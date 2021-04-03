@@ -1,4 +1,7 @@
-﻿#include "triton/driver/stream.h"
+﻿#include "triton/codegen/pass.h"
+#include "triton/driver/kernel.h"
+#include "triton/driver/module.h"
+#include "triton/driver/stream.h"
 #include "triton/ir/builder.h"
 #include "triton/ir/module.h"
 #include "triton/runtime/function.h"
@@ -113,6 +116,11 @@ void init_triton_driver(py::module &&m) {
       .def(py::init([](uint64_t handle, bool take_ownership) {
         return std::unique_ptr<driver::cu_stream>(new driver::cu_stream((CUstream)handle, take_ownership));
       }));
+
+  py::class_<drv::module>(m, "module");
+  //py::class_<drv::cu_module, drv::module>(m, "cu_module");
+
+  py::class_<drv::kernel>(m, "kernel");
 }
 
 /*****************************************************************************/
@@ -154,6 +162,19 @@ void init_triton_runtime(py::module &&m) {
       .def(py::init<const std::string &, const rt::options_t &, driver::device *, const std::vector<rt::config> &, const std::vector<std::string> &>())
       .def("autotune", &rt::function::autotune, py::return_value_policy::reference_internal)
       .def("signature", &rt::function::get_signature);
+}
+
+/*****************************************************************************/
+/* Python bindings for triton::codegen                                       */
+/*****************************************************************************/
+void init_triton_codegen(py::module &&m) {
+  m.def("add_passes_to_emit_bin", [](ir::module &ir, driver::device *dev, int num_warps) {
+    driver::module *mod;
+    driver::kernel *ker;
+    size_t shared_mem;
+    triton::codegen::add_passes_to_emit_bin(ir, dev, num_warps, mod, ker, shared_mem);
+    return std::make_tuple(mod, ker, shared_mem);
+  });
 }
 
 /*****************************************************************************/
@@ -210,14 +231,14 @@ void init_triton_ir(py::module &&m) {
   py::class_<ir::argument, ir::value>(m, "argument");
 
   py::class_<ir::basic_block, ir::value>(m, "basic_block")
-      .def("create", &ir::basic_block::create);
+      .def("create", &ir::basic_block::create, py::return_value_policy::reference_internal);
 
   py::class_<ir::builder>(m, "builder")
       .def(py::init<ir::context &>())
       // terminator instructions
       .def("br", &ir::builder::create_br)
       .def("cond_br", &ir::builder::create_cond_br)
-      .def("ret_void", &ir::builder::create_ret_void)
+      .def("ret_void", &ir::builder::create_ret_void, py::return_value_policy::reference_internal)
       // Cast instructions
       .def("cast", &ir::builder::create_cast)
       .def("ptr_to_int", &ir::builder::create_ptr_to_int)
@@ -286,7 +307,7 @@ void init_triton_ir(py::module &&m) {
       .def("reshape", &ir::builder::create_reshape)
       .def("broadcast", &ir::builder::create_broadcast)
       // Built-in instruction
-      .def("get_program_id", &ir::builder::create_get_program_id, py::arg("axis"), py::arg("name") = "")
+      .def("get_program_id", &ir::builder::create_get_program_id, py::return_value_policy::reference_internal, py::arg("axis"), py::arg("name") = "")
       .def("get_num_program", &ir::builder::create_get_num_program)
       .def("atomic_cas", &ir::builder::create_atomic_cas)
       .def("atomic_exch", &ir::builder::create_atomic_exch)
@@ -304,6 +325,7 @@ void init_triton_ir(py::module &&m) {
 
 void init_triton(py::module &m) {
   py::module subm = m.def_submodule("triton");
+  init_triton_codegen(std::move(subm.def_submodule("codegen")));
   init_triton_driver(std::move(subm.def_submodule("driver")));
   init_triton_ir(std::move(subm.def_submodule("ir")));
   init_triton_runtime(std::move(subm.def_submodule("runtime")));

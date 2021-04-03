@@ -162,13 +162,15 @@ def as_ir_type(module, obj):
 
 
 def kernel(fn):
+    num_warps = 4
+
     kernel.cache[fn] = dict()
 
     def wrapper(*wargs):
         # device inference
         tensor_idxs = [i for i, arg in enumerate(wargs) if isinstance(arg, torch.Tensor)]
         if len(tensor_idxs) == 0:
-            raise ValueError("No Tensor argument found. Please specify device.")
+            raise ValueError("No Tensor argument found.")
         device = wargs[tensor_idxs[0]].device
         # type inference
         types_key = [None] * len(wargs)
@@ -198,6 +200,10 @@ def kernel(fn):
             wrapper(ctx, *handle.args)
             finalize_function(module)
             module.pop_scope()
+            # generate binary module from Triton-IR
+            tt_device = _triton.driver.cu_device(device.index, False)
+            _triton.codegen.add_passes_to_emit_bin(module, tt_device, num_warps)
+            print('done!')
             exit()
             # Compile to machine code
             kernel.cache[fn][key] = _triton.rt.kernel(ctx.module, device)
@@ -220,7 +226,8 @@ kernel.cache = dict()
 
 @kernel
 def add(ctx, X, Y):
-    ctx.pid = get_program_id(0)
+    pass
+    #ctx.pid = get_program_id(0)
     #ctx.off = pid * BLOCK + arange(0, BLOCK)
     #ctx.val = load(X + ctx.off)
     #store(Y + ctx.off, ctx.val)
