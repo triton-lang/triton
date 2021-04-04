@@ -445,7 +445,7 @@ void Generator::VisitDeclaration(Declaration* decl) {
   const std::string &name = obj->Name();
   if(!name.empty()){
     mod_->set_value(name, val);
-    mod_->get_scope().types[name] = ty;
+    mod_->get_scope().set_type(name, ty);
   }
 }
 
@@ -570,7 +570,7 @@ void Generator::VisitFuncDef(FuncDef* funcDef) {
     if(obj->IsRestrictQualified())
       fn->add_attr(i, ir::attribute(ir::noalias));
     mod_->set_value(name, nullptr, args[i]);
-    mod_->get_scope().types[name] = args[i]->get_type();
+    mod_->get_scope().set_type(name, args[i]->get_type());
     i++;
   }
   ir::basic_block *entry = ir::basic_block::create(mod_->get_context(), "entry", fn);

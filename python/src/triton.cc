@@ -201,6 +201,16 @@ void init_triton_ir(py::module &&m) {
       .def_property("name", &ir::value::get_name, &ir::value::set_name)
       .def_property_readonly("type", &ir::value::get_type);
 
+  py::class_<ir::user, ir::value>(m, "user");
+
+  py::class_<ir::constant, ir::user>(m, "constant");
+
+  py::class_<ir::constant_int, ir::constant>(m, "constant_int")
+      .def_property_readonly("value", &ir::constant_int::get_value);
+
+  py::class_<ir::constant_fp, ir::constant>(m, "constant_float")
+      .def_property_readonly("value", &ir::constant_fp::get_value);
+
   py::class_<ir::type>(m, "type")
       .def("is_ptr", &ir::type::is_pointer_ty)
       .def("is_int", static_cast<bool (ir::type::*)() const>(&ir::type::is_integer_ty))
@@ -227,8 +237,7 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<ir::scope>(m, "scope")
       .def(py::init<>())
-      .def_readwrite("types", &ir::scope::types)
-      .def_readwrite("values", &ir::scope::values);
+      .def("set_type", &ir::scope::set_type);
 
   py::class_<ir::module>(m, "module")
       .def(py::init<std::string>())
@@ -238,8 +247,8 @@ void init_triton_ir(py::module &&m) {
       .def("set_value", (void (ir::module::*)(const std::string &, ir::value *)) & ir::module::set_value)
       .def("get_value", (ir::value * (ir::module::*)(const std::string &)) & ir::module::get_value, ret::reference)
       .def("pop_scope", &ir::module::pop_scope)
-      .def("get_scope", &ir::module::get_scope, ret::reference)
       .def("get_context", &ir::module::get_context, ret::reference)
+      .def_property_readonly("scope", &ir::module::get_scope, ret::reference)
       .def_property_readonly("builder", &ir::module::get_builder);
 
   py::class_<ir::function>(m, "function")

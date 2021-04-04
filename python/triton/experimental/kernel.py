@@ -1,143 +1,170 @@
 import inspect
 import struct
+import enum
 import types
 import torch
+import ast
 import triton._C.libtriton.triton as _triton
+from abc import ABC, abstractmethod
 
-
-def broadcast(builder, lhs, rhs):
-    lhs_ty = lhs.type
-    rhs_ty = rhs.type
-    # op(block, scalar)
-    if lhs_ty.is_block() and not rhs_ty.is_block():
-        rhs = builder.splat(rhs, lhs_ty.shape)
-    # op(scalar, block)
-    elif rhs_ty.is_block() and not lhs_ty.is_block():
-        lhs = builder.splat(lhs, rhs_ty.shape)
-    # op(block, block)
-    elif lhs_ty.is_block() and rhs_ty.is_block() and lhs_ty.shape != rhs_ty.shape:
-        raise NotImplementedError("Blocks must have the same shape")
-    return lhs, rhs
-
-
-class value:
-    def __init__(self, ctx, handle):
-        self.ctx = ctx
-        self.builder = ctx.module.builder
-        self.handle = handle
-        self.type = handle.type
-
-    def __add__(self, other):
-        # implicit broadcast
-        lhs, rhs = broadcast(self.builder, self.handle, other.handle)
-        if self.type.scalar.is_ptr():
-            handle = self.builder.gep(lhs, [rhs])
-        elif self.type.scalar.is_floating():
-            handle = self.builder.fadd(lhs, rhs)
-        else:
-            handle = self.builder.add(lhs, rhs)
-        return value(self.ctx, handle)
-
-    def __sub__(self, other):
-        if self.type.is_floating():
-            handle = self.builder.fsub(self.handle, other.handle)
-        else:
-            handle = self.builder.sub(self.handle, other.handle)
-        return value(self.ctx, handle)
-
-    def __mul__(self, other):
-        if self.type.is_floating():
-            handle = self.builder.fmul(self.handle, other.handle)
-        else:
-            handle = self.builder.mul(self.handle, other.handle)
-        return value(self.ctx, handle)
-
-    def __div__(self, other):
-        if self.type.is_floating():
-            handle = self.builder.fdiv(self.handle, other.handle)
-        else:
-            handle = self.builder.sdiv(self.handle, other.handle)
-        return value(self.ctx, handle)
-
-    def __mod__(self, other):
-        if self.type.is_floating():
-            handle = self.builder.frem(self.handle, other.handle)
-        else:
-            handle = self.builder.srem(self.handle, other.handle)
-        return value(self.ctx, handle)
-
-    def __lshift__(self, other):
-        if self.type.is_floating():
-            handle = self.builder.fshl(self.handle, other.handle)
-        else:
-            handle = self.builder.shl(self.handle, other.handle)
-        return value(self.ctx, handle)
-
-
-class context:
-    def __init__(self):
-        self.__dict__['module'] = _triton.ir.module("")
-
-    def __setattr__(self, name, value):
-        self.module.set_value(name, value.handle)
-
-    def __getattr__(self, name):
-        ret = self.module.get_value(name)
-        return value(self, ret)
-
-    def arange(self, start, end):
-        assert isinstance(start, int), "start must be int"
-        assert isinstance(end, int), "end must be int"
-        builder = self.module.builder
-        handle = builder.get_range(start, end)
-        return value(self, handle)
-
-    def get_program_id(self, axis):
-        builder = self.module.builder
-        handle = builder.get_program_id(axis)
-        return value(self, handle)
-
-
-class For:
-    def __enter__(self):
-        pass
-
-    def __exit__(self):
-        pass
-
-
-class If:
-    def __enter__(self):
-        pass
-
-    def __exit__(self):
-        pass
+########################
+# Built-in Functions   #
+########################
 
 
 def load(ptr):
-    handle = ptr.builder.load(ptr.handle)
-    return value(ptr.ctx, handle)
+    pass
+
+
+def arange(start, end):
+    pass
+
+
+def get_program_id(axis):
+    pass
 
 
 def store(ptr, arg):
-    handle = ptr.builder.store(ptr.handle, arg.handle)
-    return value(ptr.ctx, handle)
+    pass
 
 
-def init_function(module, name, arg_names, prototype):
-    fn = module.get_or_insert_function(name, prototype)
-    for i, arg_name in enumerate(arg_names):
-        fn.args[i].name = arg_name
-        module.set_value(arg_name, fn.args[i])
-        module.get_scope().types[arg_name] = fn.args[i].type
-    entry = _triton.ir.basic_block.create(module.get_context(), "entry", fn)
-    module.seal_block(entry)
-    module.builder.set_insert_block(entry)
-    return fn
+class CodeGenerator(ast.NodeVisitor):
+    def broadcast(self, lhs, rhs):
+        lhs_ty = lhs.type
+        rhs_ty = rhs.type
+        # op(block, scalar)
+        if lhs_ty.is_block() and not rhs_ty.is_block():
+            rhs = self.builder.splat(rhs, lhs_ty.shape)
+        # op(scalar, block)
+        elif rhs_ty.is_block() and not lhs_ty.is_block():
+            lhs = self.builder.splat(lhs, rhs_ty.shape)
+        # op(block, block)
+        elif lhs_ty.is_block() and rhs_ty.is_block() and lhs_ty.shape != rhs_ty.shape:
+            raise NotImplementedError("Blocks must have the same shape")
+        return lhs, rhs
 
+    def __init__(self, module, prototype, symbols):
+        self.module = module
+        self.builder = module.builder
+        self.prototype = prototype
+        self.symbols = symbols
 
-def finalize_function(module):
-    module.builder.ret_void()
+    def visit_Module(self, node):
+        self.module.add_new_scope()
+        ast.NodeVisitor.generic_visit(self, node)
+        self.module.pop_scope()
+
+    def visit_FunctionDef(self, node):
+        module = self.module
+        arg_names = ast.NodeVisitor.visit(self, node.args)
+        # initialize function
+        fn = module.get_or_insert_function(node.name, self.prototype)
+        for i, arg_name in enumerate(arg_names):
+            fn.args[i].name = arg_name
+            module.set_value(arg_name, fn.args[i])
+            module.scope.set_type(arg_name, fn.args[i].type)
+        entry = _triton.ir.basic_block.create(module.get_context(), "entry", fn)
+        module.add_new_scope()
+        module.seal_block(entry)
+        module.builder.set_insert_block(entry)
+        # visit function body
+        for stmt in node.body:
+            ast.NodeVisitor.visit(self, stmt)
+        # finalize function
+        module.builder.ret_void()
+        module.pop_scope()
+
+    def visit_arguments(self, node):
+        names = []
+        for arg in node.args:
+            names += [ast.NodeVisitor.visit(self, arg)]
+        return names
+
+    def visit_arg(self, node):
+        ast.NodeVisitor.generic_visit(self, node)
+        return node.arg
+
+    def visit_Assign(self, node):
+        names = []
+        for target in node.targets:
+            names += [ast.NodeVisitor.visit(self, target)]
+        assert len(names) == 1
+        name = names[0]
+        value = ast.NodeVisitor.visit(self, node.value)
+        self.module.set_value(name, value)
+
+    def visit_Name(self, node):
+        return node.id
+
+    def visit_Store(self, node):
+        ast.NodeVisitor.generic_visit(self, node)
+
+    def visit_Load(self, node):
+        ast.NodeVisitor.generic_visit(self, node)
+
+    def visit_BinOp(self, node):
+        lhs = ast.NodeVisitor.visit(self, node.left)
+        rhs = ast.NodeVisitor.visit(self, node.right)
+        lhs = self.module.get_value(lhs)
+        rhs = self.module.get_value(rhs)
+        lhs, rhs = self.broadcast(lhs, rhs)
+        # -------------------
+        # Handle ADD operator
+        # -------------------
+        if type(node.op) == ast.Add:
+            if lhs.type.scalar.is_ptr():  # ptr + offset
+                return self.builder.gep(lhs, [rhs])
+            elif lhs.type.scalar.is_floating():  # float + float
+                return self.builder.fadd(lhs, rhs)
+            else:  # int + int
+                return self.builder.add(lhs, rhs)
+        raise NotImplementedError("Unsupported op: {}".format(expr.op))
+
+    def visit_Call(self, node):
+        fn = ast.NodeVisitor.visit(self, node.func)
+        if isinstance(fn, str):
+            fn = self.symbols[fn]
+        name = fn.__name__
+
+        args = [ast.NodeVisitor.visit(self, arg) for arg in node.args]
+        assert not node.keywords, "keywords not supported"
+        assert not any(arg is None for arg in args)
+        if name == 'get_program_id':
+            is_valid = isinstance(args[0], _triton.ir.constant_int)
+            assert is_valid, "expected constant integer"
+            return self.builder.get_program_id(args[0].value)
+        if name == 'arange':
+            is_valid_0 = isinstance(args[0], _triton.ir.constant_int)
+            is_valid_1 = isinstance(args[1], _triton.ir.constant_int)
+            assert is_valid_0 and is_valid_1, "expected constant integer"
+            return self.builder.get_range(args[0].value, args[1].value)
+        if name == 'load':
+            return self.builder.load(*args)
+        if name == 'store':
+            return self.builder.store(*args)
+        print(args)
+
+    def visit_Num(self, node):
+        val = node.n
+        ty = type(val)
+        if ty == int:
+            return self.builder.get_int32(val)
+        if ty == float:
+            return self.builder.get_float(val)
+        raise NotImplementedError("Unsupported constant type: {}".format(ty))
+
+    def visit_Attribute(self, node):
+        lhs = ast.NodeVisitor.visit(self, node.value)
+        if isinstance(lhs, str):
+            lhs = self.symbols[lhs]
+        return getattr(lhs, node.attr)
+
+    def visit_Expr(self, node):
+        ast.NodeVisitor.generic_visit(self, node)
+
+    def generic_visit(self, node):
+        typename = type(node).__name__
+        raise NotImplementedError("Unsupported node: {}".format(typename))
 
 
 suffixes = {
@@ -203,24 +230,15 @@ def kernel(fn):
         key = f'{device.type}_{device.index}_{types_key}'
         if key not in kernel.cache[fn]:
             # create IR module
-            ctx = context()
-            module = ctx.module
+            module = _triton.ir.module("")
             # Generate Triton IR
-            arg_names = inspect.getfullargspec(fn).args[1:]
             arg_types = [as_ir_type(module, arg) for arg in wargs]
             ret_type = _triton.ir.type.get_void(module.get_context())
             prototype = _triton.ir.type.make_function(ret_type, arg_types)
-            module.add_new_scope()
-            handle = init_function(module, fn.__name__, arg_names, prototype)
-            # Call decorated function
-            params = [value(ctx, h) for h in handle.args]
-            fn(ctx, *params)
-            finalize_function(module)
-            module.pop_scope()
-            # generate binary module from Triton-IR
+            tree = ast.parse(inspect.getsource(fn))
+            CodeGenerator(module, prototype, globals()).visit(tree)
             tt_device = _triton.driver.cu_device(device.index, False)
             # Compile to machine code
-            print('emitting bin')
             mod, ker, shared_mem = _triton.codegen.add_passes_to_emit_bin(module, tt_device, num_warps)
             caller = binary(mod, ker, num_warps, shared_mem)
             kernel.cache[fn][key] = caller
@@ -243,12 +261,12 @@ kernel.cache = dict()
 
 
 @kernel
-def add(ctx, Xptr, Yptr, Zptr):
-    ctx.pid = ctx.get_program_id(0)
-    ctx.off = ctx.arange(0, 128)
-    ctx.x = load(Xptr + ctx.off)
-    ctx.y = load(Yptr + ctx.off)
-    store(Zptr + ctx.off, ctx.x + ctx.y)
+def add(Xptr, Yptr, Zptr):
+    pid = get_program_id(0)
+    off = arange(0, 128)
+    x = load(Xptr + off)
+    y = load(Yptr + off)
+    store(Zptr + off, x + y)
 
 
 x = torch.rand(128, device='cuda')
@@ -256,5 +274,4 @@ y = torch.rand(128, device='cuda')
 z = torch.empty_like(x)
 add(x, y, z)
 print(z)
-
 print(x + y)
