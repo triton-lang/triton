@@ -58,7 +58,8 @@ bool peephole::rewrite_trans_phi(ir::instruction* value, ir::builder& builder) {
 }
 
 bool peephole::rewrite_dot(ir::instruction *value, ir::builder& builder){
-  // dot(a, b, 0) + c -> dot(a, b, c)
+  // dot(a, b, c) + d -> dot(a, b, c + d)
+  // d + dot(a, b, c) -> dot(a, b, c + d)
   auto add = dynamic_cast<ir::binary_operator*>(value);
   if(add && add->get_op() == ir::binary_op_t::FAdd) {
     ir::value *lhs = add->get_operand(0);
@@ -79,7 +80,7 @@ bool peephole::rewrite_dot(ir::instruction *value, ir::builder& builder){
     ir::value *a = dot->get_operand(0);
     ir::value *b = dot->get_operand(1);
     builder.set_insert_point(add);
-    ir::value * new_dot = builder.insert(ir::dot_inst::create_nn(a, b, other, dot->get_name()));
+    ir::value * new_dot = builder.insert(ir::dot_inst::create_nn(a, b, builder.create_fadd(acc, other), dot->get_name()));
     add->replace_all_uses_with(new_dot);
     return true;
   }

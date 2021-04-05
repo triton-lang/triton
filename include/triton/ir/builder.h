@@ -38,6 +38,7 @@ public:
   value *get_int1(bool val);
   value *get_int32(int32_t val);
   value *get_int64(int64_t val);
+  value *get_float32(float val);
   value *get_range(int32_t lo, int32_t hi);
   // Types
   type *get_void_ty();
@@ -51,11 +52,10 @@ public:
   type *get_double_ty();
   // Insert
   template<typename InstTy>
-  InstTy* insert(InstTy *inst, const std::string &name = ""){
+  InstTy* insert(InstTy *inst){
     assert(block_);
     block_->get_inst_list().insert(insert_point_, inst);
     inst->set_parent(block_);
-    inst->set_name(name);
 //    for(ir::value* op: inst->ops())
 //      op->add_use(inst);
     return inst;
@@ -65,91 +65,91 @@ public:
   value* create_cond_br(value *cond, basic_block* if_dest, basic_block* else_dest);
   value* create_ret_void();
   // Cast instructions
-  value *create_cast(cast_op_t op, value *v, type *dst_ty, const std::string &name = "");
-  value* create_ptr_to_int(value *src, type *dst_ty, const std::string &name = "");
-  value* create_si_to_fp(value *src, type *dst_ty, const std::string &name = "");
-  value* create_ui_to_fp(value *src, type *dst_ty, const std::string &name = "");
-  value* create_fp_to_si(value *src, type *dst_ty, const std::string &name = "");
-  value* create_fp_to_ui(value *src, type *dst_ty, const std::string &name = "");
-  value* create_fp_ext(value *src, type *dst_ty, const std::string &name = "");
-  value* create_fp_trunc(value *src, type *dst_ty, const std::string &name = "");
-  value* create_int_cast(value *src, type *dst_ty, bool is_signed, const std::string &name = "");
-  value *create_downcast(value *arg, const std::string &name = "");
+  value *create_cast(cast_op_t op, value *v, type *dst_ty);
+  value* create_ptr_to_int(value *src, type *dst_ty);
+  value* create_si_to_fp(value *src, type *dst_ty);
+  value* create_ui_to_fp(value *src, type *dst_ty);
+  value* create_fp_to_si(value *src, type *dst_ty);
+  value* create_fp_to_ui(value *src, type *dst_ty);
+  value* create_fp_ext(value *src, type *dst_ty);
+  value* create_fp_trunc(value *src, type *dst_ty);
+  value* create_int_cast(value *src, type *dst_ty, bool is_signed);
+  value *create_downcast(value *arg);
   // Phi instruction
-  phi_node* create_phi(type *ty, unsigned num_reserved, const std::string &name = "");
+  phi_node* create_phi(type *ty, unsigned num_reserved);
   // Binary instructions
-  value *create_insert_nuwnswb_binop(binary_op_t op, value *lhs, value *rhs, const std::string &name, bool has_nuw, bool has_nsw);
-  value *create_fmul(value *lhs, value *rhs, const std::string &name = "");
-  value *create_fdiv(value *lhs, value *rhs, const std::string &name = "");
-  value *create_frem(value *lhs, value *rhs, const std::string &name = "");
-  value *create_fadd(value *lhs, value *rhs, const std::string &name = "");
-  value *create_fsub(value *lhs, value *rhs, const std::string &name = "");
-  value *create_mul(value *lhs, value *rhs, const std::string &name = "", bool has_nuw = false, bool has_nsw = false);
-  value *create_sdiv(value *lhs, value *rhs, const std::string &name = "");
-  value *create_udiv(value *lhs, value *rhs, const std::string &name = "");
-  value *create_srem(value *lhs, value *rhs, const std::string &name = "");
-  value *create_urem(value *lhs, value *rhs, const std::string &name = "");
-  value *create_add(value *lhs, value *rhs, const std::string &name = "", bool has_nuw = false, bool has_nsw = false);
-  value *create_sub(value *lhs, value *rhs, const std::string &name = "", bool has_nuw = false, bool has_nsw = false);
-  value *create_shl(value *lhs, value *rhs, const std::string &name = "", bool has_nuw = false, bool has_nsw = false);
-  value *create_lshr(value *lhs, value *rhs, const std::string &name = "", bool has_nuw = false, bool has_nsw = false);
-  value *create_ashr(value *lhs, value *rhs, const std::string &name = "", bool has_nuw = false, bool has_nsw = false);
+  value *create_insert_nuwnswb_binop(binary_op_t op, value *lhs, value *rhs, bool has_nuw, bool has_nsw);
+  value *create_fmul(value *lhs, value *rhs);
+  value *create_fdiv(value *lhs, value *rhs);
+  value *create_frem(value *lhs, value *rhs);
+  value *create_fadd(value *lhs, value *rhs);
+  value *create_fsub(value *lhs, value *rhs);
+  value *create_mul(value *lhs, value *rhs, bool has_nuw = false, bool has_nsw = false);
+  value *create_sdiv(value *lhs, value *rhs);
+  value *create_udiv(value *lhs, value *rhs);
+  value *create_srem(value *lhs, value *rhs);
+  value *create_urem(value *lhs, value *rhs);
+  value *create_add(value *lhs, value *rhs, bool has_nuw = false, bool has_nsw = false);
+  value *create_sub(value *lhs, value *rhs, bool has_nuw = false, bool has_nsw = false);
+  value *create_shl(value *lhs, value *rhs, bool has_nuw = false, bool has_nsw = false);
+  value *create_lshr(value *lhs, value *rhs, bool has_nuw = false, bool has_nsw = false);
+  value *create_ashr(value *lhs, value *rhs, bool has_nuw = false, bool has_nsw = false);
   // GEP
-  value *create_gep(value *ptr, const std::vector<value*>& idx_list, const std::string &name = "");
+  value *create_gep(value *ptr, const std::vector<value*>& idx_list);
   // Comparison (int)
-  value *create_icmp(cmp_pred_t pred, value *lhs, value *rhs, const std::string &name = "");
-  value *create_icmpSLE(value *lhs, value *rhs, const std::string &name = "");
-  value *create_icmpSLT(value *lhs, value *rhs, const std::string &name = "");
-  value *create_icmpSGE(value *lhs, value *rhs, const std::string &name = "");
-  value *create_icmpSGT(value *lhs, value *rhs, const std::string &name = "");
-  value *create_icmpULE(value *lhs, value *rhs, const std::string &name = "");
-  value *create_icmpULT(value *lhs, value *rhs, const std::string &name = "");
-  value *create_icmpUGE(value *lhs, value *rhs, const std::string &name = "");
-  value *create_icmpUGT(value *lhs, value *rhs, const std::string &name = "");
-  value *create_icmpEQ(value *lhs, value *rhs, const std::string &name = "");
-  value *create_icmpNE(value *lhs, value *rhs, const std::string &name = "");
+  value *create_icmp(cmp_pred_t pred, value *lhs, value *rhs);
+  value *create_icmpSLE(value *lhs, value *rhs);
+  value *create_icmpSLT(value *lhs, value *rhs);
+  value *create_icmpSGE(value *lhs, value *rhs);
+  value *create_icmpSGT(value *lhs, value *rhs);
+  value *create_icmpULE(value *lhs, value *rhs);
+  value *create_icmpULT(value *lhs, value *rhs);
+  value *create_icmpUGE(value *lhs, value *rhs);
+  value *create_icmpUGT(value *lhs, value *rhs);
+  value *create_icmpEQ(value *lhs, value *rhs);
+  value *create_icmpNE(value *lhs, value *rhs);
   // Comparison (float)
-  value *create_fcmp(cmp_pred_t pred, value *lhs, value *rhs, const std::string &name = "");
-  value *create_fcmpOLT(value *lhs, value *rhs, const std::string &name = "");
-  value *create_fcmpOGT(value *lhs, value *rhs, const std::string &name = "");
-  value *create_fcmpOLE(value *lhs, value *rhs, const std::string &name = "");
-  value *create_fcmpOGE(value *lhs, value *rhs, const std::string &name = "");
-  value *create_fcmpOEQ(value *lhs, value *rhs, const std::string &name = "");
-  value *create_fcmpONE(value *lhs, value *rhs, const std::string &name = "");
+  value *create_fcmp(cmp_pred_t pred, value *lhs, value *rhs);
+  value *create_fcmpOLT(value *lhs, value *rhs);
+  value *create_fcmpOGT(value *lhs, value *rhs);
+  value *create_fcmpOLE(value *lhs, value *rhs);
+  value *create_fcmpOGE(value *lhs, value *rhs);
+  value *create_fcmpOEQ(value *lhs, value *rhs);
+  value *create_fcmpONE(value *lhs, value *rhs);
   // Logical
-  value *create_and(value *lhs, value *rhs, const std::string &name = "");
-  value *create_xor(value *lhs, value *rhs, const std::string &name = "");
-  value *create_or(value *lhs, value *rhs, const std::string &name = "");
+  value *create_and(value *lhs, value *rhs);
+  value *create_xor(value *lhs, value *rhs);
+  value *create_or(value *lhs, value *rhs);
   // Unary
-//  value *create_fneg(value *arg, const std::string &name = "");
-//  value *create_neg(value *arg, const std::string &name = "");
-//  value *create_not(value *arg, const std::string &name = "");
+//  value *create_fneg(value *arg);
+//  value *create_neg(value *arg);
+//  value *create_not(value *arg);
   // Input/Output
-  value *create_load(value *arg, const std::string &name = "");
-  value *create_store(value *ptr, value *val, const std::string &name = "");
-  value *create_masked_load(value *arg, value *mask, value *false_value, const std::string &name = "");
-  value *create_masked_store(value *ptr, value *val, value *mask, const std::string &name = "");
+  value *create_load(value *arg);
+  value *create_store(value *ptr, value *val);
+  value *create_masked_load(value *arg, value *mask, value *false_value);
+  value *create_masked_store(value *ptr, value *val, value *mask);
   // Block instruction
-  value *create_splat(value *arg, const type::block_shapes_t &shapes, const std::string &name = "");
-  value *create_reshape(value *arg, const type::block_shapes_t &shapes, const std::string &name = "");
-  value *create_broadcast(value *arg, const type::block_shapes_t &shapes, const std::string &name = "");
+  value *create_splat(value *arg, const type::block_shapes_t &shapes);
+  value *create_reshape(value *arg, const type::block_shapes_t &shapes);
+  value *create_broadcast(value *arg, const type::block_shapes_t &shapes);
   // Built-in instruction
-  value *create_get_program_id(unsigned axis, const std::string &name = "");
-  value *create_get_num_program(unsigned axis, const std::string &name = "");
-  value *create_atomic_cas(value *ptr, value *cmp, value *val, const std::string &name = "");
-  value *create_atomic_exch(value *ptr, value *val, const std::string &name = "");
-  value *create_atomic_add(value *ptr, value *val, value *msk, const std::string &name = "");
-  value *create_exp(value* arg, const std::string &name = "");
-  value *create_log(value* arg, const std::string &name = "");
-  value *create_dot(value *A, value *B, value *C, const std::string &name = "");
-  value *create_trans(value *A, const std::vector<int> &perm = {}, const std::string &name = "");
-  value *create_sqrt(value *A, const std::string &name = "");
-  value *create_reduce(value *A, reduce_inst::op_t op, unsigned axis, const std::string &name = "");
-  value *create_select(value *pred, value *if_value, value *else_value, const std::string &name = "");
+  value *create_get_program_id(unsigned axis);
+  value *create_get_num_program(unsigned axis);
+  value *create_atomic_cas(value *ptr, value *cmp, value *val);
+  value *create_atomic_exch(value *ptr, value *val);
+  value *create_atomic_add(value *ptr, value *val, value *msk);
+  value *create_exp(value* arg);
+  value *create_log(value* arg);
+  value *create_dot(value *A, value *B, value *C);
+  value *create_trans(value *A, const std::vector<int> &perm = {});
+  value *create_sqrt(value *A);
+  value *create_reduce(value *A, reduce_inst::op_t op, unsigned axis);
+  value *create_select(value *pred, value *if_value, value *else_value);
   // Intrinsics
-  value *create_copy_to_shared(value *arg, const std::string &name = "");
-  value *create_masked_load_async(value *arg, value *mask, value *false_value, const std::string &name = "");
-  value *create_copy_from_shared(value *arg, const std::string &name = "");
+  value *create_copy_to_shared(value *arg);
+  value *create_masked_load_async(value *arg, value *mask, value *false_value);
+  value *create_copy_from_shared(value *arg);
   value *create_barrier(const std::string &name = "");
   value *create_async_wait(int N);
 

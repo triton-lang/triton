@@ -37,6 +37,7 @@ class alloc_const;
 /* Module */
 struct scope {
 public:
+  const std::map<std::string, ir::value*>& get_values() { return values; }
   void set_type(const std::string& name, ir::type* ty) { types[name] = ty; }
   ir::type* get_type(const std::string& name) { return types.at(name); }
 private:

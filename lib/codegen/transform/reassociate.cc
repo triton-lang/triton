@@ -54,19 +54,19 @@ ir::value *reassociate::reassociate_idx(ir::value *old_value,
         builder.set_insert_point(op);
         new_lhs = builder.create_reshape(old_lhs, shapes);
         new_rhs = builder.create_reshape(old_rhs, shapes);
-        new_value = builder.create_add(new_lhs, new_rhs, op->get_name());
+        new_value = builder.create_add(new_lhs, new_rhs);
       }
       if(dynamic_cast<ir::broadcast_inst*>(op)){
         builder.set_insert_point(op);
         new_lhs = builder.create_broadcast(old_lhs, shapes);
         new_rhs = builder.create_broadcast(old_rhs, shapes);
-        new_value = builder.create_add(new_lhs, new_rhs, op->get_name());
+        new_value = builder.create_add(new_lhs, new_rhs);
       }
       if(dynamic_cast<ir::splat_inst*>(op)){
         builder.set_insert_point(op);
         new_lhs = builder.create_splat(old_lhs, shapes);
         new_rhs = builder.create_splat(old_rhs, shapes);
-        new_value = builder.create_add(new_lhs, new_rhs, op->get_name());
+        new_value = builder.create_add(new_lhs, new_rhs);
       }
     }
   }
@@ -84,10 +84,10 @@ ir::value *reassociate::reassociate_idx(ir::value *old_value,
       ir::value *rlhs = bin_lhs->get_operand(1);
       // (cst + x) + y -> cst + (x + y)
       if(is_cst(llhs))
-        new_value = builder.create_add(llhs, builder.create_add(rlhs, rhs), name);
+        new_value = builder.create_add(llhs, builder.create_add(rlhs, rhs));
       // (x + cst) + y -> cst + (x + y)
       if(is_cst(rlhs))
-        new_value = builder.create_add(rlhs, builder.create_add(llhs, rhs), name);
+        new_value = builder.create_add(rlhs, builder.create_add(llhs, rhs));
     }
     // x + (y + z)
     if(ir::instruction* bin_rhs = is_bin_add(rhs)){
@@ -95,10 +95,10 @@ ir::value *reassociate::reassociate_idx(ir::value *old_value,
       ir::value *rrhs = bin_rhs->get_operand(1);
       // x + (cst + y) -> cst + (x + y)
       if(is_cst(lrhs))
-        new_value = builder.create_add(lrhs, builder.create_add(rrhs, lhs), name, cst);
+        new_value = builder.create_add(lrhs, builder.create_add(rrhs, lhs), cst);
       // x + (y + cst) -> cst + (x + y)
       if(is_cst(rrhs))
-        new_value = builder.create_add(rrhs, builder.create_add(lrhs, lhs), name, cst);
+        new_value = builder.create_add(rrhs, builder.create_add(lrhs, lhs), cst);
     }
   }
   // extract constant and non-constant
@@ -202,7 +202,7 @@ void reassociate::run(ir::module &mod) {
           ir::value *cst = *sta->idx_begin();
           ir::value *off = *pz->idx_begin();
           ir::value *pz_dyn = builder.create_gep(dyn, {off});
-          ir::value *pz_sta = builder.create_gep(pz_dyn, {cst}, pz->get_name());
+          ir::value *pz_sta = builder.create_gep(pz_dyn, {cst});
           pz->replace_all_uses_with(pz_sta);
           infos[pz_sta].dyn_ptr = pz_dyn;
           infos[pz_sta].sta_ptr = (ir::getelementptr_inst*)pz_sta;
@@ -235,7 +235,8 @@ void reassociate::run(ir::module &mod) {
           phi_dyn->add_incoming(pa_dyn, phi->get_incoming_block(idx_a));
           builder.set_insert_point(phi->get_parent()->get_first_non_phi());
           // re-add the offset
-          ir::value *phi_sta = builder.create_gep(phi_dyn, {off}, phi->get_name() + "_sta");
+          ir::value *phi_sta = builder.create_gep(phi_dyn, {off});
+          phi_sta->set_name( phi->get_name() + "_sta");
           phi->replace_all_uses_with(phi_sta);
           // remove offset from pz
           if(auto *x = dynamic_cast<ir::instruction*>(pz)){
