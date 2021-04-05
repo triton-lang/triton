@@ -417,17 +417,6 @@ def as_ir_type(module, obj):
     return type_map[suffixes[obj.__class__]](ctx)
 
 
-class binary:
-    def __init__(self, module, kernel, num_warps, shared_mem):
-        self.module = module
-        self.kernel = kernel
-        self.shared_mem = shared_mem
-        self.num_warps = num_warps
-
-    def __call__(self, stream, args, grid_0, grid_1=1, grid_2=1):
-        stream.enqueue(self.kernel, grid_0, grid_1, grid_2, self.num_warps * 32, 1, 1, args, self.shared_mem)
-
-
 def cdiv(a, b):
     return (a + b - 1) // b
 
@@ -440,12 +429,25 @@ def pow2_divisor(N):
     return 1
 
 
-def jit(fn):
-    num_warps = 4
+class Binary:
+    def __init__(self, module, kernel, num_warps, shared_mem):
+        self.module = module
+        self.kernel = kernel
+        self.shared_mem = shared_mem
+        self.num_warps = num_warps
 
-    jit.cache[fn] = dict()
+    def __call__(self, stream, args, grid_0, grid_1=1, grid_2=1):
+        stream.enqueue(self.kernel, grid_0, grid_1, grid_2, self.num_warps * 32, 1, 1, args, self.shared_mem)
 
-    def wrapper(*wargs, grid):
+
+class Kernel:
+    def __init__(self, fn, grid):
+        self.fn = fn
+        self.grid = grid
+
+    def __call__(self, *wargs, **meta):
+        if 'num_warps' not in meta:
+            meta['num_warps'] = 4
         # device inference
         tensor_idxs = [i for i, arg in enumerate(wargs) if isinstance(arg, torch.Tensor)]
         if len(tensor_idxs) == 0:
@@ -462,43 +464,56 @@ def jit(fn):
         args = [arg.data_ptr() if i in tensor_idxs else arg for i, arg in enumerate(wargs)]
         attributes = {i: pow2_divisor(a) for i, a in enumerate(args) if isinstance(a, int)}
         attr_key = '_'.join(map(str, attributes.values()))
-
-        # retrieve from cache
+        # cache
         key = f'{device.type}_{device.index}_{types_key}_{attr_key}'
-        if key not in jit.cache[fn]:
+        cache = self.fn.cache
+        if key not in cache:
+            num_warps = meta['num_warps']
             # create IR module
             module = _triton.ir.module("")
             # Generate Triton IR
             arg_types = [as_ir_type(module, arg) for arg in wargs]
             ret_type = _triton.ir.type.get_void(module.context)
             prototype = _triton.ir.type.make_function(ret_type, arg_types)
-            tree = ast.parse(inspect.getsource(fn))
+            tree = ast.parse(inspect.getsource(self.fn.src))
             CodeGenerator(module, prototype, gscope=globals(), attributes=attributes).visit(tree)
             tt_device = _triton.driver.cu_device(device.index, False)
             # Compile to machine code
             mod, ker, shared_mem = _triton.codegen.add_passes_to_emit_bin(module, tt_device, num_warps)
-            caller = binary(mod, ker, num_warps, shared_mem)
-            jit.cache[fn][key] = caller
-        # create callable kernel from IR
-        caller = jit.cache[fn][key]
+            cache[key] = Binary(mod, ker, num_warps, shared_mem)
+            pass
         # pack arguments
         fmt = ''.join(['P' if i in tensor_idxs else suffixes[arg.__class__] for i, arg in enumerate(wargs)])
         params = struct.pack(fmt, *args)
-        # run function
+        # enqueue cached function into stream
+        binary = cache[key]
         cu_stream = torch.cuda.current_stream(device.index).cuda_stream
         stream = _triton.driver.cu_stream(cu_stream, False)
-        caller(stream, params, *grid)
-
-    return wrapper
+        binary(stream, params, *self.grid(meta))
 
 
-jit.cache = dict()
+class JITFunction:
+    def __init__(self, src):
+        self.src = src
+        self.cache = dict()
+
+    def compile(self, module, device, num_warps):
+        pass
+
+    def __getitem__(self, grid_fn):
+        return Kernel(self, grid)
+
+
+def jit(fn):
+    return JITFunction(fn)
+
 
 MB, NB, KB = 128, 128, 32
+meta = {'MB': MB, 'NB': NB, 'KB': KB}
 
 
 @jit
-def matmul(Cptr, Aptr, Bptr, M, N, K, lda, ldb, ldc):
+def matmul(Cptr, Aptr, Bptr, M, N, K, lda, ldb, ldc, **meta):
     pid_m = get_program_id(0)
     pid_n = get_program_id(1)
     rm = pid_m * MB + arange(0, MB)
@@ -519,5 +534,9 @@ M, N, K = 512, 512, 512
 A = torch.randn((M, K), dtype=torch.float16, device='cuda')
 B = torch.randn((K, N), dtype=torch.float16, device='cuda')
 C = torch.empty((M, N), dtype=torch.float16, device='cuda')
-matmul(C, A, B, M, N, K, A.stride(0), B.stride(0), C.stride(0), grid=(cdiv(M, MB), cdiv(N, NB)))
+# Launch triton kernel
+grid = lambda _: (cdiv(M, meta['MB']), cdiv(N, meta['NB']))
+matmul[grid](C, A, B, M, N, K, A.stride(0), B.stride(0), C.stride(0))
+# Compare results
 assert torch.allclose(C, torch.mm(A, B), atol=1e-3, rtol=1e-3)
+print(C)
