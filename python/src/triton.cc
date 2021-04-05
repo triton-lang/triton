@@ -3,6 +3,7 @@
 #include "triton/driver/module.h"
 #include "triton/driver/stream.h"
 #include "triton/ir/builder.h"
+#include "triton/ir/enums.h"
 #include "triton/ir/module.h"
 #include "triton/runtime/function.h"
 #include <pybind11/buffer_info.h>
@@ -217,8 +218,9 @@ void init_triton_ir(py::module &&m) {
       .def("is_int", static_cast<bool (ir::type::*)() const>(&ir::type::is_integer_ty))
       .def("is_floating", &ir::type::is_floating_point_ty)
       .def("is_block", &ir::type::is_block_ty)
-      .def("make_ptr", &ir::pointer_type::get, ret::reference_internal)
-      .def("make_function", &ir::function_type::get, ret::reference_internal)
+      .def("make_ptr", &ir::pointer_type::get, ret::reference)
+      .def("make_function", &ir::function_type::get, ret::reference)
+      .def("make_block", &ir::block_type::get, ret::reference)
       .def("get_void", &ir::type::get_void_ty, ret::reference)
       .def("get_fp16", &ir::type::get_half_ty, ret::reference)
       .def("get_fp32", &ir::type::get_float_ty, ret::reference)
@@ -228,6 +230,7 @@ void init_triton_ir(py::module &&m) {
       .def("get_int16", &ir::type::get_int16_ty, ret::reference)
       .def("get_int32", &ir::type::get_int32_ty, ret::reference)
       .def("get_int64", &ir::type::get_int64_ty, ret::reference)
+      .def_property_readonly("fp_mantissa_width", &ir::type::get_fp_mantissa_width)
       .def_property_readonly("scalar", &ir::type::get_scalar_ty);
 
   py::class_<ir::pointer_type, ir::type>(m, "pointer_type");
@@ -261,6 +264,22 @@ void init_triton_ir(py::module &&m) {
   py::class_<ir::basic_block, ir::value>(m, "basic_block")
       .def("create", &ir::basic_block::create, ret::reference)
       .def_property_readonly("parent", &ir::basic_block::get_parent, ret::reference);
+
+  using ecast = ir::cast_op_t;
+  py::enum_<ir::cast_op_t>(m, "cast_op")
+      .value("trunc", ecast::Trunc)
+      .value("zext", ecast::ZExt)
+      .value("sext", ecast::SExt)
+      .value("fptrunc", ecast::FPTrunc)
+      .value("fpext", ecast::FPExt)
+      .value("uitofp", ecast::UIToFP)
+      .value("sitofp", ecast::SIToFP)
+      .value("fptoui", ecast::FPToUI)
+      .value("fptosi", ecast::FPToSI)
+      .value("ptrtoint", ecast::PtrToInt)
+      .value("inttoptr", ecast::IntToPtr)
+      .value("bitcast", ecast::BitCast)
+      .value("addrspacecast", ecast::AddrSpaceCast);
 
   py::class_<ir::builder>(m, "builder")
       .def(py::init<ir::context &>())

@@ -12,6 +12,18 @@ from abc import ABC, abstractmethod
 ########################
 
 
+class float32:
+    @staticmethod
+    def make_ir(context):
+        return _triton.ir.type.get_fp32(context)
+
+
+class float16:
+    @staticmethod
+    def make_ir(context):
+        return _triton.ir.type.get_fp16(context)
+
+
 def load(ptr):
     pass
 
@@ -21,6 +33,10 @@ def dot(a, b):
 
 
 def select(cond, true_val, false_val):
+    pass
+
+
+def cast(arg, dtype):
     pass
 
 
@@ -274,7 +290,6 @@ class CodeGenerator(ast.NodeVisitor):
         cond = ast.NodeVisitor.visit(self, cond_node)
         self.builder.cond_br(cond, loop_bb, next_bb)
         self.builder.set_insert_block(loop_bb)
-        print('loop')
         self.visit_compound_statement(node.body, add_scope=True)
         # TODO: handle case where body breaks control flow
         continue_fn()
@@ -318,6 +333,17 @@ class CodeGenerator(ast.NodeVisitor):
             _0 = self.builder.get_float32(0)
             shape = [int(x) for x in args]
             return self.builder.splat(_0, shape)
+        if name == 'cast':
+            # return type
+            src_ty = args[0].type
+            ret_ty = args[1].make_ir(self.module.context)
+            if src_ty.is_block:
+                ret_ty = _triton.ir.type.make_block(ret_ty, src_ty.shape)
+            # FP Truncation
+            if src_ty.scalar.is_floating() and ret_ty.scalar.is_floating() and\
+               src_ty.scalar.fp_mantissa_width > ret_ty.scalar.fp_mantissa_width:
+                return self.builder.fp_trunc(args[0], ret_ty)
+            raise NotImplementedError(f"cast from {src_ty} to {ret_ty}")
         if name == 'dot':
             M, K = args[0].type.shape
             K, N = args[1].type.shape
@@ -453,9 +479,10 @@ MB, NB, KB = 128, 128, 32
 
 @kernel
 def matmul(Cptr, Aptr, Bptr, M, N, K, lda, ldb, ldc):
-    pid = get_program_id(0)
-    rm = pid * MB + arange(0, MB)
-    rn = pid * NB + arange(0, NB)
+    pid_m = get_program_id(0)
+    pid_n = get_program_id(1)
+    rm = pid_m * MB + arange(0, MB)
+    rn = pid_n * NB + arange(0, NB)
     rk = arange(0, KB)
     Aptr = Aptr + rm[:, None] * lda + rk[None, :]
     Bptr = Bptr + rk[:, None] * ldb + rn[None, :]
@@ -463,13 +490,15 @@ def matmul(Cptr, Aptr, Bptr, M, N, K, lda, ldb, ldc):
     c = zeros(MB, NB)
     for k in range(K, 0, -KB):
         c += dot(load(Aptr), load(Bptr))
-    store(Cptr, c)
+        Aptr += KB
+        Bptr += KB * ldb
+    store(Cptr, cast(c, float16))
 
 
 M, N, K = 128, 128, 128
-A = torch.rand((M, K), dtype=torch.float16, device='cuda')
-B = torch.rand((K, N), dtype=torch.float16, device='cuda')
-C = torch.empty((M, N), device='cuda')
+A = torch.randn((M, K), dtype=torch.float16, device='cuda')
+B = torch.randn((K, N), dtype=torch.float16, device='cuda')
+C = torch.empty((M, N), dtype=torch.float16, device='cuda')
 matmul(C, A, B, M, N, K, A.stride(0), B.stride(0), C.stride(0))
 print(torch.matmul(A, B))
 print(C)

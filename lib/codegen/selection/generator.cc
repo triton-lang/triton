@@ -406,8 +406,11 @@ void generator::visit_load_inst(ir::load_inst* x){
       //   ret = false_value
       PHINode *_ret = phi(ptr->getType()->getPointerElementType(), 2);
       Instruction *then_term;
-      Instruction *else_term;
-      llvm::SplitBlockAndInsertIfThenElse(vals_[mx->get_mask_operand()][idx], _ret, &then_term, &else_term);
+            Instruction *else_term;
+            builder_->SetInsertPoint(_ret->getParent());
+            Instruction* dummy = builder_->CreateRet(nullptr);
+            llvm::SplitBlockAndInsertIfThenElse(vals_[mx->get_mask_operand()][idx], _ret, &then_term, &else_term);
+            dummy->removeFromParent();
       builder_->SetInsertPoint(then_term);
       Value* then_ret = load(ptr);
       builder_->SetInsertPoint(else_term);
