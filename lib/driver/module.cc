@@ -316,6 +316,7 @@ void cu_module::init_from_ptx(const std::string& ptx) {
 //      log = match.suffix();
 //    }
 //    std::cout << log << std::endl;
+//    std::cout << ptx_ << std::endl;
 
     CUjit_option opt[] = {CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER,
                           CU_JIT_INFO_LOG_BUFFER_SIZE_BYTES, CU_JIT_INFO_LOG_BUFFER,

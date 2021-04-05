@@ -266,15 +266,6 @@ DEFINE_FCMP_INSTR(ONE, cmp_pred_t::FCMP_ONE)
 
 value *builder::create_load(value *ptr){
   return insert(unmasked_load_inst::create(ptr));
-//  type  *ty  = ptr->get_type()->get_pointer_element_ty();
-//  value *mask   = constant_int::get(get_int1_ty(), 1);
-//  value *undef  = undef_value::get(ty);
-//  if(ptr->get_type()->is_tile_ty()){
-//    auto shapes = ptr->get_type()->get_tile_shapes();
-//    return insert(masked_load_inst::create(ptr, create_splat(mask, shapes), create_splat(undef, shapes)));
-//  }
-//  return insert(masked_load_inst::create(ptr, mask, undef));
-
 }
 
 value *builder::create_store(value *ptr, value *val){

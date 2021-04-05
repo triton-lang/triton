@@ -35,7 +35,7 @@ private:
 
 /* Attribute */
 enum attribute_kind_t {
-  readonly,
+  readonly = 0,
   writeonly,
   noalias,
   aligned,
@@ -71,7 +71,7 @@ public:
       case writeonly: return ".writeonly";
       case noalias: return ".noalias";
       case aligned: return ".aligned(" + std::to_string(value_) + ")";
-      case multiple_of: return ".readonly";
+      case multiple_of: return ".multipleof(" + std::to_string(value_) + ")";
       case retune: return ".retunr";
       default: break;
     }

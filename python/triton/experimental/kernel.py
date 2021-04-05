@@ -118,12 +118,13 @@ class CodeGenerator(ast.NodeVisitor):
         if add_scope:
             self.module.pop_scope()
 
-    def __init__(self, module, prototype, gscope):
+    def __init__(self, module, prototype, gscope, attributes):
         self.module = module
         self.builder = module.builder
         self.prototype = prototype
         self.gscope = gscope
         self.lscope = dict()
+        self.attributes = attributes
         self.builtins = {'range': __builtins__.range}
 
     def visit_Module(self, node):
@@ -137,6 +138,12 @@ class CodeGenerator(ast.NodeVisitor):
         # initialize function
         fn = module.get_or_insert_function(node.name, self.prototype)
         for i, arg_name in enumerate(arg_names):
+            if i in self.attributes:
+                is_ptr = fn.args[i].type.is_ptr()
+                attr = 'aligned' if is_ptr else 'multiple_of'
+                attr = getattr(_triton.ir.attribute_kind, attr)
+                attr = _triton.ir.attribute(attr, self.attributes[i])
+                fn.add_attr(i + 1, attr)
             fn.args[i].name = arg_name
             module.set_value(arg_name, fn.args[i])
             module.scope.set_type(arg_name, fn.args[i].type)
@@ -270,11 +277,11 @@ class CodeGenerator(ast.NodeVisitor):
         pos_cond_node = ast.BinOp(ld_target, ast.Lt(), node.iter.args[1])
         neg_cond_node = ast.BinOp(ld_target, ast.Gt(), node.iter.args[1])
         pos_step_node = ast.BinOp(node.iter.args[2], ast.Gt(), ast.Num(0))
-        #cond_node = ast.Call()
-        #cond_node.func = ast.Name(id="select", ctx=ast.Load())
-        #cond_node.args = [pos_step_node, pos_cond_node, neg_cond_node]
-        #cond_node.keywords = []
-        cond_node = neg_cond_node
+        cond_node = ast.Call()
+        cond_node.func = ast.Name(id="select", ctx=ast.Load())
+        cond_node.args = [pos_step_node, pos_cond_node, neg_cond_node]
+        cond_node.keywords = []
+        #cond_node = neg_cond_node
         step_node = ast.AugAssign(target=st_target, op=ast.Add(), value=node.iter.args[2])
         # code generation
         current_bb = self.builder.get_insert_block()
@@ -421,12 +428,24 @@ class binary:
         stream.enqueue(self.kernel, grid_0, grid_1, grid_2, self.num_warps * 32, 1, 1, args, self.shared_mem)
 
 
-def kernel(fn):
+def cdiv(a, b):
+    return (a + b - 1) // b
+
+
+def pow2_divisor(N):
+    if N % 16 == 0: return 16
+    if N % 8 == 0: return 8
+    if N % 4 == 0: return 4
+    if N % 2 == 0: return 2
+    return 1
+
+
+def jit(fn):
     num_warps = 4
 
-    kernel.cache[fn] = dict()
+    jit.cache[fn] = dict()
 
-    def wrapper(*wargs):
+    def wrapper(*wargs, grid):
         # device inference
         tensor_idxs = [i for i, arg in enumerate(wargs) if isinstance(arg, torch.Tensor)]
         if len(tensor_idxs) == 0:
@@ -439,9 +458,14 @@ def kernel(fn):
             suffix = suffixes[arg.dtype] if i in tensor_idxs else suffixes[arg.__class__]
             types_key[i] = prefix + suffix
         types_key = '_'.join(types_key)
+        # attribute key
+        args = [arg.data_ptr() if i in tensor_idxs else arg for i, arg in enumerate(wargs)]
+        attributes = {i: pow2_divisor(a) for i, a in enumerate(args) if isinstance(a, int)}
+        attr_key = '_'.join(map(str, attributes.values()))
+
         # retrieve from cache
-        key = f'{device.type}_{device.index}_{types_key}'
-        if key not in kernel.cache[fn]:
+        key = f'{device.type}_{device.index}_{types_key}_{attr_key}'
+        if key not in jit.cache[fn]:
             # create IR module
             module = _triton.ir.module("")
             # Generate Triton IR
@@ -449,35 +473,31 @@ def kernel(fn):
             ret_type = _triton.ir.type.get_void(module.context)
             prototype = _triton.ir.type.make_function(ret_type, arg_types)
             tree = ast.parse(inspect.getsource(fn))
-            CodeGenerator(module, prototype, gscope=globals()).visit(tree)
+            CodeGenerator(module, prototype, gscope=globals(), attributes=attributes).visit(tree)
             tt_device = _triton.driver.cu_device(device.index, False)
             # Compile to machine code
             mod, ker, shared_mem = _triton.codegen.add_passes_to_emit_bin(module, tt_device, num_warps)
-            print('compiled')
             caller = binary(mod, ker, num_warps, shared_mem)
-            print('compiled!')
-            kernel.cache[fn][key] = caller
+            jit.cache[fn][key] = caller
         # create callable kernel from IR
-        caller = kernel.cache[fn][key]
+        caller = jit.cache[fn][key]
         # pack arguments
         fmt = ''.join(['P' if i in tensor_idxs else suffixes[arg.__class__] for i, arg in enumerate(wargs)])
-        args = [arg.data_ptr() if i in tensor_idxs else arg for i, arg in enumerate(wargs)]
         params = struct.pack(fmt, *args)
         # run function
         cu_stream = torch.cuda.current_stream(device.index).cuda_stream
         stream = _triton.driver.cu_stream(cu_stream, False)
-        grid = (1, 1, 1)
         caller(stream, params, *grid)
 
     return wrapper
 
 
-kernel.cache = dict()
+jit.cache = dict()
 
 MB, NB, KB = 128, 128, 32
 
 
-@kernel
+@jit
 def matmul(Cptr, Aptr, Bptr, M, N, K, lda, ldb, ldc):
     pid_m = get_program_id(0)
     pid_n = get_program_id(1)
@@ -486,19 +506,18 @@ def matmul(Cptr, Aptr, Bptr, M, N, K, lda, ldb, ldc):
     rk = arange(0, KB)
     Aptr = Aptr + rm[:, None] * lda + rk[None, :]
     Bptr = Bptr + rk[:, None] * ldb + rn[None, :]
-    Cptr = Cptr + rm[:, None] * ldc + rn[None, :]
     c = zeros(MB, NB)
     for k in range(K, 0, -KB):
         c += dot(load(Aptr), load(Bptr))
         Aptr += KB
         Bptr += KB * ldb
+    Cptr = Cptr + rm[:, None] * ldc + rn[None, :]
     store(Cptr, cast(c, float16))
 
 
-M, N, K = 128, 128, 128
+M, N, K = 512, 512, 512
 A = torch.randn((M, K), dtype=torch.float16, device='cuda')
 B = torch.randn((K, N), dtype=torch.float16, device='cuda')
 C = torch.empty((M, N), dtype=torch.float16, device='cuda')
-matmul(C, A, B, M, N, K, A.stride(0), B.stride(0), C.stride(0))
-print(torch.matmul(A, B))
-print(C)
+matmul(C, A, B, M, N, K, A.stride(0), B.stride(0), C.stride(0), grid=(cdiv(M, MB), cdiv(N, NB)))
+assert torch.allclose(C, torch.mm(A, B), atol=1e-3, rtol=1e-3)

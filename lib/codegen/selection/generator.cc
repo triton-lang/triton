@@ -449,6 +449,7 @@ void generator::visit_store_inst(ir::store_inst * x){
     size_t aln = alignment_->get(ptr_op, ord[0]);
     size_t nts = axes_.at(a_axes_->get(x->get_pointer_operand(), ord[0])).contiguous;
     vec  = std::min(nts, aln);
+//    std::cout << aln << " " << nts << std::endl;
   }
   auto idxs    = idxs_.at(val_op);
   Type *ty = cvt(val_op->get_type()->get_scalar_ty());

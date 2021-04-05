@@ -256,8 +256,23 @@ void init_triton_ir(py::module &&m) {
       .def_property_readonly("scope", &ir::module::get_scope, ret::reference)
       .def_property_readonly("builder", &ir::module::get_builder);
 
+  using eattr = ir::attribute_kind_t;
+  py::enum_<eattr>(m, "attribute_kind")
+      .value("readonly", eattr::readonly)
+      .value("writeonly", eattr::writeonly)
+      .value("noalias", eattr::noalias)
+      .value("aligned", eattr::aligned)
+      .value("multiple_of", eattr::multiple_of)
+      .value("retune", eattr::retune)
+      .value("not_implemented", eattr::not_implemented);
+
+  py::class_<ir::attribute>(m, "attribute")
+      .def(py::init<eattr, int>());
+
   py::class_<ir::function>(m, "function")
-      .def_property_readonly("args", &ir::function::args);
+      .def_property_readonly("args", &ir::function::args)
+      .def_property_readonly("attrs", &ir::function::attrs)
+      .def("add_attr", &ir::function::add_attr);
 
   py::class_<ir::argument, ir::value>(m, "argument");
 
