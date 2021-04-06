@@ -24,6 +24,10 @@ class float16:
         return _triton.ir.type.get_fp16(context)
 
 
+class Stub:
+    pass
+
+
 def load(ptr):
     pass
 
@@ -41,19 +45,19 @@ def cast(arg, dtype):
 
 
 def arange(start, end):
-    pass
+    return Stub()
 
 
-def get_program_id(axis):
-    pass
+def program_id(axis):
+    return Stub()
 
 
 def store(ptr, arg):
     pass
 
 
-def zeros(shape):
-    pass
+def zeros(*shape):
+    return Stub()
 
 
 class CodeGenerator(ast.NodeVisitor):
@@ -118,13 +122,14 @@ class CodeGenerator(ast.NodeVisitor):
         if add_scope:
             self.module.pop_scope()
 
-    def __init__(self, module, prototype, gscope, attributes):
+    def __init__(self, module, prototype, gscope, attributes, kwargs):
         self.module = module
         self.builder = module.builder
         self.prototype = prototype
         self.gscope = gscope
         self.lscope = dict()
         self.attributes = attributes
+        self.kwargs = kwargs
         self.builtins = {'range': __builtins__.range}
 
     def visit_Module(self, node):
@@ -134,7 +139,9 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node):
         module = self.module
-        arg_names = ast.NodeVisitor.visit(self, node.args)
+        arg_names, kwarg_names = ast.NodeVisitor.visit(self, node.args)
+        # store keyword arguments in local scope
+        self.lscope[kwarg_names] = self.kwargs
         # initialize function
         fn = module.get_or_insert_function(node.name, self.prototype)
         for i, arg_name in enumerate(arg_names):
@@ -157,10 +164,11 @@ class CodeGenerator(ast.NodeVisitor):
         module.builder.ret_void()
 
     def visit_arguments(self, node):
-        names = []
+        arg_names = []
         for arg in node.args:
-            names += [ast.NodeVisitor.visit(self, arg)]
-        return names
+            arg_names += [ast.NodeVisitor.visit(self, arg)]
+        kwarg_names = ast.NodeVisitor.visit(self, node.kwarg)
+        return arg_names, kwarg_names
 
     def visit_arg(self, node):
         ast.NodeVisitor.generic_visit(self, node)
@@ -173,8 +181,9 @@ class CodeGenerator(ast.NodeVisitor):
         assert len(names) == 1
         name = names[0]
         value = ast.NodeVisitor.visit(self, node.value)
-        self.module.set_value(name, value)
-        self.module.scope.set_type(name, value.type)
+        if isinstance(value, _triton.ir.value):
+            self.module.set_value(name, value)
+            self.module.scope.set_type(name, value.type)
         self.lscope[name] = value
 
     def visit_AugAssign(self, node):
@@ -199,6 +208,10 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_BinOp(self, node):
         lhs = ast.NodeVisitor.visit(self, node.left)
         rhs = ast.NodeVisitor.visit(self, node.right)
+        if isinstance(lhs, int):
+            lhs = self.builder.get_int32(lhs)
+        if isinstance(rhs, int):
+            rhs = self.builder.get_int32(rhs)
         lhs, rhs = self.broadcast(lhs, rhs)
         lhs_ty = lhs.type.scalar
         rhs_ty = rhs.type.scalar
@@ -233,6 +246,8 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_UnaryOp(self, node):
         operand = ast.NodeVisitor.visit(self, node.operand)
+        if isinstance(operand, int):
+            operand = self.builder.get_int32(operand)
         # Handle non-constant
         _0f = self.builder.get_float32(0)
         _0i = self.builder.get_int32(0)
@@ -248,10 +263,17 @@ class CodeGenerator(ast.NodeVisitor):
 
         raise NotImplementedError(f"Unsupported op: {node.op}")
 
+    def visit_Str(self, node):
+        return ast.literal_eval(node)
+
     def visit_Subscript(self, node):
-        assert node.ctx.__class__.__name__ == "Load"
         lhs = ast.NodeVisitor.visit(self, node.value)
         slices = ast.NodeVisitor.visit(self, node.slice)
+        if isinstance(lhs, dict):
+            return dict.__getitem__(lhs, slices)
+        assert isinstance(lhs, _triton.ir.value)
+        assert node.ctx.__class__.__name__ == "Load"
+        # subscripting ir-value
         shapes = []
         curr = 0
         for s in slices:
@@ -328,7 +350,7 @@ class CodeGenerator(ast.NodeVisitor):
         args = [ast.NodeVisitor.visit(self, arg) for arg in node.args]
         assert not node.keywords, "keywords not supported"
         assert not any(arg is None for arg in args)
-        if name == 'get_program_id':
+        if name == 'program_id':
             return self.builder.get_program_id(int(args[0]))
         if name == 'arange':
             return self.builder.get_range(int(args[0]), int(args[1]))
@@ -445,9 +467,7 @@ class Kernel:
         self.fn = fn
         self.grid = grid
 
-    def __call__(self, *wargs, **meta):
-        if 'num_warps' not in meta:
-            meta['num_warps'] = 4
+    def __call__(self, *wargs, num_warps=4, **meta):
         # device inference
         tensor_idxs = [i for i, arg in enumerate(wargs) if isinstance(arg, torch.Tensor)]
         if len(tensor_idxs) == 0:
@@ -468,7 +488,6 @@ class Kernel:
         key = f'{device.type}_{device.index}_{types_key}_{attr_key}'
         cache = self.fn.cache
         if key not in cache:
-            num_warps = meta['num_warps']
             # create IR module
             module = _triton.ir.module("")
             # Generate Triton IR
@@ -476,7 +495,7 @@ class Kernel:
             ret_type = _triton.ir.type.get_void(module.context)
             prototype = _triton.ir.type.make_function(ret_type, arg_types)
             tree = ast.parse(inspect.getsource(self.fn.src))
-            CodeGenerator(module, prototype, gscope=globals(), attributes=attributes).visit(tree)
+            CodeGenerator(module, prototype, gscope=globals(), attributes=attributes, kwargs=meta).visit(tree)
             tt_device = _triton.driver.cu_device(device.index, False)
             # Compile to machine code
             mod, ker, shared_mem = _triton.codegen.add_passes_to_emit_bin(module, tt_device, num_warps)
@@ -492,42 +511,81 @@ class Kernel:
         binary(stream, params, *self.grid(meta))
 
 
+class Autotuner:
+    def __init__(self, kernel, configs):
+        if not configs:
+            self.configs = [Config(dict(), num_warps=4)]
+        else:
+            self.configs = configs
+        self.kernel = kernel
+
+    def __call__(self, *args, **meta):
+        for config in self.configs:
+            # check for conflicts, i.e. meta-parameters both provided
+            # as kwargs and by the autotuner
+            conflicts = meta.keys() & config.meta.keys()
+            if conflicts:
+                raise ValueError(
+                    f"Conflicting meta-parameters: {', '.join(conflicts)}."
+                    " Make sure that you don't re-define auto-tuned symbols."
+                )
+            # augment meta-parameters with tunable ones
+            meta.update(config.meta)
+            self.kernel(*args, num_warps=config.num_warps, **meta)
+
+
 class JITFunction:
-    def __init__(self, src):
+    def __init__(self, src, configs):
         self.src = src
+        self.configs = configs
         self.cache = dict()
 
     def compile(self, module, device, num_warps):
         pass
 
     def __getitem__(self, grid_fn):
-        return Kernel(self, grid)
+        return Autotuner(Kernel(self, grid), self.configs)
 
 
-def jit(fn):
-    return JITFunction(fn)
+class Config:
+    def __init__(self, meta, num_warps=4):
+        self.meta = meta
+        self.num_warps = num_warps
 
 
-MB, NB, KB = 128, 128, 32
-meta = {'MB': MB, 'NB': NB, 'KB': KB}
+def jit(configs=None):
+    if configs is None:
+        configs = []
+
+    def decorator(fn):
+        return JITFunction(fn, configs)
+
+    return decorator
 
 
-@jit
-def matmul(Cptr, Aptr, Bptr, M, N, K, lda, ldb, ldc, **meta):
-    pid_m = get_program_id(0)
-    pid_n = get_program_id(1)
-    rm = pid_m * MB + arange(0, MB)
-    rn = pid_n * NB + arange(0, NB)
-    rk = arange(0, KB)
-    Aptr = Aptr + rm[:, None] * lda + rk[None, :]
-    Bptr = Bptr + rk[:, None] * ldb + rn[None, :]
-    c = zeros(MB, NB)
-    for k in range(K, 0, -KB):
-        c += dot(load(Aptr), load(Bptr))
-        Aptr += KB
-        Bptr += KB * ldb
-    Cptr = Cptr + rm[:, None] * ldc + rn[None, :]
-    store(Cptr, cast(c, float16))
+@jit(configs=[
+    Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32}, num_warps=4),
+])
+def matmul(C, A, B, M, N, K, lda, ldb, ldc, **META):
+    # extract meta-parameters
+    BLOCK_M = META['BLOCK_M']
+    BLOCK_N = META['BLOCK_N']
+    BLOCK_K = META['BLOCK_K']
+    # matrix multiplication
+    pid_m = program_id(0)
+    pid_n = program_id(1)
+    rm = pid_m * BLOCK_M + arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + arange(0, BLOCK_N)
+    rk = arange(0, BLOCK_K)
+    A = A + rm[:, None] * lda + rk[None, :]
+    B = B + rk[:, None] * ldb + rn[None, :]
+    c = zeros(BLOCK_M, BLOCK_N)
+    for k in range(K, 0, -BLOCK_K):
+        c += dot(load(A), load(B))
+        A += BLOCK_K
+        B += BLOCK_K * ldb
+    C = C + rm[:, None] * ldc + rn[None, :]
+    store(C, cast(c, float16))
 
 
 M, N, K = 512, 512, 512
@@ -535,8 +593,7 @@ A = torch.randn((M, K), dtype=torch.float16, device='cuda')
 B = torch.randn((K, N), dtype=torch.float16, device='cuda')
 C = torch.empty((M, N), dtype=torch.float16, device='cuda')
 # Launch triton kernel
-grid = lambda _: (cdiv(M, meta['MB']), cdiv(N, meta['NB']))
+grid = lambda META: (cdiv(M, META['BLOCK_M']), cdiv(N, META['BLOCK_N']))
 matmul[grid](C, A, B, M, N, K, A.stride(0), B.stride(0), C.stride(0))
 # Compare results
-assert torch.allclose(C, torch.mm(A, B), atol=1e-3, rtol=1e-3)
-print(C)
+assert torch.allclose(C, torch.matmul(A, B), atol=1e-3, rtol=1e-3)
