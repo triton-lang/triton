@@ -80,6 +80,11 @@ def load(ptr):
     return ir_value(builder, builder.load(ptr._handle))
 
 
+def store(ptr, arg):
+    builder = ptr.builder
+    return ir_value(builder, builder.store(ptr._handle, arg._handle))
+
+
 def dot(a, b):
     builder = a.builder
     M, K = a.type.shape
@@ -92,7 +97,8 @@ def dot(a, b):
 
 
 def select(cond, true_val, false_val):
-    pass
+    builder = cond.builder
+    return ir_value(builder, builder.select(cond._handle, true_val._handle, false_val._handle))
 
 
 def cast(arg, dtype):
@@ -114,10 +120,6 @@ def arange(start, end):
 
 def program_id(axis):
     return Stub()
-
-
-def store(ptr, arg):
-    pass
 
 
 def zeros(*shape):
@@ -399,11 +401,11 @@ class CodeGenerator(ast.NodeVisitor):
         if name == 'program_id':
             return self._wrap_ir(self.builder.get_program_id(int(args[0]._handle)))
         if name == 'arange':
-            return self._wrap_ir(self.builder.get_range(int(args[0]._handle), int(args[1]._handle)))
+            return self._wrap_ir(self.builder.arange(int(args[0]._handle), int(args[1]._handle)))
         if name == 'load':
             return load(*args)
         if name == 'store':
-            return self._wrap_ir(self.builder.store(*[arg._handle for arg in args]))
+            return store(*args)
         if name == 'zeros':
             _0 = self.builder.get_float32(0)
             shape = [int(x._handle) for x in args]
@@ -413,7 +415,7 @@ class CodeGenerator(ast.NodeVisitor):
         if name == 'dot':
             return dot(*args)
         if name == 'select':
-            return self._wrap_ir(self.builder.select(*[arg._handle for arg in args]))
+            return select(*args)
         raise NotImplementedError(f"Unsupported function: {name}")
 
     def visit_Num(self, node):

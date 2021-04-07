@@ -584,32 +584,32 @@ protected:
 
 class get_program_id_inst: public builtin_inst {
 private:
-  get_program_id_inst(type *ty, unsigned axis, const std::string &name, instruction *next);
-  std::string repr_impl() const { return "get_program_id(" + std::to_string(axis_) + ")"; }
+  get_program_id_inst(type *ty, constant_int *axis, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "get_program_id(" + std::to_string(axis_->get_value()) + ")"; }
 
 public:
-  static instruction* create(context &ctx, unsigned axis, const std::string &name = "", instruction *next = nullptr);
-  unsigned get_axis() const { return axis_; }
+  static instruction* create(context &ctx, constant_int* axis, const std::string &name = "", instruction *next = nullptr);
+  constant_int* get_axis() const { return axis_; }
   _TRITON_DEFINE_CLONE(get_program_id_inst)
   _TRITON_DEFINE_ACCEPT(get_program_id_inst)
 
 private:
-  unsigned axis_;
+  constant_int* axis_;
 };
 
 class get_num_program_inst: public builtin_inst {
 private:
-  get_num_program_inst(type *ty, unsigned axis, const std::string &name, instruction *next);
-  std::string repr_impl() const { return "get_num_program(" + std::to_string(axis_) + ")"; }
+  get_num_program_inst(type *ty, constant_int *axis, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "get_num_program(" + std::to_string(axis_->get_value()) + ")"; }
 
 public:
-  static instruction* create(context &ctx, unsigned axis, const std::string &name = "", instruction *next = nullptr);
-  unsigned get_axis() const { return axis_; }
+  static instruction* create(context &ctx, constant_int* axis, const std::string &name = "", instruction *next = nullptr);
+  constant_int* get_axis() const { return axis_; }
   _TRITON_DEFINE_CLONE(get_num_program_inst)
   _TRITON_DEFINE_ACCEPT(get_num_program_inst)
 
 private:
-  unsigned axis_;
+  constant_int* axis_;
 };
 
 class atomic_cas_inst: public builtin_inst {

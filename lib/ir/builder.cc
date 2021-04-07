@@ -57,9 +57,7 @@ value *builder::get_int64(int64_t val)
 value *builder::get_float32(float val)
 { return constant_fp::get(type::get_float_ty(ctx_), val); }
 
-value *builder::get_range(int32_t _lo, int32_t _hi) {
-  constant_int* lo = static_cast<constant_int*>(get_int32(_lo));
-  constant_int* hi = static_cast<constant_int*>(get_int32(_hi));
+value *builder::create_arange(constant_int *lo, constant_int *hi) {
   return insert(make_range::create(lo, hi));
 }
 
@@ -305,11 +303,11 @@ value *builder::create_downcast(value *arg) {
 //                               built-in instructions
 //===----------------------------------------------------------------------===//
 
-value *builder::create_get_program_id(unsigned axis) {
+value *builder::create_get_program_id(constant_int* axis) {
   return insert(get_program_id_inst::create(ctx_, axis));
 }
 
-value *builder::create_get_num_program(unsigned axis) {
+value *builder::create_get_num_program(constant_int* axis) {
   return insert(get_num_program_inst::create(ctx_, axis));
 }
 

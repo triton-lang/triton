@@ -435,6 +435,7 @@ void init_triton_ir(py::module &&m) {
       .def("reshape", &ir::builder::create_reshape, ret::reference)
       .def("broadcast", &ir::builder::create_broadcast, ret::reference)
       // Built-in instruction
+      .def("arange", &ir::builder::create_arange, ret::reference)
       .def("get_program_id", &ir::builder::create_get_program_id, ret::reference)
       .def("get_num_program", &ir::builder::create_get_num_program, ret::reference)
       .def("atomic_cas", &ir::builder::create_atomic_cas, ret::reference)
@@ -450,7 +451,6 @@ void init_triton_ir(py::module &&m) {
       // constants
       .def("get_int32", &ir::builder::get_int32, ret::reference)
       .def("get_float32", &ir::builder::get_float32, ret::reference)
-      .def("get_range", &ir::builder::get_range, ret::reference)
       // control-flow
       .def("get_insert_block", &ir::builder::get_insert_block, ret::reference)
       .def("set_insert_block", (void (ir::builder::*)(ir::basic_block *)) & ir::builder::set_insert_point);

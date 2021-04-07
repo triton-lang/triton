@@ -41,7 +41,6 @@ public:
   value *get_int32(int32_t val);
   value *get_int64(int64_t val);
   value *get_float32(float val);
-  value *get_range(int32_t lo, int32_t hi);
   // Types
   type *get_void_ty();
   type *get_int1_ty();
@@ -136,8 +135,9 @@ public:
   value *create_reshape(value *arg, const type::block_shapes_t &shapes);
   value *create_broadcast(value *arg, const type::block_shapes_t &shapes);
   // Built-in instruction
-  value *create_get_program_id(unsigned axis);
-  value *create_get_num_program(unsigned axis);
+  value *create_arange(constant_int* lo, constant_int* hi);
+  value *create_get_program_id(constant_int *axis);
+  value *create_get_num_program(constant_int* axis);
   value *create_atomic_cas(value *ptr, value *cmp, value *val);
   value *create_atomic_exch(value *ptr, value *val);
   value *create_atomic_add(value *ptr, value *val, value *msk);
