@@ -191,16 +191,78 @@ void init_triton_codegen(py::module &&m) {
 /*****************************************************************************/
 /* Python bindings for triton::ir                                            */
 /*****************************************************************************/
+ir::builder *get_builder(ir::value *lhs, ir::value *rhs) {
+  return lhs->get_type()->get_context().builder;
+};
+
+ir::value *__add__(ir::value *lhs, ir::value *rhs) {
+  ir::builder *builder = get_builder(lhs, rhs);
+  ir::type *lhs_ty = lhs->get_type()->get_scalar_ty();
+  ir::type *rhs_ty = rhs->get_type()->get_scalar_ty();
+  // ptr + offset
+  if (lhs_ty->is_pointer_ty())
+    return builder->create_gep(lhs, {rhs});
+  // float + float
+  else if (lhs_ty->is_floating_point_ty())
+    return builder->create_fadd(lhs, rhs);
+  // int + int
+  else if (lhs_ty->is_integer_ty())
+    return builder->create_add(lhs, rhs);
+  throw pybind11::value_error("unsupported operands for +");
+}
+
+ir::value *__mul__(ir::value *lhs, ir::value *rhs) {
+  ir::builder *builder = get_builder(lhs, rhs);
+  ir::type *lhs_ty = lhs->get_type()->get_scalar_ty();
+  ir::type *rhs_ty = rhs->get_type()->get_scalar_ty();
+  // float * float
+  if (lhs_ty->is_floating_point_ty())
+    return builder->create_fmul(lhs, rhs);
+  // int * int
+  else if (lhs_ty->is_integer_ty())
+    return builder->create_mul(lhs, rhs);
+  throw pybind11::value_error("unsupported operands for *");
+}
+
+ir::value *__gt__(ir::value *lhs, ir::value *rhs) {
+  ir::builder *builder = get_builder(lhs, rhs);
+  ir::type *lhs_ty = lhs->get_type()->get_scalar_ty();
+  ir::type *rhs_ty = rhs->get_type()->get_scalar_ty();
+  // float > float
+  if (lhs_ty->is_floating_point_ty())
+    return builder->create_fcmpOGT(lhs, rhs);
+  else if (lhs_ty->is_integer_ty())
+    return builder->create_icmpSGT(lhs, rhs);
+  throw pybind11::value_error("unsupported operands for >");
+}
+
+ir::value *__lt__(ir::value *lhs, ir::value *rhs) {
+  ir::builder *builder = get_builder(lhs, rhs);
+  ir::type *lhs_ty = lhs->get_type()->get_scalar_ty();
+  ir::type *rhs_ty = rhs->get_type()->get_scalar_ty();
+  // float > float
+  if (lhs_ty->is_floating_point_ty())
+    return builder->create_fcmpOLT(lhs, rhs);
+  else if (lhs_ty->is_integer_ty())
+    return builder->create_icmpSLT(lhs, rhs);
+  throw pybind11::value_error("unsupported operands for <");
+}
+
 void init_triton_ir(py::module &&m) {
   using ret = py::return_value_policy;
   using namespace pybind11::literals;
 
   py::class_<ir::context>(m, "context")
-      .def(py::init<>());
+      .def(py::init<>())
+      .def_readwrite("builder", &ir::context::builder);
 
   py::class_<ir::value>(m, "value")
       .def_property("name", &ir::value::get_name, &ir::value::set_name)
-      .def_property_readonly("type", &ir::value::get_type);
+      .def_property_readonly("type", &ir::value::get_type)
+      .def("__add__", &__add__, ret::reference)
+      .def("__mul__", &__mul__, ret::reference)
+      .def("__gt__", &__gt__, ret::reference)
+      .def("__lt__", &__lt__, ret::reference);
 
   py::class_<ir::user, ir::value>(m, "user");
 
@@ -231,7 +293,8 @@ void init_triton_ir(py::module &&m) {
       .def("get_int32", &ir::type::get_int32_ty, ret::reference)
       .def("get_int64", &ir::type::get_int64_ty, ret::reference)
       .def_property_readonly("fp_mantissa_width", &ir::type::get_fp_mantissa_width)
-      .def_property_readonly("scalar", &ir::type::get_scalar_ty);
+      .def_property_readonly("scalar", &ir::type::get_scalar_ty)
+      .def_property_readonly("context", &ir::type::get_context, ret::reference);
 
   py::class_<ir::pointer_type, ir::type>(m, "pointer_type");
   py::class_<ir::function_type, ir::type>(m, "function_type");

@@ -12,6 +12,16 @@ from abc import ABC, abstractmethod
 ########################
 
 
+class ir_value:
+    def __init__(self, builder, handle):
+        self.builder = builder
+        self.type = handle.type
+        self._handle = handle
+
+    def __add__(self, other):
+        pass
+
+
 class float32:
     @staticmethod
     def make_ir(context):
@@ -215,7 +225,6 @@ class CodeGenerator(ast.NodeVisitor):
         lhs, rhs = self.broadcast(lhs, rhs)
         lhs_ty = lhs.type.scalar
         rhs_ty = rhs.type.scalar
-
         # Handle ADD operator
         if type(node.op) == ast.Add:
             if lhs_ty.is_ptr():  # ptr + offset
@@ -490,12 +499,14 @@ class Kernel:
         if key not in cache:
             # create IR module
             module = _triton.ir.module("")
+            module.context.builder = module.builder
             # Generate Triton IR
             arg_types = [as_ir_type(module, arg) for arg in wargs]
             ret_type = _triton.ir.type.get_void(module.context)
             prototype = _triton.ir.type.make_function(ret_type, arg_types)
             tree = ast.parse(inspect.getsource(self.fn.src))
-            CodeGenerator(module, prototype, gscope=globals(), attributes=attributes, kwargs=meta).visit(tree)
+            code_gen = CodeGenerator(module, prototype, gscope=globals(), attributes=attributes, kwargs=meta)
+            code_gen.visit(tree)
             tt_device = _triton.driver.cu_device(device.index, False)
             # Compile to machine code
             mod, ker, shared_mem = _triton.codegen.add_passes_to_emit_bin(module, tt_device, num_warps)
