@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #ifndef _TRITON_IR_BUILDER_H_
 #define _TRITON_IR_BUILDER_H_
@@ -27,6 +27,8 @@ class builder{
 public:
   // Constructor
   builder(context &ctx);
+  // Getters
+  const context& get_context() { return ctx_; }
   // Setters
   void set_insert_point(iterator instr);
   void set_insert_point(instruction* i);

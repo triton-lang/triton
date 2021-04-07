@@ -76,11 +76,19 @@ class Stub:
 
 
 def load(ptr):
-    pass
+    builder = ptr.builder
+    return ir_value(builder, builder.load(ptr._handle))
 
 
 def dot(a, b):
-    pass
+    builder = a.builder
+    M, K = a.type.shape
+    K, N = b.type.shape
+    assert a.type.scalar.is_floating()
+    assert b.type.scalar.is_floating()
+    _0 = builder.get_float32(0)
+    _0 = builder.splat(_0, [M, N])
+    return ir_value(builder, builder.dot(a._handle, b._handle, _0))
 
 
 def select(cond, true_val, false_val):
@@ -88,7 +96,16 @@ def select(cond, true_val, false_val):
 
 
 def cast(arg, dtype):
-    pass
+    builder = arg.builder
+    # return type
+    dtype = dtype.make_ir(builder.context)
+    if arg.type.is_block:
+        dtype = _triton.ir.type.make_block(dtype, arg.type.shape)
+    # FP Truncation
+    if arg.type.scalar.is_floating() and dtype.scalar.is_floating() and\
+      arg.type.scalar.fp_mantissa_width > dtype.scalar.fp_mantissa_width:
+        return ir_value(builder, builder.fp_trunc(arg._handle, dtype))
+    raise NotImplementedError(f"cast from {arg.type} to {dtype}")
 
 
 def arange(start, end):
@@ -384,7 +401,7 @@ class CodeGenerator(ast.NodeVisitor):
         if name == 'arange':
             return self._wrap_ir(self.builder.get_range(int(args[0]._handle), int(args[1]._handle)))
         if name == 'load':
-            return self._wrap_ir(self.builder.load(*[arg._handle for arg in args]))
+            return load(*args)
         if name == 'store':
             return self._wrap_ir(self.builder.store(*[arg._handle for arg in args]))
         if name == 'zeros':
@@ -392,24 +409,9 @@ class CodeGenerator(ast.NodeVisitor):
             shape = [int(x._handle) for x in args]
             return self._wrap_ir(self.builder.splat(_0, shape))
         if name == 'cast':
-            # return type
-            src_ty = args[0].type
-            ret_ty = args[1].make_ir(self.module.context)
-            if src_ty.is_block:
-                ret_ty = _triton.ir.type.make_block(ret_ty, src_ty.shape)
-            # FP Truncation
-            if src_ty.scalar.is_floating() and ret_ty.scalar.is_floating() and\
-               src_ty.scalar.fp_mantissa_width > ret_ty.scalar.fp_mantissa_width:
-                return self._wrap_ir(self.builder.fp_trunc(args[0]._handle, ret_ty))
-            raise NotImplementedError(f"cast from {src_ty} to {ret_ty}")
+            return cast(*args)
         if name == 'dot':
-            M, K = args[0].type.shape
-            K, N = args[1].type.shape
-            assert args[0].type.scalar.is_floating()
-            assert args[1].type.scalar.is_floating()
-            _0 = self.builder.get_float32(0)
-            _0 = self.builder.splat(_0, [M, N])
-            return self._wrap_ir(self.builder.dot(args[0]._handle, args[1]._handle, _0))
+            return dot(*args)
         if name == 'select':
             return self._wrap_ir(self.builder.select(*[arg._handle for arg in args]))
         raise NotImplementedError(f"Unsupported function: {name}")

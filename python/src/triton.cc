@@ -361,6 +361,8 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<ir::builder>(m, "builder")
       .def(py::init<ir::context &>())
+      // getters
+      .def_property_readonly("context", &ir::builder::get_context, ret::reference)
       // terminator instructions
       .def("br", &ir::builder::create_br, ret::reference)
       .def("cond_br", &ir::builder::create_cond_br, ret::reference)
