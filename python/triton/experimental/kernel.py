@@ -660,6 +660,9 @@ def matmul(C, A, B, M, N, K, lda, ldb, ldc, **META):
         A += BLOCK_K
         B += BLOCK_K * ldb
     acc = acc.to(float16)
+    # rematerialize rm and rn to save registers
+    rm = pid_m * BLOCK_M + arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + arange(0, BLOCK_N)
     C = C + rm[:, None] * ldc + rn[None, :]
     store(C, acc)
 

@@ -102,144 +102,61 @@ You will specifically learn about:
 #
 # In practice, this can improve the performance of our matrix multiplication kernel by >10\% on some hardware architecture (e.g., 220 to 245 TFLOPS on A100).
 #
-# Final Result
-# ~~~~~~~~~~~~~~
-#
-# We are now ready to put all these pieces together and write our Triton kernel for matrix multiplication.
-# Note that we rematerialize :code:`rm` and :code:`rn:` after the inner loop to decrease register pressure.
-# This is an optimization that provides an additional 5% performance improvement and cannot be currently done by the Triton compiler.
-#
-#  .. code-block:: C
-#    :force:
-#
-#    #define MAX_GROUP_SIZE 8
-#
-#    __global__ void dot(TYPE* A, TYPE* B, TYPE* C,
-#                       int M, int N, int K,
-#                       int stride_a_0, int stride_b_0, int stride_c_0) {
-#      // prologue
-#      int pid = get_program_id(0);
-#      int grid_m = (M + MB - 1) / MB;
-#      int grid_n = (N + NB - 1) / NB;
-#      // re-order program ID for better L2 performance
-#      int width = MAX_GROUP_SIZE * grid_n;
-#      int group_id = pid / width;
-#      int group_size = min(grid_m - group_id * MAX_GROUP_SIZE, MAX_GROUP_SIZE);
-#      int pid_m = group_id * MAX_GROUP_SIZE + (pid % group_size);
-#      int pid_n = (pid % width) / (group_size);
-#      // pointers to operands
-#      // note the parentheses here; they force the offset
-#      // computation to happen in typeof(stride_a_0) = int32 rather than
-#      // typeof(A) = int64
-#      int rm[MB] = pid_m * MB + 0 ... MB;
-#      int rn[NB] = pid_n * NB + 0 ... NB;
-#      int rk[KB] = 0 ... KB;
-#      TYPE *pa[MB, KB] = A + (rk [newaxis, :] * 1 + rm[:, newaxis] * stride_a_0);
-#      TYPE *pb[KB, NB] = B + (rk[:, newaxis] * stride_b_0 + rn [newaxis, :] * 1);
-#      // reduction loop
-#      float acc[MB, NB] = 0;
-#      for (int k = K; k > 0; k -= KB) {
-#        acc += (*pa) @ (*pb);
-#        pa += KB * 1;
-#        pb += KB * stride_b_0;
-#      }
-#      // pointers to output
-#      // here we rematerialize `rm` and `rn` so that they are not live through
-#      // the above reduction loop. In the future, the compiler should be able to
-#      // do this automatically.
-#      rm = pid_m * MB + 0 ... MB;
-#      rn = pid_n * NB + 0 ... NB;
-#      TYPE *pc[MB, NB] = C + (rm[:, newaxis] * stride_c_0 + rn[newaxis, :]);
-#      // we write back using *?() operator. `acc` gets casted to `float32` implicitly.
-#      *? (rm[:, newaxis] < M && rn [newaxis, :] < N) pc = acc;
-#    }
-#
-# Where :code:`TYPE` is the data-type of the input matrices and :code:`MB`, :code:`NB`, :code:`KB` are the block sizes defined in the above pseudo-code.
-# Good values for these block sizes are hard to find, hence we will introduce the auto-tuner in the next section of this tutorial.
-# If :code:`TYPE` is :code:`half`, then tensor cores will be used automatically provided that :code:`MB`, :code:`NB` and :code:`KB` are multiples of 16.
-#
 
 # %%
-# Torch Bindings
-# ----------------
+# Final Result
+# -------------
 #
-# Auto-Tuning
-# ~~~~~~~~~~~~~~
-#
-# In order to use Triton's built-in auto-tuner in the above kernel, we need to define a list of :code:`triton.config` objects. that can be constructed as follows:
+# In order to use Triton's built-in auto-tuner in the above kernel, we need to define a list of :code:`triton.Config` objects. that can be constructed as follows:
 
 import torch
 import triton
 
-autotune_configs = [
-    triton.config(defines={"MB": "128", "NB": "128", "KB": "32"}, num_warps=4),
-    triton.config(defines={'MB': '64', 'NB': '128', 'KB': '32'}, num_warps=4),
-    triton.config(defines={'MB': '128', 'NB': '64', 'KB': '32'}, num_warps=4),
-    triton.config(defines={'MB': '64', 'NB': '64', 'KB': '64'}, num_warps=4),
-    triton.config(defines={'MB': '32', 'NB': '128', 'KB': '64'}, num_warps=4),
-    triton.config(defines={'MB': '128', 'NB': '32', 'KB': '64'}, num_warps=4),
-    triton.config(defines={'MB': '64', 'NB': '32', 'KB': '64'}, num_warps=2),
-    triton.config(defines={'MB': '32', 'NB': '64', 'KB': '64'}, num_warps=2)
-]
+@triton.jit(
+    configs=[
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_warps=4),\
+        triton.Config({'BLOCK_M': 64 , 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_warps=4),\
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64 , 'BLOCK_K': 32, 'GROUP_M': 8}, num_warps=4),\
+        triton.Config({'BLOCK_M': 64 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=4),\
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=4),\
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32 , 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=4),\
+        triton.Config({'BLOCK_M': 64 , 'BLOCK_N': 32 , 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=2),\
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=2),
+    ]
+)
+def _matmul(C, A, B, M, N, K, lda, ldb, ldc, **META):
+    # extract meta-parameters
+    BLOCK_M = META['BLOCK_M']
+    BLOCK_N = META['BLOCK_N']
+    BLOCK_K = META['BLOCK_K']
+    GROUP_M = META['GROUP_M']
+    # matrix multiplication
+    pid = triton.program_id(0)
+    grid_m = (M + BLOCK_M - 1) / BLOCK_M
+    # re-order program ID for better L2 performance
+    width = GROUP_M * grid_m
+    group_id = pid / width
+    group_size = min(grid_m - group_id * GROUP_M, GROUP_M)
+    pid_m = group_id * GROUP_M + (pid % group_size)
+    pid_n = (pid % width) / (group_size)
+    # do matrix multiplication
+    rm = pid_m * BLOCK_M + triton.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + triton.arange(0, BLOCK_N)
+    rk = triton.arange(0, BLOCK_K)
+    A = A + rm[:, None] * lda + rk[None, :]
+    B = B + rk[:, None] * ldb + rn[None, :]
+    acc = triton.zeros(BLOCK_M, BLOCK_N)
+    for _ in range(K, 0, -BLOCK_K):
+        acc += triton.dot(triton.load(A), triton.load(B))
+        A += BLOCK_K
+        B += BLOCK_K * ldb
+    acc = acc.to(triton.float16)
+    # rematerialize rm and rn to save registers
+    rm = pid_m * BLOCK_M + triton.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + triton.arange(0, BLOCK_N)
+    C = C + rm[:, None] * ldc + rn[None, :]
+    triton.store(C, acc)
 
-# %%
-# we also need to define a list of :code:`string` (i.e., "autotuning key") that specifies the set of argument names whose change in value will trigger the auto-tuner to kick in.
-# Here, we want to re-tune our kernel only when the shape of input matrices changes.
-
-autotune_key = ["M", "N", "K"]
-
-# %%
-# We can now create an auto-tuned kernel by passing the `autotune_configs` and `autotune_key` lists to the constructor of the :code:`triton.kernel` class.
-
-src = """
-#define MAX_GROUP_SIZE 8
-
-__global__ void dot(TYPE* A, TYPE* B, TYPE* C, 
-                   int M, int N, int K, 
-                   int lda, int ldb, int ldc) {
-  int pid = get_program_id(0);
-  int grid_m = (M + MB - 1) / MB;
-  int grid_n = (N + NB - 1) / NB;
-  int width = MAX_GROUP_SIZE * grid_n;
-  int group_id = pid / width;
-  int group_size = min(grid_m - group_id * MAX_GROUP_SIZE, MAX_GROUP_SIZE);
-  int pid_m = group_id * MAX_GROUP_SIZE + (pid % group_size);
-  int pid_n = (pid % width) / (group_size);
-  int rm[MB] = pid_m * MB + 0 ... MB;
-  int rn[NB] = pid_n * NB + 0 ... NB;
-  int rk[KB] = 0 ... KB;
-  TYPE *pa[MB, KB] = A + (rk [newaxis, :] * 1 + rm[:, newaxis] * lda);
-  TYPE *pb[KB, NB] = B + (rk[:, newaxis] * ldb + rn [newaxis, :] * 1);
-  float acc[MB, NB] = 0;
-  for (int k = K; k > 0; k -= KB) {
-    acc += (*pa) @ (*pb);
-    pa += KB * 1;
-    pb += KB * ldb;
-  }
-  rm = pid_m * MB + 0 ... MB;
-  rn = pid_n * NB + 0 ... NB;
-  TYPE *pc[MB, NB] = C + (rm[:, newaxis] * ldc + rn[newaxis, :]);
-  *? (rm[:, newaxis] < M && rn [newaxis, :] < N) pc = acc;
-}
-"""
-
-
-def make_kernel(device, dtype):
-    key = (device, dtype)
-    cache = make_kernel.cache
-    if key not in cache:
-        defines = {'TYPE': dtype}
-        cache[key] = triton.kernel(
-            src,
-            device=device,
-            defines=defines,
-            autotune_configs=autotune_configs,
-            autotune_key=autotune_key,
-        )
-    return cache[key]
-
-
-make_kernel.cache = dict()
 
 # %%
 # Autograd Function
@@ -252,17 +169,12 @@ make_kernel.cache = dict()
 class _dot(torch.autograd.Function):
     @staticmethod
     def forward(ctx, a, b):
-        M, Ka = a.shape
-        Kb, N = b.shape
-        assert Ka == Kb, "incompatible dimensions"
+        assert a.shape[1] == b.shape[0], "incompatible dimensions"
         assert a.is_contiguous() and b.is_contiguous(), "inputs must be contiguous"
+        M, K, N = a.shape[0], a.shape[1], b.shape[1]
         c = torch.empty((M, N), device=a.device, dtype=a.dtype)
-        kernel = make_kernel(a.device, a.dtype)
-        grid = lambda opt: (triton.cdiv(M, opt.MB) * triton.cdiv(N, opt.NB), )
-        kernel(a.data_ptr(), b.data_ptr(), c.data_ptr(), \
-               M, N, Ka, \
-               a.stride(0), b.stride(0), c.stride(0), \
-               grid=grid)
+        grid = lambda META: (cdiv(M, META['BLOCK_M']) * cdiv(N, META['BLOCK_N']), )
+        _matmul(a, b, c, M, N, Ka, a.stride(0), b.stride(0), c.stride(0), grid=grid)
         return c
 
 
