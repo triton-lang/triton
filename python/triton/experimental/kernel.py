@@ -21,6 +21,42 @@ def builtin(fn):
     return wrapper
 
 
+def implicit_broadcast(builder, lhs, rhs):
+    lhs_ty = lhs.type
+    rhs_ty = rhs.type
+    # op(block, scalar)
+    if lhs_ty.is_block() and not rhs_ty.is_block():
+        rhs = ir_value(builder, builder.splat(rhs._handle, lhs_ty.shape))
+    # op(scalar, block)
+    elif rhs_ty.is_block() and not lhs_ty.is_block():
+        lhs = ir_value(builder, builder.splat(lhs._handle, rhs_ty.shape))
+    # op(block, block)
+    elif lhs_ty.is_block() and rhs_ty.is_block():
+        lhs_shape = lhs_ty.shape
+        rhs_shape = rhs_ty.shape
+        if len(lhs_shape) != len(rhs_shape):
+            raise ValueError("Cannot broadcast blocks of different shapes")
+        ret_shape = []
+        for i, (l, r) in enumerate(zip(lhs_shape, rhs_shape)):
+            if l == 1:
+                ret_shape.append(r)
+            elif r == 1:
+                ret_shape.append(l)
+            elif l == r:
+                ret_shape.append(l)
+            else:
+                raise ValueError(f'Incompatible shape {l} and {r} at dimension {i}')
+        if lhs_shape != ret_shape:
+            lhs = ir_value(builder, builder.broadcast(lhs._handle, ret_shape))
+        if rhs_shape != ret_shape:
+            rhs = ir_value(builder, builder.broadcast(rhs._handle, ret_shape))
+    return lhs, rhs
+
+
+def implicit_typecast(builder, lhs, rhs):
+    pass
+
+
 class ir_value:
     def __init__(self, builder, handle):
         assert isinstance(handle, _triton.ir.value)
@@ -57,6 +93,18 @@ class ir_value:
             return self.builder.fcmpOLT(self._handle, other._handle)
         elif self.type.scalar.is_int():  # int < int
             return self.builder.icmpSLT(self._handle, other._handle)
+
+    def to(self, dtype):
+        builder = self.builder
+        # return type
+        dtype = dtype.make_ir(builder.context)
+        if self.type.is_block:
+            dtype = _triton.ir.type.make_block(dtype, self.type.shape)
+        # FP Truncation
+        if self.type.scalar.is_floating() and dtype.scalar.is_floating() and\
+        self.type.scalar.fp_mantissa_width > dtype.scalar.fp_mantissa_width:
+            return ir_value(builder, builder.fp_trunc(self._handle, dtype))
+        raise NotImplementedError(f"cast from {self.type} to {dtype}")
 
     def __getitem__(self, slices):
         builder = self.builder
@@ -115,19 +163,6 @@ def select(cond, true_val, false_val):
     return ir_value(builder, builder.select(cond._handle, true_val._handle, false_val._handle))
 
 
-def cast(arg, dtype):
-    builder = arg.builder
-    # return type
-    dtype = dtype.make_ir(builder.context)
-    if arg.type.is_block:
-        dtype = _triton.ir.type.make_block(dtype, arg.type.shape)
-    # FP Truncation
-    if arg.type.scalar.is_floating() and dtype.scalar.is_floating() and\
-      arg.type.scalar.fp_mantissa_width > dtype.scalar.fp_mantissa_width:
-        return ir_value(builder, builder.fp_trunc(arg._handle, dtype))
-    raise NotImplementedError(f"cast from {arg.type} to {dtype}")
-
-
 def arange(start, end):
     builder = start.builder
     start = int(start._handle)
@@ -149,37 +184,6 @@ def zeros(*shape):
 
 
 class CodeGenerator(ast.NodeVisitor):
-    def broadcast(self, lhs, rhs):
-        lhs_ty = lhs.type
-        rhs_ty = rhs.type
-        # op(block, scalar)
-        if lhs_ty.is_block() and not rhs_ty.is_block():
-            rhs = self.builder.splat(rhs, lhs_ty.shape)
-        # op(scalar, block)
-        elif rhs_ty.is_block() and not lhs_ty.is_block():
-            lhs = self.builder.splat(lhs, rhs_ty.shape)
-        # op(block, block)
-        elif lhs_ty.is_block() and rhs_ty.is_block():
-            lhs_shape = lhs_ty.shape
-            rhs_shape = rhs_ty.shape
-            if len(lhs_shape) != len(rhs_shape):
-                raise ValueError("Cannot broadcast blocks of different shapes")
-            ret_shape = []
-            for i, (l, r) in enumerate(zip(lhs_shape, rhs_shape)):
-                if l == 1:
-                    ret_shape.append(r)
-                elif r == 1:
-                    ret_shape.append(l)
-                elif l == r:
-                    ret_shape.append(l)
-                else:
-                    raise ValueError(f'Incompatible shape {l} and {r} at dimension {i}')
-            if lhs_shape != ret_shape:
-                lhs = self.builder.broadcast(lhs, ret_shape)
-            if rhs_shape != ret_shape:
-                rhs = self.builder.broadcast(rhs, ret_shape)
-        return lhs, rhs
-
     def get_value(self, name):
         # search node.id in local scope
         ret = None
@@ -301,18 +305,15 @@ class CodeGenerator(ast.NodeVisitor):
             lhs = self._wrap_ir(self.builder.get_int32(lhs))
         if isinstance(rhs, int):
             rhs = self._wrap_ir(self.builder.get_int32(rhs))
-        lhs, rhs = self.broadcast(lhs._handle, rhs._handle)
-        lhs = self._wrap_ir(lhs)
-        rhs = self._wrap_ir(rhs)
-        if type(node.op) == ast.Add:
-            return lhs + rhs
-        if type(node.op) == ast.Mult:
-            return lhs * rhs
-        if type(node.op) == ast.Gt:
-            return lhs > rhs
-        if type(node.op) == ast.Lt:
-            return lhs < rhs
-        raise NotImplementedError(f"Unsupported op: {node.op}")
+        lhs, rhs = implicit_broadcast(self.builder, lhs, rhs)
+        fn = {
+            ast.Add: '__add__',
+            ast.Sub: '__sub__',
+            ast.Mult: '__mul__',
+            ast.Gt: '__gt__',
+            ast.Lt: '__lt__',
+        }[type(node.op)]
+        return getattr(lhs, fn)(rhs)
 
     def visit_UnaryOp(self, node):
         operand = ast.NodeVisitor.visit(self, node.operand)
@@ -606,7 +607,7 @@ def matmul(C, A, B, M, N, K, lda, ldb, ldc, **META):
         A += BLOCK_K
         B += BLOCK_K * ldb
     C = C + rm[:, None] * ldc + rn[None, :]
-    store(C, cast(c, float16))
+    store(C, c.to(float16))
 
 
 M, N, K = 512, 512, 512
