@@ -58,6 +58,20 @@ class ir_value:
         elif self.type.scalar.is_int():  # int < int
             return self.builder.icmpSLT(self._handle, other._handle)
 
+    def __getitem__(self, slices):
+        builder = self.builder
+        shapes = []
+        curr = 0
+        for s in slices:
+            if s == None:
+                shapes += [1]
+            elif s == (None, None, None):
+                shapes += [self.type.shape[curr]]
+                curr += 1
+            else:
+                raise NotImplementedError(f"Unsupported slice type: {s}")
+        return ir_value(builder, builder.reshape(self._handle, shapes))
+
 
 class float32:
     @staticmethod
@@ -115,15 +129,23 @@ def cast(arg, dtype):
 
 
 def arange(start, end):
-    return Stub()
+    builder = start.builder
+    start = int(start._handle)
+    end = int(end._handle)
+    return ir_value(builder, builder.get_range(start, end))
 
 
 def program_id(axis):
-    return Stub()
+    builder = axis.builder
+    axis = int(axis._handle)
+    return ir_value(builder, builder.get_program_id(axis))
 
 
 def zeros(*shape):
-    return Stub()
+    builder = shape[0].builder
+    _0 = builder.get_float32(0)
+    shape = [int(x._handle) for x in shape]
+    return ir_value(builder, builder.splat(_0, shape))
 
 
 class CodeGenerator(ast.NodeVisitor):
@@ -315,24 +337,10 @@ class CodeGenerator(ast.NodeVisitor):
         return ast.literal_eval(node)
 
     def visit_Subscript(self, node):
+        assert node.ctx.__class__.__name__ == "Load"
         lhs = ast.NodeVisitor.visit(self, node.value)
         slices = ast.NodeVisitor.visit(self, node.slice)
-        if isinstance(lhs, dict):
-            return dict.__getitem__(lhs, slices)
-        assert isinstance(lhs, ir_value)
-        assert node.ctx.__class__.__name__ == "Load"
-        # subscripting ir-value
-        shapes = []
-        curr = 0
-        for s in slices:
-            if s == None:
-                shapes += [1]
-            elif s == (None, None, None):
-                shapes += [lhs.type.shape[curr]]
-                curr += 1
-            else:
-                raise NotImplementedError(f"Unsupported slice type: {s}")
-        return self._wrap_ir(self.builder.reshape(lhs._handle, shapes))
+        return lhs[slices]
 
     def visit_ExtSlice(self, node):
         return [ast.NodeVisitor.visit(self, dim) for dim in node.dims]
@@ -393,30 +401,8 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Call(self, node):
         fn = ast.NodeVisitor.visit(self, node.func)
-        name = fn.__name__
-
         args = [ast.NodeVisitor.visit(self, arg) for arg in node.args]
-        assert not node.keywords, "keywords not supported"
-        assert not any(arg is None for arg in args)
-        if name == 'program_id':
-            return self._wrap_ir(self.builder.get_program_id(int(args[0]._handle)))
-        if name == 'arange':
-            return self._wrap_ir(self.builder.arange(int(args[0]._handle), int(args[1]._handle)))
-        if name == 'load':
-            return load(*args)
-        if name == 'store':
-            return store(*args)
-        if name == 'zeros':
-            _0 = self.builder.get_float32(0)
-            shape = [int(x._handle) for x in args]
-            return self._wrap_ir(self.builder.splat(_0, shape))
-        if name == 'cast':
-            return cast(*args)
-        if name == 'dot':
-            return dot(*args)
-        if name == 'select':
-            return select(*args)
-        raise NotImplementedError(f"Unsupported function: {name}")
+        return fn(*args)
 
     def visit_Num(self, node):
         val = node.n
@@ -615,7 +601,7 @@ def matmul(C, A, B, M, N, K, lda, ldb, ldc, **META):
     A = A + rm[:, None] * lda + rk[None, :]
     B = B + rk[:, None] * ldb + rn[None, :]
     c = zeros(BLOCK_M, BLOCK_N)
-    for k in range(K, 0, -BLOCK_K):
+    for _ in range(K, 0, -BLOCK_K):
         c += dot(load(A), load(B))
         A += BLOCK_K
         B += BLOCK_K * ldb

@@ -526,7 +526,7 @@ void generator::visit_downcast_inst(ir::downcast_inst* x) {
  */
 void generator::visit_get_program_id_inst(ir::get_program_id_inst* pid) {
   Module *module = builder_->GetInsertBlock()->getModule();
-  Value *ret = tgt_->get_block_id(module, *builder_, pid->get_axis()->get_value());
+  Value *ret = tgt_->get_block_id(module, *builder_, pid->get_axis());
   vals_[pid][{}] = ret;
 }
 
@@ -535,7 +535,7 @@ void generator::visit_get_program_id_inst(ir::get_program_id_inst* pid) {
  */
 void generator::visit_get_num_program_inst(ir::get_num_program_inst* np) {
   Module *module = builder_->GetInsertBlock()->getModule();
-  Value *ret = tgt_->get_num_blocks(module, *builder_, np->get_axis()->get_value());
+  Value *ret = tgt_->get_num_blocks(module, *builder_, np->get_axis());
   vals_[np][{}] = ret;
 }
 

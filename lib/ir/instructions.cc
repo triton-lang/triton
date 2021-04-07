@@ -724,22 +724,22 @@ instruction* select_inst::create(value *pred, value *if_value, value *else_value
 
 
 // get_program_id
-get_program_id_inst::get_program_id_inst(type *ty, constant_int* axis, const std::string &name, instruction *next)
+get_program_id_inst::get_program_id_inst(type *ty, unsigned axis, const std::string &name, instruction *next)
   : builtin_inst(ty, INST_GET_PROGRAM_ID, 0, name, next), axis_(axis){
 
 }
 
-instruction* get_program_id_inst::create(context &ctx, constant_int *axis, const std::string &name, instruction *next) {
+instruction* get_program_id_inst::create(context &ctx, unsigned axis, const std::string &name, instruction *next) {
   return new get_program_id_inst(type::get_int32_ty(ctx), axis, name, next);
 }
 
 // get_num_program
-get_num_program_inst::get_num_program_inst(type *ty, constant_int* axis, const std::string &name, instruction *next)
+get_num_program_inst::get_num_program_inst(type *ty, unsigned axis, const std::string &name, instruction *next)
   : builtin_inst(ty, INST_GET_NUM_PROGRAMS, 0, name, next), axis_(axis){
 
 }
 
-instruction* get_num_program_inst::create(context &ctx, constant_int *axis, const std::string &name, instruction *next) {
+instruction* get_num_program_inst::create(context &ctx, unsigned axis, const std::string &name, instruction *next) {
   return new get_num_program_inst(type::get_int32_ty(ctx), axis, name, next);
 }
 
