@@ -12,14 +12,51 @@ from abc import ABC, abstractmethod
 ########################
 
 
+def builtin(fn):
+    def wrapper(*args):
+        ret = fn(*args)
+        ret = ir_value(args[0].builder, ret)
+        return ret
+
+    return wrapper
+
+
 class ir_value:
     def __init__(self, builder, handle):
+        assert isinstance(handle, _triton.ir.value)
         self.builder = builder
         self.type = handle.type
         self._handle = handle
 
+    @builtin
     def __add__(self, other):
-        pass
+        if self.type.scalar.is_ptr():  # ptr + offset
+            return self.builder.gep(self._handle, [other._handle])
+        elif self.type.scalar.is_floating():  # float + float
+            return self.builder.fadd(self._handle, other._handle)
+        elif self.type.scalar.is_int():  # int + int
+            return self.builder.add(self._handle, other._handle)
+
+    @builtin
+    def __mul__(self, other):
+        if self.type.scalar.is_floating():  # float * float
+            return self.builder.fmul(self._handle, other._handle)
+        elif self.type.scalar.is_int():  # int * int
+            return self.builder.mul(self._handle, other._handle)
+
+    @builtin
+    def __gt__(self, other):
+        if self.type.scalar.is_floating():  # float > float
+            return self.builder.fcmpOGT(self._handle, other._handle)
+        elif self.type.scalar.is_int():  # int > int
+            return self.builder.icmpSGT(self._handle, other._handle)
+
+    @builtin
+    def __lt__(self, other):
+        if self.type.scalar.is_floating():  # float < float
+            return self.builder.fcmpOLT(self._handle, other._handle)
+        elif self.type.scalar.is_int():  # int < int
+            return self.builder.icmpSLT(self._handle, other._handle)
 
 
 class float32:
@@ -115,12 +152,12 @@ class CodeGenerator(ast.NodeVisitor):
             ret = self.builtins[name]
         else:
             raise ValueError(f'{name} is not defined')
-        if isinstance(ret, _triton.ir.value):
-            return self.module.get_value(name)
+        if isinstance(ret, ir_value):
+            return self._wrap_ir(self.module.get_value(name))
         elif isinstance(ret, int):
-            return self.builder.get_int32(ret)
+            return self._wrap_ir(self.builder.get_int32(ret))
         elif isinstance(ret, float):
-            return self.builder.get_float32(ret)
+            return self._wrap_ir(self.builder.get_float32(ret))
         else:
             return ret
 
@@ -141,6 +178,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.attributes = attributes
         self.kwargs = kwargs
         self.builtins = {'range': __builtins__.range}
+        self._wrap_ir = lambda x: ir_value(self.builder, x)
 
     def visit_Module(self, node):
         self.module.add_new_scope()
@@ -164,7 +202,7 @@ class CodeGenerator(ast.NodeVisitor):
             fn.args[i].name = arg_name
             module.set_value(arg_name, fn.args[i])
             module.scope.set_type(arg_name, fn.args[i].type)
-            self.lscope[arg_name] = fn.args[i]
+            self.lscope[arg_name] = self._wrap_ir(fn.args[i])
         entry = _triton.ir.basic_block.create(module.context, "entry", fn)
         module.seal_block(entry)
         module.builder.set_insert_block(entry)
@@ -191,8 +229,8 @@ class CodeGenerator(ast.NodeVisitor):
         assert len(names) == 1
         name = names[0]
         value = ast.NodeVisitor.visit(self, node.value)
-        if isinstance(value, _triton.ir.value):
-            self.module.set_value(name, value)
+        if isinstance(value, ir_value):
+            self.module.set_value(name, value._handle)
             self.module.scope.set_type(name, value.type)
         self.lscope[name] = value
 
@@ -219,38 +257,20 @@ class CodeGenerator(ast.NodeVisitor):
         lhs = ast.NodeVisitor.visit(self, node.left)
         rhs = ast.NodeVisitor.visit(self, node.right)
         if isinstance(lhs, int):
-            lhs = self.builder.get_int32(lhs)
+            lhs = self._wrap_ir(self.builder.get_int32(lhs))
         if isinstance(rhs, int):
-            rhs = self.builder.get_int32(rhs)
-        lhs, rhs = self.broadcast(lhs, rhs)
-        lhs_ty = lhs.type.scalar
-        rhs_ty = rhs.type.scalar
-        # Handle ADD operator
+            rhs = self._wrap_ir(self.builder.get_int32(rhs))
+        lhs, rhs = self.broadcast(lhs._handle, rhs._handle)
+        lhs = self._wrap_ir(lhs)
+        rhs = self._wrap_ir(rhs)
         if type(node.op) == ast.Add:
-            if lhs_ty.is_ptr():  # ptr + offset
-                return self.builder.gep(lhs, [rhs])
-            elif lhs_ty.is_floating():  # float + float
-                return self.builder.fadd(lhs, rhs)
-            elif lhs_ty.is_int():  # int + int
-                return self.builder.add(lhs, rhs)
-        # Handle MULT operator
+            return lhs + rhs
         if type(node.op) == ast.Mult:
-            if lhs.type.is_floating():
-                return self.builder.fmul(lhs, rhs)
-            elif lhs_ty.is_int():
-                return self.builder.mul(lhs, rhs)
-        # Handle GT operator
+            return lhs * rhs
         if type(node.op) == ast.Gt:
-            if lhs_ty.is_floating():
-                return self.builder.fcmpOGT(lhs, rhs)
-            elif lhs_ty.is_int():
-                return self.builder.icmpSGT(lhs, rhs)
-        # Handle LT operator
+            return lhs > rhs
         if type(node.op) == ast.Lt:
-            if lhs_ty.is_floating():
-                return self.builder.fcmpOLT(lhs, rhs)
-            elif lhs_ty.is_int():
-                return self.builder.icmpSLT(lhs, rhs)
+            return lhs < rhs
         raise NotImplementedError(f"Unsupported op: {node.op}")
 
     def visit_UnaryOp(self, node):
@@ -266,9 +286,9 @@ class CodeGenerator(ast.NodeVisitor):
         # HANDLE MINUS OPERATOR
         if type(node.op) == ast.USub:
             if operand.type.is_floating():
-                return self.builder.fsub(_0f, operand)
+                return self._wrap_ir(self.builder.fsub(_0f, operand._handle))
             elif operand.type.is_int():
-                return self.builder.sub(_0i, operand)
+                return self._wrap_ir(self.builder.sub(_0i, operand._handle))
 
         raise NotImplementedError(f"Unsupported op: {node.op}")
 
@@ -280,7 +300,7 @@ class CodeGenerator(ast.NodeVisitor):
         slices = ast.NodeVisitor.visit(self, node.slice)
         if isinstance(lhs, dict):
             return dict.__getitem__(lhs, slices)
-        assert isinstance(lhs, _triton.ir.value)
+        assert isinstance(lhs, ir_value)
         assert node.ctx.__class__.__name__ == "Load"
         # subscripting ir-value
         shapes = []
@@ -293,7 +313,7 @@ class CodeGenerator(ast.NodeVisitor):
                 curr += 1
             else:
                 raise NotImplementedError(f"Unsupported slice type: {s}")
-        return self.builder.reshape(lhs, shapes)
+        return self._wrap_ir(self.builder.reshape(lhs._handle, shapes))
 
     def visit_ExtSlice(self, node):
         return [ast.NodeVisitor.visit(self, dim) for dim in node.dims]
@@ -322,11 +342,11 @@ class CodeGenerator(ast.NodeVisitor):
         def continue_fn():
             ast.NodeVisitor.visit(self, step_node)
             cond = ast.NodeVisitor.visit(self, cond_node)
-            return self.builder.cond_br(cond, loop_bb, next_bb)
+            return self.builder.cond_br(cond._handle, loop_bb, next_bb)
 
         ast.NodeVisitor.visit(self, init_node)
         cond = ast.NodeVisitor.visit(self, cond_node)
-        self.builder.cond_br(cond, loop_bb, next_bb)
+        self.builder.cond_br(cond._handle, loop_bb, next_bb)
         self.builder.set_insert_block(loop_bb)
         self.visit_compound_statement(node.body, add_scope=True)
         # TODO: handle case where body breaks control flow
@@ -360,17 +380,17 @@ class CodeGenerator(ast.NodeVisitor):
         assert not node.keywords, "keywords not supported"
         assert not any(arg is None for arg in args)
         if name == 'program_id':
-            return self.builder.get_program_id(int(args[0]))
+            return self._wrap_ir(self.builder.get_program_id(int(args[0]._handle)))
         if name == 'arange':
-            return self.builder.get_range(int(args[0]), int(args[1]))
+            return self._wrap_ir(self.builder.get_range(int(args[0]._handle), int(args[1]._handle)))
         if name == 'load':
-            return self.builder.load(*args)
+            return self._wrap_ir(self.builder.load(*[arg._handle for arg in args]))
         if name == 'store':
-            return self.builder.store(*args)
+            return self._wrap_ir(self.builder.store(*[arg._handle for arg in args]))
         if name == 'zeros':
             _0 = self.builder.get_float32(0)
-            shape = [int(x) for x in args]
-            return self.builder.splat(_0, shape)
+            shape = [int(x._handle) for x in args]
+            return self._wrap_ir(self.builder.splat(_0, shape))
         if name == 'cast':
             # return type
             src_ty = args[0].type
@@ -380,7 +400,7 @@ class CodeGenerator(ast.NodeVisitor):
             # FP Truncation
             if src_ty.scalar.is_floating() and ret_ty.scalar.is_floating() and\
                src_ty.scalar.fp_mantissa_width > ret_ty.scalar.fp_mantissa_width:
-                return self.builder.fp_trunc(args[0], ret_ty)
+                return self._wrap_ir(self.builder.fp_trunc(args[0]._handle, ret_ty))
             raise NotImplementedError(f"cast from {src_ty} to {ret_ty}")
         if name == 'dot':
             M, K = args[0].type.shape
@@ -389,18 +409,18 @@ class CodeGenerator(ast.NodeVisitor):
             assert args[1].type.scalar.is_floating()
             _0 = self.builder.get_float32(0)
             _0 = self.builder.splat(_0, [M, N])
-            return self.builder.dot(args[0], args[1], _0)
+            return self._wrap_ir(self.builder.dot(args[0]._handle, args[1]._handle, _0))
         if name == 'select':
-            return self.builder.select(*args)
+            return self._wrap_ir(self.builder.select(*[arg._handle for arg in args]))
         raise NotImplementedError(f"Unsupported function: {name}")
 
     def visit_Num(self, node):
         val = node.n
         ty = type(val)
         if ty == int:
-            return self.builder.get_int32(val)
+            return self._wrap_ir(self.builder.get_int32(val))
         if ty == float:
-            return self.builder.get_float32(val)
+            return self._wrap_ir(self.builder.get_float32(val))
         raise NotImplementedError("Unsupported constant type: {}".format(ty))
 
     def visit_Attribute(self, node):
