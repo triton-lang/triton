@@ -57,6 +57,20 @@ def implicit_typecast(builder, lhs, rhs):
     pass
 
 
+# class ir_builder:
+#     def _wrap_fn(self, fn):
+#         def wrapper(*args):
+#             args = [arg._handle if isinstance(arg, ir_value) else arg for arg in args]
+#             ret = fn(*args)
+#             ret = ir_value(self, ret)
+#             return ret
+
+#         return wrapper
+
+#     def __init__(self, handle):
+#         self._handle = handle
+
+
 class ir_value:
     def __init__(self, builder, handle):
         assert isinstance(handle, _triton.ir.value)
@@ -72,6 +86,15 @@ class ir_value:
             return self.builder.fadd(self._handle, other._handle)
         elif self.type.scalar.is_int():  # int + int
             return self.builder.add(self._handle, other._handle)
+
+    @builtin
+    def __sub__(self, other):
+        #if self.type.scalar.is_ptr():  # ptr + offset
+        #    return self.builder.gep(self._handle, [other._handle])
+        if self.type.scalar.is_floating():  # float + float
+            return self.builder.fsub(self._handle, other._handle)
+        elif self.type.scalar.is_int():  # int + int
+            return self.builder.sub(self._handle, other._handle)
 
     @builtin
     def __mul__(self, other):
@@ -93,6 +116,20 @@ class ir_value:
             return self.builder.fcmpOLT(self._handle, other._handle)
         elif self.type.scalar.is_int():  # int < int
             return self.builder.icmpSLT(self._handle, other._handle)
+
+    @builtin
+    def __div__(self, other):
+        if self.type.scalar.is_floating():  # float / float
+            return self.builder.fdiv(self._handle, other._handle)
+        elif self.type.scalar.is_int():  # int / int
+            return self.builder.sdiv(self._handle, other._handle)
+
+    @builtin
+    def __mod__(self, other):
+        if self.type.scalar.is_floating():  # float % float
+            return self.builder.frem(self._handle, other._handle)
+        elif self.type.scalar.is_int():  # int % int
+            return self.builder.srem(self._handle, other._handle)
 
     def to(self, dtype):
         builder = self.builder
@@ -135,6 +172,12 @@ class float16:
 
 class Stub:
     pass
+
+
+def min(a, b):
+    builder = a.builder
+    cond = a < b
+    return ir_value(builder, builder.select(cond._handle, a._handle, b._handle))
 
 
 def load(ptr):
@@ -312,6 +355,8 @@ class CodeGenerator(ast.NodeVisitor):
             ast.Mult: '__mul__',
             ast.Gt: '__gt__',
             ast.Lt: '__lt__',
+            ast.Div: '__div__',
+            ast.Mod: '__mod__',
         }[type(node.op)]
         return getattr(lhs, fn)(rhs)
 
@@ -586,28 +631,37 @@ def jit(configs=None):
 
 
 @jit(configs=[
-    Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32}, num_warps=4),
+    Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_warps=4),
 ])
 def matmul(C, A, B, M, N, K, lda, ldb, ldc, **META):
     # extract meta-parameters
     BLOCK_M = META['BLOCK_M']
     BLOCK_N = META['BLOCK_N']
     BLOCK_K = META['BLOCK_K']
+    GROUP_M = META['GROUP_M']
     # matrix multiplication
-    pid_m = program_id(0)
-    pid_n = program_id(1)
+    pid = program_id(0)
+    grid_m = (M + BLOCK_M - 1) / BLOCK_M
+    # re-order program ID for better L2 performance
+    width = GROUP_M * grid_m
+    group_id = pid / width
+    group_size = min(grid_m - group_id * GROUP_M, GROUP_M)
+    pid_m = group_id * GROUP_M + (pid % group_size)
+    pid_n = (pid % width) / (group_size)
+    # do matrix multiplication
     rm = pid_m * BLOCK_M + arange(0, BLOCK_M)
     rn = pid_n * BLOCK_N + arange(0, BLOCK_N)
     rk = arange(0, BLOCK_K)
     A = A + rm[:, None] * lda + rk[None, :]
     B = B + rk[:, None] * ldb + rn[None, :]
-    c = zeros(BLOCK_M, BLOCK_N)
+    acc = zeros(BLOCK_M, BLOCK_N)
     for _ in range(K, 0, -BLOCK_K):
-        c += dot(load(A), load(B))
+        acc += dot(load(A), load(B))
         A += BLOCK_K
         B += BLOCK_K * ldb
+    acc = acc.to(float16)
     C = C + rm[:, None] * ldc + rn[None, :]
-    store(C, c.to(float16))
+    store(C, acc)
 
 
 M, N, K = 512, 512, 512
@@ -615,7 +669,7 @@ A = torch.randn((M, K), dtype=torch.float16, device='cuda')
 B = torch.randn((K, N), dtype=torch.float16, device='cuda')
 C = torch.empty((M, N), dtype=torch.float16, device='cuda')
 # Launch triton kernel
-grid = lambda META: (cdiv(M, META['BLOCK_M']), cdiv(N, META['BLOCK_N']))
+grid = lambda META: (cdiv(M, META['BLOCK_M']) * cdiv(N, META['BLOCK_N']), )
 matmul[grid](C, A, B, M, N, K, A.stride(0), B.stride(0), C.stride(0))
 # Compare results
 assert torch.allclose(C, torch.matmul(A, B), atol=1e-3, rtol=1e-3)
