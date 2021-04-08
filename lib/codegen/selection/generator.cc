@@ -406,11 +406,8 @@ void generator::visit_load_inst(ir::load_inst* x){
       //   ret = false_value
       PHINode *_ret = phi(ptr->getType()->getPointerElementType(), 2);
       Instruction *then_term;
-            Instruction *else_term;
-            builder_->SetInsertPoint(_ret->getParent());
-            Instruction* dummy = builder_->CreateRet(nullptr);
-            llvm::SplitBlockAndInsertIfThenElse(vals_[mx->get_mask_operand()][idx], _ret, &then_term, &else_term);
-            dummy->removeFromParent();
+      Instruction *else_term;
+      llvm::SplitBlockAndInsertIfThenElse(vals_[mx->get_mask_operand()][idx], _ret, &then_term, &else_term);
       builder_->SetInsertPoint(then_term);
       Value* then_ret = load(ptr);
       builder_->SetInsertPoint(else_term);
@@ -449,7 +446,6 @@ void generator::visit_store_inst(ir::store_inst * x){
     size_t aln = alignment_->get(ptr_op, ord[0]);
     size_t nts = axes_.at(a_axes_->get(x->get_pointer_operand(), ord[0])).contiguous;
     vec  = std::min(nts, aln);
-//    std::cout << aln << " " << nts << std::endl;
   }
   auto idxs    = idxs_.at(val_op);
   Type *ty = cvt(val_op->get_type()->get_scalar_ty());
@@ -936,8 +932,7 @@ void generator::visit_mma16816(ir::dot_inst* dot, ir::value *A, ir::value *B, ir
 
   BasicBlock* CurrBB = builder_->GetInsertBlock();
   BasicBlock* FirstBB = &CurrBB->getParent()->getEntryBlock();
-  if(FirstBB != CurrBB)
-    builder_->SetInsertPoint(FirstBB->getTerminator());
+  builder_->SetInsertPoint(FirstBB->getTerminator());
 
   Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
   Value *lane   = urem(thread, i32(32));
@@ -1546,8 +1541,7 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
       int off = (off_1*shapes[in_order[0]] + off_0);
       std::pair<int, int> key = {id_1  % n_shared_1, id_0 % n_shared_0};
       if(ptrs.find(key) == ptrs.end()){
-        if(FirstBB != CurrBB)
-          builder_->SetInsertPoint(FirstBB->getTerminator());
+        builder_->SetInsertPoint(FirstBB->getTerminator());
         indices_t idx = idxs_.at(arg).at(key.first*in_ld);
         Value* phase = udiv(idx[in_order[1]], i32(per_phase));
         phase = urem(phase, i32(max_phase));

@@ -148,19 +148,18 @@ def _matmul(A, B, C, M, N, K, lda, ldb, ldc, **META):
     rm = pid_m * BLOCK_M + triton.arange(0, BLOCK_M)
     rn = pid_n * BLOCK_N + triton.arange(0, BLOCK_N)
     rk = triton.arange(0, BLOCK_K)
-    A = A + rm[:, None] * lda + rk[None, :]
-    B = B + rk[:, None] * ldb + rn[None, :]
+    A = A + (rm[:, None] * lda + rk[None, :] * 1)
+    B = B + (rk[:, None] * ldb + rn[None, :] * 1)
     acc = triton.zeros(BLOCK_M, BLOCK_N)
     for _ in range(K, 0, -BLOCK_K):
         acc += triton.dot(triton.load(A), triton.load(B))
-        A += BLOCK_K
+        A += BLOCK_K * 1
         B += BLOCK_K * ldb
-    acc = acc.to(triton.float16)
     # rematerialize rm and rn to save registers
     rm = pid_m * BLOCK_M + triton.arange(0, BLOCK_M)
     rn = pid_n * BLOCK_N + triton.arange(0, BLOCK_N)
-    C = C + rm[:, None] * ldc + rn[None, :]
-    triton.store(C, acc)
+    C = C + (rm[:, None] * ldc + rn[None, :] * 1)
+    triton.store(C, acc.to(triton.float16))
 
 
 # %%
@@ -280,6 +279,7 @@ def benchmark(M, N, K, provider):
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b))
     if provider == 'triton':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: dot(a, b))
+        print(ms, min_ms, max_ms)
     if provider == 'cutlass':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: triton.testing.cutlass_matmul(a, b))
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)

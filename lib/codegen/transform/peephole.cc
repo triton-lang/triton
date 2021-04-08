@@ -80,7 +80,7 @@ bool peephole::rewrite_dot(ir::instruction *value, ir::builder& builder){
     ir::value *a = dot->get_operand(0);
     ir::value *b = dot->get_operand(1);
     builder.set_insert_point(add);
-    ir::value * new_dot = builder.insert(ir::dot_inst::create_nn(a, b, builder.create_fadd(acc, other), dot->get_name()));
+    ir::value * new_dot = builder.insert(ir::dot_inst::create_nn(a, b, other, dot->get_name()));
     add->replace_all_uses_with(new_dot);
     return true;
   }
