@@ -393,7 +393,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_For(self, node):
         iterator = ast.NodeVisitor.visit(self, node.iter.func)
-        assert iterator == __builtins__.range
+        assert iterator == self.builtins['range']
         # create nodes
         st_target = ast.Name(id=node.target.id, ctx=ast.Store())
         ld_target = ast.Name(id=node.target.id, ctx=ast.Load())
@@ -401,10 +401,9 @@ class CodeGenerator(ast.NodeVisitor):
         pos_cond_node = ast.BinOp(ld_target, ast.Lt(), node.iter.args[1])
         neg_cond_node = ast.BinOp(ld_target, ast.Gt(), node.iter.args[1])
         pos_step_node = ast.BinOp(node.iter.args[2], ast.Gt(), ast.Num(0))
-        cond_node = ast.Call()
-        cond_node.func = ast.Name(id="select", ctx=ast.Load())
-        cond_node.args = [pos_step_node, pos_cond_node, neg_cond_node]
-        cond_node.keywords = []
+        build_cond = lambda: select(ast.NodeVisitor.visit(self, pos_step_node),\
+                                    ast.NodeVisitor.visit(self, pos_cond_node),\
+                                    ast.NodeVisitor.visit(self, neg_cond_node))
         #cond_node = neg_cond_node
         step_node = ast.AugAssign(target=st_target, op=ast.Add(), value=node.iter.args[2])
         # code generation
@@ -414,11 +413,11 @@ class CodeGenerator(ast.NodeVisitor):
 
         def continue_fn():
             ast.NodeVisitor.visit(self, step_node)
-            cond = ast.NodeVisitor.visit(self, cond_node)
+            cond = build_cond()
             return self.builder.cond_br(cond._handle, loop_bb, next_bb)
 
         ast.NodeVisitor.visit(self, init_node)
-        cond = ast.NodeVisitor.visit(self, cond_node)
+        cond = build_cond()
         self.builder.cond_br(cond._handle, loop_bb, next_bb)
         self.builder.set_insert_block(loop_bb)
         self.visit_compound_statement(node.body, add_scope=True)
@@ -555,7 +554,6 @@ class Kernel:
         if key not in cache:
             # create IR module
             module = _triton.ir.module("")
-            module.context.builder = module.builder
             # Generate Triton IR
             arg_types = [as_ir_type(module, arg) for arg in wargs]
             ret_type = _triton.ir.type.get_void(module.context)

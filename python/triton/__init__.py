@@ -4,7 +4,7 @@ import torch
 # submodules
 from . import testing
 from .kernel import *
-from . import ops
+#from . import ops
 
 # version
 __version__ = '1.0.0'

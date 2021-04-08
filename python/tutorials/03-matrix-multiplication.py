@@ -28,16 +28,16 @@ You will specifically learn about:
 #      for n in range(0, N, NB):
 #        acc = zeros((MB, NB), dtype=float32)
 #        for k in range(0, K, KB):
-#          acc += A[m : m+MB, k : k+KB] @  B[k : k+KB, n : n+NB]
+#          acc += dot(A[m : m+MB, k : k+KB],  B[k : k+KB, n : n+NB])
 #        C[m : m+MB, n : n+NB] = acc;
 #
-# where each iteration of the doubly-nested for-loops corresponds to a Triton program instance.
+# where each iteration of the doubly-nested for-loop corresponds to a Triton program instance.
 
 # %%
 # Compute Kernel
 # ----------------
 #
-# The above algorithm is actually fairly straightforward to implement in Triton, as we can simply use the :code:`@` operator for block-level matrix multiplication.
+# The above algorithm is actually fairly straightforward to implement in Triton.
 # The main difficulty comes from the 2D pointer arithmetic that must be done to specify the memory locations of the tiles of :code:`A` and :code:`B` that we need to read in the inner loop.
 #
 # Pointer Arithmetics
@@ -48,19 +48,21 @@ You will specifically learn about:
 #
 #  .. code-block:: python
 #
-#    &A[m : m+MB, k:k+KB] =  A + (m : m+MB)[:, newaxis]*A.stride(0) + (k : k+KB)[newaxis, :];
-#    &B[k : k+KB, n:n+NB] =  B + (k : k+KB)[:, newaxis]*B.stride(0) + (n : n+NB)[newaxis, :];
+#    &A[m : m+MB, k:k+KB] =  A + (m : m+MB)[:, None]*A.stride(0) + (k : k+KB)[newaxis, :];
+#    &B[k : k+KB, n:n+NB] =  B + (k : k+KB)[:, None]*B.stride(0) + (n : n+NB)[newaxis, :];
 #
 # Which means that, at initialization (i.e., :code:`k = 0`), pointers for blocks of A and B can be initialized in Triton as:
 #
-#  .. code-block:: C
+#  .. code-block:: python
 #    :force:
 #
-#    int rm[MB] = program_id_m * MB + 0 ... MB;
-#    int rn[NB] = program_id_n * NB + 0 ... NB;
-#    int rk[KB] = 0 ... KB;
-#    TYPE *pa[MB, KB] = A + (rm[:, newaxis] * stride_a_0 + rk [newaxis, :] * 1);
-#    TYPE *pb[KB, NB] = B + (rk[:, newaxis] * stride_b_0 + rn [newaxis, :] * 1);
+#    range_m = program_id_m * MB + 0 ... MB;
+#    range_n = program_id_n * NB + 0 ... NB;
+#    range_k = triton.arange(0, KB);
+#    // pointer for A operand
+#    pa = A + (range_m[:, None] * stride_a_0 + range_k[None, :] * 1);
+#    // pointer for B operand
+#    pb = B + (range_k[:, None] * stride_b_0 + range_n[None, :] * 1);
 #
 # These pointers can then be updated in the inner loop as:
 #
@@ -112,19 +114,21 @@ You will specifically learn about:
 import torch
 import triton
 
+
 @triton.jit(
     configs=[
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_warps=4),\
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_warps=4),
         triton.Config({'BLOCK_M': 64 , 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_warps=4),\
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64 , 'BLOCK_K': 32, 'GROUP_M': 8}, num_warps=4),\
         triton.Config({'BLOCK_M': 64 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=4),\
-        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=4),\
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32 , 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=4),\
         triton.Config({'BLOCK_M': 64 , 'BLOCK_N': 32 , 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=2),\
         triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=2),
-    ]
+    ],
+    key = ['M', 'N', 'K']
 )
-def _matmul(C, A, B, M, N, K, lda, ldb, ldc, **META):
+def _matmul(A, B, C, M, N, K, lda, ldb, ldc, **META):
     # extract meta-parameters
     BLOCK_M = META['BLOCK_M']
     BLOCK_N = META['BLOCK_N']
@@ -133,8 +137,9 @@ def _matmul(C, A, B, M, N, K, lda, ldb, ldc, **META):
     # matrix multiplication
     pid = triton.program_id(0)
     grid_m = (M + BLOCK_M - 1) / BLOCK_M
+    grid_n = (N + BLOCK_N - 1) / BLOCK_N
     # re-order program ID for better L2 performance
-    width = GROUP_M * grid_m
+    width = GROUP_M * grid_n
     group_id = pid / width
     group_size = min(grid_m - group_id * GROUP_M, GROUP_M)
     pid_m = group_id * GROUP_M + (pid % group_size)
@@ -173,8 +178,8 @@ class _dot(torch.autograd.Function):
         assert a.is_contiguous() and b.is_contiguous(), "inputs must be contiguous"
         M, K, N = a.shape[0], a.shape[1], b.shape[1]
         c = torch.empty((M, N), device=a.device, dtype=a.dtype)
-        grid = lambda META: (cdiv(M, META['BLOCK_M']) * cdiv(N, META['BLOCK_N']), )
-        _matmul(a, b, c, M, N, Ka, a.stride(0), b.stride(0), c.stride(0), grid=grid)
+        grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), )
+        _matmul[grid](a, b, c, M, N, K, a.stride(0), b.stride(0), c.stride(0))
         return c
 
 
@@ -187,8 +192,8 @@ dot = _dot.apply
 # We can test our custom matrix multiplication operation against cuBLAS (i.e., :code:`torch.matmul`).
 # Note that we need to modify the :code`atol` and :code:`rtol` parameters of `torch.allclose` to account for the fact that we are comparing FP16 tensors.
 
-a = torch.rand((512, 768), device='cuda', dtype=torch.float16)
-b = torch.rand((768, 896), device='cuda', dtype=torch.float16)
+a = torch.randn((4096, 4096), device='cuda', dtype=torch.float16)
+b = torch.randn((4096, 4096), device='cuda', dtype=torch.float16)
 c_0 = dot(a, b)
 c_1 = torch.matmul(a, b)
 print(c_0)
