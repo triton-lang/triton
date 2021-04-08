@@ -118,15 +118,15 @@ import triton
 @triton.jit(
     configs=[
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_warps=4),
-        triton.Config({'BLOCK_M': 64 , 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_warps=4),\
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64 , 'BLOCK_K': 32, 'GROUP_M': 8}, num_warps=4),\
-        triton.Config({'BLOCK_M': 64 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=4),\
-        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32 , 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=4),\
-        triton.Config({'BLOCK_M': 64 , 'BLOCK_N': 32 , 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=2),\
-        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=2),
+        # triton.Config({'BLOCK_M': 64 , 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_warps=4),\
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64 , 'BLOCK_K': 32, 'GROUP_M': 8}, num_warps=4),\
+        # triton.Config({'BLOCK_M': 64 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=4),\
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32 , 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=4),\
+        # triton.Config({'BLOCK_M': 64 , 'BLOCK_N': 32 , 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=2),\
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=2),
     ],
-    key = ['M', 'N', 'K']
+    key=['M', 'N', 'K']
 )
 def _matmul(A, B, C, M, N, K, lda, ldb, ldc, **META):
     # extract meta-parameters
@@ -264,7 +264,7 @@ print(torch.allclose(c_0, c_2, rtol=1e-3, atol=1e-3))
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=['M', 'N', 'K'],  # argument names to use as an x-axis for the plot
-        x_vals=[256 * i for i in range(2, 33)],  # different possible values for `x_name`
+        x_vals=[8192],  # different possible values for `x_name`
         y_name='provider',  # argument name whose value corresponds to a different line in the plot
         y_vals=['cublas', 'triton', 'cutlass'],  # possible keys for `y_name`
         y_lines=["cuBLAS", "Triton", 'CUTLASS'],  # label name for the lines
@@ -286,7 +286,7 @@ def benchmark(M, N, K, provider):
     return perf(ms), perf(max_ms), perf(min_ms)
 
 
-benchmark.run(show_plots=True)
+benchmark.run(print_data=True)
 
 # %%
 # As we can see, the performance of our kernel is pretty good. It is in fact faster than CUTLASS, and therefore probably comparable to the absolute best CUDA code an expert could write.

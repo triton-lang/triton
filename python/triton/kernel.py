@@ -585,15 +585,15 @@ class Kernel:
 
 
 class Autotuner:
-    def __init__(self, kernel, configs, key):
+    def __init__(self, src, configs, key):
         if not configs:
             self.configs = [Config(dict(), num_warps=4)]
         else:
             self.configs = configs
-        self.kernel = kernel
-        arg_names = inspect.getfullargspec(kernel.fn.src).args
+        arg_names = inspect.getfullargspec(src).args
         self.key_idx = [arg_names.index(k) for k in key]
         self.cache = dict()
+        self.kernel = None
 
     def __call__(self, *args, **meta):
         key = tuple([args[i] for i in self.key_idx])
@@ -614,7 +614,6 @@ class Autotuner:
                 timings[config] = triton.testing.do_bench(kernel_call)
             self.cache[key] = builtins.min(timings, key=timings.get)
         config = self.cache[key]
-        print(config.meta)
         self.kernel(*args, num_warps=config.num_warps, **meta, **config.meta)
 
 
@@ -624,12 +623,14 @@ class JITFunction:
         self.configs = configs
         self.cache = dict()
         self.key = key
+        self.tuner = Autotuner(src, configs, key)
 
     def compile(self, module, device, num_warps):
         pass
 
     def __getitem__(self, grid_fn):
-        return Autotuner(Kernel(self, grid_fn), self.configs, self.key)
+        self.tuner.kernel = Kernel(self, grid_fn)
+        return self.tuner
 
 
 class Config:

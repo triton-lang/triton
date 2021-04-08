@@ -15,7 +15,6 @@
 
 namespace py = pybind11;
 
-using namespace triton;
 namespace ir = triton::ir;
 namespace rt = triton::runtime;
 namespace drv = triton::driver;
@@ -28,14 +27,14 @@ void init_triton_driver(py::module &&m) {
   // base device
   py::class_<drv::device>(m, "device");
   // cuda device
-  py::class_<drv::cu_device, driver::device>(m, "cu_device")
+  py::class_<drv::cu_device, drv::device>(m, "cu_device")
       .def(py::init([](int dev_id, bool take_ownership) {
         CUdevice handle;
         drv::dispatch::cuDeviceGet(&handle, dev_id);
         return new drv::cu_device(handle, take_ownership);
       }));
   // host device
-  py::class_<drv::host_device, driver::device>(m, "host_device")
+  py::class_<drv::host_device, drv::device>(m, "host_device")
       .def(py::init<>());
 
   // base stream
@@ -48,9 +47,9 @@ void init_triton_driver(py::module &&m) {
       // py doesn't support opaque pointer (e.g., CUstream) so
       // we assume it has been converted to uint64_t
       .def(py::init([](uint64_t handle, bool take_ownership) {
-        return std::unique_ptr<driver::cu_stream>(new driver::cu_stream((CUstream)handle, take_ownership));
+        return std::unique_ptr<drv::cu_stream>(new drv::cu_stream((CUstream)handle, take_ownership));
       }))
-      .def("enqueue", [](driver::cu_stream *self, driver::kernel *kernel,
+      .def("enqueue", [](drv::cu_stream *self, drv::kernel *kernel,
                          size_t grid_0, size_t grid_1, size_t grid_2,
                          size_t block_0, size_t block_1, size_t block_2,
                          const std::string &args,
@@ -70,9 +69,9 @@ void init_triton_driver(py::module &&m) {
 /*****************************************************************************/
 void init_triton_codegen(py::module &&m) {
   m.def(
-      "add_passes_to_emit_bin", [](ir::module &ir, driver::device *dev, int num_warps) {
-        driver::module *mod;
-        driver::kernel *ker;
+      "add_passes_to_emit_bin", [](ir::module &ir, drv::device *dev, int num_warps) {
+        drv::module *mod;
+        drv::kernel *ker;
         size_t shared_mem;
         triton::codegen::add_passes_to_emit_bin(ir, dev, num_warps, mod, ker, shared_mem);
         return std::make_tuple(mod, ker, shared_mem);
