@@ -50,10 +50,18 @@ def implicit_broadcast(builder, lhs, rhs):
             else:
                 raise ValueError(f'Incompatible shape {l} and {r} at dimension {i}')
         if lhs_shape != ret_shape:
-            lhs = ir_value(builder, builder.broadcast(lhs._handle, ret_shape))
+            lhs = broadcast_to(lhs, ret_shape)
         if rhs_shape != ret_shape:
-            rhs = ir_value(builder, builder.broadcast(rhs._handle, ret_shape))
+            rhs = broadcast_to(rhs, ret_shape)
     return lhs, rhs
+
+
+def broadcast_to(input, shape):
+    builder = input.builder
+    if not input.type.is_block():
+        return ir_value(builder, builder.splat(input._handle, shape))
+    assert len(input.type.shape) == len(shape)
+    return ir_value(builder, builder.broadcast(input._handle, shape))
 
 
 def implicit_typecast(builder, lhs, rhs):
@@ -114,6 +122,13 @@ class ir_value:
             return self.builder.icmpSGT(self._handle, other._handle)
 
     @builtin
+    def __ge__(self, other):
+        if self.type.scalar.is_floating():  # float >= float
+            return self.builder.fcmpOGE(self._handle, other._handle)
+        elif self.type.scalar.is_int():  # int >= int
+            return self.builder.icmpSGE(self._handle, other._handle)
+
+    @builtin
     def __lt__(self, other):
         if self.type.scalar.is_floating():  # float < float
             return self.builder.fcmpOLT(self._handle, other._handle)
@@ -134,11 +149,16 @@ class ir_value:
         elif self.type.scalar.is_int():  # int % int
             return self.builder.srem(self._handle, other._handle)
 
+    @builtin
+    def __and__(self, other):
+        return self.builder.and_(self._handle, other._handle)
+
     def to(self, dtype):
         builder = self.builder
         # return type
-        dtype = dtype.make_ir(builder.context)
-        if self.type.is_block:
+        if not isinstance(dtype, _triton.ir.type):
+            dtype = dtype.make_ir(builder.context)
+        if self.type.is_block():
             dtype = _triton.ir.type.make_block(dtype, self.type.shape)
         # FP Truncation
         if self.type.scalar.is_floating() and dtype.scalar.is_floating() and\
@@ -173,24 +193,33 @@ class float16:
         return _triton.ir.type.get_fp16(context)
 
 
-class Stub:
-    pass
-
-
 def min(a, b):
     builder = a.builder
     cond = a < b
     return ir_value(builder, builder.select(cond._handle, a._handle, b._handle))
 
 
-def load(ptr):
+def load(ptr, mask=None, else_value=None):
     builder = ptr.builder
-    return ir_value(builder, builder.load(ptr._handle))
+    if mask is None and else_value is None:
+        return ir_value(builder, builder.load(ptr._handle))
+    assert mask is not None
+    mask = broadcast_to(mask, ptr.type.shape)
+    if else_value is None:
+        else_value = _triton.ir.undef.get(ptr.element)
+        if ptr.type.is_block:
+            else_value = builder.create_splat(else_value, ptr.type.shape)
+    else:
+        else_value = else_value.to(ptr.type.scalar.element)
+        else_value = broadcast_to(else_value, ptr.type.shape)
+    return ir_value(builder, builder.masked_load(ptr._handle, mask._handle, else_value._handle))
 
 
-def store(ptr, arg):
+def store(ptr, arg, mask=None):
     builder = ptr.builder
-    return ir_value(builder, builder.store(ptr._handle, arg._handle))
+    if mask is None:
+        return ir_value(builder, builder.store(ptr._handle, arg._handle))
+    return ir_value(builder, builder.masked_store(ptr._handle, arg._handle, mask._handle))
 
 
 def dot(a, b):
@@ -222,11 +251,14 @@ def program_id(axis):
     return ir_value(builder, builder.get_program_id(axis))
 
 
-def zeros(*shape):
+def zeros(shape, dtype):
     builder = shape[0].builder
-    _0 = builder.get_float32(0)
+    if dtype == triton.float32:
+        _0 = ir_value(builder, builder.get_float32(0))
+    if dtype == triton.float16:
+        _0 = ir_value(builder, builder.get_float16(0))
     shape = [int(x._handle) for x in shape]
-    return ir_value(builder, builder.splat(_0, shape))
+    return ir_value(builder, builder.splat(_0._handle, shape))
 
 
 class CodeGenerator(ast.NodeVisitor):
@@ -344,6 +376,10 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Load(self, node):
         ast.NodeVisitor.generic_visit(self, node)
 
+    def visit_Tuple(self, node):
+        args = [ast.NodeVisitor.visit(self, x) for x in node.elts]
+        return tuple(args)
+
     def visit_BinOp(self, node):
         lhs = ast.NodeVisitor.visit(self, node.left)
         rhs = ast.NodeVisitor.visit(self, node.right)
@@ -360,8 +396,56 @@ class CodeGenerator(ast.NodeVisitor):
             ast.Lt: '__lt__',
             ast.Div: '__div__',
             ast.Mod: '__mod__',
+            ast.BitAnd: '__and__',
+            ast.BitOr: '__or__',
+            ast.BitXor: '__xor__',
         }[type(node.op)]
         return getattr(lhs, fn)(rhs)
+
+    def visit_If(self, node):
+        cond = ast.NodeVisitor.visit(self, node.test)
+        if cond:
+            self.visit_compound_statement(node.body)
+        else:
+            self.visit_compound_statement(node.orelse)
+
+    def visit_IfExp(self, node):
+        cond = ast.NodeVisitor.visit(self, node.test)
+        if cond:
+            return ast.NodeVisitor.visit(self, node.body)
+        else:
+            return ast.NodeVisitor.visit(self, node.orelse)
+
+    def visit_Compare(self, node):
+        lhs = ast.NodeVisitor.visit(self, node.left)
+        rhs = ast.NodeVisitor.visit(self, node.comparators[0])
+        if isinstance(lhs, int):
+            lhs = self._wrap_ir(self.builder.get_int32(lhs))
+        if isinstance(rhs, int):
+            rhs = self._wrap_ir(self.builder.get_int32(rhs))
+        lhs, rhs = implicit_broadcast(self.builder, lhs, rhs)
+        fn = {
+            ast.Eq: '__eq__',
+            ast.NotEq: '__ne__',
+            ast.Lt: '__lt__',
+            ast.LtE: '__le__',
+            ast.Gt: '__gt__',
+            ast.GtE: '__ge__',
+            ast.Is: '__eq__',
+            ast.IsNot: '__ne__',
+        }[type(node.ops[0])]
+        return getattr(lhs, fn)(rhs)
+
+    # def visit_BoolOp(self, node):
+    #     values = [ast.NodeVisitor.visit(self, v) for v in node.values]
+    #     for i in range(len(values)):
+    #         if isinstance(values[i], int):
+    #             values[i] = self._wrap_ir(self.builder.get_int32(values[i]))
+    #     fn = {
+    #         ast.And: '__and__',
+    #         ast.Or: '__or__',
+    #     }[type(node.op)]
+    #     return getattr(values[0], fn)(*values[1:])
 
     def visit_UnaryOp(self, node):
         operand = ast.NodeVisitor.visit(self, node.operand)
@@ -447,10 +531,16 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_NameConstant(self, node):
         return ast.NodeVisitor.visit(self, node.value)
 
+    def visit_keyword(self, node):
+        return {node.arg: ast.NodeVisitor.visit(self, node.value)}
+
     def visit_Call(self, node):
         fn = ast.NodeVisitor.visit(self, node.func)
+        kws = dict()
+        for keyword in node.keywords:
+            kws.update(ast.NodeVisitor.visit(self, keyword))
         args = [ast.NodeVisitor.visit(self, arg) for arg in node.args]
-        return fn(*args)
+        return fn(*args, **kws)
 
     def visit_Num(self, node):
         val = node.n

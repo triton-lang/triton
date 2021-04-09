@@ -98,6 +98,9 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<ir::constant, ir::user>(m, "constant");
 
+  py::class_<ir::undef_value, ir::constant>(m, "undef")
+      .def("get", &ir::undef_value::get, ret::reference);
+
   py::class_<ir::constant_int, ir::constant>(m, "constant_int")
       .def_property_readonly("value", &ir::constant_int::get_value)
       .def("__int__", [](ir::constant_int *self) { return self->get_value(); });
@@ -126,7 +129,9 @@ void init_triton_ir(py::module &&m) {
       .def_property_readonly("scalar", &ir::type::get_scalar_ty)
       .def_property_readonly("context", &ir::type::get_context, ret::reference);
 
-  py::class_<ir::pointer_type, ir::type>(m, "pointer_type");
+  py::class_<ir::pointer_type, ir::type>(m, "pointer_type")
+      .def_property_readonly("element", &ir::pointer_type::get_element_ty, ret::reference);
+
   py::class_<ir::function_type, ir::type>(m, "function_type");
   py::class_<ir::integer_type, ir::type>(m, "integer_type");
   py::class_<ir::block_type, ir::type>(m, "block_type")
@@ -248,7 +253,7 @@ void init_triton_ir(py::module &&m) {
       .def("fcmpOEQ", &ir::builder::create_fcmpOEQ, ret::reference)
       .def("fcmpONE", &ir::builder::create_fcmpONE, ret::reference)
       // Logical
-      .def("and", &ir::builder::create_and, ret::reference)
+      .def("and_", &ir::builder::create_and, ret::reference)
       .def("xor", &ir::builder::create_xor, ret::reference)
       .def("or", &ir::builder::create_or, ret::reference)
       // Unary
@@ -279,6 +284,7 @@ void init_triton_ir(py::module &&m) {
       .def("select", &ir::builder::create_select, ret::reference)
       // constants
       .def("get_int32", &ir::builder::get_int32, ret::reference)
+      .def("get_float16", &ir::builder::get_float16, ret::reference)
       .def("get_float32", &ir::builder::get_float32, ret::reference)
       .def("get_range", &ir::builder::get_range, ret::reference)
       // control-flow

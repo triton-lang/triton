@@ -150,16 +150,23 @@ def _matmul(A, B, C, M, N, K, lda, ldb, ldc, **META):
     rk = triton.arange(0, BLOCK_K)
     A = A + (rm[:, None] * lda + rk[None, :] * 1)
     B = B + (rk[:, None] * ldb + rn[None, :] * 1)
-    acc = triton.zeros(BLOCK_M, BLOCK_N)
-    for _ in range(K, 0, -BLOCK_K):
-        acc += triton.dot(triton.load(A), triton.load(B))
+    acc = triton.zeros((BLOCK_M, BLOCK_N), dtype=triton.float32)
+    for k in range(K, 0, -BLOCK_K):
+        if META['EVEN_K']:
+            a = triton.load(A)
+            b = triton.load(B)
+        else:
+            a = triton.load(A, mask=rk[None, :] < k, else_value=0.)
+            b = triton.load(B, mask=rk[:, None] < k, else_value=0.)
+        acc += triton.dot(a, b)
         A += BLOCK_K * 1
         B += BLOCK_K * ldb
     # rematerialize rm and rn to save registers
     rm = pid_m * BLOCK_M + triton.arange(0, BLOCK_M)
     rn = pid_n * BLOCK_N + triton.arange(0, BLOCK_N)
     C = C + (rm[:, None] * ldc + rn[None, :] * 1)
-    triton.store(C, acc.to(triton.float16))
+    mask = (rm < M)[:, None] & (rn < N)[None, :]
+    triton.store(C, acc.to(triton.float16), mask=mask)
 
 
 # %%
@@ -178,7 +185,7 @@ class _dot(torch.autograd.Function):
         M, K, N = a.shape[0], a.shape[1], b.shape[1]
         c = torch.empty((M, N), device=a.device, dtype=a.dtype)
         grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), )
-        _matmul[grid](a, b, c, M, N, K, a.stride(0), b.stride(0), c.stride(0))
+        _matmul[grid](a, b, c, M, N, K, a.stride(0), b.stride(0), c.stride(0), EVEN_K=(K % 64 == 0))
         return c
 
 
@@ -191,13 +198,14 @@ dot = _dot.apply
 # We can test our custom matrix multiplication operation against cuBLAS (i.e., :code:`torch.matmul`).
 # Note that we need to modify the :code`atol` and :code:`rtol` parameters of `torch.allclose` to account for the fact that we are comparing FP16 tensors.
 
-a = torch.randn((4096, 4096), device='cuda', dtype=torch.float16)
-b = torch.randn((4096, 4096), device='cuda', dtype=torch.float16)
+#torch.manual_seed(0)
+a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
 c_0 = dot(a, b)
 c_1 = torch.matmul(a, b)
 print(c_0)
 print(c_1)
-print(torch.allclose(c_0, c_1, rtol=1e-3, atol=1e-3))
+print(triton.testing.allclose(c_0, c_1))
 
 # %%
 # Benchmark
@@ -279,7 +287,6 @@ def benchmark(M, N, K, provider):
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b))
     if provider == 'triton':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: dot(a, b))
-        print(ms, min_ms, max_ms)
     if provider == 'cutlass':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: triton.testing.cutlass_matmul(a, b))
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)

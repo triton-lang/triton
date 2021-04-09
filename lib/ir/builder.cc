@@ -54,6 +54,9 @@ value *builder::get_int32(int32_t val)
 value *builder::get_int64(int64_t val)
 { return constant_int::get(type::get_int64_ty(ctx_), val);}
 
+value *builder::get_float16(float val)
+{ return constant_fp::get(type::get_half_ty(ctx_), val); }
+
 value *builder::get_float32(float val)
 { return constant_fp::get(type::get_float_ty(ctx_), val); }
 

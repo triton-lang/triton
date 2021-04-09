@@ -52,12 +52,13 @@ void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps,
   codegen::transform::coalesce coalesce(&align, &layouts);
   codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target.get(), num_warps);
   // run passes
-  ir::print(ir, std::cout);
   dce.run(ir);
+  //ir::print(ir, std::cout);
   peephole.run(ir);
   dce.run(ir);
   pipeline.run(ir);
   dce.run(ir);
+  //ir::print(ir, std::cout);
   disassociate.run(ir);
   dce.run(ir);
   align.run(ir);
