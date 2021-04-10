@@ -6,6 +6,7 @@
 #include "triton/ir/enums.h"
 #include "triton/ir/function.h"
 #include "triton/ir/module.h"
+#include <optional>
 #include <pybind11/buffer_info.h>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
@@ -66,6 +67,7 @@ void init_triton_driver(py::module &&m) {
 /*****************************************************************************/
 /* Python bindings for triton::codegen                                       */
 /*****************************************************************************/
+
 void init_triton_codegen(py::module &&m) {
   m.def(
       "add_passes_to_emit_bin", [](ir::module &ir, drv::device *dev, int num_warps) {
@@ -82,6 +84,219 @@ void init_triton_codegen(py::module &&m) {
 /* Python bindings for triton::ir                                            */
 /*****************************************************************************/
 
+ir::value *add(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
+  ir::type *scalar_ty = lhs->get_type()->get_scalar_ty();
+  // ptr + offset
+  if (scalar_ty->is_pointer_ty())
+    return builder->create_gep(lhs, {rhs});
+  // float + float
+  else if (scalar_ty->is_floating_point_ty())
+    return builder->create_fadd(lhs, rhs);
+  // int + int
+  else if (scalar_ty->is_integer_ty())
+    return builder->create_add(lhs, rhs);
+}
+
+ir::value *sub(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
+  ir::type *scalar_ty = lhs->get_type()->get_scalar_ty();
+  // ptr + offset
+  if (scalar_ty->is_pointer_ty())
+    return builder->create_gep(lhs, {rhs});
+  // float + float
+  if (scalar_ty->is_floating_point_ty())
+    return builder->create_fsub(lhs, rhs);
+  // int + int
+  else if (scalar_ty->is_integer_ty())
+    return builder->create_sub(lhs, rhs);
+}
+
+ir::value *mul(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
+  ir::type *scalar_ty = lhs->get_type()->get_scalar_ty();
+  // float * float
+  if (scalar_ty->is_floating_point_ty())
+    return builder->create_fmul(lhs, rhs);
+  // int * int
+  else if (scalar_ty->is_integer_ty())
+    return builder->create_mul(lhs, rhs);
+}
+
+ir::value *greater_than(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
+  ir::type *scalar_ty = lhs->get_type()->get_scalar_ty();
+  // float > float
+  if (scalar_ty->is_floating_point_ty())
+    return builder->create_fcmpOGT(lhs, rhs);
+  // int > int
+  else if (scalar_ty->is_integer_ty())
+    return builder->create_icmpSGT(lhs, rhs);
+}
+
+ir::value *greater_equal(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
+  ir::type *scalar_ty = lhs->get_type()->get_scalar_ty();
+  // float >= float
+  if (scalar_ty->is_floating_point_ty())
+    return builder->create_fcmpOGE(lhs, rhs);
+  // int >= int
+  else if (scalar_ty->is_integer_ty())
+    return builder->create_icmpSGE(lhs, rhs);
+}
+
+ir::value *less_than(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
+  ir::type *scalar_ty = lhs->get_type()->get_scalar_ty();
+  // float < float
+  if (scalar_ty->is_floating_point_ty())
+    return builder->create_fcmpOLT(lhs, rhs);
+  // int < int
+  else if (scalar_ty->is_integer_ty())
+    return builder->create_icmpSLT(lhs, rhs);
+}
+
+ir::value *div(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
+  ir::type *scalar_ty = lhs->get_type()->get_scalar_ty();
+  // float / float
+  if (scalar_ty->is_floating_point_ty())
+    return builder->create_fdiv(lhs, rhs);
+  // int / int
+  else if (scalar_ty->is_integer_ty())
+    return builder->create_sdiv(lhs, rhs);
+}
+
+ir::value *mod(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
+  ir::type *scalar_ty = lhs->get_type()->get_scalar_ty();
+  // float % int
+  if (scalar_ty->is_floating_point_ty())
+    return builder->create_frem(lhs, rhs);
+  // int % int
+  else if (scalar_ty->is_integer_ty())
+    return builder->create_srem(lhs, rhs);
+}
+
+ir::value *and_(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
+  return builder->create_and(lhs, rhs);
+}
+
+ir::value *convert(ir::value *arg, ir::type *type, ir::builder *builder) {
+  if (type->is_block_ty())
+    type = ir::block_type::get(type, arg->get_type()->get_block_shapes());
+  // FP Truncation
+  ir::type *src_ty = arg->get_type()->get_scalar_ty();
+  ir::type *dst_ty = type->get_scalar_ty();
+  bool truncate_fp = src_ty->is_floating_point_ty() &&
+                     dst_ty->is_floating_point_ty() &&
+                     src_ty->get_fp_mantissa_width() > dst_ty->get_fp_mantissa_width();
+  if (truncate_fp)
+    return builder->create_fp_trunc(arg, type);
+}
+
+ir::value *broadcast_to(ir::value *arg0, const ir::type::block_shapes_t &shape, ir::builder *builder) {
+  if (!arg0->get_type()->is_block_ty())
+    return builder->create_splat(arg0, shape);
+  auto src_shape = arg0->get_type()->get_block_shapes();
+  if (src_shape.size() != shape.size())
+    throw std::runtime_error("Cannot broadcast");
+  return builder->create_broadcast(arg0, shape);
+}
+
+std::tuple<ir::value *, ir::value *> broadcast(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
+  ir::type *lhs_ty = lhs->get_type();
+  ir::type *rhs_ty = rhs->get_type();
+  // broadcast(block, scalar)
+  if (lhs_ty->is_block_ty() && !rhs_ty->is_block_ty())
+    rhs = builder->create_splat(rhs, lhs_ty->get_block_shapes());
+  // broadcast(scalar, block)
+  else if (!lhs_ty->is_block_ty() && rhs_ty->is_block_ty())
+    lhs = builder->create_splat(lhs, rhs_ty->get_block_shapes());
+  // broadcast(block, block)
+  else if (lhs_ty->is_block_ty() && rhs_ty->is_block_ty()) {
+    auto lhs_shape = lhs_ty->get_block_shapes();
+    auto rhs_shape = rhs_ty->get_block_shapes();
+    if (lhs_shape.size() != rhs_shape.size())
+      throw std::runtime_error("Cannot broadcast: blocks must have the same rank");
+    ir::type::block_shapes_t ret_shape;
+    for (size_t i = 0; i < lhs_shape.size(); ++i) {
+      unsigned left = lhs_shape[i];
+      unsigned right = rhs_shape[i];
+      if (left == 1)
+        ret_shape.push_back(right);
+      else if (right == 1)
+        ret_shape.push_back(left);
+      else if (left == right)
+        ret_shape.push_back(left);
+      else
+        throw std::runtime_error("Cannot broadcast: incompatible dimensions at index " + std::to_string(i) +
+                                 ": " + std::to_string(left) + " and " + std::to_string(right));
+    }
+    if (lhs_shape != ret_shape)
+      lhs = broadcast_to(lhs, ret_shape, builder);
+    if (rhs_shape != ret_shape)
+      rhs = broadcast_to(rhs, ret_shape, builder);
+  }
+  return std::make_tuple(lhs, rhs);
+}
+
+ir::value *subscript(ir::value *lhs, std::vector<py::object> slices, ir::builder *builder) {
+  ir::type::block_shapes_t shape;
+  size_t curr = 0;
+  for (py::object slice : slices) {
+    py::object none = py::none();
+    py::object all = py::make_tuple(none, none, none);
+    if (slice.is(none))
+      shape.push_back(1);
+    else if (slice.is(all))
+      shape.push_back(lhs->get_type()->get_block_shapes()[curr]);
+    else
+      throw std::runtime_error("unsupported slice");
+  }
+  return builder->create_reshape(lhs, shape);
+}
+
+ir::value *min(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
+  ir::value *cond = less_than(lhs, rhs, builder);
+  return builder->create_select(cond, lhs, rhs);
+}
+
+ir::value *load(ir::value *ptr, std::optional<ir::value *> _mask, std::optional<ir::value *> _else_value, ir::builder *builder) {
+  if (!_mask.has_value() && !_else_value.has_value())
+    return builder->create_load(ptr);
+  if (!_mask.has_value())
+    throw std::runtime_error("`else_value` cannot be provided without `mask`");
+  ir::value *mask = _mask.value();
+  ir::type *elt_ty = ptr->get_type()->get_scalar_ty()->get_pointer_element_ty();
+  ir::value *else_value = _else_value.has_value() ? _else_value.value() : ir::undef_value::get(elt_ty);
+  else_value = convert(else_value, elt_ty, builder);
+  else_value = broadcast_to(else_value, ptr->get_type()->get_block_shapes(), builder);
+  return builder->create_masked_load(ptr, mask, else_value);
+}
+
+ir::value *store(ir::value *ptr, ir::value *val, std::optional<ir::value *> _mask, ir::builder *builder) {
+  if (!_mask.has_value())
+    return builder->create_store(ptr, val);
+  ir::value *mask = _mask.value();
+  return builder->create_masked_store(ptr, val, mask);
+}
+
+ir::value *dot(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
+  ir::value *_0 = builder->get_float32(0);
+  _0 = builder->create_splat(_0, lhs->get_type()->get_block_shapes());
+  return builder->create_dot(lhs, rhs, _0);
+}
+
+ir::value *select(ir::value *cond, ir::value *true_val, ir::value *false_val, ir::builder *builder) {
+  return builder->create_select(cond, true_val, false_val);
+}
+
+ir::value *arange(int start, int end, ir::builder *builder) {
+  return builder->get_range(start, end);
+}
+
+ir::value *program_id(int axis, ir::builder *builder) {
+  return builder->create_get_program_id(axis);
+}
+
+ir::value *zeros(ir::type::block_shapes_t shape, ir::type *dtype, ir::builder *builder) {
+  ir::value *_0 = ir::constant::get_null_value(dtype);
+  return builder->create_splat(_0, shape);
+}
+
 void init_triton_ir(py::module &&m) {
   using ret = py::return_value_policy;
   using namespace pybind11::literals;
@@ -93,7 +308,29 @@ void init_triton_ir(py::module &&m) {
       .def_property("name", &ir::value::get_name, &ir::value::set_name)
       .def_property_readonly("type", &ir::value::get_type);
 
-  py::class_<ir::user, ir::value>(m, "user");
+  py::class_<ir::user, ir::value>(m, "user")
+      .def("__add__", &add, ret::reference)
+      .def("__sub__", &sub, ret::reference)
+      .def("__mul__", &mul, ret::reference)
+      .def("__div__", &div, ret::reference)
+      .def("__mod__", &mod, ret::reference)
+      .def("__gt__", &greater_than, ret::reference)
+      .def("__ge__", &greater_equal, ret::reference)
+      .def("__lt__", &less_than, ret::reference)
+      .def("__and__", &and_, ret::reference)
+      .def("__getitem__", &subscript, ret::reference)
+      .def("to", &convert, ret::reference);
+
+  m.def("broadcast", &broadcast, ret::reference);
+  m.def("broadcast_to", &broadcast_to, ret::reference);
+  m.def("min", &min, ret::reference);
+  m.def("load", &load, ret::reference);
+  m.def("store", &store, ret::reference);
+  m.def("dot", &dot, ret::reference);
+  m.def("select", &select, ret::reference);
+  m.def("arange", &arange, ret::reference);
+  m.def("program_id", &program_id, ret::reference);
+  m.def("zeros", &zeros, ret::reference);
 
   py::class_<ir::constant, ir::user>(m, "constant");
 
