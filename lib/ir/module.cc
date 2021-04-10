@@ -10,17 +10,13 @@ namespace triton{
 namespace ir{
 
 /* Module */
-module::module(const std::string &name)
-  : name_(name), builder_(context_) {
+module::module(const std::string &name, builder &builder)
+  : name_(name), builder_(builder) {
   sealed_blocks_.insert(nullptr);
 }
 
 ir::builder& module::get_builder() {
   return builder_;
-}
-
-ir::context& module::get_context() {
-  return context_;
 }
 
 void module::set_value(const std::string& name, ir::basic_block *block, ir::value *value){

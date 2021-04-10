@@ -115,18 +115,17 @@ import torch
 import triton
 
 
+@triton.jit()
+def relu(x):
+    return max(x, 0)
+
+
 @triton.jit(
     configs=[
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_warps=4),
-        # triton.Config({'BLOCK_M': 64 , 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_warps=4),\
-        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64 , 'BLOCK_K': 32, 'GROUP_M': 8}, num_warps=4),\
-        # triton.Config({'BLOCK_M': 64 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=4),\
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=4),
-        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32 , 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=4),\
-        # triton.Config({'BLOCK_M': 64 , 'BLOCK_N': 32 , 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=2),\
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'GROUP_M': 8}, num_warps=2),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_warps=4),
     ],
-    key=['M', 'N', 'K']
+    key=['M', 'N', 'K'],
 )
 def _matmul(A, B, C, M, N, K, lda, ldb, ldc, **META):
     # extract meta-parameters
@@ -152,12 +151,8 @@ def _matmul(A, B, C, M, N, K, lda, ldb, ldc, **META):
     B = B + (rk[:, None] * ldb + rn[None, :] * 1)
     acc = triton.zeros((BLOCK_M, BLOCK_N), dtype=triton.float32)
     for k in range(K, 0, -BLOCK_K):
-        if META['EVEN_K']:
-            a = triton.load(A)
-            b = triton.load(B)
-        else:
-            a = triton.load(A, mask=rk[None, :] < k, else_value=0.)
-            b = triton.load(B, mask=rk[:, None] < k, else_value=0.)
+        a = triton.load(A)
+        b = triton.load(B)
         acc += triton.dot(a, b)
         A += BLOCK_K * 1
         B += BLOCK_K * ldb
@@ -165,9 +160,16 @@ def _matmul(A, B, C, M, N, K, lda, ldb, ldc, **META):
     rm = pid_m * BLOCK_M + triton.arange(0, BLOCK_M)
     rn = pid_n * BLOCK_N + triton.arange(0, BLOCK_N)
     C = C + (rm[:, None] * ldc + rn[None, :] * 1)
-    mask = (rm < M)[:, None] & (rn < N)[None, :]
+    mask = (rm[:, None] < M) & (rn[None, :] < N)
     triton.store(C, acc.to(triton.float16), mask=mask)
 
+
+M, N, K = 512, 512, 512
+a = torch.randn((M, K), device='cuda', dtype=torch.float16)
+b = torch.randn((K, N), device='cuda', dtype=torch.float16)
+c = torch.empty((M, N), device='cuda', dtype=torch.float16)
+grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), )
+_matmul[grid](a, b, c, M, N, K, a.stride(0), b.stride(0), c.stride(0))
 
 # %%
 # Autograd Function
@@ -273,8 +275,8 @@ print(torch.allclose(c_0, c_2, rtol=1e-3, atol=1e-3))
         x_names=['M', 'N', 'K'],  # argument names to use as an x-axis for the plot
         x_vals=[8192],  # different possible values for `x_name`
         y_name='provider',  # argument name whose value corresponds to a different line in the plot
-        y_vals=['cublas', 'triton', 'cutlass'],  # possible keys for `y_name`
-        y_lines=["cuBLAS", "Triton", 'CUTLASS'],  # label name for the lines
+        y_vals=['cublas', 'triton'],  # possible keys for `y_name`
+        y_lines=["cuBLAS", "Triton"],  # label name for the lines
         ylabel="TFLOPS",  # label name for the y-axis
         plot_name="matmul-performance",  # name for the plot. Used also as a file name for saving the plot.
         args={}

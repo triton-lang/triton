@@ -15,24 +15,15 @@ from abc import ABC, abstractmethod
 ########################
 
 
-def builtin(fn):
-    def wrapper(*args):
-        ret = fn(*args)
-        ret = ir_value(args[0].builder, ret)
-        return ret
-
-    return wrapper
-
-
 def implicit_broadcast(builder, lhs, rhs):
     lhs_ty = lhs.type
     rhs_ty = rhs.type
     # op(block, scalar)
     if lhs_ty.is_block() and not rhs_ty.is_block():
-        rhs = ir_value(builder, builder.splat(rhs._handle, lhs_ty.shape))
+        rhs = builder.splat(rhs._handle, lhs_ty.shape)
     # op(scalar, block)
     elif rhs_ty.is_block() and not lhs_ty.is_block():
-        lhs = ir_value(builder, builder.splat(lhs._handle, rhs_ty.shape))
+        lhs = builder.splat(lhs._handle, rhs_ty.shape)
     # op(block, block)
     elif lhs_ty.is_block() and rhs_ty.is_block():
         lhs_shape = lhs_ty.shape
@@ -59,99 +50,80 @@ def implicit_broadcast(builder, lhs, rhs):
 def broadcast_to(input, shape):
     builder = input.builder
     if not input.type.is_block():
-        return ir_value(builder, builder.splat(input._handle, shape))
+        return builder.splat(input._handle, shape)
     assert len(input.type.shape) == len(shape)
-    return ir_value(builder, builder.broadcast(input._handle, shape))
-
-
-def implicit_typecast(builder, lhs, rhs):
-    pass
-
-
-# class ir_builder:
-#     def _wrap_fn(self, fn):
-#         def wrapper(*args):
-#             args = [arg._handle if isinstance(arg, ir_value) else arg for arg in args]
-#             ret = fn(*args)
-#             ret = ir_value(self, ret)
-#             return ret
-
-#         return wrapper
-
-#     def __init__(self, handle):
-#         self._handle = handle
+    return builder.broadcast(input._handle, shape)
 
 
 class ir_value:
-    def __init__(self, builder, handle):
-        assert isinstance(handle, _triton.ir.value)
+    """
+    This class is used to wrap a generated Triton-IR value.
+    It differs from _triton.ir.value in that it is associated with a
+    builder object that can directly generate code into the provided
+    Triton-IR module.
+    """
+    def __init__(self, builder, handle: _triton.ir.value):
         self.builder = builder
         self.type = handle.type
         self._handle = handle
 
-    @builtin
     def __add__(self, other):
         if self.type.scalar.is_ptr():  # ptr + offset
-            return self.builder.gep(self._handle, [other._handle])
+            return self.builder.gep(self, [other])
         elif self.type.scalar.is_floating():  # float + float
-            return self.builder.fadd(self._handle, other._handle)
+            return self.builder.fadd(self, other)
         elif self.type.scalar.is_int():  # int + int
-            return self.builder.add(self._handle, other._handle)
+            return self.builder.add(self, other)
 
-    @builtin
     def __sub__(self, other):
         #if self.type.scalar.is_ptr():  # ptr + offset
-        #    return self.builder.gep(self._handle, [other._handle])
+        #    return self.builder.gep(self, [other])
         if self.type.scalar.is_floating():  # float + float
-            return self.builder.fsub(self._handle, other._handle)
+            return self.builder.fsub(self, other)
         elif self.type.scalar.is_int():  # int + int
-            return self.builder.sub(self._handle, other._handle)
+            return self.builder.sub(self, other)
 
-    @builtin
     def __mul__(self, other):
         if self.type.scalar.is_floating():  # float * float
-            return self.builder.fmul(self._handle, other._handle)
+            return self.builder.fmul(self, other)
         elif self.type.scalar.is_int():  # int * int
-            return self.builder.mul(self._handle, other._handle)
+            return self.builder.mul(self, other)
 
-    @builtin
     def __gt__(self, other):
         if self.type.scalar.is_floating():  # float > float
-            return self.builder.fcmpOGT(self._handle, other._handle)
+            return self.builder.fcmpOGT(self, other)
         elif self.type.scalar.is_int():  # int > int
-            return self.builder.icmpSGT(self._handle, other._handle)
+            return self.builder.icmpSGT(self, other)
 
-    @builtin
     def __ge__(self, other):
         if self.type.scalar.is_floating():  # float >= float
-            return self.builder.fcmpOGE(self._handle, other._handle)
+            return self.builder.fcmpOGE(self, other)
         elif self.type.scalar.is_int():  # int >= int
-            return self.builder.icmpSGE(self._handle, other._handle)
+            return self.builder.icmpSGE(self, other)
 
-    @builtin
     def __lt__(self, other):
         if self.type.scalar.is_floating():  # float < float
-            return self.builder.fcmpOLT(self._handle, other._handle)
+            return self.builder.fcmpOLT(self, other)
         elif self.type.scalar.is_int():  # int < int
-            return self.builder.icmpSLT(self._handle, other._handle)
+            return self.builder.icmpSLT(self, other)
 
-    @builtin
     def __div__(self, other):
         if self.type.scalar.is_floating():  # float / float
-            return self.builder.fdiv(self._handle, other._handle)
+            return self.builder.fdiv(self, other)
         elif self.type.scalar.is_int():  # int / int
-            return self.builder.sdiv(self._handle, other._handle)
+            return self.builder.sdiv(self, other)
 
-    @builtin
     def __mod__(self, other):
         if self.type.scalar.is_floating():  # float % float
-            return self.builder.frem(self._handle, other._handle)
+            return self.builder.frem(self, other)
         elif self.type.scalar.is_int():  # int % int
-            return self.builder.srem(self._handle, other._handle)
+            return self.builder.srem(self, other)
 
-    @builtin
     def __and__(self, other):
-        return self.builder.and_(self._handle, other._handle)
+        return self.builder.and_(self, other)
+
+    def __int__(self):
+        return int(self._handle)
 
     def to(self, dtype):
         builder = self.builder
@@ -163,7 +135,7 @@ class ir_value:
         # FP Truncation
         if self.type.scalar.is_floating() and dtype.scalar.is_floating() and\
         self.type.scalar.fp_mantissa_width > dtype.scalar.fp_mantissa_width:
-            return ir_value(builder, builder.fp_trunc(self._handle, dtype))
+            return builder.fp_trunc(self, dtype)
         raise NotImplementedError(f"cast from {self.type} to {dtype}")
 
     def __getitem__(self, slices):
@@ -178,7 +150,7 @@ class ir_value:
                 curr += 1
             else:
                 raise NotImplementedError(f"Unsupported slice type: {s}")
-        return ir_value(builder, builder.reshape(self._handle, shapes))
+        return builder.reshape(self, shapes)
 
 
 class float32:
@@ -195,14 +167,13 @@ class float16:
 
 def min(a, b):
     builder = a.builder
-    cond = a < b
-    return ir_value(builder, builder.select(cond._handle, a._handle, b._handle))
+    return builder.select(a < b, a, b)
 
 
 def load(ptr, mask=None, else_value=None):
     builder = ptr.builder
     if mask is None and else_value is None:
-        return ir_value(builder, builder.load(ptr._handle))
+        return builder.load(ptr)
     assert mask is not None
     mask = broadcast_to(mask, ptr.type.shape)
     if else_value is None:
@@ -212,14 +183,14 @@ def load(ptr, mask=None, else_value=None):
     else:
         else_value = else_value.to(ptr.type.scalar.element)
         else_value = broadcast_to(else_value, ptr.type.shape)
-    return ir_value(builder, builder.masked_load(ptr._handle, mask._handle, else_value._handle))
+    return builder.masked_load(ptr, mask, else_value)
 
 
 def store(ptr, arg, mask=None):
     builder = ptr.builder
     if mask is None:
-        return ir_value(builder, builder.store(ptr._handle, arg._handle))
-    return ir_value(builder, builder.masked_store(ptr._handle, arg._handle, mask._handle))
+        return builder.store(ptr, arg)
+    return builder.masked_store(ptr, arg, mask)
 
 
 def dot(a, b):
@@ -230,35 +201,33 @@ def dot(a, b):
     assert b.type.scalar.is_floating()
     _0 = builder.get_float32(0)
     _0 = builder.splat(_0, [M, N])
-    return ir_value(builder, builder.dot(a._handle, b._handle, _0))
+    return builder.dot(a, b, _0)
 
 
 def select(cond, true_val, false_val):
     builder = cond.builder
-    return ir_value(builder, builder.select(cond._handle, true_val._handle, false_val._handle))
+    return builder.select(cond, true_val, false_val)
 
 
 def arange(start, end):
     builder = start.builder
-    start = int(start._handle)
-    end = int(end._handle)
-    return ir_value(builder, builder.get_range(start, end))
+    return builder.get_range(int(start), int(end))
 
 
 def program_id(axis):
     builder = axis.builder
-    axis = int(axis._handle)
-    return ir_value(builder, builder.get_program_id(axis))
+    axis = int(axis)
+    return builder.get_program_id(axis)
 
 
 def zeros(shape, dtype):
     builder = shape[0].builder
     if dtype == triton.float32:
-        _0 = ir_value(builder, builder.get_float32(0))
+        _0 = builder.get_float32(0)
     if dtype == triton.float16:
-        _0 = ir_value(builder, builder.get_float16(0))
-    shape = [int(x._handle) for x in shape]
-    return ir_value(builder, builder.splat(_0._handle, shape))
+        _0 = builder.get_float16(0)
+    shape = [int(x) for x in shape]
+    return builder.splat(_0, shape)
 
 
 class CodeGenerator(ast.NodeVisitor):
@@ -276,11 +245,11 @@ class CodeGenerator(ast.NodeVisitor):
         else:
             raise ValueError(f'{name} is not defined')
         if isinstance(ret, ir_value):
-            return self._wrap_ir(self.module.get_value(name))
+            return ir_value(self.builder, self.module.get_value(name))
         elif isinstance(ret, int):
-            return self._wrap_ir(self.builder.get_int32(ret))
+            return self.builder.get_int32(ret)
         elif isinstance(ret, float):
-            return self._wrap_ir(self.builder.get_float32(ret))
+            return self.builder.get_float32(ret)
         else:
             return ret
 
@@ -292,16 +261,45 @@ class CodeGenerator(ast.NodeVisitor):
         if add_scope:
             self.module.pop_scope()
 
-    def __init__(self, module, prototype, gscope, attributes, kwargs):
-        self.module = module
-        self.builder = module.builder
+    @staticmethod
+    def _wrap(builder, fn):
+        def cvt(val):
+            if isinstance(val, ir_value):
+                return val._handle
+            if isinstance(val, list):
+                return [cvt(x) for x in val]
+            return val
+
+        def wrapper(*args, **kwargs):
+            args = [cvt(arg) for arg in args]
+            kwargs = {k: cvt(v) for k, v in kwargs.items()}
+            ret = fn(*args, **kwargs)
+            if isinstance(ret, _triton.ir.value) and\
+               not isinstance(ret, _triton.ir.basic_block):
+                ret = ir_value(builder, ret)
+            return ret
+
+        return wrapper
+
+    @staticmethod
+    def _patch_builder(builder):
+        methods = [fn for fn in dir(builder) \
+                   if callable(getattr(builder, fn)) and not fn.startswith("__")]
+        for method in methods:
+            attr = getattr(builder, method)
+            setattr(builder, method, CodeGenerator._wrap(builder, attr))
+        return builder
+
+    def __init__(self, context, prototype, gscope, attributes, kwargs):
+        self.builder = _triton.ir.builder(context)
+        self.builder = CodeGenerator._patch_builder(self.builder)
+        self.module = _triton.ir.module('', self.builder)
         self.prototype = prototype
         self.gscope = gscope
         self.lscope = dict()
         self.attributes = attributes
         self.kwargs = kwargs
         self.builtins = {'range': range, 'min': min}
-        self._wrap_ir = lambda x: ir_value(self.builder, x)
 
     def visit_Module(self, node):
         self.module.add_new_scope()
@@ -325,8 +323,8 @@ class CodeGenerator(ast.NodeVisitor):
             fn.args[i].name = arg_name
             module.set_value(arg_name, fn.args[i])
             module.scope.set_type(arg_name, fn.args[i].type)
-            self.lscope[arg_name] = self._wrap_ir(fn.args[i])
-        entry = _triton.ir.basic_block.create(module.context, "entry", fn)
+            self.lscope[arg_name] = ir_value(self.builder, fn.args[i])
+        entry = _triton.ir.basic_block.create(module.builder.context, "entry", fn)
         module.seal_block(entry)
         module.builder.set_insert_block(entry)
         # visit function body
@@ -384,9 +382,9 @@ class CodeGenerator(ast.NodeVisitor):
         lhs = ast.NodeVisitor.visit(self, node.left)
         rhs = ast.NodeVisitor.visit(self, node.right)
         if isinstance(lhs, int):
-            lhs = self._wrap_ir(self.builder.get_int32(lhs))
+            lhs = self.builder.get_int32(lhs)
         if isinstance(rhs, int):
-            rhs = self._wrap_ir(self.builder.get_int32(rhs))
+            rhs = self.builder.get_int32(rhs)
         lhs, rhs = implicit_broadcast(self.builder, lhs, rhs)
         fn = {
             ast.Add: '__add__',
@@ -420,9 +418,9 @@ class CodeGenerator(ast.NodeVisitor):
         lhs = ast.NodeVisitor.visit(self, node.left)
         rhs = ast.NodeVisitor.visit(self, node.comparators[0])
         if isinstance(lhs, int):
-            lhs = self._wrap_ir(self.builder.get_int32(lhs))
+            lhs = self.builder.get_int32(lhs)
         if isinstance(rhs, int):
-            rhs = self._wrap_ir(self.builder.get_int32(rhs))
+            rhs = self.builder.get_int32(rhs)
         lhs, rhs = implicit_broadcast(self.builder, lhs, rhs)
         fn = {
             ast.Eq: '__eq__',
@@ -460,9 +458,9 @@ class CodeGenerator(ast.NodeVisitor):
         # HANDLE MINUS OPERATOR
         if type(node.op) == ast.USub:
             if operand.type.is_floating():
-                return self._wrap_ir(self.builder.fsub(_0f, operand._handle))
+                return self.builder.fsub(_0f, operand._handle)
             elif operand.type.is_int():
-                return self._wrap_ir(self.builder.sub(_0i, operand._handle))
+                return self.builder.sub(_0i, operand._handle)
 
         raise NotImplementedError(f"Unsupported op: {node.op}")
 
@@ -495,8 +493,8 @@ class CodeGenerator(ast.NodeVisitor):
         step_node = ast.AugAssign(target=st_target, op=ast.Add(), value=node.iter.args[2])
         # code generation
         current_bb = self.builder.get_insert_block()
-        loop_bb = _triton.ir.basic_block.create(self.module.context, "loop", current_bb.parent)
-        next_bb = _triton.ir.basic_block.create(self.module.context, "postloop", current_bb.parent)
+        loop_bb = _triton.ir.basic_block.create(self.module.builder.context, "loop", current_bb.parent)
+        next_bb = _triton.ir.basic_block.create(self.module.builder.context, "postloop", current_bb.parent)
 
         def continue_fn():
             ast.NodeVisitor.visit(self, step_node)
@@ -546,9 +544,9 @@ class CodeGenerator(ast.NodeVisitor):
         val = node.n
         ty = type(val)
         if ty == int:
-            return self._wrap_ir(self.builder.get_int32(val))
+            return self.builder.get_int32(val)
         if ty == float:
-            return self._wrap_ir(self.builder.get_float32(val))
+            return self.builder.get_float32(val)
         raise NotImplementedError("Unsupported constant type: {}".format(ty))
 
     def visit_Attribute(self, node):
@@ -589,12 +587,11 @@ type_map = {
 }
 
 
-def as_ir_type(module, obj):
-    ctx = module.context
+def as_ir_type(context, obj):
     if isinstance(obj, torch.Tensor):
-        ty = type_map[suffixes[obj.dtype]](ctx)
+        ty = type_map[suffixes[obj.dtype]](context)
         return _triton.ir.type.make_ptr(ty, 1)
-    return type_map[suffixes[obj.__class__]](ctx)
+    return type_map[suffixes[obj.__class__]](context)
 
 
 def cdiv(a, b):
@@ -649,19 +646,19 @@ class Kernel:
         cache = self.fn.cache
         if key not in cache:
             # create IR module
-            module = _triton.ir.module("")
+            context = _triton.ir.context()
             # Generate Triton IR
-            arg_types = [as_ir_type(module, arg) for arg in wargs]
-            ret_type = _triton.ir.type.get_void(module.context)
+            arg_types = [as_ir_type(context, arg) for arg in wargs]
+            ret_type = _triton.ir.type.get_void(context)
             prototype = _triton.ir.type.make_function(ret_type, arg_types)
             tree = ast.parse(inspect.getsource(self.fn.src))
             # export symbols visible from self.fn into code-generator object
             gscope = sys.modules[self.fn.src.__module__].__dict__
-            code_gen = CodeGenerator(module, prototype, gscope=gscope, attributes=attributes, kwargs=meta)
+            code_gen = CodeGenerator(context, prototype, gscope=gscope, attributes=attributes, kwargs=meta)
             code_gen.visit(tree)
             tt_device = _triton.driver.cu_device(device.index, False)
             # Compile to machine code
-            mod, ker, shared_mem = _triton.codegen.add_passes_to_emit_bin(module, tt_device, num_warps)
+            mod, ker, shared_mem = _triton.codegen.add_passes_to_emit_bin(code_gen.module, tt_device, num_warps)
             cache[key] = Binary(mod, ker, num_warps, shared_mem)
             pass
         # # pack arguments

@@ -66,8 +66,7 @@ private:
   void push_function(function *fn) { functions_.push_back(fn); }
 
 public:
-  module(const std::string &name);
-  context& get_context();
+  module(const std::string &name, builder& builder);
   builder& get_builder();
   // Setters
   void set_value(const std::string& name, basic_block* block, value *x);
@@ -100,8 +99,7 @@ public:
 
 private:
   std::string name_;
-  context context_;
-  builder builder_;
+  builder& builder_;
   std::map<val_key_t, value*> values_;
   std::map<val_key_t, type*> types_;
   std::set<std::string> const_;

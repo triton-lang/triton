@@ -4,8 +4,8 @@
 #include "triton/driver/stream.h"
 #include "triton/ir/builder.h"
 #include "triton/ir/enums.h"
+#include "triton/ir/function.h"
 #include "triton/ir/module.h"
-#include "triton/runtime/function.h"
 #include <pybind11/buffer_info.h>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
@@ -16,7 +16,6 @@
 namespace py = pybind11;
 
 namespace ir = triton::ir;
-namespace rt = triton::runtime;
 namespace drv = triton::driver;
 
 /*****************************************************************************/
@@ -143,16 +142,15 @@ void init_triton_ir(py::module &&m) {
       .def("set_type", &ir::scope::set_type);
 
   py::class_<ir::module>(m, "module")
-      .def(py::init<std::string>())
+      .def(py::init<std::string, ir::builder &>())
       .def("get_or_insert_function", &ir::module::get_or_insert_function, ret::reference)
       .def("add_new_scope", &ir::module::add_new_scope, ret::reference)
       .def("seal_block", &ir::module::seal_block)
       .def("set_value", (void (ir::module::*)(const std::string &, ir::value *)) & ir::module::set_value)
       .def("get_value", (ir::value * (ir::module::*)(const std::string &)) & ir::module::get_value, ret::reference)
       .def("pop_scope", &ir::module::pop_scope)
-      .def_property_readonly("context", &ir::module::get_context, ret::reference)
       .def_property_readonly("scope", &ir::module::get_scope, ret::reference)
-      .def_property_readonly("builder", &ir::module::get_builder);
+      .def_property_readonly("builder", &ir::module::get_builder, ret::reference);
 
   using eattr = ir::attribute_kind_t;
   py::enum_<eattr>(m, "attribute_kind")
@@ -194,7 +192,7 @@ void init_triton_ir(py::module &&m) {
       .value("bitcast", ecast::BitCast)
       .value("addrspacecast", ecast::AddrSpaceCast);
 
-  py::class_<ir::builder>(m, "builder")
+  py::class_<ir::builder>(m, "builder", py::dynamic_attr())
       .def(py::init<ir::context &>())
       // getters
       .def_property_readonly("context", &ir::builder::get_context, ret::reference)
