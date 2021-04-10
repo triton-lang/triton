@@ -150,7 +150,7 @@ ir::value *less_than(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
     return builder->create_icmpSLT(lhs, rhs);
 }
 
-ir::value *div(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
+ir::value *div_(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
   ir::type *scalar_ty = lhs->get_type()->get_scalar_ty();
   // float / float
   if (scalar_ty->is_floating_point_ty())
@@ -280,7 +280,7 @@ ir::value *dot(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
   return builder->create_dot(lhs, rhs, _0);
 }
 
-ir::value *select(ir::value *cond, ir::value *true_val, ir::value *false_val, ir::builder *builder) {
+ir::value *select_(ir::value *cond, ir::value *true_val, ir::value *false_val, ir::builder *builder) {
   return builder->create_select(cond, true_val, false_val);
 }
 
@@ -312,7 +312,7 @@ void init_triton_ir(py::module &&m) {
       .def("__add__", &add, ret::reference)
       .def("__sub__", &sub, ret::reference)
       .def("__mul__", &mul, ret::reference)
-      .def("__div__", &div, ret::reference)
+      .def("__div__", &div_, ret::reference)
       .def("__mod__", &mod, ret::reference)
       .def("__gt__", &greater_than, ret::reference)
       .def("__ge__", &greater_equal, ret::reference)
@@ -327,7 +327,7 @@ void init_triton_ir(py::module &&m) {
   m.def("load", &load, ret::reference);
   m.def("store", &store, ret::reference);
   m.def("dot", &dot, ret::reference);
-  m.def("select", &select, ret::reference);
+  m.def("select", &select_, ret::reference);
   m.def("arange", &arange, ret::reference);
   m.def("program_id", &program_id, ret::reference);
   m.def("zeros", &zeros, ret::reference);
