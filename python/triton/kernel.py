@@ -6,7 +6,6 @@ import torch
 import ast
 import builtins
 import triton._C.libtriton.triton as _triton
-from triton._C.libtriton.triton.ir.builtins import *
 import triton
 import sys
 from abc import ABC, abstractmethod
@@ -26,6 +25,18 @@ class float16:
     @staticmethod
     def make_ir(context):
         return _triton.ir.type.get_fp16(context)
+
+
+broadcast = _triton.ir.broadcast
+broadcast_to = _triton.ir.broadcast_to
+min = _triton.ir.min
+load = _triton.ir.load
+store = _triton.ir.store
+dot = _triton.ir.dot
+select = _triton.ir.select
+arange = _triton.ir.arange
+program_id = _triton.ir.program_id
+zeros = _triton.ir.zeros
 
 
 class CodeGenerator(ast.NodeVisitor):
@@ -218,9 +229,9 @@ class CodeGenerator(ast.NodeVisitor):
         # HANDLE MINUS OPERATOR
         if type(node.op) == ast.USub:
             if operand.type.is_floating():
-                return self.builder.fsub(_0f, operand)
+                return _0f.__sub__(operand, builder=self.builder)
             elif operand.type.is_int():
-                return self.builder.sub(_0i, operand)
+                return _0i.__sub__(operand, builder=self.builder)
 
         raise NotImplementedError(f"Unsupported op: {node.op}")
 
@@ -302,7 +313,7 @@ class CodeGenerator(ast.NodeVisitor):
             kws.update(ast.NodeVisitor.visit(self, keyword))
         args = [ast.NodeVisitor.visit(self, arg) for arg in node.args]
         if isinstance(fn.__self__, _triton.ir.value) or \
-           sys.modules[fn.__module__] is _triton.ir.builtins:
+           sys.modules[fn.__module__] is _triton.ir:
             return fn(*args, builder=self.builder, **kws)
         return fn(*args, **kws)
 

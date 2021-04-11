@@ -340,17 +340,16 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<ir::user, ir::value>(m, "user");
 
-  auto builtins = m.def_submodule("builtins");
-  builtins.def("broadcast", &broadcast, "input"_a, "other"_a, "builder"_a, ret::reference);
-  builtins.def("broadcast_to", &broadcast_to, "input"_a, "shape"_a, "builder"_a, ret::reference);
-  builtins.def("min", &min, "input"_a, "other"_a, "builder"_a = py::none(), ret::reference);
-  builtins.def("load", &load, "pointer"_a, "mask"_a = py::none(), "else_value"_a = py::none(), "builder"_a = py::none(), ret::reference);
-  builtins.def("store", &store, "pointer"_a, "value"_a, "mask"_a = py::none(), "builder"_a = py::none(), ret::reference);
-  builtins.def("dot", &dot, "input"_a, "other"_a, "builder"_a, ret::reference);
-  builtins.def("select", &select_, "cond"_a, "true_val"_a, "false_val"_a, "builder"_a, ret::reference);
-  builtins.def("arange", &arange, "start"_a, "end"_a, "builder"_a, ret::reference);
-  builtins.def("program_id", &program_id, "axis"_a, "builder"_a, ret::reference);
-  builtins.def("zeros", &zeros, "shape"_a, "dtype"_a, "builder"_a = py::none(), ret::reference);
+  m.def("broadcast", &broadcast, "input"_a, "other"_a, "builder"_a, ret::reference);
+  m.def("broadcast_to", &broadcast_to, "input"_a, "shape"_a, "builder"_a, ret::reference);
+  m.def("min", &min, "input"_a, "other"_a, "builder"_a = py::none(), ret::reference);
+  m.def("load", &load, "pointer"_a, "mask"_a = py::none(), "else_value"_a = py::none(), "builder"_a = py::none(), ret::reference);
+  m.def("store", &store, "pointer"_a, "value"_a, "mask"_a = py::none(), "builder"_a = py::none(), ret::reference);
+  m.def("dot", &dot, "input"_a, "other"_a, "builder"_a, ret::reference);
+  m.def("select", &select_, "cond"_a, "true_val"_a, "false_val"_a, "builder"_a, ret::reference);
+  m.def("arange", &arange, "start"_a, "end"_a, "builder"_a, ret::reference);
+  m.def("program_id", &program_id, "axis"_a, "builder"_a, ret::reference);
+  m.def("zeros", &zeros, "shape"_a, "dtype"_a, "builder"_a = py::none(), ret::reference);
 
   py::class_<ir::constant, ir::user>(m, "constant");
 
@@ -433,110 +432,14 @@ void init_triton_ir(py::module &&m) {
       .def("create", &ir::basic_block::create, ret::reference)
       .def_property_readonly("parent", &ir::basic_block::get_parent, ret::reference);
 
-  using ecast = ir::cast_op_t;
-  py::enum_<ir::cast_op_t>(m, "cast_op")
-      .value("trunc", ecast::Trunc)
-      .value("zext", ecast::ZExt)
-      .value("sext", ecast::SExt)
-      .value("fptrunc", ecast::FPTrunc)
-      .value("fpext", ecast::FPExt)
-      .value("uitofp", ecast::UIToFP)
-      .value("sitofp", ecast::SIToFP)
-      .value("fptoui", ecast::FPToUI)
-      .value("fptosi", ecast::FPToSI)
-      .value("ptrtoint", ecast::PtrToInt)
-      .value("inttoptr", ecast::IntToPtr)
-      .value("bitcast", ecast::BitCast)
-      .value("addrspacecast", ecast::AddrSpaceCast);
-
   py::class_<ir::builder>(m, "builder", py::dynamic_attr())
       .def(py::init<ir::context &>())
       // getters
       .def_property_readonly("context", &ir::builder::get_context, ret::reference)
-      // terminator instructions
+      // control flow
       .def("br", &ir::builder::create_br, ret::reference)
       .def("cond_br", &ir::builder::create_cond_br, ret::reference)
       .def("ret_void", &ir::builder::create_ret_void, ret::reference)
-      // Cast instructions
-      .def("cast", &ir::builder::create_cast, ret::reference)
-      .def("ptr_to_int", &ir::builder::create_ptr_to_int, ret::reference)
-      .def("si_to_fp", &ir::builder::create_si_to_fp, ret::reference)
-      .def("ui_to_fp", &ir::builder::create_ui_to_fp, ret::reference)
-      .def("fp_to_si", &ir::builder::create_fp_to_si, ret::reference)
-      .def("fp_to_ui", &ir::builder::create_fp_to_ui, ret::reference)
-      .def("fp_ext", &ir::builder::create_fp_ext, ret::reference)
-      .def("fp_trunc", &ir::builder::create_fp_trunc, ret::reference)
-      .def("int_cast", &ir::builder::create_int_cast, ret::reference)
-      .def("downcast", &ir::builder::create_downcast, ret::reference)
-      // Binary instructions
-      .def("insert_nuwnswb_binop", &ir::builder::create_insert_nuwnswb_binop, ret::reference)
-      .def("fmul", &ir::builder::create_fmul, ret::reference)
-      .def("fdiv", &ir::builder::create_fdiv, ret::reference)
-      .def("frem", &ir::builder::create_frem, ret::reference)
-      .def("fadd", &ir::builder::create_fadd, ret::reference)
-      .def("fsub", &ir::builder::create_fsub, ret::reference)
-      .def("mul", &ir::builder::create_mul, ret::reference, "lhs"_a, "rhs"_a, "has_nuw"_a = false, "has_nsw"_a = false)
-      .def("sdiv", &ir::builder::create_sdiv, ret::reference)
-      .def("udiv", &ir::builder::create_udiv, ret::reference)
-      .def("srem", &ir::builder::create_srem, ret::reference)
-      .def("urem", &ir::builder::create_urem, ret::reference)
-      .def("add", &ir::builder::create_add, ret::reference, "lhs"_a, "rhs"_a, "has_nuw"_a = false, "has_nsw"_a = false)
-      .def("sub", &ir::builder::create_sub, ret::reference, "lhs"_a, "rhs"_a, "has_nuw"_a = false, "has_nsw"_a = false)
-      .def("shl", &ir::builder::create_shl, ret::reference, "lhs"_a, "rhs"_a, "has_nuw"_a = false, "has_nsw"_a = false)
-      .def("lshr", &ir::builder::create_lshr, ret::reference, "lhs"_a, "rhs"_a, "has_nuw"_a = false, "has_nsw"_a = false)
-      .def("ashr", &ir::builder::create_ashr, ret::reference, "lhs"_a, "rhs"_a, "has_nuw"_a = false, "has_nsw"_a = false)
-      // GEP
-      .def("gep", &ir::builder::create_gep, ret::reference)
-      // Comparison (int, ret::reference)
-      .def("icmp", &ir::builder::create_icmp, ret::reference)
-      .def("icmpSLE", &ir::builder::create_icmpSLE, ret::reference)
-      .def("icmpSLT", &ir::builder::create_icmpSLT, ret::reference)
-      .def("icmpSGE", &ir::builder::create_icmpSGE, ret::reference)
-      .def("icmpSGT", &ir::builder::create_icmpSGT, ret::reference)
-      .def("icmpULE", &ir::builder::create_icmpULE, ret::reference)
-      .def("icmpULT", &ir::builder::create_icmpULT, ret::reference)
-      .def("icmpUGE", &ir::builder::create_icmpUGE, ret::reference)
-      .def("icmpUGT", &ir::builder::create_icmpUGT, ret::reference)
-      .def("icmpEQ", &ir::builder::create_icmpEQ, ret::reference)
-      .def("icmpNE", &ir::builder::create_icmpNE, ret::reference)
-      // Comparison (float, ret::reference)
-      .def("fcmp", &ir::builder::create_fcmp, ret::reference)
-      .def("fcmpOLT", &ir::builder::create_fcmpOLT, ret::reference)
-      .def("fcmpOGT", &ir::builder::create_fcmpOGT, ret::reference)
-      .def("fcmpOLE", &ir::builder::create_fcmpOLE, ret::reference)
-      .def("fcmpOGE", &ir::builder::create_fcmpOGE, ret::reference)
-      .def("fcmpOEQ", &ir::builder::create_fcmpOEQ, ret::reference)
-      .def("fcmpONE", &ir::builder::create_fcmpONE, ret::reference)
-      // Logical
-      .def("and_", &ir::builder::create_and, ret::reference)
-      .def("xor", &ir::builder::create_xor, ret::reference)
-      .def("or", &ir::builder::create_or, ret::reference)
-      // Unary
-      //  .def("fneg", &ir::builder::create_fneg, ret::reference)
-      //  .def("neg", &ir::builder::create_neg, ret::reference)
-      //  .def("not", &ir::builder::create_not, ret::reference)
-      // Input/Output
-      .def("load", &ir::builder::create_load, ret::reference)
-      .def("store", &ir::builder::create_store, ret::reference)
-      .def("masked_load", &ir::builder::create_masked_load, ret::reference)
-      .def("masked_store", &ir::builder::create_masked_store, ret::reference)
-      // Tile instruction
-      .def("splat", &ir::builder::create_splat, ret::reference)
-      .def("reshape", &ir::builder::create_reshape, ret::reference)
-      .def("broadcast", &ir::builder::create_broadcast, ret::reference)
-      // Built-in instruction
-      .def("get_program_id", &ir::builder::create_get_program_id, ret::reference)
-      .def("get_num_program", &ir::builder::create_get_num_program, ret::reference)
-      .def("atomic_cas", &ir::builder::create_atomic_cas, ret::reference)
-      .def("atomic_exch", &ir::builder::create_atomic_exch, ret::reference)
-      .def("atomic_add", &ir::builder::create_atomic_add, ret::reference)
-      .def("exp", &ir::builder::create_exp, ret::reference)
-      .def("log", &ir::builder::create_log, ret::reference)
-      .def("dot", &ir::builder::create_dot, ret::reference)
-      .def("trans", &ir::builder::create_trans, ret::reference)
-      .def("sqrt", &ir::builder::create_sqrt, ret::reference)
-      .def("reduce", &ir::builder::create_reduce, ret::reference)
-      .def("select", &ir::builder::create_select, ret::reference)
       // constants
       .def("get_int32", &ir::builder::get_int32, ret::reference)
       .def("get_float16", &ir::builder::get_float16, ret::reference)
