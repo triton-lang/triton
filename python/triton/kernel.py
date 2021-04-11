@@ -6,6 +6,7 @@ import torch
 import ast
 import builtins
 import triton._C.libtriton.triton as _triton
+from triton._C.libtriton.triton.ir.builtins import *
 import triton
 import sys
 from abc import ABC, abstractmethod
@@ -27,238 +28,6 @@ class float16:
         return _triton.ir.type.get_fp16(context)
 
 
-def implicit_broadcast(builder, lhs, rhs):
-    lhs_ty = lhs.type
-    rhs_ty = rhs.type
-    # op(block, scalar)
-    if lhs_ty.is_block() and not rhs_ty.is_block():
-        rhs = builder.splat(rhs._handle, lhs_ty.shape)
-    # op(scalar, block)
-    elif rhs_ty.is_block() and not lhs_ty.is_block():
-        lhs = builder.splat(lhs._handle, rhs_ty.shape)
-    # op(block, block)
-    elif lhs_ty.is_block() and rhs_ty.is_block():
-        lhs_shape = lhs_ty.shape
-        rhs_shape = rhs_ty.shape
-        if len(lhs_shape) != len(rhs_shape):
-            raise ValueError("Cannot broadcast blocks of different shapes")
-        ret_shape = []
-        for i, (l, r) in enumerate(zip(lhs_shape, rhs_shape)):
-            if l == 1:
-                ret_shape.append(r)
-            elif r == 1:
-                ret_shape.append(l)
-            elif l == r:
-                ret_shape.append(l)
-            else:
-                raise ValueError(f'Incompatible shape {l} and {r} at dimension {i}')
-        if lhs_shape != ret_shape:
-            lhs = broadcast_to(lhs, ret_shape)
-        if rhs_shape != ret_shape:
-            rhs = broadcast_to(rhs, ret_shape)
-    return lhs, rhs
-
-
-def broadcast_to(input, shape):
-    builder = input.builder
-    if not input.type.is_block():
-        return builder.splat(input._handle, shape)
-    assert len(input.type.shape) == len(shape)
-    return builder.broadcast(input._handle, shape)
-
-
-class ir_value:
-    """
-    This class is used to wrap a generated Triton-IR value.
-    It differs from _triton.ir.value in that it is associated with a
-    builder object that can directly generate code into the provided
-    Triton-IR module.
-    """
-    def __init__(self, builder, handle: _triton.ir.value):
-        self.builder = builder
-        self.type = handle.type
-        self._handle = handle
-
-    def __add__(self, other):
-        if self.type.scalar.is_ptr():  # ptr + offset
-            return self.builder.gep(self, [other])
-        elif self.type.scalar.is_floating():  # float + float
-            return self.builder.fadd(self, other)
-        elif self.type.scalar.is_int():  # int + int
-            return self.builder.add(self, other)
-
-    def __sub__(self, other):
-        #if self.type.scalar.is_ptr():  # ptr + offset
-        #    return self.builder.gep(self, [other])
-        if self.type.scalar.is_floating():  # float + float
-            return self.builder.fsub(self, other)
-        elif self.type.scalar.is_int():  # int + int
-            return self.builder.sub(self, other)
-
-    def __mul__(self, other):
-        if self.type.scalar.is_floating():  # float * float
-            return self.builder.fmul(self, other)
-        elif self.type.scalar.is_int():  # int * int
-            return self.builder.mul(self, other)
-
-    def __gt__(self, other):
-        if self.type.scalar.is_floating():  # float > float
-            return self.builder.fcmpOGT(self, other)
-        elif self.type.scalar.is_int():  # int > int
-            return self.builder.icmpSGT(self, other)
-
-    def __ge__(self, other):
-        if self.type.scalar.is_floating():  # float >= float
-            return self.builder.fcmpOGE(self, other)
-        elif self.type.scalar.is_int():  # int >= int
-            return self.builder.icmpSGE(self, other)
-
-    def __lt__(self, other):
-        if self.type.scalar.is_floating():  # float < float
-            return self.builder.fcmpOLT(self, other)
-        elif self.type.scalar.is_int():  # int < int
-            return self.builder.icmpSLT(self, other)
-
-    def __div__(self, other):
-        if self.type.scalar.is_floating():  # float / float
-            return self.builder.fdiv(self, other)
-        elif self.type.scalar.is_int():  # int / int
-            return self.builder.sdiv(self, other)
-
-    def __mod__(self, other):
-        if self.type.scalar.is_floating():  # float % float
-            return self.builder.frem(self, other)
-        elif self.type.scalar.is_int():  # int % int
-            return self.builder.srem(self, other)
-
-    def __and__(self, other):
-        return self.builder.and_(self, other)
-
-    def __int__(self):
-        return int(self._handle)
-
-    def to(self, dtype):
-        builder = self.builder
-        # return type
-        if not isinstance(dtype, _triton.ir.type):
-            dtype = dtype.make_ir(builder.context)
-        if self.type.is_block():
-            dtype = _triton.ir.type.make_block(dtype, self.type.shape)
-        # FP Truncation
-        if self.type.scalar.is_floating() and dtype.scalar.is_floating() and\
-        self.type.scalar.fp_mantissa_width > dtype.scalar.fp_mantissa_width:
-            return builder.fp_trunc(self, dtype)
-        raise NotImplementedError(f"cast from {self.type} to {dtype}")
-
-    def __getitem__(self, slices):
-        builder = self.builder
-        shapes = []
-        curr = 0
-        for s in slices:
-            if s == None:
-                shapes += [1]
-            elif s == (None, None, None):
-                shapes += [self.type.shape[curr]]
-                curr += 1
-            else:
-                raise NotImplementedError(f"Unsupported slice type: {s}")
-        return builder.reshape(self, shapes)
-
-
-def min(a, b):
-    builder = a.builder
-    return builder.select(a < b, a, b)
-
-
-def load(ptr, mask=None, else_value=None):
-    builder = ptr.builder
-    if mask is None and else_value is None:
-        return builder.load(ptr)
-    assert mask is not None
-    mask = broadcast_to(mask, ptr.type.shape)
-    if else_value is None:
-        else_value = _triton.ir.undef.get(ptr.element)
-        if ptr.type.is_block:
-            else_value = builder.create_splat(else_value, ptr.type.shape)
-    else:
-        else_value = else_value.to(ptr.type.scalar.element)
-        else_value = broadcast_to(else_value, ptr.type.shape)
-    return builder.masked_load(ptr, mask, else_value)
-
-
-def store(ptr, arg, mask=None):
-    builder = ptr.builder
-    if mask is None:
-        return builder.store(ptr, arg)
-    return builder.masked_store(ptr, arg, mask)
-
-
-def dot(a, b):
-    builder = a.builder
-    M, K = a.type.shape
-    K, N = b.type.shape
-    assert a.type.scalar.is_floating()
-    assert b.type.scalar.is_floating()
-    _0 = builder.get_float32(0)
-    _0 = builder.splat(_0, [M, N])
-    return builder.dot(a, b, _0)
-
-
-def select(cond, true_val, false_val):
-    builder = cond.builder
-    return builder.select(cond, true_val, false_val)
-
-
-def arange(start, end):
-    builder = start.builder
-    return builder.get_range(int(start), int(end))
-
-
-def program_id(axis):
-    builder = axis.builder
-    axis = int(axis)
-    return builder.get_program_id(axis)
-
-
-def zeros(shape, dtype):
-    builder = shape[0].builder
-    if dtype == triton.float32:
-        _0 = builder.get_float32(0)
-    if dtype == triton.float16:
-        _0 = builder.get_float16(0)
-    shape = [int(x) for x in shape]
-    return builder.splat(_0, shape)
-
-
-class builder(_triton.ir.builder):
-    def _wrap(self, fn):
-        def cvt(val):
-            if isinstance(val, ir_value):
-                return val._handle
-            if isinstance(val, list):
-                return [cvt(x) for x in val]
-            return val
-
-        def wrapper(*args, **kwargs):
-            args = [cvt(arg) for arg in args]
-            kwargs = {k: cvt(v) for k, v in kwargs.items()}
-            ret = fn(*args, **kwargs)
-            if isinstance(ret, _triton.ir.value) and\
-               not isinstance(ret, _triton.ir.basic_block):
-                ret = ir_value(self, ret)
-            return ret
-
-        return wrapper
-
-    def __init__(self, context):
-        super().__init__(context)
-        methods = [fn for fn in dir(self) \
-                   if callable(getattr(self, fn)) and not fn.startswith("__")]
-        for method in methods:
-            attr = getattr(self, method)
-            setattr(self, method, self._wrap(attr))
-
-
 class CodeGenerator(ast.NodeVisitor):
     def get_value(self, name):
         # search node.id in local scope
@@ -273,8 +42,8 @@ class CodeGenerator(ast.NodeVisitor):
             ret = self.builtins[name]
         else:
             raise ValueError(f'{name} is not defined')
-        if isinstance(ret, ir_value):
-            return ir_value(self.builder, self.module.get_value(name))
+        if isinstance(ret, _triton.ir.value):
+            return self.module.get_value(name)
         elif isinstance(ret, int):
             return self.builder.get_int32(ret)
         elif isinstance(ret, float):
@@ -291,7 +60,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.module.pop_scope()
 
     def __init__(self, context, prototype, gscope, attributes, kwargs):
-        self.builder = builder(context)
+        self.builder = _triton.ir.builder(context)
         self.module = _triton.ir.module('', self.builder)
         self.prototype = prototype
         self.gscope = gscope
@@ -321,7 +90,7 @@ class CodeGenerator(ast.NodeVisitor):
             fn.args[i].name = arg_name
             self.module.set_value(arg_name, fn.args[i])
             self.module.scope.set_type(arg_name, fn.args[i].type)
-            self.lscope[arg_name] = ir_value(self.builder, fn.args[i])
+            self.lscope[arg_name] = fn.args[i]
         entry = _triton.ir.basic_block.create(self.builder.context, "entry", fn)
         self.module.seal_block(entry)
         self.builder.set_insert_block(entry)
@@ -348,8 +117,8 @@ class CodeGenerator(ast.NodeVisitor):
         assert len(names) == 1
         name = names[0]
         value = ast.NodeVisitor.visit(self, node.value)
-        if isinstance(value, ir_value):
-            self.module.set_value(name, value._handle)
+        if isinstance(value, _triton.ir.value):
+            self.module.set_value(name, value)
             self.module.scope.set_type(name, value.type)
         self.lscope[name] = value
 
@@ -383,7 +152,7 @@ class CodeGenerator(ast.NodeVisitor):
             lhs = self.builder.get_int32(lhs)
         if isinstance(rhs, int):
             rhs = self.builder.get_int32(rhs)
-        lhs, rhs = implicit_broadcast(self.builder, lhs, rhs)
+        lhs, rhs = broadcast(lhs, rhs, builder=self.builder)
         fn = {
             ast.Add: '__add__',
             ast.Sub: '__sub__',
@@ -396,6 +165,8 @@ class CodeGenerator(ast.NodeVisitor):
             ast.BitOr: '__or__',
             ast.BitXor: '__xor__',
         }[type(node.op)]
+        if isinstance(lhs, _triton.ir.value):
+            return getattr(lhs, fn)(rhs, builder=self.builder)
         return getattr(lhs, fn)(rhs)
 
     def visit_If(self, node):
@@ -419,7 +190,7 @@ class CodeGenerator(ast.NodeVisitor):
             lhs = self.builder.get_int32(lhs)
         if isinstance(rhs, int):
             rhs = self.builder.get_int32(rhs)
-        lhs, rhs = implicit_broadcast(self.builder, lhs, rhs)
+        lhs, rhs = broadcast(lhs, rhs, builder=self.builder)
         fn = {
             ast.Eq: '__eq__',
             ast.NotEq: '__ne__',
@@ -430,6 +201,8 @@ class CodeGenerator(ast.NodeVisitor):
             ast.Is: '__eq__',
             ast.IsNot: '__ne__',
         }[type(node.ops[0])]
+        if isinstance(lhs, _triton.ir.value):
+            return getattr(lhs, fn)(rhs, builder=self.builder)
         return getattr(lhs, fn)(rhs)
 
     def visit_UnaryOp(self, node):
@@ -445,9 +218,9 @@ class CodeGenerator(ast.NodeVisitor):
         # HANDLE MINUS OPERATOR
         if type(node.op) == ast.USub:
             if operand.type.is_floating():
-                return self.builder.fsub(_0f, operand._handle)
+                return self.builder.fsub(_0f, operand)
             elif operand.type.is_int():
-                return self.builder.sub(_0i, operand._handle)
+                return self.builder.sub(_0i, operand)
 
         raise NotImplementedError(f"Unsupported op: {node.op}")
 
@@ -458,6 +231,8 @@ class CodeGenerator(ast.NodeVisitor):
         assert node.ctx.__class__.__name__ == "Load"
         lhs = ast.NodeVisitor.visit(self, node.value)
         slices = ast.NodeVisitor.visit(self, node.slice)
+        if isinstance(lhs, _triton.ir.value):
+            return lhs.__getitem__(slices, builder=self.builder)
         return lhs[slices]
 
     def visit_ExtSlice(self, node):
@@ -475,7 +250,8 @@ class CodeGenerator(ast.NodeVisitor):
         pos_step_node = ast.BinOp(node.iter.args[2], ast.Gt(), ast.Num(0))
         build_cond = lambda: select(ast.NodeVisitor.visit(self, pos_step_node),\
                                     ast.NodeVisitor.visit(self, pos_cond_node),\
-                                    ast.NodeVisitor.visit(self, neg_cond_node))
+                                    ast.NodeVisitor.visit(self, neg_cond_node),\
+                                    builder=self.builder)
         #cond_node = neg_cond_node
         step_node = ast.AugAssign(target=st_target, op=ast.Add(), value=node.iter.args[2])
         # code generation
@@ -486,11 +262,11 @@ class CodeGenerator(ast.NodeVisitor):
         def continue_fn():
             ast.NodeVisitor.visit(self, step_node)
             cond = build_cond()
-            return self.builder.cond_br(cond._handle, loop_bb, next_bb)
+            return self.builder.cond_br(cond, loop_bb, next_bb)
 
         ast.NodeVisitor.visit(self, init_node)
         cond = build_cond()
-        self.builder.cond_br(cond._handle, loop_bb, next_bb)
+        self.builder.cond_br(cond, loop_bb, next_bb)
         self.builder.set_insert_block(loop_bb)
         self.visit_compound_statement(node.body, add_scope=True)
         # TODO: handle case where body breaks control flow
@@ -525,6 +301,9 @@ class CodeGenerator(ast.NodeVisitor):
         for keyword in node.keywords:
             kws.update(ast.NodeVisitor.visit(self, keyword))
         args = [ast.NodeVisitor.visit(self, arg) for arg in node.args]
+        if isinstance(fn.__self__, _triton.ir.value) or \
+           sys.modules[fn.__module__] is _triton.ir.builtins:
+            return fn(*args, builder=self.builder, **kws)
         return fn(*args, **kws)
 
     def visit_Num(self, node):

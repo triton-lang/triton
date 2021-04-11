@@ -174,17 +174,18 @@ ir::value *and_(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
   return builder->create_and(lhs, rhs);
 }
 
-ir::value *convert(ir::value *arg, ir::type *type, ir::builder *builder) {
-  if (type->is_block_ty())
-    type = ir::block_type::get(type, arg->get_type()->get_block_shapes());
+ir::value *convert(ir::value *arg, py::object _dtype, ir::builder *builder) {
+  ir::type *dtype = _dtype.attr("make_ir")(builder->get_context()).cast<ir::type *>();
+  if (dtype->is_block_ty())
+    dtype = ir::block_type::get(dtype, arg->get_type()->get_block_shapes());
   // FP Truncation
   ir::type *src_ty = arg->get_type()->get_scalar_ty();
-  ir::type *dst_ty = type->get_scalar_ty();
+  ir::type *dst_ty = dtype->get_scalar_ty();
   bool truncate_fp = src_ty->is_floating_point_ty() &&
                      dst_ty->is_floating_point_ty() &&
                      src_ty->get_fp_mantissa_width() > dst_ty->get_fp_mantissa_width();
   if (truncate_fp)
-    return builder->create_fp_trunc(arg, type);
+    return builder->create_fp_trunc(arg, dtype);
 }
 
 ir::value *broadcast_to(ir::value *arg0, const ir::type::block_shapes_t &shape, ir::builder *builder) {
@@ -239,9 +240,9 @@ ir::value *subscript(ir::value *lhs, std::vector<py::object> slices, ir::builder
   for (py::object slice : slices) {
     py::object none = py::none();
     py::object all = py::make_tuple(none, none, none);
-    if (slice.is(none))
+    if (slice.attr("__eq__")(none))
       shape.push_back(1);
-    else if (slice.is(all))
+    else if (slice.attr("__eq__")(all))
       shape.push_back(lhs->get_type()->get_block_shapes()[curr]);
     else
       throw std::runtime_error("unsupported slice");
@@ -262,7 +263,7 @@ ir::value *load(ir::value *ptr, std::optional<ir::value *> _mask, std::optional<
   ir::value *mask = _mask.value();
   ir::type *elt_ty = ptr->get_type()->get_scalar_ty()->get_pointer_element_ty();
   ir::value *else_value = _else_value.has_value() ? _else_value.value() : ir::undef_value::get(elt_ty);
-  else_value = convert(else_value, elt_ty, builder);
+  else_value = convert(else_value, py::cast(elt_ty), builder);
   else_value = broadcast_to(else_value, ptr->get_type()->get_block_shapes(), builder);
   return builder->create_masked_load(ptr, mask, else_value);
 }
@@ -292,7 +293,8 @@ ir::value *program_id(int axis, ir::builder *builder) {
   return builder->create_get_program_id(axis);
 }
 
-ir::value *zeros(ir::type::block_shapes_t shape, ir::type *dtype, ir::builder *builder) {
+ir::value *zeros(ir::type::block_shapes_t shape, py::object _dtype, ir::builder *builder) {
+  ir::type *dtype = _dtype.attr("make_ir")(builder->get_context()).cast<ir::type *>();
   ir::value *_0 = ir::constant::get_null_value(dtype);
   return builder->create_splat(_0, shape);
 }
@@ -306,31 +308,32 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<ir::value>(m, "value")
       .def_property("name", &ir::value::get_name, &ir::value::set_name)
-      .def_property_readonly("type", &ir::value::get_type);
+      .def_property_readonly("type", &ir::value::get_type)
+      .def("__add__", &add, "other"_a, "builder"_a, ret::reference)
+      .def("__sub__", &sub, "other"_a, "builder"_a, ret::reference)
+      .def("__mul__", &mul, "other"_a, "builder"_a, ret::reference)
+      .def("__div__", &div_, "other"_a, "builder"_a, ret::reference)
+      .def("__mod__", &mod, "other"_a, "builder"_a, ret::reference)
+      .def("__gt__", &greater_than, "other"_a, "builder"_a, ret::reference)
+      .def("__ge__", &greater_equal, "other"_a, "builder"_a, ret::reference)
+      .def("__lt__", &less_than, "other"_a, "builder"_a, ret::reference)
+      .def("__and__", &and_, "other"_a, "builder"_a, ret::reference)
+      .def("__getitem__", &subscript, "slices"_a, "builder"_a, ret::reference)
+      .def("to", &convert, "dtype"_a, "builder"_a, ret::reference);
 
-  py::class_<ir::user, ir::value>(m, "user")
-      .def("__add__", &add, ret::reference)
-      .def("__sub__", &sub, ret::reference)
-      .def("__mul__", &mul, ret::reference)
-      .def("__div__", &div_, ret::reference)
-      .def("__mod__", &mod, ret::reference)
-      .def("__gt__", &greater_than, ret::reference)
-      .def("__ge__", &greater_equal, ret::reference)
-      .def("__lt__", &less_than, ret::reference)
-      .def("__and__", &and_, ret::reference)
-      .def("__getitem__", &subscript, ret::reference)
-      .def("to", &convert, ret::reference);
+  py::class_<ir::user, ir::value>(m, "user");
 
-  m.def("broadcast", &broadcast, ret::reference);
-  m.def("broadcast_to", &broadcast_to, ret::reference);
-  m.def("min", &min, ret::reference);
-  m.def("load", &load, ret::reference);
-  m.def("store", &store, ret::reference);
-  m.def("dot", &dot, ret::reference);
-  m.def("select", &select_, ret::reference);
-  m.def("arange", &arange, ret::reference);
-  m.def("program_id", &program_id, ret::reference);
-  m.def("zeros", &zeros, ret::reference);
+  auto builtins = m.def_submodule("builtins");
+  builtins.def("broadcast", &broadcast, "input"_a, "other"_a, "builder"_a, ret::reference);
+  builtins.def("broadcast_to", &broadcast_to, "input"_a, "shape"_a, "builder"_a, ret::reference);
+  builtins.def("min", &min, "input"_a, "other"_a, "builder"_a = py::none(), ret::reference);
+  builtins.def("load", &load, "pointer"_a, "mask"_a = py::none(), "else_value"_a = py::none(), "builder"_a = py::none(), ret::reference);
+  builtins.def("store", &store, "pointer"_a, "value"_a, "mask"_a = py::none(), "builder"_a = py::none(), ret::reference);
+  builtins.def("dot", &dot, "input"_a, "other"_a, "builder"_a, ret::reference);
+  builtins.def("select", &select_, "cond"_a, "true_val"_a, "false_val"_a, "builder"_a, ret::reference);
+  builtins.def("arange", &arange, "start"_a, "end"_a, "builder"_a, ret::reference);
+  builtins.def("program_id", &program_id, "axis"_a, "builder"_a, ret::reference);
+  builtins.def("zeros", &zeros, "shape"_a, "dtype"_a, "builder"_a = py::none(), ret::reference);
 
   py::class_<ir::constant, ir::user>(m, "constant");
 
