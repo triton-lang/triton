@@ -27,16 +27,16 @@ class float16:
         return _triton.ir.type.get_fp16(context)
 
 
-broadcast = _triton.ir.broadcast
-broadcast_to = _triton.ir.broadcast_to
-min = _triton.ir.min
-load = _triton.ir.load
-store = _triton.ir.store
-dot = _triton.ir.dot
-select = _triton.ir.select
-arange = _triton.ir.arange
-program_id = _triton.ir.program_id
-zeros = _triton.ir.zeros
+broadcast = _triton.frontend.broadcast
+broadcast_to = _triton.frontend.broadcast_to
+load = _triton.frontend.load
+store = _triton.frontend.store
+dot = _triton.frontend.dot
+minimum = _triton.frontend.minimum
+where = _triton.frontend.where
+arange = _triton.frontend.arange
+program_id = _triton.frontend.program_id
+zeros = _triton.frontend.zeros
 
 
 class CodeGenerator(ast.NodeVisitor):
@@ -78,7 +78,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.lscope = dict()
         self.attributes = attributes
         self.kwargs = kwargs
-        self.builtins = {'range': range, 'min': min}
+        self.builtins = {'range': range, 'min': minimum}
 
     def visit_Module(self, node):
         self.module.add_new_scope()
@@ -259,7 +259,7 @@ class CodeGenerator(ast.NodeVisitor):
         pos_cond_node = ast.BinOp(ld_target, ast.Lt(), node.iter.args[1])
         neg_cond_node = ast.BinOp(ld_target, ast.Gt(), node.iter.args[1])
         pos_step_node = ast.BinOp(node.iter.args[2], ast.Gt(), ast.Num(0))
-        build_cond = lambda: select(ast.NodeVisitor.visit(self, pos_step_node),\
+        build_cond = lambda: where(ast.NodeVisitor.visit(self, pos_step_node),\
                                     ast.NodeVisitor.visit(self, pos_cond_node),\
                                     ast.NodeVisitor.visit(self, neg_cond_node),\
                                     builder=self.builder)
@@ -312,8 +312,8 @@ class CodeGenerator(ast.NodeVisitor):
         for keyword in node.keywords:
             kws.update(ast.NodeVisitor.visit(self, keyword))
         args = [ast.NodeVisitor.visit(self, arg) for arg in node.args]
-        if isinstance(fn.__self__, _triton.ir.value) or \
-           sys.modules[fn.__module__] is _triton.ir:
+        if hasattr(fn, '__self__') and isinstance(fn.__self__, _triton.ir.value) or \
+           sys.modules[fn.__module__] is _triton.frontend:
             return fn(*args, builder=self.builder, **kws)
         return fn(*args, **kws)
 
@@ -431,12 +431,12 @@ class Kernel:
             # generate Triton-IR
             # export symbols visible from self.fn into code-generator object
             gscope = sys.modules[self.fn.src.__module__].__dict__
-            code_gen = CodeGenerator(context, prototype, gscope=gscope, attributes=attributes, kwargs=meta)
+            generator = CodeGenerator(context, prototype, gscope=gscope, attributes=attributes, kwargs=meta)
             tree = ast.parse(inspect.getsource(self.fn.src))
-            code_gen.visit(tree)
+            generator.visit(tree)
             tt_device = _triton.driver.cu_device(device.index, False)
             # Compile to machine code
-            mod, ker, shared_mem = _triton.codegen.add_passes_to_emit_bin(code_gen.module, tt_device, num_warps)
+            mod, ker, shared_mem = _triton.code_gen.add_passes_to_emit_bin(generator.module, tt_device, num_warps)
             cache[key] = Binary(mod, ker, num_warps, shared_mem)
             pass
         # # pack arguments
