@@ -108,6 +108,24 @@ void init_triton_frontend(py::module &&m) {
   DEF_FUNC(m, "where", where, "condition"_a, "x"_a, "y"_a);
   // triton.minimum
   DEF_FUNC(m, "minimum", minimum, "x"_a, "y"_a);
+
+  auto py_array = py::class_<array>(m, "array");
+  DEF_FUNC(py_array, "__add__", add, "other"_a);
+  DEF_FUNC(py_array, "__sub__", sub, "other"_a);
+  DEF_FUNC(py_array, "__mul__", mul, "other"_a);
+  DEF_FUNC(py_array, "__div__", _div, "other"_a);
+  DEF_FUNC(py_array, "__mod__", mod, "other"_a);
+  DEF_FUNC(py_array, "__gt__", greater_than, "other"_a);
+  DEF_FUNC(py_array, "__ge__", greater_equal, "other"_a);
+  DEF_FUNC(py_array, "__lt__", less_than, "other"_a);
+  DEF_FUNC(py_array, "__le__", less_equal, "other"_a);
+  DEF_FUNC(py_array, "__and__", _and, "other"_a);
+  DEF_FUNC(py_array, "__getitem__", subscript, "other"_a);
+  DEF_FUNC(py_array, "to", cast, "dtype"_a);
+
+  py::implicitly_convertible<ir::argument, array>();
+  py::implicitly_convertible<ir::user, array>();
+  //py::implicitly_convertible<array, ir::value>();
 }
 
 /*****************************************************************************/
@@ -124,18 +142,6 @@ void init_triton_ir(py::module &&m) {
   auto value = py::class_<ir::value>(m, "value");
   value.def_property("name", &ir::value::get_name, &ir::value::set_name);
   value.def_property_readonly("type", &ir::value::get_type);
-  DEF_FUNC(value, "__add__", add, "other"_a);
-  DEF_FUNC(value, "__sub__", sub, "other"_a);
-  DEF_FUNC(value, "__mul__", mul, "other"_a);
-  DEF_FUNC(value, "__div__", _div, "other"_a);
-  DEF_FUNC(value, "__mod__", mod, "other"_a);
-  DEF_FUNC(value, "__gt__", greater_than, "other"_a);
-  DEF_FUNC(value, "__ge__", greater_equal, "other"_a);
-  DEF_FUNC(value, "__lt__", less_than, "other"_a);
-  DEF_FUNC(value, "__le__", less_equal, "other"_a);
-  DEF_FUNC(value, "__and__", _and, "other"_a);
-  DEF_FUNC(value, "__getitem__", subscript, "other"_a);
-  DEF_FUNC(value, "to", cast, "dtype"_a);
 
   py::class_<ir::user, ir::value>(m, "user");
 
