@@ -176,7 +176,7 @@ ir::value *and_(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
 
 ir::value *convert(ir::value *arg, py::object _dtype, ir::builder *builder) {
   ir::type *dtype = _dtype.attr("make_ir")(builder->get_context()).cast<ir::type *>();
-  if (dtype->is_block_ty())
+  if (arg->get_type()->is_block_ty())
     dtype = ir::block_type::get(dtype, arg->get_type()->get_block_shapes());
   // FP Truncation
   ir::type *src_ty = arg->get_type()->get_scalar_ty();
@@ -234,18 +234,33 @@ std::tuple<ir::value *, ir::value *> broadcast(ir::value *lhs, ir::value *rhs, i
   return std::make_tuple(lhs, rhs);
 }
 
+enum slice_mode_t {
+  NEWAXIS,
+  ALL
+};
+
 ir::value *subscript(ir::value *lhs, std::vector<py::object> slices, ir::builder *builder) {
-  ir::type::block_shapes_t shape;
-  size_t curr = 0;
+  std::vector<slice_mode_t> modes;
   for (py::object slice : slices) {
     py::object none = py::none();
     py::object all = py::make_tuple(none, none, none);
-    if (slice.attr("__eq__")(none))
-      shape.push_back(1);
-    else if (slice.attr("__eq__")(all))
-      shape.push_back(lhs->get_type()->get_block_shapes()[curr]);
+    if (slice.is(none))
+      modes.push_back(NEWAXIS);
+    else if (all.attr("__eq__")(slice))
+      modes.push_back(ALL);
     else
-      throw std::runtime_error("unsupported slice");
+      throw std::runtime_error("slice must be None or (None, None, None)");
+  }
+
+  ir::type::block_shapes_t shape;
+  size_t curr = 0;
+  for (slice_mode_t mode : modes) {
+    if (mode == NEWAXIS)
+      shape.push_back(1);
+    else {
+      assert(mode == ALL);
+      shape.push_back(lhs->get_type()->get_block_shapes()[curr++]);
+    }
   }
   return builder->create_reshape(lhs, shape);
 }
@@ -277,7 +292,9 @@ ir::value *store(ir::value *ptr, ir::value *val, std::optional<ir::value *> _mas
 
 ir::value *dot(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
   ir::value *_0 = builder->get_float32(0);
-  _0 = builder->create_splat(_0, lhs->get_type()->get_block_shapes());
+  unsigned M = lhs->get_type()->get_block_shapes()[0];
+  unsigned N = rhs->get_type()->get_block_shapes()[1];
+  _0 = builder->create_splat(_0, {M, N});
   return builder->create_dot(lhs, rhs, _0);
 }
 
