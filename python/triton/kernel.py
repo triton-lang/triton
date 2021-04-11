@@ -32,7 +32,6 @@ broadcast_to = _triton.frontend.broadcast_to
 load = _triton.frontend.load
 store = _triton.frontend.store
 dot = _triton.frontend.dot
-minimum = _triton.frontend.minimum
 where = _triton.frontend.where
 arange = _triton.frontend.arange
 program_id = _triton.frontend.program_id
@@ -66,9 +65,12 @@ class CodeGenerator(ast.NodeVisitor):
         if add_scope:
             self.module.add_new_scope()
         for stmt in stmts:
-            ast.NodeVisitor.visit(self, stmt)
+            self.last_ret = ast.NodeVisitor.visit(self, stmt)
+            if isinstance(stmt, ast.Return):
+                break
         if add_scope:
             self.module.pop_scope()
+        return self.last_ret
 
     def __init__(self, context, prototype, gscope, attributes, kwargs):
         self.builder = _triton.ir.builder(context)
@@ -85,30 +87,43 @@ class CodeGenerator(ast.NodeVisitor):
         ast.NodeVisitor.generic_visit(self, node)
         self.module.pop_scope()
 
-    def visit_FunctionDef(self, node):
+    # By design, only non-kernel functions can return
+    def visit_Return(self, node):
+        return ast.NodeVisitor.visit(self, node.value)
+
+    def visit_FunctionDef(self, node, inline=False, arg_values=None):
         arg_names, kwarg_names = ast.NodeVisitor.visit(self, node.args)
         # store keyword arguments in local scope
         self.lscope[kwarg_names] = self.kwargs
         # initialize function
-        fn = self.module.get_or_insert_function(node.name, self.prototype)
-        for i, arg_name in enumerate(arg_names):
-            if i in self.attributes:
-                is_ptr = fn.args[i].type.is_ptr()
-                attr = 'aligned' if is_ptr else 'multiple_of'
-                attr = getattr(_triton.ir.attribute_kind, attr)
-                attr = _triton.ir.attribute(attr, self.attributes[i])
-                fn.add_attr(i + 1, attr)
-            fn.args[i].name = arg_name
-            self.module.set_value(arg_name, fn.args[i])
-            self.module.scope.set_type(arg_name, fn.args[i].type)
-            self.lscope[arg_name] = fn.args[i]
-        entry = _triton.ir.basic_block.create(self.builder.context, "entry", fn)
-        self.module.seal_block(entry)
-        self.builder.set_insert_block(entry)
-        # visit function body
-        self.visit_compound_statement(node.body, add_scope=True)
-        # finalize function
-        self.builder.ret_void()
+        if inline:
+            assert len(arg_values) == len(arg_names)
+        else:
+            fn = self.module.get_or_insert_function(node.name, self.prototype)
+            arg_values = []
+            for i, arg_name in enumerate(arg_names):
+                if i in self.attributes:
+                    is_ptr = fn.args[i].type.is_ptr()
+                    attr = 'aligned' if is_ptr else 'multiple_of'
+                    attr = getattr(_triton.ir.attribute_kind, attr)
+                    attr = _triton.ir.attribute(attr, self.attributes[i])
+                    fn.add_attr(i + 1, attr)
+                fn.args[i].name = arg_name
+                arg_values.append(fn.args[i])
+        for arg_name, arg_value in zip(arg_names, arg_values):
+            self.module.set_value(arg_name, arg_value)
+            self.module.scope.set_type(arg_name, arg_value.type)
+            self.lscope[arg_name] = arg_value
+        if inline:
+            return self.visit_compound_statement(node.body, add_scope=True)
+        else:
+            entry = _triton.ir.basic_block.create(self.builder.context, "entry", fn)
+            self.module.seal_block(entry)
+            self.builder.set_insert_block(entry)
+            # visit function body
+            self.visit_compound_statement(node.body, add_scope=True)
+            # finalize function
+            self.builder.ret_void()
 
     def visit_arguments(self, node):
         arg_names = []
@@ -312,6 +327,8 @@ class CodeGenerator(ast.NodeVisitor):
         for keyword in node.keywords:
             kws.update(ast.NodeVisitor.visit(self, keyword))
         args = [ast.NodeVisitor.visit(self, arg) for arg in node.args]
+        if isinstance(fn, JITFunction):
+            return fn(*args, generator=self, **kws)
         if hasattr(fn, '__self__') and isinstance(fn.__self__, _triton.ir.value) or \
            sys.modules[fn.__module__] is _triton.frontend:
             return fn(*args, builder=self.builder, **kws)
@@ -490,6 +507,13 @@ class JITFunction:
         self.key = key
         self.tuner = Autotuner(src, configs, key)
 
+    def __call__(self, *args, generator: CodeGenerator, **meta):
+        tree = ast.parse(inspect.getsource(self.src))
+        assert isinstance(tree, ast.Module)
+        assert len(tree.body) == 1
+        assert isinstance(tree.body[0], ast.FunctionDef)
+        return generator.visit_FunctionDef(tree.body[0], inline=True, arg_values=args)
+
     def __getitem__(self, grid_fn):
         self.tuner.kernel = Kernel(self, grid_fn)
         return self.tuner
@@ -511,3 +535,8 @@ def jit(configs=None, key=None):
         return JITFunction(fn, configs, key)
 
     return decorator
+
+
+@jit()
+def minimum(x, y):
+    return triton.where(x < y, x, y)
