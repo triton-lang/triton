@@ -21,6 +21,31 @@ void throw_not_implemented(std::string key) {
 void throw_not_int_or_float(std::string key) {
   throw std::runtime_error("`" + key + "` only supported for integer and floating point types.");
 }
+
+enum type_code {
+  float16,
+  float32
+};
+
+ir::type *make_ir(type_code ty, ir::builder *builder) {
+  switch (ty) {
+  case float16:
+    return builder->get_half_ty();
+  case float32:
+    return builder->get_float_ty();
+  default:
+    throw_not_implemented("make_ir");
+  }
+}
+
+type_code from_ir(ir::type *ty) {
+  if (ty->is_half_ty())
+    return float16;
+  if (ty->is_float_ty())
+    return float32;
+  throw_not_implemented("from_ir");
+}
+
 /*----------------------------------------------
  definition of triton.cast / triton.ir.value.to
  ----------------------------------------------*/
@@ -31,8 +56,8 @@ std::string cast_docstr = R"pbdoc(
   :type input: triton.ir.value
 )pbdoc";
 
-ir::value *cast(ir::value *input, py::object _dtype, ir::builder *builder) {
-  ir::type *dtype = _dtype.attr("make_ir")(builder->get_context()).cast<ir::type *>();
+ir::value *cast(ir::value *input, type_code _dtype, ir::builder *builder) {
+  ir::type *dtype = make_ir(_dtype, builder);
   if (input->get_type()->is_block_ty())
     dtype = ir::block_type::get(dtype, input->get_type()->get_block_shapes());
   // FP Truncation
@@ -137,9 +162,11 @@ ir::value *load(ir::value *pointer, std::optional<ir::value *> _mask, std::optio
     throw std::runtime_error("`other` cannot be provided without `mask`");
   ir::value *mask = _mask.value();
   ir::type *elt_ty = pointer->get_type()->get_scalar_ty()->get_pointer_element_ty();
+  auto shape = pointer->get_type()->get_block_shapes();
   ir::value *other = _other.has_value() ? _other.value() : ir::undef_value::get(elt_ty);
-  other = cast(other, py::cast(elt_ty), builder);
-  other = broadcast_to(other, pointer->get_type()->get_block_shapes(), builder);
+  other = cast(other, from_ir(elt_ty), builder);
+  other = broadcast_to(other, shape, builder);
+  mask = broadcast_to(mask, shape, builder);
   return builder->create_masked_load(pointer, mask, other);
 }
 
@@ -240,8 +267,8 @@ std::string zeros_docstr = R"pbdoc(
     :param dtype: Data-type of the new array, e.g., triton.float16
     :type dtype: triton.ir.dtype
   )pbdoc";
-ir::value *zeros(ir::type::block_shapes_t shape, py::object _dtype, ir::builder *builder) {
-  ir::type *dtype = _dtype.attr("make_ir")(builder->get_context()).cast<ir::type *>();
+ir::value *zeros(ir::type::block_shapes_t shape, type_code _dtype, ir::builder *builder) {
+  ir::type *dtype = make_ir(_dtype, builder);
   ir::value *_0 = ir::constant::get_null_value(dtype);
   return builder->create_splat(_0, shape);
 };

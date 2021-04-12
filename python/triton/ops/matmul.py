@@ -43,12 +43,12 @@ def _kernel(A, B, C, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride
     B = B + (rk[:, None] * stride_bk + rn[None, :] * stride_bn)
     acc = triton.zeros((BLOCK_M, BLOCK_N), dtype=triton.float32)
     for k in range(K, 0, -BLOCK_K):
-        #if META['EVEN_K']:
-        #    a = triton.load(A)
-        #    b = triton.load(B)
-        #else:
-        a = triton.load(A, mask=rk[None, :] < k, else_value=0.)
-        b = triton.load(B, mask=rk[:, None] < k, else_value=0.)
+        if META['EVEN_K']:
+            a = triton.load(A)
+            b = triton.load(B)
+        else:
+            a = triton.load(A, mask=rk[None, :] < k, other=0.)
+            b = triton.load(B, mask=rk[:, None] < k, other=0.)
         acc += triton.dot(a, b)
         A += BLOCK_K * stride_ak
         B += BLOCK_K * stride_bk

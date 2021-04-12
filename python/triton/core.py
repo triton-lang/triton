@@ -1,17 +1,4 @@
-import triton._C.libtriton.triton as _triton
 import triton
-
-
-class float32:
-    @staticmethod
-    def make_ir(context):
-        return _triton.ir.type.get_fp32(context)
-
-
-class float16:
-    @staticmethod
-    def make_ir(context):
-        return _triton.ir.type.get_fp16(context)
 
 
 @triton.jit

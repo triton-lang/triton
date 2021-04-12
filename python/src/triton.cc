@@ -108,6 +108,11 @@ void init_triton_frontend(py::module &&m) {
   DEF_FUNC(m, "where", where, "condition"_a, "x"_a, "y"_a);
   // triton.minimum
   DEF_FUNC(m, "minimum", minimum, "x"_a, "y"_a);
+
+  py::enum_<type_code>(m, "dtype")
+      .value("float16", type_code::float16)
+      .value("float32", type_code::float32)
+      .export_values();
 }
 
 /*****************************************************************************/
