@@ -10,33 +10,6 @@ import triton
 import sys
 from abc import ABC, abstractmethod
 
-########################
-# Built-in Functions   #
-########################
-
-
-class float32:
-    @staticmethod
-    def make_ir(context):
-        return _triton.ir.type.get_fp32(context)
-
-
-class float16:
-    @staticmethod
-    def make_ir(context):
-        return _triton.ir.type.get_fp16(context)
-
-
-broadcast = _triton.frontend.broadcast
-broadcast_to = _triton.frontend.broadcast_to
-load = _triton.frontend.load
-store = _triton.frontend.store
-dot = _triton.frontend.dot
-where = _triton.frontend.where
-arange = _triton.frontend.arange
-program_id = _triton.frontend.program_id
-zeros = _triton.frontend.zeros
-
 
 class CodeGenerator(ast.NodeVisitor):
     def get_value(self, name):
@@ -80,7 +53,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.lscope = dict()
         self.attributes = attributes
         self.kwargs = kwargs
-        self.builtins = {'range': range, 'min': minimum}
+        self.builtins = {'range': range, 'min': triton.minimum}
 
     def visit_Module(self, node):
         self.module.add_new_scope()
@@ -178,7 +151,7 @@ class CodeGenerator(ast.NodeVisitor):
             lhs = self.builder.get_int32(lhs)
         if isinstance(rhs, int):
             rhs = self.builder.get_int32(rhs)
-        lhs, rhs = broadcast(lhs, rhs, builder=self.builder)
+        lhs, rhs = triton.broadcast(lhs, rhs, builder=self.builder)
         fn = {
             ast.Add: '__add__',
             ast.Sub: '__sub__',
@@ -216,7 +189,7 @@ class CodeGenerator(ast.NodeVisitor):
             lhs = self.builder.get_int32(lhs)
         if isinstance(rhs, int):
             rhs = self.builder.get_int32(rhs)
-        lhs, rhs = broadcast(lhs, rhs, builder=self.builder)
+        lhs, rhs = triton.broadcast(lhs, rhs, builder=self.builder)
         fn = {
             ast.Eq: '__eq__',
             ast.NotEq: '__ne__',
@@ -274,7 +247,7 @@ class CodeGenerator(ast.NodeVisitor):
         pos_cond_node = ast.BinOp(ld_target, ast.Lt(), node.iter.args[1])
         neg_cond_node = ast.BinOp(ld_target, ast.Gt(), node.iter.args[1])
         pos_step_node = ast.BinOp(node.iter.args[2], ast.Gt(), ast.Num(0))
-        build_cond = lambda: where(ast.NodeVisitor.visit(self, pos_step_node),\
+        build_cond = lambda: triton.where(ast.NodeVisitor.visit(self, pos_step_node),\
                                     ast.NodeVisitor.visit(self, pos_cond_node),\
                                     ast.NodeVisitor.visit(self, neg_cond_node),\
                                     builder=self.builder)
@@ -358,48 +331,6 @@ class CodeGenerator(ast.NodeVisitor):
         raise NotImplementedError("Unsupported node: {}".format(typename))
 
 
-
-suffixes = {
-    int: 'I', float: 'f', bool: 'B',\
-    torch.float16: 'f16', torch.float32: 'f32', torch.float64: 'f64',
-    torch.bool: 'i1', \
-    torch.int8: 'i8', torch.int16: 'i16', torch.int32: 'i32', torch.int64: 'i64',
-}
-
-type_map = {
-    'I': _triton.ir.type.get_int32,
-    'f': _triton.ir.type.get_fp32,
-    'B': _triton.ir.type.get_int1,
-    'f16': _triton.ir.type.get_fp16,
-    'f32': _triton.ir.type.get_fp32,
-    'f64': _triton.ir.type.get_fp64,
-    'i1': _triton.ir.type.get_int1,
-    'i8': _triton.ir.type.get_int8,
-    'i16': _triton.ir.type.get_int16,
-    'i32': _triton.ir.type.get_int32,
-    'i64': _triton.ir.type.get_int64,
-}
-
-
-def as_ir_type(context, obj):
-    if isinstance(obj, torch.Tensor):
-        ty = type_map[suffixes[obj.dtype]](context)
-        return _triton.ir.type.make_ptr(ty, 1)
-    return type_map[suffixes[obj.__class__]](context)
-
-
-def cdiv(a, b):
-    return (a + b - 1) // b
-
-
-def pow2_divisor(N):
-    if N % 16 == 0: return 16
-    if N % 8 == 0: return 8
-    if N % 4 == 0: return 4
-    if N % 2 == 0: return 2
-    return 1
-
-
 class Binary:
     def __init__(self, module, kernel, num_warps, shared_mem):
         self.module = module
@@ -412,9 +343,84 @@ class Binary:
 
 
 class Kernel:
+
+    type_names = {
+        int: 'I',
+        float: 'f',
+        bool: 'B',
+        torch.float16: 'f16',
+        torch.float32: 'f32',
+        torch.float64: 'f64',
+        torch.bool: 'i1',
+        torch.int8: 'i8',
+        torch.int16: 'i16',
+        torch.int32: 'i32',
+        torch.int64: 'i64',
+    }
+
+    @staticmethod
+    def _to_triton_ir(context, obj):
+        type_map = {
+            'I': _triton.ir.type.get_int32,
+            'f': _triton.ir.type.get_fp32,
+            'B': _triton.ir.type.get_int1,
+            'f16': _triton.ir.type.get_fp16,
+            'f32': _triton.ir.type.get_fp32,
+            'f64': _triton.ir.type.get_fp64,
+            'i1': _triton.ir.type.get_int1,
+            'i8': _triton.ir.type.get_int8,
+            'i16': _triton.ir.type.get_int16,
+            'i32': _triton.ir.type.get_int32,
+            'i64': _triton.ir.type.get_int64,
+        }
+        # convert torch.Tensor to Triton IR pointers
+        if isinstance(obj, torch.Tensor):
+            name = Kernel.type_names[obj.dtype]
+            elt_ty = type_map[name](context)
+            return _triton.ir.type.make_ptr(elt_ty, 1)
+        # default path returns triton.ir.type directly
+        name = Kernel.type_names[obj.__class__]
+        return type_map[name](context)
+
+    @staticmethod
+    def _types_key(*wargs, tensor_idxs):
+        # type inference
+        types_key = [None] * len(wargs)
+        for i, arg in enumerate(wargs):
+            prefix = 'P' if i in tensor_idxs else ''
+            suffix = Kernel.type_names[arg.dtype] if i in tensor_idxs else Kernel.type_names[arg.__class__]
+            types_key[i] = prefix + suffix
+        return tuple(types_key)
+
+    @staticmethod
+    def pow2_divisor(N):
+        if N % 16 == 0: return 16
+        if N % 8 == 0: return 8
+        if N % 4 == 0: return 4
+        if N % 2 == 0: return 2
+        return 1
+
     def __init__(self, fn, grid):
         self.fn = fn
         self.grid = grid
+
+    def _compile(self, *wargs, device, attributes, num_warps, **meta):
+        # create IR module
+        context = _triton.ir.context()
+        # get just-in-time proto-type of kernel
+        arg_types = [Kernel._to_triton_ir(context, arg) for arg in wargs]
+        ret_type = _triton.ir.type.get_void(context)
+        prototype = _triton.ir.type.make_function(ret_type, arg_types)
+        # generate Triton-IR
+        # export symbols visible from self.fn into code-generator object
+        gscope = sys.modules[self.fn.src.__module__].__dict__
+        generator = CodeGenerator(context, prototype, gscope=gscope, attributes=attributes, kwargs=meta)
+        tree = ast.parse(inspect.getsource(self.fn.src))
+        generator.visit(tree)
+        tt_device = _triton.driver.cu_device(device.index, False)
+        # Compile to machine code
+        mod, ker, shared_mem = _triton.code_gen.add_passes_to_emit_bin(generator.module, tt_device, num_warps)
+        return Binary(mod, ker, num_warps, shared_mem)
 
     def __call__(self, *wargs, num_warps, **meta):
         # device inference
@@ -422,42 +428,20 @@ class Kernel:
         if len(tensor_idxs) == 0:
             raise ValueError("No Tensor argument found.")
         device = wargs[tensor_idxs[0]].device
-        # type inference
-        types_key = [None] * len(wargs)
-        for i, arg in enumerate(wargs):
-            prefix = 'P' if i in tensor_idxs else ''
-            suffix = suffixes[arg.dtype] if i in tensor_idxs else suffixes[arg.__class__]
-            types_key[i] = prefix + suffix
-        types_key = '_'.join(types_key)
-        # attribute key
+        # attributes
         args = [arg.data_ptr() if i in tensor_idxs else arg for i, arg in enumerate(wargs)]
-        attributes = {i: pow2_divisor(a) for i, a in enumerate(args) if isinstance(a, int)}
-        attr_key = '_'.join(map(str, attributes.values()))
-        # meta key
-        meta_key = '_'.join([f'{k}_{v}' for k, v in meta.items()])
-        # cache
-        key = f'{device.type}_{device.index}_{types_key}_{attr_key}_{meta_key}'
+        attributes = {i: Kernel.pow2_divisor(a) for i, a in enumerate(args) if isinstance(a, int)}
+        # determine if we need to re-compile
+        types_key = Kernel._types_key(*wargs, tensor_idxs=tensor_idxs)
+        attr_key = frozenset(attributes.items())
+        meta_key = frozenset(meta.items())
+        key = (device.type, device.index, types_key, attr_key, num_warps, meta_key)
         cache = self.fn.cache
         if key not in cache:
-            # create IR module
-            context = _triton.ir.context()
-            # get just-in-time proto-type of kernel
-            arg_types = [as_ir_type(context, arg) for arg in wargs]
-            ret_type = _triton.ir.type.get_void(context)
-            prototype = _triton.ir.type.make_function(ret_type, arg_types)
-            # generate Triton-IR
-            # export symbols visible from self.fn into code-generator object
-            gscope = sys.modules[self.fn.src.__module__].__dict__
-            generator = CodeGenerator(context, prototype, gscope=gscope, attributes=attributes, kwargs=meta)
-            tree = ast.parse(inspect.getsource(self.fn.src))
-            generator.visit(tree)
-            tt_device = _triton.driver.cu_device(device.index, False)
-            # Compile to machine code
-            mod, ker, shared_mem = _triton.code_gen.add_passes_to_emit_bin(generator.module, tt_device, num_warps)
-            cache[key] = Binary(mod, ker, num_warps, shared_mem)
-            pass
-        # # pack arguments
-        fmt = ''.join(['P' if i in tensor_idxs else suffixes[arg.__class__] for i, arg in enumerate(wargs)])
+            # compile and cache configuration if necessary
+            cache[key] = self._compile(*wargs, device=device, attributes=attributes, num_warps=num_warps, **meta)
+        # pack arguments
+        fmt = ''.join(['P' if i in tensor_idxs else Kernel.type_names[arg.__class__] for i, arg in enumerate(wargs)])
         params = struct.pack(fmt, *args)
         # enqueue cached function into stream
         binary = cache[key]
@@ -535,8 +519,3 @@ def jit(configs=None, key=None):
         return JITFunction(fn, configs, key)
 
     return decorator
-
-
-@jit()
-def minimum(x, y):
-    return triton.where(x < y, x, y)
