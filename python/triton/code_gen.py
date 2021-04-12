@@ -451,7 +451,7 @@ class Kernel:
 
 
 class Autotuner:
-    def __init__(self, src, configs, key):
+    def __init__(self, kernel, src, configs, key):
         if not configs:
             self.configs = [Config(dict(), num_warps=4)]
         else:
@@ -459,7 +459,7 @@ class Autotuner:
         arg_names = inspect.getfullargspec(src).args
         self.key_idx = [arg_names.index(k) for k in key]
         self.cache = dict()
-        self.kernel = None
+        self.kernel = kernel
 
     def _bench(self, *args, config, **meta):
         # check for conflicts, i.e. meta-parameters both provided
@@ -489,6 +489,7 @@ class JITFunction:
     def __init__(self, src):
         self.src = src
         self.cache = dict()
+        self.kernel_decorators = []
 
     def __call__(self, *args, generator: CodeGenerator, **meta):
         tree = ast.parse(inspect.getsource(self.src))
@@ -499,9 +500,8 @@ class JITFunction:
 
     def __getitem__(self, grid_fn):
         kernel = Kernel(self, grid_fn)
-        if self.tuner:
-            self.tuner.kernel = Kernel(self, grid_fn)
-            return self.tuner
+        for decorator in self.kernel_decorators:
+            kernel = decorator(kernel)
         return kernel
 
 
@@ -513,7 +513,10 @@ class Config:
 
 def autotune(configs, key):
     def decorator(fn):
-        fn.tuner = Autotuner(fn.src, configs, key)
+        def wrapper(kernel):
+            return Autotuner(kernel, fn.src, configs, key)
+
+        fn.kernel_decorators.append(wrapper)
         return fn
 
     return decorator
