@@ -189,11 +189,6 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Compare(self, node):
         lhs = ast.NodeVisitor.visit(self, node.left)
         rhs = ast.NodeVisitor.visit(self, node.comparators[0])
-        if isinstance(lhs, int):
-            lhs = self.builder.get_int32(lhs)
-        if isinstance(rhs, int):
-            rhs = self.builder.get_int32(rhs)
-        lhs, rhs = triton.broadcast(lhs, rhs, builder=self.builder)
         fn = {
             ast.Eq: '__eq__',
             ast.NotEq: '__ne__',
@@ -204,7 +199,10 @@ class CodeGenerator(ast.NodeVisitor):
             ast.Is: '__eq__',
             ast.IsNot: '__ne__',
         }[type(node.ops[0])]
-        if isinstance(lhs, _triton.ir.value):
+        is_lhs_triton = isinstance(lhs, _triton.ir.value)
+        is_rhs_triton = isinstance(rhs, _triton.ir.value)
+        if is_lhs_triton or is_rhs_triton:
+            lhs, rhs = triton.broadcast(lhs, rhs, builder=self.builder)
             return getattr(lhs, fn)(rhs, builder=self.builder)
         return getattr(lhs, fn)(rhs)
 
@@ -312,13 +310,7 @@ class CodeGenerator(ast.NodeVisitor):
         return fn(*args, **kws)
 
     def visit_Num(self, node):
-        val = node.n
-        ty = type(val)
-        if ty == int:
-            return self.builder.get_int32(val)
-        if ty == float:
-            return self.builder.get_float32(val)
-        raise NotImplementedError("Unsupported constant type: {}".format(ty))
+        return node.n
 
     def visit_Attribute(self, node):
         lhs = ast.NodeVisitor.visit(self, node.value)
@@ -485,12 +477,15 @@ class Autotuner:
         return triton.testing.do_bench(kernel_call)
 
     def __call__(self, *args, **meta):
-        key = tuple([args[i] for i in self.key_idx])
-        if key not in self.cache:
-            timings = {config: self._bench(*args, config=config, **meta) \
-                       for config in self.configs}
-            self.cache[key] = builtins.min(timings, key=timings.get)
-        config = self.cache[key]
+        if len(self.configs) > 1:
+            key = tuple([args[i] for i in self.key_idx])
+            if key not in self.cache:
+                timings = {config: self._bench(*args, config=config, **meta) \
+                        for config in self.configs}
+                self.cache[key] = builtins.min(timings, key=timings.get)
+            config = self.cache[key]
+        else:
+            config = self.configs[0]
         self.kernel(*args, num_warps=config.num_warps, **meta, **config.meta)
 
 

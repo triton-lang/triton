@@ -2,7 +2,7 @@
 # or pybind11 shows `munmap_chunk(): invalid pointer`
 import torch
 # submodules
-from .code_gen import jit, autotune, heuristics, Config
+from .code_gen import jit, autotune, heuristics, Config, Autotuner
 from .core import *
 from triton._C.libtriton.triton.frontend import *
 

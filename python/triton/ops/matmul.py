@@ -59,21 +59,21 @@ def _kernel(A, B, C, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride
     C = C + (rm[:, None] * stride_cm + rn[None, :] * stride_cn)
     mask = (rm < M)[:, None] & (rn < N)[None, :]
     # handles write-back with reduction-splitting
-    #if META['SPLIT_K'] == 1:
-    triton.store(C, acc, mask=mask)
-    #else:
-    #    LOCKS = LOCKS + triton.program_id(0)
-    #    COUNT = LOCKS + triton.num_programs(0)
-    #    while triton.atomic_cas(LOCKS, 0, 1) == 1:
-    #        pass
-    #    count = triton.load(COUNT)
-    #    if count == 0:
-    #        triton.store(C, acc, mask=mask)
-    #    else:
-    #        curr = triton.load(C, mask=mask)
-    #        triton.store(C, acc + curr, mask=mask)
-    #    triton.atomic_xchg(COUNT, (count + 1) % META['SPLIT_K'])
-    #    triton.atomic_xchg(LOCKS, 0)
+    if META['SPLIT_K'] == 1:
+        triton.store(C, acc, mask=mask)
+    else:
+        LOCKS = LOCKS + triton.program_id(0)
+        COUNT = LOCKS + triton.num_programs(0)
+        while triton.atomic_cas(LOCKS, 0, 1) == 1:
+            pass
+        count = triton.load(COUNT)
+        if count == 0:
+            triton.store(C, acc, mask=mask)
+        else:
+            curr = triton.load(C, mask=mask)
+            triton.store(C, acc + curr, mask=mask)
+        triton.atomic_xchg(COUNT, (count + 1) % META['SPLIT_K'])
+        triton.atomic_xchg(LOCKS, 0)
 
 
 class _matmul(torch.autograd.Function):
