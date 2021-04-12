@@ -17,6 +17,10 @@ static const std::string _builder_doc = R"pbdoc(
 void throw_not_implemented(std::string key) {
   throw std::runtime_error("Encountered unimplemented code path in `" + key + "`. This is likely a bug on our side.");
 }
+
+void throw_not_int_or_float(std::string key) {
+  throw std::runtime_error("`" + key + "` only supported for integer and floating point types.");
+}
 /*----------------------------------------------
  definition of triton.cast / triton.ir.value.to
  ----------------------------------------------*/
@@ -240,6 +244,77 @@ ir::value *zeros(ir::type::block_shapes_t shape, py::object _dtype, ir::builder 
   ir::type *dtype = _dtype.attr("make_ir")(builder->get_context()).cast<ir::type *>();
   ir::value *_0 = ir::constant::get_null_value(dtype);
   return builder->create_splat(_0, shape);
+};
+
+/*----------------------------------------------
+ definition of triton.exp
+ ----------------------------------------------*/
+std::string exp_docstr = R"pbdoc(
+    Returns the element-wise exponential of `input`.
+ )pbdoc";
+ir::value *exp(ir::value *input, ir::builder *builder) {
+  return builder->create_exp(input);
+};
+
+/*----------------------------------------------
+ definition of triton.log
+ ----------------------------------------------*/
+std::string log_docstr = R"pbdoc(
+    Returns the element-wise natural logarithm of `input`.
+ )pbdoc";
+ir::value *log(ir::value *input, ir::builder *builder) {
+  return builder->create_log(input);
+};
+
+/*----------------------------------------------
+ definition of triton.sqrt
+ ----------------------------------------------*/
+std::string sqrt_docstr = R"pbdoc(
+    Returns the element-wise square root of `input`.
+ )pbdoc";
+ir::value *sqrt(ir::value *input, ir::builder *builder) {
+  return builder->create_sqrt(input);
+};
+
+/*----------------------------------------------
+ definition of triton.min
+ ----------------------------------------------*/
+ir::value *reduce_impl(ir::value *input, unsigned int axis, ir::builder *builder, const std::string &name,
+                       ir::reduce_inst::op_t FLOAT_OP, ir::reduce_inst::op_t INT_OP) {
+  ir::type *scalar_ty = input->get_type()->get_scalar_ty();
+  if (scalar_ty->is_floating_point_ty())
+    return builder->create_reduce(input, FLOAT_OP, axis);
+  else if (scalar_ty->is_integer_ty())
+    return builder->create_reduce(input, INT_OP, axis);
+  else
+    throw_not_int_or_float(name);
+}
+
+std::string min_docstr = R"pbdoc(
+    Returns the minimum value of `input`.
+ )pbdoc";
+ir::value *min(ir::value *input, unsigned int axis, ir::builder *builder) {
+  return reduce_impl(input, axis, builder, "min", ir::reduce_inst::FMIN, ir::reduce_inst::MIN);
+};
+
+/*----------------------------------------------
+ definition of triton.max
+ ----------------------------------------------*/
+std::string max_docstr = R"pbdoc(
+    Returns the maximum value of `input`.
+ )pbdoc";
+ir::value *max(ir::value *input, unsigned int axis, ir::builder *builder) {
+  return reduce_impl(input, axis, builder, "max", ir::reduce_inst::FMAX, ir::reduce_inst::MAX);
+};
+
+/*----------------------------------------------
+ definition of triton.sum
+ ----------------------------------------------*/
+std::string sum_docstr = R"pbdoc(
+    Returns the sum of `input`.
+ )pbdoc";
+ir::value *sum(ir::value *input, unsigned int axis, ir::builder *builder) {
+  return reduce_impl(input, axis, builder, "sum", ir::reduce_inst::FADD, ir::reduce_inst::ADD);
 };
 
 /*----------------------------------------------

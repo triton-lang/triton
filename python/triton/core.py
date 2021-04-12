@@ -1,10 +1,6 @@
 import triton._C.libtriton.triton as _triton
 import triton
 
-########################
-# Built-in Functions   #
-########################
-
 
 class float32:
     @staticmethod
@@ -21,6 +17,20 @@ class float16:
 @triton.jit
 def minimum(x, y):
     return triton.where(x < y, x, y)
+
+
+@triton.jit
+def maximum(x, y):
+    return triton.where(x > y, x, y)
+
+
+@triton.jit
+def softmax(x, axis=0):
+    assert axis == 0
+    z = x - triton.max(x)
+    num = triton.exp(z)
+    den = triton.sum(num)
+    return num / den
 
 
 def cdiv(x, y):

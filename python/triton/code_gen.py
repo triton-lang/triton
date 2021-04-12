@@ -45,13 +45,14 @@ class CodeGenerator(ast.NodeVisitor):
             self.module.pop_scope()
         return self.last_ret
 
-    def __init__(self, context, prototype, gscope, attributes, kwargs):
+    def __init__(self, context, prototype, gscope, attributes, constants, kwargs):
         self.builder = _triton.ir.builder(context)
         self.module = _triton.ir.module('', self.builder)
         self.prototype = prototype
         self.gscope = gscope
         self.lscope = dict()
         self.attributes = attributes
+        self.constants = constants
         self.kwargs = kwargs
         self.builtins = {'range': range, 'min': triton.minimum}
 
@@ -75,14 +76,17 @@ class CodeGenerator(ast.NodeVisitor):
             fn = self.module.get_or_insert_function(node.name, self.prototype)
             arg_values = []
             for i, arg_name in enumerate(arg_names):
-                if i in self.attributes:
-                    is_ptr = fn.args[i].type.is_ptr()
-                    attr = 'aligned' if is_ptr else 'multiple_of'
-                    attr = getattr(_triton.ir.attribute_kind, attr)
-                    attr = _triton.ir.attribute(attr, self.attributes[i])
-                    fn.add_attr(i + 1, attr)
-                fn.args[i].name = arg_name
-                arg_values.append(fn.args[i])
+                if i in self.constants:
+                    arg_values.append(self.builder.get_int32(self.constants[i]))
+                else:
+                    if i in self.attributes:
+                        is_ptr = fn.args[i].type.is_ptr()
+                        attr = 'aligned' if is_ptr else 'multiple_of'
+                        attr = getattr(_triton.ir.attribute_kind, attr)
+                        attr = _triton.ir.attribute(attr, self.attributes[i])
+                        fn.add_attr(i + 1, attr)
+                    fn.args[i].name = arg_name
+                    arg_values.append(fn.args[i])
         for arg_name, arg_value in zip(arg_names, arg_values):
             self.module.set_value(arg_name, arg_value)
             self.module.scope.set_type(arg_name, arg_value.type)
@@ -404,7 +408,7 @@ class Kernel:
         self.fn = fn
         self.grid = grid
 
-    def _compile(self, *wargs, device, attributes, num_warps, **meta):
+    def _compile(self, *wargs, device, attributes, constants, num_warps, **meta):
         # create IR module
         context = _triton.ir.context()
         # get just-in-time proto-type of kernel
@@ -414,7 +418,7 @@ class Kernel:
         # generate Triton-IR
         # export symbols visible from self.fn into code-generator object
         gscope = sys.modules[self.fn.src.__module__].__dict__
-        generator = CodeGenerator(context, prototype, gscope=gscope, attributes=attributes, kwargs=meta)
+        generator = CodeGenerator(context, prototype, gscope=gscope, attributes=attributes, constants=constants, kwargs=meta)
         tree = ast.parse(inspect.getsource(self.fn.src))
         generator.visit(tree)
         tt_device = _triton.driver.cu_device(device.index, False)
@@ -431,15 +435,20 @@ class Kernel:
         # attributes
         args = [arg.data_ptr() if i in tensor_idxs else arg for i, arg in enumerate(wargs)]
         attributes = {i: Kernel.pow2_divisor(a) for i, a in enumerate(args) if isinstance(a, int)}
+        # transforms ints whose value is one into constants for just-in-time compilation
+        constants = {i: arg for i, arg in enumerate(wargs) if isinstance(arg, int) and arg == 1}
         # determine if we need to re-compile
         types_key = Kernel._types_key(*wargs, tensor_idxs=tensor_idxs)
         attr_key = frozenset(attributes.items())
         meta_key = frozenset(meta.items())
-        key = (device.type, device.index, types_key, attr_key, num_warps, meta_key)
+        const_key = frozenset(constants.items())
+        key = (device.type, device.index, types_key, attr_key, num_warps, meta_key, const_key)
         cache = self.fn.cache
         if key not in cache:
             # compile and cache configuration if necessary
-            cache[key] = self._compile(*wargs, device=device, attributes=attributes, num_warps=num_warps, **meta)
+            cache[key] = self._compile(
+                *wargs, device=device, attributes=attributes, num_warps=num_warps, constants=constants, **meta
+            )
         # pack arguments
         fmt = ''.join(['P' if i in tensor_idxs else Kernel.type_names[arg.__class__] for i, arg in enumerate(wargs)])
         params = struct.pack(fmt, *args)
@@ -500,7 +509,7 @@ class JITFunction:
 
     def __getitem__(self, grid_fn):
         kernel = Kernel(self, grid_fn)
-        for decorator in self.kernel_decorators:
+        for decorator in reversed(self.kernel_decorators):
             kernel = decorator(kernel)
         return kernel
 
@@ -515,6 +524,23 @@ def autotune(configs, key):
     def decorator(fn):
         def wrapper(kernel):
             return Autotuner(kernel, fn.src, configs, key)
+
+        fn.kernel_decorators.append(wrapper)
+        return fn
+
+    return decorator
+
+
+def heuristics(values):
+    def decorator(fn):
+        def wrapper(kernel):
+            def fun(*args, **meta):
+                for v, heur in values.items():
+                    assert v not in meta
+                    meta[v] = heur(*args, **meta)
+                return kernel(*args, **meta)
+
+            return fun
 
         fn.kernel_decorators.append(wrapper)
         return fn

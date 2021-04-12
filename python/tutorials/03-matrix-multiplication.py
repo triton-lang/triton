@@ -123,7 +123,7 @@ import triton
     key=['M', 'N', 'K'],
 )
 @triton.jit
-def _matmul(A, B, C, M, N, K, lda, ldb, ldc, **META):
+def _matmul(A, B, C, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn, **META):
     # extract meta-parameters
     BLOCK_M = META['BLOCK_M']
     BLOCK_N = META['BLOCK_N']
@@ -143,51 +143,43 @@ def _matmul(A, B, C, M, N, K, lda, ldb, ldc, **META):
     rm = pid_m * BLOCK_M + triton.arange(0, BLOCK_M)
     rn = pid_n * BLOCK_N + triton.arange(0, BLOCK_N)
     rk = triton.arange(0, BLOCK_K)
-    A = A + (rm[:, None] * lda + rk[None, :] * 1)
-    B = B + (rk[:, None] * ldb + rn[None, :] * 1)
+    A = A + (rm[:, None] * stride_am + rk[None, :] * stride_ak)
+    B = B + (rk[:, None] * stride_bk + rn[None, :] * stride_bn)
     acc = triton.zeros((BLOCK_M, BLOCK_N), dtype=triton.float32)
     for k in range(K, 0, -BLOCK_K):
         a = triton.load(A)
         b = triton.load(B)
         acc += triton.dot(a, b)
-        A += BLOCK_K * 1
-        B += BLOCK_K * ldb
+        A += BLOCK_K * stride_ak
+        B += BLOCK_K * stride_bk
     # rematerialize rm and rn to save registers
     rm = pid_m * BLOCK_M + triton.arange(0, BLOCK_M)
     rn = pid_n * BLOCK_N + triton.arange(0, BLOCK_N)
-    C = C + (rm[:, None] * ldc + rn[None, :] * 1)
+    C = C + (rm[:, None] * stride_cm + rn[None, :] * stride_cn)
     mask = (rm[:, None] < M) & (rn[None, :] < N)
     triton.store(C, acc.to(triton.float16), mask=mask)
 
 
-M, N, K = 512, 512, 512
-a = torch.randn((M, K), device='cuda', dtype=torch.float16)
-b = torch.randn((K, N), device='cuda', dtype=torch.float16)
-c = torch.empty((M, N), device='cuda', dtype=torch.float16)
-grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), )
-_matmul[grid](a, b, c, M, N, K, a.stride(0), b.stride(0), c.stride(0))
-
 # %%
-# Autograd Function
-# ~~~~~~~~~~~~~~~~~~
-#
-# Now we are ready to expose our auto-tuned kernel as a `torch.autograd.Function`.
-# To do so, we just need to define a `forward` function that takes a two tensors as input and returns a tensor as output.
+# We can also create a convenience function that only takes two input tensors
+# and (1) checks any shape constraint; (2) allocates the output; (3) launches the kernel
 
 
-class _dot(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, a, b):
-        assert a.shape[1] == b.shape[0], "incompatible dimensions"
-        assert a.is_contiguous() and b.is_contiguous(), "inputs must be contiguous"
-        M, K, N = a.shape[0], a.shape[1], b.shape[1]
-        c = torch.empty((M, N), device=a.device, dtype=a.dtype)
-        grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), )
-        _matmul[grid](a, b, c, M, N, K, a.stride(0), b.stride(0), c.stride(0), EVEN_K=(K % 64 == 0))
-        return c
+def matmul(a, b):
+    # checks constraints
+    assert a.shape[1] == b.shape[0], "incompatible dimensions"
+    assert a.is_contiguous(), "matrix A must be contiguous"
+    assert b.is_contiguous(), "matrix B must be contiguous"
+    M, K = a.shape
+    _, N = b.shape
+    # allocates output
+    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
+    # launch kernel
+    grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), )
+    _matmul[grid](a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1))
+    # return output
+    return c
 
-
-dot = _dot.apply
 
 # %%
 # Unit Test
@@ -199,7 +191,7 @@ dot = _dot.apply
 #torch.manual_seed(0)
 a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
 b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-c_0 = dot(a, b)
+c_0 = matmul(a, b)
 c_1 = torch.matmul(a, b)
 print(c_0)
 print(c_1)
@@ -212,7 +204,7 @@ print(triton.testing.allclose(c_0, c_1))
 # Installing The CUTLASS Bindings
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
-# The cuBLAS library (used by :code:`torch.matmul`) uses handwritten assembly-level optimizations that cannot be replicated using publicly available tools.
+# There is, to the best of our knowledge, no CUDA-C code capable of matching the performance of cuBLAS (used by :code:`torch.matmul`) on large square matrices.
 # For this reason, we will instead compare the performance of our kernel against `CUTLASS <https://github.com/NVIDIA/cutlass/>`_ , a highly optimized CUDA library for matrix multiplication written by NVIDIA themselves._
 # To install CUTLASS, you need a recent version of cmake:
 #
