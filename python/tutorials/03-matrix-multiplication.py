@@ -115,18 +115,14 @@ import torch
 import triton
 
 
-@triton.jit()
-def relu(x):
-    return max(x, 0)
-
-
-@triton.jit(
+@triton.autotune(
     configs=[
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_warps=4),
         triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_warps=4),
     ],
     key=['M', 'N', 'K'],
 )
+@triton.jit
 def _matmul(A, B, C, M, N, K, lda, ldb, ldc, **META):
     # extract meta-parameters
     BLOCK_M = META['BLOCK_M']

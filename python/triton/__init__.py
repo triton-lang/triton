@@ -3,7 +3,7 @@
 import torch
 # submodules
 from . import testing
-from .code_gen import jit, Config
+from .code_gen import jit, autotune, Config
 from .core import *
 from triton._C.libtriton.triton.frontend import *
 

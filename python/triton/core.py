@@ -18,7 +18,7 @@ class float16:
         return _triton.ir.type.get_fp16(context)
 
 
-@triton.jit()
+@triton.jit
 def minimum(x, y):
     return triton.where(x < y, x, y)
 

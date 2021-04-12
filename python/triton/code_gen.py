@@ -461,35 +461,34 @@ class Autotuner:
         self.cache = dict()
         self.kernel = None
 
+    def _bench(self, *args, config, **meta):
+        # check for conflicts, i.e. meta-parameters both provided
+        # as kwargs and by the autotuner
+        conflicts = meta.keys() & config.meta.keys()
+        if conflicts:
+            raise ValueError(
+                f"Conflicting meta-parameters: {', '.join(conflicts)}."
+                " Make sure that you don't re-define auto-tuned symbols."
+            )
+        # augment meta-parameters with tunable ones
+        current = dict(meta, **config.meta)
+        kernel_call = lambda: self.kernel(*args, num_warps=config.num_warps, **current)
+        return triton.testing.do_bench(kernel_call)
+
     def __call__(self, *args, **meta):
         key = tuple([args[i] for i in self.key_idx])
         if key not in self.cache:
-            timings = dict()
-            for config in self.configs:
-                # check for conflicts, i.e. meta-parameters both provided
-                # as kwargs and by the autotuner
-                conflicts = meta.keys() & config.meta.keys()
-                if conflicts:
-                    raise ValueError(
-                        f"Conflicting meta-parameters: {', '.join(conflicts)}."
-                        " Make sure that you don't re-define auto-tuned symbols."
-                    )
-                # augment meta-parameters with tunable ones
-                current = dict(meta, **config.meta)
-                kernel_call = lambda: self.kernel(*args, num_warps=config.num_warps, **current)
-                timings[config] = triton.testing.do_bench(kernel_call)
+            timings = {config: self._bench(*args, config=config, **meta) \
+                       for config in self.configs}
             self.cache[key] = builtins.min(timings, key=timings.get)
         config = self.cache[key]
         self.kernel(*args, num_warps=config.num_warps, **meta, **config.meta)
 
 
 class JITFunction:
-    def __init__(self, src, configs, key):
+    def __init__(self, src):
         self.src = src
-        self.configs = configs
         self.cache = dict()
-        self.key = key
-        self.tuner = Autotuner(src, configs, key)
 
     def __call__(self, *args, generator: CodeGenerator, **meta):
         tree = ast.parse(inspect.getsource(self.src))
@@ -499,8 +498,11 @@ class JITFunction:
         return generator.visit_FunctionDef(tree.body[0], inline=True, arg_values=args)
 
     def __getitem__(self, grid_fn):
-        self.tuner.kernel = Kernel(self, grid_fn)
-        return self.tuner
+        kernel = Kernel(self, grid_fn)
+        if self.tuner:
+            self.tuner.kernel = Kernel(self, grid_fn)
+            return self.tuner
+        return kernel
 
 
 class Config:
@@ -509,13 +511,13 @@ class Config:
         self.num_warps = num_warps
 
 
-def jit(configs=None, key=None):
-    if configs is None:
-        configs = []
-    if key is None:
-        key = []
-
+def autotune(configs, key):
     def decorator(fn):
-        return JITFunction(fn, configs, key)
+        fn.tuner = Autotuner(fn.src, configs, key)
+        return fn
 
     return decorator
+
+
+def jit(fn):
+    return JITFunction(fn)
