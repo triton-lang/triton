@@ -734,13 +734,13 @@ instruction* get_program_id_inst::create(context &ctx, unsigned axis, const std:
 }
 
 // get_num_program
-get_num_program_inst::get_num_program_inst(type *ty, unsigned axis, const std::string &name, instruction *next)
+get_num_programs_inst::get_num_programs_inst(type *ty, unsigned axis, const std::string &name, instruction *next)
   : builtin_inst(ty, INST_GET_NUM_PROGRAMS, 0, name, next), axis_(axis){
 
 }
 
-instruction* get_num_program_inst::create(context &ctx, unsigned axis, const std::string &name, instruction *next) {
-  return new get_num_program_inst(type::get_int32_ty(ctx), axis, name, next);
+instruction* get_num_programs_inst::create(context &ctx, unsigned axis, const std::string &name, instruction *next) {
+  return new get_num_programs_inst(type::get_int32_ty(ctx), axis, name, next);
 }
 
 

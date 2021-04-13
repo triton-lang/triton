@@ -312,8 +312,8 @@ value *builder::create_get_program_id(unsigned axis) {
   return insert(get_program_id_inst::create(ctx_, axis));
 }
 
-value *builder::create_get_num_program(unsigned axis) {
-  return insert(get_num_program_inst::create(ctx_, axis));
+value *builder::create_get_num_programs(unsigned axis) {
+  return insert(get_num_programs_inst::create(ctx_, axis));
 }
 
 value *builder::create_atomic_cas(value *ptr, value *cmp, value *val){

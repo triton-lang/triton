@@ -138,7 +138,7 @@ public:
   value *create_broadcast(value *arg, const type::block_shapes_t &shapes);
   // Built-in instruction
   value *create_get_program_id(unsigned axis);
-  value *create_get_num_program(unsigned axis);
+  value *create_get_num_programs(unsigned axis);
   value *create_atomic_cas(value *ptr, value *cmp, value *val);
   value *create_atomic_exch(value *ptr, value *val);
   value *create_atomic_add(value *ptr, value *val, value *msk);

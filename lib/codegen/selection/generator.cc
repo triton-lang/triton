@@ -533,9 +533,9 @@ void generator::visit_get_program_id_inst(ir::get_program_id_inst* pid) {
 }
 
 /**
- * \brief Code Generation for `get_num_program`
+ * \brief Code Generation for `get_num_programs`
  */
-void generator::visit_get_num_program_inst(ir::get_num_program_inst* np) {
+void generator::visit_get_num_programs_inst(ir::get_num_programs_inst* np) {
   Module *module = builder_->GetInsertBlock()->getModule();
   Value *ret = tgt_->get_num_blocks(module, *builder_, np->get_axis());
   vals_[np][{}] = ret;

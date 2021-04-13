@@ -246,14 +246,27 @@ ir::value *arange(int start, int end, ir::builder *builder) {
  definition of triton.program_id
  ----------------------------------------------*/
 std::string program_id_docstr = R"pbdoc(
-    Returns the id of the current program instance. 
+    Returns the id of the current program instance along the given `axis`.
     Triton uses an SPMD model in which different @triton.jit functions run in parallel with different `program_id`s.
 
-    :param axis: The axis of the program id. Has to be either 0, 1 or 2.
+    :param axis: The axis of the 3D launch grid. Has to be either 0, 1 or 2.
     :type axis: int
   )pbdoc";
 ir::value *program_id(int axis, ir::builder *builder) {
   return builder->create_get_program_id(axis);
+};
+
+/*----------------------------------------------
+ definition of triton.num_programs
+ ----------------------------------------------*/
+std::string num_programs_docstr = R"pbdoc(
+    Returns the number of program instances launched along the given `axis`.
+
+    :param axis: The axis of the 3D launch grid. Has to be either 0, 1 or 2.
+    :type axis: int
+  )pbdoc";
+ir::value *num_programs(int axis, ir::builder *builder) {
+  return builder->create_get_num_programs(axis);
 };
 
 /*----------------------------------------------
@@ -342,6 +355,26 @@ std::string sum_docstr = R"pbdoc(
  )pbdoc";
 ir::value *sum(ir::value *input, unsigned int axis, ir::builder *builder) {
   return reduce_impl(input, axis, builder, "sum", ir::reduce_inst::FADD, ir::reduce_inst::ADD);
+};
+
+/*----------------------------------------------
+ definition of triton.atomic_cas
+ ----------------------------------------------*/
+std::string atomic_cas_docstr = R"pbdoc(
+    Atomic compare-and-swap.
+ )pbdoc";
+ir::value *atomic_cas(ir::value *ptr, ir::value *cmp, ir::value *val, ir::builder *builder) {
+  return builder->create_atomic_cas(ptr, cmp, val);
+};
+
+/*----------------------------------------------
+ definition of triton.atomic_xchg
+ ----------------------------------------------*/
+std::string atomic_xchg_docstr = R"pbdoc(
+    Atomic exchange.
+ )pbdoc";
+ir::value *atomic_xchg(ir::value *ptr, ir::value *val, ir::builder *builder) {
+  return builder->create_atomic_exch(ptr, val);
 };
 
 /*----------------------------------------------
@@ -467,6 +500,23 @@ ir::value *less_equal(ir::value *self, ir::value *other, ir::builder *builder) {
   else if (scalar_ty->is_integer_ty())
     return builder->create_icmpSLE(self, other);
   throw_not_implemented("less_equal");
+}
+
+/*----------------------------------------------
+ definition of self == other
+ ----------------------------------------------*/
+std::string equal_docstr = R"pbdoc(
+    Returns self == other, element-wise.
+)pbdoc";
+ir::value *equal(ir::value *self, ir::value *other, ir::builder *builder) {
+  ir::type *scalar_ty = self->get_type()->get_scalar_ty();
+  // float == float
+  if (scalar_ty->is_floating_point_ty())
+    return builder->create_fcmpOEQ(self, other);
+  // int == int
+  else if (scalar_ty->is_integer_ty())
+    return builder->create_icmpEQ(self, other);
+  throw_not_implemented("equal");
 }
 
 /*----------------------------------------------

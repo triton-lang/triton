@@ -597,16 +597,16 @@ private:
   unsigned axis_;
 };
 
-class get_num_program_inst: public builtin_inst {
+class get_num_programs_inst: public builtin_inst {
 private:
-  get_num_program_inst(type *ty, unsigned axis, const std::string &name, instruction *next);
-  std::string repr_impl() const { return "get_num_program(" + std::to_string(axis_) + ")"; }
+  get_num_programs_inst(type *ty, unsigned axis, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "get_num_programs(" + std::to_string(axis_) + ")"; }
 
 public:
   static instruction* create(context &ctx, unsigned axis, const std::string &name = "", instruction *next = nullptr);
   unsigned get_axis() const { return axis_; }
-  _TRITON_DEFINE_CLONE(get_num_program_inst)
-  _TRITON_DEFINE_ACCEPT(get_num_program_inst)
+  _TRITON_DEFINE_CLONE(get_num_programs_inst)
+  _TRITON_DEFINE_ACCEPT(get_num_programs_inst)
 
 private:
   unsigned axis_;

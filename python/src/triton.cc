@@ -90,6 +90,8 @@ void init_triton_frontend(py::module &&m) {
 
   // triton.program_id
   DEF_FUNC(m, "program_id", program_id, "axis"_a);
+  // triton.num_programs
+  DEF_FUNC(m, "num_programs", num_programs, "axis"_a);
   // triton.try_broadcast
   DEF_FUNC(m, "broadcast", try_broadcast, "input"_a, "other"_a);
   // triton.broadcast_to
@@ -108,6 +110,10 @@ void init_triton_frontend(py::module &&m) {
   DEF_FUNC(m, "where", where, "condition"_a, "x"_a, "y"_a);
   // triton.minimum
   DEF_FUNC(m, "minimum", minimum, "x"_a, "y"_a);
+  // triton.atomic_cas
+  DEF_FUNC(m, "atomic_cas", atomic_cas, "ptr"_a, "cmp"_a, "val"_a);
+  // triton.atomic_xchg
+  DEF_FUNC(m, "atomic_xchg", atomic_xchg, "ptr"_a, "val"_a);
 
   py::enum_<type_code>(m, "dtype")
       .value("float16", type_code::float16)
@@ -138,6 +144,7 @@ void init_triton_ir(py::module &&m) {
   DEF_FUNC(value, "__ge__", greater_equal, "other"_a);
   DEF_FUNC(value, "__lt__", less_than, "other"_a);
   DEF_FUNC(value, "__le__", less_equal, "other"_a);
+  DEF_FUNC(value, "__eq__", equal, "other"_a);
   DEF_FUNC(value, "__and__", _and, "other"_a);
   DEF_FUNC(value, "__getitem__", subscript, "other"_a);
   DEF_FUNC(value, "to", cast, "dtype"_a);

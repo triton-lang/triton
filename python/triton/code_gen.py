@@ -151,11 +151,6 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_BinOp(self, node):
         lhs = ast.NodeVisitor.visit(self, node.left)
         rhs = ast.NodeVisitor.visit(self, node.right)
-        if isinstance(lhs, int):
-            lhs = self.builder.get_int32(lhs)
-        if isinstance(rhs, int):
-            rhs = self.builder.get_int32(rhs)
-        lhs, rhs = triton.broadcast(lhs, rhs, builder=self.builder)
         fn = {
             ast.Add: '__add__',
             ast.Sub: '__sub__',
@@ -168,16 +163,45 @@ class CodeGenerator(ast.NodeVisitor):
             ast.BitOr: '__or__',
             ast.BitXor: '__xor__',
         }[type(node.op)]
-        if isinstance(lhs, _triton.ir.value):
+        is_lhs_triton = isinstance(lhs, _triton.ir.value)
+        is_rhs_triton = isinstance(rhs, _triton.ir.value)
+        if is_lhs_triton or is_rhs_triton:
+            lhs = self._convert(lhs)
+            rhs = self._convert(rhs)
+            lhs, rhs = triton.broadcast(lhs, rhs, builder=self.builder)
             return getattr(lhs, fn)(rhs, builder=self.builder)
         return getattr(lhs, fn)(rhs)
 
     def visit_If(self, node):
         cond = ast.NodeVisitor.visit(self, node.test)
-        if cond:
-            self.visit_compound_statement(node.body)
+        print(node.test, cond)
+        if isinstance(cond, _triton.ir.value):
+            current_bb = self.builder.get_insert_block()
+            then_bb = _triton.ir.basic_block.create(self.builder.context, "then", current_bb.parent)
+            else_bb = _triton.ir.basic_block.create(self.builder.context, "else", current_bb.parent) if node.orelse else None
+            endif_bb = _triton.ir.basic_block.create(self.builder.context, "endif", current_bb.parent)
+            self.module.seal_block(then_bb)
+            if else_bb:
+                self.module.seal_block(else_bb)
+                self.builder.cond_br(cond, then_bb, else_bb)
+            else:
+                self.builder.cond_br(cond, then_bb, endif_bb)
+            self.builder.set_insert_block(then_bb)
+            self.visit_compound_statement(node.body, add_scope=True)
+            # TODO: last statement is a terminator?
+            self.builder.br(endif_bb)
+            if else_bb:
+                self.builder.set_insert_block(else_bb)
+                self.visit_compound_statement(node.orelse, add_scope=True)
+                #TODO: last statement is a terminator?
+                self.builder.br(endif_bb)
+            self.module.seal_block(endif_bb)
+            self.builder.set_insert_block(endif_bb)
         else:
-            self.visit_compound_statement(node.orelse)
+            if cond:
+                self.visit_compound_statement(node.body)
+            else:
+                self.visit_compound_statement(node.orelse)
 
     def visit_IfExp(self, node):
         cond = ast.NodeVisitor.visit(self, node.test)
@@ -185,6 +209,9 @@ class CodeGenerator(ast.NodeVisitor):
             return ast.NodeVisitor.visit(self, node.body)
         else:
             return ast.NodeVisitor.visit(self, node.orelse)
+
+    def visit_Pass(self, node):
+        pass
 
     def visit_Compare(self, node):
         lhs = ast.NodeVisitor.visit(self, node.left)
@@ -202,6 +229,8 @@ class CodeGenerator(ast.NodeVisitor):
         is_lhs_triton = isinstance(lhs, _triton.ir.value)
         is_rhs_triton = isinstance(rhs, _triton.ir.value)
         if is_lhs_triton or is_rhs_triton:
+            lhs = self._convert(lhs)
+            rhs = self._convert(rhs)
             lhs, rhs = triton.broadcast(lhs, rhs, builder=self.builder)
             return getattr(lhs, fn)(rhs, builder=self.builder)
         return getattr(lhs, fn)(rhs)
@@ -216,7 +245,7 @@ class CodeGenerator(ast.NodeVisitor):
         if operand.type.is_block():
             _0f = self.builder.splat(_0f)
             _0i = self.builder.splat(_0i)
-        # HANDLE MINUS OPERATOR
+        # Handle minux operator
         if type(node.op) == ast.USub:
             if operand.type.is_floating():
                 return _0f.__sub__(operand, builder=self.builder)
@@ -224,6 +253,28 @@ class CodeGenerator(ast.NodeVisitor):
                 return _0i.__sub__(operand, builder=self.builder)
 
         raise NotImplementedError(f"Unsupported op: {node.op}")
+
+    def visit_While(self, node):
+        current_bb = self.builder.get_insert_block()
+        loop_bb = _triton.ir.basic_block.create(self.module.builder.context, "loop", current_bb.parent)
+        next_bb = _triton.ir.basic_block.create(self.module.builder.context, "postloop", current_bb.parent)
+
+        def continue_fn():
+            cond = ast.NodeVisitor.visit(self, node.test)
+            return self.builder.cond_br(cond, loop_bb, next_bb)
+
+        continue_fn()
+        self.builder.set_insert_block(loop_bb)
+        self.visit_compound_statement(node.body, add_scope=True)
+        continue_fn()
+        stop_bb = self.builder.get_insert_block()
+        self.module.seal_block(stop_bb)
+        self.module.seal_block(loop_bb)
+        self.module.seal_block(next_bb)
+        self.builder.set_insert_block(next_bb)
+
+        for stmt in node.orelse:
+            ast.NodeVisitor.generic_visit(self, stmt)
 
     def visit_Str(self, node):
         return ast.literal_eval(node)
@@ -296,6 +347,13 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_keyword(self, node):
         return {node.arg: ast.NodeVisitor.visit(self, node.value)}
 
+    def _convert(self, x):
+        if isinstance(x, int):
+            return self.builder.get_int32(x)
+        elif isinstance(x, float):
+            return self.builder.get_float32(x)
+        return x
+
     def visit_Call(self, node):
         fn = ast.NodeVisitor.visit(self, node.func)
         kws = dict()
@@ -306,6 +364,8 @@ class CodeGenerator(ast.NodeVisitor):
             return fn(*args, generator=self, **kws)
         if hasattr(fn, '__self__') and isinstance(fn.__self__, _triton.ir.value) or \
            sys.modules[fn.__module__] is _triton.frontend:
+            args = [self._convert(x) for x in args]
+            kws = {n: self._convert(v) for n, v in kws.items()}
             return fn(*args, builder=self.builder, **kws)
         return fn(*args, **kws)
 

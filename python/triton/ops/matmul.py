@@ -3,7 +3,7 @@ import triton
 
 
 @triton.heuristics({
-    'EVEN_K': lambda *args, **meta: args[5] % meta['BLOCK_K'] == 0,
+    'EVEN_K': lambda *args, **meta: args[5] % (meta['BLOCK_K'] * meta['SPLIT_K']) == 0,
 })
 @triton.autotune(
     configs=[
@@ -25,8 +25,10 @@ def _kernel(A, B, C, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride
     BLOCK_N = META['BLOCK_N']
     BLOCK_K = META['BLOCK_K']
     GROUP_M = META['GROUP_M']
+    SPLIT_K = META['SPLIT_K']
     # matrix multiplication
     pid = triton.program_id(0)
+    pid_z = triton.program_id(1)
     grid_m = (M + BLOCK_M - 1) / BLOCK_M
     grid_n = (N + BLOCK_N - 1) / BLOCK_N
     # re-order program ID for better L2 performance
@@ -39,8 +41,10 @@ def _kernel(A, B, C, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride
     rm = pid_m * BLOCK_M + triton.arange(0, BLOCK_M)
     rn = pid_n * BLOCK_N + triton.arange(0, BLOCK_N)
     rk = triton.arange(0, BLOCK_K)
-    A = A + (rm[:, None] * stride_am + rk[None, :] * stride_ak)
-    B = B + (rk[:, None] * stride_bk + rn[None, :] * stride_bn)
+    # pointers
+    K = K / SPLIT_K
+    A = A + (pid_z * K * stride_ak + rm[:, None] * stride_am + rk[None, :] * stride_ak)
+    B = B + (pid_z * K * stride_bk + rk[:, None] * stride_bk + rn[None, :] * stride_bn)
     acc = triton.zeros((BLOCK_M, BLOCK_N), dtype=triton.float32)
     for k in range(K, 0, -BLOCK_K):
         if META['EVEN_K']:
@@ -59,7 +63,7 @@ def _kernel(A, B, C, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride
     C = C + (rm[:, None] * stride_cm + rn[None, :] * stride_cn)
     mask = (rm < M)[:, None] & (rn < N)[None, :]
     # handles write-back with reduction-splitting
-    if META['SPLIT_K'] == 1:
+    if SPLIT_K == 1:
         triton.store(C, acc, mask=mask)
     else:
         LOCKS = LOCKS + triton.program_id(0)
@@ -70,17 +74,20 @@ def _kernel(A, B, C, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride
         if count == 0:
             triton.store(C, acc, mask=mask)
         else:
-            curr = triton.load(C, mask=mask)
+            curr = triton.load(C, mask=mask, other=0.)
             triton.store(C, acc + curr, mask=mask)
-        triton.atomic_xchg(COUNT, (count + 1) % META['SPLIT_K'])
+        triton.atomic_xchg(COUNT, (count + 1) % SPLIT_K)
         triton.atomic_xchg(LOCKS, 0)
 
 
 class _matmul(torch.autograd.Function):
     kernel = _kernel
 
+    _locks = dict()
+
     @staticmethod
     def _call(a, b):
+        device = a.device
         # handle non-contiguous inputs if necessary
         if a.stride(0) > 1 and a.stride(1) > 1:
             a = a.contiguous()
@@ -91,10 +98,14 @@ class _matmul(torch.autograd.Function):
         M, K = a.shape
         _, N = b.shape
         # allocates output
-        c = torch.empty((M, N), device=a.device, dtype=a.dtype)
+        c = torch.empty((M, N), device=device, dtype=a.dtype)
+        # allocate locks for split-k
+        if a.device not in _matmul._locks:
+            _matmul._locks[device] = torch.zeros(1024 * 1024, dtype=torch.int32, device=device)
+        locks = _matmul._locks[device]
         # launch kernel
-        grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), )
-        _kernel[grid](a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), 0)
+        grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), META['SPLIT_K'])
+        _kernel[grid](a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), locks)
         # done
         return c
 
