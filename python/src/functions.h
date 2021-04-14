@@ -10,9 +10,10 @@ static const std::string _builder_doc = R"pbdoc(
   :type builder: triton.ir.builder
 )pbdoc";
 
+#define VA_ARGS(...) , ##__VA_ARGS__
 #define DEF_FUNC(MOD, PY_NAME, C_FUNC, ...)                          \
   MOD.def(PY_NAME, C_FUNC, (C_FUNC##_docstr + _builder_doc).c_str(), \
-          ret::reference, __VA_ARGS__, "builder"_a)
+          ret::reference VA_ARGS(__VA_ARGS__), "builder"_a)
 
 void throw_not_implemented(std::string key) {
   throw std::runtime_error("Encountered unimplemented code path in `" + key + "`. This is likely a bug on our side.");
@@ -68,6 +69,12 @@ ir::value *cast(ir::value *input, type_code _dtype, ir::builder *builder) {
                      src_ty->get_fp_mantissa_width() > dst_ty->get_fp_mantissa_width();
   if (truncate_fp)
     return builder->create_fp_trunc(input, dtype);
+  bool ext_fp = src_ty->is_floating_point_ty() &&
+                dst_ty->is_floating_point_ty() &&
+                src_ty->get_fp_mantissa_width() < dst_ty->get_fp_mantissa_width();
+  if (ext_fp)
+    return builder->create_fp_ext(input, dtype);
+
   throw_not_implemented("cast");
 }
 
@@ -289,20 +296,20 @@ ir::value *zeros(ir::type::block_shapes_t shape, type_code _dtype, ir::builder *
 /*----------------------------------------------
  definition of triton.exp
  ----------------------------------------------*/
-std::string exp_docstr = R"pbdoc(
+std::string _exp_docstr = R"pbdoc(
     Returns the element-wise exponential of `input`.
  )pbdoc";
-ir::value *exp(ir::value *input, ir::builder *builder) {
+ir::value *_exp(ir::value *input, ir::builder *builder) {
   return builder->create_exp(input);
 };
 
 /*----------------------------------------------
  definition of triton.log
  ----------------------------------------------*/
-std::string log_docstr = R"pbdoc(
+std::string _log_docstr = R"pbdoc(
     Returns the element-wise natural logarithm of `input`.
  )pbdoc";
-ir::value *log(ir::value *input, ir::builder *builder) {
+ir::value *_log(ir::value *input, ir::builder *builder) {
   return builder->create_log(input);
 };
 
@@ -376,6 +383,16 @@ std::string atomic_xchg_docstr = R"pbdoc(
 ir::value *atomic_xchg(ir::value *ptr, ir::value *val, ir::builder *builder) {
   return builder->create_atomic_exch(ptr, val);
 };
+
+/*----------------------------------------------
+ debug barrier
+ ----------------------------------------------*/
+std::string debug_barrier_docstr = R"pbdoc(
+   Temporary hacky fixup for when the compiler forgets to insert sync barriers
+)pbdoc";
+ir::value *debug_barrier(ir::builder *builder) {
+  return builder->create_barrier();
+}
 
 /*----------------------------------------------
  definition of self + other

@@ -12,11 +12,10 @@ def maximum(x, y):
 
 
 @triton.jit
-def softmax(x, axis=0):
-    assert axis == 0
-    z = x - triton.max(x)
+def softmax(x):
+    z = x - triton.max(x, 0)
     num = triton.exp(z)
-    den = triton.sum(num)
+    den = triton.sum(num, 0)
     return num / den
 
 

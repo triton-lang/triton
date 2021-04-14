@@ -54,7 +54,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.attributes = attributes
         self.constants = constants
         self.kwargs = kwargs
-        self.builtins = {'range': range, 'min': triton.minimum}
+        self.builtins = {'range': range, 'min': triton.minimum, 'float': float}
 
     def visit_Module(self, node):
         self.module.add_new_scope()
@@ -71,7 +71,9 @@ class CodeGenerator(ast.NodeVisitor):
         self.lscope[kwarg_names] = self.kwargs
         # initialize function
         if inline:
-            assert len(arg_values) == len(arg_names)
+            pass
+            #print(arg_values, arg_names)
+            #assert len(arg_values) == len(arg_names)
         else:
             fn = self.module.get_or_insert_function(node.name, self.prototype)
             arg_values = []
@@ -155,26 +157,33 @@ class CodeGenerator(ast.NodeVisitor):
             ast.Add: '__add__',
             ast.Sub: '__sub__',
             ast.Mult: '__mul__',
-            ast.Gt: '__gt__',
-            ast.Lt: '__lt__',
-            ast.Div: '__div__',
+            ast.MatMult: '__mul__',
+            ast.Div: '__truediv__',
+            ast.FloorDiv: '__floordiv__',
             ast.Mod: '__mod__',
+            ast.Pow: '__pow__',
+            ast.LShift: '__lshift__',
+            ast.RShift: '__rshift__',
             ast.BitAnd: '__and__',
             ast.BitOr: '__or__',
             ast.BitXor: '__xor__',
         }[type(node.op)]
         is_lhs_triton = isinstance(lhs, _triton.ir.value)
         is_rhs_triton = isinstance(rhs, _triton.ir.value)
+        kws = dict()
         if is_lhs_triton or is_rhs_triton:
             lhs = self._convert(lhs)
             rhs = self._convert(rhs)
             lhs, rhs = triton.broadcast(lhs, rhs, builder=self.builder)
-            return getattr(lhs, fn)(rhs, builder=self.builder)
-        return getattr(lhs, fn)(rhs)
+            kws['builder'] = self.builder
+        ret = getattr(lhs, fn)(rhs, **kws)
+        if ret is NotImplemented:
+            fn = fn[:2] + 'r' + fn[2:]
+            ret = getattr(rhs, fn)(lhs, **kws)
+        return ret
 
     def visit_If(self, node):
         cond = ast.NodeVisitor.visit(self, node.test)
-        print(node.test, cond)
         if isinstance(cond, _triton.ir.value):
             current_bb = self.builder.get_insert_block()
             then_bb = _triton.ir.basic_block.create(self.builder.context, "then", current_bb.parent)
@@ -236,22 +245,10 @@ class CodeGenerator(ast.NodeVisitor):
         return getattr(lhs, fn)(rhs)
 
     def visit_UnaryOp(self, node):
-        operand = ast.NodeVisitor.visit(self, node.operand)
-        if isinstance(operand, int):
-            operand = self.builder.get_int32(operand)
-        # Handle non-constant
-        _0f = self.builder.get_float32(0)
-        _0i = self.builder.get_int32(0)
-        if operand.type.is_block():
-            _0f = self.builder.splat(_0f)
-            _0i = self.builder.splat(_0i)
-        # Handle minux operator
+        # Handle minus operator
         if type(node.op) == ast.USub:
-            if operand.type.is_floating():
-                return _0f.__sub__(operand, builder=self.builder)
-            elif operand.type.is_int():
-                return _0i.__sub__(operand, builder=self.builder)
-
+            tmp = ast.BinOp(ast.Num(0), ast.Sub(), node.operand)
+            return ast.NodeVisitor.visit(self, tmp)
         raise NotImplementedError(f"Unsupported op: {node.op}")
 
     def visit_While(self, node):
@@ -297,9 +294,9 @@ class CodeGenerator(ast.NodeVisitor):
         st_target = ast.Name(id=node.target.id, ctx=ast.Store())
         ld_target = ast.Name(id=node.target.id, ctx=ast.Load())
         init_node = ast.Assign(targets=[st_target], value=node.iter.args[0])
-        pos_cond_node = ast.BinOp(ld_target, ast.Lt(), node.iter.args[1])
-        neg_cond_node = ast.BinOp(ld_target, ast.Gt(), node.iter.args[1])
-        pos_step_node = ast.BinOp(node.iter.args[2], ast.Gt(), ast.Num(0))
+        pos_cond_node = ast.Compare(ld_target, ast.Lt(), node.iter.args[1])
+        neg_cond_node = ast.Compare(ld_target, ast.Gt(), node.iter.args[1])
+        pos_step_node = ast.Compare(node.iter.args[2], ast.Gt(), ast.Num(0))
         build_cond = lambda: triton.where(ast.NodeVisitor.visit(self, pos_step_node),\
                                     ast.NodeVisitor.visit(self, pos_cond_node),\
                                     ast.NodeVisitor.visit(self, neg_cond_node),\

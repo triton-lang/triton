@@ -110,10 +110,25 @@ void init_triton_frontend(py::module &&m) {
   DEF_FUNC(m, "where", where, "condition"_a, "x"_a, "y"_a);
   // triton.minimum
   DEF_FUNC(m, "minimum", minimum, "x"_a, "y"_a);
+  // triton.exp
+  DEF_FUNC(m, "exp", _exp, "x"_a);
+  // triton.log
+  DEF_FUNC(m, "log", _log, "x"_a);
+
+  // triton.max
+  DEF_FUNC(m, "max", max, "input"_a, "axis"_a);
+  // triton.min
+  DEF_FUNC(m, "min", min, "input"_a, "axis"_a);
+  // triton.sum
+  DEF_FUNC(m, "sum", sum, "input"_a, "axis"_a);
+
   // triton.atomic_cas
   DEF_FUNC(m, "atomic_cas", atomic_cas, "ptr"_a, "cmp"_a, "val"_a);
   // triton.atomic_xchg
   DEF_FUNC(m, "atomic_xchg", atomic_xchg, "ptr"_a, "val"_a);
+
+  // triton.__debug__barrier
+  DEF_FUNC(m, "debug_barrier", debug_barrier);
 
   py::enum_<type_code>(m, "dtype")
       .value("float16", type_code::float16)
@@ -138,7 +153,7 @@ void init_triton_ir(py::module &&m) {
   DEF_FUNC(value, "__add__", add, "other"_a);
   DEF_FUNC(value, "__sub__", sub, "other"_a);
   DEF_FUNC(value, "__mul__", mul, "other"_a);
-  DEF_FUNC(value, "__div__", _div, "other"_a);
+  DEF_FUNC(value, "__truediv__", _div, "other"_a);
   DEF_FUNC(value, "__mod__", mod, "other"_a);
   DEF_FUNC(value, "__gt__", greater_than, "other"_a);
   DEF_FUNC(value, "__ge__", greater_equal, "other"_a);
