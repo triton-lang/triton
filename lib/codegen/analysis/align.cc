@@ -462,7 +462,7 @@ std::vector<unsigned> align::populate_starting_multiple_default(ir::value* v) {
       if(attr.get_kind() == ir::aligned){
         ir::type* ty = x->get_type()->get_pointer_element_ty();
         int nbits  = ty->get_primitive_size_in_bits();
-        int nbytes = nbits / 8;
+        int nbytes = std::max<int>(nbits / 8, 1);
         return add_to_cache(x, {attr.get_value() / nbytes}, starting_multiple_);
       }
     }

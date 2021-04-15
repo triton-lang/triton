@@ -1,4 +1,5 @@
 #include "triton/ir/builder.h"
+#include <functional>
 #include <iostream>
 #include <pybind11/pybind11.h>
 
@@ -24,8 +25,14 @@ void throw_not_int_or_float(std::string key) {
 }
 
 enum type_code {
+  _bool,
+  int8,
+  int16,
+  int32,
+  int64,
   float16,
-  float32
+  float32,
+  float64
 };
 
 ir::type *make_ir(type_code ty, ir::builder *builder) {
@@ -58,23 +65,46 @@ std::string cast_docstr = R"pbdoc(
 )pbdoc";
 
 ir::value *cast(ir::value *input, type_code _dtype, ir::builder *builder) {
-  ir::type *dtype = make_ir(_dtype, builder);
-  if (input->get_type()->is_block_ty())
-    dtype = ir::block_type::get(dtype, input->get_type()->get_block_shapes());
+  ir::type *src_ty = input->get_type();
+  ir::type *dst_ty = make_ir(_dtype, builder);
+  if (src_ty->is_block_ty())
+    dst_ty = ir::block_type::get(dst_ty, input->get_type()->get_block_shapes());
+  ir::type *src_sca_ty = src_ty->get_scalar_ty();
+  ir::type *dst_sca_ty = dst_ty->get_scalar_ty();
   // FP Truncation
-  ir::type *src_ty = input->get_type()->get_scalar_ty();
-  ir::type *dst_ty = dtype->get_scalar_ty();
-  bool truncate_fp = src_ty->is_floating_point_ty() &&
-                     dst_ty->is_floating_point_ty() &&
-                     src_ty->get_fp_mantissa_width() > dst_ty->get_fp_mantissa_width();
+  bool truncate_fp = src_sca_ty->is_floating_point_ty() &&
+                     dst_sca_ty->is_floating_point_ty() &&
+                     src_sca_ty->get_fp_mantissa_width() > dst_sca_ty->get_fp_mantissa_width();
   if (truncate_fp)
-    return builder->create_fp_trunc(input, dtype);
-  bool ext_fp = src_ty->is_floating_point_ty() &&
-                dst_ty->is_floating_point_ty() &&
-                src_ty->get_fp_mantissa_width() < dst_ty->get_fp_mantissa_width();
+    return builder->create_fp_trunc(input, dst_ty);
+  // FP Extension
+  bool ext_fp = src_sca_ty->is_floating_point_ty() &&
+                dst_sca_ty->is_floating_point_ty() &&
+                src_sca_ty->get_fp_mantissa_width() < dst_sca_ty->get_fp_mantissa_width();
   if (ext_fp)
-    return builder->create_fp_ext(input, dtype);
-
+    return builder->create_fp_ext(input, dst_ty);
+  // Int cast
+  if (src_sca_ty->is_integer_ty() && dst_sca_ty->is_integer_ty() &&
+      src_sca_ty->get_integer_bitwidth() != dst_sca_ty->get_integer_bitwidth())
+    return builder->create_int_cast(input, dst_ty, true);
+  // Float -> Int
+  if (src_sca_ty->is_floating_point_ty() && dst_sca_ty->is_integer_ty())
+    return builder->create_fp_to_si(input, dst_ty);
+  // int -> Float
+  if (src_sca_ty->is_integer_ty() && dst_sca_ty->is_floating_point_ty())
+    return builder->create_si_to_fp(input, dst_ty);
+  // Ptr -> Ptr
+  if (src_sca_ty->is_pointer_ty() && dst_sca_ty->is_pointer_ty())
+    return builder->create_cast(ir::BitCast, input, dst_ty);
+  // * -> Bool
+  if (dst_sca_ty->is_bool_ty()) {
+    if (src_sca_ty->is_pointer_ty())
+      input = cast(input, int64, builder);
+    ir::value *other = builder->get_int64(0);
+    if (src_ty->is_bool_ty())
+      other = builder->create_splat(other, src_ty->get_block_shapes());
+    return builder->create_icmpNE(input, other);
+  }
   throw_not_implemented("cast");
 }
 
@@ -392,6 +422,20 @@ std::string debug_barrier_docstr = R"pbdoc(
 )pbdoc";
 ir::value *debug_barrier(ir::builder *builder) {
   return builder->create_barrier();
+}
+
+#define DEF_BINARY_OP(MOD, PY_NAME, C_FUNC, ...)                                \
+  MOD.def(PY_NAME, binary_op(C_FUNC), (C_FUNC##_docstr + _builder_doc).c_str(), \
+          ret::reference VA_ARGS(__VA_ARGS__), "builder"_a)
+
+template <class FN>
+std::function<ir::value *(ir::value *, ir::value *, ir::builder *builder)>
+binary_op(const FN &fn) {
+  auto ret = [&fn](ir::value *self, ir::value *other, ir::builder *builder) {
+    //std::tie(self, other) = try_broadcast(self, other, builder);
+    return fn(self, other, builder);
+  };
+  return ret;
 }
 
 /*----------------------------------------------

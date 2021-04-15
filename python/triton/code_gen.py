@@ -8,6 +8,7 @@ import builtins
 import triton._C.libtriton.triton as _triton
 import triton
 import sys
+import textwrap
 from abc import ABC, abstractmethod
 
 
@@ -54,7 +55,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.attributes = attributes
         self.constants = constants
         self.kwargs = kwargs
-        self.builtins = {'range': range, 'min': triton.minimum, 'float': float}
+        self.builtins = {'range': range, 'min': triton.minimum, 'float': float, 'int': int, 'getattr': getattr}
 
     def visit_Module(self, node):
         self.module.add_new_scope()
@@ -223,6 +224,8 @@ class CodeGenerator(ast.NodeVisitor):
         pass
 
     def visit_Compare(self, node):
+        assert len(node.comparators) == 1
+        assert len(node.ops) == 1
         lhs = ast.NodeVisitor.visit(self, node.left)
         rhs = ast.NodeVisitor.visit(self, node.comparators[0])
         fn = {
@@ -294,9 +297,9 @@ class CodeGenerator(ast.NodeVisitor):
         st_target = ast.Name(id=node.target.id, ctx=ast.Store())
         ld_target = ast.Name(id=node.target.id, ctx=ast.Load())
         init_node = ast.Assign(targets=[st_target], value=node.iter.args[0])
-        pos_cond_node = ast.Compare(ld_target, ast.Lt(), node.iter.args[1])
-        neg_cond_node = ast.Compare(ld_target, ast.Gt(), node.iter.args[1])
-        pos_step_node = ast.Compare(node.iter.args[2], ast.Gt(), ast.Num(0))
+        pos_cond_node = ast.Compare(ld_target, [ast.Lt()], [node.iter.args[1]])
+        neg_cond_node = ast.Compare(ld_target, [ast.Gt()], [node.iter.args[1]])
+        pos_step_node = ast.Compare(node.iter.args[2], [ast.Gt()], [ast.Num(0)])
         build_cond = lambda: triton.where(ast.NodeVisitor.visit(self, pos_step_node),\
                                     ast.NodeVisitor.visit(self, pos_cond_node),\
                                     ast.NodeVisitor.visit(self, neg_cond_node),\
@@ -466,10 +469,9 @@ class Kernel:
         prototype = _triton.ir.type.make_function(ret_type, arg_types)
         # generate Triton-IR
         # export symbols visible from self.fn into code-generator object
-        gscope = sys.modules[self.fn.src.__module__].__dict__
+        gscope = sys.modules[self.fn.module].__dict__
         generator = CodeGenerator(context, prototype, gscope=gscope, attributes=attributes, constants=constants, kwargs=meta)
-        tree = ast.parse(inspect.getsource(self.fn.src))
-        generator.visit(tree)
+        generator.visit(self.fn.parse())
         tt_device = _triton.driver.cu_device(device.index, False)
         # Compile to machine code
         mod, ker, shared_mem = _triton.code_gen.add_passes_to_emit_bin(generator.module, tt_device, num_warps)
@@ -505,16 +507,16 @@ class Kernel:
         binary = cache[key]
         cu_stream = torch.cuda.current_stream(device.index).cuda_stream
         stream = _triton.driver.cu_stream(cu_stream, False)
-        binary(stream, params, *self.grid(meta))
+        grid = self.grid(meta) if hasattr(self.grid, '__call__') else self.grid
+        binary(stream, params, *grid)
 
 
 class Autotuner:
-    def __init__(self, kernel, src, configs, key):
+    def __init__(self, kernel, arg_names, configs, key):
         if not configs:
             self.configs = [Config(dict(), num_warps=4)]
         else:
             self.configs = configs
-        arg_names = inspect.getfullargspec(src).args
         self.key_idx = [arg_names.index(k) for k in key]
         self.cache = dict()
         self.kernel = kernel
@@ -547,17 +549,25 @@ class Autotuner:
 
 
 class JITFunction:
-    def __init__(self, src):
-        self.src = src
+    def __init__(self, fn):
+        self.module = fn.__module__
+        self.arg_names = inspect.getfullargspec(fn).args
         self.cache = dict()
         self.kernel_decorators = []
+        self.src = textwrap.dedent(inspect.getsource(fn))
 
-    def __call__(self, *args, generator: CodeGenerator, **meta):
-        tree = ast.parse(inspect.getsource(self.src))
+    # we do not parse in the constructor because
+    # the user might want to monkey-patch self.src dynamically.
+    # Some unit tests do this, for example.
+    def parse(self):
+        tree = ast.parse(self.src)
         assert isinstance(tree, ast.Module)
         assert len(tree.body) == 1
         assert isinstance(tree.body[0], ast.FunctionDef)
-        return generator.visit_FunctionDef(tree.body[0], inline=True, arg_values=args)
+        return tree
+
+    def __call__(self, *args, generator: CodeGenerator, **meta):
+        return generator.visit_FunctionDef(self.parse().body[0], inline=True, arg_values=args)
 
     def __getitem__(self, grid_fn):
         kernel = Kernel(self, grid_fn)
@@ -575,7 +585,7 @@ class Config:
 def autotune(configs, key):
     def decorator(fn):
         def wrapper(kernel):
-            return Autotuner(kernel, fn.src, configs, key)
+            return Autotuner(kernel, fn.arg_names, configs, key)
 
         fn.kernel_decorators.append(wrapper)
         return fn

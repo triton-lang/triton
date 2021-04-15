@@ -150,7 +150,7 @@ void init_triton_ir(py::module &&m) {
   auto value = py::class_<ir::value>(m, "value");
   value.def_property("name", &ir::value::get_name, &ir::value::set_name);
   value.def_property_readonly("type", &ir::value::get_type);
-  DEF_FUNC(value, "__add__", add, "other"_a);
+  DEF_BINARY_OP(value, "__add__", add, "other"_a);
   DEF_FUNC(value, "__sub__", sub, "other"_a);
   DEF_FUNC(value, "__mul__", mul, "other"_a);
   DEF_FUNC(value, "__truediv__", _div, "other"_a);
