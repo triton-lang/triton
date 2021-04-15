@@ -123,10 +123,6 @@ public:
   value *create_and(value *lhs, value *rhs);
   value *create_xor(value *lhs, value *rhs);
   value *create_or(value *lhs, value *rhs);
-  // Unary
-//  value *create_fneg(value *arg);
-//  value *create_neg(value *arg);
-//  value *create_not(value *arg);
   // Input/Output
   value *create_load(value *arg);
   value *create_store(value *ptr, value *val);
@@ -161,6 +157,7 @@ private:
   basic_block *block_;
   iterator insert_point_;
 };
+
 
 }
 }

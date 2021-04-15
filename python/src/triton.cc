@@ -1,9 +1,9 @@
-﻿#include "functions.h"
-#include "triton/codegen/pass.h"
+﻿#include "triton/codegen/pass.h"
 #include "triton/driver/kernel.h"
 #include "triton/driver/module.h"
 #include "triton/driver/stream.h"
 #include "triton/ir/builder.h"
+#include "triton/ir/dispatch.h"
 #include "triton/ir/enums.h"
 #include "triton/ir/function.h"
 #include "triton/ir/module.h"
@@ -86,54 +86,49 @@ void init_triton_codegen(py::module &&m) {
 
 void init_triton_frontend(py::module &&m) {
   using ret = py::return_value_policy;
-  using namespace pybind11::literals;
 
-  // triton.program_id
-  DEF_FUNC(m, "program_id", program_id, "axis"_a);
-  // triton.num_programs
-  DEF_FUNC(m, "num_programs", num_programs, "axis"_a);
-  // triton.try_broadcast
-  DEF_FUNC(m, "broadcast", try_broadcast, "input"_a, "other"_a);
-  // triton.broadcast_to
-  DEF_FUNC(m, "broadcast_to", broadcast_to, "input"_a, "shape"_a);
-  // triton.dot
-  DEF_FUNC(m, "dot", dot, "input"_a, "other"_a);
-  // triton.arange
-  DEF_FUNC(m, "arange", arange, "start"_a, "end"_a);
-  // triton.zeros
-  DEF_FUNC(m, "zeros", zeros, "shape"_a, "dtype"_a);
-  // triton.load
-  DEF_FUNC(m, "load", load, "pointer"_a, "mask"_a = py::none(), "other"_a = py::none());
-  // triton.store
-  DEF_FUNC(m, "store", store, "pointer"_a, "value"_a, "mask"_a = py::none());
-  // triton.where
-  DEF_FUNC(m, "where", where, "condition"_a, "x"_a, "y"_a);
-  // triton.minimum
-  DEF_FUNC(m, "minimum", minimum, "x"_a, "y"_a);
-  // triton.exp
-  DEF_FUNC(m, "exp", _exp, "x"_a);
-  // triton.log
-  DEF_FUNC(m, "log", _log, "x"_a);
-
-  // triton.max
-  DEF_FUNC(m, "max", max, "input"_a, "axis"_a);
-  // triton.min
-  DEF_FUNC(m, "min", min, "input"_a, "axis"_a);
-  // triton.sum
-  DEF_FUNC(m, "sum", sum, "input"_a, "axis"_a);
-
-  // triton.atomic_cas
-  DEF_FUNC(m, "atomic_cas", atomic_cas, "ptr"_a, "cmp"_a, "val"_a);
-  // triton.atomic_xchg
-  DEF_FUNC(m, "atomic_xchg", atomic_xchg, "ptr"_a, "val"_a);
-
-  // triton.__debug__barrier
-  DEF_FUNC(m, "debug_barrier", debug_barrier);
-
-  py::enum_<type_code>(m, "dtype")
-      .value("float16", type_code::float16)
-      .value("float32", type_code::float32)
-      .export_values();
+  // programming model
+  m.def("program_id", &ir::dispatch::program_id, ret::reference);
+  m.def("num_programs", &ir::dispatch::num_programs, ret::reference);
+  // binary
+  m.def("add", &ir::dispatch::add, ret::reference);
+  m.def("sub", &ir::dispatch::sub, ret::reference);
+  m.def("mul", &ir::dispatch::mul, ret::reference);
+  m.def("div", &ir::dispatch::div, ret::reference);
+  m.def("mod", &ir::dispatch::mod, ret::reference);
+  m.def("and_", &ir::dispatch::and_, ret::reference);
+  // comparison
+  m.def("greater_than", &ir::dispatch::greater_than, ret::reference);
+  m.def("greater_equal", &ir::dispatch::greater_equal, ret::reference);
+  m.def("less_than", &ir::dispatch::less_than, ret::reference);
+  m.def("less_equal", &ir::dispatch::less_equal, ret::reference);
+  m.def("equal", &ir::dispatch::equal, ret::reference);
+  // block creation
+  m.def("arange", &ir::dispatch::arange, ret::reference);
+  m.def("zeros", &ir::dispatch::zeros, ret::reference);
+  // shape manipuatation
+  m.def("reshape", &ir::dispatch::reshape, ret::reference);
+  typedef std::tuple<ir::value *, ir::value *> (*broadcast_ty)(ir::value *, ir::value *, ir::builder *);
+  typedef ir::value *(*broadcast_to_ty)(ir::value *, ir::type::block_shapes_t, ir::builder *);
+  m.def("broadcast", (broadcast_ty)(&ir::dispatch::broadcast), ret::reference);
+  m.def("broadcast_to", (broadcast_to_ty)(&ir::dispatch::broadcast), ret::reference);
+  // memory
+  m.def("load", &ir::dispatch::load, ret::reference);
+  m.def("store", &ir::dispatch::store, ret::reference);
+  m.def("atomic_cas", &ir::dispatch::atomic_cas, ret::reference);
+  m.def("atomic_xchg", &ir::dispatch::atomic_xchg, ret::reference);
+  // linear algebra
+  m.def("dot", &ir::dispatch::dot, ret::reference);
+  // indexing
+  m.def("where", &ir::dispatch::where, ret::reference);
+  // reduction
+  m.def("min", &ir::dispatch::min, ret::reference);
+  m.def("max", &ir::dispatch::max, ret::reference);
+  m.def("sum", &ir::dispatch::sum, ret::reference);
+  // math
+  m.def("exp", &ir::dispatch::exp, ret::reference);
+  m.def("log", &ir::dispatch::log, ret::reference);
+  m.def("sqrt", &ir::dispatch::sqrt, ret::reference);
 }
 
 /*****************************************************************************/
@@ -150,19 +145,6 @@ void init_triton_ir(py::module &&m) {
   auto value = py::class_<ir::value>(m, "value");
   value.def_property("name", &ir::value::get_name, &ir::value::set_name);
   value.def_property_readonly("type", &ir::value::get_type);
-  DEF_BINARY_OP(value, "__add__", add, "other"_a);
-  DEF_FUNC(value, "__sub__", sub, "other"_a);
-  DEF_FUNC(value, "__mul__", mul, "other"_a);
-  DEF_FUNC(value, "__truediv__", _div, "other"_a);
-  DEF_FUNC(value, "__mod__", mod, "other"_a);
-  DEF_FUNC(value, "__gt__", greater_than, "other"_a);
-  DEF_FUNC(value, "__ge__", greater_equal, "other"_a);
-  DEF_FUNC(value, "__lt__", less_than, "other"_a);
-  DEF_FUNC(value, "__le__", less_equal, "other"_a);
-  DEF_FUNC(value, "__eq__", equal, "other"_a);
-  DEF_FUNC(value, "__and__", _and, "other"_a);
-  DEF_FUNC(value, "__getitem__", subscript, "other"_a);
-  DEF_FUNC(value, "to", cast, "dtype"_a);
 
   py::class_<ir::user, ir::value>(m, "user");
 

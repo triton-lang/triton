@@ -26,14 +26,26 @@ class CodeGenerator(ast.NodeVisitor):
             ret = self.builtins[name]
         else:
             raise ValueError(f'{name} is not defined')
-        if isinstance(ret, _triton.ir.value):
-            return self.module.get_value(name)
+        if isinstance(ret, triton.block):
+            handle = self.module.get_value(name)
+            return triton.block(handle)
         elif isinstance(ret, int):
             return self.builder.get_int32(ret)
         elif isinstance(ret, float):
             return self.builder.get_float32(ret)
         else:
             return ret
+
+    def set_value(self, name, value):
+        if isinstance(value, _triton.ir.value):
+            value = triton.block(value)
+        if isinstance(value, triton.block):
+            self.module.set_value(name, value.handle)
+            self.module.scope.set_type(name, value.type)
+        self.lscope[name] = value
+
+    def is_triton_object(self, value):
+        return isinstance(value, triton.block)
 
     def visit_compound_statement(self, stmts, add_scope=False):
         if add_scope:
@@ -73,8 +85,6 @@ class CodeGenerator(ast.NodeVisitor):
         # initialize function
         if inline:
             pass
-            #print(arg_values, arg_names)
-            #assert len(arg_values) == len(arg_names)
         else:
             fn = self.module.get_or_insert_function(node.name, self.prototype)
             arg_values = []
@@ -91,9 +101,7 @@ class CodeGenerator(ast.NodeVisitor):
                     fn.args[i].name = arg_name
                     arg_values.append(fn.args[i])
         for arg_name, arg_value in zip(arg_names, arg_values):
-            self.module.set_value(arg_name, arg_value)
-            self.module.scope.set_type(arg_name, arg_value.type)
-            self.lscope[arg_name] = arg_value
+            self.set_value(arg_name, arg_value)
         if inline:
             return self.visit_compound_statement(node.body, add_scope=True)
         else:
@@ -123,10 +131,7 @@ class CodeGenerator(ast.NodeVisitor):
         assert len(names) == 1
         name = names[0]
         value = ast.NodeVisitor.visit(self, node.value)
-        if isinstance(value, _triton.ir.value):
-            self.module.set_value(name, value)
-            self.module.scope.set_type(name, value.type)
-        self.lscope[name] = value
+        self.set_value(names[0], value)
 
     def visit_AugAssign(self, node):
         name = node.target.id
@@ -169,10 +174,8 @@ class CodeGenerator(ast.NodeVisitor):
             ast.BitOr: '__or__',
             ast.BitXor: '__xor__',
         }[type(node.op)]
-        is_lhs_triton = isinstance(lhs, _triton.ir.value)
-        is_rhs_triton = isinstance(rhs, _triton.ir.value)
         kws = dict()
-        if is_lhs_triton or is_rhs_triton:
+        if self.is_triton_object(lhs) or self.is_triton_object(rhs):
             lhs = self._convert(lhs)
             rhs = self._convert(rhs)
             lhs, rhs = triton.broadcast(lhs, rhs, builder=self.builder)
@@ -185,7 +188,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_If(self, node):
         cond = ast.NodeVisitor.visit(self, node.test)
-        if isinstance(cond, _triton.ir.value):
+        if self.is_triton_object(cond):
             current_bb = self.builder.get_insert_block()
             then_bb = _triton.ir.basic_block.create(self.builder.context, "then", current_bb.parent)
             else_bb = _triton.ir.basic_block.create(self.builder.context, "else", current_bb.parent) if node.orelse else None
@@ -238,9 +241,7 @@ class CodeGenerator(ast.NodeVisitor):
             ast.Is: '__eq__',
             ast.IsNot: '__ne__',
         }[type(node.ops[0])]
-        is_lhs_triton = isinstance(lhs, _triton.ir.value)
-        is_rhs_triton = isinstance(rhs, _triton.ir.value)
-        if is_lhs_triton or is_rhs_triton:
+        if self.is_triton_object(lhs) or self.is_triton_object(rhs):
             lhs = self._convert(lhs)
             rhs = self._convert(rhs)
             lhs, rhs = triton.broadcast(lhs, rhs, builder=self.builder)
@@ -283,7 +284,7 @@ class CodeGenerator(ast.NodeVisitor):
         assert node.ctx.__class__.__name__ == "Load"
         lhs = ast.NodeVisitor.visit(self, node.value)
         slices = ast.NodeVisitor.visit(self, node.slice)
-        if isinstance(lhs, _triton.ir.value):
+        if self.is_triton_object(lhs):
             return lhs.__getitem__(slices, builder=self.builder)
         return lhs[slices]
 
@@ -362,7 +363,7 @@ class CodeGenerator(ast.NodeVisitor):
         args = [ast.NodeVisitor.visit(self, arg) for arg in node.args]
         if isinstance(fn, JITFunction):
             return fn(*args, generator=self, **kws)
-        if hasattr(fn, '__self__') and isinstance(fn.__self__, _triton.ir.value) or \
+        if hasattr(fn, '__self__') and self.is_triton_object(fn.__self__) or \
            sys.modules[fn.__module__] is _triton.frontend:
             args = [self._convert(x) for x in args]
             kws = {n: self._convert(v) for n, v in kws.items()}

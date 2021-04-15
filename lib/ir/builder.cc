@@ -279,7 +279,6 @@ value *builder::create_masked_load(value *ptr, value *mask, value *false_value){
   return insert(masked_load_inst::create(ptr, mask, false_value));
 }
 
-
 value *builder::create_masked_store(value *ptr, value *val, value *mask){
   return insert(masked_store_inst::create(ptr, val, mask));
 }
@@ -381,6 +380,8 @@ value *builder::create_barrier(const std::string &name) {
 value *builder::create_async_wait(int N) {
   return insert(async_wait_inst::create(ctx_, N));
 }
+
+
 
 }
 }
