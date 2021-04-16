@@ -343,8 +343,12 @@ ir::value* dispatch::zeros(shape_t shape, ir::type *dtype, ir::builder *builder)
 //===----------------------------------------------------------------------===//
 
 
-ir::value *dispatch::reshape(ir::value *input, shape_t shape, ir::builder *builder) {
-  return builder->create_reshape(input, shape);
+ir::value *dispatch::reshape(ir::value *input, shape_t dst_shape, ir::builder *builder) {
+  unsigned numel = 1;
+  for(unsigned s: dst_shape) numel *= s;
+  if(input->get_type()->get_tile_num_elements() != numel)
+    throw semantic_error("cannot reshape block of different shape");
+  return builder->create_reshape(input, dst_shape);
 }
 
 ir::value *dispatch::broadcast(ir::value *input, shape_t shape, ir::builder *builder) {
@@ -455,6 +459,9 @@ ir::value *dispatch::load(ir::value* ptr, ir::value* mask, ir::value* other, ir:
 }
 
 ir::value *dispatch::store(ir::value* ptr, ir::value *val, ir::value* mask, ir::builder *builder) {
+  val = dispatch::broadcast(val, ptr->get_type()->get_block_shapes(), builder);
+  if(mask)
+    mask = dispatch::broadcast(mask, ptr->get_type()->get_block_shapes(), builder);
   ir::type *ptr_ty = ptr->get_type();
   ir::type *val_ty = val->get_type();
   if(ptr_ty->get_scalar_ty()->get_pointer_element_ty() !=

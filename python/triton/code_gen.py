@@ -69,6 +69,12 @@ class CodeGenerator(ast.NodeVisitor):
         ast.NodeVisitor.generic_visit(self, node)
         self.module.pop_scope()
 
+    def visit_List(self, node):
+        ctx = ast.NodeVisitor.visit(self, node.ctx)
+        assert ctx is None
+        elts = [ast.NodeVisitor.visit(self, elt) for elt in node.elts]
+        return elts
+
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
         return ast.NodeVisitor.visit(self, node.value)

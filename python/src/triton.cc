@@ -196,7 +196,8 @@ void init_triton_ir(py::module &&m) {
   py::class_<ir::function_type, ir::type>(m, "function_type");
   py::class_<ir::integer_type, ir::type>(m, "integer_type");
   py::class_<ir::block_type, ir::type>(m, "block_type")
-      .def_property_readonly("shape", &ir::block_type::get_shapes);
+      .def_property_readonly("shape", &ir::block_type::get_shapes)
+      .def_property_readonly("numel", &ir::type::get_tile_num_elements);
 
   py::class_<ir::scope>(m, "scope")
       .def(py::init<>())

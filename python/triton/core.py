@@ -7,7 +7,11 @@ from functools import wraps
 def _patch(fn):
 
     # convert block/dtype to ir values
-    def _to_ir(x):
+    def _to_ir(x, builder):
+        if isinstance(x, int):
+            return builder.get_int32(x)
+        elif isinstance(x, float):
+            return builder.get_float32(x)
         forward_handle = isinstance(x, (dtype, block))
         return x.handle if forward_handle else x
 
@@ -15,12 +19,14 @@ def _patch(fn):
         return block(x) if isinstance(x, ir.value) else x
 
     def wrapper(*args, **kwargs):
-        args = [_to_ir(x) for x in args]
-        kwargs = {k: _convert(v) for k, v in kwargs.items()}
+        builder = args[-1]
+        assert isinstance(builder, ir.builder)
+        args = [_to_ir(x, builder) for x in args]
+        kwargs = {k: _to_ir(v, builder) for k, v in kwargs.items()}
         ret = fn(*args, **kwargs)
         if isinstance(ret, tuple):
             return map(_from_ir, ret)
-        return ret
+        return _from_ir(ret)
 
     return wrapper
 
@@ -136,8 +142,17 @@ class block:
 
     @builtin
     def __getitem__(self, slices, builder=None):
-        print(slices)
-        assert False
+        src_shape = self.type.shape
+        dst_shape = []
+        curr = 0
+        for sl in slices:
+            if sl == None:
+                dst_shape.append(1)
+            elif sl == (None, None, None):
+                dst_shape.append(src_shape[curr])
+                curr += 1
+        ret = frontend.reshape(self, dst_shape, builder)
+        return ret
 
     @builtin
     def to(self, dtype, builder=None):
@@ -232,6 +247,14 @@ def broadcast_to(input, shape, builder=None):
     :type shape: tuple of int
     """
     return frontend.broadcast_to(input, shape, builder)
+
+
+@builtin
+def reshape(input, shape, builder=None):
+    """
+    Reshapes a block to a new shape.
+    """
+    return frontend.reshape(input, shape, builder)
 
 
 # -----------------------
@@ -376,6 +399,11 @@ def minimum(x, y):
 @triton.jit
 def maximum(x, y):
     return triton.where(x > y, x, y)
+
+
+@triton.jit
+def ravel(x):
+    return triton.reshape(x, [x.type.numel])
 
 
 @triton.jit

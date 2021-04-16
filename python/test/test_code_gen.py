@@ -47,7 +47,7 @@ def _test_unary(dtype_x, expr, device='cuda'):
     # reference result
     z_ref = eval(expr)
     # triton result
-    z_tri = torch.empty(SIZE, dtype=z_ref.dtype, device=device)
+    z_tri = torch.empty_like(z_ref)
     kernel[(1, )](z_tri, x, SIZE=SIZE, num_warps=4)
     # compare
     triton.testing.assert_allclose(z_ref, z_tri)
@@ -77,6 +77,7 @@ def _test_binary(dtype_x, dtype_y, expr, device='cuda'):
     triton.testing.assert_allclose(z_ref, z_tri)
 
 
+'''
 # ---------------
 # test binary ops
 # ---------------
@@ -130,6 +131,39 @@ def test_compare_op(dtype_x, dtype_y, expr, device='cuda'):
      ])
 def test_unary_op(dtype_x, expr, device='cuda'):
     _test_unary(dtype_x, expr, device=device)
+'''
+
+# ----------------
+# test indexing
+# ----------------
+
+_all = slice(None, None, None)
+
+smap = {'None': None, ':': slice(None, None, None)}
+
+
+@pytest.mark.parametrize("slices", [':,None'])
+def test_index1d(slices, device='cuda'):
+    slices = tuple([smap[s] for s in slices.split(',')])
+
+    @triton.jit
+    def kernel(Z, X, **meta):
+        SIZE = meta['SIZE']
+        m = triton.arange(0, SIZE)
+        n = triton.arange(0, SIZE)
+        x = triton.load(X + m)
+        z = x[:, None]
+        triton.store(Z + m[:, None] * SIZE + n[None, :], z)
+
+    dtype = torch.float32
+    shape_in = (32, )
+    shape_ou = (32, 32)
+    x = triton.testing.random(shape_in, dtype=dtype, device=device)
+    y = torch.zeros(shape_ou, dtype=dtype, device=device)
+    z_ref = x[slices] + y
+    z_tri = torch.empty_like(z_ref)
+    kernel[(1, )](z_tri, x, num_warps=1, SIZE=shape_in[0])
+    triton.testing.assert_allclose(z_ref, z_tri)
 
 
 # ---------------
@@ -151,7 +185,3 @@ def test_unary_op(dtype_x, expr, device='cuda'):
 # ---------------
 # test while
 # ---------------
-
-# ----------------
-# test subscript
-# ----------------
