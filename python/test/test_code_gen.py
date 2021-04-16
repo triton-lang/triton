@@ -24,9 +24,10 @@ float_dtypes = ['float16', 'float32', 'float64']
 dtypes = int_dtypes + float_dtypes
 
 
-def patch_kernel(template, test_str):
+def patch_kernel(template, to_replace):
     kernel = copy.deepcopy(template)
-    kernel.src = kernel.src.replace('GENERATE_TEST_HERE', test_str)
+    for key, value in to_replace.items():
+        kernel.src = kernel.src.replace(key, value)
     return kernel
 
 
@@ -41,7 +42,7 @@ def _test_unary(dtype_x, expr, device='cuda'):
         z = GENERATE_TEST_HERE
         triton.store(Z + off, z)
 
-    kernel = patch_kernel(kernel, expr)
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': expr})
     # inputs
     x = triton.testing.random(SIZE, dtype=cvt[dtype_x], device=device)
     # reference result
@@ -64,7 +65,7 @@ def _test_binary(dtype_x, dtype_y, expr, device='cuda'):
         z = GENERATE_TEST_HERE
         triton.store(Z + off, z)
 
-    kernel = patch_kernel(kernel, expr)
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': expr})
     # inputs
     x = triton.testing.random(SIZE, dtype=cvt[dtype_x], device=device)
     y = triton.testing.random(SIZE, dtype=cvt[dtype_y], device=device)
@@ -77,7 +78,6 @@ def _test_binary(dtype_x, dtype_y, expr, device='cuda'):
     triton.testing.assert_allclose(z_ref, z_tri)
 
 
-'''
 # ---------------
 # test binary ops
 # ---------------
@@ -131,38 +131,60 @@ def test_compare_op(dtype_x, dtype_y, expr, device='cuda'):
      ])
 def test_unary_op(dtype_x, expr, device='cuda'):
     _test_unary(dtype_x, expr, device=device)
-'''
+
 
 # ----------------
 # test indexing
 # ----------------
 
-_all = slice(None, None, None)
 
-smap = {'None': None, ':': slice(None, None, None)}
+def make_ptr_str(name, shape):
+    rank = len(shape)
+    offsets = []
+    stride = 1
+    for i in reversed(range(rank)):
+        idx = ', '.join([':' if ii == i else 'None' for ii in range(rank)])
+        offsets += [f'triton.arange(0, {shape[i]})[{idx}]*{stride}']
+        stride *= shape[i]
+    return f"{name} + {' + '.join(offsets)}"
 
 
-@pytest.mark.parametrize("slices", [':,None'])
-def test_index1d(slices, device='cuda'):
-    slices = tuple([smap[s] for s in slices.split(',')])
+@pytest.mark.parametrize("expr", [f'x[{s}]' for s in
+    ['None, :', ':, None',\
+     'None, :, :', ':, :, None']\
+])
+def test_index1d(expr, device='cuda'):
+    dtype = torch.int32
+    rank_x = expr.count(':')
+    rank_y = expr.count(',') + 1
+    shape_x = [32 for _ in range(rank_x)]
+    shape_z = [32 for _ in range(rank_y)]
 
+    # Triton kernel
     @triton.jit
     def kernel(Z, X, **meta):
         SIZE = meta['SIZE']
         m = triton.arange(0, SIZE)
         n = triton.arange(0, SIZE)
-        x = triton.load(X + m)
-        z = x[:, None]
-        triton.store(Z + m[:, None] * SIZE + n[None, :], z)
+        x = triton.load(X_PTR_EXPR)
+        z = GENERATE_TEST_HERE
+        triton.store(Z_PTR_EXPR, z)
 
-    dtype = torch.float32
-    shape_in = (32, )
-    shape_ou = (32, 32)
-    x = triton.testing.random(shape_in, dtype=dtype, device=device)
-    y = torch.zeros(shape_ou, dtype=dtype, device=device)
-    z_ref = x[slices] + y
+    to_replace = {
+        'X_PTR_EXPR': make_ptr_str('X', shape_x),
+        'Z_PTR_EXPR': make_ptr_str('Z', shape_z),
+        'GENERATE_TEST_HERE': expr,
+    }
+    kernel = patch_kernel(kernel, to_replace)
+
+    # torch result
+    x = triton.testing.random(shape_x, dtype=dtype, device=device)
+    y = torch.zeros(shape_z, dtype=dtype, device=device)
+    z_ref = eval(expr) + y
+    # triton result
     z_tri = torch.empty_like(z_ref)
-    kernel[(1, )](z_tri, x, num_warps=1, SIZE=shape_in[0])
+    kernel[(1, )](z_tri, x, num_warps=1, SIZE=shape_x[0])
+    # compare
     triton.testing.assert_allclose(z_ref, z_tri)
 
 

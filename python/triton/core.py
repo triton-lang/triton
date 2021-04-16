@@ -142,13 +142,15 @@ class block:
 
     @builtin
     def __getitem__(self, slices, builder=None):
+        if isinstance(slices, slice):
+            slices = [slices]
         src_shape = self.type.shape
         dst_shape = []
         curr = 0
         for sl in slices:
             if sl == None:
                 dst_shape.append(1)
-            elif sl == (None, None, None):
+            elif sl == slice(None, None, None):
                 dst_shape.append(src_shape[curr])
                 curr += 1
         ret = frontend.reshape(self, dst_shape, builder)

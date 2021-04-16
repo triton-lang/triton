@@ -284,8 +284,6 @@ void cu_module::init_from_ptx(const std::string& ptx) {
   // JIT compile source-code
 //  std::cout << ptx << std::endl;
 
-//  std::cout << ptx << std::endl;
-
   try{
 //    // compile ptx with ptxas
 //    char _fsrc[] = "/tmp/triton_k_XXXXXX";

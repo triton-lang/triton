@@ -336,7 +336,7 @@ class CodeGenerator(ast.NodeVisitor):
         lower = ast.NodeVisitor.visit(self, node.lower)
         upper = ast.NodeVisitor.visit(self, node.upper)
         step = ast.NodeVisitor.visit(self, node.step)
-        return (lower, upper, step)
+        return slice(lower, upper, step)
 
     def visit_Index(self, node):
         return ast.NodeVisitor.visit(self, node.value)

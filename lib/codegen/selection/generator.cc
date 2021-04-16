@@ -514,6 +514,8 @@ void generator::visit_broadcast_inst(ir::broadcast_inst* x) {
       in_idx[k] = shape[k] == 1 ? i32(0) : in_idx[k];
     vals_[x][out_idx] = vals_[op][in_idx];
   }
+//  for(size_t i = 0; i < idxs_.at(x).size(); i++)
+//    vals_[x][idxs_[x][i]] = vals_[op][idxs_[op][i]];
 }
 
 /**
