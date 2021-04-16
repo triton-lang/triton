@@ -39,6 +39,11 @@ struct dispatch{
   static ir::value *lshr(ir::value *input, ir::value *other, ir::builder *builder);
   static ir::value *shl(ir::value *input, ir::value *other, ir::builder *builder);
 
+  // unary operators
+  static ir::value *plus(ir::value *input, ir::builder *builder);
+  static ir::value *minus(ir::value *input, ir::builder *builder);
+  static ir::value *invert(ir::value *input, ir::builder *builder);
+
   // comparison operators
   static ir::value *greater_than(ir::value *input, ir::value *other, ir::builder *builder);
   static ir::value *greater_equal(ir::value *input, ir::value *other, ir::builder *builder);

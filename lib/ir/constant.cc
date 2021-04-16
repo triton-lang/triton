@@ -30,9 +30,9 @@ constant *constant::get_null_value(type *ty) {
 
 constant *constant::get_all_ones_value(type *ty) {
   if(ty->is_integer_ty())
-    return constant_int::get(ty, 0xFFFFFFFF);
+    return constant_int::get(ty, 0xFFFFFFFFFFFFFFFF);
   if(ty->is_floating_point_ty())
-    return constant_fp::get(ty, 0xFFFFFFFF);
+    return constant_fp::get(ty, 0xFFFFFFFFFFFFFFFF);
   throw std::runtime_error("Cannot create all ones value for that type!");
 }
 

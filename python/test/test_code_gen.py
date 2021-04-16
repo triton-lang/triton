@@ -4,6 +4,8 @@ import copy
 import pytest
 import ast
 
+torch.manual_seed(0)
+
 # convert from string to torch.dtype
 # Necessary because doesn't print torch.dtype properly
 cvt = {
@@ -17,7 +19,9 @@ cvt = {
     'float64': torch.float64,
 }
 
-dtypes = {'int8', 'int32', 'int64', 'float16', 'float32', 'float64'}
+int_dtypes = ['int8', 'int16', 'int32', 'int64']
+float_dtypes = ['float16', 'float32', 'float64']
+dtypes = int_dtypes + float_dtypes
 
 
 def patch_kernel(template, test_str):
@@ -39,7 +43,7 @@ def _test_unary(dtype_x, expr, device='cuda'):
 
     kernel = patch_kernel(kernel, expr)
     # inputs
-    x = torch.randn(SIZE, dtype=cvt[dtype_x], device=device)
+    x = triton.testing.random(SIZE, dtype=cvt[dtype_x], device=device)
     # reference result
     z_ref = eval(expr)
     # triton result
@@ -61,7 +65,6 @@ def _test_binary(dtype_x, dtype_y, expr, device='cuda'):
         triton.store(Z + off, z)
 
     kernel = patch_kernel(kernel, expr)
-    grid = lambda meta: (1, )
     # inputs
     x = triton.testing.random(SIZE, dtype=cvt[dtype_x], device=device)
     y = triton.testing.random(SIZE, dtype=cvt[dtype_y], device=device)
@@ -120,13 +123,14 @@ def test_compare_op(dtype_x, dtype_y, expr, device='cuda'):
 # ---------------
 # test unary ops
 # ---------------
-# @pytest.mark.parametrize("dtype_x, expr", [
-#     (dtype_x, f' {op}x') \
-#   for op in ['-'] \
-#   for dtype_x in ['float32']
-# ])
-# def test_unary_op(dtype_x, expr, device='cuda'):
-#     _test_unary(dtype_x, expr, device=device)
+@pytest.mark.parametrize("dtype_x, expr", [
+    (dtype_x, f' -x') for dtype_x in float_dtypes
+] + [\
+    (dtype_x, f' ~x') for dtype_x in int_dtypes
+     ])
+def test_unary_op(dtype_x, expr, device='cuda'):
+    _test_unary(dtype_x, expr, device=device)
+
 
 # ---------------
 # test load

@@ -225,6 +225,31 @@ ir::value *dispatch::shl(ir::value *input, ir::value *other, ir::builder *builde
 }
 
 //===----------------------------------------------------------------------===//
+//                               Unary Operators
+//===----------------------------------------------------------------------===//
+
+ir::value *dispatch::plus(ir::value *input, ir::builder *) {
+  return input;
+}
+
+ir::value *dispatch::minus(ir::value *input, ir::builder *builder) {
+  ir::type* input_sca_ty = input->get_type()->get_scalar_ty();
+  if(input_sca_ty->is_pointer_ty())
+    throw semantic_error("wrong type argument to unary minus (" + input_sca_ty->repr() + ")");
+  ir::value *_0 = ir::constant::get_null_value(input_sca_ty);
+  return dispatch::sub(_0, input, builder);
+}
+
+ir::value *dispatch::invert(ir::value *input, ir::builder *builder) {
+  ir::type* input_sca_ty = input->get_type()->get_scalar_ty();
+  if(input_sca_ty->is_pointer_ty() || input_sca_ty->is_floating_point_ty())
+    throw semantic_error("wrong type argument to unary invert (" + input_sca_ty->repr() + ")");
+  ir::value *_1 = ir::constant::get_all_ones_value(input_sca_ty);
+  return dispatch::xor_(input, _1, builder);
+}
+
+
+//===----------------------------------------------------------------------===//
 //                               Comparison Operators
 //===----------------------------------------------------------------------===//
 

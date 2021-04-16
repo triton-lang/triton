@@ -101,6 +101,10 @@ void init_triton_frontend(py::module &&m) {
   m.def("xor_", &ir::dispatch::xor_, ret::reference);
   m.def("lshr", &ir::dispatch::lshr, ret::reference);
   m.def("shl", &ir::dispatch::shl, ret::reference);
+  // unary
+  m.def("plus", &ir::dispatch::plus, ret::reference);
+  m.def("minus", &ir::dispatch::minus, ret::reference);
+  m.def("invert", &ir::dispatch::invert, ret::reference);
   // comparison
   m.def("greater_than", &ir::dispatch::greater_than, ret::reference);
   m.def("greater_equal", &ir::dispatch::greater_equal, ret::reference);

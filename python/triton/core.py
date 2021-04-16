@@ -77,6 +77,15 @@ class block:
     def __mod__(self, other, builder=None):
         return frontend.mod(self, other, builder)
 
+    # unary operators
+    @builtin
+    def __neg__(self, builder=None):
+        return frontend.minus(self, builder)
+
+    @builtin
+    def __invert__(self, builder=None):
+        return frontend.invert(self, builder)
+
     # bitwise operators
 
     @builtin

@@ -171,7 +171,6 @@ class CodeGenerator(ast.NodeVisitor):
         }[type(node.op)]
         kws = dict()
         if self.is_triton_object(lhs) or self.is_triton_object(rhs):
-            lhs, rhs = triton.broadcast(lhs, rhs, builder=self.builder)
             kws['builder'] = self.builder
         ret = getattr(lhs, fn)(rhs, **kws)
         if ret is NotImplemented:
@@ -235,16 +234,19 @@ class CodeGenerator(ast.NodeVisitor):
             ast.IsNot: '__ne__',
         }[type(node.ops[0])]
         if self.is_triton_object(lhs) or self.is_triton_object(rhs):
-            lhs, rhs = triton.broadcast(lhs, rhs, builder=self.builder)
             return getattr(lhs, fn)(rhs, builder=self.builder)
         return getattr(lhs, fn)(rhs)
 
     def visit_UnaryOp(self, node):
-        # Handle minus operator
-        if type(node.op) == ast.USub:
-            tmp = ast.BinOp(ast.Num(0), ast.Sub(), node.operand)
-            return ast.NodeVisitor.visit(self, tmp)
-        raise NotImplementedError(f"Unsupported op: {node.op}")
+        op = ast.NodeVisitor.visit(self, node.operand)
+        fn = {
+            ast.USub: '__neg__',
+            ast.UAdd: '__pos__',
+            ast.Invert: '__invert__',
+        }[type(node.op)]
+        if self.is_triton_object(op):
+            return getattr(op, fn)(builder=self.builder)
+        return getattr(op, fn)()
 
     def visit_While(self, node):
         current_bb = self.builder.get_insert_block()
