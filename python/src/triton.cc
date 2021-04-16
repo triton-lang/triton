@@ -94,15 +94,20 @@ void init_triton_frontend(py::module &&m) {
   m.def("add", &ir::dispatch::add, ret::reference);
   m.def("sub", &ir::dispatch::sub, ret::reference);
   m.def("mul", &ir::dispatch::mul, ret::reference);
-  m.def("div", &ir::dispatch::div, ret::reference);
+  m.def("truediv", &ir::dispatch::truediv, ret::reference);
   m.def("mod", &ir::dispatch::mod, ret::reference);
   m.def("and_", &ir::dispatch::and_, ret::reference);
+  m.def("or_", &ir::dispatch::or_, ret::reference);
+  m.def("xor_", &ir::dispatch::xor_, ret::reference);
+  m.def("lshr", &ir::dispatch::lshr, ret::reference);
+  m.def("shl", &ir::dispatch::shl, ret::reference);
   // comparison
   m.def("greater_than", &ir::dispatch::greater_than, ret::reference);
   m.def("greater_equal", &ir::dispatch::greater_equal, ret::reference);
   m.def("less_than", &ir::dispatch::less_than, ret::reference);
   m.def("less_equal", &ir::dispatch::less_equal, ret::reference);
   m.def("equal", &ir::dispatch::equal, ret::reference);
+  m.def("not_equal", &ir::dispatch::not_equal, ret::reference);
   // block creation
   m.def("arange", &ir::dispatch::arange, ret::reference);
   m.def("zeros", &ir::dispatch::zeros, ret::reference);

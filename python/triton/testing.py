@@ -74,7 +74,7 @@ def random(shape, dtype, device):
     if dtype == torch.bool:
         return torch.randint(0, 2, shape, dtype=dtype, device=device)
     if dtype in [torch.int8, torch.int16, torch.int32, torch.int64]:
-        return torch.randint(0, 128, shape, dtype=dtype, device=device)
+        return torch.randint(1, 32, shape, dtype=dtype, device=device)
     if dtype in [torch.float16, torch.float32, torch.float64]:
         return torch.randn(shape, dtype=dtype, device=device)
     raise RuntimeError(f'Unknown dtype {dtype}')

@@ -17,7 +17,7 @@ cvt = {
     'float64': torch.float64,
 }
 
-dtypes = {'float32'}
+dtypes = {'int8', 'int32', 'int64', 'float16', 'float32', 'float64'}
 
 
 def patch_kernel(template, test_str):
@@ -79,7 +79,7 @@ def _test_binary(dtype_x, dtype_y, expr, device='cuda'):
 # ---------------
 @pytest.mark.parametrize("dtype_x, dtype_y, expr", [
     (dtype_x, dtype_y, f' x {op} y') \
-  for op in ['+'] \
+  for op in ['+', '-', '*', '/', '%'] \
   for dtype_x in dtypes \
   for dtype_y in dtypes
 ])
@@ -88,11 +88,28 @@ def test_bin_op(dtype_x, dtype_y, expr, device='cuda'):
 
 
 # ---------------
+# test bitwise ops
+# ---------------
+@pytest.mark.parametrize("dtype_x, dtype_y, expr", [
+    (dtype_x, dtype_y, f' x {op} y') \
+  for op in ['&', '|', '^', '>>', '<<'] \
+  for dtype_x in dtypes \
+  for dtype_y in dtypes
+])
+def test_bitwise_op(dtype_x, dtype_y, expr, device='cuda'):
+    if 'float' in dtype_x + dtype_y:
+        with pytest.raises(RuntimeError):
+            _test_binary(dtype_x, dtype_y, expr, device=device)
+    else:
+        _test_binary(dtype_x, dtype_y, expr, device=device)
+
+
+# ---------------
 # test compare ops
 # ---------------
 @pytest.mark.parametrize("dtype_x, dtype_y, expr", [
     (dtype_x, dtype_y, f' x {op} y') \
-    for op in [ '<'] \
+    for op in ['==', '!=', '>', '<', '>=', '<='] \
     for dtype_x in dtypes \
     for dtype_y in dtypes
 ])

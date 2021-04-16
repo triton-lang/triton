@@ -14,6 +14,11 @@ namespace ir{
  semantics of most expected frontends
  ----------------------------------------------*/
 
+struct semantic_error: public std::runtime_error {
+  semantic_error(const std::string& msg):
+    std::runtime_error(msg) { }
+};
+
 struct dispatch{
   typedef ir::type::block_shapes_t shape_t;
 
@@ -26,9 +31,13 @@ struct dispatch{
   static ir::value *add(ir::value *input, ir::value *other, ir::builder *builder);
   static ir::value *sub(ir::value *input, ir::value *other, ir::builder *builder);
   static ir::value *mul(ir::value *input, ir::value *other, ir::builder *builder);
-  static ir::value *div(ir::value *input, ir::value *other, ir::builder *builder);
+  static ir::value *truediv(ir::value *input, ir::value *other, ir::builder *builder);
   static ir::value *mod(ir::value *input, ir::value *other, ir::builder *builder);
   static ir::value *and_(ir::value *input, ir::value *other, ir::builder *builder);
+  static ir::value *or_(ir::value *input, ir::value *other, ir::builder *builder);
+  static ir::value *xor_(ir::value *input, ir::value *other, ir::builder *builder);
+  static ir::value *lshr(ir::value *input, ir::value *other, ir::builder *builder);
+  static ir::value *shl(ir::value *input, ir::value *other, ir::builder *builder);
 
   // comparison operators
   static ir::value *greater_than(ir::value *input, ir::value *other, ir::builder *builder);
@@ -36,17 +45,18 @@ struct dispatch{
   static ir::value *less_than(ir::value *input, ir::value *other, ir::builder *builder);
   static ir::value *less_equal(ir::value *input, ir::value *other, ir::builder *builder);
   static ir::value *equal(ir::value *input, ir::value *other, ir::builder *builder);
+  static ir::value *not_equal(ir::value *input, ir::value *other, ir::builder *builder);
 
   // block creation
   static ir::value* arange(int start, int end, ir::builder *builder);
   static ir::value* zeros(shape_t shape, ir::type *dtype, ir::builder *builder);
 
 
-  // shape manipulation
+  // casting ops
   static ir::value *reshape(ir::value *input, shape_t shape, ir::builder *builder);
   static ir::value *broadcast(ir::value *input, shape_t shape, ir::builder *builder);
   static std::tuple<ir::value*, ir::value*> broadcast(ir::value *lhs, ir::value* rhs, ir::builder *builder);
-
+  static ir::value *cast(ir::value *input, ir::type *type, ir::builder *builder);
 
   // memory operators
   static ir::value *load(ir::value* ptr, ir::value* mask, ir::value* other, ir::builder *builder);

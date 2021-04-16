@@ -1,4 +1,5 @@
 #include "triton/ir/dispatch.h"
+#include <iostream>
 
 namespace triton{
 namespace ir{
@@ -23,28 +24,96 @@ ir::value *dispatch::num_programs(int axis, ir::builder *builder) {
 }
 
 //===----------------------------------------------------------------------===//
+//                               Implicit Casting Utilities
+//===----------------------------------------------------------------------===//
+
+ir::type *computation_type(ir::type* a_ty, ir::type* b_ty){
+  context &ctx = a_ty->get_context();
+  // 1) if one operand is double, the other is implicitly
+  //    converted to double
+  if(a_ty->is_double_ty() || b_ty->is_double_ty())
+    return type::get_double_ty(ctx);
+  // 2) if one operand is float, the other is implicitly
+  //    converted to float
+  if(a_ty->is_float_ty() || b_ty->is_float_ty())
+    return type::get_float_ty(ctx);
+  // 3 ) if one operand is half, the other is implicitly
+  //     converted to half
+  if(a_ty->is_half_ty() || b_ty->is_half_ty())
+    return type::get_half_ty(ctx);
+  if(!a_ty->is_integer_ty() || !b_ty->is_integer_ty())
+    throw_unreachable("augment_types");
+  // 4 ) both operands are integer and undergo
+  //    integer promotion
+  int a_rank = a_ty->get_integer_bitwidth();
+  int b_rank = b_ty->get_integer_bitwidth();
+  return a_rank > b_rank ? a_ty : b_ty;
+}
+
+//===----------------------------------------------------------------------===//
 //                               Binary Operators
 //===----------------------------------------------------------------------===//
 
+void throw_incompatible_types(ir::type* type_a, ir::type* type_b) {
+  throw semantic_error("invalid operands of type " + type_a->repr() + " and " + type_b->repr());
+}
+
+void check_ptr_type(ir::type* type_a, ir::type* type_b, bool allow_ptr_a){
+
+  if(type_a->is_pointer_ty()){
+    if(!allow_ptr_a)
+      throw_incompatible_types(type_a, type_b);
+    // T* + U* with T != U
+    if(type_b->is_pointer_ty() && (type_a != type_b))
+      throw_incompatible_types(type_a, type_b);
+    // T* + float
+    if(type_b->is_floating_point_ty())
+      throw_incompatible_types(type_a, type_b);
+  }
+}
+
+void binary_op_type_checking(ir::value*& lhs, ir::value*& rhs, ir::builder* builder,
+                             bool allow_lhs_ptr = false, bool allow_rhs_ptr = false,
+                             bool arithmetic_check = true){
+  // implicit broadcasting
+  std::tie(lhs, rhs) = dispatch::broadcast(lhs, rhs, builder);
+  // implicit typecasting
+  ir::type *lhs_sca_ty = lhs->get_type()->get_scalar_ty();
+  ir::type *rhs_sca_ty = rhs->get_type()->get_scalar_ty();
+  check_ptr_type(lhs_sca_ty, rhs_sca_ty, allow_lhs_ptr);
+  check_ptr_type(rhs_sca_ty, lhs_sca_ty, allow_rhs_ptr);
+  if(arithmetic_check && !lhs_sca_ty->is_pointer_ty() && !rhs_sca_ty->is_pointer_ty()){
+    ir::type *ret_sca_ty = computation_type(lhs_sca_ty, rhs_sca_ty);
+    lhs = dispatch::cast(lhs, ret_sca_ty, builder);
+    rhs = dispatch::cast(rhs, ret_sca_ty, builder);
+  }
+}
+
 ir::value *dispatch::add(ir::value *input, ir::value *other, ir::builder *builder) {
-  ir::type *scalar_ty = input->get_type()->get_scalar_ty();
+  binary_op_type_checking(input, other, builder, true, true);
+  ir::type *input_scalar_ty = input->get_type()->get_scalar_ty();
+  ir::type *other_scalar_ty = other->get_type()->get_scalar_ty();
+  // offset + ptr
   // ptr + offset
-  if (scalar_ty->is_pointer_ty())
+  if(other_scalar_ty->is_pointer_ty() && !input_scalar_ty->is_pointer_ty())
+    std::swap(input, other);
+  if (input_scalar_ty->is_pointer_ty())
     return builder->create_gep(input, {other});
   // float + float
-  else if (scalar_ty->is_floating_point_ty())
+  else if (input_scalar_ty->is_floating_point_ty())
     return builder->create_fadd(input, other);
   // int + int
-  else if (scalar_ty->is_integer_ty())
+  else if (input_scalar_ty->is_integer_ty())
     return builder->create_add(input, other);
   return throw_unreachable("add");
 }
 
 ir::value *dispatch::sub(ir::value *input, ir::value *other, ir::builder *builder) {
+  binary_op_type_checking(input, other, builder, false, false);
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
-  // ptr + offset
-  if (scalar_ty->is_pointer_ty())
-    return builder->create_gep(input, {other});
+  // ptr - offset
+//  if (scalar_ty->is_pointer_ty())
+//    return builder->create_gep(input, {other});
   // float + float
   if (scalar_ty->is_floating_point_ty())
     return builder->create_fsub(input, other);
@@ -55,6 +124,7 @@ ir::value *dispatch::sub(ir::value *input, ir::value *other, ir::builder *builde
 }
 
 ir::value *dispatch::mul(ir::value *input, ir::value *other, ir::builder *builder) {
+  binary_op_type_checking(input, other, builder);
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
   // float * float
   if (scalar_ty->is_floating_point_ty())
@@ -65,18 +135,36 @@ ir::value *dispatch::mul(ir::value *input, ir::value *other, ir::builder *builde
   return throw_unreachable("mul");
 }
 
-ir::value *dispatch::div(ir::value *input, ir::value *other, ir::builder *builder) {
-  ir::type *scalar_ty = input->get_type()->get_scalar_ty();
-  // float / float
-  if (scalar_ty->is_floating_point_ty())
-    return builder->create_fdiv(input, other);
-  // int / int
-  else if (scalar_ty->is_integer_ty())
-    return builder->create_sdiv(input, other);
-  return throw_unreachable("div");
+ir::value *dispatch::truediv(ir::value *input, ir::value *other, ir::builder *builder) {
+  binary_op_type_checking(input, other, builder, false, false, false);
+  ir::type *input_scalar_ty = input->get_type()->get_scalar_ty();
+  ir::type *other_scalar_ty = other->get_type()->get_scalar_ty();
+  // float / int
+  if(input_scalar_ty->is_floating_point_ty() && other_scalar_ty->is_integer_ty())
+    other = cast(other, input_scalar_ty, builder);
+  // int / float
+  else if(input_scalar_ty->is_integer_ty() && other_scalar_ty->is_floating_point_ty())
+    input = cast(input, other_scalar_ty, builder);
+  // int / int (cast to float32)
+  else if(input_scalar_ty->is_integer_ty() && other_scalar_ty->is_integer_ty()){
+    input = cast(input, builder->get_float_ty(), builder);
+    other = cast(other, builder->get_float_ty(), builder);
+  }
+  // float / float (cast to highest exponent type)
+  else if(input_scalar_ty->is_floating_point_ty() && other_scalar_ty->is_floating_point_ty()){
+    if(input_scalar_ty->get_fp_mantissa_width() > other_scalar_ty->get_fp_mantissa_width())
+      other = cast(other, input_scalar_ty, builder);
+    else
+      input = cast(input, other_scalar_ty, builder);
+  }
+  // unreachable
+  else
+    return throw_unreachable("div");
+  return builder->create_fdiv(input, other);
 }
 
 ir::value *dispatch::mod(ir::value *input, ir::value *other, ir::builder *builder) {
+  binary_op_type_checking(input, other, builder);
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
   // float % int
   if (scalar_ty->is_floating_point_ty())
@@ -87,16 +175,61 @@ ir::value *dispatch::mod(ir::value *input, ir::value *other, ir::builder *builde
   return throw_unreachable("mod");
 }
 
+
+void bitwise_op_type_checking(ir::value *&input, ir::value *&other, ir::builder *builder, bool force_lhs_type = false){
+  binary_op_type_checking(input, other, builder, false, false, false);
+  ir::type *input_sca_ty = input->get_type()->get_scalar_ty();
+  ir::type *other_sca_ty = other->get_type()->get_scalar_ty();
+  if(!input_sca_ty->is_integer_ty() || !other_sca_ty->is_integer_ty())
+    throw_incompatible_types(input_sca_ty, other_sca_ty);
+  // for some reason pytorch assigns the result of binary op to have the type of the lhs...
+  if(force_lhs_type){
+    if(input_sca_ty->get_integer_bitwidth() != other_sca_ty->get_integer_bitwidth())
+      other = dispatch::cast(other, input_sca_ty, builder);
+  }
+  else{
+    if(input_sca_ty->get_integer_bitwidth() < other_sca_ty->get_integer_bitwidth())
+      input = dispatch::cast(input, other_sca_ty, builder);
+    else if(other_sca_ty->get_integer_bitwidth() < input_sca_ty->get_integer_bitwidth())
+      other = dispatch::cast(other, input_sca_ty, builder);
+  }
+
+}
+
 ir::value *dispatch::and_(ir::value *input, ir::value *other, ir::builder *builder) {
+  bitwise_op_type_checking(input, other, builder, true);
   return builder->create_and(input, other);
 }
 
+ir::value *dispatch::or_(ir::value *input, ir::value *other, ir::builder *builder) {
+  bitwise_op_type_checking(input, other, builder, true);
+  return builder->create_or(input, other);
+}
+
+
+ir::value *dispatch::xor_(ir::value *input, ir::value *other, ir::builder *builder) {
+  bitwise_op_type_checking(input, other, builder, true);
+  return builder->create_xor(input, other);
+}
+
+
+ir::value *dispatch::lshr(ir::value *input, ir::value *other, ir::builder *builder) {
+  bitwise_op_type_checking(input, other, builder, false);
+  return builder->create_lshr(input, other);
+}
+
+
+ir::value *dispatch::shl(ir::value *input, ir::value *other, ir::builder *builder) {
+  bitwise_op_type_checking(input, other, builder, false);
+  return builder->create_shl(input, other);
+}
 
 //===----------------------------------------------------------------------===//
 //                               Comparison Operators
 //===----------------------------------------------------------------------===//
 
 ir::value *dispatch::greater_than(ir::value *input, ir::value *other, ir::builder *builder) {
+  binary_op_type_checking(input, other, builder);
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
   // float > float
   if (scalar_ty->is_floating_point_ty())
@@ -108,6 +241,7 @@ ir::value *dispatch::greater_than(ir::value *input, ir::value *other, ir::builde
 }
 
 ir::value *dispatch::greater_equal(ir::value *input, ir::value *other, ir::builder *builder) {
+  binary_op_type_checking(input, other, builder);
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
   // float >= float
   if (scalar_ty->is_floating_point_ty())
@@ -119,6 +253,7 @@ ir::value *dispatch::greater_equal(ir::value *input, ir::value *other, ir::build
 }
 
 ir::value *dispatch::less_than(ir::value *input, ir::value *other, ir::builder *builder) {
+  binary_op_type_checking(input, other, builder);
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
   // float < float
   if (scalar_ty->is_floating_point_ty())
@@ -130,6 +265,7 @@ ir::value *dispatch::less_than(ir::value *input, ir::value *other, ir::builder *
 }
 
 ir::value *dispatch::less_equal(ir::value *input, ir::value *other, ir::builder *builder) {
+  binary_op_type_checking(input, other, builder);
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
   // float < float
   if (scalar_ty->is_floating_point_ty())
@@ -141,6 +277,7 @@ ir::value *dispatch::less_equal(ir::value *input, ir::value *other, ir::builder 
 }
 
 ir::value *dispatch::equal(ir::value *input, ir::value *other, ir::builder *builder) {
+  binary_op_type_checking(input, other, builder);
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
   // float == float
   if (scalar_ty->is_floating_point_ty())
@@ -148,6 +285,18 @@ ir::value *dispatch::equal(ir::value *input, ir::value *other, ir::builder *buil
   // int == int
   else if (scalar_ty->is_integer_ty())
     return builder->create_icmpEQ(input, other);
+  return throw_unreachable("equal");
+}
+
+ir::value *dispatch::not_equal(ir::value *input, ir::value *other, ir::builder *builder) {
+  binary_op_type_checking(input, other, builder);
+  ir::type *scalar_ty = input->get_type()->get_scalar_ty();
+  // float == float
+  if (scalar_ty->is_floating_point_ty())
+    return builder->create_fcmpONE(input, other);
+  // int == int
+  else if (scalar_ty->is_integer_ty())
+    return builder->create_icmpNE(input, other);
   return throw_unreachable("equal");
 }
 
@@ -219,6 +368,51 @@ std::tuple<ir::value*, ir::value*> dispatch::broadcast(ir::value *lhs, ir::value
   return std::make_tuple(lhs, rhs);
 }
 
+ir::value *dispatch::cast(ir::value *input, ir::type *dst_ty, ir::builder *builder) {
+  ir::type *src_ty = input->get_type();
+  if (src_ty->is_block_ty())
+    dst_ty = ir::block_type::get(dst_ty, input->get_type()->get_block_shapes());
+  if(src_ty == dst_ty)
+    return input;
+  ir::type *src_sca_ty = src_ty->get_scalar_ty();
+  ir::type *dst_sca_ty = dst_ty->get_scalar_ty();
+  // FP Truncation
+  bool truncate_fp = src_sca_ty->is_floating_point_ty() &&
+                     dst_sca_ty->is_floating_point_ty() &&
+                     src_sca_ty->get_fp_mantissa_width() > dst_sca_ty->get_fp_mantissa_width();
+  if (truncate_fp)
+    return builder->create_fp_trunc(input, dst_ty);
+  // FP Extension
+  bool ext_fp = src_sca_ty->is_floating_point_ty() &&
+                dst_sca_ty->is_floating_point_ty() &&
+                src_sca_ty->get_fp_mantissa_width() < dst_sca_ty->get_fp_mantissa_width();
+  if (ext_fp)
+    return builder->create_fp_ext(input, dst_ty);
+  // Int cast
+  if (src_sca_ty->is_integer_ty() && dst_sca_ty->is_integer_ty() &&
+      src_sca_ty->get_integer_bitwidth() != dst_sca_ty->get_integer_bitwidth())
+    return builder->create_int_cast(input, dst_ty, true);
+  // Float -> Int
+  if (src_sca_ty->is_floating_point_ty() && dst_sca_ty->is_integer_ty())
+    return builder->create_fp_to_si(input, dst_ty);
+  // int -> Float
+  if (src_sca_ty->is_integer_ty() && dst_sca_ty->is_floating_point_ty())
+    return builder->create_si_to_fp(input, dst_ty);
+  // Ptr -> Ptr
+  if (src_sca_ty->is_pointer_ty() && dst_sca_ty->is_pointer_ty())
+    return builder->create_cast(ir::BitCast, input, dst_ty);
+  // * -> Bool
+  if (dst_sca_ty->is_bool_ty()) {
+    if (src_sca_ty->is_pointer_ty())
+      input = cast(input, builder->get_int64_ty(), builder);
+    ir::value *other = builder->get_int64(0);
+    if (src_ty->is_bool_ty())
+      other = builder->create_splat(other, src_ty->get_block_shapes());
+    return builder->create_icmpNE(input, other);
+  }
+  return throw_unreachable("cast");
+}
+
 //===----------------------------------------------------------------------===//
 //                               Memory Operators
 //===----------------------------------------------------------------------===//
@@ -236,8 +430,16 @@ ir::value *dispatch::load(ir::value* ptr, ir::value* mask, ir::value* other, ir:
 }
 
 ir::value *dispatch::store(ir::value* ptr, ir::value *val, ir::value* mask, ir::builder *builder) {
+  ir::type *ptr_ty = ptr->get_type();
+  ir::type *val_ty = val->get_type();
+  if(ptr_ty->get_scalar_ty()->get_pointer_element_ty() !=
+     val_ty->get_scalar_ty())
+    throw semantic_error("Cannot store " + val_ty->repr() + " into " + ptr_ty->repr() + "." +
+                         "Please convert data explicitly before storing.");
   if (!mask)
     return builder->create_store(ptr, val);
+  if(!mask->get_type()->get_scalar_ty()->is_bool_ty())
+    throw semantic_error("Mask must have boolean scalar type");
   return builder->create_masked_store(ptr, val, mask);
 }
 

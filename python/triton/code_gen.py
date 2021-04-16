@@ -29,12 +29,7 @@ class CodeGenerator(ast.NodeVisitor):
         if isinstance(ret, triton.block):
             handle = self.module.get_value(name)
             return triton.block(handle)
-        elif isinstance(ret, int):
-            return self.builder.get_int32(ret)
-        elif isinstance(ret, float):
-            return self.builder.get_float32(ret)
-        else:
-            return ret
+        return ret
 
     def set_value(self, name, value):
         if isinstance(value, _triton.ir.value):
@@ -90,7 +85,7 @@ class CodeGenerator(ast.NodeVisitor):
             arg_values = []
             for i, arg_name in enumerate(arg_names):
                 if i in self.constants:
-                    arg_values.append(self.builder.get_int32(self.constants[i]))
+                    arg_values.append(self.constants[i])
                 else:
                     if i in self.attributes:
                         is_ptr = fn.args[i].type.is_ptr()
@@ -176,8 +171,6 @@ class CodeGenerator(ast.NodeVisitor):
         }[type(node.op)]
         kws = dict()
         if self.is_triton_object(lhs) or self.is_triton_object(rhs):
-            lhs = self._convert(lhs)
-            rhs = self._convert(rhs)
             lhs, rhs = triton.broadcast(lhs, rhs, builder=self.builder)
             kws['builder'] = self.builder
         ret = getattr(lhs, fn)(rhs, **kws)
@@ -242,8 +235,6 @@ class CodeGenerator(ast.NodeVisitor):
             ast.IsNot: '__ne__',
         }[type(node.ops[0])]
         if self.is_triton_object(lhs) or self.is_triton_object(rhs):
-            lhs = self._convert(lhs)
-            rhs = self._convert(rhs)
             lhs, rhs = triton.broadcast(lhs, rhs, builder=self.builder)
             return getattr(lhs, fn)(rhs, builder=self.builder)
         return getattr(lhs, fn)(rhs)
@@ -348,13 +339,6 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_keyword(self, node):
         return {node.arg: ast.NodeVisitor.visit(self, node.value)}
 
-    def _convert(self, x):
-        if isinstance(x, int):
-            return self.builder.get_int32(x)
-        elif isinstance(x, float):
-            return self.builder.get_float32(x)
-        return x
-
     def visit_Call(self, node):
         fn = ast.NodeVisitor.visit(self, node.func)
         kws = dict()
@@ -364,9 +348,7 @@ class CodeGenerator(ast.NodeVisitor):
         if isinstance(fn, JITFunction):
             return fn(*args, generator=self, **kws)
         if hasattr(fn, '__self__') and self.is_triton_object(fn.__self__) or \
-           sys.modules[fn.__module__] is _triton.frontend:
-            args = [self._convert(x) for x in args]
-            kws = {n: self._convert(v) for n, v in kws.items()}
+            sys.modules[fn.__module__] is triton.core:
             return fn(*args, builder=self.builder, **kws)
         return fn(*args, **kws)
 

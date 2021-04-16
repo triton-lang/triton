@@ -1,20 +1,26 @@
+from triton._C.libtriton.triton import ir
 from triton._C.libtriton.triton import frontend
 import triton
+from functools import wraps
 
 
 def _patch(fn):
 
     # convert block/dtype to ir values
-    def _convert(x):
+    def _to_ir(x):
         forward_handle = isinstance(x, (dtype, block))
         return x.handle if forward_handle else x
 
+    def _from_ir(x):
+        return block(x) if isinstance(x, ir.value) else x
+
     def wrapper(*args, **kwargs):
-        args = [_convert(x) for x in args]
+        args = [_to_ir(x) for x in args]
         kwargs = {k: _convert(v) for k, v in kwargs.items()}
         ret = fn(*args, **kwargs)
-        if isinstance(ret, ir.value):
-            return block(ret)
+        if isinstance(ret, tuple):
+            return map(_from_ir, ret)
+        return ret
 
     return wrapper
 
@@ -22,7 +28,23 @@ def _patch(fn):
 for name in dir(frontend):
     fn = getattr(frontend, name)
     if callable(fn):
-        setattr(triton, name, _patch(fn))
+        setattr(frontend, name, _patch(fn))
+
+
+def builtin(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if 'builder' not in kwargs or \
+           kwargs['builder'] is None:
+            raise ValueError("Builder argument must be provided outside of JIT functions")
+        return fn(*args, **kwargs)
+
+    if wrapper.__doc__:
+        wrapper.__doc__ += """\
+:param builder: IR builder to generate code into, optional from within @triton.jit functions
+    :type builder: triton.ir.builder
+"""
+    return wrapper
 
 
 class dtype:
@@ -35,40 +57,81 @@ class block:
         self.handle = handle
         self.type = handle.type
 
+    @builtin
     def __add__(self, other, builder=None):
         return frontend.add(self, other, builder)
 
+    @builtin
     def __sub__(self, other, builder=None):
         return frontend.sub(self, other, builder)
 
+    @builtin
     def __mul__(self, other, builder=None):
         return frontend.mul(self, other, builder)
 
+    @builtin
     def __truediv__(self, other, builder=None):
-        return frontend.div(self, other, builder)
+        return frontend.truediv(self, other, builder)
 
+    @builtin
     def __mod__(self, other, builder=None):
         return frontend.mod(self, other, builder)
 
+    # bitwise operators
+
+    @builtin
     def __and__(self, other, builder=None):
         return frontend.and_(self, other, builder)
 
+    @builtin
+    def __or__(self, other, builder=None):
+        return frontend.or_(self, other, builder)
+
+    @builtin
+    def __xor__(self, other, builder=None):
+        return frontend.xor_(self, other, builder)
+
+    @builtin
+    def __lshift__(self, other, builder=None):
+        return frontend.shl(self, other, builder)
+
+    @builtin
+    def __rshift__(self, other, builder=None):
+        return frontend.lshr(self, other, builder)
+
+    # comparison operators
+
+    @builtin
     def __gt__(self, other, builder=None):
         return frontend.greater_than(self, other, builder)
 
+    @builtin
     def __ge__(self, other, builder=None):
         return frontend.greater_equal(self, other, builder)
 
+    @builtin
     def __lt__(self, other, builder=None):
         return frontend.less_than(self, other, builder)
 
+    @builtin
     def __le__(self, other, builder=None):
         return frontend.less_equal(self, other, builder)
 
+    @builtin
     def __eq__(self, other, builder=None):
         return frontend.equal(self, other, builder)
 
-    def __getitem__(self, index, builder=None):
+    @builtin
+    def __ne__(self, other, builder=None):
+        return frontend.not_equal(self, other, builder)
+
+    @builtin
+    def __getitem__(self, slices, builder=None):
+        print(slices)
+        assert False
+
+    @builtin
+    def to(self, dtype, builder=None):
         assert False
 
 
@@ -77,6 +140,7 @@ class block:
 # -----------------------
 
 
+@builtin
 def program_id(axis, builder=None):
     """
     Returns the id of the current program instance along the given `axis`.
@@ -88,6 +152,7 @@ def program_id(axis, builder=None):
     return frontend.program_id(axis, builder)
 
 
+@builtin
 def num_programs(axis, builder=None):
     """
     Returns the number of program instances launched along the given `axis`.
@@ -103,6 +168,7 @@ def num_programs(axis, builder=None):
 # -----------------------
 
 
+@builtin
 def arange(start, end, builder=None):
     """
     Returns contiguous values within the open interval [start, end).
@@ -115,6 +181,7 @@ def arange(start, end, builder=None):
     return frontend.arange(start, end, builder)
 
 
+@builtin
 def zeros(shape, dtype, builder=None):
     """
     Returns a block filled with the scalar value 0 and the given shape.
@@ -132,6 +199,7 @@ def zeros(shape, dtype, builder=None):
 # -----------------------
 
 
+@builtin
 def broadcast(input, other, builder=None):
     """
     Tries to broadcast two blocks to a common compatible shape.
@@ -144,6 +212,7 @@ def broadcast(input, other, builder=None):
     return frontend.broadcast(input, other, builder)
 
 
+@builtin
 def broadcast_to(input, shape, builder=None):
     """
     Tries to broadcast a block to a new shape.
@@ -161,6 +230,7 @@ def broadcast_to(input, shape, builder=None):
 # -----------------------
 
 
+@builtin
 def dot(input, other, builder=None):
     """
     Returns the matrix product of two blocks.
@@ -179,7 +249,8 @@ def dot(input, other, builder=None):
 # -----------------------
 
 
-def load(pointer, mask, other, builder=None):
+@builtin
+def load(pointer, mask=None, other=None, builder=None):
     """
     Return a block of data whose values are, elementwise, loaded from memory at location defined by `pointer`.
 
@@ -193,7 +264,8 @@ def load(pointer, mask, other, builder=None):
     return frontend.load(pointer, mask, other, builder)
 
 
-def store(pointer, value, mask, builder=None):
+@builtin
+def store(pointer, value, mask=None, builder=None):
     """
     Stores `value` block of elements in memory, element-wise, at the memory locations specified by `pointer`. 
 
@@ -207,10 +279,12 @@ def store(pointer, value, mask, builder=None):
     return frontend.store(pointer, value, mask, builder)
 
 
+@builtin
 def atomic_cas(ptr, cmp, val, builder=None):
     return frontend.atomic_cas(ptr, cmp, val, builder)
 
 
+@builtin
 def atomic_xchg(ptr, val, builder=None):
     return frontend.atomic_xchg(ptr, val, builder)
 
@@ -220,6 +294,7 @@ def atomic_xchg(ptr, val, builder=None):
 # -----------------------
 
 
+@builtin
 def where(condition, x, y, builder=None):
     """
     Returns a block of elements from either `x` or `y`, depending on `condition`.
@@ -239,10 +314,12 @@ def where(condition, x, y, builder=None):
 # -----------------------
 
 
+@builtin
 def exp(x, builder=None):
     return frontend.exp(x, builder)
 
 
+@builtin
 def log(x, builder=None):
     return frontend.log(x, builder)
 
@@ -252,14 +329,17 @@ def log(x, builder=None):
 # -----------------------
 
 
+@builtin
 def max(input, axis, builder=None):
     return frontend.max(input, axis, builder)
 
 
+@builtin
 def min(input, axis, builder=None):
     return frontend.min(input, axis, builder)
 
 
+@builtin
 def sum(input, axis, builder=None):
     return frontend.sum(input, axis, builder)
 
@@ -269,6 +349,7 @@ def sum(input, axis, builder=None):
 # -----------------------
 
 
+@builtin
 def debug_barrier(builder=None):
     return frontend.debug_barrier(builder)
 

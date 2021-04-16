@@ -42,8 +42,8 @@ unsigned type::get_tile_bitwidth() const
 unsigned type::get_fp_mantissa_width() const {
   id_t id = get_scalar_ty()->id_;
   assert(is_floating_point_ty() && "Not a floating point type!");
-  if (id == HalfTyID) return 11;
-  if (id == FloatTyID) return 24;
+  if (id == HalfTyID) return 10;
+  if (id == FloatTyID) return 23;
   if (id == DoubleTyID) return 53;
   throw std::runtime_error("unreachable");
 }
@@ -199,7 +199,7 @@ block_type* block_type::get(type *elt_ty, const block_shapes_t &shapes) {
   assert(is_valid_elt_ty(elt_ty) && "Invalid type for tile element!");
   // look-up
   context_impl *impl = elt_ty->get_context().p_impl.get();
-  block_type *&entry = impl->tile_tys[std::make_pair(elt_ty, shapes)];
+  block_type *&entry = impl->block_tys[std::make_pair(elt_ty, shapes)];
   if(!entry)
     entry = new block_type(elt_ty, shapes);
   return entry;
