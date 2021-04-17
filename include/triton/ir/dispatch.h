@@ -84,6 +84,9 @@ struct dispatch{
   static ir::value *exp(ir::value *x, ir::builder *builder);
   static ir::value *log(ir::value *x, ir::builder *builder);
   static ir::value *sqrt(ir::value *x, ir::builder *builder);
+
+  // internal (debug only)
+  static ir::value *debug_barrier(ir::builder *builder);
 };
 
 }

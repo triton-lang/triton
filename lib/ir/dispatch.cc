@@ -422,11 +422,19 @@ ir::value *dispatch::cast(ir::value *input, ir::type *dst_ty, ir::builder *build
       src_sca_ty->get_integer_bitwidth() != dst_sca_ty->get_integer_bitwidth())
     return builder->create_int_cast(input, dst_ty, true);
   // Float -> Int
-  if (src_sca_ty->is_floating_point_ty() && dst_sca_ty->is_integer_ty())
-    return builder->create_fp_to_si(input, dst_ty);
+  if (src_sca_ty->is_floating_point_ty() && dst_sca_ty->is_integer_ty()){
+    if(dst_sca_ty->is_bool_ty())
+      return builder->create_fp_to_ui(input, dst_ty);
+    else
+      return builder->create_fp_to_si(input, dst_ty);
+  }
   // int -> Float
-  if (src_sca_ty->is_integer_ty() && dst_sca_ty->is_floating_point_ty())
-    return builder->create_si_to_fp(input, dst_ty);
+  if (src_sca_ty->is_integer_ty() && dst_sca_ty->is_floating_point_ty()){
+    if(src_sca_ty->is_bool_ty())
+      return builder->create_ui_to_fp(input, dst_ty);
+    else
+      return builder->create_si_to_fp(input, dst_ty);
+  }
   // Ptr -> Ptr
   if (src_sca_ty->is_pointer_ty() && dst_sca_ty->is_pointer_ty())
     return builder->create_cast(ir::BitCast, input, dst_ty);
@@ -447,19 +455,32 @@ ir::value *dispatch::cast(ir::value *input, ir::type *dst_ty, ir::builder *build
 //===----------------------------------------------------------------------===//
 
 ir::value *dispatch::load(ir::value* ptr, ir::value* mask, ir::value* other, ir::builder* builder) {
+  if(ptr->get_type()->is_block_ty()){
+    if(mask){
+      mask = dispatch::broadcast(mask, ptr->get_type()->get_block_shapes(), builder);
+    }
+    if(other){
+      other = dispatch::broadcast(other, ptr->get_type()->get_block_shapes(), builder);
+      other = dispatch::cast(other, ptr->get_type()->get_scalar_ty()->get_pointer_element_ty(), builder);
+    }
+  }
   if (!mask && !other)
     return builder->create_load(ptr);
   if (!mask)
     throw std::runtime_error("`other` cannot be provided without `mask`");
   ir::type *elt_ty = ptr->get_type()->get_scalar_ty()->get_pointer_element_ty();
   auto shape = ptr->get_type()->get_block_shapes();
-  if(!other)
+  if(!other){
     other = ir::undef_value::get(elt_ty);
+    if(ptr->get_type()->is_block_ty())
+      other = builder->create_splat(other, ptr->get_type()->get_block_shapes());
+  }
   return builder->create_masked_load(ptr, mask, other);
 }
 
 ir::value *dispatch::store(ir::value* ptr, ir::value *val, ir::value* mask, ir::builder *builder) {
-  val = dispatch::broadcast(val, ptr->get_type()->get_block_shapes(), builder);
+  if(ptr->get_type()->is_block_ty())
+    val = dispatch::broadcast(val, ptr->get_type()->get_block_shapes(), builder);
   if(mask)
     mask = dispatch::broadcast(mask, ptr->get_type()->get_block_shapes(), builder);
   ir::type *ptr_ty = ptr->get_type();
@@ -468,8 +489,9 @@ ir::value *dispatch::store(ir::value* ptr, ir::value *val, ir::value* mask, ir::
      val_ty->get_scalar_ty())
     throw semantic_error("Cannot store " + val_ty->repr() + " into " + ptr_ty->repr() + "." +
                          "Please convert data explicitly before storing.");
-  if (!mask)
+  if (!mask){
     return builder->create_store(ptr, val);
+  }
   if(!mask->get_type()->get_scalar_ty()->is_bool_ty())
     throw semantic_error("Mask must have boolean scalar type");
   return builder->create_masked_store(ptr, val, mask);
@@ -545,6 +567,13 @@ ir::value *dispatch::log(ir::value *x, ir::builder *builder) {
 
 ir::value *dispatch::sqrt(ir::value *x, ir::builder *builder) {
   return builder->create_sqrt(x);
+}
+
+
+//
+
+ir::value *dispatch::debug_barrier(ir::builder *builder) {
+  return builder->create_barrier();
 }
 
 

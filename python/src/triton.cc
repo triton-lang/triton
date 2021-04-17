@@ -115,12 +115,13 @@ void init_triton_frontend(py::module &&m) {
   // block creation
   m.def("arange", &ir::dispatch::arange, ret::reference);
   m.def("zeros", &ir::dispatch::zeros, ret::reference);
-  // shape manipuatation
+  // type manipuatation
   m.def("reshape", &ir::dispatch::reshape, ret::reference);
   typedef std::tuple<ir::value *, ir::value *> (*broadcast_ty)(ir::value *, ir::value *, ir::builder *);
   typedef ir::value *(*broadcast_to_ty)(ir::value *, ir::type::block_shapes_t, ir::builder *);
   m.def("broadcast", (broadcast_ty)(&ir::dispatch::broadcast), ret::reference);
   m.def("broadcast_to", (broadcast_to_ty)(&ir::dispatch::broadcast), ret::reference);
+  m.def("cast", &ir::dispatch::cast, ret::reference);
   // memory
   m.def("load", &ir::dispatch::load, ret::reference);
   m.def("store", &ir::dispatch::store, ret::reference);
@@ -138,6 +139,8 @@ void init_triton_frontend(py::module &&m) {
   m.def("exp", &ir::dispatch::exp, ret::reference);
   m.def("log", &ir::dispatch::log, ret::reference);
   m.def("sqrt", &ir::dispatch::sqrt, ret::reference);
+  // internal (debugging only)
+  m.def("debug_barrier", &ir::dispatch::debug_barrier, ret::reference);
 }
 
 /*****************************************************************************/

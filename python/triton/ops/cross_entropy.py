@@ -14,10 +14,15 @@ def next_power_of_2(n):
     return n
 
 
-def num_warps(n):
-    return 4
+def num_warps(N):
+    if N < 2048:
+        return 4
+    elif N < 8192:
+        return 8
+    return 16
 
 
+@triton.heuristics({'num_warps': lambda *args, **meta: num_warps(args[4])})
 @triton.heuristics({'BLOCK': lambda *args, **meta: next_power_of_2(args[4])})
 @triton.jit
 def _forward(LOGITS, PROBS, IDX, LOSS, N, **meta):
@@ -32,7 +37,9 @@ def _forward(LOGITS, PROBS, IDX, LOSS, N, **meta):
     # write-back negative log-probs
     logits = triton.load(LOGITS, mask=cols < N, other=-float('inf'))
     logits = logits.to(triton.float32)
-    probs = triton.log(triton.softmax(logits))
+    logits = logits - triton.max(logits, 0)
+    probs = triton.log(triton.sum(triton.exp(logits), 0)) - logits
+    probs = probs.to(triton.float16)
     triton.store(WRIT_PROBS, probs, mask=cols < N)
     # There is a bug in the compiler, which fails to insert a barrier here.
     # We add it explicitly for now. Will be fixed soon.
@@ -42,23 +49,25 @@ def _forward(LOGITS, PROBS, IDX, LOSS, N, **meta):
     triton.store(LOSS + row, probs)
 
 
-@triton.heuristics({'BLOCK': lambda *args, **meta: next_power_of_2(args[4])})
+@triton.heuristics({'num_warps': lambda *args, **meta: num_warps(args[3])})
+@triton.heuristics({'BLOCK': lambda *args, **meta: next_power_of_2(args[3])})
 @triton.jit
-def _backward(PROBS, INDICES, DPROBS, N, **meta):
+def _backward(PROBS, IDX, DPROBS, N, **meta):
     BLOCK = meta['BLOCK']
     row = triton.program_id(0)
     cols = triton.arange(0, BLOCK)
-    idx = triton.oad(IDX + row)
+    idx = triton.load(IDX + row)
     # pointers to probs
     PROBS = PROBS + row * N + cols
     # We know d(-log(p[i])/dlogit[k] = -id_mat[i,k] + p[k]
     # and we have -log(p[k]) stored in PROBS, so this is easy
-    probs = triton.exp(triton.load(PROBS, mask=cols < N))
-    delta = triton.arange(BLOCK) == idx
-    dout = triton.load(DPROBS + row)
+    probs = -triton.load(PROBS, mask=cols < N, other=float('inf'))
+    probs = triton.exp(probs.to(triton.float32))
+    delta = cols == idx
     # write result in-place in PROBS
+    dout = triton.load(DPROBS + row)
     din = (probs - delta) * dout
-    triton.store(PROBS, din, mask=cols < N)
+    triton.store(PROBS, din.to(triton.float16), mask=cols < N)
 
 
 class _cross_entropy(torch.autograd.Function):
@@ -73,7 +82,7 @@ class _cross_entropy(torch.autograd.Function):
         result = torch.empty_like(indices, dtype=dtype, device=device)
         neg_logprobs = torch.empty_like(logits, dtype=dtype, device=device)
         grid = lambda opt: (logits.numel() // n_cols, )
-        _forward[grid](logits, neg_logprobs, indices, result, n_cols, num_warps=4)
+        _forward[grid](logits, neg_logprobs, indices, result, n_cols)
         # save for backward
         ctx.save_for_backward(neg_logprobs, indices)
         return result
@@ -92,7 +101,7 @@ class _cross_entropy(torch.autograd.Function):
         n_cols = neg_logprobs.shape[-1]
         # run the kernel
         # neg_logprobs will be modified in place to become our gradient:
-        grid = lambda opt: (logits.numel() // n_cols, )
+        grid = lambda opt: (neg_logprobs.numel() // n_cols, )
         _backward[grid](neg_logprobs, indices, dneg_logprobs, n_cols)
         return neg_logprobs, None
 

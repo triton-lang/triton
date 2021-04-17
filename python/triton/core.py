@@ -54,8 +54,16 @@ def builtin(fn):
 
 
 class dtype:
-    def __init__(self, handle):
-        self.handle = handle
+    def __init__(self, init):
+        self.init = init
+
+    def convert(self, x, builder):
+        handle = self.init(builder.context)
+        return frontend.cast(x, handle, builder)
+
+
+float16 = dtype(ir.type.get_fp16)
+float32 = dtype(ir.type.get_fp32)
 
 
 class block:
@@ -158,7 +166,7 @@ class block:
 
     @builtin
     def to(self, dtype, builder=None):
-        assert False
+        return dtype.convert(self, builder)
 
 
 # -----------------------
