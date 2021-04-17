@@ -541,6 +541,10 @@ ir::value *dispatch::dot(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
 
 ir::value *dispatch::where(ir::value* condition, ir::value *x, ir::value *y, ir::builder *builder){
   condition = dispatch::cast(condition, builder->get_int1_ty(), builder);
+  x = dispatch::broadcast(x, condition->get_type()->get_block_shapes(), builder);
+  y = dispatch::broadcast(y, condition->get_type()->get_block_shapes(), builder);
+  if(x->get_type()->get_scalar_ty() != y->get_type()->get_scalar_ty())
+    throw_incompatible_types(x->get_type()->get_scalar_ty(), y->get_type()->get_scalar_ty());
   return builder->create_select(condition, x, y);
 }
 
