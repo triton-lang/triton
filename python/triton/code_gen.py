@@ -164,7 +164,6 @@ class CodeGenerator(ast.NodeVisitor):
             ast.Add: '__add__',
             ast.Sub: '__sub__',
             ast.Mult: '__mul__',
-            ast.MatMult: '__mul__',
             ast.Div: '__truediv__',
             ast.FloorDiv: '__floordiv__',
             ast.Mod: '__mod__',
@@ -176,10 +175,13 @@ class CodeGenerator(ast.NodeVisitor):
             ast.BitXor: '__xor__',
         }[type(node.op)]
         kws = dict()
-        if self.is_triton_object(lhs) or self.is_triton_object(rhs):
+
+        if self.is_triton_object(lhs):
             kws['builder'] = self.builder
         ret = getattr(lhs, fn)(rhs, **kws)
         if ret is NotImplemented:
+            if self.is_triton_object(rhs):
+                kws['builder'] = self.builder
             fn = fn[:2] + 'r' + fn[2:]
             ret = getattr(rhs, fn)(lhs, **kws)
         return ret
@@ -194,9 +196,9 @@ class CodeGenerator(ast.NodeVisitor):
             self.module.seal_block(then_bb)
             if else_bb:
                 self.module.seal_block(else_bb)
-                self.builder.cond_br(cond, then_bb, else_bb)
+                self.builder.cond_br(cond.handle, then_bb, else_bb)
             else:
-                self.builder.cond_br(cond, then_bb, endif_bb)
+                self.builder.cond_br(cond.handle, then_bb, endif_bb)
             self.builder.set_insert_block(then_bb)
             self.visit_compound_statement(node.body, add_scope=True)
             # TODO: last statement is a terminator?
@@ -261,7 +263,7 @@ class CodeGenerator(ast.NodeVisitor):
 
         def continue_fn():
             cond = ast.NodeVisitor.visit(self, node.test)
-            return self.builder.cond_br(cond, loop_bb, next_bb)
+            return self.builder.cond_br(cond.handle, loop_bb, next_bb)
 
         continue_fn()
         self.builder.set_insert_block(loop_bb)
@@ -314,11 +316,11 @@ class CodeGenerator(ast.NodeVisitor):
         def continue_fn():
             ast.NodeVisitor.visit(self, step_node)
             cond = build_cond()
-            return self.builder.cond_br(cond, loop_bb, next_bb)
+            return self.builder.cond_br(cond.handle, loop_bb, next_bb)
 
         ast.NodeVisitor.visit(self, init_node)
         cond = build_cond()
-        self.builder.cond_br(cond, loop_bb, next_bb)
+        self.builder.cond_br(cond.handle, loop_bb, next_bb)
         self.builder.set_insert_block(loop_bb)
         self.visit_compound_statement(node.body, add_scope=True)
         # TODO: handle case where body breaks control flow

@@ -1370,10 +1370,11 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
  * \brief Code Generation for `select`
  */
 void generator::visit_select_inst(ir::select_inst* x) {
-  for(indices_t idx: idxs_.at(x))
+  for(indices_t idx: idxs_.at(x)){
     vals_[x][idx] = select(vals_[x->get_operand(0)][idx],
                            vals_[x->get_operand(1)][idx],
                            vals_[x->get_operand(2)][idx]);
+  }
 }
 
 /**

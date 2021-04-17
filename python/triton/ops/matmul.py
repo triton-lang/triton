@@ -29,20 +29,20 @@ def _kernel(A, B, C, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride
     # matrix multiplication
     pid = triton.program_id(0)
     pid_z = triton.program_id(1)
-    grid_m = (M + BLOCK_M - 1) / BLOCK_M
-    grid_n = (N + BLOCK_N - 1) / BLOCK_N
+    grid_m = (M + BLOCK_M - 1) // BLOCK_M
+    grid_n = (N + BLOCK_N - 1) // BLOCK_N
     # re-order program ID for better L2 performance
     width = GROUP_M * grid_n
-    group_id = pid / width
+    group_id = pid // width
     group_size = min(grid_m - group_id * GROUP_M, GROUP_M)
     pid_m = group_id * GROUP_M + (pid % group_size)
-    pid_n = (pid % width) / (group_size)
+    pid_n = (pid % width) // (group_size)
     # do matrix multiplication
     rm = pid_m * BLOCK_M + triton.arange(0, BLOCK_M)
     rn = pid_n * BLOCK_N + triton.arange(0, BLOCK_N)
     rk = triton.arange(0, BLOCK_K)
     # pointers
-    K = K / SPLIT_K
+    K = K // SPLIT_K
     A = A + (pid_z * K * stride_ak + rm[:, None] * stride_am + rk[None, :] * stride_ak)
     B = B + (pid_z * K * stride_bk + rk[:, None] * stride_bk + rn[None, :] * stride_bn)
     acc = triton.zeros((BLOCK_M, BLOCK_N), dtype=triton.float32)

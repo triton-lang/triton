@@ -12,8 +12,11 @@ def _patch(fn):
             return builder.get_int32(x)
         elif isinstance(x, float):
             return builder.get_float32(x)
-        forward_handle = isinstance(x, (dtype, block))
-        return x.handle if forward_handle else x
+        if isinstance(x, block):
+            return x.handle
+        if isinstance(x, dtype):
+            return x.handle(builder)
+        return x
 
     def _from_ir(x):
         return block(x) if isinstance(x, ir.value) else x
@@ -57,9 +60,9 @@ class dtype:
     def __init__(self, init):
         self.init = init
 
-    def convert(self, x, builder):
-        handle = self.init(builder.context)
-        return frontend.cast(x, handle, builder)
+    def handle(self, builder):
+        ctx = builder.context
+        return self.init(ctx)
 
 
 float16 = dtype(ir.type.get_fp16)
@@ -83,9 +86,16 @@ class block:
     def __mul__(self, other, builder=None):
         return frontend.mul(self, other, builder)
 
+    def __rmul__(self, other, builder=None):
+        return self.__mul__(other, builder=builder)
+
     @builtin
     def __truediv__(self, other, builder=None):
         return frontend.truediv(self, other, builder)
+
+    @builtin
+    def __floordiv__(self, other, builder=None):
+        return frontend.floordiv(self, other, builder)
 
     @builtin
     def __mod__(self, other, builder=None):
@@ -166,7 +176,7 @@ class block:
 
     @builtin
     def to(self, dtype, builder=None):
-        return dtype.convert(self, builder)
+        return frontend.cast(self, dtype.handle(builder), builder)
 
 
 # -----------------------

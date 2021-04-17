@@ -27,6 +27,12 @@ ir::value *dispatch::num_programs(int axis, ir::builder *builder) {
 //                               Implicit Casting Utilities
 //===----------------------------------------------------------------------===//
 
+ir::type *integer_promote(ir::type* a_ty, ir::type* b_ty){
+  int a_rank = a_ty->get_integer_bitwidth();
+  int b_rank = b_ty->get_integer_bitwidth();
+  return a_rank > b_rank ? a_ty : b_ty;
+}
+
 ir::type *computation_type(ir::type* a_ty, ir::type* b_ty){
   context &ctx = a_ty->get_context();
   // 1) if one operand is double, the other is implicitly
@@ -45,9 +51,7 @@ ir::type *computation_type(ir::type* a_ty, ir::type* b_ty){
     throw_unreachable("augment_types");
   // 4 ) both operands are integer and undergo
   //    integer promotion
-  int a_rank = a_ty->get_integer_bitwidth();
-  int b_rank = b_ty->get_integer_bitwidth();
-  return a_rank > b_rank ? a_ty : b_ty;
+  return integer_promote(a_ty, b_ty);
 }
 
 //===----------------------------------------------------------------------===//
@@ -161,6 +165,19 @@ ir::value *dispatch::truediv(ir::value *input, ir::value *other, ir::builder *bu
   else
     return throw_unreachable("div");
   return builder->create_fdiv(input, other);
+}
+
+ir::value *dispatch::floordiv(ir::value *input, ir::value *other, ir::builder *builder){
+  binary_op_type_checking(input, other, builder, false, false, false);
+  ir::type *input_scalar_ty = input->get_type()->get_scalar_ty();
+  ir::type *other_scalar_ty = other->get_type()->get_scalar_ty();
+  if(input_scalar_ty->is_integer_ty() && other_scalar_ty->is_integer_ty()){
+    ir::type *ret_ty = integer_promote(input_scalar_ty, other_scalar_ty);
+    input = dispatch::cast(input, ret_ty, builder);
+    other = dispatch::cast(other, ret_ty, builder);
+    return builder->create_sdiv(input, other);
+  }
+  return throw_unreachable("floordiv");
 }
 
 ir::value *dispatch::mod(ir::value *input, ir::value *other, ir::builder *builder) {
@@ -522,8 +539,10 @@ ir::value *dispatch::dot(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
 //                               Indexing
 //===----------------------------------------------------------------------===//
 
-ir::value *dispatch::where(ir::value* condition, ir::value *x, ir::value *y, ir::builder *builder)
-{ return builder->create_select(condition, x, y); }
+ir::value *dispatch::where(ir::value* condition, ir::value *x, ir::value *y, ir::builder *builder){
+  condition = dispatch::cast(condition, builder->get_int1_ty(), builder);
+  return builder->create_select(condition, x, y);
+}
 
 
 //===----------------------------------------------------------------------===//
