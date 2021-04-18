@@ -34,7 +34,7 @@ def _kernel(
         AS1 = SDD_K // TZ
         lockid = triton.where(TZ > 1, 1, 0)
         offka = pid0 * AS1
-        offkb = pid1 * AS1
+        offkb = pid0 * AS1
         offmc = 0
         offnc = 0
         offpa = 0
@@ -142,7 +142,6 @@ def _kernel(
         checkb = checkbn & checkbk
         a = triton.load(pa, mask=checka)
         b = triton.load(pb, mask=checkb)
-    acc = acc * 0 + 256
     c = acc.to(triton.float16)
     if meta['SDD']:
         checkc = True
@@ -150,7 +149,7 @@ def _kernel(
         rr_blockidn = triton.arange(0, TN) // BLOCK
         rr_offlutm = rr_blockidm * (TN // BLOCK) * 4
         rr_offlutn = rr_blockidn * 4
-        off_bkid = 3 + rr_offlutn[:, None] + rr_offlutn[None, :]
+        off_bkid = 3 + rr_offlutm[:, None] + rr_offlutn[None, :]
         bkid = triton.load(header + off_bkid)
         offpc = bkid * BLOCK * BLOCK
         rcm = triton.arange(0, TM) % BLOCK
@@ -294,10 +293,10 @@ class _matmul(torch.autograd.Function):
             raise ValueError('Reduction size for SDD must be a multiple of 16')
         # create kernel
         total_width = sum([width * pack * pack for width, pack in zip(widths, packs)])
-        c = torch.empty((AS0, total_width, block, block), dtype=dtype, device=device)
+        c = torch.zeros((AS0, total_width, block, block), dtype=dtype, device=device)
         for lut, width, pack in zip(luts, widths, packs):
             num_lock = 1
-            meta = {'TM': block * pack, 'TN': block * pack, 'TMN': block * block * pack * pack, 'BLOCK': block, 'TK': 32, 'TZ': 1, \
+            meta = {'TM': block * pack, 'TN': block * pack, 'BLOCK': block, 'TK': 32, 'TZ': 1, \
                     'SDD': True, 'DSD': False, 'DDS': False}
             # create output
             locks = _matmul.get_locks(2 * width * AS0 * num_lock, a.device)

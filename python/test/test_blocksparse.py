@@ -10,7 +10,7 @@ import pytest
         for block in [16]
     ],
 )
-def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=1, H=1, M=256, N=256, K=256):
+def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=128, N=128, K=128):
     DTYPE = {"float16": torch.float16, "float32": torch.float32}[DTYPE]
     # set seed
     torch.random.manual_seed(0)
@@ -23,9 +23,6 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=1, H=1, M=256, N=256, K=
         "dds": (b.shape[2], b.shape[3]),
     }[MODE]
     layout = torch.randint(2, (H, shape[0] // BLOCK, shape[1] // BLOCK))
-    a[:] = 1.
-    b[:] = 1.
-    layout[:] = 1
     # triton result
     op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B)
     ra = triton.testing.sparsify_tensor(a, layout, BLOCK) if MODE == "dsd" else a
@@ -39,8 +36,6 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=1, H=1, M=256, N=256, K=
     tc = torch.matmul(ta, tb)
     tc = triton.testing.mask_tensor(tc, layout, BLOCK) if MODE == "sdd" else tc
     tc = triton.testing.sparsify_tensor(tc, layout, BLOCK) if MODE == "sdd" else tc
-    print(rc)
-    print(tc)
     # compare
     assert triton.testing.allclose(rc, tc)
 
