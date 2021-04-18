@@ -62,7 +62,7 @@ public:
   unsigned get_tile_bitwidth() const;
   unsigned get_primitive_size_in_bits() const;
   type *get_scalar_ty() const;
-  const block_shapes_t& get_block_shapes() const;
+  block_shapes_t get_block_shapes() const;
   const size_t get_tile_rank() const;
   const size_t get_tile_ranks1() const;
   unsigned get_tile_num_elements() const;

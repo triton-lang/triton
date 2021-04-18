@@ -113,11 +113,11 @@ ir::value *dispatch::add(ir::value *input, ir::value *other, ir::builder *builde
 }
 
 ir::value *dispatch::sub(ir::value *input, ir::value *other, ir::builder *builder) {
-  binary_op_type_checking(input, other, builder, false, false);
+  binary_op_type_checking(input, other, builder, true, false);
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
   // ptr - offset
-//  if (scalar_ty->is_pointer_ty())
-//    return builder->create_gep(input, {other});
+  if (scalar_ty->is_pointer_ty())
+    return builder->create_gep(input, {dispatch::minus(other, builder)});
   // float + float
   if (scalar_ty->is_floating_point_ty())
     return builder->create_fsub(input, other);
@@ -541,8 +541,10 @@ ir::value *dispatch::dot(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
 
 ir::value *dispatch::where(ir::value* condition, ir::value *x, ir::value *y, ir::builder *builder){
   condition = dispatch::cast(condition, builder->get_int1_ty(), builder);
-  x = dispatch::broadcast(x, condition->get_type()->get_block_shapes(), builder);
-  y = dispatch::broadcast(y, condition->get_type()->get_block_shapes(), builder);
+  if(condition->get_type()->is_block_ty()){
+    x = dispatch::broadcast(x, condition->get_type()->get_block_shapes(), builder);
+    y = dispatch::broadcast(y, condition->get_type()->get_block_shapes(), builder);
+  }
   if(x->get_type()->get_scalar_ty() != y->get_type()->get_scalar_ty())
     throw_incompatible_types(x->get_type()->get_scalar_ty(), y->get_type()->get_scalar_ty());
   return builder->create_select(condition, x, y);
@@ -594,6 +596,14 @@ ir::value *dispatch::sqrt(ir::value *x, ir::builder *builder) {
 
 
 //
+
+ir::value *dispatch::multiple_of(ir::value *x, int value, ir::builder *){
+  ir::instruction* i = dynamic_cast<ir::instruction*>(x);
+  if(!i)
+    throw_unreachable("multiple_of");
+  i->set_metadata(ir::metadata::multiple_of, value);
+  return i;
+}
 
 ir::value *dispatch::debug_barrier(ir::builder *builder) {
   return builder->create_barrier();

@@ -46,7 +46,7 @@ class CodeGenerator(ast.NodeVisitor):
         if add_scope:
             self.module.add_new_scope()
         for stmt in stmts:
-            self.last_ret = ast.NodeVisitor.visit(self, stmt)
+            self.last_ret = self.visit(stmt)
             if isinstance(stmt, ast.Return):
                 break
         if add_scope:
@@ -62,7 +62,8 @@ class CodeGenerator(ast.NodeVisitor):
         self.attributes = attributes
         self.constants = constants
         self.kwargs = kwargs
-        self.builtins = {'range': range, 'min': triton.minimum, 'float': float, 'int': int, 'getattr': getattr}
+        self.last_node = None
+        self.builtins = {'range': range, 'min': triton.minimum, 'float': float, 'int': int, 'print': print, 'getattr': getattr}
 
     def visit_Module(self, node):
         self.module.add_new_scope()
@@ -70,17 +71,17 @@ class CodeGenerator(ast.NodeVisitor):
         self.module.pop_scope()
 
     def visit_List(self, node):
-        ctx = ast.NodeVisitor.visit(self, node.ctx)
+        ctx = self.visit(node.ctx)
         assert ctx is None
-        elts = [ast.NodeVisitor.visit(self, elt) for elt in node.elts]
+        elts = [self.visit(elt) for elt in node.elts]
         return elts
 
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
-        return ast.NodeVisitor.visit(self, node.value)
+        return self.visit(node.value)
 
     def visit_FunctionDef(self, node, inline=False, arg_values=None):
-        arg_names, kwarg_names = ast.NodeVisitor.visit(self, node.args)
+        arg_names, kwarg_names = self.visit(node.args)
         # store keyword arguments in local scope
         self.lscope[kwarg_names] = self.kwargs
         # initialize function
@@ -117,8 +118,8 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_arguments(self, node):
         arg_names = []
         for arg in node.args:
-            arg_names += [ast.NodeVisitor.visit(self, arg)]
-        kwarg_names = ast.NodeVisitor.visit(self, node.kwarg)
+            arg_names += [self.visit(arg)]
+        kwarg_names = self.visit(node.kwarg)
         return arg_names, kwarg_names
 
     def visit_arg(self, node):
@@ -128,10 +129,10 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Assign(self, node):
         names = []
         for target in node.targets:
-            names += [ast.NodeVisitor.visit(self, target)]
+            names += [self.visit(target)]
         assert len(names) == 1
         name = names[0]
-        value = ast.NodeVisitor.visit(self, node.value)
+        value = self.visit(node.value)
         self.set_value(names[0], value)
 
     def visit_AugAssign(self, node):
@@ -139,7 +140,7 @@ class CodeGenerator(ast.NodeVisitor):
         lhs = ast.Name(id=name, ctx=ast.Load())
         rhs = ast.BinOp(lhs, node.op, node.value)
         assign = ast.Assign(targets=[node.target], value=rhs)
-        ast.NodeVisitor.visit(self, assign)
+        self.visit(assign)
         return self.get_value(name)
 
     def visit_Name(self, node):
@@ -154,12 +155,12 @@ class CodeGenerator(ast.NodeVisitor):
         ast.NodeVisitor.generic_visit(self, node)
 
     def visit_Tuple(self, node):
-        args = [ast.NodeVisitor.visit(self, x) for x in node.elts]
+        args = [self.visit(x) for x in node.elts]
         return tuple(args)
 
     def visit_BinOp(self, node):
-        lhs = ast.NodeVisitor.visit(self, node.left)
-        rhs = ast.NodeVisitor.visit(self, node.right)
+        lhs = self.visit(node.left)
+        rhs = self.visit(node.right)
         fn = {
             ast.Add: '__add__',
             ast.Sub: '__sub__',
@@ -187,7 +188,7 @@ class CodeGenerator(ast.NodeVisitor):
         return ret
 
     def visit_If(self, node):
-        cond = ast.NodeVisitor.visit(self, node.test)
+        cond = self.visit(node.test)
         if self.is_triton_object(cond):
             current_bb = self.builder.get_insert_block()
             then_bb = _triton.ir.basic_block.create(self.builder.context, "then", current_bb.parent)
@@ -217,11 +218,11 @@ class CodeGenerator(ast.NodeVisitor):
                 self.visit_compound_statement(node.orelse)
 
     def visit_IfExp(self, node):
-        cond = ast.NodeVisitor.visit(self, node.test)
+        cond = self.visit(node.test)
         if cond:
-            return ast.NodeVisitor.visit(self, node.body)
+            return self.visit(node.body)
         else:
-            return ast.NodeVisitor.visit(self, node.orelse)
+            return self.visit(node.orelse)
 
     def visit_Pass(self, node):
         pass
@@ -229,8 +230,8 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Compare(self, node):
         assert len(node.comparators) == 1
         assert len(node.ops) == 1
-        lhs = ast.NodeVisitor.visit(self, node.left)
-        rhs = ast.NodeVisitor.visit(self, node.comparators[0])
+        lhs = self.visit(node.left)
+        rhs = self.visit(node.comparators[0])
         fn = {
             ast.Eq: '__eq__',
             ast.NotEq: '__ne__',
@@ -246,7 +247,7 @@ class CodeGenerator(ast.NodeVisitor):
         return getattr(lhs, fn)(rhs)
 
     def visit_UnaryOp(self, node):
-        op = ast.NodeVisitor.visit(self, node.operand)
+        op = self.visit(node.operand)
         fn = {
             ast.USub: '__neg__',
             ast.UAdd: '__pos__',
@@ -262,7 +263,7 @@ class CodeGenerator(ast.NodeVisitor):
         next_bb = _triton.ir.basic_block.create(self.module.builder.context, "postloop", current_bb.parent)
 
         def continue_fn():
-            cond = ast.NodeVisitor.visit(self, node.test)
+            cond = self.visit(node.test)
             return self.builder.cond_br(cond.handle, loop_bb, next_bb)
 
         continue_fn()
@@ -283,17 +284,17 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Subscript(self, node):
         assert node.ctx.__class__.__name__ == "Load"
-        lhs = ast.NodeVisitor.visit(self, node.value)
-        slices = ast.NodeVisitor.visit(self, node.slice)
+        lhs = self.visit(node.value)
+        slices = self.visit(node.slice)
         if self.is_triton_object(lhs):
             return lhs.__getitem__(slices, builder=self.builder)
         return lhs[slices]
 
     def visit_ExtSlice(self, node):
-        return [ast.NodeVisitor.visit(self, dim) for dim in node.dims]
+        return [self.visit(dim) for dim in node.dims]
 
     def visit_For(self, node):
-        iterator = ast.NodeVisitor.visit(self, node.iter.func)
+        iterator = self.visit(node.iter.func)
         assert iterator == self.builtins['range']
         # create nodes
         st_target = ast.Name(id=node.target.id, ctx=ast.Store())
@@ -302,9 +303,9 @@ class CodeGenerator(ast.NodeVisitor):
         pos_cond_node = ast.Compare(ld_target, [ast.Lt()], [node.iter.args[1]])
         neg_cond_node = ast.Compare(ld_target, [ast.Gt()], [node.iter.args[1]])
         pos_step_node = ast.Compare(node.iter.args[2], [ast.Gt()], [ast.Num(0)])
-        build_cond = lambda: triton.where(ast.NodeVisitor.visit(self, pos_step_node),\
-                                    ast.NodeVisitor.visit(self, pos_cond_node),\
-                                    ast.NodeVisitor.visit(self, neg_cond_node),\
+        build_cond = lambda: triton.where(self.visit(pos_step_node),\
+                                    self.visit(pos_cond_node),\
+                                    self.visit(neg_cond_node),\
                                     builder=self.builder)
         #cond_node = neg_cond_node
         step_node = ast.AugAssign(target=st_target, op=ast.Add(), value=node.iter.args[2])
@@ -314,11 +315,11 @@ class CodeGenerator(ast.NodeVisitor):
         next_bb = _triton.ir.basic_block.create(self.module.builder.context, "postloop", current_bb.parent)
 
         def continue_fn():
-            ast.NodeVisitor.visit(self, step_node)
+            self.visit(step_node)
             cond = build_cond()
             return self.builder.cond_br(cond.handle, loop_bb, next_bb)
 
-        ast.NodeVisitor.visit(self, init_node)
+        self.visit(init_node)
         cond = build_cond()
         self.builder.cond_br(cond.handle, loop_bb, next_bb)
         self.builder.set_insert_block(loop_bb)
@@ -335,26 +336,26 @@ class CodeGenerator(ast.NodeVisitor):
             ast.NodeVisitor.generic_visit(self, stmt)
 
     def visit_Slice(self, node):
-        lower = ast.NodeVisitor.visit(self, node.lower)
-        upper = ast.NodeVisitor.visit(self, node.upper)
-        step = ast.NodeVisitor.visit(self, node.step)
+        lower = self.visit(node.lower)
+        upper = self.visit(node.upper)
+        step = self.visit(node.step)
         return slice(lower, upper, step)
 
     def visit_Index(self, node):
-        return ast.NodeVisitor.visit(self, node.value)
+        return self.visit(node.value)
 
     def visit_NameConstant(self, node):
-        return ast.NodeVisitor.visit(self, node.value)
+        return node.value
 
     def visit_keyword(self, node):
-        return {node.arg: ast.NodeVisitor.visit(self, node.value)}
+        return {node.arg: self.visit(node.value)}
 
     def visit_Call(self, node):
-        fn = ast.NodeVisitor.visit(self, node.func)
+        fn = self.visit(node.func)
         kws = dict()
         for keyword in node.keywords:
-            kws.update(ast.NodeVisitor.visit(self, keyword))
-        args = [ast.NodeVisitor.visit(self, arg) for arg in node.args]
+            kws.update(self.visit(keyword))
+        args = [self.visit(arg) for arg in node.args]
         if isinstance(fn, JITFunction):
             return fn(*args, generator=self, **kws)
         if hasattr(fn, '__self__') and self.is_triton_object(fn.__self__) or \
@@ -366,7 +367,7 @@ class CodeGenerator(ast.NodeVisitor):
         return node.n
 
     def visit_Attribute(self, node):
-        lhs = ast.NodeVisitor.visit(self, node.value)
+        lhs = self.visit(node.value)
         return getattr(lhs, node.attr)
 
     def visit_Expr(self, node):
@@ -374,6 +375,11 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_NoneType(self, node):
         return None
+
+    def visit(self, node):
+        if node is not None:
+            self.last_node = node
+        return super().visit(node)
 
     def generic_visit(self, node):
         typename = type(node).__name__
@@ -389,6 +395,14 @@ class Binary:
 
     def __call__(self, stream, args, grid_0, grid_1=1, grid_2=1):
         stream.enqueue(self.kernel, grid_0, grid_1, grid_2, self.num_warps * 32, 1, 1, args, self.shared_mem)
+
+
+class CompilationError(Exception):
+    def __init__(self, src, node, err):
+        self.message = '\n'.join(src.split('\n')[:node.lineno])
+        self.message += '\n' + ' ' * node.col_offset + '^'
+        self.message += '\n Error: ' + str(err)
+        super().__init__(self.message)
 
 
 class Kernel:
@@ -466,7 +480,13 @@ class Kernel:
         # export symbols visible from self.fn into code-generator object
         gscope = sys.modules[self.fn.module].__dict__
         generator = CodeGenerator(context, prototype, gscope=gscope, attributes=attributes, constants=constants, kwargs=meta)
-        generator.visit(self.fn.parse())
+        try:
+            generator.visit(self.fn.parse())
+        except Exception as e:
+            node = generator.last_node
+            if node is None or isinstance(e, NotImplementedError):
+                raise e
+            raise CompilationError(self.fn.src, node, e)
         tt_device = _triton.driver.cu_device(device.index, False)
         # Compile to machine code
         mod, ker, shared_mem = _triton.code_gen.add_passes_to_emit_bin(generator.module, tt_device, num_warps)

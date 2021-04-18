@@ -68,7 +68,7 @@ type * type::get_pointer_element_ty() const {
 }
 
 
-const type::block_shapes_t &type::get_block_shapes() const {
+type::block_shapes_t type::get_block_shapes() const {
   assert(is_block_ty());
   return ((block_type*)this)->get_shapes();
 }

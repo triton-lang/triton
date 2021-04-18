@@ -141,6 +141,7 @@ void init_triton_frontend(py::module &&m) {
   m.def("log", &ir::dispatch::log, ret::reference);
   m.def("sqrt", &ir::dispatch::sqrt, ret::reference);
   // internal (debugging only)
+  m.def("multiple_of", &ir::dispatch::multiple_of, ret::reference);
   m.def("debug_barrier", &ir::dispatch::debug_barrier, ret::reference);
 }
 
@@ -254,6 +255,7 @@ void init_triton_ir(py::module &&m) {
       .def("get_insert_block", &ir::builder::get_insert_block, ret::reference)
       .def("set_insert_block", (void (ir::builder::*)(ir::basic_block *)) & ir::builder::set_insert_point)
       // constants
+      .def("get_int1", &ir::builder::get_int1, ret::reference)
       .def("get_int32", &ir::builder::get_int32, ret::reference)
       .def("get_float16", &ir::builder::get_float16, ret::reference)
       .def("get_float32", &ir::builder::get_float32, ret::reference)

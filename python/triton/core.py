@@ -8,7 +8,9 @@ def _patch(fn):
 
     # convert block/dtype to ir values
     def _to_ir(x, builder):
-        if isinstance(x, int):
+        if isinstance(x, bool):
+            return builder.get_int1(x)
+        elif isinstance(x, int):
             return builder.get_int32(x)
         elif isinstance(x, float):
             return builder.get_float32(x)
@@ -77,6 +79,9 @@ class block:
     @builtin
     def __add__(self, other, builder=None):
         return frontend.add(self, other, builder)
+
+    def __radd__(self, other, builder=None):
+        return self.__add__(other, builder=builder)
 
     @builtin
     def __sub__(self, other, builder=None):
@@ -352,6 +357,8 @@ def where(condition, x, y, builder=None):
     Returns a block of elements from either `x` or `y`, depending on `condition`.
     Note that `x` and `y` are always evaluated regardless of the value of `condition`.
     If you want to avoid unintented memory operations, use the `mask` arguments in `triton.load` and `triton.store` instead.
+    The shape of `x` and `y` are both broadcast to the shape of `condition`.
+    `x` and `y` must have the data type.
 
     :param condition: When True (nonzero), yield x, otherwise yield y.
     :type condition: Block of triton.bool
