@@ -6,7 +6,7 @@ import pytest
 @pytest.mark.parametrize(
     "MODE, TRANS_A, TRANS_B, BLOCK, DTYPE",
     [
-        (mode, at, bt, block, dtype) for dtype in ["float16"] for mode in ["sdd"] for at in [False] for bt in [False]
+        (mode, at, bt, block, dtype) for dtype in ["float16"] for mode in ["dds"] for at in [False] for bt in [False]
         for block in [16]
     ],
 )

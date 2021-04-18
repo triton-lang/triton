@@ -100,7 +100,7 @@ def _kernel(
     pa = A + pidz * stride_za + offha * stride_ha + offpa + ram[:, None] * stride_ma + rka[None, :] * stride_ka
     pb = B + pidz * stride_zb + offhb * stride_hb + offpb + rbn[None, :] * stride_nb + rkb[:, None] * stride_kb
     if meta['DDS']:
-        checkam = ra[:, None] < DS0
+        checkam = ram[:, None] < DS0
     else:
         checkam = AS1 > 0
     if meta['DSD']:
@@ -442,15 +442,8 @@ class _matmul(torch.autograd.Function):
         BS2 = block * spdims[1 if trans_b else 2]
         dtype = a.dtype
         # kernel
-        key = (block, a.device, a.dtype, b.dtype, trans_a, trans_b, trans_c)
-        if key not in _matmul.dds_cache:
-            defines = {
-                'TM': 128, 'TN': block, 'TK': 16, 'BLOCK': block, 'TYPE': dtype, 'STRIDE_AM': 1 if trans_a else 'lda',
-                'STRIDE_AK': 'lda' if trans_a else 1, 'STRIDE_BN': block if trans_b else 1, 'STRIDE_BK': 1 if trans_b else block,
-                'STRIDE_CM': '1' if trans_c else 'ldc', 'STRIDE_CN': 'ldc' if trans_c else '1', 'NAME': 'dds_kernel', 'DDS': True
-            }
-            _matmul.dds_cache[key] = triton.kernel(src, device=a.device, defines=defines)
-        kernel = _matmul.dds_cache[key]
+        meta = {'TN': block, 'TM': 128, 'TK': 16, 'BLOCK': block, 'TZ': 1,\
+                'SDD': False, 'DSD': False, 'DDS': True}
         # output
         CS0 = AS0
         CS1 = AS1
@@ -458,27 +451,32 @@ class _matmul(torch.autograd.Function):
         CS3 = AS2 if trans_c else BS2
         locks = _matmul.get_locks(2 * AS0 * AS2 // 32 * num_locks, a.device)
         c = torch.empty((CS0, CS1, CS2, CS3), dtype=dtype, device=a.device)
-        kernel(
-            a.data_ptr(),
-            b.data_ptr(),
-            c.data_ptr(),
-            a.stride(2),
-            block,
-            c.stride(2),
+        grid = lambda meta: [width, triton.cdiv(AS2, meta['TM']), AS0]
+        _kernel[grid](
+            a,
+            b,
+            c,
             a.stride(0),
-            b.stride(0),
-            c.stride(0),
             a.stride(1),
+            a.stride(2),
+            a.stride(3),
+            b.stride(0),
             b.stride(1),
+            b.stride(2),
+            b.stride(3),
+            c.stride(0),
             c.stride(1),
+            c.stride(2),
+            c.stride(3),
             AS2,
             BS2,
             0,
             0,
-            lut.data_ptr(),
-            locks.data_ptr(),
+            lut,
+            locks,
             num_locks,
-            grid=lambda opt: [width, triton.cdiv(AS2, opt.TM), AS0]
+            num_warps=4,
+            **meta
         )
         return c
 
@@ -494,16 +492,8 @@ class _matmul(torch.autograd.Function):
         BS3 = b.size(2 if trans_b else 3)
         dtype = a.dtype
         # kernel
-        key = (block, a.device, a.dtype, b.dtype, trans_a, trans_b, trans_c)
-        if key not in _matmul.dsd_cache:
-            defines = {
-                'TM': block, 'TN': 128, 'TK': 16, 'BLOCK': block, 'TYPE': dtype, 'STRIDE_AM': 1 if trans_a else block,
-                'STRIDE_AK': block if trans_a else 1, 'STRIDE_BN': 'ldb' if trans_b else '1', 'STRIDE_BK':
-                '1' if trans_b else 'ldb', 'STRIDE_CM': '1' if trans_c else 'ldc', 'STRIDE_CN': 'ldc' if trans_c else '1', 'NAME':
-                'dsd_kernel', 'DSD': True
-            }
-            _matmul.dsd_cache[key] = triton.kernel(src, device=a.device, defines=defines)
-        kernel = _matmul.dsd_cache[key]
+        meta = {'TM': block, 'TN': 128, 'TK': 16, 'BLOCK': block, 'TZ': 1,\
+                'SDD': False, 'DSD': True, 'DDS': False}
         # output
         CS0 = BS0
         CS1 = BS1
@@ -511,27 +501,32 @@ class _matmul(torch.autograd.Function):
         CS3 = AS1 if trans_c else BS3
         locks = _matmul.get_locks(2 * BS0 * BS3 // 32 * num_locks, a.device)
         c = torch.empty((CS0, CS1, CS2, CS3), dtype=dtype, device=a.device)
-        kernel(
-            a.data_ptr(),
-            b.data_ptr(),
-            c.data_ptr(),
-            block,
-            b.stride(2),
-            c.stride(2),
+        grid = lambda meta: [width, triton.cdiv(BS3, meta['TN']), BS0]
+        _kernel[grid](
+            a,
+            b,
+            c,
             a.stride(0),
-            b.stride(0),
-            c.stride(0),
             a.stride(1),
+            a.stride(2),
+            a.stride(3),
+            b.stride(0),
             b.stride(1),
+            b.stride(2),
+            b.stride(3),
+            c.stride(0),
             c.stride(1),
+            c.stride(2),
+            c.stride(3),
             BS3,
             AS1,
             0,
             0,
-            lut.data_ptr(),
-            locks.data_ptr(),
+            lut,
+            locks,
             num_locks,
-            grid=lambda opt: [width, triton.cdiv(BS3, opt.TN), BS0]
+            num_warps=4,
+            **meta
         )
         return c
 

@@ -413,6 +413,11 @@ def debug_barrier(builder=None):
     return frontend.debug_barrier(builder)
 
 
+@builtin
+def multiple_of(x, value, builder=None):
+    return frontend.multiple_of(x, value, builder)
+
+
 # -----------------------
 # Standard library
 # -----------------------
