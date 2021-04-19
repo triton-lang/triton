@@ -96,7 +96,7 @@ def test_bin_op(dtype_x, dtype_y, expr, device='cuda'):
 # ---------------
 @pytest.mark.parametrize("dtype_x, dtype_y, expr", [
     (dtype_x, dtype_y, f' x {op} y') \
-  for op in ['&', '|', '^', '>>', '<<'] \
+  for op in ['&', '|', '^'] \
   for dtype_x in dtypes \
   for dtype_y in dtypes
 ])
