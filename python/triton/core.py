@@ -139,6 +139,9 @@ class block:
     def __truediv__(self, other, builder=None):
         return frontend.truediv(self, other, builder)
 
+    def __rtruediv__(self, other, builder=None):
+        return frontend.truediv(other, self, builder)
+
     @builtin
     def __floordiv__(self, other, builder=None):
         return frontend.floordiv(self, other, builder)
@@ -472,6 +475,11 @@ def minimum(x, y):
 @triton.jit
 def maximum(x, y):
     return triton.where(x > y, x, y)
+
+
+@triton.jit
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
 
 
 @triton.jit

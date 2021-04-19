@@ -484,7 +484,7 @@ class Kernel:
             generator.visit(self.fn.parse())
         except Exception as e:
             node = generator.last_node
-            if node is None or isinstance(e, NotImplementedError):
+            if node is None or isinstance(e, (NotImplementedError, CompilationError)):
                 raise e
             raise CompilationError(self.fn.src, node, e)
         tt_device = _triton.driver.cu_device(device.index, False)
@@ -582,7 +582,13 @@ class JITFunction:
         return tree
 
     def __call__(self, *args, generator: CodeGenerator, **meta):
-        return generator.visit_FunctionDef(self.parse().body[0], inline=True, arg_values=args)
+        try:
+            return generator.visit_FunctionDef(self.parse().body[0], inline=True, arg_values=args)
+        except Exception as e:
+            node = generator.last_node
+            if node is None or isinstance(e, (NotImplementedError, CompilationError)):
+                raise e
+            raise CompilationError(self.src, node, e)
 
     def __getitem__(self, grid_fn):
         kernel = Kernel(self, grid_fn)

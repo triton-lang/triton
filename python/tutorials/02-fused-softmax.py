@@ -4,8 +4,7 @@ Fused Softmax
 In this tutorial, you will write a fused softmax operation (that outperforms PyTorch) and learn about:
 
 - The benefits of kernel fusion for bandwidth-bound operations.
-- The syntax and usage of reduction operators in Triton.
-- The automatic vectorization capabilities of the Triton compiler.
+- The reduction operators in Triton.
 """
 
 # %%
@@ -36,13 +35,13 @@ def naive_softmax(x):
 # %%
 # When implemented naively in pytorch, computing :code:`y = naive_softmax(x)` for :math:`x \in R^{M \times N}` requires reading :math:`7MN` elements from DRAM and writing back :math:`3MN + 2M` elements.
 # This is obviously wasteful; we'd prefer to have a custom "fused" kernel that only reads X once and does all the necessary computations on-chip.
-# In this case, we would be reading and writing back only :math:`MN` bytes, so we could expect a theoretical speed-up of ~5x (i.e., :math:`(10MN + 2M) / 2MN`).
+# This solution would require reading and writing back only :math:`MN` bytes, so we could expect a theoretical speed-up of ~5x (i.e., :math:`(10MN + 2M) / 2MN`).
 # In practice, though, we would be getting a bit less as our kernel computes exponentials and internally moves data around in shared memory.
 
 # %%
 # Compute Kernel
 # ----------------
-# Our softmax kernel works as follows: each program loads a row of the input X, normalizes it and writes back the result to the output Y.
+# Our softmax kernel works as follows: each program loads a row of the input matrix X, normalizes it and writes back the result to the output Y.
 # Note that one important limitation of Triton is that each block must have a power-of-two number of elements,
 # so we need to internally "pad" tiles and guard the memory operations properly if we want to handle any possible input shapes:
 
@@ -72,8 +71,7 @@ def _softmax(Y, X, stride_xm, stride_ym, M, N, **meta):
 
 
 # %%
-# As before, we can create a helper function that enqueues the kernel and its arguments given a single input tensor.
-# We just need to make sure that BLOCK is the smallest power of two greater than the number of columns N of the input matrix.
+# We can create a helper function that enqueues the kernel and its (meta-)arguments for any given input tensor.
 
 
 def next_power_of_2(n):
@@ -89,8 +87,7 @@ def next_power_of_2(n):
 
 def softmax(x):
     M, N = x.shape
-    # Now are kernels are indexed not only by the provided device but also
-    # by the rounded number of columns in the input matrix
+    # The block size is the smallest power of two greater than the number of columns in `x`
     BLOCK = next_power_of_2(N)
     # Another trick we can use is to ask the compiler to parallelize each
     # row-normalization more aggressively -- i.e., with more warps -- vectors
