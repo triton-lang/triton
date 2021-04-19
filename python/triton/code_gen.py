@@ -492,7 +492,7 @@ class Kernel:
         mod, ker, shared_mem = _triton.code_gen.add_passes_to_emit_bin(generator.module, tt_device, num_warps)
         return Binary(mod, ker, num_warps, shared_mem)
 
-    def __call__(self, *wargs, num_warps, **meta):
+    def __call__(self, *wargs, num_warps=4, **meta):
         # device inference
         tensor_idxs = [i for i, arg in enumerate(wargs) if isinstance(arg, torch.Tensor)]
         if len(tensor_idxs) == 0:

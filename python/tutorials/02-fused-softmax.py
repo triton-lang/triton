@@ -45,70 +45,37 @@ def naive_softmax(x):
 # Our softmax kernel works as follows: each program loads a row of the input X, normalizes it and writes back the result to the output Y.
 # Note that one important limitation of Triton is that each block must have a power-of-two number of elements,
 # so we need to internally "pad" tiles and guard the memory operations properly if we want to handle any possible input shapes:
-#
-#  .. code-block:: C
-#
-#    __global__ void softmax(float* Y, float* X, int stride_xm, int stride_ym, int M, int N){
-#      // row index
-#      int    m             = get_program_id(0);
-#      // column indices
-#      int    n    [BLOCK] = 0 ... BLOCK;
-#      // the memory address of all the elements
-#      // that we want to load can be computed as follows
-#      float* px   [BLOCK] = X + m*stride_xm + n;
-#      // because BLOCK has to be a power of two
-#      // (per Triton-C specs), it is important
-#      // to guard each memory operation with predicates
-#      // or we will read out of bounds
-#      bool   check[BLOCK] = n < N;
-#      float  x    [BLOCK] = check ? *px : -F32_INFINITY;
-#      // syntax for reduction in Triton is:
-#      // x[:, :, OPERATOR, :, :]
-#      //            ^
-#      //           index
-#      // where operator is in {min, max, +}
-#      // for 1D vectors, this is just x[OPERATOR].
-#      float  z    [BLOCK] = x - x[max];
-#      // Note that exponentials in Triton are fast
-#      // but approximate (i.e., think __expf in CUDA)
-#      float  num  [BLOCK] = exp(z);
-#      float  denom         = num[+];
-#      // The result of the reduction is now stored in y
-#      float  y    [BLOCK] = num / denom;
-#      // We write it back
-#      float* py   [BLOCK] = Y + m*stride_ym + n;
-#      *?(check)py = y;
-#    }
 
-# %%
-# Torch Bindings
-# ---------------
-# Here our torch bindings is quite similar to that of the vector addition mentioned in the previous tutorial.
-# We just need to make sure that BLOCK is the smallest power of two greater than the number of columns N of the input matrix.
-# This means that different values of BLOCK will result in different kernels
-
-import torch
 import triton
 
-# Source code for the Triton kernel
-_src = """
-__global__ void softmax(float* Y, float* X, int stride_ym, int stride_xm, int M, int N){
-    int    m             = get_program_id(0);
-    int    n    [BLOCK] = 0 ... BLOCK;
-    float* px   [BLOCK] = X + m*stride_xm + n;
-    bool   check[BLOCK] = n < N;
-    float  x    [BLOCK] = check ? *px : -F32_INFINITY;
-    float  z    [BLOCK] = x - x[max];
-    float  num  [BLOCK] = exp(z);
-    float  denom        = num[+];
-    float  y    [BLOCK] = num / denom;
-    float* py   [BLOCK] = Y + m*stride_ym + n;
-    *?(check)py = y; 
-}
-"""
+
+@triton.jit
+def _softmax(Y, X, stride_xm, stride_ym, M, N, **meta):
+    # row index
+    m = triton.program_id(0)
+    # col indices
+    n = triton.arange(0, meta['BLOCK'])
+    # the memory address of all the elements
+    # that we want to load can be computed as follows
+    X = X + m * stride_xm + n
+    x = triton.load(X, mask=n < N, other=-float('inf'))
+    # Substract maximum for numerical stability
+    z = x - triton.max(x, axis=0)
+    # Note that exponentials in Triton are fast
+    # but approximate (i.e., think __expf in CUDA)
+    num = triton.exp(z)
+    denom = triton.sum(num, axis=0)
+    y = num / denom
+    # Write back to Y
+    Y = Y + m * stride_ym + n
+    triton.store(Y, y, mask=n < N)
 
 
-# helper function to get the smaller power-of-two larger than a given number
+# %%
+# As before, we can create a helper function that enqueues the kernel and its arguments given a single input tensor.
+# We just need to make sure that BLOCK is the smallest power of two greater than the number of columns N of the input matrix.
+
+
 def next_power_of_2(n):
     n -= 1
     n |= n >> 1
@@ -120,9 +87,8 @@ def next_power_of_2(n):
     return n
 
 
-# kernel caching mechanism
-def make_kernel(N, device):
-    cache = make_kernel.cache
+def softmax(x):
+    M, N = x.shape
     # Now are kernels are indexed not only by the provided device but also
     # by the rounded number of columns in the input matrix
     BLOCK = next_power_of_2(N)
@@ -134,36 +100,12 @@ def make_kernel(N, device):
     num_warps = 4
     if BLOCK >= 2048: num_warps = 8
     if BLOCK >= 4096: num_warps = 16
-    # Each (BLOCK, num_warps, device) results in a different kernel
-    key = (BLOCK, num_warps, device)
-    if key not in cache:
-        defines = {'BLOCK': BLOCK}
-        cache[key] = triton.kernel(_src, device=device, defines=defines, num_warps=num_warps)
-    return cache[key]
+    # Allocate output
+    y = torch.empty_like(x)
+    # Enqueue kernel. The launch grid is simple: we have one kernel instance per row of the input matrix
+    _softmax[(M, )](y, x, x.stride(0), y.stride(0), M, N, BLOCK=BLOCK)
+    return y
 
-
-make_kernel.cache = dict()
-
-
-class _softmax(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, x):
-        # constraints of the op
-        assert x.dtype == torch.float32
-        y = torch.empty_like(x)
-        # The launch grid is simple: we have one kernel instance per row of the input matrix
-        M, N = y.shape
-        grid = lambda opt: (M, )
-        # Launch kernel
-        kernel = make_kernel(N, y.device)
-        kernel(y.data_ptr(), x.data_ptr(), y.stride(0), x.stride(0), M, N, grid=grid)
-        return y
-
-
-softmax = _softmax.apply
-
-# %%
-# We can use the above softmax function to compute the row-wise softmax of a given matrix.
 
 # %%
 # Unit Test
