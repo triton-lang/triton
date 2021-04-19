@@ -472,6 +472,8 @@ ir::value *dispatch::cast(ir::value *input, ir::type *dst_ty, ir::builder *build
 //===----------------------------------------------------------------------===//
 
 ir::value *dispatch::load(ir::value* ptr, ir::value* mask, ir::value* other, ir::builder* builder) {
+  if(!ptr->get_type()->get_scalar_ty()->is_pointer_ty())
+    throw semantic_error("Pointer argument of load instruction is " + ptr->get_type()->repr());
   if(ptr->get_type()->is_block_ty()){
     if(mask){
       mask = dispatch::broadcast(mask, ptr->get_type()->get_block_shapes(), builder);
@@ -496,19 +498,16 @@ ir::value *dispatch::load(ir::value* ptr, ir::value* mask, ir::value* other, ir:
 }
 
 ir::value *dispatch::store(ir::value* ptr, ir::value *val, ir::value* mask, ir::builder *builder) {
+  if(!ptr->get_type()->get_scalar_ty()->is_pointer_ty())
+    throw semantic_error("Pointer argument of store instruction is " + ptr->get_type()->repr());
   if(ptr->get_type()->is_block_ty())
     val = dispatch::broadcast(val, ptr->get_type()->get_block_shapes(), builder);
   if(mask)
     mask = dispatch::broadcast(mask, ptr->get_type()->get_block_shapes(), builder);
   ir::type *ptr_ty = ptr->get_type();
-  ir::type *val_ty = val->get_type();
-  if(ptr_ty->get_scalar_ty()->get_pointer_element_ty() !=
-     val_ty->get_scalar_ty())
-    throw semantic_error("Cannot store " + val_ty->repr() + " into " + ptr_ty->repr() + "." +
-                         "Please convert data explicitly before storing.");
-  if (!mask){
+  val = dispatch::cast(val, ptr_ty->get_scalar_ty()->get_pointer_element_ty(), builder);
+  if (!mask)
     return builder->create_store(ptr, val);
-  }
   if(!mask->get_type()->get_scalar_ty()->is_bool_ty())
     throw semantic_error("Mask must have boolean scalar type");
   return builder->create_masked_store(ptr, val, mask);

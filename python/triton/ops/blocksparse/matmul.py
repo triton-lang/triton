@@ -142,7 +142,8 @@ def _kernel(
         checkb = checkbn & checkbk
         a = triton.load(pa, mask=checka)
         b = triton.load(pb, mask=checkb)
-    c = acc.to(triton.float16)
+    c = acc.to(C.dtype.element_ty)
+
     if meta['SDD']:
         checkc = True
         rr_blockidm = triton.arange(0, TM) // BLOCK
@@ -312,12 +313,12 @@ class _matmul(torch.autograd.Function):
                     c,
                     a.stride(0),
                     a.stride(1),
-                    a.stride(2),
-                    a.stride(3),
+                    a.stride(3 if trans_a else 2),
+                    a.stride(2 if trans_a else 3),
                     b.stride(0),
                     b.stride(1),
-                    b.stride(2),
-                    b.stride(3),
+                    b.stride(3 if trans_b else 2),
+                    b.stride(2 if trans_b else 3),
                     c.stride(0),
                     c.stride(0),
                     c.stride(2),
@@ -458,16 +459,16 @@ class _matmul(torch.autograd.Function):
             c,
             a.stride(0),
             a.stride(1),
-            a.stride(2),
-            a.stride(3),
+            a.stride(3 if trans_a else 2),
+            a.stride(2 if trans_a else 3),
             b.stride(0),
             b.stride(1),
-            b.stride(2),
-            b.stride(3),
+            b.stride(3 if trans_b else 2),
+            b.stride(2 if trans_b else 3),
             c.stride(0),
             c.stride(1),
-            c.stride(2),
-            c.stride(3),
+            c.stride(3 if trans_c else 2),
+            c.stride(2 if trans_c else 3),
             AS2,
             BS2,
             0,
@@ -508,12 +509,12 @@ class _matmul(torch.autograd.Function):
             c,
             a.stride(0),
             a.stride(1),
-            a.stride(2),
-            a.stride(3),
+            a.stride(3 if trans_a else 2),
+            a.stride(2 if trans_a else 3),
             b.stride(0),
             b.stride(1),
-            b.stride(2),
-            b.stride(3),
+            b.stride(3 if trans_b else 2),
+            b.stride(2 if trans_b else 3),
             c.stride(0),
             c.stride(1),
             c.stride(2),

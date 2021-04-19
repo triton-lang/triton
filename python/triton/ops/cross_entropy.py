@@ -39,7 +39,6 @@ def _forward(LOGITS, PROBS, IDX, LOSS, N, **meta):
     logits = logits.to(triton.float32)
     logits = logits - triton.max(logits, 0)
     probs = triton.log(triton.sum(triton.exp(logits), 0)) - logits
-    probs = probs.to(triton.float16)
     triton.store(WRIT_PROBS, probs, mask=cols < N)
     # There is a bug in the compiler, which fails to insert a barrier here.
     # We add it explicitly for now. Will be fixed soon.

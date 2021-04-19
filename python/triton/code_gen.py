@@ -36,7 +36,7 @@ class CodeGenerator(ast.NodeVisitor):
             value = triton.block(value)
         if isinstance(value, triton.block):
             self.module.set_value(name, value.handle)
-            self.module.scope.set_type(name, value.type)
+            self.module.scope.set_type(name, value.handle.type)
         self.lscope[name] = value
 
     def is_triton_object(self, value):

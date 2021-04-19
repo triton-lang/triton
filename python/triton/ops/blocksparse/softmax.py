@@ -77,7 +77,6 @@ def _forward(
         x = x + attn_m
     # computation
     x = triton.softmax(x)
-    x = x.to(triton.float16)
     triton.store(px, x, mask=check)
 
 
@@ -100,16 +99,18 @@ def _backward(X, scale, DX, LUT, sizemax, stride_zx, stride_zdx, **meta):
     offset = triton.load(header + 1)
     # bounds checking on lut
     check = rbn < size
-    rbmn = triton.load(rbn, mask=check, other=size - 1)
+    rbmn = triton.where(check, rbn, size - 1)
     # initialize pointers to block-sparse input
     blockid = triton.load(LUT + offset + rbmn * 4)
     X = X + pidz * stride_zx + blockid * BLOCK * BLOCK + rxm * BLOCK + rxn
     DX = DX + pidz * stride_zdx + blockid * BLOCK * BLOCK + rxm * BLOCK + rxn
     # compute fused softmax backward
-    x = triton.load(X, mask=check, other=0).to(triton.float32)
-    dx = triton.load(DX, mask=check, other=0).to(triton.float32)
-    y = x * (dx - triton.sum(x * dx)) * scale
-    triton.store(DX, y.to(triton.float16), mask=check)
+    x = triton.load(X, mask=check, other=0)
+    dx = triton.load(DX, mask=check, other=0)
+    x = x.to(triton.float32)
+    dx = dx.to(triton.float32)
+    y = x * (dx - triton.sum(x * dx, 0)) * scale
+    triton.store(DX, y, mask=check)
 
 
 class _softmax(torch.autograd.Function):
@@ -205,7 +206,7 @@ class _softmax(torch.autograd.Function):
         # run kernel
         M = x.shape[0]
         grid = lambda opt: [ctx.spdims[0] * ctx.spdims[1] * ctx.block, M]
-        _backward[grid](x, ctx.scale, dx, lut, ctx.matlut, x.stride(0), dx.stride(0), BLOCK=BLOCK)
+        _backward[grid](x, ctx.scale, dx, lut, ctx.maxlut, x.stride(0), dx.stride(0), BLOCK=ctx.block)
         return dx, None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
 

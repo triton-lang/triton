@@ -21,7 +21,11 @@ def _patch(fn):
         return x
 
     def _from_ir(x):
-        return block(x) if isinstance(x, ir.value) else x
+        if isinstance(x, ir.value):
+            if x.type.is_void():
+                return None
+            return block(x)
+        return x
 
     def wrapper(*args, **kwargs):
         builder = args[-1]
@@ -67,14 +71,51 @@ class dtype:
         return self.init(ctx)
 
 
+class pointer_dtype:
+    def __init__(self, element_ty):
+        self.element_ty = element_ty
+
+    def handle(self, builder):
+        return ir.type.make_ptr(self.element_ty, 1)
+
+
+int1 = dtype(ir.type.get_int1)
+int8 = dtype(ir.type.get_int8)
+int16 = dtype(ir.type.get_int16)
+int32 = dtype(ir.type.get_int32)
+int64 = dtype(ir.type.get_int64)
 float16 = dtype(ir.type.get_fp16)
 float32 = dtype(ir.type.get_fp32)
+float64 = dtype(ir.type.get_fp64)
 
 
 class block:
+    @staticmethod
+    def _init_dtype(ir_type):
+        # primitive type
+        if ir_type.is_int1(): return int1
+        if ir_type.is_int8(): return int8
+        if ir_type.is_int16(): return int16
+        if ir_type.is_int32(): return int32
+        if ir_type.is_int64(): return int64
+        if ir_type.is_fp16(): return float16
+        if ir_type.is_fp32(): return float32
+        if ir_type.is_fp64(): return float64
+        # pointer type
+        if ir_type.is_ptr():
+            element_ty = block._init_dtype(ir_type.element)
+            return pointer_dtype(element_ty)
+        raise ValueError(f"Unsupported type {ir_type}")
+
     def __init__(self, handle):
+        # IR handle
         self.handle = handle
-        self.type = handle.type
+        # Block shape
+        self.shape = (1, )
+        if self.handle.type.is_block():
+            self.shape = self.handle.type.shape
+        # Data-type wrapper
+        self.dtype = block._init_dtype(self.handle.type.scalar)
 
     @builtin
     def __add__(self, other, builder=None):
@@ -167,7 +208,7 @@ class block:
     def __getitem__(self, slices, builder=None):
         if isinstance(slices, slice):
             slices = [slices]
-        src_shape = self.type.shape
+        src_shape = self.shape
         dst_shape = []
         curr = 0
         for sl in slices:
