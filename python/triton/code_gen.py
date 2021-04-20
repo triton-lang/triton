@@ -463,9 +463,8 @@ class Kernel:
         if N % 2 == 0: return 2
         return 1
 
-    def __init__(self, fn, grid):
+    def __init__(self, fn):
         self.fn = fn
-        self.grid = grid
 
     def _compile(self, *wargs, device, attributes, constants, num_warps, **meta):
         # explicitly set device
@@ -492,7 +491,7 @@ class Kernel:
         mod, ker, shared_mem = _triton.code_gen.add_passes_to_emit_bin(generator.module, tt_device, num_warps)
         return Binary(mod, ker, num_warps, shared_mem)
 
-    def __call__(self, *wargs, num_warps=4, **meta):
+    def __call__(self, *wargs, grid, num_warps=4, **meta):
         # device inference
         tensor_idxs = [i for i, arg in enumerate(wargs) if isinstance(arg, torch.Tensor)]
         if len(tensor_idxs) == 0:
@@ -522,8 +521,17 @@ class Kernel:
         binary = cache[key]
         cu_stream = torch.cuda.current_stream(device.index).cuda_stream
         stream = _triton.driver.cu_stream(cu_stream, False)
-        grid = self.grid(meta) if hasattr(self.grid, '__call__') else self.grid
+        grid = grid(meta) if hasattr(grid, '__call__') else grid
         binary(stream, params, *grid)
+
+
+class Launcher:
+    def __init__(self, kernel, grid):
+        self.kernel = kernel
+        self.grid = grid
+
+    def __call__(self, *wargs, **kwargs):
+        self.kernel(*wargs, **kwargs, grid=self.grid)
 
 
 class Autotuner:
@@ -570,6 +578,7 @@ class JITFunction:
         self.cache = dict()
         self.kernel_decorators = []
         self.src = textwrap.dedent(inspect.getsource(fn))
+        self.kernel = None
 
     # we do not parse in the constructor because
     # the user might want to monkey-patch self.src dynamically.
@@ -590,11 +599,15 @@ class JITFunction:
                 raise e
             raise CompilationError(self.src, node, e)
 
-    def __getitem__(self, grid_fn):
-        kernel = Kernel(self, grid_fn)
-        for decorator in reversed(self.kernel_decorators):
-            kernel = decorator(kernel)
-        return kernel
+    def _init_kernel(self):
+        if self.kernel is None:
+            self.kernel = Kernel(self)
+            for decorator in reversed(self.kernel_decorators):
+                self.kernel = decorator(self.kernel)
+        return self.kernel
+
+    def __getitem__(self, grid):
+        return Launcher(self._init_kernel(), grid)
 
 
 class Config:

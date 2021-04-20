@@ -237,7 +237,7 @@ print(triton.testing.allclose(c_0, c_1))
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=['M', 'N', 'K'],  # argument names to use as an x-axis for the plot
-        x_vals=[512],  # different possible values for `x_name`
+        x_vals=[8192],  # different possible values for `x_name`
         y_name='provider',  # argument name whose value corresponds to a different line in the plot
         y_vals=['cublas', 'triton'],  # possible keys for `y_name`
         y_lines=["cuBLAS", "Triton"],  # label name for the lines
@@ -247,14 +247,13 @@ print(triton.testing.allclose(c_0, c_1))
     )
 )
 def benchmark(M, N, K, provider):
-    print(provider)
     silu = torch.nn.SiLU()
     a = torch.randn((M, K), device='cuda', dtype=torch.float16)
     b = torch.randn((K, N), device='cuda', dtype=torch.float16)
     if provider == 'cublas':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: silu(torch.matmul(a, b)))
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b))
     if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b, activation=swish))
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b))
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
 
