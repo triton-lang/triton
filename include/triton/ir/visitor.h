@@ -52,7 +52,7 @@ class exp_inst;
 class log_inst;
 
 class get_program_id_inst;
-class get_num_program_inst;
+class get_num_programs_inst;
 class atomic_cas_inst;
 class atomic_exch_inst;
 class atomic_add_inst;
@@ -128,7 +128,7 @@ public:
   virtual void visit_downcast_inst(downcast_inst*) = 0;
 
   virtual void visit_get_program_id_inst(get_program_id_inst*) = 0;
-  virtual void visit_get_num_program_inst(get_num_program_inst*) = 0;
+  virtual void visit_get_num_programs_inst(get_num_programs_inst*) = 0;
   virtual void visit_atomic_cas_inst(atomic_cas_inst*) = 0;
   virtual void visit_atomic_exch_inst(atomic_exch_inst*) = 0;
   virtual void visit_atomic_add_inst(atomic_add_inst*) = 0;

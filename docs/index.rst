@@ -17,15 +17,27 @@ Getting Started
    getting-started/installation
    getting-started/tutorials/index
 
-Programming Guide
+Language Reference
+-------------------
+
+- Checkout the :doc:`Python API Documentation <language-reference/python-api/index>`
+
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Language Reference
+   :hidden:
+
+   language-reference/python-api/index
+
+   
+Going Further
 ------------------
 
 Check out the following documents to learn more about Triton and how it compares against other DSLs for DNNs:
 
 - Chapter 1: :doc:`Introduction <programming-guide/chapter-1/introduction>`
 - Chapter 2: :doc:`Related Work <programming-guide/chapter-2/related-work>`
-- Chapter 3: :doc:`The Triton-C Language <programming-guide/chapter-3/triton-c>`
-- Chapter 4: :doc:`The Triton-IR Intermediate Representation <programming-guide/chapter-4/triton-ir>`
 
 .. toctree::
    :maxdepth: 1
@@ -34,5 +46,3 @@ Check out the following documents to learn more about Triton and how it compares
 
    programming-guide/chapter-1/introduction
    programming-guide/chapter-2/related-work
-   programming-guide/chapter-3/triton-c
-   programming-guide/chapter-4/triton-ir

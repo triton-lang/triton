@@ -119,7 +119,7 @@ public:
   void visit_exp_inst(ir::exp_inst*);
   void visit_log_inst(ir::log_inst*);
   void visit_get_program_id_inst(ir::get_program_id_inst*);
-  void visit_get_num_program_inst(ir::get_num_program_inst*);
+  void visit_get_num_programs_inst(ir::get_num_programs_inst*);
   void visit_atomic_cas_inst(ir::atomic_cas_inst*);
   void visit_atomic_exch_inst(ir::atomic_exch_inst*);
   void visit_atomic_add_inst(ir::atomic_add_inst*);

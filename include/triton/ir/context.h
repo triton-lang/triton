@@ -9,6 +9,7 @@
 namespace triton{
 namespace ir{
 
+class builder;
 class type;
 class context_impl;
 
@@ -16,8 +17,11 @@ class context_impl;
 class context {
 public:
   context();
+  context(const context&) = delete;
+  context& operator=(const context&) = delete;
 
 public:
+  ir::builder* builder = nullptr;
   std::shared_ptr<context_impl> p_impl;
 };
 

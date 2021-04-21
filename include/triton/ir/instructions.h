@@ -514,7 +514,7 @@ public:
 
 class retile_inst: public unary_inst {
 protected:
-  retile_inst(value *arg, value_id_t id, const type::tile_shapes_t &shapes, const std::string &name, instruction *next);
+  retile_inst(value *arg, value_id_t id, const type::block_shapes_t &shapes, const std::string &name, instruction *next);
 };
 
 // reshape
@@ -525,7 +525,7 @@ private:
   std::string repr_impl() const { return "reshape"; }
 
 public:
-  static instruction* create(value *arg, const type::tile_shapes_t &shape_suffix,
+  static instruction* create(value *arg, const type::block_shapes_t &shape_suffix,
                       const std::string &name = "", instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(reshape_inst)
   _TRITON_DEFINE_ACCEPT(reshape_inst)
@@ -539,7 +539,7 @@ private:
   std::string repr_impl() const { return "splat"; }
 
 public:
-  static instruction* create(value *arg, const type::tile_shapes_t &shape_suffix,
+  static instruction* create(value *arg, const type::block_shapes_t &shape_suffix,
                       const std::string &name = "", instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(splat_inst)
   _TRITON_DEFINE_ACCEPT(splat_inst)
@@ -553,7 +553,7 @@ private:
   std::string repr_impl() const { return "broadcast"; }
 
 public:
-  static instruction* create(value *arg, const type::tile_shapes_t &shape_suffix,
+  static instruction* create(value *arg, const type::block_shapes_t &shape_suffix,
                       const std::string &name = "", instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(broadcast_inst)
   _TRITON_DEFINE_ACCEPT(broadcast_inst)
@@ -597,16 +597,16 @@ private:
   unsigned axis_;
 };
 
-class get_num_program_inst: public builtin_inst {
+class get_num_programs_inst: public builtin_inst {
 private:
-  get_num_program_inst(type *ty, unsigned axis, const std::string &name, instruction *next);
-  std::string repr_impl() const { return "get_num_program(" + std::to_string(axis_) + ")"; }
+  get_num_programs_inst(type *ty, unsigned axis, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "get_num_programs(" + std::to_string(axis_) + ")"; }
 
 public:
   static instruction* create(context &ctx, unsigned axis, const std::string &name = "", instruction *next = nullptr);
   unsigned get_axis() const { return axis_; }
-  _TRITON_DEFINE_CLONE(get_num_program_inst)
-  _TRITON_DEFINE_ACCEPT(get_num_program_inst)
+  _TRITON_DEFINE_CLONE(get_num_programs_inst)
+  _TRITON_DEFINE_ACCEPT(get_num_programs_inst)
 
 private:
   unsigned axis_;
