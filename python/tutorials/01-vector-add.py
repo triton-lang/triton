@@ -1,5 +1,3 @@
-import torch
-import triton
 """
 Vector Addition
 =================
@@ -13,6 +11,9 @@ In this tutorial, you will write a simple vector addition using Triton and learn
 # %%
 # Compute Kernel
 # --------------------------
+
+import torch
+import triton
 
 
 @triton.jit
