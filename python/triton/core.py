@@ -236,8 +236,7 @@ class block:
 @builtin
 def program_id(axis, builder=None):
     """
-    Returns the id of the current program instance along the given `axis`.
-    Triton uses an SPMD model in which different JIT'ed functions run in parallel with different `program_id`s.
+    Returns the id of the current program instance along the given :code:`axis`.
 
     :param axis: The axis of the 3D launch grid. Has to be either 0, 1 or 2.
     :type axis: int
@@ -248,8 +247,7 @@ def program_id(axis, builder=None):
 @builtin
 def num_programs(axis, builder=None):
     """
-    Returns the number of program instances launched along the given `axis`.
-    Triton uses an SPMD model in which a 3D grid of JIT'ed functions run in parallel.
+    Returns the number of program instances launched along the given :code:`axis`.
 
     :param axis: The axis of the 3D launch grid. Has to be either 0, 1 or 2.
     :type axis: int
@@ -265,7 +263,7 @@ def num_programs(axis, builder=None):
 @builtin
 def arange(start, end, builder=None):
     """
-    Returns contiguous values within the open interval [start, end).
+    Returns contiguous values within the open interval [:code:`start`, :code:`end`).
 
     :param start: Start of the interval. Must be a power of two.
     :type start: int
@@ -278,11 +276,11 @@ def arange(start, end, builder=None):
 @builtin
 def zeros(shape, dtype, builder=None):
     """
-    Returns a block filled with the scalar value 0 and the given shape.
+    Returns a block filled with the scalar value 0 for the given :code:`shape` and :code:`dtype`.
 
     :param shape: Shape of the new array, e.g., (8, 16) or (8, )
     :type shape: tuple of ints
-    :param dtype: Data-type of the new array, e.g., triton.float16
+    :param dtype: Data-type of the new array, e.g., :code:`triton.float16`
     :type dtype: DType
     """
     return frontend.zeros(shape, dtype, builder)
@@ -309,12 +307,12 @@ def broadcast(input, other, builder=None):
 @builtin
 def broadcast_to(input, shape, builder=None):
     """
-    Tries to broadcast the given block to a new shape.
+    Tries to broadcast the given block to a new :code:`shape`.
 
     :param input: The input block.
     :type input: Block
-    :param shape: The new shape.
-    :type shape: tuple of int
+    :param shape: The desired shape.
+    :type shape: Tuple[int]
     """
     return frontend.broadcast_to(input, shape, builder)
 
@@ -326,6 +324,9 @@ def reshape(input, shape, builder=None):
 
     :param input: The input block.
     :type input: 
+    :param shape: The desired shape.
+    :type shape: Tuple[int]
+
     """
     return frontend.reshape(input, shape, builder)
 
@@ -339,12 +340,13 @@ def reshape(input, shape, builder=None):
 def dot(input, other, builder=None):
     """
     Returns the matrix product of two blocks.
+
     The two blocks must be two dimensionals and have compatible inner dimensions.
 
     :param input: The first block to be multiplied.
-    :type input: 2D block of scalar-type in {`float16`, `float32`}
+    :type input: 2D block of scalar-type in {:code:`float16`, :code:`float32`}
     :param other: The second block to be multiplied.
-    :type other: 2D block of scalar-type in {`float16`, `float32`}
+    :type other: 2D block of scalar-type in {:code:`float16`, :code:`float32`}
     """
     return frontend.dot(input, other, builder)
 
@@ -357,13 +359,15 @@ def dot(input, other, builder=None):
 @builtin
 def load(pointer, mask=None, other=None, builder=None):
     """
-    Return a block of data whose values are, elementwise, loaded from memory at location defined by `pointer`.
-    `mask` and `other` are implicitly broadcast to `pointer.shape`. 
-    `other` is implicitly typecast to `pointer.dtype.element_ty`.
+    Return a block of data whose values are, elementwise, loaded from memory at location defined by :code:`pointer`.
+
+    :code:`mask` and :code:`other` are implicitly broadcast to :code:`pointer.shape`. 
+
+    :code:`other` is implicitly typecast to :code:`pointer.dtype.element_ty`.
 
     :param pointer: Pointers to the data to be loaded.
     :type pointer: Block of dtype=triton.PointerDType
-    :param mask: if mask[idx] is false, do not load the data at address `pointer[idx]`.
+    :param mask: if mask[idx] is false, do not load the data at address :code:`pointer[idx]`.
     :type mask: Block of triton.int1, optional
     :param other: if mask[idx] is false, return other[idx]
     :type other: Block, optional
@@ -374,14 +378,15 @@ def load(pointer, mask=None, other=None, builder=None):
 @builtin
 def store(pointer, value, mask=None, builder=None):
     """
-    Stores `value` block of elements in memory, element-wise, at the memory locations specified by `pointer`. 
-    `value` is implicitly broadcast to `pointer.shape` and typecast to `pointer.dtype.element_ty`.
+    Stores :code:`value` block of elements in memory, element-wise, at the memory locations specified by :code:`pointer`. 
 
-    :param pointer: The memory locations where the elements of `value` are stored.
+    :code:`value` is implicitly broadcast to :code:`pointer.shape` and typecast to :code:`pointer.dtype.element_ty`.
+
+    :param pointer: The memory locations where the elements of :code:`value` are stored.
     :type pointer: Block of dtype=triton.PointerDType
     :param value: The block of elements to be stored.
     :type value: Block
-    :param mask: If mask[idx] is false, do not store `value[idx]` at `pointer[idx]`.
+    :param mask: If mask[idx] is false, do not store :code:`value[idx]` at :code:`pointer[idx]`.
     :type mask: Block of triton.int1, optional
     """
     return frontend.store(pointer, value, mask, builder)
@@ -390,7 +395,7 @@ def store(pointer, value, mask=None, builder=None):
 @builtin
 def atomic_cas(pointer, cmp, val, builder=None):
     """
-    Performs an atomic "compare-and-swap" and the memory locations specified by `pointer`.
+    Performs an atomic "compare-and-swap" and the memory locations specified by :code:`pointer`.
 
     :param pointer: The memory locations to compare-and-swap.
     :type pointer: Block of dtype=triton.PointerDType
@@ -406,7 +411,7 @@ def atomic_cas(pointer, cmp, val, builder=None):
 @builtin
 def atomic_xchg(pointer, val, builder=None):
     """
-    Swaps the *old* values stored at location `pointer` with the new values given by `val`. Returns the old values.
+    Swaps the *old* values stored at location :code:`pointer` with the new values given by :code:`val`. Returns the old values.
 
     :param pointer: The memory locations which contain the old values
     :type pointer: Block of dtype=triton.PointerDType
@@ -424,11 +429,14 @@ def atomic_xchg(pointer, val, builder=None):
 @builtin
 def where(condition, x, y, builder=None):
     """
-    Returns a block of elements from either `x` or `y`, depending on `condition`.
-    Note that `x` and `y` are always evaluated regardless of the value of `condition`.
-    If you want to avoid unintented memory operations, use the `mask` arguments in `triton.load` and `triton.store` instead.
-    The shape of `x` and `y` are both broadcast to the shape of `condition`.
-    `x` and `y` must have the data type.
+    Returns a block of elements from either :code:`x` or :code:`y`, depending on :code:`condition`.
+
+    Note that :code:`x` and :code:`y` are always evaluated regardless of the value of :code:`condition`.
+
+    If you want to avoid unintented memory operations, use the :code:`mask` arguments in `triton.load` and `triton.store` instead.
+
+    The shape of :code:`x` and :code:`y` are both broadcast to the shape of :code:`condition`.
+    :code:`x` and :code:`y` must have the data type.
 
     :param condition: When True (nonzero), yield x, otherwise yield y.
     :type condition: Block of triton.bool
@@ -446,7 +454,7 @@ def where(condition, x, y, builder=None):
 @builtin
 def exp(x, builder=None):
     """
-    Returns a new tensor with the exponential of the elements of the input block.
+    Computes the element-wise exponential of :code:`x`
 
     :param x: the input values
     :type x: Block
@@ -458,7 +466,7 @@ def exp(x, builder=None):
 @builtin
 def log(x, builder=None):
     """
-    Returns a new tensor with the natural logarithm of the elements of the input block.
+    Computes the element-wise natural logarithm of :code:`x`
 
     :param x: the input values
     :type x: Block

@@ -23,17 +23,34 @@
 
 # -- General configuration ------------------------------------------------
 
-# If your documentation needs a minimal Sphinx version, state it here.
-#
-# needs_sphinx = '1.0'
 
-# Add any Sphinx extension module names here, as strings. They can be
-# extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
-# ones.
-extensions = []
+def setup(app):
+    """Customize function args retrieving to get args under decorator."""
+    import sphinx
+    import triton
 
-# Math Jax
-extensions += ['sphinx.ext.mathjax']
+    def forward_jit_fn(func):
+        old = func
+
+        def wrapped(obj, **kwargs):
+            if isinstance(obj, triton.code_gen.JITFunction):
+                obj = obj.fn
+            return old(obj)
+
+        return wrapped
+
+    old_documenter = sphinx.ext.autosummary.get_documenter
+
+    def documenter(app, obj, parent):
+        if isinstance(obj, triton.code_gen.JITFunction):
+            obj = obj.fn
+        return old_documenter(app, obj, parent)
+
+    sphinx.ext.autosummary.get_documenter = documenter
+    sphinx.util.inspect.unwrap_all = forward_jit_fn(sphinx.util.inspect.unwrap_all)
+    sphinx.util.inspect.signature = forward_jit_fn(sphinx.util.inspect.signature)
+    sphinx.util.inspect.object_description = forward_jit_fn(sphinx.util.inspect.object_description)
+
 
 # Auto Doc
 import sys
