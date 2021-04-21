@@ -191,18 +191,18 @@
 <dl class="py function">
 <dt id="triton.where">
 <code class="sig-prename descclassname"><span class="pre">triton.</span></code><code class="sig-name descname"><span class="pre">where</span></code><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">condition</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">builder</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.where" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns a block of elements from either <cite>x</cite> or <cite>y</cite>, depending on <cite>condition</cite>.
-Note that <cite>x</cite> and <cite>y</cite> are always evaluated regardless of the value of <cite>condition</cite>.
-If you want to avoid unintented memory operations, use the <cite>mask</cite> arguments in <cite>triton.load</cite> and <cite>triton.store</cite> instead.
-The shape of <cite>x</cite> and <cite>y</cite> are both broadcast to the shape of <cite>condition</cite>.
-<cite>x</cite> and <cite>y</cite> must have the data type.</p>
+<dd><p>Returns a block of elements from either <code class="code docutils literal notranslate"><span class="pre">x</span></code> or <code class="code docutils literal notranslate"><span class="pre">y</span></code>, depending on <code class="code docutils literal notranslate"><span class="pre">condition</span></code>.</p>
+<p>Note that <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code> are always evaluated regardless of the value of <code class="code docutils literal notranslate"><span class="pre">condition</span></code>.</p>
+<p>If you want to avoid unintented memory operations, use the <code class="code docutils literal notranslate"><span class="pre">mask</span></code> arguments in <cite>triton.load</cite> and <cite>triton.store</cite> instead.</p>
+<p>The shape of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code> are both broadcast to the shape of <code class="code docutils literal notranslate"><span class="pre">condition</span></code>.
+<code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code> must have the data type.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>condition</strong> (<em>Block of triton.bool</em>) – When True (nonzero), yield x, otherwise yield y.</p></li>
 <li><p><strong>x</strong> – values selected at indices where condition is True.</p></li>
 <li><p><strong>y</strong> – values selected at indices where condition is False.</p></li>
-<li><p><strong>builder</strong> (<em>triton.ir.builder</em>) – IR builder to generate code into, optional from within &#64;triton.jit functions</p></li>
+<li><p><strong>builder</strong> (<em>triton.ir.builder</em><em>, </em><em>optional from within JIT'ed functions</em>) – IR builder to generate code into</p></li>
 </ul>
 </dd>
 </dl>

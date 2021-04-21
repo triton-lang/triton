@@ -235,10 +235,10 @@
 </colgroup>
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.program_id.html#triton.program_id" title="triton.program_id"><code class="xref py py-obj docutils literal notranslate"><span class="pre">program_id</span></code></a></p></td>
-<td><p>Returns the id of the current program instance along the given <cite>axis</cite>. Triton uses an SPMD model in which different &#64;triton.jit functions run in parallel with different <a href="#id1"><span class="problematic" id="id2">`</span></a>program_id`s.</p></td>
+<td><p>Returns the id of the current program instance along the given <code class="code docutils literal notranslate"><span class="pre">axis</span></code>.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.num_programs.html#triton.num_programs" title="triton.num_programs"><code class="xref py py-obj docutils literal notranslate"><span class="pre">num_programs</span></code></a></p></td>
-<td><p>Returns the number of program instances launched along the given <cite>axis</cite>.</p></td>
+<td><p>Returns the number of program instances launched along the given <code class="code docutils literal notranslate"><span class="pre">axis</span></code>.</p></td>
 </tr>
 </tbody>
 </table>
@@ -252,10 +252,10 @@
 </colgroup>
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.arange.html#triton.arange" title="triton.arange"><code class="xref py py-obj docutils literal notranslate"><span class="pre">arange</span></code></a></p></td>
-<td><p>Returns contiguous values within the open interval [start, end).</p></td>
+<td><p>Returns contiguous values within the open interval [<code class="code docutils literal notranslate"><span class="pre">start</span></code>, <code class="code docutils literal notranslate"><span class="pre">end</span></code>).</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.zeros.html#triton.zeros" title="triton.zeros"><code class="xref py py-obj docutils literal notranslate"><span class="pre">zeros</span></code></a></p></td>
-<td><p>Returns a block filled with the scalar value 0 and the given shape.</p></td>
+<td><p>Returns a block filled with the scalar value 0 for the given <code class="code docutils literal notranslate"><span class="pre">shape</span></code> and <code class="code docutils literal notranslate"><span class="pre">dtype</span></code>.</p></td>
 </tr>
 </tbody>
 </table>
@@ -269,13 +269,13 @@
 </colgroup>
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.broadcast_to.html#triton.broadcast_to" title="triton.broadcast_to"><code class="xref py py-obj docutils literal notranslate"><span class="pre">broadcast_to</span></code></a></p></td>
-<td><p>Tries to broadcast a block to a new shape.</p></td>
+<td><p>Tries to broadcast the given block to a new <code class="code docutils literal notranslate"><span class="pre">shape</span></code>.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.reshape.html#triton.reshape" title="triton.reshape"><code class="xref py py-obj docutils literal notranslate"><span class="pre">reshape</span></code></a></p></td>
-<td><p>Reshapes a block to a new shape.</p></td>
+<td><p>Tries to reshape the given block to a new shape.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.ravel.html#triton.ravel" title="triton.ravel"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ravel</span></code></a></p></td>
-<td><p></p></td>
+<td><p>Returns a contiguous flattened view of <code class="code docutils literal notranslate"><span class="pre">x</span></code></p></td>
 </tr>
 </tbody>
 </table>
@@ -303,16 +303,16 @@
 </colgroup>
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.load.html#triton.load" title="triton.load"><code class="xref py py-obj docutils literal notranslate"><span class="pre">load</span></code></a></p></td>
-<td><p>Return a block of data whose values are, elementwise, loaded from memory at location defined by <cite>pointer</cite>.</p></td>
+<td><p>Return a block of data whose values are, elementwise, loaded from memory at location defined by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.store.html#triton.store" title="triton.store"><code class="xref py py-obj docutils literal notranslate"><span class="pre">store</span></code></a></p></td>
-<td><p>Stores <cite>value</cite> block of elements in memory, element-wise, at the memory locations specified by <cite>pointer</cite>.</p></td>
+<td><p>Stores <code class="code docutils literal notranslate"><span class="pre">value</span></code> block of elements in memory, element-wise, at the memory locations specified by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.atomic_cas.html#triton.atomic_cas" title="triton.atomic_cas"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_cas</span></code></a></p></td>
-<td><p></p></td>
+<td><p>Performs an atomic “compare-and-swap” and the memory locations specified by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.atomic_xchg.html#triton.atomic_xchg" title="triton.atomic_xchg"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_xchg</span></code></a></p></td>
-<td><p></p></td>
+<td><p>Swaps the <em>old</em> values stored at location <code class="code docutils literal notranslate"><span class="pre">pointer</span></code> with the new values given by <code class="code docutils literal notranslate"><span class="pre">val</span></code>.</p></td>
 </tr>
 </tbody>
 </table>
@@ -326,7 +326,7 @@
 </colgroup>
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.where.html#triton.where" title="triton.where"><code class="xref py py-obj docutils literal notranslate"><span class="pre">where</span></code></a></p></td>
-<td><p>Returns a block of elements from either <cite>x</cite> or <cite>y</cite>, depending on <cite>condition</cite>.</p></td>
+<td><p>Returns a block of elements from either <code class="code docutils literal notranslate"><span class="pre">x</span></code> or <code class="code docutils literal notranslate"><span class="pre">y</span></code>, depending on <code class="code docutils literal notranslate"><span class="pre">condition</span></code>.</p></td>
 </tr>
 </tbody>
 </table>
@@ -340,16 +340,16 @@
 </colgroup>
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.exp.html#triton.exp" title="triton.exp"><code class="xref py py-obj docutils literal notranslate"><span class="pre">exp</span></code></a></p></td>
-<td><p></p></td>
+<td><p>Computes the element-wise exponential of <code class="code docutils literal notranslate"><span class="pre">x</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.log.html#triton.log" title="triton.log"><code class="xref py py-obj docutils literal notranslate"><span class="pre">log</span></code></a></p></td>
-<td><p></p></td>
+<td><p>Computes the element-wise natural logarithm of <code class="code docutils literal notranslate"><span class="pre">x</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.sigmoid.html#triton.sigmoid" title="triton.sigmoid"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sigmoid</span></code></a></p></td>
-<td><p></p></td>
+<td><p>Computes the element-wise sigmoid of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.softmax.html#triton.softmax" title="triton.softmax"><code class="xref py py-obj docutils literal notranslate"><span class="pre">softmax</span></code></a></p></td>
-<td><p></p></td>
+<td><p>Computes the element-wise softmax of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
 </tbody>
 </table>
@@ -363,13 +363,13 @@
 </colgroup>
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.max.html#triton.max" title="triton.max"><code class="xref py py-obj docutils literal notranslate"><span class="pre">max</span></code></a></p></td>
-<td><p></p></td>
+<td><p>Returns the maximum value of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> block along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.min.html#triton.min" title="triton.min"><code class="xref py py-obj docutils literal notranslate"><span class="pre">min</span></code></a></p></td>
-<td><p></p></td>
+<td><p>Returns the minimum value of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> block along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.sum.html#triton.sum" title="triton.sum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sum</span></code></a></p></td>
-<td><p></p></td>
+<td><p>Returns the sum of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> block along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
 </tr>
 </tbody>
 </table>
@@ -383,10 +383,10 @@
 </colgroup>
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.minimum.html#triton.minimum" title="triton.minimum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">minimum</span></code></a></p></td>
-<td><p></p></td>
+<td><p>Computes the element-wise minimum of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.maximum.html#triton.maximum" title="triton.maximum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">maximum</span></code></a></p></td>
-<td><p></p></td>
+<td><p>Computes the element-wise maximum of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
 </tr>
 </tbody>
 </table>
@@ -400,7 +400,7 @@
 </colgroup>
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.multiple_of.html#triton.multiple_of" title="triton.multiple_of"><code class="xref py py-obj docutils literal notranslate"><span class="pre">multiple_of</span></code></a></p></td>
-<td><p></p></td>
+<td><p>Let the compiler knows that the values in <code class="code docutils literal notranslate"><span class="pre">input</span></code> are all multiples of <code class="code docutils literal notranslate"><span class="pre">value</span></code>.</p></td>
 </tr>
 </tbody>
 </table>

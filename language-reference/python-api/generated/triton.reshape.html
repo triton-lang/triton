@@ -193,9 +193,16 @@
 <dl class="py function">
 <dt id="triton.reshape">
 <code class="sig-prename descclassname"><span class="pre">triton.</span></code><code class="sig-name descname"><span class="pre">reshape</span></code><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shape</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">builder</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.reshape" title="Permalink to this definition">¶</a></dt>
-<dd><p>Reshapes a block to a new shape.
-:param builder: IR builder to generate code into, optional from within &#64;triton.jit functions
-:type builder: triton.ir.builder</p>
+<dd><p>Tries to reshape the given block to a new shape.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>input</strong> – The input block.</p></li>
+<li><p><strong>shape</strong> (<em>Tuple</em><em>[</em><em>int</em><em>]</em>) – The desired shape.</p></li>
+<li><p><strong>builder</strong> (<em>triton.ir.builder</em><em>, </em><em>optional from within JIT'ed functions</em>) – IR builder to generate code into</p></li>
+</ul>
+</dd>
+</dl>
 </dd></dl>
 
 </div>
