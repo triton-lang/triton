@@ -192,13 +192,12 @@
 <dl class="py function">
 <dt id="triton.program_id">
 <code class="sig-prename descclassname"><span class="pre">triton.</span></code><code class="sig-name descname"><span class="pre">program_id</span></code><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">axis</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">builder</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.program_id" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the id of the current program instance along the given <cite>axis</cite>.
-Triton uses an SPMD model in which different &#64;triton.jit functions run in parallel with different <a href="#id1"><span class="problematic" id="id2">`</span></a>program_id`s.</p>
+<dd><p>Returns the id of the current program instance along the given <code class="code docutils literal notranslate"><span class="pre">axis</span></code>.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>axis</strong> (<em>int</em>) – The axis of the 3D launch grid. Has to be either 0, 1 or 2.</p></li>
-<li><p><strong>builder</strong> (<em>triton.ir.builder</em>) – IR builder to generate code into, optional from within &#64;triton.jit functions</p></li>
+<li><p><strong>builder</strong> (<em>triton.ir.builder</em><em>, </em><em>optional from within JIT'ed functions</em>) – IR builder to generate code into</p></li>
 </ul>
 </dd>
 </dl>

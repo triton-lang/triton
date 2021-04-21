@@ -192,13 +192,13 @@
 <dl class="py function">
 <dt id="triton.zeros">
 <code class="sig-prename descclassname"><span class="pre">triton.</span></code><code class="sig-name descname"><span class="pre">zeros</span></code><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">shape</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">builder</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.zeros" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns a block filled with the scalar value 0 and the given shape.</p>
+<dd><p>Returns a block filled with the scalar value 0 for the given <code class="code docutils literal notranslate"><span class="pre">shape</span></code> and <code class="code docutils literal notranslate"><span class="pre">dtype</span></code>.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>shape</strong> (<em>tuple of ints</em>) – Shape of the new array, e.g., (8, 16) or (8, )</p></li>
-<li><p><strong>dtype</strong> (<em>triton.ir.dtype</em>) – Data-type of the new array, e.g., triton.float16</p></li>
-<li><p><strong>builder</strong> (<em>triton.ir.builder</em>) – IR builder to generate code into, optional from within &#64;triton.jit functions</p></li>
+<li><p><strong>dtype</strong> (<em>DType</em>) – Data-type of the new array, e.g., <code class="code docutils literal notranslate"><span class="pre">triton.float16</span></code></p></li>
+<li><p><strong>builder</strong> (<em>triton.ir.builder</em><em>, </em><em>optional from within JIT'ed functions</em>) – IR builder to generate code into</p></li>
 </ul>
 </dd>
 </dl>

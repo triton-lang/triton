@@ -193,8 +193,19 @@
 <h1>triton.atomic_cas<a class="headerlink" href="#triton-atomic-cas" title="Permalink to this headline">¶</a></h1>
 <dl class="py function">
 <dt id="triton.atomic_cas">
-<code class="sig-prename descclassname"><span class="pre">triton.</span></code><code class="sig-name descname"><span class="pre">atomic_cas</span></code><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ptr</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cmp</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">val</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">builder</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.atomic_cas" title="Permalink to this definition">¶</a></dt>
-<dd></dd></dl>
+<code class="sig-prename descclassname"><span class="pre">triton.</span></code><code class="sig-name descname"><span class="pre">atomic_cas</span></code><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pointer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cmp</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">val</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">builder</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.atomic_cas" title="Permalink to this definition">¶</a></dt>
+<dd><p>Performs an atomic “compare-and-swap” and the memory locations specified by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>pointer</strong> (<em>Block of dtype=triton.PointerDType</em>) – The memory locations to compare-and-swap.</p></li>
+<li><p><strong>cmp</strong> (<em>Block of dtype=`pointer.dtype.element_ty`</em>) – The values expected to be found in the atomic object</p></li>
+<li><p><strong>val</strong> (<em>Block of dtype=`pointer.dtype.element_ty`</em>) – The values to copy in case the expected value matches the contained value.</p></li>
+<li><p><strong>builder</strong> (<em>triton.ir.builder</em><em>, </em><em>optional from within JIT'ed functions</em>) – IR builder to generate code into</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
 
 </div>
 

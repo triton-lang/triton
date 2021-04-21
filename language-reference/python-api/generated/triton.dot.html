@@ -191,14 +191,14 @@
 <dl class="py function">
 <dt id="triton.dot">
 <code class="sig-prename descclassname"><span class="pre">triton.</span></code><code class="sig-name descname"><span class="pre">dot</span></code><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">builder</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.dot" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the matrix product of two blocks.
-The two blocks must be two dimensionals and have compatible inner dimensions.</p>
+<dd><p>Returns the matrix product of two blocks.</p>
+<p>The two blocks must be two dimensionals and have compatible inner dimensions.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>input</strong> (2D block of scalar-type in {<cite>float16</cite>, <cite>float32</cite>}) – The first block to be multiplied.</p></li>
-<li><p><strong>other</strong> (2D block of scalar-type in {<cite>float16</cite>, <cite>float32</cite>}) – The second block to be multiplied.</p></li>
-<li><p><strong>builder</strong> (<em>triton.ir.builder</em>) – IR builder to generate code into, optional from within &#64;triton.jit functions</p></li>
+<li><p><strong>input</strong> (2D block of scalar-type in {<code class="code docutils literal notranslate"><span class="pre">float16</span></code>, <code class="code docutils literal notranslate"><span class="pre">float32</span></code>}) – The first block to be multiplied.</p></li>
+<li><p><strong>other</strong> (2D block of scalar-type in {<code class="code docutils literal notranslate"><span class="pre">float16</span></code>, <code class="code docutils literal notranslate"><span class="pre">float32</span></code>}) – The second block to be multiplied.</p></li>
+<li><p><strong>builder</strong> (<em>triton.ir.builder</em><em>, </em><em>optional from within JIT'ed functions</em>) – IR builder to generate code into</p></li>
 </ul>
 </dd>
 </dl>

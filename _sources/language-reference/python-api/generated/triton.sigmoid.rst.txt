@@ -3,4 +3,4 @@
 
 .. currentmodule:: triton
 
-.. autodata:: sigmoid
+.. autofunction:: sigmoid
