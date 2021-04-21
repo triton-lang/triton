@@ -10,17 +10,13 @@ namespace triton{
 namespace ir{
 
 /* Module */
-module::module(const std::string &name)
-  : name_(name), builder_(context_) {
+module::module(const std::string &name, builder &builder)
+  : name_(name), builder_(builder) {
   sealed_blocks_.insert(nullptr);
 }
 
 ir::builder& module::get_builder() {
   return builder_;
-}
-
-ir::context& module::get_context() {
-  return context_;
 }
 
 void module::set_value(const std::string& name, ir::basic_block *block, ir::value *value){
@@ -98,7 +94,7 @@ ir::value *module::get_value_recursive(const std::string& name, ir::basic_block 
   ir::value *result;
   bool is_const = const_.find(name) != const_.end();
   auto &preds = block->get_predecessors();
-  ir::type *ty = get_scope().types.at(name);
+  ir::type *ty = get_scope().get_type(name);
   if(block && !is_const && sealed_blocks_.find(block) == sealed_blocks_.end()){
     incomplete_phis_[block][name] = make_phi(ty, 1, block);
     result = (ir::value*)incomplete_phis_[block][name];

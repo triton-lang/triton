@@ -1,30 +1,31 @@
 #ifndef _TRITON_CODEGEN_PASS_H_
 #define _TRITON_CODEGEN_PASS_H_
 
-#include <list>
+
+#include <memory>
 
 namespace triton{
 
 namespace ir{
   class module;
 }
+namespace driver{
+  class device;
+  class module;
+  class kernel;
+}
+}
 
+namespace triton{
 namespace codegen{
 
-class pass {
-public:
-  virtual void run(ir::module& m);
-};
+// TODO:
+// There should be a proper pass manager there!
+void add_passes_to_emit_bin(ir::module &ir, driver::device* dev, int num_warps,
+                            driver::module*& mod, driver::kernel*& ker, size_t& shared_mem);
 
-
-class pass_manager {
-public:
-  void add(pass* p);
-  void run(ir::module& m);
-
-private:
-  std::list<pass*> passes;
-};
 
 }
 }
+
+#endif

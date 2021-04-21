@@ -15,7 +15,7 @@ void axes::update_graph_reduce(ir::instruction *i) {
   auto* red = static_cast<ir::reduce_inst*>(i);
   unsigned axis = red->get_axis();
   ir::value *arg = red->get_operand(0);
-  auto in_shapes = arg->get_type()->get_tile_shapes();
+  auto in_shapes = arg->get_type()->get_block_shapes();
   unsigned current = 0;
   for(unsigned d = 0; d < in_shapes.size(); d++){
     if(d == axis)
@@ -29,8 +29,8 @@ void axes::update_graph_reshape(ir::instruction *i) {
   // operands
   ir::value *op = reshape->get_operand(0);
   // shapes
-  auto op_shapes = op->get_type()->get_tile_shapes();
-  auto res_shapes = reshape->get_type()->get_tile_shapes();
+  auto op_shapes = op->get_type()->get_block_shapes();
+  auto res_shapes = reshape->get_type()->get_block_shapes();
   // construct edges
   unsigned current = 0;
   bool is_skewed = false;
@@ -58,10 +58,10 @@ void axes::update_graph_trans(ir::instruction *i) {
 
 void axes::update_graph_broadcast(ir::instruction *i) {
   auto *broadcast = static_cast<ir::broadcast_inst*>(i);
-  auto shapes = broadcast->get_type()->get_tile_shapes();
+  auto shapes = broadcast->get_type()->get_block_shapes();
   ir::value *op = broadcast->get_operand(0);
   ir::type *op_ty = op->get_type();
-  const auto& op_shapes = op_ty->get_tile_shapes();
+  const auto& op_shapes = op_ty->get_block_shapes();
   // add edge between non-broadcast axes
   for(unsigned d = 0; d < shapes.size(); d ++)
     if(op_shapes[d] == shapes[d])
@@ -70,7 +70,7 @@ void axes::update_graph_broadcast(ir::instruction *i) {
 
 void axes::update_graph_dot(ir::instruction *i) {
   auto *dot = static_cast<ir::dot_inst*>(i);
-  auto shapes = dot->get_type()->get_tile_shapes();
+  auto shapes = dot->get_type()->get_block_shapes();
   ir::value *A = dot->get_operand(0);
   ir::value *B = dot->get_operand(1);
   ir::value *D = dot->get_operand(2);
@@ -83,7 +83,7 @@ void axes::update_graph_elementwise(ir::instruction *i, bool connect_ret) {
   if(i->get_num_operands() == 0)
     return;
   ir::value *op = i->get_operand(0);
-  if(!op->get_type()->is_tile_ty())
+  if(!op->get_type()->is_block_ty())
     return;
   auto rank = op->get_type()->get_tile_rank();
   for(unsigned d = 0; d < rank; d++)
@@ -96,7 +96,7 @@ void axes::update_graph_elementwise(ir::instruction *i, bool connect_ret) {
 }
 
 void axes::update_graph_no_edge(ir::instruction *i) {
-  if(!i->get_type()->is_tile_ty())
+  if(!i->get_type()->is_block_ty())
     return;
   auto rank = i->get_type()->get_tile_rank();
   for(unsigned d = 0; d < rank; d++)

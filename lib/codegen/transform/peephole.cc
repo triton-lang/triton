@@ -58,7 +58,8 @@ bool peephole::rewrite_trans_phi(ir::instruction* value, ir::builder& builder) {
 }
 
 bool peephole::rewrite_dot(ir::instruction *value, ir::builder& builder){
-  // dot(a, b, 0) + c -> dot(a, b, c)
+  // dot(a, b, c) + d -> dot(a, b, c + d)
+  // d + dot(a, b, c) -> dot(a, b, c + d)
   auto add = dynamic_cast<ir::binary_operator*>(value);
   if(add && add->get_op() == ir::binary_op_t::FAdd) {
     ir::value *lhs = add->get_operand(0);
@@ -131,10 +132,10 @@ bool peephole::rewrite_unit_red(ir::instruction *value, ir::builder& builder){
   if(!x)
     return false;
   ir::value *arg = x->get_operand(0);
-  auto shapes = arg->get_type()->get_tile_shapes();
+  auto shapes = arg->get_type()->get_block_shapes();
   if(shapes[x->get_axis()] == 1){
     builder.set_insert_point(x);
-    ir::value* new_red = builder.create_reshape(arg, x->get_type()->get_tile_shapes());
+    ir::value* new_red = builder.create_reshape(arg, x->get_type()->get_block_shapes());
     x->replace_all_uses_with(new_red);
     return true;
   }
