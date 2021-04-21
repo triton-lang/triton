@@ -1,0 +1,6 @@
+﻿triton.num\_programs
+====================
+
+.. currentmodule:: triton
+
+.. autofunction:: num_programs

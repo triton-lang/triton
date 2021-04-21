@@ -1,0 +1,6 @@
+﻿triton.sigmoid
+==============
+
+.. currentmodule:: triton
+
+.. autodata:: sigmoid

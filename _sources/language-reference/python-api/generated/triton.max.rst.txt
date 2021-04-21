@@ -1,0 +1,6 @@
+﻿triton.max
+==========
+
+.. currentmodule:: triton
+
+.. autofunction:: max

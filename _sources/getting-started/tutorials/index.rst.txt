@@ -12,7 +12,7 @@ Below is a gallery of tutorials for writing various basic operations with Triton
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="- The basic syntax of the Triton programming language - The best practices for creating PyTorch...">
+    <div class="sphx-glr-thumbcontainer" tooltip="- The basic programming model used by Triton - The triton.jit decorator, which constitutes the ...">
 
 .. only:: html
 
@@ -33,7 +33,7 @@ Below is a gallery of tutorials for writing various basic operations with Triton
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="- The benefits of kernel fusion for bandwidth-bound operations. - The syntax and usage of reduc...">
+    <div class="sphx-glr-thumbcontainer" tooltip="- The benefits of kernel fusion for bandwidth-bound operations. - The reduction operators in Tr...">
 
 .. only:: html
 
@@ -54,7 +54,7 @@ Below is a gallery of tutorials for writing various basic operations with Triton
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="- The block-level matrix multiplication operator @ - Multi-dimensional pointer arithmetic - Pro...">
+    <div class="sphx-glr-thumbcontainer" tooltip="- Block-level matrix multiplications - Multi-dimensional pointer arithmetic - Program re-orderi...">
 
 .. only:: html
 

@@ -1,0 +1,6 @@
+﻿triton.minimum
+==============
+
+.. currentmodule:: triton
+
+.. autodata:: minimum
