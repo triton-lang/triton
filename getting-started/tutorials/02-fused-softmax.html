@@ -280,7 +280,7 @@ so we need to internally “pad” tiles and guard the memory operations properl
     <span class="c1"># Allocate output</span>
     <span class="n">y</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
     <span class="c1"># Enqueue kernel. The launch grid is simple: we have one kernel instance per row of the input matrix</span>
-    <span class="n">_softmax</span><span class="p">[(</span><span class="n">M</span><span class="p">,</span> <span class="p">)](</span><span class="n">y</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">x</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">y</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">BLOCK</span><span class="o">=</span><span class="n">BLOCK</span><span class="p">)</span>
+    <span class="n">_softmax</span><span class="p">[(</span><span class="n">M</span><span class="p">,</span> <span class="p">)](</span><span class="n">y</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">x</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">y</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">,</span> <span class="n">BLOCK</span><span class="o">=</span><span class="n">BLOCK</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">y</span>
 </pre></div>
 </div>
@@ -343,7 +343,7 @@ This means that – when temporary data is too large to fit entirely in the GPU�
 Note that our Triton kernel is not only faster than PyTorch’s CUDA kernel, it is also <strong>easier to read, understand and maintain</strong>.</p></li>
 </ul>
 </div></blockquote>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  20.767 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  20.176 seconds)</p>
 <div class="sphx-glr-footer class sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-02-fused-softmax-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/d91442ac2982c4e0cc3ab0f43534afbc/02-fused-softmax.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">02-fused-softmax.py</span></code></a></p>

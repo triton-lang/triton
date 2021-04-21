@@ -151,7 +151,7 @@ We can create a helper function that enqueues the kernel and its (meta-)argument
         # Allocate output
         y = torch.empty_like(x)
         # Enqueue kernel. The launch grid is simple: we have one kernel instance per row of the input matrix
-        _softmax[(M, )](y, x, x.stride(0), y.stride(0), M, N, BLOCK=BLOCK)
+        _softmax[(M, )](y, x, x.stride(0), y.stride(0), M, N, num_warps=num_warps, BLOCK=BLOCK)
         return y
 
 
@@ -264,7 +264,7 @@ In the above plot, we can see that:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  20.767 seconds)
+   **Total running time of the script:** ( 0 minutes  20.176 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_02-fused-softmax.py:
