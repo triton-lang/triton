@@ -405,7 +405,7 @@ def atomic_cas(pointer, cmp, val, builder=None):
     :type val: Block of dtype=`pointer.dtype.element_ty`
     """
 
-    return frontend.atomic_cas(ptr, cmp, val, builder)
+    return frontend.atomic_cas(pointer, cmp, val, builder)
 
 
 @builtin
@@ -418,7 +418,7 @@ def atomic_xchg(pointer, val, builder=None):
     :param val: The new values to store
     :type val: Block of dtype=`pointer.dtype.element_ty`
     """
-    return frontend.atomic_xchg(ptr, val, builder)
+    return frontend.atomic_xchg(pointer, val, builder)
 
 
 # -----------------------
