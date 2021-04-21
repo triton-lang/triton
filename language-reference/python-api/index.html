@@ -43,7 +43,7 @@
     
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="triton.program_id" href="generated/triton.program_id.html" />
+    <link rel="next" title="Introduction" href="../../programming-guide/chapter-1/introduction.html" />
     <link rel="prev" title="Matrix Multiplication" href="../../getting-started/tutorials/03-matrix-multiplication.html" /> 
 </head>
 
@@ -97,59 +97,16 @@
 <p class="caption"><span class="caption-text">Language Reference</span></p>
 <ul class="current">
 <li class="toctree-l1 current"><a class="current reference internal" href="#">Python API</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="#programming-model">Programming Model</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.program_id.html">triton.program_id</a></li>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.num_programs.html">triton.num_programs</a></li>
-</ul>
-</li>
-<li class="toctree-l2"><a class="reference internal" href="#creation-ops">Creation Ops</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.arange.html">triton.arange</a></li>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.zeros.html">triton.zeros</a></li>
-</ul>
-</li>
-<li class="toctree-l2"><a class="reference internal" href="#shape-manipulation-ops">Shape Manipulation Ops</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.broadcast_to.html">triton.broadcast_to</a></li>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.reshape.html">triton.reshape</a></li>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.ravel.html">triton.ravel</a></li>
-</ul>
-</li>
-<li class="toctree-l2"><a class="reference internal" href="#linear-algebra-ops">Linear Algebra Ops</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.dot.html">triton.dot</a></li>
-</ul>
-</li>
-<li class="toctree-l2"><a class="reference internal" href="#memory-ops">Memory Ops</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.load.html">triton.load</a></li>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.store.html">triton.store</a></li>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.atomic_cas.html">triton.atomic_cas</a></li>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.atomic_xchg.html">triton.atomic_xchg</a></li>
-</ul>
-</li>
-<li class="toctree-l2"><a class="reference internal" href="#indexing-ops">Indexing Ops</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.where.html">triton.where</a></li>
-</ul>
-</li>
-<li class="toctree-l2"><a class="reference internal" href="#math-ops">Math Ops</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.exp.html">triton.exp</a></li>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.log.html">triton.log</a></li>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.sigmoid.html">triton.sigmoid</a></li>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.softmax.html">triton.softmax</a></li>
-</ul>
-</li>
-<li class="toctree-l2"><a class="reference internal" href="#reduction-ops">Reduction Ops</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.max.html">triton.max</a></li>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.min.html">triton.min</a></li>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.sum.html">triton.sum</a></li>
-</ul>
-</li>
-<li class="toctree-l2"><a class="reference internal" href="#comparison-ops">Comparison ops</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.minimum.html">triton.minimum</a></li>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.maximum.html">triton.maximum</a></li>
-</ul>
-</li>
-<li class="toctree-l2"><a class="reference internal" href="#compiler-hint-ops">Compiler Hint Ops</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="generated/triton.multiple_of.html">triton.multiple_of</a></li>
-</ul>
-</li>
+<li class="toctree-l2"><a class="reference internal" href="#programming-model">Programming Model</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#creation-ops">Creation Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#shape-manipulation-ops">Shape Manipulation Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#linear-algebra-ops">Linear Algebra Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#memory-ops">Memory Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#indexing-ops">Indexing Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#math-ops">Math Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#reduction-ops">Reduction Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#comparison-ops">Comparison ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#compiler-hint-ops">Compiler Hint Ops</a></li>
 </ul>
 </li>
 </ul>
@@ -234,12 +191,6 @@
 <col style="width: 90%" />
 </colgroup>
 <tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.program_id.html#triton.program_id" title="triton.program_id"><code class="xref py py-obj docutils literal notranslate"><span class="pre">program_id</span></code></a></p></td>
-<td><p>Returns the id of the current program instance along the given <cite>axis</cite>. Triton uses an SPMD model in which different &#64;triton.jit functions run in parallel with different <a href="#id1"><span class="problematic" id="id2">`</span></a>program_id`s.</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.num_programs.html#triton.num_programs" title="triton.num_programs"><code class="xref py py-obj docutils literal notranslate"><span class="pre">num_programs</span></code></a></p></td>
-<td><p>Returns the number of program instances launched along the given <cite>axis</cite>.</p></td>
-</tr>
 </tbody>
 </table>
 </div>
@@ -251,12 +202,6 @@
 <col style="width: 90%" />
 </colgroup>
 <tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.arange.html#triton.arange" title="triton.arange"><code class="xref py py-obj docutils literal notranslate"><span class="pre">arange</span></code></a></p></td>
-<td><p>Returns contiguous values within the open interval [start, end).</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.zeros.html#triton.zeros" title="triton.zeros"><code class="xref py py-obj docutils literal notranslate"><span class="pre">zeros</span></code></a></p></td>
-<td><p>Returns a block filled with the scalar value 0 and the given shape.</p></td>
-</tr>
 </tbody>
 </table>
 </div>
@@ -268,15 +213,6 @@
 <col style="width: 90%" />
 </colgroup>
 <tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.broadcast_to.html#triton.broadcast_to" title="triton.broadcast_to"><code class="xref py py-obj docutils literal notranslate"><span class="pre">broadcast_to</span></code></a></p></td>
-<td><p>Tries to broadcast a block to a new shape.</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.reshape.html#triton.reshape" title="triton.reshape"><code class="xref py py-obj docutils literal notranslate"><span class="pre">reshape</span></code></a></p></td>
-<td><p>Reshapes a block to a new shape.</p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.ravel.html#triton.ravel" title="triton.ravel"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ravel</span></code></a></p></td>
-<td><p></p></td>
-</tr>
 </tbody>
 </table>
 </div>
@@ -288,9 +224,6 @@
 <col style="width: 90%" />
 </colgroup>
 <tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.dot.html#triton.dot" title="triton.dot"><code class="xref py py-obj docutils literal notranslate"><span class="pre">dot</span></code></a></p></td>
-<td><p>Returns the matrix product of two blocks.</p></td>
-</tr>
 </tbody>
 </table>
 </div>
@@ -302,18 +235,6 @@
 <col style="width: 90%" />
 </colgroup>
 <tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.load.html#triton.load" title="triton.load"><code class="xref py py-obj docutils literal notranslate"><span class="pre">load</span></code></a></p></td>
-<td><p>Return a block of data whose values are, elementwise, loaded from memory at location defined by <cite>pointer</cite>.</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.store.html#triton.store" title="triton.store"><code class="xref py py-obj docutils literal notranslate"><span class="pre">store</span></code></a></p></td>
-<td><p>Stores <cite>value</cite> block of elements in memory, element-wise, at the memory locations specified by <cite>pointer</cite>.</p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.atomic_cas.html#triton.atomic_cas" title="triton.atomic_cas"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_cas</span></code></a></p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.atomic_xchg.html#triton.atomic_xchg" title="triton.atomic_xchg"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_xchg</span></code></a></p></td>
-<td><p></p></td>
-</tr>
 </tbody>
 </table>
 </div>
@@ -325,9 +246,6 @@
 <col style="width: 90%" />
 </colgroup>
 <tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.where.html#triton.where" title="triton.where"><code class="xref py py-obj docutils literal notranslate"><span class="pre">where</span></code></a></p></td>
-<td><p>Returns a block of elements from either <cite>x</cite> or <cite>y</cite>, depending on <cite>condition</cite>.</p></td>
-</tr>
 </tbody>
 </table>
 </div>
@@ -339,18 +257,6 @@
 <col style="width: 90%" />
 </colgroup>
 <tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.exp.html#triton.exp" title="triton.exp"><code class="xref py py-obj docutils literal notranslate"><span class="pre">exp</span></code></a></p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.log.html#triton.log" title="triton.log"><code class="xref py py-obj docutils literal notranslate"><span class="pre">log</span></code></a></p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.sigmoid.html#triton.sigmoid" title="triton.sigmoid"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sigmoid</span></code></a></p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.softmax.html#triton.softmax" title="triton.softmax"><code class="xref py py-obj docutils literal notranslate"><span class="pre">softmax</span></code></a></p></td>
-<td><p></p></td>
-</tr>
 </tbody>
 </table>
 </div>
@@ -362,15 +268,6 @@
 <col style="width: 90%" />
 </colgroup>
 <tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.max.html#triton.max" title="triton.max"><code class="xref py py-obj docutils literal notranslate"><span class="pre">max</span></code></a></p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.min.html#triton.min" title="triton.min"><code class="xref py py-obj docutils literal notranslate"><span class="pre">min</span></code></a></p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.sum.html#triton.sum" title="triton.sum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sum</span></code></a></p></td>
-<td><p></p></td>
-</tr>
 </tbody>
 </table>
 </div>
@@ -382,12 +279,6 @@
 <col style="width: 90%" />
 </colgroup>
 <tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.minimum.html#triton.minimum" title="triton.minimum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">minimum</span></code></a></p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.maximum.html#triton.maximum" title="triton.maximum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">maximum</span></code></a></p></td>
-<td><p></p></td>
-</tr>
 </tbody>
 </table>
 </div>
@@ -399,9 +290,6 @@
 <col style="width: 90%" />
 </colgroup>
 <tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.multiple_of.html#triton.multiple_of" title="triton.multiple_of"><code class="xref py py-obj docutils literal notranslate"><span class="pre">multiple_of</span></code></a></p></td>
-<td><p></p></td>
-</tr>
 </tbody>
 </table>
 </div>
@@ -413,7 +301,7 @@
           </div>
           <footer>
     <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
-        <a href="generated/triton.program_id.html" class="btn btn-neutral float-right" title="triton.program_id" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="../../programming-guide/chapter-1/introduction.html" class="btn btn-neutral float-right" title="Introduction" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
         <a href="../../getting-started/tutorials/03-matrix-multiplication.html" class="btn btn-neutral float-left" title="Matrix Multiplication" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
     </div>
 
