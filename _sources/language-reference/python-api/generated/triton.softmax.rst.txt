@@ -1,0 +1,6 @@
+﻿triton.softmax
+==============
+
+.. currentmodule:: triton
+
+.. autodata:: softmax

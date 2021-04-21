@@ -1,0 +1,6 @@
+﻿triton.broadcast\_to
+====================
+
+.. currentmodule:: triton
+
+.. autofunction:: broadcast_to

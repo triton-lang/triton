@@ -1,0 +1,6 @@
+﻿triton.where
+============
+
+.. currentmodule:: triton
+
+.. autofunction:: where

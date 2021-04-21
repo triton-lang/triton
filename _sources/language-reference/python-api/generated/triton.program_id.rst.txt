@@ -1,0 +1,6 @@
+﻿triton.program\_id
+==================
+
+.. currentmodule:: triton
+
+.. autofunction:: program_id

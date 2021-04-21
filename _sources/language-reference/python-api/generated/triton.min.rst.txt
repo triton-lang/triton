@@ -1,0 +1,6 @@
+﻿triton.min
+==========
+
+.. currentmodule:: triton
+
+.. autofunction:: min

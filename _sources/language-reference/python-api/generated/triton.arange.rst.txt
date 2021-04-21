@@ -1,0 +1,6 @@
+﻿triton.arange
+=============
+
+.. currentmodule:: triton
+
+.. autofunction:: arange

@@ -1,0 +1,6 @@
+﻿triton.reshape
+==============
+
+.. currentmodule:: triton
+
+.. autofunction:: reshape

@@ -1,0 +1,6 @@
+﻿triton.atomic\_cas
+==================
+
+.. currentmodule:: triton
+
+.. autofunction:: atomic_cas

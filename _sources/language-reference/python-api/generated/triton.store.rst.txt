@@ -1,0 +1,6 @@
+﻿triton.store
+============
+
+.. currentmodule:: triton
+
+.. autofunction:: store
