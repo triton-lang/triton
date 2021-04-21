@@ -100,7 +100,7 @@ def softmax(x):
     # Allocate output
     y = torch.empty_like(x)
     # Enqueue kernel. The launch grid is simple: we have one kernel instance per row of the input matrix
-    _softmax[(M, )](y, x, x.stride(0), y.stride(0), M, N, BLOCK=BLOCK)
+    _softmax[(M, )](y, x, x.stride(0), y.stride(0), M, N, num_warps=num_warps, BLOCK=BLOCK)
     return y
 
 
