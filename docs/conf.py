@@ -35,16 +35,23 @@ extensions = []
 # Math Jax
 extensions += ['sphinx.ext.mathjax']
 
+# Auto Doc
+import sys
+import os
+sys.path.insert(0, os.path.abspath('../python/'))
+extensions = ['sphinx.ext.autodoc', 'sphinx.ext.autosummary', 'sphinx.ext.coverage', 'sphinx.ext.napoleon']
+autosummary_generate = True
+
 # Sphinx gallery
-extensions += ['sphinx_gallery.gen_gallery']
-from sphinx_gallery.sorting import FileNameSortKey
-sphinx_gallery_conf = {
-    'examples_dirs': '../python/tutorials/',
-    'gallery_dirs': 'getting-started/tutorials',
-    'filename_pattern': '',
-    'ignore_pattern': r'__init__\.py',
-    'within_subsection_order': FileNameSortKey,
-}
+#extensions += ['sphinx_gallery.gen_gallery']
+#from sphinx_gallery.sorting import FileNameSortKey
+# sphinx_gallery_conf = {
+#     'examples_dirs': '../python/tutorials/',
+#     'gallery_dirs': 'getting-started/tutorials',
+#     'filename_pattern': '',
+#     'ignore_pattern': r'__init__\.py',
+#     'within_subsection_order': FileNameSortKey,
+# }
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
