@@ -35,7 +35,7 @@ private:
 
 /* Attribute */
 enum attribute_kind_t {
-  readonly,
+  readonly = 0,
   writeonly,
   noalias,
   aligned,
@@ -71,7 +71,7 @@ public:
       case writeonly: return ".writeonly";
       case noalias: return ".noalias";
       case aligned: return ".aligned(" + std::to_string(value_) + ")";
-      case multiple_of: return ".readonly";
+      case multiple_of: return ".multipleof(" + std::to_string(value_) + ")";
       case retune: return ".retunr";
       default: break;
     }
@@ -102,7 +102,7 @@ private:
 
 public:
   // accessors
-  const args_t &args() { return args_; }
+  const args_t &args() const { return args_; }
   function_type* get_fn_type() { return fn_ty_; }
 
   // factory methods

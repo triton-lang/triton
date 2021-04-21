@@ -35,6 +35,13 @@ extensions = []
 # Math Jax
 extensions += ['sphinx.ext.mathjax']
 
+# Auto Doc
+import sys
+import os
+sys.path.insert(0, os.path.abspath('../python/'))
+extensions = ['sphinx.ext.autodoc', 'sphinx.ext.autosummary', 'sphinx.ext.coverage', 'sphinx.ext.napoleon']
+autosummary_generate = True
+
 # Sphinx gallery
 extensions += ['sphinx_gallery.gen_gallery']
 from sphinx_gallery.sorting import FileNameSortKey

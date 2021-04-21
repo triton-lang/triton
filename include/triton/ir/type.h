@@ -18,7 +18,7 @@ class constant_int;
 /* Type */
 class type {
 public:
-  typedef std::vector<unsigned>	         tile_shapes_t;
+  typedef std::vector<unsigned>	         block_shapes_t;
 
 protected:
   typedef std::vector<type*>                  contained_tys_vec_t;
@@ -43,7 +43,7 @@ public:
     FunctionTyID,    ///< 11: Functions
     PointerTyID,     ///< 12: Pointers
     StructTyID,      ///< 13: Struct
-    TileTyID,        ///< 14: Tile
+    BlockTyID,        ///< 14: Tile
   };
 
 public:
@@ -62,7 +62,7 @@ public:
   unsigned get_tile_bitwidth() const;
   unsigned get_primitive_size_in_bits() const;
   type *get_scalar_ty() const;
-  const tile_shapes_t& get_tile_shapes() const;
+  block_shapes_t get_block_shapes() const;
   const size_t get_tile_rank() const;
   const size_t get_tile_ranks1() const;
   unsigned get_tile_num_elements() const;
@@ -83,7 +83,7 @@ public:
                                                  get_integer_bitwidth() == bitwidth;}
   bool is_bool_ty() const               { return is_integer_ty(1); }
   bool is_pointer_ty() const            { return id_ == PointerTyID; }
-  bool is_tile_ty() const               { return id_ == TileTyID; }
+  bool is_block_ty() const               { return id_ == BlockTyID; }
 
   // Composite predicates
   bool is_int_or_tileint_ty();
@@ -110,7 +110,7 @@ public:
   // repr
   std::string tile_repr() const {
     std::string res = get_tile_element_ty()->repr();
-    auto shapes = get_tile_shapes();
+    auto shapes = get_block_shapes();
     res += "<";
     for(size_t i = 0; i < shapes.size(); i++){
       if(i > 0)
@@ -137,7 +137,7 @@ public:
       case FunctionTyID: return "fn";
       case PointerTyID: return get_pointer_element_ty()->repr() + "*";
       case StructTyID: return "struct";
-      case TileTyID: return tile_repr();
+      case BlockTyID: return tile_repr();
       default: break;
     }
     assert(false);
@@ -180,23 +180,23 @@ public:
   type* get_type_at_index(value *idx) const;
 };
 
-class tile_type: public composite_type {
+class block_type: public composite_type {
 private:
-  tile_type(type *ty, const tile_shapes_t &shapes);
+  block_type(type *ty, const block_shapes_t &shapes);
   static bool is_valid_elt_ty(type *ty);
 
 public:
   // accessors
-  const tile_shapes_t& get_shapes() const { return shapes_; }
+  const block_shapes_t& get_shapes() const { return shapes_; }
   unsigned get_num_elements() const;
   unsigned get_bitwidth() const;
 
   // factory methods
-  static tile_type* get(type *ty, const tile_shapes_t &shapes);
-  static tile_type* get_same_shapes(type *ty, type *ref);
+  static block_type* get(type *ty, const block_shapes_t &shapes);
+  static block_type* get_same_shapes(type *ty, type *ref);
 
 private:
-  tile_shapes_t shapes_;
+  block_shapes_t shapes_;
 };
 
 class pointer_type: public type {
