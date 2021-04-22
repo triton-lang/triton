@@ -53,7 +53,7 @@ class CMakeBuild(build_ext):
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
         build_suffix = 'debug' if self.debug else 'release'
-        llvm_build_dir = os.path.join(tempfile.gettempdir(), f"llvm-{build_suffix}")
+        llvm_build_dir = os.path.join(tempfile.gettempdir(), "llvm-" + build_suffix)
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
         if not os.path.exists(llvm_build_dir):

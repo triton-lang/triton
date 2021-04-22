@@ -5,6 +5,7 @@ import torch
 from .code_gen import jit, autotune, heuristics, Config, Autotuner
 from .core import *
 
+from . import code_gen
 from . import testing
 from . import ops
 # version
