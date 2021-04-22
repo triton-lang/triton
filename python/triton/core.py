@@ -529,7 +529,7 @@ def multiple_of(input, value, builder=None):
     """
     Let the compiler knows that the values in :code:`input` are all multiples of :code:`value`. 
     """
-    return frontend.multiple_of(x, value, builder)
+    return frontend.multiple_of(input, value, builder)
 
 
 # -----------------------
