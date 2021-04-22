@@ -573,12 +573,14 @@ class Autotuner:
 
 class JITFunction:
     def __init__(self, fn):
+        self.fn = fn
         self.module = fn.__module__
         self.arg_names = inspect.getfullargspec(fn).args
         self.cache = dict()
         self.kernel_decorators = []
         self.src = textwrap.dedent(inspect.getsource(fn))
         self.kernel = None
+        self.__doc__ = fn.__doc__
 
     # we do not parse in the constructor because
     # the user might want to monkey-patch self.src dynamically.
