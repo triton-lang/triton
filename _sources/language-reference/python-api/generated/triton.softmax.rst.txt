@@ -1,6 +1,0 @@
-﻿triton.softmax
-==============
-
-.. currentmodule:: triton
-
-.. autofunction:: softmax

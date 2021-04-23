@@ -1,6 +1,0 @@
-﻿triton.dot
-==========
-
-.. currentmodule:: triton
-
-.. autofunction:: dot

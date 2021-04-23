@@ -1,6 +1,0 @@
-﻿triton.sum
-==========
-
-.. currentmodule:: triton
-
-.. autofunction:: sum

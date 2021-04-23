@@ -1,6 +1,0 @@
-﻿triton.zeros
-============
-
-.. currentmodule:: triton
-
-.. autofunction:: zeros

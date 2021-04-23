@@ -78,34 +78,35 @@ Our softmax kernel works as follows: each program loads a row of the input matri
 Note that one important limitation of Triton is that each block must have a power-of-two number of elements,
 so we need to internally "pad" tiles and guard the memory operations properly if we want to handle any possible input shapes:
 
-.. GENERATED FROM PYTHON SOURCE LINES 47-73
+.. GENERATED FROM PYTHON SOURCE LINES 47-74
 
 .. code-block:: default
 
 
     import triton
+    import triton.language as tl
 
 
     @triton.jit
     def _softmax(Y, X, stride_xm, stride_ym, M, N, **meta):
         # row index
-        m = triton.program_id(0)
+        m = tl.program_id(0)
         # col indices
-        n = triton.arange(0, meta['BLOCK'])
+        n = tl.arange(0, meta['BLOCK'])
         # the memory address of all the elements
         # that we want to load can be computed as follows
         X = X + m * stride_xm + n
-        x = triton.load(X, mask=n < N, other=-float('inf'))
+        x = tl.load(X, mask=n < N, other=-float('inf'))
         # Substract maximum for numerical stability
-        z = x - triton.max(x, axis=0)
+        z = x - tl.max(x, axis=0)
         # Note that exponentials in Triton are fast
         # but approximate (i.e., think __expf in CUDA)
-        num = triton.exp(z)
-        denom = triton.sum(num, axis=0)
+        num = tl.exp(z)
+        denom = tl.sum(num, axis=0)
         y = num / denom
         # Write back to Y
         Y = Y + m * stride_ym + n
-        triton.store(Y, y, mask=n < N)
+        tl.store(Y, y, mask=n < N)
 
 
 
@@ -115,11 +116,11 @@ so we need to internally "pad" tiles and guard the memory operations properly if
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 74-75
+.. GENERATED FROM PYTHON SOURCE LINES 75-76
 
 We can create a helper function that enqueues the kernel and its (meta-)arguments for any given input tensor.
 
-.. GENERATED FROM PYTHON SOURCE LINES 75-107
+.. GENERATED FROM PYTHON SOURCE LINES 76-108
 
 .. code-block:: default
 
@@ -162,17 +163,17 @@ We can create a helper function that enqueues the kernel and its (meta-)argument
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 108-110
+.. GENERATED FROM PYTHON SOURCE LINES 109-111
 
 Unit Test
 ----------
 
-.. GENERATED FROM PYTHON SOURCE LINES 112-114
+.. GENERATED FROM PYTHON SOURCE LINES 113-115
 
 We make sure that we test our kernel on a matrix with an irregular number of rows and columns.
 This will allow us to verify that our padding mechanism works.
 
-.. GENERATED FROM PYTHON SOURCE LINES 114-121
+.. GENERATED FROM PYTHON SOURCE LINES 115-122
 
 .. code-block:: default
 
@@ -198,18 +199,18 @@ This will allow us to verify that our padding mechanism works.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 122-123
+.. GENERATED FROM PYTHON SOURCE LINES 123-124
 
 As expected, the results are identical.
 
-.. GENERATED FROM PYTHON SOURCE LINES 125-129
+.. GENERATED FROM PYTHON SOURCE LINES 126-130
 
 Benchmark
 -------------
 Here we will benchmark our operation as a function of the number of columns in the input matrix -- assuming 4096 rows.
 We will then compare its performance against (1) :code:`torch.softmax` and (2) the :code:`naive_softmax` defined above.
 
-.. GENERATED FROM PYTHON SOURCE LINES 129-157
+.. GENERATED FROM PYTHON SOURCE LINES 130-158
 
 .. code-block:: default
 
@@ -219,9 +220,9 @@ We will then compare its performance against (1) :code:`torch.softmax` and (2) t
         triton.testing.Benchmark(
             x_names=['N'],  # argument names to use as an x-axis for the plot
             x_vals=[256 * i for i in range(2, 50)],  # different possible values for `x_name`
-            y_name='provider',  # argument name whose value corresponds to a different line in the plot
-            y_vals=['torch', 'triton', 'naive'],  # possible keys for `y_name`
-            y_lines=["Torch", "Triton", 'Naive'],  # label name for the lines
+            line_arg='provider',  # argument name whose value corresponds to a different line in the plot
+            line_vals=['torch', 'triton', 'naive'],  # possible values for `line_arg``
+            line_names=["Torch", "Triton", 'Naive'],  # label name for the lines
             ylabel="GB/s",  # label name for the y-axis
             plot_name="softmax-performance",  # name for the plot. Used also as a file name for saving the plot.
             args={'M': 4096}  # values for function arguments not in `x_names` and `y_name`
@@ -252,7 +253,7 @@ We will then compare its performance against (1) :code:`torch.softmax` and (2) t
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 158-163
+.. GENERATED FROM PYTHON SOURCE LINES 159-164
 
 In the above plot, we can see that:
 
@@ -264,7 +265,7 @@ In the above plot, we can see that:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  20.176 seconds)
+   **Total running time of the script:** ( 0 minutes  20.250 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_02-fused-softmax.py:

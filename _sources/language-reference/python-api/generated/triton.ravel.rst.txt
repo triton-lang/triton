@@ -1,6 +1,0 @@
-﻿triton.ravel
-============
-
-.. currentmodule:: triton
-
-.. autofunction:: ravel

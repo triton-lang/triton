@@ -134,13 +134,14 @@ Final Result
 -------------
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 115-188
+.. GENERATED FROM PYTHON SOURCE LINES 115-189
 
 .. code-block:: default
 
 
     import torch
     import triton
+    import triton.language as tl
 
     # %
     # :code:`triton.jit`'ed functions can be auto-tuned by using the `triton.autotune` decorator, which consumes:
@@ -150,9 +151,9 @@ Final Result
 
     @triton.jit
     def sigmoid(x):
-        ret_true = 1 / (1 + triton.exp(-x))
-        ret_false = triton.exp(x) / (1 + triton.exp(x))
-        return triton.where(x >= 0, ret_true, ret_false)
+        ret_true = 1 / (1 + tl.exp(-x))
+        ret_false = tl.exp(x) / (1 + tl.exp(x))
+        return tl.where(x >= 0, ret_true, ret_false)
 
 
     @triton.jit
@@ -177,7 +178,7 @@ Final Result
         BLOCK_K = META['BLOCK_K']
         GROUP_M = 8
         # matrix multiplication
-        pid = triton.program_id(0)
+        pid = tl.program_id(0)
         grid_m = (M + BLOCK_M - 1) // BLOCK_M
         grid_n = (N + BLOCK_N - 1) // BLOCK_N
         # re-order program ID for better L2 performance
@@ -187,16 +188,16 @@ Final Result
         pid_m = group_id * GROUP_M + (pid % group_size)
         pid_n = (pid % width) // (group_size)
         # do matrix multiplication
-        rm = pid_m * BLOCK_M + triton.arange(0, BLOCK_M)
-        rn = pid_n * BLOCK_N + triton.arange(0, BLOCK_N)
-        rk = triton.arange(0, BLOCK_K)
+        rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+        rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+        rk = tl.arange(0, BLOCK_K)
         A = A + (rm[:, None] * stride_am + rk[None, :] * stride_ak)
         B = B + (rk[:, None] * stride_bk + rn[None, :] * stride_bn)
-        acc = triton.zeros((BLOCK_M, BLOCK_N), dtype=triton.float32)
+        acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
         for k in range(K, 0, -BLOCK_K):
-            a = triton.load(A)
-            b = triton.load(B)
-            acc += triton.dot(a, b)
+            a = tl.load(A)
+            b = tl.load(B)
+            acc += tl.dot(a, b)
             A += BLOCK_K * stride_ak
             B += BLOCK_K * stride_bk
         # triton can accept arbitrary activation function
@@ -204,11 +205,11 @@ Final Result
         if META['ACTIVATION']:
             acc = META['ACTIVATION'](acc)
         # rematerialize rm and rn to save registers
-        rm = pid_m * BLOCK_M + triton.arange(0, BLOCK_M)
-        rn = pid_n * BLOCK_N + triton.arange(0, BLOCK_N)
+        rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+        rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
         C = C + (rm[:, None] * stride_cm + rn[None, :] * stride_cn)
         mask = (rm[:, None] < M) & (rn[None, :] < N)
-        triton.store(C, acc, mask=mask)
+        tl.store(C, acc, mask=mask)
 
 
 
@@ -218,12 +219,12 @@ Final Result
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 189-191
+.. GENERATED FROM PYTHON SOURCE LINES 190-192
 
 We can also create a convenience wrapper function that only takes two input tensors
 and (1) checks any shape constraint; (2) allocates the output; (3) launches the kernel
 
-.. GENERATED FROM PYTHON SOURCE LINES 191-213
+.. GENERATED FROM PYTHON SOURCE LINES 192-214
 
 .. code-block:: default
 
@@ -256,14 +257,14 @@ and (1) checks any shape constraint; (2) allocates the output; (3) launches the 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 214-218
+.. GENERATED FROM PYTHON SOURCE LINES 215-219
 
 Unit Test
 -----------
 
 We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS + custom element-wise swish kernel)
 
-.. GENERATED FROM PYTHON SOURCE LINES 218-228
+.. GENERATED FROM PYTHON SOURCE LINES 219-229
 
 .. code-block:: default
 
@@ -287,38 +288,38 @@ We can test our custom matrix multiplication operation against a native torch im
 
  .. code-block:: none
 
-    tensor([[-5.9605e-08,  5.1094e+01, -1.8477e-05,  ...,  2.6547e+01,
-             -7.2598e-05, -4.2510e-04],
-            [-2.7100e-01, -3.0220e-05,  5.9414e+00,  ...,  2.8340e+00,
-             -1.8644e-04,  1.3094e+01],
-            [-1.5332e-01,  4.8125e+00,  8.4277e-01,  ...,  3.6387e+00,
-              4.3375e+01,  1.6865e+00],
+    tensor([[-4.5061e-05,  4.1656e+01,  1.7500e+01,  ..., -2.7405e-02,
+             -2.3251e-03, -0.0000e+00],
+            [-1.0967e-04, -4.2915e-06, -0.0000e+00,  ..., -1.4901e-06,
+             -0.0000e+00,  1.4367e+01],
+            [ 5.8156e+01, -0.0000e+00, -1.4603e-04,  ...,  1.3930e+01,
+             -2.1362e-01,  9.4062e+00],
             ...,
-            [-0.0000e+00,  2.9453e+01, -4.7684e-07,  ...,  6.2617e+00,
-              4.1133e+00, -0.0000e+00],
-            [ 1.6562e+01, -8.1539e-04,  1.3836e+01,  ...,  1.9844e+00,
-             -1.1238e-02,  8.4375e+00],
-            [-1.0876e-01, -2.7295e-01,  3.2156e+01,  ..., -1.6907e-02,
-             -0.0000e+00, -0.0000e+00]], device='cuda:0', dtype=torch.float16)
-    tensor([[-5.9605e-08,  5.1094e+01, -1.8537e-05,  ...,  2.6547e+01,
-             -7.2658e-05, -4.2605e-04],
-            [-2.7100e-01, -3.0220e-05,  5.9414e+00,  ...,  2.8340e+00,
-             -1.8632e-04,  1.3094e+01],
-            [-1.5332e-01,  4.8125e+00,  8.4277e-01,  ...,  3.6387e+00,
-              4.3375e+01,  1.6875e+00],
+            [ 2.3703e+01, -9.2163e-02, -1.3471e-05,  ..., -9.5215e-02,
+              2.0047e+01,  1.4891e+01],
+            [-1.9073e-06,  5.0664e+00, -0.0000e+00,  ...,  2.0281e+01,
+             -1.7583e-05,  3.8000e+01],
+            [-1.7285e-05,  5.3945e+00, -1.3916e-01,  ..., -2.0984e-01,
+              5.3750e+00, -1.5993e-03]], device='cuda:0', dtype=torch.float16)
+    tensor([[-4.4942e-05,  4.1656e+01,  1.7500e+01,  ..., -2.7405e-02,
+             -2.3232e-03, -0.0000e+00],
+            [-1.1003e-04, -4.2915e-06, -0.0000e+00,  ..., -1.4901e-06,
+             -0.0000e+00,  1.4367e+01],
+            [ 5.8156e+01, -0.0000e+00, -1.4639e-04,  ...,  1.3930e+01,
+             -2.1362e-01,  9.4062e+00],
             ...,
-            [-0.0000e+00,  2.9453e+01, -4.7684e-07,  ...,  6.2617e+00,
-              4.1133e+00, -0.0000e+00],
-            [ 1.6562e+01, -8.1778e-04,  1.3836e+01,  ...,  1.9844e+00,
-             -1.1238e-02,  8.4375e+00],
-            [-1.0876e-01, -2.7295e-01,  3.2156e+01,  ..., -1.6891e-02,
-             -0.0000e+00, -0.0000e+00]], device='cuda:0', dtype=torch.float16)
+            [ 2.3703e+01, -9.2163e-02, -1.3471e-05,  ..., -9.5276e-02,
+              2.0047e+01,  1.4891e+01],
+            [-1.9073e-06,  5.0664e+00, -0.0000e+00,  ...,  2.0281e+01,
+             -1.7583e-05,  3.8000e+01],
+            [-1.7345e-05,  5.3945e+00, -1.3916e-01,  ..., -2.0984e-01,
+              5.3750e+00, -1.6031e-03]], device='cuda:0', dtype=torch.float16)
     tensor(True, device='cuda:0')
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 229-235
+.. GENERATED FROM PYTHON SOURCE LINES 230-236
 
 Benchmark
 --------------
@@ -327,7 +328,7 @@ Square Matrix Performance
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 We can now compare the performance of our kernel against CUTLASS. Here we focus on square matrices, but feel free to arrange the script as you wish to compare any other matrix shape.#
 
-.. GENERATED FROM PYTHON SOURCE LINES 235-261
+.. GENERATED FROM PYTHON SOURCE LINES 236-262
 
 .. code-block:: default
 
@@ -337,9 +338,9 @@ We can now compare the performance of our kernel against CUTLASS. Here we focus 
         triton.testing.Benchmark(
             x_names=['M', 'N', 'K'],  # argument names to use as an x-axis for the plot
             x_vals=[256 * i for i in range(2, 33)],  # different possible values for `x_name`
-            y_name='provider',  # argument name whose value corresponds to a different line in the plot
-            y_vals=['cublas', 'triton'],  # possible keys for `y_name`
-            y_lines=["cuBLAS", "Triton"],  # label name for the lines
+            line_arg='provider',  # argument name whose value corresponds to a different line in the plot
+            line_vals=['cublas', 'triton'],  # possible values for `line_arg``
+            line_names=["cuBLAS", "Triton"],  # label name for the lines
             ylabel="TFLOPS",  # label name for the y-axis
             plot_name="matmul-performance",  # name for the plot. Used also as a file name for saving the plot.
             args={}
@@ -357,7 +358,7 @@ We can now compare the performance of our kernel against CUTLASS. Here we focus 
         return perf(ms), perf(max_ms), perf(min_ms)
 
 
-    benchmark.run(print_data=True)
+    benchmark.run(show_plots=True, print_data=True)
 
 
 .. image:: /getting-started/tutorials/images/sphx_glr_03-matrix-multiplication_001.png
@@ -374,35 +375,35 @@ We can now compare the performance of our kernel against CUTLASS. Here we focus 
              M      cuBLAS      Triton
     0    512.0   20.164923   15.420235
     1    768.0   58.982401   40.215272
-    2   1024.0   91.180520   72.315584
-    3   1280.0  157.538463  117.028568
-    4   1536.0  153.867127  144.446699
+    2   1024.0   95.325090   72.315584
+    3   1280.0  151.703703  117.028568
+    4   1536.0  153.867127  150.593357
     5   1792.0  208.137481  190.498706
-    6   2048.0  199.728763  152.520144
-    7   2304.0  246.266731  178.267699
-    8   2560.0  235.741014  215.578957
-    9   2816.0  231.990461  198.246398
-    10  3072.0  236.916752  221.184001
-    11  3328.0  239.173747  210.500857
-    12  3584.0  248.385067  230.552287
-    13  3840.0  251.917998  222.519114
-    14  4096.0  263.172024  244.032234
-    15  4352.0  249.595626  232.307632
-    16  4608.0  276.560014  254.803966
-    17  4864.0  266.614125  245.366501
-    18  5120.0  257.003930  238.096276
-    19  5376.0  252.676487  236.527241
-    20  5632.0  270.057027  248.514009
-    21  5888.0  264.206935  242.511113
-    22  6144.0  259.441481  241.205983
-    23  6400.0  257.157204  235.078047
-    24  6656.0  254.161678  232.699140
-    25  6912.0  251.844029  233.178785
-    26  7168.0  253.282797  231.740709
-    27  7424.0  251.868505  230.377264
-    28  7680.0  250.988932  231.606284
-    29  7936.0  253.293068  229.692102
-    30  8192.0  253.002304  231.360005
+    6   2048.0  202.135135  151.146088
+    7   2304.0  251.451276  178.267699
+    8   2560.0  237.449270  218.453323
+    9   2816.0  238.329010  200.987140
+    10  3072.0  243.017615  223.806730
+    11  3328.0  244.868356  210.500857
+    12  3584.0  250.460703  232.941430
+    13  3840.0  256.593972  225.697957
+    14  4096.0  266.305018  247.634187
+    15  4352.0  247.675667  237.797917
+    16  4608.0  280.621108  260.713476
+    17  4864.0  272.431168  252.534501
+    18  5120.0  265.596772  245.223576
+    19  5376.0  261.381955  244.335299
+    20  5632.0  283.439220  260.383339
+    21  5888.0  276.674704  254.103421
+    22  6144.0  274.869441  252.078378
+    23  6400.0  269.190319  249.027231
+    24  6656.0  269.252160  249.104840
+    25  6912.0  267.069377  247.115909
+    26  7168.0  268.504352  246.006552
+    27  7424.0  267.373291  246.355964
+    28  7680.0  266.406511  245.760004
+    29  7936.0  228.348876  248.331598
+    30  8192.0  227.680622  247.977332
 
 
 
@@ -410,7 +411,7 @@ We can now compare the performance of our kernel against CUTLASS. Here we focus 
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  32.933 seconds)
+   **Total running time of the script:** ( 0 minutes  37.657 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_03-matrix-multiplication.py:

@@ -1,6 +1,0 @@
-﻿triton.load
-===========
-
-.. currentmodule:: triton
-
-.. autofunction:: load
