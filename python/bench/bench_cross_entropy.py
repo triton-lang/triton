@@ -5,9 +5,9 @@ confs = [
     triton.testing.Benchmark(
               x_names = ['N'],
               x_vals  = [128, 256, 512, 1024, 2048, 3072, 4096, 6144, 8192],
-              y_name  = 'provider',
-              y_vals  = ['triton', 'torch'],
-              y_lines = ['Triton', 'Torch'],
+              line_arg  = 'provider',
+              line_vals  = ['triton', 'torch'],
+              line_names = ['Triton', 'Torch'],
               ylabel  = 'GBPS',
               plot_name = f'{mode}-2048',
               args = {'M': 2048, 'dtype': torch.float16, 'mode': mode}
