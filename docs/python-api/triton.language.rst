@@ -1,7 +1,7 @@
-Python API
-===========
+triton.language
+================
 
-.. currentmodule:: triton
+.. currentmodule:: triton.language
 
 
 Programming Model

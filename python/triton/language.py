@@ -1,6 +1,6 @@
+import triton
 from triton._C.libtriton.triton import ir
 from triton._C.libtriton.triton import frontend
-import triton
 from functools import wraps
 
 
@@ -25,7 +25,7 @@ def _patch(fn):
             if x.type.is_void():
                 return None
             return block(x)
-        return x
+        return tl
 
     def wrapper(*args, **kwargs):
         builder = args[-1]
@@ -547,7 +547,7 @@ def minimum(x, y):
     :param other: the second input block
     :type other: Block
     """
-    return triton.where(x < y, x, y)
+    return triton.language.where(x < y, x, y)
 
 
 @triton.jit
@@ -560,7 +560,7 @@ def maximum(x, y):
     :param other: the second input block
     :type other: Block
     """
-    return triton.where(x > y, x, y)
+    return triton.language.where(x > y, x, y)
 
 
 @triton.jit
@@ -571,7 +571,7 @@ def sigmoid(x):
     :param x: the input block
     :type x: Block
     """
-    return 1 / (1 + np.exp(-x))
+    return 1 / (1 + triton.language.exp(-x))
 
 
 @triton.jit
@@ -582,9 +582,9 @@ def softmax(x):
     :param x: the input block
     :type x: Block
     """
-    z = x - triton.max(x, 0)
-    num = triton.exp(z)
-    den = triton.sum(num, 0)
+    z = x - triton.language.max(x, 0)
+    num = triton.language.exp(z)
+    den = triton.language.sum(num, 0)
     return num / den
 
 
@@ -596,8 +596,4 @@ def ravel(x):
     :param x: the input block
     :type x: Block
     """
-    return triton.reshape(x, [x.type.numel])
-
-
-def cdiv(x, y):
-    return (x + y - 1) // y
+    return triton.language.reshape(x, [x.type.numel])

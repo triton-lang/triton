@@ -1,4 +1,5 @@
 import triton
+import triton.language as tl
 import triton._C.libtriton as libtriton
 import torch
 
@@ -16,21 +17,21 @@ def _kernel(
     #------------#
     #- Prologue -#
     #------------#
-    pid0 = triton.program_id(0)
-    pid1 = triton.program_id(1)
-    pidz = triton.program_id(2)
+    pid0 = tl.program_id(0)
+    pid1 = tl.program_id(1)
+    pidz = tl.program_id(2)
     if meta['SDD']:
         pid1 = pid1 + SDD_off_width
-        blockidm = triton.arange(0, TM) // BLOCK
-        blockidn = triton.arange(0, TN) // BLOCK
+        blockidm = tl.arange(0, TM) // BLOCK
+        blockidn = tl.arange(0, TN) // BLOCK
         offlutm = blockidm * (TN // BLOCK) * 4
         offlutn = blockidn * 4
         header = lut + pid1 * (TM // BLOCK) * (TN // BLOCK) * 4
-        z = triton.load(header + 0)
-        i = triton.load(header + 1 + offlutm)
-        j = triton.load(header + 2 + offlutn)
+        z = tl.load(header + 0)
+        i = tl.load(header + 1 + offlutm)
+        j = tl.load(header + 2 + offlutn)
         AS1 = SDD_K // TZ
-        lockid = triton.where(TZ > 1, 1, 0)
+        lockid = tl.where(TZ > 1, 1, 0)
         offka = pid0 * AS1
         offkb = pid0 * AS1
         offmc = 0
@@ -41,16 +42,16 @@ def _kernel(
         offhc = 0
         offha = z
         offhb = z
-        ram = i * BLOCK + (triton.arange(0, TM) % BLOCK)
-        rbn = j * BLOCK + (triton.arange(0, TN) % BLOCK)
+        ram = i * BLOCK + (tl.arange(0, TM) % BLOCK)
+        rbn = j * BLOCK + (tl.arange(0, TN) % BLOCK)
     else:
         header = lut + pid0 * 6
-        offset = triton.load(header + 0)
-        AS1 = triton.load(header + 1)
-        column = triton.load(header + 2)
-        depth = triton.load(header + 3)
-        lockid = triton.load(header + 4)
-        maxid = triton.load(header + 5)
+        offset = tl.load(header + 0)
+        AS1 = tl.load(header + 1)
+        column = tl.load(header + 2)
+        depth = tl.load(header + 3)
+        lockid = tl.load(header + 4)
+        maxid = tl.load(header + 5)
         pinc = lut + offset
         offhc = depth
         if meta['DSD']:
@@ -60,14 +61,14 @@ def _kernel(
             offpc = 0
             # dense input offset
             offnb = pid1 * TN
-            offkb = triton.load(pinc)
-            offkb = triton.multiple_of(offkb, 8)  # compiler hint
+            offkb = tl.load(pinc)
+            offkb = tl.multiple_of(offkb, 8)  # compiler hint
             offpb = 0
             # sparse input offset
             offma = 0
             offka = 0
-            offpa = triton.load(pinc + 1)
-            offpa = triton.multiple_of(offpa, 8)  # compiler hint
+            offpa = tl.load(pinc + 1)
+            offpa = tl.multiple_of(offpa, 8)  # compiler hint
             offpa = offpa * BLOCK * BLOCK
             offha = 0
             offhb = depth
@@ -78,23 +79,23 @@ def _kernel(
             offpc = 0
             # dense input offset
             offma = pid1 * TM
-            offka = triton.load(pinc)
-            offka = triton.multiple_of(offka, 8)  # compiler hint
+            offka = tl.load(pinc)
+            offka = tl.multiple_of(offka, 8)  # compiler hint
             offpa = 0
             # sparse input offset
             offnb = 0
             offkb = 0
-            offpb = triton.load(pinc + 1)
-            offpb = triton.multiple_of(offpb, 8)  # compiler hint
+            offpb = tl.load(pinc + 1)
+            offpb = tl.multiple_of(offpb, 8)  # compiler hint
             offpb = offpb * BLOCK * BLOCK
             offha = depth
             offhb = 0
-        ram = offma + triton.arange(0, TM)
-        rbn = offnb + triton.arange(0, TN)
+        ram = offma + tl.arange(0, TM)
+        rbn = offnb + tl.arange(0, TN)
 
     # initialize a, b pointers
-    rka = offka + triton.arange(0, TK)
-    rkb = offkb + triton.arange(0, TK)
+    rka = offka + tl.arange(0, TK)
+    rkb = offkb + tl.arange(0, TK)
     pa = A + pidz * stride_za + offha * stride_ha + offpa + ram[:, None] * stride_ma + rka[None, :] * stride_ka
     pb = B + pidz * stride_zb + offhb * stride_hb + offpb + rbn[None, :] * stride_nb + rkb[:, None] * stride_kb
     if meta['DDS']:
@@ -105,31 +106,31 @@ def _kernel(
         checkbn = rbn[None, :] < DS0
     else:
         checkbn = AS1 > 0
-    a = triton.load(pa, mask=checkam, other=0.)
-    b = triton.load(pb, mask=checkbn, other=0.)
+    a = tl.load(pa, mask=checkam, other=0.)
+    b = tl.load(pb, mask=checkbn, other=0.)
 
     ## ---------------- ##
     ##    Inner Loop    ##
     ## ---------------- ##
-    acc = triton.zeros((TM, TN), dtype=triton.float32)
+    acc = tl.zeros((TM, TN), dtype=tl.float32)
     for k in range(AS1, 0, -TK):
-        acc += triton.dot(a, b)
+        acc += tl.dot(a, b)
         if meta['SDD']:
             inc_a = TK * stride_ka
             inc_b = TK * stride_kb
         else:
             pinc += 2
         if meta['DSD']:
-            inc_b = triton.load(pinc)
-            inc_a = triton.load(pinc + 1)
-            inc_b = triton.multiple_of(inc_b, 8)
-            inc_a = triton.multiple_of(inc_a, 8)
+            inc_b = tl.load(pinc)
+            inc_a = tl.load(pinc + 1)
+            inc_b = tl.multiple_of(inc_b, 8)
+            inc_a = tl.multiple_of(inc_a, 8)
             inc_b = inc_b * stride_kb
         if meta['DDS']:
-            inc_a = triton.load(pinc)
-            inc_b = triton.load(pinc + 1)
-            inc_a = triton.multiple_of(inc_a, 8)
-            inc_b = triton.multiple_of(inc_b, 8)
+            inc_a = tl.load(pinc)
+            inc_b = tl.load(pinc + 1)
+            inc_a = tl.multiple_of(inc_a, 8)
+            inc_b = tl.multiple_of(inc_b, 8)
             inc_a = inc_a * stride_ka
         pa += inc_a
         pb += inc_b
@@ -138,24 +139,24 @@ def _kernel(
         checkbk = k > TK
         checka = checkam & checkak
         checkb = checkbn & checkbk
-        a = triton.load(pa, mask=checka)
-        b = triton.load(pb, mask=checkb)
+        a = tl.load(pa, mask=checka)
+        b = tl.load(pb, mask=checkb)
     c = acc.to(C.dtype.element_ty)
 
     if meta['SDD']:
         checkc = True
-        rr_blockidm = triton.arange(0, TM) // BLOCK
-        rr_blockidn = triton.arange(0, TN) // BLOCK
+        rr_blockidm = tl.arange(0, TM) // BLOCK
+        rr_blockidn = tl.arange(0, TN) // BLOCK
         rr_offlutm = rr_blockidm * (TN // BLOCK) * 4
         rr_offlutn = rr_blockidn * 4
         off_bkid = 3 + rr_offlutm[:, None] + rr_offlutn[None, :]
-        bkid = triton.load(header + off_bkid)
+        bkid = tl.load(header + off_bkid)
         offpc = bkid * BLOCK * BLOCK
-        rcm = triton.arange(0, TM) % BLOCK
-        rcn = triton.arange(0, TN) % BLOCK
+        rcm = tl.arange(0, TM) % BLOCK
+        rcn = tl.arange(0, TN) % BLOCK
     else:
-        rcm = offmc + triton.arange(0, TM)
-        rcn = offnc + triton.arange(0, TN)
+        rcm = offmc + tl.arange(0, TM)
+        rcn = offnc + tl.arange(0, TN)
     if meta['DSD']:
         checkc = rcn[None, :] < DS0
     if meta['DDS']:
@@ -164,21 +165,21 @@ def _kernel(
     pc = C + offpc + offhc * stride_hc + pidz * stride_zc + rcm[:, None] * stride_mc + rcn[None, :] * stride_nc
     # write-back directly
     if lockid == 0:
-        triton.store(pc, c, mask=checkc)
+        tl.store(pc, c, mask=checkc)
     # accumulate partial results using spin-locks
     else:
-        plock = locks + triton.program_id(2) * nlocks * triton.num_programs(1) + triton.program_id(1) * nlocks + lockid - 1
-        pcount = plock + triton.num_programs(2) * triton.num_programs(1) * nlocks
-        while triton.atomic_cas(plock, 0, 1) == 1:
+        plock = locks + tl.program_id(2) * nlocks * tl.num_programs(1) + tl.program_id(1) * nlocks + lockid - 1
+        pcount = plock + tl.num_programs(2) * tl.num_programs(1) * nlocks
+        while tl.atomic_cas(plock, 0, 1) == 1:
             pass
-        count = triton.load(pcount)
+        count = tl.load(pcount)
         if count == 0:
-            triton.store(pc, c, mask=checkc)
+            tl.store(pc, c, mask=checkc)
         else:
-            d = triton.load(pc, mask=checkc)
-            triton.store(pc, d + c, mask=checkc)
-        triton.atomic_xchg(pcount, (count + 1) % maxid)
-        triton.atomic_xchg(plock, 0)
+            d = tl.load(pc, mask=checkc)
+            tl.store(pc, d + c, mask=checkc)
+        tl.atomic_xchg(pcount, (count + 1) % maxid)
+        tl.atomic_xchg(plock, 0)
 
 
 ##############
