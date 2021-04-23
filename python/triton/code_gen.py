@@ -396,7 +396,7 @@ class Binary:
         self.num_warps = num_warps
 
     def asm(self, mode):
-        if mode == 'ir':
+        if mode == 'ttir':
             return self.ir_asm
         if mode == 'ptx':
             return self.module.ptx()
