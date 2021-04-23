@@ -60,9 +60,9 @@ square_confs = [
     triton.testing.Benchmark(
               x_names = ['M', 'N'],
               x_vals  = [128, 256, 512, 1024, 2048, 3072, 4096, 6144],
-              y_name  = 'block',
-              y_vals  = [16, 32, 64],
-              y_lines = ['Block16', 'Block32', 'Block64'],
+              line_arg  = 'block',
+              line_vals  = [16, 32, 64],
+              line_nams = ['Block16', 'Block32', 'Block64'],
               ylabel  = 'GBPS',
               plot_name = f'{layout_mode}-square',
               args = {'layout_mode': layout_mode, 'dtype': torch.float16, 'provider': 'triton'}
