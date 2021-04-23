@@ -10,9 +10,9 @@ square_confs = [
     triton.testing.Benchmark(
               x_names = ['M', 'N', 'K'],
               x_vals  = [128, 256, 512, 1024, 2048, 3072, 4096, 6144],
-              y_name  = 'block',
-              y_vals  = [16, 32, 64],
-              y_lines = ['Block16', 'Block32', 'Block64'],
+              line_arg  = 'block',
+              line_vals  = [16, 32, 64],
+              line_names = ['Block16', 'Block32', 'Block64'],
               ylabel  = 'TFLOPS',
               plot_name = f'{op_mode}-{layout_mode}-square-{nt[AT]}{nt[BT]}',
               args = {'layout_mode': layout_mode, 'op_mode': op_mode,
