@@ -622,7 +622,7 @@ class matmul:
         if layout_dim == 2:
             layout = layout.unsqueeze(0)
 
-        self.layout = layout.to(torch.int32)    # Above code assumes the layout tensor is an integral type
+        self.layout = layout.long()    # Above code assumes the layout tensor is an integral type
         self.spdims = layout.shape
 
         if not mode == 'sdd':
