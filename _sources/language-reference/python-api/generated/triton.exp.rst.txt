@@ -1,6 +1,0 @@
-﻿triton.exp
-==========
-
-.. currentmodule:: triton
-
-.. autofunction:: exp

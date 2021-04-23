@@ -1,6 +1,0 @@
-﻿triton.sigmoid
-==============
-
-.. currentmodule:: triton
-
-.. autofunction:: sigmoid

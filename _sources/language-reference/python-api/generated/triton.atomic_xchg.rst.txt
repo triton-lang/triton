@@ -1,6 +1,0 @@
-﻿triton.atomic\_xchg
-===================
-
-.. currentmodule:: triton
-
-.. autofunction:: atomic_xchg

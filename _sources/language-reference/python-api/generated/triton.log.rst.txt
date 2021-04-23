@@ -1,6 +1,0 @@
-﻿triton.log
-==========
-
-.. currentmodule:: triton
-
-.. autofunction:: log

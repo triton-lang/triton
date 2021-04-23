@@ -1,6 +1,0 @@
-﻿triton.multiple\_of
-===================
-
-.. currentmodule:: triton
-
-.. autofunction:: multiple_of
