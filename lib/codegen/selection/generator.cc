@@ -817,9 +817,9 @@ void generator::visit_mma884(ir::dot_inst* C, ir::value *A, ir::value *B, ir::va
   // update accumulators
   unsigned num_m = layout_c->rep(0) * shape_c[0] / layout_c->spt(0);
   unsigned num_n = layout_c->rep(1) * shape_c[1] / layout_c->spt(1);
+  for(unsigned K = 0; K < NK; K += 4)
   for(unsigned m = 0; m < num_m/2; m++)
-  for(unsigned n = 0; n < num_n/2; n++)
-  for(unsigned K = 0; K < NK; K += 4){
+  for(unsigned n = 0; n < num_n/2; n++) {
     if(has.find({m, K}) == has.end()){
       Value* ptra = ptr_a[(is_a_row ? K/4 : m) % num_ptr_a];
       int step_am = is_a_row ? m : m / (num_ptr_a)*(num_ptr_a);

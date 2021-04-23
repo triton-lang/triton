@@ -7,6 +7,7 @@
 #include "triton/ir/enums.h"
 #include "triton/ir/function.h"
 #include "triton/ir/module.h"
+#include "triton/ir/print.h"
 #include <optional>
 #include <pybind11/buffer_info.h>
 #include <pybind11/functional.h>
@@ -78,7 +79,9 @@ void init_triton_codegen(py::module &&m) {
         drv::kernel *ker;
         size_t shared_mem;
         triton::codegen::add_passes_to_emit_bin(ir, dev, num_warps, mod, ker, shared_mem);
-        return std::make_tuple(mod, ker, shared_mem);
+        std::stringstream ss;
+        ir::print(ir, ss);
+        return std::make_tuple(mod, ker, shared_mem, ss.str());
       },
       py::return_value_policy::take_ownership);
 }
