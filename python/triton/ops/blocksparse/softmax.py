@@ -1,3 +1,4 @@
+import triton.language as tl
 import triton
 import torch
 import os
@@ -31,86 +32,86 @@ def _forward(
 ):
     TN = meta['TN']
     BLOCK = meta['BLOCK']
-    pidhm = triton.program_id(0)
-    pidz = triton.program_id(1)
+    pidhm = tl.program_id(0)
+    pidz = tl.program_id(1)
     # create index ranges
     rxm = pidhm % BLOCK
     rbm = pidhm // BLOCK
-    rxn = triton.arange(0, TN) % BLOCK
-    rbn = triton.arange(0, TN) // BLOCK
+    rxn = tl.arange(0, TN) % BLOCK
+    rbn = tl.arange(0, TN) // BLOCK
     # extract information from LUT
     header = LUT + rbm * 2
-    size = triton.load(header + 0)
-    offset = triton.load(header + 1)
+    size = tl.load(header + 0)
+    offset = tl.load(header + 1)
     check = rbn < size
-    rbmn = triton.where(check, rbn, size - 1)
+    rbmn = tl.where(check, rbn, size - 1)
     # block id and column id
-    blockid = triton.load(LUT + offset + rbmn * 4 + 0)
-    columnid = triton.load(LUT + offset + rbmn * 4 + 1)
-    rowid = triton.load(LUT + offset + rbmn * 4 + 2)
-    headid = triton.load(LUT + offset + rbmn * 4 + 3)
+    blockid = tl.load(LUT + offset + rbmn * 4 + 0)
+    columnid = tl.load(LUT + offset + rbmn * 4 + 1)
+    rowid = tl.load(LUT + offset + rbmn * 4 + 2)
+    headid = tl.load(LUT + offset + rbmn * 4 + 3)
     # pointers to X
     px = X + pidz * stride_zx + blockid * BLOCK * BLOCK + rxm * BLOCK + rxn
-    x = triton.load(px, mask=check, other=-float('inf'))
-    x = x.to(triton.float32)
+    x = tl.load(px, mask=check, other=-float('inf'))
+    x = x.to(tl.float32)
     # apply scale
     if meta['APPLY_SCALE']:
         x = x * scale
     # apply RPE
     if meta['APPLY_RPE']:
         prpe = RPE + pidz * stride_zrpe + headid * stride_hrpe + columnid * BLOCK + rowid * BLOCK * stride_srpe + rxm * stride_srpe + rxn
-        rpe = triton.load(prpe, mask=check, other=0)
+        rpe = tl.load(prpe, mask=check, other=0)
         x = x + rpe
     # apply key-padding mask
     if meta['APPLY_KP_MASK']:
         pkp_m = KP_M + pidz * stride_zkpm + columnid * BLOCK + rxn
-        kp_m = triton.load(pkp_m, mask=check, other=-float('inf'))
+        kp_m = tl.load(pkp_m, mask=check, other=-float('inf'))
         if meta['KP_MASK_MUL']:
-            kp_m = triton.where(kp_m == 0, -float('inf'), 0.)
+            kp_m = tl.where(kp_m == 0, -float('inf'), 0.)
         x = x + kp_m
     # apply attention mask
     if meta['APPLY_ATTN_MASK']:
         pattn_m = ATTN_M + columnid * BLOCK + rowid * BLOCK * stride_zattnm + rxm * stride_zattnm + rxn
-        attn_m = triton.load(pattn_m, mask=check, other=-float('inf'))
+        attn_m = tl.load(pattn_m, mask=check, other=-float('inf'))
         if meta['ATTN_MASK_MUL']:
-            attn_m = triton.where(attn_m == 0, -float('inf'), 0.)
+            attn_m = tl.where(attn_m == 0, -float('inf'), 0.)
         x = x + attn_m
     # computation
-    x = triton.softmax(x)
-    triton.store(px, x, mask=check)
+    x = tl.softmax(x)
+    tl.store(px, x, mask=check)
 
 
 @triton.heuristics({'num_warps': lambda *args, **meta: num_warps(args[4] * meta['BLOCK'])})
 @triton.heuristics({'TN': lambda *args, **meta: next_power_of_2(args[4]) * meta['BLOCK']})
 @triton.jit
 def _backward(X, scale, DX, LUT, sizemax, stride_zx, stride_zdx, **meta):
-    pidhm = triton.program_id(0)
-    pidz = triton.program_id(1)
+    pidhm = tl.program_id(0)
+    pidz = tl.program_id(1)
     TN = meta['TN']
     BLOCK = meta['BLOCK']
     # create index ranges
     rxm = pidhm % BLOCK
     rbm = pidhm // BLOCK
-    rxn = triton.arange(0, TN) % BLOCK
-    rbn = triton.arange(0, TN) // BLOCK
+    rxn = tl.arange(0, TN) % BLOCK
+    rbn = tl.arange(0, TN) // BLOCK
     # extract information from look-up table
     header = LUT + rbm * 2
-    size = triton.load(header + 0)
-    offset = triton.load(header + 1)
+    size = tl.load(header + 0)
+    offset = tl.load(header + 1)
     # bounds checking on lut
     check = rbn < size
-    rbmn = triton.where(check, rbn, size - 1)
+    rbmn = tl.where(check, rbn, size - 1)
     # initialize pointers to block-sparse input
-    blockid = triton.load(LUT + offset + rbmn * 4)
+    blockid = tl.load(LUT + offset + rbmn * 4)
     X = X + pidz * stride_zx + blockid * BLOCK * BLOCK + rxm * BLOCK + rxn
     DX = DX + pidz * stride_zdx + blockid * BLOCK * BLOCK + rxm * BLOCK + rxn
     # compute fused softmax backward
-    x = triton.load(X, mask=check, other=0)
-    dx = triton.load(DX, mask=check, other=0)
-    x = x.to(triton.float32)
-    dx = dx.to(triton.float32)
-    y = x * (dx - triton.sum(x * dx, 0)) * scale
-    triton.store(DX, y, mask=check)
+    x = tl.load(X, mask=check, other=0)
+    dx = tl.load(DX, mask=check, other=0)
+    x = x.to(tl.float32)
+    dx = dx.to(tl.float32)
+    y = x * (dx - tl.sum(x * dx, 0)) * scale
+    tl.store(DX, y, mask=check)
 
 
 class _softmax(torch.autograd.Function):

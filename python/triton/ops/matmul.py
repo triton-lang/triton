@@ -1,4 +1,5 @@
 import torch
+import triton.language as tl
 import triton
 
 
@@ -27,8 +28,8 @@ def _kernel(A, B, C, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride
     GROUP_M = META['GROUP_M']
     SPLIT_K = META['SPLIT_K']
     # matrix multiplication
-    pid = triton.program_id(0)
-    pid_z = triton.program_id(1)
+    pid = tl.program_id(0)
+    pid_z = tl.program_id(1)
     grid_m = (M + BLOCK_M - 1) // BLOCK_M
     grid_n = (N + BLOCK_N - 1) // BLOCK_N
     # re-order program ID for better L2 performance
@@ -38,46 +39,46 @@ def _kernel(A, B, C, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride
     pid_m = group_id * GROUP_M + (pid % group_size)
     pid_n = (pid % width) // (group_size)
     # do matrix multiplication
-    rm = pid_m * BLOCK_M + triton.arange(0, BLOCK_M)
-    rn = pid_n * BLOCK_N + triton.arange(0, BLOCK_N)
-    rk = triton.arange(0, BLOCK_K)
+    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    rk = tl.arange(0, BLOCK_K)
     # pointers
     K = K // SPLIT_K
     A = A + (pid_z * K * stride_ak + rm[:, None] * stride_am + rk[None, :] * stride_ak)
     B = B + (pid_z * K * stride_bk + rk[:, None] * stride_bk + rn[None, :] * stride_bn)
-    acc = triton.zeros((BLOCK_M, BLOCK_N), dtype=triton.float32)
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for k in range(K, 0, -BLOCK_K):
         if META['EVEN_K']:
-            a = triton.load(A)
-            b = triton.load(B)
+            a = tl.load(A)
+            b = tl.load(B)
         else:
-            a = triton.load(A, mask=rk[None, :] < k, other=0.)
-            b = triton.load(B, mask=rk[:, None] < k, other=0.)
-        acc += triton.dot(a, b)
+            a = tl.load(A, mask=rk[None, :] < k, other=0.)
+            b = tl.load(B, mask=rk[:, None] < k, other=0.)
+        acc += tl.dot(a, b)
         A += BLOCK_K * stride_ak
         B += BLOCK_K * stride_bk
-    acc = acc.to(triton.float16)
+    acc = acc.to(tl.float16)
     # rematerialize rm and rn to save registers
-    rm = pid_m * BLOCK_M + triton.arange(0, BLOCK_M)
-    rn = pid_n * BLOCK_N + triton.arange(0, BLOCK_N)
+    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     C = C + (rm[:, None] * stride_cm + rn[None, :] * stride_cn)
     mask = (rm < M)[:, None] & (rn < N)[None, :]
     # handles write-back with reduction-splitting
     if SPLIT_K == 1:
-        triton.store(C, acc, mask=mask)
+        tl.store(C, acc, mask=mask)
     else:
-        LOCKS = LOCKS + triton.program_id(0)
-        COUNT = LOCKS + triton.num_programs(0)
-        while triton.atomic_cas(LOCKS, 0, 1) == 1:
+        LOCKS = LOCKS + tl.program_id(0)
+        COUNT = LOCKS + tl.num_programs(0)
+        while tl.atomic_cas(LOCKS, 0, 1) == 1:
             pass
-        count = triton.load(COUNT)
+        count = tl.load(COUNT)
         if count == 0:
-            triton.store(C, acc, mask=mask)
+            tl.store(C, acc, mask=mask)
         else:
-            curr = triton.load(C, mask=mask, other=0.)
-            triton.store(C, acc + curr, mask=mask)
-        triton.atomic_xchg(COUNT, (count + 1) % SPLIT_K)
-        triton.atomic_xchg(LOCKS, 0)
+            curr = tl.load(C, mask=mask, other=0.)
+            tl.store(C, acc + curr, mask=mask)
+        tl.atomic_xchg(COUNT, (count + 1) % SPLIT_K)
+        tl.atomic_xchg(LOCKS, 0)
 
 
 class _matmul(torch.autograd.Function):
