@@ -609,19 +609,41 @@ class matmul:
         # look-up table cache
         self.lut_cache = dict()
         # attributes
+        self.block = block
+        self.mode = mode
         self.trans_a = trans_a
         self.trans_b = trans_b
-        self.mode = mode
+
+        layout_dim = layout.ndim
+        assert layout_dim in (2, 3), "Layout should be a 2 or 3 dimensional tensor of 0s and 1s"
+
+        # Support using the same layout across attention heads etc.
+        if layout_dim == 2:
+            layout = layout.unsqueeze(0)
+
+        self.layout = layout.to(torch.int32)    # Above code assumes the layout tensor is an integral type
         self.spdims = layout.shape
-        self.block = block
-        self.layout = layout
+
+        if not mode == 'sdd':
+            # Which dimension of the sparse input will be the inner dim for the matmul?
+            sparse_inner = -1 - int(trans_a) if mode == 'dsd' else -2 + int(trans_b)
+            self.dense_inner_dim = -1 if sparse_inner == -2 else -1     # Dim in dense input on the 'inside' of the matmul
+            self.dense_inner_size = layout.shape[sparse_inner] * block          # Expected inner dim size for dense input
+            self.sparse_shape = (layout.shape[0], layout.sum(), block, block)   # Expected shape for sparse inputs
 
     # Kernel assumes that all tensors are 4 dimensional
     @staticmethod
-    def _pad_shape(x):
-        # Add extra batch dimensions if needed
-        for i in range(4 - x.ndim):
-            x = x.unsqueeze(0)
+    def _normalize_leading_dims(x):
+        extra_dims = x.ndim - 4
+
+        # Flatten any extra leading dimensions into the batch dimension
+        if extra_dims > 0:
+            x = x.flatten(0, extra_dims)
+
+        # Add extra leading singleton dimensions if needed
+        elif extra_dims < 0:
+            singletons = [1] * -extra_dims
+            x = x.view(*singletons, *x.shape)
 
         return x
 
@@ -629,12 +651,51 @@ class matmul:
         c_lut, c_num_locks, c_width, c_packs,\
         da_lut, da_num_locks, da_width, da_packs,\
         db_lut, db_num_locks, db_width, db_packs = self.make_lut(a.dtype, a.device)
-        # pad shapes with ones
-        a = matmul._pad_shape(a)
-        b = matmul._pad_shape(b)
+
+        # If we don't check for invalid shapes here, they will never get checked and can lead to undefined behavior
+        mode, trans_a, trans_b = self.mode, self.trans_a, self.trans_b
+        if mode == 'sdd':
+            # Both inputs are dense and the output is sparse
+            a_inner = a.shape[-1 if not trans_a else -2]
+            b_inner = b.shape[-1 if not trans_b else -2]
+
+            if a_inner != b_inner:
+                a_dim = a.ndim - 1 - int(trans_a)
+                b_dim = b.ndim - 1 - int(trans_b)
+                raise ValueError(f"Size of tensor A at dim {a_dim} ({a_inner}) must match size"
+                                 f"of tensor B at dim {b_dim} ({b_inner})")
+        else:
+            # One input is sparse
+            dense, dense_name, sparse, sparse_name = (a, 'A', b, 'B') if mode == 'dds' else (b, 'B', a, 'A')
+            dense_inner = dense.shape[self.dense_inner_dim]
+            if dense_inner != self.dense_inner_size:
+                raise ValueError(f"Expected tensor {dense_name} to have size {self.dense_inner_size} at dim "
+                                 f"{self.dense_inner_dim % dense.ndim}, got {dense_inner}.")
+
+            assert broadcastable_shapes(sparse.shape, self.sparse_shape),\
+                f"Expected tensor of shape {self.sparse_shape} for argument {sparse_name}, got {sparse.shape}"
+
+        leading_dims_a = a.shape[-2:]   # Batch, attention head, etc. dims
+        leading_dims_b = b.shape[-2:]   # Batch, attention head, etc. dims
+        if not broadcastable_shapes(leading_dims_a, leading_dims_b):
+            raise ValueError(f"Tensors A and B should be broacastable along leading (non-matrix) dimensions; "
+                             f"got {leading_dims_a} for A and {leading_dims_b} for B.")
+
+        # Either pad shapes with leading singleton dimensions or flatten extra leading dimensions as needed
+        a = matmul._normalize_leading_dims(a)
+        b = matmul._normalize_leading_dims(b)
+
         # execute
         c = _matmul.apply(
-            a, b, self.trans_a, self.trans_b, False, self.mode, self.spdims, self.block, c_lut, c_num_locks, c_width, c_packs,
+            a, b, trans_a, trans_b, False, mode, self.spdims, self.block, c_lut, c_num_locks, c_width, c_packs,
             da_lut, da_num_locks, da_width, da_packs, db_lut, db_num_locks, db_width, db_packs
         )
-        return c
+        # This removes any leading singleton dimensions we may have added to the tensor that weren't in the input;
+        # also, if we flattened any extra leading dimensions (i.e. the inputs were more than 4D) this unflattens them
+        return c.view(*leading_dims_a, *c.shape[-2:])
+
+
+# Standard PyTorch broadcasting semantics- see <https://pytorch.org/docs/stable/notes/broadcasting.html>
+def broadcastable_shapes(shape1, shape2):
+    dim_iter = zip(reversed(shape1), reversed(shape2))
+    return all(a_dim == b_dim or a_dim == 1 or b_dim == 1 for a_dim, b_dim in dim_iter)
