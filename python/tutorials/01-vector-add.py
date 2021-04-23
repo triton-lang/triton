@@ -54,10 +54,10 @@ def add(x, y):
     #  - torch.tensor objects are implicitly converted to pointers to their first element.
     #  - `triton.jit`'ed functions can be subscripted with a launch grid to obtain a callable GPU kernel
     #  - don't forget to pass meta-parameters as keywords arguments
-    _add[grid](x, y, z, N, BLOCK=1024)
+    kernel = _add[grid](x, y, z, N, BLOCK=1024)
     # We return a handle to z but, since `torch.cuda.synchronize()` hasn't been called, the kernel is still
     # running asynchronously.
-    return z
+    return z, kernel
 
 
 # %%
@@ -68,10 +68,15 @@ size = 98432
 x = torch.rand(size, device='cuda')
 y = torch.rand(size, device='cuda')
 za = x + y
-zb = add(x, y)
+zb, kernel = add(x, y)
 print(za)
 print(zb)
 print(f'The maximum difference between torch and triton is ' f'{torch.max(torch.abs(za - zb))}')
+
+# print asm
+# print(kernel.asm('ir'))
+# print(kernel.asm('ptx'))
+# print(kernel.asm('llir'))
 
 # %%
 # Seems like we're good to go!
