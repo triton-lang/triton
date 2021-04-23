@@ -16,9 +16,9 @@ square_confs = [
     triton.testing.Benchmark(
         x_names=["M", "N", "K"],
         x_vals=rounded_linspace(512, 8192, 32, 128),
-        y_name="provider",
-        y_vals=["cublas", "triton", "cutlass"],
-        y_lines=["cuBLAS", "Triton", "CUTLASS"],
+        line_arg="provider",
+        line_vals=["cublas", "triton", "cutlass"],
+        line_names=["cuBLAS", "Triton", "CUTLASS"],
         ylabel="TFLOPS",
         plot_name=f"matmul-square-{nt[AT]}{nt[BT]}",
         args={"AT": AT, "BT": BT, "dtype": torch.float16},
@@ -30,9 +30,9 @@ transformer_confs = [
     triton.testing.Benchmark(
         x_names=[x],
         x_vals = rounded_linspace(NK//16, NK, 32, 128),
-        y_name="provider",
-        y_vals=["cublas", "triton", "cutlass"],
-        y_lines=["cuBLAS", "Triton", "CUTLASS"],
+        line_arg="provider",
+        line_vals=["cublas", "triton", "cutlass"],
+        line_names=["cuBLAS", "Triton", "CUTLASS"],
         ylabel="TFLOPS",
         plot_name=f"matmul-M{M}-{'NK'.replace(x, '')}{NK}",
         args= {"M": M, 'NK'.replace(x,''): NK, "AT": False, "BT": False, "dtype": torch.float16}

@@ -1,5 +1,6 @@
 import os
 import triton
+import triton.language as tl
 import torch
 
 
@@ -27,25 +28,25 @@ def num_warps(N):
 @triton.jit
 def _forward(LOGITS, PROBS, IDX, LOSS, N, **meta):
     BLOCK = meta['BLOCK']
-    row = triton.program_id(0)
-    cols = triton.arange(0, BLOCK)
-    idx = triton.load(IDX + row)
+    row = tl.program_id(0)
+    cols = tl.arange(0, BLOCK)
+    idx = tl.load(IDX + row)
     # pointers to logit and probs
     LOGITS = LOGITS + row * N + cols
     WRIT_PROBS = PROBS + row * N + cols
     READ_PROBS = PROBS + row * N + idx
     # write-back negative log-probs
-    logits = triton.load(LOGITS, mask=cols < N, other=-float('inf'))
-    logits = logits.to(triton.float32)
-    logits = logits - triton.max(logits, 0)
-    probs = triton.log(triton.sum(triton.exp(logits), 0)) - logits
-    triton.store(WRIT_PROBS, probs, mask=cols < N)
+    logits = tl.load(LOGITS, mask=cols < N, other=-float('inf'))
+    logits = logits.to(tl.float32)
+    logits = logits - tl.max(logits, 0)
+    probs = tl.log(tl.sum(tl.exp(logits), 0)) - logits
+    tl.store(WRIT_PROBS, probs, mask=cols < N)
     # There is a bug in the compiler, which fails to insert a barrier here.
     # We add it explicitly for now. Will be fixed soon.
-    triton.debug_barrier()
+    tl.debug_barrier()
     # write-back loss
-    probs = triton.load(READ_PROBS)
-    triton.store(LOSS + row, probs)
+    probs = tl.load(READ_PROBS)
+    tl.store(LOSS + row, probs)
 
 
 @triton.heuristics({'num_warps': lambda *args, **meta: num_warps(args[3])})
@@ -53,20 +54,20 @@ def _forward(LOGITS, PROBS, IDX, LOSS, N, **meta):
 @triton.jit
 def _backward(PROBS, IDX, DPROBS, N, **meta):
     BLOCK = meta['BLOCK']
-    row = triton.program_id(0)
-    cols = triton.arange(0, BLOCK)
-    idx = triton.load(IDX + row)
+    row = tl.program_id(0)
+    cols = tl.arange(0, BLOCK)
+    idx = tl.load(IDX + row)
     # pointers to probs
     PROBS = PROBS + row * N + cols
     # We know d(-log(p[i])/dlogit[k] = -id_mat[i,k] + p[k]
     # and we have -log(p[k]) stored in PROBS, so this is easy
-    probs = -triton.load(PROBS, mask=cols < N, other=float('inf'))
-    probs = triton.exp(probs.to(triton.float32))
+    probs = -tl.load(PROBS, mask=cols < N, other=float('inf'))
+    probs = tl.exp(probs.to(tl.float32))
     delta = cols == idx
     # write result in-place in PROBS
-    dout = triton.load(DPROBS + row)
+    dout = tl.load(DPROBS + row)
     din = (probs - delta) * dout
-    triton.store(PROBS, din.to(triton.float16), mask=cols < N)
+    tl.store(PROBS, din.to(tl.float16), mask=cols < N)
 
 
 class _cross_entropy(torch.autograd.Function):
