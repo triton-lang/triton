@@ -393,6 +393,13 @@ class Binary:
         self.shared_mem = shared_mem
         self.num_warps = num_warps
 
+    def asm(self, mode):
+        if mode == 'ptx':
+            return self.module.ptx()
+        if mode == 'llir':
+            return self.module.llir()
+        raise ValueError('Unsupported mode ' + mode)
+
     def __call__(self, stream, args, grid_0, grid_1=1, grid_2=1):
         stream.enqueue(self.kernel, grid_0, grid_1, grid_2, self.num_warps * 32, 1, 1, args, self.shared_mem)
 
@@ -523,6 +530,7 @@ class Kernel:
         stream = _triton.driver.cu_stream(cu_stream, False)
         grid = grid(meta) if hasattr(grid, '__call__') else grid
         binary(stream, params, *grid)
+        return binary
 
 
 class Launcher:
@@ -531,7 +539,7 @@ class Launcher:
         self.grid = grid
 
     def __call__(self, *wargs, **kwargs):
-        self.kernel(*wargs, **kwargs, grid=self.grid)
+        return self.kernel(*wargs, **kwargs, grid=self.grid)
 
 
 class Autotuner:
