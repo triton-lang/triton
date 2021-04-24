@@ -626,19 +626,24 @@ class matmul:
         self.spdims = layout.shape
 
         if not mode == 'sdd':
-            # Which dimension of the sparse input will be the inner dim for the matmul?
-            sparse_inner = -1 - int(trans_a) if mode == 'dsd' else -2 + int(trans_b)
-            self.dense_inner_dim = -1 if sparse_inner == -2 else -1     # Dim in dense input on the 'inside' of the matmul
-            self.dense_inner_size = layout.shape[sparse_inner] * block          # Expected inner dim size for dense input
-            self.sparse_shape = (layout.shape[0], layout.sum(), block, block)   # Expected shape for sparse inputs
+            # Dims to be reduced on the 'inside' of the matmul, either -1 or -2
+            trans_dense, trans_sparse, sparse_inner = (trans_b, trans_a, -1) if mode == 'dsd' else (trans_a, trans_b, -2)
+            self.dense_inner_dim = -((sparse_inner % 2) + 1) if not trans_dense else sparse_inner
+            sparse_inner = sparse_inner if not trans_sparse else -((sparse_inner % 2) + 1)
+
+            # Inner dim of the dense input should be equal to the inner dim of the sparse input
+            self.dense_inner_size = layout.shape[sparse_inner] * block
+            # Expected shape for sparse inputs
+            self.sparse_shape = (layout.shape[0], layout.sum().item(), block, block)
 
     def __call__(self, a, b):
         c_lut, c_num_locks, c_width, c_packs,\
         da_lut, da_num_locks, da_width, da_packs,\
         db_lut, db_num_locks, db_width, db_packs = self.make_lut(a.dtype, a.device)
 
-        # If we don't check for invalid shapes here, they will never get checked and can lead to undefined behavior
-        leading_dims = self._validate_shapes(a, b)
+        # If we don't check for invalid shapes & devices here, they will lead to undefined behavior
+        # and potential illegal memory accesses
+        leading_dims = self._validate_inputs(a, b)
 
         # Either pad shapes with leading singleton dimensions or flatten extra leading dimensions as needed
         a = matmul._normalize_leading_dims(a)
@@ -669,7 +674,14 @@ class matmul:
 
         return x
 
-    def _validate_shapes(self, a, b):
+    def _validate_inputs(self, a, b):
+        device_a, device_b = a.device, b.device
+        if device_a != device_b:
+            raise ValueError(f"Inputs must be on the same device; got {device_a} for tensor A "
+                             f"and {device_b} for tensor B")
+        if device_a.type != 'cuda':
+            raise ValueError("Only GPU devices are supported for now")
+
         mode, trans_a, trans_b = self.mode, self.trans_a, self.trans_b
         if mode == 'sdd':
             # Both inputs are dense and the output is sparse
@@ -689,8 +701,9 @@ class matmul:
                 raise ValueError(f"Expected tensor {dense_name} to have size {self.dense_inner_size} at dim "
                                  f"{self.dense_inner_dim % dense.ndim}, got {dense_inner}.")
 
-            assert broadcastable_shapes(sparse.shape, self.sparse_shape), \
-                f"Expected tensor of shape {self.sparse_shape} for argument {sparse_name}, got {sparse.shape}"
+            if not broadcastable_shapes(sparse.shape, self.sparse_shape):
+                raise ValueError(f"Expected tensor of shape {self.sparse_shape} for argument {sparse_name}, "
+                                 f"got {sparse.shape}")
 
         leading_dims_a = a.shape[:-2]  # Batch, attention head, etc. dims
         leading_dims_b = b.shape[:-2]  # Batch, attention head, etc. dims
