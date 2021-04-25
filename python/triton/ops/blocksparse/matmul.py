@@ -660,8 +660,7 @@ class matmul:
             a, b, self.trans_a, self.trans_b, False, self.mode, self.spdims, self.block, c_lut, c_num_locks, c_width,
             c_packs, da_lut, da_num_locks, da_width, da_packs, db_lut, db_num_locks, db_width, db_packs
         )
-        # This removes any leading singleton dimensions we may have added to the tensor that weren't in the input;
-        # also, if we flattened any extra leading dimensions (i.e. the inputs were more than 4D) this unflattens them
+        # This removes any leading singleton dimensions we may have added to the tensor that weren't in the input
         return c.view(*leading_dims, *c.shape[-self.c_trailing_dims:])
 
     def _validate_inputs(self, a, b):
@@ -700,6 +699,21 @@ class matmul:
                 raise ValueError(f"Expected tensor of shape {self.sparse_shape} for argument {sparse_name}, "
                                  f"got {sparse.shape}")
 
+        def add_extra_dims(x):
+            # Add extra leading singleton dimensions if needed
+            dims_needed = 4 - x.ndim
+            if dims_needed > 0:
+                singletons = [1] * dims_needed
+                x = x.view(*singletons, *x.shape)
+            elif dims_needed < 0:
+                raise ValueError("Tensors with more than 4 dimensions are not currently supported")
+
+            return x
+
+        # Pad shapes with leading singleton dimensions
+        a = add_extra_dims(a)
+        b = add_extra_dims(b)
+
         leading_dims_a = a.shape[:-self.a_trailing_dims]  # Batch, attention head, etc. dims
         leading_dims_b = b.shape[:-self.b_trailing_dims]  # Batch, attention head, etc. dims
         if leading_dims_a != leading_dims_b:
@@ -708,30 +722,8 @@ class matmul:
             except RuntimeError:
                 raise ValueError(f"Tensors A and B should be broacastable along leading (non-matrix) dimensions; "
                                  f"got {leading_dims_a} for A and {leading_dims_b} for B.")
-            else:
-                a = a.expand(*leading_dims_c, *a.shape[-self.a_trailing_dims:])
-                b = b.expand(*leading_dims_c, *b.shape[-self.b_trailing_dims:])
         else:
             leading_dims_c = leading_dims_a
-
-        def normalize_leading_dims(x):
-            extra_dims = x.ndim - 4
-
-            # Flatten any extra leading dimensions into the batch dimension; this
-            # will involve copying if we just broadcasted A and B
-            if extra_dims > 0:
-                x = x.flatten(0, extra_dims)
-
-            # Add extra leading singleton dimensions if needed
-            elif extra_dims < 0:
-                singletons = [1] * -extra_dims
-                x = x.view(*singletons, *x.shape)
-
-            return x
-
-        # Either pad shapes with leading singleton dimensions or flatten extra leading dimensions as needed
-        a = normalize_leading_dims(a)
-        b = normalize_leading_dims(b)
 
         return a, b, leading_dims_c
 
