@@ -702,14 +702,17 @@ class matmul:
 
         leading_dims_a = a.shape[:-self.a_trailing_dims]  # Batch, attention head, etc. dims
         leading_dims_b = b.shape[:-self.b_trailing_dims]  # Batch, attention head, etc. dims
-        try:
-            leading_dims_c = torch.broadcast_shapes(leading_dims_a, leading_dims_b)
-        except RuntimeError:
-            raise ValueError(f"Tensors A and B should be broacastable along leading (non-matrix) dimensions; "
-                             f"got {leading_dims_a} for A and {leading_dims_b} for B.")
+        if leading_dims_a != leading_dims_b:
+            try:
+                leading_dims_c = broadcast_shapes(leading_dims_a, leading_dims_b)
+            except RuntimeError:
+                raise ValueError(f"Tensors A and B should be broacastable along leading (non-matrix) dimensions; "
+                                 f"got {leading_dims_a} for A and {leading_dims_b} for B.")
+            else:
+                a = a.expand(*leading_dims_c, *a.shape[-self.a_trailing_dims:])
+                b = b.expand(*leading_dims_c, *b.shape[-self.b_trailing_dims:])
         else:
-            a = a.expand(*leading_dims_c, *a.shape[-self.a_trailing_dims:])
-            b = b.expand(*leading_dims_c, *b.shape[-self.b_trailing_dims:])
+            leading_dims_c = leading_dims_a
 
         def normalize_leading_dims(x):
             extra_dims = x.ndim - 4
@@ -731,3 +734,11 @@ class matmul:
         b = normalize_leading_dims(b)
 
         return a, b, leading_dims_c
+
+# Copied from the PyTorch 1.8 implementation so that we can support older PyTorch versions
+def broadcast_shapes(*shapes):
+    with torch.no_grad():
+        scalar = torch.zeros((), device="cpu")
+        tensors = [scalar.expand(shape) for shape in shapes]
+        tensors = torch.broadcast_tensors(*tensors)
+        return tensors[0].shape
