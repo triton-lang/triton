@@ -618,14 +618,6 @@ class matmul:
         layout_dim = layout.ndim
         assert layout_dim in (2, 3), "Layout should be a 2 or 3 dimensional tensor of 0s and 1s"
 
-        # Support using the same layout across attention heads etc.
-        if layout_dim == 2:
-            layout = layout.unsqueeze(0)
-
-        layout = layout.long()  # Above code assumes the layout tensor is an integral type
-        self.layout = layout
-        self.spdims = layout.shape
-
         if not mode == 'sdd':
             # Dims to be reduced on the 'inside' of the matmul, either -1 or -2
             trans_dense, trans_sparse, sparse_inner = (trans_b, trans_a, -1) if mode == 'dsd' else (trans_a, trans_b, -2)
@@ -635,16 +627,15 @@ class matmul:
             # Inner dim of the dense input should be equal to the inner dim of the sparse input
             self.dense_inner_size = layout.shape[sparse_inner] * block
             # Expected shape for sparse inputs
-            self.sparse_shape = (layout.shape[0], layout.sum().item(), block, block)
-            self.a_trailing_dims = 3 if mode == 'dsd' else 2
-            self.b_trailing_dims = 2 if mode == 'dsd' else 3
-            self.c_trailing_dims = 2
-        else:
-            # How many of the dims of A, B, and C should be considered non-batch dims? Block sparse tensors
-            # have shape [(...,) blocks, block height, block width]
-            self.a_trailing_dims = 2
-            self.b_trailing_dims = 2
-            self.c_trailing_dims = 3
+            self.sparse_shape = (layout.sum().item(), block, block)
+
+        # Support using the same layout across attention heads etc.
+        if layout_dim == 2:
+            layout = layout.unsqueeze(0)
+
+        layout = layout.long()  # Above code assumes the layout tensor is an integral type
+        self.layout = layout
+        self.spdims = layout.shape
 
     def __call__(self, a, b):
         c_lut, c_num_locks, c_width, c_packs,\
@@ -653,7 +644,8 @@ class matmul:
 
         # If we don't check for invalid shapes, devices, & dtypes here, they will lead to undefined behavior
         # and potential illegal memory accesses
-        a, b, leading_dims = self._validate_inputs(a, b)
+        original_dims = max(a.ndim, b.ndim)
+        a, b = self._validate_inputs(a, b)
 
         # execute
         c = _matmul.apply(
@@ -661,7 +653,11 @@ class matmul:
             c_packs, da_lut, da_num_locks, da_width, da_packs, db_lut, db_num_locks, db_width, db_packs
         )
         # This removes any leading singleton dimensions we may have added to the tensor that weren't in the input
-        return c.view(*leading_dims, *c.shape[-self.c_trailing_dims:])
+        dims_to_trim = c.ndim - original_dims
+        for _ in range(dims_to_trim):
+            c = c.squeeze(0)
+
+        return c
 
     def _validate_inputs(self, a, b):
         if a.device != b.device:
@@ -680,12 +676,12 @@ class matmul:
         if mode == 'sdd':
             # Both inputs are dense and the output is sparse
             a_inner = a.shape[-1 if not trans_a else -2]
-            b_inner = b.shape[-1 if not trans_b else -2]
+            b_inner = b.shape[-2 if not trans_b else -1]
 
             if a_inner != b_inner:
                 a_dim = a.ndim - 1 - int(trans_a)
                 b_dim = b.ndim - 1 - int(trans_b)
-                raise ValueError(f"Size of tensor A at dim {a_dim} ({a_inner}) must match size"
+                raise ValueError(f"Size of tensor A at dim {a_dim} ({a_inner}) must match size "
                                  f"of tensor B at dim {b_dim} ({b_inner})")
         else:
             # One input is sparse
@@ -695,9 +691,9 @@ class matmul:
                 raise ValueError(f"Expected tensor {dense_name} to have size {self.dense_inner_size} at dim "
                                  f"{self.dense_inner_dim % dense.ndim}, got {dense_inner}.")
 
-            if sparse.shape != self.sparse_shape:
-                raise ValueError(f"Expected tensor of shape {self.sparse_shape} for argument {sparse_name}, "
-                                 f"got {sparse.shape}")
+            if sparse.shape[-len(self.sparse_shape):] != self.sparse_shape:
+                raise ValueError(f"Expected tensor with trailing dimensions of shape {self.sparse_shape} for argument "
+                                 f"{sparse_name}, got {sparse.shape}")
 
         def add_extra_dims(x):
             # Add extra leading singleton dimensions if needed
@@ -714,18 +710,7 @@ class matmul:
         a = add_extra_dims(a)
         b = add_extra_dims(b)
 
-        leading_dims_a = a.shape[:-self.a_trailing_dims]  # Batch, attention head, etc. dims
-        leading_dims_b = b.shape[:-self.b_trailing_dims]  # Batch, attention head, etc. dims
-        if leading_dims_a != leading_dims_b:
-            try:
-                leading_dims_c = broadcast_shapes(leading_dims_a, leading_dims_b)
-            except RuntimeError:
-                raise ValueError(f"Tensors A and B should be broacastable along leading (non-matrix) dimensions; "
-                                 f"got {leading_dims_a} for A and {leading_dims_b} for B.")
-        else:
-            leading_dims_c = leading_dims_a
-
-        return a, b, leading_dims_c
+        return a, b
 
 # Copied from the PyTorch 1.8 implementation so that we can support older PyTorch versions
 def broadcast_shapes(*shapes):
