@@ -711,11 +711,3 @@ class matmul:
         b = add_extra_dims(b)
 
         return a, b
-
-# Copied from the PyTorch 1.8 implementation so that we can support older PyTorch versions
-def broadcast_shapes(*shapes):
-    with torch.no_grad():
-        scalar = torch.zeros((), device="cpu")
-        tensors = [scalar.expand(shape) for shape in shapes]
-        tensors = torch.broadcast_tensors(*tensors)
-        return tensors[0].shape
