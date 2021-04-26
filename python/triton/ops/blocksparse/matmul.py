@@ -279,13 +279,12 @@ class _matmul(torch.autograd.Function):
             trans_a, trans_b = not trans_b, not trans_a
 
         # Shape check
-        a_inner = a.shape[-2 if trans_a else -1]
-        b_inner = b.shape[-1 if trans_b else -2]
+        a_dim = -2 if trans_a else -1
+        b_dim = -1 if trans_b else -2
+        a_inner, b_inner = a.shape[a_dim], b.shape[b_dim]
         if a_inner != b_inner:
-            a_dim = a.ndim - 1 - int(trans_a)
-            b_dim = b.ndim - 1 - int(trans_b)
-            raise ValueError(f"Size of tensor A at dim {a_dim} ({a_inner}) must match size "
-                             f"of tensor B at dim {b_dim} ({b_inner})")
+            raise ValueError(f"Size of tensor A along the {_dim_to_name(a_dim)} dim ({a_inner}) must match size "
+                             f"of tensor B along the {_dim_to_name(b_dim)} dim ({b_inner})")
         if a_inner % 16 != 0:
             raise ValueError('Reduction size for SDD must be a multiple of 16')
 
@@ -710,3 +709,7 @@ class matmul:
         b = add_extra_dims(b)
 
         return a, b
+
+def _dim_to_name(x):
+    # assert x in (-1, -2)
+    return "last" if x == -1 else "second to last"
