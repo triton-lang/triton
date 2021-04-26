@@ -273,33 +273,42 @@ class _matmul(torch.autograd.Function):
 
     @staticmethod
     def _sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, luts, num_locks, widths, packs):
-
+        # (A * B)^T = (B^T * A^T)
         if trans_c:
             a, b = b, a
             trans_a, trans_b = not trans_b, not trans_a
-        AS0 = a.size(0)
-        AS2 = a.size(3 if trans_a else 2)
-        AS3 = a.size(2 if trans_a else 3)
+
+        # Shape check
+        a_inner = a.shape[-2 if trans_a else -1]
+        b_inner = b.shape[-1 if trans_b else -2]
+        if a_inner != b_inner:
+            a_dim = a.ndim - 1 - int(trans_a)
+            b_dim = b.ndim - 1 - int(trans_b)
+            raise ValueError(f"Size of tensor A at dim {a_dim} ({a_inner}) must match size "
+                             f"of tensor B at dim {b_dim} ({b_inner})")
+        if a_inner % 16 != 0:
+            raise ValueError('Reduction size for SDD must be a multiple of 16')
+
+        batch_size = a.size(0)
+        a_outer = a.size(3 if trans_a else 2)
         dtype = a.dtype
         device = a.device
-        is_16_multiple = AS3 % 16 == 0
-        if not is_16_multiple:
-            raise ValueError('Reduction size for SDD must be a multiple of 16')
+
         # create kernel
         total_width = sum([width * pack * pack for width, pack in zip(widths, packs)])
-        c = torch.zeros((AS0, total_width, block, block), dtype=dtype, device=device)
+        c = torch.zeros((batch_size, total_width, block, block), dtype=dtype, device=device)
         for lut, width, pack in zip(luts, widths, packs):
             num_lock = 1
             meta = {'TM': block * pack, 'TN': block * pack, 'BLOCK': block, 'TK': 32, 'TZ': 1,
                     'SDD': True, 'DSD': False, 'DDS': False}
             # create output
-            locks = _matmul.get_locks(2 * width * AS0 * num_lock, a.device)
+            locks = _matmul.get_locks(2 * width * batch_size * num_lock, a.device)
             # maximum grid size is 65535
             # so operation might be decomposed into multiple
             # kernel calls
             max_width = 49152
             for off_width in range(0, width, max_width):
-                grid = lambda meta: [meta['TZ'], min(max_width, width - off_width), AS0]
+                grid = lambda meta: [meta['TZ'], min(max_width, width - off_width), batch_size]
                 _kernel[grid](
                     a,
                     b,
@@ -316,9 +325,9 @@ class _matmul(torch.autograd.Function):
                     c.stride(0),
                     c.stride(2),
                     c.stride(3),
-                    AS2,
-                    AS2,
-                    AS3,
+                    a_outer,
+                    a_outer,
+                    a_inner,
                     off_width,
                     lut,
                     locks,
@@ -673,17 +682,7 @@ class matmul:
             raise ValueError(f"Inputs must be the same dtype; got {a.dtype} for A and {b.dtype} for B")
 
         mode, trans_a, trans_b = self.mode, self.trans_a, self.trans_b
-        if mode == 'sdd':
-            # Both inputs are dense and the output is sparse
-            a_inner = a.shape[-1 if not trans_a else -2]
-            b_inner = b.shape[-2 if not trans_b else -1]
-
-            if a_inner != b_inner:
-                a_dim = a.ndim - 1 - int(trans_a)
-                b_dim = b.ndim - 1 - int(trans_b)
-                raise ValueError(f"Size of tensor A at dim {a_dim} ({a_inner}) must match size "
-                                 f"of tensor B at dim {b_dim} ({b_inner})")
-        else:
+        if mode != 'sdd':
             # One input is sparse
             dense, dense_name, sparse, sparse_name = (a, 'A', b, 'B') if mode == 'dds' else (b, 'B', a, 'A')
             dense_inner = dense.shape[self.dense_inner_dim]
