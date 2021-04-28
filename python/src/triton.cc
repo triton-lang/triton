@@ -189,6 +189,7 @@ void init_triton_ir(py::module &&m) {
       .def("make_function", &ir::function_type::get, ret::reference)
       .def("make_block", &ir::block_type::get, ret::reference)
       .def("get_void", &ir::type::get_void_ty, ret::reference)
+      .def("get_fp8", &ir::type::get_fp8_ty, ret::reference)
       .def("get_fp16", &ir::type::get_half_ty, ret::reference)
       .def("get_fp32", &ir::type::get_float_ty, ret::reference)
       .def("get_fp64", &ir::type::get_double_ty, ret::reference)
