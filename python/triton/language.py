@@ -128,6 +128,9 @@ class block:
     def __sub__(self, other, builder=None):
         return frontend.sub(self, other, builder)
 
+    def __rsub__(self, other, builder=None):
+        return frontend.sub(other, self, builder)
+
     @builtin
     def __mul__(self, other, builder=None):
         return frontend.mul(self, other, builder)
@@ -183,22 +186,42 @@ class block:
 
     # comparison operators
 
+    # >
     @builtin
     def __gt__(self, other, builder=None):
         return frontend.greater_than(self, other, builder)
 
     @builtin
+    def __rgt__(self, other, builder=None):
+        return frontend.greater_than(other, self, builder)
+
+    # >=
+    @builtin
     def __ge__(self, other, builder=None):
         return frontend.greater_equal(self, other, builder)
 
+    def __rge__(self, other, builder=None):
+        return frontend.greater_equal(other, self, builder)
+
+    # <
     @builtin
     def __lt__(self, other, builder=None):
         return frontend.less_than(self, other, builder)
 
     @builtin
+    def __rlt__(self, other, builder=None):
+        return frontend.less_than(other, self, builder)
+
+    # <=
+    @builtin
     def __le__(self, other, builder=None):
         return frontend.less_equal(self, other, builder)
 
+    @builtin
+    def __rle__(self, other, builder=None):
+        return frontend.less_equal(other, self, builder)
+
+    # ==
     @builtin
     def __eq__(self, other, builder=None):
         return frontend.equal(self, other, builder)
@@ -421,6 +444,20 @@ def atomic_xchg(pointer, val, builder=None):
     return frontend.atomic_xchg(pointer, val, builder)
 
 
+@builtin
+def atomic_add(pointer, val, mask=None, builder=None):
+    """
+    Performs an atomic add and the memory locations specified by :code:`pointer`.
+    :param pointer: The memory locations which contain the old values
+    :type pointer: Block of dtype=triton.PointerDType
+    :param val: The values to add
+    :type val: Block of dtype=`pointer.dtype.element_ty`
+    :param mask: If mask[idx] is false, :code:`pointer[idx]` is unaffected.
+    :type mask: Block of triton.int1, optional
+    """
+    return frontend.atomic_add(pointer, val, mask, builder)
+
+
 # -----------------------
 # Conditioning
 # -----------------------
@@ -473,6 +510,17 @@ def log(x, builder=None):
     """
 
     return frontend.log(x, builder)
+
+
+@builtin
+def sqrt(x, builder=None):
+    """
+    Computes the element-wise square root of :code:`x`
+
+    :param x: the input values
+    :type x: Block
+    """
+    return frontend.sqrt(x, builder)
 
 
 # -----------------------
