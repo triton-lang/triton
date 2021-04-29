@@ -521,6 +521,15 @@ ir::value *dispatch::atomic_xchg(ir::value* ptr, ir::value *val, ir::builder *bu
   return builder->create_atomic_exch(ptr, val);
 }
 
+ir::value *dispatch::atomic_add(ir::value* ptr, ir::value *val, ir::value *mask, ir::builder *builder){
+  if(!mask){
+    mask = builder->get_int1(true);
+    if(ptr->get_type()->is_block_ty())
+      mask = builder->create_splat(mask, ptr->get_type()->get_block_shapes());
+  }
+  return builder->create_atomic_add(ptr, val, mask);
+}
+
 //===----------------------------------------------------------------------===//
 //                               Linear Algebra
 //===----------------------------------------------------------------------===//

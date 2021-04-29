@@ -249,9 +249,13 @@ class CodeGenerator(ast.NodeVisitor):
             ast.Is: '__eq__',
             ast.IsNot: '__ne__',
         }[type(node.ops[0])]
-        if self.is_triton_object(lhs) or self.is_triton_object(rhs):
+        if self.is_triton_object(lhs):
             return getattr(lhs, fn)(rhs, builder=self.builder)
-        return getattr(lhs, fn)(rhs)
+        elif self.is_triton_object(rhs):
+            fn = fn[:2] + 'r' + fn[2:]
+            return getattr(rhs, fn)(lhs, builder=self.builder)
+        else:
+            return getattr(lhs, fn)(rhs)
 
     def visit_UnaryOp(self, node):
         op = self.visit(node.operand)

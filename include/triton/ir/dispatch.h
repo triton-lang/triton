@@ -69,6 +69,7 @@ struct dispatch{
   static ir::value *store(ir::value* ptr, ir::value *value, ir::value *mask, ir::builder *builder);
   static ir::value *atomic_cas(ir::value* ptr, ir::value *cmp, ir::value *val, ir::builder *builder);
   static ir::value *atomic_xchg(ir::value* ptr, ir::value *val, ir::builder *builder);
+  static ir::value *atomic_add(ir::value* ptr, ir::value *val, ir::value *msk, ir::builder *builder);
 
   // linear algebra
   static ir::value *dot(ir::value *lhs, ir::value *rhs, ir::builder *builder);
