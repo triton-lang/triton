@@ -4,22 +4,22 @@ from triton._C.libtriton.triton import frontend
 from functools import wraps
 
 
+# convert block/dtype to ir values
+def _to_ir(x, builder):
+    if isinstance(x, bool):
+        return builder.get_int1(x)
+    elif isinstance(x, int):
+        return builder.get_int32(x)
+    elif isinstance(x, float):
+        return builder.get_float32(x)
+    if isinstance(x, block):
+        return x.handle
+    if isinstance(x, dtype):
+        return x.handle(builder)
+    return x
+
+
 def _patch(fn):
-
-    # convert block/dtype to ir values
-    def _to_ir(x, builder):
-        if isinstance(x, bool):
-            return builder.get_int1(x)
-        elif isinstance(x, int):
-            return builder.get_int32(x)
-        elif isinstance(x, float):
-            return builder.get_float32(x)
-        if isinstance(x, block):
-            return x.handle
-        if isinstance(x, dtype):
-            return x.handle(builder)
-        return x
-
     def _from_ir(x):
         if isinstance(x, ir.value):
             if x.type.is_void():
@@ -306,6 +306,7 @@ def zeros(shape, dtype, builder=None):
     :param dtype: Data-type of the new array, e.g., :code:`triton.float16`
     :type dtype: DType
     """
+    shape = [int(x.handle) if isinstance(x, block) else x for x in shape]
     return frontend.zeros(shape, dtype, builder)
 
 
