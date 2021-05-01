@@ -21,6 +21,7 @@ type *type::get_scalar_ty() const {
 
 unsigned type::get_primitive_size_in_bits() const {
   switch (id_) {
+    case FP8TyID: return 8;
     case HalfTyID: return 16;
     case FloatTyID: return 32;
     case DoubleTyID: return 64;
@@ -42,6 +43,7 @@ unsigned type::get_tile_bitwidth() const
 unsigned type::get_fp_mantissa_width() const {
   id_t id = get_scalar_ty()->id_;
   assert(is_floating_point_ty() && "Not a floating point type!");
+  if (id == FP8TyID) return 3;
   if (id == HalfTyID) return 10;
   if (id == FloatTyID) return 23;
   if (id == DoubleTyID) return 53;
@@ -103,7 +105,7 @@ bool type::is_integer_ty(unsigned width) const
 
 
 bool type::is_floating_point_ty() const
-{ return is_half_ty() || is_float_ty() || is_double_ty(); }
+{ return is_fp8_ty() || is_half_ty() || is_float_ty() || is_double_ty(); }
 
 bool type::is_sized() const {
   // primitive types are sized
@@ -120,7 +122,8 @@ bool type::is_sized() const {
 // primitive types
 type *type::get_void_ty(context &ctx) { return &ctx.p_impl->void_ty; }
 type *type::get_label_ty(context &ctx) { return &ctx.p_impl->label_ty; }
-// half
+// floating point
+type *type::get_fp8_ty(context &ctx) { return &ctx.p_impl->fp8_ty; }
 type *type::get_half_ty(context &ctx) { return &ctx.p_impl->half_ty; }
 type *type::get_float_ty(context &ctx) { return &ctx.p_impl->float_ty; }
 type *type::get_double_ty(context &ctx) { return &ctx.p_impl->double_ty; }

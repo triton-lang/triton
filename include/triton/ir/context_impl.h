@@ -22,9 +22,11 @@ public:
   context_impl(context &ctx);
 
 public:
-  // primitive types
-  type void_ty, label_ty, half_ty, float_ty, double_ty;
-  // derived types
+  // non-numeric types
+  type void_ty, label_ty;
+  // floating point types
+  type fp8_ty, half_ty, float_ty, double_ty;
+  // integer types
   integer_type int1_ty, int8_ty, int16_ty, int32_ty, int64_ty, int128_ty;
   // Pointer types
   std::map<std::pair<type*, unsigned>, pointer_type*> ptr_tys;

@@ -29,21 +29,22 @@ public:
   enum id_t {
     // primitive types
     VoidTyID = 0,    ///<  0: type with no size
-    HalfTyID,        ///<  1: 16-bit floating point type
-    FloatTyID,       ///<  2: 32-bit floating point type
-    DoubleTyID,      ///<  3: 64-bit floating point type
-    X86_FP80TyID,    ///<  4: 80-bit floating point type (X87)
-    FP128TyID,       ///<  5: 128-bit floating point type (112-bit mantissa)
-    PPC_FP128TyID,   ///<  6: 128-bit floating point type (two 64-bits, PowerPC)
-    LabelTyID,       ///<  7: Labels
-    MetadataTyID,    ///<  8: Metadata
-    TokenTyID,       ///<  9: Token
+    FP8TyID,         ///<  1: 8-bit floating point type (3 bits mantissa)
+    HalfTyID,        ///<  3: 16-bit floating point type
+    FloatTyID,       ///<  4: 32-bit floating point type
+    DoubleTyID,      ///<  5: 64-bit floating point type
+    X86_FP80TyID,    ///<  6: 80-bit floating point type (X87)
+    FP128TyID,       ///<  7: 128-bit floating point type (112-bit mantissa)
+    PPC_FP128TyID,   ///<  8: 128-bit floating point type (two 64-bits, PowerPC)
+    LabelTyID,       ///<  9: Labels
+    MetadataTyID,    ///< 10: Metadata
+    TokenTyID,       ///< 11: Token
     // derived types
-    IntegerTyID,     ///< 10: Arbitrary bit width integers
-    FunctionTyID,    ///< 11: Functions
-    PointerTyID,     ///< 12: Pointers
-    StructTyID,      ///< 13: Struct
-    BlockTyID,        ///< 14: Tile
+    IntegerTyID,     ///< 12: Arbitrary bit width integers
+    FunctionTyID,    ///< 13: Functions
+    PointerTyID,     ///< 14: Pointers
+    StructTyID,      ///< 15: Struct
+    BlockTyID,       ///< 16: Block
   };
 
 public:
@@ -72,6 +73,7 @@ public:
 
   // primitive predicates
   bool is_void_ty() const               { return id_ == VoidTyID; }
+  bool is_fp8_ty() const                { return id_ == FP8TyID; }
   bool is_half_ty() const               { return id_ == HalfTyID; }
   bool is_float_ty() const              { return id_ == FloatTyID; }
   bool is_double_ty() const             { return id_ == DoubleTyID; }
@@ -96,6 +98,7 @@ public:
   static type *get_void_ty(context &ctx);
   static type *get_label_ty(context &ctx);
   // half
+  static type *get_fp8_ty(context &ctx);
   static type *get_half_ty(context &ctx);
   static type *get_float_ty(context &ctx);
   static type *get_double_ty(context &ctx);
@@ -124,6 +127,7 @@ public:
   std::string repr() const {
     switch(id_) {
       case VoidTyID: return "void";
+      case FP8TyID: return "fp8";
       case HalfTyID: return "f16";
       case FloatTyID: return "f32";
       case DoubleTyID: return "f64";

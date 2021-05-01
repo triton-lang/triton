@@ -27,6 +27,7 @@ using namespace llvm;
 #define void_ty              builder_->getVoidTy()
 #define f16_ty               builder_->getHalfTy()
 #define f32_ty               builder_->getFloatTy()
+#define i8_ty               builder_->getInt8Ty()
 #define i32_ty               builder_->getInt32Ty()
 #define vec_ty(type, num_el) VectorType::get(type, num_el, false)
 #define ptr_ty(...)          PointerType::get(__VA_ARGS__)
@@ -60,6 +61,7 @@ using namespace llvm;
 #define insert_elt(...)      builder_->CreateInsertElement(__VA_ARGS__)
 #define intrinsic(...)       builder_->CreateIntrinsic(__VA_ARGS__)
 #define load(...)            builder_->CreateLoad(__VA_ARGS__)
+#define lshr(...)            builder_->CreateLShr(__VA_ARGS__)
 #define max_num(...)         builder_->CreateMaxNum(__VA_ARGS__)
 #define min_num(...)         builder_->CreateMinNum(__VA_ARGS__)
 #define mul(...)             builder_->CreateMul(__VA_ARGS__)
@@ -69,6 +71,7 @@ using namespace llvm;
 #define select(...)          builder_->CreateSelect(__VA_ARGS__)
 #define store(...)           builder_->CreateStore(__VA_ARGS__)
 #define sub(...)             builder_->CreateSub(__VA_ARGS__)
+#define shl(...)             builder_->CreateShl(__VA_ARGS__)
 #define udiv(...)            builder_->CreateUDiv(__VA_ARGS__)
 #define urem(...)            builder_->CreateURem(__VA_ARGS__)
 #define splat(...)           builder_->CreateVectorSplat(__VA_ARGS__)
@@ -101,6 +104,7 @@ Type *generator::cvt(ir::type *ty) {
   // primitive types
   switch(ty->get_type_id()){
     case ir::type::VoidTyID:      return Type::getVoidTy(*ctx_);
+    case ir::type::FP8TyID:       return Type::getInt8Ty(*ctx_);
     case ir::type::HalfTyID:      return Type::getHalfTy(*ctx_);
     case ir::type::FloatTyID:     return Type::getFloatTy(*ctx_);
     case ir::type::DoubleTyID:    return Type::getDoubleTy(*ctx_);
@@ -316,10 +320,108 @@ void generator::visit_fcmp_inst(ir::fcmp_inst* x) {
   }
 }
 
+
+std::tuple<Value*, Value*, Value*, Value*> generator::fp32x4_to_fp8x4(Value *in0, Value *in1, Value *in2, Value *in3){
+    InlineAsm *ptx = InlineAsm::get(FunctionType::get(i32_ty, {f32_ty, f32_ty, f32_ty, f32_ty}, false),
+    "{                                              \n\t"
+     ".reg .b32 b<4>;                        \n\t"
+     "shl.b32  b0, $1, 4;                    \n\t" // shift into into upper byte
+     "shl.b32  b1, $2, 4;                    \n\t"
+     "shl.b32  b2, $3, 4;                    \n\t"
+     "shl.b32  b3, $4, 4;                    \n\t"
+     "lop3.b32 b0, b0, 0x80000000, $1, 0xb8; \n\t" // restore sign
+     "lop3.b32 b1, b1, 0x80000000, $2, 0xb8; \n\t"
+     "lop3.b32 b2, b2, 0x80000000, $3, 0xb8; \n\t"
+     "lop3.b32 b3, b3, 0x80000000, $4, 0xb8; \n\t"
+     "prmt.b32 b0, b0, b1, 0x6273;           \n\t" // pack lower half b0, b1 (62 unused here)
+     "prmt.b32 b2, b2, b3, 0x6273;           \n\t" // pack lower half b2, b3 (62 unused here)
+     "prmt.b32 $0, b0, b2, 0x5410;           \n\t" // pack full b0, b1, b2, b3
+    "}", "=r, r, r, r, r", false);
+    Value *packed_ret = call(ptx, {in0, in1, in2, in3});
+    Value* ret = bit_cast(packed_ret, vec_ty(i8_ty, 4));
+    return std::make_tuple(extract_elt(ret, (int)0),
+                           extract_elt(ret, (int)1),
+                           extract_elt(ret, (int)2),
+                           extract_elt(ret, (int)3));
+}
+
+std::tuple<Value*, Value*, Value*, Value*> generator::fp8x4_to_fp32x4(Value *in0, Value *in1, Value *in2, Value *in3){
+   Value *ret0, *ret1, *ret2, *ret3;
+   std::tie(ret0, ret1, ret2, ret3) = fp8x4_to_fp16x4(in0, in1, in2, in3);
+   ret0 = cast(llvm::Instruction::FPExt, ret0, f32_ty);
+   ret1 = cast(llvm::Instruction::FPExt, ret1, f32_ty);
+   ret2 = cast(llvm::Instruction::FPExt, ret2, f32_ty);
+   ret3 = cast(llvm::Instruction::FPExt, ret3, f32_ty);
+   return std::make_tuple(ret0, ret1, ret2, ret3);
+}
+
+
+std::tuple<Value*, Value*, Value*, Value*> generator::fp8x4_to_fp16x4(Value *in0, Value *in1, Value *in2, Value *in3){
+    Type *ret_ty = StructType::get(*ctx_, {vec_ty(f16_ty, 2), vec_ty(f16_ty, 2)});
+    InlineAsm *ptx = InlineAsm::get(FunctionType::get(ret_ty, {i32_ty}, false),
+    "{"
+    ".reg .b32 a<2>, b<2>;                  \n\t"
+    "prmt.b32 a0, 0, $2, 0x5140;            \n\t"
+    "prmt.b32 a1, 0, $2, 0x7362;            \n\t"
+    "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n\t" // strip sign
+    "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n\t"
+    "shr.b32  b0, b0, 1;                    \n\t" // shift into fp16 poistion
+    "shr.b32  b1, b1, 1;                    \n\t"
+    "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n\t" // restore sign
+    "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n\t"
+    "}", "=r,=r,r", false);
+    Value *packed_in = UndefValue::get(vec_ty(i8_ty, 4));
+    packed_in = insert_elt(packed_in, in0, (int)0);
+    packed_in = insert_elt(packed_in, in1, (int)1);
+    packed_in = insert_elt(packed_in, in2, (int)2);
+    packed_in = insert_elt(packed_in, in3, (int)3);
+    Value *in = bit_cast(packed_in, i32_ty);
+    Value *ret = call(ptx, {in});
+    Value *packed_ret0 = extract_val(ret, {0});
+    Value *packed_ret1 = extract_val(ret, {1});
+    Value *ret0 = extract_elt(packed_ret0, (int)0);
+    Value *ret1 = extract_elt(packed_ret0, (int)1);
+    Value *ret2 = extract_elt(packed_ret1, (int)0);
+    Value *ret3 = extract_elt(packed_ret1, (int)1);
+    return std::make_tuple(ret0, ret1, ret2, ret3);
+}
+
+
 /**
  * \brief Code Generation for `cast`
  */
 void generator::visit_cast_inst(ir::cast_inst* x) {
+  // <> FP8
+  ir::value *op = x->get_operand(0);
+  ir::type* ret_sca_ty = x->get_type()->get_scalar_ty();
+  ir::type* op_sca_ty = op->get_type()->get_scalar_ty();
+  if(ret_sca_ty->is_fp8_ty() || op_sca_ty->is_fp8_ty()){
+    // ensure that conversions can be vectorized
+    int ld = layouts_->get(x)->get_order(0);
+    int contiguous = layouts_->get(x)->to_scanline()->nts(ld);
+    if(contiguous % 4 != 0)
+        throw std::runtime_error("unsupported fp32 -> fp8 conversion");
+    auto x_idxs = idxs_.at(x);
+    auto op_idxs = idxs_.at(op);
+    // run the conversion
+    auto cvt = [&](Value* a, Value* b, Value* c, Value* d){
+      if(op_sca_ty->is_fp8_ty() && ret_sca_ty->is_half_ty())
+        return fp8x4_to_fp16x4(a, b, c, d);
+      throw std::runtime_error("unsupported conversion");
+    };
+    for(size_t i = 0; i < x_idxs.size(); i+=4){
+        std::tie(vals_[x][x_idxs[i+0]],
+                 vals_[x][x_idxs[i+1]],
+                 vals_[x][x_idxs[i+2]],
+                 vals_[x][x_idxs[i+3]]) = cvt(vals_[op][op_idxs[i+0]],
+                                              vals_[op][op_idxs[i+1]],
+                                              vals_[op][op_idxs[i+2]],
+                                              vals_[op][op_idxs[i+3]]);
+    }
+    return;
+  }
+
+
   Type *ty = cvt(x->get_type()->get_scalar_ty());
   auto cvt = [](ir::cast_op_t op){
     using ll = llvm::Instruction::CastOps;
