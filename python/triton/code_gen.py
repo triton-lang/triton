@@ -51,7 +51,7 @@ class CodeGenerator(ast.NodeVisitor):
                 break
         if add_scope:
             self.module.pop_scope()
-        return stmts and isinstance(stmt, ast.Return)
+        return self.last_ret
 
     def __init__(self, context, prototype, gscope, attributes, constants, kwargs):
         self.builder = _triton.ir.builder(context)
@@ -85,10 +85,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
-        ret = self.visit(node.value)
-        if ret is None:
-            return self.builder.ret_void()
-        return ret
+        return self.visit(node.value)
 
     def visit_FunctionDef(self, node, inline=False, arg_values=None):
         arg_names, kwarg_names = self.visit(node.args)
@@ -115,8 +112,7 @@ class CodeGenerator(ast.NodeVisitor):
         for arg_name, arg_value in zip(arg_names, arg_values):
             self.set_value(arg_name, arg_value)
         if inline:
-            self.visit_compound_statement(node.body, add_scope=True)
-            return self.last_ret
+            return self.visit_compound_statement(node.body, add_scope=True)
         else:
             entry = _triton.ir.basic_block.create(self.builder.context, "entry", fn)
             self.module.seal_block(entry)
@@ -144,8 +140,6 @@ class CodeGenerator(ast.NodeVisitor):
         assert len(names) == 1
         name = names[0]
         value = self.visit(node.value)
-        if not isinstance(value, triton.language.block):
-            value = triton.language._to_ir(value, self.builder)
         self.set_value(names[0], value)
 
     def visit_AugAssign(self, node):
@@ -214,16 +208,14 @@ class CodeGenerator(ast.NodeVisitor):
             else:
                 self.builder.cond_br(cond.handle, then_bb, endif_bb)
             self.builder.set_insert_block(then_bb)
-            is_terminator = self.visit_compound_statement(node.body, add_scope=True)
+            self.visit_compound_statement(node.body, add_scope=True)
             # TODO: last statement is a terminator?
-            if not is_terminator:
-                self.builder.br(endif_bb)
+            self.builder.br(endif_bb)
             if else_bb:
                 self.builder.set_insert_block(else_bb)
-                is_terminator = self.visit_compound_statement(node.orelse, add_scope=True)
+                self.visit_compound_statement(node.orelse, add_scope=True)
                 #TODO: last statement is a terminator?
-                if not is_terminator:
-                    self.builder.br(endif_bb)
+                self.builder.br(endif_bb)
             self.module.seal_block(endif_bb)
             self.builder.set_insert_block(endif_bb)
         else:
@@ -257,13 +249,9 @@ class CodeGenerator(ast.NodeVisitor):
             ast.Is: '__eq__',
             ast.IsNot: '__ne__',
         }[type(node.ops[0])]
-        if self.is_triton_object(lhs):
+        if self.is_triton_object(lhs) or self.is_triton_object(rhs):
             return getattr(lhs, fn)(rhs, builder=self.builder)
-        elif self.is_triton_object(rhs):
-            fn = fn[:2] + 'r' + fn[2:]
-            return getattr(rhs, fn)(lhs, builder=self.builder)
-        else:
-            return getattr(lhs, fn)(rhs)
+        return getattr(lhs, fn)(rhs)
 
     def visit_UnaryOp(self, node):
         op = self.visit(node.operand)
@@ -436,20 +424,23 @@ class CompilationError(Exception):
 
 
 class Kernel:
-
-    type_names = {
-        int: 'I',
-        float: 'f',
-        bool: 'B',
-        torch.float16: 'f16',
-        torch.float32: 'f32',
-        torch.float64: 'f64',
-        torch.bool: 'i1',
-        torch.int8: 'i8',
-        torch.int16: 'i16',
-        torch.int32: 'i32',
-        torch.int64: 'i64',
-    }
+    @staticmethod
+    def _type_name(obj):
+        type_names = {
+            int: 'I',
+            float: 'f',
+            bool: 'B',
+            triton.language.float8: 'f8',
+            torch.float16: 'f16',
+            torch.float32: 'f32',
+            torch.float64: 'f64',
+            torch.bool: 'i1',
+            torch.int8: 'i8',
+            torch.int16: 'i16',
+            torch.int32: 'i32',
+            torch.int64: 'i64',
+        }
+        return type_names[obj]
 
     @staticmethod
     def _to_triton_ir(context, obj):
@@ -457,6 +448,7 @@ class Kernel:
             'I': _triton.ir.type.get_int32,
             'f': _triton.ir.type.get_fp32,
             'B': _triton.ir.type.get_int1,
+            'f8': _triton.ir.type.get_fp8,
             'f16': _triton.ir.type.get_fp16,
             'f32': _triton.ir.type.get_fp32,
             'f64': _triton.ir.type.get_fp64,
@@ -467,12 +459,12 @@ class Kernel:
             'i64': _triton.ir.type.get_int64,
         }
         # convert torch.Tensor to Triton IR pointers
-        if isinstance(obj, torch.Tensor):
-            name = Kernel.type_names[obj.dtype]
+        if hasattr(obj, 'data_ptr'):
+            name = Kernel._type_name(obj.dtype)
             elt_ty = type_map[name](context)
             return _triton.ir.type.make_ptr(elt_ty, 1)
         # default path returns triton.ir.type directly
-        name = Kernel.type_names[obj.__class__]
+        name = Kernel._type_name(obj.__class__)
         return type_map[name](context)
 
     @staticmethod
@@ -481,7 +473,7 @@ class Kernel:
         types_key = [None] * len(wargs)
         for i, arg in enumerate(wargs):
             prefix = 'P' if i in tensor_idxs else ''
-            suffix = Kernel.type_names[arg.dtype] if i in tensor_idxs else Kernel.type_names[arg.__class__]
+            suffix = Kernel._type_name(arg.dtype) if i in tensor_idxs else Kernel._type_name(arg.__class__)
             types_key[i] = prefix + suffix
         return tuple(types_key)
 
@@ -523,7 +515,7 @@ class Kernel:
 
     def __call__(self, *wargs, grid, num_warps=4, **meta):
         # device inference
-        tensor_idxs = [i for i, arg in enumerate(wargs) if isinstance(arg, torch.Tensor)]
+        tensor_idxs = [i for i, arg in enumerate(wargs) if hasattr(arg, 'data_ptr')]
         if len(tensor_idxs) == 0:
             raise ValueError("No Tensor argument found.")
         device = wargs[tensor_idxs[0]].device
@@ -545,7 +537,7 @@ class Kernel:
                 *wargs, device=device, attributes=attributes, num_warps=num_warps, constants=constants, **meta
             )
         # pack arguments
-        fmt = ''.join(['P' if i in tensor_idxs else Kernel.type_names[arg.__class__] for i, arg in enumerate(wargs)])
+        fmt = ''.join(['P' if i in tensor_idxs else Kernel._type_name(arg.__class__) for i, arg in enumerate(wargs)])
         params = struct.pack(fmt, *args)
         # enqueue cached function into stream
         binary = cache[key]
@@ -703,3 +695,19 @@ def jit(fn):
 
 def cdiv(x, y):
     return (x + y - 1) // y
+
+
+######
+
+
+class TensorWrapper:
+    def __init__(self, data_ptr, dtype):
+        self._data_ptr = data_ptr
+        self.dtype = dtype
+
+    def data_ptr(self):
+        return self._data_ptr
+
+
+def reinterpret(tensor, dtype):
+    return TensorWrapper(tensor.data_ptr(), dtype)
