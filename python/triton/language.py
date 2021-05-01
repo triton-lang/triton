@@ -4,22 +4,22 @@ from triton._C.libtriton.triton import frontend
 from functools import wraps
 
 
+# convert block/dtype to ir values
+def _to_ir(x, builder):
+    if isinstance(x, bool):
+        return builder.get_int1(x)
+    elif isinstance(x, int):
+        return builder.get_int32(x)
+    elif isinstance(x, float):
+        return builder.get_float32(x)
+    if isinstance(x, block):
+        return x.handle
+    if isinstance(x, dtype):
+        return x.handle(builder)
+    return x
+
+
 def _patch(fn):
-
-    # convert block/dtype to ir values
-    def _to_ir(x, builder):
-        if isinstance(x, bool):
-            return builder.get_int1(x)
-        elif isinstance(x, int):
-            return builder.get_int32(x)
-        elif isinstance(x, float):
-            return builder.get_float32(x)
-        if isinstance(x, block):
-            return x.handle
-        if isinstance(x, dtype):
-            return x.handle(builder)
-        return x
-
     def _from_ir(x):
         if isinstance(x, ir.value):
             if x.type.is_void():
@@ -130,6 +130,9 @@ class block:
     def __sub__(self, other, builder=None):
         return frontend.sub(self, other, builder)
 
+    def __rsub__(self, other, builder=None):
+        return frontend.sub(other, self, builder)
+
     @builtin
     def __mul__(self, other, builder=None):
         return frontend.mul(self, other, builder)
@@ -185,22 +188,42 @@ class block:
 
     # comparison operators
 
+    # >
     @builtin
     def __gt__(self, other, builder=None):
         return frontend.greater_than(self, other, builder)
 
     @builtin
+    def __rgt__(self, other, builder=None):
+        return frontend.greater_than(other, self, builder)
+
+    # >=
+    @builtin
     def __ge__(self, other, builder=None):
         return frontend.greater_equal(self, other, builder)
 
+    def __rge__(self, other, builder=None):
+        return frontend.greater_equal(other, self, builder)
+
+    # <
     @builtin
     def __lt__(self, other, builder=None):
         return frontend.less_than(self, other, builder)
 
     @builtin
+    def __rlt__(self, other, builder=None):
+        return frontend.less_than(other, self, builder)
+
+    # <=
+    @builtin
     def __le__(self, other, builder=None):
         return frontend.less_equal(self, other, builder)
 
+    @builtin
+    def __rle__(self, other, builder=None):
+        return frontend.less_equal(other, self, builder)
+
+    # ==
     @builtin
     def __eq__(self, other, builder=None):
         return frontend.equal(self, other, builder)
@@ -285,6 +308,7 @@ def zeros(shape, dtype, builder=None):
     :param dtype: Data-type of the new array, e.g., :code:`triton.float16`
     :type dtype: DType
     """
+    shape = [int(x.handle) if isinstance(x, block) else x for x in shape]
     return frontend.zeros(shape, dtype, builder)
 
 
@@ -423,6 +447,20 @@ def atomic_xchg(pointer, val, builder=None):
     return frontend.atomic_xchg(pointer, val, builder)
 
 
+@builtin
+def atomic_add(pointer, val, mask=None, builder=None):
+    """
+    Performs an atomic add and the memory locations specified by :code:`pointer`.
+    :param pointer: The memory locations which contain the old values
+    :type pointer: Block of dtype=triton.PointerDType
+    :param val: The values to add
+    :type val: Block of dtype=`pointer.dtype.element_ty`
+    :param mask: If mask[idx] is false, :code:`pointer[idx]` is unaffected.
+    :type mask: Block of triton.int1, optional
+    """
+    return frontend.atomic_add(pointer, val, mask, builder)
+
+
 # -----------------------
 # Conditioning
 # -----------------------
@@ -475,6 +513,17 @@ def log(x, builder=None):
     """
 
     return frontend.log(x, builder)
+
+
+@builtin
+def sqrt(x, builder=None):
+    """
+    Computes the element-wise square root of :code:`x`
+
+    :param x: the input values
+    :type x: Block
+    """
+    return frontend.sqrt(x, builder)
 
 
 # -----------------------

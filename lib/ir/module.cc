@@ -107,9 +107,12 @@ ir::value *module::get_value_recursive(const std::string& name, ir::basic_block 
     ir::phi_node* phi = make_phi(ty, 1, block);
     set_value(name, block, phi);
     result = add_phi_operands(name, phi);
+    if(auto *phi = dynamic_cast<ir::phi_node*>(result))
+      result = try_remove_trivial_phis(phi);
   }
-  if(auto *phi = dynamic_cast<ir::phi_node*>(result))
+  if(auto *phi = dynamic_cast<ir::phi_node*>(result)){
     result = try_remove_trivial_phis(phi);
+  }
   set_value(name, block, result);
   return result;
 }

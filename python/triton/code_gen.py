@@ -51,7 +51,7 @@ class CodeGenerator(ast.NodeVisitor):
                 break
         if add_scope:
             self.module.pop_scope()
-        return self.last_ret
+        return stmts and isinstance(stmt, ast.Return)
 
     def __init__(self, context, prototype, gscope, attributes, constants, kwargs):
         self.builder = _triton.ir.builder(context)
@@ -85,7 +85,10 @@ class CodeGenerator(ast.NodeVisitor):
 
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
-        return self.visit(node.value)
+        ret = self.visit(node.value)
+        if ret is None:
+            return self.builder.ret_void()
+        return ret
 
     def visit_FunctionDef(self, node, inline=False, arg_values=None):
         arg_names, kwarg_names = self.visit(node.args)
@@ -112,7 +115,8 @@ class CodeGenerator(ast.NodeVisitor):
         for arg_name, arg_value in zip(arg_names, arg_values):
             self.set_value(arg_name, arg_value)
         if inline:
-            return self.visit_compound_statement(node.body, add_scope=True)
+            self.visit_compound_statement(node.body, add_scope=True)
+            return self.last_ret
         else:
             entry = _triton.ir.basic_block.create(self.builder.context, "entry", fn)
             self.module.seal_block(entry)
@@ -140,6 +144,8 @@ class CodeGenerator(ast.NodeVisitor):
         assert len(names) == 1
         name = names[0]
         value = self.visit(node.value)
+        if not isinstance(value, triton.language.block):
+            value = triton.language._to_ir(value, self.builder)
         self.set_value(names[0], value)
 
     def visit_AugAssign(self, node):
@@ -208,14 +214,16 @@ class CodeGenerator(ast.NodeVisitor):
             else:
                 self.builder.cond_br(cond.handle, then_bb, endif_bb)
             self.builder.set_insert_block(then_bb)
-            self.visit_compound_statement(node.body, add_scope=True)
+            is_terminator = self.visit_compound_statement(node.body, add_scope=True)
             # TODO: last statement is a terminator?
-            self.builder.br(endif_bb)
+            if not is_terminator:
+                self.builder.br(endif_bb)
             if else_bb:
                 self.builder.set_insert_block(else_bb)
-                self.visit_compound_statement(node.orelse, add_scope=True)
+                is_terminator = self.visit_compound_statement(node.orelse, add_scope=True)
                 #TODO: last statement is a terminator?
-                self.builder.br(endif_bb)
+                if not is_terminator:
+                    self.builder.br(endif_bb)
             self.module.seal_block(endif_bb)
             self.builder.set_insert_block(endif_bb)
         else:
@@ -249,9 +257,13 @@ class CodeGenerator(ast.NodeVisitor):
             ast.Is: '__eq__',
             ast.IsNot: '__ne__',
         }[type(node.ops[0])]
-        if self.is_triton_object(lhs) or self.is_triton_object(rhs):
+        if self.is_triton_object(lhs):
             return getattr(lhs, fn)(rhs, builder=self.builder)
-        return getattr(lhs, fn)(rhs)
+        elif self.is_triton_object(rhs):
+            fn = fn[:2] + 'r' + fn[2:]
+            return getattr(rhs, fn)(lhs, builder=self.builder)
+        else:
+            return getattr(lhs, fn)(rhs)
 
     def visit_UnaryOp(self, node):
         op = self.visit(node.operand)

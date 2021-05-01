@@ -134,6 +134,7 @@ void init_triton_frontend(py::module &&m) {
   m.def("store", &ir::dispatch::store, ret::reference);
   m.def("atomic_cas", &ir::dispatch::atomic_cas, ret::reference);
   m.def("atomic_xchg", &ir::dispatch::atomic_xchg, ret::reference);
+  m.def("atomic_add", &ir::dispatch::atomic_add, ret::reference);
   // linear algebra
   m.def("dot", &ir::dispatch::dot, ret::reference);
   // indexing
@@ -179,6 +180,9 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<ir::constant_fp, ir::constant>(m, "constant_float")
       .def_property_readonly("value", &ir::constant_fp::get_value);
+
+  py::class_<ir::instruction, ir::user>(m, "instruction");
+  py::class_<ir::phi_node, ir::user>(m, "phi_node");
 
   py::class_<ir::type>(m, "type")
       .def("is_ptr", &ir::type::is_pointer_ty)
