@@ -2,7 +2,7 @@
 # or pybind11 shows `munmap_chunk(): invalid pointer`
 import torch
 # submodules
-from .code_gen import cdiv, jit, autotune, heuristics, Config, Autotuner
+from .code_gen import cdiv, jit, autotune, heuristics, Config, Autotuner, reinterpret
 
 from . import language
 from . import code_gen

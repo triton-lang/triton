@@ -436,20 +436,23 @@ class CompilationError(Exception):
 
 
 class Kernel:
-
-    type_names = {
-        int: 'I',
-        float: 'f',
-        bool: 'B',
-        torch.float16: 'f16',
-        torch.float32: 'f32',
-        torch.float64: 'f64',
-        torch.bool: 'i1',
-        torch.int8: 'i8',
-        torch.int16: 'i16',
-        torch.int32: 'i32',
-        torch.int64: 'i64',
-    }
+    @staticmethod
+    def _type_name(obj):
+        type_names = {
+            int: 'I',
+            float: 'f',
+            bool: 'B',
+            triton.language.float8: 'f8',
+            torch.float16: 'f16',
+            torch.float32: 'f32',
+            torch.float64: 'f64',
+            torch.bool: 'i1',
+            torch.int8: 'i8',
+            torch.int16: 'i16',
+            torch.int32: 'i32',
+            torch.int64: 'i64',
+        }
+        return type_names[obj]
 
     @staticmethod
     def _to_triton_ir(context, obj):
@@ -457,6 +460,7 @@ class Kernel:
             'I': _triton.ir.type.get_int32,
             'f': _triton.ir.type.get_fp32,
             'B': _triton.ir.type.get_int1,
+            'f8': _triton.ir.type.get_fp8,
             'f16': _triton.ir.type.get_fp16,
             'f32': _triton.ir.type.get_fp32,
             'f64': _triton.ir.type.get_fp64,
@@ -467,12 +471,12 @@ class Kernel:
             'i64': _triton.ir.type.get_int64,
         }
         # convert torch.Tensor to Triton IR pointers
-        if isinstance(obj, torch.Tensor):
-            name = Kernel.type_names[obj.dtype]
+        if hasattr(obj, 'data_ptr'):
+            name = Kernel._type_name(obj.dtype)
             elt_ty = type_map[name](context)
             return _triton.ir.type.make_ptr(elt_ty, 1)
         # default path returns triton.ir.type directly
-        name = Kernel.type_names[obj.__class__]
+        name = Kernel._type_name(obj.__class__)
         return type_map[name](context)
 
     @staticmethod
@@ -481,7 +485,7 @@ class Kernel:
         types_key = [None] * len(wargs)
         for i, arg in enumerate(wargs):
             prefix = 'P' if i in tensor_idxs else ''
-            suffix = Kernel.type_names[arg.dtype] if i in tensor_idxs else Kernel.type_names[arg.__class__]
+            suffix = Kernel._type_name(arg.dtype) if i in tensor_idxs else Kernel._type_name(arg.__class__)
             types_key[i] = prefix + suffix
         return tuple(types_key)
 
@@ -523,7 +527,7 @@ class Kernel:
 
     def __call__(self, *wargs, grid, num_warps=4, **meta):
         # device inference
-        tensor_idxs = [i for i, arg in enumerate(wargs) if isinstance(arg, torch.Tensor)]
+        tensor_idxs = [i for i, arg in enumerate(wargs) if hasattr(arg, 'data_ptr')]
         if len(tensor_idxs) == 0:
             raise ValueError("No Tensor argument found.")
         device = wargs[tensor_idxs[0]].device
@@ -545,7 +549,7 @@ class Kernel:
                 *wargs, device=device, attributes=attributes, num_warps=num_warps, constants=constants, **meta
             )
         # pack arguments
-        fmt = ''.join(['P' if i in tensor_idxs else Kernel.type_names[arg.__class__] for i, arg in enumerate(wargs)])
+        fmt = ''.join(['P' if i in tensor_idxs else Kernel._type_name(arg.__class__) for i, arg in enumerate(wargs)])
         params = struct.pack(fmt, *args)
         # enqueue cached function into stream
         binary = cache[key]
@@ -703,3 +707,19 @@ def jit(fn):
 
 def cdiv(x, y):
     return (x + y - 1) // y
+
+
+######
+
+
+class TensorWrapper:
+    def __init__(self, data_ptr, dtype):
+        self._data_ptr = data_ptr
+        self.dtype = dtype
+
+    def data_ptr(self):
+        return self._data_ptr
+
+
+def reinterpret(tensor, dtype):
+    return TensorWrapper(tensor.data_ptr(), dtype)
