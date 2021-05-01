@@ -522,11 +522,24 @@ ir::value *dispatch::atomic_xchg(ir::value* ptr, ir::value *val, ir::builder *bu
 }
 
 ir::value *dispatch::atomic_add(ir::value* ptr, ir::value *val, ir::value *mask, ir::builder *builder){
+  if(!ptr->get_type()->get_scalar_ty()->is_pointer_ty())
+    throw semantic_error("Pointer argument of store instruction is " + ptr->get_type()->repr());
+  if(ptr->get_type()->is_block_ty()){
+    if(mask){
+      mask = dispatch::broadcast(mask, ptr->get_type()->get_block_shapes(), builder);
+    }
+    if(val){
+      val = dispatch::broadcast(val, ptr->get_type()->get_block_shapes(), builder);
+    }
+  }
+  val = dispatch::cast(val, ptr->get_type()->get_scalar_ty()->get_pointer_element_ty(), builder);
+
   if(!mask){
     mask = builder->get_int1(true);
     if(ptr->get_type()->is_block_ty())
       mask = builder->create_splat(mask, ptr->get_type()->get_block_shapes());
   }
+
   return builder->create_atomic_add(ptr, val, mask);
 }
 
