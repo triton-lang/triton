@@ -102,6 +102,10 @@ public:
   void visit_getelementptr_inst(ir::getelementptr_inst*);
   void visit_icmp_inst(ir::icmp_inst*);
   void visit_fcmp_inst(ir::fcmp_inst*);
+  std::tuple<Value*, Value*, Value*, Value*> fp8x4_to_fp32x4(Value *in0, Value *in1, Value *in2, Value *in3);
+  std::tuple<Value*, Value*, Value*, Value*> fp32x4_to_fp8x4(Value *in0, Value *in1, Value *in2, Value *in3);
+  std::tuple<Value*, Value*, Value*, Value*> fp8x4_to_fp16x4(Value *in0, Value *in1, Value *in2, Value *in3);
+  std::tuple<Value*, Value*, Value*, Value*> fp16x4_to_fp8x4(Value *in0, Value *in1, Value *in2, Value *in3);
   void visit_cast_inst(ir::cast_inst*);
   void visit_return_inst(ir::return_inst*);
   void visit_cond_branch_inst(ir::cond_branch_inst*);

@@ -12,9 +12,12 @@ namespace ir{
 context_impl::context_impl(context &ctx)
     : void_ty(ctx, type::VoidTyID),
       label_ty(ctx, type::LabelTyID),
+      // floating point
+      fp8_ty(ctx, type::FP8TyID),
       half_ty(ctx, type::HalfTyID),
       float_ty(ctx, type::FloatTyID),
       double_ty(ctx, type::DoubleTyID),
+      // integers
       int1_ty(ctx, 1),
       int8_ty(ctx, 8),
       int16_ty(ctx, 16),
