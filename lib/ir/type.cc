@@ -105,7 +105,7 @@ bool type::is_integer_ty(unsigned width) const
 
 
 bool type::is_floating_point_ty() const
-{ return is_half_ty() || is_float_ty() || is_double_ty(); }
+{ return is_fp8_ty() || is_half_ty() || is_float_ty() || is_double_ty(); }
 
 bool type::is_sized() const {
   // primitive types are sized

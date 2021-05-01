@@ -200,6 +200,7 @@ void init_triton_ir(py::module &&m) {
       .def("get_int64", &ir::type::get_int64_ty, ret::reference)
 
       .def("is_void", &ir::type::is_void_ty)
+      .def("is_fp8", &ir::type::is_fp8_ty)
       .def("is_fp16", &ir::type::is_half_ty)
       .def("is_fp32", &ir::type::is_float_ty)
       .def("is_fp64", &ir::type::is_double_ty)

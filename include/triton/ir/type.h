@@ -73,6 +73,7 @@ public:
 
   // primitive predicates
   bool is_void_ty() const               { return id_ == VoidTyID; }
+  bool is_fp8_ty() const                { return id_ == FP8TyID; }
   bool is_half_ty() const               { return id_ == HalfTyID; }
   bool is_float_ty() const              { return id_ == FloatTyID; }
   bool is_double_ty() const             { return id_ == DoubleTyID; }
