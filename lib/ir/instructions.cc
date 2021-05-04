@@ -833,27 +833,27 @@ async_wait_inst* async_wait_inst::create(context &ctx, int N, const std::string 
 }
 
 
-// nv_dynamic_program_idx
-make_range_dyn::make_range_dyn(type *ty, const std::string &name, instruction *next)
-  : instruction(ty, INST_MAKE_RANGE_DYN, 0, name, next) { }
+//// nv_dynamic_program_idx
+//make_range_dyn::make_range_dyn(type *ty, const std::string &name, instruction *next)
+//  : instruction(ty, INST_MAKE_RANGE_DYN, 0, name, next) { }
 
-make_range_dyn* make_range_dyn::create(type *ty, const std::string &name, instruction *next) {
-  return new make_range_dyn(ty, name, next);
-}
+//make_range_dyn* make_range_dyn::create(type *ty, const std::string &name, instruction *next) {
+//  return new make_range_dyn(ty, name, next);
+//}
 
-// nv_static_program_idx
-make_range_sta::make_range_sta(make_range *range)
-  : constant(range->get_type(), 0), range_(range) { }
+//// nv_static_program_idx
+//make_range_sta::make_range_sta(make_range *range)
+//  : constant(range->get_type(), 0), range_(range) { }
 
-make_range* make_range_sta::get_range() const
-{ return range_; }
+//make_range* make_range_sta::get_range() const
+//{ return range_; }
 
-make_range_sta* make_range_sta::get(make_range* range) {
-  static std::map<make_range*, make_range_sta*> cache;
-  if(cache.find(range) == cache.end())
-    cache.insert({range, new make_range_sta(range)});
-  return cache.at(range);
-}
+//make_range_sta* make_range_sta::get(make_range* range) {
+//  static std::map<make_range*, make_range_sta*> cache;
+//  if(cache.find(range) == cache.end())
+//    cache.insert({range, new make_range_sta(range)});
+//  return cache.at(range);
+//}
 
 
 // make_range
