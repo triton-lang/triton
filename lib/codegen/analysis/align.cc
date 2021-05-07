@@ -174,8 +174,6 @@ std::vector<align::cst_info> align::populate_is_constant(ir::value *v) {
     return is_constant_.at(v);
   if(auto *x = dynamic_cast<ir::constant_int*>(v))
     return add_to_cache(v, {cst_info{true, std::min<unsigned>(x->get_value(), 128)}}, is_constant_);
-  if(dynamic_cast<ir::make_range_sta*>(v))
-    return add_to_cache(v, {cst_info{true, 0}}, is_constant_);
   if(auto *x = dynamic_cast<ir::phi_node*>(v))
     return populate_is_constant_phi(x);
   if(auto *x = dynamic_cast<ir::splat_inst*>(v))
@@ -321,8 +319,6 @@ std::vector<unsigned> align::populate_max_contiguous_default(ir::value* v) {
     return add_to_cache(v, {1}, max_contiguous_);
   auto shapes = v->get_type()->get_block_shapes();
   if(dynamic_cast<ir::make_range*>(v))
-    return add_to_cache(v, {shapes[0]}, max_contiguous_);
-  if(dynamic_cast<ir::make_range_sta*>(v))
     return add_to_cache(v, {shapes[0]}, max_contiguous_);
   return add_to_cache(v, std::vector<unsigned>(shapes.size(), 1), max_contiguous_);
 }
@@ -486,10 +482,6 @@ std::vector<unsigned> align::populate_starting_multiple(ir::value *v){
     return add_to_cache(x, {std::min<unsigned>(x->get_value(), 128)}, starting_multiple_);
   if(auto *x = dynamic_cast<ir::make_range*>(v))
     return add_to_cache(x, {(unsigned)x->get_first()->get_value()}, starting_multiple_);
-  if(auto *x = dynamic_cast<ir::make_range_dyn*>(v))
-    return add_to_cache(x, {128}, starting_multiple_);
-  if(auto *x = dynamic_cast<ir::make_range_sta*>(v))
-    return add_to_cache(x, {(unsigned)x->get_range()->get_first()->get_value()}, starting_multiple_);
   if(auto *x = dynamic_cast<ir::getelementptr_inst*>(v))
     return populate_starting_multiple_gep(x);
   if(auto *x = dynamic_cast<ir::splat_inst*>(v))
