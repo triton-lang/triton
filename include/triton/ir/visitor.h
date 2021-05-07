@@ -144,12 +144,12 @@ public:
   virtual void visit_masked_load_async_inst(masked_load_async_inst*)= 0;
   virtual void visit_barrier_inst(barrier_inst*) = 0;
   virtual void visit_async_wait_inst(async_wait_inst*) = 0;
-  virtual void visit_make_range_dyn(make_range_dyn*) = 0;
+//  virtual void visit_make_range_dyn(make_range_dyn*) = 0;
   virtual void visit_make_range(make_range*) = 0;
 
   virtual void visit_function(function*) = 0;
 
-  virtual void visit_make_range_sta(make_range_sta*) = 0;
+//  virtual void visit_make_range_sta(make_range_sta*) = 0;
   virtual void visit_undef_value(undef_value*) = 0;
   virtual void visit_constant_int(constant_int*) = 0;
   virtual void visit_constant_fp(constant_fp*) = 0;

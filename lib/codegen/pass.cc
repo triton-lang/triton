@@ -12,7 +12,6 @@
 #include "triton/codegen/transform/membar.h"
 #include "triton/codegen/transform/peephole.h"
 #include "triton/codegen/transform/pipeline.h"
-#include "triton/codegen/transform/reassociate.h"
 #include "triton/driver/device.h"
 #include "triton/driver/kernel.h"
 #include "triton/driver/module.h"
@@ -48,7 +47,7 @@ void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps,
   codegen::transform::membar barriers(&liveness, &layouts, &allocation);
   codegen::transform::dce dce;
   codegen::transform::peephole peephole(target.get(), &layouts);
-  codegen::transform::reassociate reassociate;
+//  codegen::transform::reassociate reassociate;
   codegen::transform::coalesce coalesce(&align, &layouts);
   codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target.get(), num_warps);
   // run passes
@@ -76,7 +75,7 @@ void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps,
   align.run(ir);
   dce.run(ir);
   if (target->is_gpu()) {
-    reassociate.run(ir);
+//    reassociate.run(ir);
     cts.run(ir);
   }
   dce.run(ir);

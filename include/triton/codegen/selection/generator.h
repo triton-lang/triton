@@ -74,6 +74,33 @@ struct distributed_axis {
   Value* thread_id;
 };
 
+class adder{
+public:
+  adder(Builder** builder): builder_(builder) { }
+  Value* operator()(Value* x, Value* y, const std::string& name = "");
+
+private:
+  Builder** builder_;
+};
+
+class multiplier{
+public:
+  multiplier(Builder** builder): builder_(builder) { }
+  Value* operator()(Value* x, Value* y, const std::string& name = "");
+private:
+  Builder** builder_;
+};
+
+class geper{
+public:
+  geper(Builder** builder): builder_(builder) { }
+  Value* operator()(Value *ptr, Value* off, const std::string& name = "");
+  Value* operator()(Type* ty, Value*ptr, std::vector<Value*> vals, const std::string& name = "");
+
+private:
+  Builder** builder_;
+};
+
 class generator: public ir::visitor, public analysis::layout_visitor {
 private:
   void init_idx(ir::value *x);
@@ -143,9 +170,9 @@ public:
   void visit_copy_from_shared_inst(ir::copy_from_shared_inst*);
   void visit_barrier_inst(ir::barrier_inst*);
   void visit_async_wait_inst(ir::async_wait_inst*);
-  void visit_make_range_dyn(ir::make_range_dyn*);
+//  void visit_make_range_dyn(ir::make_range_dyn*);
   void visit_make_range(ir::make_range*);
-  void visit_make_range_sta(ir::make_range_sta*);
+//  void visit_make_range_sta(ir::make_range_sta*);
   void visit_undef_value(ir::undef_value*);
   void visit_constant_int(ir::constant_int*);
   void visit_constant_fp(ir::constant_fp*);
@@ -194,6 +221,11 @@ private:
   std::map<ir::value*, std::map<indices_t, Value*>> vals_;
   std::map<ir::value*, BasicBlock *> bbs_;
   std::map<ir::value*, std::vector<int>> ords_;
+
+  // helper for creating llvm values
+  adder add;
+  multiplier mul;
+  geper gep;
 
 };
 
