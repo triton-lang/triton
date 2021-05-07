@@ -821,33 +821,33 @@ private:
   int N_;
 };
 
-// On NVIDIA, implementation is such that
-// constant_range = nv_dynamic_program_idx + nv_static_program_idx
-// so as to enable re-association on nv_static_program_idx which is constant
-class make_range_dyn: public instruction {
-private:
-  make_range_dyn(type *ty, const std::string &name, instruction *next);
-  std::string repr_impl() const { return "nv_dynamic_program_idx"; }
-  _TRITON_DEFINE_CLONE(make_range_dyn)
-  _TRITON_DEFINE_ACCEPT(make_range_dyn)
+//// On NVIDIA, implementation is such that
+//// constant_range = nv_dynamic_program_idx + nv_static_program_idx
+//// so as to enable re-association on nv_static_program_idx which is constant
+//class make_range_dyn: public instruction {
+//private:
+//  make_range_dyn(type *ty, const std::string &name, instruction *next);
+//  std::string repr_impl() const { return "nv_dynamic_program_idx"; }
+//  _TRITON_DEFINE_CLONE(make_range_dyn)
+//  _TRITON_DEFINE_ACCEPT(make_range_dyn)
 
-public:
-  static make_range_dyn* create(type *ty, const std::string &name = "", instruction *next = nullptr);
-};
+//public:
+//  static make_range_dyn* create(type *ty, const std::string &name = "", instruction *next = nullptr);
+//};
 
-class make_range_sta: public constant {
-private:
-  make_range_sta(make_range *range);
+//class make_range_sta: public constant {
+//private:
+//  make_range_sta(make_range *range);
 
-public:
-  static make_range_sta *get(make_range* range);
-  make_range* get_range() const;
-  std::string repr() const { return "nv_static_program_idx"; }
-  _TRITON_DEFINE_ACCEPT(make_range_sta)
+//public:
+//  static make_range_sta *get(make_range* range);
+//  make_range* get_range() const;
+//  std::string repr() const { return "nv_static_program_idx"; }
+//  _TRITON_DEFINE_ACCEPT(make_range_sta)
 
-private:
-  make_range *range_;
-};
+//private:
+//  make_range *range_;
+//};
 
 
 /* constant range */
