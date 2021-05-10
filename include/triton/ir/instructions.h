@@ -666,6 +666,11 @@ private:
   dot_inst(value *A, value *B, value *C, TransT AT, TransT BT, const std::string &name, instruction *next);
   std::string repr_impl() const { return "dot"; }
 
+  bool is_prefetched_ = false;
+public:
+  bool is_prefetched() const { return is_prefetched_; }
+  void set_prefetched(bool is_prefetched) { is_prefetched_ = is_prefetched; }
+
 public:
   static instruction *create(value *A, value *B, value *C, bool AT, bool BT, const std::string &name = "", instruction *next = nullptr);
   static instruction* create_nn(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
