@@ -81,7 +81,7 @@ cu_kernel::cu_kernel(driver::module *program, const char * name) : kernel(progra
   dispatch::cuFuncGetAttribute(&shared_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, *cu_);
   dispatch::cuFuncGetAttribute(&n_spills, CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES,  *cu_);
   dispatch::cuFuncGetAttribute(&n_reg, CU_FUNC_ATTRIBUTE_NUM_REGS, *cu_);
-  std::cout << n_reg << std::endl;
+//  std::cout << n_reg << std::endl;
   if (shared_optin > 49152){
 //      std::cout << "dynamic shared memory " << shared_optin << " " << shared_static << std::endl;
       dispatch::cuFuncSetAttribute(*cu_, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin - shared_static);
