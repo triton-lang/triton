@@ -821,6 +821,23 @@ private:
   int N_;
 };
 
+class prefetch_s_inst : public instruction {
+  std::string repr_impl() const { return "prefetch_s"; }
+  _TRITON_DEFINE_CLONE(prefetch_s_inst)
+  _TRITON_DEFINE_ACCEPT(prefetch_s_inst)
+  
+  /// inc_: 0->first, 1->latch
+  int inc_ = 0;
+public:
+  prefetch_s_inst(context &ctx, value *arg, int inc, const std::string &name, instruction *next) 
+    : instruction(type::get_void_ty(ctx), INST_PREFETCH_S, 1, name, next), inc_(inc) {
+    set_operand(0, arg);
+  }
+  int get_inc() const { return inc_; }
+  static prefetch_s_inst *create(context &ctx, value *arg, int inc, const std::string &name = "",
+   instruction *next=nullptr);
+};
+
 //// On NVIDIA, implementation is such that
 //// constant_range = nv_dynamic_program_idx + nv_static_program_idx
 //// so as to enable re-association on nv_static_program_idx which is constant

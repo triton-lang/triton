@@ -1820,6 +1820,40 @@ void generator::visit_barrier_inst(ir::barrier_inst*) {
   add_barrier();
 }
 
+void generator::visit_prefetch_s_inst(ir::prefetch_s_inst *i) {
+  ir::value *v = i->get_operand(0);
+  int inc = i->get_inc();
+  if (inc == 0) {
+    // If dot has not been visitied, do nothing.
+  } else {
+    // If dot has been visitied, insert prefetched lds
+    assert(inc == 1);
+    assert(prefetch_latch_to_bb_.find(v) != prefetch_latch_to_bb_.end() && 
+           "dot hasn't be visited");
+    // sink lds & extract element
+    // move lds & all uses to current location
+    std::stack<Value*> work_stack;
+    for (Value *value : prefetch_latch_to_bb_[v])
+      work_stack.push(value);
+    std::vector<Instruction*> dead_instrs;
+    while (!work_stack.empty()) {
+      Value *m = work_stack.top();
+      work_stack.pop();
+
+      for (auto u : m->users())
+        work_stack.push(u);
+
+      assert(isa<Instruction>(m));
+      auto m_instr = static_cast<Instruction*>(m);
+
+      m_instr->removeFromParent();
+      m_instr->insertAfter(&*std::prev(builder_->GetInsertBlock()->end()));
+      assert(m_instr->getParent() == &*builder_->GetInsertBlock());
+      builder_->SetInsertPoint(m_instr->getParent());
+    }
+  }  
+}
+
 void generator::visit_async_wait_inst(ir::async_wait_inst* i) {
   std::string asm_str = "cp.async.wait_group " + std::to_string(i->get_N()) + ";";
   InlineAsm *iasm = InlineAsm::get(FunctionType::get(void_ty, {}), asm_str, "", true);
