@@ -92,8 +92,8 @@ void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps,
   swizzle.run(ir);
   liveness.run(ir);
   allocation.run(ir);
-  barriers.run(ir);
   prefetch_s.run(ir);
+  barriers.run(ir);  
   isel.visit(ir, *llvm);
   mod = driver::module::create(dev, std::move(llvm));
   ker = driver::kernel::create(&*mod, name.c_str());

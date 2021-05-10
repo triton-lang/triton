@@ -1136,7 +1136,7 @@ void generator::visit_mma884(ir::dot_inst* C, ir::value *A, ir::value *B, ir::va
     for (unsigned m = 0; m < num_m/2; m += is_a_row?1:2) {
       has[{m, 0}].first = phi(f16x2_ty, 2);
       has[{m, 0}].second = phi(f16x2_ty, 2);
-      if (!is_a_row) {
+      if (!is_a_row && vec_a>4) {
         has[{m+1, 0}].first = phi(f16x2_ty, 2);
         has[{m+1, 0}].second = phi(f16x2_ty, 2);
       }
@@ -1144,7 +1144,7 @@ void generator::visit_mma884(ir::dot_inst* C, ir::value *A, ir::value *B, ir::va
     for (unsigned n = 0; n < num_n/2; n += is_b_row?2:1) {
       hbs[{n, 0}].first = phi(f16x2_ty, 2);
       hbs[{n, 0}].second = phi(f16x2_ty, 2);
-      if (is_b_row) {
+      if (is_b_row && vec_b>4) {
         hbs[{n+1, 0}].first = phi(f16x2_ty, 2);
         hbs[{n+1, 0}].second = phi(f16x2_ty, 2);
       }
