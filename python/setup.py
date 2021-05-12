@@ -80,8 +80,9 @@ class CMakeBuild(build_ext):
                 cmake_args += ["-A", "x64"]
             build_args += ["--", "/m"]
         else:
+            import multiprocessing
             cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
-            build_args += ["--", "-j8"]
+            build_args += ["--", f'-j{2*multiprocessing.cpu_count()}']
 
         env = os.environ.copy()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)
@@ -105,7 +106,6 @@ setup(
     # for PyPI
     keywords=["Compiler", "Deep Learning"],
     url="https://github.com/ptillet/triton/",
-    download_url="https://github.com/ptillet/triton/archive/v0.1.tar.gz",
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
