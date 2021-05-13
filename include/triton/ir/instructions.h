@@ -666,6 +666,11 @@ private:
   dot_inst(value *A, value *B, value *C, TransT AT, TransT BT, const std::string &name, instruction *next);
   std::string repr_impl() const { return "dot"; }
 
+  bool is_prefetched_ = false;
+public:
+  bool is_prefetched() const { return is_prefetched_; }
+  void set_prefetched(bool is_prefetched) { is_prefetched_ = is_prefetched; }
+
 public:
   static instruction *create(value *A, value *B, value *C, bool AT, bool BT, const std::string &name = "", instruction *next = nullptr);
   static instruction* create_nn(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
@@ -819,6 +824,23 @@ public:
 
 private:
   int N_;
+};
+
+class prefetch_s_inst : public instruction {
+  std::string repr_impl() const { return "prefetch_s"; }
+  _TRITON_DEFINE_CLONE(prefetch_s_inst)
+  _TRITON_DEFINE_ACCEPT(prefetch_s_inst)
+  
+  /// inc_: 0->first, 1->latch
+  int inc_ = 0;
+public:
+  prefetch_s_inst(context &ctx, value *arg, int inc, const std::string &name, instruction *next) 
+    : instruction(type::get_void_ty(ctx), INST_PREFETCH_S, 1, name, next), inc_(inc) {
+    set_operand(0, arg);
+  }
+  int get_inc() const { return inc_; }
+  static prefetch_s_inst *create(context &ctx, value *arg, int inc, const std::string &name = "",
+   instruction *next=nullptr);
 };
 
 //// On NVIDIA, implementation is such that

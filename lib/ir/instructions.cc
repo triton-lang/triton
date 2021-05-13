@@ -832,6 +832,10 @@ async_wait_inst* async_wait_inst::create(context &ctx, int N, const std::string 
   return new async_wait_inst(ctx, N, name, next);
 }
 
+// prefetch_s
+prefetch_s_inst *prefetch_s_inst::create(context &ctx, value *arg, int inc, const std::string &name, instruction *next) {
+  return new prefetch_s_inst(ctx, arg, inc, name, next);
+}
 
 //// nv_dynamic_program_idx
 //make_range_dyn::make_range_dyn(type *ty, const std::string &name, instruction *next)
