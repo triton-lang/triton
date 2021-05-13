@@ -96,7 +96,15 @@ void membar::transfer(ir::basic_block *block,
       }
     }
     // RAW, WAR
-    if(intersect_with(read, sync_write).size() || intersect_with({i}, sync_read).size()){
+    bool is_i_double_buffered = i->get_type()->is_block_ty() &&
+                                layouts_->get(i)->to_shared() &&
+                                layouts_->get(i)->to_shared()->get_double_buffer();
+    // WAR barrier is not required when data is double-buffered
+    // TODO: how about other patterns, like WWAR?
+    if(!intersect_with(read, sync_write).empty() || 
+       (!intersect_with({i}, sync_read).empty() && !is_i_double_buffered) ||
+       // force WAR barrier on A100
+       (!intersect_with({i}, sync_read).empty() && tgt_->as_nvidia()->sm() >= 80)){
       builder.set_insert_point(i);
       barrier = (ir::barrier_inst*)builder.create_barrier();
       inserted = true;
@@ -133,6 +141,7 @@ void membar::run(ir::module &mod) {
   }
 
   for(ir::function *fn: mod.get_function_list()){
+    // TODO: (dyan) we need DominatorTree here.
     std::vector<ir::basic_block*> rpo = ir::cfg::reverse_post_order(fn);
     std::map<ir::basic_block*, val_vec_t> async_writes;
     std::map<ir::basic_block*, val_set_t> sync_writes;

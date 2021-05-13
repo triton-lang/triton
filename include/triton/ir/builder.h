@@ -151,6 +151,7 @@ public:
   value *create_copy_from_shared(value *arg);
   value *create_barrier(const std::string &name = "");
   value *create_async_wait(int N);
+  value *create_prefetch_s(value *arg, int inc);
 
 private:
   context &ctx_;

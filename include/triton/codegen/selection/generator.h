@@ -11,6 +11,7 @@
 namespace llvm{
   class Type;
   class Value;
+  class PHINode;
   class BasicBlock;
   class Attribute;
   class Instruction;
@@ -169,6 +170,7 @@ public:
   void visit_copy_to_shared_inst(ir::copy_to_shared_inst*);
   void visit_copy_from_shared_inst(ir::copy_from_shared_inst*);
   void visit_barrier_inst(ir::barrier_inst*);
+  void visit_prefetch_s_inst(ir::prefetch_s_inst*);
   void visit_async_wait_inst(ir::async_wait_inst*);
 //  void visit_make_range_dyn(ir::make_range_dyn*);
   void visit_make_range(ir::make_range*);
@@ -209,16 +211,19 @@ private:
   std::map<analysis::data_layout*, Value*> offset_b_k_;
   std::map<analysis::data_layout*, Value*> offset_b_n_;
 
+  /// layout -> base ptr
   std::map<analysis::data_layout*, Value*> shared_ptr_;
   std::map<analysis::data_layout*, Value*> shared_pre_ptr_;
   std::map<analysis::data_layout*, Value*> shared_next_ptr_;
+  /// offset for double-buffered layout
   std::map<analysis::data_layout*, Value*> shared_off_;
 
-
+  /// Base shmem pointer of ir value
   std::map<ir::value*, Value*> shmems_;
   std::map<ir::value*, Value*> shoffs_;
   std::map<ir::value*, std::vector<indices_t>> idxs_;
   std::map<ir::value*, std::map<indices_t, Value*>> vals_;
+  /// triton bb -> llvm bb
   std::map<ir::value*, BasicBlock *> bbs_;
   std::map<ir::value*, std::vector<int>> ords_;
 
@@ -227,6 +232,11 @@ private:
   multiplier mul;
   geper gep;
 
+  /// PHI nodes
+  std::vector<std::tuple<llvm::PHINode*, Value*, ir::basic_block*>> lazy_phi_incs_;
+
+  /// Record prefetch instrs that needs to be moved
+  std::map<ir::value*, std::vector<Value*>> prefetch_latch_to_bb_;
 };
 
 }
