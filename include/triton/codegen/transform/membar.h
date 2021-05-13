@@ -5,6 +5,7 @@
 #include <map>
 #include <list>
 #include <set>
+#include "triton/codegen/target.h"
 
 namespace triton {
 
@@ -44,14 +45,16 @@ private:
                 std::set<triton::ir::value *> &safe_war, bool &inserted, ir::builder &builder);
 
 public:
-  membar(analysis::liveness *liveness, analysis::layouts *layouts, analysis::allocation *alloc):
-    liveness_(liveness), layouts_(layouts), alloc_(alloc) {}
+  membar(analysis::liveness *liveness, analysis::layouts *layouts, analysis::allocation *alloc, target* tgt):
+    liveness_(liveness), layouts_(layouts), alloc_(alloc), tgt_(tgt) {}
   void run(ir::module &mod);
 
 private:
   analysis::liveness *liveness_;
   analysis::layouts *layouts_;
   analysis::allocation *alloc_;
+
+  target* tgt_;
 };
 
 

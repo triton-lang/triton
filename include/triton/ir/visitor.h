@@ -70,6 +70,7 @@ class barrier_inst;
 class async_wait_inst;
 class make_range_dyn;
 class make_range;
+class prefetch_s_inst;
 
 class make_range_sta;
 class undef_value;
@@ -146,6 +147,7 @@ public:
   virtual void visit_async_wait_inst(async_wait_inst*) = 0;
 //  virtual void visit_make_range_dyn(make_range_dyn*) = 0;
   virtual void visit_make_range(make_range*) = 0;
+  virtual void visit_prefetch_s_inst(prefetch_s_inst*) = 0;
 
   virtual void visit_function(function*) = 0;
 

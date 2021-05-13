@@ -381,6 +381,9 @@ value *builder::create_async_wait(int N) {
   return insert(async_wait_inst::create(ctx_, N));
 }
 
+value *builder::create_prefetch_s(value *arg, int inc) {
+  return insert(prefetch_s_inst::create(ctx_, arg, inc));
+}
 
 
 }
