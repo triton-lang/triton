@@ -80,9 +80,16 @@ public:
   static CUresult cuModuleGetGlobal_v2(CUdeviceptr *dptr, size_t* bytes, CUmodule hmod, const char *name);
   static CUresult cuMemcpyHtoDAsync_v2(CUdeviceptr dstDevice, const void *srcHost, size_t ByteCount, CUstream hStream);
   static CUresult cuModuleLoad(CUmodule *module, const char *fname);
+  static CUresult cuModuleLoadData(CUmodule* module, const void* image);
   static CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, unsigned int sharedMemBytes, CUstream hStream, void **kernelParams, void **extra);
   static CUresult cuModuleUnload(CUmodule hmod);
   static CUresult cuModuleLoadDataEx(CUmodule *module, const void *image, unsigned int numOptions, CUjit_option *options, void **optionValues);
+
+  static CUresult cuLinkAddData_v2(CUlinkState state, CUjitInputType type, void* data, size_t size, const char* name, unsigned int numOptions, CUjit_option* options, void** optionValues);
+  static CUresult cuLinkCreate_v2(unsigned int  numOptions, CUjit_option* options, void** optionValues, CUlinkState* stateOut);
+  static CUresult cuLinkComplete(CUlinkState state, void** cubinOut, size_t* sizeOut);
+  static CUresult cuLinkDestroy(CUlinkState state);
+
   static CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev);
   static CUresult cuDeviceGetCount(int *count);
   static CUresult cuMemcpyHtoD_v2(CUdeviceptr dstDevice, const void *srcHost, size_t ByteCount);
@@ -146,6 +153,11 @@ private:
   static void* cuLaunchKernel_;
   static void* cuModuleUnload_;
   static void* cuModuleLoadDataEx_;
+  static void* cuLinkAddData_v2_;
+  static void* cuLinkCreate_v2_;
+  static void* cuLinkDestroy_;
+  static void* cuModuleLoadData_;
+  static void* cuLinkComplete_;
   static void* cuDeviceGetAttribute_;
   static void* cuDeviceGetCount_;
   static void* cuMemcpyHtoD_v2_;
