@@ -319,24 +319,15 @@ void cu_module::init_from_ptx(const std::string& ptx) {
 //    std::cout << log << std::endl;
 //    std::cout << ptx_ << std::endl;
 
-    CUjit_option opt[] = {CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER,
-                          CU_JIT_INFO_LOG_BUFFER_SIZE_BYTES, CU_JIT_INFO_LOG_BUFFER,
-                          CU_JIT_LOG_VERBOSE};
-    unsigned int errbufsize = 8192;
-    unsigned int logbufsize = 8192;
-    char _err[errbufsize];
-    char _log[logbufsize];
-    void* optval[] = {(void*)(uintptr_t)errbufsize, (void*)_err, (void*)(uintptr_t)logbufsize, (void*)_log, (void*)1};
-    dispatch::cuModuleLoadDataEx(&*cu_, ptx_.data(), 5, opt, optval);
-    std::string err(_err);
-    std::string log(_log);
-//    std::smatch match;
-//    std::regex expr ("\\b([0-9]+) bytes spill");
-//    spilled_ = 0;
-//    while (std::regex_search(log,match,expr)){
-//      spilled_ += std::stoi(match[1]);
-//      log = match.suffix();
-//    }
+    CUlinkState link_state;
+    dispatch::cuLinkCreate_v2(0, 0, 0, &link_state);
+    dispatch::cuLinkAddData_v2(link_state, CU_JIT_INPUT_PTX, (void*)ptx_.data(), ptx_.size(), 0, 0, 0, 0);
+    size_t cubin_size;
+    void *cubin;
+    dispatch::cuLinkComplete(link_state, &cubin, &cubin_size);
+    dispatch::cuModuleLoadData(&*cu_, cubin);
+    cubin_ = std::string((const char*)cubin, cubin_size);
+    dispatch::cuLinkDestroy(link_state);
   }
   catch(exception::cuda::invalid_ptx const &){
 //#ifdef TRITON_LOG_PTX_ERROR

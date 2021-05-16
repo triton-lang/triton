@@ -63,6 +63,7 @@ void init_triton_driver(py::module &&m) {
 
   py::class_<drv::cu_module, drv::module>(m, "cu_module")
       .def("ptx", &drv::cu_module::ptx)
+      .def("cubin", [](drv::cu_module *self) { return py::bytes(self->cubin()); })
       .def("llir", &drv::cu_module::llir);
 
   py::class_<drv::kernel>(m, "kernel");

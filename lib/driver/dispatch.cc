@@ -140,11 +140,16 @@ CUDA_DEFINE1(CUresult, cuDriverGetVersion, int *)
 CUDA_DEFINE3(CUresult, cuDeviceGetName, char *, int, CUdevice)
 CUDA_DEFINE3(CUresult, cuDeviceGetPCIBusId, char *, int, CUdevice)
 CUDA_DEFINE4(CUresult, cuModuleGetGlobal_v2, CUdeviceptr*, size_t*, CUmodule, const char*)
+CUDA_DEFINE8(CUresult, cuLinkAddData_v2, CUlinkState, CUjitInputType, void*, size_t, const char*, unsigned int, CUjit_option*, void**);
+CUDA_DEFINE4(CUresult, cuLinkCreate_v2, unsigned int, CUjit_option*, void**, CUlinkState*);
+CUDA_DEFINE1(CUresult, cuLinkDestroy, CUlinkState);
 
+CUDA_DEFINE3(CUresult, cuLinkComplete, CUlinkState, void**, size_t*);
 CUDA_DEFINE4(CUresult, cuMemcpyHtoDAsync_v2, CUdeviceptr, const void *, size_t, CUstream)
 CUDA_DEFINE2(CUresult, cuModuleLoad, CUmodule *, const char *)
 CUDA_DEFINE11(CUresult, cuLaunchKernel, CUfunction, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, CUstream, void **, void **)
 CUDA_DEFINE1(CUresult, cuModuleUnload, CUmodule)
+CUDA_DEFINE2(CUresult, cuModuleLoadData, CUmodule *, const void *)
 CUDA_DEFINE5(CUresult, cuModuleLoadDataEx, CUmodule *, const void *, unsigned int, CUjit_option *, void **)
 CUDA_DEFINE3(CUresult, cuDeviceGetAttribute, int *, CUdevice_attribute, CUdevice)
 CUDA_DEFINE1(CUresult, cuDeviceGetCount, int *)
@@ -210,6 +215,12 @@ void* dispatch::cuDriverGetVersion_;
 void* dispatch::cuDeviceGetName_;
 void* dispatch::cuDeviceGetPCIBusId_;
 void* dispatch::cuModuleGetGlobal_v2_;
+
+void* dispatch::cuLinkAddData_v2_;
+void* dispatch::cuLinkCreate_v2_;
+void* dispatch::cuLinkDestroy_;
+void* dispatch::cuModuleLoadData_;
+void* dispatch::cuLinkComplete_;
 
 void* dispatch::cuMemcpyHtoDAsync_v2_;
 void* dispatch::cuModuleLoad_;

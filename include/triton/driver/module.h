@@ -68,9 +68,11 @@ public:
   std::unique_ptr<buffer> symbol(const char * name) const;
   std::string llir() const { return llir_; }
   const std::string& ptx() const { return ptx_; }
+  const std::string& cubin() const { return cubin_; }
 
 private:
   std::string ptx_;
+  std::string cubin_;
   std::string llir_;
 };
 
