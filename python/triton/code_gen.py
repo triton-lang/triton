@@ -5,6 +5,8 @@ import types
 import torch
 import ast
 import builtins
+import tempfile
+from .tools.disasm import extract
 import triton._C.libtriton.triton as _triton
 import triton
 import sys
@@ -413,12 +415,24 @@ class Binary:
         self.kernel = kernel
         self.shared_mem = shared_mem
         self.num_warps = num_warps
+        self.sass = None
 
     def asm(self, mode):
         if mode == 'ttir':
             return self.ir_asm
         if mode == 'ptx':
             return self.module.ptx()
+        if mode == 'sass':
+            if self.sass is None:
+                cubin = self.module.cubin()
+                # get a temporary file name
+                fd, path = tempfile.mkstemp(suffix='.cubin')
+                f = open(path, 'wb')
+                f.write(cubin)
+                f.close()
+                # extract SASS from cubin
+                self.sass = extract(path, None)
+            return self.sass
         if mode == 'llir':
             return self.module.llir()
         raise ValueError('Unsupported mode ' + mode)
@@ -710,6 +724,7 @@ def cdiv(x, y):
 
 
 ######
+
 
 class TensorWrapper:
     def __init__(self, data_ptr, dtype, device):
