@@ -51,7 +51,7 @@ def builtin(fn):
     def wrapper(*args, **kwargs):
         if 'builder' not in kwargs or \
            kwargs['builder'] is None:
-            raise ValueError("Builder argument must be provided outside of JIT functions")
+            raise ValueError("Builder argument must be provided outside of JIT functions. Did you forget to add @triton.jit ?")
         return fn(*args, **kwargs)
 
     if wrapper.__doc__:
