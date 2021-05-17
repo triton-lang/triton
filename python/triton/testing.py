@@ -123,7 +123,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, percentiles=[0.2, 0.8]):
         # if it contains a backward pass. So we clear the
         # provided gradients
         if grad_to_none is not None:
-            grad_to_none.grad = None
+            for x in grad_to_none:
+                x.grad = None
         # we clear the L2 cache before each run
         cache.zero_()
         # record time of `fn`
@@ -246,6 +247,7 @@ class Mark:
                 plt.savefig(os.path.join(save_path, f"{bench.plot_name}.png"))
         df = df[[bench.x_names[0]] + bench.line_names]
         if print_data:
+            print(bench.plot_name + ':')
             print(df)
         if save_path:
             df.to_csv(os.path.join(save_path, f"{bench.plot_name}.csv"), float_format='%.1f', index=False)
