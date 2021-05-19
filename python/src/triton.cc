@@ -228,20 +228,15 @@ void init_triton_ir(py::module &&m) {
       .def_property_readonly("shape", &ir::block_type::get_shapes)
       .def_property_readonly("numel", &ir::type::get_tile_num_elements);
 
-  py::class_<ir::scope>(m, "scope")
-      .def(py::init<>())
-      .def_property_readonly("values", &ir::scope::get_values)
-      .def("set_type", &ir::scope::set_type);
-
   py::class_<ir::module>(m, "module")
       .def(py::init<std::string, ir::builder &>())
       .def("get_or_insert_function", &ir::module::get_or_insert_function, ret::reference)
-      .def("add_new_scope", &ir::module::add_new_scope, ret::reference)
       .def("seal_block", &ir::module::seal_block)
       .def("set_value", (void (ir::module::*)(const std::string &, ir::value *)) & ir::module::set_value)
+      .def("set_type", &ir::module::set_type)
       .def("get_value", (ir::value * (ir::module::*)(const std::string &)) & ir::module::get_value, ret::reference)
-      .def("pop_scope", &ir::module::pop_scope)
-      .def_property_readonly("scope", &ir::module::get_scope, ret::reference)
+      .def("get_values", &ir::module::get_values, ret::reference)
+      .def("set_values", &ir::module::set_values)
       .def_property_readonly("builder", &ir::module::get_builder, ret::reference);
 
   using eattr = ir::attribute_kind_t;

@@ -38,21 +38,17 @@ class CodeGenerator(ast.NodeVisitor):
             value = triton.language.block(value)
         if isinstance(value, triton.language.block):
             self.module.set_value(name, value.handle)
-            self.module.scope.set_type(name, value.handle.type)
+            self.module.set_type(name, value.handle.type)
         self.lscope[name] = value
 
     def is_triton_object(self, value):
         return isinstance(value, triton.language.block)
 
-    def visit_compound_statement(self, stmts, add_scope=False):
-        if add_scope:
-            self.module.add_new_scope()
+    def visit_compound_statement(self, stmts):
         for stmt in stmts:
             self.last_ret = self.visit(stmt)
             if isinstance(stmt, ast.Return):
                 break
-        if add_scope:
-            self.module.pop_scope()
         return stmts and isinstance(stmt, ast.Return)
 
     def __init__(self, context, prototype, gscope, attributes, constants, kwargs):
@@ -75,9 +71,7 @@ class CodeGenerator(ast.NodeVisitor):
         }
 
     def visit_Module(self, node):
-        self.module.add_new_scope()
         ast.NodeVisitor.generic_visit(self, node)
-        self.module.pop_scope()
 
     def visit_List(self, node):
         ctx = self.visit(node.ctx)
@@ -117,14 +111,14 @@ class CodeGenerator(ast.NodeVisitor):
         for arg_name, arg_value in zip(arg_names, arg_values):
             self.set_value(arg_name, arg_value)
         if inline:
-            self.visit_compound_statement(node.body, add_scope=True)
+            self.visit_compound_statement(node.body)
             return self.last_ret
         else:
             entry = _triton.ir.basic_block.create(self.builder.context, "entry", fn)
             self.module.seal_block(entry)
             self.builder.set_insert_block(entry)
             # visit function body
-            self.visit_compound_statement(node.body, add_scope=True)
+            self.visit_compound_statement(node.body)
             # finalize function
             self.builder.ret_void()
 
@@ -216,13 +210,13 @@ class CodeGenerator(ast.NodeVisitor):
             else:
                 self.builder.cond_br(cond.handle, then_bb, endif_bb)
             self.builder.set_insert_block(then_bb)
-            is_terminator = self.visit_compound_statement(node.body, add_scope=True)
+            is_terminator = self.visit_compound_statement(node.body)
             # TODO: last statement is a terminator?
             if not is_terminator:
                 self.builder.br(endif_bb)
             if else_bb:
                 self.builder.set_insert_block(else_bb)
-                is_terminator = self.visit_compound_statement(node.orelse, add_scope=True)
+                is_terminator = self.visit_compound_statement(node.orelse)
                 #TODO: last statement is a terminator?
                 if not is_terminator:
                     self.builder.br(endif_bb)
@@ -289,7 +283,7 @@ class CodeGenerator(ast.NodeVisitor):
 
         continue_fn()
         self.builder.set_insert_block(loop_bb)
-        self.visit_compound_statement(node.body, add_scope=True)
+        self.visit_compound_statement(node.body)
         continue_fn()
         stop_bb = self.builder.get_insert_block()
         self.module.seal_block(stop_bb)
@@ -344,7 +338,7 @@ class CodeGenerator(ast.NodeVisitor):
         cond = build_cond()
         self.builder.cond_br(cond.handle, loop_bb, next_bb)
         self.builder.set_insert_block(loop_bb)
-        self.visit_compound_statement(node.body, add_scope=True)
+        self.visit_compound_statement(node.body)
         # TODO: handle case where body breaks control flow
         continue_fn()
         stop_bb = self.builder.get_insert_block()
@@ -643,7 +637,12 @@ class JITFunction:
 
     def __call__(self, *args, generator: CodeGenerator, **meta):
         try:
-            return generator.visit_FunctionDef(self.parse().body[0], inline=True, arg_values=args)
+            lscope = generator.lscope.copy()
+            values = generator.module.get_values().copy()
+            ret = generator.visit_FunctionDef(self.parse().body[0], inline=True, arg_values=args)
+            generator.lscope = lscope
+            generator.module.set_values(values)
+            return ret
         except Exception as e:
             node = generator.last_node
             if node is None or isinstance(e, (NotImplementedError, CompilationError)):
