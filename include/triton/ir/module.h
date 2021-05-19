@@ -35,15 +35,6 @@ class global_value;
 class alloc_const;
 
 /* Module */
-struct scope {
-public:
-  const std::map<std::string, ir::value*>& get_values() { return values; }
-  void set_type(const std::string& name, ir::type* ty) { types[name] = ty; }
-  ir::type* get_type(const std::string& name) { return types.at(name); }
-private:
-  std::map<std::string, ir::type*> types;
-  std::map<std::string, ir::value*> values;
-};
 
 class module {
   typedef std::pair<std::string, basic_block*> val_key_t;
@@ -74,8 +65,11 @@ public:
   void set_const(const std::string& name);
   void set_continue_fn(std::function<ir::value*()> fn);
   // Getters
+  const std::map<val_key_t, value*>& get_values() { return values_; }
+  void set_values(const std::map<val_key_t, value*>& values) { values_ = values; }
   value *get_value(const std::string& name, basic_block* block);
   value *get_value(const std::string& name);
+  void set_type(const std::string& name, ir::type* ty) { types_[name] = ty; }
   const std::string& get_name();
   std::function<ir::value*()> get_continue_fn();
   // Seal block -- no more predecessors will be added
@@ -84,10 +78,6 @@ public:
   const functions_list_t &get_function_list() const { return functions_; }
   functions_list_t &get_function_list()             { return functions_; }
   function *get_or_insert_function(const std::string &name, function_type *ty);
-  // Scope
-  void add_new_scope()                                        { if(scopes_.empty()) scopes_.push(scope()); else scopes_.push(scope(get_scope())); }
-  void pop_scope()                                            { scopes_.pop(); }
-  scope& get_scope()                                          { return scopes_.top(); }
   // Const allocation
   void add_alloc(ir::alloc_const* x)                          { allocs_.push_back(x); }
   const std::vector<ir::alloc_const*>& allocs()               { return allocs_; }
@@ -101,7 +91,7 @@ private:
   std::string name_;
   builder& builder_;
   std::map<val_key_t, value*> values_;
-  std::map<val_key_t, type*> types_;
+  std::map<std::string, type*> types_;
   std::set<std::string> const_;
   std::set<basic_block*> sealed_blocks_;
   std::map<basic_block*, std::map<std::string, phi_node*>> incomplete_phis_;
@@ -109,7 +99,6 @@ private:
   symbols_map_t symbols_;
   std::function<ir::value*()> continue_fn_;
   std::map<value*, value**> current_phi_;
-  std::stack<scope> scopes_;
   std::vector<ir::alloc_const*> allocs_;
   std::map<std::string, ir::value*> globals_;
   std::map<std::string, md_pair_t> metadatas_;
