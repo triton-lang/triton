@@ -11,7 +11,7 @@ import triton._C.libtriton.triton as _triton
 import triton
 import sys
 import textwrap
-from abc import ABC, abstractmethod
+import collections
 
 
 class CodeGenerator(ast.NodeVisitor):
@@ -134,15 +134,20 @@ class CodeGenerator(ast.NodeVisitor):
         return node.arg
 
     def visit_Assign(self, node):
-        names = []
+        _names = []
         for target in node.targets:
-            names += [self.visit(target)]
-        assert len(names) == 1
-        name = names[0]
-        value = self.visit(node.value)
-        if not isinstance(value, triton.language.block):
-            value = triton.language._to_ir(value, self.builder)
-        self.set_value(names[0], value)
+            _names += [self.visit(target)]
+        assert len(_names) == 1
+        names = _names[0]
+        values = self.visit(node.value)
+        if not isinstance(names, tuple):
+            names = [names]
+        if not isinstance(values, tuple):
+            values = [values]
+        for name, value in zip(names, values):
+            if not isinstance(value, triton.language.block):
+                value = triton.language._to_ir(value, self.builder)
+            self.set_value(name, value)
 
     def visit_AugAssign(self, node):
         name = node.target.id
