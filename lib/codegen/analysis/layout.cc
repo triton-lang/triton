@@ -436,7 +436,7 @@ void layouts::run(ir::module &mod) {
       layouts_[id] = new shared_layout(out_layout, axes_->get(val), shape, {recoalasce}, val->get_type()->get_scalar_ty(), align_);
       tmp_[recoalasce] = id;
     }
-    if(auto *atom = dynamic_cast<ir::atomic_cas_inst*>(i)){
+    if(auto *atom = dynamic_cast<ir::atomic_inst*>(i)){
       id++;
       layouts_[id] = new shared_layout(nullptr, {}, {1}, {atom}, atom->get_type()->get_scalar_ty(), align_);
       tmp_[atom] = id;

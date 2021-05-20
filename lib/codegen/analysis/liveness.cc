@@ -45,6 +45,8 @@ void liveness::run(ir::module &mod) {
     for(ir::user *u: users)
       if(indices.find(u) != indices.end())
         end = std::max(end, indices.at(u));
+    if(end == 0)
+      end = start + 1;
     intervals_[layout] = segment{start, end};
   }
 
