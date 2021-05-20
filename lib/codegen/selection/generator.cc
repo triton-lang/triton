@@ -902,13 +902,14 @@ void generator::visit_atomic_add_inst(ir::atomic_add_inst* add) {
       // asm string
       std::string suffix = vec == 2 ? "x2" : "";
       std::string mod = nbits == 32 ? "" : ".noftz";
-      std::string asm_str = "@$0 atom.global.gpu.add" + mod + ".f" + std::to_string(nbits) + suffix + " $1, [$2" + offset + "], $3;";
-      std::string ty_id = nbits == 32 ? "f" : (vec == 1 ? "h" : "r");
+      std::string ty_str = ty->isFloatingPointTy() ? "f" : "u";
+      std::string asm_str = "@$0 atom.global.gpu.add" + mod + "." + ty_str + std::to_string(nbits) + suffix + " $1, [$2" + offset + "], $3;";
+      std::string ty_id = nbits == 32 ? ty_str : (vec == 1 ? "h" : "r");
       std::string constraint = "b,=" + ty_id + ",l," + ty_id;
       // create inline asm
       InlineAsm *iasm = InlineAsm::get(fn_ty, asm_str, constraint, true);
       // call asm
-      call(iasm, (ArrayRef<Value*>{rmw_msk, rmw_ptr, rmw_val}));
+      vals_[add][idx] = call(iasm, (ArrayRef<Value*>{rmw_msk, rmw_ptr, rmw_val}));
     }
   }
   else{
@@ -920,8 +921,9 @@ void generator::visit_atomic_add_inst(ir::atomic_add_inst* add) {
     std::vector<Type*> arg_ty = {rmw_msk->getType(), rmw_ptr->getType(), rmw_val->getType()};
     FunctionType *fn_ty = FunctionType::get(ty, arg_ty, false);
     std::string mod = nbits == 32 ? "" : ".noftz";
-    std::string asm_str = "@$0 atom.global.gpu.add" + mod + ".f" + std::to_string(nbits) + " $1, [$2], $3;";
-    std::string ty_id = nbits == 32 ? "f" : "h";
+    std::string ty_str = ty->isFloatingPointTy() ? "f" : "u";
+    std::string asm_str = "@$0 atom.global.gpu.add" + mod + "." + ty_str + std::to_string(nbits) + " $1, [$2], $3;";
+    std::string ty_id = nbits == 32 ? "r" : "h";
     InlineAsm *iasm = InlineAsm::get(fn_ty, asm_str, "b,="+ty_id+",l,"+ty_id, true);
 
     BasicBlock *current = builder_->GetInsertBlock();
@@ -935,10 +937,16 @@ void generator::visit_atomic_add_inst(ir::atomic_add_inst* add) {
     add_barrier();
     cond_br(pred, tid_0_bb, tid_0_done_bb);
     builder_->SetInsertPoint(tid_0_bb);
-    call(iasm, (ArrayRef<Value*>{rmw_msk, rmw_ptr, rmw_val}));
+    Value *old = call(iasm, (ArrayRef<Value*>{rmw_msk, rmw_ptr, rmw_val}));
+    Value *atom_ptr;
+    atom_ptr = gep(shmem_, i32(alloc_->offset(layouts_->get(layouts_->tmp(add)))), "");
+    atom_ptr = bit_cast(atom_ptr, ptr_ty(old->getType(), 3));
+    store(old, atom_ptr);
     br(tid_0_done_bb);
     builder_->SetInsertPoint(tid_0_done_bb);
     tgt_->add_memfence(module, *builder_);
+    add_barrier();
+    vals_[add][{}] = load(atom_ptr);
   }
 }
 
