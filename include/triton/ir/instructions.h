@@ -452,16 +452,6 @@ public:
   _TRITON_DEFINE_ACCEPT(masked_load_async_inst)
 };
 
-class atomic_add_inst: public io_inst {
-private:
-  atomic_add_inst(value *ptr, value *val, value *msk, const std::string &name = "", instruction *next = nullptr);
-  std::string repr_impl() const { return "atomic_add"; }
-  _TRITON_DEFINE_CLONE(atomic_add_inst)
-  _TRITON_DEFINE_ACCEPT(atomic_add_inst)
-
-public:
-  static instruction* create(value *ptr, value *val, value *msk, const std::string &name = "", instruction *next = nullptr);
-};
 
 
 // store
@@ -612,7 +602,25 @@ private:
   unsigned axis_;
 };
 
-class atomic_cas_inst: public builtin_inst {
+
+class atomic_inst: public io_inst {
+public:
+  using io_inst::io_inst;
+};
+
+class atomic_add_inst: public atomic_inst {
+private:
+  atomic_add_inst(value *ptr, value *val, value *msk, const std::string &name = "", instruction *next = nullptr);
+  std::string repr_impl() const { return "atomic_add"; }
+  _TRITON_DEFINE_CLONE(atomic_add_inst)
+  _TRITON_DEFINE_ACCEPT(atomic_add_inst)
+
+public:
+  static instruction* create(value *ptr, value *val, value *msk, const std::string &name = "", instruction *next = nullptr);
+};
+
+
+class atomic_cas_inst: public atomic_inst {
 private:
   atomic_cas_inst(value *ptr, value *cmp, value *val, const std::string &name, instruction *next);
   std::string repr_impl() const { return "atomic_cas"; }
@@ -623,7 +631,7 @@ public:
   static instruction* create(value *ptr, value *cmp, value *val, const std::string &name = "", instruction *next = nullptr);
 };
 
-class atomic_exch_inst: public builtin_inst {
+class atomic_exch_inst: public atomic_inst {
 private:
   atomic_exch_inst(value *ptr, value *val, const std::string &name = "", instruction *next = nullptr);
   std::string repr_impl() const { return "atomic_exch"; }

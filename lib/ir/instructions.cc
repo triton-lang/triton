@@ -484,19 +484,6 @@ masked_load_async_inst* masked_load_async_inst::create(value *ptr, value *mask, 
   return new masked_load_async_inst(ptr, mask, false_value, name, next);
 }
 
-// atomic add
-
-atomic_add_inst::atomic_add_inst(value *ptr, value *val, value *msk, const std::string &name, instruction *next)
-  : io_inst(ptr->get_type()->get_pointer_element_ty(), INST_ATOMIC_ADD, 3, name, next) {
-  set_operand(0, ptr);
-  set_operand(1, val);
-  set_operand(2, msk);
-}
-
-instruction* atomic_add_inst::create(value *ptr, value *val, value *msk, const std::string &name, instruction *next) {
-  return new atomic_add_inst(ptr, val, msk, name, next);
-}
-
 // store
 
 store_inst::store_inst(value *ptr, value_id_t id, unsigned num_ops, const std::string &name, instruction *next)
@@ -744,10 +731,20 @@ instruction* get_num_programs_inst::create(context &ctx, unsigned axis, const st
 }
 
 
+atomic_add_inst::atomic_add_inst(value *ptr, value *val, value *msk, const std::string &name, instruction *next)
+  : atomic_inst(ptr->get_type()->get_pointer_element_ty(), INST_ATOMIC_ADD, 3, name, next) {
+  set_operand(0, ptr);
+  set_operand(1, val);
+  set_operand(2, msk);
+}
+
+instruction* atomic_add_inst::create(value *ptr, value *val, value *msk, const std::string &name, instruction *next) {
+  return new atomic_add_inst(ptr, val, msk, name, next);
+}
 // atomic cas
 
 atomic_cas_inst::atomic_cas_inst(value *ptr, value *cmp, value *val, const std::string &name, instruction *next)
-  : builtin_inst(ptr->get_type()->get_pointer_element_ty(), INST_ATOMIC_CAS, 3, name, next) {
+  : atomic_inst(ptr->get_type()->get_pointer_element_ty(), INST_ATOMIC_CAS, 3, name, next) {
   set_operand(0, ptr);
   set_operand(1, cmp);
   set_operand(2, val);
@@ -760,7 +757,7 @@ instruction* atomic_cas_inst::create(value *ptr, value *cmp, value *val, const s
 // atomic exch
 
 atomic_exch_inst::atomic_exch_inst(value *ptr, value *val, const std::string &name, instruction *next)
-  : builtin_inst(ptr->get_type()->get_pointer_element_ty(), INST_ATOMIC_EXCH, 2, name, next) {
+  : atomic_inst(ptr->get_type()->get_pointer_element_ty(), INST_ATOMIC_EXCH, 2, name, next) {
   set_operand(0, ptr);
   set_operand(1, val);
 }
