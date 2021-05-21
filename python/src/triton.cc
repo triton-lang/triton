@@ -129,6 +129,7 @@ void init_triton_frontend(py::module &&m) {
   typedef ir::value *(*broadcast_to_ty)(ir::value *, ir::type::block_shapes_t, ir::builder *);
   m.def("broadcast", (broadcast_ty)(&ir::dispatch::broadcast), ret::reference);
   m.def("broadcast_to", (broadcast_to_ty)(&ir::dispatch::broadcast), ret::reference);
+  m.def("bitcast", &ir::dispatch::bitcast, ret::reference);
   m.def("cast", &ir::dispatch::cast, ret::reference);
   // memory
   m.def("load", &ir::dispatch::load, ret::reference);
