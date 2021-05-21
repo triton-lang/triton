@@ -414,6 +414,23 @@ std::tuple<ir::value*, ir::value*> dispatch::broadcast(ir::value *lhs, ir::value
   return std::make_tuple(lhs, rhs);
 }
 
+ir::value *dispatch::bitcast(ir::value *input, ir::type *dst_ty, ir::builder *builder){
+  ir::type *src_ty = input->get_type();
+  if (src_ty->is_block_ty())
+    dst_ty = ir::block_type::get(dst_ty, input->get_type()->get_block_shapes());
+  if(src_ty == dst_ty)
+    return input;
+  ir::type *src_sca_ty = src_ty->get_scalar_ty();
+  ir::type *dst_sca_ty = dst_ty->get_scalar_ty();
+  // Bitcast
+  int src_bits = src_sca_ty->get_primitive_size_in_bits();
+  int dst_bits = dst_sca_ty->get_primitive_size_in_bits();
+  if( src_bits!= dst_bits)
+    throw std::runtime_error("Cannot bitcast data-type of size " + std::to_string(src_bits) +
+                             "to data-type of size " + std::to_string(dst_bits));
+  return builder->create_cast(ir::BitCast, input, dst_ty);
+}
+
 ir::value *dispatch::cast(ir::value *input, ir::type *dst_ty, ir::builder *builder) {
   ir::type *src_ty = input->get_type();
   if (src_ty->is_block_ty())
