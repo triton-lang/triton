@@ -95,7 +95,13 @@ void prefetch::run(ir::module &mod) {
       });
 
       builder.set_insert_point(bb->get_first_non_phi());
-      for (ir::instruction *i : loads) {
+      auto& inst_list = bb->get_inst_list();
+      for (ir::instruction *i : loads){
+        auto it = std::find(inst_list.begin(), inst_list.end(), i);
+        // make sure we don't invalidate insert point
+        // in case instruction already at the top
+        if(it == builder.get_insert_point())
+          continue;
         bb->erase(i);
         builder.insert(i);
       }
