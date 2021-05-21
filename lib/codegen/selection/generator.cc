@@ -903,9 +903,9 @@ void generator::visit_atomic_add_inst(ir::atomic_add_inst* add) {
       std::string suffix = vec == 2 ? "x2" : "";
       std::string mod = nbits == 32 ? "" : ".noftz";
       std::string ty_str = add->get_type()->get_scalar_ty()->is_floating_point_ty() ? "f" : "u";
-      std::string asm_str = "@$0 atom.global.gpu.add" + mod + "." + ty_str + std::to_string(nbits) + suffix + " $1, [$2" + offset + "], $3;";
+      std::string asm_str = "@$1 atom.global.gpu.add" + mod + "." + ty_str + std::to_string(nbits) + suffix + " $0, [$2" + offset + "], $3;";
       std::string ty_id = nbits == 32 ? ty_str : (vec == 1 ? "h" : "r");
-      std::string constraint = "b,=" + ty_id + ",l," + ty_id;
+      std::string constraint = "=" + ty_id + ",b,l," + ty_id;
       // create inline asm
       InlineAsm *iasm = InlineAsm::get(fn_ty, asm_str, constraint, true);
       // call asm
@@ -922,9 +922,9 @@ void generator::visit_atomic_add_inst(ir::atomic_add_inst* add) {
     FunctionType *fn_ty = FunctionType::get(ty, arg_ty, false);
     std::string mod = nbits == 32 ? "" : ".noftz";
     std::string ty_str = add->get_type()->get_scalar_ty()->is_floating_point_ty() ? "f" : "u";
-    std::string asm_str = "@$0 atom.global.gpu.add" + mod + "." + ty_str + std::to_string(nbits) + " $1, [$2], $3;";
+    std::string asm_str = "@$1 atom.global.gpu.add" + mod + "." + ty_str + std::to_string(nbits) + " $0, [$2], $3;";
     std::string ty_id = nbits == 32 ? "r" : "h";
-    InlineAsm *iasm = InlineAsm::get(fn_ty, asm_str, "b,="+ty_id+",l,"+ty_id, true);
+    InlineAsm *iasm = InlineAsm::get(fn_ty, asm_str, "="+ty_id+",b,l,"+ty_id, true);
 
     BasicBlock *current = builder_->GetInsertBlock();
     Module *module = current->getModule();
