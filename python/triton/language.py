@@ -76,7 +76,7 @@ class pointer_dtype:
         self.element_ty = element_ty
 
     def handle(self, builder):
-        return ir.type.make_ptr(self.element_ty, 1)
+        return ir.type.make_ptr(self.element_ty.handle(builder), 1)
 
 
 int1 = dtype(ir.type.get_int1)
@@ -249,8 +249,11 @@ class block:
         return ret
 
     @builtin
-    def to(self, dtype, builder=None):
-        return frontend.cast(self, dtype.handle(builder), builder)
+    def to(self, dtype, bitcast=False, builder=None):
+        dtype = dtype.handle(builder)
+        if bitcast:
+            return frontend.bitcast(self, dtype, builder)
+        return frontend.cast(self, dtype, builder)
 
 
 # -----------------------
