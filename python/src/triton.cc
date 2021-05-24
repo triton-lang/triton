@@ -137,6 +137,8 @@ void init_triton_frontend(py::module &&m) {
   m.def("atomic_cas", &ir::dispatch::atomic_cas, ret::reference);
   m.def("atomic_xchg", &ir::dispatch::atomic_xchg, ret::reference);
   m.def("atomic_add", &ir::dispatch::atomic_add, ret::reference);
+  m.def("atomic_max", &ir::dispatch::atomic_max, ret::reference);
+  m.def("atomic_min", &ir::dispatch::atomic_min, ret::reference);
   // linear algebra
   m.def("dot", &ir::dispatch::dot, ret::reference);
   // indexing

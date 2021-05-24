@@ -538,7 +538,7 @@ ir::value *dispatch::atomic_xchg(ir::value* ptr, ir::value *val, ir::builder *bu
   return builder->create_atomic_exch(ptr, val);
 }
 
-ir::value *dispatch::atomic_add(ir::value* ptr, ir::value *val, ir::value *mask, ir::builder *builder){
+void atom_red_typechecking(ir::value*& ptr, ir::value *&val, ir::value *&mask, ir::builder *builder){
   if(!ptr->get_type()->get_scalar_ty()->is_pointer_ty())
     throw semantic_error("Pointer argument of store instruction is " + ptr->get_type()->repr());
   if(ptr->get_type()->is_block_ty()){
@@ -550,13 +550,42 @@ ir::value *dispatch::atomic_add(ir::value* ptr, ir::value *val, ir::value *mask,
     }
   }
   val = dispatch::cast(val, ptr->get_type()->get_scalar_ty()->get_pointer_element_ty(), builder);
-
   if(!mask){
     mask = builder->get_int1(true);
     if(ptr->get_type()->is_block_ty())
       mask = builder->create_splat(mask, ptr->get_type()->get_block_shapes());
   }
+}
 
+ir::value *dispatch::atomic_max(ir::value* ptr, ir::value *val, ir::value *mask, ir::builder *builder){
+  atom_red_typechecking(ptr, val, mask, builder);
+  ir::type* sca_ty = val->get_type()->get_scalar_ty();
+  // direct call to atomic_max for integers
+  if(sca_ty->is_integer_ty())
+    return builder->create_atomic_max(ptr, val, mask, true);
+  // for float
+  // return atomic_smax(i_ptr, i_val) if val >= 0
+  // return atomic_umin(i_ptr, i_val) if val < 0
+  ir::value* i_val = bitcast(val, builder->get_int32_ty(), builder);
+  ir::value* i_ptr = bitcast(ptr, pointer_type::get(builder->get_int32_ty(), 1), builder);
+  ir::value* pos = greater_equal(val, constant_fp::get(sca_ty, 0), builder);
+  ir::value* neg = less_than(val, constant_fp::get(sca_ty, 0), builder);
+  ir::value* pos_ret = builder->create_atomic_max(i_ptr, i_val, and_(mask, pos, builder), true);
+  ir::value* neg_ret = builder->create_atomic_min(i_ptr, i_val, and_(mask, neg, builder), false);
+  return where(pos, pos_ret, neg_ret, builder);
+}
+
+ir::value *dispatch::atomic_min(ir::value* ptr, ir::value *val, ir::value *mask, int is_signed, ir::builder *builder){
+  atom_red_typechecking(ptr, val, mask, builder);
+  // direct call to atomic_min for integers
+  ir::type* sca_ty = val->get_type()->get_scalar_ty();
+  if(!sca_ty->is_integer_ty())
+    throw semantic_error("atomic_min only supported for integer arguments");
+  return builder->create_atomic_min(ptr, val, mask, is_signed);
+}
+
+ir::value *dispatch::atomic_add(ir::value* ptr, ir::value *val, ir::value *mask, ir::builder *builder){
+  atom_red_typechecking(ptr, val, mask, builder);
   return builder->create_atomic_add(ptr, val, mask);
 }
 

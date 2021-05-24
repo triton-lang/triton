@@ -730,6 +730,7 @@ instruction* get_num_programs_inst::create(context &ctx, unsigned axis, const st
   return new get_num_programs_inst(type::get_int32_ty(ctx), axis, name, next);
 }
 
+// atomic_add
 
 atomic_add_inst::atomic_add_inst(value *ptr, value *val, value *msk, const std::string &name, instruction *next)
   : atomic_inst(ptr->get_type()->get_pointer_element_ty(), INST_ATOMIC_ADD, 3, name, next) {
@@ -741,6 +742,33 @@ atomic_add_inst::atomic_add_inst(value *ptr, value *val, value *msk, const std::
 instruction* atomic_add_inst::create(value *ptr, value *val, value *msk, const std::string &name, instruction *next) {
   return new atomic_add_inst(ptr, val, msk, name, next);
 }
+
+// atomic_max
+
+atomic_max_inst::atomic_max_inst(value *ptr, value *val, value *msk, bool is_signed, const std::string &name, instruction *next)
+  : atomic_inst(ptr->get_type()->get_pointer_element_ty(), INST_ATOMIC_MAX, 3, name, next), is_signed_(is_signed) {
+  set_operand(0, ptr);
+  set_operand(1, val);
+  set_operand(2, msk);
+}
+
+instruction* atomic_max_inst::create(value *ptr, value *val, value *msk, bool is_signed, const std::string &name, instruction *next) {
+  return new atomic_max_inst(ptr, val, msk, is_signed, name, next);
+}
+
+// atomic_min
+
+atomic_min_inst::atomic_min_inst(value *ptr, value *val, value *msk, bool is_signed, const std::string &name, instruction *next)
+  : atomic_inst(ptr->get_type()->get_pointer_element_ty(), INST_ATOMIC_MIN, 3, name, next), is_signed_(is_signed){
+  set_operand(0, ptr);
+  set_operand(1, val);
+  set_operand(2, msk);
+}
+
+instruction* atomic_min_inst::create(value *ptr, value *val, value *msk, bool is_signed, const std::string &name, instruction *next) {
+  return new atomic_min_inst(ptr, val, msk, is_signed, name, next);
+}
+
 // atomic cas
 
 atomic_cas_inst::atomic_cas_inst(value *ptr, value *cmp, value *val, const std::string &name, instruction *next)

@@ -27,6 +27,8 @@ void dce::run(ir::module &mod) {
         case ir::INST_MASKED_STORE:
         case ir::INST_ATOMIC_ADD:
         case ir::INST_ATOMIC_CAS:
+        case ir::INST_ATOMIC_MAX:
+        case ir::INST_ATOMIC_MIN:
         case ir::INST_ATOMIC_EXCH:
         case ir::INST_BARRIER: {
           work_list.push_back(i);
@@ -62,6 +64,13 @@ void dce::run(ir::module &mod) {
     for(ir::instruction *i: block->get_inst_list()){
       if(marked.find(i) == marked.end())
         to_delete.push_back(i);
+      // delete phi with no incoming
+      if(ir::phi_node* phi = dynamic_cast<ir::phi_node*>(i)){
+        if(std::all_of(phi->op_begin(), phi->op_end(), [&](ir::value*v) {
+          return marked.find((ir::instruction*)v) != marked.end();
+        }))
+        to_delete.push_back(phi);
+      }
     }
   }
 

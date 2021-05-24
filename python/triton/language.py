@@ -89,6 +89,8 @@ float16 = dtype(ir.type.get_fp16)
 float32 = dtype(ir.type.get_fp32)
 float64 = dtype(ir.type.get_fp64)
 
+pi32_t = pointer_dtype(int32)
+
 
 class block:
     @staticmethod
@@ -463,6 +465,50 @@ def atomic_add(pointer, val, mask=None, builder=None):
     """
     return frontend.atomic_add(pointer, val, mask, builder)
 
+
+@builtin
+def atomic_max(pointer, val, mask=None, builder=None):
+    """
+    Performs an atomic add and the memory locations specified by :code:`pointer`.
+    :param pointer: The memory locations which contain the old values
+    :type pointer: Block of dtype=triton.PointerDType
+    :param val: The values to add
+    :type val: Block of dtype=`pointer.dtype.element_ty`
+    :param mask: If mask[idx] is false, :code:`pointer[idx]` is unaffected.
+    :type mask: Block of triton.int1, optional
+    """
+    return frontend.atomic_max(pointer, val, mask, builder)
+
+
+@builtin
+def _atomic_min(pointer, val, mask=None, is_signed=1, builder=None):
+    """
+    Performs an atomic add and the memory locations specified by :code:`pointer`.
+    :param pointer: The memory locations which contain the old values
+    :type pointer: Block of dtype=triton.PointerDType
+    :param val: The values to add
+    :type val: Block of dtype=`pointer.dtype.element_ty`
+    :param mask: If mask[idx] is false, :code:`pointer[idx]` is unaffected.
+    :type mask: Block of triton.int1, optional
+    """
+    return frontend.atomic_min(pointer, val, mask, is_signed, builder)
+
+
+# @triton.jit
+# def atomic_max(DEST, value, mask=None):
+#     DEST = DEST.to(pi32_t)
+#     curr = tl.load(DEST)
+#     retry = True
+#     while retry:
+#         # Generate new value from `curr`
+#         old = curr
+#         new = tl.maximum(value, curr.to(value.dtype, bitcast=True))
+#         new = new.to(dtype=tl.int32, bitcast=True)
+#         # Try to swap old <-> new
+#         curr = tl.atomic_cas(DEST, old, new)
+#         # retry if *DEST has changed in the meantime
+#         retry = (curr != old)
+#         #retry = value > curr.to(value.dtype, bitcast=True)
 
 # -----------------------
 # Conditioning

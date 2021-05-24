@@ -327,6 +327,14 @@ value *builder::create_atomic_add(value *ptr, value *val, value *msk){
   return insert(atomic_add_inst::create(ptr, val, msk));
 }
 
+value *builder::create_atomic_max(value *ptr, value *val, value *msk, bool is_signed){
+  return insert(atomic_max_inst::create(ptr, val, msk, is_signed));
+}
+
+value *builder::create_atomic_min(value *ptr, value *val, value *msk, bool is_signed){
+  return insert(atomic_min_inst::create(ptr, val, msk, is_signed));
+}
+
 value *builder::create_exp(value *arg){
   return insert(exp_inst::create(arg));
 }

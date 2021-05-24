@@ -619,6 +619,35 @@ public:
   static instruction* create(value *ptr, value *val, value *msk, const std::string &name = "", instruction *next = nullptr);
 };
 
+class atomic_max_inst: public atomic_inst {
+private:
+  atomic_max_inst(value *ptr, value *val, value *msk, bool is_signed, const std::string &name = "", instruction *next = nullptr);
+  std::string repr_impl() const { return "atomic_max"; }
+  _TRITON_DEFINE_CLONE(atomic_max_inst)
+  _TRITON_DEFINE_ACCEPT(atomic_max_inst)
+
+public:
+  static instruction* create(value *ptr, value *val, value *msk, bool is_signed, const std::string &name = "", instruction *next = nullptr);
+  bool get_is_signed() { return is_signed_;}
+
+private:
+  bool is_signed_;
+};
+
+class atomic_min_inst: public atomic_inst {
+private:
+  atomic_min_inst(value *ptr, value *val, value *msk, bool is_signed, const std::string &name = "", instruction *next = nullptr);
+  std::string repr_impl() const { return "atomic_min"; }
+  _TRITON_DEFINE_CLONE(atomic_min_inst)
+  _TRITON_DEFINE_ACCEPT(atomic_min_inst)
+
+public:
+  static instruction* create(value *ptr, value *val, value *msk, bool is_signed, const std::string &name = "", instruction *next = nullptr);
+  bool get_is_signed() { return is_signed_;}
+
+private:
+  bool is_signed_;
+};
 
 class atomic_cas_inst: public atomic_inst {
 private:

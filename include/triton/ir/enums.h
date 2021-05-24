@@ -128,6 +128,8 @@ enum value_id_t: unsigned {
   INST_ATOMIC_CAS,
   INST_ATOMIC_EXCH,
   INST_ATOMIC_ADD,
+  INST_ATOMIC_MAX,
+  INST_ATOMIC_MIN,
   // math
   INST_EXP,
   INST_LOG,

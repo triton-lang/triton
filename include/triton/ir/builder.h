@@ -138,6 +138,8 @@ public:
   value *create_atomic_cas(value *ptr, value *cmp, value *val);
   value *create_atomic_exch(value *ptr, value *val);
   value *create_atomic_add(value *ptr, value *val, value *msk);
+  value *create_atomic_max(value *ptr, value *val, value *msk, bool is_signed);
+  value *create_atomic_min(value *ptr, value *val, value *msk, bool is_signed);
   value *create_exp(value* arg);
   value *create_log(value* arg);
   value *create_dot(value *A, value *B, value *C);
