@@ -137,7 +137,7 @@ public:
   value *create_get_num_programs(unsigned axis);
   value *create_atomic_cas(value *ptr, value *cmp, value *val);
   value *create_atomic_exch(value *ptr, value *val);
-  value *create_atomic_add(value *ptr, value *val, value *msk);
+  value *create_atomic_rmw(ir::atomic_rmw_op_t op, value *ptr, value *val, value *msk);
   value *create_exp(value* arg);
   value *create_log(value* arg);
   value *create_dot(value *A, value *B, value *C);

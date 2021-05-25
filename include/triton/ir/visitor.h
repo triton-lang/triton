@@ -53,9 +53,10 @@ class log_inst;
 
 class get_program_id_inst;
 class get_num_programs_inst;
+class atomic_inst;
 class atomic_cas_inst;
 class atomic_exch_inst;
-class atomic_add_inst;
+class atomic_rmw_inst;
 class dot_inst;
 class trans_inst;
 class sqrt_inst;
@@ -132,7 +133,7 @@ public:
   virtual void visit_get_num_programs_inst(get_num_programs_inst*) = 0;
   virtual void visit_atomic_cas_inst(atomic_cas_inst*) = 0;
   virtual void visit_atomic_exch_inst(atomic_exch_inst*) = 0;
-  virtual void visit_atomic_add_inst(atomic_add_inst*) = 0;
+  virtual void visit_atomic_rmw_inst(atomic_rmw_inst*) = 0;
   virtual void visit_dot_inst(dot_inst*) = 0;
   virtual void visit_trans_inst(trans_inst*) = 0;
   virtual void visit_sqrt_inst(sqrt_inst*) = 0;
