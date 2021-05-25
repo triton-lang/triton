@@ -25,8 +25,8 @@ void dce::run(ir::module &mod) {
         case ir::INST_COND_BRANCH:
         case ir::INST_UNMASKED_STORE:
         case ir::INST_MASKED_STORE:
-        case ir::INST_ATOMIC_ADD:
         case ir::INST_ATOMIC_CAS:
+        case ir::INST_ATOMIC_RMW:
         case ir::INST_ATOMIC_EXCH:
         case ir::INST_BARRIER: {
           work_list.push_back(i);

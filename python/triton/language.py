@@ -89,6 +89,8 @@ float16 = dtype(ir.type.get_fp16)
 float32 = dtype(ir.type.get_fp32)
 float64 = dtype(ir.type.get_fp64)
 
+pi32_t = pointer_dtype(int32)
+
 
 class block:
     @staticmethod
@@ -462,6 +464,31 @@ def atomic_add(pointer, val, mask=None, builder=None):
     :type mask: Block of triton.int1, optional
     """
     return frontend.atomic_add(pointer, val, mask, builder)
+
+
+@builtin
+def atomic_max(pointer, val, mask=None, builder=None):
+    return frontend.atomic_max(pointer, val, mask, builder)
+
+
+@builtin
+def atomic_min(pointer, val, mask=None, builder=None):
+    return frontend.atomic_min(pointer, val, mask, builder)
+
+
+@builtin
+def atomic_and(pointer, val, mask=None, builder=None):
+    return frontend.atomic_and(pointer, val, mask, builder)
+
+
+@builtin
+def atomic_or(pointer, val, mask=None, builder=None):
+    return frontend.atomic_or(pointer, val, mask, builder)
+
+
+@builtin
+def atomic_xor(pointer, val, mask=None, builder=None):
+    return frontend.atomic_xor(pointer, val, mask, builder)
 
 
 # -----------------------
