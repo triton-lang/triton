@@ -468,47 +468,28 @@ def atomic_add(pointer, val, mask=None, builder=None):
 
 @builtin
 def atomic_max(pointer, val, mask=None, builder=None):
-    """
-    Performs an atomic add and the memory locations specified by :code:`pointer`.
-    :param pointer: The memory locations which contain the old values
-    :type pointer: Block of dtype=triton.PointerDType
-    :param val: The values to add
-    :type val: Block of dtype=`pointer.dtype.element_ty`
-    :param mask: If mask[idx] is false, :code:`pointer[idx]` is unaffected.
-    :type mask: Block of triton.int1, optional
-    """
     return frontend.atomic_max(pointer, val, mask, builder)
 
 
 @builtin
 def atomic_min(pointer, val, mask=None, builder=None):
-    """
-    Performs an atomic add and the memory locations specified by :code:`pointer`.
-    :param pointer: The memory locations which contain the old values
-    :type pointer: Block of dtype=triton.PointerDType
-    :param val: The values to add
-    :type val: Block of dtype=`pointer.dtype.element_ty`
-    :param mask: If mask[idx] is false, :code:`pointer[idx]` is unaffected.
-    :type mask: Block of triton.int1, optional
-    """
     return frontend.atomic_min(pointer, val, mask, builder)
 
 
-# @triton.jit
-# def atomic_max(DEST, value, mask=None):
-#     DEST = DEST.to(pi32_t)
-#     curr = tl.load(DEST)
-#     retry = True
-#     while retry:
-#         # Generate new value from `curr`
-#         old = curr
-#         new = tl.maximum(value, curr.to(value.dtype, bitcast=True))
-#         new = new.to(dtype=tl.int32, bitcast=True)
-#         # Try to swap old <-> new
-#         curr = tl.atomic_cas(DEST, old, new)
-#         # retry if *DEST has changed in the meantime
-#         retry = (curr != old)
-#         #retry = value > curr.to(value.dtype, bitcast=True)
+@builtin
+def atomic_and(pointer, val, mask=None, builder=None):
+    return frontend.atomic_and(pointer, val, mask, builder)
+
+
+@builtin
+def atomic_or(pointer, val, mask=None, builder=None):
+    return frontend.atomic_or(pointer, val, mask, builder)
+
+
+@builtin
+def atomic_xor(pointer, val, mask=None, builder=None):
+    return frontend.atomic_xor(pointer, val, mask, builder)
+
 
 # -----------------------
 # Conditioning

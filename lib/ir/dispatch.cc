@@ -600,6 +600,21 @@ ir::value *dispatch::atomic_add(ir::value* ptr, ir::value *val, ir::value *mask,
   return builder->create_atomic_rmw(op, ptr, val, mask);
 }
 
+ir::value *dispatch::atomic_and(ir::value* ptr, ir::value *val, ir::value *mask, ir::builder *builder){
+  atom_red_typechecking(ptr, val, mask, builder);
+  return builder->create_atomic_rmw(ir::atomic_rmw_op_t::And, ptr, val, mask);
+}
+
+ir::value *dispatch::atomic_or(ir::value* ptr, ir::value *val, ir::value *mask, ir::builder *builder){
+  atom_red_typechecking(ptr, val, mask, builder);
+  return builder->create_atomic_rmw(ir::atomic_rmw_op_t::Or, ptr, val, mask);
+}
+
+ir::value *dispatch::atomic_xor(ir::value* ptr, ir::value *val, ir::value *mask, ir::builder *builder){
+  atom_red_typechecking(ptr, val, mask, builder);
+  return builder->create_atomic_rmw(ir::atomic_rmw_op_t::Xor, ptr, val, mask);
+}
+
 //===----------------------------------------------------------------------===//
 //                               Linear Algebra
 //===----------------------------------------------------------------------===//

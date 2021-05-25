@@ -242,7 +242,7 @@ def test_tuples():
 @pytest.mark.parametrize("op, dtype_x, mode", itertools.chain.from_iterable([
     [('add', 'int32', mode), ('add', 'float16', mode), ('add', 'float32', mode), \
     ('max', 'int32', mode), ('max', 'float32', mode),\
-    ('min', 'int32', mode), ('min', 'float32', mode)
+    ('min', 'int32', mode), ('min', 'float32', mode),\
     ]
     for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']]))
 def test_atomic_rmw(op, dtype_x, mode, device='cuda'):
