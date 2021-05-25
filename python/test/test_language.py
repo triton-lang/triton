@@ -242,8 +242,7 @@ def test_tuples():
 @pytest.mark.parametrize("op, dtype_x, mode", itertools.chain.from_iterable([
     [('add', 'int32', mode), ('add', 'float16', mode), ('add', 'float32', mode), \
     ('max', 'int32', mode), ('max', 'float32', mode),\
-    #('min', 'int32', mode), ('min', 'float32', mode)
-
+    ('min', 'int32', mode), ('min', 'float32', mode)
     ]
     for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']]))
 def test_atomic_rmw(op, dtype_x, mode, device='cuda'):
@@ -260,7 +259,7 @@ def test_atomic_rmw(op, dtype_x, mode, device='cuda'):
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.atomic_{op}(Z, x)'})
     torch_op = {'add': torch.sum, 'max': torch.max, 'min': torch.min}[op]
     max_neutral = float('-inf') if dtype_x.is_floating_point else torch.iinfo(dtype_x).min
-    min_neutral = float('inf') if dtype_x.is_floating_point else torch.iinfo(dtype_x).min
+    min_neutral = float('inf') if dtype_x.is_floating_point else torch.iinfo(dtype_x).max
     neutral = {'add': 0, 'max': max_neutral, 'min': min_neutral}[op]
 
     # triton result
@@ -282,7 +281,7 @@ def test_atomic_rmw(op, dtype_x, mode, device='cuda'):
     # torch result
     z_ref = torch_op(x_tri).to(dtype_x)
     # compare
-    exact = op not in ['min', 'max']
+    exact = op not in ['add']
     if exact:
         assert z_ref.item() == z_tri.item()
     else:
