@@ -575,7 +575,7 @@ ir::value *dispatch::atomic_max(ir::value* ptr, ir::value *val, ir::value *mask,
   return where(pos, pos_ret, neg_ret, builder);
 }
 
-ir::value *dispatch::atomic_min(ir::value* ptr, ir::value *val, ir::value *mask, int is_signed, ir::builder *builder){
+ir::value *dispatch::atomic_min(ir::value* ptr, ir::value *val, ir::value *mask, ir::builder *builder){
   atom_red_typechecking(ptr, val, mask, builder);
   ir::type* sca_ty = val->get_type()->get_scalar_ty();
   // direct call to atomic_max for integers

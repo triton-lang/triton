@@ -481,7 +481,7 @@ def atomic_max(pointer, val, mask=None, builder=None):
 
 
 @builtin
-def _atomic_min(pointer, val, mask=None, is_signed=1, builder=None):
+def atomic_min(pointer, val, mask=None, builder=None):
     """
     Performs an atomic add and the memory locations specified by :code:`pointer`.
     :param pointer: The memory locations which contain the old values
@@ -491,7 +491,7 @@ def _atomic_min(pointer, val, mask=None, is_signed=1, builder=None):
     :param mask: If mask[idx] is false, :code:`pointer[idx]` is unaffected.
     :type mask: Block of triton.int1, optional
     """
-    return frontend.atomic_min(pointer, val, mask, is_signed, builder)
+    return frontend.atomic_min(pointer, val, mask, builder)
 
 
 # @triton.jit
