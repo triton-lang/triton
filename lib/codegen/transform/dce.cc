@@ -62,13 +62,6 @@ void dce::run(ir::module &mod) {
     for(ir::instruction *i: block->get_inst_list()){
       if(marked.find(i) == marked.end())
         to_delete.push_back(i);
-      // delete phi with no incoming
-      if(ir::phi_node* phi = dynamic_cast<ir::phi_node*>(i)){
-        if(std::all_of(phi->op_begin(), phi->op_end(), [&](ir::value*v) {
-          return marked.find((ir::instruction*)v) != marked.end();
-        }))
-        to_delete.push_back(phi);
-      }
     }
   }
 

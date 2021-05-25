@@ -672,8 +672,6 @@ void generator::visit_masked_load_inst(ir::masked_load_inst* x) {
  * \brief Code Generation for a (synchronous) `store`
  */
 void generator::visit_store_inst(ir::store_inst * x){
-  BasicBlock *current = builder_->GetInsertBlock();
-  Module *module = current->getModule();
   ir::masked_store_inst *mx = dynamic_cast<ir::masked_store_inst*>(x);
   // operands
   ir::value *ptr_op = x->get_pointer_operand();
