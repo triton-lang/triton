@@ -1558,49 +1558,48 @@ void generator::visit_reduce1d_inst(ir::reduce_inst* x, std::function<Value*(Val
   ir::value *arg = x->get_operand(0);
   Type *ty = cvt(x->get_type()->get_scalar_ty());
   Value *acc = nullptr;
-  // PTX helper
-  InlineAsm *shfl = InlineAsm::get(FunctionType::get(ty, {ty, i32_ty}, false),
-                                   "shfl.sync.bfly.b32 $0, $1, $2, 0x1f, 0xffffffff;", "=r,r,r", false);
-  InlineAsm *sts = InlineAsm::get(FunctionType::get(void_ty, {builder_->getInt1Ty(), ptr_ty(ty, 3), ty}, false),
-                                  "@$0 st.shared.b32 [$1], $2;", "b,r,r", false);
-  InlineAsm *lds = InlineAsm::get(FunctionType::get(ty, {builder_->getInt1Ty(), ptr_ty(ty, 3)}, false),
-                                  "@$1 ld.shared.b32 $0, [$2];", "=r,b,r", false);
-  // pointers
-  Value *base;
-  base = gep(shmem_, i32(alloc_->offset(layouts_->get(layouts_->tmp(x)))), "");
-  base = bit_cast(base, ptr_ty(ty, 3));
-  Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
-  Value* warp = udiv(thread, i32(32));
-  Value* lane = urem(thread, i32(32));
-  Value *lane0 = icmp_eq(lane, i32(0));
-  Value *warp0 = icmp_eq(warp, i32(0));
-  Value *thread0 = icmp_eq(thread, i32(0));
+
   // reduce within thread
   for(indices_t idx: idxs_.at(arg)){
     Value *val = vals_[arg][idx];
     acc = !acc ? val : do_acc(acc, val);
   }
   // reduce within wrap
-  add_barrier();
+  InlineAsm *shfl = InlineAsm::get(FunctionType::get(ty, {ty, i32_ty}, false),
+                                   "shfl.sync.bfly.b32 $0, $1, $2, 0x1f, 0xffffffff;", "=f,f,r", false);
   for(int i = 16; i > 0; i >>= 1)
     acc = do_acc(acc, call(shfl, {acc, i32(i)}));
+  // pointers
+  unsigned addr_space = shmem_->getType()->getPointerAddressSpace();
+  Value *base = bit_cast(shmem_, ptr_ty(ty, addr_space));
+  Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
+  Value* warp = udiv(thread, i32(32));
+  Value* lane = urem(thread, i32(32));
   // store warp result in shared memory
   add_barrier();
-  call(sts, {warp0, gep(base, lane), neutral});
+  store(neutral, gep(base, lane));
   add_barrier();
-  call(sts, {lane0, gep(base, warp), acc});
+  store(acc, gep(base, warp));
   add_barrier();
-  Value* ret= call(lds, {warp0, gep(base, lane)});
-  add_barrier();
-  for(int i = num_warps_/2; i > 0; i >>= 1){
+
+  // reduce across warps
+  Value *cond = icmp_eq(warp, i32(0));
+  Instruction *barrier = add_barrier();
+  builder_->SetInsertPoint(barrier->getParent());
+  Instruction* dummy = builder_->CreateRet(nullptr);
+  Instruction *term = llvm::SplitBlockAndInsertIfThen(cond, barrier, false);
+  dummy->removeFromParent();
+  builder_->SetInsertPoint(term);
+  Value* ret = load(gep(base, thread));
+  for(int i = (num_warps_+1)/2; i > 0; i >>= 1){
     Value *current = call(shfl, {ret, i32(i)});
     ret = do_acc(ret, current);
   }
-  call(sts, {thread0, base, ret});;
-  add_barrier();
+  store(ret, gep(base, thread));
+
+  // store first warp done
+  builder_->SetInsertPoint(barrier->getParent());
   ret = load(base);
-  add_barrier();
-  // register reduction result
   for(indices_t idx: idxs_.at(x))
     vals_[x][idx] = ret;
 }
