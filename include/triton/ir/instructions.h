@@ -608,17 +608,20 @@ public:
   using io_inst::io_inst;
 };
 
-class atomic_add_inst: public atomic_inst {
+class atomic_rmw_inst: public atomic_inst {
 private:
-  atomic_add_inst(value *ptr, value *val, value *msk, const std::string &name = "", instruction *next = nullptr);
-  std::string repr_impl() const { return "atomic_add"; }
-  _TRITON_DEFINE_CLONE(atomic_add_inst)
-  _TRITON_DEFINE_ACCEPT(atomic_add_inst)
+  atomic_rmw_inst(atomic_rmw_op_t op, value *ptr, value *val, value *msk, const std::string &name = "", instruction *next = nullptr);
+  std::string repr_impl() const { return "atomic_rmw"; }
+  _TRITON_DEFINE_CLONE(atomic_rmw_inst)
+  _TRITON_DEFINE_ACCEPT(atomic_rmw_inst)
 
 public:
-  static instruction* create(value *ptr, value *val, value *msk, const std::string &name = "", instruction *next = nullptr);
-};
+  static instruction* create(atomic_rmw_op_t op, value *ptr, value *val, value *msk, const std::string &name = "", instruction *next = nullptr);
+  atomic_rmw_op_t get_op() { return op_; }
 
+private:
+  atomic_rmw_op_t op_;
+};
 
 class atomic_cas_inst: public atomic_inst {
 private:

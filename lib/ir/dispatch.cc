@@ -538,7 +538,7 @@ ir::value *dispatch::atomic_xchg(ir::value* ptr, ir::value *val, ir::builder *bu
   return builder->create_atomic_exch(ptr, val);
 }
 
-ir::value *dispatch::atomic_add(ir::value* ptr, ir::value *val, ir::value *mask, ir::builder *builder){
+void atom_red_typechecking(ir::value*& ptr, ir::value *&val, ir::value *&mask, ir::builder *builder){
   if(!ptr->get_type()->get_scalar_ty()->is_pointer_ty())
     throw semantic_error("Pointer argument of store instruction is " + ptr->get_type()->repr());
   if(ptr->get_type()->is_block_ty()){
@@ -550,14 +550,69 @@ ir::value *dispatch::atomic_add(ir::value* ptr, ir::value *val, ir::value *mask,
     }
   }
   val = dispatch::cast(val, ptr->get_type()->get_scalar_ty()->get_pointer_element_ty(), builder);
-
   if(!mask){
     mask = builder->get_int1(true);
     if(ptr->get_type()->is_block_ty())
       mask = builder->create_splat(mask, ptr->get_type()->get_block_shapes());
   }
+}
 
-  return builder->create_atomic_add(ptr, val, mask);
+ir::value *dispatch::atomic_max(ir::value* ptr, ir::value *val, ir::value *mask, ir::builder *builder){
+  atom_red_typechecking(ptr, val, mask, builder);
+  ir::type* sca_ty = val->get_type()->get_scalar_ty();
+  // direct call to atomic_max for integers
+  if(sca_ty->is_integer_ty())
+    return builder->create_atomic_rmw(ir::atomic_rmw_op_t::Max, ptr, val, mask);
+  // for float
+  // return atomic_smax(i_ptr, i_val) if val >= 0
+  // return atomic_umin(i_ptr, i_val) if val < 0
+  ir::value* i_val = bitcast(val, builder->get_int32_ty(), builder);
+  ir::value* i_ptr = bitcast(ptr, pointer_type::get(builder->get_int32_ty(), 1), builder);
+  ir::value* pos = greater_equal(val, constant_fp::get(sca_ty, 0), builder);
+  ir::value* neg = less_than(val, constant_fp::get(sca_ty, 0), builder);
+  ir::value* pos_ret = builder->create_atomic_rmw(ir::atomic_rmw_op_t::Max, i_ptr, i_val, and_(mask, pos, builder));
+  ir::value* neg_ret = builder->create_atomic_rmw(ir::atomic_rmw_op_t::UMin, i_ptr, i_val, and_(mask, neg, builder));
+  return where(pos, pos_ret, neg_ret, builder);
+}
+
+ir::value *dispatch::atomic_min(ir::value* ptr, ir::value *val, ir::value *mask, ir::builder *builder){
+  atom_red_typechecking(ptr, val, mask, builder);
+  ir::type* sca_ty = val->get_type()->get_scalar_ty();
+  // direct call to atomic_max for integers
+  if(sca_ty->is_integer_ty())
+    return builder->create_atomic_rmw(ir::atomic_rmw_op_t::Min, ptr, val, mask);
+  // for float
+  // return atomic_smin(i_ptr, i_val) if val >= 0
+  // return atomic_umax(i_ptr, i_val) if val < 0
+  ir::value* i_val = bitcast(val, builder->get_int32_ty(), builder);
+  ir::value* i_ptr = bitcast(ptr, pointer_type::get(builder->get_int32_ty(), 1), builder);
+  ir::value* pos = greater_equal(val, constant_fp::get(sca_ty, 0), builder);
+  ir::value* neg = less_than(val, constant_fp::get(sca_ty, 0), builder);
+  ir::value* pos_ret = builder->create_atomic_rmw(ir::atomic_rmw_op_t::Min, i_ptr, i_val, and_(mask, pos, builder));
+  ir::value* neg_ret = builder->create_atomic_rmw(ir::atomic_rmw_op_t::UMax, i_ptr, i_val, and_(mask, neg, builder));
+  return where(pos, pos_ret, neg_ret, builder);
+}
+
+ir::value *dispatch::atomic_add(ir::value* ptr, ir::value *val, ir::value *mask, ir::builder *builder){
+  atom_red_typechecking(ptr, val, mask, builder);
+  ir::type* sca_ty = val->get_type()->get_scalar_ty();
+  auto op = sca_ty->is_floating_point_ty() ? ir::atomic_rmw_op_t::FAdd : ir::atomic_rmw_op_t::Add;
+  return builder->create_atomic_rmw(op, ptr, val, mask);
+}
+
+ir::value *dispatch::atomic_and(ir::value* ptr, ir::value *val, ir::value *mask, ir::builder *builder){
+  atom_red_typechecking(ptr, val, mask, builder);
+  return builder->create_atomic_rmw(ir::atomic_rmw_op_t::And, ptr, val, mask);
+}
+
+ir::value *dispatch::atomic_or(ir::value* ptr, ir::value *val, ir::value *mask, ir::builder *builder){
+  atom_red_typechecking(ptr, val, mask, builder);
+  return builder->create_atomic_rmw(ir::atomic_rmw_op_t::Or, ptr, val, mask);
+}
+
+ir::value *dispatch::atomic_xor(ir::value* ptr, ir::value *val, ir::value *mask, ir::builder *builder){
+  atom_red_typechecking(ptr, val, mask, builder);
+  return builder->create_atomic_rmw(ir::atomic_rmw_op_t::Xor, ptr, val, mask);
 }
 
 //===----------------------------------------------------------------------===//

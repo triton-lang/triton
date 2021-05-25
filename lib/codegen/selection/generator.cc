@@ -813,28 +813,35 @@ void generator::visit_atomic_cas_inst(ir::atomic_cas_inst* cas) {
   Module *module = current->getModule();
   Value *tid = tgt_->get_local_id(module, *builder_, 0);
   Value *pred = icmp_eq(tid, i32(0));
-  BasicBlock *tid_0_bb = BasicBlock::Create(*ctx_, "tid_0", current->getParent());
-  BasicBlock *tid_0_done_bb = BasicBlock::Create(*ctx_, "tid_0_done", current->getParent());
+//  BasicBlock *tid_0_bb = BasicBlock::Create(*ctx_, "tid_0", current->getParent());
+//  BasicBlock *tid_0_done_bb = BasicBlock::Create(*ctx_, "tid_0_done", current->getParent());
   add_barrier();
   tgt_->add_memfence(module, *builder_);
-  cond_br(pred, tid_0_bb, tid_0_done_bb);
-  builder_->SetInsertPoint(tid_0_bb);
+  Value *atom_ptr;
+  atom_ptr = gep(shmem_, i32(alloc_->offset(layouts_->get(layouts_->tmp(cas)))), "");
+  atom_ptr = bit_cast(atom_ptr, ptr_ty(cvt(cas->get_type()->get_scalar_ty()), 3));
+//  cond_br(pred, tid_0_bb, tid_0_done_bb);
+//  builder_->SetInsertPoint(tid_0_bb);
   Value *cas_ptr = vals_[cas->get_operand(0)][{}];
   Value *cas_cmp = vals_[cas->get_operand(1)][{}];
   Value *cas_val = vals_[cas->get_operand(2)][{}];
-  Value *old = atomic_cmp_xchg(cas_ptr, cas_cmp, cas_val, AtomicOrdering::Monotonic, AtomicOrdering::Monotonic);
-  old = extract_val(old, std::vector<unsigned>{0});
-  Value *atom_ptr;
-  atom_ptr = gep(shmem_, i32(alloc_->offset(layouts_->get(layouts_->tmp(cas)))), "");
-  atom_ptr = bit_cast(atom_ptr, ptr_ty(old->getType(), 3));
-  store(old, atom_ptr);
-  br(tid_0_done_bb);
-  builder_->SetInsertPoint(tid_0_done_bb);
+  std::string asm_str = "@$1 atom.global.cas.b32 $0, [$2], $3, $4;";
+  FunctionType *fn_ty = FunctionType::get(i32_ty, {pred->getType(), cas_ptr->getType(), cas_cmp->getType(), cas_val->getType()}, false);
+  InlineAsm *iasm = InlineAsm::get(fn_ty, asm_str, "=r,b,l,r,r", true);
+  add_barrier();
+  Value *old = call(iasm, {pred, cas_ptr, cas_cmp, cas_val});
+  add_barrier();
+
+  std::string asm2_str = "@$0 st.shared.b32 [$1], $2;";
+  FunctionType *fn2_ty = FunctionType::get(void_ty, {pred->getType(), atom_ptr->getType(), old->getType()}, false);
+  InlineAsm *iasm2 = InlineAsm::get(fn2_ty, asm2_str, "b,r,r", true);
+  add_barrier();
+  call(iasm2, {pred, atom_ptr, old});
   tgt_->add_memfence(module, *builder_);
   add_barrier();
   vals_[cas][{}] = load(atom_ptr);
+  add_barrier();
 }
-
 /**
  * \brief Code Generation for `atomic_exch`
  */
@@ -860,93 +867,86 @@ void generator::visit_atomic_exch_inst(ir::atomic_exch_inst* xchg) {
 /**
  * \brief Code Generation for `atomic_add`
  */
-//TODO: clean-up
-void generator::visit_atomic_add_inst(ir::atomic_add_inst* add) {
+void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
+  ir::value* ptr = atom->get_operand(0);
+  ir::value* val = atom->get_operand(1);
+  ir::value* msk = atom->get_operand(2);
 
-  if(add->get_type()->is_block_ty()){
-    ir::value* ptr = add->get_operand(0);
-    ir::value* val = add->get_operand(1);
-    ir::value* msk = add->get_operand(2);
-
-    // vector size
-    int vec = 1;
+  // vector size
+  int vec = 1;
+  if(atom->get_type()->is_block_ty()){
     int ld = ords_.at(ptr)[0];
     unsigned alignment = alignment_->get(ptr, ld);
     vec = std::min<int>(layouts_->get(ptr)->to_scanline()->nts(ld), alignment);
     vec = std::min(vec, val->get_type()->get_tile_element_ty()->is_half_ty() ? 2 : 1);
-
-    for(int i = 0; i < idxs_.at(val).size(); i += vec){
-      auto idx = idxs_[val][i];
-      Value *rmw_val = UndefValue::get(vec_ty(vals_[val][idx]->getType(), vec));
-      for(int ii = 0; ii < vec; ii++)
-        rmw_val = insert_elt(rmw_val, vals_[val][idxs_[val][i+ii]], ii);
-      Value *rmw_ptr = vals_[ptr][idx];
-      Value *rmw_msk = vals_[msk][idx];
-      if(vec == 1)
-        rmw_val = extract_elt(rmw_val, i32(0));
-      Type* ty = rmw_val->getType();
-      size_t nbits = ty->getScalarSizeInBits();
-      // extract pointer offset
-      std::string offset = "";
-      if(GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(rmw_ptr))
-      if(gep->getNumIndices() == 1)
-      if(ConstantInt *cst = dyn_cast<ConstantInt>(gep->idx_begin())){
-        offset = " + " + std::to_string(cst->getValue().getSExtValue()*nbits/8);
-        rmw_ptr = gep->getPointerOperand();
-      }
-      rmw_ptr = bit_cast(rmw_ptr, ty->getPointerTo(1));
-      // asm argument type
-      std::vector<Type*> arg_ty = {rmw_msk->getType(), rmw_ptr->getType(), rmw_val->getType()};
-      // asm function type
-      FunctionType *fn_ty = FunctionType::get(ty, arg_ty, false);
-      // asm string
-      std::string suffix = vec == 2 ? "x2" : "";
-      std::string mod = nbits == 32 ? "" : ".noftz";
-      std::string ty_str = add->get_type()->get_scalar_ty()->is_floating_point_ty() ? "f" : "u";
-      std::string asm_str = "@$1 atom.global.gpu.add" + mod + "." + ty_str + std::to_string(nbits) + suffix + " $0, [$2" + offset + "], $3;";
-      std::string ty_id = nbits == 32 ? ty_str : (vec == 1 ? "h" : "r");
-      std::string constraint = "=" + ty_id + ",b,l," + ty_id;
-      // create inline asm
-      InlineAsm *iasm = InlineAsm::get(fn_ty, asm_str, constraint, true);
-      // call asm
-      vals_[add][idx] = call(iasm, (ArrayRef<Value*>{rmw_msk, rmw_ptr, rmw_val}));
-    }
   }
-  else{
-    Value *rmw_ptr = vals_[add->get_operand(0)][{}];
-    Value *rmw_val = vals_[add->get_operand(1)][{}];
-    Value *rmw_msk = vals_[add->get_operand(2)][{}];
+
+  for(int i = 0; i < idxs_.at(val).size(); i += vec){
+    auto idx = idxs_[val][i];
+    Value *rmw_val = UndefValue::get(vec_ty(vals_[val][idx]->getType(), vec));
+    for(int ii = 0; ii < vec; ii++)
+      rmw_val = insert_elt(rmw_val, vals_[val][idxs_[val][i+ii]], ii);
+    Value *rmw_ptr = vals_[ptr][idx];
+    Value *rmw_msk = vals_[msk][idx];
+    if(vec == 1)
+      rmw_val = extract_elt(rmw_val, i32(0));
     Type* ty = rmw_val->getType();
     size_t nbits = ty->getScalarSizeInBits();
+    // extract pointer offset
+    std::string offset = "";
+    if(GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(rmw_ptr))
+    if(gep->getNumIndices() == 1)
+    if(ConstantInt *cst = dyn_cast<ConstantInt>(gep->idx_begin())){
+      offset = " + " + std::to_string(cst->getValue().getSExtValue()*nbits/8);
+      rmw_ptr = gep->getPointerOperand();
+    }
+    rmw_ptr = bit_cast(rmw_ptr, ty->getPointerTo(1));
+    // asm argument type
     std::vector<Type*> arg_ty = {rmw_msk->getType(), rmw_ptr->getType(), rmw_val->getType()};
+    // asm function type
     FunctionType *fn_ty = FunctionType::get(ty, arg_ty, false);
+    // asm string
+    std::string s_nbits = std::to_string(nbits);
+    std::string name;
+    std::string s_ty;
+    using tt = ir::atomic_rmw_op_t;
+    switch(atom->get_op()){
+      case tt::Or: name = "or"; s_ty = "b"; break;
+      case tt::And: name = "and"; s_ty = "b"; break;
+      case tt::Xor: name = "xor", s_ty = "b"; break;
+      case tt::Add: name = "add" , s_ty = "s"; break;
+      case tt::Min: name = "min", s_ty = "s"; break;
+      case tt::Max: name = "max", s_ty = "s"; break;
+      case tt::UMin: name = "min", s_ty = "u"; break;
+      case tt::UMax: name = "max", s_ty = "u"; break;
+      case tt::FAdd: name = "add", s_ty = "f"; break;
+    }
+    std::string s_vec = vec == 2 ? "x2" : "";
     std::string mod = nbits == 32 ? "" : ".noftz";
-    std::string ty_str = add->get_type()->get_scalar_ty()->is_floating_point_ty() ? "f" : "u";
-    std::string asm_str = "@$1 atom.global.gpu.add" + mod + "." + ty_str + std::to_string(nbits) + " $0, [$2], $3;";
-    std::string ty_id = nbits == 32 ? "r" : "h";
-    InlineAsm *iasm = InlineAsm::get(fn_ty, asm_str, "="+ty_id+",b,l,"+ty_id, true);
 
-    BasicBlock *current = builder_->GetInsertBlock();
-    Module *module = current->getModule();
-
-    Value *tid = tgt_->get_local_id(module, *builder_, 0);
-    Value *pred = icmp_eq(tid, i32(0));
-    BasicBlock *tid_0_bb = BasicBlock::Create(*ctx_, "tid_0", current->getParent());
-    BasicBlock *tid_0_done_bb = BasicBlock::Create(*ctx_, "tid_0_done", current->getParent());
-    tgt_->add_memfence(module, *builder_);
-    add_barrier();
-    cond_br(pred, tid_0_bb, tid_0_done_bb);
-    builder_->SetInsertPoint(tid_0_bb);
-    Value *old = call(iasm, (ArrayRef<Value*>{rmw_msk, rmw_ptr, rmw_val}));
-    Value *atom_ptr;
-    atom_ptr = gep(shmem_, i32(alloc_->offset(layouts_->get(layouts_->tmp(add)))), "");
-    atom_ptr = bit_cast(atom_ptr, ptr_ty(old->getType(), 3));
-    store(old, atom_ptr);
-    br(tid_0_done_bb);
-    builder_->SetInsertPoint(tid_0_done_bb);
-    tgt_->add_memfence(module, *builder_);
-    add_barrier();
-    vals_[add][{}] = load(atom_ptr);
+    std::string asm_str = "@$1 atom.global.gpu." + name + mod + "." + s_ty + s_nbits + s_vec + " $0, [$2" + offset + "], $3;";
+    std::string ty_id = nbits*vec == 32 ? "r" : "h";
+    std::string constraint = "=" + ty_id + ",b,l," + ty_id;
+    // create inline asm
+    InlineAsm *iasm = InlineAsm::get(fn_ty, asm_str, constraint, true);
+    // call asm
+    if(atom->get_type()->is_block_ty())
+      vals_[atom][idx] = call(iasm, (ArrayRef<Value*>{rmw_msk, rmw_ptr, rmw_val}));
+    else{
+      Module *mod = builder_->GetInsertBlock()->getModule();
+      tgt_->add_memfence(mod, *builder_);
+      add_barrier();
+      Value *tid = tgt_->get_local_id(mod, *builder_, 0);
+      rmw_msk = builder_->CreateAnd(rmw_msk, icmp_eq(tid, i32(0)));
+      Value *old = call(iasm, (ArrayRef<Value*>{rmw_msk, rmw_ptr, rmw_val}));
+      Value *atom_ptr;
+      atom_ptr = gep(shmem_, i32(alloc_->offset(layouts_->get(layouts_->tmp(atom)))), "");
+      atom_ptr = bit_cast(atom_ptr, ptr_ty(old->getType(), 3));
+      store(old, atom_ptr);
+      add_barrier();
+      vals_[atom][idx] = load(atom_ptr);
+      add_barrier();
+    }
   }
 }
 
