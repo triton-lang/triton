@@ -869,14 +869,10 @@ void generator::visit_atomic_exch_inst(ir::atomic_exch_inst* xchg) {
 /**
  * \brief Code Generation for `atomic_add`
  */
-void generator::visit_atomic(ir::atomic_inst * atom) {
+void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
   ir::value* ptr = atom->get_operand(0);
   ir::value* val = atom->get_operand(1);
   ir::value* msk = atom->get_operand(2);
-
-  std::string name = atom->repr();
-  std::string pfx = "atomic_";
-  name = name.erase(0, pfx.size());
 
   // vector size
   int vec = 1;
@@ -912,21 +908,27 @@ void generator::visit_atomic(ir::atomic_inst * atom) {
     // asm function type
     FunctionType *fn_ty = FunctionType::get(ty, arg_ty, false);
     // asm string
+    std::string s_nbits = std::to_string(nbits);
+    std::string name;
+    std::string s_ty;
+    using tt = ir::atomic_rmw_op_t;
+    switch(atom->get_op()){
+      case tt::Or: name = "or"; s_ty = "b"; break;
+      case tt::And: name = "and"; s_ty = "b"; break;
+      case tt::Xor: name = "xor", s_ty = "b"; break;
+      case tt::Add: name = "add" , s_ty = "s"; break;
+      case tt::Min: name = "min", s_ty = "s"; break;
+      case tt::Max: name = "max", s_ty = "s"; break;
+      case tt::UMin: name = "min", s_ty = "u"; break;
+      case tt::UMax: name = "max", s_ty = "u"; break;
+      case tt::FAdd: name = "add", s_ty = "f"; break;
+    }
     std::string s_vec = vec == 2 ? "x2" : "";
     std::string mod = nbits == 32 ? "" : ".noftz";
-    std::string s_ty = atom->get_type()->get_scalar_ty()->is_floating_point_ty() ? "f" : "u";
-    std::string s_nbits = std::to_string(nbits);
-    if(auto *max = dynamic_cast<ir::atomic_max_inst*>(atom))
-    if(max->get_is_signed())
-      s_ty = "s";
-    if(auto *max = dynamic_cast<ir::atomic_min_inst*>(atom))
-    if(max->get_is_signed())
-      s_ty = "s";
 
     std::string asm_str = "@$1 atom.global.gpu." + name + mod + "." + s_ty + s_nbits + s_vec + " $0, [$2" + offset + "], $3;";
     std::string ty_id = nbits*vec == 32 ? "r" : "h";
     std::string constraint = "=" + ty_id + ",b,l," + ty_id;
-//    std::cout << asm_str << " " << constraint << std::endl;
     // create inline asm
     InlineAsm *iasm = InlineAsm::get(fn_ty, asm_str, constraint, true);
     // call asm
@@ -948,18 +950,6 @@ void generator::visit_atomic(ir::atomic_inst * atom) {
       add_barrier();
     }
   }
-}
-
-void generator::visit_atomic_add_inst(ir::atomic_add_inst* add) {
-  visit_atomic(add);
-}
-
-void generator::visit_atomic_max_inst(ir::atomic_max_inst* max) {
-  visit_atomic(max);
-}
-
-void generator::visit_atomic_min_inst(ir::atomic_min_inst* min) {
-  visit_atomic(min);
 }
 
 /**

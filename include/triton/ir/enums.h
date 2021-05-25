@@ -28,6 +28,18 @@ enum binary_op_t: unsigned int{
   Xor
 };
 
+enum class atomic_rmw_op_t: unsigned int{
+  And,
+  Or,
+  Xor,
+  Add,
+  Max,
+  Min,
+  UMax,
+  UMin,
+  FAdd,
+};
+
 enum cast_op_t: unsigned int {
   Trunc,
   ZExt,
@@ -127,9 +139,7 @@ enum value_id_t: unsigned {
   // atomics
   INST_ATOMIC_CAS,
   INST_ATOMIC_EXCH,
-  INST_ATOMIC_ADD,
-  INST_ATOMIC_MAX,
-  INST_ATOMIC_MIN,
+  INST_ATOMIC_RMW,
   // math
   INST_EXP,
   INST_LOG,
