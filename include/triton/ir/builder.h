@@ -119,6 +119,12 @@ public:
   value *create_fcmpOGE(value *lhs, value *rhs);
   value *create_fcmpOEQ(value *lhs, value *rhs);
   value *create_fcmpONE(value *lhs, value *rhs);
+  value *create_fcmpULT(value *lhs, value *rhs);
+  value *create_fcmpUGT(value *lhs, value *rhs);
+  value *create_fcmpULE(value *lhs, value *rhs);
+  value *create_fcmpUGE(value *lhs, value *rhs);
+  value *create_fcmpUEQ(value *lhs, value *rhs);
+  value *create_fcmpUNE(value *lhs, value *rhs);
   // Logical
   value *create_and(value *lhs, value *rhs);
   value *create_xor(value *lhs, value *rhs);
