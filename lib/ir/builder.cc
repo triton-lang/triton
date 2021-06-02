@@ -261,6 +261,12 @@ DEFINE_FCMP_INSTR(OGT, cmp_pred_t::FCMP_OGT)
 DEFINE_FCMP_INSTR(OEQ, cmp_pred_t::FCMP_OEQ)
 DEFINE_FCMP_INSTR(ONE, cmp_pred_t::FCMP_ONE)
 
+DEFINE_FCMP_INSTR(ULE, cmp_pred_t::FCMP_ULE)
+DEFINE_FCMP_INSTR(ULT, cmp_pred_t::FCMP_ULT)
+DEFINE_FCMP_INSTR(UGE, cmp_pred_t::FCMP_UGE)
+DEFINE_FCMP_INSTR(UGT, cmp_pred_t::FCMP_UGT)
+DEFINE_FCMP_INSTR(UEQ, cmp_pred_t::FCMP_UEQ)
+DEFINE_FCMP_INSTR(UNE, cmp_pred_t::FCMP_UNE)
 
 
 //===----------------------------------------------------------------------===//
