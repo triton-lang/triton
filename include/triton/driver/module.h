@@ -60,7 +60,7 @@ public:
 // CUDA
 class cu_module: public module {
   std::string compile_llvm_module(llvm::Module* module, driver::device* device);
-  void init_from_ptx(const std::string& ptx);
+  void init_from_ptx(const std::string& ptx, cu_device *device);
 
 public:
   cu_module(driver::device* device, std::unique_ptr<llvm::Module> module);
