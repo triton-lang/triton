@@ -77,6 +77,54 @@ void print(module &mod, std::ostream& os) {
   }
 }
 
+void print(function &fn, std::ostream &os) {
+  //
+}
+
+void print(basic_block &bb, std::ostream &os) {
+  auto const &predecessors = bb.get_predecessors();
+  os << bb.get_name() << ":";
+  if(!predecessors.empty()){
+    os << "                 ";
+    os << "; preds = ";
+    auto const &predecessors = bb.get_predecessors();
+    for(ir::basic_block *pred: predecessors)
+      os << pred->get_name() << (pred!=predecessors.back()?", ":"");
+  }
+  os << std::endl;
+  for(ir::instruction *inst: bb.get_inst_list()){
+    print(*inst, os);
+  }
+}
+
+void print(instruction &instr, std::ostream &os) {
+    instruction *inst = &instr;
+    os << "  ";
+    if(!inst->get_type()->is_void_ty()){
+      os << instr.get_name();
+      os << " = ";
+    }
+    ir::type* type = inst->get_type();
+    os << inst->repr() << " " << type->repr();
+    ir::instruction::ops_t ops = inst->ops();
+    size_t num_ops = inst->get_num_operands();
+    if(num_ops > 0)
+      os << " ";;
+    for(unsigned i = 0; i < num_ops; i++){
+      if(auto *x = dynamic_cast<ir::constant*>(ops[i]))
+        os << x->repr();
+      else
+        os << ops[i]->get_name();
+      os << (i < num_ops - 1?", ":"");
+    }
+    os << ";";
+//        os << " (";
+//        for(ir::user* usr: inst->get_users())
+//          os << get_name(usr, cnt++) << ", " ;
+//        os << " )";
+    os << std::endl;
+}
+
 
 }
 }
