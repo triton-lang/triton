@@ -141,10 +141,19 @@ struct double_buffer_info_t {
   ir::phi_node* phi;
 };
 
+struct N_buffer_info_t {
+  std::vector<ir::value*> firsts; // not necessarily ordered as input order
+  ir::value* latch;
+  ir::phi_node* phi;
+  std::map<ir::value*, int> firsts_idx;
+};
+
+// abstract for dot and coresponding smem values
 class shared_layout: public data_layout {
 private:
   static bool is_loop_latch(ir::phi_node *phi, ir::instruction *terminator);
   static void extract_double_bufferable(ir::value *v, std::shared_ptr<double_buffer_info_t>& res);
+  static void extract_N_bufferable(ir::value *v, std::shared_ptr<N_buffer_info_t>& res);
 
 public:
   shared_layout(data_layout *arg,
@@ -158,6 +167,10 @@ public:
   size_t get_size()                         { return size_; }
   ir::type* get_type()                      { return ty_; }
   double_buffer_info_t* get_double_buffer() { return double_buffer_.get(); }
+  N_buffer_info_t* get_N_buffer()           { return N_buffer_.get(); }
+  int get_num_stages() const;
+  size_t get_per_stage_size() const         { return size_ / get_num_stages(); }
+  size_t get_per_stage_elements() const;
   size_t get_num_per_phase()                { return num_per_phase_; }
   ir::value* hmma_dot_a()                      { return hmma_dot_a_; }
   ir::value* hmma_dot_b()                      { return hmma_dot_b_; }
@@ -169,6 +182,7 @@ private:
   size_t size_;
   ir::type *ty_;
   std::shared_ptr<double_buffer_info_t> double_buffer_;
+  std::shared_ptr<N_buffer_info_t>      N_buffer_;
   size_t num_per_phase_;
   ir::value* hmma_dot_a_;
   ir::value* hmma_dot_b_;
