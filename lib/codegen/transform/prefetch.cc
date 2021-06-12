@@ -55,14 +55,12 @@ void prefetch::run(ir::module &mod) {
 
     // 1. in the loop header (first iteration)
     builder.set_insert_point(loop_header->get_inst_list().back());
-    builder.create_barrier();
     assert(a && b);
     builder.create_prefetch_s(a->get_incoming_value(0), /*inc*/ 0);
     builder.create_prefetch_s(b->get_incoming_value(0), /*inc*/ 0);
 
     // 2. at the end of the loop body (next iteration)
     builder.set_insert_point(loop_body->get_inst_list().back());
-    builder.create_barrier();
     builder.create_prefetch_s(a->get_incoming_value(1), /*inc*/ 1);
     builder.create_prefetch_s(b->get_incoming_value(1), /*inc*/ 1);
   }
