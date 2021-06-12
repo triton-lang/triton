@@ -285,8 +285,6 @@ static bool is_smem(ir::value* v) {
 static bool is_multistage_pipe_phi(ir::phi_node* phi, ir::basic_block* bb0, ir::basic_block* bb1, 
     std::vector<ir::value*>& values_0, ir::value*& value_1) {
   ir::value* next = phi;
-  // std::cout << "\nis_multistage_pipe_phi(...):\n";
-  // ir::print(*static_cast<ir::instruction*>(phi), std::cout);
   while (auto cphi = dynamic_cast<ir::phi_node*>(next)) {
     // smem from previous bb & phi/smem from current bb
     ir::value* c0 = cphi->get_incoming_value(0);
@@ -329,6 +327,10 @@ void shared_layout::extract_N_bufferable(ir::value *v, std::shared_ptr<N_buffer_
   ir::value* value_1;
   
   if (!is_multistage_pipe_phi(phi, bb0, bb1, values_0, value_1))
+    return;
+
+  // double-buffer is a special case
+  if (values_0.size() == 1)
     return;
 
   // compute original values_0 input order
