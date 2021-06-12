@@ -30,8 +30,7 @@ void prefetch::run(ir::module &mod) {
   ir::for_each_instruction(mod, [&](ir::instruction *i) {
     if (auto *dot = dynamic_cast<ir::dot_inst*>(i)) {
       // Now only do prefetching when dot is fp16 & volta/turing
-      if (dot->get_operand(0)->get_type()->get_scalar_ty()->get_type_id() != ir::type::HalfTyID ||
-          tgt_->as_nvidia()->sm() >= 80)
+      if (dot->get_operand(0)->get_type()->get_scalar_ty()->get_type_id() != ir::type::HalfTyID)
         return;
       auto *a = dynamic_cast<ir::phi_node*>(dot->get_operand(0));
       auto *b = dynamic_cast<ir::phi_node*>(dot->get_operand(1));

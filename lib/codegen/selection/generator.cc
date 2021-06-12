@@ -1223,24 +1223,21 @@ void generator::visit_mma884(ir::dot_inst* C, ir::value *A, ir::value *B, ir::va
  * \brief Code Generation for `mma.16816` (A100)
  */
 //TODO: clean-up
-void generator::visit_mma16816(ir::dot_inst* dot, ir::value *A, ir::value *B, ir::value *D, unsigned NK) {
-  const auto& shapes = dot->get_type()->get_block_shapes();
-
+void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::value *D, unsigned NK) {
+  const std::vector<unsigned>& shapes = C->get_type()->get_block_shapes();
   std::map<std::vector<Value*>, std::vector<Value*>> fcs;
-
-  for(indices_t idx: idxs_.at(dot)){
+  for(indices_t idx: idxs_.at(C)){
     std::vector<Value*> key(idx.size() - 2);
     std::copy(idx.begin() + 2, idx.end(), key.begin());
     fcs[key].push_back(vals_[D][idx]);
   };
-
   auto shape_a = A->get_type()->get_block_shapes();
   auto shape_b = B->get_type()->get_block_shapes();
   auto ord_a = layouts_->get(A)->get_order();
   auto ord_b = layouts_->get(B)->get_order();
-  analysis::mma_layout* layout = layouts_->get(dot)->to_mma();
-  analysis::shared_layout* layout_a = (analysis::shared_layout*)layouts_->get(dot->get_operand(0));
-  analysis::shared_layout* layout_b = (analysis::shared_layout*)layouts_->get(dot->get_operand(1));
+  analysis::mma_layout* layout = layouts_->get(C)->to_mma();
+  analysis::shared_layout* layout_a = (analysis::shared_layout*)layouts_->get(C->get_operand(0));
+  analysis::shared_layout* layout_b = (analysis::shared_layout*)layouts_->get(C->get_operand(1));
   bool is_a_row = ord_a[0] == 1;
   bool is_b_row = ord_b[0] == 1;
   std::string a_trans = is_a_row ? "" : ".trans";
@@ -1264,8 +1261,6 @@ void generator::visit_mma16816(ir::dot_inst* dot, ir::value *A, ir::value *B, ir
   int vec_a = 8;
   int vec_b = 8;
 
-
-
   Type *fp32_ty = f32_ty;
   Type *fp16x2_ty = vec_ty(f16_ty, 2);
   Type *fp16x2_pack4_ty = StructType::get(*ctx_, std::vector<llvm::Type*>{fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty});
@@ -1275,7 +1270,6 @@ void generator::visit_mma16816(ir::dot_inst* dot, ir::value *A, ir::value *B, ir
   // left-hand-side values
   std::map<std::pair<unsigned, unsigned>, std::pair<Value*, Value*>> ha;
   std::map<std::pair<unsigned, unsigned>, Value*> hb;
-
 
   BasicBlock* CurrBB = builder_->GetInsertBlock();
   BasicBlock* FirstBB = &CurrBB->getParent()->getEntryBlock();
@@ -1339,66 +1333,170 @@ void generator::visit_mma16816(ir::dot_inst* dot, ir::value *A, ir::value *B, ir
                                              "{$0, $1, $2, $3}, "
                                              "{$4, $5, $6, $7}, "
                                              "{$8, $9}, "
-                                             "{$10, $11, $12, $13};", "=f,=f,=f,=f,r,r,r,r,r,r,0,1,2,3", false);
+                                             "{$10, $11, $12, $13};", 
+                                             "=f,=f,=f,=f,r,r,r,r,r,r,0,1,2,3", true);
+
   unsigned num_rep_0 = shapes[0] / layout->spt(0);
   unsigned num_rep_1 = shapes[1] / layout->spt(1);
-  for(unsigned K = 0; K < NK; K += 16)
-  for(unsigned m = 0; m < num_rep_0; m++)
-  for(unsigned n = 0; n < num_rep_1; n++){
-    if(ha.find({m, K}) == ha.end()){
-      Value* ptra = ptrs_a[(is_a_row ? K/16 : m) % num_ptr_a];
+
+  std::cout << "num_rep_0: " << num_rep_0 << "\n";
+  std::cout << "num_rep_1: " << num_rep_1 << "\n";
+
+  // create mma & unpack result
+  auto call_mma = [&](unsigned m, unsigned n, unsigned K) {
+      unsigned cols_per_thread = num_rep_0 * 2;
+      std::vector<size_t> idx = {
+        (m*2 + 0) + (n*2 + 0)*cols_per_thread,
+        (m*2 + 0) + (n*2 + 1)*cols_per_thread,
+        (m*2 + 1) + (n*2 + 0)*cols_per_thread,
+        (m*2 + 1) + (n*2 + 1)*cols_per_thread
+      };
+      Value *nc = call(mma_ty, mma_fn, {ha[{m, K}].first, ha[{m, K}].second,ha[{m, K+8}].first, ha[{m, K+8}].second,
+                                                        hb[{n, K}], hb[{n, K+8}],
+                                                        fc[idx[0]], fc[idx[1]], fc[idx[2]], fc[idx[3]]});
+      fc[idx[0]] = extract_val(nc, std::vector<unsigned>{0});
+      fc[idx[1]] = extract_val(nc, std::vector<unsigned>{1});
+      fc[idx[2]] = extract_val(nc, std::vector<unsigned>{2});
+      fc[idx[3]] = extract_val(nc, std::vector<unsigned>{3});
+  };
+
+  ir::phi_node* phiA = dynamic_cast<ir::phi_node*>(A);
+  ir::phi_node* phiB = dynamic_cast<ir::phi_node*>(B);
+
+  auto register_lds =
+    [&](decltype(ha)& vals, int m, int K, int inc, Value* val0, Value *val1, bool is_prefetch) {
+      if (K <= 8 && is_prefetch) {
+        ir::basic_block* inc_block = phiA->get_incoming_block(inc);
+        lazy_phi_incs_.push_back(std::make_tuple((PHINode*)vals[{m, K}].first, val0, inc_block));
+        lazy_phi_incs_.push_back(std::make_tuple((PHINode*)vals[{m, K}].second, val1, inc_block));
+      } else
+        vals[{m, K}] = {val0, val1};
+  };
+
+  auto register_lds2 =
+    [&](decltype(hb)& vals, int m, int K, int inc, Value* val, bool is_prefetch) {
+      if (K <= 8 && is_prefetch) {
+        ir::basic_block* inc_block = phiA->get_incoming_block(inc);
+        lazy_phi_incs_.push_back(std::make_tuple((PHINode*)vals[{m, K}], val, inc_block));
+      } else
+        vals[{m, K}] = val;
+  };
+
+  auto load_a = [&](int m, int K, int inc, bool is_prefetch) {
+      int offidx = (is_a_row ? K/16 : m) % num_ptr_a;
+      Value* ptra;
+      if(K == 0 && is_prefetch){
+        if(inc == 0)
+          ptra = gep(shared_pre_ptr_[layout_a], off_a[offidx]);
+        else
+          ptra = gep(shared_next_ptr_[layout_a], off_a[offidx]);
+      }
+      else
+        ptra = ptrs_a[offidx];
       int step_am = is_a_row ? m : m / (num_ptr_a)*(num_ptr_a);
       int step_ak = is_a_row ? K / (num_ptr_a*16)*(num_ptr_a*16) : K;
       InlineAsm *ld_a0_fn = InlineAsm::get(ld_x4_ty, "ldmatrix.sync.aligned.m8n8.x4" + a_trans + ".shared.b16 "
-                                                "{$0, $1, $2, $3}, [$4 + " + std::to_string(2*step_am*16*layout->wpt(0)*stride_a_m + 2*step_ak*stride_a_k) + "];", "=r,=r,=r,=r,r", false);
+                                                "{$0, $1, $2, $3}, [$4 + " + 
+                                                std::to_string(2*step_am*16*layout->wpt(0)*stride_a_m + 2*step_ak*stride_a_k) + "];", 
+                                                "=r,=r,=r,=r,r", true);
       Value *haa = call(ld_x4_ty, ld_a0_fn, {ptra});
+      if(K == 0 && inc == 1 && is_prefetch)
+          prefetch_latch_to_bb_[phiA->get_incoming_value(1)].push_back(haa);
       Value *ha0 = extract_val(haa, std::vector<unsigned>{0});
       Value *ha1 = extract_val(haa, std::vector<unsigned>{1});
       Value *ha2 = extract_val(haa, std::vector<unsigned>{2});
       Value *ha3 = extract_val(haa, std::vector<unsigned>{3});
-      ha[{m, K}] = std::make_pair(ha0, ha1);
-      ha[{m, K+8}] = std::make_pair(ha2, ha3);
-    }
-    if(hb.find({n, K})==hb.end()){
-      Value* ptrb = ptrs_b[(is_b_row ? n : K/16) % num_ptr_b];
+      register_lds(ha, m, K, inc, ha0, ha1, is_prefetch);
+      register_lds(ha, m, K + 8, inc, ha2, ha3, is_prefetch);
+  };
+
+  auto load_b = [&](int n, int K, int inc, bool is_prefetch) {
+      int offidx = (is_b_row ? n : K/16) % num_ptr_b;
+      Value* ptrb;
+      if(K == 0 && is_prefetch){
+        if(inc == 0)
+          ptrb = gep(shared_pre_ptr_[layout_b], off_b[offidx]);
+        else
+          ptrb = gep(shared_next_ptr_[layout_b], off_b[offidx]);
+      }
+      else
+        ptrb = ptrs_b[offidx];
       int step_bn = is_b_row ? n / (num_ptr_b)*(num_ptr_b) : n;
       int step_bk = is_b_row ? K : K / (num_ptr_b*8)*(num_ptr_b*8);
       InlineAsm *ld_b_fn = InlineAsm::get(ld_x4_ty, "ldmatrix.sync.aligned.m8n8.x4" + b_trans + ".shared.b16 "
-                                                "{$0, $1, $2, $3}, [$4 + " + std::to_string(2*step_bn*8*layout->wpt(1)*stride_b_n + 2*step_bk*stride_b_k) + "];", "=r,=r,=r,=r,r", false);
+                                                    "{$0, $1, $2, $3}, [$4 + " + 
+                                                    std::to_string(2*step_bn*8*layout->wpt(1)*stride_b_n + 2*step_bk*stride_b_k) + "];", 
+                                                    "=r,=r,=r,=r,r", true);
       Value *hbb = call(ld_x4_ty, ld_b_fn, {ptrb});
+      if(K == 0 && inc == 1 && is_prefetch)
+          prefetch_latch_to_bb_[phiB->get_incoming_value(1)].push_back(hbb);
       Value *hb0 = extract_val(hbb, std::vector<unsigned>{0});
       Value *hb1 = extract_val(hbb, std::vector<unsigned>{1});
       Value *hb2 = extract_val(hbb, std::vector<unsigned>{2});
       Value *hb3 = extract_val(hbb, std::vector<unsigned>{3});
-      hb[{n, K}] = hb0;
-      hb[{n+1, K}] = hb2;
-      hb[{n, K+8}] = hb1;
-      hb[{n+1, K+8}] = hb3;
-    }
-    unsigned cols_per_thread = num_rep_0 * 2;
-    std::vector<size_t> idx = {
-      (m*2 + 0) + (n*2 + 0)*cols_per_thread,
-      (m*2 + 0) + (n*2 + 1)*cols_per_thread,
-      (m*2 + 1) + (n*2 + 0)*cols_per_thread,
-      (m*2 + 1) + (n*2 + 1)*cols_per_thread
-    };
-    Value *nc = call(mma_ty, mma_fn, {ha[{m, K}].first, ha[{m, K}].second,ha[{m, K+8}].first, ha[{m, K+8}].second,
-                                                      hb[{n, K}], hb[{n, K+8}],
-                                                      fc[idx[0]], fc[idx[1]], fc[idx[2]], fc[idx[3]]});
-    fc[idx[0]] = extract_val(nc, std::vector<unsigned>{0});
-    fc[idx[1]] = extract_val(nc, std::vector<unsigned>{1});
-    fc[idx[2]] = extract_val(nc, std::vector<unsigned>{2});
-    fc[idx[3]] = extract_val(nc, std::vector<unsigned>{3});
-  }
+      register_lds2(hb, n, K, inc, hb0, is_prefetch);
+      register_lds2(hb, n+1, K, inc, hb2, is_prefetch);
+      register_lds2(hb, n, K+8, inc, hb1, is_prefetch);
+      register_lds2(hb, n+1, K+8, inc, hb3, is_prefetch);
+  };
 
+  if (C->is_prefetched()) {
+      // create phis
+      builder_->SetInsertPoint(CurrBB->getFirstNonPHI());
+      for(unsigned m = 0; m < num_rep_0; m++){
+        ha[{m, 0}].first = phi(fp16x2_ty, 2);
+        ha[{m, 0}].second = phi(fp16x2_ty, 2);
+        ha[{m, 8}].first = phi(fp16x2_ty, 2);
+        ha[{m, 8}].second = phi(fp16x2_ty, 2);
+      }
+      for(unsigned n = 0; n < num_rep_1; n+=2){
+        hb[{n, 0}] = phi(fp16x2_ty, 2);
+        hb[{n+1, 0}] = phi(fp16x2_ty, 2);
+        hb[{n, 8}] = phi(fp16x2_ty, 2);
+        hb[{n+1, 8}] = phi(fp16x2_ty, 2);
+      }
+      // insert prefetched lds at the end of loop header
+      builder_->SetInsertPoint(bbs_[phiA->get_incoming_block(0)]->getTerminator());
+      for(unsigned m = 0; m < num_rep_0; m++)
+        load_a(m, 0, 0, true);
+      for(unsigned n = 0; n < num_rep_1; n+=2)
+        load_b(n, 0, 0, true);
+      // update accumulators
+      builder_->SetInsertPoint(CurrBB);
+      for(unsigned K = 0; K < NK; K += 16){
+        int NEXTK = (K + 16) % NK;
+        // prefetch A
+        for(unsigned m = 0; m < num_rep_0; m++)
+          load_a(m, NEXTK, 1, true);
+        // prefetch B
+        for(unsigned n = 0; n < num_rep_1; n+=2)
+          load_b(n, NEXTK, 1, true);
+        // tensor core ops
+        for(unsigned m = 0; m < num_rep_0; m++)
+        for(unsigned n = 0; n < num_rep_1; n++){
+          call_mma(m, n, K);
+        }
+      }
+  }
+  else{
+      for(unsigned K = 0; K < NK; K += 16)
+      for(unsigned m = 0; m < num_rep_0; m++)
+      for(unsigned n = 0; n < num_rep_1; n++){
+        if(ha.find({m, K}) == ha.end())
+          load_a(m, K, 0, false);
+        if(hb.find({n, K})==hb.end())
+          load_b(n, K, 0, false);
+        call_mma(m, n, K);
+      }
+  }
   // write back
   unsigned i = 0;
-  for(indices_t idx: idxs_.at(dot)){
+  for(indices_t idx: idxs_.at(C)){
     std::vector<Value*> key(idx.size() - 2);
     std::copy(idx.begin() + 2, idx.end(), key.begin());
     if(i >= fcs.at(key).size())
       i = 0;
-    vals_[dot][idx] = fcs.at(key)[i++];
+    vals_[C][idx] = fcs.at(key)[i++];
   };
 }
 
