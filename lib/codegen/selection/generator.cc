@@ -212,18 +212,41 @@ void generator::visit_value(ir::value* v) {
     return;
   if(v->get_type()->is_block_ty()){
     if(analysis::shared_layout* layout = layouts_->get(v)->to_shared()){
-      auto double_buffer = layout->get_double_buffer();
+      analysis::N_buffer_info_t *n_buffer = layout->get_N_buffer();
+      analysis::double_buffer_info_t *double_buffer = layout->get_double_buffer();
+
       // offset
       Value *offset = nullptr;
-      if(double_buffer && v == double_buffer->phi)
-        offset = shared_off_[layout];
       // base pointer
       Value *ptr = shared_ptr_[layout];
-      if(double_buffer && v == double_buffer->latch)
-        ptr = shared_next_ptr_[layout];
-      else if(double_buffer && v == double_buffer->first)
-        ptr = shared_pre_ptr_[layout];
+
+      if (n_buffer) {
+        // ptr = base (shared_ptr_[layout]) + smem_idx * size
+        // read_smem_idx
+        if (v == n_buffer->phi) {
+          ptr = shared_ptr_[layout];
+        }
+        // write_smem_idx
+        if (std::find(n_buffer->firsts.begin(), n_buffer->firsts.end(), v) != n_buffer->firsts.end()) {
+          int write_smem_idx = /*stage_idx*/n_buffer->firsts_idx.at(v);
+          int elements = write_smem_idx * layout->get_per_stage_elements();
+          ptr = gep(shared_pre_ptr_[layout], i32(elements));
+        } else if (v == n_buffer->latch) {
+          Value* write_smem_idx = write_smem_idx_[layout];
+          Value* elements = mul(write_smem_idx, i32(layout->get_per_stage_elements()));
+          ptr = gep(shared_pre_ptr_[layout], elements);
+        }
+      } else if (double_buffer) {
+        if(v == double_buffer->phi)
+          offset = shared_off_[layout];
+        if(v == double_buffer->latch)
+          ptr = shared_next_ptr_[layout];
+        else if(v == double_buffer->first)
+          ptr = shared_pre_ptr_[layout];
+      } // else do nothing
+      // what visit_dot & vist_cts & ... see
       shmems_[v] = ptr;
+      // now only latches have offset (PHINode), only used by finalize_share_layout()
       shoffs_[v] = offset;
     }
   }
@@ -2350,8 +2373,36 @@ void generator::visit_layout_scanline(analysis::scanline_layout* layout) {
 void generator::visit_layout_shared(analysis::shared_layout* layout) {
   Type* ty = cvt(layout->get_type());
   PointerType *ptr_ty = ty->getPointerTo(shmem_->getType()->getPointerAddressSpace());
-  // double-buffered
-  if(layout->get_double_buffer()) {
+  if (layout->get_N_buffer()) {
+    // create pointers
+    shared_pre_ptr_[layout] = gep(shmem_, i32(alloc_->offset(layout)));
+    // TODO: check ptr_ty
+    shared_pre_ptr_[layout] = bit_cast(shared_pre_ptr_[layout], ptr_ty);
+
+    BasicBlock *current = builder_->GetInsertBlock();
+
+    auto info = *layout->get_N_buffer();
+    ir::phi_node *phi = info.phi;
+    BasicBlock *parent = bbs_.at(phi->get_parent());
+    if(parent->empty())
+      builder_->SetInsertPoint(parent);
+    else if (const Instruction *first_non_phi = &*parent->getFirstNonPHI()) {
+      builder_->SetInsertPoint(&*parent->getFirstNonPHI());
+    } else 
+      builder_->SetInsertPoint(parent);
+
+    // create smem_idx
+    read_smem_idx_[layout] = phi(i32_ty, 2);
+    write_smem_idx_[layout] = phi(i32_ty, 2);
+
+    // create pointers
+    // ptr of the current iteration
+    shared_ptr_[layout] = phi(ptr_ty, 2);
+    // ptr of the next iteration
+    shared_next_ptr_[layout] = phi(ptr_ty, 2);
+
+    builder_->SetInsertPoint(current);
+  } else if(layout->get_double_buffer()) {
     BasicBlock *current = builder_->GetInsertBlock();
     auto info = *layout->get_double_buffer();
     ir::phi_node *phi = info.phi;
@@ -2367,8 +2418,7 @@ void generator::visit_layout_shared(analysis::shared_layout* layout) {
     shared_off_[layout] = phi(i32_ty, 2);
     shared_next_ptr_[layout] = gep(shared_ptr_[layout], shared_off_[layout], "next_ptr");
     builder_->SetInsertPoint(current);
-  }
-  else{
+  } else{
     size_t offset = alloc_->offset(layout);
     shared_ptr_[layout] = gep(shmem_, i32(offset));
     shared_ptr_[layout] = bit_cast(shared_ptr_[layout], ptr_ty);
@@ -2452,7 +2502,67 @@ void generator::init_idx(ir::value *v) {
 }
 
 void generator::finalize_shared_layout(analysis::shared_layout *shared) {
-  if(shared->get_double_buffer()) {
+  if (auto n_buffer = shared->get_N_buffer()) {
+    // if (*_smem_idx == #stages-1) {
+    //   *_smem_idx = 0;
+    // } else *_smem_idx++;
+    auto finalize_smem_idx = [&](auto &smem_idx, int init_stage) {
+      // insert point
+      Value *idx = smem_idx[shared];
+      builder_->SetInsertPoint(bbs_.at(n_buffer->phi->get_parent())->getTerminator());
+      Value *cond = icmp_eq(idx, i32(shared->get_num_stages()-1));
+      PHINode *_ret = phi(i32_ty, 2);      
+      Instruction *then_term = nullptr;
+      Instruction *else_term = nullptr;
+      Instruction *dummy = builder_->CreateRet(nullptr);
+      llvm::SplitBlockAndInsertIfThenElse(cond, _ret, &then_term, &else_term, nullptr);
+      dummy->removeFromParent();
+      builder_->SetInsertPoint(then_term);
+      Value *zero_smem_idx = i32(0);
+      builder_->SetInsertPoint(else_term);
+      Value *inc_smem_idx = add(idx, i32(1));
+      builder_->SetInsertPoint(_ret->getParent());
+      _ret->addIncoming(zero_smem_idx, then_term->getParent());
+      _ret->addIncoming(inc_smem_idx, else_term->getParent());
+      // update ir::bb -> llvm::bb mapping
+      bbs_.at(n_buffer->phi->get_parent()) = builder_->GetInsertBlock();
+      // idx = init_stage;
+      // loop: ...
+      if (auto idx_phi = llvm::dyn_cast<PHINode>(smem_idx[shared])) {
+        idx_phi->addIncoming(i32(init_stage), bbs_.at(n_buffer->phi->get_incoming_block(0)));
+        idx_phi->addIncoming(_ret, bbs_.at(n_buffer->phi->get_incoming_block(1)));
+      } else
+        throw std::runtime_error("Should be PHINode");
+    };
+
+    // read_smem_idx is used by next_ptr to compute the next iteration value, so init value is 2
+    finalize_smem_idx(read_smem_idx_, 2);
+    finalize_smem_idx(write_smem_idx_, shared->get_num_stages()-1);
+
+    // finalize pointers
+    ir::phi_node *pn = n_buffer->phi;
+    BasicBlock *header = bbs_.at(pn->get_incoming_block(0));
+    BasicBlock *loop = bbs_.at(pn->get_incoming_block(1));
+    // %curr_ptr = phi %shared_pre_ptr, %next_ptr
+    // %next_ptr = phi %shared_pre_ptr[+1], (gep(%pre_ptr, read_smem_idx*per_stage_size))
+    if (auto curr_ptr = dyn_cast<PHINode>(shared_ptr_[shared])) {
+      curr_ptr->addIncoming(shared_pre_ptr_[shared], header);
+      curr_ptr->addIncoming(shared_next_ptr_[shared], loop);
+    } else 
+      throw std::runtime_error("Should be PHINode");
+
+    BasicBlock *current = builder_->GetInsertBlock();
+    builder_->SetInsertPoint(header->getTerminator());
+    Value *next_ptr_header = gep(shared_pre_ptr_[shared], i32(shared->get_per_stage_elements()));
+    builder_->SetInsertPoint(current->getTerminator());
+
+    assert(isa<PHINode>(shared_next_ptr_[shared]));
+    static_cast<PHINode*>(shared_next_ptr_[shared])->addIncoming(next_ptr_header, header);
+
+    Value *lds_offset = mul(read_smem_idx_[shared], i32(shared->get_per_stage_elements()));
+    Value *next_ptr = gep(shared_pre_ptr_[shared], lds_offset);
+    static_cast<PHINode*>(shared_next_ptr_[shared])->addIncoming(next_ptr, loop);
+  } else if(shared->get_double_buffer()) {
     auto info = *shared->get_double_buffer();
     ir::phi_node *phi = info.phi;
     PHINode *ptr = (PHINode*)shmems_[phi];

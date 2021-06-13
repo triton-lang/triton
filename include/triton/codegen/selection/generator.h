@@ -223,6 +223,10 @@ private:
   std::map<ir::value*, Value*> shoffs_;
   std::map<ir::value*, std::vector<indices_t>> idxs_;
   std::map<ir::value*, std::map<indices_t, Value*>> vals_;
+  /// idx for multi-stage pipeline
+  std::map<analysis::data_layout*, Value*> read_smem_idx_;
+  std::map<analysis::data_layout*, Value*> write_smem_idx_;
+  
   /// triton bb -> llvm bb
   std::map<ir::value*, BasicBlock *> bbs_;
   std::map<ir::value*, std::vector<int>> ords_;
