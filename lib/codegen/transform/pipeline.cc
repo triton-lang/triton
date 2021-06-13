@@ -256,7 +256,21 @@ void pipeline::run(ir::module &mod) {
     }
   }
 
-
+  // try to reorder prefetched value from a0, a1, a2, ..., b0, b1, b2, ...  to
+  // a0, b0, a1, b1, ...
+  if (!preheader_loads.empty()) {
+    ir::basic_block* header = preheader_loads.begin()->first->get_incoming_block(0);
+    builder.set_insert_point(header->get_inst_list().back());
+    for (int i=1; i<num_stages-1; ++i) {
+      for (auto iter = preheader_loads.begin(); iter != preheader_loads.end(); ++iter) {
+        ir::instruction* original_load = static_cast<ir::instruction*>(iter->second.at(i));
+        ir::instruction* moved_load = original_load->clone();
+        builder.insert(moved_load);
+        original_load->replace_all_uses_with(moved_load);
+      }
+    }
+  }
+  
   // try to move dot_inst after loads
   // for better overlap of io and compute
   struct move_config_t{

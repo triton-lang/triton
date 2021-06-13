@@ -1362,9 +1362,6 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   unsigned num_rep_0 = shapes[0] / layout->spt(0);
   unsigned num_rep_1 = shapes[1] / layout->spt(1);
 
-  std::cout << "num_rep_0: " << num_rep_0 << "\n";
-  std::cout << "num_rep_1: " << num_rep_1 << "\n";
-
   // create mma & unpack result
   auto call_mma = [&](unsigned m, unsigned n, unsigned K) {
       unsigned cols_per_thread = num_rep_0 * 2;
