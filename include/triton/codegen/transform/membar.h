@@ -26,6 +26,7 @@ class allocation;
 class liveness;
 class layouts;
 class cts;
+class shared_layout;
 
 }
 
@@ -40,6 +41,7 @@ private:
 private:
   bool intersect(const val_set_t &X, const val_set_t &Y);
   int group_of(triton::ir::value *i, std::vector<triton::ir::value *> &async_write);
+  bool intersect_with(analysis::shared_layout* a_layout, analysis::shared_layout* b_layout);
   val_set_t intersect_with(const val_set_t& as, const val_set_t& bs);
   void transfer(ir::basic_block *block, val_vec_t &async_write, val_set_t &sync_write, val_set_t &sync_read,
                 std::set<triton::ir::value *> &safe_war, bool &inserted, ir::builder &builder);
