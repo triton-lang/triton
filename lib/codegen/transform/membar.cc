@@ -101,7 +101,7 @@ void membar::transfer(ir::basic_block *block,
                                 layouts_->get(i)->to_shared()->get_double_buffer();
     // WAR barrier is not required when data is double-buffered
     // TODO: how about other patterns, like WWAR?
-    if(!intersect_with(read, sync_write).empty() || 
+    if(!intersect_with(read, sync_write).empty() ||
        (!intersect_with({i}, sync_read).empty() && !is_i_double_buffered) ||
        // force WAR barrier on A100
        (!intersect_with({i}, sync_read).empty() && tgt_->as_nvidia()->sm() >= 80)){
