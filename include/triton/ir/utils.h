@@ -17,6 +17,7 @@ class value;
 
 class cfg {
 public:
+  static std::vector<basic_block *> post_order(function* fn);
   static std::vector<basic_block *> reverse_post_order(function* fn);
 };
 

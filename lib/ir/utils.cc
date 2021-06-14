@@ -8,25 +8,39 @@
 namespace triton{
 namespace ir{
 
-std::vector<basic_block*> cfg::reverse_post_order(function* fn) {
+std::vector<basic_block*> cfg::post_order(function* fn) {
   std::stack<basic_block*> stack;
   std::set<basic_block*> visited;
   std::vector<basic_block*> result;
   // initialize stack
   for(ir::basic_block* block: fn->blocks())
-    if(block->get_predecessors().empty())
+    if(block->get_predecessors().empty()){
       stack.push(block);
+      visited.insert(block);
+    }
   // DFS
   while(!stack.empty()) {
     basic_block* current = stack.top();
-    stack.pop();
-    result.push_back(current);
-    visited.insert(current);
+    bool tail = true;
     for(basic_block* succ: current->get_successors())
-      if(visited.find(succ) == visited.end())
+      if(visited.find(succ) == visited.end()){
         stack.push(succ);
+        visited.insert(succ);
+        tail = false;
+        break;
+      }
+    if(tail){
+      stack.pop();
+      result.push_back(current);
+    }
   }
-  return std::move(result);
+  return result;
+}
+
+std::vector<basic_block*> cfg::reverse_post_order(function* fn) {
+  auto result = post_order(fn);
+  std::reverse(result.begin(), result.end());
+  return result;
 }
 
 void for_each_instruction(module &mod, const std::function<void (instruction *)> &do_work) {

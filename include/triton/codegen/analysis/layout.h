@@ -217,7 +217,8 @@ public:
   data_layout* get(size_t id)                                 { return layouts_.at(id); }
   data_layout* get(ir::value *v)                              { return get(layout_of(v));}
   std::map<size_t, data_layout*> &get_all()                   { return layouts_; }
-  size_t tmp(ir::instruction* i)                              { return tmp_.at((ir::value*)i);}
+  bool has_tmp(ir::value* i)                                  { return tmp_.find(i) != tmp_.end(); }
+  int tmp(ir::value* i)                                       { return tmp_.at(i);}
 
   // execution
   void run(ir::module &mod);
