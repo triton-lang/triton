@@ -28,11 +28,24 @@ int membar::group_of(ir::value* v, std::vector<ir::value*> &async_write) {
     return *std::max_element(groups.begin(), groups.end());
   }
   else{
+    if(layouts_->has_tmp(v))
+      return async_write.size() - 1;
     auto it = std::find(async_write.begin(), async_write.end(), v);
     return std::distance(async_write.begin(), it);
   }
 }
 
+inline bool membar::intersect_with(analysis::shared_layout* a_layout, analysis::shared_layout* b_layout) {
+  if(!a_layout || !b_layout)
+    return false;
+  int a_start = alloc_->offset(a_layout);
+  int a_end = a_start + a_layout->get_size();
+  int b_start = alloc_->offset(b_layout);
+  int b_end = b_start + b_layout->get_size();
+  if(a_start < b_end || b_start < a_end)
+    return true;
+  return false;
+}
 
 membar::val_set_t membar::intersect_with(const val_set_t& as, const val_set_t& bs) {
   val_set_t ret;
@@ -40,19 +53,16 @@ membar::val_set_t membar::intersect_with(const val_set_t& as, const val_set_t& b
     if(!a->get_type()->is_block_ty())
       continue;
     analysis::shared_layout* a_layout = layouts_->get(a)->to_shared();
-    if(!a_layout)
-      continue;
-    int a_start = alloc_->offset(a_layout);
-    int a_end = a_start + a_layout->get_size();
+    analysis::shared_layout* a_tmp = layouts_->has_tmp(a) ? layouts_->get(layouts_->tmp(a))->to_shared() : nullptr;
     for(ir::value* b: bs){
       if(!b->get_type()->is_block_ty())
         continue;
       analysis::shared_layout* b_layout = layouts_->get(b)->to_shared();
-      if(!b_layout)
-        continue;
-      int b_start = alloc_->offset(b_layout);
-      int b_end = b_start + b_layout->get_size();
-      if(a_start < b_end || b_start < a_end)
+      analysis::shared_layout* b_tmp = layouts_->has_tmp(b) ? layouts_->get(layouts_->tmp(b))->to_shared() : nullptr;
+      if(intersect_with(a_layout, b_layout) ||
+         intersect_with(a_layout, b_tmp) ||
+         intersect_with(a_tmp, b_layout) ||
+         intersect_with(a_tmp, b_tmp))
         ret.insert(b);
     }
   }
@@ -81,6 +91,8 @@ void membar::transfer(ir::basic_block *block,
     std::set<ir::value*> read;
     std::copy_if(i->op_begin(), i->op_end(), std::inserter(read, read.begin()),
                  [&](ir::value* i){ return i->get_type()->is_block_ty() && layouts_->get(i)->to_shared();});
+    if(layouts_->has_tmp(i))
+      read.insert(i);
     // RAW (async)
     val_set_t tmp;
     std::copy(async_write.begin(), async_write.end(), std::inserter(tmp, tmp.begin()));
