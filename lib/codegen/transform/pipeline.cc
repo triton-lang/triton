@@ -160,9 +160,12 @@ void pipeline::run(ir::module &mod) {
       std::vector<ir::value*> first_ptrs(num_stages-1);
       std::vector<ir::value*> first_loads(num_stages-1);
       std::vector<ir::value*> first_masks(num_stages-1);
+      std::vector<ir::value*> loop_conds(num_stages-1);
 
       std::map<ir::phi_node*, ir::value*> prev_phi_vals;
       // initialize prev_phi_vals
+      // note: we assume that ptr & other values only depend on ptr & iv (phis)
+      // TODO: can we just add all phis here?
       prev_phi_vals[ptr] = ptr->get_value_for_block(header);
       for (ir::phi_node* iv : induction_vars)
         prev_phi_vals[iv] = iv->get_value_for_block(header);
@@ -170,16 +173,33 @@ void pipeline::run(ir::module &mod) {
 
       builder.set_insert_point(header->get_inst_list().back());
       first_ptrs[0] = ptr->get_value_for_block(header);
-      first_masks[0] = builder.create_splat(header_cond, ty->get_block_shapes());
-      ir::value* false_value = builder.create_splat(ir::undef_value::get(ty->get_scalar_ty()), ty->get_block_shapes());
+      loop_conds[0] = header_cond;
+      first_masks[0] = builder.create_splat(loop_conds[0], ty->get_block_shapes());
+      ir::value* false_value = nullptr;
+      if (auto* masked_load = dynamic_cast<ir::masked_load_inst*>(load)) {
+        ir::value* remat_mask =rematerialize_vals(builder, masked_load->get_mask_operand(), prev_phi_vals) ;
+        ir::value* remat_false_value = 
+            rematerialize_vals(builder, masked_load->get_false_value_operand(), prev_phi_vals);
+        first_masks[0] = builder.create_and(first_masks[0], remat_mask);
+        false_value = remat_false_value;
+      } else
+        false_value = builder.create_splat(ir::undef_value::get(ty->get_scalar_ty()), ty->get_block_shapes());
       first_loads[0] = builder.create_masked_load(first_ptrs[0], first_masks[0], false_value);
 
       for (int stage = 1; stage < num_stages-1; ++stage) {
-        first_ptrs[stage] = rematerialize_vals(builder, ptr->get_value_for_block(block), prev_phi_vals);
-        first_masks[stage] = builder.create_splat(
-            rematerialize_vals(builder, block_cond, prev_phi_vals), ty->get_block_shapes());
-        first_loads[stage] = builder.create_masked_load(first_ptrs[stage], first_masks[stage], false_value);
+        // mask is the loop condition of the previous iteration
+        loop_conds[stage] = rematerialize_vals(builder, block_cond, prev_phi_vals);
         update_prev_phi_vals(builder, prev_phi_vals);
+        first_ptrs[stage] = rematerialize_vals(builder, ptr, prev_phi_vals);
+        first_masks[stage] = builder.create_splat(loop_conds[stage], ty->get_block_shapes());
+        if (auto* masked_load = dynamic_cast<ir::masked_load_inst*>(load)) {
+          ir::value* remat_mask = rematerialize_vals(builder, masked_load->get_mask_operand(), prev_phi_vals);
+          ir::value* remat_false_value = 
+              rematerialize_vals(builder, masked_load->get_false_value_operand(), prev_phi_vals);
+          first_masks[stage] = builder.create_and(first_masks[stage], remat_mask);
+          false_value = remat_false_value;
+        }
+        first_loads[stage] = builder.create_masked_load(first_ptrs[stage], first_masks[stage], false_value);
       }
 
       // create new phis for induction variables
@@ -199,6 +219,14 @@ void pipeline::run(ir::module &mod) {
       ir::value* next_ptr = ptr->get_value_for_block(block);
       ir::value* next_mask = builder.create_splat(
           rematerialize_vals(builder, block_cond, load_ivs), ty->get_block_shapes());
+      if (auto* masked_load = dynamic_cast<ir::masked_load_inst*>(load)) {
+        ir::value* remat_mask = rematerialize_vals(builder, masked_load->get_mask_operand(), next_load_ivs);
+        // TODO: false may depends on some other phi nodes
+        ir::value* remat_false_value = 
+            rematerialize_vals(builder, masked_load->get_false_value_operand(), next_load_ivs);
+        next_mask = builder.create_and(next_mask, remat_mask);
+        false_value = remat_false_value;
+      }
       ir::value* next_load = builder.create_masked_load(next_ptr, next_mask, false_value);
 
 
@@ -270,7 +298,7 @@ void pipeline::run(ir::module &mod) {
       }
     }
   }
-  
+
   // try to move dot_inst after loads
   // for better overlap of io and compute
   struct move_config_t{
