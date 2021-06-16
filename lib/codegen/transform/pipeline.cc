@@ -136,7 +136,7 @@ void pipeline::run(ir::module &mod) {
   // do the pipelining
   std::vector<ir::phi_node*> new_loads;
   ir::builder &builder = mod.get_builder();
-  const int num_stages = 2;
+  const int num_stages = num_stages_;
   std::map<ir::phi_node*, std::vector<ir::value*>> preheader_loads; // Used to reorder loads
   for(auto info: to_pipeline){
     ir::load_inst* load = info.first;
@@ -148,8 +148,7 @@ void pipeline::run(ir::module &mod) {
     assert(block_br);
     assert(header_br);
     ir::type* ty = load->get_type();
-        // multi-stage pipe
-    // collect ptr offset
+    // multi-stage pipe
     if (has_copy_async_ && num_stages > 2) {
       ir::value* header_cond = header_br->get_cond();
       ir::value* block_cond = block_br->get_cond();
