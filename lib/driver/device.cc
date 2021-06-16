@@ -98,6 +98,7 @@ int cu_device::compute_capability() const {
     return *interpreted_as_;
   size_t major = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>();
   size_t minor = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR>();
+  // return 80;
   return major*10 + minor;
 }
 

@@ -4,6 +4,7 @@
 #include "triton/codegen/analysis/layout.h"
 #include "triton/codegen/analysis/allocation.h"
 #include "triton/codegen/transform/membar.h"
+#include "triton/codegen/transform/prefetch.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
@@ -64,6 +65,26 @@ membar::val_set_t membar::intersect_with(const val_set_t& as, const val_set_t& b
   return ret;
 }
 
+bool membar::check_safe_war(ir::instruction* i) {
+  bool is_i_shared_block = i->get_type()->is_block_ty() &&
+                          layouts_->get(i)->to_shared();
+  bool is_i_double_buffered = is_i_shared_block &&
+                              layouts_->get(i)->to_shared()->get_double_buffer();
+  bool is_i_n_buffered = is_i_shared_block && 
+                          layouts_->get(i)->to_shared()->get_N_buffer();
+  
+  if (is_i_double_buffered) {
+    // with async copy & prefetch_s disabled, WARs are not safe
+    if (dynamic_cast<ir::masked_load_async_inst*>(i) && !prefetch_->is_prefetched(i))
+      return false;
+    else
+      return true;
+  }
+  if (is_i_n_buffered)
+    return true;
+  return false;
+}
+
 void membar::transfer(ir::basic_block *block,
                       val_vec_t& async_write,
                       val_set_t& sync_write,
@@ -103,16 +124,10 @@ void membar::transfer(ir::basic_block *block,
       }
     }
     // RAW, WAR
-    bool is_i_shared_block = i->get_type()->is_block_ty() &&
-                             layouts_->get(i)->to_shared();
-    bool is_i_double_buffered = is_i_shared_block &&
-                                layouts_->get(i)->to_shared()->get_double_buffer();
-    bool is_i_n_buffered = is_i_shared_block && 
-                           layouts_->get(i)->to_shared()->get_N_buffer();
+    bool is_safe_war = check_safe_war(i);
     // WAR barrier is not required when data is double-buffered
-    // TODO: how about other patterns, like WWAR?
     if(!intersect_with(read, sync_write).empty() || 
-       (!intersect_with({i}, sync_read).empty() && !is_i_double_buffered && !is_i_n_buffered)) {
+       (!intersect_with({i}, sync_read).empty() && !is_safe_war)) {
       builder.set_insert_point(i);
       barrier = (ir::barrier_inst*)builder.create_barrier();
       inserted = true;

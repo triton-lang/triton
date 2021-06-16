@@ -45,20 +45,21 @@ void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps,
   codegen::analysis::liveness liveness(&layouts);
   codegen::analysis::swizzle swizzle(&layouts, target.get());
   codegen::analysis::allocation allocation(&liveness);
-  codegen::transform::membar barriers(&liveness, &layouts, &allocation, target.get());
   codegen::transform::dce dce;
   codegen::transform::peephole peephole(target.get(), &layouts);
 //  codegen::transform::reassociate reassociate;
   codegen::transform::coalesce coalesce(&align, &layouts);
   codegen::transform::prefetch prefetch_s(target.get());
+  codegen::transform::membar barriers(&liveness, &layouts, &allocation, &prefetch_s, target.get());
   codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target.get(), num_warps);
   // run passes
   dce.run(ir);
   peephole.run(ir);
   dce.run(ir);
+  // ir::print(ir, std::cout);
   pipeline.run(ir);
   dce.run(ir);
-  //ir::print(ir, std::cout);
+  // ir::print(ir, std::cout);
   disassociate.run(ir);
   dce.run(ir);
   align.run(ir);
