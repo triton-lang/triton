@@ -51,8 +51,8 @@ private:
 
 public:
   membar(analysis::liveness *liveness, analysis::layouts *layouts, analysis::allocation *alloc, 
-         transform::prefetch *prefetch_, target* tgt):
-    liveness_(liveness), layouts_(layouts), alloc_(alloc), tgt_(tgt) {}
+         transform::prefetch *prefetch, target* tgt):
+    liveness_(liveness), layouts_(layouts), alloc_(alloc), prefetch_(prefetch), tgt_(tgt) {}
   void run(ir::module &mod);
 
 private:
