@@ -2373,7 +2373,6 @@ void generator::visit_layout_shared(analysis::shared_layout* layout) {
   if (layout->get_N_buffer()) {
     // create pointers
     shared_pre_ptr_[layout] = gep(shmem_, i32(alloc_->offset(layout)));
-    // TODO: check ptr_ty
     shared_pre_ptr_[layout] = bit_cast(shared_pre_ptr_[layout], ptr_ty);
 
     BasicBlock *current = builder_->GetInsertBlock();

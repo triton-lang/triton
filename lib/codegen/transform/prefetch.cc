@@ -66,8 +66,20 @@ void prefetch::run(ir::module &mod) {
 
     prefetched_vals_.insert(a->get_incoming_value(0));
     prefetched_vals_.insert(b->get_incoming_value(0));
-    prefetched_vals_.insert(a->get_incoming_value(1));
-    prefetched_vals_.insert(b->get_incoming_value(1));
+    // nested phis
+    ir::value* next_a = a->get_incoming_value(1);
+    while (auto* next_a_phi = dynamic_cast<ir::phi_node*>(next_a)) {
+      prefetched_vals_.insert(next_a_phi->get_incoming_value(0));
+      next_a = next_a_phi->get_incoming_value(1);
+    }
+    prefetched_vals_.insert(next_a);
+
+    ir::value* next_b = b->get_incoming_value(1);
+    while (auto* next_b_phi = dynamic_cast<ir::phi_node*>(next_b)) {
+      prefetched_vals_.insert(next_b_phi->get_incoming_value(0));
+      next_b = next_b_phi->get_incoming_value(1);
+    }
+    prefetched_vals_.insert(next_b);
   }
 
   // move loads to the beginning of the loop

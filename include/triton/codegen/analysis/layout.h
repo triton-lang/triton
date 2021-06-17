@@ -153,7 +153,7 @@ class shared_layout: public data_layout {
 private:
   static bool is_loop_latch(ir::phi_node *phi, ir::instruction *terminator);
   static void extract_double_bufferable(ir::value *v, std::shared_ptr<double_buffer_info_t>& res);
-  static void extract_N_bufferable(ir::value *v, std::shared_ptr<N_buffer_info_t>& res);
+  static void extract_N_bufferable(ir::value *v, std::shared_ptr<N_buffer_info_t>& res, int &prev_stages);
 
 public:
   shared_layout(data_layout *arg,

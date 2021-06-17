@@ -137,7 +137,7 @@ void pipeline::run(ir::module &mod) {
   std::vector<ir::phi_node*> new_loads;
   ir::builder &builder = mod.get_builder();
   const int num_stages = num_stages_;
-  std::map<ir::phi_node*, std::vector<ir::value*>> preheader_loads; // Used to reorder loads
+  std::vector<std::pair<ir::phi_node*, std::vector<ir::value*>>> preheader_loads; // Used to reorder loads
   for(auto info: to_pipeline){
     ir::load_inst* load = info.first;
     ir::phi_node* ptr   = info.second;
@@ -246,7 +246,7 @@ void pipeline::run(ir::module &mod) {
       new_loads.push_back(new_load_phis.back());
 
       // record first_loads to reorder them
-      preheader_loads[new_load_phis.front()] = first_loads;
+      preheader_loads.push_back({new_load_phis.front(), first_loads});
     } else {
       // pre-fetch first iteration
       builder.set_insert_point(header->get_inst_list().back());

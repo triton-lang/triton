@@ -282,6 +282,8 @@ static bool is_smem(ir::value* v) {
     return false;
 }
 
+/// param:
+///    value_1: next_value
 static bool is_multistage_pipe_phi(ir::phi_node* phi, ir::basic_block* bb0, ir::basic_block* bb1, 
     std::vector<ir::value*>& values_0, ir::value*& value_1) {
   ir::value* next = phi;
@@ -294,11 +296,9 @@ static bool is_multistage_pipe_phi(ir::phi_node* phi, ir::basic_block* bb0, ir::
 
     if (is_smem(c0)) {
       assert(cbb0 == bb0);
-      // ir::print(*static_cast<ir::instruction*>(c0), std::cout);
       values_0.push_back(c0);
       if (auto phi1 = dynamic_cast<ir::phi_node*>(c1)) {
         next = phi1;
-        // ir::print(*static_cast<ir::instruction*>(c1), std::cout);
         continue;
       } else {
         if (is_smem(c1)) {
@@ -314,7 +314,7 @@ static bool is_multistage_pipe_phi(ir::phi_node* phi, ir::basic_block* bb0, ir::
   }
 }
 
-void shared_layout::extract_N_bufferable(ir::value *v, std::shared_ptr<N_buffer_info_t> &res) {
+void shared_layout::extract_N_bufferable(ir::value *v, std::shared_ptr<N_buffer_info_t> &res, int &prev_stages) {
   auto* phi = dynamic_cast<ir::phi_node*>(v);
   // if the phi node is nested
   if (!phi)
@@ -341,7 +341,12 @@ void shared_layout::extract_N_bufferable(ir::value *v, std::shared_ptr<N_buffer_
       order[static_cast<ir::value*>(instr)] = idx++;
   }
   assert(order.size() == values_0.size() && "order size incorrect");
-  res.reset(new N_buffer_info_t{values_0, value_1, phi, order});
+  
+  int curr_stages = values_0.size() + 1;
+  if (curr_stages > prev_stages) {
+    res.reset(new N_buffer_info_t{values_0, value_1, phi, order});
+    prev_stages = curr_stages;
+  }
 }
 
 
@@ -356,10 +361,9 @@ shared_layout::shared_layout(data_layout *arg,
   arg_layout_ = arg;
 
   // N-stage buffering
-  for (ir::value *v : values) {
-    extract_N_bufferable(v, N_buffer_);
-    if (N_buffer_) break;
-  }
+  int prev_stages = 0;
+  for (ir::value *v : values)
+    extract_N_bufferable(v, N_buffer_, prev_stages);
 
   // double-buffering
   if (!N_buffer_)

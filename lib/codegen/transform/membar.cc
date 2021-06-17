@@ -83,15 +83,13 @@ bool membar::check_safe_war(ir::instruction* i) {
   bool is_i_n_buffered = is_i_shared_block && 
                           layouts_->get(i)->to_shared()->get_N_buffer();
   
-  if (is_i_double_buffered) {
+  if (is_i_double_buffered || is_i_n_buffered) {
     // with async copy & prefetch_s disabled, WARs are not safe
     if (dynamic_cast<ir::masked_load_async_inst*>(i) && !prefetch_->is_prefetched(i))
       return false;
     else
       return true;
   }
-  if (is_i_n_buffered)
-    return true;
   return false;
 }
 
