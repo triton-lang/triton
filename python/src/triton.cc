@@ -33,7 +33,10 @@ void init_triton_driver(py::module &&m) {
         CUdevice handle;
         drv::dispatch::cuDeviceGet(&handle, dev_id);
         return new drv::cu_device(handle, take_ownership);
-      }));
+      }))
+      .def("max_shared_memory", [](drv::cu_device *self) {
+        return self->max_shared_memory();
+      });
   // host device
   py::class_<drv::host_device, drv::device>(m, "host_device")
       .def(py::init<>());

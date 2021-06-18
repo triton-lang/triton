@@ -537,6 +537,8 @@ class Kernel:
         tt_device = _triton.driver.cu_device(device.index, False)
         # Compile to machine code
         mod, ker, shared_mem, ir_asm = _triton.code_gen.add_passes_to_emit_bin(generator.module, tt_device, num_warps, num_stages)
+        if shared_mem > tt_device.max_shared_memory():
+            raise  RuntimeError("shared memory exceed")
         return Binary(mod, ker, num_warps, num_stages, shared_mem, ir_asm)
 
     def __call__(self, *wargs, grid, num_warps=4, num_stages=2, **meta):

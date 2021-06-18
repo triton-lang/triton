@@ -37,11 +37,11 @@ import torch
                 (128, 256, 16, 1, 8, 2, None, None, None, AT, BT, DTYPE),
                 (256, 128, 16, 1, 8, 2, None, None, None, AT, BT, DTYPE),
                 (256, 128, 32, 1, 8, 2, None, None, None, AT, BT, DTYPE),
-                # # split-k
+                # split-k
                 (64, 64, 16, 2, 4, 2, None, None, None, AT, BT, DTYPE),
                 (64, 64, 16, 4, 4, 2, None, None, None, AT, BT, DTYPE),
                 (64, 64, 16, 8, 4, 2, None, None, None, AT, BT, DTYPE),
-                # # variable input
+                # variable input
                 (128, 128, 32, 1, 4, 2, 1024, 1024, 1024, AT, BT, DTYPE),
                 (128, 128, 32, 1, 4, 2, 384, 128, 640, AT, BT, DTYPE),
                 (128, 128, 32, 1, 4, 2, 107, 233, 256, AT, BT, DTYPE),
@@ -85,5 +85,13 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     b = b.t() if BT else b
     # run test
     th_c = torch.matmul(a, b)
-    tt_c = triton.ops.matmul(a, b)
+    try:
+        tt_c = triton.ops.matmul(a, b)
+    except RuntimeError as e:
+        if str(e) == "shared memory exceed":
+            pytest.skip("shared memory exceed")
+        else:
+            assert False
+    except:
+        assert False    
     assert triton.testing.allclose(th_c, tt_c)
