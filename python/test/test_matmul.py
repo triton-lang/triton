@@ -5,56 +5,69 @@ import torch
 
 
 @pytest.mark.parametrize(
-    "BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, M, N, K, AT, BT, DTYPE",
+    "BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, DTYPE",
     itertools.chain(
         *[
             [
                 # 1 warp
-                (16, 16, 16, 1, 1, None, None, None, AT, BT, DTYPE),
-                (32, 16, 16, 1, 1, None, None, None, AT, BT, DTYPE),
-                (16, 32, 16, 1, 1, None, None, None, AT, BT, DTYPE),
-                (16, 16, 32, 1, 1, None, None, None, AT, BT, DTYPE),
-                (32, 16, 32, 1, 1, None, None, None, AT, BT, DTYPE),
-                (16, 32, 32, 1, 1, None, None, None, AT, BT, DTYPE),
-                (16, 16, 64, 1, 1, None, None, None, AT, BT, DTYPE),
-                (64, 16, 64, 1, 1, None, None, None, AT, BT, DTYPE),
-                (16, 64, 64, 1, 1, None, None, None, AT, BT, DTYPE),
+                (16, 16, 16, 1, 1, 2, None, None, None, AT, BT, DTYPE),
+                (32, 16, 16, 1, 1, 2, None, None, None, AT, BT, DTYPE),
+                (16, 32, 16, 1, 1, 2, None, None, None, AT, BT, DTYPE),
+                (16, 16, 32, 1, 1, 2, None, None, None, AT, BT, DTYPE),
+                (32, 16, 32, 1, 1, 2, None, None, None, AT, BT, DTYPE),
+                (16, 32, 32, 1, 1, 2, None, None, None, AT, BT, DTYPE),
+                (16, 16, 64, 1, 1, 2, None, None, None, AT, BT, DTYPE),
+                (64, 16, 64, 1, 1, 2, None, None, None, AT, BT, DTYPE),
+                (16, 64, 64, 1, 1, 2, None, None, None, AT, BT, DTYPE),
                 # 2 warp
-                (64, 32, 64, 1, 2, None, None, None, AT, BT, DTYPE),
-                (32, 64, 64, 1, 2, None, None, None, AT, BT, DTYPE),
-                (64, 32, 16, 1, 2, None, None, None, AT, BT, DTYPE),
-                (32, 64, 16, 1, 2, None, None, None, AT, BT, DTYPE),
-                (128, 32, 32, 1, 2, None, None, None, AT, BT, DTYPE),
-                (32, 128, 32, 1, 2, None, None, None, AT, BT, DTYPE),
+                (64, 32, 64, 1, 2, 2, None, None, None, AT, BT, DTYPE),
+                (32, 64, 64, 1, 2, 2, None, None, None, AT, BT, DTYPE),
+                (64, 32, 16, 1, 2, 2, None, None, None, AT, BT, DTYPE),
+                (32, 64, 16, 1, 2, 2, None, None, None, AT, BT, DTYPE),
+                (128, 32, 32, 1, 2, 2, None, None, None, AT, BT, DTYPE),
+                (32, 128, 32, 1, 2, 2, None, None, None, AT, BT, DTYPE),
                 # 4 warp
-                (128, 64, 16, 1, 4, None, None, None, AT, BT, DTYPE),
-                (64, 128, 16, 1, 4, None, None, None, AT, BT, DTYPE),
-                (128, 32, 32, 1, 4, None, None, None, AT, BT, DTYPE),
-                (32, 128, 32, 1, 4, None, None, None, AT, BT, DTYPE),
-                (128, 32, 64, 1, 4, None, None, None, AT, BT, DTYPE),
-                (32, 128, 64, 1, 4, None, None, None, AT, BT, DTYPE),
+                (128, 64, 16, 1, 4, 2, None, None, None, AT, BT, DTYPE),
+                (64, 128, 16, 1, 4, 2, None, None, None, AT, BT, DTYPE),
+                (128, 32, 32, 1, 4, 2, None, None, None, AT, BT, DTYPE),
+                (32, 128, 32, 1, 4, 2, None, None, None, AT, BT, DTYPE),
+                (128, 32, 64, 1, 4, 2, None, None, None, AT, BT, DTYPE),
+                (32, 128, 64, 1, 4, 2, None, None, None, AT, BT, DTYPE),
                 # 8 warp
-                (128, 256, 16, 1, 8, None, None, None, AT, BT, DTYPE),
-                (256, 128, 16, 1, 8, None, None, None, AT, BT, DTYPE),
-                (256, 128, 32, 1, 8, None, None, None, AT, BT, DTYPE),
+                (128, 256, 16, 1, 8, 2, None, None, None, AT, BT, DTYPE),
+                (256, 128, 16, 1, 8, 2, None, None, None, AT, BT, DTYPE),
+                (256, 128, 32, 1, 8, 2, None, None, None, AT, BT, DTYPE),
                 # # split-k
-                (64, 64, 16, 2, 4, None, None, None, AT, BT, DTYPE),
-                (64, 64, 16, 4, 4, None, None, None, AT, BT, DTYPE),
-                (64, 64, 16, 8, 4, None, None, None, AT, BT, DTYPE),
+                (64, 64, 16, 2, 4, 2, None, None, None, AT, BT, DTYPE),
+                (64, 64, 16, 4, 4, 2, None, None, None, AT, BT, DTYPE),
+                (64, 64, 16, 8, 4, 2, None, None, None, AT, BT, DTYPE),
                 # # variable input
-                (128, 128, 32, 1, 4, 1024, 1024, 1024, AT, BT, DTYPE),
-                (128, 128, 32, 1, 4, 384, 128, 640, AT, BT, DTYPE),
-                (128, 128, 32, 1, 4, 107, 233, 256, AT, BT, DTYPE),
-                (128, 128, 32, 1, 4, 107, 233, 311, AT, BT, DTYPE),
+                (128, 128, 32, 1, 4, 2, 1024, 1024, 1024, AT, BT, DTYPE),
+                (128, 128, 32, 1, 4, 2, 384, 128, 640, AT, BT, DTYPE),
+                (128, 128, 32, 1, 4, 2, 107, 233, 256, AT, BT, DTYPE),
+                (128, 128, 32, 1, 4, 2, 107, 233, 311, AT, BT, DTYPE),
             ] for DTYPE in ["float16", "float32"] for AT in [False, True] for BT in [False, True]
+        ],
+        # n-stage
+        *[
+            [
+                (16, 16, 16, 1, 1, STAGES, 1024, 1024, 1024, AT, BT, DTYPE),
+                (64, 32, 64, 1, 2, STAGES, 1024, 1024, 1024, AT, BT, DTYPE),
+                (128, 64, 16, 1, 4, STAGES, 1024, 1024, 1024, AT, BT, DTYPE),
+                (256, 128, 32, 1, 8, STAGES, 1024, 1024, 1024, AT, BT, DTYPE),
+                (128, 128, 32, 1, 4, STAGES, 384, 128, 640, AT, BT, DTYPE),
+                # split-k
+                (64, 64, 16, 8, 4, STAGES, 1024, 1024, 1024, AT, BT, DTYPE),
+                (64, 64, 16, 8, 4, STAGES, 1024, 1024, 32, AT, BT, DTYPE),
+            ] for DTYPE in ["float16", "float32"] for AT in [False, True] for BT in [False, True] for STAGES in [2, 3, 4]
         ]
     ),
 )
-def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, M, N, K, AT, BT, DTYPE):
+def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, DTYPE):
     torch.manual_seed(0)
     # nuke kernel decorators -- will set meta-parameters manually
     META = {'BLOCK_M': BLOCK_M, 'BLOCK_N': BLOCK_N, 'BLOCK_K': BLOCK_K, 'SPLIT_K': SPLIT_K, 'GROUP_M': 8}
-    configs = [triton.Config(meta=META, num_warps=NWARP)]
+    configs = [triton.Config(meta=META, num_warps=NWARP, num_stages=NSTAGE)]
     kernel = triton.ops._matmul.kernel
     decorators = kernel.kernel_decorators
     kernel.kernel_decorators = []
