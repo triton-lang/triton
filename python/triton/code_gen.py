@@ -448,10 +448,11 @@ class CompilationError(Exception):
         self.message += '\n Error: ' + str(err)
         super().__init__(self.message)
 
-class SharedMemoryExceedError(Exception):
-    def __init__(self, required, limit):
-        self.message = f'Required shared memory ({required//1024}KB) '\
-                       f'exceed hardware limit ({limit//1024}KB)'
+class OutOfResources(Exception):
+    def __init__(self, required, limit, name):
+        self.message = f'out of resource: {name}'\
+                       f'Required: {required}'\
+                       f'Hardware limit: {limit}'
         super().__init__(self.message)
 
 
@@ -544,7 +545,7 @@ class Kernel:
         # Compile to machine code
         mod, ker, shared_mem, ir_asm = _triton.code_gen.add_passes_to_emit_bin(generator.module, tt_device, num_warps, num_stages)
         if shared_mem > tt_device.max_shared_memory():
-            raise  SharedMemoryExceedError(shared_mem, tt_device.max_shared_memory())
+            raise  OutOfResources(shared_mem, tt_device.max_shared_memory(), "shared memory")
         return Binary(mod, ker, num_warps, num_stages, shared_mem, ir_asm)
 
     def __call__(self, *wargs, grid, num_warps=4, num_stages=2, **meta):

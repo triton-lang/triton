@@ -85,8 +85,5 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     b = b.t() if BT else b
     # run test
     th_c = torch.matmul(a, b)
-    try:
-        tt_c = triton.ops.matmul(a, b)
-    except triton.code_gen.SharedMemoryExceedError as e:
-        pytest.skip("shared memory exceed")
+    tt_c = triton.testing.catch_oor(lambda : triton.ops.matmul(a, b), pytest)
     assert triton.testing.allclose(th_c, tt_c)
