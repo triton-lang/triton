@@ -26,7 +26,7 @@ namespace codegen {
 
 // TODO:
 // There should be a proper pass manager there!
-void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps,
+void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps, int num_stages,
                             driver::module *&mod, driver::kernel *&ker, size_t &shared_mem) {
   // generate llvm code
   llvm::LLVMContext ctx;
@@ -39,26 +39,27 @@ void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps,
   codegen::analysis::align align;
   codegen::analysis::axes axes;
   codegen::transform::cts cts(cts_use_async);
-  codegen::transform::pipeline pipeline(cts_use_async);
+  codegen::transform::pipeline pipeline(cts_use_async, num_stages);
   codegen::transform::disassociate disassociate;
   codegen::analysis::layouts layouts(&axes, &align, num_warps, target.get());
   codegen::analysis::liveness liveness(&layouts);
   codegen::analysis::swizzle swizzle(&layouts, target.get());
   codegen::analysis::allocation allocation(&liveness);
-  codegen::transform::membar barriers(&liveness, &layouts, &allocation, target.get());
   codegen::transform::dce dce;
   codegen::transform::peephole peephole(target.get(), &layouts);
 //  codegen::transform::reassociate reassociate;
   codegen::transform::coalesce coalesce(&align, &layouts);
   codegen::transform::prefetch prefetch_s(target.get());
+  codegen::transform::membar barriers(&liveness, &layouts, &allocation, &prefetch_s, target.get());
   codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target.get(), num_warps);
   // run passes
   dce.run(ir);
   peephole.run(ir);
   dce.run(ir);
+  // ir::print(ir, std::cout);
   pipeline.run(ir);
   dce.run(ir);
-  //ir::print(ir, std::cout);
+  // ir::print(ir, std::cout);
   disassociate.run(ir);
   dce.run(ir);
   align.run(ir);

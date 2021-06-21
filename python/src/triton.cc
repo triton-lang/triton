@@ -33,7 +33,10 @@ void init_triton_driver(py::module &&m) {
         CUdevice handle;
         drv::dispatch::cuDeviceGet(&handle, dev_id);
         return new drv::cu_device(handle, take_ownership);
-      }));
+      }))
+      .def("max_shared_memory", [](drv::cu_device *self) {
+        return self->max_shared_memory();
+      });
   // host device
   py::class_<drv::host_device, drv::device>(m, "host_device")
       .def(py::init<>());
@@ -75,11 +78,11 @@ void init_triton_driver(py::module &&m) {
 
 void init_triton_codegen(py::module &&m) {
   m.def(
-      "add_passes_to_emit_bin", [](ir::module &ir, drv::device *dev, int num_warps) {
+      "add_passes_to_emit_bin", [](ir::module &ir, drv::device *dev, int num_warps, int num_stages) {
         drv::module *mod;
         drv::kernel *ker;
         size_t shared_mem;
-        triton::codegen::add_passes_to_emit_bin(ir, dev, num_warps, mod, ker, shared_mem);
+        triton::codegen::add_passes_to_emit_bin(ir, dev, num_warps, num_stages, mod, ker, shared_mem);
         std::stringstream ss;
         ir::print(ir, ss);
         return std::make_tuple(mod, ker, shared_mem, ss.str());

@@ -21,7 +21,7 @@ namespace codegen{
 
 // TODO:
 // There should be a proper pass manager there!
-void add_passes_to_emit_bin(ir::module &ir, driver::device* dev, int num_warps,
+void add_passes_to_emit_bin(ir::module &ir, driver::device* dev, int num_warps, int num_stages,
                             driver::module*& mod, driver::kernel*& ker, size_t& shared_mem);
 
 

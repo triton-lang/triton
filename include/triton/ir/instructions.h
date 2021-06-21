@@ -832,6 +832,7 @@ public:
   static async_wait_inst* create(context &ctx, int N,
                                  const std::string &name = "", instruction *next = nullptr);
   int get_N() { return N_; }
+  void set_N(int n) { N_ = n; }
 
 private:
   int N_;
