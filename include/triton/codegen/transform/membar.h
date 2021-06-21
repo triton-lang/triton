@@ -32,6 +32,8 @@ class shared_layout;
 
 namespace transform{
 
+class prefetch;
+
 class membar {
 private:
   typedef std::pair<unsigned, unsigned> interval_t;
@@ -40,6 +42,7 @@ private:
 
 private:
   bool intersect(const val_set_t &X, const val_set_t &Y);
+  bool check_safe_war(ir::instruction* i);
   int group_of(triton::ir::value *i, std::vector<triton::ir::value *> &async_write);
   bool intersect_with(analysis::shared_layout* a_layout, analysis::shared_layout* b_layout);
   val_set_t intersect_with(const val_set_t& as, const val_set_t& bs);
@@ -47,14 +50,16 @@ private:
                 std::set<triton::ir::value *> &safe_war, bool &inserted, ir::builder &builder);
 
 public:
-  membar(analysis::liveness *liveness, analysis::layouts *layouts, analysis::allocation *alloc, target* tgt):
-    liveness_(liveness), layouts_(layouts), alloc_(alloc), tgt_(tgt) {}
+  membar(analysis::liveness *liveness, analysis::layouts *layouts, analysis::allocation *alloc, 
+         transform::prefetch *prefetch, target* tgt):
+    liveness_(liveness), layouts_(layouts), alloc_(alloc), prefetch_(prefetch), tgt_(tgt) {}
   void run(ir::module &mod);
 
 private:
   analysis::liveness *liveness_;
   analysis::layouts *layouts_;
   analysis::allocation *alloc_;
+  transform::prefetch *prefetch_;
 
   target* tgt_;
 };

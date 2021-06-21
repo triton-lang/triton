@@ -324,7 +324,7 @@ void cu_module::init_from_ptx(const std::string& ptx, driver::cu_device* device)
   }
   catch(exception::cuda::invalid_ptx const &){
 //#ifdef TRITON_LOG_PTX_ERROR
-    std::cout << ptx << std::endl;
+    // std::cout << ptx << std::endl;
     std::cerr << "It appears that Triton produced invalid PTX code:" << std::endl;
 //    exit(1);
 //#endif

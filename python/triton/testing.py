@@ -1,5 +1,6 @@
 import torch
 import os
+from .code_gen import OutOfResources
 
 try:
     import triton._C.libtriton.cutlass as _cutlass
@@ -7,6 +8,15 @@ try:
 except ImportError:
     _cutlass = None
     has_cutlass = False
+
+def catch_oor(kernel, pytest_handle=None):
+    try:
+        res = kernel()
+    except OutOfResources as e:
+        if pytest_handle:
+            pytest_handle.skip(str(e))
+        return None
+    return res
 
 
 def sparsify_tensor(x, mask, block):
