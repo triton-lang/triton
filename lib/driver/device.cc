@@ -108,7 +108,7 @@ size_t cu_device::max_threads_per_block() const {
 
 // maximum amount of shared memory per block
 size_t cu_device::max_shared_memory() const {
-  return cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK>();
+  return cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN>();
 }
 
 // warp size
