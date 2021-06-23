@@ -67,6 +67,7 @@ class CodeGenerator(ast.NodeVisitor):
             'float': float,
             'int': int,
             'print': print,
+            'isinstance': isinstance,
             'getattr': getattr,
         }
 
