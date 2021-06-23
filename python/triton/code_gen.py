@@ -555,6 +555,7 @@ class Kernel:
         if len(tensor_idxs) == 0:
             raise ValueError("No Tensor argument found.")
         device = wargs[tensor_idxs[0]].device
+        torch.cuda.set_device(device.index)
         # attributes
         args = [arg.data_ptr() if i in tensor_idxs else arg for i, arg in enumerate(wargs)]
         attributes = {i: Kernel.pow2_divisor(a) for i, a in enumerate(args) if isinstance(a, int)}
