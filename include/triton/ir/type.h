@@ -28,23 +28,21 @@ protected:
 public:
   enum id_t {
     // primitive types
-    VoidTyID = 0,    ///<  0: type with no size
-    FP8TyID,         ///<  1: 8-bit floating point type (3 bits mantissa)
-    HalfTyID,        ///<  3: 16-bit floating point type
-    FloatTyID,       ///<  4: 32-bit floating point type
-    DoubleTyID,      ///<  5: 64-bit floating point type
-    X86_FP80TyID,    ///<  6: 80-bit floating point type (X87)
-    FP128TyID,       ///<  7: 128-bit floating point type (112-bit mantissa)
-    PPC_FP128TyID,   ///<  8: 128-bit floating point type (two 64-bits, PowerPC)
-    LabelTyID,       ///<  9: Labels
-    MetadataTyID,    ///< 10: Metadata
-    TokenTyID,       ///< 11: Token
+    VoidTyID = 0,    ///< type with no size
+    FP8TyID,         ///< 8-bit floating point type (3 bits mantissa)
+    FP16TyID,        ///< 16-bit floating point type (10 bits mantissa)
+    BF16TyID,        ///< 16-bit floating point type (7 bits mantissa)
+    FP32TyID,        ///< 32-bit floating point type
+    FP64TyID,        ///< 64-bit floating point type
+    LabelTyID,       ///< Labels
+    MetadataTyID,    ///< Metadata
+    TokenTyID,       ///< Token
     // derived types
-    IntegerTyID,     ///< 12: Arbitrary bit width integers
-    FunctionTyID,    ///< 13: Functions
-    PointerTyID,     ///< 14: Pointers
-    StructTyID,      ///< 15: Struct
-    BlockTyID,       ///< 16: Block
+    IntegerTyID,     ///< Arbitrary bit width integers
+    FunctionTyID,    ///< Functions
+    PointerTyID,     ///< Pointers
+    StructTyID,      ///< Struct
+    BlockTyID,       ///< Block
   };
 
 public:
@@ -74,9 +72,9 @@ public:
   // primitive predicates
   bool is_void_ty() const               { return id_ == VoidTyID; }
   bool is_fp8_ty() const                { return id_ == FP8TyID; }
-  bool is_half_ty() const               { return id_ == HalfTyID; }
-  bool is_float_ty() const              { return id_ == FloatTyID; }
-  bool is_double_ty() const             { return id_ == DoubleTyID; }
+  bool is_fp16_ty() const               { return id_ == FP16TyID; }
+  bool is_fp32_ty() const              { return id_ == FP32TyID; }
+  bool is_fp64_ty() const             { return id_ == FP64TyID; }
   bool is_label_ty()  const             { return id_ == LabelTyID;}
   bool is_metadata_ty() const           { return id_ == MetadataTyID; }
   bool is_token_ty() const              { return id_ == TokenTyID; }
@@ -99,9 +97,9 @@ public:
   static type *get_label_ty(context &ctx);
   // half
   static type *get_fp8_ty(context &ctx);
-  static type *get_half_ty(context &ctx);
-  static type *get_float_ty(context &ctx);
-  static type *get_double_ty(context &ctx);
+  static type *get_fp16_ty(context &ctx);
+  static type *get_fp32_ty(context &ctx);
+  static type *get_fp64_ty(context &ctx);
   // integer types
   static integer_type *get_int1_ty(context &ctx);
   static integer_type *get_int8_ty(context &ctx);
@@ -128,12 +126,9 @@ public:
     switch(id_) {
       case VoidTyID: return "void";
       case FP8TyID: return "fp8";
-      case HalfTyID: return "f16";
-      case FloatTyID: return "f32";
-      case DoubleTyID: return "f64";
-      case X86_FP80TyID: return "f80";
-      case FP128TyID: return "f128";
-      case PPC_FP128TyID: return "ppcf128";
+      case FP16TyID: return "f16";
+      case FP32TyID: return "f32";
+      case FP64TyID: return "f64";
       case LabelTyID: return "label";
       case MetadataTyID: return "md";
       case TokenTyID: return "tok";

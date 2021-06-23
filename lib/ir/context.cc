@@ -14,9 +14,9 @@ context_impl::context_impl(context &ctx)
       label_ty(ctx, type::LabelTyID),
       // floating point
       fp8_ty(ctx, type::FP8TyID),
-      half_ty(ctx, type::HalfTyID),
-      float_ty(ctx, type::FloatTyID),
-      double_ty(ctx, type::DoubleTyID),
+      half_ty(ctx, type::FP16TyID),
+      float_ty(ctx, type::FP32TyID),
+      double_ty(ctx, type::FP64TyID),
       // integers
       int1_ty(ctx, 1),
       int8_ty(ctx, 8),

@@ -161,11 +161,9 @@ Type *generator::cvt(ir::type *ty) {
   switch(ty->get_type_id()){
     case ir::type::VoidTyID:      return Type::getVoidTy(*ctx_);
     case ir::type::FP8TyID:       return Type::getInt8Ty(*ctx_);
-    case ir::type::HalfTyID:      return Type::getHalfTy(*ctx_);
-    case ir::type::FloatTyID:     return Type::getFloatTy(*ctx_);
-    case ir::type::DoubleTyID:    return Type::getDoubleTy(*ctx_);
-    case ir::type::X86_FP80TyID:  return Type::getX86_FP80Ty(*ctx_);
-    case ir::type::PPC_FP128TyID: return Type::getPPC_FP128Ty(*ctx_);
+    case ir::type::FP16TyID:      return Type::getHalfTy(*ctx_);
+    case ir::type::FP32TyID:     return Type::getFloatTy(*ctx_);
+    case ir::type::FP64TyID:    return Type::getDoubleTy(*ctx_);
     case ir::type::LabelTyID:     return Type::getLabelTy(*ctx_);
     case ir::type::MetadataTyID:  return Type::getMetadataTy(*ctx_);
     case ir::type::TokenTyID:     return Type::getTokenTy(*ctx_);
@@ -476,9 +474,9 @@ void generator::visit_cast_inst(ir::cast_inst* x) {
     auto op_idxs = idxs_.at(op);
     // run the conversion
     auto cvt = [&](Value* a, Value* b, Value* c, Value* d){
-      if(op_sca_ty->is_float_ty() && ret_sca_ty->is_fp8_ty())
+      if(op_sca_ty->is_fp32_ty() && ret_sca_ty->is_fp8_ty())
         return fp32x4_to_fp8x4(a, b, c, d);
-      if(op_sca_ty->is_fp8_ty() && ret_sca_ty->is_half_ty())
+      if(op_sca_ty->is_fp8_ty() && ret_sca_ty->is_fp16_ty())
         return fp8x4_to_fp16x4(a, b, c, d);
       throw std::runtime_error("unsupported conversion");
     };
@@ -901,7 +899,7 @@ void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
     int ld = ords_.at(ptr)[0];
     unsigned alignment = alignment_->get(ptr, ld);
     vec = std::min<int>(layouts_->get(ptr)->to_scanline()->nts(ld), alignment);
-    vec = std::min(vec, val->get_type()->get_tile_element_ty()->is_half_ty() ? 2 : 1);
+    vec = std::min(vec, val->get_type()->get_tile_element_ty()->is_fp16_ty() ? 2 : 1);
   }
 
   for(int i = 0; i < idxs_.at(val).size(); i += vec){
