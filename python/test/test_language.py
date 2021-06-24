@@ -294,9 +294,10 @@ def test_atomic_rmw(op, dtype_x, mode, device='cuda'):
 # ---------------
 @pytest.mark.parametrize("dtype_x, dtype_z, bitcast", [
     (dtype_x, dtype_z, False) \
-                        for dtype_x in dtypes + ['bfloat16']\
-                        for dtype_z in dtypes + ['bfloat16']
+                        for dtype_x in dtypes\
+                        for dtype_z in dtypes
 ] + [
+    ('bfloat16', 'float32', False),
     ('float32', 'int32', True)
 ])
 def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):

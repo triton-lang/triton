@@ -693,7 +693,6 @@ void generator::visit_masked_load_inst(ir::masked_load_inst* x) {
  * \brief Code Generation for a (synchronous) `store`
  */
 void generator::visit_store_inst(ir::store_inst * x){
-  ir::masked_store_inst *mx = dynamic_cast<ir::masked_store_inst*>(x);
   // operands
   ir::value *ptr_op = x->get_pointer_operand();
   ir::value *val_op = x->get_value_operand();
@@ -713,8 +712,6 @@ void generator::visit_store_inst(ir::store_inst * x){
   // code generation
   for(size_t i = 0; i < idxs.size(); i += vec){
     indices_t idx = idxs[i];
-    // value
-    Value *val = vals_[val_op][idx];
     // pointers
     Value *ptr = vals_[ptr_op][idx];
     size_t dtsize = val_op->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
@@ -758,7 +755,9 @@ void generator::visit_store_inst(ir::store_inst * x){
     // create inline ASM signature
     // ---
     Type* val_arg_ty = IntegerType::get(*ctx_, width);
-    std::vector<Type*> arg_tys = {pred->getType(), ptr->getType(), vec_ty(val_arg_ty, n_words)};
+    std::vector<Type*> arg_tys = {pred->getType(), ptr->getType()};
+    for(int ii = 0; ii < n_words; ii++)
+      arg_tys.push_back(val_arg_ty);
     FunctionType *asm_ty = FunctionType::get(builder_->getVoidTy(), arg_tys, false);
     // ---
     // create inline ASM constraints
@@ -766,19 +765,23 @@ void generator::visit_store_inst(ir::store_inst * x){
     std::string asm_cstrt = "b,l";
     for(int ii = 0; ii < n_words; ii++){
       asm_cstrt += ",";
-      asm_cstrt += (width == 64) ? "=l" : ((width == 32) ? "=r" : "=c");
+      asm_cstrt += (width == 64) ? "l" : ((width == 32) ? "r" : "c");
     }
     // ---
     // finally call inline ASM
     // ---
     InlineAsm *_asm = InlineAsm::get(asm_ty, asm_oss.str(), asm_cstrt, true);
     std::vector<Value*> args = {pred, ptr};
-    Value* vals = UndefValue::get(vec_ty(ty, vec));
-    std::vector<Value*> tmps;
-    for(unsigned int ii = 0; ii < vec; ii++)
-      vals = builder_->CreateInsertElement(vals, vals_[val_op][idxs[i+ii]], ii);
-    vals = builder_->CreateBitCast(vals, arg_tys[2]);
-    call(_asm, {pred, ptr, vals});
+    for(unsigned int ii = 0; ii < n_words; ii++){
+      size_t n_subw = width / nbits;
+      Value* curr = UndefValue::get(vec_ty(ty, n_subw));
+      for(unsigned int jj = 0; jj < n_subw; jj++){
+        Value* new_elt = vals_[val_op][idxs[i + ii*n_subw + jj]];
+        curr = builder_->CreateInsertElement(curr, new_elt, jj);
+      }
+      args.push_back(bit_cast(curr, val_arg_ty));
+    }
+    call(_asm, args);
   }
 }
 void generator::visit_unmasked_store_inst(ir::unmasked_store_inst* x) {
