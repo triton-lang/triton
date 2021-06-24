@@ -296,7 +296,8 @@ def test_atomic_rmw(op, dtype_x, mode, device='cuda'):
     (dtype_x, dtype_z, False) \
                         for dtype_x in dtypes\
                         for dtype_z in dtypes
-] + [
+] + [ 
+    ('float32', 'bfloat16', False),
     ('bfloat16', 'float32', False),
     ('float32', 'int32', True)
 ])
