@@ -73,6 +73,7 @@ public:
   bool is_void_ty() const               { return id_ == VoidTyID; }
   bool is_fp8_ty() const                { return id_ == FP8TyID; }
   bool is_fp16_ty() const               { return id_ == FP16TyID; }
+  bool is_bf16_ty() const               { return id_ == BF16TyID; }
   bool is_fp32_ty() const              { return id_ == FP32TyID; }
   bool is_fp64_ty() const             { return id_ == FP64TyID; }
   bool is_label_ty()  const             { return id_ == LabelTyID;}
@@ -98,6 +99,7 @@ public:
   // half
   static type *get_fp8_ty(context &ctx);
   static type *get_fp16_ty(context &ctx);
+  static type *get_bf16_ty(context &ctx);
   static type *get_fp32_ty(context &ctx);
   static type *get_fp64_ty(context &ctx);
   // integer types

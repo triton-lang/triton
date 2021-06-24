@@ -162,6 +162,7 @@ Type *generator::cvt(ir::type *ty) {
     case ir::type::VoidTyID:      return Type::getVoidTy(*ctx_);
     case ir::type::FP8TyID:       return Type::getInt8Ty(*ctx_);
     case ir::type::FP16TyID:      return Type::getHalfTy(*ctx_);
+  case ir::type::BF16TyID:      return Type::getBFloatTy(*ctx_);
     case ir::type::FP32TyID:     return Type::getFloatTy(*ctx_);
     case ir::type::FP64TyID:    return Type::getDoubleTy(*ctx_);
     case ir::type::LabelTyID:     return Type::getLabelTy(*ctx_);
@@ -673,7 +674,6 @@ void generator::visit_load_inst(ir::load_inst* x){
           curr = extract_val(_ret, {ii});
       else
           curr = _ret;
-//      std::cout << n_words << " " << vec << " " << width << " " << dtsize << " " << nbits << std::endl;
       rets.push_back(bit_cast(curr, vec_ty(ty, width / (dtsize*8))));
     }
     int tmp = (width / (dtsize * 8));
@@ -697,6 +697,9 @@ void generator::visit_store_inst(ir::store_inst * x){
   // operands
   ir::value *ptr_op = x->get_pointer_operand();
   ir::value *val_op = x->get_value_operand();
+  ir::value *msk_op = nullptr;
+  if(auto* msk_st = dynamic_cast<ir::masked_store_inst*>(x))
+    msk_op = msk_st->get_mask_operand();
   // vector size
   size_t vec = 1;
   if(val_op->get_type()->is_block_ty()){
@@ -707,28 +710,75 @@ void generator::visit_store_inst(ir::store_inst * x){
   }
   auto idxs    = idxs_.at(val_op);
   Type *ty = cvt(val_op->get_type()->get_scalar_ty());
+  // code generation
   for(size_t i = 0; i < idxs.size(); i += vec){
-    auto idx = idxs[i];
-    // pointer
-    Value *ptr = vals_[ptr_op][idx];
-    ptr = bit_cast(ptr, vec_ty(ty, vec)->getPointerTo(1));
+    indices_t idx = idxs[i];
     // value
-    Value* val = UndefValue::get(vec_ty(ty, vec));
-    for(size_t ii = 0; ii < vec; ii++)
-      val = insert_elt(val, vals_.at(val_op)[idxs[i + ii]], ii);
-    if(mx){
-      Value *msk = vals_[mx->get_mask_operand()][idx];
-      Instruction *no_op = intrinsic(Intrinsic::donothing, {}, {});
-      builder_->SetInsertPoint(no_op->getParent());
-      Instruction* dummy = builder_->CreateRet(nullptr);
-      Instruction *term = llvm::SplitBlockAndInsertIfThen(msk, no_op, false);
-      dummy->removeFromParent();
-      builder_->SetInsertPoint(term);
-      store(val, ptr);
-      builder_->SetInsertPoint(no_op);
+    Value *val = vals_[val_op][idx];
+    // pointers
+    Value *ptr = vals_[ptr_op][idx];
+    size_t dtsize = val_op->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
+    GetElementPtrInst *in_gep = dyn_cast<GetElementPtrInst>(ptr);
+    size_t in_off;
+    if(in_gep){
+        ConstantInt* cst = dyn_cast<ConstantInt>(in_gep->idx_begin());
+        in_off = cst ? cst->getValue().getSExtValue()*dtsize : 0;
+        ptr = cst ? in_gep->getPointerOperand() : in_gep;
     }
-    else
-      store(val, ptr);
+    else{
+        in_off = 0;
+    }
+    // mask
+    Value *pred = msk_op ? vals_[msk_op][idx] : builder_->getTrue();
+    size_t nbits = dtsize*8;
+    // pack sub-words (< 32/64bits) into words
+    // each load has width min(nbits*vec, 32/64)
+    // and there are (nbits * vec)/width of them
+    int max_word_width = std::max<int>(32, nbits);
+    int tot_width = nbits*vec;
+    int width = std::min(tot_width, max_word_width);
+    int n_words = std::max(1, tot_width / width);
+    // -----
+    // create inline asm string
+    // -----
+    std::ostringstream asm_oss;
+    asm_oss << "@$0"; // predicate
+    asm_oss << " st.global";
+    if(n_words > 1)
+      asm_oss << ".v" << n_words; // vector width
+    asm_oss << ".b" << width; // word size
+    asm_oss << " [ $1 + " << in_off << "]";
+    asm_oss << " , {";
+    for(int i = 0; i < n_words; i++){ // return values
+      if(i > 0) asm_oss << ",";
+      asm_oss << "$" << 2 + i;
+    }
+    asm_oss << "};";
+    // ----
+    // create inline ASM signature
+    // ---
+    Type* val_arg_ty = IntegerType::get(*ctx_, width);
+    std::vector<Type*> arg_tys = {pred->getType(), ptr->getType(), vec_ty(val_arg_ty, n_words)};
+    FunctionType *asm_ty = FunctionType::get(builder_->getVoidTy(), arg_tys, false);
+    // ---
+    // create inline ASM constraints
+    // ---
+    std::string asm_cstrt = "b,l";
+    for(int ii = 0; ii < n_words; ii++){
+      asm_cstrt += ",";
+      asm_cstrt += (width == 64) ? "=l" : ((width == 32) ? "=r" : "=c");
+    }
+    // ---
+    // finally call inline ASM
+    // ---
+    InlineAsm *_asm = InlineAsm::get(asm_ty, asm_oss.str(), asm_cstrt, true);
+    std::vector<Value*> args = {pred, ptr};
+    Value* vals = UndefValue::get(vec_ty(ty, vec));
+    std::vector<Value*> tmps;
+    for(unsigned int ii = 0; ii < vec; ii++)
+      vals = builder_->CreateInsertElement(vals, vals_[val_op][idxs[i+ii]], ii);
+    vals = builder_->CreateBitCast(vals, arg_tys[2]);
+    call(_asm, {pred, ptr, vals});
   }
 }
 void generator::visit_unmasked_store_inst(ir::unmasked_store_inst* x) {

@@ -23,6 +23,7 @@ unsigned type::get_primitive_size_in_bits() const {
   switch (id_) {
     case FP8TyID: return 8;
     case FP16TyID: return 16;
+    case BF16TyID: return 16;
     case FP32TyID: return 32;
     case FP64TyID: return 64;
     case IntegerTyID: return ((integer_type*)(this))->get_bitwidth();
@@ -42,6 +43,7 @@ unsigned type::get_fp_mantissa_width() const {
   assert(is_floating_point_ty() && "Not a floating point type!");
   if (id == FP8TyID) return 3;
   if (id == FP16TyID) return 10;
+  if (id == BF16TyID) return 7;
   if (id == FP32TyID) return 23;
   if (id == FP64TyID) return 53;
   throw std::runtime_error("unreachable");
@@ -102,7 +104,7 @@ bool type::is_integer_ty(unsigned width) const
 
 
 bool type::is_floating_point_ty() const
-{ return is_fp8_ty() || is_fp16_ty() || is_fp32_ty() || is_fp64_ty(); }
+{ return is_fp8_ty() || is_fp16_ty() || is_bf16_ty() || is_fp32_ty() || is_fp64_ty(); }
 
 bool type::is_sized() const {
   // primitive types are sized
@@ -121,9 +123,10 @@ type *type::get_void_ty(context &ctx) { return &ctx.p_impl->void_ty; }
 type *type::get_label_ty(context &ctx) { return &ctx.p_impl->label_ty; }
 // floating point
 type *type::get_fp8_ty(context &ctx) { return &ctx.p_impl->fp8_ty; }
-type *type::get_fp16_ty(context &ctx) { return &ctx.p_impl->half_ty; }
-type *type::get_fp32_ty(context &ctx) { return &ctx.p_impl->float_ty; }
-type *type::get_fp64_ty(context &ctx) { return &ctx.p_impl->double_ty; }
+type *type::get_fp16_ty(context &ctx) { return &ctx.p_impl->fp16_ty; }
+type *type::get_bf16_ty(context &ctx) { return &ctx.p_impl->bf16_ty; }
+type *type::get_fp32_ty(context &ctx) { return &ctx.p_impl->fp32_ty; }
+type *type::get_fp64_ty(context &ctx) { return &ctx.p_impl->fp64_ty; }
 // integer types
 integer_type *type::get_int1_ty(context &ctx) { return &ctx.p_impl->int1_ty; }
 integer_type *type::get_int8_ty(context &ctx) { return &ctx.p_impl->int8_ty; }

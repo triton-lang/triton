@@ -86,6 +86,7 @@ int32 = dtype(ir.type.get_int32)
 int64 = dtype(ir.type.get_int64)
 float8 = dtype(ir.type.get_fp8)
 float16 = dtype(ir.type.get_fp16)
+bfloat16 = dtype(ir.type.get_bf16)
 float32 = dtype(ir.type.get_fp32)
 float64 = dtype(ir.type.get_fp64)
 
@@ -103,6 +104,7 @@ class block:
         if ir_type.is_int64(): return int64
         if ir_type.is_fp8(): return float8
         if ir_type.is_fp16(): return float16
+        if ir_type.is_bf16(): return bfloat16
         if ir_type.is_fp32(): return float32
         if ir_type.is_fp64(): return float64
         # pointer type
