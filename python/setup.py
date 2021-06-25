@@ -49,7 +49,7 @@ class CMakeBuild(build_ext):
             self.build_extension(ext)
 
     def build_extension(self, ext):
-        #self.debug = True
+        # self.debug = True
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
         build_suffix = 'debug' if self.debug else 'release'

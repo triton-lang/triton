@@ -37,16 +37,16 @@ ir::type *computation_type(ir::type* a_ty, ir::type* b_ty){
   context &ctx = a_ty->get_context();
   // 1) if one operand is double, the other is implicitly
   //    converted to double
-  if(a_ty->is_double_ty() || b_ty->is_double_ty())
-    return type::get_double_ty(ctx);
+  if(a_ty->is_fp64_ty() || b_ty->is_fp64_ty())
+    return type::get_fp64_ty(ctx);
   // 2) if one operand is float, the other is implicitly
   //    converted to float
-  if(a_ty->is_float_ty() || b_ty->is_float_ty())
-    return type::get_float_ty(ctx);
+  if(a_ty->is_fp32_ty() || b_ty->is_fp32_ty())
+    return type::get_fp32_ty(ctx);
   // 3 ) if one operand is half, the other is implicitly
   //     converted to half
-  if(a_ty->is_half_ty() || b_ty->is_half_ty())
-    return type::get_half_ty(ctx);
+  if(a_ty->is_fp16_ty() || b_ty->is_fp16_ty())
+    return type::get_fp16_ty(ctx);
   if(!a_ty->is_integer_ty() || !b_ty->is_integer_ty())
     throw_unreachable("augment_types");
   // 4 ) both operands are integer and undergo
