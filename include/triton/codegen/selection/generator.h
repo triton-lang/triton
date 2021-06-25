@@ -134,6 +134,9 @@ public:
   std::tuple<Value*, Value*, Value*, Value*> fp32x4_to_fp8x4(Value *in0, Value *in1, Value *in2, Value *in3);
   std::tuple<Value*, Value*, Value*, Value*> fp8x4_to_fp16x4(Value *in0, Value *in1, Value *in2, Value *in3);
   std::tuple<Value*, Value*, Value*, Value*> fp16x4_to_fp8x4(Value *in0, Value *in1, Value *in2, Value *in3);
+  Value* bf16_to_fp32(Value *in0);
+  Value* fp32_to_bf16(Value *in0);
+
   void visit_cast_inst(ir::cast_inst*);
   void visit_return_inst(ir::return_inst*);
   void visit_cond_branch_inst(ir::cond_branch_inst*);

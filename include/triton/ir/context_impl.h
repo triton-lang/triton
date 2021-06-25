@@ -25,7 +25,7 @@ public:
   // non-numeric types
   type void_ty, label_ty;
   // floating point types
-  type fp8_ty, half_ty, float_ty, double_ty;
+  type fp8_ty, fp16_ty, bf16_ty, fp32_ty, fp64_ty;
   // integer types
   integer_type int1_ty, int8_ty, int16_ty, int32_ty, int64_ty, int128_ty;
   // Pointer types

@@ -30,8 +30,8 @@ inline bool is_hmma_c(ir::value *v){
     ir::type *a_ty = a->get_type();
     ir::value *b = x->get_operand(1);
     ir::type *b_ty = b->get_type();
-    result = a_ty->get_scalar_ty()->is_half_ty() &&
-             b_ty->get_scalar_ty()->is_half_ty();
+    result = a_ty->get_scalar_ty()->is_fp16_ty() &&
+             b_ty->get_scalar_ty()->is_fp16_ty();
   }
   return result;
 }
@@ -312,6 +312,7 @@ static bool is_multistage_pipe_phi(ir::phi_node* phi, ir::basic_block* bb0, ir::
     } else
       return false;
   }
+  return false;
 }
 
 void shared_layout::extract_N_bufferable(ir::value *v, std::shared_ptr<N_buffer_info_t> &res, int &prev_stages) {

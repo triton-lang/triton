@@ -15,12 +15,12 @@ constant *constant::get_null_value(type *ty) {
   switch (ty->get_scalar_ty()->get_type_id()) {
   case type::IntegerTyID:
     return constant_int::get(ty, 0);
-  case type::HalfTyID:
-    return constant_fp::get(type::get_half_ty(ctx), 0);
-  case type::FloatTyID:
-    return constant_fp::get(type::get_float_ty(ctx), 0);
-  case type::DoubleTyID:
-    return constant_fp::get(type::get_double_ty(ctx), 0);
+  case type::FP16TyID:
+    return constant_fp::get(type::get_fp16_ty(ctx), 0);
+  case type::FP32TyID:
+    return constant_fp::get(type::get_fp32_ty(ctx), 0);
+  case type::FP64TyID:
+    return constant_fp::get(type::get_fp64_ty(ctx), 0);
   default:
     throw std::runtime_error("Cannot create a null constant of that type!");
   }
