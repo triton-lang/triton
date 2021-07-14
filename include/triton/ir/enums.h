@@ -142,6 +142,8 @@ enum value_id_t: unsigned {
   INST_ATOMIC_RMW,
   // math
   INST_EXP,
+  INST_COS,
+  INST_SIN,
   INST_LOG,
   // array arithmetic
   INST_TRANS,

@@ -546,6 +546,28 @@ def log(x, builder=None):
 
     return frontend.log(x, builder)
 
+@builtin
+def cos(x, builder=None):
+    """
+    Computes the element-wise cosine of :code:`x`
+
+    :param x: the input values
+    :type x: Block
+    """
+
+    return frontend.cos(x, builder)
+
+@builtin
+def sin(x, builder=None):
+    """
+    Computes the element-wise sine of :code:`x`
+
+    :param x: the input values
+    :type x: Block
+    """
+
+    return frontend.sin(x, builder)
+
 
 @builtin
 def sqrt(x, builder=None):
