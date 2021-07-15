@@ -337,6 +337,14 @@ value *builder::create_exp(value *arg){
   return insert(exp_inst::create(arg));
 }
 
+value *builder::create_cos(value *arg){
+  return insert(cos_inst::create(arg));
+}
+
+value *builder::create_sin(value *arg){
+  return insert(sin_inst::create(arg));
+}
+
 value *builder::create_log(value *arg){
   return insert(log_inst::create(arg));
 }
