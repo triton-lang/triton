@@ -145,6 +145,8 @@ public:
   value *create_atomic_exch(value *ptr, value *val);
   value *create_atomic_rmw(ir::atomic_rmw_op_t op, value *ptr, value *val, value *msk);
   value *create_exp(value* arg);
+  value *create_cos(value* arg);
+  value *create_sin(value* arg);
   value *create_log(value* arg);
   value *create_dot(value *A, value *B, value *C);
   value *create_trans(value *A, const std::vector<int> &perm = {});

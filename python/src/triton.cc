@@ -156,6 +156,8 @@ void init_triton_frontend(py::module &&m) {
   // math
   m.def("exp", &ir::dispatch::exp, ret::reference);
   m.def("log", &ir::dispatch::log, ret::reference);
+  m.def("cos", &ir::dispatch::cos, ret::reference);
+  m.def("sin", &ir::dispatch::sin, ret::reference);
   m.def("sqrt", &ir::dispatch::sqrt, ret::reference);
   // internal (debugging only)
   m.def("multiple_of", &ir::dispatch::multiple_of, ret::reference);

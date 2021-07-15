@@ -657,6 +657,28 @@ public:
   static instruction* create(value *val, const std::string &name = "", instruction *next = nullptr);
 };
 
+class cos_inst: public builtin_inst {
+private:
+  cos_inst(value *val, const std::string &name = "", instruction *next = nullptr);
+  std::string repr_impl() const { return "cos"; }
+  _TRITON_DEFINE_CLONE(cos_inst)
+  _TRITON_DEFINE_ACCEPT(cos_inst)
+
+public:
+  static instruction* create(value *val, const std::string &name = "", instruction *next = nullptr);
+};
+
+class sin_inst: public builtin_inst {
+private:
+  sin_inst(value *val, const std::string &name = "", instruction *next = nullptr);
+  std::string repr_impl() const { return "sin"; }
+  _TRITON_DEFINE_CLONE(sin_inst)
+  _TRITON_DEFINE_ACCEPT(sin_inst)
+
+public:
+  static instruction* create(value *val, const std::string &name = "", instruction *next = nullptr);
+};
+
 class log_inst: public builtin_inst {
 private:
   log_inst(value *val, const std::string &name = "", instruction *next = nullptr);
