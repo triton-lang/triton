@@ -781,6 +781,27 @@ instruction* exp_inst::create(value *val, const std::string& name, instruction *
   return new exp_inst(val, name, next);
 }
 
+// cos
+cos_inst::cos_inst(value *val, const std::string &name, instruction *next)
+  : builtin_inst(val->get_type(), INST_COS, 1, name, next) {
+  set_operand(0, val);
+}
+
+instruction* cos_inst::create(value *val, const std::string& name, instruction *next) {
+  return new cos_inst(val, name, next);
+}
+
+// sin
+sin_inst::sin_inst(value *val, const std::string &name, instruction *next)
+  : builtin_inst(val->get_type(), INST_SIN, 1, name, next) {
+  set_operand(0, val);
+}
+
+instruction* sin_inst::create(value *val, const std::string& name, instruction *next) {
+  return new sin_inst(val, name, next);
+}
+
+
 // log
 
 log_inst::log_inst(value *val, const std::string &name, instruction *next)

@@ -688,6 +688,14 @@ ir::value *dispatch::log(ir::value *x, ir::builder *builder) {
   return builder->create_log(x);
 }
 
+ir::value *dispatch::cos(ir::value *x, ir::builder *builder) {
+  return builder->create_cos(x);
+}
+
+ir::value *dispatch::sin(ir::value *x, ir::builder *builder) {
+  return builder->create_sin(x);
+}
+
 ir::value *dispatch::sqrt(ir::value *x, ir::builder *builder) {
   return builder->create_sqrt(x);
 }

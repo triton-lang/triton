@@ -845,6 +845,30 @@ void generator::visit_exp_inst(ir::exp_inst* x){
 }
 
 /**
+ * \brief Code Generation for `cos`
+ */
+void generator::visit_cos_inst(ir::cos_inst* x){
+  std::vector<llvm::Type*> tys = {f32_ty};
+  FunctionType *fn_ty = FunctionType::get(f32_ty, tys, false);
+  InlineAsm *cos = InlineAsm::get(fn_ty, "cos.approx.f32 $0, $0;", "=f,0", false);
+  for(auto idx: idxs_.at(x)){
+    vals_[x][idx] = call(cos, std::vector<llvm::Value*>{vals_[x->get_operand(0)][idx]});
+  }
+ }
+
+/**
+ * \brief Code Generation for `sin`
+ */
+void generator::visit_sin_inst(ir::sin_inst* x){
+  std::vector<llvm::Type*> tys = {f32_ty};
+  FunctionType *fn_ty = FunctionType::get(f32_ty, tys, false);
+  InlineAsm *sin = InlineAsm::get(fn_ty, "sin.approx.f32 $0, $0;", "=f,0", false);
+  for(auto idx: idxs_.at(x)){
+    vals_[x][idx] = call(sin, std::vector<llvm::Value*>{vals_[x->get_operand(0)][idx]});
+  }
+ }
+
+/**
  * \brief Code Generation for `log`
  */
 void generator::visit_log_inst(ir::log_inst* x){
