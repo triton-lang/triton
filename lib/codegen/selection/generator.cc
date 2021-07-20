@@ -197,9 +197,9 @@ generator::generator(analysis::axes *a_axes,
                     analysis::allocation *alloc,
                     analysis::swizzle *swizzle,
                     target *tgt,
-                    unsigned num_warps)
+                    unsigned num_warps, bool force_nc_cache)
   : a_axes_(a_axes), layouts_(layouts), alignment_(alignment), alloc_(alloc), swizzle_(swizzle),
-    tgt_(tgt), num_warps_(num_warps), add(&builder_), mul(&builder_), gep(&builder_) {
+    tgt_(tgt), num_warps_(num_warps), force_nc_cache_(force_nc_cache), add(&builder_), mul(&builder_), gep(&builder_) {
 
 }
 
@@ -626,7 +626,10 @@ void generator::visit_load_inst(ir::load_inst* x){
     // -----
     std::ostringstream asm_oss;
     asm_oss << "@$" << n_words; // predicate
-    asm_oss << " ld.global.cg";
+    if(force_nc_cache_)
+      asm_oss << " ld.global.nc";
+    else
+      asm_oss << " ld.global.cg";
     if(n_words > 1)
       asm_oss << ".v" << n_words; // vector width
     asm_oss << ".b" << width; // word size

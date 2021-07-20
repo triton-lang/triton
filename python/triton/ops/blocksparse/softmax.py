@@ -183,7 +183,7 @@ class _softmax(torch.autograd.Function):
         }
         grid = lambda opt: [spdims[0] * spdims[1] * block, M]
         _forward[grid](x, scale, lut, rpe, key_padding_mask, attn_mask, maxlut, x.stride(0),\
-                       stride_zrpe, stride_hrpe, stride_srpe, stride_zkpm, stride_zattnm, **meta)
+                       stride_zrpe, stride_hrpe, stride_srpe, stride_zkpm, stride_zattnm, force_nc_cache=True, **meta)
 
         # save to context
         ctx.mark_dirty(x)
@@ -207,7 +207,7 @@ class _softmax(torch.autograd.Function):
         # run kernel
         M = x.shape[0]
         grid = lambda opt: [ctx.spdims[0] * ctx.spdims[1] * ctx.block, M]
-        _backward[grid](x, ctx.scale, dx, lut, ctx.maxlut, x.stride(0), dx.stride(0), BLOCK=ctx.block)
+        _backward[grid](x, ctx.scale, dx, lut, ctx.maxlut, x.stride(0), dx.stride(0), force_nc_cache=True, BLOCK=ctx.block)
         return dx, None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
 

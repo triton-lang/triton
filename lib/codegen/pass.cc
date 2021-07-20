@@ -26,7 +26,7 @@ namespace codegen {
 
 // TODO:
 // There should be a proper pass manager there!
-void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps, int num_stages,
+void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps, int num_stages, bool force_nc_cache,
                             driver::module *&mod, driver::kernel *&ker, size_t &shared_mem) {
   // generate llvm code
   llvm::LLVMContext ctx;
@@ -51,7 +51,7 @@ void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps, 
   codegen::transform::coalesce coalesce(&align, &layouts);
   codegen::transform::prefetch prefetch_s(target.get());
   codegen::transform::membar barriers(&liveness, &layouts, &allocation, &prefetch_s, target.get());
-  codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target.get(), num_warps);
+  codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target.get(), num_warps, force_nc_cache);
   // run passes
   dce.run(ir);
   peephole.run(ir);
