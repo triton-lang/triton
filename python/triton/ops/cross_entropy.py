@@ -74,6 +74,8 @@ class _cross_entropy(torch.autograd.Function):
     @classmethod
     def forward(cls, ctx, logits, indices):
         # make sure we can use triton
+        assert logits.is_contiguous(), "logits must be contiguous"
+        assert indices.is_contiguous(), "indices must be contiguous"
         assert (indices.dtype == torch.int64), "Indices are expected to be of type long."
         # make kernel
         device, dtype = logits.device, logits.dtype
