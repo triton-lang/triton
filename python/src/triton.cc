@@ -78,11 +78,11 @@ void init_triton_driver(py::module &&m) {
 
 void init_triton_codegen(py::module &&m) {
   m.def(
-      "add_passes_to_emit_bin", [](ir::module &ir, drv::device *dev, int num_warps, int num_stages) {
+      "add_passes_to_emit_bin", [](ir::module &ir, drv::device *dev, int num_warps, int num_stages, bool force_nc_cache) {
         drv::module *mod;
         drv::kernel *ker;
         size_t shared_mem;
-        triton::codegen::add_passes_to_emit_bin(ir, dev, num_warps, num_stages, mod, ker, shared_mem);
+        triton::codegen::add_passes_to_emit_bin(ir, dev, num_warps, num_stages, force_nc_cache, mod, ker, shared_mem);
         std::stringstream ss;
         ir::print(ir, ss);
         return std::make_tuple(mod, ker, shared_mem, ss.str());
