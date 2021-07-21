@@ -4,6 +4,9 @@ pr: none
 jobs:
 - job: linux
 
+  workspace:
+    clean: all
+
   timeoutInMinutes: 180
 
   pool: default
@@ -34,3 +37,4 @@ jobs:
     - bash: |
         python3 -m twine upload wheelhouse/* --skip-existing -u $(PYPI_USERNAME) -p $(PYPI_PASSWORD) 
       displayName: Upload wheels to PyPI
+    
