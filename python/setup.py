@@ -7,12 +7,13 @@ import subprocess
 import distutils
 import glob
 import tempfile
+import shutil
 from distutils.version import LooseVersion
 from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext
 from setuptools.command.test import test as TestCommand
 import distutils.spawn
-import requests
+import urllib.request
 import tarfile
 
 def get_llvm():
@@ -21,17 +22,21 @@ def get_llvm():
     supported = ['llvm-config{v}'.format(v=v) for v in versions]
     paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
     paths = [p for p in paths if p is not None]
-    if paths:
-      return paths[0]
+    #if paths:
+    #  return paths[0]
     # download if nothing is installed
     name = 'clang+llvm-11.0.0-x86_64-linux-gnu-ubuntu-20.04'
     dir = '/tmp'
     llvm_config = '{dir}/{name}/bin/llvm-config'.format(dir=dir, name=name)
     if not os.path.exists(llvm_config):
         print('downloading and extracting LLVM...')
+        try:
+            shutil.rmtree(os.path.join(dir, name))
+        except:
+            pass
         url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-11.0.0/{name}.tar.xz".format(name=name)
-        response = requests.get(url, stream=True)
-        file = tarfile.open(fileobj=response.raw, mode="r|xz")
+        ftpstream = urllib.request.urlopen(url)
+        file = tarfile.open(fileobj=ftpstream, mode="r|xz")
         file.extractall(path=dir)
     return llvm_config
 
