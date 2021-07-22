@@ -64,7 +64,8 @@ endif()
 # Triton
 file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
 add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
-target_link_libraries(triton ${LLVM_LDFLAGS} ${LLVM_LIBRARIES})
+target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
+target_link_libraries(triton ${LLVM_LIBRARIES})
 message(STATUS ${LLVM_LDFLAGS})
 
 if(BUILD_PYTHON_MODULE)
