@@ -35,7 +35,7 @@ jobs:
                                   yum search llvm;\
                                   yum install -y llvm11 llvm11-devel llvm11-static llvm11-libs; ls /usr/bin/*llvm*;\
                                   yum search tinfo;"
-        export CIBW_BEFORE_BUILD="pip install cmake;"
+        #export CIBW_BEFORE_BUILD="pip install cmake;"
         export CIBW_SKIP="{cp,pp}35-*"
         export CIBW_BUILD="{cp,pp}3*-manylinux_x86_64"
         #export CIBW_REPAIR_WHEEL_COMMAND="auditwheel repair --plat manylinux_2_24_x86_64 -w {dest_dir} {wheel}"
