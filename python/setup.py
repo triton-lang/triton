@@ -17,16 +17,15 @@ import urllib.request
 import tarfile
 
 def get_llvm():
-    return 'llvm-config'
     # tries to find system LLVM
-    versions = ['-11.0', '-11', '']
+    versions = ['-11.0', '-11']
     supported = ['llvm-config{v}'.format(v=v) for v in versions]
     paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
     paths = [p for p in paths if p is not None]
     if paths:
       return paths[0]
     # download if nothing is installed
-    name = 'clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04'
+    name = 'clang+llvm-11.0.0-x86_64-linux-gnu-ubuntu-20.04'
     dir = '/tmp'
     llvm_config = '{dir}/{name}/bin/llvm-config'.format(dir=dir, name=name)
     if not os.path.exists(llvm_config):
@@ -35,7 +34,7 @@ def get_llvm():
             shutil.rmtree(os.path.join(dir, name))
         except:
             pass
-        url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-11.0.1/{name}.tar.xz".format(name=name)
+        url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-11.0.0/{name}.tar.xz".format(name=name)
         ftpstream = urllib.request.urlopen(url)
         file = tarfile.open(fileobj=ftpstream, mode="r|xz")
         file.extractall(path=dir)
