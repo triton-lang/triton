@@ -17,6 +17,7 @@ import urllib.request
 import tarfile
 
 def get_llvm():
+    return 'llvm-config'
     # tries to find system LLVM
     versions = ['-11.0', '-11', '']
     supported = ['llvm-config{v}'.format(v=v) for v in versions]

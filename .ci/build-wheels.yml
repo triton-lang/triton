@@ -33,7 +33,7 @@ jobs:
         export CIBW_BEFORE_BUILD="pip install cmake;\
                                   yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm;\
                                   yum search llvm;\
-                                  yum install -y llvm11-devel"
+                                  yum install -y llvm11 llvm11-devel llvm11-static llvm11-libs"
         export CIBW_SKIP="{cp,pp}35-*"
         export CIBW_BUILD="{cp,pp}3*-manylinux_x86_64"
         #export CIBW_REPAIR_WHEEL_COMMAND="auditwheel repair --plat manylinux_2_24_x86_64 -w {dest_dir} {wheel}"
