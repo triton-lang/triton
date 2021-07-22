@@ -1,4 +1,5 @@
 #include <cassert>
+#include <exception>
 #include "triton/ir/constant.h"
 #include "triton/ir/type.h"
 #include "triton/ir/context.h"
