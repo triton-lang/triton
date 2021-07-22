@@ -28,7 +28,7 @@ jobs:
         echo "base-dir=/project" >> python/setup.cfg
       displayName: Patch setup.py
     - bash: |
-        export CIBW_BEFORE_BUILD="pip install cmake &&
+        export CIBW_BEFORE_BUILD="yum search llvm && pip install cmake && yum install wget &&
                                   wget https://github.com/llvm/llvm-project/releases/download/llvmorg-11.0.0/clang+llvm-11.0.0-x86_64-linux-gnu-ubuntu-20.04.tar.xz &&
                                   tar xvf clang+llvm-11.0.0-x86_64-linux-gnu-ubuntu-20.04.tar.xz &&
                                   export PATH=$PATH:`realpath ./clang+llvm-11.0.0-x86_64-linux-gnu-ubuntu-20.04/bin/`"
