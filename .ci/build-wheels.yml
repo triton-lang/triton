@@ -29,7 +29,7 @@ jobs:
       displayName: Patch setup.py
     - bash: |
         export CIBW_MANYLINUX_X86_64_IMAGE="manylinux_2_24"
-        export CIBW_BEFORE_BUILD="pip install cmake; echo 'deb http://deb.debian.org/debian testing main' >> /etc/apt/sources.list; apt-get update -y; apt-get install -y g++;"
+        export CIBW_BEFORE_BUILD="pip install cmake; echo 'deb http://deb.debian.org/debian testing main' >> /etc/apt/sources.list; apt-get update -y; apt-get install -y g++ llvm-11-dev;"
         export CIBW_SKIP="{cp,pp}35-*"
         export CIBW_BUILD="{cp,pp}3*-manylinux_x86_64"
         python3 -m cibuildwheel python --output-dir wheelhouse
