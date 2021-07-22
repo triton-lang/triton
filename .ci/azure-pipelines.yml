@@ -20,23 +20,18 @@ pr:
 # Pipeline
 steps:
 - script: |
-    python -m pip install --upgrade pip
-    pip install torch==1.7.1+cu110 torchvision==0.8.2+cu110 torchaudio===0.7.2 \
-                -f https://download.pytorch.org/whl/torch_stable.html
-    pip install matplotlib pandas
+    alias python='python3'
     cd python
-    python setup.py install
+    python3 setup.py develop
   displayName: Setup python environment
 
 - script: |
     cd python/bench
-    python -m run 
+    python3 -m run 
 
 - publish: python/bench/results
   artifact: Benchmarks
 
 - script: |
-    source $(venv)/bin/activate
-    pip install pytest
     pytest .
   displayName: 'Run Python tests'
