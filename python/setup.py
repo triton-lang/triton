@@ -25,7 +25,7 @@ def get_llvm():
     #if paths:
     #  return paths[0]
     # download if nothing is installed
-    name = 'clang+llvm-11.0.0-x86_64-linux-gnu-ubuntu-20.04'
+    name = 'clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04'
     dir = '/tmp'
     llvm_config = '{dir}/{name}/bin/llvm-config'.format(dir=dir, name=name)
     if not os.path.exists(llvm_config):
