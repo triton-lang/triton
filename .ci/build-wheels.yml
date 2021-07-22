@@ -29,16 +29,10 @@ jobs:
       displayName: Patch setup.py
     - bash: |
         export CIBW_MANYLINUX_X86_64_IMAGE="manylinux2014"
-        # export CIBW_BEFORE_BUILD="pip install cmake; echo 'deb http://deb.debian.org/debian testing main' >> /etc/apt/sources.list; apt-get update -y; apt-get install -y g++ llvm-11-dev;"
         export CIBW_BEFORE_BUILD="pip install cmake;\
-                                  yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm;\
-                                  yum search zlib;\
-                                  yum install -y llvm11 llvm11-devel llvm11-static llvm11-libs zlib-devel; ls /usr/bin/*llvm*;\
-                                  yum search tinfo;"
-        #export CIBW_BEFORE_BUILD="pip install cmake;"
+                                  yum install -y llvm11 llvm11-devel llvm11-static llvm11-libs zlib-devel;\
         export CIBW_SKIP="{cp,pp}35-*"
         export CIBW_BUILD="{cp,pp}3*-manylinux_x86_64"
-        #export CIBW_REPAIR_WHEEL_COMMAND="auditwheel repair --plat manylinux_2_24_x86_64 -w {dest_dir} {wheel}"
         python3 -m cibuildwheel python --output-dir wheelhouse
       displayName: Build wheels
     - task: PublishBuildArtifacts@1
