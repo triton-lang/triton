@@ -4,6 +4,7 @@
 #define _TRITON_IR_DISPATCH_H_
 
 #include "triton/ir/builder.h"
+#include <stdexcept>
 
 namespace triton{
 namespace ir{
