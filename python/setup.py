@@ -22,8 +22,8 @@ def get_llvm():
     supported = ['llvm-config{v}'.format(v=v) for v in versions]
     paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
     paths = [p for p in paths if p is not None]
-    #if paths:
-    #  return paths[0]
+    if paths:
+      return paths[0]
     # download if nothing is installed
     name = 'clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04'
     dir = '/tmp'
