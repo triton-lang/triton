@@ -29,6 +29,7 @@ jobs:
       displayName: Patch setup.py
     - bash: |
         export CIBW_MANYLINUX_X86_64_IMAGE="manylinux2014"
+        export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="manylinux2014"
         export CIBW_BEFORE_BUILD="pip install cmake;\
                                   yum install -y llvm11 llvm11-devel llvm11-static llvm11-libs zlib-devel;"
         export CIBW_SKIP="{cp,pp}35-*"
