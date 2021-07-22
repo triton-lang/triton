@@ -83,7 +83,7 @@ else()
         endif()
         set(result_code)
         execute_process(
-            COMMAND ${LLVM_CONFIG} --${flag}
+            COMMAND ${LLVM_CONFIG} --link-static --${flag}
             RESULT_VARIABLE result_code
             OUTPUT_VARIABLE LLVM_${var}
             OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -103,7 +103,7 @@ else()
         endif()
         set(result_code)
         execute_process(
-            COMMAND ${LLVM_CONFIG} --${flag} ${components}
+            COMMAND ${LLVM_CONFIG} --link-static --${flag} ${components}
             RESULT_VARIABLE result_code
             OUTPUT_VARIABLE tmplibs
             OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -141,7 +141,7 @@ else()
     endif()
 
     llvm_set(LIBRARY_DIRS libdir true)
-    llvm_set_libs(LIBRARIES libs "${LLVM_FIND_COMPONENTS}")
+    llvm_set_libs(LIBRARIES libfiles "${LLVM_FIND_COMPONENTS}")
     # LLVM bug: llvm-config --libs tablegen returns -lLLVM-3.8.0
     # but code for it is not in shared library
     if("${LLVM_FIND_COMPONENTS}" MATCHES "tablegen")

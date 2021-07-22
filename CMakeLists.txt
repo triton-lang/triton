@@ -34,8 +34,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -std=gnu++17")
 ##########
 # LLVM
 ##########
-set(LLVM_FIND_COMPONENTS "all")
-find_package(LLVM 11 REQUIRED)
+find_package(LLVM 11 REQUIRED COMPONENTS "nvptx")
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 include_directories("${LLVM_INCLUDE_DIRS}")
 if(APPLE)
@@ -65,7 +64,7 @@ endif()
 file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
 add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
 target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
-target_link_libraries(triton ${LLVM_LIBRARIES})
+target_link_libraries(triton ${LLVM_LIBRARIES} ${LLVM_SYSTEM_LIBS})
 message(STATUS ${LLVM_LDFLAGS})
 
 if(BUILD_PYTHON_MODULE)
