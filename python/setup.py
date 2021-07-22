@@ -26,13 +26,13 @@ def get_llvm():
     # download if nothing is installed
     name = 'clang+llvm-11.0.0-x86_64-linux-gnu-ubuntu-20.04'
     dir = '/tmp'
-    llvm_config = f'{dir}/{name}/bin/llvm-config'
+    llvm_config = '{dir}/{name}/bin/llvm-config'.format(dir=dir, name=name)
     if not os.path.exists(llvm_config):
         print('downloading and extracting LLVM...')
-        url = f"https://github.com/llvm/llvm-project/releases/download/llvmorg-11.0.0/{name}.tar.xz"
+        url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-11.0.0/{name}.tar.xz".format(name=name)
         response = requests.get(url, stream=True)
         file = tarfile.open(fileobj=response.raw, mode="r|xz")
-        file.extractall(path=f"{dir}")
+        file.extractall(path=dir)
     return llvm_config
 
 class CMakeExtension(Extension):
