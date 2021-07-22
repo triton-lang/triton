@@ -1,4 +1,8 @@
 name: Triton CI
+
+workspace:
+  clean: all
+
 pool:
   name: default
 
@@ -16,27 +20,18 @@ pr:
 # Pipeline
 steps:
 - script: |
-    mkdir $(venv)
-    python -m virtualenv --python=python3 $(venv)
-    source $(venv)/bin/activate
-    python -m pip install --upgrade pip
-    pip install torch==1.7.1+cu110 torchvision==0.8.2+cu110 torchaudio===0.7.2 \
-                -f https://download.pytorch.org/whl/torch_stable.html
+    alias python='python3'
     cd python
-    python setup.py install
+    pip3 install -e .
   displayName: Setup python environment
 
 - script: |
-    source $(venv)/bin/activate
-    pip install matplotlib pandas
     cd python/bench
-    python -m run 
+    python3 -m run 
 
 - publish: python/bench/results
   artifact: Benchmarks
 
 - script: |
-    source $(venv)/bin/activate
-    pip install pytest
     pytest .
   displayName: 'Run Python tests'
