@@ -211,6 +211,7 @@ static std::map<int, int> vptx = {
   {11010, 71},
   {11020, 72},
   {11030, 73},
+  {11040, 74}
 };
 
 std::string cu_module::compile_llvm_module(llvm::Module* module, driver::device* device) {
