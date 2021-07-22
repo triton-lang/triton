@@ -66,7 +66,7 @@ class CMakeBuild(build_ext):
             "-DBUILD_TUTORIALS=OFF",
             "-DBUILD_PYTHON_MODULE=ON",
             #'-DPYTHON_EXECUTABLE=' + sys.executable,
-            #'-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON,
+            '-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
             "-DTRITON_LLVM_BUILD_DIR=" + llvm_build_dir,
             "-DPYTHON_INCLUDE_DIRS=" + ";".join(python_include_dirs)
         ]
