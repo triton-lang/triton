@@ -33,7 +33,7 @@ jobs:
         export CIBW_BEFORE_BUILD="pip install cmake;\
                                   yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm;\
                                   yum search llvm;\
-                                  yum install -y llvm11 llvm11-devel llvm11-static llvm11-libs; ls /usr/bin/*llvm*;\
+                                  yum install -y llvm11 llvm11-devel llvm11-static llvm11-libs zlib1g-dev; ls /usr/bin/*llvm*;\
                                   yum search tinfo;"
         #export CIBW_BEFORE_BUILD="pip install cmake;"
         export CIBW_SKIP="{cp,pp}35-*"
