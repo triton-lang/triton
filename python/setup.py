@@ -12,7 +12,28 @@ from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext
 from setuptools.command.test import test as TestCommand
 import distutils.spawn
+import requests
+import tarfile
 
+def get_llvm():
+    # tries to find system LLVM
+    versions = ['-11.0', '-11']
+    supported = ['llvm-config{v}'.format(v=v) for v in versions]
+    paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
+    paths = [p for p in paths if p is not None]
+    if paths:
+      return paths[0]
+    # download if nothing is installed
+    name = 'clang+llvm-11.0.0-x86_64-linux-gnu-ubuntu-20.04'
+    dir = '/tmp'
+    llvm_config = f'{dir}/{name}/bin/llvm-config'
+    if not os.path.exists(llvm_config):
+        print('downloading and extracting LLVM...')
+        url = f"https://github.com/llvm/llvm-project/releases/download/llvmorg-11.0.0/{name}.tar.xz"
+        response = requests.get(url, stream=True)
+        file = tarfile.open(fileobj=response.raw, mode="r|xz")
+        file.extractall(path=f"{dir}")
+    return llvm_config
 
 class CMakeExtension(Extension):
     def __init__(self, name, path, sourcedir=""):
@@ -49,6 +70,7 @@ class CMakeBuild(build_ext):
             self.build_extension(ext)
 
     def build_extension(self, ext):
+        llvm_config = get_llvm()
         # self.debug = True
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
@@ -65,8 +87,9 @@ class CMakeBuild(build_ext):
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
             "-DBUILD_TUTORIALS=OFF",
             "-DBUILD_PYTHON_MODULE=ON",
+            f"-DLLVM_CONFIG={llvm_config}",
             #'-DPYTHON_EXECUTABLE=' + sys.executable,
-            '-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
+            #'-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
             "-DTRITON_LLVM_BUILD_DIR=" + llvm_build_dir,
             "-DPYTHON_INCLUDE_DIRS=" + ";".join(python_include_dirs)
         ]
