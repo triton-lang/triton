@@ -22,7 +22,7 @@ steps:
 - script: |
     alias python='python3'
     cd python
-    python3 setup.py develop
+    pip3 install -e .
   displayName: Setup python environment
 
 - script: |
