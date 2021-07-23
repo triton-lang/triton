@@ -12,7 +12,7 @@ Below is a gallery of tutorials for writing various basic operations with Triton
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="- The basic programming model used by Triton - The triton.jit decorator, which constitutes the ...">
+    <div class="sphx-glr-thumbcontainer" tooltip="- The basic programming model of Triton - The triton.jit decorator, which is used to define Tri...">
 
 .. only:: html
 
@@ -33,7 +33,7 @@ Below is a gallery of tutorials for writing various basic operations with Triton
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="- The benefits of kernel fusion for bandwidth-bound operations. - The reduction operators in Tr...">
+    <div class="sphx-glr-thumbcontainer" tooltip="- The benefits of kernel fusion for bandwidth-bound operations. - Reduction operators in Triton...">
 
 .. only:: html
 

@@ -22,9 +22,9 @@ Vector Addition
 =================
 In this tutorial, you will write a simple vector addition using Triton and learn about:
 
-- The basic programming model used by Triton
-- The `triton.jit` decorator, which constitutes the main entry point for writing Triton kernels.
-- The best practices for validating and benchmarking custom ops against native reference implementations
+- The basic programming model of Triton
+- The `triton.jit` decorator, which is used to define Triton kernels.
+- The best practices for validating and benchmarking your custom ops against native reference implementations
 
 .. GENERATED FROM PYTHON SOURCE LINES 12-14
 
@@ -73,8 +73,8 @@ Compute Kernel
 
 .. GENERATED FROM PYTHON SOURCE LINES 44-46
 
-We can also declara a helper function that handles allocating the output vector
-and enqueueing the kernel.
+Let's also declare a helper function that to (1) allocate the output vector
+and (2) enqueueing the above kernel.
 
 .. GENERATED FROM PYTHON SOURCE LINES 46-64
 
@@ -85,16 +85,16 @@ and enqueueing the kernel.
     def add(x, y):
         z = torch.empty_like(x)
         N = z.shape[0]
-        # The SPMD launch grid denotes the number of kernel instances that should execute in parallel.
+        # The SPMD launch grid denotes the number of kernel instances that run in parallel.
         # It is analogous to CUDA launch grids. It can be either Tuple[int], or Callable(metaparameters) -> Tuple[int]
         grid = lambda meta: (triton.cdiv(N, meta['BLOCK']), )
         # NOTE:
-        #  - torch.tensor objects are implicitly converted to pointers to their first element.
-        #  - `triton.jit`'ed functions can be subscripted with a launch grid to obtain a callable GPU kernel
+        #  - each torch.tensor object is implicitly converted into a pointer to its first element.
+        #  - `triton.jit`'ed functions can be index with a launch grid to obtain a callable GPU kernel
         #  - don't forget to pass meta-parameters as keywords arguments
         _add[grid](x, y, z, N, BLOCK=1024)
         # We return a handle to z but, since `torch.cuda.synchronize()` hasn't been called, the kernel is still
-        # running asynchronously.
+        # running asynchronously at this point.
         return z
 
 
@@ -107,7 +107,7 @@ and enqueueing the kernel.
 
 .. GENERATED FROM PYTHON SOURCE LINES 65-66
 
-We can now use the above function to compute the sum of two `torch.tensor` objects and test our results:
+We can now use the above function to compute the element-wise sum of two `torch.tensor` objects and test its correctness:
 
 .. GENERATED FROM PYTHON SOURCE LINES 66-77
 
@@ -150,7 +150,7 @@ Seems like we're good to go!
 Benchmark
 -----------
 We can now benchmark our custom op for vectors of increasing sizes to get a sense of how it does relative to PyTorch.
-To make things easier, Triton has a set of built-in utilities that allow us to concisely plot the performance of our custom op.
+To make things easier, Triton has a set of built-in utilities that allow us to concisely plot the performance of your custom ops
 for different problem sizes.
 
 .. GENERATED FROM PYTHON SOURCE LINES 86-112
@@ -199,7 +199,7 @@ We can now run the decorated function above. Pass `show_plots=True` to see the p
 
 .. code-block:: default
 
-    benchmark.run(show_plots=True)
+    benchmark.run(print_data=True, show_plots=True)
 
 
 .. image:: /getting-started/tutorials/images/sphx_glr_01-vector-add_001.png
@@ -207,13 +207,38 @@ We can now run the decorated function above. Pass `show_plots=True` to see the p
     :class: sphx-glr-single-img
 
 
+.. rst-class:: sphx-glr-script-out
+
+ Out:
+
+ .. code-block:: none
+
+    vector-add-performance:
+               size       Torch      Triton
+    0        4096.0    9.600000    9.600000
+    1        8192.0   19.200000   19.200000
+    2       16384.0   38.400001   38.400001
+    3       32768.0   76.800002   63.999998
+    4       65536.0  127.999995  127.999995
+    5      131072.0  219.428568  219.428568
+    6      262144.0  341.333321  384.000001
+    7      524288.0  472.615390  472.615390
+    8     1048576.0  614.400016  614.400016
+    9     2097152.0  722.823517  722.823517
+    10    4194304.0  780.190482  780.190482
+    11    8388608.0  812.429770  812.429770
+    12   16777216.0  833.084721  833.084721
+    13   33554432.0  843.811163  843.811163
+    14   67108864.0  848.362445  849.278610
+    15  134217728.0  850.656574  851.577704
+
 
 
 
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  7.682 seconds)
+   **Total running time of the script:** ( 0 minutes  11.005 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_01-vector-add.py:
