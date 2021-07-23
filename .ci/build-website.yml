@@ -12,6 +12,8 @@ jobs:
   steps:
     - bash: |
         set -o errexit
+        cd python
+        pip install -e .
       displayName: Install dependencies
     - bash: |
         cd docs
