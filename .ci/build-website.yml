@@ -22,6 +22,7 @@ jobs:
     - bash: |
         git checkout gh-pages
         sh ./update-website.sh
+        git remote set-url origin git@github.com:ptillet/triton.git
         git push
       displayName: Publish docs
     
