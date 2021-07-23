@@ -65,6 +65,7 @@ add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
 target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
 target_link_libraries(triton ${LLVM_LIBRARIES} ${LLVM_SYSTEM_LIBS})
 
+
 if(BUILD_PYTHON_MODULE)
     set(CMAKE_SHARED_LIBRARY_SUFFIX ".so")
     # Check if the platform is MacOS
