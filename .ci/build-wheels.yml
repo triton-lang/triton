@@ -16,7 +16,7 @@ jobs:
         set -o errexit
         python3 --version
         python3 -m pip install --upgrade pip
-        pip3 install cibuildwheel==1.10.0
+        pip3 install cibuildwheel==2.0.0
         pip3 install twine
       displayName: Install dependencies
     - bash: |
@@ -28,7 +28,11 @@ jobs:
         echo "base-dir=/project" >> python/setup.cfg
       displayName: Patch setup.py
     - bash: |
-        export CIBW_BEFORE_BUILD="pip install cmake"
+        export CIBW_MANYLINUX_X86_64_IMAGE="manylinux2014"
+        export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="manylinux2014"
+        export CIBW_BEFORE_BUILD="pip install cmake;\
+                                  yum install -y llvm11 llvm11-devel llvm11-static llvm11-libs zlib-devel;"
+        export CIBW_SKIP="{cp,pp}35-*"
         export CIBW_BUILD="{cp,pp}3*-manylinux_x86_64"
         python3 -m cibuildwheel python --output-dir wheelhouse
       displayName: Build wheels
