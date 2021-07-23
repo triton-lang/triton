@@ -15,7 +15,7 @@ jobs:
     - bash: |
         set -o errexit
         cd python
-        python setup.py develop
+        pip3 install -e .
       displayName: Install dependencies
     - bash: |
         cd docs
