@@ -13,6 +13,8 @@
   
   <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
   <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+  <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+  <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
   <link rel="stylesheet" href="../../_static/gallery.css" type="text/css" />
   <link rel="stylesheet" href="../../_static/gallery-binder.css" type="text/css" />
   <link rel="stylesheet" href="../../_static/gallery-dataframe.css" type="text/css" />
@@ -34,10 +36,11 @@
   
     
       <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
         <script src="../../_static/jquery.js"></script>
         <script src="../../_static/underscore.js"></script>
         <script src="../../_static/doctools.js"></script>
-        <script async="async" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.7/latest.js?config=TeX-AMS-MML_HTMLorMML"></script>
+        <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     
     <script type="text/javascript" src="../../_static/js/theme.js"></script>
 
@@ -89,18 +92,18 @@
               
             
             
-              <p class="caption"><span class="caption-text">Getting Started</span></p>
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../../getting-started/installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../getting-started/tutorials/index.html">Tutorials</a></li>
 </ul>
-<p class="caption"><span class="caption-text">Python API</span></p>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.html">triton</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.language.html">triton.language</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
 </ul>
-<p class="caption"><span class="caption-text">Programming Guide</span></p>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="../chapter-1/introduction.html">Introduction</a></li>
 <li class="toctree-l1 current"><a class="current reference internal" href="#">Related Work</a><ul>
@@ -287,39 +290,24 @@ i &amp; j
 <div class="section" id="scheduling-languages">
 <h2>Scheduling Languages<a class="headerlink" href="#scheduling-languages" title="Permalink to this headline">¶</a></h2>
 <p>Separation of concerns cite{dijkstra82} is a well-known design principle in computer science: programs should be decomposed into modular layers of abstraction that separate the semantics of their algorithms from the details of their implementation. Systems like Halide and TVM push this philosophy one step further, and enforce this separation at the grammatical level through the use of a  <strong>scheduling language</strong>. The benefits of this methodology are particularly visible in the case of matrix multiplication, where, as one can see below, the definition of the algorithm (Line 1-7) is completely disjoint from its implementation (Line 8-16), meaning that both can be maintained, optimized and distributed independently.</p>
-<div class="highlight-python notranslate"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span class="normal"> 1</span>
-<span class="normal"> 2</span>
-<span class="normal"> 3</span>
-<span class="normal"> 4</span>
-<span class="normal"> 5</span>
-<span class="normal"> 6</span>
-<span class="normal"> 7</span>
-<span class="normal"> 8</span>
-<span class="normal"> 9</span>
-<span class="normal">10</span>
-<span class="normal">11</span>
-<span class="normal">12</span>
-<span class="normal">13</span>
-<span class="normal">14</span>
-<span class="normal">15</span>
-<span class="normal">16</span></pre></div></td><td class="code"><div class="highlight"><pre><span></span><span class="o">//</span> <span class="n">algorithm</span>
-<span class="n">Var</span> <span class="n">x</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">),</span> <span class="n">y</span><span class="p">(</span><span class="s2">&quot;y&quot;</span><span class="p">);</span>
-<span class="n">Func</span> <span class="n">matmul</span><span class="p">(</span><span class="s2">&quot;matmul&quot;</span><span class="p">);</span>
-<span class="n">RDom</span> <span class="n">k</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">matrix_size</span><span class="p">);</span>
-<span class="n">RVar</span> <span class="n">ki</span><span class="p">;</span>
-<span class="n">matmul</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span> <span class="o">=</span> <span class="mf">0.0</span><span class="n">f</span><span class="p">;</span>
-<span class="n">matmul</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span> <span class="o">+=</span> <span class="n">A</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span> <span class="o">*</span> <span class="n">B</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">k</span><span class="p">);</span>
-<span class="o">//</span> <span class="n">schedule</span>
-<span class="n">Var</span> <span class="n">xi</span><span class="p">(</span><span class="s2">&quot;xi&quot;</span><span class="p">),</span> <span class="n">xo</span><span class="p">(</span><span class="s2">&quot;xo&quot;</span><span class="p">),</span> <span class="n">yo</span><span class="p">(</span><span class="s2">&quot;yo&quot;</span><span class="p">),</span> <span class="n">yi</span><span class="p">(</span><span class="s2">&quot;yo&quot;</span><span class="p">),</span> <span class="n">yii</span><span class="p">(</span><span class="s2">&quot;yii&quot;</span><span class="p">),</span> <span class="n">xii</span><span class="p">(</span><span class="s2">&quot;xii&quot;</span><span class="p">);</span>
-<span class="n">matmul</span><span class="o">.</span><span class="n">vectorize</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="mi">8</span><span class="p">);</span>
-<span class="n">matmul</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">xi</span><span class="p">,</span> <span class="n">block_size</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">xi</span><span class="p">,</span> <span class="n">xi</span><span class="p">,</span> <span class="n">xii</span><span class="p">,</span> <span class="mi">8</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">yi</span><span class="p">,</span> <span class="n">block_size</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">yi</span><span class="p">,</span> <span class="n">yi</span><span class="p">,</span> <span class="n">yii</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">ki</span><span class="p">,</span> <span class="n">block_size</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">reorder</span><span class="p">(</span><span class="n">xii</span><span class="p">,</span> <span class="n">yii</span><span class="p">,</span> <span class="n">xi</span><span class="p">,</span> <span class="n">ki</span><span class="p">,</span> <span class="n">yi</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">parallel</span><span class="p">(</span><span class="n">y</span><span class="p">)</span><span class="o">.</span><span class="n">vectorize</span><span class="p">(</span><span class="n">xii</span><span class="p">)</span><span class="o">.</span><span class="n">unroll</span><span class="p">(</span><span class="n">xi</span><span class="p">)</span><span class="o">.</span><span class="n">unroll</span><span class="p">(</span><span class="n">yii</span><span class="p">);</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="o">//</span> <span class="n">algorithm</span>
+<span class="linenos"> 2</span><span class="n">Var</span> <span class="n">x</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">),</span> <span class="n">y</span><span class="p">(</span><span class="s2">&quot;y&quot;</span><span class="p">);</span>
+<span class="linenos"> 3</span><span class="n">Func</span> <span class="n">matmul</span><span class="p">(</span><span class="s2">&quot;matmul&quot;</span><span class="p">);</span>
+<span class="linenos"> 4</span><span class="n">RDom</span> <span class="n">k</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">matrix_size</span><span class="p">);</span>
+<span class="linenos"> 5</span><span class="n">RVar</span> <span class="n">ki</span><span class="p">;</span>
+<span class="linenos"> 6</span><span class="n">matmul</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span> <span class="o">=</span> <span class="mf">0.0</span><span class="n">f</span><span class="p">;</span>
+<span class="linenos"> 7</span><span class="n">matmul</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span> <span class="o">+=</span> <span class="n">A</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span> <span class="o">*</span> <span class="n">B</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">k</span><span class="p">);</span>
+<span class="linenos"> 8</span><span class="o">//</span> <span class="n">schedule</span>
+<span class="linenos"> 9</span><span class="n">Var</span> <span class="n">xi</span><span class="p">(</span><span class="s2">&quot;xi&quot;</span><span class="p">),</span> <span class="n">xo</span><span class="p">(</span><span class="s2">&quot;xo&quot;</span><span class="p">),</span> <span class="n">yo</span><span class="p">(</span><span class="s2">&quot;yo&quot;</span><span class="p">),</span> <span class="n">yi</span><span class="p">(</span><span class="s2">&quot;yo&quot;</span><span class="p">),</span> <span class="n">yii</span><span class="p">(</span><span class="s2">&quot;yii&quot;</span><span class="p">),</span> <span class="n">xii</span><span class="p">(</span><span class="s2">&quot;xii&quot;</span><span class="p">);</span>
+<span class="linenos">10</span><span class="n">matmul</span><span class="o">.</span><span class="n">vectorize</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="mi">8</span><span class="p">);</span>
+<span class="linenos">11</span><span class="n">matmul</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+<span class="linenos">12</span>    <span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">xi</span><span class="p">,</span> <span class="n">block_size</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">xi</span><span class="p">,</span> <span class="n">xi</span><span class="p">,</span> <span class="n">xii</span><span class="p">,</span> <span class="mi">8</span><span class="p">)</span>
+<span class="linenos">13</span>    <span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">yi</span><span class="p">,</span> <span class="n">block_size</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">yi</span><span class="p">,</span> <span class="n">yi</span><span class="p">,</span> <span class="n">yii</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span>
+<span class="linenos">14</span>    <span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">ki</span><span class="p">,</span> <span class="n">block_size</span><span class="p">)</span>
+<span class="linenos">15</span>    <span class="o">.</span><span class="n">reorder</span><span class="p">(</span><span class="n">xii</span><span class="p">,</span> <span class="n">yii</span><span class="p">,</span> <span class="n">xi</span><span class="p">,</span> <span class="n">ki</span><span class="p">,</span> <span class="n">yi</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>
+<span class="linenos">16</span>    <span class="o">.</span><span class="n">parallel</span><span class="p">(</span><span class="n">y</span><span class="p">)</span><span class="o">.</span><span class="n">vectorize</span><span class="p">(</span><span class="n">xii</span><span class="p">)</span><span class="o">.</span><span class="n">unroll</span><span class="p">(</span><span class="n">xi</span><span class="p">)</span><span class="o">.</span><span class="n">unroll</span><span class="p">(</span><span class="n">yii</span><span class="p">);</span>
 </pre></div>
-</td></tr></table></div>
+</div>
 <p>The resulting code may however not be completely portable, as schedules can sometimes rely on execution models (e.g., SPMD) or hardware intrinsics (e.g., matrix-multiply-accumulate) that are not widely available. This issue can be mitigated by auto-scheduling mechanisms <a class="reference internal" href="#mullapudi2016" id="id14"><span>[MULLAPUDI2016]</span></a>.</p>
 <div class="section" id="id15">
 <h3>Advantages<a class="headerlink" href="#id15" title="Permalink to this headline">¶</a></h3>

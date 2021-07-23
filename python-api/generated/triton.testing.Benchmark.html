@@ -13,6 +13,8 @@
   
   <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
   <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+  <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+  <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
   <link rel="stylesheet" href="../../_static/gallery.css" type="text/css" />
   <link rel="stylesheet" href="../../_static/gallery-binder.css" type="text/css" />
   <link rel="stylesheet" href="../../_static/gallery-dataframe.css" type="text/css" />
@@ -34,6 +36,7 @@
   
     
       <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
         <script src="../../_static/jquery.js"></script>
         <script src="../../_static/underscore.js"></script>
         <script src="../../_static/doctools.js"></script>
@@ -89,12 +92,12 @@
               
             
             
-              <p class="caption"><span class="caption-text">Getting Started</span></p>
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../../getting-started/installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../getting-started/tutorials/index.html">Tutorials</a></li>
 </ul>
-<p class="caption"><span class="caption-text">Python API</span></p>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="../triton.html">triton</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../triton.language.html">triton.language</a></li>
@@ -105,7 +108,7 @@
 </ul>
 </li>
 </ul>
-<p class="caption"><span class="caption-text">Programming Guide</span></p>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-1/introduction.html">Introduction</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-2/related-work.html">Related Work</a></li>
@@ -181,12 +184,12 @@
   <div class="section" id="triton-testing-benchmark">
 <h1>triton.testing.Benchmark<a class="headerlink" href="#triton-testing-benchmark" title="Permalink to this headline">¶</a></h1>
 <dl class="py class">
-<dt id="triton.testing.Benchmark">
-<em class="property"><span class="pre">class</span> </em><code class="sig-prename descclassname"><span class="pre">triton.testing.</span></code><code class="sig-name descname"><span class="pre">Benchmark</span></code><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x_names</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x_vals</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">line_arg</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">line_vals</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">line_names</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">plot_name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">xlabel</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ylabel</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x_log</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y_log</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.testing.Benchmark" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="triton.testing.Benchmark">
+<em class="property"><span class="pre">class</span> </em><span class="sig-prename descclassname"><span class="pre">triton.testing.</span></span><span class="sig-name descname"><span class="pre">Benchmark</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x_names</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x_vals</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">line_arg</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">line_vals</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">line_names</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">plot_name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">xlabel</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ylabel</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x_log</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y_log</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">color</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">styles</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.testing.Benchmark" title="Permalink to this definition">¶</a></dt>
 <dd><p>This class is used by the <code class="code docutils literal notranslate"><span class="pre">perf_report</span></code> function to generate line plots with a concise API.</p>
 <dl class="py method">
-<dt id="triton.testing.Benchmark.__init__">
-<code class="sig-name descname"><span class="pre">__init__</span></code><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x_names</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x_vals</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">line_arg</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">line_vals</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">line_names</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">plot_name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">xlabel</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ylabel</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x_log</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y_log</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.testing.Benchmark.__init__" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="triton.testing.Benchmark.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x_names</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x_vals</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">line_arg</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">line_vals</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">line_names</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">plot_name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">xlabel</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ylabel</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x_log</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y_log</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">color</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">styles</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.testing.Benchmark.__init__" title="Permalink to this definition">¶</a></dt>
 <dd><p>Constructor</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
