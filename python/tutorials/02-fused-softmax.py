@@ -17,15 +17,16 @@ import torch
 
 
 # Compute the row-wise softmax of x
+@torch.jit.script
 def naive_softmax(x):
     # read  MN elements ; write M  elements
-    x_max = torch.max(x, axis=1)[0]
+    x_max = x.max(dim=1)[0]
     # read 2MN elements ; write MN elements
     z = x - x_max[:, None]
     # read  MN elements ; write MN elements
     numerator = torch.exp(x)
     # read  MN elements ; write M  elements
-    denominator = torch.sum(numerator, axis=1)
+    denominator = numerator.sum(dim=1)
     # read 2MN elements ; write MN elements
     ret = numerator / denominator[:, None]
     # in total: read 7MN elements ; wrote 3MN + 2M elements
@@ -132,10 +133,11 @@ print(torch.allclose(y_tri, y_ref))
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=['N'],  # argument names to use as an x-axis for the plot
-        x_vals=[256 * i for i in range(2, 50)],  # different possible values for `x_name`
+        x_vals=[128 * i for i in range(2, 100)],  # different possible values for `x_name`
         line_arg='provider',  # argument name whose value corresponds to a different line in the plot
-        line_vals=['torch', 'triton', 'naive'],  # possible values for `line_arg``
-        line_names=["Torch", "Triton", 'Naive'],  # label name for the lines
+        line_vals=['triton', 'torch-native', 'torch-jit'],  # possible values for `line_arg``
+        line_names=["Triton", "Torch (native)", "Torch (jit)"],  # label name for the lines
+        styles=[('blue', '-'), ('green', '-'), ('green', '--')],  # line styles
         ylabel="GB/s",  # label name for the y-axis
         plot_name="softmax-performance",  # name for the plot. Used also as a file name for saving the plot.
         args={'M': 4096}  # values for function arguments not in `x_names` and `y_name`
@@ -143,17 +145,17 @@ print(torch.allclose(y_tri, y_ref))
 )
 def benchmark(M, N, provider):
     x = torch.randn(M, N, device='cuda', dtype=torch.float32)
-    if provider == 'torch':
+    if provider == 'torch-native':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.softmax(x, axis=-1))
     if provider == 'triton':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: softmax(x))
-    if provider == 'naive':
+    if provider == 'torch-jit':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: naive_softmax(x))
     gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
 
-benchmark.run(show_plots=True, print_data=True)
+benchmark.run(show_plots=True, print_data=True, save_path='.')
 
 # %%
 # In the above plot, we can see that:
