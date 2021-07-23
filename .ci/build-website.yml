@@ -1,0 +1,25 @@
+trigger: none
+pr: none
+
+jobs:
+- job: linux
+
+  workspace:
+    clean: all
+
+  pool: default
+
+  steps:
+    - bash: |
+        set -o errexit
+      displayName: Install dependencies
+    - bash: |
+        cd docs
+        make html
+      displayName: Build docs
+    - bash: |
+        git checkout gh-pages
+        sh ./update-website.sh
+        git push
+      displayName: Publish docs
+    
