@@ -3,9 +3,9 @@ Vector Addition
 =================
 In this tutorial, you will write a simple vector addition using Triton and learn about:
 
-- The basic programming model used by Triton
-- The `triton.jit` decorator, which constitutes the main entry point for writing Triton kernels.
-- The best practices for validating and benchmarking custom ops against native reference implementations
+- The basic programming model of Triton
+- The `triton.jit` decorator, which is used to define Triton kernels.
+- The best practices for validating and benchmarking your custom ops against native reference implementations
 """
 
 # %%
@@ -41,28 +41,28 @@ def _add(
 
 
 # %%
-# We can also declara a helper function that handles allocating the output vector
-# and enqueueing the kernel.
+# Let's also declare a helper function that to (1) allocate the output vector
+# and (2) enqueueing the above kernel.
 
 
 def add(x, y):
     z = torch.empty_like(x)
     N = z.shape[0]
-    # The SPMD launch grid denotes the number of kernel instances that should execute in parallel.
+    # The SPMD launch grid denotes the number of kernel instances that run in parallel.
     # It is analogous to CUDA launch grids. It can be either Tuple[int], or Callable(metaparameters) -> Tuple[int]
     grid = lambda meta: (triton.cdiv(N, meta['BLOCK']), )
     # NOTE:
-    #  - torch.tensor objects are implicitly converted to pointers to their first element.
-    #  - `triton.jit`'ed functions can be subscripted with a launch grid to obtain a callable GPU kernel
+    #  - each torch.tensor object is implicitly converted into a pointer to its first element.
+    #  - `triton.jit`'ed functions can be index with a launch grid to obtain a callable GPU kernel
     #  - don't forget to pass meta-parameters as keywords arguments
     _add[grid](x, y, z, N, BLOCK=1024)
     # We return a handle to z but, since `torch.cuda.synchronize()` hasn't been called, the kernel is still
-    # running asynchronously.
+    # running asynchronously at this point.
     return z
 
 
 # %%
-# We can now use the above function to compute the sum of two `torch.tensor` objects and test our results:
+# We can now use the above function to compute the element-wise sum of two `torch.tensor` objects and test its correctness:
 
 torch.manual_seed(0)
 size = 98432
@@ -81,7 +81,7 @@ print(f'The maximum difference between torch and triton is ' f'{torch.max(torch.
 # Benchmark
 # -----------
 # We can now benchmark our custom op for vectors of increasing sizes to get a sense of how it does relative to PyTorch.
-# To make things easier, Triton has a set of built-in utilities that allow us to concisely plot the performance of our custom op.
+# To make things easier, Triton has a set of built-in utilities that allow us to concisely plot the performance of your custom ops
 # for different problem sizes.
 
 
@@ -91,8 +91,9 @@ print(f'The maximum difference between torch and triton is ' f'{torch.max(torch.
         x_vals=[2**i for i in range(12, 28, 1)],  # different possible values for `x_name`
         x_log=True,  # x axis is logarithmic
         line_arg='provider',  # argument name whose value corresponds to a different line in the plot
-        line_vals=['torch', 'triton'],  # possible values for `line_arg`
-        line_names=["Torch", "Triton"],  # label name for the lines
+        line_vals=['triton', 'torch'],  # possible values for `line_arg`
+        line_names=["Triton", "Torch"],  # label name for the lines
+        styles=[('blue', '-'), ('green', '-')],  # line styles
         ylabel="GB/s",  # label name for the y-axis
         plot_name="vector-add-performance",  # name for the plot. Used also as a file name for saving the plot.
         args={}  # values for function arguments not in `x_names` and `y_name`
@@ -112,4 +113,4 @@ def benchmark(size, provider):
 # %%
 # We can now run the decorated function above. Pass `show_plots=True` to see the plots and/or
 # `save_path='/path/to/results/' to save them to disk along with raw CSV data
-benchmark.run(show_plots=True)
+benchmark.run(print_data=True, show_plots=True)

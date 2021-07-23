@@ -168,6 +168,8 @@ class Benchmark:
         ylabel='',
         x_log=False,
         y_log=False,
+        color=None,
+        styles=None,
     ):
         """
         Constructor 
@@ -202,6 +204,7 @@ class Benchmark:
         self.line_vals = line_vals
         self.line_names = line_names
         self.y_log = y_log
+        self.styles = styles
         # plot info
         self.xlabel = xlabel
         self.ylabel = ylabel
@@ -239,11 +242,13 @@ class Mark:
             plt.figure()
             ax = plt.subplot()
             x = bench.x_names[0]
-            for y in bench.line_names:
+            for i, y in enumerate(bench.line_names):
                 y_min, y_max = df[y + '-min'], df[y + '-max']
-                ax.plot(df[x], df[y], label=y)
+                col = bench.styles[i][0] if bench.styles else None
+                sty = bench.styles[i][1] if bench.styles else None
+                ax.plot(df[x], df[y], label=y, color=col, ls=sty)
                 if y_min is not None and y_max is not None:
-                    ax.fill_between(df[x], y_min, y_max, alpha=0.5)
+                    ax.fill_between(df[x], y_min, y_max, alpha=0.15, color=col)
             ax.legend()
             xlabel = bench.xlabel if bench.xlabel else " = ".join(bench.x_names)
             ax.set_xlabel(xlabel)
