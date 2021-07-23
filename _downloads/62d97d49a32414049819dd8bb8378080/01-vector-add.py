@@ -91,8 +91,9 @@ print(f'The maximum difference between torch and triton is ' f'{torch.max(torch.
         x_vals=[2**i for i in range(12, 28, 1)],  # different possible values for `x_name`
         x_log=True,  # x axis is logarithmic
         line_arg='provider',  # argument name whose value corresponds to a different line in the plot
-        line_vals=['torch', 'triton'],  # possible values for `line_arg`
-        line_names=["Torch", "Triton"],  # label name for the lines
+        line_vals=['triton', 'torch'],  # possible values for `line_arg`
+        line_names=["Triton", "Torch"],  # label name for the lines
+        styles=[('blue', '-'), ('green', '-')],  # line styles
         ylabel="GB/s",  # label name for the y-axis
         plot_name="vector-add-performance",  # name for the plot. Used also as a file name for saving the plot.
         args={}  # values for function arguments not in `x_names` and `y_name`

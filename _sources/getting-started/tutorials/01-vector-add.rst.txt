@@ -153,7 +153,7 @@ We can now benchmark our custom op for vectors of increasing sizes to get a sens
 To make things easier, Triton has a set of built-in utilities that allow us to concisely plot the performance of your custom ops
 for different problem sizes.
 
-.. GENERATED FROM PYTHON SOURCE LINES 86-112
+.. GENERATED FROM PYTHON SOURCE LINES 86-113
 
 .. code-block:: default
 
@@ -165,8 +165,9 @@ for different problem sizes.
             x_vals=[2**i for i in range(12, 28, 1)],  # different possible values for `x_name`
             x_log=True,  # x axis is logarithmic
             line_arg='provider',  # argument name whose value corresponds to a different line in the plot
-            line_vals=['torch', 'triton'],  # possible values for `line_arg`
-            line_names=["Torch", "Triton"],  # label name for the lines
+            line_vals=['triton', 'torch'],  # possible values for `line_arg`
+            line_names=["Triton", "Torch"],  # label name for the lines
+            styles=[('blue', '-'), ('green', '-')],  # line styles
             ylabel="GB/s",  # label name for the y-axis
             plot_name="vector-add-performance",  # name for the plot. Used also as a file name for saving the plot.
             args={}  # values for function arguments not in `x_names` and `y_name`
@@ -190,12 +191,12 @@ for different problem sizes.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 113-115
+.. GENERATED FROM PYTHON SOURCE LINES 114-116
 
 We can now run the decorated function above. Pass `show_plots=True` to see the plots and/or
 `save_path='/path/to/results/' to save them to disk along with raw CSV data
 
-.. GENERATED FROM PYTHON SOURCE LINES 115-115
+.. GENERATED FROM PYTHON SOURCE LINES 116-116
 
 .. code-block:: default
 
@@ -214,11 +215,11 @@ We can now run the decorated function above. Pass `show_plots=True` to see the p
  .. code-block:: none
 
     vector-add-performance:
-               size       Torch      Triton
-    0        4096.0    9.600000    9.600000
+               size      Triton       Torch
+    0        4096.0    9.540372    9.600000
     1        8192.0   19.200000   19.200000
-    2       16384.0   38.400001   38.400001
-    3       32768.0   76.800002   63.999998
+    2       16384.0   31.999999   31.999999
+    3       32768.0   63.999998   76.800002
     4       65536.0  127.999995  127.999995
     5      131072.0  219.428568  219.428568
     6      262144.0  341.333321  384.000001
@@ -229,8 +230,8 @@ We can now run the decorated function above. Pass `show_plots=True` to see the p
     11    8388608.0  812.429770  812.429770
     12   16777216.0  833.084721  833.084721
     13   33554432.0  843.811163  843.811163
-    14   67108864.0  848.362445  849.278610
-    15  134217728.0  850.656574  851.577704
+    14   67108864.0  849.278610  848.362445
+    15  134217728.0  851.577704  850.656574
 
 
 
@@ -238,7 +239,7 @@ We can now run the decorated function above. Pass `show_plots=True` to see the p
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  11.005 seconds)
+   **Total running time of the script:** ( 0 minutes  10.999 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_01-vector-add.py:
