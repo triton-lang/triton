@@ -7,12 +7,14 @@ import subprocess
 import distutils
 import glob
 import tempfile
+import shutil
 from distutils.version import LooseVersion
 from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext
 from setuptools.command.test import test as TestCommand
 import distutils.spawn
-
+import urllib.request
+import tarfile
 
 class CMakeExtension(Extension):
     def __init__(self, name, path, sourcedir=""):
@@ -66,7 +68,7 @@ class CMakeBuild(build_ext):
             "-DBUILD_TUTORIALS=OFF",
             "-DBUILD_PYTHON_MODULE=ON",
             #'-DPYTHON_EXECUTABLE=' + sys.executable,
-            '-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
+            #'-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
             "-DTRITON_LLVM_BUILD_DIR=" + llvm_build_dir,
             "-DPYTHON_INCLUDE_DIRS=" + ";".join(python_include_dirs)
         ]
