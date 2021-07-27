@@ -13,12 +13,8 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      - name: Clean-up
-        run: |
-          rm -rf "${{ github.workspace }}"
-          ls -lh .
 
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v2
 
       - name: Install Triton
