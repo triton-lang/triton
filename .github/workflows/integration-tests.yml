@@ -18,6 +18,9 @@ jobs:
           rm -rf "${{ github.workspace }}"
           ls -lh .
 
+      - name: Checkout repo
+        uses: actions/checkout@v2
+
       - name: Install Triton
         run: |
           alias python='python3'
