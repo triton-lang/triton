@@ -1,36 +1,35 @@
 name: Integration Tests
-
-# Use self-hosted agent
-runs-on:  self-hosted
-
-# Trigger: PR is created or updated from master
 on:
   pull_request:
     branches:
       - master
 
-# Run integration tests
-steps:
 
-  - name: Runner workspace path
-  - run: |
-      echo "Cleaning up previous run"
-      rm -rf "${{ github.workspace }}"
+jobs:
 
-  - name: Check out repository code
-    uses: actions/checkout@v2
+  Integration-Tests:
+    
+    runs-on: self-hosted
 
-  - name: Install Triton
-  - run: |
-      alias python='python3'
-      cd python
-      pip3 install -e .
+    steps:
+      - name: Clean-up
+      - run: |
+          rm -rf "${{ github.workspace }}"
 
-  - name: Run benchmarks
-  - run: |
-      cd python/bench
-      python3 -m run 
+      - name: Check out repository code
+        uses: actions/checkout@v2
 
-  - name: Run unit tests
-  - run: |
-      pytest .
+      - name: Install Triton
+      - run: |
+          alias python='python3'
+          cd python
+          pip3 install -e .
+
+      - name: Run benchmarks
+      - run: |
+          cd python/bench
+          python3 -m run 
+
+      - name: Run unit tests
+      - run: |
+          pytest .
