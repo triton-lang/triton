@@ -16,7 +16,7 @@ jobs:
       - name: Clean-up
         run: |
           rm -rf "${{ github.workspace }}"
-          ls -lh *
+          ls -lh .
 
       - name: Install Triton
         run: |
