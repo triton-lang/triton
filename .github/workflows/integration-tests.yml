@@ -11,6 +11,12 @@ on:
 
 # Run integration tests
 steps:
+
+  - name: Runner workspace path
+  - run: |
+      echo "Cleaning up previous run"
+      rm -rf "${{ github.workspace }}"
+
   - name: Check out repository code
     uses: actions/checkout@v2
 
@@ -28,8 +34,3 @@ steps:
   - name: Run unit tests
   - run: |
       pytest .
-    displayName: 'Run Python tests'
-
-  - name: Clean-up
-  - uses: colpal/actions-clean@v1
-      if: ${{ always() }} # To ensure this step runs even when earlier steps fail
