@@ -16,9 +16,7 @@ jobs:
       - name: Clean-up
         run: |
           rm -rf "${{ github.workspace }}"
-
-      - name: Check out repository code
-        uses: actions/checkout@v2
+          ls -lh *
 
       - name: Install Triton
         run: |
