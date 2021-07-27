@@ -1,0 +1,35 @@
+name: Integration Tests
+
+# Use self-hosted agent
+runs-on:  self-hosted
+
+# Trigger: PR is created or updated from master
+on:
+  pull_request:
+    branches:
+      - master
+
+# Run integration tests
+steps:
+  - name: Check out repository code
+    uses: actions/checkout@v2
+
+  - name: Install Triton
+  - run: |
+      alias python='python3'
+      cd python
+      pip3 install -e .
+
+  - name: Run benchmarks
+  - run: |
+      cd python/bench
+      python3 -m run 
+
+  - name: Run unit tests
+  - run: |
+      pytest .
+    displayName: 'Run Python tests'
+
+  - name: Clean-up
+  - uses: colpal/actions-clean@v1
+      if: ${{ always() }} # To ensure this step runs even when earlier steps fail
