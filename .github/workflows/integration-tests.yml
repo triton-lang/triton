@@ -13,23 +13,23 @@ jobs:
 
     steps:
       - name: Clean-up
-      - run: |
+        run: |
           rm -rf "${{ github.workspace }}"
 
       - name: Check out repository code
         uses: actions/checkout@v2
 
       - name: Install Triton
-      - run: |
+        run: |
           alias python='python3'
           cd python
           pip3 install -e .
 
       - name: Run benchmarks
-      - run: |
+        run: |
           cd python/bench
           python3 -m run 
 
       - name: Run unit tests
-      - run: |
+        run: |
           pytest .
