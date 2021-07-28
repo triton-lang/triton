@@ -37,4 +37,4 @@ jobs:
 
       - name: Upload wheels to PyPI
         run: |
-          python3 -m twine upload wheelhouse/* --skip-existing -u $(PYPI_USERNAME) -p $(PYPI_PASSWORD) 
+          python3 -m twine upload wheelhouse/* --skip-existing
