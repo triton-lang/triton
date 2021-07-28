@@ -8,6 +8,8 @@ Binary Distributions
 
 You can install the latest stable release of Triton from pip:
 
+.. code-block:: bash
+
       pip install triton
 
 Binary wheels are available for CPython 3.6-3.9 and PyPy 3.6-3.7.
