@@ -6,7 +6,12 @@ Installation
 Binary Distributions
 ---------------------
 
-You can install the latest nightly release of Triton from pip:
+You can install the latest stable release of Triton from pip:
+
+      pip install triton
+
+
+And the latest nightly release:
 
 .. code-block:: bash
   
@@ -28,8 +33,6 @@ You can install the Python package from source by running the following commands
       git clone https://github.com/ptillet/triton.git;
       cd triton/python;
       pip install -e .
-
-This may take a while (10-20 minutes) as it will download and compile LLVM from source.
 
 You can then test your installation by running the unit tests:
 

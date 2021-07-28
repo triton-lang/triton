@@ -1,4 +1,4 @@
-name: Build Website
+name: Documentation
 on:
   workflow_dispatch:
   schedule:    
@@ -6,7 +6,7 @@ on:
 
 jobs:
 
-  Build-Website:
+  Build-Documentation:
     
     runs-on: self-hosted
 
