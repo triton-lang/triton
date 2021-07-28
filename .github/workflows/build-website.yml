@@ -1,0 +1,40 @@
+name: Build Website
+on:
+  workflow_dispatch:
+  schedule:    
+    - cron: "0 0 * * *"
+
+jobs:
+
+  Build-Website:
+    
+    runs-on: self-hosted
+
+    steps:
+
+      
+      - name: Checkout gh-pages
+        uses: actions/checkout@v1
+        with:
+          ref: 'gh-pages'
+
+      - name: Checkout branch
+        uses: actions/checkout@v1
+
+      - name: Install Triton
+        run: |
+          alias python='python3'
+          cd python
+          pip3 install -e .
+
+      - name: Build docs
+        run: |
+          cd docs
+          make html
+
+      - name: Publish docs
+        run: |
+          git checkout gh-pages
+          sh ./update-website.sh
+          git remote set-url origin git@github.com:ptillet/triton.git
+          git push
