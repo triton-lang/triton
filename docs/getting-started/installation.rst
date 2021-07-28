@@ -46,19 +46,3 @@ and the benchmarks
       
       cd bench/
       python -m run --with-plots --result-dir /tmp/triton-bench
-
-+++++++++++++++
-C++ Package
-+++++++++++++++
-
-Those not interested in Python integration may want to use the internals of Triton (i.e, runtime, parser, codegen, driver, intermediate representation) directly. This can be done by running the following commands:
-
-.. code-block:: bash
-
-      git clone https://github.com/ptillet/triton.git;
-      mkdir build;
-      cd build;
-      cmake ../;
-      make -j8;
-
-Note that while direct usage of the C++ API is not officially supported, a usage tutorial can be found  `here <https://github.com/ptillet/triton/blob/master/tutorials/01-matmul.cc>`_

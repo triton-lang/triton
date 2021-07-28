@@ -126,7 +126,7 @@ setup(
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
     packages=["triton", "triton/_C", "triton/tools", "triton/ops", "triton/ops/blocksparse"],
-    install_requires=["numpy", "torch"],
+    install_requires=["cmake", "torch"],
     package_data={"triton/ops": ["*.c"], "triton/ops/blocksparse": ["*.c"]},
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
