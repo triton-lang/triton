@@ -2,7 +2,7 @@
   <img src="https://cdn.openai.com/triton/assets/triton-logo.png" alt="Triton logo" width="88" height="100">
 </div>
 
-[![Wheels](https://github.com/openai/triton/actions/workflows/wheels.yml/badge.svg?branch=master)](https://github.com/openai/triton/actions/workflows/wheels.yml)
+[![Wheels](https://github.com/openai/triton/actions/workflows/wheels.yml/badge.svg)](https://github.com/openai/triton/actions/workflows/wheels.yml)
 
 
 **`Documentation`** |
