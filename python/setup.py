@@ -16,6 +16,31 @@ import distutils.spawn
 import urllib.request
 import tarfile
 
+def get_llvm():
+    # tries to find system LLVM
+    versions = ['-11.0', '-11', '-11-64']
+    supported = ['llvm-config{v}'.format(v=v) for v in versions]
+    paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
+    paths = [p for p in paths if p is not None]
+    if paths:
+      return paths[0]
+    # download if nothing is installed
+    name = 'clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04'
+    dir = '/tmp'
+    llvm_config = '{dir}/{name}/bin/llvm-config'.format(dir=dir, name=name)
+    if not os.path.exists(llvm_config):
+        try:
+            shutil.rmtree(os.path.join(dir, name))
+        except:
+            pass
+        url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-11.0.1/{name}.tar.xz".format(name=name)
+        print('downloading and extracting ' + url + '...')
+        ftpstream = urllib.request.urlopen(url)
+        file = tarfile.open(fileobj=ftpstream, mode="r|xz")
+        file.extractall(path=dir)
+    return llvm_config
+
+
 class CMakeExtension(Extension):
     def __init__(self, name, path, sourcedir=""):
         Extension.__init__(self, name, sources=[])
@@ -51,6 +76,7 @@ class CMakeBuild(build_ext):
             self.build_extension(ext)
 
     def build_extension(self, ext):
+        llvm_config = get_llvm()
         # self.debug = True
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
@@ -67,6 +93,7 @@ class CMakeBuild(build_ext):
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
             "-DBUILD_TUTORIALS=OFF",
             "-DBUILD_PYTHON_MODULE=ON",
+            "-DLLVM_CONFIG=" + llvm_config,
             #'-DPYTHON_EXECUTABLE=' + sys.executable,
             #'-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
             "-DTRITON_LLVM_BUILD_DIR=" + llvm_build_dir,
