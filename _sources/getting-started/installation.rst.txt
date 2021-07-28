@@ -6,7 +6,13 @@ Installation
 Binary Distributions
 ---------------------
 
-You can install the latest nightly release of Triton from pip:
+You can install the latest stable release of Triton from pip:
+
+      pip install triton
+
+Binary wheels are available for CPython 3.6-3.9 and PyPy 3.6-3.7.
+
+And the latest nightly release:
 
 .. code-block:: bash
   
@@ -27,9 +33,10 @@ You can install the Python package from source by running the following commands
 
       git clone https://github.com/ptillet/triton.git;
       cd triton/python;
+      pip install cmake; # build time dependency
       pip install -e .
 
-This may take a while (10-20 minutes) as it will download and compile LLVM from source.
+Note that, if llvm-11 is not present on your system, the setup.py script will download LLVM static libraries on the web and link against that.
 
 You can then test your installation by running the unit tests:
 
@@ -43,19 +50,3 @@ and the benchmarks
       
       cd bench/
       python -m run --with-plots --result-dir /tmp/triton-bench
-
-+++++++++++++++
-C++ Package
-+++++++++++++++
-
-Those not interested in Python integration may want to use the internals of Triton (i.e, runtime, parser, codegen, driver, intermediate representation) directly. This can be done by running the following commands:
-
-.. code-block:: bash
-
-      git clone https://github.com/ptillet/triton.git;
-      mkdir build;
-      cd build;
-      cmake ../;
-      make -j8;
-
-Note that while direct usage of the C++ API is not officially supported, a usage tutorial can be found  `here <https://github.com/ptillet/triton/blob/master/tutorials/01-matmul.cc>`_

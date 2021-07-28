@@ -98,7 +98,6 @@
 <li class="toctree-l2"><a class="reference internal" href="#binary-distributions">Binary Distributions</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#from-source">From Source</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#python-package">Python Package</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#c-package">C++ Package</a></li>
 </ul>
 </li>
 </ul>
@@ -186,7 +185,12 @@
 <h1>Installation<a class="headerlink" href="#installation" title="Permalink to this headline">¶</a></h1>
 <div class="section" id="binary-distributions">
 <h2>Binary Distributions<a class="headerlink" href="#binary-distributions" title="Permalink to this headline">¶</a></h2>
-<p>You can install the latest nightly release of Triton from pip:</p>
+<p>You can install the latest stable release of Triton from pip:</p>
+<blockquote>
+<div><p>pip install triton</p>
+</div></blockquote>
+<p>Binary wheels are available for CPython 3.6-3.9 and PyPy 3.6-3.7.</p>
+<p>And the latest nightly release:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip install -U --pre triton
 </pre></div>
 </div>
@@ -198,10 +202,11 @@
 <p>You can install the Python package from source by running the following commands:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git clone https://github.com/ptillet/triton.git<span class="p">;</span>
 <span class="nb">cd</span> triton/python<span class="p">;</span>
+pip install cmake<span class="p">;</span> <span class="c1"># build time dependency</span>
 pip install -e .
 </pre></div>
 </div>
-<p>This may take a while (10-20 minutes) as it will download and compile LLVM from source.</p>
+<p>Note that, if llvm-11 is not present on your system, the setup.py script will download LLVM static libraries on the web and link against that.</p>
 <p>You can then test your installation by running the unit tests:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pytest -vs .
 </pre></div>
@@ -211,18 +216,6 @@ pip install -e .
 python -m run --with-plots --result-dir /tmp/triton-bench
 </pre></div>
 </div>
-</div>
-<div class="section" id="c-package">
-<h3>C++ Package<a class="headerlink" href="#c-package" title="Permalink to this headline">¶</a></h3>
-<p>Those not interested in Python integration may want to use the internals of Triton (i.e, runtime, parser, codegen, driver, intermediate representation) directly. This can be done by running the following commands:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git clone https://github.com/ptillet/triton.git<span class="p">;</span>
-mkdir build<span class="p">;</span>
-<span class="nb">cd</span> build<span class="p">;</span>
-cmake ../<span class="p">;</span>
-make -j8<span class="p">;</span>
-</pre></div>
-</div>
-<p>Note that while direct usage of the C++ API is not officially supported, a usage tutorial can be found  <a class="reference external" href="https://github.com/ptillet/triton/blob/master/tutorials/01-matmul.cc">here</a></p>
 </div>
 </div>
 </div>

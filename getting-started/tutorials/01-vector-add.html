@@ -228,8 +228,8 @@ to download the full example code</p>
     <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">Z</span> <span class="o">+</span> <span class="n">offsets</span><span class="p">,</span> <span class="n">z</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>Let’s also declare a helper function that to (1) allocate the output vector
-and (2) enqueueing the above kernel.</p>
+<p>Let’s also declare a helper function to (1) allocate the <cite>z</cite> tensor
+and (2) enqueue the above kernel with appropriate grid/block sizes.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">add</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">):</span>
     <span class="n">z</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
     <span class="n">N</span> <span class="o">=</span> <span class="n">z</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
@@ -268,7 +268,7 @@ The maximum difference between torch and triton is 0.0
 </div>
 <div class="section" id="benchmark">
 <h2>Benchmark<a class="headerlink" href="#benchmark" title="Permalink to this headline">¶</a></h2>
-<p>We can now benchmark our custom op for vectors of increasing sizes to get a sense of how it does relative to PyTorch.
+<p>We can now benchmark our custom op on vectors of increasing sizes to get a sense of how it does relative to PyTorch.
 To make things easier, Triton has a set of built-in utilities that allow us to concisely plot the performance of your custom ops
 for different problem sizes.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nd">@triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">perf_report</span><span class="p">(</span>
@@ -296,7 +296,7 @@ for different problem sizes.</p>
     <span class="k">return</span> <span class="n">gbps</span><span class="p">(</span><span class="n">ms</span><span class="p">),</span> <span class="n">gbps</span><span class="p">(</span><span class="n">max_ms</span><span class="p">),</span> <span class="n">gbps</span><span class="p">(</span><span class="n">min_ms</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>We can now run the decorated function above. Pass <cite>show_plots=True</cite> to see the plots and/or
+<p>We can now run the decorated function above. Pass <cite>print_data=True</cite> to see the performance number, <cite>show_plots=True</cite> to plot them, and/or
 <a href="#id1"><span class="problematic" id="id2">`</span></a>save_path=’/path/to/results/’ to save them to disk along with raw CSV data</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">benchmark</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">show_plots</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -305,13 +305,13 @@ for different problem sizes.</p>
 <p class="sphx-glr-script-out">Out:</p>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>vector-add-performance:
            size      Triton       Torch
-0        4096.0    9.600000    9.600000
+0        4096.0    9.540372    9.600000
 1        8192.0   19.200000   19.200000
 2       16384.0   38.400001   38.400001
 3       32768.0   76.800002   76.800002
 4       65536.0  127.999995  127.999995
 5      131072.0  219.428568  219.428568
-6      262144.0  341.333321  341.333321
+6      262144.0  341.333321  384.000001
 7      524288.0  472.615390  472.615390
 8     1048576.0  614.400016  614.400016
 9     2097152.0  722.823517  722.823517
@@ -323,7 +323,7 @@ for different problem sizes.</p>
 15  134217728.0  851.577704  850.656574
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  11.009 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  10.979 seconds)</p>
 <div class="sphx-glr-footer class sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-01-vector-add-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/62d97d49a32414049819dd8bb8378080/01-vector-add.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">01-vector-add.py</span></code></a></p>

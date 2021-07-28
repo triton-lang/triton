@@ -41,8 +41,8 @@ def _add(
 
 
 # %%
-# Let's also declare a helper function that to (1) allocate the output vector
-# and (2) enqueueing the above kernel.
+# Let's also declare a helper function to (1) allocate the `z` tensor
+# and (2) enqueue the above kernel with appropriate grid/block sizes.
 
 
 def add(x, y):
@@ -80,7 +80,7 @@ print(f'The maximum difference between torch and triton is ' f'{torch.max(torch.
 # %%
 # Benchmark
 # -----------
-# We can now benchmark our custom op for vectors of increasing sizes to get a sense of how it does relative to PyTorch.
+# We can now benchmark our custom op on vectors of increasing sizes to get a sense of how it does relative to PyTorch.
 # To make things easier, Triton has a set of built-in utilities that allow us to concisely plot the performance of your custom ops
 # for different problem sizes.
 
@@ -111,6 +111,6 @@ def benchmark(size, provider):
 
 
 # %%
-# We can now run the decorated function above. Pass `show_plots=True` to see the plots and/or
+# We can now run the decorated function above. Pass `print_data=True` to see the performance number, `show_plots=True` to plot them, and/or
 # `save_path='/path/to/results/' to save them to disk along with raw CSV data
 benchmark.run(print_data=True, show_plots=True)
