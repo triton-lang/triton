@@ -23,6 +23,7 @@ jobs:
 
       - name: Install Triton
         run: |
+          eval `ssh-agent -s`
           ssh-add
           alias python='python3'
           cd python
