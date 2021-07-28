@@ -1,6 +1,13 @@
 name: Build Wheels
-on: workflow_dispatch
 on:
+  workflow_dispatch:
+    inputs:
+      logLevel:
+        description: 'Log level'     
+        required: true
+        default: 'warning'
+      tags:
+        description: 'Trigger wheels build'  
   schedule:    
     - cron: "0 0 * * *"
 
@@ -25,7 +32,7 @@ jobs:
           echo "base-dir=/project" >> python/setup.cfg
 
       - name: Build wheels
-      - run: |
+        run: |
           export CIBW_MANYLINUX_X86_64_IMAGE="manylinux2014"
           export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="manylinux2014"
           export CIBW_BEFORE_BUILD="pip install cmake;\
@@ -36,5 +43,5 @@ jobs:
 
 
       - name: Upload wheels to PyPI
-      - run: |
+        run: |
           python3 -m twine upload wheelhouse/* --skip-existing -u $(PYPI_USERNAME) -p $(PYPI_PASSWORD) 

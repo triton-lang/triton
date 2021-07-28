@@ -1,6 +1,13 @@
 name: Build Website
-on: workflow_dispatch
 on:
+  workflow_dispatch:
+    inputs:
+      logLevel:
+        description: 'Log level'     
+        required: true
+        default: 'warning'
+      tags:
+        description: 'Trigger website build'  
   schedule:    
     - cron: "0 0 * * *"
 
@@ -22,12 +29,12 @@ jobs:
           pip3 install -e .
 
       - name: Build docs
-      - run: |
+        run: |
           cd docs
           make html
 
       - name: Publish docs
-      - run: |
+        run: |
           git checkout gh-pages
           sh ./update-website.sh
           git remote set-url origin git@github.com:ptillet/triton.git
