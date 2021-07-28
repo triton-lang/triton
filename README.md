@@ -2,12 +2,12 @@
   <img src="https://cdn.openai.com/triton/assets/triton-logo.png" alt="Triton logo" width="88" height="100">
 </div>
 
-[![Build Wheels](https://github.com/openai/triton/actions/workflows/build-wheels.yml/badge.svg?branch=master)](https://github.com/openai/triton/actions/workflows/build-wheels.yml)
+[![Wheels](https://github.com/openai/triton/actions/workflows/wheels.yml/badge.svg?branch=master)](https://github.com/openai/triton/actions/workflows/wheels.yml)
 
 
 **`Documentation`** |
 ------------------- |
-[![Build Website](https://github.com/openai/triton/actions/workflows/build-website.yml/badge.svg)](https://triton-lang.org/)
+[![Documentation](https://github.com/openai/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/)
 
 
 # Triton
