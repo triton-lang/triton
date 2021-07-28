@@ -23,8 +23,6 @@ jobs:
 
       - name: Install Triton
         run: |
-          eval `ssh-agent -s`
-          DISPLAY=:0 SSH_ASKPASS=~/.ssh/give_pass.sh ssh-add ${{ secrets.SSH_KEY }} <<< ${{ secrets.SSH_PASS }}
           alias python='python3'
           cd python
           pip3 install -e .
@@ -38,5 +36,7 @@ jobs:
         run: |
           git checkout gh-pages
           sh ./update-website.sh
+          eval `ssh-agent -s`
+          DISPLAY=:0 SSH_ASKPASS=~/.ssh/give_pass.sh ssh-add ${{ secrets.SSH_KEY }} <<< ${{ secrets.SSH_PASS }}
           git remote set-url origin git@github.com:ptillet/triton.git
           git push
