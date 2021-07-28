@@ -1,3 +1,5 @@
+<img src="https://cdn.openai.com/triton/assets/triton-logo.png" alt="Triton logo" width="80" height="91">
+
 # Triton
 
 This is the development repository of Triton, a language and compiler for writing highly efficient custom Deep-Learning primitives. The aim of Triton is to provide an open-source environment to write fast code at higher productivity than CUDA, but also with higher flexibility than other existing DSLs.
