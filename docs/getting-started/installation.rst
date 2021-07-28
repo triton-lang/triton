@@ -10,6 +10,7 @@ You can install the latest stable release of Triton from pip:
 
       pip install triton
 
+Binary wheels are available for CPython 3.6-3.9 and PyPy 3.6-3.7.
 
 And the latest nightly release:
 
@@ -32,7 +33,10 @@ You can install the Python package from source by running the following commands
 
       git clone https://github.com/ptillet/triton.git;
       cd triton/python;
+      pip install cmake; # build time dependency
       pip install -e .
+
+Note that, if llvm-11 is not present on your system, the setup.py script will download LLVM static libraries on the web and link against that.
 
 You can then test your installation by running the unit tests:
 
