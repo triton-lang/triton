@@ -25,21 +25,28 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -std=gnu++17")
 
 
-# if(APPLE)
-#     set(CMAKE_OSX_SYSROOT "/")
-#     set(CMAKE_OSX_DEPLOYMENT_TARGET "")
-# endif()
-
-
 ##########
 # LLVM
 ##########
-find_package(LLVM 11 REQUIRED COMPONENTS "nvptx")
-message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
-include_directories("${LLVM_INCLUDE_DIRS}")
-if(APPLE)
-  set(CMAKE_OSX_DEPLOYMENT_TARGET "10.14")
+if("${LLVM_LIBRARY_DIR}" STREQUAL "")
+    find_package(LLVM 11 REQUIRED COMPONENTS "nvptx")
+    message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
+    if(APPLE)
+      set(CMAKE_OSX_DEPLOYMENT_TARGET "10.14")
+    endif()
+# sometimes we don't want to use llvm-config, since it may have been downloaded for some specific linux distros
+else()
+    set(LLVM_LDFLAGS "-L${LLVM_LIBRARY_DIR}")
+    set(LLVM_LIBRARIES libLLVMNVPTXCodeGen.a libLLVMSelectionDAG.a libLLVMipo.a libLLVMInstrumentation.a
+                       libLLVMVectorize.a libLLVMLinker.a libLLVMIRReader.a libLLVMAsmParser.a libLLVMFrontendOpenMP.a
+                       libLLVMAsmPrinter.a libLLVMDebugInfoDWARF.a libLLVMCodeGen.a libLLVMTarget.a libLLVMScalarOpts.a
+                       libLLVMInstCombine.a libLLVMAggressiveInstCombine.a libLLVMTransformUtils.a libLLVMBitWriter.a
+                       libLLVMAnalysis.a libLLVMProfileData.a libLLVMObject.a libLLVMTextAPI.a libLLVMMCParser.a
+                       libLLVMBitReader.a libLLVMCore.a libLLVMRemarks.a libLLVMBitstreamReader.a libLLVMNVPTXDesc.a
+                       libLLVMMC.a libLLVMDebugInfoCodeView.a libLLVMDebugInfoMSF.a libLLVMBinaryFormat.a libLLVMNVPTXInfo.a
+                       libLLVMSupport.a libLLVMDemangle.a)
 endif()
+include_directories("${LLVM_INCLUDE_DIRS}")
 
 # Python module
 if(BUILD_PYTHON_MODULE)
