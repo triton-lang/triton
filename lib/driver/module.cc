@@ -242,7 +242,7 @@ std::string cu_module::compile_llvm_module(llvm::Module* module, driver::device*
   if(major < 10)
     throw std::runtime_error("Triton requires CUDA 10+");
   // PTX version
-  int ptx = vptx.at(version);
+  int ptx = version > 11040 ? 73 : vptx.at(version);
   int ptx_major = ptx / 10;
   int ptx_minor = ptx % 10;
   // create
