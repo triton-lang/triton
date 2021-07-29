@@ -27,6 +27,10 @@ Supported Hardware:
   * NVIDIA GPUs (Compute Capability 7.0+)
   * Under development: AMD GPUs, CPUs
 
+# Contributing
+
+Community contributions are more than welcome, whether it be to fix bugs or to add new features. Feel free to open Github issues about your contribution ideas, and we will review them. A contributor's guide containing general guidelines is coming soon!
+
 # Disclaimer
 
 Triton is a fairly recent project, and it is under active development. We expect it to be pretty useful in a wide variety of cases, but don't be surprised if it's a bit rough around the edges :)
