@@ -29,7 +29,7 @@ Supported Hardware:
 
 # Contributing
 
-Community contributions are more than welcome, whether it be to fix bugs or to add new features. Feel free to open Github issues about your contribution ideas, and we will review them. A contributor's guide containing general guidelines is coming soon!
+Community contributions are more than welcome, whether it be to fix bugs or to add new features. Feel free to open GitHub issues about your contribution ideas, and we will review them. A contributor's guide containing general guidelines is coming soon!
 
 # Disclaimer
 
