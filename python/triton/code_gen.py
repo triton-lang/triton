@@ -558,13 +558,20 @@ class Kernel:
         if len(tensor_idxs) == 0:
             raise ValueError("No Tensor argument found.")
         invalid_args = []
+        devices_idx = []
         for idx in tensor_idxs:
             curr = wargs[idx]
             if not curr.is_cuda:
-                invalid_args += [idx]
+                invalid_args.append(idx)
+            else:
+                devices_idx.append(curr.device.index)
+
         if invalid_args:
             raise ValueError("Arguments at index {invalid_args} are on the wrong device.".format(invalid_args=invalid_args) +
                              " Only CUDA is supported at the moment")
+        if len(set(devices_idx)) != 1:
+            raise ValueError("Tensor arguments are not on the same device. Got device indices {devices_idx}.".format(devices_idx=devices_idx))
+          
         device = wargs[tensor_idxs[0]].device
         torch.cuda.set_device(device.index)
         # attributes
