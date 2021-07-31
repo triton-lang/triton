@@ -346,17 +346,17 @@ We will then compare its performance against (1) <code class="code docutils lite
 <p class="sphx-glr-script-out">Out:</p>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>softmax-performance:
           N      Triton  Torch (native)  Torch (jit)
-0     256.0  512.000001      512.000001   273.066674
-1     384.0  585.142862      585.142862   261.446801
+0     256.0  512.000001      546.133347   273.066674
+1     384.0  585.142862      585.142862   267.130429
 2     512.0  630.153853      606.814814   264.258068
 3     640.0  682.666684      640.000002   269.473696
 4     768.0  702.171410      664.216187   273.066663
 ..      ...         ...             ...          ...
-93  12160.0  812.359066      406.179533   329.483481
-94  12288.0  812.429770      415.661740   329.602681
-95  12416.0  810.840807      411.722274   329.173158
+93  12160.0  812.359066      405.755985   329.483481
+94  12288.0  812.429770      415.222812   329.602681
+95  12416.0  810.840807      412.149375   329.173158
 96  12544.0  810.925276      412.971190   329.292871
-97  12672.0  811.007961      412.516771   329.142870
+97  12672.0  811.007961      412.097543   329.142870
 
 [98 rows x 4 columns]
 </pre></div>
@@ -370,7 +370,7 @@ This means that – when temporary data is too large to fit entirely in the GPU�
 Note that our Triton kernel is not only faster than PyTorch’s CUDA kernel, it is also <strong>easier to read, understand and maintain</strong>.</p></li>
 </ul>
 </div></blockquote>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 1 minutes  8.252 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 1 minutes  8.181 seconds)</p>
 <div class="sphx-glr-footer class sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-02-fused-softmax-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/d91442ac2982c4e0cc3ab0f43534afbc/02-fused-softmax.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">02-fused-softmax.py</span></code></a></p>
