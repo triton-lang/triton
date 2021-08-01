@@ -20,6 +20,8 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE "Release")
 endif()
 
+find_library(TERMINFO_LIBRARY tinfo)
+
 # Compiler flags
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -std=gnu++17")
@@ -70,7 +72,7 @@ endif()
 file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
 add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
 target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
-target_link_libraries(triton ${LLVM_LIBRARIES} z tinfo)
+target_link_libraries(triton ${LLVM_LIBRARIES} z ${TERMINFO_LIBRARY})
 
 
 if(BUILD_PYTHON_MODULE)
