@@ -18,6 +18,13 @@ The foundations of this project are described in the following MAPL2019 publicat
 
 The [official documentation](https://triton-lang.org) contains installation instructions and tutorials.
 
+# Contributing
+
+Community contributions are more than welcome, whether it be to fix bugs or to add new features. Feel free to open GitHub issues about your contribution ideas, and we will review them. A contributor's guide containing general guidelines is coming soon!
+
+If you’re interested in joining our team and working on Triton & GPU kernels, [we’re hiring](https://openai.com/jobs/#acceleration)!
+
+
 # Compatibility
 
 Supported Platforms:
@@ -26,10 +33,6 @@ Supported Platforms:
 Supported Hardware:
   * NVIDIA GPUs (Compute Capability 7.0+)
   * Under development: AMD GPUs, CPUs
-
-# Contributing
-
-Community contributions are more than welcome, whether it be to fix bugs or to add new features. Feel free to open GitHub issues about your contribution ideas, and we will review them. A contributor's guide containing general guidelines is coming soon!
 
 # Disclaimer
 
