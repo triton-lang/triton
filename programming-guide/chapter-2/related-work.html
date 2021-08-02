@@ -114,8 +114,8 @@
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#scheduling-languages">Scheduling Languages</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="#id15">Advantages</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#id16">Limitations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id16">Advantages</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id17">Limitations</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#references">References</a></li>
@@ -190,7 +190,7 @@
             
   <div class="section" id="related-work">
 <h1>Related Work<a class="headerlink" href="#related-work" title="Permalink to this headline">¶</a></h1>
-<p>At first sight, Triton may seem like just yet another DSL for DNNs. The purpose of this section is to contextualize Triton and highlights its differences with the two leading approaches in this domain: polyhedral compilation and scheduling languages.</p>
+<p>At first sight, Triton may seem like just yet another DSL for DNNs. The purpose of this section is to contextualize Triton and highlight its differences with the two leading approaches in this domain: polyhedral compilation and scheduling languages.</p>
 <div class="section" id="polyhedral-compilation">
 <h2>Polyhedral Compilation<a class="headerlink" href="#polyhedral-compilation" title="Permalink to this headline">¶</a></h2>
 <p>Traditional compilers typically rely on intermediate representations, such as LLVM-IR <a class="reference internal" href="#lattner2004" id="id1"><span>[LATTNER2004]</span></a>, that encode control flow information using (un)conditional branches. This relatively low-level format makes it difficult to statically analyze the runtime behavior (e.g., cache misses) of input programs, and to  automatically optimize loops accordingly through the use of tiling <a class="reference internal" href="#wolfe1989" id="id2"><span>[WOLFE1989]</span></a>, fusion <a class="reference internal" href="#darte1999" id="id3"><span>[DARTE1999]</span></a> and interchange <a class="reference internal" href="#allen1984" id="id4"><span>[ALLEN1984]</span></a>. To solve this issue, polyhedral compilers <a class="reference internal" href="#ancourt1991" id="id5"><span>[ANCOURT1991]</span></a> rely on program representations that have statically predictable control flow, thereby enabling aggressive compile-time program transformations for data locality and parallelism. Though this strategy has been adopted by many languages and compilers for DNNs such as Tiramisu <a class="reference internal" href="#baghdadi2021" id="id6"><span>[BAGHDADI2021]</span></a>, Tensor Comprehensions <a class="reference internal" href="#vasilache2018" id="id7"><span>[VASILACHE2018]</span></a>, Diesel <a class="reference internal" href="#elango2018" id="id8"><span>[ELANGO2018]</span></a> and the Affine dialect in MLIR <a class="reference internal" href="#lattner2019" id="id9"><span>[LATTNER2019]</span></a>, it also comes with a number of limitations that will be described later in this section.</p>
@@ -282,14 +282,14 @@ i &amp; j
 <div class="section" id="limitations">
 <h3>Limitations<a class="headerlink" href="#limitations" title="Permalink to this headline">¶</a></h3>
 <p>Unfortunately, polyhedral compilers suffer from two major limitations that have prevented its adoption as a universal method for code generation in neural networks.</p>
-<p>First, the set of possible program transformations $Omega = { Theta_S ~|~ S in text{program} }$ is large, and grows with the number of statements in the program as well as with the size of their iteration domain. Verifying the legality of each transformation can also require the resolution of complex integer linear programs, making polyhedral compilation very computationally expensive. To make matters worse, hardware properties (e.g., cache size, number of SMs) and contextual characteristics (e.g., input tensor shapes) also have to be taken into account by this framework, leading to expensive auto-tuning procedures <a class="reference internal" href="#sato2019" id="id12"><span>[SATO2019]</span></a>.</p>
+<p>First, the set of possible program transformations <span class="math notranslate nohighlight">\(\Omega = \{ \Theta_S ~|~ S \in \text{program} \}\)</span> is large, and grows with the number of statements in the program as well as with the size of their iteration domain. Verifying the legality of each transformation can also require the resolution of complex integer linear programs, making polyhedral compilation very computationally expensive. To make matters worse, hardware properties (e.g., cache size, number of SMs) and contextual characteristics (e.g., input tensor shapes) also have to be taken into account by this framework, leading to expensive auto-tuning procedures <a class="reference internal" href="#sato2019" id="id12"><span>[SATO2019]</span></a>.</p>
 <p>Second, the polyhedral framework is not very generally applicable; SCoPs are relatively common <a class="reference internal" href="#girbal2006" id="id13"><span>[GIRBAL2006]</span></a> but require loop bounds and array subscripts to be affine functions of loop indices, which typically only occurs in regular, dense computations. For this reason, this framework still has to be successfully applied to sparse – or even structured-sparse – neural networks, whose importance has been rapidly rising over the past few years.</p>
 <p>On the other hand, blocked program representations advocated by this dissertation are less restricted in scope and can achieve close to peak performance using standard dataflow analysis.</p>
 </div>
 </div>
 <div class="section" id="scheduling-languages">
 <h2>Scheduling Languages<a class="headerlink" href="#scheduling-languages" title="Permalink to this headline">¶</a></h2>
-<p>Separation of concerns cite{dijkstra82} is a well-known design principle in computer science: programs should be decomposed into modular layers of abstraction that separate the semantics of their algorithms from the details of their implementation. Systems like Halide and TVM push this philosophy one step further, and enforce this separation at the grammatical level through the use of a  <strong>scheduling language</strong>. The benefits of this methodology are particularly visible in the case of matrix multiplication, where, as one can see below, the definition of the algorithm (Line 1-7) is completely disjoint from its implementation (Line 8-16), meaning that both can be maintained, optimized and distributed independently.</p>
+<p>Separation of concerns <a class="reference internal" href="#dijkstra82" id="id14"><span>[DIJKSTRA82]</span></a> is a well-known design principle in computer science: programs should be decomposed into modular layers of abstraction that separate the semantics of their algorithms from the details of their implementation. Systems like Halide and TVM push this philosophy one step further, and enforce this separation at the grammatical level through the use of a  <strong>scheduling language</strong>. The benefits of this methodology are particularly visible in the case of matrix multiplication, where, as one can see below, the definition of the algorithm (Line 1-7) is completely disjoint from its implementation (Line 8-16), meaning that both can be maintained, optimized and distributed independently.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="o">//</span> <span class="n">algorithm</span>
 <span class="linenos"> 2</span><span class="n">Var</span> <span class="n">x</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">),</span> <span class="n">y</span><span class="p">(</span><span class="s2">&quot;y&quot;</span><span class="p">);</span>
 <span class="linenos"> 3</span><span class="n">Func</span> <span class="n">matmul</span><span class="p">(</span><span class="s2">&quot;matmul&quot;</span><span class="p">);</span>
@@ -308,15 +308,15 @@ i &amp; j
 <span class="linenos">16</span>    <span class="o">.</span><span class="n">parallel</span><span class="p">(</span><span class="n">y</span><span class="p">)</span><span class="o">.</span><span class="n">vectorize</span><span class="p">(</span><span class="n">xii</span><span class="p">)</span><span class="o">.</span><span class="n">unroll</span><span class="p">(</span><span class="n">xi</span><span class="p">)</span><span class="o">.</span><span class="n">unroll</span><span class="p">(</span><span class="n">yii</span><span class="p">);</span>
 </pre></div>
 </div>
-<p>The resulting code may however not be completely portable, as schedules can sometimes rely on execution models (e.g., SPMD) or hardware intrinsics (e.g., matrix-multiply-accumulate) that are not widely available. This issue can be mitigated by auto-scheduling mechanisms <a class="reference internal" href="#mullapudi2016" id="id14"><span>[MULLAPUDI2016]</span></a>.</p>
-<div class="section" id="id15">
-<h3>Advantages<a class="headerlink" href="#id15" title="Permalink to this headline">¶</a></h3>
+<p>The resulting code may however not be completely portable, as schedules can sometimes rely on execution models (e.g., SPMD) or hardware intrinsics (e.g., matrix-multiply-accumulate) that are not widely available. This issue can be mitigated by auto-scheduling mechanisms <a class="reference internal" href="#mullapudi2016" id="id15"><span>[MULLAPUDI2016]</span></a>.</p>
+<div class="section" id="id16">
+<h3>Advantages<a class="headerlink" href="#id16" title="Permalink to this headline">¶</a></h3>
 <p>The main advantage of this approach is that it allows programmers to write an algorithm <em>only once</em>, and focus on performance optimization separately. It makes it possible to manually specify optimizations that a polyhedral compiler wouldn’t be able to figure out automatically using static data-flow analysis.</p>
 <p>Scheduling languages are, without a doubt, one of the most popular approaches for neural network code generation. The most popular system for this purpose is probably TVM, which provides good performance across a wide range of platforms as well as built-in automatic scheduling mechanisms.</p>
 </div>
-<div class="section" id="id16">
-<h3>Limitations<a class="headerlink" href="#id16" title="Permalink to this headline">¶</a></h3>
-<p>This ease-of-development comes at a cost. First of all, existing systems that follow this paradigm tend to be noticeably slower than Triton on modern hardware when applicable (e.g., V100/A100 tensor cores w/ equal tile sizes). I do believe that this is not a fundamental issue of scheduling languages – in the sense that it could probably be solved with more efforts – but it could mean that these systems are harder to engineer. More importantly, existing scheduling languages generate loops whose bounds and increments cannot depend on surrounding loop indice without at least imposing severe constraints on possible schedules – if not breaking the system entirely. This is problematic for sparse com-putations, whose iteration spaces may be irregular.</p>
+<div class="section" id="id17">
+<h3>Limitations<a class="headerlink" href="#id17" title="Permalink to this headline">¶</a></h3>
+<p>This ease-of-development comes at a cost. First of all, existing systems that follow this paradigm tend to be noticeably slower than Triton on modern hardware when applicable (e.g., V100/A100 tensor cores w/ equal tile sizes). I do believe that this is not a fundamental issue of scheduling languages – in the sense that it could probably be solved with more efforts – but it could mean that these systems are harder to engineer. More importantly, existing scheduling languages generate loops whose bounds and increments cannot depend on surrounding loop indice without at least imposing severe constraints on possible schedules – if not breaking the system entirely. This is problematic for sparse computations, whose iteration spaces may be irregular.</p>
 <table class="colwidths-given docutils align-default">
 <colgroup>
 <col style="width: 50%" />
@@ -402,7 +402,15 @@ i &amp; j
 <li><p>Girbal et al., “Semi-Automatic Composition of Loop Transformations for Deep Parallelism and Memory Hierarchies”, International Journal of Parallel Programming 2006</p></li>
 </ol>
 </dd>
-<dt class="label" id="mullapudi2016"><span class="brackets"><a class="fn-backref" href="#id14">MULLAPUDI2016</a></span></dt>
+<dt class="label" id="dijkstra82"><span class="brackets"><a class="fn-backref" href="#id14">DIJKSTRA82</a></span></dt>
+<dd><ol class="upperalpha simple" start="5">
+<li><ol class="upperalpha simple" start="23">
+<li><p>Dijkstra et al., “On the role of scientific thought”, Selected writings on computing: a personal perspective 1982</p></li>
+</ol>
+</li>
+</ol>
+</dd>
+<dt class="label" id="mullapudi2016"><span class="brackets"><a class="fn-backref" href="#id15">MULLAPUDI2016</a></span></dt>
 <dd><ol class="upperalpha simple" start="18">
 <li><p>Mullapudi et al., “Automatically scheduling halide image processing pipelines”, TOG 2016</p></li>
 </ol>
