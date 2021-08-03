@@ -49,7 +49,7 @@ Let us consider instead the case of a simple (numerically stabilized) softmax op
         # read 2MN elements ; write MN elements
         z = x - x_max[:, None]
         # read  MN elements ; write MN elements
-        numerator = torch.exp(x)
+        numerator = torch.exp(z)
         # read  MN elements ; write M  elements
         denominator = numerator.sum(dim=1)
         # read 2MN elements ; write MN elements
@@ -261,17 +261,17 @@ We will then compare its performance against (1) :code:`torch.softmax` and (2) t
 
     softmax-performance:
               N      Triton  Torch (native)  Torch (jit)
-    0     256.0  512.000001      546.133347   273.066674
-    1     384.0  585.142862      585.142862   267.130429
-    2     512.0  630.153853      606.814814   264.258068
-    3     640.0  682.666684      640.000002   269.473696
-    4     768.0  702.171410      664.216187   273.066663
+    0     256.0  512.000001      546.133347   186.181817
+    1     384.0  585.142862      585.142862   153.600004
+    2     512.0  630.153853      606.814814   154.566038
+    3     640.0  682.666684      640.000002   160.000000
+    4     768.0  702.171410      664.216187   162.754967
     ..      ...         ...             ...          ...
-    93  12160.0  812.359066      406.179533   329.483481
-    94  12288.0  812.429770      415.661740   329.602681
-    95  12416.0  810.840807      412.149375   329.173158
-    96  12544.0  810.925276      412.546756   329.292871
-    97  12672.0  811.007961      412.097543   329.410251
+    93  12160.0  812.359066      406.179533   198.936606
+    94  12288.0  812.429770      416.101597   199.298541
+    95  12416.0  810.840807      412.149375   198.854847
+    96  12544.0  810.925276      412.971190   199.111113
+    97  12672.0  811.007961      412.097543   199.167004
 
     [98 rows x 4 columns]
 
@@ -290,7 +290,7 @@ In the above plot, we can see that:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 1 minutes  8.174 seconds)
+   **Total running time of the script:** ( 1 minutes  13.269 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_02-fused-softmax.py:
