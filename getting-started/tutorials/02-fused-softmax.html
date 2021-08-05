@@ -195,7 +195,9 @@ to download the full example code</p>
 </div>
 <div class="sphx-glr-example-title section" id="fused-softmax">
 <span id="sphx-glr-getting-started-tutorials-02-fused-softmax-py"></span><h1>Fused Softmax<a class="headerlink" href="#fused-softmax" title="Permalink to this headline">¶</a></h1>
-<p>In this tutorial, you will write a fused softmax operation that is significantly faster than PyTorch’s native op for a particular class of matrices: those whose rows can fit in the GPU’s SRAM.
+<p>In this tutorial, you will write a fused softmax operation that is significantly faster
+than PyTorch’s native op for a particular class of matrices: those whose rows can fit in
+the GPU’s SRAM.
 You will learn about:</p>
 <ul class="simple">
 <li><p>The benefits of kernel fusion for bandwidth-bound operations.</p></li>
@@ -208,9 +210,13 @@ Let us consider instead the case of a simple (numerically stabilized) softmax op
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">torch</span>
 
 
-<span class="c1"># Compute the row-wise softmax of x</span>
 <span class="nd">@torch</span><span class="o">.</span><span class="n">jit</span><span class="o">.</span><span class="n">script</span>
 <span class="k">def</span> <span class="nf">naive_softmax</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Compute row-wise softmax of X using native pytorch</span>
+
+<span class="sd">    We subtract the maximum element in order to avoid overflows. Softmax is invariant to</span>
+<span class="sd">    this shift.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
     <span class="c1"># read  MN elements ; write M  elements</span>
     <span class="n">x_max</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
     <span class="c1"># read 2MN elements ; write MN elements</span>
@@ -225,45 +231,57 @@ Let us consider instead the case of a simple (numerically stabilized) softmax op
     <span class="k">return</span> <span class="n">ret</span>
 </pre></div>
 </div>
-<p>When implemented naively in pytorch, computing <code class="code docutils literal notranslate"><span class="pre">y</span> <span class="pre">=</span> <span class="pre">naive_softmax(x)</span></code> for <span class="math notranslate nohighlight">\(x \in R^{M \times N}\)</span> requires reading <span class="math notranslate nohighlight">\(7MN\)</span> elements from DRAM and writing back <span class="math notranslate nohighlight">\(3MN + 2M\)</span> elements.
-This is obviously wasteful; we’d prefer to have a custom “fused” kernel that only reads X once and does all the necessary computations on-chip.
-Doing so would require reading and writing back only <span class="math notranslate nohighlight">\(MN\)</span> bytes, so we could expect a theoretical speed-up of ~5x (i.e., <span class="math notranslate nohighlight">\((10MN + 2M) / 2MN\)</span>).
-The <cite>torch.jit.script</cite> flags aims to perform this kind of “kernel fusion” automatically but, as we will see later, it is still far from ideal.</p>
+<p>When implemented naively in PyTorch, computing <code class="code docutils literal notranslate"><span class="pre">y</span> <span class="pre">=</span> <span class="pre">naive_softmax(x)</span></code> for <span class="math notranslate nohighlight">\(x \in R^{M \times N}\)</span>
+requires reading <span class="math notranslate nohighlight">\(7MN\)</span> elements from DRAM and writing back <span class="math notranslate nohighlight">\(3MN + 2M\)</span> elements.
+This is obviously wasteful; we’d prefer to have a custom “fused” kernel that only reads
+X once and does all the necessary computations on-chip.
+Doing so would require reading and writing back only <span class="math notranslate nohighlight">\(MN\)</span> bytes, so we could
+expect a theoretical speed-up of ~5x (i.e., <span class="math notranslate nohighlight">\((10MN + 2M) / 2MN\)</span>).
+The <cite>torch.jit.script</cite> flags aims to perform this kind of “kernel fusion” automatically
+but, as we will see later, it is still far from ideal.</p>
 </div>
 <div class="section" id="compute-kernel">
 <h2>Compute Kernel<a class="headerlink" href="#compute-kernel" title="Permalink to this headline">¶</a></h2>
-<p>Our softmax kernel works as follows: each program loads a row of the input matrix X, normalizes it and writes back the result to the output Y.
-Note that one important limitation of Triton is that each block must have a power-of-two number of elements,
-so we need to internally “pad” each row and guard the memory operations properly if we want to handle any possible input shapes:</p>
+<p>Our softmax kernel works as follows: each program loads a row of the input matrix X,
+normalizes it and writes back the result to the output Y.
+Note that one important limitation of Triton is that each block must have a
+power-of-two number of elements, so we need to internally “pad” each row and guard the
+memory operations properly if we want to handle any possible input shapes:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">triton</span>
 <span class="kn">import</span> <span class="nn">triton.language</span> <span class="k">as</span> <span class="nn">tl</span>
 
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
-<span class="k">def</span> <span class="nf">_softmax</span><span class="p">(</span><span class="n">Y</span><span class="p">,</span> <span class="n">X</span><span class="p">,</span> <span class="n">stride_xm</span><span class="p">,</span> <span class="n">stride_ym</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="o">**</span><span class="n">meta</span><span class="p">):</span>
-    <span class="c1"># row index</span>
-    <span class="n">m</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-    <span class="c1"># col indices</span>
-    <span class="c1"># here BLOCK is the smallest power of two greater than `N`</span>
-    <span class="n">n</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s1">&#39;BLOCK&#39;</span><span class="p">])</span>
-    <span class="c1"># the memory address of all the elements</span>
-    <span class="c1"># that we want to load can be computed as follows</span>
-    <span class="n">X</span> <span class="o">=</span> <span class="n">X</span> <span class="o">+</span> <span class="n">m</span> <span class="o">*</span> <span class="n">stride_xm</span> <span class="o">+</span> <span class="n">n</span>
-    <span class="n">x</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">n</span> <span class="o">&lt;</span> <span class="n">N</span><span class="p">,</span> <span class="n">other</span><span class="o">=-</span><span class="nb">float</span><span class="p">(</span><span class="s1">&#39;inf&#39;</span><span class="p">))</span>
+<span class="k">def</span> <span class="nf">softmax_kernel</span><span class="p">(</span>
+    <span class="n">output_ptr</span><span class="p">,</span> <span class="n">input_ptr</span><span class="p">,</span> <span class="n">input_row_stride</span><span class="p">,</span> <span class="n">output_row_stride</span><span class="p">,</span> <span class="n">n_cols</span><span class="p">,</span> <span class="o">**</span><span class="n">meta</span>
+<span class="p">):</span>
+    <span class="c1"># The rows of the softmax are independent, so we parallelize across those</span>
+    <span class="n">row_idx</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">BLOCK_SIZE</span> <span class="o">=</span> <span class="n">meta</span><span class="p">[</span><span class="s1">&#39;BLOCK_SIZE&#39;</span><span class="p">]</span>
+    <span class="c1"># The stride represents how much we need to increase the pointer to advance 1 row</span>
+    <span class="n">row_start_ptr</span> <span class="o">=</span> <span class="n">input_ptr</span> <span class="o">+</span> <span class="n">row_idx</span> <span class="o">*</span> <span class="n">input_row_stride</span>
+
+    <span class="c1"># The block size is the next power of two greater than n_cols, so we can fit each</span>
+    <span class="c1"># row in a single block</span>
+    <span class="n">col_offsets</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="p">)</span>
+    <span class="n">input_ptrs</span> <span class="o">=</span> <span class="n">row_start_ptr</span> <span class="o">+</span> <span class="n">col_offsets</span>
+    <span class="c1"># Load the row into SRAM, using a mask since BLOCK_SIZE may be &gt; than n_cols</span>
+    <span class="n">row</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">input_ptrs</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">col_offsets</span> <span class="o">&lt;</span> <span class="n">n_cols</span><span class="p">,</span> <span class="n">other</span><span class="o">=-</span><span class="nb">float</span><span class="p">(</span><span class="s1">&#39;inf&#39;</span><span class="p">))</span>
     <span class="c1"># Substract maximum for numerical stability</span>
-    <span class="n">z</span> <span class="o">=</span> <span class="n">x</span> <span class="o">-</span> <span class="n">tl</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-    <span class="c1"># Note that exponentials in Triton are fast</span>
-    <span class="c1"># but approximate (i.e., think __expf in CUDA)</span>
-    <span class="n">num</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">z</span><span class="p">)</span>
-    <span class="n">denom</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">num</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-    <span class="n">y</span> <span class="o">=</span> <span class="n">num</span> <span class="o">/</span> <span class="n">denom</span>
-    <span class="c1"># Write back to Y</span>
-    <span class="n">Y</span> <span class="o">=</span> <span class="n">Y</span> <span class="o">+</span> <span class="n">m</span> <span class="o">*</span> <span class="n">stride_ym</span> <span class="o">+</span> <span class="n">n</span>
-    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">Y</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">n</span> <span class="o">&lt;</span> <span class="n">N</span><span class="p">)</span>
+    <span class="n">row_minus_max</span> <span class="o">=</span> <span class="n">row</span> <span class="o">-</span> <span class="n">tl</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">row</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="c1"># Note that exponentials in Triton are fast but approximate (i.e., think __expf in CUDA)</span>
+    <span class="n">numerator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">row_minus_max</span><span class="p">)</span>
+    <span class="n">denominator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">numerator</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">softmax_output</span> <span class="o">=</span> <span class="n">numerator</span> <span class="o">/</span> <span class="n">denominator</span>
+    <span class="c1"># Write back output to DRAM</span>
+    <span class="n">output_row_start_ptr</span> <span class="o">=</span> <span class="n">output_ptr</span> <span class="o">+</span> <span class="n">row_idx</span> <span class="o">*</span> <span class="n">output_row_stride</span>
+    <span class="n">output_ptrs</span> <span class="o">=</span> <span class="n">output_row_start_ptr</span> <span class="o">+</span> <span class="n">col_offsets</span>
+    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">output_ptrs</span><span class="p">,</span> <span class="n">softmax_output</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">col_offsets</span> <span class="o">&lt;</span> <span class="n">n_cols</span><span class="p">)</span>
 </pre></div>
 </div>
 <p>We can create a helper function that enqueues the kernel and its (meta-)arguments for any given input tensor.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">next_power_of_2</span><span class="p">(</span><span class="n">n</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Return the smallest power of 2 greater than or equal to n&quot;&quot;&quot;</span>
     <span class="n">n</span> <span class="o">-=</span> <span class="mi">1</span>
     <span class="n">n</span> <span class="o">|=</span> <span class="n">n</span> <span class="o">&gt;&gt;</span> <span class="mi">1</span>
     <span class="n">n</span> <span class="o">|=</span> <span class="n">n</span> <span class="o">&gt;&gt;</span> <span class="mi">2</span>
@@ -275,20 +293,31 @@ so we need to internally “pad” each row and guard the memory operations prop
 
 
 <span class="k">def</span> <span class="nf">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
-    <span class="n">M</span><span class="p">,</span> <span class="n">N</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">n_rows</span><span class="p">,</span> <span class="n">n_cols</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span>
     <span class="c1"># The block size is the smallest power of two greater than the number of columns in `x`</span>
-    <span class="n">BLOCK</span> <span class="o">=</span> <span class="n">next_power_of_2</span><span class="p">(</span><span class="n">N</span><span class="p">)</span>
+    <span class="n">BLOCK_SIZE</span> <span class="o">=</span> <span class="n">next_power_of_2</span><span class="p">(</span><span class="n">n_cols</span><span class="p">)</span>
     <span class="c1"># Another trick we can use is to ask the compiler to use more threads per row by</span>
     <span class="c1"># increasing the number of warps (`num_warps`) over which each row is distributed.</span>
     <span class="c1"># You will see in the next tutorial how to auto-tune this value in a more natural</span>
     <span class="c1"># way so you don&#39;t have to come up with manual heuristics yourself.</span>
     <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">4</span>
-    <span class="k">if</span> <span class="n">BLOCK</span> <span class="o">&gt;=</span> <span class="mi">2048</span><span class="p">:</span> <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">8</span>
-    <span class="k">if</span> <span class="n">BLOCK</span> <span class="o">&gt;=</span> <span class="mi">4096</span><span class="p">:</span> <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">16</span>
+    <span class="k">if</span> <span class="n">BLOCK_SIZE</span> <span class="o">&gt;=</span> <span class="mi">2048</span><span class="p">:</span>
+        <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">8</span>
+    <span class="k">if</span> <span class="n">BLOCK_SIZE</span> <span class="o">&gt;=</span> <span class="mi">4096</span><span class="p">:</span>
+        <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">16</span>
     <span class="c1"># Allocate output</span>
     <span class="n">y</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
-    <span class="c1"># Enqueue kernel. The launch grid is simple: we have one kernel instance per row of the input matrix</span>
-    <span class="n">_softmax</span><span class="p">[(</span><span class="n">M</span><span class="p">,</span> <span class="p">)](</span><span class="n">y</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">x</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">y</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">,</span> <span class="n">BLOCK</span><span class="o">=</span><span class="n">BLOCK</span><span class="p">)</span>
+    <span class="c1"># Enqueue kernel. The 1D launch grid is simple: we have one kernel instance per row o</span>
+    <span class="c1"># f the input matrix</span>
+    <span class="n">softmax_kernel</span><span class="p">[(</span><span class="n">n_rows</span><span class="p">,)](</span>
+        <span class="n">y</span><span class="p">,</span>
+        <span class="n">x</span><span class="p">,</span>
+        <span class="n">x</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span>
+        <span class="n">y</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span>
+        <span class="n">n_cols</span><span class="p">,</span>
+        <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">,</span>
+        <span class="n">BLOCK_SIZE</span><span class="o">=</span><span class="n">BLOCK_SIZE</span><span class="p">,</span>
+    <span class="p">)</span>
     <span class="k">return</span> <span class="n">y</span>
 </pre></div>
 </div>
@@ -299,9 +328,9 @@ so we need to internally “pad” each row and guard the memory operations prop
 This will allow us to verify that our padding mechanism works.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
 <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">1823</span><span class="p">,</span> <span class="mi">781</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">)</span>
-<span class="n">y_tri</span> <span class="o">=</span> <span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
-<span class="n">y_ref</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">y_tri</span><span class="p">,</span> <span class="n">y_ref</span><span class="p">))</span>
+<span class="n">y_triton</span> <span class="o">=</span> <span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+<span class="n">y_torch</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">y_triton</span><span class="p">,</span> <span class="n">y_torch</span><span class="p">))</span>
 </pre></div>
 </div>
 <p class="sphx-glr-script-out">Out:</p>
@@ -317,14 +346,24 @@ We will then compare its performance against (1) <code class="code docutils lite
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nd">@triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">perf_report</span><span class="p">(</span>
     <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">Benchmark</span><span class="p">(</span>
         <span class="n">x_names</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;N&#39;</span><span class="p">],</span>  <span class="c1"># argument names to use as an x-axis for the plot</span>
-        <span class="n">x_vals</span><span class="o">=</span><span class="p">[</span><span class="mi">128</span> <span class="o">*</span> <span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">100</span><span class="p">)],</span>  <span class="c1"># different possible values for `x_name`</span>
+        <span class="n">x_vals</span><span class="o">=</span><span class="p">[</span>
+            <span class="mi">128</span> <span class="o">*</span> <span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">100</span><span class="p">)</span>
+        <span class="p">],</span>  <span class="c1"># different possible values for `x_name`</span>
         <span class="n">line_arg</span><span class="o">=</span><span class="s1">&#39;provider&#39;</span><span class="p">,</span>  <span class="c1"># argument name whose value corresponds to a different line in the plot</span>
-        <span class="n">line_vals</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;triton&#39;</span><span class="p">,</span> <span class="s1">&#39;torch-native&#39;</span><span class="p">,</span> <span class="s1">&#39;torch-jit&#39;</span><span class="p">],</span>  <span class="c1"># possible values for `line_arg``</span>
-        <span class="n">line_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;Triton&quot;</span><span class="p">,</span> <span class="s2">&quot;Torch (native)&quot;</span><span class="p">,</span> <span class="s2">&quot;Torch (jit)&quot;</span><span class="p">],</span>  <span class="c1"># label name for the lines</span>
+        <span class="n">line_vals</span><span class="o">=</span><span class="p">[</span>
+            <span class="s1">&#39;triton&#39;</span><span class="p">,</span>
+            <span class="s1">&#39;torch-native&#39;</span><span class="p">,</span>
+            <span class="s1">&#39;torch-jit&#39;</span><span class="p">,</span>
+        <span class="p">],</span>  <span class="c1"># possible values for `line_arg``</span>
+        <span class="n">line_names</span><span class="o">=</span><span class="p">[</span>
+            <span class="s2">&quot;Triton&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;Torch (native)&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;Torch (jit)&quot;</span><span class="p">,</span>
+        <span class="p">],</span>  <span class="c1"># label name for the lines</span>
         <span class="n">styles</span><span class="o">=</span><span class="p">[(</span><span class="s1">&#39;blue&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">),</span> <span class="p">(</span><span class="s1">&#39;green&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">),</span> <span class="p">(</span><span class="s1">&#39;green&#39;</span><span class="p">,</span> <span class="s1">&#39;--&#39;</span><span class="p">)],</span>  <span class="c1"># line styles</span>
         <span class="n">ylabel</span><span class="o">=</span><span class="s2">&quot;GB/s&quot;</span><span class="p">,</span>  <span class="c1"># label name for the y-axis</span>
         <span class="n">plot_name</span><span class="o">=</span><span class="s2">&quot;softmax-performance&quot;</span><span class="p">,</span>  <span class="c1"># name for the plot. Used also as a file name for saving the plot.</span>
-        <span class="n">args</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;M&#39;</span><span class="p">:</span> <span class="mi">4096</span><span class="p">}</span>  <span class="c1"># values for function arguments not in `x_names` and `y_name`</span>
+        <span class="n">args</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;M&#39;</span><span class="p">:</span> <span class="mi">4096</span><span class="p">},</span>  <span class="c1"># values for function arguments not in `x_names` and `y_name`</span>
     <span class="p">)</span>
 <span class="p">)</span>
 <span class="k">def</span> <span class="nf">benchmark</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">provider</span><span class="p">):</span>
@@ -348,15 +387,15 @@ We will then compare its performance against (1) <code class="code docutils lite
           N      Triton  Torch (native)  Torch (jit)
 0     256.0  512.000001      546.133347   186.181817
 1     384.0  585.142862      585.142862   153.600004
-2     512.0  630.153853      585.142849   154.566038
-3     640.0  682.666684      640.000002   160.000000
+2     512.0  630.153853      606.814814   154.566038
+3     640.0  660.645170      640.000002   160.000000
 4     768.0  702.171410      664.216187   163.839992
 ..      ...         ...             ...          ...
-93  12160.0  812.359066      406.179533   199.140227
-94  12288.0  812.429770      415.661740   199.399583
-95  12416.0  810.840807      412.149375   199.054102
-96  12544.0  810.925276      412.971190   199.308841
-97  12672.0  811.007961      412.097543   199.264875
+93  12160.0  812.359066      406.179533   199.038365
+94  12288.0  812.429770      415.222812   199.298541
+95  12416.0  810.840807      412.149375   198.854847
+96  12544.0  810.925276      412.971190   199.209928
+97  12672.0  809.389265      412.097543   199.167004
 
 [98 rows x 4 columns]
 </pre></div>
@@ -370,7 +409,7 @@ This means that – when temporary data is too large to fit entirely in the GPU�
 Note that our Triton kernel is not only faster than PyTorch’s CUDA kernel, it is also <strong>easier to read, understand and maintain</strong>.</p></li>
 </ul>
 </div></blockquote>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 1 minutes  12.626 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 1 minutes  13.186 seconds)</p>
 <div class="sphx-glr-footer class sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-02-fused-softmax-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/d91442ac2982c4e0cc3ab0f43534afbc/02-fused-softmax.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">02-fused-softmax.py</span></code></a></p>

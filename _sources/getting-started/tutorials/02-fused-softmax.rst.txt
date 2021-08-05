@@ -20,20 +20,22 @@
 
 Fused Softmax
 =================
-In this tutorial, you will write a fused softmax operation that is significantly faster than PyTorch's native op for a particular class of matrices: those whose rows can fit in the GPU's SRAM.
+In this tutorial, you will write a fused softmax operation that is significantly faster
+than PyTorch's native op for a particular class of matrices: those whose rows can fit in
+the GPU's SRAM.
 You will learn about:
 
 - The benefits of kernel fusion for bandwidth-bound operations.
 - Reduction operators in Triton.
 
-.. GENERATED FROM PYTHON SOURCE LINES 12-16
+.. GENERATED FROM PYTHON SOURCE LINES 14-18
 
 Motivations
 ------------
 Custom GPU kernels for elementwise additions are educationally valuable but won't get you very far in practice.
 Let us consider instead the case of a simple (numerically stabilized) softmax operation:
 
-.. GENERATED FROM PYTHON SOURCE LINES 16-37
+.. GENERATED FROM PYTHON SOURCE LINES 18-43
 
 .. code-block:: default
 
@@ -41,9 +43,13 @@ Let us consider instead the case of a simple (numerically stabilized) softmax op
     import torch
 
 
-    # Compute the row-wise softmax of x
     @torch.jit.script
     def naive_softmax(x):
+        """Compute row-wise softmax of X using native pytorch
+
+        We subtract the maximum element in order to avoid overflows. Softmax is invariant to
+        this shift.
+        """
         # read  MN elements ; write M  elements
         x_max = x.max(dim=1)[0]
         # read 2MN elements ; write MN elements
@@ -65,22 +71,28 @@ Let us consider instead the case of a simple (numerically stabilized) softmax op
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 38-42
+.. GENERATED FROM PYTHON SOURCE LINES 44-52
 
-When implemented naively in pytorch, computing :code:`y = naive_softmax(x)` for :math:`x \in R^{M \times N}` requires reading :math:`7MN` elements from DRAM and writing back :math:`3MN + 2M` elements.
-This is obviously wasteful; we'd prefer to have a custom "fused" kernel that only reads X once and does all the necessary computations on-chip.
-Doing so would require reading and writing back only :math:`MN` bytes, so we could expect a theoretical speed-up of ~5x (i.e., :math:`(10MN + 2M) / 2MN`).
-The `torch.jit.script` flags aims to perform this kind of "kernel fusion" automatically but, as we will see later, it is still far from ideal.
+When implemented naively in PyTorch, computing :code:`y = naive_softmax(x)` for :math:`x \in R^{M \times N}`
+requires reading :math:`7MN` elements from DRAM and writing back :math:`3MN + 2M` elements.
+This is obviously wasteful; we'd prefer to have a custom "fused" kernel that only reads
+X once and does all the necessary computations on-chip.
+Doing so would require reading and writing back only :math:`MN` bytes, so we could
+expect a theoretical speed-up of ~5x (i.e., :math:`(10MN + 2M) / 2MN`).
+The `torch.jit.script` flags aims to perform this kind of "kernel fusion" automatically
+but, as we will see later, it is still far from ideal.
 
-.. GENERATED FROM PYTHON SOURCE LINES 44-49
+.. GENERATED FROM PYTHON SOURCE LINES 54-61
 
 Compute Kernel
 ----------------
-Our softmax kernel works as follows: each program loads a row of the input matrix X, normalizes it and writes back the result to the output Y.
-Note that one important limitation of Triton is that each block must have a power-of-two number of elements,
-so we need to internally "pad" each row and guard the memory operations properly if we want to handle any possible input shapes:
+Our softmax kernel works as follows: each program loads a row of the input matrix X,
+normalizes it and writes back the result to the output Y.
+Note that one important limitation of Triton is that each block must have a
+power-of-two number of elements, so we need to internally "pad" each row and guard the
+memory operations properly if we want to handle any possible input shapes:
 
-.. GENERATED FROM PYTHON SOURCE LINES 49-77
+.. GENERATED FROM PYTHON SOURCE LINES 61-94
 
 .. code-block:: default
 
@@ -90,26 +102,31 @@ so we need to internally "pad" each row and guard the memory operations properly
 
 
     @triton.jit
-    def _softmax(Y, X, stride_xm, stride_ym, M, N, **meta):
-        # row index
-        m = tl.program_id(0)
-        # col indices
-        # here BLOCK is the smallest power of two greater than `N`
-        n = tl.arange(0, meta['BLOCK'])
-        # the memory address of all the elements
-        # that we want to load can be computed as follows
-        X = X + m * stride_xm + n
-        x = tl.load(X, mask=n < N, other=-float('inf'))
+    def softmax_kernel(
+        output_ptr, input_ptr, input_row_stride, output_row_stride, n_cols, **meta
+    ):
+        # The rows of the softmax are independent, so we parallelize across those
+        row_idx = tl.program_id(0)
+        BLOCK_SIZE = meta['BLOCK_SIZE']
+        # The stride represents how much we need to increase the pointer to advance 1 row
+        row_start_ptr = input_ptr + row_idx * input_row_stride
+
+        # The block size is the next power of two greater than n_cols, so we can fit each
+        # row in a single block
+        col_offsets = tl.arange(0, BLOCK_SIZE)
+        input_ptrs = row_start_ptr + col_offsets
+        # Load the row into SRAM, using a mask since BLOCK_SIZE may be > than n_cols
+        row = tl.load(input_ptrs, mask=col_offsets < n_cols, other=-float('inf'))
         # Substract maximum for numerical stability
-        z = x - tl.max(x, axis=0)
-        # Note that exponentials in Triton are fast
-        # but approximate (i.e., think __expf in CUDA)
-        num = tl.exp(z)
-        denom = tl.sum(num, axis=0)
-        y = num / denom
-        # Write back to Y
-        Y = Y + m * stride_ym + n
-        tl.store(Y, y, mask=n < N)
+        row_minus_max = row - tl.max(row, axis=0)
+        # Note that exponentials in Triton are fast but approximate (i.e., think __expf in CUDA)
+        numerator = tl.exp(row_minus_max)
+        denominator = tl.sum(numerator, axis=0)
+        softmax_output = numerator / denominator
+        # Write back output to DRAM
+        output_row_start_ptr = output_ptr + row_idx * output_row_stride
+        output_ptrs = output_row_start_ptr + col_offsets
+        tl.store(output_ptrs, softmax_output, mask=col_offsets < n_cols)
 
 
 
@@ -119,17 +136,18 @@ so we need to internally "pad" each row and guard the memory operations properly
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 78-79
+.. GENERATED FROM PYTHON SOURCE LINES 95-96
 
 We can create a helper function that enqueues the kernel and its (meta-)arguments for any given input tensor.
 
-.. GENERATED FROM PYTHON SOURCE LINES 79-110
+.. GENERATED FROM PYTHON SOURCE LINES 96-139
 
 .. code-block:: default
 
 
 
     def next_power_of_2(n):
+        """Return the smallest power of 2 greater than or equal to n"""
         n -= 1
         n |= n >> 1
         n |= n >> 2
@@ -141,20 +159,31 @@ We can create a helper function that enqueues the kernel and its (meta-)argument
 
 
     def softmax(x):
-        M, N = x.shape
+        n_rows, n_cols = x.shape
         # The block size is the smallest power of two greater than the number of columns in `x`
-        BLOCK = next_power_of_2(N)
+        BLOCK_SIZE = next_power_of_2(n_cols)
         # Another trick we can use is to ask the compiler to use more threads per row by
         # increasing the number of warps (`num_warps`) over which each row is distributed.
         # You will see in the next tutorial how to auto-tune this value in a more natural
         # way so you don't have to come up with manual heuristics yourself.
         num_warps = 4
-        if BLOCK >= 2048: num_warps = 8
-        if BLOCK >= 4096: num_warps = 16
+        if BLOCK_SIZE >= 2048:
+            num_warps = 8
+        if BLOCK_SIZE >= 4096:
+            num_warps = 16
         # Allocate output
         y = torch.empty_like(x)
-        # Enqueue kernel. The launch grid is simple: we have one kernel instance per row of the input matrix
-        _softmax[(M, )](y, x, x.stride(0), y.stride(0), M, N, num_warps=num_warps, BLOCK=BLOCK)
+        # Enqueue kernel. The 1D launch grid is simple: we have one kernel instance per row o
+        # f the input matrix
+        softmax_kernel[(n_rows,)](
+            y,
+            x,
+            x.stride(0),
+            y.stride(0),
+            n_cols,
+            num_warps=num_warps,
+            BLOCK_SIZE=BLOCK_SIZE,
+        )
         return y
 
 
@@ -165,26 +194,26 @@ We can create a helper function that enqueues the kernel and its (meta-)argument
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 111-113
+.. GENERATED FROM PYTHON SOURCE LINES 140-142
 
 Unit Test
 ----------
 
-.. GENERATED FROM PYTHON SOURCE LINES 115-117
+.. GENERATED FROM PYTHON SOURCE LINES 144-146
 
 We make sure that we test our kernel on a matrix with an irregular number of rows and columns.
 This will allow us to verify that our padding mechanism works.
 
-.. GENERATED FROM PYTHON SOURCE LINES 117-124
+.. GENERATED FROM PYTHON SOURCE LINES 146-153
 
 .. code-block:: default
 
 
     torch.manual_seed(0)
     x = torch.randn(1823, 781, device='cuda')
-    y_tri = softmax(x)
-    y_ref = torch.softmax(x, axis=1)
-    print(torch.allclose(y_tri, y_ref))
+    y_triton = softmax(x)
+    y_torch = torch.softmax(x, axis=1)
+    print(torch.allclose(y_triton, y_torch))
 
 
 
@@ -201,18 +230,18 @@ This will allow us to verify that our padding mechanism works.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 125-126
+.. GENERATED FROM PYTHON SOURCE LINES 154-155
 
 As expected, the results are identical.
 
-.. GENERATED FROM PYTHON SOURCE LINES 128-132
+.. GENERATED FROM PYTHON SOURCE LINES 157-161
 
 Benchmark
 -------------
 Here we will benchmark our operation as a function of the number of columns in the input matrix -- assuming 4096 rows.
 We will then compare its performance against (1) :code:`torch.softmax` and (2) the :code:`naive_softmax` defined above.
 
-.. GENERATED FROM PYTHON SOURCE LINES 132-161
+.. GENERATED FROM PYTHON SOURCE LINES 161-200
 
 .. code-block:: default
 
@@ -221,14 +250,24 @@ We will then compare its performance against (1) :code:`torch.softmax` and (2) t
     @triton.testing.perf_report(
         triton.testing.Benchmark(
             x_names=['N'],  # argument names to use as an x-axis for the plot
-            x_vals=[128 * i for i in range(2, 100)],  # different possible values for `x_name`
+            x_vals=[
+                128 * i for i in range(2, 100)
+            ],  # different possible values for `x_name`
             line_arg='provider',  # argument name whose value corresponds to a different line in the plot
-            line_vals=['triton', 'torch-native', 'torch-jit'],  # possible values for `line_arg``
-            line_names=["Triton", "Torch (native)", "Torch (jit)"],  # label name for the lines
+            line_vals=[
+                'triton',
+                'torch-native',
+                'torch-jit',
+            ],  # possible values for `line_arg``
+            line_names=[
+                "Triton",
+                "Torch (native)",
+                "Torch (jit)",
+            ],  # label name for the lines
             styles=[('blue', '-'), ('green', '-'), ('green', '--')],  # line styles
             ylabel="GB/s",  # label name for the y-axis
             plot_name="softmax-performance",  # name for the plot. Used also as a file name for saving the plot.
-            args={'M': 4096}  # values for function arguments not in `x_names` and `y_name`
+            args={'M': 4096},  # values for function arguments not in `x_names` and `y_name`
         )
     )
     def benchmark(M, N, provider):
@@ -263,22 +302,22 @@ We will then compare its performance against (1) :code:`torch.softmax` and (2) t
               N      Triton  Torch (native)  Torch (jit)
     0     256.0  512.000001      546.133347   186.181817
     1     384.0  585.142862      585.142862   153.600004
-    2     512.0  630.153853      585.142849   154.566038
-    3     640.0  682.666684      640.000002   160.000000
+    2     512.0  630.153853      606.814814   154.566038
+    3     640.0  660.645170      640.000002   160.000000
     4     768.0  702.171410      664.216187   163.839992
     ..      ...         ...             ...          ...
-    93  12160.0  812.359066      406.179533   199.140227
-    94  12288.0  812.429770      415.661740   199.399583
-    95  12416.0  810.840807      412.149375   199.054102
-    96  12544.0  810.925276      412.971190   199.308841
-    97  12672.0  811.007961      412.097543   199.264875
+    93  12160.0  812.359066      406.179533   199.038365
+    94  12288.0  812.429770      415.222812   199.298541
+    95  12416.0  810.840807      412.149375   198.854847
+    96  12544.0  810.925276      412.971190   199.209928
+    97  12672.0  809.389265      412.097543   199.167004
 
     [98 rows x 4 columns]
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 162-167
+.. GENERATED FROM PYTHON SOURCE LINES 201-207
 
 In the above plot, we can see that:
 
@@ -290,7 +329,7 @@ In the above plot, we can see that:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 1 minutes  12.626 seconds)
+   **Total running time of the script:** ( 1 minutes  13.186 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_02-fused-softmax.py:

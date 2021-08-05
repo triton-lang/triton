@@ -31,37 +31,43 @@ In this tutorial, you will write a simple vector addition using Triton and learn
 Compute Kernel
 --------------------------
 
-.. GENERATED FROM PYTHON SOURCE LINES 14-43
+.. GENERATED FROM PYTHON SOURCE LINES 14-49
 
 .. code-block:: default
 
 
     import torch
-    import triton.language as tl
     import triton
+    import triton.language as tl
 
 
     @triton.jit
-    def _add(
-        X,  # *Pointer* to first input vector
-        Y,  # *Pointer* to second input vector
-        Z,  # *Pointer* to output vector
-        N,  # Size of the vector
-        **meta  # Optional meta-parameters for the kernel
+    def add_kernel(
+        x_ptr,  # *Pointer* to first input vector
+        y_ptr,  # *Pointer* to second input vector
+        output_ptr,  # *Pointer* to output vector
+        n_elements,  # Size of the vector
+        **meta,  # Optional meta-parameters for the kernel
     ):
-        pid = tl.program_id(0)
-        # Create an offset for the blocks of pointers to be
-        # processed by this program instance
-        offsets = pid * meta['BLOCK'] + tl.arange(0, meta['BLOCK'])
-        # Create a mask to guard memory operations against
-        # out-of-bounds accesses
-        mask = offsets < N
-        # Load x
-        x = tl.load(X + offsets, mask=mask)
-        y = tl.load(Y + offsets, mask=mask)
-        # Write back x + y
-        z = x + y
-        tl.store(Z + offsets, z)
+        BLOCK_SIZE = meta['BLOCK_SIZE']  # How many inputs each program should process
+        # There are multiple 'program's processing different data. We identify which program
+        # we are here
+        pid = tl.program_id(axis=0)  # We use a 1D launch grid so axis is 0
+        # This program will process inputs that are offset from the initial data.
+        # for instance, if you had a vector of length 256 and block_size of 64, the programs
+        # would each access the elements [0:64, 64:128, 128:192, 192:256].
+        # Note that offsets is a list of pointers
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        # Create a mask to guard memory operations against out-of-bounds accesses
+        mask = offsets < n_elements
+        # Load x and y from DRAM, masking out any extar elements in case the input is not a
+        # multiple of the block size
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        output = x + y
+        # Write x + y back to DRAM
+        tl.store(output_ptr + offsets, output)
 
 
 
@@ -71,31 +77,34 @@ Compute Kernel
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 44-46
+.. GENERATED FROM PYTHON SOURCE LINES 50-52
 
 Let's also declare a helper function to (1) allocate the `z` tensor
 and (2) enqueue the above kernel with appropriate grid/block sizes.
 
-.. GENERATED FROM PYTHON SOURCE LINES 46-64
+.. GENERATED FROM PYTHON SOURCE LINES 52-73
 
 .. code-block:: default
 
 
 
-    def add(x, y):
-        z = torch.empty_like(x)
-        N = z.shape[0]
+    def add(x: torch.Tensor, y: torch.Tensor):
+        # We need to preallocate the output
+        output = torch.empty_like(x)
+        assert x.is_cuda and y.is_cuda and output.is_cuda
+        n_elements = output.shape[0]
         # The SPMD launch grid denotes the number of kernel instances that run in parallel.
         # It is analogous to CUDA launch grids. It can be either Tuple[int], or Callable(metaparameters) -> Tuple[int]
-        grid = lambda meta: (triton.cdiv(N, meta['BLOCK']), )
+        # In this case, we use a 1D grid where the size is the number of blocks
+        grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
         # NOTE:
         #  - each torch.tensor object is implicitly converted into a pointer to its first element.
         #  - `triton.jit`'ed functions can be index with a launch grid to obtain a callable GPU kernel
         #  - don't forget to pass meta-parameters as keywords arguments
-        _add[grid](x, y, z, N, BLOCK=1024)
+        add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
         # We return a handle to z but, since `torch.cuda.synchronize()` hasn't been called, the kernel is still
         # running asynchronously at this point.
-        return z
+        return output
 
 
 
@@ -105,11 +114,11 @@ and (2) enqueue the above kernel with appropriate grid/block sizes.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 65-66
+.. GENERATED FROM PYTHON SOURCE LINES 74-75
 
 We can now use the above function to compute the element-wise sum of two `torch.tensor` objects and test its correctness:
 
-.. GENERATED FROM PYTHON SOURCE LINES 66-77
+.. GENERATED FROM PYTHON SOURCE LINES 75-89
 
 .. code-block:: default
 
@@ -118,11 +127,14 @@ We can now use the above function to compute the element-wise sum of two `torch.
     size = 98432
     x = torch.rand(size, device='cuda')
     y = torch.rand(size, device='cuda')
-    za = x + y
-    zb = add(x, y)
-    print(za)
-    print(zb)
-    print(f'The maximum difference between torch and triton is ' f'{torch.max(torch.abs(za - zb))}')
+    output_torch = x + y
+    output_triton = add(x, y)
+    print(output_torch)
+    print(output_triton)
+    print(
+        f'The maximum difference between torch and triton is '
+        f'{torch.max(torch.abs(output_torch - output_triton))}'
+    )
 
 
 
@@ -141,11 +153,11 @@ We can now use the above function to compute the element-wise sum of two `torch.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 78-79
+.. GENERATED FROM PYTHON SOURCE LINES 90-91
 
 Seems like we're good to go!
 
-.. GENERATED FROM PYTHON SOURCE LINES 81-86
+.. GENERATED FROM PYTHON SOURCE LINES 93-98
 
 Benchmark
 -----------
@@ -153,7 +165,7 @@ We can now benchmark our custom op on vectors of increasing sizes to get a sense
 To make things easier, Triton has a set of built-in utilities that allow us to concisely plot the performance of your custom ops
 for different problem sizes.
 
-.. GENERATED FROM PYTHON SOURCE LINES 86-113
+.. GENERATED FROM PYTHON SOURCE LINES 98-127
 
 .. code-block:: default
 
@@ -162,15 +174,17 @@ for different problem sizes.
     @triton.testing.perf_report(
         triton.testing.Benchmark(
             x_names=['size'],  # argument names to use as an x-axis for the plot
-            x_vals=[2**i for i in range(12, 28, 1)],  # different possible values for `x_name`
+            x_vals=[
+                2 ** i for i in range(12, 28, 1)
+            ],  # different possible values for `x_name`
             x_log=True,  # x axis is logarithmic
             line_arg='provider',  # argument name whose value corresponds to a different line in the plot
             line_vals=['triton', 'torch'],  # possible values for `line_arg`
-            line_names=["Triton", "Torch"],  # label name for the lines
+            line_names=['Triton', 'Torch'],  # label name for the lines
             styles=[('blue', '-'), ('green', '-')],  # line styles
-            ylabel="GB/s",  # label name for the y-axis
-            plot_name="vector-add-performance",  # name for the plot. Used also as a file name for saving the plot.
-            args={}  # values for function arguments not in `x_names` and `y_name`
+            ylabel='GB/s',  # label name for the y-axis
+            plot_name='vector-add-performance',  # name for the plot. Used also as a file name for saving the plot.
+            args={},  # values for function arguments not in `x_names` and `y_name`
         )
     )
     def benchmark(size, provider):
@@ -191,16 +205,17 @@ for different problem sizes.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 114-116
+.. GENERATED FROM PYTHON SOURCE LINES 128-130
 
 We can now run the decorated function above. Pass `print_data=True` to see the performance number, `show_plots=True` to plot them, and/or
 `save_path='/path/to/results/' to save them to disk along with raw CSV data
 
-.. GENERATED FROM PYTHON SOURCE LINES 116-116
+.. GENERATED FROM PYTHON SOURCE LINES 130-131
 
 .. code-block:: default
 
     benchmark.run(print_data=True, show_plots=True)
+
 
 
 .. image:: /getting-started/tutorials/images/sphx_glr_01-vector-add_001.png
@@ -218,16 +233,16 @@ We can now run the decorated function above. Pass `print_data=True` to see the p
                size      Triton       Torch
     0        4096.0    9.600000    9.600000
     1        8192.0   19.200000   19.200000
-    2       16384.0   38.400001   38.400001
-    3       32768.0   76.800002   76.800002
+    2       16384.0   31.999999   31.999999
+    3       32768.0   63.999998   76.800002
     4       65536.0  127.999995  127.999995
     5      131072.0  219.428568  219.428568
-    6      262144.0  384.000001  384.000001
+    6      262144.0  341.333321  384.000001
     7      524288.0  472.615390  472.615390
     8     1048576.0  614.400016  614.400016
     9     2097152.0  722.823517  722.823517
     10    4194304.0  780.190482  780.190482
-    11    8388608.0  819.200021  812.429770
+    11    8388608.0  812.429770  812.429770
     12   16777216.0  833.084721  833.084721
     13   33554432.0  843.811163  843.811163
     14   67108864.0  849.278610  848.362445
@@ -239,7 +254,7 @@ We can now run the decorated function above. Pass `print_data=True` to see the p
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  10.996 seconds)
+   **Total running time of the script:** ( 0 minutes  11.055 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_01-vector-add.py:
