@@ -25,7 +25,7 @@ def add_kernel(
     n_elements,  # Size of the vector
     **meta,  # Optional meta-parameters for the kernel
 ):
-    block_size = meta['block_size']  # How many inputs each program should process
+    BLOCK_SIZE = meta['BLOCK_SIZE']  # How many inputs each program should process
     # There are multiple 'program's processing different data. We identify which program
     # we are here
     pid = tl.program_id(axis=0)  # We use a 1D launch grid so axis is 0
@@ -33,8 +33,8 @@ def add_kernel(
     # for instance, if you had a vector of length 256 and block_size of 64, the programs
     # would each access the elements [0:64, 64:128, 128:192, 192:256].
     # Note that offsets is a list of pointers
-    block_start = pid * block_size
-    offsets = block_start + tl.arange(0, block_size)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
     # Create a mask to guard memory operations against out-of-bounds accesses
     mask = offsets < n_elements
     # Load x and y from DRAM, masking out any extar elements in case the input is not a
@@ -59,12 +59,12 @@ def add(x: torch.Tensor, y: torch.Tensor):
     # The SPMD launch grid denotes the number of kernel instances that run in parallel.
     # It is analogous to CUDA launch grids. It can be either Tuple[int], or Callable(metaparameters) -> Tuple[int]
     # In this case, we use a 1D grid where the size is the number of blocks
-    grid = lambda meta: (triton.cdiv(n_elements, meta['block_size']),)
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
     # NOTE:
     #  - each torch.tensor object is implicitly converted into a pointer to its first element.
     #  - `triton.jit`'ed functions can be index with a launch grid to obtain a callable GPU kernel
     #  - don't forget to pass meta-parameters as keywords arguments
-    add_kernel[grid](x, y, output, n_elements, block_size=1024)
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     # We return a handle to z but, since `torch.cuda.synchronize()` hasn't been called, the kernel is still
     # running asynchronously at this point.
     return output
