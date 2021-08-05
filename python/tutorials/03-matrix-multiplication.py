@@ -330,24 +330,12 @@ else:
             128 * i for i in range(1, 33)
         ],  # different possible values for `x_name`
         line_arg='provider',  # argument name whose value corresponds to a different line in the plot
-        line_vals=[
-            'cublas',
-            'cublas + relu',
-            'triton',
-            'triton + relu',
-        ],  # possible values for `line_arg``
-        line_names=[
-            "cuBLAS",
-            "cuBLAS (+ torch.nn.LeakyReLU)",
-            "Triton",
-            "Triton (+ LeakyReLU)",
-        ],  # label name for the lines
-        styles=[
-            ('green', '-'),
-            ('green', '--'),
-            ('blue', '-'),
-            ('blue', '--'),
-        ],  # line styles
+        # possible values for `line_arg``
+        line_vals=['cublas', 'cublas + relu', 'triton', 'triton + relu'],
+        # label name for the lines
+        line_names=["cuBLAS", "cuBLAS (+ torch.nn.LeakyReLU)", "Triton", "Triton (+ LeakyReLU)"],
+        # line styles
+        styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel="TFLOPS",  # label name for the y-axis
         plot_name="matmul-performance",  # name for the plot. Used also as a file name for saving the plot.
         args={},
