@@ -20,6 +20,9 @@ def catch_oor(kernel, pytest_handle=None):
 
 
 def sparsify_tensor(x, mask, block):
+    """Convert from a dense representation (batch, n_heads, m, n) tensor to a sparse
+    representation that is (batch, n_blocks, block_size, block_size)
+    """
     ret = torch.empty((x.size(0), mask.sum(), block, block), dtype=x.dtype, device=x.device)
     for idx, (h, i, j) in enumerate(zip(*mask.nonzero(as_tuple=True))):
         ret[:, idx, :, :] = x[:, h, i * block:(i + 1) * block, j * block:(j + 1) * block]

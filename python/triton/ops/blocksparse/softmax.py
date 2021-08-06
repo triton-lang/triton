@@ -1,7 +1,10 @@
-import triton.language as tl
-import triton
+from functools import lru_cache
+from typing import Tuple
+
+import pytest
 import torch
-import os
+import triton
+import triton.language as tl
 
 
 def next_power_of_2(n):
@@ -23,72 +26,114 @@ def num_warps(n):
     return 16
 
 
-@triton.heuristics({'num_warps': lambda *args, **meta: num_warps(args[6] * meta['BLOCK'])})
-@triton.heuristics({'TN': lambda *args, **meta: next_power_of_2(args[6] * meta['BLOCK'])})
+@triton.heuristics(
+    {"num_warps": lambda *args, **meta: num_warps(args[5] * meta["SPARSE_BLOCK_SIZE"])}
+)
+@triton.heuristics(
+    {
+        "MAX_N_COLS": lambda *args, **meta: next_power_of_2(
+            args[5] * meta["SPARSE_BLOCK_SIZE"]
+        )
+    }
+)
 @triton.jit
-def _forward(
-    X, scale, LUT, RPE, KP_M, ATTN_M, sizemax, stride_zx, stride_zrpe, stride_hrpe, stride_srpe, stride_zkpm, stride_zattnm,
-    **meta
+def softmax_forward_kernel(
+    # Pointer to a tensor that is (batch, n_heads, M, N) and we want to compute the
+    # softmax across the M dimension
+    input_ptr,
+    # Scale to apply to the logits before softmax. This can be helpful because the softmax
+    # is computed in fp32 which prevents overflow or underflow when scaling
+    scale,
+    lut_ptr,  # Pointer to some pre-computed information we store
+    key_padding_mask,
+    attention_mask,
+    max_size,  # Used by triton heuristics decorator to set block size and num_warps
+    stride_batch_x,
+    stride_batch_key_padding_mask,
+    stride_batch_attn_mask,
+    **meta,
 ):
-    TN = meta['TN']
-    BLOCK = meta['BLOCK']
-    pidhm = tl.program_id(0)
-    pidz = tl.program_id(1)
+    MAX_N_COLS = meta["MAX_N_COLS"]
+    SPARSE_BLOCK_SIZE = meta["SPARSE_BLOCK_SIZE"]
+    # TODO: Understand and rename everything from here to rbmn
+    pid_row = tl.program_id(0)
+    pid_batch = tl.program_id(1)
     # create index ranges
-    rxm = pidhm % BLOCK
-    rbm = pidhm // BLOCK
-    rxn = tl.arange(0, TN) % BLOCK
-    rbn = tl.arange(0, TN) // BLOCK
+    row_in_sparse_block = pid_row % SPARSE_BLOCK_SIZE
+    sparse_block_id = pid_row // SPARSE_BLOCK_SIZE
+    rxn = tl.arange(0, MAX_N_COLS) % SPARSE_BLOCK_SIZE
+    rbn = tl.arange(0, MAX_N_COLS) // SPARSE_BLOCK_SIZE
     # extract information from LUT
-    header = LUT + rbm * 2
+    header = lut_ptr + sparse_block_id * 2
     size = tl.load(header + 0)
     offset = tl.load(header + 1)
     check = rbn < size
     rbmn = tl.where(check, rbn, size - 1)
-    # block id and column id
-    blockid = tl.load(LUT + offset + rbmn * 4 + 0)
-    columnid = tl.load(LUT + offset + rbmn * 4 + 1)
-    rowid = tl.load(LUT + offset + rbmn * 4 + 2)
-    headid = tl.load(LUT + offset + rbmn * 4 + 3)
-    # pointers to X
-    px = X + pidz * stride_zx + blockid * BLOCK * BLOCK + rxm * BLOCK + rxn
-    x = tl.load(px, mask=check, other=-float('inf'))
-    x = x.to(tl.float32)
-    # apply scale
-    if meta['APPLY_SCALE']:
-        x = x * scale
-    # apply RPE
-    if meta['APPLY_RPE']:
-        prpe = RPE + pidz * stride_zrpe + headid * stride_hrpe + columnid * BLOCK + rowid * BLOCK * stride_srpe + rxm * stride_srpe + rxn
-        rpe = tl.load(prpe, mask=check, other=0)
-        x = x + rpe
-    # apply key-padding mask
-    if meta['APPLY_KP_MASK']:
-        pkp_m = KP_M + pidz * stride_zkpm + columnid * BLOCK + rxn
-        kp_m = tl.load(pkp_m, mask=check, other=-float('inf'))
-        if meta['KP_MASK_MUL']:
-            kp_m = tl.where(kp_m == 0, -float('inf'), 0.)
-        x = x + kp_m
+
+    block_id = tl.load(lut_ptr + offset + rbmn * 4 + 0)
+    column_id = tl.load(lut_ptr + offset + rbmn * 4 + 1)
+    row_id = tl.load(lut_ptr + offset + rbmn * 4 + 2)
+    input_ptrs = (
+        input_ptr
+        + pid_batch * stride_batch_x
+        + block_id * SPARSE_BLOCK_SIZE * SPARSE_BLOCK_SIZE
+        + row_in_sparse_block * SPARSE_BLOCK_SIZE
+        + rxn
+    )
+    inputs = tl.load(input_ptrs, mask=check, other=-float("inf"))
+    # This was a suggestion from Philippe. We are unsure if it improves performance
+    # or not. Seems inconsistent. It may need to go in another place.
+    inputs = tl.multiple_of(inputs, 8)  # compiler hint
+    inputs = inputs.to(tl.float32)
+    # TODO: See if this needs to be hidden behind a flag
+    if meta["APPLY_SCALE"]:
+        inputs = inputs * scale
+    if meta["APPLY_KP_MASK"]:
+        key_padding_mask_ptr = (
+            key_padding_mask
+            + pid_batch * stride_batch_key_padding_mask
+            + column_id * SPARSE_BLOCK_SIZE
+            + rxn
+        )
+        key_padding_mask = tl.load(
+            key_padding_mask_ptr, mask=check, other=-float("inf")
+        )
+        if meta["KP_MASK_MUL"]:
+            key_padding_mask = tl.where(key_padding_mask == 0, -float("inf"), 0.0)
+        inputs = inputs + key_padding_mask
     # apply attention mask
-    if meta['APPLY_ATTN_MASK']:
-        pattn_m = ATTN_M + columnid * BLOCK + rowid * BLOCK * stride_zattnm + rxm * stride_zattnm + rxn
-        attn_m = tl.load(pattn_m, mask=check, other=-float('inf'))
-        if meta['ATTN_MASK_MUL']:
-            attn_m = tl.where(attn_m == 0, -float('inf'), 0.)
-        x = x + attn_m
+    if meta["APPLY_ATTN_MASK"]:
+        attn_mask_ptr = (
+            attention_mask
+            + column_id * SPARSE_BLOCK_SIZE
+            + row_id * SPARSE_BLOCK_SIZE * stride_batch_attn_mask
+            + row_in_sparse_block * stride_batch_attn_mask
+            + rxn
+        )
+        attn_m = tl.load(attn_mask_ptr, mask=check, other=-float("inf"))
+        # TODO: See if this (and kp_mask) are ever off. Would be simpler to just require
+        # that the mask is a bool mask.
+        if meta["ATTN_MASK_MUL"]:
+            attn_m = tl.where(attn_m == 0, -float("inf"), 0.0)
+        inputs = inputs + attn_m
     # computation
-    x = tl.softmax(x)
-    tl.store(px, x, mask=check)
+    probs = tl.softmax(inputs)
+    # Op is in-place, we write back to the same memory location
+    tl.store(input_ptrs, probs, mask=check)
 
 
-@triton.heuristics({'num_warps': lambda *args, **meta: num_warps(args[4] * meta['BLOCK'])})
-@triton.heuristics({'TN': lambda *args, **meta: next_power_of_2(args[4]) * meta['BLOCK']})
+@triton.heuristics(
+    {"num_warps": lambda *args, **meta: num_warps(args[4] * meta["BLOCK"])}
+)
+@triton.heuristics(
+    {"TN": lambda *args, **meta: next_power_of_2(args[4]) * meta["BLOCK"]}
+)
 @triton.jit
-def _backward(X, scale, DX, LUT, sizemax, stride_zx, stride_zdx, **meta):
+def softmax_backward_kernel(X, scale, DX, LUT, sizemax, stride_zx, stride_zdx, **meta):
     pidhm = tl.program_id(0)
     pidz = tl.program_id(1)
-    TN = meta['TN']
-    BLOCK = meta['BLOCK']
+    TN = meta["TN"]
+    BLOCK = meta["BLOCK"]
     # create index ranges
     rxm = pidhm % BLOCK
     rbm = pidhm // BLOCK
@@ -114,88 +159,71 @@ def _backward(X, scale, DX, LUT, sizemax, stride_zx, stride_zdx, **meta):
     tl.store(DX, y, mask=check)
 
 
-class _softmax(torch.autograd.Function):
-    @staticmethod
-    def make_lut(layout, block, device):
-        _empty = torch.tensor([], dtype=torch.int64, device=layout.device)
-        sizes = _empty.clone()
-        # sizes along rows
-        for h in range(layout.shape[0]):
-            sizes = torch.cat((sizes, layout[h, :, :].sum(-1)))
-        # offsets in block format
-        offsets = torch.zeros_like(sizes)
-        offsets[1:] = torch.cumsum(sizes[:-1], dim=0)
-        # block indices
-        idx = torch.arange(layout.sum())
-        head = layout.nonzero(as_tuple=False)[:, 0]
-        rows = layout.nonzero(as_tuple=False)[:, 1]
-        columns = layout.nonzero(as_tuple=False)[:, 2]
-        core = torch.stack((idx, columns, rows, head), dim=1).view(-1)
-        # construct look-up table
-        offsets = offsets * 4 + 2 * sizes.numel()
-        header = torch.stack((sizes, offsets), dim=1).view(-1)
-        lut = torch.cat((header, core)).type(torch.int32).to(device)
-        return lut, int(sizes.max())
-
+class BlocksparseSoftmaxFunction(torch.autograd.Function):
     @staticmethod
     def forward(
-        ctx, x, scale, rpe, key_padding_mask, attn_mask, kp_mask_mode, attn_mask_mode, spdims, block, lut, maxlut, bench, time
+        ctx,
+        x,
+        scale,
+        key_padding_mask,
+        attn_mask,
+        kp_mask_mode,
+        attn_mask_mode,
+        sparse_block_size,
+        lut,
+        maxlut,
+        n_heads,
+        n_rows,
     ):
-        apply_scale = False if scale == 1.0 else True
-
-        # handle None rpe
-        if rpe is None:
-            apply_rpe = False
-            stride_zrpe, stride_hrpe, stride_srpe = 0, 0, 0
-            rpe = torch.empty(0, dtype=x.dtype, device=x.device)
-        else:
-            apply_rpe = True
-            stride_zrpe, stride_hrpe, stride_srpe = rpe.stride(0), rpe.stride(1), rpe.stride(2)
 
         # handle None key_padding_mask
         if key_padding_mask is None:
-            apply_kp_mask = False
             stride_zkpm = 0
             key_padding_mask = torch.empty(0, dtype=x.dtype, device=x.device)
         else:
-            apply_kp_mask = True
             stride_zkpm = key_padding_mask.stride(0)
 
         # handle None attention_mask
         if attn_mask is None:
-            apply_attn_mask = False
             stride_zattnm = 0
             attn_mask = torch.empty(0, dtype=x.dtype, device=x.device)
         else:
-            apply_attn_mask = True
             stride_zattnm = attn_mask.stride(0)
 
         # run kernel
-        M = x.shape[0]
+        n_batch, n_blocks, block_size_1, block_size_2 = x.shape
+        assert sparse_block_size == block_size_1 == block_size_2
         meta = {
-            'BLOCK': block,
-            'APPLY_SCALE': apply_scale,
-            'APPLY_RPE': apply_rpe,
-            'APPLY_KP_MASK': apply_kp_mask,
-            'APPLY_ATTN_MASK': apply_attn_mask,
-            'KP_MASK_MUL': kp_mask_mode == 'mul',
-            'ATTN_MASK_MUL': attn_mask_mode == 'mul',
+            "SPARSE_BLOCK_SIZE": sparse_block_size,
+            "APPLY_SCALE": scale != 1.0,
+            "APPLY_KP_MASK": key_padding_mask is not None,
+            "APPLY_ATTN_MASK": attn_mask is not None,
+            "KP_MASK_MUL": kp_mask_mode == "mul",
+            "ATTN_MASK_MUL": attn_mask_mode == "mul",
         }
-        grid = lambda opt: [spdims[0] * spdims[1] * block, M]
-        _forward[grid](x, scale, lut, rpe, key_padding_mask, attn_mask, maxlut, x.stride(0),\
-                       stride_zrpe, stride_hrpe, stride_srpe, stride_zkpm, stride_zattnm, force_nc_cache=True, **meta)
+        grid = lambda opt: [n_heads * n_rows, n_batch]
+        softmax_forward_kernel[grid](
+            x,
+            scale,
+            lut,
+            key_padding_mask,
+            attn_mask,
+            maxlut,
+            x.stride(0),
+            stride_zkpm,
+            stride_zattnm,
+            force_nc_cache=True,
+            **meta,
+        )
 
         # save to context
         ctx.mark_dirty(x)
         ctx.save_for_backward(x, lut)
-        ctx.spdims = spdims
-        ctx.block = block
+        ctx.sparse_block_size = sparse_block_size
+        ctx.n_heads = n_heads
+        ctx.n_rows = n_rows
         ctx.maxlut = maxlut
         ctx.scale = scale
-        ctx.apply_scale = apply_scale
-        ctx.apply_rpe = apply_rpe
-        ctx.apply_kp_mask = apply_kp_mask
-        ctx.apply_attn_mask = apply_attn_mask
         ctx.kp_mask_mode = kp_mask_mode
         ctx.attn_mask_mode = attn_mask_mode
         return x
@@ -206,41 +234,106 @@ class _softmax(torch.autograd.Function):
         x, lut = ctx.saved_tensors
         # run kernel
         M = x.shape[0]
-        grid = lambda opt: [ctx.spdims[0] * ctx.spdims[1] * ctx.block, M]
-        _backward[grid](x, ctx.scale, dx, lut, ctx.maxlut, x.stride(0), dx.stride(0), force_nc_cache=True, BLOCK=ctx.block)
-        return dx, None, None, None, None, None, None, None, None, None, None, None, None, None, None
+        grid = lambda opt: [ctx.n_heads * ctx.n_rows, M]
+        softmax_backward_kernel[grid](
+            x,
+            ctx.scale,
+            dx,
+            lut,
+            ctx.maxlut,
+            x.stride(0),
+            dx.stride(0),
+            force_nc_cache=True,
+            BLOCK=ctx.sparse_block_size,
+        )
+        return (
+            dx,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
 
 
-class softmax:
+class BlocksparseSoftmax:
+    @lru_cache
+    def make_index_mapping(self):
+        return make_index_mapping(self.block_mask)
 
-    apply_softmax = _softmax.apply
-
-    def make_lut(self, device):
-        key = (device, )
-        if key not in self.lut_cache:
-            self.lut_cache[key] = _softmax.make_lut(self.layout, self.block, device)
-        return self.lut_cache[key]
-
-    def __init__(self, layout, block, bench=False):
-        self.spdims = layout.shape
-        self.layout = layout
-        self.block = block
-        self.bench = bench
-        self.lut_cache = dict()
+    def __init__(self, block_mask: torch.Tensor, block_size: int):
+        self.block_mask = block_mask
+        self.block_size = block_size
 
     def __call__(
-        self, x, scale=1., rpe=None, key_padding_mask=None, attn_mask=None, key_padding_mask_mode='add', attn_mask_mode='add'
+        self,
+        x,
+        scale=1.0,
+        key_padding_mask=None,
+        attn_mask=None,
+        key_padding_mask_mode="add",
+        attn_mask_mode="add",
     ):
-        time_y = [None]
-        if rpe is not None and rpe.dtype != x.dtype:
-            raise ValueError('relative position embedding must be %s' % x.dtype)
         if attn_mask is not None and attn_mask.dtype != x.dtype:
-            raise ValueError('Attention mask must be %s' % x.dtype)
+            raise ValueError("Attention mask must be %s" % x.dtype)
         if key_padding_mask is not None and key_padding_mask.dtype != x.dtype:
-            raise ValueError('Key padding mask must be %s' % x.dtype)
-        lut, maxlut = self.make_lut(x.device)
-        x = softmax.apply_softmax(
-            x, scale, rpe, key_padding_mask, attn_mask, key_padding_mask_mode, attn_mask_mode, self.spdims, self.block, lut,
-            maxlut, self.bench, time_y
+            raise ValueError("Key padding mask must be %s" % x.dtype)
+        lut, max_lut = self.make_index_mapping()
+        n_heads = self.block_mask.shape[0]
+        n_rows = self.block_mask.shape[1] * self.block_size
+        x = BlocksparseSoftmaxFunction.apply(
+            x,
+            scale,
+            key_padding_mask,
+            attn_mask,
+            key_padding_mask_mode,
+            attn_mask_mode,
+            self.block_size,
+            lut,
+            max_lut,
+            n_heads,
+            n_rows,
         )
         return x
+
+
+def make_index_mapping(block_mask: torch.Tensor) -> Tuple[torch.Tensor, int]:
+    """Cache some information for lookup in the kernel. This is cached into a flat
+    tensor so it can easily be read in Triton.
+
+    Specifically, we cache a few pieces of information:
+    1. block_idx: which block we are processing. This is just an arange
+    2. indices for the nonzero blocks. These are flattened out to being
+        all the column indices then all the row indices then all the head indices.
+    3. TODO: Figure out what the header is
+
+    :param block_mask: The block mask. Has shape (n_heads, n_blocks, n_blocks)
+    :returns: Tuple of a tensor containing
+
+    """
+    # block indices
+    block_idxs = torch.arange(block_mask.sum())
+    head, rows, columns = block_mask.nonzero().split(1, dim=1)
+    # Interleave indices as [0, col_0, row_0, head_0, 1, col_1, row_1, head_1, ...]
+    core = torch.stack(
+        (block_idxs, columns[:, 0], rows[:, 0], head[:, 0]), dim=1
+    ).flatten()
+
+    num_blocks_per_col = block_mask.sum(dim=-1).flatten()
+    block_offsets = torch.zeros_like(num_blocks_per_col)
+    block_offsets[1:] = torch.cumsum(num_blocks_per_col[:-1], dim=0)
+
+    # TODO: WHy do we multiply by 4 and add twice the number of columns
+    block_offsets = block_offsets * 4 + 2 * num_blocks_per_col.numel()
+    header = torch.stack((num_blocks_per_col, block_offsets), dim=1).flatten()
+    tensor = torch.cat((header, core)).type(torch.int32).cuda()
+    return tensor, int(num_blocks_per_col.max())

@@ -1,13 +1,17 @@
+import pytest
 import torch
 import triton
-import pytest
 
 
 @pytest.mark.parametrize(
     "MODE, TRANS_A, TRANS_B, BLOCK, DTYPE",
     [
-        (mode, at, bt, block, dtype) for dtype in ["float16", "float32"] for mode in ["sdd", "dsd", "dds"]
-        for at in [False, True] for bt in [False, True] for block in [16, 32, 64]
+        (mode, at, bt, block, dtype)
+        for dtype in ["float16", "float32"]
+        for mode in ["sdd", "dsd", "dds"]
+        for at in [False, True]
+        for bt in [False, True]
+        for block in [16, 32, 64]
     ],
 )
 def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=256):
@@ -15,8 +19,12 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     # set seed
     torch.random.manual_seed(0)
     # create inputs
-    a = torch.randn((Z, H, K, M) if TRANS_A else (Z, H, M, K), dtype=DTYPE, device="cuda")
-    b = torch.randn((Z, H, N, K) if TRANS_B else (Z, H, K, N), dtype=DTYPE, device="cuda")
+    a = torch.randn(
+        (Z, H, K, M) if TRANS_A else (Z, H, M, K), dtype=DTYPE, device="cuda"
+    )
+    b = torch.randn(
+        (Z, H, N, K) if TRANS_B else (Z, H, K, N), dtype=DTYPE, device="cuda"
+    )
     shape = {
         "sdd": (M, N),
         "dsd": (a.shape[2], a.shape[3]),
@@ -24,10 +32,12 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     }[MODE]
     layout = torch.randint(2, (H, shape[0] // BLOCK, shape[1] // BLOCK))
     # triton result
-    op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B)
+    op = triton.ops.blocksparse.matmul(
+        layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B
+    )
     ra = triton.testing.sparsify_tensor(a, layout, BLOCK) if MODE == "dsd" else a
     rb = triton.testing.sparsify_tensor(b, layout, BLOCK) if MODE == "dds" else b
-    rc = triton.testing.catch_oor(lambda : op(ra, rb), pytest)
+    rc = triton.testing.catch_oor(lambda: op(ra, rb), pytest)
     # torch result
     ta = triton.testing.mask_tensor(a, layout, BLOCK) if MODE == "dsd" else a
     tb = triton.testing.mask_tensor(b, layout, BLOCK) if MODE == "dds" else b
@@ -41,44 +51,78 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
 
 
 @pytest.mark.parametrize(
-    "BLOCK, WIDTH",
-    [(block, width) for block in [32] for width in [256, 576, 1024, 1792]],
+    "block_size, n_ctx", [(32, 256), (32, 576), (32, 1024), (32, 1792)]
 )
-def test_softmax(BLOCK, WIDTH, DTYPE=torch.float16):
+def test_softmax(block_size, n_ctx, dtype=torch.float16):
     # set seed
     torch.random.manual_seed(0)
-    Z, H, M, N = 2, 4, WIDTH, WIDTH
+    batch_size, n_heads, n_rows, n_cols = 2, 4, n_ctx, n_ctx
     scale = 0.4
-    # create inputs
-    layout = torch.randint(2, (H, M // BLOCK, N // BLOCK))
-    x = torch.randn((Z, H, M, N), dtype=DTYPE, requires_grad=True, device="cuda")
-    at_mask = torch.randint(low=0, high=2, size=(N, N), dtype=torch.bool, requires_grad=False, device="cuda")
-    kp_mask = torch.randint(low=0, high=2, size=(Z, N), dtype=DTYPE, requires_grad=False, device="cuda")
-    kp_mask[kp_mask == 1.0] = float("-inf")
+    # this is a block attention mask
+    block_mask = torch.randint(
+        2, (n_heads, n_rows // block_size, n_cols // block_size), dtype=torch.bool
+    )
+    logits = torch.randn(
+        (batch_size, n_heads, n_rows, n_cols),
+        dtype=dtype,
+        requires_grad=True,
+        device="cuda",
+    )
+    fine_mask = torch.randint(
+        low=0,
+        high=2,
+        size=(n_cols, n_cols),
+        dtype=torch.bool,
+        requires_grad=False,
+        device="cuda",
+    )
+    key_padding_mask = torch.randint(
+        low=0,
+        high=2,
+        size=(batch_size, n_cols),
+        dtype=dtype,
+        requires_grad=False,
+        device="cuda",
+    )
+    key_padding_mask[key_padding_mask == 1.0] = float("-inf")
     # triton result
-    op = triton.ops.blocksparse.softmax(layout, BLOCK)
-    tx = triton.testing.sparsify_tensor(x, layout, BLOCK)
-    ty = op(
-        tx,
+    sparse_softmax = triton.ops.blocksparse.BlocksparseSoftmax(block_mask, block_size)
+    triton_inputs = triton.testing.sparsify_tensor(logits, block_mask, block_size)
+    triton_outputs = sparse_softmax(
+        triton_inputs,
         scale=scale,
-        key_padding_mask=kp_mask,
+        key_padding_mask=key_padding_mask,
         key_padding_mask_mode="add",
-        attn_mask=at_mask.to(DTYPE),
+        attn_mask=fine_mask.to(dtype),
         attn_mask_mode="mul",
     )
     # torch result
-    rx = triton.testing.mask_tensor(x, layout, BLOCK, value=float("-inf"))
-    if at_mask is not None:
-        # broadcast at_mask to the same shape as rx
-        M = at_mask[None, None, :, :] + torch.zeros_like(rx)
-        rx[M == 0] = float("-inf")
-    if kp_mask is not None:
-        rx += kp_mask[:, None, None, :]
-    ry = torch.softmax(rx * scale, -1)
-    ry = torch.softmax(rx * scale, -1)
-    ry = triton.testing.sparsify_tensor(ry, layout, BLOCK)
+    torch_inputs = triton.testing.mask_tensor(
+        logits, block_mask, block_size, value=float("-inf")
+    )
+    if fine_mask is not None:
+        # broadcast fine_mask to the same shape as inputs
+        n_rows = fine_mask[None, None, :, :] + torch.zeros_like(torch_inputs)
+        torch_inputs[n_rows == 0] = float("-inf")
+    if key_padding_mask is not None:
+        torch_inputs += key_padding_mask[:, None, None, :]
+    torch_outputs = torch.softmax(torch_inputs * scale, -1)
+    torch_outputs_sparse = triton.testing.sparsify_tensor(
+        torch_outputs, block_mask, block_size
+    )
     # compare
-    assert triton.testing.allclose(ry, ty)
+    assert triton.testing.allclose(torch_outputs_sparse, triton_outputs)
+
+    # Compare the backward pass
+    torch_outputs.sum().backward()
+    torch_logits_grad = logits.grad.clone()
+    logits.grad = None
+
+    # The test below is failing, which seems rather concerning
+    # triton_outputs.sum().backward()
+    # triton_logits_grad = logits.grad.clone()
+    # logits.grad = None
+    # assert triton.testing.allclose(torch_logits_grad, triton_logits_grad)
 
 
 def test_attention_fwd_bwd(
@@ -93,7 +137,12 @@ def test_attention_fwd_bwd(
 ):
     # inputs
     qkv_shape = (batch_size, n_heads, n_ctx, 64)
-    qkvs = [torch.nn.Parameter(input_scale * torch.randn(qkv_shape), requires_grad=True).to(dtype).cuda() for _ in range(3)]
+    qkvs = [
+        torch.nn.Parameter(input_scale * torch.randn(qkv_shape), requires_grad=True)
+        .to(dtype)
+        .cuda()
+        for _ in range(3)
+    ]
     attn_mask = torch.tril(
         torch.ones(
             [n_ctx, n_ctx],
@@ -110,9 +159,11 @@ def test_attention_fwd_bwd(
     query.retain_grad()
     key.retain_grad()
     value.retain_grad()
-    attn_out = triton_attention(layout, block, attn_mask, query=query, key=key, value=value, scale=scale)
+    attn_out = triton_attention(
+        layout, block, attn_mask, query=query, key=key, value=value, scale=scale
+    )
     # ad hoc loss
-    loss = (attn_out**2).mean()
+    loss = (attn_out ** 2).mean()
     loss.backward()
     grads = [query.grad, key.grad, value.grad]
 
@@ -127,7 +178,7 @@ def test_attention_fwd_bwd(
     probs = torch.softmax(scores, dim=-1)
     torch_attn_out = torch.einsum("bhst,bhtd->bhsd", probs, torch_v)
     # ad hoc loss
-    torch_loss = (torch_attn_out**2).mean()
+    torch_loss = (torch_attn_out ** 2).mean()
     torch_loss.backward()
     torch_grads = [torch_q.grad, torch_k.grad, torch_v.grad]
 
@@ -147,9 +198,13 @@ def triton_attention(
     value: torch.Tensor,
     scale: float,
 ):
-    sparse_dot_sdd_nt = triton.ops.blocksparse.matmul(layout, block, "sdd", trans_a=False, trans_b=True)
-    sparse_dot_dsd_nn = triton.ops.blocksparse.matmul(layout, block, "dsd", trans_a=False, trans_b=False)
-    sparse_softmax = triton.ops.blocksparse.softmax(
+    sparse_dot_sdd_nt = triton.ops.blocksparse.matmul(
+        layout, block, "sdd", trans_a=False, trans_b=True
+    )
+    sparse_dot_dsd_nn = triton.ops.blocksparse.matmul(
+        layout, block, "dsd", trans_a=False, trans_b=False
+    )
+    sparse_softmax = triton.ops.blocksparse.BlockSparseSoftmax(
         layout,
         block,
     )
