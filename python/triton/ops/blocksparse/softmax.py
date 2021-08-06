@@ -44,7 +44,7 @@ def softmax_forward_kernel(
     # Scale to apply to the logits before softmax. This can be helpful because the softmax
     # is computed in fp32 which prevents overflow or underflow when scaling
     scale,
-    lut_ptr,  # Pointer to some pre-computed information we store
+    index_mapping_ptr,  # Pointer to precomputed mapping from block ids to indices
     key_padding_mask,
     attention_mask,
     max_size,  # Used by triton heuristics decorator to set block size and num_warps
@@ -61,25 +61,32 @@ def softmax_forward_kernel(
     # create index ranges
     row_in_sparse_block = pid_row % SPARSE_BLOCK_SIZE
     sparse_block_id = pid_row // SPARSE_BLOCK_SIZE
-    rxn = tl.arange(0, MAX_N_COLS) % SPARSE_BLOCK_SIZE
-    rbn = tl.arange(0, MAX_N_COLS) // SPARSE_BLOCK_SIZE
-    # extract information from LUT
-    # The header is laid out as (size_0, offset_0, size_1, offset_1, ...)
-    header = lut_ptr + sparse_block_id * 2
-    size = tl.load(header + 0)
+    range_x_cols = tl.arange(0, MAX_N_COLS) % SPARSE_BLOCK_SIZE
+    range_block_cols = tl.arange(0, MAX_N_COLS) // SPARSE_BLOCK_SIZE
+    # We have our block id, but we now read the header to convert that to indices
+    # in the original data.
+    # The header is laid out as (size_0, offset_0, size_1, offset_1, ...), this give us
+    # the offsets of ther id in the index mapping and the length of each row in blocks
+    header = index_mapping_ptr + sparse_block_id * 2
+    row_len = tl.load(header + 0)
     offset = tl.load(header + 1)
-    check = rbn < size
-    rbmn = tl.where(check, rbn, size - 1)
+    check = range_block_cols < row_len
+    rbmn = tl.where(check, range_block_cols, row_len - 1)
 
-    block_id = tl.load(lut_ptr + offset + rbmn * 4 + 0)
-    column_id = tl.load(lut_ptr + offset + rbmn * 4 + 1)
-    row_id = tl.load(lut_ptr + offset + rbmn * 4 + 2)
+    block_id = tl.load(index_mapping_ptr + offset + rbmn * 4 + 0)
+    column_id = tl.load(index_mapping_ptr + offset + rbmn * 4 + 1)
+    row_id = tl.load(index_mapping_ptr + offset + rbmn * 4 + 2)
     input_ptrs = (
         input_ptr
+        # First advance to the relevant batch
         + pid_batch * stride_batch_x
+        # Then advance to the relevant block
         + block_id * SPARSE_BLOCK_SIZE * SPARSE_BLOCK_SIZE
+        # Then advance to the row we are processing
         + row_in_sparse_block * SPARSE_BLOCK_SIZE
-        + rxn
+        # Then get a range starting from there and going for the max number of columns
+        # We will mask out the extra pointers if it doesnt have the max columns
+        + range_x_cols
     )
     inputs = tl.load(input_ptrs, mask=check, other=-float("inf"))
     # This was a suggestion from Philippe. We are unsure if it improves performance
@@ -94,7 +101,7 @@ def softmax_forward_kernel(
             key_padding_mask
             + pid_batch * stride_batch_key_padding_mask
             + column_id * SPARSE_BLOCK_SIZE
-            + rxn
+            + range_x_cols
         )
         key_padding_mask = tl.load(
             key_padding_mask_ptr, mask=check, other=-float("inf")
@@ -109,7 +116,7 @@ def softmax_forward_kernel(
             + column_id * SPARSE_BLOCK_SIZE
             + row_id * SPARSE_BLOCK_SIZE * stride_batch_attn_mask
             + row_in_sparse_block * stride_batch_attn_mask
-            + rxn
+            + range_x_cols
         )
         attn_m = tl.load(attn_mask_ptr, mask=check, other=-float("inf"))
         # TODO: See if this (and kp_mask) are ever off. Would be simpler to just require
