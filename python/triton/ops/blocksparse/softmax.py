@@ -64,6 +64,7 @@ def softmax_forward_kernel(
     rxn = tl.arange(0, MAX_N_COLS) % SPARSE_BLOCK_SIZE
     rbn = tl.arange(0, MAX_N_COLS) // SPARSE_BLOCK_SIZE
     # extract information from LUT
+    # The header is laid out as (size_0, offset_0, size_1, offset_1, ...)
     header = lut_ptr + sparse_block_id * 2
     size = tl.load(header + 0)
     offset = tl.load(header + 1)
@@ -328,12 +329,15 @@ def make_index_mapping(block_mask: torch.Tensor) -> Tuple[torch.Tensor, int]:
         (block_idxs, columns[:, 0], rows[:, 0], head[:, 0]), dim=1
     ).flatten()
 
-    num_blocks_per_col = block_mask.sum(dim=-1).flatten()
-    block_offsets = torch.zeros_like(num_blocks_per_col)
-    block_offsets[1:] = torch.cumsum(num_blocks_per_col[:-1], dim=0)
+    n_blocks_per_col = block_mask.sum(dim=-1).flatten()
+    block_offsets = torch.zeros_like(n_blocks_per_col)
+    block_offsets[1:] = torch.cumsum(n_blocks_per_col[:-1], dim=0)
 
-    # TODO: WHy do we multiply by 4 and add twice the number of columns
-    block_offsets = block_offsets * 4 + 2 * num_blocks_per_col.numel()
-    header = torch.stack((num_blocks_per_col, block_offsets), dim=1).flatten()
+    # We are computing offsets in this tensor, so we need to account for its header
+    header_offset = 2 * n_blocks_per_col.numel()
+    # Each block has a block_id, col_id, row_id, and head_id stacked together so
+    # we  multiply by 4
+    block_offsets = block_offsets * 4 + header_offset
+    header = torch.stack((n_blocks_per_col, block_offsets), dim=1).flatten()
     tensor = torch.cat((header, core)).type(torch.int32).cuda()
-    return tensor, int(num_blocks_per_col.max())
+    return tensor, int(n_blocks_per_col.max())
