@@ -68,20 +68,22 @@ def softmax_forward_kernel(
     # The header is laid out as (size_0, offset_0, size_1, offset_1, ...), this give us
     # the offsets of ther id in the index mapping and the length of each row in blocks
     header = index_mapping_ptr + sparse_block_id * 2
-    row_len = tl.load(header + 0)
+    n_cols = tl.load(header + 0)  # Number of blocks in this row
     offset = tl.load(header + 1)
-    check = range_block_cols < row_len
-    rbmn = tl.where(check, range_block_cols, row_len - 1)
+    check = range_block_cols < n_cols
 
-    block_id = tl.load(index_mapping_ptr + offset + rbmn * 4 + 0)
-    column_id = tl.load(index_mapping_ptr + offset + rbmn * 4 + 1)
-    row_id = tl.load(index_mapping_ptr + offset + rbmn * 4 + 2)
+    # Don't let the range exceed the number of blocks in this row
+    range_block_cols = tl.where(check, range_block_cols, n_cols - 1)
+
+    block_ids = tl.load(index_mapping_ptr + offset + range_block_cols * 4 + 0)
+    column_ids = tl.load(index_mapping_ptr + offset + range_block_cols * 4 + 1)
+    row_ids = tl.load(index_mapping_ptr + offset + range_block_cols * 4 + 2)
     input_ptrs = (
         input_ptr
         # First advance to the relevant batch
         + pid_batch * stride_batch_x
-        # Then advance to the relevant block
-        + block_id * SPARSE_BLOCK_SIZE * SPARSE_BLOCK_SIZE
+        # Then advance to the relevant blocks we are processing
+        + block_ids * SPARSE_BLOCK_SIZE * SPARSE_BLOCK_SIZE
         # Then advance to the row we are processing
         + row_in_sparse_block * SPARSE_BLOCK_SIZE
         # Then get a range starting from there and going for the max number of columns
@@ -100,7 +102,7 @@ def softmax_forward_kernel(
         key_padding_mask_ptr = (
             key_padding_mask
             + pid_batch * stride_batch_key_padding_mask
-            + column_id * SPARSE_BLOCK_SIZE
+            + column_ids * SPARSE_BLOCK_SIZE
             + range_x_cols
         )
         key_padding_mask = tl.load(
@@ -113,8 +115,8 @@ def softmax_forward_kernel(
     if meta["APPLY_ATTN_MASK"]:
         attn_mask_ptr = (
             attention_mask
-            + column_id * SPARSE_BLOCK_SIZE
-            + row_id * SPARSE_BLOCK_SIZE * stride_batch_attn_mask
+            + column_ids * SPARSE_BLOCK_SIZE
+            + row_ids * SPARSE_BLOCK_SIZE * stride_batch_attn_mask
             + row_in_sparse_block * stride_batch_attn_mask
             + range_x_cols
         )
@@ -324,7 +326,8 @@ def make_index_mapping(block_mask: torch.Tensor) -> Tuple[torch.Tensor, int]:
         all the column indices then all the row indices then all the head indices.
     3. TODO: Figure out what the header is
 
-    :param block_mask: The block mask. Has shape (n_heads, n_blocks, n_blocks)
+    :param block_mask: The block mask. Has shape (n_heads, n_rows, n_cols)
+        n_rows and n_cols are both in terms of blocks
     :returns: Tuple of a tensor containing
 
     """
@@ -336,15 +339,15 @@ def make_index_mapping(block_mask: torch.Tensor) -> Tuple[torch.Tensor, int]:
         (block_idxs, columns[:, 0], rows[:, 0], head[:, 0]), dim=1
     ).flatten()
 
-    n_blocks_per_col = block_mask.sum(dim=-1).flatten()
-    block_offsets = torch.zeros_like(n_blocks_per_col)
-    block_offsets[1:] = torch.cumsum(n_blocks_per_col[:-1], dim=0)
+    n_blocks_per_row = block_mask.sum(dim=-1).flatten()
+    block_offsets = torch.zeros_like(n_blocks_per_row)
+    block_offsets[1:] = torch.cumsum(n_blocks_per_row[:-1], dim=0)
 
     # We are computing offsets in this tensor, so we need to account for its header
-    header_offset = 2 * n_blocks_per_col.numel()
+    header_offset = 2 * n_blocks_per_row.numel()
     # Each block has a block_id, col_id, row_id, and head_id stacked together so
-    # we  multiply by 4
+    # we multiply by 4
     block_offsets = block_offsets * 4 + header_offset
-    header = torch.stack((n_blocks_per_col, block_offsets), dim=1).flatten()
+    header = torch.stack((n_blocks_per_row, block_offsets), dim=1).flatten()
     tensor = torch.cat((header, core)).type(torch.int32).cuda()
-    return tensor, int(n_blocks_per_col.max())
+    return tensor, int(n_blocks_per_row.max())
