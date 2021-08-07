@@ -624,6 +624,14 @@ def max_contiguous(input, value, _builder=None):
     return frontend.max_contiguous(input, value, _builder)
 
 
+@builtin
+def max_contiguous(input, value, builder=None):
+    """
+    Let the compiler knows that the `value` first values in :code:`input` are contiguous. 
+    """
+    return frontend.max_contiguous(input, value, builder)
+
+
 # -----------------------
 # Standard library
 # -----------------------
