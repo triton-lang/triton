@@ -29,6 +29,7 @@
 #include "triton/tools/sha1.hpp"
 #include "triton/tools/sys/getenv.hpp"
 #include "triton/tools/sys/mkdir.hpp"
+#include "triton/tools/sys/exec.hpp"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IR/IRPrintingPasses.h"
@@ -299,10 +300,13 @@ std::string cu_module::compile_llvm_module(llvm::Module* module, driver::device*
 void cu_module::init_from_ptx(const std::string& ptx, driver::cu_device* device) {
   // JIT compile source-code
   try{
-    std::string ptxas = tools::getenv("TRITON_PTXAS");
+    // use ptxas if present in PATH. Otherwise, use JIT from the driver
+    std::string ptxas = "ptxas";
+    std::string version;
+    int use_system_ptxas = tools::exec(ptxas + " --version 2>&1", version) == 0;
 
     // Use PTXAS via system call
-    if(!ptxas.empty()){
+    if(use_system_ptxas){
       // compile ptx with ptxas
       char _fsrc[] = "/tmp/triton_k_XXXXXX";
       char _flog[] = "/tmp/triton_l_XXXXXX";
@@ -316,7 +320,7 @@ void cu_module::init_from_ptx(const std::string& ptx, driver::cu_device* device)
       std::string cmd;
       int err;
       std::string cc = std::to_string(device->compute_capability());
-      cmd = "ptxas -v --gpu-name=sm_" + cc + " " + fsrc + " -o " + fsrc + ".o 2> " + flog;
+      cmd = ptxas + " -v --gpu-name=sm_" + cc + " " + fsrc + " -o " + fsrc + ".o 2> " + flog;
       err = system(cmd.c_str());
       dispatch::cuModuleLoad(&*cu_, (fsrc + ".o").c_str());
       unlink(_fsrc);
