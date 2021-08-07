@@ -109,9 +109,6 @@ data_layout::data_layout(id_t id,
         max_contiguous = curr;
     }
   }
-  bool is_recoalesce = false;
-  for(ir::value* v: values)
-    is_recoalesce = is_recoalesce || dynamic_cast<ir::recoalesce_inst*>(v);
   if(max_contiguous.size() > 0){
     std::sort(order_.begin(), order_.end(), [&](unsigned a, unsigned b) {
       return max_contiguous[a] > max_contiguous[b];
@@ -514,6 +511,10 @@ void layouts::run(ir::module &mod) {
       // create layout
       layouts_[id] = new shared_layout(layout, axes_->get(arg), shapes, {red}, red->get_type()->get_scalar_ty(), align_);
       tmp_[red] = id;
+    }
+    if(auto *decoalesce = dynamic_cast<ir::decoalesce_inst*>(i)){
+        std::cout << "decoalesce" << std::endl;
+        exit(1);
     }
     if(auto *recoalasce = dynamic_cast<ir::recoalesce_inst*>(i)){
       ir::value *val = recoalasce->get_operand(0);

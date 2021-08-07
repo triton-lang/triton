@@ -823,6 +823,11 @@ recoalesce_inst* recoalesce_inst::create(value *arg, const std::string &name, in
   return new recoalesce_inst(arg->get_type(), INST_RECOALESCE, arg, name, next);
 }
 
+// decoalesce
+decoalesce_inst* decoalesce_inst::create(value *arg, const std::string &name, instruction *next) {
+  return new decoalesce_inst(arg->get_type(), INST_DECOALESCE, arg, name, next);
+}
+
 
 
 // barrier

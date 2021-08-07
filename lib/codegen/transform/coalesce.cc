@@ -62,82 +62,29 @@ ir::value* coalesce::rematerialize(ir::value *x, ir::builder &builder,
 }
 
 void coalesce::run(ir::module &mod) {
-  size_t num_groups = layout_->num_layouts();
+  ir::builder& builder = mod.get_builder();
 
+  for(ir::function *fn: mod.get_function_list())
+  for(ir::basic_block *block: fn->blocks())
+  for(ir::instruction* i: block->get_inst_list()){
+    // coalesce before store
+    if(auto x = dynamic_cast<ir::masked_store_inst*>(i))
+    if(ir::value* op = x->get_value_operand())
+    if(layout_->get(op)->to_mma()){
+      builder.set_insert_point(x);
+      ir::instruction* new_op = ir::recoalesce_inst::create(op);
+      builder.insert(new_op);
+      x->replace_uses_of_with(op, new_op);
+    }
+    // uncoalesce after load
+    if(auto x = dynamic_cast<ir::masked_load_inst*>(i))
+    if(layout_->get(x)->to_mma()){
+        builder.set_insert_point(x);
+        ir::instruction* new_x = ir::decoalesce_inst::create(x);
+        builder.insert(new_x);
+        x->replace_all_uses_with(new_x);
+    }
 
-  for(size_t id = 0; id < num_groups; id++) {
-    if(!layout_->get(id)->to_mma())
-      continue;
-    // extract memory stores
-    const auto& values = layout_->values_of(id);
-    ir::value* dot = nullptr;
-    for(ir::value *v: values)
-      if(auto x = dynamic_cast<ir::dot_inst*>(v))
-        dot = x;
-
-    ir::builder& builder = mod.get_builder();
-    std::vector<ir::value*> worklist = {dot};
-    std::set<ir::value*> seen;
-    while(!worklist.empty()) {
-      ir::value *current = worklist.back();
-      seen.insert(current);
-      worklist.pop_back();
-      // stop if trunc
-      if(auto x = dynamic_cast<ir::fp_trunc_inst*>(current)){
-        builder.set_insert_point_after(x);
-        ir::recoalesce_inst* rc = ir::recoalesce_inst::create(x);
-        builder.insert(rc);
-        x->replace_all_uses_with(rc);
-        rc->replace_uses_of_with(rc, x);
-        break;
-      }
-      // recurse
-      for(ir::user *u: current->get_users())
-        if(seen.find(u) == seen.end())
-          worklist.push_back(u);
-    }
-  }
-
-  // find values to rematerialize
-  std::vector<ir::io_inst*> remat;
-  for(size_t id = 0; id < num_groups; id++) {
-    const auto& values = layout_->values_of(id);
-    // extract pointers used in ld/st operations
-    std::set<ir::io_inst*> io;
-    for(ir::value *v: values)
-      extract_io_use(v, io);
-    // extract leading axes
-    std::map<int, std::vector<ir::io_inst*>> axes;
-    for(ir::io_inst *i: io){
-      if(i->get_pointer_operand()->get_type()->get_tile_rank() == layout_->get(id)->get_rank()){
-        extract_ld(i, axes);
-      }
-    }
-    // update list of values to rematerialize
-    if(axes.empty())
-      continue;
-    for(auto it = ++axes.rbegin(); it != axes.rend(); it++){
-      if(it->second.size() == 1)
-        continue;
-      remat.insert(remat.begin(), it->second.begin(), it->second.end());
-    }
-  }
-  // rematerialize values
-  for(ir::io_inst *r: remat) {
-    ir::builder& builder = mod.get_builder();
-    // rematerialize operands
-    std::map<ir::value*, ir::value*> seen;
-    for(ir::value *op: r->ops())
-      r->replace_uses_of_with(op, rematerialize(op, mod.get_builder(), seen));
-    // copy to shared if load
-    auto& inst_list = r->get_parent()->get_inst_list();
-    auto pos = ++std::find(inst_list.begin(), inst_list.end(), r);
-    builder.set_insert_point(pos);
-    if(dynamic_cast<ir::load_inst*>(r)){
-      ir::instruction *cts = builder.insert(ir::copy_to_shared_inst::create(r));
-      r->replace_all_uses_with(cts);
-      cts->replace_uses_of_with(cts, r);
-    }
   }
 }
 

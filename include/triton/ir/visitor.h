@@ -65,6 +65,7 @@ class reduce_inst;
 class select_inst;
 
 class recoalesce_inst;
+class decoalesce_inst;
 class copy_to_shared_inst;
 class copy_from_shared_inst;
 class masked_load_async_inst;
@@ -143,8 +144,11 @@ public:
   virtual void visit_select_inst(select_inst*) = 0;
 
   virtual void visit_recoalesce_inst(recoalesce_inst*) = 0;
+  virtual void visit_decoalesce_inst(decoalesce_inst*) = 0;
   virtual void visit_copy_to_shared_inst(copy_to_shared_inst*) = 0;
   virtual void visit_copy_from_shared_inst(copy_from_shared_inst*) = 0;
+
+
   virtual void visit_masked_load_async_inst(masked_load_async_inst*)= 0;
   virtual void visit_barrier_inst(barrier_inst*) = 0;
   virtual void visit_async_wait_inst(async_wait_inst*) = 0;

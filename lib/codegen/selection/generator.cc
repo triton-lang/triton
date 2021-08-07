@@ -1885,6 +1885,13 @@ void generator::visit_select_inst(ir::select_inst* x) {
 }
 
 /**
+ * \brief Code Generation for `decoalesce`
+ */
+void generator::visit_decoalesce_inst(ir::decoalesce_inst* rc) {
+    exit(1);
+}
+
+/**
  * \brief Code Generation for `recoalesce`
  */
 void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
