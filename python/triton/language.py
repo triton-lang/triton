@@ -637,6 +637,14 @@ def multiple_of(input, value, builder=None):
     return frontend.multiple_of(input, value, builder)
 
 
+@builtin
+def max_contiguous(input, value, builder=None):
+    """
+    Let the compiler knows that the `value` first values in :code:`input` are contiguous. 
+    """
+    return frontend.max_contiguous(input, value, builder)
+
+
 # -----------------------
 # Standard library
 # -----------------------

@@ -98,6 +98,7 @@ struct dispatch{
 
   // internal (debug/optimization)
   static ir::value *multiple_of(ir::value *x, int value, ir::builder *builder);
+  static ir::value *max_contiguous(ir::value *x, int value, ir::builder *builder);
   static ir::value *debug_barrier(ir::builder *builder);
 };
 

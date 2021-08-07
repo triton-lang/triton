@@ -711,6 +711,14 @@ ir::value *dispatch::multiple_of(ir::value *x, int value, ir::builder *){
   return i;
 }
 
+ir::value *dispatch::max_contiguous(ir::value *x, int value, ir::builder *){
+  ir::instruction* i = dynamic_cast<ir::instruction*>(x);
+  if(!i)
+    throw_unreachable("max_contiguous");
+  i->set_metadata(ir::metadata::max_contiguous, value);
+  return i;
+}
+
 ir::value *dispatch::debug_barrier(ir::builder *builder) {
   return builder->create_barrier();
 }
