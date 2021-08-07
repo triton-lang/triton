@@ -161,6 +161,7 @@ void init_triton_frontend(py::module &&m) {
   m.def("sqrt", &ir::dispatch::sqrt, ret::reference);
   // internal (debugging only)
   m.def("multiple_of", &ir::dispatch::multiple_of, ret::reference);
+  m.def("max_contiguous", &ir::dispatch::max_contiguous, ret::reference);
   m.def("debug_barrier", &ir::dispatch::debug_barrier, ret::reference);
 }
 

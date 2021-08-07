@@ -11,7 +11,8 @@ namespace ir{
 class metadata{
 public:
   enum kind_t{
-    multiple_of
+    multiple_of,
+    max_contiguous
   };
 
 private:
