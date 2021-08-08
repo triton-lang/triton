@@ -27,7 +27,8 @@ int exec(const std::string& cmd, std::string& result) {
     pclose(pipe);
     return 0;
   }
-  return WEXITSTATUS(pclose(pipe));
+  int status = pclose(pipe);
+  return WEXITSTATUS(status);
 
 }
 
