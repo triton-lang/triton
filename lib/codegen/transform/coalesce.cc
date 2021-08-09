@@ -79,10 +79,11 @@ void coalesce::run(ir::module &mod) {
     // uncoalesce after load
     if(auto x = dynamic_cast<ir::masked_load_inst*>(i))
     if(layout_->get(x)->to_mma()){
-        builder.set_insert_point(x);
+        builder.set_insert_point_after(x);
         ir::instruction* new_x = ir::decoalesce_inst::create(x);
         builder.insert(new_x);
         x->replace_all_uses_with(new_x);
+        new_x->replace_uses_of_with(new_x, x);
     }
 
   }

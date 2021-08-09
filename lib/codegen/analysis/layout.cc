@@ -512,9 +512,23 @@ void layouts::run(ir::module &mod) {
       layouts_[id] = new shared_layout(layout, axes_->get(arg), shapes, {red}, red->get_type()->get_scalar_ty(), align_);
       tmp_[red] = id;
     }
-    if(auto *decoalesce = dynamic_cast<ir::decoalesce_inst*>(i)){
-        std::cout << "decoalesce" << std::endl;
-        exit(1);
+    if(auto *decoalasce = dynamic_cast<ir::decoalesce_inst*>(i)){
+      ir::value *val = decoalasce;
+      mma_layout* out_layout = get(val)->to_mma();
+      scanline_layout* in_layout = get(i->get_operand(0))->to_scanline();
+      if(!out_layout || !in_layout)
+        return;
+      id++;
+      ir::type::block_shapes_t out_shape = val->get_type()->get_block_shapes();
+      ir::type::block_shapes_t shape(out_shape.size());
+      size_t ld = in_layout->get_order(0);
+      shape[ld] = out_shape[ld];
+      for(size_t k = 0; k < out_shape.size(); k++)
+        if(k != ld)
+          shape[k] = out_layout->to_mma()->spt(k);
+      // create layout
+      layouts_[id] = new shared_layout(in_layout, axes_->get(val), shape, {decoalasce}, val->get_type()->get_scalar_ty(), align_);
+      tmp_[decoalasce] = id;
     }
     if(auto *recoalasce = dynamic_cast<ir::recoalesce_inst*>(i)){
       ir::value *val = recoalasce->get_operand(0);
