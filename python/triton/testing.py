@@ -55,6 +55,14 @@ def mask_tensor(x, mask, block, value=0):
         ret[:, h, i * block:(i + 1) * block, j * block:(j + 1) * block] = value
     return ret
 
+def assert_almost_eq(x, y, decimal=2, err_msg=''):
+    import numpy.testing as npt
+    if isinstance(x, torch.Tensor):
+        x = x.cpu().detach().numpy()
+    if isinstance(y, torch.Tensor):
+        y = y.cpu().detach().numpy()
+    npt.assert_array_almost_equal(x, y, err_msg=err_msg, decimal=decimal)
+
 
 def allclose(x, y, tol=1e-2):
     if x.dtype != y.dtype:
