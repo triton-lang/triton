@@ -23,7 +23,7 @@ You will specifically learn about:
 # yourself with Triton, in a way that is easy to customize and extend.
 #
 # Roughly speaking, the kernel that we will write will implement the following blocked
-# algorithm to multiply a (MxK) by a (KxN) matrix:
+# algorithm to multiply a (M, K) by a (K, N) matrix:
 #
 #  .. code-block:: python
 #
@@ -38,7 +38,7 @@ You will specifically learn about:
 #          acc += dot(a, b)
 #        C[m : m+BLOCK_SIZE_M, n : n+BLOCK_SIZE_N] = acc;
 #
-# where each iteration of the doubly-nested for-loop corresponds to a Triton program instance.
+# where each iteration of the doubly-nested for-loop is performed by a dedicated Triton program instance.
 
 # %%
 # Compute Kernel
