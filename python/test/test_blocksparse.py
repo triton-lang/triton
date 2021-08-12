@@ -6,7 +6,7 @@ import pytest
 @pytest.mark.parametrize(
     "MODE, TRANS_A, TRANS_B, BLOCK, DTYPE",
     [
-        (mode, at, bt, block, dtype) for dtype in ["float16", "float32"] for mode in ["sdd", "dsd", "dds"]
+        (mode, at, bt, block, dtype) for dtype in ["float16"] for mode in ["sdd", "dsd", "dds"]
         for at in [False, True] for bt in [False, True] for block in [16, 32, 64]
     ],
 )
@@ -37,7 +37,7 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     tc = triton.testing.mask_tensor(tc, layout, BLOCK) if MODE == "sdd" else tc
     tc = triton.testing.sparsify_tensor(tc, layout, BLOCK) if MODE == "sdd" else tc
     # compare
-    assert triton.testing.allclose(rc, tc)
+    triton.testing.assert_almost_equal(rc, tc)
 
 
 @pytest.mark.parametrize(
@@ -78,7 +78,7 @@ def test_softmax(BLOCK, WIDTH, DTYPE=torch.float16):
     ry = torch.softmax(rx * scale, -1)
     ry = triton.testing.sparsify_tensor(ry, layout, BLOCK)
     # compare
-    assert triton.testing.allclose(ry, ty)
+    triton.testing.assert_almost_equal(ry, ty)
 
 
 def test_attention_fwd_bwd(
@@ -133,9 +133,9 @@ def test_attention_fwd_bwd(
 
     # comparison
     # print(f"Triton loss {loss} and torch loss {torch_loss}.  Also checking grads...")
-    torch.testing.assert_allclose(loss, torch_loss, rtol=tol, atol=tol)
+    triton.testing.assert_almost_equal(loss, torch_loss)
     for g1, g2 in zip(grads, torch_grads):
-        torch.testing.assert_allclose(g1, g2, rtol=tol, atol=tol)
+        triton.testing.assert_almost_equal(g1, g2)
 
 
 def triton_attention(

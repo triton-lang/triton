@@ -55,7 +55,7 @@ def _test_unary(dtype_x, expr, torch_expr=None, device='cuda'):
     z_tri = torch.empty_like(z_ref)
     kernel[(1, )](z_tri, x, SIZE=SIZE, num_warps=4)
     # compare
-    triton.testing.assert_allclose(z_ref, z_tri)
+    triton.testing.assert_almost_equal(z_ref, z_tri)
 
 
 def _test_binary(dtype_x, dtype_y, expr, device='cuda'):
@@ -79,7 +79,7 @@ def _test_binary(dtype_x, dtype_y, expr, device='cuda'):
     z_tri = torch.empty(SIZE, dtype=z_ref.dtype, device=device)
     kernel[(1, )](z_tri, x, y, SIZE=SIZE, num_warps=4)
     # compare
-    triton.testing.assert_allclose(z_ref, z_tri)
+    triton.testing.assert_almost_equal(z_ref, z_tri, err_msg=expr)
 
 
 # ---------------
@@ -202,7 +202,7 @@ def test_index1d(expr, device='cuda'):
     z_tri = torch.empty_like(z_ref)
     kernel[(1, )](z_tri, x, num_warps=1, SIZE=shape_x[0])
     # compare
-    triton.testing.assert_allclose(z_ref, z_tri)
+    triton.testing.assert_almost_equal(z_ref, z_tri)
 
 
 # ---------------
@@ -300,7 +300,7 @@ def test_atomic_rmw(op, dtype_x, mode, device='cuda'):
     if exact:
         assert z_ref.item() == z_tri.item()
     else:
-        triton.testing.assert_allclose(z_ref, z_tri)
+        triton.testing.assert_almost_equal(z_ref, z_tri)
 
 
 # ---------------
