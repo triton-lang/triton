@@ -221,7 +221,7 @@ to accomodate the needs of modern deep learning workloads (e.g., fused activatio
 In this tutorial, you will learn how to implement efficient matrix multiplications by
 yourself with Triton, in a way that is easy to customize and extend.</p>
 <p>Roughly speaking, the kernel that we will write will implement the following blocked
-algorithm to multiply a (MxK) by a (KxN) matrix:</p>
+algorithm to multiply a (M, K) by a (K, N) matrix:</p>
 <blockquote>
 <div><div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># do in parallel</span>
 <span class="k">for</span> <span class="n">m</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">):</span>
@@ -236,7 +236,7 @@ algorithm to multiply a (MxK) by a (KxN) matrix:</p>
 </pre></div>
 </div>
 </div></blockquote>
-<p>where each iteration of the doubly-nested for-loop corresponds to a Triton program instance.</p>
+<p>where each iteration of the doubly-nested for-loop is performed by a dedicated Triton program instance.</p>
 </div>
 <div class="section" id="compute-kernel">
 <h2>Compute Kernel<a class="headerlink" href="#compute-kernel" title="Permalink to this headline">¶</a></h2>
@@ -247,33 +247,29 @@ multi-dimensional pointer arithmetics.</p>
 <div class="section" id="pointer-arithmetics">
 <h3>Pointer Arithmetics<a class="headerlink" href="#pointer-arithmetics" title="Permalink to this headline">¶</a></h3>
 <p>For a row-major 2D tensor <code class="code docutils literal notranslate"><span class="pre">X</span></code>, the memory location of <code class="code docutils literal notranslate"><span class="pre">X[i,</span> <span class="pre">j]</span></code> is given b
-y <code class="code docutils literal notranslate"><span class="pre">&amp;X[i,</span> <span class="pre">j]</span> <span class="pre">=</span> <span class="pre">X</span> <span class="pre">+</span> <span class="pre">i*stride_x_0</span> <span class="pre">+</span> <span class="pre">j*stride_x_1</span></code>.
+y <code class="code docutils literal notranslate"><span class="pre">&amp;X[i,</span> <span class="pre">j]</span> <span class="pre">=</span> <span class="pre">X</span> <span class="pre">+</span> <span class="pre">i*stride_xi</span> <span class="pre">+</span> <span class="pre">j*stride_xj</span></code>.
 Therefore, blocks of pointers for <code class="code docutils literal notranslate"><span class="pre">A[m</span> <span class="pre">:</span> <span class="pre">m+BLOCK_SIZE_M,</span> <span class="pre">k:k+BLOCK_SIZE_K]</span></code> and
 <code class="code docutils literal notranslate"><span class="pre">B[k</span> <span class="pre">:</span> <span class="pre">k+BLOCK_SIZE_K,</span> <span class="pre">n</span> <span class="pre">:</span> <span class="pre">n+BLOCK_SIZE_N]</span></code> can be defined in pseudo-code as:</p>
 <blockquote>
-<div><div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="o">&amp;</span><span class="n">A</span><span class="p">[</span><span class="n">m</span> <span class="p">:</span> <span class="n">m</span><span class="o">+</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">k</span><span class="p">:</span><span class="n">k</span><span class="o">+</span><span class="n">BLOCK_SIZE_K</span><span class="p">]</span> <span class="o">=</span>  <span class="n">A</span> <span class="o">+</span> <span class="p">(</span><span class="n">m</span> <span class="p">:</span> <span class="n">m</span><span class="o">+</span><span class="n">BLOCK_SIZE_M</span><span class="p">)[:,</span> <span class="kc">None</span><span class="p">]</span><span class="o">*</span><span class="n">A</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">k</span> <span class="p">:</span> <span class="n">k</span><span class="o">+</span><span class="n">BLOCK_SIZE_K</span><span class="p">)[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span><span class="o">*</span><span class="n">A</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
-<span class="o">&amp;</span><span class="n">B</span><span class="p">[</span><span class="n">k</span> <span class="p">:</span> <span class="n">k</span><span class="o">+</span><span class="n">BLOCK_SIZE_K</span><span class="p">,</span> <span class="n">n</span><span class="p">:</span><span class="n">n</span><span class="o">+</span><span class="n">BLOCK_SIZE_N</span><span class="p">]</span> <span class="o">=</span>  <span class="n">B</span> <span class="o">+</span> <span class="p">(</span><span class="n">k</span> <span class="p">:</span> <span class="n">k</span><span class="o">+</span><span class="n">BLOCK_SIZE_K</span><span class="p">)[:,</span> <span class="kc">None</span><span class="p">]</span><span class="o">*</span><span class="n">B</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">n</span> <span class="p">:</span> <span class="n">n</span><span class="o">+</span><span class="n">BLOCK_SIZE_N</span><span class="p">)[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span><span class="o">*</span><span class="n">B</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+<div><div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="o">&amp;</span><span class="n">A</span><span class="p">[</span><span class="n">m</span> <span class="p">:</span> <span class="n">m</span><span class="o">+</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">k</span><span class="p">:</span><span class="n">k</span><span class="o">+</span><span class="n">BLOCK_SIZE_K</span><span class="p">]</span> <span class="o">=</span>  <span class="n">a_ptr</span> <span class="o">+</span> <span class="p">(</span><span class="n">m</span> <span class="p">:</span> <span class="n">m</span><span class="o">+</span><span class="n">BLOCK_SIZE_M</span><span class="p">)[:,</span> <span class="kc">None</span><span class="p">]</span><span class="o">*</span><span class="n">A</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">k</span> <span class="p">:</span> <span class="n">k</span><span class="o">+</span><span class="n">BLOCK_SIZE_K</span><span class="p">)[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span><span class="o">*</span><span class="n">A</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+<span class="o">&amp;</span><span class="n">B</span><span class="p">[</span><span class="n">k</span> <span class="p">:</span> <span class="n">k</span><span class="o">+</span><span class="n">BLOCK_SIZE_K</span><span class="p">,</span> <span class="n">n</span><span class="p">:</span><span class="n">n</span><span class="o">+</span><span class="n">BLOCK_SIZE_N</span><span class="p">]</span> <span class="o">=</span>  <span class="n">b_ptr</span> <span class="o">+</span> <span class="p">(</span><span class="n">k</span> <span class="p">:</span> <span class="n">k</span><span class="o">+</span><span class="n">BLOCK_SIZE_K</span><span class="p">)[:,</span> <span class="kc">None</span><span class="p">]</span><span class="o">*</span><span class="n">B</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">n</span> <span class="p">:</span> <span class="n">n</span><span class="o">+</span><span class="n">BLOCK_SIZE_N</span><span class="p">)[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span><span class="o">*</span><span class="n">B</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
 </pre></div>
 </div>
 </div></blockquote>
 <p>Which means that pointers for blocks of A and B can be initialized (i.e., <code class="code docutils literal notranslate"><span class="pre">k=0</span></code>) in Triton as:</p>
 <blockquote>
-<div><div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">pid_m</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-<span class="n">pid_n</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
-<span class="n">rm</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_M</span> <span class="o">+</span> <span class="n">triton</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
-<span class="n">rn</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span> <span class="o">+</span> <span class="n">triton</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
-<span class="n">rk</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">)</span>
-<span class="o">//</span> <span class="n">pointer</span> <span class="k">for</span> <span class="n">A</span> <span class="n">operand</span>
-<span class="n">pa</span> <span class="o">=</span> <span class="n">A</span> <span class="o">+</span> <span class="p">(</span><span class="n">rm</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_a_0</span> <span class="o">+</span> <span class="n">rk</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_a_1</span><span class="p">);</span>
-<span class="o">//</span> <span class="n">pointer</span> <span class="k">for</span> <span class="n">B</span> <span class="n">operand</span>
-<span class="n">pb</span> <span class="o">=</span> <span class="n">B</span> <span class="o">+</span> <span class="p">(</span><span class="n">rk</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_b_0</span> <span class="o">+</span> <span class="n">rn</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_b_1</span><span class="p">);</span>
+<div><div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">offs_am</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_M</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+<span class="n">offs_bn</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+<span class="n">offs_k</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">)</span>
+<span class="n">a_ptrs</span> <span class="o">=</span> <span class="n">a_ptr</span> <span class="o">+</span> <span class="p">(</span><span class="n">offs_am</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span><span class="o">*</span><span class="n">stride_am</span> <span class="o">+</span> <span class="n">offs_k</span> <span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span><span class="o">*</span><span class="n">stride_ak</span><span class="p">)</span>
+<span class="n">b_ptrs</span> <span class="o">=</span> <span class="n">b_ptr</span> <span class="o">+</span> <span class="p">(</span><span class="n">offs_k</span> <span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span><span class="o">*</span><span class="n">stride_bk</span> <span class="o">+</span> <span class="n">offs_bn</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span><span class="o">*</span><span class="n">stride_bn</span><span class="p">)</span>
 </pre></div>
 </div>
 </div></blockquote>
 <p>And then updated in the inner loop as follows:</p>
 <blockquote>
-<div><div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">pa</span> <span class="o">+=</span> <span class="n">BLOCK_SIZE_K</span> <span class="o">*</span> <span class="n">stride_a_1</span><span class="p">;</span>
-<span class="n">pb</span> <span class="o">+=</span> <span class="n">BLOCK_SIZE_K</span> <span class="o">*</span> <span class="n">stride_b_0</span><span class="p">;</span>
+<div><div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">pa</span> <span class="o">+=</span> <span class="n">BLOCK_SIZE_K</span> <span class="o">*</span> <span class="n">stride_ak</span><span class="p">;</span>
+<span class="n">pb</span> <span class="o">+=</span> <span class="n">BLOCK_SIZE_K</span> <span class="o">*</span> <span class="n">stride_bk</span><span class="p">;</span>
 </pre></div>
 </div>
 </div></blockquote>
@@ -299,13 +295,25 @@ a simple row-major ordering</p>
 This can be done by ‘super-grouping’ blocks in groups of <code class="code docutils literal notranslate"><span class="pre">GROUP_M</span></code> rows before
 switching to the next column:</p>
 <blockquote>
-<div><div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">pid</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
-<span class="n">width</span> <span class="o">=</span> <span class="n">GROUP_M</span> <span class="o">*</span> <span class="n">grid_n</span><span class="p">;</span>
-<span class="n">group_id</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">//</span> <span class="n">width</span><span class="p">;</span>
-<span class="c1"># we need to handle the case where M % (GROUP_M*BLOCK_SIZE_M) != 0</span>
-<span class="n">group_size</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">grid_m</span> <span class="o">-</span> <span class="n">group_id</span> <span class="o">*</span> <span class="n">GROUP_M</span><span class="p">,</span> <span class="n">GROUP_M</span><span class="p">);</span>
-<span class="n">pid_m</span> <span class="o">=</span> <span class="n">group_id</span> <span class="o">*</span> <span class="n">GROUP_M</span> <span class="o">+</span> <span class="p">(</span><span class="n">pid</span> <span class="o">%</span> <span class="n">group_size</span><span class="p">);</span>
-<span class="n">pid_n</span> <span class="o">=</span> <span class="p">(</span><span class="n">pid</span> <span class="o">%</span> <span class="n">width</span><span class="p">)</span> <span class="o">//</span> <span class="p">(</span><span class="n">group_size</span><span class="p">);</span>
+<div><div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># program ID</span>
+<span class="n">pid</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="c1"># number of program ids along the M axis</span>
+<span class="n">num_pid_m</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+<span class="c1"># number of programs ids along the N axis</span>
+<span class="n">num_pid_n</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+<span class="c1"># number of programs in group</span>
+<span class="n">num_pid_in_group</span> <span class="o">=</span> <span class="n">GROUP_SIZE_M</span> <span class="o">*</span> <span class="n">num_pid_n</span>
+<span class="c1"># id of the group this program is in</span>
+<span class="n">group_id</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">//</span> <span class="n">num_pid_in_group</span>
+<span class="c1"># row-id of the first program in the group</span>
+<span class="n">first_pid_m</span> <span class="o">=</span> <span class="n">group_id</span> <span class="o">*</span> <span class="n">GROUP_SIZE_M</span>
+<span class="c1"># if `num_pid_m` isn&#39;t divisible by `GROUP_SIZE_M`, the last group is smaller</span>
+<span class="n">group_size_m</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">num_pid_m</span> <span class="o">-</span> <span class="n">first_pid_m</span><span class="p">,</span> <span class="n">GROUP_SIZE_M</span><span class="p">)</span>
+<span class="c1"># *within groups*, programs are ordered in a column-major order</span>
+<span class="c1"># row-id of the program in the *launch grid*</span>
+<span class="n">pid_m</span> <span class="o">=</span> <span class="n">first_pid_m</span> <span class="o">+</span> <span class="p">(</span><span class="n">pid</span> <span class="o">%</span> <span class="n">group_size_m</span><span class="p">)</span>
+<span class="c1"># col-id of the program in the *launch grid*</span>
+<span class="n">pid_n</span> <span class="o">=</span> <span class="p">(</span><span class="n">pid</span> <span class="o">%</span> <span class="n">num_pid_in_group</span><span class="p">)</span> <span class="o">//</span> <span class="n">group_size_m</span>
 </pre></div>
 </div>
 </div></blockquote>
@@ -354,26 +362,19 @@ more than 10% on some hardware architecture (e.g., 220 to 245 TFLOPS on A100).</
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
 <span class="k">def</span> <span class="nf">matmul_kernel</span><span class="p">(</span>
     <span class="c1"># Pointers to matrices</span>
-    <span class="n">a_ptr</span><span class="p">,</span>
-    <span class="n">b_ptr</span><span class="p">,</span>
-    <span class="n">c_ptr</span><span class="p">,</span>
+    <span class="n">a_ptr</span><span class="p">,</span> <span class="n">b_ptr</span><span class="p">,</span> <span class="n">c_ptr</span><span class="p">,</span>
     <span class="c1"># Matrix dimensions</span>
-    <span class="n">M</span><span class="p">,</span>
-    <span class="n">N</span><span class="p">,</span>
-    <span class="n">K</span><span class="p">,</span>
+    <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span>
     <span class="c1"># The stride variables represent how much to increase the ptr by when moving by 1</span>
     <span class="c1"># element in a particular dimension. E.g. stride_am is how much to increase a_ptr</span>
     <span class="c1"># by to get the element one row down (A has M rows)</span>
-    <span class="n">stride_am</span><span class="p">,</span>
-    <span class="n">stride_ak</span><span class="p">,</span>
-    <span class="n">stride_bk</span><span class="p">,</span>
-    <span class="n">stride_bn</span><span class="p">,</span>
-    <span class="n">stride_cm</span><span class="p">,</span>
-    <span class="n">stride_cn</span><span class="p">,</span>
+    <span class="n">stride_am</span><span class="p">,</span> <span class="n">stride_ak</span><span class="p">,</span>
+    <span class="n">stride_bk</span><span class="p">,</span> <span class="n">stride_bn</span><span class="p">,</span>
+    <span class="n">stride_cm</span><span class="p">,</span> <span class="n">stride_cn</span><span class="p">,</span>
+    <span class="c1"># Meta-parameters</span>
     <span class="o">**</span><span class="n">meta</span><span class="p">,</span>
 <span class="p">):</span>
-    <span class="sd">&quot;&quot;&quot;Kernel for computing the matmul AB = C</span>
-
+    <span class="sd">&quot;&quot;&quot;Kernel for computing the matmul C = A x B.</span>
 <span class="sd">    A has shape (M, K), B has shape (K, N) and C has shape (M, N)</span>
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="c1"># extract meta-parameters</span>
@@ -381,67 +382,65 @@ more than 10% on some hardware architecture (e.g., 220 to 245 TFLOPS on A100).</
     <span class="n">BLOCK_SIZE_N</span> <span class="o">=</span> <span class="n">meta</span><span class="p">[</span><span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">]</span>
     <span class="n">BLOCK_SIZE_K</span> <span class="o">=</span> <span class="n">meta</span><span class="p">[</span><span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">]</span>
     <span class="n">GROUP_SIZE_M</span> <span class="o">=</span> <span class="mi">8</span>
+
+    <span class="c1"># -----------------------------------------------------------</span>
+    <span class="c1"># Map program ids `pid` to the block of C it should compute.</span>
+    <span class="c1"># This is done in a grouped ordering to promote L2 data reuse</span>
+    <span class="c1"># See above `L2 Cache Optimizations` section for details</span>
     <span class="n">pid</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">num_pid_m</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+    <span class="n">num_pid_n</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+    <span class="n">num_pid_in_group</span> <span class="o">=</span> <span class="n">GROUP_SIZE_M</span> <span class="o">*</span> <span class="n">num_pid_n</span>
+    <span class="n">group_id</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">//</span> <span class="n">num_pid_in_group</span>
+    <span class="n">first_pid_m</span> <span class="o">=</span> <span class="n">group_id</span> <span class="o">*</span> <span class="n">GROUP_SIZE_M</span>
+    <span class="n">group_size_m</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">num_pid_m</span> <span class="o">-</span> <span class="n">first_pid_m</span><span class="p">,</span> <span class="n">GROUP_SIZE_M</span><span class="p">)</span>
+    <span class="n">pid_m</span> <span class="o">=</span> <span class="n">first_pid_m</span> <span class="o">+</span> <span class="p">(</span><span class="n">pid</span> <span class="o">%</span> <span class="n">group_size_m</span><span class="p">)</span>
+    <span class="n">pid_n</span> <span class="o">=</span> <span class="p">(</span><span class="n">pid</span> <span class="o">%</span> <span class="n">num_pid_in_group</span><span class="p">)</span> <span class="o">//</span> <span class="n">group_size_m</span>
 
-    <span class="c1"># the number of blocks is the ceil(M / BLOCK_SIZE_M) since we need an extra block</span>
-    <span class="c1"># Note that this will lead to some quantization in performance where time-taken jumps</span>
-    <span class="c1"># when you need to add a new block</span>
-    <span class="n">n_blocks_m</span> <span class="o">=</span> <span class="p">(</span><span class="n">M</span> <span class="o">+</span> <span class="n">BLOCK_SIZE_M</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">//</span> <span class="n">BLOCK_SIZE_M</span>
-    <span class="n">n_blocks_n</span> <span class="o">=</span> <span class="p">(</span><span class="n">N</span> <span class="o">+</span> <span class="n">BLOCK_SIZE_N</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">//</span> <span class="n">BLOCK_SIZE_N</span>
+    <span class="c1"># ----------------------------------------------------------</span>
+    <span class="c1"># Create pointers for the first blocks of A and B.</span>
+    <span class="c1"># We will advance this pointer as we move in the K direction</span>
+    <span class="c1"># and accumulate</span>
+    <span class="c1"># a_ptrs is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers</span>
+    <span class="c1"># b_ptrs is a block of [BLOCK_SIZE_K, BLOCK_SIZE_n] pointers</span>
+    <span class="c1"># see above `Pointer Arithmetics` section for details</span>
+    <span class="n">offs_am</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_M</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+    <span class="n">offs_bn</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+    <span class="n">offs_k</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">)</span>
+    <span class="n">a_ptrs</span> <span class="o">=</span> <span class="n">a_ptr</span> <span class="o">+</span> <span class="p">(</span><span class="n">offs_am</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span><span class="o">*</span><span class="n">stride_am</span> <span class="o">+</span> <span class="n">offs_k</span> <span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span><span class="o">*</span><span class="n">stride_ak</span><span class="p">)</span>
+    <span class="n">b_ptrs</span> <span class="o">=</span> <span class="n">b_ptr</span> <span class="o">+</span> <span class="p">(</span><span class="n">offs_k</span> <span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span><span class="o">*</span><span class="n">stride_bk</span> <span class="o">+</span> <span class="n">offs_bn</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span><span class="o">*</span><span class="n">stride_bn</span><span class="p">)</span>
 
-    <span class="c1"># Map PIDs to the block they should compute. This is done in a grouped ordering</span>
-    <span class="c1"># to promote L2 cache reuse.</span>
-    <span class="n">n_output_blocks_in_group</span> <span class="o">=</span> <span class="n">GROUP_SIZE_M</span> <span class="o">*</span> <span class="n">n_blocks_n</span>
-    <span class="n">group_id</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">//</span> <span class="n">n_output_blocks_in_group</span>
-    <span class="n">first_m_block_in_group</span> <span class="o">=</span> <span class="n">group_id</span> <span class="o">*</span> <span class="n">GROUP_SIZE_M</span>
-
-    <span class="c1"># If the number of blocks is not divisible by the group size, the last group is smaller</span>
-    <span class="n">group_size_m</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">n_blocks_m</span> <span class="o">-</span> <span class="n">first_m_block_in_group</span><span class="p">,</span> <span class="n">GROUP_SIZE_M</span><span class="p">)</span>
-
-    <span class="c1"># Within a group, we compute in col-major ordering, block_m and block_n are the</span>
-    <span class="c1"># output row and col that this program is computing in terms of blocks</span>
-    <span class="n">block_m</span> <span class="o">=</span> <span class="n">first_m_block_in_group</span> <span class="o">+</span> <span class="p">(</span><span class="n">pid</span> <span class="o">%</span> <span class="n">group_size_m</span><span class="p">)</span>
-    <span class="n">block_n</span> <span class="o">=</span> <span class="p">(</span><span class="n">pid</span> <span class="o">%</span> <span class="n">n_output_blocks_in_group</span><span class="p">)</span> <span class="o">//</span> <span class="n">group_size_m</span>
-
-    <span class="c1"># Convert from block indices back to element indices</span>
-    <span class="n">m_start</span> <span class="o">=</span> <span class="n">block_m</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_M</span>
-    <span class="n">n_start</span> <span class="o">=</span> <span class="n">block_n</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span>
-
-    <span class="c1"># Expand out to all the offsets for each of the elements in this block.</span>
-    <span class="n">m_offsets_a</span> <span class="o">=</span> <span class="p">(</span><span class="n">m_start</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">))[:,</span> <span class="kc">None</span><span class="p">]</span>
-    <span class="n">n_offsets_b</span> <span class="o">=</span> <span class="p">(</span><span class="n">n_start</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">))[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>
-    <span class="n">k_offsets</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">)</span>
-
-    <span class="c1"># Get the pointers for the first block of each. We will advance this pointer</span>
-    <span class="c1"># as we move in the K direction and accumulate.</span>
-    <span class="c1"># a_ptrs should contain BLOCK_SIZE_M * BLOCK_SIZE_K pointers</span>
-    <span class="n">a_ptrs</span> <span class="o">=</span> <span class="n">a_ptr</span> <span class="o">+</span> <span class="p">(</span><span class="n">stride_am</span> <span class="o">*</span> <span class="n">m_offsets_a</span> <span class="o">+</span> <span class="n">stride_ak</span> <span class="o">*</span> <span class="n">k_offsets</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:])</span>
-    <span class="c1"># b_ptrs should contain BLOCK_SIZE_K * BLOCK_SIZE_N pointers</span>
-    <span class="n">b_ptrs</span> <span class="o">=</span> <span class="n">b_ptr</span> <span class="o">+</span> <span class="p">(</span><span class="n">stride_bk</span> <span class="o">*</span> <span class="n">k_offsets</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">+</span> <span class="n">stride_bn</span> <span class="o">*</span> <span class="n">n_offsets_b</span><span class="p">)</span>
-    <span class="c1"># We accumulate internally in fp32, but the output is written out in the dtype</span>
-    <span class="c1"># of the tensor when it is stored</span>
+    <span class="c1"># -----------------------------------------------------------</span>
+    <span class="c1"># Iterate to compute a block of the C matrix</span>
+    <span class="c1"># We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block</span>
+    <span class="c1"># of fp32 values for higher accuracy.</span>
+    <span class="c1"># `accumulator` will be converted back to fp16 after the loop</span>
     <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
     <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">):</span>
-        <span class="c1"># Note that for simplicity, we don&#39;t apply a mask here. This means that if K is</span>
-        <span class="c1"># not a multiple of BLOCK_SIZE_K, this will access out-of-bounds memory and</span>
-        <span class="c1"># accumulate it incorrectly.</span>
+        <span class="c1"># Note that for simplicity, we don&#39;t apply a mask here.</span>
+        <span class="c1"># This means that if K is not a multiple of BLOCK_SIZE_K,</span>
+        <span class="c1"># this will access out-of-bounds memory and produce an</span>
+        <span class="c1"># error or (worse!) incorrect results.</span>
         <span class="n">a</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">a_ptrs</span><span class="p">)</span>
         <span class="n">b</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">b_ptrs</span><span class="p">)</span>
         <span class="c1"># We accumulate along the K dimension</span>
         <span class="n">accumulator</span> <span class="o">+=</span> <span class="n">tl</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
-
         <span class="c1"># Advance the ptrs to the next K block</span>
         <span class="n">a_ptrs</span> <span class="o">+=</span> <span class="n">BLOCK_SIZE_K</span> <span class="o">*</span> <span class="n">stride_ak</span>
         <span class="n">b_ptrs</span> <span class="o">+=</span> <span class="n">BLOCK_SIZE_K</span> <span class="o">*</span> <span class="n">stride_bk</span>
-    <span class="c1"># triton can accept arbitrary activation function via metaparameters!</span>
+    <span class="c1"># you can fuse arbitrary activation functions here</span>
+    <span class="c1"># while the accumulator is still in FP32 !</span>
     <span class="k">if</span> <span class="n">meta</span><span class="p">[</span><span class="s1">&#39;ACTIVATION&#39;</span><span class="p">]:</span>
         <span class="n">accumulator</span> <span class="o">=</span> <span class="n">meta</span><span class="p">[</span><span class="s1">&#39;ACTIVATION&#39;</span><span class="p">](</span><span class="n">accumulator</span><span class="p">)</span>
+    <span class="n">c</span> <span class="o">=</span> <span class="n">accumulator</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
 
-    <span class="n">m_offsets_c</span> <span class="o">=</span> <span class="p">(</span><span class="n">m_start</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">))[:,</span> <span class="kc">None</span><span class="p">]</span>
-    <span class="n">n_offsets_c</span> <span class="o">=</span> <span class="p">(</span><span class="n">n_start</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">))[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>
-    <span class="n">c_ptrs</span> <span class="o">=</span> <span class="n">c_ptr</span> <span class="o">+</span> <span class="n">stride_cm</span> <span class="o">*</span> <span class="n">m_offsets_c</span> <span class="o">+</span> <span class="n">stride_cn</span> <span class="o">*</span> <span class="n">n_offsets_c</span>
-    <span class="n">mask</span> <span class="o">=</span> <span class="p">(</span><span class="n">m_offsets_c</span> <span class="o">&lt;</span> <span class="n">M</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">n_offsets_c</span> <span class="o">&lt;</span> <span class="n">N</span><span class="p">)</span>
-    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">c_ptrs</span><span class="p">,</span> <span class="n">accumulator</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
+    <span class="c1"># -----------------------------------------------------------</span>
+    <span class="c1"># Write back the block of the output matrix C</span>
+    <span class="n">offs_cm</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_M</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+    <span class="n">offs_cn</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+    <span class="n">c_ptrs</span> <span class="o">=</span> <span class="n">c_ptr</span> <span class="o">+</span> <span class="n">stride_cm</span> <span class="o">*</span> <span class="n">offs_cm</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">+</span> <span class="n">stride_cn</span> <span class="o">*</span> <span class="n">offs_cn</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>
+    <span class="n">c_mask</span> <span class="o">=</span> <span class="p">(</span><span class="n">offs_cm</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">M</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">offs_cn</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">&lt;</span> <span class="n">N</span><span class="p">)</span>
+    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">c_ptrs</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">c_mask</span><span class="p">)</span>
 
 
 <span class="c1"># we can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`</span>
@@ -469,18 +468,11 @@ and (1) checks any shape constraint; (2) allocates the output; (3) launches the 
         <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">META</span><span class="p">[</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">])</span> <span class="o">*</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">META</span><span class="p">[</span><span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">]),</span>
     <span class="p">)</span>
     <span class="n">matmul_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>
-        <span class="n">a</span><span class="p">,</span>
-        <span class="n">b</span><span class="p">,</span>
-        <span class="n">c</span><span class="p">,</span>
-        <span class="n">M</span><span class="p">,</span>
-        <span class="n">N</span><span class="p">,</span>
-        <span class="n">K</span><span class="p">,</span>
-        <span class="n">a</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span>
-        <span class="n">a</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>
-        <span class="n">b</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span>
-        <span class="n">b</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>
-        <span class="n">c</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span>
-        <span class="n">c</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>
+        <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span>
+        <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span>
+        <span class="n">a</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">a</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>
+        <span class="n">b</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">b</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>
+        <span class="n">c</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">c</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>
         <span class="n">ACTIVATION</span><span class="o">=</span><span class="n">activation</span><span class="p">,</span>
     <span class="p">)</span>
     <span class="k">return</span> <span class="n">c</span>
@@ -575,42 +567,42 @@ torch_output=tensor([[  1.1045, -36.9688,  31.4688,  ..., -11.3906,  24.4531, -3
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>matmul-performance:
          M     cuBLAS  ...     Triton  Triton (+ LeakyReLU)
 0    128.0   0.455111  ...   0.512000              0.512000
-1    256.0   2.730667  ...   2.978909              2.978909
+1    256.0   2.978909  ...   2.978909              2.978909
 2    384.0   7.372800  ...   8.507077              8.507077
-3    512.0  14.563555  ...  15.420235             16.384000
-4    640.0  22.260869  ...  24.380953             23.272727
+3    512.0  14.563555  ...  16.384000             16.384000
+4    640.0  22.260869  ...  24.380953             24.380953
 5    768.0  32.768000  ...  34.028308             34.028308
-6    896.0  39.025776  ...  40.140799             39.025776
-7   1024.0  49.932191  ...  53.773130             52.428801
-8   1152.0  45.242181  ...  46.656000             46.656000
-9   1280.0  51.200001  ...  56.888887             56.888887
+6    896.0  39.025776  ...  40.140799             36.023796
+7   1024.0  49.932191  ...  52.428801             52.428801
+8   1152.0  44.566925  ...  46.656000             46.656000
+9   1280.0  51.200001  ...  56.888887             56.109587
 10  1408.0  64.138541  ...  64.902096             64.902096
 11  1536.0  78.643199  ...  76.106321             75.296679
-12  1664.0  62.929456  ...  62.061463             62.061463
+12  1664.0  63.372618  ...  62.492442             61.636381
 13  1792.0  72.983276  ...  69.810085             69.379162
 14  1920.0  67.434145  ...  70.892307             70.530615
-15  2048.0  73.908442  ...  74.898285             74.565406
-16  2176.0  83.500614  ...  78.916269             79.855747
-17  2304.0  68.251065  ...  73.275679             72.828879
-18  2432.0  71.125224  ...  80.731218             80.731218
-19  2560.0  77.649287  ...  76.560748             76.382283
-20  2688.0  81.928846  ...  80.366642             82.823267
-21  2816.0  77.743683  ...  78.868366             78.301990
-22  2944.0  81.832567  ...  79.610276             78.605729
-23  3072.0  81.005868  ...  81.005868             82.420822
-24  3200.0  84.321474  ...  89.635851             85.106381
-25  3328.0  83.226931  ...  87.156532             86.113988
-26  3456.0  81.932484  ...  83.632331             85.313831
-27  3584.0  87.211821  ...  87.211821             91.563533
-28  3712.0  85.896254  ...  82.491612             84.874549
-29  3840.0  85.070769  ...  87.493673             87.701820
-30  3968.0  92.935215  ...  83.865247             83.578035
-31  4096.0  93.662059  ...  85.926841             84.840533
+15  2048.0  73.908442  ...  75.234154             74.898285
+16  2176.0  81.472263  ...  80.817862             80.173899
+17  2304.0  68.446623  ...  73.501144             73.275679
+18  2432.0  71.305746  ...  81.197876             79.362895
+19  2560.0  77.649287  ...  77.649287             76.560748
+20  2688.0  82.642823  ...  80.708630             82.823267
+21  2816.0  79.587973  ...  79.733474             77.605356
+22  2944.0  81.967162  ...  78.112900             79.230573
+23  3072.0  81.707223  ...  84.135370             79.863336
+24  3200.0  84.099871  ...  87.074829             89.136491
+25  3328.0  83.905938  ...  84.003845             86.424125
+26  3456.0  81.518272  ...  85.494768             81.353753
+27  3584.0  86.540320  ...  94.448944             94.847460
+28  3712.0  83.947349  ...  88.955779             89.114488
+29  3840.0  84.809814  ...  88.191387             87.217666
+30  3968.0  93.148045  ...  83.179234             87.409694
+31  4096.0  93.531519  ...  89.777746             87.552332
 
 [32 rows x 5 columns]
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 2 minutes  9.226 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 2 minutes  30.498 seconds)</p>
 <div class="sphx-glr-footer class sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-03-matrix-multiplication-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/d5fee5b55a64e47f1b5724ec39adf171/03-matrix-multiplication.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">03-matrix-multiplication.py</span></code></a></p>
