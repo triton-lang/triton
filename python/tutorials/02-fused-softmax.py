@@ -28,25 +28,25 @@ def naive_softmax(x):
     """
     # read  MN elements ; write M  elements
     x_max = x.max(dim=1)[0]
-    # read 2MN elements ; write MN elements
+    # read MN + M elements ; write MN elements
     z = x - x_max[:, None]
     # read  MN elements ; write MN elements
     numerator = torch.exp(z)
     # read  MN elements ; write M  elements
     denominator = numerator.sum(dim=1)
-    # read 2MN elements ; write MN elements
+    # read MN + M elements ; write MN elements
     ret = numerator / denominator[:, None]
-    # in total: read 7MN elements ; wrote 3MN + 2M elements
+    # in total: read 5MN + 2M elements ; wrote 3MN + 2M elements
     return ret
 
 
 # %%
 # When implemented naively in PyTorch, computing :code:`y = naive_softmax(x)` for :math:`x \in R^{M \times N}`
-# requires reading :math:`7MN` elements from DRAM and writing back :math:`3MN + 2M` elements.
+# requires reading :math:`5MN + 2M` elements from DRAM and writing back :math:`3MN + 2M` elements.
 # This is obviously wasteful; we'd prefer to have a custom "fused" kernel that only reads
 # X once and does all the necessary computations on-chip.
 # Doing so would require reading and writing back only :math:`MN` bytes, so we could
-# expect a theoretical speed-up of ~5x (i.e., :math:`(10MN + 2M) / 2MN`).
+# expect a theoretical speed-up of ~4x (i.e., :math:`(8MN + 4M) / 2MN`).
 # The `torch.jit.script` flags aims to perform this kind of "kernel fusion" automatically
 # but, as we will see later, it is still far from ideal.
 
