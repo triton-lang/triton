@@ -262,7 +262,7 @@ def test_tuples():
     for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']]))
 def test_atomic_rmw(op, dtype_x, mode, device='cuda'):
     dtype_x = cvt[dtype_x]
-    n_programs = 37
+    n_programs = 5
 
     # triton kernel
     @triton.jit
