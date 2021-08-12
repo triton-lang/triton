@@ -649,6 +649,17 @@ def max_contiguous(input, value, builder=None):
 # Standard library
 # -----------------------
 
+@triton.jit
+def cdiv(x, div):
+    """
+    Computes the ceiling division of :code:`x` by :code:`div`
+
+    :param x: the input number
+    :type input: Block
+    :param div: the divisor
+    :param div: Block
+    """
+    return (x + div - 1) // div
 
 @triton.jit
 def minimum(x, y):
