@@ -80,6 +80,9 @@ Math Ops
 
     exp
     log
+    cos
+    sin
+    sqrt
     sigmoid
     softmax
 
