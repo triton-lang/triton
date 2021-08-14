@@ -7,7 +7,7 @@
   
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   
-  <title>triton.language.softmax &mdash; Triton  documentation</title>
+  <title>triton.language.cos &mdash; Triton  documentation</title>
   
 
   
@@ -46,8 +46,8 @@
     
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="triton.language.max" href="triton.language.max.html" />
-    <link rel="prev" title="triton.language.sigmoid" href="triton.language.sigmoid.html" /> 
+    <link rel="next" title="triton.language.sin" href="triton.language.sin.html" />
+    <link rel="prev" title="triton.language.log" href="triton.language.log.html" /> 
 </head>
 
 <body class="wy-body-for-nav">
@@ -110,11 +110,11 @@
 <li class="toctree-l2 current"><a class="reference internal" href="../triton.language.html#math-ops">Math Ops</a><ul class="current">
 <li class="toctree-l3"><a class="reference internal" href="triton.language.exp.html">triton.language.exp</a></li>
 <li class="toctree-l3"><a class="reference internal" href="triton.language.log.html">triton.language.log</a></li>
-<li class="toctree-l3"><a class="reference internal" href="triton.language.cos.html">triton.language.cos</a></li>
+<li class="toctree-l3 current"><a class="current reference internal" href="#">triton.language.cos</a></li>
 <li class="toctree-l3"><a class="reference internal" href="triton.language.sin.html">triton.language.sin</a></li>
 <li class="toctree-l3"><a class="reference internal" href="triton.language.sqrt.html">triton.language.sqrt</a></li>
 <li class="toctree-l3"><a class="reference internal" href="triton.language.sigmoid.html">triton.language.sigmoid</a></li>
-<li class="toctree-l3 current"><a class="current reference internal" href="#">triton.language.softmax</a></li>
+<li class="toctree-l3"><a class="reference internal" href="triton.language.softmax.html">triton.language.softmax</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#reduction-ops">Reduction Ops</a></li>
@@ -178,13 +178,13 @@
         
           <li><a href="../triton.language.html">triton.language</a> &raquo;</li>
         
-      <li>triton.language.softmax</li>
+      <li>triton.language.cos</li>
     
     
       <li class="wy-breadcrumbs-aside">
         
           
-            <a href="../../_sources/python-api/generated/triton.language.softmax.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/python-api/generated/triton.language.cos.rst.txt" rel="nofollow"> View page source</a>
           
         
       </li>
@@ -197,15 +197,18 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
             
-  <div class="section" id="triton-language-softmax">
-<h1>triton.language.softmax<a class="headerlink" href="#triton-language-softmax" title="Permalink to this headline">¶</a></h1>
+  <div class="section" id="triton-language-cos">
+<h1>triton.language.cos<a class="headerlink" href="#triton-language-cos" title="Permalink to this headline">¶</a></h1>
 <dl class="py function">
-<dt class="sig sig-object py" id="triton.language.softmax">
-<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">softmax</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.softmax" title="Permalink to this definition">¶</a></dt>
-<dd><p>Computes the element-wise softmax of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p>
+<dt class="sig sig-object py" id="triton.language.cos">
+<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">cos</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">builder</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.cos" title="Permalink to this definition">¶</a></dt>
+<dd><p>Computes the element-wise cosine of <code class="code docutils literal notranslate"><span class="pre">x</span></code></p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>x</strong> (<em>Block</em>) – the input block</p>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>x</strong> (<em>Block</em>) – the input values</p></li>
+<li><p><strong>builder</strong> (<em>triton.ir.builder</em><em>, </em><em>optional from within JIT'ed functions</em>) – IR builder to generate code into</p></li>
+</ul>
 </dd>
 </dl>
 </dd></dl>
@@ -218,8 +221,8 @@
           </div>
           <footer>
     <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
-        <a href="triton.language.max.html" class="btn btn-neutral float-right" title="triton.language.max" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
-        <a href="triton.language.sigmoid.html" class="btn btn-neutral float-left" title="triton.language.sigmoid" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="triton.language.sin.html" class="btn btn-neutral float-right" title="triton.language.sin" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="triton.language.log.html" class="btn btn-neutral float-left" title="triton.language.log" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
     </div>
 
   <hr/>
