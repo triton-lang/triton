@@ -13,7 +13,11 @@ def get_p2p_matrix():
         return pytest.skip("No multi-GPU topology", allow_module_level=True)
 
     lines = stdout.split("Legend")[0].split('\n')[1:]
-    return np.array([line.split('\t')[1:-1] for line in lines][:-2])
+    matrix = np.array([line.split('\t')[1:-1] for line in lines][:-2])
+    if matrix.size <= 1:
+        return pytest.skip("No multi-GPU topology", allow_module_level=True)
+    else:
+        return matrix
 
 
 def get_p2p_devices():
