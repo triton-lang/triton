@@ -6,14 +6,12 @@ import triton.language as tl
 import numpy as np
 
 
-@pytest.fixture(scope="module", autouse=True)
-def print_p2p_matrix():
-    stdout = subprocess.check_output(["nvidia-smi", "topo", "-p2p", "n"])
-    print(stdout)
-
-
 def get_p2p_matrix():
-    stdout = subprocess.check_output(["nvidia-smi", "topo", "-p2p", "n"]).decode("ascii")
+    try:
+        stdout = subprocess.check_output(["nvidia-smi", "topo", "-p2p", "n"]).decode("ascii")
+    except subprocess.CalledProcessError:
+        return pytest.skip("No multi-GPU topology", allow_module_level=True)
+
     lines = stdout.split("Legend")[0].split('\n')[1:]
     return np.array([line.split('\t')[1:-1] for line in lines][:-2])
 
@@ -42,6 +40,7 @@ def _copy(from_ptr, to_ptr, N, **meta):
     tl.store(to_ptr + offsets, values, mask=offsets < N)
 
 
+@pytest.mark.skipif(not p2p_devices, reason="No pair of device with P2P support")
 @pytest.mark.parametrize("device_kernel, device_from, device_to, stream_from, stream_to",
                          [(device_kernel, device_from, device_to, stream_from, stream_to)
                           for device_kernel in p2p_devices
@@ -52,7 +51,8 @@ def _copy(from_ptr, to_ptr, N, **meta):
                           ])
 def test_p2p(device_kernel, device_from, device_to, stream_from, stream_to):
     if device_to == device_from:
-        return
+        return pytest.skip()
+
     torch.cuda.set_device(device_kernel)
     N = 512
     grid = lambda meta: (triton.cdiv(N, meta['BLOCK']),)
@@ -66,6 +66,7 @@ def test_p2p(device_kernel, device_from, device_to, stream_from, stream_to):
     assert torch.allclose(x_from, x_to.to(device_from))
 
 
+@pytest.mark.skipif(not non_p2p_devices, reason="No pair of device with no P2P support")
 @pytest.mark.parametrize("device_kernel, device_from, device_to, stream_from, stream_to",
                          [(device_kernel, device_from, device_to, stream_from, stream_to)
                           for device_kernel in non_p2p_devices
@@ -76,7 +77,8 @@ def test_p2p(device_kernel, device_from, device_to, stream_from, stream_to):
                           ])
 def test_non_p2p(device_kernel, device_from, device_to, stream_from, stream_to):
     if device_to == device_from:
-        return
+        return pytest.skip()
+
     with pytest.raises(RuntimeError):
         torch.cuda.set_device(device_kernel)
         N = 512
