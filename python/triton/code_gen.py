@@ -134,6 +134,22 @@ class CodeGenerator(ast.NodeVisitor):
         ast.NodeVisitor.generic_visit(self, node)
         return node.arg
 
+    def visit_AnnAssign(self, node):
+        # extract attributes
+        annotation = self.visit(node.annotation)
+        target = self.visit(node.target)
+        value = self.visit(node.value)
+        # constexpr
+        if annotation == triton.language.constexpr:
+            if target in self.lscope:
+                raise ValueError(f'{target} is already defined.'
+                                 f' constexpr cannot be reassigned.')
+            self.lscope[target] = triton.language.constexpr(value)
+            return self.lscope[target]
+        # default: call visit_Assign
+        return self.visit_Assign(node)
+
+
     def visit_Assign(self, node):
         _names = []
         for target in node.targets:

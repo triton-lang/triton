@@ -12,9 +12,11 @@ def _to_ir(x, builder):
         return builder.get_int32(x)
     elif isinstance(x, float):
         return builder.get_float32(x)
-    if isinstance(x, block):
+    elif isinstance(x, constexpr):
+        return _to_ir(x.value, builder)
+    elif isinstance(x, block):
         return x.handle
-    if isinstance(x, dtype):
+    elif isinstance(x, dtype):
         return x.handle(builder)
     return x
 
@@ -261,6 +263,86 @@ class block:
 
 
 # -----------------------
+# constexpr
+# -----------------------
+
+class constexpr:
+    """
+    This class is used to store a value that is known at compile-time.
+    """
+
+    def __init__(self, value):
+        self.value = value
+
+    def __add__(self, other):
+        return self.value + other.value
+
+    def __radd__(self, other):
+        return other.value + self.value
+
+    def __sub__(self, other):
+        return self.value - other.value
+
+    def __rsub__(self, other):
+        return other.value - self.value
+    
+    def __mul__(self, other):
+        return self.value * other.value
+
+    def __rmul__(self, other):
+        return other.value * self.value
+    
+    def __truediv__(self, other):
+        return self.value / other.value
+    
+    def __rtruediv__(self, other):
+        return other.value / self.value
+    
+    def __floordiv__(self, other):
+        return self.value // other.value
+    
+    def __rfloordiv__(self, other):
+        return other.value // self.value
+
+    #
+    
+    def __gt__(self, other):
+        return self.value > other.value
+
+    def __rgt__(self, other):
+        return other.value > self.value
+
+    def __ge__(self, other):
+        return self.value >= other.value
+    
+    def __rge__(self, other):
+        return other.value >= self.value
+    
+    def __lt__(self, other):
+        return self.value < other.value
+
+    def __rlt__(self, other):
+        return other.value < self.value
+    
+    def __le__(self, other):
+        return self.value <= other.value
+    
+    def __rle__(self, other):
+        return other.value <= self.value
+    
+    def __eq__(self, other):
+        return self.value == other.value
+    
+    def __ne__(self, other):
+        return self.value != other.value
+
+    def __bool__(self):
+        return bool(self.value)
+
+    def __call__(self, *args, **kwds):
+        return self.value(*args, **kwds)
+
+# -----------------------
 # SPMD Programming Model
 # -----------------------
 
@@ -315,7 +397,7 @@ def zeros(shape, dtype, builder=None):
     :param dtype: Data-type of the new array, e.g., :code:`triton.float16`
     :type dtype: DType
     """
-    shape = [int(x.handle) if isinstance(x, block) else x for x in shape]
+    shape = [x.value for x in shape]
     return frontend.zeros(shape, dtype, builder)
 
 
