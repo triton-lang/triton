@@ -38,6 +38,7 @@ enum class atomic_rmw_op_t: unsigned int{
   UMax,
   UMin,
   FAdd,
+  Xchg,
 };
 
 enum cast_op_t: unsigned int {
