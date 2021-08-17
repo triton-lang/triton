@@ -66,7 +66,7 @@ import torch
 def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, DTYPE):
     torch.manual_seed(0)
     # nuke kernel decorators -- will set meta-parameters manually
-    META = {'BLOCK_M': BLOCK_M, 'BLOCK_N': BLOCK_N, 'BLOCK_K': BLOCK_K, 'SPLIT_K': SPLIT_K, 'GROUP_M': 8}
+    META = {'BLOCK_M': BLOCK_M, 'BLOCK_N': BLOCK_N, 'BLOCK_K': BLOCK_K, 'SPLIT_K': SPLIT_K}
     configs = [triton.Config(meta=META, num_warps=NWARP, num_stages=NSTAGE)]
     kernel = triton.ops._matmul.kernel
     decorators = kernel.kernel_decorators
