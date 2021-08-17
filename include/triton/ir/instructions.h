@@ -634,18 +634,6 @@ public:
   static instruction* create(value *ptr, value *cmp, value *val, const std::string &name = "", instruction *next = nullptr);
 };
 
-class atomic_exch_inst: public atomic_inst {
-private:
-  atomic_exch_inst(value *ptr, value *val, const std::string &name = "", instruction *next = nullptr);
-  std::string repr_impl() const { return "atomic_exch"; }
-  _TRITON_DEFINE_CLONE(atomic_exch_inst)
-  _TRITON_DEFINE_ACCEPT(atomic_exch_inst)
-
-public:
-  static instruction* create(value *ptr, value *val, const std::string &name = "", instruction *next = nullptr);
-};
-
-
 class exp_inst: public builtin_inst {
 private:
   exp_inst(value *val, const std::string &name = "", instruction *next = nullptr);

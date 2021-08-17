@@ -534,10 +534,6 @@ ir::value *dispatch::atomic_cas(ir::value* ptr, ir::value *cmp, ir::value *val, 
   return builder->create_atomic_cas(ptr, cmp, val);
 }
 
-ir::value *dispatch::atomic_xchg(ir::value* ptr, ir::value *val, ir::builder *builder){
-  return builder->create_atomic_exch(ptr, val);
-}
-
 void atom_red_typechecking(ir::value*& ptr, ir::value *&val, ir::value *&mask, ir::builder *builder){
   if(!ptr->get_type()->get_scalar_ty()->is_pointer_ty())
     throw semantic_error("Pointer argument of store instruction is " + ptr->get_type()->repr());
@@ -613,6 +609,12 @@ ir::value *dispatch::atomic_or(ir::value* ptr, ir::value *val, ir::value *mask, 
 ir::value *dispatch::atomic_xor(ir::value* ptr, ir::value *val, ir::value *mask, ir::builder *builder){
   atom_red_typechecking(ptr, val, mask, builder);
   return builder->create_atomic_rmw(ir::atomic_rmw_op_t::Xor, ptr, val, mask);
+}
+
+ir::value *dispatch::atomic_xchg(ir::value* ptr, ir::value *val, ir::value *mask, ir::builder *builder){
+  atom_red_typechecking(ptr, val, mask, builder);
+  ir::type* sca_ty = val->get_type()->get_scalar_ty();
+  return builder->create_atomic_rmw(ir::atomic_rmw_op_t::Xchg, ptr, val, mask);
 }
 
 //===----------------------------------------------------------------------===//

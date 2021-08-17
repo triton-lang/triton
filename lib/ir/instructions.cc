@@ -757,18 +757,6 @@ instruction* atomic_cas_inst::create(value *ptr, value *cmp, value *val, const s
   return new atomic_cas_inst(ptr, cmp, val, name, next);
 }
 
-// atomic exch
-
-atomic_exch_inst::atomic_exch_inst(value *ptr, value *val, const std::string &name, instruction *next)
-  : atomic_inst(ptr->get_type()->get_pointer_element_ty(), INST_ATOMIC_EXCH, 2, name, next) {
-  set_operand(0, ptr);
-  set_operand(1, val);
-}
-
-instruction* atomic_exch_inst::create(value *ptr, value *val, const std::string &name, instruction *next) {
-  return new atomic_exch_inst(ptr, val, name, next);
-}
-
 
 // exp
 

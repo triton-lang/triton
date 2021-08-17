@@ -442,7 +442,7 @@ def atomic_cas(pointer, cmp, val, builder=None):
 
 
 @builtin
-def atomic_xchg(pointer, val, builder=None):
+def atomic_xchg(pointer, val, mask=None, builder=None):
     """
     Swaps the *old* values stored at location :code:`pointer` with the new values given by :code:`val`. Returns the old values.
 
@@ -450,8 +450,10 @@ def atomic_xchg(pointer, val, builder=None):
     :type pointer: Block of dtype=triton.PointerDType
     :param val: The new values to store
     :type val: Block of dtype=`pointer.dtype.element_ty`
+    :param mask: If mask[idx] is false, :code:`pointer[idx]` is unaffected.
+    :type mask: Block of triton.int1, optional
     """
-    return frontend.atomic_xchg(pointer, val, builder)
+    return frontend.atomic_xchg(pointer, val, mask, builder)
 
 
 @builtin
