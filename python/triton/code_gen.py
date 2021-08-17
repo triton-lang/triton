@@ -99,7 +99,8 @@ class CodeGenerator(ast.NodeVisitor):
             arg_values = []
             for i, arg_name in enumerate(arg_names):
                 if i in self.constants:
-                    arg_values.append(self.constants[i])
+                    cst = triton.language.constexpr(self.constants[i])
+                    arg_values.append(cst)
                 else:
                     if i in self.attributes:
                         is_ptr = fn.args[i].type.is_ptr()
@@ -162,6 +163,9 @@ class CodeGenerator(ast.NodeVisitor):
         if not isinstance(values, tuple):
             values = [values]
         for name, value in zip(names, values):
+            # by default, constexpr are assigned into variable
+            if isinstance(value, triton.language.constexpr):
+                value = value.value
             if not isinstance(value, triton.language.block):
                 value = triton.language._to_ir(value, self.builder)
             self.set_value(name, value)
@@ -206,17 +210,13 @@ class CodeGenerator(ast.NodeVisitor):
             ast.BitOr: '__or__',
             ast.BitXor: '__xor__',
         }[type(node.op)]
-        kws = dict()
-
         if self.is_triton_object(lhs):
-            kws['builder'] = self.builder
-        ret = getattr(lhs, fn)(rhs, **kws)
-        if ret is NotImplemented:
-            if self.is_triton_object(rhs):
-                kws['builder'] = self.builder
+            return getattr(lhs, fn)(rhs, builder=self.builder)
+        elif self.is_triton_object(rhs):
             fn = fn[:2] + 'r' + fn[2:]
-            ret = getattr(rhs, fn)(lhs, **kws)
-        return ret
+            return getattr(rhs, fn)(lhs, builder=self.builder)
+        else:
+            return getattr(lhs, fn)(rhs)
 
     def visit_If(self, node):
         cond = self.visit(node.test)
@@ -405,7 +405,7 @@ class CodeGenerator(ast.NodeVisitor):
         return fn(*args, **kws)
 
     def visit_Num(self, node):
-        return node.n
+        return triton.language.constexpr(node.n)
 
     def visit_Attribute(self, node):
         lhs = self.visit(node.value)

@@ -397,6 +397,9 @@ def zeros(shape, dtype, builder=None):
     :param dtype: Data-type of the new array, e.g., :code:`triton.float16`
     :type dtype: DType
     """
+    for d in shape:
+        if not isinstance(d, constexpr):
+            raise TypeError("Shape elements must have type `constexpr`")
     shape = [x.value for x in shape]
     return frontend.zeros(shape, dtype, builder)
 

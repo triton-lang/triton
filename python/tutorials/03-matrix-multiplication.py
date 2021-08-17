@@ -188,10 +188,10 @@ def matmul_kernel(
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
     """
     # extract meta-parameters
-    BLOCK_SIZE_M = meta['BLOCK_SIZE_M']
-    BLOCK_SIZE_N = meta['BLOCK_SIZE_N']
-    BLOCK_SIZE_K = meta['BLOCK_SIZE_K']
-    GROUP_SIZE_M = 8
+    BLOCK_SIZE_M: tl.constexpr = meta['BLOCK_SIZE_M']
+    BLOCK_SIZE_N: tl.constexpr = meta['BLOCK_SIZE_N']
+    BLOCK_SIZE_K: tl.constexpr = meta['BLOCK_SIZE_K']
+    GROUP_SIZE_M: tl.constexpr = 8
 
     # -----------------------------------------------------------
     # Map program ids `pid` to the block of C it should compute.
