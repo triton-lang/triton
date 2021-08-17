@@ -108,7 +108,13 @@ class _matmul(torch.autograd.Function):
         locks = _matmul._locks[device]
         # launch kernel
         grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), META['SPLIT_K'])
-        _kernel[grid](a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), locks)
+        _kernel[grid](a, b, c, 
+                      M, N, K, 
+                      a.stride(0), a.stride(1), 
+                      b.stride(0), b.stride(1), 
+                      c.stride(0), c.stride(1), 
+                      locks, 
+                      SPLIT_K=1, GROUP_M=8)
         # done
         return c
 
