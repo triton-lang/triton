@@ -1,4 +1,6 @@
-/* Copyright 2018-2021 Philippe Tillet
+/* 
+* Copyright 2018-2020 Philippe Tillet
+* Copyright 2020-2021 OpenAI
 * 
 * Permission is hereby granted, free of charge, to any person obtaining 
 * a copy of this software and associated documentation files 
@@ -19,8 +21,3 @@
 * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE 
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
-
-
-// The compiler front-end is based on a modified version of WGTCC
-// https://github.com/wgtdkp/wgtcc
-// Copyright (c) 2016 wgtdkp
