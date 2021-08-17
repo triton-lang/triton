@@ -600,7 +600,7 @@ class Kernel:
             # compile and cache configuration if necessary
             cache[key] = self._compile(
                 *wargs, device=tt_device, attributes=attributes,
-                num_warps=num_warps, num_stages=num_stages, force_nc_cache=force_nc_cache, 
+                num_warps=num_warps, num_stages=num_stages, force_nc_cache=force_nc_cache,
                 constants=constants, **meta
             )
         # pack arguments
@@ -753,19 +753,19 @@ def autotune(configs, key, reset_to_zero=None):
     .. highlight:: python
     .. code-block:: python
 
-        @triton.autotune(configs=[ 
+        @triton.autotune(configs=[
             triton.Config(meta={'BLOCK_SIZE': 128}, num_warps=4),
             triton.Config(meta={'BLOCK_SIZE': 1024}, num_warps=8),
-          ], 
+          ],
           key=['x_size'] # the two above configs will be evaluated anytime
-                         # the value of x_size changes   
+                         # the value of x_size changes
         )
         @triton.jit
         def kernel(x_ptr, x_size, **META):
             BLOCK_SIZE = META['BLOCK_SIZE']
-    
+
     :note: When all the configurations are evaluated, the kernel will run multiple time.
-           This means that whatever value the kernel updates will be updated multiple times. 
+           This means that whatever value the kernel updates will be updated multiple times.
            To avoid this undesired behavior, you can use the `reset_to_zero` argument, which
            reset the value of the provided tensor to `zero` before running any configuration.
 
@@ -799,7 +799,7 @@ def heuristics(values):
         def kernel(x_ptr, x_size, **META):
             BLOCK_SIZE = META['BLOCK_SIZE'] # smallest power-of-two >= x_size
 
-    
+
     .param values: a dictionary of meta-parameter names and functions that compute the value of the meta-parameter.
                    each such function takes a list of positional arguments as input.
     .type values: dict[str, Callable[[list[Any]], Any]]
@@ -832,7 +832,7 @@ def jit(fn):
            * objects within the triton.language package,
            * arguments to this function,
            * other jit'd functions
-    
+
     :param fn: the function to be jit-compiled
     :type fn: Callable
     """
@@ -849,14 +849,15 @@ def cdiv(x, y):
 
 
 class TensorWrapper:
-    def __init__(self, data_ptr, dtype, device):
+    def __init__(self, data_ptr, dtype, device, is_cuda):
         self._data_ptr = data_ptr
         self.dtype = dtype
         self.device = device
+        self.is_cuda = is_cuda
 
     def data_ptr(self):
         return self._data_ptr
 
 
 def reinterpret(tensor, dtype):
-    return TensorWrapper(tensor.data_ptr(), dtype, tensor.device)
+    return TensorWrapper(tensor.data_ptr(), dtype, tensor.device, tensor.is_cuda)
