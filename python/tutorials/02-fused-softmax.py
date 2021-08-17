@@ -69,13 +69,11 @@ def softmax_kernel(
 ):
     # The rows of the softmax are independent, so we parallelize across those
     row_idx = tl.program_id(0)
-    BLOCK_SIZE = meta['BLOCK_SIZE']
     # The stride represents how much we need to increase the pointer to advance 1 row
     row_start_ptr = input_ptr + row_idx * input_row_stride
-
     # The block size is the next power of two greater than n_cols, so we can fit each
     # row in a single block
-    col_offsets = tl.arange(0, BLOCK_SIZE)
+    col_offsets = tl.arange(0, meta['BLOCK_SIZE'])
     input_ptrs = row_start_ptr + col_offsets
     # Load the row into SRAM, using a mask since BLOCK_SIZE may be > than n_cols
     row = tl.load(input_ptrs, mask=col_offsets < n_cols, other=-float('inf'))

@@ -30,8 +30,8 @@ def _forward(
     X, scale, LUT, RPE, KP_M, ATTN_M, sizemax, stride_zx, stride_zrpe, stride_hrpe, stride_srpe, stride_zkpm, stride_zattnm,
     **meta
 ):
-    TN = meta['TN']
-    BLOCK = meta['BLOCK']
+    TN: tl.constexpr = meta['TN']
+    BLOCK: tl.constexpr = meta['BLOCK']
     pidhm = tl.program_id(0)
     pidz = tl.program_id(1)
     # create index ranges

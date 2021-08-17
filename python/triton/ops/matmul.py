@@ -22,11 +22,11 @@ import triton
 @triton.jit
 def _kernel(A, B, C, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn, LOCKS, **META):
     # extract meta-parameters
-    BLOCK_M = META['BLOCK_M']
-    BLOCK_N = META['BLOCK_N']
-    BLOCK_K = META['BLOCK_K']
-    GROUP_M = META['GROUP_M']
-    SPLIT_K = META['SPLIT_K']
+    BLOCK_M: tl.constexpr = META['BLOCK_M']
+    BLOCK_N: tl.constexpr = META['BLOCK_N']
+    BLOCK_K: tl.constexpr = META['BLOCK_K']
+    GROUP_M: tl.constexpr = META['GROUP_M']
+    SPLIT_K: tl.constexpr = META['SPLIT_K']
     # matrix multiplication
     pid = tl.program_id(0)
     pid_z = tl.program_id(1)

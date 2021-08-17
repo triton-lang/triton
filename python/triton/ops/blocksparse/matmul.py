@@ -9,11 +9,11 @@ def _kernel(
     A, B, C, stride_za, stride_ha, stride_ma, stride_ka, stride_zb, stride_hb, stride_kb, stride_nb, stride_zc, stride_hc,
     stride_mc, stride_nc, DS0, DS1, SDD_K, SDD_off_width, lut, locks, nlocks, **meta
 ):
-    TM = meta['TM']
-    TN = meta['TN']
-    TK = meta['TK']
-    TZ = meta['TZ']
-    BLOCK = meta['BLOCK']
+    TM: tl.constexpr = meta['TM']
+    TN: tl.constexpr = meta['TN']
+    TK: tl.constexpr = meta['TK']
+    TZ: tl.constexpr = meta['TZ']
+    BLOCK: tl.constexpr = meta['BLOCK']
     #------------#
     #- Prologue -#
     #------------#
