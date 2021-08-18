@@ -198,13 +198,14 @@
 <h1>triton.language.atomic_xchg<a class="headerlink" href="#triton-language-atomic-xchg" title="Permalink to this headline">¶</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.atomic_xchg">
-<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">atomic_xchg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pointer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">val</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">builder</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.atomic_xchg" title="Permalink to this definition">¶</a></dt>
+<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">atomic_xchg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pointer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">val</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">builder</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.atomic_xchg" title="Permalink to this definition">¶</a></dt>
 <dd><p>Swaps the <em>old</em> values stored at location <code class="code docutils literal notranslate"><span class="pre">pointer</span></code> with the new values given by <code class="code docutils literal notranslate"><span class="pre">val</span></code>. Returns the old values.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>pointer</strong> (<em>Block of dtype=triton.PointerDType</em>) – The memory locations which contain the old values</p></li>
 <li><p><strong>val</strong> (<em>Block of dtype=`pointer.dtype.element_ty`</em>) – The new values to store</p></li>
+<li><p><strong>mask</strong> (<em>Block of triton.int1</em><em>, </em><em>optional</em>) – If mask[idx] is false, <code class="code docutils literal notranslate"><span class="pre">pointer[idx]</span></code> is unaffected.</p></li>
 <li><p><strong>builder</strong> (<em>triton.ir.builder</em><em>, </em><em>optional from within JIT'ed functions</em>) – IR builder to generate code into</p></li>
 </ul>
 </dd>
