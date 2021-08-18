@@ -714,6 +714,19 @@ class JITFunction:
 
 
 class Config:
+    """
+    An object that represents a possible kernel configuration for the auto-tuner to try.
+
+    :ivar meta: a dictionary of meta-parameters to pass to the kernel as keyword arguments.
+    :type meta: dict[Str, Any]
+    :ivar num_warps: the number of warps to use for the kernel when compiled for GPUs. For example, if
+                      `num_warps=8`, then each kernel instance will be automatically parallelized to
+                      cooperatively execute using `8 * 32 = 256` threads.
+    :type num_warps: int
+    :ivar num_stages: the number of stages that the compiler should use when software-pipelining loops.
+                       Mostly useful for matrix multiplication workloads on SM80+ GPUs.
+    :type num_stages: int
+    """
     def __init__(self, meta, num_warps=4, num_stages=2):
         self.meta = meta
         self.num_warps = num_warps
@@ -721,6 +734,35 @@ class Config:
 
 
 def autotune(configs, key, reset_to_zero=None):
+    """
+    Decorator for auto-tuning a :code:`triton.jit`'d function.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        @triton.autotune(configs=[ 
+            triton.Config(meta={'BLOCK_SIZE': 128}, num_warps=4),
+            triton.Config(meta={'BLOCK_SIZE': 1024}, num_warps=8),
+          ], 
+          key=['x_size'] # the two above configs will be evaluated anytime
+                         # the value of x_size changes   
+        )
+        @triton.jit
+        def kernel(x_ptr, x_size, **META):
+            BLOCK_SIZE = META['BLOCK_SIZE']
+    
+    :note: When all the configurations are evaluated, the kernel will run multiple time.
+           This means that whatever value the kernel updates will be updated multiple times. 
+           To avoid this undesired behavior, you can use the `reset_to_zero` argument, which
+           reset the value of the provided tensor to `zero` before running any configuration.
+
+    :param configs: a list of :code:`triton.Config` objects
+    :type configs: list[triton.Config]
+    :param key: a list of argument names whose change in value will trigger the evaluation of all provided configs.
+    :type key: list[str]
+    :param reset_to_zero: a list of argument names whose value will be reset to zero before evaluating any configs.
+    :type reset_to_zero: list[str]
+    """
     def decorator(fn):
         def wrapper(kernel):
             return Autotuner(kernel, fn.arg_names, configs, key, reset_to_zero)
@@ -732,6 +774,23 @@ def autotune(configs, key, reset_to_zero=None):
 
 
 def heuristics(values):
+    """
+    Decorator for specifying how the values of certain meta-parameters may be computed.
+    This is useful for cases where auto-tuning is prohibitevely expensive, or just not applicable.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        @heuristics(values={'BLOCK_SIZE': lambda args: 2 ** int(math.ceil(math.log2(args[1])))})
+        @triton.jit
+        def kernel(x_ptr, x_size, **META):
+            BLOCK_SIZE = META['BLOCK_SIZE'] # smallest power-of-two >= x_size
+
+    
+    .param values: a dictionary of meta-parameter names and functions that compute the value of the meta-parameter.
+                   each such function takes a list of positional arguments as input.
+    .type values: dict[str, Callable[[list[Any]], Any]]
+    """
     def decorator(fn):
         def wrapper(kernel):
             def fun(*args, **meta):
@@ -766,6 +825,8 @@ def jit(fn):
     """
     return JITFunction(fn)
 
+
+######
 
 def cdiv(x, y):
     return (x + y - 1) // y
