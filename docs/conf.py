@@ -24,10 +24,19 @@
 # -- General configuration ------------------------------------------------
 
 
+
+
+def process_sig(app, what, name, obj, options, signature, return_annotation):
+    if signature and '_builder' in signature:
+        signature = signature.split('_builder')[0] + ")" 
+    return (signature, return_annotation)
+
 def setup(app):
     """Customize function args retrieving to get args under decorator."""
     import sphinx
     import triton
+
+    app.connect("autodoc-process-signature", process_sig)
 
     def forward_jit_fn(func):
         old = func
@@ -38,6 +47,7 @@ def setup(app):
             return old(obj)
 
         return wrapped
+
 
     old_documenter = sphinx.ext.autosummary.get_documenter
 
