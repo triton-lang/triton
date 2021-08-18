@@ -46,7 +46,7 @@
     
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="triton.language.minimum" href="triton.language.minimum.html" />
+    <link rel="next" title="triton.language.atomic_add" href="triton.language.atomic_add.html" />
     <link rel="prev" title="triton.language.min" href="triton.language.min.html" /> 
 </head>
 
@@ -114,6 +114,7 @@
 <li class="toctree-l3 current"><a class="current reference internal" href="#">triton.language.sum</a></li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#atomic-ops">Atomic Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#comparison-ops">Comparison ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#compiler-hint-ops">Compiler Hint Ops</a></li>
 </ul>
@@ -197,14 +198,13 @@
 <h1>triton.language.sum<a class="headerlink" href="#triton-language-sum" title="Permalink to this headline">¶</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.sum">
-<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">sum</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">axis</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">builder</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.sum" title="Permalink to this definition">¶</a></dt>
+<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">sum</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">axis</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.sum" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the sum of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> block along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>input</strong> – the input values</p></li>
 <li><p><strong>axis</strong> – the dimension along which the reduction should be done</p></li>
-<li><p><strong>builder</strong> (<em>triton.ir.builder</em><em>, </em><em>optional from within JIT'ed functions</em>) – IR builder to generate code into</p></li>
 </ul>
 </dd>
 </dl>
@@ -218,7 +218,7 @@
           </div>
           <footer>
     <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
-        <a href="triton.language.minimum.html" class="btn btn-neutral float-right" title="triton.language.minimum" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="triton.language.atomic_add.html" class="btn btn-neutral float-right" title="triton.language.atomic_add" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
         <a href="triton.language.min.html" class="btn btn-neutral float-left" title="triton.language.min" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
     </div>
 

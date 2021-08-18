@@ -115,6 +115,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#indexing-ops">Indexing Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#math-ops">Math Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#reduction-ops">Reduction Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#atomic-ops">Atomic Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#comparison-ops">Comparison ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#compiler-hint-ops">Compiler Hint Ops</a></li>
 </ul>
@@ -198,15 +199,15 @@
 <h1>triton.language.atomic_xchg<a class="headerlink" href="#triton-language-atomic-xchg" title="Permalink to this headline">¶</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.atomic_xchg">
-<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">atomic_xchg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pointer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">val</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">builder</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.atomic_xchg" title="Permalink to this definition">¶</a></dt>
-<dd><p>Swaps the <em>old</em> values stored at location <code class="code docutils literal notranslate"><span class="pre">pointer</span></code> with the new values given by <code class="code docutils literal notranslate"><span class="pre">val</span></code>. Returns the old values.</p>
+<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">atomic_xchg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pointer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">val</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.atomic_xchg" title="Permalink to this definition">¶</a></dt>
+<dd><p>Performs an atomic exchange at the memory location specified by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p>
+<p>Return the data stored at <code class="code docutils literal notranslate"><span class="pre">pointer</span></code> before the atomic operation.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>pointer</strong> (<em>Block of dtype=triton.PointerDType</em>) – The memory locations which contain the old values</p></li>
-<li><p><strong>val</strong> (<em>Block of dtype=`pointer.dtype.element_ty`</em>) – The new values to store</p></li>
-<li><p><strong>mask</strong> (<em>Block of triton.int1</em><em>, </em><em>optional</em>) – If mask[idx] is false, <code class="code docutils literal notranslate"><span class="pre">pointer[idx]</span></code> is unaffected.</p></li>
-<li><p><strong>builder</strong> (<em>triton.ir.builder</em><em>, </em><em>optional from within JIT'ed functions</em>) – IR builder to generate code into</p></li>
+<li><p><strong>pointer</strong> (<em>Block of dtype=triton.PointerDType</em>) – The memory locations to compare-and-swap.</p></li>
+<li><p><strong>cmp</strong> (<em>Block of dtype=`pointer.dtype.element_ty`</em>) – The values expected to be found in the atomic object</p></li>
+<li><p><strong>val</strong> (<em>Block of dtype=`pointer.dtype.element_ty`</em>) – The values to copy in case the expected value matches the contained value.</p></li>
 </ul>
 </dd>
 </dl>

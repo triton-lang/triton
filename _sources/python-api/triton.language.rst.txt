@@ -98,6 +98,18 @@ Reduction Ops
     min
     sum
 
+Atomic Ops
+---------------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    atomic_cas
+    atomic_add
+    atomic_max
+    atomic_min
+
 
 Comparison ops
 ---------------

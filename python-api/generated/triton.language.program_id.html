@@ -113,6 +113,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#indexing-ops">Indexing Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#math-ops">Math Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#reduction-ops">Reduction Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#atomic-ops">Atomic Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#comparison-ops">Comparison ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#compiler-hint-ops">Compiler Hint Ops</a></li>
 </ul>
@@ -196,14 +197,11 @@
 <h1>triton.language.program_id<a class="headerlink" href="#triton-language-program-id" title="Permalink to this headline">¶</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.program_id">
-<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">program_id</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">axis</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">builder</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.program_id" title="Permalink to this definition">¶</a></dt>
+<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">program_id</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">axis</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.program_id" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the id of the current program instance along the given <code class="code docutils literal notranslate"><span class="pre">axis</span></code>.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>axis</strong> (<em>int</em>) – The axis of the 3D launch grid. Has to be either 0, 1 or 2.</p></li>
-<li><p><strong>builder</strong> (<em>triton.ir.builder</em><em>, </em><em>optional from within JIT'ed functions</em>) – IR builder to generate code into</p></li>
-</ul>
+<dd class="field-odd"><p><strong>axis</strong> (<em>int</em>) – The axis of the 3D launch grid. Has to be either 0, 1 or 2.</p>
 </dd>
 </dl>
 </dd></dl>

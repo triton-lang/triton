@@ -114,6 +114,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#indexing-ops">Indexing Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#math-ops">Math Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#reduction-ops">Reduction Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#atomic-ops">Atomic Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#comparison-ops">Comparison ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#compiler-hint-ops">Compiler Hint Ops</a></li>
 </ul>
@@ -197,14 +198,13 @@
 <h1>triton.language.broadcast_to<a class="headerlink" href="#triton-language-broadcast-to" title="Permalink to this headline">¶</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.broadcast_to">
-<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">broadcast_to</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shape</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">builder</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.broadcast_to" title="Permalink to this definition">¶</a></dt>
+<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">broadcast_to</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shape</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.broadcast_to" title="Permalink to this definition">¶</a></dt>
 <dd><p>Tries to broadcast the given block to a new <code class="code docutils literal notranslate"><span class="pre">shape</span></code>.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>input</strong> (<em>Block</em>) – The input block.</p></li>
 <li><p><strong>shape</strong> (<em>Tuple</em><em>[</em><em>int</em><em>]</em>) – The desired shape.</p></li>
-<li><p><strong>builder</strong> (<em>triton.ir.builder</em><em>, </em><em>optional from within JIT'ed functions</em>) – IR builder to generate code into</p></li>
 </ul>
 </dd>
 </dl>

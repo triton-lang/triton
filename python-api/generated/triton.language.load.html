@@ -115,6 +115,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#indexing-ops">Indexing Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#math-ops">Math Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#reduction-ops">Reduction Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#atomic-ops">Atomic Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#comparison-ops">Comparison ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#compiler-hint-ops">Compiler Hint Ops</a></li>
 </ul>
@@ -198,7 +199,7 @@
 <h1>triton.language.load<a class="headerlink" href="#triton-language-load" title="Permalink to this headline">¶</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.load">
-<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">load</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pointer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">builder</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.load" title="Permalink to this definition">¶</a></dt>
+<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">load</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pointer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.load" title="Permalink to this definition">¶</a></dt>
 <dd><p>Return a block of data whose values are, elementwise, loaded from memory at location defined by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p>
 <p><code class="code docutils literal notranslate"><span class="pre">mask</span></code> and <code class="code docutils literal notranslate"><span class="pre">other</span></code> are implicitly broadcast to <code class="code docutils literal notranslate"><span class="pre">pointer.shape</span></code>.</p>
 <p><code class="code docutils literal notranslate"><span class="pre">other</span></code> is implicitly typecast to <code class="code docutils literal notranslate"><span class="pre">pointer.dtype.element_ty</span></code>.</p>
@@ -208,7 +209,6 @@
 <li><p><strong>pointer</strong> (<em>Block of dtype=triton.PointerDType</em>) – Pointers to the data to be loaded.</p></li>
 <li><p><strong>mask</strong> (<em>Block of triton.int1</em><em>, </em><em>optional</em>) – if mask[idx] is false, do not load the data at address <code class="code docutils literal notranslate"><span class="pre">pointer[idx]</span></code>.</p></li>
 <li><p><strong>other</strong> (<em>Block</em><em>, </em><em>optional</em>) – if mask[idx] is false, return other[idx]</p></li>
-<li><p><strong>builder</strong> (<em>triton.ir.builder</em><em>, </em><em>optional from within JIT'ed functions</em>) – IR builder to generate code into</p></li>
 </ul>
 </dd>
 </dl>

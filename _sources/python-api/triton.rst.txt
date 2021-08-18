@@ -8,3 +8,6 @@ triton
     :nosignatures:
 
     jit
+    autotune
+    heuristics
+    Config
