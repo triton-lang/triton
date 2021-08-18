@@ -193,11 +193,11 @@ class CodeGenerator(ast.NodeVisitor):
         kws = dict()
 
         if self.is_triton_object(lhs):
-            kws['builder'] = self.builder
+            kws['_builder'] = self.builder
         ret = getattr(lhs, fn)(rhs, **kws)
         if ret is NotImplemented:
             if self.is_triton_object(rhs):
-                kws['builder'] = self.builder
+                kws['_builder'] = self.builder
             fn = fn[:2] + 'r' + fn[2:]
             ret = getattr(rhs, fn)(lhs, **kws)
         return ret
@@ -260,10 +260,10 @@ class CodeGenerator(ast.NodeVisitor):
             ast.IsNot: '__ne__',
         }[type(node.ops[0])]
         if self.is_triton_object(lhs):
-            return getattr(lhs, fn)(rhs, builder=self.builder)
+            return getattr(lhs, fn)(rhs, _builder=self.builder)
         elif self.is_triton_object(rhs):
             fn = fn[:2] + 'r' + fn[2:]
-            return getattr(rhs, fn)(lhs, builder=self.builder)
+            return getattr(rhs, fn)(lhs, _builder=self.builder)
         else:
             return getattr(lhs, fn)(rhs)
 
@@ -275,7 +275,7 @@ class CodeGenerator(ast.NodeVisitor):
             ast.Invert: '__invert__',
         }[type(node.op)]
         if self.is_triton_object(op):
-            return getattr(op, fn)(builder=self.builder)
+            return getattr(op, fn)(_builder=self.builder)
         return getattr(op, fn)()
 
     def visit_While(self, node):
@@ -308,7 +308,7 @@ class CodeGenerator(ast.NodeVisitor):
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
         if self.is_triton_object(lhs):
-            return lhs.__getitem__(slices, builder=self.builder)
+            return lhs.__getitem__(slices, _builder=self.builder)
         return lhs[slices]
 
     def visit_ExtSlice(self, node):
@@ -331,7 +331,7 @@ class CodeGenerator(ast.NodeVisitor):
         build_cond = lambda: triton.language.where(self.visit(pos_step_node),\
                                     self.visit(pos_cond_node),\
                                     self.visit(neg_cond_node),\
-                                    builder=self.builder)
+                                    _builder=self.builder)
         #cond_node = neg_cond_node
         step_node = ast.AugAssign(target=st_target, op=ast.Add(), value=arg_2)
         # code generation
@@ -385,7 +385,7 @@ class CodeGenerator(ast.NodeVisitor):
             return fn(*args, generator=self, **kws)
         if hasattr(fn, '__self__') and self.is_triton_object(fn.__self__) or \
             sys.modules[fn.__module__] is triton.language:
-            return fn(*args, builder=self.builder, **kws)
+            return fn(*args, _builder=self.builder, **kws)
         return fn(*args, **kws)
 
     def visit_Num(self, node):
