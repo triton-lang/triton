@@ -49,9 +49,9 @@ for name in dir(frontend):
 def builtin(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        if 'builder' not in kwargs or \
-           kwargs['builder'] is None:
-            raise ValueError("Builder argument must be provided outside of JIT functions. Did you forget to add @triton.jit ?")
+        if '_builder' not in kwargs or \
+           kwargs['_builder'] is None:
+           raise ValueError("Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)")
         return fn(*args, **kwargs)
 
     return wrapper
