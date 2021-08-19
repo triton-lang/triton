@@ -334,7 +334,7 @@ std::string cu_module::compile_llvm_module(llvm::Module* module, driver::device*
   std::error_code ec;
 
   // Save GCN ISA binary.
-  std::string isabin_path = module_name + std::string(".o");
+  std::string isabin_path = std::string("/tmp/") + module_name + std::string(".o");
   std::unique_ptr<llvm::raw_fd_ostream> isabin_fs(
       new llvm::raw_fd_ostream(isabin_path, ec, llvm::sys::fs::OF_Text));
   if (ec)
@@ -352,14 +352,14 @@ std::string cu_module::compile_llvm_module(llvm::Module* module, driver::device*
 
 #ifdef __HIP_PLATFORM_AMD__
   // Save GCN ISA.
-  std::string amdgcn_path = module_name + std::string(".gcn");
+  std::string amdgcn_path = std::string("/tmp/") + module_name + std::string(".gcn");
   std::string result(buffer.begin(), buffer.end());
   std::ofstream amdgcn(amdgcn_path);
   amdgcn << result;
   amdgcn.close();
 
   // generate HASCO file
-  std::string hsaco_path = module_name + std::string(".hsaco");
+  std::string hsaco_path = std::string("/tmp/") + module_name + std::string(".hsaco");
   std::string error_message;
   int lld_result =
       llvm::sys::ExecuteAndWait("/opt/rocm/llvm/bin/ld.lld", {"/opt/rocm/llvm/bin/ld.lld", "-flavor", "gnu", "-shared", "-o", hsaco_path, isabin_path},
