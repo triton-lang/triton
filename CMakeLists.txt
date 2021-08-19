@@ -42,28 +42,27 @@ endif()
 ##########
 # LLVM
 ##########
-if("${LLVM_LIBRARY_DIR}" STREQUAL "")
 if (TRITON_USE_ROCM)
-    find_package(LLVM 11 REQUIRED COMPONENTS "amdgpu")
+    find_package(LLVM 12 REQUIRED COMPONENTS "amdgpu")
 else()
-    find_package(LLVM 11 REQUIRED COMPONENTS "nvptx")
-endif()
-    
-    message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
-    if(APPLE)
-      set(CMAKE_OSX_DEPLOYMENT_TARGET "10.14")
+    if("${LLVM_LIBRARY_DIR}" STREQUAL "")
+        find_package(LLVM 11 REQUIRED COMPONENTS "nvptx")
+        message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
+        if(APPLE)
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "10.14")
+        endif()
+    # sometimes we don't want to use llvm-config, since it may have been downloaded for some specific linux distros
+    else()
+        set(LLVM_LDFLAGS "-L${LLVM_LIBRARY_DIR}")
+        set(LLVM_LIBRARIES libLLVMNVPTXCodeGen.a libLLVMSelectionDAG.a libLLVMipo.a libLLVMInstrumentation.a
+                        libLLVMVectorize.a libLLVMLinker.a libLLVMIRReader.a libLLVMAsmParser.a libLLVMFrontendOpenMP.a
+                        libLLVMAsmPrinter.a libLLVMDebugInfoDWARF.a libLLVMCodeGen.a libLLVMTarget.a libLLVMScalarOpts.a
+                        libLLVMInstCombine.a libLLVMAggressiveInstCombine.a libLLVMTransformUtils.a libLLVMBitWriter.a
+                        libLLVMAnalysis.a libLLVMProfileData.a libLLVMObject.a libLLVMTextAPI.a libLLVMMCParser.a
+                        libLLVMBitReader.a libLLVMCore.a libLLVMRemarks.a libLLVMBitstreamReader.a libLLVMNVPTXDesc.a
+                        libLLVMMC.a libLLVMDebugInfoCodeView.a libLLVMDebugInfoMSF.a libLLVMBinaryFormat.a libLLVMNVPTXInfo.a
+                        libLLVMSupport.a libLLVMDemangle.a)
     endif()
-# sometimes we don't want to use llvm-config, since it may have been downloaded for some specific linux distros
-else()
-    set(LLVM_LDFLAGS "-L${LLVM_LIBRARY_DIR}")
-    set(LLVM_LIBRARIES libLLVMNVPTXCodeGen.a libLLVMSelectionDAG.a libLLVMipo.a libLLVMInstrumentation.a
-                       libLLVMVectorize.a libLLVMLinker.a libLLVMIRReader.a libLLVMAsmParser.a libLLVMFrontendOpenMP.a
-                       libLLVMAsmPrinter.a libLLVMDebugInfoDWARF.a libLLVMCodeGen.a libLLVMTarget.a libLLVMScalarOpts.a
-                       libLLVMInstCombine.a libLLVMAggressiveInstCombine.a libLLVMTransformUtils.a libLLVMBitWriter.a
-                       libLLVMAnalysis.a libLLVMProfileData.a libLLVMObject.a libLLVMTextAPI.a libLLVMMCParser.a
-                       libLLVMBitReader.a libLLVMCore.a libLLVMRemarks.a libLLVMBitstreamReader.a libLLVMNVPTXDesc.a
-                       libLLVMMC.a libLLVMDebugInfoCodeView.a libLLVMDebugInfoMSF.a libLLVMBinaryFormat.a libLLVMNVPTXInfo.a
-                       libLLVMSupport.a libLLVMDemangle.a)
 endif()
 include_directories("${LLVM_INCLUDE_DIRS}")
 
@@ -93,7 +92,6 @@ if(BUILD_PYTHON_MODULE)
         set(PYTHON_SRC ${PYTHON_SRC_PATH}/main.cc ${PYTHON_SRC_PATH}/triton.cc  ${PYTHON_SRC_PATH}/superblock.cc ${CUTLASS_SRC})
     endif()
 endif()
-
 
 # Triton
 file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
