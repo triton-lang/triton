@@ -82,8 +82,13 @@ void prefetch::run(ir::module &mod) {
     prefetched_vals_.insert(next_b);
   }
 
+#ifdef __HIP_PLATFORM_AMD__
+  if (false)
+  {
+#else
   // move loads to the beginning of the loop
   if (tgt_->as_nvidia()->sm() < 80) {
+#endif
     for (ir::function *fn : mod.get_function_list())
     for (ir::basic_block *bb : fn->blocks()) {
       // only apply to loop body
