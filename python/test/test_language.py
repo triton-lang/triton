@@ -35,6 +35,18 @@ def patch_kernel(template, to_replace):
 
 
 # generic test functions
+def _test_empty_kernel(dtype_x, expr, torch_expr=None, device='cuda'):
+    SIZE = 128
+    # define the kernel / launch-grid
+    @triton.jit
+    def kernel(X, **meta):
+        pid = tl.program_id(0) 
+    # inputs
+    x = triton.testing.random(SIZE, dtype=cvt[dtype_x], device=device)
+    # run empty kernel  
+    kernel[(1, )](x, SIZE=SIZE, num_warps=4)
+    
+# generic test functions
 def _test_unary(dtype_x, expr, torch_expr=None, device='cuda'):
     SIZE = 128
     # define the kernel / launch-grid
@@ -123,6 +135,17 @@ def test_bitwise_op(dtype_x, dtype_y, expr, device='cuda'):
 ])
 def test_compare_op(dtype_x, dtype_y, expr, device='cuda'):
     _test_binary(dtype_x, dtype_y, expr, device=device)
+
+# ---------------
+# test empty ops
+# ---------------
+@pytest.mark.parametrize("dtype_x, expr", [
+    (dtype_x, f' -x') for dtype_x in float_dtypes
+] + [\
+    (dtype_x, f' ~x') for dtype_x in int_dtypes
+     ])
+def test_empty_kernel(dtype_x, expr, device='cuda'):
+    _test_empty_kernel(dtype_x, expr, device=device)
 
 
 # ---------------
