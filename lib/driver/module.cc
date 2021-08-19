@@ -73,11 +73,19 @@ std::string exec(const char* cmd) {
     return result;
 }
 
+#ifdef __HIP_PLATFORM_AMD__
+  void LLVMInitializeAMDGPUTargetInfo();
+  void LLVMInitializeAMDGPUTarget();
+  void LLVMInitializeAMDGPUTargetMC();
+  void LLVMInitializeAMDGPUAsmPrinter();
+  void LLVMInitializeAMDGPUAsmParser();
+#else
   void LLVMInitializeNVPTXTargetInfo();
   void LLVMInitializeNVPTXTarget();
   void LLVMInitializeNVPTXTargetMC();
   void LLVMInitializeNVPTXAsmPrinter();
   void LLVMInitializeNVPTXAsmParser();
+#endif
 
 
 namespace triton
@@ -93,10 +101,17 @@ namespace driver
 void module::init_llvm() {
   static bool init = false;
   if(!init){
+#ifdef __HIP_PLATFORM_AMD__
+    LLVMInitializeAMDGPUTargetInfo();
+    LLVMInitializeAMDGPUTarget();
+    LLVMInitializeAMDGPUTargetMC();
+    LLVMInitializeAMDGPUAsmPrinter();
+#else
     LLVMInitializeNVPTXTargetInfo();
     LLVMInitializeNVPTXTarget();
     LLVMInitializeNVPTXTargetMC();
     LLVMInitializeNVPTXAsmPrinter();
+#endif 
     init = true;
   }
 }

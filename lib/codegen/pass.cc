@@ -13,9 +13,15 @@
 #include "triton/codegen/transform/peephole.h"
 #include "triton/codegen/transform/pipeline.h"
 #include "triton/codegen/transform/prefetch.h"
+#ifdef __HIP_PLATFORM_AMD__
+#include "triton/driver/device_hip.h"
+#include "triton/driver/kernel_hip.h"
+#include "triton/driver/module_hip.h"
+#else
 #include "triton/driver/device.h"
 #include "triton/driver/kernel.h"
 #include "triton/driver/module.h"
+#endif
 #include "triton/ir/function.h"
 #include "triton/ir/module.h"
 #include "triton/ir/print.h"
