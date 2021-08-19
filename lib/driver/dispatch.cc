@@ -20,8 +20,13 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
+#ifdef __HIP_PLATFORM_AMD__
+#include "triton/driver/dispatch_hip.h"
+#include "triton/driver/context_hip.h"
+#else
 #include "triton/driver/dispatch.h"
 #include "triton/driver/context.h"
+#endif
 #include "triton/tools/sys/getenv.hpp"
 
 namespace triton
@@ -96,11 +101,15 @@ bool dispatch::cuinit(){
     putenv((char*)"CUDA_CACHE_DISABLE=1");
     std::string libcuda = tools::getenv("TRITON_LIBCUDA");
     if(libcuda.empty()){
+#ifdef __HIP_PLATFORM_AMD__
+     cuda_ = dlopen("libamdhip64.so", RTLD_LAZY);
+#else
       cuda_ = dlopen("libcuda.so", RTLD_LAZY);
       if(!cuda_)
         cuda_ = dlopen("libcuda.so.1", RTLD_LAZY);
       if(!cuda_)
         throw std::runtime_error("Could not find `libcuda.so`. Make sure it is in your LD_LIBRARY_PATH.");
+#endif
     }
     else
       cuda_ = dlopen(libcuda.c_str(), RTLD_LAZY);
@@ -108,8 +117,13 @@ bool dispatch::cuinit(){
   if(cuda_ == nullptr)
     return false;
   CUresult (*fptr)(unsigned int);
+#ifdef __HIP_PLATFORM_AMD__
+  hipInit_ = dlsym(cuda_, "hipInit");
+  *reinterpret_cast<void **>(&fptr) = hipInit_;
+#else
   cuInit_ = dlsym(cuda_, "cuInit");
   *reinterpret_cast<void **>(&fptr) = cuInit_;
+#endif
   CUresult res = (*fptr)(0);
   check(res);
   return true;
@@ -132,6 +146,49 @@ bool dispatch::spvllvminit(){
   return spvllvm_ != nullptr;
 }
 
+#ifdef __HIP_PLATFORM_AMD__
+//HIP
+CUDA_DEFINE1(hipError_t, hipCtxDestroy, hipCtx_t)
+CUDA_DEFINE2(hipError_t, hipEventCreate, hipEvent_t *, unsigned int)
+CUDA_DEFINE2(hipError_t, hipGetDevice, hipDevice_t *, int)
+CUDA_DEFINE3(hipError_t, hipMemcpyDtoH, void *, hipDeviceptr_t, size_t)
+CUDA_DEFINE2(hipError_t, hipStreamCreate__, hipStream_t *, unsigned int)
+CUDA_DEFINE3(hipError_t, hipEventElapsedTime, float *, hipEvent_t, hipEvent_t)
+CUDA_DEFINE1(hipError_t, hipFree, hipDeviceptr_t)
+CUDA_DEFINE4(hipError_t, hipMemcpyDtoHAsync, void *, hipDeviceptr_t, size_t, hipStream_t)
+CUDA_DEFINE1(hipError_t, hipDriverGetVersion, int *)
+CUDA_DEFINE3(hipError_t, hipDeviceGetName, char *, int, int)
+CUDA_DEFINE3(hipError_t, hipDeviceGetPCIBusId, char *, int, int)
+CUDA_DEFINE4(hipError_t, hipModuleGetGlobal, hipDeviceptr_t*, size_t*, hipModule_t, const char*)
+
+CUDA_DEFINE4(hipError_t, hipMemcpyHtoDAsync, hipDeviceptr_t, const void *, size_t, hipStream_t)
+CUDA_DEFINE2(hipError_t, hipModuleLoad, hipModule_t *, const char *)
+CUDA_DEFINE11(hipError_t, hipModuleLaunchKernel, hipFunction_t, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, hipStream_t, void **, void **)
+CUDA_DEFINE1(hipError_t, hipModuleUnload, hipModule_t)
+CUDA_DEFINE5(hipError_t, hipModuleLoadDataEx, hipModule_t *, const void *, unsigned int, hipJitOption *, void **)
+CUDA_DEFINE3(hipError_t, hipDeviceGetAttribute, int *, hipDeviceAttribute_t, int)
+CUDA_DEFINE1(hipError_t, hipGetDeviceCount, int *)
+CUDA_DEFINE3(hipError_t, hipMemcpyHtoD, hipDeviceptr_t, const void *, size_t )
+CUDA_DEFINE1(hipError_t, hipInit, unsigned int)
+CUDA_DEFINE2(hipError_t, hipEventRecord, hipEvent_t, hipStream_t)
+CUDA_DEFINE3(hipError_t, hipCtxCreate, hipCtx_t *, unsigned int, hipDevice_t)
+CUDA_DEFINE3(hipError_t, hipModuleGetFunction, hipFunction_t *, hipModule_t, const char *)
+CUDA_DEFINE1(hipError_t, hipStreamSynchronize, hipStream_t)
+CUDA_DEFINE1(hipError_t, hipStreamDestroy, hipStream_t)
+CUDA_DEFINE2(hipError_t, cuStreamGetCtx, hipStream_t, hipCtx_t*)
+CUDA_DEFINE1(hipError_t, hipEventDestroy, hipEvent_t)
+CUDA_DEFINE2(hipError_t, hipMalloc, hipDeviceptr_t*, size_t)
+CUDA_DEFINE3(hipError_t, hipPointerGetAttribute, void*, hipPointerAttribute_t, hipDeviceptr_t)
+CUDA_DEFINE1(hipError_t, hipCtxGetDevice, hipDevice_t*)
+CUDA_DEFINE1(hipError_t, hipCtxGetCurrent, hipCtx_t*)
+CUDA_DEFINE1(hipError_t, hipCtxSetCurrent, hipCtx_t)
+CUDA_DEFINE4(hipError_t, hipMemsetD8Async, hipDeviceptr_t, unsigned char, size_t, hipStream_t)
+CUDA_DEFINE1(hipError_t, hipCtxPushCurrent, hipCtx_t)
+CUDA_DEFINE1(hipError_t, hipCtxPopCurrent, hipCtx_t*)
+// CUDA_DEFINE3(hipError_t, hipFuncGetAttribute, int*, hipFuncAttribute_t, hipFunction_t)
+// CUDA_DEFINE3(hipError_t, hipFuncSetAttribute, hipFunction_t, hipFuncAttribute_t, int)
+// CUDA_DEFINE2(hipError_t, hipFuncSetCacheConfig, hipFunction_t, hipFuncCache)
+#else
 //CUDA
 CUDA_DEFINE1(CUresult, cuCtxDestroy_v2, CUcontext)
 CUDA_DEFINE2(CUresult, cuEventCreate, CUevent *, unsigned int)
@@ -178,6 +235,7 @@ CUDA_DEFINE1(CUresult, cuCtxPopCurrent_v2, CUcontext*)
 CUDA_DEFINE3(CUresult, cuFuncGetAttribute, int*, CUfunction_attribute, CUfunction)
 CUDA_DEFINE3(CUresult, cuFuncSetAttribute, CUfunction, CUfunction_attribute, int)
 CUDA_DEFINE2(CUresult, cuFuncSetCacheConfig, CUfunction, CUfunc_cache)
+#endif
 
 NVML_DEFINE2(nvmlReturn_t, nvmlDeviceGetHandleByPciBusId_v2, const char *, nvmlDevice_t*)
 NVML_DEFINE3(nvmlReturn_t, nvmlDeviceGetClockInfo, nvmlDevice_t, nvmlClockType_t, unsigned int*)
@@ -205,6 +263,49 @@ void* dispatch::cuda_;
 void* dispatch::nvml_;
 void* dispatch::spvllvm_;
 
+
+#ifdef __HIP_PLATFORM_AMD__
+void* dispatch::hipCtxGetCurrent_;
+void* dispatch::hipCtxSetCurrent_;
+void* dispatch::hipCtxDestroy_;
+void* dispatch::hipEventCreate_;
+void* dispatch::hipGetDevice_;
+void* dispatch::hipMemcpyDtoH_;
+void* dispatch::hipStreamCreate___;
+void* dispatch::hipEventElapsedTime_;
+void* dispatch::hipFree_;
+void* dispatch::hipMemcpyDtoHAsync_;
+void* dispatch::hipDriverGetVersion_;
+void* dispatch::hipDeviceGetName_;
+void* dispatch::hipDeviceGetPCIBusId_;
+void* dispatch::hipModuleGetGlobal_;
+
+void* dispatch::hipMemcpyHtoDAsync_;
+void* dispatch::hipModuleLoad_;
+void* dispatch::hipModuleLaunchKernel_;
+void* dispatch::hipModuleUnload_;
+void* dispatch::hipModuleLoadDataEx_;
+void* dispatch::hipDeviceGetAttribute_;
+void* dispatch::hipGetDeviceCount_;
+void* dispatch::hipMemcpyHtoD_;
+void* dispatch::hipInit_;
+void* dispatch::hipEventRecord_;
+void* dispatch::hipCtxCreate_;
+void* dispatch::hipModuleGetFunction_;
+void* dispatch::hipStreamSynchronize_;
+void* dispatch::hipStreamDestroy_;
+void* dispatch::cuStreamGetCtx_;
+void* dispatch::hipEventDestroy_;
+void* dispatch::hipMalloc_;
+void* dispatch::hipPointerGetAttribute_;
+void* dispatch::hipCtxGetDevice_;
+void* dispatch::hipMemsetD8Async_;
+void* dispatch::hipCtxPushCurrent_;
+void* dispatch::hipCtxPopCurrent_;
+void* dispatch::hipFuncGetAttribute_;
+void* dispatch::cuFuncSetAttribute_;
+void* dispatch::hipFuncSetCacheConfig_;
+#else
 //CUDA
 void* dispatch::cuCtxGetCurrent_;
 void* dispatch::cuCtxSetCurrent_;
@@ -252,6 +353,7 @@ void* dispatch::cuCtxPopCurrent_v2_;
 void* dispatch::cuFuncGetAttribute_;
 void* dispatch::cuFuncSetAttribute_;
 void* dispatch::cuFuncSetCacheConfig_;
+#endif
 
 void* dispatch::nvmlInit_v2_;
 void* dispatch::nvmlDeviceGetHandleByPciBusId_v2_;

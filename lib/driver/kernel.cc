@@ -21,8 +21,13 @@
 */
 
 #include <string.h>
+#ifdef __HIP_PLATFORM_AMD__
+#include "triton/driver/kernel_hip.h"
+#include "triton/driver/buffer_hip.h"
+#else
 #include "triton/driver/kernel.h"
 #include "triton/driver/buffer.h"
+#endif
 
 namespace triton
 {
@@ -70,21 +75,36 @@ host_kernel::host_kernel(driver::module* program, const char *name): kernel(prog
 
 cu_kernel::cu_kernel(driver::module *program, const char * name) : kernel(program, CUfunction(), true) {
   dispatch::cuModuleGetFunction(&*cu_, *program->cu(), name);
+#ifdef __HIP_PLATFORM_AMD__
+  // dispatch::hipFuncSetCacheConfig(*cu_, hipFuncCachePreferShared);
+#else
   dispatch::cuFuncSetCacheConfig(*cu_, CU_FUNC_CACHE_PREFER_SHARED);
+#endif
   // properties
   int shared_total, shared_optin, shared_static;
   int n_spills, n_reg;
   CUdevice dev;
   dispatch::cuCtxGetDevice(&dev);
   dispatch::cuDeviceGetAttribute(&shared_total, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR, dev);
+#ifdef __HIP_PLATFORM_AMD__
+  // dispatch::hipDeviceGetAttribute(&shared_optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, dev);
+  // dispatch::hipFuncGetAttribute(&shared_static, hipFuncAttributeSharedSizeBytes, *cu_);
+  // dispatch::hipFuncGetAttribute(&n_spills, hipFuncAttributeLocalSizeBytes,  *cu_);
+  // dispatch::hipFuncGetAttribute(&n_reg, hipFuncAttributeNumRegs, *cu_);
+#else
   dispatch::cuDeviceGetAttribute(&shared_optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, dev);
   dispatch::cuFuncGetAttribute(&shared_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, *cu_);
   dispatch::cuFuncGetAttribute(&n_spills, CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES,  *cu_);
   dispatch::cuFuncGetAttribute(&n_reg, CU_FUNC_ATTRIBUTE_NUM_REGS, *cu_);
+#endif
 //  std::cout << n_reg << std::endl;
   if (shared_optin > 49152){
 //      std::cout << "dynamic shared memory " << shared_optin << " " << shared_static << std::endl;
+#ifdef __HIP_PLATFORM_AMD__
+      // dispatch::hipFuncSetAttribute(*cu_, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin - shared_static);
+#else
       dispatch::cuFuncSetAttribute(*cu_, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin - shared_static);
+#endif
   }
 }
 

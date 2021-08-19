@@ -23,12 +23,21 @@
 #include <cassert>
 #include <unistd.h>
 #include <array>
+#ifdef __HIP_PLATFORM_AMD__
+#include "triton/driver/backend_hip.h"
+#include "triton/driver/stream_hip.h"
+#include "triton/driver/context_hip.h"
+#include "triton/driver/device_hip.h"
+#include "triton/driver/kernel_hip.h"
+#include "triton/driver/buffer_hip.h"
+#else
 #include "triton/driver/backend.h"
 #include "triton/driver/stream.h"
 #include "triton/driver/context.h"
 #include "triton/driver/device.h"
 #include "triton/driver/kernel.h"
 #include "triton/driver/buffer.h"
+#endif
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/ExecutionEngine/GenericValue.h"
 
@@ -123,17 +132,36 @@ void cu_stream::enqueue(driver::kernel* kernel, std::array<size_t, 3> grid, std:
 }
 
 void cu_stream::write(driver::buffer* buffer, bool blocking, std::size_t offset, std::size_t size, void const* ptr) {
-  if(blocking)
+  if(blocking){
+#ifdef __HIP_PLATFORM_AMD__
+    dispatch::hipMemcpyHtoD(static_cast<char *>(*buffer->cu()) + offset, ptr, size);
+#else
     dispatch::cuMemcpyHtoD(*buffer->cu() + offset, ptr, size);
-  else
+#endif
+  }else{
+#ifdef __HIP_PLATFORM_AMD__
+    dispatch::hipMemcpyHtoDAsync(static_cast<char *>(*buffer->cu()) + offset, ptr, size, *cu_);
+#else
     dispatch::cuMemcpyHtoDAsync(*buffer->cu() + offset, ptr, size, *cu_);
+#endif
+  }
 }
 
 void cu_stream::read(driver::buffer* buffer, bool blocking, std::size_t offset, std::size_t size, void* ptr) {
-  if(blocking)
+  if(blocking){
+#ifdef __HIP_PLATFORM_AMD__
+    dispatch::hipMemcpyDtoH(ptr, static_cast<char *>(*buffer->cu()) + offset, size);
+#else
     dispatch::cuMemcpyDtoH(ptr, *buffer->cu() + offset, size);
-  else
+#endif
+  }else{
+#ifdef __HIP_PLATFORM_AMD__
+    dispatch::hipMemcpyDtoHAsync(ptr, static_cast<char*>(*buffer->cu()) + offset, size, *cu_);
+#else
     dispatch::cuMemcpyDtoHAsync(ptr, *buffer->cu() + offset, size, *cu_);
+#endif
+  }
+
 }
 
 

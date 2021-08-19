@@ -20,10 +20,17 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
+#ifdef __HIP_PLATFORM_AMD__
+#include "triton/driver/stream_hip.h"
+#include "triton/driver/buffer_hip.h"
+#include "triton/driver/context_hip.h"
+#include "triton/driver/dispatch_hip.h"
+#else
 #include "triton/driver/stream.h"
 #include "triton/driver/buffer.h"
 #include "triton/driver/context.h"
 #include "triton/driver/dispatch.h"
+#endif
 
 
 namespace triton
@@ -47,7 +54,11 @@ size_t buffer::size() {
 
 uintptr_t buffer::addr_as_uintptr_t() {
   switch(backend_){
+#ifdef __HIP_PLATFORM_AMD__
+    case CUDA: return (uintptr_t)*cu_;
+#else
     case CUDA: return *cu_;
+#endif
     case Host: return (uintptr_t)hst_->data;
     default: return 0;
   }
@@ -74,7 +85,11 @@ host_buffer::host_buffer(size_t size)
 
 cu_buffer::cu_buffer(size_t size)
   : buffer(size, CUdeviceptr(), true) {
+#ifdef __HIP_PLATFORM_AMD__
+  dispatch::hipMalloc(&*cu_, size);
+#else
   dispatch::cuMemAlloc(&*cu_, size);
+#endif
 }
 
 cu_buffer::cu_buffer(size_t size, CUdeviceptr cu, bool take_ownership)

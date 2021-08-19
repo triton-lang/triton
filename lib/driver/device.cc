@@ -25,8 +25,13 @@
 #include <sstream>
 #include <cstring>
 #include <memory>
+#ifdef __HIP_PLATFORM_AMD__
+#include "triton/driver/device_hip.h"
+#include "triton/driver/context_hip.h"
+#else
 #include "triton/driver/device.h"
 #include "triton/driver/context.h"
+#endif
 #include "triton/codegen/target.h"
 
 namespace triton
@@ -173,7 +178,11 @@ std::string cu_device::infos() const{
 
 // target
 std::unique_ptr<codegen::target> cu_device::make_target() const {
+#ifdef __HIP_PLATFORM_AMD__
+  return std::unique_ptr<codegen::amd_cl_target>(new codegen::amd_cl_target());
+#else
   return std::unique_ptr<codegen::nvidia_cu_target>(new codegen::nvidia_cu_target(compute_capability()));
+#endif
 }
 
 

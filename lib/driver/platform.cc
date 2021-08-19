@@ -22,7 +22,11 @@
 
 #include <string>
 #include "triton/driver/platform.h"
+#ifdef __HIP_PLATFORM_AMD__
+#include "triton/driver/device_hip.h"
+#else
 #include "triton/driver/device.h"
+#endif
 
 
 namespace triton
