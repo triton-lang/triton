@@ -4,9 +4,15 @@
 #define _TRITON_DRIVER_MODULE_H_
 
 #include <map>
+#ifdef __HIP_PLATFORM_AMD__
+#include "triton/driver/handle_hip.h"
+#include "triton/driver/context_hip.h"
+#include "triton/driver/buffer_hip.h"
+#else
 #include "triton/driver/handle.h"
 #include "triton/driver/context.h"
 #include "triton/driver/buffer.h"
+#endif
 
 namespace llvm
 {

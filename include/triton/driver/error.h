@@ -4,7 +4,11 @@
 #define _TRITON_DRIVER_ERROR_H_
 
 #include <exception>
+#ifdef __HIP_PLATFORM_AMD__
+#include "triton/driver/dispatch_hip.h"
+#else
 #include "triton/driver/dispatch.h"
+#endif
 
 
 namespace triton

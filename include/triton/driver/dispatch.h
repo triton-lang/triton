@@ -6,9 +6,15 @@
 #include <type_traits>
 #include <dlfcn.h>
 
+#ifdef __HIP_PLATFORM_AMD__
+//HIP Backend
+#include "hip/hip_runtime.h"
+#include "triton/external/CUDA/nvml_hip.h"
+#else
 //CUDA Backend
 #include "triton/external/CUDA/cuda.h"
 #include "triton/external/CUDA/nvml.h"
+#endif
 
 //Exceptions
 #include <iostream>
@@ -85,10 +91,12 @@ public:
   static CUresult cuModuleUnload(CUmodule hmod);
   static CUresult cuModuleLoadDataEx(CUmodule *module, const void *image, unsigned int numOptions, CUjit_option *options, void **optionValues);
 
+#ifndef __HIP_PLATFORM_AMD__
   static CUresult cuLinkAddData_v2(CUlinkState state, CUjitInputType type, void* data, size_t size, const char* name, unsigned int numOptions, CUjit_option* options, void** optionValues);
   static CUresult cuLinkCreate_v2(unsigned int  numOptions, CUjit_option* options, void** optionValues, CUlinkState* stateOut);
   static CUresult cuLinkComplete(CUlinkState state, void** cubinOut, size_t* sizeOut);
   static CUresult cuLinkDestroy(CUlinkState state);
+#endif
 
   static CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev);
   static CUresult cuDeviceGetCount(int *count);
@@ -104,12 +112,18 @@ public:
   static CUresult cuStreamDestroy_v2(CUstream hStream);
   static CUresult cuEventDestroy_v2(CUevent hEvent);
   static CUresult cuMemAlloc_v2(CUdeviceptr *dptr, size_t bytesize);
+#ifdef __HIP_PLATFORM_AMD__
+  static hipError_t hipPointerGetAttribute(void * data, hipPointerAttribute_t attribute, hipDeviceptr_t ptr);
+#else
   static CUresult cuPointerGetAttribute(void * data, CUpointer_attribute attribute, CUdeviceptr ptr);
+#endif
   static CUresult cuCtxGetDevice(CUdevice* result);
   static CUresult cuMemsetD8Async(CUdeviceptr dst, unsigned char x, size_t N, CUstream stream);
+#ifndef __HIP_PLATFORM_AMD__
   static CUresult cuFuncGetAttribute(int* pi, CUfunction_attribute attrib, CUfunction hfunc);
   static CUresult cuFuncSetAttribute(CUfunction hfunc, CUfunction_attribute attrib, int  value);
   static CUresult cuFuncSetCacheConfig (CUfunction hfunc, CUfunc_cache config);
+#endif
   // NVML
   static nvmlReturn_t nvmlDeviceGetHandleByPciBusId_v2( const char* pciBusId, nvmlDevice_t* device);
   static nvmlReturn_t nvmlDeviceGetClockInfo(nvmlDevice_t device, nvmlClockType_t type, unsigned int *clock);
@@ -133,6 +147,48 @@ private:
   static void* opengl_;
 
 
+#ifdef __HIP_PLATFORM_AMD__
+  // HIP functions
+  static void* hipCtxGetCurrent_;
+  static void* hipCtxSetCurrent_;
+  static void* hipCtxDestroy_;
+  static void* hipEventCreate_;
+  static void* hipGetDevice_;
+  static void* hipMemcpyDtoH_;
+  static void* hipStreamCreate___;
+  static void* hipEventElapsedTime_;
+  static void* hipFree_;
+  static void* hipMemcpyDtoHAsync_;
+  static void* hipDriverGetVersion_;
+  static void* hipDeviceGetName_;
+  static void* hipDeviceGetPCIBusId_;
+  static void* hipModuleGetGlobal_;
+  static void* hipMemcpyHtoDAsync_;
+  static void* hipModuleLoad_;
+  static void* hipModuleLaunchKernel_;
+  static void* hipModuleUnload_;
+  static void* hipModuleLoadDataEx_;
+  static void* hipDeviceGetAttribute_;
+  static void* hipGetDeviceCount_;
+  static void* hipMemcpyHtoD_;
+  static void* hipInit_;
+  static void* hipEventRecord_;
+  static void* hipCtxCreate_;
+  static void* hipModuleGetFunction_;
+  static void* hipStreamSynchronize_;
+  static void* hipStreamDestroy_;
+  static void* cuStreamGetCtx_;
+  static void* hipEventDestroy_;
+  static void* hipMalloc_;
+  static void* hipPointerGetAttribute_;
+  static void* hipCtxGetDevice_;
+  static void* hipMemsetD8Async_;
+  static void* hipCtxPushCurrent_;
+  static void* hipCtxPopCurrent_;
+  static void* hipFuncGetAttribute_;
+  static void* cuFuncSetAttribute_;
+  static void* hipFuncSetCacheConfig_;
+#else
   // CUDA functions
   static void* cuCtxGetCurrent_;
   static void* cuCtxSetCurrent_;
@@ -178,6 +234,7 @@ private:
   static void* cuFuncGetAttribute_;
   static void* cuFuncSetAttribute_;
   static void* cuFuncSetCacheConfig_;
+#endif
   // NVML
   static void* nvmlInit_v2_;
   static void* nvmlDeviceGetHandleByPciBusId_v2_;
