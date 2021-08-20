@@ -1910,7 +1910,6 @@ void generator::visit_decoalesce_inst(ir::decoalesce_inst* rc) {
   int max_spt1 = std::max(in_spt1, out_spt1);
   indices_t idx(2);
   int num_packs = shape[ord[1]]/max_spt1;
-  std::cout << num_packs << " " << in_ord1.size() << " " << out_ord1.size() << std::endl;
   for(size_t j = 0; j < num_packs; j++){
     add_barrier();
     for(size_t k = 0; k < in_ord1.size()/num_packs; k++)
