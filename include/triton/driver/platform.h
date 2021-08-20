@@ -6,7 +6,11 @@
 #include <vector>
 #include <string>
 
+#ifdef __HIP_PLATFORM_AMD__
+#include "triton/driver/handle_hip.h"
+#else
 #include "triton/driver/handle.h"
+#endif
 
 namespace triton
 {

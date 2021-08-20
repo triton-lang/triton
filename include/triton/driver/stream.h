@@ -4,10 +4,17 @@
 #define _TRITON_DRIVER_STREAM_H_
 
 #include <map>
+#ifdef __HIP_PLATFORM_AMD__
+#include "triton/driver/context_hip.h"
+#include "triton/driver/device_hip.h"
+#include "triton/driver/handle_hip.h"
+#include "triton/driver/buffer_hip.h"
+#else
 #include "triton/driver/context.h"
 #include "triton/driver/device.h"
 #include "triton/driver/handle.h"
 #include "triton/driver/buffer.h"
+#endif
 
 namespace triton
 {

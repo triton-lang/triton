@@ -1,0 +1,3 @@
+[submodule "third_party/hipify-torch"]
+	path = third_party/hipify-torch
+	url = https://github.com/ROCmSoftwarePlatform/hipify-torch

@@ -7,7 +7,11 @@
 #include <map>
 #include <list>
 #include <vector>
+#ifdef __HIP_PLATFORM_AMD__
+#include "triton/driver/context_hip.h"
+#else
 #include "triton/driver/context.h"
+#endif
 
 namespace llvm
 {

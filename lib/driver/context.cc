@@ -21,8 +21,13 @@
 */
 
 #include <cassert>
+#ifdef __HIP_PLATFORM_AMD__
+#include "triton/driver/context_hip.h"
+#include "triton/driver/module_hip.h"
+#else
 #include "triton/driver/context.h"
 #include "triton/driver/module.h"
+#endif
 #include "triton/tools/sys/getenv.hpp"
 #include "triton/tools/sys/mkdir.hpp"
 
@@ -109,7 +114,11 @@ cu_context::cu_context(CUcontext context, bool take_ownership): driver::context(
 }
 
 cu_context::cu_context(driver::device* device): context(device, CUcontext(), true){
+#ifdef __HIP_PLATFORM_AMD__
+  dispatch::hipCtxCreate(&*cu_, 0, *((driver::cu_device*)dev_)->cu());
+#else
   dispatch::cuCtxCreate(&*cu_, CU_CTX_SCHED_AUTO, *((driver::cu_device*)dev_)->cu());
+#endif
 //  dispatch::cuCtxPopCurrent_v2(NULL);
 }
 

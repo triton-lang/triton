@@ -72,6 +72,24 @@ void check(CUresult err)
   case CUDA_ERROR_ILLEGAL_ADDRESS                : throw illegal_address();
   case CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES        : throw launch_out_of_resources();
   case CUDA_ERROR_LAUNCH_TIMEOUT                 : throw launch_timeout();
+#ifdef __HIP_PLATFORM_AMD__
+  // case hipErrorLaunchIncompatibleTexturing  : throw launch_incompatible_texturing();
+  case hipErrorPeerAccessAlreadyEnabled    : throw peer_access_already_enabled();
+  case hipErrorPeerAccessNotEnabled        : throw peer_access_not_enabled();
+  // case hipErrorPrimaryContextActive         : throw primary_context_active();
+  // case hipErrorContextIsDestroyed           : throw context_is_destroyed();
+  case hipErrorAssert                         : throw assert_error();
+  // case hipErrorTooManyPeers                 : throw too_many_peers();
+  case hipErrorHostMemoryAlreadyRegistered : throw host_memory_already_registered();
+  case hipErrorHostMemoryNotRegistered     : throw host_memory_not_registered();
+  // case hipErrorHardwareStackError           : throw hardware_stack_error();
+  // case hipErrorIllegalInstruction            : throw illegal_instruction();
+  // case hipErrorMisalignedAddress             : throw misaligned_address();
+  // case hipErrorInvalidAddressSpace          : throw invalid_address_space();
+  // case hipErrorInvalidPc                     : throw invalid_pc();
+  case hipErrorLaunchFailure                  : throw launch_failed();
+  // case hipErrorNotPermitted                  : throw not_permitted();
+#else
   case CUDA_ERROR_LAUNCH_INCOMPATIBLE_TEXTURING  : throw launch_incompatible_texturing();
   case CUDA_ERROR_PEER_ACCESS_ALREADY_ENABLED    : throw peer_access_already_enabled();
   case CUDA_ERROR_PEER_ACCESS_NOT_ENABLED        : throw peer_access_not_enabled();
@@ -88,6 +106,7 @@ void check(CUresult err)
   case CUDA_ERROR_INVALID_PC                     : throw invalid_pc();
   case CUDA_ERROR_LAUNCH_FAILED                  : throw launch_failed();
   case CUDA_ERROR_NOT_PERMITTED                  : throw not_permitted();
+#endif
   case CUDA_ERROR_NOT_SUPPORTED                  : throw not_supported();
   case CUDA_ERROR_UNKNOWN                        : throw unknown();
   default                                        : throw unknown();

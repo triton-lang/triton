@@ -3,8 +3,13 @@
 #ifndef _TRITON_DRIVER_BUFFER_H_
 #define _TRITON_DRIVER_BUFFER_H_
 
+#ifdef __HIP_PLATFORM_AMD__
+#include "triton/driver/handle_hip.h"
+#include "triton/driver/context_hip.h"
+#else
 #include "triton/driver/handle.h"
 #include "triton/driver/context.h"
+#endif
 
 namespace triton
 {

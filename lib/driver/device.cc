@@ -25,8 +25,13 @@
 #include <sstream>
 #include <cstring>
 #include <memory>
+#ifdef __HIP_PLATFORM_AMD__
+#include "triton/driver/device_hip.h"
+#include "triton/driver/context_hip.h"
+#else
 #include "triton/driver/device.h"
 #include "triton/driver/context.h"
+#endif
 #include "triton/codegen/target.h"
 
 namespace triton
@@ -108,7 +113,11 @@ size_t cu_device::max_threads_per_block() const {
 
 // maximum amount of shared memory per block
 size_t cu_device::max_shared_memory() const {
+#ifdef __HIP_PLATFORM_AMD__
+  return cuGetInfo<hipDeviceAttributeMaxSharedMemoryPerBlock>();
+#else
   return cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN>();
+#endif
 }
 
 // warp size
@@ -173,7 +182,11 @@ std::string cu_device::infos() const{
 
 // target
 std::unique_ptr<codegen::target> cu_device::make_target() const {
+#ifdef __HIP_PLATFORM_AMD__
+  return std::unique_ptr<codegen::amd_cl_target>(new codegen::amd_cl_target());
+#else
   return std::unique_ptr<codegen::nvidia_cu_target>(new codegen::nvidia_cu_target(compute_capability()));
+#endif
 }
 
 

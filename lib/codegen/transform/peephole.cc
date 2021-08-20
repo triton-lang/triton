@@ -248,8 +248,10 @@ void peephole::run(ir::module &mod) {
       was_modified = was_modified || rewrite_unit_red(i, builder);
       was_modified = was_modified || rewrite_gep_ptr_min_off_plus_off(i, builder);
       was_modified = was_modified || rewrite_select_masked_load(i, builder);
+#ifndef __HIP_PLATFORM_AMD__
       if(tgt_->as_nvidia()->sm() >= 80)
         was_modified = was_modified || rewrite_load_to_shared(i, builder);
+#endif
       if(was_modified)
         seen.insert(i);
     }

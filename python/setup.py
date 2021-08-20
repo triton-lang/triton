@@ -88,7 +88,10 @@ class CMakeBuild(build_ext):
         if not os.path.exists(llvm_build_dir):
             os.makedirs(llvm_build_dir)
         # python directories
-        python_include_dirs = [distutils.sysconfig.get_python_inc()] + ['/usr/local/cuda/include']
+        if os.environ['TRITON_USE_ROCM'] == 'ON':
+            python_include_dirs = [distutils.sysconfig.get_python_inc()] +['/opt/rocm/include']
+        else:
+            python_include_dirs = [distutils.sysconfig.get_python_inc()] + ['/usr/local/cuda/include']
         cmake_args = [
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
             "-DBUILD_TUTORIALS=OFF",

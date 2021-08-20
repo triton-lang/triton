@@ -22,12 +22,21 @@
 
 #include <vector>
 #include <stdexcept>
+#ifdef __HIP_PLATFORM_AMD__
+#include "triton/driver/dispatch_hip.h"
+#include "triton/driver/backend_hip.h"
+#include "triton/driver/buffer_hip.h"
+#include "triton/driver/context_hip.h"
+#include "triton/driver/stream_hip.h"
+#include "triton/driver/kernel_hip.h"
+#else
 #include "triton/driver/dispatch.h"
 #include "triton/driver/backend.h"
 #include "triton/driver/buffer.h"
 #include "triton/driver/context.h"
 #include "triton/driver/stream.h"
 #include "triton/driver/kernel.h"
+#endif
 
 
 namespace triton

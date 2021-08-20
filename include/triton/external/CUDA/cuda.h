@@ -47,6 +47,9 @@
  * Users Notice.
  */
 
+#ifdef __HIP_PLATFORM_AMD__
+#include "hip/hip_runtime.h"
+#else
 #ifndef __cuda_cuda_h__
 #define __cuda_cuda_h__
 
@@ -14501,3 +14504,4 @@ CUresult CUDAAPI cuEventDestroy(CUevent hEvent);
 #undef __CUDA_DEPRECATED
 
 #endif /* __cuda_cuda_h__ */
+#endif

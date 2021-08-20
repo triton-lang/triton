@@ -4,7 +4,11 @@
 #define _TRITON_DRIVER_DEVICE_H_
 
 #include "triton/driver/platform.h"
+#ifdef __HIP_PLATFORM_AMD__
+#include "triton/driver/handle_hip.h"
+#else
 #include "triton/driver/handle.h"
+#endif
 
 namespace triton
 {

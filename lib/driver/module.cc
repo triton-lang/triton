@@ -23,8 +23,13 @@
 #include <unistd.h>
 #include <memory>
 #include <regex>
+#ifdef __HIP_PLATFORM_AMD__
+#include "triton/driver/module_hip.h"
+#include "triton/driver/context_hip.h"
+#else
 #include "triton/driver/module.h"
 #include "triton/driver/context.h"
+#endif
 #include "triton/driver/error.h"
 #include "triton/tools/sha1.hpp"
 #include "triton/tools/sys/getenv.hpp"
@@ -46,6 +51,15 @@
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/ExecutionEngine/SectionMemoryManager.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#ifdef __HIP_PLATFORM_AMD__
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/FormattedStream.h"
+#include "llvm/Support/Program.h"
+#include "llvm/Support/ToolOutputFile.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
+#include "triton/tools/rocm_helper.h"
+#endif
 
 std::string exec(const char* cmd) {
     std::array<char, 128> buffer;
@@ -60,11 +74,19 @@ std::string exec(const char* cmd) {
     return result;
 }
 
+#ifdef __HIP_PLATFORM_AMD__
+  void LLVMInitializeAMDGPUTargetInfo();
+  void LLVMInitializeAMDGPUTarget();
+  void LLVMInitializeAMDGPUTargetMC();
+  void LLVMInitializeAMDGPUAsmPrinter();
+  void LLVMInitializeAMDGPUAsmParser();
+#else
   void LLVMInitializeNVPTXTargetInfo();
   void LLVMInitializeNVPTXTarget();
   void LLVMInitializeNVPTXTargetMC();
   void LLVMInitializeNVPTXAsmPrinter();
   void LLVMInitializeNVPTXAsmParser();
+#endif
 
 
 namespace triton
@@ -80,10 +102,17 @@ namespace driver
 void module::init_llvm() {
   static bool init = false;
   if(!init){
+#ifdef __HIP_PLATFORM_AMD__
+    LLVMInitializeAMDGPUTargetInfo();
+    LLVMInitializeAMDGPUTarget();
+    LLVMInitializeAMDGPUTargetMC();
+    LLVMInitializeAMDGPUAsmPrinter();
+#else
     LLVMInitializeNVPTXTargetInfo();
     LLVMInitializeNVPTXTarget();
     LLVMInitializeNVPTXTargetMC();
     LLVMInitializeNVPTXAsmPrinter();
+#endif 
     init = true;
   }
 }
@@ -235,14 +264,20 @@ int vptx(int version){
 }
 
 std::string cu_module::compile_llvm_module(llvm::Module* module, driver::device* device) {
+#ifndef __HIP_PLATFORM_AMD__
   // LLVM version in use may not officially support target hardware
   int max_nvvm_cc = 75;
   int max_nvvm_ptx = 64;
+#endif
   // options
   auto options = llvm::cl::getRegisteredOptions();
+#ifndef __HIP_PLATFORM_AMD__
   auto* short_ptr = static_cast<llvm::cl::opt<bool>*>(options["nvptx-short-ptr"]);
   assert(short_ptr);
   short_ptr->setValue(true);
+#endif
+
+#ifndef __HIP_PLATFORM_AMD__
   // compute capability
   int cc = ((driver::cu_device*)device)->compute_capability();
   std::string sm = "sm_" + std::to_string(cc);
@@ -252,12 +287,34 @@ std::string cu_module::compile_llvm_module(llvm::Module* module, driver::device*
   int ptx = vptx(version);
   int ptx_major = ptx / 10;
   int ptx_minor = ptx % 10;
+#endif
   // create
   llvm::SmallVector<char, 0> buffer;
+#ifdef __HIP_PLATFORM_AMD__
+  std::string rocminfo = GetAMDGPUInfo();
+  
+  std::string triple = "amdgcn-amd-amdhsa";
+  std::string layout = "";
+  std::string proc;
+  std::string features;
+
+  if (!rocminfo.empty())
+  {
+    proc = std::get<0>(GetFeatureStrFromGCNArchName(rocminfo));
+    features = std::get<1>(GetFeatureStrFromGCNArchName(rocminfo));
+  }
+  else
+  { // Default to MI100 params
+    proc = "gfx908";
+    features = "+sramecc,-xnack";
+  }
+  
+#else
   std::string triple = "nvptx64-nvidia-cuda";
   std::string proc = "sm_" + std::to_string(std::min(cc, max_nvvm_cc));
   std::string layout = "";
   std::string features = "+ptx" + std::to_string(std::min(ptx, max_nvvm_ptx));
+#endif
   init_llvm();
   // verify and store llvm
   llvm::legacy::PassManager pm;
@@ -284,10 +341,52 @@ std::string cu_module::compile_llvm_module(llvm::Module* module, driver::device*
     f.addFnAttr(llvm::Attribute::AlwaysInline);
   llvm::legacy::PassManager pass;
   llvm::raw_svector_ostream stream(buffer);
+
+#ifdef __HIP_PLATFORM_AMD__
+  // create dump files
+  std::string module_name = module->getModuleIdentifier();
+  std::error_code ec;
+
+  // Save GCN ISA binary.
+  std::string isabin_path = std::string("/tmp/") + module_name + std::string(".o");
+  std::unique_ptr<llvm::raw_fd_ostream> isabin_fs(
+      new llvm::raw_fd_ostream(isabin_path, ec, llvm::sys::fs::OF_Text));
+  if (ec)
+  {
+    std::cout << isabin_path << " was not created. error code: " << ec << std::endl;
+  }
+#endif
+
   // emit
   machine->addPassesToEmitFile(pass, stream, nullptr, llvm::CodeGenFileType::CGFT_AssemblyFile);
+#ifdef __HIP_PLATFORM_AMD__
+  machine->addPassesToEmitFile(pass, *isabin_fs, nullptr, llvm::CGFT_ObjectFile);
+#endif
   pass.run(*module);
 
+#ifdef __HIP_PLATFORM_AMD__
+  // Save GCN ISA.
+  std::string amdgcn_path = std::string("/tmp/") + module_name + std::string(".gcn");
+  std::string result(buffer.begin(), buffer.end());
+  std::ofstream amdgcn(amdgcn_path);
+  amdgcn << result;
+  amdgcn.close();
+
+  // generate HASCO file
+  std::string hsaco_path = std::string("/tmp/") + module_name + std::string(".hsaco");
+  std::string error_message;
+  int lld_result =
+      llvm::sys::ExecuteAndWait("/opt/rocm/llvm/bin/ld.lld", {"/opt/rocm/llvm/bin/ld.lld", "-flavor", "gnu", "-shared", "-o", hsaco_path, isabin_path},
+                                llvm::None, {}, 0, 0, &error_message);
+  if (lld_result)
+  {
+    std::cout << "ld.lld execute fail: " << std::endl;
+    std::cout << error_message << std::endl;
+    std::cout << lld_result << std::endl;
+  }
+
+  return hsaco_path;
+#else
   // post-process
   std::string result(buffer.begin(), buffer.end());
   find_and_replace(result, ".version", "\n", ".version " + std::to_string(ptx_major) + "." + std::to_string(ptx_minor) + "\n");
@@ -295,6 +394,7 @@ std::string cu_module::compile_llvm_module(llvm::Module* module, driver::device*
   while(find_and_replace(result, "\t// begin inline asm", "\n", ""));
   while(find_and_replace(result, "\t// end inline asm", "\n", ""));
   return result;
+#endif
 }
 
 void cu_module::init_from_ptx(const std::string& ptx, driver::cu_device* device) {
@@ -337,12 +437,28 @@ void cu_module::init_from_ptx(const std::string& ptx, driver::cu_device* device)
     char _err[errbufsize];
     char _log[logbufsize];
     void* optval[] = {(void*)(uintptr_t)errbufsize, (void*)_err, (void*)(uintptr_t)logbufsize, (void*)_log, (void*)1};
+#ifdef __HIP_PLATFORM_AMD__
+    // Read HSACO.
+    std::ifstream hsaco_file(ptx_, std::ios::binary | std::ios::ate);
+    std::ifstream::pos_type hsaco_file_size = hsaco_file.tellg();
+
+    std::vector<unsigned char> hsaco(hsaco_file_size);
+    hsaco_file.seekg(0, std::ios::beg);
+    hsaco_file.read(reinterpret_cast<char*>(&hsaco[0]), hsaco_file_size);
+    hsaco_file.close();
+    dispatch::hipModuleLoadDataEx(&*cu_, hsaco.data(), 5, opt, optval);
+#else
     dispatch::cuModuleLoadDataEx(&*cu_, ptx_.data(), 5, opt, optval);
+#endif
   }
   catch(exception::cuda::invalid_ptx const &){
 //#ifdef TRITON_LOG_PTX_ERROR
+#ifdef __HIP_PLATFORM_AMD__
+    std::cerr << "It appears that Triton produced an invalid HSACO object" << std::endl;
+#else
      std::cout << ptx << std::endl;
     std::cerr << "It appears that Triton produced invalid PTX code:" << std::endl;
+#endif
 //    exit(1);
 //#endif
     throw;

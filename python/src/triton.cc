@@ -1,7 +1,13 @@
 ﻿#include "triton/codegen/pass.h"
+#ifdef __HIP_PLATFORM_AMD__
+#include "triton/driver/kernel_hip.h"
+#include "triton/driver/module_hip.h"
+#include "triton/driver/stream_hip.h"
+#else
 #include "triton/driver/kernel.h"
 #include "triton/driver/module.h"
 #include "triton/driver/stream.h"
+#endif
 #include "triton/ir/builder.h"
 #include "triton/ir/dispatch.h"
 #include "triton/ir/enums.h"

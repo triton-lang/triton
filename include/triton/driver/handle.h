@@ -8,7 +8,11 @@
 #include <iostream>
 #include <functional>
 #include <type_traits>
+#ifdef __HIP_PLATFORM_AMD__
+#include "triton/driver/dispatch_hip.h"
+#else
 #include "triton/driver/dispatch.h"
+#endif
 #include "llvm/ExecutionEngine/JITSymbol.h"
 #include "llvm/ExecutionEngine/Orc/CompileUtils.h"
 #include "llvm/ExecutionEngine/Orc/Core.h"

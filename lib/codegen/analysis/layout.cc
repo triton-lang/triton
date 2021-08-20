@@ -141,7 +141,12 @@ mma_layout::mma_layout(size_t num_warps,
                        shared_layout *layout_a, shared_layout *layout_b): data_layout(MMA, axes, shape, values, align) {
   /* fragments per warp */
   // try to make things as square as possible to maximize data re-use
+#ifdef __HIP_PLATFORM_AMD__
+      if (false)
+      {
+#else
   if(tgt->as_nvidia()->sm() < 80){
+#endif
     fpw_ = {2, 2, 1};
 //    std::vector<int> fpw_nm1;
 //    unsigned num_fragments = std::min<unsigned>((shape_[0]/8)*(shape_[1]/8), 4);
