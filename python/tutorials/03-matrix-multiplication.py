@@ -283,7 +283,7 @@ def matmul(a, b, activation=None):
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
     )
-    matmul_kernel[grid](
+    pgm = matmul_kernel[grid](
         a, b, c,
         M, N, K,
         a.stride(0), a.stride(1),
@@ -291,6 +291,7 @@ def matmul(a, b, activation=None):
         c.stride(0), c.stride(1),
         ACTIVATION=activation,
     )
+    print(pgm.asm('ttir'))
     return c
 
 
