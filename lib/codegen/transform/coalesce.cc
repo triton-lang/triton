@@ -38,10 +38,11 @@ ir::value* coalesce::simplify(ir::instruction *inst, ir::builder& builder){
   for(size_t i = 0; i < op->get_num_operands(); i++){
     ir::value* arg_i = op->get_operand(i);
     builder.set_insert_point(op);
-
+    // create new layout transform
     ir::instruction* new_arg_i = inst->clone();
-    new_arg_i->replace_uses_of_with(new_arg_i->get_operand(0), arg_i);
     builder.insert(new_arg_i);
+    // set the right args
+    new_arg_i->replace_uses_of_with(new_arg_i->get_operand(0), arg_i);
     op->replace_uses_of_with(arg_i, simplify(new_arg_i, builder));
   }
   return op;
@@ -49,7 +50,6 @@ ir::value* coalesce::simplify(ir::instruction *inst, ir::builder& builder){
 
 void coalesce::run(ir::module &mod) {
   ir::builder& builder = mod.get_builder();
-
   // add layout conversion instructions
   for(ir::function *fn: mod.get_function_list())
   for(ir::basic_block *block: fn->blocks())
@@ -70,11 +70,9 @@ void coalesce::run(ir::module &mod) {
         ir::instruction* new_x = ir::decoalesce_inst::create(x);
         builder.insert(new_x);
         x->replace_all_uses_with(new_x);
-        new_x->replace_uses_of_with(new_x, x);
+        new_x->replace_uses_of_with(new_x, simplify(x, builder));
     }
   }
-
-
 }
 
 
