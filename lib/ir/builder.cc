@@ -325,10 +325,6 @@ value *builder::create_atomic_cas(value *ptr, value *cmp, value *val){
   return insert(atomic_cas_inst::create(ptr, cmp, val));
 }
 
-value *builder::create_atomic_exch(value *ptr, value *val){
-  return insert(atomic_exch_inst::create(ptr, val));
-}
-
 value *builder::create_atomic_rmw(ir::atomic_rmw_op_t op, value *ptr, value *val, value *msk){
   return insert(atomic_rmw_inst::create(op, ptr, val, msk));
 }

@@ -922,30 +922,9 @@ void generator::visit_atomic_cas_inst(ir::atomic_cas_inst* cas) {
   vals_[cas][{}] = load(atom_ptr);
   add_barrier();
 }
-/**
- * \brief Code Generation for `atomic_exch`
- */
-void generator::visit_atomic_exch_inst(ir::atomic_exch_inst* xchg) {
-  BasicBlock *current = builder_->GetInsertBlock();
-  Module *module = current->getModule();
-  Value *rmw_ptr = vals_[xchg->get_operand(0)][{}];
-  Value *rmw_val = vals_[xchg->get_operand(1)][{}];
-  Value *tid = tgt_->get_local_id(module, *builder_, 0);
-  Value *pred = icmp_eq(tid, i32(0));
-  BasicBlock *tid_0_bb = BasicBlock::Create(*ctx_, "tid_0", current->getParent());
-  BasicBlock *tid_0_done_bb = BasicBlock::Create(*ctx_, "tid_0_done", current->getParent());
-  tgt_->add_memfence(module, *builder_);
-  add_barrier();
-  cond_br(pred, tid_0_bb, tid_0_done_bb);
-  builder_->SetInsertPoint(tid_0_bb);
-  atomic_rmw(AtomicRMWInst::Xchg, rmw_ptr, rmw_val, AtomicOrdering::Monotonic, SyncScope::System);
-  br(tid_0_done_bb);
-  builder_->SetInsertPoint(tid_0_done_bb);
-  tgt_->add_memfence(module, *builder_);
-}
 
 /**
- * \brief Code Generation for `atomic_add`
+ * \brief Code Generation for `atomic_rmw`
  */
 void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
   ir::value* ptr = atom->get_operand(0);
@@ -1000,6 +979,7 @@ void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
       case tt::UMin: name = "min", s_ty = "u"; break;
       case tt::UMax: name = "max", s_ty = "u"; break;
       case tt::FAdd: name = "add", s_ty = "f"; break;
+      case tt::Xchg: name = "exch", s_ty = "b"; break;
     }
     std::string s_vec = vec == 2 ? "x2" : "";
     std::string mod = nbits == 32 ? "" : ".noftz";
