@@ -27,6 +27,7 @@
 #include <memory>
 #include "triton/driver/device.h"
 #include "triton/driver/context.h"
+#include "triton/driver/error.h"
 #include "triton/codegen/target.h"
 
 namespace triton
@@ -157,6 +158,14 @@ size_t cu_device::max_mem_clock() const{
 // max memory clock
 void cu_device::set_max_clock() {
   dispatch::nvmlDeviceSetApplicationsClocks(nvml_device(), max_mem_clock(), max_sm_clock());
+}
+
+void cu_device::enable_peer_access(CUdeviceptr peer_mem_ptr) const{
+  CUcontext context;
+  dispatch::cuPointerGetAttribute(&context, CU_POINTER_ATTRIBUTE_CONTEXT, peer_mem_ptr);
+  try {
+    dispatch::cuCtxEnablePeerAccess(context, 0);
+  } catch (exception::cuda::peer_access_already_enabled) {}
 }
 
 // print infos
