@@ -1907,13 +1907,14 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
   auto out_ord0 = axes_.at(a_axes_->get(out, ord[0])).values;
   auto out_ord1 = axes_.at(a_axes_->get(out, ord[1])).values;
 
-  int in_spt1  = in_layout->shape_per_cta(ord[1]);
-  int out_spt1 = out_layout->shape_per_cta(ord[1]);
-  int max_spt1 = std::max(in_spt1, out_spt1);
+  int in_shape_per_cta1  = in_layout->shape_per_cta(ord[1]);
+  int out_shape_per_cta1 = out_layout->shape_per_cta(ord[1]);
+  int max_shape_per_cta_1 = std::max(in_shape_per_cta1, out_shape_per_cta1);
   indices_t idx(2);
-  int num_packs = shape[ord[1]]/max_spt1;
+  int num_packs = shape[ord[1]]/max_shape_per_cta_1;
   for(size_t j = 0; j < num_packs; j++){
     add_barrier();
+    // write block of input to shared memory
     for(size_t k = 0; k < in_ord1.size()/num_packs; k++)
     for(size_t i = 0; i < in_ord0.size(); i++){
       idx[ord[0]] = in_ord0[i];
@@ -1923,6 +1924,7 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
       store(vals_[in][idx], ptr);
     }
     add_barrier();
+    // load block of input from shared memory
     for(size_t k = 0; k < out_ord1.size()/num_packs; k++)
     for(size_t i = 0; i < out_ord0.size(); i++){
       idx[ord[0]] = out_ord0[i];
