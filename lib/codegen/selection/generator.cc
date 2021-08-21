@@ -1936,6 +1936,10 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
   }
 }
 
+void generator::visit_cvt_scanline_inst(ir::cvt_scanline_inst *rc) {
+  visit_layout_convert(rc, rc->get_operand(0));
+}
+
 /**
  * \brief Code Generation for `decoalesce`
  */

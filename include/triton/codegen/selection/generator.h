@@ -172,6 +172,7 @@ public:
   void visit_reduce_inst(ir::reduce_inst*);
   void visit_select_inst(ir::select_inst*);
   void visit_layout_convert(ir::value *out, ir::value *in);
+  void visit_cvt_scanline_inst(ir::cvt_scanline_inst*);
   void visit_decoalesce_inst(ir::decoalesce_inst*);
   void visit_recoalesce_inst(ir::recoalesce_inst*);
   void visit_masked_load_async_inst(ir::masked_load_async_inst*);

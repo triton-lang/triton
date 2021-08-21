@@ -14,7 +14,7 @@ def _copy(x_ptr, x_stride0, x_stride1,
     off_n = pid_1 * BLOCK_N + tl.arange(0, BLOCK_N)
     x_ptrs = x_ptr + off_m[:, None] * x_stride0 + off_n[None, :] * x_stride1
     y_ptrs = y_ptr + off_m[:, None] * y_stride0 + off_n[None, :] * y_stride1
-    tl.store(y_ptrs, tl.load(x_ptrs))
+    tl.store(y_ptrs, tl.load(x_ptrs), mask=True)
 
 def copy(x, perm):
     M, N = x.shape
@@ -24,7 +24,6 @@ def copy(x, perm):
     pgm = _copy[grid](x, x.stride(0), x.stride(1),
           y, y.stride(0), y.stride(1),
           BLOCK_M=128, BLOCK_N=128)
-    print(pgm.asm('ptx'))
     return y
 
 x = torch.randn((8192, 8192), device='cuda')

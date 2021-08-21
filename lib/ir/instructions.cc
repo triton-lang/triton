@@ -818,6 +818,11 @@ copy_from_shared_inst* copy_from_shared_inst::create(value *arg, const std::stri
   return new copy_from_shared_inst(arg->get_type(), INST_COPY_FROM_SHARED, arg, name, next);
 }
 
+// cvt_scanline
+cvt_scanline_inst* cvt_scanline_inst::create(value *arg, const std::string &name, instruction *next) {
+  return new cvt_scanline_inst(arg->get_type(), INST_CVT_SCANLINE, arg, name, next);
+}
+
 // recoalesce
 recoalesce_inst* recoalesce_inst::create(value *arg, const std::string &name, instruction *next) {
   return new recoalesce_inst(arg->get_type(), INST_RECOALESCE, arg, name, next);

@@ -105,18 +105,19 @@ void axes::update_graph_no_edge(ir::instruction *i) {
 
 void axes::update_graph(ir::instruction *i) {
   switch (i->get_id()) {
-    case ir::INST_REDUCE:           return update_graph_reduce(i);
-    case ir::INST_RESHAPE:          return update_graph_reshape(i);
-    case ir::INST_SPLAT:            return update_graph_no_edge(i);;
-    case ir::INST_TRANS:            return update_graph_trans(i);
-    case ir::INST_BROADCAST:        return update_graph_broadcast(i);
-    case ir::INST_DOT:              return update_graph_dot(i);
-    case ir::INST_COPY_TO_SHARED:   return update_graph_no_edge(i);
-    case ir::INST_MASKED_LOAD_ASYNC:return update_graph_elementwise(i, false);
-    case ir::INST_COPY_FROM_SHARED: return update_graph_no_edge(i);
-    case ir::INST_RECOALESCE:       return update_graph_no_edge(i);
-    case ir::INST_DECOALESCE:       return update_graph_no_edge(i);
-    default:                        return update_graph_elementwise(i);
+    case ir::INST_REDUCE:            return update_graph_reduce(i);
+    case ir::INST_RESHAPE:           return update_graph_reshape(i);
+    case ir::INST_SPLAT:             return update_graph_no_edge(i);;
+    case ir::INST_TRANS:             return update_graph_trans(i);
+    case ir::INST_BROADCAST:         return update_graph_broadcast(i);
+    case ir::INST_DOT:               return update_graph_dot(i);
+    case ir::INST_COPY_TO_SHARED:    return update_graph_no_edge(i);
+    case ir::INST_MASKED_LOAD_ASYNC: return update_graph_elementwise(i, false);
+    case ir::INST_COPY_FROM_SHARED:  return update_graph_no_edge(i);
+    case ir::INST_RECOALESCE:        return update_graph_no_edge(i);
+    case ir::INST_DECOALESCE:        return update_graph_no_edge(i);
+    case ir::INST_CVT_SCANLINE:      return update_graph_no_edge(i);
+    default:                         return update_graph_elementwise(i);
   }
   return;
 }

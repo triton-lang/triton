@@ -73,7 +73,10 @@ void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps, 
   axes.run(ir);
   layouts.run(ir);
   coalesce.run(ir);
+//  ir::print(ir, std::cout);
   dce.run(ir);
+//  exit(1);
+
   align.run(ir);
   dce.run(ir);
   if (target->is_gpu()) {

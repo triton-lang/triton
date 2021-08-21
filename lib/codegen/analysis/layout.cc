@@ -514,6 +514,18 @@ void layouts::run(ir::module &mod) {
       layouts_[id] = new shared_layout(layout, axes_->get(arg), shapes, {red}, red->get_type()->get_scalar_ty(), align_);
       tmp_[red] = id;
     }
+    if(auto *cvt_scanline = dynamic_cast<ir::cvt_scanline_inst*>(i)){
+      ir::value *val = cvt_scanline;
+      scanline_layout* out_layout = get(val)->to_scanline();
+      scanline_layout* in_layout = get(i->get_operand(0))->to_scanline();
+      if(!out_layout || !in_layout)
+        return;
+      id++;
+      ir::type::block_shapes_t shape = val->get_type()->get_block_shapes();
+      // create layout
+      layouts_[id] = new shared_layout(in_layout, axes_->get(val), shape, {cvt_scanline}, val->get_type()->get_scalar_ty(), align_);
+      tmp_[cvt_scanline] = id;
+    }
     if(auto *decoalasce = dynamic_cast<ir::decoalesce_inst*>(i)){
       ir::value *val = decoalasce;
       mma_layout* out_layout = get(val)->to_mma();
