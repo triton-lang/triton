@@ -93,7 +93,21 @@ protected:
   shape_t shape_;
 };
 
-class mma_layout: public data_layout {
+class distributed_layout: public data_layout{
+public:
+  distributed_layout(id_t id,
+                     const std::vector<int>& axes,
+                     const std::vector<unsigned>& shape,
+                     const std::vector<ir::value*>& values,
+                     analysis::align* align);
+
+  int shape_per_cta(size_t k) { return shape_per_cta_.at(k); }
+
+protected:
+  std::vector<int> shape_per_cta_;
+};
+
+class mma_layout: public distributed_layout {
 public:
   mma_layout(size_t num_warps,
                 const std::vector<int>& axes,
@@ -107,18 +121,16 @@ public:
   int fpw(size_t k) { return fpw_.at(k); }
   int wpt(size_t k) { return wpt_.at(k); }
   int spw(size_t k) { return spw_.at(k); }
-  int spt(size_t k) { return spt_.at(k); }
   int rep(size_t k) { return rep_.at(k); }
 
 private:
   std::vector<int> fpw_;
   std::vector<int> spw_;
   std::vector<int> wpt_;
-  std::vector<int> spt_;
   std::vector<int> rep_;
 };
 
-struct scanline_layout: public data_layout {
+struct scanline_layout: public distributed_layout {
   scanline_layout(size_t num_warps,
                     const std::vector<int>& axes,
                     const std::vector<unsigned>& shape,

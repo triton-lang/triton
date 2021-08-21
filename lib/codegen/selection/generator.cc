@@ -1116,8 +1116,8 @@ void generator::visit_mma884(ir::dot_inst* C, ir::value *A, ir::value *B, ir::va
   for(indices_t idx: idxs_.at(C))
     acc.push_back(vals_[D][idx]);
 
-  unsigned num_m = layout_c->rep(0) * shape_c[0] / layout_c->spt(0);
-  unsigned num_n = layout_c->rep(1) * shape_c[1] / layout_c->spt(1);
+  unsigned num_m = layout_c->rep(0) * shape_c[0] / layout_c->shape_per_cta(0);
+  unsigned num_n = layout_c->rep(1) * shape_c[1] / layout_c->shape_per_cta(1);
 
   // create mma & unpack result
   auto call_mma = [&](unsigned m, unsigned n, unsigned K) {
@@ -1396,8 +1396,8 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
                                              "{$10, $11, $12, $13};",
                                              "=f,=f,=f,=f,r,r,r,r,r,r,0,1,2,3", true);
 
-  unsigned num_rep_0 = shapes[0] / layout->spt(0);
-  unsigned num_rep_1 = shapes[1] / layout->spt(1);
+  unsigned num_rep_0 = shapes[0] / layout->shape_per_cta(0);
+  unsigned num_rep_1 = shapes[1] / layout->shape_per_cta(1);
 
   // create mma & unpack result
   auto call_mma = [&](unsigned m, unsigned n, unsigned K) {
@@ -1626,8 +1626,8 @@ void generator::visit_fmadot(ir::dot_inst* C, ir::value* A, ir::value* B, ir::va
   std::map<std::pair<int, int>, Value*> has, hbs;
   for(unsigned k = 0; k < NK; k++){
     int z = 0;
-    for(unsigned m = 0; m < shape_c[0]; m+=layout_c->mts(0)*layout_c->nts(0))
-    for(unsigned n = 0; n < shape_c[1]; n+=layout_c->mts(1)*layout_c->nts(1))
+    for(unsigned m = 0; m < shape_c[0]; m += layout_c->shape_per_cta(0))
+    for(unsigned n = 0; n < shape_c[1]; n += layout_c->shape_per_cta(1))
     for(unsigned mm = 0; mm < layout_c->nts(0); mm++)
     for(unsigned nn = 0; nn < layout_c->nts(1); nn++)
     {
@@ -1905,8 +1905,8 @@ void generator::visit_decoalesce_inst(ir::decoalesce_inst* rc) {
   auto in_ord1 = axes_.at(a_axes_->get(op, ord[1])).values;
   auto out_ord0 = axes_.at(a_axes_->get(rc, ord[0])).values;
   auto out_ord1 = axes_.at(a_axes_->get(rc, ord[1])).values;
-  int in_spt1  = in_layout->spt(ord[1]);
-  int out_spt1 = out_layout->mts(ord[1])*out_layout->nts(ord[1]);
+  int in_spt1  = in_layout->shape_per_cta(ord[1]);
+  int out_spt1 = out_layout->shape_per_cta(ord[1]);
   int max_spt1 = std::max(in_spt1, out_spt1);
   indices_t idx(2);
   int num_packs = shape[ord[1]]/max_spt1;
@@ -1932,6 +1932,10 @@ void generator::visit_decoalesce_inst(ir::decoalesce_inst* rc) {
   }
 }
 
+void generator::visit_layout_convert(ir::instruction *out, ir::instruction *in){
+
+}
+
 /**
  * \brief Code Generation for `recoalesce`
  */
@@ -1953,10 +1957,8 @@ void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
   auto in_ord1 = axes_.at(a_axes_->get(op, ord[1])).values;
   auto out_ord0 = axes_.at(a_axes_->get(rc, ord[0])).values;
   auto out_ord1 = axes_.at(a_axes_->get(rc, ord[1])).values;
-  int in_spt0  = in_layout->spt(ord[0]);
-  int in_spt1  = in_layout->spt(ord[1]);
-  int out_spt0 = out_layout->mts(ord[0])*out_layout->nts(ord[0]);
-  int out_spt1 = out_layout->mts(ord[1])*out_layout->nts(ord[1]);
+  int in_spt1  = in_layout->shape_per_cta(ord[1]);
+  int out_spt1 = out_layout->shape_per_cta(ord[1]);
   int max_spt1 = std::max(in_spt1, out_spt1);
   indices_t idx(2);
   int num_packs = shape[ord[1]]/max_spt1;
@@ -2373,12 +2375,12 @@ void generator::visit_layout_mma(analysis::mma_layout* layout) {
     offset_b_k_[layout] = and_(lane, _3);
     // i indices
     Value *offset_c_m = add(and_(lane, _1), offset_a_m_[layout]);
-    for(unsigned m = 0; m < shape[0]; m+=layout->spt(0))
+    for(unsigned m = 0; m < shape[0]; m+=layout->shape_per_cta(0))
     for(unsigned mm = 0; mm < layout->rep(0); mm++)
       idx_m.push_back(add(offset_c_m, i32(m + mm*2)));
     // j indices
     Value *offset_c_n = add(and_(lane, _2), add(off_warp_n, off_pair_n));
-    for(unsigned n = 0; n < shape[1]; n+=layout->spt(1))
+    for(unsigned n = 0; n < shape[1]; n+=layout->shape_per_cta(1))
     for(unsigned nn = 0; nn < layout->rep(1); nn++){
       idx_n.push_back(add(offset_c_n, i32(n + nn/2*4 + (nn%2)*2*layout->fpw(1)*layout->rep(1))));
       idx_n.push_back(add(offset_c_n, i32(n + nn/2*4 + (nn%2)*2*layout->fpw(1)*layout->rep(1) + 1)));
@@ -2414,11 +2416,11 @@ void generator::visit_layout_mma(analysis::mma_layout* layout) {
     // c offset
     Value *off_c_m = add(udiv(lane, _4), off_warp_m);
     Value *off_c_n = add(mul(_2, urem(lane, _4)), off_warp_n);
-    for(unsigned m = 0; m < shape[0]; m+=layout->spt(0)){
+    for(unsigned m = 0; m < shape[0]; m+=layout->shape_per_cta(0)){
       idx_m.push_back(add(off_c_m, i32(m)));
       idx_m.push_back(add(off_c_m, i32(m + 8)));
     }
-    for(unsigned n = 0; n < shape[1]; n+=layout->spt(1)){
+    for(unsigned n = 0; n < shape[1]; n+=layout->shape_per_cta(1)){
       idx_n.push_back(add(off_c_n, i32(n)));
       idx_n.push_back(add(off_c_n, i32(n + 1)));
     }
@@ -2454,11 +2456,11 @@ void generator::visit_layout_scanline(analysis::scanline_layout* layout) {
     std::string str_k = std::to_string(k);
     Value *contiguous_k = i32(nts);
     Value *scaled_thread_id = mul(thread_id[k], contiguous_k);
-    unsigned per_block  = nts * mts;
-    unsigned per_thread = nts * shape[k] / per_block;
+    unsigned per_cta  = layout->shape_per_cta(k);
+    unsigned per_thread = nts * shape[k] / per_cta;
     std::vector<Value*> idx_list(per_thread);
     for(unsigned n = 0 ; n < per_thread; n++){
-      unsigned offset = n / nts * per_block + n % nts;
+      unsigned offset = n / nts * per_cta + n % nts;
       idx_list[n] = add(scaled_thread_id, i32(offset), "idx_" + str_k + "_" + std::to_string(n));
     }
     axes_[layout->get_axis(k)] = distributed_axis{nts, idx_list, thread_id[k]};
