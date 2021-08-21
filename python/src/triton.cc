@@ -36,6 +36,9 @@ void init_triton_driver(py::module &&m) {
       }))
       .def("max_shared_memory", [](drv::cu_device *self) {
         return self->max_shared_memory();
+      })
+      .def("enable_peer_access", [](drv::cu_device *self, unsigned long long int peer_mem_ptr) {
+        self->enable_peer_access(peer_mem_ptr);
       });
   // host device
   py::class_<drv::host_device, drv::device>(m, "host_device")
