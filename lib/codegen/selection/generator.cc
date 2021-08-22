@@ -1899,36 +1899,47 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
   Value *base;
   base = gep(shmem_, i32(alloc_->offset(layouts_->get(layouts_->tmp(out)))));
   base = bit_cast(base, ptr_ty(ty, 3));
-  Value *ld = i32(shape[ord[0]]);
+//  Value *ld = i32(shape[ord[0]]);
   auto in_ord0 = axes_.at(a_axes_->get(in, ord[0])).values;
   auto in_ord1 = axes_.at(a_axes_->get(in, ord[1])).values;
   auto out_ax0 = axes_.at(a_axes_->get(out, ord[0])).values;
   auto out_ax1 = axes_.at(a_axes_->get(out, ord[1])).values;
 
-  int in_shape_per_cta1  = in_layout->shape_per_cta(ord[1]);
-  int out_shape_per_cta1 = out_layout->shape_per_cta(ord[1]);
-  int max_shape_per_cta_1 = std::max(in_shape_per_cta1, out_shape_per_cta1);
-  indices_t idx(2);
-  int num_packs = shape[ord[1]]/max_shape_per_cta_1;
-  for(size_t j = 0; j < num_packs; j++){
+  std::vector<int> n_reps;
+  for(int i = 0; i < shape.size(); i++){
+    int in_per_cta = in_layout->shape_per_cta(i);
+    int out_per_cta = out_layout->shape_per_cta(i);
+    int max_per_cta = std::max(in_per_cta, out_per_cta);
+    n_reps.push_back(shape[i]/max_per_cta);
+  }
+  std::vector<std::vector<Value*>> in_ax;
+  std::vector<std::vector<Value*>> out_ax;
+  for(int d = 0; d < shape.size(); d++){
+    in_ax.push_back(axes_.at(a_axes_->get(in, d)).values);
+    out_ax.push_back(axes_.at(a_axes_->get(out, d)).values);
+  }
+
+  Value *ld = i32(shape[1]);
+  for(int i = 0; i < n_reps[0]; i++)
+  for(int j = 0; j < n_reps[1]; j++){
     add_barrier();
-    // write block of input to shared memory
-    for(size_t k = 0; k < in_ord1.size()/num_packs; k++)
-    for(size_t i = 0; i < in_ord0.size(); i++){
-      idx[ord[0]] = in_ord0[i];
-      idx[ord[1]] = in_ord1[j*in_ord1.size()/num_packs + k];
-      Value *off = add(idx[ord[0]], mul(in_ord1[k], ld));
+    for(int ii = 0; ii < in_ax[0].size()/n_reps[0]; ii++)
+    for(int jj = 0; jj < in_ax[1].size()/n_reps[1]; jj++){
+      indices_t idx(2);
+      idx[0] = in_ax[0][i*in_ax[0].size()/n_reps[0] + ii];
+      idx[1] = in_ax[1][j*in_ax[1].size()/n_reps[1] + jj];
+      Value *off = add(mul(idx[0], ld), idx[1]);
       Value *ptr = gep(base, off);
       store(vals_[in][idx], ptr);
     }
     add_barrier();
-    // load block of input from shared memory
-    for(size_t k = 0; k < out_ax1.size()/num_packs; k++)
-    for(size_t i = 0; i < out_ax0.size(); i++){
-      idx[ord[0]] = out_ax0[i];
-      idx[ord[1]] = out_ax1[j*out_ax1.size()/num_packs + k];
-      Value *off = add(idx[ord[0]], mul(out_ax1[k], ld));
-      Value *ptr  = gep(base, off);
+    for(int ii = 0; ii < out_ax[0].size()/n_reps[0]; ii++)
+    for(int jj = 0; jj < out_ax[1].size()/n_reps[1]; jj++){
+      indices_t idx(2);
+      idx[0] = out_ax[0][i*out_ax[0].size()/n_reps[0] + ii];
+      idx[1] = out_ax[1][j*out_ax[1].size()/n_reps[1] + jj];
+      Value *off = add(mul(idx[0], ld), idx[1]);
+      Value *ptr = gep(base, off);
       vals_[out][idx] = load(ptr);
     }
   }

@@ -102,6 +102,7 @@ public:
                      analysis::align* align);
 
   int shape_per_cta(size_t k) { return shape_per_cta_.at(k); }
+  int rep_per_cta(size_t k) { return shape_[k] / shape_per_cta_[k]; }
 
 protected:
   std::vector<int> shape_per_cta_;
