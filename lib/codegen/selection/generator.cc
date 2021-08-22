@@ -1893,19 +1893,17 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
   // Orders
   analysis::distributed_layout* in_layout = dynamic_cast<analysis::distributed_layout*>(layouts_->get(out));
   analysis::distributed_layout* out_layout = dynamic_cast<analysis::distributed_layout*>(layouts_->get(in));
-  std::vector<int> ord;
-  if(in_layout->to_scanline())
-    ord = in_layout->get_order();
-  else
-    ord = out_layout->get_order();
+  auto in_ord = in_layout->get_order();
+  auto out_ord = out_layout->get_order();
+  std::vector<int> ord = in_layout->to_scanline() ? in_ord : out_ord;
   Value *base;
   base = gep(shmem_, i32(alloc_->offset(layouts_->get(layouts_->tmp(out)))));
   base = bit_cast(base, ptr_ty(ty, 3));
   Value *ld = i32(shape[ord[0]]);
   auto in_ord0 = axes_.at(a_axes_->get(in, ord[0])).values;
   auto in_ord1 = axes_.at(a_axes_->get(in, ord[1])).values;
-  auto out_ord0 = axes_.at(a_axes_->get(out, ord[0])).values;
-  auto out_ord1 = axes_.at(a_axes_->get(out, ord[1])).values;
+  auto out_ax0 = axes_.at(a_axes_->get(out, ord[0])).values;
+  auto out_ax1 = axes_.at(a_axes_->get(out, ord[1])).values;
 
   int in_shape_per_cta1  = in_layout->shape_per_cta(ord[1]);
   int out_shape_per_cta1 = out_layout->shape_per_cta(ord[1]);
@@ -1925,11 +1923,11 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
     }
     add_barrier();
     // load block of input from shared memory
-    for(size_t k = 0; k < out_ord1.size()/num_packs; k++)
-    for(size_t i = 0; i < out_ord0.size(); i++){
-      idx[ord[0]] = out_ord0[i];
-      idx[ord[1]] = out_ord1[j*out_ord1.size()/num_packs + k];
-      Value *off = add(idx[ord[0]], mul(out_ord1[k], ld));
+    for(size_t k = 0; k < out_ax1.size()/num_packs; k++)
+    for(size_t i = 0; i < out_ax0.size(); i++){
+      idx[ord[0]] = out_ax0[i];
+      idx[ord[1]] = out_ax1[j*out_ax1.size()/num_packs + k];
+      Value *off = add(idx[ord[0]], mul(out_ax1[k], ld));
       Value *ptr  = gep(base, off);
       vals_[out][idx] = load(ptr);
     }

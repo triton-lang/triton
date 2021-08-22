@@ -24,9 +24,15 @@ def copy(x, perm):
     pgm = _copy[grid](x, x.stride(0), x.stride(1),
           y, y.stride(0), y.stride(1),
           BLOCK_M=128, BLOCK_N=128)
+    print(pgm.asm('ptx'))
     return y
 
 x = torch.randn((8192, 8192), device='cuda')
 gbps = lambda ms: 2 * x.numel() * x.element_size() / ms * 1e-6
-ms, _, _= triton.testing.do_bench(lambda: copy(x, (1, 0)))
-print(gbps(ms))
+# ms, _, _= triton.testing.do_bench(lambda: copy(x, (1, 0)))
+# print(gbps(ms))
+
+print('---')
+print(copy(x, (1, 0)))
+print(x)
+print('---')
