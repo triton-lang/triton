@@ -1893,18 +1893,11 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
   // Orders
   analysis::distributed_layout* in_layout = dynamic_cast<analysis::distributed_layout*>(layouts_->get(in));
   analysis::distributed_layout* out_layout = dynamic_cast<analysis::distributed_layout*>(layouts_->get(out));
-  bool scanline_to_scanline = in_layout->to_scanline() && out_layout->to_scanline();
   auto in_ord = in_layout->get_order();
   auto out_ord = out_layout->get_order();
-  std::vector<int> ord = in_layout->to_scanline() ? in_ord : out_ord;
   Value *base;
   base = gep(shmem_, i32(alloc_->offset(layouts_->get(layouts_->tmp(out)))));
   base = bit_cast(base, ptr_ty(ty, 3));
-//  Value *ld = i32(shape[ord[0]]);
-  auto in_ord0 = axes_.at(a_axes_->get(in, ord[0])).values;
-  auto in_ord1 = axes_.at(a_axes_->get(in, ord[1])).values;
-  auto out_ax0 = axes_.at(a_axes_->get(out, ord[0])).values;
-  auto out_ax1 = axes_.at(a_axes_->get(out, ord[1])).values;
 
   std::vector<int> n_reps;
   for(int i = 0; i < shape.size(); i++){
@@ -1920,8 +1913,10 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
     out_ax.push_back(axes_.at(a_axes_->get(out, d)).values);
   }
 
-  std::cout << in_ord[0] << " " << in_ord[1] << std::endl;
-  std::cout << out_ord[0] << " " << out_ord[1] << std::endl;
+  if(in_layout->to_mma())
+    std::swap(out_ord[0], out_ord[1]);
+  if(out_layout->to_mma())
+    std::swap(in_ord[0], in_ord[1]);
 
   Value *ld = i32(shape[1]);
   indices_t idx(2);
@@ -1933,11 +1928,7 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
     for(int jj = 0; jj < in_ax[1].size()/n_reps[1]; jj++){
       idx[0] = in_ax[0][i*in_ax[0].size()/n_reps[0] + ii];
       idx[1] = in_ax[1][j*in_ax[1].size()/n_reps[1] + jj];
-      Value *off;
-//      if(scanline_to_scanline)
-      off = add(mul(idx[in_ord[1]], ld), idx[in_ord[0]]);
-//      else
-//        off = add(mul(idx[0], ld), idx[1]);
+      Value *off  = add(mul(idx[in_ord[0]], ld), idx[in_ord[1]]);
       Value *ptr = gep(base, off);
       store(vals_[in][idx], ptr);
     }
@@ -1946,66 +1937,12 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
     for(int jj = 0; jj < out_ax[1].size()/n_reps[1]; jj++){
       idx[0] = out_ax[0][i*out_ax[0].size()/n_reps[0] + ii];
       idx[1] = out_ax[1][j*out_ax[1].size()/n_reps[1] + jj];
-      Value *off;
-//      if(scanline_to_scanline)
-      off = add(mul(idx[out_ord[1]], ld), idx[out_ord[0]]);
-//      else
-//        off = add(mul(idx[0], ld), idx[1]);
+      Value *off = add(mul(idx[out_ord[0]], ld), idx[out_ord[1]]);
       Value *ptr = gep(base, off);
       vals_[out][idx] = load(ptr);
     }
   }
 }
-
-//void generator::visit_layout_convert(ir::value *out, ir::value *in){
-//  ir::block_type::block_shapes_t shape = out->get_type()->get_block_shapes();
-//  // pointer to temporary shared memory
-//  Type *ty = cvt(out->get_type()->get_scalar_ty());
-//  // Orders
-//  analysis::distributed_layout* in_layout = dynamic_cast<analysis::distributed_layout*>(layouts_->get(out));
-//  analysis::distributed_layout* out_layout = dynamic_cast<analysis::distributed_layout*>(layouts_->get(in));
-//  std::vector<int> ord;
-//  if(in_layout->to_scanline())
-//    ord = in_layout->get_order();
-//  else
-//    ord = out_layout->get_order();
-//  Value *base;
-//  base = gep(shmem_, i32(alloc_->offset(layouts_->get(layouts_->tmp(out)))));
-//  base = bit_cast(base, ptr_ty(ty, 3));
-//  Value *ld = i32(shape[ord[0]]);
-//  auto in_ord0 = axes_.at(a_axes_->get(in, ord[0])).values;
-//  auto in_ord1 = axes_.at(a_axes_->get(in, ord[1])).values;
-//  auto out_ord0 = axes_.at(a_axes_->get(out, ord[0])).values;
-//  auto out_ord1 = axes_.at(a_axes_->get(out, ord[1])).values;
-
-//  int in_shape_per_cta1  = in_layout->shape_per_cta(ord[1]);
-//  int out_shape_per_cta1 = out_layout->shape_per_cta(ord[1]);
-//  int max_shape_per_cta_1 = std::max(in_shape_per_cta1, out_shape_per_cta1);
-//  indices_t idx(2);
-//  int num_packs = shape[ord[1]]/max_shape_per_cta_1;
-//  for(size_t j = 0; j < num_packs; j++){
-//    add_barrier();
-//    // write block of input to shared memory
-//    for(size_t k = 0; k < in_ord1.size()/num_packs; k++)
-//    for(size_t i = 0; i < in_ord0.size(); i++){
-//      idx[ord[0]] = in_ord0[i];
-//      idx[ord[1]] = in_ord1[j*in_ord1.size()/num_packs + k];
-//      Value *off = add(idx[ord[0]], mul(in_ord1[k], ld));
-//      Value *ptr = gep(base, off);
-//      store(vals_[in][idx], ptr);
-//    }
-//    add_barrier();
-//    // load block of input from shared memory
-//    for(size_t k = 0; k < out_ord1.size()/num_packs; k++)
-//    for(size_t i = 0; i < out_ord0.size(); i++){
-//      idx[ord[0]] = out_ord0[i];
-//      idx[ord[1]] = out_ord1[j*out_ord1.size()/num_packs + k];
-//      Value *off = add(idx[ord[0]], mul(out_ord1[k], ld));
-//      Value *ptr  = gep(base, off);
-//      vals_[out][idx] = load(ptr);
-//    }
-//  }
-//}
 
 void generator::visit_cvt_scanline_inst(ir::cvt_scanline_inst *rc) {
   visit_layout_convert(rc, rc->get_operand(0));
