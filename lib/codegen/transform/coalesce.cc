@@ -80,6 +80,8 @@ void coalesce::run(ir::module &mod) {
       auto val_inst = dynamic_cast<ir::instruction*>(val);
       if(!val_inst)
         break;
+      if(dynamic_cast<ir::recoalesce_inst*>(val))
+        break;
       std::vector<unsigned> in_contig;
       std::vector<ir::instruction*> queue = {val_inst};
       std::set<ir::instruction*> seen;
