@@ -33,6 +33,6 @@ gbps = lambda ms: 2 * x.numel() * x.element_size() / ms * 1e-6
 # print(gbps(ms))
 
 print('---')
-print(copy(x, (1, 0)))
+print(copy(x, (0, 1)))
 print(x)
 print('---')

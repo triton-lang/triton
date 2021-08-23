@@ -252,7 +252,6 @@ def matmul_kernel(
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
 
-    # c = c + tl.load(c_ptrs, mask=c_mask)
     tl.store(c_ptrs, c, mask=c_mask)
 
 

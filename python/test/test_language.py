@@ -363,6 +363,30 @@ def test_reduce1d(dtype, shape, device='cuda'):
     triton.testing.assert_almost_equal(z_tri, z_ref)
 
 
+@pytest.mark.parametrize("dtype, shape, axis", 
+  [(dtype, shape, 1) \
+        for dtype in ['float32']\
+        for shape in [(32, 32)]])
+def test_reduce2d(dtype, shape, axis, device='cuda'):
+    dtype = cvt[dtype]
+    # triton kernel
+    @triton.jit
+    def kernel(X, Z, **meta):
+        range_m = tl.arange(0, meta['BLOCK_M'])
+        range_n = tl.arange(0, meta['BLOCK_N'])
+        x = tl.load(X + range_m[:, None]*meta['BLOCK_N'] + range_n[None, :])
+        z = tl.sum(x, axis=meta['AXIS'])
+        tl.store(Z + range_m, z)
+    # input
+    x = triton.testing.random(shape, dtype=dtype, device=device)
+    # triton result
+    z_tri = torch.empty((shape[0],), dtype=dtype, device=device)
+    kernel[(1,)](x, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)
+    # torch result
+    z_ref = torch.sum(x, axis=axis).to(dtype)
+    # compare
+    triton.testing.assert_almost_equal(z_tri, z_ref)
+
 
 
 # ---------------

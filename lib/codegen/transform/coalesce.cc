@@ -98,11 +98,14 @@ void coalesce::run(ir::module &mod) {
           auto inst_op = dynamic_cast<ir::instruction*>(op);
           if(!inst_op || seen.find(inst_op) != seen.end())
             continue;
-          queue.push_back(inst_op);
+          if(op->get_type()->get_tile_num_elements() ==
+             val->get_type()->get_tile_num_elements())
+            queue.push_back(inst_op);
         }
       }
-      if(in_contig.empty())
+      if(in_contig.empty() || out_contig==in_contig)
         continue;
+//      std::cout << in_contig.size() << " " << out_contig.size() << " " << in_contig[0] << " " << out_contig[0] << std::endl;
       builder.set_insert_point_after(val_inst);
       auto new_val = builder.insert(ir::cvt_scanline_inst::create(val_inst));
       x->replace_uses_of_with(val_inst, new_val);
