@@ -366,7 +366,7 @@ def test_reduce1d(dtype, shape, device='cuda'):
 @pytest.mark.parametrize("dtype, shape, axis", 
   [(dtype, shape, 1) \
         for dtype in ['float32']\
-        for shape in [(32, 32)]])
+        for shape in [(1, 1024)]])
 def test_reduce2d(dtype, shape, axis, device='cuda'):
     dtype = cvt[dtype]
     # triton kernel

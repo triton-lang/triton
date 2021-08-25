@@ -1818,6 +1818,7 @@ void generator::visit_reducend_inst(ir::reduce_inst* x, std::function<Value*(Val
       add_barrier();
       // update accumulator
       acc = do_acc(acc, load(read_ptr));
+      add_barrier();
       store(acc, write_ptr);
     }
   }
