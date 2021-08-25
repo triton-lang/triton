@@ -126,12 +126,6 @@ bool dispatch::nvmlinit(){
   return res;
 }
 
-bool dispatch::spvllvminit(){
-  if(spvllvm_==nullptr)
-    spvllvm_ = dlopen("libLLVMSPIRVLib.so", RTLD_LAZY);
-  return spvllvm_ != nullptr;
-}
-
 //CUDA
 CUDA_DEFINE1(CUresult, cuCtxDestroy_v2, CUcontext)
 CUDA_DEFINE2(CUresult, cuEventCreate, CUevent *, unsigned int)
