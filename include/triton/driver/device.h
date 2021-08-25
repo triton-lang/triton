@@ -67,6 +67,7 @@ public:
   size_t max_sm_clock() const;
   size_t max_mem_clock() const;
   void set_max_clock();
+  void enable_peer_access(CUdeviceptr peer_mem_ptr) const;
   // Target
   std::unique_ptr<codegen::target> make_target() const;
 
