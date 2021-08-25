@@ -1920,27 +1920,32 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
     std::swap(in_ord[0], in_ord[1]);
 
   Value *ld = i32(shape[1]);
-  indices_t idx(2);
+  indices_t r_idx(2), s_idx(2);
   indices_t strides(2);
-  for(int i = 0; i < n_reps[0]; i++)
-  for(int j = 0; j < n_reps[1]; j++){
+  for(int _i = 0; _i < n_reps[0]; _i++)
+  for(int _j = 0; _j < n_reps[1]; _j++){
+    int i, j;
     add_barrier();
+    i = _i*in_ax[0].size()/n_reps[0];
+    j = _j*in_ax[1].size()/n_reps[1];
     for(int ii = 0; ii < in_ax[0].size()/n_reps[0]; ii++)
     for(int jj = 0; jj < in_ax[1].size()/n_reps[1]; jj++){
-      idx[0] = in_ax[0][i*in_ax[0].size()/n_reps[0] + ii];
-      idx[1] = in_ax[1][j*in_ax[1].size()/n_reps[1] + jj];
-      Value *off  = add(mul(idx[in_ord[0]], ld), idx[in_ord[1]]);
+      r_idx = {in_ax[0][i + ii], in_ax[1][j + jj]};
+      s_idx = {in_ax[0][ii], in_ax[1][jj]};
+      Value *off  = add(mul(s_idx[in_ord[0]], ld), s_idx[in_ord[1]]);
       Value *ptr = gep(base, off);
-      store(vals_[in][idx], ptr);
+      store(vals_[in][r_idx], ptr);
     }
     add_barrier();
+    i = _i*out_ax[0].size()/n_reps[0];
+    j = _j*out_ax[1].size()/n_reps[1];
     for(int ii = 0; ii < out_ax[0].size()/n_reps[0]; ii++)
     for(int jj = 0; jj < out_ax[1].size()/n_reps[1]; jj++){
-      idx[0] = out_ax[0][i*out_ax[0].size()/n_reps[0] + ii];
-      idx[1] = out_ax[1][j*out_ax[1].size()/n_reps[1] + jj];
-      Value *off = add(mul(idx[out_ord[0]], ld), idx[out_ord[1]]);
+      r_idx = {out_ax[0][i + ii], out_ax[1][j + jj]};
+      s_idx = {out_ax[0][ii], out_ax[1][jj]};
+      Value *off = add(mul(s_idx[out_ord[0]], ld), s_idx[out_ord[1]]);
       Value *ptr = gep(base, off);
-      vals_[out][idx] = load(ptr);
+      vals_[out][r_idx] = load(ptr);
     }
   }
 }
@@ -1962,6 +1967,55 @@ void generator::visit_decoalesce_inst(ir::decoalesce_inst* rc) {
 void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
   visit_layout_convert(rc, rc->get_operand(0));
 }
+//void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
+//  ir::value *op = rc->get_operand(0);
+//  ir::block_type::block_shapes_t shape = rc->get_type()->get_block_shapes();
+//  // pointer to temporary shared memory
+//  Type *ty = cvt(rc->get_type()->get_scalar_ty());
+//  // layout
+//  analysis::mma_layout* in_layout = layouts_->get(op)->to_mma();
+//  analysis::scanline_layout* out_layout = layouts_->get(rc)->to_scanline();
+//  // Orders
+//  auto ord = layouts_->get(rc)->to_scanline()->get_order();
+//  Value *base;
+//  base = gep(shmem_, i32(alloc_->offset(layouts_->get(layouts_->tmp(rc)))));
+//  base = bit_cast(base, ptr_ty(ty, 3));
+//  Value *ld = i32(shape[ord[0]]);
+//  auto in_ord0 = axes_.at(a_axes_->get(op, ord[0])).values;
+//  auto in_ord1 = axes_.at(a_axes_->get(op, ord[1])).values;
+//  auto out_ord0 = axes_.at(a_axes_->get(rc, ord[0])).values;
+//  auto out_ord1 = axes_.at(a_axes_->get(rc, ord[1])).values;
+//  int in_spt0  = in_layout->shape_per_cta(ord[0]);
+//  int in_spt1  = in_layout->shape_per_cta(ord[1]);
+//  int out_spt0 = out_layout->mts(ord[0])*out_layout->nts(ord[0]);
+//  int out_spt1 = out_layout->mts(ord[1])*out_layout->nts(ord[1]);
+//  int max_spt1 = std::max(in_spt1, out_spt1);
+//  indices_t idx(2);
+//  int num_packs = shape[ord[1]]/max_spt1;
+//  for(size_t j = 0; j < num_packs; j++){
+//    add_barrier();
+//    for(size_t k = 0; k < in_ord1.size()/num_packs; k++)
+//    for(size_t i = 0; i < in_ord0.size(); i++){
+//      idx[ord[0]] = in_ord0[i];
+//      idx[ord[1]] = in_ord1[j*in_ord1.size()/num_packs + k];
+//      Value *off = add(idx[ord[0]], mul(in_ord1[k], ld));
+//      Value *ptr = gep(base, off);
+//      store(vals_[op][idx], ptr);
+
+//    }
+//    add_barrier();
+//    for(size_t k = 0; k < out_ord1.size()/num_packs; k++)
+//    for(size_t i = 0; i < out_ord0.size(); i++){
+//      idx[ord[0]] = out_ord0[i];
+//      idx[ord[1]] = out_ord1[j*out_ord1.size()/num_packs + k];
+//      Value *off = add(idx[ord[0]], mul(out_ord1[k], ld));
+//      Value *ptr  = gep(base, off);
+//      vals_[rc][idx] = load(ptr);
+//    }
+//  }
+//}
+
+
 
 void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* x){
   unsigned in_vec = 1;
