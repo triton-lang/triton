@@ -1920,7 +1920,6 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
     std::swap(in_ord[0], in_ord[1]);
 
   Value *ld = i32(shape[1]);
-  indices_t r_idx(2), s_idx(2);
   indices_t strides(2);
   for(int _i = 0; _i < n_reps[0]; _i++)
   for(int _j = 0; _j < n_reps[1]; _j++){
@@ -1930,22 +1929,22 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
     j = _j*in_ax[1].size()/n_reps[1];
     for(int ii = 0; ii < in_ax[0].size()/n_reps[0]; ii++)
     for(int jj = 0; jj < in_ax[1].size()/n_reps[1]; jj++){
-      r_idx = {in_ax[0][i + ii], in_ax[1][j + jj]};
-      s_idx = {in_ax[0][ii], in_ax[1][jj]};
-      Value *off  = add(mul(s_idx[in_ord[0]], ld), s_idx[in_ord[1]]);
+      indices_t idxs = {in_ax[0][i + ii], in_ax[1][j + jj]};
+      indices_t offs = {in_ax[0][ii], in_ax[1][jj]};
+      Value *off  = add(mul(offs[in_ord[0]], ld), offs[in_ord[1]]);
       Value *ptr = gep(base, off);
-      store(vals_[in][r_idx], ptr);
+      store(vals_[in][idxs], ptr);
     }
     add_barrier();
     i = _i*out_ax[0].size()/n_reps[0];
     j = _j*out_ax[1].size()/n_reps[1];
     for(int ii = 0; ii < out_ax[0].size()/n_reps[0]; ii++)
     for(int jj = 0; jj < out_ax[1].size()/n_reps[1]; jj++){
-      r_idx = {out_ax[0][i + ii], out_ax[1][j + jj]};
-      s_idx = {out_ax[0][ii], out_ax[1][jj]};
-      Value *off = add(mul(s_idx[out_ord[0]], ld), s_idx[out_ord[1]]);
+      indices_t idxs = {out_ax[0][i + ii], out_ax[1][j + jj]};
+      indices_t offs = {out_ax[0][ii], out_ax[1][jj]};
+      Value *off = add(mul(offs[out_ord[0]], ld), offs[out_ord[1]]);
       Value *ptr = gep(base, off);
-      vals_[out][r_idx] = load(ptr);
+      vals_[out][idxs] = load(ptr);
     }
   }
 }
