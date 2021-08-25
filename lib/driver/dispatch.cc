@@ -185,14 +185,6 @@ NVML_DEFINE3(nvmlReturn_t, nvmlDeviceGetClockInfo, nvmlDevice_t, nvmlClockType_t
 NVML_DEFINE3(nvmlReturn_t, nvmlDeviceGetMaxClockInfo, nvmlDevice_t, nvmlClockType_t, unsigned int*)
 NVML_DEFINE3(nvmlReturn_t, nvmlDeviceSetApplicationsClocks, nvmlDevice_t, unsigned int, unsigned int)
 
-// LLVM to SPIR-V
-int dispatch::initializeLLVMToSPIRVPass(llvm::PassRegistry &registry){
-  return f_impl<dispatch::spvllvminit>(spvllvm_, initializeLLVMToSPIRVPass, initializeLLVMToSPIRVPass_, "initializeLLVMToSPIRVPass", std::ref(registry));
-}
-
-bool dispatch::writeSpirv(llvm::Module *M, std::ostream &OS, std::string &ErrMsg){
-  return f_impl<dispatch::spvllvminit>(spvllvm_, writeSpirv, writeSpirv_, "writeSpirv", M, std::ref(OS), std::ref(ErrMsg));
-}
 
 // Release
 void dispatch::release(){
@@ -204,7 +196,6 @@ void dispatch::release(){
 
 void* dispatch::cuda_;
 void* dispatch::nvml_;
-void* dispatch::spvllvm_;
 
 //CUDA
 void* dispatch::cuCtxGetCurrent_;
@@ -260,10 +251,6 @@ void* dispatch::nvmlDeviceGetHandleByPciBusId_v2_;
 void* dispatch::nvmlDeviceGetClockInfo_;
 void* dispatch::nvmlDeviceGetMaxClockInfo_;
 void* dispatch::nvmlDeviceSetApplicationsClocks_;
-
-// SPIR-V
-void* dispatch::initializeLLVMToSPIRVPass_;
-void* dispatch::writeSpirv_;
 
 }
 }
