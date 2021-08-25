@@ -1913,37 +1913,40 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
     in_ax.push_back(axes_.at(a_axes_->get(in, d)).values);
     out_ax.push_back(axes_.at(a_axes_->get(out, d)).values);
   }
-
   if(in_layout->to_mma())
     std::swap(out_ord[0], out_ord[1]);
   if(out_layout->to_mma())
     std::swap(in_ord[0], in_ord[1]);
-
   Value *ld = i32(shape[1]);
-  indices_t strides(2);
-  for(int _i = 0; _i < n_reps[0]; _i++)
-  for(int _j = 0; _j < n_reps[1]; _j++){
-    int i, j;
+  for(int i = 0; i < n_reps[0]; i++)
+  for(int j = 0; j < n_reps[1]; j++){
+    int max_ii, max_jj;
     add_barrier();
-    i = _i*in_ax[0].size()/n_reps[0];
-    j = _j*in_ax[1].size()/n_reps[1];
-    for(int ii = 0; ii < in_ax[0].size()/n_reps[0]; ii++)
-    for(int jj = 0; jj < in_ax[1].size()/n_reps[1]; jj++){
-      indices_t idxs = {in_ax[0][i + ii], in_ax[1][j + jj]};
+    max_ii = in_ax[0].size()/n_reps[0];
+    max_jj = in_ax[1].size()/n_reps[1];
+    for(int ii = 0; ii < max_ii; ii++)
+    for(int jj = 0; jj < max_jj; jj++){
+      // shared mem pointer
       indices_t offs = {in_ax[0][ii], in_ax[1][jj]};
       Value *off  = add(mul(offs[in_ord[0]], ld), offs[in_ord[1]]);
       Value *ptr = gep(base, off);
+      // stash value to shared mem
+      indices_t idxs = {in_ax[0][i*max_ii + ii],
+                        in_ax[1][j*max_jj + jj]};
       store(vals_[in][idxs], ptr);
     }
     add_barrier();
-    i = _i*out_ax[0].size()/n_reps[0];
-    j = _j*out_ax[1].size()/n_reps[1];
-    for(int ii = 0; ii < out_ax[0].size()/n_reps[0]; ii++)
-    for(int jj = 0; jj < out_ax[1].size()/n_reps[1]; jj++){
-      indices_t idxs = {out_ax[0][i + ii], out_ax[1][j + jj]};
+    max_ii = out_ax[0].size()/n_reps[0];
+    max_jj = out_ax[1].size()/n_reps[1];
+    for(int ii = 0; ii < max_ii; ii++)
+    for(int jj = 0; jj < max_jj; jj++){
+      // shared mem pointer
       indices_t offs = {out_ax[0][ii], out_ax[1][jj]};
       Value *off = add(mul(offs[out_ord[0]], ld), offs[out_ord[1]]);
       Value *ptr = gep(base, off);
+      // load value from shared rem
+      indices_t idxs = {out_ax[0][i*max_ii + ii],
+                        out_ax[1][j*max_jj + jj]};
       vals_[out][idxs] = load(ptr);
     }
   }

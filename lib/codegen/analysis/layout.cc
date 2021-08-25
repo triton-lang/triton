@@ -163,7 +163,7 @@ mma_layout::mma_layout(size_t num_warps,
     spw_ = {16, 8, 1};
     rep_ = {2,  2, 1};
   }
-  order_ = {0, 1};
+//  order_ = {0, 1};
 
   /* warps per tile */
   // try to make things as square as possible to maximize data re-use
