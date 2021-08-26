@@ -218,55 +218,50 @@ NVML_DEFINE3(nvmlReturn_t, nvmlDeviceSetApplicationsClocks, nvmlDevice_t, unsign
 #define HIP_DEFINE10(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10) DEFINE10(hipinit, hip_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10)
 #define HIP_DEFINE11(ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11) DEFINE11(hipinit, hip_, ret, fname, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11)
 
-//// context management
-//HIP_DEFINE1(hipError_t, hipCtxDestroy, hipCtx_t)
-//HIP_DEFINE3(hipError_t, hipCtxCreate, hipCtx_t *, unsigned int, hipDevice_t)
-//HIP_DEFINE1(hipError_t, hipCtxGetDevice, hipDevice_t*)
-//HIP_DEFINE1(hipError_t, hipCtxPushCurrent, hipCtx_t)
-//HIP_DEFINE1(hipError_t, hipCtxPopCurrent, hipCtx_t*)
-//HIP_DEFINE2(hipError_t, hipCtxEnablePeerAccess, hipCtx_t, unsigned int)
-//HIP_DEFINE1(hipError_t, hipInit, unsigned int)
-//HIP_DEFINE1(hipError_t, hipDriverGetVersion, int *)
-//// device management
-//HIP_DEFINE2(hipError_t, hipGetDevice, hipDevice_t *, int)
-//HIP_DEFINE3(hipError_t, hipDeviceGetName, char *, int, hipDevice_t)
-//HIP_DEFINE3(hipError_t, hipDeviceGetPCIBusId, char *, int, hipDevice_t)
-//HIP_DEFINE3(hipError_t, hipDeviceGetAttribute, int *, hipDeviceAttribute_t, hipDevice_t)
-//HIP_DEFINE1(hipError_t, hipGetDeviceCount, int *)
-//// link management
-//HIP_DEFINE8(hipError_t, cuLinkAddData_v2, CUlinkState, hipJitInputType, void*, size_t, const char*, unsigned int, hipJitOption*, void**);
-//HIP_DEFINE4(hipError_t, cuLinkCreate_v2, unsigned int, hipJitOption*, void**, CUlinkState*);
-//HIP_DEFINE1(hipError_t, hipLinkDestroy, CUlinkState);
-//HIP_DEFINE3(hipError_t, hipLinkComplete, CUlinkState, void**, size_t*);
-//// module management
-//HIP_DEFINE4(hipError_t, hipModuleGetGlobal, hipDeviceptr_t*, size_t*, hipModule_t, const char*)
-//HIP_DEFINE2(hipError_t, hipModuleLoad, hipModule_t *, const char *)
-//HIP_DEFINE1(hipError_t, hipModuleUnload, hipModule_t)
-//HIP_DEFINE2(hipError_t, hipModuleLoadData, hipModule_t *, const void *)
-//HIP_DEFINE5(hipError_t, hipModuleLoadDataEx, hipModule_t *, const void *, unsigned int, hipJitOption *, void **)
-//HIP_DEFINE3(hipError_t, hipModuleGetFunction, hipFunction_t *, hipModule_t, const char *)
-//// stream management
-//HIP_DEFINE2(hipError_t, hipStreamCreate__, hipStream_t *, unsigned int)
-//HIP_DEFINE1(hipError_t, hipStreamSynchronize, hipStream_t)
-//HIP_DEFINE1(hipError_t, hipStreamDestroy, hipStream_t)
-//HIP_DEFINE11(hipError_t, hipModuleLaunchKernel, hipFunction_t, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, hipStream_t, void **, void **)
-//// function management
-//HIP_DEFINE3(hipError_t, hipFuncGetAttribute, int*, hipFuncAttribute_t, hipFunction_t)
-//HIP_DEFINE2(hipError_t, hipFuncSetCacheConfig, hipFunction_t, hipFuncCache)
-//// memory management
-//HIP_DEFINE3(hipError_t, hipMemcpyDtoH, void *, hipDeviceptr_t, size_t)
-//HIP_DEFINE1(hipError_t, hipFree, hipDeviceptr_t)
-//HIP_DEFINE4(hipError_t, hipMemcpyDtoHAsync, void *, hipDeviceptr_t, size_t, hipStream_t)
-//HIP_DEFINE4(hipError_t, hipMemcpyHtoDAsync, hipDeviceptr_t, const void *, size_t, hipStream_t)
-//HIP_DEFINE3(hipError_t, hipMemcpyHtoD, hipDeviceptr_t, const void *, size_t )
-//HIP_DEFINE2(hipError_t, hipMalloc, hipDeviceptr_t*, size_t)
-//HIP_DEFINE3(hipError_t, hipPointerGetAttribute, void*, CUpointer_attribute, hipDeviceptr_t)
-//HIP_DEFINE4(hipError_t, hipMemsetD8Async, hipDeviceptr_t, unsigned char, size_t, hipStream_t)
-//// event management
-//HIP_DEFINE2(hipError_t, hipEventCreate, hipEvent_t *, unsigned int)
-//HIP_DEFINE3(hipError_t, hipEventElapsedTime, float *, hipEvent_t, hipEvent_t)
-//HIP_DEFINE2(hipError_t, hipEventRecord, hipEvent_t, hipStream_t)
-//HIP_DEFINE1(hipError_t, hipEventDestroy, hipEvent_t)
+// context management
+HIP_DEFINE1(hipError_t, hipCtxDestroy, hipCtx_t)
+HIP_DEFINE3(hipError_t, hipCtxCreate, hipCtx_t *, unsigned int, hipDevice_t)
+HIP_DEFINE1(hipError_t, hipCtxGetDevice, hipDevice_t*)
+HIP_DEFINE1(hipError_t, hipCtxPushCurrent, hipCtx_t)
+HIP_DEFINE1(hipError_t, hipCtxPopCurrent, hipCtx_t*)
+HIP_DEFINE2(hipError_t, hipCtxEnablePeerAccess, hipCtx_t, unsigned int)
+HIP_DEFINE1(hipError_t, hipInit, unsigned int)
+HIP_DEFINE1(hipError_t, hipDriverGetVersion, int *)
+// device management
+HIP_DEFINE2(hipError_t, hipGetDevice, hipDevice_t *, int)
+HIP_DEFINE3(hipError_t, hipDeviceGetName, char *, int, hipDevice_t)
+HIP_DEFINE3(hipError_t, hipDeviceGetPCIBusId, char *, int, hipDevice_t)
+HIP_DEFINE3(hipError_t, hipDeviceGetAttribute, int *, hipDeviceAttribute_t, hipDevice_t)
+HIP_DEFINE1(hipError_t, hipGetDeviceCount, int *)
+// module management
+HIP_DEFINE4(hipError_t, hipModuleGetGlobal, hipDeviceptr_t*, size_t*, hipModule_t, const char*)
+HIP_DEFINE2(hipError_t, hipModuleLoad, hipModule_t *, const char *)
+HIP_DEFINE1(hipError_t, hipModuleUnload, hipModule_t)
+HIP_DEFINE2(hipError_t, hipModuleLoadData, hipModule_t *, const void *)
+HIP_DEFINE5(hipError_t, hipModuleLoadDataEx, hipModule_t *, const void *, unsigned int, hipJitOption *, void **)
+HIP_DEFINE3(hipError_t, hipModuleGetFunction, hipFunction_t *, hipModule_t, const char *)
+// stream management
+HIP_DEFINE2(hipError_t, hipStreamCreate, hipStream_t *, unsigned int)
+HIP_DEFINE1(hipError_t, hipStreamSynchronize, hipStream_t)
+HIP_DEFINE1(hipError_t, hipStreamDestroy, hipStream_t)
+HIP_DEFINE11(hipError_t, hipModuleLaunchKernel, hipFunction_t, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, hipStream_t, void **, void **)
+// function management
+HIP_DEFINE3(hipError_t, hipFuncGetAttribute, int*, hipFuncAttribute, hipFunction_t)
+HIP_DEFINE2(hipError_t, hipFuncSetCacheConfig, hipFunction_t, hipFuncCache_t)
+// memory management
+HIP_DEFINE3(hipError_t, hipMemcpyDtoH, void *, hipDeviceptr_t, size_t)
+HIP_DEFINE1(hipError_t, hipFree, hipDeviceptr_t)
+HIP_DEFINE4(hipError_t, hipMemcpyDtoHAsync, void *, hipDeviceptr_t, size_t, hipStream_t)
+HIP_DEFINE4(hipError_t, hipMemcpyHtoDAsync, hipDeviceptr_t, const void *, size_t, hipStream_t)
+HIP_DEFINE3(hipError_t, hipMemcpyHtoD, hipDeviceptr_t, const void *, size_t )
+HIP_DEFINE2(hipError_t, hipMalloc, hipDeviceptr_t*, size_t)
+HIP_DEFINE3(hipError_t, hipPointerGetAttribute, void*, CUpointer_attribute, hipDeviceptr_t)
+HIP_DEFINE4(hipError_t, hipMemsetD8Async, hipDeviceptr_t, unsigned char, size_t, hipStream_t)
+// event management
+HIP_DEFINE2(hipError_t, hipEventCreate, hipEvent_t *, unsigned int)
+HIP_DEFINE3(hipError_t, hipEventElapsedTime, float *, hipEvent_t, hipEvent_t)
+HIP_DEFINE2(hipError_t, hipEventRecord, hipEvent_t, hipStream_t)
+HIP_DEFINE1(hipError_t, hipEventDestroy, hipEvent_t)
 
 
 /* ------------------- *
