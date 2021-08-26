@@ -154,10 +154,10 @@ public:
 
   handle<CUType>   cu()  { return cu_; }
   handle<HostType> hst() { return hst_; }
-  handle<HIPType> hip() { return hip_; }
-  const handle<CUType>& cu()    const { return cu_; }
+  handle<HIPType>  hip() { return hip_; }
+  const handle<CUType>&   cu()    const { return cu_; }
   const handle<HostType>& hst() const { return hst_; }
-  const handle<HIPType>& hip() const { return hip_; }
+  const handle<HIPType>&  hip() const { return hip_; }
   backend_t backend() { return backend_; }
 
 protected:

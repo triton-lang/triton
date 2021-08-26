@@ -30,18 +30,6 @@ private:
   std::string name_;
 };
 
-// CUDA
-class cu_platform: public platform
-{
-public:
-  cu_platform(): platform("CUDA") { }
-  std::string version() const;
-  void devices(std::vector<driver::device*> &devices) const;
-
-private:
-  handle<CUPlatform> cu_;
-};
-
 // Host
 class host_platform: public platform
 {
@@ -49,6 +37,17 @@ public:
   host_platform(): platform("CPU") { }
   std::string version() const;
   void devices(std::vector<driver::device*> &devices) const;
+};
+
+// CUDA
+class cu_platform: public platform
+{
+public:
+  cu_platform(): platform("CUDA") { }
+  std::string version() const;
+  void devices(std::vector<driver::device*> &devices) const;
+private:
+  handle<CUPlatform> cu_;
 };
 
 }
