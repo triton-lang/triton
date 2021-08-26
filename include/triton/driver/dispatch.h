@@ -58,17 +58,18 @@ protected:
   }
 
 public:
+  static void release();
+  // Nvidia
   static bool nvmlinit();
   static bool cuinit();
-  static void release();
+  // AMD
+  static bool hipinit();
 
   /* ------------------- *
    * CUDA
    * ------------------- */
   // context management
   static CUresult cuInit(unsigned int Flags);
-  static CUresult cuCtxGetCurrent(CUcontext *pctx);
-  static CUresult cuCtxSetCurrent(CUcontext ctx);
   static CUresult cuCtxDestroy_v2(CUcontext ctx);
   static CUresult cuCtxCreate_v2(CUcontext *pctx, unsigned int flags, CUdevice dev);
   static CUresult cuCtxPushCurrent_v2(CUcontext ctx);

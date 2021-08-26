@@ -96,7 +96,6 @@ host_context::host_context(driver::device* dev): context(dev, host_context_t(), 
 
 // import CUdevice
 CUdevice cu_context::get_device_of(CUcontext context){
-  dispatch::cuCtxPushCurrent_v2(context);
   CUdevice res;
   dispatch::cuCtxGetDevice(&res);
   dispatch::cuCtxPopCurrent_v2(NULL);
