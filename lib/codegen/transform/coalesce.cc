@@ -73,7 +73,7 @@ void coalesce::run(ir::module &mod) {
         new_x->replace_uses_of_with(new_x, simplify(x, builder));
     }
     // re-arrange scanline to promote memory coalescing
-    if(auto x = dynamic_cast<ir::masked_store_inst*>(i)){
+    if(auto x = dynamic_cast<ir::store_inst*>(i)){
       ir::value* ptr = x->get_pointer_operand();
       ir::value* val = x->get_value_operand();
       auto out_contig = align_->contiguous(ptr);

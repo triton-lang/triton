@@ -626,10 +626,10 @@ void generator::visit_load_inst(ir::load_inst* x){
     // -----
     std::ostringstream asm_oss;
     asm_oss << "@$" << n_words; // predicate
-    if(force_nc_cache_)
-      asm_oss << " ld.global.nc";
-    else
-      asm_oss << " ld.global.cg";
+//    if(force_nc_cache_)
+      asm_oss << " ld.global";
+//    else
+//      asm_oss << " ld.global.cg";
     if(n_words > 1)
       asm_oss << ".v" << n_words; // vector width
     asm_oss << ".b" << width; // word size
@@ -1915,7 +1915,9 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
   }
   in_ord = in_layout->to_mma() ? out_ord : in_ord;
   out_ord = out_layout->to_mma() ? in_ord : out_ord;
-  Value *ld = i32(shape[in_ord[0]]);
+  Value *in_ld = i32(shape[in_ord[0]]);
+  Value *out_ld = i32(shape[out_ord[0]]);
+
   for(int i = 0; i < n_reps[0]; i++)
   for(int j = 0; j < n_reps[1]; j++){
     int max_ii, max_jj;
@@ -1926,7 +1928,7 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
     for(int jj = 0; jj < max_jj; jj++){
       // shared mem pointer
       indices_t offs = {in_ax[0][ii], in_ax[1][jj]};
-      Value *off  = add(offs[in_ord[0]], mul(ld, offs[in_ord[1]]));
+      Value *off  = add(offs[out_ord[0]], mul(out_ld, offs[out_ord[1]]));
       Value *ptr = gep(base, off);
       // stash value to shared mem
       indices_t idxs = {in_ax[0][i*max_ii + ii],
@@ -1940,7 +1942,7 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
     for(int jj = 0; jj < max_jj; jj++){
       // shared mem pointer
       indices_t offs = {out_ax[0][ii], out_ax[1][jj]};
-      Value *off  = add(offs[out_ord[0]], mul(ld, offs[out_ord[1]]));
+      Value *off  = add(offs[out_ord[0]], mul(out_ld, offs[out_ord[1]]));
       Value *ptr = gep(base, off);
       // load value from shared rem
       indices_t idxs = {out_ax[0][i*max_ii + ii],
