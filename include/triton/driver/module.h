@@ -25,7 +25,7 @@ class cu_context;
 class cu_device;
 
 // Base
-class module: public polymorphic_resource<CUmodule, host_module_t> {
+class module: public polymorphic_resource<CUmodule, hipModule_t, host_module_t> {
 protected:
   void init_llvm();
 

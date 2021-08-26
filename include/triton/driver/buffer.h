@@ -14,7 +14,7 @@ namespace driver
 class stream;
 
 // Base
-class buffer : public polymorphic_resource<CUdeviceptr, host_buffer_t> {
+class buffer : public polymorphic_resource<CUdeviceptr, hipDeviceptr_t, host_buffer_t> {
 public:
   buffer(size_t size, CUdeviceptr cl, bool take_ownership);
   buffer(size_t size, host_buffer_t hst, bool take_ownership);

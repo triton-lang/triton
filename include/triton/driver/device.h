@@ -20,7 +20,7 @@ namespace driver
 class context;
 
 // Base device
-class device: public polymorphic_resource<CUdevice, host_device_t>{
+class device: public polymorphic_resource<CUdevice, hipDeviceWrapper, host_device_t>{
 public:
   using polymorphic_resource::polymorphic_resource;
   virtual std::unique_ptr<codegen::target> make_target() const = 0;

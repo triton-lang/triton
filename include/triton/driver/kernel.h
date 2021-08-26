@@ -21,7 +21,7 @@ namespace driver
 class cu_buffer;
 
 // Base
-class kernel: public polymorphic_resource<CUfunction, host_function_t> {
+class kernel: public polymorphic_resource<CUfunction, hipFunction_t, host_function_t> {
 public:
   kernel(driver::module* program, CUfunction fn, bool has_ownership);
   kernel(driver::module* program, host_function_t fn, bool has_ownership);

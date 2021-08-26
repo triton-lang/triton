@@ -21,7 +21,7 @@ class Range;
 class cu_buffer;
 
 // Base
-class stream: public polymorphic_resource<CUstream, host_stream_t> {
+class stream: public polymorphic_resource<CUstream, hipStream_t, host_stream_t> {
 public:
   stream(CUstream, bool has_ownership);
   stream(host_stream_t, bool has_ownership);

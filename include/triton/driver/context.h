@@ -11,7 +11,7 @@ namespace triton
 namespace driver
 {
 
-class context: public polymorphic_resource<CUcontext, host_context_t>{
+class context: public polymorphic_resource<CUcontext, hipCtx_t, host_context_t>{
 protected:
   static std::string get_cache_path();
 

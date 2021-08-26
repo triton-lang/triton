@@ -33,6 +33,7 @@ namespace driver
 
 enum backend_t {
   CUDA,
+  HIP,
   Host
 };
 
@@ -106,6 +107,12 @@ private:
   hipError_t status_;
 };
 
+struct hipDeviceWrapper{
+  int val_;
+  hipDeviceWrapper(int val): val_(val) {}
+  operator int() const { return val_; }
+};
+
 //
 
 template<class T, class CUType>
@@ -137,22 +144,26 @@ protected:
   bool has_ownership_;
 };
 
-template<class CUType, class HostType>
+template<class CUType, class HIPType, class HostType>
 class polymorphic_resource {
 public:
   polymorphic_resource(CUType cu, bool take_ownership): cu_(cu, take_ownership), backend_(CUDA){}
+  polymorphic_resource(HIPType hip, bool take_ownership): hip_(hip, take_ownership), backend_(HIP){}
   polymorphic_resource(HostType hst, bool take_ownership): hst_(hst, take_ownership), backend_(Host){}
   virtual ~polymorphic_resource() { }
 
-  handle<CUType> cu() { return cu_; }
+  handle<CUType>   cu()  { return cu_; }
   handle<HostType> hst() { return hst_; }
-  const handle<CUType>& cu() const { return cu_; }
+  handle<HIPType> hip() { return hip_; }
+  const handle<CUType>& cu()    const { return cu_; }
   const handle<HostType>& hst() const { return hst_; }
+  const handle<HIPType>& hip() const { return hip_; }
   backend_t backend() { return backend_; }
 
 protected:
   handle<CUType> cu_;
   handle<HostType> hst_;
+  handle<HIPType> hip_;
   backend_t backend_;
 };
 
