@@ -39,17 +39,29 @@ inline void _delete(host_buffer_t x)   { if(x.data) delete[] x.data; }
 inline void _delete(host_function_t) { }
 
 //CUDA
-inline void _delete(CUcontext x) { dispatch::cuCtxDestroy(x); }
-inline void _delete(CUdeviceptr x) { dispatch::cuMemFree(x); }
-inline void _delete(CUstream x) { dispatch::cuStreamDestroy(x); }
-inline void _delete(CUdevice) { }
-inline void _delete(CUevent x) { dispatch::cuEventDestroy(x); }
-inline void _delete(CUfunction) { }
-inline void _delete(CUmodule x) { dispatch::cuModuleUnload(x); }
-inline void _delete(cu_event_t x) { _delete(x.first); _delete(x.second); }
-inline void _delete(CUPlatform){}
+inline CUresult _delete(CUcontext x)   { return dispatch::cuCtxDestroy(x); }
+inline CUresult _delete(CUdeviceptr x) { return dispatch::cuMemFree(x); }
+inline CUresult _delete(CUstream x)    { return dispatch::cuStreamDestroy(x); }
+inline CUresult _delete(CUdevice)      { return CUDA_SUCCESS; }
+inline CUresult _delete(CUevent x)     { return dispatch::cuEventDestroy(x); }
+inline CUresult _delete(CUfunction)    { return CUDA_SUCCESS; }
+inline CUresult _delete(CUmodule x)    { return dispatch::cuModuleUnload(x); }
+inline CUresult _delete(cu_event_t x)  { _delete(x.first); return _delete(x.second); }
+inline CUresult _delete(CUPlatform)    { return CUDA_SUCCESS; }
+
+//HIP
+inline hipError_t _delete(hipCtx_t x)       { return dispatch::hipCtxDestroy(x); }
+inline hipError_t _delete(hipDeviceptr_t x) { return dispatch::hipFree(x); }
+inline hipError_t _delete(hipStream_t x)    { return dispatch::hipStreamDestroy(x); }
+// hipDevice maps to `int` like CUdevice. No redefinition here
+inline hipError_t _delete(hipEvent_t x)     { return dispatch::hipEventDestroy(x); }
+inline hipError_t _delete(hipFunction_t)    { return hipSuccess;}
+inline hipError_t _delete(hipModule_t x)    { return dispatch::hipModuleUnload(x); }
+inline hipError_t _delete(hipPlatform)      { return hipSuccess;  }
+inline hipError_t _delete(hip_event_t x)    { _delete(x.first); return _delete(x.second); }
 
 //Constructor
+
 template<class T>
 handle<T>::handle(T cu, bool take_ownership): h_(new T(cu)), has_ownership_(take_ownership)
 { }
@@ -86,6 +98,13 @@ template class handle<host_stream_t>;
 template class handle<host_buffer_t>;
 template class handle<host_function_t>;
 
-
+template class handle<hipDeviceptr_t>;
+template class handle<hipStream_t>;
+template class handle<hipCtx_t>;
+//template class handle<hipDevice_t>;
+template class handle<hip_event_t>;
+template class handle<hipFunction_t>;
+template class handle<hipModule_t>;
+template class handle<hipPlatform>;
 }
 }

@@ -92,6 +92,22 @@ private:
   CUresult status_;
 };
 
+// Extra HIP handles
+struct hip_event_t{
+  operator bool() const { return first && second; }
+  hipEvent_t first;
+  hipEvent_t second;
+};
+
+struct hipPlatform{
+  hipPlatform() : status_(dispatch::hipInit(0)) { }
+  operator bool() const { return status_; }
+private:
+  hipError_t status_;
+};
+
+//
+
 template<class T, class CUType>
 class handle_interface{
 public:
