@@ -391,6 +391,10 @@ def test_reduce2d(dtype, shape, axis, device='cuda'):
 # test permute
 # ---------------
 
+# ---------------
+# test permute
+# ---------------
+
 @pytest.mark.parametrize("dtype, shape, perm",
   [(dtype, shape, perm) \
         for dtype in ['float32']\
@@ -407,20 +411,23 @@ def test_permute(dtype, shape, perm, device='cuda'):
         off_m = tl.arange(0, BLOCK_M)
         off_n = tl.arange(0, BLOCK_N)
         Xs = X + off_m[:, None] * stride_xm + off_n[None, :] * stride_xn
-        Zs = Z + off_n[:, None] * stride_zm + off_n[None, :] * stride_zn
+        Zs = Z + off_m[:, None] * stride_zm + off_n[None, :] * stride_zn
         tl.store(Zs, tl.load(Xs))
     # input
     x = triton.testing.random(shape, dtype=dtype, device=device)
     # triton result
-    z_tri = torch.empty_like(x).permute(*perm)
-    kernel[(1, 1)](x, x.stride(0), x.stride(1), 
-                   z_tri, z_tri.stride(0), z_tri.stride(1), 
-                   BLOCK_M=shape[0], BLOCK_N=shape[1])
+    z_tri = torch.empty_like(x)
+    pgm = kernel[(1, 1)](x, x.stride(0), x.stride(1), 
+                        z_tri, z_tri.stride(1), z_tri.stride(0), 
+                        BLOCK_M=shape[0], BLOCK_N=shape[1])
     # torch result
-    z_ref = x.permute(*perm)
+    z_ref = x.permute(*perm).contiguous()
     # compare
     triton.testing.assert_almost_equal(z_tri, z_ref)
-
+    # parse ptx to make sure ld/st are vectorized
+    ptx = pgm.asm('ptx')
+    assert 'ld.global.v4' in ptx
+    assert 'st.global.v4' in ptx
 
 # ---------------
 # test load
