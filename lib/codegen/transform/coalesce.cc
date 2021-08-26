@@ -73,43 +73,43 @@ void coalesce::run(ir::module &mod) {
         new_x->replace_uses_of_with(new_x, simplify(x, builder));
     }
     // re-arrange scanline to promote memory coalescing
-//    if(auto x = dynamic_cast<ir::masked_store_inst*>(i)){
-//      ir::value* ptr = x->get_pointer_operand();
-//      ir::value* val = x->get_value_operand();
-//      auto out_contig = align_->contiguous(ptr);
-//      auto val_inst = dynamic_cast<ir::instruction*>(val);
-//      if(!val_inst)
-//        break;
-//      if(dynamic_cast<ir::recoalesce_inst*>(val))
-//        break;
-//      std::vector<unsigned> in_contig;
-//      std::vector<ir::instruction*> queue = {val_inst};
-//      std::set<ir::instruction*> seen;
-//      std::vector<ir::io_inst*> ios;
-//      while(!queue.empty()){
-//        ir::instruction* curr = queue.back();
-//        queue.pop_back();
-//        if(auto io_inst = dynamic_cast<ir::io_inst*>(curr)){
-//          in_contig = align_->contiguous(io_inst->get_pointer_operand());
-//          break;
-//        }
-//        seen.insert(curr);
-//        for(ir::value* op: curr->ops()){
-//          auto inst_op = dynamic_cast<ir::instruction*>(op);
-//          if(!inst_op || seen.find(inst_op) != seen.end())
-//            continue;
-//          if(op->get_type()->get_tile_num_elements() ==
-//             val->get_type()->get_tile_num_elements())
-//            queue.push_back(inst_op);
-//        }
-//      }
-//      if(in_contig.empty() || out_contig==in_contig)
-//        continue;
-////      std::cout << in_contig.size() << " " << out_contig.size() << " " << in_contig[0] << " " << out_contig[0] << std::endl;
-//      builder.set_insert_point_after(val_inst);
-//      auto new_val = builder.insert(ir::cvt_scanline_inst::create(val_inst));
-//      x->replace_uses_of_with(val_inst, new_val);
-//    }
+    if(auto x = dynamic_cast<ir::masked_store_inst*>(i)){
+      ir::value* ptr = x->get_pointer_operand();
+      ir::value* val = x->get_value_operand();
+      auto out_contig = align_->contiguous(ptr);
+      auto val_inst = dynamic_cast<ir::instruction*>(val);
+      if(!val_inst)
+        break;
+      if(dynamic_cast<ir::recoalesce_inst*>(val))
+        break;
+      std::vector<unsigned> in_contig;
+      std::vector<ir::instruction*> queue = {val_inst};
+      std::set<ir::instruction*> seen;
+      std::vector<ir::io_inst*> ios;
+      while(!queue.empty()){
+        ir::instruction* curr = queue.back();
+        queue.pop_back();
+        if(auto io_inst = dynamic_cast<ir::io_inst*>(curr)){
+          in_contig = align_->contiguous(io_inst->get_pointer_operand());
+          break;
+        }
+        seen.insert(curr);
+        for(ir::value* op: curr->ops()){
+          auto inst_op = dynamic_cast<ir::instruction*>(op);
+          if(!inst_op || seen.find(inst_op) != seen.end())
+            continue;
+          if(op->get_type()->get_tile_num_elements() ==
+             val->get_type()->get_tile_num_elements())
+            queue.push_back(inst_op);
+        }
+      }
+      if(in_contig.empty() || out_contig==in_contig)
+        continue;
+//      std::cout << in_contig.size() << " " << out_contig.size() << " " << in_contig[0] << " " << out_contig[0] << std::endl;
+      builder.set_insert_point_after(val_inst);
+      auto new_val = builder.insert(ir::cvt_scanline_inst::create(val_inst));
+      x->replace_uses_of_with(val_inst, new_val);
+    }
   }
 }
 
