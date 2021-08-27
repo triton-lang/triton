@@ -101,7 +101,7 @@ template class handle<host_function_t>;
 template class handle<hipDeviceptr_t>;
 template class handle<hipStream_t>;
 template class handle<hipCtx_t>;
-//template class handle<hipDevice_t>;
+template class handle<hipDeviceWrapper>;
 template class handle<hip_event_t>;
 template class handle<hipFunction_t>;
 template class handle<hipModule_t>;

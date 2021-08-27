@@ -20,20 +20,19 @@
 #include "triton/ir/module.h"
 #include "triton/ir/print.h"
 #include "llvm/IR/Module.h"
-
+#include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/Verifier.h"
 namespace triton {
 namespace codegen {
 
 // TODO:
 // There should be a proper pass manager there!
-void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps, int num_stages, bool force_nc_cache,
-                            driver::module *&mod, driver::kernel *&ker, size_t &shared_mem) {
+std::unique_ptr<llvm::Module> add_passes_to_emit_bin(ir::module &ir, llvm::LLVMContext& ctx, int cc, int num_warps, int num_stages, bool force_nc_cache) {
   // generate llvm code
-  llvm::LLVMContext ctx;
   std::string name = ir.get_function_list()[0]->get_name();
   std::unique_ptr<llvm::Module> llvm(new llvm::Module(name, ctx));
   // optimizations
-  std::unique_ptr<codegen::target> target = dev->make_target();
+  auto target = std::unique_ptr<codegen::target>(new codegen::nvidia_cu_target(cc));
   bool cts_use_async = target->as_nvidia()->sm() >= 80;
   // create passes
   codegen::analysis::align align;
@@ -47,7 +46,6 @@ void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps, 
   codegen::analysis::allocation allocation(&liveness);
   codegen::transform::dce dce;
   codegen::transform::peephole peephole(target.get(), &layouts);
-//  codegen::transform::reassociate reassociate;
   codegen::transform::coalesce coalesce(&align, &layouts);
   codegen::transform::prefetch prefetch_s(target.get());
   codegen::transform::membar barriers(&liveness, &layouts, &allocation, &prefetch_s, target.get());
@@ -56,10 +54,8 @@ void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps, 
   dce.run(ir);
   peephole.run(ir);
   dce.run(ir);
-  // ir::print(ir, std::cout);
   pipeline.run(ir);
   dce.run(ir);
-  // ir::print(ir, std::cout);
   disassociate.run(ir);
   dce.run(ir);
   align.run(ir);
@@ -76,10 +72,8 @@ void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps, 
   dce.run(ir);
   align.run(ir);
   dce.run(ir);
-  if (target->is_gpu()) {
-//    reassociate.run(ir);
+  if (target->is_gpu())
     cts.run(ir);
-  }
   dce.run(ir);
   align.run(ir);
   axes.run(ir);
@@ -93,14 +87,9 @@ void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps, 
   liveness.run(ir);
   allocation.run(ir);
   prefetch_s.run(ir);
-//  ir::print(ir, std::cout);
   barriers.run(ir);
-//  ir::print(ir, std::cout);
-//  ir::print(ir, std::cout);
   isel.visit(ir, *llvm);
-  mod = driver::module::create(dev, std::move(llvm));
-  ker = driver::kernel::create(&*mod, name.c_str());
-  shared_mem = allocation.allocated_size();
+  return llvm;
 }
 
 } // namespace codegen

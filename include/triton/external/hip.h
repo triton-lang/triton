@@ -8,11 +8,6 @@
 
 // Ignoring error-code return values from hip APIs is discouraged. On C++17,
 // we can make that yield a warning
-#if __cplusplus >= 201703L
-#define __HIP_NODISCARD [[nodiscard]]
-#else
-#define __HIP_NODISCARD
-#endif
 
 /*
  * @brief hipError_t
@@ -22,7 +17,7 @@
 // Developer note - when updating these, update the hipErrorName and hipErrorString functions in
 // NVCC and HCC paths Also update the hipCUDAErrorTohipError function in NVCC path.
 
-typedef enum __HIP_NODISCARD hipError_t {
+typedef enum hipError_t {
     hipSuccess = 0,  ///< Successful completion.
     hipErrorInvalidValue = 1,  ///< One or more of the parameters passed to the API call is NULL
                                ///< or not in an acceptable range.
@@ -109,8 +104,6 @@ typedef enum __HIP_NODISCARD hipError_t {
                                   ///< not seen in production systems.
     hipErrorTbd  ///< Marker that more error codes are needed.
 } hipError_t;
-
-#undef __HIP_NODISCARD
 
 
 typedef struct ihipCtx_t* hipCtx_t;

@@ -34,21 +34,21 @@ public:
   host_buffer(size_t size);
 };
 
-// GPU
-template<class HandleT>
-class cu_hip_buffer: public buffer{
-public:
-  cu_hip_buffer(size_t size);
-  cu_hip_buffer(size_t size, HandleT h, bool take_ownership);
-  void set_zero(triton::driver::stream *queue, size_t size);
-};
-
 // CUDA
 class cu_buffer: public buffer
 {
 public:
   cu_buffer(size_t size);
   cu_buffer(size_t size, CUdeviceptr cu, bool take_ownership);
+  void set_zero(triton::driver::stream *queue, size_t size);
+};
+
+// HIP
+class hip_buffer: public buffer
+{
+public:
+  hip_buffer(size_t size);
+  hip_buffer(size_t size, hipDeviceptr_t hip, bool take_ownership);
   void set_zero(triton::driver::stream *queue, size_t size);
 };
 

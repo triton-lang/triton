@@ -139,6 +139,8 @@ CUDA_DEFINE2(CUresult, cuDeviceGet, CUdevice *, int)
 CUDA_DEFINE3(CUresult, cuDeviceGetName, char *, int, CUdevice)
 CUDA_DEFINE3(CUresult, cuDeviceGetPCIBusId, char *, int, CUdevice)
 CUDA_DEFINE3(CUresult, cuDeviceGetAttribute, int *, CUdevice_attribute, CUdevice)
+CUDA_DEFINE1(CUresult, cuDeviceGetCount, int*)
+
 // link management
 CUDA_DEFINE8(CUresult, cuLinkAddData_v2, CUlinkState, CUjitInputType, void*, size_t, const char*, unsigned int, CUjit_option*, void**);
 CUDA_DEFINE4(CUresult, cuLinkCreate_v2, unsigned int, CUjit_option*, void**, CUlinkState*);
@@ -205,6 +207,9 @@ NVML_DEFINE3(nvmlReturn_t, nvmlDeviceSetApplicationsClocks, nvmlDevice_t, unsign
 /* ------------------- *
  * HIP
  * ------------------- */
+bool dispatch::hipinit(){
+  return false;
+}
 
 #define HIP_DEFINE1(ret, fname, t1) DEFINE1(hipinit, hip_, ret, fname, t1)
 #define HIP_DEFINE2(ret, fname, t1, t2) DEFINE2(hipinit, hip_, ret, fname, t1, t2)
@@ -278,6 +283,9 @@ void dispatch::release(){
 
 void* dispatch::cuda_;
 void* dispatch::nvml_;
+void* dispatch::nvmlInit_v2_;
+void* dispatch::hip_;
+
 
 }
 }

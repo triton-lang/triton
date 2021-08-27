@@ -421,6 +421,7 @@ class Binary:
         self.num_stages = num_stages
         self.force_nc_cache = force_nc_cache
         self.sass = None
+        self.backend = _triton.runtime.backend.CUDA
 
     def asm(self, mode):
         if mode == 'ttir':
@@ -443,7 +444,10 @@ class Binary:
         raise ValueError('Unsupported mode ' + mode)
 
     def __call__(self, stream, args, grid_0, grid_1=1, grid_2=1):
-        stream.enqueue(self.kernel, grid_0, grid_1, grid_2, self.num_warps * 32, 1, 1, args, self.shared_mem)
+        _triton.runtime.enqueue(self.backend, stream, self.kernel,
+                                grid_0, grid_1, grid_2, 
+                                self.num_warps * 32, 1, 1, 
+                                args, self.shared_mem)
 
 
 class CompilationError(Exception):
@@ -528,6 +532,7 @@ class Kernel:
 
     def __init__(self, fn):
         self.fn = fn
+        self.backend = _triton.runtime.backend.CUDA
 
     def _compile(self, *wargs, device, attributes, constants, num_warps, num_stages, force_nc_cache, **meta):
         # create IR module
@@ -549,8 +554,9 @@ class Kernel:
             raise CompilationError(self.fn.src, node, e)
         # Compile to machine code
         mod, ker, shared_mem, ir_asm = _triton.code_gen.add_passes_to_emit_bin(generator.module, device, num_warps, num_stages, force_nc_cache)
-        if shared_mem > device.max_shared_memory():
-            raise OutOfResources(shared_mem, device.max_shared_memory(), "shared memory")
+        max_shared_memory = _triton.runtime.max_shared_memory(self.backend, device)
+        if shared_mem > max_shared_memory:
+            raise OutOfResources(shared_mem, max_shared_memory, "shared memory")
         return Binary(mod, ker, num_warps, num_stages, force_nc_cache, shared_mem, ir_asm)
 
     def __call__(self, *wargs, grid, num_warps=4, num_stages=2, force_nc_cache=False, **meta):
@@ -571,19 +577,20 @@ class Kernel:
                              " Only CUDA is supported at the moment")
 
         device = torch.device('cuda', torch.cuda.current_device())
-        tt_device = _triton.driver.cu_device(device.index, False)
-        if len(set(device_ids)) != 1 or device_ids[0] != device.index:
+        device_ty  = device.type
+        device_idx = device.index
+        if len(set(device_ids)) != 1 or device_ids[0] != device_idx:
             # try to enable P2P communication
             for arg_idx, dst_idx in zip(tensor_idxs, device_ids):
-                if dst_idx != device.index:
+                if dst_idx != device_idx:
                     try:
-                        tt_device.enable_peer_access(wargs[arg_idx].data_ptr())
+                        _triton.runtime.enable_peer_access(self.backend, wargs[arg_idx].data_ptr())
                     except RuntimeError as e:
                         raise RuntimeError("Cannot enable P2P access from device {} to device {}: {}"
-                                           .format(device.index, dst_idx, str(e)))
+                                           .format(device_idx, dst_idx, str(e)))
 
         # enqueue kernel on the current device
-        torch.cuda.set_device(device.index)
+        torch.cuda.set_device(device_idx)
         # attributes
         args = [arg.data_ptr() if i in tensor_idxs else arg for i, arg in enumerate(wargs)]
         attributes = {i: Kernel.pow2_divisor(a) for i, a in enumerate(args) if isinstance(a, int)}
@@ -594,12 +601,12 @@ class Kernel:
         attr_key = frozenset(attributes.items())
         meta_key = frozenset(meta.items())
         const_key = frozenset(constants.items())
-        key = (device.type, device.index, types_key, attr_key, num_warps, num_stages, meta_key, const_key)
+        key = (device_ty, device_idx, types_key, attr_key, num_warps, num_stages, meta_key, const_key)
         cache = self.fn.cache
         if key not in cache:
             # compile and cache configuration if necessary
             cache[key] = self._compile(
-                *wargs, device=tt_device, attributes=attributes,
+                *wargs, device=device_idx, attributes=attributes,
                 num_warps=num_warps, num_stages=num_stages, force_nc_cache=force_nc_cache, 
                 constants=constants, **meta
             )
@@ -608,8 +615,7 @@ class Kernel:
         params = struct.pack(fmt, *args)
         # enqueue cached function into stream
         binary = cache[key]
-        cu_stream = torch.cuda.current_stream(device.index).cuda_stream
-        stream = _triton.driver.cu_stream(cu_stream, False)
+        stream = torch.cuda.current_stream(device_idx).cuda_stream
         grid = grid(meta) if hasattr(grid, '__call__') else grid
         binary(stream, params, *grid)
         return binary

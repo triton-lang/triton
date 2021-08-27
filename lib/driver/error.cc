@@ -94,6 +94,9 @@ void check(CUresult err)
   }
 }
 
+void check(hipError_t error) {
+}
+
 }
 }
 

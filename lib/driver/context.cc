@@ -1,4 +1,4 @@
-/* Copyright 2015-2017 Philippe Tillet
+﻿/* Copyright 2015-2017 Philippe Tillet
 *
 * Permission is hereby granted, free of charge, to any person obtaining
 * a copy of this software and associated documentation files
@@ -36,28 +36,24 @@ namespace driver
 //         BASE             //
 /* ------------------------ */
 
-context::context(driver::device *dev, CUcontext cu, bool take_ownership):
+context::context(CUcontext cu, bool take_ownership):
   polymorphic_resource(cu, take_ownership),
-  dev_(dev), cache_path_(get_cache_path()) {
+  cache_path_(get_cache_path()) {
 }
 
-context::context(driver::device *dev, host_context_t hst, bool take_ownership):
+context::context(host_context_t hst, bool take_ownership):
   polymorphic_resource(hst, take_ownership),
-  dev_(dev), cache_path_(get_cache_path()){
+  cache_path_(get_cache_path()){
 }
 
 context* context::create(driver::device *dev){
   switch(dev->backend()){
-  case CUDA: return new cu_context(dev);
-  case Host: return new host_context(dev);
-  default: throw std::runtime_error("unknown backend");
+  case CUDA: return new cu_context  ((driver::cu_device*)dev  );
+  case Host: return new host_context((driver::host_device*)dev);
+  default: throw std::runtime_error("Unknown backend");
   }
 }
 
-
-driver::device* context::device() const {
-  return dev_;
-}
 
 std::string context::get_cache_path(){
   //user-specified cache path
@@ -86,32 +82,31 @@ std::string const & context::cache_path() const{
 //         Host             //
 /* ------------------------ */
 
-host_context::host_context(driver::device* dev): context(dev, host_context_t(), true){
+host_context::host_context(driver::host_device*): context(host_context_t(), true){
 
 }
 
 /* ------------------------ */
 //         CUDA             //
 /* ------------------------ */
+cu_context::cu_context(CUcontext context, bool take_ownership):
+    driver::context(context, take_ownership)
+{ }
 
-// import CUdevice
-CUdevice cu_context::get_device_of(CUcontext context){
-  CUdevice res;
-  dispatch::cuCtxGetDevice(&res);
-  dispatch::cuCtxPopCurrent_v2(NULL);
-  return res;
+cu_context::cu_context(driver::cu_device* dev): context(CUcontext(), true){
+  dispatch::cuCtxCreate(&*cu_, CU_CTX_SCHED_AUTO, *dev->cu());
 }
 
-// wrapper for cuda context
-cu_context::cu_context(CUcontext context, bool take_ownership): driver::context(new driver::cu_device(get_device_of(context), false),
-                                                                                context, take_ownership) {
-}
+/* ------------------------ */
+//         HIP              //
+/* ------------------------ */
+//hip_context::hip_context(CUcontext context, bool take_ownership):
+//    driver::context(context, take_ownership)
+//{ }
 
-cu_context::cu_context(driver::device* device): context(device, CUcontext(), true){
-  dispatch::cuCtxCreate(&*cu_, CU_CTX_SCHED_AUTO, *((driver::cu_device*)dev_)->cu());
-//  dispatch::cuCtxPopCurrent_v2(NULL);
-}
-
+//hip_context::hip_context(driver::hip_device* dev): context(CUcontext(), true){
+//  dispatch::cuCtxCreate(&*hip_, HIP_CTX_SCHED_AUTO, *dev->hip());
+//}
 
 }
 }

@@ -75,35 +75,33 @@ host_buffer::host_buffer(size_t size)
 }
 
 
-//
-template<class T> struct _fn {} ;
-
-template<> struct _fn<hipDeviceptr_t>{
-  static constexpr auto alloc = dispatch::hipMalloc;
-  static constexpr auto memset_async = dispatch::hipMemsetD8Async;
-  static hipDeviceptr_t& h(buffer* buf) { return *buf->hip(); };
-};
-
-template<> struct _fn<CUdeviceptr>{
-  static constexpr auto alloc = dispatch::cuMemAlloc_v2;
-  static constexpr auto memset_async = dispatch::cuMemsetD8Async;
-  static CUdeviceptr& h(buffer* buf) { return *buf->cu(); };
-};
-
-template<class T>
-cu_hip_buffer<T>::cu_hip_buffer(size_t size)
-  : buffer(size, T(), true) {
-  _fn<T>::alloc(&_fn<T>::h(this), size);
+// CUDA
+cu_buffer::cu_buffer(size_t size)
+  : buffer(size, CUdeviceptr(), true) {
+  dispatch::cuMemAlloc(&*cu_, size);
 }
 
-template<class T>
-cu_hip_buffer<T>::cu_hip_buffer(size_t size, T handle, bool take_ownership)
-  : buffer(size, handle, take_ownership){
+cu_buffer::cu_buffer(size_t size, CUdeviceptr cu, bool take_ownership)
+  : buffer(size, cu, take_ownership){
 }
 
-template<class T>
-void cu_hip_buffer<T>::set_zero(driver::stream* queue, size_t size){
-  _fn<T>::memset_async(_fn<T>::h(this), 0, size, *queue->cu());
+void cu_buffer::set_zero(driver::stream* queue, size_t size){
+  dispatch::cuMemsetD8Async(*cu_, 0, size, *queue->cu());
+}
+
+// HIP
+
+hip_buffer::hip_buffer(size_t size)
+  : buffer(size, CUdeviceptr(), true) {
+  dispatch::hipMalloc(&*hip_, size);
+}
+
+hip_buffer::hip_buffer(size_t size, hipDeviceptr_t hip, bool take_ownership)
+  : buffer(size, hip, take_ownership){
+}
+
+void hip_buffer::set_zero(driver::stream* queue, size_t size){
+  dispatch::hipMemsetD8Async(*hip_, 0, size, *queue->hip());
 }
 
 }
