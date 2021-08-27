@@ -16,7 +16,8 @@ class stream;
 // Base
 class buffer : public polymorphic_resource<CUdeviceptr, hipDeviceptr_t, host_buffer_t> {
 public:
-  buffer(size_t size, CUdeviceptr cl, bool take_ownership);
+  buffer(size_t size, hipDeviceptr_t hip, bool take_ownership);
+  buffer(size_t size, CUdeviceptr cu, bool take_ownership);
   buffer(size_t size, host_buffer_t hst, bool take_ownership);
   uintptr_t addr_as_uintptr_t();
   static buffer* create(driver::context* ctx, size_t size);
@@ -33,6 +34,15 @@ public:
   host_buffer(size_t size);
 };
 
+// GPU
+template<class HandleT>
+class cu_hip_buffer: public buffer{
+public:
+  cu_hip_buffer(size_t size);
+  cu_hip_buffer(size_t size, HandleT h, bool take_ownership);
+  void set_zero(triton::driver::stream *queue, size_t size);
+};
+
 // CUDA
 class cu_buffer: public buffer
 {
@@ -46,3 +56,5 @@ public:
 }
 
 #endif
+
+

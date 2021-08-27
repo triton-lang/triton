@@ -35,6 +35,9 @@ namespace driver
 
 //
 
+buffer::buffer(size_t size, hipDeviceptr_t hip, bool take_ownership)
+  : polymorphic_resource(hip, take_ownership), size_(size) {}
+
 buffer::buffer(size_t size, CUdeviceptr cu, bool take_ownership)
   : polymorphic_resource(cu, take_ownership), size_(size) { }
 
@@ -47,7 +50,8 @@ size_t buffer::size() {
 
 uintptr_t buffer::addr_as_uintptr_t() {
   switch(backend_){
-    case CUDA: return *cu_;
+    case HIP : return (uintptr_t)*hip_;
+    case CUDA: return (uintptr_t)*cu_;
     case Host: return (uintptr_t)hst_->data;
     default: return 0;
   }
@@ -56,6 +60,7 @@ uintptr_t buffer::addr_as_uintptr_t() {
 
 buffer* buffer::create(driver::context* ctx, size_t size) {
   switch(ctx->backend()){
+//  case HIP : return new hip_buffer(size);
   case CUDA: return new cu_buffer(size);
   case Host: return new host_buffer(size);
   default: throw std::runtime_error("unknown backend");
@@ -71,18 +76,34 @@ host_buffer::host_buffer(size_t size)
 
 
 //
+template<class T> struct _fn {} ;
 
-cu_buffer::cu_buffer(size_t size)
-  : buffer(size, CUdeviceptr(), true) {
-  dispatch::cuMemAlloc(&*cu_, size);
+template<> struct _fn<hipDeviceptr_t>{
+  static constexpr auto alloc = dispatch::hipMalloc;
+  static constexpr auto memset_async = dispatch::hipMemsetD8Async;
+  static hipDeviceptr_t& h(buffer* buf) { return *buf->hip(); };
+};
+
+template<> struct _fn<CUdeviceptr>{
+  static constexpr auto alloc = dispatch::cuMemAlloc_v2;
+  static constexpr auto memset_async = dispatch::cuMemsetD8Async;
+  static CUdeviceptr& h(buffer* buf) { return *buf->cu(); };
+};
+
+template<class T>
+cu_hip_buffer<T>::cu_hip_buffer(size_t size)
+  : buffer(size, T(), true) {
+  _fn<T>::alloc(&_fn<T>::h(this), size);
 }
 
-cu_buffer::cu_buffer(size_t size, CUdeviceptr cu, bool take_ownership)
-  : buffer(size, cu, take_ownership){
+template<class T>
+cu_hip_buffer<T>::cu_hip_buffer(size_t size, T handle, bool take_ownership)
+  : buffer(size, handle, take_ownership){
 }
 
-void cu_buffer::set_zero(driver::stream* queue, size_t size){
-  dispatch::cuMemsetD8Async(*cu_, 0, size, *queue->cu());
+template<class T>
+void cu_hip_buffer<T>::set_zero(driver::stream* queue, size_t size){
+  _fn<T>::memset_async(_fn<T>::h(this), 0, size, *queue->cu());
 }
 
 }
