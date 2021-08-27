@@ -113,6 +113,11 @@ void init_triton_codegen(py::module &&m) {
   m.def(
       "add_passes_to_emit_bin", [](ir::module &ir, uint64_t device, int num_warps, int num_stages, bool force_nc_cache) {
         std::string name = ir.get_function_list()[0]->get_name();
+        // record asm as we generate
+        std::map<std::string, std::string> asm_map;
+        std::ostringstream ttir;
+        ir::print(ir, ttir);
+        asm_map["ttir"] = ttir.str();
         // device properties
         CUdevice dev = (CUdevice)device;
         size_t major = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>(dev);
@@ -123,8 +128,12 @@ void init_triton_codegen(py::module &&m) {
         // Triton-IR -> LLVM-IR
         llvm::LLVMContext ctx;
         auto llvm = triton::codegen::add_passes_to_emit_bin(ir, ctx, cc, num_warps, num_stages, force_nc_cache);
+        llvm::raw_string_ostream llir(asm_map["llir"]);
+        llir << *llvm;
+        llir.flush();
         // LLVM-IR -> PTX
         std::string ptx = drv::llir_to_ptx(&*llvm, cc, version);
+        asm_map["ptx"] = ptx;
         // PTX -> Binary
         CUmodule mod = drv::ptx_to_cumodule(ptx, cc);
         // Handle to the kernel
@@ -141,7 +150,8 @@ void init_triton_codegen(py::module &&m) {
         drv::dispatch::cuFuncGetAttribute(&n_reg, CU_FUNC_ATTRIBUTE_NUM_REGS, fun);
         if (shared_optin > 49152)
             drv::dispatch::cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin - shared_static);
-        return std::make_tuple((uint64_t)mod, (uint64_t)fun, shared_static, "");
+        // record asm
+        return std::make_tuple((uint64_t)mod, (uint64_t)fun, asm_map, shared_static);
 
       },
       py::return_value_policy::take_ownership);

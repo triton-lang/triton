@@ -411,9 +411,9 @@ class CodeGenerator(ast.NodeVisitor):
 
 
 class Binary:
-    def __init__(self, module, kernel, num_warps, num_stages, force_nc_cache, shared_mem, ir_asm):
+    def __init__(self, module, kernel, asm, num_warps, num_stages, force_nc_cache, shared_mem):
         # cache ir asm
-        self.ir_asm = ir_asm
+        self.asm = asm
         self.module = module
         self.kernel = kernel
         self.shared_mem = shared_mem
@@ -422,26 +422,6 @@ class Binary:
         self.force_nc_cache = force_nc_cache
         self.sass = None
         self.backend = _triton.runtime.backend.CUDA
-
-    def asm(self, mode):
-        if mode == 'ttir':
-            return self.ir_asm
-        if mode == 'ptx':
-            return self.module.ptx()
-        if mode == 'sass':
-            if self.sass is None:
-                cubin = self.module.cubin()
-                # get a temporary file name
-                fd, path = tempfile.mkstemp(suffix='.cubin')
-                f = open(path, 'wb')
-                f.write(cubin)
-                f.close()
-                # extract SASS from cubin
-                self.sass = extract(path, None)
-            return self.sass
-        if mode == 'llir':
-            return self.module.llir()
-        raise ValueError('Unsupported mode ' + mode)
 
     def __call__(self, stream, args, grid_0, grid_1=1, grid_2=1):
         _triton.runtime.enqueue(self.backend, stream, self.kernel,
@@ -553,11 +533,11 @@ class Kernel:
                 raise e
             raise CompilationError(self.fn.src, node, e)
         # Compile to machine code
-        mod, ker, shared_mem, ir_asm = _triton.code_gen.add_passes_to_emit_bin(generator.module, device, num_warps, num_stages, force_nc_cache)
+        mod, ker, asm, shared_mem = _triton.code_gen.add_passes_to_emit_bin(generator.module, device, num_warps, num_stages, force_nc_cache)
         max_shared_memory = _triton.runtime.max_shared_memory(self.backend, device)
         if shared_mem > max_shared_memory:
             raise OutOfResources(shared_mem, max_shared_memory, "shared memory")
-        return Binary(mod, ker, num_warps, num_stages, force_nc_cache, shared_mem, ir_asm)
+        return Binary(mod, ker, asm, num_warps, num_stages, force_nc_cache, shared_mem)
 
     def __call__(self, *wargs, grid, num_warps=4, num_stages=2, force_nc_cache=False, **meta):
         # device inference
