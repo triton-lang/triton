@@ -209,7 +209,7 @@ generator::generator(analysis::axes *a_axes,
 void generator::visit_value(ir::value* v) {
   if(!seen_.insert(v).second)
     return;
-  std::cout << v->get_name() << std::endl;
+//  std::cout << v->get_name() << std::endl;
   if(v->get_type()->is_block_ty()){
     if(analysis::shared_layout* layout = layouts_->get(v)->to_shared()){
       analysis::N_buffer_info_t *n_buffer = layout->get_N_buffer();
@@ -1890,9 +1890,6 @@ void generator::visit_select_inst(ir::select_inst* x) {
 
 void generator::visit_layout_convert(ir::value *out, ir::value *in){
   ir::block_type::block_shapes_t shape = out->get_type()->get_block_shapes();
-//  analysis::mma_layout* in_layout2 = layouts_->get(in)->to_mma();
-//  analysis::scanline_layout* out_layout2 = layouts_->get(out)->to_scanline();
-//  std::cout << in_layout2 << " " << out_layout2 << std::endl;
   // pointer to temporary shared memory
   Type *ty = cvt(out->get_type()->get_scalar_ty());
   // Orders

@@ -75,6 +75,7 @@ void coalesce::run(ir::module &mod) {
         ir::instruction* new_x = ir::cvt_layout_inst::create(x);
         builder.insert(new_x);
         x->replace_all_uses_with(new_x);
+        new_x->replace_uses_of_with(new_x, x);
 //        new_x->replace_uses_of_with(new_x, new_x);
     }
     // re-arrange scanline to promote memory coalescing

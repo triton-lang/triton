@@ -70,10 +70,8 @@ void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps, 
   align.run(ir);
   axes.run(ir);
   layouts.run(ir);
-  std::cout << "coalescing" << std::endl;
   coalesce.run(ir);
   dce.run(ir);
-  ir::print(ir, std::cout);
 //  exit(1);
 
   align.run(ir);
@@ -85,24 +83,18 @@ void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps, 
   dce.run(ir);
   align.run(ir);
   axes.run(ir);
-  std::cout << "." << std::endl;
   layouts.run(ir);
-  std::cout << "." << std::endl;
   peephole.run(ir);
   dce.run(ir);
   align.run(ir);
   axes.run(ir);
-  std::cout << "." << std::endl;
   layouts.run(ir);
-  std::cout << "." << std::endl;
   swizzle.run(ir);
   liveness.run(ir);
   allocation.run(ir);
   prefetch_s.run(ir);
   barriers.run(ir);
-  ir::print(ir, std::cout);
   isel.visit(ir, *llvm);
-  std::cout << "done" << std::endl;
   mod = driver::module::create(dev, std::move(llvm));
   ker = driver::kernel::create(&*mod, name.c_str());
   shared_mem = allocation.allocated_size();
