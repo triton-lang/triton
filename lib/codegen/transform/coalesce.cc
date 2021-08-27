@@ -57,6 +57,7 @@ void coalesce::run(ir::module &mod) {
     // coalesce before store
     if(auto x = dynamic_cast<ir::store_inst*>(i))
     if(ir::value* op = x->get_value_operand())
+    if(op->get_type()->is_block_ty())
     if(layout_->get(op)->to_mma()){
       builder.set_insert_point(x);
       ir::instruction* new_op = ir::recoalesce_inst::create(op);
@@ -65,6 +66,7 @@ void coalesce::run(ir::module &mod) {
     }
     // uncoalesce after load
     if(auto x = dynamic_cast<ir::load_inst*>(i))
+    if(x->get_type()->is_block_ty())
     if(layout_->get(x)->to_mma()){
         builder.set_insert_point_after(x);
         ir::instruction* new_x = ir::decoalesce_inst::create(x);

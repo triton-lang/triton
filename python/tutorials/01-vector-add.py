@@ -101,7 +101,7 @@ print(
     triton.testing.Benchmark(
         x_names=['size'],  # argument names to use as an x-axis for the plot
         x_vals=[
-            2 ** i for i in range(12, 28, 1)
+            128
         ],  # different possible values for `x_name`
         x_log=True,  # x axis is logarithmic
         line_arg='provider',  # argument name whose value corresponds to a different line in the plot
@@ -121,6 +121,7 @@ def benchmark(size, provider):
     if provider == 'triton':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: add(x, y))
     gbps = lambda ms: 12 * size / ms * 1e-6
+    print(ms)
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
 

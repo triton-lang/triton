@@ -70,7 +70,6 @@ void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps, 
   align.run(ir);
   axes.run(ir);
   layouts.run(ir);
-//  ir::print(ir, std::cout);
   coalesce.run(ir);
   dce.run(ir);
 //  exit(1);
@@ -95,6 +94,7 @@ void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps, 
   allocation.run(ir);
   prefetch_s.run(ir);
   barriers.run(ir);
+//  ir::print(ir, std::cout);
   isel.visit(ir, *llvm);
   mod = driver::module::create(dev, std::move(llvm));
   ker = driver::kernel::create(&*mod, name.c_str());
