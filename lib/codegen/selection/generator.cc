@@ -209,6 +209,7 @@ generator::generator(analysis::axes *a_axes,
 void generator::visit_value(ir::value* v) {
   if(!seen_.insert(v).second)
     return;
+  std::cout << v->get_name() << std::endl;
   if(v->get_type()->is_block_ty()){
     if(analysis::shared_layout* layout = layouts_->get(v)->to_shared()){
       analysis::N_buffer_info_t *n_buffer = layout->get_N_buffer();
@@ -1889,6 +1890,9 @@ void generator::visit_select_inst(ir::select_inst* x) {
 
 void generator::visit_layout_convert(ir::value *out, ir::value *in){
   ir::block_type::block_shapes_t shape = out->get_type()->get_block_shapes();
+//  analysis::mma_layout* in_layout2 = layouts_->get(in)->to_mma();
+//  analysis::scanline_layout* out_layout2 = layouts_->get(out)->to_scanline();
+//  std::cout << in_layout2 << " " << out_layout2 << std::endl;
   // pointer to temporary shared memory
   Type *ty = cvt(out->get_type()->get_scalar_ty());
   // Orders
@@ -1899,7 +1903,6 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
   Value *base;
   base = gep(shmem_, i32(alloc_->offset(layouts_->get(layouts_->tmp(out)))));
   base = bit_cast(base, ptr_ty(ty, 3));
-
   std::vector<int> n_reps;
   for(int i = 0; i < shape.size(); i++){
     int in_per_cta = in_layout->shape_per_cta(i);
@@ -1917,7 +1920,6 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
   out_ord = out_layout->to_mma() ? in_ord : out_ord;
   Value *in_ld = i32(shape[in_ord[0]]);
   Value *out_ld = i32(shape[out_ord[0]]);
-
   for(int i = 0; i < n_reps[0]; i++)
   for(int j = 0; j < n_reps[1]; j++){
     int max_ii, max_jj;
@@ -1952,24 +1954,11 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
   }
 }
 
-void generator::visit_cvt_scanline_inst(ir::cvt_scanline_inst *rc) {
+void generator::visit_cvt_layout_inst(ir::cvt_layout_inst *rc) {
   visit_layout_convert(rc, rc->get_operand(0));
 }
 
-/**
- * \brief Code Generation for `decoalesce`
- */
-void generator::visit_decoalesce_inst(ir::decoalesce_inst* rc) {
-  visit_layout_convert(rc, rc->get_operand(0));
-}
-
-/**
- * \brief Code Generation for `recoalesce`
- */
-void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
-  visit_layout_convert(rc, rc->get_operand(0));
-}
-//void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
+//void generator::visit_cvt_layout_inst(ir::cvt_layout_inst* rc) {
 //  ir::value *op = rc->get_operand(0);
 //  ir::block_type::block_shapes_t shape = rc->get_type()->get_block_shapes();
 //  // pointer to temporary shared memory
@@ -1977,6 +1966,7 @@ void generator::visit_recoalesce_inst(ir::recoalesce_inst* rc) {
 //  // layout
 //  analysis::mma_layout* in_layout = layouts_->get(op)->to_mma();
 //  analysis::scanline_layout* out_layout = layouts_->get(rc)->to_scanline();
+//  std::cout << in_layout << " " << out_layout << std::endl;
 //  // Orders
 //  auto ord = layouts_->get(rc)->to_scanline()->get_order();
 //  Value *base;

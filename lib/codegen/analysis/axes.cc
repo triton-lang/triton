@@ -114,9 +114,7 @@ void axes::update_graph(ir::instruction *i) {
     case ir::INST_COPY_TO_SHARED:    return update_graph_no_edge(i);
     case ir::INST_MASKED_LOAD_ASYNC: return update_graph_elementwise(i, false);
     case ir::INST_COPY_FROM_SHARED:  return update_graph_no_edge(i);
-    case ir::INST_RECOALESCE:        return update_graph_no_edge(i);
-    case ir::INST_DECOALESCE:        return update_graph_no_edge(i);
-    case ir::INST_CVT_SCANLINE:      return update_graph_no_edge(i);
+    case ir::INST_CVT_LAYOUT:        return update_graph_no_edge(i);
     default:                         return update_graph_elementwise(i);
   }
   return;

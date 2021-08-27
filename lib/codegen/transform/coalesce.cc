@@ -19,34 +19,37 @@ coalesce::coalesce(analysis::align* align, analysis::layouts *layouts)
 // simplify layout conversions using the following simple rules:
 //   - cvt_1(cvt_2(x)) if convert1 is the inverse of convert2
 //   - cvt_1(elementwise(x, y)) = elementwise(convert(x), convert(y))
-ir::value* coalesce::simplify(ir::instruction *inst, ir::builder& builder){
-  ir::decoalesce_inst* dc = dynamic_cast<ir::decoalesce_inst*>(inst);
-  ir::recoalesce_inst* rc = dynamic_cast<ir::recoalesce_inst*>(inst);
-  // i must be layout conversion instruction
-  if(!dc && !rc)
-    return inst;
-  //   - cvt_1(cvt_2(x)) if convert1 is the inverse of convert2
-  ir::value* _op = inst->get_operand(0);
-  ir::instruction* op = dynamic_cast<ir::instruction*>(_op);
-  if(inst->get_id() == ir::INST_DECOALESCE && op->get_id() == ir::INST_RECOALESCE)
-    return op->get_operand(0);
-  if(op->get_id() == ir::INST_DECOALESCE && inst->get_id() == ir::INST_RECOALESCE)
-    return op->get_operand(0);
-  //   - cvt_1(elementwise(x, y)) = elementwise(cvt_1(x), cvt_2(y))
-  if(op->get_id() != ir::INST_BINOP)
-    return inst;
-  for(size_t i = 0; i < op->get_num_operands(); i++){
-    ir::value* arg_i = op->get_operand(i);
-    builder.set_insert_point(op);
-    // create new layout transform
-    ir::instruction* new_arg_i = inst->clone();
-    builder.insert(new_arg_i);
-    // set the right args
-    new_arg_i->replace_uses_of_with(new_arg_i->get_operand(0), arg_i);
-    op->replace_uses_of_with(arg_i, simplify(new_arg_i, builder));
-  }
-  return op;
-}
+//ir::value* coalesce::simplify(ir::instruction *inst, ir::builder& builder){
+//  ir::value* _op = inst->get_operand(0);
+//  ir::instruction* op = dynamic_cast<ir::instruction*>(_op);
+//  analysis::mma_layout* mma_in  = layout_->get(op)  ->to_mma();
+//  analysis::mma_layout* mma_out = layout_->get(inst)->to_mma();
+//  std::cout << 1 << std::endl;
+//  // i must be layout conversion instruction
+//  if(!mma_in && !mma_out)
+//    return inst;
+//  //   - cvt_1(cvt_2(x)) if convert1 is the inverse of convert2
+//  bool is_op_cvt = op->get_id() == ir::INST_CVT_LAYOUT;
+//  if((mma_in || mma_out) && is_op_cvt &&
+//     (layout_->get(inst) == layout_->get(op->get_operand(0))))
+//    return op->get_operand(0);
+//  //   - cvt_1(elementwise(x, y)) = elementwise(cvt_1(x), cvt_2(y))
+//  if(op->get_id() != ir::INST_BINOP && op->get_id() != ir::INST_GETELEMENTPTR)
+//    return inst;
+//  std::cout << 1 << std::endl;
+//  for(size_t i = 0; i < op->get_num_operands(); i++){
+//    ir::value* arg_i = op->get_operand(i);
+//    builder.set_insert_point(op);
+//    // create new layout transform
+//    ir::instruction* new_arg_i = inst->clone();
+//    builder.insert(new_arg_i);
+//    // set the right args
+//    new_arg_i->replace_uses_of_with(new_arg_i->get_operand(0), arg_i);
+//    op->replace_uses_of_with(arg_i, simplify(new_arg_i, builder));
+//  }
+//  std::cout << 2 << std::endl;
+//  return op;
+//}
 
 void coalesce::run(ir::module &mod) {
   ir::builder& builder = mod.get_builder();
@@ -60,19 +63,19 @@ void coalesce::run(ir::module &mod) {
     if(op->get_type()->is_block_ty())
     if(layout_->get(op)->to_mma()){
       builder.set_insert_point(x);
-      ir::instruction* new_op = ir::recoalesce_inst::create(op);
+      ir::instruction* new_op = ir::cvt_layout_inst::create(op);
       builder.insert(new_op);
-      x->replace_uses_of_with(op, simplify(new_op, builder));
+      x->replace_uses_of_with(op, new_op);
     }
     // uncoalesce after load
     if(auto x = dynamic_cast<ir::load_inst*>(i))
     if(x->get_type()->is_block_ty())
     if(layout_->get(x)->to_mma()){
         builder.set_insert_point_after(x);
-        ir::instruction* new_x = ir::decoalesce_inst::create(x);
+        ir::instruction* new_x = ir::cvt_layout_inst::create(x);
         builder.insert(new_x);
         x->replace_all_uses_with(new_x);
-        new_x->replace_uses_of_with(new_x, simplify(x, builder));
+//        new_x->replace_uses_of_with(new_x, new_x);
     }
     // re-arrange scanline to promote memory coalescing
     if(auto x = dynamic_cast<ir::store_inst*>(i)){
@@ -82,7 +85,7 @@ void coalesce::run(ir::module &mod) {
       auto val_inst = dynamic_cast<ir::instruction*>(val);
       if(!val_inst)
         break;
-      if(dynamic_cast<ir::recoalesce_inst*>(val))
+      if(dynamic_cast<ir::cvt_layout_inst*>(val))
         break;
       std::vector<unsigned> in_contig;
       std::vector<ir::instruction*> queue = {val_inst};
@@ -112,7 +115,7 @@ void coalesce::run(ir::module &mod) {
         continue;
 //      std::cout << in_contig.size() << " " << out_contig.size() << " " << in_contig[0] << " " << out_contig[0] << std::endl;
       builder.set_insert_point_after(val_inst);
-      auto new_val = builder.insert(ir::cvt_scanline_inst::create(val_inst));
+      auto new_val = builder.insert(ir::cvt_layout_inst::create(val_inst));
       x->replace_uses_of_with(val_inst, new_val);
     }
   }

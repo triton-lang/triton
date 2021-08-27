@@ -515,53 +515,18 @@ void layouts::run(ir::module &mod) {
       layouts_[id] = new shared_layout(layout, axes_->get(arg), shapes, {red}, red->get_type()->get_scalar_ty(), align_);
       tmp_[red] = id;
     }
-    if(auto *cvt_scanline = dynamic_cast<ir::cvt_scanline_inst*>(i)){
-      ir::value *val = cvt_scanline;
-      scanline_layout* out_layout = get(val)->to_scanline();
-      scanline_layout* in_layout = get(i->get_operand(0))->to_scanline();
-      if(!out_layout || !in_layout)
-        return;
+    if(auto *val = dynamic_cast<ir::cvt_layout_inst*>(i)){
+      distributed_layout* out_layout = dynamic_cast<distributed_layout*>(get(val));
+      distributed_layout* in_layout = dynamic_cast<distributed_layout*>(get(i->get_operand(0)));
       id++;
-      ir::type::block_shapes_t shape = val->get_type()->get_block_shapes();
-      // create layout
-      layouts_[id] = new shared_layout(in_layout, axes_->get(val), shape, {cvt_scanline}, val->get_type()->get_scalar_ty(), align_);
-      tmp_[cvt_scanline] = id;
-    }
-    if(auto *decoalasce = dynamic_cast<ir::decoalesce_inst*>(i)){
-      ir::value *val = decoalasce;
-      mma_layout* out_layout = get(val)->to_mma();
-      scanline_layout* in_layout = get(i->get_operand(0))->to_scanline();
-      if(!out_layout || !in_layout)
-        return;
-      id++;
-      ir::type::block_shapes_t out_shape = val->get_type()->get_block_shapes();
-      ir::type::block_shapes_t shape(out_shape.size());
-      size_t ld = in_layout->get_order(0);
-      shape[ld] = out_shape[ld];
-      for(size_t k = 0; k < out_shape.size(); k++)
-        if(k != ld)
-          shape[k] = out_layout->to_mma()->shape_per_cta(k);
-      // create layout
-      layouts_[id] = new shared_layout(in_layout, axes_->get(val), shape, {decoalasce}, val->get_type()->get_scalar_ty(), align_);
-      tmp_[decoalasce] = id;
-    }
-    if(auto *recoalasce = dynamic_cast<ir::recoalesce_inst*>(i)){
-      ir::value *val = recoalasce->get_operand(0);
-      mma_layout* in_layout = get(val)->to_mma();
-      scanline_layout* out_layout = get(i)->to_scanline();
-      if(!in_layout || !out_layout)
-        return;
-      id++;
-      ir::type::block_shapes_t in_shape = val->get_type()->get_block_shapes();
-      ir::type::block_shapes_t shape(in_shape.size());
-      size_t ld = out_layout->get_order(0);
-      shape[ld] = in_shape[ld];
-      for(size_t k = 0; k < in_shape.size(); k++)
-        if(k != ld)
-          shape[k] = in_layout->to_mma()->shape_per_cta(k);
-      // create layout
-      layouts_[id] = new shared_layout(out_layout, axes_->get(val), shape, {recoalasce}, val->get_type()->get_scalar_ty(), align_);
-      tmp_[recoalasce] = id;
+      size_t dim = val->get_type()->get_tile_rank();
+      ir::type::block_shapes_t shape(dim);
+      for(size_t k = 0; k < dim; k++){
+        shape[k] = std::max(in_layout->shape_per_cta(k),
+                            out_layout->shape_per_cta(k));
+      }
+      layouts_[id] = new shared_layout(out_layout, axes_->get(val), shape, {val}, val->get_type()->get_scalar_ty(), align_);
+      tmp_[val] = id;
     }
     if(auto *atom = dynamic_cast<ir::atomic_inst*>(i)){
       id++;
