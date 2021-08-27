@@ -1,8 +1,5 @@
 ﻿#include "triton/codegen/pass.h"
 #include "triton/driver/error.h"
-#include "triton/driver/kernel.h"
-#include "triton/driver/module.h"
-#include "triton/driver/stream.h"
 #include "triton/driver/llvm.h"
 #include "triton/ir/builder.h"
 #include "triton/ir/dispatch.h"

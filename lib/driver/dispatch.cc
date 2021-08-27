@@ -21,7 +21,6 @@
 */
 
 #include "triton/driver/dispatch.h"
-#include "triton/driver/context.h"
 #include "triton/tools/sys/getenv.hpp"
 
 namespace triton
