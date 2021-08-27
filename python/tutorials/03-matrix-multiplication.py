@@ -166,6 +166,7 @@ import triton.language as tl
         triton.Config({'BLOCK_SIZE_M': 32 , 'BLOCK_SIZE_N': 64 , 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
     ],
     key=['M', 'N', 'K'],
+    reset_to_zero=['c_ptr']
 )
 # %
 # We can now define our kernel as normal, using all the techniques presented above
@@ -250,6 +251,7 @@ def matmul_kernel(
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    c += tl.load(c_ptrs, mask=c_mask)
     tl.store(c_ptrs, c, mask=c_mask)
 
 
@@ -275,7 +277,7 @@ def matmul(a, b, activation=None):
         K % 32 == 0
     ), "We don't check memory-out-of-bounds with K so K must be divisible by BLOCK_SIZE_K"
     # allocates output
-    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
+    c = torch.ones((M, N), device=a.device, dtype=a.dtype)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),

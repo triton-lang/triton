@@ -55,7 +55,7 @@ void coalesce::run(ir::module &mod) {
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction* i: block->get_inst_list()){
     // coalesce before store
-    if(auto x = dynamic_cast<ir::masked_store_inst*>(i))
+    if(auto x = dynamic_cast<ir::store_inst*>(i))
     if(ir::value* op = x->get_value_operand())
     if(layout_->get(op)->to_mma()){
       builder.set_insert_point(x);
@@ -64,7 +64,7 @@ void coalesce::run(ir::module &mod) {
       x->replace_uses_of_with(op, simplify(new_op, builder));
     }
     // uncoalesce after load
-    if(auto x = dynamic_cast<ir::masked_load_inst*>(i))
+    if(auto x = dynamic_cast<ir::load_inst*>(i))
     if(layout_->get(x)->to_mma()){
         builder.set_insert_point_after(x);
         ir::instruction* new_x = ir::decoalesce_inst::create(x);
@@ -88,15 +88,18 @@ void coalesce::run(ir::module &mod) {
       std::vector<ir::io_inst*> ios;
       while(!queue.empty()){
         ir::instruction* curr = queue.back();
+        seen.insert(curr);
         queue.pop_back();
         if(auto io_inst = dynamic_cast<ir::io_inst*>(curr)){
           in_contig = align_->contiguous(io_inst->get_pointer_operand());
           break;
         }
-        seen.insert(curr);
         for(ir::value* op: curr->ops()){
           auto inst_op = dynamic_cast<ir::instruction*>(op);
           if(!inst_op || seen.find(inst_op) != seen.end())
+            continue;
+          if(!op->get_type()->is_block_ty() ||
+             !val->get_type()->is_block_ty())
             continue;
           if(op->get_type()->get_tile_num_elements() ==
              val->get_type()->get_tile_num_elements())

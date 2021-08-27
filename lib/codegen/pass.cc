@@ -70,8 +70,8 @@ void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps, 
   align.run(ir);
   axes.run(ir);
   layouts.run(ir);
-  coalesce.run(ir);
 //  ir::print(ir, std::cout);
+  coalesce.run(ir);
   dce.run(ir);
 //  exit(1);
 
