@@ -151,7 +151,7 @@ void init_triton_runtime(py::module &&m) {
 typedef std::map<std::string, std::string> asm_map_t;
 
 
-std::tuple<uint64_t, uint64_t, int> cu_compile_llir(const std::string& name, llvm::Module* llvm, uint64_t dev, asm_map_t& asm_map, int cc, int version){
+std::tuple<uint64_t, uint64_t> cu_compile_llir(const std::string& name, llvm::Module* llvm, uint64_t dev, asm_map_t& asm_map, int cc, int version){
   // LLVM-IR -> PTX
   std::string ptx = drv::llir_to_ptx(llvm, cc, version);
   asm_map["ptx"] = ptx;
@@ -172,7 +172,7 @@ std::tuple<uint64_t, uint64_t, int> cu_compile_llir(const std::string& name, llv
   if (shared_optin > 49152)
       drv::dispatch::cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin - shared_static);
   // record asm
-  return std::make_tuple((uint64_t)mod, (uint64_t)fun, shared_static);
+  return std::make_tuple((uint64_t)mod, (uint64_t)fun);
 }
 
 std::tuple<uint64_t, uint64_t> hip_compile_llir(const std::string& name, llvm::Module* llvm, uint64_t dev, asm_map_t& asm_map){
@@ -207,30 +207,28 @@ void init_triton_codegen(py::module &&m) {
           drv::dispatch::cuDriverGetVersion(&version);
           // Triton-IR -> NVPTX LLVM-IR
           triton::codegen::nvidia_cu_target target(cc);
-          int _;
-          auto llvm = triton::codegen::add_passes_to_emit_bin(ir, ctx, &target, cc, num_warps, num_stages, force_nc_cache, _);
+          int n_shared_bytes;
+          auto llvm = triton::codegen::add_passes_to_emit_bin(ir, ctx, &target, cc, num_warps, num_stages, force_nc_cache, n_shared_bytes);
           llvm::raw_string_ostream llir(asm_map["llir"]);
           llir << *llvm;
           llir.flush();
           // LLVM-IR -> Bin
           uint64_t mod, fun;
-          int shared_static;
-          auto ret = cu_compile_llir(name, &*llvm, device, asm_map, cc, version);
-          std::cout << std::get<2>(ret) << " " << _ << std::endl;
-          return std::make_tuple(std::get<0>(ret), std::get<1>(ret), asm_map, std::get<2>(ret));
+          std::tie(mod, fun) = cu_compile_llir(name, &*llvm, device, asm_map, cc, version);
+          return std::make_tuple(mod, fun, asm_map, n_shared_bytes);
         }
         if(backend == ROCM){
           // Triton-IR -> NVPTX LLVM-IR
           triton::codegen::amd_cl_target target;
-          int shared_static;
-          auto llvm = triton::codegen::add_passes_to_emit_bin(ir, ctx, &target, 70, num_warps, num_stages, force_nc_cache, shared_static);
+          int n_shared_bytes;
+          auto llvm = triton::codegen::add_passes_to_emit_bin(ir, ctx, &target, 70, num_warps, num_stages, force_nc_cache, n_shared_bytes);
           llvm::raw_string_ostream llir(asm_map["llir"]);
           llir << *llvm;
           llir.flush();
           // LLVM-IR -> Bin
           uint64_t mod, fun;
           std::tie(mod, fun) = hip_compile_llir(name, &*llvm, device, asm_map);
-          return std::make_tuple(mod, fun, asm_map, shared_static);
+          return std::make_tuple(mod, fun, asm_map, n_shared_bytes);
         }
       },
       py::return_value_policy::take_ownership);
