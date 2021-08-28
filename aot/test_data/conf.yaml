@@ -1,0 +1,24 @@
+compile_config:
+  force_nc_cache: false
+  num_stages: 4
+  num_warps: 4
+kernels:
+  _matmul:
+    meta:
+      ACTIVATION: leaky_relu
+      BLOCK_K: 32
+      BLOCK_M: 32
+      BLOCK_N: 64
+    type_variants: _, _, _, A, A, A, M, K, K, N, M, N
+    types: f32*,f32*,f32*,i32,i32,i32,I,I,I,I,I,I
+  add_kernel:
+    meta:
+      BLOCK_SIZE: 1024
+    type_variants: _,_,_,A
+    types: f32*,f32*,f32*,i64
+named_type_variants:
+  '*i': 16,24,28,30,31,1
+  A: 16,24
+  K: 1, 8
+  M: 1, 8
+  N: 1, 8

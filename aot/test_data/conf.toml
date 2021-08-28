@@ -1,0 +1,28 @@
+[named_type_variants]
+K = "1, 8"
+M = "1, 8"
+N = "1, 8"
+"*i" = "16,24,28,30,31,1"
+A = "16,24"
+
+[compile_config]
+num_warps = 4
+num_stages = 4
+force_nc_cache = false
+
+[kernels.add_kernel]
+types = "f32*,f32*,f32*,i64"
+type_variants = "_,_,_,A"
+
+[kernels._matmul]
+types = "f32*,f32*,f32*,i32,i32,i32,I,I,I,I,I,I"
+type_variants = "_, _, _, A, A, A, M, K, K, N, M, N"
+
+[kernels.add_kernel.meta]
+BLOCK_SIZE = 1024
+
+[kernels._matmul.meta]
+BLOCK_M = 32
+BLOCK_N = 64
+BLOCK_K = 32
+ACTIVATION = "leaky_relu"
