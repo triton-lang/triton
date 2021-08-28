@@ -47,6 +47,15 @@
 #include "llvm/ExecutionEngine/SectionMemoryManager.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
+// begin AMD stuff
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/FormattedStream.h"
+#include "llvm/Support/Program.h"
+#include "llvm/Support/ToolOutputFile.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
+// end AMD stuff
+
 namespace triton{
 namespace driver{
 
@@ -144,6 +153,7 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version){
   return result;
 }
 
+
 CUmodule ptx_to_cumodule(const std::string& ptx, int cc) {
   // JIT compile source-code
   try{
@@ -194,6 +204,114 @@ CUmodule ptx_to_cumodule(const std::string& ptx, int cc) {
     throw;
   }
 }
+
+/* ------------------------ */
+//         HIP              //
+/* ------------------------ */
+
+std::string llir_to_amdgpu(llvm::Module* module, int cc) {
+  init_llvm();
+  // create
+  llvm::SmallVector<char, 0> buffer;
+  std::string triple = "amdgcn-amd-amdhsa";
+  std::string layout = "";
+  std::string proc;
+  std::string features;
+  proc = "gfx906";
+  features = "+sramecc,-xnack";
+  // verify and store llvm
+  llvm::legacy::PassManager pm;
+  pm.add(llvm::createVerifierPass());
+  pm.run(*module);
+  // create machine
+  module->setTargetTriple(triple);
+  std::string error;
+  auto target = llvm::TargetRegistry::lookupTarget(module->getTargetTriple(), error);
+  llvm::TargetOptions opt;
+  opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
+  opt.UnsafeFPMath = false;
+  opt.NoInfsFPMath = false;
+  opt.NoNaNsFPMath = true;
+  llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), proc, features, opt,
+                                                             llvm::Reloc::PIC_, llvm::None,
+                                                             llvm::CodeGenOpt::Aggressive);
+  // set data layout
+  if(layout.empty())
+    module->setDataLayout(machine->createDataLayout());
+  else
+    module->setDataLayout(layout);
+  // emit machine code
+  for (llvm::Function &f : module->functions())
+    f.addFnAttr(llvm::Attribute::AlwaysInline);
+  llvm::legacy::PassManager pass;
+  llvm::raw_svector_ostream stream(buffer);
+
+  // create dump files
+  std::string module_name = module->getModuleIdentifier();
+  std::error_code ec;
+
+  // Save GCN ISA binary.
+  std::string isabin_path = std::string("/tmp/") + module_name + std::string(".o");
+  std::unique_ptr<llvm::raw_fd_ostream> isabin_fs(
+      new llvm::raw_fd_ostream(isabin_path, ec, llvm::sys::fs::OF_Text));
+  if (ec)
+  {
+    std::cout << isabin_path << " was not created. error code: " << ec << std::endl;
+  }
+
+  // emit
+  machine->addPassesToEmitFile(pass, *isabin_fs, nullptr, llvm::CGFT_ObjectFile);
+  pass.run(*module);
+  // Save GCN ISA.
+  std::string amdgcn_path = std::string("/tmp/") + module_name + std::string(".gcn");
+  std::string result(buffer.begin(), buffer.end());
+  std::ofstream amdgcn(amdgcn_path);
+  amdgcn << result;
+  amdgcn.close();
+
+  // generate HASCO file
+  std::string hsaco_path = std::string("/tmp/") + module_name + std::string(".hsaco");
+  std::string error_message;
+  int lld_result =
+      llvm::sys::ExecuteAndWait("/opt/rocm/llvm/bin/ld.lld",
+                                {"/opt/rocm/llvm/bin/ld.lld", "-flavor", "gnu", "-shared", "-o", hsaco_path, isabin_path},
+                                llvm::None, {}, 0, 0, &error_message);
+  if (lld_result)
+  {
+    std::cout << "ld.lld execute fail: " << std::endl;
+    std::cout << error_message << std::endl;
+    std::cout << lld_result << std::endl;
+  }
+
+  return hsaco_path;
+}
+
+
+hipModule_t amdgpu_to_hipmodule(const std::string& path) {
+  // Read HSACO.
+  std::ifstream hsaco_file(path, std::ios::binary | std::ios::ate);
+  std::ifstream::pos_type hsaco_file_size = hsaco_file.tellg();
+
+  std::vector<unsigned char> hsaco(hsaco_file_size);
+  hsaco_file.seekg(0, std::ios::beg);
+  hsaco_file.read(reinterpret_cast<char*>(&hsaco[0]), hsaco_file_size);
+  hsaco_file.close();
+  hipJitOption opt[] = {hipJitOptionErrorLogBufferSizeBytes, hipJitOptionErrorLogBuffer,
+                            hipJitOptionInfoLogBufferSizeBytes, hipJitOptionInfoLogBuffer,
+                            hipJitOptionLogVerbose};
+  unsigned int errbufsize = 8192;
+  unsigned int logbufsize = 8192;
+  char _err[errbufsize];
+  char _log[logbufsize];
+  void* optval[] = {(void*)(uintptr_t)errbufsize,
+                    (void*)_err, (void*)(uintptr_t)logbufsize,
+                    (void*)_log, (void*)1};
+  hipModule_t ret;
+  dispatch::hipModuleLoadDataEx(&ret, hsaco.data(), 5, opt, optval);
+  return ret;
+}
+
+
 
 }
 }

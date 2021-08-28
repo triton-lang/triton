@@ -279,3 +279,8 @@ typedef enum hipFuncCache_t {
     hipFuncCachePreferL1,      ///< prefer larger L1 cache and smaller shared memory
     hipFuncCachePreferEqual,   ///< prefer equal size L1 cache and shared memory
 } hipFuncCache_t;
+
+
+#define HIP_LAUNCH_PARAM_BUFFER_POINTER ((void*)0x01)
+#define HIP_LAUNCH_PARAM_BUFFER_SIZE ((void*)0x02)
+#define HIP_LAUNCH_PARAM_END ((void*)0x03)

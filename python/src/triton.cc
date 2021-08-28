@@ -33,11 +33,70 @@ int cuGetInfo(CUdevice device) {
   return res;
 }
 
+template<hipDeviceAttribute_t attr>
+int hipGetInfo(hipDevice_t device) {
+  int res;
+  drv::dispatch::hipDeviceGetAttribute(&res, attr, device);
+  return res;
+}
+
 enum backend_t {
   HOST,
   CUDA,
   ROCM,
 };
+
+void cu_enable_peer_access(uint64_t peer_ptr){
+  CUcontext context;
+  drv::dispatch::cuPointerGetAttribute(&context, CU_POINTER_ATTRIBUTE_CONTEXT, peer_ptr);
+  try {
+      drv::dispatch::cuCtxEnablePeerAccess(context, 0);
+  } catch (drv::exception::cuda::peer_access_already_enabled) {}
+}
+
+void host_enqueue(uint64_t stream, uint64_t kernel,
+                  uint64_t grid_0, uint64_t grid_1, uint64_t grid_2,
+                  uint64_t block_0, uint64_t block_1, uint64_t block_2,
+                  void* args_ptr, size_t args_size, int64_t shared_mem){
+  throw std::runtime_error("unsupported");
+// auto hst = kernel->module()->hst();
+// hst_->futures->reserve(hst_->futures->size() + grid[0]*grid[1]*grid[2]);
+// char* params = new char[args_size];
+// std::memcpy((void*)params, (void*)args, args_size);
+// for(size_t i = 0; i < grid[0]; i++)
+//   for(size_t j = 0; j < grid[1]; j++)
+//     for(size_t k = 0; k < grid[2]; k++)
+//       hst_->futures->emplace_back(hst_->pool->enqueue(hst->fn, (char**)params, int32_t(i), int32_t(j), int32_t(k)));
+}
+
+void cu_enqueue(uint64_t stream, uint64_t kernel,
+                uint64_t grid_0, uint64_t grid_1, uint64_t grid_2,
+                uint64_t block_0, uint64_t block_1, uint64_t block_2,
+                void* args_ptr, size_t args_size, int64_t shared_mem){
+  void *config[] = {
+      CU_LAUNCH_PARAM_BUFFER_POINTER, (void*)args_ptr,
+      CU_LAUNCH_PARAM_BUFFER_SIZE,    &args_size,
+      CU_LAUNCH_PARAM_END
+  };
+  drv::dispatch::cuLaunchKernel((CUfunction)kernel, grid_0, grid_1, grid_2, 
+                                block_0, block_1, block_2, 
+                                shared_mem, (CUstream)stream, nullptr, config);
+}
+
+void hip_enqueue(uint64_t stream, uint64_t kernel,
+                uint64_t grid_0, uint64_t grid_1, uint64_t grid_2,
+                uint64_t block_0, uint64_t block_1, uint64_t block_2,
+                void* args_ptr, size_t args_size, int64_t shared_mem) {
+  void *config[] = {
+      HIP_LAUNCH_PARAM_BUFFER_POINTER, (void*)args_ptr,
+      HIP_LAUNCH_PARAM_BUFFER_SIZE,    &args_size,
+      HIP_LAUNCH_PARAM_END
+  };
+  drv::dispatch::hipModuleLaunchKernel((hipFunction_t)kernel, grid_0, grid_1, grid_2, 
+                                block_0, block_1, block_2, 
+                                shared_mem, (hipStream_t)stream, nullptr, config);
+
+}
 
 void init_triton_runtime(py::module &&m) {
 
@@ -52,11 +111,7 @@ void init_triton_runtime(py::module &&m) {
   m.def("enable_peer_access", [](backend_t backend, uint64_t peer_ptr) {
       if (backend != CUDA)
         throw std::runtime_error("P2P only supported on CUDA devices!");
-      CUcontext context;
-      drv::dispatch::cuPointerGetAttribute(&context, CU_POINTER_ATTRIBUTE_CONTEXT, peer_ptr);
-      try {
-        drv::dispatch::cuCtxEnablePeerAccess(context, 0);
-      } catch (drv::exception::cuda::peer_access_already_enabled) {}
+      cu_enable_peer_access(peer_ptr);
     }
   );
 
@@ -66,7 +121,9 @@ void init_triton_runtime(py::module &&m) {
         return 0;
       if(backend == CUDA) 
         return cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN>(device);
-      throw std::runtime_error("hip not supported");
+      if(backend == ROCM)
+        return hipGetInfo<hipDeviceAttributeMaxSharedMemoryPerBlock>(device);
+      return -1;
   });
 
   // enqueue
@@ -74,32 +131,14 @@ void init_triton_runtime(py::module &&m) {
                       uint64_t grid_0, uint64_t grid_1, uint64_t grid_2,
                       uint64_t block_0, uint64_t block_1, uint64_t block_2,
                       const std::string &args, int64_t shared_mem){
-    const void* args_ptr = args.data();
+    void* args_ptr = (void*)args.data();
     size_t args_size = args.size();
-    if(backend == HOST) {
-        throw std::runtime_error("CPU not yet supported");
-        // auto hst = kernel->module()->hst();
-        // hst_->futures->reserve(hst_->futures->size() + grid[0]*grid[1]*grid[2]);
-        // char* params = new char[args_size];
-        // std::memcpy((void*)params, (void*)args, args_size);
-        // for(size_t i = 0; i < grid[0]; i++)
-        //   for(size_t j = 0; j < grid[1]; j++)
-        //     for(size_t k = 0; k < grid[2]; k++)
-        //       hst_->futures->emplace_back(hst_->pool->enqueue(hst->fn, (char**)params, int32_t(i), int32_t(j), int32_t(k)));
-    }
-    if(backend == CUDA) {
-      void *config[] = {
-          CU_LAUNCH_PARAM_BUFFER_POINTER, (void*)args_ptr,
-          CU_LAUNCH_PARAM_BUFFER_SIZE,    &args_size,
-          CU_LAUNCH_PARAM_END
-      };
-      drv::dispatch::cuLaunchKernel((CUfunction)kernel, grid_0, grid_1, grid_2, 
-                                    block_0, block_1, block_2, 
-                                   shared_mem, (CUstream)stream, nullptr, config);
-    }
-    if(backend == ROCM) {
-      throw std::runtime_error("ROCM not yet supported");
-    }
+    if(backend == HOST)
+      host_enqueue(stream, kernel, grid_0, grid_1, grid_2, block_0, block_1, block_2, args_ptr, args_size, shared_mem);
+    if(backend == CUDA)
+      cu_enqueue(stream, kernel, grid_0, grid_1, grid_2, block_0, block_1, block_2, args_ptr, args_size, shared_mem);
+    if(backend == ROCM)
+      hip_enqueue(stream, kernel, grid_0, grid_1, grid_2, block_0, block_1, block_2, args_ptr, args_size, shared_mem);
   });
 
   
@@ -111,7 +150,7 @@ void init_triton_runtime(py::module &&m) {
 
 void init_triton_codegen(py::module &&m) {
   m.def(
-      "add_passes_to_emit_bin", [](ir::module &ir, uint64_t device, int num_warps, int num_stages, bool force_nc_cache) {
+      "compile_ttir", [](ir::module &ir, uint64_t device, int num_warps, int num_stages, bool force_nc_cache) {
         std::string name = ir.get_function_list()[0]->get_name();
         // record asm as we generate
         std::map<std::string, std::string> asm_map;
