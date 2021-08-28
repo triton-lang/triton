@@ -30,7 +30,7 @@ def find_cuda() -> cc.LibCudaConf:
 
 def find_c_compiler():
     # TODO: turn to real function
-    print("Warning!!! FAKE find compiler witn my local hard-coded paths")
+    print("Warning!!! FAKE find compiler witn GCC")
     import subprocess
     
     cuda = find_cuda()
@@ -72,10 +72,14 @@ def find_c_compiler():
 
 if __name__ == "__main__":
 
+    base = Path(__file__).parent / "test_data"
+    (base / "build").mkdir(parents=True, exist_ok=True)
+    (base / "bin").mkdir(parents=True, exist_ok=True)
+
     # Arguments
     # TODO: add argparsing
-    path_to_script = "test_data/_mod.py"
-    path_to_config = "test_data/conf.toml"
+    path_to_script = str(base / "_mod.py")
+    path_to_config = str(base / "conf.toml")
     lib_name = "aot_kernels"
 
     # this one is needed to init Cuda context
@@ -107,7 +111,9 @@ if __name__ == "__main__":
         # Compile all argument permutation
         print(f"[{idx+1}/{len(kernels)}] {ker_name}")
         
+        ker_count = 0
         for abst_args in kernel_conf.signiture_iter():
+            ker_count += 1
             attr_sign, bin_ = kernel.aot_compile(
                 *abst_args,
                 num_warps=kernel_conf.compile_params.num_warps,
@@ -128,7 +134,7 @@ if __name__ == "__main__":
                     next(kernel_conf.signiture_iter()), kernels[ker_name].fn.arg_names
                 ),
             )
-        print(f"\t -> Done.")
+        print(f"\t -> Done. Compiled {ker_count} kernel versions")
     
     compiler = find_c_compiler()
     compiler("test_data/bin", ccode.gen_c_code())
