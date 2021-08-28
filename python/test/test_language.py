@@ -34,6 +34,8 @@ def patch_kernel(template, to_replace):
     return kernel
 
 
+
+
 # generic test functions
 def _test_unary(dtype_x, expr, torch_expr=None, device='cuda'):
     SIZE = 128
@@ -384,3 +386,13 @@ def test_reduce1d(dtype, shape, device='cuda'):
 # ---------------
 # test while
 # ---------------
+
+# ---------------
+# test noop
+#----------------
+def test_noop(device='cuda'):
+    @triton.jit
+    def kernel(**meta):
+        pass
+    x = triton.testing.random((1,), dtype=torch.int32, device=device)
+    kernel[(1, )](x)

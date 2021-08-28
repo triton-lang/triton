@@ -411,7 +411,7 @@ class CodeGenerator(ast.NodeVisitor):
 
 
 class Binary:
-    def __init__(self, module, kernel, asm, num_warps, num_stages, force_nc_cache, shared_mem):
+    def __init__(self, backend, module, kernel, asm, num_warps, num_stages, force_nc_cache, shared_mem):
         # cache ir asm
         self.asm = asm
         self.module = module
@@ -421,7 +421,7 @@ class Binary:
         self.num_stages = num_stages
         self.force_nc_cache = force_nc_cache
         self.sass = None
-        self.backend = _triton.runtime.backend.CUDA
+        self.backend = backend
 
     def __call__(self, stream, args, grid_0, grid_1=1, grid_2=1):
         _triton.runtime.enqueue(self.backend, stream, self.kernel,
@@ -512,7 +512,6 @@ class Kernel:
 
     def __init__(self, fn):
         self.fn = fn
-        self.backend = _triton.runtime.backend.CUDA
 
     def _compile(self, *wargs, device, attributes, constants, num_warps, num_stages, force_nc_cache, **meta):
         # create IR module
@@ -533,11 +532,15 @@ class Kernel:
                 raise e
             raise CompilationError(self.fn.src, node, e)
         # Compile to machine code
-        mod, ker, asm, shared_mem = _triton.code_gen.compile_ttir(generator.module, device, num_warps, num_stages, force_nc_cache)
-        max_shared_memory = _triton.runtime.max_shared_memory(self.backend, device)
+        if torch.version.hip is None:
+            backend = _triton.runtime.backend.CUDA
+        else:
+            backend = _triton.runtime.backend.ROCM
+        mod, ker, asm, shared_mem = _triton.code_gen.compile_ttir(backend, generator.module, device, num_warps, num_stages, force_nc_cache)
+        max_shared_memory = _triton.runtime.max_shared_memory(backend, device)
         if shared_mem > max_shared_memory:
             raise OutOfResources(shared_mem, max_shared_memory, "shared memory")
-        return Binary(mod, ker, asm, num_warps, num_stages, force_nc_cache, shared_mem)
+        return Binary(backend, mod, ker, asm, num_warps, num_stages, force_nc_cache, shared_mem)
 
     def __call__(self, *wargs, grid, num_warps=4, num_stages=2, force_nc_cache=False, **meta):
         # device inference

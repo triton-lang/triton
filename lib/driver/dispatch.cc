@@ -207,7 +207,16 @@ NVML_DEFINE3(nvmlReturn_t, nvmlDeviceSetApplicationsClocks, nvmlDevice_t, unsign
  * HIP
  * ------------------- */
 bool dispatch::hipinit(){
-  return false;
+  if(hip_==nullptr)
+    hip_ = dlopen("libamdhip64.so", RTLD_LAZY);
+  if(hip_ == nullptr)
+    return false;
+  hipError_t (*fptr)();
+  hipInit_ = dlsym(hip_, "hipInit");
+  *reinterpret_cast<void **>(&fptr) = hipInit_;
+  hipError_t res = (*fptr)();
+  check(res);
+  return res;
 }
 
 #define HIP_DEFINE1(ret, fname, t1) DEFINE1(hipinit, hip_, ret, fname, t1)
@@ -250,7 +259,7 @@ HIP_DEFINE1(hipError_t, hipStreamSynchronize, hipStream_t)
 HIP_DEFINE1(hipError_t, hipStreamDestroy, hipStream_t)
 HIP_DEFINE11(hipError_t, hipModuleLaunchKernel, hipFunction_t, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, hipStream_t, void **, void **)
 // function management
-HIP_DEFINE3(hipError_t, hipFuncGetAttribute, int*, hipFuncAttribute, hipFunction_t)
+HIP_DEFINE2(hipError_t, hipFuncGetAttributes, hipFuncAttributes*, void*)
 HIP_DEFINE2(hipError_t, hipFuncSetCacheConfig, hipFunction_t, hipFuncCache_t)
 // memory management
 HIP_DEFINE3(hipError_t, hipMemcpyDtoH, void *, hipDeviceptr_t, size_t)

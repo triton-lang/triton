@@ -66,6 +66,10 @@ void init_llvm() {
     LLVMInitializeNVPTXTarget();
     LLVMInitializeNVPTXTargetMC();
     LLVMInitializeNVPTXAsmPrinter();
+    LLVMInitializeAMDGPUTargetInfo();
+    LLVMInitializeAMDGPUTarget();
+    LLVMInitializeAMDGPUTargetMC();
+    LLVMInitializeAMDGPUAsmPrinter();
     init = true;
   }
 }
@@ -209,16 +213,18 @@ CUmodule ptx_to_cumodule(const std::string& ptx, int cc) {
 //         HIP              //
 /* ------------------------ */
 
-std::string llir_to_amdgpu(llvm::Module* module, int cc) {
+std::string llir_to_amdgpu(llvm::Module* module, const std::string& _proc) {
   init_llvm();
+
+//  proc = std::get<0>(GetFeatureStrFromGCNArchName(rocminfo));
+//  features = std::get<1>(GetFeatureStrFromGCNArchName(rocminfo));
+
   // create
   llvm::SmallVector<char, 0> buffer;
   std::string triple = "amdgcn-amd-amdhsa";
   std::string layout = "";
-  std::string proc;
   std::string features;
-  proc = "gfx906";
-  features = "+sramecc,-xnack";
+  std::string proc = "gfx908";
   // verify and store llvm
   llvm::legacy::PassManager pm;
   pm.add(llvm::createVerifierPass());

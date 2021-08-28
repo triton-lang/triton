@@ -17,6 +17,8 @@
 // Developer note - when updating these, update the hipErrorName and hipErrorString functions in
 // NVCC and HCC paths Also update the hipCUDAErrorTohipError function in NVCC path.
 
+#include <cstddef>
+
 typedef enum hipError_t {
     hipSuccess = 0,  ///< Successful completion.
     hipErrorInvalidValue = 1,  ///< One or more of the parameters passed to the API call is NULL

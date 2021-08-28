@@ -165,7 +165,7 @@ public:
   static hipError_t hipStreamDestroy(hipStream_t hStream);
   static hipError_t hipModuleLaunchKernel(hipFunction_t f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, unsigned int sharedMemBytes, hipStream_t hStream, void **kernelParams, void **extra);
   // function management
-  static hipError_t hipFuncGetAttribute(int* pi, hipFuncAttribute attrib, hipFunction_t hfunc);
+  static hipError_t hipFuncGetAttributes(hipFuncAttributes* attrib, void* hfunc);
   static hipError_t hipFuncSetAttribute(hipFunction_t hfunc, hipFuncAttribute attrib, int value);
   static hipError_t hipFuncSetCacheConfig(hipFunction_t hfunc, hipFuncCache_t config);
   // memory management
@@ -290,7 +290,7 @@ private:
   static void* hipStreamDestroy_;
   static void* hipModuleLaunchKernel_;;
   // function management
-  static void* hipFuncGetAttribute_;
+  static void* hipFuncGetAttributes_;
   static void* hipFuncSetAttribute_;
   static void* hipFuncSetCacheConfig_;
   // memory management

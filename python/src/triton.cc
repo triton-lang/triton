@@ -1,4 +1,5 @@
 ﻿#include "triton/codegen/pass.h"
+#include "triton/codegen/target.h"
 #include "triton/driver/error.h"
 #include "triton/driver/llvm.h"
 #include "triton/ir/builder.h"
@@ -147,51 +148,88 @@ void init_triton_runtime(py::module &&m) {
 /*****************************************************************************/
 /* Python bindings for triton::codegen                                       */
 /*****************************************************************************/
+typedef std::map<std::string, std::string> asm_map_t;
+
+
+std::tuple<uint64_t, uint64_t, uint64_t> cu_compile_llir(const std::string& name, llvm::Module* llvm, uint64_t dev, asm_map_t& asm_map, int cc, int version){
+  // LLVM-IR -> PTX
+  std::string ptx = drv::llir_to_ptx(llvm, cc, version);
+  asm_map["ptx"] = ptx;
+  // PTX -> Binary
+  CUmodule mod = drv::ptx_to_cumodule(ptx, cc);
+  // Handle to the kernel
+  CUfunction fun;
+  drv::dispatch::cuModuleGetFunction(&fun, mod, name.c_str());
+  // Dynamic shared memory
+  drv::dispatch::cuFuncSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED);
+  int shared_total, shared_optin, shared_static;
+  int n_spills, n_reg;
+  drv::dispatch::cuDeviceGetAttribute(&shared_total, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR, dev);
+  drv::dispatch::cuDeviceGetAttribute(&shared_optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, dev);
+  drv::dispatch::cuFuncGetAttribute(&shared_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun);
+  drv::dispatch::cuFuncGetAttribute(&n_spills, CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES,  fun);
+  drv::dispatch::cuFuncGetAttribute(&n_reg, CU_FUNC_ATTRIBUTE_NUM_REGS, fun);
+  if (shared_optin > 49152)
+      drv::dispatch::cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin - shared_static);
+  // record asm
+  return std::make_tuple((uint64_t)mod, (uint64_t)fun, shared_static);
+}
+
+std::tuple<uint64_t, uint64_t> hip_compile_llir(const std::string& name, llvm::Module* llvm, uint64_t dev, asm_map_t& asm_map){
+  // LLVM-IR -> HSA-CO
+  std::string path = drv::llir_to_amdgpu(llvm, "gfx908");
+  // HSA-CO -> hipModule
+  hipModule_t mod = drv::amdgpu_to_hipmodule(path);
+  // Handle to the kernel
+  hipFunction_t fun;
+  drv::dispatch::hipModuleGetFunction(&fun, mod, name.c_str());
+  // record asm
+  return std::make_tuple((uint64_t)mod, (uint64_t)fun);
+}
 
 void init_triton_codegen(py::module &&m) {
   m.def(
-      "compile_ttir", [](ir::module &ir, uint64_t device, int num_warps, int num_stages, bool force_nc_cache) {
+      "compile_ttir", [](backend_t backend, ir::module &ir, uint64_t device, int num_warps, int num_stages, bool force_nc_cache) {
         std::string name = ir.get_function_list()[0]->get_name();
         // record asm as we generate
-        std::map<std::string, std::string> asm_map;
+        asm_map_t asm_map;
         std::ostringstream ttir;
         ir::print(ir, ttir);
         asm_map["ttir"] = ttir.str();
-        // device properties
-        CUdevice dev = (CUdevice)device;
-        size_t major = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>(dev);
-        size_t minor = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR>(dev);
-        size_t cc = major*10 + minor;
-        int version;
-        drv::dispatch::cuDriverGetVersion(&version);
-        // Triton-IR -> LLVM-IR
         llvm::LLVMContext ctx;
-        auto llvm = triton::codegen::add_passes_to_emit_bin(ir, ctx, cc, num_warps, num_stages, force_nc_cache);
-        llvm::raw_string_ostream llir(asm_map["llir"]);
-        llir << *llvm;
-        llir.flush();
-        // LLVM-IR -> PTX
-        std::string ptx = drv::llir_to_ptx(&*llvm, cc, version);
-        asm_map["ptx"] = ptx;
-        // PTX -> Binary
-        CUmodule mod = drv::ptx_to_cumodule(ptx, cc);
-        // Handle to the kernel
-        CUfunction fun;
-        drv::dispatch::cuModuleGetFunction(&fun, mod, name.c_str());
-        // Dynamic shared memory
-        drv::dispatch::cuFuncSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED);
-        int shared_total, shared_optin, shared_static;
-        int n_spills, n_reg;
-        drv::dispatch::cuDeviceGetAttribute(&shared_total, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR, dev);
-        drv::dispatch::cuDeviceGetAttribute(&shared_optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, dev);
-        drv::dispatch::cuFuncGetAttribute(&shared_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun);
-        drv::dispatch::cuFuncGetAttribute(&n_spills, CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES,  fun);
-        drv::dispatch::cuFuncGetAttribute(&n_reg, CU_FUNC_ATTRIBUTE_NUM_REGS, fun);
-        if (shared_optin > 49152)
-            drv::dispatch::cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin - shared_static);
-        // record asm
-        return std::make_tuple((uint64_t)mod, (uint64_t)fun, asm_map, shared_static);
-
+        if(backend == CUDA){
+          // device properties
+          CUdevice dev = (CUdevice)device;
+          size_t major = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>(dev);
+          size_t minor = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR>(dev);
+          size_t cc = major*10 + minor;
+          int version;
+          drv::dispatch::cuDriverGetVersion(&version);
+          // Triton-IR -> NVPTX LLVM-IR
+          triton::codegen::nvidia_cu_target target(cc);
+          int shared_static;
+          auto llvm = triton::codegen::add_passes_to_emit_bin(ir, ctx, &target, cc, num_warps, num_stages, force_nc_cache, shared_static);
+          llvm::raw_string_ostream llir(asm_map["llir"]);
+          llir << *llvm;
+          llir.flush();
+          // LLVM-IR -> Bin
+          uint64_t mod, fun;
+          std::tie(mod, fun, shared_static) = cu_compile_llir(name, &*llvm, device, asm_map, cc, version);
+          return std::make_tuple(mod, fun, asm_map, shared_static);
+        }
+        if(backend == ROCM){
+          // Triton-IR -> NVPTX LLVM-IR
+          triton::codegen::amd_cl_target target;
+          int shared_static;
+          auto llvm = triton::codegen::add_passes_to_emit_bin(ir, ctx, &target, 70, num_warps, num_stages, force_nc_cache, shared_static);
+          llvm::raw_string_ostream llir(asm_map["llir"]);
+          llir << *llvm;
+          llir.flush();
+          // LLVM-IR -> Bin
+          uint64_t mod, fun;
+          std::tie(mod, fun) = hip_compile_llir(name, &*llvm, device, asm_map);
+          return std::make_tuple(mod, fun, asm_map, shared_static);
+        }
       },
       py::return_value_policy::take_ownership);
 }

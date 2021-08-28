@@ -2230,12 +2230,12 @@ void generator::visit_function(ir::function* fn) {
   // set metadata
   if(tgt_->is_gpu()){
       tgt_->set_kernel(*builder_, ctx, mod_, ret);
-      Metadata *md_args[] = {
-        ValueAsMetadata::get(ret),
-        MDString::get(ctx, "maxntidx"),
-        ValueAsMetadata::get(i32(num_warps_*32))
-      };
-      mod_->getOrInsertNamedMetadata("nvvm.annotations")->addOperand(MDNode::get(ctx, md_args));
+//      Metadata *md_args[] = {
+//        ValueAsMetadata::get(ret),
+//        MDString::get(ctx, "maxntidx"),
+//        ValueAsMetadata::get(i32(num_warps_*32))
+//      };
+//      mod_->getOrInsertNamedMetadata("nvvm.annotations")->addOperand(MDNode::get(ctx, md_args));
   }
   // set arguments
   for(unsigned i = 0; i < fn->args().size(); i++)
