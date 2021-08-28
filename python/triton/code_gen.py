@@ -533,7 +533,7 @@ class Kernel:
                 raise e
             raise CompilationError(self.fn.src, node, e)
         # Compile to machine code
-        mod, ker, asm, shared_mem = _triton.code_gen.add_passes_to_emit_bin(generator.module, device, num_warps, num_stages, force_nc_cache)
+        mod, ker, asm, shared_mem = _triton.code_gen.compile_ttir(generator.module, device, num_warps, num_stages, force_nc_cache)
         max_shared_memory = _triton.runtime.max_shared_memory(self.backend, device)
         if shared_mem > max_shared_memory:
             raise OutOfResources(shared_mem, max_shared_memory, "shared memory")
