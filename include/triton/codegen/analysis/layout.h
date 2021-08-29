@@ -111,10 +111,15 @@ public:
   int rep(size_t k) { return rep_.at(k); }
 
 private:
+  // fragment per warp
   std::vector<int> fpw_;
+  // shape per warp
   std::vector<int> spw_;
+  // warp per tile
   std::vector<int> wpt_;
+  // shape per tile
   std::vector<int> spt_;
+  // repetitions
   std::vector<int> rep_;
 };
 
@@ -131,7 +136,9 @@ struct scanline_layout: public data_layout {
   int nts(size_t k) { return nts_.at(k); }
 
 public:
+  // micro tile size. The size of a tile held by a thread block.
   std::vector<int> mts_;
+  // nano tile size. The size of a tile held by a thread.
   std::vector<int> nts_;
 };
 

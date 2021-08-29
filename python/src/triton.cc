@@ -15,6 +15,7 @@
 #include <pybind11/stl.h>
 #include <regex>
 #include <string>
+#include <sstream>
 
 namespace py = pybind11;
 namespace ir = triton::ir;
