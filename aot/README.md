@@ -1,5 +1,5 @@
 # Ahead of Time Triton Compiler
-This is a prototype for discussion. Not usable at all, only to ideate stucture.
+This is a prototype for discussion. Not usable at all, only to ideate structure.
 
 The compiler takes a Triton kernel script and input type specification via config file as input and produces a shared library
 that launches the kernels.
@@ -59,18 +59,26 @@ CUresult add_kernel_i64_16(CUstream stream, GridWarps g, CUdeviceptr x_ptr, CUde
 
 ```
 
-## Whats going?
+## What's going on?
 
-1. Load and executre Triton module ([tt_bindings](tt_bindings.py))
-2. Parse config and build abstract inputy data ([compilation_config](compilation_config.py))
+1. Load and execute Triton module ([tt_bindings](tt_bindings.py))
+2. Parse config and build abstract input data ([compilation_config](compilation_config.py))
 3. Compile kernels with Triton ([aot_kernel](aot_kernel.py))
 4. C code generation ([c_codegen](c_codegen.py))
 5. C compilation ([ttc](ttc.py))
 
-### Noteable missing parts
+### Notable missing parts
 - auto kernel selection based on input sizes
 - compilation error handling
+- auto-tuner handling
+- device specification
 
 ### Points to discuss
+- kernel launching code efficiency 
 - best way to load kernels
 - ptx? cubin?
+
+### Suggested Goals
+- Efficient kernel launching
+- Informative and empathetic error messages
+- Easy to use config
