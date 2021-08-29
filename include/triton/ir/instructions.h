@@ -702,6 +702,16 @@ public:
   _TRITON_DEFINE_ACCEPT(dot_inst)
 };
 
+class bmm_inst : public builtin_inst {
+  bmm_inst(value *A, value *B, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "bmm"; }
+
+public:
+  static instruction *create(value *A, value *B, const std::string &name = "", instruction *next = nullptr);
+  _TRITON_DEFINE_CLONE(bmm_inst)
+  _TRITON_DEFINE_ACCEPT(bmm_inst)
+};
+
 //class outer_inst: public builtin_inst {
 //private:
 //  outer_inst(value *A, value *B, value *C, const std::string &name, instruction *next);

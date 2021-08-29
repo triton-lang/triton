@@ -1675,6 +1675,13 @@ void generator::visit_dot_inst(ir::dot_inst* dot) {
   return visit_fmadot(dot, A, B, D, NK, c_ty, f_mul_add);
 }
 
+void generator::visit_bmm_inst(ir::bmm_inst* bmm) {
+  ir::value *A = bmm->get_operand(0);
+  ir::value *B = bmm->get_operand(1);
+
+  throw std::runtime_error("Not implemented");
+}
+
 void generator::visit_trans_inst(ir::trans_inst* trans) {
   throw std::runtime_error("not supported");
 }

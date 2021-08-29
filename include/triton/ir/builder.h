@@ -148,6 +148,7 @@ public:
   value *create_sin(value* arg);
   value *create_log(value* arg);
   value *create_dot(value *A, value *B, value *C);
+  value *create_bmm(value *A, value *B);
   value *create_trans(value *A, const std::vector<int> &perm = {});
   value *create_sqrt(value *A);
   value *create_reduce(value *A, reduce_inst::op_t op, unsigned axis);

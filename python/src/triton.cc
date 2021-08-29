@@ -151,6 +151,7 @@ void init_triton_frontend(py::module &&m) {
   m.def("atomic_xor", &ir::dispatch::atomic_xor, ret::reference);
   // linear algebra
   m.def("dot", &ir::dispatch::dot, ret::reference);
+  m.def("bmm", &ir::dispatch::bmm, ret::reference);
   // indexing
   m.def("where", &ir::dispatch::where, ret::reference);
   // reduction

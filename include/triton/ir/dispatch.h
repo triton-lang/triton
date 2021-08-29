@@ -80,6 +80,7 @@ struct dispatch{
 
   // linear algebra
   static ir::value *dot(ir::value *lhs, ir::value *rhs, ir::builder *builder);
+  static ir::value *bmm(ir::value *lhs, ir::value *rhs, ir::builder *builder);
 
   // indexing
   static ir::value *where(ir::value* condition, ir::value *x, ir::value *y, ir::builder *builder);

@@ -349,6 +349,10 @@ value *builder::create_dot(value *A, value *B, value *C) {
   return insert(dot_inst::create_nn(A, B, C));
 }
 
+value *builder::create_bmm(value *A, value *B) {
+  return insert(bmm_inst::create(A, B));
+}
+
 value *builder::create_trans(value *A, const std::vector<int>& perm) {
   return insert(trans_inst::create(A, perm));
 }

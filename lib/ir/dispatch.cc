@@ -629,6 +629,10 @@ ir::value *dispatch::dot(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
   return builder->create_dot(lhs, rhs, _0);
 }
 
+ir::value *dispatch::bmm(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
+  return builder->create_bmm(lhs, rhs);
+}
+
 
 //===----------------------------------------------------------------------===//
 //                               Indexing

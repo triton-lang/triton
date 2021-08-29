@@ -150,6 +150,7 @@ enum value_id_t: unsigned {
   INST_TRANS,
   INST_REDUCE,
   INST_DOT,
+  INST_BMM,
   // intrinsics
   INST_COPY_TO_SHARED,
   INST_COPY_FROM_SHARED,

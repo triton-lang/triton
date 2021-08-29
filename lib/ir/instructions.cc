@@ -592,6 +592,16 @@ instruction *dot_inst::create_tt(value *A, value *B, value *C,
   return new dot_inst(A, B, C, Trans, Trans, name, next);
 }
 
+bmm_inst::bmm_inst(value *A, value *B, const std::string &name, instruction *next)
+    : builtin_inst(A->get_type(), INST_BMM, 2, name, next) {
+  set_operand(0, A);
+  set_operand(1, B);
+}
+
+instruction *bmm_inst::create(value *A, value *B, const std::string &name, instruction *next) {
+  return new bmm_inst(A, B, name, next);
+}
+
 //===----------------------------------------------------------------------===//
 //                               trans instructions
 //===----------------------------------------------------------------------===//

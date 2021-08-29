@@ -378,6 +378,12 @@ def dot(input, other, _builder=None):
     """
     return frontend.dot(input, other, _builder)
 
+@builtin
+def bmm(input, other, _builder=None):
+    """
+    Returns the batch matrix multiplication of two batch matrices.
+    """
+    return frontend.bmm(input, other, _builder)
 
 # -----------------------
 # Non-Atomic Memory Operations
