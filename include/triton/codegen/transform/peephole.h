@@ -34,8 +34,7 @@ private:
   bool rewrite_gep_ptr_min_off_plus_off(ir::instruction *value, ir::builder& builder);
   bool rewrite_select_masked_load(ir::instruction *value, ir::builder& builder);
   bool rewrite_load_to_shared(ir::instruction *value, ir::builder& builder);
-
-private:
+  bool rewrite_cvt_layout(ir::instruction *value, ir::builder& builder);
 
 public:
   peephole(target* tgt, analysis::layouts* layouts): tgt_(tgt), layouts_(layouts) {}

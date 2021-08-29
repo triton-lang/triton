@@ -489,6 +489,9 @@ void layouts::create(size_t id, const std::vector<ir::value*>& values) {
 void layouts::run(ir::module &mod) {
   // make graph
   graph_.clear();
+  layouts_.clear();
+  groups_.clear();
+
   ir::for_each_instruction(mod, [this](ir::instruction* i) {
     make_graph(i);
   });

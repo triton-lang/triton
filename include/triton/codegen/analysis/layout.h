@@ -225,6 +225,7 @@ public:
 
   // accessors
   unsigned layout_of(ir::value *value) const                  { return groups_.at(value); }
+  bool has(ir::value* value) const { return groups_.find(value) != groups_.end(); }
   const std::vector<ir::value*>& values_of(unsigned id) const { return values_.at(id); }
   size_t num_layouts() const                                  { return values_.size();}
   data_layout* get(size_t id)                                 { return layouts_.at(id); }
@@ -232,7 +233,7 @@ public:
   std::map<size_t, data_layout*> &get_all()                   { return layouts_; }
   bool has_tmp(ir::value* i)                                  { return tmp_.find(i) != tmp_.end(); }
   int tmp(ir::value* i)                                       { return tmp_.at(i);}
-
+  void copy(ir::value* dst, ir::value* src)                   { groups_[dst] = groups_[src]; }
   // execution
   void run(ir::module &mod);
 
