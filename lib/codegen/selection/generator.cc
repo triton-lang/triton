@@ -465,7 +465,7 @@ Value* generator::bf16_to_fp32(Value *in0){
 
 Value* generator::fp32_to_bf16(Value *in0){
   if(tgt_->as_nvidia()->sm() >= 80){
-    InlineAsm *ptx = InlineAsm::get(FunctionType::get(builder_->getInt16Ty(), {builder_->getFloatTy()}),
+    InlineAsm *ptx = InlineAsm::get(FunctionType::get(builder_->getInt16Ty(), {builder_->getFloatTy()}, false),
                                     "cvt.rn.bf16.f32 $0, $1;", "=h,r", false);
     return call(ptx, {in0});
   }
