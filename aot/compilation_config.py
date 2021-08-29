@@ -14,6 +14,18 @@ from abstract_values import (
 
 from _types import ModuleScope
 
+
+class ConfigKeys:
+    NAMED_VARIANTS = "named_type_variants"
+    COMPILATION_CONFIG = "compile_params"
+    KERNEL_SIGNITURES = "kernels"
+    INPUT_TYPES = "types"
+    TPYE_VARIANTS = "type_variants"
+    META_INPUT = "meta"
+    POINTER_TYPE = "*"
+    UNIQUE_VARIANT = "^"
+
+
 def dict_product(d):
     keys = d.keys()
     for element in product(*d.values()):
@@ -22,6 +34,7 @@ def dict_product(d):
 ValueMaker = Union[AbstractInt, AbstractFloat, AbstractBool]
 MetaValue = Union[int, float, bool, str]
 TypeVariant = str
+NamedVariantsMap = Mapping[str, Sequence[int]]
 
 
 @dataclass
@@ -46,6 +59,7 @@ class KernelSignitureConfig:
     compile_params: CompileParams
 
     def signiture_iter(self):
+        """ Iterate over all variants of abstract inputs """
         for prod_vals in dict_product(self.named_variants):
             abstract_vals = [
                 f(v)
@@ -56,13 +70,26 @@ class KernelSignitureConfig:
             yield self.pointers[:] + abstract_vals
 
 
-def parse_named_variants(d):
-    """Turn string variants into integers"""
+def parse_named_variants(global_named_variants: Mapping[str, str]) -> NamedVariantsMap:
+    """
+    Named variants are values assigned to kernel inputs for optimnization purposes.
+    Triton optimizes kernels based on input data size. In AOT compilation data size is not known at compile time.
+    Users can define several value options for input params and Triton will generate a kernel for each size combination.
+
+    To allow coupling of values among inputs, we allow named definition of possible variants.
+
+    Turn string variants into integers
+    """
     # TODO: parse error messages
-    return {k: [int(x) for x in d[k].split(",")] for k in d}
+    return {var_name: [int(x) for x in global_named_variants[var_name].split(",")] for var_name in global_named_variants}
 
 
 def parse_meta(meta_kwargs: Dict, module_scope: ModuleScope):
+    """
+    Parse meta attributes passed to kernels.
+    We allow floats, ints and strings that represent in scope JITFunctions.
+
+    """
     if module_scope is None:
         module_scope = {}
     meta = {}
@@ -92,41 +119,58 @@ def parse_meta(meta_kwargs: Dict, module_scope: ModuleScope):
     return meta
 
 
-def _parse_type_size_variants(var_ident: Sequence[str], nv: Dict):
-    """Build shared and private variants of current function"""
+def _parse_type_size_variants(var_ident: Sequence[str], nv: NamedVariantsMap) -> Tuple[Sequence[str], NamedVariantsMap]:
+    """
+    Type variants defined in a global scope (visible to all kernels). 
+    This function generates per kernel version of named variants.
+
+    "^" suffix means use a unique named variant. 
+    E.g:
+        A = 1, 8
+        Types:          x: 32, y:i32, z:i32
+        Type Variants:  A^,    A,     A
+    y and z attributes will have coupled values, first attribute will get it's own values.
+    in total |product([1,8], [1,8])| kernels will be compiled.
+    """
     private_var_count = 0
-    variants = {}
-    ordered_v_keys = []
+    locl_nv = {}
+    variant_keys = []
     for v in var_ident:
         if v == "_":
             continue
-        if v[-1] == "^":
+        if v[-1] == ConfigKeys.UNIQUE_VARIANT:
+            # Create unique name for 
             name = f"vv{private_var_count}"
             private_var_count += 1
-            variants[name] = nv[v[:-1]]
-            ordered_v_keys.append(name)
+            # TODO: propper named variant selection
+            locl_nv[name] = nv[v[:-1]]
+            variant_keys.append(name)
         elif v in nv:
-            variants[v] = nv[v]
-            ordered_v_keys.append(v)
+            locl_nv[v] = nv[v]
+            variant_keys.append(v)
 
-    return ordered_v_keys, variants
+    return variant_keys, locl_nv
 
 
-def parse_func(
+def parse_kernel(
     name: str,
     fconf: Mapping,
     named_variants: Mapping[str, Sequence[int]],
     compile_conf: CompileParams,
     module_scope: ModuleScope = None,
 ) -> KernelSignitureConfig:
-    tys = [v.strip() for v in fconf.get("types", "").split(",")]
-    ty_vars = [v.strip() for v in fconf.get("type_variants", "").split(",")]
+    """
+    Parse config files and prepare abstract kernel inputs for compilation optimization.
+    """
+
+    tys = [v.strip() for v in fconf.get(ConfigKeys.INPUT_TYPES, "").split(",")]
+    ty_vars = [v.strip() for v in fconf.get(ConfigKeys.TPYE_VARIANTS, "").split(",")]
     pointers = []
     type_makers = []
 
     for ty in tys:
         # Pointer type (e.g. Tensor)
-        if ty[-1] == "*":
+        if ty[-1] == ConfigKeys.POINTER_TYPE:
             # TODO: device hard coded to 0, needs config
             dtype = AbstractPtr(ty[:-1], DummyCudaDevice(0))
             pointers.append(dtype)
@@ -135,21 +179,22 @@ def parse_func(
             ty_cls = TYPE_MAKERS[ty]
             type_makers.append(ty_cls)
 
-    ordered_keys, variants = _parse_type_size_variants(ty_vars, named_variants)
+    variant_keys, local_named_vars = _parse_type_size_variants(ty_vars, named_variants)
 
-    meta = parse_meta(fconf.get("meta", {}), module_scope)
+    meta = parse_meta(fconf.get(ConfigKeys.META_INPUT, {}), module_scope)
 
+    # TODO: have better explanation of what went wrong
     assert len(type_makers) == len(
-        ordered_keys
-    ), f"In {name} function config got {len(type_makers)} values and {len(ordered_keys)} variants. \n\t Values and Variants must be of same length"
+        variant_keys
+    ), f"In {name} function config got {len(type_makers)} values and {len(variant_keys)} variants. \n\t Values and Variants must be of same length"
 
     return KernelSignitureConfig(
         name=name,
         pointers=pointers,
         abs_val_makers=type_makers,
-        variants=ordered_keys,
+        variants=variant_keys,
         meta=meta,
-        named_variants=variants,
+        named_variants=local_named_vars,
         compile_params=compile_conf,
     )
 
@@ -158,16 +203,16 @@ def parse_compilation_config(
     conf: Dict, module_scope: ModuleScope = None
 ) -> Mapping[str, KernelSignitureConfig]:
     
-    named_variants = parse_named_variants(conf.get("named_type_variants", {}))
-    compile_conf = CompileParams.from_dict(conf.get("compile_params", {}))
+    named_variants = parse_named_variants(conf.get(ConfigKeys.NAMED_VARIANTS, {}))
+    compile_conf = CompileParams.from_dict(conf.get(ConfigKeys.COMPILATION_CONFIG, {}))
 
     return {
-        func_name: parse_func(
+        func_name: parse_kernel(
             func_name,
             fconf,
             named_variants,
             compile_conf=compile_conf,
             module_scope=module_scope,
         )
-        for func_name, fconf in conf.get("kernels", {}).items()
+        for func_name, fconf in conf.get(ConfigKeys.KERNEL_SIGNITURES, {}).items()
     }

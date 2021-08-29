@@ -211,11 +211,3 @@ class SharedLibrarySource:
             raise Exception(f" {srcs.sources[0]} source write failed")
 
         return srcs
-
-if __name__ == "__main__":
-
-    src = Path("/home/aitu14/data-infra/ffi_sand/add.ptx").read_text()
-
-    sign = CInputSigniture()
-
-    print(gen_kernel_code("add_kernel", src, sign))
