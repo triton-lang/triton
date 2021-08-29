@@ -4,6 +4,14 @@ This is a prototype for discussion. Not usable at all, only to ideate structure.
 The compiler takes a Triton kernel script and input type specification via config file as input and produces a shared library
 that launches the kernels.
 
+## What's going on?
+
+1. Load and execute Triton module ([tt_bindings](tt_bindings.py))
+2. Parse config and build abstract input data ([compilation_config](compilation_config.py))
+3. Compile kernels with Triton ([aot_kernel](aot_kernel.py))
+4. C code generation ([c_codegen](c_codegen.py))
+5. C compilation ([ttc](ttc.py))
+
 ### Config sample
 ```toml
 [named_type_variants]
@@ -58,14 +66,6 @@ CUfunction add_kernel_i64_16_fn();
 CUresult add_kernel_i64_16(CUstream stream, GridWarps g, CUdeviceptr x_ptr, CUdeviceptr y_ptr, CUdeviceptr output_ptr, int64_t n_elements);
 
 ```
-
-## What's going on?
-
-1. Load and execute Triton module ([tt_bindings](tt_bindings.py))
-2. Parse config and build abstract input data ([compilation_config](compilation_config.py))
-3. Compile kernels with Triton ([aot_kernel](aot_kernel.py))
-4. C code generation ([c_codegen](c_codegen.py))
-5. C compilation ([ttc](ttc.py))
 
 ### Notable missing parts
 - auto kernel selection based on input sizes
