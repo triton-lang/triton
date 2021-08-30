@@ -209,7 +209,7 @@ generator::generator(analysis::axes *a_axes,
 void generator::visit_value(ir::value* v) {
   if(!seen_.insert(v).second)
     return;
-//  std::cout << v->get_name() << std::endl;
+
   if(v->get_type()->is_block_ty()){
     if(analysis::shared_layout* layout = layouts_->get(v)->to_shared()){
       analysis::N_buffer_info_t *n_buffer = layout->get_N_buffer();
@@ -587,7 +587,7 @@ void generator::visit_load_inst(ir::load_inst* x){
   Type* ty  = cvt(op->get_type()->get_scalar_ty()->get_pointer_element_ty());
   // compute vector width
   size_t vec = 1;
-  if(op->get_type()->is_block_ty()){
+  if(op->get_type()->is_block_ty() && op->get_type()->get_tile_rank() > 1){
     auto   ord = ords_.at(op);
     size_t aln = alignment_->get(op, ord[0]);
     size_t nts = layouts_->get(x)->to_scanline()->nts(ord[0]);
@@ -1948,63 +1948,13 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
                         out_ax[1][j*max_jj + jj]};
       vals_[out][idxs] = load(ptr);
     }
+
   }
 }
 
 void generator::visit_cvt_layout_inst(ir::cvt_layout_inst *rc) {
   visit_layout_convert(rc, rc->get_operand(0));
 }
-
-//void generator::visit_cvt_layout_inst(ir::cvt_layout_inst* rc) {
-//  ir::value *op = rc->get_operand(0);
-//  ir::block_type::block_shapes_t shape = rc->get_type()->get_block_shapes();
-//  // pointer to temporary shared memory
-//  Type *ty = cvt(rc->get_type()->get_scalar_ty());
-//  // layout
-//  analysis::mma_layout* in_layout = layouts_->get(op)->to_mma();
-//  analysis::scanline_layout* out_layout = layouts_->get(rc)->to_scanline();
-//  std::cout << in_layout << " " << out_layout << std::endl;
-//  // Orders
-//  auto ord = layouts_->get(rc)->to_scanline()->get_order();
-//  Value *base;
-//  base = gep(shmem_, i32(alloc_->offset(layouts_->get(layouts_->tmp(rc)))));
-//  base = bit_cast(base, ptr_ty(ty, 3));
-//  Value *ld = i32(shape[ord[0]]);
-//  auto in_ord0 = axes_.at(a_axes_->get(op, ord[0])).values;
-//  auto in_ord1 = axes_.at(a_axes_->get(op, ord[1])).values;
-//  auto out_ord0 = axes_.at(a_axes_->get(rc, ord[0])).values;
-//  auto out_ord1 = axes_.at(a_axes_->get(rc, ord[1])).values;
-//  int in_spt0  = in_layout->shape_per_cta(ord[0]);
-//  int in_spt1  = in_layout->shape_per_cta(ord[1]);
-//  int out_spt0 = out_layout->mts(ord[0])*out_layout->nts(ord[0]);
-//  int out_spt1 = out_layout->mts(ord[1])*out_layout->nts(ord[1]);
-//  int max_spt1 = std::max(in_spt1, out_spt1);
-//  indices_t idx(2);
-//  int num_packs = shape[ord[1]]/max_spt1;
-//  for(size_t j = 0; j < num_packs; j++){
-//    add_barrier();
-//    for(size_t k = 0; k < in_ord1.size()/num_packs; k++)
-//    for(size_t i = 0; i < in_ord0.size(); i++){
-//      idx[ord[0]] = in_ord0[i];
-//      idx[ord[1]] = in_ord1[j*in_ord1.size()/num_packs + k];
-//      Value *off = add(idx[ord[0]], mul(in_ord1[k], ld));
-//      Value *ptr = gep(base, off);
-//      store(vals_[op][idx], ptr);
-
-//    }
-//    add_barrier();
-//    for(size_t k = 0; k < out_ord1.size()/num_packs; k++)
-//    for(size_t i = 0; i < out_ord0.size(); i++){
-//      idx[ord[0]] = out_ord0[i];
-//      idx[ord[1]] = out_ord1[j*out_ord1.size()/num_packs + k];
-//      Value *off = add(idx[ord[0]], mul(out_ord1[k], ld));
-//      Value *ptr  = gep(base, off);
-//      vals_[rc][idx] = load(ptr);
-//    }
-//  }
-//}
-
-
 
 void generator::visit_masked_load_async_inst(ir::masked_load_async_inst* x){
   unsigned in_vec = 1;

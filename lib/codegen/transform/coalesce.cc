@@ -70,6 +70,7 @@ void coalesce::run(ir::module &mod) {
     // uncoalesce after load
     if(auto x = dynamic_cast<ir::load_inst*>(i))
     if(x->get_type()->is_block_ty())
+    if(x->get_type()->get_tile_rank()==2)
     if(layout_->get(x)->to_mma()){
         builder.set_insert_point_after(x);
         ir::instruction* new_x = ir::cvt_layout_inst::create(x);
@@ -114,7 +115,6 @@ void coalesce::run(ir::module &mod) {
       }
       if(in_contig.empty() || out_contig==in_contig)
         continue;
-//      std::cout << in_contig.size() << " " << out_contig.size() << " " << in_contig[0] << " " << out_contig[0] << std::endl;
       builder.set_insert_point_after(val_inst);
       auto new_val = builder.insert(ir::cvt_layout_inst::create(val_inst));
       x->replace_uses_of_with(val_inst, new_val);
