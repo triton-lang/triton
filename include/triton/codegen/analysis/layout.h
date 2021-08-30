@@ -230,6 +230,9 @@ public:
   // execution
   void run(ir::module &mod);
 
+  // print all layout info
+  void print(std::ostream& o);
+  
 private:
   analysis::axes* axes_;
   analysis::align* align_;

@@ -7,7 +7,7 @@
 #include "triton/ir/function.h"
 #include "triton/ir/module.h"
 #include "triton/ir/utils.h"
-// #include "triton/ir/type.h"
+#include "triton/ir/print.h"
 
 namespace triton{
 namespace codegen{
@@ -539,6 +539,28 @@ void layouts::run(ir::module &mod) {
       tmp_[atom] = id;
     }
   });
+}
+
+void layouts::print(std::ostream &os) {
+  os << "Num layouts: " << num_layouts() << "\n"
+     << layouts_.size() << "\n"
+     << groups_.size() << "\n";
+
+  bool func_print = true;
+
+  for (auto &[v, g] : groups_) {
+    if (auto instr = dynamic_cast<ir::instruction*>(v)) {
+      if (func_print) {
+        os << "Print mod:\n";
+        ir::print(*instr->get_parent()->get_parent()->get_parent(), os);
+        func_print = false;
+      }
+      ir::print(*instr, os);
+    }
+    os << g << "\n";
+  }
+
+
 }
 
 }

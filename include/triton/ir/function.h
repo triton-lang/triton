@@ -104,6 +104,7 @@ public:
   // accessors
   const args_t &args() const { return args_; }
   function_type* get_fn_type() { return fn_ty_; }
+  module *get_parent() { return parent_; }
 
   // factory methods
   static function *create(function_type *ty, linkage_types_t linkage,
