@@ -433,7 +433,7 @@ def test_permute(dtype, shape, perm, device='cuda'):
 # test dot
 # ---------------
 
-@pytest.mark.parametrize("epilogue", ['add-rows'])
+@pytest.mark.parametrize("epilogue", ['none', 'add-matrix', 'add-rows', 'add-cols'])
 def test_dot(epilogue, device='cuda'):
     torch.manual_seed(0)
     # triton kernel
@@ -475,13 +475,14 @@ def test_dot(epilogue, device='cuda'):
                          ADD_ROWS = epilogue=='add-rows',
                          ADD_COLS = epilogue=='add-cols')
     # torch result
-    z_ref = torch.matmul(x, y).to(torch.float16)
+    z_ref = torch.matmul(x.float(), y.float())
     if epilogue == 'add-matrix':
         z_ref += z
     if epilogue == 'add-rows':
         z_ref += z[:,0][:, None]
     if epilogue == 'add-cols':
         z_ref += z[0,:][None, :]
+    z_ref = z_ref.to(torch.float16)
     # compare
     ptx = pgm.asm('ptx')
     # print(ptx)

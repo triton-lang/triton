@@ -15,11 +15,12 @@ ir::instruction* rematerialize(ir::builder& bld, ir::instruction *root,
     return root;
   if(!root->get_type()->is_block_ty())
     return root;
+
   bld.set_insert_point(root);
   ir::instruction *new_root = bld.insert(root->clone());
   for(ir::value *op: root->ops()){
     ir::instruction *i = dynamic_cast<ir::instruction*>(op);
-    if(!i)
+    if(!i || i->get_id() == ir::INST_REDUCE)
       continue;
     ir::instruction* new_op = rematerialize(bld, i, seen);
     new_root->replace_uses_of_with(op, new_op);
@@ -30,9 +31,20 @@ ir::instruction* rematerialize(ir::builder& bld, ir::instruction *root,
 void disassociate::run(ir::module &mod) {
   ir::builder &bld = mod.get_builder();
 
-  std::map<ir::user*, std::map<int, std::set<ir::user*>>> clone_info;
+//  ir::for_each_instruction(mod, [&](ir::instruction *i){
+//    bld.set_insert_point(i);
+//    for(ir::value* op: i->ops()){
+//      auto reshape = dynamic_cast<ir::make_range*>(op);
+//      if(!reshape)
+//        continue;
+//      ir::instruction* new_op = bld.insert(reshape->clone());
+//      i->replace_uses_of_with(op, new_op);
+//    }
+//  });
+
+
   ir::for_each_instruction(mod, [&](ir::instruction *i){
-    if(dynamic_cast<ir::reshape_inst*>(i)){
+    if(dynamic_cast<ir::reshape_inst*>(i) || dynamic_cast<ir::splat_inst*>(i)){
       std::set<ir::value*> seen;
       ir::instruction* new_i = rematerialize(bld, i, seen);
       i->replace_all_uses_with(new_i);

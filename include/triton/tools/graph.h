@@ -6,6 +6,7 @@
 #include <map>
 #include <set>
 #include <vector>
+#include <iostream>
 
 namespace triton {
 namespace tools{
@@ -40,8 +41,9 @@ public:
       nmap->clear();
     std::set<node_t> nodes = nodes_;
     unsigned id = 0;
-    while(!nodes.empty())
+    while(!nodes.empty()){
       connected_components_impl(*nodes.begin(), nodes, nmap, cmap, id++);
+    }
   }
 
   void add_edge(node_t x, node_t y) {

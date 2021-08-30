@@ -1890,7 +1890,6 @@ void generator::visit_select_inst(ir::select_inst* x) {
 
 
 void generator::visit_layout_convert(ir::value *out, ir::value *in){
-  std::cout << 0 << std::endl;
   ir::block_type::block_shapes_t shape = out->get_type()->get_block_shapes();
   // pointer to temporary shared memory
   Type *ty = cvt(out->get_type()->get_scalar_ty());

@@ -135,11 +135,15 @@ std::vector<int> axes::get(ir::value *value) {
 void axes::run(ir::module &mod) {
   // make graph
   graph_.clear();
+  axes_.clear();
   ir::for_each_instruction(mod, [this](ir::instruction *x) {
     update_graph(x);
   });
   // find connected components
   graph_.connected_components(nullptr, &axes_);
+  std::set<size_t> uniq;
+  for(auto x: axes_)
+    uniq.insert(x.second);
 }
 
 }
