@@ -498,6 +498,7 @@ void layouts::run(ir::module &mod) {
 
   // connected components
   graph_.connected_components(&values_, &groups_);
+  std::cout << values_.size() << std::endl;
 
   // create layouts
   for(const auto& x: values_)
