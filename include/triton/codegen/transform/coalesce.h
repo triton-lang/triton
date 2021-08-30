@@ -33,6 +33,7 @@ private:
 
 public:
   coalesce(analysis::align* align, triton::codegen::analysis::layouts *layouts);
+  triton::ir::value *simplify(ir::instruction* i, triton::ir::builder &builder);
   void run(ir::module &mod);
 
 private:

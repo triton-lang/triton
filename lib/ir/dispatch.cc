@@ -374,12 +374,15 @@ ir::value *dispatch::broadcast(ir::value *input, shape_t shape, ir::builder *bui
   auto src_shape = input->get_type()->get_block_shapes();
   if (src_shape.size() != shape.size())
     throw std::runtime_error("Cannot broadcast");
+  if(shape == src_shape)
+    return input;
   return builder->create_broadcast(input, shape);
 }
 
 std::tuple<ir::value*, ir::value*> dispatch::broadcast(ir::value *lhs, ir::value* rhs, ir::builder *builder) {
   ir::type *lhs_ty = lhs->get_type();
   ir::type *rhs_ty = rhs->get_type();
+
   // make_shape_compatible(block, scalar)
   if (lhs_ty->is_block_ty() && !rhs_ty->is_block_ty())
     rhs = builder->create_splat(rhs, lhs_ty->get_block_shapes());

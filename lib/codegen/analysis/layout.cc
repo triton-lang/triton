@@ -109,9 +109,6 @@ data_layout::data_layout(id_t id,
         max_contiguous = curr;
     }
   }
-  bool is_recoalesce = false;
-  for(ir::value* v: values)
-    is_recoalesce = is_recoalesce || dynamic_cast<ir::recoalesce_inst*>(v);
   if(max_contiguous.size() > 0){
     std::sort(order_.begin(), order_.end(), [&](unsigned a, unsigned b) {
       return max_contiguous[a] > max_contiguous[b];
@@ -129,6 +126,13 @@ int data_layout::find_axis(int to_find) const {
 }
 
 
+distributed_layout::distributed_layout(id_t id,
+                         const std::vector<int> &axes,
+                         const std::vector<unsigned> &shape,
+                         const std::vector<ir::value *> &values,
+                         analysis::align* align): data_layout(id, axes, shape, values, align)
+{ }
+
 /* -------------------------------- *
  *           MMA Layout             *
  * -------------------------------- */
@@ -138,20 +142,11 @@ mma_layout::mma_layout(size_t num_warps,
                        const std::vector<unsigned>& shape,
                        const std::vector<ir::value *> &values,
                        analysis::align* align, target* tgt,
-                       shared_layout *layout_a, shared_layout *layout_b): data_layout(MMA, axes, shape, values, align) {
+                       shared_layout *layout_a, shared_layout *layout_b): distributed_layout(MMA, axes, shape, values, align) {
   /* fragments per warp */
   // try to make things as square as possible to maximize data re-use
   if(tgt->as_nvidia()->sm() < 80){
     fpw_ = {2, 2, 1};
-//    std::vector<int> fpw_nm1;
-//    unsigned num_fragments = std::min<unsigned>((shape_[0]/8)*(shape_[1]/8), 4);
-//    do {
-//      fpw_nm1 = fpw_;
-//      if(fpw_[0]*fpw_[1] < num_fragments)
-//        fpw_[0] = clamp(fpw_[0]*2, 1, shape_[0] / 8);
-//      if(fpw_[0]*fpw_[1] < num_fragments)
-//        fpw_[1] = clamp(fpw_[1]*2, 1, shape_[1] / 8);
-//    }while(fpw_nm1 != fpw_);
     auto ord_a = layout_a->get_order();
     auto ord_b = layout_b->get_order();
     bool is_a_row = ord_a[0] != 0;
@@ -168,6 +163,7 @@ mma_layout::mma_layout(size_t num_warps,
     spw_ = {16, 8, 1};
     rep_ = {2,  2, 1};
   }
+  order_ = {0, 1};
 
   /* warps per tile */
   // try to make things as square as possible to maximize data re-use
@@ -182,7 +178,7 @@ mma_layout::mma_layout(size_t num_warps,
   }while(wpt_nm1 != wpt_);
 
   /* shape per block */
-  spt_ = {spw_[0]*wpt_[0], spw_[1]*wpt_[1], 1};
+  shape_per_cta_ = {spw_[0]*wpt_[0], spw_[1]*wpt_[1], 1};
 }
 
 
@@ -194,7 +190,7 @@ scanline_layout::scanline_layout(size_t num_warps,
                                  const std::vector<int>& axes,
                                  const std::vector<unsigned>& shape,
                                  const std::vector<ir::value *> &values,
-                                 analysis::align* align, target *tgt): data_layout(SCANLINE, axes, shape, values, align){
+                                 analysis::align* align, target *tgt): distributed_layout(SCANLINE, axes, shape, values, align){
   unsigned size = std::accumulate(shape_.begin(), shape_.end(), 1, std::multiplies<int>());
   unsigned num_threads = tgt->is_gpu() ? num_warps * 32 : 1;
   nts_.resize(shape_.size());
@@ -230,6 +226,10 @@ scanline_layout::scanline_layout(size_t num_warps,
     mts_[i] = clamp(num_threads, 1, shape_[i] / nts_[i]);
     num_threads = num_threads / mts_[i];
   }
+
+  shape_per_cta_.resize(shape_.size());
+  for(size_t d = 0; d < shape_.size(); d++)
+    shape_per_cta_[d] = mts_[d]*nts_[d];
 }
 
 
@@ -489,6 +489,9 @@ void layouts::create(size_t id, const std::vector<ir::value*>& values) {
 void layouts::run(ir::module &mod) {
   // make graph
   graph_.clear();
+  layouts_.clear();
+  groups_.clear();
+
   ir::for_each_instruction(mod, [this](ir::instruction* i) {
     make_graph(i);
   });
@@ -515,23 +518,18 @@ void layouts::run(ir::module &mod) {
       layouts_[id] = new shared_layout(layout, axes_->get(arg), shapes, {red}, red->get_type()->get_scalar_ty(), align_);
       tmp_[red] = id;
     }
-    if(auto *recoalasce = dynamic_cast<ir::recoalesce_inst*>(i)){
-      ir::value *val = recoalasce->get_operand(0);
-      mma_layout* in_layout = get(val)->to_mma();
-      scanline_layout* out_layout = get(i)->to_scanline();
-      if(!in_layout || !out_layout)
-        return;
+    if(auto *val = dynamic_cast<ir::cvt_layout_inst*>(i)){
+      distributed_layout* out_layout = dynamic_cast<distributed_layout*>(get(val));
+      distributed_layout* in_layout = dynamic_cast<distributed_layout*>(get(i->get_operand(0)));
       id++;
-      ir::type::block_shapes_t in_shape = val->get_type()->get_block_shapes();
-      ir::type::block_shapes_t shape(in_shape.size());
-      size_t ld = out_layout->get_order(0);
-      shape[ld] = in_shape[ld];
-      for(size_t k = 0; k < in_shape.size(); k++)
-        if(k != ld)
-          shape[k] = in_layout->to_mma()->spt(k);
-      // create layout
-      layouts_[id] = new shared_layout(out_layout, axes_->get(val), shape, {recoalasce}, val->get_type()->get_scalar_ty(), align_);
-      tmp_[recoalasce] = id;
+      size_t dim = val->get_type()->get_tile_rank();
+      ir::type::block_shapes_t shape(dim);
+      for(size_t k = 0; k < dim; k++){
+        shape[k] = std::max(in_layout->shape_per_cta(k),
+                            out_layout->shape_per_cta(k));
+      }
+      layouts_[id] = new shared_layout(out_layout, axes_->get(val), shape, {val}, val->get_type()->get_scalar_ty(), align_);
+      tmp_[val] = id;
     }
     if(auto *atom = dynamic_cast<ir::atomic_inst*>(i)){
       id++;
