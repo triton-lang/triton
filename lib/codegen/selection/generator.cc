@@ -1059,7 +1059,7 @@ void generator::visit_mma884(ir::dot_inst* C, ir::value *A, ir::value *B, ir::va
   BasicBlock* curr_bb = builder_->GetInsertBlock();
   BasicBlock* entry = &curr_bb->getParent()->getEntryBlock();
   builder_->SetInsertPoint(entry->getTerminator());
-  auto compute_offs = [&layout_c](bool is_row, int per_phase, int max_phase, int num_ptr, int vec
+  auto compute_offs = [&layout_c, this](bool is_row, int per_phase, int max_phase, int num_ptr, int vec,
       int stride_0, int stride_1, int stride_rep, 
       std::map<analysis::data_layout*, Value*> offset_0_, 
       std::map<analysis::data_layout*, Value*> offset_1_) -> std::vector<Value*> {
@@ -1080,7 +1080,7 @@ void generator::visit_mma884(ir::dot_inst* C, ir::value *A, ir::value *B, ir::va
   std::vector<Value*> off_a = compute_offs(is_a_row, per_phase_a, max_phase_a, num_ptr_a, vec_a,
     stride_a0, stride_a1, /*rep*/is_a_row?4:stride_rep_m, offset_a_k_, offset_a_m_);
   std::vector<Value*> off_b = compute_offs(is_b_row, per_phase_b, max_phase_b, num_ptr_b, vec_b,
-    stride_b0, stride_b1, /*rep*/is_b_row?stride_rep_n:4, offset_b_n_, offset_b_k);
+    stride_b0, stride_b1, /*rep*/is_b_row?stride_rep_n:4, offset_b_n_, offset_b_k_);
   builder_->SetInsertPoint(curr_bb);
 
   /* --------------------------------- */
