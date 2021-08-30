@@ -281,30 +281,30 @@ void pipeline::run(ir::module &mod) {
 
   // try to move dot_inst after loads
   // for better overlap of io and compute
-  struct move_config_t{
-    std::vector<ir::instruction*> insts;
-    ir::load_inst* dst;
-  };
-  std::map<ir::basic_block*, move_config_t> to_move;
+//  struct move_config_t{
+//    std::vector<ir::instruction*> insts;
+//    ir::load_inst* dst;
+//  };
+//  std::map<ir::basic_block*, move_config_t> to_move;
 
-  if(has_copy_async_){
-    for(ir::function* fn: mod.get_function_list())
-    for(ir::basic_block* bb: fn->blocks())
-    for(ir::instruction* inst: bb->get_inst_list()){
-      if(auto* i = dynamic_cast<ir::dot_inst*>(inst))
-        recursive_deps(i, bb, to_move[bb].insts);
-      if(auto* i = dynamic_cast<ir::load_inst*>(inst))
-        to_move[bb].dst = i;
-    }
+//  if(has_copy_async_){
+//    for(ir::function* fn: mod.get_function_list())
+//    for(ir::basic_block* bb: fn->blocks())
+//    for(ir::instruction* inst: bb->get_inst_list()){
+//      if(auto* i = dynamic_cast<ir::dot_inst*>(inst))
+//        recursive_deps(i, bb, to_move[bb].insts);
+//      if(auto* i = dynamic_cast<ir::load_inst*>(inst))
+//        to_move[bb].dst = i;
+//    }
 
-    for(auto& x: to_move){
-      builder.set_insert_point_after(x.second.dst);
-      for(ir::instruction* i: x.second.insts){
-        x.first->erase(i);
-        builder.insert(i);
-      }
-    }
-  }
+//    for(auto& x: to_move){
+//      builder.set_insert_point_after(x.second.dst);
+//      for(ir::instruction* i: x.second.insts){
+//        x.first->erase(i);
+//        builder.insert(i);
+//      }
+//    }
+//  }
 
 
 }

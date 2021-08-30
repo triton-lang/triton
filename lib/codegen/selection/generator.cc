@@ -1334,7 +1334,8 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
 
   BasicBlock* CurrBB = builder_->GetInsertBlock();
   BasicBlock* FirstBB = &CurrBB->getParent()->getEntryBlock();
-  builder_->SetInsertPoint(FirstBB->getTerminator());
+  if(FirstBB != CurrBB)
+    builder_->SetInsertPoint(FirstBB->getTerminator());
 
   Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
   Value *lane   = urem(thread, i32(32));

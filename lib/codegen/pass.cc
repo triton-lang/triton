@@ -58,11 +58,11 @@ void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps, 
   dce.run(ir);
   pipeline.run(ir);
   dce.run(ir);
+//  ir::print(ir, std::cout);
   disassociate.run(ir);
   dce.run(ir);
   align.run(ir);
   axes.run(ir);
-//  ir::print(ir, std::cout);
   layouts.run(ir);
   peephole.run(ir);
   dce.run(ir);
@@ -77,28 +77,22 @@ void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps, 
 
   align.run(ir);
   dce.run(ir);
-  if (target->is_gpu()) {
-//    reassociate.run(ir);
+  if (target->is_gpu())
     cts.run(ir);
-  }
   dce.run(ir);
   align.run(ir);
   axes.run(ir);
   layouts.run(ir);
-//  ir::print(ir, std::cout);
   peephole.run(ir);
   dce.run(ir);
-//  ir::print(ir, std::cout);
   align.run(ir);
   axes.run(ir);
   layouts.run(ir);
   swizzle.run(ir);
   liveness.run(ir);
-//    ir::print(ir, std::cout);
   allocation.run(ir);
   prefetch_s.run(ir);
   barriers.run(ir);
-//  ir::print(ir, std::cout);
   isel.visit(ir, *llvm);
 //  std::cout << "done" << std::endl;
   mod = driver::module::create(dev, std::move(llvm));

@@ -430,6 +430,68 @@ def test_permute(dtype, shape, perm, device='cuda'):
     assert 'st.global.v4' in ptx
 
 # ---------------
+# test dot
+# ---------------
+
+@pytest.mark.parametrize("epilogue", ['add-rows'])
+def test_dot(epilogue, device='cuda'):
+    torch.manual_seed(0)
+    # triton kernel
+    @triton.jit
+    def kernel(X, stride_xm, stride_xk, 
+               Y, stride_yk, stride_yn,
+               Z, stride_zm, stride_zn, **meta):
+        BLOCK_M = meta['BLOCK_M']
+        BLOCK_K = meta['BLOCK_K']
+        BLOCK_N = meta['BLOCK_N']
+        off_m = tl.arange(0, BLOCK_M)
+        off_n = tl.arange(0, BLOCK_N)
+        off_k = tl.arange(0, BLOCK_K)
+        Xs = X + off_m[:, None] * stride_xm + off_k[None, :] * stride_xk
+        Ys = Y + off_k[:, None] * stride_yk + off_n[None, :] * stride_yn
+        Zs = Z + off_m[:, None] * stride_zm + off_n[None, :] * stride_zn
+        z = tl.dot(tl.load(Xs), tl.load(Ys))
+        if meta['ADD_MATRIX']:
+            z += tl.load(Zs)
+        if meta['ADD_ROWS']:
+            ZRs = Z + off_m * stride_zm
+            z += tl.load(ZRs)[:, None]
+        if meta['ADD_COLS']:
+            ZCs = Z + off_n * stride_zn 
+            z += tl.load(ZCs)[None, :]
+        tl.store(Zs, z)
+    # input
+    M, N, K = 64, 64, 32
+    x = triton.testing.random((M, K), dtype=torch.float16, device=device)
+    y = triton.testing.random((K, N), dtype=torch.float16, device=device)
+    # triton result
+    z = triton.testing.random((M, N), dtype=torch.float16, device=device)
+    z_tri = z.clone()
+    pgm = kernel[(1, 1)](x, x.stride(0), x.stride(1),
+                         y, y.stride(0), y.stride(1),
+                         z_tri, z_tri.stride(0), z_tri.stride(1),
+                         BLOCK_M=M, BLOCK_K=K, BLOCK_N=N,
+                         ADD_MATRIX = epilogue=='add-matrix',
+                         ADD_ROWS = epilogue=='add-rows',
+                         ADD_COLS = epilogue=='add-cols')
+    # torch result
+    z_ref = torch.matmul(x, y).to(torch.float16)
+    if epilogue == 'add-matrix':
+        z_ref += z
+    if epilogue == 'add-rows':
+        z_ref += z[:,0][:, None]
+    if epilogue == 'add-cols':
+        z_ref += z[0,:][None, :]
+    # compare
+    ptx = pgm.asm('ptx')
+    # print(ptx)
+    triton.testing.assert_almost_equal(z_tri, z_ref)
+    # make sure ld/st are vectorized
+    assert 'ld.global.v4' in ptx
+    assert 'st.global.v4' in ptx
+
+
+# ---------------
 # test load
 # ---------------
 
