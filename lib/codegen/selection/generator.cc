@@ -1059,28 +1059,28 @@ void generator::visit_mma884(ir::dot_inst* C, ir::value *A, ir::value *B, ir::va
   BasicBlock* curr_bb = builder_->GetInsertBlock();
   BasicBlock* entry = &curr_bb->getParent()->getEntryBlock();
   builder_->SetInsertPoint(entry->getTerminator());
-  Value* off_a0 = is_a_row ? offset_a_k_[layout_c] : offset_a_m_[layout_c];
-  Value* off_a1 = is_a_row ? offset_a_m_[layout_c] : offset_a_k_[layout_c];
-  Value* phase_a = urem(udiv(off_a1, i32(per_phase_a)), i32(max_phase_a));
-  std::vector<Value*> off_a(num_ptr_a);
-  for(int i = 0; i < num_ptr_a; i++){
-    Value* off_a0i = add(off_a0, i32(i*(is_a_row?4:stride_rep_m)));
-    off_a0i = exact_udiv(off_a0i, i32(vec_a));
-    off_a0i = xor_(off_a0i, phase_a);
-    off_a0i = mul(off_a0i, i32(vec_a));
-    off_a[i] = add(mul(off_a0i, i32(stride_a0)), mul(off_a1, i32(stride_a1)));
-  }
-  Value* off_b0 = is_b_row ? offset_b_n_[layout_c] : offset_b_k_[layout_c];
-  Value* off_b1 = is_b_row ? offset_b_k_[layout_c] : offset_b_n_[layout_c];
-  Value* phase_b = urem(udiv(off_b1, i32(per_phase_b)), i32(max_phase_b));
-  std::vector<Value*> off_b(num_ptr_b);
-  for(int i = 0; i < num_ptr_b; i++){
-    Value* off_b0i = add(off_b0, i32(i*(is_b_row?stride_rep_n:4)));
-    off_b0i = udiv(off_b0i, i32(vec_b));
-    off_b0i = xor_(off_b0i, phase_b);
-    off_b0i = mul(off_b0i, i32(vec_b));
-    off_b[i] = add(mul(off_b0i, i32(stride_b0)), mul(off_b1, i32(stride_b1)));
-  }
+  auto compute_offs = [&layout_c](bool is_row, int per_phase, int max_phase, int num_ptr, int vec
+      int stride_0, int stride_1, int stride_rep, 
+      std::map<analysis::data_layout*, Value*> offset_0_, 
+      std::map<analysis::data_layout*, Value*> offset_1_) -> std::vector<Value*> {
+    std::vector<Value*> off_(num_ptr);
+    Value* off_0 = is_row ? offset_0_[layout_c] : offset_1_[layout_c];
+    Value* off_1 = is_row ? offset_1_[layout_c] : offset_0_[layout_c];
+    Value *phase = urem(udiv(off_1, i32(per_phase)), i32(max_phase));
+    for (int i=0; i<num_ptr; ++i) {
+      Value *off_0i = add(off_0, i32(i*stride_rep));
+      off_0i = exact_udiv(off_0i, i32(vec));
+      off_0i = xor_(off_0i, phase);
+      off_0i = mul(off_0i, i32(vec));
+      off_[i] = add(mul(off_0i, i32(stride_0)), mul(off_1, i32(stride_1)));
+    }
+    return off_;
+  };
+  
+  std::vector<Value*> off_a = compute_offs(is_a_row, per_phase_a, max_phase_a, num_ptr_a, vec_a,
+    stride_a0, stride_a1, /*rep*/is_a_row?4:stride_rep_m, offset_a_k_, offset_a_m_);
+  std::vector<Value*> off_b = compute_offs(is_b_row, per_phase_b, max_phase_b, num_ptr_b, vec_b,
+    stride_b0, stride_b1, /*rep*/is_b_row?stride_rep_n:4, offset_b_n_, offset_b_k);
   builder_->SetInsertPoint(curr_bb);
 
   /* --------------------------------- */
@@ -1310,8 +1310,6 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   int stride_a1 = is_a_row ? stride_a_m : stride_a_k;
   int stride_b0 = is_b_row ? stride_b_n : stride_b_k;
   int stride_b1 = is_b_row ? stride_b_k : stride_b_n;
-  int lda = is_a_row ? stride_a_m : stride_a_k;
-  int ldb = is_b_row ? stride_b_k : stride_b_n;
   int per_phase_a = swizzle_->get_per_phase(layout_a);
   int max_phase_a = swizzle_->get_max_phase(layout_a);
   int per_phase_b = swizzle_->get_per_phase(layout_b);
@@ -1343,10 +1341,11 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   Value *warp1  = urem(warp12, i32(layout->wpt(1)));
   std::vector<Value *>& fc = fcs.begin()->second;
 
-  Value *tidr8  = urem(lane, i32(8));
+  Value *tidr8 = urem(lane, i32(8));
+  Value *tidd8 = udiv(lane, i32(8));
   Value *phase_a = urem(udiv(tidr8, i32(per_phase_a)), i32(max_phase_a));
-  Value* off_a0   = mul(tidr8, i32(lda));
-  Value *off_am  = mul(add(urem(udiv(lane, i32(8)), i32(2)), mul(warp0, i32(2))), i32(8));
+  Value* off_a0   = mul(tidr8, i32(stride_a1));
+  Value *off_am  = mul(add(urem(tidd8, i32(2)), mul(warp0, i32(2))), i32(8));
   Value *off_ak  = mul(udiv(lane, i32(16)), i32(8));
   off_am = urem(off_am, i32(shape_a[0]));
   off_ak = urem(off_ak, i32(shape_a[1]));
@@ -1362,9 +1361,9 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   }
 
   Value *phase_b = urem(udiv(tidr8, i32(per_phase_b)), i32(max_phase_b));
-  Value* off_b0   = mul(tidr8, i32(ldb));
+  Value* off_b0   = mul(tidr8, i32(stride_b1));
   Value *off_bn  = mul(add(mul(udiv(lane, i32(16)), i32(layout->wpt(1))), mul(warp1, i32(1))), i32(8));
-  Value *off_bk  = mul(urem(udiv(lane, i32(8)), i32(2)), i32(8));
+  Value *off_bk  = mul(urem(tidd8, i32(2)), i32(8));
   off_bn = urem(off_bn, i32(shape_b[1]));
   off_bk = urem(off_bk, i32(shape_b[0]));
   off_b0 = add(off_b0, is_b_row ? off_bn : off_bk);
