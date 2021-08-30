@@ -209,7 +209,6 @@ generator::generator(analysis::axes *a_axes,
 void generator::visit_value(ir::value* v) {
   if(!seen_.insert(v).second)
     return;
-
   if(v->get_type()->is_block_ty()){
     if(analysis::shared_layout* layout = layouts_->get(v)->to_shared()){
       analysis::N_buffer_info_t *n_buffer = layout->get_N_buffer();
@@ -1059,7 +1058,8 @@ void generator::visit_mma884(ir::dot_inst* C, ir::value *A, ir::value *B, ir::va
   /* --------------------------------- */
   BasicBlock* curr_bb = builder_->GetInsertBlock();
   BasicBlock* entry = &curr_bb->getParent()->getEntryBlock();
-  builder_->SetInsertPoint(entry->getTerminator());
+  if(entry != curr_bb)
+    builder_->SetInsertPoint(entry->getTerminator());
   Value* off_a0 = is_a_row ? offset_a_k_[layout_c] : offset_a_m_[layout_c];
   Value* off_a1 = is_a_row ? offset_a_m_[layout_c] : offset_a_k_[layout_c];
   Value* phase_a = urem(udiv(off_a1, i32(per_phase_a)), i32(max_phase_a));
@@ -1890,6 +1890,7 @@ void generator::visit_select_inst(ir::select_inst* x) {
 
 
 void generator::visit_layout_convert(ir::value *out, ir::value *in){
+  std::cout << 0 << std::endl;
   ir::block_type::block_shapes_t shape = out->get_type()->get_block_shapes();
   // pointer to temporary shared memory
   Type *ty = cvt(out->get_type()->get_scalar_ty());
