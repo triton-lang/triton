@@ -65,7 +65,7 @@ class sqrt_inst;
 class reduce_inst;
 class select_inst;
 
-class recoalesce_inst;
+class cvt_layout_inst;
 class copy_to_shared_inst;
 class copy_from_shared_inst;
 class masked_load_async_inst;
@@ -144,9 +144,11 @@ public:
   virtual void visit_reduce_inst(reduce_inst*) = 0;
   virtual void visit_select_inst(select_inst*) = 0;
 
-  virtual void visit_recoalesce_inst(recoalesce_inst*) = 0;
+  virtual void visit_cvt_layout_inst(cvt_layout_inst*) = 0;
   virtual void visit_copy_to_shared_inst(copy_to_shared_inst*) = 0;
   virtual void visit_copy_from_shared_inst(copy_from_shared_inst*) = 0;
+
+
   virtual void visit_masked_load_async_inst(masked_load_async_inst*)= 0;
   virtual void visit_barrier_inst(barrier_inst*) = 0;
   virtual void visit_async_wait_inst(async_wait_inst*) = 0;

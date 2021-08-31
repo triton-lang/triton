@@ -211,6 +211,42 @@ bool peephole::rewrite_select_masked_load(ir::instruction *value, ir::builder& b
   return true;
 }
 
+bool peephole::rewrite_cvt_layout(ir::instruction *value, ir::builder& builder){
+  auto cvt = dynamic_cast<ir::cvt_layout_inst*>(value);
+  if(!cvt)
+    return false;
+  ir::instruction* op = dynamic_cast<ir::instruction*>(cvt->get_operand(0));
+  if(!op)
+    return false;
+  // convert(elementwise(x, y)) = elementwise(convert(x), convert(y))
+  if(op->get_id() == ir::INST_BINOP){
+    for(size_t i = 0; i < op->get_num_operands(); i++){
+      ir::value* arg_i = op->get_operand(i);
+      builder.set_insert_point(op);
+      // create new layout transform
+      ir::instruction* new_arg_i = cvt->clone();
+      layouts_->copy(new_arg_i, op);
+      builder.insert(new_arg_i);
+      // set the right args
+      new_arg_i->replace_uses_of_with(new_arg_i->get_operand(0), arg_i);
+      op->replace_uses_of_with(arg_i, new_arg_i);
+    }
+    cvt->replace_all_uses_with(op);
+    return true;
+  }
+  auto cvt_op = dynamic_cast<ir::cvt_layout_inst*>(op);
+  if(!cvt_op)
+    return false;
+  // convert1(convert2(x)) if convert1 is the inverse of convert2
+  ir::value* op_op = cvt_op->get_operand(0);
+  if(layouts_->has(cvt) && layouts_->has(op_op) &&
+     layouts_->get(cvt) && layouts_->get(op_op)){
+    cvt->replace_all_uses_with(op_op);
+    return true;
+  }
+  return false;
+}
+
 void peephole::run(ir::module &mod) {
   ir::builder &builder = mod.get_builder();
   // keep track of whether any modification was made
@@ -248,6 +284,7 @@ void peephole::run(ir::module &mod) {
       was_modified = was_modified || rewrite_unit_red(i, builder);
       was_modified = was_modified || rewrite_gep_ptr_min_off_plus_off(i, builder);
       was_modified = was_modified || rewrite_select_masked_load(i, builder);
+      was_modified = was_modified || rewrite_cvt_layout(i, builder);
       if(tgt_->as_nvidia()->sm() >= 80)
         was_modified = was_modified || rewrite_load_to_shared(i, builder);
       if(was_modified)

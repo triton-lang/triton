@@ -87,6 +87,7 @@ def assert_allclose(x, y, tol=1e-2):
 
 
 def random(shape, dtype, device):
+    torch.manual_seed(0)
     if isinstance(shape, int):
         shape = (shape, )
     if dtype == torch.bool:
