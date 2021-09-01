@@ -118,6 +118,8 @@ public:
   bool has_attr(unsigned arg_id) const { return  attrs_.find(arg_id) != attrs_.end(); }
   std::set<attribute> get_attributes(argument* arg) { return attrs_[arg->get_arg_no() + 1]; }
 
+  void print(std::ostream &os);
+
   // visitor
   void accept(visitor *v) { v->visit_function(this); }
 

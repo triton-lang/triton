@@ -2,14 +2,306 @@
 #include "triton/ir/basic_block.h"
 #include "triton/ir/module.h"
 #include "triton/ir/type.h"
+#include "triton/ir/value.h"
 #include "triton/ir/constant.h"
 #include "triton/ir/function.h"
 #include "triton/ir/instructions.h"
 #include "triton/ir/print.h"
 
+#include <map>
+
 namespace triton{
 namespace ir{
 
+namespace {
+class SlotTracker {
+  // A mapping of values to slot numbers.
+  using value_map = std::map<const value*, unsigned>;
+
+  // The module for which we are holding slot numbers.
+  const module *mod_;
+  bool module_processed = false;
+
+  // The function for which we are holding slot numbers.
+  const function *func_ = nullptr;
+  bool function_processed = false;
+
+  // m_map - The slot map for the module level data.
+  value_map m_map;
+  unsigned m_next = 0;
+
+  // f_map - The slot map for the function level data.
+  value_map f_map;
+  unsigned f_next = 0;
+
+public:
+  // Construct from a module
+  explicit SlotTracker(const module *mod) : mod_(mod) {}
+
+  // Construct from a function
+  explicit SlotTracker(const function *f) 
+    : mod_(f? f->get_parent() : nullptr), func_(f) {}
+
+  // Return the slot number of the specified value. If something is not in
+  // the SlotTracker, return -1
+  int get_local_slot(const value *v);
+
+private:
+  void initialize_if_needed();
+
+  // Add all of the module level global variables (and their initializers)
+  // and function declarations, but not contents of those functions.
+  void process_module();
+
+  // Add all of the functions arguments, basic blocks, and instructions.
+  void process_function();
+};
+
+class AssemblyWriter {
+  std::ostream &os;
+  SlotTracker &slot_tracker;
+
+public:
+  AssemblyWriter(std::ostream &os, SlotTracker &slot_tracker)
+    : os(os), slot_tracker(slot_tracker) {}
+
+  void print_function(const function *f);
+  void print_argument(const argument *arg);
+  void print_basic_block(const basic_block *bb);
+  void print_instruction(const instruction *instr);
+  void print_value(const value *v);
+
+  void write_operand(const value *op, bool print_type = false);
+};
+} // anonymous namespace
+
+//-------------------------
+// SlotTracker
+//-------------------------
+void SlotTracker::process_module() {
+  // Nothing to do at the moment.
+  // Create slots for global variable & unamed functions & ...
+  module_processed = true;
+}
+
+void SlotTracker::process_function() {
+  f_next = 0;
+
+  // Add all the function arguments with no names.
+  for (const argument *arg : func_->args())
+    if (!arg->has_name())
+      create_function_slot(arg);
+
+  // Add all of the basic blocks and instructions with no names.
+  for (const basic_block *bb : func_->blocks()) {
+    if (!bb->has_name())
+      create_function_slot(bb);
+
+    for (const instruction *instr : bb->get_inst_list()) {
+      if (!instr->get_type()->is_void_ty() && !instr->has_name())
+        create_function_slot(instr);
+    }
+  }
+
+  function_processed = true;
+}
+
+void SlotTracker::create_function_slot(const value *v) {
+  assert(!v->get_type()->is_void_ty() && !v->has_name() && "Doesn't need a slot");
+
+  unsigned dst_slot = f_next++;
+  f_map[v] = dst_slot;
+}
+
+int SlotTracker::get_local_slot(const value *v) {
+  assert(dynamic_cast<constant>(v) == nullptr && "Can't get a constant slot");
+
+  // Check for uninitialized state and do lazy initialization.
+  initialize_if_needed();
+
+  value_map::iterator f_iter = f_map.find(v);
+  return f_iter == f_map.end() ? -1 : (int)f_iter->second;
+}
+
+void SlotTracker::initialize_if_needed() {
+  if (mod_ && !module_processed)
+    process_module();
+
+  if (func_ && !function_processed)
+    process_function();
+}
+
+
+//-------------------------------
+// AssemblyWriter
+//-------------------------------
+void AssemblyWriter::write_operand(const value *operand, bool print_type) {
+  if (!operand) {
+    os << "<null operand!>";
+    return;
+  }
+
+  if (auto *c = dynamic_cast<ir::constant*>(operand)) {
+    os << c->repr();
+    return;
+  }
+
+  // Print the normal way
+  int slot_num = slot_tracker.get_local_slot(operand);
+
+  if (slot_num != -1)
+    os << "%" << slot_num;
+  else
+    os << "<badref>";
+}
+
+void AssemblyWriter::print_module(const module *mod) {
+  slot_tracker.initialize_if_needed();
+
+  // ;ModuleID = ...
+  // source_filename = ...
+
+  // Print all of the functions.
+  for (function *f : mod->get_function_list()) {
+    os << "\n";
+    print_function(f);
+  }
+}
+
+void AssemblyWriter::print_function(const function *f) {
+  // Annotation & Attributes
+
+  os << "def ";
+  ir::type *rt_type = f->get_fn_type()->get_return_ty();
+  // Functions must have names.
+  os << rt_type->repr() << " " << f->get_name() << "(";
+  // Print arguments
+  for (ir::argument *arg : f->args()) {
+    if (arg->get_arg_no() > 0)
+      os << ", ";
+    print_argument(arg);
+  }
+  os << ")";
+
+  // Print function body
+  os << "{";
+  for (const basic_block *bb : f->blocks()) 
+    print_basic_block(bb);
+  os << "}";
+}
+
+void AssemblyWriter::print_argument(const argument *arg) {
+  // Print type
+  os << arg->get_type()->repr();
+
+  // Print name, if available.
+  if (arg->has_name())
+    os << " " << arg->get_name();
+  else {
+    int slot_num = slot_tracker.get_local_slot(arg);
+    assert(slot_num != -1 && "expect argument in function here");
+    os << "%" << slot_num;
+  }
+}
+
+void AssemblyWriter::print_basic_block(const basic_block *bb) {
+  // bb label
+  if (bb->has_name()) {
+    os << "\n";
+    os << bb->get_name() << ":";
+  } else {
+    os << "\n";
+    int slot_num = slot_tracker.get_local_slot(bb);
+    if (slot != -1)
+      os << slot_num << ":";
+    else
+      os << "<badref>:";
+  }
+
+  // Print predecessors for the block
+  auto const &predecessors = bb->get_predecessors();
+  if (!predecessors.empty()) {
+    os << std::setw(50) << std::setfill(' ')
+       << "; preds = ";
+    for (ir::basic_block *pred : predecessors)
+      write_opreand(pred);
+  }
+
+  os << "\n";
+
+  // Annotation?
+
+  // Print all of the instructions in the basic block
+  for (const ir::instruction *instr : bb->get_inst_list())
+    print_instruction(instr);
+}
+
+void AssemblyWriter::print_instruction(const int *instr) {
+  // Print out indentation for an instruction.
+  os << "  ";
+
+  ir::type *type = instr->get_type();
+  if (instr->has_name()) {
+    os << instr->get_name();
+    os << " = ";
+  } else if (!type->is_void_ty()) {
+    // Print out the def slot taken.
+    int slot_num = slot_tracker.get_local_slot(instr);
+    if (slot_num == -1)
+      os << "<badref> = ";
+    else
+      os << "%" << slot_num << " = ";
+  }
+
+  // Print out opcode
+  os << instr->repr() << " " << type->repr();
+
+  size_t num_ops = instr->get_num_operands();
+  if (num_ops > 0)
+    os << " ";
+  ir::instruction::ops_t ops = instr->ops();
+  for (unsigned i = 0; i < num_ops; ++i) {
+    if (i)
+      os << ", ";
+    write_oprand(ops[i]);
+  }
+}
+
+void AssemblyWriter::print_value(const int *v) {
+  //
+}
+
+
+//-------------------------------
+// External interface
+//-------------------------------
+void module::print(std::ostream &os) {
+  SlotTracker slot_tracker(this);
+  AssemblyWriter writer(os, slot_tracker);
+  writer.print_module(this);
+}
+
+void function::print(std::ostream &os) {
+  SlotTracker slot_tracker(this->get_parent());
+  AssemblyWriter writer(os, slot_tracker);
+  writer.print_function(this);
+}
+
+void basic_block::print(std::ostream &os) {
+  SlotTracker slot_tracker(this->get_parent());
+  AssemblyWriter writer(os, slot_tracker);
+  writer.print_basic_block(this);
+}
+
+void instruction::print(std::ostream &os) {
+  SlotTracker slot_tracker(this->get_parent());
+  AssemblyWriter writer(os, slot_tracker);
+  writer.print_instruction(this);
+}
+
+//-------------------------------
+// legacy print interface
+//-------------------------------
 std::string get_name(ir::value *v, unsigned i) {
   if(v->get_name().empty()){
     std::string name = "%" + std::to_string(i);

@@ -35,6 +35,7 @@ public:
   // name
   void set_name(const std::string &name);
   const std::string &get_name() const { return name_; }
+  bool has_name() { return name_ == ""; }
   type* get_type() const { return ty_; }
   // visitor
   virtual void accept(visitor *v) = 0;

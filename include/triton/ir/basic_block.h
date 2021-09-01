@@ -67,6 +67,8 @@ public:
   // factory functions
   static basic_block* create(context &ctx, const std::string &name, function *parent);
 
+  void print(std::ostream &os);
+
   // visitor
   void accept(visitor *v) { v->visit_basic_block(this); }
 
