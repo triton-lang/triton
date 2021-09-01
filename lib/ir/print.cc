@@ -9,6 +9,7 @@
 #include "triton/ir/print.h"
 
 #include <map>
+#include <iomanip>
 
 namespace triton{
 namespace ir{
@@ -46,15 +47,25 @@ public:
   // the SlotTracker, return -1
   int get_local_slot(const value *v);
 
-private:
   void initialize_if_needed();
 
+  // If you'd like to deal with a function instead of just a module, use
+  // this method to get its data into the SlotTracker
+  void incorporate_function(const function *f) {
+    func_ = f;
+    function_processed = false;
+  }
+
+private:
   // Add all of the module level global variables (and their initializers)
   // and function declarations, but not contents of those functions.
   void process_module();
 
   // Add all of the functions arguments, basic blocks, and instructions.
   void process_function();
+
+  // Insert specified value* into the slot table
+  void create_function_slot(const value *v);
 };
 
 class AssemblyWriter {
@@ -65,6 +76,7 @@ public:
   AssemblyWriter(std::ostream &os, SlotTracker &slot_tracker)
     : os(os), slot_tracker(slot_tracker) {}
 
+  void print_module(const module *mod);
   void print_function(const function *f);
   void print_argument(const argument *arg);
   void print_basic_block(const basic_block *bb);
@@ -141,8 +153,13 @@ void AssemblyWriter::write_operand(const value *operand, bool print_type) {
     return;
   }
 
-  if (auto *c = dynamic_cast<ir::constant*>(operand)) {
+  if (auto *c = dynamic_cast<const ir::constant*>(operand)) {
     os << c->repr();
+    return;
+  }
+
+  if (operand->has_name()) {
+    os << operand->get_name();
     return;
   }
 
@@ -157,7 +174,6 @@ void AssemblyWriter::write_operand(const value *operand, bool print_type) {
 
 void AssemblyWriter::print_module(const module *mod) {
   slot_tracker.initialize_if_needed();
-
   // ;ModuleID = ...
   // source_filename = ...
 
@@ -170,6 +186,8 @@ void AssemblyWriter::print_module(const module *mod) {
 
 void AssemblyWriter::print_function(const function *f) {
   // Annotation & Attributes
+
+  slot_tracker.incorporate_function(f);
 
   os << "def ";
   ir::type *rt_type = f->get_fn_type()->get_return_ty();
@@ -187,7 +205,7 @@ void AssemblyWriter::print_function(const function *f) {
   os << "{";
   for (const basic_block *bb : f->blocks()) 
     print_basic_block(bb);
-  os << "}";
+  os << "}\n";
 }
 
 void AssemblyWriter::print_argument(const argument *arg) {
@@ -200,8 +218,13 @@ void AssemblyWriter::print_argument(const argument *arg) {
   else {
     int slot_num = slot_tracker.get_local_slot(arg);
     assert(slot_num != -1 && "expect argument in function here");
-    os << "%" << slot_num;
+    os << " %" << slot_num;
   }
+
+  // Print attributes
+  std::set<attribute> attrs = arg->get_parent()->get_attributes(arg);
+  for (attribute attr : attrs)
+    os << " " << attr.repr();
 }
 
 void AssemblyWriter::print_basic_block(const basic_block *bb) {
@@ -212,7 +235,7 @@ void AssemblyWriter::print_basic_block(const basic_block *bb) {
   } else {
     os << "\n";
     int slot_num = slot_tracker.get_local_slot(bb);
-    if (slot != -1)
+    if (slot_num != -1)
       os << slot_num << ":";
     else
       os << "<badref>:";
@@ -223,8 +246,11 @@ void AssemblyWriter::print_basic_block(const basic_block *bb) {
   if (!predecessors.empty()) {
     os << std::setw(50) << std::setfill(' ')
        << "; preds = ";
-    for (ir::basic_block *pred : predecessors)
-      write_opreand(pred);
+    for (size_t i=0; i<predecessors.size(); ++i) {
+      if (i)
+        os << ", ";
+      write_operand(predecessors[i]);
+    }
   }
 
   os << "\n";
@@ -236,7 +262,7 @@ void AssemblyWriter::print_basic_block(const basic_block *bb) {
     print_instruction(instr);
 }
 
-void AssemblyWriter::print_instruction(const int *instr) {
+void AssemblyWriter::print_instruction(const instruction *instr) {
   // Print out indentation for an instruction.
   os << "  ";
 
@@ -263,12 +289,14 @@ void AssemblyWriter::print_instruction(const int *instr) {
   for (unsigned i = 0; i < num_ops; ++i) {
     if (i)
       os << ", ";
-    write_oprand(ops[i]);
+    write_operand(ops[i]);
   }
+
+  os << ";\n";
 }
 
-void AssemblyWriter::print_value(const int *v) {
-  //
+void AssemblyWriter::print_value(const value *v) {
+  // Not implemented
 }
 
 
@@ -282,7 +310,7 @@ void module::print(std::ostream &os) {
 }
 
 void function::print(std::ostream &os) {
-  SlotTracker slot_tracker(this->get_parent());
+  SlotTracker slot_tracker(this);
   AssemblyWriter writer(os, slot_tracker);
   writer.print_function(this);
 }
@@ -294,7 +322,7 @@ void basic_block::print(std::ostream &os) {
 }
 
 void instruction::print(std::ostream &os) {
-  SlotTracker slot_tracker(this->get_parent());
+  SlotTracker slot_tracker(this->get_parent()->get_parent());
   AssemblyWriter writer(os, slot_tracker);
   writer.print_instruction(this);
 }
