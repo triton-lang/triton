@@ -108,9 +108,9 @@ You will specifically learn about:
 #    # program ID
 #    pid = tl.program_id(axis=0)
 #    # number of program ids along the M axis
-#    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+#    num_pid_m = triton.cdiv(M, BLOCK_SIZE_M)
 #    # number of programs ids along the N axis
-#    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+#    num_pid_n = triton.cdiv(N, BLOCK_SIZE_N)
 #    # number of programs in group
 #    num_pid_in_group = GROUP_SIZE_M * num_pid_n 
 #    # id of the group this program is in
