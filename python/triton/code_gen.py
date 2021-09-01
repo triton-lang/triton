@@ -820,6 +820,37 @@ def heuristics(values):
     return decorator
 
 
+def _next_power_of_two(n):
+    res = 1
+    while res < n:
+        res *= 2
+    return res
+
+
+def _block_to_warps(n):
+    if n < 512:
+        return 4
+    if n < 2048:
+        return 8
+    return 16
+
+def _clip(x, lower, upper):
+    return max(lower, min(upper, x))
+
+def _total_size_to_block(total_size):
+    mp_cnt = torch.cuda.get_device_properties(torch.cuda.current_device()).multi_processor_count
+    return _clip(_next_power_of_two(total_size // mp_cnt), 128, 8192)
+
+
+def elementwise_heuristics(arg_idx):
+    """Sensible heuristic for elementwise functions"""
+
+    return triton.heuristics({
+        'BLOCK': lambda *args, **kwargs: _total_size_to_block(args[arg_idx]),
+        'num_warps': lambda *args, **meta: _block_to_warps(meta['BLOCK']),
+    })
+
+
 def jit(fn):
     """
     Decorator for JIT-compiling a function using the Triton compiler.
