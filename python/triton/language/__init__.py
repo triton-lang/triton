@@ -50,8 +50,8 @@ def builtin(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if '_builder' not in kwargs or \
-           kwargs['_builder'] is None:
-           raise ValueError("Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)")
+                kwargs['_builder'] is None:
+            raise ValueError("Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)")
         return fn(*args, **kwargs)
 
     return wrapper
@@ -351,7 +351,7 @@ def reshape(input, shape, _builder=None):
     Tries to reshape the given block to a new shape.
 
     :param input: The input block.
-    :type input: 
+    :type input:
     :param shape: The desired shape.
     :type shape: Tuple[int]
 
@@ -389,7 +389,7 @@ def load(pointer, mask=None, other=None, _builder=None):
     """
     Return a block of data whose values are, elementwise, loaded from memory at location defined by :code:`pointer`.
 
-    :code:`mask` and :code:`other` are implicitly broadcast to :code:`pointer.shape`. 
+    :code:`mask` and :code:`other` are implicitly broadcast to :code:`pointer.shape`.
 
     :code:`other` is implicitly typecast to :code:`pointer.dtype.element_ty`.
 
@@ -406,7 +406,7 @@ def load(pointer, mask=None, other=None, _builder=None):
 @builtin
 def store(pointer, value, mask=None, _builder=None):
     """
-    Stores :code:`value` block of elements in memory, element-wise, at the memory locations specified by :code:`pointer`. 
+    Stores :code:`value` block of elements in memory, element-wise, at the memory locations specified by :code:`pointer`.
 
     :code:`value` is implicitly broadcast to :code:`pointer.shape` and typecast to :code:`pointer.dtype.element_ty`.
 
@@ -441,9 +441,9 @@ def _add_atomic_docstr(name):
     """
         func.__doc__ = docstr.format(name=name)
         return func
-    
+
     return _decorator
-    
+
 @builtin
 @_add_atomic_docstr("compare-and-swap")
 def atomic_cas(pointer, cmp, val, _builder=None):
@@ -531,7 +531,7 @@ def _add_math_1arg_docstr(name):
     """
         func.__doc__ = docstr.format(name=name)
         return func
-    
+
     return _decorator
 
 @builtin
@@ -577,7 +577,7 @@ def _add_reduction_docstr(name):
     """
         func.__doc__ = docstr.format(name=name)
         return func
-    
+
     return _decorator
 
 @builtin
@@ -611,7 +611,7 @@ def debug_barrier(_builder=None):
 @builtin
 def multiple_of(input, value, _builder=None):
     """
-    Let the compiler knows that the values in :code:`input` are all multiples of :code:`value`. 
+    Let the compiler knows that the values in :code:`input` are all multiples of :code:`value`.
     """
     return frontend.multiple_of(input, value, _builder)
 
@@ -619,7 +619,7 @@ def multiple_of(input, value, _builder=None):
 @builtin
 def max_contiguous(input, value, _builder=None):
     """
-    Let the compiler knows that the `value` first values in :code:`input` are contiguous. 
+    Let the compiler knows that the `value` first values in :code:`input` are contiguous.
     """
     return frontend.max_contiguous(input, value, _builder)
 
@@ -627,7 +627,7 @@ def max_contiguous(input, value, _builder=None):
 @builtin
 def max_contiguous(input, value, _builder=None):
     """
-    Let the compiler knows that the `value` first values in :code:`input` are contiguous. 
+    Let the compiler knows that the `value` first values in :code:`input` are contiguous.
     """
     return frontend.max_contiguous(input, value, _builder)
 
@@ -698,3 +698,24 @@ def ravel(x):
     :type x: Block
     """
     return triton.language.reshape(x, [x.type.numel])
+
+
+@triton.jit
+def atomic_sum(pointer, el, mask):
+    """
+    Computes sum over a block and atomically adds it to storage destination.
+
+    On high level it does this:
+
+    *pointer += sum(x * [mask > 0])
+
+    :param pointer: The memory locations to add the result.
+    :type pointer: Block of dtype=triton.PointerDType
+    :param el: The values to be summed
+    :type el: Block of dtype=`pointer.dtype.element_ty`
+    :param mask: Mask must be set to 1 for the corresponding element in x to be added to the sum.
+    :type mask: Block of dtype=`pointer.dtype.element_ty`
+    """
+    sum_elements = triton.language.where(mask, el, 0.0)
+    partial_sum = triton.language.sum(sum_elements, 0)
+    triton.language.atomic_add(pointer, partial_sum)

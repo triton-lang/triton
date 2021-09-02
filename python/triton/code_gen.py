@@ -327,10 +327,10 @@ class CodeGenerator(ast.NodeVisitor):
         pos_cond_node = ast.Compare(ld_target, [ast.Lt()], [arg_1])
         neg_cond_node = ast.Compare(ld_target, [ast.Gt()], [arg_1])
         pos_step_node = ast.Compare(arg_2, [ast.Gt()], [ast.Num(0)])
-        build_cond = lambda: triton.language.where(self.visit(pos_step_node),\
-                                    self.visit(pos_cond_node),\
-                                    self.visit(neg_cond_node),\
-                                    _builder=self.builder)
+        build_cond = lambda: triton.language.where(self.visit(pos_step_node), \
+                                                   self.visit(pos_cond_node), \
+                                                   self.visit(neg_cond_node), \
+                                                   _builder=self.builder)
         #cond_node = neg_cond_node
         step_node = ast.AugAssign(target=st_target, op=ast.Add(), value=arg_2)
         # code generation
