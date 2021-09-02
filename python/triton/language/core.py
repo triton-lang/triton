@@ -25,7 +25,7 @@ def _patch(fn):
             if x.type.is_void():
                 return None
             return block(x)
-        return tl
+        return x
 
     def wrapper(*args, **kwargs):
         builder = args[-1]
