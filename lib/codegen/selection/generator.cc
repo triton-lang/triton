@@ -586,11 +586,14 @@ void generator::visit_load_inst(ir::load_inst* x){
   Type* ty  = cvt(op->get_type()->get_scalar_ty()->get_pointer_element_ty());
   // compute vector width
   size_t vec = 1;
-  if(op->get_type()->is_block_ty() && op->get_type()->get_tile_rank() > 1){
+  if(op->get_type()->is_block_ty()){
     auto   ord = ords_.at(op);
     size_t aln = alignment_->get(op, ord[0]);
-    size_t nts = layouts_->get(x)->to_scanline()->nts(ord[0]);
-    vec = std::min(nts, aln);
+    auto layout = layouts_->get(x)->to_scanline();
+    if(layout){
+      size_t nts = layout->nts(ord[0]);
+      vec = std::min(nts, aln);
+    }
   }
   // code generation
   auto idxs = idxs_.at(x);
