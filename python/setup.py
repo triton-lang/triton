@@ -19,23 +19,23 @@ import tarfile
 def get_llvm():
     # tries to find system LLVM
     versions = ['-11.0', '-11', '-11-64']
-    supported = ['llvm-config{v}'.format(v=v) for v in versions]
+    supported = [f"llvm-config{v}" for v in versions]
     paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
     paths = [p for p in paths if p is not None]
     if paths:
       return '', ''
     # download if nothing is installed
     name = 'clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04'
-    dir = '/tmp'
-    llvm_include_dir = '{dir}/{name}/include'.format(dir=dir, name=name)
-    llvm_library_dir = '{dir}/{name}/lib'.format(dir=dir, name=name)
+    dir_mame = '/tmp'
+    llvm_include_dir = f'{dir_mame}/{name}/include'
+    llvm_library_dir = f'{dir_mame}/{name}/lib'
     if not os.path.exists(llvm_library_dir):
         try:
-            shutil.rmtree(os.path.join(dir, name))
+            shutil.rmtree(os.path.join(dir_mame, name))
         except:
             pass
-        url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-11.0.1/{name}.tar.xz".format(name=name)
-        print('downloading and extracting ' + url + '...')
+        url = f"https://github.com/llvm/llvm-project/releases/download/llvmorg-11.0.1/{name}.tar.xz"
+        print(f'downloading and extracting {url}...')
         ftpstream = urllib.request.urlopen(url)
         file = tarfile.open(fileobj=ftpstream, mode="r|xz")
         file.extractall(path=dir)
@@ -65,7 +65,7 @@ class CMakeBuild(build_ext):
             out = subprocess.check_output(["cmake", "--version"])
         except OSError:
             raise RuntimeError(
-                "CMake must be installed to build the following extensions: " + ", ".join(e.name for e in self.extensions)
+                f"""CMake must be installed to build the following extensions: {', '.join(e.name for e in self.extensions)}"""
             )
 
         if platform.system() == "Windows":
@@ -105,7 +105,7 @@ class CMakeBuild(build_ext):
         build_args = ["--config", cfg]
 
         if platform.system() == "Windows":
-            cmake_args += ["-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_{}={}".format(cfg.upper(), extdir)]
+            cmake_args += [f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_{cfg.upper()}={extdir}"]
             if sys.maxsize > 2**32:
                 cmake_args += ["-A", "x64"]
             build_args += ["--", "/m"]
@@ -141,6 +141,6 @@ setup(
         "Intended Audience :: Developers",
         "Topic :: Software Development :: Build Tools",
         "License :: OSI Approved :: MIT License",
-        "Programming Language :: Python :: 3.6",
+        "Programming Language :: Python :: 3.8",
     ],
 )
