@@ -425,6 +425,8 @@ ir::value *dispatch::bitcast(ir::value *input, ir::type *dst_ty, ir::builder *bu
     return input;
   ir::type *src_sca_ty = src_ty->get_scalar_ty();
   ir::type *dst_sca_ty = dst_ty->get_scalar_ty();
+  if(src_sca_ty->is_pointer_ty() || dst_sca_ty->is_pointer_ty())
+    return cast(input, dst_ty, builder);
   // Bitcast
   int src_bits = src_sca_ty->get_primitive_size_in_bits();
   int dst_bits = dst_sca_ty->get_primitive_size_in_bits();
@@ -472,6 +474,10 @@ ir::value *dispatch::cast(ir::value *input, ir::type *dst_ty, ir::builder *build
     else
       return builder->create_si_to_fp(input, dst_ty);
   }
+  if (src_sca_ty->is_pointer_ty() && !dst_sca_ty->is_pointer_ty())
+    return builder->create_cast(ir::PtrToInt, input, dst_ty);
+  if (!src_sca_ty->is_pointer_ty() && dst_sca_ty->is_pointer_ty())
+    return builder->create_cast(ir::IntToPtr, input, dst_ty);
   // Ptr -> Ptr
   if (src_sca_ty->is_pointer_ty() && dst_sca_ty->is_pointer_ty())
     return builder->create_cast(ir::BitCast, input, dst_ty);
