@@ -146,7 +146,7 @@ class CodeGenerator(ast.NodeVisitor):
             values = [values]
         for name, value in zip(names, values):
             if not isinstance(value, triton.language.block):
-                value = triton.language._to_ir(value, self.builder)
+                value = triton.language.core._to_ir(value, self.builder)
             self.set_value(name, value)
 
     def visit_AugAssign(self, node):
@@ -327,10 +327,10 @@ class CodeGenerator(ast.NodeVisitor):
         pos_cond_node = ast.Compare(ld_target, [ast.Lt()], [arg_1])
         neg_cond_node = ast.Compare(ld_target, [ast.Gt()], [arg_1])
         pos_step_node = ast.Compare(arg_2, [ast.Gt()], [ast.Num(0)])
-        build_cond = lambda: triton.language.where(self.visit(pos_step_node), \
-                                                   self.visit(pos_cond_node), \
-                                                   self.visit(neg_cond_node), \
-                                                   _builder=self.builder)
+        build_cond = lambda: triton.language.where(self.visit(pos_step_node),\
+                                    self.visit(pos_cond_node),\
+                                    self.visit(neg_cond_node),\
+                                    _builder=self.builder)
         #cond_node = neg_cond_node
         step_node = ast.AugAssign(target=st_target, op=ast.Add(), value=arg_2)
         # code generation
@@ -383,7 +383,7 @@ class CodeGenerator(ast.NodeVisitor):
         if isinstance(fn, JITFunction):
             return fn(*args, generator=self, **kws)
         if hasattr(fn, '__self__') and self.is_triton_object(fn.__self__) or \
-            sys.modules[fn.__module__] is triton.language:
+            sys.modules[fn.__module__] is triton.language.core:
             return fn(*args, _builder=self.builder, **kws)
         return fn(*args, **kws)
 
@@ -600,7 +600,7 @@ class Kernel:
             # compile and cache configuration if necessary
             cache[key] = self._compile(
                 *wargs, device=tt_device, attributes=attributes,
-                num_warps=num_warps, num_stages=num_stages, force_nc_cache=force_nc_cache,
+                num_warps=num_warps, num_stages=num_stages, force_nc_cache=force_nc_cache, 
                 constants=constants, **meta
             )
         # pack arguments
@@ -753,19 +753,19 @@ def autotune(configs, key, reset_to_zero=None):
     .. highlight:: python
     .. code-block:: python
 
-        @triton.autotune(configs=[
+        @triton.autotune(configs=[ 
             triton.Config(meta={'BLOCK_SIZE': 128}, num_warps=4),
             triton.Config(meta={'BLOCK_SIZE': 1024}, num_warps=8),
-          ],
+          ], 
           key=['x_size'] # the two above configs will be evaluated anytime
-                         # the value of x_size changes
+                         # the value of x_size changes   
         )
         @triton.jit
         def kernel(x_ptr, x_size, **META):
             BLOCK_SIZE = META['BLOCK_SIZE']
-
+    
     :note: When all the configurations are evaluated, the kernel will run multiple time.
-           This means that whatever value the kernel updates will be updated multiple times.
+           This means that whatever value the kernel updates will be updated multiple times. 
            To avoid this undesired behavior, you can use the `reset_to_zero` argument, which
            reset the value of the provided tensor to `zero` before running any configuration.
 
@@ -794,12 +794,12 @@ def heuristics(values):
     .. highlight:: python
     .. code-block:: python
 
-        @heuristics(values={'BLOCK_SIZE': lambda args: 2 ** int(math.ceil(math.log2(args[1])))})
+        @triton.heuristics(values={'BLOCK_SIZE': lambda args: 2 ** int(math.ceil(math.log2(args[1])))})
         @triton.jit
         def kernel(x_ptr, x_size, **META):
             BLOCK_SIZE = META['BLOCK_SIZE'] # smallest power-of-two >= x_size
 
-
+    
     .param values: a dictionary of meta-parameter names and functions that compute the value of the meta-parameter.
                    each such function takes a list of positional arguments as input.
     .type values: dict[str, Callable[[list[Any]], Any]]
@@ -820,37 +820,6 @@ def heuristics(values):
     return decorator
 
 
-def _next_power_of_two(n):
-    res = 1
-    while res < n:
-        res *= 2
-    return res
-
-
-def _block_to_warps(n):
-    if n < 512:
-        return 4
-    if n < 2048:
-        return 8
-    return 16
-
-def _clip(x, lower, upper):
-    return max(lower, min(upper, x))
-
-def _total_size_to_block(total_size):
-    mp_cnt = torch.cuda.get_device_properties(torch.cuda.current_device()).multi_processor_count
-    return _clip(_next_power_of_two(total_size // mp_cnt), 128, 8192)
-
-
-def elementwise_heuristics(arg_idx):
-    """Sensible heuristic for elementwise functions"""
-
-    return triton.heuristics({
-        'BLOCK': lambda *args, **kwargs: _total_size_to_block(args[arg_idx]),
-        'num_warps': lambda *args, **meta: _block_to_warps(meta['BLOCK']),
-    })
-
-
 def jit(fn):
     """
     Decorator for JIT-compiling a function using the Triton compiler.
@@ -863,7 +832,7 @@ def jit(fn):
            * objects within the triton.language package,
            * arguments to this function,
            * other jit'd functions
-
+    
     :param fn: the function to be jit-compiled
     :type fn: Callable
     """
@@ -880,15 +849,14 @@ def cdiv(x, y):
 
 
 class TensorWrapper:
-    def __init__(self, data_ptr, dtype, device, is_cuda):
+    def __init__(self, data_ptr, dtype, device):
         self._data_ptr = data_ptr
         self.dtype = dtype
         self.device = device
-        self.is_cuda = is_cuda
 
     def data_ptr(self):
         return self._data_ptr
 
 
 def reinterpret(tensor, dtype):
-    return TensorWrapper(tensor.data_ptr(), dtype, tensor.device, tensor.is_cuda)
+    return TensorWrapper(tensor.data_ptr(), dtype, tensor.device)
