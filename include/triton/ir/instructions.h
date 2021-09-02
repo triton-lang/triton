@@ -73,6 +73,8 @@ public:
   // instruction id
   value_id_t get_id() const { return id_; }
 
+  void print(std::ostream &os);
+
 private:
   basic_block *parent_;
   std::map<ir::metadata::kind_t, unsigned> metadatas_;

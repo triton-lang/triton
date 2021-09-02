@@ -104,20 +104,25 @@ public:
   // accessors
   const args_t &args() const { return args_; }
   function_type* get_fn_type() { return fn_ty_; }
+  const function_type* get_fn_type() const { return fn_ty_; }
   module *get_parent() { return parent_; }
+  const module *get_parent() const { return parent_; }
 
   // factory methods
   static function *create(function_type *ty, linkage_types_t linkage,
                           const std::string &name, module *mod);
   // blocks
   const blocks_t &blocks() { return blocks_; }
+  const blocks_t &blocks() const { return blocks_; }
   void insert_block(basic_block* block, basic_block *next = nullptr);
 
   // attributes
   void add_attr(unsigned arg_id, attribute attr) { attrs_[arg_id].insert(attr); }
   const attr_map_t &attrs() { return attrs_; }
   bool has_attr(unsigned arg_id) const { return  attrs_.find(arg_id) != attrs_.end(); }
-  std::set<attribute> get_attributes(argument* arg) { return attrs_[arg->get_arg_no() + 1]; }
+  std::set<attribute> get_attributes(const argument* arg) { return attrs_[arg->get_arg_no() + 1]; }
+
+  void print(std::ostream &os);
 
   // visitor
   void accept(visitor *v) { v->visit_function(this); }
