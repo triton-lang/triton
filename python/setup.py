@@ -26,19 +26,19 @@ def get_llvm():
       return '', ''
     # download if nothing is installed
     name = 'clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04'
-    dir_mame = '/tmp'
-    llvm_include_dir = f'{dir_mame}/{name}/include'
-    llvm_library_dir = f'{dir_mame}/{name}/lib'
+    dir_name = '/tmp'
+    llvm_include_dir = f'{dir_name}/{name}/include'
+    llvm_library_dir = f'{dir_name}/{name}/lib'
     if not os.path.exists(llvm_library_dir):
         try:
-            shutil.rmtree(os.path.join(dir_mame, name))
+            shutil.rmtree(os.path.join(dir_name, name))
         except:
             pass
         url = f"https://github.com/llvm/llvm-project/releases/download/llvmorg-11.0.1/{name}.tar.xz"
         print(f'downloading and extracting {url}...')
         ftpstream = urllib.request.urlopen(url)
         file = tarfile.open(fileobj=ftpstream, mode="r|xz")
-        file.extractall(path=dir)
+        file.extractall(path=dir_name)
     return llvm_include_dir, llvm_library_dir
 
 
