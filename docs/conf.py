@@ -66,7 +66,7 @@ def setup(app):
 import sys
 import os
 sys.path.insert(0, os.path.abspath('../python/'))
-extensions = ['sphinx.ext.autodoc', 'sphinx.ext.autosummary', 'sphinx.ext.coverage', 'sphinx.ext.napoleon']
+extensions = ['sphinx.ext.autodoc', 'sphinx.ext.intersphinx', 'sphinx.ext.autosummary', 'sphinx.ext.coverage', 'sphinx.ext.napoleon']
 autosummary_generate = True
 
 # Sphinx gallery
@@ -78,6 +78,9 @@ sphinx_gallery_conf = {
     'filename_pattern': '',
     'ignore_pattern': r'__init__\.py',
     'within_subsection_order': FileNameSortKey,
+    'reference_url': {
+        'sphinx_gallery': None,
+    }
 }
 
 # Add any paths that contain templates here, relative to this directory.
