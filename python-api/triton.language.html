@@ -40,6 +40,7 @@
         <script src="../_static/jquery.js"></script>
         <script src="../_static/underscore.js"></script>
         <script src="../_static/doctools.js"></script>
+        <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     
     <script type="text/javascript" src="../_static/js/theme.js"></script>
 
@@ -158,6 +159,13 @@
 <li class="toctree-l2"><a class="reference internal" href="#comparison-ops">Comparison ops</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.minimum.html">triton.language.minimum</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.maximum.html">triton.language.maximum</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#random-number-generation">Random Number Generation</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.randint4x.html">triton.language.randint4x</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.randint.html">triton.language.randint</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.rand.html">triton.language.rand</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.randn.html">triton.language.randn</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#compiler-hint-ops">Compiler Hint Ops</a><ul>
@@ -434,6 +442,29 @@
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.maximum.html#triton.language.maximum" title="triton.language.maximum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">maximum</span></code></a></p></td>
 <td><p>Computes the element-wise maximum of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="random-number-generation">
+<span id="id1"></span><h2>Random Number Generation<a class="headerlink" href="#random-number-generation" title="Permalink to this headline">¶</a></h2>
+<table class="longtable docutils align-default">
+<colgroup>
+<col style="width: 10%" />
+<col style="width: 90%" />
+</colgroup>
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.randint4x.html#triton.language.randint4x" title="triton.language.randint4x"><code class="xref py py-obj docutils literal notranslate"><span class="pre">randint4x</span></code></a></p></td>
+<td><p>Given a <code class="code docutils literal notranslate"><span class="pre">seed</span></code> scalar and an <code class="code docutils literal notranslate"><span class="pre">offset</span></code> block, returns four blocks of random <code class="code docutils literal notranslate"><span class="pre">int32</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.randint.html#triton.language.randint" title="triton.language.randint"><code class="xref py py-obj docutils literal notranslate"><span class="pre">randint</span></code></a></p></td>
+<td><p>Given a <code class="code docutils literal notranslate"><span class="pre">seed</span></code> scalar and an <code class="code docutils literal notranslate"><span class="pre">offset</span></code> block, returns a single block of random <code class="code docutils literal notranslate"><span class="pre">int32</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.rand.html#triton.language.rand" title="triton.language.rand"><code class="xref py py-obj docutils literal notranslate"><span class="pre">rand</span></code></a></p></td>
+<td><p>Given a <code class="code docutils literal notranslate"><span class="pre">seed</span></code> scalar and an <code class="code docutils literal notranslate"><span class="pre">offset</span></code> block, returns a block of random <code class="code docutils literal notranslate"><span class="pre">float32</span></code> in <span class="math notranslate nohighlight">\(U(0, 1)\)</span></p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.randn.html#triton.language.randn" title="triton.language.randn"><code class="xref py py-obj docutils literal notranslate"><span class="pre">randn</span></code></a></p></td>
+<td><p>Given a <code class="code docutils literal notranslate"><span class="pre">seed</span></code> scalar and an <code class="code docutils literal notranslate"><span class="pre">offset</span></code> block, returns a block of random <code class="code docutils literal notranslate"><span class="pre">float32</span></code> in <span class="math notranslate nohighlight">\(\mathcal{N}(0, 1)\)</span></p></td>
 </tr>
 </tbody>
 </table>

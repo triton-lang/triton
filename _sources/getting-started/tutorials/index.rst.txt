@@ -72,6 +72,27 @@ Below is a gallery of tutorials for writing various basic operations with Triton
    :hidden:
 
    /getting-started/tutorials/03-matrix-multiplication
+
+.. raw:: html
+
+    <div class="sphx-glr-thumbcontainer" tooltip="In this tutorial, you will write a memory-efficient implementation of dropout whose state will ...">
+
+.. only:: html
+
+ .. figure:: /getting-started/tutorials/images/thumb/sphx_glr_04-low-memory-dropout_thumb.png
+     :alt: Low-Memory Dropout
+
+     :ref:`sphx_glr_getting-started_tutorials_04-low-memory-dropout.py`
+
+.. raw:: html
+
+    </div>
+
+
+.. toctree::
+   :hidden:
+
+   /getting-started/tutorials/04-low-memory-dropout
 .. raw:: html
 
     <div class="sphx-glr-clear"></div>
