@@ -1,27 +1,24 @@
 """
-Pseudorandom
+Dropout
 =================
 
-.. image:: random_bits.png
-  :width: 400
+In this tutorial, you will write a memory-efficient implementation of dropout whose state
+will be composed of a single int32 seed. This differs from more traditional implementations of dropout,
+whose state is generally composed of a bit mask tensor of the same shape as the input. You will learn about:
 
-In this tutorial, you will write a dropout kernel using Triton. This kernel will different from the
-usual implementations - the state will be represented by a single int32 seed, as opposed to bit mask
-of the same shape as a tensor. You will learn about:
-
-- how to generate pseudorandom numbers in parallel fashion on a GPU
-- the api for `triton.random.philox` (based on [SALMON2011]_)
+- The limitations of naive implementations of Dropout with PyTorch
+- Parallel pseudo-random number generation in Triton
 """
 
 # %%
 # Baseline
 # -------------
-# Dropout is an aritchemtic operation, which is often utilized to improve performance of deep
-# learning in low-data regime (i.e. regularization). It was first introduced in [SRIVASTAVA2014]_.
+# The *dropout* operator was first introduced in [SRIVASTAVA2014]_ as a way to improve the performance 
+# of deep neural networks in low-data regime (i.e. regularization).
 #
-# It takes a vector as input and produces an vector of the same shape as output. Each scalar in the
+# It takes a vector as input and produces a vector of the same shape as output. Each scalar in the
 # output has a probability :math:`p` of being changed to zero and otherwise it is copied from the input.
-# This forces the network to perform well even if only :math:`1 - p` scalars from the input are available.
+# This forces the network to perform well even when only :math:`1 - p` scalars from the input are available.
 #
 # At evaluation time we want to use the full power of the network so we set :math:`p=0`. Naively this would
 # increase the norm of the output (which can be a bad thing, e.g. it can lead to artificial decrease
@@ -38,11 +35,11 @@ import triton.language as tl
 
 @triton.jit
 def _dropout(
-        x_ptr,
-        x_keep_ptr,
-        output_ptr,
-        n_elements,
-        p,
+        x_ptr, # pointer to the input
+        x_keep_ptr, # pointer to a mask of 0s and 1s
+        output_ptr, # pointer to the output
+        n_elements, # number of elements in the `x` tensor
+        p, # probability that an element of `x` is changed to zero
         **meta,
 ):
     BLOCK_SIZE = meta['BLOCK_SIZE']
@@ -50,10 +47,12 @@ def _dropout(
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
+    # Load data
     x = tl.load(x_ptr + offsets, mask=mask)
     x_keep = tl.load(x_keep_ptr + offsets, mask=mask)
     # The line below is the crucial part, described in the paragraph above!
     output = tl.where(x_keep, x / (1 - p), 0.0)
+    # Write-back output
     tl.store(output_ptr + offsets, output, mask=mask)
 
 
@@ -84,14 +83,17 @@ print(tabulate.tabulate([
 # Above implementation of dropout works fine, but it can be a bit awkward to deal with. Firstly
 # we need to store the dropout mask for backpropagation. Secondly, dropout state management can get
 # very tricky when using recompute/checkpointing (e.g. see all the notes about `preserve_rng_state` in
-# https://pytorch.org/docs/1.9.0/checkpoint.html). In this tutorial we'll produce a custom replacement
-# that (1) has a smaller memory footprint; (2) requires less data movement; and (3) simplified the implementation 
+# https://pytorch.org/docs/1.9.0/checkpoint.html). In this tutorial we'll describe an alternative implementation
+# that (1) has a smaller memory footprint; (2) requires less data movement; and (3) simplifies the management
 # of persisting randomness across multiple invocations of the kernel.
 #
 # Pseudorandom number generation in Triton is simple! In this tutorial we will use the
 # :code:`triton.language.rand` function which generates a block of uniformly distributed :code:`float32` 
 # values in [0, 1), given a seed and a block of :code:`int32` offsets. But if you need it, Triton also provides
 # other :ref:`random number generation strategies <Random Number Generation>`.
+#
+# .. note::
+#    Triton's implementation of PRNG is based on the Philox algorithm (described on [SALMON2011]_).
 #
 # Let's put it all together.
 
