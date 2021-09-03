@@ -84,9 +84,9 @@ print(tabulate.tabulate([
 # Above implementation of dropout works fine, but it can be a bit awkward to deal with. Firstly
 # we need to store the dropout mask for backpropagation. Secondly, dropout state management can get
 # very tricky when using recompute/checkpointing (e.g. see all the notes about `preserve_rng_state` in
-# https://pytorch.org/docs/1.9.0/checkpoint.html). In this tutorial we'll produce an implementation
-# that reduces the memory usage and lowers the implementation barrier to persisting randomness across
-# multiple invocations of the kernel.
+# https://pytorch.org/docs/1.9.0/checkpoint.html). In this tutorial we'll produce a custom replacement
+# that (1) has a smaller memory footprint; (2) requires less data movement; and (3) simplified the implementation 
+# of persisting randomness across multiple invocations of the kernel.
 #
 # Pseudorandom number generation in Triton is simple! We'll use the function
 # `triton.language.random.philox.random_4x`. It takes offset and seed as input and produces 4 random
@@ -101,7 +101,6 @@ print(tabulate.tabulate([
 #
 # Let's put it all together.
 
-from triton.language.random.philox import *
 
 @triton.jit
 def _seeded_dropout(
@@ -118,12 +117,10 @@ def _seeded_dropout(
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     x = tl.load(x_ptr + offsets, mask=mask)
-    # generate random int32 based on seed and offset within the input tensor
-    random_int, _, _, _ = random_4x(seed, offsets)
     # convert that int32 to float in range [0, 1)
-    random_float = uint32_to_uniform_float(random_int)
+    random = tl.rand(seed, offsets)
     # compute dropout mask based on the value of the random float.
-    x_keep = random_float > p
+    x_keep = random > p
     output = tl.where(x_keep, x / (1 - p), 0.0)
     tl.store(output_ptr + offsets, output, mask=mask)
 

@@ -107,22 +107,46 @@ class CustomPhilox(CustomPhilox4x):
 ## Unit Tests
 #####################################
 
-def test_uint32_to_uniform():
+BLOCK = 1024
+
+# test generation of random uint32
+@pytest.mark.parametrize('size, seed',
+    [(size, seed) for size in ['10', '4,53', '10000']\
+                  for seed in [0, 42, 124, 54]]
+)
+def test_randint(size, seed, device='cuda'):
+    size = list(map(int, size.split(',')))
     @triton.jit
-    def kernel(source, target, N, **meta):
-        BLOCK = meta["BLOCK"]
+    def kernel(X, N, seed):
+        offset = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        rand = tl.randint(seed, offset)
+        tl.store(X + offset, rand, mask=offset < N)
+    # triton result
+    x = torch.empty(size, dtype=torch.int32, device=device)
+    N = x.numel()
+    grid = (triton.cdiv(N, BLOCK),)
+    kernel[grid](x, N, seed)
+    out_tri = x.cpu().numpy().astype(np.uint32).flatten().tolist()
+    # reference result
+    gen = CustomPhilox4x(seed, config=PHILOX_32)
+    out_ref = [gen.random_raw()[0] for _ in out_tri]
+    assert out_tri == out_ref
+
+# test conversion of random uint32 into random float in [0, 1]
+def test_uint32_to_uniform_float():
+    @triton.jit
+    def kernel(SRC, TGT, N, **meta):
         pid = tl.program_id(0)
         offset = pid * BLOCK + tl.arange(0, BLOCK)
-        mask = offset < N
-        s = tl.load(source + offset)
-        t = tl.random.uint32_to_uniform_float(s)
-        tl.store(target + offset, t, mask=mask)
+        src = tl.load(SRC + offset)
+        tgt = tl.random.uint32_to_uniform_float(src)
+        tl.store(TGT + offset, tgt, mask=offset < N)
     
     def run(source):
         target = -torch.ones(source.shape, dtype=torch.float32, device=source.device)
         N = source.numel()
-        grid = lambda meta: (triton.cdiv(N, meta["BLOCK"]),)
-        kernel[grid](source, target, N, BLOCK=1024)
+        grid = lambda meta: (triton.cdiv(N, BLOCK),)
+        kernel[grid](source, target, N)
         return target
         
     # check range of edge values
@@ -136,44 +160,39 @@ def test_uint32_to_uniform():
     target = run(source).tolist()
     assert scipy.stats.kstest(target, 'uniform', args=(0, 1)).statistic < 0.01
 
+# test uniform PRNG
 @pytest.mark.parametrize('size, seed',
-    [(size, seed) for size in ['10', '4,53', '10000']\
+    [(size, seed) for size in [1000000]\
                   for seed in [0, 42, 124, 54]]
 )
 def test_rand(size, seed, device='cuda'):
-    size = list(map(int, size.split(',')))
     @triton.jit
-    def kernel(X, N, seed, **meta):
-        BLOCK = meta['BLOCK']
+    def kernel(X, N, seed):
         offset = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
         rand = tl.rand(seed, offset)
         tl.store(X + offset, rand, mask=offset < N)
     # triton result
-    x = torch.empty(size, dtype=torch.int32, device=device)
+    x = torch.empty(size, dtype=torch.float32, device=device)
     N = x.numel()
-    grid = lambda meta: (triton.cdiv(N, meta["BLOCK"]),)
-    kernel[grid](x, N, seed, BLOCK=1024)
-    out_tri = x.cpu().numpy().astype(np.uint32).flatten().tolist()
-    # reference result
-    gen = CustomPhilox4x(seed, config=PHILOX_32)
-    out_ref = [gen.random_raw()[0] for _ in out_tri]
-    assert out_tri == out_ref
+    grid = (triton.cdiv(N, BLOCK),)
+    kernel[grid](x, N, seed)
+    assert scipy.stats.kstest(x.tolist(), 'uniform', args=(0, 1)).statistic < 0.01
 
+# test normal PRNG
 @pytest.mark.parametrize('size, seed',
     [(size, seed) for size in [1000000]\
                   for seed in [0, 42, 124, 54]]
 )
 def test_randn(size, seed, device='cuda'):
     @triton.jit
-    def kernel(X, N, seed, **meta):
-        BLOCK = meta['BLOCK']
+    def kernel(X, N, seed):
         offset = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
         rand = tl.randn(seed, offset)
         tl.store(X + offset, rand, mask=offset < N)
     # triton result
     x = torch.empty(size, dtype=torch.float32, device=device)
     N = x.numel()
-    grid = lambda meta: (triton.cdiv(N, meta["BLOCK"]),)
-    kernel[grid](x, N, seed, BLOCK=1024)
+    grid = (triton.cdiv(N, BLOCK),)
+    kernel[grid](x, N, seed)
     assert abs(x.mean()) < 1e-2
     assert abs(x.std() - 1) < 1e-2

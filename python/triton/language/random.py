@@ -111,19 +111,24 @@ def pair_uniform_to_normal(u1, u2):
     return r * tl.cos(th), r * tl.sin(th)
 
 @triton.jit
-def rand4x(seed, offset):
+def randint4x(seed, offset):
     """Given seed and offset returns four random uint32"""
     z = 0
     return philox_f(offset, z, z, z, seed, z)
 
 @triton.jit
-def rand(seed, offset):
-    ret, _, _, _ = rand4x(seed, offset)
+def randint(seed, offset):
+    ret, _, _, _ = randint4x(seed, offset)
     return ret
 
 @triton.jit
+def rand(seed, offset):
+    source = randint(seed, offset)
+    return uint32_to_uniform_float(source)
+
+@triton.jit
 def randn(seed, offset):
-    i1, i2, _, _ = rand4x(seed, offset)
+    i1, i2, _, _ = randint4x(seed, offset)
     u1 = uint32_to_uniform_float(i1)
     u2 = uint32_to_uniform_float(i2)
     n1, n2 = pair_uniform_to_normal(u1, u2)
