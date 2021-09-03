@@ -88,19 +88,12 @@ print(tabulate.tabulate([
 # that (1) has a smaller memory footprint; (2) requires less data movement; and (3) simplified the implementation 
 # of persisting randomness across multiple invocations of the kernel.
 #
-# Pseudorandom number generation in Triton is simple! We'll use the function
-# `triton.language.random.philox.random_4x`. It takes offset and seed as input and produces 4 random
-# int32's as output. To be maximally efficient one should use all 4 numbers at the same time, but
-# we're not going to worry about that for now in the interest of simplicity.
-#
-# The final ingredient we need for our dropout implementation is
-# `triton.language.random.philox.uint32_to_uniform_float`, which is a numerically stable way to
-# convert random integer to float sampled from [0, 1). This is originally designed from uint32, but
-# it works with int32 too as long as the int32 uniformly covers all the possible values it can take.
-# Both random int32 and uint32 is just a source of 32 random bits after all!
+# Pseudorandom number generation in Triton is simple! In this tutorial we will use the
+# :code:`triton.language.rand` function which generates a block of uniformly distributed :code:`float32` 
+# values in [0, 1), given a seed and a block of :code:`int32` offsets. But if you need it, Triton also provides
+# other :ref:`random number generation strategies <Random Number Generation>`.
 #
 # Let's put it all together.
-
 
 @triton.jit
 def _seeded_dropout(
@@ -111,16 +104,18 @@ def _seeded_dropout(
         seed,
         **meta,
 ):
+    # compute memory offsets of elements handled by this instance
     BLOCK_SIZE = meta['BLOCK_SIZE']
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    # load data from x
     mask = offsets < n_elements
     x = tl.load(x_ptr + offsets, mask=mask)
-    # convert that int32 to float in range [0, 1)
+    # randomly prune it
     random = tl.rand(seed, offsets)
-    # compute dropout mask based on the value of the random float.
     x_keep = random > p
+    # write-back
     output = tl.where(x_keep, x / (1 - p), 0.0)
     tl.store(output_ptr + offsets, output, mask=mask)
 

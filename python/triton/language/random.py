@@ -95,7 +95,11 @@ def philox_f(c0, c1, c2, c3, k0, k1):
 
 @triton.jit
 def uint32_to_uniform_float(x):
-    """Converts random uint32 to a float in range [0, 1)"""
+    """
+    Numerically stable function to convert a random integer into a random float uniformly sampled in [0, 1). 
+    This is originally designed from uint32, but it works with int32 too as long as the int32 uniformly 
+    covers all the possible values it can take.
+    """
     mantissa = x & 0x7fffff
     exp = 127
     res = mantissa | (exp << 23)
@@ -112,22 +116,55 @@ def pair_uniform_to_normal(u1, u2):
 
 @triton.jit
 def randint4x(seed, offset):
-    """Given seed and offset returns four random uint32"""
+    """
+    Given a :code:`seed` scalar and an :code:`offset` block, returns four 
+    blocks of random :code:`int32`. 
+    
+    This is the maximally efficient entry point 
+    to Triton's Philox pseudo-random number generator.
+
+    :param seed: The seed for generating random numbers.
+    :param offsets: The offsets to generate random numbers for.
+    """
     z = 0
     return philox_f(offset, z, z, z, seed, z)
 
 @triton.jit
 def randint(seed, offset):
+    """
+    Given a :code:`seed` scalar and an :code:`offset` block, returns a single 
+    block of random :code:`int32`. 
+    
+    If you need multiple streams of random numbers,
+    using `randint4x` is likely to be faster than calling `randint` 4 times.
+
+    :param seed: The seed for generating random numbers.
+    :param offsets: The offsets to generate random numbers for.
+    """
     ret, _, _, _ = randint4x(seed, offset)
     return ret
 
 @triton.jit
 def rand(seed, offset):
+    """
+    Given a :code:`seed` scalar and an :code:`offset` block, 
+    returns a block of random :code:`float32` in :math:`U(0, 1)`
+
+    :param seed: The seed for generating random numbers.
+    :param offsets: The offsets to generate random numbers for.
+    """
     source = randint(seed, offset)
     return uint32_to_uniform_float(source)
 
 @triton.jit
 def randn(seed, offset):
+    """
+    Given a :code:`seed` scalar and an :code:`offset` block, 
+    returns a block of random :code:`float32` in :math:`\mathcal{N}(0, 1)`
+
+    :param seed: The seed for generating random numbers.
+    :param offsets: The offsets to generate random numbers for.
+    """
     i1, i2, _, _ = randint4x(seed, offset)
     u1 = uint32_to_uniform_float(i1)
     u2 = uint32_to_uniform_float(i2)
