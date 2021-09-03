@@ -87,6 +87,8 @@ public:
   // Metadata
   void add_metadata(const std::string &name, md_pair_t x)     { metadatas_[name] = x; }
 
+  void print(std::ostream &os);
+
 private:
   std::string name_;
   builder& builder_;

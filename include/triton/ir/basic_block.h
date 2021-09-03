@@ -39,6 +39,7 @@ public:
 
   // get instruction list
   inst_list_t           &get_inst_list()       { return inst_list_; }
+  const inst_list_t     &get_inst_list() const { return inst_list_; }
   void  erase(instruction *i)                  {  inst_list_.remove(i); }
 
   // instruction iterator functions
@@ -66,6 +67,8 @@ public:
 
   // factory functions
   static basic_block* create(context &ctx, const std::string &name, function *parent);
+
+  void print(std::ostream &os);
 
   // visitor
   void accept(visitor *v) { v->visit_basic_block(this); }
