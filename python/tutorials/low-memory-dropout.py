@@ -1,5 +1,5 @@
 """
-Dropout
+Low-Memory Dropout
 =================
 
 In this tutorial, you will write a memory-efficient implementation of dropout whose state
