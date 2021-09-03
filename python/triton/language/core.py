@@ -648,6 +648,7 @@ def cdiv(x, div):
     """
     return (x + div - 1) // div
 
+
 @triton.jit
 def minimum(x, y):
     """
