@@ -72,15 +72,12 @@ void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps, 
   layouts.run(ir);
   coalesce.run(ir);
   dce.run(ir);
-//  exit(1);
-
   align.run(ir);
   dce.run(ir);
   if (target->is_gpu())
     cts.run(ir);
   dce.run(ir);
   align.run(ir);
-//  ir::print(ir, std::cout);
   axes.run(ir);
   layouts.run(ir);
   peephole.run(ir);
@@ -88,6 +85,7 @@ void add_passes_to_emit_bin(ir::module &ir, driver::device *dev, int num_warps, 
   align.run(ir);
   axes.run(ir);
   layouts.run(ir);
+  layouts.print(std::cout);
   swizzle.run(ir);
   liveness.run(ir);
   allocation.run(ir);

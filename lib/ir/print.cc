@@ -160,16 +160,18 @@ void AssemblyWriter::write_operand(const value *operand, bool print_type) {
 
   if (operand->has_name()) {
     os << operand->get_name();
-    return;
+  } else {  // Print the normal way
+    int slot_num = slot_tracker.get_local_slot(operand);
+
+    if (slot_num != -1)
+      os << "%" << slot_num;
+    else
+      os << "<badref>";
   }
 
-  // Print the normal way
-  int slot_num = slot_tracker.get_local_slot(operand);
-
-  if (slot_num != -1)
-    os << "%" << slot_num;
-  else
-    os << "<badref>";
+  // Print type
+  if (print_type)
+    os << ":" << operand->get_type()->repr();
 }
 
 void AssemblyWriter::print_module(const module *mod) {
@@ -289,7 +291,7 @@ void AssemblyWriter::print_instruction(const instruction *instr) {
   for (unsigned i = 0; i < num_ops; ++i) {
     if (i)
       os << ", ";
-    write_operand(ops[i]);
+    write_operand(ops[i], /*print_type=*/true);
   }
 
   os << ";\n";

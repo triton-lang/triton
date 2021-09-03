@@ -88,7 +88,7 @@ void init_triton_codegen(py::module &&m) {
         size_t shared_mem;
         triton::codegen::add_passes_to_emit_bin(ir, dev, num_warps, num_stages, force_nc_cache, mod, ker, shared_mem);
         std::stringstream ss;
-        ir::print(ir, ss);
+        ir.print(ss);
         return std::make_tuple(mod, ker, shared_mem, ss.str());
       },
       py::return_value_policy::take_ownership);

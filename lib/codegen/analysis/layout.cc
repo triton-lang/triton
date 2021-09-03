@@ -541,25 +541,27 @@ void layouts::run(ir::module &mod) {
 
 void layouts::print(std::ostream &os) {
   os << "Num layouts: " << num_layouts() << "\n"
-     << layouts_.size() << "\n"
-     << groups_.size() << "\n";
+     << "layouts_.size(): " << layouts_.size() << "\n"
+     << "groups_.size(): " << groups_.size() << "\n";
 
-  bool func_print = true;
+  bool func_print = false;
 
-  for (auto &[v, g] : groups_) {
-    if (auto instr = dynamic_cast<ir::instruction*>(v)) {
-      if (func_print) {
-        os << "Print mod:\n";
-        ir::print(*instr->get_parent()->get_parent()->get_parent(), os);
-        func_print = false;
-      }
-      ir::print(*instr, os);
+  // should cache functions
+  ir::value *any_value = *values_.begin()->second.begin();
+  os << "Print function:\n";
+  dynamic_cast<ir::instruction*>(any_value)->get_parent()->get_parent()->print(os);
+  os << "\n\n";
+
+  for (auto &[layout_id, values] : values_) {
+    os << "Layout id: " << layout_id << "\n";
+    std::set<ir::value*> values_set(values.begin(), values.end());
+    for (ir::value *v : values_set) {
+      if (auto *instr = dynamic_cast<ir::instruction*>(v))
+        instr->print(os);
     }
-    os << g << "\n";
+    
   }
-
-
-}
+} // layouts::print()
 
 }
 }

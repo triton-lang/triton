@@ -33,7 +33,7 @@ private:
 
 public:
   axes();
-  void run(ir::module &mod);
+  void run(ir::module &mod, bool print_debug = false);
   // accessors
   int get(ir::value *value, unsigned dim);
   std::vector<int> get(ir::value *value);

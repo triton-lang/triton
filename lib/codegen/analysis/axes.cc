@@ -1,5 +1,7 @@
 #include "triton/codegen/analysis/axes.h"
 #include "triton/ir/utils.h"
+#include "triton/ir/function.h"
+#include "triton/ir/basic_block.h"
 #include "triton/ir/instructions.h"
 #include "triton/ir/type.h"
 #include <iostream>
@@ -132,7 +134,7 @@ std::vector<int> axes::get(ir::value *value) {
   return result;
 }
 
-void axes::run(ir::module &mod) {
+void axes::run(ir::module &mod, bool print_debug) {
   // make graph
   graph_.clear();
   axes_.clear();
@@ -144,6 +146,25 @@ void axes::run(ir::module &mod) {
   std::set<size_t> uniq;
   for(auto x: axes_)
     uniq.insert(x.second);
+
+  if (print_debug) {
+    bool func_print = false;
+    // dump pass info
+    for (auto &[node, ax] : axes_) {
+      ir::value *v = node.first;
+      unsigned dim = node.second;
+      if (auto *instr = dynamic_cast<ir::instruction*>(v)) {
+        if (!func_print) {
+          instr->get_parent()->get_parent()->print(std::cout);
+          func_print = true;
+        }
+        instr->print(std::cout);
+        std::cout << "dim: " << dim
+                  << "\naxes: " << ax << std::endl;
+      }
+      std::cout << std::endl;
+    }
+  }
 }
 
 }
