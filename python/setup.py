@@ -126,7 +126,7 @@ setup(
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
-    packages=["triton", "triton/_C", "triton/language","triton/language/random", "triton/tools", "triton/ops", "triton/ops/blocksparse"],
+    packages=["triton", "triton/_C", "triton/language", "triton/tools", "triton/ops", "triton/ops/blocksparse"],
     install_requires=["torch"],
     package_data={"triton/ops": ["*.c"], "triton/ops/blocksparse": ["*.c"]},
     include_package_data=True,
