@@ -114,6 +114,7 @@ def pair_uniform_to_normal(u1, u2):
     r = tl.sqrt(-2.0 * tl.log(u1))
     return r * tl.cos(th), r * tl.sin(th)
 
+
 @triton.jit
 def randint4x(seed, offset):
     """
@@ -128,6 +129,7 @@ def randint4x(seed, offset):
     """
     z = 0
     return philox_f(offset, z, z, z, seed, z)
+
 
 @triton.jit
 def randint(seed, offset):
@@ -144,6 +146,7 @@ def randint(seed, offset):
     ret, _, _, _ = randint4x(seed, offset)
     return ret
 
+
 @triton.jit
 def rand(seed, offset):
     """
@@ -155,6 +158,7 @@ def rand(seed, offset):
     """
     source = randint(seed, offset)
     return uint32_to_uniform_float(source)
+
 
 @triton.jit
 def randn(seed, offset):
@@ -168,6 +172,37 @@ def randn(seed, offset):
     i1, i2, _, _ = randint4x(seed, offset)
     u1 = uint32_to_uniform_float(i1)
     u2 = uint32_to_uniform_float(i2)
+    n1, _ = pair_uniform_to_normal(u1, u2)
+    return n1
+
+
+@triton.jit
+def rand4x(seed, offsets):
+    """
+    Given a :code:`seed` scalar and an :code:`offsets` block,
+    returns a 4 blocks of random :code:`float32` in :math:`U(0, 1)`
+
+    :param seed: The seed for generating random numbers.
+    :param offsets: The offsets to generate random numbers for.
+    """
+    i1, i2, i3, i4 = randint4x(seed, offsets)
+    u1 = uint32_to_uniform_float(i1)
+    u2 = uint32_to_uniform_float(i2)
+    u3 = uint32_to_uniform_float(i3)
+    u4 = uint32_to_uniform_float(i4)
+    return u1, u2, u3, u4
+
+
+@triton.jit
+def randn4x(seed, offset):
+    """
+    Given a :code:`seed` scalar and an :code:`offset` block,
+    returns a 4 blocks of random :code:`float32` in :math:`\mathcal{N}(0, 1)`
+
+    :param seed: The seed for generating random numbers.
+    :param offsets: The offsets to generate random numbers for.
+    """
+    u1, u2, u3, u4 = rand4x(seed, offset)
     n1, n2 = pair_uniform_to_normal(u1, u2)
-    ret = tl.where(offset % 2 == 0, n1, n2)
-    return ret
+    n3, n4 = pair_uniform_to_normal(u3, u4)
+    return n1, n2, n3, n4
