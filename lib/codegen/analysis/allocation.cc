@@ -50,7 +50,6 @@ void allocation::run(ir::module &mod) {
       J.erase(j_it);
     }
   }
-
   // Build interference graph
   std::map<shared_layout*, std::set<shared_layout*>> interferences;
   for(shared_layout* x: V)
@@ -66,13 +65,10 @@ void allocation::run(ir::module &mod) {
         && XS.intersect(YS))
       interferences[x].insert(y);
   }
-
   // Initialize colors
   std::map<shared_layout*, int> colors;
   for(shared_layout* X: V)
     colors[X] = (X==V[0])?0:-1;
-
-
   // First-fit graph coloring
   std::vector<bool> available(V.size());
   for(shared_layout* x: V){
@@ -87,7 +83,6 @@ void allocation::run(ir::module &mod) {
     auto It = std::find(available.begin(), available.end(), true);
     colors[x] = std::distance(available.begin(), It);
   }
-
   // Finalize allocation
   for(shared_layout* x: V){
     unsigned Adj = 0;
@@ -95,7 +90,6 @@ void allocation::run(ir::module &mod) {
       Adj = std::max<unsigned>(Adj, starts[y] + y->get_size());
     offsets_[x] = starts[x] + colors[x] * Adj;
   }
-
   // Save maximum size of induced memory space
   allocated_size_ = 0;
   for(shared_layout* x: V)

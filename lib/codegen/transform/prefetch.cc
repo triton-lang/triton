@@ -83,7 +83,7 @@ void prefetch::run(ir::module &mod) {
   }
 
   // move loads to the beginning of the loop
-  if (tgt_->as_nvidia() && tgt_->as_nvidia()->sm() < 80) {
+  if (tgt_->as_nvidia()->sm() < 80) {
     for (ir::function *fn : mod.get_function_list())
     for (ir::basic_block *bb : fn->blocks()) {
       // only apply to loop body

@@ -25,7 +25,7 @@ def _patch(fn):
             if x.type.is_void():
                 return None
             return block(x)
-        return tl
+        return x
 
     def wrapper(*args, **kwargs):
         builder = args[-1]
@@ -624,6 +624,14 @@ def max_contiguous(input, value, _builder=None):
     return frontend.max_contiguous(input, value, _builder)
 
 
+@builtin
+def max_contiguous(input, value, _builder=None):
+    """
+    Let the compiler knows that the `value` first values in :code:`input` are contiguous. 
+    """
+    return frontend.max_contiguous(input, value, _builder)
+
+
 # -----------------------
 # Standard library
 # -----------------------
@@ -639,6 +647,7 @@ def cdiv(x, div):
     :param div: Block
     """
     return (x + div - 1) // div
+
 
 @triton.jit
 def minimum(x, y):

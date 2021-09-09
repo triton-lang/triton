@@ -146,7 +146,7 @@ class CodeGenerator(ast.NodeVisitor):
             values = [values]
         for name, value in zip(names, values):
             if not isinstance(value, triton.language.block):
-                value = triton.language._to_ir(value, self.builder)
+                value = triton.language.core._to_ir(value, self.builder)
             self.set_value(name, value)
 
     def visit_AugAssign(self, node):
@@ -383,7 +383,7 @@ class CodeGenerator(ast.NodeVisitor):
         if isinstance(fn, JITFunction):
             return fn(*args, generator=self, **kws)
         if hasattr(fn, '__self__') and self.is_triton_object(fn.__self__) or \
-            sys.modules[fn.__module__] is triton.language:
+            sys.modules[fn.__module__] is triton.language.core:
             return fn(*args, _builder=self.builder, **kws)
         return fn(*args, **kws)
 
@@ -783,7 +783,7 @@ def heuristics(values):
     .. highlight:: python
     .. code-block:: python
 
-        @heuristics(values={'BLOCK_SIZE': lambda args: 2 ** int(math.ceil(math.log2(args[1])))})
+        @triton.heuristics(values={'BLOCK_SIZE': lambda args: 2 ** int(math.ceil(math.log2(args[1])))})
         @triton.jit
         def kernel(x_ptr, x_size, **META):
             BLOCK_SIZE = META['BLOCK_SIZE'] # smallest power-of-two >= x_size

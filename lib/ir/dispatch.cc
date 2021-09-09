@@ -374,12 +374,15 @@ ir::value *dispatch::broadcast(ir::value *input, shape_t shape, ir::builder *bui
   auto src_shape = input->get_type()->get_block_shapes();
   if (src_shape.size() != shape.size())
     throw std::runtime_error("Cannot broadcast");
+  if(shape == src_shape)
+    return input;
   return builder->create_broadcast(input, shape);
 }
 
 std::tuple<ir::value*, ir::value*> dispatch::broadcast(ir::value *lhs, ir::value* rhs, ir::builder *builder) {
   ir::type *lhs_ty = lhs->get_type();
   ir::type *rhs_ty = rhs->get_type();
+
   // make_shape_compatible(block, scalar)
   if (lhs_ty->is_block_ty() && !rhs_ty->is_block_ty())
     rhs = builder->create_splat(rhs, lhs_ty->get_block_shapes());
@@ -422,6 +425,8 @@ ir::value *dispatch::bitcast(ir::value *input, ir::type *dst_ty, ir::builder *bu
     return input;
   ir::type *src_sca_ty = src_ty->get_scalar_ty();
   ir::type *dst_sca_ty = dst_ty->get_scalar_ty();
+  if(src_sca_ty->is_pointer_ty() || dst_sca_ty->is_pointer_ty())
+    return cast(input, dst_ty, builder);
   // Bitcast
   int src_bits = src_sca_ty->get_primitive_size_in_bits();
   int dst_bits = dst_sca_ty->get_primitive_size_in_bits();
@@ -469,6 +474,10 @@ ir::value *dispatch::cast(ir::value *input, ir::type *dst_ty, ir::builder *build
     else
       return builder->create_si_to_fp(input, dst_ty);
   }
+  if (src_sca_ty->is_pointer_ty() && !dst_sca_ty->is_pointer_ty())
+    return builder->create_cast(ir::PtrToInt, input, dst_ty);
+  if (!src_sca_ty->is_pointer_ty() && dst_sca_ty->is_pointer_ty())
+    return builder->create_cast(ir::IntToPtr, input, dst_ty);
   // Ptr -> Ptr
   if (src_sca_ty->is_pointer_ty() && dst_sca_ty->is_pointer_ty())
     return builder->create_cast(ir::BitCast, input, dst_ty);

@@ -93,7 +93,22 @@ protected:
   shape_t shape_;
 };
 
-class mma_layout: public data_layout {
+class distributed_layout: public data_layout{
+public:
+  distributed_layout(id_t id,
+                     const std::vector<int>& axes,
+                     const std::vector<unsigned>& shape,
+                     const std::vector<ir::value*>& values,
+                     analysis::align* align);
+
+  int shape_per_cta(size_t k) { return shape_per_cta_.at(k); }
+  int rep_per_cta(size_t k) { return shape_[k] / shape_per_cta_[k]; }
+
+protected:
+  std::vector<int> shape_per_cta_;
+};
+
+class mma_layout: public distributed_layout {
 public:
   mma_layout(size_t num_warps,
                 const std::vector<int>& axes,
@@ -107,18 +122,22 @@ public:
   int fpw(size_t k) { return fpw_.at(k); }
   int wpt(size_t k) { return wpt_.at(k); }
   int spw(size_t k) { return spw_.at(k); }
-  int spt(size_t k) { return spt_.at(k); }
   int rep(size_t k) { return rep_.at(k); }
 
 private:
+  // fragment per warp
   std::vector<int> fpw_;
+  // shape per warp
   std::vector<int> spw_;
+  // warp per tile
   std::vector<int> wpt_;
+  // shape per tile
   std::vector<int> spt_;
+  // repetitions
   std::vector<int> rep_;
 };
 
-struct scanline_layout: public data_layout {
+struct scanline_layout: public distributed_layout {
   scanline_layout(size_t num_warps,
                     const std::vector<int>& axes,
                     const std::vector<unsigned>& shape,
@@ -131,7 +150,9 @@ struct scanline_layout: public data_layout {
   int nts(size_t k) { return nts_.at(k); }
 
 public:
+  // micro tile size. The size of a tile held by a thread block.
   std::vector<int> mts_;
+  // nano tile size. The size of a tile held by a thread.
   std::vector<int> nts_;
 };
 
@@ -212,6 +233,7 @@ public:
 
   // accessors
   unsigned layout_of(ir::value *value) const                  { return groups_.at(value); }
+  bool has(ir::value* value) const { return groups_.find(value) != groups_.end(); }
   const std::vector<ir::value*>& values_of(unsigned id) const { return values_.at(id); }
   size_t num_layouts() const                                  { return values_.size();}
   data_layout* get(size_t id)                                 { return layouts_.at(id); }
@@ -219,7 +241,7 @@ public:
   std::map<size_t, data_layout*> &get_all()                   { return layouts_; }
   bool has_tmp(ir::value* i)                                  { return tmp_.find(i) != tmp_.end(); }
   int tmp(ir::value* i)                                       { return tmp_.at(i);}
-
+  void copy(ir::value* dst, ir::value* src)                   { groups_[dst] = groups_[src]; }
   // execution
   void run(ir::module &mod);
 

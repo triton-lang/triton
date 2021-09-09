@@ -121,6 +121,19 @@ Comparison ops
     minimum
     maximum
 
+.. _Random Number Generation:
+
+Random Number Generation
+-------------------------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    randint4x
+    randint
+    rand
+    randn
 
 Compiler Hint Ops
 -------------------
