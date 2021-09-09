@@ -34,7 +34,16 @@ def patch_kernel(template, to_replace):
     return kernel
 
 
-
+@pytest.mark.parametrize("dtype_x", [
+    (dtype_x) for dtype_x in dtypes
+])
+def test_empty_kernel(dtype_x, device='cuda'):
+    SIZE = 128
+    @triton.jit
+    def kernel(X, **meta):
+        pass
+    x = triton.testing.random(SIZE, dtype=cvt[dtype_x], device=device)
+    kernel[(1, )](x, SIZE=SIZE, num_warps=4)
 
 # generic test functions
 def _test_unary(dtype_x, expr, torch_expr=None, device='cuda'):
