@@ -10,6 +10,10 @@
 #include "triton/external/CUDA/cuda.h"
 #include "triton/external/CUDA/nvml.h"
 
+//// HIP backend
+//#define __HIP_PLATFORM_AMD__
+#include "triton/external/hip.h"
+
 //Exceptions
 #include <iostream>
 #include <stdexcept>
@@ -28,6 +32,7 @@ class cu_context;
 
 template<class T> void check(T){}
 void check(CUresult err);
+void check(hipError_t err);
 
 class dispatch
 {
@@ -58,17 +63,18 @@ protected:
   }
 
 public:
+  static void release();
+  // Nvidia
   static bool nvmlinit();
   static bool cuinit();
-  static void release();
+  // AMD
+  static bool hipinit();
 
   /* ------------------- *
    * CUDA
    * ------------------- */
   // context management
   static CUresult cuInit(unsigned int Flags);
-  static CUresult cuCtxGetCurrent(CUcontext *pctx);
-  static CUresult cuCtxSetCurrent(CUcontext ctx);
   static CUresult cuCtxDestroy_v2(CUcontext ctx);
   static CUresult cuCtxCreate_v2(CUcontext *pctx, unsigned int flags, CUdevice dev);
   static CUresult cuCtxPushCurrent_v2(CUcontext ctx);
@@ -128,6 +134,55 @@ public:
   static nvmlReturn_t nvmlDeviceGetMaxClockInfo(nvmlDevice_t device, nvmlClockType_t type, unsigned int *clock);
   static nvmlReturn_t nvmlDeviceSetApplicationsClocks(nvmlDevice_t device, unsigned int mem_clock, unsigned int sm_clock);
 
+  /* ------------------- *
+   * HIP
+   * ------------------- */
+  // context management
+  static hipError_t hipInit(unsigned int Flags);
+  static hipError_t hipCtxDestroy(hipCtx_t ctx);
+  static hipError_t hipCtxCreate(hipCtx_t *pctx, unsigned int flags, hipDevice_t dev);
+  static hipError_t hipCtxPushCurrent(hipCtx_t ctx);
+  static hipError_t hipCtxPopCurrent(hipCtx_t *pctx);
+  static hipError_t hipCtxGetDevice(hipDevice_t* result);
+  static hipError_t hipCtxEnablePeerAccess(hipCtx_t peerContext, unsigned int flags);
+  static hipError_t hipDriverGetVersion(int *driverVersion);
+  // device management
+  static hipError_t hipGetDevice(hipDevice_t *device, int ordinal);
+  static hipError_t hipDeviceGetName(char *name, int len, hipDevice_t dev);
+  static hipError_t hipDeviceGetPCIBusId(char *id, int len, hipDevice_t dev);
+  static hipError_t hipDeviceGetAttribute(int *pi, hipDeviceAttribute_t attrib, hipDevice_t dev);
+  static hipError_t hipGetDeviceCount(int *count);
+  // module management
+  static hipError_t hipModuleGetGlobal(hipDeviceptr_t *dptr, size_t* bytes, hipModule_t hmod, const char *name);
+  static hipError_t hipModuleLoad(hipModule_t *module, const char *fname);
+  static hipError_t hipModuleLoadData(hipModule_t* module, const void* image);
+  static hipError_t hipModuleUnload(hipModule_t hmod);
+  static hipError_t hipModuleLoadDataEx(hipModule_t *module, const void *image, unsigned int numOptions, hipJitOption *options, void **optionValues);
+  static hipError_t hipModuleGetFunction(hipFunction_t *hfunc, hipModule_t hmod, const char *name);
+  // stream management
+  static hipError_t hipStreamCreate(hipStream_t *phStream, unsigned int Flags);
+  static hipError_t hipStreamSynchronize(hipStream_t hStream);
+  static hipError_t hipStreamDestroy(hipStream_t hStream);
+  static hipError_t hipModuleLaunchKernel(hipFunction_t f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, unsigned int sharedMemBytes, hipStream_t hStream, void **kernelParams, void **extra);
+  // function management
+  static hipError_t hipFuncGetAttributes(hipFuncAttributes* attrib, void* hfunc);
+  static hipError_t hipFuncSetAttribute(hipFunction_t hfunc, hipFuncAttribute attrib, int value);
+  static hipError_t hipFuncSetCacheConfig(hipFunction_t hfunc, hipFuncCache_t config);
+  // memory management
+  static hipError_t hipMalloc(hipDeviceptr_t *dptr, size_t bytesize);
+  static hipError_t hipPointerGetAttribute(void * data, CUpointer_attribute attribute, hipDeviceptr_t ptr);
+  static hipError_t hipMemsetD8Async(hipDeviceptr_t dst, unsigned char x, size_t N, hipStream_t stream);
+  static hipError_t hipMemcpyDtoH(void *dstHost, hipDeviceptr_t srcDevice, size_t ByteCount);
+  static hipError_t hipFree(hipDeviceptr_t dptr);
+  static hipError_t hipMemcpyDtoHAsync(void *dstHost, hipDeviceptr_t srcDevice, size_t ByteCount, hipStream_t hStream);
+  static hipError_t hipMemcpyHtoDAsync(hipDeviceptr_t dstDevice, const void *srcHost, size_t ByteCount, hipStream_t hStream);
+  static hipError_t hipMemcpyHtoD(hipDeviceptr_t dstDevice, const void *srcHost, size_t ByteCount);
+  // event management
+  static hipError_t hipEventCreate(hipEvent_t *phEvent, unsigned int Flags);
+  static hipError_t hipEventElapsedTime(float *pMilliseconds, hipEvent_t hStart, hipEvent_t hEnd);
+  static hipError_t hipEventRecord(hipEvent_t hEvent, hipStream_t hStream);
+  static hipError_t hipEventDestroy(hipEvent_t hEvent);
+
 
 
 private:
@@ -135,6 +190,7 @@ private:
   // Libraries
   static void* cuda_;
   static void* nvml_;
+  static void* hip_;
 
 
   /* ------------------- *
@@ -194,9 +250,6 @@ private:
   static void* cuEventRecord_;
   static void* cuEventDestroy_v2_;
 
-
-
-
   /* ------------------- *
    * NVML
    * ------------------- */
@@ -205,6 +258,55 @@ private:
   static void* nvmlDeviceGetClockInfo_;
   static void* nvmlDeviceGetMaxClockInfo_;
   static void* nvmlDeviceSetApplicationsClocks_;
+
+  /* ------------------- *
+   * HIP
+   * ------------------- */
+  // context management
+  static void* hipInit_;
+  static void* hipCtxDestroy_;
+  static void* hipCtxCreate_;
+  static void* hipCtxPushCurrent_;
+  static void* hipCtxPopCurrent_;
+  static void* hipCtxGetDevice_;
+  static void* hipCtxEnablePeerAccess_;
+  static void* hipDriverGetVersion_;
+  // device management
+  static void* hipGetDevice_;
+  static void* hipDeviceGetName_;
+  static void* hipDeviceGetPCIBusId_;
+  static void* hipDeviceGetAttribute_;
+  static void* hipGetDeviceCount_;
+  // module management
+  static void* hipModuleGetGlobal_;
+  static void* hipModuleLoad_;
+  static void* hipModuleLoadData_;
+  static void* hipModuleUnload_;
+  static void* hipModuleLoadDataEx_;
+  static void* hipModuleGetFunction_;
+  // stream management
+  static void* hipStreamCreate_;
+  static void* hipStreamSynchronize_;
+  static void* hipStreamDestroy_;
+  static void* hipModuleLaunchKernel_;;
+  // function management
+  static void* hipFuncGetAttributes_;
+  static void* hipFuncSetAttribute_;
+  static void* hipFuncSetCacheConfig_;
+  // memory management
+  static void* hipMalloc_;
+  static void* hipPointerGetAttribute_;
+  static void* hipMemsetD8Async_;
+  static void* hipMemcpyDtoH_;
+  static void* hipFree_;
+  static void* hipMemcpyDtoHAsync_;
+  static void* hipMemcpyHtoDAsync_;
+  static void* hipMemcpyHtoD_;
+  // event management
+  static void* hipEventCreate_;
+  static void* hipEventElapsedTime_;
+  static void* hipEventRecord_;
+  static void* hipEventDestroy_;
 };
 
 }

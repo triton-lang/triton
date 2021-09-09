@@ -34,6 +34,8 @@ def patch_kernel(template, to_replace):
     return kernel
 
 
+
+
 # generic test functions
 def _test_unary(dtype_x, expr, torch_expr=None, device='cuda'):
     SIZE = 128
@@ -425,7 +427,7 @@ def test_permute(dtype, shape, perm, device='cuda'):
     # compare
     triton.testing.assert_almost_equal(z_tri, z_ref)
     # parse ptx to make sure ld/st are vectorized
-    ptx = pgm.asm('ptx')
+    ptx = pgm.asm['ptx']
     assert 'ld.global.v4' in ptx
     assert 'st.global.v4' in ptx
 
@@ -484,7 +486,7 @@ def test_dot(epilogue, device='cuda'):
         z_ref += z[0,:][None, :]
     z_ref = z_ref.to(torch.float16)
     # compare
-    ptx = pgm.asm('ptx')
+    ptx = pgm.asm['ptx']
     # print(ptx)
     triton.testing.assert_almost_equal(z_tri, z_ref)
     # make sure ld/st are vectorized
@@ -511,3 +513,13 @@ def test_dot(epilogue, device='cuda'):
 # ---------------
 # test while
 # ---------------
+
+# ---------------
+# test noop
+#----------------
+def test_noop(device='cuda'):
+    @triton.jit
+    def kernel(**meta):
+        pass
+    x = triton.testing.random((1,), dtype=torch.int32, device=device)
+    kernel[(1, )](x)
