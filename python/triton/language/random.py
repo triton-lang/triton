@@ -1,5 +1,5 @@
 import triton
-import triton.language as tl
+from . import core as tl
 
 
 # Notes
