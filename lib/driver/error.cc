@@ -94,6 +94,73 @@ void check(CUresult err)
   }
 }
 
+void check(hipError_t error) {
+  using namespace exception::hip;
+  switch(error)
+  {
+  case hipSuccess                              : break;
+    case hipErrorInvalidValue                  : throw invalid_value();
+    case hipErrorMemoryAllocation                  : throw out_of_memory();
+    case hipErrorNotInitialized                : throw not_initialized();
+    case hipErrorDeinitialized                  : throw deinitialized();
+    case hipErrorProfilerDisabled              : throw profiler_disabled();
+    case hipErrorProfilerNotInitialized       : throw profiler_not_initialized();
+    case hipErrorProfilerAlreadyStarted       : throw profiler_already_started();
+    case hipErrorProfilerAlreadyStopped       : throw profiler_already_stopped();
+    case hipErrorNoDevice                      : throw no_device();
+    case hipErrorInvalidSymbol                      : throw invalid_symbol();
+    case hipErrorInvalidDevice                 : throw invalid_device();
+    case hipErrorInvalidImage                  : throw invalid_image();
+    case hipErrorInvalidContext                : throw invalid_context();
+    case hipErrorContextAlreadyCurrent        : throw context_already_current();
+    case hipErrorMapFailed                     : throw map_failed();
+    case hipErrorUnmapFailed                   : throw unmap_failed();
+    case hipErrorArrayIsMapped                : throw array_is_mapped();
+    case hipErrorAlreadyMapped                 : throw already_mapped();
+    case hipErrorNoBinaryForGpu              : throw no_binary_for_gpu();
+    case hipErrorAlreadyAcquired               : throw already_acquired();
+    case hipErrorNotMapped                     : throw not_mapped();
+    case hipErrorNotMappedAsArray             : throw not_mapped_as_array();
+    case hipErrorNotMappedAsPointer           : throw not_mapped_as_pointer();
+    case hipErrorECCNotCorrectable            : throw ecc_uncorrectable();
+    case hipErrorUnsupportedLimit             : throw unsupported_limit();
+    case hipErrorContextAlreadyInUse          : throw context_already_in_use();
+    case hipErrorPeerAccessUnsupported        : throw peer_access_unsupported();
+    case hipErrorInvalidKernelFile            : throw invalid_ptx();
+    case hipErrorInvalidGraphicsContext       : throw invalid_graphics_context();
+    case hipErrorInvalidSource                 : throw invalid_source();
+    case hipErrorFileNotFound                 : throw file_not_found();
+    case hipErrorSharedObjectSymbolNotFound : throw shared_object_symbol_not_found();
+    case hipErrorSharedObjectInitFailed      : throw shared_object_init_failed();
+    case hipErrorOperatingSystem               : throw operating_system();
+    case hipErrorInvalidResourceHandle                 : throw invalid_handle();
+    case hipErrorNotFound                      : throw not_found();
+    case hipErrorNotReady                      : throw not_ready();
+    case hipErrorIllegalAddress                : throw illegal_address();
+    case hipErrorLaunchOutOfResources        : throw launch_out_of_resources();
+    case hipErrorLaunchTimeOut                 : throw launch_timeout();
+    // case hipErrorLaunchIncompatibleTexturing  : throw launch_incompatible_texturing();
+    case hipErrorPeerAccessAlreadyEnabled    : throw peer_access_already_enabled();
+    case hipErrorPeerAccessNotEnabled        : throw peer_access_not_enabled();
+    // case hipErrorPrimaryContextActive         : throw primary_context_active();
+    // case hipErrorContextIsDestroyed           : throw context_is_destroyed();
+    case hipErrorAssert                         : throw assert_error();
+    // case hipErrorTooManyPeers                 : throw too_many_peers();
+    case hipErrorHostMemoryAlreadyRegistered : throw host_memory_already_registered();
+    case hipErrorHostMemoryNotRegistered     : throw host_memory_not_registered();
+    // case hipErrorHardwareStackError           : throw hardware_stack_error();
+    // case hipErrorIllegalInstruction            : throw illegal_instruction();
+    // case hipErrorMisalignedAddress             : throw misaligned_address();
+    // case hipErrorInvalidAddressSpace          : throw invalid_address_space();
+    // case hipErrorInvalidPc                     : throw invalid_pc();
+    case hipErrorLaunchFailure                  : throw launch_failed();
+    // case hipErrorNotPermitted                  : throw not_permitted();
+    case hipErrorNotSupported                  : throw not_supported();
+    case hipErrorUnknown                        : throw unknown();
+    default                                        : throw unknown();
+}
+}
+
 }
 }
 
