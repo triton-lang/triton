@@ -151,7 +151,7 @@ void init_triton_runtime(py::module &&m) {
 typedef std::map<std::string, std::string> asm_map_t;
 
 
-std::tuple<uint64_t, uint64_t> cu_compile_llir(const std::string& name, llvm::Module* llvm, uint64_t dev, asm_map_t& asm_map, int cc, int version){
+std::tuple<uint64_t, uint64_t> cu_compile_llir(const std::string& name, size_t n_shared_bytes, llvm::Module* llvm, uint64_t dev, asm_map_t& asm_map, int cc, int version){
   // LLVM-IR -> PTX
   std::string ptx = drv::llir_to_ptx(llvm, cc, version);
   asm_map["ptx"] = ptx;
@@ -161,16 +161,19 @@ std::tuple<uint64_t, uint64_t> cu_compile_llir(const std::string& name, llvm::Mo
   CUfunction fun;
   drv::dispatch::cuModuleGetFunction(&fun, mod, name.c_str());
   // Dynamic shared memory
-  drv::dispatch::cuFuncSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED);
-  int shared_total, shared_optin, shared_static;
-  int n_spills, n_reg;
-  drv::dispatch::cuDeviceGetAttribute(&shared_total, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR, dev);
+  int shared_optin;
   drv::dispatch::cuDeviceGetAttribute(&shared_optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, dev);
-  drv::dispatch::cuFuncGetAttribute(&shared_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun);
-  drv::dispatch::cuFuncGetAttribute(&n_spills, CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES,  fun);
-  drv::dispatch::cuFuncGetAttribute(&n_reg, CU_FUNC_ATTRIBUTE_NUM_REGS, fun);
-  if (shared_optin > 49152)
-      drv::dispatch::cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin - shared_static);
+  if(n_shared_bytes > 49152 && shared_optin > 49152){
+    drv::dispatch::cuFuncSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED);
+    int shared_total, shared_static;
+    int n_spills, n_reg;
+    drv::dispatch::cuDeviceGetAttribute(&shared_total, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR, dev);
+    drv::dispatch::cuFuncGetAttribute(&shared_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun);
+    drv::dispatch::cuFuncGetAttribute(&n_spills, CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES,  fun);
+    drv::dispatch::cuFuncGetAttribute(&n_reg, CU_FUNC_ATTRIBUTE_NUM_REGS, fun);
+    drv::dispatch::cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin - shared_static);
+  }
+  
   // record asm
   return std::make_tuple((uint64_t)mod, (uint64_t)fun);
 }
@@ -214,7 +217,7 @@ void init_triton_codegen(py::module &&m) {
           llir.flush();
           // LLVM-IR -> Bin
           uint64_t mod, fun;
-          std::tie(mod, fun) = cu_compile_llir(name, &*llvm, device, asm_map, cc, version);
+          std::tie(mod, fun) = cu_compile_llir(name, n_shared_bytes, &*llvm, device, asm_map, cc, version);
           return std::make_tuple(mod, fun, asm_map, n_shared_bytes);
         }
         if(backend == ROCM){
