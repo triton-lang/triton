@@ -427,7 +427,7 @@ def test_permute(dtype, shape, perm, device='cuda'):
     # compare
     triton.testing.assert_almost_equal(z_tri, z_ref)
     # parse ptx to make sure ld/st are vectorized
-    ptx = pgm.asm('ptx')
+    ptx = pgm.asm['ptx']
     assert 'ld.global.v4' in ptx
     assert 'st.global.v4' in ptx
 
@@ -486,7 +486,7 @@ def test_dot(epilogue, device='cuda'):
         z_ref += z[0,:][None, :]
     z_ref = z_ref.to(torch.float16)
     # compare
-    ptx = pgm.asm('ptx')
+    ptx = pgm.asm['ptx']
     # print(ptx)
     triton.testing.assert_almost_equal(z_tri, z_ref)
     # make sure ld/st are vectorized
