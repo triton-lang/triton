@@ -1314,14 +1314,18 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   int stride_a1 = is_a_row ? stride_a_m : stride_a_k;
   int stride_b0 = is_b_row ? stride_b_n : stride_b_k;
   int stride_b1 = is_b_row ? stride_b_k : stride_b_n;
-  int lda = is_a_row ? stride_a_m : stride_a_k;
   int ldb = is_b_row ? stride_b_k : stride_b_n;
   int per_phase_a = swizzle_->get_per_phase(layout_a);
   int max_phase_a = swizzle_->get_max_phase(layout_a);
   int per_phase_b = swizzle_->get_per_phase(layout_b);
   int max_phase_b = swizzle_->get_max_phase(layout_b);
-  int num_ptr_a   = 8;
-  int num_ptr_b   = 8;
+
+  unsigned num_rep_m = shapes[0] / layout->shape_per_cta(0);
+  unsigned num_rep_n = shapes[1] / layout->shape_per_cta(1);
+  unsigned num_rep_k = std::max<unsigned>(NK / 16, 1);
+
+  int num_ptr_a  = is_a_row ? num_rep_k : num_rep_m;
+  int num_ptr_b  = is_b_row ? num_rep_n : num_rep_k;
   int vec_a = 8;
   int vec_b = 8;
 
@@ -1343,20 +1347,22 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
   Value *lane   = urem(thread, i32(32));
   Value *warp   = udiv(thread, i32(32));
-  Value *warp12 = udiv(warp, i32(layout->wpt(0)));
-  Value *warp0  = urem(warp, i32(layout->wpt(0)));
-  Value *warp1  = urem(warp12, i32(layout->wpt(1)));
+  Value *warp_mn = udiv(warp, i32(layout->wpt(0)));
+  Value *warp_m  = urem(warp, i32(layout->wpt(0)));
+  Value *warp_n  = urem(warp_mn, i32(layout->wpt(1)));
   std::vector<Value *>& fc = fcs.begin()->second;
 
-  Value *tidr8  = urem(lane, i32(8));
-  Value *phase_a = urem(udiv(tidr8, i32(per_phase_a)), i32(max_phase_a));
-  Value* off_a0   = mul(tidr8, i32(lda));
-  Value *off_am  = mul(add(urem(udiv(lane, i32(8)), i32(2)), mul(warp0, i32(2))), i32(8));
-  Value *off_ak  = mul(udiv(lane, i32(16)), i32(8));
-  off_am = urem(off_am, i32(shape_a[0]));
-  off_ak = urem(off_ak, i32(shape_a[1]));
-  off_a0 = add(off_a0, is_a_row ? off_ak : off_am);
-  Value* off_a1 = is_a_row ? off_am : off_ak;
+  Value *c = urem(lane, i32(8));
+  Value *s = udiv(lane, i32(8));
+
+  Value *phase_a = urem(udiv(c, i32(per_phase_a)), i32(max_phase_a));
+  Value *matoff_am = add(urem(s, i32(2)), mul(warp_m, i32(2)));
+  Value *off_am = mul(matoff_am, i32(8));
+  Value *matoff_ak = udiv(s, i32(2));
+  Value *off_ak = mul(matoff_ak, i32(8));
+  Value *off_a0 = is_a_row? off_ak : off_am;
+  Value *off_a1 = add(is_a_row? off_am : off_ak, c);
+
   std::vector<Value*> off_a(num_ptr_a);
   for(int i = 0; i < num_ptr_a; i++){
     Value* off_a0i = add(off_a0, i32(i*16*(is_a_row?1:layout->wpt(0))));
@@ -1366,14 +1372,14 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
     off_a[i] = add(mul(off_a0i, i32(stride_a0)), mul(off_a1, i32(stride_a1)));
   }
 
-  Value *phase_b = urem(udiv(tidr8, i32(per_phase_b)), i32(max_phase_b));
-  Value* off_b0   = mul(tidr8, i32(ldb));
-  Value *off_bn  = mul(add(mul(udiv(lane, i32(16)), i32(layout->wpt(1))), mul(warp1, i32(1))), i32(8));
-  Value *off_bk  = mul(urem(udiv(lane, i32(8)), i32(2)), i32(8));
-  off_bn = urem(off_bn, i32(shape_b[1]));
-  off_bk = urem(off_bk, i32(shape_b[0]));
-  off_b0 = add(off_b0, is_b_row ? off_bn : off_bk);
-  Value* off_b1 = is_b_row ? off_bk : off_bn;
+  Value *phase_b = urem(udiv(c, i32(per_phase_b)), i32(max_phase_b));  
+  Value *matoff_bn = add(mul(udiv(s, i32(2)), i32(layout->wpt(1))), warp_n);
+  Value *off_bn = mul(matoff_bn, i32(8));
+  Value *matoff_bk = urem(s, i32(2));
+  Value *off_bk = mul(matoff_bk, i32(8));
+  Value *off_b0 = is_b_row ? off_bn : off_bk;
+  Value *off_b1 = add(is_b_row ? off_bk : off_bn, c);
+
   std::vector<Value*> off_b(num_ptr_b);
   for(int i = 0; i < num_ptr_b; i++){
     Value* off_b0i = add(off_b0, i32(i*(is_b_row?8*layout->wpt(1):16)));
@@ -1401,12 +1407,9 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
                                              "{$10, $11, $12, $13};",
                                              "=f,=f,=f,=f,r,r,r,r,r,r,0,1,2,3", true);
 
-  unsigned num_rep_0 = shapes[0] / layout->shape_per_cta(0);
-  unsigned num_rep_1 = shapes[1] / layout->shape_per_cta(1);
-
   // create mma & unpack result
   auto call_mma = [&](unsigned m, unsigned n, unsigned K) {
-      unsigned cols_per_thread = num_rep_0 * 2;
+      unsigned cols_per_thread = num_rep_m * 2;
       std::vector<size_t> idx = {
         (m*2 + 0) + (n*2 + 0)*cols_per_thread,
         (m*2 + 0) + (n*2 + 1)*cols_per_thread,
@@ -1455,8 +1458,8 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
       }
       else
         ptra = ptrs_a[offidx];
-      int step_am = is_a_row ? m : m / (num_ptr_a)*(num_ptr_a);
-      int step_ak = is_a_row ? K / (num_ptr_a*16)*(num_ptr_a*16) : K;
+      int step_am = is_a_row ? m : 0;
+      int step_ak = is_a_row ? 0 : K;
       InlineAsm *ld_a0_fn = InlineAsm::get(ld_x4_ty, "ldmatrix.sync.aligned.m8n8.x4" + a_trans + ".shared.b16 "
                                                 "{$0, $1, $2, $3}, [$4 + " +
                                                 std::to_string(2*step_am*16*layout->wpt(0)*stride_a_m + 2*step_ak*stride_a_k) + "];",
@@ -1483,8 +1486,8 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
       }
       else
         ptrb = ptrs_b[offidx];
-      int step_bn = is_b_row ? n / (num_ptr_b)*(num_ptr_b) : n;
-      int step_bk = is_b_row ? K : K / (num_ptr_b*8)*(num_ptr_b*8);
+      int step_bn = is_b_row ? 0 : n;
+      int step_bk = is_b_row ? K : 0;
       InlineAsm *ld_b_fn = InlineAsm::get(ld_x4_ty, "ldmatrix.sync.aligned.m8n8.x4" + b_trans + ".shared.b16 "
                                                     "{$0, $1, $2, $3}, [$4 + " +
                                                     std::to_string(2*step_bn*8*layout->wpt(1)*stride_b_n + 2*step_bk*stride_b_k) + "];",
@@ -1505,13 +1508,13 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   if (C->is_prefetched()) {
       // create phis
       builder_->SetInsertPoint(CurrBB->getFirstNonPHI());
-      for(unsigned m = 0; m < num_rep_0; m++){
+      for(unsigned m = 0; m < num_rep_m; m++){
         ha[{m, 0}].first = phi(fp16x2_ty, 2);
         ha[{m, 0}].second = phi(fp16x2_ty, 2);
         ha[{m, 8}].first = phi(fp16x2_ty, 2);
         ha[{m, 8}].second = phi(fp16x2_ty, 2);
       }
-      for(unsigned n = 0; n < num_rep_1; n+=2){
+      for(unsigned n = 0; n < num_rep_n; n+=2){
         hb[{n, 0}] = phi(fp16x2_ty, 2);
         hb[{n+1, 0}] = phi(fp16x2_ty, 2);
         hb[{n, 8}] = phi(fp16x2_ty, 2);
@@ -1519,37 +1522,37 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
       }
       // insert prefetched lds at the end of loop header
       builder_->SetInsertPoint(bbs_[phiA->get_incoming_block(0)]->getTerminator());
-      for(unsigned m = 0; m < num_rep_0; m++)
+      for(unsigned m = 0; m < num_rep_m; m++)
         load_a(m, 0, 0, true);
-      for(unsigned n = 0; n < num_rep_1; n+=2)
+      for(unsigned n = 0; n < num_rep_n; n+=2)
         load_b(n, 0, 0, true);
       // update accumulators
       builder_->SetInsertPoint(CurrBB);
       for(unsigned K = 0; K < NK; K += 16){
         int NEXTK = (K + 16) % NK;
         // prefetch A
-        for(unsigned m = 0; m < num_rep_0; m++)
+        for(unsigned m = 0; m < num_rep_m; m++)
           load_a(m, NEXTK, 1, true);
         // prefetch B
-        for(unsigned n = 0; n < num_rep_1; n+=2)
+        for(unsigned n = 0; n < num_rep_n; n+=2)
           load_b(n, NEXTK, 1, true);
         // tensor core ops
-        for(unsigned m = 0; m < num_rep_0; m++)
-        for(unsigned n = 0; n < num_rep_1; n++){
+        for(unsigned m = 0; m < num_rep_m; m++)
+        for(unsigned n = 0; n < num_rep_n; n++){
           call_mma(m, n, K);
         }
       }
   }
   else{
-      for(unsigned K = 0; K < NK; K += 16)
-      for(unsigned m = 0; m < num_rep_0; m++)
-      for(unsigned n = 0; n < num_rep_1; n++){
-        if(ha.find({m, K}) == ha.end())
-          load_a(m, K, 0, false);
-        if(hb.find({n, K})==hb.end())
-          load_b(n, K, 0, false);
-        call_mma(m, n, K);
-      }
+    for(unsigned K = 0; K < NK; K += 16)
+    for(unsigned m = 0; m < num_rep_m; m++)
+    for(unsigned n = 0; n < num_rep_n; n++){
+      if(ha.find({m, K}) == ha.end())
+        load_a(m, K, 0, false);
+      if(hb.find({n, K})==hb.end())
+        load_b(n, K, 0, false);
+      call_mma(m, n, K);
+    }
   }
   // write back
   unsigned i = 0;
