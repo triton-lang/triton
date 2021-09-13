@@ -275,7 +275,7 @@ ir::value *dispatch::greater_than(ir::value *input, ir::value *other, ir::builde
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
   // float > float
   if (scalar_ty->is_floating_point_ty())
-    return builder->create_fcmpUGT(input, other);
+    return builder->create_fcmpOGT(input, other);
   // int > int
   else if (scalar_ty->is_integer_ty())
     return builder->create_icmpSGT(input, other);
@@ -287,7 +287,7 @@ ir::value *dispatch::greater_equal(ir::value *input, ir::value *other, ir::build
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
   // float >= float
   if (scalar_ty->is_floating_point_ty())
-    return builder->create_fcmpUGE(input, other);
+    return builder->create_fcmpOGE(input, other);
   // int >= int
   else if (scalar_ty->is_integer_ty())
     return builder->create_icmpSGE(input, other);
@@ -299,7 +299,7 @@ ir::value *dispatch::less_than(ir::value *input, ir::value *other, ir::builder *
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
   // float < float
   if (scalar_ty->is_floating_point_ty())
-    return builder->create_fcmpULT(input, other);
+    return builder->create_fcmpOLT(input, other);
   // int < int
   else if (scalar_ty->is_integer_ty())
     return builder->create_icmpSLT(input, other);
@@ -311,7 +311,7 @@ ir::value *dispatch::less_equal(ir::value *input, ir::value *other, ir::builder 
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
   // float < float
   if (scalar_ty->is_floating_point_ty())
-    return builder->create_fcmpULE(input, other);
+    return builder->create_fcmpOLE(input, other);
   // int < int
   else if (scalar_ty->is_integer_ty())
     return builder->create_icmpSLE(input, other);
@@ -323,7 +323,7 @@ ir::value *dispatch::equal(ir::value *input, ir::value *other, ir::builder *buil
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
   // float == float
   if (scalar_ty->is_floating_point_ty())
-    return builder->create_fcmpUEQ(input, other);
+    return builder->create_fcmpOEQ(input, other);
   // int == int
   else if (scalar_ty->is_integer_ty())
     return builder->create_icmpEQ(input, other);
