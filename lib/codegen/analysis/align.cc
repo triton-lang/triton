@@ -401,7 +401,7 @@ std::vector<unsigned> align::populate_starting_multiple_binop(ir::binary_operato
     if(x->is_int_add_sub())
       result[d] = gcd(lhs[d], rhs[d]);
     if(x->is_int_div())
-      result[d] = std::max<unsigned>(lhs[d] / rhs[d], 1);
+      result[d] = 1;
     if(x->is_int_rem() && rhs[d] > 1){
       result[d] = gcd(lhs[d], rhs[d]);
     }
