@@ -1,0 +1,6 @@
+__pycache__
+.pytest_cache
+
+python/build/
+python/triton.egg-info/
+python/triton/_C/libtriton.so
