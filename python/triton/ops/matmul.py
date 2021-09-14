@@ -49,10 +49,10 @@ def _kernel(A, B, C, M, N, K,
     rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     ram = tl.max_contiguous(tl.multiple_of(rm % M, BLOCK_M), BLOCK_M)
     rbn = tl.max_contiguous(tl.multiple_of(rn % N, BLOCK_N), BLOCK_N)
-    rk = tl.arange(0, BLOCK_K)
+    rk = pid_z*BLOCK_K + tl.arange(0, BLOCK_K)
     # pointers
-    A = A + (pid_z * BLOCK_K * stride_ak + ram[:, None] * stride_am + rk[None, :] * stride_ak)
-    B = B + (pid_z * BLOCK_K * stride_bk + rk[:, None] * stride_bk + rbn[None, :] * stride_bn)
+    A = A + (ram[:, None] * stride_am + rk[None, :] * stride_ak)
+    B = B + (rk[:, None] * stride_bk + rbn[None, :] * stride_bn)
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for k in range(K, 0, -BLOCK_K*SPLIT_K):
         if META['EVEN_K']:
