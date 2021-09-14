@@ -52,7 +52,7 @@ matmul_data = {
 def test_matmul(M, N, K):
     ref_gpu_util = matmul_data[(M, N, K)]['v100']
     cur_sm_clock = nvsmi(['clocks.current.sm'])[0]
-    ref_sm_clock = 1350
+    ref_sm_clock = 1245
     max_gpu_perf = 1e-6*80*8*128*cur_sm_clock
     assert cur_sm_clock == ref_sm_clock, f'GPU SMs must run at {ref_sm_clock} MHz'
     a = torch.randn((M, K), dtype=torch.float16, device='cuda')
