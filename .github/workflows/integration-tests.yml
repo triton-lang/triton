@@ -27,9 +27,11 @@ jobs:
       - name: Run regression tests
         run: |
           cd python/test/regression
-          nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
+          sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
+          sudo nvidia-smi -i 0 --lock-memory-clocks=877,877
           pytest -vs .
-          nvidia-smi -i 0 -rgc
+          sudo nvidia-smi -i 0 -rgc
+          sudo nvidia-smi -i 0 -rmc
 
       - name: Run unit tests
         run: |

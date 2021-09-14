@@ -51,7 +51,7 @@ matmul_data = {
 @pytest.mark.parametrize('M, N, K', matmul_data.keys())
 def test_matmul(M, N, K):
     ref_gpu_util = matmul_data[(M, N, K)]['v100']
-    cur_sm_clock = nvsmi(['clocks.current.sm'])
+    cur_sm_clock = nvsmi(['clocks.current.sm'])[0]
     ref_sm_clock = 1350
     max_gpu_perf = 1e-6*80*8*128*cur_sm_clock
     assert cur_sm_clock == ref_sm_clock, f'GPU SMs must run at {ref_sm_clock} MHz'
@@ -80,7 +80,7 @@ def _add(x_ptr, y_ptr, output_ptr, n_elements, **meta):
     tl.store(output_ptr + offsets, output, mask=mask)
 
 
-matmul_data = {
+elementwise_data = {
   1024*16   : {'v100': 0.0219},
   1024*64   : {'v100': 0.0843},
   1024*256  : {'v100': 0.248},
@@ -90,10 +90,10 @@ matmul_data = {
   1024*65536: {'v100': 0.911},
 }
 
-@pytest.mark.parametrize('N', matmul_data.keys())
+@pytest.mark.parametrize('N', elementwise_data.keys())
 def test_elementwise(N):
-    ref_gpu_util = matmul_data['N']['v100']
-    cur_mem_clock = nvsmi(['clocks.current.memory'])
+    ref_gpu_util = elementwise_data[N]['v100']
+    cur_mem_clock = nvsmi(['clocks.current.memory'])[0]
     ref_mem_clock = 877
     max_gpu_perf = 512*2*ref_mem_clock*1e-3
     assert cur_mem_clock == ref_mem_clock, f'GPU memmory must run at {ref_mem_clock} MHz'
