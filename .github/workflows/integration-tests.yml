@@ -24,11 +24,14 @@ jobs:
           cd python
           pip3 install -e .
 
-      - name: Run benchmarks
+      - name: Run regression tests
         run: |
-          cd python/bench
-          python3 -m run 
+          cd python/test/regression
+          nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
+          pytest -vs .
+          nvidia-smi -i 0 -rgc
 
       - name: Run unit tests
         run: |
-          pytest .
+          cd python/test/unit
+          pytest -vs .
