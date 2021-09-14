@@ -110,7 +110,7 @@ def nvsmi(attrs):
     ret = [int(x) for x in ret]
     return ret
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None, percentiles=[0.2, 0.8], record_clocks=False):
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None, percentiles=[0.5, 0.2, 0.8], record_clocks=False):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -146,7 +146,6 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, percentiles=[0.2, 0.8], 
     # doesn't contain any input data before the run
     start_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
     end_event   = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
-    clocks      = [None for i in range(n_repeat)]
     cache = torch.empty(int(256e6), dtype=torch.int8, device='cuda')
     # Warm-up
     for _ in range(n_warmup):
@@ -168,12 +167,11 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, percentiles=[0.2, 0.8], 
     # Record clocks
     torch.cuda.synchronize()
     times = torch.tensor([s.elapsed_time(e) for s, e in zip(start_event, end_event)])
-    med_ms = torch.median(times).item()
     if percentiles:
         percentiles = torch.quantile(times, torch.tensor(percentiles)).tolist()
-        return tuple([med_ms] + percentiles)
+        return tuple(percentiles)
     else:
-        return med_ms
+        return torch.mean(times).item()
 
 
 class Benchmark:
