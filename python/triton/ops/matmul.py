@@ -49,13 +49,12 @@ def _kernel(A, B, C, M, N, K,
     rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     ram = tl.max_contiguous(tl.multiple_of(rm % M, BLOCK_M), BLOCK_M)
     rbn = tl.max_contiguous(tl.multiple_of(rn % N, BLOCK_N), BLOCK_N)
-    rk = tl.arange(0, BLOCK_K)
+    rk = pid_z*BLOCK_K + tl.arange(0, BLOCK_K)
     # pointers
-    K = K // SPLIT_K
-    A = A + (pid_z * K * stride_ak + ram[:, None] * stride_am + rk[None, :] * stride_ak)
-    B = B + (pid_z * K * stride_bk + rk[:, None] * stride_bk + rbn[None, :] * stride_bn)
+    A = A + (ram[:, None] * stride_am + rk[None, :] * stride_ak)
+    B = B + (rk[:, None] * stride_bk + rbn[None, :] * stride_bn)
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-    for k in range(K, 0, -BLOCK_K):
+    for k in range(K, 0, -BLOCK_K*SPLIT_K):
         if META['EVEN_K']:
             a = tl.load(A)
             b = tl.load(B)
@@ -63,8 +62,8 @@ def _kernel(A, B, C, M, N, K,
             a = tl.load(A, mask=rk[None, :] < k, other=0.)
             b = tl.load(B, mask=rk[:, None] < k, other=0.)
         acc += tl.dot(a, b)
-        A += BLOCK_K * stride_ak
-        B += BLOCK_K * stride_bk
+        A += BLOCK_K * SPLIT_K * stride_ak
+        B += BLOCK_K * SPLIT_K * stride_bk
     acc = acc.to(tl.float16)
     # rematerialize rm and rn to save registers
     rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
