@@ -1,4 +1,1 @@
-# Core deps.
--r requirements.txt
-
 scipy >= 1.7.1

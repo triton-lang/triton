@@ -1,4 +1,0 @@
-# Core deps.
--r requirements.txt
-
-matplotlib >= 3.4.3
