@@ -67,6 +67,16 @@ void coalesce::run(ir::module &mod) {
       builder.insert(new_op);
       x->replace_uses_of_with(op, new_op);
     }
+    // coalesce before atomic_rmw
+    if(auto x = dynamic_cast<ir::atomic_rmw_inst*>(i))
+    if(ir::value* op = x->get_operand(1))
+    if(op->get_type()->is_block_ty())
+    if(layout_->get(op)->to_mma()){
+      builder.set_insert_point(x);
+      ir::instruction* new_op = ir::cvt_layout_inst::create(op);
+      builder.insert(new_op);
+      x->replace_uses_of_with(op, new_op);
+    }
     // uncoalesce after load
     if(auto x = dynamic_cast<ir::load_inst*>(i))
     if(x->get_type()->is_block_ty())
