@@ -610,8 +610,9 @@ class Kernel:
                     num_warps=num_warps, num_stages=num_stages, force_nc_cache=force_nc_cache, 
                     constants=constants, **meta
                 )
-                with FileLock(self.fn.bin_cache_lock):
-                    bin_cache[key] = binary
+                if self.fn.bin_cache_lock:
+                    with FileLock(self.fn.bin_cache_lock):
+                        bin_cache[key] = binary
             drv_cache[key] = LoadedBinary(device_idx, binary)
         # pack arguments
         fmt = ''.join(['P' if i in tensor_idxs else Kernel._type_name(arg.__class__) for i, arg in enumerate(wargs)])
@@ -704,7 +705,7 @@ class JITFunction:
         self.bin_cache_lock = lock_path
 
     def _cleanup_disk_cache(self):
-        if self.bin_cache is not None:
+        if self.bin_cache_lock:
             self.bin_cache.close()
 
     def __init__(self, fn):
@@ -719,6 +720,7 @@ class JITFunction:
         # initiated lazily since JITFunction are created
         # by decorators at program startup
         self.bin_cache = None 
+        self.bin_cache_lock = None
         # JITFunction can be instantiated as kernel
         # when called with a grid using __getitem__
         self.kernel_decorators = []
