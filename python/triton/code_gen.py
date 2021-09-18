@@ -5,6 +5,11 @@ import struct
 import sys
 import tempfile
 import textwrap
+import hashlib
+import atexit
+import os
+import shelve
+from filelock import FileLock
 
 import torch
 import triton
@@ -411,23 +416,30 @@ class CodeGenerator(ast.NodeVisitor):
 
 
 class Binary:
-    def __init__(self, backend, module, kernel, asm, num_warps, num_stages, force_nc_cache, shared_mem):
-        # cache ir asm
+    def __init__(self, backend, name, asm, shared_mem, num_warps):
+        self.backend = backend
+        self.name = name
         self.asm = asm
-        self.module = module
-        self.kernel = kernel
         self.shared_mem = shared_mem
         self.num_warps = num_warps
-        self.num_stages = num_stages
-        self.force_nc_cache = force_nc_cache
-        self.sass = None
-        self.backend = backend
+
+class LoadedBinary:
+    def __init__(self, device: int, bin: Binary):
+        module, kernel = _triton.code_gen.load_binary(bin.backend, 
+                                                      bin.name, 
+                                                      bin.asm, 
+                                                      bin.shared_mem, 
+                                                      device)
+        self.bin = bin
+        self.module = module
+        self.kernel = kernel
+        self.device = device
 
     def __call__(self, stream, args, grid_0, grid_1=1, grid_2=1):
-        _triton.runtime.enqueue(self.backend, stream, self.kernel,
+        _triton.runtime.enqueue(self.bin.backend, stream, self.kernel,
                                 grid_0, grid_1, grid_2, 
-                                self.num_warps * 32, 1, 1, 
-                                args, self.shared_mem)
+                                self.bin.num_warps * 32, 1, 1, 
+                                args, self.bin.shared_mem)
 
 
 class CompilationError(Exception):
@@ -536,11 +548,11 @@ class Kernel:
             backend = _triton.runtime.backend.CUDA
         else:
             backend = _triton.runtime.backend.ROCM
-        mod, ker, asm, shared_mem = _triton.code_gen.compile_ttir(backend, generator.module, device, num_warps, num_stages, force_nc_cache)
+        name, asm, shared_mem = _triton.code_gen.compile_ttir(backend, generator.module, device, num_warps, num_stages, force_nc_cache)
         max_shared_memory = _triton.runtime.max_shared_memory(backend, device)
         if shared_mem > max_shared_memory:
             raise OutOfResources(shared_mem, max_shared_memory, "shared memory")
-        return Binary(backend, mod, ker, asm, num_warps, num_stages, force_nc_cache, shared_mem)
+        return Binary(backend, name, asm, shared_mem, num_warps)
 
     def __call__(self, *wargs, grid, num_warps=4, num_stages=2, force_nc_cache=False, **meta):
         # device inference
@@ -579,29 +591,37 @@ class Kernel:
         attributes = {i: Kernel.pow2_divisor(a) for i, a in enumerate(args) if isinstance(a, int)}
         # transforms ints whose value is one into constants for just-in-time compilation
         constants = {i: arg for i, arg in enumerate(wargs) if isinstance(arg, int) and arg == 1}
-        # determine if we need to re-compile
+        # compute hash for caching this kernel
         types_key = Kernel._types_key(*wargs, tensor_idxs=tensor_idxs)
         attr_key = frozenset(attributes.items())
         meta_key = frozenset(meta.items())
         const_key = frozenset(constants.items())
         key = (device_ty, device_idx, types_key, attr_key, num_warps, num_stages, meta_key, const_key)
-        cache = self.fn.cache
-        if key not in cache:
-            # compile and cache configuration if necessary
-            cache[key] = self._compile(
-                *wargs, device=device_idx, attributes=attributes,
-                num_warps=num_warps, num_stages=num_stages, force_nc_cache=force_nc_cache, 
-                constants=constants, **meta
-            )
+        key = str(key)
+        # get cached binary
+        self.fn.init_bin_cache()
+        bin_cache = self.fn.bin_cache
+        drv_cache = self.fn.drv_cache
+        if key not in drv_cache:
+            binary = bin_cache.get(key, None)
+            if binary is None:
+                binary = self._compile(
+                    *wargs, device=device_idx, attributes=attributes,
+                    num_warps=num_warps, num_stages=num_stages, force_nc_cache=force_nc_cache, 
+                    constants=constants, **meta
+                )
+                with FileLock(self.fn.bin_cache_lock):
+                    bin_cache[key] = binary
+            drv_cache[key] = LoadedBinary(device_idx, binary)
         # pack arguments
         fmt = ''.join(['P' if i in tensor_idxs else Kernel._type_name(arg.__class__) for i, arg in enumerate(wargs)])
         params = struct.pack(fmt, *args)
         # enqueue cached function into stream
-        binary = cache[key]
+        callable = drv_cache[key]
         stream = torch.cuda.current_stream(device_idx).cuda_stream
         grid = grid(meta) if hasattr(grid, '__call__') else grid
-        binary(stream, params, *grid)
-        return binary
+        callable(stream, params, *grid)
+        return callable
 
 
 class Launcher:
@@ -662,15 +682,55 @@ class Autotuner:
 
 
 class JITFunction:
+
+    def _init_bin_cache(self, src):
+        # fetch cache directory path
+        cache_dir = os.environ.get('TRITON_CACHE_DIR', '/tmp/triton/')
+        if not cache_dir:
+            self.bin_cache = dict()
+            self.bin_cache_lock = None
+            return
+        # create cache directory
+        if not os.path.exists(cache_dir):
+            os.makedirs(cache_dir)
+        # create md5 hash of src
+        md5 = hashlib.md5()
+        md5.update(src.encode('utf-8'))
+        md5_hash = md5.hexdigest()
+        # load dbm file in cache_dir for md5_hash
+        cache_path = os.path.join(cache_dir, md5_hash)
+        lock_path = cache_path + '.lock'
+        self.bin_cache = shelve.open(cache_path, 'c')
+        self.bin_cache_lock = lock_path
+
+    def _cleanup_disk_cache(self):
+        if self.bin_cache is not None:
+            self.bin_cache.close()
+
     def __init__(self, fn):
+        # information of wrapped function
         self.fn = fn
         self.module = fn.__module__
         self.arg_names = inspect.getfullargspec(fn).args
-        self.cache = dict()
-        self.kernel_decorators = []
         self.src = textwrap.dedent(inspect.getsource(fn))
+        # cache for callable driver objects (e.g. CUkernel)
+        self.drv_cache = dict()
+        # cache for binary code:
+        # initiated lazily since JITFunction are created
+        # by decorators at program startup
+        self.bin_cache = None 
+        # JITFunction can be instantiated as kernel
+        # when called with a grid using __getitem__
+        self.kernel_decorators = []
         self.kernel = None
+        # forward docs
         self.__doc__ = fn.__doc__
+        # register clean-up
+        atexit.register(self._cleanup_disk_cache)
+    
+    def init_bin_cache(self):
+        if self.bin_cache is None:
+            self._init_bin_cache(self.src)
 
     # we do not parse in the constructor because
     # the user might want to monkey-patch self.src dynamically.
