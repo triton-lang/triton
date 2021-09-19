@@ -52,7 +52,7 @@ def test_matmul(M, N, K):
     cur_sm_clock = nvsmi(['clocks.current.sm'])[0]
     ref_sm_clock = 1350
     max_gpu_perf = 1e-6*80*8*128*cur_sm_clock
-    assert abs(cur_sm_clock - ref_sm_clock) < 5, f'GPU SMs must run at {ref_sm_clock} MHz'
+    assert abs(cur_sm_clock - ref_sm_clock) < 10, f'GPU SMs must run at {ref_sm_clock} MHz'
     a = torch.randn((M, K), dtype=torch.float16, device='cuda')
     b = torch.randn((K, N), dtype=torch.float16, device='cuda')
     fn = lambda: triton.ops.matmul(a, b)
@@ -95,7 +95,7 @@ def test_elementwise(N):
     cur_mem_clock = nvsmi(['clocks.current.memory'])[0]
     ref_mem_clock = 877
     max_gpu_perf = 512*2*ref_mem_clock*1e-3
-    assert abs(cur_mem_clock - ref_mem_clock) < 5, f'GPU memmory must run at {ref_mem_clock} MHz'
+    assert abs(cur_mem_clock - ref_mem_clock) < 10, f'GPU memmory must run at {ref_mem_clock} MHz'
     z = torch.empty((N, ), dtype=torch.float16, device='cuda')
     x = torch.randn_like(z)
     y = torch.randn_like(z)
