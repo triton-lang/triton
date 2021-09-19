@@ -690,11 +690,21 @@ class Autotuner:
 
 class JITFunction:
 
+    # clear cache if the db is older than either the frontend or the backend
+    def _clear_cache(self):
+        frontend_mtime = os.path.getmtime(triton.code_gen.__file__)
+        backend_mtime  = os.path.getmtime(triton._C.libtriton.__file__)
+        with FileLock(self.bin_lock_path):
+            cache_mtime    = os.path.getmtime(self.db_path)
+            if frontend_mtime > cache_mtime or backend_mtime > cache_mtime:
+                os.remove(self.db_path)
+
     def _init_cache_paths(self):
         # fetch cache directory path
         cache_dir = os.environ.get('TRITON_CACHE_DIR', '/tmp/triton/')
         if not cache_dir:
             self.bin_cache_path = None
+            self.db_path = None
             self.bin_lock_path  = None
             return
         # create cache directory
@@ -706,14 +716,18 @@ class JITFunction:
         md5_hash = md5.hexdigest()
         # load dbm file in cache_dir for md5_hash
         self.bin_cache_path = os.path.join(cache_dir, md5_hash)
-        self.bin_lock_path  = self.bin_cache_path + '.lock'
+        self.db_path = self.bin_cache_path + '.db'
+        self.bin_lock_path  = self.bin_cache_path + '.lock' 
+        # if bin_cache_path exists
+        if os.path.exists(self.db_path):
+            self._clear_cache()
 
     def __init__(self, fn):
         # information of wrapped function
         self.fn = fn
         self.module = fn.__module__
         self.arg_names = inspect.getfullargspec(fn).args
-        self.src = textwrap.dedent(inspect.getsource(fn))
+        self.src = textwrap.dedent(inspect.getsource(fn)) 
         # cache for callable driver objects (e.g. CUkernel)
         self.drv_cache = dict()
         # on-disk paths for the binary cache and corresponding
