@@ -709,7 +709,7 @@ class JITFunction:
             return
         # create cache directory
         if not os.path.exists(cache_dir):
-            os.makedirs(cache_dir)
+            os.makedirs(cache_dir, exist_ok=True)
         # create md5 hash of src
         md5 = hashlib.md5()
         md5.update(self.src.encode('utf-8'))
