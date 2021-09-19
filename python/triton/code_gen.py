@@ -431,6 +431,7 @@ class LoadedBinary:
                                                       bin.shared_mem, 
                                                       device)
         self.bin = bin
+        self.asm = bin.asm
         self.module = module
         self.kernel = kernel
         self.device = device
@@ -597,22 +598,27 @@ class Kernel:
         meta_key = frozenset(meta.items())
         const_key = frozenset(constants.items())
         key = (device_ty, device_idx, types_key, attr_key, num_warps, num_stages, meta_key, const_key)
-        key = str(key)
+        key = repr(key)
         # get cached binary
-        self.fn.init_bin_cache()
-        bin_cache = self.fn.bin_cache
         drv_cache = self.fn.drv_cache
+        bin_cache_path = self.fn.bin_cache_path
+        bin_lock_path  = self.fn.bin_lock_path
         if key not in drv_cache:
-            binary = bin_cache.get(key, None)
+            binary = None
+            if bin_lock_path:
+                with FileLock(bin_lock_path):
+                    with shelve.open(bin_cache_path) as db:
+                        binary = db.get(key, None)
             if binary is None:
                 binary = self._compile(
                     *wargs, device=device_idx, attributes=attributes,
                     num_warps=num_warps, num_stages=num_stages, force_nc_cache=force_nc_cache, 
                     constants=constants, **meta
                 )
-                if self.fn.bin_cache_lock:
-                    with FileLock(self.fn.bin_cache_lock):
-                        bin_cache[key] = binary
+                if bin_lock_path:
+                    with FileLock(bin_lock_path):
+                        with shelve.open(bin_cache_path) as db:
+                            db[key] = binary
             drv_cache[key] = LoadedBinary(device_idx, binary)
         # pack arguments
         fmt = ''.join(['P' if i in tensor_idxs else Kernel._type_name(arg.__class__) for i, arg in enumerate(wargs)])
@@ -684,29 +690,23 @@ class Autotuner:
 
 class JITFunction:
 
-    def _init_bin_cache(self, src):
+    def _init_cache_paths(self):
         # fetch cache directory path
         cache_dir = os.environ.get('TRITON_CACHE_DIR', '/tmp/triton/')
         if not cache_dir:
-            self.bin_cache = dict()
-            self.bin_cache_lock = None
+            self.bin_cache_path = None
+            self.bin_lock_path  = None
             return
         # create cache directory
         if not os.path.exists(cache_dir):
             os.makedirs(cache_dir)
         # create md5 hash of src
         md5 = hashlib.md5()
-        md5.update(src.encode('utf-8'))
+        md5.update(self.src.encode('utf-8'))
         md5_hash = md5.hexdigest()
         # load dbm file in cache_dir for md5_hash
-        cache_path = os.path.join(cache_dir, md5_hash)
-        lock_path = cache_path + '.lock'
-        self.bin_cache = shelve.open(cache_path, 'c')
-        self.bin_cache_lock = lock_path
-
-    def _cleanup_disk_cache(self):
-        if self.bin_cache_lock:
-            self.bin_cache.close()
+        self.bin_cache_path = os.path.join(cache_dir, md5_hash)
+        self.bin_lock_path  = self.bin_cache_path + '.lock'
 
     def __init__(self, fn):
         # information of wrapped function
@@ -716,25 +716,18 @@ class JITFunction:
         self.src = textwrap.dedent(inspect.getsource(fn))
         # cache for callable driver objects (e.g. CUkernel)
         self.drv_cache = dict()
-        # cache for binary code:
-        # initiated lazily since JITFunction are created
-        # by decorators at program startup
-        self.bin_cache = None 
-        self.bin_cache_lock = None
+        # on-disk paths for the binary cache and corresponding
+        # file-lock
+        self._init_cache_paths()
         # JITFunction can be instantiated as kernel
         # when called with a grid using __getitem__
         self.kernel_decorators = []
         self.kernel = None
         # forward docs
         self.__doc__ = fn.__doc__
-        # register clean-up
-        atexit.register(self._cleanup_disk_cache)
-    
-    def init_bin_cache(self):
-        if self.bin_cache is None:
-            self._init_bin_cache(self.src)
 
-    # we do not parse in the constructor because
+
+    # we do not parse `src` in the constructor because
     # the user might want to monkey-patch self.src dynamically.
     # Some unit tests do this, for example.
     def parse(self):
@@ -761,10 +754,16 @@ class JITFunction:
                 raise e
             raise CompilationError(self.src, node, e)
 
+    # - when `.src` attribute is set, cache path needs
+    #   to be reinitialized
+    # - when kernel decorators change, cached kernel
+    #   needs to be cleared
     def __setattr__(self, name, value):
         if name == 'kernel_decorators':
             self.kernel = None
         super(JITFunction, self).__setattr__(name, value)
+        if name == 'src':
+            self._init_cache_paths()
 
     def _init_kernel(self):
         if self.kernel is None:
