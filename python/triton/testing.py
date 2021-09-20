@@ -1,6 +1,9 @@
 import torch
 import os
 from .code_gen import OutOfResources
+import subprocess
+import sys
+
 
 try:
     import triton._C.libtriton.cutlass as _cutlass
@@ -87,6 +90,7 @@ def assert_allclose(x, y, tol=1e-2):
 
 
 def random(shape, dtype, device):
+    torch.manual_seed(0)
     if isinstance(shape, int):
         shape = (shape, )
     if dtype == torch.bool:
@@ -98,7 +102,15 @@ def random(shape, dtype, device):
     raise RuntimeError(f'Unknown dtype {dtype}')
 
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None, percentiles=[0.2, 0.8]):
+def nvsmi(attrs):
+    attrs = ','.join(attrs)
+    cmd = ['nvidia-smi', '-i', '0', '--query-gpu=' + attrs, '--format=csv,noheader,nounits']
+    out = subprocess.check_output(cmd)
+    ret = out.decode(sys.stdout.encoding).split(',')
+    ret = [int(x) for x in ret]
+    return ret
+
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None, percentiles=[0.5, 0.2, 0.8], record_clocks=False):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -126,17 +138,20 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, percentiles=[0.2, 0.8]):
     end_event.record()
     torch.cuda.synchronize()
     estimate_ms = start_event.elapsed_time(end_event) / 5
+    # compute number of warmup and repeat
+    n_warmup = max(1, int(warmup/estimate_ms))
+    n_repeat = max(1, int(rep/estimate_ms))
     # We maintain a buffer of 256 MB that we clear
     # before each kernel call to make sure that the L2
     # doesn't contain any input data before the run
-    start_event = [torch.cuda.Event(enable_timing=True) for i in range(rep)]
-    end_event = [torch.cuda.Event(enable_timing=True) for i in range(rep)]
+    start_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
+    end_event   = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
     cache = torch.empty(int(256e6), dtype=torch.int8, device='cuda')
     # Warm-up
-    for _ in range(int(warmup / estimate_ms)):
+    for _ in range(n_warmup):
         fn()
     # Benchmark
-    for i in range(rep):
+    for i in range(n_repeat):
         # we don't want `fn` to accumulate gradient values
         # if it contains a backward pass. So we clear the
         # provided gradients
@@ -149,14 +164,14 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, percentiles=[0.2, 0.8]):
         start_event[i].record()
         fn()
         end_event[i].record()
+    # Record clocks
     torch.cuda.synchronize()
     times = torch.tensor([s.elapsed_time(e) for s, e in zip(start_event, end_event)])
-    percentiles = torch.quantile(times, torch.tensor(percentiles)).tolist()
-    med_ms = torch.median(times).item()
     if percentiles:
-        return tuple([med_ms] + percentiles)
+        percentiles = torch.quantile(times, torch.tensor(percentiles)).tolist()
+        return tuple(percentiles)
     else:
-        return med_ms
+        return torch.mean(times).item()
 
 
 class Benchmark:

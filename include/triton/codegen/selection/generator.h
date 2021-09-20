@@ -159,7 +159,6 @@ public:
   void visit_get_program_id_inst(ir::get_program_id_inst*);
   void visit_get_num_programs_inst(ir::get_num_programs_inst*);
   void visit_atomic_cas_inst(ir::atomic_cas_inst*);
-  void visit_atomic_exch_inst(ir::atomic_exch_inst*);
   void visit_atomic_rmw_inst(ir::atomic_rmw_inst*);
   void visit_mma884(ir::dot_inst*, ir::value *A, ir::value *B, ir::value *D, unsigned NK);
   void visit_mma16816(ir::dot_inst*, ir::value *A, ir::value *B, ir::value *D, unsigned NK);
@@ -172,7 +171,8 @@ public:
   void visit_reducend_inst(ir::reduce_inst*, std::function<Value*(Value*,Value*)>, Value*);
   void visit_reduce_inst(ir::reduce_inst*);
   void visit_select_inst(ir::select_inst*);
-  void visit_recoalesce_inst(ir::recoalesce_inst*);
+  void visit_layout_convert(ir::value *out, ir::value *in);
+  void visit_cvt_layout_inst(ir::cvt_layout_inst*);
   void visit_masked_load_async_inst(ir::masked_load_async_inst*);
   void visit_copy_to_shared_inst(ir::copy_to_shared_inst*);
   void visit_copy_from_shared_inst(ir::copy_from_shared_inst*);

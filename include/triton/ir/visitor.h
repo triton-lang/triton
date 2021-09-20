@@ -57,7 +57,6 @@ class get_program_id_inst;
 class get_num_programs_inst;
 class atomic_inst;
 class atomic_cas_inst;
-class atomic_exch_inst;
 class atomic_rmw_inst;
 class dot_inst;
 class trans_inst;
@@ -65,7 +64,7 @@ class sqrt_inst;
 class reduce_inst;
 class select_inst;
 
-class recoalesce_inst;
+class cvt_layout_inst;
 class copy_to_shared_inst;
 class copy_from_shared_inst;
 class masked_load_async_inst;
@@ -136,7 +135,6 @@ public:
   virtual void visit_get_program_id_inst(get_program_id_inst*) = 0;
   virtual void visit_get_num_programs_inst(get_num_programs_inst*) = 0;
   virtual void visit_atomic_cas_inst(atomic_cas_inst*) = 0;
-  virtual void visit_atomic_exch_inst(atomic_exch_inst*) = 0;
   virtual void visit_atomic_rmw_inst(atomic_rmw_inst*) = 0;
   virtual void visit_dot_inst(dot_inst*) = 0;
   virtual void visit_trans_inst(trans_inst*) = 0;
@@ -144,9 +142,11 @@ public:
   virtual void visit_reduce_inst(reduce_inst*) = 0;
   virtual void visit_select_inst(select_inst*) = 0;
 
-  virtual void visit_recoalesce_inst(recoalesce_inst*) = 0;
+  virtual void visit_cvt_layout_inst(cvt_layout_inst*) = 0;
   virtual void visit_copy_to_shared_inst(copy_to_shared_inst*) = 0;
   virtual void visit_copy_from_shared_inst(copy_from_shared_inst*) = 0;
+
+
   virtual void visit_masked_load_async_inst(masked_load_async_inst*)= 0;
   virtual void visit_barrier_inst(barrier_inst*) = 0;
   virtual void visit_async_wait_inst(async_wait_inst*) = 0;

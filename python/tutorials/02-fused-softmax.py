@@ -92,23 +92,10 @@ def softmax_kernel(
 # %%
 # We can create a helper function that enqueues the kernel and its (meta-)arguments for any given input tensor.
 
-
-def next_power_of_2(n):
-    """Return the smallest power of 2 greater than or equal to n"""
-    n -= 1
-    n |= n >> 1
-    n |= n >> 2
-    n |= n >> 4
-    n |= n >> 8
-    n |= n >> 16
-    n += 1
-    return n
-
-
 def softmax(x):
     n_rows, n_cols = x.shape
     # The block size is the smallest power of two greater than the number of columns in `x`
-    BLOCK_SIZE = next_power_of_2(n_cols)
+    BLOCK_SIZE = triton.next_power_of_2(n_cols)
     # Another trick we can use is to ask the compiler to use more threads per row by
     # increasing the number of warps (`num_warps`) over which each row is distributed.
     # You will see in the next tutorial how to auto-tune this value in a more natural

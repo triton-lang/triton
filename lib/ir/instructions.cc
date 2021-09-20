@@ -757,18 +757,6 @@ instruction* atomic_cas_inst::create(value *ptr, value *cmp, value *val, const s
   return new atomic_cas_inst(ptr, cmp, val, name, next);
 }
 
-// atomic exch
-
-atomic_exch_inst::atomic_exch_inst(value *ptr, value *val, const std::string &name, instruction *next)
-  : atomic_inst(ptr->get_type()->get_pointer_element_ty(), INST_ATOMIC_EXCH, 2, name, next) {
-  set_operand(0, ptr);
-  set_operand(1, val);
-}
-
-instruction* atomic_exch_inst::create(value *ptr, value *val, const std::string &name, instruction *next) {
-  return new atomic_exch_inst(ptr, val, name, next);
-}
-
 
 // exp
 
@@ -818,6 +806,11 @@ instruction* log_inst::create(value *val, const std::string& name, instruction *
 //                               intrinsic instructions
 //===----------------------------------------------------------------------===//
 
+// cvt_scanline
+cvt_layout_inst* cvt_layout_inst::create(value *arg, const std::string &name, instruction *next) {
+  return new cvt_layout_inst(arg->get_type(), INST_CVT_LAYOUT, arg, name, next);
+}
+
 // copy to shared
 copy_to_shared_inst* copy_to_shared_inst::create(value *arg, const std::string &name,
                                                  instruction *next) {
@@ -829,13 +822,6 @@ copy_from_shared_inst* copy_from_shared_inst::create(value *arg, const std::stri
                                                  instruction *next) {
   return new copy_from_shared_inst(arg->get_type(), INST_COPY_FROM_SHARED, arg, name, next);
 }
-
-// recoalesce
-recoalesce_inst* recoalesce_inst::create(value *arg, const std::string &name, instruction *next) {
-  return new recoalesce_inst(arg->get_type(), INST_RECOALESCE, arg, name, next);
-}
-
-
 
 // barrier
 barrier_inst::barrier_inst(context &ctx, const std::string &name,

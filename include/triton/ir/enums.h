@@ -38,6 +38,7 @@ enum class atomic_rmw_op_t: unsigned int{
   UMax,
   UMin,
   FAdd,
+  Xchg,
 };
 
 enum cast_op_t: unsigned int {
@@ -152,6 +153,9 @@ enum value_id_t: unsigned {
   // intrinsics
   INST_COPY_TO_SHARED,
   INST_COPY_FROM_SHARED,
+  INST_CVT_LAYOUT,
+  INST_CVT_SCANLINE,
+  INST_DECOALESCE,
   INST_RECOALESCE,
   INST_BARRIER,
   INST_ASYNC_WAIT,

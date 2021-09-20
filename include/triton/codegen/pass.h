@@ -4,7 +4,16 @@
 
 #include <memory>
 
+namespace llvm{
+  class Module;
+  class LLVMContext;
+}
+
 namespace triton{
+
+namespace codegen {
+  class target;
+}
 
 namespace ir{
   class module;
@@ -21,8 +30,10 @@ namespace codegen{
 
 // TODO:
 // There should be a proper pass manager there!
-void add_passes_to_emit_bin(ir::module &ir, driver::device* dev, int num_warps, int num_stages, bool force_nc_cache,
-                            driver::module*& mod, driver::kernel*& ker, size_t& shared_mem);
+std::unique_ptr<llvm::Module> add_passes_to_emit_bin(ir::module &ir, llvm::LLVMContext& ctx,
+                                                     codegen::target* target,
+                                                     int sm, int num_warps,
+                                                     int num_stages, bool force_nc_cache, int &shared_static);
 
 
 }

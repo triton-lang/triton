@@ -35,6 +35,7 @@ public:
   // name
   void set_name(const std::string &name);
   const std::string &get_name() const { return name_; }
+  bool has_name() const { return !name_.empty(); }
   type* get_type() const { return ty_; }
   // visitor
   virtual void accept(visitor *v) = 0;
@@ -70,6 +71,7 @@ public:
 
   // Operands
   const ops_t& ops() { return ops_; }
+  const ops_t& ops() const { return ops_; }
   op_iterator op_begin() { return ops_.begin(); }
   op_iterator op_end()   { return ops_.end(); }
   void     set_operand(unsigned i, value *x);

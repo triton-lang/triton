@@ -15,128 +15,109 @@ namespace transform{
 coalesce::coalesce(analysis::align* align, analysis::layouts *layouts)
   : align_(align), layout_(layouts) { }
 
-// Find all values that are used as pointer operands in LD/ST
-void coalesce::extract_io_use(ir::value *v, std::set<ir::io_inst*>& result) {
-  for(ir::user* u: v->get_users()){
-    auto i = dynamic_cast<ir::io_inst*>(u);
-    if(i && i->get_pointer_operand() == v)
-      result.insert(i);
-  }
-}
 
-void coalesce::extract_ld(ir::io_inst* i, std::map<int, std::vector<ir::io_inst*>>& result) {
-  ir::value *ptr = i->get_pointer_operand();
-  auto contiguous = align_->contiguous(ptr);
-  auto it = std::max_element(contiguous.begin(), contiguous.end());
-  int axis = std::distance(contiguous.begin(), it);
-  result[axis].push_back(i);
-}
-
-ir::value* coalesce::rematerialize(ir::value *x, ir::builder &builder,
-                                   std::map<ir::value*, ir::value*>& seen) {
-  if(seen.find(x) != seen.end())
-    return seen.at(x);
-  auto i = dynamic_cast<ir::instruction*>(x);
-  // not an instruction -- forward value
-  if(!i)
-    return x;
-  // already in shared memory -- forward value
-  if(dynamic_cast<ir::copy_to_shared_inst*>(x)){
-    return x;
-  }
-  // set insert point
-  auto& inst_list = i->get_parent()->get_inst_list();
-  auto pos = ++std::find(inst_list.begin(), inst_list.end(), i);
-  builder.set_insert_point(pos);
-  if(dynamic_cast<ir::load_inst*>(x)){
-    ir::value *ret = builder.insert(ir::copy_to_shared_inst::create(x));
-    return ret;
-  }
-  // default -- recursive clone
-  ir::instruction *cloned = builder.insert(i->clone());
-  seen[i] = cloned;
-  // rematerialize operands
-  for(ir::value *op: cloned->ops())
-    cloned->replace_uses_of_with(op, rematerialize(op, builder, seen));
-  return cloned;
-}
+// simplify layout conversions using the following simple rules:
+//   - cvt_1(cvt_2(x)) if convert1 is the inverse of convert2
+//   - cvt_1(elementwise(x, y)) = elementwise(convert(x), convert(y))
+//ir::value* coalesce::simplify(ir::instruction *inst, ir::builder& builder){
+//  ir::value* _op = inst->get_operand(0);
+//  ir::instruction* op = dynamic_cast<ir::instruction*>(_op);
+//  analysis::mma_layout* mma_in  = layout_->get(op)  ->to_mma();
+//  analysis::mma_layout* mma_out = layout_->get(inst)->to_mma();
+//  std::cout << 1 << std::endl;
+//  // i must be layout conversion instruction
+//  if(!mma_in && !mma_out)
+//    return inst;
+//  //   - cvt_1(cvt_2(x)) if convert1 is the inverse of convert2
+//  bool is_op_cvt = op->get_id() == ir::INST_CVT_LAYOUT;
+//  if((mma_in || mma_out) && is_op_cvt &&
+//     (layout_->get(inst) == layout_->get(op->get_operand(0))))
+//    return op->get_operand(0);
+//  //   - cvt_1(elementwise(x, y)) = elementwise(cvt_1(x), cvt_2(y))
+//  if(op->get_id() != ir::INST_BINOP && op->get_id() != ir::INST_GETELEMENTPTR)
+//    return inst;
+//  std::cout << 1 << std::endl;
+//  for(size_t i = 0; i < op->get_num_operands(); i++){
+//    ir::value* arg_i = op->get_operand(i);
+//    builder.set_insert_point(op);
+//    // create new layout transform
+//    ir::instruction* new_arg_i = inst->clone();
+//    builder.insert(new_arg_i);
+//    // set the right args
+//    new_arg_i->replace_uses_of_with(new_arg_i->get_operand(0), arg_i);
+//    op->replace_uses_of_with(arg_i, simplify(new_arg_i, builder));
+//  }
+//  std::cout << 2 << std::endl;
+//  return op;
+//}
 
 void coalesce::run(ir::module &mod) {
-  size_t num_groups = layout_->num_layouts();
-
-
-  for(size_t id = 0; id < num_groups; id++) {
-    if(!layout_->get(id)->to_mma())
-      continue;
-    // extract memory stores
-    const auto& values = layout_->values_of(id);
-    ir::value* dot = nullptr;
-    for(ir::value *v: values)
-      if(auto x = dynamic_cast<ir::dot_inst*>(v))
-        dot = x;
-
-    ir::builder& builder = mod.get_builder();
-    std::vector<ir::value*> worklist = {dot};
-    std::set<ir::value*> seen;
-    while(!worklist.empty()) {
-      ir::value *current = worklist.back();
-      seen.insert(current);
-      worklist.pop_back();
-      // stop if trunc
-      if(auto x = dynamic_cast<ir::fp_trunc_inst*>(current)){
+  ir::builder& builder = mod.get_builder();
+  // add layout conversion instructions
+  for(ir::function *fn: mod.get_function_list())
+  for(ir::basic_block *block: fn->blocks())
+  for(ir::instruction* i: block->get_inst_list()){
+    // coalesce before store
+    if(auto x = dynamic_cast<ir::store_inst*>(i))
+    if(ir::value* op = x->get_value_operand())
+    if(op->get_type()->is_block_ty())
+    if(layout_->get(op)->to_mma()){
+      builder.set_insert_point(x);
+      ir::instruction* new_op = ir::cvt_layout_inst::create(op);
+      builder.insert(new_op);
+      x->replace_uses_of_with(op, new_op);
+    }
+    // uncoalesce after load
+    if(auto x = dynamic_cast<ir::load_inst*>(i))
+    if(x->get_type()->is_block_ty())
+    if(x->get_type()->get_tile_rank()==2)
+    if(layout_->get(x)->to_mma()){
         builder.set_insert_point_after(x);
-        ir::recoalesce_inst* rc = ir::recoalesce_inst::create(x);
-        builder.insert(rc);
-        x->replace_all_uses_with(rc);
-        rc->replace_uses_of_with(rc, x);
+        ir::instruction* new_x = ir::cvt_layout_inst::create(x);
+        builder.insert(new_x);
+        x->replace_all_uses_with(new_x);
+        new_x->replace_uses_of_with(new_x, x);
+//        new_x->replace_uses_of_with(new_x, new_x);
+    }
+    // re-arrange scanline to promote memory coalescing
+    if(auto x = dynamic_cast<ir::store_inst*>(i)){
+      ir::value* ptr = x->get_pointer_operand();
+      ir::value* val = x->get_value_operand();
+      auto out_contig = align_->contiguous(ptr);
+      auto val_inst = dynamic_cast<ir::instruction*>(val);
+      if(!val_inst)
         break;
+      if(dynamic_cast<ir::cvt_layout_inst*>(val))
+        break;
+      std::vector<unsigned> in_contig;
+      std::vector<ir::instruction*> queue = {val_inst};
+      std::set<ir::instruction*> seen;
+      std::vector<ir::io_inst*> ios;
+      while(!queue.empty()){
+        ir::instruction* curr = queue.back();
+        seen.insert(curr);
+        queue.pop_back();
+        if(auto io_inst = dynamic_cast<ir::io_inst*>(curr)){
+          in_contig = align_->contiguous(io_inst->get_pointer_operand());
+          break;
+        }
+        for(ir::value* op: curr->ops()){
+          auto inst_op = dynamic_cast<ir::instruction*>(op);
+          if(!inst_op || seen.find(inst_op) != seen.end())
+            continue;
+          if(!op->get_type()->is_block_ty() ||
+             !val->get_type()->is_block_ty())
+            continue;
+          if(op->get_type()->get_tile_num_elements() ==
+             val->get_type()->get_tile_num_elements())
+            queue.push_back(inst_op);
+        }
       }
-      // recurse
-      for(ir::user *u: current->get_users())
-        if(seen.find(u) == seen.end())
-          worklist.push_back(u);
-    }
-  }
-
-  // find values to rematerialize
-  std::vector<ir::io_inst*> remat;
-  for(size_t id = 0; id < num_groups; id++) {
-    const auto& values = layout_->values_of(id);
-    // extract pointers used in ld/st operations
-    std::set<ir::io_inst*> io;
-    for(ir::value *v: values)
-      extract_io_use(v, io);
-    // extract leading axes
-    std::map<int, std::vector<ir::io_inst*>> axes;
-    for(ir::io_inst *i: io){
-      if(i->get_pointer_operand()->get_type()->get_tile_rank() == layout_->get(id)->get_rank()){
-        extract_ld(i, axes);
-      }
-    }
-    // update list of values to rematerialize
-    if(axes.empty())
-      continue;
-    for(auto it = ++axes.rbegin(); it != axes.rend(); it++){
-      if(it->second.size() == 1)
+      if(in_contig.empty() || out_contig==in_contig)
         continue;
-      remat.insert(remat.begin(), it->second.begin(), it->second.end());
-    }
-  }
-  // rematerialize values
-  for(ir::io_inst *r: remat) {
-    ir::builder& builder = mod.get_builder();
-    // rematerialize operands
-    std::map<ir::value*, ir::value*> seen;
-    for(ir::value *op: r->ops())
-      r->replace_uses_of_with(op, rematerialize(op, mod.get_builder(), seen));
-    // copy to shared if load
-    auto& inst_list = r->get_parent()->get_inst_list();
-    auto pos = ++std::find(inst_list.begin(), inst_list.end(), r);
-    builder.set_insert_point(pos);
-    if(dynamic_cast<ir::load_inst*>(r)){
-      ir::instruction *cts = builder.insert(ir::copy_to_shared_inst::create(r));
-      r->replace_all_uses_with(cts);
-      cts->replace_uses_of_with(cts, r);
+      builder.set_insert_point_after(val_inst);
+      auto new_val = builder.insert(ir::cvt_layout_inst::create(val_inst));
+      x->replace_uses_of_with(val_inst, new_val);
     }
   }
 }

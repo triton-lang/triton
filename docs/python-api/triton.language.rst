@@ -98,6 +98,18 @@ Reduction Ops
     min
     sum
 
+Atomic Ops
+---------------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    atomic_cas
+    atomic_add
+    atomic_max
+    atomic_min
+
 
 Comparison ops
 ---------------
@@ -109,6 +121,19 @@ Comparison ops
     minimum
     maximum
 
+.. _Random Number Generation:
+
+Random Number Generation
+-------------------------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    randint4x
+    randint
+    rand
+    randn
 
 Compiler Hint Ops
 -------------------

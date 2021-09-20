@@ -30,7 +30,7 @@ void swizzle::run(ir::module &) {
       if(!in_layout)
         continue;
       int dtsize = layout->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
-      if(tgt_->as_nvidia()->sm() < 80){
+      if(tgt_->as_nvidia() && tgt_->as_nvidia()->sm() < 80){
         int inner = mma_dot_a ? 0 : 1;
         per_phase_[layout] = std::max<int>(128 / (in_layout->mts(ord[0])*in_layout->nts(ord[0])*dtsize), 1);
         max_phase_[layout] = (ord[inner] == 1 ? 8 : 4) / per_phase_[layout];

@@ -1,17 +1,21 @@
-import inspect
-import struct
-import enum
-import types
-import torch
 import ast
 import builtins
-import tempfile
-from .tools.disasm import extract
-import triton._C.libtriton.triton as _triton
-import triton
+import inspect
+import struct
 import sys
+import tempfile
 import textwrap
-import collections
+import hashlib
+import atexit
+import os
+import shelve
+from filelock import FileLock
+
+import torch
+import triton
+import triton._C.libtriton.triton as _triton
+
+from .tools.disasm import extract
 
 
 class CodeGenerator(ast.NodeVisitor):
@@ -167,7 +171,7 @@ class CodeGenerator(ast.NodeVisitor):
             if isinstance(value, triton.language.constexpr):
                 value = value.value
             if not isinstance(value, triton.language.block):
-                value = triton.language._to_ir(value, self.builder)
+                value = triton.language.core._to_ir(value, self.builder)
             self.set_value(name, value)
 
     def visit_AugAssign(self, node):
@@ -276,10 +280,10 @@ class CodeGenerator(ast.NodeVisitor):
             ast.IsNot: '__ne__',
         }[type(node.ops[0])]
         if self.is_triton_object(lhs):
-            return getattr(lhs, fn)(rhs, builder=self.builder)
+            return getattr(lhs, fn)(rhs, _builder=self.builder)
         elif self.is_triton_object(rhs):
             fn = fn[:2] + 'r' + fn[2:]
-            return getattr(rhs, fn)(lhs, builder=self.builder)
+            return getattr(rhs, fn)(lhs, _builder=self.builder)
         else:
             return getattr(lhs, fn)(rhs)
 
@@ -291,7 +295,7 @@ class CodeGenerator(ast.NodeVisitor):
             ast.Invert: '__invert__',
         }[type(node.op)]
         if self.is_triton_object(op):
-            return getattr(op, fn)(builder=self.builder)
+            return getattr(op, fn)(_builder=self.builder)
         return getattr(op, fn)()
 
     def visit_While(self, node):
@@ -324,7 +328,7 @@ class CodeGenerator(ast.NodeVisitor):
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
         if self.is_triton_object(lhs):
-            return lhs.__getitem__(slices, builder=self.builder)
+            return lhs.__getitem__(slices, _builder=self.builder)
         return lhs[slices]
 
     def visit_ExtSlice(self, node):
@@ -347,7 +351,7 @@ class CodeGenerator(ast.NodeVisitor):
         build_cond = lambda: triton.language.where(self.visit(pos_step_node),\
                                     self.visit(pos_cond_node),\
                                     self.visit(neg_cond_node),\
-                                    builder=self.builder)
+                                    _builder=self.builder)
         #cond_node = neg_cond_node
         step_node = ast.AugAssign(target=st_target, op=ast.Add(), value=arg_2)
         # code generation
@@ -400,8 +404,8 @@ class CodeGenerator(ast.NodeVisitor):
         if isinstance(fn, JITFunction):
             return fn(*args, generator=self, **kws)
         if hasattr(fn, '__self__') and self.is_triton_object(fn.__self__) or \
-            sys.modules[fn.__module__] is triton.language:
-            return fn(*args, builder=self.builder, **kws)
+            sys.modules[fn.__module__] is triton.language.core:
+            return fn(*args, _builder=self.builder, **kws)
         return fn(*args, **kws)
 
     def visit_Num(self, node):
@@ -428,39 +432,31 @@ class CodeGenerator(ast.NodeVisitor):
 
 
 class Binary:
-    def __init__(self, module, kernel, num_warps, num_stages, force_nc_cache, shared_mem, ir_asm):
-        # cache ir asm
-        self.ir_asm = ir_asm
-        self.module = module
-        self.kernel = kernel
+    def __init__(self, backend, name, asm, shared_mem, num_warps):
+        self.backend = backend
+        self.name = name
+        self.asm = asm
         self.shared_mem = shared_mem
         self.num_warps = num_warps
-        self.num_stages = num_stages
-        self.force_nc_cache = force_nc_cache
-        self.sass = None
 
-    def asm(self, mode):
-        if mode == 'ttir':
-            return self.ir_asm
-        if mode == 'ptx':
-            return self.module.ptx()
-        if mode == 'sass':
-            if self.sass is None:
-                cubin = self.module.cubin()
-                # get a temporary file name
-                fd, path = tempfile.mkstemp(suffix='.cubin')
-                f = open(path, 'wb')
-                f.write(cubin)
-                f.close()
-                # extract SASS from cubin
-                self.sass = extract(path, None)
-            return self.sass
-        if mode == 'llir':
-            return self.module.llir()
-        raise ValueError('Unsupported mode ' + mode)
+class LoadedBinary:
+    def __init__(self, device: int, bin: Binary):
+        module, kernel = _triton.code_gen.load_binary(bin.backend, 
+                                                      bin.name, 
+                                                      bin.asm, 
+                                                      bin.shared_mem, 
+                                                      device)
+        self.bin = bin
+        self.asm = bin.asm
+        self.module = module
+        self.kernel = kernel
+        self.device = device
 
     def __call__(self, stream, args, grid_0, grid_1=1, grid_2=1):
-        stream.enqueue(self.kernel, grid_0, grid_1, grid_2, self.num_warps * 32, 1, 1, args, self.shared_mem)
+        _triton.runtime.enqueue(self.bin.backend, stream, self.kernel,
+                                grid_0, grid_1, grid_2, 
+                                self.bin.num_warps * 32, 1, 1, 
+                                args, self.bin.shared_mem)
 
 
 class CompilationError(Exception):
@@ -469,6 +465,7 @@ class CompilationError(Exception):
         self.message += '\n' + ' ' * node.col_offset + '^'
         self.message += '\n Error: ' + str(err)
         super().__init__(self.message)
+
 
 class OutOfResources(Exception):
     def __init__(self, required, limit, name):
@@ -546,8 +543,6 @@ class Kernel:
         self.fn = fn
 
     def _compile(self, *wargs, device, attributes, constants, num_warps, num_stages, force_nc_cache, **meta):
-        # explicitly set device
-        torch.cuda.set_device(device.index)
         # create IR module
         context = _triton.ir.context()
         # get just-in-time proto-type of kernel
@@ -565,12 +560,16 @@ class Kernel:
             if node is None or isinstance(e, (NotImplementedError, CompilationError)):
                 raise e
             raise CompilationError(self.fn.src, node, e)
-        tt_device = _triton.driver.cu_device(device.index, False)
         # Compile to machine code
-        mod, ker, shared_mem, ir_asm = _triton.code_gen.add_passes_to_emit_bin(generator.module, tt_device, num_warps, num_stages, force_nc_cache)
-        if shared_mem > tt_device.max_shared_memory():
-            raise  OutOfResources(shared_mem, tt_device.max_shared_memory(), "shared memory")
-        return Binary(mod, ker, num_warps, num_stages, force_nc_cache, shared_mem, ir_asm)
+        if torch.version.hip is None:
+            backend = _triton.runtime.backend.CUDA
+        else:
+            backend = _triton.runtime.backend.ROCM
+        name, asm, shared_mem = _triton.code_gen.compile_ttir(backend, generator.module, device, num_warps, num_stages, force_nc_cache)
+        max_shared_memory = _triton.runtime.max_shared_memory(backend, device)
+        if shared_mem > max_shared_memory:
+            raise OutOfResources(shared_mem, max_shared_memory, "shared memory")
+        return Binary(backend, name, asm, shared_mem, num_warps)
 
     def __call__(self, *wargs, grid, num_warps=4, num_stages=2, force_nc_cache=False, **meta):
         # device inference
@@ -578,44 +577,74 @@ class Kernel:
         if len(tensor_idxs) == 0:
             raise ValueError("No Tensor argument found.")
         invalid_args = []
+        device_ids = []
         for idx in tensor_idxs:
             curr = wargs[idx]
             if not curr.is_cuda:
-                invalid_args += [idx]
+                invalid_args.append(idx)
+            else:
+                device_ids.append(curr.device.index)
         if invalid_args:
             raise ValueError("Arguments at index {invalid_args} are on the wrong device.".format(invalid_args=invalid_args) +
                              " Only CUDA is supported at the moment")
-        device = wargs[tensor_idxs[0]].device
-        torch.cuda.set_device(device.index)
+
+        device = torch.device('cuda', torch.cuda.current_device())
+        device_ty  = device.type
+        device_idx = device.index
+        if len(set(device_ids)) != 1 or device_ids[0] != device_idx:
+            # try to enable P2P communication
+            for arg_idx, dst_idx in zip(tensor_idxs, device_ids):
+                if dst_idx != device_idx:
+                    try:
+                        _triton.runtime.enable_peer_access(self.backend, wargs[arg_idx].data_ptr())
+                    except RuntimeError as e:
+                        raise RuntimeError("Cannot enable P2P access from device {} to device {}: {}"
+                                           .format(device_idx, dst_idx, str(e)))
+
+        # enqueue kernel on the current device
+        torch.cuda.set_device(device_idx)
         # attributes
         args = [arg.data_ptr() if i in tensor_idxs else arg for i, arg in enumerate(wargs)]
         attributes = {i: Kernel.pow2_divisor(a) for i, a in enumerate(args) if isinstance(a, int)}
         # transforms ints whose value is one into constants for just-in-time compilation
         constants = {i: arg for i, arg in enumerate(wargs) if isinstance(arg, int) and arg == 1}
-        # determine if we need to re-compile
+        # compute hash for caching this kernel
         types_key = Kernel._types_key(*wargs, tensor_idxs=tensor_idxs)
         attr_key = frozenset(attributes.items())
         meta_key = frozenset(meta.items())
         const_key = frozenset(constants.items())
-        key = (device.type, device.index, types_key, attr_key, num_warps, num_stages, meta_key, const_key)
-        cache = self.fn.cache
-        if key not in cache:
-            # compile and cache configuration if necessary
-            cache[key] = self._compile(
-                *wargs, device=device, attributes=attributes, 
-                num_warps=num_warps, num_stages=num_stages, force_nc_cache=force_nc_cache, 
-                constants=constants, **meta
-            )
+        key = (device_ty, device_idx, types_key, attr_key, num_warps, num_stages, meta_key, const_key)
+        key = repr(key)
+        # get cached binary
+        drv_cache = self.fn.drv_cache
+        bin_cache_path = self.fn.bin_cache_path
+        bin_lock_path  = self.fn.bin_lock_path
+        if key not in drv_cache:
+            binary = None
+            if bin_lock_path:
+                with FileLock(bin_lock_path):
+                    with shelve.open(bin_cache_path) as db:
+                        binary = db.get(key, None)
+            if binary is None:
+                binary = self._compile(
+                    *wargs, device=device_idx, attributes=attributes,
+                    num_warps=num_warps, num_stages=num_stages, force_nc_cache=force_nc_cache, 
+                    constants=constants, **meta
+                )
+                if bin_lock_path:
+                    with FileLock(bin_lock_path):
+                        with shelve.open(bin_cache_path) as db:
+                            db[key] = binary
+            drv_cache[key] = LoadedBinary(device_idx, binary)
         # pack arguments
         fmt = ''.join(['P' if i in tensor_idxs else Kernel._type_name(arg.__class__) for i, arg in enumerate(wargs)])
         params = struct.pack(fmt, *args)
         # enqueue cached function into stream
-        binary = cache[key]
-        cu_stream = torch.cuda.current_stream(device.index).cuda_stream
-        stream = _triton.driver.cu_stream(cu_stream, False)
+        callable = drv_cache[key]
+        stream = torch.cuda.current_stream(device_idx).cuda_stream
         grid = grid(meta) if hasattr(grid, '__call__') else grid
-        binary(stream, params, *grid)
-        return binary
+        callable(stream, params, *grid)
+        return callable
 
 
 class Launcher:
@@ -676,17 +705,59 @@ class Autotuner:
 
 
 class JITFunction:
+
+    # clear cache if the db is older than either the frontend or the backend
+    def _clear_cache(self):
+        frontend_mtime = os.path.getmtime(triton.code_gen.__file__)
+        backend_mtime  = os.path.getmtime(triton._C.libtriton.__file__)
+        with FileLock(self.bin_lock_path):
+            cache_mtime    = os.path.getmtime(self.db_path)
+            if frontend_mtime > cache_mtime or backend_mtime > cache_mtime:
+                os.remove(self.db_path)
+
+    def _init_cache_paths(self):
+        # fetch cache directory path
+        cache_dir = os.environ.get('TRITON_CACHE_DIR', '/tmp/triton/')
+        if not cache_dir:
+            self.bin_cache_path = None
+            self.db_path = None
+            self.bin_lock_path  = None
+            return
+        # create cache directory
+        if not os.path.exists(cache_dir):
+            os.makedirs(cache_dir, exist_ok=True)
+        # create md5 hash of src
+        md5 = hashlib.md5()
+        md5.update(self.src.encode('utf-8'))
+        md5_hash = md5.hexdigest()
+        # load dbm file in cache_dir for md5_hash
+        self.bin_cache_path = os.path.join(cache_dir, md5_hash)
+        self.db_path = self.bin_cache_path + '.db'
+        self.bin_lock_path  = self.bin_cache_path + '.lock' 
+        # if bin_cache_path exists
+        if os.path.exists(self.db_path):
+            self._clear_cache()
+
     def __init__(self, fn):
+        # information of wrapped function
         self.fn = fn
         self.module = fn.__module__
         self.arg_names = inspect.getfullargspec(fn).args
-        self.cache = dict()
+        self.src = textwrap.dedent(inspect.getsource(fn)) 
+        # cache for callable driver objects (e.g. CUkernel)
+        self.drv_cache = dict()
+        # on-disk paths for the binary cache and corresponding
+        # file-lock
+        self._init_cache_paths()
+        # JITFunction can be instantiated as kernel
+        # when called with a grid using __getitem__
         self.kernel_decorators = []
-        self.src = textwrap.dedent(inspect.getsource(fn))
         self.kernel = None
+        # forward docs
         self.__doc__ = fn.__doc__
 
-    # we do not parse in the constructor because
+
+    # we do not parse `src` in the constructor because
     # the user might want to monkey-patch self.src dynamically.
     # Some unit tests do this, for example.
     def parse(self):
@@ -713,10 +784,16 @@ class JITFunction:
                 raise e
             raise CompilationError(self.src, node, e)
 
+    # - when `.src` attribute is set, cache path needs
+    #   to be reinitialized
+    # - when kernel decorators change, cached kernel
+    #   needs to be cleared
     def __setattr__(self, name, value):
         if name == 'kernel_decorators':
             self.kernel = None
         super(JITFunction, self).__setattr__(name, value)
+        if name == 'src':
+            self._init_cache_paths()
 
     def _init_kernel(self):
         if self.kernel is None:
@@ -730,6 +807,19 @@ class JITFunction:
 
 
 class Config:
+    """
+    An object that represents a possible kernel configuration for the auto-tuner to try.
+
+    :ivar meta: a dictionary of meta-parameters to pass to the kernel as keyword arguments.
+    :type meta: dict[Str, Any]
+    :ivar num_warps: the number of warps to use for the kernel when compiled for GPUs. For example, if
+                      `num_warps=8`, then each kernel instance will be automatically parallelized to
+                      cooperatively execute using `8 * 32 = 256` threads.
+    :type num_warps: int
+    :ivar num_stages: the number of stages that the compiler should use when software-pipelining loops.
+                       Mostly useful for matrix multiplication workloads on SM80+ GPUs.
+    :type num_stages: int
+    """
     def __init__(self, meta, num_warps=4, num_stages=2):
         self.meta = meta
         self.num_warps = num_warps
@@ -737,6 +827,35 @@ class Config:
 
 
 def autotune(configs, key, reset_to_zero=None):
+    """
+    Decorator for auto-tuning a :code:`triton.jit`'d function.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        @triton.autotune(configs=[ 
+            triton.Config(meta={'BLOCK_SIZE': 128}, num_warps=4),
+            triton.Config(meta={'BLOCK_SIZE': 1024}, num_warps=8),
+          ], 
+          key=['x_size'] # the two above configs will be evaluated anytime
+                         # the value of x_size changes   
+        )
+        @triton.jit
+        def kernel(x_ptr, x_size, **META):
+            BLOCK_SIZE = META['BLOCK_SIZE']
+    
+    :note: When all the configurations are evaluated, the kernel will run multiple time.
+           This means that whatever value the kernel updates will be updated multiple times. 
+           To avoid this undesired behavior, you can use the `reset_to_zero` argument, which
+           reset the value of the provided tensor to `zero` before running any configuration.
+
+    :param configs: a list of :code:`triton.Config` objects
+    :type configs: list[triton.Config]
+    :param key: a list of argument names whose change in value will trigger the evaluation of all provided configs.
+    :type key: list[str]
+    :param reset_to_zero: a list of argument names whose value will be reset to zero before evaluating any configs.
+    :type reset_to_zero: list[str]
+    """
     def decorator(fn):
         def wrapper(kernel):
             return Autotuner(kernel, fn.arg_names, configs, key, reset_to_zero)
@@ -748,6 +867,23 @@ def autotune(configs, key, reset_to_zero=None):
 
 
 def heuristics(values):
+    """
+    Decorator for specifying how the values of certain meta-parameters may be computed.
+    This is useful for cases where auto-tuning is prohibitevely expensive, or just not applicable.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        @triton.heuristics(values={'BLOCK_SIZE': lambda args: 2 ** int(math.ceil(math.log2(args[1])))})
+        @triton.jit
+        def kernel(x_ptr, x_size, **META):
+            BLOCK_SIZE = META['BLOCK_SIZE'] # smallest power-of-two >= x_size
+
+    
+    .param values: a dictionary of meta-parameter names and functions that compute the value of the meta-parameter.
+                   each such function takes a list of positional arguments as input.
+    .type values: dict[str, Callable[[list[Any]], Any]]
+    """
     def decorator(fn):
         def wrapper(kernel):
             def fun(*args, **meta):
@@ -783,9 +919,21 @@ def jit(fn):
     return JITFunction(fn)
 
 
+######
+
 def cdiv(x, y):
     return (x + y - 1) // y
 
+def next_power_of_2(n):
+    """Return the smallest power of 2 greater than or equal to n"""
+    n -= 1
+    n |= n >> 1
+    n |= n >> 2
+    n |= n >> 4
+    n |= n >> 8
+    n |= n >> 16
+    n += 1
+    return n
 
 ######
 

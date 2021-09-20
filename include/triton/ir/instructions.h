@@ -73,6 +73,8 @@ public:
   // instruction id
   value_id_t get_id() const { return id_; }
 
+  void print(std::ostream &os);
+
 private:
   basic_block *parent_;
   std::map<ir::metadata::kind_t, unsigned> metadatas_;
@@ -634,18 +636,6 @@ public:
   static instruction* create(value *ptr, value *cmp, value *val, const std::string &name = "", instruction *next = nullptr);
 };
 
-class atomic_exch_inst: public atomic_inst {
-private:
-  atomic_exch_inst(value *ptr, value *val, const std::string &name = "", instruction *next = nullptr);
-  std::string repr_impl() const { return "atomic_exch"; }
-  _TRITON_DEFINE_CLONE(atomic_exch_inst)
-  _TRITON_DEFINE_ACCEPT(atomic_exch_inst)
-
-public:
-  static instruction* create(value *ptr, value *val, const std::string &name = "", instruction *next = nullptr);
-};
-
-
 class exp_inst: public builtin_inst {
 private:
   exp_inst(value *val, const std::string &name = "", instruction *next = nullptr);
@@ -819,16 +809,15 @@ public:
   _TRITON_DEFINE_ACCEPT(copy_from_shared_inst)
 };
 
-
-class recoalesce_inst: public unary_inst{
+class cvt_layout_inst: public unary_inst {
 private:
   using unary_inst::unary_inst;
-  std::string repr_impl() const { return "recoalesce_inst"; }
+  std::string repr_impl() const { return "cvt_layout_inst"; }
 
 public:
-  static recoalesce_inst* create(value *arg, const std::string &name = "", instruction *next = nullptr);
-  _TRITON_DEFINE_CLONE(recoalesce_inst)
-  _TRITON_DEFINE_ACCEPT(recoalesce_inst)
+  static cvt_layout_inst* create(value *arg, const std::string &name = "", instruction *next = nullptr);
+  _TRITON_DEFINE_CLONE(cvt_layout_inst)
+  _TRITON_DEFINE_ACCEPT(cvt_layout_inst)
 };
 
 class barrier_inst: public instruction{
