@@ -215,10 +215,10 @@ class CodeGenerator(ast.NodeVisitor):
             ast.BitXor: '__xor__',
         }[type(node.op)]
         if self.is_triton_object(lhs):
-            return getattr(lhs, fn)(rhs, builder=self.builder)
+            return getattr(lhs, fn)(rhs, _builder=self.builder)
         elif self.is_triton_object(rhs):
             fn = fn[:2] + 'r' + fn[2:]
-            return getattr(rhs, fn)(lhs, builder=self.builder)
+            return getattr(rhs, fn)(lhs, _builder=self.builder)
         else:
             return getattr(lhs, fn)(rhs)
 

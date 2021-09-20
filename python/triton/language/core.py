@@ -396,7 +396,7 @@ def zeros(shape, dtype, _builder=None):
         if not isinstance(d, constexpr):
             raise TypeError("Shape elements must have type `constexpr`")
     shape = [x.value for x in shape]
-    return frontend.zeros(shape, dtype, builder)
+    return frontend.zeros(shape, dtype, _builder)
 
 
 # -----------------------
