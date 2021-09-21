@@ -602,6 +602,7 @@ class Kernel:
         key = repr(key)
         # get cached binary
         drv_cache = self.fn.drv_cache
+        bin_mut_path = self.fn.bin_mut_path
         bin_cache_path = self.fn.bin_cache_path
         bin_lock_path  = self.fn.bin_lock_path
         if key not in drv_cache:
@@ -621,7 +622,7 @@ class Kernel:
                         cache_mtime    = max([os.path.getmtime(db) for db in db_paths])
                         is_stale = frontend_mtime > cache_mtime or backend_mtime > cache_mtime
                         # check if the cache is corrupted
-                        is_corrupted = os.path.exists(bin_cache_path + '.mutating')
+                        is_corrupted = os.path.exists(bin_mut_path)
                         # delete the cache if stale or corrupted
                         if is_stale or is_corrupted:
                             for db in db_paths:
@@ -637,11 +638,10 @@ class Kernel:
                 )
                 if bin_lock_path:
                     with FileLock(bin_lock_path):
-                        mut_path = bin_cache_path + '.mutation'
-                        open(mut_path, 'a').close()
+                        open(bin_mut_path, 'a').close()
                         with shelve.open(bin_cache_path) as db:
                             db[key] = binary
-                        os.remove(mut_path)
+                        os.remove(bin_mut_path)
  
             drv_cache[key] = LoadedBinary(device_idx, binary)
         # pack arguments
@@ -733,8 +733,8 @@ class JITFunction:
         md5_hash = md5.hexdigest()
         # load dbm file in cache_dir for md5_hash
         self.bin_cache_path = os.path.join(cache_dir, md5_hash)
-        self.db_path = self.bin_cache_path + '.db'
         self.bin_lock_path  = self.bin_cache_path + '.lock' 
+        self.bin_mut_path = self.bin_cache_path + '.mutating'
 
     def __init__(self, fn):
         # information of wrapped function
