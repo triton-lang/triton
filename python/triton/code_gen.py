@@ -17,6 +17,7 @@ import torch
 import triton
 import triton._C.libtriton.triton as _triton
 from filelock import FileLock
+import dbm
 
 @contextmanager
 def tempfile(suffix='', dir=None):
@@ -678,10 +679,22 @@ class Kernel:
                 )
                 if bin_lock_path:
                     with FileLock(bin_lock_path):
-                        with open_atomic(bin_cache_path, '.db', 'a') as file:
-                            shutil.copyfile(bin_cache_path + '.db', file.name)
-                            with shelve.open(os.path.splitext(file.name)[0]) as db:
-                                db[key] = binary
+                        dbtype = dbm.whichdb(bin_cache_path)
+                        # extension of file(s) created by db
+                        ext = {'dbm.gnu': '', 'dbm.ndbm': '.db'}[dbtype]
+                        dbpath = bin_cache_path + ext
+                        # create temporary file(s)
+                        dbdir = os.path.dirname(os.path.abspath(dbpath))
+                        file = tmp.NamedTemporaryFile(delete=False, suffix=ext, dir=dbdir)
+                        file.close()
+                        # copy data-base to temporary file(s)
+                        shutil.copyfile(dbpath, file.name)
+                        # write data to temporary file
+                        with shelve.open(os.path.splitext(file.name)[0]) as db:
+                            db[key] = binary
+                        # move temporary file(s) to db
+                        os.rename(file.name, dbpath)
+ 
             drv_cache[key] = LoadedBinary(device_idx, binary)
         # pack arguments
         fmt = ''.join(['P' if i in tensor_idxs else Kernel._type_name(arg.__class__) for i, arg in enumerate(wargs)])
