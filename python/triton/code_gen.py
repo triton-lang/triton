@@ -608,6 +608,25 @@ class Kernel:
             binary = None
             if bin_lock_path:
                 with FileLock(bin_lock_path):
+                    dbtype = dbm.whichdb(bin_cache_path)
+                    # handle stale/corrupted cache if it exists
+                    if dbtype is not None:
+                        # some db types can create multiple files
+                        exts = {'dbm.gnu': [''], 'dbm.ndbm': ['.db'],
+                            'dbm.dumb': ['dir', 'dat']}[dbtype]
+                        db_paths = [bin_cache_path + ext for ext in exts]
+                        # check if the cache is stale
+                        frontend_mtime = os.path.getmtime(triton.code_gen.__file__)
+                        backend_mtime  = os.path.getmtime(triton._C.libtriton.__file__)
+                        cache_mtime    = max([os.path.getmtime(db) for db in db_paths])
+                        is_stale = frontend_mtime > cache_mtime or backend_mtime > cache_mtime
+                        # check if the cache is corrupted
+                        is_corrupted = os.path.exists(bin_cache_path + '.mutating')
+                        # delete the cache if stale or corrupted
+                        if is_stale or is_corrupted:
+                            for db in db_paths:
+                                os.remove(self.db_path)
+                    # read the cache, creating if needed
                     with shelve.open(bin_cache_path) as db:
                         binary = db.get(key, None)
             if binary is None:
@@ -618,30 +637,11 @@ class Kernel:
                 )
                 if bin_lock_path:
                     with FileLock(bin_lock_path):
-                        dbtype = dbm.whichdb(bin_cache_path)
-                        # extension of file(s) created by db
-                        ext = {'dbm.gnu': '', 'dbm.ndbm': '.db'}[dbtype]
-                        dbpath = bin_cache_path + ext
-                        # create temporary file(s)
-                        try:
-                            dbdir = os.path.dirname(os.path.abspath(dbpath))
-                            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext, dir=dbdir)
-                            tmp.close()
-                            # move data-base to temporary file(s)
-                            # do not copy as it can be expensive
-                            # so it's probably preferrable to have the whole
-                            # cache wiped out in the rare event that
-                            # the process is killed while updating it
-                            os.rename(dbpath, tmp.name)
-                            # write data to temporary file
-                            with shelve.open(os.path.splitext(tmp.name)[0]) as db:
-                                db[key] = binary
-                            # move temporary file(s) to db
-                            os.rename(tmp.name, dbpath)
-                        finally:
-                            if os.path.exists(tmp.name):
-                                os.remove(tmp.name)
-
+                        mut_path = bin_cache_path + '.mutation'
+                        open(mut_path, 'a').close()
+                        with shelve.open(bin_cache_path) as db:
+                            db[key] = binary
+                        os.remove(mut_path)
  
             drv_cache[key] = LoadedBinary(device_idx, binary)
         # pack arguments
@@ -716,15 +716,6 @@ class Autotuner:
 
 class JITFunction:
 
-    # clear cache if the db is older than either the frontend or the backend
-    def _clear_cache(self):
-        frontend_mtime = os.path.getmtime(triton.code_gen.__file__)
-        backend_mtime  = os.path.getmtime(triton._C.libtriton.__file__)
-        with FileLock(self.bin_lock_path):
-            cache_mtime    = os.path.getmtime(self.db_path)
-            if frontend_mtime > cache_mtime or backend_mtime > cache_mtime:
-                os.remove(self.db_path)
-
     def _init_cache_paths(self):
         # fetch cache directory path
         cache_dir = os.environ.get('TRITON_CACHE_DIR', '/tmp/triton/')
@@ -744,9 +735,6 @@ class JITFunction:
         self.bin_cache_path = os.path.join(cache_dir, md5_hash)
         self.db_path = self.bin_cache_path + '.db'
         self.bin_lock_path  = self.bin_cache_path + '.lock' 
-        # if bin_cache_path exists
-        if os.path.exists(self.db_path):
-            self._clear_cache()
 
     def __init__(self, fn):
         # information of wrapped function
