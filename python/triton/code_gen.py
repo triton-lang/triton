@@ -623,16 +623,25 @@ class Kernel:
                         ext = {'dbm.gnu': '', 'dbm.ndbm': '.db'}[dbtype]
                         dbpath = bin_cache_path + ext
                         # create temporary file(s)
-                        dbdir = os.path.dirname(os.path.abspath(dbpath))
-                        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext, dir=dbdir)
-                        tmp.close()
-                        # copy data-base to temporary file(s)
-                        shutil.copyfile(dbpath, tmp.name)
-                        # write data to temporary file
-                        with shelve.open(os.path.splitext(tmp.name)[0]) as db:
-                            db[key] = binary
-                        # move temporary file(s) to db
-                        os.rename(tmp.name, dbpath)
+                        try:
+                            dbdir = os.path.dirname(os.path.abspath(dbpath))
+                            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext, dir=dbdir)
+                            tmp.close()
+                            # move data-base to temporary file(s)
+                            # do not copy as it can be expensive
+                            # so it's probably preferrable to have the whole
+                            # cache wiped out in the rare event that
+                            # the process is killed while updating it
+                            os.rename(dbpath, tmp.name)
+                            # write data to temporary file
+                            with shelve.open(os.path.splitext(tmp.name)[0]) as db:
+                                db[key] = binary
+                            # move temporary file(s) to db
+                            os.rename(tmp.name, dbpath)
+                        finally:
+                            if os.path.exists(tmp.name):
+                                os.remove(tmp.name)
+
  
             drv_cache[key] = LoadedBinary(device_idx, binary)
         # pack arguments
