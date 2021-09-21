@@ -679,11 +679,9 @@ class Kernel:
                 if bin_lock_path:
                     with FileLock(bin_lock_path):
                         with open_atomic(bin_cache_path, '.db', 'a') as file:
-                            if os.path.exists(bin_cache_path + '.db'):
-                                shutil.copyfile(bin_cache_path + '.db', file.name)
-                            db = shelve.open(os.path.splitext(file.name)[0])
-                            db[key] = binary
-                            db.close()
+                            shutil.copyfile(bin_cache_path + '.db', file.name)
+                            with shelve.open(os.path.splitext(file.name)[0]) as db:
+                                db[key] = binary
             drv_cache[key] = LoadedBinary(device_idx, binary)
         # pack arguments
         fmt = ''.join(['P' if i in tensor_idxs else Kernel._type_name(arg.__class__) for i, arg in enumerate(wargs)])
