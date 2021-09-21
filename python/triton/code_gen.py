@@ -626,7 +626,9 @@ class Kernel:
                         # delete the cache if stale or corrupted
                         if is_stale or is_corrupted:
                             for db in db_paths:
-                                os.remove(self.db_path)
+                                os.remove(db)
+                        if is_corrupted:
+                            os.remove(bin_mut_path)
                     # read the cache, creating if needed
                     with shelve.open(bin_cache_path) as db:
                         binary = db.get(key, None)
@@ -721,7 +723,6 @@ class JITFunction:
         cache_dir = os.environ.get('TRITON_CACHE_DIR', '/tmp/triton/')
         if not cache_dir:
             self.bin_cache_path = None
-            self.db_path = None
             self.bin_lock_path  = None
             return
         # create cache directory
