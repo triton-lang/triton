@@ -11,73 +11,12 @@ import shelve
 import shutil
 import os
 from .tools.disasm import extract
-import tempfile as tmp
-from contextlib import contextmanager
+import tempfile
 import torch
 import triton
 import triton._C.libtriton.triton as _triton
 from filelock import FileLock
 import dbm
-
-@contextmanager
-def tempfile(suffix='', dir=None):
-    """ Context for temporary file.
-
-    Will find a free temporary filename upon entering
-    and will try to delete the file on leaving, even in case of an exception.
-
-    Parameters
-    ----------
-    suffix : string
-        optional file suffix
-    dir : string
-        optional directory to save temporary file in
-    """
-
-    tf = tmp.NamedTemporaryFile(delete=False, suffix=suffix, dir=dir)
-    tf.file.close()
-    try:
-        yield tf.name
-    finally:
-        try:
-            os.remove(tf.name)
-        except OSError as e:
-            if e.errno == 2:
-                pass
-            else:
-                raise
-
-@contextmanager
-def open_atomic(filepath, suffix, *args, **kwargs):
-    """ Open temporary file object that atomically moves to destination upon
-    exiting.
-
-    Allows reading and writing to and from the same filename.
-
-    The file will not be moved to destination in case of an exception.
-
-    Parameters
-    ----------
-    filepath : string
-        the file path to be opened
-    fsync : bool
-        whether to force write the file to disk
-    *args : mixed
-        Any valid arguments for :code:`open`
-    **kwargs : mixed
-        Any valid keyword arguments for :code:`open`
-    """
-    fsync = kwargs.get('fsync', False)
-
-    with tempfile(dir=os.path.dirname(os.path.abspath(filepath + suffix)), suffix=suffix) as tmppath:
-        with open(tmppath, *args, **kwargs) as file:
-            try:
-                yield file
-            finally:
-                if fsync:
-                    file.flush()
-                    os.fsync(file.fileno())
-        os.rename(tmppath, filepath + suffix)
 
 
 class CodeGenerator(ast.NodeVisitor):
@@ -685,15 +624,15 @@ class Kernel:
                         dbpath = bin_cache_path + ext
                         # create temporary file(s)
                         dbdir = os.path.dirname(os.path.abspath(dbpath))
-                        file = tmp.NamedTemporaryFile(delete=False, suffix=ext, dir=dbdir)
-                        file.close()
+                        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext, dir=dbdir)
+                        tmp.close()
                         # copy data-base to temporary file(s)
-                        shutil.copyfile(dbpath, file.name)
+                        shutil.copyfile(dbpath, tmp.name)
                         # write data to temporary file
-                        with shelve.open(os.path.splitext(file.name)[0]) as db:
+                        with shelve.open(os.path.splitext(tmp.name)[0]) as db:
                             db[key] = binary
                         # move temporary file(s) to db
-                        os.rename(file.name, dbpath)
+                        os.rename(tmp.name, dbpath)
  
             drv_cache[key] = LoadedBinary(device_idx, binary)
         # pack arguments
