@@ -614,7 +614,7 @@ class Kernel:
                     if dbtype is not None:
                         # some db types can create multiple files
                         exts = {'dbm.gnu': [''], 'dbm.ndbm': ['.db'],
-                            'dbm.dumb': ['dir', 'dat']}[dbtype]
+                                'dbm.dumb': ['.dir', '.dat']}[dbtype]
                         db_paths = [bin_cache_path + ext for ext in exts]
                         # check if the cache is stale
                         frontend_mtime = os.path.getmtime(triton.code_gen.__file__)
