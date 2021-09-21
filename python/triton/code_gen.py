@@ -678,7 +678,7 @@ class Kernel:
                 )
                 if bin_lock_path:
                     with FileLock(bin_lock_path):
-                        with open_atomic(bin_cache_path, '.db', 'w') as file:
+                        with open_atomic(bin_cache_path, '.db', 'a') as file:
                             shutil.copyfile(bin_cache_path + '.db', file.name)
                             db = shelve.open(os.path.splitext(file.name)[0])
                             db[key] = binary
