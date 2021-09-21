@@ -7,7 +7,7 @@ import pytest
 @pytest.mark.parametrize("TRANS_A", [False, True])
 @pytest.mark.parametrize("TRANS_B", [False, True])
 @pytest.mark.parametrize("BLOCK", [16, 32, 64])
-@pytest.mark.parametrize("DTYPE", [torch.float16, torch.float32])
+@pytest.mark.parametrize("DTYPE", [torch.float16])
 def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=256):
     # set seed
     torch.random.manual_seed(0)

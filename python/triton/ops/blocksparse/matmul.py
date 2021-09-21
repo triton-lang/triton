@@ -3,9 +3,94 @@ import triton.language as tl
 import triton._C.libtriton as libtriton
 import torch
 
+# --------------------------------------------------------
+# Sparse = Dense x Dense (SDD)
+# This operation uses super-blocking to make sure that
+# it's done efficiently when small blocks can be grouped
+# together
+# --------------------------------------------------------
 
 @triton.jit
-def _kernel(
+def _sdd_kernel(
+    A, B, C, stride_za, stride_ha, stride_ma, stride_ka, stride_zb, stride_hb, stride_kb, stride_nb, stride_zc, stride_hc,
+    stride_mc, stride_nc, DS0, DS1, SDD_K, SDD_off_width, lut, locks, nlocks, **meta
+):
+    TILE_M = meta['TM']
+    TILE_N = meta['TN']
+    TILE_K = meta['TK']
+    SPLIT_K = meta['TZ']
+    BLOCK = meta['BLOCK']
+    #------------#
+    #- Prologue -#
+    #------------#
+    pid0 = tl.program_id(0)
+    pid1 = tl.program_id(1)
+    pidz = tl.program_id(2)
+    pid1 = pid1 + SDD_off_width
+    blockidm = tl.arange(0, TILE_M) // BLOCK
+    blockidn = tl.arange(0, TILE_N) // BLOCK
+    offlutm = blockidm * (TILE_N // BLOCK) * 4
+    offlutn = blockidn * 4
+    header = lut + pid1 * (TILE_M // BLOCK) * (TILE_N // BLOCK) * 4
+    z = tl.load(header + 0)
+    i = tl.load(header + 1 + offlutm)
+    j = tl.load(header + 2 + offlutn)
+    AS1 = SDD_K
+    offka = pid0 * AS1
+    offkb = pid0 * AS1
+    offha = z
+    offhb = z
+    ram = i * BLOCK + (tl.arange(0, TILE_M) % BLOCK)
+    rbn = j * BLOCK + (tl.arange(0, TILE_N) % BLOCK)
+
+    # initialize a, b pointers
+    rka = offka + tl.arange(0, TILE_K)
+    rkb = offkb + tl.arange(0, TILE_K)
+    pa = A + pidz * SPLIT_K * stride_za + offha * stride_ha + ram[:, None] * stride_ma + rka[None, :] * stride_ka
+    pb = B + pidz * SPLIT_K * stride_zb + offhb * stride_hb + rbn[None, :] * stride_nb + rkb[:, None] * stride_kb
+    checkam = AS1 > 0
+    checkbn = AS1 > 0
+    a = tl.load(pa, mask=checkam, other=0.)
+    b = tl.load(pb, mask=checkbn, other=0.)
+
+    ## ---------------- ##
+    ##    Inner Loop    ##
+    ## ---------------- ##
+    acc = tl.zeros((TILE_M, TILE_N), dtype=tl.float32)
+    for k in range(AS1, 0, -TILE_K*SPLIT_K):
+        acc += tl.dot(a, b)
+        inc_a = TILE_K * SPLIT_K * stride_ka
+        inc_b = TILE_K * SPLIT_K * stride_kb
+        pa += inc_a
+        pb += inc_b
+        # pre-fetch
+        checkak = k > TILE_K
+        checkbk = k > TILE_K
+        checka = checkam & checkak
+        checkb = checkbn & checkbk
+        a = tl.load(pa, mask=checka)
+        b = tl.load(pb, mask=checkb)
+    c = acc.to(C.dtype.element_ty)
+
+    checkc = True
+    rr_blockidm = tl.arange(0, TILE_M) // BLOCK
+    rr_blockidn = tl.arange(0, TILE_N) // BLOCK
+    rr_offlutm = rr_blockidm * (TILE_N // BLOCK) * 4
+    rr_offlutn = rr_blockidn * 4
+    off_bkid = 3 + rr_offlutm[:, None] + rr_offlutn[None, :]
+    bkid = tl.load(header + off_bkid)
+    offpc = bkid * BLOCK * BLOCK
+    rcm = tl.arange(0, TILE_M) % BLOCK
+    rcn = tl.arange(0, TILE_N) % BLOCK
+    pc = C + offpc  + pidz * stride_zc + rcm[:, None] * stride_mc + rcn[None, :] * stride_nc
+    tl.store(pc, c, mask=checkc)
+
+
+# -----------------------------
+# Dense = Sparse x Dense (DSD)
+# -----------------------------
+@triton.jit
+def _dsd_kernel(
     A, B, C, stride_za, stride_ha, stride_ma, stride_ka, stride_zb, stride_hb, stride_kb, stride_nb, stride_zc, stride_hc,
     stride_mc, stride_nc, DS0, DS1, SDD_K, SDD_off_width, lut, locks, nlocks, **meta
 ):
@@ -20,118 +105,50 @@ def _kernel(
     pid0 = tl.program_id(0)
     pid1 = tl.program_id(1)
     pidz = tl.program_id(2)
-    if meta['SDD']:
-        pid1 = pid1 + SDD_off_width
-        blockidm = tl.arange(0, TM) // BLOCK
-        blockidn = tl.arange(0, TN) // BLOCK
-        offlutm = blockidm * (TN // BLOCK) * 4
-        offlutn = blockidn * 4
-        header = lut + pid1 * (TM // BLOCK) * (TN // BLOCK) * 4
-        z = tl.load(header + 0)
-        i = tl.load(header + 1 + offlutm)
-        j = tl.load(header + 2 + offlutn)
-        AS1 = SDD_K
-        lockid = tl.where(TZ > 1, 1, 0)
-        offka = pid0 * AS1
-        offkb = pid0 * AS1
-        offmc = 0
-        offnc = 0
-        offpa = 0
-        offpb = 0
-        maxid = TZ
-        offhc = 0
-        offha = z
-        offhb = z
-        ram = i * BLOCK + (tl.arange(0, TM) % BLOCK)
-        rbn = j * BLOCK + (tl.arange(0, TN) % BLOCK)
-    else:
-        header = lut + pid0 * 6
-        offset = tl.load(header + 0)
-        AS1 = tl.load(header + 1)
-        column = tl.load(header + 2)
-        depth = tl.load(header + 3)
-        lockid = tl.load(header + 4)
-        maxid = tl.load(header + 5)
-        pinc = lut + offset
-        offhc = depth
-        if meta['DSD']:
-            # output offset
-            offnc = pid1 * TN
-            offmc = column * TM
-            offpc = 0
-            # dense input offset
-            offnb = pid1 * TN
-            offkb = tl.load(pinc)
-            offkb = tl.multiple_of(offkb, 8)  # compiler hint
-            offpb = 0
-            # sparse input offset
-            offma = 0
-            offka = 0
-            offpa = tl.load(pinc + 1)
-            offpa = tl.multiple_of(offpa, 8)  # compiler hint
-            offpa = offpa * BLOCK * BLOCK
-            offha = 0
-            offhb = depth
-        else:
-            # output offset
-            offmc = pid1 * TM
-            offnc = column * TN
-            offpc = 0
-            # dense input offset
-            offma = pid1 * TM
-            offka = tl.load(pinc)
-            offka = tl.multiple_of(offka, 8)  # compiler hint
-            offpa = 0
-            # sparse input offset
-            offnb = 0
-            offkb = 0
-            offpb = tl.load(pinc + 1)
-            offpb = tl.multiple_of(offpb, 8)  # compiler hint
-            offpb = offpb * BLOCK * BLOCK
-            offha = depth
-            offhb = 0
-        ram = offma + tl.arange(0, TM)
-        rbn = offnb + tl.arange(0, TN)
-
+    header = lut + pid0 * 6
+    offset = tl.load(header + 0)
+    AS1 = tl.load(header + 1)
+    column = tl.load(header + 2)
+    depth = tl.load(header + 3)
+    lockid = tl.load(header + 4)
+    maxid = tl.load(header + 5)
+    pinc = lut + offset
+    offhc = depth
+    # output offset
+    offnc = pid1 * TN
+    offmc = column * TM
+    # dense input offset
+    offnb = pid1 * TN
+    offkb = tl.load(pinc)
+    offkb = tl.multiple_of(offkb, 8)  # compiler hint
+    # sparse input offset
+    offpa = tl.load(pinc + 1)
+    offpa = tl.multiple_of(offpa, 8)  # compiler hint
+    offpa = offpa * BLOCK * BLOCK
+    offhb = depth
+    ram = tl.arange(0, TM)
+    rbn = offnb + tl.arange(0, TN)
     # initialize a, b pointers
-    rka = offka + tl.arange(0, TK)
+    rka = tl.arange(0, TK)
     rkb = offkb + tl.arange(0, TK)
-    pa = A + pidz * TZ * stride_za + offha * stride_ha + offpa + ram[:, None] * stride_ma + rka[None, :] * stride_ka
-    pb = B + pidz * TZ * stride_zb + offhb * stride_hb + offpb + rbn[None, :] * stride_nb + rkb[:, None] * stride_kb
-    if meta['DDS']:
-        checkam = ram[:, None] < DS0
-    else:
-        checkam = AS1 > 0
-    if meta['DSD']:
-        checkbn = rbn[None, :] < DS0
-    else:
-        checkbn = AS1 > 0
+    pa = A + pidz * TZ * stride_za + offpa + ram[:, None] * stride_ma + rka[None, :] * stride_ka
+    pb = B + pidz * TZ * stride_zb + offhb * stride_hb + rbn[None, :] * stride_nb + rkb[:, None] * stride_kb
+    checkam = AS1 > 0
+    checkbn = rbn[None, :] < DS0
     a = tl.load(pa, mask=checkam, other=0.)
     b = tl.load(pb, mask=checkbn, other=0.)
-
     ## ---------------- ##
     ##    Inner Loop    ##
     ## ---------------- ##
     acc = tl.zeros((TM, TN), dtype=tl.float32)
     for k in range(AS1, 0, -TK*TZ):
         acc += tl.dot(a, b)
-        if meta['SDD']:
-            inc_a = TK * TZ * stride_ka
-            inc_b = TK * TZ * stride_kb
-        else:
-            pinc += 2
-        if meta['DSD']:
-            inc_b = tl.load(pinc)
-            inc_a = tl.load(pinc + 1)
-            inc_b = tl.multiple_of(inc_b, 8)
-            inc_a = tl.multiple_of(inc_a, 8)
-            inc_b = inc_b * stride_kb
-        if meta['DDS']:
-            inc_a = tl.load(pinc)
-            inc_b = tl.load(pinc + 1)
-            inc_a = tl.multiple_of(inc_a, 8)
-            inc_b = tl.multiple_of(inc_b, 8)
-            inc_a = inc_a * stride_ka
+        pinc += 2
+        inc_b = tl.load(pinc)
+        inc_a = tl.load(pinc + 1)
+        inc_b = tl.multiple_of(inc_b, 8)
+        inc_a = tl.multiple_of(inc_a, 8)
+        inc_b = inc_b * stride_kb
         pa += inc_a
         pb += inc_b
         # pre-fetch
@@ -142,44 +159,95 @@ def _kernel(
         a = tl.load(pa, mask=checka)
         b = tl.load(pb, mask=checkb)
     c = acc.to(C.dtype.element_ty)
+    rcm = offmc + tl.arange(0, TM)
+    rcn = offnc + tl.arange(0, TN)
+    checkc = rcn[None, :] < DS0
+    pc = C + offhc * stride_hc + pidz * stride_zc + rcm[:, None] * stride_mc + rcn[None, :] * stride_nc
+    tl.store(pc, c, mask=checkc)
 
-    if meta['SDD']:
-        checkc = True
-        rr_blockidm = tl.arange(0, TM) // BLOCK
-        rr_blockidn = tl.arange(0, TN) // BLOCK
-        rr_offlutm = rr_blockidm * (TN // BLOCK) * 4
-        rr_offlutn = rr_blockidn * 4
-        off_bkid = 3 + rr_offlutm[:, None] + rr_offlutn[None, :]
-        bkid = tl.load(header + off_bkid)
-        offpc = bkid * BLOCK * BLOCK
-        rcm = tl.arange(0, TM) % BLOCK
-        rcn = tl.arange(0, TN) % BLOCK
-    else:
-        rcm = offmc + tl.arange(0, TM)
-        rcn = offnc + tl.arange(0, TN)
-    if meta['DSD']:
-        checkc = rcn[None, :] < DS0
-    if meta['DDS']:
-        checkc = rcm[:, None] < DS0
 
+@triton.jit
+def _dds_kernel(
+    A, B, C, stride_za, stride_ha, stride_ma, stride_ka, stride_zb, stride_hb, stride_kb, stride_nb, stride_zc, stride_hc,
+    stride_mc, stride_nc, DS0, DS1, SDD_K, SDD_off_width, lut, locks, nlocks, **meta
+):
+    TM = meta['TM']
+    TN = meta['TN']
+    TK = meta['TK']
+    TZ = meta['TZ']
+    BLOCK = meta['BLOCK']
+    #------------#
+    #- Prologue -#
+    #------------#
+    pid0 = tl.program_id(0)
+    pid1 = tl.program_id(1)
+    pidz = tl.program_id(2)
+    header = lut + pid0 * 6
+    offset = tl.load(header + 0)
+    AS1 = tl.load(header + 1)
+    column = tl.load(header + 2)
+    depth = tl.load(header + 3)
+    lockid = tl.load(header + 4)
+    maxid = tl.load(header + 5)
+    pinc = lut + offset
+    offhc = depth
+    # output offset
+    offmc = pid1 * TM
+    offnc = column * TN
+    offpc = 0
+    # dense input offset
+    offma = pid1 * TM
+    offka = tl.load(pinc)
+    offka = tl.multiple_of(offka, 8)  # compiler hint
+    offpa = 0
+    # sparse input offset
+    offnb = 0
+    offkb = 0
+    offpb = tl.load(pinc + 1)
+    offpb = tl.multiple_of(offpb, 8)  # compiler hint
+    offpb = offpb * BLOCK * BLOCK
+    offha = depth
+    offhb = 0
+    ram = offma + tl.arange(0, TM)
+    rbn = offnb + tl.arange(0, TN)
+
+    # initialize a, b pointers
+    rka = offka + tl.arange(0, TK)
+    rkb = offkb + tl.arange(0, TK)
+    pa = A + pidz * TZ * stride_za + offha * stride_ha + offpa + ram[:, None] * stride_ma + rka[None, :] * stride_ka
+    pb = B + pidz * TZ * stride_zb + offhb * stride_hb + offpb + rbn[None, :] * stride_nb + rkb[:, None] * stride_kb
+    checkam = ram[:, None] < DS0
+    checkbn = AS1 > 0
+    a = tl.load(pa, mask=checkam, other=0.)
+    b = tl.load(pb, mask=checkbn, other=0.)
+
+    ## ---------------- ##
+    ##    Inner Loop    ##
+    ## ---------------- ##
+    acc = tl.zeros((TM, TN), dtype=tl.float32)
+    for k in range(AS1, 0, -TK*TZ):
+        acc += tl.dot(a, b)
+        pinc += 2
+        inc_a = tl.load(pinc)
+        inc_b = tl.load(pinc + 1)
+        inc_a = tl.multiple_of(inc_a, 8)
+        inc_b = tl.multiple_of(inc_b, 8)
+        inc_a = inc_a * stride_ka
+        pa += inc_a
+        pb += inc_b
+        # pre-fetch
+        checkak = k > TK
+        checkbk = k > TK
+        checka = checkam & checkak
+        checkb = checkbn & checkbk
+        a = tl.load(pa, mask=checka)
+        b = tl.load(pb, mask=checkb)
+    c = acc.to(C.dtype.element_ty)
+    rcm = offmc + tl.arange(0, TM)
+    rcn = offnc + tl.arange(0, TN)
+    checkc = rcm[:, None] < DS0
     pc = C + offpc + offhc * stride_hc + pidz * stride_zc + rcm[:, None] * stride_mc + rcn[None, :] * stride_nc
-    # write-back directly
-    if lockid == 0:
-        tl.store(pc, c, mask=checkc)
-    # accumulate partial results using spin-locks
-    else:
-        plock = locks + tl.program_id(2) * nlocks * tl.num_programs(1) + tl.program_id(1) * nlocks + lockid - 1
-        pcount = plock + tl.num_programs(2) * tl.num_programs(1) * nlocks
-        while tl.atomic_cas(plock, 0, 1) == 1:
-            pass
-        count = tl.load(pcount)
-        if count == 0:
-            tl.store(pc, c, mask=checkc)
-        else:
-            d = tl.load(pc, mask=checkc)
-            tl.store(pc, d + c, mask=checkc)
-        tl.atomic_xchg(pcount, (count + 1) % maxid)
-        tl.atomic_xchg(plock, 0)
+    tl.store(pc, c, mask=checkc)
 
 
 ##############
@@ -308,7 +376,7 @@ class _matmul(torch.autograd.Function):
             max_width = 49152
             for off_width in range(0, width, max_width):
                 grid = lambda meta: [meta['TZ'], min(max_width, width - off_width), batch_size]
-                _kernel[grid](
+                _sdd_kernel[grid](
                     a,
                     b,
                     c,
@@ -451,7 +519,7 @@ class _matmul(torch.autograd.Function):
         locks = _matmul.get_locks(2 * AS0 * AS2 // 32 * num_locks, a.device)
         c = torch.empty((CS0, CS1, CS2, CS3), dtype=dtype, device=a.device)
         grid = lambda meta: [width, triton.cdiv(AS2, meta['TM']), AS0]
-        _kernel[grid](
+        _dds_kernel[grid](
             a,
             b,
             c,
@@ -498,7 +566,7 @@ class _matmul(torch.autograd.Function):
         locks = _matmul.get_locks(2 * BS0 * BS3 // 32 * num_locks, a.device)
         c = torch.empty((CS0, CS1, CS2, CS3), dtype=dtype, device=a.device)
         grid = lambda meta: [width, triton.cdiv(BS3, meta['TN']), BS0]
-        _kernel[grid](
+        _dsd_kernel[grid](
             a,
             b,
             c,
