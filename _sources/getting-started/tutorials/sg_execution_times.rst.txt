@@ -5,14 +5,14 @@
 
 Computation times
 =================
-**11:50.662** total execution time for **getting-started_tutorials** files:
+**11:51.052** total execution time for **getting-started_tutorials** files:
 
 +---------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_03-matrix-multiplication.py` (``03-matrix-multiplication.py``) | 06:28.511 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_03-matrix-multiplication.py` (``03-matrix-multiplication.py``) | 06:28.869 | 0.0 MB |
 +---------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_02-fused-softmax.py` (``02-fused-softmax.py``)                 | 03:29.511 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_02-fused-softmax.py` (``02-fused-softmax.py``)                 | 03:29.348 | 0.0 MB |
 +---------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_01-vector-add.py` (``01-vector-add.py``)                       | 01:52.287 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_01-vector-add.py` (``01-vector-add.py``)                       | 01:52.819 | 0.0 MB |
 +---------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_04-low-memory-dropout.py` (``04-low-memory-dropout.py``)       | 00:00.354 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_04-low-memory-dropout.py` (``04-low-memory-dropout.py``)       | 00:00.016 | 0.0 MB |
 +---------------------------------------------------------------------------------------------------------+-----------+--------+
