@@ -668,7 +668,7 @@ class Kernel:
             binary = None
             if bin_lock_path:
                 with FileLock(bin_lock_path):
-                    with shelve.open(bin_cache_path) as db:
+                    with shelve.open(bin_cache_path, 'c') as db:
                         binary = db.get(key, None)
             if binary is None:
                 binary = self._compile(
@@ -679,9 +679,7 @@ class Kernel:
                 if bin_lock_path:
                     with FileLock(bin_lock_path):
                         with open_atomic(bin_cache_path, '.db', 'a') as file:
-                            bin_db_path = bin_cache_path + '.db'
-                            if os.path.exists(bin_db_path):
-                                shutil.copyfile(bin_db_path, file.name)
+                            shutil.copyfile(bin_cache_path + '.db', file.name)
                             db = shelve.open(os.path.splitext(file.name)[0])
                             db[key] = binary
                             db.close()
