@@ -58,14 +58,14 @@ void coalesce::run(ir::module &mod) {
   for(ir::basic_block *block: fn->blocks())
   for(ir::instruction* i: block->get_inst_list()){
     // coalesce before store
-    if(auto x = dynamic_cast<ir::store_inst*>(i))
-    if(ir::value* op = x->get_value_operand())
+    if(dynamic_cast<ir::store_inst*>(i) || dynamic_cast<ir::atomic_rmw_inst*>(i))
+    if(ir::value* op = i->get_operand(1))
     if(op->get_type()->is_block_ty())
     if(layout_->get(op)->to_mma()){
-      builder.set_insert_point(x);
+      builder.set_insert_point(i);
       ir::instruction* new_op = ir::cvt_layout_inst::create(op);
       builder.insert(new_op);
-      x->replace_uses_of_with(op, new_op);
+      i->replace_uses_of_with(op, new_op);
     }
     // uncoalesce after load
     if(auto x = dynamic_cast<ir::load_inst*>(i))
