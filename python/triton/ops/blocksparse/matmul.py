@@ -114,7 +114,7 @@ def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, luts, num_locks, 
                 b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
                 c.stride(0), c.stride(1), c.stride(2), c.stride(3),
                 Ka, off_grid, lut,
-                TILE_M = block*pack, TILE_N = block*pack, TILE_K = 32, BLOCK = block,
+                TILE_M = block*pack, TILE_N = block*pack, TILE_K = 32, BLOCK = block, num_stages=3,
                 num_warps=4,
             )
     return c
@@ -219,20 +219,20 @@ def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, num_locks, w
     # compute output
     grid = lambda meta: [width, triton.cdiv(BS3, meta['TILE_N']), BS0]
     # fmt: off
-    _dsd_kernel[grid](
+    pgm = _dsd_kernel[grid](
         a, b, c,
         a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),
         b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
         c.stride(0), c.stride(1), c.stride(3 if trans_c else 2), c.stride(2 if trans_c else 3),
         BS3, AS1, lut,
-        TILE_M = block, TILE_N = 128, TILE_K = 16, BLOCK = block,
+        TILE_M = block, TILE_N = 128, TILE_K = 16, BLOCK = block, num_stages=2,
         num_warps=4,
     )
     return c
 
 def dsd_lut(layout, block, step, trans, device):  
     sizes = torch.sum(layout, 2 if trans else 1)
-    depth, column = sizes.nonzero(as_tuple=True)
+    head_id, col_id = sizes.nonzero(as_tuple=True)
     sizes = sizes.flatten()
     segments = sizes*step
     # pointer increments
@@ -281,10 +281,10 @@ def dsd_lut(layout, block, step, trans, device):
     A_incs[offsets[segments > 0], 0] = A_idx[offsets[segments > 0]]
     A_incs = A_incs.view(-1)
     # create header
-    width    = column.size(0)
+    width    = col_id.size(0)
     offsets  = offsets*2*div + 4*width
     segments = segments*div
-    header   = torch.stack((offsets, segments, column, depth), dim=1).view(-1).contiguous()
+    header   = torch.stack((offsets, segments, col_id, head_id), dim=1).view(-1).contiguous()
     # create increments
     incs     = torch.stack((B_incs, A_incs), dim=1).view(-1).contiguous()
     incs     = torch.cat((incs, torch.zeros(2, device=incs.device, dtype=incs.dtype)))
