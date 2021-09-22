@@ -12,78 +12,72 @@ import torch
 
 @triton.jit
 def _sdd_kernel(
-    A, B, C, stride_za, stride_ha, stride_ma, stride_ka, stride_zb, stride_hb, stride_kb, stride_nb, stride_zc, stride_hc,
-    stride_mc, stride_nc, DS0, DS1, SDD_K, SDD_off_width, lut, locks, nlocks, **meta
+    A, B, C, stride_za, stride_ha, stride_ma, stride_ak, stride_zb, stride_hb, stride_bk, stride_nb, stride_zc, stride_hc,
+    stride_mc, stride_nc, DS0, DS1, K, SDD_off_width, lut, locks, nlocks, **meta
 ):
     TILE_M = meta['TM']
     TILE_N = meta['TN']
     TILE_K = meta['TK']
-    SPLIT_K = meta['TZ']
     BLOCK = meta['BLOCK']
     #------------#
     #- Prologue -#
     #------------#
     pid0 = tl.program_id(0)
-    pid1 = tl.program_id(1)
-    pidz = tl.program_id(2)
-    pid1 = pid1 + SDD_off_width
+    pid1 = tl.program_id(1) + SDD_off_width
     blockidm = tl.arange(0, TILE_M) // BLOCK
     blockidn = tl.arange(0, TILE_N) // BLOCK
     offlutm = blockidm * (TILE_N // BLOCK) * 4
     offlutn = blockidn * 4
     header = lut + pid1 * (TILE_M // BLOCK) * (TILE_N // BLOCK) * 4
-    z = tl.load(header + 0)
-    i = tl.load(header + 1 + offlutm)
-    j = tl.load(header + 2 + offlutn)
-    AS1 = SDD_K
-    offka = pid0 * AS1
-    offkb = pid0 * AS1
-    offha = z
-    offhb = z
-    ram = i * BLOCK + (tl.arange(0, TILE_M) % BLOCK)
-    rbn = j * BLOCK + (tl.arange(0, TILE_N) % BLOCK)
-
-    # initialize a, b pointers
-    rka = offka + tl.arange(0, TILE_K)
-    rkb = offkb + tl.arange(0, TILE_K)
-    pa = A + pidz * SPLIT_K * stride_za + offha * stride_ha + ram[:, None] * stride_ma + rka[None, :] * stride_ka
-    pb = B + pidz * SPLIT_K * stride_zb + offhb * stride_hb + rbn[None, :] * stride_nb + rkb[:, None] * stride_kb
-    checkam = AS1 > 0
-    checkbn = AS1 > 0
-    a = tl.load(pa, mask=checkam, other=0.)
-    b = tl.load(pb, mask=checkbn, other=0.)
-
+    # batch offset
+    off_z = tl.program_id(2)
+    # head offset
+    off_h = tl.load(header + 0)
+    # initialize pointers to A
+    start_am = tl.load(header + 1 + offlutm)
+    offs_am = start_am * BLOCK + (tl.arange(0, TILE_M) % BLOCK)
+    offs_ak = pid0 * K + tl.arange(0, TILE_K)
+    a_ptrs = A + off_z * stride_za \
+                + off_h * stride_ha \
+                + offs_am[:, None] * stride_ma \
+                + offs_ak[None, :] * stride_ak
+    # initialize pointers to B
+    start_bn = tl.load(header + 2 + offlutn)
+    offs_bn = start_bn * BLOCK + (tl.arange(0, TILE_N) % BLOCK)
+    offs_bk = pid0 * K + tl.arange(0, TILE_K)
+    b_ptrs = B + off_z * stride_zb \
+                + off_h * stride_hb \
+                + offs_bn[None, :] * stride_nb \
+                + offs_bk[:, None] * stride_bk
     ## ---------------- ##
     ##    Inner Loop    ##
     ## ---------------- ##
     acc = tl.zeros((TILE_M, TILE_N), dtype=tl.float32)
-    for k in range(AS1, 0, -TILE_K*SPLIT_K):
+    for k in range(K, 0, -TILE_K):
+        a = tl.load(a_ptrs)
+        b = tl.load(b_ptrs)
         acc += tl.dot(a, b)
-        inc_a = TILE_K * SPLIT_K * stride_ka
-        inc_b = TILE_K * SPLIT_K * stride_kb
-        pa += inc_a
-        pb += inc_b
-        # pre-fetch
-        checkak = k > TILE_K
-        checkbk = k > TILE_K
-        checka = checkam & checkak
-        checkb = checkbn & checkbk
-        a = tl.load(pa, mask=checka)
-        b = tl.load(pb, mask=checkb)
+        a_ptrs += TILE_K * stride_ak
+        b_ptrs += TILE_K * stride_bk
     c = acc.to(C.dtype.element_ty)
-
-    checkc = True
-    rr_blockidm = tl.arange(0, TILE_M) // BLOCK
-    rr_blockidn = tl.arange(0, TILE_N) // BLOCK
-    rr_offlutm = rr_blockidm * (TILE_N // BLOCK) * 4
-    rr_offlutn = rr_blockidn * 4
-    off_bkid = 3 + rr_offlutm[:, None] + rr_offlutn[None, :]
-    bkid = tl.load(header + off_bkid)
-    offpc = bkid * BLOCK * BLOCK
-    rcm = tl.arange(0, TILE_M) % BLOCK
-    rcn = tl.arange(0, TILE_N) % BLOCK
-    pc = C + offpc  + pidz * stride_zc + rcm[:, None] * stride_mc + rcn[None, :] * stride_nc
-    tl.store(pc, c, mask=checkc)
+    ## ---------------- ##
+    ##    Epilogue      ##
+    ## ---------------- ##
+    blockidm = tl.arange(0, TILE_M) // BLOCK
+    blockidn = tl.arange(0, TILE_N) // BLOCK
+    offlutm = blockidm * (TILE_N // BLOCK) * 4
+    offlutn = blockidn * 4
+    off_block_id = 3 + offlutm[:, None] + offlutn[None, :]
+    block_id = tl.load(header + off_block_id)
+    off_c = block_id * BLOCK * BLOCK
+    # initialize pointers to C
+    offs_cm = tl.arange(0, TILE_M) % BLOCK
+    offs_cn = tl.arange(0, TILE_N) % BLOCK
+    pc = C + off_c \
+            + off_z * stride_zc \
+            + offs_cm[:, None] * stride_mc \
+            + offs_cn[None, :] * stride_nc
+    tl.store(pc, c, mask=True)
 
 
 # -----------------------------
