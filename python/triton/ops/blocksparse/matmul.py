@@ -3,27 +3,31 @@ import triton.language as tl
 import triton._C.libtriton as libtriton
 import torch
 
+# ********************************************************
 # --------------------------------------------------------
 # Sparse = Dense x Dense (SDD)
 # This operation uses super-blocking to make sure that
 # it's done efficiently when small blocks can be grouped
 # together
 # --------------------------------------------------------
+# ********************************************************
 
 @triton.jit
 def _sdd_kernel(
-    A, B, C, stride_za, stride_ha, stride_ma, stride_ak, stride_zb, stride_hb, stride_bk, stride_nb, stride_zc, stride_hc,
-    stride_mc, stride_nc, DS0, DS1, K, SDD_off_width, lut, locks, nlocks, **meta
+    A, B, C, 
+    stride_za, stride_ha, stride_ma, stride_ak, 
+    stride_zb, stride_hb, stride_bk, stride_nb, 
+    stride_zc, stride_mc, stride_nc, 
+    K, grid_offset, lut, **meta
 ):
-    TILE_M = meta['TM']
-    TILE_N = meta['TN']
-    TILE_K = meta['TK']
-    BLOCK = meta['BLOCK']
+    TILE_M = meta['TILE_M']
+    TILE_N = meta['TILE_N']
+    TILE_K = meta['TILE_K']
+    BLOCK  = meta['BLOCK']
     #------------#
     #- Prologue -#
     #------------#
-    pid0 = tl.program_id(0)
-    pid1 = tl.program_id(1) + SDD_off_width
+    pid1 = tl.program_id(1) + grid_offset
     blockidm = tl.arange(0, TILE_M) // BLOCK
     blockidn = tl.arange(0, TILE_N) // BLOCK
     offlutm = blockidm * (TILE_N // BLOCK) * 4
@@ -36,7 +40,7 @@ def _sdd_kernel(
     # initialize pointers to A
     start_am = tl.load(header + 1 + offlutm)
     offs_am = start_am * BLOCK + (tl.arange(0, TILE_M) % BLOCK)
-    offs_ak = pid0 * K + tl.arange(0, TILE_K)
+    offs_ak = tl.arange(0, TILE_K)
     a_ptrs = A + off_z * stride_za \
                 + off_h * stride_ha \
                 + offs_am[:, None] * stride_ma \
@@ -44,7 +48,7 @@ def _sdd_kernel(
     # initialize pointers to B
     start_bn = tl.load(header + 2 + offlutn)
     offs_bn = start_bn * BLOCK + (tl.arange(0, TILE_N) % BLOCK)
-    offs_bk = pid0 * K + tl.arange(0, TILE_K)
+    offs_bk = tl.arange(0, TILE_K)
     b_ptrs = B + off_z * stride_zb \
                 + off_h * stride_hb \
                 + offs_bn[None, :] * stride_nb \
@@ -79,18 +83,70 @@ def _sdd_kernel(
             + offs_cn[None, :] * stride_nc
     tl.store(pc, c, mask=True)
 
+def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, luts, num_locks, widths, packs):
+    # (A * B)^T = B^T * A^T
+    if trans_c:
+        a, b = b, a
+        trans_a, trans_b = not trans_b, not trans_a
+    # shape constraints
+    a_dim = -2 if trans_a else -1
+    b_dim = -1 if trans_b else -2
+    Ka, Kb = a.shape[a_dim], b.shape[b_dim]
+    if Ka != Kb:
+        raise ValueError(f"Inner dimension mismatch (A: {Ka} vs B: {Kb})")
+    if Ka % 16 != 0:
+        raise ValueError('Reduction size for SDD must be a multiple of 16')
+    # allocate output
+    n_blocks = sum([width * pack * pack for width, pack in zip(widths, packs)])
+    c = torch.zeros((a.shape[0], n_blocks, block, block), dtype=a.dtype, device=a.device)
+    # each iteration of the loop below
+    # computes the value for one group of super-blocks
+    # (e.g., all 4x4 super-blocks)
+    for lut, width, pack in zip(luts, widths, packs):
+        # maximum grid size in Triton/CUDA is 64k but we may have more
+        # super-blocks than that.
+        max_grid = 65535
+        for off_grid in range(0, width, max_grid):
+            grid = [1, min(max_grid, width - off_grid), c.shape[0]]
+            # fmt: off
+            _sdd_kernel[grid](
+                a, b, c,
+                a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),
+                b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
+                c.stride(0), c.stride(2), c.stride(3),
+                Ka, off_grid, lut,
+                TILE_M = block*pack, TILE_N = block*pack, TILE_K = 32, BLOCK = block,
+                num_warps=4,
+            )
+    return c
+
+def sdd_lut(layout, block, device):
+    start_width = 128 // block
+    layout = layout.type(torch.int32)
+    superblocks = libtriton.superblock(layout.data_ptr(), layout.shape[0], layout.shape[1], layout.shape[2], start_width)
+    luts, widths, packs = [], [], []
+    for size, nnz in superblocks:
+        nnz = nnz.reshape(-1, 4)
+        width = nnz.shape[0] // (size * size)
+        luts.append(torch.from_numpy(nnz).type(torch.int32).to(device))
+        widths.append(width)
+        packs.append(size)
+    return luts, None, widths, packs
 
 # -----------------------------
 # Dense = Sparse x Dense (DSD)
 # -----------------------------
 @triton.jit
 def _dsd_kernel(
-    A, B, C, stride_az, stride_ha, stride_am, stride_ak, stride_zb, stride_hb, stride_bk, stride_bn, stride_zc, stride_hc,
-    stride_cm, stride_cn, DS0, DS1, SDD_K, SDD_off_width, lut, locks, nlocks, **meta
+    A, B, C, 
+    stride_az, stride_am, stride_ak, 
+    stride_zb, stride_hb, stride_bk, stride_bn, 
+    stride_zc, stride_hc, stride_cm, stride_cn, 
+    DS0, DS1, lut, **meta
 ):
-    TILE_M = meta['TM']
-    TILE_N = meta['TN']
-    TILE_K = meta['TK']
+    TILE_M = meta['TILE_M']
+    TILE_N = meta['TILE_N']
+    TILE_K = meta['TILE_K']
     BLOCK = meta['BLOCK']
     #------------#
     #- Prologue -#
@@ -103,8 +159,6 @@ def _dsd_kernel(
     AS1    = tl.load(header + 1)
     column = tl.load(header + 2)
     off_h  = tl.load(header + 3)
-    lockid = tl.load(header + 4)
-    maxid  = tl.load(header + 5)
     pinc   = lut + offset
     # initialize pointers to A (sparse)
     off_a   = tl.load(pinc + 1)
@@ -151,16 +205,48 @@ def _dsd_kernel(
             + offs_cn[None, :] * stride_cn
     tl.store(pc, c, mask = offs_cn[None, :] < DS0)
 
+def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, num_locks, width, packs):
+    # shapes / dtypes
+    AS1 = block * spdims[2 if trans_a else 1]
+    BS0 = b.size(0)
+    BS1 = b.size(1)
+    BS3 = b.size(2 if trans_b else 3)
+    dtype = a.dtype
+    # allocate output
+    CS0 = BS0
+    CS1 = BS1
+    CS2 = BS3 if trans_c else AS1
+    CS3 = AS1 if trans_c else BS3
+    c = torch.empty((CS0, CS1, CS2, CS3), dtype=dtype, device=a.device)
+    # compute output
+    # fmt: off
+    grid = lambda meta: [width, triton.cdiv(BS3, meta['TILE_N']), BS0]
+    _dsd_kernel[grid](
+        a, b, c,
+        a.stride(0), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),
+        b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
+        c.stride(0), c.stride(1), c.stride(3 if trans_c else 2), c.stride(2 if trans_c else 3),
+        BS3, AS1, lut,
+        TILE_M = block, TILE_N = 128, TILE_K = 16, BLOCK = block,
+        num_warps=4,
+    )
+    return c
 
+# -----------------------------
+# Dense = Dense x Sparse (DDS)
+# -----------------------------
 @triton.jit
 def _dds_kernel(
-    A, B, C, stride_za, stride_ha, stride_ma, stride_ka, stride_zb, stride_hb, stride_bk, stride_bn, stride_zc, stride_hc,
-    stride_mc, stride_nc, DS0, DS1, SDD_K, SDD_off_width, lut, locks, nlocks, **meta
+    A, B, C, 
+    stride_za, stride_ha, stride_ma, stride_ka, 
+    stride_zb, stride_hb, stride_bk, stride_bn, 
+    stride_zc, stride_hc, stride_mc, stride_nc, 
+    DS0, DS1, lut, **meta
 ):
-    TILE_M = meta['TM']
-    TILE_N = meta['TN']
-    TILE_K = meta['TK']
-    BLOCK = meta['BLOCK']
+    TILE_M = meta['TILE_M']
+    TILE_N = meta['TILE_N']
+    TILE_K = meta['TILE_K']
+    BLOCK  = meta['BLOCK']
     #------------#
     #- Prologue -#
     #------------#
@@ -172,8 +258,6 @@ def _dds_kernel(
     AS1 = tl.load(header + 1)
     column = tl.load(header + 2)
     off_h = tl.load(header + 3)
-    lockid = tl.load(header + 4)
-    maxid = tl.load(header + 5)
     pinc = lut + offset
     # initialize pointers to A (dense)
     offs_am = pid1*TILE_M + tl.arange(0, TILE_M)
@@ -224,15 +308,37 @@ def _dds_kernel(
     # write back
     tl.store(ptrs_c, c, mask = offs_cm[:, None] < DS0)
 
+def dds_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, num_locks, width, packs):
+    # shapes / dtypes
+    AS0 = a.size(0)
+    AS1 = a.size(1)
+    AS2 = a.size(3 if trans_a else 2)
+    BS2 = block * spdims[1 if trans_b else 2]
+    dtype = a.dtype
+    # output
+    CS0 = AS0
+    CS1 = AS1
+    CS2 = BS2 if trans_c else AS2
+    CS3 = AS2 if trans_c else BS2
+    c = torch.empty((CS0, CS1, CS2, CS3), dtype=dtype, device=a.device)
+    grid = lambda meta: [width, triton.cdiv(AS2, meta['TILE_M']), AS0]
+    # fmt: off
+    _dds_kernel[grid](
+        a, b, c,
+        a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),
+        b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
+        c.stride(0), c.stride(1), c.stride(3 if trans_c else 2), c.stride(2 if trans_c else 3),
+        AS2, BS2, lut,
+        TILE_M = 128, TILE_N = block, TILE_K = 16, BLOCK = block,
+        num_warps=4
+    )
+    return c
 
 ##############
 #  MAIN API  #
 ##############
 class _matmul(torch.autograd.Function):
 
-    sdd_cache = dict()
-    dsd_cache = dict()
-    dds_cache = dict()
     locks = dict()
 
     # Given an array sizes representing reduction size for each
@@ -294,91 +400,6 @@ class _matmul(torch.autograd.Function):
             _matmul.locks[dev] = torch.zeros(size, dtype=torch.int32, device=dev)
         return _matmul.locks[dev]
 
-    ##########################
-    # SPARSE = DENSE x DENSE #
-    ##########################
-
-    @staticmethod
-    def make_sdd_lut(layout, block, device):
-        start_width = 128 // block
-        layout = layout.type(torch.int32)
-        superblocks = libtriton.superblock(layout.data_ptr(), layout.shape[0], layout.shape[1], layout.shape[2], start_width)
-        luts, widths, packs = [], [], []
-        for size, nnz in superblocks:
-            nnz = nnz.reshape(-1, 4)
-            width = nnz.shape[0] // (size * size)
-            luts.append(torch.from_numpy(nnz).type(torch.int32).to(device))
-            widths.append(width)
-            packs.append(size)
-
-        # create locks
-        return luts, None, widths, packs
-
-    @staticmethod
-    def _sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, luts, num_locks, widths, packs):
-        # (A * B)^T = (B^T * A^T)
-        if trans_c:
-            a, b = b, a
-            trans_a, trans_b = not trans_b, not trans_a
-
-        # Shape check
-        a_dim = -2 if trans_a else -1
-        b_dim = -1 if trans_b else -2
-        a_inner, b_inner = a.shape[a_dim], b.shape[b_dim]
-        if a_inner != b_inner:
-            raise ValueError(f"Size of tensor A along the {_dim_to_name(a_dim)} dim ({a_inner}) must match size "
-                             f"of tensor B along the {_dim_to_name(b_dim)} dim ({b_inner})")
-        if a_inner % 16 != 0:
-            raise ValueError('Reduction size for SDD must be a multiple of 16')
-
-        batch_size = a.size(0)
-        a_outer = a.size(3 if trans_a else 2)
-        dtype = a.dtype
-        device = a.device
-
-        # create kernel
-        total_width = sum([width * pack * pack for width, pack in zip(widths, packs)])
-        c = torch.zeros((batch_size, total_width, block, block), dtype=dtype, device=device)
-        for lut, width, pack in zip(luts, widths, packs):
-            num_lock = 1
-            meta = {'TM': block * pack, 'TN': block * pack, 'BLOCK': block, 'TK': 32, 'TZ': 1,
-                    'SDD': True, 'DSD': False, 'DDS': False}
-            # create output
-            locks = _matmul.get_locks(2 * width * batch_size * num_lock, a.device)
-            # maximum grid size is 65535
-            # so operation might be decomposed into multiple
-            # kernel calls
-            max_width = 49152
-            for off_width in range(0, width, max_width):
-                grid = lambda meta: [meta['TZ'], min(max_width, width - off_width), batch_size]
-                _sdd_kernel[grid](
-                    a,
-                    b,
-                    c,
-                    a.stride(0),
-                    a.stride(1),
-                    a.stride(3 if trans_a else 2),
-                    a.stride(2 if trans_a else 3),
-                    b.stride(0),
-                    b.stride(1),
-                    b.stride(3 if trans_b else 2),
-                    b.stride(2 if trans_b else 3),
-                    c.stride(0),
-                    c.stride(0),
-                    c.stride(2),
-                    c.stride(3),
-                    a_outer,
-                    a_outer,
-                    a_inner,
-                    off_width,
-                    lut,
-                    locks,
-                    num_lock,
-                    num_warps=4,
-                    **meta
-                )
-        # save for backward pass
-        return c
 
     ##########################
     # DENSE = DENSE x SPARSE #
@@ -475,101 +496,7 @@ class _matmul(torch.autograd.Function):
         num_locks = max(1, lockid.max())
         return lut, num_locks, width, None
 
-    @staticmethod
-    def _dds_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, num_locks, width, packs):
-        # shapes / dtypes
-        AS0 = a.size(0)
-        AS1 = a.size(1)
-        AS2 = a.size(3 if trans_a else 2)
-        BS2 = block * spdims[1 if trans_b else 2]
-        dtype = a.dtype
-        # kernel
-        meta = {'TN': block, 'TM': 128, 'TK': 16, 'BLOCK': block, 'TZ': 1,
-                'SDD': False, 'DSD': False, 'DDS': True}
-        # output
-        CS0 = AS0
-        CS1 = AS1
-        CS2 = BS2 if trans_c else AS2
-        CS3 = AS2 if trans_c else BS2
-        locks = _matmul.get_locks(2 * AS0 * AS2 // 32 * num_locks, a.device)
-        c = torch.empty((CS0, CS1, CS2, CS3), dtype=dtype, device=a.device)
-        grid = lambda meta: [width, triton.cdiv(AS2, meta['TM']), AS0]
-        _dds_kernel[grid](
-            a,
-            b,
-            c,
-            a.stride(0),
-            a.stride(1),
-            a.stride(3 if trans_a else 2),
-            a.stride(2 if trans_a else 3),
-            b.stride(0),
-            b.stride(1),
-            b.stride(3 if trans_b else 2),
-            b.stride(2 if trans_b else 3),
-            c.stride(0),
-            c.stride(1),
-            c.stride(3 if trans_c else 2),
-            c.stride(2 if trans_c else 3),
-            AS2,
-            BS2,
-            0,
-            0,
-            lut,
-            locks,
-            num_locks,
-            num_warps=4,
-            **meta
-        )
-        return c
-
-    @staticmethod
-    def _dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, num_locks, width, packs):
-        # shapes / dtypes
-        AS1 = block * spdims[2 if trans_a else 1]
-        BS0 = b.size(0)
-        BS1 = b.size(1)
-        BS3 = b.size(2 if trans_b else 3)
-        dtype = a.dtype
-        # kernel
-        meta = {'TM': block, 'TN': 128, 'TK': 16, 'BLOCK': block, 'TZ': 1,
-                'SDD': False, 'DSD': True, 'DDS': False}
-        # output
-        CS0 = BS0
-        CS1 = BS1
-        CS2 = BS3 if trans_c else AS1
-        CS3 = AS1 if trans_c else BS3
-        locks = _matmul.get_locks(2 * BS0 * BS3 // 32 * num_locks, a.device)
-        c = torch.empty((CS0, CS1, CS2, CS3), dtype=dtype, device=a.device)
-        grid = lambda meta: [width, triton.cdiv(BS3, meta['TN']), BS0]
-        _dsd_kernel[grid](
-            a,
-            b,
-            c,
-            a.stride(0),
-            a.stride(1),
-            a.stride(3 if trans_a else 2),
-            a.stride(2 if trans_a else 3),
-            b.stride(0),
-            b.stride(1),
-            b.stride(3 if trans_b else 2),
-            b.stride(2 if trans_b else 3),
-            c.stride(0),
-            c.stride(1),
-            c.stride(3 if trans_c else 2),
-            c.stride(2 if trans_c else 3),
-            BS3,
-            AS1,
-            0,
-            0,
-            lut,
-            locks,
-            num_locks,
-            num_warps=4,
-            **meta
-        )
-        return c
-
-    fn = {'sdd': _sdd_matmul.__get__(object), 'dsd': _dsd_matmul.__get__(object), 'dds': _dds_matmul.__get__(object)}
+    fn = {'sdd': sdd_matmul, 'dsd': dsd_matmul, 'dds': dds_matmul}
 
     @staticmethod
     def forward(
@@ -631,7 +558,7 @@ class matmul:
         layout, block = self.layout, self.block
         step = 16
         if self.mode == 'sdd':
-            c_lut, c_num_locks, c_width, c_packs = _matmul.make_sdd_lut(layout, block, device)
+            c_lut, c_num_locks, c_width, c_packs = sdd_lut(layout, block, device)
         elif self.mode == 'dsd':
             c_lut, c_num_locks, c_width, c_packs = _matmul.make_dxx_lut(layout, block, step, not self.trans_a, device)
         elif self.mode == 'dds':
@@ -640,7 +567,7 @@ class matmul:
         if self.mode == 'sdd':
             da_lut, da_num_locks, da_width, da_packs = _matmul.make_dxx_lut(layout, block, step, True, device)
         elif self.mode == 'dsd':
-            da_lut, da_num_locks, da_width, da_packs = _matmul.make_sdd_lut(layout, block, device)
+            da_lut, da_num_locks, da_width, da_packs = sdd_lut(layout, block, device)
         elif self.mode == 'dds':
             da_lut, da_num_locks, da_width, da_packs = _matmul.make_dxx_lut(layout, block, step, not self.trans_b, device)
         # DB look-up table
@@ -649,7 +576,7 @@ class matmul:
         elif self.mode == 'dsd':
             db_lut, db_num_locks, db_width, db_packs = _matmul.make_dxx_lut(layout, block, step, self.trans_a, device)
         elif self.mode == 'dds':
-            db_lut, db_num_locks, db_width, db_packs = _matmul.make_sdd_lut(layout, block, device)
+            db_lut, db_num_locks, db_width, db_packs = sdd_lut(layout, block, device)
         self.lut_cache[key] = (c_lut, c_num_locks, c_width, c_packs,
                                da_lut, da_num_locks, da_width, da_packs,
                                db_lut, db_num_locks, db_width, db_packs)
@@ -753,6 +680,3 @@ class matmul:
 
         return a, b
 
-def _dim_to_name(x):
-    # assert x in (-1, -2)
-    return "last" if x == -1 else "second to last"
