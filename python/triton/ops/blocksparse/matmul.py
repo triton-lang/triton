@@ -88,54 +88,50 @@ def _dsd_kernel(
     A, B, C, stride_az, stride_ha, stride_am, stride_ak, stride_zb, stride_hb, stride_bk, stride_bn, stride_zc, stride_hc,
     stride_cm, stride_cn, DS0, DS1, SDD_K, SDD_off_width, lut, locks, nlocks, **meta
 ):
-    TM = meta['TM']
-    TN = meta['TN']
-    TK = meta['TK']
-    TZ = meta['TZ']
+    TILE_M = meta['TM']
+    TILE_N = meta['TN']
+    TILE_K = meta['TK']
     BLOCK = meta['BLOCK']
     #------------#
     #- Prologue -#
     #------------#
-    pid0 = tl.program_id(0)
-    pid1 = tl.program_id(1)
-    pidz = tl.program_id(2)
+    pid0   = tl.program_id(0)
+    pid1   = tl.program_id(1)
+    pidz   = tl.program_id(2)
     header = lut + pid0 * 6
     offset = tl.load(header + 0)
-    AS1 = tl.load(header + 1)
+    AS1    = tl.load(header + 1)
     column = tl.load(header + 2)
-    off_h = tl.load(header + 3)
+    off_h  = tl.load(header + 3)
     lockid = tl.load(header + 4)
-    maxid = tl.load(header + 5)
-    pinc = lut + offset
-    # output offset
+    maxid  = tl.load(header + 5)
+    pinc   = lut + offset
     # initialize pointers to A (sparse)
-    off_a = tl.load(pinc + 1)
-    off_a = tl.multiple_of(off_a, 8)  # compiler hint
-    off_a = off_a * BLOCK * BLOCK
-    offs_am = tl.arange(0, TM)
-    offs_ak = tl.arange(0, TK)
+    off_a   = tl.load(pinc + 1)
+    off_a   = tl.multiple_of(off_a, 8)  # compiler hint
+    off_a   = off_a * BLOCK * BLOCK
+    offs_am = tl.arange(0, TILE_M)
+    offs_ak = tl.arange(0, TILE_K)
     pa = A + off_a \
-            + pidz * TZ * stride_az \
+            + pidz * stride_az \
             + offs_am[:, None] * stride_am \
             + offs_ak[None, :] * stride_ak
     # initialize pointers to B (dense)
-    offkb = tl.load(pinc)
-    offkb = tl.multiple_of(offkb, 8)  # compiler hint
-    offs_bn = pid1*TN + tl.arange(0, TN)
-    offs_bk = offkb + tl.arange(0, TK)
-    pb = B + pidz * TZ * stride_zb \
+    offs_bn  = pid1*TILE_N + tl.arange(0, TILE_N)
+    start_bk = tl.load(pinc)
+    start_bk = tl.multiple_of(start_bk, 8)  # compiler hint
+    offs_bk  = start_bk + tl.arange(0, TILE_K)
+    pb = B + pidz * stride_zb \
             + off_h * stride_hb \
             + offs_bn[None, :] * stride_bn \
             + offs_bk[:, None] * stride_bk
-    checkam = AS1 > 0
-    checkbn = offs_bn[None, :] < DS0
-    a = tl.load(pa, mask=checkam, other=0.)
-    b = tl.load(pb, mask=checkbn, other=0.)
     ## ---------------- ##
     ##    Inner Loop    ##
     ## ---------------- ##
-    acc = tl.zeros((TM, TN), dtype=tl.float32)
-    for k in range(AS1, 0, -TK*TZ):
+    acc = tl.zeros((TILE_M, TILE_N), dtype=tl.float32)
+    for k in range(AS1, 0, -TILE_K):
+        a = tl.load(pa, mask=True)
+        b = tl.load(pb, mask=offs_bn[None, :] < DS0)
         acc += tl.dot(a, b)
         pinc += 2
         inc_b = tl.load(pinc)
@@ -145,17 +141,10 @@ def _dsd_kernel(
         inc_b = inc_b * stride_bk
         pa += inc_a
         pb += inc_b
-        # pre-fetch
-        checkak = k > TK
-        checkbk = k > TK
-        checka = checkam & checkak
-        checkb = checkbn & checkbk
-        a = tl.load(pa, mask=checka)
-        b = tl.load(pb, mask=checkb)
     c = acc.to(C.dtype.element_ty)
     # initialize pointers to C
-    offs_cm = column*TM + tl.arange(0, TM)
-    offs_cn = pid1*TN + tl.arange(0, TN)
+    offs_cm = column*TILE_M + tl.arange(0, TILE_M)
+    offs_cn = pid1*TILE_N + tl.arange(0, TILE_N)
     pc = C + off_h * stride_hc \
             + pidz * stride_zc \
             + offs_cm[:, None] * stride_cm \
