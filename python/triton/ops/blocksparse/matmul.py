@@ -85,8 +85,8 @@ def _sdd_kernel(
 # -----------------------------
 @triton.jit
 def _dsd_kernel(
-    A, B, C, stride_za, stride_ha, stride_ma, stride_ka, stride_zb, stride_hb, stride_kb, stride_nb, stride_zc, stride_hc,
-    stride_mc, stride_nc, DS0, DS1, SDD_K, SDD_off_width, lut, locks, nlocks, **meta
+    A, B, C, stride_az, stride_ha, stride_am, stride_ak, stride_zb, stride_hb, stride_bk, stride_bn, stride_zc, stride_hc,
+    stride_cm, stride_cn, DS0, DS1, SDD_K, SDD_off_width, lut, locks, nlocks, **meta
 ):
     TM = meta['TM']
     TN = meta['TN']
@@ -103,32 +103,32 @@ def _dsd_kernel(
     offset = tl.load(header + 0)
     AS1 = tl.load(header + 1)
     column = tl.load(header + 2)
-    depth = tl.load(header + 3)
+    off_h = tl.load(header + 3)
     lockid = tl.load(header + 4)
     maxid = tl.load(header + 5)
     pinc = lut + offset
-    offhc = depth
     # output offset
-    offnc = pid1 * TN
-    offmc = column * TM
-    # dense input offset
-    offnb = pid1 * TN
+    # initialize pointers to A (sparse)
+    off_a = tl.load(pinc + 1)
+    off_a = tl.multiple_of(off_a, 8)  # compiler hint
+    off_a = off_a * BLOCK * BLOCK
+    offs_am = tl.arange(0, TM)
+    offs_ak = tl.arange(0, TK)
+    pa = A + off_a \
+            + pidz * TZ * stride_az \
+            + offs_am[:, None] * stride_am \
+            + offs_ak[None, :] * stride_ak
+    # initialize pointers to B (dense)
     offkb = tl.load(pinc)
     offkb = tl.multiple_of(offkb, 8)  # compiler hint
-    # sparse input offset
-    offpa = tl.load(pinc + 1)
-    offpa = tl.multiple_of(offpa, 8)  # compiler hint
-    offpa = offpa * BLOCK * BLOCK
-    offhb = depth
-    ram = tl.arange(0, TM)
-    rbn = offnb + tl.arange(0, TN)
-    # initialize a, b pointers
-    rka = tl.arange(0, TK)
-    rkb = offkb + tl.arange(0, TK)
-    pa = A + pidz * TZ * stride_za + offpa + ram[:, None] * stride_ma + rka[None, :] * stride_ka
-    pb = B + pidz * TZ * stride_zb + offhb * stride_hb + rbn[None, :] * stride_nb + rkb[:, None] * stride_kb
+    offs_bn = pid1*TN + tl.arange(0, TN)
+    offs_bk = offkb + tl.arange(0, TK)
+    pb = B + pidz * TZ * stride_zb \
+            + off_h * stride_hb \
+            + offs_bn[None, :] * stride_bn \
+            + offs_bk[:, None] * stride_bk
     checkam = AS1 > 0
-    checkbn = rbn[None, :] < DS0
+    checkbn = offs_bn[None, :] < DS0
     a = tl.load(pa, mask=checkam, other=0.)
     b = tl.load(pb, mask=checkbn, other=0.)
     ## ---------------- ##
@@ -142,7 +142,7 @@ def _dsd_kernel(
         inc_a = tl.load(pinc + 1)
         inc_b = tl.multiple_of(inc_b, 8)
         inc_a = tl.multiple_of(inc_a, 8)
-        inc_b = inc_b * stride_kb
+        inc_b = inc_b * stride_bk
         pa += inc_a
         pb += inc_b
         # pre-fetch
@@ -153,11 +153,14 @@ def _dsd_kernel(
         a = tl.load(pa, mask=checka)
         b = tl.load(pb, mask=checkb)
     c = acc.to(C.dtype.element_ty)
-    rcm = offmc + tl.arange(0, TM)
-    rcn = offnc + tl.arange(0, TN)
-    checkc = rcn[None, :] < DS0
-    pc = C + offhc * stride_hc + pidz * stride_zc + rcm[:, None] * stride_mc + rcn[None, :] * stride_nc
-    tl.store(pc, c, mask=checkc)
+    # initialize pointers to C
+    offs_cm = column*TM + tl.arange(0, TM)
+    offs_cn = pid1*TN + tl.arange(0, TN)
+    pc = C + off_h * stride_hc \
+            + pidz * stride_zc \
+            + offs_cm[:, None] * stride_cm \
+            + offs_cn[None, :] * stride_cn
+    tl.store(pc, c, mask = offs_cn[None, :] < DS0)
 
 
 @triton.jit
