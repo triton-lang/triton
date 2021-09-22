@@ -17,7 +17,7 @@ def _sdd_kernel(
     A, B, C, 
     stride_za, stride_ha, stride_ma, stride_ak, 
     stride_zb, stride_hb, stride_bk, stride_nb, 
-    stride_zc, stride_mc, stride_nc, 
+    stride_zc, stride_hc, stride_mc, stride_nc, 
     K, grid_offset, lut, **meta
 ):
     TILE_M = meta['TILE_M']
@@ -73,12 +73,11 @@ def _sdd_kernel(
     offlutn = blockidn * 4
     off_block_id = 3 + offlutm[:, None] + offlutn[None, :]
     block_id = tl.load(header + off_block_id)
-    off_c = block_id * BLOCK * BLOCK
     # initialize pointers to C
     offs_cm = tl.arange(0, TILE_M) % BLOCK
     offs_cn = tl.arange(0, TILE_N) % BLOCK
-    pc = C + off_c \
-            + off_z * stride_zc \
+    pc = C + off_z * stride_zc \
+            + block_id * stride_hc \
             + offs_cm[:, None] * stride_mc \
             + offs_cn[None, :] * stride_nc
     tl.store(pc, c, mask=True)
@@ -113,7 +112,7 @@ def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, luts, num_locks, 
                 a, b, c,
                 a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),
                 b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
-                c.stride(0), c.stride(2), c.stride(3),
+                c.stride(0), c.stride(1), c.stride(2), c.stride(3),
                 Ka, off_grid, lut,
                 TILE_M = block*pack, TILE_N = block*pack, TILE_K = 32, BLOCK = block,
                 num_warps=4,
@@ -139,7 +138,7 @@ def sdd_lut(layout, block, device):
 @triton.jit
 def _dsd_kernel(
     A, B, C, 
-    stride_az, stride_am, stride_ak, 
+    stride_az, stride_ha, stride_am, stride_ak, 
     stride_zb, stride_hb, stride_bk, stride_bn, 
     stride_zc, stride_hc, stride_cm, stride_cn, 
     DS0, DS1, lut, **meta
@@ -154,20 +153,19 @@ def _dsd_kernel(
     pid0   = tl.program_id(0)
     pid1   = tl.program_id(1)
     pidz   = tl.program_id(2)
-    header = lut + pid0 * 6
+    header = lut + pid0 * 4
     offset = tl.load(header + 0)
     AS1    = tl.load(header + 1)
     column = tl.load(header + 2)
     off_h  = tl.load(header + 3)
     pinc   = lut + offset
     # initialize pointers to A (sparse)
-    off_a   = tl.load(pinc + 1)
-    off_a   = tl.multiple_of(off_a, 8)  # compiler hint
-    off_a   = off_a * BLOCK * BLOCK
+    block_id   = tl.load(pinc + 1)
+    block_id   = tl.multiple_of(block_id, 8)  # compiler hint
     offs_am = tl.arange(0, TILE_M)
     offs_ak = tl.arange(0, TILE_K)
-    pa = A + off_a \
-            + pidz * stride_az \
+    pa = A + pidz * stride_az \
+            + block_id * stride_ha \
             + offs_am[:, None] * stride_am \
             + offs_ak[None, :] * stride_ak
     # initialize pointers to B (dense)
@@ -219,11 +217,11 @@ def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, num_locks, w
     CS3 = AS1 if trans_c else BS3
     c = torch.empty((CS0, CS1, CS2, CS3), dtype=dtype, device=a.device)
     # compute output
-    # fmt: off
     grid = lambda meta: [width, triton.cdiv(BS3, meta['TILE_N']), BS0]
+    # fmt: off
     _dsd_kernel[grid](
         a, b, c,
-        a.stride(0), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),
+        a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),
         b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
         c.stride(0), c.stride(1), c.stride(3 if trans_c else 2), c.stride(2 if trans_c else 3),
         BS3, AS1, lut,
@@ -231,6 +229,70 @@ def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, num_locks, w
         num_warps=4,
     )
     return c
+
+def dsd_lut(layout, block, step, trans, device):  
+    sizes = torch.sum(layout, 2 if trans else 1)
+    depth, column = sizes.nonzero(as_tuple=True)
+    sizes = sizes.flatten()
+    segments = sizes*step
+    # pointer increments
+    if trans:
+        nnz = layout.nonzero(as_tuple=False)
+    else:
+        nnz = layout.transpose(1, 2).nonzero(as_tuple=False)
+    num_blocks = nnz.size(0)
+    offsets = torch.zeros_like(sizes)
+    offsets[1:] = torch.cumsum(sizes[:-1], dim=0)
+    offsets = torch.min(offsets, (num_blocks - 1) * torch.ones_like(offsets))
+    # dense input pointer increments
+    # -------------------------------
+    B_idx = nnz[:, 2] * block
+    B_incs = B_idx.clone()
+    B_incs[1:] -= B_idx[:-1]
+    div = block // step
+    B_incs = B_incs.view(-1, 1).repeat(1, div)
+    B_incs[:, 1:] = step
+    B_incs[:, 0] -= (div - 1) * step
+    # first increment for each reduction is actually the offset
+    B_incs[offsets[segments > 0], 0] = B_idx[offsets[segments > 0]]
+    B_incs = B_incs.view(-1)
+    # sparse input pointer increments
+    # -------------------------------
+    if trans:
+        A_idx = torch.arange(num_blocks)
+    else:
+        A_idx = torch.tensor([], dtype=torch.int64, device=layout.device)
+        current_offset = 0
+        for z in range(layout.size(0)):
+            layoutw = layout[z, :, :].clone()
+            msum = layoutw.sum()
+            layoutw[layoutw > 0] = 1 + torch.arange(msum)
+            A_idx = torch.cat((A_idx, current_offset + layoutw.T[layoutw.T > 0] - 1))
+            current_offset += msum
+    A_incs = A_idx * block * block
+    A_incs[1:] -= A_idx[:-1] * block * block
+    A_incs = A_incs.view(-1, 1).repeat(1, div)
+    if trans:
+        A_incs[:, 1:] = step
+        A_incs[:, 0] -= (div - 1) * step
+    else:
+        A_incs[:, 1:] = step * block
+        A_incs[:, 0] -= (div - 1) * step * block
+    A_incs[offsets[segments > 0], 0] = A_idx[offsets[segments > 0]]
+    A_incs = A_incs.view(-1)
+    # create header
+    width    = column.size(0)
+    offsets  = offsets*2*div + 4*width
+    segments = segments*div
+    header   = torch.stack((offsets, segments, column, depth), dim=1).view(-1).contiguous()
+    # create increments
+    incs     = torch.stack((B_incs, A_incs), dim=1).view(-1).contiguous()
+    incs     = torch.cat((incs, torch.zeros(2, device=incs.device, dtype=incs.dtype)))
+    # create lut
+    lut = torch.cat((header, incs))
+    lut = lut.type(torch.int32).to(device)
+    # create locks
+    return lut, None, width, None
 
 # -----------------------------
 # Dense = Dense x Sparse (DDS)
@@ -253,7 +315,7 @@ def _dds_kernel(
     pid0 = tl.program_id(0)
     pid1 = tl.program_id(1)
     pidz = tl.program_id(2)
-    header = lut + pid0 * 6
+    header = lut + pid0 * 4
     offset = tl.load(header + 0)
     AS1 = tl.load(header + 1)
     column = tl.load(header + 2)
@@ -269,13 +331,12 @@ def _dds_kernel(
             + offs_am[:, None] * stride_ma \
             + offs_ak[None, :] * stride_ka
     # initialize pointers to B (sparse)
-    off_b = tl.load(pinc + 1)
-    off_b = tl.multiple_of(off_b, 8) 
-    off_b = off_b * BLOCK * BLOCK
+    block_id = tl.load(pinc + 1)
+    block_id = tl.multiple_of(block_id, 8) 
     offs_bn = tl.arange(0, TILE_N)
     offs_bk = tl.arange(0, TILE_K)
-    ptrs_b = B + off_b \
-            + pidz * stride_zb \
+    ptrs_b = B + pidz * stride_zb \
+            + block_id * stride_hb \
             + offs_bn[None, :] * stride_bn \
             + offs_bk[:, None] * stride_bk
     ## ---------------- ##
@@ -338,163 +399,6 @@ def dds_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, num_locks, w
 #  MAIN API  #
 ##############
 class _matmul(torch.autograd.Function):
-
-    locks = dict()
-
-    # Given an array sizes representing reduction size for each
-    # column of a block-mode matrix multiplication,
-    # performs load-balancing to achieve more smaller reductions
-    # between `seg_size` elements
-    @staticmethod
-    def load_balance(sizes):
-        # segment size
-        # heuristics taken from OpenAI blocksparse code
-        # https://github.com/openai/blocksparse/blob/master/blocksparse/matmul.py#L95
-        max_size = sizes.max()
-        min_size = sizes[sizes != 0].min()
-        #if max_size > min_size * 2.0:
-        #  seg_max = max(triton.cdiv(max_size, 4), min_size*2)
-        #else:
-        #  seg_max = max_size
-        seg_max = max_size
-        seg_min = max(triton.cdiv(seg_max, 4), 4)
-        # split reduction into segments
-        div = sizes // seg_max
-        rem = sizes % seg_max
-        packs = div + (sizes < seg_min).long() + (rem >= seg_min).long()
-        width = packs.sum()
-        segments = torch.empty(width, dtype=sizes.dtype)
-        column = torch.empty_like(segments)
-        lockid = torch.zeros_like(segments)
-        maxid = torch.zeros_like(segments)
-        nlocks = 0
-        current = 0
-        col_idx = 0
-        for i in range(len(sizes)):
-            d, r = div[i], rem[i]
-            isempty = sizes[i] < seg_min
-            last = current + d + (r >= seg_min) + isempty
-            # column id
-            column[current:last] = col_idx
-            # lock id
-            if d > 1 or (d == 1 and r >= seg_min):
-                nlocks += 1
-                lockid[current:last] = nlocks
-                maxid[current:last] = last - current
-            # segment size
-            segments[current:current + d] = seg_max
-            if r < seg_min and not isempty:
-                segments[current + d - 1] += r
-            if r >= seg_min or isempty:
-                segments[current + d] = r
-            current = last
-            col_idx += 1
-        offsets = torch.zeros_like(segments)
-        offsets[1:] = torch.cumsum(segments[:-1], dim=0)
-        return segments, column, lockid, maxid, offsets
-
-    @staticmethod
-    def get_locks(size, dev):
-        if dev not in _matmul.locks or \
-            size > _matmul.locks[dev].size(0):
-            _matmul.locks[dev] = torch.zeros(size, dtype=torch.int32, device=dev)
-        return _matmul.locks[dev]
-
-
-    ##########################
-    # DENSE = DENSE x SPARSE #
-    # DENSE = SPARSE x DENSE #
-    ##########################
-
-    # Given a binary layout of 0s and 1s,
-    # Construct look-up table for efficient execution on GPUs
-    @staticmethod
-    def make_dxx_lut(layout, block, step, trans, device, transform=lambda idx: idx):
-        # load-balancing
-        _empty = torch.tensor([], dtype=torch.int64, device=layout.device)
-        segments = _empty.clone()
-        column = _empty.clone()
-        depth = _empty.clone()
-        lockid = _empty.clone()
-        maxid = _empty.clone()
-        offsets = _empty.clone()
-        current_offset = 0
-        current_maxid = 0
-        for z in range(layout.size(0)):
-            if trans:
-                sizes = torch.sum(layout[z, :, :], 1)
-            else:
-                sizes = torch.sum(layout[z, :, :], 0)
-            z_segments, z_column, z_lockid, z_maxid, z_offsets = _matmul.load_balance(sizes)
-            z_depth = z * torch.ones_like(z_segments)
-            z_lockid[z_lockid > 0] += current_maxid
-            current_maxid = z_lockid.max()
-            # concatenate depth
-            segments = torch.cat((segments, z_segments))
-            column = torch.cat((column, z_column))
-            depth = torch.cat((depth, z_depth))
-            maxid = torch.cat((maxid, z_maxid))
-            offsets = torch.cat((offsets, current_offset + z_offsets))
-            lockid = torch.cat((lockid, z_lockid))
-            current_offset += layout[z, :, :].sum()
-        segments *= step
-        # pointer increments
-        if trans:
-            nnz = layout.nonzero(as_tuple=False)
-        else:
-            nnz = layout.transpose(1, 2).nonzero(as_tuple=False)
-        num_blocks = nnz.size(0)
-        offsets = torch.min(offsets, (num_blocks - 1) * torch.ones_like(offsets))
-        idx = transform(nnz[:, 2] * block)
-        xincs = idx.clone()
-        xincs[1:] -= idx[:-1]
-        # divide block into multiple steps
-        div = block // step
-        xincs = xincs.view(-1, 1).repeat(1, div)
-        xincs[:, 1:] = step
-        xincs[:, 0] -= (div - 1) * step
-        # first increment for each reduction is actually the offset
-        xincs[offsets[segments > 0], 0] = idx[offsets[segments > 0]]
-        xincs = xincs.view(-1)
-        # block-mode input increments
-        if trans:
-            widx = torch.arange(num_blocks)
-        else:
-            widx = _empty.clone()
-            current_offset = 0
-            for z in range(layout.size(0)):
-                layoutw = layout[z, :, :].clone()
-                msum = layoutw.sum()
-                layoutw[layoutw > 0] = 1 + torch.arange(msum)
-                widx = torch.cat((widx, current_offset + layoutw.T[layoutw.T > 0] - 1))
-                current_offset += msum
-        widx = widx
-        wincs = widx * block * block
-        wincs[1:] -= widx[:-1] * block * block
-        wincs = wincs.view(-1, 1).repeat(1, div)
-        if trans:
-            wincs[:, 1:] = step
-            wincs[:, 0] -= (div - 1) * step
-        else:
-            wincs[:, 1:] = step * block
-            wincs[:, 0] -= (div - 1) * step * block
-        wincs[offsets[segments > 0], 0] = widx[offsets[segments > 0]]
-        wincs = wincs.view(-1)
-        # adjust offset and segment size
-        offsets *= 2 * div
-        segments *= div
-        # create header
-        width = column.size(0)
-        offsets += 6 * width
-        header = torch.stack((offsets, segments, column, depth, lockid, maxid), dim=1).view(-1).contiguous()
-        incs = torch.stack((xincs, wincs), dim=1).view(-1).contiguous()
-        incs = torch.cat((incs, torch.zeros(2, device=incs.device, dtype=incs.dtype)))
-        # create lut
-        lut = torch.cat((header, incs))
-        lut = lut.type(torch.int32).to(device)
-        # create locks
-        num_locks = max(1, lockid.max())
-        return lut, num_locks, width, None
 
     fn = {'sdd': sdd_matmul, 'dsd': dsd_matmul, 'dds': dds_matmul}
 
@@ -560,21 +464,21 @@ class matmul:
         if self.mode == 'sdd':
             c_lut, c_num_locks, c_width, c_packs = sdd_lut(layout, block, device)
         elif self.mode == 'dsd':
-            c_lut, c_num_locks, c_width, c_packs = _matmul.make_dxx_lut(layout, block, step, not self.trans_a, device)
+            c_lut, c_num_locks, c_width, c_packs = dsd_lut(layout, block, step, not self.trans_a, device)
         elif self.mode == 'dds':
-            c_lut, c_num_locks, c_width, c_packs = _matmul.make_dxx_lut(layout, block, step, self.trans_b, device)
+            c_lut, c_num_locks, c_width, c_packs = dsd_lut(layout, block, step, self.trans_b, device)
         # DA look-up table
         if self.mode == 'sdd':
-            da_lut, da_num_locks, da_width, da_packs = _matmul.make_dxx_lut(layout, block, step, True, device)
+            da_lut, da_num_locks, da_width, da_packs = dsd_lut(layout, block, step, True, device)
         elif self.mode == 'dsd':
             da_lut, da_num_locks, da_width, da_packs = sdd_lut(layout, block, device)
         elif self.mode == 'dds':
-            da_lut, da_num_locks, da_width, da_packs = _matmul.make_dxx_lut(layout, block, step, not self.trans_b, device)
+            da_lut, da_num_locks, da_width, da_packs = dsd_lut(layout, block, step, not self.trans_b, device)
         # DB look-up table
         if self.mode == 'sdd':
-            db_lut, db_num_locks, db_width, db_packs = _matmul.make_dxx_lut(layout, block, step, False, device)
+            db_lut, db_num_locks, db_width, db_packs = dsd_lut(layout, block, step, False, device)
         elif self.mode == 'dsd':
-            db_lut, db_num_locks, db_width, db_packs = _matmul.make_dxx_lut(layout, block, step, self.trans_a, device)
+            db_lut, db_num_locks, db_width, db_packs = dsd_lut(layout, block, step, self.trans_a, device)
         elif self.mode == 'dds':
             db_lut, db_num_locks, db_width, db_packs = sdd_lut(layout, block, device)
         self.lut_cache[key] = (c_lut, c_num_locks, c_width, c_packs,
@@ -679,4 +583,3 @@ class matmul:
         b = add_extra_dims(b)
 
         return a, b
-
