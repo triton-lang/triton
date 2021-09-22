@@ -194,17 +194,13 @@ def _dds_kernel(
             + pidz * stride_zb \
             + offs_bn[None, :] * stride_bn \
             + offs_bk[:, None] * stride_bk
-    #
-    checkam = offs_am[:, None] < DS0
-    checkbn = AS1 > 0
-    a = tl.load(ptrs_a, mask=checkam, other=0.)
-    b = tl.load(ptrs_b, mask=checkbn, other=0.)
-
     ## ---------------- ##
     ##    Inner Loop    ##
     ## ---------------- ##
     acc = tl.zeros((TILE_M, TILE_N), dtype=tl.float32)
     for k in range(AS1, 0, -TILE_K):
+        a = tl.load(ptrs_a, mask = offs_am[:, None] < DS0)
+        b = tl.load(ptrs_b, mask = True)
         acc += tl.dot(a, b)
         pinc += 2
         inc_a = tl.load(pinc)
@@ -214,25 +210,19 @@ def _dds_kernel(
         inc_a = inc_a * stride_ka
         ptrs_a += inc_a
         ptrs_b += inc_b
-        # pre-fetch
-        checkak = k > TILE_K
-        checkbk = k > TILE_K
-        checka = checkam & checkak
-        checkb = checkbn & checkbk
-        a = tl.load(ptrs_a, mask=checka)
-        b = tl.load(ptrs_b, mask=checkb)
+    ## ---------------- ##
+    ##    Epilogue      ##
+    ## ---------------- ##
     c = acc.to(C.dtype.element_ty)
     # initialize pointers to C (dense)
-    offmc = pid1 * TILE_M
-    offnc = column * TILE_N
-    rcm = offmc + tl.arange(0, TILE_M)
-    rcn = offnc + tl.arange(0, TILE_N)
-    checkc = rcm[:, None] < DS0
+    offs_cm = pid1 * TILE_M + tl.arange(0, TILE_M)
+    offs_cn = column * TILE_N + tl.arange(0, TILE_N)
     ptrs_c = C + off_h * stride_hc \
             + pidz * stride_zc \
-            + rcm[:, None] * stride_mc \
-            + rcn[None, :] * stride_nc
-    tl.store(ptrs_c, c, mask=checkc)
+            + offs_cm[:, None] * stride_mc \
+            + offs_cn[None, :] * stride_nc
+    # write back
+    tl.store(ptrs_c, c, mask = offs_cm[:, None] < DS0)
 
 
 ##############
