@@ -134,10 +134,10 @@ def _dsd_kernel(
         b = tl.load(pb, mask=offs_bn[None, :] < DS0)
         acc += tl.dot(a, b)
         pinc += 2
-        inc_b = tl.load(pinc)
         inc_a = tl.load(pinc + 1)
-        inc_b = tl.multiple_of(inc_b, 8)
         inc_a = tl.multiple_of(inc_a, 8)
+        inc_b = tl.load(pinc)
+        inc_b = tl.multiple_of(inc_b, 8)
         inc_b = inc_b * stride_bk
         pa += inc_a
         pb += inc_b
@@ -154,13 +154,12 @@ def _dsd_kernel(
 
 @triton.jit
 def _dds_kernel(
-    A, B, C, stride_za, stride_ha, stride_ma, stride_ka, stride_zb, stride_hb, stride_kb, stride_nb, stride_zc, stride_hc,
+    A, B, C, stride_za, stride_ha, stride_ma, stride_ka, stride_zb, stride_hb, stride_bk, stride_bn, stride_zc, stride_hc,
     stride_mc, stride_nc, DS0, DS1, SDD_K, SDD_off_width, lut, locks, nlocks, **meta
 ):
-    TM = meta['TM']
-    TN = meta['TN']
-    TK = meta['TK']
-    TZ = meta['TZ']
+    TILE_M = meta['TM']
+    TILE_N = meta['TN']
+    TILE_K = meta['TK']
     BLOCK = meta['BLOCK']
     #------------#
     #- Prologue -#
@@ -172,46 +171,40 @@ def _dds_kernel(
     offset = tl.load(header + 0)
     AS1 = tl.load(header + 1)
     column = tl.load(header + 2)
-    depth = tl.load(header + 3)
+    off_h = tl.load(header + 3)
     lockid = tl.load(header + 4)
     maxid = tl.load(header + 5)
     pinc = lut + offset
-    offhc = depth
-    # output offset
-    offmc = pid1 * TM
-    offnc = column * TN
-    offpc = 0
-    # dense input offset
-    offma = pid1 * TM
-    offka = tl.load(pinc)
-    offka = tl.multiple_of(offka, 8)  # compiler hint
-    offpa = 0
-    # sparse input offset
-    offnb = 0
-    offkb = 0
-    offpb = tl.load(pinc + 1)
-    offpb = tl.multiple_of(offpb, 8)  # compiler hint
-    offpb = offpb * BLOCK * BLOCK
-    offha = depth
-    offhb = 0
-    ram = offma + tl.arange(0, TM)
-    rbn = offnb + tl.arange(0, TN)
-
-    # initialize a, b pointers
-    rka = offka + tl.arange(0, TK)
-    rkb = offkb + tl.arange(0, TK)
-    pa = A + pidz * TZ * stride_za + offha * stride_ha + offpa + ram[:, None] * stride_ma + rka[None, :] * stride_ka
-    pb = B + pidz * TZ * stride_zb + offhb * stride_hb + offpb + rbn[None, :] * stride_nb + rkb[:, None] * stride_kb
-    checkam = ram[:, None] < DS0
+    # initialize pointers to A (dense)
+    offs_am = pid1*TILE_M + tl.arange(0, TILE_M)
+    start_ak = tl.load(pinc)
+    start_ak = tl.multiple_of(start_ak, 8)
+    offs_ak = start_ak + tl.arange(0, TILE_K)
+    ptrs_a = A + pidz * stride_za \
+            + off_h * stride_ha \
+            + offs_am[:, None] * stride_ma \
+            + offs_ak[None, :] * stride_ka
+    # initialize pointers to B (sparse)
+    off_b = tl.load(pinc + 1)
+    off_b = tl.multiple_of(off_b, 8) 
+    off_b = off_b * BLOCK * BLOCK
+    offs_bn = tl.arange(0, TILE_N)
+    offs_bk = tl.arange(0, TILE_K)
+    ptrs_b = B + off_b \
+            + pidz * stride_zb \
+            + offs_bn[None, :] * stride_bn \
+            + offs_bk[:, None] * stride_bk
+    #
+    checkam = offs_am[:, None] < DS0
     checkbn = AS1 > 0
-    a = tl.load(pa, mask=checkam, other=0.)
-    b = tl.load(pb, mask=checkbn, other=0.)
+    a = tl.load(ptrs_a, mask=checkam, other=0.)
+    b = tl.load(ptrs_b, mask=checkbn, other=0.)
 
     ## ---------------- ##
     ##    Inner Loop    ##
     ## ---------------- ##
-    acc = tl.zeros((TM, TN), dtype=tl.float32)
-    for k in range(AS1, 0, -TK*TZ):
+    acc = tl.zeros((TILE_M, TILE_N), dtype=tl.float32)
+    for k in range(AS1, 0, -TILE_K):
         acc += tl.dot(a, b)
         pinc += 2
         inc_a = tl.load(pinc)
@@ -219,21 +212,27 @@ def _dds_kernel(
         inc_a = tl.multiple_of(inc_a, 8)
         inc_b = tl.multiple_of(inc_b, 8)
         inc_a = inc_a * stride_ka
-        pa += inc_a
-        pb += inc_b
+        ptrs_a += inc_a
+        ptrs_b += inc_b
         # pre-fetch
-        checkak = k > TK
-        checkbk = k > TK
+        checkak = k > TILE_K
+        checkbk = k > TILE_K
         checka = checkam & checkak
         checkb = checkbn & checkbk
-        a = tl.load(pa, mask=checka)
-        b = tl.load(pb, mask=checkb)
+        a = tl.load(ptrs_a, mask=checka)
+        b = tl.load(ptrs_b, mask=checkb)
     c = acc.to(C.dtype.element_ty)
-    rcm = offmc + tl.arange(0, TM)
-    rcn = offnc + tl.arange(0, TN)
+    # initialize pointers to C (dense)
+    offmc = pid1 * TILE_M
+    offnc = column * TILE_N
+    rcm = offmc + tl.arange(0, TILE_M)
+    rcn = offnc + tl.arange(0, TILE_N)
     checkc = rcm[:, None] < DS0
-    pc = C + offpc + offhc * stride_hc + pidz * stride_zc + rcm[:, None] * stride_mc + rcn[None, :] * stride_nc
-    tl.store(pc, c, mask=checkc)
+    ptrs_c = C + off_h * stride_hc \
+            + pidz * stride_zc \
+            + rcm[:, None] * stride_mc \
+            + rcn[None, :] * stride_nc
+    tl.store(ptrs_c, c, mask=checkc)
 
 
 ##############
