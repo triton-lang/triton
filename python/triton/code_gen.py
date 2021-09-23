@@ -573,7 +573,6 @@ class Kernel:
                              " Only CUDA is supported at the moment")
 
         device = torch.device('cuda', torch.cuda.current_device())
-        device_ty  = device.type
         device_idx = device.index
         if len(set(device_ids)) != 1 or device_ids[0] != device_idx:
             # try to enable P2P communication
