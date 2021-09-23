@@ -1,14 +1,15 @@
 import ast
 import builtins
+import functools
 import inspect
+import re
 import struct
 import sys
-import tempfile
 import textwrap
 import hashlib
 import os
 import shelve
-import shutil
+import subprocess
 import os
 from .tools.disasm import extract
 import tempfile
@@ -460,6 +461,16 @@ class OutOfResources(Exception):
         super().__init__(self.message)
 
 
+@functools.lru_cache()
+def get_nvcc_version():
+    try:
+        output = subprocess.check_output(["nvcc", "--version"], text=True)
+        version = re.search(r"release (\d+\.\d)", output).group(1)
+        return tuple(map(int, version.split(".")))
+    except Exception:
+        return None
+
+
 class Kernel:
     @staticmethod
     def _type_name(obj):
@@ -598,7 +609,17 @@ class Kernel:
         attr_key = frozenset(attributes.items())
         meta_key = frozenset(meta.items())
         const_key = frozenset(constants.items())
-        key = (device_ty, device_idx, types_key, attr_key, num_warps, num_stages, meta_key, const_key)
+
+        with open(triton.code_gen.__file__, "rb") as f:
+            frontend_contents = hashlib.md5(f.read()).hexdigest()
+        with open(triton._C.libtriton.__file__, "rb") as f:
+            backend_contents = hashlib.md5(f.read()).hexdigest()
+        version_key = (triton.__version__, frontend_contents, backend_contents)
+
+        key = (
+            get_nvcc_version(), version_key, types_key, attr_key,
+            num_warps, num_stages, meta_key, const_key
+        )
         key = repr(key)
         # get cached binary
         drv_cache = self.fn.drv_cache
@@ -616,18 +637,12 @@ class Kernel:
                         exts = {'dbm.gnu': [''], 'dbm.ndbm': ['.db'],
                                 'dbm.dumb': ['.dir', '.dat']}[dbtype]
                         db_paths = [bin_cache_path + ext for ext in exts]
-                        # check if the cache is stale
-                        frontend_mtime = os.path.getmtime(triton.code_gen.__file__)
-                        backend_mtime  = os.path.getmtime(triton._C.libtriton.__file__)
-                        cache_mtime    = max([os.path.getmtime(db) for db in db_paths])
-                        is_stale = frontend_mtime > cache_mtime or backend_mtime > cache_mtime
                         # check if the cache is corrupted
                         is_corrupted = os.path.exists(bin_mut_path)
-                        # delete the cache if stale or corrupted
-                        if is_stale or is_corrupted:
+                        # delete the cache if corrupted
+                        if is_corrupted:
                             for db in db_paths:
                                 os.remove(db)
-                        if is_corrupted:
                             os.remove(bin_mut_path)
                     # read the cache, creating if needed
                     with shelve.open(bin_cache_path) as db:
@@ -728,13 +743,9 @@ class JITFunction:
         # create cache directory
         if not os.path.exists(cache_dir):
             os.makedirs(cache_dir, exist_ok=True)
-        # create md5 hash of src
-        md5 = hashlib.md5()
-        md5.update(self.src.encode('utf-8'))
-        md5_hash = md5.hexdigest()
         # load dbm file in cache_dir for md5_hash
-        self.bin_cache_path = os.path.join(cache_dir, md5_hash)
-        self.bin_lock_path  = self.bin_cache_path + '.lock' 
+        self.bin_cache_path = os.path.join(cache_dir, self.src_md5_hash)
+        self.bin_lock_path  = self.bin_cache_path + '.lock'
         self.bin_mut_path = self.bin_cache_path + '.mutating'
 
     def __init__(self, fn):
@@ -742,11 +753,12 @@ class JITFunction:
         self.fn = fn
         self.module = fn.__module__
         self.arg_names = inspect.getfullargspec(fn).args
-        self.src = textwrap.dedent(inspect.getsource(fn)) 
+        self.src = textwrap.dedent(inspect.getsource(fn))
         # cache for callable driver objects (e.g. CUkernel)
         self.drv_cache = dict()
         # on-disk paths for the binary cache and corresponding
         # file-lock
+        self.src_md5_hash = hashlib.md5(self.src.encode("utf-8")).hexdigest()
         self._init_cache_paths()
         # JITFunction can be instantiated as kernel
         # when called with a grid using __getitem__
@@ -803,6 +815,9 @@ class JITFunction:
 
     def __getitem__(self, grid):
         return Launcher(self._init_kernel(), grid)
+
+    def __repr__(self):
+        return f"JITFunction({self.module}:{self.fn.__name__}:{self.src_md5_hash})"
 
 
 class Config:
