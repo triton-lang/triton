@@ -715,8 +715,14 @@ def version_key():
     with open(triton._C.libtriton.__file__, "rb") as f:
         backend_contents = hashlib.md5(f.read()).hexdigest()
 
-    nvcc_version = hashlib.md5(subprocess.check_output(["nvcc", "--version"])).hexdigest()
-    ptxas_version = hashlib.md5(subprocess.check_output(["ptxas", "--version"])).hexdigest()
+    try:
+        nvcc_version = hashlib.md5(subprocess.check_output(["nvcc", "--version"])).hexdigest()
+    except subprocess.CalledProcessError:
+        nvcc_version = None
+    try:
+        ptxas_version = hashlib.md5(subprocess.check_output(["ptxas", "--version"])).hexdigest()
+    except subprocess.CalledProcessError:
+        ptxas_version = None
     compute_capability = tuple(torch.cuda.get_arch_list())
 
     return (
