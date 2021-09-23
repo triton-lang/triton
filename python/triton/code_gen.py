@@ -742,19 +742,19 @@ class JITFunction:
         # create cache directory
         if not os.path.exists(cache_dir):
             os.makedirs(cache_dir, exist_ok=True)
-        # load dbm file in cache_dir for md5_hash
-        cache_key = (self.cache_version, self.src) + version_key()
-        cache_key = hashlib.md5(repr(cache_key).encode("utf-8")).hexdigest()
-        self.bin_cache_path = os.path.join(cache_dir, cache_key)
+        # paths for dbm file in cache_dir
+        cache_key = (self.version, self.src) + version_key()
+        cache_key_str = hashlib.md5(repr(cache_key).encode("utf-8")).hexdigest()
+        self.bin_cache_path = os.path.join(cache_dir, cache_key_str)
         self.bin_lock_path  = self.bin_cache_path + '.lock'
         self.bin_mut_path = self.bin_cache_path + '.mutating'
 
-    def __init__(self, fn, cache_version=None):
+    def __init__(self, fn, version=None):
         # information of wrapped function
         self.fn = fn
         self.module = fn.__module__
         self.arg_names = inspect.getfullargspec(fn).args
-        self.cache_version = cache_version
+        self.version = version
         self.src = textwrap.dedent(inspect.getsource(fn))
         # cache for callable driver objects (e.g. CUkernel)
         self.drv_cache = dict()
