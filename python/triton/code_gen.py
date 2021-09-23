@@ -748,13 +748,13 @@ class JITFunction:
         self.fn = fn
         self.module = fn.__module__
         self.arg_names = inspect.getfullargspec(fn).args
+        self.cache_version = cache_version
         self.src = textwrap.dedent(inspect.getsource(fn))
         # cache for callable driver objects (e.g. CUkernel)
         self.drv_cache = dict()
 
         # on-disk paths for the binary cache and corresponding
         # file-lock
-        self.cache_version = cache_version
         self._init_cache_paths()
 
         # JITFunction can be instantiated as kernel
