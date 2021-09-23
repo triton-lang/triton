@@ -917,7 +917,7 @@ def heuristics(values):
     return decorator
 
 
-def jit(fn_or_kwargs):
+def jit(*args, **kwargs):
     """
     Decorator for JIT-compiling a function using the Triton compiler.
 
@@ -933,11 +933,13 @@ def jit(fn_or_kwargs):
     :param fn: the function to be jit-compiled
     :type fn: Callable
     """
-    if callable(fn_or_kwargs):
-        return JITFunction(fn_or_kwargs)
+    if args:
+        assert len(args) == 1
+        assert callable(args[0])
+        return JITFunction(args[0], **kwargs)
     else:
         def decorator(fn):
-            return JITFunction(fn, **fn_or_kwargs)
+            return JITFunction(fn, **kwargs)
         return decorator
 
 
