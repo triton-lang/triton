@@ -140,8 +140,8 @@ ops = ['==', '!=', '>', '<', '>=', '<=']
 # NaNs
 [('float32', 'float32', f' x {op} y', mode_x, mode_y) \
     for op in ops
-    for mode_x, mode_y in [('nan' , 'real'), 
-                           ('real', 'nan'), 
+    for mode_x, mode_y in [('nan' , 'real'),
+                           ('real', 'nan'),
                            ('nan' , 'nan')]
 
 ])
@@ -334,7 +334,7 @@ def test_atomic_rmw(op, dtype_x, mode, device='cuda'):
     (dtype_x, dtype_z, False) \
                         for dtype_x in dtypes\
                         for dtype_z in dtypes
-] + [ 
+] + [
     ('float32', 'bfloat16', False),
     ('bfloat16', 'float32', False),
     ('float32', 'int32', True)
@@ -364,7 +364,7 @@ def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
 # ---------------
 # test reduce
 # ---------------
-@pytest.mark.parametrize("dtype, shape", 
+@pytest.mark.parametrize("dtype, shape",
   [(dtype, shape) \
         for dtype in dtypes\
         for shape in [128, 512]])
@@ -387,7 +387,7 @@ def test_reduce1d(dtype, shape, device='cuda'):
     triton.testing.assert_almost_equal(z_tri, z_ref)
 
 
-@pytest.mark.parametrize("dtype, shape, axis", 
+@pytest.mark.parametrize("dtype, shape, axis",
   [(dtype, shape, 1) \
         for dtype in ['float32']\
         for shape in [(1, 1024)]])
@@ -428,7 +428,7 @@ def test_permute(dtype, shape, perm, device='cuda'):
     dtype = cvt[dtype]
     # triton kernel
     @triton.jit
-    def kernel(X, stride_xm, stride_xn, 
+    def kernel(X, stride_xm, stride_xn,
                Z, stride_zm, stride_zn, **meta):
         BLOCK_M = meta['BLOCK_M']
         BLOCK_N = meta['BLOCK_N']
@@ -441,8 +441,8 @@ def test_permute(dtype, shape, perm, device='cuda'):
     x = triton.testing.random(shape, dtype=dtype, device=device)
     # triton result
     z_tri = torch.empty_like(x)
-    pgm = kernel[(1, 1)](x, x.stride(0), x.stride(1), 
-                        z_tri, z_tri.stride(1), z_tri.stride(0), 
+    pgm = kernel[(1, 1)](x, x.stride(0), x.stride(1),
+                        z_tri, z_tri.stride(1), z_tri.stride(0),
                         BLOCK_M=shape[0], BLOCK_N=shape[1])
     # torch result
     z_ref = x.permute(*perm).contiguous()
@@ -458,13 +458,18 @@ def test_permute(dtype, shape, perm, device='cuda'):
 # ---------------
 
 @pytest.mark.parametrize("epilogue", ['none', 'add-matrix', 'add-rows', 'add-cols'])
-def test_dot(epilogue, device='cuda'):
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
+def test_dot(epilogue, dtype, device='cuda'):
     torch.manual_seed(0)
+
     # triton kernel
     @triton.jit
-    def kernel(X, stride_xm, stride_xk, 
+    def kernel(X, stride_xm, stride_xk,
                Y, stride_yk, stride_yn,
-               Z, stride_zm, stride_zn, **meta):
+               Z, stride_zm, stride_zn,
+               W, stride_wm, stride_wn,
+               **meta):
+
         BLOCK_M = meta['BLOCK_M']
         BLOCK_K = meta['BLOCK_K']
         BLOCK_N = meta['BLOCK_N']
@@ -477,23 +482,37 @@ def test_dot(epilogue, device='cuda'):
         z = tl.dot(tl.load(Xs), tl.load(Ys))
         if meta['ADD_MATRIX']:
             z += tl.load(Zs)
+
+        Ws = W + off_m[:, None] * stride_wm + off_n[None, :] * stride_wn
+        #  -- This runs
+        # w = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+        # tl.store(Ws, w)
+
+        # -- Boom
+        tl.store(Ws, z)
+
         if meta['ADD_ROWS']:
             ZRs = Z + off_m * stride_zm
             z += tl.load(ZRs)[:, None]
         if meta['ADD_COLS']:
-            ZCs = Z + off_n * stride_zn 
+            ZCs = Z + off_n * stride_zn
             z += tl.load(ZCs)[None, :]
         tl.store(Zs, z)
+
     # input
     M, N, K = 64, 64, 32
-    x = triton.testing.random((M, K), dtype=torch.float16, device=device)
-    y = triton.testing.random((K, N), dtype=torch.float16, device=device)
+    x = triton.testing.random((M, K), dtype=dtype, device=device)
+    y = triton.testing.random((K, N), dtype=dtype, device=device)
+
     # triton result
-    z = triton.testing.random((M, N), dtype=torch.float16, device=device)
+    z = triton.testing.random((M, N), dtype=dtype, device=device)
+    w = triton.testing.random((M, N), dtype=dtype, device=device)
+
     z_tri = z.clone()
     pgm = kernel[(1, 1)](x, x.stride(0), x.stride(1),
                          y, y.stride(0), y.stride(1),
                          z_tri, z_tri.stride(0), z_tri.stride(1),
+                         w, w.stride(0), w.stride(1),
                          BLOCK_M=M, BLOCK_K=K, BLOCK_N=N,
                          ADD_MATRIX = epilogue=='add-matrix',
                          ADD_ROWS = epilogue=='add-rows',
