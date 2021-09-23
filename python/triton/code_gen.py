@@ -597,8 +597,9 @@ class Kernel:
         attr_key = tuple(attributes.items())
         meta_key = tuple(sorted(meta.items()))
         const_key = tuple(constants.items())
+        compute_capability = torch.cuda.get_device_capability(device)
 
-        key = (types_key, attr_key, num_warps, num_stages, meta_key, const_key)
+        key = (compute_capability, types_key, attr_key, num_warps, num_stages, meta_key, const_key)
         key = repr(key)
         # get cached binary
         drv_cache = self.fn.drv_cache
@@ -723,11 +724,10 @@ def version_key():
         ptxas_version = hashlib.md5(subprocess.check_output(["ptxas", "--version"])).hexdigest()
     except Exception:
         ptxas_version = None
-    compute_capability = tuple(torch.cuda.get_arch_list())
 
     return (
         triton.__version__, frontend_contents, backend_contents,
-        nvcc_version, ptxas_version, compute_capability
+        nvcc_version, ptxas_version
     )
 
 class JITFunction:
