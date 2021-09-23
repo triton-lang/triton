@@ -717,11 +717,11 @@ def version_key():
 
     try:
         nvcc_version = hashlib.md5(subprocess.check_output(["nvcc", "--version"])).hexdigest()
-    except subprocess.CalledProcessError:
+    except Exception:
         nvcc_version = None
     try:
         ptxas_version = hashlib.md5(subprocess.check_output(["ptxas", "--version"])).hexdigest()
-    except subprocess.CalledProcessError:
+    except Exception:
         ptxas_version = None
     compute_capability = tuple(torch.cuda.get_arch_list())
 
