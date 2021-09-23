@@ -606,9 +606,9 @@ class Kernel:
         constants = {i: arg for i, arg in enumerate(wargs) if isinstance(arg, int) and arg == 1}
         # compute hash for caching this kernel
         types_key = Kernel._types_key(*wargs, tensor_idxs=tensor_idxs)
-        attr_key = frozenset(attributes.items())
-        meta_key = frozenset(meta.items())
-        const_key = frozenset(constants.items())
+        attr_key = tuple(attributes.items())
+        meta_key = tuple(sorted(meta.items()))
+        const_key = tuple(constants.items())
 
         with open(triton.code_gen.__file__, "rb") as f:
             frontend_contents = hashlib.md5(f.read()).hexdigest()
