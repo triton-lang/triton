@@ -1,17 +1,16 @@
 import ast
 import builtins
+import functools
 import inspect
 import struct
 import sys
-import tempfile
 import textwrap
 import hashlib
 import os
 import shelve
-import shutil
+import subprocess
 import os
 from .tools.disasm import extract
-import tempfile
 import torch
 import triton
 import triton._C.libtriton.triton as _triton
@@ -595,10 +594,11 @@ class Kernel:
         constants = {i: arg for i, arg in enumerate(wargs) if isinstance(arg, int) and arg == 1}
         # compute hash for caching this kernel
         types_key = Kernel._types_key(*wargs, tensor_idxs=tensor_idxs)
-        attr_key = frozenset(attributes.items())
-        meta_key = frozenset(meta.items())
-        const_key = frozenset(constants.items())
-        key = (device_ty, device_idx, types_key, attr_key, num_warps, num_stages, meta_key, const_key)
+        attr_key = tuple(attributes.items())
+        meta_key = tuple(sorted(meta.items()))
+        const_key = tuple(constants.items())
+
+        key = (types_key, attr_key, num_warps, num_stages, meta_key, const_key)
         key = repr(key)
         # get cached binary
         drv_cache = self.fn.drv_cache
@@ -616,18 +616,12 @@ class Kernel:
                         exts = {'dbm.gnu': [''], 'dbm.ndbm': ['.db'],
                                 'dbm.dumb': ['.dir', '.dat']}[dbtype]
                         db_paths = [bin_cache_path + ext for ext in exts]
-                        # check if the cache is stale
-                        frontend_mtime = os.path.getmtime(triton.code_gen.__file__)
-                        backend_mtime  = os.path.getmtime(triton._C.libtriton.__file__)
-                        cache_mtime    = max([os.path.getmtime(db) for db in db_paths])
-                        is_stale = frontend_mtime > cache_mtime or backend_mtime > cache_mtime
                         # check if the cache is corrupted
                         is_corrupted = os.path.exists(bin_mut_path)
-                        # delete the cache if stale or corrupted
-                        if is_stale or is_corrupted:
+                        # delete the cache if corrupted
+                        if is_corrupted:
                             for db in db_paths:
                                 os.remove(db)
-                        if is_corrupted:
                             os.remove(bin_mut_path)
                     # read the cache, creating if needed
                     with shelve.open(bin_cache_path) as db:
@@ -714,7 +708,21 @@ class Autotuner:
         return self.kernel(*args, num_warps=config.num_warps, num_stages=config.num_stages, **meta, **config.meta)
 
 
+@functools.lru_cache()
+def version_key():
+    with open(triton.code_gen.__file__, "rb") as f:
+        frontend_contents = hashlib.md5(f.read()).hexdigest()
+    with open(triton._C.libtriton.__file__, "rb") as f:
+        backend_contents = hashlib.md5(f.read()).hexdigest()
 
+    nvcc_version = hashlib.md5(subprocess.check_output(["nvcc", "--version"])).hexdigest()
+    ptxas_version = hashlib.md5(subprocess.check_output(["ptxas", "--version"])).hexdigest()
+    compute_capability = tuple(torch.cuda.get_arch_list())
+
+    return (
+        triton.__version__, frontend_contents, backend_contents,
+        nvcc_version, ptxas_version, compute_capability
+    )
 
 class JITFunction:
 
@@ -728,26 +736,27 @@ class JITFunction:
         # create cache directory
         if not os.path.exists(cache_dir):
             os.makedirs(cache_dir, exist_ok=True)
-        # create md5 hash of src
-        md5 = hashlib.md5()
-        md5.update(self.src.encode('utf-8'))
-        md5_hash = md5.hexdigest()
         # load dbm file in cache_dir for md5_hash
-        self.bin_cache_path = os.path.join(cache_dir, md5_hash)
-        self.bin_lock_path  = self.bin_cache_path + '.lock' 
+        cache_key = (self.cache_version, self.src) + version_key()
+        cache_key = hashlib.md5(repr(cache_key).encode("utf-8")).hexdigest()
+        self.bin_cache_path = os.path.join(cache_dir, cache_key)
+        self.bin_lock_path  = self.bin_cache_path + '.lock'
         self.bin_mut_path = self.bin_cache_path + '.mutating'
 
-    def __init__(self, fn):
+    def __init__(self, fn, cache_version=None):
         # information of wrapped function
         self.fn = fn
         self.module = fn.__module__
         self.arg_names = inspect.getfullargspec(fn).args
-        self.src = textwrap.dedent(inspect.getsource(fn)) 
+        self.src = textwrap.dedent(inspect.getsource(fn))
         # cache for callable driver objects (e.g. CUkernel)
         self.drv_cache = dict()
+
         # on-disk paths for the binary cache and corresponding
         # file-lock
+        self.cache_version = cache_version
         self._init_cache_paths()
+
         # JITFunction can be instantiated as kernel
         # when called with a grid using __getitem__
         self.kernel_decorators = []
@@ -803,6 +812,9 @@ class JITFunction:
 
     def __getitem__(self, grid):
         return Launcher(self._init_kernel(), grid)
+
+    def __repr__(self):
+        return f"JITFunction({self.module}:{self.fn.__name__})"
 
 
 class Config:
@@ -899,7 +911,7 @@ def heuristics(values):
     return decorator
 
 
-def jit(fn):
+def jit(fn_or_kwargs):
     """
     Decorator for JIT-compiling a function using the Triton compiler.
 
@@ -911,11 +923,16 @@ def jit(fn):
            * objects within the triton.language package,
            * arguments to this function,
            * other jit'd functions
-    
+
     :param fn: the function to be jit-compiled
     :type fn: Callable
     """
-    return JITFunction(fn)
+    if callable(fn_or_kwargs):
+        return JITFunction(fn_or_kwargs)
+    else:
+        def decorator(fn):
+            return JITFunction(fn, **fn_or_kwargs)
+        return decorator
 
 
 ######
