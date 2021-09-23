@@ -30,7 +30,7 @@ def _kernel(
         z = tl.load(header + 0)
         i = tl.load(header + 1 + offlutm)
         j = tl.load(header + 2 + offlutn)
-        AS1 = SDD_K // TZ
+        AS1 = SDD_K
         lockid = tl.where(TZ > 1, 1, 0)
         offka = pid0 * AS1
         offkb = pid0 * AS1
@@ -96,8 +96,8 @@ def _kernel(
     # initialize a, b pointers
     rka = offka + tl.arange(0, TK)
     rkb = offkb + tl.arange(0, TK)
-    pa = A + pidz * stride_za + offha * stride_ha + offpa + ram[:, None] * stride_ma + rka[None, :] * stride_ka
-    pb = B + pidz * stride_zb + offhb * stride_hb + offpb + rbn[None, :] * stride_nb + rkb[:, None] * stride_kb
+    pa = A + pidz * TZ * stride_za + offha * stride_ha + offpa + ram[:, None] * stride_ma + rka[None, :] * stride_ka
+    pb = B + pidz * TZ * stride_zb + offhb * stride_hb + offpb + rbn[None, :] * stride_nb + rkb[:, None] * stride_kb
     if meta['DDS']:
         checkam = ram[:, None] < DS0
     else:
@@ -113,11 +113,11 @@ def _kernel(
     ##    Inner Loop    ##
     ## ---------------- ##
     acc = tl.zeros((TM, TN), dtype=tl.float32)
-    for k in range(AS1, 0, -TK):
+    for k in range(AS1, 0, -TK*TZ):
         acc += tl.dot(a, b)
         if meta['SDD']:
-            inc_a = TK * stride_ka
-            inc_b = TK * stride_kb
+            inc_a = TK * TZ * stride_ka
+            inc_b = TK * TZ * stride_kb
         else:
             pinc += 2
         if meta['DSD']:

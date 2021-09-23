@@ -275,7 +275,7 @@ ir::value *dispatch::greater_than(ir::value *input, ir::value *other, ir::builde
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
   // float > float
   if (scalar_ty->is_floating_point_ty())
-    return builder->create_fcmpUGT(input, other);
+    return builder->create_fcmpOGT(input, other);
   // int > int
   else if (scalar_ty->is_integer_ty())
     return builder->create_icmpSGT(input, other);
@@ -287,7 +287,7 @@ ir::value *dispatch::greater_equal(ir::value *input, ir::value *other, ir::build
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
   // float >= float
   if (scalar_ty->is_floating_point_ty())
-    return builder->create_fcmpUGE(input, other);
+    return builder->create_fcmpOGE(input, other);
   // int >= int
   else if (scalar_ty->is_integer_ty())
     return builder->create_icmpSGE(input, other);
@@ -299,7 +299,7 @@ ir::value *dispatch::less_than(ir::value *input, ir::value *other, ir::builder *
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
   // float < float
   if (scalar_ty->is_floating_point_ty())
-    return builder->create_fcmpULT(input, other);
+    return builder->create_fcmpOLT(input, other);
   // int < int
   else if (scalar_ty->is_integer_ty())
     return builder->create_icmpSLT(input, other);
@@ -311,7 +311,7 @@ ir::value *dispatch::less_equal(ir::value *input, ir::value *other, ir::builder 
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
   // float < float
   if (scalar_ty->is_floating_point_ty())
-    return builder->create_fcmpULE(input, other);
+    return builder->create_fcmpOLE(input, other);
   // int < int
   else if (scalar_ty->is_integer_ty())
     return builder->create_icmpSLE(input, other);
@@ -323,7 +323,7 @@ ir::value *dispatch::equal(ir::value *input, ir::value *other, ir::builder *buil
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
   // float == float
   if (scalar_ty->is_floating_point_ty())
-    return builder->create_fcmpUEQ(input, other);
+    return builder->create_fcmpOEQ(input, other);
   // int == int
   else if (scalar_ty->is_integer_ty())
     return builder->create_icmpEQ(input, other);
@@ -509,11 +509,18 @@ ir::value *dispatch::load(ir::value* ptr, ir::value* mask, ir::value* other, ir:
       other = dispatch::cast(other, ptr->get_type()->get_scalar_ty()->get_pointer_element_ty(), builder);
     }
   }
+  ir::type *ptr_ty = ptr->get_type()->get_scalar_ty();
+  ir::type *elt_ty = ptr_ty->get_pointer_element_ty();
+  // treat bool* as int8*
+  if(elt_ty == builder->get_int1_ty()){
+    elt_ty = builder->get_int8_ty();
+    ptr_ty = pointer_type::get(elt_ty, ptr_ty->get_pointer_address_space());
+    ptr = dispatch::cast(ptr, ptr_ty, builder);
+  }
   if (!mask && !other)
     return builder->create_load(ptr);
   if (!mask)
     throw std::runtime_error("`other` cannot be provided without `mask`");
-  ir::type *elt_ty = ptr->get_type()->get_scalar_ty()->get_pointer_element_ty();
   auto shape = ptr->get_type()->get_block_shapes();
   if(!other){
     other = ir::undef_value::get(elt_ty);
@@ -530,8 +537,16 @@ ir::value *dispatch::store(ir::value* ptr, ir::value *val, ir::value* mask, ir::
     val = dispatch::broadcast(val, ptr->get_type()->get_block_shapes(), builder);
   if(mask)
     mask = dispatch::broadcast(mask, ptr->get_type()->get_block_shapes(), builder);
-  ir::type *ptr_ty = ptr->get_type();
-  val = dispatch::cast(val, ptr_ty->get_scalar_ty()->get_pointer_element_ty(), builder);
+  ir::type *ptr_ty = ptr->get_type()->get_scalar_ty();
+  ir::type *elt_ty = ptr_ty->get_pointer_element_ty();
+  // treat bool* as int8*
+  if(elt_ty == builder->get_int1_ty()){
+    elt_ty = builder->get_int8_ty();
+    ptr_ty = pointer_type::get(elt_ty, ptr_ty->get_pointer_address_space());
+    ptr = dispatch::cast(ptr, ptr_ty, builder);
+  }
+  // cast to target data-type
+  val = dispatch::cast(val, elt_ty, builder);
   if (!mask)
     return builder->create_store(ptr, val);
   if(!mask->get_type()->get_scalar_ty()->is_bool_ty())
