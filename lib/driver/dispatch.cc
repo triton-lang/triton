@@ -21,7 +21,6 @@
 */
 
 #include "triton/driver/dispatch.h"
-#include "triton/tools/sys/getenv.hpp"
 
 namespace triton
 {
@@ -92,8 +91,6 @@ void* dispatch::fname ## _;
 
 bool dispatch::cuinit(){
   if(cuda_==nullptr){
-    putenv((char*)"CUDA_CACHE_DISABLE=1");
-    std::string libcuda = tools::getenv("TRITON_LIBCUDA");
     if(libcuda.empty()){
       cuda_ = dlopen("libcuda.so", RTLD_LAZY);
       if(!cuda_)
