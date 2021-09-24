@@ -733,7 +733,7 @@ def version_key():
 
 class JITFunction:
     def _set_cache_key(self):
-        self.cache_key = hashlib.md5(repr((self.version, self.src)).encode("utf-8")).hexdigest()
+        self.cache_key = (hashlib.md5(self.src.encode("utf-8")).hexdigest(), self.version)
 
     def __init__(self, fn, version=None):
         # information of wrapped function
