@@ -1,5 +1,5 @@
 # version
-__version__ = '1.0.0'
+__version__ = '1.0.1'
 
 # TODO: torch needs to be imported first
 # or pybind11 shows `munmap_chunk(): invalid pointer`
