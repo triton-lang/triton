@@ -615,17 +615,10 @@ class Kernel:
             if cache_dir and not os.path.exists(cache_dir):
                 os.makedirs(cache_dir, exist_ok=True)
 
+            binary = None
             if cache_dir:
                 bin_cache_path = os.path.join(cache_dir, hashed_key)
-                bin_lock_path = bin_cache_path + ".lock"
-            else:
-                bin_cache_path = None
-                bin_lock_path = None
-
-            binary = None
-            if bin_cache_path and os.path.exists(bin_cache_path):
-                assert bin_lock_path is not None
-                with FileLock(bin_lock_path):
+                if os.path.exists(bin_cache_path):
                     with open(bin_cache_path, 'rb') as f:
                         binary = pickle.load(f)["binary"]
             if binary is None:
@@ -634,12 +627,11 @@ class Kernel:
                     num_warps=num_warps, num_stages=num_stages, force_nc_cache=force_nc_cache, 
                     constants=constants, **meta
                 )
-                if bin_lock_path:
-                    assert bin_cache_path is not None
-                    with FileLock(bin_lock_path):
-                        with open(bin_cache_path + ".tmp", "wb") as f:
-                            pickle.dump({"binary": binary, "key": key}, f)
-                        os.rename(bin_cache_path + ".tmp", bin_cache_path)
+                if cache_dir:
+                    bin_cache_path = os.path.join(cache_dir, hashed_key)
+                    with open(bin_cache_path + ".tmp", "wb") as f:
+                        pickle.dump({"binary": binary, "key": key}, f)
+                    os.rename(bin_cache_path + ".tmp", bin_cache_path)
  
             drv_cache[key_str] = LoadedBinary(device_idx, binary)
         # pack arguments
