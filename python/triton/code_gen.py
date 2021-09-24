@@ -598,7 +598,10 @@ class Kernel:
         const_key = tuple(constants.items())
         compute_capability = torch.cuda.get_device_capability(device)
 
-        key = (self.fn.cache_key, compute_capability, types_key, attr_key, num_warps, num_stages, meta_key, const_key)
+        key = (
+            self.fn.cache_key, version_key(), compute_capability,
+            types_key, attr_key, num_warps, num_stages, meta_key, const_key
+        )
         hashed_key = hashlib.md5(repr(key).encode("utf-8")).hexdigest()
 
         # get cached binary
