@@ -21,7 +21,6 @@
 */
 
 #include "triton/driver/dispatch.h"
-#include "triton/tools/sys/getenv.hpp"
 
 namespace triton
 {
@@ -92,17 +91,11 @@ void* dispatch::fname ## _;
 
 bool dispatch::cuinit(){
   if(cuda_==nullptr){
-    putenv((char*)"CUDA_CACHE_DISABLE=1");
-    std::string libcuda = tools::getenv("TRITON_LIBCUDA");
-    if(libcuda.empty()){
-      cuda_ = dlopen("libcuda.so", RTLD_LAZY);
-      if(!cuda_)
-        cuda_ = dlopen("libcuda.so.1", RTLD_LAZY);
-      if(!cuda_)
-        throw std::runtime_error("Could not find `libcuda.so`. Make sure it is in your LD_LIBRARY_PATH.");
-    }
-    else
-      cuda_ = dlopen(libcuda.c_str(), RTLD_LAZY);
+    cuda_ = dlopen("libcuda.so", RTLD_LAZY);
+    if(!cuda_)
+      cuda_ = dlopen("libcuda.so.1", RTLD_LAZY);
+    if(!cuda_)
+      throw std::runtime_error("Could not find `libcuda.so`. Make sure it is in your LD_LIBRARY_PATH.");
   }
   if(cuda_ == nullptr)
     return false;
