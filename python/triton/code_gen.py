@@ -602,27 +602,29 @@ class Kernel:
             self.fn.cache_key, version_key(), compute_capability,
             types_key, attr_key, num_warps, num_stages, meta_key, const_key
         )
-        hashed_key = hashlib.md5(repr(key).encode("utf-8")).hexdigest()
+        key_str = repr(key)
 
         # get cached binary
         drv_cache = self.fn.drv_cache
 
-        # create cache directory
-        cache_dir = os.environ.get('TRITON_CACHE_DIR', '/tmp/triton/')
-        if cache_dir and not os.path.exists(cache_dir):
-            os.makedirs(cache_dir, exist_ok=True)
+        if key_str not in drv_cache:
+            hashed_key = hashlib.md5(key_str.encode("utf-8")).hexdigest()
 
-        if cache_dir:
-            bin_cache_path = os.path.join(cache_dir, hashed_key)
-            bin_lock_path = bin_cache_path + ".lock"
-        else:
-            bin_cache_path = None
-            bin_lock_path = None
+            # create cache directory
+            cache_dir = os.environ.get('TRITON_CACHE_DIR', '/tmp/triton/')
+            if cache_dir and not os.path.exists(cache_dir):
+                os.makedirs(cache_dir, exist_ok=True)
 
-        if hashed_key not in drv_cache:
+            if cache_dir:
+                bin_cache_path = os.path.join(cache_dir, hashed_key)
+                bin_lock_path = bin_cache_path + ".lock"
+            else:
+                bin_cache_path = None
+                bin_lock_path = None
+
             binary = None
-            if bin_lock_path:
-                assert bin_cache_path is not None
+            if bin_cache_path and os.path.exists(bin_cache_path):
+                assert bin_lock_path is not None
                 with FileLock(bin_lock_path):
                     with open(bin_cache_path, 'rb') as f:
                         binary = pickle.load(f)["binary"]
@@ -639,12 +641,12 @@ class Kernel:
                             pickle.dump({"binary": binary, "key": key}, f)
                         os.rename(bin_cache_path + ".tmp", bin_cache_path)
  
-            drv_cache[hashed_key] = LoadedBinary(device_idx, binary)
+            drv_cache[key_str] = LoadedBinary(device_idx, binary)
         # pack arguments
         fmt = ''.join(['P' if i in tensor_idxs else Kernel._type_name(arg.__class__) for i, arg in enumerate(wargs)])
         params = struct.pack(fmt, *args)
         # enqueue cached function into stream
-        callable = drv_cache[hashed_key]
+        callable = drv_cache[key_str]
         stream = torch.cuda.current_stream(device_idx).cuda_stream
         grid = grid(meta) if hasattr(grid, '__call__') else grid
         callable(stream, params, *grid)
