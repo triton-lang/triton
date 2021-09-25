@@ -114,7 +114,7 @@ def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, luts, num_locks, 
                 b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
                 c.stride(0), c.stride(1), c.stride(2), c.stride(3),
                 Ka, off_grid, lut,
-                TILE_M = block*pack, TILE_N = block*pack, TILE_K = 16, BLOCK = block, num_stages=3,
+                TILE_M = block*pack, TILE_N = block*pack, TILE_K = 16, BLOCK = block, num_stages=2,
                 num_warps=4,
             )
     return c
@@ -190,9 +190,8 @@ def _dsd_kernel(
         inc_a = tl.multiple_of(inc_a, 8)
         inc_b = tl.load(pinc)
         inc_b = tl.multiple_of(inc_b, 8)
-        inc_b = inc_b * stride_bk
         pa += inc_a
-        pb += inc_b
+        pb += inc_b*stride_bk
     c = acc.to(C.dtype.element_ty)
     # initialize pointers to C
     offs_cm = column*TILE_M + tl.arange(0, TILE_M)

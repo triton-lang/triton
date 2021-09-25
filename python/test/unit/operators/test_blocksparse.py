@@ -12,7 +12,7 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     # set seed
     torch.random.manual_seed(0)
     # create inputs
-    a = torch.ones((Z, H, K, M) if TRANS_A else (Z, H, M, K), dtype=DTYPE, device="cuda")
+    a = torch.randn((Z, H, K, M) if TRANS_A else (Z, H, M, K), dtype=DTYPE, device="cuda")
     b = torch.randn((Z, H, N, K) if TRANS_B else (Z, H, K, N), dtype=DTYPE, device="cuda")
     shape = {
         "sdd": (M, N),
@@ -20,7 +20,6 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
         "dds": (b.shape[2], b.shape[3]),
     }[MODE]
     layout = torch.randint(2, (H, shape[0] // BLOCK, shape[1] // BLOCK))
-    # layout[:] = 1
     # triton result
     op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B)
     ra = triton.testing.sparsify_tensor(a, layout, BLOCK) if MODE == "dsd" else a
