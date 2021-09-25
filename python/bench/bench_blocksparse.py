@@ -19,7 +19,7 @@ square_confs = [
                       'AT': AT, 'BT': BT, 'dtype': torch.float16, 'provider': 'triton'}
     )\
     for AT in [False] for BT in [False] \
-    for op_mode in ['sdd']  for layout_mode in ['dense']
+    for op_mode in ['dsd']  for layout_mode in ['dense']
 ]
 
 

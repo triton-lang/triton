@@ -108,15 +108,17 @@ def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, luts, num_locks, 
         for off_grid in range(0, width, max_grid):
             grid = [1, min(max_grid, width - off_grid), c.shape[0]]
             # fmt: off
-            _sdd_kernel[grid](
+            pgm = _sdd_kernel[grid](
                 a, b, c,
                 a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),
                 b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
                 c.stride(0), c.stride(1), c.stride(2), c.stride(3),
                 Ka, off_grid, lut,
-                TILE_M = block*pack, TILE_N = block*pack, TILE_K = 16, BLOCK = block, num_stages=2,
+                TILE_M = block*pack, TILE_N = block*pack, TILE_K = 64, BLOCK = block, num_stages=2,
                 num_warps=4,
             )
+            # print(pgm.asm['ptx'])
+            # exit()
     return c
 
 def sdd_lut(layout, block, device):
@@ -215,16 +217,18 @@ def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, num_locks, w
     CS2 = BS3 if trans_c else AS1
     CS3 = AS1 if trans_c else BS3
     c = torch.empty((CS0, CS1, CS2, CS3), dtype=dtype, device=a.device)
+    # meta-parameter heuristics
+    TILE_N = {16: 256, 32: 256, 64: 128, 128: 128}[block]
     # compute output
     grid = lambda meta: [width, triton.cdiv(BS3, meta['TILE_N']), BS0]
     # fmt: off
-    pgm = _dsd_kernel[grid](
+    _dsd_kernel[grid](
         a, b, c,
         a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),
         b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
         c.stride(0), c.stride(1), c.stride(3 if trans_c else 2), c.stride(2 if trans_c else 3),
         BS3, AS1, lut,
-        TILE_M = block, TILE_N = 128, TILE_K = 16, BLOCK = block, num_stages=3,
+        TILE_M = block, TILE_N=TILE_N, TILE_K = min(block, 32), BLOCK = block, num_stages=3,
         num_warps=4,
     )
     # exit()
@@ -382,6 +386,7 @@ def dds_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, num_locks, w
     CS2 = BS2 if trans_c else AS2
     CS3 = AS2 if trans_c else BS2
     c = torch.empty((CS0, CS1, CS2, CS3), dtype=dtype, device=a.device)
+    TILE_M = {16: 256, 32: 256, 64: 128, 128: 128}[block]
     grid = lambda meta: [width, triton.cdiv(AS2, meta['TILE_M']), AS0]
     # fmt: off
     _dds_kernel[grid](
@@ -390,7 +395,7 @@ def dds_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, num_locks, w
         b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
         c.stride(0), c.stride(1), c.stride(3 if trans_c else 2), c.stride(2 if trans_c else 3),
         AS2, BS2, lut,
-        TILE_M = 128, TILE_N = block, TILE_K = 16, BLOCK = block,
+        TILE_M = TILE_M, TILE_N = block, TILE_K = min(block, 32), BLOCK = block, num_stages=3,
         num_warps=4
     )
     return c
@@ -460,7 +465,7 @@ class matmul:
             return self.lut_cache[key]
         # C look-up table
         layout, block = self.layout, self.block
-        step = 16
+        step = min(block, 32)
         if self.mode == 'sdd':
             c_lut, c_num_locks, c_width, c_packs = sdd_lut(layout, block, device)
         elif self.mode == 'dsd':
