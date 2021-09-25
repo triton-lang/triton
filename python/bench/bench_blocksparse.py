@@ -9,10 +9,10 @@ nt = {False: 'n', True: 't'}
 square_confs = [
     triton.testing.Benchmark(
               x_names = ['M', 'N', 'K'],
-              x_vals  = [128, 256, 512, 1024, 2048, 3072, 4096, 6144],
+              x_vals  = [8192],
               line_arg  = 'block',
-              line_vals  = [16, 32, 64, 128],
-              line_names = ['Block16', 'Block32', 'Block64', 'Block128'],
+              line_vals  = [128],
+              line_names = ['Block128'],
               ylabel  = 'TFLOPS',
               plot_name = f'{op_mode}-{layout_mode}-square-{nt[AT]}{nt[BT]}',
               args = {'layout_mode': layout_mode, 'op_mode': op_mode,
@@ -49,7 +49,8 @@ def bench_matmul(M, N, K, block, layout_mode, op_mode, AT, BT, dtype, provider, 
             'dsd': 2 * Z * N * float(layout.sum()) * block * block,\
             'dds': 2 * Z * M * float(layout.sum()) * block * block
         }[op_mode]*1e-12
-        return tflops(mean_ms), tflops(min_ms), tflops(max_ms)
+        return mean_ms, min_ms, max_ms
+        # return tflops(mean_ms), tflops(min_ms), tflops(max_ms)
 
 
 # -------------------------------
