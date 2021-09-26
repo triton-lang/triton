@@ -148,19 +148,22 @@ def _dsd_kernel(
     TILE_M = meta['TILE_M']
     TILE_N = meta['TILE_N']
     TILE_K = meta['TILE_K']
+    BLOCK = meta['BLOCK']
     #------------#
     #- Prologue -#
     #------------#
     pid0   = tl.program_id(0)
-    pid_n   = tl.program_id(1)
-    pidz    = tl.program_id(2)
-    header  = lut + pid0 * 4
-    off_inc = tl.load(header + 0)
-    off_h   = tl.load(header + 3)
-    pinc    = lut + off_inc
+    pid1   = tl.program_id(1)
+    pidz   = tl.program_id(2)
+    header = lut + pid0 * 4
+    offset = tl.load(header + 0)
+    K      = tl.load(header + 1)
+    column = tl.load(header + 2)
+    off_h  = tl.load(header + 3)
+    pinc   = lut + offset
     # initialize pointers to A (sparse)
-    block_id = tl.load(pinc + 1)
-    block_id = tl.multiple_of(block_id, 8)  # compiler hint
+    block_id   = tl.load(pinc + 1)
+    block_id   = tl.multiple_of(block_id, 8)  # compiler hint
     offs_am = tl.arange(0, TILE_M)
     offs_ak = tl.arange(0, TILE_K)
     pa = A + pidz * stride_az \
@@ -168,7 +171,7 @@ def _dsd_kernel(
             + offs_am[:, None] * stride_am \
             + offs_ak[None, :] * stride_ak
     # initialize pointers to B (dense)
-    offs_bn  = pid_n*TILE_N + tl.arange(0, TILE_N)
+    offs_bn  = pid1*TILE_N + tl.arange(0, TILE_N)
     start_bk = tl.load(pinc)
     start_bk = tl.multiple_of(start_bk, 8)  # compiler hint
     offs_bk  = start_bk + tl.arange(0, TILE_K)
@@ -180,7 +183,6 @@ def _dsd_kernel(
     ##    Inner Loop    ##
     ## ---------------- ##
     acc = tl.zeros((TILE_M, TILE_N), dtype=tl.float32)
-    K = tl.load(header + 1)
     for k in range(K, 0, -TILE_K):
         a = tl.load(pa, mask=True)
         b = tl.load(pb, mask=offs_bn[None, :] < DS0)
@@ -194,82 +196,13 @@ def _dsd_kernel(
         pb += inc_b*stride_bk
     c = acc.to(C.dtype.element_ty)
     # initialize pointers to C
-    offs_cm = tl.load(header + 2)*TILE_M + tl.arange(0, TILE_M)
-    offs_cn = pid_n*TILE_N + tl.arange(0, TILE_N)
+    offs_cm = column*TILE_M + tl.arange(0, TILE_M)
+    offs_cn = pid1*TILE_N + tl.arange(0, TILE_N)
     pc = C + off_h * stride_hc \
             + pidz * stride_zc \
             + offs_cm[:, None] * stride_cm \
             + offs_cn[None, :] * stride_cn
     tl.store(pc, c, mask = offs_cn[None, :] < DS0)
-
-@triton.autotune(
-    configs=[
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
-    ],
-    key=['M', 'N', 'K'],
-)
-# %
-# We can now define our kernel as normal, using all the techniques presented above
-@triton.jit
-def matmul_kernel(
-    # Pointers to matrices
-    a_ptr, b_ptr, c_ptr,
-    # Matrix dimensions
-    M, N, K,
-    # The stride variables represent how much to increase the ptr by when moving by 1
-    # element in a particular dimension. E.g. stride_am is how much to increase a_ptr
-    # by to get the element one row down (A has M rows)
-    stride_am, stride_ak,
-    stride_bk, stride_bn,
-    stride_cm, stride_cn,
-    # Meta-parameters
-    **meta,
-):
-    """Kernel for computing the matmul C = A x B.
-    A has shape (M, K), B has shape (K, N) and C has shape (M, N)
-    """
-    # extract meta-parameters
-    BLOCK_SIZE_M = meta['BLOCK_SIZE_M']
-    BLOCK_SIZE_N = meta['BLOCK_SIZE_N']
-    BLOCK_SIZE_K = meta['BLOCK_SIZE_K']
-    GROUP_SIZE_M = 8
-
-    # -----------------------------------------------------------
-    # Map program ids `pid` to the block of C it should compute.
-    # This is done in a grouped ordering to promote L2 data reuse
-    # See above `L2 Cache Optimizations` section for details
-    pid = tl.program_id(axis=0)
-    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
-    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
-    num_pid_in_group = GROUP_SIZE_M * num_pid_n 
-    group_id = pid // num_pid_in_group 
-    first_pid_m = group_id * GROUP_SIZE_M 
-    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M) 
-    pid_m = first_pid_m + (pid % group_size_m)
-    pid_n = (pid % num_pid_in_group) // group_size_m
-
-    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    offs_k = tl.arange(0, BLOCK_SIZE_K)
-    a_ptrs = a_ptr + (offs_am[:, None]*stride_am + offs_k [None, :]*stride_ak)
-    b_ptrs = b_ptr + (offs_k [:, None]*stride_bk + offs_bn[None, :]*stride_bn)
-
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-    for k in range(0, K, BLOCK_SIZE_K):
-        a = tl.load(a_ptrs)
-        b = tl.load(b_ptrs)
-        accumulator += tl.dot(a, b)
-        a_ptrs += BLOCK_SIZE_K * stride_ak
-        b_ptrs += BLOCK_SIZE_K * stride_bk
-
-    c = accumulator.to(tl.float16)
-    offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
-    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    tl.store(c_ptrs, c, mask=c_mask)
-
-
 
 def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, num_locks, width, packs):
     # shapes / dtypes
@@ -289,26 +222,16 @@ def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, num_locks, w
     # compute output
     grid = lambda meta: [width, triton.cdiv(BS3, meta['TILE_N']), BS0]
     # fmt: off
-    # _dsd_kernel[grid](
-    #     a, b, c,
-    #     a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),
-    #     b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
-    #     c.stride(0), c.stride(1), c.stride(3 if trans_c else 2), c.stride(2 if trans_c else 3),
-    #     BS3, AS1, lut,
-    #     TILE_M = block, TILE_N=TILE_N, TILE_K = min(block, 32), BLOCK = block, num_stages=3,
-    #     num_warps=4,
-    # )
-    M, N, K = CS2, CS3, CS3
-    grid = lambda META: (
-        triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
-    )
-    matmul_kernel[grid](
+    _dsd_kernel[grid](
         a, b, c,
-        M, N, K,
-        b.stride(2), a.stride(3),
-        b.stride(2), b.stride(3),
-        c.stride(2), c.stride(3),
+        a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),
+        b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
+        c.stride(0), c.stride(1), c.stride(3 if trans_c else 2), c.stride(2 if trans_c else 3),
+        BS3, AS1, lut,
+        TILE_M = block, TILE_N=TILE_N, TILE_K = min(block, 32), BLOCK = block, num_stages=3,
+        num_warps=4,
     )
+    # exit()
     return c
 
 def dsd_lut(layout, block, step, trans, device):  
@@ -389,6 +312,7 @@ def _dds_kernel(
     TILE_M = meta['TILE_M']
     TILE_N = meta['TILE_N']
     TILE_K = meta['TILE_K']
+    BLOCK  = meta['BLOCK']
     #------------#
     #- Prologue -#
     #------------#
