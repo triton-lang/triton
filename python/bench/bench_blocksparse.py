@@ -24,7 +24,7 @@ square_confs = [
 
 
 @triton.testing.perf_report(square_confs)
-def bench_matmul(M, N, K, block, layout_mode, op_mode, AT, BT, dtype, provider, warmup=100, rep=100):
+def bench_matmul(M, N, K, block, layout_mode, op_mode, AT, BT, dtype, provider, warmup=100, rep=1000):
     Z, H = 1, 1
     make_layout = {
         'tril': lambda H, M, N: torch.tril(torch.ones((H, M, N), dtype=torch.int64)),\

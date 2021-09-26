@@ -148,14 +148,17 @@ def _dsd_kernel(
     TILE_M = meta['TILE_M']
     TILE_N = meta['TILE_N']
     TILE_K = meta['TILE_K']
-    BLOCK = meta['BLOCK']
+    GROUP_SIZE_M = meta['GROUP_SIZE_M']
     #------------#
     #- Prologue -#
     #------------#
-    pid0   = tl.program_id(0)
-    pid1   = tl.program_id(1)
+    pid_m   = tl.program_id(0)
+    pid_n   = tl.program_id(1)
+    num_pid_m = tl.num_programs(0)
+    num_pid_n = tl.num_programs(1)
+    pid_m, pid_n = tl.swizzle2d(pid_m, pid_n, num_pid_m, num_pid_n, GROUP_SIZE_M)
     pidz   = tl.program_id(2)
-    header = lut + pid0 * 4
+    header = lut + pid_m * 4
     offset = tl.load(header + 0)
     K      = tl.load(header + 1)
     column = tl.load(header + 2)
@@ -171,7 +174,7 @@ def _dsd_kernel(
             + offs_am[:, None] * stride_am \
             + offs_ak[None, :] * stride_ak
     # initialize pointers to B (dense)
-    offs_bn  = pid1*TILE_N + tl.arange(0, TILE_N)
+    offs_bn  = pid_n*TILE_N + tl.arange(0, TILE_N)
     start_bk = tl.load(pinc)
     start_bk = tl.multiple_of(start_bk, 8)  # compiler hint
     offs_bk  = start_bk + tl.arange(0, TILE_K)
@@ -197,7 +200,7 @@ def _dsd_kernel(
     c = acc.to(C.dtype.element_ty)
     # initialize pointers to C
     offs_cm = column*TILE_M + tl.arange(0, TILE_M)
-    offs_cn = pid1*TILE_N + tl.arange(0, TILE_N)
+    offs_cn = pid_n*TILE_N + tl.arange(0, TILE_N)
     pc = C + off_h * stride_hc \
             + pidz * stride_zc \
             + offs_cm[:, None] * stride_cm \
@@ -312,25 +315,28 @@ def _dds_kernel(
     TILE_M = meta['TILE_M']
     TILE_N = meta['TILE_N']
     TILE_K = meta['TILE_K']
-    BLOCK  = meta['BLOCK']
+    GROUP_SIZE_M = meta['GROUP_SIZE_M']
     #------------#
     #- Prologue -#
     #------------#
-    pid0 = tl.program_id(0)
-    pid1 = tl.program_id(1)
-    pidz = tl.program_id(2)
-    header = lut + pid0 * 4
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    num_pid_m = tl.num_programs(0)
+    num_pid_n = tl.num_programs(1)
+    pid_m, pid_n = tl.swizzle2d(pid_m, pid_n, num_pid_m, num_pid_n, GROUP_SIZE_M)
+    pid_z = tl.program_id(2)
+    header = lut + pid_m * 4
     offset = tl.load(header + 0)
     AS1 = tl.load(header + 1)
     column = tl.load(header + 2)
     off_h = tl.load(header + 3)
     pinc = lut + offset
     # initialize pointers to A (dense)
-    offs_am = pid1*TILE_M + tl.arange(0, TILE_M)
+    offs_am = pid_n*TILE_M + tl.arange(0, TILE_M)
     start_ak = tl.load(pinc)
     start_ak = tl.multiple_of(start_ak, 8)
     offs_ak = start_ak + tl.arange(0, TILE_K)
-    ptrs_a = A + pidz * stride_za \
+    ptrs_a = A + pid_z * stride_za \
             + off_h * stride_ha \
             + offs_am[:, None] * stride_ma \
             + offs_ak[None, :] * stride_ka
@@ -339,7 +345,7 @@ def _dds_kernel(
     block_id = tl.multiple_of(block_id, 8) 
     offs_bn = tl.arange(0, TILE_N)
     offs_bk = tl.arange(0, TILE_K)
-    ptrs_b = B + pidz * stride_zb \
+    ptrs_b = B + pid_z * stride_zb \
             + block_id * stride_hb \
             + offs_bn[None, :] * stride_bn \
             + offs_bk[:, None] * stride_bk
@@ -364,10 +370,10 @@ def _dds_kernel(
     ## ---------------- ##
     c = acc.to(C.dtype.element_ty)
     # initialize pointers to C (dense)
-    offs_cm = pid1 * TILE_M + tl.arange(0, TILE_M)
+    offs_cm = pid_n * TILE_M + tl.arange(0, TILE_M)
     offs_cn = column * TILE_N + tl.arange(0, TILE_N)
     ptrs_c = C + off_h * stride_hc \
-            + pidz * stride_zc \
+            + pid_z * stride_zc \
             + offs_cm[:, None] * stride_mc \
             + offs_cn[None, :] * stride_nc
     # write back
