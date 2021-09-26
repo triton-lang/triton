@@ -232,7 +232,7 @@ def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, num_locks, w
         c.stride(0), c.stride(1), c.stride(3 if trans_c else 2), c.stride(2 if trans_c else 3),
         BS3, AS1, lut,
         TILE_M = block, TILE_N=TILE_N, TILE_K = min(block, 32), BLOCK = block, num_stages=3,
-        num_warps=4,
+        num_warps=4, GROUP_SIZE_M=8,
     )
     # exit()
     return c
@@ -402,7 +402,7 @@ def dds_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, num_locks, w
         c.stride(0), c.stride(1), c.stride(3 if trans_c else 2), c.stride(2 if trans_c else 3),
         AS2, BS2, lut,
         TILE_M = TILE_M, TILE_N = block, TILE_K = min(block, 32), BLOCK = block, num_stages=3,
-        num_warps=4
+        num_warps=4, GROUP_SIZE_M=8,
     )
     return c
 
