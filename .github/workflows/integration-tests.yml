@@ -23,6 +23,7 @@ jobs:
           alias python='python3'
           cd python
           pip3 install -e .
+          rm -r /tmp/triton/
 
       - name: Unit tests
         run: |
@@ -32,6 +33,7 @@ jobs:
       - name: Regression tests
         run: |
           cd python/test/regression
+          sudo nvidia-smi -i 0 -pm 1
           sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
           sudo nvidia-smi -i 0 --lock-memory-clocks=877,877
           pytest -vs .
