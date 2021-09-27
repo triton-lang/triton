@@ -136,6 +136,8 @@ def sdd_lut(layout, block, device):
 
 # -----------------------------
 # Dense = Sparse x Dense (DSD)
+# This operation uses a look-up table that contains pre-computed pointer increments
+# in order to minimize computations in the inner loop of the matmul kernel.
 # -----------------------------
 @triton.jit
 def _dsd_kernel(
@@ -251,8 +253,19 @@ def dsd_lut(layout, block, step, trans, device):
     offsets = torch.zeros_like(sizes)
     offsets[1:] = torch.cumsum(sizes[:-1], dim=0)
     offsets = torch.min(offsets, (num_blocks - 1) * torch.ones_like(offsets))
+    # -------------------------------
     # dense input pointer increments
     # -------------------------------
+    # given a list of the indices for the first element of each non-zero block.
+    # For example, for the indices
+    # [32, 80, 128, 256, 288]
+    # we would generate the increments
+    # [32, 48, 48, 128, 32]
+    #        ^
+    #   index of first element
+    # Note that the inner loop matmul kernel may have a fixed step size (e.g., TILE_K)
+    # that is smaller than the block size, so we need to do a bit of extra work
+    # to handle this case
     B_idx = nnz[:, 2] * block
     B_incs = B_idx.clone()
     B_incs[1:] -= B_idx[:-1]
@@ -263,8 +276,10 @@ def dsd_lut(layout, block, step, trans, device):
     # first increment for each reduction is actually the offset
     B_incs[offsets[segments > 0], 0] = B_idx[offsets[segments > 0]]
     B_incs = B_incs.view(-1)
+    # -------------------------------
     # sparse input pointer increments
     # -------------------------------
+    # same as above, except that the increments are in the sparse memory layout
     if trans:
         A_idx = torch.arange(num_blocks)
     else:
