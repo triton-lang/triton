@@ -42,9 +42,6 @@ def _forward(
     px = X + pidz * stride_zx + blockid * BLOCK * BLOCK + rxm * BLOCK + rxn
     x = tl.load(px, mask=check, other=-float('inf'))
     x = x.to(tl.float32)
-    # causal attention without explicit masking
-    is_in_upper_triangle = columnid*BLOCK + rxn > rowid*BLOCK + rxm 
-    x = x + tl.where(is_in_upper_triangle & is_causal, -float('inf'), 0.)
     # apply scale
     if meta['APPLY_SCALE']:
         x = x * scale
@@ -67,6 +64,9 @@ def _forward(
         if meta['ATTN_MASK_MUL']:
             attn_m = tl.where(attn_m == 0, -float('inf'), 0.)
         x = x + attn_m
+    # apply causal mask
+    is_in_upper_triangle = columnid*BLOCK + rxn > rowid*BLOCK + rxm 
+    x = x + tl.where(is_in_upper_triangle & is_causal, -float('inf'), 0.)
     # computation
     x = tl.softmax(x)
     tl.store(px, x, mask=check)
