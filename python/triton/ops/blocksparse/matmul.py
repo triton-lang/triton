@@ -12,6 +12,9 @@ import torch
 # --------------------------------------------------------
 # ********************************************************
 
+@triton.heuristics({
+    'EVEN_K': lambda *args, **meta: args[15] % meta['TILE_K'] == 0,
+})
 @triton.jit
 def _sdd_kernel(
     A, B, C, 
@@ -58,6 +61,12 @@ def _sdd_kernel(
     ## ---------------- ##
     acc = tl.zeros((TILE_M, TILE_N), dtype=tl.float32)
     for k in range(K, 0, -TILE_K):
+        if meta['EVEN_K']:
+            a = tl.load(a_ptrs)
+            b = tl.load(b_ptrs)
+        else:
+            a = tl.load(a_ptrs, mask=offs_ak[None, :] < k, other=0.)
+            b = tl.load(b_ptrs, mask=offs_bk[:, None] < k, other=0.)
         a = tl.load(a_ptrs)
         b = tl.load(b_ptrs)
         acc += tl.dot(a, b)
@@ -114,7 +123,7 @@ def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, luts, num_locks, 
                 b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
                 c.stride(0), c.stride(1), c.stride(2), c.stride(3),
                 Ka, off_grid, lut,
-                TILE_M = block*pack, TILE_N = block*pack, TILE_K = 64, BLOCK = block, num_stages=2,
+                TILE_M = block*pack, TILE_N = block*pack, TILE_K = 32, BLOCK = block, num_stages=3,
                 num_warps=4,
             )
             # print(pgm.asm['ptx'])
