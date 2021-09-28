@@ -2500,9 +2500,8 @@ void generator::visit_layout_shared(analysis::shared_layout* layout) {
 void generator::visit_basic_block(ir::basic_block * block) {
   BasicBlock *parent = bbs_[block];
   builder_->SetInsertPoint(parent);
-  for(ir::instruction *i: block->get_inst_list()){
+  for(ir::instruction *i: block->get_inst_list())
     visit_value(i);
-  }
   // Update ir bb -> llvm bb mapping
   bbs_[block] = builder_->GetInsertBlock();
 }

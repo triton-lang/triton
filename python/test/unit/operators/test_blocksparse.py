@@ -7,7 +7,7 @@ import pytest
 @pytest.mark.parametrize("TRANS_A", [False, True])
 @pytest.mark.parametrize("TRANS_B", [False, True])
 @pytest.mark.parametrize("BLOCK", [16, 32, 64])
-@pytest.mark.parametrize("DTYPE", [torch.float16, torch.float32])
+@pytest.mark.parametrize("DTYPE", [torch.float16])
 def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=256):
     # set seed
     torch.random.manual_seed(0)
@@ -41,15 +41,20 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
 @pytest.mark.parametrize("WIDTH", [256, 576, 1024, 1792])
 @pytest.mark.parametrize("DTYPE", [torch.float16, torch.float32])
 def test_softmax(BLOCK, WIDTH, DTYPE):
+    is_causal = True
     # set seed
     torch.random.manual_seed(0)
-    Z, H, M, N = 2, 4, WIDTH, WIDTH
+    Z, H, M, N = 1, 1, WIDTH, WIDTH
     scale = 0.4
     # create inputs
     layout = torch.randint(2, (H, M // BLOCK, N // BLOCK))
     x = torch.randn((Z, H, M, N), dtype=DTYPE, requires_grad=True, device="cuda")
     at_mask = torch.randint(low=0, high=2, size=(N, N), dtype=torch.bool, requires_grad=False, device="cuda")
+    # make sure each row has at least one non-zero element
+    torch.diagonal(layout)[:] = 1
+    torch.diagonal(at_mask)[:] = 1
     kp_mask = torch.randint(low=0, high=2, size=(Z, N), dtype=DTYPE, requires_grad=False, device="cuda")
+    kp_mask[:] = 0
     kp_mask[kp_mask == 1.0] = float("-inf")
     # triton result
     op = triton.ops.blocksparse.softmax(layout, BLOCK)
@@ -61,16 +66,15 @@ def test_softmax(BLOCK, WIDTH, DTYPE):
         key_padding_mask_mode="add",
         attn_mask=at_mask.to(DTYPE),
         attn_mask_mode="mul",
+        is_causal=is_causal,
     )
     # torch result
     rx = triton.testing.mask_tensor(x, layout, BLOCK, value=float("-inf"))
-    if at_mask is not None:
-        # broadcast at_mask to the same shape as rx
-        M = at_mask[None, None, :, :] + torch.zeros_like(rx)
-        rx[M == 0] = float("-inf")
-    if kp_mask is not None:
-        rx += kp_mask[:, None, None, :]
-    ry = torch.softmax(rx * scale, -1)
+    # broadcast at_mask to the same shape as rx
+    if is_causal: at_mask = torch.tril(at_mask)
+    M = at_mask[None, None, :, :] + torch.zeros_like(rx)
+    rx[M == 0] = float("-inf")
+    # rx += kp_mask[:, None, None, :]
     ry = torch.softmax(rx * scale, -1)
     ry = triton.testing.sparsify_tensor(ry, layout, BLOCK)
     # compare
