@@ -26,7 +26,6 @@ Version 1.1 is out! New features include:
 - Automatic on-disk caching of compiled binary objects
 - Random Number Generation
 - Faster (up to 2x on A100), cleaner blocksparse ops
-- Fixed the semantics of comparison with NaN to match that of Python
 
 # Contributing
 
