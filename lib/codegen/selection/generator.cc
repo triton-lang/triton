@@ -14,7 +14,12 @@
 #include "triton/ir/type.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/IRBuilder.h"
+#ifdef __HIP_PLATFORM_AMD__
+#include "llvm/IR/Type.h"
+#include "llvm/IR/IntrinsicsAMDGPU.h"
+#else
 #include "llvm/IR/IntrinsicsNVPTX.h"
+#endif
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/InlineAsm.h"
@@ -318,8 +323,24 @@ void generator::visit_binary_operator(ir::binary_operator*x) {
        vals_[x][idx] = add(lhs, rhs);
      else if(op == ll::Mul)
        vals_[x][idx] = mul(lhs, rhs);
-     else
-       vals_[x][idx] = bin_op(op, lhs, rhs);
+     else{
+       if (op==ll::FRem){
+          if (lhs->getType()->isHalfTy() && rhs->getType()->isHalfTy())
+          {
+            lhs=cast(llvm::Instruction::FPExt, lhs, f32_ty);
+            rhs=cast(llvm::Instruction::FPExt, rhs, f32_ty);
+            vals_[x][idx] = bin_op(op, lhs, rhs);
+            vals_[x][idx] = cast(llvm::Instruction::FPTrunc, vals_[x][idx], f16_ty);
+          }
+          else
+          {
+            vals_[x][idx] = bin_op(op, lhs, rhs);
+          }
+       }
+       else{
+         vals_[x][idx] = bin_op(op, lhs, rhs);
+       }
+     }
   }
 }
 
@@ -624,6 +645,10 @@ void generator::visit_load_inst(ir::load_inst* x){
     int tot_width = nbits*vec;
     int width = std::min(tot_width, max_word_width);
     int n_words = std::max(1, tot_width / width);
+    //set return type
+    std::vector<Type*> ret_tys(n_words, IntegerType::get(*ctx_, width));
+    Type* ret_ty = ret_tys.size() > 1 ? StructType::get(*ctx_, ret_tys) : ret_tys[0];
+#ifndef __HIP_PLATFORM_AMD__
     // -----
     // create inline asm string
     // -----
@@ -673,8 +698,6 @@ void generator::visit_load_inst(ir::load_inst* x){
     // ----
     // create inline ASM signature
     // ---
-    std::vector<Type*> ret_tys(n_words, IntegerType::get(*ctx_, width));
-    Type* ret_ty = ret_tys.size() > 1 ? StructType::get(*ctx_, ret_tys) : ret_tys[0];
     std::vector<Type*> arg_tys = {pred->getType(), ptr->getType()};
     for(Value *v: others)
         arg_tys.push_back(v->getType());
@@ -700,6 +723,9 @@ void generator::visit_load_inst(ir::load_inst* x){
     for(Value *v: others)
         args.push_back(v);
     Value *_ret = call(_asm, args);
+#else
+    Value *_ret =  builder_->CreateLoad(ret_ty, ptr);
+#endif
     // ---
     // extract and store return values
     // ---
@@ -1673,10 +1699,12 @@ void generator::visit_dot_inst(ir::dot_inst* dot) {
   unsigned NK = A_shapes[red_axis];
   bool is_outer = NK == 1;
   bool is_mma = layouts_->get(dot)->to_mma();
-  if(!is_outer && is_mma && tgt_->as_nvidia()->sm() < 80)
+#ifndef __HIP_PLATFORM_AMD__
+  if(!is_outer && is_mma && tgt_->as_nvidia() && tgt_->as_nvidia()->sm() < 80)
     return visit_mma884(dot, A, B, D, NK);
-  if(!is_outer && is_mma && tgt_->as_nvidia()->sm() >= 80)
+  if(!is_outer && is_mma && tgt_->as_nvidia() && tgt_->as_nvidia()->sm() >= 80)
     return visit_mma16816(dot, A, B, D, NK);
+#endif
   return visit_fmadot(dot, A, B, D, NK, c_ty, f_mul_add);
 }
 
@@ -2256,12 +2284,14 @@ void generator::visit_function(ir::function* fn) {
   // set metadata
   if(tgt_->is_gpu()){
       tgt_->set_kernel(*builder_, ctx, mod_, ret);
+#ifndef __HIP_PLATFORM_AMD__
       Metadata *md_args[] = {
         ValueAsMetadata::get(ret),
         MDString::get(ctx, "maxntidx"),
         ValueAsMetadata::get(i32(num_warps_*32))
       };
       mod_->getOrInsertNamedMetadata("nvvm.annotations")->addOperand(MDNode::get(ctx, md_args));
+#endif
   }
   // set arguments
   for(unsigned i = 0; i < fn->args().size(); i++)
@@ -2304,7 +2334,11 @@ void generator::visit_layout_mma(analysis::mma_layout* layout) {
   Value *_8 = i32(8);
   Value *_16 = i32(16);
   Value *_32 = i32(32);
+#ifdef __HIP_PLATFORM_AMD__
+  int cc = 1; // generate ir for older CUDA cards
+#else
   int cc = tgt_->as_nvidia()->sm();
+#endif
   std::vector<Value*> idx_m;
   std::vector<Value*> idx_n;
   std::vector<Value*> idx_z;

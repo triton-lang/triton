@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.6)
 include(ExternalProject)
 
+set(TRITON_USE_ROCM "$ENV{TRITON_USE_ROCM}")
+
 if(NOT TRITON_LLVM_BUILD_DIR)
     set(TRITON_LLVM_BUILD_DIR ${CMAKE_BINARY_DIR})
 endif()
@@ -102,6 +104,9 @@ if(BUILD_PYTHON_MODULE)
     endif()
     include_directories("." ${PYTHON_SRC_PATH} ${PYTHON_INCLUDE_DIRS} ${CUTLASS_INCLUDE_DIR})
     link_directories(${PYTHON_LINK_DIRS} ${CUTLASS_LIBRARY_DIR})
+    if (TRITON_USE_ROCM)
+        add_definitions(-D__HIP_PLATFORM_AMD__)
+    endif()
     set(PYTHON_SRC ${PYTHON_SRC_PATH}/main.cc ${PYTHON_SRC_PATH}/triton.cc  ${PYTHON_SRC_PATH}/superblock.cc ${CUTLASS_SRC})
 endif()
 

@@ -308,7 +308,7 @@ std::string llir_to_amdgpu(llvm::Module* module, const std::string& _proc) {
   machine->addPassesToEmitFile(pass, *isabin_fs, nullptr, llvm::CGFT_ObjectFile);
   pass.run(*module);
   // Save GCN ISA.
-  std::string amdgcn_path = std::string("/tmp/") + module_name + std::string(".gcn");
+  std::string amdgcn_path = std::string("/tmp/") + module_name + std::string(".isa");
   std::string result(buffer.begin(), buffer.end());
   std::ofstream amdgcn(amdgcn_path);
   amdgcn << result;

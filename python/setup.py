@@ -15,6 +15,7 @@ from setuptools.command.test import test as TestCommand
 import distutils.spawn
 import urllib.request
 import tarfile
+import torch
 
 def get_llvm():
     # tries to find system LLVM
@@ -88,7 +89,10 @@ class CMakeBuild(build_ext):
         if not os.path.exists(llvm_build_dir):
             os.makedirs(llvm_build_dir)
         # python directories
-        python_include_dirs = [distutils.sysconfig.get_python_inc()] + ['/usr/local/cuda/include']
+        if torch.version.hip is not None:
+            python_include_dirs= [distutils.sysconfig.get_python_inc()] +['/opt/rocm/include']
+        else:
+            python_include_dirs = [distutils.sysconfig.get_python_inc()] + ['/usr/local/cuda/include']
         cmake_args = [
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
             "-DBUILD_TUTORIALS=OFF",
@@ -115,6 +119,9 @@ class CMakeBuild(build_ext):
             build_args += ["--", '-j' + str(2 * multiprocessing.cpu_count())]
 
         env = os.environ.copy()
+
+        if torch.version.hip is not None:
+            env["TRITON_USE_ROCM"] = "ON"
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=self.build_temp)
 

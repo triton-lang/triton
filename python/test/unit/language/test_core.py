@@ -45,6 +45,29 @@ def test_empty_kernel(dtype_x, device='cuda'):
     x = triton.testing.random(SIZE, dtype=cvt[dtype_x], device=device)
     kernel[(1, )](x, SIZE=SIZE, num_warps=4)
 
+def _test_load_and_store_op(dtype_x, device='cuda'):
+    SIZE = 1
+    # define the kernel / launch-grid
+    @triton.jit
+    def kernel(Z, X, **meta):
+        x = tl.load(X)
+        tl.store(Z, x)
+    # inputs
+    x = triton.testing.random(SIZE, dtype=cvt[dtype_x], device=device)
+  
+    # reference result
+    z_ref = x.clone()
+
+    # triton result
+    z_tri = torch.empty_like(x)
+
+    # triton.testing.assert_almost_equal(z_ref, z_tri)
+
+    # run load and store kernel
+    kernel[(1, )](z_tri, x, SIZE=SIZE, num_warps=4)
+
+    triton.testing.assert_almost_equal(z_ref, z_tri)
+
 # generic test functions
 def _test_unary(dtype_x, expr, torch_expr=None, device='cuda'):
     SIZE = 128
@@ -148,6 +171,17 @@ ops = ['==', '!=', '>', '<', '>=', '<=']
 def test_compare_op(dtype_x, dtype_y, expr, mode_x, mode_y, device='cuda'):
     _test_binary(dtype_x, dtype_y, expr, mode_x=mode_x, mode_y=mode_y, device=device)
 
+# ---------------
+# test load and store op
+# ---------------
+@pytest.mark.parametrize("dtype_x", [
+    (dtype_x) for dtype_x in float_dtypes
+] + [\
+    (dtype_x) for dtype_x in int_dtypes
+     ])
+def test_load_and_store_op(dtype_x, device='cuda'):
+    _test_load_and_store_op(dtype_x, device=device)
+    print("after test")
 
 # ---------------
 # test unary ops
