@@ -218,10 +218,6 @@ bool peephole::rewrite_cvt_layout(ir::instruction *value, ir::builder& builder){
   ir::instruction* op = dynamic_cast<ir::instruction*>(cvt->get_operand(0));
   if(!op)
     return false;
-  if(layouts_->get(value) == layouts_->get(op)){
-    value->replace_all_uses_with(op);
-    return true;
-  }
   // convert(elementwise(x, y)) = elementwise(convert(x), convert(y))
   if(op->get_id() == ir::INST_BINOP){
     for(size_t i = 0; i < op->get_num_operands(); i++){
