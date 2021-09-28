@@ -1,18 +1,6 @@
 import triton.language as tl
 import triton
 import torch
-import os
-
-
-def next_power_of_2(n):
-    n -= 1
-    n |= n >> 1
-    n |= n >> 2
-    n |= n >> 4
-    n |= n >> 8
-    n |= n >> 16
-    n += 1
-    return n
 
 
 def num_warps(n):
@@ -23,11 +11,11 @@ def num_warps(n):
     return 16
 
 
-@triton.heuristics({'num_warps': lambda *args, **meta: num_warps(args[6] * meta['BLOCK'])})
-@triton.heuristics({'TN': lambda *args, **meta: next_power_of_2(args[6] * meta['BLOCK'])})
+@triton.heuristics({'num_warps': lambda *args, **meta: num_warps(args[7] * meta['BLOCK'])})
+@triton.heuristics({'TN': lambda *args, **meta: triton.next_power_of_2(args[7] * meta['BLOCK'])})
 @triton.jit
 def _forward(
-    X, scale, LUT, RPE, KP_M, ATTN_M, sizemax, stride_zx, stride_zrpe, stride_hrpe, stride_srpe, stride_zkpm, stride_zattnm,
+    X, scale, LUT, RPE, KP_M, ATTN_M, is_causal, sizemax, stride_zx, stride_zrpe, stride_hrpe, stride_srpe, stride_zkpm, stride_zattnm,
     **meta
 ):
     TN = meta['TN']
@@ -46,10 +34,10 @@ def _forward(
     check = rbn < size
     rbmn = tl.where(check, rbn, size - 1)
     # block id and column id
-    blockid = tl.load(LUT + offset + rbmn * 4 + 0)
+    blockid  = tl.load(LUT + offset + rbmn * 4 + 0)
     columnid = tl.load(LUT + offset + rbmn * 4 + 1)
-    rowid = tl.load(LUT + offset + rbmn * 4 + 2)
-    headid = tl.load(LUT + offset + rbmn * 4 + 3)
+    rowid    = tl.load(LUT + offset + rbmn * 4 + 2)
+    headid   = tl.load(LUT + offset + rbmn * 4 + 3)
     # pointers to X
     px = X + pidz * stride_zx + blockid * BLOCK * BLOCK + rxm * BLOCK + rxn
     x = tl.load(px, mask=check, other=-float('inf'))
@@ -76,13 +64,16 @@ def _forward(
         if meta['ATTN_MASK_MUL']:
             attn_m = tl.where(attn_m == 0, -float('inf'), 0.)
         x = x + attn_m
+    # apply causal mask
+    is_in_upper_triangle = columnid*BLOCK + rxn > rowid*BLOCK + rxm 
+    x = x + tl.where(is_in_upper_triangle & is_causal, -float('inf'), 0.)
     # computation
     x = tl.softmax(x)
     tl.store(px, x, mask=check)
 
 
 @triton.heuristics({'num_warps': lambda *args, **meta: num_warps(args[4] * meta['BLOCK'])})
-@triton.heuristics({'TN': lambda *args, **meta: next_power_of_2(args[4]) * meta['BLOCK']})
+@triton.heuristics({'TN': lambda *args, **meta: triton.next_power_of_2(args[4]) * meta['BLOCK']})
 @triton.jit
 def _backward(X, scale, DX, LUT, sizemax, stride_zx, stride_zdx, **meta):
     pidhm = tl.program_id(0)
@@ -139,10 +130,13 @@ class _softmax(torch.autograd.Function):
 
     @staticmethod
     def forward(
-        ctx, x, scale, rpe, key_padding_mask, attn_mask, kp_mask_mode, attn_mask_mode, spdims, block, lut, maxlut, bench, time
+        ctx, x, scale, rpe, 
+        key_padding_mask, attn_mask, 
+        kp_mask_mode, attn_mask_mode, 
+        is_causal,
+        spdims, block, lut, maxlut
     ):
         apply_scale = False if scale == 1.0 else True
-
         # handle None rpe
         if rpe is None:
             apply_rpe = False
@@ -151,7 +145,6 @@ class _softmax(torch.autograd.Function):
         else:
             apply_rpe = True
             stride_zrpe, stride_hrpe, stride_srpe = rpe.stride(0), rpe.stride(1), rpe.stride(2)
-
         # handle None key_padding_mask
         if key_padding_mask is None:
             apply_kp_mask = False
@@ -160,7 +153,6 @@ class _softmax(torch.autograd.Function):
         else:
             apply_kp_mask = True
             stride_zkpm = key_padding_mask.stride(0)
-
         # handle None attention_mask
         if attn_mask is None:
             apply_attn_mask = False
@@ -169,22 +161,19 @@ class _softmax(torch.autograd.Function):
         else:
             apply_attn_mask = True
             stride_zattnm = attn_mask.stride(0)
-
         # run kernel
         M = x.shape[0]
-        meta = {
-            'BLOCK': block,
-            'APPLY_SCALE': apply_scale,
-            'APPLY_RPE': apply_rpe,
-            'APPLY_KP_MASK': apply_kp_mask,
-            'APPLY_ATTN_MASK': apply_attn_mask,
-            'KP_MASK_MUL': kp_mask_mode == 'mul',
-            'ATTN_MASK_MUL': attn_mask_mode == 'mul',
-        }
-        grid = lambda opt: [spdims[0] * spdims[1] * block, M]
-        _forward[grid](x, scale, lut, rpe, key_padding_mask, attn_mask, maxlut, x.stride(0),\
-                       stride_zrpe, stride_hrpe, stride_srpe, stride_zkpm, stride_zattnm, force_nc_cache=True, **meta)
-
+        grid = [spdims[0] * spdims[1] * block, M]
+        _forward[grid](x, scale, lut, rpe, key_padding_mask, attn_mask, is_causal, maxlut, x.stride(0),\
+                       stride_zrpe, stride_hrpe, stride_srpe, stride_zkpm, stride_zattnm, 
+                       BLOCK           = block,
+                       APPLY_SCALE     = apply_scale, 
+                       APPLY_RPE       = apply_rpe,
+                       APPLY_KP_MASK   = apply_kp_mask, 
+                       APPLY_ATTN_MASK = apply_attn_mask, 
+                       KP_MASK_MUL     = (kp_mask_mode == 'mul'),
+                       ATTN_MASK_MUL   = (attn_mask_mode == 'mul'),
+                       force_nc_cache  = True)
         # save to context
         ctx.mark_dirty(x)
         ctx.save_for_backward(x, lut)
@@ -213,25 +202,24 @@ class _softmax(torch.autograd.Function):
 
 class softmax:
 
-    apply_softmax = _softmax.apply
-
     def make_lut(self, device):
         key = (device, )
         if key not in self.lut_cache:
             self.lut_cache[key] = _softmax.make_lut(self.layout, self.block, device)
         return self.lut_cache[key]
 
-    def __init__(self, layout, block, bench=False):
+    def __init__(self, layout, block):
         self.spdims = layout.shape
         self.layout = layout
         self.block = block
-        self.bench = bench
         self.lut_cache = dict()
 
     def __call__(
-        self, x, scale=1., rpe=None, key_padding_mask=None, attn_mask=None, key_padding_mask_mode='add', attn_mask_mode='add'
+        self, x, scale=1., rpe=None, 
+        key_padding_mask=None, attn_mask=None, 
+        key_padding_mask_mode='add', attn_mask_mode='add',
+        is_causal = False
     ):
-        time_y = [None]
         if rpe is not None and rpe.dtype != x.dtype:
             raise ValueError('relative position embedding must be %s' % x.dtype)
         if attn_mask is not None and attn_mask.dtype != x.dtype:
@@ -239,8 +227,12 @@ class softmax:
         if key_padding_mask is not None and key_padding_mask.dtype != x.dtype:
             raise ValueError('Key padding mask must be %s' % x.dtype)
         lut, maxlut = self.make_lut(x.device)
-        x = softmax.apply_softmax(
-            x, scale, rpe, key_padding_mask, attn_mask, key_padding_mask_mode, attn_mask_mode, self.spdims, self.block, lut,
-            maxlut, self.bench, time_y
+        x = _softmax.apply(
+            x, scale, rpe, 
+            key_padding_mask, attn_mask, 
+            key_padding_mask_mode, attn_mask_mode, 
+            is_causal,
+            self.spdims, self.block, 
+            lut, maxlut
         )
         return x
