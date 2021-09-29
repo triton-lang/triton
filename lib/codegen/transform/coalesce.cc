@@ -62,8 +62,8 @@ void coalesce::run(ir::module &mod) {
     if(ir::value* op = i->get_operand(1))
     if(op->get_type()->is_block_ty())
     if(layout_->get(op)->to_mma()){
-      builder.set_insert_point(i);
       ir::instruction* new_op = ir::cvt_layout_inst::create(op);
+      builder.set_insert_point(i);
       builder.insert(new_op);
       i->replace_uses_of_with(op, new_op);
     }
@@ -79,6 +79,10 @@ void coalesce::run(ir::module &mod) {
         new_x->replace_uses_of_with(new_x, x);
 //        new_x->replace_uses_of_with(new_x, new_x);
     }
+  }
+  for(ir::function *fn: mod.get_function_list())
+  for(ir::basic_block *block: fn->blocks())
+  for(ir::instruction* i: block->get_inst_list()){
     // re-arrange scanline to promote memory coalescing
     if(auto x = dynamic_cast<ir::store_inst*>(i)){
       ir::value* ptr = x->get_pointer_operand();
@@ -113,7 +117,7 @@ void coalesce::run(ir::module &mod) {
             queue.push_back(inst_op);
         }
       }
-      if(in_contig.empty() || out_contig==in_contig)
+      if(in_contig.size() <= 1 || out_contig==in_contig)
         continue;
       builder.set_insert_point_after(val_inst);
       auto new_val = builder.insert(ir::cvt_layout_inst::create(val_inst));

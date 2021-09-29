@@ -188,7 +188,7 @@ void pipeline::run(ir::module &mod) {
       builder.set_insert_point(block->get_first_non_phi());
       std::map<ir::phi_node*, ir::value*> load_ivs;
       std::map<ir::phi_node*, ir::value*> next_load_ivs;
-      for (ir::phi_node* iv : induction_vars) {
+      for (auto& [iv, val] : prev_phi_vals) {
         ir::phi_node* pn = builder.create_phi(iv->get_type(), 2);
         pn->add_incoming(prev_phi_vals[iv], header);
         load_ivs[iv] = pn;
@@ -198,7 +198,8 @@ void pipeline::run(ir::module &mod) {
         
       // pre-fetch next iteration
       builder.set_insert_point(block->get_inst_list().back());
-      ir::value* next_ptr = ptr->get_value_for_block(block);
+//      ir::value* next_ptr = ptr->get_value_for_block(block);
+      ir::value* next_ptr = rematerialize_vals(builder, block, ptr->get_value_for_block(block), load_ivs);
       ir::value* next_mask = builder.create_splat(
           rematerialize_vals(builder, block, block_cond, load_ivs), ty->get_block_shapes());
       if (auto* masked_load = dynamic_cast<ir::masked_load_inst*>(load)) {
