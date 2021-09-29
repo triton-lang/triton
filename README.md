@@ -18,6 +18,15 @@ The foundations of this project are described in the following MAPL2019 publicat
 
 The [official documentation](https://triton-lang.org) contains installation instructions and tutorials.
 
+# Changelog
+
+Version 1.1 is out! New features include:
+- Many, many bugfixes
+- More documentation
+- Automatic on-disk caching of compiled binary objects
+- Random Number Generation
+- Faster (up to 2x on A100), cleaner blocksparse ops
+
 # Contributing
 
 Community contributions are more than welcome, whether it be to fix bugs or to add new features. Feel free to open GitHub issues about your contribution ideas, and we will review them. A contributor's guide containing general guidelines is coming soon!
