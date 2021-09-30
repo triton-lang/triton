@@ -89,6 +89,101 @@ def softmax_kernel(
     output_ptrs = output_row_start_ptr + col_offsets
     tl.store(output_ptrs, softmax_output, mask=col_offsets < n_cols)
 
+@triton.jit
+def softmax_kernel_big_row(
+    output_ptr, input_ptr, input_row_stride, output_row_stride, n_cols, **meta
+):
+    """ Specialized kernel for big row size inputs.
+
+        issues & todos:
+          - can't use loop
+          - can't use if conditions
+          - could potentially speed up more if we can do exp_sum() using float8
+    """
+    row_idx = tl.program_id(0)
+
+    # The stride represents how much we need to increase the pointer to advance 1 row
+    row_start_ptr = input_ptr + row_idx * input_row_stride
+
+    BLOCK_SIZE = meta['BLOCK_SIZE'] // 2
+
+    tl_max = tl.zeros((1,), tl.float32) * float('-inf')
+    tl_sum = tl.zeros((1,), tl.float32)
+    #for (seg, action) in iter([(0, "load_max"), (1, "load_max_sum"), (0, "load_sum_write"), (1, "load_write")]):
+    if True:
+        # seg: segment ID
+        (seg, action) = (0, 0)
+        col_offsets = tl.arange(0, BLOCK_SIZE) + seg * BLOCK_SIZE
+        input_ptrs = row_start_ptr + col_offsets
+
+        row = tl.load(input_ptrs, mask=col_offsets < n_cols, other=-float('inf'))
+
+        # load_max: 0
+        # load_max_sum: 1
+        # load_sum_write: 2
+        # load_write: 3
+
+        #if action == 0 or action == 1:  # max in action
+        #    tl_max = tl.maximum(tl_max, tl.max(row, axis=0))
+
+        #if action == 1 or action == 2:  # "sum" in action
+        #    row_minus_max = row - tl_max
+        #    numerator = tl.exp(row_minus_max)
+        #    denominator = tl.sum(numerator, axis=0)
+        #    tl_sum += tl.sum(numerator, axis=0)
+
+        #if action == 2 or action == 3:  # "write" in action:
+        #    softmax_output = row / tl_sum
+        #    # Write back output to DRAM
+        #    output_row_start_ptr = output_ptr + row_idx * output_row_stride
+        #    output_ptrs = output_row_start_ptr + col_offsets
+        #    tl.store(output_ptrs, softmax_output, mask=col_offsets < n_cols)
+
+        tl_max = tl.maximum(tl_max, tl.max(row, axis=0))
+
+        # seg: segment ID
+        (seg, action) = (1, 1)
+        col_offsets = tl.arange(0, BLOCK_SIZE) + seg * BLOCK_SIZE
+        input_ptrs = row_start_ptr + col_offsets
+
+        row = tl.load(input_ptrs, mask=col_offsets < n_cols, other=-float('inf'))
+
+        tl_max = tl.maximum(tl_max, tl.max(row, axis=0))
+
+        row_minus_max = row - tl_max
+        numerator = tl.exp(row_minus_max)
+        tl_sum += tl.sum(numerator, axis=0)
+
+        # seg: segment ID
+        (seg, action) = (0, 2)
+        col_offsets = tl.arange(0, BLOCK_SIZE) + seg * BLOCK_SIZE
+        input_ptrs = row_start_ptr + col_offsets
+
+        row = tl.load(input_ptrs, mask=col_offsets < n_cols, other=-float('inf'))
+
+        row_minus_max = row - tl_max
+        numerator = tl.exp(row_minus_max)
+        tl_sum += tl.sum(numerator, axis=0)
+
+        softmax_output = tl.exp(row - tl_max) / tl_sum
+        # Write back output to DRAM
+        output_row_start_ptr = output_ptr + row_idx * output_row_stride
+        output_ptrs = output_row_start_ptr + col_offsets
+        tl.store(output_ptrs, softmax_output, mask=col_offsets < n_cols)
+
+        # seg: segment ID
+        (seg, action) = (1, 3)
+        col_offsets = tl.arange(0, BLOCK_SIZE) + seg * BLOCK_SIZE
+        input_ptrs = row_start_ptr + col_offsets
+
+        row = tl.load(input_ptrs, mask=col_offsets < n_cols, other=-float('inf'))
+
+        softmax_output = tl.exp(row - tl_max) / tl_sum
+        # Write back output to DRAM
+        output_row_start_ptr = output_ptr + row_idx * output_row_stride
+        output_ptrs = output_row_start_ptr + col_offsets
+        tl.store(output_ptrs, softmax_output, mask=col_offsets < n_cols)
+
 
 # %%
 # We can create a helper function that enqueues the kernel and its (meta-)arguments for any given input tensor.
@@ -106,11 +201,16 @@ def softmax(x):
         num_warps = 8
     if BLOCK_SIZE >= 4096:
         num_warps = 16
+    if BLOCK_SIZE >= 8096:
+        num_warps = 32
+    k = softmax_kernel
+    if True and BLOCK_SIZE >= 64*1024:
+        k = softmax_kernel_big_row
     # Allocate output
     y = torch.empty_like(x)
     # Enqueue kernel. The 1D launch grid is simple: we have one kernel instance per row o
     # f the input matrix
-    softmax_kernel[(n_rows,)](
+    k[(n_rows,)](
         y,
         x,
         x.stride(0),
@@ -134,7 +234,11 @@ torch.manual_seed(0)
 x = torch.randn(1823, 781, device='cuda')
 y_triton = softmax(x)
 y_torch = torch.softmax(x, axis=1)
-print(torch.allclose(y_triton, y_torch))
+print("small row result: ", torch.allclose(y_triton, y_torch))
+x = torch.randn(1823, 64*1024+11, device='cuda')
+y_triton = softmax(x)
+y_torch = torch.softmax(x, axis=1)
+print("big row result: ", torch.allclose(y_triton, y_torch))
 
 #%%
 # As expected, the results are identical.
@@ -150,7 +254,7 @@ print(torch.allclose(y_triton, y_torch))
     triton.testing.Benchmark(
         x_names=['N'],  # argument names to use as an x-axis for the plot
         x_vals=[
-            128 * i for i in range(2, 100)
+            128 * i for i in (list(range(2, 100)) + [512])
         ],  # different possible values for `x_name`
         line_arg='provider',  # argument name whose value corresponds to a different line in the plot
         line_vals=[
