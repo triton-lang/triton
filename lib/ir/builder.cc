@@ -369,6 +369,9 @@ value *builder::create_select(value *pred, value *if_value, value *else_value){
 //                               intrinsic instructions
 //===----------------------------------------------------------------------===//
 
+value *builder::create_umulhi(value *lhs, value *rhs) {
+  return insert(umulhi_inst::create(lhs, rhs));
+}
 
 value *builder::create_copy_to_shared(value *arg) {
   return insert(copy_to_shared_inst::create(arg));

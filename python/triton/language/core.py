@@ -524,6 +524,10 @@ def where(condition, x, y, _builder=None):
 # Math
 # -----------------------
 
+@builtin
+def umulhi(x, y, _builder=None):
+    return frontend.umulhi(x, y, _builder)
+
 def _add_math_1arg_docstr(name):
 
     def _decorator(func):
@@ -537,11 +541,6 @@ def _add_math_1arg_docstr(name):
         return func
     
     return _decorator
-
-@builtin
-@_add_math_1arg_docstr("exponential")
-def exp(x, _builder=None):
-    return frontend.exp(x, _builder)
 
 
 @builtin

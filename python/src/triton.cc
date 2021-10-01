@@ -340,6 +340,7 @@ void init_triton_frontend(py::module &&m) {
   m.def("max", &ir::dispatch::max, ret::reference);
   m.def("sum", &ir::dispatch::sum, ret::reference);
   // math
+  m.def("umulhi", &ir::dispatch::umulhi, ret::reference);
   m.def("exp", &ir::dispatch::exp, ret::reference);
   m.def("log", &ir::dispatch::log, ret::reference);
   m.def("cos", &ir::dispatch::cos, ret::reference);

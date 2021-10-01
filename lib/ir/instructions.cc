@@ -761,6 +761,19 @@ instruction* atomic_cas_inst::create(value *ptr, value *cmp, value *val, const s
 }
 
 
+// umulhi
+
+umulhi_inst::umulhi_inst(value *lhs, value *rhs, const std::string &name, instruction *next)
+  : builtin_inst(lhs->get_type(), INST_UMULHI, 2, name, next) {
+ set_operand(0, lhs);
+ set_operand(1, rhs);
+}
+
+instruction* umulhi_inst::create(value *lhs, value *rhs, const std::string &name, instruction *next) {
+  return new umulhi_inst(lhs, rhs, name, next);
+}
+
+
 // exp
 
 exp_inst::exp_inst(value *val, const std::string &name, instruction *next)

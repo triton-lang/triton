@@ -48,6 +48,7 @@ class splat_inst;
 class broadcast_inst;
 class downcast_inst;
 
+class umulhi_inst;
 class exp_inst;
 class cos_inst;
 class sin_inst;
@@ -122,6 +123,7 @@ public:
   virtual void visit_unmasked_store_inst(unmasked_store_inst*) = 0;
   virtual void visit_masked_store_inst(masked_store_inst*) = 0;
 
+  virtual void visit_umulhi_inst(umulhi_inst*) = 0;
   virtual void visit_exp_inst(exp_inst*) = 0;
   virtual void visit_cos_inst(cos_inst*) = 0;
   virtual void visit_sin_inst(sin_inst*) = 0;

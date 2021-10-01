@@ -654,6 +654,17 @@ public:
   static instruction* create(value *ptr, value *cmp, value *val, const std::string &name = "", instruction *next = nullptr);
 };
 
+class umulhi_inst: public builtin_inst {
+private:
+  umulhi_inst(value *lhs, value *rhs, const std::string &name = "", instruction *next = nullptr);
+  std::string repr_impl() const { return "umulhi"; }
+  _TRITON_DEFINE_CLONE(umulhi_inst)
+  _TRITON_DEFINE_ACCEPT(umulhi_inst)
+
+public:
+  static instruction* create(value *lhs, value *rhs, const std::string &name = "", instruction *next = nullptr);
+};
+
 class exp_inst: public builtin_inst {
 private:
   exp_inst(value *val, const std::string &name = "", instruction *next = nullptr);
@@ -802,6 +813,7 @@ public:
 //===----------------------------------------------------------------------===//
 //                               intrinsics classes
 //===----------------------------------------------------------------------===//
+
 
 class copy_to_shared_inst: public unary_inst{
 private:

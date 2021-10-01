@@ -715,6 +715,11 @@ ir::value *dispatch::sum(ir::value *input, unsigned int axis, ir::builder *build
 //                               Math
 //===----------------------------------------------------------------------===//
 
+ir::value *dispatch::umulhi(ir::value *x, ir::value* y, ir::builder *builder) {
+  binary_op_type_checking(x, y, builder);
+  return builder->insert(umulhi_inst::create(x, y));
+}
+
 ir::value *dispatch::exp(ir::value *x, ir::builder *builder) {
   return builder->create_exp(x);
 }

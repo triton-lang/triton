@@ -90,6 +90,7 @@ struct dispatch{
   static ir::value *sum(ir::value *input, unsigned int axis, ir::builder *builder);
 
   // math
+  static ir::value *umulhi(ir::value *x, ir::value *y, ir::builder *builder);
   static ir::value *exp(ir::value *x, ir::builder *builder);
   static ir::value *log(ir::value *x, ir::builder *builder);
   static ir::value *cos(ir::value *x, ir::builder *builder);

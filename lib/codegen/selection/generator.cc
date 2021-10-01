@@ -862,6 +862,20 @@ void generator::visit_cos_inst(ir::cos_inst* x){
  }
 
 /**
+ * \brief Code Generation for `umulhi`
+ */
+void generator::visit_umulhi_inst(ir::umulhi_inst* x){
+  std::vector<llvm::Type*> tys = {i32_ty, i32_ty};
+  FunctionType *fn_ty = FunctionType::get(i32_ty, tys, false);
+  InlineAsm *umulhi = InlineAsm::get(fn_ty, "mul.hi.u32 $0, $1, $2;", "=r,r,r", false);
+  for(auto idx: idxs_.at(x)){
+    Value* lhs = vals_[x->get_operand(0)][idx];
+    Value* rhs = vals_[x->get_operand(1)][idx];
+    vals_[x][idx] = call(umulhi, std::vector<llvm::Value*>{lhs, rhs});
+  }
+ }
+
+/**
  * \brief Code Generation for `sin`
  */
 void generator::visit_sin_inst(ir::sin_inst* x){
