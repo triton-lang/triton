@@ -2197,7 +2197,8 @@ void generator::visit_async_wait_inst(ir::async_wait_inst* i) {
 
 void generator::visit_make_range(ir::make_range* x) {
   for(indices_t idx: idxs_.at(x)){
-    vals_[x][idx] = idx[0];
+    Value* start = ConstantInt::get(idx[0]->getType(), x->get_first()->get_value());
+    vals_[x][idx] = add(start, idx[0]);
   }
 }
 
