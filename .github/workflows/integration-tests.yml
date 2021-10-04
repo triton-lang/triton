@@ -18,10 +18,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
 
+      - name: Clear cache
+        run: |
+          rm -r /tmp/triton/
+        continue-on-error: true
+
       - name: Install Triton
         run: |
-          touch /tmp/triton/
-          rm -r /tmp/triton/
           alias python='python3'
           cd python
           pip3 install -e .
