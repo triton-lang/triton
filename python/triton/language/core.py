@@ -309,7 +309,7 @@ def zeros(shape, dtype, _builder=None):
 
     :param shape: Shape of the new array, e.g., (8, 16) or (8, )
     :type shape: tuple of ints
-    :param dtype: Data-type of the new array, e.g., :code:`triton.float16`
+    :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
     :type dtype: DType
     """
     shape = [int(x.handle) if isinstance(x, block) else x for x in shape]
