@@ -162,7 +162,7 @@ Type *generator::cvt(ir::type *ty) {
     case ir::type::VoidTyID:      return Type::getVoidTy(*ctx_);
     case ir::type::FP8TyID:       return Type::getInt8Ty(*ctx_);
     case ir::type::FP16TyID:      return Type::getHalfTy(*ctx_);
-  case ir::type::BF16TyID:      return Type::getInt16Ty(*ctx_);
+    case ir::type::BF16TyID:      return Type::getInt16Ty(*ctx_);
     case ir::type::FP32TyID:     return Type::getFloatTy(*ctx_);
     case ir::type::FP64TyID:    return Type::getDoubleTy(*ctx_);
     case ir::type::LabelTyID:     return Type::getLabelTy(*ctx_);

@@ -9,7 +9,9 @@ def _to_ir(x, builder):
     if isinstance(x, bool):
         return builder.get_int1(x)
     elif isinstance(x, int):
-        return builder.get_int32(x)
+        if abs(x) <= 2**31 - 1:
+            return builder.get_int32(x)
+        return builder.get_int64(x)
     elif isinstance(x, float):
         return builder.get_float32(x)
     if isinstance(x, block):
