@@ -20,10 +20,11 @@ jobs:
 
       - name: Install Triton
         run: |
+          touch /tmp/triton/
+          rm -r /tmp/triton/
           alias python='python3'
           cd python
           pip3 install -e .
-          rm -r /tmp/triton/
 
       - name: Unit tests
         run: |
