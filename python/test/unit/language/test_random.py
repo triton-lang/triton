@@ -112,7 +112,7 @@ BLOCK = 1024
 # test generation of random uint32
 @pytest.mark.parametrize('size, seed',
     [(size, seed) for size in ['10', '4,53', '10000']\
-                  for seed in [0, 42, 124, 54]]
+                  for seed in [0, 42, 124, 54, 0xffffffff, 0xdeadbeefcafeb0ba]]
 )
 def test_randint(size, seed, device='cuda'):
     size = list(map(int, size.split(',')))

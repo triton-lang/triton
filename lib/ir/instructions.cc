@@ -875,7 +875,7 @@ make_range *make_range::create(constant_int *first, constant_int *last) {
   assert(first->get_type()->is_integer_ty());
   assert(first->get_type() == last->get_type());
   assert(((constant_int*)first)->get_value() == 0);
-  type *ty = block_type::get(first->get_type(), {(unsigned)last->get_value()});
+  type *ty = block_type::get(first->get_type(), {(unsigned)last->get_value() - (unsigned)first->get_value()});
   return new make_range(ty, first, last);
 }
 
