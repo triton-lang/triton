@@ -9,7 +9,7 @@ def _to_ir(x, builder):
     if isinstance(x, bool):
         return builder.get_int1(x)
     elif isinstance(x, int):
-        if abs(x) <= 2**31 - 1:
+        if x.__abs__() <= 2**31:
             return builder.get_int32(x)
         return builder.get_int64(x)
     elif isinstance(x, float):
@@ -637,6 +637,10 @@ def max_contiguous(input, value, _builder=None):
 # -----------------------
 # Standard library
 # -----------------------
+
+@triton.jit
+def abs(x):
+    return where(x >= 0, x, -x)
 
 @triton.jit
 def cdiv(x, div):
