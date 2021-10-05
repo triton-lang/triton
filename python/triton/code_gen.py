@@ -103,8 +103,7 @@ class CodeGenerator(ast.NodeVisitor):
             arg_values = []
             for i, arg_name in enumerate(arg_names):
                 if i in self.constants:
-                    cst = triton.language.core._to_ir(self.constant[i], self.builder)
-                    arg_values.append(cst)
+                    arg_values.append(self.constants[i])
                 else:
                     if i in self.attributes:
                         is_ptr = fn.args[i].type.is_ptr()
