@@ -162,7 +162,7 @@ Type *generator::cvt(ir::type *ty) {
     case ir::type::VoidTyID:      return Type::getVoidTy(*ctx_);
     case ir::type::FP8TyID:       return Type::getInt8Ty(*ctx_);
     case ir::type::FP16TyID:      return Type::getHalfTy(*ctx_);
-  case ir::type::BF16TyID:      return Type::getInt16Ty(*ctx_);
+    case ir::type::BF16TyID:      return Type::getInt16Ty(*ctx_);
     case ir::type::FP32TyID:     return Type::getFloatTy(*ctx_);
     case ir::type::FP64TyID:    return Type::getDoubleTy(*ctx_);
     case ir::type::LabelTyID:     return Type::getLabelTy(*ctx_);
@@ -2200,7 +2200,8 @@ void generator::visit_async_wait_inst(ir::async_wait_inst* i) {
 
 void generator::visit_make_range(ir::make_range* x) {
   for(indices_t idx: idxs_.at(x)){
-    vals_[x][idx] = idx[0];
+    Value* start = ConstantInt::get(idx[0]->getType(), x->get_first()->get_value());
+    vals_[x][idx] = add(start, idx[0]);
   }
 }
 
@@ -2503,9 +2504,8 @@ void generator::visit_layout_shared(analysis::shared_layout* layout) {
 void generator::visit_basic_block(ir::basic_block * block) {
   BasicBlock *parent = bbs_[block];
   builder_->SetInsertPoint(parent);
-  for(ir::instruction *i: block->get_inst_list()){
+  for(ir::instruction *i: block->get_inst_list())
     visit_value(i);
-  }
   // Update ir bb -> llvm bb mapping
   bbs_[block] = builder_->GetInsertBlock();
 }

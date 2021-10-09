@@ -18,22 +18,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
 
+      - name: Clear cache
+        run: |
+          rm -r /tmp/triton/
+        continue-on-error: true
+
       - name: Install Triton
         run: |
           alias python='python3'
           cd python
           pip3 install -e .
 
+      - name: Unit tests
+        run: |
+          cd python/test/unit
+          pytest -vs .
+
       - name: Regression tests
         run: |
           cd python/test/regression
+          sudo nvidia-smi -i 0 -pm 1
           sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
           sudo nvidia-smi -i 0 --lock-memory-clocks=877,877
           pytest -vs .
           sudo nvidia-smi -i 0 -rgc
           sudo nvidia-smi -i 0 -rmc
 
-      - name: Unit tests
-        run: |
-          cd python/test/unit
-          pytest -vs .

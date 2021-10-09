@@ -9,7 +9,9 @@ def _to_ir(x, builder):
     if isinstance(x, bool):
         return builder.get_int1(x)
     elif isinstance(x, int):
-        return builder.get_int32(x)
+        if x.__abs__() <= 2**31:
+            return builder.get_int32(x)
+        return builder.get_int64(x)
     elif isinstance(x, float):
         return builder.get_float32(x)
     if isinstance(x, block):
@@ -307,7 +309,7 @@ def zeros(shape, dtype, _builder=None):
 
     :param shape: Shape of the new array, e.g., (8, 16) or (8, )
     :type shape: tuple of ints
-    :param dtype: Data-type of the new array, e.g., :code:`triton.float16`
+    :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
     :type dtype: DType
     """
     shape = [int(x.handle) if isinstance(x, block) else x for x in shape]
@@ -637,6 +639,10 @@ def max_contiguous(input, value, _builder=None):
 # -----------------------
 
 @triton.jit
+def abs(x):
+    return where(x >= 0, x, -x)
+
+@triton.jit
 def cdiv(x, div):
     """
     Computes the ceiling division of :code:`x` by :code:`div`
@@ -699,3 +705,35 @@ def ravel(x):
     :type x: Block
     """
     return triton.language.reshape(x, [x.type.numel])
+
+@triton.jit
+def swizzle2d(i, j, size_i, size_j, size_g):
+    """
+    transformes indices of a row-major size_i*size_j matrix into those
+    of one where indices are row major for each group of size_j rows.
+    For example, for size_i = size_j = 4 and size_g = 2, it will transform
+    [[0 , 1 , 2 , 3 ], 
+     [4 , 5 , 6 , 7 ],
+     [8 , 9 , 10, 11],
+     [12, 13, 14, 15]]
+    into
+    [[0, 2,  4 , 6 ],
+     [1, 3,  5 , 7 ],
+     [8, 10, 12, 14],
+     [9, 11, 13, 15]]
+    """
+    # "unrolled index in array"
+    ij = i*size_j + j
+    # number of elements in `size_g` groups
+    # of `size_j` columns
+    size_gj = size_g * size_j
+    # index of the group in which (i,j) is
+    group_id = ij // size_gj 
+    # row-index of the first element of this group
+    off_i = group_id * size_g
+    # last group may have fewer rows
+    size_g = minimum(size_i - off_i, size_g) 
+    # new row and column indices
+    new_i = off_i + (ij % size_g)
+    new_j = (ij % size_gj) // size_g
+    return new_i, new_j

@@ -128,7 +128,10 @@ def randint4x(seed, offset):
     :param offsets: The offsets to generate random numbers for.
     """
     z = 0
-    return philox_f(offset, z, z, z, seed, z)
+    seed = hacky_to_uint64(seed) # uint will solve this
+    seed_hi = ((seed >> 32) & 0xffffffff).to(tl.int32)
+    seed_lo = (seed & 0xffffffff).to(tl.int32)
+    return philox_f(offset, z, z, z, seed_lo, seed_hi)
 
 
 @triton.jit

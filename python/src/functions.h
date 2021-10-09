@@ -314,7 +314,7 @@ std::string zeros_docstr = R"pbdoc(
 
     :param shape: Shape of the new array, e.g., (8, 16) or (8, )
     :type shape: tuple of ints
-    :param dtype: Data-type of the new array, e.g., triton.float16
+    :param dtype: Data-type of the new array, e.g., tl.float16
     :type dtype: triton.ir.dtype
   )pbdoc";
 ir::value *zeros(ir::type::block_shapes_t shape, type_code _dtype, ir::builder *builder) {

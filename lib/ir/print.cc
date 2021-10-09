@@ -126,7 +126,7 @@ void SlotTracker::create_function_slot(const value *v) {
 }
 
 int SlotTracker::get_local_slot(const value *v) {
-  assert(dynamic_cast<constant>(v) == nullptr && "Can't get a constant slot");
+  assert(dynamic_cast<const constant*>(v) == nullptr && "Can't get a constant slot");
 
   // Check for uninitialized state and do lazy initialization.
   initialize_if_needed();
