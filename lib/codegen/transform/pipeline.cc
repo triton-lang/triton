@@ -105,6 +105,9 @@ struct pipeline_info_t {
   ir::load_inst* load;
   ir::phi_node* ptr;
   ir::dot_inst* dot;
+
+  pipeline_info_t(ir::load_inst* load, ir::phi_node* ptr, ir::dot_inst* dot)
+    : load(load), ptr(ptr), dot(dot) {}
 };
 
 void pipeline::run(ir::module &mod) {
