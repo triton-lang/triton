@@ -515,6 +515,20 @@ def test_dot(epilogue, device='cuda'):
     assert 'ld.global.v4' in ptx
     assert 'st.global.v4' in ptx
 
+def test_dot_without_load():
+    @triton.jit
+    def kernel(out, **meta):
+        pid = tl.program_id(axis=0)
+        a = tl.zeros((32, 32), tl.float32)
+        b = tl.zeros((32, 32), tl.float32)
+        c = tl.zeros((32, 32), tl.float32)
+        c = tl.dot(a, b)
+        pout = out + tl.arange(0, 32)[:, None]*32 + tl.arange(0, 32)[None, :]
+        tl.store(pout, c)
+        
+    out = torch.ones((32,32), dtype=torch.float32, device="cuda")
+    kernel[(1,)](out)
+
 # ---------------
 # test arange
 # ---------------
