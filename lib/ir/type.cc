@@ -201,6 +201,9 @@ block_type* block_type::get(type *elt_ty, const block_shapes_t &shapes) {
   assert(elt_ty && "Can't get a tile of <null> type!");
   assert(shapes.size() && "Can't create a tile with empty shapes!");
   assert(is_valid_elt_ty(elt_ty) && "Invalid type for tile element!");
+  for (size_t i = 0; i < shapes.size(); i++) {
+    assert(shapes[i] % 8 == 0 && "Dimension must be multiply of 8");
+  }
   // look-up
   context_impl *impl = elt_ty->get_context().p_impl.get();
   block_type *&entry = impl->block_tys[std::make_pair(elt_ty, shapes)];
