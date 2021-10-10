@@ -363,8 +363,10 @@ ir::value* dispatch::zeros(shape_t shape, ir::type *dtype, ir::builder *builder)
 ir::value *dispatch::reshape(ir::value *input, shape_t dst_shape, ir::builder *builder) {
   unsigned numel = 1;
   for(unsigned s: dst_shape) numel *= s;
-  if(input->get_type()->get_tile_num_elements() != numel)
-    throw semantic_error("cannot reshape block of different shape");
+  if (input->get_type()->get_tile_num_elements() != numel) {
+    auto type = input->get_type();
+    throw semantic_error("cannot reshape block of different shape from type: " + type->repr());
+  }
   return builder->create_reshape(input, dst_shape);
 }
 
@@ -372,8 +374,10 @@ ir::value *dispatch::broadcast(ir::value *input, shape_t shape, ir::builder *bui
   if (!input->get_type()->is_block_ty())
     return builder->create_splat(input, shape);
   auto src_shape = input->get_type()->get_block_shapes();
-  if (src_shape.size() != shape.size())
-    throw std::runtime_error("Cannot broadcast");
+  if (src_shape.size() != shape.size()) {
+    auto type = input->get_type();
+    throw std::runtime_error("Cannot broadcast from type: " + type->repr());
+  }
   if(shape == src_shape)
     return input;
   return builder->create_broadcast(input, shape);
