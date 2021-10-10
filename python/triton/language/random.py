@@ -100,11 +100,9 @@ def uint32_to_uniform_float(x):
     This is originally designed from uint32, but it works with int32 too as long as the int32 uniformly 
     covers all the possible values it can take.
     """
-    mantissa = x & 0x7fffff
-    exp = 127
-    res = mantissa | (exp << 23)
-    return res.to(tl.float32, bitcast=True) - 1.0
-
+    max = 2147483647.
+    x = tl.where(x < 0, -x - 1, x)
+    return x / max
 
 @triton.jit
 def pair_uniform_to_normal(u1, u2):
