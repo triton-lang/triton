@@ -549,16 +549,17 @@ def test_arange(start, device='cuda'):
 # ---------------
 # test load
 # ---------------
-
+# 'bfloat16': torch.bfloat16,
 # Testing masked loads with an intermate copy to shared memory run.
-def test_masked_load_shared_memory(device='cuda'):
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
+def test_masked_load_shared_memory(dtype, device='cuda'):
     M = 32
     N = 32
     K = 8
 
-    in1 = torch.rand((M, K), dtype=torch.float, device=device)
-    in2 = torch.rand((K, N), dtype=torch.float, device=device)
-    out = torch.zeros((M, N), dtype=torch.float, device=device)
+    in1 = torch.rand((M, K), dtype=dtype, device=device)
+    in2 = torch.rand((K, N), dtype=dtype, device=device)
+    out = torch.zeros((M, N), dtype=dtype, device=device)
 
     @triton.jit
     def _kernel(in1_ptr, in2_ptr, output_ptr,
