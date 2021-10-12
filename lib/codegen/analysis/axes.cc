@@ -86,12 +86,19 @@ void axes::update_graph_elementwise(ir::instruction *i, bool connect_ret) {
   if(!op->get_type()->is_block_ty())
     return;
   auto rank = op->get_type()->get_tile_rank();
-  for(unsigned d = 0; d < rank; d++)
-  for(ir::value* opx: i->ops())
-  for(ir::value* opy: i->ops()){
-    if(connect_ret && !i->get_type()->is_void_ty())
-      graph_.add_edge({i, d}, {opx, d});
-    graph_.add_edge({opx, d}, {opy, d});
+  for(unsigned d = 0; d < rank; d++) {
+    if (!connect_ret) {
+      graph_.add_edge({i, d}, {i, d});
+    }
+
+    for(ir::value* opx: i->ops()) {
+      for(ir::value* opy: i->ops()) {
+        if(connect_ret && !i->get_type()->is_void_ty()) {
+          graph_.add_edge({i, d}, {opx, d});
+        }
+        graph_.add_edge({opx, d}, {opy, d});
+      }
+    }
   }
 }
 
