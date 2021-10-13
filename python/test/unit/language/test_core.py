@@ -549,6 +549,55 @@ def test_arange(start, device='cuda'):
 # ---------------
 # test load
 # ---------------
+# 'bfloat16': torch.bfloat16,
+# Testing masked loads with an intermate copy to shared memory run.
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
+def test_masked_load_shared_memory(dtype, device='cuda'):
+    M = 32
+    N = 32
+    K = 8
+
+    in1 = torch.rand((M, K), dtype=dtype, device=device)
+    in2 = torch.rand((K, N), dtype=dtype, device=device)
+    out = torch.zeros((M, N), dtype=dtype, device=device)
+
+    @triton.jit
+    def _kernel(in1_ptr, in2_ptr, output_ptr,
+                in_stride, in2_stride, out_stride,
+                in_numel, in2_numel, out_numel, **meta):
+        M = meta['M']
+        N = meta['N']
+        K = meta['K']
+
+        M_offsets = tl.arange(0, M)
+        N_offsets = tl.arange(0, N)
+        K_offsets = tl.arange(0, K)
+
+        in_offsets =  M_offsets[:, None] * in_stride + K_offsets[None,:]
+        in2_offsets =  K_offsets[:, None] * in2_stride + N_offsets[None,:]
+
+        # Load inputs.
+        x = tl.load(in1_ptr + in_offsets, mask=in_offsets < in_numel)
+        w = tl.load(in2_ptr + in2_offsets, mask=in2_offsets < in2_numel)
+
+        # Without a dot product the memory doesn't get promoted to shared.
+        o = tl.dot(x, w)
+
+        # Store output
+        output_offsets =  M_offsets[:, None] * out_stride + N_offsets[None,:]
+        tl.store(output_ptr + output_offsets, o, mask=output_offsets < in2_numel)
+
+    pgm = _kernel[(1,)](in1, in2, out,
+                  in1.stride()[0],
+                  in2.stride()[0],
+                  out.stride()[0],
+                  in1.numel(),
+                  in2.numel(),
+                  out.numel(),
+                  M=M, N=N, K=K)
+
+    reference_out =torch.matmul(in1, in2)
+    triton.testing.allclose(out, reference_out)
 
 # ---------------
 # test store
