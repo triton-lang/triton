@@ -623,7 +623,7 @@ class Kernel:
             hashed_key = hashlib.md5(key.encode("utf-8")).hexdigest()
 
             # create cache directory
-            cache_dir = os.environ.get('TRITON_CACHE_DIR', '/tmp/triton/')
+            cache_dir = os.environ.get('TRITON_CACHE_DIR', '')
             if cache_dir and not os.path.exists(cache_dir):
                 os.makedirs(cache_dir, exist_ok=True)
 
