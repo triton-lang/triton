@@ -100,9 +100,9 @@ def uint32_to_uniform_float(x):
     This is originally designed from uint32, but it works with int32 too as long as the int32 uniformly 
     covers all the possible values it can take.
     """
-    max = 2147483647.
+    max = 4.656613e-10 # = 1/MAX_INT = 1/2147483647.
     x = tl.where(x < 0, -x - 1, x)
-    return x / max
+    return x * max
 
 @triton.jit
 def pair_uniform_to_normal(u1, u2):
