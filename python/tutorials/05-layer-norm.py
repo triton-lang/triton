@@ -1,3 +1,8 @@
+"""
+Layer Normalization
+====================
+"""
+
 import torch
 import triton.language as tl
 import triton
