@@ -387,7 +387,7 @@ def dot(input, other, _builder=None):
 
 
 @builtin
-def load(pointer, mask=None, other=None, _builder=None):
+def load(pointer, mask=None, other=None, cache_modifier="", _builder=None):
     """
     Return a block of data whose values are, elementwise, loaded from memory at location defined by :code:`pointer`.
 
@@ -402,7 +402,7 @@ def load(pointer, mask=None, other=None, _builder=None):
     :param other: if mask[idx] is false, return other[idx]
     :type other: Block, optional
     """
-    return frontend.load(pointer, mask, other, _builder)
+    return frontend.load(pointer, mask, other, cache_modifier, _builder)
 
 
 @builtin

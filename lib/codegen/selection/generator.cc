@@ -629,10 +629,10 @@ void generator::visit_load_inst(ir::load_inst* x){
     // -----
     std::ostringstream asm_oss;
     asm_oss << "@$" << n_words; // predicate
-//    if(force_nc_cache_)
+   if (x->get_cache_modifier() == ir::load_inst::CA)
       asm_oss << " ld.global";
-//    else
-//      asm_oss << " ld.global.cg";
+   else
+     asm_oss << " ld.global.cg";
     if(n_words > 1)
       asm_oss << ".v" << n_words; // vector width
     asm_oss << ".b" << width; // word size
