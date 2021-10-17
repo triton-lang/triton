@@ -396,7 +396,8 @@ public:
 class load_inst: public io_inst {
 public:
   enum CACHE_MODIFIER : uint32_t {
-    CA=0, 
+    NONE=0,
+    CA,
     CG,
   }; 
 
@@ -407,6 +408,7 @@ protected:
   std::string get_cache_modifier_repr() const {
     if (cache_ == CA) return ".ca";
     if (cache_ == CG) return ".cg";
+    return ""; 
   }
   CACHE_MODIFIER cache_;
 

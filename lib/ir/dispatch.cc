@@ -517,7 +517,7 @@ ir::value *dispatch::load(ir::value* ptr, ir::value* mask, ir::value* other, con
     ptr_ty = pointer_type::get(elt_ty, ptr_ty->get_pointer_address_space());
     ptr = dispatch::cast(ptr, ptr_ty, builder);
   }
-  load_inst::CACHE_MODIFIER cache = load_inst::CA; // default
+  load_inst::CACHE_MODIFIER cache = load_inst::None; // default
   if (!cache_modifier.empty()) {
     if (cache_modifier == ".ca")
       cache = load_inst::CA;

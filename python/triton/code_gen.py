@@ -537,7 +537,7 @@ class Kernel:
     def __init__(self, fn):
         self.fn = fn
 
-    def _compile(self, *wargs, device, attributes, constants, num_warps, num_stages, force_nc_cache, **meta):
+    def _compile(self, *wargs, device, attributes, constants, num_warps, num_stages, **meta):
         # create IR module
         context = _triton.ir.context()
         # get just-in-time proto-type of kernel
@@ -560,13 +560,13 @@ class Kernel:
             backend = _triton.runtime.backend.CUDA
         else:
             backend = _triton.runtime.backend.ROCM
-        name, asm, shared_mem = _triton.code_gen.compile_ttir(backend, generator.module, device, num_warps, num_stages, force_nc_cache)
+        name, asm, shared_mem = _triton.code_gen.compile_ttir(backend, generator.module, device, num_warps, num_stages)
         max_shared_memory = _triton.runtime.max_shared_memory(backend, device)
         if shared_mem > max_shared_memory:
             raise OutOfResources(shared_mem, max_shared_memory, "shared memory")
         return Binary(backend, name, asm, shared_mem, num_warps)
 
-    def __call__(self, *wargs, grid, num_warps=4, num_stages=2, force_nc_cache=False, **meta):
+    def __call__(self, *wargs, grid, num_warps=4, num_stages=2, **meta):
         # device inference
         tensor_idxs = [i for i, arg in enumerate(wargs) if hasattr(arg, 'data_ptr')]
         if len(tensor_idxs) == 0:
@@ -643,7 +643,7 @@ class Kernel:
             if binary is None:
                 binary = self._compile(
                     *wargs, device=device_idx, attributes=attributes,
-                    num_warps=num_warps, num_stages=num_stages, force_nc_cache=force_nc_cache, 
+                    num_warps=num_warps, num_stages=num_stages, 
                     constants=constants, **meta
                 )
                 if bin_cache_path:
