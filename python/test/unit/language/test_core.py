@@ -599,7 +599,7 @@ def test_masked_load_shared_memory(dtype, device='cuda'):
     reference_out =torch.matmul(in1, in2)
     triton.testing.allclose(out, reference_out)
 
-@pytest.mark.parametrize("cache", [".ca", ".cg"])
+@pytest.mark.parametrize("cache", ["", ".ca", ".cg"])
 def test_load_cache_modifier(cache):
     src = torch.empty(128, device='cuda')
     dst = torch.empty(128, device='cuda')
@@ -613,9 +613,14 @@ def test_load_cache_modifier(cache):
     pgm = _kernel[(1,)](dst, src, CACHE=cache)
     ptx = pgm.asm['ptx']
 
+    if cache == '':
+        assert 'ld.global.ca' not in ptx
+        assert 'ld.global.cg' not in ptx
     if cache == '.cg':
         assert 'ld.global.cg' in ptx
+        assert 'ld.global.ca' not in ptx
     if cache == '.ca':
+        assert 'ld.global.ca' in ptx
         assert 'ld.global.cg' not in ptx
 
 # ---------------
