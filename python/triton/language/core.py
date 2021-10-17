@@ -401,6 +401,8 @@ def load(pointer, mask=None, other=None, cache_modifier="", _builder=None):
     :type mask: Block of triton.int1, optional
     :param other: if mask[idx] is false, return other[idx]
     :type other: Block, optional
+    :param cache_modifier: changes cache option in nvidia ptx
+    'type cache_modifier: str, optional
     """
     return frontend.load(pointer, mask, other, cache_modifier, _builder)
 
