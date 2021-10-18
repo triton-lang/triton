@@ -130,9 +130,9 @@ public:
   value *create_xor(value *lhs, value *rhs);
   value *create_or(value *lhs, value *rhs);
   // Input/Output
-  value *create_load(value *arg);
+  value *create_load(value *arg, load_inst::CACHE_MODIFIER cache);
   value *create_store(value *ptr, value *val);
-  value *create_masked_load(value *arg, value *mask, value *false_value);
+  value *create_masked_load(value *arg, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache);
   value *create_masked_store(value *ptr, value *val, value *mask);
   // Block instruction
   value *create_splat(value *arg, const type::block_shapes_t &shapes);
@@ -154,7 +154,7 @@ public:
   value *create_select(value *pred, value *if_value, value *else_value);
   // Intrinsics
   value *create_copy_to_shared(value *arg);
-  value *create_masked_load_async(value *arg, value *mask, value *false_value);
+  value *create_masked_load_async(value *arg, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache);
   value *create_copy_from_shared(value *arg);
   value *create_barrier(const std::string &name = "");
   value *create_async_wait(int N);

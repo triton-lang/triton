@@ -111,6 +111,8 @@ struct pipeline_info_t {
 };
 
 void pipeline::run(ir::module &mod) {
+  if (num_stages_ <= 1)
+    return;
   // *Very* conservative heuristics for pre-fetching.
   // A load instruction can be pipelined if:
   //   - the pointer is a phi node that references a value
@@ -176,7 +178,7 @@ void pipeline::run(ir::module &mod) {
         false_value = remat_false_value;
       } else
         false_value = builder.create_splat(ir::undef_value::get(ty->get_scalar_ty()), ty->get_block_shapes());
-      first_loads[0] = builder.create_masked_load(first_ptrs[0], first_masks[0], false_value);
+      first_loads[0] = builder.create_masked_load(first_ptrs[0], first_masks[0], false_value, load->get_cache_modifier());
 
       for (int stage = 1; stage < num_stages-1; ++stage) {
         // mask is the loop condition of the previous iteration
@@ -191,7 +193,7 @@ void pipeline::run(ir::module &mod) {
           first_masks[stage] = builder.create_and(first_masks[stage], remat_mask);
           false_value = remat_false_value;
         }
-        first_loads[stage] = builder.create_masked_load(first_ptrs[stage], first_masks[stage], false_value);
+        first_loads[stage] = builder.create_masked_load(first_ptrs[stage], first_masks[stage], false_value, load->get_cache_modifier());
       }
 
       // create new phis for induction variables
@@ -220,7 +222,7 @@ void pipeline::run(ir::module &mod) {
         next_mask = builder.create_and(next_mask, remat_mask);
         false_value = remat_false_value;
       }
-      ir::value* next_load = builder.create_masked_load(next_ptr, next_mask, false_value);
+      ir::value* next_load = builder.create_masked_load(next_ptr, next_mask, false_value, load->get_cache_modifier());
 
 
       // phi node
@@ -255,7 +257,7 @@ void pipeline::run(ir::module &mod) {
       }
       else
         false_value = builder.create_splat(ir::undef_value::get(ty->get_scalar_ty()), ty->get_block_shapes());
-      ir::value* first_load = builder.create_masked_load(first_ptr, first_mask, false_value);
+      ir::value* first_load = builder.create_masked_load(first_ptr, first_mask, false_value, load->get_cache_modifier());
       // pre-fetch next iteration
       builder.set_insert_point(block->get_inst_list().back());
       ir::value* next_ptr = ptr->get_value_for_block(block);
@@ -266,7 +268,7 @@ void pipeline::run(ir::module &mod) {
         next_mask = builder.create_and(next_mask, remat_mask);
         false_value = remat_false_value;
       }
-      ir::value* next_load = builder.create_masked_load(next_ptr, next_mask, false_value);
+      ir::value* next_load = builder.create_masked_load(next_ptr, next_mask, false_value, load->get_cache_modifier());
       // phi node
       builder.set_insert_point(block->get_first_non_phi());
       ir::phi_node* new_load = builder.create_phi(ty, 2);

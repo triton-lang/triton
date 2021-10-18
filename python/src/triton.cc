@@ -203,7 +203,7 @@ std::tuple<uint64_t, uint64_t> hip_load_binary(const std::string& name, asm_map_
 // CUDA
 std::tuple<std::string, asm_map_t, int> cu_compile_ttir(const std::string& name, ir::module &ir, 
                                                                uint64_t device, int num_warps, int num_stages,
-                                                               bool force_nc_cache, asm_map_t &asm_map){
+                                                               asm_map_t &asm_map){
   llvm::LLVMContext ctx;
   // device properties
   CUdevice dev = (CUdevice)device;
@@ -215,7 +215,7 @@ std::tuple<std::string, asm_map_t, int> cu_compile_ttir(const std::string& name,
   // Triton-IR -> NVPTX LLVM-IR
   triton::codegen::nvidia_cu_target target(cc);
   int n_shared_bytes;
-  auto llvm = triton::codegen::add_passes_to_emit_bin(ir, ctx, &target, cc, num_warps, num_stages, force_nc_cache, n_shared_bytes);
+  auto llvm = triton::codegen::add_passes_to_emit_bin(ir, ctx, &target, cc, num_warps, num_stages, n_shared_bytes);
   std::string tmp;
   llvm::raw_string_ostream llir(tmp);
   llir << *llvm;
@@ -236,12 +236,12 @@ std::tuple<std::string, asm_map_t, int> cu_compile_ttir(const std::string& name,
 // HIP
 std::tuple<std::string, asm_map_t, int> hip_compile_ttir(const std::string& name, ir::module &ir, 
                                                                 uint64_t device, int num_warps, int num_stages, 
-                                                                bool force_nc_cache, asm_map_t &asm_map){
+                                                                asm_map_t &asm_map){
   llvm::LLVMContext ctx;
   // Triton-IR -> NVPTX LLVM-IR
   triton::codegen::amd_cl_target target;
   int n_shared_bytes;
-  auto llvm = triton::codegen::add_passes_to_emit_bin(ir, ctx, &target, 70, num_warps, num_stages, force_nc_cache, n_shared_bytes);
+  auto llvm = triton::codegen::add_passes_to_emit_bin(ir, ctx, &target, 70, num_warps, num_stages, n_shared_bytes);
   std::string tmp;
   llvm::raw_string_ostream llir(tmp);
   llir << *llvm;
@@ -255,7 +255,7 @@ std::tuple<std::string, asm_map_t, int> hip_compile_ttir(const std::string& name
 
 void init_triton_codegen(py::module &&m) {
   m.def(
-      "compile_ttir", [](backend_t backend, ir::module &ir, uint64_t device, int num_warps, int num_stages, bool force_nc_cache) {
+      "compile_ttir", [](backend_t backend, ir::module &ir, uint64_t device, int num_warps, int num_stages) {
         std::string name = ir.get_function_list()[0]->get_name();
         // record asm as we generate
         asm_map_t asm_map;
@@ -264,9 +264,9 @@ void init_triton_codegen(py::module &&m) {
         asm_map["ttir"] = py::cast(ttir.str());
         llvm::LLVMContext ctx;
         if(backend == CUDA)
-          return cu_compile_ttir(name, ir, device, num_warps, num_stages, force_nc_cache, asm_map);
+          return cu_compile_ttir(name, ir, device, num_warps, num_stages, asm_map);
         if(backend == ROCM)
-          return hip_compile_ttir(name, ir, device, num_warps, num_stages, force_nc_cache, asm_map);
+          return hip_compile_ttir(name, ir, device, num_warps, num_stages, asm_map);
       }, py::return_value_policy::take_ownership);
   m.def("load_binary", [](backend_t backend, const std::string& name, asm_map_t &asm_map, size_t n_shared_bytes, uint64_t dev){
         if(backend == CUDA)
