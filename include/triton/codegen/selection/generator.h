@@ -122,8 +122,7 @@ public:
             analysis::allocation *alloc,
             analysis::swizzle *swizzle,
             target *tgt,
-            unsigned num_warps,
-            bool force_nc_cache = false);
+            unsigned num_warps);
 
   void visit_value(ir::value* v);
   void visit_phi_node(ir::phi_node*);
@@ -213,7 +212,6 @@ private:
   std::set<ir::value*> seen_;
 
   unsigned num_warps_;
-  bool force_nc_cache_;
 
   std::map<analysis::data_layout*, Value*> offset_a_m_;
   std::map<analysis::data_layout*, Value*> offset_a_k_;

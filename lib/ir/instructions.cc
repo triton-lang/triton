@@ -433,8 +433,8 @@ io_inst::io_inst(type *ty, value_id_t id, unsigned num_ops, const std::string &n
 { }
 
 // load_inst
-load_inst::load_inst(value *ptr, value_id_t id, unsigned num_ops, const std::string &name, instruction *next)
-  : io_inst(get_pointee_type(ptr->get_type()), id, num_ops, name, next)
+load_inst::load_inst(value *ptr, value_id_t id, unsigned num_ops, load_inst::CACHE_MODIFIER cache, const std::string &name, instruction *next)
+  : io_inst(get_pointee_type(ptr->get_type()), id, num_ops, name, next), cache_(cache)
 { }
 
 // load
@@ -447,41 +447,44 @@ type *load_inst::get_pointee_type(type *ty) {
 }
 
 // unmasked_load
-unmasked_load_inst::unmasked_load_inst(value *ptr, const std::string &name, instruction *next)
-  : load_inst(ptr, INST_UNMASKED_LOAD, 1, name, next) {
+unmasked_load_inst::unmasked_load_inst(value *ptr, load_inst::CACHE_MODIFIER cache, const std::string &name, instruction *next)
+  : load_inst(ptr, INST_UNMASKED_LOAD, 1, cache, name, next) {
   set_operand(0, ptr);
 }
 
-unmasked_load_inst* unmasked_load_inst::create(value *ptr, const std::string &name, instruction *next) {
-  return new unmasked_load_inst(ptr, name, next);
+unmasked_load_inst* unmasked_load_inst::create(value *ptr, load_inst::CACHE_MODIFIER cache, const std::string &name, instruction *next) {
+  return new unmasked_load_inst(ptr, cache, name, next);
 }
 
 // masked load
-masked_load_inst::masked_load_inst(value *ptr, value *mask, value *false_value,
+masked_load_inst::masked_load_inst(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache,
                                    const std::string &name, instruction *next)
-  : load_inst(ptr, INST_MASKED_LOAD, 3, name, next) {
+  : load_inst(ptr, INST_MASKED_LOAD, 3, cache, name, next) {
   set_operand(0, ptr);
   set_operand(1, mask);
   set_operand(2, false_value);
 }
 
 masked_load_inst* masked_load_inst::create(value *ptr, value *mask, value *false_value,
+                                           load_inst::CACHE_MODIFIER cache,
                                            const std::string &name, instruction *next) {
-  return new masked_load_inst(ptr, mask, false_value, name, next);
+  return new masked_load_inst(ptr, mask, false_value, cache, name, next);
 }
 
 // masked load async
 masked_load_async_inst::masked_load_async_inst(value *ptr, value *mask, value *false_value,
+                                   load_inst::CACHE_MODIFIER cache,
                                    const std::string &name, instruction *next)
-  : load_inst(ptr, INST_MASKED_LOAD_ASYNC, 3, name, next) {
+  : load_inst(ptr, INST_MASKED_LOAD_ASYNC, 3, cache, name, next) {
   set_operand(0, ptr);
   set_operand(1, mask);
   set_operand(2, false_value);
 }
 
 masked_load_async_inst* masked_load_async_inst::create(value *ptr, value *mask, value *false_value,
+                                           load_inst::CACHE_MODIFIER cache,
                                            const std::string &name, instruction *next) {
-  return new masked_load_async_inst(ptr, mask, false_value, name, next);
+  return new masked_load_async_inst(ptr, mask, false_value, cache, name, next);
 }
 
 // store
