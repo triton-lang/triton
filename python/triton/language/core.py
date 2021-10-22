@@ -346,6 +346,18 @@ def broadcast_to(input, shape, _builder=None):
     """
     return frontend.broadcast_to(input, shape, _builder)
 
+@builtin
+def cat(input, other, _builder=None):
+    """
+    Concatenate the given blocks
+
+    :param input: The first input block.
+    :type input: 
+    :param other: The second input block.
+    :type other: 
+    """
+    return frontend.cat(input, other, _builder)
+
 
 @builtin
 def reshape(input, shape, _builder=None):

@@ -116,7 +116,8 @@ void axes::update_graph(ir::instruction *i) {
   switch (i->get_id()) {
     case ir::INST_REDUCE:            return update_graph_reduce(i);
     case ir::INST_RESHAPE:           return update_graph_reshape(i);
-    case ir::INST_SPLAT:             return update_graph_no_edge(i);;
+    case ir::INST_SPLAT:             return update_graph_no_edge(i);
+    case ir::INST_CAT:               return update_graph_elementwise(i, true);
     case ir::INST_TRANS:             return update_graph_trans(i);
     case ir::INST_BROADCAST:         return update_graph_broadcast(i);
     case ir::INST_DOT:               return update_graph_dot(i);

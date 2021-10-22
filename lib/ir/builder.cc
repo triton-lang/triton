@@ -297,6 +297,10 @@ value *builder::create_reshape(value *arg, const type::block_shapes_t &shapes) {
   return insert(reshape_inst::create(arg, shapes));
 }
 
+value *builder::create_cat(value *lhs, value *rhs) {
+  return insert(cat_inst::create(lhs, rhs));
+}
+
 value *builder::create_splat(value *arg, const type::block_shapes_t &shapes) {
   return insert(splat_inst::create(arg, shapes));
 }

@@ -137,6 +137,7 @@ public:
   // Block instruction
   value *create_splat(value *arg, const type::block_shapes_t &shapes);
   value *create_reshape(value *arg, const type::block_shapes_t &shapes);
+  value *create_cat(value *lhs, value *rhs);
   value *create_broadcast(value *arg, const type::block_shapes_t &shapes);
   // Built-in instruction
   value *create_get_program_id(unsigned axis);

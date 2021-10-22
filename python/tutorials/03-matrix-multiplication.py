@@ -224,6 +224,8 @@ def matmul_kernel(
     stride_am, stride_ak,
     stride_bk, stride_bn,
     stride_cm, stride_cn,
+    # Numerical precision
+    seed,
     # Meta-parameters
     **meta,
 ):
@@ -286,8 +288,9 @@ def matmul_kernel(
     # if meta['ACTIVATION']: 
     #     accumulator = meta['ACTIVATION'](accumulator)
     # try random
-    rand = pid * BLOCK_SIZE_M * BLOCK_SIZE_N + tl.arange(0, 32768)
-    rand = tl.rand(stride_cm*0, rand)
+    offs = pid * BLOCK_SIZE_M * BLOCK_SIZE_N + tl.arange(0, 8192)
+    rand1, rand2, rand3, rand4 = tl.rand4x(seed, offs)
+    rand = tl.cat(tl.cat(rand1, rand2), tl.cat(rand3, rand4))
     rand = tl.reshape(rand, [meta['BLOCK_SIZE_M'], meta['BLOCK_SIZE_N']])
     accumulator += rand
     c = accumulator.to(tl.float16)
@@ -334,6 +337,7 @@ def matmul(a, b, activation=None):
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
+        0,
         ACTIVATION=activation,
     )
     # print(pgm.asm['ptx'])

@@ -368,6 +368,10 @@ ir::value *dispatch::reshape(ir::value *input, shape_t dst_shape, ir::builder *b
   return builder->create_reshape(input, dst_shape);
 }
 
+ir::value *dispatch::cat(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
+  return builder->create_cat(lhs, rhs);
+}
+
 ir::value *dispatch::broadcast(ir::value *input, shape_t shape, ir::builder *builder) {
   if (!input->get_type()->is_block_ty())
     return builder->create_splat(input, shape);

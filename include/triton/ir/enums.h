@@ -132,6 +132,7 @@ enum value_id_t: unsigned {
   // retile
   INST_RESHAPE,
   INST_SPLAT,
+  INST_CAT,
   INST_BROADCAST,
   INST_DOWNCAST,
   // builtin
