@@ -144,44 +144,15 @@ import torch
 import triton
 import triton.language as tl
 
-# @triton.jit
-# def _stoch_round(x, noise):
-#     sign = x >= 0
-#     abs_x_f32 = tl.abs(x)
-#     abs_x_f16 = abs_x_f32.to(tl.float16)
-#     delta = tl.where(abs_x_f32 > abs_x_f16, 1, -1).to(tl.int16)
-#     other = (abs_x_f16.to(tl.int16, bitcast=True) + delta).to(tl.float16, bitcast=True)
-#     d_abs_x_f16 = tl.abs(abs_x_f16.to(tl.float32) - abs_x_f32)
-#     d_other = tl.abs(other.to(tl.float32) - abs_x_f32)
-#     p_abs_x_f16 = d_other / (d_abs_x_f16 + d_other)
-#     ret = tl.where(noise < p_abs_x_f16, abs_x_f16, other)
-#     zero = 0.0
-#     zero = zero.to(tl.float16)
-#     ret = tl.where(abs_x_f32 == 0.0, zero, ret)
-#     ret = tl.where(sign, ret, -ret)
-#     return ret
 
 @triton.jit
-def _stoch_round(x, noise):
+def stoch_round(x, noise):
     stoch_mask = 0xFFFFFFFF >> (9  + 10)
     trunc_mask = 0xFFFFFFFF << (23 - 10)
     noise = noise & stoch_mask
     z = (x.to(tl.int32, bitcast=True) + noise) & trunc_mask
     z = z.to(tl.float32, bitcast=True).to(tl.float16)
     return z
-
-# @triton.jit
-# def stoch_round(Z, X, seed, **META):
-#     x = tl.load(X)
-#     stoch_mask = 0xFFFFFFFF >> (9  + META['FBITS'])
-#     trunc_mask = 0xFFFFFFFF << (23 - META['FBITS'])
-#     # noise = tl.randint(seed, off) & stoch_mask
-#     noise = tl.arange(0, 8192)
-#     z = (x.to(tl.int32, bitcast=True) + noise) & trunc_mask
-#     z = z.to(tl.float32, bitcast=True).to(tl.float16)
-#     z = z.to(tl.float32)
-#     mean_z = tl.sum(z, axis=0) / 8192
-#     tl.store(Z, mean_z)
 
 # %
 # :code:`triton.jit`'ed functions can be auto-tuned by using the `triton.autotune`
@@ -225,7 +196,7 @@ def matmul_kernel(
     stride_bk, stride_bn,
     stride_cm, stride_cn,
     # Numerical precision
-    seed,
+    seed, scale_ptr,
     # Meta-parameters
     **meta,
 ):
@@ -283,18 +254,16 @@ def matmul_kernel(
         # Advance the ptrs to the next K block
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
-    # you can fuse arbitrary activation functions here
-    # while the accumulator is still in FP32 !
-    # if meta['ACTIVATION']: 
-    #     accumulator = meta['ACTIVATION'](accumulator)
-    # try random
-    offs = pid * BLOCK_SIZE_M * BLOCK_SIZE_N + tl.arange(0, 8192)
-    rand1, rand2, rand3, rand4 = tl.rand4x(seed, offs)
-    rand = tl.cat(tl.cat(rand1, rand2), tl.cat(rand3, rand4))
-    rand = tl.reshape(rand, [meta['BLOCK_SIZE_M'], meta['BLOCK_SIZE_N']])
-    accumulator += rand
-    c = accumulator.to(tl.float16)
-
+    # unrolled = 1e-30 + tl.abs(unrolled) / 65504.0
+    c = accumulator.to(tl.float32)
+    unrolled = tl.reshape(accumulator, [32768])
+    scale = tl.sum(unrolled, 0)
+    tl.store(scale_ptr, scale)
+    # offs = pid * BLOCK_SIZE_M * BLOCK_SIZE_N + tl.arange(0, 8192)
+    # rand1, rand2, rand3, rand4 = tl.randint4x(seed, offs)
+    # rand = tl.cat(tl.cat(rand1, rand2), tl.cat(rand3, rand4))
+    # rand = tl.reshape(rand, [meta['BLOCK_SIZE_M'], meta['BLOCK_SIZE_N']])
+    # c = stoch_round(accumulator, rand)
     # -----------------------------------------------------------
     # Write back the block of the output matrix C
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
@@ -302,6 +271,8 @@ def matmul_kernel(
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     tl.store(c_ptrs, c, mask=c_mask)
+    # flexpoint
+    # stochastic rounding
 
 
 # we can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`
@@ -327,6 +298,7 @@ def matmul(a, b, activation=None):
     ), "We don't check memory-out-of-bounds with K so K must be divisible by BLOCK_SIZE_K"
     # allocates output
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
+    scale = torch.empty((1,), device=a.device, dtype=torch.float32)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
@@ -337,10 +309,11 @@ def matmul(a, b, activation=None):
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
-        0,
+        0, scale,
         ACTIVATION=activation,
     )
-    # print(pgm.asm['ptx'])
+    print(pgm.asm['ptx'])
+    exit()
     return c
 
 
@@ -361,7 +334,7 @@ if triton.testing.allclose(triton_output, torch_output):
     print("✅ Triton and Torch match")
 else:
     print("❌ Triton and Torch differ")
-exit()
+# exit()
 # %%
 # Benchmark
 # --------------
