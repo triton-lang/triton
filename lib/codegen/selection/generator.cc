@@ -25,6 +25,53 @@ namespace codegen{
 
 using namespace llvm;
 
+InsertPtMover::InsertPtMover(Builder *&builder, const std::vector<Value*>& args, std::vector<Instruction*> syncs)
+      : builder_(builder){
+    // save current position
+    block_ = builder_->GetInsertBlock();
+    it_ = builder_->GetInsertPoint();
+    // get position of "latest" arg
+    Instruction* max_inst = nullptr;
+    int max_dist = 0;
+    for(Value* v: args){
+      Instruction* curr_inst = dyn_cast<Instruction>(v);
+      // not an instruction (e.g., constant) -- skip
+      if(!curr_inst)
+        continue;
+      // only re-orders when all arguments are in insert block
+      if(curr_inst->getParent() != block_)
+        return;
+      auto curr_it = BasicBlock::iterator(curr_inst);
+      auto curr_dist = std::distance(block_->begin(), curr_it);
+      if(curr_dist > max_dist){
+        max_inst = curr_inst;
+        max_dist = curr_dist;
+      }
+    }
+    if(!max_inst)
+      return;
+    auto it = BasicBlock::iterator(max_inst);
+    ++it;
+    // insert point can be moved before all phis are declared
+    auto first_non_phi = BasicBlock::iterator(block_->getFirstNonPHI());
+    int min_distance = std::distance(block_->begin(), first_non_phi);
+    if(max_dist < min_distance)
+      it = first_non_phi;
+    // insert point cannot move across sync boundaries
+    for(Instruction* i: syncs){
+      auto it_i = BasicBlock::iterator(i);
+      if(std::distance(it_i, it_) < 0 != std::distance(it_i, it) < 0){
+        return;
+      }
+    }
+    builder_->SetInsertPoint(block_, it);
+  }
+
+InsertPtMover::~InsertPtMover(){
+  builder_->SetInsertPoint(block_, it_);
+}
+
+
 Value* adder::operator()(Value *x, Value *y, const std::string& name) {
   // (x + cst) + y -> (x + y) + cst
   if(auto* bin = dyn_cast<BinaryOperator>(x))
@@ -313,6 +360,7 @@ void generator::visit_binary_operator(ir::binary_operator*x) {
   for(indices_t idx: idxs_.at(x)){
     Value *lhs = vals_[x->get_operand(0)][idx];
     Value *rhs = vals_[x->get_operand(1)][idx];
+    InsertPtMover reorder(builder_, {lhs, rhs}, syncs_[builder_->GetInsertBlock()]);
     auto op = cvt(x->get_op());
     if(op == ll::Add)
        vals_[x][idx] = add(lhs, rhs);
@@ -364,6 +412,7 @@ void generator::visit_icmp_inst(ir::icmp_inst* x) {
   for(indices_t idx: idxs_.at(x)){
     Value *lhs = vals_[x->get_operand(0)][idx];
     Value *rhs = vals_[x->get_operand(1)][idx];
+    InsertPtMover reorder(builder_, {lhs, rhs}, syncs_[builder_->GetInsertBlock()]);
     vals_[x][idx] = icmp(cvt(x->get_pred()), lhs, rhs);
   }
 }
@@ -400,6 +449,7 @@ void generator::visit_fcmp_inst(ir::fcmp_inst* x) {
   for(indices_t idx: idxs_.at(x)){
     Value *lhs = vals_[x->get_operand(0)][idx];
     Value *rhs = vals_[x->get_operand(1)][idx];
+    InsertPtMover reorder(builder_, {lhs, rhs}, syncs_[builder_->GetInsertBlock()]);
     vals_[x][idx] = fcmp(cvt(x->get_pred()), lhs, rhs);
   }
 }
@@ -547,6 +597,7 @@ void generator::visit_cast_inst(ir::cast_inst* x) {
   };
   for(indices_t idx: idxs_.at(x)){
     Value *arg = vals_[x->get_operand(0)][idx];
+    InsertPtMover reorder(builder_, {arg}, syncs_[builder_->GetInsertBlock()]);
     vals_[x][idx] = cast(cvt(x->get_op()), arg, ty);
   }
 }
@@ -887,6 +938,7 @@ void generator::visit_umulhi_inst(ir::umulhi_inst* x){
   for(auto idx: idxs_.at(x)){
     Value* lhs = vals_[x->get_operand(0)][idx];
     Value* rhs = vals_[x->get_operand(1)][idx];
+    InsertPtMover reorder(builder_, {lhs, rhs}, syncs_[builder_->GetInsertBlock()]);
     vals_[x][idx] = call(umulhi, std::vector<llvm::Value*>{lhs, rhs});
   }
  }
@@ -1913,9 +1965,11 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
  */
 void generator::visit_select_inst(ir::select_inst* x) {
   for(indices_t idx: idxs_.at(x)){
-    vals_[x][idx] = select(vals_[x->get_operand(0)][idx],
-                           vals_[x->get_operand(1)][idx],
-                           vals_[x->get_operand(2)][idx]);
+    Value* cond = vals_[x->get_operand(0)][idx];
+    Value* true_val = vals_[x->get_operand(1)][idx];
+    Value* false_val = vals_[x->get_operand(2)][idx];
+    InsertPtMover reorder(builder_, {cond, true_val, false_val}, syncs_[builder_->GetInsertBlock()]);
+    vals_[x][idx] = select(cond, true_val, false_val);
   }
 }
 
@@ -2148,7 +2202,9 @@ void generator::visit_copy_from_shared_inst(ir::copy_from_shared_inst*) {
 
 Instruction* generator::add_barrier() {
   Module *module = builder_->GetInsertBlock()->getModule();
-  return tgt_->add_barrier(module, *builder_);
+  Instruction* ret = tgt_->add_barrier(module, *builder_);
+  syncs_[ret->getParent()].push_back(ret);
+  return ret;
 }
 
 void generator::visit_barrier_inst(ir::barrier_inst*) {

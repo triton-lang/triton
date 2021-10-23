@@ -5,6 +5,7 @@
 
 #include "triton/ir/visitor.h"
 #include "triton/codegen/analysis/layout.h"
+#include "llvm/IR/BasicBlock.h"
 #include <functional>
 
 // forward
@@ -101,6 +102,19 @@ public:
 private:
   Builder** builder_;
 };
+
+class InsertPtMover {
+public:
+  InsertPtMover(Builder*& builder, const std::vector<Value*>& args, std::vector<Instruction*> insts);
+  ~InsertPtMover();
+
+private:
+  Builder*& builder_;
+  BasicBlock* block_;
+  BasicBlock::iterator it_;
+};
+
+
 
 class generator: public ir::visitor, public analysis::layout_visitor {
 private:
@@ -247,6 +261,7 @@ private:
 
   /// PHI nodes
   std::vector<std::tuple<llvm::PHINode*, Value*, ir::basic_block*>> lazy_phi_incs_;
+  std::map<BasicBlock*, std::vector<Instruction*>> syncs_;
 
   /// Record prefetch instrs that needs to be moved
   std::map<ir::value*, std::vector<Value*>> prefetch_latch_to_bb_;
