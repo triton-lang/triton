@@ -1766,42 +1766,42 @@ void generator::visit_reduce1d_inst(ir::reduce_inst* x, std::function<Value*(Val
     Value *val = vals_[arg][idx];
     acc = !acc ? val : do_acc(acc, val);
   }
-//  // reduce within wrap
-//  for(int i = 16; i > 0; i >>= 1)
-//    acc = do_acc(acc, shfl_sync(acc, i));
-//  // pointers
-//  unsigned addr_space = shmem_->getType()->getPointerAddressSpace();
-//  Value *base = bit_cast(shmem_, ptr_ty(ret_ty, addr_space));
-//  Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
-//  Value* warp = udiv(thread, i32(32));
-//  Value* lane = urem(thread, i32(32));
-//  // store warp result in shared memory
-//  add_barrier();
-//  store(neutral, gep(base, lane));
-//  add_barrier();
-//  store(acc, gep(base, warp));
-//  add_barrier();
+  // reduce within wrap
+  for(int i = 16; i > 0; i >>= 1)
+    acc = do_acc(acc, shfl_sync(acc, i));
+  // pointers
+  unsigned addr_space = shmem_->getType()->getPointerAddressSpace();
+  Value *base = bit_cast(shmem_, ptr_ty(ret_ty, addr_space));
+  Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
+  Value* warp = udiv(thread, i32(32));
+  Value* lane = urem(thread, i32(32));
+  // store warp result in shared memory
+  add_barrier();
+  store(neutral, gep(base, lane));
+  add_barrier();
+  store(acc, gep(base, warp));
+  add_barrier();
 
-//  // reduce across warps
-//  Value *cond = icmp_eq(warp, i32(0));
-//  Instruction *barrier = add_barrier();
-//  builder_->SetInsertPoint(barrier->getParent());
-//  Instruction* dummy = builder_->CreateRet(nullptr);
-//  Instruction *term = llvm::SplitBlockAndInsertIfThen(cond, barrier, false);
-//  dummy->removeFromParent();
-//  builder_->SetInsertPoint(term);
-//  Value* ret = load(gep(base, thread));
-//  for(int i = (num_warps_+1)/2; i > 0; i >>= 1){
-//    Value *current = shfl_sync(ret, i);
-//    ret = do_acc(ret, current);
-//  }
-//  store(ret, gep(base, thread));
+  // reduce across warps
+  Value *cond = icmp_eq(warp, i32(0));
+  Instruction *barrier = add_barrier();
+  builder_->SetInsertPoint(barrier->getParent());
+  Instruction* dummy = builder_->CreateRet(nullptr);
+  Instruction *term = llvm::SplitBlockAndInsertIfThen(cond, barrier, false);
+  dummy->removeFromParent();
+  builder_->SetInsertPoint(term);
+  Value* ret = load(gep(base, thread));
+  for(int i = (num_warps_+1)/2; i > 0; i >>= 1){
+    Value *current = shfl_sync(ret, i);
+    ret = do_acc(ret, current);
+  }
+  store(ret, gep(base, thread));
 
-//  // store first warp done
-//  builder_->SetInsertPoint(barrier->getParent());
-//  ret = load(base);
+  // store first warp done
+  builder_->SetInsertPoint(barrier->getParent());
+  ret = load(base);
   for(indices_t idx: idxs_.at(x))
-    vals_[x][idx] = acc;
+    vals_[x][idx] = ret;
 }
 
 /**

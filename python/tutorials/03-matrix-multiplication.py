@@ -254,16 +254,17 @@ def matmul_kernel(
         # Advance the ptrs to the next K block
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
-    # unrolled = 1e-30 + tl.abs(unrolled) / 65504.0
-    c = accumulator.to(tl.float32)
+    # flexpoint
     unrolled = tl.reshape(accumulator, [32768])
-    scale = tl.sum(unrolled, 0)
-    tl.store(scale_ptr, scale)
-    # offs = pid * BLOCK_SIZE_M * BLOCK_SIZE_N + tl.arange(0, 8192)
-    # rand1, rand2, rand3, rand4 = tl.randint4x(seed, offs)
-    # rand = tl.cat(tl.cat(rand1, rand2), tl.cat(rand3, rand4))
-    # rand = tl.reshape(rand, [meta['BLOCK_SIZE_M'], meta['BLOCK_SIZE_N']])
-    # c = stoch_round(accumulator, rand)
+    unrolled = 1e-30 + tl.abs(unrolled) * 1.5266243282852955e-05
+    scale = tl.max(unrolled, 0)
+    tl.atomic_max(scale_ptr, scale)
+    # stochastic rounding
+    offs = pid * BLOCK_SIZE_M * BLOCK_SIZE_N + tl.arange(0, 8192)
+    rand1, rand2, rand3, rand4 = tl.randint4x(seed, offs)
+    rand = tl.cat(tl.cat(rand1, rand2), tl.cat(rand3, rand4))
+    rand = tl.reshape(rand, [meta['BLOCK_SIZE_M'], meta['BLOCK_SIZE_N']])
+    c = stoch_round(accumulator, rand)
     # -----------------------------------------------------------
     # Write back the block of the output matrix C
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
@@ -271,8 +272,6 @@ def matmul_kernel(
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     tl.store(c_ptrs, c, mask=c_mask)
-    # flexpoint
-    # stochastic rounding
 
 
 # we can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`
@@ -312,8 +311,8 @@ def matmul(a, b, activation=None):
         0, scale,
         ACTIVATION=activation,
     )
-    print(pgm.asm['ptx'])
-    exit()
+    # print(pgm.asm['ptx'])
+    # exit()
     return c
 
 
