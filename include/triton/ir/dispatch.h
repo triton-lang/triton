@@ -61,6 +61,7 @@ struct dispatch{
 
   // casting ops
   static ir::value *reshape(ir::value *input, shape_t shape, ir::builder *builder);
+  static ir::value *cat(ir::value *lhs, ir::value *rhs, ir::builder *builder);
   static ir::value *broadcast(ir::value *input, shape_t shape, ir::builder *builder);
   static std::tuple<ir::value*, ir::value*> broadcast(ir::value *lhs, ir::value* rhs, ir::builder *builder);
   static ir::value *bitcast(ir::value *input, ir::type *type, ir::builder *builder);
@@ -90,6 +91,7 @@ struct dispatch{
   static ir::value *sum(ir::value *input, unsigned int axis, ir::builder *builder);
 
   // math
+  static ir::value *umulhi(ir::value *x, ir::value *y, ir::builder *builder);
   static ir::value *exp(ir::value *x, ir::builder *builder);
   static ir::value *log(ir::value *x, ir::builder *builder);
   static ir::value *cos(ir::value *x, ir::builder *builder);

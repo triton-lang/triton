@@ -137,6 +137,7 @@ public:
   // Block instruction
   value *create_splat(value *arg, const type::block_shapes_t &shapes);
   value *create_reshape(value *arg, const type::block_shapes_t &shapes);
+  value *create_cat(value *lhs, value *rhs);
   value *create_broadcast(value *arg, const type::block_shapes_t &shapes);
   // Built-in instruction
   value *create_get_program_id(unsigned axis);
@@ -153,6 +154,8 @@ public:
   value *create_reduce(value *A, reduce_inst::op_t op, unsigned axis);
   value *create_select(value *pred, value *if_value, value *else_value);
   // Intrinsics
+  // These have no place in the IR, and hopefully they can be removed at some point
+  value *create_umulhi(value* lhs, value* rhs);
   value *create_copy_to_shared(value *arg);
   value *create_masked_load_async(value *arg, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache);
   value *create_copy_from_shared(value *arg);

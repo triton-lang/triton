@@ -346,6 +346,18 @@ def broadcast_to(input, shape, _builder=None):
     """
     return frontend.broadcast_to(input, shape, _builder)
 
+@builtin
+def cat(input, other, _builder=None):
+    """
+    Concatenate the given blocks
+
+    :param input: The first input block.
+    :type input: 
+    :param other: The second input block.
+    :type other: 
+    """
+    return frontend.cat(input, other, _builder)
+
 
 @builtin
 def reshape(input, shape, _builder=None):
@@ -524,6 +536,10 @@ def where(condition, x, y, _builder=None):
 # Math
 # -----------------------
 
+@builtin
+def umulhi(x, y, _builder=None):
+    return frontend.umulhi(x, y, _builder)
+
 def _add_math_1arg_docstr(name):
 
     def _decorator(func):
@@ -542,7 +558,6 @@ def _add_math_1arg_docstr(name):
 @_add_math_1arg_docstr("exponential")
 def exp(x, _builder=None):
     return frontend.exp(x, _builder)
-
 
 @builtin
 @_add_math_1arg_docstr("natural logarithm")

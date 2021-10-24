@@ -297,6 +297,10 @@ value *builder::create_reshape(value *arg, const type::block_shapes_t &shapes) {
   return insert(reshape_inst::create(arg, shapes));
 }
 
+value *builder::create_cat(value *lhs, value *rhs) {
+  return insert(cat_inst::create(lhs, rhs));
+}
+
 value *builder::create_splat(value *arg, const type::block_shapes_t &shapes) {
   return insert(splat_inst::create(arg, shapes));
 }
@@ -369,6 +373,9 @@ value *builder::create_select(value *pred, value *if_value, value *else_value){
 //                               intrinsic instructions
 //===----------------------------------------------------------------------===//
 
+value *builder::create_umulhi(value *lhs, value *rhs) {
+  return insert(umulhi_inst::create(lhs, rhs));
+}
 
 value *builder::create_copy_to_shared(value *arg) {
   return insert(copy_to_shared_inst::create(arg));

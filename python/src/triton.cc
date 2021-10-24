@@ -313,6 +313,7 @@ void init_triton_frontend(py::module &&m) {
   m.def("arange", &ir::dispatch::arange, ret::reference);
   m.def("zeros", &ir::dispatch::zeros, ret::reference);
   // type manipuatation
+  m.def("cat", &ir::dispatch::cat, ret::reference);
   m.def("reshape", &ir::dispatch::reshape, ret::reference);
   typedef std::tuple<ir::value *, ir::value *> (*broadcast_ty)(ir::value *, ir::value *, ir::builder *);
   typedef ir::value *(*broadcast_to_ty)(ir::value *, ir::type::block_shapes_t, ir::builder *);
@@ -340,6 +341,7 @@ void init_triton_frontend(py::module &&m) {
   m.def("max", &ir::dispatch::max, ret::reference);
   m.def("sum", &ir::dispatch::sum, ret::reference);
   // math
+  m.def("umulhi", &ir::dispatch::umulhi, ret::reference);
   m.def("exp", &ir::dispatch::exp, ret::reference);
   m.def("log", &ir::dispatch::log, ret::reference);
   m.def("cos", &ir::dispatch::cos, ret::reference);

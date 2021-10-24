@@ -499,6 +499,7 @@ void layouts::run(ir::module &mod) {
     make_graph(i);
   });
 
+
   // connected components
   graph_.connected_components(&values_, &groups_);
 

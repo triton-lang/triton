@@ -368,6 +368,10 @@ ir::value *dispatch::reshape(ir::value *input, shape_t dst_shape, ir::builder *b
   return builder->create_reshape(input, dst_shape);
 }
 
+ir::value *dispatch::cat(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
+  return builder->create_cat(lhs, rhs);
+}
+
 ir::value *dispatch::broadcast(ir::value *input, shape_t shape, ir::builder *builder) {
   if (!input->get_type()->is_block_ty())
     return builder->create_splat(input, shape);
@@ -714,6 +718,11 @@ ir::value *dispatch::sum(ir::value *input, unsigned int axis, ir::builder *build
 //===----------------------------------------------------------------------===//
 //                               Math
 //===----------------------------------------------------------------------===//
+
+ir::value *dispatch::umulhi(ir::value *x, ir::value* y, ir::builder *builder) {
+  binary_op_type_checking(x, y, builder);
+  return builder->insert(umulhi_inst::create(x, y));
+}
 
 ir::value *dispatch::exp(ir::value *x, ir::builder *builder) {
   return builder->create_exp(x);
