@@ -144,16 +144,6 @@ import torch
 import triton
 import triton.language as tl
 
-
-@triton.jit
-def stoch_round(x, noise):
-    stoch_mask = 0xFFFFFFFF >> (9  + 10)
-    trunc_mask = 0xFFFFFFFF << (23 - 10)
-    noise = noise & stoch_mask
-    z = (x.to(tl.int32, bitcast=True) + noise) & trunc_mask
-    z = z.to(tl.float32, bitcast=True).to(tl.float16)
-    return z
-
 # %
 # :code:`triton.jit`'ed functions can be auto-tuned by using the `triton.autotune`
 # decorator, which consumes:
@@ -162,22 +152,18 @@ def stoch_round(x, noise):
 #   - An autotuning *key* whose change in values will trigger evaluation of all the
 #       provided configs
 
-@triton.jit
-def gelu(x):
-    return x * tl.sigmoid(1.702 * x) 
-
 @triton.autotune(
     configs=[
         triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
-        # triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
-        # triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 64,  'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        # triton.Config({'BLOCK_SIZE_M': 64 , 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        # triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        # triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64 , 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        # triton.Config({'BLOCK_SIZE_M': 64 , 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        # triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32 , 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        # triton.Config({'BLOCK_SIZE_M': 64 , 'BLOCK_SIZE_N': 32 , 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
-        # triton.Config({'BLOCK_SIZE_M': 32 , 'BLOCK_SIZE_N': 64 , 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 64,  'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 64 , 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64 , 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 64 , 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32 , 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 64 , 'BLOCK_SIZE_N': 32 , 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
+        triton.Config({'BLOCK_SIZE_M': 32 , 'BLOCK_SIZE_N': 64 , 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
     ],
     key=['M', 'N', 'K'],
 )
@@ -195,8 +181,6 @@ def matmul_kernel(
     stride_am, stride_ak,
     stride_bk, stride_bn,
     stride_cm, stride_cn,
-    # Numerical precision
-    seed, scale_ptr,
     # Meta-parameters
     **meta,
 ):
@@ -254,17 +238,12 @@ def matmul_kernel(
         # Advance the ptrs to the next K block
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
-    # flexpoint
-    unrolled = tl.reshape(accumulator, [32768])
-    unrolled = 1e-30 + tl.abs(unrolled) * 1.5266243282852955e-05
-    scale = tl.max(unrolled, 0)
-    tl.atomic_max(scale_ptr, scale)
-    # stochastic rounding
-    offs = pid * BLOCK_SIZE_M * BLOCK_SIZE_N + tl.arange(0, 8192)
-    rand1, rand2, rand3, rand4 = tl.randint4x(seed, offs)
-    rand = tl.cat(tl.cat(rand1, rand2), tl.cat(rand3, rand4))
-    rand = tl.reshape(rand, [meta['BLOCK_SIZE_M'], meta['BLOCK_SIZE_N']])
-    c = stoch_round(accumulator, rand)
+    # you can fuse arbitrary activation functions here
+    # while the accumulator is still in FP32 !
+    if meta['ACTIVATION']: 
+        accumulator = meta['ACTIVATION'](accumulator)
+    c = accumulator.to(tl.float16)
+
     # -----------------------------------------------------------
     # Write back the block of the output matrix C
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
@@ -297,22 +276,18 @@ def matmul(a, b, activation=None):
     ), "We don't check memory-out-of-bounds with K so K must be divisible by BLOCK_SIZE_K"
     # allocates output
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
-    scale = torch.empty((1,), device=a.device, dtype=torch.float32)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
     )
-    pgm = matmul_kernel[grid](
+    matmul_kernel[grid](
         a, b, c,
         M, N, K,
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
-        0, scale,
         ACTIVATION=activation,
     )
-    # print(pgm.asm['ptx'])
-    # exit()
     return c
 
 
@@ -333,7 +308,7 @@ if triton.testing.allclose(triton_output, torch_output):
     print("✅ Triton and Torch match")
 else:
     print("❌ Triton and Torch differ")
-# exit()
+
 # %%
 # Benchmark
 # --------------
@@ -347,7 +322,7 @@ else:
     triton.testing.Benchmark(
         x_names=['M', 'N', 'K'],  # argument names to use as an x-axis for the plot
         x_vals=[
-            8192
+            128 * i for i in range(2, 33)
         ],  # different possible values for `x_name`
         line_arg='provider',  # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
@@ -375,7 +350,7 @@ def benchmark(M, N, K, provider):
         )
     if provider == 'triton + relu':
         ms, min_ms, max_ms = triton.testing.do_bench(
-            lambda: matmul(a, b, activation=gelu)
+            lambda: matmul(a, b, activation=leaky_relu)
         )
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
