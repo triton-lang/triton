@@ -554,6 +554,10 @@ def _add_math_1arg_docstr(name):
     
     return _decorator
 
+@builtin
+@_add_math_1arg_docstr("exponential")
+def exp(x, _builder=None):
+    return frontend.exp(x, _builder)
 
 @builtin
 @_add_math_1arg_docstr("natural logarithm")
