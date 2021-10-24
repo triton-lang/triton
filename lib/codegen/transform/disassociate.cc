@@ -11,6 +11,8 @@ namespace transform{
 
 ir::instruction* rematerialize(ir::builder& bld, ir::instruction *root,
                           std::set<ir::value*>& seen) {
+  if (dynamic_cast<ir::phi_node*>(root))
+    return root;
   if(!seen.insert(root).second)
     return root;
   if(!root->get_type()->is_block_ty())

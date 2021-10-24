@@ -520,6 +520,21 @@ public:
 //                               retile_inst classes
 //===----------------------------------------------------------------------===//
 
+// cat
+
+class cat_inst: public instruction {
+private:
+  std::string repr_impl() const { return "cat"; }
+  cat_inst(value *x, value *y, const std::string &name, instruction *next);
+
+public:
+  static instruction* create(value *lhs, value *rhs,
+                             const std::string &name = "",
+                             instruction *next = nullptr);
+  _TRITON_DEFINE_CLONE(cat_inst)
+  _TRITON_DEFINE_ACCEPT(cat_inst)
+};
+
 // retile
 
 class retile_inst: public unary_inst {
@@ -652,6 +667,17 @@ private:
 
 public:
   static instruction* create(value *ptr, value *cmp, value *val, const std::string &name = "", instruction *next = nullptr);
+};
+
+class umulhi_inst: public builtin_inst {
+private:
+  umulhi_inst(value *lhs, value *rhs, const std::string &name = "", instruction *next = nullptr);
+  std::string repr_impl() const { return "umulhi"; }
+  _TRITON_DEFINE_CLONE(umulhi_inst)
+  _TRITON_DEFINE_ACCEPT(umulhi_inst)
+
+public:
+  static instruction* create(value *lhs, value *rhs, const std::string &name = "", instruction *next = nullptr);
 };
 
 class exp_inst: public builtin_inst {
@@ -803,6 +829,7 @@ public:
 //                               intrinsics classes
 //===----------------------------------------------------------------------===//
 
+
 class copy_to_shared_inst: public unary_inst{
 private:
   using unary_inst::unary_inst;
@@ -883,35 +910,6 @@ public:
   static prefetch_s_inst *create(context &ctx, value *arg, int inc, const std::string &name = "",
    instruction *next=nullptr);
 };
-
-//// On NVIDIA, implementation is such that
-//// constant_range = nv_dynamic_program_idx + nv_static_program_idx
-//// so as to enable re-association on nv_static_program_idx which is constant
-//class make_range_dyn: public instruction {
-//private:
-//  make_range_dyn(type *ty, const std::string &name, instruction *next);
-//  std::string repr_impl() const { return "nv_dynamic_program_idx"; }
-//  _TRITON_DEFINE_CLONE(make_range_dyn)
-//  _TRITON_DEFINE_ACCEPT(make_range_dyn)
-
-//public:
-//  static make_range_dyn* create(type *ty, const std::string &name = "", instruction *next = nullptr);
-//};
-
-//class make_range_sta: public constant {
-//private:
-//  make_range_sta(make_range *range);
-
-//public:
-//  static make_range_sta *get(make_range* range);
-//  make_range* get_range() const;
-//  std::string repr() const { return "nv_static_program_idx"; }
-//  _TRITON_DEFINE_ACCEPT(make_range_sta)
-
-//private:
-//  make_range *range_;
-//};
-
 
 /* constant range */
 class make_range: public instruction{

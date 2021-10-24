@@ -45,9 +45,11 @@ class masked_store_inst;
 class retile_inst;
 class reshape_inst;
 class splat_inst;
+class cat_inst;
 class broadcast_inst;
 class downcast_inst;
 
+class umulhi_inst;
 class exp_inst;
 class cos_inst;
 class sin_inst;
@@ -122,6 +124,7 @@ public:
   virtual void visit_unmasked_store_inst(unmasked_store_inst*) = 0;
   virtual void visit_masked_store_inst(masked_store_inst*) = 0;
 
+  virtual void visit_umulhi_inst(umulhi_inst*) = 0;
   virtual void visit_exp_inst(exp_inst*) = 0;
   virtual void visit_cos_inst(cos_inst*) = 0;
   virtual void visit_sin_inst(sin_inst*) = 0;
@@ -129,6 +132,7 @@ public:
 
   virtual void visit_reshape_inst(reshape_inst*) = 0;
   virtual void visit_splat_inst(splat_inst*) = 0;
+  virtual void visit_cat_inst(cat_inst*) = 0;
   virtual void visit_broadcast_inst(broadcast_inst*) = 0;
   virtual void visit_downcast_inst(downcast_inst*) = 0;
 
@@ -150,13 +154,10 @@ public:
   virtual void visit_masked_load_async_inst(masked_load_async_inst*)= 0;
   virtual void visit_barrier_inst(barrier_inst*) = 0;
   virtual void visit_async_wait_inst(async_wait_inst*) = 0;
-//  virtual void visit_make_range_dyn(make_range_dyn*) = 0;
   virtual void visit_make_range(make_range*) = 0;
   virtual void visit_prefetch_s_inst(prefetch_s_inst*) = 0;
-
   virtual void visit_function(function*) = 0;
 
-//  virtual void visit_make_range_sta(make_range_sta*) = 0;
   virtual void visit_undef_value(undef_value*) = 0;
   virtual void visit_constant_int(constant_int*) = 0;
   virtual void visit_constant_fp(constant_fp*) = 0;

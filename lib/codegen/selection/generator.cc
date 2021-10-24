@@ -774,6 +774,22 @@ void generator::visit_masked_store_inst(ir::masked_store_inst* x) {
   visit_store_inst(x);
 }
 
+/**
+ * \brief Code Generation for `cat`
+ */
+void generator::visit_cat_inst(ir::cat_inst* x) {
+  auto idxs = idxs_.at(x);
+  ir::value* lhs = x->get_operand(0);
+  ir::value* rhs = x->get_operand(1);
+  int i = 0;
+  for(size_t j = 0; j < idxs_.at(lhs).size(); j ++)
+    vals_[x][idxs_[x][i++]] = vals_[lhs][idxs_[lhs][j]];
+  for(size_t j = 0; j < idxs_.at(rhs).size(); j ++){
+    vals_[x][idxs_[x][i++]] = vals_[rhs][idxs_[rhs][j]];
+  }
+}
+
+
 
 /**
  * \brief Code Generation for `reshape`
@@ -858,6 +874,20 @@ void generator::visit_cos_inst(ir::cos_inst* x){
   InlineAsm *cos = InlineAsm::get(fn_ty, "cos.approx.f32 $0, $0;", "=f,0", false);
   for(auto idx: idxs_.at(x)){
     vals_[x][idx] = call(cos, std::vector<llvm::Value*>{vals_[x->get_operand(0)][idx]});
+  }
+ }
+
+/**
+ * \brief Code Generation for `umulhi`
+ */
+void generator::visit_umulhi_inst(ir::umulhi_inst* x){
+  std::vector<llvm::Type*> tys = {i32_ty, i32_ty};
+  FunctionType *fn_ty = FunctionType::get(i32_ty, tys, false);
+  InlineAsm *umulhi = InlineAsm::get(fn_ty, "mul.hi.u32 $0, $1, $2;", "=r,r,r", false);
+  for(auto idx: idxs_.at(x)){
+    Value* lhs = vals_[x->get_operand(0)][idx];
+    Value* rhs = vals_[x->get_operand(1)][idx];
+    vals_[x][idx] = call(umulhi, std::vector<llvm::Value*>{lhs, rhs});
   }
  }
 
