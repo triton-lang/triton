@@ -25,7 +25,7 @@ namespace codegen {
 // TODO:
 // There should be a proper pass manager there!
 std::unique_ptr<llvm::Module> add_passes_to_emit_bin(ir::module &ir, llvm::LLVMContext& ctx, codegen::target* target,
-                                                     int cc, int num_warps, int num_stages, bool force_nc_cache, int& shared_static) {
+                                                     int cc, int num_warps, int num_stages, int& shared_static) {
   // generate llvm code
   std::string name = ir.get_function_list()[0]->get_name();
   std::unique_ptr<llvm::Module> llvm(new llvm::Module(name, ctx));
@@ -46,7 +46,7 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(ir::module &ir, llvm::LLVMC
   codegen::transform::coalesce coalesce(&align, &layouts);
   codegen::transform::prefetch prefetch_s(target);
   codegen::transform::membar barriers(&liveness, &layouts, &allocation, &prefetch_s, target);
-  codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target, num_warps, force_nc_cache);
+  codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target, num_warps);
   // run passes
   dce.run(ir);
   peephole.run(ir);

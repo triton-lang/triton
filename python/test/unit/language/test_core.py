@@ -515,10 +515,113 @@ def test_dot(epilogue, device='cuda'):
     assert 'ld.global.v4' in ptx
     assert 'st.global.v4' in ptx
 
+def test_dot_without_load():
+    @triton.jit
+    def kernel(out, **meta):
+        pid = tl.program_id(axis=0)
+        a = tl.zeros((32, 32), tl.float32)
+        b = tl.zeros((32, 32), tl.float32)
+        c = tl.zeros((32, 32), tl.float32)
+        c = tl.dot(a, b)
+        pout = out + tl.arange(0, 32)[:, None]*32 + tl.arange(0, 32)[None, :]
+        tl.store(pout, c)
+        
+    out = torch.ones((32,32), dtype=torch.float32, device="cuda")
+    kernel[(1,)](out)
+
+# ---------------
+# test arange
+# ---------------
+
+@pytest.mark.parametrize("start", [0, 1, 7, 16])
+def test_arange(start, device='cuda'):
+    BLOCK = 128
+    z_tri = torch.empty(BLOCK, dtype=torch.int32, device=device)
+    @triton.jit
+    def _kernel(z, **meta):
+        off = tl.arange(0, meta['BLOCK'])
+        val = tl.arange(meta['START'], meta['END'])
+        tl.store(z + off, val)
+    _kernel[(1,)](z_tri, START=start, END=start+BLOCK, BLOCK=BLOCK)
+    z_ref = torch.arange(start, BLOCK+start, dtype=torch.int32, device=device)
+    triton.testing.assert_almost_equal(z_tri, z_ref)
 
 # ---------------
 # test load
 # ---------------
+# 'bfloat16': torch.bfloat16,
+# Testing masked loads with an intermate copy to shared memory run.
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
+def test_masked_load_shared_memory(dtype, device='cuda'):
+    M = 32
+    N = 32
+    K = 8
+
+    in1 = torch.rand((M, K), dtype=dtype, device=device)
+    in2 = torch.rand((K, N), dtype=dtype, device=device)
+    out = torch.zeros((M, N), dtype=dtype, device=device)
+
+    @triton.jit
+    def _kernel(in1_ptr, in2_ptr, output_ptr,
+                in_stride, in2_stride, out_stride,
+                in_numel, in2_numel, out_numel, **meta):
+        M = meta['M']
+        N = meta['N']
+        K = meta['K']
+
+        M_offsets = tl.arange(0, M)
+        N_offsets = tl.arange(0, N)
+        K_offsets = tl.arange(0, K)
+
+        in_offsets =  M_offsets[:, None] * in_stride + K_offsets[None,:]
+        in2_offsets =  K_offsets[:, None] * in2_stride + N_offsets[None,:]
+
+        # Load inputs.
+        x = tl.load(in1_ptr + in_offsets, mask=in_offsets < in_numel)
+        w = tl.load(in2_ptr + in2_offsets, mask=in2_offsets < in2_numel)
+
+        # Without a dot product the memory doesn't get promoted to shared.
+        o = tl.dot(x, w)
+
+        # Store output
+        output_offsets =  M_offsets[:, None] * out_stride + N_offsets[None,:]
+        tl.store(output_ptr + output_offsets, o, mask=output_offsets < in2_numel)
+
+    pgm = _kernel[(1,)](in1, in2, out,
+                  in1.stride()[0],
+                  in2.stride()[0],
+                  out.stride()[0],
+                  in1.numel(),
+                  in2.numel(),
+                  out.numel(),
+                  M=M, N=N, K=K)
+
+    reference_out =torch.matmul(in1, in2)
+    triton.testing.allclose(out, reference_out)
+
+@pytest.mark.parametrize("cache", ["", ".ca", ".cg"])
+def test_load_cache_modifier(cache):
+    src = torch.empty(128, device='cuda')
+    dst = torch.empty(128, device='cuda')
+
+    @triton.jit
+    def _kernel(dst, src, **meta):
+        offsets = tl.arange(0, 128)
+        x = tl.load(src+offsets, cache_modifier=meta['CACHE'])
+        tl.store(dst+offsets, x)
+
+    pgm = _kernel[(1,)](dst, src, CACHE=cache)
+    ptx = pgm.asm['ptx']
+
+    if cache == '':
+        assert 'ld.global.ca' not in ptx
+        assert 'ld.global.cg' not in ptx
+    if cache == '.cg':
+        assert 'ld.global.cg' in ptx
+        assert 'ld.global.ca' not in ptx
+    if cache == '.ca':
+        assert 'ld.global.ca' in ptx
+        assert 'ld.global.cg' not in ptx
 
 # ---------------
 # test store

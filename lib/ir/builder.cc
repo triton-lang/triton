@@ -273,16 +273,16 @@ DEFINE_FCMP_INSTR(UNE, cmp_pred_t::FCMP_UNE)
 //                               load/store instructions
 //===----------------------------------------------------------------------===//
 
-value *builder::create_load(value *ptr){
-  return insert(unmasked_load_inst::create(ptr));
+value *builder::create_load(value *ptr, load_inst::CACHE_MODIFIER cache){
+  return insert(unmasked_load_inst::create(ptr, cache));
 }
 
 value *builder::create_store(value *ptr, value *val){
   return insert(unmasked_store_inst::create(ptr, val));
 }
 
-value *builder::create_masked_load(value *ptr, value *mask, value *false_value){
-  return insert(masked_load_inst::create(ptr, mask, false_value));
+value *builder::create_masked_load(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache){
+  return insert(masked_load_inst::create(ptr, mask, false_value, cache));
 }
 
 value *builder::create_masked_store(value *ptr, value *val, value *mask){
@@ -295,6 +295,10 @@ value *builder::create_masked_store(value *ptr, value *val, value *mask){
 
 value *builder::create_reshape(value *arg, const type::block_shapes_t &shapes) {
   return insert(reshape_inst::create(arg, shapes));
+}
+
+value *builder::create_cat(value *lhs, value *rhs) {
+  return insert(cat_inst::create(lhs, rhs));
 }
 
 value *builder::create_splat(value *arg, const type::block_shapes_t &shapes) {
@@ -369,6 +373,9 @@ value *builder::create_select(value *pred, value *if_value, value *else_value){
 //                               intrinsic instructions
 //===----------------------------------------------------------------------===//
 
+value *builder::create_umulhi(value *lhs, value *rhs) {
+  return insert(umulhi_inst::create(lhs, rhs));
+}
 
 value *builder::create_copy_to_shared(value *arg) {
   return insert(copy_to_shared_inst::create(arg));
@@ -379,8 +386,8 @@ value *builder::create_copy_from_shared(value *arg) {
   return insert(copy_from_shared_inst::create(arg));
 }
 
-value *builder::create_masked_load_async(value *ptr, value *mask, value *false_value) {
-  return insert(masked_load_async_inst::create(ptr, mask, false_value));
+value *builder::create_masked_load_async(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache) {
+  return insert(masked_load_async_inst::create(ptr, mask, false_value, cache));
 }
 
 value *builder::create_barrier(const std::string &name) {

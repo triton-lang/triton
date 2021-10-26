@@ -117,7 +117,7 @@ void coalesce::run(ir::module &mod) {
             queue.push_back(inst_op);
         }
       }
-      if(in_contig.empty() || out_contig==in_contig)
+      if(in_contig.size() <= 1 || out_contig==in_contig)
         continue;
       builder.set_insert_point_after(val_inst);
       auto new_val = builder.insert(ir::cvt_layout_inst::create(val_inst));

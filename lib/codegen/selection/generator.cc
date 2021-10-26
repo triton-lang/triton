@@ -162,7 +162,7 @@ Type *generator::cvt(ir::type *ty) {
     case ir::type::VoidTyID:      return Type::getVoidTy(*ctx_);
     case ir::type::FP8TyID:       return Type::getInt8Ty(*ctx_);
     case ir::type::FP16TyID:      return Type::getHalfTy(*ctx_);
-  case ir::type::BF16TyID:      return Type::getInt16Ty(*ctx_);
+    case ir::type::BF16TyID:      return Type::getInt16Ty(*ctx_);
     case ir::type::FP32TyID:     return Type::getFloatTy(*ctx_);
     case ir::type::FP64TyID:    return Type::getDoubleTy(*ctx_);
     case ir::type::LabelTyID:     return Type::getLabelTy(*ctx_);
@@ -197,9 +197,9 @@ generator::generator(analysis::axes *a_axes,
                     analysis::allocation *alloc,
                     analysis::swizzle *swizzle,
                     target *tgt,
-                    unsigned num_warps, bool force_nc_cache)
+                    unsigned num_warps)
   : a_axes_(a_axes), layouts_(layouts), alignment_(alignment), alloc_(alloc), swizzle_(swizzle),
-    tgt_(tgt), num_warps_(num_warps), force_nc_cache_(force_nc_cache), add(&builder_), mul(&builder_), gep(&builder_) {
+    tgt_(tgt), num_warps_(num_warps), add(&builder_), mul(&builder_), gep(&builder_) {
 
 }
 
@@ -629,10 +629,9 @@ void generator::visit_load_inst(ir::load_inst* x){
     // -----
     std::ostringstream asm_oss;
     asm_oss << "@$" << n_words; // predicate
-//    if(force_nc_cache_)
-      asm_oss << " ld.global";
-//    else
-//      asm_oss << " ld.global.cg";
+    asm_oss << " ld.global";
+    if (x->get_cache_modifier() == ir::load_inst::CA) asm_oss << ".ca";
+    if (x->get_cache_modifier() == ir::load_inst::CG) asm_oss << ".cg";
     if(n_words > 1)
       asm_oss << ".v" << n_words; // vector width
     asm_oss << ".b" << width; // word size
@@ -775,6 +774,22 @@ void generator::visit_masked_store_inst(ir::masked_store_inst* x) {
   visit_store_inst(x);
 }
 
+/**
+ * \brief Code Generation for `cat`
+ */
+void generator::visit_cat_inst(ir::cat_inst* x) {
+  auto idxs = idxs_.at(x);
+  ir::value* lhs = x->get_operand(0);
+  ir::value* rhs = x->get_operand(1);
+  int i = 0;
+  for(size_t j = 0; j < idxs_.at(lhs).size(); j ++)
+    vals_[x][idxs_[x][i++]] = vals_[lhs][idxs_[lhs][j]];
+  for(size_t j = 0; j < idxs_.at(rhs).size(); j ++){
+    vals_[x][idxs_[x][i++]] = vals_[rhs][idxs_[rhs][j]];
+  }
+}
+
+
 
 /**
  * \brief Code Generation for `reshape`
@@ -859,6 +874,20 @@ void generator::visit_cos_inst(ir::cos_inst* x){
   InlineAsm *cos = InlineAsm::get(fn_ty, "cos.approx.f32 $0, $0;", "=f,0", false);
   for(auto idx: idxs_.at(x)){
     vals_[x][idx] = call(cos, std::vector<llvm::Value*>{vals_[x->get_operand(0)][idx]});
+  }
+ }
+
+/**
+ * \brief Code Generation for `umulhi`
+ */
+void generator::visit_umulhi_inst(ir::umulhi_inst* x){
+  std::vector<llvm::Type*> tys = {i32_ty, i32_ty};
+  FunctionType *fn_ty = FunctionType::get(i32_ty, tys, false);
+  InlineAsm *umulhi = InlineAsm::get(fn_ty, "mul.hi.u32 $0, $1, $2;", "=r,r,r", false);
+  for(auto idx: idxs_.at(x)){
+    Value* lhs = vals_[x->get_operand(0)][idx];
+    Value* rhs = vals_[x->get_operand(1)][idx];
+    vals_[x][idx] = call(umulhi, std::vector<llvm::Value*>{lhs, rhs});
   }
  }
 
@@ -2197,7 +2226,8 @@ void generator::visit_async_wait_inst(ir::async_wait_inst* i) {
 
 void generator::visit_make_range(ir::make_range* x) {
   for(indices_t idx: idxs_.at(x)){
-    vals_[x][idx] = idx[0];
+    Value* start = ConstantInt::get(idx[0]->getType(), x->get_first()->get_value());
+    vals_[x][idx] = add(start, idx[0]);
   }
 }
 
@@ -2500,9 +2530,8 @@ void generator::visit_layout_shared(analysis::shared_layout* layout) {
 void generator::visit_basic_block(ir::basic_block * block) {
   BasicBlock *parent = bbs_[block];
   builder_->SetInsertPoint(parent);
-  for(ir::instruction *i: block->get_inst_list()){
+  for(ir::instruction *i: block->get_inst_list())
     visit_value(i);
-  }
   // Update ir bb -> llvm bb mapping
   bbs_[block] = builder_->GetInsertBlock();
 }

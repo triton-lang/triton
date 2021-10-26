@@ -394,22 +394,38 @@ public:
 
 // load
 class load_inst: public io_inst {
+public:
+  enum CACHE_MODIFIER : uint32_t {
+    NONE=0,
+    CA,
+    CG,
+  }; 
+
+  CACHE_MODIFIER get_cache_modifier() const { return cache_; }
 protected:
-  load_inst(value *ptr, value_id_t id, unsigned num_ops,
+  load_inst(value *ptr, value_id_t id, unsigned num_ops, CACHE_MODIFIER cache,
           const std::string &name = "", instruction *next = nullptr);
+  std::string get_cache_modifier_repr() const {
+    if (cache_ == CA) return ".ca";
+    if (cache_ == CG) return ".cg";
+    return ""; 
+  }
+  CACHE_MODIFIER cache_;
 
 private:
   static type *get_pointee_type(type *ty);
+
 };
 
 // unmasked load
 class unmasked_load_inst: public load_inst {
 private:
-  std::string repr_impl() const { return "unmasked_load"; }
-  unmasked_load_inst(value *ptr, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "unmasked_load" + get_cache_modifier_repr(); }
+  unmasked_load_inst(value *ptr, load_inst::CACHE_MODIFIER cache, const std::string &name, instruction *next);
 
 public:
   static unmasked_load_inst* create(value *ptr,
+                                    CACHE_MODIFIER cache,
                                     const std::string &name = "",
                                     instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(unmasked_load_inst)
@@ -419,8 +435,8 @@ public:
 // masked load
 class masked_load_inst: public load_inst {
 private:
-  std::string repr_impl() const { return "masked_load"; }
-  masked_load_inst(value *ptr, value *mask, value *false_value,
+  std::string repr_impl() const { return "masked_load" + get_cache_modifier_repr(); }
+  masked_load_inst(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache,
                    const std::string &name, instruction *next);
 
 public:
@@ -429,6 +445,7 @@ public:
   value *get_false_value_operand() { return get_operand(2); }
   // factory method
   static masked_load_inst* create(value *ptr, value *mask, value *false_value,
+                                  CACHE_MODIFIER cache,
                                   const std::string &name = "",
                                   instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(masked_load_inst)
@@ -438,8 +455,8 @@ public:
 // masked load async
 class masked_load_async_inst: public load_inst {
 private:
-  std::string repr_impl() const { return "masked_load_async_async"; }
-  masked_load_async_inst(value *ptr, value *mask, value *false_value,
+  std::string repr_impl() const { return "masked_load_async_async" + get_cache_modifier_repr(); }
+  masked_load_async_inst(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache,
                    const std::string &name, instruction *next);
 
 public:
@@ -448,6 +465,7 @@ public:
   value *get_false_value_operand() { return get_operand(2); }
   // factory method
   static masked_load_async_inst* create(value *ptr, value *mask, value *false_value,
+                                  load_inst::CACHE_MODIFIER cache,
                                   const std::string &name = "",
                                   instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(masked_load_async_inst)
@@ -501,6 +519,21 @@ public:
 //===----------------------------------------------------------------------===//
 //                               retile_inst classes
 //===----------------------------------------------------------------------===//
+
+// cat
+
+class cat_inst: public instruction {
+private:
+  std::string repr_impl() const { return "cat"; }
+  cat_inst(value *x, value *y, const std::string &name, instruction *next);
+
+public:
+  static instruction* create(value *lhs, value *rhs,
+                             const std::string &name = "",
+                             instruction *next = nullptr);
+  _TRITON_DEFINE_CLONE(cat_inst)
+  _TRITON_DEFINE_ACCEPT(cat_inst)
+};
 
 // retile
 
@@ -634,6 +667,17 @@ private:
 
 public:
   static instruction* create(value *ptr, value *cmp, value *val, const std::string &name = "", instruction *next = nullptr);
+};
+
+class umulhi_inst: public builtin_inst {
+private:
+  umulhi_inst(value *lhs, value *rhs, const std::string &name = "", instruction *next = nullptr);
+  std::string repr_impl() const { return "umulhi"; }
+  _TRITON_DEFINE_CLONE(umulhi_inst)
+  _TRITON_DEFINE_ACCEPT(umulhi_inst)
+
+public:
+  static instruction* create(value *lhs, value *rhs, const std::string &name = "", instruction *next = nullptr);
 };
 
 class exp_inst: public builtin_inst {
@@ -785,6 +829,7 @@ public:
 //                               intrinsics classes
 //===----------------------------------------------------------------------===//
 
+
 class copy_to_shared_inst: public unary_inst{
 private:
   using unary_inst::unary_inst;
@@ -865,35 +910,6 @@ public:
   static prefetch_s_inst *create(context &ctx, value *arg, int inc, const std::string &name = "",
    instruction *next=nullptr);
 };
-
-//// On NVIDIA, implementation is such that
-//// constant_range = nv_dynamic_program_idx + nv_static_program_idx
-//// so as to enable re-association on nv_static_program_idx which is constant
-//class make_range_dyn: public instruction {
-//private:
-//  make_range_dyn(type *ty, const std::string &name, instruction *next);
-//  std::string repr_impl() const { return "nv_dynamic_program_idx"; }
-//  _TRITON_DEFINE_CLONE(make_range_dyn)
-//  _TRITON_DEFINE_ACCEPT(make_range_dyn)
-
-//public:
-//  static make_range_dyn* create(type *ty, const std::string &name = "", instruction *next = nullptr);
-//};
-
-//class make_range_sta: public constant {
-//private:
-//  make_range_sta(make_range *range);
-
-//public:
-//  static make_range_sta *get(make_range* range);
-//  make_range* get_range() const;
-//  std::string repr() const { return "nv_static_program_idx"; }
-//  _TRITON_DEFINE_ACCEPT(make_range_sta)
-
-//private:
-//  make_range *range_;
-//};
-
 
 /* constant range */
 class make_range: public instruction{

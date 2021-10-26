@@ -101,21 +101,33 @@ void finalize_iv_vals(ir::builder& builder, ir::basic_block* block, std::map<ir:
   }
 }
 
+struct pipeline_info_t {
+  ir::load_inst* load;
+  ir::phi_node* ptr;
+  ir::dot_inst* dot;
+
+  pipeline_info_t(ir::load_inst* load, ir::phi_node* ptr, ir::dot_inst* dot)
+    : load(load), ptr(ptr), dot(dot) {}
+};
+
 void pipeline::run(ir::module &mod) {
+  if (num_stages_ <= 1)
+    return;
   // *Very* conservative heuristics for pre-fetching.
   // A load instruction can be pipelined if:
   //   - the pointer is a phi node that references a value
   //     in its basic block (i.e., pointer induction variable)
   //   - the load has only  a single use in a dot instruction
   // As more use cases become apparent, this pass will be improved
-  std::vector<std::pair<ir::load_inst*, ir::phi_node*>> to_pipeline;
+  std::vector<pipeline_info_t> to_pipeline;
   ir::for_each_instruction(mod, [&](ir::instruction *i){
     if(auto* load = dynamic_cast<ir::load_inst*>(i)){
       ir::phi_node* ptr = dynamic_cast<ir::phi_node*>(load->get_pointer_operand());
       auto users = load->get_users();
+      auto dot = dynamic_cast<ir::dot_inst*>(*users.begin());
       if(ptr && ptr->get_incoming_block(1) == ptr->get_parent()
-         && users.size() == 1 && dynamic_cast<ir::dot_inst*>(*users.begin()))
-        to_pipeline.push_back({load, ptr});
+         && users.size() == 1 && dot)
+        to_pipeline.push_back({load, ptr, dot});
     }});
   // do the pipelining
   std::vector<ir::phi_node*> new_loads;
@@ -123,8 +135,8 @@ void pipeline::run(ir::module &mod) {
   const int num_stages = num_stages_;
   std::vector<std::pair<ir::phi_node*, std::vector<ir::value*>>> preheader_loads; // Used to reorder loads
   for(auto info: to_pipeline){
-    ir::load_inst* load = info.first;
-    ir::phi_node* ptr   = info.second;
+    ir::load_inst* load = info.load;
+    ir::phi_node* ptr   = info.ptr;
     ir::basic_block* block = load->get_parent();
     ir::basic_block* header = block->get_predecessors()[0];
     auto* block_br = dynamic_cast<ir::cond_branch_inst*>(block->get_inst_list().back());
@@ -166,7 +178,7 @@ void pipeline::run(ir::module &mod) {
         false_value = remat_false_value;
       } else
         false_value = builder.create_splat(ir::undef_value::get(ty->get_scalar_ty()), ty->get_block_shapes());
-      first_loads[0] = builder.create_masked_load(first_ptrs[0], first_masks[0], false_value);
+      first_loads[0] = builder.create_masked_load(first_ptrs[0], first_masks[0], false_value, load->get_cache_modifier());
 
       for (int stage = 1; stage < num_stages-1; ++stage) {
         // mask is the loop condition of the previous iteration
@@ -181,14 +193,14 @@ void pipeline::run(ir::module &mod) {
           first_masks[stage] = builder.create_and(first_masks[stage], remat_mask);
           false_value = remat_false_value;
         }
-        first_loads[stage] = builder.create_masked_load(first_ptrs[stage], first_masks[stage], false_value);
+        first_loads[stage] = builder.create_masked_load(first_ptrs[stage], first_masks[stage], false_value, load->get_cache_modifier());
       }
 
       // create new phis for induction variables
       builder.set_insert_point(block->get_first_non_phi());
       std::map<ir::phi_node*, ir::value*> load_ivs;
       std::map<ir::phi_node*, ir::value*> next_load_ivs;
-      for (ir::phi_node* iv : induction_vars) {
+      for (auto& [iv, val] : prev_phi_vals) {
         ir::phi_node* pn = builder.create_phi(iv->get_type(), 2);
         pn->add_incoming(prev_phi_vals[iv], header);
         load_ivs[iv] = pn;
@@ -198,7 +210,8 @@ void pipeline::run(ir::module &mod) {
         
       // pre-fetch next iteration
       builder.set_insert_point(block->get_inst_list().back());
-      ir::value* next_ptr = ptr->get_value_for_block(block);
+//      ir::value* next_ptr = ptr->get_value_for_block(block);
+      ir::value* next_ptr = rematerialize_vals(builder, block, ptr->get_value_for_block(block), load_ivs);
       ir::value* next_mask = builder.create_splat(
           rematerialize_vals(builder, block, block_cond, load_ivs), ty->get_block_shapes());
       if (auto* masked_load = dynamic_cast<ir::masked_load_inst*>(load)) {
@@ -209,7 +222,7 @@ void pipeline::run(ir::module &mod) {
         next_mask = builder.create_and(next_mask, remat_mask);
         false_value = remat_false_value;
       }
-      ir::value* next_load = builder.create_masked_load(next_ptr, next_mask, false_value);
+      ir::value* next_load = builder.create_masked_load(next_ptr, next_mask, false_value, load->get_cache_modifier());
 
 
       // phi node
@@ -244,7 +257,7 @@ void pipeline::run(ir::module &mod) {
       }
       else
         false_value = builder.create_splat(ir::undef_value::get(ty->get_scalar_ty()), ty->get_block_shapes());
-      ir::value* first_load = builder.create_masked_load(first_ptr, first_mask, false_value);
+      ir::value* first_load = builder.create_masked_load(first_ptr, first_mask, false_value, load->get_cache_modifier());
       // pre-fetch next iteration
       builder.set_insert_point(block->get_inst_list().back());
       ir::value* next_ptr = ptr->get_value_for_block(block);
@@ -255,7 +268,7 @@ void pipeline::run(ir::module &mod) {
         next_mask = builder.create_and(next_mask, remat_mask);
         false_value = remat_false_value;
       }
-      ir::value* next_load = builder.create_masked_load(next_ptr, next_mask, false_value);
+      ir::value* next_load = builder.create_masked_load(next_ptr, next_mask, false_value, load->get_cache_modifier());
       // phi node
       builder.set_insert_point(block->get_first_non_phi());
       ir::phi_node* new_load = builder.create_phi(ty, 2);
@@ -287,22 +300,23 @@ void pipeline::run(ir::module &mod) {
     std::vector<ir::instruction*> insts;
     ir::load_inst* dst;
   };
-  std::map<ir::basic_block*, move_config_t> to_move;
+  std::vector<move_config_t> to_move(to_pipeline.size());
 
   if(has_copy_async_){
-    for(ir::function* fn: mod.get_function_list())
-    for(ir::basic_block* bb: fn->blocks())
-    for(ir::instruction* inst: bb->get_inst_list()){
-      if(auto* i = dynamic_cast<ir::dot_inst*>(inst))
-        recursive_deps(i, bb, to_move[bb].insts);
-      if(auto* i = dynamic_cast<ir::load_inst*>(inst))
-        to_move[bb].dst = i;
+    for (size_t idx = 0; idx < to_pipeline.size(); ++idx) {
+      auto info = to_pipeline[idx];
+      ir::load_inst* load = info.load;
+      ir::phi_node* ptr = info.ptr;
+      ir::dot_inst* dot = info.dot;
+      ir::basic_block* bb = dot->get_parent();
+      recursive_deps(dot, bb, to_move[idx].insts);
+      to_move[idx].dst = load;
     }
 
-    for(auto& x: to_move){
-      builder.set_insert_point_after(x.second.dst);
-      for(ir::instruction* i: x.second.insts){
-        x.first->erase(i);
+    for(auto& move_config: to_move){
+      builder.set_insert_point_after(move_config.dst);
+      for(ir::instruction* i: move_config.insts){
+        i->get_parent()->erase(i);
         builder.insert(i);
       }
     }

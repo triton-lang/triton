@@ -9,7 +9,9 @@ def _to_ir(x, builder):
     if isinstance(x, bool):
         return builder.get_int1(x)
     elif isinstance(x, int):
-        return builder.get_int32(x)
+        if x.__abs__() <= 2**31:
+            return builder.get_int32(x)
+        return builder.get_int64(x)
     elif isinstance(x, float):
         return builder.get_float32(x)
     elif isinstance(x, constexpr):
@@ -389,7 +391,7 @@ def zeros(shape, dtype, _builder=None):
 
     :param shape: Shape of the new array, e.g., (8, 16) or (8, )
     :type shape: tuple of ints
-    :param dtype: Data-type of the new array, e.g., :code:`triton.float16`
+    :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
     :type dtype: DType
     """
     for d in shape:
@@ -428,6 +430,18 @@ def broadcast_to(input, shape, _builder=None):
     :type shape: Tuple[int]
     """
     return frontend.broadcast_to(input, shape, _builder)
+
+@builtin
+def cat(input, other, _builder=None):
+    """
+    Concatenate the given blocks
+
+    :param input: The first input block.
+    :type input: 
+    :param other: The second input block.
+    :type other: 
+    """
+    return frontend.cat(input, other, _builder)
 
 
 @builtin
@@ -470,7 +484,7 @@ def dot(input, other, _builder=None):
 
 
 @builtin
-def load(pointer, mask=None, other=None, _builder=None):
+def load(pointer, mask=None, other=None, cache_modifier="", _builder=None):
     """
     Return a block of data whose values are, elementwise, loaded from memory at location defined by :code:`pointer`.
 
@@ -484,8 +498,10 @@ def load(pointer, mask=None, other=None, _builder=None):
     :type mask: Block of triton.int1, optional
     :param other: if mask[idx] is false, return other[idx]
     :type other: Block, optional
+    :param cache_modifier: changes cache option in nvidia ptx
+    'type cache_modifier: str, optional
     """
-    return frontend.load(pointer, mask, other, _builder)
+    return frontend.load(pointer, mask, other, cache_modifier, _builder)
 
 
 @builtin
@@ -605,6 +621,10 @@ def where(condition, x, y, _builder=None):
 # Math
 # -----------------------
 
+@builtin
+def umulhi(x, y, _builder=None):
+    return frontend.umulhi(x, y, _builder)
+
 def _add_math_1arg_docstr(name):
 
     def _decorator(func):
@@ -623,7 +643,6 @@ def _add_math_1arg_docstr(name):
 @_add_math_1arg_docstr("exponential")
 def exp(x, _builder=None):
     return frontend.exp(x, _builder)
-
 
 @builtin
 @_add_math_1arg_docstr("natural logarithm")
@@ -722,6 +741,10 @@ def max_contiguous(input, value, _builder=None):
 # -----------------------
 
 @triton.jit
+def abs(x):
+    return where(x >= 0, x, -x)
+
+@triton.jit
 def cdiv(x, div):
     """
     Computes the ceiling division of :code:`x` by :code:`div`
@@ -784,3 +807,35 @@ def ravel(x):
     :type x: Block
     """
     return triton.language.reshape(x, [x.type.numel])
+
+@triton.jit
+def swizzle2d(i, j, size_i, size_j, size_g):
+    """
+    transformes indices of a row-major size_i*size_j matrix into those
+    of one where indices are row major for each group of size_j rows.
+    For example, for size_i = size_j = 4 and size_g = 2, it will transform
+    [[0 , 1 , 2 , 3 ], 
+     [4 , 5 , 6 , 7 ],
+     [8 , 9 , 10, 11],
+     [12, 13, 14, 15]]
+    into
+    [[0, 2,  4 , 6 ],
+     [1, 3,  5 , 7 ],
+     [8, 10, 12, 14],
+     [9, 11, 13, 15]]
+    """
+    # "unrolled index in array"
+    ij = i*size_j + j
+    # number of elements in `size_g` groups
+    # of `size_j` columns
+    size_gj = size_g * size_j
+    # index of the group in which (i,j) is
+    group_id = ij // size_gj 
+    # row-index of the first element of this group
+    off_i = group_id * size_g
+    # last group may have fewer rows
+    size_g = minimum(size_i - off_i, size_g) 
+    # new row and column indices
+    new_i = off_i + (ij % size_g)
+    new_j = (ij % size_gj) // size_g
+    return new_i, new_j

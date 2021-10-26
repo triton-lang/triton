@@ -122,8 +122,7 @@ public:
             analysis::allocation *alloc,
             analysis::swizzle *swizzle,
             target *tgt,
-            unsigned num_warps,
-            bool force_nc_cache = false);
+            unsigned num_warps);
 
   void visit_value(ir::value* v);
   void visit_phi_node(ir::phi_node*);
@@ -148,12 +147,14 @@ public:
   void visit_store_inst(ir::store_inst*);
   void visit_unmasked_store_inst(ir::unmasked_store_inst*);
   void visit_masked_store_inst(ir::masked_store_inst*);
+  void visit_cat_inst(ir::cat_inst*);
   void visit_reshape_inst(ir::reshape_inst*);
   void visit_splat_inst(ir::splat_inst*);
   void visit_broadcast_inst(ir::broadcast_inst*);
   void visit_downcast_inst(ir::downcast_inst*);
   void visit_exp_inst(ir::exp_inst*);
   void visit_cos_inst(ir::cos_inst*);
+  void visit_umulhi_inst(ir::umulhi_inst* x);
   void visit_sin_inst(ir::sin_inst*);
   void visit_log_inst(ir::log_inst*);
   void visit_get_program_id_inst(ir::get_program_id_inst*);
@@ -213,7 +214,6 @@ private:
   std::set<ir::value*> seen_;
 
   unsigned num_warps_;
-  bool force_nc_cache_;
 
   std::map<analysis::data_layout*, Value*> offset_a_m_;
   std::map<analysis::data_layout*, Value*> offset_a_k_;

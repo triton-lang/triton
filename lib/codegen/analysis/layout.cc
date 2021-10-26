@@ -198,20 +198,23 @@ scanline_layout::scanline_layout(size_t num_warps,
   bool is_dot = std::any_of(values.begin(), values.end(),
                             [&](ir::value* v) { return dynamic_cast<ir::dot_inst*>(v); });
 
-  ir::value *ptr = nullptr;
+
+
+  std::vector<ir::value*> ptrs;
   for(ir::value *v: values)
-    for(ir::user *usr: v->get_users())
-      if(auto *io = dynamic_cast<ir::io_inst*>(usr)){
-        if(!ptr || ptr->get_type()->get_tile_rank() < io->get_pointer_operand()->get_type()->get_tile_rank())
-        ptr = io->get_pointer_operand();
-      }
+     for(ir::user *usr: v->get_users())
+       if(auto *io = dynamic_cast<ir::io_inst*>(usr)){
+        if(ptrs.empty() || ptrs[0]->get_type()->get_tile_rank() <= io->get_pointer_operand()->get_type()->get_tile_rank())
+          ptrs.push_back(io->get_pointer_operand());
+       }
 
   unsigned i = order_[0];
   int contiguous = 1;
-  if(ptr){
+  for(ir::value* ptr: ptrs){
     int nbits = ptr->get_type()->get_pointer_element_ty()->get_scalar_ty()->get_primitive_size_in_bits();
-    contiguous = std::min<int>(align->get(ptr, i), 128 / nbits);
+    contiguous = std::max<int>(contiguous, std::min<int>(align->get(ptr, i), 128 / nbits));
   }
+
 
   nts_[i] = clamp(size / num_threads, 1, std::min<int>(contiguous, shape_[i]));
   mts_[i] = clamp(num_threads, 1, shape_[i] / nts_[i]);
@@ -496,6 +499,7 @@ void layouts::run(ir::module &mod) {
     make_graph(i);
   });
 
+
   // connected components
   graph_.connected_components(&values_, &groups_);
 
@@ -537,6 +541,7 @@ void layouts::run(ir::module &mod) {
       tmp_[atom] = id;
     }
   });
+
 }
 
 }

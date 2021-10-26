@@ -79,19 +79,28 @@ void axes::update_graph_dot(ir::instruction *i) {
     graph_.add_edge({dot, d}, {D, d});
 }
 
-void axes::update_graph_elementwise(ir::instruction *i, bool connect_ret) {
+void axes::update_graph_elementwise(ir::instruction *i, 
+                                    bool is_masked_load_async) {
   if(i->get_num_operands() == 0)
     return;
   ir::value *op = i->get_operand(0);
   if(!op->get_type()->is_block_ty())
     return;
   auto rank = op->get_type()->get_tile_rank();
-  for(unsigned d = 0; d < rank; d++)
-  for(ir::value* opx: i->ops())
-  for(ir::value* opy: i->ops()){
-    if(connect_ret && !i->get_type()->is_void_ty())
-      graph_.add_edge({i, d}, {opx, d});
-    graph_.add_edge({opx, d}, {opy, d});
+  for(unsigned d = 0; d < rank; d++) {
+    // If we are dealing with a masked async load we need to attach the
+    // dimensions so we match the behaviour of the copy_to_shared instruction
+    // which async masked load replaces.
+    if (is_masked_load_async) {
+      graph_.add_edge({i, d}, {i, d});
+    }
+
+    for(ir::value* opx: i->ops())
+    for(ir::value* opy: i->ops()) {
+      if(!is_masked_load_async && !i->get_type()->is_void_ty())
+        graph_.add_edge({i, d}, {opx, d});
+      graph_.add_edge({opx, d}, {opy, d});
+    }
   }
 }
 
@@ -107,12 +116,13 @@ void axes::update_graph(ir::instruction *i) {
   switch (i->get_id()) {
     case ir::INST_REDUCE:            return update_graph_reduce(i);
     case ir::INST_RESHAPE:           return update_graph_reshape(i);
-    case ir::INST_SPLAT:             return update_graph_no_edge(i);;
+    case ir::INST_SPLAT:             return update_graph_no_edge(i);
+    case ir::INST_CAT:               return update_graph_elementwise(i, true);
     case ir::INST_TRANS:             return update_graph_trans(i);
     case ir::INST_BROADCAST:         return update_graph_broadcast(i);
     case ir::INST_DOT:               return update_graph_dot(i);
     case ir::INST_COPY_TO_SHARED:    return update_graph_no_edge(i);
-    case ir::INST_MASKED_LOAD_ASYNC: return update_graph_elementwise(i, false);
+    case ir::INST_MASKED_LOAD_ASYNC: return update_graph_elementwise(i, true);
     case ir::INST_COPY_FROM_SHARED:  return update_graph_no_edge(i);
     case ir::INST_CVT_LAYOUT:        return update_graph_no_edge(i);
     default:                         return update_graph_elementwise(i);

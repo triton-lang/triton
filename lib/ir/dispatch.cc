@@ -368,6 +368,10 @@ ir::value *dispatch::reshape(ir::value *input, shape_t dst_shape, ir::builder *b
   return builder->create_reshape(input, dst_shape);
 }
 
+ir::value *dispatch::cat(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
+  return builder->create_cat(lhs, rhs);
+}
+
 ir::value *dispatch::broadcast(ir::value *input, shape_t shape, ir::builder *builder) {
   if (!input->get_type()->is_block_ty())
     return builder->create_splat(input, shape);
@@ -497,7 +501,7 @@ ir::value *dispatch::cast(ir::value *input, ir::type *dst_ty, ir::builder *build
 //                               Memory Operators
 //===----------------------------------------------------------------------===//
 
-ir::value *dispatch::load(ir::value* ptr, ir::value* mask, ir::value* other, ir::builder* builder) {
+ir::value *dispatch::load(ir::value* ptr, ir::value* mask, ir::value* other, const std::string &cache_modifier, ir::builder* builder) {
   if(!ptr->get_type()->get_scalar_ty()->is_pointer_ty())
     throw semantic_error("Pointer argument of load instruction is " + ptr->get_type()->repr());
   if(ptr->get_type()->is_block_ty()){
@@ -517,8 +521,17 @@ ir::value *dispatch::load(ir::value* ptr, ir::value* mask, ir::value* other, ir:
     ptr_ty = pointer_type::get(elt_ty, ptr_ty->get_pointer_address_space());
     ptr = dispatch::cast(ptr, ptr_ty, builder);
   }
+  load_inst::CACHE_MODIFIER cache = load_inst::NONE; // default
+  if (!cache_modifier.empty()) {
+    if (cache_modifier == ".ca")
+      cache = load_inst::CA;
+    else if (cache_modifier == ".cg")
+      cache = load_inst::CG;
+    else
+      throw std::runtime_error(std::string("Cache modifier ") + cache_modifier + " not supported");
+  }
   if (!mask && !other)
-    return builder->create_load(ptr);
+    return builder->create_load(ptr, cache);
   if (!mask)
     throw std::runtime_error("`other` cannot be provided without `mask`");
   auto shape = ptr->get_type()->get_block_shapes();
@@ -527,7 +540,7 @@ ir::value *dispatch::load(ir::value* ptr, ir::value* mask, ir::value* other, ir:
     if(ptr->get_type()->is_block_ty())
       other = builder->create_splat(other, ptr->get_type()->get_block_shapes());
   }
-  return builder->create_masked_load(ptr, mask, other);
+  return builder->create_masked_load(ptr, mask, other, cache);
 }
 
 ir::value *dispatch::store(ir::value* ptr, ir::value *val, ir::value* mask, ir::builder *builder) {
@@ -705,6 +718,11 @@ ir::value *dispatch::sum(ir::value *input, unsigned int axis, ir::builder *build
 //===----------------------------------------------------------------------===//
 //                               Math
 //===----------------------------------------------------------------------===//
+
+ir::value *dispatch::umulhi(ir::value *x, ir::value* y, ir::builder *builder) {
+  binary_op_type_checking(x, y, builder);
+  return builder->insert(umulhi_inst::create(x, y));
+}
 
 ir::value *dispatch::exp(ir::value *x, ir::builder *builder) {
   return builder->create_exp(x);
