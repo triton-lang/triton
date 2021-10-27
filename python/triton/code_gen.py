@@ -492,6 +492,8 @@ class Kernel:
         }
         if hasattr(obj, 'data_ptr'):
             return type_names[obj.dtype]
+        if isinstance(obj, triton.language.core.constexpr):
+            obj = obj.value
         if isinstance(obj, int):
             if abs(obj) <= 0xffffffff:
                 return 'I'
@@ -500,6 +502,7 @@ class Kernel:
             return 'f'
         if isinstance(obj, bool):
             return 'B'
+        print(obj, type(obj))
         assert False
 
         
@@ -581,7 +584,19 @@ class Kernel:
             raise OutOfResources(shared_mem, max_shared_memory, "shared memory")
         return Binary(backend, name, asm, shared_mem, num_warps)
 
-    def __call__(self, *wargs, grid, num_warps=4, num_stages=2, **meta):
+    def __call__(self, *wargs, grid, num_warps=4, num_stages=2, **kwargs):
+        # handle arguments passed by name
+        kwargs = {self.fn.arg_names.index(name): value for name, value in kwargs.items()}
+        wargs = list(wargs)
+        for i, pos in enumerate(sorted(kwargs)):
+            wargs.insert(pos + i, kwargs[pos])
+        if len(wargs) != len(self.fn.arg_names):
+            raise TypeError(f"Function takes {len(self.fn.arg_names)} positional arguments but {len(wargs)} were given")
+        # handle annotations
+        for name, type in self.fn.__annotations__.items():
+            pos = self.fn.arg_names.index(name)
+            assert type == triton.language.core.constexpr
+            wargs[pos] = type(wargs[pos])
         # device inference
         tensor_idxs = [i for i, arg in enumerate(wargs) if hasattr(arg, 'data_ptr')]
         if len(tensor_idxs) == 0:
@@ -613,21 +628,21 @@ class Kernel:
         # enqueue kernel on the current device
         torch.cuda.set_device(device_idx)
         # attributes
-        args = [arg.data_ptr() if i in tensor_idxs else arg for i, arg in enumerate(wargs)]
+        args = [arg.data_ptr() if i in tensor_idxs else arg.value if isinstance(arg, triton.language.core.constexpr) else arg for i, arg in enumerate(wargs)]
         attributes = {i: Kernel.pow2_divisor(a) for i, a in enumerate(args) \
                       if isinstance(a, int) and i not in self.fn.do_not_specialize}
+
         # transforms ints whose value is one into constants for just-in-time compilation
-        constants = {i: arg for i, arg in enumerate(wargs) if isinstance(arg, int) and arg == 1}
+        constants = {i: arg for i, arg in enumerate(wargs) if isinstance(arg, triton.language.core.constexpr) or (isinstance(arg, int) and arg == 1)}
+
         # compute hash for caching this kernel
         types_key = Kernel._types_key(*wargs, tensor_idxs=tensor_idxs)
         attr_key = tuple(attributes.items())
-        meta_key = tuple(sorted(meta.items()))
         const_key = tuple(constants.items())
         compute_capability = torch.cuda.get_device_capability(device)
-
         key = (
             self.fn.cache_key, version_key(), compute_capability,
-            types_key, attr_key, num_warps, num_stages, meta_key, const_key
+            types_key, attr_key, num_warps, num_stages, const_key
         )
         key = repr(key)
 
@@ -659,7 +674,7 @@ class Kernel:
                 binary = self._compile(
                     *wargs, device=device_idx, attributes=attributes,
                     num_warps=num_warps, num_stages=num_stages, 
-                    constants=constants, **meta
+                    constants=constants,
                 )
                 if bin_cache_path:
                     assert bin_lock_path is not None
@@ -677,7 +692,10 @@ class Kernel:
         # enqueue cached function into stream
         callable = drv_cache[key]
         stream = torch.cuda.current_stream(device_idx).cuda_stream
-        grid = grid(meta) if hasattr(grid, '__call__') else grid
+        csts = {self.fn.arg_names[i]: arg.value for i, arg in enumerate(wargs) if isinstance(arg, triton.language.core.constexpr)}
+        grid = grid(csts) if hasattr(grid, '__call__') else grid
+        if isinstance(grid, int):
+            grid = tuple(grid)
         callable(stream, params, *grid)
         return callable
 
@@ -784,6 +802,8 @@ class JITFunction:
         # when called with a grid using __getitem__
         self.kernel_decorators = []
         self.kernel = None
+        # annotations
+        self.__annotations__ = fn.__annotations__
         # forward docs
         self.__doc__ = fn.__doc__
 

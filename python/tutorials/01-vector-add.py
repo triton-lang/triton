@@ -24,7 +24,7 @@ def add_kernel(
     y_ptr,  # *Pointer* to second input vector
     output_ptr,  # *Pointer* to output vector
     n_elements,  # Size of the vector
-    BLOCK_SIZE,  # Number of elements each program should process
+    BLOCK_SIZE: tl.constexpr,  # Number of elements each program should process
                  # NOTE: `constexpr` so it can be used as a shape value
 ):
     # There are multiple 'program's processing different data. We identify which program
@@ -66,7 +66,7 @@ def add(x: torch.Tensor, y: torch.Tensor):
     #  - `triton.jit`'ed functions can be index with a launch grid to obtain a callable GPU kernel
     #  - don't forget to pass meta-parameters as keywords arguments
     pgm = add_kernel[grid](x, y, output, n_elements, 
-                           tl.constexpr(1024))
+                           BLOCK_SIZE=1024)
     # We return a handle to z but, since `torch.cuda.synchronize()` hasn't been called, the kernel is still
     # running asynchronously at this point.
     return output
