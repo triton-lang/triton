@@ -482,7 +482,7 @@ class Kernel:
                 return 'I'
             return 'L'
         if isinstance(obj, float):
-            return 'f'
+            return 'd'
         if isinstance(obj, bool):
             return 'B'
         assert False
@@ -522,7 +522,7 @@ class Kernel:
         types_key = [None] * len(wargs)
         for i, arg in enumerate(wargs):
             prefix = 'P' if i in tensor_idxs else ''
-            suffix = Kernel._type_name(arg) if i in tensor_idxs else Kernel._type_name(arg)
+            suffix = Kernel._type_name(arg)
             types_key[i] = prefix + suffix
         return tuple(types_key)
 
