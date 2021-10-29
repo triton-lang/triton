@@ -1,4 +1,5 @@
-from triton_ops.safe_import import triton, tl
+import triton
+import triton.language as tl
 import torch
 
 # ********************************************************
