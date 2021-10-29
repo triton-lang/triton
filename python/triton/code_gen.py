@@ -495,6 +495,7 @@ class Kernel:
             'I': _triton.ir.type.get_int32,
             'L': _triton.ir.type.get_int64,
             'f': _triton.ir.type.get_fp32,
+            'd': _triton.ir.type.get_fp64,
             'B': _triton.ir.type.get_int1,
             'f8': _triton.ir.type.get_fp8,
             'f16': _triton.ir.type.get_fp16,
