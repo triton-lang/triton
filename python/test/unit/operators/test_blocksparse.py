@@ -21,7 +21,7 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     }[MODE]
     layout = torch.randint(2, (H, shape[0] // BLOCK, shape[1] // BLOCK))
     # triton result
-    op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B)
+    op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B, device="cuda")
     ra = triton.testing.sparsify_tensor(a, layout, BLOCK) if MODE == "dsd" else a
     rb = triton.testing.sparsify_tensor(b, layout, BLOCK) if MODE == "dds" else b
     rc = triton.testing.catch_oor(lambda: op(ra, rb), pytest)
