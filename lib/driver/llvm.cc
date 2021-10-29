@@ -178,7 +178,7 @@ std::string ptx_to_cubin(const std::string& ptx, int cc) {
   ofs.close();
   std::string cmd;
   int err;
-  cmd = ptxas + " -v --gpu-name=sm_" + std::to_string(cc) + " " + fsrc + " -o " + fsrc + ".o";
+  cmd = ptxas + " -v --gpu-name=sm_" + std::to_string(cc) + " " + fsrc + " -o " + fsrc + ".o 2> " + flog;
   err = system(cmd.c_str());
   CUmodule ret;
   std::ifstream _cubin(_fbin, std::ios::binary );
