@@ -394,9 +394,11 @@ def zeros(shape, dtype, _builder=None):
     :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
     :type dtype: DType
     """
-    for d in shape:
+    for i, d in enumerate(shape):
         if not isinstance(d, constexpr):
-            raise TypeError("Shape elements must have type `constexpr`")
+            raise TypeError(f"Shape element {i} must have type `constexpr`")
+        if not isinstance(d.value, int):
+            raise TypeError(f"Shape element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
     shape = [x.value for x in shape]
     return frontend.zeros(shape, dtype, _builder)
 

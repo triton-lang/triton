@@ -103,7 +103,9 @@ class CodeGenerator(ast.NodeVisitor):
             arg_values = []
             for i, arg_name in enumerate(arg_names):
                 if i in self.constants:
-                    cst = triton.language.constexpr(self.constants[i])
+                    cst = self.constants[i]
+                    if not isinstance(cst, triton.language.constexpr):
+                        cst = triton.language.constexpr(self.constants[i])
                     arg_values.append(cst)
                 else:
                     if i in self.attributes:
@@ -114,6 +116,7 @@ class CodeGenerator(ast.NodeVisitor):
                         fn.add_attr(i + 1, attr)
                     fn.args[i].name = arg_name
                     arg_values.append(fn.args[i])
+                
         for arg_name, arg_value in zip(arg_names, arg_values):
             self.set_value(arg_name, arg_value)
         if inline:
@@ -167,7 +170,7 @@ class CodeGenerator(ast.NodeVisitor):
         if not isinstance(values, tuple):
             values = [values]
         for name, value in zip(names, values):
-            # by default, constexpr are assigned into variable
+            # by default, constexpr are assigned into python variable
             if isinstance(value, triton.language.constexpr):
                 value = value.value
             if not isinstance(value, triton.language.block):
@@ -200,6 +203,10 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_BinOp(self, node):
         lhs = self.visit(node.left)
         rhs = self.visit(node.right)
+        if isinstance(lhs, triton.language.core.constexpr):
+            lhs = lhs.value
+        if isinstance(rhs, triton.language.core.constexpr):
+            rhs = rhs.value
         fn = {
             ast.Add: '__add__',
             ast.Sub: '__sub__',
@@ -269,6 +276,10 @@ class CodeGenerator(ast.NodeVisitor):
         assert len(node.ops) == 1
         lhs = self.visit(node.left)
         rhs = self.visit(node.comparators[0])
+        if isinstance(lhs, triton.language.core.constexpr):
+            lhs = lhs.value
+        if isinstance(rhs, triton.language.core.constexpr):
+            rhs = rhs.value
         fn = {
             ast.Eq: '__eq__',
             ast.NotEq: '__ne__',
@@ -289,6 +300,8 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_UnaryOp(self, node):
         op = self.visit(node.operand)
+        if isinstance(op, triton.language.core.constexpr):
+            op = op.value
         fn = {
             ast.USub: '__neg__',
             ast.UAdd: '__pos__',
@@ -502,7 +515,8 @@ class Kernel:
             return 'f'
         if isinstance(obj, bool):
             return 'B'
-        print(obj, type(obj))
+        if isinstance(obj, str):
+            return 'str'
         assert False
 
         
@@ -555,17 +569,18 @@ class Kernel:
     def __init__(self, fn):
         self.fn = fn
 
-    def _compile(self, *wargs, device, attributes, constants, num_warps, num_stages, **meta):
+    def _compile(self, *wargs, device, attributes, constants, num_warps, num_stages):
         # create IR module
         context = _triton.ir.context()
         # get just-in-time proto-type of kernel
-        arg_types = [Kernel._to_triton_ir(context, arg) for arg in wargs]
+        arg_types = [Kernel._to_triton_ir(context, arg) for arg in wargs \
+                     if not isinstance(arg, triton.language.core.constexpr)]
         ret_type = _triton.ir.type.get_void(context)
         prototype = _triton.ir.type.make_function(ret_type, arg_types)
         # generate Triton-IR
         # export symbols visible from self.fn into code-generator object
         gscope = sys.modules[self.fn.module].__dict__
-        generator = CodeGenerator(context, prototype, gscope=gscope, attributes=attributes, constants=constants, kwargs=meta)
+        generator = CodeGenerator(context, prototype, gscope=gscope, attributes=attributes, constants=constants, kwargs=dict())
         try:
             generator.visit(self.fn.parse())
         except Exception as e:
@@ -628,7 +643,7 @@ class Kernel:
         # enqueue kernel on the current device
         torch.cuda.set_device(device_idx)
         # attributes
-        args = [arg.data_ptr() if i in tensor_idxs else arg.value if isinstance(arg, triton.language.core.constexpr) else arg for i, arg in enumerate(wargs)]
+        args = [arg.data_ptr() if i in tensor_idxs else arg for i, arg in enumerate(wargs)]
         attributes = {i: Kernel.pow2_divisor(a) for i, a in enumerate(args) \
                       if isinstance(a, int) and i not in self.fn.do_not_specialize}
 
@@ -687,8 +702,8 @@ class Kernel:
  
             drv_cache[key] = LoadedBinary(device_idx, binary)
         # pack arguments
-        fmt = ''.join(['P' if i in tensor_idxs else Kernel._type_name(arg) for i, arg in enumerate(wargs)])
-        params = struct.pack(fmt, *args)
+        fmt = ''.join(['P' if i in tensor_idxs else Kernel._type_name(arg) for i, arg in enumerate(wargs) if not isinstance(arg, triton.language.core.constexpr)])
+        params = struct.pack(fmt, *[arg for arg in args if not isinstance(arg, triton.language.core.constexpr)])
         # enqueue cached function into stream
         callable = drv_cache[key]
         stream = torch.cuda.current_stream(device_idx).cuda_stream
@@ -743,18 +758,18 @@ class Autotuner:
             self.kernel(*args, num_warps=config.num_warps, num_stages=config.num_stages, **current)
         return triton.testing.do_bench(kernel_call)
 
-    def __call__(self, *args, **meta):
+    def __call__(self, *args, **kwargs):
         if len(self.configs) > 1:
             key = tuple([args[i] for i in self.key_idx])
             if key not in self.cache:
-                timings = {config: self._bench(*args, config=config, **meta) \
+                timings = {config: self._bench(*args, config=config, **kwargs) \
                         for config in self.configs}
                 self.cache[key] = builtins.min(timings, key=timings.get)
                 self.hook(args)
             config = self.cache[key]
         else:
             config = self.configs[0]
-        return self.kernel(*args, num_warps=config.num_warps, num_stages=config.num_stages, **meta, **config.meta)
+        return self.kernel(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
 
 
 @functools.lru_cache()
@@ -874,8 +889,8 @@ class Config:
                        Mostly useful for matrix multiplication workloads on SM80+ GPUs.
     :type num_stages: int
     """
-    def __init__(self, meta, num_warps=4, num_stages=2):
-        self.meta = meta
+    def __init__(self, kwargs, num_warps=4, num_stages=2):
+        self.kwargs = kwargs
         self.num_warps = num_warps
         self.num_stages = num_stages
 
