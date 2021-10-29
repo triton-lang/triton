@@ -16,10 +16,9 @@ def num_warps(n):
 @triton.jit
 def _forward(
     X, scale, LUT, RPE, KP_M, ATTN_M, is_causal, sizemax, stride_zx, stride_zrpe, stride_hrpe, stride_srpe, stride_zkpm, stride_zattnm,
-    **meta
+    TN: tl.constexpr, BLOCK: tl.constexpr, APPLY_SCALE: tl.constexpr, APPLY_RPE: tl.constexpr, APPLY_KP_MASK: tl.constexpr,
+    KP_MASK_MUL: tl.constexpr, APPLY_ATTN_MASK: tl.constexpr, ATTN_MASK_MUL: tl.constexpr,
 ):
-    TN: tl.constexpr = meta['TN']
-    BLOCK: tl.constexpr = meta['BLOCK']
     pidhm = tl.program_id(0)
     pidz = tl.program_id(1)
     # create index ranges
@@ -43,25 +42,25 @@ def _forward(
     x = tl.load(px, mask=check, other=-float('inf'))
     x = x.to(tl.float32)
     # apply scale
-    if meta['APPLY_SCALE']:
+    if APPLY_SCALE:
         x = x * scale
     # apply RPE
-    if meta['APPLY_RPE']:
+    if APPLY_RPE:
         prpe = RPE + pidz * stride_zrpe + headid * stride_hrpe + columnid * BLOCK + rowid * BLOCK * stride_srpe + rxm * stride_srpe + rxn
         rpe = tl.load(prpe, mask=check, other=0)
         x = x + rpe
     # apply key-padding mask
-    if meta['APPLY_KP_MASK']:
+    if APPLY_KP_MASK:
         pkp_m = KP_M + pidz * stride_zkpm + columnid * BLOCK + rxn
         kp_m = tl.load(pkp_m, mask=check, other=-float('inf'))
-        if meta['KP_MASK_MUL']:
+        if KP_MASK_MUL:
             kp_m = tl.where(kp_m == 0, -float('inf'), 0.)
         x = x + kp_m
     # apply attention mask
-    if meta['APPLY_ATTN_MASK']:
+    if APPLY_ATTN_MASK:
         pattn_m = ATTN_M + columnid * BLOCK + rowid * BLOCK * stride_zattnm + rxm * stride_zattnm + rxn
         attn_m = tl.load(pattn_m, mask=check, other=-float('inf'))
-        if meta['ATTN_MASK_MUL']:
+        if ATTN_MASK_MUL:
             attn_m = tl.where(attn_m == 0, -float('inf'), 0.)
         x = x + attn_m
     # apply causal mask
@@ -75,11 +74,9 @@ def _forward(
 @triton.heuristics({'num_warps': lambda *args, **meta: num_warps(args[4] * meta['BLOCK'])})
 @triton.heuristics({'TN': lambda *args, **meta: triton.next_power_of_2(args[4]) * meta['BLOCK']})
 @triton.jit
-def _backward(X, scale, DX, LUT, sizemax, stride_zx, stride_zdx, **meta):
+def _backward(X, scale, DX, LUT, sizemax, stride_zx, stride_zdx, TN: tl.constexpr, BLOCK: tl.constexpr):
     pidhm = tl.program_id(0)
     pidz = tl.program_id(1)
-    TN = meta['TN']
-    BLOCK = meta['BLOCK']
     # create index ranges
     rxm = pidhm % BLOCK
     rbm = pidhm // BLOCK
@@ -172,8 +169,7 @@ class _softmax(torch.autograd.Function):
                        APPLY_KP_MASK   = apply_kp_mask, 
                        APPLY_ATTN_MASK = apply_attn_mask, 
                        KP_MASK_MUL     = (kp_mask_mode == 'mul'),
-                       ATTN_MASK_MUL   = (attn_mask_mode == 'mul'),
-                       force_nc_cache  = True)
+                       ATTN_MASK_MUL   = (attn_mask_mode == 'mul'))
         # save to context
         ctx.mark_dirty(x)
         ctx.save_for_backward(x, lut)
@@ -196,7 +192,7 @@ class _softmax(torch.autograd.Function):
         # run kernel
         M = x.shape[0]
         grid = lambda opt: [ctx.spdims[0] * ctx.spdims[1] * ctx.block, M]
-        _backward[grid](x, ctx.scale, dx, lut, ctx.maxlut, x.stride(0), dx.stride(0), force_nc_cache=True, BLOCK=ctx.block)
+        _backward[grid](x, ctx.scale, dx, lut, ctx.maxlut, x.stride(0), dx.stride(0), BLOCK=ctx.block)
         return dx, None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
 

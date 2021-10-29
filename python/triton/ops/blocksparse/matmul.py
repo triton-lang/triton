@@ -21,12 +21,10 @@ def _sdd_kernel(
     stride_za, stride_ha, stride_ma, stride_ak, 
     stride_zb, stride_hb, stride_bk, stride_nb, 
     stride_zc, stride_hc, stride_mc, stride_nc, 
-    K, grid_offset, lut, **meta
+    K, grid_offset, lut, 
+    TILE_M: tl.constexpr, TILE_N: tl.constexpr, TILE_K: tl.constexpr,
+    BLOCK: tl.constexpr, EVEN_K: tl.constexpr
 ):
-    TILE_M = meta['TILE_M']
-    TILE_N = meta['TILE_N']
-    TILE_K = meta['TILE_K']
-    BLOCK  = meta['BLOCK']
     #------------#
     #- Prologue -#
     #------------#
@@ -61,7 +59,7 @@ def _sdd_kernel(
     ## ---------------- ##
     acc = tl.zeros((TILE_M, TILE_N), dtype=tl.float32)
     for k in range(K, 0, -TILE_K):
-        if meta['EVEN_K']:
+        if EVEN_K:
             a = tl.load(a_ptrs)
             b = tl.load(b_ptrs)
         else:
@@ -154,12 +152,10 @@ def _dsd_kernel(
     stride_az, stride_ha, stride_am, stride_ak, 
     stride_zb, stride_hb, stride_bk, stride_bn, 
     stride_zc, stride_hc, stride_cm, stride_cn, 
-    DS0, DS1, lut, **meta
+    DS0, DS1, lut, 
+    TILE_M: tl.constexpr, TILE_N: tl.constexpr, TILE_K: tl.constexpr,
+    GROUP_SIZE_M: tl.constexpr,
 ):
-    TILE_M = meta['TILE_M']
-    TILE_N = meta['TILE_N']
-    TILE_K = meta['TILE_K']
-    GROUP_SIZE_M = meta['GROUP_SIZE_M']
     #------------#
     #- Prologue -#
     #------------#
@@ -242,7 +238,7 @@ def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, num_locks, w
         b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
         c.stride(0), c.stride(1), c.stride(3 if trans_c else 2), c.stride(2 if trans_c else 3),
         BS3, AS1, lut,
-        TILE_M = block, TILE_N=TILE_N, TILE_K = min(block, 32), BLOCK = block, num_stages=3,
+        TILE_M = block, TILE_N=TILE_N, TILE_K = min(block, 32), num_stages=3,
         num_warps=4, GROUP_SIZE_M=8,
     )
     # exit()
@@ -334,12 +330,10 @@ def _dds_kernel(
     stride_za, stride_ha, stride_ma, stride_ka, 
     stride_zb, stride_hb, stride_bk, stride_bn, 
     stride_zc, stride_hc, stride_mc, stride_nc, 
-    DS0, DS1, lut, **meta
+    DS0, DS1, lut, 
+    TILE_M: tl.constexpr, TILE_N: tl.constexpr, TILE_K: tl.constexpr,
+    GROUP_SIZE_M: tl.constexpr
 ):
-    TILE_M = meta['TILE_M']
-    TILE_N = meta['TILE_N']
-    TILE_K = meta['TILE_K']
-    GROUP_SIZE_M = meta['GROUP_SIZE_M']
     #------------#
     #- Prologue -#
     #------------#
@@ -425,7 +419,7 @@ def dds_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, num_locks, w
         b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
         c.stride(0), c.stride(1), c.stride(3 if trans_c else 2), c.stride(2 if trans_c else 3),
         AS2, BS2, lut,
-        TILE_M = TILE_M, TILE_N = block, TILE_K = min(block, 32), BLOCK = block, num_stages=3,
+        TILE_M = TILE_M, TILE_N = block, TILE_K = min(block, 32), num_stages=3,
         num_warps=4, GROUP_SIZE_M=8,
     )
     return c
