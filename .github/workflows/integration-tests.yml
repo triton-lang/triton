@@ -5,7 +5,7 @@ on:
   pull_request:
     branches:
       - master
-      - v2
+      - v2.0
 
 
 jobs:
