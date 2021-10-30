@@ -573,8 +573,7 @@ class Kernel:
         # create IR module
         context = _triton.ir.context()
         # get just-in-time proto-type of kernel
-        arg_types = [Kernel._to_triton_ir(context, arg) for arg in wargs \
-                     if not isinstance(arg, triton.language.core.constexpr)]
+        arg_types = [Kernel._to_triton_ir(context, arg) for arg in wargs]
         ret_type = _triton.ir.type.get_void(context)
         prototype = _triton.ir.type.make_function(ret_type, arg_types)
         # generate Triton-IR
@@ -648,7 +647,8 @@ class Kernel:
                       if isinstance(a, int) and i not in self.fn.do_not_specialize}
 
         # transforms ints whose value is one into constants for just-in-time compilation
-        constants = {i: arg for i, arg in enumerate(wargs) if isinstance(arg, triton.language.core.constexpr) or (isinstance(arg, int) and arg == 1)}
+        constants = {i: arg for i, arg in enumerate(wargs) if isinstance(arg, int) and arg == 1}
+        constants.update({i: arg.value for i, arg in enumerate(wargs) if isinstance(arg, triton.language.constexpr)})
 
         # compute hash for caching this kernel
         types_key = Kernel._types_key(*wargs, tensor_idxs=tensor_idxs)

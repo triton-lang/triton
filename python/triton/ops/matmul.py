@@ -114,7 +114,6 @@ class _matmul(torch.autograd.Function):
                       b.stride(0), b.stride(1), 
                       c.stride(0), c.stride(1), 
                       locks, GROUP_M=8)
-        # done
         return c
 
     @staticmethod
