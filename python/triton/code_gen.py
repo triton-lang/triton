@@ -745,14 +745,14 @@ class Autotuner:
     def _bench(self, *args, config, **meta):
         # check for conflicts, i.e. meta-parameters both provided
         # as kwargs and by the autotuner
-        conflicts = meta.keys() & config.meta.keys()
+        conflicts = meta.keys() & config.kwargs.keys()
         if conflicts:
             raise ValueError(
                 f"Conflicting meta-parameters: {', '.join(conflicts)}."
                 " Make sure that you don't re-define auto-tuned symbols."
             )
         # augment meta-parameters with tunable ones
-        current = dict(meta, **config.meta)
+        current = dict(meta, **config.kwargs)
         def kernel_call():
             self.hook(args)
             self.kernel(*args, num_warps=config.num_warps, num_stages=config.num_stages, **current)
