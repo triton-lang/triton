@@ -570,6 +570,7 @@ class Kernel:
         self.fn = fn
 
     def _compile(self, *wargs, device, attributes, constants, num_warps, num_stages):
+        wargs = [arg for arg in wargs if not isinstance(arg, triton.language.constexpr)]
         # create IR module
         context = _triton.ir.context()
         # get just-in-time proto-type of kernel
