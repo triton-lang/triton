@@ -26,13 +26,9 @@ def _kernel(A, B, C, M, N, K,
             stride_am, stride_ak, 
             stride_bk, stride_bn, 
             stride_cm, stride_cn, 
-            LOCKS, **META):
-    # extract meta-parameters
-    BLOCK_M = META['BLOCK_M']
-    BLOCK_N = META['BLOCK_N']
-    BLOCK_K = META['BLOCK_K']
-    GROUP_M = META['GROUP_M']
-    SPLIT_K = META['SPLIT_K']
+            LOCKS,
+            BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+            GROUP_M: tl.constexpr, SPLIT_K: tl.constexpr, EVEN_K: tl.constexpr):
     # matrix multiplication
     pid = tl.program_id(0)
     pid_z = tl.program_id(1)
@@ -55,7 +51,7 @@ def _kernel(A, B, C, M, N, K,
     B = B + (rk[:, None] * stride_bk + rbn[None, :] * stride_bn)
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for k in range(K, 0, -BLOCK_K*SPLIT_K):
-        if META['EVEN_K']:
+        if EVEN_K:
             a = tl.load(A)
             b = tl.load(B)
         else:
@@ -113,14 +109,11 @@ class _matmul(torch.autograd.Function):
         locks = _matmul._locks[device]
         # launch kernel
         grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), META['SPLIT_K'])
-        _kernel[grid](a, b, c, 
-                      M, N, K, 
+        _kernel[grid](a, b, c, M, N, K, 
                       a.stride(0), a.stride(1), 
                       b.stride(0), b.stride(1), 
                       c.stride(0), c.stride(1), 
-                      locks, 
-                      GROUP_M=8)
-        # done
+                      locks, GROUP_M=8)
         return c
 
     @staticmethod

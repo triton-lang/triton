@@ -198,8 +198,6 @@ scanline_layout::scanline_layout(size_t num_warps,
   bool is_dot = std::any_of(values.begin(), values.end(),
                             [&](ir::value* v) { return dynamic_cast<ir::dot_inst*>(v); });
 
-
-
   std::vector<ir::value*> ptrs;
   for(ir::value *v: values)
      for(ir::user *usr: v->get_users())
@@ -214,7 +212,6 @@ scanline_layout::scanline_layout(size_t num_warps,
     int nbits = ptr->get_type()->get_pointer_element_ty()->get_scalar_ty()->get_primitive_size_in_bits();
     contiguous = std::max<int>(contiguous, std::min<int>(align->get(ptr, i), 128 / nbits));
   }
-
 
   nts_[i] = clamp(size / num_threads, 1, std::min<int>(contiguous, shape_[i]));
   mts_[i] = clamp(num_threads, 1, shape_[i] / nts_[i]);
