@@ -18,7 +18,7 @@ import tarfile
 
 def get_llvm():
     # tries to find system LLVM
-    versions = ['-11.0', '-11', '-11-64']
+    versions = ['-11.0', '-11', '-11-64'] 
     supported = ['llvm-config{v}'.format(v=v) for v in versions]
     paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
     paths = [p for p in paths if p is not None]
