@@ -125,11 +125,13 @@ void parse_args(py::handle args, const std::string& func_key, py::handle arg_nam
         // long and int have different kernels
         if(std::abs(value) <= 0xffffffff){
           cache_key += 'I';
+          params_ptr = (char*)(((uintptr_t)params_ptr + 3) & (-4));
           std::memcpy(params_ptr, &value, 4);
           params_ptr += 4;
         }
         else{
           cache_key += 'L';
+          params_ptr = (char*)(((uintptr_t)params_ptr + 7) & (-8));
           std::memcpy(params_ptr, &value, 8);
           params_ptr += 8;
         }
@@ -146,6 +148,7 @@ void parse_args(py::handle args, const std::string& func_key, py::handle arg_nam
       if(PyFloat_Check(arg_ptr)){
         cache_key += "f";
         float value = PyFloat_AsDouble(arg_ptr);
+        params_ptr = (char*)(((uintptr_t)params_ptr + 3) & (-4));
         std::memcpy(params_ptr, &value, 4);
         params_ptr += 4;
         continue;
@@ -163,6 +166,7 @@ void parse_args(py::handle args, const std::string& func_key, py::handle arg_nam
       if(data_ptr){
         cache_key += "P";
         long value = PyLong_AsLong(data_ptr);
+        params_ptr = (char*)(((uintptr_t)params_ptr + 7) & (-8));
         std::memcpy(params_ptr, &value, 8);
         params_ptr += 8;
         continue;
@@ -177,6 +181,7 @@ void parse_args(py::handle args, const std::string& func_key, py::handle arg_nam
       assert(false);
     }
   params.resize(std::ptrdiff_t(params_ptr - &params[0]));
+  std::cout << params.size() << std::endl;
 }
 
 //
@@ -223,8 +228,7 @@ void init_triton_runtime(py::module &&m) {
     PyObject* grid_ptr = grid.ptr();
     if(!PyTuple_Check(grid_ptr)){
       PyObject* grid_call = PyObject_GetAttrString(grid_ptr, "__call__");
-      if(grid_call)
-        grid_ptr = PyObject_Call(grid_ptr, constants, nullptr);
+      grid_ptr = PyObject_Call(grid_call, PyTuple_Pack(1, constants), nullptr);
     }
     int size = PyTuple_Size(grid_ptr);
     int grid_0 = PyLong_AsLong(PyTuple_GetItem(grid_ptr, 0));

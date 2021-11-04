@@ -637,14 +637,7 @@ class Kernel:
 
         self.fn.bin_cache[key] = LoadedBinary(device_idx, binary)
 
-
-class Launcher:
-    def __init__(self, fn, kernel, grid):
-        self.fn = fn
-        self.kernel = kernel
-        self.grid = grid
-
-    def __call__(self, *wargs, num_warps=4, num_stages=2, **kwargs):
+    def __call__(self, *wargs, grid, num_warps=4, num_stages=2, **kwargs):
         # handle arguments passed by name
         kwargs = {self.fn.arg_names.index(name): value for name, value in kwargs.items()}
         wargs = list(wargs)
@@ -667,8 +660,17 @@ class Launcher:
         stream = ((bits & 0xFFFFFFFFFFFF) ^ mask) - mask
         # make key for cache
         return _triton.runtime.launch(wargs, self.fn.cache_key, self.fn.arg_names, device, stream,
-                                                             self.fn.bin_cache, num_warps, num_stages, self.kernel.add_to_cache,
-                                                             self.grid)
+                                      self.fn.bin_cache, num_warps, num_stages, self.add_to_cache, grid)
+
+
+class Launcher:
+    def __init__(self, kernel, grid):
+        self.kernel = kernel
+        self.grid = grid
+
+    def __call__(self, *wargs, **kwargs):
+        self.kernel(*wargs, **kwargs, grid=self.grid)
+        
 
 
 class Autotuner:
@@ -819,18 +821,15 @@ class JITFunction:
         if name == 'src':
             self._set_cache_key()
 
-    def _init_launcher(self):
-        if self.launcher is None:
-            kernel = Kernel(self)
+    def _init_kernel(self):
+        if self.kernel is None:
+            self.kernel = Kernel(self)
             for decorator in reversed(self.kernel_decorators):
-                kernel = decorator(self.kernel)
-            self.launcher = Launcher(self, kernel, None)
-        return self.launcher
+                self.kernel = decorator(self.kernel)
+        return self.kernel
 
     def __getitem__(self, grid):
-        launcher = self._init_launcher()
-        launcher.grid = grid
-        return launcher
+        return Launcher(self._init_kernel(), grid)
 
     def __repr__(self):
         return f"JITFunction({self.module}:{self.fn.__name__})"
