@@ -18,7 +18,7 @@ import tarfile
 
 def get_llvm():
     # tries to find system LLVM
-    versions = ['-11.0', '-11', '-11-64']
+    versions = ['-11.0', '-11', '-11-64'] 
     supported = ['llvm-config{v}'.format(v=v) for v in versions]
     paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
     paths = [p for p in paths if p is not None]
@@ -127,7 +127,7 @@ setup(
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
     packages=["triton", "triton/_C", "triton/language", "triton/tools", "triton/ops", "triton/ops/blocksparse"],
-    install_requires=["torch", "filelock"],
+    install_requires=["cmake", "torch", "filelock"],
     package_data={"triton/ops": ["*.c"], "triton/ops/blocksparse": ["*.c"]},
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
