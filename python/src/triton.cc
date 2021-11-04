@@ -111,7 +111,7 @@ std::string pow2_divisor(long N){
 
 // Launch
 void parse_args(py::handle args, const std::string& func_key, py::handle arg_names,
-                std::string& cache_key, std::string& params, PyObject* constants) {
+                std::string& cache_key, std::string& params, size_t& params_size, PyObject* constants) {
     size_t len = PyList_Size(args.ptr());
     params.reserve(32*len); // 8 max bytes by argument
     char* params_ptr = &params[0];
@@ -169,6 +169,11 @@ void parse_args(py::handle args, const std::string& func_key, py::handle arg_nam
         params_ptr = (char*)(((uintptr_t)params_ptr + 7) & (-8));
         std::memcpy(params_ptr, &value, 8);
         params_ptr += 8;
+        PyObject* dtype = PyObject_GetAttrString(arg_ptr, "dtype");
+        PyObject* repr  = PyObject_Repr(dtype);
+        const char* start = (const char*)PyUnicode_1BYTE_DATA(repr) + 6; // remove 'torch.'
+        size_t len = PyUnicode_GET_LENGTH(repr) - 6;
+        cache_key += std::string(start, len);
         continue;
       }
       // argument is `constexpr`
@@ -176,12 +181,15 @@ void parse_args(py::handle args, const std::string& func_key, py::handle arg_nam
       if(value){
         PyObject* name = PyList_GetItem(arg_names.ptr(), i);
         PyDict_SetItem(constants, name, value);
+        PyObject* repr = PyObject_Repr(value);
+        const char* start = (const char*)PyUnicode_1BYTE_DATA(repr);
+        size_t len = PyUnicode_GET_LENGTH(repr);
+        cache_key += std::string(start, len);
         continue;
       }
       assert(false);
     }
-  params.resize(std::ptrdiff_t(params_ptr - &params[0]));
-  std::cout << params.size() << std::endl;
+  params_size = (std::ptrdiff_t)(params_ptr - &params[0]);
 }
 
 //
@@ -214,8 +222,9 @@ void init_triton_runtime(py::module &&m) {
     // parse arguments to compute cache key, compile-time constants and packed kernel arguments
     std::string cache_key;
     std::string params;
+    size_t params_size;
     PyObject* constants = PyDict_New();
-    parse_args(args, func_key, arg_names, cache_key, params, constants);
+    parse_args(args, func_key, arg_names, cache_key, params, params_size, constants);
     // get cached binary
     PyObject* key = PyUnicode_FromString(cache_key.c_str());
     PyObject* bin = nullptr;
@@ -239,7 +248,6 @@ void init_triton_runtime(py::module &&m) {
     uint64_t shared_mem = PyLong_AsLong(PyObject_GetAttrString(bin, "shared_mem"));
     // actually launch
     void* params_ptr = (void*)&params[0];
-    size_t params_size = params.size();
     void *config[] = {
         CU_LAUNCH_PARAM_BUFFER_POINTER, params_ptr,
         CU_LAUNCH_PARAM_BUFFER_SIZE, (void*)&params_size,

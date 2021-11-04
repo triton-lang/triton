@@ -757,6 +757,7 @@ class JITFunction:
         self.cache_key += str(self.version)
         self.cache_key += version_key()
         self.cache_key += compute_capability()
+        self.cache_key = hashlib.md5(self.cache_key.encode("utf-8")).hexdigest()
 
     def __init__(self, fn, version=None, do_not_specialize=None):
         # information of wrapped function
@@ -775,7 +776,6 @@ class JITFunction:
         # when called with a grid using __getitem__
         self.kernel_decorators = []
         self.kernel = None
-        self.launcher = None
         # annotations
         self.annotations = {self.arg_names.index(name): ty for name, ty in fn.__annotations__.items()}
         self.__annotations__ = fn.__annotations__
@@ -816,7 +816,7 @@ class JITFunction:
     #   needs to be cleared
     def __setattr__(self, name, value):
         if name == 'kernel_decorators':
-            self.launcher = None
+            self.kernel = None
         super(JITFunction, self).__setattr__(name, value)
         if name == 'src':
             self._set_cache_key()
