@@ -669,7 +669,7 @@ class Launcher:
         self.grid = grid
 
     def __call__(self, *wargs, **kwargs):
-        self.kernel(*wargs, **kwargs, grid=self.grid)
+        return self.kernel(*wargs, **kwargs, grid=self.grid)
         
 
 
