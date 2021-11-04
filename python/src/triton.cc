@@ -221,7 +221,7 @@ void init_triton_runtime(py::module &&m) {
   // cache key
   m.def("launch", [](py::handle args, const std::string& func_key, py::list& arg_names, 
                      py::handle device, py::handle stream, py::handle bin_cache, py::handle num_warps, py::handle num_stages, 
-                     py::function add_to_cache, py::handle grid){
+                     py::handle add_to_cache, py::handle grid){
     // parse arguments to compute cache key, compile-time constants and packed kernel arguments
     long _num_warps = PyLong_AsLong(num_warps.ptr());
     long _num_stages = PyLong_AsLong(num_stages.ptr());
