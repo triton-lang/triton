@@ -13,6 +13,7 @@
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include "Python.h"
 #include <regex>
 #include <string>
 #include "llvm/IR/Module.h"
@@ -22,6 +23,7 @@
 namespace py = pybind11;
 namespace ir = triton::ir;
 namespace drv = triton::driver;
+
 
 /*****************************************************************************/
 /* Python bindings for triton::driver                                        */
@@ -99,7 +101,91 @@ void hip_enqueue(uint64_t stream, uint64_t kernel,
 
 }
 
+std::string pow2_divisor(long N){
+    if(N % 16 == 0) return "16";
+    if(N % 8 == 0) return "8";
+    if(N % 4 == 0) return "4";
+    if(N % 2 == 0) return "2";
+    return "1";
+}
+
+// Launch
+void parse_args(py::handle args, const std::string& func_key, py::handle arg_names,
+                std::string& cache_key, std::string& params, PyObject* constants) {
+    size_t len = PyList_Size(args.ptr());
+    params.reserve(32*len); // 8 max bytes by argument
+    char* params_ptr = &params[0];
+    cache_key = func_key;
+    for(int i = 0; i < len; i++){
+      auto arg_ptr = PyList_GetItem(args.ptr(), i);
+      auto arg = py::handle(arg_ptr);
+      // argument is `long`
+      if(PyLong_Check(arg_ptr)){
+        long value = PyLong_AsLong(arg_ptr);
+        // long and int have different kernels
+        if(std::abs(value) <= 0xffffffff){
+          cache_key += 'I';
+          std::memcpy(params_ptr, &value, 4);
+          params_ptr += 4;
+        }
+        else{
+          cache_key += 'L';
+          std::memcpy(params_ptr, &value, 8);
+          params_ptr += 8;
+        }
+        // values equal to 1 are specialized
+        if(value == 1)
+          cache_key += '1';
+        else
+          cache_key += 'x';
+        // values divisible by small powers of 2 are specialized
+        cache_key += pow2_divisor(value);
+        continue;
+      }
+      // argument is `float`
+      if(PyFloat_Check(arg_ptr)){
+        cache_key += "f";
+        float value = PyFloat_AsDouble(arg_ptr);
+        std::memcpy(params_ptr, &value, 4);
+        params_ptr += 4;
+        continue;
+      }
+      // argument is `bool`
+      if(PyBool_Check(arg_ptr)){
+        cache_key += "B";
+        bool value =  arg_ptr == Py_True ? true : false;
+        std::memcpy(params_ptr, &value, 1);
+        params_ptr += 1;
+        continue;
+      }
+      // argument is tensor
+      PyObject* data_ptr = PyObject_CallMethod(arg_ptr, "data_ptr", nullptr);
+      if(data_ptr){
+        cache_key += "P";
+        long value = PyLong_AsLong(data_ptr);
+        std::memcpy(params_ptr, &value, 8);
+        params_ptr += 8;
+        continue;
+      }
+      // argument is `constexpr`
+      PyObject* value = PyObject_GetAttrString(arg_ptr, "value");
+      if(value){
+        PyObject* name = PyList_GetItem(arg_names.ptr(), i);
+        PyDict_SetItem(constants, name, value);
+        continue;
+      }
+      assert(false);
+    }
+  params.resize(std::ptrdiff_t(params_ptr - &params[0]));
+}
+
+//
+
 void init_triton_runtime(py::module &&m) {
+
+  // m.def("current_stream", [](uint64_t device){
+  //   return (uint64_t)(c10::cuda::getCurrentCUDAStream(device).stream());
+  // });
 
   // wrap backend_t
   py::enum_<backend_t>(m, "backend")
@@ -115,6 +201,53 @@ void init_triton_runtime(py::module &&m) {
       cu_enable_peer_access(peer_ptr);
     }
   );
+
+  // cache key
+  m.def("launch", [](py::handle args, const std::string& func_key, py::list& arg_names, 
+                     py::handle device, py::handle stream, py::handle bin_cache, py::handle num_warps, py::handle num_stages, 
+                     py::handle add_to_cache, py::handle grid){
+    // parse arguments to compute cache key, compile-time constants and packed kernel arguments
+    std::string cache_key;
+    std::string params;
+    PyObject* constants = PyDict_New();
+    parse_args(args, func_key, arg_names, cache_key, params, constants);
+    // get cached binary
+    PyObject* key = PyUnicode_FromString(cache_key.c_str());
+    PyObject* bin = nullptr;
+    if(!PyDict_Contains(bin_cache.ptr(), key)){
+      PyObject* cache_args = PyTuple_Pack(5, key, args.ptr(), device.ptr(), num_warps.ptr(), num_stages.ptr());
+      PyObject_Call(add_to_cache.ptr(), cache_args, nullptr);
+    }
+    bin = PyDict_GetItem(bin_cache.ptr(), key);
+    // get grid
+    PyObject* grid_ptr = grid.ptr();
+    if(!PyTuple_Check(grid_ptr)){
+      PyObject* grid_call = PyObject_GetAttrString(grid_ptr, "__call__");
+      if(grid_call)
+        grid_ptr = PyObject_Call(grid_ptr, constants, nullptr);
+    }
+    int size = PyTuple_Size(grid_ptr);
+    int grid_0 = PyLong_AsLong(PyTuple_GetItem(grid_ptr, 0));
+    int grid_1 = size < 2 ? 1 : PyLong_AsLong(PyTuple_GetItem(grid_ptr, 1));
+    int grid_2 = size < 3 ? 1 : PyLong_AsLong(PyTuple_GetItem(grid_ptr, 2));
+    // enqueue
+    uint64_t kernel = PyLong_AsLong(PyObject_GetAttrString(bin, "kernel"));
+    uint64_t shared_mem = PyLong_AsLong(PyObject_GetAttrString(bin, "shared_mem"));
+    // actually launch
+    void* params_ptr = (void*)&params[0];
+    size_t params_size = params.size();
+    void *config[] = {
+        CU_LAUNCH_PARAM_BUFFER_POINTER, params_ptr,
+        CU_LAUNCH_PARAM_BUFFER_SIZE, (void*)&params_size,
+        CU_LAUNCH_PARAM_END
+    };
+    long _num_warps = PyLong_AsLong(num_warps.ptr());
+    long _stream = PyLong_AsLong(stream.ptr());
+    drv::dispatch::cuLaunchKernel((CUfunction)kernel, grid_0, grid_1, grid_2, 
+                                  _num_warps*32, 1, 1, shared_mem, (CUstream)_stream, 
+                                  nullptr, config);
+    return py::handle(bin);
+  });
 
   // query maximum shared memory
   m.def("max_shared_memory", [](backend_t backend, uint64_t device) {
