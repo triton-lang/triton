@@ -110,10 +110,11 @@ std::string pow2_divisor(long N){
 }
 
 // Launch
-void parse_args(py::handle args, const std::string& func_key, py::handle arg_names,
-                std::string& cache_key, std::string& params, size_t& params_size, PyObject* constants) {
+void parse_args(py::handle& args, const std::string& func_key, py::handle& arg_names,
+                std::string& cache_key, std::string& params, size_t& params_size, PyObject* constants,
+                int num_warps, int num_stages) {
     size_t len = PyList_Size(args.ptr());
-    params.reserve(32*len); // 8 max bytes by argument
+    params.reserve(8*len); // 8 max bytes by argument
     char* params_ptr = &params[0];
     cache_key = func_key;
     for(int i = 0; i < len; i++){
@@ -189,6 +190,8 @@ void parse_args(py::handle args, const std::string& func_key, py::handle arg_nam
       }
       assert(false);
     }
+  cache_key += std::to_string(num_warps);
+  cache_key += std::to_string(num_stages);
   params_size = (std::ptrdiff_t)(params_ptr - &params[0]);
 }
 
@@ -218,19 +221,20 @@ void init_triton_runtime(py::module &&m) {
   // cache key
   m.def("launch", [](py::handle args, const std::string& func_key, py::list& arg_names, 
                      py::handle device, py::handle stream, py::handle bin_cache, py::handle num_warps, py::handle num_stages, 
-                     py::handle add_to_cache, py::handle grid){
+                     py::function add_to_cache, py::handle grid){
     // parse arguments to compute cache key, compile-time constants and packed kernel arguments
+    long _num_warps = PyLong_AsLong(num_warps.ptr());
+    long _num_stages = PyLong_AsLong(num_stages.ptr());
     std::string cache_key;
     std::string params;
     size_t params_size;
     PyObject* constants = PyDict_New();
-    parse_args(args, func_key, arg_names, cache_key, params, params_size, constants);
+    parse_args(args, func_key, arg_names, cache_key, params, params_size, constants, _num_warps, _num_stages);
     // get cached binary
     PyObject* key = PyUnicode_FromString(cache_key.c_str());
     PyObject* bin = nullptr;
     if(!PyDict_Contains(bin_cache.ptr(), key)){
-      PyObject* cache_args = PyTuple_Pack(5, key, args.ptr(), device.ptr(), num_warps.ptr(), num_stages.ptr());
-      PyObject_Call(add_to_cache.ptr(), cache_args, nullptr);
+      add_to_cache(py::handle(key), args, device, num_warps, num_stages);
     }
     bin = PyDict_GetItem(bin_cache.ptr(), key);
     // get grid
@@ -247,14 +251,12 @@ void init_triton_runtime(py::module &&m) {
     uint64_t kernel = PyLong_AsLong(PyObject_GetAttrString(bin, "kernel"));
     uint64_t shared_mem = PyLong_AsLong(PyObject_GetAttrString(bin, "shared_mem"));
     // actually launch
-    void* params_ptr = (void*)&params[0];
     void *config[] = {
-        CU_LAUNCH_PARAM_BUFFER_POINTER, params_ptr,
-        CU_LAUNCH_PARAM_BUFFER_SIZE, (void*)&params_size,
+        CU_LAUNCH_PARAM_BUFFER_POINTER, params.data(),
+        CU_LAUNCH_PARAM_BUFFER_SIZE, &params_size,
         CU_LAUNCH_PARAM_END
     };
-    long _num_warps = PyLong_AsLong(num_warps.ptr());
-    long _stream = PyLong_AsLong(stream.ptr());
+    uint64_t _stream = PyLong_AsLong(stream.ptr());
     drv::dispatch::cuLaunchKernel((CUfunction)kernel, grid_0, grid_1, grid_2, 
                                   _num_warps*32, 1, 1, shared_mem, (CUstream)_stream, 
                                   nullptr, config);
