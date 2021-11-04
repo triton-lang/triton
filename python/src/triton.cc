@@ -122,9 +122,10 @@ void parse_args(py::handle& args, const std::string& func_key, py::handle& arg_n
       auto arg = py::handle(arg_ptr);
       // argument is `long`
       if(PyLong_Check(arg_ptr)){
-        long value = PyLong_AsLong(arg_ptr);
+        int overflow;
+        long long value = PyLong_AsLongLongAndOverflow(arg_ptr, &overflow);
         // long and int have different kernels
-        if(std::abs(value) <= 0xffffffff){
+        if(!overflow & (std::abs(value) <= 0xffffffff)){
           cache_key += 'I';
           params_ptr = (char*)(((uintptr_t)params_ptr + 3) & (-4));
           std::memcpy(params_ptr, &value, 4);
@@ -133,6 +134,10 @@ void parse_args(py::handle& args, const std::string& func_key, py::handle& arg_n
         else{
           cache_key += 'L';
           params_ptr = (char*)(((uintptr_t)params_ptr + 7) & (-8));
+          if(overflow){
+            unsigned long long uvalue = PyLong_AsUnsignedLongLong(arg_ptr);
+            std::memcpy(&value, &uvalue, 8);
+          }
           std::memcpy(params_ptr, &value, 8);
           params_ptr += 8;
         }
