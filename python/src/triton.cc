@@ -244,14 +244,14 @@ void init_triton_runtime(py::module &&m) {
     bin = PyDict_GetItem(bin_cache.ptr(), key);
     // get grid
     PyObject* grid_ptr = grid.ptr();
-    if(!PyTuple_Check(grid_ptr)){
+    if(!PySequence_Check(grid_ptr)){
       PyObject* grid_call = PyObject_GetAttrString(grid_ptr, "__call__");
       grid_ptr = PyObject_Call(grid_call, PyTuple_Pack(1, constants), nullptr);
     }
-    int size = PyTuple_Size(grid_ptr);
-    int grid_0 = PyLong_AsLong(PyTuple_GetItem(grid_ptr, 0));
-    int grid_1 = size < 2 ? 1 : PyLong_AsLong(PyTuple_GetItem(grid_ptr, 1));
-    int grid_2 = size < 3 ? 1 : PyLong_AsLong(PyTuple_GetItem(grid_ptr, 2));
+    int size = PySequence_Size(grid_ptr);
+    int grid_0 = PyLong_AsLong(PySequence_GetItem(grid_ptr, 0));
+    int grid_1 = size < 2 ? 1 : PyLong_AsLong(PySequence_GetItem(grid_ptr, 1));
+    int grid_2 = size < 3 ? 1 : PyLong_AsLong(PySequence_GetItem(grid_ptr, 2));
     // enqueue
     uint64_t kernel = PyLong_AsLong(PyObject_GetAttrString(bin, "kernel"));
     uint64_t shared_mem = PyLong_AsLong(PyObject_GetAttrString(bin, "shared_mem"));
