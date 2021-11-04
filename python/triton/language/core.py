@@ -119,6 +119,9 @@ class block:
         self.shape = (1, )
         if self.handle.type.is_block():
             self.shape = self.handle.type.shape
+        self.numel = 1
+        for s in self.shape:
+            self.numel *= s
         # Data-type wrapper
         self.dtype = block._init_dtype(self.handle.type.scalar)
 
@@ -352,6 +355,13 @@ def program_id(axis, _builder=None):
     :param axis: The axis of the 3D launch grid. Has to be either 0, 1 or 2.
     :type axis: int
     """
+    # if axis == -1:
+    #     pid0 = frontend.program_id(0, _builder)
+    #     pid1 = frontend.program_id(1, _builder)
+    #     pid2 = frontend.program_id(2, _builder)
+    #     npg0 = frontend.num_programs(0, _builder)
+    #     npg1 = frontend.num_programs(0, _builder)
+    #     return pid0 + pid1*npg0 + pid2*npg0*npg1
     return frontend.program_id(axis, _builder)
 
 
