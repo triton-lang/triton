@@ -152,7 +152,9 @@ class CodeGenerator(ast.NodeVisitor):
             if target in self.lscope:
                 raise ValueError(f'{target} is already defined.'
                                  f' constexpr cannot be reassigned.')
-            self.lscope[target] = triton.language.constexpr(value)
+            if not isinstance(value, triton.language.constexpr):
+                value = triton.language.constexpr(value)
+            self.lscope[target] = value
             return self.lscope[target]
         # default: call visit_Assign
         return self.visit_Assign(node)
