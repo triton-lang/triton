@@ -34,6 +34,17 @@ class constant;
 class global_value;
 class alloc_const;
 
+class phi_builder {
+  typedef std::pair<std::string, basic_block*> val_key_t;
+
+private:
+  std::map<val_key_t, value*> values_;
+  std::map<std::string, type*> types_;
+  std::set<basic_block*> sealed_blocks_;
+  std::map<basic_block*, std::map<std::string, phi_node*>> incomplete_phis_;
+  std::map<value*, value**> current_phi_;
+};
+
 /* Module */
 
 class module {
@@ -44,10 +55,6 @@ class module {
 public:
   typedef std::map<std::string, global_value*> symbols_map_t;
   typedef std::vector<function*> functions_list_t;
-  struct current_iteration_info_t{
-    lang::iteration_statement *statement;
-    basic_block *block;
-  };
 
 private:
   phi_node *make_phi(type *ty, unsigned num_values, basic_block *block);

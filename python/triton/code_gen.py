@@ -36,6 +36,7 @@ class CodeGenerator(ast.NodeVisitor):
         else:
             raise ValueError(f'{name} is not defined')
         if isinstance(ret, triton.language.block):
+            print(self.lscope)
             handle = self.module.get_value(name)
             return triton.language.block(handle)
         return ret
@@ -95,6 +96,7 @@ class CodeGenerator(ast.NodeVisitor):
         return ret
 
     def visit_FunctionDef(self, node, inline=False, arg_values=None):
+        print(node.name)
         arg_names, kwarg_names = self.visit(node.args)
         # initialize defaults
         for i, default_value in enumerate(node.args.defaults):
@@ -881,7 +883,7 @@ class JITFunction:
 
     cache_hook = None
 
-    def __init__(self, fn, version=None, do_not_specialize=None):
+    def __init__(self, fn, version=None, inline=True, do_not_specialize=None):
         # information of wrapped function
         self.fn = fn
         self.module = fn.__module__
@@ -890,6 +892,7 @@ class JITFunction:
         self.arg_defaults = [v.default for v in signature.parameters.values()]
 
         self.version = version
+        self.inline = inline
         self.src = textwrap.dedent(inspect.getsource(fn))
         self.src = self.src[self.src.find("def"):]
         self.do_not_specialize = [] if do_not_specialize is None else do_not_specialize
@@ -941,10 +944,9 @@ class JITFunction:
             gscope = generator.gscope.copy()
             lscope = generator.lscope.copy()
             values = generator.module.get_values().copy()
-            types = generator.module.get_types().copy()
-            generator.gscope = sys.modules[self.fn.__module__].__dict__
             generator.lscope = dict()
-            ret = generator.visit_FunctionDef(self.parse().body[0], inline=True, arg_values=arg_values)
+            generator.gscope = sys.modules[self.fn.__module__].__dict__
+            ret = generator.visit_FunctionDef(self.parse().body[0], inline=self.inline, arg_values=args)
             generator.gscope = gscope
             generator.lscope = lscope
             generator.module.set_values(values)
