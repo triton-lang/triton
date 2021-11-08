@@ -24,6 +24,7 @@ namespace llvm{
   class IRBuilder;
   class ArrayType;
   class Function;
+  class StructType;
 }
 
 namespace triton{
@@ -114,6 +115,8 @@ private:
 private:
   Type *cvt(ir::type *ty);
   llvm::Attribute cvt(ir::attribute attr);
+  llvm::StructType* packed_type(ir::value* i);
+  void forward_declare(ir::call_inst* i);
 
 public:
   generator(analysis::axes *a_axes,

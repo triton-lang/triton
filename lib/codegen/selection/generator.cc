@@ -3167,6 +3167,18 @@ void generator::finalize_phi_node(ir::phi_node *x) {
   }
 }
 
+StructType* generator::packed_type(ir::value* i){
+  Type* dtype = cvt(i->get_type()->get_tile_element_ty());
+  auto* layout = dynamic_cast<analysis::scanline_layout*>(layouts_->get(i));
+  assert(layout);
+}
+
+void generator::forward_declare(ir::call_inst* i){
+  layouts_->get(i)
+  std::vector<Type*> arg_tys;
+//  FunctionType* ty = FunctionType::get()
+}
+
 void generator::visit(ir::module &src, llvm::Module &dst) {
   mod_ = &dst;
   ctx_ = &dst.getContext();
