@@ -5,6 +5,7 @@
 #include "triton/ir/instructions.h"
 #include "triton/ir/constant.h"
 #include "triton/ir/type.h"
+#include "triton/ir/function.h"
 
 namespace triton{
 namespace ir{
@@ -78,6 +79,21 @@ void phi_node::add_incoming(value *v, basic_block *block){
 phi_node* phi_node::create(type *ty, unsigned num_reserved, const std::string &name, instruction *next){
   return new phi_node(ty, num_reserved, name, next);
 }
+
+//===----------------------------------------------------------------------===//
+//                               call_inst classes
+//===----------------------------------------------------------------------===//
+
+call_inst::call_inst(ir::function* fn, const std::vector<ir::value*>& values, const std::string& name, instruction* next)
+  : instruction(fn->get_fn_type()->get_return_ty(), INST_CALL, values.size(), name, next){
+  for(size_t i = 0; i < values.size(); i++)
+    set_operand(i, values.at(i));
+}
+
+call_inst* call_inst::create(ir::function* fn, const std::vector<ir::value*>& values, const std::string &name, instruction *next) {
+  return new call_inst(fn, values, name, next);
+}
+
 
 
 //===----------------------------------------------------------------------===//
@@ -324,7 +340,7 @@ cast_inst *cast_inst::create_integer_cast(value *arg, type *ty, bool is_signed, 
 
 // return_inst
 return_inst::return_inst(context &ctx, value *ret_val, instruction *next)
-    : terminator_inst(type::get_void_ty(ctx), INST_RETURN, ret_val!=nullptr, "", next){
+    : terminator_inst(ret_val?ret_val->get_type():type::get_void_ty(ctx), INST_RETURN, ret_val!=nullptr, "", next){
   if(ret_val)
     set_operand(0, ret_val);
 }

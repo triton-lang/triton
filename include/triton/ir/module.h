@@ -104,7 +104,10 @@ public:
   // Functions
   const functions_list_t &get_function_list() const { return functions_; }
   functions_list_t &get_function_list()             { return functions_; }
+  function *get_function(const std::string& name)   { return (function*)symbols_.at(name);}
   function *get_or_insert_function(const std::string &name, function_type *ty);
+  void reset_ret_ty(const std::string& name, type* ty);
+
   // Const allocation
   void add_alloc(ir::alloc_const* x)                          { allocs_.push_back(x); }
   const std::vector<ir::alloc_const*>& allocs()               { return allocs_; }

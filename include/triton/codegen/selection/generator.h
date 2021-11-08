@@ -125,6 +125,7 @@ public:
             unsigned num_warps);
 
   void visit_value(ir::value* v);
+  void visit_call_inst(ir::call_inst*);
   void visit_phi_node(ir::phi_node*);
   void visit_binary_operator(ir::binary_operator*);
   void visit_getelementptr_inst(ir::getelementptr_inst*);

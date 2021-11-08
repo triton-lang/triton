@@ -22,6 +22,7 @@ class phi_node;
 
 /* Builder */
 class builder{
+public:
   typedef basic_block::iterator iterator;
 
 public:
@@ -73,6 +74,7 @@ public:
   value* create_br(basic_block *dest);
   value* create_cond_br(value *cond, basic_block* if_dest, basic_block* else_dest);
   value* create_ret_void();
+  value* create_ret(value *ret);
   // Cast instructions
   value *create_cast(cast_op_t op, value *v, type *dst_ty);
   value* create_ptr_to_int(value *src, type *dst_ty);
@@ -84,6 +86,8 @@ public:
   value* create_fp_trunc(value *src, type *dst_ty);
   value* create_int_cast(value *src, type *dst_ty, bool is_signed);
   value *create_downcast(value *arg);
+  // Call instruction
+  value* create_call(function* fn, const std::vector<value*>& args);
   // Phi instruction
   phi_node* create_phi(type *ty, unsigned num_reserved);
   // Binary instructions

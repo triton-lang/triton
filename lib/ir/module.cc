@@ -103,6 +103,8 @@ ir::value *value_constructor::get_value(const std::string& name, ir::basic_block
   ir::basic_block* save_block = builder_.get_insert_block();
   ir::basic_block::iterator save_pt = builder_.get_insert_point();
   val_key_t key(name, block);
+//  std::cout << values_.size() << std::endl;
+//  std::cout << name << " " << block << " " << values_.begin()->first.first << " " << values_.begin()->first.second << std::endl;
   if(values_.find(key) != values_.end()){
     return values_.at(key);
   }
@@ -133,6 +135,10 @@ void value_constructor::seal_block(ir::basic_block *block){
 
 module::module(const std::string &name, builder &builder)
   : name_(name), builder_(builder) {
+}
+
+void module::reset_ret_ty(const std::string& name, type* ty) {
+  get_function(name)->get_fn_type()->reset_ret_ty(ty);
 }
 
 ir::builder& module::get_builder() {

@@ -707,9 +707,20 @@ void init_triton_ir(py::module &&m) {
       .def_property_readonly("shape", &ir::block_type::get_shapes)
       .def_property_readonly("numel", &ir::type::get_tile_num_elements);
 
+  py::class_<ir::value_constructor>(m, "value_constructor")
+      .def(py::init<ir::builder&>())
+      .def("seal_block", &ir::value_constructor::seal_block)
+      .def("set_value", (void (ir::value_constructor::*)(const std::string &, ir::value *)) & ir::value_constructor::set_value)
+      .def("set_type", &ir::value_constructor::set_type)
+      .def("get_value", (ir::value * (ir::value_constructor::*)(const std::string &)) & ir::value_constructor::get_value, ret::reference)
+      .def("get_values", &ir::value_constructor::get_values, ret::reference)
+      .def("set_values", &ir::value_constructor::set_values);
+
   py::class_<ir::module>(m, "module")
       .def(py::init<std::string, ir::builder &>())
+      .def("get_function", &ir::module::get_function, ret::reference)
       .def("get_or_insert_function", &ir::module::get_or_insert_function, ret::reference)
+<<<<<<< HEAD
       .def("seal_block", &ir::module::seal_block)
       .def("set_value", (void (ir::module::*)(const std::string &, ir::value *)) & ir::module::set_value)
       .def("set_type", &ir::module::set_type)
@@ -718,6 +729,9 @@ void init_triton_ir(py::module &&m) {
       .def("set_values", &ir::module::set_values)
       .def("get_types", &ir::module::get_types, ret::reference)
       .def("set_types", &ir::module::set_types)
+=======
+      .def("reset_ret_ty", &ir::module::reset_ret_ty)
+>>>>>>> device functions
       .def_property_readonly("builder", &ir::module::get_builder, ret::reference);
 
   using eattr = ir::attribute_kind_t;
@@ -744,14 +758,20 @@ void init_triton_ir(py::module &&m) {
       .def("create", &ir::basic_block::create, ret::reference)
       .def_property_readonly("parent", &ir::basic_block::get_parent, ret::reference);
 
+  py::class_<ir::builder::iterator>(m, "bb_iterator");
+
   py::class_<ir::builder>(m, "builder", py::dynamic_attr())
       .def(py::init<ir::context &>())
       // getters
       .def_property_readonly("context", &ir::builder::get_context, ret::reference)
       // control flow
+      .def("call", &ir::builder::create_call, ret::reference)
       .def("br", &ir::builder::create_br, ret::reference)
       .def("cond_br", &ir::builder::create_cond_br, ret::reference)
       .def("ret_void", &ir::builder::create_ret_void, ret::reference)
+      .def("ret", &ir::builder::create_ret, ret::reference)
+      .def("get_insert_point", &ir::builder::get_insert_point)
+      .def("set_insert_point", (void (ir::builder::*)(ir::builder::iterator))&ir::builder::set_insert_point)
       .def("get_insert_block", &ir::builder::get_insert_block, ret::reference)
       .def("set_insert_block", (void (ir::builder::*)(ir::basic_block *)) & ir::builder::set_insert_point)
       // constants

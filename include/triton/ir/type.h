@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #ifndef _TRITON_IR_TYPE_H_
 #define _TRITON_IR_TYPE_H_
@@ -242,6 +242,7 @@ public:
   ty_iterator       params_end()         { return contained_tys_.end(); }
   type*    get_param_ty(unsigned i) const { return contained_tys_.at(1 + i);   }
   type*    get_return_ty()          const { return contained_tys_.at(0);       }
+  void     reset_ret_ty(type* ty)         { contained_tys_[0] = ty;}
   // factory methods
   static function_type* get(type *ret_ty, const std::vector<type*>& param_tys);
 };

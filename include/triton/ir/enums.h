@@ -95,6 +95,8 @@ enum value_id_t: unsigned {
     INSTRUCTIONS
    * ------------ */
   INST_BEGIN,
+  // call
+  INST_CALL,
   // phi
   INST_PHI,
   // arithmetic

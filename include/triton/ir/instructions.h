@@ -81,6 +81,24 @@ private:
   value_id_t id_;
 };
 
+//===----------------------------------------------------------------------===//
+//                               call_inst classes
+//===----------------------------------------------------------------------===//
+
+class call_inst: public instruction {
+private:
+  std::string repr_impl() const { return "call"; }
+  call_inst(ir::function* fn, const std::vector<ir::value*>& values, const std::string& name, instruction* next);
+
+public:
+  static call_inst* create(ir::function* fn, const std::vector<ir::value*>& values, const std::string &name = "", instruction *next = nullptr);
+
+  _TRITON_DEFINE_CLONE(call_inst)
+  _TRITON_DEFINE_ACCEPT(call_inst)
+
+private:
+};
+
 
 //===----------------------------------------------------------------------===//
 //                               phi_node classes

@@ -11,6 +11,8 @@ class value;
 
 class instruction;
 
+class call_inst;
+
 class phi_node;
 class binary_operator;
 class getelementptr_inst;
@@ -103,6 +105,7 @@ public:
   virtual ~visitor() {}
 
   virtual void visit_value(ir::value*);
+  virtual void visit_call_inst(ir::call_inst*) = 0;
 
   virtual void visit_basic_block(basic_block*) = 0;
   virtual void visit_argument(argument*) = 0;

@@ -283,6 +283,17 @@ void generator::visit_phi_node(ir::phi_node* x) {
 }
 
 /**
+ * \brief Code Generation for `call`
+ */
+void generator::visit_call_inst(ir::call_inst* call) {
+  for(indices_t idx: idxs_.at(call)){
+    std::cout << "." << std::endl;
+  }
+  std::cout << "call!" << std::endl;
+  exit(1);
+}
+
+/**
  * \brief Code Generation for `binary_operator`
  */
 void generator::visit_binary_operator(ir::binary_operator*x) {
@@ -3171,6 +3182,14 @@ void generator::visit(ir::module &src, llvm::Module &dst) {
       new GlobalVariable(*mod_, array_ty, false, GlobalVariable::ExternalLinkage,
                          nullptr, "__shared_ptr", nullptr, GlobalVariable::NotThreadLocal, 3);
     shmem_ = bit_cast(sh_mem_array, ptr_ty);
+  }
+  // instantiate device functions
+  for(ir::function *fn: src.get_function_list())
+  for(ir::basic_block *bb: fn->blocks())
+  for(ir::instruction *i: bb->get_inst_list())
+  if(auto *call = dynamic_cast<ir::call_inst*>(i)){
+    std::cout << "call??" << std::endl;
+//    mod_->getOrInsertFunction()
   }
   // visit functions
   for(ir::function *fn: src.get_function_list())

@@ -131,6 +131,10 @@ value *builder::create_ret_void() {
   return insert(return_inst::create(ctx_));
 }
 
+value *builder::create_ret(value* val) {
+  return insert(return_inst::create(ctx_, val));
+}
+
 //===----------------------------------------------------------------------===//
 //                               cast instructions
 //===----------------------------------------------------------------------===//
@@ -161,6 +165,14 @@ value* builder::create_int_cast(value *src, type *dst_ty, bool is_signed){
 
 phi_node* builder::create_phi(type *ty, unsigned num_reserved){
   return insert(phi_node::create(ty, num_reserved));
+}
+
+//===----------------------------------------------------------------------===//
+//                               call instructions
+//===----------------------------------------------------------------------===//
+
+value *builder::create_call(function* fn, const std::vector<value*>& args){
+  return insert(call_inst::create(fn, args));
 }
 
 //===----------------------------------------------------------------------===//
