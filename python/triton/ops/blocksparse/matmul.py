@@ -107,6 +107,7 @@ def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, widths, out 
 
 def sdd_lut(layout, block, device):
     lut = layout.nonzero(as_tuple=False).to(device).int()
+    lut = lut.contiguous()
     return lut, None
 
 # -----------------------------
