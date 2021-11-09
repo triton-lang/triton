@@ -6,7 +6,7 @@ def init_to_zero(name):
     return lambda nargs: nargs[name].zero_()
 
 @triton.heuristics({
-    'EVEN_K': lambda *args, **meta: args[5] % (meta['BLOCK_K'] * meta['SPLIT_K']) == 0,
+    'EVEN_K': lambda nargs, **meta: nargs['K'] % (meta['BLOCK_K'] * meta['SPLIT_K']) == 0,
 })
 @triton.autotune(
     configs=[

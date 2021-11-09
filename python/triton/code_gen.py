@@ -650,6 +650,7 @@ class Kernel:
             wargs[pos] = _type(wargs[pos])
         # query device index and cuda stream
         device = torch.cuda.current_device()
+        torch.cuda.set_device(device)
         # query stream
         # this is hacky but much faster than `torch.cuda.current_stream(device).cuda_stream`
         # https://github.com/pytorch/pytorch/blob/master/c10/core/Stream.h#L154
@@ -704,11 +705,14 @@ class Autotuner:
         # augment meta-parameters with tunable ones
         current = dict(meta, **config.kwargs)
         def kernel_call():
+            if config.pre_hook:
+                config.pre_hook(self.nargs)
             self.hook(args)
             self.kernel(*args, num_warps=config.num_warps, num_stages=config.num_stages, **current)
         return triton.testing.do_bench(kernel_call)
 
     def __call__(self, *args, **kwargs):
+        self.nargs = dict(zip(self.arg_names, args))
         if len(self.configs) > 1:
             key = tuple([args[i] for i in self.key_idx])
             if key not in self.cache:
@@ -720,7 +724,7 @@ class Autotuner:
         else:
             config = self.configs[0]
         if config.pre_hook != None:
-            config.pre_hook(dict(zip(self.arg_names, args)))
+            config.pre_hook(self.nargs)
         return self.kernel(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
 
 
@@ -924,7 +928,7 @@ def heuristics(values):
             def fun(*args, **meta):
                 for v, heur in values.items():
                     assert v not in meta
-                    meta[v] = heur(*args, **meta)
+                    meta[v] = heur(dict(zip(fn.arg_names, args)), **meta)
                 return kernel(*args, **meta)
 
             return fun
