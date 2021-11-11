@@ -412,6 +412,8 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Call(self, node):
         fn = self.visit(node.func)
+        if isinstance(fn, triton.language.constexpr):
+            fn = fn.value
         kws = dict()
         for keyword in node.keywords:
             kws.update(self.visit(keyword))
@@ -652,6 +654,7 @@ class Kernel:
             wargs[pos] = _type(wargs[pos])
         # query device index and cuda stream
         device = torch.cuda.current_device()
+        torch.cuda.set_device(device)
         # query stream
         # this is hacky but much faster than `torch.cuda.current_stream(device).cuda_stream`
         # https://github.com/pytorch/pytorch/blob/master/c10/core/Stream.h#L154
@@ -660,6 +663,7 @@ class Kernel:
         bits = torch._C._cuda_getCurrentStream(device)
         mask = 1 << 47
         stream = ((bits & 0xFFFFFFFFFFFF) ^ mask) - mask
+        # stream = torch.cuda.current_stream(device).cuda_stream
         # make key for cache
         return _triton.runtime.launch(wargs, self.fn.cache_key, self.fn.arg_names, device, stream,
                                       self.fn.bin_cache, num_warps, num_stages, self.add_to_cache, grid)
