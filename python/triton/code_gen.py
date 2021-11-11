@@ -656,7 +656,7 @@ class Kernel:
         device = torch.cuda.current_device()
         torch.cuda.set_device(device)
         cc = torch.cuda.get_device_capability(device)
-        cc = cc[0] + '-' + cc[1]
+        cc = str(cc[0]) + '-' + str(cc[1])
         # query stream
         # this is hacky but much faster than `torch.cuda.current_stream(device).cuda_stream`
         # https://github.com/pytorch/pytorch/blob/master/c10/core/Stream.h#L154
