@@ -655,6 +655,8 @@ class Kernel:
         # query device index and cuda stream
         device = torch.cuda.current_device()
         torch.cuda.set_device(device)
+        cc = torch.cuda.get_device_capability(device)
+        cc = cc[0] + '-' + cc[1]
         # query stream
         # this is hacky but much faster than `torch.cuda.current_stream(device).cuda_stream`
         # https://github.com/pytorch/pytorch/blob/master/c10/core/Stream.h#L154
@@ -665,7 +667,7 @@ class Kernel:
         stream = ((bits & 0xFFFFFFFFFFFF) ^ mask) - mask
         # stream = torch.cuda.current_stream(device).cuda_stream
         # make key for cache
-        return _triton.runtime.launch(wargs, self.fn.cache_key, self.fn.arg_names, device, stream,
+        return _triton.runtime.launch(wargs, self.fn.cache_key + cc, self.fn.arg_names, device, stream,
                                       self.fn.bin_cache, num_warps, num_stages, self.add_to_cache, grid)
 
 
@@ -728,11 +730,6 @@ class Autotuner:
 
 
 @functools.lru_cache()
-def compute_capability():
-    device = torch.device('cuda', 0)
-    return '-'.join(map(str, torch.cuda.get_device_capability(device)))
-
-@functools.lru_cache()
 def version_key():
     import pkgutil
     contents = []
@@ -762,7 +759,6 @@ class JITFunction:
         self.cache_key = hashlib.md5(self.src.encode("utf-8")).hexdigest()
         self.cache_key += str(self.version)
         self.cache_key += version_key()
-        self.cache_key += compute_capability()
         self.cache_key = hashlib.md5(self.cache_key.encode("utf-8")).hexdigest()
 
     def __init__(self, fn, version=None, do_not_specialize=None):
