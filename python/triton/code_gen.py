@@ -667,7 +667,7 @@ class Kernel:
         stream = ((bits & 0xFFFFFFFFFFFF) ^ mask) - mask
         # stream = torch.cuda.current_stream(device).cuda_stream
         # make key for cache
-        return _triton.runtime.launch(wargs, self.fn.cache_key + cc, self.fn.arg_names, device, stream,
+        return _triton.runtime.launch(wargs, self.fn.do_not_specialize, self.fn.cache_key + cc, self.fn.arg_names, device, stream,
                                       self.fn.bin_cache, num_warps, num_stages, self.add_to_cache, grid)
 
 
