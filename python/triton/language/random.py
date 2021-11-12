@@ -110,6 +110,7 @@ def randint4x(seed, offset):
     :param offsets: The offsets to generate random numbers for.
     """
     z = offset*0 #FIXME: just 0 doesn't work. Likelye some error with broadcasting
+    seed = seed + 0
     seed = hacky_to_uint64(seed) # uint will solve this
     seed_hi = ((seed >> 32) & 0xffffffff).to(tl.int32)
     seed_lo = (seed & 0xffffffff).to(tl.int32)
