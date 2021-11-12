@@ -572,7 +572,7 @@ class Kernel:
         prototype = _triton.ir.type.make_function(ret_type, arg_types)
         # generate Triton-IR
         # export symbols visible from self.fn into code-generator object
-        gscope = sys.modules[self.fn.module].__dict__
+        gscope = self.fn.fn.__globals__
         generator = CodeGenerator(context, prototype, gscope=gscope, attributes=attributes, constants=constants, kwargs=dict())
         try:
             generator.visit(self.fn.parse())

@@ -1,5 +1,7 @@
 import argparse
 import itertools
+import re
+import importlib.util
 import torch
 import triton
 
@@ -51,12 +53,67 @@ def profile_matmul(args):
 def profile_blocksparse(args):
   raise NotImplementedError("profile_blocksparse not implemented")
 
+def _parse_value(dtype, shape, value):
+  if not shape: # scalar value
+    if value.isdigit():
+      return int(value)
+    try:
+      res = float(value)
+      return res
+    except ValueError as e:
+      raise ValueError(f"Don't know what to do with {value}")
+  else: # Tensor
+    return torch.ones(shape, dtype=dtype, device='cuda')
+
+
+def _parse_params(args_str):
+  _str_to_dtype = {'float16': torch.float16, 'float32': torch.float32}
+  res = []
+  for arg_str in args_str:
+    # name:dtype:shape:value(optional)
+    re_result = re.match('(?P<name>\w+)(:(?P<dtype>float16|float32):(?P<shape>\d+(,\d+)*))?(:(?P<value>[^:]*))?', arg_str)
+    if not re_result:
+      raise ValueError(f'Cannot parse {arg_str}')
+    name = re_result.group('name')
+    dtype = re_result.group('dtype')
+    shape = re_result.group('shape')
+    value = re_result.group('value')
+    if dtype and shape:
+      dtype = _str_to_dtype[dtype]
+      shape = list(map(int, shape.split(',')))
+    value = _parse_value(dtype, shape, value)
+    res.append(value)
+  return res
+    
+
+def profile_custom_kernel(args):
+  '''
+  python -m triton.tools.profiler --kernel /path/to/kernel.py::kernel_name --arg [name]:dtype:value
+  '''
+  # print(args.args)
+  try:
+    path, kname = re.match('([^:]+)::(.+)', args.kernel).groups()
+  except Exception as e:
+    print('invalid kernel, abort')
+    exit()
+  kernel_args = _parse_params(args.args)
+  # load the module
+  spec = importlib.util.spec_from_file_location('', path)
+  pymod = importlib.util.module_from_spec(spec)
+  spec.loader.exec_module(pymod)
+  jit_fn = getattr(pymod, kname)
+  grid = list(map(int, args.grid.split(',')))
+  ms, min_ms, max_ms = triton.testing.do_bench(lambda: jit_fn[grid](*kernel_args))
+
+  print(f'{ms:.3f} ms')
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser(description='Triton profiler')
-  parser.add_argument('--operation', required=True, choices=['matmul', 'blocksparse'])
+  parser.add_argument('--kernel', required=True)
   parser.add_argument('--device', default='cuda')
   parser.add_argument('--varify-result', action='store_true')
   parser.add_argument('--random-seed', type=int, default=0)
+
   # matmul args
   parser.add_argument('--M')
   parser.add_argument('--N')
@@ -67,10 +124,16 @@ if __name__ == '__main__':
   # override configs
   parser.add_argument('--config', help='Config, format: BLOCK_M,BLOCK_N,BLOCK_K,SPLIT_K,num_warps,num_stages')
 
+  # custom kernels
+  parser.add_argument('--args', '-a', action='append')
+  parser.add_argument('--grid', required=True)
+
   args = parser.parse_args()
 
   torch.manual_seed(args.random_seed)
-  if args.operation == 'matmul':
+  if args.kernel == 'matmul':
     profile_matmul(args)
-  elif args.operation == 'blocksparse':
+  elif args.kernel == 'blocksparse':
     profile_blocksparse(args)
+  else:
+    profile_custom_kernel(args)
