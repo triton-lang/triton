@@ -794,12 +794,6 @@ class JITFunction:
     
     cache_hook = None
 
-    def _set_cache_key(self):
-        if not hasattr(self.fn, 'hash'):
-            dependencies_finder = DependenciesFinder(globals=self.fn.__globals__, src=self.src)
-            dependencies_finder.visit(self.parse())
-            self.fn.hash = dependencies_finder.ret
-        self.cache_key = self.fn.hash
 
     def __init__(self, fn, version=None, do_not_specialize=None):
         # information of wrapped function
@@ -812,8 +806,6 @@ class JITFunction:
                                  [self.arg_names.index(arg) for arg in do_not_specialize]
         # cache for callable driver objects (e.g. CUkernel)
         self.bin_cache = dict()
-        # cache for binaries (on-disk)
-        self._set_cache_key()
         # JITFunction can be instantiated as kernel
         # when called with a grid using __getitem__
         self.kernel_decorators = []
@@ -823,9 +815,16 @@ class JITFunction:
         self.__annotations__ = fn.__annotations__
         # forward docs
         self.__doc__ = fn.__doc__
-        #
 
 
+    @property
+    @functools.lru_cache()
+    def cache_key(self):
+        if not hasattr(self.fn, 'hash'):
+            dependencies_finder = DependenciesFinder(globals=self.fn.__globals__, src=self.src)
+            dependencies_finder.visit(self.parse())
+            self.fn.hash = dependencies_finder.ret
+        return self.fn.hash
 
     # we do not parse `src` in the constructor because
     # the user might want to monkey-patch self.src dynamically.
@@ -865,7 +864,7 @@ class JITFunction:
         if name == 'src':
             if hasattr(self.fn, 'hash'):
                 delattr(self.fn, 'hash')
-            self._set_cache_key()
+            JITFunction.cache_key.fget.cache_clear()
 
     def _init_kernel(self):
         if self.kernel is None:
