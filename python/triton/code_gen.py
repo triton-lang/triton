@@ -412,6 +412,8 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Call(self, node):
         fn = self.visit(node.func)
+        if isinstance(fn, triton.language.constexpr):
+            fn = fn.value
         kws = dict()
         for keyword in node.keywords:
             kws.update(self.visit(keyword))
@@ -652,6 +654,9 @@ class Kernel:
             wargs[pos] = _type(wargs[pos])
         # query device index and cuda stream
         device = torch.cuda.current_device()
+        torch.cuda.set_device(device)
+        cc = torch.cuda.get_device_capability(device)
+        cc = str(cc[0]) + '-' + str(cc[1])
         # query stream
         # this is hacky but much faster than `torch.cuda.current_stream(device).cuda_stream`
         # https://github.com/pytorch/pytorch/blob/master/c10/core/Stream.h#L154
@@ -660,8 +665,9 @@ class Kernel:
         bits = torch._C._cuda_getCurrentStream(device)
         mask = 1 << 47
         stream = ((bits & 0xFFFFFFFFFFFF) ^ mask) - mask
+        # stream = torch.cuda.current_stream(device).cuda_stream
         # make key for cache
-        return _triton.runtime.launch(wargs, self.fn.cache_key, self.fn.arg_names, device, stream,
+        return _triton.runtime.launch(wargs, self.fn.cache_key + cc, self.fn.arg_names, device, stream,
                                       self.fn.bin_cache, num_warps, num_stages, self.add_to_cache, grid)
 
 
@@ -724,11 +730,6 @@ class Autotuner:
 
 
 @functools.lru_cache()
-def compute_capability():
-    device = torch.device('cuda', 0)
-    return '-'.join(map(str, torch.cuda.get_device_capability(device)))
-
-@functools.lru_cache()
 def version_key():
     import pkgutil
     contents = []
@@ -750,16 +751,49 @@ def version_key():
         ptxas_version = ''
     return '-'.join(triton.__version__) + '-' + ptxas_version + '-' + '-'.join(contents)
 
+#########################3
+
+
+class DependenciesFinder(ast.NodeVisitor):
+
+    def __init__(self, globals, src) -> None:
+        super().__init__()
+        self.ret = hashlib.md5(src.encode("utf-8")).hexdigest()
+        self.globals = globals
+
+    def visit_Name(self, node):
+        return self.globals.get(node.id, None)
+    
+    def visit_Attribute(self, node):
+        lhs = self.visit(node.value)
+        while isinstance(lhs, ast.Attribute):
+            lhs = self.visit(lhs.value)
+        if lhs is None or lhs is triton:
+            return None
+        return getattr(lhs, node.attr)
+
+    def visit_Call(self, node):
+        func = self.visit(node.func)
+        if func is None:
+            return
+        if isinstance(func, triton.JITFunction):
+            func = func.fn
+        module = inspect.getmodule(func)
+        if module and module.__name__.startswith('triton.'):
+            return
+        if not hasattr(func, 'hash'):
+            src = textwrap.dedent(inspect.getsource(func))
+            tree = ast.parse(src)
+            finder = DependenciesFinder(func.__globals__, src)
+            finder.visit(tree)
+            func.hash = finder.ret
+        self.ret = (self.ret + func.hash).encode("utf-8")
+        self.ret = hashlib.md5(self.ret).hexdigest()
+
 class JITFunction:
     
     cache_hook = None
 
-    def _set_cache_key(self):
-        self.cache_key = hashlib.md5(self.src.encode("utf-8")).hexdigest()
-        self.cache_key += str(self.version)
-        self.cache_key += version_key()
-        self.cache_key += compute_capability()
-        self.cache_key = hashlib.md5(self.cache_key.encode("utf-8")).hexdigest()
 
     def __init__(self, fn, version=None, do_not_specialize=None):
         # information of wrapped function
@@ -772,8 +806,6 @@ class JITFunction:
                                  [self.arg_names.index(arg) for arg in do_not_specialize]
         # cache for callable driver objects (e.g. CUkernel)
         self.bin_cache = dict()
-        # cache for binaries (on-disk)
-        self._set_cache_key()
         # JITFunction can be instantiated as kernel
         # when called with a grid using __getitem__
         self.kernel_decorators = []
@@ -784,6 +816,15 @@ class JITFunction:
         # forward docs
         self.__doc__ = fn.__doc__
 
+
+    @property
+    @functools.lru_cache()
+    def cache_key(self):
+        if not hasattr(self.fn, 'hash'):
+            dependencies_finder = DependenciesFinder(globals=self.fn.__globals__, src=self.src)
+            dependencies_finder.visit(self.parse())
+            self.fn.hash = dependencies_finder.ret
+        return self.fn.hash
 
     # we do not parse `src` in the constructor because
     # the user might want to monkey-patch self.src dynamically.
@@ -821,7 +862,9 @@ class JITFunction:
             self.kernel = None
         super(JITFunction, self).__setattr__(name, value)
         if name == 'src':
-            self._set_cache_key()
+            if hasattr(self.fn, 'hash'):
+                delattr(self.fn, 'hash')
+            JITFunction.cache_key.fget.cache_clear()
 
     def _init_kernel(self):
         if self.kernel is None:
