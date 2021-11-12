@@ -751,15 +751,55 @@ def version_key():
         ptxas_version = ''
     return '-'.join(triton.__version__) + '-' + ptxas_version + '-' + '-'.join(contents)
 
+#########################3
+
+
+class DependenciesFinder(ast.NodeVisitor):
+
+    def __init__(self, globals, src) -> None:
+        super().__init__()
+        self.ret = hashlib.md5(src.encode("utf-8")).hexdigest()
+        self.globals = globals
+
+    def visit_Name(self, node):
+        return self.globals.get(node.id, None)
+    
+    def visit_Attribute(self, node):
+        lhs = self.visit(node.value)
+        while isinstance(lhs, ast.Attribute):
+            lhs = self.visit(lhs.value)
+        if lhs is None or lhs is triton:
+            return None
+        return getattr(lhs, node.attr)
+
+    def visit_Call(self, node):
+        func = self.visit(node.func)
+        if func is None:
+            return
+        if isinstance(func, triton.JITFunction):
+            func = func.fn
+        module = inspect.getmodule(func)
+        if module and module.__name__.startswith('triton.'):
+            return
+        if not hasattr(func, 'hash'):
+            src = textwrap.dedent(inspect.getsource(func))
+            tree = ast.parse(src)
+            finder = DependenciesFinder(func.__globals__, src)
+            finder.visit(tree)
+            func.hash = finder.ret
+        self.ret = (self.ret + func.hash).encode("utf-8")
+        self.ret = hashlib.md5(self.ret).hexdigest()
+
 class JITFunction:
     
     cache_hook = None
 
     def _set_cache_key(self):
-        self.cache_key = hashlib.md5(self.src.encode("utf-8")).hexdigest()
-        self.cache_key += str(self.version)
-        self.cache_key += version_key()
-        self.cache_key = hashlib.md5(self.cache_key.encode("utf-8")).hexdigest()
+        if not hasattr(self.fn, 'hash'):
+            dependencies_finder = DependenciesFinder(globals=self.fn.__globals__, src=self.src)
+            dependencies_finder.visit(self.parse())
+            self.fn.hash = dependencies_finder.ret
+        self.cache_key = self.fn.hash
 
     def __init__(self, fn, version=None, do_not_specialize=None):
         # information of wrapped function
@@ -783,6 +823,8 @@ class JITFunction:
         self.__annotations__ = fn.__annotations__
         # forward docs
         self.__doc__ = fn.__doc__
+        #
+
 
 
     # we do not parse `src` in the constructor because
@@ -821,6 +863,8 @@ class JITFunction:
             self.kernel = None
         super(JITFunction, self).__setattr__(name, value)
         if name == 'src':
+            if hasattr(self.fn, 'hash'):
+                delattr(self.fn, 'hash')
             self._set_cache_key()
 
     def _init_kernel(self):
