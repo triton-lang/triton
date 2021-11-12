@@ -782,11 +782,13 @@ void generator::visit_cat_inst(ir::cat_inst* x) {
   ir::value* lhs = x->get_operand(0);
   ir::value* rhs = x->get_operand(1);
   int i = 0;
-  for(size_t j = 0; j < idxs_.at(lhs).size(); j ++)
+  for(size_t j = 0; j < idxs_.at(lhs).size(); j ++){
     vals_[x][idxs_[x][i++]] = vals_[lhs][idxs_[lhs][j]];
+  }
   for(size_t j = 0; j < idxs_.at(rhs).size(); j ++){
     vals_[x][idxs_[x][i++]] = vals_[rhs][idxs_[rhs][j]];
   }
+//  std::cout << "!" << std::endl;
 }
 
 
