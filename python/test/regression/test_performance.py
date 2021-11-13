@@ -56,7 +56,7 @@ def test_matmul(M, N, K):
     a = torch.randn((M, K), dtype=torch.float16, device='cuda')
     b = torch.randn((K, N), dtype=torch.float16, device='cuda')
     fn = lambda: triton.ops.matmul(a, b)
-    ms = triton.testing.do_bench(fn, percentiles=None, warmup=10, rep=1000)
+    ms = triton.testing.do_bench(fn, percentiles=None, warmup=25, rep=1000)
     cur_gpu_perf = 2.*M*N*K/ms * 1e-9
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     triton.testing.assert_almost_equal(cur_gpu_util, ref_gpu_util, decimal=2)
@@ -101,7 +101,7 @@ def test_elementwise(N):
     y = torch.randn_like(z)
     grid = lambda args: (triton.cdiv(N, args['BLOCK_SIZE']), )
     fn = lambda: _add[grid](x, y, z, N, BLOCK_SIZE=1024)
-    ms = triton.testing.do_bench(fn, percentiles=None, warmup=10, rep=250)
+    ms = triton.testing.do_bench(fn, percentiles=None, warmup=25, rep=250)
     cur_gpu_perf = 3.*N*z.element_size()/ms*1e-6
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     triton.testing.assert_almost_equal(cur_gpu_util, ref_gpu_util, decimal=2)
