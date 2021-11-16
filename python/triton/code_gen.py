@@ -700,6 +700,8 @@ class Kernel:
             return 'B'
         if isinstance(obj, str):
             return 'str'
+        if isinstance(obj, JITFunction):
+            return ''
         assert False
 
         
