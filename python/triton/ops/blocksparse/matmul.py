@@ -12,7 +12,7 @@ import torch
 # ********************************************************
 
 @triton.heuristics({
-    'EVEN_K': lambda nargs, **meta: nargs['K'] % meta['TILE_K'] == 0,
+    'EVEN_K': lambda nargs: nargs['K'] % nargs['TILE_K'] == 0,
 })
 @triton.jit
 def _sdd_kernel(

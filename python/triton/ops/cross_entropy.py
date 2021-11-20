@@ -23,8 +23,8 @@ def num_warps(N):
     return 16
 
 
-@triton.heuristics({'num_warps': lambda nargs, **meta: num_warps(nargs['N'])})
-@triton.heuristics({'BLOCK': lambda nargs, **meta: next_power_of_2(nargs['N'])})
+@triton.heuristics({'num_warps': lambda nargs: num_warps(nargs['N'])})
+@triton.heuristics({'BLOCK': lambda nargs: next_power_of_2(nargs['N'])})
 @triton.jit
 def _forward(LOGITS, PROBS, IDX, LOSS, N, BLOCK: tl.constexpr):
     row = tl.program_id(0)
@@ -48,8 +48,8 @@ def _forward(LOGITS, PROBS, IDX, LOSS, N, BLOCK: tl.constexpr):
     tl.store(LOSS + row, probs)
 
 
-@triton.heuristics({'num_warps': lambda nargs, **meta: num_warps(nargs['N'])})
-@triton.heuristics({'BLOCK': lambda nargs, **meta: next_power_of_2(nargs['N'])})
+@triton.heuristics({'num_warps': lambda nargs: num_warps(nargs['N'])})
+@triton.heuristics({'BLOCK': lambda nargs: next_power_of_2(nargs['N'])})
 @triton.jit
 def _backward(PROBS, IDX, DPROBS, N, BLOCK: tl.constexpr):
     row = tl.program_id(0)

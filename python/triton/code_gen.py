@@ -972,7 +972,7 @@ def heuristics(values):
             def fun(*args, **meta):
                 for v, heur in values.items():
                     assert v not in meta
-                    meta[v] = heur(dict(zip(fn.arg_names, args)), **meta)
+                    meta[v] = heur({**dict(zip(fn.arg_names, args)), **meta})
                 return kernel(*args, **meta)
 
             return fun
