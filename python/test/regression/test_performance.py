@@ -29,16 +29,16 @@ matmul_data = {
   (1024, 1024, 1024 ) : {'v100': 0.466},
   (2048, 2048, 2048 ) : {'v100': 0.680},
   (4096, 4096, 4096 ) : {'v100': 0.831},
-  (8192, 8192, 8192 ) : {'v100': 0.841},
+  (8192, 8192, 8192 ) : {'v100': 0.849},
   # tall-skinny
   (16  , 1024, 1024 ) : {'v100': 0.0128},
-  (16  , 4096, 4096 ) : {'v100': 0.0558},
+  (16  , 4096, 4096 ) : {'v100': 0.0883},
   (16  , 8192, 8192 ) : {'v100': 0.101},
-  (64  , 1024, 1024 ) : {'v100': 0.049},
-  (64  , 4096, 4096 ) : {'v100': 0.211},
+  (64  , 1024, 1024 ) : {'v100': 0.073},
+  (64  , 4096, 4096 ) : {'v100': 0.228},
   (64  , 8192, 8192 ) : {'v100': 0.360},
-  (1024, 64  , 1024 ) : {'v100': 0.0469},
-  (4096, 64  , 4096 ) : {'v100': 0.198},
+  (1024, 64  , 1024 ) : {'v100': 0.0692},
+  (4096, 64  , 4096 ) : {'v100': 0.223},
   (8192, 64  , 8192 ) : {'v100': 0.323},
 #   # deep reductions
 #   (64  , 64  , 16384) : {'v100': 0.},
@@ -56,7 +56,7 @@ def test_matmul(M, N, K):
     a = torch.randn((M, K), dtype=torch.float16, device='cuda')
     b = torch.randn((K, N), dtype=torch.float16, device='cuda')
     fn = lambda: triton.ops.matmul(a, b)
-    ms = triton.testing.do_bench(fn, percentiles=None, warmup=10, rep=1000)
+    ms = triton.testing.do_bench(fn, percentiles=None, warmup=25, rep=1000)
     cur_gpu_perf = 2.*M*N*K/ms * 1e-9
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     triton.testing.assert_almost_equal(cur_gpu_util, ref_gpu_util, decimal=2)
@@ -101,7 +101,7 @@ def test_elementwise(N):
     y = torch.randn_like(z)
     grid = lambda args: (triton.cdiv(N, args['BLOCK_SIZE']), )
     fn = lambda: _add[grid](x, y, z, N, BLOCK_SIZE=1024)
-    ms = triton.testing.do_bench(fn, percentiles=None, warmup=10, rep=250)
+    ms = triton.testing.do_bench(fn, percentiles=None, warmup=25, rep=250)
     cur_gpu_perf = 3.*N*z.element_size()/ms*1e-6
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     triton.testing.assert_almost_equal(cur_gpu_util, ref_gpu_util, decimal=2)

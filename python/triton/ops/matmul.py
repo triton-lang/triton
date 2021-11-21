@@ -2,9 +2,11 @@ import torch
 import triton.language as tl
 import triton
 
+def init_to_zero(name):
+    return lambda nargs: nargs[name].zero_()
 
 @triton.heuristics({
-    'EVEN_K': lambda *args, **meta: args[5] % (meta['BLOCK_K'] * meta['SPLIT_K']) == 0,
+    'EVEN_K': lambda nargs: nargs['K'] % (nargs['BLOCK_K'] * nargs['SPLIT_K']) == 0,
 })
 @triton.autotune(
     configs=[
@@ -18,6 +20,14 @@ import triton
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
         triton.Config({'BLOCK_M': 64 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=5, num_warps=2),
         triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=5, num_warps=2),
+        triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 2}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 4}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 8}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 16}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 2}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 4}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 8}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 16}, num_warps=2, pre_hook=init_to_zero('C')),
     ],
     key=['M', 'N', 'K'],
 )
@@ -26,7 +36,6 @@ def _kernel(A, B, C, M, N, K,
             stride_am, stride_ak, 
             stride_bk, stride_bn, 
             stride_cm, stride_cn, 
-            LOCKS,
             BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
             GROUP_M: tl.constexpr, SPLIT_K: tl.constexpr, EVEN_K: tl.constexpr):
     # matrix multiplication
@@ -70,18 +79,7 @@ def _kernel(A, B, C, M, N, K,
     if SPLIT_K == 1:
         tl.store(C, acc, mask=mask)
     else:
-        LOCKS = LOCKS + tl.program_id(0)
-        COUNT = LOCKS + tl.num_programs(0)
-        while tl.atomic_cas(LOCKS, 0, 1) == 1:
-            pass
-        count = tl.load(COUNT)
-        if count == 0:
-            tl.store(C, acc, mask=mask)
-        else:
-            curr = tl.load(C, mask=mask, other=0.)
-            tl.store(C, acc + curr, mask=mask)
-        tl.atomic_xchg(COUNT, (count + 1) % SPLIT_K)
-        tl.atomic_xchg(LOCKS, 0)
+        tl.atomic_add(C, acc, mask=mask)
 
 
 class _matmul(torch.autograd.Function):
@@ -103,17 +101,13 @@ class _matmul(torch.autograd.Function):
         _, N = b.shape
         # allocates output
         c = torch.empty((M, N), device=device, dtype=a.dtype)
-        # allocate locks for split-k
-        if a.device not in _matmul._locks:
-            _matmul._locks[device] = torch.zeros(1024 * 1024, dtype=torch.int32, device=device)
-        locks = _matmul._locks[device]
         # launch kernel
         grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), META['SPLIT_K'])
         _kernel[grid](a, b, c, M, N, K, 
                       a.stride(0), a.stride(1), 
                       b.stride(0), b.stride(1), 
                       c.stride(0), c.stride(1), 
-                      locks, GROUP_M=8)
+                      GROUP_M=8)
         return c
 
     @staticmethod
