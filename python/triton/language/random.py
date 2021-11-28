@@ -8,71 +8,47 @@ from . import core as tl
 # 3. Even though technically philox sampling outputs int, in many places we pretends they were actualy uints e.g. uint_to_uniform_float
 
 
+# 0x9E3779B9
 @triton.jit
 def PHILOX_KEY_A():
-    # 0x9E3779B9
     return -1640531527
 
 
+# 0xBB67AE85
 @triton.jit
 def PHILOX_KEY_B():
-    # 0xBB67AE85
     return -1150833019
 
 
+# 0xD2511F53
 @triton.jit
 def PHILOX_ROUND_A():
-    # 0xD2511F53
     return -766435501
 
 
+# 0xCD9E8D57
 @triton.jit
 def PHILOX_ROUND_B():
-    # 0xCD9E8D57
     return -845247145
 
 @triton.jit
 def hacky_to_uint64(x):
     return ((x >> 1).to(tl.int64) << 1) + (x & 1).to(tl.int64)
 
-
 @triton.jit
-def single_round(c0, c1, c2, c3, k0, k1):
-    A = PHILOX_ROUND_A()
-    B = PHILOX_ROUND_B()
-    _c0, _c2 = c0, c2
-    c0 = tl.umulhi(B, _c2) ^ c1 ^ k0
-    c2 = tl.umulhi(A, _c0) ^ c3 ^ k1
-    c1 = B * _c2
-    c3 = A * _c0
-    return c0, c1, c2, c3
-
-
-@triton.jit
-def raise_key(k0, k1):
-    return (k0 + PHILOX_KEY_A(), k1 + PHILOX_KEY_B())
-
-@triton.jit
-def philox_f(c0, c1, c2, c3, k0, k1):
-    c0, c1, c2, c3 = single_round(c0, c1, c2, c3, k0, k1)
-    k0, k1 = raise_key(k0, k1)
-    c0, c1, c2, c3 = single_round(c0, c1, c2, c3, k0, k1)
-    k0, k1 = raise_key(k0, k1)
-    c0, c1, c2, c3 = single_round(c0, c1, c2, c3, k0, k1)
-    k0, k1 = raise_key(k0, k1)
-    c0, c1, c2, c3 = single_round(c0, c1, c2, c3, k0, k1)
-    k0, k1 = raise_key(k0, k1)
-    c0, c1, c2, c3 = single_round(c0, c1, c2, c3, k0, k1)
-    k0, k1 = raise_key(k0, k1)
-    c0, c1, c2, c3 = single_round(c0, c1, c2, c3, k0, k1)
-    k0, k1 = raise_key(k0, k1)
-    c0, c1, c2, c3 = single_round(c0, c1, c2, c3, k0, k1)
-    k0, k1 = raise_key(k0, k1)
-    c0, c1, c2, c3 = single_round(c0, c1, c2, c3, k0, k1)
-    k0, k1 = raise_key(k0, k1)
-    c0, c1, c2, c3 = single_round(c0, c1, c2, c3, k0, k1)
-    k0, k1 = raise_key(k0, k1)
-    c0, c1, c2, c3 = single_round(c0, c1, c2, c3, k0, k1)
+def philox_f(c0, c1, c2, c3, k0, k1, n_rounds=5):
+    for _ in range(n_rounds):
+        # update random state
+        A = PHILOX_ROUND_A()
+        B = PHILOX_ROUND_B()
+        _c0, _c2 = c0, c2
+        c0 = tl.umulhi(B, _c2) ^ c1 ^ k0
+        c2 = tl.umulhi(A, _c0) ^ c3 ^ k1
+        c1 = B * _c2
+        c3 = A * _c0
+        # raise key
+        k0 = k0 + PHILOX_KEY_A()
+        k1 = k1 + PHILOX_KEY_B()
     return c0, c1, c2, c3
 
 

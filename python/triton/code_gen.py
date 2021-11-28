@@ -93,6 +93,13 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node, inline=False, arg_values=None):
         arg_names, kwarg_names = self.visit(node.args)
+        # create defaults
+        defaults = []
+        for i, default_value in enumerate(node.args.defaults):
+            name = node.args.args[-i-1].arg
+            st_target = ast.Name(id=name, ctx=ast.Store())
+            init_node = ast.Assign(targets=[st_target], value=default_value)
+            self.visit(init_node)
         # store keyword arguments in local scope
         self.lscope[kwarg_names] = self.kwargs
         # initialize function
@@ -353,6 +360,7 @@ class CodeGenerator(ast.NodeVisitor):
         iterator = self.visit(node.iter.func)
         if iterator != self.builtins['range']:
             raise RuntimeError('Only `range` iterator currently supported')
+        iter_args = [self.visit(node.iter.args[i]) for i in range(len(node.iter.args))]
         # create nodes
         st_target = ast.Name(id=node.target.id, ctx=ast.Store())
         ld_target = ast.Name(id=node.target.id, ctx=ast.Load())
@@ -805,7 +813,10 @@ class JITFunction:
         # information of wrapped function
         self.fn = fn
         self.module = fn.__module__
-        self.arg_names = inspect.getfullargspec(fn).args
+        signature = inspect.signature(fn)
+        self.arg_names = [v.name for v in signature.parameters.values()]
+        self.arg_defaults = [v.default for v in signature.parameters.values()]
+
         self.version = version
         self.src = textwrap.dedent(inspect.getsource(fn))
         self.do_not_specialize = [] if do_not_specialize is None else\
@@ -829,7 +840,7 @@ class JITFunction:
         if not hasattr(self.fn, 'hash'):
             dependencies_finder = DependenciesFinder(globals=self.fn.__globals__, src=self.src)
             dependencies_finder.visit(self.parse())
-            self.fn.hash = dependencies_finder.ret
+            self.fn.hash = dependencies_finder.ret + version_key()
         return self.fn.hash
 
     # we do not parse `src` in the constructor because
