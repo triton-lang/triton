@@ -370,12 +370,14 @@ class CodeGenerator(ast.NodeVisitor):
         if is_static:
             st_target = ast.Name(id=node.target.id, ctx=ast.Store())
             iter_args = [arg.value for arg in iter_args]
-            for i in iterator(*iter_args):
-                self.lscope[node.target.id] = triton.language.constexpr(i)
-                self.visit_compound_statement(node.body)
-                for stmt in node.orelse:
-                    ast.NodeVisitor.generic_visit(self, stmt)
-            return
+            range = iterator(*iter_args)
+            if len(range) <= 10:
+                for i in iterator(*iter_args):
+                    self.lscope[node.target.id] = triton.language.constexpr(i)
+                    self.visit_compound_statement(node.body)
+                    for stmt in node.orelse:
+                        ast.NodeVisitor.generic_visit(self, stmt)
+                return
         # create nodes
         st_target = ast.Name(id=node.target.id, ctx=ast.Store())
         ld_target = ast.Name(id=node.target.id, ctx=ast.Load())
