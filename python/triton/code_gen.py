@@ -93,12 +93,16 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node, inline=False, arg_values=None):
         arg_names, kwarg_names = self.visit(node.args)
-        # create defaults
-        defaults = []
+        # initialize defaults
         for i, default_value in enumerate(node.args.defaults):
-            name = node.args.args[-i-1].arg
+            arg_node = node.args.args[-i-1]
+            annotation = arg_node.annotation
+            name = arg_node.arg
             st_target = ast.Name(id=name, ctx=ast.Store())
-            init_node = ast.Assign(targets=[st_target], value=default_value)
+            if annotation is None:
+                init_node = ast.Assign(targets=[st_target], value=default_value)
+            else:
+                init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation)
             self.visit(init_node)
         # store keyword arguments in local scope
         self.lscope[kwarg_names] = self.kwargs
@@ -360,7 +364,18 @@ class CodeGenerator(ast.NodeVisitor):
         iterator = self.visit(node.iter.func)
         if iterator != self.builtins['range']:
             raise RuntimeError('Only `range` iterator currently supported')
-        iter_args = [self.visit(node.iter.args[i]) for i in range(len(node.iter.args))]
+        # static for loops: all iterator arguments are constexpr
+        iter_args = [self.visit(arg) for arg in node.iter.args]
+        is_static = all([isinstance(x, triton.language.constexpr) for x in iter_args])
+        if is_static:
+            st_target = ast.Name(id=node.target.id, ctx=ast.Store())
+            iter_args = [arg.value for arg in iter_args]
+            for i in iterator(*iter_args):
+                self.lscope[node.target.id] = triton.language.constexpr(i)
+                self.visit_compound_statement(node.body)
+                for stmt in node.orelse:
+                    ast.NodeVisitor.generic_visit(self, stmt)
+            return
         # create nodes
         st_target = ast.Name(id=node.target.id, ctx=ast.Store())
         ld_target = ast.Name(id=node.target.id, ctx=ast.Load())
@@ -859,6 +874,7 @@ class JITFunction:
             lscope = generator.lscope.copy()
             values = generator.module.get_values().copy()
             generator.gscope = sys.modules[self.fn.__module__].__dict__
+            generator.lscope = dict()
             ret = generator.visit_FunctionDef(self.parse().body[0], inline=True, arg_values=args)
             generator.gscope = gscope
             generator.lscope = lscope

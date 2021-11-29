@@ -269,9 +269,10 @@ void init_triton_runtime(py::module &&m) {
         CU_LAUNCH_PARAM_END
     };
     uint64_t _stream = PyLong_AsLong(stream.ptr());
-    drv::dispatch::cuLaunchKernel((CUfunction)kernel, grid_0, grid_1, grid_2, 
-                                  _num_warps*32, 1, 1, shared_mem, (CUstream)_stream, 
-                                  nullptr, config);
+    if(grid_0*grid_1*grid_2 > 0)
+      drv::dispatch::cuLaunchKernel((CUfunction)kernel, grid_0, grid_1, grid_2, 
+                                    _num_warps*32, 1, 1, shared_mem, (CUstream)_stream, 
+                                     nullptr, config);
     return bin;
   });
 
