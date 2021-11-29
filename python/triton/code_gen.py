@@ -16,6 +16,7 @@ import triton
 import triton._C.libtriton.triton as _triton
 from filelock import FileLock
 import dbm
+import tempfile
 
 
 class CodeGenerator(ast.NodeVisitor):
@@ -465,6 +466,7 @@ class LoadedBinary:
                                                       device)
         self.bin = bin
         self.asm = bin.asm
+        self.sass = None
         self.module = module
         self.kernel = kernel
         self.device = device
@@ -475,6 +477,16 @@ class LoadedBinary:
                                 grid_0, grid_1, grid_2, 
                                 self.bin.num_warps * 32, 1, 1, 
                                 args, self.bin.shared_mem)
+
+    def get_sass(self, fun=None):
+        if self.sass:
+            return self.sass
+        fd, path = tempfile.mkstemp()
+        with open(fd, 'wb') as cubin:
+            cubin.write(self.asm['cubin'])
+        self.sass = extract(path, fun)
+        os.remove(path)
+        return self.sass
 
 
 class CompilationError(Exception):
@@ -727,9 +739,11 @@ class Autotuner:
                         for config in self.configs}
                 self.cache[key] = builtins.min(timings, key=timings.get)
                 self.hook(args)
-            config = self.cache[key]
+                self.configs_timings = timings
+            config = self.cache[key]            
         else:
             config = self.configs[0]
+        self.best_config = config
         if config.pre_hook != None:
             config.pre_hook(self.nargs)
         return self.kernel(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
@@ -908,6 +922,14 @@ class Config:
         self.num_stages = num_stages
         self.pre_hook = pre_hook
 
+    def __str__(self):
+        res = []
+        for k, v in self.kwargs.items():
+            res.append(f'{k}: {v}')
+        res.append(f'num_warps: {self.num_warps}')
+        res.append(f'num_stages: {self.num_stages}')
+        return ', '.join(res)
+
 
 def autotune(configs, key, reset_to_zero=None):
     """
@@ -974,7 +996,6 @@ def heuristics(values):
                     assert v not in meta
                     meta[v] = heur({**dict(zip(fn.arg_names, args)), **meta})
                 return kernel(*args, **meta)
-
             return fun
 
         fn.kernel_decorators.append(wrapper)
