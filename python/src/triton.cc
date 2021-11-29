@@ -188,8 +188,8 @@ void parse_args(py::list& args, py::list do_not_specialize, const std::string& f
         continue;
       }
       // argument is `constexpr`
-      py::object value = arg.attr("value");
-      if(value){
+      if(py::hasattr(arg, "value")){
+        py::object value = arg.attr("value");
         py::object name = arg_names[i];
         constants[name] = value;
         py::object repr = py::repr(value);
@@ -198,7 +198,10 @@ void parse_args(py::list& args, py::list do_not_specialize, const std::string& f
         cache_key += std::string(start, len);
         continue;
       }
-      assert(false);
+      std::string ty_str = arg.attr("__class__").attr("__name__").cast<std::string>();
+      std::string err_msg = "Received type '" + ty_str + "' for argument " + std::to_string(i) + "."
+                            + " Only int, float, bool, torch.Tensor, and triton.language.constexpr are supported.";
+      throw std::runtime_error(err_msg);
     }
   cache_key += std::to_string(num_warps);
   cache_key += std::to_string(num_stages);
