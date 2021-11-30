@@ -508,6 +508,7 @@ class CompilationError(Exception):
         self.message += '\n' + ' ' * node.col_offset + '^'
         self.message += '\n Error: ' + str(err)
         super().__init__(self.message)
+        self.args = (src, node, err)
 
 
 class OutOfResources(Exception):
@@ -516,6 +517,7 @@ class OutOfResources(Exception):
                        f'Required: {required}'\
                        f'Hardware limit: {limit}'
         super().__init__(self.message)
+        self.args = (required, limit, name)
 
 
 class Kernel:
