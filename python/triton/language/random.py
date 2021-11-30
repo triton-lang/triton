@@ -22,7 +22,7 @@ def hacky_to_uint64(x):
     return ((x >> 1).to(tl.int64) << 1) + (x & 1).to(tl.int64)
 
 @triton.jit
-def philox_f(c0, c1, c2, c3, k0, k1, n_rounds):
+def philox_f(c0, c1, c2, c3, k0, k1, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """
     Run `n_rounds` rounds of Philox for state (c0, c1, c2, c3) and key (k0, k1).
     """
