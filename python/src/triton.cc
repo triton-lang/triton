@@ -297,12 +297,16 @@ void init_triton_runtime(py::module &&m) {
                       const std::string &args, int64_t shared_mem){
     void* args_ptr = (void*)args.data();
     size_t args_size = args.size();
+    // release the gil in case the enqueue blocks
+    // cuda will block if too many ops are enqueued
+    Py_BEGIN_ALLOW_THREADS
     if(backend == HOST)
       host_enqueue(stream, kernel, grid_0, grid_1, grid_2, block_0, block_1, block_2, args_ptr, args_size, shared_mem);
     if(backend == CUDA)
       cu_enqueue(stream, kernel, grid_0, grid_1, grid_2, block_0, block_1, block_2, args_ptr, args_size, shared_mem);
     if(backend == ROCM)
       hip_enqueue(stream, kernel, grid_0, grid_1, grid_2, block_0, block_1, block_2, args_ptr, args_size, shared_mem);
+    Py_END_ALLOW_THREADS
   });
 
   
