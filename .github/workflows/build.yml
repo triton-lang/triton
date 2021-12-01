@@ -1,0 +1,35 @@
+name: Build Check
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - master
+      - v2.0
+
+
+jobs:
+
+  Build:
+    
+    runs-on: ${{ matrix.os }}-latest
+
+    strategy:
+      matrix:
+        os: [windows]
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v2
+      
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.8
+          architecture: x64
+
+      - name: Install Triton
+        run: |
+          cd python
+          python -m pip install -e .
