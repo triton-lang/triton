@@ -1,4 +1,4 @@
-﻿#include <numeric>
+#include <numeric>
 #include <sstream>
 #include <iomanip>
 #include "triton/codegen/selection/generator.h"
@@ -694,11 +694,11 @@ void generator::visit_load_inst(ir::load_inst* x){
     // ---
     // finally call inline ASM
     // ---
-    InlineAsm *_asm = InlineAsm::get(asm_ty, asm_oss.str(), asm_cstrt, true);
+    InlineAsm *inlineAsm = InlineAsm::get(asm_ty, asm_oss.str(), asm_cstrt, true);
     std::vector<Value*> args = {pred, ptr};
     for(Value *v: others)
         args.push_back(v);
-    Value *_ret = call(_asm, args);
+    Value *_ret = call(inlineAsm, args);
     // ---
     // extract and store return values
     // ---
