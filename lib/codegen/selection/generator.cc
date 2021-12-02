@@ -1,4 +1,4 @@
-#include <numeric>
+﻿#include <numeric>
 #include <sstream>
 #include <iomanip>
 #include "triton/codegen/selection/generator.h"
@@ -441,18 +441,18 @@ std::tuple<Value*, Value*, Value*, Value*> generator::fp8x4_to_fp16x4(Value *in0
   "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n\t"
   "}", "=r,=r,r", false);
   Value *packed_in = UndefValue::get(vec_ty(i8_ty, 4));
-  packed_in = insert_elt(packed_in, in0, (int)0);
-  packed_in = insert_elt(packed_in, in1, (int)1);
-  packed_in = insert_elt(packed_in, in2, (int)2);
-  packed_in = insert_elt(packed_in, in3, (int)3);
+  packed_in = insert_elt(packed_in, in0, (uint64_t)0);
+  packed_in = insert_elt(packed_in, in1, (uint64_t)1);
+  packed_in = insert_elt(packed_in, in2, (uint64_t)2);
+  packed_in = insert_elt(packed_in, in3, (uint64_t)3);
   Value *in = bit_cast(packed_in, i32_ty);
   Value *ret = call(ptx, {in});
   Value *packed_ret0 = extract_val(ret, {0});
   Value *packed_ret1 = extract_val(ret, {1});
-  Value *ret0 = extract_elt(packed_ret0, (int)0);
-  Value *ret1 = extract_elt(packed_ret0, (int)1);
-  Value *ret2 = extract_elt(packed_ret1, (int)0);
-  Value *ret3 = extract_elt(packed_ret1, (int)1);
+  Value *ret0 = extract_elt(packed_ret0, (uint64_t)0);
+  Value *ret1 = extract_elt(packed_ret0, (uint64_t)1);
+  Value *ret2 = extract_elt(packed_ret1, (uint64_t)0);
+  Value *ret3 = extract_elt(packed_ret1, (uint64_t)1);
   return std::make_tuple(ret0, ret1, ret2, ret3);
 }
 

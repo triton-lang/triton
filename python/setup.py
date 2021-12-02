@@ -24,6 +24,8 @@ def get_llvm():
     paths = [p for p in paths if p is not None]
     if paths:
       return '', ''
+    if platform.system() == "Windows":
+      return '', ''
     # download if nothing is installed
     name = 'clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04'
     dir = '/tmp'
