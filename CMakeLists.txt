@@ -24,6 +24,13 @@ find_library(TERMINFO_LIBRARY tinfo)
 
 # Compiler flags
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+if(WIN32)
+    SET(BUILD_SHARED_LIBS OFF)
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/deps/dlfcn-win32/src)
+    add_subdirectory(deps/dlfcn-win32/src ${CMAKE_BINARY_DIR}/dlfcn-win32)
+endif()
+
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -std=gnu++17")
 
 
@@ -110,7 +117,12 @@ endif()
 file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
 add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
 target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
-target_link_libraries(triton ${LLVM_LIBRARIES} z ${TERMINFO_LIBRARY})
+
+if(WIN32)
+    target_link_libraries(triton PRIVATE ${LLVM_LIBRARIES} dl) # dl is from dlfcn-win32
+else()
+    target_link_libraries(triton ${LLVM_LIBRARIES} z ${TERMINFO_LIBRARY})
+endif()
 
 
 if(BUILD_PYTHON_MODULE)
