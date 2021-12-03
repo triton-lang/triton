@@ -272,10 +272,18 @@ void init_triton_runtime(py::module &&m) {
         CU_LAUNCH_PARAM_END
     };
     uint64_t _stream = PyLong_AsLong(stream.ptr());
-    if(grid_0*grid_1*grid_2 > 0)
+    if(grid_0*grid_1*grid_2 > 0) {
+      // release the gil in case the enqueue blocks
+      // cuda will block if too many ops are enqueued
+      Py_BEGIN_ALLOW_THREADS
+
+
       drv::dispatch::cuLaunchKernel((CUfunction)kernel, grid_0, grid_1, grid_2, 
                                     _num_warps*32, 1, 1, shared_mem, (CUstream)_stream, 
                                      nullptr, config);
+
+       Py_END_ALLOW_THREADS
+   }
     return bin;
   });
 
