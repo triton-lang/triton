@@ -33,19 +33,10 @@ namespace tools
 
     inline std::string getenv(const char * name)
     {
-        #ifdef _MSC_VER
-            char* cache_path = 0;
-            std::size_t sz = 0;
-            _dupenv_s(&cache_path, &sz, name);
-        #else
-            const char * cstr = std::getenv(name);
-        #endif
+        const char * cstr = std::getenv(name);
         if(!cstr)
             return "";
         std::string result(cstr);
-        #ifdef _MSC_VER
-            free(cache_path);
-        #endif
         return result;
     }
 
