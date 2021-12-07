@@ -20,7 +20,9 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 #include <fstream>
-#include <unistd.h>
+#if __has_include(<unistd.h>)
+    #include <unistd.h>
+#endif
 #include <memory>
 #include <regex>
 #include "triton/driver/llvm.h"
@@ -185,8 +187,10 @@ std::string ptx_to_cubin(const std::string& ptx, int cc) {
   // compile ptx with ptxas
   char _fsrc[L_tmpnam];
   char _flog[L_tmpnam];
-  std::string fsrc = std::tmpnam(_fsrc);
-  std::string flog = std::tmpnam(_flog);
+  std::tmpnam(_fsrc);
+  std::tmpnam(_flog);
+  std::string fsrc = _fsrc;
+  std::string flog = _flog;
   std::string fbin = fsrc + ".o";
   const char* _fbin = fbin.c_str();
   std::ofstream ofs(fsrc);
@@ -367,8 +371,8 @@ hipModule_t amdgpu_to_hipmodule(const std::string& path) {
   hipJitOption opt[] = {hipJitOptionErrorLogBufferSizeBytes, hipJitOptionErrorLogBuffer,
                             hipJitOptionInfoLogBufferSizeBytes, hipJitOptionInfoLogBuffer,
                             hipJitOptionLogVerbose};
-  unsigned int errbufsize = 8192;
-  unsigned int logbufsize = 8192;
+  const unsigned int errbufsize = 8192;
+  const unsigned int logbufsize = 8192;
   char _err[errbufsize];
   char _log[logbufsize];
   void* optval[] = {(void*)(uintptr_t)errbufsize,
