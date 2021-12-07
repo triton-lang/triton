@@ -13,6 +13,14 @@ namespace tools
 {
 
 
+#ifdef _WIN32
+#define popen _popen
+#define pclose _pclose
+#endif
+
+#ifndef WEXITSTATUS
+#define WEXITSTATUS(stat_val) ((unsigned)(stat_val) & 255)
+#endif
 
 int exec(const std::string& cmd, std::string& result) {
   char buffer[128];
