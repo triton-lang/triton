@@ -323,6 +323,7 @@ class CodeGenerator(ast.NodeVisitor):
             ast.USub: '__neg__',
             ast.UAdd: '__pos__',
             ast.Invert: '__invert__',
+            ast.Not: '__neg__',
         }[type(node.op)]
         if self.is_triton_object(op):
             return getattr(op, fn)(_builder=self.builder)
