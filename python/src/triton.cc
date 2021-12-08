@@ -286,6 +286,31 @@ void init_triton_runtime(py::module &&m) {
       return -1;
   });
 
+  // query DRAM & L2 cache
+  m.def("memory_clock_rate", [](backend_t backend, uint64_t device) {
+    if (backend == CUDA) return cuGetInfo<CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE>(device);
+    return -1;
+  });
+  m.def("global_memory_bus_width", [](backend_t backend, uint64_t device) {
+    if (backend == CUDA) return cuGetInfo<CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH>(device);
+    return -1;
+  });
+  m.def("l2_cache_size", [](backend_t backend, uint64_t device) {
+    if (backend == CUDA) return cuGetInfo<CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE>(device);
+    return -1;
+  });
+
+  // query clock rate (in kilohertz)
+  m.def("clock_rate", [](backend_t backend, uint64_t device) {
+    if (backend == CUDA) return cuGetInfo<CU_DEVICE_ATTRIBUTE_CLOCK_RATE>(device);
+    return -1;
+  });
+
+  m.def("num_sm", [](backend_t backend, uint64_t device) {
+    if (backend == CUDA) return cuGetInfo<CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT>(device);
+    return -1;
+  });
+
   // enqueue
   m.def("enqueue", [](backend_t backend, uint64_t stream, uint64_t kernel,
                       uint64_t grid_0, uint64_t grid_1, uint64_t grid_2,

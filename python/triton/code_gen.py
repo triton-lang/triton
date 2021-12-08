@@ -17,6 +17,8 @@ import triton._C.libtriton.triton as _triton
 from filelock import FileLock
 import dbm
 import tempfile
+from typing import Optional
+
 
 
 class CodeGenerator(ast.NodeVisitor):
@@ -694,7 +696,10 @@ class Launcher:
 
 
 class Autotuner:
-    def __init__(self, kernel, arg_names, configs, key, reset_to_zero):
+    def __init__(self, kernel, arg_names, configs, key, reset_to_zero, perf_model=None, top_k:Optional[int]=None):
+        '''
+
+        '''
         if not configs:
             self.configs = [Config(dict(), num_warps=4, num_stages=2)]
         else:
@@ -711,7 +716,8 @@ class Autotuner:
                     args[i].zero_()
             self.hook = _hook
         self.arg_names = arg_names
-
+        self.perf_model, self.configs_top_k = perf_model, top_k
+    
     def _bench(self, *args, config, **meta):
         # check for conflicts, i.e. meta-parameters both provided
         # as kwargs and by the autotuner
@@ -734,13 +740,25 @@ class Autotuner:
         self.nargs = dict(zip(self.arg_names, args))
         if len(self.configs) > 1:
             key = tuple([args[i] for i in self.key_idx])
+            # prune configs
+            if self.perf_model:
+                top_k = self.configs_top_k
+                if len(self.configs) > top_k:
+                    est_timing = {config: self.perf_model(**self.nargs, **kwargs, **config.kwargs, num_stages=config.num_stages, num_warps=config.num_warps) for config in self.configs}
+                    self.configs = sorted(est_timing.keys(), key=lambda x:est_timing[x])[:top_k]
+                    for config, est in est_timing.items():
+                        print(config)
+                        print(est)
             if key not in self.cache:
                 timings = {config: self._bench(*args, config=config, **kwargs) \
-                        for config in self.configs}
+                           for config in self.configs}
                 self.cache[key] = builtins.min(timings, key=timings.get)
                 self.hook(args)
                 self.configs_timings = timings
-            config = self.cache[key]            
+                for config, bench in timings.items():
+                    print(config)
+                    print(bench)
+            config = self.cache[key]
         else:
             config = self.configs[0]
         self.best_config = config
@@ -931,7 +949,7 @@ class Config:
         return ', '.join(res)
 
 
-def autotune(configs, key, reset_to_zero=None):
+def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
     """
     Decorator for auto-tuning a :code:`triton.jit`'d function.
 
@@ -963,6 +981,9 @@ def autotune(configs, key, reset_to_zero=None):
     """
     def decorator(fn):
         def wrapper(kernel):
+            if prune_configs_by:
+                perf_model, top_k = prune_configs_by['model'], prune_configs_by['top_k']
+                return Autotuner(kernel, fn.arg_names, configs, key, reset_to_zero, perf_model, top_k)
             return Autotuner(kernel, fn.arg_names, configs, key, reset_to_zero)
 
         fn.kernel_decorators.append(wrapper)
