@@ -109,6 +109,24 @@ std::string pow2_divisor(long N){
     return "1";
 }
 
+// Returns something like "int16", whether dtype is a torch.dtype or
+// triton.language.dtype.
+std::string dtype_cache_key_part(const py::object& dtype) {
+  if (py::hasattr(dtype, "cache_key_part")) {
+    // Presumed to be a triton.language.dtype.
+    return std::string(py::str(py::getattr(dtype, "cache_key_part")));
+  } else {
+    // Remove 'torch.' prefix from repr of torch.dtype.
+    py::object repr = py::repr(dtype);
+    size_t repr_len = PyUnicode_GET_LENGTH(repr.ptr());
+    const char* repr_ptr = (const char*)PyUnicode_1BYTE_DATA(repr.ptr());
+    if (repr_len <= 6 || strncmp(repr_ptr, "torch.", 6)) {
+      throw std::logic_error("invalid dtype: " + std::string(repr_ptr, repr_len));
+    }
+    return std::string(repr_ptr + 6, repr_len - 6);
+  }
+}
+
 // Launch
 void parse_args(py::list& args, py::list do_not_specialize, const std::string& func_key, py::list& arg_names,
                 std::string& cache_key, std::string& params, size_t& params_size, py::dict constants,
@@ -137,7 +155,7 @@ void parse_args(py::list& args, py::list do_not_specialize, const std::string& f
           continue;
         }
         // long and int have different kernels
-        if(!overflow & (std::abs(value) <= 0xffffffff)){
+        if(!overflow && -2147483648LL <= value && value <= 2147483647LL) {
           cache_key += "int32";
           params_ptr = (char*)(((uintptr_t)params_ptr + 3) & (-4));
           std::memcpy(params_ptr, &value, 4);
@@ -185,12 +203,7 @@ void parse_args(py::list& args, py::list do_not_specialize, const std::string& f
         params_ptr = (char*)(((uintptr_t)params_ptr + 7) & (-8));
         std::memcpy(params_ptr, &value, 8);
         params_ptr += 8;
-        py::object dtype = arg.attr("dtype");
-        py::object repr = py::repr(dtype);
-        assert(!strncmp((const char*)PyUnicode_1BYTE_DATA(repr.ptr()), "torch.", 6));
-        const char* start = (const char*)PyUnicode_1BYTE_DATA(repr.ptr()) + 6; // remove 'torch.'
-        size_t len = PyUnicode_GET_LENGTH(repr.ptr()) - 6;
-        cache_key += std::string(start, len);
+        cache_key += dtype_cache_key_part(arg.attr("dtype"));
         cache_key += "*";
         cache_key += "[multipleof(";
         cache_key += pow2_divisor(value);
@@ -628,6 +641,10 @@ void init_triton_ir(py::module &&m) {
       .def("get_int16", &ir::type::get_int16_ty, ret::reference)
       .def("get_int32", &ir::type::get_int32_ty, ret::reference)
       .def("get_int64", &ir::type::get_int64_ty, ret::reference)
+      .def("get_uint8", &ir::type::get_uint8_ty, ret::reference)
+      .def("get_uint16", &ir::type::get_uint16_ty, ret::reference)
+      .def("get_uint32", &ir::type::get_uint32_ty, ret::reference)
+      .def("get_uint64", &ir::type::get_uint64_ty, ret::reference)
 
       .def("is_void", &ir::type::is_void_ty)
       .def("is_fp8", &ir::type::is_fp8_ty)
@@ -635,11 +652,15 @@ void init_triton_ir(py::module &&m) {
       .def("is_bf16", &ir::type::is_bf16_ty)
       .def("is_fp32", &ir::type::is_fp32_ty)
       .def("is_fp64", &ir::type::is_fp64_ty)
-      .def("is_int1", [](ir::type *self) { return self->is_integer_ty(1); })
-      .def("is_int8", [](ir::type *self) { return self->is_integer_ty(8); })
-      .def("is_int16", [](ir::type *self) { return self->is_integer_ty(16); })
-      .def("is_int32", [](ir::type *self) { return self->is_integer_ty(32); })
-      .def("is_int64", [](ir::type *self) { return self->is_integer_ty(64); })
+      .def("is_int1", [](ir::type *self) { return self->is_integer_ty(1, ir::signedness::SIGNED); })
+      .def("is_int8", [](ir::type *self) { return self->is_integer_ty(8, ir::signedness::SIGNED); })
+      .def("is_int16", [](ir::type *self) { return self->is_integer_ty(16, ir::signedness::SIGNED); })
+      .def("is_int32", [](ir::type *self) { return self->is_integer_ty(32, ir::signedness::SIGNED); })
+      .def("is_int64", [](ir::type *self) { return self->is_integer_ty(64, ir::signedness::SIGNED); })
+      .def("is_uint8", [](ir::type *self) { return self->is_integer_ty(8, ir::signedness::UNSIGNED); })
+      .def("is_uint16", [](ir::type *self) { return self->is_integer_ty(16, ir::signedness::UNSIGNED); })
+      .def("is_uint32", [](ir::type *self) { return self->is_integer_ty(32, ir::signedness::UNSIGNED); })
+      .def("is_uint64", [](ir::type *self) { return self->is_integer_ty(64, ir::signedness::UNSIGNED); })
 
       .def_property_readonly("fp_mantissa_width", &ir::type::get_fp_mantissa_width)
       .def_property_readonly("scalar", &ir::type::get_scalar_ty)

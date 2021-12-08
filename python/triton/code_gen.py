@@ -331,7 +331,6 @@ class CodeGenerator(ast.NodeVisitor):
             return triton.language.constexpr(not op)
         if isinstance(op, triton.language.core.constexpr):
             op = op.value
-        #     print(op)
         fn = {
             ast.USub: '__neg__',
             ast.UAdd: '__pos__',
@@ -571,15 +570,20 @@ class Kernel:
             torch.int16: 'i16',
             torch.int32: 'i32',
             torch.int64: 'i64',
+            triton.language.uint8: 'u8',
+            triton.language.uint16: 'u16',
+            triton.language.uint32: 'u32',
+            triton.language.uint64: 'u64',
         }
         if hasattr(obj, 'data_ptr'):
             return type_names[obj.dtype]
         if isinstance(obj, triton.language.core.constexpr):
             obj = obj.value
         if isinstance(obj, int):
-            if abs(obj) <= 0xffffffff:
+            if -2147483648 <= obj <= 2147483647:
                 return 'I'
-            return 'L'
+            else:
+                return 'L'
         if isinstance(obj, float):
             return 'f'
         if isinstance(obj, bool):
@@ -607,6 +611,10 @@ class Kernel:
             'i16': _triton.ir.type.get_int16,
             'i32': _triton.ir.type.get_int32,
             'i64': _triton.ir.type.get_int64,
+            'u8': _triton.ir.type.get_uint8,
+            'u16': _triton.ir.type.get_uint16,
+            'u32': _triton.ir.type.get_uint32,
+            'u64': _triton.ir.type.get_uint64,
         }
         # convert torch.Tensor to Triton IR pointers
         if hasattr(obj, 'data_ptr'):
@@ -1165,4 +1173,15 @@ class TensorWrapper:
 
 
 def reinterpret(tensor, dtype):
-    return TensorWrapper(tensor, dtype)
+    if isinstance(tensor, TensorWrapper):
+        if dtype == tensor.base.dtype:
+            # Reinterpreting to the original interpretation; return the base.
+            return tensor.base
+        else:
+            # Reinterpreting a wrapped tensor to a different type.
+            return TensorWrapper(tensor.base, dtype)
+    elif isinstance(tensor, torch.Tensor):
+        # A new wrapper is needed around an unwrapped tensor.
+        return TensorWrapper(tensor, dtype)
+    else:
+        raise TypeError(f'Cannot reinterpret a {type(tensor)}.')

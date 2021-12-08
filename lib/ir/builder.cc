@@ -84,6 +84,18 @@ type *builder::get_int32_ty()
 type *builder::get_int64_ty()
 { return type::get_int64_ty(ctx_); }
 
+type *builder::get_uint8_ty()
+{ return type::get_uint8_ty(ctx_); }
+
+type *builder::get_uint16_ty()
+{ return type::get_uint16_ty(ctx_); }
+
+type *builder::get_uint32_ty()
+{ return type::get_uint32_ty(ctx_); }
+
+type *builder::get_uint64_ty()
+{ return type::get_uint64_ty(ctx_); }
+
 type *builder::get_half_ty()
 { return type::get_fp16_ty(ctx_); }
 
