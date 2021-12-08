@@ -35,6 +35,9 @@ def _patch(fn):
         builder = args[-1]
         assert isinstance(builder, ir.builder)
         args = [_to_ir(x, builder) for x in args]
+        for i, arg in enumerate(args):
+            if arg is None:
+                raise ValueError(f"Unexpected `None` at position {i} for function {fn.__name__}")
         kwargs = {k: _to_ir(v, builder) for k, v in kwargs.items()}
         ret = fn(*args, **kwargs)
         if isinstance(ret, tuple):
@@ -77,7 +80,7 @@ class pointer_dtype:
     def handle(self, builder):
         return ir.type.make_ptr(self.element_ty.handle(builder), 1)
 
-
+# scalar types
 int1 = dtype(ir.type.get_int1)
 int8 = dtype(ir.type.get_int8)
 int16 = dtype(ir.type.get_int16)
@@ -88,7 +91,7 @@ float16 = dtype(ir.type.get_fp16)
 bfloat16 = dtype(ir.type.get_bf16)
 float32 = dtype(ir.type.get_fp32)
 float64 = dtype(ir.type.get_fp64)
-
+# pointer types
 pi32_t = pointer_dtype(int32)
 
 

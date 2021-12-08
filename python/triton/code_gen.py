@@ -112,6 +112,7 @@ class CodeGenerator(ast.NodeVisitor):
         else:
             fn = self.module.get_or_insert_function(node.name, self.prototype)
             arg_values = []
+            idx = 0
             for i, arg_name in enumerate(arg_names):
                 if i in self.constants:
                     cst = self.constants[i]
@@ -120,13 +121,14 @@ class CodeGenerator(ast.NodeVisitor):
                     arg_values.append(cst)
                 else:
                     if i in self.attributes:
-                        is_ptr = fn.args[i].type.is_ptr()
+                        is_ptr = fn.args[idx].type.is_ptr()
                         attr = 'aligned' if is_ptr else 'multiple_of'
                         attr = getattr(_triton.ir.attribute_kind, attr)
                         attr = _triton.ir.attribute(attr, self.attributes[i])
-                        fn.add_attr(i + 1, attr)
-                    fn.args[i].name = arg_name
-                    arg_values.append(fn.args[i])
+                        fn.add_attr(idx + 1, attr)
+                    fn.args[idx].name = arg_name
+                    arg_values.append(fn.args[idx])
+                    idx += 1
                 
         for arg_name, arg_value in zip(arg_names, arg_values):
             self.set_value(arg_name, arg_value)
@@ -592,6 +594,8 @@ class Kernel:
         self.fn = fn
 
     def _compile(self, *wargs, device, attributes, constants, num_warps, num_stages):
+        wargs = [triton.language.constexpr(arg) if arg is None else arg for arg in wargs]
+        constants.update({i: arg.value for i, arg in enumerate(wargs) if isinstance(arg, triton.language.constexpr)})
         wargs = [arg for arg in wargs if not isinstance(arg, triton.language.constexpr)]
         # create IR module
         context = _triton.ir.context()

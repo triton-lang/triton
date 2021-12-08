@@ -199,6 +199,10 @@ void parse_args(py::list& args, py::list do_not_specialize, const std::string& f
         continue;
       }
       std::string ty_str = arg.attr("__class__").attr("__name__").cast<std::string>();
+      if(ty_str == "NoneType"){
+        cache_key += "None";
+        continue;
+      }
       std::string err_msg = "Received type '" + ty_str + "' for argument " + std::to_string(i) + "."
                             + " Only int, float, bool, torch.Tensor, and triton.language.constexpr are supported.";
       throw std::runtime_error(err_msg);
