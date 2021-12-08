@@ -147,6 +147,7 @@ def test_rand(size, seed, device='cuda'):
     N = x.numel()
     grid = (triton.cdiv(N, BLOCK),)
     kernel[grid](x, N, seed)
+    assert all((x >= 0) & (x <= 1))
     assert scipy.stats.kstest(x.tolist(), 'uniform', args=(0, 1)).statistic < 0.01
 
 # test normal PRNG
