@@ -35,9 +35,9 @@ def _patch(fn):
         builder = args[-1]
         assert isinstance(builder, ir.builder)
         args = [_to_ir(x, builder) for x in args]
-        for i, arg in enumerate(args):
-            if arg is None:
-                raise ValueError(f"Unexpected `None` at position {i} for function {fn.__name__}")
+        # for i, arg in enumerate(args):
+        #     if arg is None:
+        #         raise ValueError(f"Unexpected `None` at position {i} for function {fn.__name__}")
         kwargs = {k: _to_ir(v, builder) for k, v in kwargs.items()}
         ret = fn(*args, **kwargs)
         if isinstance(ret, tuple):

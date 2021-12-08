@@ -295,6 +295,10 @@ class CodeGenerator(ast.NodeVisitor):
             lhs = lhs.value
         if isinstance(rhs, triton.language.core.constexpr):
             rhs = rhs.value
+        if type(node.ops[0]) == ast.Is:
+            return triton.language.constexpr(lhs is rhs)
+        if type(node.ops[0]) == ast.IsNot:
+            return triton.language.constexpr(lhs is not rhs)
         fn = {
             ast.Eq: '__eq__',
             ast.NotEq: '__ne__',
@@ -302,8 +306,6 @@ class CodeGenerator(ast.NodeVisitor):
             ast.LtE: '__le__',
             ast.Gt: '__gt__',
             ast.GtE: '__ge__',
-            ast.Is: '__eq__',
-            ast.IsNot: '__ne__',
         }[type(node.ops[0])]
         if self.is_triton_object(lhs):
             return getattr(lhs, fn)(rhs, _builder=self.builder)
