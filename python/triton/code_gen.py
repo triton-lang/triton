@@ -129,6 +129,7 @@ class CodeGenerator(ast.NodeVisitor):
                     fn.args[idx].name = arg_name
                     arg_values.append(fn.args[idx])
                     idx += 1
+        
                 
         for arg_name, arg_value in zip(arg_names, arg_values):
             self.set_value(arg_name, arg_value)
@@ -317,13 +318,16 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_UnaryOp(self, node):
         op = self.visit(node.operand)
+        if type(node.op) == ast.Not:
+            assert isinstance(op, triton.language.constexpr), "`not` only supported for constexpr at the moment"
+            return triton.language.constexpr(not op)
         if isinstance(op, triton.language.core.constexpr):
             op = op.value
+        #     print(op)
         fn = {
             ast.USub: '__neg__',
             ast.UAdd: '__pos__',
             ast.Invert: '__invert__',
-            ast.Not: '__neg__',
         }[type(node.op)]
         if self.is_triton_object(op):
             return getattr(op, fn)(_builder=self.builder)
@@ -597,13 +601,11 @@ class Kernel:
         self.fn = fn
 
     def _compile(self, *wargs, device, attributes, constants, num_warps, num_stages):
-        wargs = [triton.language.constexpr(arg) if arg is None else arg for arg in wargs]
-        constants.update({i: arg.value for i, arg in enumerate(wargs) if isinstance(arg, triton.language.constexpr)})
-        wargs = [arg for arg in wargs if not isinstance(arg, triton.language.constexpr)]
         # create IR module
         context = _triton.ir.context()
         # get just-in-time proto-type of kernel
-        arg_types = [Kernel._to_triton_ir(context, arg) for arg in wargs]
+        fn_args = [arg for i, arg in enumerate(wargs) if i not in constants]
+        arg_types = [Kernel._to_triton_ir(context, arg) for arg in fn_args]
         ret_type = _triton.ir.type.get_void(context)
         prototype = _triton.ir.type.make_function(ret_type, arg_types)
         # generate Triton-IR
@@ -636,8 +638,9 @@ class Kernel:
                       if isinstance(a, int) and i not in self.fn.do_not_specialize}
 
         # transforms ints whose value is one into constants for just-in-time compilation
-        constants = {i: arg for i, arg in enumerate(wargs) if isinstance(arg, int) and arg == 1}
+        constants = {i: arg for i, arg in enumerate(wargs) if isinstance(arg, int) and arg == 1 and i not in self.fn.do_not_specialize}
         constants.update({i: arg.value for i, arg in enumerate(wargs) if isinstance(arg, triton.language.constexpr)})
+        constants.update({i: None for i, arg in enumerate(wargs) if arg is None})
         hashed_key = hashlib.md5(key.encode("utf-8")).hexdigest()
 
         # create cache directory
