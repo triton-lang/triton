@@ -279,7 +279,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_IfExp(self, node):
         cond = self.visit(node.test)
-        if cond:
+        if cond.value:
             return self.visit(node.body)
         else:
             return self.visit(node.orelse)
