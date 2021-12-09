@@ -743,9 +743,12 @@ class Autotuner:
             # prune configs
             if self.perf_model:
                 top_k = self.configs_top_k
+                if isinstance(top_k, float) and top_k <= 1.0:
+                    top_k = int(len(self.configs) * top_k)
                 if len(self.configs) > top_k:
                     est_timing = {config: self.perf_model(**self.nargs, **kwargs, **config.kwargs, num_stages=config.num_stages, num_warps=config.num_warps) for config in self.configs}
                     self.configs = sorted(est_timing.keys(), key=lambda x:est_timing[x])[:top_k]
+                    print("Estimation:")
                     for config, est in est_timing.items():
                         print(config)
                         print(est)
@@ -755,9 +758,10 @@ class Autotuner:
                 self.cache[key] = builtins.min(timings, key=timings.get)
                 self.hook(args)
                 self.configs_timings = timings
+                print("\nBench result:")
                 for config, bench in timings.items():
                     print(config)
-                    print(bench)
+                    print(bench[0])
             config = self.cache[key]
         else:
             config = self.configs[0]
