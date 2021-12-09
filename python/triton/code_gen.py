@@ -696,7 +696,7 @@ class Launcher:
 
 
 class Autotuner:
-    def __init__(self, kernel, arg_names, configs, key, reset_to_zero, perf_model=None, top_k:Optional[int]=None):
+    def __init__(self, kernel, arg_names, configs, key, reset_to_zero, prune_configs_by=None):
         '''
 
         '''
@@ -716,7 +716,15 @@ class Autotuner:
                     args[i].zero_()
             self.hook = _hook
         self.arg_names = arg_names
+        # prune configs
+        if prune_configs_by:
+            perf_model, top_k = prune_configs_by['perf_model'], prune_configs_by['top_k']
+            if 'prune_num_stages_by' in prune_configs_by:
+                prune_num_stages_by = prune_configs_by['prune_num_stages_by']
+        else:
+            perf_model, top_k, prune_num_stages_by = None, None, None
         self.perf_model, self.configs_top_k = perf_model, top_k
+        self.prune_num_stages_by = prune_num_stages_by
     
     def _bench(self, *args, config, **meta):
         # check for conflicts, i.e. meta-parameters both provided
@@ -741,6 +749,8 @@ class Autotuner:
         if len(self.configs) > 1:
             key = tuple([args[i] for i in self.key_idx])
             # prune configs
+            if self.prune_num_stages_by:
+                self.configs = self.prune_num_stages_by(self.configs)
             if self.perf_model:
                 top_k = self.configs_top_k
                 if len(self.configs) > top_k:
@@ -982,8 +992,7 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
     def decorator(fn):
         def wrapper(kernel):
             if prune_configs_by:
-                perf_model, top_k = prune_configs_by['model'], prune_configs_by['top_k']
-                return Autotuner(kernel, fn.arg_names, configs, key, reset_to_zero, perf_model, top_k)
+                return Autotuner(kernel, fn.arg_names, configs, key, reset_to_zero, prune_configs_by)
             return Autotuner(kernel, fn.arg_names, configs, key, reset_to_zero)
 
         fn.kernel_decorators.append(wrapper)
