@@ -1,0 +1,39 @@
+# exhaustive search
+(cu_graph) 1, 1024, 4096 >> Triton: 10.83; Torch: 12.03
+(cu_graph) 1, 1024, 8192 >> Triton: 17.67; Torch: 18.66
+(cu_graph) 1, 1024, 12288 >> Triton: 23.72; Torch: 25.53
+(cu_graph) 16, 4096, 1024 >> Triton: 9.35; Torch: 10.85
+(cu_graph) 16, 8192, 1024 >> Triton: 16.58; Torch: 16.98
+(cu_graph) 16, 12288, 1024 >> Triton: 22.77; Torch: 23.46
+
+# top_k = 1
+(cu_graph) 1, 1024, 4096 >> Triton: 13.28; Torch: 12.05
+(cu_graph) 1, 1024, 8192 >> Triton: 17.71; Torch: 18.68
+(cu_graph) 1, 1024, 12288 >> Triton: 23.84; Torch: 25.54
+(cu_graph) 16, 4096, 1024 >> Triton: 10.72; Torch: 10.85
+(cu_graph) 16, 8192, 1024 >> Triton: 15.95; Torch: 16.99
+(cu_graph) 16, 12288, 1024 >> Triton: 22.83; Torch: 23.55
+
+# top_k = 5
+(cu_graph) 1, 1024, 4096 >> Triton: 10.71; Torch: 12.06
+(cu_graph) 1, 1024, 8192 >> Triton: 17.69; Torch: 18.65
+(cu_graph) 1, 1024, 12288 >> Triton: 23.87; Torch: 25.54
+(cu_graph) 16, 4096, 1024 >> Triton: 10.70; Torch: 10.85
+(cu_graph) 16, 8192, 1024 >> Triton: 16.38; Torch: 17.01
+(cu_graph) 16, 12288, 1024 >> Triton: 22.78; Torch: 23.55
+
+# top_k = 10
+(cu_graph) 1, 1024, 4096 >> Triton: 10.69; Torch: 12.03
+(cu_graph) 1, 1024, 8192 >> Triton: 17.46; Torch: 18.68 # could be 16.61
+(cu_graph) 1, 1024, 12288 >> Triton: 23.85; Torch: 25.53
+(cu_graph) 16, 4096, 1024 >> Triton: 9.35; Torch: 10.84
+(cu_graph) 16, 8192, 1024 >> Triton: 16.38; Torch: 16.99
+(cu_graph) 16, 12288, 1024 >> Triton: 22.77; Torch: 23.55
+
+# top_k = 20
+(cu_graph) 1, 1024, 4096 >> Triton: 10.70; Torch: 12.05
+(cu_graph) 1, 1024, 8192 >> Triton: 17.70; Torch: 18.67
+(cu_graph) 1, 1024, 12288 >> Triton: 23.87; Torch: 25.54
+(cu_graph) 16, 4096, 1024 >> Triton: 9.36; Torch: 10.84
+(cu_graph) 16, 8192, 1024 >> Triton: 16.59; Torch: 17.07
+(cu_graph) 16, 12288, 1024 >> Triton: 22.78; Torch: 23.55

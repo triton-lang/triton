@@ -11,6 +11,8 @@ def get_dram_bw(backend=None, device=None):
   if not device:
     device = torch.cuda.current_device()
   mem_clock_khz = _triton.runtime.memory_clock_rate(backend, device)
+  # # Fix mem_clock_khz for now
+  # mem_clock_khz = 1215000
   bus_width = _triton.runtime.global_memory_bus_width(backend, device)
   bw = mem_clock_khz * bus_width * 2 // 1024 // 1024 // 8 # In GB/s
   return bw
@@ -20,6 +22,8 @@ def get_matmul_tput(backend, device, num_ctas, num_warps):
   num_subcores = _triton.runtime.num_sm(backend, device) * 4 # on recent GPUs
   total_warps = num_ctas * min(num_warps, 4)
   clock_rate = _triton.runtime.clock_rate(backend, device) # in kHz
+  # # Fix clock rate for now
+  # clock_rate = 1410000 # kHz
   # assume fp32 += fp16*fp16
   tput = min(num_subcores, total_warps) * clock_rate *2*4*4*4*2 # 2 4x4x4 Tensor Cores
   tput /= 1024*1024*1024
@@ -74,7 +78,7 @@ def estimate_matmul_time(
   if SPLIT_K == 1:
     store_ms = store_c_dram /store_bw
   else:
-    reduce_bw = store_bw/2
+    reduce_bw = store_bw
     store_ms = store_c_dram/reduce_bw
     # c.zero_()
     zero_ms = M*N*2/(1024*1024)/store_bw
@@ -113,8 +117,8 @@ def prune_num_stages(configs):
     ldgsts_latency = 300 # Does this matter?
     optimal_num_stages = ldgsts_latency/mma_cycles
 
-    # nearest 3 stages, prefer large #stages
-    nearest = heapq.nsmallest(3, v, key=lambda x: 10 + (x[1] - optimal_num_stages) \
+    # nearest stages, prefer large #stages
+    nearest = heapq.nsmallest(2, v, key=lambda x: 10 + abs(x[1] - optimal_num_stages) \
                                           if (x[1] - optimal_num_stages) < 0 else x[1] - optimal_num_stages)
 
     for n in nearest:

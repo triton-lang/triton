@@ -748,30 +748,31 @@ class Autotuner:
         self.nargs = dict(zip(self.arg_names, args))
         if len(self.configs) > 1:
             key = tuple([args[i] for i in self.key_idx])
-            # prune configs
-            if self.prune_num_stages_by:
-                self.configs = self.prune_num_stages_by(self.configs)
-            if self.perf_model:
-                top_k = self.configs_top_k
-                if isinstance(top_k, float) and top_k <= 1.0:
-                    top_k = int(len(self.configs) * top_k)
-                if len(self.configs) > top_k:
-                    est_timing = {config: self.perf_model(**self.nargs, **kwargs, **config.kwargs, num_stages=config.num_stages, num_warps=config.num_warps) for config in self.configs}
-                    self.configs = sorted(est_timing.keys(), key=lambda x:est_timing[x])[:top_k]
-                    print("Estimation:")
-                    for config, est in est_timing.items():
-                        print(config)
-                        print(est)
             if key not in self.cache:
+                # prune configs
+                pruned_configs = self.configs
+                if self.prune_num_stages_by:
+                    pruned_configs = self.prune_num_stages_by(self.configs)
+                if self.perf_model:
+                    top_k = self.configs_top_k
+                    if isinstance(top_k, float) and top_k <= 1.0:
+                        top_k = int(len(self.configs) * top_k)
+                    if len(pruned_configs) > top_k:
+                        est_timing = {config: self.perf_model(**self.nargs, **kwargs, **config.kwargs, num_stages=config.num_stages, num_warps=config.num_warps) for config in pruned_configs}
+                        pruned_configs = sorted(est_timing.keys(), key=lambda x:est_timing[x])[:top_k]
+                        # print("Estimation:")
+                        # for config, est in est_timing.items():
+                        #     print(config)
+                        #     print(est)
                 timings = {config: self._bench(*args, config=config, **kwargs) \
-                           for config in self.configs}
+                           for config in pruned_configs}
                 self.cache[key] = builtins.min(timings, key=timings.get)
                 self.hook(args)
                 self.configs_timings = timings
-                print("\nBench result:")
-                for config, bench in timings.items():
-                    print(config)
-                    print(bench[0])
+                # print("\nBench result:")
+                # for config, bench in timings.items():
+                #     print(config)
+                #     print(bench[0])
             config = self.cache[key]
         else:
             config = self.configs[0]
