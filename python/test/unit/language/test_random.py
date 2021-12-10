@@ -74,9 +74,8 @@ class CustomPhilox4x:
         return np.array([ret0, ret1, ret2, ret3], dtype=self._dtype)
 
     def _raise_key(self, key):
-        ret0 = key[0] + self._config.PHILOX_KEY_A
-        ret1 = key[1] + self._config.PHILOX_KEY_B
-        return np.array([ret0, ret1], dtype=self._dtype)
+        pk = [self._config.PHILOX_KEY_A, self._config.PHILOX_KEY_B]
+        return key + np.array(pk, dtype=self._dtype)
 
     def random_raw(self):
         counter = self._counter

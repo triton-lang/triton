@@ -72,6 +72,9 @@ class dtype:
         ctx = builder.context
         return self.init(ctx)
 
+    def __str__(self):
+        return f"dtype({self.init.__name__})"
+
 
 class pointer_dtype:
     def __init__(self, element_ty):
