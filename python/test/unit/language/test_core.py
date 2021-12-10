@@ -339,7 +339,8 @@ def test_atomic_rmw(op, dtype_x, mode, device='cuda'):
     ('float32', 'int32', True)
 ])
 def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
-    x = torch.tensor([43.5], dtype=cvt[dtype_x], device=device)
+    x0 = 43 if dtype_x.startswith('int') else 43.5
+    x = torch.tensor([x0], dtype=cvt[dtype_x], device=device)
 
     # triton kernel
     @triton.jit
