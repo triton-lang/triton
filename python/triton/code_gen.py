@@ -10,6 +10,7 @@ import os
 import pickle
 import subprocess
 import os
+import warnings
 from .tools.disasm import extract
 import torch
 import triton
@@ -475,7 +476,11 @@ class CodeGenerator(ast.NodeVisitor):
     def visit(self, node):
         if node is not None:
             self.last_node = node
-        return super().visit(node)
+        with warnings.catch_warnings():
+            # The ast library added visit_Constant and deprecated some other
+            # methods but we can't move to that without breaking Python 3.6 and 3.7.
+            warnings.simplefilter("ignore", DeprecationWarning)
+            return super().visit(node)
 
     def generic_visit(self, node):
         typename = type(node).__name__
@@ -512,12 +517,11 @@ class LoadedBinary:
 
 
 class CompilationError(Exception):
-    def __init__(self, src, node, err):
+    def __init__(self, src, node):
         self.message = '\n'.join(src.split('\n')[:node.lineno])
         self.message += '\n' + ' ' * node.col_offset + '^'
-        self.message += '\n Error: ' + str(err)
         super().__init__(self.message)
-        self.args = (src, node, err)
+        self.args = (src, node)
 
 
 class OutOfResources(Exception):
@@ -618,7 +622,7 @@ class Kernel:
             node = generator.last_node
             if node is None or isinstance(e, (NotImplementedError, CompilationError)):
                 raise e
-            raise CompilationError(self.fn.src, node, e)
+            raise CompilationError(self.fn.src, node) from e
         # Compile to machine code
         if torch.version.hip is None:
             backend = _triton.runtime.backend.CUDA

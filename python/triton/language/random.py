@@ -134,7 +134,7 @@ def pair_uniform_to_normal(u1, u2):
 def randn(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offset` block, 
-    returns a block of random :code:`float32` in :math:`\mathcal{N}(0, 1)`
+    returns a block of random :code:`float32` in :math:`\\mathcal{N}(0, 1)`
 
     :param seed: The seed for generating random numbers.
     :param offsets: The offsets to generate random numbers for.
@@ -149,7 +149,7 @@ def randn(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
 def randn4x(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offset` block,
-    returns a 4 blocks of random :code:`float32` in :math:`\mathcal{N}(0, 1)`
+    returns a 4 blocks of random :code:`float32` in :math:`\\mathcal{N}(0, 1)`
 
     :param seed: The seed for generating random numbers.
     :param offsets: The offsets to generate random numbers for.

@@ -86,7 +86,7 @@ Value* geper::operator()(Value *ptr, Value* off, const std::string& name){
 #define void_ty              builder_->getVoidTy()
 #define f16_ty               builder_->getHalfTy()
 #define f32_ty               builder_->getFloatTy()
-#define i8_ty               builder_->getInt8Ty()
+#define i8_ty                builder_->getInt8Ty()
 #define i32_ty               builder_->getInt32Ty()
 #define vec_ty(type, num_el) VectorType::get(type, num_el, false)
 #define ptr_ty(...)          PointerType::get(__VA_ARGS__)
@@ -163,8 +163,8 @@ Type *generator::cvt(ir::type *ty) {
     case ir::type::FP8TyID:       return Type::getInt8Ty(*ctx_);
     case ir::type::FP16TyID:      return Type::getHalfTy(*ctx_);
     case ir::type::BF16TyID:      return Type::getInt16Ty(*ctx_);
-    case ir::type::FP32TyID:     return Type::getFloatTy(*ctx_);
-    case ir::type::FP64TyID:    return Type::getDoubleTy(*ctx_);
+    case ir::type::FP32TyID:      return Type::getFloatTy(*ctx_);
+    case ir::type::FP64TyID:      return Type::getDoubleTy(*ctx_);
     case ir::type::LabelTyID:     return Type::getLabelTy(*ctx_);
     case ir::type::MetadataTyID:  return Type::getMetadataTy(*ctx_);
     case ir::type::TokenTyID:     return Type::getTokenTy(*ctx_);
