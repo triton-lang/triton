@@ -363,14 +363,18 @@ def test_atomic_rmw(op, dtype_x, mode, device='cuda'):
     (dtype_x, dtype_z, False) \
                         for dtype_x in dtypes\
                         for dtype_z in dtypes
-] )
+] + [ 
+    ('float32', 'bfloat16', False),
+    ('bfloat16', 'float32', False),
+    ('float32', 'int32', True)
+])
 def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
-    # SIZE = 128
-    # SIZE = 256
-    # SIZE = 512
+    if torch.version.hip is not None:
+        assert 'bfloat' not in dtype_x 
+        assert 'bfloat' not in dtype_z
+
     SIZE = 1024
     x = triton.testing.random((SIZE, ), dtype=cvt[dtype_x], device=device)
-    
     # triton kernel
     @triton.jit
     def kernel(X, Z, **meta):
@@ -389,10 +393,6 @@ def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
         z_ref = torch.from_numpy(z_ref).to(device)
     else:
         z_ref = x.to(z_tri.dtype)
-
-    # z_tri_sorted=torch.sort(torch.flatten(z_tri))[0]
-    # z_ref_sorted=torch.sort(torch.flatten(z_ref))[0]
-    # triton.testing.assert_almost_equal(z_tri_sorted, z_ref_sorted)
     triton.testing.assert_almost_equal(z_ref, z_tri)
 
 # ---------------
