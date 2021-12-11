@@ -56,6 +56,8 @@
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/IR/Intrinsics.h"
 // end AMD stuff
 
 namespace triton{
@@ -264,8 +266,9 @@ std::string llir_to_amdgpu(llvm::Module* module, const std::string& _proc) {
   llvm::SmallVector<char, 0> buffer;
   std::string triple = "amdgcn-amd-amdhsa";
   std::string layout = "";
-  std::string features;
+  std::string features="+sramecc,-xnack";
   std::string proc = "gfx908";
+  std::string module_name = module->getModuleIdentifier() + "_" + return_current_time_and_date();
   // verify and store llvm
   llvm::legacy::PassManager pm;
   pm.add(llvm::createVerifierPass());
@@ -281,7 +284,7 @@ std::string llir_to_amdgpu(llvm::Module* module, const std::string& _proc) {
   opt.NoNaNsFPMath = true;
   llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), proc, features, opt,
                                                              llvm::Reloc::PIC_, llvm::None,
-                                                             llvm::CodeGenOpt::Aggressive);
+                                                             llvm::CodeGenOpt::None);
   // set data layout
   if(layout.empty())
     module->setDataLayout(machine->createDataLayout());
@@ -294,7 +297,6 @@ std::string llir_to_amdgpu(llvm::Module* module, const std::string& _proc) {
   llvm::raw_svector_ostream stream(buffer);
 
   // create dump files
-  std::string module_name = module->getModuleIdentifier();
   std::error_code ec;
 
   // Save GCN ISA binary.
@@ -309,12 +311,22 @@ std::string llir_to_amdgpu(llvm::Module* module, const std::string& _proc) {
   // emit
   machine->addPassesToEmitFile(pass, *isabin_fs, nullptr, llvm::CGFT_ObjectFile);
   pass.run(*module);
+
+#ifdef DEBUG_ROCM
+  std::cout << "Generating GCN ISA file" << std::endl;
+  llvm::SmallVector<char, 0> debugBuffer;
+  llvm::legacy::PassManager debugPass;
+  llvm::raw_svector_ostream debugStream(debugBuffer);
+  machine->addPassesToEmitFile(debugPass, debugStream, nullptr, llvm::CodeGenFileType::CGFT_AssemblyFile); // TODO:cause segfault on REM ops also cause @llvm.amdgcn.if bug
+  debugPass.run(*module);
+
   // Save GCN ISA.
   std::string amdgcn_path = std::string("/tmp/") + module_name + std::string(".gcn");
-  std::string result(buffer.begin(), buffer.end());
+  std::string result(debugBuffer.begin(), debugBuffer.end());
   std::ofstream amdgcn(amdgcn_path);
   amdgcn << result;
   amdgcn.close();
+#endif
 
   // generate HASCO file
   std::string hsaco_path = std::string("/tmp/") + module_name + std::string(".hsaco");

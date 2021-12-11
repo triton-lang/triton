@@ -41,7 +41,7 @@ Value* amd_cl_target::get_global_offset(Module *module, IRBuilder<>& builder, un
 }
 
 Instruction* amd_cl_target::add_memfence(Module *module, IRBuilder<>& builder) {
-  throw std::runtime_error("not implemented");
+  throw std::runtime_error("not implemented on AMD");
 }
 
 
@@ -156,7 +156,7 @@ Value* cpu_target::get_block_id(Module *module, llvm::IRBuilder<> &builder, unsi
 }
 
 Value* cpu_target::get_num_blocks(Module *module, IRBuilder<>& builder, unsigned ax) {
-  throw std::runtime_error("not implemented");
+  throw std::runtime_error("not implemented on CPU");
 }
 
 
