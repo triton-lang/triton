@@ -25,6 +25,7 @@
 #endif
 #include <memory>
 #include <regex>
+#include <iomanip>
 #include "triton/driver/llvm.h"
 #include "triton/driver/dispatch.h"
 #include "triton/driver/error.h"
@@ -268,7 +269,11 @@ std::string llir_to_amdgpu(llvm::Module* module, const std::string& _proc) {
   std::string layout = "";
   std::string features="+sramecc,-xnack";
   std::string proc = "gfx908";
-  std::string module_name = module->getModuleIdentifier() + "_" + return_current_time_and_date();
+  // name kernel
+  auto in_time_t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::stringstream cur_time;
+  cur_time << std::put_time(std::localtime(&in_time_t), "%Y-%m-%d--%I-%M-%S");
+  std::string kernel_name = module->getModuleIdentifier() + "_" + cur_time.str();
   // verify and store llvm
   llvm::legacy::PassManager pm;
   pm.add(llvm::createVerifierPass());
@@ -300,7 +305,7 @@ std::string llir_to_amdgpu(llvm::Module* module, const std::string& _proc) {
   std::error_code ec;
 
   // Save GCN ISA binary.
-  std::string isabin_path = std::string("/tmp/") + module_name + std::string(".o");
+  std::string isabin_path = std::string("/tmp/") + kernel_name + std::string(".o");
   std::unique_ptr<llvm::raw_fd_ostream> isabin_fs(
       new llvm::raw_fd_ostream(isabin_path, ec, llvm::sys::fs::OF_Text));
   if (ec)
@@ -321,7 +326,7 @@ std::string llir_to_amdgpu(llvm::Module* module, const std::string& _proc) {
   debugPass.run(*module);
 
   // Save GCN ISA.
-  std::string amdgcn_path = std::string("/tmp/") + module_name + std::string(".gcn");
+  std::string amdgcn_path = std::string("/tmp/") + kernel_name + std::string(".gcn");
   std::string result(debugBuffer.begin(), debugBuffer.end());
   std::ofstream amdgcn(amdgcn_path);
   amdgcn << result;
@@ -329,7 +334,7 @@ std::string llir_to_amdgpu(llvm::Module* module, const std::string& _proc) {
 #endif
 
   // generate HASCO file
-  std::string hsaco_path = std::string("/tmp/") + module_name + std::string(".hsaco");
+  std::string hsaco_path = std::string("/tmp/") + kernel_name + std::string(".hsaco");
   std::string error_message;
   int lld_result =
       llvm::sys::ExecuteAndWait("/opt/rocm/llvm/bin/ld.lld",
