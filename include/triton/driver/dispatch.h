@@ -11,7 +11,6 @@
 #include "triton/external/CUDA/nvml.h"
 
 //// HIP backend
-//#define __HIP_PLATFORM_AMD__
 #include "triton/external/hip.h"
 
 //Exceptions

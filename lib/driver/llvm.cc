@@ -25,6 +25,7 @@
 #endif
 #include <memory>
 #include <regex>
+#include <iomanip>
 #include "triton/driver/llvm.h"
 #include "triton/driver/dispatch.h"
 #include "triton/driver/error.h"
@@ -56,6 +57,8 @@
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/IR/Intrinsics.h"
 // end AMD stuff
 
 namespace triton{
@@ -264,8 +267,13 @@ std::string llir_to_amdgpu(llvm::Module* module, const std::string& _proc) {
   llvm::SmallVector<char, 0> buffer;
   std::string triple = "amdgcn-amd-amdhsa";
   std::string layout = "";
-  std::string features;
+  std::string features="+sramecc,-xnack";
   std::string proc = "gfx908";
+  // name kernel
+  auto in_time_t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::stringstream cur_time;
+  cur_time << std::put_time(std::localtime(&in_time_t), "%Y-%m-%d--%I-%M-%S");
+  std::string kernel_name = module->getModuleIdentifier() + "_" + cur_time.str();
   // verify and store llvm
   llvm::legacy::PassManager pm;
   pm.add(llvm::createVerifierPass());
@@ -281,7 +289,7 @@ std::string llir_to_amdgpu(llvm::Module* module, const std::string& _proc) {
   opt.NoNaNsFPMath = true;
   llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), proc, features, opt,
                                                              llvm::Reloc::PIC_, llvm::None,
-                                                             llvm::CodeGenOpt::Aggressive);
+                                                             llvm::CodeGenOpt::None);
   // set data layout
   if(layout.empty())
     module->setDataLayout(machine->createDataLayout());
@@ -294,11 +302,10 @@ std::string llir_to_amdgpu(llvm::Module* module, const std::string& _proc) {
   llvm::raw_svector_ostream stream(buffer);
 
   // create dump files
-  std::string module_name = module->getModuleIdentifier();
   std::error_code ec;
 
   // Save GCN ISA binary.
-  std::string isabin_path = std::string("/tmp/") + module_name + std::string(".o");
+  std::string isabin_path = std::string("/tmp/") + kernel_name + std::string(".o");
   std::unique_ptr<llvm::raw_fd_ostream> isabin_fs(
       new llvm::raw_fd_ostream(isabin_path, ec, llvm::sys::fs::OF_Text));
   if (ec)
@@ -309,15 +316,25 @@ std::string llir_to_amdgpu(llvm::Module* module, const std::string& _proc) {
   // emit
   machine->addPassesToEmitFile(pass, *isabin_fs, nullptr, llvm::CGFT_ObjectFile);
   pass.run(*module);
+
+#ifdef DEBUG_ROCM
+  std::cout << "Generating GCN ISA file" << std::endl;
+  llvm::SmallVector<char, 0> debugBuffer;
+  llvm::legacy::PassManager debugPass;
+  llvm::raw_svector_ostream debugStream(debugBuffer);
+  machine->addPassesToEmitFile(debugPass, debugStream, nullptr, llvm::CodeGenFileType::CGFT_AssemblyFile); // TODO:cause segfault on REM ops also cause @llvm.amdgcn.if bug
+  debugPass.run(*module);
+
   // Save GCN ISA.
-  std::string amdgcn_path = std::string("/tmp/") + module_name + std::string(".gcn");
-  std::string result(buffer.begin(), buffer.end());
+  std::string amdgcn_path = std::string("/tmp/") + kernel_name + std::string(".gcn");
+  std::string result(debugBuffer.begin(), debugBuffer.end());
   std::ofstream amdgcn(amdgcn_path);
   amdgcn << result;
   amdgcn.close();
+#endif
 
   // generate HASCO file
-  std::string hsaco_path = std::string("/tmp/") + module_name + std::string(".hsaco");
+  std::string hsaco_path = std::string("/tmp/") + kernel_name + std::string(".hsaco");
   std::string error_message;
   int lld_result =
       llvm::sys::ExecuteAndWait("/opt/rocm/llvm/bin/ld.lld",

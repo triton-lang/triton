@@ -559,7 +559,27 @@ ir::value *dispatch::store(ir::value* ptr, ir::value *val, ir::value* mask, ir::
     ptr = dispatch::cast(ptr, ptr_ty, builder);
   }
   // cast to target data-type
+#ifdef USE_ROCM
+  ir::type *src_ty = val->get_type();
+  ir::type *dst_ty = elt_ty;
+  if (src_ty->is_block_ty())
+    dst_ty = ir::block_type::get(dst_ty, src_ty->get_block_shapes());
+
+  ir::type *src_sca_ty = src_ty->get_scalar_ty();
+  ir::type *dst_sca_ty = dst_ty->get_scalar_ty();
+  // check if truncation is need
+  bool truncate_fp = src_sca_ty->is_floating_point_ty() &&
+                     dst_sca_ty->is_floating_point_ty() &&
+                     src_sca_ty->get_fp_mantissa_width() > dst_sca_ty->get_fp_mantissa_width();
+  if (truncate_fp && elt_ty->is_fp16_ty())
+  {
+    std::cout << "WARNING: "<<"casting down to fp16 is broken on ROCM" << std::endl;
+  }
+
   val = dispatch::cast(val, elt_ty, builder);
+#else
+  val = dispatch::cast(val, elt_ty, builder);
+#endif
   if (!mask)
     return builder->create_store(ptr, val);
   if(!mask->get_type()->get_scalar_ty()->is_bool_ty())
@@ -659,6 +679,8 @@ ir::value *dispatch::atomic_xchg(ir::value* ptr, ir::value *val, ir::value *mask
 //===----------------------------------------------------------------------===//
 
 ir::value *dispatch::dot(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
+  lhs = dispatch::cast(lhs, builder->get_float_ty(), builder);
+  rhs = dispatch::cast(rhs, builder->get_float_ty(), builder);
   ir::value *_0 = builder->get_float32(0);
   unsigned M = lhs->get_type()->get_block_shapes()[0];
   unsigned N = rhs->get_type()->get_block_shapes()[1];
