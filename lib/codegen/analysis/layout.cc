@@ -145,7 +145,7 @@ mma_layout::mma_layout(size_t num_warps,
                        shared_layout *layout_a, shared_layout *layout_b): distributed_layout(MMA, axes, shape, values, align) {
   /* fragments per warp */
   // try to make things as square as possible to maximize data re-use
-  if(tgt->as_nvidia()->sm() < 80){
+  if(tgt->as_nvidia() && tgt->as_nvidia()->sm() < 80){
     fpw_ = {2, 2, 1};
     auto ord_a = layout_a->get_order();
     auto ord_b = layout_b->get_order();

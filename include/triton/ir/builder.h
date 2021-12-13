@@ -42,6 +42,7 @@ public:
   value *get_int64(int64_t val);
   value *get_float16(float val);
   value *get_float32(float val);
+  value *get_float64(float val);
   value *get_range(int32_t lo, int32_t hi);
   // Types
   type *get_void_ty();
