@@ -163,12 +163,155 @@ def init_to_zero(name):
         triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 4}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
         triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 8}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
         triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 16}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
+
+
+        # BLOCK_M = 32
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=2, num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=3, num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=5, num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=6, num_warps=2),
+
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=2, num_warps=4),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=3, num_warps=4),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=5, num_warps=4),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=6, num_warps=4),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 2}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=7, num_warps=4),
+
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=2, num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=3, num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=4, num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=5, num_warps=4),
+
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64, 'BLOCK_K': 32, 'SPLIT_K': 2}, num_stages=5, num_warps=2, pre_hook=init_to_zero('C')),
+
+        # SPILT_K, num_stages = 2
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 2}, num_warps=4, pre_hook=init_to_zero('C')),
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 4}, num_warps=4, pre_hook=init_to_zero('C')),
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 8}, num_warps=4, pre_hook=init_to_zero('C')),
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 16}, num_warps=4, pre_hook=init_to_zero('C')),
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 2}, num_warps=4, pre_hook=init_to_zero('C')),
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 4}, num_warps=4, pre_hook=init_to_zero('C')),
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 8}, num_warps=4, pre_hook=init_to_zero('C')),
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 16}, num_warps=4, pre_hook=init_to_zero('C')),
+
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 2}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 4}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 8}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 16}, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 16}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 32}, num_warps=2, pre_hook=init_to_zero('C')),
+
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 64, 'SPLIT_K': 2}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 64, 'SPLIT_K': 4}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 64, 'SPLIT_K': 8}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 64, 'SPLIT_K': 16}, num_warps=2, pre_hook=init_to_zero('C')),
+
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 32, 'SPLIT_K': 2}, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 32, 'SPLIT_K': 4}, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 32, 'SPLIT_K': 8}, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 32, 'SPLIT_K': 16}, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 2}, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 4}, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 8}, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 16}, num_warps=4, pre_hook=init_to_zero('C')),
+
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 2}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 4}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 8}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 16}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 2}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 4}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 8}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 16}, num_warps=2, pre_hook=init_to_zero('C')),
+
+        # # SPLIT_K num_stages=3
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 2}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 4}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 8}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 16}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 2}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 4}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 8}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 16}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
+
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 2}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 4}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 8}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 16}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 16}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 32}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
+
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 64, 'SPLIT_K': 2}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 64, 'SPLIT_K': 4}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 64, 'SPLIT_K': 8}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 64, 'SPLIT_K': 16}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
+
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 32, 'SPLIT_K': 2}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 32, 'SPLIT_K': 4}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 32, 'SPLIT_K': 8}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 32, 'SPLIT_K': 16}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 2}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 4}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 8}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 16}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
+
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 2}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 4}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 8}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 16}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 2}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 4}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 8}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 16}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
+
+        # # SPLIT_K num_stages=4
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 2}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 4}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 8}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 16}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 2}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 4}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 8}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
+        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 16}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
+
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 2}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 4}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 8}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 16}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 16}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 32}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
+
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 64, 'SPLIT_K': 2}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 64, 'SPLIT_K': 4}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 64, 'SPLIT_K': 8}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 64, 'SPLIT_K': 16}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
+
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 32, 'SPLIT_K': 2}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 32, 'SPLIT_K': 4}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 32, 'SPLIT_K': 8}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 32, 'SPLIT_K': 16}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 2}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 4}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 8}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 16}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
+
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 2}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 4}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 8}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 16}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 2}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 4}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 8}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 16}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
     ],
     key=['M', 'N', 'K'],
     prune_configs_by={
       'prune_num_stages_by' : prune_num_stages,
       'perf_model': estimate_matmul_time,
-      'top_k': 2
+      'top_k': 10
     },
 )
 @triton.jit
@@ -273,18 +416,32 @@ mm_shapes = [
   # [16, 8192, 3072], # Triton: 43.02; Torch: 42.60
 
   
-  # [1, 1024, 4096 ], # Triton: 10.85; Torch: 11.96
-  #                   # >> OpenAI: 0.0197; Triton-atomic: 0.0204; Torch: 0.0209
-  # [1, 1024, 8192 ], # Triton: 17.70; Torch: 18.59
-  #                  # >> OpenAI: 0.0284; Triton-atomic: 0.0299; Torch: 0.0301
-  # [1, 1024, 12288], # Triton: 23.51; Torch: 25.28
-  #                   # >> OpenAI: 0.0383; Triton-atomic: 0.0401; Torch: 0.0397
-  # [16, 4096, 1024 ], # Triton: 10.45; Torch: 10.49
-  #                   # >> OpenAI: 0.0172; Triton-atomic: 0.0211; Torch: 0.0185
-  # [16, 8192, 1024 ], # Triton: 15.88; Torch: 17.00
-  #                   # >> OpenAI: 0.0255; Triton-atomic: 0.0316; Torch: 0.0275
-  # [16, 12288, 1024], # Triton: 22.73; Torch: 23.57
-  #                   # >> OpenAI: 0.0352; Triton-atomic: 0.0414; Torch: 0.0366
+  [1, 1024, 4096 ], # Triton: 10.85; Torch: 11.96
+                    # >> OpenAI: 0.0197; Triton-atomic: 0.0204; Torch: 0.0209
+  [1, 1024, 8192 ], # Triton: 17.70; Torch: 18.59
+                   # >> OpenAI: 0.0284; Triton-atomic: 0.0299; Torch: 0.0301
+  [1, 1024, 12288], # Triton: 23.51; Torch: 25.28
+                    # >> OpenAI: 0.0383; Triton-atomic: 0.0401; Torch: 0.0397
+  [1, 4096, 1024 ], # Triton: 10.45; Torch: 10.49
+                    # >> OpenAI: 0.0172; Triton-atomic: 0.0211; Torch: 0.0185
+  [1, 8192, 1024 ], # Triton: 15.88; Torch: 17.00
+                    # >> OpenAI: 0.0255; Triton-atomic: 0.0316; Torch: 0.0275
+  [1, 12288, 1024], # Triton: 22.73; Torch: 23.57
+                    # >> OpenAI: 0.0352; Triton-atomic: 0.0414; Torch: 0.0366
+
+  [16, 1024, 4096 ],
+  [16, 1024, 8192 ],
+  [16, 1024, 12288],
+  [16, 4096, 1024 ],
+  [16, 8192, 1024 ],
+  [16, 12288, 1024],
+
+  [32, 1024, 4096 ],
+  [32, 1024, 8192 ],
+  [32, 1024, 12288],
+  [32, 4096, 1024 ],
+  [32, 8192, 1024 ],
+  [32, 12288, 1024],
 
   # [8192, 8192, 8192],
 ]
@@ -307,8 +464,8 @@ for M, N, K in mm_shapes:
     #   for config, timing in at.configs_timings.items():
     #     print(config)
     #     print(f'{timing[0]*1000:.1f}us')
-    print('best:')
-    print(at.best_config)
+    # print('best:')
+    # print(at.best_config)
 
     do_bench = False
     if do_bench:
@@ -318,6 +475,8 @@ for M, N, K in mm_shapes:
 
 
 
+    if M*N >= 4096*4096:
+      LAYERS=10
     as_ = []
     bs_ = []
     cs_graph = [None for _ in range(LAYERS)]

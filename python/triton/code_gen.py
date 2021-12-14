@@ -18,6 +18,7 @@ from filelock import FileLock
 import dbm
 import tempfile
 from typing import Optional
+import time
 
 
 
@@ -764,8 +765,11 @@ class Autotuner:
                         # for config, est in est_timing.items():
                         #     print(config)
                         #     print(est)
+                bench_start = time.time()
                 timings = {config: self._bench(*args, config=config, **kwargs) \
                            for config in pruned_configs}
+                bench_end = time.time()
+                self.bench_time = bench_end - bench_start
                 self.cache[key] = builtins.min(timings, key=timings.get)
                 self.hook(args)
                 self.configs_timings = timings
@@ -833,6 +837,8 @@ class DependenciesFinder(ast.NodeVisitor):
             func = func.fn
         module = inspect.getmodule(func)
         if module and module.__name__.startswith('triton.'):
+            return
+        if inspect.isbuiltin(func):
             return
         if not hasattr(func, 'hash'):
             src = textwrap.dedent(inspect.getsource(func))
