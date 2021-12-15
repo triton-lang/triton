@@ -455,7 +455,7 @@ public:
 // masked load async
 class masked_load_async_inst: public load_inst {
 private:
-  std::string repr_impl() const { return "masked_load_async_async" + get_cache_modifier_repr(); }
+  std::string repr_impl() const { return "masked_load_async" + get_cache_modifier_repr(); }
   masked_load_async_inst(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache,
                    const std::string &name, instruction *next);
 

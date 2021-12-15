@@ -35,7 +35,7 @@ private:
   bool rewrite_select_masked_load(ir::instruction *value, ir::builder& builder);
   bool rewrite_load_to_shared(ir::instruction *value, ir::builder& builder);
   bool rewrite_cvt_layout(ir::instruction *value, ir::builder& builder);
-
+ 
 public:
   peephole(target* tgt, analysis::layouts* layouts): tgt_(tgt), layouts_(layouts) {}
   void run(ir::module &mod);

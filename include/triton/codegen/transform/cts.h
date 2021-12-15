@@ -21,6 +21,9 @@ class cts {
 private:
   void add_copy(ir::instruction *parent, ir::value *x, ir::builder &builder, bool to_shared);
 
+ // adhoc rule for float8-gemm
+  bool rewrite_fp_ext_smem(ir::instruction *value, ir::builder& builder);
+
 public:
   cts(bool use_async = false): use_async_(use_async) {}
   void run(ir::module &mod);
