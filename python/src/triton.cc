@@ -656,6 +656,8 @@ void init_triton_ir(py::module &&m) {
   py::class_<ir::type>(m, "type")
       .def("is_ptr", &ir::type::is_pointer_ty)
       .def("is_int", static_cast<bool (ir::type::*)() const>(&ir::type::is_integer_ty))
+      .def("get_int_width", &ir::type::get_integer_bitwidth)
+
       .def("is_floating", &ir::type::is_floating_point_ty)
       .def("is_block", &ir::type::is_block_ty)
       .def("make_ptr", &ir::pointer_type::get, ret::reference)

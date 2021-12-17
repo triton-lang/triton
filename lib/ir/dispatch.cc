@@ -855,6 +855,9 @@ ir::value *dispatch::sqrt(ir::value *x, ir::builder *builder) {
 }
 
 
+//===----------------------------------------------------------------------===//
+//                               Control FLow
+//===----------------------------------------------------------------------===//
 //
 
 ir::value *dispatch::multiple_of(ir::value *x, int value, ir::builder *){

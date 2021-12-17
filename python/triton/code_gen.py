@@ -20,8 +20,34 @@ import triton
 import triton._C.libtriton.triton as _triton
 from .tools.disasm import extract
 
-def mangle(type):
-    pass
+def mangle_ty(type):
+    if type.is_ptr():
+        return 'P' + mangle_ty(type.element)
+    if type.is_int():
+        return 'i' + str(type.get_int_width())
+    if type.is_fp8():
+        return 'fp8'
+    if type.is_fp16():
+        return 'fp16'
+    if type.is_bf16():
+        return 'bf16'
+    if type.is_fp32():
+        return 'fp32'
+    if type.is_fp64():
+        return 'fp64'
+    if type.is_void():
+        return 'V'
+    if type.is_block():
+        elt = mangle_ty(type.scalar)
+        shape = '_'.join(map(str, type.shape))
+        return f'{elt}S{shape}S'
+    assert False, "Unsupport type"
+
+def mangle_fn(name, arg_tys):
+    mangled_arg_names = '_'.join([mangle_ty(ty) for ty in arg_tys])
+    # doesn't mangle ret type, which must be a function of arg tys
+    return f'{name}__{mangled_arg_names}'
+
 
 class CodeGenerator(ast.NodeVisitor):
     def get_value(self, name):
@@ -99,10 +125,6 @@ class CodeGenerator(ast.NodeVisitor):
         #   return ret
         return self.builder.ret(ret.handle)
 
-    def mangle(self, name, prototype):
-        ret = name
-        print(prototype.ret_ty, prototype.arg_tys)
-
     def visit_FunctionDef(self, node, inline=False, arg_values=None):
         arg_names, kwarg_names = self.visit(node.args)
         # initialize defaults
@@ -122,8 +144,9 @@ class CodeGenerator(ast.NodeVisitor):
         if inline:
             pass
         else:
-            mangled_name = self.mangle(node.name, self.prototype)
-            fn = self.module.get_or_insert_function(node.name, self.prototype)
+            fn_name = mangle_fn(node.name, self.prototype.arg_tys)
+            print(fn_name)
+            fn = self.module.get_or_insert_function(fn_name, self.prototype)
             arg_values = []
             idx = 0
             for i, arg_name in enumerate(arg_names):
@@ -471,9 +494,12 @@ class CodeGenerator(ast.NodeVisitor):
             ret = fn(*args, generator=self, **kws)
             # if fn.inline:
             #     return ret
-            symbol = self.module.get_function(fn.__name__)
-            args = [arg.handle for arg in args]
-            ret = self.builder.call(symbol, args)
+            arg_vals = [arg.handle for arg in args]
+            arg_tys = [arg.type for arg in args]
+            fn_name = mangle_fn(fn.__name__, arg_tys)
+            print(fn_name)
+            symbol = self.module.get_function(fn_name)
+            ret = self.builder.call(symbol, arg_vals)
             return ret
         if hasattr(fn, '__self__') and self.is_triton_object(fn.__self__) or \
                 sys.modules[fn.__module__] is triton.language.core:
