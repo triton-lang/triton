@@ -719,6 +719,11 @@ def min(input, axis, _builder=None):
 def sum(input, axis, _builder=None):
     return frontend.sum(input, axis, _builder)
 
+@builtin
+@_add_reduction_docstr("xor sum")
+def xor_sum(input, axis, _builder=None):
+    return frontend.xor_sum(input, axis, _builder)
+
 
 # -----------------------
 # Internal for debugging
