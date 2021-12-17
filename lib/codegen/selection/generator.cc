@@ -1890,6 +1890,7 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
     case ir::reduce_inst::FSUB: return fsub(x, y);
     case ir::reduce_inst::FMAX: return max_num(x, y);
     case ir::reduce_inst::FMIN: return min_num(x, y);
+    case ir::reduce_inst::XOR: return xor_(x, y);
     default: throw std::runtime_error("unreachable");
     }
   };
@@ -1904,6 +1905,7 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
     case ir::reduce_inst::FSUB: neutral = ConstantFP::get(ty, 0); break;
     case ir::reduce_inst::FMAX: neutral = ConstantFP::get(ty, -INFINITY); break;
     case ir::reduce_inst::FMIN: neutral = ConstantFP::get(ty, INFINITY); break;
+    case ir::reduce_inst::XOR: neutral = neutral = ConstantInt::get(ty, 0); break;
     default: throw std::runtime_error("unreachable");
   }
   ir::value *arg = x->get_operand(0);

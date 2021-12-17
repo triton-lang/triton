@@ -89,6 +89,7 @@ struct dispatch{
   static ir::value *min(ir::value *input, unsigned int axis, ir::builder *builder);
   static ir::value *max(ir::value *input, unsigned int axis, ir::builder *builder);
   static ir::value *sum(ir::value *input, unsigned int axis, ir::builder *builder);
+  static ir::value *xor_sum(ir::value *input, unsigned axis, ir::builder *builder);
 
   // math
   static ir::value *umulhi(ir::value *x, ir::value *y, ir::builder *builder);
