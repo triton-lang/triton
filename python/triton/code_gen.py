@@ -20,6 +20,8 @@ import triton
 import triton._C.libtriton.triton as _triton
 from .tools.disasm import extract
 
+def mangle(type):
+    pass
 
 class CodeGenerator(ast.NodeVisitor):
     def get_value(self, name):
@@ -97,6 +99,10 @@ class CodeGenerator(ast.NodeVisitor):
         #   return ret
         return self.builder.ret(ret.handle)
 
+    def mangle(self, name, prototype):
+        ret = name
+        print(prototype.ret_ty, prototype.arg_tys)
+
     def visit_FunctionDef(self, node, inline=False, arg_values=None):
         arg_names, kwarg_names = self.visit(node.args)
         # initialize defaults
@@ -116,6 +122,7 @@ class CodeGenerator(ast.NodeVisitor):
         if inline:
             pass
         else:
+            mangled_name = self.mangle(node.name, self.prototype)
             fn = self.module.get_or_insert_function(node.name, self.prototype)
             arg_values = []
             idx = 0
@@ -153,7 +160,6 @@ class CodeGenerator(ast.NodeVisitor):
             if not has_ret:
                 self.builder.ret_void()
             else:
-                print(self.last_ret.type.is_block())
                 self.module.reset_ret_ty(node.name, self.last_ret.type)
             # self.module.reset_ret_type(node.name)
             self.builder.set_insert_block(insert_pt)
@@ -463,8 +469,8 @@ class CodeGenerator(ast.NodeVisitor):
         args = [self.visit(arg) for arg in node.args]
         if isinstance(fn, JITFunction):
             ret = fn(*args, generator=self, **kws)
-            if fn.inline:
-                return ret
+            # if fn.inline:
+            #     return ret
             symbol = self.module.get_function(fn.__name__)
             args = [arg.handle for arg in args]
             ret = self.builder.call(symbol, args)
@@ -968,7 +974,7 @@ class JITFunction:
             generator.lscope = dict()
             generator.gscope = sys.modules[self.fn.__module__].__dict__
             generator.prototype = prototype
-            ret = generator.visit_FunctionDef(self.parse().body[0], inline=self.inline, arg_values=args)
+            ret = generator.visit_FunctionDef(self.parse().body[0], inline=False, arg_values=args)
             generator.gscope = gscope
             generator.lscope = lscope
             generator.value_constructor = value_constructor

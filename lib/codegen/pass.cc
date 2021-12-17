@@ -49,6 +49,8 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(ir::module &ir, llvm::LLVMC
   codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target, num_warps);
   // run passes
   ir.print(std::cout);
+  std::cout << "----" << std::endl;
+  exit(1);
   dce.run(ir);
   peephole.run(ir);
   dce.run(ir);

@@ -87,7 +87,7 @@ private:
 
 class call_inst: public instruction {
 private:
-  std::string repr_impl() const { return "call"; }
+  std::string repr_impl() const;
   call_inst(ir::function* fn, const std::vector<ir::value*>& values, const std::string& name, instruction* next);
 
 public:
@@ -97,6 +97,7 @@ public:
   _TRITON_DEFINE_ACCEPT(call_inst)
 
 private:
+  ir::function* fn_;
 };
 
 

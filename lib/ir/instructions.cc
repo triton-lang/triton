@@ -84,8 +84,10 @@ phi_node* phi_node::create(type *ty, unsigned num_reserved, const std::string &n
 //                               call_inst classes
 //===----------------------------------------------------------------------===//
 
+std::string call_inst::repr_impl() const { return "call " + fn_->get_name(); }
+
 call_inst::call_inst(ir::function* fn, const std::vector<ir::value*>& values, const std::string& name, instruction* next)
-  : instruction(fn->get_fn_type()->get_return_ty(), INST_CALL, values.size(), name, next){
+  : instruction(fn->get_fn_type()->get_return_ty(), INST_CALL, values.size(), name, next), fn_(fn){
   for(size_t i = 0; i < values.size(); i++)
     set_operand(i, values.at(i));
 }

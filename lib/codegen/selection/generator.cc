@@ -3174,8 +3174,8 @@ StructType* generator::packed_type(ir::value* i){
 }
 
 void generator::forward_declare(ir::call_inst* i){
-  layouts_->get(i)
-  std::vector<Type*> arg_tys;
+//  layouts_->get(i);
+//  std::vector<Type*> arg_tys;
 //  FunctionType* ty = FunctionType::get()
 }
 
