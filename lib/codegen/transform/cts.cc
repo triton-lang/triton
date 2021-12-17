@@ -112,11 +112,11 @@ void cts::run(ir::module &mod) {
     }
   }
 
-  for (ir::function* fn : mod.get_function_list())
-  for (ir::basic_block *bb : fn->blocks())
-  for (ir::instruction* i : bb->get_inst_list()) {
-    rewrite_fp_ext_smem(i, builder);
-  }
+  // for (ir::function* fn : mod.get_function_list())
+  // for (ir::basic_block *bb : fn->blocks())
+  // for (ir::instruction* i : bb->get_inst_list()) {
+  //   rewrite_fp_ext_smem(i, builder);
+  // }
 }
 
 

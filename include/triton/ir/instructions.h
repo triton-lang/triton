@@ -728,12 +728,21 @@ public:
 class dot_inst: public builtin_inst {
 public:
   enum TransT { NoTrans, Trans };
+  enum DataType { 
+    FP8, FP16, BF16, TF32, FP32, 
+    INT1, INT4, INT8, INT32, 
+    UNKNOWN,
+  };
 
 private:
   dot_inst(value *A, value *B, value *C, TransT AT, TransT BT, const std::string &name, instruction *next);
   std::string repr_impl() const { return "dot"; }
 
   bool is_prefetched_ = false;
+  DataType C_type_ = DataType::FP32;
+  DataType A_type_ = DataType::FP16;
+  DataType B_type_ = DataType::FP16;
+  
 public:
   bool is_prefetched() const { return is_prefetched_; }
   void set_prefetched(bool is_prefetched) { is_prefetched_ = is_prefetched; }
