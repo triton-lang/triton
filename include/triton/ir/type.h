@@ -74,8 +74,8 @@ public:
   bool is_fp8_ty() const                { return id_ == FP8TyID; }
   bool is_fp16_ty() const               { return id_ == FP16TyID; }
   bool is_bf16_ty() const               { return id_ == BF16TyID; }
-  bool is_fp32_ty() const              { return id_ == FP32TyID; }
-  bool is_fp64_ty() const             { return id_ == FP64TyID; }
+  bool is_fp32_ty() const               { return id_ == FP32TyID; }
+  bool is_fp64_ty() const               { return id_ == FP64TyID; }
   bool is_label_ty()  const             { return id_ == LabelTyID;}
   bool is_metadata_ty() const           { return id_ == MetadataTyID; }
   bool is_token_ty() const              { return id_ == TokenTyID; }

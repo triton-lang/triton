@@ -68,12 +68,20 @@ class dtype:
     def __init__(self, init):
         self.init = init
 
+    @property
+    def name(self) -> str:
+        # The init functions are named something like 'get_int8'. Strip the prefix.
+        nom = self.init.__name__
+        prefix = 'get_'
+        assert nom.startswith(prefix)
+        return nom[len(prefix):]
+
     def handle(self, builder):
         ctx = builder.context
         return self.init(ctx)
 
     def __str__(self):
-        return f"dtype({self.init.__name__})"
+        return self.name
 
 
 class pointer_dtype:
@@ -130,6 +138,10 @@ class block:
             self.numel *= s
         # Data-type wrapper
         self.dtype = block._init_dtype(self.handle.type.scalar)
+
+    def __str__(self) -> str:
+        # ex. "float32[3,4]"
+        return str(self.dtype) + '[' + ','.join(str(s) for s in self.shape) + ']'
 
     @builtin
     def __add__(self, other, _builder=None):
