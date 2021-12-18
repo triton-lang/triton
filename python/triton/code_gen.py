@@ -274,8 +274,9 @@ class CodeGenerator(ast.NodeVisitor):
             self.module.seal_block(endif_bb)
             self.builder.set_insert_block(endif_bb)
         else:
-            assert isinstance(cond, triton.language.constexpr)
-            if cond.value:
+            if isinstance(cond, triton.language.constexpr):
+                cond = cond.value
+            if cond:
                 self.visit_compound_statement(node.body)
             else:
                 self.visit_compound_statement(node.orelse)
