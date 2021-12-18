@@ -248,7 +248,8 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_If(self, node):
         cond = self.visit(node.test)
-        if self.is_triton_object(cond):
+        if isinstance(cond, triton.language.block):
+            cond = cond.to(triton.language.int1, _builder=self.builder)
             current_bb = self.builder.get_insert_block()
             then_bb = _triton.ir.basic_block.create(self.builder.context, "then", current_bb.parent)
             else_bb = _triton.ir.basic_block.create(self.builder.context, "else", current_bb.parent) if node.orelse else None
@@ -273,6 +274,8 @@ class CodeGenerator(ast.NodeVisitor):
             self.module.seal_block(endif_bb)
             self.builder.set_insert_block(endif_bb)
         else:
+            if isinstance(cond, triton.language.constexpr):
+                cond = cond.value
             if cond:
                 self.visit_compound_statement(node.body)
             else:
