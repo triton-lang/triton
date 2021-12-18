@@ -158,12 +158,26 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version){
 }
 
 std::string ptx_to_cubin(const std::string& ptx, int cc) {
-  std::string ptxas = "ptxas";
   std::string version;
-  int use_system_ptxas = tools::exec(ptxas + " --version 2>&1", version) == 0;
-  if(!use_system_ptxas)
-    throw std::runtime_error("could not find `ptxas` in PATH");
-
+  // search pathes for ptxas
+  std::vector<std::string> ptxas_prefixes = {"", "/usr/local/cuda/bin/"};
+  std::string triton_ptxas = tools::getenv("TRITON_PTXAS_PATH");
+  if(!triton_ptxas.empty())
+    ptxas_prefixes.insert(ptxas_prefixes.begin(), triton_ptxas);
+  // see what path for ptxas are valid
+  std::vector<std::string> working_ptxas;
+  for(std::string prefix: ptxas_prefixes){
+    std::string ptxas = prefix + "ptxas";
+    bool works = tools::exec(ptxas + " --version 2>&1", version) == 0;
+    if(works)
+      working_ptxas.push_back(ptxas);
+  }
+  // error if no working ptxas was found
+  std::cout << working_ptxas.size() << std::endl;
+  if(working_ptxas.empty())
+    throw std::runtime_error("`ptxas` was searched in TRITON_PTXAS_PATH, /usr/local/cuda/bin/ or PATH"
+                             " but a working version could not be found.");
+  std::string ptxas = working_ptxas.front();
   // compile ptx with ptxas
   char _fsrc[] = "/tmp/triton_k_XXXXXX";
   char _flog[] = "/tmp/triton_l_XXXXXX";
