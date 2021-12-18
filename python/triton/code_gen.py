@@ -521,10 +521,10 @@ class LoadedBinary:
 
 class CompilationError(Exception):
     def __init__(self, src, node):
-        self.message = '\n'.join(src.split('\n')[:node.lineno])
+        self.message = f'at {node.lineno}:{node.col_offset}:\n'
+        self.message += '\n'.join(src.split('\n')[:node.lineno])
         self.message += '\n' + ' ' * node.col_offset + '^'
         super().__init__(self.message)
-        self.args = (src, node)
 
 
 class OutOfResources(Exception):
@@ -1084,6 +1084,9 @@ class TensorWrapper:
     
     def data_ptr(self):
         return self.base.data_ptr()
+
+    def __str__(self) -> str:
+        return f'TensorWrapper[{self.dtype}]({self.base})'
 
 
 def reinterpret(tensor, dtype):
