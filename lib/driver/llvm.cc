@@ -173,7 +173,6 @@ std::string ptx_to_cubin(const std::string& ptx, int cc) {
       working_ptxas.push_back(ptxas);
   }
   // error if no working ptxas was found
-  std::cout << working_ptxas.size() << std::endl;
   if(working_ptxas.empty())
     throw std::runtime_error("`ptxas` was searched in TRITON_PTXAS_PATH, /usr/local/cuda/bin/ or PATH"
                              " but a working version could not be found.");
