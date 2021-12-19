@@ -440,7 +440,7 @@ void init_triton_codegen(py::module &&m) {
         // record asm as we generate
         asm_map_t asm_map;
         std::ostringstream ttir;
-        ir::print(ir, ttir);
+        ir.print(ttir);
         asm_map["ttir"] = py::cast(ttir.str());
         llvm::LLVMContext ctx;
         if(backend == CUDA)
