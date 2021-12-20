@@ -275,6 +275,16 @@ void init_triton_runtime(py::module &&m) {
     return bin;
   });
 
+  m.def("cc", [](backend_t backend, uint64_t device) -> int {
+    if (backend == CUDA) {
+      CUdevice dev = (CUdevice)device;
+      int major = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>(dev);
+      int minor = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR>(dev);
+      return major*10 + minor;
+    }
+    return -1;
+  });
+
   // query maximum shared memory
   m.def("max_shared_memory", [](backend_t backend, uint64_t device) {
       if (backend == HOST)
