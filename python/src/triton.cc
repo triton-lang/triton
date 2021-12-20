@@ -127,6 +127,10 @@ void parse_args(py::list& args, py::list do_not_specialize, const std::string& f
       if(PyLong_Check(arg_ptr)){
         int overflow;
         long long value = PyLong_AsLongLongAndOverflow(arg_ptr, &overflow);
+        if(specialize && (value == 1)){
+          cache_key += '1';
+          continue;
+        }
         // long and int have different kernels
         if(!overflow & (std::abs(value) <= 0xffffffff)){
           cache_key += 'I';
@@ -147,10 +151,7 @@ void parse_args(py::list& args, py::list do_not_specialize, const std::string& f
         if(!specialize)
           continue;
         // values equal to 1 are specialized
-        if(value == 1)
-          cache_key += '1';
-        else
-          cache_key += 'x';
+        cache_key += 'x';
         // values divisible by small powers of 2 are specialized
         cache_key += pow2_divisor(value);
         continue;
@@ -188,8 +189,8 @@ void parse_args(py::list& args, py::list do_not_specialize, const std::string& f
         continue;
       }
       // argument is `constexpr`
-      py::object value = arg.attr("value");
-      if(value){
+      if(py::hasattr(arg, "value")){
+        py::object value = arg.attr("value");
         py::object name = arg_names[i];
         constants[name] = value;
         py::object repr = py::repr(value);
@@ -198,7 +199,14 @@ void parse_args(py::list& args, py::list do_not_specialize, const std::string& f
         cache_key += std::string(start, len);
         continue;
       }
-      assert(false);
+      std::string ty_str = arg.attr("__class__").attr("__name__").cast<std::string>();
+      if(ty_str == "NoneType"){
+        cache_key += "None";
+        continue;
+      }
+      std::string err_msg = "Received type '" + ty_str + "' for argument " + std::to_string(i) + "."
+                            + " Only int, float, bool, torch.Tensor, and triton.language.constexpr are supported.";
+      throw std::runtime_error(err_msg);
     }
   cache_key += std::to_string(num_warps);
   cache_key += std::to_string(num_stages);
@@ -269,9 +277,18 @@ void init_triton_runtime(py::module &&m) {
         CU_LAUNCH_PARAM_END
     };
     uint64_t _stream = PyLong_AsLong(stream.ptr());
-    drv::dispatch::cuLaunchKernel((CUfunction)kernel, grid_0, grid_1, grid_2, 
-                                  _num_warps*32, 1, 1, shared_mem, (CUstream)_stream, 
-                                  nullptr, config);
+    if(grid_0*grid_1*grid_2 > 0) {
+      // release the gil in case the enqueue blocks
+      // cuda will block if too many ops are enqueued
+      Py_BEGIN_ALLOW_THREADS
+
+
+      drv::dispatch::cuLaunchKernel((CUfunction)kernel, grid_0, grid_1, grid_2, 
+                                    _num_warps*32, 1, 1, shared_mem, (CUstream)_stream, 
+                                     nullptr, config);
+
+       Py_END_ALLOW_THREADS
+   }
     return bin;
   });
 
@@ -328,12 +345,16 @@ void init_triton_runtime(py::module &&m) {
                       const std::string &args, int64_t shared_mem){
     void* args_ptr = (void*)args.data();
     size_t args_size = args.size();
+    // release the gil in case the enqueue blocks
+    // cuda will block if too many ops are enqueued
+    Py_BEGIN_ALLOW_THREADS
     if(backend == HOST)
       host_enqueue(stream, kernel, grid_0, grid_1, grid_2, block_0, block_1, block_2, args_ptr, args_size, shared_mem);
     if(backend == CUDA)
       cu_enqueue(stream, kernel, grid_0, grid_1, grid_2, block_0, block_1, block_2, args_ptr, args_size, shared_mem);
     if(backend == ROCM)
       hip_enqueue(stream, kernel, grid_0, grid_1, grid_2, block_0, block_1, block_2, args_ptr, args_size, shared_mem);
+    Py_END_ALLOW_THREADS
   });
 
   
@@ -454,7 +475,7 @@ void init_triton_codegen(py::module &&m) {
         // record asm as we generate
         asm_map_t asm_map;
         std::ostringstream ttir;
-        ir::print(ir, ttir);
+        ir.print(ttir);
         asm_map["ttir"] = py::cast(ttir.str());
         llvm::LLVMContext ctx;
         if(backend == CUDA)
@@ -534,6 +555,7 @@ void init_triton_frontend(py::module &&m) {
   m.def("min", &ir::dispatch::min, ret::reference);
   m.def("max", &ir::dispatch::max, ret::reference);
   m.def("sum", &ir::dispatch::sum, ret::reference);
+  m.def("xor_sum", &ir::dispatch::xor_sum, ret::reference);
   // math
   m.def("umulhi", &ir::dispatch::umulhi, ret::reference);
   m.def("exp", &ir::dispatch::exp, ret::reference);

@@ -10,6 +10,7 @@ import os
 import pickle
 import subprocess
 import os
+import warnings
 from .tools.disasm import extract
 import torch
 import triton
@@ -97,6 +98,17 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node, inline=False, arg_values=None):
         arg_names, kwarg_names = self.visit(node.args)
+        # initialize defaults
+        for i, default_value in enumerate(node.args.defaults):
+            arg_node = node.args.args[-i-1]
+            annotation = arg_node.annotation
+            name = arg_node.arg
+            st_target = ast.Name(id=name, ctx=ast.Store())
+            if annotation is None:
+                init_node = ast.Assign(targets=[st_target], value=default_value)
+            else:
+                init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation)
+            self.visit(init_node)
         # store keyword arguments in local scope
         self.lscope[kwarg_names] = self.kwargs
         # initialize function
@@ -105,6 +117,7 @@ class CodeGenerator(ast.NodeVisitor):
         else:
             fn = self.module.get_or_insert_function(node.name, self.prototype)
             arg_values = []
+            idx = 0
             for i, arg_name in enumerate(arg_names):
                 if i in self.constants:
                     cst = self.constants[i]
@@ -113,13 +126,15 @@ class CodeGenerator(ast.NodeVisitor):
                     arg_values.append(cst)
                 else:
                     if i in self.attributes:
-                        is_ptr = fn.args[i].type.is_ptr()
+                        is_ptr = fn.args[idx].type.is_ptr()
                         attr = 'aligned' if is_ptr else 'multiple_of'
                         attr = getattr(_triton.ir.attribute_kind, attr)
                         attr = _triton.ir.attribute(attr, self.attributes[i])
-                        fn.add_attr(i + 1, attr)
-                    fn.args[i].name = arg_name
-                    arg_values.append(fn.args[i])
+                        fn.add_attr(idx + 1, attr)
+                    fn.args[idx].name = arg_name
+                    arg_values.append(fn.args[idx])
+                    idx += 1
+        
                 
         for arg_name, arg_value in zip(arg_names, arg_values):
             self.set_value(arg_name, arg_value)
@@ -237,7 +252,8 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_If(self, node):
         cond = self.visit(node.test)
-        if self.is_triton_object(cond):
+        if isinstance(cond, triton.language.block):
+            cond = cond.to(triton.language.int1, _builder=self.builder)
             current_bb = self.builder.get_insert_block()
             then_bb = _triton.ir.basic_block.create(self.builder.context, "then", current_bb.parent)
             else_bb = _triton.ir.basic_block.create(self.builder.context, "else", current_bb.parent) if node.orelse else None
@@ -262,6 +278,8 @@ class CodeGenerator(ast.NodeVisitor):
             self.module.seal_block(endif_bb)
             self.builder.set_insert_block(endif_bb)
         else:
+            if isinstance(cond, triton.language.constexpr):
+                cond = cond.value
             if cond:
                 self.visit_compound_statement(node.body)
             else:
@@ -269,7 +287,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_IfExp(self, node):
         cond = self.visit(node.test)
-        if cond:
+        if cond.value:
             return self.visit(node.body)
         else:
             return self.visit(node.orelse)
@@ -286,6 +304,10 @@ class CodeGenerator(ast.NodeVisitor):
             lhs = lhs.value
         if isinstance(rhs, triton.language.core.constexpr):
             rhs = rhs.value
+        if type(node.ops[0]) == ast.Is:
+            return triton.language.constexpr(lhs is rhs)
+        if type(node.ops[0]) == ast.IsNot:
+            return triton.language.constexpr(lhs is not rhs)
         fn = {
             ast.Eq: '__eq__',
             ast.NotEq: '__ne__',
@@ -293,8 +315,6 @@ class CodeGenerator(ast.NodeVisitor):
             ast.LtE: '__le__',
             ast.Gt: '__gt__',
             ast.GtE: '__ge__',
-            ast.Is: '__eq__',
-            ast.IsNot: '__ne__',
         }[type(node.ops[0])]
         if self.is_triton_object(lhs):
             return getattr(lhs, fn)(rhs, _builder=self.builder)
@@ -306,8 +326,12 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_UnaryOp(self, node):
         op = self.visit(node.operand)
+        if type(node.op) == ast.Not:
+            assert isinstance(op, triton.language.constexpr), "`not` only supported for constexpr at the moment"
+            return triton.language.constexpr(not op)
         if isinstance(op, triton.language.core.constexpr):
             op = op.value
+        #     print(op)
         fn = {
             ast.USub: '__neg__',
             ast.UAdd: '__pos__',
@@ -357,6 +381,20 @@ class CodeGenerator(ast.NodeVisitor):
         iterator = self.visit(node.iter.func)
         if iterator != self.builtins['range']:
             raise RuntimeError('Only `range` iterator currently supported')
+        # static for loops: all iterator arguments are constexpr
+        iter_args = [self.visit(arg) for arg in node.iter.args]
+        is_static = all([isinstance(x, triton.language.constexpr) for x in iter_args])
+        if is_static:
+            st_target = ast.Name(id=node.target.id, ctx=ast.Store())
+            iter_args = [arg.value for arg in iter_args]
+            range = iterator(*iter_args)
+            if len(range) <= 10:
+                for i in iterator(*iter_args):
+                    self.lscope[node.target.id] = triton.language.constexpr(i)
+                    self.visit_compound_statement(node.body)
+                    for stmt in node.orelse:
+                        ast.NodeVisitor.generic_visit(self, stmt)
+                return
         # create nodes
         st_target = ast.Name(id=node.target.id, ctx=ast.Store())
         ld_target = ast.Name(id=node.target.id, ctx=ast.Load())
@@ -445,7 +483,11 @@ class CodeGenerator(ast.NodeVisitor):
     def visit(self, node):
         if node is not None:
             self.last_node = node
-        return super().visit(node)
+        with warnings.catch_warnings():
+            # The ast library added visit_Constant and deprecated some other
+            # methods but we can't move to that without breaking Python 3.6 and 3.7.
+            warnings.simplefilter("ignore", DeprecationWarning)
+            return super().visit(node)
 
     def generic_visit(self, node):
         typename = type(node).__name__
@@ -493,10 +535,10 @@ class LoadedBinary:
 
 
 class CompilationError(Exception):
-    def __init__(self, src, node, err):
-        self.message = '\n'.join(src.split('\n')[:node.lineno])
+    def __init__(self, src, node):
+        self.message = f'at {node.lineno}:{node.col_offset}:\n'
+        self.message += '\n'.join(src.split('\n')[:node.lineno])
         self.message += '\n' + ' ' * node.col_offset + '^'
-        self.message += '\n Error: ' + str(err)
         super().__init__(self.message)
 
 
@@ -506,6 +548,7 @@ class OutOfResources(Exception):
                        f'Required: {required}'\
                        f'Hardware limit: {limit}'
         super().__init__(self.message)
+        self.args = (required, limit, name)
 
 
 class Kernel:
@@ -580,11 +623,11 @@ class Kernel:
         self.fn = fn
 
     def _compile(self, *wargs, device, attributes, constants, num_warps, num_stages):
-        wargs = [arg for arg in wargs if not isinstance(arg, triton.language.constexpr)]
         # create IR module
         context = _triton.ir.context()
         # get just-in-time proto-type of kernel
-        arg_types = [Kernel._to_triton_ir(context, arg) for arg in wargs]
+        fn_args = [arg for i, arg in enumerate(wargs) if i not in constants]
+        arg_types = [Kernel._to_triton_ir(context, arg) for arg in fn_args]
         ret_type = _triton.ir.type.get_void(context)
         prototype = _triton.ir.type.make_function(ret_type, arg_types)
         # generate Triton-IR
@@ -597,7 +640,7 @@ class Kernel:
             node = generator.last_node
             if node is None or isinstance(e, (NotImplementedError, CompilationError)):
                 raise e
-            raise CompilationError(self.fn.src, node, e)
+            raise CompilationError(self.fn.src, node) from e
         # Compile to machine code
         if torch.version.hip is None:
             backend = _triton.runtime.backend.CUDA
@@ -617,8 +660,9 @@ class Kernel:
                       if isinstance(a, int) and i not in self.fn.do_not_specialize}
 
         # transforms ints whose value is one into constants for just-in-time compilation
-        constants = {i: arg for i, arg in enumerate(wargs) if isinstance(arg, int) and arg == 1}
+        constants = {i: arg for i, arg in enumerate(wargs) if isinstance(arg, int) and arg == 1 and i not in self.fn.do_not_specialize}
         constants.update({i: arg.value for i, arg in enumerate(wargs) if isinstance(arg, triton.language.constexpr)})
+        constants.update({i: None for i, arg in enumerate(wargs) if arg is None})
         hashed_key = hashlib.md5(key.encode("utf-8")).hexdigest()
 
         # create cache directory
@@ -858,7 +902,10 @@ class JITFunction:
         # information of wrapped function
         self.fn = fn
         self.module = fn.__module__
-        self.arg_names = inspect.getfullargspec(fn).args
+        signature = inspect.signature(fn)
+        self.arg_names = [v.name for v in signature.parameters.values()]
+        self.arg_defaults = [v.default for v in signature.parameters.values()]
+
         self.version = version
         self.src = textwrap.dedent(inspect.getsource(fn))
         self.do_not_specialize = [] if do_not_specialize is None else\
@@ -882,7 +929,7 @@ class JITFunction:
         if not hasattr(self.fn, 'hash'):
             dependencies_finder = DependenciesFinder(globals=self.fn.__globals__, src=self.src)
             dependencies_finder.visit(self.parse())
-            self.fn.hash = dependencies_finder.ret
+            self.fn.hash = dependencies_finder.ret + version_key()
         return self.fn.hash
 
     # we do not parse `src` in the constructor because
@@ -901,6 +948,7 @@ class JITFunction:
             lscope = generator.lscope.copy()
             values = generator.module.get_values().copy()
             generator.gscope = sys.modules[self.fn.__module__].__dict__
+            generator.lscope = dict()
             ret = generator.visit_FunctionDef(self.parse().body[0], inline=True, arg_values=args)
             generator.gscope = gscope
             generator.lscope = lscope
@@ -1098,6 +1146,9 @@ class TensorWrapper:
     
     def data_ptr(self):
         return self.base.data_ptr()
+
+    def __str__(self) -> str:
+        return f'TensorWrapper[{self.dtype}]({self.base})'
 
 
 def reinterpret(tensor, dtype):

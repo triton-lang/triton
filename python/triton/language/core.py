@@ -35,6 +35,9 @@ def _patch(fn):
         builder = args[-1]
         assert isinstance(builder, ir.builder)
         args = [_to_ir(x, builder) for x in args]
+        # for i, arg in enumerate(args):
+        #     if arg is None:
+        #         raise ValueError(f"Unexpected `None` at position {i} for function {fn.__name__}")
         kwargs = {k: _to_ir(v, builder) for k, v in kwargs.items()}
         ret = fn(*args, **kwargs)
         if isinstance(ret, tuple):
@@ -65,9 +68,20 @@ class dtype:
     def __init__(self, init):
         self.init = init
 
+    @property
+    def name(self) -> str:
+        # The init functions are named something like 'get_int8'. Strip the prefix.
+        nom = self.init.__name__
+        prefix = 'get_'
+        assert nom.startswith(prefix)
+        return nom[len(prefix):]
+
     def handle(self, builder):
         ctx = builder.context
         return self.init(ctx)
+
+    def __str__(self):
+        return self.name
 
 
 class pointer_dtype:
@@ -77,7 +91,7 @@ class pointer_dtype:
     def handle(self, builder):
         return ir.type.make_ptr(self.element_ty.handle(builder), 1)
 
-
+# scalar types
 int1 = dtype(ir.type.get_int1)
 int8 = dtype(ir.type.get_int8)
 int16 = dtype(ir.type.get_int16)
@@ -88,7 +102,7 @@ float16 = dtype(ir.type.get_fp16)
 bfloat16 = dtype(ir.type.get_bf16)
 float32 = dtype(ir.type.get_fp32)
 float64 = dtype(ir.type.get_fp64)
-
+# pointer types
 pi32_t = pointer_dtype(int32)
 
 
@@ -124,6 +138,10 @@ class block:
             self.numel *= s
         # Data-type wrapper
         self.dtype = block._init_dtype(self.handle.type.scalar)
+
+    def __str__(self) -> str:
+        # ex. "float32[3,4]"
+        return str(self.dtype) + '[' + ','.join(str(s) for s in self.shape) + ']'
 
     @builtin
     def __add__(self, other, _builder=None):
@@ -712,6 +730,11 @@ def min(input, axis, _builder=None):
 @_add_reduction_docstr("sum")
 def sum(input, axis, _builder=None):
     return frontend.sum(input, axis, _builder)
+
+@builtin
+@_add_reduction_docstr("xor sum")
+def xor_sum(input, axis, _builder=None):
+    return frontend.xor_sum(input, axis, _builder)
 
 
 # -----------------------

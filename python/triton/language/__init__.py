@@ -1,4 +1,3 @@
-from . import core
-from . import random
+from . import core, random
 from .core import *
 from .random import *

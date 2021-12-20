@@ -714,6 +714,13 @@ ir::value *dispatch::sum(ir::value *input, unsigned int axis, ir::builder *build
   return reduce_impl(input, axis, builder, "sum", ir::reduce_inst::FADD, ir::reduce_inst::ADD);
 }
 
+ir::value *dispatch::xor_sum(ir::value *input, unsigned int axis, ir::builder *builder) {
+  ir::type *scalar_ty = input->get_type()->get_scalar_ty();
+  if (!scalar_ty->is_integer_ty())
+    throw semantic_error("xor_sum only supported for integers");
+  return reduce_impl(input, axis, builder, "sum", ir::reduce_inst::XOR, ir::reduce_inst::XOR);
+}
+
 
 //===----------------------------------------------------------------------===//
 //                               Math
