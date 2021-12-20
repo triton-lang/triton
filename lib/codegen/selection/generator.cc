@@ -1,4 +1,24 @@
-﻿#include "common.h"
+﻿#include <numeric>
+#include <sstream>
+#include <iomanip>
+#include "triton/codegen/selection/generator.h"
+#include "triton/codegen/target.h"
+#include "triton/codegen/analysis/axes.h"
+#include "triton/codegen/analysis/allocation.h"
+#include "triton/codegen/analysis/align.h"
+#include "triton/codegen/analysis/swizzle.h"
+#include "triton/codegen/transform/coalesce.h"
+#include "triton/ir/context.h"
+#include "triton/ir/module.h"
+#include "triton/ir/function.h"
+#include "triton/ir/type.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/IntrinsicsNVPTX.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Attributes.h"
+#include "llvm/IR/InlineAsm.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 namespace triton{
 namespace codegen{

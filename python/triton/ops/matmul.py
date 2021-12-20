@@ -44,15 +44,6 @@ def init_to_zero(name):
         triton.Config({'BLOCK_M': 16, 'BLOCK_N': 64, 'BLOCK_K': 32, 'SPLIT_K': 2}, num_stages=5, num_warps=2, pre_hook=init_to_zero('C')),
 
         # SPILT_K, num_stages = 2
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 2}, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 4}, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 8}, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 16}, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 2}, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 4}, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 8}, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 16}, num_warps=4, pre_hook=init_to_zero('C')),
-
         triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 2}, num_warps=2, pre_hook=init_to_zero('C')),
         triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 4}, num_warps=2, pre_hook=init_to_zero('C')),
         triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 8}, num_warps=2, pre_hook=init_to_zero('C')),
@@ -84,15 +75,6 @@ def init_to_zero(name):
         triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 16}, num_warps=2, pre_hook=init_to_zero('C')),
 
         # # SPLIT_K num_stages=3
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 2}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 4}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 8}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 16}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 2}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 4}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 8}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 16}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
-
         triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 2}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
         triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 4}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
         triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 8}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
@@ -124,15 +106,6 @@ def init_to_zero(name):
         triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 16}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
 
         # # SPLIT_K num_stages=4
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 2}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 4}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 8}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 16}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 2}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 4}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 8}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 16}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
-
         triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 2}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
         triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 4}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
         triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 8}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
@@ -187,15 +160,6 @@ def init_to_zero(name):
         triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64, 'BLOCK_K': 32, 'SPLIT_K': 2}, num_stages=5, num_warps=2, pre_hook=init_to_zero('C')),
 
         # SPILT_K, num_stages = 2
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 2}, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 4}, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 8}, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 16}, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 2}, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 4}, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 8}, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 16}, num_warps=4, pre_hook=init_to_zero('C')),
-
         triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 2}, num_warps=2, pre_hook=init_to_zero('C')),
         triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 4}, num_warps=2, pre_hook=init_to_zero('C')),
         triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 8}, num_warps=2, pre_hook=init_to_zero('C')),
@@ -227,15 +191,6 @@ def init_to_zero(name):
         triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 16}, num_warps=2, pre_hook=init_to_zero('C')),
 
         # # SPLIT_K num_stages=3
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 2}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 4}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 8}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 16}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 2}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 4}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 8}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 16}, num_stages=3, num_warps=4, pre_hook=init_to_zero('C')),
-
         triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 2}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
         triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 4}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
         triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 8}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
@@ -267,15 +222,6 @@ def init_to_zero(name):
         triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 16}, num_stages=3, num_warps=2, pre_hook=init_to_zero('C')),
 
         # # SPLIT_K num_stages=4
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 2}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 4}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 8}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 256, 'BLOCK_K': 64, 'SPLIT_K': 16}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 2}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 4}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 8}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
-        # triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 16}, num_stages=4, num_warps=4, pre_hook=init_to_zero('C')),
-
         triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 2}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
         triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 4}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
         triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 64, 'SPLIT_K': 8}, num_stages=4, num_warps=2, pre_hook=init_to_zero('C')),
