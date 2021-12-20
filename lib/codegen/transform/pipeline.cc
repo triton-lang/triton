@@ -104,17 +104,12 @@ void finalize_iv_vals(ir::builder& builder, ir::basic_block* block, std::map<ir:
 struct pipeline_info_t {
   ir::load_inst* load;
   ir::phi_node* ptr;
-  ir::fp_ext_inst* cvt = nullptr;
   ir::dot_inst* dot;
 
   pipeline_info_t(ir::load_inst* load, ir::phi_node* ptr, ir::dot_inst* dot)
     : load(load), ptr(ptr), dot(dot) {}
-
-  pipeline_info_t(ir::load_inst* load, ir::phi_node* ptr, ir::fp_ext_inst* cvt, ir::dot_inst* dot)
-    : load(load), ptr(ptr), cvt(cvt), dot(dot) {}
 };
 
-// TODO: this should be a LoopPass and should be more general
 void pipeline::run(ir::module &mod) {
   if (num_stages_ <= 1)
     return;
@@ -130,13 +125,9 @@ void pipeline::run(ir::module &mod) {
       ir::phi_node* ptr = dynamic_cast<ir::phi_node*>(load->get_pointer_operand());
       auto users = load->get_users();
       auto dot = dynamic_cast<ir::dot_inst*>(*users.begin());
-      auto cvt = dynamic_cast<ir::fp_ext_inst*>(*users.begin());
-      if(ptr && ptr->get_incoming_block(1) == ptr->get_parent() && users.size() == 1) {
-        if (dot) to_pipeline.push_back({load, ptr, dot});
-        if (cvt)
-          if (auto dot = dynamic_cast<ir::dot_inst*>(*cvt->get_users().begin()))
-            to_pipeline.push_back({load, ptr, cvt, dot});
-      }
+      if(ptr && ptr->get_incoming_block(1) == ptr->get_parent()
+         && users.size() == 1 && dot)
+        to_pipeline.push_back({load, ptr, dot});
     }});
   // do the pipelining
   std::vector<ir::phi_node*> new_loads;
@@ -144,9 +135,8 @@ void pipeline::run(ir::module &mod) {
   const int num_stages = num_stages_;
   std::vector<std::pair<ir::phi_node*, std::vector<ir::value*>>> preheader_loads; // Used to reorder loads
   for(auto info: to_pipeline){
-    ir::load_inst* load  = info.load;
-    ir::phi_node* ptr    = info.ptr;
-    ir::fp_ext_inst* cvt = info.cvt;
+    ir::load_inst* load = info.load;
+    ir::phi_node* ptr   = info.ptr;
     ir::basic_block* block = load->get_parent();
     ir::basic_block* header = block->get_predecessors()[0];
     auto* block_br = dynamic_cast<ir::cond_branch_inst*>(block->get_inst_list().back());
@@ -253,7 +243,7 @@ void pipeline::run(ir::module &mod) {
 
       // record first_loads to reorder them
       preheader_loads.push_back({new_load_phis.front(), first_loads});
-    } else { // num_stages == 2
+    } else {
       // pre-fetch first iteration
       builder.set_insert_point(header->get_inst_list().back());
       ir::value* first_ptr = ptr->get_value_for_block(header);
@@ -268,8 +258,6 @@ void pipeline::run(ir::module &mod) {
       else
         false_value = builder.create_splat(ir::undef_value::get(ty->get_scalar_ty()), ty->get_block_shapes());
       ir::value* first_load = builder.create_masked_load(first_ptr, first_mask, false_value, load->get_cache_modifier());
-      if (cvt)
-        first_load = builder.create_fp_ext(first_load, cvt->get_type());
       // pre-fetch next iteration
       builder.set_insert_point(block->get_inst_list().back());
       ir::value* next_ptr = ptr->get_value_for_block(block);
@@ -281,17 +269,12 @@ void pipeline::run(ir::module &mod) {
         false_value = remat_false_value;
       }
       ir::value* next_load = builder.create_masked_load(next_ptr, next_mask, false_value, load->get_cache_modifier());
-      if (cvt) {
-        ty = cvt->get_type();
-        next_load = builder.create_fp_ext(next_load, ty);
-      }
       // phi node
       builder.set_insert_point(block->get_first_non_phi());
       ir::phi_node* new_load = builder.create_phi(ty, 2);
       new_load->add_incoming(first_load, header);
       new_load->add_incoming(next_load, block);
-      if (cvt) cvt->replace_all_uses_with(new_load); // cvt is now the proxy for load
-      else load->replace_all_uses_with(new_load);
+      load->replace_all_uses_with(new_load);
       new_loads.push_back(new_load);
     }
   }
