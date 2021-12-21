@@ -3,7 +3,7 @@ import triton
 import triton._C.libtriton.triton as _triton
 import heapq
 
-def get_dram_bw(backend=None, device=None):
+def get_dram_gbps(backend=None, device=None):
   ''' return DRAM bandwidth in GB/s '''
   # assert backend == CUDA
   if not backend:
@@ -12,20 +12,27 @@ def get_dram_bw(backend=None, device=None):
     device = torch.cuda.current_device()
   mem_clock_khz = _triton.runtime.memory_clock_rate(backend, device)
   bus_width = _triton.runtime.global_memory_bus_width(backend, device)
-  bw = mem_clock_khz * bus_width * 2 // 1024 // 1024 // 8 # In GB/s
-  return bw
+  bw_gbps = mem_clock_khz * bus_width * 2 // 1024 // 1024 // 8 # In GB/s
+  return bw_gbps
 
-def get_matmul_tput(backend, device, num_ctas, num_warps):
-  ''' return compute throughput in TOPS '''
+def get_max_tensorcore_tflops(backend, device):
   num_subcores = _triton.runtime.num_sm(backend, device) * 4 # on recent GPUs
-  total_warps = num_ctas * min(num_warps, 4)
   clock_rate = _triton.runtime.clock_rate(backend, device) # in kHz
-  # # Fix clock rate for now
-  # clock_rate = 1410000 # kHz
   # assume fp32 += fp16*fp16
-  tput = min(num_subcores, total_warps) * clock_rate *2*4*4*4*2 # 2 4x4x4 Tensor Cores
-  tput /= 1024*1024*1024
-  return tput
+  cc = _triton.runtime.cc(backend, device)
+  if cc < 80:
+    ops_per_sub_core = 256 # 2 4x4x4 Tensor Cores
+  else:
+    ops_per_sub_core = 512
+  tflops = num_subcores * clock_rate * ops_per_sub_core / (1024*1024*1024)
+  return tflops
+
+def get_tensorcore_tflops(backend, device, num_ctas, num_warps):
+  ''' return compute throughput in TOPS '''
+  total_warps = num_ctas * min(num_warps, 4)
+  num_subcores = _triton.runtime.num_sm(backend, device) * 4 # on recent GPUs
+  tflops = min(num_subcores, total_warps)/num_subcores * get_max_tensorcore_tflops(backend, device)
+  return tflops
 
 def estimate_matmul_time(
   # backend, device, 
@@ -49,7 +56,7 @@ def estimate_matmul_time(
 
   # time to compute
   total_ops = 2*M*N*K / (1024*1024*1024) # GOPS
-  tput = get_matmul_tput(backend, device, num_ctas, num_warps)
+  tput = get_tensorcore_tflops(backend, device, num_ctas, num_warps)
   compute_ms = total_ops / tput
 
   # time to load data
@@ -57,7 +64,7 @@ def estimate_matmul_time(
   active_cta_ratio = min(1, num_ctas/num_sm)
   active_cta_ratio_bw1 = min(1, num_ctas/32) # 32 active ctas are enough to saturate 
   active_cta_ratio_bw2 = max(min(1, (num_ctas-32)/(108-32)), 0) # 32-108, remaining 5%
-  dram_bw = get_dram_bw(backend, device) * (active_cta_ratio_bw1*0.95 + active_cta_ratio_bw2*0.05)  # in GB/s
+  dram_bw = get_dram_gbps(backend, device) * (active_cta_ratio_bw1*0.95 + active_cta_ratio_bw2*0.05)  # in GB/s
   l2_bw   = dram_bw * 4 # rough estimation (should be 4.7 for A100?)
   # assume 80% of (following) loads are in L2 cache
   load_a_dram = M*K*2*(1+0.2*(num_cta_n-1)) # assume dtype=float16 (size==2)
@@ -90,7 +97,6 @@ def estimate_matmul_time(
   return total_time_ms
 
 def prune_num_stages(configs):
-  # TODO: should cache this
   backend = _triton.runtime.backend.CUDA
   device = torch.cuda.current_device()
   cc = _triton.runtime.cc(backend, device)
