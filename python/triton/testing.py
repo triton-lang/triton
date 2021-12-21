@@ -1,5 +1,6 @@
 import torch
 import os
+import triton._C.libtriton.triton as _triton
 from .code_gen import OutOfResources
 import subprocess
 import sys
@@ -313,3 +314,27 @@ def perf_report(benchmarks):
     """
     wrapper = lambda fn: Mark(fn, benchmarks)
     return wrapper
+
+def get_dram_gbps(backend=None, device=None):
+    ''' return DRAM bandwidth in GB/s '''
+    # assert backend == CUDA
+    if not backend:
+        backend = _triton.runtime.backend.CUDA
+    if not device:
+        device = torch.cuda.current_device()
+    mem_clock_khz = _triton.runtime.memory_clock_rate(backend, device)
+    bus_width = _triton.runtime.global_memory_bus_width(backend, device)
+    bw_gbps = mem_clock_khz * bus_width * 2 // 1024 // 1024 // 8 # In GB/s
+    return bw_gbps
+
+def get_max_tensorcore_tflops(backend, device):
+    num_subcores = _triton.runtime.num_sm(backend, device) * 4 # on recent GPUs
+    clock_rate = _triton.runtime.clock_rate(backend, device) # in kHz
+    # assume fp32 += fp16*fp16
+    cc = _triton.runtime.cc(backend, device)
+    if cc < 80:
+        ops_per_sub_core = 256 # 2 4x4x4 Tensor Cores
+    else:
+        ops_per_sub_core = 512
+    tflops = num_subcores * clock_rate * ops_per_sub_core / (1024*1024*1024)
+    return tflops
