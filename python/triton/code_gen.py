@@ -18,7 +18,7 @@ import triton._C.libtriton.triton as _triton
 from filelock import FileLock
 import dbm
 import tempfile
-from typing import Optional
+from typing import Optional, Dict
 import time
 
 
@@ -547,8 +547,8 @@ class CompilationError(Exception):
 
 class OutOfResources(Exception):
     def __init__(self, required, limit, name):
-        self.message = f'out of resource: {name}'\
-                       f'Required: {required}'\
+        self.message = f'out of resource: {name}, '\
+                       f'Required: {required}, '\
                        f'Hardware limit: {limit}'
         super().__init__(self.message)
         self.args = (required, limit, name)
@@ -744,9 +744,12 @@ class Launcher:
 
 
 class Autotuner:
-    def __init__(self, kernel, arg_names, configs, key, reset_to_zero, prune_configs_by=None):
+    def __init__(self, kernel, arg_names, configs, key, reset_to_zero, prune_configs_by: Dict=None):
         '''
-
+        :param prune_configs_by: a dict of functions that are used to prune configs, fields: 
+            'perf_model': performance model used to predicate running time with different configs, returns running time
+            'top_k': number of configs to bench
+            'prune_num_stages_by'(optional): a function used to prune num_stages. It take configs:List[Config] as its input, and returns pruned configs.
         '''
         if not configs:
             self.configs = [Config(dict(), num_warps=4, num_stages=2)]
@@ -1040,6 +1043,10 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
     :type configs: list[triton.Config]
     :param key: a list of argument names whose change in value will trigger the evaluation of all provided configs.
     :type key: list[str]
+    :param prune_configs_by: a dict of functions that are used to prune configs, fields: 
+        'perf_model': performance model used to predicate running time with different configs, returns running time
+        'top_k': number of configs to bench
+        'prune_num_stages_by'(optional): a function used to prune num_stages. It take configs:List[Config] as its input, and returns pruned configs.
     :param reset_to_zero: a list of argument names whose value will be reset to zero before evaluating any configs.
     :type reset_to_zero: list[str]
     """
