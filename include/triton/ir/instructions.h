@@ -92,6 +92,7 @@ private:
 
 public:
   static call_inst* create(ir::function* fn, const std::vector<ir::value*>& values, const std::string &name = "", instruction *next = nullptr);
+  ir::function* get_fn() { return fn_; }
 
   _TRITON_DEFINE_CLONE(call_inst)
   _TRITON_DEFINE_ACCEPT(call_inst)
