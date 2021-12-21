@@ -68,28 +68,6 @@ void cts::add_copy(ir::instruction *parent, ir::value *x, ir::builder &builder, 
   parent->replace_uses_of_with(x, copy);
 }
 
-bool cts::rewrite_fp_ext_smem(ir::instruction *value, ir::builder& builder) {
-  // (dot xxx, (cts (fp_ext (load %ptr)))) => 
-  //   (dot xxx, (cts (fp_ext (cfs (cts (load %ptr)))))
-  if (auto fp_ext = dynamic_cast<ir::fp_ext_inst*>(value)) {
-    if (auto load = dynamic_cast<ir::load_inst*>(fp_ext->get_operand(0))) {
-      const std::set<ir::user*> &fp_ext_users = fp_ext->get_users();
-      if (fp_ext_users.size() != 1) 
-        return false;
-
-      if (auto cts = dynamic_cast<ir::copy_to_shared_inst*>(*fp_ext_users.begin())) {
-        builder.set_insert_point(fp_ext);
-        auto load_cts = builder.create_copy_to_shared(load);
-        auto load_cfs = builder.create_copy_from_shared(load_cts);
-        fp_ext->replace_uses_of_with(load, load_cfs);
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-
 void cts::run(ir::module &mod) {
   // Add shared copies
   ir::builder &builder = mod.get_builder();
@@ -111,12 +89,6 @@ void cts::run(ir::module &mod) {
         }
     }
   }
-
-  // for (ir::function* fn : mod.get_function_list())
-  // for (ir::basic_block *bb : fn->blocks())
-  // for (ir::instruction* i : bb->get_inst_list()) {
-  //   rewrite_fp_ext_smem(i, builder);
-  // }
 }
 
 
