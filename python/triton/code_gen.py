@@ -494,7 +494,7 @@ class CodeGenerator(ast.NodeVisitor):
             # if fn.inline:
             #     return ret
             arg_vals = [arg.handle for arg in args]
-            arg_tys = [arg.dtype.handle(self.builder) for arg in args]
+            arg_tys = [arg.type for arg in arg_vals]
             fn_name = mangle_fn(fn.__name__, arg_tys)
             symbol = self.module.get_function(fn_name)
             ret = self.builder.call(symbol, arg_vals)
@@ -990,8 +990,9 @@ class JITFunction:
             gscope = generator.gscope.copy()
             lscope = generator.lscope.copy()
             value_constructor = generator.value_constructor
-            arg_types = [arg.dtype.handle(generator.builder) for arg in args]
-            arg_types = [_triton.ir.type.make_block(ty, arg.shape) for ty, arg in zip(arg_types, args)]
+            # arg_types = [arg.dtype.handle(generator.builder) for arg in args]
+            # arg_types = [_triton.ir.type.make_block(ty, arg.shape) for ty, arg in zip(arg_types, args)]
+            arg_types = [arg.handle.type for arg in args]
             ret_type  = _triton.ir.type.get_void(generator.builder.context)
             prototype = _triton.ir.type.make_function(ret_type, arg_types)
             generator.value_constructor = _triton.ir.value_constructor(generator.builder)
