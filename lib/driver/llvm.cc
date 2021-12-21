@@ -178,16 +178,14 @@ std::string ptx_to_cubin(const std::string& ptx, int cc) {
                              " but a working version could not be found.");
   std::string ptxas = working_ptxas.front();
   // compile ptx with ptxas
-  char _fsrc[] = "/tmp/triton_k_XXXXXX";
-  char _flog[] = "/tmp/triton_l_XXXXXX";
-  mkstemp(_fsrc);
-  mkstemp(_flog);
-  std::string fsrc = _fsrc;
-  std::string flog = _flog;
+  char _fsrc[L_tmpnam];
+  char _flog[L_tmpnam];
+  std::string fsrc = std::tmpnam(_fsrc);
+  std::string flog = std::tmpnam(_flog);
   std::string fbin = fsrc + ".o";
   const char* _fbin = fbin.c_str();
   std::ofstream ofs(fsrc);
-  ofs << ptx;
+  ofs << ptx << std::endl;
   ofs.close();
   std::string cmd;
   int err;
@@ -196,16 +194,18 @@ std::string ptx_to_cubin(const std::string& ptx, int cc) {
   if(err != 0){
     std::ifstream _log(_flog);
     std::string log(std::istreambuf_iterator<char>(_log), {});
+    unlink(_fsrc);
+    unlink(_flog);
     throw std::runtime_error("Internal Triton PTX codegen error: \n" + log);
   }
   CUmodule ret;
   std::ifstream _cubin(_fbin, std::ios::binary );
   std::string cubin(std::istreambuf_iterator<char>(_cubin), {});
   _cubin.close();
-  dispatch::cuModuleLoadData(&ret, cubin.c_str());
   unlink(_fsrc);
   unlink(_flog);
   unlink(_fbin);
+  dispatch::cuModuleLoadData(&ret, cubin.c_str());
   return cubin;
 }
 
