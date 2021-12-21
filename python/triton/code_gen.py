@@ -511,7 +511,7 @@ class LoadedBinary:
                                                       device)
         self.bin = bin
         self.asm = bin.asm
-        self.sass = None
+        self.sass = ''
         self.module = module
         self.kernel = kernel
         self.device = device
@@ -527,10 +527,13 @@ class LoadedBinary:
         if self.sass:
             return self.sass
         fd, path = tempfile.mkstemp()
-        with open(fd, 'wb') as cubin:
-            cubin.write(self.asm['cubin'])
-        self.sass = extract(path, fun)
-        os.remove(path)
+        try:
+            with open(fd, 'wb') as cubin:
+                cubin.write(self.asm['cubin'])
+            self.sass = extract(path, fun)
+        finally:
+            os.remove(path)
+        self.asm['sass'] = self.sass
         return self.sass
 
 
@@ -1042,9 +1045,7 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
     """
     def decorator(fn):
         def wrapper(kernel):
-            if prune_configs_by:
-                return Autotuner(kernel, fn.arg_names, configs, key, reset_to_zero, prune_configs_by)
-            return Autotuner(kernel, fn.arg_names, configs, key, reset_to_zero)
+            return Autotuner(kernel, fn.arg_names, configs, key, reset_to_zero, prune_configs_by)
 
         fn.kernel_decorators.append(wrapper)
         return fn
