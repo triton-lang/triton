@@ -482,7 +482,8 @@ class CodeGenerator(ast.NodeVisitor):
         with warnings.catch_warnings():
             # The ast library added visit_Constant and deprecated some other
             # methods but we can't move to that without breaking Python 3.6 and 3.7.
-            warnings.simplefilter("ignore", DeprecationWarning)
+            warnings.simplefilter("ignore", DeprecationWarning)  # python 3.9
+            warnings.simplefilter("ignore", PendingDeprecationWarning)  # python 3.8
             return super().visit(node)
 
     def generic_visit(self, node):
@@ -905,7 +906,7 @@ class JITFunction:
             node = generator.last_node
             if node is None or isinstance(e, (NotImplementedError, CompilationError)):
                 raise e
-            raise CompilationError(self.src, node, e)
+            raise CompilationError(self.src, node) from e
 
     # - when `.src` attribute is set, cache path needs
     #   to be reinitialized
