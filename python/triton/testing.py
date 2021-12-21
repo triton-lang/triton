@@ -89,14 +89,21 @@ def assert_allclose(x, y, tol=1e-2):
     assert allclose(x, y, tol)
 
 
-def random(shape, dtype, device):
-    torch.manual_seed(0)
+def random(shape, dtype, device, seed=0):
+    """
+    Override the seed in tests if you're calling this function twice and don't
+    want the same result for both calls.
+    """
+    torch.manual_seed(seed)
     if isinstance(shape, int):
         shape = (shape, )
     if dtype == torch.bool:
         return torch.randint(0, 2, shape, dtype=dtype, device=device)
     if dtype in [torch.int8, torch.int16, torch.int32, torch.int64]:
-        return torch.randint(1, 32, shape, dtype=dtype, device=device)
+        iinfo = torch.iinfo(dtype)
+        x = torch.randint(iinfo.min, iinfo.max, shape, dtype=dtype, device=device)
+        x[x == 0] = 1  # Hack. Never return zero so tests of division don't error out.
+        return x
     if dtype in [torch.float16, torch.float32, torch.float64]:
         return torch.normal(0, 1, shape, dtype=dtype, device=device)
     raise RuntimeError(f'Unknown dtype {dtype}')
