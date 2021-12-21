@@ -292,6 +292,16 @@ void init_triton_runtime(py::module &&m) {
     return bin;
   });
 
+  m.def("cc", [](backend_t backend, uint64_t device) -> int {
+    if (backend == CUDA) {
+      CUdevice dev = (CUdevice)device;
+      int major = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>(dev);
+      int minor = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR>(dev);
+      return major*10 + minor;
+    }
+    return -1;
+  });
+
   // query maximum shared memory
   m.def("max_shared_memory", [](backend_t backend, uint64_t device) {
       if (backend == HOST)
@@ -301,6 +311,31 @@ void init_triton_runtime(py::module &&m) {
       if(backend == ROCM)
         return hipGetInfo<hipDeviceAttributeMaxSharedMemoryPerBlock>(device);
       return -1;
+  });
+
+  // query DRAM & L2 cache
+  m.def("memory_clock_rate", [](backend_t backend, uint64_t device) {
+    if (backend == CUDA) return cuGetInfo<CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE>(device);
+    return -1;
+  });
+  m.def("global_memory_bus_width", [](backend_t backend, uint64_t device) {
+    if (backend == CUDA) return cuGetInfo<CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH>(device);
+    return -1;
+  });
+  m.def("l2_cache_size", [](backend_t backend, uint64_t device) {
+    if (backend == CUDA) return cuGetInfo<CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE>(device);
+    return -1;
+  });
+
+  // query clock rate (in kilohertz)
+  m.def("clock_rate", [](backend_t backend, uint64_t device) {
+    if (backend == CUDA) return cuGetInfo<CU_DEVICE_ATTRIBUTE_CLOCK_RATE>(device);
+    return -1;
+  });
+
+  m.def("num_sm", [](backend_t backend, uint64_t device) {
+    if (backend == CUDA) return cuGetInfo<CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT>(device);
+    return -1;
   });
 
   // enqueue

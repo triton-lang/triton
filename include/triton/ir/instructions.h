@@ -455,7 +455,7 @@ public:
 // masked load async
 class masked_load_async_inst: public load_inst {
 private:
-  std::string repr_impl() const { return "masked_load_async_async" + get_cache_modifier_repr(); }
+  std::string repr_impl() const { return "masked_load_async" + get_cache_modifier_repr(); }
   masked_load_async_inst(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache,
                    const std::string &name, instruction *next);
 
@@ -728,12 +728,21 @@ public:
 class dot_inst: public builtin_inst {
 public:
   enum TransT { NoTrans, Trans };
+  enum DataType { 
+    FP8, FP16, BF16, TF32, FP32, 
+    INT1, INT4, INT8, INT32, 
+    UNKNOWN,
+  };
 
 private:
   dot_inst(value *A, value *B, value *C, TransT AT, TransT BT, const std::string &name, instruction *next);
   std::string repr_impl() const { return "dot"; }
 
   bool is_prefetched_ = false;
+  DataType C_type_ = DataType::FP32;
+  DataType A_type_ = DataType::FP16;
+  DataType B_type_ = DataType::FP16;
+  
 public:
   bool is_prefetched() const { return is_prefetched_; }
   void set_prefetched(bool is_prefetched) { is_prefetched_ = is_prefetched; }
