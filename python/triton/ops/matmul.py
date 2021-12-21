@@ -36,7 +36,7 @@ def get_configs_io_bound():
         triton.Config({'BLOCK_M': 64 , 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
         triton.Config({'BLOCK_M': 64 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=5, num_warps=2),
-      ].extend(get_configs_io_bound()),
+    ] + get_configs_io_bound(),
     key=['M', 'N', 'K'],
     prune_configs_by={
       'prune_num_stages_by' : prune_num_stages,
