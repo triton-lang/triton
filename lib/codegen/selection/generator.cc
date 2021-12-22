@@ -163,7 +163,7 @@ Type *generator::cvt(ir::type *ty) {
     case ir::type::VoidTyID:      return Type::getVoidTy(*ctx_);
     case ir::type::FP8TyID:       return Type::getInt8Ty(*ctx_);
     case ir::type::FP16TyID:      return Type::getHalfTy(*ctx_);
-    case ir::type::BF16TyID:      return Type::getInt16Ty(*ctx_);
+    case ir::type::BF16TyID:      return Type::getBFloatTy(*ctx_);
     case ir::type::FP32TyID:      return Type::getFloatTy(*ctx_);
     case ir::type::FP64TyID:      return Type::getDoubleTy(*ctx_);
     case ir::type::LabelTyID:     return Type::getLabelTy(*ctx_);
@@ -458,7 +458,7 @@ std::tuple<Value*, Value*, Value*, Value*> generator::fp8x4_to_fp16x4(Value *in0
 }
 
 Value* generator::bf16_to_fp32(Value *in0){
-  Value *ret = UndefValue::get(vec_ty(builder_->getInt16Ty(), 2));
+  Value *ret = UndefValue::get(vec_ty(builder_->getBFloatTy(), 2));
   ret = insert_elt(ret, in0, (uint64_t)1);
   ret = insert_elt(ret, builder_->getInt16(0), (uint64_t)0);
   return bit_cast(ret, builder_->getFloatTy());
@@ -466,11 +466,11 @@ Value* generator::bf16_to_fp32(Value *in0){
 
 Value* generator::fp32_to_bf16(Value *in0){
   if(tgt_->as_nvidia()->sm() >= 80){
-    InlineAsm *ptx = InlineAsm::get(FunctionType::get(builder_->getInt16Ty(), {builder_->getFloatTy()}, false),
+    InlineAsm *ptx = InlineAsm::get(FunctionType::get(builder_->getBFloatTy(), {builder_->getFloatTy()}, false),
                                     "cvt.rn.bf16.f32 $0, $1;", "=h,r", false);
     return call(ptx, {in0});
   }
-  return extract_elt(bit_cast(in0, vec_ty(builder_->getInt16Ty(), 2)), (uint64_t)1);
+  return extract_elt(bit_cast(in0, vec_ty(builder_->getBFloatTy(), 2)), (uint64_t)1);
 }
 
 /**
