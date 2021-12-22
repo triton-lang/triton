@@ -544,6 +544,8 @@ class CompilationError(Exception):
         self.message += '\n'.join(src.split('\n')[:node.lineno])
         self.message += '\n' + ' ' * node.col_offset + '^'
         super().__init__(self.message)
+        # this is necessary to make CompilationError picklable
+        self.args = (src, node)
 
 
 class OutOfResources(Exception):
