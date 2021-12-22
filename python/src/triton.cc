@@ -110,14 +110,14 @@ std::string pow2_divisor(long N){
 }
 
 // Launch
-void parse_args(py::list& args, py::list do_not_specialize, const std::string& func_key, py::list& arg_names,
+void parse_args(py::list& args, py::list do_not_specialize, py::list& arg_names,
                 std::string& cache_key, std::string& params, size_t& params_size, py::dict constants,
                 int num_warps, int num_stages) {
     size_t len = PyList_Size(args.ptr());
     params.reserve(8*len); // 8 max bytes by argument
     char* params_ptr = &params[0];
-    cache_key = func_key;
     for(int i = 0; i < len; i++){
+      cache_key += "_";
       py::int_ py_i = py::int_(i);
       bool specialize = std::find(do_not_specialize.begin(), do_not_specialize.end(), py_i) == do_not_specialize.end();
       py::object arg = args[i];
@@ -133,13 +133,13 @@ void parse_args(py::list& args, py::list do_not_specialize, const std::string& f
         }
         // long and int have different kernels
         if(!overflow & (std::abs(value) <= 0xffffffff)){
-          cache_key += 'I';
+          cache_key += 'int32';
           params_ptr = (char*)(((uintptr_t)params_ptr + 3) & (-4));
           std::memcpy(params_ptr, &value, 4);
           params_ptr += 4;
         }
         else{
-          cache_key += 'L';
+          cache_key += 'int64';
           params_ptr = (char*)(((uintptr_t)params_ptr + 7) & (-8));
           if(overflow){
             unsigned long long uvalue = PyLong_AsUnsignedLongLong(arg_ptr);
@@ -150,8 +150,6 @@ void parse_args(py::list& args, py::list do_not_specialize, const std::string& f
         }
         if(!specialize)
           continue;
-        // values equal to 1 are specialized
-        cache_key += 'x';
         // values divisible by small powers of 2 are specialized
         cache_key += pow2_divisor(value);
         continue;
@@ -243,11 +241,12 @@ void init_triton_runtime(py::module &&m) {
     // parse arguments to compute cache key, compile-time constants and packed kernel arguments
     long _num_warps = PyLong_AsLong(num_warps.ptr());
     long _num_stages = PyLong_AsLong(num_stages.ptr());
-    std::string cache_key;
+    std::string args_key;
     std::string params;
     size_t params_size;
     py::dict constants;
-    parse_args(args, do_not_specialize, func_key, arg_names, cache_key, params, params_size, constants, _num_warps, _num_stages);
+    parse_args(args, do_not_specialize, arg_names, args_key, params, params_size, constants, _num_warps, _num_stages);
+    std::string cache_key = func_key + args_key;
 
     // get cached binary
     py::str key(cache_key);

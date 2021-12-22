@@ -700,7 +700,36 @@ class Kernel:
                         pickle.dump({"binary": binary, "key": key}, f)
                     os.rename(bin_cache_path + ".tmp", bin_cache_path)
                     if JITFunction.cache_hook is not None:
-                        JITFunction.cache_hook(key=key, binary=binary)
+                        signatures = []
+                        for i, name in enumerate(self.fn.arg_names):
+                            arg = wargs[i]
+                            curr = f'{name}: '
+                            if i in constants:
+                                curr += f"constant({constants[i]})"
+                            else:
+                                if(hasattr(arg, 'data_ptr')):
+                                    curr += Kernel._type_name(arg) + '*'
+                                elif isinstance(arg, triton.language.constexpr):
+                                    curr += f'constexpr[{arg.value}]'
+                                elif isinstance(arg, int):
+                                    if abs(arg) <= 0xffffffff:
+                                        curr += 'i32'
+                                    else:
+                                        curr += 'i64'
+                                elif isinstance(arg, float):
+                                    curr += "f32"
+                                elif isinstance(arg, bool):
+                                    curr += "i1"
+                                if i in attributes:
+                                    curr += f"[multipleof({attributes[i]})]"
+                            
+
+
+                            
+                            signatures.append(curr)
+                        signature = ', '.join(signatures)
+                        repr = f'{self.fn.fn.__name__}({signature})'
+                        JITFunction.cache_hook(key=key, binary=binary, repr=repr)
 
         self.fn.bin_cache[key] = LoadedBinary(device_idx, binary)
 

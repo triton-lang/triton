@@ -71,8 +71,21 @@ def test_reuse():
     reset_tmp_dir()
     x = torch.empty(1, dtype=torch.int32, device='cuda')
     for i in range(10):
-        kernel[(1,)](x, 43, BLOCK=1024)
+        kernel[(1,)](x, 1, BLOCK=1024)
     assert counter == 1
+
+def test_hook():
+    ret = None
+    def cache_hook(key, binary, repr):
+        nonlocal ret
+        print('a')
+        ret = (key, binary, repr)
+    JITFunction.cache_hook = cache_hook
+    reset_tmp_dir()
+    x = torch.empty(1, dtype=torch.int32, device='cuda')
+    kernel[(1,)](x, 43, BLOCK=1024)
+    print(ret)
+    
 
 @pytest.mark.parametrize('mode', ['enable', 'disable'])
 def test_specialize(mode):
