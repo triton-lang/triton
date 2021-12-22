@@ -30,8 +30,8 @@ inline bool is_hmma_c(ir::value *v){
     ir::type *a_ty = a->get_type();
     ir::value *b = x->get_operand(1);
     ir::type *b_ty = b->get_type();
-    result = a_ty->get_scalar_ty()->is_fp16_ty() &&
-             b_ty->get_scalar_ty()->is_fp16_ty();
+    result = (a_ty->get_scalar_ty()->is_fp16_ty() && b_ty->get_scalar_ty()->is_fp16_ty()) ||
+             (a_ty->get_scalar_ty()->is_bf16_ty() && b_ty->get_scalar_ty()->is_bf16_ty());
   }
   return result;
 }

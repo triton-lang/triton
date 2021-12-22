@@ -85,6 +85,7 @@ Value* geper::operator()(Value *ptr, Value* off, const std::string& name){
 // types
 #define void_ty              builder_->getVoidTy()
 #define f16_ty               builder_->getHalfTy()
+#define bf16_ty              builder_->getBFloatTy()
 #define f32_ty               builder_->getFloatTy()
 #define i8_ty                builder_->getInt8Ty()
 #define i32_ty               builder_->getInt32Ty()
@@ -1354,12 +1355,14 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   int num_ptr_b   = 8;
   int vec_a = 8;
   int vec_b = 8;
+  std::string input_dtype = A->get_type()->get_scalar_ty()->is_fp16_ty() ? "f16" : "bf16";
 
+  Type *input_ty = A->get_type()->get_scalar_ty()->is_fp16_ty() ? f16_ty : bf16_ty;
   Type *fp32_ty = f32_ty;
-  Type *fp16x2_ty = vec_ty(f16_ty, 2);
-  Type *fp16x2_pack4_ty = StructType::get(*ctx_, std::vector<llvm::Type*>{fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty});
+  Type *inputx2_ty = vec_ty(input_ty, 2);
+  Type *inputx2_pack4_ty = StructType::get(*ctx_, std::vector<llvm::Type*>{inputx2_ty, inputx2_ty, inputx2_ty, inputx2_ty});
   Type *fp32_pack4_ty = StructType::get(*ctx_, std::vector<llvm::Type*>{fp32_ty, fp32_ty, fp32_ty, fp32_ty});
-  FunctionType *ld_x4_ty = FunctionType::get(fp16x2_pack4_ty, std::vector<llvm::Type*>{ptr_ty(f16_ty, 3)}, false);
+  FunctionType *ld_x4_ty = FunctionType::get(inputx2_pack4_ty, std::vector<llvm::Type*>{ptr_ty(input_ty, 3)}, false);
 
   // left-hand-side values
   std::map<std::pair<unsigned, unsigned>, std::pair<Value*, Value*>> ha;
@@ -1423,8 +1426,9 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   for(int i = 0; i < num_ptr_b; i++)
     ptrs_b[i] = gep(shmems_[B], {off_b[i]});
 
-  FunctionType *mma_ty = FunctionType::get(fp32_pack4_ty, std::vector<llvm::Type*>{fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty}, false);
-  InlineAsm *mma_fn = InlineAsm::get(mma_ty, "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 "
+  FunctionType *mma_ty = FunctionType::get(fp32_pack4_ty, std::vector<llvm::Type*>{inputx2_ty, inputx2_ty, inputx2_ty, inputx2_ty, inputx2_ty, inputx2_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty}, false);
+  InlineAsm *mma_fn = InlineAsm::get(mma_ty, "mma.sync.aligned.m16n8k16.row.col.f32."
+                                             + input_dtype + "." + input_dtype + ".f32 "
                                              "{$0, $1, $2, $3}, "
                                              "{$4, $5, $6, $7}, "
                                              "{$8, $9}, "
@@ -1536,16 +1540,16 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
       // create phis
       builder_->SetInsertPoint(CurrBB->getFirstNonPHI());
       for(unsigned m = 0; m < num_rep_0; m++){
-        ha[{m, 0}].first = phi(fp16x2_ty, 2);
-        ha[{m, 0}].second = phi(fp16x2_ty, 2);
-        ha[{m, 8}].first = phi(fp16x2_ty, 2);
-        ha[{m, 8}].second = phi(fp16x2_ty, 2);
+        ha[{m, 0}].first = phi(inputx2_ty, 2);
+        ha[{m, 0}].second = phi(inputx2_ty, 2);
+        ha[{m, 8}].first = phi(inputx2_ty, 2);
+        ha[{m, 8}].second = phi(inputx2_ty, 2);
       }
       for(unsigned n = 0; n < num_rep_1; n+=2){
-        hb[{n, 0}] = phi(fp16x2_ty, 2);
-        hb[{n+1, 0}] = phi(fp16x2_ty, 2);
-        hb[{n, 8}] = phi(fp16x2_ty, 2);
-        hb[{n+1, 8}] = phi(fp16x2_ty, 2);
+        hb[{n, 0}] = phi(inputx2_ty, 2);
+        hb[{n+1, 0}] = phi(inputx2_ty, 2);
+        hb[{n, 8}] = phi(inputx2_ty, 2);
+        hb[{n+1, 8}] = phi(inputx2_ty, 2);
       }
       // insert prefetched lds at the end of loop header
       builder_->SetInsertPoint(bbs_[phiA->get_incoming_block(0)]->getTerminator());
