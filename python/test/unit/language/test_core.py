@@ -453,11 +453,6 @@ def test_reduce2d(dtype, shape, axis, device='cuda'):
 # ---------------
 # test permute
 # ---------------
-
-# ---------------
-# test permute
-# ---------------
-
 @pytest.mark.parametrize("dtype, shape, perm",
   [(dtype, shape, perm) \
         for dtype in ['float32']\

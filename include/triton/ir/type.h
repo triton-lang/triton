@@ -131,6 +131,7 @@ public:
       case FP16TyID: return "f16";
       case FP32TyID: return "f32";
       case FP64TyID: return "f64";
+      case BF16TyID: return "bf16";
       case LabelTyID: return "label";
       case MetadataTyID: return "md";
       case TokenTyID: return "tok";
@@ -141,8 +142,7 @@ public:
       case BlockTyID: return tile_repr();
       default: break;
     }
-    assert(false);
-    return "";
+    throw std::logic_error("unknown type id '" + std::to_string(id_) + "'");
   };
 
 private:
