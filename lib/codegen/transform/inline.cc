@@ -10,10 +10,23 @@ void inliner::do_inline(ir::function* fn, ir::call_inst* callsite, ir::builder& 
   ir::function* parent_fn = callsite->get_fn();
   // create new basic block to branch to when the called function return
   // and optionally also a phi node to hold the return values
-  ir::basic_block* after_call_bb = ir::basic_block::create(callsite->get_parent()->get_context(), "after_call", parent_fn);
-  ir::phi_node* ret_vals = builder.create_phi(fn->get_fn_type()->get_return_ty(), 0);
+  ir::basic_block* exit = ir::basic_block::create(callsite->get_parent()->get_context(), "after_call", parent_fn);
+  ir::phi_node* ret_val = builder.create_phi(fn->get_fn_type()->get_return_ty(), 0);
+  // clone all the basic blocks
+  std::vector<ir::basic_block*> new_blocks;
+  for(ir::basic_block* block: fn->blocks()){
+   ir::context& ctx = block->get_context();
+   const std::string& name = block->get_name();
+   new_blocks.push_back(ir::basic_block::create(ctx, name, parent_fn));
+  }
   // get arguments `fn` is called with
   std::vector<ir::value*> tgt_args(callsite->op_begin(), callsite->op_end());
+  // replace the callsite by a branch to the function's entry block
+  builder.set_insert_point(callsite);
+  ir::value* br = builder.create_br(new_blocks[0]);
+  callsite->replace_all_uses_with(br);
+
+
   std::vector<ir::argument*> src_args(fn->args().begin(), fn->args().end());
   for(ir::basic_block* old_block: fn->blocks()){
     ir::basic_block* new_block = ir::basic_block::create(old_block->get_context(), old_block->get_name(), callsite->get_fn());
