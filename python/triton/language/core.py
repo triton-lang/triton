@@ -86,10 +86,15 @@ class dtype:
 
 class pointer_dtype:
     def __init__(self, element_ty):
+        if not isinstance(element_ty, dtype):
+            raise TypeError('element_ty is a {type(element_ty).__name__}.')
         self.element_ty = element_ty
 
     def handle(self, builder):
         return ir.type.make_ptr(self.element_ty.handle(builder), 1)
+
+    def __str__(self):
+        return f'pointer<{self.element_ty}>'
 
 # scalar types
 int1 = dtype(ir.type.get_int1)

@@ -187,6 +187,7 @@ void parse_args(py::list& args, py::list do_not_specialize, const std::string& f
         params_ptr += 8;
         py::object dtype = arg.attr("dtype");
         py::object repr = py::repr(dtype);
+        assert(!strncmp((const char*)PyUnicode_1BYTE_DATA(repr.ptr()), "torch.", 6));
         const char* start = (const char*)PyUnicode_1BYTE_DATA(repr.ptr()) + 6; // remove 'torch.'
         size_t len = PyUnicode_GET_LENGTH(repr.ptr()) - 6;
         cache_key += std::string(start, len);
