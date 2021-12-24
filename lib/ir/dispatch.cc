@@ -55,7 +55,7 @@ ir::type *computation_type(ir::type* a_ty, ir::type* b_ty, DivOrMod div_or_mod) 
     }
   }
   if (!a_ty->is_integer_ty() || !b_ty->is_integer_ty())
-    throw_unreachable("augment_types");
+    throw_unreachable("computation_type");
   // 4 ) both operands are integer and undergo
   //    integer promotion
   return integer_promote(a_ty, b_ty);
@@ -493,7 +493,7 @@ ir::value *dispatch::cast(ir::value *input, ir::type *dst_ty, ir::builder *build
       other = builder->create_splat(other, src_ty->get_block_shapes());
     return builder->create_icmpNE(input, other);
   }
-  return throw_unreachable("cast");
+  return throw_unreachable("cast from " + src_sca_ty->repr() + " to " + dst_sca_ty->repr());
 }
 
 //===----------------------------------------------------------------------===//
