@@ -110,6 +110,52 @@ protected:
 
 class mma_layout: public distributed_layout {
 public:
+  enum TensorCoreType : uint8_t {
+    // floating-point tensor core instr
+    FP32_FP16_FP16_FP32, // default
+    FP32_BF16_BF16_FP32, // Not implemented
+    FP32_TF32_TF32_FP32, // Not implemented
+    // integer tensor core instr
+    INT32_INT1_INT1_INT32, // Not implemented
+    INT32_INT4_INT4_INT32, // Not implemented
+    INT32_INT8_INT8_INT32, // Not implemented
+    //
+    NOT_APPLICABLE,    
+  };
+
+  // Used on nvidia GPUs with sm >= 80
+  inline static const std::map<TensorCoreType, std::vector<int>> mma_instr_shape_ = {
+    {FP32_FP16_FP16_FP32, {16, 8, 16}}, 
+    {FP32_BF16_BF16_FP32, {16, 8, 16}},
+    {FP32_TF32_TF32_FP32, {16, 8, 8}},
+
+    {INT32_INT1_INT1_INT32, {16, 8, 256}},
+    {INT32_INT4_INT4_INT32, {16, 8, 64}},
+    {INT32_INT8_INT8_INT32, {16, 8, 32}},
+  };
+
+  inline static const std::map<TensorCoreType, std::string> mma_instr_ptx_ = {
+    {FP32_FP16_FP16_FP32, "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32"}, 
+    {FP32_BF16_BF16_FP32, "mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32"},
+    {FP32_TF32_TF32_FP32, "mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32"},
+
+    {INT32_INT1_INT1_INT32, "mma.sync.aligned.m16n8k256.row.col.s32.b1.b1.s32.xor.popc"},
+    {INT32_INT4_INT4_INT32, "mma.sync.aligned.m16n8k64.row.col.satfinite.s32.s4.s4.s32"},
+    {INT32_INT8_INT8_INT32, "mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32"},
+  };
+
+  // vector length per ldmatrix (16*8/elelment_size_in_bits)
+  inline static const std::map<TensorCoreType, int> mma_instr_vec_ = {
+    {FP32_FP16_FP16_FP32, 8},
+    {FP32_BF16_BF16_FP32, 8},
+    {FP32_TF32_TF32_FP32, 4},
+
+    {INT32_INT1_INT1_INT32, 128},
+    {INT32_INT4_INT4_INT32, 32},
+    {INT32_INT8_INT8_INT32, 16},
+  };
+
+public:
   mma_layout(size_t num_warps,
                 const std::vector<int>& axes,
                 const std::vector<unsigned>& shapes,
@@ -124,6 +170,11 @@ public:
   int spw(size_t k) { return spw_.at(k); }
   int rep(size_t k) { return rep_.at(k); }
 
+  // helpers for generator.cc
+  std::string get_ptx_instr() const { return mma_instr_ptx_.at(tensor_core_type_); }
+  int get_vec_a() const { return mma_instr_vec_.at(tensor_core_type_); }
+  int get_vec_b() const { return mma_instr_vec_.at(tensor_core_type_); }
+
 private:
   // fragment per warp
   std::vector<int> fpw_;
@@ -135,6 +186,8 @@ private:
   std::vector<int> spt_;
   // repetitions
   std::vector<int> rep_;
+
+  TensorCoreType tensor_core_type_ = FP32_FP16_FP16_FP32;
 };
 
 struct scanline_layout: public distributed_layout {

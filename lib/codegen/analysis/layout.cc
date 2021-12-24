@@ -36,6 +36,48 @@ inline bool is_hmma_c(ir::value *v){
   return result;
 }
 
+static bool is_mma_c(ir::value *v) {
+  mma_layout::TensorCoreType mma_type;
+  if (auto* dot = dynamic_cast<ir::dot_inst*>(v)) {
+    ir::value* a = dot->get_operand(0);
+    ir::value* b = dot->get_operand(1);
+    ir::type* a_ty = a->get_type();
+    ir::type* b_ty = b->get_type();
+    ir::type* c_ty = v->get_type();
+
+    if (c_ty->get_scalar_ty()->is_fp32_ty()) {
+      // floating point tensor cores
+      if (a_ty->get_scalar_ty()->is_fp16_ty() && b_ty->get_scalar_ty()->is_fp16_ty()) {
+        mma_type = mma_layout::FP32_FP16_FP16_FP32;
+        return true;
+      }
+      if (a_ty->get_scalar_ty()->is_bf16_ty() && b_ty->get_scalar_ty()->is_bf16_ty()) {
+        mma_type = mma_layout::FP32_BF16_BF16_FP32;
+        return true;
+      }
+      if (a_ty->get_scalar_ty()->is_fp32_ty() && b_ty->get_scalar_ty()->is_fp32_ty() 
+          && dot->allow_tf32()) {
+        mma_type = mma_layout::FP32_TF32_TF32_FP32;
+        return true;
+      }
+    } else if (c_ty->get_scalar_ty()->is_integer_ty(32)) {
+      // integer tensor cores
+      if (a_ty->get_scalar_ty()->is_integer_ty(1) && b_ty->get_scalar_ty()->is_integer_ty(1)) {
+        mma_type = mma_layout::INT32_INT1_INT1_INT32;
+        return true;
+      }
+      if (a_ty->get_scalar_ty()->is_integer_ty(4) && b_ty->get_scalar_ty()->is_integer_ty(4)) {
+        mma_type = mma_layout::INT32_INT4_INT4_INT32;
+        return true;
+      }
+      if (a_ty->get_scalar_ty()->is_integer_ty(8) && b_ty->get_scalar_ty()->is_integer_ty(8)) {
+        mma_type = mma_layout::INT32_INT8_INT8_INT32;
+        return true;
+      }
+    }
+  }
+}
+
 inline void extract_io_use(ir::value *v, std::set<ir::value*>& result) {
   for(ir::user* u: v->get_users()){
     auto i = dynamic_cast<ir::io_inst*>(u);
@@ -159,9 +201,9 @@ mma_layout::mma_layout(size_t num_warps,
     spw_ = {fpw_[0]*4*rep_[0], fpw_[1]*4*rep_[1], 1};
   }
   else{
-    fpw_ = {1, 1, 1};
-    spw_ = {16, 8, 1};
-    rep_ = {2,  2, 1};
+    // fpw_ = {1, 1, 1};
+    spw_ = mma_instr_shape_.at(tensor_core_type_); // e.g., {16, 8, 16} for f32.f16.f16.f32
+    // rep_ = {2,  2, 1};
   }
   order_ = {0, 1};
 
