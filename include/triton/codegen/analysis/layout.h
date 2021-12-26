@@ -112,7 +112,7 @@ class mma_layout: public distributed_layout {
 public:
   enum TensorCoreType : uint8_t {
     // floating-point tensor core instr
-    FP32_FP16_FP16_FP32, // default
+    FP32_FP16_FP16_FP32 = 0, // default
     FP32_BF16_BF16_FP32, // Not implemented
     FP32_TF32_TF32_FP32, // Not implemented
     // integer tensor core instr
@@ -132,6 +132,17 @@ public:
     {INT32_INT1_INT1_INT32, {16, 8, 256}},
     {INT32_INT4_INT4_INT32, {16, 8, 64}},
     {INT32_INT8_INT8_INT32, {16, 8, 32}},
+  };
+
+  // shape of matrices loaded by ldmatrix (m-n-k, for mxk & kxn matrices)
+  inline static const std::map<TensorCoreType, std::vector<int>> mma_mat_shape_ = {
+    {FP32_FP16_FP16_FP32, {8, 8, 8}}, 
+    {FP32_BF16_BF16_FP32, {8, 8, 8}},
+    {FP32_TF32_TF32_FP32, {8, 8, 4}},
+
+    {INT32_INT1_INT1_INT32, {8, 8, 64}},
+    {INT32_INT4_INT4_INT32, {8, 8, 32}},
+    {INT32_INT8_INT8_INT32, {8, 8, 16}},
   };
 
   inline static const std::map<TensorCoreType, std::string> mma_instr_ptx_ = {
@@ -162,7 +173,8 @@ public:
                 const std::vector<ir::value *> &values,
                 analysis::align* align, target *tgt,
              shared_layout* layout_a,
-             shared_layout* layout_b);
+             shared_layout* layout_b,
+             ir::value *dot);
   void accept(layout_visitor* vst) { vst->visit_layout_mma(this); }
   // accessor
   int fpw(size_t k) { return fpw_.at(k); }
@@ -172,8 +184,13 @@ public:
 
   // helpers for generator.cc
   std::string get_ptx_instr() const { return mma_instr_ptx_.at(tensor_core_type_); }
+  std::vector<int> get_mma_instr_shape() const { return mma_instr_shape_.at(tensor_core_type_); }
+  std::vector<int> get_mma_mat_shape() const { return mma_mat_shape_.at(tensor_core_type_); }
   int get_vec_a() const { return mma_instr_vec_.at(tensor_core_type_); }
   int get_vec_b() const { return mma_instr_vec_.at(tensor_core_type_); }
+
+  // setter
+  void set_tensor_core_type(TensorCoreType type) { tensor_core_type_ = type; }
 
 private:
   // fragment per warp
