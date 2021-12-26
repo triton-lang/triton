@@ -75,7 +75,7 @@ ir::value *value_constructor::add_phi_operands(const std::string& name, ir::phi_
 
 ir::value *value_constructor::get_value_recursive(const std::string& name, ir::basic_block *block) {
   ir::value *result;
-  auto &preds = block->get_predecessors();
+  auto preds = block->get_predecessors();
   ir::type *ty = types_.at(name);
   if(block && sealed_blocks_.find(block) == sealed_blocks_.end()){
     incomplete_phis_[block][name] = make_phi(ty, 1, block);

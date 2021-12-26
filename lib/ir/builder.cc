@@ -117,13 +117,10 @@ type *builder::get_double_ty()
 //===----------------------------------------------------------------------===//
 
 value* builder::create_br(basic_block *dest){
-  dest->add_predecessor(block_);
   return insert(branch_inst::create(dest));
 }
 
 value* builder::create_cond_br(value *cond, basic_block *if_dest, basic_block *else_dest){
-  if_dest->add_predecessor(block_);
-  else_dest->add_predecessor(block_);
   return insert(branch_inst::create(cond, if_dest, else_dest));
 }
 

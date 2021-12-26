@@ -110,6 +110,10 @@ public:
     return (function*)symbols_.at(name);
   }
   function *get_or_insert_function(const std::string &name, function_type *ty);
+  void remove_function(ir::function* fn){
+    functions_.erase(std::remove(functions_.begin(), functions_.end(), fn), functions_.end());
+  }
+
   void reset_ret_ty(const std::string& name, type* ty);
 
   // Const allocation

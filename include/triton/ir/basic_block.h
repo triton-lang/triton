@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #ifndef _TRITON_IR_BASIC_BLOCK_H_
 #define _TRITON_IR_BASIC_BLOCK_H_
@@ -35,6 +35,7 @@ public:
   context& get_context() { return ctx_; }
 
   // get iterator to first instruction that is not a phi
+  void replace_phi_uses_with(basic_block* before, basic_block* after);
   iterator get_first_non_phi();
 
   // get instruction list
@@ -60,10 +61,13 @@ public:
   inline const instruction       &back() const { return *inst_list_.back();  }
   inline       instruction       &back()       { return *inst_list_.back();  }
 
+  void append_instruction(ir::instruction* i);
+  // split
+  basic_block* split_before(ir::instruction* loc, const std::string& name);
+
   // predecessors
-  const std::vector<basic_block*>& get_predecessors() const { return preds_; }
-  const std::vector<basic_block*>& get_successors() const { return succs_; }
-  void add_predecessor(basic_block* pred);
+  std::vector<basic_block*> get_predecessors() const;
+  std::vector<basic_block*> get_successors() const;
 
   // factory functions
   static basic_block* create(context &ctx, const std::string &name, function *parent);

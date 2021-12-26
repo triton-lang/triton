@@ -13,6 +13,7 @@
 #include "triton/codegen/transform/peephole.h"
 #include "triton/codegen/transform/pipeline.h"
 #include "triton/codegen/transform/prefetch.h"
+#include "triton/codegen/transform/inline.h"
 #include "triton/ir/function.h"
 #include "triton/ir/module.h"
 #include "triton/ir/print.h"
@@ -33,6 +34,7 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(ir::module &ir, llvm::LLVMC
   bool cts_use_async = target->as_nvidia() && target->as_nvidia()->sm() >= 80;
   // create passes
   codegen::analysis::align align;
+  codegen::transform::inliner inliner;
   codegen::analysis::axes axes;
   codegen::transform::cts cts(cts_use_async);
   codegen::transform::pipeline pipeline(cts_use_async, num_stages);
@@ -48,9 +50,7 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(ir::module &ir, llvm::LLVMC
   codegen::transform::membar barriers(&liveness, &layouts, &allocation, &prefetch_s, target);
   codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target, num_warps);
   // run passes
-  ir.print(std::cout);
-  std::cout << "----" << std::endl;
-  exit(1);
+  inliner.run(ir);
   dce.run(ir);
   peephole.run(ir);
   dce.run(ir);
