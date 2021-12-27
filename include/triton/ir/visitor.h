@@ -44,6 +44,9 @@ class masked_load_inst;
 class unmasked_store_inst;
 class masked_store_inst;
 
+class extract_value_inst;
+class insert_value_inst;
+
 class retile_inst;
 class reshape_inst;
 class splat_inst;
@@ -132,6 +135,9 @@ public:
   virtual void visit_cos_inst(cos_inst*) = 0;
   virtual void visit_sin_inst(sin_inst*) = 0;
   virtual void visit_log_inst(log_inst*) = 0;
+
+  virtual void visit_extract_value_inst(extract_value_inst*) = 0;
+  virtual void visit_insert_value_inst(insert_value_inst*) = 0;
 
   virtual void visit_reshape_inst(reshape_inst*) = 0;
   virtual void visit_splat_inst(splat_inst*) = 0;

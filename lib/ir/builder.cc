@@ -317,6 +317,19 @@ value *builder::create_masked_store(value *ptr, value *val, value *mask){
 }
 
 //===----------------------------------------------------------------------===//
+//                               struct instructions
+//===----------------------------------------------------------------------===//
+
+
+// Struct instructions
+value *builder::create_insert_value(value* val, value *elt, size_t idx){
+  return insert(insert_value_inst::create(val, elt, idx));
+}
+
+value *builder::create_extract_value(value* val, size_t idx) {
+  return insert(extract_value_inst::create(val, idx));
+}
+//===----------------------------------------------------------------------===//
 //                               block instructions
 //===----------------------------------------------------------------------===//
 

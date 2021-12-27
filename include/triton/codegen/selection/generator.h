@@ -152,6 +152,8 @@ public:
   void visit_unmasked_store_inst(ir::unmasked_store_inst*);
   void visit_masked_store_inst(ir::masked_store_inst*);
   void visit_cat_inst(ir::cat_inst*);
+  void visit_extract_value_inst(ir::extract_value_inst *);
+  void visit_insert_value_inst(ir::insert_value_inst *);
   void visit_reshape_inst(ir::reshape_inst*);
   void visit_splat_inst(ir::splat_inst*);
   void visit_broadcast_inst(ir::broadcast_inst*);

@@ -123,6 +123,9 @@ class CodeGenerator(ast.NodeVisitor):
             return self.builder.ret_void()
         # if self.inline:
         #   return ret
+        if isinstance(ret, _triton.ir.value):
+            ret = self.builder.ret(ret)
+            return ret
         return self.builder.ret(ret.handle)
 
     def visit_FunctionDef(self, node, inline=False, arg_values=None):
@@ -226,6 +229,12 @@ class CodeGenerator(ast.NodeVisitor):
             names = [names]
         if not isinstance(values, tuple):
             values = [values]
+        if isinstance(values[0], _triton.ir.value):
+            struct = values[0]
+            ty = struct.type
+            if ty.is_struct():
+                values = [self.builder.extract_value(struct, i) for i in range(ty.num_types)]
+        assert len(values) == len(names)
         for name, value in zip(names, values):
             # by default, constexpr are assigned into python variable
             if isinstance(value, triton.language.constexpr):
@@ -255,6 +264,17 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Tuple(self, node):
         args = [self.visit(x) for x in node.elts]
+        mode = type(args[0])
+        # tuple of values -- create a struct
+        if len(args) > 1 and mode == triton.language.block\
+            and all([type(arg) == mode for arg in args]):
+            args = [arg.handle for arg in args]
+            tys = [arg.type for arg in args]
+            struct_ty = _triton.ir.struct_type.get(tys, True)
+            ret = _triton.ir.undef.get(struct_ty)
+            for i, arg in enumerate(args):
+                ret = self.builder.insert_value(ret, arg, i)
+            return ret
         return tuple(args)
 
     def visit_BinOp(self, node):

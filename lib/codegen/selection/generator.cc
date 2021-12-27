@@ -13,6 +13,7 @@
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/type.h"
+#include "triton/ir/utils.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicsNVPTX.h"
@@ -139,6 +140,14 @@ Value* geper::operator()(Value *ptr, Value* off, const std::string& name){
  * \brief Convert Triton-IR Type to LLVM-IR Type
  */
 Type *generator::cvt(ir::type *ty) {
+  // struct
+  if(ty->is_struct_ty()){
+    std::vector<Type*> tys;
+    for(size_t i = 0; i < ty->get_struct_numel(); i++)
+      tys.push_back(cvt(ty->get_struct_type(i)));
+    return StructType::get(builder_->getContext(), tys, true);
+  }
+
   // function
   if(auto* tt = dynamic_cast<ir::function_type*>(ty)){
     Type *ret_ty = cvt(tt->get_return_ty());
@@ -286,10 +295,7 @@ void generator::visit_phi_node(ir::phi_node* x) {
  * \brief Code Generation for `call`
  */
 void generator::visit_call_inst(ir::call_inst* call) {
-  for(indices_t idx: idxs_.at(call)){
-    std::cout << "." << std::endl;
-  }
-  std::cout << "call!" << std::endl;
+  std::cout << "call not supported!" << std::endl;
   exit(1);
 }
 
@@ -863,6 +869,31 @@ void generator::visit_masked_store_inst(ir::masked_store_inst* x) {
   visit_store_inst(x);
 }
 
+// --
+
+void generator::visit_extract_value_inst(ir::extract_value_inst *x) {
+  auto idxs    = idxs_.at(x);
+  ir::value* agg = x->get_operand(0);
+  unsigned insert_idx = x->get_idx();
+  for(size_t i = 0; i < idxs.size(); i++){
+    auto idx = idxs[i];
+    vals_[x][idx] = builder_->CreateExtractValue(vals_[agg][idx], {insert_idx});
+  }
+}
+
+
+void generator::visit_insert_value_inst(ir::insert_value_inst *x){
+  auto idxs    = idxs_.at(x);
+  ir::value* agg = x->get_operand(0);
+  ir::value* val = x->get_operand(1);
+  unsigned insert_idx = x->get_idx();
+  for(size_t i = 0; i < idxs.size(); i++){
+    auto idx = idxs[i];
+    vals_[x][idx] = builder_->CreateInsertValue(vals_[agg][idx], vals_[val][idx],{insert_idx});
+  }
+}
+
+// --
 /**
  * \brief Code Generation for `cat`
  */
@@ -2685,7 +2716,8 @@ void generator::visit_make_range(ir::make_range* x) {
 }
 
 void generator::visit_undef_value(ir::undef_value *x) {
-  Type* ty = cvt(x->get_type()->get_scalar_ty());
+  ir::type* sca_ty = x->get_type()->get_scalar_ty();
+  Type* ty = cvt(sca_ty);
   for(indices_t idx: idxs_.at(x))
     vals_[x][idx] = llvm::UndefValue::get(ty);
 }
@@ -2750,7 +2782,8 @@ void generator::visit_function(ir::function* fn) {
   for(unsigned i = 0; i < fn->args().size(); i++)
     vals_[fn->args()[i]][{}] = &*(ret->arg_begin() + i);
   // create blocks
-  for(ir::basic_block *block: fn->blocks()) {
+  auto blocks = ir::cfg::reverse_post_order(fn);
+  for(ir::basic_block *block: blocks) {
     BasicBlock *dst_block = BasicBlock::Create(ctx, block->get_name(), ret);
     bbs_[block] = dst_block;
   }
@@ -2760,7 +2793,7 @@ void generator::visit_function(ir::function* fn) {
     visit_layout(x.second);
   }
   // generate LLVM-IR code
-  for(ir::basic_block *block: fn->blocks())
+  for(ir::basic_block *block: blocks)
     visit_basic_block(block);
   // finalize
   finalize_function(fn);
@@ -3196,13 +3229,12 @@ void generator::visit(ir::module &src, llvm::Module &dst) {
     shmem_ = bit_cast(sh_mem_array, ptr_ty);
   }
   // instantiate device functions
-  for(ir::function *fn: src.get_function_list())
-  for(ir::basic_block *bb: fn->blocks())
-  for(ir::instruction *i: bb->get_inst_list())
-  if(auto *call = dynamic_cast<ir::call_inst*>(i)){
-    std::cout << "call??" << std::endl;
-//    mod_->getOrInsertFunction()
-  }
+//  for(ir::function *fn: src.get_function_list())
+//  for(ir::basic_block *bb: fn->blocks())
+//  for(ir::instruction *i: bb->get_inst_list())
+//  if(auto *call = dynamic_cast<ir::call_inst*>(i)){
+//    std::cout << "call??" << std::endl;
+//  }
   // visit functions
   for(ir::function *fn: src.get_function_list())
     visit_function(fn);

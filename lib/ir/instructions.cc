@@ -539,6 +539,36 @@ masked_store_inst::masked_store_inst(value *ptr, value *val, value *mask,
 masked_store_inst* masked_store_inst::create(value *ptr, value *val, value *mask, const std::string &name, instruction *next)  {
   return new masked_store_inst(ptr, val, mask, name, next);
 }
+
+//===----------------------------------------------------------------------===//
+//                               struct classes
+//===----------------------------------------------------------------------===//
+
+// insert value
+
+insert_value_inst::insert_value_inst(value *val, value *elt, size_t idx, const std::string& name, instruction *next)
+  : instruction(val->get_type(), INST_INSERT_VALUE, 2, name, next), idx_(idx) {
+  set_operand(0, val);
+  set_operand(1, elt);
+}
+
+insert_value_inst* insert_value_inst::create(value *val, value *elt, size_t idx, const std::string& name, instruction *next){
+  return new insert_value_inst(val, elt, idx, name, next);
+}
+
+
+// extract value
+
+extract_value_inst::extract_value_inst(value *val, size_t idx, const std::string& name, instruction *next)
+  : instruction(val->get_type()->get_struct_type(idx), INST_EXTRACT_VALUE, 1, name, next), idx_(idx) {
+  set_operand(0, val);
+}
+
+extract_value_inst* extract_value_inst::create(value *val, size_t idx, const std::string& name, instruction *next){
+  return new extract_value_inst(val, idx, name, next);
+}
+
+
 //===----------------------------------------------------------------------===//
 //                               retile_inst classes
 //===----------------------------------------------------------------------===//
@@ -592,6 +622,9 @@ instruction* broadcast_inst::create(value *arg, const type::block_shapes_t &shap
 instruction* downcast_inst::create(value *arg, const std::string &name, instruction *next) {
   return new downcast_inst(arg->get_type()->get_scalar_ty(), INST_DOWNCAST, arg, name, next);
 }
+
+
+
 
 //===----------------------------------------------------------------------===//
 //                               matmul_inst classes

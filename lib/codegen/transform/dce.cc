@@ -3,6 +3,7 @@
 #include "triton/ir/basic_block.h"
 #include "triton/ir/module.h"
 #include "triton/ir/utils.h"
+#include <iostream>
 
 namespace triton {
 namespace codegen{
@@ -64,6 +65,7 @@ void dce::run(ir::module &mod) {
         to_delete.push_back(i);
     }
   }
+
 
   // delete
   for(ir::instruction* i: to_delete)

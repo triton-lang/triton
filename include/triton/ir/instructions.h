@@ -567,6 +567,44 @@ public:
 };
 
 //===----------------------------------------------------------------------===//
+//                               struct classes
+//===----------------------------------------------------------------------===//
+
+// insert_value
+
+class insert_value_inst: public instruction {
+private:
+  std::string repr_impl() const { return "insertvalue"; }
+  insert_value_inst(value *val, value *elt, size_t idx, const std::string &name, instruction *next);
+
+public:
+  static insert_value_inst* create(value *val, value* elt, size_t idx, const std::string &name = "", instruction *next = nullptr);
+  size_t get_idx() { return idx_; }
+  _TRITON_DEFINE_CLONE(insert_value_inst)
+  _TRITON_DEFINE_ACCEPT(insert_value_inst)
+
+private:
+  size_t idx_;
+};
+
+// extract_value
+
+class extract_value_inst: public instruction {
+private:
+  std::string repr_impl() const { return "extractvalue"; }
+  extract_value_inst(value *val, size_t idx, const std::string &name, instruction *next);
+
+public:
+  static extract_value_inst* create(value *val, size_t idx, const std::string &name = "", instruction *next = nullptr);
+  size_t get_idx() { return idx_; }
+  _TRITON_DEFINE_CLONE(extract_value_inst)
+  _TRITON_DEFINE_ACCEPT(extract_value_inst)
+
+private:
+  size_t idx_;
+};
+
+//===----------------------------------------------------------------------===//
 //                               retile_inst classes
 //===----------------------------------------------------------------------===//
 

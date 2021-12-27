@@ -131,6 +131,9 @@ enum value_id_t: unsigned {
   INST_MASKED_LOAD_ASYNC,
   INST_UNMASKED_STORE,
   INST_MASKED_STORE,
+  // struct
+  INST_EXTRACT_VALUE,
+  INST_INSERT_VALUE,
   // retile
   INST_RESHAPE,
   INST_SPLAT,

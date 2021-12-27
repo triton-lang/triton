@@ -685,6 +685,7 @@ void init_triton_ir(py::module &&m) {
       .def("is_bf16", &ir::type::is_bf16_ty)
       .def("is_fp32", &ir::type::is_fp32_ty)
       .def("is_fp64", &ir::type::is_fp64_ty)
+<<<<<<< HEAD
       .def("is_int1", [](ir::type *self) { return self->is_integer_ty(1, ir::signedness::SIGNED); })
       .def("is_int8", [](ir::type *self) { return self->is_integer_ty(8, ir::signedness::SIGNED); })
       .def("is_int16", [](ir::type *self) { return self->is_integer_ty(16, ir::signedness::SIGNED); })
@@ -696,6 +697,15 @@ void init_triton_ir(py::module &&m) {
       .def("is_uint64", [](ir::type *self) { return self->is_integer_ty(64, ir::signedness::UNSIGNED); })
 
       .def("repr", &ir::type::repr)
+=======
+      .def("is_int1", [](ir::type *self) { return self->is_integer_ty(1); })
+      .def("is_int8", [](ir::type *self) { return self->is_integer_ty(8); })
+      .def("is_int16", [](ir::type *self) { return self->is_integer_ty(16); })
+      .def("is_int32", [](ir::type *self) { return self->is_integer_ty(32); })
+      .def("is_int64", [](ir::type *self) { return self->is_integer_ty(64); })
+      .def("is_struct", &ir::type::is_struct_ty)
+
+>>>>>>> more work
       .def_property_readonly("fp_mantissa_width", &ir::type::get_fp_mantissa_width)
       .def_property_readonly("scalar", &ir::type::get_scalar_ty)
       .def_property_readonly("context", &ir::type::get_context, ret::reference);
@@ -710,9 +720,14 @@ void init_triton_ir(py::module &&m) {
       });
 
   py::class_<ir::integer_type, ir::type>(m, "integer_type");
+
   py::class_<ir::block_type, ir::type>(m, "block_type")
       .def_property_readonly("shape", &ir::block_type::get_shapes)
       .def_property_readonly("numel", &ir::type::get_tile_num_elements);
+  
+  py::class_<ir::struct_type, ir::type>(m, "struct_type")
+      .def("get", &ir::struct_type::get, ret::reference)
+      .def_property_readonly("num_types", &ir::struct_type::get_num_types);
 
   py::class_<ir::value_constructor>(m, "value_constructor")
       .def(py::init<ir::builder&>())
@@ -727,18 +742,7 @@ void init_triton_ir(py::module &&m) {
       .def(py::init<std::string, ir::builder &>())
       .def("get_function", &ir::module::get_function, ret::reference)
       .def("get_or_insert_function", &ir::module::get_or_insert_function, ret::reference)
-<<<<<<< HEAD
-      .def("seal_block", &ir::module::seal_block)
-      .def("set_value", (void (ir::module::*)(const std::string &, ir::value *)) & ir::module::set_value)
-      .def("set_type", &ir::module::set_type)
-      .def("get_value", (ir::value * (ir::module::*)(const std::string &)) & ir::module::get_value, ret::reference)
-      .def("get_values", &ir::module::get_values, ret::reference)
-      .def("set_values", &ir::module::set_values)
-      .def("get_types", &ir::module::get_types, ret::reference)
-      .def("set_types", &ir::module::set_types)
-=======
       .def("reset_ret_ty", &ir::module::reset_ret_ty)
->>>>>>> device functions
       .def_property_readonly("builder", &ir::module::get_builder, ret::reference);
 
   using eattr = ir::attribute_kind_t;
@@ -781,6 +785,9 @@ void init_triton_ir(py::module &&m) {
       .def("set_insert_point", (void (ir::builder::*)(ir::builder::iterator))&ir::builder::set_insert_point)
       .def("get_insert_block", &ir::builder::get_insert_block, ret::reference)
       .def("set_insert_block", (void (ir::builder::*)(ir::basic_block *)) & ir::builder::set_insert_point)
+      // struct
+      .def("insert_value", &ir::builder::create_insert_value, ret::reference)
+      .def("extract_value", &ir::builder::create_extract_value, ret::reference)
       // constants
       .def("get_int1", &ir::builder::get_int1, ret::reference)
       .def("get_int32", &ir::builder::get_int32, ret::reference)

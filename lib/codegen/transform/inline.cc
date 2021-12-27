@@ -2,6 +2,7 @@
 #include "triton/codegen/transform/inline.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
+#include "triton/ir/utils.h"
 
 namespace triton{
 namespace codegen{
@@ -26,6 +27,8 @@ void inliner::do_inline(ir::function* fn, ir::call_inst* callsite, ir::builder& 
   // a phi node holds the return values of the inlined function
   builder.set_insert_point(exit->get_first_non_phi());
   ir::phi_node* exit_val = builder.create_phi(fn->get_fn_type()->get_return_ty(), 0);
+  callsite->replace_all_uses_with(exit_val);
+  callsite->erase_from_parent();
   // get arguments `fn` is called with
   std::vector<ir::value*> tgt_args(callsite->op_begin(), callsite->op_end());
   std::vector<ir::argument*> src_args(fn->args().begin(), fn->args().end());
@@ -36,28 +39,39 @@ void inliner::do_inline(ir::function* fn, ir::call_inst* callsite, ir::builder& 
   ir::instruction* terminator = new_blocks[0]->get_inst_list().back();
 //  new_blocks[0]->get_inst_list().back()->erase_from_parent();
   terminator->erase_from_parent();
+  std::map<ir::instruction*, ir::instruction*> inst_map;
+  std::map<ir::argument*, ir::value*> arg_map;
+  for(size_t k = 0; k < fn->args().size(); k++)
+    arg_map[fn->args()[k]] = callsite->ops()[k];
+  std::vector<ir::basic_block*> rpo = ir::cfg::reverse_post_order(fn);
   for(size_t i = 0; i < new_blocks.size(); i++){
     ir::basic_block* old_block = fn->blocks()[i];
     ir::basic_block* new_block = new_blocks[i];
     builder.set_insert_point(new_block);
     for(ir::instruction* old_inst: old_block->get_inst_list()){
-       // `ret` instruction is a special case:
-      // instead of returning we need to branch to after the function call
-      ir::instruction* new_inst = nullptr;
-      if(ir::return_inst* ret = dynamic_cast<ir::return_inst*>(old_inst)){
-        new_inst = ir::branch_inst::create(exit);
-        if(ir::value* ret_val = ret->get_return_value())
-          exit_val->add_incoming(ret_val, new_block);
-      }
-      else
-        new_inst = old_inst->clone();
-      if(ir::call_inst* call = dynamic_cast<ir::call_inst*>(new_inst)){
-        callsites[call->get_fn()].push_back(call);
-      }
+      // clone instruction
+      ir::instruction* new_inst = old_inst->clone();
+      // replace basic block
       for(size_t k = 0; k < new_blocks.size(); k++)
         new_inst->replace_uses_of_with(fn->blocks()[k], new_blocks[k]);
-      for(size_t k = 0; k < src_args.size(); k++)
-        new_inst->replace_uses_of_with(src_args[k], tgt_args[k]);
+      // replace values
+      for(size_t k = 0; k < new_inst->get_num_operands(); k++){
+        ir::value* op = new_inst->get_operand(k);
+        if(auto arg_op = dynamic_cast<ir::argument*>(op))
+          new_inst->set_operand(k, arg_map.at(arg_op));
+        if(auto inst_op = dynamic_cast<ir::instruction*>(op))
+          new_inst->set_operand(k, inst_map.at(inst_op));
+      }
+       // `ret` instruction is a special case:
+      // instead of returning we need to branch to after the function call
+      if(ir::return_inst* ret = dynamic_cast<ir::return_inst*>(new_inst)){
+        if(ir::value* ret_val = ret->get_return_value())
+          exit_val->add_incoming(ret_val, new_block);
+        new_inst = ir::branch_inst::create(exit);
+      }
+      if(ir::call_inst* call = dynamic_cast<ir::call_inst*>(new_inst))
+        callsites[call->get_fn()].push_back(call);
+      inst_map[old_inst] = new_inst;
       builder.insert(new_inst);
     }
   }
