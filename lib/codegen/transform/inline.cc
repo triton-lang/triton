@@ -75,6 +75,8 @@ void inliner::do_inline(ir::function* fn, ir::call_inst* callsite, ir::builder& 
       builder.insert(new_inst);
     }
   }
+  if(exit_val->get_num_incoming() == 1)
+    exit_val->replace_all_uses_with(exit_val->get_incoming_value(0));
   // done -- make sure insert point is properly set to exit block
   builder.set_insert_point(exit);
 }
