@@ -158,6 +158,9 @@ class CodeGenerator(ast.NodeVisitor):
                         cst = triton.language.constexpr(self.constants[i])
                     arg_values.append(cst)
                 else:
+                    print(fn_name)
+                    print(fn.args)
+                    print(idx)
                     if i in self.attributes:
                         is_ptr = fn.args[idx].type.is_ptr()
                         attr = 'aligned' if is_ptr else 'multiple_of'
