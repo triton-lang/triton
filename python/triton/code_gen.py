@@ -128,7 +128,7 @@ class CodeGenerator(ast.NodeVisitor):
             return ret
         return self.builder.ret(ret.handle)
 
-    def visit_FunctionDef(self, node, inline=False, arg_values=None):
+    def visit_FunctionDef(self, node):
         arg_names, kwarg_names = self.visit(node.args)
         # initialize defaults
         for i, default_value in enumerate(node.args.defaults):
@@ -144,53 +144,43 @@ class CodeGenerator(ast.NodeVisitor):
         # store keyword arguments in local scope
         self.lscope[kwarg_names] = self.kwargs
         # initialize function
-        if inline:
-            pass
-        else:
-            fn_name = mangle_fn(node.name, self.prototype.arg_tys)
-            fn = self.module.get_or_insert_function(fn_name, self.prototype)
-            arg_values = []
-            idx = 0
-            for i, arg_name in enumerate(arg_names):
-                if i in self.constants:
-                    cst = self.constants[i]
-                    if not isinstance(cst, triton.language.constexpr):
-                        cst = triton.language.constexpr(self.constants[i])
-                    arg_values.append(cst)
-                else:
-                    print(fn_name)
-                    print(fn.args)
-                    print(idx)
-                    if i in self.attributes:
-                        is_ptr = fn.args[idx].type.is_ptr()
-                        attr = 'aligned' if is_ptr else 'multiple_of'
-                        attr = getattr(_triton.ir.attribute_kind, attr)
-                        attr = _triton.ir.attribute(attr, self.attributes[i])
-                        fn.add_attr(i + 1, attr)
-                    fn.args[i].name = arg_name
-                    arg_values.append(fn.args[i])
-                
-        if inline:
-            for arg_name, arg_value in zip(arg_names, arg_values):
-                self.set_value(arg_name, arg_value)
-            self.visit_compound_statement(node.body)
-            return self.last_ret
-        else:
-            insert_pt = self.builder.get_insert_block()
-            entry = _triton.ir.basic_block.create(self.builder.context, "entry", fn)
-            self.builder.set_insert_block(entry)
-            self.value_constructor.seal_block(entry)
-            for arg_name, arg_value in zip(arg_names, arg_values):
-                self.set_value(arg_name, arg_value)
-            # visit function body
-            has_ret = self.visit_compound_statement(node.body)
-            # finalize 
-            if not has_ret:
-                self.builder.ret_void()
+        fn_name = mangle_fn(node.name, self.prototype.arg_tys)
+        fn = self.module.get_or_insert_function(fn_name, self.prototype)
+        arg_values = []
+        idx = 0
+        for i, arg_name in enumerate(arg_names):
+            if i in self.constants:
+                cst = self.constants[i]
+                if not isinstance(cst, triton.language.constexpr):
+                    cst = triton.language.constexpr(self.constants[i])
+                arg_values.append(cst)
             else:
-                self.module.reset_ret_ty(fn_name, self.last_ret.type)
-            # self.module.reset_ret_type(node.name)
-            self.builder.set_insert_block(insert_pt)
+                if i in self.attributes:
+                    is_ptr = fn.args[idx].type.is_ptr()
+                    attr = 'aligned' if is_ptr else 'multiple_of'
+                    attr = getattr(_triton.ir.attribute_kind, attr)
+                    attr = _triton.ir.attribute(attr, self.attributes[i])
+                    fn.add_attr(idx + 1, attr)
+                fn.args[idx].name = arg_name
+                arg_values.append(fn.args[idx])
+                idx += 1
+        
+                
+        insert_pt = self.builder.get_insert_block()
+        entry = _triton.ir.basic_block.create(self.builder.context, "entry", fn)
+        self.builder.set_insert_block(entry)
+        self.value_constructor.seal_block(entry)
+        for arg_name, arg_value in zip(arg_names, arg_values):
+            self.set_value(arg_name, arg_value)
+        # visit function body
+        has_ret = self.visit_compound_statement(node.body)
+        # finalize 
+        if not has_ret:
+            self.builder.ret_void()
+        else:
+            self.module.reset_ret_ty(fn_name, self.last_ret.type)
+        # self.module.reset_ret_type(node.name)
+        self.builder.set_insert_block(insert_pt)
             
 
     def visit_arguments(self, node):
@@ -513,9 +503,14 @@ class CodeGenerator(ast.NodeVisitor):
             kws.update(self.visit(keyword))
         args = [self.visit(arg) for arg in node.args]
         if isinstance(fn, JITFunction):
+            # handle defaults
+            off = len(fn.arg_names) - len(args)
+            if off > 0:
+                for arg in fn.arg_defaults[-off:]:
+                    args.append(triton.language.block(triton.language.core._to_ir(arg, self.builder)))
+            # generate function def
             ret = fn(*args, generator=self, **kws)
-            # if fn.inline:
-            #     return ret
+            # generate call
             arg_vals = [arg.handle for arg in args]
             arg_tys = [arg.type for arg in arg_vals]
             fn_name = mangle_fn(fn.__name__, arg_tys)
@@ -976,6 +971,8 @@ class JITFunction:
         # annotations
         self.annotations = {self.arg_names.index(name): ty for name, ty in fn.__annotations__.items()}
         self.__annotations__ = fn.__annotations__
+        # constexprs
+        self.constexprs = [self.arg_names.index(ann) for ann in self.__annotations__.keys()]
         # forward docs
         self.__doc__ = fn.__doc__
         self.__name__ = fn.__name__
@@ -1022,7 +1019,7 @@ class JITFunction:
             generator.lscope = dict()
             generator.gscope = sys.modules[self.fn.__module__].__dict__
             generator.prototype = prototype
-            ret = generator.visit_FunctionDef(self.parse().body[0], inline=False, arg_values=args)
+            ret = generator.visit_FunctionDef(self.parse().body[0])
             generator.gscope = gscope
             generator.lscope = lscope
             generator.value_constructor = value_constructor
