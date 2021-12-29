@@ -86,16 +86,15 @@ class CodeGenerator(ast.NodeVisitor):
                 break
         return stmts and isinstance(stmt, ast.Return)
 
-    def __init__(self, context, prototype, gscope, attributes, constants, kwargs):
+    def __init__(self, context, prototype, gscope, attributes, constants, module = None):
         self.builder = _triton.ir.builder(context)
         self.value_constructor = _triton.ir.value_constructor(self.builder)
-        self.module = _triton.ir.module('', self.builder)
+        self.module = _triton.ir.module('', self.builder) if module is None else module
         self.prototype = prototype
         self.gscope = gscope
         self.lscope = dict()
         self.attributes = attributes
         self.constants = constants
-        self.kwargs = kwargs
         self.last_node = None
         self.builtins = {
             'range': range,
@@ -141,8 +140,6 @@ class CodeGenerator(ast.NodeVisitor):
             else:
                 init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation)
             self.visit(init_node)
-        # store keyword arguments in local scope
-        self.lscope[kwarg_names] = self.kwargs
         # initialize function
         fn_name = mangle_fn(node.name, self.prototype.arg_tys)
         fn = self.module.get_or_insert_function(fn_name, self.prototype)
@@ -521,7 +518,15 @@ class CodeGenerator(ast.NodeVisitor):
                     new_arg = triton.language.core._to_ir(arg, self.builder)
                     args[i] = triton.language.block(new_arg)
             # generate function def
-            ret = fn(*args, generator=self, **kws)
+            # ret = fn(*args, generator=self, **kws)
+            attributes = dict()
+            constants = {i: args[i] for i in fn.constexprs}
+            arg_types = [arg.handle.type for i, arg in enumerate(args) if i not in fn.constexprs]
+            ret_type  = _triton.ir.type.get_void(self.builder.context)
+            prototype = _triton.ir.type.make_function(ret_type, arg_types)
+            gscope = sys.modules[fn.fn.__module__].__dict__
+            generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module)
+            generator.visit(fn.parse())
             # generate call
             args = [arg for i, arg in enumerate(args) if i not in fn.constexprs]
             arg_vals = [arg.handle for arg in args]
@@ -1012,39 +1017,8 @@ class JITFunction:
         assert isinstance(tree.body[0], ast.FunctionDef)
         return tree
 
-    def __call__(self, *args, generator: CodeGenerator, **kwargs):
-        try:
-            from inspect import getcallargs
-            arg_values = getcallargs(self.fn, *args, **kwargs)
-            arg_values = [arg_values[name] for name in self.arg_names]
-            arg_values = [arg if isinstance(arg, triton.language.block)
-                          else triton.language.constexpr(arg) for arg in arg_values]
-
-            gscope = generator.gscope.copy()
-            lscope = generator.lscope.copy()
-            constants = generator.constants.copy()
-            value_constructor = generator.value_constructor
-            # arg_types = [arg.dtype.handle(generator.builder) for arg in args]
-            # arg_types = [_triton.ir.type.make_block(ty, arg.shape) for ty, arg in zip(arg_types, args)]
-            arg_types = [arg.handle.type for i, arg in enumerate(args) if i not in self.constexprs]
-            ret_type  = _triton.ir.type.get_void(generator.builder.context)
-            prototype = _triton.ir.type.make_function(ret_type, arg_types)
-            generator.value_constructor = _triton.ir.value_constructor(generator.builder)
-            generator.lscope = dict()
-            generator.gscope = sys.modules[self.fn.__module__].__dict__
-            generator.constants = {i: args[i] for i in self.constexprs}
-            generator.prototype = prototype
-            ret = generator.visit_FunctionDef(self.parse().body[0])
-            generator.gscope = gscope
-            generator.lscope = lscope
-            generator.value_constructor = value_constructor
-            generator.constants = constants
-            return ret
-        except Exception as e:
-            node = generator.last_node
-            if node is None or isinstance(e, (NotImplementedError, CompilationError)):
-                raise e
-            raise CompilationError(self.src, node) from e
+    def __call__(self, *args, **kwargs):
+        raise RuntimeError("Cannot call @triton.jit'd outside of the scope of a kernel.")
 
     # - when `.src` attribute is set, cache path needs
     #   to be reinitialized
