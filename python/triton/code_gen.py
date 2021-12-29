@@ -507,10 +507,23 @@ class CodeGenerator(ast.NodeVisitor):
             off = len(fn.arg_names) - len(args)
             if off > 0:
                 for arg in fn.arg_defaults[-off:]:
-                    args.append(triton.language.block(triton.language.core._to_ir(arg, self.builder)))
+                    args.append(arg)
+                    new_arg = triton.language.core._to_ir(arg, self.builder)
+                    args.append(triton.language.block(new_arg))
+            # handle type annotation
+            # NOTE: for now, only `constexpr` annotation is supported
+            for i, arg in enumerate(args):
+                if i in fn.annotations:
+                    assert fn.annotations[i] is triton.language.constexpr
+                    if not isinstance(args[i], fn.annotations[i]):
+                        args[i] = fn.annotations[i](arg)
+                elif not self.is_triton_object(arg):
+                    new_arg = triton.language.core._to_ir(arg, self.builder)
+                    args[i] = triton.language.block(new_arg)
             # generate function def
             ret = fn(*args, generator=self, **kws)
             # generate call
+            args = [arg for i, arg in enumerate(args) if i not in fn.constexprs]
             arg_vals = [arg.handle for arg in args]
             arg_tys = [arg.type for arg in arg_vals]
             fn_name = mangle_fn(fn.__name__, arg_tys)
@@ -1009,20 +1022,23 @@ class JITFunction:
 
             gscope = generator.gscope.copy()
             lscope = generator.lscope.copy()
+            constants = generator.constants.copy()
             value_constructor = generator.value_constructor
             # arg_types = [arg.dtype.handle(generator.builder) for arg in args]
             # arg_types = [_triton.ir.type.make_block(ty, arg.shape) for ty, arg in zip(arg_types, args)]
-            arg_types = [arg.handle.type for arg in args]
+            arg_types = [arg.handle.type for i, arg in enumerate(args) if i not in self.constexprs]
             ret_type  = _triton.ir.type.get_void(generator.builder.context)
             prototype = _triton.ir.type.make_function(ret_type, arg_types)
             generator.value_constructor = _triton.ir.value_constructor(generator.builder)
             generator.lscope = dict()
             generator.gscope = sys.modules[self.fn.__module__].__dict__
+            generator.constants = {i: args[i] for i in self.constexprs}
             generator.prototype = prototype
             ret = generator.visit_FunctionDef(self.parse().body[0])
             generator.gscope = gscope
             generator.lscope = lscope
             generator.value_constructor = value_constructor
+            generator.constants = constants
             return ret
         except Exception as e:
             node = generator.last_node

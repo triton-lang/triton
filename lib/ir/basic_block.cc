@@ -11,14 +11,14 @@ namespace ir {
 class phi_node;
 
 
-basic_block::basic_block(context &ctx, const std::string &name, function *parent):
+basic_block::basic_block(context &ctx, const std::string &name, function *parent, basic_block* next):
     value(type::get_label_ty(ctx), name), ctx_(ctx), parent_(parent) {
   if(parent_)
-    parent_->insert_block(this);
+    parent_->insert_block(this, next);
 }
 
-basic_block* basic_block::create(context &ctx, const std::string &name, function *parent){
-  return new basic_block(ctx, name, parent);
+basic_block* basic_block::create(context &ctx, const std::string &name, function *parent, basic_block* next){
+  return new basic_block(ctx, name, parent, next);
 }
 
 void basic_block::replace_phi_uses_with(basic_block* before, basic_block* after) {
@@ -36,7 +36,7 @@ void basic_block::append_instruction(ir::instruction* i){
 }
 
 basic_block* basic_block::split_before(ir::instruction* loc, const std::string& name) {
-  basic_block* ret = basic_block::create(ctx_, name, parent_);
+  basic_block* ret = basic_block::create(ctx_, name, parent_, this);
   // splice instruction list
   auto loc_it = std::find(inst_list_.begin(), inst_list_.end(), loc);
   ret->get_inst_list().splice(ret->get_inst_list().begin(), inst_list_, inst_list_.begin(), loc_it);

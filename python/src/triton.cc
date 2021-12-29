@@ -766,7 +766,7 @@ void init_triton_ir(py::module &&m) {
   py::class_<ir::argument, ir::value>(m, "argument");
 
   py::class_<ir::basic_block, ir::value>(m, "basic_block")
-      .def("create", &ir::basic_block::create, ret::reference)
+      .def("create", &ir::basic_block::create, ret::reference, py::arg(), py::arg(), py::arg() = nullptr)
       .def_property_readonly("parent", &ir::basic_block::get_parent, ret::reference);
 
   py::class_<ir::builder::iterator>(m, "bb_iterator");

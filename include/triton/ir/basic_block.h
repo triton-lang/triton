@@ -27,7 +27,7 @@ public:
 
 private:
   // constructors
-  basic_block(context &ctx, const std::string &name, function *parent);
+  basic_block(context &ctx, const std::string &name, function *parent, basic_block *next);
 
 public:
   // accessors
@@ -70,7 +70,7 @@ public:
   std::vector<basic_block*> get_successors() const;
 
   // factory functions
-  static basic_block* create(context &ctx, const std::string &name, function *parent);
+  static basic_block* create(context &ctx, const std::string &name, function *parent, basic_block *next = nullptr);
 
   void print(std::ostream &os);
 
