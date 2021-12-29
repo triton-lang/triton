@@ -37,7 +37,7 @@ def add_kernel(
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     # Create a mask to guard memory operations against out-of-bounds accesses
     mask = offsets < n_elements
-    # Load x and y from DRAM, masking out any extar elements in case the input is not a
+    # Load x and y from DRAM, masking out any extra elements in case the input is not a
     # multiple of the block size
     x = tl.load(x_ptr + offsets, mask=mask)
     y = tl.load(y_ptr + offsets, mask=mask)
