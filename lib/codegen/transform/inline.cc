@@ -8,8 +8,14 @@ namespace triton{
 namespace codegen{
 namespace transform{
 
+
+bool fncmp::operator()(ir::function* x, ir::function* y) const {
+  auto fn_list = x->get_parent()->get_function_list();
+  return std::find(fn_list.begin(), fn_list.end(), x) < std::find(fn_list.begin(), fn_list.end(), y);
+};
+
 void inliner::do_inline(ir::function* fn, ir::call_inst* callsite, ir::builder& builder,
-                        std::map<ir::function*, std::vector<ir::call_inst*>>& callsites){
+                        std::map<ir::function*, std::vector<ir::call_inst*>, fncmp>& callsites){
   ir::basic_block* parent_block = callsite->get_parent();
   ir::function* parent_fn = parent_block->get_parent();
    // the parent block is split into block A and block B:
@@ -82,9 +88,8 @@ void inliner::do_inline(ir::function* fn, ir::call_inst* callsite, ir::builder& 
 }
 
 void inliner::run(ir::module &mod) {
-
   // gather all call sites
-  std::map<ir::function*, std::vector<ir::call_inst*>> callsites;
+  std::map<ir::function*, std::vector<ir::call_inst*>, fncmp> callsites;
   for(ir::function* fn: mod.get_function_list())
   for(ir::basic_block* block: fn->blocks())
   for(ir::instruction* instr: block->get_inst_list())
