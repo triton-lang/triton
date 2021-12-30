@@ -1265,6 +1265,17 @@ def jit(*args, **kwargs):
             return JITFunction(fn, **kwargs)
         return decorator
 
+######
+
+# class ForwardDeclaration:
+
+#     def __init__(self, name, ret_ty, arg_tys) -> None:
+#         self.name = name
+#         self.ret_ty = ret_ty
+#         self.arg_tys = arg_tys
+
+# def forward_declare(name, ret_ty, arg_tys):
+#     return ForwardDeclaration(name, ret_ty, arg_tys)
 
 ######
 
