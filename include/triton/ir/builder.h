@@ -130,9 +130,9 @@ public:
   value *create_xor(value *lhs, value *rhs);
   value *create_or(value *lhs, value *rhs);
   // Input/Output
-  value *create_load(value *arg, load_inst::CACHE_MODIFIER cache);
+  value *create_load(value *arg, load_inst::CACHE_MODIFIER cache, bool is_volatile);
   value *create_store(value *ptr, value *val);
-  value *create_masked_load(value *arg, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache);
+  value *create_masked_load(value *arg, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache, bool is_volatile);
   value *create_masked_store(value *ptr, value *val, value *mask);
   // Block instruction
   value *create_splat(value *arg, const type::block_shapes_t &shapes);
