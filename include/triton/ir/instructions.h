@@ -402,8 +402,11 @@ public:
   }; 
 
   CACHE_MODIFIER get_cache_modifier() const { return cache_; }
+  bool get_is_volatile() const { return is_volatile_; }
+
 protected:
   load_inst(value *ptr, value_id_t id, unsigned num_ops, CACHE_MODIFIER cache,
+          bool is_volatile,
           const std::string &name = "", instruction *next = nullptr);
   std::string get_cache_modifier_repr() const {
     if (cache_ == CA) return ".ca";
@@ -412,20 +415,24 @@ protected:
   }
   CACHE_MODIFIER cache_;
 
+  std::string get_volatile_repr() {
+    return is_volatile_ ? ".volatile" : "";
+  }
+  bool is_volatile_;
+
 private:
   static type *get_pointee_type(type *ty);
-
 };
 
 // unmasked load
 class unmasked_load_inst: public load_inst {
 private:
   std::string repr_impl() const { return "unmasked_load" + get_cache_modifier_repr(); }
-  unmasked_load_inst(value *ptr, load_inst::CACHE_MODIFIER cache, const std::string &name, instruction *next);
+  unmasked_load_inst(value *ptr, load_inst::CACHE_MODIFIER cache, bool is_volatile, const std::string &name, instruction *next);
 
 public:
   static unmasked_load_inst* create(value *ptr,
-                                    CACHE_MODIFIER cache,
+                                    CACHE_MODIFIER cache, bool is_volatile,
                                     const std::string &name = "",
                                     instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(unmasked_load_inst)
@@ -436,7 +443,7 @@ public:
 class masked_load_inst: public load_inst {
 private:
   std::string repr_impl() const { return "masked_load" + get_cache_modifier_repr(); }
-  masked_load_inst(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache,
+  masked_load_inst(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache, bool is_volatile,
                    const std::string &name, instruction *next);
 
 public:
@@ -445,7 +452,7 @@ public:
   value *get_false_value_operand() { return get_operand(2); }
   // factory method
   static masked_load_inst* create(value *ptr, value *mask, value *false_value,
-                                  CACHE_MODIFIER cache,
+                                  CACHE_MODIFIER cache, bool is_volatile,
                                   const std::string &name = "",
                                   instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(masked_load_inst)

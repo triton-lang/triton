@@ -273,16 +273,16 @@ DEFINE_FCMP_INSTR(UNE, cmp_pred_t::FCMP_UNE)
 //                               load/store instructions
 //===----------------------------------------------------------------------===//
 
-value *builder::create_load(value *ptr, load_inst::CACHE_MODIFIER cache){
-  return insert(unmasked_load_inst::create(ptr, cache));
+value *builder::create_load(value *ptr, load_inst::CACHE_MODIFIER cache, bool is_volatile){
+  return insert(unmasked_load_inst::create(ptr, cache, is_volatile));
 }
 
 value *builder::create_store(value *ptr, value *val){
   return insert(unmasked_store_inst::create(ptr, val));
 }
 
-value *builder::create_masked_load(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache){
-  return insert(masked_load_inst::create(ptr, mask, false_value, cache));
+value *builder::create_masked_load(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache, bool is_volatile){
+  return insert(masked_load_inst::create(ptr, mask, false_value, cache, is_volatile));
 }
 
 value *builder::create_masked_store(value *ptr, value *val, value *mask){

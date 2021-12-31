@@ -600,7 +600,8 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<ir::constant_int, ir::constant>(m, "constant_int")
       .def_property_readonly("value", &ir::constant_int::get_value)
-      .def("__int__", [](ir::constant_int *self) { return self->get_value(); });
+      .def("__int__", [](ir::constant_int *self) { return self->get_value(); })
+      .def("__bool__", [](ir::constant_int *self) { return self->get_value(); });
 
   py::class_<ir::constant_fp, ir::constant>(m, "constant_float")
       .def_property_readonly("value", &ir::constant_fp::get_value);
