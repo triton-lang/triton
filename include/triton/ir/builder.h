@@ -88,6 +88,7 @@ public:
   value *create_downcast(value *arg);
   // Call instruction
   value* create_call(function* fn, const std::vector<value*>& args);
+  value* create_launch(function* fn, const std::vector<value*>& args, const std::vector<value*>& grid, value* num_warps);
   // Phi instruction
   phi_node* create_phi(type *ty, unsigned num_reserved);
   // Binary instructions

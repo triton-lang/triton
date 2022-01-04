@@ -12,6 +12,7 @@ class value;
 class instruction;
 
 class call_inst;
+class launch_inst;
 
 class phi_node;
 class binary_operator;
@@ -109,6 +110,7 @@ public:
 
   virtual void visit_value(ir::value*);
   virtual void visit_call_inst(ir::call_inst*) = 0;
+  virtual void visit_launch_inst(ir::launch_inst*) = 0;
 
   virtual void visit_basic_block(basic_block*) = 0;
   virtual void visit_argument(argument*) = 0;

@@ -101,6 +101,31 @@ private:
   ir::function* fn_;
 };
 
+class launch_inst: public instruction {
+private:
+  std::string repr_impl() const { return "launch"; }
+  launch_inst(ir::function* fn, const std::vector<ir::value*>& values, const std::vector<ir::value*>& grid, ir::value* num_warps,
+              const std::string &name = "", instruction *next = nullptr);
+
+public:
+  static launch_inst* create(ir::function* fn, const std::vector<ir::value*>& values, const std::vector<ir::value*>& grid, ir::value* num_warps,
+                             const std::string& name = "", instruction* next = nullptr);
+
+  ir::function* get_fn();
+  std::vector<ir::value*> get_values();
+  std::vector<ir::value*> get_grid();
+  ir::value* get_num_warps();
+
+
+  _TRITON_DEFINE_CLONE(launch_inst)
+  _TRITON_DEFINE_ACCEPT(launch_inst)
+
+private:
+  unsigned val_begin;
+  unsigned val_end;
+  unsigned grid_begin;
+  unsigned grid_end;
+};
 
 //===----------------------------------------------------------------------===//
 //                               phi_node classes

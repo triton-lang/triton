@@ -97,6 +97,7 @@ enum value_id_t: unsigned {
   INST_BEGIN,
   // call
   INST_CALL,
+  INST_LAUNCH,
   // phi
   INST_PHI,
   // arithmetic

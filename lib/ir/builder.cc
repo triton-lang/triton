@@ -172,6 +172,11 @@ value *builder::create_call(function* fn, const std::vector<value*>& args){
   return insert(call_inst::create(fn, args));
 }
 
+value* builder::create_launch(function* fn, const std::vector<value*>& args, const std::vector<value*>& grid, value* num_warps){
+  return insert(launch_inst::create(fn, args, grid, num_warps));
+
+}
+
 //===----------------------------------------------------------------------===//
 //                               binary float instructions
 //===----------------------------------------------------------------------===//

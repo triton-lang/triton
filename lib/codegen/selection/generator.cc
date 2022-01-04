@@ -299,6 +299,32 @@ void generator::visit_call_inst(ir::call_inst* call) {
   exit(1);
 }
 
+void generator::visit_launch_inst(ir::launch_inst *launch) {
+  ir::function* fn = (ir::function*)launch->get_operand(0);
+  // forward-declare cudaGetParameterBufferV2
+  Type* ret_ty1 = builder_->getInt64Ty();
+  ArrayType* dim3 = ArrayType::get(builder_->getInt32Ty(), 3);
+  std::vector<Type*> arg_tys1 = {PointerType::get(builder_->getInt8Ty(), 0),
+                                dim3,
+                                dim3,
+                                builder_->getInt32Ty()};
+  FunctionType* fn_ty1 = FunctionType::get(ret_ty1, arg_tys1, false);
+  Function* get_param_buffer = Function::Create(fn_ty1, Function::ExternalLinkage, "cudaGetParameterBufferV2", mod_);
+  AllocaInst* grid = builder_->CreateAlloca(arg_tys1[1]);
+  AllocaInst* block = builder_->CreateAlloca(arg_tys1[2]);
+  ConstantInt* _0 = builder_->getInt32(0);
+  ConstantInt* _1 = builder_->getInt32(1);
+  ConstantInt* _2 = builder_->getInt32(2);
+  builder_->CreateStore(vals_[launch->get_grid()[0]][{}], builder_->CreateGEP(grid, {_0, _0}));
+  builder_->CreateStore(vals_[launch->get_grid()[1]][{}], builder_->CreateGEP(grid, {_0, _1}));
+  builder_->CreateStore(vals_[launch->get_grid()[2]][{}], builder_->CreateGEP(grid, {_0, _2}));
+  builder_->CreateStore(vals_[launch->get_num_warps()][{}], builder_->CreateGEP(block, {_0, _0}));
+  builder_->CreateStore(builder_->getInt32(1), builder_->CreateGEP(block, {_0, _1}));
+  builder_->CreateStore(builder_->getInt32(1), builder_->CreateGEP(block, {_0, _2}));
+  Value* callee = ConstantExpr::getCast(Instruction::BitCast, mod_->getFunction("mult__Pfp32_fp32__"), arg_tys1[0]);
+  builder_->CreateCall(get_param_buffer, {callee, builder_->CreateLoad(grid), builder_->CreateLoad(block), builder_->getInt32(0)});
+}
+
 /**
  * \brief Code Generation for `binary_operator`
  */

@@ -536,13 +536,28 @@ class CodeGenerator(ast.NodeVisitor):
             symbol = self.module.get_function(fn_name)
             ret = self.builder.call(symbol, arg_vals)
             return ret
+        # built-in function
         if hasattr(fn, '__self__') and self.is_triton_object(fn.__self__) or \
-                sys.modules[fn.__module__] is triton.language.core:
-            return fn(*args, _builder=self.builder, **kws)
-        if fn in self.builtins.values():
-            args = [arg.value if isinstance(arg, triton.language.constexpr) else arg
-                    for arg in args]
-        return fn(*args, **kws)
+            sys.modules[fn.__module__] is triton.language.core:
+            ret = fn(*args, _builder=self.builder, **kws)
+        # special case: dynamic parallelism
+        # in this case the core primitive returns a proxy
+        if isinstance(ret, triton.language.core.LaunchProxy):
+            ret_type  = _triton.ir.type.get_void(self.builder.context)
+            arg_tys = [x.type for x in ret.args]
+            prototype = _triton.ir.type.make_function(ret_type, arg_tys)
+            gscope = sys.modules[ret.fn.fn.__module__].__dict__
+            constants = ret.constants
+            # TODO: clean-up attributes handling in function
+            attributes = {i: list(arg.parent.get_attrs(arg))[0].value for i, arg in enumerate(ret.args) \
+                     if isinstance(arg, _triton.ir.argument) and arg.parent.has_attr(i + 1) }
+            generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module)
+            generator.visit(ret.fn.parse())
+            fn_name = mangle_fn(ret.fn.__name__, arg_tys, ret.constants)
+            symbol = self.module.get_function(fn_name)
+            ret = self.builder.launch(symbol, ret.args, ret.grid, ret.num_warps)
+        return ret
+        # return fn(*args, **kws)
 
     def visit_Constant(self, node):
         return triton.language.constexpr(node.value)

@@ -24,7 +24,7 @@ public:
   static argument* create(type *ty, const std::string &name,
                           function *parent = nullptr, unsigned arg_no = 0);
   function* get_parent() const;
-  unsigned get_arg_no() const;
+  unsigned  get_arg_no() const;
 
   void accept(visitor *v);
 

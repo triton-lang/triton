@@ -756,14 +756,19 @@ void init_triton_ir(py::module &&m) {
       .value("not_implemented", eattr::not_implemented);
 
   py::class_<ir::attribute>(m, "attribute")
-      .def(py::init<eattr, int>());
+      .def(py::init<eattr, int>())
+      .def_property_readonly("value", &ir::attribute::get_value);
 
   py::class_<ir::function>(m, "function")
       .def_property_readonly("args", &ir::function::args)
       .def_property_readonly("attrs", &ir::function::attrs)
-      .def("add_attr", &ir::function::add_attr);
+      .def("add_attr", &ir::function::add_attr)
+      .def("has_attr", &ir::function::has_attr)
+      .def("get_attrs", &ir::function::get_attributes);
 
-  py::class_<ir::argument, ir::value>(m, "argument");
+  py::class_<ir::argument, ir::value>(m, "argument")
+      .def_property_readonly("parent", &ir::argument::get_parent, ret::reference)
+      .def_property_readonly("arg_no", &ir::argument::get_arg_no);
 
   py::class_<ir::basic_block, ir::value>(m, "basic_block")
       .def("create", &ir::basic_block::create, ret::reference, py::arg(), py::arg(), py::arg() = nullptr)
@@ -777,6 +782,7 @@ void init_triton_ir(py::module &&m) {
       .def_property_readonly("context", &ir::builder::get_context, ret::reference)
       // control flow
       .def("call", &ir::builder::create_call, ret::reference)
+      .def("launch", &ir::builder::create_launch, ret::reference)
       .def("br", &ir::builder::create_br, ret::reference)
       .def("cond_br", &ir::builder::create_cond_br, ret::reference)
       .def("ret_void", &ir::builder::create_ret_void, ret::reference)

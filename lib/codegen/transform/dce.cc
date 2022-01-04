@@ -29,6 +29,8 @@ void dce::run(ir::module &mod) {
         case ir::INST_ATOMIC_CAS:
         case ir::INST_ATOMIC_RMW:
         case ir::INST_ATOMIC_EXCH:
+        case ir::INST_CALL:
+        case ir::INST_LAUNCH:
         case ir::INST_BARRIER: {
           work_list.push_back(i);
           marked.insert(i);

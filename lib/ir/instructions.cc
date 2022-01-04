@@ -97,6 +97,53 @@ call_inst* call_inst::create(ir::function* fn, const std::vector<ir::value*>& va
 }
 
 
+// launch
+
+launch_inst::launch_inst(ir::function* fn, const std::vector<ir::value*>& values, const std::vector<ir::value*>& grid, ir::value* num_warps, const std::string& name, instruction* next)
+  : instruction(fn->get_fn_type()->get_return_ty(), INST_LAUNCH, 1 + values.size() + grid.size() + 1, name, next){
+  int k = 0;
+  if(grid.size() != 3)
+    throw std::runtime_error("grid must have 3 elements");
+  set_operand(k++, fn);
+  val_begin = k;
+  for(ir::value* v: values)
+    set_operand(k++, v);
+  val_end = k;
+  grid_begin = k;
+  for(ir::value* g: grid)
+    set_operand(k++, g);
+  grid_end = k;
+  set_operand(k++, num_warps);
+}
+
+
+ir::function* launch_inst::get_fn() {
+  return (ir::function*)get_operand(0);
+}
+
+std::vector<ir::value*> launch_inst::get_values() {
+  std::vector<ir::value*> ret;
+  for(int i = val_begin; i < val_end; i++)
+    ret.push_back(get_operand(i));
+  return ret;
+}
+
+std::vector<ir::value*> launch_inst::get_grid() {
+  std::vector<ir::value*> ret;
+  for(int i = grid_begin; i < grid_end; i++)
+    ret.push_back(get_operand(i));
+  return ret;
+}
+
+ir::value* launch_inst::get_num_warps() {
+  return get_operand(grid_end);
+}
+
+
+launch_inst* launch_inst::create(ir::function *fn, const std::vector<ir::value *> &values, const std::vector<ir::value *> &grid, ir::value *num_warps, const std::string &name, instruction *next) {
+ return new launch_inst(fn, values, grid, num_warps, name, next);
+}
+
 
 //===----------------------------------------------------------------------===//
 //                               binary_operator classes
