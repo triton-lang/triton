@@ -110,6 +110,9 @@ public:
     return (function*)symbols_.at(name);
   }
   function *get_or_insert_function(const std::string &name, function_type *ty);
+  bool has_function(const std::string& name){
+    return symbols_.find(name) != symbols_.end();
+  }
   void remove_function(ir::function* fn){
     functions_.erase(std::remove(functions_.begin(), functions_.end(), fn), functions_.end());
   }

@@ -219,7 +219,7 @@ std::string ptx_to_cubin(const std::string& ptx, const std::string& ptxas, int c
   ofs.close();
   std::string cmd;
   int err;
-  cmd = ptxas + " -v --gpu-name=sm_" + std::to_string(cc) + " " + fsrc + " -o " + fsrc + ".o 2> " + flog;
+  cmd = ptxas + " -v -c --gpu-name=sm_" + std::to_string(cc) + " " + fsrc + " -o " + fsrc + ".o 2> " + flog;
   err = system(cmd.c_str());
   if(err != 0){
     std::ifstream _log(_flog);
@@ -235,7 +235,20 @@ std::string ptx_to_cubin(const std::string& ptx, const std::string& ptxas, int c
   unlink(_fsrc);
   unlink(_flog);
   unlink(_fbin);
-  dispatch::cuModuleLoadData(&ret, cubin.c_str());
+//  dispatch::cuModuleLoadData(&ret, cubin.c_str());
+
+  CUlinkState link_state;
+  dispatch::cuLinkCreate_v2(0, nullptr, nullptr, &link_state);
+  dispatch::cuLinkAddFile_v2(link_state, CU_JIT_INPUT_LIBRARY, "/usr/local/cuda/lib64/libcudadevrt.a", 0, nullptr, nullptr);
+  dispatch::cuLinkAddData_v2(link_state, CU_JIT_INPUT_CUBIN, (void*)cubin.c_str(), cubin.size(), "", 0, nullptr, nullptr);
+  size_t cubin_size;
+  void* cubin_data;
+  dispatch::cuLinkComplete(link_state, &cubin_data, &cubin_size);
+  cubin = std::string((char*)cubin_data, cubin_size);
+  dispatch::cuModuleLoadDataEx(&ret, cubin_data, 0, nullptr, nullptr);
+  dispatch::cuLinkDestroy(link_state);
+  std::cout << cubin_size << std::endl;
+
   return cubin;
 }
 

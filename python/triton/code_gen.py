@@ -548,12 +548,13 @@ class CodeGenerator(ast.NodeVisitor):
             prototype = _triton.ir.type.make_function(ret_type, arg_tys)
             gscope = sys.modules[ret.fn.fn.__module__].__dict__
             constants = ret.constants
-            # TODO: clean-up attributes handling in function
-            attributes = {i: list(arg.parent.get_attrs(arg))[0].value for i, arg in enumerate(ret.args) \
-                     if isinstance(arg, _triton.ir.argument) and arg.parent.has_attr(i + 1) }
-            generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module)
-            generator.visit(ret.fn.parse())
             fn_name = mangle_fn(ret.fn.__name__, arg_tys, ret.constants)
+            # TODO: clean-up attributes handling in function
+            if not self.module.has_function(fn_name):
+                attributes = {i: list(arg.parent.get_attrs(arg))[0].value for i, arg in enumerate(ret.args) \
+                        if isinstance(arg, _triton.ir.argument) and arg.parent.has_attr(i + 1) }
+                generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module)
+                generator.visit(ret.fn.parse())
             symbol = self.module.get_function(fn_name)
             ret = self.builder.launch(symbol, ret.args, ret.grid, ret.num_warps)
         return ret

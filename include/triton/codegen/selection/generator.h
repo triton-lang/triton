@@ -246,6 +246,7 @@ private:
   /// triton bb -> llvm bb
   std::map<ir::value*, BasicBlock *> bbs_;
   std::map<ir::value*, std::vector<int>> ords_;
+  std::map<ir::value*, Function*> fns_;
 
   // helper for creating llvm values
   adder add;

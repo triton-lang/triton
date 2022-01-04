@@ -315,13 +315,17 @@ void generator::visit_launch_inst(ir::launch_inst *launch) {
   ConstantInt* _0 = builder_->getInt32(0);
   ConstantInt* _1 = builder_->getInt32(1);
   ConstantInt* _2 = builder_->getInt32(2);
-  builder_->CreateStore(vals_[launch->get_grid()[0]][{}], builder_->CreateGEP(grid, {_0, _0}));
-  builder_->CreateStore(vals_[launch->get_grid()[1]][{}], builder_->CreateGEP(grid, {_0, _1}));
-  builder_->CreateStore(vals_[launch->get_grid()[2]][{}], builder_->CreateGEP(grid, {_0, _2}));
-  builder_->CreateStore(vals_[launch->get_num_warps()][{}], builder_->CreateGEP(block, {_0, _0}));
+//  builder_->CreateStore(vals_[launch->get_grid()[0]][{}], builder_->CreateGEP(grid, {_0, _0}));
+//  builder_->CreateStore(vals_[launch->get_grid()[1]][{}], builder_->CreateGEP(grid, {_0, _1}));
+//  builder_->CreateStore(vals_[launch->get_grid()[2]][{}], builder_->CreateGEP(grid, {_0, _2}));
+
+  builder_->CreateStore(builder_->getInt32(1), builder_->CreateGEP(grid, {_0, _0}));
+  builder_->CreateStore(builder_->getInt32(1), builder_->CreateGEP(grid, {_0, _1}));
+  builder_->CreateStore(builder_->getInt32(1), builder_->CreateGEP(grid, {_0, _2}));
+  builder_->CreateStore(builder_->getInt32(128), builder_->CreateGEP(block, {_0, _0}));
   builder_->CreateStore(builder_->getInt32(1), builder_->CreateGEP(block, {_0, _1}));
   builder_->CreateStore(builder_->getInt32(1), builder_->CreateGEP(block, {_0, _2}));
-  Value* callee = ConstantExpr::getCast(Instruction::BitCast, mod_->getFunction("mult__Pfp32_fp32__"), arg_tys1[0]);
+  Value* callee = ConstantExpr::getCast(Instruction::BitCast, fns_[fn], arg_tys1[0]);
   builder_->CreateCall(get_param_buffer, {callee, builder_->CreateLoad(grid), builder_->CreateLoad(block), builder_->getInt32(0)});
 }
 
@@ -2771,6 +2775,8 @@ void generator::visit_alloc_const(ir::alloc_const *alloc) {
 
 
 void generator::visit_function(ir::function* fn) {
+  if(fns_.find(fn) != fns_.end())
+    return;
   LLVMContext &ctx = builder_->getContext();
   FunctionType *fn_ty = (FunctionType*)cvt(fn->get_fn_type());
   if(!tgt_->is_gpu()){
@@ -2784,6 +2790,7 @@ void generator::visit_function(ir::function* fn) {
     fn_ty = FunctionType::get(fn_ret_ty, fn_args_ty, false);
   }
   Function *ret = Function::Create(fn_ty, Function::ExternalLinkage, fn->get_name(), mod_);
+  fns_[fn] = ret;
   // set attributes
   for(auto attr_pair: fn->attrs()){
     unsigned id = attr_pair.first;
@@ -3262,8 +3269,9 @@ void generator::visit(ir::module &src, llvm::Module &dst) {
 //    std::cout << "call??" << std::endl;
 //  }
   // visit functions
-  for(ir::function *fn: src.get_function_list())
+  for(ir::function *fn: src.get_function_list()){
     visit_function(fn);
+  }
 }
 
 

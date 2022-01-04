@@ -740,6 +740,7 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<ir::module>(m, "module")
       .def(py::init<std::string, ir::builder &>())
+      .def("has_function", &ir::module::has_function)
       .def("get_function", &ir::module::get_function, ret::reference)
       .def("get_or_insert_function", &ir::module::get_or_insert_function, ret::reference)
       .def("reset_ret_ty", &ir::module::reset_ret_ty)

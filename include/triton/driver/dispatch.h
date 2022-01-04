@@ -89,6 +89,7 @@ public:
   static CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev);
   static CUresult cuDeviceGetCount(int *count);
   // link management
+  static CUresult cuLinkAddFile_v2(CUlinkState state, CUjitInputType type, const char *path, unsigned int numOptions, CUjit_option *options, void **optionValues);
   static CUresult cuLinkAddData_v2(CUlinkState state, CUjitInputType type, void* data, size_t size, const char* name, unsigned int numOptions, CUjit_option* options, void** optionValues);
   static CUresult cuLinkCreate_v2(unsigned int  numOptions, CUjit_option* options, void** optionValues, CUlinkState* stateOut);
   static CUresult cuLinkComplete(CUlinkState state, void** cubinOut, size_t* sizeOut);
@@ -214,6 +215,7 @@ private:
   static void* cuDeviceGetAttribute_;
   static void* cuDeviceGetCount_;
   // link management
+  static void* cuLinkAddFile_v2_;
   static void* cuLinkAddData_v2_;
   static void* cuLinkCreate_v2_;
   static void* cuLinkDestroy_;
