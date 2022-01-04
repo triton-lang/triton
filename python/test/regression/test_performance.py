@@ -54,6 +54,7 @@ matmul_data = {
 
 @pytest.mark.parametrize('M, N, K', matmul_data.keys())
 def test_matmul(M, N, K):
+    torch.manual_seed(0)
     ref_gpu_util = matmul_data[(M, N, K)]['v100']
     cur_sm_clock = nvsmi(['clocks.current.sm'])[0]
     ref_sm_clock = 1350
@@ -99,6 +100,7 @@ elementwise_data = {
 
 @pytest.mark.parametrize('N', elementwise_data.keys())
 def test_elementwise(N):
+    torch.manual_seed(0)
     ref_gpu_util = elementwise_data[N]['v100']
     cur_mem_clock = nvsmi(['clocks.current.memory'])[0]
     ref_mem_clock = 877
