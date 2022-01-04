@@ -327,6 +327,12 @@ void generator::visit_launch_inst(ir::launch_inst *launch) {
   FunctionType* launch_device_ty = FunctionType::get(builder_->getInt32Ty(), launch_device_arg_tys, false);
   Function* launch_device = Function::Create(launch_device_ty, Function::ExternalLinkage, "cudaLaunchDeviceV2", mod_);
   // TODO: add branch
+  BasicBlock* launch_done_bb = BasicBlock::Create(builder_->getContext(), "launch_done", builder_->GetInsertBlock()->getParent());
+  BasicBlock* launch_bb = BasicBlock::Create(builder_->getContext(), "launch", launch_done_bb->getParent(), launch_done_bb);
+  Value* do_not_launch = builder_->CreateICmpEQ(builder_->CreatePtrToInt(arg_ptr, builder_->getInt64Ty()),
+                                                builder_->getInt64(0));
+  builder_->CreateCondBr(do_not_launch, launch_done_bb, launch_bb);
+  builder_->SetInsertPoint(launch_bb);
   Value* base_arg_ptr = arg_ptr;
   unsigned addr_space = base_arg_ptr->getType()->getPointerAddressSpace();
   for(ir::value* arg: launch->get_values()){
@@ -335,10 +341,12 @@ void generator::visit_launch_inst(ir::launch_inst *launch) {
     Value* curr_arg_ptr = builder_->CreateBitCast(base_arg_ptr, curr_arg_ty->getPointerTo(addr_space));
     builder_->CreateStore(curr_arg, curr_arg_ptr);
     unsigned arg_size = curr_arg_ty->isPointerTy() ? 8 : curr_arg_ty->getPrimitiveSizeInBits() / 8;
-    base_arg_ptr->print(llvm::outs());
     base_arg_ptr = builder_->CreateGEP(base_arg_ptr, {builder_->getInt32(arg_size)});
   }
   builder_->CreateCall(launch_device, {arg_ptr, builder_->getInt64(0)});
+  builder_->CreateBr(launch_done_bb);
+  // done
+  builder_->SetInsertPoint(launch_done_bb);
 
 }
 

@@ -164,9 +164,8 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version){
   init_llvm();
   // verify and store llvm
   llvm::legacy::PassManager pm;
-  pm.add(llvm::createPrintModulePass(llvm::outs()));
-  pm.add(llvm::createVerifierPass());
 //  pm.add(llvm::createPrintModulePass(llvm::outs()));
+  pm.add(llvm::createVerifierPass());
   pm.run(*module);
   // module->print(llvm::outs(), nullptr);
 
@@ -235,10 +234,10 @@ std::string ptx_to_cubin(const std::string& ptx, const std::string& ptxas, int c
   unlink(_fsrc);
   unlink(_flog);
   unlink(_fbin);
-//  dispatch::cuModuleLoadData(&ret, cubin.c_str());
-
   CUlinkState link_state;
   dispatch::cuLinkCreate_v2(0, nullptr, nullptr, &link_state);
+  // TODO: fix path
+  // TODO: only add if necessary
   dispatch::cuLinkAddFile_v2(link_state, CU_JIT_INPUT_LIBRARY, "/usr/local/cuda/lib64/libcudadevrt.a", 0, nullptr, nullptr);
   dispatch::cuLinkAddData_v2(link_state, CU_JIT_INPUT_CUBIN, (void*)cubin.c_str(), cubin.size(), "", 0, nullptr, nullptr);
   size_t cubin_size;
@@ -247,8 +246,6 @@ std::string ptx_to_cubin(const std::string& ptx, const std::string& ptxas, int c
   cubin = std::string((char*)cubin_data, cubin_size);
   dispatch::cuModuleLoadDataEx(&ret, cubin_data, 0, nullptr, nullptr);
   dispatch::cuLinkDestroy(link_state);
-  std::cout << cubin_size << std::endl;
-
   return cubin;
 }
 
