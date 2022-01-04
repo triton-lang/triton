@@ -50,7 +50,6 @@ def bench_op(M, N, K, AT, BT, dtype, provider, warmup=25, rep=75):
         a = a.t()
     if BT:
         b = b.t()
-    num_flops = 2 * M * N * K
     tflops = lambda ms: 2. * M * N * K / ms * 1e-9
     if provider == "cublas":
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), warmup=warmup, rep=rep)
