@@ -295,38 +295,39 @@ void generator::visit_phi_node(ir::phi_node* x) {
  * \brief Code Generation for `call`
  */
 void generator::visit_call_inst(ir::call_inst* call) {
-  std::cout << "call not supported!" << std::endl;
-  exit(1);
+  throw std::runtime_error("call not supported! Triton should be inlining everything.");
 }
 
 void generator::visit_launch_inst(ir::launch_inst *launch) {
   ir::function* fn = (ir::function*)launch->get_operand(0);
   // forward-declare cudaGetParameterBufferV2
-  Type* ret_ty1 = builder_->getInt64Ty();
-  ArrayType* dim3 = ArrayType::get(builder_->getInt32Ty(), 3);
-  std::vector<Type*> arg_tys1 = {PointerType::get(builder_->getInt8Ty(), 0),
-                                dim3,
-                                dim3,
-                                builder_->getInt32Ty()};
-  FunctionType* fn_ty1 = FunctionType::get(ret_ty1, arg_tys1, false);
-  Function* get_param_buffer = Function::Create(fn_ty1, Function::ExternalLinkage, "cudaGetParameterBufferV2", mod_);
-  AllocaInst* grid = builder_->CreateAlloca(arg_tys1[1]);
-  AllocaInst* block = builder_->CreateAlloca(arg_tys1[2]);
+  std::vector<Type*> get_param_arg_tys = {PointerType::get(builder_->getInt8Ty(), 0),
+                                           ArrayType::get(builder_->getInt32Ty(), 3),
+                                           ArrayType::get(builder_->getInt32Ty(), 3),
+                                           builder_->getInt32Ty()};
+  FunctionType* get_param_ty = FunctionType::get(builder_->getInt64Ty(), get_param_arg_tys, false);
+  Function* get_param_buffer = Function::Create(get_param_ty, Function::ExternalLinkage, "cudaGetParameterBufferV2", mod_);
+  AllocaInst* grid = builder_->CreateAlloca(get_param_arg_tys[1]);
+  AllocaInst* block = builder_->CreateAlloca(get_param_arg_tys[2]);
   ConstantInt* _0 = builder_->getInt32(0);
   ConstantInt* _1 = builder_->getInt32(1);
   ConstantInt* _2 = builder_->getInt32(2);
-//  builder_->CreateStore(vals_[launch->get_grid()[0]][{}], builder_->CreateGEP(grid, {_0, _0}));
-//  builder_->CreateStore(vals_[launch->get_grid()[1]][{}], builder_->CreateGEP(grid, {_0, _1}));
-//  builder_->CreateStore(vals_[launch->get_grid()[2]][{}], builder_->CreateGEP(grid, {_0, _2}));
-
-  builder_->CreateStore(builder_->getInt32(1), builder_->CreateGEP(grid, {_0, _0}));
-  builder_->CreateStore(builder_->getInt32(1), builder_->CreateGEP(grid, {_0, _1}));
-  builder_->CreateStore(builder_->getInt32(1), builder_->CreateGEP(grid, {_0, _2}));
-  builder_->CreateStore(builder_->getInt32(128), builder_->CreateGEP(block, {_0, _0}));
+  builder_->CreateStore(vals_[launch->get_grid()[0]][{}], builder_->CreateGEP(grid, {_0, _0}));
+  builder_->CreateStore(vals_[launch->get_grid()[1]][{}], builder_->CreateGEP(grid, {_0, _1}));
+  builder_->CreateStore(vals_[launch->get_grid()[2]][{}], builder_->CreateGEP(grid, {_0, _2}));
+  Value* num_warps = mul(builder_->getInt32(32), vals_[launch->get_num_warps()][{}]);
+  builder_->CreateStore(num_warps, builder_->CreateGEP(block, {_0, _0}));
   builder_->CreateStore(builder_->getInt32(1), builder_->CreateGEP(block, {_0, _1}));
   builder_->CreateStore(builder_->getInt32(1), builder_->CreateGEP(block, {_0, _2}));
-  Value* callee = ConstantExpr::getCast(Instruction::BitCast, fns_[fn], arg_tys1[0]);
-  builder_->CreateCall(get_param_buffer, {callee, builder_->CreateLoad(grid), builder_->CreateLoad(block), builder_->getInt32(0)});
+  Value* callee = ConstantExpr::getCast(Instruction::BitCast, fns_[fn], get_param_arg_tys[0]);
+  Value* arg_ptr = builder_->CreateCall(get_param_buffer, {callee, builder_->CreateLoad(grid), builder_->CreateLoad(block), builder_->getInt32(0)});
+  // forwrd-declare cudaLaunchDeviceV2
+  std::vector<Type*> launch_device_arg_tys = {builder_->getInt64Ty(), builder_->getInt64Ty()};
+  FunctionType* launch_device_ty = FunctionType::get(builder_->getInt32Ty(), launch_device_arg_tys, false);
+  Function* launch_device = Function::Create(launch_device_ty, Function::ExternalLinkage, "cudaLaunchDeviceV2", mod_);
+  // TODO: add branch
+  builder_->CreateCall(launch_device, {arg_ptr, builder_->getInt64(0)});
+
 }
 
 /**
