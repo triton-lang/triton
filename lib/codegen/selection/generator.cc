@@ -163,7 +163,7 @@ Type *generator::cvt(ir::type *ty) {
     case ir::type::VoidTyID:      return Type::getVoidTy(*ctx_);
     case ir::type::FP8TyID:       return Type::getInt8Ty(*ctx_);
     case ir::type::FP16TyID:      return Type::getHalfTy(*ctx_);
-    case ir::type::BF16TyID:      return Type::getInt16Ty(*ctx_);
+    case ir::type::BF16TyID:      return Type::getBFloatTy(*ctx_);
     case ir::type::FP32TyID:      return Type::getFloatTy(*ctx_);
     case ir::type::FP64TyID:      return Type::getDoubleTy(*ctx_);
     case ir::type::LabelTyID:     return Type::getLabelTy(*ctx_);
@@ -458,19 +458,23 @@ std::tuple<Value*, Value*, Value*, Value*> generator::fp8x4_to_fp16x4(Value *in0
 }
 
 Value* generator::bf16_to_fp32(Value *in0){
-  Value *ret = UndefValue::get(vec_ty(builder_->getInt16Ty(), 2));
-  ret = insert_elt(ret, in0, (uint64_t)1);
-  ret = insert_elt(ret, builder_->getInt16(0), (uint64_t)0);
-  return bit_cast(ret, builder_->getFloatTy());
+  // Value *ret = UndefValue::get(vec_ty(bf16_ty, 2));
+  // ret = insert_elt(ret, in0, (uint64_t)1);
+  // ret = insert_elt(ret, bit_cast(builder_->getInt16(0), bf16_ty), (uint64_t)0);
+  // return bit_cast(ret, f32_ty);
+
+  InlineAsm *ptx = InlineAsm::get(FunctionType::get(f32_ty, {bf16_ty}, false),
+                                  "cvt.rn.f32.bf16 $0, $1;", "=r,h", false);
+  return call(ptx, {in0});
 }
 
 Value* generator::fp32_to_bf16(Value *in0){
   if(tgt_->as_nvidia()->sm() >= 80){
-    InlineAsm *ptx = InlineAsm::get(FunctionType::get(builder_->getInt16Ty(), {builder_->getFloatTy()}, false),
+    InlineAsm *ptx = InlineAsm::get(FunctionType::get(bf16_ty, {f32_ty}, false),
                                     "cvt.rn.bf16.f32 $0, $1;", "=h,r", false);
     return call(ptx, {in0});
   }
-  return extract_elt(bit_cast(in0, vec_ty(builder_->getInt16Ty(), 2)), (uint64_t)1);
+  return extract_elt(bit_cast(in0, vec_ty(bf16_ty, 2)), (uint64_t)1);
 }
 
 /**
@@ -515,12 +519,16 @@ void generator::visit_cast_inst(ir::cast_inst* x) {
   if(ret_sca_ty->is_bf16_ty() || op_sca_ty->is_bf16_ty()){
     // FP32 -> BF16
     if(op_sca_ty->is_fp32_ty())
-    for(size_t i = 0; i < x_idxs.size(); i++)
-      vals_[x][x_idxs[i + 0]] = fp32_to_bf16(vals_[op][op_idxs[i + 0]]);
+      // for(size_t i = 0; i < x_idxs.size(); i++)
+      //   vals_[x][x_idxs[i + 0]] = fp32_to_bf16(vals_[op][op_idxs[i + 0]]);
+      for (indices_t idx: idxs_.at(x)) {
+        Value *arg = vals_[x->get_operand(0)][idx];
+        vals_[x][idx] = fp32_to_bf16(arg); // cast(cvt(x->get_op()), arg, ty);
+      }
     // BF16 -> FP32
     if(ret_sca_ty->is_fp32_ty())
-    for(size_t i = 0; i < x_idxs.size(); i++)
-      vals_[x][x_idxs[i + 0]] = bf16_to_fp32(vals_[op][op_idxs[i + 0]]);
+      for(size_t i = 0; i < x_idxs.size(); i++)
+        vals_[x][x_idxs[i + 0]] = bf16_to_fp32(vals_[op][op_idxs[i + 0]]);
     return;
   }
 
@@ -675,6 +683,7 @@ void generator::visit_load_inst(ir::load_inst* x){
     // ---
     std::vector<Type*> ret_tys(n_words, IntegerType::get(*ctx_, width));
     Type* ret_ty = ret_tys.size() > 1 ? StructType::get(*ctx_, ret_tys) : ret_tys[0];
+    // ret_ty->print(llvm::outs());
     std::vector<Type*> arg_tys = {pred->getType(), ptr->getType()};
     for(Value *v: others)
         arg_tys.push_back(v->getType());
@@ -744,15 +753,19 @@ void generator::visit_store_inst(ir::store_inst * x){
   }
   auto idxs    = idxs_.at(val_op);
   Type *ty = cvt(val_op->get_type()->get_scalar_ty());
+  if (ty->isBFloatTy()) // llvm11-nvptx cannot select bf16 store
+    ty = f16_ty;
   for(size_t i = 0; i < idxs.size(); i += vec){
     auto idx = idxs[i];
     // pointer
     Value *ptr = vals_[ptr_op][idx];
-    ptr = bit_cast(ptr, vec_ty(ty, vec)->getPointerTo(1));
+    // vectorize
+    Type *v_ty = vec_ty(ty, vec);
+    ptr = bit_cast(ptr, v_ty->getPointerTo(1));
     // value
-    Value* val = UndefValue::get(vec_ty(ty, vec));
+    Value* val = UndefValue::get(v_ty);
     for(size_t ii = 0; ii < vec; ii++)
-      val = insert_elt(val, vals_.at(val_op)[idxs[i + ii]], ii);
+      val = insert_elt(val, bit_cast(vals_.at(val_op)[idxs[i + ii]], ty), ii);
     if(mx){
       Value *msk = vals_[mx->get_mask_operand()][idx];
       Instruction *no_op = intrinsic(Intrinsic::donothing, {}, {});
@@ -1358,9 +1371,6 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   int stride_b0 = is_b_row ? stride_b_n : stride_b_k;
   int stride_b1 = is_b_row ? stride_b_k : stride_b_n;
 
-  int lda = is_a_row ? stride_a_m : stride_a_k;
-  int ldb = is_b_row ? stride_b_k : stride_b_n;
-
   int per_phase_a = swizzle_->get_per_phase(layout_a);
   int max_phase_a = swizzle_->get_max_phase(layout_a);
   int per_phase_b = swizzle_->get_per_phase(layout_b);
@@ -1370,23 +1380,17 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   int num_rep_n = shapes[1] / layout->shape_per_cta(1);
   int num_rep_k = std::max<int>(NK/mma_instr_k, 1);
 
-  int num_ptr_a   = is_a_row ? num_rep_k : num_rep_m;
-  int num_ptr_b   = is_b_row ? num_rep_n : num_rep_k;
-
-  int vec_a = layout->get_vec_a();
-  int vec_b = layout->get_vec_b();
-
-    std::cout << "per_phase_a: " << per_phase_a << "\n"
-            << "max_phase_a: " << max_phase_a << "\n"
-            << "per_phase_b: " << per_phase_b << "\n"
-            << "max_phase_b: " << max_phase_b << "\n"
-            << "num_rep_m: " << num_rep_m << "\n"
-            << "num_rep_n: " << num_rep_n << "\n"
-            << "num_rep_k: " << num_rep_k << "\n\n"
-            << "num_ptr_a: " << num_ptr_a << "\n"
-            << "num_ptr_b: " << num_ptr_b << "\n"
-            << "shape_per_cta0: " << layout->shape_per_cta(0) << "\n"
-            << "shape_per_cta1: " << layout->shape_per_cta(1) << "\n";
+    // std::cout << "per_phase_a: " << per_phase_a << "\n"
+    //         << "max_phase_a: " << max_phase_a << "\n"
+    //         << "per_phase_b: " << per_phase_b << "\n"
+    //         << "max_phase_b: " << max_phase_b << "\n"
+    //         << "num_rep_m: " << num_rep_m << "\n"
+    //         << "num_rep_n: " << num_rep_n << "\n"
+    //         << "num_rep_k: " << num_rep_k << "\n\n"
+    //         << "num_ptr_a: " << num_ptr_a << "\n"
+    //         << "num_ptr_b: " << num_ptr_b << "\n"
+    //         << "shape_per_cta0: " << layout->shape_per_cta(0) << "\n"
+    //         << "shape_per_cta1: " << layout->shape_per_cta(1) << "\n";
 
   Type *fp32_ty = f32_ty;
   Type *fp16x2_ty = vec_ty(f16_ty, 2);
@@ -1409,10 +1413,16 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
     phi_ty = fp16x2_ty;
     
   } else if (A_ir_ty->is_bf16_ty() && B_ir_ty->is_bf16_ty()) {
-    mma_ty = FunctionType::get(fp32_pack4_ty, std::vector<llvm::Type*>{bf16x2_ty, bf16x2_ty, bf16x2_ty, bf16x2_ty, bf16x2_ty, bf16x2_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty}, false);
-    smem_ptr_ty = ptr_ty(bf16_ty, 3);
-    ldmatrix_ty = FunctionType::get(bf16x2_pack4_ty, std::vector<llvm::Type*>{smem_ptr_ty}, false);
-    phi_ty = bf16x2_ty;
+    // FIXME: We should use bf16 here.
+    mma_ty = FunctionType::get(fp32_pack4_ty, std::vector<llvm::Type*>{fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty}, false);
+    smem_ptr_ty = ptr_ty(f16_ty, 3);
+    ldmatrix_ty = FunctionType::get(fp16x2_pack4_ty, std::vector<llvm::Type*>{smem_ptr_ty}, false);
+    phi_ty = fp16x2_ty;
+
+    // mma_ty = FunctionType::get(fp32_pack4_ty, std::vector<llvm::Type*>{bf16x2_ty, bf16x2_ty, bf16x2_ty, bf16x2_ty, bf16x2_ty, bf16x2_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty}, false);
+    // smem_ptr_ty = ptr_ty(bf16_ty, 3);
+    // ldmatrix_ty = FunctionType::get(bf16x2_pack4_ty, std::vector<llvm::Type*>{smem_ptr_ty}, false);
+    // phi_ty = bf16x2_ty;
   } else if (A_ir_ty->is_fp32_ty() && B_ir_ty->is_fp32_ty()) {
     mma_ty = FunctionType::get(fp32_pack4_ty, std::vector<llvm::Type*>{fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty}, false);
     smem_ptr_ty = ptr_ty(fp32_ty, 3);
@@ -1420,8 +1430,6 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
     phi_ty = fp32_ty;
   } else
     throw std::runtime_error("mma16816 data type not supported");
-
-
 
   // left-hand-side values
   std::map<std::pair<unsigned, unsigned>, std::pair<Value*, Value*>> ha;
@@ -1448,94 +1456,66 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   Value *s0 = urem(s, i32(2));
   Value *s1 = udiv(s, i32(2));
 
-  // // compute base offset (the first ptr) for current thread (before swizzling)
-  // auto compute_smem_offsets = [&](bool is_row, Value* matoff_row, Value* matoff_col) -> std::tuple<Value*, Value*> {
-  //   Value *off_row = mul(matoff_row, i32(8)); // TODO: should this be vec_x?
-  //   Value *off_col = mul(matoff_col, i32(8));
-  //   Value *off_0 = is_row ? off_row : off_col;
-  //   Value *off_1 = add(is_row ? off_col : off_row, c);
-  //   return {off_0, off_1};
-  // };
-
-  // // compute i-th smem load ptr (with swizzling)
-  // auto compute_smem_ptrs = [&](Value *off_0, Value *off_1, int stride_0, int stride_1, 
-  //                              Value *phase, int off_i, int vec) -> Value* {
-  //   Value *off_0i = add(off_0, i32(off_i));
-  //   Value *mat_off0i = exact_udiv(off_0i, i32(vec));
-  //   mat_off0i = xor_(mat_off0i, phase);
-  //   off_0i = mul(mat_off0i, i32(vec));
-  //   return add(mul(off_0i, i32(stride_0)), mul(off_1, i32(stride_1)));
-  // };
-
-  // // matrix offsets
-  // Value *matoff_am = add(s0, mul(warp_m, i32(2)));
-  // Value *matoff_ak = s1;
-  // Value *off_a0, *off_a1;
-  // std::tie(off_a0, off_a1) = compute_smem_offsets(is_a_row, matoff_am, matoff_ak);
-
-  // std::vector<Value*> off_a(num_ptr_a);
-  // Value *phase_a = urem(udiv(c, i32(per_phase_a)), i32(max_phase_a));
-  // for(int i = 0; i < num_ptr_a; i++){
-  //   int off_i = i * 16 * (is_a_row ? 1 : layout->wpt(0));
-  //   off_a[i] = compute_smem_ptrs(off_a0, off_a1, stride_a0, stride_a1, phase_a, off_i, vec_a);
-  // }
-
-  // Value *matoff_bn = add(mul(s1, i32(layout->wpt(1))), warp_n);
-  // Value *matoff_bk = s0;
-  // Value *off_b0, *off_b1;
-  // std::tie(off_b0, off_b1) = compute_smem_offsets(is_b_row, matoff_bn, matoff_bk);
-
-  // std::vector<Value*> off_b(num_ptr_b);
-  // Value *phase_b = urem(udiv(c, i32(per_phase_b)), i32(max_phase_b));
-  // for(int i = 0; i < num_ptr_b; i++){
-  //   int off_i = i * (is_b_row ? 8 * layout->wpt(1) : 16);
-  //   off_b[i] = compute_smem_ptrs(off_b0, off_b1, stride_b0, stride_b1, phase_b, off_i, vec_b);
-  // }
-
-  // Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
-  // Value *lane   = urem(thread, i32(32));
-  // Value *warp   = udiv(thread, i32(32));
-  // Value *warp12 = udiv(warp, i32(layout->wpt(0)));
-  // Value *warp0  = urem(warp, i32(layout->wpt(0)));
-  // Value *warp1  = urem(warp12, i32(layout->wpt(1)));
-  // std::vector<Value *>& fc = fcs.begin()->second;
-
-  // Value *tidr8  = urem(lane, i32(8));
   Value *phase_a = urem(udiv(c, i32(per_phase_a)), i32(max_phase_a));
-  Value *off_a0   = mul(c, i32(lda));
+  // | -> k (row-major), since we have ldmatrix.trans, we only need to change stride
+  // v (s0_0(0), s1_0(2), | *num_rep_k
+  // m  s0_1(1), s1_1(3)) |  (stride in num of matrices(mat_stride_ak): 2)
+  // -----------
+  //   *num_rep_m (stride in num of matrices(mat_stride_am): 2*layout->wpt(0))
+  int mat_stride_am = 2 * layout->wpt(0);
+  int mat_stride_ak = 2;
+  // we need pointers on the fast-changing axis
+  int num_ptr_a = is_a_row ? num_rep_k : num_rep_m;
+  int mat_stride_aptr = is_a_row ? mat_stride_ak : mat_stride_am;
+  // physical mat idx (before swizzling)
+  int mat_shape_a0 = is_a_row ? mat_shape_k : mat_shape_m;
+  int mat_shape_a1 = is_a_row ? mat_shape_m : mat_shape_k;
 
-  Value *mat_off_m = add(s0, mul(warp_m, i32(2)));
-  Value *off_am  = mul(mat_off_m, i32(mat_shape_m));
-  Value *off_ak  = mul(s1, i32(mat_shape_k));
-  off_am = urem(off_am, i32(shape_a[0])); // TODO: what's this?
-  off_ak = urem(off_ak, i32(shape_a[1]));
-  off_a0 = add(off_a0, is_a_row ? off_ak : off_am);
-  Value* off_a1 = is_a_row ? off_am : off_ak;
+  Value *mat_off_am = add(s0, mul(warp_m, i32(2)));
+  Value *mat_off_ak = s1;
+  Value *mat_off_a0 = is_a_row ? mat_off_ak : mat_off_am;
+  Value *off_am  = mul(mat_off_am, i32(mat_shape_m));
+  Value *off_ak  = mul(mat_off_ak, i32(mat_shape_k));
+  // off_am = urem(off_am, i32(shape_a[0]));
+  // off_ak = urem(off_ak, i32(shape_a[1]));
+  Value* off_a1 = add(c, is_a_row ? off_am : off_ak);
   std::vector<Value*> off_a(num_ptr_a);
   for(int i = 0; i < num_ptr_a; i++){
-    Value* off_a0i = add(off_a0, i32(i*mma_instr_k*(is_a_row?1:layout->wpt(0))));
-    off_a0i = exact_udiv(off_a0i, i32(vec_a));
-    off_a0i = xor_(off_a0i, phase_a);
-    off_a0i = mul(off_a0i, i32(vec_a));
-    off_a[i] = add(mul(off_a0i, i32(stride_a0)), mul(off_a1, i32(stride_a1)));
+    Value *mat_off_a0i = add(mat_off_a0, i32(i*mat_stride_aptr));
+    mat_off_a0i = xor_(mat_off_a0i, phase_a); // smem swizzle
+    off_a[i] = add(mul(mat_off_a0i, i32(mat_shape_a0)), mul(off_a1, i32(stride_a1)));
   }
 
   Value *phase_b = urem(udiv(c, i32(per_phase_b)), i32(max_phase_b));
-  Value *off_b0   = mul(c, i32(ldb));
-  Value *mat_off_n = add(mul(s1, i32(layout->wpt(1))), warp_n);
-  Value *off_bn  = mul(mat_off_n, i32(mat_shape_n));
-  Value *off_bk  = mul(s0, i32(mat_shape_k));
-  off_bn = urem(off_bn, i32(shape_b[1]));
-  off_bk = urem(off_bk, i32(shape_b[0]));
-  off_b0 = add(off_b0, is_b_row ? off_bn : off_bk);
-  Value* off_b1 = is_b_row ? off_bk : off_bn;
+  // | -> n (col-major)
+  // v (s0_0(0), | (stride: wpt(1)) | s1_0(2)  | *num_rep_n
+  // k  s0_1(1), |    *num_rep_n    | s1_1(3)) | (stride in num of matrices(mat_stride_bn): wpt(1))
+  // -----------
+  //   *num_rep_k (stride in num of matrices(mat_stride_bk): 2)
+  int mat_stride_bk = 2;
+  int mat_stride_bn = layout->wpt(1);
+  // we need pointers on the fast-changing axis
+  int num_ptr_b = is_b_row ? num_rep_n : num_rep_k;
+  int mat_stride_bptr = is_b_row ? mat_stride_bn : mat_stride_bk;
+  // phsical mat idx (before swizzling)
+  int mat_shape_b0 = is_b_row ? mat_shape_n : mat_shape_k;
+  int mat_shape_b1 = is_b_row ? mat_shape_k : mat_shape_n;
+
+  Value *mat_off_bk = s0;
+  Value *mat_off_bn = add(mul(s1, i32(layout->wpt(1))), warp_n);
+  Value *mat_off_b0 = is_b_row ? mat_off_bn : mat_off_bk;
+
+  // // legacy b swizzling
+  Value *off_bn  = mul(mat_off_bn, i32(mat_shape_n));
+  Value *off_bk  = mul(mat_off_bk, i32(mat_shape_k));
+  // off_bn = urem(off_bn, i32(shape_b[1]));
+  // off_bk = urem(off_bk, i32(shape_b[0]));
+  Value* off_b1 = add(c, is_b_row ? off_bk : off_bn);
   std::vector<Value*> off_b(num_ptr_b);
   for(int i = 0; i < num_ptr_b; i++){
-    Value* off_b0i = add(off_b0, i32(i*(is_b_row?mma_instr_n*layout->wpt(1):mma_instr_k)));
-    off_b0i = exact_udiv(off_b0i, i32(vec_b));
-    off_b0i = xor_(off_b0i, phase_b);
-    off_b0i = mul(off_b0i, i32(vec_b));
-    off_b[i] = add(mul(off_b0i, i32(stride_b0)), mul(off_b1, i32(stride_b1)));
+    Value *mat_off_b0i = add(mat_off_b0, i32(i*mat_stride_bptr));
+    mat_off_b0i = xor_(mat_off_b0i, phase_b); // swizzle
+    off_b[i] = add(mul(mat_off_b0i, i32(mat_shape_b0)), mul(off_b1, i32(stride_b1)));
   }
 
   builder_->SetInsertPoint(CurrBB);
@@ -1597,24 +1577,26 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
         vals[{m, K}] = val;
   };
 
+  size_t dtsize_a = A->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
+  size_t dtsize_b = B->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
+
   auto load_a = [&](int m, int K, int inc, bool is_prefetch) {
       int offidx = (is_a_row ? K/mma_instr_k : m) % num_ptr_a;
       Value* ptra;
       if(K == 0 && is_prefetch){
         if(inc == 0)
-          ptra = gep(shared_pre_ptr_[layout_a], off_a[offidx]);
+          ptra = bit_cast(gep(shared_pre_ptr_[layout_a], off_a[offidx]), smem_ptr_ty);
         else
-          ptra = gep(shared_next_ptr_[layout_a], off_a[offidx]);
-      }
-      else
+          ptra = bit_cast(gep(shared_next_ptr_[layout_a], off_a[offidx]), smem_ptr_ty);
+      } else
         ptra = ptrs_a[offidx];
       int step_am = is_a_row ? m : 0;
       int step_ak = is_a_row ? 0 : K;
       InlineAsm *ld_a0_fn = InlineAsm::get(ldmatrix_ty, "ldmatrix.sync.aligned.m8n8.x4" + a_trans + ".shared.b16 "
                                                 "{$0, $1, $2, $3}, [$4 + " +
                                                 std::to_string(
-                                                  2*step_am*mma_instr_m*layout->wpt(0)*stride_a_m + 
-                                                  2*step_ak*stride_a_k) + "];",
+                                                dtsize_a*step_am*mma_instr_m*layout->wpt(0)*stride_a_m + 
+                                                dtsize_a*step_ak*stride_a_k) + "];",
                                                 "=r,=r,=r,=r,r", true);
       Value *haa = call(ldmatrix_ty, ld_a0_fn, {ptra});
       if(K == 0 && inc == 1 && is_prefetch)
@@ -1632,9 +1614,9 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
       Value* ptrb;
       if(K == 0 && is_prefetch){
         if(inc == 0)
-          ptrb = gep(shared_pre_ptr_[layout_b], off_b[offidx]);
+          ptrb = bit_cast(gep(shared_pre_ptr_[layout_b], off_b[offidx]), smem_ptr_ty);
         else
-          ptrb = gep(shared_next_ptr_[layout_b], off_b[offidx]);
+          ptrb = bit_cast(gep(shared_next_ptr_[layout_b], off_b[offidx]), smem_ptr_ty);
       }
       else
         ptrb = ptrs_b[offidx];
@@ -1642,7 +1624,9 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
       int step_bk = is_b_row ? K : 0;
       InlineAsm *ld_b_fn = InlineAsm::get(ldmatrix_ty, "ldmatrix.sync.aligned.m8n8.x4" + b_trans + ".shared.b16 "
                                                     "{$0, $1, $2, $3}, [$4 + " +
-                                                    std::to_string(2*step_bn*(mma_instr_k/2)*layout->wpt(1)*stride_b_n + 2*step_bk*stride_b_k) + "];",
+                                                    std::to_string(
+                                                    dtsize_b*step_bn*mat_shape_n*layout->wpt(1)*stride_b_n + 
+                                                    dtsize_b*step_bk*stride_b_k) + "];",
                                                     "=r,=r,=r,=r,r", true);
       Value *hbb = call(ldmatrix_ty, ld_b_fn, {ptrb});
       if(K == 0 && inc == 1 && is_prefetch)
@@ -1663,14 +1647,14 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
       for(unsigned m = 0; m < num_rep_m; m++){
         ha[{m, 0}].first = phi(phi_ty, 2);
         ha[{m, 0}].second = phi(phi_ty, 2);
-        ha[{m, 8}].first = phi(phi_ty, 2);
-        ha[{m, 8}].second = phi(phi_ty, 2);
+        ha[{m, mat_shape_k}].first = phi(phi_ty, 2);
+        ha[{m, mat_shape_k}].second = phi(phi_ty, 2);
       }
       for(unsigned n = 0; n < num_rep_n; n+=2){
         hb[{n, 0}] = phi(phi_ty, 2);
         hb[{n+1, 0}] = phi(phi_ty, 2);
-        hb[{n, 8}] = phi(phi_ty, 2);
-        hb[{n+1, 8}] = phi(phi_ty, 2);
+        hb[{n, mat_shape_k}] = phi(phi_ty, 2);
+        hb[{n+1, mat_shape_k}] = phi(phi_ty, 2);
       }
       // insert prefetched lds at the end of loop header
       builder_->SetInsertPoint(bbs_[phiA->get_incoming_block(0)]->getTerminator());
@@ -1873,13 +1857,13 @@ inline Value* generator::shfl_sync(Value* acc, int32_t i){
   InlineAsm *shfl = InlineAsm::get(FunctionType::get(ty, {ty, i32_ty}, false), asm_str, "=f,f,r", false);
   if(ty->getPrimitiveSizeInBits() <= 32)
     return call(shfl, {acc, i32(i)});
-  acc = builder_->CreateBitCast(acc, vec_ty(f32_ty, 2));
+  acc = bit_cast(acc, vec_ty(f32_ty, 2));
   Value* acc0 = builder_->CreateExtractElement(acc, i32(0));
   Value* acc1 = builder_->CreateExtractElement(acc, i32(1));
   Value* ret = UndefValue::get(vec_ty(f32_ty, 2));
   ret = insert_elt(ret, shfl_sync(acc0, i), i32(0));
   ret = insert_elt(ret, shfl_sync(acc1, i), i32(1));
-  return builder_->CreateBitCast(ret, ty);
+  return bit_cast(ret, ty);
 }
 
 /**
@@ -2057,6 +2041,10 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
   ir::block_type::block_shapes_t shape = out->get_type()->get_block_shapes();
   // pointer to temporary shared memory
   Type *ty = cvt(out->get_type()->get_scalar_ty());
+
+  if (ty->isBFloatTy()) // llvm11-nvptx cannot select bf16 store
+    ty = f16_ty;
+
   // Orders
   analysis::distributed_layout* in_layout = dynamic_cast<analysis::distributed_layout*>(layouts_->get(in));
   analysis::distributed_layout* out_layout = dynamic_cast<analysis::distributed_layout*>(layouts_->get(out));
@@ -2097,7 +2085,7 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
       // stash value to shared mem
       indices_t idxs = {in_ax[0][i*max_ii + ii],
                         in_ax[1][j*max_jj + jj]};
-      store(vals_[in][idxs], ptr);
+      store(bit_cast(vals_[in][idxs], ty), ptr);
     }
     add_barrier();
     max_ii = out_ax[0].size()/n_reps[0];

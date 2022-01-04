@@ -99,8 +99,9 @@ inline void extract_dot_use(ir::value *v, ir::value*& result, size_t n) {
 inline void extract_hmma_dot_use(ir::value *v, ir::value*& result, size_t n) {
   for(ir::user* u: v->get_users()){
     auto i = dynamic_cast<ir::dot_inst*>(u);
-    if(i && is_hmma_c(i) && i->get_operand(n) == v)
+    if(i && is_hmma_c(i) && i->get_operand(n) == v) {
       result = i;
+    }
   }
 }
 
@@ -434,6 +435,13 @@ shared_layout::shared_layout(data_layout *arg,
   hmma_dot_a_ = hmma_dot_a;
   hmma_dot_b_ = hmma_dot_b;
 
+  // Update mma_vec
+  if (hmma_dot_a_) {
+    set_mma_vec(mma_layout::mma_instr_vec_.at(get_mma_type(hmma_dot_a_)));
+  } else if (hmma_dot_b_) {
+    set_mma_vec(mma_layout::mma_instr_vec_.at(get_mma_type(hmma_dot_b_)));
+  }
+
   // size
   size_ = ty_->get_primitive_size_in_bits() / 8;
   for(auto s: shape_)
@@ -523,7 +531,6 @@ void layouts::create(size_t id, const std::vector<ir::value*>& values) {
                                   (shared_layout*)layouts_.at(groups_.at(a)), 
                                   (shared_layout*)layouts_.at(groups_.at(b)),
                                   dot);
-    // static_cast<mma_layout*>(layouts_[id])->set_tensor_core_type(get_mma_type(dot));
   }
   else if(it_cts != values.end()){
     ir::instruction *cts = (ir::instruction*)*it_cts;

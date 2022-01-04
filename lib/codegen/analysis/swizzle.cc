@@ -20,9 +20,6 @@ void swizzle::run(ir::module &) {
       ir::value* mma_dot_a = layout->hmma_dot_a();
       ir::value* mma_dot_b = layout->hmma_dot_b();
 
-      std::cout << "mma_dot_a: " << mma_dot_a << "\n"
-                << "mma_dot_b: " << mma_dot_b << "\n";
-
       if(!mma_dot_a && !mma_dot_b){
         per_phase_[layout] = 1;
         max_phase_[layout] = 1;
@@ -47,7 +44,7 @@ void swizzle::run(ir::module &) {
         
         per_phase_[layout] = std::max<int>(128 / (in_layout->mts(ord[0])*in_layout->nts(ord[0])*dtsize), 1);
         max_phase_[layout] = 8 / per_phase_[layout];
-        vec_[layout]       = 4; // FIXME!!!!!!!!!!!!!!!!!
+        vec_[layout]       = layout->get_mma_vec(); // FIXME!!!!!!!!!!!!!!!!!
         // std::cout << "mma swizzle\n"
         //           << "mts[0]: " << in_layout->mts(ord[0]) << "\tnts[0]: " << in_layout->nts(ord[0]) << "\tdtsize: " << dtsize << "\n"
         //           << "per_phase_: " << per_phase_[layout] << "\n"

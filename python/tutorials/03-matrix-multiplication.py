@@ -5,8 +5,11 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
+        # triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
+
         # triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
-        # triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=2, num_warps=8),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
+        # triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
         # triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 64,  'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
         # triton.Config({'BLOCK_SIZE_M': 64 , 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
         # triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
@@ -16,7 +19,8 @@ import triton.language as tl
         # triton.Config({'BLOCK_SIZE_M': 64 , 'BLOCK_SIZE_N': 32 , 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=1, num_warps=2),
         # triton.Config({'BLOCK_SIZE_M': 32 , 'BLOCK_SIZE_N': 64 , 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
 
-        triton.Config({'BLOCK_SIZE_M': 16 , 'BLOCK_SIZE_N': 16 , 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 1}, num_stages=1, num_warps=1),
+        # triton.Config({'BLOCK_SIZE_M': 128 , 'BLOCK_SIZE_N': 128 , 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=4),
+        # triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64 , 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=1, num_warps=4),
     ],
     key=['M', 'N', 'K'],
 )
@@ -39,8 +43,15 @@ def matmul_kernel(
     GROUP_SIZE_M: tl.constexpr,
     ACTIVATION: tl.constexpr,
  ):
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n 
+    group_id = pid // num_pid_in_group 
+    first_pid_m = group_id * GROUP_SIZE_M 
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M) 
+    pid_m = first_pid_m + (pid % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
 
     offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
@@ -62,7 +73,7 @@ def matmul_kernel(
 
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
-    # c = accumulator.to(tl.float16)
+    # c = accumulator.to(tl.bfloat16)
     c = accumulator
 
     # -----------------------------------------------------------
@@ -70,8 +81,8 @@ def matmul_kernel(
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
-    # c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    tl.store(c_ptrs, c)
+    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    tl.store(c_ptrs, c, mask=c_mask)
 
 
 # we can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`
@@ -88,7 +99,7 @@ def leaky_relu(x):
 def matmul(a, b, activation=None):
     # checks constraints
     assert a.shape[1] == b.shape[0], "incompatible dimensions"
-    assert a.is_contiguous(), "matrix A must be contiguous"
+    # assert a.is_contiguous(), "matrix A must be contiguous"
     # assert b.is_contiguous(), "matrix B must be contiguous"
     M, K = a.shape
     K, N = b.shape
@@ -99,8 +110,7 @@ def matmul(a, b, activation=None):
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (
-        triton.cdiv(M, META['BLOCK_SIZE_M']), 
-        triton.cdiv(N, META['BLOCK_SIZE_N']),
+        triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
     )
     pgm = matmul_kernel[grid](
         a, b, c,
@@ -120,19 +130,26 @@ def matmul(a, b, activation=None):
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS)
 
 torch.manual_seed(0)
-a = torch.randn((32, 64), device='cuda', dtype=torch.float32)
-b = torch.randn((32, 64), device='cuda', dtype=torch.float32)
+a = torch.randn((8192, 8192), device='cuda', dtype=torch.float32)
+b = torch.randn((8192, 8192), device='cuda', dtype=torch.float32)
+# a = a.t()
 b = b.t()
 triton_output, pgm = matmul(a, b, activation=None)
 torch_output = torch.matmul(a, b)
-# torch.set_printoptions(threshold=10_000)
-# print(triton_output)
-# print(torch_output)
-print(f"triton_output={triton_output}")
-print(f"torch_output={torch_output}")
+# # torch.set_printoptions(threshold=10_000)
+# # print(triton_output)
+# # print(torch_output)
+# print(f"triton_output={triton_output}")
+# print(f"torch_output={torch_output}")
 if triton.testing.allclose(triton_output, torch_output):
     print("✅ Triton and Torch match")
 else:
     print("❌ Triton and Torch differ")
 
 # print(pgm.get_sass())
+torch_ms, _, _ = triton.testing.do_bench(lambda : torch.matmul(a, b), warmup=100, rep=500)
+triton_ms, _, _ = triton.testing.do_bench(lambda : matmul(a, b), warmup=100, rep=500)
+
+
+print(triton_ms)
+print(torch_ms)
