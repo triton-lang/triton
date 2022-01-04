@@ -305,7 +305,7 @@ void generator::visit_launch_inst(ir::launch_inst *launch) {
                                            ArrayType::get(builder_->getInt32Ty(), 3),
                                            ArrayType::get(builder_->getInt32Ty(), 3),
                                            builder_->getInt32Ty()};
-  FunctionType* get_param_ty = FunctionType::get(builder_->getInt64Ty(), get_param_arg_tys, false);
+  FunctionType* get_param_ty = FunctionType::get(PointerType::get(builder_->getInt8Ty(), 0), get_param_arg_tys, false);
   Function* get_param_buffer = Function::Create(get_param_ty, Function::ExternalLinkage, "cudaGetParameterBufferV2", mod_);
   AllocaInst* grid = builder_->CreateAlloca(get_param_arg_tys[1]);
   AllocaInst* block = builder_->CreateAlloca(get_param_arg_tys[2]);
@@ -319,13 +319,25 @@ void generator::visit_launch_inst(ir::launch_inst *launch) {
   builder_->CreateStore(num_warps, builder_->CreateGEP(block, {_0, _0}));
   builder_->CreateStore(builder_->getInt32(1), builder_->CreateGEP(block, {_0, _1}));
   builder_->CreateStore(builder_->getInt32(1), builder_->CreateGEP(block, {_0, _2}));
-  Value* callee = ConstantExpr::getCast(Instruction::BitCast, fns_[fn], get_param_arg_tys[0]);
+  Function* called_fn = fns_[fn];
+  Value* callee = ConstantExpr::getCast(Instruction::BitCast, called_fn, get_param_arg_tys[0]);
   Value* arg_ptr = builder_->CreateCall(get_param_buffer, {callee, builder_->CreateLoad(grid), builder_->CreateLoad(block), builder_->getInt32(0)});
   // forwrd-declare cudaLaunchDeviceV2
-  std::vector<Type*> launch_device_arg_tys = {builder_->getInt64Ty(), builder_->getInt64Ty()};
+  std::vector<Type*> launch_device_arg_tys = {get_param_ty->getReturnType(), builder_->getInt64Ty()};
   FunctionType* launch_device_ty = FunctionType::get(builder_->getInt32Ty(), launch_device_arg_tys, false);
   Function* launch_device = Function::Create(launch_device_ty, Function::ExternalLinkage, "cudaLaunchDeviceV2", mod_);
   // TODO: add branch
+  Value* base_arg_ptr = arg_ptr;
+  unsigned addr_space = base_arg_ptr->getType()->getPointerAddressSpace();
+  for(ir::value* arg: launch->get_values()){
+    Value* curr_arg = vals_[arg][{}];
+    Type* curr_arg_ty = curr_arg->getType();
+    Value* curr_arg_ptr = builder_->CreateBitCast(base_arg_ptr, curr_arg_ty->getPointerTo(addr_space));
+    builder_->CreateStore(curr_arg, curr_arg_ptr);
+    unsigned arg_size = curr_arg_ty->isPointerTy() ? 8 : curr_arg_ty->getPrimitiveSizeInBits() / 8;
+    base_arg_ptr->print(llvm::outs());
+    base_arg_ptr = builder_->CreateGEP(base_arg_ptr, {builder_->getInt32(arg_size)});
+  }
   builder_->CreateCall(launch_device, {arg_ptr, builder_->getInt64(0)});
 
 }
