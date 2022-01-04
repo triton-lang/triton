@@ -1,3 +1,4 @@
+isort
 numpy
 pytest
 scipy >= 1.7.1

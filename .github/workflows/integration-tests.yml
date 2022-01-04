@@ -30,6 +30,9 @@ jobs:
           cd python
           pip3 install -e .
 
+      - name: Check imports
+        run: "isort -c ./python || echo '::error title=Imports not sorted::Please run \"isort ./python\"'"
+
       - name: Unit tests
         run: |
           cd python/test/unit
