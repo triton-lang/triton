@@ -21,8 +21,8 @@
 # SOFTWARE.
 
 import argparse
-import subprocess
 import re
+import subprocess
 
 FLINE_RE = re.compile(r'\s*/\*\w{4}\*/\s*([^;]*;)\s*/\* 0x(\w{16}) \*/\s*')
 SLINE_RE = re.compile(r'\s*/\* 0x(\w{16}) \*/\s*')

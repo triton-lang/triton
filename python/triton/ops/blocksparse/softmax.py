@@ -1,6 +1,7 @@
-import triton.language as tl
-import triton
 import torch
+
+import triton
+import triton.language as tl
 
 
 def num_warps(n):
@@ -33,10 +34,10 @@ def _forward(
     check = rbn < size
     rbmn = tl.where(check, rbn, size - 1)
     # block id and column id
-    blockid  = tl.load(LUT + offset + rbmn * 4 + 0)
+    blockid = tl.load(LUT + offset + rbmn * 4 + 0)
     columnid = tl.load(LUT + offset + rbmn * 4 + 1)
-    rowid    = tl.load(LUT + offset + rbmn * 4 + 2)
-    headid   = tl.load(LUT + offset + rbmn * 4 + 3)
+    rowid = tl.load(LUT + offset + rbmn * 4 + 2)
+    headid = tl.load(LUT + offset + rbmn * 4 + 3)
     # pointers to X
     px = X + pidz * stride_zx + blockid * BLOCK * BLOCK + rxm * BLOCK + rxn
     x = tl.load(px, mask=check, other=-float('inf'))
@@ -64,7 +65,7 @@ def _forward(
             attn_m = tl.where(attn_m == 0, -float('inf'), 0.)
         x = x + attn_m
     # apply causal mask
-    is_in_upper_triangle = columnid*BLOCK + rxn > rowid*BLOCK + rxm 
+    is_in_upper_triangle = columnid * BLOCK + rxn > rowid * BLOCK + rxm
     x = x + tl.where(is_in_upper_triangle & is_causal, -float('inf'), 0.)
     # computation
     x = tl.softmax(x)
@@ -127,9 +128,9 @@ class _softmax(torch.autograd.Function):
 
     @staticmethod
     def forward(
-        ctx, x, scale, rpe, 
-        key_padding_mask, attn_mask, 
-        kp_mask_mode, attn_mask_mode, 
+        ctx, x, scale, rpe,
+        key_padding_mask, attn_mask,
+        kp_mask_mode, attn_mask_mode,
         is_causal,
         spdims, block, lut, maxlut
     ):
@@ -161,15 +162,15 @@ class _softmax(torch.autograd.Function):
         # run kernel
         M = x.shape[0]
         grid = [spdims[0] * spdims[1] * block, M]
-        _forward[grid](x, scale, lut, rpe, key_padding_mask, attn_mask, is_causal, maxlut, x.stride(0),\
-                       stride_zrpe, stride_hrpe, stride_srpe, stride_zkpm, stride_zattnm, 
-                       BLOCK           = block,
-                       APPLY_SCALE     = apply_scale, 
-                       APPLY_RPE       = apply_rpe,
-                       APPLY_KP_MASK   = apply_kp_mask, 
-                       APPLY_ATTN_MASK = apply_attn_mask, 
-                       KP_MASK_MUL     = (kp_mask_mode == 'mul'),
-                       ATTN_MASK_MUL   = (attn_mask_mode == 'mul'))
+        _forward[grid](x, scale, lut, rpe, key_padding_mask, attn_mask, is_causal, maxlut, x.stride(0),
+                       stride_zrpe, stride_hrpe, stride_srpe, stride_zkpm, stride_zattnm,
+                       BLOCK=block,
+                       APPLY_SCALE=apply_scale,
+                       APPLY_RPE=apply_rpe,
+                       APPLY_KP_MASK=apply_kp_mask,
+                       APPLY_ATTN_MASK=apply_attn_mask,
+                       KP_MASK_MUL=(kp_mask_mode == 'mul'),
+                       ATTN_MASK_MUL=(attn_mask_mode == 'mul'))
         # save to context
         ctx.mark_dirty(x)
         ctx.save_for_backward(x, lut)
@@ -211,10 +212,10 @@ class softmax:
         self.lut_cache = dict()
 
     def __call__(
-        self, x, scale=1., rpe=None, 
-        key_padding_mask=None, attn_mask=None, 
+        self, x, scale=1., rpe=None,
+        key_padding_mask=None, attn_mask=None,
         key_padding_mask_mode='add', attn_mask_mode='add',
-        is_causal = False
+        is_causal=False
     ):
         if rpe is not None and rpe.dtype != x.dtype:
             raise ValueError('relative position embedding must be %s' % x.dtype)
@@ -224,11 +225,11 @@ class softmax:
             raise ValueError('Key padding mask must be %s' % x.dtype)
         lut, maxlut = self.make_lut(x.device)
         x = _softmax.apply(
-            x, scale, rpe, 
-            key_padding_mask, attn_mask, 
-            key_padding_mask_mode, attn_mask_mode, 
+            x, scale, rpe,
+            key_padding_mask, attn_mask,
+            key_padding_mask_mode, attn_mask_mode,
             is_causal,
-            self.spdims, self.block, 
+            self.spdims, self.block,
             lut, maxlut
         )
         return x

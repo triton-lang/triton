@@ -1,9 +1,11 @@
-import torch
-import triton
-import pytest
 import subprocess
-import triton.language as tl
+
 import numpy as np
+import pytest
+import torch
+
+import triton
+import triton.language as tl
 
 
 def get_p2p_matrix():
