@@ -65,7 +65,7 @@ def builtin(fn):
     def wrapper(*args, **kwargs):
         if '_builder' not in kwargs or \
            kwargs['_builder'] is None:
-           raise ValueError("Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)")
+            raise ValueError("Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)")
         return fn(*args, **kwargs)
 
     return wrapper
@@ -111,6 +111,7 @@ class pointer_dtype:
     def __str__(self):
         return f'pointer<{self.element_ty}>'
 
+
 # scalar types
 int1 = dtype(ir.type.get_int1)
 int8 = dtype(ir.type.get_int8)
@@ -134,20 +135,34 @@ class block:
     @staticmethod
     def _init_dtype(ir_type):
         # primitive type
-        if ir_type.is_int1(): return int1
-        if ir_type.is_int8(): return int8
-        if ir_type.is_int16(): return int16
-        if ir_type.is_int32(): return int32
-        if ir_type.is_int64(): return int64
-        if ir_type.is_uint8(): return uint8
-        if ir_type.is_uint16(): return uint16
-        if ir_type.is_uint32(): return uint32
-        if ir_type.is_uint64(): return uint64
-        if ir_type.is_fp8(): return float8
-        if ir_type.is_fp16(): return float16
-        if ir_type.is_bf16(): return bfloat16
-        if ir_type.is_fp32(): return float32
-        if ir_type.is_fp64(): return float64
+        if ir_type.is_int1():
+            return int1
+        if ir_type.is_int8():
+            return int8
+        if ir_type.is_int16():
+            return int16
+        if ir_type.is_int32():
+            return int32
+        if ir_type.is_int64():
+            return int64
+        if ir_type.is_uint8():
+            return uint8
+        if ir_type.is_uint16():
+            return uint16
+        if ir_type.is_uint32():
+            return uint32
+        if ir_type.is_uint64():
+            return uint64
+        if ir_type.is_fp8():
+            return float8
+        if ir_type.is_fp16():
+            return float16
+        if ir_type.is_bf16():
+            return bfloat16
+        if ir_type.is_fp32():
+            return float32
+        if ir_type.is_fp64():
+            return float64
         # pointer type
         if ir_type.is_ptr():
             element_ty = block._init_dtype(ir_type.element)
@@ -331,27 +346,27 @@ class constexpr:
 
     def __rsub__(self, other):
         return other.value - self.value
-    
+
     def __mul__(self, other):
         return self.value * other.value
 
     def __rmul__(self, other):
         return other.value * self.value
-    
+
     def __truediv__(self, other):
         return self.value / other.value
-    
+
     def __rtruediv__(self, other):
         return other.value / self.value
-    
+
     def __floordiv__(self, other):
         return self.value // other.value
-    
+
     def __rfloordiv__(self, other):
         return other.value // self.value
 
     #
-    
+
     def __gt__(self, other):
         return self.value > other.value
 
@@ -360,25 +375,25 @@ class constexpr:
 
     def __ge__(self, other):
         return self.value >= other.value
-    
+
     def __rge__(self, other):
         return other.value >= self.value
-    
+
     def __lt__(self, other):
         return self.value < other.value
 
     def __rlt__(self, other):
         return other.value < self.value
-    
+
     def __le__(self, other):
         return self.value <= other.value
-    
+
     def __rle__(self, other):
         return other.value <= self.value
-    
+
     def __eq__(self, other):
         return self.value == other.value
-    
+
     def __ne__(self, other):
         return self.value != other.value
 
@@ -488,6 +503,7 @@ def broadcast_to(input, shape, _builder=None):
     :type shape: Tuple[int]
     """
     return frontend.broadcast_to(input, shape, _builder)
+
 
 @builtin
 def cat(input, other, _builder=None):
@@ -600,9 +616,10 @@ def _add_atomic_docstr(name):
     """
         func.__doc__ = docstr.format(name=name)
         return func
-    
+
     return _decorator
-    
+
+
 @builtin
 @_add_atomic_docstr("compare-and-swap")
 def atomic_cas(pointer, cmp, val, _builder=None):
@@ -613,6 +630,7 @@ def atomic_cas(pointer, cmp, val, _builder=None):
 @_add_atomic_docstr("exchange")
 def atomic_xchg(pointer, val, mask=None, _builder=None):
     return frontend.atomic_xchg(pointer, val, mask, _builder)
+
 
 @builtin
 @_add_atomic_docstr("add")
@@ -683,6 +701,7 @@ def where(condition, x, y, _builder=None):
 def umulhi(x, y, _builder=None):
     return frontend.umulhi(x, y, _builder)
 
+
 def _add_math_1arg_docstr(name):
 
     def _decorator(func):
@@ -694,23 +713,27 @@ def _add_math_1arg_docstr(name):
     """
         func.__doc__ = docstr.format(name=name)
         return func
-    
+
     return _decorator
+
 
 @builtin
 @_add_math_1arg_docstr("exponential")
 def exp(x, _builder=None):
     return frontend.exp(x, _builder)
 
+
 @builtin
 @_add_math_1arg_docstr("natural logarithm")
 def log(x, _builder=None):
     return frontend.log(x, _builder)
 
+
 @builtin
 @_add_math_1arg_docstr("cosine")
 def cos(x, _builder=None):
     return frontend.cos(x, _builder)
+
 
 @builtin
 @_add_math_1arg_docstr("sine")
@@ -739,8 +762,9 @@ def _add_reduction_docstr(name):
     """
         func.__doc__ = docstr.format(name=name)
         return func
-    
+
     return _decorator
+
 
 @builtin
 @_add_reduction_docstr("maximum")
@@ -758,6 +782,7 @@ def min(input, axis, _builder=None):
 @_add_reduction_docstr("sum")
 def sum(input, axis, _builder=None):
     return frontend.sum(input, axis, _builder)
+
 
 @builtin
 @_add_reduction_docstr("xor sum")
@@ -806,6 +831,7 @@ def max_contiguous(input, value, _builder=None):
 @triton.jit
 def abs(x):
     return where(x >= 0, x, -x)
+
 
 @triton.jit
 def cdiv(x, div):
@@ -871,6 +897,7 @@ def ravel(x):
     """
     return triton.language.reshape(x, [x.type.numel])
 
+
 @triton.jit
 def swizzle2d(i, j, size_i, size_j, size_g):
     """
@@ -888,16 +915,16 @@ def swizzle2d(i, j, size_i, size_j, size_g):
      [9, 11, 13, 15]]
     """
     # "unrolled index in array"
-    ij = i*size_j + j
+    ij = i * size_j + j
     # number of elements in `size_g` groups
     # of `size_j` columns
     size_gj = size_g * size_j
     # index of the group in which (i,j) is
-    group_id = ij // size_gj 
+    group_id = ij // size_gj
     # row-index of the first element of this group
     off_i = group_id * size_g
     # last group may have fewer rows
-    size_g = minimum(size_i - off_i, size_g) 
+    size_g = minimum(size_i - off_i, size_g)
     # new row and column indices
     new_i = off_i + (ij % size_g)
     new_j = (ij % size_gj) // size_g

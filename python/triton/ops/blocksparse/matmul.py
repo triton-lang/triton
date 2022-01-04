@@ -11,16 +11,17 @@ import torch
 # --------------------------------------------------------
 # ********************************************************
 
+
 @triton.heuristics({
     'EVEN_K': lambda nargs: nargs['K'] % nargs['TILE_K'] == 0,
 })
 @triton.jit
 def _sdd_kernel(
-    A, B, C, 
-    stride_za, stride_ha, stride_ma, stride_ak, 
-    stride_zb, stride_hb, stride_bk, stride_nb, 
-    stride_zc, stride_hc, stride_mc, stride_nc, 
-    K, grid_offset, lut, 
+    A, B, C,
+    stride_za, stride_ha, stride_ma, stride_ak,
+    stride_zb, stride_hb, stride_bk, stride_nb,
+    stride_zc, stride_hc, stride_mc, stride_nc,
+    K, grid_offset, lut,
     TILE_M: tl.constexpr, TILE_N: tl.constexpr, TILE_K: tl.constexpr,
     BLOCK: tl.constexpr, EVEN_K: tl.constexpr
 ):
@@ -30,25 +31,25 @@ def _sdd_kernel(
     block_id = tl.program_id(1) + grid_offset
     lut += block_id * 3
     # offsets
-    off_z = tl.program_id(2) # batch
-    off_h = tl.load(lut + 0) # head
-    
+    off_z = tl.program_id(2)  # batch
+    off_h = tl.load(lut + 0)  # head
+
     # initialize pointers to A
     start_am = tl.load(lut + 1)
     offs_am = start_am * BLOCK + (tl.arange(0, TILE_M) % BLOCK)
     offs_ak = tl.arange(0, TILE_K)
-    a_ptrs = A + (off_z * stride_za \
-                + off_h * stride_ha \
-                + offs_am[:, None] * stride_ma \
-                + offs_ak[None, :] * stride_ak)
+    a_ptrs = A + (off_z * stride_za
+                  + off_h * stride_ha
+                  + offs_am[:, None] * stride_ma
+                  + offs_ak[None, :] * stride_ak)
     # initialize pointers to B
     start_bn = tl.load(lut + 2)
     offs_bn = start_bn * BLOCK + (tl.arange(0, TILE_N) % BLOCK)
     offs_bk = tl.arange(0, TILE_K)
-    b_ptrs = B + (off_z * stride_zb \
-                + off_h * stride_hb \
-                + offs_bn[None, :] * stride_nb \
-                + offs_bk[:, None] * stride_bk)
+    b_ptrs = B + (off_z * stride_zb
+                  + off_h * stride_hb
+                  + offs_bn[None, :] * stride_nb
+                  + offs_bk[:, None] * stride_bk)
     ## ---------------- ##
     ##    Inner Loop    ##
     ## ---------------- ##
@@ -69,13 +70,14 @@ def _sdd_kernel(
     ## ---------------- ##
     offs_cm = tl.arange(0, TILE_M) % BLOCK
     offs_cn = tl.arange(0, TILE_N) % BLOCK
-    pc = C + (off_z * stride_zc \
-            + block_id * stride_hc \
-            + offs_cm[:, None] * stride_mc \
-            + offs_cn[None, :] * stride_nc)
+    pc = C + (off_z * stride_zc
+              + block_id * stride_hc
+              + offs_cm[:, None] * stride_mc
+              + offs_cn[None, :] * stride_nc)
     tl.store(pc, c, mask=True)
 
-def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, widths, out = None):
+
+def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, widths, out=None):
     # (A * B)^T = B^T * A^T
     if trans_c:
         a, b = b, a
@@ -99,7 +101,7 @@ def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, widths, out 
         b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
         c.stride(0), c.stride(1), c.stride(2), c.stride(3),
         Ka, 0, lut,
-        TILE_M = block, TILE_N = block, TILE_K = 32, BLOCK = block, num_stages=4,
+        TILE_M=block, TILE_N=block, TILE_K=32, BLOCK=block, num_stages=4,
         num_warps=4,
     )
     return c
@@ -115,50 +117,52 @@ def sdd_lut(layout, block, device):
 # This operation uses a look-up table that contains pre-computed pointer increments
 # in order to minimize computations in the inner loop of the matmul kernel.
 # -----------------------------
+
+
 @triton.jit
 def _dsd_kernel(
-    A, B, C, 
-    stride_az, stride_ha, stride_am, stride_ak, 
-    stride_zb, stride_hb, stride_bk, stride_bn, 
-    stride_zc, stride_hc, stride_cm, stride_cn, 
-    DS0, DS1, lut, 
+    A, B, C,
+    stride_az, stride_ha, stride_am, stride_ak,
+    stride_zb, stride_hb, stride_bk, stride_bn,
+    stride_zc, stride_hc, stride_cm, stride_cn,
+    DS0, DS1, lut,
     TILE_M: tl.constexpr, TILE_N: tl.constexpr, TILE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr, BLOCK: tl.constexpr
 ):
     #------------#
     #- Prologue -#
     #------------#
-    pid_m   = tl.program_id(0)
-    pid_n   = tl.program_id(1)
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
     num_pid_m = tl.num_programs(0)
     num_pid_n = tl.num_programs(1)
     pid_n, pid_m = tl.swizzle2d(pid_n, pid_m, num_pid_n, num_pid_m, GROUP_SIZE_M)
-    pidz   = tl.program_id(2)
+    pidz = tl.program_id(2)
     header = lut + pid_n * 4
     offset = tl.load(header + 0)
-    K      = tl.load(header + 1)
+    K = tl.load(header + 1)
     column = tl.load(header + 2)
-    off_h  = tl.load(header + 3)
-    pinc   = lut + offset
+    off_h = tl.load(header + 3)
+    pinc = lut + offset
     # initialize pointers to A (sparse)
-    block_id   = tl.load(pinc + 1)
-    block_id   = tl.multiple_of(block_id, 8)  # compiler hint
+    block_id = tl.load(pinc + 1)
+    block_id = tl.multiple_of(block_id, 8)  # compiler hint
     offs_am = tl.arange(0, TILE_M)
     offs_ak = tl.arange(0, TILE_K)
     pa = A + pidz * stride_az \
-            + block_id * stride_ha \
-            + offs_am[:, None] * stride_am \
-            + offs_ak[None, :] * stride_ak
+        + block_id * stride_ha \
+        + offs_am[:, None] * stride_am \
+        + offs_ak[None, :] * stride_ak
     # initialize pointers to B (dense)
-    offs_bn  = pid_m*TILE_N + tl.arange(0, TILE_N)
+    offs_bn = pid_m * TILE_N + tl.arange(0, TILE_N)
     offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn % DS0, TILE_N), TILE_N)
     start_bk = tl.load(pinc)
     start_bk = tl.multiple_of(start_bk, 8)  # compiler hint
-    offs_bk  = start_bk + tl.arange(0, TILE_K)
+    offs_bk = start_bk + tl.arange(0, TILE_K)
     pb = B + pidz * stride_zb \
-            + off_h * stride_hb \
-            + offs_bn[None, :] * stride_bn \
-            + offs_bk[:, None] * stride_bk
+        + off_h * stride_hb \
+        + offs_bn[None, :] * stride_bn \
+        + offs_bk[:, None] * stride_bk
     ## ---------------- ##
     ##    Inner Loop    ##
     ## ---------------- ##
@@ -173,7 +177,7 @@ def _dsd_kernel(
         b = tl.load(pb, mask=offs_bn[None, :] < DS0)
         acc += tl.dot(a, b)
         pa += inc_a
-        pb += inc_b*stride_bk
+        pb += inc_b * stride_bk
         pinc += 2
         inc_a = tl.load(pinc + 1)
         inc_a = tl.multiple_of(inc_a, 8)
@@ -181,15 +185,16 @@ def _dsd_kernel(
         inc_b = tl.multiple_of(inc_b, 8)
     c = acc.to(C.dtype.element_ty)
     # initialize pointers to C
-    offs_cm = column*TILE_M + tl.arange(0, TILE_M)
-    offs_cn = pid_m*TILE_N + tl.arange(0, TILE_N)
+    offs_cm = column * TILE_M + tl.arange(0, TILE_M)
+    offs_cn = pid_m * TILE_N + tl.arange(0, TILE_N)
     pc = C + off_h * stride_hc \
-            + pidz * stride_zc \
-            + offs_cm[:, None] * stride_cm \
-            + offs_cn[None, :] * stride_cn
-    tl.store(pc, c, mask = offs_cn[None, :] < DS0)
+        + pidz * stride_zc \
+        + offs_cm[:, None] * stride_cm \
+        + offs_cn[None, :] * stride_cn
+    tl.store(pc, c, mask=offs_cn[None, :] < DS0)
 
-def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out = None):
+
+def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=None):
     # shapes / dtypes
     AS1 = block * spdims[2 if trans_a else 1]
     BS0 = b.size(0)

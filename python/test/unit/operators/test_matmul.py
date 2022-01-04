@@ -80,11 +80,11 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     K = BLOCK_K * SPLIT_K if K is None else K
     # allocate/transpose inputs
     DTYPE = {"float16": torch.float16, "float32": torch.float32}[DTYPE]
-    a = .1*torch.randn((K, M) if AT else (M, K), device="cuda", dtype=DTYPE)
-    b = .1*torch.randn((N, K) if BT else (K, N), device="cuda", dtype=DTYPE)
+    a = .1 * torch.randn((K, M) if AT else (M, K), device="cuda", dtype=DTYPE)
+    b = .1 * torch.randn((N, K) if BT else (K, N), device="cuda", dtype=DTYPE)
     a = a.t() if AT else a
     b = b.t() if BT else b
     # run test
     th_c = torch.matmul(a, b)
-    tt_c = triton.testing.catch_oor(lambda : triton.ops.matmul(a, b), pytest)
+    tt_c = triton.testing.catch_oor(lambda: triton.ops.matmul(a, b), pytest)
     triton.testing.assert_almost_equal(th_c, tt_c)

@@ -8,6 +8,7 @@ import pytest
 
 tmpdir = ".tmp"
 
+
 @triton.jit
 def function_1(i):
     i = i + 1
@@ -20,17 +21,20 @@ def function_2(i):
     i = i + 1
     return i
 
+
 @triton.jit
 def kernel(X, i, BLOCK: tl.constexpr):
     i = i + 1
     i = function_1(i)
     tl.store(X, i)
 
+
 @triton.jit(do_not_specialize=["i"])
 def kernel_nospec(X, i, BLOCK: tl.constexpr):
     i = i + 1
     i = function_1(i)
     tl.store(X, i)
+
 
 def apply_src_change(target, old, new):
     delattr(kernel.fn, 'hash')
@@ -42,28 +46,34 @@ def apply_src_change(target, old, new):
     target.src = target.src.replace(new, old)
     return ret
 
+
 def test_nochange():
     baseline = kernel.cache_key
     updated = apply_src_change(kernel, 'i + 1', 'i + 1')
     assert baseline == updated
+
 
 def test_toplevel_change():
     baseline = kernel.cache_key
     updated = apply_src_change(kernel, 'i + 1', 'i + 2')
     assert baseline != updated
 
+
 def test_nested1_change():
     baseline = kernel.cache_key
     updated = apply_src_change(function_1, 'i + 1', 'i + 2')
     assert baseline != updated
+
 
 def reset_tmp_dir():
     os.environ["TRITON_CACHE_DIR"] = tmpdir
     if os.path.exists(tmpdir):
         shutil.rmtree(tmpdir)
 
+
 def test_reuse():
     counter = 0
+
     def inc_counter(key, binary, repr):
         nonlocal counter
         counter += 1
@@ -73,11 +83,12 @@ def test_reuse():
     for i in range(10):
         kernel[(1,)](x, 1, BLOCK=1024)
     assert counter == 1
-    
+
 
 @pytest.mark.parametrize('mode', ['enable', 'disable'])
 def test_specialize(mode):
     counter = 0
+
     def inc_counter(key, binary, repr):
         nonlocal counter
         counter += 1
