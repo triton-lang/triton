@@ -1,7 +1,6 @@
 #pragma once
 
-#include <map>
-#include <vector>
+#include <list>
 
 namespace triton {
 
@@ -22,8 +21,7 @@ struct fncmp {
 class inliner {
 public:
   inliner() {}
-  void do_inline(ir::function* fn, ir::call_inst* callsite, ir::builder& builder,
-                 std::map<ir::function *, std::vector<ir::call_inst *>, triton::codegen::transform::fncmp> &callsites);
+  void do_inline(ir::function* fn, ir::call_inst* callsite, ir::builder& builder, std::list<ir::call_inst*>& callsites);
   void run(ir::module &mod);
 };
 

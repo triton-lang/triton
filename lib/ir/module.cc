@@ -160,8 +160,9 @@ const std::string& module::get_name() {
 /* functions */
 function *module::get_or_insert_function(const std::string &name, function_type *ty) {
   function *&fn = (function*&)symbols_[name];
-  if(fn == nullptr)
-    return fn = function::create(ty, global_value::external, name, this);
+  if(fn == nullptr){
+    fn = function::create(ty, global_value::external, name, this);
+  }
   return fn;
 }
 

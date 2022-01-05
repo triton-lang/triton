@@ -50,11 +50,9 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(ir::module &ir, llvm::LLVMC
   codegen::transform::membar barriers(&liveness, &layouts, &allocation, &prefetch_s, target);
   codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target, num_warps);
   // run passes
-  ir.print(std::cout);
   inliner.run(ir);
   dce.run(ir);
-  ir.print(std::cout);
-  exit(1);
+
   peephole.run(ir);
   dce.run(ir);
   pipeline.run(ir);

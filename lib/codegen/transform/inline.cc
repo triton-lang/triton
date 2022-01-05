@@ -15,14 +15,13 @@ bool fncmp::operator()(ir::function* x, ir::function* y) const {
 };
 
 void inliner::do_inline(ir::function* fn, ir::call_inst* callsite, ir::builder& builder,
-                        std::map<ir::function*, std::vector<ir::call_inst*>, fncmp>& callsites){
+                        std::list<ir::call_inst*>& callsites){
   ir::basic_block* parent_block = callsite->get_parent();
   ir::function* parent_fn = parent_block->get_parent();
    // the parent block is split into block A and block B:
   //   - block A (`new_blocks[0]`) is the entry block of the inlined function
   //   - block B (`exit`) resumes execution of the parent function
   ir::basic_block* entry = parent_block->split_before(callsite, fn->get_name());
-  return;
   ir::basic_block* exit = entry->get_successors()[0];
   std::vector<ir::basic_block*> new_blocks = {entry};
   for(size_t i = 1; i < fn->blocks().size(); i++){
@@ -32,7 +31,10 @@ void inliner::do_inline(ir::function* fn, ir::call_inst* callsite, ir::builder& 
    new_blocks.push_back(ir::basic_block::create(ctx, name, parent_fn));
   }
   // a phi node holds the return values of the inlined function
-  builder.set_insert_point(exit->get_first_non_phi());
+  if(exit->get_inst_list().empty())
+    builder.set_insert_point(exit);
+  else
+    builder.set_insert_point(exit->get_first_non_phi());
   ir::phi_node* exit_val = builder.create_phi(fn->get_fn_type()->get_return_ty(), 0);
   callsite->replace_all_uses_with(exit_val);
   callsite->erase_from_parent();
@@ -67,7 +69,8 @@ void inliner::do_inline(ir::function* fn, ir::call_inst* callsite, ir::builder& 
         if(auto arg_op = dynamic_cast<ir::argument*>(op))
           new_inst->set_operand(k, arg_map.at(arg_op));
         if(auto inst_op = dynamic_cast<ir::instruction*>(op))
-          new_inst->set_operand(k, inst_map.at(inst_op));
+          if(inst_map.find(inst_op) != inst_map.end())
+            new_inst->set_operand(k, inst_map.at(inst_op));
       }
        // `ret` instruction is a special case:
       // instead of returning we need to branch to after the function call
@@ -76,8 +79,6 @@ void inliner::do_inline(ir::function* fn, ir::call_inst* callsite, ir::builder& 
           exit_val->add_incoming(ret_val, new_block);
         new_inst = ir::branch_inst::create(exit);
       }
-      if(ir::call_inst* call = dynamic_cast<ir::call_inst*>(new_inst))
-        callsites[call->get_fn()].push_back(call);
       inst_map[old_inst] = new_inst;
       builder.insert(new_inst);
     }
@@ -89,23 +90,37 @@ void inliner::do_inline(ir::function* fn, ir::call_inst* callsite, ir::builder& 
 }
 
 void inliner::run(ir::module &mod) {
+
   // gather all call sites
-  std::map<ir::function*, std::vector<ir::call_inst*>, fncmp> callsites;
-  for(ir::function* fn: mod.get_function_list())
-  for(ir::basic_block* block: fn->blocks())
-  for(ir::instruction* instr: block->get_inst_list())
-  if(ir::call_inst* call = dynamic_cast<ir::call_inst*>(instr)){
-    callsites[call->get_fn()].push_back(call);
+  while(true){
+    std::map<ir::function*, size_t> counts;
+    for(ir::function* fn: mod.get_function_list())
+      counts[fn] = 0;
+
+    std::list<ir::call_inst*> callsites;
+    for(ir::function* fn: mod.get_function_list()){
+      for(ir::basic_block* block: fn->blocks())
+      for(ir::instruction* instr: block->get_inst_list())
+      if(ir::call_inst* call = dynamic_cast<ir::call_inst*>(instr)){
+        callsites.push_back(call);
+        counts[call->get_fn()] += 1;
+      }
+    }
+
+    for(auto& count: counts){
+      if(count.first != mod.get_function_list().front() &&
+         count.second == 0)
+        count.first->get_parent()->remove_function(count.first);
+    }
+
+    if(callsites.empty())
+      break;
+
+    for(ir::call_inst* call: callsites)
+      do_inline(call->get_fn(), call, mod.get_builder(), callsites);
   }
 
 
-  // replace call sites with function bodies, one by one
-  for(auto& x: callsites){
-    ir::function* fn = x.first;
-    for(ir::call_inst* callsite: x.second)
-      do_inline(fn, callsite, mod.get_builder(), callsites);
-    mod.remove_function(fn);
-  }
 }
 
 }

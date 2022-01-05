@@ -527,17 +527,18 @@ class CodeGenerator(ast.NodeVisitor):
             attributes = dict()
             constexprs = [i for i, arg in enumerate(args) if isinstance(arg, triton.language.constexpr)]
             constants = {i: args[i] for i in constexprs}
-            arg_types = [arg.handle.type for i, arg in enumerate(args) if i not in constexprs]
-            ret_type  = _triton.ir.type.get_void(self.builder.context)
-            prototype = _triton.ir.type.make_function(ret_type, arg_types)
-            gscope = sys.modules[fn.fn.__module__].__dict__
-            generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module)
-            generator.visit(fn.parse())
             # generate call
             args = [arg for i, arg in enumerate(args) if i not in constexprs]
             arg_vals = [arg.handle for arg in args]
-            arg_tys = [arg.type for arg in arg_vals]
-            fn_name = mangle_fn(fn.__name__, arg_tys, constants)
+            arg_types = [arg.handle.type for i, arg in enumerate(args) if i not in constexprs]
+            fn_name = mangle_fn(fn.__name__, arg_types, constants)
+            # generate function def if necessary
+            if not self.module.has_function(fn_name):
+                ret_type  = _triton.ir.type.get_void(self.builder.context)
+                prototype = _triton.ir.type.make_function(ret_type, arg_types)
+                gscope = sys.modules[fn.fn.__module__].__dict__
+                generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module)
+                generator.visit(fn.parse())
             symbol = self.module.get_function(fn_name)
             ret = self.builder.call(symbol, arg_vals)
             return ret

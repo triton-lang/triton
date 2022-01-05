@@ -38,7 +38,7 @@ void basic_block::append_instruction(ir::instruction* i){
 basic_block* basic_block::split_before(ir::instruction* loc, const std::string& name) {
   basic_block* ret = basic_block::create(ctx_, name, parent_, this);
   ret->set_name(get_name());
-  set_name(name);
+  set_name("after_" + name);
 
   // splice instruction list
   auto loc_it = std::find(inst_list_.begin(), inst_list_.end(), loc);

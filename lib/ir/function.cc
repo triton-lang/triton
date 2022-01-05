@@ -35,6 +35,8 @@ function::function(function_type *ty, linkage_types_t linkage,
                    const std::string &name, module *parent)
     : global_object(ty, 0, linkage, name), parent_(parent), fn_ty_(ty) {
   unsigned num_params = fn_ty_->get_num_params();
+  if(parent)
+    parent->push_function(this);
   // skip if no parameter
   if(num_params == 0)
     return;
@@ -44,8 +46,6 @@ function::function(function_type *ty, linkage_types_t linkage,
     type *param_ty = fn_ty_->get_param_ty(i);
     args_[i] = argument::create(param_ty, "", this, i);
   }
-  if(parent)
-    parent->push_function(this);
 }
 
 /* basic block */
