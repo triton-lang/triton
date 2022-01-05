@@ -22,6 +22,7 @@ void inliner::do_inline(ir::function* fn, ir::call_inst* callsite, ir::builder& 
   //   - block A (`new_blocks[0]`) is the entry block of the inlined function
   //   - block B (`exit`) resumes execution of the parent function
   ir::basic_block* entry = parent_block->split_before(callsite, fn->get_name());
+  return;
   ir::basic_block* exit = entry->get_successors()[0];
   std::vector<ir::basic_block*> new_blocks = {entry};
   for(size_t i = 1; i < fn->blocks().size(); i++){
@@ -96,6 +97,7 @@ void inliner::run(ir::module &mod) {
   if(ir::call_inst* call = dynamic_cast<ir::call_inst*>(instr)){
     callsites[call->get_fn()].push_back(call);
   }
+
 
   // replace call sites with function bodies, one by one
   for(auto& x: callsites){

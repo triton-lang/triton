@@ -122,12 +122,14 @@ class CodeGenerator(ast.NodeVisitor):
         ret = self.visit(node.value)
         if ret is None:
             return self.builder.ret_void()
-        # if self.inline:
-        #   return ret
         if isinstance(ret, _triton.ir.value):
             ret = self.builder.ret(ret)
             return ret
-        return self.builder.ret(ret.handle)
+        if isinstance(ret, triton.language.block):
+            ret = ret.handle
+        if isinstance(ret, triton.language.constexpr):
+            ret = triton.language.core._to_ir(ret, self.builder)
+        return self.builder.ret(ret)
 
     def visit_FunctionDef(self, node):
         arg_names, kwarg_names = self.visit(node.args)
@@ -512,6 +514,8 @@ class CodeGenerator(ast.NodeVisitor):
             # handle type annotation
             # NOTE: for now, only `constexpr` annotation is supported
             for i, arg in enumerate(args):
+                if isinstance(arg, triton.language.constexpr):
+                    continue
                 if i in fn.annotations:
                     assert fn.annotations[i] is triton.language.constexpr
                     if not isinstance(args[i], fn.annotations[i]):
@@ -521,15 +525,16 @@ class CodeGenerator(ast.NodeVisitor):
                     args[i] = triton.language.block(new_arg)
             # generate function def
             attributes = dict()
-            constants = {i: args[i] for i in fn.constexprs}
-            arg_types = [arg.handle.type for i, arg in enumerate(args) if i not in fn.constexprs]
+            constexprs = [i for i, arg in enumerate(args) if isinstance(arg, triton.language.constexpr)]
+            constants = {i: args[i] for i in constexprs}
+            arg_types = [arg.handle.type for i, arg in enumerate(args) if i not in constexprs]
             ret_type  = _triton.ir.type.get_void(self.builder.context)
             prototype = _triton.ir.type.make_function(ret_type, arg_types)
             gscope = sys.modules[fn.fn.__module__].__dict__
             generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module)
             generator.visit(fn.parse())
             # generate call
-            args = [arg for i, arg in enumerate(args) if i not in fn.constexprs]
+            args = [arg for i, arg in enumerate(args) if i not in constexprs]
             arg_vals = [arg.handle for arg in args]
             arg_tys = [arg.type for arg in arg_vals]
             fn_name = mangle_fn(fn.__name__, arg_tys, constants)
