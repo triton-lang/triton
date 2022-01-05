@@ -121,6 +121,8 @@ public:
   const attr_map_t &attrs() { return attrs_; }
   bool has_attr(unsigned arg_id) const { return  attrs_.find(arg_id) != attrs_.end(); }
   std::set<attribute> get_attributes(const argument* arg) { return attrs_[arg->get_arg_no() + 1]; }
+  void set_is_kernel(bool new_val) { is_kernel_ = new_val; }
+  bool get_is_kernel() { return is_kernel_; }
 
   void print(std::ostream &os);
 
@@ -134,6 +136,7 @@ private:
   args_t args_;
   blocks_t blocks_;
   attr_map_t attrs_;
+  bool is_kernel_;
 };
 
 }

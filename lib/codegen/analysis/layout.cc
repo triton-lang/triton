@@ -608,6 +608,8 @@ void layouts::run(ir::module &mod) {
   // create temporaries
   size_t id = values_.size();
   ir::for_each_instruction(mod, [this, &id](ir::instruction* i) {
+//    std::cout << "layout: " << std::endl;
+//    i->print(std::cout);
     if(auto *red = dynamic_cast<ir::reduce_inst*>(i)) {
       id++;
       ir::value *arg = red->get_operand(0);

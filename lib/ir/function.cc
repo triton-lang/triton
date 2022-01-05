@@ -33,7 +33,7 @@ void argument::accept(visitor *v) {
 /* function */
 function::function(function_type *ty, linkage_types_t linkage,
                    const std::string &name, module *parent)
-    : global_object(ty, 0, linkage, name), parent_(parent), fn_ty_(ty) {
+    : global_object(ty, 0, linkage, name), parent_(parent), fn_ty_(ty), is_kernel_(false) {
   unsigned num_params = fn_ty_->get_num_params();
   if(parent)
     parent->push_function(this);

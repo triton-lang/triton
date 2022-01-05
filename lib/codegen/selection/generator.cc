@@ -275,7 +275,8 @@ void generator::visit_value(ir::value* v) {
     builder_->SetInsertPoint(&*current->getFirstNonPHI());
   // visit user
   if(auto *usr = dynamic_cast<ir::user*>(v)){
-    usr->accept(this);
+    if(!dynamic_cast<ir::function*>(usr))
+      usr->accept(this);
   }
   // revert insert point
   if(phi && !current->empty() && current->getFirstNonPHI())
@@ -333,15 +334,22 @@ void generator::visit_launch_inst(ir::launch_inst *launch) {
                                                 builder_->getInt64(0));
   builder_->CreateCondBr(do_not_launch, launch_done_bb, launch_bb);
   builder_->SetInsertPoint(launch_bb);
-  Value* base_arg_ptr = arg_ptr;
-  unsigned addr_space = base_arg_ptr->getType()->getPointerAddressSpace();
+  unsigned addr_space = arg_ptr->getType()->getPointerAddressSpace();
+  unsigned off = 0;
+  unsigned last_size = 0;
   for(ir::value* arg: launch->get_values()){
     Value* curr_arg = vals_[arg][{}];
     Type* curr_arg_ty = curr_arg->getType();
-    Value* curr_arg_ptr = builder_->CreateBitCast(base_arg_ptr, curr_arg_ty->getPointerTo(addr_space));
+    // handle struct alignment
+    off += last_size;
+    unsigned size = curr_arg_ty->isPointerTy() ? 8 : curr_arg_ty->getPrimitiveSizeInBits() / 8;
+    off = (off + size - 1) / size * size;
+    // get pointer to current arg
+    Value* curr_arg_ptr = builder_->CreateGEP(arg_ptr, builder_->getInt32(off));
+    curr_arg_ptr = builder_->CreateBitCast(curr_arg_ptr, curr_arg_ty->getPointerTo(addr_space));
+    // store arg
     builder_->CreateStore(curr_arg, curr_arg_ptr);
-    unsigned arg_size = curr_arg_ty->isPointerTy() ? 8 : curr_arg_ty->getPrimitiveSizeInBits() / 8;
-    base_arg_ptr = builder_->CreateGEP(base_arg_ptr, {builder_->getInt32(arg_size)});
+    last_size = size;
   }
   builder_->CreateCall(launch_device, {arg_ptr, builder_->getInt64(0)});
   builder_->CreateBr(launch_done_bb);
@@ -379,6 +387,7 @@ void generator::visit_binary_operator(ir::binary_operator*x) {
       default: throw std::runtime_error("unreachable switch");
     }
   };
+//  x->print(std::cout);
   for(indices_t idx: idxs_.at(x)){
     Value *lhs = vals_[x->get_operand(0)][idx];
     Value *rhs = vals_[x->get_operand(1)][idx];
@@ -2795,10 +2804,7 @@ void generator::visit_alloc_const(ir::alloc_const *alloc) {
 }
 
 
-void generator::visit_function(ir::function* fn) {
-  if(fns_.find(fn) != fns_.end())
-    return;
-  LLVMContext &ctx = builder_->getContext();
+void generator::forward_declare(ir::function* fn){
   FunctionType *fn_ty = (FunctionType*)cvt(fn->get_fn_type());
   if(!tgt_->is_gpu()){
     Type *fn_ret_ty = fn_ty->getReturnType();
@@ -2812,6 +2818,17 @@ void generator::visit_function(ir::function* fn) {
   }
   Function *ret = Function::Create(fn_ty, Function::ExternalLinkage, fn->get_name(), mod_);
   fns_[fn] = ret;
+}
+
+void generator::visit_function(ir::function* fn) {
+  idxs_.clear();
+  vals_.clear();
+  seen_.clear();
+  LLVMContext &ctx = builder_->getContext();
+
+  Function* ret = fns_[fn];
+
+
   // set attributes
   for(auto attr_pair: fn->attrs()){
     unsigned id = attr_pair.first;
@@ -3068,10 +3085,12 @@ void generator::visit_layout_shared(analysis::shared_layout* layout) {
 }
 
 void generator::visit_basic_block(ir::basic_block * block) {
+
   BasicBlock *parent = bbs_[block];
   builder_->SetInsertPoint(parent);
-  for(ir::instruction *i: block->get_inst_list())
+  for(ir::instruction *i: block->get_inst_list()){
     visit_value(i);
+  }
   // Update ir bb -> llvm bb mapping
   bbs_[block] = builder_->GetInsertBlock();
 }
@@ -3260,12 +3279,6 @@ StructType* generator::packed_type(ir::value* i){
   assert(layout);
 }
 
-void generator::forward_declare(ir::call_inst* i){
-//  layouts_->get(i);
-//  std::vector<Type*> arg_tys;
-//  FunctionType* ty = FunctionType::get()
-}
-
 void generator::visit(ir::module &src, llvm::Module &dst) {
   mod_ = &dst;
   ctx_ = &dst.getContext();
@@ -3290,9 +3303,10 @@ void generator::visit(ir::module &src, llvm::Module &dst) {
 //    std::cout << "call??" << std::endl;
 //  }
   // visit functions
-  for(ir::function *fn: src.get_function_list()){
+  for(ir::function *fn: src.get_function_list())
+    forward_declare(fn);
+  for(ir::function *fn: src.get_function_list())
     visit_function(fn);
-  }
 }
 
 

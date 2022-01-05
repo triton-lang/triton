@@ -108,8 +108,7 @@ void inliner::run(ir::module &mod) {
     }
 
     for(auto& count: counts){
-      if(count.first != mod.get_function_list().front() &&
-         count.second == 0)
+      if(!count.first->get_is_kernel() && count.second == 0)
         count.first->get_parent()->remove_function(count.first);
     }
 

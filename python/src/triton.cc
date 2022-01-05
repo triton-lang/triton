@@ -763,6 +763,7 @@ void init_triton_ir(py::module &&m) {
   py::class_<ir::function>(m, "function")
       .def_property_readonly("args", &ir::function::args)
       .def_property_readonly("attrs", &ir::function::attrs)
+      .def("set_is_kernel", &ir::function::set_is_kernel)
       .def("add_attr", &ir::function::add_attr)
       .def("has_attr", &ir::function::has_attr)
       .def("get_attrs", &ir::function::get_attributes);

@@ -116,7 +116,7 @@ private:
   Type *cvt(ir::type *ty);
   llvm::Attribute cvt(ir::attribute attr);
   llvm::StructType* packed_type(ir::value* i);
-  void forward_declare(ir::call_inst* i);
+  void forward_declare(ir::function* fn);
 
 public:
   generator(analysis::axes *a_axes,

@@ -945,7 +945,7 @@ class LaunchProxy:
 @builtin
 def launch(fn, args, grid, num_warps=None, _builder=None):
     constants = {i: x for i, x in enumerate(args) if isinstance(x, constexpr)}
-    args = [_to_ir(x, builder=_builder) for x in args]
+    args = [_to_ir(x, builder=_builder) for x in args if not isinstance(x, constexpr)]
     grid = [_to_ir(x, builder=_builder) for x in grid]
     if num_warps is None:
         num_warps = _to_ir(4, builder=_builder)
