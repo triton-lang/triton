@@ -40,6 +40,8 @@ public:
   value *get_int1(bool val);
   value *get_int32(int32_t val);
   value *get_int64(int64_t val);
+  value *get_uint32(uint32_t val);
+  value *get_uint64(uint64_t val);
   value *get_float16(float val);
   value *get_float32(float val);
   value *get_range(int32_t lo, int32_t hi);
@@ -50,6 +52,10 @@ public:
   type *get_int16_ty();
   type *get_int32_ty();
   type *get_int64_ty();
+  type *get_uint8_ty();
+  type *get_uint16_ty();
+  type *get_uint32_ty();
+  type *get_uint64_ty();
   type *get_half_ty();
   type *get_float_ty();
   type *get_double_ty();
