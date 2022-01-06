@@ -1,7 +1,7 @@
-import triton
-from triton._C.libtriton.triton import ir
-from triton._C.libtriton.triton import frontend
 from functools import wraps
+
+import triton
+from triton._C.libtriton.triton import frontend, ir
 
 
 # convert block/dtype to ir values
@@ -65,7 +65,7 @@ def builtin(fn):
     def wrapper(*args, **kwargs):
         if '_builder' not in kwargs or \
            kwargs['_builder'] is None:
-           raise ValueError("Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)")
+            raise ValueError("Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)")
         return fn(*args, **kwargs)
 
     return wrapper
@@ -110,6 +110,7 @@ class pointer_dtype:
 
     def __str__(self):
         return f'pointer<{self.element_ty}>'
+
 
 # scalar types
 int1 = dtype(ir.type.get_int1)
@@ -331,27 +332,27 @@ class constexpr:
 
     def __rsub__(self, other):
         return other.value - self.value
-    
+
     def __mul__(self, other):
         return self.value * other.value
 
     def __rmul__(self, other):
         return other.value * self.value
-    
+
     def __truediv__(self, other):
         return self.value / other.value
-    
+
     def __rtruediv__(self, other):
         return other.value / self.value
-    
+
     def __floordiv__(self, other):
         return self.value // other.value
-    
+
     def __rfloordiv__(self, other):
         return other.value // self.value
 
     #
-    
+
     def __gt__(self, other):
         return self.value > other.value
 
@@ -360,25 +361,25 @@ class constexpr:
 
     def __ge__(self, other):
         return self.value >= other.value
-    
+
     def __rge__(self, other):
         return other.value >= self.value
-    
+
     def __lt__(self, other):
         return self.value < other.value
 
     def __rlt__(self, other):
         return other.value < self.value
-    
+
     def __le__(self, other):
         return self.value <= other.value
-    
+
     def __rle__(self, other):
         return other.value <= self.value
-    
+
     def __eq__(self, other):
         return self.value == other.value
-    
+
     def __ne__(self, other):
         return self.value != other.value
 
@@ -489,15 +490,16 @@ def broadcast_to(input, shape, _builder=None):
     """
     return frontend.broadcast_to(input, shape, _builder)
 
+
 @builtin
 def cat(input, other, _builder=None):
     """
     Concatenate the given blocks
 
     :param input: The first input block.
-    :type input: 
+    :type input:
     :param other: The second input block.
-    :type other: 
+    :type other:
     """
     return frontend.cat(input, other, _builder)
 
@@ -508,7 +510,7 @@ def reshape(input, shape, _builder=None):
     Tries to reshape the given block to a new shape.
 
     :param input: The input block.
-    :type input: 
+    :type input:
     :param shape: The desired shape.
     :type shape: Tuple[int]
 
@@ -546,7 +548,7 @@ def load(pointer, mask=None, other=None, cache_modifier="", volatile=False, _bui
     """
     Return a block of data whose values are, elementwise, loaded from memory at location defined by :code:`pointer`.
 
-    :code:`mask` and :code:`other` are implicitly broadcast to :code:`pointer.shape`. 
+    :code:`mask` and :code:`other` are implicitly broadcast to :code:`pointer.shape`.
 
     :code:`other` is implicitly typecast to :code:`pointer.dtype.element_ty`.
 
@@ -565,7 +567,7 @@ def load(pointer, mask=None, other=None, cache_modifier="", volatile=False, _bui
 @builtin
 def store(pointer, value, mask=None, _builder=None):
     """
-    Stores :code:`value` block of elements in memory, element-wise, at the memory locations specified by :code:`pointer`. 
+    Stores :code:`value` block of elements in memory, element-wise, at the memory locations specified by :code:`pointer`.
 
     :code:`value` is implicitly broadcast to :code:`pointer.shape` and typecast to :code:`pointer.dtype.element_ty`.
 
@@ -600,9 +602,10 @@ def _add_atomic_docstr(name):
     """
         func.__doc__ = docstr.format(name=name)
         return func
-    
+
     return _decorator
-    
+
+
 @builtin
 @_add_atomic_docstr("compare-and-swap")
 def atomic_cas(pointer, cmp, val, _builder=None):
@@ -613,6 +616,7 @@ def atomic_cas(pointer, cmp, val, _builder=None):
 @_add_atomic_docstr("exchange")
 def atomic_xchg(pointer, val, mask=None, _builder=None):
     return frontend.atomic_xchg(pointer, val, mask, _builder)
+
 
 @builtin
 @_add_atomic_docstr("add")
@@ -683,6 +687,7 @@ def where(condition, x, y, _builder=None):
 def umulhi(x, y, _builder=None):
     return frontend.umulhi(x, y, _builder)
 
+
 def _add_math_1arg_docstr(name):
 
     def _decorator(func):
@@ -694,23 +699,27 @@ def _add_math_1arg_docstr(name):
     """
         func.__doc__ = docstr.format(name=name)
         return func
-    
+
     return _decorator
+
 
 @builtin
 @_add_math_1arg_docstr("exponential")
 def exp(x, _builder=None):
     return frontend.exp(x, _builder)
 
+
 @builtin
 @_add_math_1arg_docstr("natural logarithm")
 def log(x, _builder=None):
     return frontend.log(x, _builder)
 
+
 @builtin
 @_add_math_1arg_docstr("cosine")
 def cos(x, _builder=None):
     return frontend.cos(x, _builder)
+
 
 @builtin
 @_add_math_1arg_docstr("sine")
@@ -739,8 +748,9 @@ def _add_reduction_docstr(name):
     """
         func.__doc__ = docstr.format(name=name)
         return func
-    
+
     return _decorator
+
 
 @builtin
 @_add_reduction_docstr("maximum")
@@ -758,6 +768,7 @@ def min(input, axis, _builder=None):
 @_add_reduction_docstr("sum")
 def sum(input, axis, _builder=None):
     return frontend.sum(input, axis, _builder)
+
 
 @builtin
 @_add_reduction_docstr("xor sum")
@@ -778,7 +789,7 @@ def debug_barrier(_builder=None):
 @builtin
 def multiple_of(input, value, _builder=None):
     """
-    Let the compiler knows that the values in :code:`input` are all multiples of :code:`value`. 
+    Let the compiler knows that the values in :code:`input` are all multiples of :code:`value`.
     """
     return frontend.multiple_of(input, value, _builder)
 
@@ -786,7 +797,7 @@ def multiple_of(input, value, _builder=None):
 @builtin
 def max_contiguous(input, value, _builder=None):
     """
-    Let the compiler knows that the `value` first values in :code:`input` are contiguous. 
+    Let the compiler knows that the `value` first values in :code:`input` are contiguous.
     """
     return frontend.max_contiguous(input, value, _builder)
 
@@ -794,7 +805,7 @@ def max_contiguous(input, value, _builder=None):
 @builtin
 def max_contiguous(input, value, _builder=None):
     """
-    Let the compiler knows that the `value` first values in :code:`input` are contiguous. 
+    Let the compiler knows that the `value` first values in :code:`input` are contiguous.
     """
     return frontend.max_contiguous(input, value, _builder)
 
@@ -806,6 +817,7 @@ def max_contiguous(input, value, _builder=None):
 @triton.jit
 def abs(x):
     return where(x >= 0, x, -x)
+
 
 @triton.jit
 def cdiv(x, div):
@@ -871,13 +883,14 @@ def ravel(x):
     """
     return triton.language.reshape(x, [x.type.numel])
 
+
 @triton.jit
 def swizzle2d(i, j, size_i, size_j, size_g):
     """
     transformes indices of a row-major size_i*size_j matrix into those
     of one where indices are row major for each group of size_j rows.
     For example, for size_i = size_j = 4 and size_g = 2, it will transform
-    [[0 , 1 , 2 , 3 ], 
+    [[0 , 1 , 2 , 3 ],
      [4 , 5 , 6 , 7 ],
      [8 , 9 , 10, 11],
      [12, 13, 14, 15]]
@@ -888,16 +901,16 @@ def swizzle2d(i, j, size_i, size_j, size_g):
      [9, 11, 13, 15]]
     """
     # "unrolled index in array"
-    ij = i*size_j + j
+    ij = i * size_j + j
     # number of elements in `size_g` groups
     # of `size_j` columns
     size_gj = size_g * size_j
     # index of the group in which (i,j) is
-    group_id = ij // size_gj 
+    group_id = ij // size_gj
     # row-index of the first element of this group
     off_i = group_id * size_g
     # last group may have fewer rows
-    size_g = minimum(size_i - off_i, size_g) 
+    size_g = minimum(size_i - off_i, size_g)
     # new row and column indices
     new_i = off_i + (ij % size_g)
     new_j = (ij % size_gj) // size_g
