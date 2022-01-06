@@ -685,7 +685,6 @@ void init_triton_ir(py::module &&m) {
       .def("is_bf16", &ir::type::is_bf16_ty)
       .def("is_fp32", &ir::type::is_fp32_ty)
       .def("is_fp64", &ir::type::is_fp64_ty)
-<<<<<<< HEAD
       .def("is_int1", [](ir::type *self) { return self->is_integer_ty(1, ir::signedness::SIGNED); })
       .def("is_int8", [](ir::type *self) { return self->is_integer_ty(8, ir::signedness::SIGNED); })
       .def("is_int16", [](ir::type *self) { return self->is_integer_ty(16, ir::signedness::SIGNED); })
@@ -695,17 +694,9 @@ void init_triton_ir(py::module &&m) {
       .def("is_uint16", [](ir::type *self) { return self->is_integer_ty(16, ir::signedness::UNSIGNED); })
       .def("is_uint32", [](ir::type *self) { return self->is_integer_ty(32, ir::signedness::UNSIGNED); })
       .def("is_uint64", [](ir::type *self) { return self->is_integer_ty(64, ir::signedness::UNSIGNED); })
-
-      .def("repr", &ir::type::repr)
-=======
-      .def("is_int1", [](ir::type *self) { return self->is_integer_ty(1); })
-      .def("is_int8", [](ir::type *self) { return self->is_integer_ty(8); })
-      .def("is_int16", [](ir::type *self) { return self->is_integer_ty(16); })
-      .def("is_int32", [](ir::type *self) { return self->is_integer_ty(32); })
-      .def("is_int64", [](ir::type *self) { return self->is_integer_ty(64); })
       .def("is_struct", &ir::type::is_struct_ty)
 
->>>>>>> more work
+      .def("repr", &ir::type::repr)
       .def_property_readonly("fp_mantissa_width", &ir::type::get_fp_mantissa_width)
       .def_property_readonly("scalar", &ir::type::get_scalar_ty)
       .def_property_readonly("context", &ir::type::get_context, ret::reference);

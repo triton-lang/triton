@@ -231,21 +231,25 @@ std::string ptx_to_cubin(const std::string& ptx, const std::string& ptxas, int c
   std::ifstream _cubin(_fbin, std::ios::binary );
   std::string cubin(std::istreambuf_iterator<char>(_cubin), {});
   _cubin.close();
-  unlink(_fsrc);
-  unlink(_flog);
-  unlink(_fbin);
   CUlinkState link_state;
-  dispatch::cuLinkCreate_v2(0, nullptr, nullptr, &link_state);
   // TODO: fix path
   // TODO: only add if necessary
+  CUjit_option options[1];
+   void* optionVals[1];
+   options[0] = CU_JIT_LTO;
+   optionVals[0] = (void*)0;
+  dispatch::cuLinkCreate_v2(0, options, optionVals, &link_state);
   dispatch::cuLinkAddFile_v2(link_state, CU_JIT_INPUT_LIBRARY, "/usr/local/cuda/lib64/libcudadevrt.a", 0, nullptr, nullptr);
-  dispatch::cuLinkAddData_v2(link_state, CU_JIT_INPUT_CUBIN, (void*)cubin.c_str(), cubin.size(), "", 0, nullptr, nullptr);
+  dispatch::cuLinkAddFile_v2(link_state, CU_JIT_INPUT_PTX, fsrc.c_str(), 0, nullptr, nullptr);
   size_t cubin_size;
   void* cubin_data;
   dispatch::cuLinkComplete(link_state, &cubin_data, &cubin_size);
   cubin = std::string((char*)cubin_data, cubin_size);
   dispatch::cuModuleLoadDataEx(&ret, cubin_data, 0, nullptr, nullptr);
   dispatch::cuLinkDestroy(link_state);
+  unlink(_fsrc);
+  unlink(_flog);
+  unlink(_fbin);
   return cubin;
 }
 

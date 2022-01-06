@@ -313,6 +313,15 @@ void generator::visit_launch_inst(ir::launch_inst *launch) {
   ConstantInt* _0 = builder_->getInt32(0);
   ConstantInt* _1 = builder_->getInt32(1);
   ConstantInt* _2 = builder_->getInt32(2);
+  // create basic block
+  BasicBlock* launch_done_bb = BasicBlock::Create(builder_->getContext(), "launch_done", builder_->GetInsertBlock()->getParent());
+  BasicBlock* launch_bb = BasicBlock::Create(builder_->getContext(), "launch", launch_done_bb->getParent(), launch_done_bb);
+  Value *tid = tgt_->get_local_id(mod_, *builder_, 0);
+  Value *is_first_thread = builder_->CreateICmpEQ(tid, i32(0));
+  builder_->CreateCondBr(is_first_thread, launch_bb, launch_done_bb);
+  builder_->SetInsertPoint(launch_bb);
+
+  //
   builder_->CreateStore(vals_[launch->get_grid()[0]][{}], builder_->CreateGEP(grid, {_0, _0}));
   builder_->CreateStore(vals_[launch->get_grid()[1]][{}], builder_->CreateGEP(grid, {_0, _1}));
   builder_->CreateStore(vals_[launch->get_grid()[2]][{}], builder_->CreateGEP(grid, {_0, _2}));
@@ -328,12 +337,12 @@ void generator::visit_launch_inst(ir::launch_inst *launch) {
   FunctionType* launch_device_ty = FunctionType::get(builder_->getInt32Ty(), launch_device_arg_tys, false);
   Function* launch_device = Function::Create(launch_device_ty, Function::ExternalLinkage, "cudaLaunchDeviceV2", mod_);
   // TODO: add branch
-  BasicBlock* launch_done_bb = BasicBlock::Create(builder_->getContext(), "launch_done", builder_->GetInsertBlock()->getParent());
-  BasicBlock* launch_bb = BasicBlock::Create(builder_->getContext(), "launch", launch_done_bb->getParent(), launch_done_bb);
   Value* do_not_launch = builder_->CreateICmpEQ(builder_->CreatePtrToInt(arg_ptr, builder_->getInt64Ty()),
                                                 builder_->getInt64(0));
-  builder_->CreateCondBr(do_not_launch, launch_done_bb, launch_bb);
-  builder_->SetInsertPoint(launch_bb);
+  BasicBlock* launch2_bb = BasicBlock::Create(builder_->getContext(), "launch2", launch_done_bb->getParent(), launch_done_bb);
+  builder_->CreateCondBr(do_not_launch, launch_done_bb, launch2_bb);
+  builder_->SetInsertPoint(launch2_bb);
+
   unsigned addr_space = arg_ptr->getType()->getPointerAddressSpace();
   unsigned off = 0;
   unsigned last_size = 0;
