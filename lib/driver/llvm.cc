@@ -20,7 +20,9 @@
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 #include <fstream>
-#include <unistd.h>
+#if __has_include(<unistd.h>)
+    #include <unistd.h>
+#endif
 #include <memory>
 #include <regex>
 #include "triton/driver/llvm.h"
@@ -165,10 +167,10 @@ std::string ptx_to_cubin(const std::string& ptx, int cc) {
     return "";
 
   // compile ptx with ptxas
-  char _fsrc[] = "/tmp/triton_k_XXXXXX";
-  char _flog[] = "/tmp/triton_l_XXXXXX";
-  mkstemp(_fsrc);
-  mkstemp(_flog);
+  char _fsrc[L_tmpnam];
+  char _flog[L_tmpnam];
+  std::tmpnam(_fsrc);
+  std::tmpnam(_flog);
   std::string fsrc = _fsrc;
   std::string flog = _flog;
   std::string fbin = fsrc + ".o";
@@ -202,10 +204,10 @@ CUmodule ptx_to_cumodule(const std::string& ptx, int cc) {
     // Use PTXAS via system call
     if(use_system_ptxas){
       // compile ptx with ptxas
-      char _fsrc[] = "/tmp/triton_k_XXXXXX";
-      char _flog[] = "/tmp/triton_l_XXXXXX";
-      mkstemp(_fsrc);
-      mkstemp(_flog);
+      char _fsrc[L_tmpnam];
+      char _flog[L_tmpnam];
+      std::tmpnam(_fsrc);
+      std::tmpnam(_flog);
       std::string fsrc = _fsrc;
       std::string flog = _flog;
       std::string fbin = fsrc + ".o";
@@ -232,8 +234,8 @@ CUmodule ptx_to_cumodule(const std::string& ptx, int cc) {
     CUjit_option opt[] = {CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER,
                           CU_JIT_INFO_LOG_BUFFER_SIZE_BYTES, CU_JIT_INFO_LOG_BUFFER,
                           CU_JIT_LOG_VERBOSE};
-    unsigned int errbufsize = 8192;
-    unsigned int logbufsize = 8192;
+    const unsigned int errbufsize = 8192;
+    const unsigned int logbufsize = 8192;
     char _err[errbufsize];
     char _log[logbufsize];
     void* optval[] = {(void*)(uintptr_t)errbufsize, (void*)_err, (void*)(uintptr_t)logbufsize, (void*)_log, (void*)1};
@@ -344,8 +346,8 @@ hipModule_t amdgpu_to_hipmodule(const std::string& path) {
   hipJitOption opt[] = {hipJitOptionErrorLogBufferSizeBytes, hipJitOptionErrorLogBuffer,
                             hipJitOptionInfoLogBufferSizeBytes, hipJitOptionInfoLogBuffer,
                             hipJitOptionLogVerbose};
-  unsigned int errbufsize = 8192;
-  unsigned int logbufsize = 8192;
+  const unsigned int errbufsize = 8192;
+  const unsigned int logbufsize = 8192;
   char _err[errbufsize];
   char _log[logbufsize];
   void* optval[] = {(void*)(uintptr_t)errbufsize,
