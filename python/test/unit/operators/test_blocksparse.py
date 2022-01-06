@@ -1,6 +1,7 @@
-import torch
-import triton
 import pytest
+import torch
+
+import triton
 
 
 @pytest.mark.parametrize("MODE", ["sdd", "dds", "dsd"])
@@ -71,7 +72,8 @@ def test_softmax(BLOCK, WIDTH, DTYPE):
     # torch result
     rx = triton.testing.mask_tensor(x, layout, BLOCK, value=float("-inf"))
     # broadcast at_mask to the same shape as rx
-    if is_causal: at_mask = torch.tril(at_mask)
+    if is_causal:
+        at_mask = torch.tril(at_mask)
     M = at_mask[None, None, :, :] + torch.zeros_like(rx)
     rx[M == 0] = float("-inf")
     # rx += kp_mask[:, None, None, :]

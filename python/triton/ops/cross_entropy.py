@@ -1,7 +1,9 @@
 import os
+
+import torch
+
 import triton
 import triton.language as tl
-import torch
 
 
 def next_power_of_2(n):

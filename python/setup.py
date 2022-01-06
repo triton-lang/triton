@@ -1,29 +1,28 @@
-import os
-import re
-import sys
-import sysconfig
-import platform
-import subprocess
 import distutils
-import glob
-import tempfile
-import shutil
-from distutils.version import LooseVersion
-from setuptools import setup, Extension, find_packages
-from setuptools.command.build_ext import build_ext
-from setuptools.command.test import test as TestCommand
 import distutils.spawn
-import urllib.request
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
 import tarfile
+import tempfile
+import urllib.request
+from distutils.version import LooseVersion
+
+from setuptools import Extension, setup
+from setuptools.command.build_ext import build_ext
+
 
 def get_llvm():
     # tries to find system LLVM
-    versions = ['-11.0', '-11', '-11-64'] 
+    versions = ['-11.0', '-11', '-11-64']
     supported = ['llvm-config{v}'.format(v=v) for v in versions]
     paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
     paths = [p for p in paths if p is not None]
     if paths:
-      return '', ''
+        return '', ''
     # download if nothing is installed
     name = 'clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04'
     dir = '/tmp'
@@ -32,7 +31,7 @@ def get_llvm():
     if not os.path.exists(llvm_library_dir):
         try:
             shutil.rmtree(os.path.join(dir, name))
-        except:
+        except Exception:
             pass
         url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-11.0.1/{name}.tar.xz".format(name=name)
         print('downloading and extracting ' + url + '...')
@@ -96,7 +95,7 @@ class CMakeBuild(build_ext):
             "-DLLVM_INCLUDE_DIRS=" + llvm_include_dir,
             "-DLLVM_LIBRARY_DIR=" + llvm_library_dir,
             #'-DPYTHON_EXECUTABLE=' + sys.executable,
-            #'-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
+            # '-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
             "-DTRITON_LLVM_BUILD_DIR=" + llvm_build_dir,
             "-DPYTHON_INCLUDE_DIRS=" + ";".join(python_include_dirs)
         ]
