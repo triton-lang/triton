@@ -16,9 +16,10 @@ You will learn about:
 # Custom GPU kernels for elementwise additions are educationally valuable but won't get you very far in practice.
 # Let us consider instead the case of a simple (numerically stabilized) softmax operation:
 
-import triton.language as tl
-import triton
 import torch
+
+import triton
+import triton.language as tl
 
 
 @torch.jit.script

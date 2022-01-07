@@ -1,4 +1,3 @@
-import triton.language as tl
 import subprocess
 import sys
 
@@ -7,6 +6,7 @@ import torch
 from numpy import record
 
 import triton
+import triton.language as tl
 
 #######################
 # Utilities

@@ -293,7 +293,7 @@ class block:
         dst_shape = []
         curr = 0
         for sl in slices:
-            if sl == None:
+            if sl is None:
                 dst_shape.append(1)
             elif sl == slice(None, None, None):
                 dst_shape.append(src_shape[curr])

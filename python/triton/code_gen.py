@@ -852,7 +852,7 @@ class Autotuner:
         else:
             config = self.configs[0]
         self.best_config = config
-        if config.pre_hook != None:
+        if config.pre_hook is not None:
             config.pre_hook(self.nargs)
         return self.kernel(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
 

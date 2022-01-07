@@ -94,7 +94,7 @@ class CMakeBuild(build_ext):
             "-DBUILD_PYTHON_MODULE=ON",
             "-DLLVM_INCLUDE_DIRS=" + llvm_include_dir,
             "-DLLVM_LIBRARY_DIR=" + llvm_library_dir,
-            #'-DPYTHON_EXECUTABLE=' + sys.executable,
+            # '-DPYTHON_EXECUTABLE=' + sys.executable,
             # '-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
             "-DTRITON_LLVM_BUILD_DIR=" + llvm_build_dir,
             "-DPYTHON_INCLUDE_DIRS=" + ";".join(python_include_dirs)
@@ -148,6 +148,8 @@ setup(
     ],
     extras_require={
         "tests": [
+            "autopep8",
+            "isort",
             "numpy",
             "pytest",
             "scipy>=1.7.1",
