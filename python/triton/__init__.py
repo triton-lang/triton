@@ -1,4 +1,4 @@
-# version
+"""isort:skip_file"""
 __version__ = '2.0.0'
 
 # TODO: torch needs to be imported first
