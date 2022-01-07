@@ -418,7 +418,7 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
     throw std::runtime_error("mma16816 data type not supported");
 
   // left-hand-side values
-  std::map<std::pair<unsigned, unsigned>, std::pair<Value*, Value*>> ha;
+  std::map<std::pair<unsigned, unsigned>, Value*> ha;
   std::map<std::pair<unsigned, unsigned>, Value*> hb;
 
   BasicBlock* CurrBB = builder_->GetInsertBlock();
@@ -452,7 +452,7 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
     // mat0, mat1 -> not-k (m/n)
     // mat2, mat3
 
-    // tune performance
+    // tune performance, this need to be synced with register_lds(..., hx, ...)
     Value *k_mat_arr  = (k_order == 1) ? s1 : s0;
     Value *nk_mat_arr = (k_order == 1) ? s0 : s1;
     mat_off[k_order^1] = add(mul(warp_off, i32(warp_off_stride)), 
@@ -528,17 +528,17 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
 
 
   // create mma & unpack result
-  auto call_mma = [&](unsigned m, unsigned n, unsigned K) {
+  auto call_mma = [&](unsigned m, unsigned n, unsigned k) {
       unsigned cols_per_thread = num_rep_m * 2;
       std::vector<size_t> idx = {
-        (m*2 + 0) + (n*2 + 0)*cols_per_thread,
-        (m*2 + 0) + (n*2 + 1)*cols_per_thread,
-        (m*2 + 1) + (n*2 + 0)*cols_per_thread,
-        (m*2 + 1) + (n*2 + 1)*cols_per_thread
+        (m + 0) + (n*2 + 0)*cols_per_thread,
+        (m + 0) + (n*2 + 1)*cols_per_thread,
+        (m + 1) + (n*2 + 0)*cols_per_thread,
+        (m + 1) + (n*2 + 1)*cols_per_thread
       };
       Value *nc = call(mma_ty, mma_fn, 
-                       {ha[{m, K}].first, ha[{m, K}].second, ha[{m, K + mat_shape_k}].first, ha[{m, K + mat_shape_k}].second,
-                        hb[{n, K}], hb[{n, K + mat_shape_k}],
+                       {ha[{m, k}], ha[{m+1, k}], ha[{m, k+1}], ha[{m+1, k+1}],
+                        hb[{n, k}], hb[{n, k+1}],
                         fc[idx[0]], fc[idx[1]], fc[idx[2]], fc[idx[3]]});
       fc[idx[0]] = extract_val(nc, std::vector<unsigned>{0});
       fc[idx[1]] = extract_val(nc, std::vector<unsigned>{1});
@@ -549,23 +549,13 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   ir::phi_node* phiA = dynamic_cast<ir::phi_node*>(A);
   ir::phi_node* phiB = dynamic_cast<ir::phi_node*>(B);
 
-  auto register_lds =
-    [&](decltype(ha)& vals, int m, int K, int inc, Value* val0, Value *val1, bool is_prefetch) {
-      if (K <= mat_shape_k && is_prefetch) {
-        ir::basic_block* inc_block = phiA->get_incoming_block(inc);
-        lazy_phi_incs_.push_back(std::make_tuple((PHINode*)vals[{m, K}].first, val0, inc_block));
-        lazy_phi_incs_.push_back(std::make_tuple((PHINode*)vals[{m, K}].second, val1, inc_block));
-      } else
-        vals[{m, K}] = {val0, val1};
-  };
-
   auto register_lds2 =
-    [&](decltype(hb)& vals, int m, int K, int inc, Value* val, bool is_prefetch) {
-      if (K <= mma_instr_k/2 && is_prefetch) {
+    [&](std::map<std::pair<unsigned, unsigned>, Value*>& vals, int n, int k, int inc, Value* val, bool is_prefetch) {
+      if (k <= 1 && is_prefetch) {
         ir::basic_block* inc_block = phiA->get_incoming_block(inc);
-        lazy_phi_incs_.push_back(std::make_tuple((PHINode*)vals[{m, K}], val, inc_block));
+        lazy_phi_incs_.push_back(std::make_tuple((PHINode*)vals[{n, k}], val, inc_block));
       } else
-        vals[{m, K}] = val;
+        vals[{n, k}] = val;
   };
 
   size_t dtsize_a = A->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
@@ -599,6 +589,7 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
     int s_mat_stride = mat_strides[order[1]];
     int s_mat_shape  = mat_shape[order[1]];
 
+    // rule: k must be the fast-changing axis
     std::string trans = k_order == order[0] ? "" : ".trans";
 
     // the offset (in byte) on the strided axis is a constant
@@ -620,70 +611,72 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
 
   auto load_a = [&](int m, int k, int inc, bool is_prefetch) {
       auto [ha0, ha1, ha2, ha3] = load_x4(
-          2*m, k/mat_shape_k, inc, is_prefetch, phiA, shared_pre_ptr_[layout_a], shared_next_ptr_[layout_a],
+          m, k, inc, is_prefetch, phiA, shared_pre_ptr_[layout_a], shared_next_ptr_[layout_a],
           off_a, ptrs_a, ord_a, /*k_order*/1, layout->wpt(0), shape_a, {mma_instr_m, mma_instr_k}, {mat_shape_m, mat_shape_k}, dtsize_a);
-      register_lds(ha, m, k, inc, ha0, ha1, is_prefetch);
-      register_lds(ha, m, k + mat_shape_k, inc, ha2, ha3, is_prefetch);
+      register_lds2(ha, m,   k,   inc, ha0, is_prefetch);
+      register_lds2(ha, m+1, k,   inc, ha1, is_prefetch);
+      register_lds2(ha, m,   k+1, inc, ha2, is_prefetch);
+      register_lds2(ha, m+1, k+1, inc, ha3, is_prefetch);
   };
 
-  auto load_b = [&](int n, int K, int inc, bool is_prefetch) {
+  auto load_b = [&](int n, int k, int inc, bool is_prefetch) {
       auto [hb0, hb1, hb2, hb3] = load_x4(
-        K/mat_shape_k, n, inc, is_prefetch, phiB, shared_pre_ptr_[layout_b], shared_next_ptr_[layout_b],
+        k, n, inc, is_prefetch, phiB, shared_pre_ptr_[layout_b], shared_next_ptr_[layout_b],
         off_b, ptrs_b, ord_b, /*k_order*/0, layout->wpt(1), shape_b, {mma_instr_k, mma_instr_n}, {mat_shape_k, mat_shape_n}, dtsize_b);
-      register_lds2(hb, n, K, inc, hb0, is_prefetch);
-      register_lds2(hb, n+1, K, inc, hb2, is_prefetch);
-      register_lds2(hb, n, K + mat_shape_k, inc, hb1, is_prefetch);
-      register_lds2(hb, n+1, K + mat_shape_k, inc, hb3, is_prefetch);
+      register_lds2(hb, n,   k,   inc, hb0, is_prefetch);
+      register_lds2(hb, n+1, k,   inc, hb2, is_prefetch);
+      register_lds2(hb, n,   k+1, inc, hb1, is_prefetch);
+      register_lds2(hb, n+1, k+1, inc, hb3, is_prefetch);
   };
 
   if (C->is_prefetched()) {
       // create phis
       builder_->SetInsertPoint(CurrBB->getFirstNonPHI());
       for(unsigned m = 0; m < num_rep_m; m++){
-        ha[{m, 0}].first = phi(phi_ty, 2);
-        ha[{m, 0}].second = phi(phi_ty, 2);
-        ha[{m, mat_shape_k}].first = phi(phi_ty, 2);
-        ha[{m, mat_shape_k}].second = phi(phi_ty, 2);
+        ha[{2*m, 0}]   = phi(phi_ty, 2);
+        ha[{2*m+1, 0}] = phi(phi_ty, 2);
+        ha[{2*m, 1}]   = phi(phi_ty, 2);
+        ha[{2*m+1, 1}] = phi(phi_ty, 2);
       }
       for(unsigned n = 0; n < num_rep_n; n+=2){
-        hb[{n, 0}] = phi(phi_ty, 2);
+        hb[{n, 0}]   = phi(phi_ty, 2);
         hb[{n+1, 0}] = phi(phi_ty, 2);
-        hb[{n, mat_shape_k}] = phi(phi_ty, 2);
-        hb[{n+1, mat_shape_k}] = phi(phi_ty, 2);
+        hb[{n, 1}]   = phi(phi_ty, 2);
+        hb[{n+1, 1}] = phi(phi_ty, 2);
       }
       // insert prefetched lds at the end of loop header
       builder_->SetInsertPoint(bbs_[phiA->get_incoming_block(0)]->getTerminator());
       for(unsigned m = 0; m < num_rep_m; m++)
-        load_a(m, 0, 0, true);
+        load_a(2*m, 0, 0, true);
       for(unsigned n = 0; n < num_rep_n; n+=2)
         load_b(n, 0, 0, true);
       // update accumulators
       builder_->SetInsertPoint(CurrBB);
-      for(unsigned K = 0; K < NK; K += mma_instr_k){
-        int NEXTK = (K + mma_instr_k) % NK;
+      for(unsigned k = 0; k < num_rep_k; ++k){ // stride of instr in mat is 2
+        int next_k = (k + 1) % num_rep_k;
         // prefetch A
         for(unsigned m = 0; m < num_rep_m; m++)
-          load_a(m, NEXTK, 1, true);
+          load_a(2*m, 2*next_k, 1, true);
         // prefetch B
         for(unsigned n = 0; n < num_rep_n; n+=2)
-          load_b(n, NEXTK, 1, true);
+          load_b(n, 2*next_k, 1, true);
         // tensor core ops
         for(unsigned m = 0; m < num_rep_m; m++)
         for(unsigned n = 0; n < num_rep_n; n++){
-          call_mma(m, n, K);
+          call_mma(2*m, n, 2*k);
         }
       }
   }
   else{
-      for(unsigned K = 0; K < NK; K += mma_instr_k)
-      for(unsigned m = 0; m < num_rep_m; m++)
-      for(unsigned n = 0; n < num_rep_n; n++){
-        if(ha.find({m, K}) == ha.end())
-          load_a(m, K, 0, false);
-        if(hb.find({n, K})==hb.end())
-          load_b(n, K, 0, false);
-        call_mma(m, n, K);
-      }
+    for (unsigned k = 0; k < num_rep_k; k++) {
+      for (unsigned m = 0; m < num_rep_m; m++)
+        load_a(2*m, 2*k, 0, /*is_prefetch*/false);
+      for (unsigned n = 0; n < num_rep_n; n+=2)
+        load_b(n,   2*k, 0, /*is_prefetch*/false);
+      for (unsigned m = 0; m < num_rep_m; m++)
+      for (unsigned n = 0; n < num_rep_n; n++)
+        call_mma(2*m, n, 2*k);
+    }
   }
   // write back
   unsigned i = 0;
