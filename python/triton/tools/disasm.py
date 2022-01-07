@@ -20,7 +20,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import argparse
 import re
 import subprocess
 
@@ -75,7 +74,7 @@ def extract(file_path, fun):
         # .headerflags: ...
         # /*0000*/ asmstr /*0x...*/
         #                 /*0x...*/
-        fname_match = FNAME_RE.match(line)
+
         # Looking for new function header (function: <name>)
         while FNAME_RE.match(line) is None:
             line_idx += 1

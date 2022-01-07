@@ -149,6 +149,7 @@ setup(
     extras_require={
         "tests": [
             "autopep8",
+            "flake8",
             "isort",
             "numpy",
             "pytest",

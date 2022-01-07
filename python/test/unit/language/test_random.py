@@ -2,7 +2,6 @@ import numpy as np
 import pytest
 import scipy.stats
 import torch
-from numpy.random import Philox
 
 import triton
 import triton.language as tl
