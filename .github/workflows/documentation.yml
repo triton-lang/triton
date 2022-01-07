@@ -25,7 +25,7 @@ jobs:
         run: |
           alias python='python3'
           cd python
-          pip3 install -e .
+          pip3 install -e '.[tutorials]'
 
       - name: Build docs
         run: |

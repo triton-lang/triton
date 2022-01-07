@@ -28,7 +28,7 @@ jobs:
         run: |
           alias python='python3'
           cd python
-          pip3 install -e .
+          pip3 install -e '.[tests]'
 
       - name: Unit tests
         run: |
@@ -44,4 +44,3 @@ jobs:
           pytest -vs .
           sudo nvidia-smi -i 0 -rgc
           sudo nvidia-smi -i 0 -rmc
-
