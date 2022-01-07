@@ -42,9 +42,8 @@ def _dropout(
         output_ptr,  # pointer to the output
         n_elements,  # number of elements in the `x` tensor
         p,  # probability that an element of `x` is changed to zero
-        **meta,
+        BLOCK_SIZE: tl.constexpr,
 ):
-    BLOCK_SIZE = meta['BLOCK_SIZE']
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -108,10 +107,9 @@ def _seeded_dropout(
         n_elements,
         p,
         seed,
-        **meta,
+        BLOCK_SIZE: tl.constexpr,
 ):
     # compute memory offsets of elements handled by this instance
-    BLOCK_SIZE = meta['BLOCK_SIZE']
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)

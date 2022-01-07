@@ -8,11 +8,19 @@ import torch
 import triton
 import triton.language as tl
 
+try:
+    # This is https://github.com/NVIDIA/apex, NOT the apex on PyPi, so it
+    # should not be added to extras_require in setup.py.
+    import apex
+    HAS_APEX = True
+except ModuleNotFoundError:
+    HAS_APEX = False
+
 
 # Forward Pass
 @triton.jit
-def _layer_norm_fwd_fused(X, Y, W, B, M, V, stride, N, eps, **META):
-    BLOCK_SIZE = META['BLOCK_SIZE']
+def _layer_norm_fwd_fused(X, Y, W, B, M, V, stride, N, eps,
+                          BLOCK_SIZE: tl.constexpr):
     # position of elements processed by this program
     row = tl.program_id(0)
     cols = tl.arange(0, BLOCK_SIZE)
@@ -42,11 +50,8 @@ def _layer_norm_fwd_fused(X, Y, W, B, M, V, stride, N, eps, **META):
 
 # Backward pass (DX + partial DW + partial DB)
 @triton.jit
-def _layer_norm_bwd_dx_fused(DX, DY, DW, DB, X, W, B, M, V, Lock,
-                             stride, N, eps,
-                             **META):
-    GROUP_SIZE_M = META['GROUP_SIZE_M']
-    BLOCK_SIZE_N = META['BLOCK_SIZE_N']
+def _layer_norm_bwd_dx_fused(DX, DY, DW, DB, X, W, B, M, V, Lock, stride, N, eps,
+                             GROUP_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr):
     # position of elements processed by this program
     row = tl.program_id(0)
     cols = tl.arange(0, BLOCK_SIZE_N)
@@ -102,15 +107,14 @@ def _layer_norm_bwd_dx_fused(DX, DY, DW, DB, X, W, B, M, V, Lock,
 
 
 @triton.jit
-def _layer_norm_bwd_dwdb(DW, DB, FINAL_DW, FINAL_DB, M, N, **meta):
+def _layer_norm_bwd_dwdb(DW, DB, FINAL_DW, FINAL_DB, M, N,
+                         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr):
     pid = tl.program_id(0)
-    BLOCK_SIZE_M = meta['BLOCK_SIZE_M']
-    BLOCK_SIZE_N = meta['BLOCK_SIZE_N']
     cols = pid * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     dw = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     db = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     for i in range(0, M, BLOCK_SIZE_M):
-        rows = i + tl.arange(0, meta['BLOCK_SIZE_M'])
+        rows = i + tl.arange(0, BLOCK_SIZE_M)
         mask = (rows[:, None] < M) & (cols[None, :] < N)
         offs = rows[:, None] * N + cols[None, :]
         dw += tl.load(DW + offs, mask=mask, other=0.)
@@ -216,8 +220,8 @@ def test_layer_norm(M, N, dtype, eps=1e-5, device='cuda'):
         x_names=['N'],
         x_vals=[512 * i for i in range(2, 32)],
         line_arg='provider',
-        line_vals=['triton', 'torch', 'apex'],
-        line_names=['Triton', 'Torch', 'Apex'],
+        line_vals=['triton', 'torch'] + (['apex'] if HAS_APEX else []),
+        line_names=['Triton', 'Torch'] + (['Apex'] if HAS_APEX else []),
         styles=[('blue', '-'), ('green', '-'), ('orange', '-')],
         ylabel='GB/s',
         plot_name='layer-norm-backward',
@@ -239,7 +243,6 @@ def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device='c
     if provider == 'torch':
         y_fwd = lambda: torch.nn.functional.layer_norm(x, w_shape, weight, bias, eps)
     if provider == 'apex':
-        import apex
         apex_layer_norm = apex.normalization.FusedLayerNorm(w_shape).to(x.device).to(x.dtype)
         y_fwd = lambda: apex_layer_norm(x)
     # forward pass
