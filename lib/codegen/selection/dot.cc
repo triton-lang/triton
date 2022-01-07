@@ -470,7 +470,10 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
     Value *mat_off[] = {nullptr, nullptr};
     // mat0, mat1 -> not-k (m/n)
     // mat2, mat3
-    Value *k_mat_arr = s1, *nk_mat_arr = s0;
+
+    // tune performance
+    Value *k_mat_arr  = (k_order == 1) ? s1 : s0;
+    Value *nk_mat_arr = (k_order == 1) ? s0 : s1;
     mat_off[k_order^1] = add(mul(warp_off, i32(warp_off_stride)), 
                              mul(nk_mat_arr, i32(nk_mat_arr_stride)));
     mat_off[k_order]   = k_mat_arr;
@@ -515,8 +518,8 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
 
   Value *phase_b = urem(udiv(c, i32(per_phase_b)), i32(max_phase_b));
   // | -> n (col-major)
-  // v (s0_0(0), | (stride: wpt(1)) | s0_1(1)  | *num_rep_n
-  // k  s1_0(2), |                  | s1_1(3)) | (stride in num of matrices(mat_stride_bn): wpt(1))
+  // v (s0_0(0), | (stride: wpt(1)) | s1_0(2)  | *num_rep_n
+  // k  s0_1(1), |                  | s1_1(3)) | (stride in num of matrices(mat_stride_bn): wpt(1))
   // -----------
   //   *num_rep_k (stride in num of matrices(mat_stride_bk): 2)
   int num_ptr_b = is_b_row ? num_rep_n : num_rep_k;
@@ -694,8 +697,8 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
       Value *hb3 = extract_val(hbb, std::vector<unsigned>{3});
       // auto [hb0, hb1, hb2, hb3] = load_x4(k, n, inc, is_prefetch);
       register_lds2(hb, n, K, inc, hb0, is_prefetch);
-      register_lds2(hb, n+1, K, inc, hb1, is_prefetch);
-      register_lds2(hb, n, K + mat_shape_k, inc, hb2, is_prefetch);
+      register_lds2(hb, n+1, K, inc, hb2, is_prefetch);
+      register_lds2(hb, n, K + mat_shape_k, inc, hb1, is_prefetch);
       register_lds2(hb, n+1, K + mat_shape_k, inc, hb3, is_prefetch);
   };
 
