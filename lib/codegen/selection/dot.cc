@@ -516,31 +516,10 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   Value *phase_b = urem(udiv(c, i32(per_phase_b)), i32(max_phase_b));
   // | -> n (col-major)
   // v (s0_0(0), | (stride: wpt(1)) | s0_1(1)  | *num_rep_n
-  // k  s1_0(2), |    *num_rep_n    | s1_1(3)) | (stride in num of matrices(mat_stride_bn): wpt(1))
+  // k  s1_0(2), |                  | s1_1(3)) | (stride in num of matrices(mat_stride_bn): wpt(1))
   // -----------
   //   *num_rep_k (stride in num of matrices(mat_stride_bk): 2)
-  int mat_stride_bk = 2;
-  int mat_stride_bn = layout->wpt(1);
-  // we need pointers on the fast-changing axis
   int num_ptr_b = is_b_row ? num_rep_n : num_rep_k;
-  int mat_stride_bptr = is_b_row ? mat_stride_bn : mat_stride_bk;
-  // phsical mat idx (before swizzling)
-  int mat_shape_b0 = is_b_row ? mat_shape_n : mat_shape_k;
-  int mat_shape_b1 = is_b_row ? mat_shape_k : mat_shape_n;
-
-  Value *mat_off_bk = s1;
-  Value *mat_off_bn = add(mul(s0, i32(layout->wpt(1))), warp_n);
-  Value *mat_off_b0 = is_b_row ? mat_off_bn : mat_off_bk;
-
-  Value *off_bn  = mul(mat_off_bn, i32(mat_shape_n));
-  Value *off_bk  = mul(mat_off_bk, i32(mat_shape_k));
-  Value* off_b1 = add(c, is_b_row ? off_bk : off_bn);
-  // std::vector<Value*> off_b(num_ptr_b);
-  // for(int i = 0; i < num_ptr_b; i++){
-  //   Value *mat_off_b0i = add(mat_off_b0, i32(i*mat_stride_bptr));
-  //   mat_off_b0i = xor_(mat_off_b0i, phase_b); // swizzle
-  //   off_b[i] = add(mul(mat_off_b0i, i32(mat_shape_b0)), mul(off_b1, i32(stride_b1)));
-  // }
   std::vector<Value*> off_b = compute_offs(warp_n, layout->wpt(1), ord_b, /*k_order*/0, 
                                            shape_b, {mat_shape_k, mat_shape_n}, num_ptr_b, 
                                            per_phase_b, max_phase_b);
@@ -608,33 +587,83 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   size_t dtsize_a = A->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
   size_t dtsize_b = B->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
 
-  auto load_a = [&](int m, int K, int inc, bool is_prefetch) {
-      int offidx = (is_a_row ? K/mma_instr_k : m) % num_ptr_a;
-      Value* ptra;
-      if(K == 0 && is_prefetch){
-        if(inc == 0)
-          ptra = bit_cast(gep(shared_pre_ptr_[layout_a], off_a[offidx]), smem_ptr_ty);
-        else
-          ptra = bit_cast(gep(shared_next_ptr_[layout_a], off_a[offidx]), smem_ptr_ty);
-      } else
-        ptra = ptrs_a[offidx];
-      int step_am = is_a_row ? m : 0;
-      int step_ak = is_a_row ? 0 : K;
-      InlineAsm *ld_a0_fn = InlineAsm::get(ldmatrix_ty, "ldmatrix.sync.aligned.m8n8.x4" + a_trans + ".shared.b16 "
-                                                "{$0, $1, $2, $3}, [$4 + " +
-                                                std::to_string(
-                                                dtsize_a*step_am*mma_instr_m*layout->wpt(0)*stride_a_m + 
-                                                dtsize_a*step_ak*stride_a_k) + "];",
-                                                "=r,=r,=r,=r,r", true);
-      Value *haa = call(ldmatrix_ty, ld_a0_fn, {ptra});
-      if(K == 0 && inc == 1 && is_prefetch)
-          prefetch_latch_to_bb_[phiA->get_incoming_value(1)].push_back(haa);
-      Value *ha0 = extract_val(haa, std::vector<unsigned>{0});
-      Value *ha1 = extract_val(haa, std::vector<unsigned>{1});
-      Value *ha2 = extract_val(haa, std::vector<unsigned>{2});
-      Value *ha3 = extract_val(haa, std::vector<unsigned>{3});
-      register_lds(ha, m, K, inc, ha0, ha1, is_prefetch);
-      register_lds(ha, m, K + mat_shape_k, inc, ha2, ha3, is_prefetch);
+  // TODO: move some logic to smem_iter
+  auto load_x4 = [&](int mat0, int mat1, int inc, bool is_prefetch, ir::phi_node *phin,
+                     Value *pre_ptr, Value *next_ptr, std::vector<Value*> &off, std::vector<Value*> &ptrs,
+                     std::vector<int> order, int k_order, int wpt,
+                     std::vector<unsigned> tile_shape, std::vector<int> mat_shape, int dtsize) -> std::tuple<Value*, Value*, Value*, Value*> {
+    int mat_idx[2] = {mat0, mat1};
+    int k = mat_idx[k_order];
+
+    assert(mat0 % 2 == 0 && mat1 % 2 == 0 && "smem matrix load must be aligned");
+
+    int ptr_idx = mat_idx[order[0]] / 2; // 2 is the shape of loaded matrix (?)
+    Value *ptr = nullptr;
+    if (k == 0 && is_prefetch) {
+      if (inc == 0)
+        ptr = bit_cast(gep(pre_ptr, off[ptr_idx]), smem_ptr_ty);
+      else
+        ptr = bit_cast(gep(next_ptr, off[ptr_idx]), smem_ptr_ty);
+    } else
+      ptr = ptrs[ptr_idx];
+
+    // TODO: reuse this (with compute_offs) by moving the logic to smem_iter
+    int warp_off_stride = (k_order == 1) ? 2 : 1; // 2 for a(mk), 1 for b(kn)
+    int mat_strides[2];
+    mat_strides[k_order]   = 1;
+    mat_strides[k_order^1] = wpt; // This seems like a coincidence
+    int s_mat_stride = mat_strides[order[1]];
+    int s_mat_shape  = mat_shape[order[1]];
+
+    std::string trans = k_order == order[0] ? "" : ".trans";
+
+    // the offset (in byte) on the strided axis is a constant
+    int s_offset = mat_idx[order[1]] * s_mat_stride * s_mat_shape * dtsize * tile_shape[order[0]];
+    InlineAsm *ld_fn = InlineAsm::get(ldmatrix_ty, 
+                                      "ldmatrix.sync.aligned.m8n8.x4" + trans + ".shared.b16 "
+                                      "{$0, $1, $2, $3}, "
+                                      "[$4 + " + std::to_string(s_offset) + "];",
+                                      "=r,=r,=r,=r,r", true);
+    assert(ptr);
+    Value *res_v4 = call(ldmatrix_ty, ld_fn, {ptr});
+    if (k == 0 && inc == 1 && is_prefetch)
+      prefetch_latch_to_bb_[phin->get_incoming_value(1)].push_back(res_v4);
+    return {extract_val(res_v4, std::vector<unsigned>{0}), 
+            extract_val(res_v4, std::vector<unsigned>{1}),
+            extract_val(res_v4, std::vector<unsigned>{2}),
+            extract_val(res_v4, std::vector<unsigned>{3})};
+  };
+
+  auto load_a = [&](int m, int k, int inc, bool is_prefetch) {
+      // int offidx = (is_a_row ? K/mma_instr_k : m) % num_ptr_a;
+      // Value* ptra;
+      // if(K == 0 && is_prefetch){
+      //   if(inc == 0)
+      //     ptra = bit_cast(gep(shared_pre_ptr_[layout_a], off_a[offidx]), smem_ptr_ty);
+      //   else
+      //     ptra = bit_cast(gep(shared_next_ptr_[layout_a], off_a[offidx]), smem_ptr_ty);
+      // } else
+      //   ptra = ptrs_a[offidx];
+      // int step_am = is_a_row ? m : 0;
+      // int step_ak = is_a_row ? 0 : K;
+      // InlineAsm *ld_a0_fn = InlineAsm::get(ldmatrix_ty, "ldmatrix.sync.aligned.m8n8.x4" + a_trans + ".shared.b16 "
+      //                                           "{$0, $1, $2, $3}, [$4 + " +
+      //                                           std::to_string(
+      //                                           dtsize_a*step_am*mma_instr_m*layout->wpt(0)*stride_a_m + 
+      //                                           dtsize_a*step_ak*stride_a_k) + "];",
+      //                                           "=r,=r,=r,=r,r", true);
+      // Value *haa = call(ldmatrix_ty, ld_a0_fn, {ptra});
+      // if(K == 0 && inc == 1 && is_prefetch)
+      //     prefetch_latch_to_bb_[phiA->get_incoming_value(1)].push_back(haa);
+      // Value *ha0 = extract_val(haa, std::vector<unsigned>{0});
+      // Value *ha1 = extract_val(haa, std::vector<unsigned>{1});
+      // Value *ha2 = extract_val(haa, std::vector<unsigned>{2});
+      // Value *ha3 = extract_val(haa, std::vector<unsigned>{3});
+      auto [ha0, ha1, ha2, ha3] = load_x4(
+          2*m, k/mat_shape_k, inc, is_prefetch, phiA, shared_pre_ptr_[layout_a], shared_next_ptr_[layout_a],
+          off_a, ptrs_a, ord_a, /*k_order*/1, layout->wpt(0), shape_a, {mat_shape_m, mat_shape_k}, dtsize_a);
+      register_lds(ha, m, k, inc, ha0, ha1, is_prefetch);
+      register_lds(ha, m, k + mat_shape_k, inc, ha2, ha3, is_prefetch);
   };
 
   auto load_b = [&](int n, int K, int inc, bool is_prefetch) {
@@ -663,6 +692,7 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
       Value *hb1 = extract_val(hbb, std::vector<unsigned>{1});
       Value *hb2 = extract_val(hbb, std::vector<unsigned>{2});
       Value *hb3 = extract_val(hbb, std::vector<unsigned>{3});
+      // auto [hb0, hb1, hb2, hb3] = load_x4(k, n, inc, is_prefetch);
       register_lds2(hb, n, K, inc, hb0, is_prefetch);
       register_lds2(hb, n+1, K, inc, hb1, is_prefetch);
       register_lds2(hb, n, K + mat_shape_k, inc, hb2, is_prefetch);
