@@ -3,7 +3,6 @@ import sys
 
 import pytest
 import torch
-from numpy import record
 
 import triton
 import triton.language as tl

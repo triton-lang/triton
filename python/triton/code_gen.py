@@ -1,19 +1,17 @@
 import ast
 import builtins
-import dbm
 import functools
 import hashlib
 import inspect
 import os
 import pickle
-import struct
 import subprocess
 import sys
 import tempfile
 import textwrap
 import time
 import warnings
-from typing import Dict, Optional
+from typing import Dict
 
 import torch
 from filelock import FileLock
@@ -406,7 +404,7 @@ class CodeGenerator(ast.NodeVisitor):
                                                    self.visit(pos_cond_node),
                                                    self.visit(neg_cond_node),
                                                    _builder=self.builder)
-        #cond_node = neg_cond_node
+        # cond_node = neg_cond_node
         step_node = ast.AugAssign(target=st_target, op=ast.Add(), value=arg_2)
         # code generation
         current_bb = self.builder.get_insert_block()

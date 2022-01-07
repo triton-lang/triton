@@ -36,6 +36,9 @@ jobs:
       - name: Check style
         run: "autopep8 -a -r -d --exit-code ./python || ( echo '::error title=Style issues::Please run \"autopep8 -a -r -i ./python\"' ; exit 1 )"
 
+      - name: Flake8
+        run: "flake8 --config ./python/setup.cfg ./python || ( echo '::error::Flake8 failed; see logs for errors.' ; exit 1 )"
+
       - name: Unit tests
         run: |
           cd python/test/unit
