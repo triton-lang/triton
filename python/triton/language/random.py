@@ -13,7 +13,7 @@ N_ROUNDS_DEFAULT = 10  # Default number of rounds for philox
 
 
 @triton.jit
-def philox_f(c0, c1, c2, c3, k0, k1, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
+def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """
     Run `n_rounds` rounds of Philox for state (c0, c1, c2, c3) and key (k0, k1).
     """
@@ -30,6 +30,13 @@ def philox_f(c0, c1, c2, c3, k0, k1, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
         k0 = k0 + PHILOX_KEY_A
         k1 = k1 + PHILOX_KEY_B
     return c0, c1, c2, c3
+
+@triton.jit
+def philox(seed, c0, c1, c2, c3, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
+    seed = seed.to(tl.uint64)
+    seed_hi = ((seed >> 32) & 0xffffffff).to(tl.uint32)
+    seed_lo = (seed & 0xffffffff).to(tl.uint32)
+    return philox_impl(c0, c1, c2, c3, seed_lo, seed_hi, n_rounds)
 
 
 @triton.jit
@@ -60,11 +67,9 @@ def randint4x(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     :param seed: The seed for generating random numbers.
     :param offsets: The offsets to generate random numbers for.
     """
-    z = offset * 0  # FIXME: just 0 doesn't work. Likely some error with broadcasting
-    seed = seed.to(tl.uint64)
-    seed_hi = ((seed >> 32) & 0xffffffff).to(tl.uint32)
-    seed_lo = (seed & 0xffffffff).to(tl.uint32)
-    return philox_f(offset, z, z, z, seed_lo, seed_hi, n_rounds)
+    # _0 = tl.zeros(offset.shape, offset.dtype)
+    _0 = offset * 0
+    return philox(seed, offset, _0, _0, _0, n_rounds)
 
 
 # -------------------

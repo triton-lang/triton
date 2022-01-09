@@ -167,6 +167,8 @@ class block:
             self.numel *= s
         # Data-type wrapper
         self.dtype = block._init_dtype(self.handle.type.scalar)
+        # Shape is a constexpr
+        self.shape = [constexpr(s) for s in self.shape]
 
     def __str__(self) -> str:
         # ex. "float32[3,4]"
@@ -907,3 +909,7 @@ def swizzle2d(i, j, size_i, size_j, size_g):
     new_i = off_i + (ij % size_g)
     new_j = (ij % size_gj) // size_g
     return new_i, new_j
+
+@triton.jit
+def zeros_like(input):
+    return zeros(input.shape, input.dtype)
