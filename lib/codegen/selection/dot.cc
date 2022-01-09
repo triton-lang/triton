@@ -307,7 +307,7 @@ public:
     if (can_use_ldmatrix_)
       num_ptr_ = tile_shape[order[0]] / (order[0] == k_order? 1 : wpt) / instr_shape[order[0]];
     else // warning: this only works for tf32 & need transpose
-      num_ptr_ = tile_shape[order[0]] / wpt / mat_shape[order[0]];
+      num_ptr_ = std::max<int>(tile_shape[order[0]] / wpt / mat_shape[order[0]], 2);
 
 
     // load_v4 stride (in num of mats)
@@ -383,12 +383,11 @@ public:
         for (int i = 0; i < num_ptr_/2; ++i) {
           Value *c_mat_off_i = add(c_mat_off, i32(i*p_load_stride_in_mat_*(k_order_ == 1?1:2)));
           c_mat_off_i = xor_(c_mat_off_i, phase);
-          // Value *c_off = add(c_off_in_mat, mul(c_mat_off_i, i32(c_mat_shape_));
-          // // TODO: move this out
-          // c_off = urem(c_off, tile_shape_[order_[0]]);
-          // s_off = urem(s_off, tile_shape_[order_[1]]);
-          offs[2*i + nk_mat_arr_int] = add(add(c_off_in_mat, mul(c_mat_off_i, i32(c_mat_shape_))), 
-                                           mul(s_off, i32(s_stride_)));
+          Value *c_off = add(c_off_in_mat, mul(c_mat_off_i, i32(c_mat_shape_)));
+          // TODO: move this out of the loop
+          c_off = urem(c_off, i32(tile_shape_[order_[0]]));
+          s_off = urem(s_off, i32(tile_shape_[order_[1]]));
+          offs[2*i + nk_mat_arr_int] = add(c_off, mul(s_off, i32(s_stride_)));
         }
       }
       return offs;
