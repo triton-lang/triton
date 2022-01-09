@@ -517,6 +517,7 @@ def reshape(input, shape, _builder=None):
     :type shape: Tuple[int]
 
     """
+    shape = [x.value for x in shape]
     return frontend.reshape(input, shape, _builder)
 
 
