@@ -106,19 +106,18 @@ def _backward(X, scale, DX, LUT, sizemax, stride_zx, stride_zdx, TN: tl.constexp
 class _softmax(torch.autograd.Function):
     @staticmethod
     def make_lut(layout, block, device):
-        _empty = torch.tensor([], dtype=torch.int64, device=layout.device)
-        sizes = _empty.clone()
         # sizes along rows
-        for h in range(layout.shape[0]):
-            sizes = torch.cat((sizes, layout[h, :, :].sum(-1)))
+        sizes = layout.sum(-1).view(-1)
         # offsets in block format
         offsets = torch.zeros_like(sizes)
         offsets[1:] = torch.cumsum(sizes[:-1], dim=0)
         # block indices
-        idx = torch.arange(layout.sum())
-        head = layout.nonzero(as_tuple=False)[:, 0]
-        rows = layout.nonzero(as_tuple=False)[:, 1]
-        columns = layout.nonzero(as_tuple=False)[:, 2]
+        layout_sum = sizes.sum()
+        idx = torch.arange(layout_sum, device=layout.device)
+        layout_nonzero = layout.nonzero(as_tuple=False)
+        head = layout_nonzero[:, 0]
+        rows = layout_nonzero[:, 1]
+        columns = layout_nonzero[:, 2]
         core = torch.stack((idx, columns, rows, head), dim=1).view(-1)
         # construct look-up table
         offsets = offsets * 4 + 2 * sizes.numel()
