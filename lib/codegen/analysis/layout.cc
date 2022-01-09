@@ -437,9 +437,25 @@ shared_layout::shared_layout(data_layout *arg,
 
   // Update mma_vec
   if (hmma_dot_a_) {
-    set_mma_vec(mma_layout::mma_instr_vec_.at(get_mma_type(hmma_dot_a_)));
+    assert(order_.size() == 2);
+    std::vector<int> mat_shape = mma_layout::mma_mat_shape_.at(get_mma_type(hmma_dot_a_));
+    if (order_[0] == 1)  {// row-major
+      mma_vec_     = mat_shape[2]; // k
+      mma_strided_ = mat_shape[0]; // m
+    } else { // col-major
+      mma_vec_     = mat_shape[0]; // m
+      mma_strided_ = mat_shape[2]; // k
+    }
   } else if (hmma_dot_b_) {
-    set_mma_vec(mma_layout::mma_instr_vec_.at(get_mma_type(hmma_dot_b_)));
+    assert(order_.size() == 2);
+    std::vector<int> mat_shape = mma_layout::mma_mat_shape_.at(get_mma_type(hmma_dot_b_));
+    if (order_[0] == 1)  {// row-major
+      mma_vec_     = mat_shape[1]; // n
+      mma_strided_ = mat_shape[2]; // k
+    } else { // col-major
+      mma_vec_     = mat_shape[2]; // k
+      mma_strided_ = mat_shape[1]; // n
+    }
   }
 
   // size

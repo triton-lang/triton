@@ -267,6 +267,7 @@ public:
   ir::value* hmma_dot_b()                      { return hmma_dot_b_; }
   void set_mma_vec(int mma_vec)             { mma_vec_ = mma_vec; }
   int  get_mma_vec()                        { return mma_vec_;}
+  int  get_mma_strided()                    { return mma_strided_; }
   data_layout* get_arg_layout()             { return arg_layout_; }
 
 private:
@@ -279,6 +280,7 @@ private:
   ir::value* hmma_dot_b_;
   data_layout* arg_layout_;
   int mma_vec_;
+  int mma_strided_;
 };
 
 

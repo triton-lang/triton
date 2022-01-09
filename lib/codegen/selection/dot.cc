@@ -297,8 +297,11 @@ public:
     s_stride_ = tile_shape[order[0]];
 
     // rule: k must be the fast-changing axis
-    need_trans_ = k_order_ == order_[0];
+    need_trans_ = k_order_ != order_[0];
     can_use_ldmatrix_ = dtsize == 2 || (!need_trans_);
+
+    // std::cout << can_use_ldmatrix_ << std::endl;
+    // std::cout << need_trans_ << std::endl;
 
     // we need more pointers at the fast-changing axis, 
     if (can_use_ldmatrix_)
@@ -332,6 +335,7 @@ public:
       Value *s0 = urem(s, i32(2));
       Value *s1 = udiv(s, i32(2));
 
+      // We use different orders for a & b for better performance. 
       // TODO: we could extract this to arr_order (?)
       Value *k_mat_arr  = (k_order_ == 1) ? s1 : s0;
       Value *nk_mat_arr = (k_order_ == 1) ? s0 : s1;
@@ -362,10 +366,33 @@ public:
       // TODO: double-check this.
       Value *phase = urem(udiv(s_off_in_mat, i32(per_phase_)), i32(max_phase_));
       std::vector<Value*> offs(num_ptr_);
-      for (int mat_nk = 0; mat_nk < 2; ++mat_nk) { // 2 pointers
-        // 
+      for (int mat = 0; mat < 4; ++mat) { // loads 4 mats each time
+        int k_mat_arr_int  = (k_order_ == 1) ? mat/2 : mat%2;
+        int nk_mat_arr_int = (k_order_ == 1) ? mat%2 : mat/2;
+        if (k_mat_arr_int > 0) // we don't need pointers for k
+          continue;
+        Value *k_mat_arr  = i32(k_mat_arr_int);
+        Value *nk_mat_arr = i32(nk_mat_arr_int);
+        // physical offset (before swizzling)
+        // TODO: does this work for b?
+        Value *c_mat_off = add(mul(warp_off, i32(warp_off_stride_)),
+                               mul(nk_mat_arr, i32(mat_arr_stride_)));
+        Value *s_mat_off = k_mat_arr; // always 0?
+        Value *s_off = add(s_off_in_mat, mul(s_mat_off, i32(s_mat_shape_)));
+        // FIXME: (k_order_ == 1?) is really dirty hack
+        for (int i = 0; i < num_ptr_/2; ++i) {
+          Value *c_mat_off_i = add(c_mat_off, i32(i*p_load_stride_in_mat_*(k_order_ == 1?1:2)));
+          c_mat_off_i = xor_(c_mat_off_i, phase);
+          // Value *c_off = add(c_off_in_mat, mul(c_mat_off_i, i32(c_mat_shape_));
+          // // TODO: move this out
+          // c_off = urem(c_off, tile_shape_[order_[0]]);
+          // s_off = urem(s_off, tile_shape_[order_[1]]);
+          offs[2*i + nk_mat_arr_int] = add(add(c_off_in_mat, mul(c_mat_off_i, i32(c_mat_shape_))), 
+                                           mul(s_off, i32(s_stride_)));
+        }
       }
-      throw std::runtime_error("not implemented");
+      return offs;
+      // throw std::runtime_error("not implemented");
     } else
       throw std::runtime_error("invalid smem load config");
   }
@@ -379,34 +406,73 @@ public:
     int mat_idx[2] = {mat0, mat1};
     int k = mat_idx[k_order_];
 
-    int ptr_idx = mat_idx[order_[0]] / (instr_shape_[order_[0]] / mat_shape_[order_[0]]);
-    Value *ptr = nullptr;
-    if (k == 0 && is_prefetch) {
-      if (inc == 0)
-        ptr = bit_cast(gep(pre_ptr, off[ptr_idx]), smem_ptr_ty);
-      else
-        ptr = bit_cast(gep(next_ptr, off[ptr_idx]), smem_ptr_ty);
-    } else
-      ptr = ptrs[ptr_idx];
+    int ptr_idx = -1;
+    if (can_use_ldmatrix_)
+      ptr_idx = mat_idx[order_[0]] / (instr_shape_[order_[0]] / mat_shape_[order_[0]]);
+    else // tf32 & trans
+      ptr_idx = mat_idx[order_[0]];
 
-    std::string trans = need_trans_ ? "" : ".trans";
+    auto get_ptr = [&](int idx) -> Value* {
+      Value *ptr = nullptr;
+      if (k == 0 && is_prefetch) {
+        if (inc == 0)
+          ptr = bit_cast(gep(pre_ptr, off.at(idx)), smem_ptr_ty);
+        else
+          ptr = bit_cast(gep(next_ptr, off.at(idx)), smem_ptr_ty);
+      } else
+        ptr = ptrs.at(idx);
+      return ptr;
+    };
+    Value *ptr = get_ptr(ptr_idx);
 
-    // the offset (in byte) on the strided axis is a constant
-    int s_offset = mat_idx[order_[1]] * (s_mat_stride_*s_mat_shape_) * s_stride_ * dtsize_;
-    InlineAsm *ld_fn = InlineAsm::get(ldmatrix_ty, 
-                                      "ldmatrix.sync.aligned.m8n8.x4" + trans + ".shared.b16 "
-                                      "{$0, $1, $2, $3}, "
-                                      "[$4 + " + std::to_string(s_offset) + "];",
-                                      "=r,=r,=r,=r,r", true);
-    assert(ptr);
-    Value *res_v4 = call(ldmatrix_ty, ld_fn, {ptr});
-
-    if (k == 0 && inc == 1 && is_prefetch)
-      prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(res_v4);
-    return {extract_val(res_v4, std::vector<unsigned>{0}), 
-            extract_val(res_v4, std::vector<unsigned>{1}),
-            extract_val(res_v4, std::vector<unsigned>{2}),
-            extract_val(res_v4, std::vector<unsigned>{3})};
+    Value *res_v4 = nullptr;
+    if (can_use_ldmatrix_) {
+      std::string trans = need_trans_ ? ".trans" : "";
+      // the offset (in byte) on the strided axis is a constant
+      int s_offset = mat_idx[order_[1]] * (s_mat_stride_*s_mat_shape_) * s_stride_ * dtsize_;
+      InlineAsm *ld_fn = InlineAsm::get(ldmatrix_ty, 
+                                        "ldmatrix.sync.aligned.m8n8.x4" + trans + ".shared.b16 "
+                                        "{$0, $1, $2, $3}, "
+                                        "[$4 + " + std::to_string(s_offset) + "];",
+                                        "=r,=r,=r,=r,r", true);
+      assert(ptr);
+      res_v4 = call(ldmatrix_ty, ld_fn, {ptr});
+      if (k == 0 && inc == 1 && is_prefetch)
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(res_v4);
+      return {extract_val(res_v4, std::vector<unsigned>{0}), 
+              extract_val(res_v4, std::vector<unsigned>{1}),
+              extract_val(res_v4, std::vector<unsigned>{2}),
+              extract_val(res_v4, std::vector<unsigned>{3})};
+    } else {
+      // assert(false && "should not be here");
+      assert(dtsize_ == 4 && need_trans_);
+      Value *ptr2 = get_ptr(ptr_idx+1);
+      assert(s_mat_stride_ == 1);
+      int s_offset_elem = mat_idx[order_[1]] * (s_mat_stride_*s_mat_shape_) * s_stride_;
+      int s_offset_arr_elem = 1 * (s_mat_stride_*s_mat_shape_) * s_stride_;
+      // std::cout << "s_offset_elem: " << s_offset_elem << "\n"
+      //           << "s_offset_arr_elem: " << s_offset_arr_elem << std::endl;
+      // TODO: s_offset ?
+      Value *elem0, *elem1, *elem2, *elem3;
+      if (k_order_ == 1) {
+        elem0 = load(gep(ptr,  i32(s_offset_elem)));
+        elem1 = load(gep(ptr2, i32(s_offset_elem)));
+        elem2 = load(gep(ptr,  i32(s_offset_elem + s_offset_arr_elem)));
+        elem3 = load(gep(ptr2, i32(s_offset_elem + s_offset_arr_elem)));
+      } else { // for b (k first)
+        elem0 = load(gep(ptr,  i32(s_offset_elem)));
+        elem2 = load(gep(ptr2, i32(s_offset_elem)));
+        elem1 = load(gep(ptr,  i32(s_offset_elem + s_offset_arr_elem)));
+        elem3 = load(gep(ptr2, i32(s_offset_elem + s_offset_arr_elem)));
+      }
+      if (k == 0 && inc == 1 && is_prefetch) {
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem0);
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem1);
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem2);
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem3);
+      }
+      return {elem0, elem1, elem2, elem3};
+    }
   }
 
   int get_num_ptr() const { return num_ptr_; }
@@ -543,22 +609,29 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   // m  s0_1(1), s1_1(3)) |  (stride in num of matrices(mat_stride_ak): 2)
   // -----------
   //   *num_rep_m (stride in num of matrices(mat_stride_am): 2*layout->wpt(0))
-  int num_ptr_a = is_a_row ? num_rep_k : num_rep_m;
   mma16816_smem_loader a_loader(layout->wpt(0), ord_a, /*k_order*/1, shape_a, 
                                 {mma_instr_m, mma_instr_k}, {mat_shape_m, mat_shape_k}, 
                                 per_phase_a, max_phase_a, dtsize_a, builder_, add, mul, gep);
   std::vector<Value*> off_a = a_loader.compute_offs(warp_m, lane);
+  int num_ptr_a = a_loader.get_num_ptr();
 
   // | -> n (col-major)
   // v (s0_0(0), | (stride: wpt(1)) | s1_0(2)  | *num_rep_n
   // k  s0_1(1), |                  | s1_1(3)) | (stride in num of matrices(mat_stride_bn): wpt(1))
   // -----------
   //   *num_rep_k (stride in num of matrices(mat_stride_bk): 2)
-  int num_ptr_b = is_b_row ? num_rep_n : num_rep_k;
   mma16816_smem_loader b_loader(layout->wpt(1), ord_b, /*k_order*/0, shape_b,
                                 {mma_instr_k, mma_instr_n}, {mat_shape_k, mat_shape_n},
                                 per_phase_b, max_phase_b, dtsize_b, builder_, add, mul, gep);
   std::vector<Value*> off_b = b_loader.compute_offs(warp_n, lane);
+  int num_ptr_b = b_loader.get_num_ptr();
+
+  // std::cout << "mat_shape_m: " << mat_shape_m << "\n"
+  //           << "mat_shape_n: " << mat_shape_n << "\n"
+  //           << "mat_shape_k: " << mat_shape_k << "\n"
+  //           << "per_phase_a: " << per_phase_a << "\n"
+  //           << "max_phase_a: " << max_phase_a << "\n"
+  //           << "num_ptr_a: " << num_ptr_a << std::endl;
 
   builder_->SetInsertPoint(CurrBB);
   // A pointer

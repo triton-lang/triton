@@ -662,7 +662,7 @@ ir::value *dispatch::dot(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
   unsigned M = lhs->get_type()->get_block_shapes()[0];
   unsigned N = rhs->get_type()->get_block_shapes()[1];
   _0 = builder->create_splat(_0, {M, N});
-  return builder->create_dot(lhs, rhs, _0, /*allow_tf32*/false);
+  return builder->create_dot(lhs, rhs, _0, /*allow_tf32*/true);
 }
 
 
