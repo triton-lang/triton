@@ -87,6 +87,7 @@ Value* geper::operator()(Value *ptr, Value* off, const std::string& name){
 #define bf16_ty              builder_->getBFloatTy()
 #define f32_ty               builder_->getFloatTy()
 #define i8_ty                builder_->getInt8Ty()
+#define i16_ty               builder_->getInt16Ty()
 #define i32_ty               builder_->getInt32Ty()
 #define vec_ty(type, num_el) VectorType::get(type, num_el, false)
 #define ptr_ty(...)          PointerType::get(__VA_ARGS__)
@@ -456,14 +457,16 @@ std::tuple<Value*, Value*, Value*, Value*> generator::fp8x4_to_fp16x4(Value *in0
 }
 
 Value* generator::bf16_to_fp32(Value *in0){
-  // Value *ret = UndefValue::get(vec_ty(bf16_ty, 2));
-  // ret = insert_elt(ret, in0, (uint64_t)1);
-  // ret = insert_elt(ret, bit_cast(builder_->getInt16(0), bf16_ty), (uint64_t)0);
-  // return bit_cast(ret, f32_ty);
-
-  InlineAsm *ptx = InlineAsm::get(FunctionType::get(f32_ty, {bf16_ty}, false),
-                                  "cvt.rn.f32.bf16 $0, $1;", "=r,h", false);
-  return call(ptx, {in0});
+  if (tgt_->as_nvidia()->sm() >= 80) {
+    InlineAsm *ptx = InlineAsm::get(FunctionType::get(f32_ty, {bf16_ty}, false),
+                                    "cvt.rn.f32.bf16 $0, $1;", "=r,h", false);
+    return call(ptx, {in0});
+  } else {
+    Value *ret = UndefValue::get(vec_ty(i16_ty, 2));
+    ret = insert_elt(ret, bit_cast(in0, i16_ty), (uint64_t)1);
+    ret = insert_elt(ret, bit_cast(builder_->getInt16(0), i16_ty), (uint64_t)0);
+    return bit_cast(ret, f32_ty);
+  }
 }
 
 Value* generator::fp32_to_bf16(Value *in0){
@@ -472,7 +475,7 @@ Value* generator::fp32_to_bf16(Value *in0){
                                     "cvt.rn.bf16.f32 $0, $1;", "=h,r", false);
     return call(ptx, {in0});
   }
-  return extract_elt(bit_cast(in0, vec_ty(bf16_ty, 2)), (uint64_t)1);
+  return extract_elt(bit_cast(in0, vec_ty(i16_ty, 2)), (uint64_t)1);
 }
 
 /**
