@@ -1359,7 +1359,8 @@ public:
     if (can_use_ldmatrix_)
       num_ptr_ = tile_shape[order[0]] / (order[0] == k_order? 1 : wpt) / instr_shape[order[0]];
     else // warning: this only works for tf32 & need transpose
-      num_ptr_ = std::max<int>(tile_shape[order[0]] / wpt / mat_shape[order[0]], 2);
+      num_ptr_ = tile_shape[order[0]] / wpt / mat_shape[order[0]];
+    num_ptr_ = std::max<int>(num_ptr_, 2);
 
 
     // load_v4 stride (in num of mats)
