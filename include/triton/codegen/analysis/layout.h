@@ -252,7 +252,7 @@ public:
                 const std::vector<unsigned>& shapes,
                 const std::vector<ir::value *> &values_,
                 ir::type *ty,
-                analysis::align* align);
+                analysis::align* align, target *tgt);
   void accept(layout_visitor* vst) { vst->visit_layout_shared(this); }
   // accessors
   size_t get_size()                         { return size_; }
@@ -281,6 +281,7 @@ private:
   data_layout* arg_layout_;
   int mma_vec_;
   int mma_strided_;
+  target *tgt_;
 };
 
 
