@@ -51,8 +51,14 @@ value *builder::get_int1(bool val)
 value *builder::get_int32(int32_t val)
 { return constant_int::get(type::get_int32_ty(ctx_), val);}
 
+value *builder::get_uint32(uint32_t val)
+{ return constant_int::get(type::get_uint32_ty(ctx_), val);}
+
 value *builder::get_int64(int64_t val)
 { return constant_int::get(type::get_int64_ty(ctx_), val);}
+
+value *builder::get_uint64(uint64_t val)
+{ return constant_int::get(type::get_uint64_ty(ctx_), val);}
 
 value *builder::get_float16(float val)
 { return constant_fp::get(type::get_fp16_ty(ctx_), val); }
@@ -83,6 +89,18 @@ type *builder::get_int32_ty()
 
 type *builder::get_int64_ty()
 { return type::get_int64_ty(ctx_); }
+
+type *builder::get_uint8_ty()
+{ return type::get_uint8_ty(ctx_); }
+
+type *builder::get_uint16_ty()
+{ return type::get_uint16_ty(ctx_); }
+
+type *builder::get_uint32_ty()
+{ return type::get_uint32_ty(ctx_); }
+
+type *builder::get_uint64_ty()
+{ return type::get_uint64_ty(ctx_); }
 
 type *builder::get_half_ty()
 { return type::get_fp16_ty(ctx_); }
@@ -273,16 +291,16 @@ DEFINE_FCMP_INSTR(UNE, cmp_pred_t::FCMP_UNE)
 //                               load/store instructions
 //===----------------------------------------------------------------------===//
 
-value *builder::create_load(value *ptr, load_inst::CACHE_MODIFIER cache){
-  return insert(unmasked_load_inst::create(ptr, cache));
+value *builder::create_load(value *ptr, load_inst::CACHE_MODIFIER cache, bool is_volatile){
+  return insert(unmasked_load_inst::create(ptr, cache, is_volatile));
 }
 
 value *builder::create_store(value *ptr, value *val){
   return insert(unmasked_store_inst::create(ptr, val));
 }
 
-value *builder::create_masked_load(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache){
-  return insert(masked_load_inst::create(ptr, mask, false_value, cache));
+value *builder::create_masked_load(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache, bool is_volatile){
+  return insert(masked_load_inst::create(ptr, mask, false_value, cache, is_volatile));
 }
 
 value *builder::create_masked_store(value *ptr, value *val, value *mask){

@@ -207,7 +207,8 @@ bool peephole::rewrite_select_masked_load(ir::instruction *value, ir::builder& b
   ir::value* new_load = builder.create_masked_load(if_value->get_pointer_operand(),
                                                    if_value->get_mask_operand(),
                                                    select->get_else_value_op(),
-                                                   if_value->get_cache_modifier());
+                                                   if_value->get_cache_modifier(),
+                                                   if_value->get_is_volatile());
   select->replace_all_uses_with(new_load);
   return true;
 }

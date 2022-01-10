@@ -1,7 +1,7 @@
-import os
+import torch
+
 import triton
 import triton.language as tl
-import torch
 
 
 def next_power_of_2(n):
@@ -94,11 +94,9 @@ class _cross_entropy(torch.autograd.Function):
         """
         # load saved tensors
         neg_logprobs, indices = ctx.saved_tensors
-        # make kernel
-        device, dtype = neg_logprobs.device, neg_logprobs.dtype
-        n_cols = neg_logprobs.shape[-1]
         # run the kernel
         # neg_logprobs will be modified in place to become our gradient:
+        n_cols = neg_logprobs.shape[-1]
         grid = lambda opt: (neg_logprobs.numel() // n_cols, )
         _backward[grid](neg_logprobs, indices, dneg_logprobs, n_cols)
         return neg_logprobs, None

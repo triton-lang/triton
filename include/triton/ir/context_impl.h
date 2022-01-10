@@ -28,6 +28,7 @@ public:
   type fp8_ty, fp16_ty, bf16_ty, fp32_ty, fp64_ty;
   // integer types
   integer_type int1_ty, int8_ty, int16_ty, int32_ty, int64_ty, int128_ty;
+  integer_type uint8_ty, uint16_ty, uint32_ty, uint64_ty;
   // Pointer types
   std::map<std::pair<type*, unsigned>, pointer_type*> ptr_tys;
   // Block types
