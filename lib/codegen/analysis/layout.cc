@@ -63,19 +63,20 @@ static mma_layout::TensorCoreType get_mma_type(ir::value *v) {
         return mma_type;
       }
     } else if (c_ty->get_scalar_ty()->is_integer_ty(32)) {
-      // integer tensor cores
-      if (a_ty->get_scalar_ty()->is_integer_ty(1) && b_ty->get_scalar_ty()->is_integer_ty(1)) {
-        mma_type = mma_layout::INT32_INT1_INT1_INT32;
-        return mma_type;
-      }
-      if (a_ty->get_scalar_ty()->is_integer_ty(4) && b_ty->get_scalar_ty()->is_integer_ty(4)) {
-        mma_type = mma_layout::INT32_INT4_INT4_INT32;
-        return mma_type;
-      }
-      if (a_ty->get_scalar_ty()->is_integer_ty(8) && b_ty->get_scalar_ty()->is_integer_ty(8)) {
-        mma_type = mma_layout::INT32_INT8_INT8_INT32;
-        return mma_type;
-      }
+      throw std::runtime_error("integer tensor cores are not yet supported");
+      // // integer tensor cores
+      // if (a_ty->get_scalar_ty()->is_integer_ty(1) && b_ty->get_scalar_ty()->is_integer_ty(1)) {
+      //   mma_type = mma_layout::INT32_INT1_INT1_INT32;
+      //   return mma_type;
+      // }
+      // if (a_ty->get_scalar_ty()->is_integer_ty(4) && b_ty->get_scalar_ty()->is_integer_ty(4)) {
+      //   mma_type = mma_layout::INT32_INT4_INT4_INT32;
+      //   return mma_type;
+      // }
+      // if (a_ty->get_scalar_ty()->is_integer_ty(8) && b_ty->get_scalar_ty()->is_integer_ty(8)) {
+      //   mma_type = mma_layout::INT32_INT8_INT8_INT32;
+      //   return mma_type;
+      // }
     }
   }
   return mma_layout::NOT_APPLICABLE;
@@ -441,23 +442,13 @@ shared_layout::shared_layout(data_layout *arg,
   if (hmma_dot_a_) {
     assert(order_.size() == 2);
     std::vector<int> mat_shape = mma_layout::mma_mat_shape_.at(get_mma_type(hmma_dot_a_));
-    if (order_[0] == 1)  {// row-major
-      mma_vec_     = mat_shape[2]; // k
-      mma_strided_ = mat_shape[0]; // m
-    } else { // col-major
-      mma_vec_     = mat_shape[0]; // m
-      mma_strided_ = mat_shape[2]; // k
-    }
+    mma_vec_     = order_[0] == 1 ? mat_shape[2] : mat_shape[0]; // k : m
+    mma_strided_ = order_[0] == 1 ? mat_shape[0] : mat_shape[2];
   } else if (hmma_dot_b_) {
     assert(order_.size() == 2);
     std::vector<int> mat_shape = mma_layout::mma_mat_shape_.at(get_mma_type(hmma_dot_b_));
-    if (order_[0] == 1)  {// row-major
-      mma_vec_     = mat_shape[1]; // n
-      mma_strided_ = mat_shape[2]; // k
-    } else { // col-major
-      mma_vec_     = mat_shape[2]; // k
-      mma_strided_ = mat_shape[1]; // n
-    }
+    mma_vec_     = order_[0] == 1 ? mat_shape[1] : mat_shape[2]; // n : k
+    mma_strided_ = order_[0] == 1 ? mat_shape[2] : mat_shape[1];
   }
 
   // size
@@ -523,11 +514,8 @@ void layouts::make_graph(ir::instruction *i) {
 void layouts::create(size_t id, const std::vector<ir::value*>& values) {
 //  if(layouts_.find(id) != layouts_.end())
 //    return;
-  auto it_hmma_c = values.begin();
-  for (; it_hmma_c != values.end(); ++it_hmma_c) {
-    if (is_hmma_c(*it_hmma_c, tgt_->as_nvidia()->sm()))
-      break;
-  }
+  auto it_hmma_c = std::find_if(values.begin(), values.end(), 
+                               [&](ir::value* v){ return is_hmma_c(v, tgt_->as_nvidia()->sm()); });
   auto cmp = [](ir::value* x, ir::value *y) {
     std::pair<int, int> xx = {x->get_type()->get_tile_rank(), x->get_type()->get_tile_num_elements()};
     std::pair<int, int> yy = {y->get_type()->get_tile_rank(), y->get_type()->get_tile_num_elements()};

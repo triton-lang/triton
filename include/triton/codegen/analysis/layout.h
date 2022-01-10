@@ -113,8 +113,8 @@ public:
   enum TensorCoreType : uint8_t {
     // floating-point tensor core instr
     FP32_FP16_FP16_FP32 = 0, // default
-    FP32_BF16_BF16_FP32, // Not implemented
-    FP32_TF32_TF32_FP32, // Not implemented
+    FP32_BF16_BF16_FP32,
+    FP32_TF32_TF32_FP32,
     // integer tensor core instr
     INT32_INT1_INT1_INT32, // Not implemented
     INT32_INT4_INT4_INT32, // Not implemented
