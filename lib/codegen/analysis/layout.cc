@@ -23,7 +23,7 @@ inline unsigned clamp(unsigned x, unsigned a, unsigned b) {
   return std::min(std::max(x, lo), hi);
 }
 
-inline bool is_hmma_c(ir::value *v){
+inline bool is_hmma_c(ir::value *v, int sm){
   bool result = false;
   if(auto *x = dynamic_cast<ir::dot_inst*>(v)){
     ir::value *a = x->get_operand(0);
@@ -32,7 +32,8 @@ inline bool is_hmma_c(ir::value *v){
     ir::type *b_ty = b->get_type();
     result = (a_ty->get_scalar_ty()->is_fp16_ty() && b_ty->get_scalar_ty()->is_fp16_ty()) ||
              (a_ty->get_scalar_ty()->is_bf16_ty() && b_ty->get_scalar_ty()->is_bf16_ty()) ||
-             (a_ty->get_scalar_ty()->is_fp32_ty() && b_ty->get_scalar_ty()->is_fp32_ty() && x->allow_tf32());
+             (a_ty->get_scalar_ty()->is_fp32_ty() && b_ty->get_scalar_ty()->is_fp32_ty() && 
+              x->allow_tf32() && sm >= 80);
   }
   return result;
 }
@@ -96,10 +97,10 @@ inline void extract_dot_use(ir::value *v, ir::value*& result, size_t n) {
   }
 }
 
-inline void extract_hmma_dot_use(ir::value *v, ir::value*& result, size_t n) {
+inline void extract_hmma_dot_use(ir::value *v, ir::value*& result, size_t n, int sm) {
   for(ir::user* u: v->get_users()){
     auto i = dynamic_cast<ir::dot_inst*>(u);
-    if(i && is_hmma_c(i) && i->get_operand(n) == v) {
+    if(i && is_hmma_c(i, sm) && i->get_operand(n) == v) {
       result = i;
     }
   }
@@ -403,7 +404,8 @@ shared_layout::shared_layout(data_layout *arg,
                                  const std::vector<unsigned>& shape,
                                  const std::vector<ir::value *> &values,
                                  ir::type *ty,
-                                 analysis::align* align): data_layout(SHARED, axes, shape, values, align), ty_(ty) {
+                                 analysis::align* align, target *tgt)
+    : data_layout(SHARED, axes, shape, values, align), ty_(ty), tgt_(tgt) {
 
   size_ = 0;
   arg_layout_ = arg;
@@ -429,8 +431,8 @@ shared_layout::shared_layout(data_layout *arg,
   for(ir::value* v: values){
     extract_dot_use(v, dot_a, 0);
     extract_dot_use(v, dot_b, 1);
-    extract_hmma_dot_use(v, hmma_dot_a, 0);
-    extract_hmma_dot_use(v, hmma_dot_b, 1);
+    extract_hmma_dot_use(v, hmma_dot_a, /*op*/0, tgt_->as_nvidia()->sm());
+    extract_hmma_dot_use(v, hmma_dot_b, /*op*/1, tgt_->as_nvidia()->sm());
   }
   hmma_dot_a_ = hmma_dot_a;
   hmma_dot_b_ = hmma_dot_b;
@@ -521,7 +523,11 @@ void layouts::make_graph(ir::instruction *i) {
 void layouts::create(size_t id, const std::vector<ir::value*>& values) {
 //  if(layouts_.find(id) != layouts_.end())
 //    return;
-  auto it_hmma_c = std::find_if(values.begin(), values.end(), &is_hmma_c);
+  auto it_hmma_c = values.begin();
+  for (; it_hmma_c != values.end(); ++it_hmma_c) {
+    if (is_hmma_c(*it_hmma_c, tgt_->as_nvidia()->sm()))
+      break;
+  }
   auto cmp = [](ir::value* x, ir::value *y) {
     std::pair<int, int> xx = {x->get_type()->get_tile_rank(), x->get_type()->get_tile_num_elements()};
     std::pair<int, int> yy = {y->get_type()->get_tile_rank(), y->get_type()->get_tile_num_elements()};
@@ -552,7 +558,7 @@ void layouts::create(size_t id, const std::vector<ir::value*>& values) {
     ir::instruction *cts = (ir::instruction*)*it_cts;
     ir::value *arg = cts->get_operand(0);
     create(groups_.at(arg), values_.at(groups_.at(arg)));
-    layouts_[id] = new shared_layout(get(arg), axes, shapes, values, largest->get_type()->get_scalar_ty(), align_);
+    layouts_[id] = new shared_layout(get(arg), axes, shapes, values, largest->get_type()->get_scalar_ty(), align_, tgt_);
   }
   else{
     layouts_[id] = new scanline_layout(num_warps_, axes, shapes, values, align_, tgt_);
@@ -589,7 +595,7 @@ void layouts::run(ir::module &mod) {
       scanline_layout *layout = get(arg)->to_scanline();
       shapes[axis] = layout->mts(axis);
       // create layout
-      layouts_[id] = new shared_layout(layout, axes_->get(arg), shapes, {red}, red->get_type()->get_scalar_ty(), align_);
+      layouts_[id] = new shared_layout(layout, axes_->get(arg), shapes, {red}, red->get_type()->get_scalar_ty(), align_, tgt_);
       tmp_[red] = id;
     }
     if(auto *val = dynamic_cast<ir::cvt_layout_inst*>(i)){
@@ -602,12 +608,12 @@ void layouts::run(ir::module &mod) {
         shape[k] = std::max(in_layout->shape_per_cta(k),
                             out_layout->shape_per_cta(k));
       }
-      layouts_[id] = new shared_layout(out_layout, axes_->get(val), shape, {val}, val->get_type()->get_scalar_ty(), align_);
+      layouts_[id] = new shared_layout(out_layout, axes_->get(val), shape, {val}, val->get_type()->get_scalar_ty(), align_, tgt_);
       tmp_[val] = id;
     }
     if(auto *atom = dynamic_cast<ir::atomic_inst*>(i)){
       id++;
-      layouts_[id] = new shared_layout(nullptr, {}, {1}, {atom}, atom->get_type()->get_scalar_ty(), align_);
+      layouts_[id] = new shared_layout(nullptr, {}, {1}, {atom}, atom->get_type()->get_scalar_ty(), align_, tgt_);
       tmp_[atom] = id;
     }
   });
