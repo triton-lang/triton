@@ -967,14 +967,17 @@ class JITFunction:
         assert isinstance(tree.body[0], ast.FunctionDef)
         return tree
 
-    def __call__(self, *args, generator: CodeGenerator):
+    def __call__(self, *args, generator: CodeGenerator, **kwargs):
         try:
+            from inspect import getcallargs
+            arg_values = getcallargs(self.fn, *args, **kwargs)
+            arg_values = [arg_values[name] for name in self.arg_names]
             gscope = generator.gscope.copy()
             lscope = generator.lscope.copy()
             values = generator.module.get_values().copy()
             generator.gscope = sys.modules[self.fn.__module__].__dict__
             generator.lscope = dict()
-            ret = generator.visit_FunctionDef(self.parse().body[0], inline=True, arg_values=args)
+            ret = generator.visit_FunctionDef(self.parse().body[0], inline=True, arg_values=arg_values)
             generator.gscope = gscope
             generator.lscope = lscope
             generator.module.set_values(values)
