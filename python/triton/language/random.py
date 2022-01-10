@@ -94,6 +94,7 @@ def rand(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     :param seed: The seed for generating random numbers.
     :param offsets: The offsets to generate random numbers for.
     """
+    offset = offset.to(tl.uint32)
     source = randint(seed, offset, n_rounds)
     return uint32_to_uniform_float(source)
 
@@ -107,6 +108,7 @@ def rand4x(seed, offsets, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     :param seed: The seed for generating random numbers.
     :param offsets: The offsets to generate random numbers for.
     """
+    offsets = offsets.to(tl.uint32)
     i1, i2, i3, i4 = randint4x(seed, offsets, n_rounds)
     u1 = uint32_to_uniform_float(i1)
     u2 = uint32_to_uniform_float(i2)
