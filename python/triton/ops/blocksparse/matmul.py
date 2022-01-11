@@ -283,14 +283,14 @@ def dsd_lut(layout, block, step, trans, device):
     # -------------------------------
     # same as above, except that the increments are in the sparse memory layout
     if trans:
-        A_idx = torch.arange(num_blocks)
+        A_idx = torch.arange(num_blocks, device=layout.device)
     else:
         A_idx = torch.tensor([], dtype=torch.int64, device=layout.device)
         current_offset = 0
         for z in range(layout.size(0)):
-            layoutw = layout[z, :, :].clone()
+            layoutw = layout[z, :, :].clone().long()
             msum = layoutw.sum()
-            layoutw[layoutw > 0] = 1 + torch.arange(msum)
+            layoutw[layoutw > 0] = 1 + torch.arange(msum, device=layout.device)
             A_idx = torch.cat((A_idx, current_offset + layoutw.T[layoutw.T > 0] - 1))
             current_offset += msum
     A_incs = A_idx * block * block
