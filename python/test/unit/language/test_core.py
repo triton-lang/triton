@@ -7,10 +7,11 @@ from typing import Optional, Union
 import numpy as np
 import pytest
 import torch
+from numpy.random import RandomState
+
 import triton
 import triton._C.libtriton.triton as _triton
 import triton.language as tl
-from numpy.random import RandomState
 from triton.code_gen import TensorWrapper, reinterpret
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
@@ -660,10 +661,10 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
 # ---------------
 
 
-@pytest.mark.parametrize("epilogue, allow_tf32", 
-                        [(epilogue, allow_tf32) 
-                         for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols']
-                         for allow_tf32 in [True, False]])
+@pytest.mark.parametrize("epilogue, allow_tf32",
+                         [(epilogue, allow_tf32)
+                          for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols']
+                          for allow_tf32 in [True, False]])
 def test_dot(epilogue, allow_tf32, device='cuda'):
     # triton kernel
     @triton.jit
