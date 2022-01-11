@@ -1392,7 +1392,6 @@ public:
       Value *s1 = udiv(s, i32(2));
 
       // We use different orders for a & b for better performance. 
-      // TODO: we could extract this to arr_order (?)
       Value *k_mat_arr  = (k_order_ == 1) ? s1 : s0;
       Value *nk_mat_arr = (k_order_ == 1) ? s0 : s1;
       mat_off[k_order_^1] = add(mul(warp_off,   i32(warp_off_stride_)),
@@ -1401,7 +1400,7 @@ public:
       // physical offset (before swizzling)
       Value *c_mat_off = mat_off[order_[0]];
       Value *s_mat_off = mat_off[order_[1]];
-      // offset inside a matrix // TODO: obviously, for tf32, this is different
+      // offset inside a matrix
       Value *s_off_in_mat = c;
       
       std::vector<Value*> offs(num_ptr_);
@@ -1419,7 +1418,6 @@ public:
       Value *c_off_in_mat = udiv(lane, i32(4)); // 4 = mat_shape[order[1]]
       Value *s_off_in_mat = urem(lane, i32(4)); // 
 
-      // TODO: double-check this.
       Value *phase = urem(udiv(s_off_in_mat, i32(per_phase_)), i32(max_phase_));
       std::vector<Value*> offs(num_ptr_);
       for (int mat = 0; mat < 4; ++mat) { // loads 4 mats each time
@@ -1430,7 +1428,6 @@ public:
         Value *k_mat_arr  = i32(k_mat_arr_int);
         Value *nk_mat_arr = i32(nk_mat_arr_int);
         // physical offset (before swizzling)
-        // TODO: does this work for b?
         Value *c_mat_off = add(mul(warp_off, i32(warp_off_stride_)),
                                mul(nk_mat_arr, i32(mat_arr_stride_)));
         Value *s_mat_off = k_mat_arr; // always 0?
@@ -1505,9 +1502,6 @@ public:
       assert(s_mat_stride_ == 1);
       int s_offset_elem = mat_idx[order_[1]] * (s_mat_stride_*s_mat_shape_) * s_stride_;
       int s_offset_arr_elem = 1 * (s_mat_stride_*s_mat_shape_) * s_stride_;
-      // std::cout << "s_offset_elem: " << s_offset_elem << "\n"
-      //           << "s_offset_arr_elem: " << s_offset_arr_elem << std::endl;
-      // TODO: s_offset ?
       Value *elem0, *elem1, *elem2, *elem3;
       if (k_order_ == 1) {
         elem0 = load(gep(ptr,  i32(s_offset_elem)));
