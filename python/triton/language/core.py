@@ -298,7 +298,7 @@ class block:
             if sl is None:
                 dst_shape.append(1)
             elif sl == slice(None, None, None):
-                dst_shape.append(src_shape[curr])
+                dst_shape.append(src_shape[curr].value)
                 curr += 1
         ret = frontend.reshape(self, dst_shape, _builder)
         return ret
@@ -323,6 +323,10 @@ class constexpr:
     def __init__(self, value):
         self.value = value
 
+    def __repr__(self) -> str:
+        return f"constexpr[{self.value}]"
+
+    #
     def __add__(self, other):
         return self.value + other.value
 
