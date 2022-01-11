@@ -742,26 +742,29 @@ public:
   };
 
 private:
-  dot_inst(value *A, value *B, value *C, TransT AT, TransT BT, const std::string &name, instruction *next);
+  dot_inst(value *A, value *B, value *C, TransT AT, TransT BT, bool allow_tf32, const std::string &name, instruction *next);
   std::string repr_impl() const { return "dot"; }
-
-  bool is_prefetched_ = false;
-  DataType C_type_ = DataType::FP32;
-  DataType A_type_ = DataType::FP16;
-  DataType B_type_ = DataType::FP16;
   
 public:
   bool is_prefetched() const { return is_prefetched_; }
   void set_prefetched(bool is_prefetched) { is_prefetched_ = is_prefetched; }
+  bool allow_tf32() const { return allow_tf32_; }
 
 public:
-  static instruction *create(value *A, value *B, value *C, bool AT, bool BT, const std::string &name = "", instruction *next = nullptr);
-  static instruction* create_nn(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
-  static instruction* create_nt(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
-  static instruction* create_tn(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
-  static instruction* create_tt(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
+  static instruction *create(value *A, value *B, value *C, bool AT, bool BT, bool allow_tf32, const std::string &name = "", instruction *next = nullptr);
+  static instruction* create_nn(value *A, value *B, value *C, bool allow_tf32, const std::string &name = "", instruction *next = nullptr);
+  static instruction* create_nt(value *A, value *B, value *C, bool allow_tf32, const std::string &name = "", instruction *next = nullptr);
+  static instruction* create_tn(value *A, value *B, value *C, bool allow_tf32, const std::string &name = "", instruction *next = nullptr);
+  static instruction* create_tt(value *A, value *B, value *C, bool allow_tf32, const std::string &name = "", instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(dot_inst)
   _TRITON_DEFINE_ACCEPT(dot_inst)
+
+private:
+  bool is_prefetched_ = false;
+  bool allow_tf32_ = false;
+  DataType C_type_ = DataType::FP32;
+  DataType A_type_ = DataType::FP16;
+  DataType B_type_ = DataType::FP16;
 };
 
 //class outer_inst: public builtin_inst {

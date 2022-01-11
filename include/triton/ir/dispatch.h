@@ -80,7 +80,7 @@ struct dispatch{
   static ir::value *atomic_xchg(ir::value* ptr, ir::value *val, ir::value *msk, ir::builder *builder);
 
   // linear algebra
-  static ir::value *dot(ir::value *lhs, ir::value *rhs, ir::builder *builder);
+  static ir::value *dot(ir::value *lhs, ir::value *rhs, ir::constant_int *allow_tf32, ir::builder *builder);
 
   // indexing
   static ir::value *where(ir::value* condition, ir::value *x, ir::value *y, ir::builder *builder);
