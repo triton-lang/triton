@@ -524,7 +524,7 @@ def reshape(input, shape, _builder=None):
 
 
 @builtin
-def dot(input, other, allow_tf32=False, _builder=None):
+def dot(input, other, allow_tf32=True, _builder=None):
     """
     Returns the matrix product of two blocks.
 
