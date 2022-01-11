@@ -121,6 +121,7 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version){
   init_llvm();
   // verify and store llvm
   llvm::legacy::PassManager pm;
+  // module->print(llvm::outs(), nullptr);
   pm.add(llvm::createVerifierPass());
   pm.run(*module);
   // create machine

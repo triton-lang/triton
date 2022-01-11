@@ -110,19 +110,87 @@ protected:
 
 class mma_layout: public distributed_layout {
 public:
+  enum TensorCoreType : uint8_t {
+    // floating-point tensor core instr
+    FP32_FP16_FP16_FP32 = 0, // default
+    FP32_BF16_BF16_FP32,
+    FP32_TF32_TF32_FP32,
+    // integer tensor core instr
+    INT32_INT1_INT1_INT32, // Not implemented
+    INT32_INT4_INT4_INT32, // Not implemented
+    INT32_INT8_INT8_INT32, // Not implemented
+    //
+    NOT_APPLICABLE,    
+  };
+
+  // Used on nvidia GPUs with sm >= 80
+  inline static const std::map<TensorCoreType, std::vector<int>> mma_instr_shape_ = {
+    {FP32_FP16_FP16_FP32, {16, 8, 16}}, 
+    {FP32_BF16_BF16_FP32, {16, 8, 16}},
+    {FP32_TF32_TF32_FP32, {16, 8, 8}},
+
+    {INT32_INT1_INT1_INT32, {16, 8, 256}},
+    {INT32_INT4_INT4_INT32, {16, 8, 64}},
+    {INT32_INT8_INT8_INT32, {16, 8, 32}},
+  };
+
+  // shape of matrices loaded by ldmatrix (m-n-k, for mxk & kxn matrices)
+  inline static const std::map<TensorCoreType, std::vector<int>> mma_mat_shape_ = {
+    {FP32_FP16_FP16_FP32, {8, 8, 8}}, 
+    {FP32_BF16_BF16_FP32, {8, 8, 8}},
+    {FP32_TF32_TF32_FP32, {8, 8, 4}},
+
+    {INT32_INT1_INT1_INT32, {8, 8, 64}},
+    {INT32_INT4_INT4_INT32, {8, 8, 32}},
+    {INT32_INT8_INT8_INT32, {8, 8, 16}},
+  };
+
+  inline static const std::map<TensorCoreType, std::string> mma_instr_ptx_ = {
+    {FP32_FP16_FP16_FP32, "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32"}, 
+    {FP32_BF16_BF16_FP32, "mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32"},
+    {FP32_TF32_TF32_FP32, "mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32"},
+
+    {INT32_INT1_INT1_INT32, "mma.sync.aligned.m16n8k256.row.col.s32.b1.b1.s32.xor.popc"},
+    {INT32_INT4_INT4_INT32, "mma.sync.aligned.m16n8k64.row.col.satfinite.s32.s4.s4.s32"},
+    {INT32_INT8_INT8_INT32, "mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32"},
+  };
+
+  // vector length per ldmatrix (16*8/elelment_size_in_bits)
+  inline static const std::map<TensorCoreType, int> mma_instr_vec_ = {
+    {FP32_FP16_FP16_FP32, 8},
+    {FP32_BF16_BF16_FP32, 8},
+    {FP32_TF32_TF32_FP32, 4},
+
+    {INT32_INT1_INT1_INT32, 128},
+    {INT32_INT4_INT4_INT32, 32},
+    {INT32_INT8_INT8_INT32, 16},
+  };
+
+public:
   mma_layout(size_t num_warps,
                 const std::vector<int>& axes,
                 const std::vector<unsigned>& shapes,
                 const std::vector<ir::value *> &values,
                 analysis::align* align, target *tgt,
              shared_layout* layout_a,
-             shared_layout* layout_b);
+             shared_layout* layout_b,
+             ir::value *dot);
   void accept(layout_visitor* vst) { vst->visit_layout_mma(this); }
   // accessor
   int fpw(size_t k) { return fpw_.at(k); }
   int wpt(size_t k) { return wpt_.at(k); }
   int spw(size_t k) { return spw_.at(k); }
   int rep(size_t k) { return rep_.at(k); }
+
+  // helpers for generator.cc
+  std::string get_ptx_instr() const { return mma_instr_ptx_.at(tensor_core_type_); }
+  std::vector<int> get_mma_instr_shape() const { return mma_instr_shape_.at(tensor_core_type_); }
+  std::vector<int> get_mma_mat_shape() const { return mma_mat_shape_.at(tensor_core_type_); }
+  int get_vec_a() const { return mma_instr_vec_.at(tensor_core_type_); }
+  int get_vec_b() const { return mma_instr_vec_.at(tensor_core_type_); }
+
+  // setter
+  void set_tensor_core_type(TensorCoreType type) { tensor_core_type_ = type; }
 
 private:
   // fragment per warp
@@ -135,6 +203,8 @@ private:
   std::vector<int> spt_;
   // repetitions
   std::vector<int> rep_;
+
+  TensorCoreType tensor_core_type_ = FP32_FP16_FP16_FP32;
 };
 
 struct scanline_layout: public distributed_layout {
@@ -182,7 +252,7 @@ public:
                 const std::vector<unsigned>& shapes,
                 const std::vector<ir::value *> &values_,
                 ir::type *ty,
-                analysis::align* align);
+                analysis::align* align, target *tgt);
   void accept(layout_visitor* vst) { vst->visit_layout_shared(this); }
   // accessors
   size_t get_size()                         { return size_; }
@@ -197,6 +267,7 @@ public:
   ir::value* hmma_dot_b()                      { return hmma_dot_b_; }
   void set_mma_vec(int mma_vec)             { mma_vec_ = mma_vec; }
   int  get_mma_vec()                        { return mma_vec_;}
+  int  get_mma_strided()                    { return mma_strided_; }
   data_layout* get_arg_layout()             { return arg_layout_; }
 
 private:
@@ -209,6 +280,8 @@ private:
   ir::value* hmma_dot_b_;
   data_layout* arg_layout_;
   int mma_vec_;
+  int mma_strided_;
+  target *tgt_;
 };
 
 
