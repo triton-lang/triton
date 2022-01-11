@@ -718,12 +718,13 @@ ir::value *dispatch::atomic_xchg(ir::value* ptr, ir::value *val, ir::value *mask
 //                               Linear Algebra
 //===----------------------------------------------------------------------===//
 
-ir::value *dispatch::dot(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
+ir::value *dispatch::dot(ir::value *lhs, ir::value *rhs, ir::constant_int *allow_tf32, ir::builder *builder) {
   ir::value *_0 = builder->get_float32(0);
   unsigned M = lhs->get_type()->get_block_shapes()[0];
   unsigned N = rhs->get_type()->get_block_shapes()[1];
   _0 = builder->create_splat(_0, {M, N});
-  return builder->create_dot(lhs, rhs, _0, /*allow_tf32*/true);
+  bool _allow_tf32 = allow_tf32->get_value() != 0;
+  return builder->create_dot(lhs, rhs, _0, _allow_tf32);
 }
 
 

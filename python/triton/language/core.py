@@ -524,18 +524,18 @@ def reshape(input, shape, _builder=None):
 
 
 @builtin
-def dot(input, other, _builder=None):
+def dot(input, other, allow_tf32=False, _builder=None):
     """
     Returns the matrix product of two blocks.
 
     The two blocks must be two dimensionals and have compatible inner dimensions.
 
     :param input: The first block to be multiplied.
-    :type input: 2D block of scalar-type in {:code:`float16`, :code:`float32`}
+    :type input: 2D block of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
     :param other: The second block to be multiplied.
-    :type other: 2D block of scalar-type in {:code:`float16`, :code:`float32`}
+    :type other: 2D block of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
     """
-    return frontend.dot(input, other, _builder)
+    return frontend.dot(input, other, allow_tf32, _builder)
 
 
 # -----------------------
