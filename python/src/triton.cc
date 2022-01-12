@@ -128,6 +128,8 @@ std::string dtype_cache_key_part(const py::object& dtype) {
 }
 
 size_t get_pointer_range_size(uint64_t addr){
+  if(addr == 0)
+    return 0;
   size_t size;
   drv::dispatch::cuPointerGetAttribute(&size, CU_POINTER_ATTRIBUTE_RANGE_SIZE, (CUdeviceptr)addr);
   return size;
