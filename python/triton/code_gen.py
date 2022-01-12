@@ -683,7 +683,7 @@ class Kernel:
             elif i in tensor_idxs:
                 addr = arg.data_ptr()
                 range_size = _triton.runtime.get_pointer_range_size(addr)
-                attributes[i] = min(Kernel.pow2_divisor(addr), 
+                attributes[i] = min(Kernel.pow2_divisor(addr),
                                     Kernel.pow2_divisor(range_size))
 
         # transforms ints whose value is one into constants for just-in-time compilation
