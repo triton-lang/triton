@@ -64,14 +64,14 @@ def mask_tensor(x, mask, block, value=0):
 
 def assert_almost_equal(x, y, decimal=2, err_msg=''):
     if x.dtype == torch.bfloat16 and y.dtype == torch.bfloat16:
-        assert almost_equal(x, y, decimal=decimal)
-    else:
-        import numpy.testing as npt
-        if isinstance(x, torch.Tensor):
-            x = x.cpu().detach().numpy()
-        if isinstance(y, torch.Tensor):
-            y = y.cpu().detach().numpy()
-        npt.assert_array_almost_equal(x, y, err_msg=err_msg, decimal=decimal)
+        x = x.float()
+        y = y.float()
+    import numpy.testing as npt
+    if isinstance(x, torch.Tensor):
+        x = x.cpu().detach().numpy()
+    if isinstance(y, torch.Tensor):
+        y = y.cpu().detach().numpy()
+    npt.assert_array_almost_equal(x, y, err_msg=err_msg, decimal=decimal)
 
 
 def allclose(x, y, tol=1e-2):
@@ -89,21 +89,6 @@ def allclose(x, y, tol=1e-2):
     tol = 1e-2
     err = torch.max(diff) / torch.max(x_max, y_max)
     return err <= tol
-
-
-def almost_equal(x, y, decimal=6):
-    tol = 1.5 * 10**(-decimal)
-    if x.dtype != y.dtype:
-        raise RuntimeError(f'{x.dtype} did not match with {x.dtype}')
-    if x.shape != y.shape:
-        raise RuntimeError(f'{x.shape} did not match with {y.shape}')
-    if x.dtype == torch.bool:
-        return torch.sum(x ^ y) == 0
-    if x.dtype in [torch.int8, torch.int16, torch.int32, torch.int64]:
-        tol = 0
-    diff = abs(x - y)
-    is_close = diff < tol
-    return is_close.all().item()
 
 
 def nvsmi(attrs):
