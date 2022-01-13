@@ -90,6 +90,7 @@ def allclose(x, y, tol=1e-2):
     err = torch.max(diff) / torch.max(x_max, y_max)
     return err <= tol
 
+
 def almost_equal(x, y, decimal=6):
     tol = 1.5 * 10**(-decimal)
     if x.dtype != y.dtype:
@@ -103,6 +104,7 @@ def almost_equal(x, y, decimal=6):
     diff = abs(x - y)
     is_close = diff < tol
     return is_close.all().item()
+
 
 def nvsmi(attrs):
     attrs = ','.join(attrs)
