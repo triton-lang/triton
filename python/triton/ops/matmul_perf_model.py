@@ -84,7 +84,7 @@ def prune_num_stages(configs, named_args):
     cc = _triton.runtime.cc(backend, device)
     # BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, num_warps, num_stages
 
-    # Some dtypes does not allow atomic_add
+    # Some dtypes do not allow atomic_add
     if named_args['A'].dtype == torch.bfloat16:
         configs = [config for config in configs if config.kwargs['SPLIT_K'] == 1]
 
