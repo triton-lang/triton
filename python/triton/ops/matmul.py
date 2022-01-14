@@ -87,7 +87,7 @@ def _kernel(A, B, C, M, N, K,
         acc += tl.dot(a, b)
         A += BLOCK_K * SPLIT_K * stride_ak
         B += BLOCK_K * SPLIT_K * stride_bk
-    acc = acc.to(tl.float16)
+    acc = acc.to(C.dtype.element_ty)
     # rematerialize rm and rn to save registers
     rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
