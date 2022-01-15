@@ -1634,10 +1634,15 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
     ldmatrix_ty = FunctionType::get(fp32_pack4_ty, std::vector<llvm::Type*>{smem_ptr_ty}, false);
     phi_ty = fp32_ty;
   } else if (A_ir_ty->is_integer_ty(8) && B_ir_ty->is_integer_ty(8)) {
-    mma_ty = FunctionType::get(i32_pack4_ty, std::vector<llvm::Type*>{i8x4_ty, i8x4_ty, i8x4_ty, i8x4_ty, i8x4_ty, i8x4_ty, i32_ty, i32_ty, i32_ty, i32_ty}, false);
-    smem_ptr_ty = ptr_ty(i8_ty, 3);
-    ldmatrix_ty = FunctionType::get(i8x4_pack4_ty, std::vector<llvm::Type*>{smem_ptr_ty}, false);
-    phi_ty = i8x4_ty;
+    // FIXME: We should use i8 here (but nvptx will generate extra casts when using i8)
+    mma_ty = FunctionType::get(i32_pack4_ty, std::vector<llvm::Type*>{i32_ty, i32_ty, i32_ty, i32_ty, i32_ty, i32_ty, i32_ty, i32_ty, i32_ty, i32_ty}, false);
+    smem_ptr_ty = ptr_ty(i32_ty, 3);
+    ldmatrix_ty = FunctionType::get(i32_pack4_ty, std::vector<llvm::Type*>{smem_ptr_ty}, false);
+    phi_ty = i32_ty;
+    // mma_ty = FunctionType::get(i32_pack4_ty, std::vector<llvm::Type*>{i8x4_ty, i8x4_ty, i8x4_ty, i8x4_ty, i8x4_ty, i8x4_ty, i32_ty, i32_ty, i32_ty, i32_ty}, false);
+    // smem_ptr_ty = ptr_ty(i8_ty, 3);
+    // ldmatrix_ty = FunctionType::get(i8x4_pack4_ty, std::vector<llvm::Type*>{smem_ptr_ty}, false);
+    // phi_ty = i8x4_ty;
   } else
     throw std::runtime_error("mma16816 data type not supported");
 
