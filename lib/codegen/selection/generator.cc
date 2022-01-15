@@ -1,6 +1,7 @@
 ﻿#include <numeric>
 #include <sstream>
 #include <iomanip>
+#include <stdexcept>
 #include "triton/codegen/selection/generator.h"
 #include "triton/codegen/target.h"
 #include "triton/codegen/analysis/axes.h"
@@ -1355,9 +1356,6 @@ public:
     need_trans_ = k_order_ != order_[0];
     can_use_ldmatrix_ = dtsize == 2 || (!need_trans_);
 
-    // std::cout << can_use_ldmatrix_ << std::endl;
-    // std::cout << need_trans_ << std::endl;
-
     // we need more pointers at the fast-changing axis, 
     if (can_use_ldmatrix_)
       num_ptr_ = tile_shape[order[0]] / (order[0] == k_order? 1 : wpt) / instr_shape[order[0]];
@@ -1496,7 +1494,6 @@ public:
               extract_val(res_v4, std::vector<unsigned>{2}),
               extract_val(res_v4, std::vector<unsigned>{3})};
     } else {
-      // assert(false && "should not be here");
       assert(dtsize_ == 4 && need_trans_);
       Value *ptr2 = get_ptr(ptr_idx+1);
       assert(s_mat_stride_ == 1);
@@ -1596,12 +1593,18 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   const int num_rep_n = shapes[1] / layout->shape_per_cta(1);
   const int num_rep_k = std::max<int>(NK/mma_instr_k, 1);
 
+  // floating point types
   Type *fp32_ty = f32_ty;
   Type *fp16x2_ty = vec_ty(f16_ty, 2);
   Type *bf16x2_ty = vec_ty(bf16_ty, 2);
   Type *fp16x2_pack4_ty = StructType::get(*ctx_, std::vector<llvm::Type*>{fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty});
   Type *bf16x2_pack4_ty = StructType::get(*ctx_, std::vector<llvm::Type*>{bf16x2_ty, bf16x2_ty, bf16x2_ty, bf16x2_ty});
   Type *fp32_pack4_ty = StructType::get(*ctx_, std::vector<llvm::Type*>{fp32_ty, fp32_ty, fp32_ty, fp32_ty});
+  // integer types
+  Type *i8x4_ty = vec_ty(i8_ty, 4);
+  Type *i8x4_pack4_ty = StructType::get(*ctx_, std::vector<llvm::Type*>{i8x4_ty, i8x4_ty, i8x4_ty, i8x4_ty});
+  Type *i32_pack4_ty  = StructType::get(*ctx_, std::vector<llvm::Type*>{i32_ty, i32_ty, i32_ty, i32_ty});
+
 
   FunctionType *ldmatrix_ty = nullptr;
   FunctionType *mma_ty = nullptr;
@@ -1630,6 +1633,11 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
     smem_ptr_ty = ptr_ty(fp32_ty, 3);
     ldmatrix_ty = FunctionType::get(fp32_pack4_ty, std::vector<llvm::Type*>{smem_ptr_ty}, false);
     phi_ty = fp32_ty;
+  } else if (A_ir_ty->is_integer_ty(8) && B_ir_ty->is_integer_ty(8)) {
+    mma_ty = FunctionType::get(i32_pack4_ty, std::vector<llvm::Type*>{i8x4_ty, i8x4_ty, i8x4_ty, i8x4_ty, i8x4_ty, i8x4_ty, i32_ty, i32_ty, i32_ty, i32_ty}, false);
+    smem_ptr_ty = ptr_ty(i8_ty, 3);
+    ldmatrix_ty = FunctionType::get(i8x4_pack4_ty, std::vector<llvm::Type*>{smem_ptr_ty}, false);
+    phi_ty = i8x4_ty;
   } else
     throw std::runtime_error("mma16816 data type not supported");
 
@@ -1690,7 +1698,7 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
                                              " {$4, $5, $6, $7},"
                                              " {$8, $9},"
                                              " {$10, $11, $12, $13};",
-                                             "=f,=f,=f,=f,r,r,r,r,r,r,0,1,2,3", true);
+                                             "=r,=r,=r,=r,r,r,r,r,r,r,0,1,2,3", true);
 
   // create mma & unpack result, m, n, k are offsets in mat
   auto call_mma = [&](unsigned m, unsigned n, unsigned k) {
@@ -1922,7 +1930,10 @@ void generator::visit_dot_inst(ir::dot_inst* dot) {
     return visit_mma884(dot, A, B, D, NK);
   if(!is_outer && is_mma && tgt_->as_nvidia()->sm() >= 80)
     return visit_mma16816(dot, A, B, D, NK); // rename it as visit_mma_v2()?
-  return visit_fmadot(dot, A, B, D, NK, c_ty, f_mul_add);
+  if (dot->get_type()->get_scalar_ty()->is_fp32_ty() && 
+      A->get_type()->get_scalar_ty()->is_fp32_ty())
+    return visit_fmadot(dot, A, B, D, NK, c_ty, f_mul_add);
+  throw std::runtime_error("dot has invalid operand type");
 }
 
 void generator::visit_trans_inst(ir::trans_inst* trans) {

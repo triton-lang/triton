@@ -33,7 +33,9 @@ inline bool is_hmma_c(ir::value *v, int sm){
     result = (a_ty->get_scalar_ty()->is_fp16_ty() && b_ty->get_scalar_ty()->is_fp16_ty()) ||
              (a_ty->get_scalar_ty()->is_bf16_ty() && b_ty->get_scalar_ty()->is_bf16_ty()) ||
              (a_ty->get_scalar_ty()->is_fp32_ty() && b_ty->get_scalar_ty()->is_fp32_ty() && 
-              x->allow_tf32() && sm >= 80);
+              x->allow_tf32() && sm >= 80) ||
+             (a_ty->get_scalar_ty()->is_integer_ty(8) && b_ty->get_scalar_ty()->is_integer_ty(8) && 
+              sm >= 80);
   }
   return result;
 }
@@ -63,7 +65,7 @@ static mma_layout::TensorCoreType get_mma_type(ir::value *v) {
         return mma_type;
       }
     } else if (c_ty->get_scalar_ty()->is_integer_ty(32)) {
-      throw std::runtime_error("integer tensor cores are not yet supported");
+      // throw std::runtime_error("integer tensor cores are not yet supported");
       // // integer tensor cores
       // if (a_ty->get_scalar_ty()->is_integer_ty(1) && b_ty->get_scalar_ty()->is_integer_ty(1)) {
       //   mma_type = mma_layout::INT32_INT1_INT1_INT32;
@@ -73,10 +75,10 @@ static mma_layout::TensorCoreType get_mma_type(ir::value *v) {
       //   mma_type = mma_layout::INT32_INT4_INT4_INT32;
       //   return mma_type;
       // }
-      // if (a_ty->get_scalar_ty()->is_integer_ty(8) && b_ty->get_scalar_ty()->is_integer_ty(8)) {
-      //   mma_type = mma_layout::INT32_INT8_INT8_INT32;
-      //   return mma_type;
-      // }
+      if (a_ty->get_scalar_ty()->is_integer_ty(8) && b_ty->get_scalar_ty()->is_integer_ty(8)) {
+        mma_type = mma_layout::INT32_INT8_INT8_INT32;
+        return mma_type;
+      }
     }
   }
   return mma_layout::NOT_APPLICABLE;
