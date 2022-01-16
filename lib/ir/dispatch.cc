@@ -64,6 +64,13 @@ ir::type *computation_type(ir::type* a_ty, ir::type* b_ty, DivOrMod div_or_mod) 
       return type::get_fp16_ty(ctx);
     }
   }
+  if (a_ty->is_bf16_ty() || b_ty->is_bf16_ty()) {
+    if (div_or_mod == DivOrMod::YES) {
+      return type::get_fp32_ty(ctx);
+    } else {
+      return type::get_bf16_ty(ctx);
+    }
+  }
   if (!a_ty->is_integer_ty() || !b_ty->is_integer_ty())
     throw_unreachable("computation_type");
   // 4 ) both operands are integer and undergo

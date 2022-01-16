@@ -84,7 +84,7 @@ Value* geper::operator()(Value *ptr, Value* off, const std::string& name){
 // types
 #define void_ty              builder_->getVoidTy()
 #define f16_ty               builder_->getHalfTy()
-#define bf16_ty              builder_->getBFloatTy()
+#define bf16_ty              builder_->getInt16Ty()
 #define f32_ty               builder_->getFloatTy()
 #define i8_ty                builder_->getInt8Ty()
 #define i16_ty               builder_->getInt16Ty()
@@ -162,7 +162,7 @@ Type *generator::cvt(ir::type *ty) {
     case ir::type::VoidTyID:      return Type::getVoidTy(*ctx_);
     case ir::type::FP8TyID:       return Type::getInt8Ty(*ctx_);
     case ir::type::FP16TyID:      return Type::getHalfTy(*ctx_);
-    case ir::type::BF16TyID:      return Type::getBFloatTy(*ctx_);
+    case ir::type::BF16TyID:      return Type::getInt16Ty(*ctx_);
     case ir::type::FP32TyID:      return Type::getFloatTy(*ctx_);
     case ir::type::FP64TyID:      return Type::getDoubleTy(*ctx_);
     case ir::type::LabelTyID:     return Type::getLabelTy(*ctx_);
@@ -758,8 +758,6 @@ void generator::visit_store_inst(ir::store_inst * x){
   }
   auto idxs    = idxs_.at(val_op);
   Type *ty = cvt(val_op->get_type()->get_scalar_ty());
-  if (ty->isBFloatTy()) // llvm11-nvptx cannot select bf16 store
-    ty = f16_ty;
   for(size_t i = 0; i < idxs.size(); i += vec){
     auto idx = idxs[i];
     // pointer
@@ -2143,9 +2141,6 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
   ir::block_type::block_shapes_t shape = out->get_type()->get_block_shapes();
   // pointer to temporary shared memory
   Type *ty = cvt(out->get_type()->get_scalar_ty());
-
-  if (ty->isBFloatTy()) // llvm11-nvptx cannot select bf16 store
-    ty = f16_ty;
 
   // Orders
   analysis::distributed_layout* in_layout = dynamic_cast<analysis::distributed_layout*>(layouts_->get(in));

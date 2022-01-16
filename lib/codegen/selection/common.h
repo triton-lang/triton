@@ -26,7 +26,7 @@ namespace triton::codegen {
 // types
 #define void_ty              builder_->getVoidTy()
 #define f16_ty               builder_->getHalfTy()
-#define bf16_ty              builder_->getBFloatTy()
+#define bf16_ty              builder_->getInt16Ty()
 #define f32_ty               builder_->getFloatTy()
 #define i8_ty                builder_->getInt8Ty()
 #define i32_ty               builder_->getInt32Ty()

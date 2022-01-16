@@ -18,6 +18,8 @@ constant *constant::get_null_value(type *ty) {
     return constant_int::get(ty, 0);
   case type::FP16TyID:
     return constant_fp::get(type::get_fp16_ty(ctx), 0);
+  case type::BF16TyID:
+    return constant_fp::get(type::get_bf16_ty(ctx), 0);
   case type::FP32TyID:
     return constant_fp::get(type::get_fp32_ty(ctx), 0);
   case type::FP64TyID:
