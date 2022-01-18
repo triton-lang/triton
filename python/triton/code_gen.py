@@ -972,6 +972,9 @@ class JITFunction:
             from inspect import getcallargs
             arg_values = getcallargs(self.fn, *args, **kwargs)
             arg_values = [arg_values[name] for name in self.arg_names]
+            arg_values = [arg if isinstance(arg, triton.language.block) \
+                              else triton.language.constexpr(arg) for arg in arg_values]
+            
             gscope = generator.gscope.copy()
             lscope = generator.lscope.copy()
             values = generator.module.get_values().copy()

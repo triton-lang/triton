@@ -165,6 +165,7 @@ class block:
         self.numel = 1
         for s in self.shape:
             self.numel *= s
+        self.numel = constexpr(self.numel)
         # Data-type wrapper
         self.dtype = block._init_dtype(self.handle.type.scalar)
         # Shape is a constexpr
@@ -321,7 +322,10 @@ class constexpr:
     """
 
     def __init__(self, value):
-        self.value = value
+        if isinstance(value, constexpr):
+            self.value = value.value
+        else:
+            self.value = value
 
     def __repr__(self) -> str:
         return f"constexpr[{self.value}]"
@@ -880,7 +884,7 @@ def ravel(x):
     :param x: the input block
     :type x: Block
     """
-    return triton.language.reshape(x, [x.type.numel])
+    return triton.language.reshape(x, [x.numel])
 
 
 @triton.jit
