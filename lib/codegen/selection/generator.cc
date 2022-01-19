@@ -1363,6 +1363,9 @@ public:
       num_ptr_ = tile_shape[order[0]] / wpt / mat_shape[order[0]];
     num_ptr_ = std::max<int>(num_ptr_, 2);
 
+    // special rule for i8/u8, 4 ptrs for each matrix
+    if (!can_use_ldmatrix_ && dtsize_ == 1)
+      num_ptr_ *= 4;
 
     // load_v4 stride (in num of mats)
     int load_stride_in_mat[2];
@@ -1443,6 +1446,61 @@ public:
       }
       return offs;
       // throw std::runtime_error("not implemented");
+    } else if (dtsize_ == 1 && need_trans_) {
+      // load i8/u8 matrices with lds8
+      Value *c_off_in_mat = udiv(lane, i32(4)); //
+      Value *s_off_in_mat = mul(urem(lane, i32(4)), i32(4)); // each thread load 4 cols
+
+      // Value *phase = urem(udiv(s_off_in_mat, i32(per_phase_)), i32(max_phase_));
+      std::vector<Value*> offs(num_ptr_);
+      std::cout << "s_stride: " << s_stride_ << std::endl;
+      for (int mat = 0; mat < 4; ++mat) { // loads 4 mats each time
+        int k_mat_arr_int  = (k_order_ == 1) ? mat/2 : mat%2;
+        int nk_mat_arr_int = (k_order_ == 1) ? mat%2 : mat/2;
+        if (k_mat_arr_int > 0) // we don't need pointers for k
+          continue;
+        Value *k_mat_arr  = i32(k_mat_arr_int);
+        Value *nk_mat_arr = i32(nk_mat_arr_int);
+        // physical offset (before swizzling)
+        Value *c_mat_off = add(mul(warp_off, i32(warp_off_stride_)),
+                               mul(nk_mat_arr, i32(mat_arr_stride_)));
+        Value *s_mat_off = k_mat_arr; // always 0?
+        // // FIXME: (k_order_ == 1?) is really dirty hack
+        // for (int i = 0; i < num_ptr_/8; ++i) {
+        //   Value *c_mat_off_i = add(c_mat_off, i32(i*p_load_stride_in_mat_*(k_order_ == 1?1:2)));
+        //   c_mat_off_i = xor_(c_mat_off_i, phase);
+        //   Value *c_off = add(c_off_in_mat, mul(c_mat_off_i, i32(c_mat_shape_)));
+        //   // TODO: move this out of the loop
+        //   c_off = urem(c_off, i32(tile_shape_[order_[0]]));
+        //   s_off = urem(s_off, i32(tile_shape_[order_[1]]));
+        //   offs[8*i + nk_mat_arr_int*4 + 0] = add(c_off, mul(s_off, i32(s_stride_)));
+        //   offs[8*i + nk_mat_arr_int*4 + 1] = add(c_off, mul(s_off, i32(s_stride_)));
+        //   offs[8*i + nk_mat_arr_int*4 + 1] = add(c_off, mul(s_off, i32(s_stride_)));
+        //   offs[8*i + nk_mat_arr_int*4 + 1] = add(c_off, mul(s_off, i32(s_stride_)));
+        // }
+        
+        for (int loadx4_off = 0; loadx4_off < num_ptr_/8; ++loadx4_off) {
+          for (int elem_off = 0; elem_off < 4; ++elem_off) {
+            int ptr_off = loadx4_off*8 + nk_mat_arr_int*4 + elem_off;
+
+            Value *c_mat_off_i = add(c_mat_off, i32(loadx4_off*p_load_stride_in_mat_*(k_order_ == 1?1:2)));
+            Value *s_off_in_mat_elem = add(s_off_in_mat, i32(elem_off));
+
+            // disable swizzling ...
+            Value *phase = urem(udiv(s_off_in_mat, i32(per_phase_)), i32(max_phase_));
+            c_mat_off_i = xor_(c_mat_off_i, phase);
+
+            Value *c_off = add(c_off_in_mat, mul(c_mat_off_i, i32(c_mat_shape_)));
+            Value *s_off = add(s_off_in_mat_elem, mul(s_mat_off, i32(s_mat_shape_)));
+            // To prevent out-of-bound access when the tile is too small
+            c_off = urem(c_off, i32(tile_shape_[order_[0]]));
+            s_off = urem(s_off, i32(tile_shape_[order_[1]]));
+            offs[ptr_off] = add(c_off, mul(s_off, i32(s_stride_)));
+          }
+        }
+      }
+      return offs;
+      // throw std::runtime_error("not implemented");
     } else
       throw std::runtime_error("invalid smem load config");
   }
@@ -1459,8 +1517,10 @@ public:
     int ptr_idx = -1;
     if (can_use_ldmatrix_)
       ptr_idx = mat_idx[order_[0]] / (instr_shape_[order_[0]] / mat_shape_[order_[0]]);
-    else // tf32 & trans
+    else if (dtsize_ == 4 && need_trans_) // tf32 & trans
       ptr_idx = mat_idx[order_[0]];
+    else // i8 & trans
+      ptr_idx = mat_idx[order_[0]] * 4;
 
     auto get_ptr = [&](int idx) -> Value* {
       Value *ptr = nullptr;
@@ -1493,8 +1553,7 @@ public:
               extract_val(res_v4, std::vector<unsigned>{1}),
               extract_val(res_v4, std::vector<unsigned>{2}),
               extract_val(res_v4, std::vector<unsigned>{3})};
-    } else {
-      assert(dtsize_ == 4 && need_trans_);
+    } else if (dtsize_ == 4 && need_trans_) { // use lds.32 to load tf32 matrices
       Value *ptr2 = get_ptr(ptr_idx+1);
       assert(s_mat_stride_ == 1);
       int s_offset_elem = mat_idx[order_[1]] * (s_mat_stride_*s_mat_shape_) * s_stride_;
@@ -1518,7 +1577,99 @@ public:
         prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem3);
       }
       return {elem0, elem1, elem2, elem3};
-    }
+    } else if (dtsize_ == 1 && need_trans_) { // use lds.8 to load i8/u8 matrices
+      Value *ptr00 = get_ptr(ptr_idx);
+      Value *ptr01 = get_ptr(ptr_idx+1);
+      Value *ptr02 = get_ptr(ptr_idx+2);
+      Value *ptr03 = get_ptr(ptr_idx+3);
+
+      Value *ptr10 = get_ptr(ptr_idx+4);
+      Value *ptr11 = get_ptr(ptr_idx+5);
+      Value *ptr12 = get_ptr(ptr_idx+6);
+      Value *ptr13 = get_ptr(ptr_idx+7);
+
+      assert(s_mat_stride_ == 1);
+      int s_offset_elem = mat_idx[order_[1]] * (s_mat_stride_*s_mat_shape_) * s_stride_;
+      int s_offset_arr_elem = 1 * (s_mat_stride_*s_mat_shape_) * s_stride_;
+
+      Value *elem0 = UndefValue::get(vec_ty(i8_ty, 4));
+      Value *elem1 = UndefValue::get(vec_ty(i8_ty, 4));
+      Value *elem2 = UndefValue::get(vec_ty(i8_ty, 4));
+      Value *elem3 = UndefValue::get(vec_ty(i8_ty, 4));
+      if (k_order_ == 1) { // 
+        Value *elem00 = load(gep(ptr00, i32(s_offset_elem)));
+        Value *elem01 = load(gep(ptr01, i32(s_offset_elem)));
+        Value *elem02 = load(gep(ptr02, i32(s_offset_elem)));
+        Value *elem03 = load(gep(ptr03, i32(s_offset_elem)));
+
+        assert(elem00->getType()->isIntegerTy(8));
+        elem0 = insert_elt(elem0, elem00, (int)0);
+        elem0 = insert_elt(elem0, elem01, (int)1);
+        elem0 = insert_elt(elem0, elem02, (int)2);
+        elem0 = insert_elt(elem0, elem03, (int)3);
+        elem0 = bit_cast(elem0, i32_ty);
+
+        // Value *elem10 = builder_->getInt8(1);
+        // Value *elem11 = builder_->getInt8(1);
+        // Value *elem12 = builder_->getInt8(1);
+        // Value *elem13 = builder_->getInt8(1);
+        Value *elem10 = load(gep(ptr10, i32(s_offset_elem)));
+        Value *elem11 = load(gep(ptr11, i32(s_offset_elem)));
+        Value *elem12 = load(gep(ptr12, i32(s_offset_elem)));
+        Value *elem13 = load(gep(ptr13, i32(s_offset_elem)));
+
+        elem1 = insert_elt(elem1, elem10, (int)0);
+        elem1 = insert_elt(elem1, elem11, (int)1);
+        elem1 = insert_elt(elem1, elem12, (int)2);
+        elem1 = insert_elt(elem1, elem13, (int)3);
+        elem1 = bit_cast(elem1, i32_ty);
+
+
+        // Value *elem20 = builder_->getInt8(1);
+        // Value *elem21 = builder_->getInt8(1);
+        // Value *elem22 = builder_->getInt8(1);
+        // Value *elem23 = builder_->getInt8(1);
+        Value *elem20 = load(gep(ptr00, i32(s_offset_elem + s_offset_arr_elem)));
+        Value *elem21 = load(gep(ptr01, i32(s_offset_elem + s_offset_arr_elem)));
+        Value *elem22 = load(gep(ptr02, i32(s_offset_elem + s_offset_arr_elem)));
+        Value *elem23 = load(gep(ptr03, i32(s_offset_elem + s_offset_arr_elem)));
+
+        elem2 = insert_elt(elem2, elem20, (int)0);
+        elem2 = insert_elt(elem2, elem21, (int)1);
+        elem2 = insert_elt(elem2, elem22, (int)2);
+        elem2 = insert_elt(elem2, elem23, (int)3);
+        elem2 = bit_cast(elem2, i32_ty);
+
+        // Value *elem30 = builder_->getInt8(1);
+        // Value *elem31 = builder_->getInt8(1);
+        // Value *elem32 = builder_->getInt8(1);
+        // Value *elem33 = builder_->getInt8(1);
+        Value *elem30 = load(gep(ptr10, i32(s_offset_elem + s_offset_arr_elem)));
+        Value *elem31 = load(gep(ptr11, i32(s_offset_elem + s_offset_arr_elem)));
+        Value *elem32 = load(gep(ptr12, i32(s_offset_elem + s_offset_arr_elem)));
+        Value *elem33 = load(gep(ptr13, i32(s_offset_elem + s_offset_arr_elem)));
+
+        elem3 = insert_elt(elem3, elem30, (int)0);
+        elem3 = insert_elt(elem3, elem31, (int)1);
+        elem3 = insert_elt(elem3, elem32, (int)2);
+        elem3 = insert_elt(elem3, elem33, (int)3);
+        elem3 = bit_cast(elem3, i32_ty);
+      } else { // for b (k first)
+        throw std::runtime_error("Not implemented");
+        // elem0 = load(gep(ptr,  i32(s_offset_elem)));
+        // elem2 = load(gep(ptr1, i32(s_offset_elem)));
+        // elem1 = load(gep(ptr,  i32(s_offset_elem + s_offset_arr_elem)));
+        // elem3 = load(gep(ptr1, i32(s_offset_elem + s_offset_arr_elem)));
+      }
+      if (k == 0 && inc == 1 && is_prefetch) {
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem0);
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem1);
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem2);
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem3);
+      }
+      return {elem0, elem1, elem2, elem3};
+    } else
+      throw std::runtime_error("invalid smem load");
   }
 
   int get_num_ptr() const { return num_ptr_; }
@@ -1636,7 +1787,7 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   } else if (A_ir_ty->is_integer_ty(8) && B_ir_ty->is_integer_ty(8)) {
     // FIXME: We should use i8 here (but nvptx will generate extra casts when using i8)
     mma_ty = FunctionType::get(i32_pack4_ty, std::vector<llvm::Type*>{i32_ty, i32_ty, i32_ty, i32_ty, i32_ty, i32_ty, i32_ty, i32_ty, i32_ty, i32_ty}, false);
-    smem_ptr_ty = ptr_ty(i32_ty, 3);
+    smem_ptr_ty = ptr_ty(i8_ty, 3);
     ldmatrix_ty = FunctionType::get(i32_pack4_ty, std::vector<llvm::Type*>{smem_ptr_ty}, false);
     phi_ty = i32_ty;
     // mma_ty = FunctionType::get(i32_pack4_ty, std::vector<llvm::Type*>{i8x4_ty, i8x4_ty, i8x4_ty, i8x4_ty, i8x4_ty, i8x4_ty, i32_ty, i32_ty, i32_ty, i32_ty}, false);
@@ -1728,12 +1879,12 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   ir::phi_node* phiB = dynamic_cast<ir::phi_node*>(B);
 
   auto register_lds2 =
-    [&](std::map<std::pair<unsigned, unsigned>, Value*>& vals, int n, int k, int inc, Value* val, bool is_prefetch) {
+    [&](std::map<std::pair<unsigned, unsigned>, Value*>& vals, int mn, int k, int inc, Value* val, bool is_prefetch) {
       if (k < 2 && is_prefetch) {
         ir::basic_block* inc_block = phiA->get_incoming_block(inc);
-        lazy_phi_incs_.push_back(std::make_tuple((PHINode*)vals[{n, k}], val, inc_block));
+        lazy_phi_incs_.push_back(std::make_tuple((PHINode*)vals[{mn, k}], val, inc_block));
       } else
-        vals[{n, k}] = val;
+        vals[{mn, k}] = val;
   };
 
   auto load_a = [&](int m, int k, int inc, bool is_prefetch) {
