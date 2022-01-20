@@ -31,6 +31,7 @@ def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: tl.constexpr = N_ROUNDS_DEFAUL
         k1 = k1 + PHILOX_KEY_B
     return c0, c1, c2, c3
 
+
 @triton.jit
 def philox(seed, c0, c1, c2, c3, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     seed = seed.to(tl.uint64)

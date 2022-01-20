@@ -919,6 +919,7 @@ def swizzle2d(i, j, size_i, size_j, size_g):
     new_j = (ij % size_gj) // size_g
     return new_i, new_j
 
+
 @triton.jit
 def zeros_like(input):
     return zeros(input.shape, input.dtype)
