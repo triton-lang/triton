@@ -1453,7 +1453,6 @@ public:
 
       // Value *phase = urem(udiv(s_off_in_mat, i32(per_phase_)), i32(max_phase_));
       std::vector<Value*> offs(num_ptr_);
-      std::cout << "s_stride: " << s_stride_ << std::endl;
       for (int mat = 0; mat < 4; ++mat) { // loads 4 mats each time
         int k_mat_arr_int  = (k_order_ == 1) ? mat/2 : mat%2;
         int nk_mat_arr_int = (k_order_ == 1) ? mat%2 : mat/2;
@@ -1578,128 +1577,79 @@ public:
       int s_offset_elem = mat_idx[order_[1]] * (s_mat_stride_*s_mat_shape_) * s_stride_;
       int s_offset_arr_elem = 1 * (s_mat_stride_*s_mat_shape_) * s_stride_;
 
-      Value *elem0 = UndefValue::get(vec_ty(i8_ty, 4));
-      Value *elem1 = UndefValue::get(vec_ty(i8_ty, 4));
-      Value *elem2 = UndefValue::get(vec_ty(i8_ty, 4));
-      Value *elem3 = UndefValue::get(vec_ty(i8_ty, 4));
+      Value *i8v4_elems[4];
+      Value *i32_elems[4];
+      for (int i=0; i<4; ++i)
+        i8v4_elems[i] = UndefValue::get(vec_ty(i8_ty, 4));
       
       Value *elem00, *elem01, *elem02, *elem03;
       Value *elem10, *elem11, *elem12, *elem13;
       Value *elem20, *elem21, *elem22, *elem23;
       Value *elem30, *elem31, *elem32, *elem33;
+      Value *i8_elems[4*4];
       if (k_order_ == 1) { // 
-        elem00 = load(gep(ptr00, i32(s_offset_elem)));
-        elem01 = load(gep(ptr01, i32(s_offset_elem)));
-        elem02 = load(gep(ptr02, i32(s_offset_elem)));
-        elem03 = load(gep(ptr03, i32(s_offset_elem)));
+        i8_elems[0*4 + 0] = load(gep(ptr00, i32(s_offset_elem)));
+        i8_elems[0*4 + 1] = load(gep(ptr01, i32(s_offset_elem)));
+        i8_elems[0*4 + 2] = load(gep(ptr02, i32(s_offset_elem)));
+        i8_elems[0*4 + 3] = load(gep(ptr03, i32(s_offset_elem)));
 
-        assert(elem00->getType()->isIntegerTy(8));
-        elem0 = insert_elt(elem0, elem00, (int)0);
-        elem0 = insert_elt(elem0, elem01, (int)1);
-        elem0 = insert_elt(elem0, elem02, (int)2);
-        elem0 = insert_elt(elem0, elem03, (int)3);
-        elem0 = bit_cast(elem0, i32_ty);
+        assert(i8_elems[0*4 + 0]->getType()->isIntegerTy(8));
 
-        elem10 = load(gep(ptr10, i32(s_offset_elem)));
-        elem11 = load(gep(ptr11, i32(s_offset_elem)));
-        elem12 = load(gep(ptr12, i32(s_offset_elem)));
-        elem13 = load(gep(ptr13, i32(s_offset_elem)));
+        i8_elems[1*4 + 0] = load(gep(ptr10, i32(s_offset_elem)));
+        i8_elems[1*4 + 1] = load(gep(ptr11, i32(s_offset_elem)));
+        i8_elems[1*4 + 2] = load(gep(ptr12, i32(s_offset_elem)));
+        i8_elems[1*4 + 3] = load(gep(ptr13, i32(s_offset_elem)));
 
-        elem1 = insert_elt(elem1, elem10, (int)0);
-        elem1 = insert_elt(elem1, elem11, (int)1);
-        elem1 = insert_elt(elem1, elem12, (int)2);
-        elem1 = insert_elt(elem1, elem13, (int)3);
-        elem1 = bit_cast(elem1, i32_ty);
+        i8_elems[2*4 + 0] = load(gep(ptr00, i32(s_offset_elem + s_offset_arr_elem)));
+        i8_elems[2*4 + 1] = load(gep(ptr01, i32(s_offset_elem + s_offset_arr_elem)));
+        i8_elems[2*4 + 2] = load(gep(ptr02, i32(s_offset_elem + s_offset_arr_elem)));
+        i8_elems[2*4 + 3] = load(gep(ptr03, i32(s_offset_elem + s_offset_arr_elem)));
 
-        elem20 = load(gep(ptr00, i32(s_offset_elem + s_offset_arr_elem)));
-        elem21 = load(gep(ptr01, i32(s_offset_elem + s_offset_arr_elem)));
-        elem22 = load(gep(ptr02, i32(s_offset_elem + s_offset_arr_elem)));
-        elem23 = load(gep(ptr03, i32(s_offset_elem + s_offset_arr_elem)));
+        i8_elems[3*4 + 0] = load(gep(ptr10, i32(s_offset_elem + s_offset_arr_elem)));
+        i8_elems[3*4 + 1] = load(gep(ptr11, i32(s_offset_elem + s_offset_arr_elem)));
+        i8_elems[3*4 + 2] = load(gep(ptr12, i32(s_offset_elem + s_offset_arr_elem)));
+        i8_elems[3*4 + 3] = load(gep(ptr13, i32(s_offset_elem + s_offset_arr_elem)));
 
-        elem2 = insert_elt(elem2, elem20, (int)0);
-        elem2 = insert_elt(elem2, elem21, (int)1);
-        elem2 = insert_elt(elem2, elem22, (int)2);
-        elem2 = insert_elt(elem2, elem23, (int)3);
-        elem2 = bit_cast(elem2, i32_ty);
-
-        elem30 = load(gep(ptr10, i32(s_offset_elem + s_offset_arr_elem)));
-        elem31 = load(gep(ptr11, i32(s_offset_elem + s_offset_arr_elem)));
-        elem32 = load(gep(ptr12, i32(s_offset_elem + s_offset_arr_elem)));
-        elem33 = load(gep(ptr13, i32(s_offset_elem + s_offset_arr_elem)));
-
-        elem3 = insert_elt(elem3, elem30, (int)0);
-        elem3 = insert_elt(elem3, elem31, (int)1);
-        elem3 = insert_elt(elem3, elem32, (int)2);
-        elem3 = insert_elt(elem3, elem33, (int)3);
-        elem3 = bit_cast(elem3, i32_ty);
+        for (int m=0; m<4; ++m) {
+          for (int e=0; e<4; ++e)
+            i8v4_elems[m] = insert_elt(i8v4_elems[m], i8_elems[m*4 + e], e);
+          i32_elems[m] = bit_cast(i8v4_elems[m], i32_ty);
+        }
       } else { // for b (k first)
-        elem00 = load(gep(ptr00, i32(s_offset_elem)));
-        elem01 = load(gep(ptr01, i32(s_offset_elem)));
-        elem02 = load(gep(ptr02, i32(s_offset_elem)));
-        elem03 = load(gep(ptr03, i32(s_offset_elem)));
+        i8_elems[0*4 + 0] = load(gep(ptr00, i32(s_offset_elem)));
+        i8_elems[0*4 + 1] = load(gep(ptr01, i32(s_offset_elem)));
+        i8_elems[0*4 + 2] = load(gep(ptr02, i32(s_offset_elem)));
+        i8_elems[0*4 + 3] = load(gep(ptr03, i32(s_offset_elem)));
 
-        assert(elem00->getType()->isIntegerTy(8));
-        elem0 = insert_elt(elem0, elem00, (int)0);
-        elem0 = insert_elt(elem0, elem01, (int)1);
-        elem0 = insert_elt(elem0, elem02, (int)2);
-        elem0 = insert_elt(elem0, elem03, (int)3);
-        elem0 = bit_cast(elem0, i32_ty);
+        assert(i8_elems[0*4 + 0]->getType()->isIntegerTy(8));
 
-        elem20 = load(gep(ptr10, i32(s_offset_elem)));
-        elem21 = load(gep(ptr11, i32(s_offset_elem)));
-        elem22 = load(gep(ptr12, i32(s_offset_elem)));
-        elem23 = load(gep(ptr13, i32(s_offset_elem)));
+        i8_elems[2*4 + 0] = load(gep(ptr10, i32(s_offset_elem)));
+        i8_elems[2*4 + 1] = load(gep(ptr11, i32(s_offset_elem)));
+        i8_elems[2*4 + 2] = load(gep(ptr12, i32(s_offset_elem)));
+        i8_elems[2*4 + 3] = load(gep(ptr13, i32(s_offset_elem)));
 
-        elem2 = insert_elt(elem2, elem20, (int)0);
-        elem2 = insert_elt(elem2, elem21, (int)1);
-        elem2 = insert_elt(elem2, elem22, (int)2);
-        elem2 = insert_elt(elem2, elem23, (int)3);
-        elem2 = bit_cast(elem2, i32_ty);
+        i8_elems[1*4 + 0] = load(gep(ptr00, i32(s_offset_elem + s_offset_arr_elem)));
+        i8_elems[1*4 + 1] = load(gep(ptr01, i32(s_offset_elem + s_offset_arr_elem)));
+        i8_elems[1*4 + 2] = load(gep(ptr02, i32(s_offset_elem + s_offset_arr_elem)));
+        i8_elems[1*4 + 3] = load(gep(ptr03, i32(s_offset_elem + s_offset_arr_elem)));
 
-        elem10 = load(gep(ptr00, i32(s_offset_elem + s_offset_arr_elem)));
-        elem11 = load(gep(ptr01, i32(s_offset_elem + s_offset_arr_elem)));
-        elem12 = load(gep(ptr02, i32(s_offset_elem + s_offset_arr_elem)));
-        elem13 = load(gep(ptr03, i32(s_offset_elem + s_offset_arr_elem)));
+        i8_elems[3*4 + 0] = load(gep(ptr10, i32(s_offset_elem + s_offset_arr_elem)));
+        i8_elems[3*4 + 1] = load(gep(ptr11, i32(s_offset_elem + s_offset_arr_elem)));
+        i8_elems[3*4 + 2] = load(gep(ptr12, i32(s_offset_elem + s_offset_arr_elem)));
+        i8_elems[3*4 + 3] = load(gep(ptr13, i32(s_offset_elem + s_offset_arr_elem)));
 
-        elem1 = insert_elt(elem1, elem10, (int)0);
-        elem1 = insert_elt(elem1, elem11, (int)1);
-        elem1 = insert_elt(elem1, elem12, (int)2);
-        elem1 = insert_elt(elem1, elem13, (int)3);
-        elem1 = bit_cast(elem1, i32_ty);
-
-        elem30 = load(gep(ptr10, i32(s_offset_elem + s_offset_arr_elem)));
-        elem31 = load(gep(ptr11, i32(s_offset_elem + s_offset_arr_elem)));
-        elem32 = load(gep(ptr12, i32(s_offset_elem + s_offset_arr_elem)));
-        elem33 = load(gep(ptr13, i32(s_offset_elem + s_offset_arr_elem)));
-
-        elem3 = insert_elt(elem3, elem30, (int)0);
-        elem3 = insert_elt(elem3, elem31, (int)1);
-        elem3 = insert_elt(elem3, elem32, (int)2);
-        elem3 = insert_elt(elem3, elem33, (int)3);
-        elem3 = bit_cast(elem3, i32_ty);
+        for (int m=0; m<4; ++m) {
+          for (int e=0; e<4; ++e)
+            i8v4_elems[m] = insert_elt(i8v4_elems[m], i8_elems[m*4 + e], e);
+          i32_elems[m] = bit_cast(i8v4_elems[m], i32_ty);
+        }
       }
       if (k == 0 && inc == 1 && is_prefetch) {
-        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem00);
-        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem01);
-        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem02);
-        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem03);
-
-        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem10);
-        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem11);
-        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem12);
-        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem13);
-
-        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem20);
-        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem21);
-        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem22);
-        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem23);
-
-        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem30);
-        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem31);
-        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem32);
-        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem33);
+        for (int m = 0; m < 4; ++m)
+        for (int e = 0; e < 4; ++e)
+          prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(i8_elems[m*4 + e]);
       }
-      return {elem0, elem1, elem2, elem3};
+      return {i32_elems[0], i32_elems[1], i32_elems[2], i32_elems[3]};
     } else
       throw std::runtime_error("invalid smem load");
   }
