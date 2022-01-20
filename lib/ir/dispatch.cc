@@ -527,8 +527,15 @@ ir::value *dispatch::cast(ir::value *input, ir::type *dst_ty, ir::builder *build
     else
       return builder->create_si_to_fp(input, dst_ty);
   }
-  if (src_sca_ty->is_pointer_ty() && !dst_sca_ty->is_pointer_ty())
-    return builder->create_cast(ir::PtrToInt, input, dst_ty);
+  if (src_sca_ty->is_pointer_ty() && dst_sca_ty->is_integer_ty()){
+    int bitwidth = dst_sca_ty->get_integer_bitwidth();
+    if(bitwidth == 64)
+      return builder->create_cast(ir::PtrToInt, input, dst_ty);
+    if(bitwidth == 1)
+      return dispatch::not_equal(dispatch::cast(input, builder->get_int64_ty(), builder),
+                                 builder->get_int64(0),
+                                 builder);
+  }
   if (!src_sca_ty->is_pointer_ty() && dst_sca_ty->is_pointer_ty())
     return builder->create_cast(ir::IntToPtr, input, dst_ty);
   // Ptr -> Ptr
@@ -718,12 +725,13 @@ ir::value *dispatch::atomic_xchg(ir::value* ptr, ir::value *val, ir::value *mask
 //                               Linear Algebra
 //===----------------------------------------------------------------------===//
 
-ir::value *dispatch::dot(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
+ir::value *dispatch::dot(ir::value *lhs, ir::value *rhs, ir::constant_int *allow_tf32, ir::builder *builder) {
   ir::value *_0 = builder->get_float32(0);
   unsigned M = lhs->get_type()->get_block_shapes()[0];
   unsigned N = rhs->get_type()->get_block_shapes()[1];
   _0 = builder->create_splat(_0, {M, N});
-  return builder->create_dot(lhs, rhs, _0);
+  bool _allow_tf32 = allow_tf32->get_value() != 0;
+  return builder->create_dot(lhs, rhs, _0, _allow_tf32);
 }
 
 
