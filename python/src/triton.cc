@@ -466,6 +466,7 @@ std::tuple<std::string, asm_map_t, int> cu_compile_ttir(const std::string& name,
                                                                uint64_t device, int num_warps, int num_stages,
                                                                asm_map_t &asm_map){
 
+  int n_shared_bytes;
   Py_BEGIN_ALLOW_THREADS
   llvm::LLVMContext ctx;
   // device properties
@@ -477,7 +478,6 @@ std::tuple<std::string, asm_map_t, int> cu_compile_ttir(const std::string& name,
   drv::dispatch::cuDriverGetVersion(&version);
   // Triton-IR -> NVPTX LLVM-IR
   triton::codegen::nvidia_cu_target target(cc);
-  int n_shared_bytes;
   auto llvm = triton::codegen::add_passes_to_emit_bin(ir, ctx, &target, cc, num_warps, num_stages, n_shared_bytes);
   std::string tmp;
   llvm::raw_string_ostream llir(tmp);
