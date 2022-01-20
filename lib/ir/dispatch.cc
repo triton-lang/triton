@@ -527,8 +527,15 @@ ir::value *dispatch::cast(ir::value *input, ir::type *dst_ty, ir::builder *build
     else
       return builder->create_si_to_fp(input, dst_ty);
   }
-  if (src_sca_ty->is_pointer_ty() && !dst_sca_ty->is_pointer_ty())
-    return builder->create_cast(ir::PtrToInt, input, dst_ty);
+  if (src_sca_ty->is_pointer_ty() && dst_sca_ty->is_integer_ty()){
+    int bitwidth = dst_sca_ty->get_integer_bitwidth();
+    if(bitwidth == 64)
+      return builder->create_cast(ir::PtrToInt, input, dst_ty);
+    if(bitwidth == 1)
+      return dispatch::not_equal(dispatch::cast(input, builder->get_int64_ty(), builder),
+                                 builder->get_int64(0),
+                                 builder);
+  }
   if (!src_sca_ty->is_pointer_ty() && dst_sca_ty->is_pointer_ty())
     return builder->create_cast(ir::IntToPtr, input, dst_ty);
   // Ptr -> Ptr

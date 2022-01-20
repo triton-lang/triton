@@ -732,6 +732,8 @@ def test_dot(epilogue, allow_tf32, device='cuda'):
     assert 'st.global.v4' in ptx
     if allow_tf32:
         assert 'mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32' in ptx
+    else:
+        assert 'mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32' not in ptx
 
 
 def test_dot_without_load():

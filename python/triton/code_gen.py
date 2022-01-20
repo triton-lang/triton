@@ -838,7 +838,7 @@ class Autotuner:
                 # prune configs
                 pruned_configs = self.configs
                 if self.prune_num_stages_by:
-                    pruned_configs = self.prune_num_stages_by(self.configs)
+                    pruned_configs = self.prune_num_stages_by(self.configs, self.nargs)
                 if self.perf_model:
                     top_k = self.configs_top_k
                     if isinstance(top_k, float) and top_k <= 1.0:
