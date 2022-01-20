@@ -46,6 +46,7 @@
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/ExecutionEngine/SectionMemoryManager.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Scalar.h"
 
 // begin AMD stuff
 #include "llvm/Support/FileSystem.h"
@@ -121,9 +122,12 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version){
   init_llvm();
   // verify and store llvm
   llvm::legacy::PassManager pm;
-  // module->print(llvm::outs(), nullptr);
   pm.add(llvm::createVerifierPass());
+  // pm.add(llvm::createDeadCodeEliminationPass());
+  // pm.add(llvm::createEarlyCSEPass());
   pm.run(*module);
+  // module->print(llvm::outs(), nullptr);
+
   // create machine
   module->setTargetTriple(triple);
   std::string error;

@@ -1465,19 +1465,6 @@ public:
         Value *c_mat_off = add(mul(warp_off, i32(warp_off_stride_)),
                                mul(nk_mat_arr, i32(mat_arr_stride_)));
         Value *s_mat_off = k_mat_arr; // always 0?
-        // // FIXME: (k_order_ == 1?) is really dirty hack
-        // for (int i = 0; i < num_ptr_/8; ++i) {
-        //   Value *c_mat_off_i = add(c_mat_off, i32(i*p_load_stride_in_mat_*(k_order_ == 1?1:2)));
-        //   c_mat_off_i = xor_(c_mat_off_i, phase);
-        //   Value *c_off = add(c_off_in_mat, mul(c_mat_off_i, i32(c_mat_shape_)));
-        //   // TODO: move this out of the loop
-        //   c_off = urem(c_off, i32(tile_shape_[order_[0]]));
-        //   s_off = urem(s_off, i32(tile_shape_[order_[1]]));
-        //   offs[8*i + nk_mat_arr_int*4 + 0] = add(c_off, mul(s_off, i32(s_stride_)));
-        //   offs[8*i + nk_mat_arr_int*4 + 1] = add(c_off, mul(s_off, i32(s_stride_)));
-        //   offs[8*i + nk_mat_arr_int*4 + 1] = add(c_off, mul(s_off, i32(s_stride_)));
-        //   offs[8*i + nk_mat_arr_int*4 + 1] = add(c_off, mul(s_off, i32(s_stride_)));
-        // }
         
         for (int loadx4_off = 0; loadx4_off < num_ptr_/8; ++loadx4_off) {
           for (int elem_off = 0; elem_off < 4; ++elem_off) {
@@ -1487,8 +1474,8 @@ public:
             Value *s_off_in_mat_elem = add(s_off_in_mat, i32(elem_off));
 
             // disable swizzling ...
-            Value *phase = urem(udiv(s_off_in_mat, i32(per_phase_)), i32(max_phase_));
-            c_mat_off_i = xor_(c_mat_off_i, phase);
+            // Value *phase = urem(udiv(s_off_in_mat, i32(per_phase_)), i32(max_phase_));
+            // c_mat_off_i = xor_(c_mat_off_i, phase);
 
             Value *c_off = add(c_off_in_mat, mul(c_mat_off_i, i32(c_mat_shape_)));
             Value *s_off = add(s_off_in_mat_elem, mul(s_mat_off, i32(s_mat_shape_)));
@@ -1500,7 +1487,6 @@ public:
         }
       }
       return offs;
-      // throw std::runtime_error("not implemented");
     } else
       throw std::runtime_error("invalid smem load config");
   }
@@ -1596,11 +1582,16 @@ public:
       Value *elem1 = UndefValue::get(vec_ty(i8_ty, 4));
       Value *elem2 = UndefValue::get(vec_ty(i8_ty, 4));
       Value *elem3 = UndefValue::get(vec_ty(i8_ty, 4));
+      
+      Value *elem00, *elem01, *elem02, *elem03;
+      Value *elem10, *elem11, *elem12, *elem13;
+      Value *elem20, *elem21, *elem22, *elem23;
+      Value *elem30, *elem31, *elem32, *elem33;
       if (k_order_ == 1) { // 
-        Value *elem00 = load(gep(ptr00, i32(s_offset_elem)));
-        Value *elem01 = load(gep(ptr01, i32(s_offset_elem)));
-        Value *elem02 = load(gep(ptr02, i32(s_offset_elem)));
-        Value *elem03 = load(gep(ptr03, i32(s_offset_elem)));
+        elem00 = load(gep(ptr00, i32(s_offset_elem)));
+        elem01 = load(gep(ptr01, i32(s_offset_elem)));
+        elem02 = load(gep(ptr02, i32(s_offset_elem)));
+        elem03 = load(gep(ptr03, i32(s_offset_elem)));
 
         assert(elem00->getType()->isIntegerTy(8));
         elem0 = insert_elt(elem0, elem00, (int)0);
@@ -1609,14 +1600,10 @@ public:
         elem0 = insert_elt(elem0, elem03, (int)3);
         elem0 = bit_cast(elem0, i32_ty);
 
-        // Value *elem10 = builder_->getInt8(1);
-        // Value *elem11 = builder_->getInt8(1);
-        // Value *elem12 = builder_->getInt8(1);
-        // Value *elem13 = builder_->getInt8(1);
-        Value *elem10 = load(gep(ptr10, i32(s_offset_elem)));
-        Value *elem11 = load(gep(ptr11, i32(s_offset_elem)));
-        Value *elem12 = load(gep(ptr12, i32(s_offset_elem)));
-        Value *elem13 = load(gep(ptr13, i32(s_offset_elem)));
+        elem10 = load(gep(ptr10, i32(s_offset_elem)));
+        elem11 = load(gep(ptr11, i32(s_offset_elem)));
+        elem12 = load(gep(ptr12, i32(s_offset_elem)));
+        elem13 = load(gep(ptr13, i32(s_offset_elem)));
 
         elem1 = insert_elt(elem1, elem10, (int)0);
         elem1 = insert_elt(elem1, elem11, (int)1);
@@ -1624,15 +1611,10 @@ public:
         elem1 = insert_elt(elem1, elem13, (int)3);
         elem1 = bit_cast(elem1, i32_ty);
 
-
-        // Value *elem20 = builder_->getInt8(1);
-        // Value *elem21 = builder_->getInt8(1);
-        // Value *elem22 = builder_->getInt8(1);
-        // Value *elem23 = builder_->getInt8(1);
-        Value *elem20 = load(gep(ptr00, i32(s_offset_elem + s_offset_arr_elem)));
-        Value *elem21 = load(gep(ptr01, i32(s_offset_elem + s_offset_arr_elem)));
-        Value *elem22 = load(gep(ptr02, i32(s_offset_elem + s_offset_arr_elem)));
-        Value *elem23 = load(gep(ptr03, i32(s_offset_elem + s_offset_arr_elem)));
+        elem20 = load(gep(ptr00, i32(s_offset_elem + s_offset_arr_elem)));
+        elem21 = load(gep(ptr01, i32(s_offset_elem + s_offset_arr_elem)));
+        elem22 = load(gep(ptr02, i32(s_offset_elem + s_offset_arr_elem)));
+        elem23 = load(gep(ptr03, i32(s_offset_elem + s_offset_arr_elem)));
 
         elem2 = insert_elt(elem2, elem20, (int)0);
         elem2 = insert_elt(elem2, elem21, (int)1);
@@ -1640,14 +1622,10 @@ public:
         elem2 = insert_elt(elem2, elem23, (int)3);
         elem2 = bit_cast(elem2, i32_ty);
 
-        // Value *elem30 = builder_->getInt8(1);
-        // Value *elem31 = builder_->getInt8(1);
-        // Value *elem32 = builder_->getInt8(1);
-        // Value *elem33 = builder_->getInt8(1);
-        Value *elem30 = load(gep(ptr10, i32(s_offset_elem + s_offset_arr_elem)));
-        Value *elem31 = load(gep(ptr11, i32(s_offset_elem + s_offset_arr_elem)));
-        Value *elem32 = load(gep(ptr12, i32(s_offset_elem + s_offset_arr_elem)));
-        Value *elem33 = load(gep(ptr13, i32(s_offset_elem + s_offset_arr_elem)));
+        elem30 = load(gep(ptr10, i32(s_offset_elem + s_offset_arr_elem)));
+        elem31 = load(gep(ptr11, i32(s_offset_elem + s_offset_arr_elem)));
+        elem32 = load(gep(ptr12, i32(s_offset_elem + s_offset_arr_elem)));
+        elem33 = load(gep(ptr13, i32(s_offset_elem + s_offset_arr_elem)));
 
         elem3 = insert_elt(elem3, elem30, (int)0);
         elem3 = insert_elt(elem3, elem31, (int)1);
@@ -1655,17 +1633,71 @@ public:
         elem3 = insert_elt(elem3, elem33, (int)3);
         elem3 = bit_cast(elem3, i32_ty);
       } else { // for b (k first)
-        throw std::runtime_error("Not implemented");
-        // elem0 = load(gep(ptr,  i32(s_offset_elem)));
-        // elem2 = load(gep(ptr1, i32(s_offset_elem)));
-        // elem1 = load(gep(ptr,  i32(s_offset_elem + s_offset_arr_elem)));
-        // elem3 = load(gep(ptr1, i32(s_offset_elem + s_offset_arr_elem)));
+        elem00 = load(gep(ptr00, i32(s_offset_elem)));
+        elem01 = load(gep(ptr01, i32(s_offset_elem)));
+        elem02 = load(gep(ptr02, i32(s_offset_elem)));
+        elem03 = load(gep(ptr03, i32(s_offset_elem)));
+
+        assert(elem00->getType()->isIntegerTy(8));
+        elem0 = insert_elt(elem0, elem00, (int)0);
+        elem0 = insert_elt(elem0, elem01, (int)1);
+        elem0 = insert_elt(elem0, elem02, (int)2);
+        elem0 = insert_elt(elem0, elem03, (int)3);
+        elem0 = bit_cast(elem0, i32_ty);
+
+        elem20 = load(gep(ptr10, i32(s_offset_elem)));
+        elem21 = load(gep(ptr11, i32(s_offset_elem)));
+        elem22 = load(gep(ptr12, i32(s_offset_elem)));
+        elem23 = load(gep(ptr13, i32(s_offset_elem)));
+
+        elem2 = insert_elt(elem2, elem20, (int)0);
+        elem2 = insert_elt(elem2, elem21, (int)1);
+        elem2 = insert_elt(elem2, elem22, (int)2);
+        elem2 = insert_elt(elem2, elem23, (int)3);
+        elem2 = bit_cast(elem2, i32_ty);
+
+        elem10 = load(gep(ptr00, i32(s_offset_elem + s_offset_arr_elem)));
+        elem11 = load(gep(ptr01, i32(s_offset_elem + s_offset_arr_elem)));
+        elem12 = load(gep(ptr02, i32(s_offset_elem + s_offset_arr_elem)));
+        elem13 = load(gep(ptr03, i32(s_offset_elem + s_offset_arr_elem)));
+
+        elem1 = insert_elt(elem1, elem10, (int)0);
+        elem1 = insert_elt(elem1, elem11, (int)1);
+        elem1 = insert_elt(elem1, elem12, (int)2);
+        elem1 = insert_elt(elem1, elem13, (int)3);
+        elem1 = bit_cast(elem1, i32_ty);
+
+        elem30 = load(gep(ptr10, i32(s_offset_elem + s_offset_arr_elem)));
+        elem31 = load(gep(ptr11, i32(s_offset_elem + s_offset_arr_elem)));
+        elem32 = load(gep(ptr12, i32(s_offset_elem + s_offset_arr_elem)));
+        elem33 = load(gep(ptr13, i32(s_offset_elem + s_offset_arr_elem)));
+
+        elem3 = insert_elt(elem3, elem30, (int)0);
+        elem3 = insert_elt(elem3, elem31, (int)1);
+        elem3 = insert_elt(elem3, elem32, (int)2);
+        elem3 = insert_elt(elem3, elem33, (int)3);
+        elem3 = bit_cast(elem3, i32_ty);
       }
       if (k == 0 && inc == 1 && is_prefetch) {
-        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem0);
-        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem1);
-        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem2);
-        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem3);
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem00);
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem01);
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem02);
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem03);
+
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem10);
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem11);
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem12);
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem13);
+
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem20);
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem21);
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem22);
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem23);
+
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem30);
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem31);
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem32);
+        prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(elem33);
       }
       return {elem0, elem1, elem2, elem3};
     } else

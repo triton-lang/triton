@@ -446,11 +446,21 @@ shared_layout::shared_layout(data_layout *arg,
     std::vector<int> mat_shape = mma_layout::mma_mat_shape_.at(get_mma_type(hmma_dot_a_));
     mma_vec_     = order_[0] == 1 ? mat_shape[2] : mat_shape[0]; // k : m
     mma_strided_ = order_[0] == 1 ? mat_shape[0] : mat_shape[2];
+
+    // for now, disable swizzle when using lds.8
+    if (get_mma_type(hmma_dot_a_) == mma_layout::INT32_INT8_INT8_INT32)
+      if (order_[0] == 0) // need transpose
+        allow_swizzle_ = false;
   } else if (hmma_dot_b_) {
     assert(order_.size() == 2);
     std::vector<int> mat_shape = mma_layout::mma_mat_shape_.at(get_mma_type(hmma_dot_b_));
     mma_vec_     = order_[0] == 1 ? mat_shape[1] : mat_shape[2]; // n : k
     mma_strided_ = order_[0] == 1 ? mat_shape[2] : mat_shape[1];
+
+    // for now, disable swizzle when using lds.8
+    if (get_mma_type(hmma_dot_b_) == mma_layout::INT32_INT8_INT8_INT32)
+      if (order_[0] == 1) // need transpose
+        allow_swizzle_ = false;
   }
 
   // size
