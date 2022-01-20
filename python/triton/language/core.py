@@ -168,6 +168,8 @@ class block:
         self.numel = constexpr(self.numel)
         # Data-type wrapper
         self.dtype = block._init_dtype(self.handle.type.scalar)
+        # Shape is a constexpr
+        self.shape = [constexpr(s) for s in self.shape]
 
     def __str__(self) -> str:
         # ex. "float32[3,4]"
@@ -297,7 +299,7 @@ class block:
             if sl is None:
                 dst_shape.append(1)
             elif sl == slice(None, None, None):
-                dst_shape.append(src_shape[curr])
+                dst_shape.append(src_shape[curr].value)
                 curr += 1
         ret = frontend.reshape(self, dst_shape, _builder)
         return ret
@@ -320,8 +322,15 @@ class constexpr:
     """
 
     def __init__(self, value):
-        self.value = value
+        if isinstance(value, constexpr):
+            self.value = value.value
+        else:
+            self.value = value
 
+    def __repr__(self) -> str:
+        return f"constexpr[{self.value}]"
+
+    #
     def __add__(self, other):
         return self.value + other.value
 
@@ -516,6 +525,7 @@ def reshape(input, shape, _builder=None):
     :type shape: Tuple[int]
 
     """
+    shape = [x.value for x in shape]
     return frontend.reshape(input, shape, _builder)
 
 
@@ -908,3 +918,8 @@ def swizzle2d(i, j, size_i, size_j, size_g):
     new_i = off_i + (ij % size_g)
     new_j = (ij % size_gj) // size_g
     return new_i, new_j
+
+
+@triton.jit
+def zeros_like(input):
+    return zeros(input.shape, input.dtype)

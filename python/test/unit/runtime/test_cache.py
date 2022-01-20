@@ -39,9 +39,9 @@ def kernel_nospec(X, i, BLOCK: tl.constexpr):
 
 
 def apply_src_change(target, old, new):
-    delattr(kernel.fn, 'hash')
-    delattr(function_1.fn, 'hash')
-    delattr(function_2.fn, 'hash')
+    kernel.hash = None
+    function_1.hash = None
+    function_2.hash = None
     function_1.src = function_1.src.replace(old, new)
     target.src = target.src.replace(old, new)
     ret = target.cache_key
