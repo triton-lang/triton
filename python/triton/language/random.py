@@ -91,7 +91,7 @@ def uint32_to_uniform_float(x):
     Numerically stable function to convert a random uint32 into a random float uniformly sampled in [0, 1).
     """
     x = x.to(tl.int32, bitcast=True)
-    max = 4.656613e-10 # = 1/MAX_INT = 1/2147483647.
+    max = 4.656613e-10  # = 1/MAX_INT = 1/2147483647.
     x = tl.where(x < 0, -x - 1, x)
     return x * max
 
