@@ -6,6 +6,7 @@
 #include <cassert>
 #include <vector>
 #include <string>
+#include <stdexcept>
 
 namespace triton{
 namespace ir{
