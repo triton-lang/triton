@@ -661,11 +661,13 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
 # ---------------
 
 
-@pytest.mark.parametrize("epilogue, allow_tf32",
-                         [(epilogue, allow_tf32)
+@pytest.mark.parametrize("epilogue, allow_tf32, dtype",
+                         [(epilogue, allow_tf32, dtype)
                           for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols']
-                          for allow_tf32 in [True, False]])
-def test_dot(epilogue, allow_tf32, device='cuda'):
+                          for allow_tf32 in [True, False]
+                          for dtype in ['float32', 'int8']
+                          if not (allow_tf32 and (dtype == 'int8'))])
+def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
     # triton kernel
     @triton.jit
     def kernel(X, stride_xm, stride_xk,
@@ -693,9 +695,10 @@ def test_dot(epilogue, allow_tf32, device='cuda'):
     # input
     M, N, K = 64, 64, 32
     rs = RandomState(17)
-    x = numpy_random((M, K), dtype_str='float32', rs=rs)
-    y = numpy_random((K, N), dtype_str='float32', rs=rs)
+    x = numpy_random((M, K), dtype_str=dtype, rs=rs)
+    y = numpy_random((K, N), dtype_str=dtype, rs=rs)
     if allow_tf32:
+        assert dtype == 'float32'
         cc = _triton.runtime.cc(_triton.runtime.backend.CUDA, torch.cuda.current_device())
         if cc < 80:
             pytest.skip("Only test tf32 on devices with sm >= 80")
@@ -704,7 +707,7 @@ def test_dot(epilogue, allow_tf32, device='cuda'):
     x_tri = to_triton(x, device=device)
     y_tri = to_triton(y, device=device)
     # triton result
-    z = numpy_random((M, N), dtype_str='float32', rs=rs)
+    z = numpy_random((M, N), dtype_str=dtype, rs=rs)
     z_tri = to_triton(z, device=device)
     if epilogue == 'trans':
         z_tri = torch.as_strided(z_tri, (M, N), z_tri.stride()[::-1])
@@ -732,73 +735,10 @@ def test_dot(epilogue, allow_tf32, device='cuda'):
     assert 'st.global.v4' in ptx
     if allow_tf32:
         assert 'mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32' in ptx
-    else:
+    elif dtype == 'float32':
         assert 'mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32' not in ptx
-
-
-@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, num_stages, AT, BT",
-                         [(BLOCK_M, BLOCK_N, BLOCK_K, num_stages, AT, BT)
-                          for BLOCK_M in [64, 128]
-                          for BLOCK_N in [64, 128]
-                          for BLOCK_K in [64, 128]
-                          for num_stages in [1, 2, 3, 4]
-                          for AT in [True, False]
-                          for BT in [True, False]])
-def test_int8_dot(BLOCK_M, BLOCK_N, BLOCK_K, num_stages, AT, BT):
-    cc = _triton.runtime.cc(_triton.runtime.backend.CUDA, torch.cuda.current_device())
-    if cc < 80:
-        pytest.skip("Only test int8 dot on devices with sm >= 80")
-    M, N = BLOCK_M, BLOCK_N
-    K = BLOCK_K * 5
-
-    @triton.jit
-    def kernel(a_ptr, b_ptr, c_ptr,
-               M, N, K,
-               stride_am, stride_ak,
-               stride_bk, stride_bn,
-               stride_cm, stride_cn,
-               BLOCK_M: tl.constexpr,
-               BLOCK_N: tl.constexpr,
-               BLOCK_K: tl.constexpr):
-        a_ptrs = a_ptr + stride_am * tl.arange(0, BLOCK_M)[:, None] + stride_ak * tl.arange(0, BLOCK_K)[None, :]
-        b_ptrs = b_ptr + stride_bk * tl.arange(0, BLOCK_K)[:, None] + stride_bn * tl.arange(0, BLOCK_N)[None, :]
-        accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.int32)
-        for k in range(0, K, BLOCK_K):
-            a = tl.load(a_ptrs)
-            b = tl.load(b_ptrs)
-            accumulator += tl.dot(a, b)
-            a_ptrs += BLOCK_K * stride_ak
-            b_ptrs += BLOCK_K * stride_bk
-        c = accumulator.to(tl.int8)
-        c_ptrs = c_ptr + stride_cm * tl.arange(0, BLOCK_M)[:, None] + stride_cn * tl.arange(0, BLOCK_N)[None, :]
-        tl.store(c_ptrs, c)
-
-    torch.manual_seed(0)
-    a = torch.randint(-3, 4, (K, M) if AT else (M, K), device='cuda', dtype=torch.int8)
-    b = torch.randint(-3, 4, (N, K) if BT else (K, N), device='cuda', dtype=torch.int8)
-    c = torch.empty((M, N), device='cuda', dtype=torch.int8)
-
-    a_fp = a.half()
-    b_fp = b.half()
-    if AT:
-        a = a.t()
-        a_fp = a_fp.t()
-    if BT:
-        b = b.t()
-        b_fp = b_fp.t()
-
-    kernel[(1,)](a, b, c,
-                 M, N, K,
-                 a.stride(0), a.stride(1),
-                 b.stride(0), b.stride(1),
-                 c.stride(0), c.stride(1),
-                 BLOCK_M, BLOCK_N, BLOCK_K,
-                 num_stages=num_stages
-                 )
-    # torch.matmul doesn't allow int8 inputs
-    torch_output = torch.matmul(a_fp, b_fp).to(torch.int8)
-
-    assert triton.testing.allclose(c, torch_output)
+    elif dtype == 'int8':
+        assert 'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
 
 
 def test_dot_without_load():
