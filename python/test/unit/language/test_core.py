@@ -735,6 +735,7 @@ def test_dot(epilogue, allow_tf32, device='cuda'):
     else:
         assert 'mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32' not in ptx
 
+
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, num_stages, AT, BT", 
                          [(BLOCK_M, BLOCK_N, BLOCK_K, num_stages, AT, BT)
                           for BLOCK_M in [64, 128]
@@ -745,10 +746,11 @@ def test_dot(epilogue, allow_tf32, device='cuda'):
                           for BT in [True, False]])
 def test_int8_dot(BLOCK_M, BLOCK_N, BLOCK_K, num_stages, AT, BT):
     cc = _triton.runtime.cc(_triton.runtime.backend.CUDA, torch.cuda.current_device())
-        if cc < 80:
-            pytest.skip("Only test int8 dot on devices with sm >= 80")
+    if cc < 80:
+        pytest.skip("Only test int8 dot on devices with sm >= 80")
     M, N = BLOCK_M, BLOCK_N
     K = BLOCK_K * 5
+
     @triton.jit
     def kernel(a_ptr, b_ptr, c_ptr,
                M, N, K,
