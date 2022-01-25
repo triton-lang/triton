@@ -736,7 +736,7 @@ def test_dot(epilogue, allow_tf32, device='cuda'):
         assert 'mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32' not in ptx
 
 
-@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, num_stages, AT, BT", 
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, num_stages, AT, BT",
                          [(BLOCK_M, BLOCK_N, BLOCK_K, num_stages, AT, BT)
                           for BLOCK_M in [64, 128]
                           for BLOCK_N in [64, 128]
