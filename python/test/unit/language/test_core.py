@@ -675,6 +675,7 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
         elif dtype == 'float32' and allow_tf32:
             pytest.skip("Only test tf32 on devices with sm >= 80")
     # triton kernel
+    
     @triton.jit
     def kernel(X, stride_xm, stride_xk,
                Y, stride_yk, stride_yn,
