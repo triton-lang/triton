@@ -79,7 +79,7 @@ def to_numpy(x):
 
 
 def patch_kernel(template, to_replace):
-    kernel = copy.deepcopy(template)
+    kernel = triton.JITFunction(template.fn)
     for key, value in to_replace.items():
         kernel.src = kernel.src.replace(key, value)
     return kernel

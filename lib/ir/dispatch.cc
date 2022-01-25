@@ -749,8 +749,11 @@ ir::value *dispatch::where(ir::value* condition, ir::value *x, ir::value *y, ir:
     x = dispatch::broadcast(x, condition->get_type()->get_block_shapes(), builder);
     y = dispatch::broadcast(y, condition->get_type()->get_block_shapes(), builder);
   }
-  if(x->get_type()->get_scalar_ty() != y->get_type()->get_scalar_ty())
-    throw_incompatible_types(x->get_type()->get_scalar_ty(), y->get_type()->get_scalar_ty());
+  ir::type* x_ty = x->get_type()->get_scalar_ty();
+  ir::type* y_ty = y->get_type()->get_scalar_ty();
+  ir::type* ty = computation_type(x_ty, y_ty, DivOrMod::NO);
+  x = dispatch::cast(x, ty, builder);
+  y = dispatch::cast(y, ty, builder);
   return builder->create_select(condition, x, y);
 }
 
