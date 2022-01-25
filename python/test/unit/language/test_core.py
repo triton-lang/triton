@@ -668,6 +668,12 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                           for dtype in ['float32', 'int8']
                           if not (allow_tf32 and (dtype == 'int8'))])
 def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
+    cc = _triton.runtime.cc(_triton.runtime.backend.CUDA, torch.cuda.current_device())
+    if cc < 80:
+        if dtype == 'int8':
+            pytest.skip("Only test int8 on devices with sm >= 80")
+        elif dtype == 'float32' and allow_tf32:
+            pytest.skip("Only test tf32 on devices with sm >= 80")
     # triton kernel
     @triton.jit
     def kernel(X, stride_xm, stride_xk,
@@ -698,10 +704,6 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
     x = numpy_random((M, K), dtype_str=dtype, rs=rs)
     y = numpy_random((K, N), dtype_str=dtype, rs=rs)
     if allow_tf32:
-        assert dtype == 'float32'
-        cc = _triton.runtime.cc(_triton.runtime.backend.CUDA, torch.cuda.current_device())
-        if cc < 80:
-            pytest.skip("Only test tf32 on devices with sm >= 80")
         x = (x.view('uint32') & np.uint32(0xffffe000)).view('float32')
         y = (y.view('uint32') & np.uint32(0xffffe000)).view('float32')
     x_tri = to_triton(x, device=device)
