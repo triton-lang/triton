@@ -216,6 +216,7 @@ mma_layout::mma_layout(size_t num_warps,
 
   /* warps per tile */
   assert((num_warps & (num_warps - 1)) == 0 && "num_warps is not power of 2");
+  wpt_ = {1, 1, 1};
   // try to make warp-level tiles as square as possible to maximize data re-use
   bool changed = false;
   do {
