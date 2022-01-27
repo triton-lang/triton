@@ -33,7 +33,9 @@ inline bool is_hmma_c(ir::value *v, int sm){
     result = (a_ty->get_scalar_ty()->is_fp16_ty() && b_ty->get_scalar_ty()->is_fp16_ty()) ||
              (a_ty->get_scalar_ty()->is_bf16_ty() && b_ty->get_scalar_ty()->is_bf16_ty()) ||
              (a_ty->get_scalar_ty()->is_fp32_ty() && b_ty->get_scalar_ty()->is_fp32_ty() && 
-              x->allow_tf32() && sm >= 80);
+              x->allow_tf32() && sm >= 80) ||
+             (a_ty->get_scalar_ty()->is_integer_ty(8) && b_ty->get_scalar_ty()->is_integer_ty(8) && 
+              sm >= 80);
   }
   return result;
 }
@@ -63,7 +65,7 @@ static mma_layout::TensorCoreType get_mma_type(ir::value *v) {
         return mma_type;
       }
     } else if (c_ty->get_scalar_ty()->is_integer_ty(32)) {
-      throw std::runtime_error("integer tensor cores are not yet supported");
+      // throw std::runtime_error("integer tensor cores are not yet supported");
       // // integer tensor cores
       // if (a_ty->get_scalar_ty()->is_integer_ty(1) && b_ty->get_scalar_ty()->is_integer_ty(1)) {
       //   mma_type = mma_layout::INT32_INT1_INT1_INT32;
@@ -73,10 +75,10 @@ static mma_layout::TensorCoreType get_mma_type(ir::value *v) {
       //   mma_type = mma_layout::INT32_INT4_INT4_INT32;
       //   return mma_type;
       // }
-      // if (a_ty->get_scalar_ty()->is_integer_ty(8) && b_ty->get_scalar_ty()->is_integer_ty(8)) {
-      //   mma_type = mma_layout::INT32_INT8_INT8_INT32;
-      //   return mma_type;
-      // }
+      if (a_ty->get_scalar_ty()->is_integer_ty(8) && b_ty->get_scalar_ty()->is_integer_ty(8)) {
+        mma_type = mma_layout::INT32_INT8_INT8_INT32;
+        return mma_type;
+      }
     }
   }
   return mma_layout::NOT_APPLICABLE;
@@ -444,11 +446,21 @@ shared_layout::shared_layout(data_layout *arg,
     std::vector<int> mat_shape = mma_layout::mma_mat_shape_.at(get_mma_type(hmma_dot_a_));
     mma_vec_     = order_[0] == 1 ? mat_shape[2] : mat_shape[0]; // k : m
     mma_strided_ = order_[0] == 1 ? mat_shape[0] : mat_shape[2];
+
+    // for now, disable swizzle when using lds.8
+    if (get_mma_type(hmma_dot_a_) == mma_layout::INT32_INT8_INT8_INT32)
+      if (order_[0] == 0) // need transpose
+        allow_swizzle_ = false;
   } else if (hmma_dot_b_) {
     assert(order_.size() == 2);
     std::vector<int> mat_shape = mma_layout::mma_mat_shape_.at(get_mma_type(hmma_dot_b_));
     mma_vec_     = order_[0] == 1 ? mat_shape[1] : mat_shape[2]; // n : k
     mma_strided_ = order_[0] == 1 ? mat_shape[2] : mat_shape[1];
+
+    // for now, disable swizzle when using lds.8
+    if (get_mma_type(hmma_dot_b_) == mma_layout::INT32_INT8_INT8_INT32)
+      if (order_[0] == 1) // need transpose
+        allow_swizzle_ = false;
   }
 
   // size
