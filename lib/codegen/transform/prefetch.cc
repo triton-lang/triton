@@ -33,6 +33,9 @@ void prefetch::run(ir::module &mod) {
       if (!(dot->get_operand(0)->get_type()->get_scalar_ty()->is_fp16_ty() ||
             dot->get_operand(0)->get_type()->get_scalar_ty()->is_bf16_ty() ||
             (dot->get_operand(0)->get_type()->get_scalar_ty()->is_fp32_ty() && dot->allow_tf32()
+             && tgt_->as_nvidia() && tgt_->as_nvidia()->sm() >= 80) || 
+            (dot->get_operand(0)->get_type()->get_scalar_ty()->is_integer_ty(8)
+             && dot->get_operand(1)->get_type()->get_scalar_ty()->is_integer_ty(8)
              && tgt_->as_nvidia() && tgt_->as_nvidia()->sm() >= 80)
            )
          )

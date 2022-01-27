@@ -726,7 +726,11 @@ ir::value *dispatch::atomic_xchg(ir::value* ptr, ir::value *val, ir::value *mask
 //===----------------------------------------------------------------------===//
 
 ir::value *dispatch::dot(ir::value *lhs, ir::value *rhs, ir::constant_int *allow_tf32, ir::builder *builder) {
-  ir::value *_0 = builder->get_float32(0);
+  ir::value *_0 = nullptr;
+  if (lhs->get_type()->is_int_or_tileint_ty())
+    _0 = builder->get_int32(0);
+  else
+    _0 = builder->get_float32(0);
   unsigned M = lhs->get_type()->get_block_shapes()[0];
   unsigned N = rhs->get_type()->get_block_shapes()[1];
   _0 = builder->create_splat(_0, {M, N});
