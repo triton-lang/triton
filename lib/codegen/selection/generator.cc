@@ -1496,7 +1496,6 @@ public:
               extract_val(res_v4, std::vector<unsigned>{2}),
               extract_val(res_v4, std::vector<unsigned>{3})};
     } else {
-      // assert(false && "should not be here");
       assert(dtsize_ == 4 && need_trans_);
       Value *ptr2 = get_ptr(ptr_idx+1);
       assert(s_mat_stride_ == 1);
