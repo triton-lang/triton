@@ -41,9 +41,15 @@ void swizzle::run(ir::module &) {
           vec_[layout] = 2*layouts_->get(mma_dot_b)->to_mma()->rep(1);
       }
       else {
+        if (!layout->allow_swizzle()) {
+          per_phase_[layout] = 1;
+          max_phase_[layout] = 1;
+          vec_[layout] = 1;
+        } else {
           per_phase_[layout] = std::max<int>(128 / (in_layout->mts(ord[0])*in_layout->nts(ord[0])*dtsize), 1);
           max_phase_[layout] = layout->get_mma_strided() / per_phase_[layout];
           vec_[layout]       = layout->get_mma_vec();
+        }
       }
     }
 }
