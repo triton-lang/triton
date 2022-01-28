@@ -204,6 +204,18 @@ ir::value *dispatch::floordiv(ir::value *input, ir::value *other, ir::builder *b
   throw_unreachable("floordiv");
 }
 
+ir::value *dispatch::fdiv(ir::value *input, ir::value *other, constant_int *ieee_rounding, ir::builder *builder){
+  ir::type *input_scalar_ty = input->get_type()->get_scalar_ty();
+  ir::type *other_scalar_ty = other->get_type()->get_scalar_ty();
+  if(!input_scalar_ty->is_floating_point_ty() || !other_scalar_ty->is_floating_point_ty())
+    throw semantic_error("both operands of fdiv must have floating point scalar type");
+  binary_op_type_checking(input, other, builder, false, false, false, DivOrMod::YES);
+  ir::value* ret = builder->create_fdiv(input, other);
+  if(ir::binary_operator* binop = dynamic_cast<ir::binary_operator*>(ret))
+    binop->set_fdiv_ieee_rounding(ieee_rounding->get_value());
+  return ret;
+}
+
 ir::value *dispatch::mod(ir::value *input, ir::value *other, ir::builder *builder) {
   binary_op_type_checking(input, other, builder, false, false, true, DivOrMod::YES);
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();

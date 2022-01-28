@@ -319,6 +319,12 @@ void generator::visit_binary_operator(ir::binary_operator*x) {
        vals_[x][idx] = add(lhs, rhs);
      else if(op == ll::Mul)
        vals_[x][idx] = mul(lhs, rhs);
+     else if(op == ll::FDiv && !x->get_fdiv_ieee_rounding()){
+       InlineAsm *ptx = InlineAsm::get(FunctionType::get(f32_ty, {f32_ty, f32_ty}, false),
+                                      " div.full.f32 $0, $1, $2;", "=r,r,r", false);
+       vals_[x][idx] = builder_->CreateCall(ptx, {lhs, rhs});
+
+     }
      else
        vals_[x][idx] = bin_op(op, lhs, rhs);
   }

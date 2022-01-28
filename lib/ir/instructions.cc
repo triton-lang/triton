@@ -134,7 +134,7 @@ bool binary_operator::is_int_add_sub() const {
 
 
 binary_operator::binary_operator(binary_op_t op, value *lhs, value *rhs, type *ty, const std::string &name, instruction *next)
-    : instruction(ty, INST_BINOP, 2, name, next), op_(op){
+    : instruction(ty, INST_BINOP, 2, name, next), op_(op), fdiv_ieee_rnd_(false){
   set_operand(0, lhs);
   set_operand(1, rhs);
 }

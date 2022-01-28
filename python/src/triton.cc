@@ -556,6 +556,7 @@ void init_triton_frontend(py::module &&m) {
   m.def("mul", &ir::dispatch::mul, ret::reference);
   m.def("truediv", &ir::dispatch::truediv, ret::reference);
   m.def("floordiv", &ir::dispatch::floordiv, ret::reference);
+  m.def("fdiv", &ir::dispatch::fdiv, ret::reference);
   m.def("mod", &ir::dispatch::mod, ret::reference);
   m.def("and_", &ir::dispatch::and_, ret::reference);
   m.def("or_", &ir::dispatch::or_, ret::reference);
