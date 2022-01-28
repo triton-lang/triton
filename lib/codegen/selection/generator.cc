@@ -650,7 +650,7 @@ void generator::visit_load_inst(ir::load_inst* x){
 //    std::cout << x->get_is_volatile() << std::endl;
     if(x->get_is_volatile())
       asm_oss << ".volatile";
-    asm_oss << ".global";
+    asm_oss << ".global.nc";
     if (x->get_cache_modifier() == ir::load_inst::CA) asm_oss << ".ca";
     if (x->get_cache_modifier() == ir::load_inst::CG) asm_oss << ".cg";
     if(n_words > 1)
