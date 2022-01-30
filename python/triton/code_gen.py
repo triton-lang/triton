@@ -986,12 +986,14 @@ class JITFunction:
             gscope = generator.gscope.copy()
             lscope = generator.lscope.copy()
             values = generator.module.get_values().copy()
+            types = generator.module.get_types().copy()
             generator.gscope = sys.modules[self.fn.__module__].__dict__
             generator.lscope = dict()
             ret = generator.visit_FunctionDef(self.parse().body[0], inline=True, arg_values=arg_values)
             generator.gscope = gscope
             generator.lscope = lscope
             generator.module.set_values(values)
+            generator.module.set_types(types)
             return ret
         except Exception as e:
             node = generator.last_node

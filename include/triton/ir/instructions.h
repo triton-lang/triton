@@ -117,6 +117,7 @@ private:
 //===----------------------------------------------------------------------===//
 //                               binary_operator classes
 //===----------------------------------------------------------------------===//
+
 class binary_operator: public instruction {
 public:
   typedef binary_op_t op_t;
@@ -145,6 +146,10 @@ public:
   bool is_shl()         const;
   bool is_shr()         const;
 
+  // Approx
+  void set_fdiv_ieee_rounding(bool rnd) { fdiv_ieee_rnd_ = rnd; }
+  bool get_fdiv_ieee_rounding() { return fdiv_ieee_rnd_; }
+
   // Wraps
   void set_has_no_unsigned_wrap(bool b = true) { has_no_unsigned_wrap_ = b; }
   void set_has_no_signed_wrap(bool b = true)   { has_no_signed_wrap_ = b; }
@@ -163,6 +168,8 @@ public:
   binary_op_t op_;
   bool has_no_unsigned_wrap_;
   bool has_no_signed_wrap_;
+
+  bool fdiv_ieee_rnd_;
 };
 
 
