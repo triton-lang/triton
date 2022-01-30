@@ -556,6 +556,7 @@ void init_triton_frontend(py::module &&m) {
   m.def("mul", &ir::dispatch::mul, ret::reference);
   m.def("truediv", &ir::dispatch::truediv, ret::reference);
   m.def("floordiv", &ir::dispatch::floordiv, ret::reference);
+  m.def("fdiv", &ir::dispatch::fdiv, ret::reference);
   m.def("mod", &ir::dispatch::mod, ret::reference);
   m.def("and_", &ir::dispatch::and_, ret::reference);
   m.def("or_", &ir::dispatch::or_, ret::reference);
@@ -691,6 +692,7 @@ void init_triton_ir(py::module &&m) {
       .def("is_uint32", [](ir::type *self) { return self->is_integer_ty(32, ir::signedness::UNSIGNED); })
       .def("is_uint64", [](ir::type *self) { return self->is_integer_ty(64, ir::signedness::UNSIGNED); })
 
+      .def("repr", &ir::type::repr)
       .def_property_readonly("fp_mantissa_width", &ir::type::get_fp_mantissa_width)
       .def_property_readonly("scalar", &ir::type::get_scalar_ty)
       .def_property_readonly("context", &ir::type::get_context, ret::reference);
@@ -713,6 +715,8 @@ void init_triton_ir(py::module &&m) {
       .def("get_value", (ir::value * (ir::module::*)(const std::string &)) & ir::module::get_value, ret::reference)
       .def("get_values", &ir::module::get_values, ret::reference)
       .def("set_values", &ir::module::set_values)
+      .def("get_types", &ir::module::get_types, ret::reference)
+      .def("set_types", &ir::module::set_types)
       .def_property_readonly("builder", &ir::module::get_builder, ret::reference);
 
   using eattr = ir::attribute_kind_t;

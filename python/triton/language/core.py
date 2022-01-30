@@ -699,6 +699,11 @@ def umulhi(x, y, _builder=None):
     return frontend.umulhi(x, y, _builder)
 
 
+@builtin
+def fdiv(x, y, ieee_rounding=False, _builder=None):
+    return frontend.fdiv(x, y, ieee_rounding, _builder)
+
+
 def _add_math_1arg_docstr(name):
 
     def _decorator(func):
@@ -869,11 +874,11 @@ def sigmoid(x):
 
 @triton.jit
 @_add_math_1arg_docstr("softmax")
-def softmax(x):
+def softmax(x, ieee_rounding=False):
     z = x - triton.language.max(x, 0)
     num = triton.language.exp(z)
     den = triton.language.sum(num, 0)
-    return num / den
+    return fdiv(num, den, ieee_rounding)
 
 
 @triton.jit

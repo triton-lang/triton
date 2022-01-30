@@ -34,6 +34,7 @@ struct dispatch{
   static ir::value *mul(ir::value *input, ir::value *other, ir::builder *builder);
   static ir::value *truediv(ir::value *input, ir::value *other, ir::builder *builder);
   static ir::value *floordiv(ir::value *input, ir::value *other, ir::builder *builder);
+  static ir::value *fdiv(ir::value *input, ir::value *other, ir::constant_int* ieee_rounding, ir::builder *builder);
   static ir::value *mod(ir::value *input, ir::value *other, ir::builder *builder);
   static ir::value *and_(ir::value *input, ir::value *other, ir::builder *builder);
   static ir::value *or_(ir::value *input, ir::value *other, ir::builder *builder);
