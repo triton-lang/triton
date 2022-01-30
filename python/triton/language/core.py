@@ -698,9 +698,11 @@ def where(condition, x, y, _builder=None):
 def umulhi(x, y, _builder=None):
     return frontend.umulhi(x, y, _builder)
 
+
 @builtin
 def fdiv(x, y, ieee_rounding=False, _builder=None):
     return frontend.fdiv(x, y, ieee_rounding, _builder)
+
 
 def _add_math_1arg_docstr(name):
 

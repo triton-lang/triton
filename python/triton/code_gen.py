@@ -986,7 +986,7 @@ class JITFunction:
             gscope = generator.gscope.copy()
             lscope = generator.lscope.copy()
             values = generator.module.get_values().copy()
-            types  = generator.module.get_types().copy()
+            types = generator.module.get_types().copy()
             generator.gscope = sys.modules[self.fn.__module__].__dict__
             generator.lscope = dict()
             ret = generator.visit_FunctionDef(self.parse().body[0], inline=True, arg_values=arg_values)
