@@ -40,6 +40,8 @@ public:
   value *get_int1(bool val);
   value *get_int32(int32_t val);
   value *get_int64(int64_t val);
+  value *get_uint32(uint32_t val);
+  value *get_uint64(uint64_t val);
   value *get_float16(float val);
   value *get_float32(float val);
   value *get_range(int32_t lo, int32_t hi);
@@ -50,6 +52,10 @@ public:
   type *get_int16_ty();
   type *get_int32_ty();
   type *get_int64_ty();
+  type *get_uint8_ty();
+  type *get_uint16_ty();
+  type *get_uint32_ty();
+  type *get_uint64_ty();
   type *get_half_ty();
   type *get_float_ty();
   type *get_double_ty();
@@ -130,9 +136,9 @@ public:
   value *create_xor(value *lhs, value *rhs);
   value *create_or(value *lhs, value *rhs);
   // Input/Output
-  value *create_load(value *arg, load_inst::CACHE_MODIFIER cache);
+  value *create_load(value *arg, load_inst::CACHE_MODIFIER cache, bool is_volatile);
   value *create_store(value *ptr, value *val);
-  value *create_masked_load(value *arg, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache);
+  value *create_masked_load(value *arg, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache, bool is_volatile);
   value *create_masked_store(value *ptr, value *val, value *mask);
   // Block instruction
   value *create_splat(value *arg, const type::block_shapes_t &shapes);
@@ -148,7 +154,7 @@ public:
   value *create_cos(value* arg);
   value *create_sin(value* arg);
   value *create_log(value* arg);
-  value *create_dot(value *A, value *B, value *C);
+  value *create_dot(value *A, value *B, value *C, bool allow_tf32);
   value *create_trans(value *A, const std::vector<int> &perm = {});
   value *create_sqrt(value *A);
   value *create_reduce(value *A, reduce_inst::op_t op, unsigned axis);

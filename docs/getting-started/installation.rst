@@ -44,7 +44,7 @@ You can then test your installation by running the unit tests:
 
 .. code-block:: bash
 
-      pip install -r requirements-test.txt
+      pip install -e '.[tests]'
       pytest -vs test/unit/
 
 and the benchmarks
