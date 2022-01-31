@@ -472,7 +472,6 @@ class CodeGenerator(ast.NodeVisitor):
         def visit_Str(self, node):
             return triton.language.constexpr(ast.literal_eval(node))
 
-
     def visit_Attribute(self, node):
         lhs = self.visit(node.value)
         return getattr(lhs, node.attr)
