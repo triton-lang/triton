@@ -1,14 +1,12 @@
 #include "triton/ir/dispatch.h"
-#include <iostream>
 
-namespace triton{
-namespace ir{
+namespace triton {
+namespace ir {
 
 
-ir::value* throw_unreachable(std::string key) {
+[[ noreturn ]] void throw_unreachable(std::string key) {
   throw std::runtime_error("Encountered unimplemented code path in `" + key + "`. "
                            "This is likely a bug on our side.");
-  return 0;
 }
 
 //===----------------------------------------------------------------------===//
@@ -30,27 +28,49 @@ ir::value *dispatch::num_programs(int axis, ir::builder *builder) {
 ir::type *integer_promote(ir::type* a_ty, ir::type* b_ty){
   int a_rank = a_ty->get_integer_bitwidth();
   int b_rank = b_ty->get_integer_bitwidth();
-  return a_rank > b_rank ? a_ty : b_ty;
+  auto a_sn = a_ty->get_integer_signedness();
+  auto b_sn = b_ty->get_integer_signedness();
+  // Rules for signedness taken from "Usual arithmetic conversions" on
+  // https://en.cppreference.com/w/c/language/conversion.
+  if (a_sn == b_sn) {
+    return a_rank > b_rank ? a_ty : b_ty;
+  } else if (a_sn == signedness::UNSIGNED) {
+    return a_rank >= b_rank ? a_ty : b_ty;
+  } else if (b_sn == signedness::UNSIGNED) {
+    return b_rank >= a_rank ? b_ty : a_ty;
+  } else {
+    throw_unreachable("integer_promote");
+  }
 }
 
-ir::type *computation_type(ir::type* a_ty, ir::type* b_ty){
+enum class DivOrMod { NO, YES };
+
+ir::type *computation_type(ir::type* a_ty, ir::type* b_ty, DivOrMod div_or_mod) {
   context &ctx = a_ty->get_context();
   // 1) if one operand is double, the other is implicitly
   //    converted to double
-  if(a_ty->is_fp64_ty() || b_ty->is_fp64_ty())
+  if (a_ty->is_fp64_ty() || b_ty->is_fp64_ty())
     return type::get_fp64_ty(ctx);
   // 2) if one operand is float, the other is implicitly
   //    converted to float
-  if(a_ty->is_fp32_ty() || b_ty->is_fp32_ty())
+  if (a_ty->is_fp32_ty() || b_ty->is_fp32_ty())
     return type::get_fp32_ty(ctx);
-  // 3 ) if one operand is half, the other is implicitly
-  //     converted to half
-  if(a_ty->is_fp16_ty() || b_ty->is_fp16_ty())
-    return type::get_fp16_ty(ctx);
-  if(!a_ty->is_integer_ty() || !b_ty->is_integer_ty())
-    throw_unreachable("augment_types");
+  // 3 ) if one operand is half, the other is implicitly converted to half
+  //     unless we're doing / or %, which do not exist natively in PTX for fp16.
+  if (a_ty->is_fp16_ty() || b_ty->is_fp16_ty()) {
+    if (div_or_mod == DivOrMod::YES) {
+      return type::get_fp32_ty(ctx);
+    } else {
+      return type::get_fp16_ty(ctx);
+    }
+  }
+  if (!a_ty->is_integer_ty() || !b_ty->is_integer_ty())
+    throw_unreachable("computation_type");
   // 4 ) both operands are integer and undergo
   //    integer promotion
+  if (div_or_mod == DivOrMod::YES && a_ty->get_integer_signedness() != b_ty->get_integer_signedness()) {
+    throw semantic_error("Cannot use /, //, or % with " + a_ty->repr() + " and " + b_ty->repr() + " because they have different signedness; this is unlikely to result in a useful answer. Cast them to the same signedness.");
+  }
   return integer_promote(a_ty, b_ty);
 }
 
@@ -78,7 +98,7 @@ void check_ptr_type(ir::type* type_a, ir::type* type_b, bool allow_ptr_a){
 
 void binary_op_type_checking(ir::value*& lhs, ir::value*& rhs, ir::builder* builder,
                              bool allow_lhs_ptr = false, bool allow_rhs_ptr = false,
-                             bool arithmetic_check = true){
+                             bool arithmetic_check = true, DivOrMod div_or_mod = DivOrMod::NO) {
   // implicit broadcasting
   std::tie(lhs, rhs) = dispatch::broadcast(lhs, rhs, builder);
   // implicit typecasting
@@ -86,8 +106,8 @@ void binary_op_type_checking(ir::value*& lhs, ir::value*& rhs, ir::builder* buil
   ir::type *rhs_sca_ty = rhs->get_type()->get_scalar_ty();
   check_ptr_type(lhs_sca_ty, rhs_sca_ty, allow_lhs_ptr);
   check_ptr_type(rhs_sca_ty, lhs_sca_ty, allow_rhs_ptr);
-  if(arithmetic_check && !lhs_sca_ty->is_pointer_ty() && !rhs_sca_ty->is_pointer_ty()){
-    ir::type *ret_sca_ty = computation_type(lhs_sca_ty, rhs_sca_ty);
+  if (arithmetic_check && !lhs_sca_ty->is_pointer_ty() && !rhs_sca_ty->is_pointer_ty()) {
+    ir::type *ret_sca_ty = computation_type(lhs_sca_ty, rhs_sca_ty, div_or_mod);
     lhs = dispatch::cast(lhs, ret_sca_ty, builder);
     rhs = dispatch::cast(rhs, ret_sca_ty, builder);
   }
@@ -109,7 +129,7 @@ ir::value *dispatch::add(ir::value *input, ir::value *other, ir::builder *builde
   // int + int
   else if (input_scalar_ty->is_integer_ty())
     return builder->create_add(input, other);
-  return throw_unreachable("add");
+  throw_unreachable("add");
 }
 
 ir::value *dispatch::sub(ir::value *input, ir::value *other, ir::builder *builder) {
@@ -124,7 +144,7 @@ ir::value *dispatch::sub(ir::value *input, ir::value *other, ir::builder *builde
   // int + int
   else if (scalar_ty->is_integer_ty())
     return builder->create_sub(input, other);
-  return throw_unreachable("sub");
+  throw_unreachable("sub");
 }
 
 ir::value *dispatch::mul(ir::value *input, ir::value *other, ir::builder *builder) {
@@ -136,11 +156,11 @@ ir::value *dispatch::mul(ir::value *input, ir::value *other, ir::builder *builde
   // int * int
   else if (scalar_ty->is_integer_ty())
     return builder->create_mul(input, other);
-  return throw_unreachable("mul");
+  throw_unreachable("mul");
 }
 
 ir::value *dispatch::truediv(ir::value *input, ir::value *other, ir::builder *builder) {
-  binary_op_type_checking(input, other, builder, false, false, false);
+  binary_op_type_checking(input, other, builder, false, false, true, DivOrMod::YES);
   ir::type *input_scalar_ty = input->get_type()->get_scalar_ty();
   ir::type *other_scalar_ty = other->get_type()->get_scalar_ty();
   // float / int
@@ -163,81 +183,99 @@ ir::value *dispatch::truediv(ir::value *input, ir::value *other, ir::builder *bu
   }
   // unreachable
   else
-    return throw_unreachable("div");
+    throw_unreachable("div");
   return builder->create_fdiv(input, other);
 }
 
 ir::value *dispatch::floordiv(ir::value *input, ir::value *other, ir::builder *builder){
-  binary_op_type_checking(input, other, builder, false, false, false);
+  binary_op_type_checking(input, other, builder, false, false, true, DivOrMod::YES);
   ir::type *input_scalar_ty = input->get_type()->get_scalar_ty();
   ir::type *other_scalar_ty = other->get_type()->get_scalar_ty();
   if(input_scalar_ty->is_integer_ty() && other_scalar_ty->is_integer_ty()){
     ir::type *ret_ty = integer_promote(input_scalar_ty, other_scalar_ty);
     input = dispatch::cast(input, ret_ty, builder);
     other = dispatch::cast(other, ret_ty, builder);
-    return builder->create_sdiv(input, other);
+    if (ret_ty->is_integer_signed()) {
+      return builder->create_sdiv(input, other);
+    } else {
+      return builder->create_udiv(input, other);
+    }
   }
-  return throw_unreachable("floordiv");
+  throw_unreachable("floordiv");
+}
+
+ir::value *dispatch::fdiv(ir::value *input, ir::value *other, constant_int *ieee_rounding, ir::builder *builder){
+  ir::type *input_scalar_ty = input->get_type()->get_scalar_ty();
+  ir::type *other_scalar_ty = other->get_type()->get_scalar_ty();
+  if(!input_scalar_ty->is_floating_point_ty() || !other_scalar_ty->is_floating_point_ty())
+    throw semantic_error("both operands of fdiv must have floating point scalar type");
+  binary_op_type_checking(input, other, builder, false, false, false, DivOrMod::YES);
+  ir::value* ret = builder->create_fdiv(input, other);
+  if(ir::binary_operator* binop = dynamic_cast<ir::binary_operator*>(ret))
+    binop->set_fdiv_ieee_rounding(ieee_rounding->get_value());
+  return ret;
 }
 
 ir::value *dispatch::mod(ir::value *input, ir::value *other, ir::builder *builder) {
-  binary_op_type_checking(input, other, builder);
+  binary_op_type_checking(input, other, builder, false, false, true, DivOrMod::YES);
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
+  ir::type *other_scalar_ty = other->get_type()->get_scalar_ty();
   // float % int
   if (scalar_ty->is_floating_point_ty())
     return builder->create_frem(input, other);
   // int % int
-  else if (scalar_ty->is_integer_ty())
-    return builder->create_srem(input, other);
-  return throw_unreachable("mod");
+  else if (scalar_ty->is_integer_ty()) {
+    if (scalar_ty->get_integer_signedness() != other_scalar_ty->get_integer_signedness()) {
+      throw semantic_error("Cannot mod " + scalar_ty->repr() + " by " + other_scalar_ty->repr() + " because they have different signedness; this is unlikely to result in a useful answer. Cast them to the same signedness.");
+    }
+    if (scalar_ty->is_integer_signed()) {
+      return builder->create_srem(input, other);
+    } else {
+      return builder->create_urem(input, other);
+    }
+  }
+  throw_unreachable("mod");
 }
 
 
-void bitwise_op_type_checking(ir::value *&input, ir::value *&other, ir::builder *builder, bool force_lhs_type = false){
+void bitwise_op_type_checking(ir::value *&input, ir::value *&other, ir::builder *builder) {
   binary_op_type_checking(input, other, builder, false, false, false);
   ir::type *input_sca_ty = input->get_type()->get_scalar_ty();
   ir::type *other_sca_ty = other->get_type()->get_scalar_ty();
   if(!input_sca_ty->is_integer_ty() || !other_sca_ty->is_integer_ty())
     throw_incompatible_types(input_sca_ty, other_sca_ty);
-  // for some reason pytorch assigns the result of binary op to have the type of the lhs...
-  if(force_lhs_type){
-    if(input_sca_ty->get_integer_bitwidth() != other_sca_ty->get_integer_bitwidth())
-      other = dispatch::cast(other, input_sca_ty, builder);
-  }
-  else{
-    if(input_sca_ty->get_integer_bitwidth() < other_sca_ty->get_integer_bitwidth())
-      input = dispatch::cast(input, other_sca_ty, builder);
-    else if(other_sca_ty->get_integer_bitwidth() < input_sca_ty->get_integer_bitwidth())
-      other = dispatch::cast(other, input_sca_ty, builder);
-  }
-
+  ir::type *ret_sca_ty = integer_promote(input_sca_ty, other_sca_ty);
+  if (ret_sca_ty != input_sca_ty)
+    input = dispatch::cast(input, ret_sca_ty, builder);
+  if (ret_sca_ty != other_sca_ty)
+    other = dispatch::cast(other, ret_sca_ty, builder);
 }
 
 ir::value *dispatch::and_(ir::value *input, ir::value *other, ir::builder *builder) {
-  bitwise_op_type_checking(input, other, builder, true);
+  bitwise_op_type_checking(input, other, builder);
   return builder->create_and(input, other);
 }
 
 ir::value *dispatch::or_(ir::value *input, ir::value *other, ir::builder *builder) {
-  bitwise_op_type_checking(input, other, builder, true);
+  bitwise_op_type_checking(input, other, builder);
   return builder->create_or(input, other);
 }
 
 
 ir::value *dispatch::xor_(ir::value *input, ir::value *other, ir::builder *builder) {
-  bitwise_op_type_checking(input, other, builder, true);
+  bitwise_op_type_checking(input, other, builder);
   return builder->create_xor(input, other);
 }
 
 
 ir::value *dispatch::lshr(ir::value *input, ir::value *other, ir::builder *builder) {
-  bitwise_op_type_checking(input, other, builder, false);
+  bitwise_op_type_checking(input, other, builder);
   return builder->create_lshr(input, other);
 }
 
 
 ir::value *dispatch::shl(ir::value *input, ir::value *other, ir::builder *builder) {
-  bitwise_op_type_checking(input, other, builder, false);
+  bitwise_op_type_checking(input, other, builder);
   return builder->create_shl(input, other);
 }
 
@@ -277,9 +315,14 @@ ir::value *dispatch::greater_than(ir::value *input, ir::value *other, ir::builde
   if (scalar_ty->is_floating_point_ty())
     return builder->create_fcmpOGT(input, other);
   // int > int
-  else if (scalar_ty->is_integer_ty())
-    return builder->create_icmpSGT(input, other);
-  return throw_unreachable("greater_than");
+  else if (scalar_ty->is_integer_ty()) {
+    if (scalar_ty->is_integer_signed()) {
+      return builder->create_icmpSGT(input, other);
+    } else {
+      return builder->create_icmpUGT(input, other);
+    }
+  }
+  throw_unreachable("greater_than");
 }
 
 ir::value *dispatch::greater_equal(ir::value *input, ir::value *other, ir::builder *builder) {
@@ -289,9 +332,14 @@ ir::value *dispatch::greater_equal(ir::value *input, ir::value *other, ir::build
   if (scalar_ty->is_floating_point_ty())
     return builder->create_fcmpOGE(input, other);
   // int >= int
-  else if (scalar_ty->is_integer_ty())
-    return builder->create_icmpSGE(input, other);
-  return throw_unreachable("greater_equal");
+  else if (scalar_ty->is_integer_ty()) {
+    if (scalar_ty->is_integer_signed()) {
+      return builder->create_icmpSGE(input, other);
+    } else {
+      return builder->create_icmpUGE(input, other);
+    }
+  }
+  throw_unreachable("greater_equal");
 }
 
 ir::value *dispatch::less_than(ir::value *input, ir::value *other, ir::builder *builder) {
@@ -301,9 +349,14 @@ ir::value *dispatch::less_than(ir::value *input, ir::value *other, ir::builder *
   if (scalar_ty->is_floating_point_ty())
     return builder->create_fcmpOLT(input, other);
   // int < int
-  else if (scalar_ty->is_integer_ty())
-    return builder->create_icmpSLT(input, other);
-  return throw_unreachable("less_than");
+  else if (scalar_ty->is_integer_ty()) {
+    if (scalar_ty->is_integer_signed()) {
+      return builder->create_icmpSLT(input, other);
+    } else {
+      return builder->create_icmpULT(input, other);
+    }
+  }
+  throw_unreachable("less_than");
 }
 
 ir::value *dispatch::less_equal(ir::value *input, ir::value *other, ir::builder *builder) {
@@ -313,9 +366,14 @@ ir::value *dispatch::less_equal(ir::value *input, ir::value *other, ir::builder 
   if (scalar_ty->is_floating_point_ty())
     return builder->create_fcmpOLE(input, other);
   // int < int
-  else if (scalar_ty->is_integer_ty())
-    return builder->create_icmpSLE(input, other);
-  return throw_unreachable("less_equal");
+  else if (scalar_ty->is_integer_ty()) {
+    if (scalar_ty->is_integer_signed()) {
+      return builder->create_icmpSLE(input, other);
+    } else {
+      return builder->create_icmpULE(input, other);
+    }
+  }
+  throw_unreachable("less_equal");
 }
 
 ir::value *dispatch::equal(ir::value *input, ir::value *other, ir::builder *builder) {
@@ -327,7 +385,7 @@ ir::value *dispatch::equal(ir::value *input, ir::value *other, ir::builder *buil
   // int == int
   else if (scalar_ty->is_integer_ty())
     return builder->create_icmpEQ(input, other);
-  return throw_unreachable("equal");
+  throw_unreachable("equal");
 }
 
 ir::value *dispatch::not_equal(ir::value *input, ir::value *other, ir::builder *builder) {
@@ -339,7 +397,7 @@ ir::value *dispatch::not_equal(ir::value *input, ir::value *other, ir::builder *
   // int == int
   else if (scalar_ty->is_integer_ty())
     return builder->create_icmpNE(input, other);
-  return throw_unreachable("equal");
+  throw_unreachable("equal");
 }
 
 //===----------------------------------------------------------------------===//
@@ -462,8 +520,11 @@ ir::value *dispatch::cast(ir::value *input, ir::type *dst_ty, ir::builder *build
     return builder->create_fp_ext(input, dst_ty);
   // Int cast
   if (src_sca_ty->is_integer_ty() && dst_sca_ty->is_integer_ty() &&
-      src_sca_ty->get_integer_bitwidth() != dst_sca_ty->get_integer_bitwidth())
-    return builder->create_int_cast(input, dst_ty, src_sca_ty != builder->get_int1_ty());
+      (src_sca_ty->get_integer_bitwidth() != dst_sca_ty->get_integer_bitwidth() ||
+       src_sca_ty->get_integer_signedness() != dst_sca_ty->get_integer_signedness())) {
+    bool sign_extend = src_sca_ty->is_integer_signed() && src_sca_ty != builder->get_int1_ty();
+    return builder->create_int_cast(input, dst_ty, sign_extend);
+  }
   // Float -> Int
   if (src_sca_ty->is_floating_point_ty() && dst_sca_ty->is_integer_ty()){
     if(dst_sca_ty->is_bool_ty())
@@ -473,13 +534,20 @@ ir::value *dispatch::cast(ir::value *input, ir::type *dst_ty, ir::builder *build
   }
   // int -> Float
   if (src_sca_ty->is_integer_ty() && dst_sca_ty->is_floating_point_ty()){
-    if(src_sca_ty->is_bool_ty())
+    if (src_sca_ty->is_bool_ty() || !src_sca_ty->is_integer_signed())
       return builder->create_ui_to_fp(input, dst_ty);
     else
       return builder->create_si_to_fp(input, dst_ty);
   }
-  if (src_sca_ty->is_pointer_ty() && !dst_sca_ty->is_pointer_ty())
-    return builder->create_cast(ir::PtrToInt, input, dst_ty);
+  if (src_sca_ty->is_pointer_ty() && dst_sca_ty->is_integer_ty()){
+    int bitwidth = dst_sca_ty->get_integer_bitwidth();
+    if(bitwidth == 64)
+      return builder->create_cast(ir::PtrToInt, input, dst_ty);
+    if(bitwidth == 1)
+      return dispatch::not_equal(dispatch::cast(input, builder->get_int64_ty(), builder),
+                                 builder->get_int64(0),
+                                 builder);
+  }
   if (!src_sca_ty->is_pointer_ty() && dst_sca_ty->is_pointer_ty())
     return builder->create_cast(ir::IntToPtr, input, dst_ty);
   // Ptr -> Ptr
@@ -494,14 +562,14 @@ ir::value *dispatch::cast(ir::value *input, ir::type *dst_ty, ir::builder *build
       other = builder->create_splat(other, src_ty->get_block_shapes());
     return builder->create_icmpNE(input, other);
   }
-  return throw_unreachable("cast");
+  throw_unreachable("casting from " + src_sca_ty->repr() + " to " + dst_sca_ty->repr());
 }
 
 //===----------------------------------------------------------------------===//
 //                               Memory Operators
 //===----------------------------------------------------------------------===//
 
-ir::value *dispatch::load(ir::value* ptr, ir::value* mask, ir::value* other, const std::string &cache_modifier, ir::builder* builder) {
+ir::value *dispatch::load(ir::value* ptr, ir::value* mask, ir::value* other, const std::string &cache_modifier, int is_volatile, ir::builder* builder) {
   if(!ptr->get_type()->get_scalar_ty()->is_pointer_ty())
     throw semantic_error("Pointer argument of load instruction is " + ptr->get_type()->repr());
   if(ptr->get_type()->is_block_ty()){
@@ -521,6 +589,7 @@ ir::value *dispatch::load(ir::value* ptr, ir::value* mask, ir::value* other, con
     ptr_ty = pointer_type::get(elt_ty, ptr_ty->get_pointer_address_space());
     ptr = dispatch::cast(ptr, ptr_ty, builder);
   }
+  // cache modifier
   load_inst::CACHE_MODIFIER cache = load_inst::NONE; // default
   if (!cache_modifier.empty()) {
     if (cache_modifier == ".ca")
@@ -531,7 +600,7 @@ ir::value *dispatch::load(ir::value* ptr, ir::value* mask, ir::value* other, con
       throw std::runtime_error(std::string("Cache modifier ") + cache_modifier + " not supported");
   }
   if (!mask && !other)
-    return builder->create_load(ptr, cache);
+    return builder->create_load(ptr, cache, is_volatile);
   if (!mask)
     throw std::runtime_error("`other` cannot be provided without `mask`");
   auto shape = ptr->get_type()->get_block_shapes();
@@ -540,7 +609,7 @@ ir::value *dispatch::load(ir::value* ptr, ir::value* mask, ir::value* other, con
     if(ptr->get_type()->is_block_ty())
       other = builder->create_splat(other, ptr->get_type()->get_block_shapes());
   }
-  return builder->create_masked_load(ptr, mask, other, cache);
+  return builder->create_masked_load(ptr, mask, other, cache, is_volatile);
 }
 
 ir::value *dispatch::store(ir::value* ptr, ir::value *val, ir::value* mask, ir::builder *builder) {
@@ -594,8 +663,13 @@ ir::value *dispatch::atomic_max(ir::value* ptr, ir::value *val, ir::value *mask,
   atom_red_typechecking(ptr, val, mask, builder);
   ir::type* sca_ty = val->get_type()->get_scalar_ty();
   // direct call to atomic_max for integers
-  if(sca_ty->is_integer_ty())
-    return builder->create_atomic_rmw(ir::atomic_rmw_op_t::Max, ptr, val, mask);
+  if(sca_ty->is_integer_ty()) {
+    if (sca_ty->is_integer_signed()) {
+      return builder->create_atomic_rmw(ir::atomic_rmw_op_t::Max, ptr, val, mask);
+    } else {
+      return builder->create_atomic_rmw(ir::atomic_rmw_op_t::UMax, ptr, val, mask);
+    }
+  }
   // for float
   // return atomic_smax(i_ptr, i_val) if val >= 0
   // return atomic_umin(i_ptr, i_val) if val < 0
@@ -611,9 +685,14 @@ ir::value *dispatch::atomic_max(ir::value* ptr, ir::value *val, ir::value *mask,
 ir::value *dispatch::atomic_min(ir::value* ptr, ir::value *val, ir::value *mask, ir::builder *builder){
   atom_red_typechecking(ptr, val, mask, builder);
   ir::type* sca_ty = val->get_type()->get_scalar_ty();
-  // direct call to atomic_max for integers
-  if(sca_ty->is_integer_ty())
-    return builder->create_atomic_rmw(ir::atomic_rmw_op_t::Min, ptr, val, mask);
+  // direct call to atomic_min for integers
+  if(sca_ty->is_integer_ty()) {
+    if (sca_ty->is_integer_signed()) {
+      return builder->create_atomic_rmw(ir::atomic_rmw_op_t::Min, ptr, val, mask);
+    } else {
+      return builder->create_atomic_rmw(ir::atomic_rmw_op_t::UMin, ptr, val, mask);
+    }
+  }
   // for float
   // return atomic_smin(i_ptr, i_val) if val >= 0
   // return atomic_umax(i_ptr, i_val) if val < 0
@@ -658,12 +737,17 @@ ir::value *dispatch::atomic_xchg(ir::value* ptr, ir::value *val, ir::value *mask
 //                               Linear Algebra
 //===----------------------------------------------------------------------===//
 
-ir::value *dispatch::dot(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
-  ir::value *_0 = builder->get_float32(0);
+ir::value *dispatch::dot(ir::value *lhs, ir::value *rhs, ir::constant_int *allow_tf32, ir::builder *builder) {
+  ir::value *_0 = nullptr;
+  if (lhs->get_type()->is_int_or_tileint_ty())
+    _0 = builder->get_int32(0);
+  else
+    _0 = builder->get_float32(0);
   unsigned M = lhs->get_type()->get_block_shapes()[0];
   unsigned N = rhs->get_type()->get_block_shapes()[1];
   _0 = builder->create_splat(_0, {M, N});
-  return builder->create_dot(lhs, rhs, _0);
+  bool _allow_tf32 = allow_tf32->get_value() != 0;
+  return builder->create_dot(lhs, rhs, _0, _allow_tf32);
 }
 
 
@@ -677,8 +761,11 @@ ir::value *dispatch::where(ir::value* condition, ir::value *x, ir::value *y, ir:
     x = dispatch::broadcast(x, condition->get_type()->get_block_shapes(), builder);
     y = dispatch::broadcast(y, condition->get_type()->get_block_shapes(), builder);
   }
-  if(x->get_type()->get_scalar_ty() != y->get_type()->get_scalar_ty())
-    throw_incompatible_types(x->get_type()->get_scalar_ty(), y->get_type()->get_scalar_ty());
+  ir::type* x_ty = x->get_type()->get_scalar_ty();
+  ir::type* y_ty = y->get_type()->get_scalar_ty();
+  ir::type* ty = computation_type(x_ty, y_ty, DivOrMod::NO);
+  x = dispatch::cast(x, ty, builder);
+  y = dispatch::cast(y, ty, builder);
   return builder->create_select(condition, x, y);
 }
 
@@ -699,7 +786,7 @@ ir::value *reduce_impl(ir::value *input, unsigned int axis, ir::builder *builder
     return builder->create_reduce(input, FLOAT_OP, axis);
   else if (scalar_ty->is_integer_ty())
     return builder->create_reduce(input, INT_OP, axis);
-  return throw_unreachable(name);
+  throw_unreachable(name);
 }
 
 ir::value *dispatch::min(ir::value *input, unsigned int axis, ir::builder *builder) {
@@ -712,6 +799,13 @@ ir::value *dispatch::max(ir::value *input, unsigned int axis, ir::builder *build
 
 ir::value *dispatch::sum(ir::value *input, unsigned int axis, ir::builder *builder) {
   return reduce_impl(input, axis, builder, "sum", ir::reduce_inst::FADD, ir::reduce_inst::ADD);
+}
+
+ir::value *dispatch::xor_sum(ir::value *input, unsigned int axis, ir::builder *builder) {
+  ir::type *scalar_ty = input->get_type()->get_scalar_ty();
+  if (!scalar_ty->is_integer_ty())
+    throw semantic_error("xor_sum only supported for integers");
+  return reduce_impl(input, axis, builder, "sum", ir::reduce_inst::XOR, ir::reduce_inst::XOR);
 }
 
 

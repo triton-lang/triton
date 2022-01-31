@@ -48,6 +48,7 @@
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/ExecutionEngine/SectionMemoryManager.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Scalar.h"
 
 // begin AMD stuff
 #include "llvm/Support/FileSystem.h"
@@ -124,7 +125,11 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version){
   // verify and store llvm
   llvm::legacy::PassManager pm;
   pm.add(llvm::createVerifierPass());
+  // pm.add(llvm::createDeadCodeEliminationPass());
+  // pm.add(llvm::createEarlyCSEPass());
   pm.run(*module);
+  // module->print(llvm::outs(), nullptr);
+
   // create machine
   module->setTargetTriple(triple);
   std::string error;
@@ -160,12 +165,25 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version){
 }
 
 std::string ptx_to_cubin(const std::string& ptx, int cc) {
-  std::string ptxas = "ptxas";
   std::string version;
-  int use_system_ptxas = tools::exec(ptxas + " --version 2>&1", version) == 0;
-  if(!use_system_ptxas)
-    return "";
-
+  // search pathes for ptxas
+  std::vector<std::string> ptxas_prefixes = {"", "/usr/local/cuda/bin/"};
+  std::string triton_ptxas = tools::getenv("TRITON_PTXAS_PATH");
+  if(!triton_ptxas.empty())
+    ptxas_prefixes.insert(ptxas_prefixes.begin(), triton_ptxas);
+  // see what path for ptxas are valid
+  std::vector<std::string> working_ptxas;
+  for(std::string prefix: ptxas_prefixes){
+    std::string ptxas = prefix + "ptxas";
+    bool works = tools::exec(ptxas + " --version 2>&1", version) == 0;
+    if(works)
+      working_ptxas.push_back(ptxas);
+  }
+  // error if no working ptxas was found
+  if(working_ptxas.empty())
+    throw std::runtime_error("`ptxas` was searched in TRITON_PTXAS_PATH, /usr/local/cuda/bin/ or PATH"
+                             " but a working version could not be found.");
+  std::string ptxas = working_ptxas.front();
   // compile ptx with ptxas
   char _fsrc[L_tmpnam];
   char _flog[L_tmpnam];
@@ -176,78 +194,28 @@ std::string ptx_to_cubin(const std::string& ptx, int cc) {
   std::string fbin = fsrc + ".o";
   const char* _fbin = fbin.c_str();
   std::ofstream ofs(fsrc);
-  ofs << ptx;
+  ofs << ptx << std::endl;
   ofs.close();
   std::string cmd;
   int err;
   cmd = ptxas + " -v --gpu-name=sm_" + std::to_string(cc) + " " + fsrc + " -o " + fsrc + ".o 2> " + flog;
   err = system(cmd.c_str());
+  if(err != 0){
+    std::ifstream _log(_flog);
+    std::string log(std::istreambuf_iterator<char>(_log), {});
+    unlink(_fsrc);
+    unlink(_flog);
+    throw std::runtime_error("Internal Triton PTX codegen error: \n" + log);
+  }
   CUmodule ret;
   std::ifstream _cubin(_fbin, std::ios::binary );
   std::string cubin(std::istreambuf_iterator<char>(_cubin), {});
   _cubin.close();
-  dispatch::cuModuleLoadData(&ret, cubin.c_str());
   unlink(_fsrc);
   unlink(_flog);
   unlink(_fbin);
+  dispatch::cuModuleLoadData(&ret, cubin.c_str());
   return cubin;
-}
-
-CUmodule ptx_to_cumodule(const std::string& ptx, int cc) {
-  // JIT compile source-code
-  try{
-    // use ptxas if present in PATH. Otherwise, use JIT from the driver
-    std::string ptxas = "ptxas";
-    std::string version;
-    int use_system_ptxas = tools::exec(ptxas + " --version 2>&1", version) == 0;
-
-    // Use PTXAS via system call
-    if(use_system_ptxas){
-      // compile ptx with ptxas
-      char _fsrc[L_tmpnam];
-      char _flog[L_tmpnam];
-      std::tmpnam(_fsrc);
-      std::tmpnam(_flog);
-      std::string fsrc = _fsrc;
-      std::string flog = _flog;
-      std::string fbin = fsrc + ".o";
-      const char* _fbin = fbin.c_str();
-      std::ofstream ofs(fsrc);
-      ofs << ptx;
-      ofs.close();
-      std::string cmd;
-      int err;
-      cmd = ptxas + " -v --gpu-name=sm_" + std::to_string(cc) + " " + fsrc + " -o " + fsrc + ".o 2> " + flog;
-      err = system(cmd.c_str());
-      CUmodule ret;
-      std::ifstream _cubin(_fbin, std::ios::binary );
-      std::string cubin(std::istreambuf_iterator<char>(_cubin), {});
-      _cubin.close();
-      dispatch::cuModuleLoadData(&ret, cubin.c_str());
-      unlink(_fsrc);
-      unlink(_flog);
-      unlink(_fbin);
-      return ret;
-    }
-
-    // Use PTXAS included in driver
-    CUjit_option opt[] = {CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER,
-                          CU_JIT_INFO_LOG_BUFFER_SIZE_BYTES, CU_JIT_INFO_LOG_BUFFER,
-                          CU_JIT_LOG_VERBOSE};
-    const unsigned int errbufsize = 8192;
-    const unsigned int logbufsize = 8192;
-    char _err[errbufsize];
-    char _log[logbufsize];
-    void* optval[] = {(void*)(uintptr_t)errbufsize, (void*)_err, (void*)(uintptr_t)logbufsize, (void*)_log, (void*)1};
-    CUmodule ret;
-    dispatch::cuModuleLoadDataEx(&ret, ptx.data(), 5, opt, optval);
-    return ret;
-  }
-  catch(exception::cuda::invalid_ptx const &){
-    std::cout << ptx << std::endl;
-    std::cerr << "It appears that Triton produced invalid PTX code:" << std::endl;
-    throw;
-  }
 }
 
 /* ------------------------ */

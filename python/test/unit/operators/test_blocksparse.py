@@ -1,6 +1,7 @@
-import torch
-import triton
 import pytest
+import torch
+
+import triton
 
 
 @pytest.mark.parametrize("MODE", ["sdd", "dds", "dsd"])
@@ -21,7 +22,7 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     }[MODE]
     layout = torch.randint(2, (H, shape[0] // BLOCK, shape[1] // BLOCK))
     # triton result
-    op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B)
+    op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B, device="cuda")
     ra = triton.testing.sparsify_tensor(a, layout, BLOCK) if MODE == "dsd" else a
     rb = triton.testing.sparsify_tensor(b, layout, BLOCK) if MODE == "dds" else b
     rc = triton.testing.catch_oor(lambda: op(ra, rb), pytest)
@@ -71,7 +72,8 @@ def test_softmax(BLOCK, WIDTH, DTYPE):
     # torch result
     rx = triton.testing.mask_tensor(x, layout, BLOCK, value=float("-inf"))
     # broadcast at_mask to the same shape as rx
-    if is_causal: at_mask = torch.tril(at_mask)
+    if is_causal:
+        at_mask = torch.tril(at_mask)
     M = at_mask[None, None, :, :] + torch.zeros_like(rx)
     rx[M == 0] = float("-inf")
     # rx += kp_mask[:, None, None, :]
@@ -151,8 +153,8 @@ def triton_attention(
     value: torch.Tensor,
     scale: float,
 ):
-    sparse_dot_sdd_nt = triton.ops.blocksparse.matmul(layout, block, "sdd", trans_a=False, trans_b=True)
-    sparse_dot_dsd_nn = triton.ops.blocksparse.matmul(layout, block, "dsd", trans_a=False, trans_b=False)
+    sparse_dot_sdd_nt = triton.ops.blocksparse.matmul(layout, block, "sdd", trans_a=False, trans_b=True, device=value.device)
+    sparse_dot_dsd_nn = triton.ops.blocksparse.matmul(layout, block, "dsd", trans_a=False, trans_b=False, device=value.device)
     sparse_softmax = triton.ops.blocksparse.softmax(
         layout,
         block,
