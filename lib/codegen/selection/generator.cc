@@ -470,18 +470,25 @@ std::tuple<Value*, Value*, Value*, Value*> generator::fp16x4_to_fp8x4(Value *in0
    * The 4 fp8 exponent bits are the low order 4 exponent bits in fp16.
    * The 3 fp8 mantissa bits are the high order 3 mantissa bits in fp16.
    * Note that the low order exponent bits and high order mantissa bits in fp16 are contiguous.
-   * Thus the entire operation becomes:
-   * fp8 = (fp16 & 0x8000) | ((f16 << 1) & 0x7fff)
-   * If the highest order exponent bit in fp16 is set then the number isn't representable in fp8.
-   * In that case the output is undefined. Thus we can assume that bit isn't set and omit the
-   * & 0x7fff. Thus the operation becomes:
-   * fp8 = (fp16 & 0x8000) | (fp16 << 1)
+   * We want to round to nearest fp8 value. To do that add 1 to 4th mantissa bit in fp16 (that's
+   * one more than the number of mantissa bits in fp8).
+   * fp8 = (fp16 & 0x8000) | (((f16 << 1) + 0x0080) & 0x7fff)
+   *
+   * We compute two fp16s in one uint32. The addition could cause bit flips from one fp16 to the
+   * other. To avoid this we zero out the most significant exponent bit. If that bit is set then
+   * the value isn't representable in float8 anyway so we assume it's never set (and give garbage
+   * output if it is). If we were willing to assume the most significant exponent was never set
+   * we could save the first two lop3.b32 instructions below.
    */
   InlineAsm *ptx = InlineAsm::get(FunctionType::get({vec_ty(i8_ty, 4)}, {i32_ty, i32_ty}, false),
   "{"
   ".reg .b32 a<2>, b<2>;                  \n\t"
   "shl.b32 a0, $1, 1;                     \n\t" // a0 = input0 << 1
   "shl.b32 a1, $2, 1;                     \n\t" // a1 = input1 << 1
+  "lop3.b32 a0, a0, 0x7fff7fff, 0, 0xc0;  \n\t" // a0 = (a0 & 0x7fff7fff)
+  "lop3.b32 a1, a1, 0x7fff7fff, 0, 0xc0;  \n\t" // a1 = (a1 & 0x7fff7fff)
+  "add.u32 a0, a0, 0x00800080;            \n\t" // a0 += 0x00800080
+  "add.u32 a1, a1, 0x00800080;            \n\t" // a1 += 0x00800080
   "lop3.b32 b0, $1, 0x80008000, a0, 0xea; \n\t" // b0 = (input0 & 0x80008000) | a0
   "lop3.b32 b1, $2, 0x80008000, a1, 0xea; \n\t" // b1 = (input1 & 0x80008000) | a1
   "prmt.b32 $0, b0, b1, 0x7531;           \n\t" // If b0 = 0xabcd and b1=0x0123 sets output to 0xac02
