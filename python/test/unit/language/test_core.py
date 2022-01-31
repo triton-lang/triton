@@ -576,7 +576,7 @@ def test_f8_f16_roundtrip():
         output = input
         tl.store(output_ptr + offsets, output, mask=mask)
 
-    f8_tensor = torch.tensor(range(256), dtype=torch.uint8, device='cuda').view(dtype=torch.int8)
+    f8_tensor = torch.tensor(range(256), dtype=torch.uint8, device='cuda').view(torch.int8)
     f8 = triton.reinterpret(f8_tensor, tl.float8)
     n_elements = f8_tensor.numel()
     f16 = torch.empty_like(f8_tensor, dtype=torch.float16)
@@ -609,7 +609,7 @@ def test_f16_to_f8_rounding():
         torch.tensor(
             range(-int(2 ** (16 - 1)), int(2 ** (16 - 1))), dtype=torch.int16, device='cuda'
         )
-        .view(dtype=torch.float16)
+        .view(torch.float16)
     )
     n_elements = f16_input.numel()
     f8_output_tensor = torch.empty_like(f16_input, dtype=torch.int8)
