@@ -130,6 +130,94 @@ float64 = dtype(ir.type.get_fp64)
 # pointer types
 pi32_t = pointer_dtype(int32)
 
+# -----------------------
+# constexpr
+# -----------------------
+
+
+class constexpr:
+    """
+    This class is used to store a value that is known at compile-time.
+    """
+
+    def __init__(self, value):
+        if isinstance(value, constexpr):
+            self.value = value.value
+        else:
+            self.value = value
+
+    def __repr__(self) -> str:
+        return f"constexpr[{self.value}]"
+
+    #
+    def __add__(self, other):
+        return self.value + other.value
+
+    def __radd__(self, other):
+        return other.value + self.value
+
+    def __sub__(self, other):
+        return self.value - other.value
+
+    def __rsub__(self, other):
+        return other.value - self.value
+
+    def __mul__(self, other):
+        return self.value * other.value
+
+    def __rmul__(self, other):
+        return other.value * self.value
+
+    def __truediv__(self, other):
+        return self.value / other.value
+
+    def __rtruediv__(self, other):
+        return other.value / self.value
+
+    def __floordiv__(self, other):
+        return self.value // other.value
+
+    def __rfloordiv__(self, other):
+        return other.value // self.value
+
+    #
+
+    def __gt__(self, other):
+        return self.value > other.value
+
+    def __rgt__(self, other):
+        return other.value > self.value
+
+    def __ge__(self, other):
+        return self.value >= other.value
+
+    def __rge__(self, other):
+        return other.value >= self.value
+
+    def __lt__(self, other):
+        return self.value < other.value
+
+    def __rlt__(self, other):
+        return other.value < self.value
+
+    def __le__(self, other):
+        return self.value <= other.value
+
+    def __rle__(self, other):
+        return other.value <= self.value
+
+    def __eq__(self, other):
+        return self.value == other.value
+
+    def __ne__(self, other):
+        return self.value != other.value
+
+    def __bool__(self):
+        return bool(self.value)
+
+    def __call__(self, *args, **kwds):
+        return self.value(*args, **kwds)
+
 
 class block:
     @staticmethod
@@ -296,7 +384,7 @@ class block:
         dst_shape = []
         curr = 0
         for sl in slices:
-            if sl is None:
+            if isinstance(sl, constexpr) and sl.value is None:
                 dst_shape.append(1)
             elif sl == slice(None, None, None):
                 dst_shape.append(src_shape[curr].value)
@@ -311,93 +399,6 @@ class block:
             return frontend.bitcast(self, dtype, _builder)
         return frontend.cast(self, dtype, _builder)
 
-
-# -----------------------
-# constexpr
-# -----------------------
-
-class constexpr:
-    """
-    This class is used to store a value that is known at compile-time.
-    """
-
-    def __init__(self, value):
-        if isinstance(value, constexpr):
-            self.value = value.value
-        else:
-            self.value = value
-
-    def __repr__(self) -> str:
-        return f"constexpr[{self.value}]"
-
-    #
-    def __add__(self, other):
-        return self.value + other.value
-
-    def __radd__(self, other):
-        return other.value + self.value
-
-    def __sub__(self, other):
-        return self.value - other.value
-
-    def __rsub__(self, other):
-        return other.value - self.value
-
-    def __mul__(self, other):
-        return self.value * other.value
-
-    def __rmul__(self, other):
-        return other.value * self.value
-
-    def __truediv__(self, other):
-        return self.value / other.value
-
-    def __rtruediv__(self, other):
-        return other.value / self.value
-
-    def __floordiv__(self, other):
-        return self.value // other.value
-
-    def __rfloordiv__(self, other):
-        return other.value // self.value
-
-    #
-
-    def __gt__(self, other):
-        return self.value > other.value
-
-    def __rgt__(self, other):
-        return other.value > self.value
-
-    def __ge__(self, other):
-        return self.value >= other.value
-
-    def __rge__(self, other):
-        return other.value >= self.value
-
-    def __lt__(self, other):
-        return self.value < other.value
-
-    def __rlt__(self, other):
-        return other.value < self.value
-
-    def __le__(self, other):
-        return self.value <= other.value
-
-    def __rle__(self, other):
-        return other.value <= self.value
-
-    def __eq__(self, other):
-        return self.value == other.value
-
-    def __ne__(self, other):
-        return self.value != other.value
-
-    def __bool__(self):
-        return bool(self.value)
-
-    def __call__(self, *args, **kwds):
-        return self.value(*args, **kwds)
 
 # -----------------------
 # SPMD Programming Model

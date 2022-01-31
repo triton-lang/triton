@@ -454,6 +454,9 @@ class CodeGenerator(ast.NodeVisitor):
         if hasattr(fn, '__self__') and self.is_triton_object(fn.__self__) or \
                 sys.modules[fn.__module__] is triton.language.core:
             return fn(*args, _builder=self.builder, **kws)
+        if fn in self.builtins.values():
+            args = [arg.value if isinstance(arg, triton.language.constexpr) else arg
+                    for arg in args]
         return fn(*args, **kws)
 
     def visit_Constant(self, node):
