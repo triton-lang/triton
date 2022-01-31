@@ -15,6 +15,7 @@
 #include <pybind11/stl.h>
 #include "Python.h"
 #include <regex>
+#include <sstream>
 #include <string>
 #include "llvm/IR/Module.h"
 #include "llvm/IR/LegacyPassManager.h"

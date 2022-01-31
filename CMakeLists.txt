@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.6)
 include(ExternalProject)
 
+set(CMAKE_CXX_STANDARD 17)
+
 if(NOT TRITON_LLVM_BUILD_DIR)
     set(TRITON_LLVM_BUILD_DIR ${CMAKE_BINARY_DIR})
 endif()
@@ -8,7 +10,9 @@ endif()
 
 project(triton)
 include(CTest)
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+if(NOT WIN32)
+  list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+endif()
 
 # Options
 option(BUILD_TUTORIALS "Build C++ Triton tutorials" ON)
@@ -20,10 +24,19 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE "Release")
 endif()
 
-find_library(TERMINFO_LIBRARY tinfo)
+if(NOT WIN32)
+    find_library(TERMINFO_LIBRARY tinfo)
+endif()
 
 # Compiler flags
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+if(WIN32)
+    SET(BUILD_SHARED_LIBS OFF)
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/deps/dlfcn-win32/src)
+    add_subdirectory(deps/dlfcn-win32/src ${CMAKE_BINARY_DIR}/dlfcn-win32)
+endif()
+
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -std=gnu++17")
 
 
@@ -31,7 +44,20 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -std=gnu++17")
 # LLVM
 ##########
 if("${LLVM_LIBRARY_DIR}" STREQUAL "")
-    find_package(LLVM 11 REQUIRED COMPONENTS "nvptx;amdgpu")
+    if(WIN32)
+      find_package(LLVM 13 REQUIRED COMPONENTS nvptx amdgpu)
+
+      include_directories(${LLVM_INCLUDE_DIRS})
+      separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
+      add_definitions(${LLVM_DEFINITIONS_LIST})
+
+      llvm_map_components_to_libnames(LLVM_LIBRARIES support core
+        NVPTXInfo nvptxcodegen
+        AMDGPUInfo AMDGPUcodegen
+      )
+    else()
+      find_package(LLVM 11 REQUIRED COMPONENTS "nvptx;amdgpu")
+    endif()
     message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
     if(APPLE)
       set(CMAKE_OSX_DEPLOYMENT_TARGET "10.14")
@@ -108,12 +134,25 @@ endif()
 
 # Triton
 file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
-add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
+if (WIN32 AND BUILD_PYTHON_MODULE)
+    find_package(Python3 REQUIRED COMPONENTS Development)
+    Python3_add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
+    set_target_properties(triton PROPERTIES SUFFIX ".pyd")
+    set_target_properties(triton PROPERTIES PREFIX "lib")
+else()
+    add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
+endif()
+
 target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
-target_link_libraries(triton ${LLVM_LIBRARIES} z ${TERMINFO_LIBRARY})
+
+if(WIN32)
+    target_link_libraries(triton PRIVATE ${LLVM_LIBRARIES} dl) # dl is from dlfcn-win32
+else()
+    target_link_libraries(triton ${LLVM_LIBRARIES} z ${TERMINFO_LIBRARY})
+endif()
 
 
-if(BUILD_PYTHON_MODULE)
+if(BUILD_PYTHON_MODULE AND NOT WIN32)
     set(CMAKE_SHARED_LIBRARY_SUFFIX ".so")
     # Check if the platform is MacOS
     if(APPLE)
