@@ -13,6 +13,7 @@
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include "Python.h"
 #include <regex>
 #include <sstream>
 #include <string>
@@ -23,6 +24,7 @@
 namespace py = pybind11;
 namespace ir = triton::ir;
 namespace drv = triton::driver;
+
 
 /*****************************************************************************/
 /* Python bindings for triton::driver                                        */
@@ -100,7 +102,168 @@ void hip_enqueue(uint64_t stream, uint64_t kernel,
 
 }
 
+long pow2_divisor(long N){
+    if(N % 16 == 0) return 16;
+    if(N % 8 == 0) return 8;
+    if(N % 4 == 0) return 4;
+    if(N % 2 == 0) return 2;
+    return 1;
+}
+
+// Returns something like "int16", whether dtype is a torch.dtype or
+// triton.language.dtype.
+std::string dtype_cache_key_part(const py::object& dtype) {
+  if (py::hasattr(dtype, "cache_key_part")) {
+    // Presumed to be a triton.language.dtype.
+    return std::string(py::str(py::getattr(dtype, "cache_key_part")));
+  } else {
+    // Remove 'torch.' prefix from repr of torch.dtype.
+    py::object repr = py::repr(dtype);
+    size_t repr_len = PyUnicode_GET_LENGTH(repr.ptr());
+    const char* repr_ptr = (const char*)PyUnicode_1BYTE_DATA(repr.ptr());
+    if (repr_len <= 6 || strncmp(repr_ptr, "torch.", 6)) {
+      throw std::logic_error("invalid dtype: " + std::string(repr_ptr, repr_len));
+    }
+    return std::string(repr_ptr + 6, repr_len - 6);
+  }
+}
+
+size_t get_pointer_range_size(uint64_t addr){
+  if(addr == 0)
+    return 0;
+  size_t size;
+  drv::dispatch::cuPointerGetAttribute(&size, CU_POINTER_ATTRIBUTE_RANGE_SIZE, (CUdeviceptr)addr);
+  return size;
+}
+
+// Launch
+void parse_args(py::list& args, py::list do_not_specialize, const std::string& func_key, py::list& arg_names,
+                std::string& cache_key, std::string& params, size_t& params_size, py::dict constants,
+                int num_warps, int num_stages) {
+    size_t len = PyList_Size(args.ptr());
+    params.reserve(8*len); // 8 max bytes by argument
+    char* params_ptr = &params[0];
+    cache_key = func_key;
+    cache_key += "-" + std::to_string(num_warps);
+    cache_key += "-" + std::to_string(num_stages);
+    cache_key += "-";
+    for(int i = 0; i < len; i++){
+      cache_key += "_";
+      py::int_ py_i = py::int_(i);
+      bool specialize = std::find(do_not_specialize.begin(), do_not_specialize.end(), py_i) == do_not_specialize.end();
+      py::object arg = args[i];
+      auto arg_ptr = arg.ptr();
+
+      // argument is `long`
+      if(PyLong_Check(arg_ptr)){
+        int overflow;
+        long long value = PyLong_AsLongLongAndOverflow(arg_ptr, &overflow);
+        // values equal to 1 are specialized
+        if(specialize && (value == 1)){
+          cache_key += "1";
+          continue;
+        }
+        // int32, uint32, int64, and uint64 have different kernels
+        if (!overflow && -0x8000'0000LL <= value && value <= 0x7FFF'FFFFLL) {
+          cache_key += "int32";
+          params_ptr = (char*)(((uintptr_t)params_ptr + 3) & (-4));
+          std::memcpy(params_ptr, &value, 4);
+          params_ptr += 4;
+        } else if (!overflow && 0x8000'0000LL <= value && value <= 0xFFFF'FFFFLL) {
+          cache_key += "uint32";
+          params_ptr = (char*)(((uintptr_t)params_ptr + 3) & (-4));
+          std::memcpy(params_ptr, &value, 4);
+          params_ptr += 4;
+        } else if (!overflow) {
+          cache_key += "int64";
+          params_ptr = (char*)(((uintptr_t)params_ptr + 7) & (-8));
+          std::memcpy(params_ptr, &value, 8);
+          params_ptr += 8;
+        } else {
+          if (PyErr_Occurred()) {
+            throw std::logic_error("An error occurred?");
+          }
+          unsigned long long unsigned_value = PyLong_AsUnsignedLongLong(arg_ptr);
+          if (PyErr_Occurred()) {
+            throw std::runtime_error("integer overflow in argument: " + std::string(py::str(arg)));
+          }
+          cache_key += "uint64";
+          params_ptr = (char*)(((uintptr_t)params_ptr + 7) & (-8));
+          std::memcpy(params_ptr, &unsigned_value, 8);
+          params_ptr += 8;
+        }
+        if(!specialize)
+          continue;
+        // values divisible by small powers of 2 are specialized
+        cache_key += "[multipleof(";
+        cache_key += std::to_string(pow2_divisor(value));
+        cache_key += ")]";
+        continue;
+      }
+      // argument is `float`
+      if(PyFloat_Check(arg_ptr)){
+        cache_key += "float32";
+        float value = PyFloat_AsDouble(arg_ptr);
+        params_ptr = (char*)(((uintptr_t)params_ptr + 3) & (-4));
+        std::memcpy(params_ptr, &value, 4);
+        params_ptr += 4;
+        continue;
+      }
+      // argument is `bool`
+      if(PyBool_Check(arg_ptr)){
+        cache_key += "bool";
+        bool value =  arg_ptr == Py_True ? true : false;
+        std::memcpy(params_ptr, &value, 1);
+        params_ptr += 1;
+        continue;
+      }
+      // argument is tensor
+      if(py::hasattr(arg, "data_ptr")){
+        py::object data_ptr = arg.attr("data_ptr")();
+        long value = data_ptr.cast<long>();
+        params_ptr = (char*)(((uintptr_t)params_ptr + 7) & (-8));
+        // copy param
+        std::memcpy(params_ptr, &value, 8);
+        params_ptr += 8;
+        // udpate cache key
+        cache_key += dtype_cache_key_part(arg.attr("dtype"));
+        cache_key += "*";
+        cache_key += "[multipleof(";
+        size_t range_size = get_pointer_range_size(value);
+        cache_key += std::to_string(std::min(pow2_divisor(value), pow2_divisor(range_size)));
+        cache_key += ")]";
+        continue;
+      }
+      // argument is `constexpr`
+      if(py::hasattr(arg, "value")){
+        py::object value = arg.attr("value");
+        py::object name = arg_names[i];
+        constants[name] = value;
+        py::object repr = py::repr(value);
+        const char* start = (const char*)PyUnicode_1BYTE_DATA(repr.ptr());
+        size_t len = PyUnicode_GET_LENGTH(repr.ptr());
+        cache_key += std::string(start, len);
+        continue;
+      }
+      std::string ty_str = arg.attr("__class__").attr("__name__").cast<std::string>();
+      if(ty_str == "NoneType"){
+        cache_key += "None";
+        continue;
+      }
+      std::string err_msg = "Received type '" + ty_str + "' for argument " + std::to_string(i) + "."
+                            + " Only int, float, bool, torch.Tensor, and triton.language.constexpr are supported.";
+      throw std::runtime_error(err_msg);
+    }
+  params_size = (std::ptrdiff_t)(params_ptr - &params[0]);
+}
+
+//
+
 void init_triton_runtime(py::module &&m) {
+
+  // m.def("current_stream", [](uint64_t device){
+  //   return (uint64_t)(c10::cuda::getCurrentCUDAStream(device).stream());
+  // });
 
   // wrap backend_t
   py::enum_<backend_t>(m, "backend")
@@ -117,6 +280,75 @@ void init_triton_runtime(py::module &&m) {
     }
   );
 
+  // get range size for the given pointer
+  m.def("get_pointer_range_size", &get_pointer_range_size);
+
+
+  // cache key
+  m.def("launch", [](py::list args, py::list do_not_specialize, const std::string& func_key, py::list& arg_names, 
+                     py::object device, py::int_ stream, py::dict bin_cache, py::int_ num_warps, py::int_ num_stages, 
+                     py::function add_to_cache, py::object grid){
+    // parse arguments to compute cache key, compile-time constants and packed kernel arguments
+    long _num_warps = PyLong_AsLong(num_warps.ptr());
+    long _num_stages = PyLong_AsLong(num_stages.ptr());
+    std::string cache_key;
+    std::string params;
+    size_t params_size;
+    py::dict constants;
+    parse_args(args, do_not_specialize, func_key, arg_names, cache_key, params, params_size, constants, _num_warps, _num_stages);
+
+    // get cached binary
+    py::str key(cache_key);
+    if(!bin_cache.contains(key))
+      add_to_cache(key, args, device, num_warps, num_stages);
+    py::object bin = bin_cache[key];
+
+    // get grid
+    py::sequence seq;
+    if(!PySequence_Check(grid.ptr()))
+      seq = grid(constants);
+    else
+      seq = grid;
+    int size = seq.size();
+    int grid_0 = py::cast<int>(seq[0]);
+    int grid_1 = size < 2 ? 1 : py::cast<int>(seq[1]);
+    int grid_2 = size < 3 ? 1 : py::cast<int>(seq[2]);
+
+    // enqueue
+    uint64_t kernel = py::cast<uint64_t>(bin.attr("kernel"));
+    uint64_t shared_mem = py::cast<uint64_t>(bin.attr("shared_mem"));
+
+    // actually launch
+    void *config[] = {
+        CU_LAUNCH_PARAM_BUFFER_POINTER, params.data(),
+        CU_LAUNCH_PARAM_BUFFER_SIZE, &params_size,
+        CU_LAUNCH_PARAM_END
+    };
+    uint64_t _stream = PyLong_AsLong(stream.ptr());
+    if(grid_0*grid_1*grid_2 > 0) {
+      // release the gil in case the enqueue blocks
+      // cuda will block if too many ops are enqueued
+      Py_BEGIN_ALLOW_THREADS
+
+      drv::dispatch::cuLaunchKernel((CUfunction)kernel, grid_0, grid_1, grid_2, 
+                                    _num_warps*32, 1, 1, shared_mem, (CUstream)_stream, 
+                                     nullptr, config);
+
+       Py_END_ALLOW_THREADS
+   }
+    return bin;
+  });
+
+  m.def("cc", [](backend_t backend, uint64_t device) -> int {
+    if (backend == CUDA) {
+      CUdevice dev = (CUdevice)device;
+      int major = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>(dev);
+      int minor = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR>(dev);
+      return major*10 + minor;
+    }
+    return -1;
+  });
+
   // query maximum shared memory
   m.def("max_shared_memory", [](backend_t backend, uint64_t device) {
       if (backend == HOST)
@@ -128,6 +360,31 @@ void init_triton_runtime(py::module &&m) {
       return -1;
   });
 
+  // query DRAM & L2 cache
+  m.def("memory_clock_rate", [](backend_t backend, uint64_t device) {
+    if (backend == CUDA) return cuGetInfo<CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE>(device);
+    return -1;
+  });
+  m.def("global_memory_bus_width", [](backend_t backend, uint64_t device) {
+    if (backend == CUDA) return cuGetInfo<CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH>(device);
+    return -1;
+  });
+  m.def("l2_cache_size", [](backend_t backend, uint64_t device) {
+    if (backend == CUDA) return cuGetInfo<CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE>(device);
+    return -1;
+  });
+
+  // query clock rate (in kilohertz)
+  m.def("clock_rate", [](backend_t backend, uint64_t device) {
+    if (backend == CUDA) return cuGetInfo<CU_DEVICE_ATTRIBUTE_CLOCK_RATE>(device);
+    return -1;
+  });
+
+  m.def("num_sm", [](backend_t backend, uint64_t device) {
+    if (backend == CUDA) return cuGetInfo<CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT>(device);
+    return -1;
+  });
+
   // enqueue
   m.def("enqueue", [](backend_t backend, uint64_t stream, uint64_t kernel,
                       uint64_t grid_0, uint64_t grid_1, uint64_t grid_2,
@@ -135,12 +392,16 @@ void init_triton_runtime(py::module &&m) {
                       const std::string &args, int64_t shared_mem){
     void* args_ptr = (void*)args.data();
     size_t args_size = args.size();
+    // release the gil in case the enqueue blocks
+    // cuda will block if too many ops are enqueued
+    Py_BEGIN_ALLOW_THREADS
     if(backend == HOST)
       host_enqueue(stream, kernel, grid_0, grid_1, grid_2, block_0, block_1, block_2, args_ptr, args_size, shared_mem);
     if(backend == CUDA)
       cu_enqueue(stream, kernel, grid_0, grid_1, grid_2, block_0, block_1, block_2, args_ptr, args_size, shared_mem);
     if(backend == ROCM)
       hip_enqueue(stream, kernel, grid_0, grid_1, grid_2, block_0, block_1, block_2, args_ptr, args_size, shared_mem);
+    Py_END_ALLOW_THREADS
   });
 
   
@@ -205,6 +466,9 @@ std::tuple<uint64_t, uint64_t> hip_load_binary(const std::string& name, asm_map_
 std::tuple<std::string, asm_map_t, int> cu_compile_ttir(const std::string& name, ir::module &ir, 
                                                                uint64_t device, int num_warps, int num_stages,
                                                                asm_map_t &asm_map){
+
+  int n_shared_bytes;
+  Py_BEGIN_ALLOW_THREADS
   llvm::LLVMContext ctx;
   // device properties
   CUdevice dev = (CUdevice)device;
@@ -215,7 +479,6 @@ std::tuple<std::string, asm_map_t, int> cu_compile_ttir(const std::string& name,
   drv::dispatch::cuDriverGetVersion(&version);
   // Triton-IR -> NVPTX LLVM-IR
   triton::codegen::nvidia_cu_target target(cc);
-  int n_shared_bytes;
   auto llvm = triton::codegen::add_passes_to_emit_bin(ir, ctx, &target, cc, num_warps, num_stages, n_shared_bytes);
   std::string tmp;
   llvm::raw_string_ostream llir(tmp);
@@ -231,6 +494,7 @@ std::tuple<std::string, asm_map_t, int> cu_compile_ttir(const std::string& name,
     py::bytes bytes(cubin);
     asm_map["cubin"] = bytes;
   }
+  Py_END_ALLOW_THREADS
   return std::make_tuple(name, asm_map, n_shared_bytes);
 }
 
@@ -261,7 +525,7 @@ void init_triton_codegen(py::module &&m) {
         // record asm as we generate
         asm_map_t asm_map;
         std::ostringstream ttir;
-        ir::print(ir, ttir);
+        ir.print(ttir);
         asm_map["ttir"] = py::cast(ttir.str());
         llvm::LLVMContext ctx;
         if(backend == CUDA)
@@ -341,6 +605,7 @@ void init_triton_frontend(py::module &&m) {
   m.def("min", &ir::dispatch::min, ret::reference);
   m.def("max", &ir::dispatch::max, ret::reference);
   m.def("sum", &ir::dispatch::sum, ret::reference);
+  m.def("xor_sum", &ir::dispatch::xor_sum, ret::reference);
   // math
   m.def("umulhi", &ir::dispatch::umulhi, ret::reference);
   m.def("exp", &ir::dispatch::exp, ret::reference);
@@ -378,7 +643,8 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<ir::constant_int, ir::constant>(m, "constant_int")
       .def_property_readonly("value", &ir::constant_int::get_value)
-      .def("__int__", [](ir::constant_int *self) { return self->get_value(); });
+      .def("__int__", [](ir::constant_int *self) { return self->get_value(); })
+      .def("__bool__", [](ir::constant_int *self) { return self->get_value(); });
 
   py::class_<ir::constant_fp, ir::constant>(m, "constant_float")
       .def_property_readonly("value", &ir::constant_fp::get_value);
@@ -405,6 +671,10 @@ void init_triton_ir(py::module &&m) {
       .def("get_int16", &ir::type::get_int16_ty, ret::reference)
       .def("get_int32", &ir::type::get_int32_ty, ret::reference)
       .def("get_int64", &ir::type::get_int64_ty, ret::reference)
+      .def("get_uint8", &ir::type::get_uint8_ty, ret::reference)
+      .def("get_uint16", &ir::type::get_uint16_ty, ret::reference)
+      .def("get_uint32", &ir::type::get_uint32_ty, ret::reference)
+      .def("get_uint64", &ir::type::get_uint64_ty, ret::reference)
 
       .def("is_void", &ir::type::is_void_ty)
       .def("is_fp8", &ir::type::is_fp8_ty)
@@ -412,11 +682,15 @@ void init_triton_ir(py::module &&m) {
       .def("is_bf16", &ir::type::is_bf16_ty)
       .def("is_fp32", &ir::type::is_fp32_ty)
       .def("is_fp64", &ir::type::is_fp64_ty)
-      .def("is_int1", [](ir::type *self) { return self->is_integer_ty(1); })
-      .def("is_int8", [](ir::type *self) { return self->is_integer_ty(8); })
-      .def("is_int16", [](ir::type *self) { return self->is_integer_ty(16); })
-      .def("is_int32", [](ir::type *self) { return self->is_integer_ty(32); })
-      .def("is_int64", [](ir::type *self) { return self->is_integer_ty(64); })
+      .def("is_int1", [](ir::type *self) { return self->is_integer_ty(1, ir::signedness::SIGNED); })
+      .def("is_int8", [](ir::type *self) { return self->is_integer_ty(8, ir::signedness::SIGNED); })
+      .def("is_int16", [](ir::type *self) { return self->is_integer_ty(16, ir::signedness::SIGNED); })
+      .def("is_int32", [](ir::type *self) { return self->is_integer_ty(32, ir::signedness::SIGNED); })
+      .def("is_int64", [](ir::type *self) { return self->is_integer_ty(64, ir::signedness::SIGNED); })
+      .def("is_uint8", [](ir::type *self) { return self->is_integer_ty(8, ir::signedness::UNSIGNED); })
+      .def("is_uint16", [](ir::type *self) { return self->is_integer_ty(16, ir::signedness::UNSIGNED); })
+      .def("is_uint32", [](ir::type *self) { return self->is_integer_ty(32, ir::signedness::UNSIGNED); })
+      .def("is_uint64", [](ir::type *self) { return self->is_integer_ty(64, ir::signedness::UNSIGNED); })
 
       .def_property_readonly("fp_mantissa_width", &ir::type::get_fp_mantissa_width)
       .def_property_readonly("scalar", &ir::type::get_scalar_ty)
@@ -480,6 +754,8 @@ void init_triton_ir(py::module &&m) {
       .def("get_int1", &ir::builder::get_int1, ret::reference)
       .def("get_int32", &ir::builder::get_int32, ret::reference)
       .def("get_int64", &ir::builder::get_int64, ret::reference)
+      .def("get_uint32", &ir::builder::get_uint32, ret::reference)
+      .def("get_uint64", &ir::builder::get_uint64, ret::reference)
       .def("get_float16", &ir::builder::get_float16, ret::reference)
       .def("get_float32", &ir::builder::get_float32, ret::reference)
       .def("get_range", &ir::builder::get_range, ret::reference);

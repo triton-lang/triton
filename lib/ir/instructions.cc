@@ -232,6 +232,7 @@ icmp_inst::icmp_inst(type *ty, cmp_pred_t pred,
 
 icmp_inst* icmp_inst::create(cmp_pred_t pred, value *lhs, value *rhs, const std::string &name, instruction *next){
   assert(is_int_predicate(pred));
+  assert(lhs->get_type() == rhs->get_type());
   type *res_ty = make_cmp_result_type(lhs->get_type());
   return new icmp_inst(res_ty, pred, lhs, rhs, name, next);
 }
@@ -433,8 +434,8 @@ io_inst::io_inst(type *ty, value_id_t id, unsigned num_ops, const std::string &n
 { }
 
 // load_inst
-load_inst::load_inst(value *ptr, value_id_t id, unsigned num_ops, load_inst::CACHE_MODIFIER cache, const std::string &name, instruction *next)
-  : io_inst(get_pointee_type(ptr->get_type()), id, num_ops, name, next), cache_(cache)
+load_inst::load_inst(value *ptr, value_id_t id, unsigned num_ops, load_inst::CACHE_MODIFIER cache, bool is_volatile, const std::string &name, instruction *next)
+  : io_inst(get_pointee_type(ptr->get_type()), id, num_ops, name, next), cache_(cache), is_volatile_(is_volatile)
 { }
 
 // load
@@ -447,35 +448,35 @@ type *load_inst::get_pointee_type(type *ty) {
 }
 
 // unmasked_load
-unmasked_load_inst::unmasked_load_inst(value *ptr, load_inst::CACHE_MODIFIER cache, const std::string &name, instruction *next)
-  : load_inst(ptr, INST_UNMASKED_LOAD, 1, cache, name, next) {
+unmasked_load_inst::unmasked_load_inst(value *ptr, load_inst::CACHE_MODIFIER cache, bool is_volatile, const std::string &name, instruction *next)
+  : load_inst(ptr, INST_UNMASKED_LOAD, 1, cache, is_volatile, name, next) {
   set_operand(0, ptr);
 }
 
-unmasked_load_inst* unmasked_load_inst::create(value *ptr, load_inst::CACHE_MODIFIER cache, const std::string &name, instruction *next) {
-  return new unmasked_load_inst(ptr, cache, name, next);
+unmasked_load_inst* unmasked_load_inst::create(value *ptr, load_inst::CACHE_MODIFIER cache, bool is_volatile, const std::string &name, instruction *next) {
+  return new unmasked_load_inst(ptr, cache, is_volatile, name, next);
 }
 
 // masked load
-masked_load_inst::masked_load_inst(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache,
+masked_load_inst::masked_load_inst(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache, bool is_volatile,
                                    const std::string &name, instruction *next)
-  : load_inst(ptr, INST_MASKED_LOAD, 3, cache, name, next) {
+  : load_inst(ptr, INST_MASKED_LOAD, 3, cache, is_volatile, name, next) {
   set_operand(0, ptr);
   set_operand(1, mask);
   set_operand(2, false_value);
 }
 
 masked_load_inst* masked_load_inst::create(value *ptr, value *mask, value *false_value,
-                                           load_inst::CACHE_MODIFIER cache,
+                                           load_inst::CACHE_MODIFIER cache, bool is_volatile,
                                            const std::string &name, instruction *next) {
-  return new masked_load_inst(ptr, mask, false_value, cache, name, next);
+  return new masked_load_inst(ptr, mask, false_value, cache, is_volatile, name, next);
 }
 
 // masked load async
 masked_load_async_inst::masked_load_async_inst(value *ptr, value *mask, value *false_value,
                                    load_inst::CACHE_MODIFIER cache,
                                    const std::string &name, instruction *next)
-  : load_inst(ptr, INST_MASKED_LOAD_ASYNC, 3, cache, name, next) {
+  : load_inst(ptr, INST_MASKED_LOAD_ASYNC, 3, cache, false, name, next) {
   set_operand(0, ptr);
   set_operand(1, mask);
   set_operand(2, false_value);
@@ -576,40 +577,41 @@ instruction* downcast_inst::create(value *arg, const std::string &name, instruct
 //                               matmul_inst classes
 //===----------------------------------------------------------------------===//
 
-dot_inst::dot_inst(value *A, value *B, value *C, TransT AT, TransT BT,
+dot_inst::dot_inst(value *A, value *B, value *C, TransT AT, TransT BT, bool allow_tf32,
                          const std::string &name, instruction *next)
     : builtin_inst(C->get_type(), INST_DOT, 3, name, next) {
   set_operand(0, A);
   set_operand(1, B);
   set_operand(2, C);
+  allow_tf32_ = allow_tf32;
 }
 
 instruction *dot_inst::create(value *A, value *B, value *C,
-                              bool AT, bool BT,
+                              bool AT, bool BT, bool allow_tf32,
                               const std::string &name, instruction *next) {
   TransT OPA = AT ? Trans : NoTrans;
   TransT OPB = BT ? Trans : NoTrans;
-  return new dot_inst(A, B, C, OPA, OPB, name, next);
+  return new dot_inst(A, B, C, OPA, OPB, allow_tf32, name, next);
 }
 
-instruction *dot_inst::create_nn(value *A, value *B, value *C,
+instruction *dot_inst::create_nn(value *A, value *B, value *C, bool allow_tf32,
                                  const std::string &name, instruction *next) {
-  return new dot_inst(A, B, C, NoTrans, NoTrans, name, next);
+  return new dot_inst(A, B, C, NoTrans, NoTrans, allow_tf32, name, next);
 }
 
-instruction *dot_inst::create_nt(value *A, value *B, value *C,
+instruction *dot_inst::create_nt(value *A, value *B, value *C, bool allow_tf32,
                                  const std::string &name, instruction *next) {
-  return new dot_inst(A, B, C, NoTrans, Trans, name, next);
+  return new dot_inst(A, B, C, NoTrans, Trans, allow_tf32, name, next);
 }
 
-instruction *dot_inst::create_tn(value *A, value *B, value *C,
+instruction *dot_inst::create_tn(value *A, value *B, value *C, bool allow_tf32,
                                  const std::string &name, instruction *next) {
-  return new dot_inst(A, B, C, Trans, NoTrans, name, next);
+  return new dot_inst(A, B, C, Trans, NoTrans, allow_tf32, name, next);
 }
 
-instruction *dot_inst::create_tt(value *A, value *B, value *C,
+instruction *dot_inst::create_tt(value *A, value *B, value *C, bool allow_tf32,
                                  const std::string &name, instruction *next) {
-  return new dot_inst(A, B, C, Trans, Trans, name, next);
+  return new dot_inst(A, B, C, Trans, Trans, allow_tf32, name, next);
 }
 
 //===----------------------------------------------------------------------===//
@@ -919,8 +921,6 @@ const constant_int* make_range::get_first() const {
 const constant_int* make_range::get_last() const {
   return last_;
 }
-
-
 
 }
 }

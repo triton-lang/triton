@@ -77,7 +77,6 @@ void coalesce::run(ir::module &mod) {
         builder.insert(new_x);
         x->replace_all_uses_with(new_x);
         new_x->replace_uses_of_with(new_x, x);
-//        new_x->replace_uses_of_with(new_x, new_x);
     }
   }
   for(ir::function *fn: mod.get_function_list())
@@ -101,6 +100,8 @@ void coalesce::run(ir::module &mod) {
         ir::instruction* curr = queue.back();
         seen.insert(curr);
         queue.pop_back();
+        if(auto dot_inst = dynamic_cast<ir::dot_inst*>(curr))
+          break;
         if(auto io_inst = dynamic_cast<ir::io_inst*>(curr)){
           in_contig = align_->contiguous(io_inst->get_pointer_operand());
           break;
