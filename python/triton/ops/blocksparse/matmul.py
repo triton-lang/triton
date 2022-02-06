@@ -242,8 +242,31 @@ def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=N
 
 
 def dsd_lut(layout, block, step, trans, device):
+    """
+    Generates the look-up table for incrementing pointers in the DSD/DDS matmul.
+    Example (BLOCK=32, STEP=16)
+    [[1, 0, 0, 1, 0],
+     [0, 1, 1, 0, 1],
+     [1, 0, 1, 0, 0]]
+
+    Then the offsets for A are
+     [0 , 16, 32, 48] <- row 0
+      \----/  \----/
+      col=0   col=3
+     [64, 80, 96, 112, 128, 144] <- row 1
+      \----/   \----/  \------/
+       col=1    col=2    col=3
+     [160, 176, 192, 208]
+    which leads to increments table 
+    [0, 16, 16, 16, || 64, 16, 16, 16, 16, 16, || 160, 16, 16, 16]
+
+    Because B is dense, the offsets are
+    [0, 16, 96, 112] <- row 0
+    [32, 48, 64, 80]  <- row 1
+    [0, 16, 64, 80]   <- row 2
+    """
     sizes = torch.sum(layout, 2 if trans else 1)
-    head_id, col_id = sizes.nonzero(as_tuple=True)
+    head_id, col_id = torch.ones_like(sizes).nonzero(as_tuple=True)
     sizes = sizes.flatten()
     segments = sizes * step
     # pointer increments
@@ -258,13 +281,6 @@ def dsd_lut(layout, block, step, trans, device):
     # -------------------------------
     # dense input pointer increments
     # -------------------------------
-    # given a list of the indices for the first element of each non-zero block.
-    # For example, for the indices
-    # [32, 80, 128, 256, 288]
-    # we would generate the increments
-    # [32, 48, 48, 128, 32]
-    #        ^
-    #   index of first element
     # Note that the inner loop matmul kernel may have a fixed step size (e.g., TILE_K)
     # that is smaller than the block size, so we need to do a bit of extra work
     # to handle this case
