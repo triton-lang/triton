@@ -51,8 +51,8 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     a_tri.retain_grad()
     b_tri.retain_grad()
     op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B, device="cuda")
-    c_tri = op(a_tri, b_tri)       
-    c_tri.backward(dc_tri)
+    c_tri = triton.testing.catch_oor(lambda: op(a_tri, b_tri), pytest)
+    triton.testing.catch_oor(lambda: c_tri.backward(dc_tri), pytest)
     da_tri = a_tri.grad
     db_tri = b_tri.grad
     # compare
