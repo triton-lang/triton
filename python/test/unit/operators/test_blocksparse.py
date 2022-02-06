@@ -52,58 +52,53 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     b_tri.retain_grad()
     op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B, device="cuda")
     c_tri = triton.testing.catch_oor(lambda: op(a_tri, b_tri), pytest)
-    # triton.testing.catch_oor(lambda: c_tri.backward(dc_tri), pytest)
-    # da_tri = a_tri.grad
-    # db_tri = b_tri.grad
+    triton.testing.catch_oor(lambda: c_tri.backward(dc_tri), pytest)
+    da_tri = a_tri.grad
+    db_tri = b_tri.grad
     # compare
     triton.testing.assert_almost_equal(c_ref, c_tri)
-    # triton.testing.assert_almost_equal(da_ref, da_tri)
-    # triton.testing.assert_almost_equal(db_ref, db_tri)
+    triton.testing.assert_almost_equal(da_ref, da_tri)
+    triton.testing.assert_almost_equal(db_ref, db_tri)
 
 
 @pytest.mark.parametrize("BLOCK", [16, 32, 64])
 @pytest.mark.parametrize("WIDTH", [256, 576, 1024, 1792])
 @pytest.mark.parametrize("DTYPE", [torch.float16, torch.float32])
-def test_softmax(BLOCK, WIDTH, DTYPE):
-    is_causal = True
+def test_softmax(BLOCK, WIDTH, DTYPE, is_causal=True, scale=0.4):
     # set seed
     torch.random.manual_seed(0)
     Z, H, M, N = 1, 1, WIDTH, WIDTH
-    scale = 0.4
-    # create inputs
-    layout = torch.randint(2, (H, M // BLOCK, N // BLOCK))
-    x = torch.randn((Z, H, M, N), dtype=DTYPE, requires_grad=True, device="cuda")
-    at_mask = torch.randint(low=0, high=2, size=(N, N), dtype=torch.bool, requires_grad=False, device="cuda")
+    # initialize layout
     # make sure each row has at least one non-zero element
+    layout = torch.randint(2, (H, M // BLOCK, N // BLOCK))
     torch.diagonal(layout)[:] = 1
-    torch.diagonal(at_mask)[:] = 1
-    kp_mask = torch.randint(low=0, high=2, size=(Z, N), dtype=DTYPE, requires_grad=False, device="cuda")
-    kp_mask[:] = 0
-    kp_mask[kp_mask == 1.0] = float("-inf")
-    # triton result
-    op = triton.ops.blocksparse.softmax(layout, BLOCK)
-    tx = triton.testing.sparsify_tensor(x, layout, BLOCK)
-    ty = op(
-        tx,
-        scale=scale,
-        key_padding_mask=kp_mask,
-        key_padding_mask_mode="add",
-        attn_mask=at_mask.to(DTYPE),
-        attn_mask_mode="mul",
-        is_causal=is_causal,
-    )
-    # torch result
-    rx = triton.testing.mask_tensor(x, layout, BLOCK, value=float("-inf"))
-    # broadcast at_mask to the same shape as rx
+    # initialize data
+    a_shape = (Z, H, M, N)
+    a_ref, a_tri = triton.testing.make_pair(a_shape)
+    dout_ref, dout_tri = triton.testing.make_pair(a_shape)
+    # compute [torch]
+    a_ref = triton.testing.mask_tensor(a_ref, layout, BLOCK, value=float("-inf"))
+    a_ref.retain_grad()
+    at_mask = torch.ones((M, N), device="cuda")
     if is_causal:
         at_mask = torch.tril(at_mask)
-    M = at_mask[None, None, :, :] + torch.zeros_like(rx)
-    rx[M == 0] = float("-inf")
-    # rx += kp_mask[:, None, None, :]
-    ry = torch.softmax(rx * scale, -1)
-    ry = triton.testing.sparsify_tensor(ry, layout, BLOCK)
+    M = at_mask[None, None, :, :] + torch.zeros_like(a_ref)
+    a_ref[M == 0] = float("-inf")
+    out_ref = torch.softmax(a_ref * scale, -1)
+    out_ref.backward(dout_ref)
+    out_ref = triton.testing.sparsify_tensor(out_ref, layout, BLOCK)
+    da_ref = triton.testing.sparsify_tensor(a_ref.grad, layout, BLOCK)
+    # compute [triton]
+    a_tri = triton.testing.sparsify_tensor(a_tri, layout, BLOCK)
+    a_tri.retain_grad()
+    dout_tri = triton.testing.sparsify_tensor(dout_tri, layout, BLOCK)
+    op = triton.ops.blocksparse.softmax(layout, BLOCK, device="cuda")
+    out_tri = op(a_tri, scale=scale, is_causal=is_causal)
+    out_tri.backward(dout_tri)
+    da_tri = a_tri.grad
     # compare
-    triton.testing.assert_almost_equal(ry, ty)
+    triton.testing.assert_almost_equal(out_tri, out_ref)
+    triton.testing.assert_almost_equal(da_tri, da_ref)
 
 
 @pytest.mark.parametrize("block", [16, 32, 64])
