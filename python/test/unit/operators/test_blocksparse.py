@@ -28,6 +28,8 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
         "dds": (b_shape[2], b_shape[3]),
     }[MODE]
     layout = torch.randint(2, (H, shape[0] // BLOCK, shape[1] // BLOCK))
+    layout[1,2,:] = 0
+    layout[1,:,1] = 0
     # create data
     a_ref, a_tri  = triton.testing.make_pair(a_shape, alpha=.1)
     b_ref, b_tri  = triton.testing.make_pair(b_shape, alpha=.1)
@@ -61,17 +63,27 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     triton.testing.assert_almost_equal(db_ref, db_tri)
 
 
-@pytest.mark.parametrize("BLOCK", [16, 32, 64])
-@pytest.mark.parametrize("WIDTH", [256, 576, 1024, 1792])
-@pytest.mark.parametrize("DTYPE", [torch.float16, torch.float32])
-def test_softmax(BLOCK, WIDTH, DTYPE, is_causal=True, scale=0.4):
+configs = [
+  (16, 256),
+  (32, 576),
+  (64, 1871),
+  (128, 2511),
+]
+
+@pytest.mark.parametrize("is_dense", [False, True])
+@pytest.mark.parametrize("BLOCK, WIDTH", configs)
+def test_softmax(BLOCK, WIDTH, is_dense, Z=2, H=2, is_causal=True, scale=0.4):
     # set seed
     torch.random.manual_seed(0)
-    Z, H, M, N = 1, 1, WIDTH, WIDTH
+    Z, H, M, N = 2, 3, WIDTH, WIDTH
     # initialize layout
     # make sure each row has at least one non-zero element
     layout = torch.randint(2, (H, M // BLOCK, N // BLOCK))
-    torch.diagonal(layout)[:] = 1
+    if is_dense:
+        layout[:] = 1
+    else:
+        layout[1,2,:] = 0
+        layout[1,:,1] = 0
     # initialize data
     a_shape = (Z, H, M, N)
     a_ref, a_tri = triton.testing.make_pair(a_shape)
@@ -92,7 +104,7 @@ def test_softmax(BLOCK, WIDTH, DTYPE, is_causal=True, scale=0.4):
     a_tri = triton.testing.sparsify_tensor(a_tri, layout, BLOCK)
     a_tri.retain_grad()
     dout_tri = triton.testing.sparsify_tensor(dout_tri, layout, BLOCK)
-    op = triton.ops.blocksparse.softmax(layout, BLOCK, device="cuda")
+    op = triton.ops.blocksparse.softmax(layout, BLOCK, device="cuda", is_dense=is_dense)
     out_tri = op(a_tri, scale=scale, is_causal=is_causal)
     out_tri.backward(dout_tri)
     da_tri = a_tri.grad
