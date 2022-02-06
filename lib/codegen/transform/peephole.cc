@@ -227,22 +227,22 @@ bool peephole::rewrite_cvt_layout(ir::instruction *value, ir::builder& builder){
   ir::instruction* op = dynamic_cast<ir::instruction*>(cvt->get_operand(0));
   if(!op)
     return false;
-  // convert(elementwise(x, y)) = elementwise(convert(x), convert(y))
-  if(op->get_id() == ir::INST_BINOP){
-    for(size_t i = 0; i < op->get_num_operands(); i++){
-      ir::value* arg_i = op->get_operand(i);
-      builder.set_insert_point(op);
-      // create new layout transform
-      ir::instruction* new_arg_i = cvt->clone();
-      layouts_->copy(new_arg_i, op);
-      builder.insert(new_arg_i);
-      // set the right args
-      new_arg_i->replace_uses_of_with(new_arg_i->get_operand(0), arg_i);
-      op->replace_uses_of_with(arg_i, new_arg_i);
-    }
-    cvt->replace_all_uses_with(op);
-    return true;
-  }
+//  // convert(elementwise(x, y)) = elementwise(convert(x), convert(y))
+//  if(op->get_id() == ir::INST_BINOP){
+//    for(size_t i = 0; i < op->get_num_operands(); i++){
+//      ir::value* arg_i = op->get_operand(i);
+//      builder.set_insert_point(op);
+//      // create new layout transform
+//      ir::instruction* new_arg_i = cvt->clone();
+//      layouts_->copy(new_arg_i, op);
+//      builder.insert(new_arg_i);
+//      // set the right args
+//      new_arg_i->replace_uses_of_with(new_arg_i->get_operand(0), arg_i);
+//      op->replace_uses_of_with(arg_i, new_arg_i);
+//    }
+//    cvt->replace_all_uses_with(op);
+//    return true;
+//  }
   auto cvt_op = dynamic_cast<ir::cvt_layout_inst*>(op);
   if(!cvt_op)
     return false;
