@@ -130,14 +130,7 @@ def test_attention_fwd_bwd(
     qkvs = [
         torch.nn.Parameter(input_scale * torch.randn(qkv_shape), requires_grad=True).to(dtype).cuda() for _ in range(3)
     ]
-    attn_mask = torch.tril(
-        torch.ones(
-            [n_ctx, n_ctx],
-            device="cuda",
-            dtype=dtype,
-        ),
-        diagonal=0,
-    )
+
 
     # Triton:
     n_blocks = n_ctx // block
@@ -146,7 +139,7 @@ def test_attention_fwd_bwd(
     query.retain_grad()
     key.retain_grad()
     value.retain_grad()
-    attn_out = triton_attention(layout, block, attn_mask, query=query, key=key, value=value, scale=scale)
+    attn_out = triton_attention(layout, block, query=query, key=key, value=value, scale=scale)
     # ad hoc loss
     loss = (attn_out ** 2).mean()
     loss.backward()
@@ -154,6 +147,8 @@ def test_attention_fwd_bwd(
 
     # Torch version:
     torch_q, torch_k, torch_v = [x.clone() for x in qkvs]
+    attn_mask = torch.ones([n_ctx, n_ctx], device="cuda", dtype=dtype)
+    attn_mask = torch.tril(attn_mask, diagonal=0)
     attn_mask = 1e6 * (-1 + (attn_mask.reshape((1, 1, n_ctx, n_ctx)).cuda()))
     torch_q.retain_grad()
     torch_k.retain_grad()
@@ -178,7 +173,6 @@ def test_attention_fwd_bwd(
 def triton_attention(
     layout,
     block: int,
-    attn_mask: torch.Tensor,
     query: torch.Tensor,
     key: torch.Tensor,
     value: torch.Tensor,
@@ -189,6 +183,6 @@ def triton_attention(
     sparse_softmax = triton.ops.blocksparse.softmax(layout, block, device=value.device)
 
     w = sparse_dot_sdd_nt(query, key)
-    w = sparse_softmax(w, scale=scale, attn_mask=attn_mask, attn_mask_mode="mul")
+    w = sparse_softmax(w, scale=scale, is_causal=True)
     a = sparse_dot_dsd_nn(w, value)
     return a
