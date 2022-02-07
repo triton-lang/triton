@@ -132,13 +132,13 @@ switching to the next column:
    # number of programs ids along the N axis
    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
    # number of programs in group
-   num_pid_in_group = GROUP_SIZE_M * num_pid_n 
+   num_pid_in_group = GROUP_SIZE_M * num_pid_n
    # id of the group this program is in
-   group_id = pid // num_pid_in_group 
+   group_id = pid // num_pid_in_group
    # row-id of the first program in the group
-   first_pid_m = group_id * GROUP_SIZE_M 
+   first_pid_m = group_id * GROUP_SIZE_M
    # if `num_pid_m` isn't divisible by `GROUP_SIZE_M`, the last group is smaller
-   group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M) 
+   group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
    # *within groups*, programs are ordered in a column-major order
    # row-id of the program in the *launch grid*
    pid_m = first_pid_m + (pid % group_size_m)
@@ -161,12 +161,13 @@ Final Result
 -------------
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 142-262
+.. GENERATED FROM PYTHON SOURCE LINES 142-258
 
 .. code-block:: default
 
 
     import torch
+
     import triton
     import triton.language as tl
 
@@ -178,23 +179,22 @@ Final Result
     #   - An autotuning *key* whose change in values will trigger evaluation of all the
     #       provided configs
 
+
     @triton.autotune(
         configs=[
             triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
             triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
-            triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 64,  'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-            triton.Config({'BLOCK_SIZE_M': 64 , 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+            triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+            triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
             triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-            triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64 , 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-            triton.Config({'BLOCK_SIZE_M': 64 , 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-            triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32 , 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-            triton.Config({'BLOCK_SIZE_M': 64 , 'BLOCK_SIZE_N': 32 , 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
-            triton.Config({'BLOCK_SIZE_M': 32 , 'BLOCK_SIZE_N': 64 , 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
+            triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+            triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+            triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+            triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
+            triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
         ],
         key=['M', 'N', 'K'],
     )
-    # %
-    # We can now define our kernel as normal, using all the techniques presented above
     @triton.jit
     def matmul_kernel(
         # Pointers to matrices
@@ -208,17 +208,13 @@ Final Result
         stride_bk, stride_bn,
         stride_cm, stride_cn,
         # Meta-parameters
-        **meta,
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
+        GROUP_SIZE_M: tl.constexpr,
+        ACTIVATION: tl.constexpr,
     ):
         """Kernel for computing the matmul C = A x B.
         A has shape (M, K), B has shape (K, N) and C has shape (M, N)
         """
-        # extract meta-parameters
-        BLOCK_SIZE_M = meta['BLOCK_SIZE_M']
-        BLOCK_SIZE_N = meta['BLOCK_SIZE_N']
-        BLOCK_SIZE_K = meta['BLOCK_SIZE_K']
-        GROUP_SIZE_M = 8
-
         # -----------------------------------------------------------
         # Map program ids `pid` to the block of C it should compute.
         # This is done in a grouped ordering to promote L2 data reuse
@@ -226,16 +222,16 @@ Final Result
         pid = tl.program_id(axis=0)
         num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
         num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
-        num_pid_in_group = GROUP_SIZE_M * num_pid_n 
-        group_id = pid // num_pid_in_group 
-        first_pid_m = group_id * GROUP_SIZE_M 
-        group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M) 
+        num_pid_in_group = GROUP_SIZE_M * num_pid_n
+        group_id = pid // num_pid_in_group
+        first_pid_m = group_id * GROUP_SIZE_M
+        group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
         pid_m = first_pid_m + (pid % group_size_m)
         pid_n = (pid % num_pid_in_group) // group_size_m
 
         # ----------------------------------------------------------
         # Create pointers for the first blocks of A and B.
-        # We will advance this pointer as we move in the K direction 
+        # We will advance this pointer as we move in the K direction
         # and accumulate
         # a_ptrs is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
         # b_ptrs is a block of [BLOCK_SIZE_K, BLOCK_SIZE_n] pointers
@@ -243,8 +239,8 @@ Final Result
         offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
         offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
         offs_k = tl.arange(0, BLOCK_SIZE_K)
-        a_ptrs = a_ptr + (offs_am[:, None]*stride_am + offs_k [None, :]*stride_ak)
-        b_ptrs = b_ptr + (offs_k [:, None]*stride_bk + offs_bn[None, :]*stride_bn)
+        a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+        b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
         # -----------------------------------------------------------
         # Iterate to compute a block of the C matrix
@@ -253,8 +249,8 @@ Final Result
         # `accumulator` will be converted back to fp16 after the loop
         accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
         for k in range(0, K, BLOCK_SIZE_K):
-            # Note that for simplicity, we don't apply a mask here. 
-            # This means that if K is not a multiple of BLOCK_SIZE_K, 
+            # Note that for simplicity, we don't apply a mask here.
+            # This means that if K is not a multiple of BLOCK_SIZE_K,
             # this will access out-of-bounds memory and produce an
             # error or (worse!) incorrect results.
             a = tl.load(a_ptrs)
@@ -265,9 +261,9 @@ Final Result
             a_ptrs += BLOCK_SIZE_K * stride_ak
             b_ptrs += BLOCK_SIZE_K * stride_bk
         # you can fuse arbitrary activation functions here
-        # while the accumulator is still in FP32 !
-        if meta['ACTIVATION']: 
-            accumulator = meta['ACTIVATION'](accumulator)
+        # while the accumulator is still in FP32!
+        if ACTIVATION:
+            accumulator = ACTIVATION(accumulator)
         c = accumulator.to(tl.float16)
 
         # -----------------------------------------------------------
@@ -292,12 +288,12 @@ Final Result
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 263-265
+.. GENERATED FROM PYTHON SOURCE LINES 259-261
 
 We can now create a convenience wrapper function that only takes two input tensors
 and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel
 
-.. GENERATED FROM PYTHON SOURCE LINES 265-294
+.. GENERATED FROM PYTHON SOURCE LINES 261-290
 
 .. code-block:: default
 
@@ -337,14 +333,14 @@ and (1) checks any shape constraint; (2) allocates the output; (3) launches the 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 295-299
+.. GENERATED FROM PYTHON SOURCE LINES 291-295
 
 Unit Test
 -----------
 
 We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS)
 
-.. GENERATED FROM PYTHON SOURCE LINES 299-312
+.. GENERATED FROM PYTHON SOURCE LINES 295-308
 
 .. code-block:: default
 
@@ -392,7 +388,7 @@ We can test our custom matrix multiplication operation against a native torch im
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 313-319
+.. GENERATED FROM PYTHON SOURCE LINES 309-315
 
 Benchmark
 --------------
@@ -401,7 +397,7 @@ Square Matrix Performance
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 We can now compare the performance of our kernel against that of cuBLAS. Here we focus on square matrices, but feel free to arrange this script as you wish to benchmark any other matrix shape.
 
-.. GENERATED FROM PYTHON SOURCE LINES 319-360
+.. GENERATED FROM PYTHON SOURCE LINES 315-356
 
 .. code-block:: default
 
@@ -463,36 +459,36 @@ We can now compare the performance of our kernel against that of cuBLAS. Here we
     matmul-performance:
              M     cuBLAS  ...     Triton  Triton (+ LeakyReLU)
     0    256.0   2.730667  ...   2.978909              2.978909
-    1    384.0   7.372800  ...   8.507077              8.507077
-    2    512.0  14.563555  ...  16.384000             16.384000
+    1    384.0   7.372800  ...   8.507077              7.899428
+    2    512.0  14.563555  ...  15.420235             16.384000
     3    640.0  22.260869  ...  24.380953             24.380953
     4    768.0  32.768000  ...  34.028308             34.028308
-    5    896.0  37.971025  ...  40.140799             39.025776
-    6   1024.0  49.932191  ...  53.773130             52.428801
-    7   1152.0  44.566925  ...  46.656000             46.656000
+    5    896.0  37.971025  ...  39.025776             39.025776
+    6   1024.0  49.932191  ...  52.428801             52.428801
+    7   1152.0  45.242181  ...  46.656000             46.656000
     8   1280.0  51.200001  ...  56.888887             56.109587
-    9   1408.0  64.138541  ...  67.305878             67.305878
-    10  1536.0  80.430545  ...  79.526831             79.526831
-    11  1664.0  63.372618  ...  62.492442             62.492442
-    12  1792.0  72.983276  ...  72.047592             72.047592
-    13  1920.0  69.120002  ...  70.172588             70.172588
-    14  2048.0  73.908442  ...  76.959706             76.608294
-    15  2176.0  83.500614  ...  86.367588             85.632545
-    16  2304.0  68.446623  ...  76.809875             76.809875
-    17  2432.0  71.305746  ...  74.918570             85.393507
-    18  2560.0  78.019048  ...  80.908642             80.709358
-    19  2688.0  83.552988  ...  89.149366             89.464755
-    20  2816.0  82.602666  ...  83.074685             83.233226
-    21  2944.0  82.646820  ...  82.373605             82.784108
-    22  3072.0  81.943708  ...  88.612060             87.516392
-    23  3200.0  78.914919  ...  91.822093             93.567248
-    24  3328.0  81.530349  ...  84.003845             84.496824
-    25  3456.0  82.519518  ...  91.200871             90.943675
-    26  3584.0  85.633710  ...  94.847460             96.579370
-    27  3712.0  85.528545  ...  85.019017             87.706180
-    28  3840.0  81.980725  ...  86.130841             91.247522
-    29  3968.0  85.993854  ...  91.747320             86.053553
-    30  4096.0  93.727466  ...  88.417474             84.307617
+    9   1408.0  64.138541  ...  66.485074             65.684049
+    10  1536.0  79.526831  ...  79.526831             78.643199
+    11  1664.0  62.929456  ...  62.061463             62.061463
+    12  1792.0  72.983276  ...  72.047592             71.588687
+    13  1920.0  68.776119  ...  70.172588             69.818184
+    14  2048.0  73.262953  ...  76.959706             76.608294
+    15  2176.0  83.500614  ...  85.998493             85.269692
+    16  2304.0  68.446623  ...  76.319081             75.834511
+    17  2432.0  71.125224  ...  82.509438             84.877538
+    18  2560.0  77.833728  ...  80.709358             81.108913
+    19  2688.0  83.369354  ...  89.676257             89.464755
+    20  2816.0  83.233226  ...  82.446516             81.827785
+    21  2944.0  82.373605  ...  82.373605             81.298583
+    22  3072.0  82.062468  ...  88.060814             88.473602
+    23  3200.0  82.368085  ...  89.761569             94.955488
+    24  3328.0  80.889094  ...  80.527177             82.939284
+    25  3456.0  81.849303  ...  86.783176             91.304157
+    26  3584.0  87.042978  ...  98.375705             90.364394
+    27  3712.0  79.726532  ...  90.815768             85.820159
+    28  3840.0  82.592983  ...  88.191387             91.398346
+    29  3968.0  85.873762  ...  90.656713             83.867052
+    30  4096.0  92.563952  ...  82.441739             82.291681
 
     [31 rows x 5 columns]
 
@@ -502,7 +498,7 @@ We can now compare the performance of our kernel against that of cuBLAS. Here we
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 5 minutes  41.070 seconds)
+   **Total running time of the script:** ( 6 minutes  5.923 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_03-matrix-multiplication.py:

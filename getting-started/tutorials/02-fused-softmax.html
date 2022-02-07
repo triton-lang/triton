@@ -107,6 +107,7 @@
 </li>
 <li class="toctree-l2"><a class="reference internal" href="03-matrix-multiplication.html">Matrix Multiplication</a></li>
 <li class="toctree-l2"><a class="reference internal" href="04-low-memory-dropout.html">Low-Memory Dropout</a></li>
+<li class="toctree-l2"><a class="reference internal" href="05-layer-norm.html">Layer Normalization</a></li>
 </ul>
 </li>
 </ul>
@@ -210,6 +211,9 @@ You will learn about:</p>
 Let us consider instead the case of a simple (numerically stabilized) softmax operation:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">torch</span>
 
+<span class="kn">import</span> <span class="nn">triton</span>
+<span class="kn">import</span> <span class="nn">triton.language</span> <span class="k">as</span> <span class="nn">tl</span>
+
 
 <span class="nd">@torch</span><span class="o">.</span><span class="n">jit</span><span class="o">.</span><span class="n">script</span>
 <span class="k">def</span> <span class="nf">naive_softmax</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
@@ -248,17 +252,13 @@ normalizes it and writes back the result to the output Y.
 Note that one important limitation of Triton is that each block must have a
 power-of-two number of elements, so we need to internally “pad” each row and guard the
 memory operations properly if we want to handle any possible input shapes:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">triton</span>
-<span class="kn">import</span> <span class="nn">triton.language</span> <span class="k">as</span> <span class="nn">tl</span>
-
-
-<span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
 <span class="k">def</span> <span class="nf">softmax_kernel</span><span class="p">(</span>
-    <span class="n">output_ptr</span><span class="p">,</span> <span class="n">input_ptr</span><span class="p">,</span> <span class="n">input_row_stride</span><span class="p">,</span> <span class="n">output_row_stride</span><span class="p">,</span> <span class="n">n_cols</span><span class="p">,</span> <span class="o">**</span><span class="n">meta</span>
+    <span class="n">output_ptr</span><span class="p">,</span> <span class="n">input_ptr</span><span class="p">,</span> <span class="n">input_row_stride</span><span class="p">,</span> <span class="n">output_row_stride</span><span class="p">,</span> <span class="n">n_cols</span><span class="p">,</span>
+    <span class="n">BLOCK_SIZE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span>
 <span class="p">):</span>
     <span class="c1"># The rows of the softmax are independent, so we parallelize across those</span>
     <span class="n">row_idx</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-    <span class="n">BLOCK_SIZE</span> <span class="o">=</span> <span class="n">meta</span><span class="p">[</span><span class="s1">&#39;BLOCK_SIZE&#39;</span><span class="p">]</span>
     <span class="c1"># The stride represents how much we need to increase the pointer to advance 1 row</span>
     <span class="n">row_start_ptr</span> <span class="o">=</span> <span class="n">input_ptr</span> <span class="o">+</span> <span class="n">row_idx</span> <span class="o">*</span> <span class="n">input_row_stride</span>
     <span class="c1"># The block size is the next power of two greater than n_cols, so we can fit each</span>
@@ -318,11 +318,7 @@ This will allow us to verify that our padding mechanism works.</p>
 <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">1823</span><span class="p">,</span> <span class="mi">781</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">)</span>
 <span class="n">y_triton</span> <span class="o">=</span> <span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
 <span class="n">y_torch</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">y_triton</span><span class="p">,</span> <span class="n">y_torch</span><span class="p">))</span>
-</pre></div>
-</div>
-<p class="sphx-glr-script-out">Out:</p>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>True
+<span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">y_triton</span><span class="p">,</span> <span class="n">y_torch</span><span class="p">),</span> <span class="p">(</span><span class="n">y_triton</span><span class="p">,</span> <span class="n">y_torch</span><span class="p">)</span>
 </pre></div>
 </div>
 <p>As expected, the results are identical.</p>
@@ -373,17 +369,17 @@ We will then compare its performance against (1) <code class="code docutils lite
 <p class="sphx-glr-script-out">Out:</p>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>softmax-performance:
           N      Triton  Torch (native)  Torch (jit)
-0     256.0  512.000001      546.133347   188.321838
-1     384.0  585.142862      585.142862   151.703707
-2     512.0  655.360017      606.814814   154.566038
+0     256.0  546.133347      512.000001   190.511628
+1     384.0  614.400016      558.545450   153.600004
+2     512.0  655.360017      585.142849   154.566038
 3     640.0  682.666684      640.000002   160.000000
-4     768.0  702.171410      646.736871   163.839992
+4     768.0  722.823517      664.216187   162.754967
 ..      ...         ...             ...          ...
-93  12160.0  810.666687      405.755985   199.038365
-94  12288.0  812.429770      415.661740   199.197579
-95  12416.0  809.189387      412.149375   198.854847
-96  12544.0  807.661970      412.971190   199.012395
-97  12672.0  807.776923      412.097543   199.167004
+93  12160.0  814.058574      406.179533   198.530610
+94  12288.0  814.111783      415.661740   198.694297
+95  12416.0  814.163950      412.149375   198.457532
+96  12544.0  814.214963      412.546756   198.716830
+97  12672.0  814.265046      412.097543   198.679085
 
 [98 rows x 4 columns]
 </pre></div>
@@ -396,7 +392,7 @@ We will then compare its performance against (1) <code class="code docutils lite
 Note however that the PyTorch <cite>softmax</cite> operation is more general and will works on tensors of any shape.</p></li>
 </ul>
 </div></blockquote>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 3 minutes  26.243 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 3 minutes  22.431 seconds)</p>
 <div class="sphx-glr-footer class sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-02-fused-softmax-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/d91442ac2982c4e0cc3ab0f43534afbc/02-fused-softmax.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">02-fused-softmax.py</span></code></a></p>

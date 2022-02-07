@@ -7,7 +7,15 @@
 Tutorials
 ==================
 
-Below is a gallery of tutorials for writing various basic operations with Triton. It is recommended that you read through the tutorials in order, starting with the simplest one. 
+Below is a gallery of tutorials for writing various basic operations with Triton. It is recommended that you read through the tutorials in order, starting with the simplest one.
+
+To install the dependencies for the tutorials:
+
+.. code-block:: bash
+
+    cd triton
+    pip install -e './python[tutorials]'
+
 
 
 .. raw:: html
@@ -93,6 +101,27 @@ Below is a gallery of tutorials for writing various basic operations with Triton
    :hidden:
 
    /getting-started/tutorials/04-low-memory-dropout
+
+.. raw:: html
+
+    <div class="sphx-glr-thumbcontainer" tooltip="Layer Normalization">
+
+.. only:: html
+
+ .. figure:: /getting-started/tutorials/images/thumb/sphx_glr_05-layer-norm_thumb.png
+     :alt: Layer Normalization
+
+     :ref:`sphx_glr_getting-started_tutorials_05-layer-norm.py`
+
+.. raw:: html
+
+    </div>
+
+
+.. toctree::
+   :hidden:
+
+   /getting-started/tutorials/05-layer-norm
 .. raw:: html
 
     <div class="sphx-glr-clear"></div>

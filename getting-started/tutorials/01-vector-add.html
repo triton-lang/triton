@@ -104,6 +104,7 @@
 <li class="toctree-l2"><a class="reference internal" href="02-fused-softmax.html">Fused Softmax</a></li>
 <li class="toctree-l2"><a class="reference internal" href="03-matrix-multiplication.html">Matrix Multiplication</a></li>
 <li class="toctree-l2"><a class="reference internal" href="04-low-memory-dropout.html">Low-Memory Dropout</a></li>
+<li class="toctree-l2"><a class="reference internal" href="05-layer-norm.html">Layer Normalization</a></li>
 </ul>
 </li>
 </ul>
@@ -202,6 +203,7 @@ to download the full example code</p>
 <div class="section" id="compute-kernel">
 <h2>Compute Kernel<a class="headerlink" href="#compute-kernel" title="Permalink to this headline">¶</a></h2>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">torch</span>
+
 <span class="kn">import</span> <span class="nn">triton</span>
 <span class="kn">import</span> <span class="nn">triton.language</span> <span class="k">as</span> <span class="nn">tl</span>
 
@@ -212,9 +214,9 @@ to download the full example code</p>
     <span class="n">y_ptr</span><span class="p">,</span>  <span class="c1"># *Pointer* to second input vector</span>
     <span class="n">output_ptr</span><span class="p">,</span>  <span class="c1"># *Pointer* to output vector</span>
     <span class="n">n_elements</span><span class="p">,</span>  <span class="c1"># Size of the vector</span>
-    <span class="o">**</span><span class="n">meta</span><span class="p">,</span>  <span class="c1"># Optional meta-parameters for the kernel</span>
+    <span class="n">BLOCK_SIZE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1"># Number of elements each program should process</span>
+                 <span class="c1"># NOTE: `constexpr` so it can be used as a shape value</span>
 <span class="p">):</span>
-    <span class="n">BLOCK_SIZE</span> <span class="o">=</span> <span class="n">meta</span><span class="p">[</span><span class="s1">&#39;BLOCK_SIZE&#39;</span><span class="p">]</span>  <span class="c1"># How many inputs each program should process</span>
     <span class="c1"># There are multiple &#39;program&#39;s processing different data. We identify which program</span>
     <span class="c1"># we are here</span>
     <span class="n">pid</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>  <span class="c1"># We use a 1D launch grid so axis is 0</span>
@@ -226,7 +228,7 @@ to download the full example code</p>
     <span class="n">offsets</span> <span class="o">=</span> <span class="n">block_start</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="p">)</span>
     <span class="c1"># Create a mask to guard memory operations against out-of-bounds accesses</span>
     <span class="n">mask</span> <span class="o">=</span> <span class="n">offsets</span> <span class="o">&lt;</span> <span class="n">n_elements</span>
-    <span class="c1"># Load x and y from DRAM, masking out any extar elements in case the input is not a</span>
+    <span class="c1"># Load x and y from DRAM, masking out any extra elements in case the input is not a</span>
     <span class="c1"># multiple of the block size</span>
     <span class="n">x</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">x_ptr</span> <span class="o">+</span> <span class="n">offsets</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
     <span class="n">y</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">y_ptr</span> <span class="o">+</span> <span class="n">offsets</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
@@ -250,7 +252,7 @@ and (2) enqueue the above kernel with appropriate grid/block sizes.</p>
     <span class="c1">#  - each torch.tensor object is implicitly converted into a pointer to its first element.</span>
     <span class="c1">#  - `triton.jit`&#39;ed functions can be index with a launch grid to obtain a callable GPU kernel</span>
     <span class="c1">#  - don&#39;t forget to pass meta-parameters as keywords arguments</span>
-    <span class="n">pgm</span> <span class="o">=</span> <span class="n">add_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">n_elements</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="o">=</span><span class="mi">1024</span><span class="p">)</span>
+    <span class="n">add_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">n_elements</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="o">=</span><span class="mi">1024</span><span class="p">)</span>
     <span class="c1"># We return a handle to z but, since `torch.cuda.synchronize()` hasn&#39;t been called, the kernel is still</span>
     <span class="c1"># running asynchronously at this point.</span>
     <span class="k">return</span> <span class="n">output</span>
@@ -326,19 +328,19 @@ for different problem sizes.</p>
 3       32768.0   76.800002   76.800002
 4       65536.0  127.999995  127.999995
 5      131072.0  219.428568  219.428568
-6      262144.0  341.333321  384.000001
+6      262144.0  341.333321  341.333321
 7      524288.0  472.615390  472.615390
 8     1048576.0  614.400016  614.400016
 9     2097152.0  722.823517  722.823517
 10    4194304.0  780.190482  780.190482
 11    8388608.0  812.429770  812.429770
 12   16777216.0  833.084721  833.084721
-13   33554432.0  842.004273  843.811163
+13   33554432.0  842.004273  842.004273
 14   67108864.0  847.448255  848.362445
 15  134217728.0  849.737435  850.656574
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 1 minutes  52.411 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 1 minutes  50.312 seconds)</p>
 <div class="sphx-glr-footer class sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-01-vector-add-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/62d97d49a32414049819dd8bb8378080/01-vector-add.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">01-vector-add.py</span></code></a></p>

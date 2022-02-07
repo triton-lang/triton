@@ -208,7 +208,7 @@ pip install -e .
 </div>
 <p>Note that, if llvm-11 is not present on your system, the setup.py script will download the official LLVM11 static libraries link against that.</p>
 <p>You can then test your installation by running the unit tests:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip install -r requirements-test.txt
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip install -e <span class="s1">&#39;.[tests]&#39;</span>
 pytest -vs test/unit/
 </pre></div>
 </div>

@@ -32,7 +32,7 @@ whose state is generally composed of a bit mask tensor of the same shape as the 
 
 Baseline
 -------------
-The *dropout* operator was first introduced in [SRIVASTAVA2014]_ as a way to improve the performance 
+The *dropout* operator was first introduced in [SRIVASTAVA2014]_ as a way to improve the performance
 of deep neural networks in low-data regime (i.e. regularization).
 
 It takes a vector as input and produces a vector of the same shape as output. Each scalar in the
@@ -46,7 +46,7 @@ keeps the norm consistent regardless of the dropout probability.
 
 Let's first take a look at the baseline implementation.
 
-.. GENERATED FROM PYTHON SOURCE LINES 29-80
+.. GENERATED FROM PYTHON SOURCE LINES 29-82
 
 .. code-block:: default
 
@@ -54,19 +54,20 @@ Let's first take a look at the baseline implementation.
 
     import tabulate
     import torch
+
     import triton
     import triton.language as tl
 
+
     @triton.jit
     def _dropout(
-            x_ptr, # pointer to the input
-            x_keep_ptr, # pointer to a mask of 0s and 1s
-            output_ptr, # pointer to the output
-            n_elements, # number of elements in the `x` tensor
-            p, # probability that an element of `x` is changed to zero
-            **meta,
+            x_ptr,  # pointer to the input
+            x_keep_ptr,  # pointer to a mask of 0s and 1s
+            output_ptr,  # pointer to the output
+            n_elements,  # number of elements in the `x` tensor
+            p,  # probability that an element of `x` is changed to zero
+            BLOCK_SIZE: tl.constexpr,
     ):
-        BLOCK_SIZE = meta['BLOCK_SIZE']
         pid = tl.program_id(axis=0)
         block_start = pid * BLOCK_SIZE
         offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -87,6 +88,7 @@ Let's first take a look at the baseline implementation.
         grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
         _dropout[grid](x, x_keep, output, n_elements, p, BLOCK_SIZE=1024)
         return output
+
 
     # Input tensor
     x = torch.randn(size=(10,)).cuda()
@@ -120,7 +122,7 @@ Let's first take a look at the baseline implementation.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 81-99
+.. GENERATED FROM PYTHON SOURCE LINES 83-101
 
 Seeded dropout
 -------------
@@ -132,7 +134,7 @@ that (1) has a smaller memory footprint; (2) requires less data movement; and (3
 of persisting randomness across multiple invocations of the kernel.
 
 Pseudorandom number generation in Triton is simple! In this tutorial we will use the
-:code:`triton.language.rand` function which generates a block of uniformly distributed :code:`float32` 
+:code:`triton.language.rand` function which generates a block of uniformly distributed :code:`float32`
 values in [0, 1), given a seed and a block of :code:`int32` offsets. But if you need it, Triton also provides
 other :ref:`random number generation strategies <Random Number Generation>`.
 
@@ -141,9 +143,10 @@ other :ref:`random number generation strategies <Random Number Generation>`.
 
 Let's put it all together.
 
-.. GENERATED FROM PYTHON SOURCE LINES 99-147
+.. GENERATED FROM PYTHON SOURCE LINES 101-149
 
 .. code-block:: default
+
 
 
     @triton.jit
@@ -153,10 +156,9 @@ Let's put it all together.
             n_elements,
             p,
             seed,
-            **meta,
+            BLOCK_SIZE: tl.constexpr,
     ):
         # compute memory offsets of elements handled by this instance
-        BLOCK_SIZE = meta['BLOCK_SIZE']
         pid = tl.program_id(axis=0)
         block_start = pid * BLOCK_SIZE
         offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -205,21 +207,21 @@ Let's put it all together.
 
     -------------------  ---------  --------  --------  -------  --------  --------  ---------  ---------  ---------  ---------
     input                -0.952835  0.371721  0.408716  1.42142  0.149397  -0.67086  -0.214186  -0.431969  -0.707878  -0.106434
-    output (seed = 123)   0         0.743443  0         2.84284  0.298794  -1.34172   0          0          0          0
-    output (seed = 123)   0         0.743443  0         2.84284  0.298794  -1.34172   0          0          0          0
-    output (seed = 512)  -1.90567   0.743443  0         2.84284  0.298794  -1.34172   0         -0.863938   0         -0.212868
+    output (seed = 123)   0         0.743443  0         0        0         -1.34172   0          0         -1.41576   -0.212868
+    output (seed = 123)   0         0.743443  0         0        0         -1.34172   0          0         -1.41576   -0.212868
+    output (seed = 512)   0         0         0.817432  2.84284  0         -1.34172  -0.428372   0          0          0
     -------------------  ---------  --------  --------  -------  --------  --------  ---------  ---------  ---------  ---------
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 148-151
+.. GENERATED FROM PYTHON SOURCE LINES 150-153
 
 Et Voilà! We have a triton kernel that applies the same dropout mask provided the seed is the same!
 If you'd like explore further applications of pseudorandomness in GPU programming, we encourage you
 to explore the `triton/language/random` folder!
 
-.. GENERATED FROM PYTHON SOURCE LINES 153-158
+.. GENERATED FROM PYTHON SOURCE LINES 155-160
 
 Exercises
 -------------
@@ -227,7 +229,7 @@ Exercises
 2. Add support for striding.
 3. (challenge) Implement a kernel for sparse Johnson-Lindenstrauss transform which generates the projection matrix one the fly each time using a seed.
 
-.. GENERATED FROM PYTHON SOURCE LINES 160-165
+.. GENERATED FROM PYTHON SOURCE LINES 162-167
 
 References
 --------------
@@ -238,7 +240,7 @@ References
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  0.010 seconds)
+   **Total running time of the script:** ( 0 minutes  0.477 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_04-low-memory-dropout.py:
