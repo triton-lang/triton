@@ -150,7 +150,7 @@ void parse_args(py::list& args, py::list do_not_specialize, const std::string& f
     for(int i = 0; i < len; i++){
       cache_key += "_";
       py::int_ py_i = py::int_(i);
-      bool specialize = std::find(do_not_specialize.begin(), do_not_specialize.end(), py_i) == do_not_specialize.end();
+      bool specialize = !do_not_specialize.contains(py_i);
       py::object arg = args[i];
       auto arg_ptr = arg.ptr();
 
