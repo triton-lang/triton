@@ -169,8 +169,6 @@ import triton.language as tl
     ],
     key=['M', 'N', 'K'],
 )
-# %
-# We can now define our kernel as normal, using all the techniques presented above
 @triton.jit
 def matmul_kernel(
     # Pointers to matrices
