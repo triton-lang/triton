@@ -131,7 +131,6 @@ def test_attention_fwd_bwd(
         torch.nn.Parameter(input_scale * torch.randn(qkv_shape), requires_grad=True).to(dtype).cuda() for _ in range(3)
     ]
 
-
     # Triton:
     n_blocks = n_ctx // block
     layout = torch.tril(torch.ones([n_heads, n_blocks, n_blocks], dtype=torch.long))
