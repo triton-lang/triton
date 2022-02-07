@@ -197,7 +197,7 @@ class _softmax(torch.autograd.Function):
         # run kernel
         M = out.shape[0]
         grid = (ctx.spdims[0], ctx.spdims[1] * ctx.block, M)
-        da = dout # in-place gradient computation
+        da = torch.empty_like(dout)
         _blocksparse_softmax_bwd[grid](
             da, da.stride(0),
             dout, dout.stride(0),
