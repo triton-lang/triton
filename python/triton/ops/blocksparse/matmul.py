@@ -251,13 +251,13 @@ def dsd_lut(layout, block, step, trans, device):
 
     Then the offsets for A are
      [0 , 16, 32, 48] <- row 0
-      \----/  \----/
+      \\----/  \\----/
       col=0   col=3
      [64, 80, 96, 112, 128, 144] <- row 1
-      \----/   \----/  \------/
+      \\----/   \\----/  \\------/
        col=1    col=2    col=3
      [160, 176, 192, 208]
-    which leads to increments table 
+    which leads to increments table
     [0, 16, 16, 16, || 64, 16, 16, 16, 16, 16, || 160, 16, 16, 16]
 
     Because B is dense, the offsets are
@@ -341,7 +341,9 @@ def dsd_lut(layout, block, step, trans, device):
 # Dense = Dense x Sparse (DDS)
 # -----------------------------
 # AB = (B^T A^T)^T
-def dds_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out = None):
+
+
+def dds_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=None):
     return dsd_matmul(b, a, not trans_b, not trans_a, not trans_c, spdims, block, lut, width, out=out)
 
 ##############

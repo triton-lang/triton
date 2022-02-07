@@ -1,6 +1,7 @@
-from numpy import require
 import pytest
 import torch
+from numpy import require
+
 import triton
 
 
@@ -28,28 +29,28 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
         "dds": (b_shape[2], b_shape[3]),
     }[MODE]
     layout = torch.randint(2, (H, shape[0] // BLOCK, shape[1] // BLOCK))
-    layout[1,2,:] = 0
-    layout[1,:,1] = 0
+    layout[1, 2, :] = 0
+    layout[1, :, 1] = 0
     # create data
-    a_ref, a_tri  = triton.testing.make_pair(a_shape, alpha=.1)
-    b_ref, b_tri  = triton.testing.make_pair(b_shape, alpha=.1)
+    a_ref, a_tri = triton.testing.make_pair(a_shape, alpha=.1)
+    b_ref, b_tri = triton.testing.make_pair(b_shape, alpha=.1)
     dc_ref, dc_tri = triton.testing.make_pair(c_shape)
     # compute [torch]
     dc_ref = do_mask(dc_ref) if is_sdd else dc_ref
-    a_ref  = do_mask(a_ref)  if is_dsd else a_ref
-    b_ref  = do_mask(b_ref)  if is_dds else b_ref
+    a_ref = do_mask(a_ref) if is_dsd else a_ref
+    b_ref = do_mask(b_ref) if is_dds else b_ref
     a_ref.retain_grad()
     b_ref.retain_grad()
-    c_ref  = torch.matmul(a_ref.transpose(2, 3) if TRANS_A else a_ref,
-                            b_ref.transpose(2, 3) if TRANS_B else b_ref)
+    c_ref = torch.matmul(a_ref.transpose(2, 3) if TRANS_A else a_ref,
+                         b_ref.transpose(2, 3) if TRANS_B else b_ref)
     c_ref.backward(dc_ref)
-    c_ref  = do_sparsify(c_ref)  if is_sdd else c_ref
+    c_ref = do_sparsify(c_ref) if is_sdd else c_ref
     da_ref = do_sparsify(a_ref.grad) if is_dsd else a_ref.grad
     db_ref = do_sparsify(b_ref.grad) if is_dds else b_ref.grad
     # triton result
     dc_tri = do_sparsify(dc_tri) if is_sdd else dc_tri
-    a_tri = do_sparsify(a_tri)   if is_dsd else a_tri
-    b_tri = do_sparsify(b_tri)   if is_dds else b_tri
+    a_tri = do_sparsify(a_tri) if is_dsd else a_tri
+    b_tri = do_sparsify(b_tri) if is_dds else b_tri
     a_tri.retain_grad()
     b_tri.retain_grad()
     op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B, device="cuda")
@@ -64,11 +65,12 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
 
 
 configs = [
-  (16, 256),
-  (32, 576),
-  (64, 1871),
-  (128, 2511),
+    (16, 256),
+    (32, 576),
+    (64, 1871),
+    (128, 2511),
 ]
+
 
 @pytest.mark.parametrize("is_dense", [False, True])
 @pytest.mark.parametrize("BLOCK, WIDTH", configs)
@@ -82,8 +84,8 @@ def test_softmax(BLOCK, WIDTH, is_dense, Z=2, H=2, is_causal=True, scale=0.4):
     if is_dense:
         layout[:] = 1
     else:
-        layout[1,2,:] = 0
-        layout[1,:,1] = 0
+        layout[1, 2, :] = 0
+        layout[1, :, 1] = 0
     # initialize data
     a_shape = (Z, H, M, N)
     a_ref, a_tri = triton.testing.make_pair(a_shape)
