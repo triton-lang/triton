@@ -1,7 +1,5 @@
 import pytest
 import torch
-from numpy import require
-
 import triton
 
 
