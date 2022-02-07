@@ -186,10 +186,7 @@ def triton_attention(
 ):
     sparse_dot_sdd_nt = triton.ops.blocksparse.matmul(layout, block, "sdd", trans_a=False, trans_b=True, device=value.device)
     sparse_dot_dsd_nn = triton.ops.blocksparse.matmul(layout, block, "dsd", trans_a=False, trans_b=False, device=value.device)
-    sparse_softmax = triton.ops.blocksparse.softmax(
-        layout,
-        block,
-    )
+    sparse_softmax = triton.ops.blocksparse.softmax(layout, block, device=value.device)
 
     w = sparse_dot_sdd_nt(query, key)
     w = sparse_softmax(w, scale=scale, attn_mask=attn_mask, attn_mask_mode="mul")
