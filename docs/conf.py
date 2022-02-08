@@ -74,7 +74,7 @@ extensions = ['sphinx.ext.autodoc', 'sphinx.ext.intersphinx', 'sphinx.ext.autosu
 autosummary_generate = True
 
 # versioning config
-smv_tag_whitelist = r'^(v1.1.1)$'
+smv_tag_whitelist = r'^(v1.1.2)$'
 smv_branch_whitelist = r'^master$'
 smv_remote_whitelist = None
 smv_released_pattern = r'^tags/.*$'
