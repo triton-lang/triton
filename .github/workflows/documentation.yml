@@ -30,7 +30,7 @@ jobs:
       - name: Build docs
         run: |
           cd docs
-          make html
+          sphinx-multiversion . _build/html/
 
       - name: Publish docs
         run: |
