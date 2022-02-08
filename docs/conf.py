@@ -34,14 +34,17 @@ def process_sig(app, what, name, obj, options, signature, return_annotation):
 def setup(app):
     """Customize function args retrieving to get args under decorator."""
     import sphinx
-    import triton
+    import os
 
     app.connect("autodoc-process-signature", process_sig)
+    os.system("pip install -e ../python")
+
 
     def forward_jit_fn(func):
         old = func
 
         def wrapped(obj, **kwargs):
+            import triton
             if isinstance(obj, triton.code_gen.JITFunction):
                 obj = obj.fn
             return old(obj)
@@ -52,6 +55,7 @@ def setup(app):
     old_documenter = sphinx.ext.autosummary.get_documenter
 
     def documenter(app, obj, parent):
+        import triton
         if isinstance(obj, triton.code_gen.JITFunction):
             obj = obj.fn
         return old_documenter(app, obj, parent)
@@ -78,18 +82,18 @@ smv_outputdir_format = '{ref.name}'
 smv_prefer_remote_refs = False
 
 # Sphinx gallery
-extensions += ['sphinx_gallery.gen_gallery']
-from sphinx_gallery.sorting import FileNameSortKey
-sphinx_gallery_conf = {
-    'examples_dirs': '../python/tutorials/',
-    'gallery_dirs': 'getting-started/tutorials',
-    'filename_pattern': '',
-    'ignore_pattern': r'__init__\.py',
-    'within_subsection_order': FileNameSortKey,
-    'reference_url': {
-        'sphinx_gallery': None,
-    }
-}
+# extensions += ['sphinx_gallery.gen_gallery']
+# from sphinx_gallery.sorting import FileNameSortKey
+# sphinx_gallery_conf = {
+#     'examples_dirs': '../python/tutorials/',
+#     'gallery_dirs': 'getting-started/tutorials',
+#     'filename_pattern': '',
+#     'ignore_pattern': r'__init__\.py',
+#     'within_subsection_order': FileNameSortKey,
+#     'reference_url': {
+#         'sphinx_gallery': None,
+#     }
+# }
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
