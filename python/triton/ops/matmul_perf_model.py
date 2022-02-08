@@ -4,7 +4,7 @@ import torch
 
 import triton
 import triton._C.libtriton.triton as _triton
-from triton.testing import get_dram_gbps, get_max_tensorcore_tflops
+from triton.testing import get_dram_gbps, get_max_tensorcore_tflops, get_max_simd_tflops
 
 
 def get_tensorcore_tflops(backend, device, num_ctas, num_warps, dtype):
@@ -14,6 +14,19 @@ def get_tensorcore_tflops(backend, device, num_ctas, num_warps, dtype):
     tflops = min(num_subcores, total_warps) / num_subcores * get_max_tensorcore_tflops(dtype, backend, device)
     return tflops
 
+
+def get_simd_tflops(backend, device, num_ctas, num_warps, dtype):
+    ''' return compute throughput in TOPS '''
+    total_warps = num_ctas * min(num_warps, 4)
+    num_subcores = _triton.runtime.num_sm(backend, device) * 4  # on recent GPUs
+    tflops = min(num_subcores, total_warps) / num_subcores * get_max_simd_tflops(dtype, backend, device)
+    return tflops
+
+def get_tflops(backend, device, num_ctas, num_warps, dtype):
+    cc = _triton.runtime.cc(backend, device)
+    if cc < 80 and dtype == torch.float32:
+        return get_simd_tflops()
+    return get_tensorcore_tflops(backend, device, num_ctas, num_warps, dtype)
 
 def estimate_matmul_time(
     # backend, device,
@@ -40,7 +53,7 @@ def estimate_matmul_time(
 
     # time to compute
     total_ops = 2 * M * N * K / (1024 * 1024 * 1024)  # GOPS
-    tput = get_tensorcore_tflops(backend, device, num_ctas, num_warps, dtype)
+    tput = get_tflops(backend, device, num_ctas, num_warps, dtype)
     compute_ms = total_ops / tput
 
     # time to load data

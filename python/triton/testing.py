@@ -328,7 +328,6 @@ def get_max_tensorcore_tflops(dtype: torch.dtype, backend=None, device=None):
         device = torch.cuda.current_device()
     num_subcores = _triton.runtime.num_sm(backend, device) * 4  # on recent GPUs
     clock_rate = _triton.runtime.clock_rate(backend, device)  # in kHz
-    # assume fp32 += fp16*fp16
     cc = _triton.runtime.cc(backend, device)
     if cc < 80:
         assert dtype == torch.float16
@@ -345,3 +344,27 @@ def get_max_tensorcore_tflops(dtype: torch.dtype, backend=None, device=None):
     tflops = num_subcores * clock_rate * ops_per_sub_core * 1e-9
     return tflops
 
+def get_max_simd_tflops(dtype: torch.dtype, backend=None, device=None):
+    if not backend:
+        backend = _triton.runtime.backend.CUDA
+    if not device:
+        device = torch.cuda.current_device()
+    num_subcores = _triton.runtime.num_sm(backend, device) * 4  # on recent GPUs
+    clock_rate = _triton.runtime.clock_rate(backend, device)  # in kHz
+    cc = _triton.runtime.cc(backend, device)
+    if cc < 80:
+        if dtype == torch.float32:
+            ops_per_sub_core = 32  # 2*16
+        elif dtype == torch.float16:
+            ops_per_sub_core = 64
+        else:
+            raise RuntimeError("dtype not supported")
+    else:
+        if dtype == torch.float32:
+            ops_per_sub_core = 32
+        elif dtype in [torch.float16, torch.bfloat16]:
+            ops_per_sub_core = 64
+        else:
+            raise RuntimeError("dtype not supported")
+    tflops = num_subcores * clock_rate * ops_per_sub_core * 1e-9
+    return tflops
