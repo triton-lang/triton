@@ -2,7 +2,7 @@ import torch
 
 import triton
 import triton.language as tl
-from .matmul_perf_model import estimate_matmul_time, early_config_prune
+from .matmul_perf_model import early_config_prune, estimate_matmul_time
 
 
 def init_to_zero(name):

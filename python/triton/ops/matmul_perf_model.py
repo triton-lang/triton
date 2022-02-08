@@ -4,7 +4,7 @@ import torch
 
 import triton
 import triton._C.libtriton.triton as _triton
-from triton.testing import get_dram_gbps, get_max_tensorcore_tflops, get_max_simd_tflops
+from triton.testing import get_dram_gbps, get_max_simd_tflops, get_max_tensorcore_tflops
 
 
 def get_tensorcore_tflops(backend, device, num_ctas, num_warps, dtype):
@@ -22,11 +22,13 @@ def get_simd_tflops(backend, device, num_ctas, num_warps, dtype):
     tflops = min(num_subcores, total_warps) / num_subcores * get_max_simd_tflops(dtype, backend, device)
     return tflops
 
+
 def get_tflops(backend, device, num_ctas, num_warps, dtype):
     cc = _triton.runtime.cc(backend, device)
     if cc < 80 and dtype == torch.float32:
         return get_simd_tflops()
     return get_tensorcore_tflops(backend, device, num_ctas, num_warps, dtype)
+
 
 def estimate_matmul_time(
     # backend, device,
@@ -93,6 +95,7 @@ def estimate_matmul_time(
               f'Activate CTAs: {active_cta_ratio*100}%')
     return total_time_ms
 
+
 def early_config_prune(configs, named_args):
     backend = _triton.runtime.backend.CUDA
     device = torch.cuda.current_device()
@@ -114,7 +117,7 @@ def early_config_prune(configs, named_args):
     configs = pruned_configs
 
     # Some dtypes do not allow atomic_add
-    if not dtype in [torch.float16, torch.float32]:
+    if dtype not in [torch.float16, torch.float32]:
         configs = [config for config in configs if config.kwargs['SPLIT_K'] == 1]
 
     # group configs by (BLOCK_M,_N,_K, SPLIT_K, num_warps)

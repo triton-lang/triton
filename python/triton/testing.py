@@ -344,6 +344,7 @@ def get_max_tensorcore_tflops(dtype: torch.dtype, backend=None, device=None):
     tflops = num_subcores * clock_rate * ops_per_sub_core * 1e-9
     return tflops
 
+
 def get_max_simd_tflops(dtype: torch.dtype, backend=None, device=None):
     if not backend:
         backend = _triton.runtime.backend.CUDA
