@@ -7,17 +7,18 @@ import triton._C.libtriton.triton as _triton
 from triton.testing import get_dram_gbps, get_max_tensorcore_tflops
 
 
-def get_tensorcore_tflops(backend, device, num_ctas, num_warps):
+def get_tensorcore_tflops(backend, device, num_ctas, num_warps, dtype):
     ''' return compute throughput in TOPS '''
     total_warps = num_ctas * min(num_warps, 4)
     num_subcores = _triton.runtime.num_sm(backend, device) * 4  # on recent GPUs
-    tflops = min(num_subcores, total_warps) / num_subcores * get_max_tensorcore_tflops(backend, device)
+    tflops = min(num_subcores, total_warps) / num_subcores * get_max_tensorcore_tflops(dtype, backend, device)
     return tflops
 
 
 def estimate_matmul_time(
     # backend, device,
     num_warps, num_stages,
+    A, B, C,
     M, N, K,
     BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K,
     debug=False, **kwargs
@@ -26,6 +27,8 @@ def estimate_matmul_time(
           = max(compute, loading) + store '''
     backend = _triton.runtime.backend.CUDA
     device = torch.cuda.current_device()
+    dtype = A.dtype
+    dtsize = A.element_size()
 
     num_cta_m = triton.cdiv(M, BLOCK_M)
     num_cta_n = triton.cdiv(N, BLOCK_N)
@@ -37,7 +40,7 @@ def estimate_matmul_time(
 
     # time to compute
     total_ops = 2 * M * N * K / (1024 * 1024 * 1024)  # GOPS
-    tput = get_tensorcore_tflops(backend, device, num_ctas, num_warps)
+    tput = get_tensorcore_tflops(backend, device, num_ctas, num_warps, dtype)
     compute_ms = total_ops / tput
 
     # time to load data
@@ -48,10 +51,10 @@ def estimate_matmul_time(
     dram_bw = get_dram_gbps(backend, device) * (active_cta_ratio_bw1 * 0.95 + active_cta_ratio_bw2 * 0.05)  # in GB/s
     l2_bw = dram_bw * 4  # rough estimation (should be 4.7 for A100?)
     # assume 80% of (following) loads are in L2 cache
-    load_a_dram = M * K * 2 * (1 + 0.2 * (num_cta_n - 1))  # assume dtype=float16 (size==2)
-    load_a_l2 = M * K * 2 * 0.8 * (num_cta_n - 1)
-    load_b_dram = N * K * 2 * (1 + 0.2 * (num_cta_m - 1))
-    load_b_l2 = N * K * 2 * 0.8 * (num_cta_m - 1)
+    load_a_dram = M * K * dtsize * (1 + 0.2 * (num_cta_n - 1))
+    load_a_l2 = M * K * dtsize * 0.8 * (num_cta_n - 1)
+    load_b_dram = N * K * dtsize * (1 + 0.2 * (num_cta_m - 1))
+    load_b_l2 = N * K * dtsize * 0.8 * (num_cta_m - 1)
     # total
     total_dram = (load_a_dram + load_b_dram) / (1024 * 1024)  # MB
     total_l2 = (load_a_l2 + load_b_l2) / (1024 * 1024)
@@ -60,7 +63,7 @@ def estimate_matmul_time(
 
     # estimate storing time
     store_bw = dram_bw * 0.6  # :o
-    store_c_dram = M * N * 2 * SPLIT_K / (1024 * 1024)  # MB
+    store_c_dram = M * N * dtsize * SPLIT_K / (1024 * 1024)  # MB
     if SPLIT_K == 1:
         store_ms = store_c_dram / store_bw
     else:
@@ -77,15 +80,28 @@ def estimate_matmul_time(
               f'Activate CTAs: {active_cta_ratio*100}%')
     return total_time_ms
 
-
-def prune_num_stages(configs, named_args):
+def early_config_prune(configs, named_args):
     backend = _triton.runtime.backend.CUDA
     device = torch.cuda.current_device()
     cc = _triton.runtime.cc(backend, device)
     # BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, num_warps, num_stages
+    dtsize = named_args['A'].element_size()
+    dtype = named_args['A'].dtype
+
+    # 1. make sure we have enough smem
+    pruned_configs = []
+    for config in configs:
+        kw = config.kwargs
+        BLOCK_M, BLOCK_N, BLOCK_K, num_stages = \
+            kw['BLOCK_M'], kw['BLOCK_N'], kw['BLOCK_K'], config.num_stages
+        max_shared_memory = _triton.runtime.max_shared_memory(backend, device)
+        required_shared_memory = (BLOCK_M + BLOCK_N) * BLOCK_K * num_stages * dtsize
+        if required_shared_memory <= max_shared_memory:
+            pruned_configs.append(config)
+    configs = pruned_configs
 
     # Some dtypes do not allow atomic_add
-    if named_args['A'].dtype == torch.bfloat16:
+    if not dtype in [torch.float16, torch.float32]:
         configs = [config for config in configs if config.kwargs['SPLIT_K'] == 1]
 
     # group configs by (BLOCK_M,_N,_K, SPLIT_K, num_warps)
