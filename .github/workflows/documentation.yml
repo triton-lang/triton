@@ -14,8 +14,6 @@ jobs:
 
       - name: Checkout branch
         uses: actions/checkout@v1
-        with:
-          ref: 'master'
 
       - name: Install Triton
         run: |
@@ -25,18 +23,14 @@ jobs:
 
       - name: Build docs
         run: |
+          git checkout -b master origin/master
           git branch
           cd docs
           sphinx-multiversion . _build/html/
 
-      - name: Checkout gh-pages
-        uses: actions/checkout@v1
-        with:
-          ref: 'gh-pages'
-
       - name: Publish docs
         run: |
-          git checkout gh-pages
+          git checkout -b gh-pages origin/gh-pages
           sh ./update-website.sh
           eval `ssh-agent -s`
           DISPLAY=:0 SSH_ASKPASS=~/.ssh/give_pass.sh ssh-add ${{ secrets.SSH_KEY }} <<< ${{ secrets.SSH_PASS }}
