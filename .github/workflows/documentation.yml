@@ -30,7 +30,6 @@ jobs:
 
       - name: Publish docs
         run: |
-          git fetch origin gh-pages:gh-pages
           git checkout gh-pages
           sh ./update-website.sh
           eval `ssh-agent -s`
