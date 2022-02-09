@@ -40,7 +40,7 @@ jobs:
           cp -r update-website.sh /tmp/triton-docs/
           rm -r *
           cp -r /tmp/triton-docs/* .
-          cp master/index.html .
+          ln -s master/index.html .
           # mv master docs
           git add .
           git commit -am "[GH-PAGES] Updated website"
