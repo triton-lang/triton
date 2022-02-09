@@ -39,7 +39,7 @@ jobs:
           # update docs
           rm -r /tmp/triton-docs; 
           mkdir /tmp/triton-docs;
-          mv -r docs/_build/html/* /tmp/triton-docs/
+          mv docs/_build/html/* /tmp/triton-docs/
           git checkout gh-pages
           cp -r CNAME /tmp/triton-docs/
           cp -r .nojekyll /tmp/triton-docs/
