@@ -38,7 +38,6 @@ jobs:
           cp -r CNAME /tmp/triton-docs/
           cp -r index.html /tmp/triton-docs/
           cp -r .nojekyll /tmp/triton-docs/
-          cp -r update-website.sh /tmp/triton-docs/
           rm -r *
           cp -r /tmp/triton-docs/* .
           # ln -s master/index.html .
