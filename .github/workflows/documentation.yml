@@ -12,12 +12,6 @@ jobs:
 
     steps:
 
-      
-      - name: Checkout gh-pages
-        uses: actions/checkout@v1
-        with:
-          ref: 'gh-pages'
-
       - name: Checkout branch
         uses: actions/checkout@v1
         with:
@@ -34,6 +28,11 @@ jobs:
           git branch
           cd docs
           sphinx-multiversion . _build/html/
+
+      - name: Checkout gh-pages
+        uses: actions/checkout@v1
+        with:
+          ref: 'gh-pages'
 
       - name: Publish docs
         run: |
