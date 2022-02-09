@@ -20,6 +20,8 @@ jobs:
 
       - name: Checkout branch
         uses: actions/checkout@v1
+        with:
+          ref: 'master'
 
       - name: Install Triton
         run: |
@@ -29,6 +31,7 @@ jobs:
 
       - name: Build docs
         run: |
+          git branch
           cd docs
           sphinx-multiversion . _build/html/
 
