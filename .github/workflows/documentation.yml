@@ -36,8 +36,20 @@ jobs:
       - name: Publish docs
         run: |
           git branch
+          # update docs
+          rm -r /tmp/triton-docs; 
+          mkdir /tmp/triton-docs;
+          mv -r docs/_build/html/* /tmp/triton-docs/
           git checkout gh-pages
-          sh ./update-website.sh
+          cp -r CNAME /tmp/triton-docs/
+          cp -r .nojekyll /tmp/triton-docs/
+          cp -r update-website.sh /tmp/triton-docs/
+          rm -r *
+          cp -r /tmp/triton-docs/* .
+          ln -s master docs
+          git add .
+          git commit -am "[GH-PAGES] Updated website"
+          # publish docs
           eval `ssh-agent -s`
           DISPLAY=:0 SSH_ASKPASS=~/.ssh/give_pass.sh ssh-add ${{ secrets.SSH_KEY }} <<< ${{ secrets.SSH_PASS }}
           git remote set-url origin git@github.com:openai/triton.git
