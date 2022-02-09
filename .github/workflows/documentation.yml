@@ -12,8 +12,16 @@ jobs:
 
     steps:
 
+
+      - name: Checkout gh-pages
+        uses: actions/checkout@v1
+        with:
+          ref: 'gh-pages'
+
       - name: Checkout branch
         uses: actions/checkout@v1
+        with:
+          ref: 'master'
 
       # - name: Install Triton
       #   run: |
