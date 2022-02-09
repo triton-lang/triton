@@ -15,21 +15,21 @@ jobs:
       - name: Checkout branch
         uses: actions/checkout@v1
 
-      - name: Install Triton
-        run: |
-          alias python='python3'
-          cd python
-          pip3 install -e '.[tutorials]'
+      # - name: Install Triton
+      #   run: |
+      #     alias python='python3'
+      #     cd python
+      #     pip3 install -e '.[tutorials]'
 
       - name: Build docs
         run: |
           git fetch origin master:master
-          git branch
           cd docs
           sphinx-multiversion . _build/html/
 
       - name: Publish docs
         run: |
+          git branch
           git checkout gh-pages
           sh ./update-website.sh
           eval `ssh-agent -s`
