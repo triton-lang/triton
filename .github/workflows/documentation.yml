@@ -21,12 +21,6 @@ jobs:
       - name: Checkout branch
         uses: actions/checkout@v1
 
-      # - name: Install Triton
-      #   run: |
-      #     alias python='python3'
-      #     cd python
-      #     pip3 install -e '.[tutorials]'
-
       - name: Build docs
         run: |
           git fetch origin master:master
@@ -46,7 +40,7 @@ jobs:
           cp -r update-website.sh /tmp/triton-docs/
           rm -r *
           cp -r /tmp/triton-docs/* .
-          ln -s master docs
+          mv master docs
           git add .
           git commit -am "[GH-PAGES] Updated website"
           # publish docs
