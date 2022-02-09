@@ -20,8 +20,6 @@ jobs:
 
       - name: Checkout branch
         uses: actions/checkout@v1
-        with:
-          ref: 'master'
 
       # - name: Install Triton
       #   run: |
