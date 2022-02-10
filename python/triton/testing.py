@@ -32,6 +32,19 @@ def sparsify_tensor(x, mask, block):
     return ret
 
 
+def make_pair(shape, device="cuda", alpha=1e-2, beta=0., trans=False, data=None):
+    if data is None:
+        data = torch.randn(shape, dtype=torch.float32, device=device)
+    ref_ret = data
+    ref_ret = ref_ret * alpha + beta
+    ref_ret = ref_ret.half().float()
+    if trans:
+        ref_ret = ref_ret.t().requires_grad_()
+    ref_ret = ref_ret.detach().requires_grad_()
+    tri_ret = ref_ret.clone().detach().requires_grad_()
+    return ref_ret, tri_ret
+
+
 def cutlass_matmul(a, b):
     if _cutlass is None:
         raise RuntimeError("Cannot find cutlass library")
