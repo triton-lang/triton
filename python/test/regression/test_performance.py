@@ -5,10 +5,10 @@ import pytest
 import torch
 
 import triton
-from triton.testing import get_dram_gbps, get_max_tensorcore_tflops
 import triton.language as tl
+from triton.testing import get_dram_gbps, get_max_tensorcore_tflops
 
-DEVICE_NAME = 'a100'
+DEVICE_NAME = 'v100'
 
 #######################
 # Utilities
@@ -28,7 +28,7 @@ def nvsmi(attrs):
 # Matrix Multiplication
 #######################
 
-sm_clocks = {'v100' : 1350, 'a100' : 1350}
+sm_clocks = {'v100': 1350, 'a100': 1350}
 mem_clocks = {'v100': 877, 'a100': 1215}
 
 matmul_data = {
@@ -87,7 +87,7 @@ matmul_data = {
 }
 
 
-@pytest.mark.parametrize('M, N, K, dtype_str', 
+@pytest.mark.parametrize('M, N, K, dtype_str',
                          [(M, N, K, dtype_str)
                           for M, N, K in matmul_data.keys()
                           for dtype_str in ['float16']])
@@ -99,12 +99,12 @@ def test_matmul(M, N, K, dtype_str):
     ref_gpu_util = matmul_data[(M, N, K)][DEVICE_NAME][dtype_str]
     cur_sm_clock = nvsmi(['clocks.current.sm'])[0]
     ref_sm_clock = sm_clocks[DEVICE_NAME]
-    max_gpu_perf = get_max_tensorcore_tflops(dtype, clock_rate=cur_sm_clock*1e3)
+    max_gpu_perf = get_max_tensorcore_tflops(dtype, clock_rate=cur_sm_clock * 1e3)
     assert abs(cur_sm_clock - ref_sm_clock) < 10, f'GPU SMs must run at {ref_sm_clock} MHz'
     if dtype == torch.int8:
         a = torch.randint(-128, 127, (M, K), dtype=dtype, device='cuda')
         b = torch.randint(-128, 127, (N, K), dtype=dtype, device='cuda')
-        b = b.t() # only test row-col layout
+        b = b.t()  # only test row-col layout
     else:
         a = torch.randn((M, K), dtype=dtype, device='cuda')
         b = torch.randn((K, N), dtype=dtype, device='cuda')
