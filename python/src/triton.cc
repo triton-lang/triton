@@ -328,13 +328,10 @@ void init_triton_runtime(py::module &&m) {
     if(grid_0*grid_1*grid_2 > 0) {
       // release the gil in case the enqueue blocks
       // cuda will block if too many ops are enqueued
-      Py_BEGIN_ALLOW_THREADS
-
+      py::gil_scoped_release allow_threads;
       drv::dispatch::cuLaunchKernel((CUfunction)kernel, grid_0, grid_1, grid_2, 
                                     _num_warps*32, 1, 1, shared_mem, (CUstream)_stream, 
                                      nullptr, config);
-
-       Py_END_ALLOW_THREADS
    }
     return bin;
   });
@@ -394,14 +391,13 @@ void init_triton_runtime(py::module &&m) {
     size_t args_size = args.size();
     // release the gil in case the enqueue blocks
     // cuda will block if too many ops are enqueued
-    Py_BEGIN_ALLOW_THREADS
+    py::gil_scoped_release allow_threads;
     if(backend == HOST)
       host_enqueue(stream, kernel, grid_0, grid_1, grid_2, block_0, block_1, block_2, args_ptr, args_size, shared_mem);
     if(backend == CUDA)
       cu_enqueue(stream, kernel, grid_0, grid_1, grid_2, block_0, block_1, block_2, args_ptr, args_size, shared_mem);
     if(backend == ROCM)
       hip_enqueue(stream, kernel, grid_0, grid_1, grid_2, block_0, block_1, block_2, args_ptr, args_size, shared_mem);
-    Py_END_ALLOW_THREADS
   });
 
   
@@ -468,7 +464,7 @@ std::tuple<std::string, asm_map_t, int> cu_compile_ttir(const std::string& name,
                                                                asm_map_t &asm_map){
 
   int n_shared_bytes;
-  Py_BEGIN_ALLOW_THREADS
+  py::gil_scoped_release allow_threads;
   llvm::LLVMContext ctx;
   // device properties
   CUdevice dev = (CUdevice)device;
@@ -494,7 +490,6 @@ std::tuple<std::string, asm_map_t, int> cu_compile_ttir(const std::string& name,
     py::bytes bytes(cubin);
     asm_map["cubin"] = bytes;
   }
-  Py_END_ALLOW_THREADS
   return std::make_tuple(name, asm_map, n_shared_bytes);
 }
 
