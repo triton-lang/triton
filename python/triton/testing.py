@@ -334,13 +334,14 @@ def get_dram_gbps(backend=None, device=None):
     return bw_gbps
 
 
-def get_max_tensorcore_tflops(dtype: torch.dtype, backend=None, device=None):
+def get_max_tensorcore_tflops(dtype: torch.dtype, backend=None, device=None, clock_rate=None):
     if not backend:
         backend = _triton.runtime.backend.CUDA
     if not device:
         device = torch.cuda.current_device()
     num_subcores = _triton.runtime.num_sm(backend, device) * 4  # on recent GPUs
-    clock_rate = _triton.runtime.clock_rate(backend, device)  # in kHz
+    if not clock_rate:
+        clock_rate = _triton.runtime.clock_rate(backend, device)  # in kHz
     cc = _triton.runtime.cc(backend, device)
     if cc < 80:
         assert dtype == torch.float16
