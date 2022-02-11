@@ -124,20 +124,31 @@ def _add(x_ptr, y_ptr, output_ptr, n_elements,
 
 
 elementwise_data = {
-    1024 * 16: {'v100': 0.0219, 'a100': 0.008},
-    1024 * 64: {'v100': 0.0791, 'a100': 0.034},
-    1024 * 256: {'v100': 0.243, 'a100': 0.114},
-    1024 * 1024: {'v100': 0.534, 'a100': 0.315},
-    1024 * 4096: {'v100': 0.796, 'a100': 0.580},
-    1024 * 16384: {'v100': 0.905, 'a100': 0.782},
-    1024 * 65536: {'v100': 0.939, 'a100': 0.850},
+    'v100': {
+        1024 * 16: 0.0219,
+        1024 * 64: 0.0791,
+        1024 * 256: 0.243,
+        1024 * 1024: 0.534,
+        1024 * 4096: 0.796,
+        1024 * 16384: 0.905,
+        1024 * 65536: 0.939,
+    },
+    'a100': {
+        1024 * 16: 0.008,
+        1024 * 64: 0.034,
+        1024 * 256: 0.114,
+        1024 * 1024: 0.315,
+        1024 * 4096: 0.580,
+        1024 * 16384: 0.782,
+        1024 * 65536: 0.850,
+    }
 }
 
 
-@pytest.mark.parametrize('N', elementwise_data.keys())
+@pytest.mark.parametrize('N', elementwise_data[DEVICE_NAME].keys())
 def test_elementwise(N):
     torch.manual_seed(0)
-    ref_gpu_util = elementwise_data[N][DEVICE_NAME]
+    ref_gpu_util = elementwise_data[DEVICE_NAME][N]
     cur_mem_clock = nvsmi(['clocks.current.memory'])[0]
     ref_mem_clock = mem_clocks[DEVICE_NAME]
     max_gpu_perf = get_dram_gbps()
