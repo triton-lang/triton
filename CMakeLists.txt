@@ -110,6 +110,15 @@ libLLVMBinaryFormat.a
 libLLVMAMDGPUInfo.a
 libLLVMSupport.a
 libLLVMDemangle.a
+libLLVMPasses.a
+libLLVMAnalysis.a
+libLLVMTransformUtils.a
+libLLVMScalarOpts.a
+libLLVMTransformUtils.a
+libLLVMipo.a
+libLLVMObjCARCOpts.a
+libLLVMCoroutines.a
+libLLVMAnalysis.a
 )
 endif()
 include_directories("${LLVM_INCLUDE_DIRS}")

@@ -90,6 +90,7 @@ static bool find_and_replace(std::string& str, const std::string& begin, const s
 }
 
 int vptx(int version){
+  if(version >= 11040) return 74;
   if(version >= 11030) return 73;
   if(version >= 11020) return 72;
   if(version >= 11010) return 71;
@@ -103,7 +104,7 @@ int vptx(int version){
 std::string llir_to_ptx(llvm::Module* module, int cc, int version){
   // LLVM version in use may not officially support target hardware
   int max_nvvm_cc = 75;
-  int max_nvvm_ptx = 64;
+  int max_nvvm_ptx = 74;
   // options
   auto options = llvm::cl::getRegisteredOptions();
   auto* short_ptr = static_cast<llvm::cl::opt<bool>*>(options["nvptx-short-ptr"]);

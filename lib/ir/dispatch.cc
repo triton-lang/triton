@@ -569,7 +569,7 @@ ir::value *dispatch::cast(ir::value *input, ir::type *dst_ty, ir::builder *build
 //                               Memory Operators
 //===----------------------------------------------------------------------===//
 
-ir::value *dispatch::load(ir::value* ptr, ir::value* mask, ir::value* other, const std::string &cache_modifier, int is_volatile, ir::builder* builder) {
+ir::value *dispatch::load(ir::value* ptr, ir::value* mask, ir::value* other, const std::string &cache_modifier, const std::string& eviction_policy, int is_volatile, ir::builder* builder) {
   if(!ptr->get_type()->get_scalar_ty()->is_pointer_ty())
     throw semantic_error("Pointer argument of load instruction is " + ptr->get_type()->repr());
   if(ptr->get_type()->is_block_ty()){
@@ -599,8 +599,20 @@ ir::value *dispatch::load(ir::value* ptr, ir::value* mask, ir::value* other, con
     else
       throw std::runtime_error(std::string("Cache modifier ") + cache_modifier + " not supported");
   }
+  // eviction policy
+  load_inst::EVICTION_POLICY eviction = load_inst::NORMAL; //default
+  if(!eviction_policy.empty()){
+    if (eviction_policy == "evict_last")
+        eviction = load_inst::EVICT_LAST;
+    else if(eviction_policy == "evict_first")
+        eviction = load_inst::EVICT_FIRST;
+    else
+        throw std::runtime_error(std::string("Eviction policy") + eviction_policy + " not supported");
+  }
+
+
   if (!mask && !other)
-    return builder->create_load(ptr, cache, is_volatile);
+    return builder->create_load(ptr, cache, eviction, is_volatile);
   if (!mask)
     throw std::runtime_error("`other` cannot be provided without `mask`");
   auto shape = ptr->get_type()->get_block_shapes();
@@ -609,7 +621,7 @@ ir::value *dispatch::load(ir::value* ptr, ir::value* mask, ir::value* other, con
     if(ptr->get_type()->is_block_ty())
       other = builder->create_splat(other, ptr->get_type()->get_block_shapes());
   }
-  return builder->create_masked_load(ptr, mask, other, cache, is_volatile);
+  return builder->create_masked_load(ptr, mask, other, cache, eviction, is_volatile);
 }
 
 ir::value *dispatch::store(ir::value* ptr, ir::value *val, ir::value* mask, ir::builder *builder) {

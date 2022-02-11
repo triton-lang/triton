@@ -697,12 +697,13 @@ void generator::visit_load_inst(ir::load_inst* x){
     std::ostringstream asm_oss;
     asm_oss << "@$" << n_words; // predicate
     asm_oss << " ld";
-//    std::cout << x->get_is_volatile() << std::endl;
     if(x->get_is_volatile())
       asm_oss << ".volatile";
     asm_oss << ".global";
     if (x->get_cache_modifier() == ir::load_inst::CA) asm_oss << ".ca";
     if (x->get_cache_modifier() == ir::load_inst::CG) asm_oss << ".cg";
+    if (x->get_eviction_policy() == ir::load_inst::EVICT_LAST) asm_oss << ".L1::evict_last";
+    if (x->get_eviction_policy() == ir::load_inst::EVICT_FIRST) asm_oss << ".L1::evict_first";
     if(n_words > 1)
       asm_oss << ".v" << n_words; // vector width
     asm_oss << ".b" << width; // word size

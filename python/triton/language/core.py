@@ -556,7 +556,7 @@ def dot(input, other, allow_tf32=True, _builder=None):
 
 
 @builtin
-def load(pointer, mask=None, other=None, cache_modifier="", volatile=False, _builder=None):
+def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", volatile=False, _builder=None):
     """
     Return a block of data whose values are, elementwise, loaded from memory at location defined by :code:`pointer`.
 
@@ -573,7 +573,7 @@ def load(pointer, mask=None, other=None, cache_modifier="", volatile=False, _bui
     :param cache_modifier: changes cache option in nvidia ptx
     'type cache_modifier: str, optional
     """
-    return frontend.load(pointer, mask, other, cache_modifier, volatile, _builder)
+    return frontend.load(pointer, mask, other, cache_modifier, eviction_policy, volatile, _builder)
 
 
 @builtin

@@ -434,8 +434,8 @@ io_inst::io_inst(type *ty, value_id_t id, unsigned num_ops, const std::string &n
 { }
 
 // load_inst
-load_inst::load_inst(value *ptr, value_id_t id, unsigned num_ops, load_inst::CACHE_MODIFIER cache, bool is_volatile, const std::string &name, instruction *next)
-  : io_inst(get_pointee_type(ptr->get_type()), id, num_ops, name, next), cache_(cache), is_volatile_(is_volatile)
+load_inst::load_inst(value *ptr, value_id_t id, unsigned num_ops, load_inst::CACHE_MODIFIER cache, EVICTION_POLICY eviction, bool is_volatile, const std::string &name, instruction *next)
+  : io_inst(get_pointee_type(ptr->get_type()), id, num_ops, name, next), cache_(cache), eviction_(eviction), is_volatile_(is_volatile)
 { }
 
 // load
@@ -448,44 +448,46 @@ type *load_inst::get_pointee_type(type *ty) {
 }
 
 // unmasked_load
-unmasked_load_inst::unmasked_load_inst(value *ptr, load_inst::CACHE_MODIFIER cache, bool is_volatile, const std::string &name, instruction *next)
-  : load_inst(ptr, INST_UNMASKED_LOAD, 1, cache, is_volatile, name, next) {
+unmasked_load_inst::unmasked_load_inst(value *ptr, load_inst::CACHE_MODIFIER cache,load_inst::EVICTION_POLICY eviction, bool is_volatile, const std::string &name, instruction *next)
+  : load_inst(ptr, INST_UNMASKED_LOAD, 1, cache, eviction, is_volatile, name, next) {
   set_operand(0, ptr);
 }
 
-unmasked_load_inst* unmasked_load_inst::create(value *ptr, load_inst::CACHE_MODIFIER cache, bool is_volatile, const std::string &name, instruction *next) {
-  return new unmasked_load_inst(ptr, cache, is_volatile, name, next);
+unmasked_load_inst* unmasked_load_inst::create(value *ptr, load_inst::CACHE_MODIFIER cache, load_inst::EVICTION_POLICY eviction, bool is_volatile, const std::string &name, instruction *next) {
+  return new unmasked_load_inst(ptr, cache, eviction, is_volatile, name, next);
 }
 
 // masked load
-masked_load_inst::masked_load_inst(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache, bool is_volatile,
+masked_load_inst::masked_load_inst(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache, load_inst::EVICTION_POLICY eviction,
+                                   bool is_volatile,
                                    const std::string &name, instruction *next)
-  : load_inst(ptr, INST_MASKED_LOAD, 3, cache, is_volatile, name, next) {
+  : load_inst(ptr, INST_MASKED_LOAD, 3, cache, eviction, is_volatile, name, next) {
   set_operand(0, ptr);
   set_operand(1, mask);
   set_operand(2, false_value);
 }
 
 masked_load_inst* masked_load_inst::create(value *ptr, value *mask, value *false_value,
-                                           load_inst::CACHE_MODIFIER cache, bool is_volatile,
+                                           load_inst::CACHE_MODIFIER cache, load_inst::EVICTION_POLICY eviction,
+                                           bool is_volatile,
                                            const std::string &name, instruction *next) {
-  return new masked_load_inst(ptr, mask, false_value, cache, is_volatile, name, next);
+  return new masked_load_inst(ptr, mask, false_value, cache, eviction, is_volatile, name, next);
 }
 
 // masked load async
 masked_load_async_inst::masked_load_async_inst(value *ptr, value *mask, value *false_value,
-                                   load_inst::CACHE_MODIFIER cache,
+                                   load_inst::CACHE_MODIFIER cache, load_inst::EVICTION_POLICY eviction,
                                    const std::string &name, instruction *next)
-  : load_inst(ptr, INST_MASKED_LOAD_ASYNC, 3, cache, false, name, next) {
+  : load_inst(ptr, INST_MASKED_LOAD_ASYNC, 3, cache, eviction, false, name, next) {
   set_operand(0, ptr);
   set_operand(1, mask);
   set_operand(2, false_value);
 }
 
 masked_load_async_inst* masked_load_async_inst::create(value *ptr, value *mask, value *false_value,
-                                           load_inst::CACHE_MODIFIER cache,
+                                           load_inst::CACHE_MODIFIER cache, EVICTION_POLICY eviction,
                                            const std::string &name, instruction *next) {
-  return new masked_load_async_inst(ptr, mask, false_value, cache, name, next);
+  return new masked_load_async_inst(ptr, mask, false_value, cache, eviction, name, next);
 }
 
 // store
