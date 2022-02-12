@@ -811,12 +811,12 @@ class Autotuner:
         # prune configs
         if prune_configs_by:
             perf_model, top_k = prune_configs_by['perf_model'], prune_configs_by['top_k']
-            if 'prune_num_stages_by' in prune_configs_by:
-                prune_num_stages_by = prune_configs_by['prune_num_stages_by']
+            if 'early_config_prune' in prune_configs_by:
+                early_config_prune = prune_configs_by['early_config_prune']
         else:
-            perf_model, top_k, prune_num_stages_by = None, None, None
+            perf_model, top_k, early_config_prune = None, None, None
         self.perf_model, self.configs_top_k = perf_model, top_k
-        self.prune_num_stages_by = prune_num_stages_by
+        self.early_config_prune = early_config_prune
 
     def _bench(self, *args, config, **meta):
         # check for conflicts, i.e. meta-parameters both provided
@@ -844,8 +844,8 @@ class Autotuner:
             if key not in self.cache:
                 # prune configs
                 pruned_configs = self.configs
-                if self.prune_num_stages_by:
-                    pruned_configs = self.prune_num_stages_by(self.configs, self.nargs)
+                if self.early_config_prune:
+                    pruned_configs = self.early_config_prune(self.configs, self.nargs)
                 if self.perf_model:
                     top_k = self.configs_top_k
                     if isinstance(top_k, float) and top_k <= 1.0:
@@ -1096,7 +1096,7 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
     :param prune_configs_by: a dict of functions that are used to prune configs, fields:
         'perf_model': performance model used to predicate running time with different configs, returns running time
         'top_k': number of configs to bench
-        'prune_num_stages_by'(optional): a function used to prune num_stages. It take configs:List[Config] as its input, and returns pruned configs.
+        'early_config_prune'(optional): a function used to do early prune (eg, num_stages). It take configs:List[Config] as its input, and returns pruned configs.
     :param reset_to_zero: a list of argument names whose value will be reset to zero before evaluating any configs.
     :type reset_to_zero: list[str]
     """
