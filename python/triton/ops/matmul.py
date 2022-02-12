@@ -2,7 +2,7 @@ import torch
 
 import triton
 import triton.language as tl
-from .matmul_perf_model import estimate_matmul_time, prune_num_stages
+from .matmul_perf_model import early_config_prune, estimate_matmul_time
 
 
 def init_to_zero(name):
@@ -27,7 +27,7 @@ def get_configs_io_bound():
 
 
 @triton.heuristics({
-    'EVEN_K': lambda nargs: nargs['K'] % (nargs['BLOCK_K'] * nargs['SPLIT_K']) == 0,
+    'EVEN_K': lambda args: args['K'] % (args['BLOCK_K'] * args['SPLIT_K']) == 0,
 })
 @triton.autotune(
     configs=[
@@ -41,10 +41,20 @@ def get_configs_io_bound():
         triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
         triton.Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=5, num_warps=2),
+        # good for int8
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 128, 'SPLIT_K': 1}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 128, 'SPLIT_K': 1}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 64, 'BLOCK_K': 128, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 256, 'BLOCK_K': 128, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 128, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=5, num_warps=2),
     ] + get_configs_io_bound(),
     key=['M', 'N', 'K'],
     prune_configs_by={
-        'prune_num_stages_by': prune_num_stages,
+        'early_config_prune': early_config_prune,
         'perf_model': estimate_matmul_time,
         'top_k': 10
     },
@@ -55,7 +65,9 @@ def _kernel(A, B, C, M, N, K,
             stride_bk, stride_bn,
             stride_cm, stride_cn,
             BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-            GROUP_M: tl.constexpr, SPLIT_K: tl.constexpr, EVEN_K: tl.constexpr):
+            GROUP_M: tl.constexpr, SPLIT_K: tl.constexpr, EVEN_K: tl.constexpr,
+            ACC_TYPE: tl.constexpr
+            ):
     # matrix multiplication
     pid = tl.program_id(0)
     pid_z = tl.program_id(1)
@@ -76,7 +88,7 @@ def _kernel(A, B, C, M, N, K,
     # pointers
     A = A + (ram[:, None] * stride_am + rk[None, :] * stride_ak)
     B = B + (rk[:, None] * stride_bk + rbn[None, :] * stride_bn)
-    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=ACC_TYPE)
     for k in range(K, 0, -BLOCK_K * SPLIT_K):
         if EVEN_K:
             a = tl.load(A)
@@ -119,13 +131,15 @@ class _matmul(torch.autograd.Function):
         _, N = b.shape
         # allocates output
         c = torch.empty((M, N), device=device, dtype=a.dtype)
+        # accumulator types
+        ACC_TYPE = tl.float32 if a.dtype in [torch.float16, torch.bfloat16, torch.float32] else tl.int32
         # launch kernel
         grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), META['SPLIT_K'])
         _kernel[grid](a, b, c, M, N, K,
                       a.stride(0), a.stride(1),
                       b.stride(0), b.stride(1),
                       c.stride(0), c.stride(1),
-                      GROUP_M=8)
+                      GROUP_M=8, ACC_TYPE=ACC_TYPE)
         return c
 
     @staticmethod
