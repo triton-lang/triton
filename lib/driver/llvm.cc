@@ -59,6 +59,13 @@
 #include "llvm/Analysis/TargetLibraryInfo.h"
 // end AMD stuff
 
+extern "C"{
+  int set_curterm(char* nterm){ return 0; }
+  int del_curterm(char* nterm){ return 0; }
+  int tigetnum(char *capname) { return 0; }
+  int setupterm(char *term, int fildes, int *errret) { return 0; }
+}
+
 namespace triton{
 namespace driver{
 
@@ -76,6 +83,7 @@ void init_llvm() {
     init = true;
   }
 }
+
 
 /* ------------------------ */
 //         CUDA             //
@@ -121,7 +129,8 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version){
   std::string triple = "nvptx64-nvidia-cuda";
   std::string proc = "sm_" + std::to_string(std::min(cc, max_nvvm_cc));
   std::string layout = "";
-  std::string features = "+ptx" + std::to_string(std::min(ptx, max_nvvm_ptx));
+  std::string features = "";
+  // std::string features = "+ptx" + std::to_string(std::min(ptx, max_nvvm_ptx));
   init_llvm();
   // verify and store llvm
   llvm::legacy::PassManager pm;
