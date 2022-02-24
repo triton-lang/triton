@@ -123,7 +123,7 @@ bool peephole::rewrite_load_to_shared(ir::instruction *value, ir::builder& build
   int nts = layout->nts(layout->get_order()[0]);
   int dtsize = value->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
   if(nts*dtsize >= 4){
-    ir::value* new_load = builder.create_masked_load_async(ptr, msk, val, ld->get_cache_modifier());
+    ir::value* new_load = builder.create_masked_load_async(ptr, msk, val, ld->get_cache_modifier(), ld->get_eviction_policy());
     copy_to_shared->replace_all_uses_with(new_load);
     return true;
   }
@@ -215,6 +215,7 @@ bool peephole::rewrite_select_masked_load(ir::instruction *value, ir::builder& b
                                                    if_value->get_mask_operand(),
                                                    select->get_else_value_op(),
                                                    if_value->get_cache_modifier(),
+                                                   if_value->get_eviction_policy(),
                                                    if_value->get_is_volatile());
   select->replace_all_uses_with(new_load);
   return true;
