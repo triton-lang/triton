@@ -59,6 +59,13 @@
 #include "llvm/Analysis/TargetLibraryInfo.h"
 // end AMD stuff
 
+extern "C"{
+  int set_curterm(char* nterm){ return 0; }
+  int del_curterm(char* nterm){ return 0; }
+  int tigetnum(char *capname) { return 0; }
+  int setupterm(char *term, int fildes, int *errret) { return 0; }
+}
+
 namespace triton{
 namespace driver{
 
@@ -77,6 +84,7 @@ void init_llvm() {
   }
 }
 
+
 /* ------------------------ */
 //         CUDA             //
 /* ------------------------ */
@@ -89,7 +97,42 @@ static bool find_and_replace(std::string& str, const std::string& begin, const s
   return true;
 }
 
+std::string path_to_ptxas(int& version) {
+  std::string ret;
+  // search pathes for ptxas
+  std::vector<std::string> ptxas_prefixes = {"", "/usr/local/cuda/bin/"};
+  std::string triton_ptxas = tools::getenv("TRITON_PTXAS_PATH");
+  if(!triton_ptxas.empty())
+    ptxas_prefixes.insert(ptxas_prefixes.begin(), triton_ptxas);
+  // see what path for ptxas are valid
+  std::vector<std::string> working_ptxas;
+  for(std::string prefix: ptxas_prefixes){
+    std::string ptxas = prefix + "ptxas";
+    bool works = tools::exec(ptxas + " --version 2>&1", ret) == 0;
+    if(works)
+      working_ptxas.push_back(ptxas);
+  }
+  // error if no working ptxas was found
+  if(working_ptxas.empty())
+    throw std::runtime_error("`ptxas` was searched in TRITON_PTXAS_PATH, /usr/local/cuda/bin/ or PATH"
+                             " but a working version could not be found.");
+  std::string ptxas = working_ptxas.front();
+  // parse version
+  std::regex version_regex("release (\\d+)\\.(\\d+)");
+  std::smatch match;
+  if(std::regex_search(ret, match, version_regex)){
+    int major = std::stoi(match[1]);
+    int minor = std::stoi(match[2]);
+    version = major*1000 + minor*10;
+  }
+  else
+    throw std::runtime_error("couldn't parse ptxas version: " + ret);
+  return ptxas;
+}
+
+
 int vptx(int version){
+  if(version >= 11040) return 74;
   if(version >= 11030) return 73;
   if(version >= 11020) return 72;
   if(version >= 11010) return 71;
@@ -103,7 +146,7 @@ int vptx(int version){
 std::string llir_to_ptx(llvm::Module* module, int cc, int version){
   // LLVM version in use may not officially support target hardware
   int max_nvvm_cc = 75;
-  int max_nvvm_ptx = 64;
+  int max_nvvm_ptx = 74;
   // options
   auto options = llvm::cl::getRegisteredOptions();
   auto* short_ptr = static_cast<llvm::cl::opt<bool>*>(options["nvptx-short-ptr"]);
@@ -120,7 +163,8 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version){
   std::string triple = "nvptx64-nvidia-cuda";
   std::string proc = "sm_" + std::to_string(std::min(cc, max_nvvm_cc));
   std::string layout = "";
-  std::string features = "+ptx" + std::to_string(std::min(ptx, max_nvvm_ptx));
+  std::string features = "";
+  // std::string features = "+ptx" + std::to_string(std::min(ptx, max_nvvm_ptx));
   init_llvm();
   // verify and store llvm
   llvm::legacy::PassManager pm;
@@ -164,26 +208,7 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version){
   return result;
 }
 
-std::string ptx_to_cubin(const std::string& ptx, int cc) {
-  std::string version;
-  // search pathes for ptxas
-  std::vector<std::string> ptxas_prefixes = {"", "/usr/local/cuda/bin/"};
-  std::string triton_ptxas = tools::getenv("TRITON_PTXAS_PATH");
-  if(!triton_ptxas.empty())
-    ptxas_prefixes.insert(ptxas_prefixes.begin(), triton_ptxas);
-  // see what path for ptxas are valid
-  std::vector<std::string> working_ptxas;
-  for(std::string prefix: ptxas_prefixes){
-    std::string ptxas = prefix + "ptxas";
-    bool works = tools::exec(ptxas + " --version 2>&1", version) == 0;
-    if(works)
-      working_ptxas.push_back(ptxas);
-  }
-  // error if no working ptxas was found
-  if(working_ptxas.empty())
-    throw std::runtime_error("`ptxas` was searched in TRITON_PTXAS_PATH, /usr/local/cuda/bin/ or PATH"
-                             " but a working version could not be found.");
-  std::string ptxas = working_ptxas.front();
+std::string ptx_to_cubin(const std::string& ptx, const std::string& ptxas, int cc) {
   // compile ptx with ptxas
   char _fsrc[L_tmpnam];
   char _flog[L_tmpnam];

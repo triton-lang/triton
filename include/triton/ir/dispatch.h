@@ -69,7 +69,8 @@ struct dispatch{
   static ir::value *cast(ir::value *input, ir::type *type, ir::builder *builder);
 
   // memory operators
-  static ir::value *load(ir::value* ptr, ir::value* mask, ir::value* other, const std::string &cache, int is_volatile, ir::builder *builder);
+  static ir::value *load(ir::value* ptr, ir::value* mask, ir::value* other, const std::string &cache,
+                         const std::string& eviction_policy, int is_volatile, ir::builder *builder);
   static ir::value *store(ir::value* ptr, ir::value *value, ir::value *mask, ir::builder *builder);
   static ir::value *atomic_cas(ir::value* ptr, ir::value *cmp, ir::value *val, ir::builder *builder);
   static ir::value *atomic_add(ir::value* ptr, ir::value *val, ir::value *msk, ir::builder *builder);
