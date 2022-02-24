@@ -506,6 +506,9 @@ ir::value *dispatch::cast(ir::value *input, ir::type *dst_ty, ir::builder *build
     return input;
   ir::type *src_sca_ty = src_ty->get_scalar_ty();
   ir::type *dst_sca_ty = dst_ty->get_scalar_ty();
+  if((src_sca_ty->is_bf16_ty() && !dst_sca_ty->is_fp32_ty()) ||
+     (dst_sca_ty->is_bf16_ty() && !src_sca_ty->is_fp32_ty()))
+    return cast(cast(input, builder->get_float_ty(), builder), dst_ty, builder);
   // FP Truncation
   bool truncate_fp = src_sca_ty->is_floating_point_ty() &&
                      dst_sca_ty->is_floating_point_ty() &&
