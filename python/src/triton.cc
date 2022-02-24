@@ -472,7 +472,7 @@ std::tuple<std::string, asm_map_t, int> cu_compile_ttir(const std::string& name,
   size_t minor = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR>(dev);
   size_t cc = major*10 + minor;
   int version;
-  drv::dispatch::cuDriverGetVersion(&version);
+  std::string ptxas_path = drv::path_to_ptxas(version);
   // Triton-IR -> NVPTX LLVM-IR
   triton::codegen::nvidia_cu_target target(cc);
   auto llvm = triton::codegen::add_passes_to_emit_bin(ir, ctx, &target, cc, num_warps, num_stages, n_shared_bytes);
@@ -485,7 +485,7 @@ std::tuple<std::string, asm_map_t, int> cu_compile_ttir(const std::string& name,
   std::string ptx = drv::llir_to_ptx(llvm.get(), cc, version);
   asm_map["ptx"] = py::cast(ptx);
   // PTX -> Binary
-  std::string cubin = drv::ptx_to_cubin(ptx, cc);
+  std::string cubin = drv::ptx_to_cubin(ptx, ptxas_path, cc);
   if(!cubin.empty()){
     py::bytes bytes(cubin);
     asm_map["cubin"] = bytes;
