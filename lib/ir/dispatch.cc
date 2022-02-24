@@ -506,9 +506,11 @@ ir::value *dispatch::cast(ir::value *input, ir::type *dst_ty, ir::builder *build
     return input;
   ir::type *src_sca_ty = src_ty->get_scalar_ty();
   ir::type *dst_sca_ty = dst_ty->get_scalar_ty();
+  //
   if((src_sca_ty->is_bf16_ty() && !dst_sca_ty->is_fp32_ty()) ||
-     (dst_sca_ty->is_bf16_ty() && !src_sca_ty->is_fp32_ty()))
-    return cast(cast(input, builder->get_float_ty(), builder), dst_ty, builder);
+     (dst_sca_ty->is_bf16_ty() && !src_sca_ty->is_fp32_ty())){
+    return cast(cast(input, builder->get_float_ty(), builder), dst_sca_ty, builder);
+  }
   // FP Truncation
   bool truncate_fp = src_sca_ty->is_floating_point_ty() &&
                      dst_sca_ty->is_floating_point_ty() &&
@@ -576,14 +578,13 @@ ir::value *dispatch::load(ir::value* ptr, ir::value* mask, ir::value* other, con
   if(!ptr->get_type()->get_scalar_ty()->is_pointer_ty())
     throw semantic_error("Pointer argument of load instruction is " + ptr->get_type()->repr());
   if(ptr->get_type()->is_block_ty()){
-    if(mask){
+    if(mask)
       mask = dispatch::broadcast(mask, ptr->get_type()->get_block_shapes(), builder);
-    }
-    if(other){
+    if(other)
       other = dispatch::broadcast(other, ptr->get_type()->get_block_shapes(), builder);
-      other = dispatch::cast(other, ptr->get_type()->get_scalar_ty()->get_pointer_element_ty(), builder);
-    }
   }
+  if(other)
+    other = dispatch::cast(other, ptr->get_type()->get_scalar_ty()->get_pointer_element_ty(), builder);
   ir::type *ptr_ty = ptr->get_type()->get_scalar_ty();
   ir::type *elt_ty = ptr_ty->get_pointer_element_ty();
   // treat bool* as int8*
