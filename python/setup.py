@@ -22,9 +22,9 @@ def get_llvm():
     paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
     paths = [p for p in paths if p is not None]
     if paths:
-      return '', ''
+        return '', ''
     if platform.system() == "Windows":
-      return '', ''
+        return '', ''
     # download if nothing is installed
     name = 'clang+llvm-13.0.0-x86_64-linux-gnu-ubuntu-16.04'
     dir = '/tmp'
@@ -33,7 +33,7 @@ def get_llvm():
     if not os.path.exists(llvm_library_dir):
         try:
             shutil.rmtree(os.path.join(dir, name))
-        except:
+        except BaseException:
             pass
         url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-13.0.0/{name}.tar.xz".format(name=name)
         print('downloading and extracting ' + url + '...')

@@ -214,8 +214,6 @@ def test_layer_norm(M, N, dtype, eps=1e-5, device='cuda'):
     triton.testing.assert_almost_equal(db_tri, db_ref, decimal=1)
     triton.testing.assert_almost_equal(dw_tri, dw_ref, decimal=1)
 
-test_layer_norm(1024, 1024+32, torch.bfloat16)
-exit()
 
 @triton.testing.perf_report(
     triton.testing.Benchmark(
