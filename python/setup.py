@@ -17,7 +17,7 @@ from setuptools.command.build_ext import build_ext
 
 def get_llvm():
     # tries to find system LLVM
-    versions = ['-13.0', '-13', '-13-64']
+    versions = ['-11.0', '-11', '-11-64']
     supported = ['llvm-config{v}'.format(v=v) for v in versions]
     paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
     paths = [p for p in paths if p is not None]
@@ -26,16 +26,16 @@ def get_llvm():
     if platform.system() == "Windows":
         return '', ''
     # download if nothing is installed
-    name = 'clang+llvm-13.0.0-x86_64-linux-gnu-ubuntu-16.04'
+    name = 'clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04'
     dir = '/tmp'
     llvm_include_dir = '{dir}/{name}/include'.format(dir=dir, name=name)
     llvm_library_dir = '{dir}/{name}/lib'.format(dir=dir, name=name)
     if not os.path.exists(llvm_library_dir):
         try:
             shutil.rmtree(os.path.join(dir, name))
-        except BaseException:
+        except Exception:
             pass
-        url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-13.0.0/{name}.tar.xz".format(name=name)
+        url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-11.0.1/{name}.tar.xz".format(name=name)
         print('downloading and extracting ' + url + '...')
         ftpstream = urllib.request.urlopen(url)
         file = tarfile.open(fileobj=ftpstream, mode="r|xz")
