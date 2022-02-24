@@ -110,6 +110,15 @@ libLLVMBinaryFormat.a
 libLLVMAMDGPUInfo.a
 libLLVMSupport.a
 libLLVMDemangle.a
+libLLVMPasses.a
+libLLVMAnalysis.a
+libLLVMTransformUtils.a
+libLLVMScalarOpts.a
+libLLVMTransformUtils.a
+libLLVMipo.a
+libLLVMObjCARCOpts.a
+libLLVMCoroutines.a
+libLLVMAnalysis.a
 )
 endif()
 include_directories("${LLVM_INCLUDE_DIRS}")
@@ -148,7 +157,7 @@ target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
 if(WIN32)
     target_link_libraries(triton PRIVATE ${LLVM_LIBRARIES} dl) # dl is from dlfcn-win32
 else()
-    target_link_libraries(triton ${LLVM_LIBRARIES} z ${TERMINFO_LIBRARY})
+    target_link_libraries(triton ${LLVM_LIBRARIES} z)
 endif()
 
 
