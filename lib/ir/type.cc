@@ -167,10 +167,10 @@ pointer_type* pointer_type::get(type *elt_ty, unsigned address_space){
   assert(is_valid_elt_ty(elt_ty) && "Invalid type for pointer element!");
   // look-up
   context_impl *impl = elt_ty->get_context().p_impl.get();
-  pointer_type *&entry = impl->ptr_tys[std::make_pair(elt_ty, address_space)];
+  std::unique_ptr<pointer_type> &entry = impl->ptr_tys[std::make_pair(elt_ty, address_space)];
   if(!entry)
-    entry = new pointer_type(elt_ty, address_space);
-  return entry;
+    entry.reset(new pointer_type(elt_ty, address_space));
+  return entry.get();
 }
 
 //===----------------------------------------------------------------------===//
@@ -217,10 +217,10 @@ block_type* block_type::get(type *elt_ty, const block_shapes_t &shapes) {
   assert(is_valid_elt_ty(elt_ty) && "Invalid type for tile element!");
   // look-up
   context_impl *impl = elt_ty->get_context().p_impl.get();
-  block_type *&entry = impl->block_tys[std::make_pair(elt_ty, shapes)];
+  std::unique_ptr<block_type> &entry = impl->block_tys[std::make_pair(elt_ty, shapes)];
   if(!entry)
-    entry = new block_type(elt_ty, shapes);
-  return entry;
+    entry.reset(new block_type(elt_ty, shapes));
+  return entry.get();
 }
 
 block_type* block_type::get_same_shapes(type *ty, type *ref){

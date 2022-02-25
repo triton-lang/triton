@@ -3,17 +3,15 @@
 #ifndef _TRITON_IR_CONTEXT_IMPL_H_
 #define _TRITON_IR_CONTEXT_IMPL_H_
 
-#include <map>
 #include "triton/ir/type.h"
+#include "triton/ir/constant.h"
+#include <map>
+#include <memory>
 
 namespace triton{
 namespace ir{
 
 class context;
-class constant;
-class constant_int;
-class constant_fp;
-class undef_value;
 
 /* Context impl */
 class context_impl {
@@ -30,16 +28,16 @@ public:
   integer_type int1_ty, int8_ty, int16_ty, int32_ty, int64_ty, int128_ty;
   integer_type uint8_ty, uint16_ty, uint32_ty, uint64_ty;
   // Pointer types
-  std::map<std::pair<type*, unsigned>, pointer_type*> ptr_tys;
+  std::map<std::pair<type*, unsigned>, std::unique_ptr<pointer_type>> ptr_tys;
   // Block types
-  std::map<std::pair<type*, type::block_shapes_t>, block_type*> block_tys;
+  std::map<std::pair<type*, type::block_shapes_t>, std::unique_ptr<block_type>> block_tys;
 
   // Int constants
-  std::map<std::pair<type*, uint64_t>, constant_int*> int_constants_;
+  std::map<std::pair<type*, uint64_t>, std::unique_ptr<constant_int>> int_constants_;
   // Float constants
-  std::map<std::pair<type*, double>, constant_fp*> fp_constants_;
+  std::map<std::pair<type*, double>, std::unique_ptr<constant_fp>> fp_constants_;
   // undef values
-  std::map<type*, undef_value*> uv_constants_;
+  std::map<type*, std::unique_ptr<undef_value>> uv_constants_;
 
 };
 
