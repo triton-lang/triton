@@ -147,6 +147,7 @@ enum value_id_t: unsigned {
   INST_EXP,
   INST_COS,
   INST_SIN,
+  INST_TANH,
   INST_LOG,
   // array arithmetic
   INST_TRANS,

@@ -153,6 +153,7 @@ public:
   value *create_exp(value* arg);
   value *create_cos(value* arg);
   value *create_sin(value* arg);
+  value *create_tanh(value* arg);
   value *create_log(value* arg);
   value *create_dot(value *A, value *B, value *C, bool allow_tf32);
   value *create_trans(value *A, const std::vector<int> &perm = {});

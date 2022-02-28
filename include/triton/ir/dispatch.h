@@ -99,6 +99,7 @@ struct dispatch{
   static ir::value *log(ir::value *x, ir::builder *builder);
   static ir::value *cos(ir::value *x, ir::builder *builder);
   static ir::value *sin(ir::value *x, ir::builder *builder);
+  static ir::value *tanh(ir::value *x, ir::builder *builder);
   static ir::value *sqrt(ir::value *x, ir::builder *builder);
 
   // internal (debug/optimization)

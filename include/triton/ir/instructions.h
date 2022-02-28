@@ -743,6 +743,17 @@ public:
   static instruction* create(value *val, const std::string &name = "", instruction *next = nullptr);
 };
 
+class tanh_inst: public builtin_inst {
+private:
+  tanh_inst(value *val, const std::string &name = "", instruction *next = nullptr);
+  std::string repr_impl() const { return "tanh"; }
+  _TRITON_DEFINE_CLONE(tanh_inst)
+  _TRITON_DEFINE_ACCEPT(tanh_inst)
+
+public:
+  static instruction* create(value *val, const std::string &name = "", instruction *next = nullptr);
+};
+
 class log_inst: public builtin_inst {
 private:
   log_inst(value *val, const std::string &name = "", instruction *next = nullptr);

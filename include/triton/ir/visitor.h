@@ -53,6 +53,7 @@ class umulhi_inst;
 class exp_inst;
 class cos_inst;
 class sin_inst;
+class tanh_inst;
 class log_inst;
 
 class get_program_id_inst;
@@ -128,6 +129,7 @@ public:
   virtual void visit_exp_inst(exp_inst*) = 0;
   virtual void visit_cos_inst(cos_inst*) = 0;
   virtual void visit_sin_inst(sin_inst*) = 0;
+  virtual void visit_tanh_inst(tanh_inst*) = 0;
   virtual void visit_log_inst(log_inst*) = 0;
 
   virtual void visit_reshape_inst(reshape_inst*) = 0;

@@ -156,6 +156,7 @@ public:
   void visit_cos_inst(ir::cos_inst*);
   void visit_umulhi_inst(ir::umulhi_inst* x);
   void visit_sin_inst(ir::sin_inst*);
+  void visit_tanh_inst(ir::tanh_inst*);
   void visit_log_inst(ir::log_inst*);
   void visit_get_program_id_inst(ir::get_program_id_inst*);
   void visit_get_num_programs_inst(ir::get_num_programs_inst*);

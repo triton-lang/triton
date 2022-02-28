@@ -850,6 +850,10 @@ ir::value *dispatch::sin(ir::value *x, ir::builder *builder) {
   return builder->create_sin(x);
 }
 
+ir::value *dispatch::tanh(ir::value *x, ir::builder *builder) {
+  return builder->create_tanh(x);
+}
+
 ir::value *dispatch::sqrt(ir::value *x, ir::builder *builder) {
   return builder->create_sqrt(x);
 }

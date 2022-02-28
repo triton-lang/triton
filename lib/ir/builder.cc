@@ -363,6 +363,10 @@ value *builder::create_sin(value *arg){
   return insert(sin_inst::create(arg));
 }
 
+value *builder::create_tanh(value *arg){
+  return insert(tanh_inst::create(arg));
+}
+
 value *builder::create_log(value *arg){
   return insert(log_inst::create(arg));
 }

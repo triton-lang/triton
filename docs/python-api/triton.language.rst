@@ -82,6 +82,7 @@ Math Ops
     log
     cos
     sin
+    tanh
     sqrt
     sigmoid
     softmax

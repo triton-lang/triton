@@ -826,6 +826,16 @@ instruction* sin_inst::create(value *val, const std::string& name, instruction *
   return new sin_inst(val, name, next);
 }
 
+// tanh
+tanh_inst::tanh_inst(value *val, const std::string &name, instruction *next)
+  : builtin_inst(val->get_type(), INST_TANH, 1, name, next) {
+  set_operand(0, val);
+}
+
+instruction* tanh_inst::create(value *val, const std::string& name, instruction *next) {
+  return new tanh_inst(val, name, next);
+}
+
 
 // log
 

@@ -983,6 +983,19 @@ void generator::visit_sin_inst(ir::sin_inst* x){
  }
 
 /**
+ * \brief Code Generation for `tanh`
+ */
+void generator::visit_tanh_inst(ir::tanh_inst* x){
+  std::vector<llvm::Type*> tys = {f32_ty};
+  FunctionType *fn_ty = FunctionType::get(f32_ty, tys, false);
+  InlineAsm *tanh = InlineAsm::get(fn_ty, "tanh.approx.f32 $0, $0;", "=f,0", false);
+  for(auto idx: idxs_.at(x)){
+    vals_[x][idx] = call(tanh, std::vector<llvm::Value*>{vals_[x->get_operand(0)][idx]});
+  }
+ }
+
+
+/**
  * \brief Code Generation for `log`
  */
 void generator::visit_log_inst(ir::log_inst* x){
@@ -1394,13 +1407,13 @@ void generator::visit_mma884(ir::dot_inst* C, ir::value *A, ir::value *B, ir::va
 namespace {
 class mma16816_smem_loader {
 public:
-  mma16816_smem_loader(int wpt, std::vector<int> order, int k_order, 
-                       std::vector<unsigned> tile_shape, 
-                       std::vector<int> instr_shape, std::vector<int> mat_shape, 
-                       int per_phase, int max_phase, int dtsize, Builder *builder, 
+  mma16816_smem_loader(int wpt, std::vector<int> order, int k_order,
+                       std::vector<unsigned> tile_shape,
+                       std::vector<int> instr_shape, std::vector<int> mat_shape,
+                       int per_phase, int max_phase, int dtsize, Builder *builder,
                        adder add, multiplier mul, geper gep)
                       : wpt_(wpt), order_(order), k_order_(k_order), tile_shape_(tile_shape),
-                        instr_shape_(instr_shape), mat_shape_(mat_shape), 
+                        instr_shape_(instr_shape), mat_shape_(mat_shape),
                         per_phase_(per_phase), max_phase_(max_phase), dtsize_(dtsize), builder_(builder),
                         add(add), mul(mul), gep(gep) {
     // compute compile-time constant variables & types
@@ -1414,7 +1427,7 @@ public:
     need_trans_ = k_order_ != order_[0];
     can_use_ldmatrix_ = dtsize == 2 || (!need_trans_);
 
-    // we need more pointers at the fast-changing axis, 
+    // we need more pointers at the fast-changing axis,
     if (can_use_ldmatrix_)
       num_ptr_ = tile_shape[order[0]] / (order[0] == k_order? 1 : wpt) / instr_shape[order[0]];
     else // warning: this only works for tf32 & need transpose
@@ -1450,7 +1463,7 @@ public:
       Value *s0 = urem(s, i32(2));
       Value *s1 = udiv(s, i32(2));
 
-      // We use different orders for a & b for better performance. 
+      // We use different orders for a & b for better performance.
       Value *k_mat_arr  = (k_order_ == 1) ? s1 : s0;
       Value *nk_mat_arr = (k_order_ == 1) ? s0 : s1;
       mat_off[k_order_^1] = add(mul(warp_off,   i32(warp_off_stride_)),
@@ -1461,7 +1474,7 @@ public:
       Value *s_mat_off = mat_off[order_[1]];
       // offset inside a matrix
       Value *s_off_in_mat = c;
-      
+
       std::vector<Value*> offs(num_ptr_);
       Value *phase = urem(udiv(s_off_in_mat, i32(per_phase_)), i32(max_phase_));
       // pre-compute strided offset
@@ -1475,7 +1488,7 @@ public:
     } else if (dtsize_ == 4 && need_trans_) {
       // load tf32 matrices with lds32
       Value *c_off_in_mat = udiv(lane, i32(4)); // 4 = mat_shape[order[1]]
-      Value *s_off_in_mat = urem(lane, i32(4)); // 
+      Value *s_off_in_mat = urem(lane, i32(4)); //
 
       Value *phase = urem(udiv(s_off_in_mat, i32(per_phase_)), i32(max_phase_));
       std::vector<Value*> offs(num_ptr_);
@@ -1522,7 +1535,7 @@ public:
         Value *c_mat_off = add(mul(warp_off, i32(warp_off_stride_)),
                                mul(nk_mat_arr, i32(mat_arr_stride_)));
         Value *s_mat_off = k_mat_arr; // always 0?
-        
+
         for (int loadx4_off = 0; loadx4_off < num_ptr_/8; ++loadx4_off) {
           for (int elem_off = 0; elem_off < 4; ++elem_off) {
             int ptr_off = loadx4_off*8 + nk_mat_arr_int*4 + elem_off;
@@ -1548,10 +1561,10 @@ public:
       throw std::runtime_error("invalid smem load config");
   }
 
-  std::tuple<Value*, Value*, Value*, Value*> 
+  std::tuple<Value*, Value*, Value*, Value*>
   load_x4(int mat0, int mat1, int inc, bool is_prefetch, ir::phi_node *pn,
           Value *pre_ptr, Value *next_ptr, std::vector<Value*> &off, std::vector<Value*> &ptrs,
-          FunctionType *ldmatrix_ty, Type *smem_ptr_ty, 
+          FunctionType *ldmatrix_ty, Type *smem_ptr_ty,
           std::map<ir::value*, std::vector<Value*>> &prefetch_latch_to_bb_) {
     assert(mat0 % 2 == 0 && mat1 % 2 == 0 && "smem matrix load must be aligned");
     int mat_idx[2] = {mat0, mat1};
@@ -1583,7 +1596,7 @@ public:
       std::string trans = need_trans_ ? ".trans" : "";
       // the offset (in byte) on the strided axis is a constant
       int s_offset = mat_idx[order_[1]] * (s_mat_stride_*s_mat_shape_) * s_stride_ * dtsize_;
-      InlineAsm *ld_fn = InlineAsm::get(ldmatrix_ty, 
+      InlineAsm *ld_fn = InlineAsm::get(ldmatrix_ty,
                                         "ldmatrix.sync.aligned.m8n8.x4" + trans + ".shared.b16 "
                                         "{$0, $1, $2, $3}, "
                                         "[$4 + " + std::to_string(s_offset) + "];",
@@ -1592,7 +1605,7 @@ public:
       res_v4 = call(ldmatrix_ty, ld_fn, {ptr});
       if (k == 0 && inc == 1 && is_prefetch)
         prefetch_latch_to_bb_[pn->get_incoming_value(1)].push_back(res_v4);
-      return {extract_val(res_v4, std::vector<unsigned>{0}), 
+      return {extract_val(res_v4, std::vector<unsigned>{0}),
               extract_val(res_v4, std::vector<unsigned>{1}),
               extract_val(res_v4, std::vector<unsigned>{2}),
               extract_val(res_v4, std::vector<unsigned>{3})};
@@ -1639,13 +1652,13 @@ public:
       Value *i32_elems[4];
       for (int i=0; i<4; ++i)
         i8v4_elems[i] = UndefValue::get(vec_ty(i8_ty, 4));
-      
+
       Value *elem00, *elem01, *elem02, *elem03;
       Value *elem10, *elem11, *elem12, *elem13;
       Value *elem20, *elem21, *elem22, *elem23;
       Value *elem30, *elem31, *elem32, *elem33;
       Value *i8_elems[4*4];
-      if (k_order_ == 1) { // 
+      if (k_order_ == 1) { //
         i8_elems[0*4 + 0] = load(gep(ptr00, i32(s_offset_elem)));
         i8_elems[0*4 + 1] = load(gep(ptr01, i32(s_offset_elem)));
         i8_elems[0*4 + 2] = load(gep(ptr02, i32(s_offset_elem)));
@@ -1732,7 +1745,7 @@ private:
   int s_mat_stride_;
   // stride when moving to next not-k mat
   int warp_off_stride_;
-  int mat_arr_stride_; // matrix arrangement (inside a load) stride  
+  int mat_arr_stride_; // matrix arrangement (inside a load) stride
   bool need_trans_, can_use_ldmatrix_;
   int num_ptr_;
 
@@ -1808,7 +1821,7 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
     mma_ty = FunctionType::get(fp32_pack4_ty, std::vector<llvm::Type*>{fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty}, false);
     smem_ptr_ty = ptr_ty(f16_ty, 3);
     ldmatrix_ty = FunctionType::get(fp16x2_pack4_ty, std::vector<llvm::Type*>{smem_ptr_ty}, false);
-    phi_ty = fp16x2_ty;    
+    phi_ty = fp16x2_ty;
   } else if (A_ir_ty->is_bf16_ty() && B_ir_ty->is_bf16_ty()) {
     // FIXME: We should use bf16 here.
     mma_ty = FunctionType::get(fp32_pack4_ty, std::vector<llvm::Type*>{fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp16x2_ty, fp32_ty, fp32_ty, fp32_ty, fp32_ty}, false);
@@ -1862,8 +1875,8 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   // m  s0_1(1), s1_1(3)) |  (stride in num of matrices(mat_stride_ak): 2)
   // -----------
   //   *num_rep_m (stride in num of matrices(mat_stride_am): 2*layout->wpt(0))
-  mma16816_smem_loader a_loader(layout->wpt(0), ord_a, /*k_order*/1, shape_a, 
-                                {mma_instr_m, mma_instr_k}, {mat_shape_m, mat_shape_k}, 
+  mma16816_smem_loader a_loader(layout->wpt(0), ord_a, /*k_order*/1, shape_a,
+                                {mma_instr_m, mma_instr_k}, {mat_shape_m, mat_shape_k},
                                 per_phase_a, max_phase_a, dtsize_a, builder_, add, mul, gep);
   std::vector<Value*> off_a = a_loader.compute_offs(warp_m, lane);
   int num_ptr_a = a_loader.get_num_ptr();
@@ -1905,7 +1918,7 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
         (m + 1) + (n*2 + 0)*cols_per_thread,
         (m + 1) + (n*2 + 1)*cols_per_thread
       };
-      Value *nc = call(mma_ty, mma_fn, 
+      Value *nc = call(mma_ty, mma_fn,
                        {ha[{m, k}], ha[{m+1, k}], ha[{m, k+1}], ha[{m+1, k+1}],
                         hb[{n, k}], hb[{n, k+1}],
                         fc[idx[0]], fc[idx[1]], fc[idx[2]], fc[idx[3]]});
@@ -1929,7 +1942,7 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
 
   auto load_a = [&](int m, int k, int inc, bool is_prefetch) {
       auto [ha0, ha1, ha2, ha3] = a_loader.load_x4(m, k, inc, is_prefetch, phiA, shared_pre_ptr_[layout_a],
-                                                   shared_next_ptr_[layout_a], off_a, ptrs_a, 
+                                                   shared_next_ptr_[layout_a], off_a, ptrs_a,
                                                    ldmatrix_ty, smem_ptr_ty, prefetch_latch_to_bb_);
       register_lds2(ha, m,   k,   inc, ha0, is_prefetch);
       register_lds2(ha, m+1, k,   inc, ha1, is_prefetch);
@@ -1939,7 +1952,7 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
 
   auto load_b = [&](int n, int k, int inc, bool is_prefetch) {
       auto [hb0, hb1, hb2, hb3] = b_loader.load_x4(k, n, inc, is_prefetch, phiB, shared_pre_ptr_[layout_b],
-                                                   shared_next_ptr_[layout_b], off_b, ptrs_b, 
+                                                   shared_next_ptr_[layout_b], off_b, ptrs_b,
                                                    ldmatrix_ty, smem_ptr_ty, prefetch_latch_to_bb_);
       register_lds2(hb, n,   k,   inc, hb0, is_prefetch);
       register_lds2(hb, n+1, k,   inc, hb2, is_prefetch);
@@ -2126,7 +2139,7 @@ void generator::visit_dot_inst(ir::dot_inst* dot) {
     return visit_mma884(dot, A, B, D, NK);
   if(!is_outer && is_mma && tgt_->as_nvidia()->sm() >= 80)
     return visit_mma16816(dot, A, B, D, NK); // rename it as visit_mma_v2()?
-  if (dot->get_type()->get_scalar_ty()->is_fp32_ty() && 
+  if (dot->get_type()->get_scalar_ty()->is_fp32_ty() &&
       A->get_type()->get_scalar_ty()->is_fp32_ty())
     return visit_fmadot(dot, A, B, D, NK, c_ty, f_mul_add);
   throw std::runtime_error("dot has invalid operand type");
