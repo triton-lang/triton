@@ -574,7 +574,7 @@ void init_triton_ir(py::module &&m) {
       .def("is_ptr", &ir::type::is_pointer_ty)
       .def("is_int", static_cast<bool (ir::type::*)() const>(&ir::type::is_integer_ty))
       .def("is_floating", &ir::type::is_floating_point_ty)
-      .def("is_block", &ir::type::is_block_ty)
+      
       .def("make_ptr", &ir::pointer_type::get, ret::reference)
       .def("make_function", &ir::function_type::get, ret::reference)
       .def("make_block", &ir::block_type::get, ret::reference)
@@ -594,6 +594,9 @@ void init_triton_ir(py::module &&m) {
       .def("get_uint32", &ir::type::get_uint32_ty, ret::reference)
       .def("get_uint64", &ir::type::get_uint64_ty, ret::reference)
 
+      .def("get_block_shapes", &ir::type::get_block_shapes)
+
+      .def("is_block", &ir::type::is_block_ty)
       .def("is_void", &ir::type::is_void_ty)
       .def("is_fp8", &ir::type::is_fp8_ty)
       .def("is_fp16", &ir::type::is_fp16_ty)

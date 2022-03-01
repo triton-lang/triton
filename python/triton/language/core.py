@@ -57,7 +57,7 @@ def _patch(fn):
 
 for name in dir(frontend):
     fn = getattr(frontend, name)
-    if callable(fn) and name[0] != "_":
+    if callable(fn) and "impl" not in name:
         setattr(frontend, name, _patch(fn))
 
 
@@ -487,7 +487,7 @@ def broadcast(input, other, _builder=None):
     :param other: The second input block.
     :type other: Block
     """
-    return frontend.broadcast(input, other, _builder)
+    return frontend.broadcast_impl(input, other, _builder)
 
 
 @builtin

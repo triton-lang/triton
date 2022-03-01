@@ -74,60 +74,61 @@ def computation_type(a_ty, b_ty, div_or_mod):
 #                               Binary Operators
 #===----------------------------------------------------------------------===//
 
-def check_ptr_type(type_a, type_b, allow_ptr_a):
-  if type_a.is_pointer_ty():
+def check_ptr_type_impl(type_a, type_b, allow_ptr_a):
+  if type_a.is_ptr():
     if not allow_ptr_a:
       raise IncompatibleTypeError(type_a, type_b)
     # T* + U* with T != U
-    if type_b.is_pointer_ty() and (type_a != type_b):
+    if type_b.is_ptr() and (type_a != type_b):
       raise IncompatibleTypeError(type_a, type_b)
     # T* + float
-    if type_b.is_floating_point_ty():
+    if type_b.is_floating():
       raise IncompatibleTypeError(type_a, type_b)
   
 
-def _binary_op_type_checking(lhs,  rhs,  builder,
+def binary_op_type_checking_impl(lhs,  rhs,  builder,
                             allow_lhs_ptr = False, allow_rhs_ptr = False,
                             arithmetic_check = True, div_or_mod = False):
   # implicit broadcasting
-  lhs, rhs = broadcast(lhs, rhs, builder)
+  lhs, rhs = broadcast_impl(lhs, rhs, builder)
   # implicit typecasting
-  lhs_sca_ty = lhs.get_type().get_scalar_ty()
-  rhs_sca_ty = rhs.get_type().get_scalar_ty()
-  check_ptr_type(lhs_sca_ty, rhs_sca_ty, allow_lhs_ptr)
-  check_ptr_type(rhs_sca_ty, lhs_sca_ty, allow_rhs_ptr)
-  if arithmetic_check and not lhs_sca_ty.is_pointer_ty() and not rhs_sca_ty.is_pointer_ty():
+  lhs_sca_ty = lhs.type.scalar
+  rhs_sca_ty = rhs.type.scalar
+  check_ptr_type_impl(lhs_sca_ty, rhs_sca_ty, allow_lhs_ptr)
+  check_ptr_type_impl(rhs_sca_ty, lhs_sca_ty, allow_rhs_ptr)
+  if arithmetic_check and not lhs_sca_ty.is_ptr() and not rhs_sca_ty.is_pointer_ty():
     ret_sca_ty = computation_type(lhs_sca_ty, rhs_sca_ty, div_or_mod)
     lhs = cast(lhs, ret_sca_ty, builder)
     rhs = cast(rhs, ret_sca_ty, builder)
+  return lhs, rhs
   
 
 def add(input, other, builder):
-  _binary_op_type_checking(input, other, builder, True, True)
-  input_scalar_ty = input.get_type().get_scalar_ty()
-  other_scalar_ty = other.get_type().get_scalar_ty()
+  input, other = binary_op_type_checking_impl(input, other, builder, True, True)
+  input_scalar_ty = input.type.scalar
+  other_scalar_ty = other.type.scalar
   # offset + ptr
   # ptr + offset
-  if other_scalar_ty.is_pointer_ty() and not input_scalar_ty.is_pointer_ty():
+  if other_scalar_ty.is_ptr() and not input_scalar_ty.is_pointer_ty():
     input, other = other, input
-  if input_scalar_ty.is_pointer_ty():
+  if input_scalar_ty.is_ptr():
     return builder.create_gep(input, [other])
   # float + float
-  elif input_scalar_ty.is_floating_point_ty():
+  elif input_scalar_ty.is_floating():
     return builder.create_fadd(input, other)
-  # + int
+  # int + int
   elif input_scalar_ty.is_integer_ty():
     return builder.create_add(input, other)
   assert False
 
 def sub(input, other, builder):
-  _binary_op_type_checking(input, other, builder, True, False)
-  scalar_ty = input.get_type().get_scalar_ty()
+  input, other = binary_op_type_checking_impl(input, other, builder, True, False)
+  scalar_ty = input.type.scalar
   # ptr - offset
-  if scalar_ty.is_pointer_ty():
+  if scalar_ty.is_ptr():
     return builder.create_gep(input, [minus(other, builder)])
   # float + float
-  if scalar_ty.is_floating_point_ty():
+  if scalar_ty.is_floating():
     return builder.create_fsub(input, other)
   # + int
   elif scalar_ty.is_integer_ty():
@@ -135,25 +136,25 @@ def sub(input, other, builder):
   assert False
 
 def mul(input, other, builder):
-  _binary_op_type_checking(input, other, builder)
-  scalar_ty = input.get_type().get_scalar_ty()
+  input, other = binary_op_type_checking_impl(input, other, builder)
+  scalar_ty = input.type.scalar
   # float * float
-  if scalar_ty.is_floating_point_ty():
+  if scalar_ty.is_floating():
     return builder.create_fmul(input, other)
   # * int
   elif scalar_ty.is_integer_ty():
     return builder.create_mul(input, other)
   assert False
 
-def Truediv(input, other, builder):
-  _binary_op_type_checking(input, other, builder, False, False, True, True)
-  input_scalar_ty = input.get_type().get_scalar_ty()
-  other_scalar_ty = other.get_type().get_scalar_ty()
+def truediv(input, other, builder):
+  input, other = binary_op_type_checking_impl(input, other, builder, False, False, True, True)
+  input_scalar_ty = input.type.scalar
+  other_scalar_ty = other.type.scalar
   # float / int
-  if input_scalar_ty.is_floating_point_ty() and other_scalar_ty.is_integer_ty():
+  if input_scalar_ty.is_floating() and other_scalar_ty.is_integer_ty():
     other = cast(other, input_scalar_ty, builder)
   # / float
-  elif input_scalar_ty.is_integer_ty() and other_scalar_ty.is_floating_point_ty():
+  elif input_scalar_ty.is_integer_ty() and other_scalar_ty.is_floating():
     input = cast(input, other_scalar_ty, builder)
   # / (cast to float32)
   elif input_scalar_ty.is_integer_ty() and other_scalar_ty.is_integer_ty():
@@ -161,7 +162,7 @@ def Truediv(input, other, builder):
     other = cast(other, builder.get_float_ty(), builder)
   
   # float / float (cast to highest exponent type)
-  elif input_scalar_ty.is_floating_point_ty() and other_scalar_ty.is_floating_point_ty():
+  elif input_scalar_ty.is_floating() and other_scalar_ty.is_floating():
     if input_scalar_ty.get_fp_mantissa_width() > other_scalar_ty.get_fp_mantissa_width():
       other = cast(other, input_scalar_ty, builder)
     else:
@@ -173,9 +174,9 @@ def Truediv(input, other, builder):
   return builder.create_fdiv(input, other)
 
 def floordiv(input, other, builder):
-  _binary_op_type_checking(input, other, builder, False, False, True, True)
-  input_scalar_ty = input.get_type().get_scalar_ty()
-  other_scalar_ty = other.get_type().get_scalar_ty()
+  input, other = binary_op_type_checking_impl(input, other, builder, False, False, True, True)
+  input_scalar_ty = input.type.scalar
+  other_scalar_ty = other.type.scalar
   if input_scalar_ty.is_integer_ty() and other_scalar_ty.is_integer_ty():
     ret_ty = integer_promote(input_scalar_ty, other_scalar_ty)
     input = cast(input, ret_ty, builder)
@@ -189,22 +190,22 @@ def floordiv(input, other, builder):
   assert False
 
 def fdiv(input, other, ieee_rounding, builder):
-  input_scalar_ty = input.get_type().get_scalar_ty()
-  other_scalar_ty = other.get_type().get_scalar_ty()
-  if not input_scalar_ty.is_floating_point_ty() or not other_scalar_ty.is_floating_point_ty():
+  input_scalar_ty = input.type.scalar
+  other_scalar_ty = other.type.scalar
+  if not input_scalar_ty.is_floating() or not other_scalar_ty.is_floating():
     raise SemanticError("both operands of fdiv must have floating poscalar type")
-  _binary_op_type_checking(input, other, builder, False, False, False, True)
+  input, other = binary_op_type_checking_impl(input, other, builder, False, False, False, True)
   ret = builder.create_fdiv(input, other)
   if isinstance(ret, ir.binary_operator):
     ret.set_fdiv_ieee_rounding(ieee_rounding.get_value())
   return ret
 
 def mod(input, other, builder):
-  _binary_op_type_checking(input, other, builder, False, False, True, True)
-  scalar_ty = input.get_type().get_scalar_ty()
-  other_scalar_ty = other.get_type().get_scalar_ty()
+  input, other = binary_op_type_checking_impl(input, other, builder, False, False, True, True)
+  scalar_ty = input.type.scalar
+  other_scalar_ty = other.type.scalar
   # float % int
-  if scalar_ty.is_floating_point_ty():
+  if scalar_ty.is_floating():
     return builder.create_frem(input, other)
   # % int
   elif scalar_ty.is_integer_ty():
@@ -221,10 +222,10 @@ def mod(input, other, builder):
   assert False
 
 
-def bitwise_op_type_checking(input, other, builder):
-  _binary_op_type_checking(input, other, builder, False, False, False)
-  input_sca_ty = input.get_type().get_scalar_ty()
-  other_sca_ty = other.get_type().get_scalar_ty()
+def bitwise_op_type_checking_impl(input, other, builder):
+  input, other = binary_op_type_checking_impl(input, other, builder, False, False, False)
+  input_sca_ty = input.type.scalar
+  other_sca_ty = other.type.scalar
   if not input_sca_ty.is_integer_ty() or not other_sca_ty.is_integer_ty():
     raise SemanticError(input_sca_ty, other_sca_ty)
   ret_sca_ty = integer_promote(input_sca_ty, other_sca_ty)
@@ -234,26 +235,26 @@ def bitwise_op_type_checking(input, other, builder):
     other = cast(other, ret_sca_ty, builder)
 
 def and_(input, other, builder):
-  bitwise_op_type_checking(input, other, builder)
+  input, other = bitwise_op_type_checking_impl(input, other, builder)
   return builder.create_and(input, other)
 
 def or_(input, other, builder):
-  bitwise_op_type_checking(input, other, builder)
+  input, other = bitwise_op_type_checking_impl(input, other, builder)
   return builder.create_or(input, other)
 
 
 def xor_(input, other, builder):
-  bitwise_op_type_checking(input, other, builder)
+  input, other = bitwise_op_type_checking_impl(input, other, builder)
   return builder.create_xor(input, other)
 
 
 def lshr(input, other, builder):
-  bitwise_op_type_checking(input, other, builder)
+  input, other = bitwise_op_type_checking_impl(input, other, builder)
   return builder.create_lshr(input, other)
 
 
 def shl(input, other, builder):
-  bitwise_op_type_checking(input, other, builder)
+  input, other = bitwise_op_type_checking_impl(input, other, builder)
   return builder.create_shl(input, other)
 
 #===----------------------------------------------------------------------===//
@@ -264,15 +265,15 @@ def plus(input, ):
   return input
 
 def minus(input, builder):
-  input_sca_ty = input.get_type().get_scalar_ty()
-  if input_sca_ty.is_pointer_ty():
+  input_sca_ty = input.type.scalar
+  if input_sca_ty.is_ptr():
     raise SemanticError("wrong type argument to unary minus (" + input_sca_ty.repr() + ")")
   _0 = ir.constant.get_null_value(input_sca_ty)
   return sub(_0, input, builder)
 
 def invert(input, builder):
-  input_sca_ty = input.get_type().get_scalar_ty()
-  if input_sca_ty.is_pointer_ty() or input_sca_ty.is_floating_point_ty():
+  input_sca_ty = input.type.scalar
+  if input_sca_ty.is_ptr() or input_sca_ty.is_floating():
     raise SemanticError("wrong type argument to unary invert (" + input_sca_ty.repr() + ")")
   _1 = ir.constant.get_all_ones_value(input_sca_ty)
   return xor_(input, _1, builder)
@@ -283,10 +284,10 @@ def invert(input, builder):
 #===----------------------------------------------------------------------===//
 
 def greater_than(input, other, builder):
-  _binary_op_type_checking(input, other, builder)
-  scalar_ty = input.get_type().get_scalar_ty()
+  binary_op_type_checking_impl(input, other, builder)
+  scalar_ty = input.type.scalar
   # float > float
-  if scalar_ty.is_floating_point_ty():
+  if scalar_ty.is_floating():
     return builder.create_fcmpOGT(input, other)
   # > int
   elif scalar_ty.is_integer_ty():
@@ -299,10 +300,10 @@ def greater_than(input, other, builder):
   assert False
 
 def greater_equal(input, other, builder):
-  _binary_op_type_checking(input, other, builder)
-  scalar_ty = input.get_type().get_scalar_ty()
+  binary_op_type_checking_impl(input, other, builder)
+  scalar_ty = input.type.scalar
   # float >= float
-  if scalar_ty.is_floating_point_ty():
+  if scalar_ty.is_floating():
     return builder.create_fcmpOGE(input, other)
   # >= int
   elif scalar_ty.is_integer_ty():
@@ -315,10 +316,10 @@ def greater_equal(input, other, builder):
   assert False
 
 def less_than(input, other, builder):
-  _binary_op_type_checking(input, other, builder)
-  scalar_ty = input.get_type().get_scalar_ty()
+  binary_op_type_checking_impl(input, other, builder)
+  scalar_ty = input.type.scalar
   # float < float
-  if scalar_ty.is_floating_point_ty():
+  if scalar_ty.is_floating():
     return builder.create_fcmpOLT(input, other)
   # < int
   elif scalar_ty.is_integer_ty():
@@ -331,10 +332,10 @@ def less_than(input, other, builder):
   assert False
 
 def less_equal(input, other, builder):
-  _binary_op_type_checking(input, other, builder)
-  scalar_ty = input.get_type().get_scalar_ty()
+  binary_op_type_checking_impl(input, other, builder)
+  scalar_ty = input.type.scalar
   # float < float
-  if scalar_ty.is_floating_point_ty():
+  if scalar_ty.is_floating():
     return builder.create_fcmpOLE(input, other)
   # < int
   elif scalar_ty.is_integer_ty():
@@ -347,10 +348,10 @@ def less_equal(input, other, builder):
   assert False
 
 def equal(input, other, builder):
-  _binary_op_type_checking(input, other, builder)
-  scalar_ty = input.get_type().get_scalar_ty()
+  binary_op_type_checking_impl(input, other, builder)
+  scalar_ty = input.type.scalar
   # float == float
-  if scalar_ty.is_floating_point_ty():
+  if scalar_ty.is_floating():
     return builder.create_fcmpOEQ(input, other)
   # == int
   elif scalar_ty.is_integer_ty():
@@ -358,10 +359,10 @@ def equal(input, other, builder):
   assert False
 
 def not_equal(input, other, builder):
-  _binary_op_type_checking(input, other, builder)
-  scalar_ty = input.get_type().get_scalar_ty()
+  binary_op_type_checking_impl(input, other, builder)
+  scalar_ty = input.type.scalar
   # float == float
-  if scalar_ty.is_floating_point_ty():
+  if scalar_ty.is_floating():
     return builder.create_fcmpUNE(input, other)
   # == int
   elif scalar_ty.is_integer_ty():
@@ -388,35 +389,35 @@ def reshape(input, dst_shape, builder):
   numel = 1
   for s in dst_shape: 
     numel *= s
-  if input.get_type().get_tile_num_elements() != numel:
+  if input.type.get_tile_num_elements() != numel:
     raise SemanticError("cannot reshape block of different shape")
   return builder.create_reshape(input, dst_shape)
 
 def cat(lhs, rhs, builder):
   return builder.create_cat(lhs, rhs)
 
-def broadcast(input, shape, builder):
-  if not input.get_type().is_block_ty():
+def broadcast_impl(input, shape, builder):
+  if not input.type.is_block():
     return builder.create_splat(input, shape)
-  src_shape = input.get_type().get_block_shapes()
+  src_shape = input.type.get_block_shapes()
   if src_shape.size() != shape.size():
     raise SemanticError("Cannot broadcast")
   if shape == src_shape:
     return input
   return builder.create_broadcast(input, shape)
 
-def broadcast(lhs,  rhs, builder):
-  lhs_ty = lhs.get_type()
-  rhs_ty = rhs.get_type()
+def broadcast_impl(lhs,  rhs, builder):
+  lhs_ty = lhs.type
+  rhs_ty = rhs.type
 
   # make_shape_compatible(block, scalar)
-  if lhs_ty.is_block_ty() and not rhs_ty.is_block_ty():
+  if lhs_ty.is_block() and not rhs_ty.is_block():
     rhs = builder.create_splat(rhs, lhs_ty.get_block_shapes())
   # make_shape_compatible(scalar, block)
-  elif not lhs_ty.is_block_ty() and rhs_ty.is_block_ty():
+  elif not lhs_ty.is_block() and rhs_ty.is_block():
     lhs = builder.create_splat(lhs, rhs_ty.get_block_shapes())
   # make_shape_compatible(block, block)
-  elif lhs_ty.is_block_ty() and rhs_ty.is_block_ty():
+  elif lhs_ty.is_block() and rhs_ty.is_block():
     lhs_shape = lhs_ty.get_block_shapes()
     rhs_shape = rhs_ty.get_block_shapes()
     if lhs_shape.size() != rhs_shape.size():
@@ -441,14 +442,14 @@ def broadcast(lhs,  rhs, builder):
   return lhs, rhs
 
 def bitcast(input, dst_ty, builder):
-  src_ty = input.get_type()
-  if src_ty.is_block_ty():
-    dst_ty = ir.block_type.get(dst_ty, input.get_type().get_block_shapes())
+  src_ty = input.type
+  if src_ty.is_block():
+    dst_ty = ir.block_type.get(dst_ty, input.type.get_block_shapes())
   if src_ty == dst_ty:
     return input
-  src_sca_ty = src_ty.get_scalar_ty()
-  dst_sca_ty = dst_ty.get_scalar_ty()
-  if src_sca_ty.is_pointer_ty() or dst_sca_ty.is_pointer_ty():
+  src_sca_ty = src_ty.scalar
+  dst_sca_ty = dst_ty.scalar
+  if src_sca_ty.is_ptr() or dst_sca_ty.is_pointer_ty():
     return cast(input, dst_ty, builder)
   # Bitcast
   src_bits = src_sca_ty.get_primitive_size_in_bits()
@@ -459,27 +460,27 @@ def bitcast(input, dst_ty, builder):
   return builder.create_cast(ir.BitCast, input, dst_ty)
 
 def cast(input, dst_ty, builder):
-  src_ty = input.get_type()
-  if src_ty.is_block_ty():
-    dst_ty = ir.block_type.get(dst_ty, input.get_type().get_block_shapes())
+  src_ty = input.type
+  if src_ty.is_block():
+    dst_ty = ir.block_type.get(dst_ty, input.type.get_block_shapes())
   if src_ty == dst_ty:
     return input
-  src_sca_ty = src_ty.get_scalar_ty()
-  dst_sca_ty = dst_ty.get_scalar_ty()
+  src_sca_ty = src_ty.scalar
+  dst_sca_ty = dst_ty.scalar
   #
   if (src_sca_ty.is_bf16_ty() and not dst_sca_ty.is_fp32_ty()) or\
      (dst_sca_ty.is_bf16_ty() and not src_sca_ty.is_fp32_ty()):
     return cast(cast(input, builder.get_float_ty(), builder), dst_sca_ty, builder)
   
   # FP Truncation
-  truncate_fp = src_sca_ty.is_floating_point_ty() and\
-                dst_sca_ty.is_floating_point_ty() and\
+  truncate_fp = src_sca_ty.is_floating() and\
+                dst_sca_ty.is_floating() and\
                 src_sca_ty.get_fp_mantissa_width() > dst_sca_ty.get_fp_mantissa_width()
   if truncate_fp:
     return builder.create_fp_trunc(input, dst_ty)
   # FP Extension
-  ext_fp = src_sca_ty.is_floating_point_ty() and\
-                dst_sca_ty.is_floating_point_ty() and\
+  ext_fp = src_sca_ty.is_floating() and\
+                dst_sca_ty.is_floating() and\
                 src_sca_ty.get_fp_mantissa_width() < dst_sca_ty.get_fp_mantissa_width()
   if ext_fp:
     return builder.create_fp_ext(input, dst_ty)
@@ -492,20 +493,20 @@ def cast(input, dst_ty, builder):
     return builder.create_int_cast(input, dst_ty, sign_extend)
   
   # Float to Int
-  if src_sca_ty.is_floating_point_ty() and dst_sca_ty.is_integer_ty():
+  if src_sca_ty.is_floating() and dst_sca_ty.is_integer_ty():
     if dst_sca_ty.is_bool_ty():
       return builder.create_fp_to_ui(input, dst_ty)
     else:
       return builder.create_fp_to_si(input, dst_ty)
   
   # . Float
-  if src_sca_ty.is_integer_ty() and dst_sca_ty.is_floating_point_ty():
+  if src_sca_ty.is_integer_ty() and dst_sca_ty.is_floating():
     if src_sca_ty.is_bool_ty() or not src_sca_ty.is_integer_signed():
       return builder.create_ui_to_fp(input, dst_ty)
     else:
       return builder.create_si_to_fp(input, dst_ty)
   
-  if src_sca_ty.is_pointer_ty() and dst_sca_ty.is_integer_ty():
+  if src_sca_ty.is_ptr() and dst_sca_ty.is_integer_ty():
     bitwidth = dst_sca_ty.get_integer_bitwidth()
     if bitwidth == 64:
       return builder.create_cast(ir.PtrToInt, input, dst_ty)
@@ -514,14 +515,14 @@ def cast(input, dst_ty, builder):
                                  builder.get_int64(0),
                                  builder)
   
-  if not src_sca_ty.is_pointer_ty() and dst_sca_ty.is_pointer_ty():
+  if not src_sca_ty.is_ptr() and dst_sca_ty.is_pointer_ty():
     return builder.create_cast(ir.IntToPtr, input, dst_ty)
   # Ptr . Ptr
-  if src_sca_ty.is_pointer_ty() and dst_sca_ty.is_pointer_ty():
+  if src_sca_ty.is_ptr() and dst_sca_ty.is_pointer_ty():
     return builder.create_cast(ir.BitCast, input, dst_ty)
   # * . Bool
   if dst_sca_ty.is_bool_ty():
-    if src_sca_ty.is_pointer_ty():
+    if src_sca_ty.is_ptr():
       input = cast(input, builder.get_int64_ty(), builder)
     other = builder.get_int64(0)
     if src_ty.is_bool_ty():
@@ -535,18 +536,18 @@ def cast(input, dst_ty, builder):
 #===----------------------------------------------------------------------===//
 
 def load( ptr,  mask,  other, cache_modifier, eviction_policy, is_volatile,  builder):
-  if not ptr.get_type().get_scalar_ty().is_pointer_ty():
-    raise SemanticError("Pointer argument of load instruction is " + ptr.get_type().repr())
-  if ptr.get_type().is_block_ty():
+  if not ptr.type.scalar.is_ptr():
+    raise SemanticError("Pointer argument of load instruction is " + ptr.type.repr())
+  if ptr.type.is_block():
     if mask:
-      mask = broadcast(mask, ptr.get_type().get_block_shapes(), builder)
+      mask = broadcast_impl(mask, ptr.type.get_block_shapes(), builder)
     if other:
-      other = broadcast(other, ptr.get_type().get_block_shapes(), builder)
+      other = broadcast_impl(other, ptr.type.get_block_shapes(), builder)
   
   if other:
-    other = cast(other, ptr.get_type().get_scalar_ty().get_pointer_element_ty(), builder)
-  ptr_ty = ptr.get_type().get_scalar_ty()
-  elt_ty = ptr_ty.get_pointer_element_ty()
+    other = cast(other, ptr.type.scalar.element, builder)
+  ptr_ty = ptr.type.scalar
+  elt_ty = ptr_ty.element
   # treat bool* as int8*
   if elt_ty == builder.get_int1_ty():
     elt_ty = builder.get_int8_ty()
@@ -578,23 +579,23 @@ def load( ptr,  mask,  other, cache_modifier, eviction_policy, is_volatile,  bui
     return builder.create_load(ptr, cache, eviction, is_volatile)
   if not mask:
     raise SemanticError("`other` cannot be provided without `mask`")
-  shape = ptr.get_type().get_block_shapes()
+  shape = ptr.type.get_block_shapes()
   if not other:
     other = ir.undef_value.get(elt_ty)
-    if ptr.get_type().is_block_ty():
-      other = builder.create_splat(other, ptr.get_type().get_block_shapes())
+    if ptr.type.is_block():
+      other = builder.create_splat(other, ptr.type.get_block_shapes())
   
   return builder.create_masked_load(ptr, mask, other, cache, eviction, is_volatile)
 
 def store( ptr, val,  mask, builder):
-  if not ptr.get_type().get_scalar_ty().is_pointer_ty():
-    raise SemanticError("Pointer argument of store instruction is " + ptr.get_type().repr())
-  if ptr.get_type().is_block_ty():
-    val = broadcast(val, ptr.get_type().get_block_shapes(), builder)
+  if not ptr.type.scalar.is_ptr():
+    raise SemanticError("Pointer argument of store instruction is " + ptr.type.repr())
+  if ptr.type.is_block():
+    val = broadcast_impl(val, ptr.type.get_block_shapes(), builder)
   if mask:
-    mask = broadcast(mask, ptr.get_type().get_block_shapes(), builder)
-  ptr_ty = ptr.get_type().get_scalar_ty()
-  elt_ty = ptr_ty.get_pointer_element_ty()
+    mask = broadcast_impl(mask, ptr.type.get_block_shapes(), builder)
+  ptr_ty = ptr.type.scalar
+  elt_ty = ptr_ty.element
   # treat bool* as int8*
   if elt_ty == builder.get_int1_ty():
     elt_ty = builder.get_int8_ty()
@@ -605,7 +606,7 @@ def store( ptr, val,  mask, builder):
   val = cast(val, elt_ty, builder)
   if not mask:
     return builder.create_store(ptr, val)
-  if not mask.get_type().get_scalar_ty().is_bool_ty():
+  if not mask.type.scalar.is_bool_ty():
     raise SemanticError("Mask must have boolean scalar type")
   return builder.create_masked_store(ptr, val, mask)
 
@@ -613,26 +614,26 @@ def atomic_cas( ptr, cmp, val, builder):
   return builder.create_atomic_cas(ptr, cmp, val)
 
 def atom_red_typechecking( ptr, val, mask, builder):
-  if not ptr.get_type().get_scalar_ty().is_pointer_ty():
-    raise SemanticError("Pointer argument of store instruction is " + ptr.get_type().repr())
-  if ptr.get_type().is_block_ty():
+  if not ptr.type.scalar.is_ptr():
+    raise SemanticError("Pointer argument of store instruction is " + ptr.type.repr())
+  if ptr.type.is_block():
     if mask:
-      mask = broadcast(mask, ptr.get_type().get_block_shapes(), builder)
+      mask = broadcast_impl(mask, ptr.type.get_block_shapes(), builder)
     
     if val:
-      val = broadcast(val, ptr.get_type().get_block_shapes(), builder)
+      val = broadcast_impl(val, ptr.type.get_block_shapes(), builder)
     
   
-  val = cast(val, ptr.get_type().get_scalar_ty().get_pointer_element_ty(), builder)
+  val = cast(val, ptr.type.scalar.element, builder)
   if not mask:
     mask = builder.get_int1(True)
-    if ptr.get_type().is_block_ty():
-      mask = builder.create_splat(mask, ptr.get_type().get_block_shapes())
+    if ptr.type.is_block():
+      mask = builder.create_splat(mask, ptr.type.get_block_shapes())
   
 
 def atomic_max( ptr, val, mask, builder):
   atom_red_typechecking(ptr, val, mask, builder)
-  sca_ty = val.get_type().get_scalar_ty()
+  sca_ty = val.type.scalar
   # direct call to atomic_max for integers
   if sca_ty.is_integer_ty():
     if sca_ty.is_integer_signed():
@@ -654,7 +655,7 @@ def atomic_max( ptr, val, mask, builder):
 
 def atomic_min( ptr, val, mask, builder):
   atom_red_typechecking(ptr, val, mask, builder)
-  sca_ty = val.get_type().get_scalar_ty()
+  sca_ty = val.type.scalar
   # direct call to atomic_min for integers
   if sca_ty.is_integer_ty():
     if sca_ty.is_integer_signed():
@@ -676,8 +677,8 @@ def atomic_min( ptr, val, mask, builder):
 
 def atomic_add( ptr, val, mask, builder):
   atom_red_typechecking(ptr, val, mask, builder)
-  sca_ty = val.get_type().get_scalar_ty()
-  op = ir.atomic_rmw_op_t.FAdd if sca_ty.is_floating_point_ty() else ir.atomic_rmw_op_t.Add
+  sca_ty = val.type.scalar
+  op = ir.atomic_rmw_op_t.FAdd if sca_ty.is_floating() else ir.atomic_rmw_op_t.Add
   return builder.create_atomic_rmw(op, ptr, val, mask)
 
 def atomic_and( ptr, val, mask, builder):
@@ -694,7 +695,7 @@ def atomic_xor( ptr, val, mask, builder):
 
 def atomic_xchg( ptr, val, mask, builder):
   atom_red_typechecking(ptr, val, mask, builder)
-  sca_ty = val.get_type().get_scalar_ty()
+  sca_ty = val.type.scalar
   return builder.create_atomic_rmw(ir.atomic_rmw_op_t.Xchg, ptr, val, mask)
 
 #===----------------------------------------------------------------------===//
@@ -703,12 +704,12 @@ def atomic_xchg( ptr, val, mask, builder):
 
 def dot(lhs, rhs, allow_tf32, builder):
   _0 = None
-  if lhs.get_type().is_int_or_tileint_ty():
+  if lhs.type.is_int_or_tileint_ty():
     _0 = builder.get_int32(0)
   else:
     _0 = builder.get_float32(0)
-  M = lhs.get_type().get_block_shapes()[0]
-  N = rhs.get_type().get_block_shapes()[1]
+  M = lhs.type.get_block_shapes()[0]
+  N = rhs.type.get_block_shapes()[1]
   _0 = builder.create_splat(_0, [M, N])
   _allow_tf32 = allow_tf32.get_value() != 0
   return builder.create_dot(lhs, rhs, _0, _allow_tf32)
@@ -720,12 +721,12 @@ def dot(lhs, rhs, allow_tf32, builder):
 
 def where( condition, x, y, builder):
   condition = cast(condition, builder.get_int1_ty(), builder)
-  if condition.get_type().is_block_ty():
-    x = broadcast(x, condition.get_type().get_block_shapes(), builder)
-    y = broadcast(y, condition.get_type().get_block_shapes(), builder)
+  if condition.type.is_block():
+    x = broadcast_impl(x, condition.type.get_block_shapes(), builder)
+    y = broadcast_impl(y, condition.type.get_block_shapes(), builder)
   
-  x_ty = x.get_type().get_scalar_ty()
-  y_ty = y.get_type().get_scalar_ty()
+  x_ty = x.type.scalar
+  y_ty = y.type.scalar
   ty = computation_type(x_ty, y_ty, div_or_mod=False)
   x = cast(x, ty, builder)
   y = cast(y, ty, builder)
@@ -738,13 +739,13 @@ def where( condition, x, y, builder):
 
 def reduce_impl(input, axis, builder, name,
                 FLOAT_OP, INT_OP):
-  scalar_ty = input.get_type().get_scalar_ty()
+  scalar_ty = input.type.scalar
   # input is extended to 32-bits if necessary
   # this increases numerical accuracy and can be done pretty much for free
   # on GPUs
   if scalar_ty.is_integer_ty() and scalar_ty.get_integer_bitwidth() <= 32:
     input = cast(input, ir.type.get_int32_ty(scalar_ty.get_context()), builder)
-  if scalar_ty.is_floating_point_ty():
+  if scalar_ty.is_floating():
     return builder.create_reduce(input, FLOAT_OP, axis)
   elif scalar_ty.is_integer_ty():
     return builder.create_reduce(input, INT_OP, axis)
@@ -760,7 +761,7 @@ def sum(input, axis, builder):
   return reduce_impl(input, axis, builder, "sum", ir.reduce_inst.FADD, ir.reduce_inst.ADD)
 
 def xor_sum(input, axis, builder):
-  scalar_ty = input.get_type().get_scalar_ty()
+  scalar_ty = input.type.scalar
   if not scalar_ty.is_integer_ty():
     raise SemanticError("xor_sum only supported for integers")
   return reduce_impl(input, axis, builder, "sum", ir.reduce_inst.XOR, ir.reduce_inst.XOR)
@@ -771,7 +772,7 @@ def xor_sum(input, axis, builder):
 #===----------------------------------------------------------------------===//
 
 def umulhi(x,  y, builder):
-  _binary_op_type_checking(x, y, builder)
+  binary_op_type_checking_impl(x, y, builder)
   return builder.insert(ir.umulhi_inst.create(x, y))
 
 def exp(x, builder):
