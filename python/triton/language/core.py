@@ -743,10 +743,12 @@ def cos(x, _builder=None):
 def sin(x, _builder=None):
     return frontend.sin(x, _builder)
 
+
 @builtin
 @_add_math_1arg_docstr("hyperbolic tangent")
 def tanh(x, _builder=None):
     return frontend.tanh(x, _builder)
+
 
 @builtin
 @_add_math_1arg_docstr("square root")
