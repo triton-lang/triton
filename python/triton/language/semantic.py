@@ -1,4 +1,4 @@
-from triton._C.libtriton.triton import frontend, ir
+from triton._C.libtriton.triton import ir
 
 class SemanticError(Exception):
     pass
@@ -86,7 +86,7 @@ def check_ptr_type(type_a, type_b, allow_ptr_a):
       raise IncompatibleTypeError(type_a, type_b)
   
 
-def binary_op_type_checking(lhs,  rhs,  builder,
+def _binary_op_type_checking(lhs,  rhs,  builder,
                             allow_lhs_ptr = False, allow_rhs_ptr = False,
                             arithmetic_check = True, div_or_mod = False):
   # implicit broadcasting
@@ -103,7 +103,7 @@ def binary_op_type_checking(lhs,  rhs,  builder,
   
 
 def add(input, other, builder):
-  binary_op_type_checking(input, other, builder, True, True)
+  _binary_op_type_checking(input, other, builder, True, True)
   input_scalar_ty = input.get_type().get_scalar_ty()
   other_scalar_ty = other.get_type().get_scalar_ty()
   # offset + ptr
@@ -121,7 +121,7 @@ def add(input, other, builder):
   assert False
 
 def sub(input, other, builder):
-  binary_op_type_checking(input, other, builder, True, False)
+  _binary_op_type_checking(input, other, builder, True, False)
   scalar_ty = input.get_type().get_scalar_ty()
   # ptr - offset
   if scalar_ty.is_pointer_ty():
@@ -135,7 +135,7 @@ def sub(input, other, builder):
   assert False
 
 def mul(input, other, builder):
-  binary_op_type_checking(input, other, builder)
+  _binary_op_type_checking(input, other, builder)
   scalar_ty = input.get_type().get_scalar_ty()
   # float * float
   if scalar_ty.is_floating_point_ty():
@@ -146,7 +146,7 @@ def mul(input, other, builder):
   assert False
 
 def Truediv(input, other, builder):
-  binary_op_type_checking(input, other, builder, False, False, True, True)
+  _binary_op_type_checking(input, other, builder, False, False, True, True)
   input_scalar_ty = input.get_type().get_scalar_ty()
   other_scalar_ty = other.get_type().get_scalar_ty()
   # float / int
@@ -173,7 +173,7 @@ def Truediv(input, other, builder):
   return builder.create_fdiv(input, other)
 
 def floordiv(input, other, builder):
-  binary_op_type_checking(input, other, builder, False, False, True, True)
+  _binary_op_type_checking(input, other, builder, False, False, True, True)
   input_scalar_ty = input.get_type().get_scalar_ty()
   other_scalar_ty = other.get_type().get_scalar_ty()
   if input_scalar_ty.is_integer_ty() and other_scalar_ty.is_integer_ty():
@@ -193,14 +193,14 @@ def fdiv(input, other, ieee_rounding, builder):
   other_scalar_ty = other.get_type().get_scalar_ty()
   if not input_scalar_ty.is_floating_point_ty() or not other_scalar_ty.is_floating_point_ty():
     raise SemanticError("both operands of fdiv must have floating poscalar type")
-  binary_op_type_checking(input, other, builder, False, False, False, True)
+  _binary_op_type_checking(input, other, builder, False, False, False, True)
   ret = builder.create_fdiv(input, other)
   if isinstance(ret, ir.binary_operator):
     ret.set_fdiv_ieee_rounding(ieee_rounding.get_value())
   return ret
 
 def mod(input, other, builder):
-  binary_op_type_checking(input, other, builder, False, False, True, True)
+  _binary_op_type_checking(input, other, builder, False, False, True, True)
   scalar_ty = input.get_type().get_scalar_ty()
   other_scalar_ty = other.get_type().get_scalar_ty()
   # float % int
@@ -222,11 +222,11 @@ def mod(input, other, builder):
 
 
 def bitwise_op_type_checking(input, other, builder):
-  binary_op_type_checking(input, other, builder, False, False, False)
+  _binary_op_type_checking(input, other, builder, False, False, False)
   input_sca_ty = input.get_type().get_scalar_ty()
   other_sca_ty = other.get_type().get_scalar_ty()
   if not input_sca_ty.is_integer_ty() or not other_sca_ty.is_integer_ty():
-    throw_incompatible_types(input_sca_ty, other_sca_ty)
+    raise SemanticError(input_sca_ty, other_sca_ty)
   ret_sca_ty = integer_promote(input_sca_ty, other_sca_ty)
   if ret_sca_ty != input_sca_ty:
     input = cast(input, ret_sca_ty, builder)
@@ -283,7 +283,7 @@ def invert(input, builder):
 #===----------------------------------------------------------------------===//
 
 def greater_than(input, other, builder):
-  binary_op_type_checking(input, other, builder)
+  _binary_op_type_checking(input, other, builder)
   scalar_ty = input.get_type().get_scalar_ty()
   # float > float
   if scalar_ty.is_floating_point_ty():
@@ -299,7 +299,7 @@ def greater_than(input, other, builder):
   assert False
 
 def greater_equal(input, other, builder):
-  binary_op_type_checking(input, other, builder)
+  _binary_op_type_checking(input, other, builder)
   scalar_ty = input.get_type().get_scalar_ty()
   # float >= float
   if scalar_ty.is_floating_point_ty():
@@ -315,7 +315,7 @@ def greater_equal(input, other, builder):
   assert False
 
 def less_than(input, other, builder):
-  binary_op_type_checking(input, other, builder)
+  _binary_op_type_checking(input, other, builder)
   scalar_ty = input.get_type().get_scalar_ty()
   # float < float
   if scalar_ty.is_floating_point_ty():
@@ -331,7 +331,7 @@ def less_than(input, other, builder):
   assert False
 
 def less_equal(input, other, builder):
-  binary_op_type_checking(input, other, builder)
+  _binary_op_type_checking(input, other, builder)
   scalar_ty = input.get_type().get_scalar_ty()
   # float < float
   if scalar_ty.is_floating_point_ty():
@@ -347,7 +347,7 @@ def less_equal(input, other, builder):
   assert False
 
 def equal(input, other, builder):
-  binary_op_type_checking(input, other, builder)
+  _binary_op_type_checking(input, other, builder)
   scalar_ty = input.get_type().get_scalar_ty()
   # float == float
   if scalar_ty.is_floating_point_ty():
@@ -358,7 +358,7 @@ def equal(input, other, builder):
   assert False
 
 def not_equal(input, other, builder):
-  binary_op_type_checking(input, other, builder)
+  _binary_op_type_checking(input, other, builder)
   scalar_ty = input.get_type().get_scalar_ty()
   # float == float
   if scalar_ty.is_floating_point_ty():
@@ -550,26 +550,26 @@ def load( ptr,  mask,  other, cache_modifier, eviction_policy, is_volatile,  bui
   # treat bool* as int8*
   if elt_ty == builder.get_int1_ty():
     elt_ty = builder.get_int8_ty()
-    ptr_ty = pointer_ir.type.get(elt_ty, ptr_ty.get_pointer_address_space())
+    ptr_ty = ir.pointer_type.get(elt_ty, ptr_ty.get_pointer_address_space())
     ptr = cast(ptr, ptr_ty, builder)
   
   # cache modifier
   cache = ir.load_inst.NONE; # default
   if not cache_modifier.empty():
     if cache_modifier == ".ca":
-      cache = load_inst.CA
+      cache = ir.load_inst.CA
     elif cache_modifier == ".cg":
-      cache = load_inst.CG
+      cache = ir.load_inst.CG
     else:
       raise SemanticError(f"Cache modifier {cache_modifier} not supported")
   
   # eviction policy
-  eviction = load_inst.NORMAL; #default
+  eviction = ir.load_inst.NORMAL; #default
   if not eviction_policy.empty():
     if eviction_policy == "evict_last":
-        eviction = load_inst.EVICT_LAST
+        eviction = ir.load_inst.EVICT_LAST
     elif eviction_policy == "evict_first":
-        eviction = load_inst.EVICT_FIRST
+        eviction = ir.load_inst.EVICT_FIRST
     else:
         raise SemanticError(f"Eviction policy {eviction_policy} not supported")
 
@@ -598,7 +598,7 @@ def store( ptr, val,  mask, builder):
   # treat bool* as int8*
   if elt_ty == builder.get_int1_ty():
     elt_ty = builder.get_int8_ty()
-    ptr_ty = pointer_ir.type.get(elt_ty, ptr_ty.get_pointer_address_space())
+    ptr_ty = ir.pointer_type.get(elt_ty, ptr_ty.get_pointer_address_space())
     ptr = cast(ptr, ptr_ty, builder)
   
   # cast to target data-type
@@ -645,9 +645,9 @@ def atomic_max( ptr, val, mask, builder):
   # return atomic_smax(i_ptr, i_val) if val >= 0
   # return atomic_umin(i_ptr, i_val) if val < 0
   i_val = bitcast(val, builder.get_int32_ty(), builder)
-  i_ptr = bitcast(ptr, pointer_ir.type.get(builder.get_int32_ty(), 1), builder)
-  pos = greater_equal(val, constant_fp.get(sca_ty, 0), builder)
-  neg = less_than(val, constant_fp.get(sca_ty, 0), builder)
+  i_ptr = bitcast(ptr, ir.pointer_type.get(builder.get_int32_ty(), 1), builder)
+  pos = greater_equal(val, ir.constant_fp.get(sca_ty, 0), builder)
+  neg = less_than(val, ir.constant_fp.get(sca_ty, 0), builder)
   pos_ret = builder.create_atomic_rmw(ir.atomic_rmw_op_t.Max, i_ptr, i_val, and_(mask, pos, builder))
   neg_ret = builder.create_atomic_rmw(ir.atomic_rmw_op_t.UMin, i_ptr, i_val, and_(mask, neg, builder))
   return where(pos, pos_ret, neg_ret, builder)
@@ -667,9 +667,9 @@ def atomic_min( ptr, val, mask, builder):
   # return atomic_smin(i_ptr, i_val) if val >= 0
   # return atomic_umax(i_ptr, i_val) if val < 0
   i_val = bitcast(val, builder.get_int32_ty(), builder)
-  i_ptr = bitcast(ptr, pointer_ir.type.get(builder.get_int32_ty(), 1), builder)
-  pos = greater_equal(val, constant_fp.get(sca_ty, 0), builder)
-  neg = less_than(val, constant_fp.get(sca_ty, 0), builder)
+  i_ptr = bitcast(ptr, ir.pointer_type.get(builder.get_int32_ty(), 1), builder)
+  pos = greater_equal(val, ir.constant_fp.get(sca_ty, 0), builder)
+  neg = less_than(val, ir.constant_fp.get(sca_ty, 0), builder)
   pos_ret = builder.create_atomic_rmw(ir.atomic_rmw_op_t.Min, i_ptr, i_val, and_(mask, pos, builder))
   neg_ret = builder.create_atomic_rmw(ir.atomic_rmw_op_t.UMax, i_ptr, i_val, and_(mask, neg, builder))
   return where(pos, pos_ret, neg_ret, builder)
@@ -771,8 +771,8 @@ def xor_sum(input, axis, builder):
 #===----------------------------------------------------------------------===//
 
 def umulhi(x,  y, builder):
-  binary_op_type_checking(x, y, builder)
-  return builder.insert(umulhi_inst.create(x, y))
+  _binary_op_type_checking(x, y, builder)
+  return builder.insert(ir.umulhi_inst.create(x, y))
 
 def exp(x, builder):
   return builder.create_exp(x)

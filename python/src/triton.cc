@@ -536,84 +536,6 @@ void init_triton_codegen(py::module &&m) {
       }, py::return_value_policy::take_ownership);
 }
 
-/*****************************************************************************/
-/* User-facing language features                                             */
-/*****************************************************************************/
-
-void init_triton_frontend(py::module &&m) {
-  using ret = py::return_value_policy;
-
-  // programming model
-  m.def("program_id", &ir::dispatch::program_id, ret::reference);
-  m.def("num_programs", &ir::dispatch::num_programs, ret::reference);
-  // binary
-  m.def("add", &ir::dispatch::add, ret::reference);
-  m.def("sub", &ir::dispatch::sub, ret::reference);
-  m.def("mul", &ir::dispatch::mul, ret::reference);
-  m.def("truediv", &ir::dispatch::truediv, ret::reference);
-  m.def("floordiv", &ir::dispatch::floordiv, ret::reference);
-  m.def("fdiv", &ir::dispatch::fdiv, ret::reference);
-  m.def("mod", &ir::dispatch::mod, ret::reference);
-  m.def("and_", &ir::dispatch::and_, ret::reference);
-  m.def("or_", &ir::dispatch::or_, ret::reference);
-  m.def("xor_", &ir::dispatch::xor_, ret::reference);
-  m.def("lshr", &ir::dispatch::lshr, ret::reference);
-  m.def("shl", &ir::dispatch::shl, ret::reference);
-  // unary
-  m.def("plus", &ir::dispatch::plus, ret::reference);
-  m.def("minus", &ir::dispatch::minus, ret::reference);
-  m.def("invert", &ir::dispatch::invert, ret::reference);
-  // comparison
-  m.def("greater_than", &ir::dispatch::greater_than, ret::reference);
-  m.def("greater_equal", &ir::dispatch::greater_equal, ret::reference);
-  m.def("less_than", &ir::dispatch::less_than, ret::reference);
-  m.def("less_equal", &ir::dispatch::less_equal, ret::reference);
-  m.def("equal", &ir::dispatch::equal, ret::reference);
-  m.def("not_equal", &ir::dispatch::not_equal, ret::reference);
-  // block creation
-  m.def("arange", &ir::dispatch::arange, ret::reference);
-  m.def("zeros", &ir::dispatch::zeros, ret::reference);
-  // type manipuatation
-  m.def("cat", &ir::dispatch::cat, ret::reference);
-  m.def("reshape", &ir::dispatch::reshape, ret::reference);
-  typedef std::tuple<ir::value *, ir::value *> (*broadcast_ty)(ir::value *, ir::value *, ir::builder *);
-  typedef ir::value *(*broadcast_to_ty)(ir::value *, ir::type::block_shapes_t, ir::builder *);
-  m.def("broadcast", (broadcast_ty)(&ir::dispatch::broadcast), ret::reference);
-  m.def("broadcast_to", (broadcast_to_ty)(&ir::dispatch::broadcast), ret::reference);
-  m.def("bitcast", &ir::dispatch::bitcast, ret::reference);
-  m.def("cast", &ir::dispatch::cast, ret::reference);
-  // memory
-  m.def("load", &ir::dispatch::load, ret::reference);
-  m.def("store", &ir::dispatch::store, ret::reference);
-  m.def("atomic_cas", &ir::dispatch::atomic_cas, ret::reference);
-  m.def("atomic_xchg", &ir::dispatch::atomic_xchg, ret::reference);
-  m.def("atomic_add", &ir::dispatch::atomic_add, ret::reference);
-  m.def("atomic_max", &ir::dispatch::atomic_max, ret::reference);
-  m.def("atomic_min", &ir::dispatch::atomic_min, ret::reference);
-  m.def("atomic_and", &ir::dispatch::atomic_and, ret::reference);
-  m.def("atomic_or", &ir::dispatch::atomic_or, ret::reference);
-  m.def("atomic_xor", &ir::dispatch::atomic_xor, ret::reference);
-  // linear algebra
-  m.def("dot", &ir::dispatch::dot, ret::reference);
-  // indexing
-  m.def("where", &ir::dispatch::where, ret::reference);
-  // reduction
-  m.def("min", &ir::dispatch::min, ret::reference);
-  m.def("max", &ir::dispatch::max, ret::reference);
-  m.def("sum", &ir::dispatch::sum, ret::reference);
-  m.def("xor_sum", &ir::dispatch::xor_sum, ret::reference);
-  // math
-  m.def("umulhi", &ir::dispatch::umulhi, ret::reference);
-  m.def("exp", &ir::dispatch::exp, ret::reference);
-  m.def("log", &ir::dispatch::log, ret::reference);
-  m.def("cos", &ir::dispatch::cos, ret::reference);
-  m.def("sin", &ir::dispatch::sin, ret::reference);
-  m.def("sqrt", &ir::dispatch::sqrt, ret::reference);
-  // internal (debugging only)
-  m.def("multiple_of", &ir::dispatch::multiple_of, ret::reference);
-  m.def("max_contiguous", &ir::dispatch::max_contiguous, ret::reference);
-  m.def("debug_barrier", &ir::dispatch::debug_barrier, ret::reference);
-}
 
 /*****************************************************************************/
 /* Python bindings for triton::ir                                            */
@@ -885,5 +807,4 @@ void init_triton(py::module &m) {
   init_triton_codegen(std::move(subm.def_submodule("code_gen")));
   init_triton_runtime(std::move(subm.def_submodule("runtime")));
   init_triton_ir(std::move(subm.def_submodule("ir")));
-  init_triton_frontend(std::move(subm.def_submodule("frontend")));
 }

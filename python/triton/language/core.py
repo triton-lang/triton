@@ -1,7 +1,8 @@
 from functools import wraps
 
 import triton
-from triton._C.libtriton.triton import frontend, ir
+from triton._C.libtriton.triton import ir
+from . import semantic as frontend
 
 
 # convert block/dtype to ir values
@@ -56,7 +57,7 @@ def _patch(fn):
 
 for name in dir(frontend):
     fn = getattr(frontend, name)
-    if callable(fn):
+    if callable(fn) and name[0] != "_":
         setattr(frontend, name, _patch(fn))
 
 
