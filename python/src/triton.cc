@@ -545,6 +545,23 @@ void init_triton_ir(py::module &&m) {
   using ret = py::return_value_policy;
   using namespace pybind11::literals;
 
+  py::enum_<ir::signedness>(m, "SIGNEDNESS")
+      .value("SIGNED", ir::signedness::SIGNED)
+      .value("UNSIGNED", ir::signedness::UNSIGNED)
+      .export_values();
+
+  py::enum_<ir::load_inst::CACHE_MODIFIER>(m, "CACHE_MODIFIER")
+      .value("NONE", ir::load_inst::NONE)
+      .value("CA", ir::load_inst::CA)
+      .value("CG", ir::load_inst::CG)
+      .export_values();
+  
+  py::enum_<ir::load_inst::EVICTION_POLICY>(m, "EVICTION_POLICY")
+      .value("NORMAL", ir::load_inst::NORMAL)
+      .value("EVICT_FIRST", ir::load_inst::EVICT_FIRST)
+      .value("EVICT_LAST", ir::load_inst::EVICT_LAST)
+      .export_values();
+
   py::class_<ir::context>(m, "context")
       .def(py::init<>());
 
@@ -571,9 +588,6 @@ void init_triton_ir(py::module &&m) {
   py::class_<ir::phi_node, ir::user>(m, "phi_node");
 
   py::class_<ir::type>(m, "type")
-      .def("is_ptr", &ir::type::is_pointer_ty)
-      .def("is_int", static_cast<bool (ir::type::*)() const>(&ir::type::is_integer_ty))
-      .def("is_floating", &ir::type::is_floating_point_ty)
       
       .def("make_ptr", &ir::pointer_type::get, ret::reference)
       .def("make_function", &ir::function_type::get, ret::reference)
@@ -593,11 +607,17 @@ void init_triton_ir(py::module &&m) {
       .def("get_uint16", &ir::type::get_uint16_ty, ret::reference)
       .def("get_uint32", &ir::type::get_uint32_ty, ret::reference)
       .def("get_uint64", &ir::type::get_uint64_ty, ret::reference)
+      .def("get_fp_mantissa_width", &ir::type::get_fp_mantissa_width, ret::reference)
 
       .def("get_block_shapes", &ir::type::get_block_shapes)
 
+      .def("is_ptr", &ir::type::is_pointer_ty)
+      .def("is_int", static_cast<bool (ir::type::*)() const>(&ir::type::is_integer_ty))
+      .def("is_floating", &ir::type::is_floating_point_ty)
+      .def("is_int_signed", &ir::type::is_integer_signed)
       .def("is_block", &ir::type::is_block_ty)
       .def("is_void", &ir::type::is_void_ty)
+      .def("is_bool", &ir::type::is_bool_ty)
       .def("is_fp8", &ir::type::is_fp8_ty)
       .def("is_fp16", &ir::type::is_fp16_ty)
       .def("is_bf16", &ir::type::is_bf16_ty)
@@ -616,7 +636,9 @@ void init_triton_ir(py::module &&m) {
       .def("repr", &ir::type::repr)
       .def_property_readonly("fp_mantissa_width", &ir::type::get_fp_mantissa_width)
       .def_property_readonly("scalar", &ir::type::get_scalar_ty)
-      .def_property_readonly("context", &ir::type::get_context, ret::reference);
+      .def_property_readonly("context", &ir::type::get_context, ret::reference)
+      .def_property_readonly("int_bitwidth", &ir::type::get_integer_bitwidth)
+      .def_property_readonly("int_signedness", &ir::type::get_integer_signedness);
 
   py::class_<ir::pointer_type, ir::type>(m, "pointer_type")
       .def_property_readonly("element", &ir::pointer_type::get_element_ty, ret::reference);
@@ -728,16 +750,28 @@ void init_triton_ir(py::module &&m) {
       .def("create_frem", &ir::builder::create_frem, ret::reference)
       .def("create_fadd", &ir::builder::create_fadd, ret::reference)
       .def("create_fsub", &ir::builder::create_fsub, ret::reference)
-      .def("create_mul", &ir::builder::create_mul, ret::reference)
+      .def("create_mul", &ir::builder::create_mul, ret::reference, 
+                          py::arg("lhs"), py::arg("rhs"), 
+                          py::arg("has_nuw")=false, py::arg("has_nsw")=false)
       .def("create_sdiv", &ir::builder::create_sdiv, ret::reference)
       .def("create_udiv", &ir::builder::create_udiv, ret::reference)
       .def("create_srem", &ir::builder::create_srem, ret::reference)
       .def("create_urem", &ir::builder::create_urem, ret::reference)
-      .def("create_add", &ir::builder::create_add, ret::reference)
-      .def("create_sub", &ir::builder::create_sub, ret::reference)
-      .def("create_shl", &ir::builder::create_shl, ret::reference)
-      .def("create_lshr", &ir::builder::create_lshr, ret::reference)
-      .def("create_ashr", &ir::builder::create_ashr, ret::reference)
+      .def("create_add", &ir::builder::create_add, ret::reference, 
+                          py::arg("lhs"), py::arg("rhs"), 
+                          py::arg("has_nuw")=false, py::arg("has_nsw")=false)
+      .def("create_sub", &ir::builder::create_sub, ret::reference,
+                          py::arg("lhs"), py::arg("rhs"), 
+                          py::arg("has_nuw")=false, py::arg("has_nsw")=false)
+      .def("create_shl", &ir::builder::create_shl, ret::reference,
+                          py::arg("lhs"), py::arg("rhs"), 
+                          py::arg("has_nuw")=false, py::arg("has_nsw")=false)
+      .def("create_lshr", &ir::builder::create_lshr, ret::reference,
+                          py::arg("lhs"), py::arg("rhs"), 
+                          py::arg("has_nuw")=false, py::arg("has_nsw")=false)
+      .def("create_ashr", &ir::builder::create_ashr, ret::reference,
+                          py::arg("lhs"), py::arg("rhs"), 
+                          py::arg("has_nuw")=false, py::arg("has_nsw")=false)
       // GEP
       .def("create_gep", &ir::builder::create_gep, ret::reference)
       // Comparison (int)

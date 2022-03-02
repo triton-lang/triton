@@ -93,11 +93,11 @@ public:
   value *create_frem(value *lhs, value *rhs);
   value *create_fadd(value *lhs, value *rhs);
   value *create_fsub(value *lhs, value *rhs);
-  value *create_mul(value *lhs, value *rhs, bool has_nuw = false, bool has_nsw = false);
   value *create_sdiv(value *lhs, value *rhs);
   value *create_udiv(value *lhs, value *rhs);
   value *create_srem(value *lhs, value *rhs);
   value *create_urem(value *lhs, value *rhs);
+  value *create_mul(value *lhs, value *rhs, bool has_nuw = false, bool has_nsw = false);
   value *create_add(value *lhs, value *rhs, bool has_nuw = false, bool has_nsw = false);
   value *create_sub(value *lhs, value *rhs, bool has_nuw = false, bool has_nsw = false);
   value *create_shl(value *lhs, value *rhs, bool has_nuw = false, bool has_nsw = false);
