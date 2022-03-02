@@ -11,7 +11,7 @@ import triton.language as tl
 def get_p2p_matrix():
     try:
         stdout = subprocess.check_output(["nvidia-smi", "topo", "-p2p", "n"]).decode("ascii")
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, FileNotFoundError):
         return pytest.skip("No multi-GPU topology", allow_module_level=True)
 
     lines = stdout.split("Legend")[0].split('\n')[1:]
