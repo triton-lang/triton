@@ -81,7 +81,7 @@ matmul_data = {
                          [(M, N, K, dtype_str)
                           for M, N, K in matmul_data[DEVICE_NAME].keys()
                           for dtype_str in ['float16']])
-def test_matmul(M, N, K, dtype_str):
+def test_matmul(M, N, K, dtype_str, device):
     if dtype_str in ['float32', 'int8'] and DEVICE_NAME != 'a100':
         pytest.skip('Only test float32 & int8 on a100')
     dtype = {'float16': torch.float16, 'float32': torch.float32, 'int8': torch.int8}[dtype_str]
@@ -92,12 +92,12 @@ def test_matmul(M, N, K, dtype_str):
     max_gpu_perf = get_max_tensorcore_tflops(dtype, clock_rate=cur_sm_clock * 1e3)
     assert abs(cur_sm_clock - ref_sm_clock) < 10, f'GPU SMs must run at {ref_sm_clock} MHz'
     if dtype == torch.int8:
-        a = torch.randint(-128, 127, (M, K), dtype=dtype, device='cuda')
-        b = torch.randint(-128, 127, (N, K), dtype=dtype, device='cuda')
+        a = torch.randint(-128, 127, (M, K), dtype=dtype, device=device)
+        b = torch.randint(-128, 127, (N, K), dtype=dtype, device=device)
         b = b.t()  # only test row-col layout
     else:
-        a = torch.randn((M, K), dtype=dtype, device='cuda')
-        b = torch.randn((K, N), dtype=dtype, device='cuda')
+        a = torch.randn((M, K), dtype=dtype, device=device)
+        b = torch.randn((K, N), dtype=dtype, device=device)
     fn = lambda: triton.ops.matmul(a, b)
     ms = triton.testing.do_bench(fn, percentiles=None, warmup=25, rep=1000)
     cur_gpu_perf = 2. * M * N * K / ms * 1e-9
@@ -146,14 +146,14 @@ elementwise_data = {
 
 
 @pytest.mark.parametrize('N', elementwise_data[DEVICE_NAME].keys())
-def test_elementwise(N):
+def test_elementwise(N, device):
     torch.manual_seed(0)
     ref_gpu_util = elementwise_data[DEVICE_NAME][N]
     cur_mem_clock = nvsmi(['clocks.current.memory'])[0]
     ref_mem_clock = mem_clocks[DEVICE_NAME]
     max_gpu_perf = get_dram_gbps()
     assert abs(cur_mem_clock - ref_mem_clock) < 10, f'GPU memmory must run at {ref_mem_clock} MHz'
-    z = torch.empty((N, ), dtype=torch.float16, device='cuda')
+    z = torch.empty((N, ), dtype=torch.float16, device=device)
     x = torch.randn_like(z)
     y = torch.randn_like(z)
     grid = lambda args: (triton.cdiv(N, args['BLOCK_SIZE']), )

@@ -86,7 +86,7 @@ def patch_kernel(template, to_replace):
 
 
 @pytest.mark.parametrize("dtype_x", [dtype_x for dtype_x in dtypes])
-def test_empty_kernel(dtype_x, device='cuda'):
+def test_empty_kernel(dtype_x, device):
     SIZE = 128
 
     @triton.jit
@@ -219,7 +219,7 @@ def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
     for dtype_x in dtypes
     for dtype_y in dtypes
 ])
-def test_bin_op(dtype_x, dtype_y, op, device='cuda'):
+def test_bin_op(dtype_x, dtype_y, op, device):
     expr = f' x {op} y'
     if op == '%' and dtype_x in int_dtypes + uint_dtypes and dtype_y in int_dtypes + uint_dtypes:
         # LLVM has 'numpy.fmod', not 'numpy.remainder', semantics on integer remainders.
@@ -252,7 +252,7 @@ def test_bin_op(dtype_x, dtype_y, op, device='cuda'):
                          [(dtype_x, dtype_y) for dtype_x in int_dtypes for dtype_y in int_dtypes] +
                          [(dtype_x, dtype_y) for dtype_x in uint_dtypes for dtype_y in uint_dtypes]
                          )
-def test_floordiv(dtype_x, dtype_y, device='cuda'):
+def test_floordiv(dtype_x, dtype_y, device):
     # Triton has IEEE, not numpy/torch, semantics for %, and those carry
     # through to //, so we have to use a nonstandard expression to get a
     # reference result for //.
@@ -270,7 +270,7 @@ def test_floordiv(dtype_x, dtype_y, device='cuda'):
     for dtype_x in dtypes
     for dtype_y in dtypes
 ])
-def test_bitwise_op(dtype_x, dtype_y, op, device='cuda'):
+def test_bitwise_op(dtype_x, dtype_y, op, device):
     expr = f'x {op} y'
     if (dtype_x in uint_dtypes and dtype_y in int_dtypes and _bitwidth(dtype_x) >= _bitwidth(dtype_y)):
         numpy_expr = f'x.astype(np.{dtype_x}) {op} y.astype(np.{dtype_x})'
@@ -323,7 +323,7 @@ ops = ['==', '!=', '>', '<', '>=', '<=']
                                                     ('nan', 'nan')]
 
                           ])
-def test_compare_op(dtype_x, dtype_y, op, mode_x, mode_y, device='cuda'):
+def test_compare_op(dtype_x, dtype_y, op, mode_x, mode_y, device):
     expr = f'x {op} y'
     if (dtype_x in uint_dtypes and dtype_y in int_dtypes and _bitwidth(dtype_x) >= _bitwidth(dtype_y)):
         numpy_expr = f'x.astype(np.{dtype_x}) {op} y.astype(np.{dtype_x})'
@@ -342,7 +342,7 @@ def test_compare_op(dtype_x, dtype_y, op, mode_x, mode_y, device='cuda'):
 ] + [
     (dtype_x, ' ~x') for dtype_x in int_dtypes
 ])
-def test_unary_op(dtype_x, expr, device='cuda'):
+def test_unary_op(dtype_x, expr, device):
     _test_unary(dtype_x, expr, device=device)
 
 # ----------------
@@ -356,7 +356,7 @@ def test_unary_op(dtype_x, expr, device='cuda'):
 @pytest.mark.parametrize("expr", [
     'exp', 'log', 'cos', 'sin'
 ])
-def test_math_op(expr, device='cuda'):
+def test_math_op(expr, device):
     _test_unary('float32', f'tl.{expr}(x)', f'np.{expr}(x) ', device=device)
 
 
@@ -381,7 +381,7 @@ def make_ptr_str(name, shape):
     for s in ['None, :', ':, None', 'None, :, :', ':, :, None']
     for d in ['int32', 'uint32', 'uint16']
 ])
-def test_index1d(expr, dtype_str, device='cuda'):
+def test_index1d(expr, dtype_str, device):
     rank_x = expr.count(':')
     rank_y = expr.count(',') + 1
     shape_x = [32 for _ in range(rank_x)]
@@ -427,8 +427,7 @@ def fn(a, b):
         a * b
 
 
-def test_tuples():
-    device = 'cuda'
+def test_tuples(device):
 
     @triton.jit
     def with_fn(X, Y, A, B, C):
@@ -472,7 +471,7 @@ def test_tuples():
         ('min', 'uint32', mode), ('min', 'int32', mode), ('min', 'float32', mode),
     ]
     for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']]))
-def test_atomic_rmw(op, dtype_x_str, mode, device='cuda'):
+def test_atomic_rmw(op, dtype_x_str, mode, device):
     n_programs = 5
 
     # triton kernel
@@ -531,7 +530,7 @@ def test_atomic_rmw(op, dtype_x_str, mode, device='cuda'):
 ] + [
     (f'int{x}', f'uint{x}', True) for x in [8, 16, 32, 64]
 ])
-def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
+def test_cast(dtype_x, dtype_z, bitcast, device):
     # This is tricky because numpy doesn't have bfloat, and torch doesn't have uints.
     x0 = 43 if dtype_x in int_dtypes else 43.5
     if dtype_x.startswith('bfloat'):
@@ -658,7 +657,7 @@ def test_f16_to_f8_rounding():
                          [(dtype, shape)
                           for dtype in dtypes
                           for shape in [128, 512]])
-def test_reduce1d(dtype_str, shape, device='cuda'):
+def test_reduce1d(dtype_str, shape, device):
 
     # triton kernel
     @triton.jit
@@ -681,7 +680,7 @@ def test_reduce1d(dtype_str, shape, device='cuda'):
 @pytest.mark.parametrize("dtype_str, shape, axis", [
     (dtype, (1, 1024), 1) for dtype in ['float32', 'uint32']
 ])
-def test_reduce2d(dtype_str, shape, axis, device='cuda'):
+def test_reduce2d(dtype_str, shape, axis, device):
     # triton kernel
     @triton.jit
     def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, AXIS: tl.constexpr):
@@ -711,7 +710,7 @@ def test_reduce2d(dtype_str, shape, axis, device='cuda'):
                           for dtype in ['float32']
                              for shape in [(128, 128)]
                              for perm in [(1, 0)]])
-def test_permute(dtype_str, shape, perm, device='cuda'):
+def test_permute(dtype_str, shape, perm, device):
 
     # triton kernel
     @triton.jit
@@ -751,7 +750,7 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                           for allow_tf32 in [True, False]
                           for dtype in ['float32', 'int8']
                           if not (allow_tf32 and (dtype == 'int8'))])
-def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
+def test_dot(epilogue, allow_tf32, dtype, device):
     cc = _triton.runtime.cc(_triton.runtime.backend.CUDA, torch.cuda.current_device())
     if cc < 80:
         if dtype == 'int8':
@@ -828,7 +827,7 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
         assert 'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
 
 
-def test_dot_without_load():
+def test_dot_without_load(device):
     @triton.jit
     def kernel(out):
         pid = tl.program_id(axis=0)
@@ -839,7 +838,7 @@ def test_dot_without_load():
         pout = out + tl.arange(0, 32)[:, None] * 32 + tl.arange(0, 32)[None, :]
         tl.store(pout, c)
 
-    out = torch.ones((32, 32), dtype=torch.float32, device="cuda")
+    out = torch.ones((32, 32), dtype=torch.float32, device=device)
     kernel[(1,)](out)
 
 # ---------------
@@ -848,7 +847,7 @@ def test_dot_without_load():
 
 
 @pytest.mark.parametrize("start", [0, 1, 7, 16])
-def test_arange(start, device='cuda'):
+def test_arange(start, device):
     BLOCK = 128
     z_tri = torch.empty(BLOCK, dtype=torch.int32, device=device)
 
@@ -870,7 +869,7 @@ def test_arange(start, device='cuda'):
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
-def test_masked_load_shared_memory(dtype, device='cuda'):
+def test_masked_load_shared_memory(dtype, device):
     M = 32
     N = 32
     K = 8
@@ -918,8 +917,8 @@ def test_masked_load_shared_memory(dtype, device='cuda'):
 
 @pytest.mark.parametrize("cache", ["", ".ca", ".cg"])
 def test_load_cache_modifier(cache):
-    src = torch.empty(128, device='cuda')
-    dst = torch.empty(128, device='cuda')
+    src = torch.empty(128, device)
+    dst = torch.empty(128, device)
 
     @triton.jit
     def _kernel(dst, src, CACHE: tl.constexpr):
@@ -985,7 +984,7 @@ def test_default():
 # ----------------
 
 
-def test_noop(device='cuda'):
+def test_noop(device):
     @triton.jit
     def kernel(x):
         pass

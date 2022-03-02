@@ -115,7 +115,7 @@ BLOCK = 1024
                          [(size, seed) for size in ['10', '4,53', '10000']
                           for seed in [0, 42, 124, 54, 0xffffffff, 0xdeadbeefcafeb0ba]]
                          )
-def test_randint(size, seed, device='cuda'):
+def test_randint(size, seed, device):
     size = list(map(int, size.split(',')))
 
     @triton.jit
@@ -141,7 +141,7 @@ def test_randint(size, seed, device='cuda'):
                          [(size, seed) for size in [1000000]
                           for seed in [0, 42, 124, 54]]
                          )
-def test_rand(size, seed, device='cuda'):
+def test_rand(size, seed, device):
     @triton.jit
     def kernel(X, N, seed):
         offset = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
@@ -162,7 +162,7 @@ def test_rand(size, seed, device='cuda'):
                          [(size, seed) for size in [1000000]
                           for seed in [0, 42, 124, 54]]
                          )
-def test_randn(size, seed, device='cuda'):
+def test_randn(size, seed, device):
     @triton.jit
     def kernel(X, N, seed):
         offset = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
