@@ -139,6 +139,8 @@ value *builder::create_ret_void() {
     return create_cast(OPCODE, src, dst_ty);\
   }
 
+DEFINE_CAST_INSTR(bitcast, cast_op_t::BitCast)
+DEFINE_CAST_INSTR(int_to_ptr, cast_op_t::IntToPtr)
 DEFINE_CAST_INSTR(ptr_to_int, cast_op_t::PtrToInt)
 DEFINE_CAST_INSTR(si_to_fp, cast_op_t::SIToFP)
 DEFINE_CAST_INSTR(ui_to_fp, cast_op_t::UIToFP)
@@ -331,6 +333,28 @@ value *builder::create_downcast(value *arg) {
   return insert(downcast_inst::create(arg));
 }
 
+//
+
+value *builder::create_atomic_rmw(ir::atomic_rmw_op_t op, value *ptr, value *val, value *msk){
+  return insert(atomic_rmw_inst::create(op, ptr, val, msk));
+}
+
+#define DEFINE_ATOMIC_RMW_INSTR(SUFFIX, OPCODE)\
+  value *builder::create_ ## SUFFIX(value *ptr, value *val, value *mask){\
+    return create_atomic_rmw(OPCODE, ptr, val, mask);\
+  }
+
+DEFINE_ATOMIC_RMW_INSTR(atomic_max, ir::atomic_rmw_op_t::Max)
+DEFINE_ATOMIC_RMW_INSTR(atomic_umax, ir::atomic_rmw_op_t::UMax)
+DEFINE_ATOMIC_RMW_INSTR(atomic_min, ir::atomic_rmw_op_t::Min)
+DEFINE_ATOMIC_RMW_INSTR(atomic_umin, ir::atomic_rmw_op_t::UMin)
+DEFINE_ATOMIC_RMW_INSTR(atomic_fadd, ir::atomic_rmw_op_t::FAdd)
+DEFINE_ATOMIC_RMW_INSTR(atomic_add, ir::atomic_rmw_op_t::Add)
+DEFINE_ATOMIC_RMW_INSTR(atomic_and, ir::atomic_rmw_op_t::And)
+DEFINE_ATOMIC_RMW_INSTR(atomic_or, ir::atomic_rmw_op_t::Or)
+DEFINE_ATOMIC_RMW_INSTR(atomic_xor, ir::atomic_rmw_op_t::Xor)
+DEFINE_ATOMIC_RMW_INSTR(atomic_xchg, ir::atomic_rmw_op_t::Xchg)
+
 //===----------------------------------------------------------------------===//
 //                               built-in instructions
 //===----------------------------------------------------------------------===//
@@ -347,9 +371,6 @@ value *builder::create_atomic_cas(value *ptr, value *cmp, value *val){
   return insert(atomic_cas_inst::create(ptr, cmp, val));
 }
 
-value *builder::create_atomic_rmw(ir::atomic_rmw_op_t op, value *ptr, value *val, value *msk){
-  return insert(atomic_rmw_inst::create(op, ptr, val, msk));
-}
 
 value *builder::create_exp(value *arg){
   return insert(exp_inst::create(arg));

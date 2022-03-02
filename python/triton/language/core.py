@@ -398,7 +398,7 @@ class block:
         dtype = dtype.handle(_builder)
         if bitcast:
             return frontend.bitcast(self, dtype, _builder)
-        return frontend.cast(self, dtype, _builder)
+        return frontend.cast_impl(self, dtype, _builder)
 
 
 # -----------------------

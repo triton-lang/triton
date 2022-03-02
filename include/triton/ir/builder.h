@@ -74,7 +74,9 @@ public:
   value* create_cond_br(value *cond, basic_block* if_dest, basic_block* else_dest);
   value* create_ret_void();
   // Cast instructions
+  value* create_bitcast(value *src, type *dest_ty);
   value *create_cast(cast_op_t op, value *v, type *dst_ty);
+  value* create_int_to_ptr(value *src, type *dst_ty);
   value* create_ptr_to_int(value *src, type *dst_ty);
   value* create_si_to_fp(value *src, type *dst_ty);
   value* create_ui_to_fp(value *src, type *dst_ty);
@@ -145,11 +147,22 @@ public:
   value *create_reshape(value *arg, const type::block_shapes_t &shapes);
   value *create_cat(value *lhs, value *rhs);
   value *create_broadcast(value *arg, const type::block_shapes_t &shapes);
+  // Atomic instruction
+  value *create_atomic_cas(value *ptr, value *cmp, value *val);
+  value *create_atomic_rmw(atomic_rmw_op_t op, value *ptr, value *val, value *msk);
+  value *create_atomic_max(value *ptr, value *val, value *msk);
+  value *create_atomic_umax(value *ptr, value *val, value *msk);
+  value *create_atomic_min(value *ptr, value *val, value *msk);
+  value *create_atomic_umin(value *ptr, value *val, value *msk);
+  value *create_atomic_fadd(value *ptr, value *val, value *msk);
+  value *create_atomic_add(value *ptr, value *val, value *msk);
+  value *create_atomic_and(value *ptr, value *val, value *msk);
+  value *create_atomic_or(value *ptr, value *val, value *msk);
+  value *create_atomic_xor(value *ptr, value *val, value *msk);
+  value *create_atomic_xchg(value *ptr, value *val, value *msk);
   // Built-in instruction
   value *create_get_program_id(unsigned axis);
   value *create_get_num_programs(unsigned axis);
-  value *create_atomic_cas(value *ptr, value *cmp, value *val);
-  value *create_atomic_rmw(ir::atomic_rmw_op_t op, value *ptr, value *val, value *msk);
   value *create_exp(value* arg);
   value *create_cos(value* arg);
   value *create_sin(value* arg);

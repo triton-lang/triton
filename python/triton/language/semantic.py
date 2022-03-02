@@ -1,9 +1,14 @@
 from triton._C.libtriton.triton import ir
 
 
-class IncompatibleTypeError(Exception):
-    def __init__(self, a_ty, b_ty):
-      pass
+
+## Create custom exception that prints message "hello"
+class IncompatibleTypeErrorimpl(Exception):
+  def __init__(self, type_a, type_b):
+    self.type_a = type_a
+    self.type_b = type_b
+    self.message = "invalid operands of type " + self.type_a.repr() + " and " + self.type_b.repr()
+    super(IncompatibleTypeErrorimpl, self).__init__(self.message)
 
 
 ##===----------------------------------------------------------------------===##
@@ -61,7 +66,6 @@ def computation_type_impl(a_ty, b_ty, div_or_mod):
   if div_or_mod and a_ty.int_signedness != b_ty.int_signedness:
     raise ValueError("Cannot use /, #, or % with " + a_ty.repr() + " and " + b_ty.repr() + " because they have different signedness;" 
                         "this is unlikely to result in a useful answer. Cast them to the same signedness.")
-  
   return integer_promote_impl(a_ty, b_ty)
 
 #===----------------------------------------------------------------------===//
@@ -71,13 +75,13 @@ def computation_type_impl(a_ty, b_ty, div_or_mod):
 def check_ptr_type_impl(type_a, type_b, allow_ptr_a):
   if type_a.is_ptr():
     if not allow_ptr_a:
-      raise IncompatibleTypeError(type_a, type_b)
+      raise IncompatibleTypeErrorimpl(type_a, type_b)
     # T* + U* with T != U
     if type_b.is_ptr() and (type_a != type_b):
-      raise IncompatibleTypeError(type_a, type_b)
+      raise IncompatibleTypeErrorimpl(type_a, type_b)
     # T* + float
     if type_b.is_floating():
-      raise IncompatibleTypeError(type_a, type_b)
+      raise IncompatibleTypeErrorimpl(type_a, type_b)
   
 
 def binary_op_type_checking_impl(lhs,  rhs,  builder,
@@ -191,7 +195,7 @@ def fdiv(input, other, ieee_rounding, builder):
   input, other = binary_op_type_checking_impl(input, other, builder, False, False, False, True)
   ret = builder.create_fdiv(input, other)
   if isinstance(ret, ir.binary_operator):
-    ret.set_fdiv_ieee_rounding(ieee_rounding.get_value())
+    ret.set_fdiv_ieee_rounding(ieee_rounding.value)
   return ret
 
 def mod(input, other, builder):
@@ -221,12 +225,13 @@ def bitwise_op_type_checking_impl(input, other, builder):
   input_sca_ty = input.type.scalar
   other_sca_ty = other.type.scalar
   if not input_sca_ty.is_int() or not other_sca_ty.is_int():
-    raise ValueError(input_sca_ty, other_sca_ty)
+    raise IncompatibleTypeErrorimpl(input_sca_ty, other_sca_ty)
   ret_sca_ty = integer_promote_impl(input_sca_ty, other_sca_ty)
   if ret_sca_ty != input_sca_ty:
     input = cast_impl(input, ret_sca_ty, builder)
   if ret_sca_ty != other_sca_ty:
     other = cast_impl(other, ret_sca_ty, builder)
+  return input, other
 
 def and_(input, other, builder):
   input, other = bitwise_op_type_checking_impl(input, other, builder)
@@ -278,7 +283,7 @@ def invert(input, builder):
 #===----------------------------------------------------------------------===//
 
 def greater_than(input, other, builder):
-  binary_op_type_checking_impl(input, other, builder)
+  input, other = binary_op_type_checking_impl(input, other, builder)
   scalar_ty = input.type.scalar
   # float > float
   if scalar_ty.is_floating():
@@ -294,7 +299,7 @@ def greater_than(input, other, builder):
   assert False
 
 def greater_equal(input, other, builder):
-  binary_op_type_checking_impl(input, other, builder)
+  input, other = binary_op_type_checking_impl(input, other, builder)
   scalar_ty = input.type.scalar
   # float >= float
   if scalar_ty.is_floating():
@@ -310,7 +315,7 @@ def greater_equal(input, other, builder):
   assert False
 
 def less_than(input, other, builder):
-  binary_op_type_checking_impl(input, other, builder)
+  input, other = binary_op_type_checking_impl(input, other, builder)
   scalar_ty = input.type.scalar
   # float < float
   if scalar_ty.is_floating():
@@ -326,7 +331,7 @@ def less_than(input, other, builder):
   assert False
 
 def less_equal(input, other, builder):
-  binary_op_type_checking_impl(input, other, builder)
+  input, other = binary_op_type_checking_impl(input, other, builder)
   scalar_ty = input.type.scalar
   # float < float
   if scalar_ty.is_floating():
@@ -342,7 +347,7 @@ def less_equal(input, other, builder):
   assert False
 
 def equal(input, other, builder):
-  binary_op_type_checking_impl(input, other, builder)
+  input, other = binary_op_type_checking_impl(input, other, builder)
   scalar_ty = input.type.scalar
   # float == float
   if scalar_ty.is_floating():
@@ -353,7 +358,7 @@ def equal(input, other, builder):
   assert False
 
 def not_equal(input, other, builder):
-  binary_op_type_checking_impl(input, other, builder)
+  input, other = binary_op_type_checking_impl(input, other, builder)
   scalar_ty = input.type.scalar
   # float == float
   if scalar_ty.is_floating():
@@ -383,7 +388,7 @@ def reshape(input, dst_shape, builder):
   numel = 1
   for s in dst_shape: 
     numel *= s
-  if input.type.get_tile_num_elements() != numel:
+  if input.type.numel != numel:
     raise ValueError("cannot reshape block of different shape")
   return builder.create_reshape(input, dst_shape)
 
@@ -440,6 +445,11 @@ def broadcast_impl(lhs, rhs, builder):
     return broadcast_impl1(lhs, rhs, builder)
   return broadcast_impl2(lhs, rhs, builder)
 
+
+# temporary until typesystem is properly merged too
+def bitcast_impl(input, dst_ty, builder):
+  return bitcast(input, dst_ty, builder).handle
+
 def bitcast(input, dst_ty, builder):
   src_ty = input.type
   if src_ty.is_block():
@@ -451,12 +461,12 @@ def bitcast(input, dst_ty, builder):
   if src_sca_ty.is_ptr() or dst_sca_ty.is_ptr():
     return cast_impl(input, dst_ty, builder)
   # Bitcast
-  src_bits = src_sca_ty.get_primitive_size_in_bits()
-  dst_bits = dst_sca_ty.get_primitive_size_in_bits()
+  src_bits = src_sca_ty.primitive_bitwidth
+  dst_bits = dst_sca_ty.primitive_bitwidth
   if  src_bits!= dst_bits:
     raise ValueError("Cannot bitcast data-type of size " + str(src_bits) +
                              "to data-type of size " + str(dst_bits))
-  return builder.create_cast(ir.BitCast, input, dst_ty)
+  return builder.create_bitcast(input, dst_ty)
 
 # temporary until typesystem is properly merged too
 def cast_impl(input, dst_ty, builder):
@@ -490,8 +500,8 @@ def cast(input, dst_ty, builder):
 
   # Int cast
   if src_sca_ty.is_int() and dst_sca_ty.is_int() and\
-      (src_sca_ty.int_bitwidth != dst_sca_ty.int_bitwidth or
-       src_sca_ty.int_signedness != dst_sca_ty.int_signedness):
+    (src_sca_ty.int_bitwidth != dst_sca_ty.int_bitwidth or
+     src_sca_ty.int_signedness != dst_sca_ty.int_signedness):
     sign_extend = src_sca_ty.is_int_signed() and src_sca_ty != builder.get_int1_ty()
     return builder.create_int_cast(input, dst_ty, sign_extend)
   
@@ -519,10 +529,10 @@ def cast(input, dst_ty, builder):
                                  builder)
   
   if not src_sca_ty.is_ptr() and dst_sca_ty.is_ptr():
-    return builder.create_cast(ir.IntToPtr, input, dst_ty)
+    return builder.create_int_to_ptr(input, dst_ty)
   # Ptr . Ptr
   if src_sca_ty.is_ptr() and dst_sca_ty.is_ptr():
-    return builder.create_cast(ir.BitCast, input, dst_ty)
+    return builder.create_bitcast(input, dst_ty)
   # * . Bool
   if dst_sca_ty.is_bool():
     if src_sca_ty.is_ptr():
@@ -556,7 +566,7 @@ def load( ptr,  mask,  other, cache_modifier, eviction_policy, is_volatile,  bui
   # treat bool* as int8*
   if elt_ty == builder.get_int1_ty():
     elt_ty = builder.get_int8_ty()
-    ptr_ty = ir.pointer_type.get(elt_ty, ptr_ty.get_pointer_address_space())
+    ptr_ty = ir.type.make_ptr(elt_ty, ptr_ty.address_space)
     ptr = cast_impl(ptr, ptr_ty, builder)
   
   # cache modifier
@@ -604,7 +614,7 @@ def store( ptr, val,  mask, builder):
   # treat bool* as int8*
   if elt_ty == builder.get_int1_ty():
     elt_ty = builder.get_int8_ty()
-    ptr_ty = ir.pointer_type.get(elt_ty, ptr_ty.get_pointer_address_space())
+    ptr_ty = ir.type.make_ptr(elt_ty, ptr_ty.address_space)
     ptr = cast_impl(ptr, ptr_ty, builder)
   
   # cast to target data-type
@@ -618,90 +628,83 @@ def store( ptr, val,  mask, builder):
 def atomic_cas( ptr, cmp, val, builder):
   return builder.create_atomic_cas(ptr, cmp, val)
 
-def atom_red_typechecking( ptr, val, mask, builder):
+def atom_red_typechecking_impl( ptr, val, mask, builder):
   if not ptr.type.scalar.is_ptr():
     raise ValueError("Pointer argument of store instruction is " + ptr.type.repr())
   if ptr.type.is_block():
     if mask:
       mask = broadcast_impl(mask, ptr.type.get_block_shapes(), builder)
-    
     if val:
       val = broadcast_impl(val, ptr.type.get_block_shapes(), builder)
-    
-  
   val = cast_impl(val, ptr.type.scalar.element, builder)
   if not mask:
     mask = builder.get_int1(True)
     if ptr.type.is_block():
       mask = builder.create_splat(mask, ptr.type.get_block_shapes())
+  return ptr, val, mask
   
 
 def atomic_max( ptr, val, mask, builder):
-  atom_red_typechecking(ptr, val, mask, builder)
+  ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
   sca_ty = val.type.scalar
   # direct call to atomic_max for integers
   if sca_ty.is_int():
     if sca_ty.is_int_signed():
-      return builder.create_atomic_rmw(ir.atomic_rmw_op_t.Max, ptr, val, mask)
+      return builder.create_atomic_max(ptr, val, mask)
     else:
-      return builder.create_atomic_rmw(ir.atomic_rmw_op_t.UMax, ptr, val, mask)
-    
-  
+      return builder.create_atomic_umax(ptr, val, mask)
   # for float
   # return atomic_smax(i_ptr, i_val) if val >= 0
   # return atomic_umin(i_ptr, i_val) if val < 0
-  i_val = bitcast(val, builder.get_int32_ty(), builder)
-  i_ptr = bitcast(ptr, ir.pointer_type.get(builder.get_int32_ty(), 1), builder)
-  pos = greater_equal(val, ir.constant_fp.get(sca_ty, 0), builder)
-  neg = less_than(val, ir.constant_fp.get(sca_ty, 0), builder)
-  pos_ret = builder.create_atomic_rmw(ir.atomic_rmw_op_t.Max, i_ptr, i_val, and_(mask, pos, builder))
-  neg_ret = builder.create_atomic_rmw(ir.atomic_rmw_op_t.UMin, i_ptr, i_val, and_(mask, neg, builder))
+  i_val = bitcast_impl(val, builder.get_int32_ty(), builder)
+  i_ptr = bitcast_impl(ptr, ir.type.make_ptr(builder.get_int32_ty(), 1), builder)
+  pos = greater_equal(val, ir.constant_float.get(sca_ty, 0), builder)
+  neg = less_than(val, ir.constant_float.get(sca_ty, 0), builder)
+  pos_ret = builder.create_atomic_max(i_ptr, i_val, and_(mask, pos, builder).handle)
+  neg_ret = builder.create_atomic_umin(i_ptr, i_val, and_(mask, neg, builder).handle)
   return where(pos, pos_ret, neg_ret, builder)
 
 def atomic_min( ptr, val, mask, builder):
-  atom_red_typechecking(ptr, val, mask, builder)
+  ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
   sca_ty = val.type.scalar
   # direct call to atomic_min for integers
   if sca_ty.is_int():
     if sca_ty.is_int_signed():
-      return builder.create_atomic_rmw(ir.atomic_rmw_op_t.Min, ptr, val, mask)
+      return builder.create_atomic_min(ptr, val, mask)
     else:
-      return builder.create_atomic_rmw(ir.atomic_rmw_op_t.UMin, ptr, val, mask)
-    
-  
+      return builder.create_atomic_umin(ptr, val, mask)
   # for float
   # return atomic_smin(i_ptr, i_val) if val >= 0
   # return atomic_umax(i_ptr, i_val) if val < 0
-  i_val = bitcast(val, builder.get_int32_ty(), builder)
-  i_ptr = bitcast(ptr, ir.pointer_type.get(builder.get_int32_ty(), 1), builder)
-  pos = greater_equal(val, ir.constant_fp.get(sca_ty, 0), builder)
-  neg = less_than(val, ir.constant_fp.get(sca_ty, 0), builder)
-  pos_ret = builder.create_atomic_rmw(ir.atomic_rmw_op_t.Min, i_ptr, i_val, and_(mask, pos, builder))
-  neg_ret = builder.create_atomic_rmw(ir.atomic_rmw_op_t.UMax, i_ptr, i_val, and_(mask, neg, builder))
+  i_val = bitcast_impl(val, builder.get_int32_ty(), builder)
+  i_ptr = bitcast_impl(ptr, ir.type.make_ptr(builder.get_int32_ty(), 1), builder)
+  pos = greater_equal(val, ir.constant_float.get(sca_ty, 0), builder)
+  neg = less_than(val, ir.constant_float.get(sca_ty, 0), builder)
+  pos_ret = builder.create_atomic_min(i_ptr, i_val, and_(mask, pos, builder).handle)
+  neg_ret = builder.create_atomic_umax(i_ptr, i_val, and_(mask, neg, builder).handle)
   return where(pos, pos_ret, neg_ret, builder)
 
 def atomic_add( ptr, val, mask, builder):
-  atom_red_typechecking(ptr, val, mask, builder)
+  ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
   sca_ty = val.type.scalar
-  op = ir.atomic_rmw_op_t.FAdd if sca_ty.is_floating() else ir.atomic_rmw_op_t.Add
-  return builder.create_atomic_rmw(op, ptr, val, mask)
+  op = builder.create_atomic_fadd if sca_ty.is_floating() else builder.create_atomic_add
+  return op(ptr, val, mask)
 
 def atomic_and( ptr, val, mask, builder):
-  atom_red_typechecking(ptr, val, mask, builder)
-  return builder.create_atomic_rmw(ir.atomic_rmw_op_t.And, ptr, val, mask)
+  ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
+  return builder.create_atomic_and(ptr, val, mask)
 
 def atomic_or( ptr, val, mask, builder):
-  atom_red_typechecking(ptr, val, mask, builder)
-  return builder.create_atomic_rmw(ir.atomic_rmw_op_t.Or, ptr, val, mask)
+  ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
+  return builder.create_atomic_or(ptr, val, mask)
 
 def atomic_xor( ptr, val, mask, builder):
-  atom_red_typechecking(ptr, val, mask, builder)
-  return builder.create_atomic_rmw(ir.atomic_rmw_op_t.Xor, ptr, val, mask)
+  ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
+  return builder.create_atomic_xor(ptr, val, mask)
 
 def atomic_xchg( ptr, val, mask, builder):
-  atom_red_typechecking(ptr, val, mask, builder)
-  sca_ty = val.type.scalar
-  return builder.create_atomic_rmw(ir.atomic_rmw_op_t.Xchg, ptr, val, mask)
+  ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
+  return builder.create_atomic_xchg(ptr, val, mask)
 
 #===----------------------------------------------------------------------===//
 #                               Linear Algebra
@@ -713,10 +716,10 @@ def dot(lhs, rhs, allow_tf32, builder):
     _0 = builder.get_int32(0)
   else:
     _0 = builder.get_float32(0)
-  M = lhs.type.get_block_shapes()[0]
-  N = rhs.type.get_block_shapes()[1]
+  M = lhs.type.shape[0]
+  N = rhs.type.shape[1]
   _0 = builder.create_splat(_0, [M, N])
-  _allow_tf32 = allow_tf32.get_value() != 0
+  _allow_tf32 = allow_tf32.value != 0
   return builder.create_dot(lhs, rhs, _0, _allow_tf32)
 
 

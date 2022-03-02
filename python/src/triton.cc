@@ -571,7 +571,9 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<ir::user, ir::value>(m, "user");
 
-  py::class_<ir::constant, ir::user>(m, "constant");
+  py::class_<ir::constant, ir::user>(m, "constant")
+      .def("get_null_value", &ir::constant::get_null_value, ret::reference);
+      .def("get_all_ones_value", &ir::constant::get_all_ones_value, ret::reference);
 
   py::class_<ir::undef_value, ir::constant>(m, "undef")
       .def("get", &ir::undef_value::get, ret::reference);
@@ -582,7 +584,8 @@ void init_triton_ir(py::module &&m) {
       .def("__bool__", [](ir::constant_int *self) { return self->get_value(); });
 
   py::class_<ir::constant_fp, ir::constant>(m, "constant_float")
-      .def_property_readonly("value", &ir::constant_fp::get_value);
+      .def_property_readonly("value", &ir::constant_fp::get_value)
+      .def("get", [](ir::type* ty, double val) { return ir::constant_fp::get(ty, val); }, ret::reference);
 
   py::class_<ir::instruction, ir::user>(m, "instruction");
   py::class_<ir::phi_node, ir::user>(m, "phi_node");
@@ -632,16 +635,19 @@ void init_triton_ir(py::module &&m) {
       .def("is_uint16", [](ir::type *self) { return self->is_integer_ty(16, ir::signedness::UNSIGNED); })
       .def("is_uint32", [](ir::type *self) { return self->is_integer_ty(32, ir::signedness::UNSIGNED); })
       .def("is_uint64", [](ir::type *self) { return self->is_integer_ty(64, ir::signedness::UNSIGNED); })
+      .def("is_int_or_tileint", &ir::type::is_int_or_tileint_ty)
 
       .def("repr", &ir::type::repr)
       .def_property_readonly("fp_mantissa_width", &ir::type::get_fp_mantissa_width)
       .def_property_readonly("scalar", &ir::type::get_scalar_ty)
       .def_property_readonly("context", &ir::type::get_context, ret::reference)
       .def_property_readonly("int_bitwidth", &ir::type::get_integer_bitwidth)
-      .def_property_readonly("int_signedness", &ir::type::get_integer_signedness);
+      .def_property_readonly("int_signedness", &ir::type::get_integer_signedness)
+      .def_property_readonly("primitive_bitwidth", &ir::type::get_primitive_size_in_bits);
 
   py::class_<ir::pointer_type, ir::type>(m, "pointer_type")
-      .def_property_readonly("element", &ir::pointer_type::get_element_ty, ret::reference);
+      .def_property_readonly("element", &ir::pointer_type::get_element_ty, ret::reference)
+      .def_property_readonly("address_space", &ir::pointer_type::get_pointer_address_space, ret::reference);
 
   py::class_<ir::function_type, ir::type>(m, "function_type");
   py::class_<ir::integer_type, ir::type>(m, "integer_type");
@@ -733,6 +739,7 @@ void init_triton_ir(py::module &&m) {
       .def("create_cond_br", &ir::builder::create_cond_br, ret::reference)
       .def("create_ret_void", &ir::builder::create_ret_void, ret::reference)
       // Cast instructions
+      .def("create_bitcast", &ir::builder::create_bitcast, ret::reference)
       .def("create_cast", &ir::builder::create_cast, ret::reference)
       .def("create_ptr_to_int", &ir::builder::create_ptr_to_int, ret::reference)
       .def("create_si_to_fp", &ir::builder::create_si_to_fp, ret::reference)
@@ -814,11 +821,24 @@ void init_triton_ir(py::module &&m) {
       .def("create_reshape", &ir::builder::create_reshape, ret::reference)
       .def("create_cat", &ir::builder::create_cat, ret::reference)
       .def("create_broadcast", &ir::builder::create_broadcast, ret::reference)
+      // atomic
+      .def("create_atomic_cas", &ir::builder::create_atomic_cas, ret::reference)
+      .def("create_atomic_rmw", &ir::builder::create_atomic_rmw, ret::reference)
+      .def("create_atomic_max", &ir::builder::create_atomic_max, ret::reference)
+      .def("create_atomic_umax", &ir::builder::create_atomic_umax, ret::reference)
+      .def("create_atomic_min", &ir::builder::create_atomic_min, ret::reference)
+      .def("create_atomic_umin", &ir::builder::create_atomic_umin, ret::reference)
+      .def("create_atomic_fadd", &ir::builder::create_atomic_fadd, ret::reference)
+      .def("create_atomic_add", &ir::builder::create_atomic_add, ret::reference)
+      .def("create_atomic_and", &ir::builder::create_atomic_and, ret::reference)
+      .def("create_atomic_or", &ir::builder::create_atomic_or, ret::reference)
+      .def("create_atomic_xor", &ir::builder::create_atomic_xor, ret::reference)
+      .def("create_atomic_xchg", &ir::builder::create_atomic_xchg, ret::reference)
+
+
       // Built-in instruction
       .def("create_get_program_id", &ir::builder::create_get_program_id, ret::reference)
       .def("create_get_num_programs", &ir::builder::create_get_num_programs, ret::reference)
-      .def("create_atomic_cas", &ir::builder::create_atomic_cas, ret::reference)
-      .def("create_atomic_rmw", &ir::builder::create_atomic_rmw, ret::reference)
       .def("create_exp", &ir::builder::create_exp, ret::reference)
       .def("create_cos", &ir::builder::create_cos, ret::reference)
       .def("create_sin", &ir::builder::create_sin, ret::reference)
