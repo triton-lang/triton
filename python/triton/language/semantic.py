@@ -596,7 +596,7 @@ def load( ptr,  mask,  other, cache_modifier, eviction_policy, is_volatile,  bui
     raise ValueError("`other` cannot be provided without `mask`")
   shape = ptr.type.get_block_shapes()
   if not other:
-    other = ir.undef_value.get(elt_ty)
+    other = ir.undef.get(elt_ty)
     if ptr.type.is_block():
       other = builder.create_splat(other, ptr.type.get_block_shapes())
   
@@ -650,9 +650,9 @@ def atomic_max( ptr, val, mask, builder):
   # direct call to atomic_max for integers
   if sca_ty.is_int():
     if sca_ty.is_int_signed():
-      return builder.create_atomic_max(ptr, val, mask)
+      return builder.create_atomic_rmw(ir.ATOMIC_OP.MAX, ptr, val, mask)
     else:
-      return builder.create_atomic_umax(ptr, val, mask)
+      return builder.create_atomic_rmw(ir.ATOMIC_OP.UMAX, ptr, val, mask)
   # for float
   # return atomic_smax(i_ptr, i_val) if val >= 0
   # return atomic_umin(i_ptr, i_val) if val < 0
@@ -660,8 +660,8 @@ def atomic_max( ptr, val, mask, builder):
   i_ptr = bitcast_impl(ptr, ir.type.make_ptr(builder.get_int32_ty(), 1), builder)
   pos = greater_equal(val, ir.constant_float.get(sca_ty, 0), builder)
   neg = less_than(val, ir.constant_float.get(sca_ty, 0), builder)
-  pos_ret = builder.create_atomic_max(i_ptr, i_val, and_(mask, pos, builder).handle)
-  neg_ret = builder.create_atomic_umin(i_ptr, i_val, and_(mask, neg, builder).handle)
+  pos_ret = builder.create_atomic_rmw(ir.ATOMIC_OP.MAX, i_ptr, i_val, and_(mask, pos, builder).handle)
+  neg_ret = builder.create_atomic_rmw(ir.ATOMIC_OP.UMIN, i_ptr, i_val, and_(mask, neg, builder).handle)
   return where(pos, pos_ret, neg_ret, builder)
 
 def atomic_min( ptr, val, mask, builder):
@@ -670,9 +670,9 @@ def atomic_min( ptr, val, mask, builder):
   # direct call to atomic_min for integers
   if sca_ty.is_int():
     if sca_ty.is_int_signed():
-      return builder.create_atomic_min(ptr, val, mask)
+      return builder.create_atomic_rmw(ir.ATOMIC_OP.MIN, ptr, val, mask)
     else:
-      return builder.create_atomic_umin(ptr, val, mask)
+      return builder.create_atomic_rmw(ir.ATOMIC_OP.UMIN, ptr, val, mask)
   # for float
   # return atomic_smin(i_ptr, i_val) if val >= 0
   # return atomic_umax(i_ptr, i_val) if val < 0
@@ -680,31 +680,31 @@ def atomic_min( ptr, val, mask, builder):
   i_ptr = bitcast_impl(ptr, ir.type.make_ptr(builder.get_int32_ty(), 1), builder)
   pos = greater_equal(val, ir.constant_float.get(sca_ty, 0), builder)
   neg = less_than(val, ir.constant_float.get(sca_ty, 0), builder)
-  pos_ret = builder.create_atomic_min(i_ptr, i_val, and_(mask, pos, builder).handle)
-  neg_ret = builder.create_atomic_umax(i_ptr, i_val, and_(mask, neg, builder).handle)
+  pos_ret = builder.create_atomic_rmw(ir.ATOMIC_OP.MIN, i_ptr, i_val, and_(mask, pos, builder).handle)
+  neg_ret = builder.create_atomic_rmw(ir.ATOMIC_OP.UMAX, i_ptr, i_val, and_(mask, neg, builder).handle)
   return where(pos, pos_ret, neg_ret, builder)
 
 def atomic_add( ptr, val, mask, builder):
   ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
   sca_ty = val.type.scalar
-  op = builder.create_atomic_fadd if sca_ty.is_floating() else builder.create_atomic_add
-  return op(ptr, val, mask)
+  op = ir.ATOMIC_OP.FADD if sca_ty.is_floating() else ir.ATOMIC_OP.ADD
+  return builder.create_atomic_rmw(op, ptr, val, mask)
 
 def atomic_and( ptr, val, mask, builder):
   ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
-  return builder.create_atomic_and(ptr, val, mask)
+  return builder.create_atomic_rmw(ir.ATOMIC_OP.AND, ptr, val, mask)
 
 def atomic_or( ptr, val, mask, builder):
   ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
-  return builder.create_atomic_or(ptr, val, mask)
+  return builder.create_atomic_rmw(ir.ATOMIC_OP.OR, ptr, val, mask)
 
 def atomic_xor( ptr, val, mask, builder):
   ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
-  return builder.create_atomic_xor(ptr, val, mask)
+  return builder.create_atomic_rmw(ir.ATOMIC_OP.XOR, ptr, val, mask)
 
 def atomic_xchg( ptr, val, mask, builder):
   ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
-  return builder.create_atomic_xchg(ptr, val, mask)
+  return builder.create_atomic_rmw(ir.ATOMIC_OP.XCHG, ptr, val, mask)
 
 #===----------------------------------------------------------------------===//
 #                               Linear Algebra
@@ -752,7 +752,7 @@ def reduce_impl(input, axis, builder, name,
   # this increases numerical accuracy and can be done pretty much for free
   # on GPUs
   if scalar_ty.is_int() and scalar_ty.int_bitwidth <= 32:
-    input = cast_impl(input, ir.type.get_int32_ty(scalar_ty.context), builder)
+    input = cast_impl(input, ir.type.get_int32(scalar_ty.context), builder)
   if scalar_ty.is_floating():
     return builder.create_reduce(input, FLOAT_OP, axis)
   elif scalar_ty.is_int():
@@ -760,19 +760,19 @@ def reduce_impl(input, axis, builder, name,
   assert False
 
 def min(input, axis, builder):
-  return reduce_impl(input, axis, builder, "min", ir.reduce_inst.FMIN, ir.reduce_inst.MIN)
+  return reduce_impl(input, axis, builder, "min", ir.REDUCE_OP.FMIN, ir.REDUCE_OP.MIN)
 
 def max(input, axis, builder):
-  return reduce_impl(input, axis, builder, "max", ir.reduce_inst.FMAX, ir.reduce_inst.MAX)
+  return reduce_impl(input, axis, builder, "max", ir.REDUCE_OP.FMAX, ir.REDUCE_OP.MAX)
 
 def sum(input, axis, builder):
-  return reduce_impl(input, axis, builder, "sum", ir.reduce_inst.FADD, ir.reduce_inst.ADD)
+  return reduce_impl(input, axis, builder, "sum", ir.REDUCE_OP.FADD, ir.REDUCE_OP.ADD)
 
 def xor_sum(input, axis, builder):
   scalar_ty = input.type.scalar
   if not scalar_ty.is_int():
     raise ValueError("xor_sum only supported for integers")
-  return reduce_impl(input, axis, builder, "sum", ir.reduce_inst.XOR, ir.reduce_inst.XOR)
+  return reduce_impl(input, axis, builder, "sum", ir.REDUCE_OP.XOR, ir.REDUCE_OP.XOR)
 
 
 #===----------------------------------------------------------------------===//

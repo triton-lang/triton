@@ -561,6 +561,26 @@ void init_triton_ir(py::module &&m) {
       .value("EVICT_FIRST", ir::load_inst::EVICT_FIRST)
       .value("EVICT_LAST", ir::load_inst::EVICT_LAST)
       .export_values();
+  
+  py::enum_<ir::reduce_inst::op_t>(m, "REDUCE_OP")
+      .value("ADD", ir::reduce_inst::ADD)
+      .value("FADD", ir::reduce_inst::FADD)
+      .value("MIN", ir::reduce_inst::MIN)
+      .value("MAX", ir::reduce_inst::MAX)
+      .value("FMIN", ir::reduce_inst::FMIN)
+      .value("FMAX", ir::reduce_inst::FMAX)
+      .value("XOR", ir::reduce_inst::XOR);
+  
+  py::enum_<ir::atomic_rmw_op_t>(m, "ATOMIC_OP")
+      .value("ADD", ir::atomic_rmw_op_t::Add)
+      .value("FADD", ir::atomic_rmw_op_t::FAdd)
+      .value("AND", ir::atomic_rmw_op_t::And)
+      .value("OR", ir::atomic_rmw_op_t::Or)
+      .value("XOR", ir::atomic_rmw_op_t::Xor)
+      .value("MAX", ir::atomic_rmw_op_t::Max)
+      .value("MIN", ir::atomic_rmw_op_t::Min)
+      .value("UMIN", ir::atomic_rmw_op_t::UMin)
+      .value("UMAX", ir::atomic_rmw_op_t::UMax);
 
   py::class_<ir::context>(m, "context")
       .def(py::init<>());
@@ -572,7 +592,7 @@ void init_triton_ir(py::module &&m) {
   py::class_<ir::user, ir::value>(m, "user");
 
   py::class_<ir::constant, ir::user>(m, "constant")
-      .def("get_null_value", &ir::constant::get_null_value, ret::reference);
+      .def("get_null_value", &ir::constant::get_null_value, ret::reference)
       .def("get_all_ones_value", &ir::constant::get_all_ones_value, ret::reference);
 
   py::class_<ir::undef_value, ir::constant>(m, "undef")
@@ -824,17 +844,6 @@ void init_triton_ir(py::module &&m) {
       // atomic
       .def("create_atomic_cas", &ir::builder::create_atomic_cas, ret::reference)
       .def("create_atomic_rmw", &ir::builder::create_atomic_rmw, ret::reference)
-      .def("create_atomic_max", &ir::builder::create_atomic_max, ret::reference)
-      .def("create_atomic_umax", &ir::builder::create_atomic_umax, ret::reference)
-      .def("create_atomic_min", &ir::builder::create_atomic_min, ret::reference)
-      .def("create_atomic_umin", &ir::builder::create_atomic_umin, ret::reference)
-      .def("create_atomic_fadd", &ir::builder::create_atomic_fadd, ret::reference)
-      .def("create_atomic_add", &ir::builder::create_atomic_add, ret::reference)
-      .def("create_atomic_and", &ir::builder::create_atomic_and, ret::reference)
-      .def("create_atomic_or", &ir::builder::create_atomic_or, ret::reference)
-      .def("create_atomic_xor", &ir::builder::create_atomic_xor, ret::reference)
-      .def("create_atomic_xchg", &ir::builder::create_atomic_xchg, ret::reference)
-
 
       // Built-in instruction
       .def("create_get_program_id", &ir::builder::create_get_program_id, ret::reference)
