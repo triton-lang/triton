@@ -3,7 +3,6 @@
 #include "triton/driver/error.h"
 #include "triton/driver/llvm.h"
 #include "triton/ir/builder.h"
-#include "triton/ir/dispatch.h"
 #include "triton/ir/enums.h"
 #include "triton/ir/function.h"
 #include "triton/ir/module.h"
