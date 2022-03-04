@@ -2377,8 +2377,8 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
   }
   in_ord = in_layout->to_mma() ? out_ord : in_ord;
   out_ord = out_layout->to_mma() ? in_ord : out_ord;
-  int in_vec = in_layout->contig_per_thread(in_ord[0]);
-  int out_vec = out_layout->contig_per_thread(out_ord[0]);
+  int in_vec = out_ord[0] == 0 ? 1 : in_layout->contig_per_thread(in_ord[0]);
+  int out_vec = out_ord[0] == 0 ? 1 : out_layout->contig_per_thread(out_ord[0]);
   int pad = std::max(in_vec, out_vec);
   Value *in_ld = i32(shape[in_ord[0]] + pad);
   Value *out_ld = i32(shape[out_ord[0]] + pad);
