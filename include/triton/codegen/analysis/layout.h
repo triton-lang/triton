@@ -103,6 +103,7 @@ public:
 
   int shape_per_cta(size_t k) { return shape_per_cta_.at(k); }
   int rep_per_cta(size_t k) { return shape_[k] / shape_per_cta_[k]; }
+  virtual int contig_per_thread(size_t k) = 0;
 
 protected:
   std::vector<int> shape_per_cta_;
@@ -181,6 +182,7 @@ public:
   int wpt(size_t k) { return wpt_.at(k); }
   int spw(size_t k) { return spw_.at(k); }
   int rep(size_t k) { return rep_.at(k); }
+  int contig_per_thread(size_t k) { return contig_per_thread_.at(k); }
 
   // helpers for generator.cc
   std::string get_ptx_instr() const { return mma_instr_ptx_.at(tensor_core_type_); }
@@ -203,6 +205,8 @@ private:
   std::vector<int> spt_;
   // repetitions
   std::vector<int> rep_;
+  // contiguous per thread
+  std::vector<int> contig_per_thread_;
 
   TensorCoreType tensor_core_type_ = FP32_FP16_FP16_FP32;
 };
@@ -218,6 +222,7 @@ struct scanline_layout: public distributed_layout {
   // accessor
   int mts(size_t k) { return mts_.at(k); }
   int nts(size_t k) { return nts_.at(k); }
+  int contig_per_thread(size_t k) { return nts_.at(k); }
 
 public:
   // micro tile size. The size of a tile held by a thread block.
