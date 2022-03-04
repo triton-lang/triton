@@ -208,10 +208,12 @@ mma_layout::mma_layout(size_t num_warps,
     int pack_size_1 = (is_b_row && !is_b_vec4) ? 2 : 1;
     rep_ = {2*pack_size_0, 2*pack_size_1, 1};
     spw_ = {fpw_[0]*4*rep_[0], fpw_[1]*4*rep_[1], 1};
+    contig_per_thread_ = {1, 1};
   }
   else{
     // fpw_ = {1, 1, 1};
     spw_ = mma_instr_shape_.at(tensor_core_type_); // e.g., {16, 8, 16} for f32.f16.f16.f32
+    contig_per_thread_ = {1, 1};
     // rep_ = {2,  2, 1};
   }
   order_ = {0, 1};
@@ -628,6 +630,12 @@ void layouts::run(ir::module &mod) {
         shape[k] = std::max(in_layout->shape_per_cta(k),
                             out_layout->shape_per_cta(k));
       }
+      auto in_ord = in_layout->get_order();
+      auto out_ord = out_layout->get_order();
+      int in_vec = in_layout->contig_per_thread(in_ord[0]);
+      int out_vec = out_layout->contig_per_thread(out_ord[0]);
+      int pad = std::max(in_vec, out_vec);
+      shape[out_ord[0]] += pad;
       layouts_[id] = new shared_layout(out_layout, axes_->get(val), shape, {val}, val->get_type()->get_scalar_ty(), align_, tgt_);
       tmp_[val] = id;
     }
