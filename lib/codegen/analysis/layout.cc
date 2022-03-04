@@ -213,7 +213,7 @@ mma_layout::mma_layout(size_t num_warps,
   else{
     // fpw_ = {1, 1, 1};
     spw_ = mma_instr_shape_.at(tensor_core_type_); // e.g., {16, 8, 16} for f32.f16.f16.f32
-    contig_per_thread_ = {1, 1};
+    contig_per_thread_ = {1, 2};
     // rep_ = {2,  2, 1};
   }
   order_ = {0, 1};
