@@ -18,6 +18,21 @@ The foundations of this project are described in the following MAPL2019 publicat
 
 The [official documentation](https://triton-lang.org) contains installation instructions and tutorials.
 
+# Quick Installation
+
+You can install the latest stable release of Triton from pip:
+
+```bash
+pip install triton
+```
+Binary wheels are available for CPython 3.6-3.9 and PyPy 3.6-3.7.
+
+And the latest nightly release:
+
+```bash
+pip install -U --pre triton
+```
+
 # Changelog
 
 Version 1.1 is out! New features include:
