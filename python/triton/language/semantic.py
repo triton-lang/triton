@@ -1,5 +1,5 @@
 from . import core
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from triton._C.libtriton.triton import ir
 
 
@@ -99,8 +99,8 @@ def binary_op_type_checking_impl(lhs: core.block,
   check_ptr_type_impl(rhs_sca_ty, lhs_sca_ty, allow_rhs_ptr)
   if arithmetic_check and not lhs_sca_ty.is_ptr() and not rhs_sca_ty.is_ptr():
     ret_sca_ty = computation_type_impl(lhs_sca_ty, rhs_sca_ty, div_or_mod)
-    lhs = cast_impl(lhs, ret_sca_ty, builder)
-    rhs = cast_impl(rhs, ret_sca_ty, builder)
+    lhs = cast(lhs, ret_sca_ty, builder)
+    rhs = cast(rhs, ret_sca_ty, builder)
   return lhs, rhs
   
 
@@ -162,20 +162,20 @@ def truediv(input: core.block,
   other_scalar_ty = other.type.scalar
   # float / int
   if input_scalar_ty.is_floating() and other_scalar_ty.is_int():
-    other = cast_impl(other, input_scalar_ty, builder)
+    other = cast(other, input_scalar_ty, builder)
   # int / float
   elif input_scalar_ty.is_int() and other_scalar_ty.is_floating():
-    input = cast_impl(input, other_scalar_ty, builder)
+    input = cast(input, other_scalar_ty, builder)
   # int / int (cast to float32)
   elif input_scalar_ty.is_int() and other_scalar_ty.is_int():
-    input = cast_impl(input, core.float32, builder)
-    other = cast_impl(other, core.float32, builder)
+    input = cast(input, core.float32, builder)
+    other = cast(other, core.float32, builder)
   # float / float (cast to highest exponent type)
   elif input_scalar_ty.is_floating() and other_scalar_ty.is_floating():
     if input_scalar_ty.get_fp_mantissa_width() > other_scalar_ty.get_fp_mantissa_width():
-      other = cast_impl(other, input_scalar_ty, builder)
+      other = cast(other, input_scalar_ty, builder)
     else:
-      input = cast_impl(input, other_scalar_ty, builder)
+      input = cast(input, other_scalar_ty, builder)
   # unreachable
   else:
     assert False
@@ -189,8 +189,8 @@ def floordiv(input: core.block,
   other_scalar_ty = other.type.scalar
   if input_scalar_ty.is_int() and other_scalar_ty.is_int():
     ret_ty = integer_promote_impl(input_scalar_ty, other_scalar_ty)
-    input = cast_impl(input, ret_ty, builder)
-    other = cast_impl(other, ret_ty, builder)
+    input = cast(input, ret_ty, builder)
+    other = cast(other, ret_ty, builder)
     if ret_ty.is_int_signed():
       return core.block(builder.create_sdiv(input.handle, other.handle), input.type)
     else:
@@ -244,9 +244,9 @@ def bitwise_op_type_checking_impl(input: core.block,
     raise IncompatibleTypeErrorimpl(input_sca_ty, other_sca_ty)
   ret_sca_ty = integer_promote_impl(input_sca_ty, other_sca_ty)
   if ret_sca_ty != input_sca_ty:
-    input = cast_impl(input, ret_sca_ty, builder)
+    input = cast(input, ret_sca_ty, builder)
   if ret_sca_ty != other_sca_ty:
-    other = cast_impl(other, ret_sca_ty, builder)
+    other = cast(other, ret_sca_ty, builder)
   return input, other
 
 def and_(input: core.block,
@@ -488,31 +488,26 @@ def broadcast_impl_value(lhs: core.block,
 #######
 # cast
 #######
-# temporary until typesystem is properly merged too
-def bitcast_impl(input, dst_ty, builder):
-  return bitcast(input, dst_ty, builder).handle
-
-def bitcast(input, dst_ty, builder):
+def bitcast(input: core.block,
+            dst_ty: core.dtype,
+            builder: ir.builder) -> core.block:
   src_ty = input.type
   if src_ty.is_block():
-    dst_ty = ir.type.make_block(dst_ty, input.type.get_block_shapes())
+    dst_ty = core.block_type(dst_ty, input.type.get_block_shapes())
   if src_ty == dst_ty:
     return input
   src_sca_ty = src_ty.scalar
   dst_sca_ty = dst_ty.scalar
   if src_sca_ty.is_ptr() or dst_sca_ty.is_ptr():
-    return cast_impl(input, dst_ty, builder)
+    return cast(input, dst_ty, builder)
   # Bitcast
   src_bits = src_sca_ty.primitive_bitwidth
   dst_bits = dst_sca_ty.primitive_bitwidth
-  if  src_bits!= dst_bits:
+  if src_bits != dst_bits:
     raise ValueError("Cannot bitcast data-type of size " + str(src_bits) +
                              "to data-type of size " + str(dst_bits))
-  return builder.create_bitcast(input, dst_ty)
-
-# temporary until typesystem is properly merged too
-def cast_impl(input, dst_ty, builder):
-  return cast(input, dst_ty, builder).handle
+  return core.block(builder.create_bitcast(input.handle, dst_ty.to_ir(builder)),
+                    dst_ty)
 
 def cast(input: core.block,
          dst_ty: core.dtype,
@@ -528,75 +523,95 @@ def cast(input: core.block,
   # bf16 <=> (not fp32)
   if (src_sca_ty.is_bf16() and not dst_sca_ty.is_fp32()) or \
      (dst_sca_ty.is_bf16() and not src_sca_ty.is_fp32()):
-    return cast_impl(cast_impl(input, core.float32, builder), dst_sca_ty, builder)
+    return case(cast(input, core.float32, builder), dst_sca_ty, builder)
 
   # FP Truncation
-  truncate_fp = src_sca_ty.is_floating() and\
-                dst_sca_ty.is_floating() and\
+  truncate_fp = src_sca_ty.is_floating() and \
+                dst_sca_ty.is_floating() and \
                 src_sca_ty.get_fp_mantissa_width() > dst_sca_ty.get_fp_mantissa_width()
   if truncate_fp:
-    return builder.create_fp_trunc(input, dst_ty)
+    return core.block(builder.create_fp_trunc(input.handle, 
+                                              dst_ty.to_ir(builder)),
+                      dst_ty)
 
   # FP Extension
-  ext_fp = src_sca_ty.is_floating() and\
-                dst_sca_ty.is_floating() and\
+  ext_fp = src_sca_ty.is_floating() and \
+                dst_sca_ty.is_floating() and \
                 src_sca_ty.get_fp_mantissa_width() < dst_sca_ty.get_fp_mantissa_width()
   if ext_fp:
-    return builder.create_fp_ext(input, dst_ty)
+    return core.block(builder.create_fp_ext(input.handle,
+                                            dst_ty.to_ir(builder)),
+                      dst_ty)
 
   # Int cast
-  if src_sca_ty.is_int() and dst_sca_ty.is_int() and\
+  if src_sca_ty.is_int() and dst_sca_ty.is_int() and \
     (src_sca_ty.int_bitwidth != dst_sca_ty.int_bitwidth or
      src_sca_ty.int_signedness != dst_sca_ty.int_signedness):
     sign_extend = src_sca_ty.is_int_signed() and src_sca_ty != builder.get_int1_ty()
-    return builder.create_int_cast(input, dst_ty, sign_extend)
+    return core.block(builder.create_int_cast(input.handle,
+                                              dst_ty.to_ir(builder), sign_extend),
+                      dst_ty)
 
   # Float to Int
   if src_sca_ty.is_floating() and dst_sca_ty.is_int():
+    # TODO: is this correct?
     if dst_sca_ty.is_bool():
-      return builder.create_fp_to_ui(input, dst_ty)
+      return core.block(builder.create_fp_to_ui(input.handle,
+                                                dst_ty.to_ir(builder)),
+                        dst_ty)
     else:
-      return builder.create_fp_to_si(input, dst_ty)
+      return core.block(builder.create_fp_to_si(input.handle,
+                                                dst_ty.to_ir(builder)),
+                        dst_ty)
 
-  # . Float
+  # int => float
   if src_sca_ty.is_int() and dst_sca_ty.is_floating():
     if src_sca_ty.is_bool() or not src_sca_ty.is_int_signed():
-      return builder.create_ui_to_fp(input, dst_ty)
+      return core.block(builder.create_ui_to_fp(input.handle,
+                                                dst_ty.to_ir(builder)),
+                        dst_ty)
     else:
-      return builder.create_si_to_fp(input, dst_ty)
+      return core.block(builder.create_si_to_fp(input.handle,
+                                                dst_ty.to_ir(builder)),
+                        dst_ty)
 
+  # ptr => int
   if src_sca_ty.is_ptr() and dst_sca_ty.is_int():
     bitwidth = dst_sca_ty.int_bitwidth
     if bitwidth == 64:
-      return builder.create_cast(ir.PtrToInt, input, dst_ty)
+      return core.block(builder.create_cast(ir.PtrToInt, input.handle, dst_ty.to_ir(builder)),
+                        dst_ty)
     if bitwidth == 1:
-      return not_equal(cast_impl(input, builder.get_int64_ty(), builder),
-                                 builder.get_int64(0),
-                                 builder)
+      return not_equal(cast(input, core.int64, builder),
+                       core.block(builder.get_int64(0), core.int64),
+                       builder)
 
   if not src_sca_ty.is_ptr() and dst_sca_ty.is_ptr():
-    return builder.create_int_to_ptr(input, dst_ty)
+    return core.block(builder.create_int_to_ptr(input.handle, dst_ty.to_ir(builder)), dst_ty)
   # Ptr . Ptr
   if src_sca_ty.is_ptr() and dst_sca_ty.is_ptr():
-    return builder.create_bitcast(input, dst_ty)
+    return core.block(builder.create_bitcast(input.handle, dst_ty.to_ir(builder)), dst_ty)
   # * . Bool
   if dst_sca_ty.is_bool():
     if src_sca_ty.is_ptr():
-      input = cast_impl(input, builder.get_int64_ty(), builder)
+      input = cast(input, core.int64, builder)
     other = builder.get_int64(0)
     if src_ty.is_bool():
       other = builder.create_splat(other, src_ty.get_block_shapes())
-    return builder.create_icmpNE(input, other)
-  
+    return core.block(builder.create_icmpNE(input.handle, other), dst_ty)
   assert False
 
 #===----------------------------------------------------------------------===//
 #                               Memory Operators
 #===----------------------------------------------------------------------===//
 
-def load( ptr,  mask,  other, cache_modifier, eviction_policy, is_volatile,  builder):
-  is_volatile = is_volatile.value
-
+def load(ptr: core.block,
+         mask: Optional[core.block],
+         other: Optional[core.block],
+         cache_modifier: str,
+         eviction_policy: str,
+         is_volatile: bool,
+         builder: ir.builder) -> core.block:
   if not ptr.type.scalar.is_ptr():
     raise ValueError("Pointer argument of load instruction is " + ptr.type.repr())
   if ptr.type.is_block():
@@ -606,14 +621,14 @@ def load( ptr,  mask,  other, cache_modifier, eviction_policy, is_volatile,  bui
       other = broadcast_impl_shape(other, ptr.type.get_block_shapes(), builder)
   
   if other:
-    other = cast_impl(other, ptr.type.scalar.element, builder)
+    other = cast(other, ptr.type.scalar.element, builder)
   ptr_ty = ptr.type.scalar
   elt_ty = ptr_ty.element
   # treat bool* as int8*
-  if elt_ty == builder.get_int1_ty():
-    elt_ty = builder.get_int8_ty()
-    ptr_ty = ir.type.make_ptr(elt_ty, ptr_ty.address_space)
-    ptr = cast_impl(ptr, ptr_ty, builder)
+  if elt_ty == core.int1:
+    elt_ty = core.int8
+    ptr_ty = core.pointer_type(elt_ty, ptr_ty.address_space)
+    ptr = cast(ptr, ptr_ty, builder)
   
   # cache modifier
   cache = ir.CACHE_MODIFIER.NONE; # default
@@ -635,20 +650,31 @@ def load( ptr,  mask,  other, cache_modifier, eviction_policy, is_volatile,  bui
     else:
         raise ValueError(f"Eviction policy {eviction_policy} not supported")
 
-
+  assert ptr.type.is_block()
+  shape = ptr.type.get_block_shapes()
+  dst_ty = core.block_type(elt_ty, shape)
   if not mask and not other:
-    return builder.create_load(ptr, cache, eviction, is_volatile)
+    return core.block(builder.create_load(ptr.handle, cache, eviction, is_volatile),
+                      dst_ty)
   if not mask:
     raise ValueError("`other` cannot be provided without `mask`")
-  shape = ptr.type.get_block_shapes()
-  if not other:
-    other = ir.undef.get(elt_ty)
-    if ptr.type.is_block():
-      other = builder.create_splat(other, ptr.type.get_block_shapes())
   
-  return builder.create_masked_load(ptr, mask, other, cache, eviction, is_volatile)
+  if not other:
+    other_ir = ir.undef.get(elt_ty.to_ir(builder))
+    if ptr.type.is_block():
+      other_ir = builder.create_splat(other_ir, ptr.type.get_block_shapes())
+    other = core.block(other_it, dst_ty)
+  
+  return core.block(builder.create_masked_load(ptr.handle,
+                                               mask.handle,
+                                               other.handle,
+                                               cache, eviction, is_volatile),
+                    dst_ty)
 
-def store( ptr, val,  mask, builder):
+def store(ptr: core.block,
+          val: core.block,
+          mask: Optional[core.block],
+          builder: ir.builder) -> core.block:
   if not ptr.type.scalar.is_ptr():
     raise ValueError("Pointer argument of store instruction is " + ptr.type.repr())
   if ptr.type.is_block():
@@ -658,23 +684,33 @@ def store( ptr, val,  mask, builder):
   ptr_ty = ptr.type.scalar
   elt_ty = ptr_ty.element
   # treat bool* as int8*
-  if elt_ty == builder.get_int1_ty():
-    elt_ty = builder.get_int8_ty()
-    ptr_ty = ir.type.make_ptr(elt_ty, ptr_ty.address_space)
-    ptr = cast_impl(ptr, ptr_ty, builder)
+  if elt_ty == core.int1:
+    elt_ty = core.int8
+    ptr_ty = core.pointer_type(elt_ty, ptr_ty.address_space)
+    ptr = cast(ptr, ptr_ty, builder)
   
   # cast to target data-type
-  val = cast_impl(val, elt_ty, builder)
+  val = cast(val, elt_ty, builder)
   if not mask:
-    return builder.create_store(ptr, val)
+    return core.block(builder.create_store(ptr.handle, val.handle))
   if not mask.type.scalar.is_bool():
     raise ValueError("Mask must have boolean scalar type")
-  return builder.create_masked_store(ptr, val, mask)
+  return core.block(builder.create_masked_store(ptr.handle, val.handle, mask.handle))
 
-def atomic_cas( ptr, cmp, val, builder):
-  return builder.create_atomic_cas(ptr, cmp, val)
+#########
+# atomic
+#########
+def atomic_cas(ptr: core.block,
+               cmp: core.block,
+               val: core.block,
+               builder: ir.builder) -> core.block:
+  # TODO: type checking
+  return core.block(builder.create_atomic_cas(ptr.handle, cmp.handle, val.handle), val.type)
 
-def atom_red_typechecking_impl( ptr, val, mask, builder):
+def atom_red_typechecking_impl(ptr: core.block,
+                               val: core.block,
+                               mask: core.block,
+                               builder: ir.builder) -> Tuple[core.block, core.block, core.block]:
   if not ptr.type.scalar.is_ptr():
     raise ValueError("Pointer argument of store instruction is " + ptr.type.repr())
   if ptr.type.is_block():
@@ -682,75 +718,121 @@ def atom_red_typechecking_impl( ptr, val, mask, builder):
       mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
     if val:
       val = broadcast_impl_shape(val, ptr.type.get_block_shapes(), builder)
-  val = cast_impl(val, ptr.type.scalar.element, builder)
+  val = cast(val, ptr.type.scalar.element, builder)
   if not mask:
-    mask = builder.get_int1(True)
+    mask_ir = builder.get_int1(True)
     if ptr.type.is_block():
-      mask = builder.create_splat(mask, ptr.type.get_block_shapes())
+      mask_ir = builder.create_splat(mask_ir, ptr.type.get_block_shapes())
+    mask = core.block(mask_ir)
   return ptr, val, mask
   
 
-def atomic_max( ptr, val, mask, builder):
+def atomic_max(ptr: core.block,
+               val: core.block,
+               mask: core.block,
+               builder: ir.builder) -> core.block:
   ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
   sca_ty = val.type.scalar
   # direct call to atomic_max for integers
   if sca_ty.is_int():
     if sca_ty.is_int_signed():
-      return builder.create_atomic_rmw(ir.ATOMIC_OP.MAX, ptr, val, mask)
+      return core.block(builder.create_atomic_rmw(ir.ATOMIC_OP.MAX, 
+                                                  ptr.handle,
+                                                  val.handle,
+                                                  mask.handle),
+                        val.type)
     else:
-      return builder.create_atomic_rmw(ir.ATOMIC_OP.UMAX, ptr, val, mask)
+      return core.block(builder.create_atomic_rmw(ir.ATOMIC_OP.UMAX,
+                                                  ptr.handle,
+                                                  val.handle,
+                                                  mask.handle),
+                        val.type)
   # for float
   # return atomic_smax(i_ptr, i_val) if val >= 0
   # return atomic_umin(i_ptr, i_val) if val < 0
-  i_val = bitcast_impl(val, builder.get_int32_ty(), builder)
-  i_ptr = bitcast_impl(ptr, ir.type.make_ptr(builder.get_int32_ty(), 1), builder)
-  pos = greater_equal(val, ir.constant_float.get(sca_ty, 0), builder)
-  neg = less_than(val, ir.constant_float.get(sca_ty, 0), builder)
+  i_val = bitcast(val, core.int32, builder)
+  i_ptr = bitcast(ptr, core.pointer_type(core.int32, 1), builder)
+  pos = greater_equal(val, core.block(ir.constant_float.get(sca_ty, 0), sca_ty), builder)
+  neg = less_than(val, core.block(ir.constant_float.get(sca_ty, 0), sca_ty), builder)
   pos_ret = builder.create_atomic_rmw(ir.ATOMIC_OP.MAX, i_ptr, i_val, and_(mask, pos, builder).handle)
   neg_ret = builder.create_atomic_rmw(ir.ATOMIC_OP.UMIN, i_ptr, i_val, and_(mask, neg, builder).handle)
   return where(pos, pos_ret, neg_ret, builder)
 
-def atomic_min( ptr, val, mask, builder):
+def atomic_min(ptr: core.block,
+               val: core.block,
+               mask: core.block,
+               builder: ir.builder) -> core.block:
   ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
   sca_ty = val.type.scalar
   # direct call to atomic_min for integers
   if sca_ty.is_int():
     if sca_ty.is_int_signed():
-      return builder.create_atomic_rmw(ir.ATOMIC_OP.MIN, ptr, val, mask)
+      return core.block(builder.create_atomic_rmw(ir.ATOMIC_OP.MIN,
+                                                  ptr.handle,
+                                                  val.handle,
+                                                  mask.handle),
+                        val.type)
     else:
-      return builder.create_atomic_rmw(ir.ATOMIC_OP.UMIN, ptr, val, mask)
+      return core.block(builder.create_atomic_rmw(ir.ATOMIC_OP.UMIN,
+                                                  ptr.handle,
+                                                  val.handle,
+                                                  mask.handle),
+                        val.type)
   # for float
   # return atomic_smin(i_ptr, i_val) if val >= 0
   # return atomic_umax(i_ptr, i_val) if val < 0
-  i_val = bitcast_impl(val, builder.get_int32_ty(), builder)
-  i_ptr = bitcast_impl(ptr, ir.type.make_ptr(builder.get_int32_ty(), 1), builder)
+  i_val = bitcast(val, builder.get_int32_ty(), builder)
+  i_ptr = bitcast(ptr, ir.type.make_ptr(builder.get_int32_ty(), 1), builder)
   pos = greater_equal(val, ir.constant_float.get(sca_ty, 0), builder)
   neg = less_than(val, ir.constant_float.get(sca_ty, 0), builder)
-  pos_ret = builder.create_atomic_rmw(ir.ATOMIC_OP.MIN, i_ptr, i_val, and_(mask, pos, builder).handle)
-  neg_ret = builder.create_atomic_rmw(ir.ATOMIC_OP.UMAX, i_ptr, i_val, and_(mask, neg, builder).handle)
+  pos_ret = core.block(builder.create_atomic_rmw(ir.ATOMIC_OP.MIN, 
+                                                 i_ptr.handle,
+                                                 i_val.handle,
+                                                 and_(mask, pos, builder).handle),
+                       i_val.type)
+  neg_ret = core.block(builder.create_atomic_rmw(ir.ATOMIC_OP.UMAX,
+                                                 i_ptr.handle,
+                                                 i_val.handle,
+                                                 and_(mask, neg, builder).handle),
+                       i_val.type)
   return where(pos, pos_ret, neg_ret, builder)
 
-def atomic_add( ptr, val, mask, builder):
+def atomic_add(ptr: core.block,
+               val: core.block,
+               mask: core.block,
+               builder: ir.builder) -> core.block:
   ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
   sca_ty = val.type.scalar
   op = ir.ATOMIC_OP.FADD if sca_ty.is_floating() else ir.ATOMIC_OP.ADD
-  return builder.create_atomic_rmw(op, ptr, val, mask)
+  return core.block(builder.create_atomic_rmw(op, ptr.handle, val.handle, mask.handle), val.type)
 
-def atomic_and( ptr, val, mask, builder):
+def atomic_and(ptr: core.block,
+               val: core.block,
+               mask: core.block, 
+               builder: ir.builder) -> core.block:
   ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
-  return builder.create_atomic_rmw(ir.ATOMIC_OP.AND, ptr, val, mask)
+  return core.block(builder.create_atomic_rmw(ir.ATOMIC_OP.AND, ptr.handle, val.handle, mask.handle), val.type)
 
-def atomic_or( ptr, val, mask, builder):
+def atomic_or(ptr: core.block,
+              val: core.block,
+              mask: core.block, 
+              builder: ir.builder) -> core.block:
   ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
-  return builder.create_atomic_rmw(ir.ATOMIC_OP.OR, ptr, val, mask)
+  return core.block(builder.create_atomic_rmw(ir.ATOMIC_OP.OR, ptr.handle, val.handle, mask.handle), val.type)
 
-def atomic_xor( ptr, val, mask, builder):
+def atomic_xor(ptr: core.block,
+               val: core.block,
+               mask: core.block, 
+               builder: ir.builder) -> core.block:
   ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
-  return builder.create_atomic_rmw(ir.ATOMIC_OP.XOR, ptr, val, mask)
+  return core.block(builder.create_atomic_rmw(ir.ATOMIC_OP.XOR, ptr.handle, val.handle, mask.handle), val.type)
 
-def atomic_xchg( ptr, val, mask, builder):
+def atomic_xchg(ptr: core.block,
+                val: core.block,
+                mask: core.block, 
+                builder: ir.builder) -> core.block:
   ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
-  return builder.create_atomic_rmw(ir.ATOMIC_OP.XCHG, ptr, val, mask)
+  return core.block(builder.create_atomic_rmw(ir.ATOMIC_OP.XCHG, ptr.handle, val.handle, mask.handle), val.type)
 
 #===----------------------------------------------------------------------===//
 #                               Linear Algebra
@@ -777,8 +859,11 @@ def dot(lhs: core.block,
 #                               Indexing
 #===----------------------------------------------------------------------===//
 
-def where(condition, x, y, builder):
-  condition = cast_impl(condition, builder.get_int1_ty(), builder)
+def where(condition: core.block,
+          x: core.block,
+          y: core.block,
+          builder: core.block) -> core.block:
+  condition = cast(condition, core.int1, builder)
   if condition.type.is_block():
     x = broadcast_impl_shape(x, condition.type.get_block_shapes(), builder)
     y = broadcast_impl_shape(y, condition.type.get_block_shapes(), builder)
@@ -786,39 +871,39 @@ def where(condition, x, y, builder):
   x_ty = x.type.scalar
   y_ty = y.type.scalar
   ty = computation_type_impl(x_ty, y_ty, div_or_mod=False)
-  x = cast_impl(x, ty, builder)
-  y = cast_impl(y, ty, builder)
-  return builder.create_select(condition, x, y)
+  x = cast(x, ty, builder)
+  y = cast(y, ty, builder)
+  return core.block(builder.create_select(condition.handle, x.handle, y.handle), ty)
 
 
 #===----------------------------------------------------------------------===//
 #                               Reductions
 #===----------------------------------------------------------------------===//
 
-def reduce_impl(input, axis, builder, name,
-                FLOAT_OP, INT_OP):
+def reduce_impl(input: core.block, axis: int, builder: ir.builder, name: str, 
+                FLOAT_OP: ir.REDUCE_OP, INT_OP: ir.REDUCE_OP) -> core.block:
   scalar_ty = input.type.scalar
   # input is extended to 32-bits if necessary
   # this increases numerical accuracy and can be done pretty much for free
   # on GPUs
   if scalar_ty.is_int() and scalar_ty.int_bitwidth <= 32:
-    input = cast_impl(input, ir.type.get_int32(scalar_ty.context), builder)
+    input = cast(input, core.int32, builder)
   if scalar_ty.is_floating():
     return builder.create_reduce(input, FLOAT_OP, axis)
   elif scalar_ty.is_int():
     return builder.create_reduce(input, INT_OP, axis)
   assert False
 
-def min(input, axis, builder):
+def min(input: core.block, axis: int, builder: ir.builder) -> core.block:
   return reduce_impl(input, axis, builder, "min", ir.REDUCE_OP.FMIN, ir.REDUCE_OP.MIN)
 
-def max(input, axis, builder):
+def max(input: core.block, axis: int, builder: ir.builder) -> core.block:
   return reduce_impl(input, axis, builder, "max", ir.REDUCE_OP.FMAX, ir.REDUCE_OP.MAX)
 
-def sum(input, axis, builder):
+def sum(input: core.block, axis: int, builder: ir.builder) -> core.block:
   return reduce_impl(input, axis, builder, "sum", ir.REDUCE_OP.FADD, ir.REDUCE_OP.ADD)
 
-def xor_sum(input, axis, builder):
+def xor_sum(input: core.block, axis: int, builder: ir.builder) -> core.block:
   scalar_ty = input.type.scalar
   if not scalar_ty.is_int():
     raise ValueError("xor_sum only supported for integers")
@@ -833,20 +918,20 @@ def umulhi(x,  y, builder):
   binary_op_type_checking_impl(x, y, builder)
   return builder.insert(ir.umulhi_inst.create(x, y))
 
-def exp(x, builder):
-  return builder.create_exp(x)
+def exp(x: core.block, builder: ir.builder) -> core.block:
+  return core.block(builder.create_exp(x.handle), x.type)
 
-def log(x, builder):
-  return builder.create_log(x)
+def log(x: core.block, builder: ir.builder) -> core.block:
+  return core.block(builder.create_log(x.handle), x.type)
 
-def cos(x, builder):
-  return builder.create_cos(x)
+def cos(x: core.block, builder: ir.builder) -> core.block:
+  return core.block(builder.create_cos(x.handle), x.type)
 
-def sin(x, builder):
-  return builder.create_sin(x)
+def sin(x: core.block, builder: ir.builder) -> core.block:
+  return core.block(builder.create_sin(x.handle), x.type)
 
-def sqrt(x, builder):
-  return builder.create_sqrt(x)
+def sqrt(x: core.block, builder: ir.builder) -> core.block:
+  return core.block(builder.create_sqrt(x.handle), x.type)
 
 
 ##

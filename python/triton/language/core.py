@@ -206,13 +206,17 @@ class dtype:
 
 
 class pointer_type(dtype):
-    def __init__(self, element_ty: dtype):
+    def __init__(self, element_ty: dtype, address_space: int = 1):
         if not isinstance(element_ty, dtype):
             raise TypeError('element_ty is a {type(element_ty).__name__}.')
         self.element_ty = element_ty
+        self.address_space = address_space
 
-    def handle(self, builder):
-        return ir.type.make_ptr(self.element_ty.handle(builder), 1)
+    # def handle(self, builder):
+    #     return ir.type.make_ptr(self.element_ty.handle(builder), 1)
+
+    def to_ir(self, builder: ir.builder) -> ir.pointer_type:
+        return ir.type.make_ptr(self.element_ty.to_ir(builder), 1)
 
     def __str__(self):
         return f'pointer<{self.element_ty}>'
@@ -225,6 +229,9 @@ class block_type(dtype):
     def __init__(self, element_ty: dtype, shape: List[int]):
         self.element_ty = element_ty
         self.shape = shape
+
+    def to_ir(self, builder: ir.builder) -> ir.block_type:
+        return ir.type.make_block(self.element_ty.to_ir(builder), self.shape)
 
     def __str__(self):
         return f'<{self.shape}, {self.element_ty}>'
