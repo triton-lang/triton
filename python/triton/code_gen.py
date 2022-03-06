@@ -12,12 +12,14 @@ import textwrap
 import time
 import warnings
 from typing import Dict
+from numpy import isin
 
 import torch
 from filelock import FileLock
 
 import triton
 import triton._C.libtriton.triton as _triton
+import triton.language as tl
 from .tools.disasm import extract
 
 
@@ -35,17 +37,15 @@ class CodeGenerator(ast.NodeVisitor):
             ret = self.builtins[name]
         else:
             raise ValueError(f'{name} is not defined')
-        if isinstance(ret, triton.language.block):
-            handle = self.module.get_value(name)
-            return triton.language.block(handle)
         return ret
 
     def set_value(self, name, value):
-        if isinstance(value, _triton.ir.value):
-            value = triton.language.block(value)
-        if isinstance(value, triton.language.block):
-            self.module.set_value(name, value.handle)
-            self.module.set_type(name, value.handle.type)
+        # if isinstance(value, _triton.ir.value):
+        #     value = triton.language.block(value)
+        # if isinstance(value, triton.language.block):
+        #     self.module.set_value(name, value.handle)
+        #     self.module.set_type(name, value.handle.type)
+        assert isinstance(value, tl.block) or isinstance(value, tl.constexpr)
         self.lscope[name] = value
 
     def is_triton_object(self, value):

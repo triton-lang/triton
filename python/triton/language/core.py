@@ -1,4 +1,6 @@
+from enum import Enum
 from functools import wraps
+from typing import List
 
 import triton
 from triton._C.libtriton.triton import ir
@@ -31,34 +33,34 @@ def _to_ir(x, builder):
     return x
 
 
-def _patch(fn):
-    def _from_ir(x):
-        if isinstance(x, ir.value):
-            if x.type.is_void():
-                return None
-            return block(x)
-        return x
+# def _patch(fn):
+#     def _from_ir(x):
+#         if isinstance(x, ir.value):
+#             if x.type.is_void():
+#                 return None
+#             return block(x)
+#         return x
 
-    def wrapper(*args, **kwargs):
-        builder = args[-1]
-        assert isinstance(builder, ir.builder)
-        args = [_to_ir(x, builder) for x in args]
-        # for i, arg in enumerate(args):
-        #     if arg is None:
-        #         raise ValueError(f"Unexpected `None` at position {i} for function {fn.__name__}")
-        kwargs = {k: _to_ir(v, builder) for k, v in kwargs.items()}
-        ret = fn(*args, **kwargs)
-        if isinstance(ret, tuple):
-            return map(_from_ir, ret)
-        return _from_ir(ret)
+#     def wrapper(*args, **kwargs):
+#         builder = args[-1]
+#         assert isinstance(builder, ir.builder)
+#         args = [_to_ir(x, builder) for x in args]
+#         # for i, arg in enumerate(args):
+#         #     if arg is None:
+#         #         raise ValueError(f"Unexpected `None` at position {i} for function {fn.__name__}")
+#         kwargs = {k: _to_ir(v, builder) for k, v in kwargs.items()}
+#         ret = fn(*args, **kwargs)
+#         if isinstance(ret, tuple):
+#             return map(_from_ir, ret)
+#         return _from_ir(ret)
 
-    return wrapper
+#     return wrapper
 
 
-for name in dir(frontend):
-    fn = getattr(frontend, name)
-    if callable(fn) and "impl" not in name:
-        setattr(frontend, name, _patch(fn))
+# for name in dir(frontend):
+#     fn = getattr(frontend, name)
+#     if callable(fn) and "impl" not in name:
+#         setattr(frontend, name, _patch(fn))
 
 
 def builtin(fn):
@@ -73,20 +75,123 @@ def builtin(fn):
 
 
 class dtype:
-    def __init__(self, init):
-        self.init = init
+    SINT_TYPES = ['int1', 'int8', 'int16', 'int32']
+    UINT_TYPES = ['uint8', 'uint16', 'uint32', 'uint64']
+    FP_TYPES = ['fp8', 'fp16', 'bf16', 'fp32', 'fp64']
 
-    @property
-    def name(self) -> str:
-        # The init functions are named something like 'get_int8'. Strip the prefix.
-        nom = self.init.__name__
-        prefix = 'get_'
-        assert nom.startswith(prefix)
-        return nom[len(prefix):]
+    class SIGNEDNESS(Enum):
+        SIGNED = 0
+        UNSIGNED = 1
 
-    def handle(self, builder):
-        ctx = builder.context
-        return self.init(ctx)
+    def __init__(self, name):
+        self.name = name
+        assert name in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES
+        if name in dtype.SINT_TYPES:
+            self.int_signedness = dtype.SIGNEDNESS.SIGNED
+            self.int_bitwidth = int(name.split('int')[-1])
+        elif name in dtype.UINT_TYPES:
+            self.int_signedness = dtype.SIGNEDNESS.UNSIGNED
+            self.int_bitwidth = int(name.split('int')[-1])
+        elif name in dtype.FP_TYPES:
+            if name == 'fp8':
+                self.fp_mantissa_width = 3
+            elif name == 'fp16':
+                self.fp_mantissa_width = 10
+            elif name == 'bf16':
+                self.fp_mantissa_width = 7
+            elif name == 'fp32':
+                self.fp_mantissa_width = 23
+            elif name == 'fp64':
+                self.fp_mantissa_width = 53
+        
+    def is_fp8(self):
+        return self.name == 'fp8'
+
+    def is_fp16(self):
+        return self.name == 'fp16'
+
+    def is_bf16(self):
+        return self.name == 'bf16'
+
+    def is_fp32(self):
+        return self.name == 'fp32'
+
+    def is_fp64(self):
+        return self.name == 'fp64'
+
+    def is_int1(self):
+        return self.name == 'int1'
+
+    def is_int8(self):
+        return self.name == 'int8'
+
+    def is_int16(self):
+        return self.name == 'int16'
+
+    def is_int32(self):
+        return self.name == 'int32'
+
+    def is_int64(self):
+        return self.name == 'int64'
+
+    def is_uint8(self):
+        return self.name == 'uint8'
+
+    def is_uint16(self):
+        return self.name == 'uint16'
+
+    def is_uint32(self):
+        return self.name == 'uint32'
+
+    def is_uint64(self):
+        return self.name == 'uint64'
+
+    def is_floating(self):
+        return self.name in dtype.FP_TYPES
+
+    def is_int_signed(self):
+        return self.name in dtype.SINT_TYPES
+
+    def is_int(self):
+        return self.name in dtype.SINT_TYPES + dtype.UINT_TYPES
+
+    def is_bool(self):
+        return self.is_int1()
+
+    def is_void(self):
+        raise RuntimeError("Not implemented")
+
+    def is_block(self):
+        return False
+
+    def is_ptr(self):
+        return False
+
+    # @property
+    # def name(self) -> str:
+    #     # The init functions are named something like 'get_int8'. Strip the prefix.
+    #     nom = self.init.__name__
+    #     prefix = 'get_'
+    #     assert nom.startswith(prefix)
+    #     return nom[len(prefix):]
+
+    def to_ir(self, builder: ir.builder) -> ir.type:
+        if self.name == 'int1':
+            return builder.get_int1_ty()
+        elif self.name == 'int8' or self.name == 'uint8':
+            return builder.get_int8_ty()
+        elif self.name == 'int16' or self.name == 'uint16':
+            return builder.get_int16_ty()
+        elif self.name == 'int32' or self.name == 'uint32':
+            return builder.get_int32_ty()
+        elif self.name == 'int64' or self.name == 'uint64':
+            return builder.get_int64_ty()
+        elif self.name == 'fp16':
+            return builder.get_half_ty()
+        elif self.name == 'fp32':
+            return builder.get_float_ty()
+        elif self.name == 'fp64':
+            return builder.get_double_ty()
 
     def __str__(self):
         return self.name
@@ -100,8 +205,8 @@ class dtype:
         return f'triton.language.{self.name}'
 
 
-class pointer_dtype:
-    def __init__(self, element_ty):
+class pointer_type(dtype):
+    def __init__(self, element_ty: dtype):
         if not isinstance(element_ty, dtype):
             raise TypeError('element_ty is a {type(element_ty).__name__}.')
         self.element_ty = element_ty
@@ -112,22 +217,37 @@ class pointer_dtype:
     def __str__(self):
         return f'pointer<{self.element_ty}>'
 
+    def is_ptr(self):
+        return True
+
+
+class block_type(dtype):
+    def __init__(self, element_ty: dtype, shape: List[int]):
+        self.element_ty = element_ty
+        self.shape = shape
+
+    def __str__(self):
+        return f'<{self.shape}, {self.element_ty}>'
+
+    def is_block(self):
+        return True
+
 
 # scalar types
-int1 = dtype(ir.type.get_int1)
-int8 = dtype(ir.type.get_int8)
-int16 = dtype(ir.type.get_int16)
-int32 = dtype(ir.type.get_int32)
-int64 = dtype(ir.type.get_int64)
-uint8 = dtype(ir.type.get_uint8)
-uint16 = dtype(ir.type.get_uint16)
-uint32 = dtype(ir.type.get_uint32)
-uint64 = dtype(ir.type.get_uint64)
-float8 = dtype(ir.type.get_fp8)
-float16 = dtype(ir.type.get_fp16)
-bfloat16 = dtype(ir.type.get_bf16)
-float32 = dtype(ir.type.get_fp32)
-float64 = dtype(ir.type.get_fp64)
+int1 = dtype('int1')
+int8 = dtype('int8')
+int16 = dtype('int16')
+int32 = dtype('int32')
+int64 = dtype('int64')
+uint8 = dtype('uint8')
+uint16 = dtype('uint16')
+uint32 = dtype('uint32')
+uint64 = dtype('uint64')
+float8 = dtype('fp8')
+float16 = dtype('fp16')
+bfloat16 = dtype('bf16')
+float32 = dtype('fp32')
+float64 = dtype('fp64')
 # pointer types
 pi32_t = pointer_dtype(int32)
 
@@ -229,10 +349,6 @@ class block:
         if ir_type.is_int16(): return int16
         if ir_type.is_int32(): return int32
         if ir_type.is_int64(): return int64
-        if ir_type.is_uint8(): return uint8
-        if ir_type.is_uint16(): return uint16
-        if ir_type.is_uint32(): return uint32
-        if ir_type.is_uint64(): return uint64
         if ir_type.is_fp8(): return float8
         if ir_type.is_fp16(): return float16
         if ir_type.is_bf16(): return bfloat16
@@ -244,7 +360,7 @@ class block:
             return pointer_dtype(element_ty)
         raise ValueError(f"Unsupported type {ir_type}")
 
-    def __init__(self, handle):
+    def __init__(self, handle, type: dtype = None):
         # IR handle
         self.handle = handle
         # Block shape
@@ -256,7 +372,10 @@ class block:
             self.numel *= s
         self.numel = constexpr(self.numel)
         # Data-type wrapper
-        self.dtype = block._init_dtype(self.handle.type.scalar)
+        self.type = type
+        # if type is not provided, infer from ir type
+        if not self.type:
+            self.type = block._init_dtype(self.handle.type.scalar)
         # Shape is a constexpr
         self.shape = [constexpr(s) for s in self.shape]
 
