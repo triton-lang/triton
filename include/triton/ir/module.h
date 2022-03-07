@@ -57,13 +57,12 @@ private:
   void push_function(function *fn) { functions_.push_back(fn); }
 
 public:
-  module(const std::string &name, builder& builder);
-  builder& get_builder();
+  module(const std::string &name);
+  const std::string& get_name();
+
   // Setters
   void set_value(const std::string& name, basic_block* block, value *x);
   void set_value(const std::string& name, value* x);
-  void set_const(const std::string& name);
-  void set_continue_fn(std::function<ir::value*()> fn);
   // Getters
   const std::map<val_key_t, value*>& get_values() { return values_; }
   const std::map<std::string, type*>& get_types() { return types_; }
@@ -73,10 +72,9 @@ public:
   value *get_value(const std::string& name, basic_block* block);
   value *get_value(const std::string& name);
   void set_type(const std::string& name, ir::type* ty) { types_[name] = ty; }
-  const std::string& get_name();
-  std::function<ir::value*()> get_continue_fn();
   // Seal block -- no more predecessors will be added
   void seal_block(basic_block *block);
+
   // Functions
   const functions_list_t &get_function_list() const { return functions_; }
   functions_list_t &get_function_list()             { return functions_; }
@@ -94,15 +92,12 @@ public:
 
 private:
   std::string name_;
-  builder& builder_;
-  std::map<val_key_t, value*> values_;
-  std::map<std::string, type*> types_;
-  std::set<std::string> const_;
-  std::set<basic_block*> sealed_blocks_;
-  std::map<basic_block*, std::map<std::string, phi_node*>> incomplete_phis_;
+  // std::map<val_key_t, value*> values_;
+  // std::map<std::string, type*> types_;
+  // std::set<basic_block*> sealed_blocks_;
+  // std::map<basic_block*, std::map<std::string, phi_node*>> incomplete_phis_;
   functions_list_t functions_;
   symbols_map_t symbols_;
-  std::function<ir::value*()> continue_fn_;
   std::map<value*, value**> current_phi_;
   std::vector<ir::alloc_const*> allocs_;
   std::map<std::string, ir::value*> globals_;

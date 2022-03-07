@@ -33,18 +33,6 @@ void module::set_value(const std::string& name, ir::value *value){
   return set_value(name, builder_.get_insert_block(), value);
 }
 
-void module::set_const(const std::string& name){
-  const_.insert(name);
-}
-
-void module::set_continue_fn(std::function<ir::value*()> fn) {
-  continue_fn_ = fn;
-}
-
-std::function<ir::value*()> module::get_continue_fn() {
-  return continue_fn_;
-}
-
 ir::phi_node* module::make_phi(ir::type *ty, unsigned num_values, ir::basic_block *block){
   basic_block::iterator insert = block->get_first_non_phi();
   if(insert != block->end()){

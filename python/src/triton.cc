@@ -676,16 +676,16 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<ir::module>(m, "module")
       .def(py::init<std::string, ir::builder &>())
-      .def("get_or_insert_function", &ir::module::get_or_insert_function, ret::reference)
-      .def("seal_block", &ir::module::seal_block)
-      .def("set_value", (void (ir::module::*)(const std::string &, ir::value *)) & ir::module::set_value)
-      .def("set_type", &ir::module::set_type)
-      .def("get_value", (ir::value * (ir::module::*)(const std::string &)) & ir::module::get_value, ret::reference)
-      .def("get_values", &ir::module::get_values, ret::reference)
-      .def("set_values", &ir::module::set_values)
-      .def("get_types", &ir::module::get_types, ret::reference)
-      .def("set_types", &ir::module::set_types)
-      .def_property_readonly("builder", &ir::module::get_builder, ret::reference);
+      .def("get_or_insert_function", &ir::module::get_or_insert_function, ret::reference);
+      // .def("seal_block", &ir::module::seal_block)
+      // .def("set_value", (void (ir::module::*)(const std::string &, ir::value *)) & ir::module::set_value)
+      // .def("set_type", &ir::module::set_type)
+      // .def("get_value", (ir::value * (ir::module::*)(const std::string &)) & ir::module::get_value, ret::reference)
+      // .def("get_values", &ir::module::get_values, ret::reference)
+      // .def("set_values", &ir::module::set_values)
+      // .def("get_types", &ir::module::get_types, ret::reference)
+      // .def("set_types", &ir::module::set_types)
+      // .def_property_readonly("builder", &ir::module::get_builder, ret::reference);
 
   using eattr = ir::attribute_kind_t;
   py::enum_<eattr>(m, "attribute_kind")
@@ -709,6 +709,7 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<ir::basic_block, ir::value>(m, "basic_block")
       .def("create", &ir::basic_block::create, ret::reference)
+      .def("get_predecessors", &ir::basic_block::get_predecessors, ret::reference)
       .def_property_readonly("parent", &ir::basic_block::get_parent, ret::reference);
 
   py::class_<ir::builder>(m, "builder", py::dynamic_attr())
