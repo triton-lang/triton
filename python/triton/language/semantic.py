@@ -290,7 +290,7 @@ def plus(input: tl.tensor) -> tl.tensor:
   return input
 
 def minus(input: tl.tensor,
-          builder: tl.tensor) -> tl.tensor:
+          builder: ir.builder) -> tl.tensor:
   input_sca_ty = input.type.scalar
   if input_sca_ty.is_ptr():
     raise ValueError("wrong type argument to unary minus (" + input_sca_ty.repr() + ")")
@@ -333,13 +333,13 @@ def greater_equal(input: tl.tensor,
   scalar_ty = input.type.scalar
   # float >= float
   if scalar_ty.is_floating():
-    return builder.create_fcmpOGE(input, other)
+    return tl.tensor(builder.create_fcmpOGE(input, other))
   # >= int
   elif scalar_ty.is_int():
     if scalar_ty.is_int_signed():
-      return builder.create_icmpSGE(input, other)
+      return tl.tensor(builder.create_icmpSGE(input, other))
     else:
-      return builder.create_icmpUGE(input, other)
+      return tl.tensor(builder.create_icmpUGE(input, other))
   assert False
 
 def less_than(input: tl.tensor,
@@ -349,13 +349,13 @@ def less_than(input: tl.tensor,
   scalar_ty = input.type.scalar
   # float < float
   if scalar_ty.is_floating():
-    return tl.tensor(builder.create_fcmpOLT(input.handle, other.handle), input.type)
+    return tl.tensor(builder.create_fcmpOLT(input.handle, other.handle))
   # < int
   elif scalar_ty.is_int():
     if scalar_ty.is_int_signed():
-      return tl.tensor(builder.create_icmpSLT(input.handle, other.handle), input.type)
+      return tl.tensor(builder.create_icmpSLT(input.handle, other.handle))
     else:
-      return tl.tensor(builder.create_icmpULT(input.handle, other.handle), input.type)
+      return tl.tensor(builder.create_icmpULT(input.handle, other.handle))
   assert False
 
 def less_equal(input: tl.tensor,
@@ -365,13 +365,13 @@ def less_equal(input: tl.tensor,
   scalar_ty = input.type.scalar
   # float < float
   if scalar_ty.is_floating():
-    return tl.tensor(builder.create_fcmpOLE(input.handle, other.handle), input.type)
+    return tl.tensor(builder.create_fcmpOLE(input.handle, other.handle))
   # < int
   elif scalar_ty.is_int():
     if scalar_ty.is_int_signed():
-      return tl.tensor(builder.create_icmpSLE(input.handle, other.handle), input.type)
+      return tl.tensor(builder.create_icmpSLE(input.handle, other.handle))
     else:
-      return tl.tensor(builder.create_icmpULE(input.handle, other.handle), input.type)
+      return tl.tensor(builder.create_icmpULE(input.handle, other.handle))
   assert False
 
 def equal(input: tl.tensor,
@@ -381,10 +381,10 @@ def equal(input: tl.tensor,
   scalar_ty = input.type.scalar
   # float == float
   if scalar_ty.is_floating():
-    return tl.tensor(builder.create_fcmpOEQ(input.handle, other.handle), input.type)
+    return tl.tensor(builder.create_fcmpOEQ(input.handle, other.handle))
   # == int
   elif scalar_ty.is_int():
-    return tl.tensor(builder.create_icmpEQ(input.handle, other.handle), input.type)
+    return tl.tensor(builder.create_icmpEQ(input.handle, other.handle))
   assert False
 
 def not_equal(input: tl.tensor,
@@ -394,10 +394,10 @@ def not_equal(input: tl.tensor,
   scalar_ty = input.type.scalar
   # float == float
   if scalar_ty.is_floating():
-    return tl.tensor(builder.create_fcmpUNE(input.handle, other.handle), input.type)
+    return tl.tensor(builder.create_fcmpUNE(input.handle, other.handle))
   # == int
   elif scalar_ty.is_int():
-    return tl.tensor(builder.create_icmpNE(input.handle, other.handle), input.type)
+    return tl.tensor(builder.create_icmpNE(input.handle, other.handle))
   assert False
 
 #===----------------------------------------------------------------------===//
@@ -523,7 +523,7 @@ def cast(input: tl.tensor,
   # bf16 <=> (not fp32)
   if (src_sca_ty.is_bf16() and not dst_sca_ty.is_fp32()) or \
      (dst_sca_ty.is_bf16() and not src_sca_ty.is_fp32()):
-    return case(cast(input, tl.float32, builder), dst_sca_ty, builder)
+    return cast(cast(input, tl.float32, builder), dst_sca_ty, builder)
 
   # FP Truncation
   truncate_fp = src_sca_ty.is_floating() and \
