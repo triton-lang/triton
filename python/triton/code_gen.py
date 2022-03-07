@@ -24,40 +24,6 @@ from .tools.disasm import extract
 
 
 class CodeGenerator(ast.NodeVisitor):
-    def get_value(self, name):
-        # search node.id in local scope
-        ret = None
-        if name in self.lscope:
-            ret = self.lscope[name]
-        # search node.id in global scope
-        elif name in self.gscope:
-            ret = self.gscope[name]
-        # search node.id in builtins
-        elif name in self.builtins:
-            ret = self.builtins[name]
-        else:
-            raise ValueError(f'{name} is not defined')
-        return ret
-
-    def set_value(self, name, value):
-        # if isinstance(value, _triton.ir.value):
-        #     value = triton.language.block(value)
-        # if isinstance(value, triton.language.block):
-        #     self.module.set_value(name, value.handle)
-        #     self.module.set_type(name, value.handle.type)
-        assert isinstance(value, tl.block) or isinstance(value, tl.constexpr)
-        self.lscope[name] = value
-
-    def is_triton_object(self, value):
-        return isinstance(value, triton.language.block)
-
-    def visit_compound_statement(self, stmts):
-        for stmt in stmts:
-            self.last_ret = self.visit(stmt)
-            if isinstance(stmt, ast.Return):
-                break
-        return stmts and isinstance(stmt, ast.Return)
-
     def __init__(self, context, prototype, gscope, attributes, constants, kwargs):
         self.builder = _triton.ir.builder(context)
         self.module = _triton.ir.module('', self.builder)
@@ -77,6 +43,40 @@ class CodeGenerator(ast.NodeVisitor):
             'isinstance': isinstance,
             'getattr': getattr,
         }
+
+    def get_value(self, name):
+        # search node.id in local scope
+        ret = None
+        if name in self.lscope:
+            ret = self.lscope[name]
+        # search node.id in global scope
+        elif name in self.gscope:
+            ret = self.gscope[name]
+        # search node.id in builtins
+        elif name in self.builtins:
+            ret = self.builtins[name]
+        else:
+            raise ValueError(f'{name} is not defined')
+        return ret
+
+    def set_value(self, name, value):
+        # if isinstance(value, _triton.ir.value):
+        #     value = triton.language.tensor(value)
+        # if isinstance(value, triton.language.tensor):
+        #     self.module.set_value(name, value.handle)
+        #     self.module.set_type(name, value.handle.type)
+        assert isinstance(value, tl.block) or isinstance(value, tl.constexpr)
+        self.lscope[name] = value
+
+    def is_triton_tensor(self, value):
+        return isinstance(value, triton.language.tensor)
+
+    def visit_compound_statement(self, stmts):
+        for stmt in stmts:
+            self.last_ret = self.visit(stmt)
+            if isinstance(stmt, ast.Return):
+                break
+        return stmts and isinstance(stmt, ast.Return)
 
     def visit_Module(self, node):
         ast.NodeVisitor.generic_visit(self, node)
@@ -190,7 +190,7 @@ class CodeGenerator(ast.NodeVisitor):
             # by default, constexpr are assigned into python variable
             if isinstance(value, triton.language.constexpr):
                 value = value.value
-            if not isinstance(value, triton.language.block):
+            if not isinstance(value, triton.language.tensor):
                 value = triton.language.core._to_ir(value, self.builder)
             self.set_value(name, value)
 
@@ -238,9 +238,9 @@ class CodeGenerator(ast.NodeVisitor):
             ast.BitOr: '__or__',
             ast.BitXor: '__xor__',
         }[type(node.op)]
-        if self.is_triton_object(lhs):
+        if self.is_triton_tensor(lhs):
             return getattr(lhs, fn)(rhs, _builder=self.builder)
-        elif self.is_triton_object(rhs):
+        elif self.is_triton_tensor(rhs):
             fn = fn[:2] + 'r' + fn[2:]
             return getattr(rhs, fn)(lhs, _builder=self.builder)
         else:
@@ -248,7 +248,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_If(self, node):
         cond = self.visit(node.test)
-        if isinstance(cond, triton.language.block):
+        if isinstance(cond, triton.language.tensor):
             cond = cond.to(triton.language.int1, _builder=self.builder)
             current_bb = self.builder.get_insert_block()
             then_bb = _triton.ir.basic_block.create(self.builder.context, "then", current_bb.parent)
@@ -312,9 +312,9 @@ class CodeGenerator(ast.NodeVisitor):
             ast.Gt: '__gt__',
             ast.GtE: '__ge__',
         }[type(node.ops[0])]
-        if self.is_triton_object(lhs):
+        if self.is_triton_tensor(lhs):
             return getattr(lhs, fn)(rhs, _builder=self.builder)
-        elif self.is_triton_object(rhs):
+        elif self.is_triton_tensor(rhs):
             fn = fn[:2] + 'r' + fn[2:]
             return getattr(rhs, fn)(lhs, _builder=self.builder)
         else:
@@ -332,7 +332,7 @@ class CodeGenerator(ast.NodeVisitor):
             ast.UAdd: '__pos__',
             ast.Invert: '__invert__',
         }[type(node.op)]
-        if self.is_triton_object(op):
+        if self.is_triton_tensor(op):
             return getattr(op, fn)(_builder=self.builder)
         return getattr(op, fn)()
 
@@ -362,7 +362,7 @@ class CodeGenerator(ast.NodeVisitor):
         assert node.ctx.__class__.__name__ == "Load"
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
-        if self.is_triton_object(lhs):
+        if self.is_triton_tensor(lhs):
             return lhs.__getitem__(slices, _builder=self.builder)
         return lhs[slices]
 
@@ -451,7 +451,7 @@ class CodeGenerator(ast.NodeVisitor):
         args = [self.visit(arg) for arg in node.args]
         if isinstance(fn, JITFunction):
             return fn(*args, generator=self, **kws)
-        if hasattr(fn, '__self__') and self.is_triton_object(fn.__self__) or \
+        if hasattr(fn, '__self__') and self.is_triton_tensor(fn.__self__) or \
                 sys.modules[fn.__module__] is triton.language.core:
             return fn(*args, _builder=self.builder, **kws)
         if fn in self.builtins.values():
@@ -987,7 +987,7 @@ class JITFunction:
             from inspect import getcallargs
             arg_values = getcallargs(self.fn, *args, **kwargs)
             arg_values = [arg_values[name] for name in self.arg_names]
-            arg_values = [arg if isinstance(arg, triton.language.block)
+            arg_values = [arg if isinstance(arg, triton.language.tensor)
                           else triton.language.constexpr(arg) for arg in arg_values]
 
             gscope = generator.gscope.copy()
