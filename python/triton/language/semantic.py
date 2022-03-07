@@ -861,7 +861,7 @@ def dot(lhs: tl.tensor,
 def where(condition: tl.tensor,
           x: tl.tensor,
           y: tl.tensor,
-          builder: tl.tensor) -> tl.tensor:
+          builder: ir.builder) -> tl.tensor:
   condition = cast(condition, tl.int1, builder)
   if condition.type.is_block():
     x = broadcast_impl_shape(x, condition.type.get_block_shapes(), builder)
@@ -913,9 +913,9 @@ def xor_sum(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
 #                               Math
 #===----------------------------------------------------------------------===//
 
-def umulhi(x,  y, builder):
+def umulhi(x: tl.tensor,  y: tl.tensor, builder: ir.builder) -> tl.tensor:
   binary_op_type_checking_impl(x, y, builder)
-  return builder.insert(ir.umulhi_inst.create(x, y))
+  return tl.tensor(builder.insert(ir.umulhi_inst.create(x.handle, y.handle)), x.type)
 
 def exp(x: tl.tensor, builder: ir.builder) -> tl.tensor:
   return tl.tensor(builder.create_exp(x.handle), x.type)
