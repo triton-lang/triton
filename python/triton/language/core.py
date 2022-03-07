@@ -7,7 +7,7 @@ from triton._C.libtriton.triton import ir
 from . import semantic as frontend
 
 
-# convert block/dtype to ir values
+# convert tensor/dtype to ir values
 def _to_ir(x, builder):
     if isinstance(x, bool):
         return builder.get_int1(x)
@@ -26,7 +26,7 @@ def _to_ir(x, builder):
         return builder.get_float32(x)
     elif isinstance(x, constexpr):
         return _to_ir(x.value, builder)
-    elif isinstance(x, block):
+    elif isinstance(x, tensor):
         return x.handle
     elif isinstance(x, dtype):
         return x.handle(builder)
@@ -38,7 +38,7 @@ def _to_ir(x, builder):
 #         if isinstance(x, ir.value):
 #             if x.type.is_void():
 #                 return None
-#             return block(x)
+#             return tensor(x)
 #         return x
 
 #     def wrapper(*args, **kwargs):
@@ -347,7 +347,7 @@ class constexpr:
         return self.value(*args, **kwds)
 
 
-class block:
+class tensor:
     @staticmethod
     def _init_dtype(ir_type):
         # primitive type
@@ -363,7 +363,7 @@ class block:
         if ir_type.is_fp64(): return float64
         # pointer type
         if ir_type.is_ptr():
-            element_ty = block._init_dtype(ir_type.element)
+            element_ty = tensor._init_dtype(ir_type.element)
             return pointer_dtype(element_ty)
         raise ValueError(f"Unsupported type {ir_type}")
 
@@ -382,7 +382,7 @@ class block:
         self.type = type
         # if type is not provided, infer from ir type
         if not self.type:
-            self.type = block._init_dtype(self.handle.type.scalar)
+            self.type = tensor._init_dtype(self.handle.type.scalar)
         # Shape is a constexpr
         self.shape = [constexpr(s) for s in self.shape]
 
@@ -582,7 +582,7 @@ def arange(start, end, _builder=None):
 @builtin
 def zeros(shape, dtype, _builder=None):
     """
-    Returns a block filled with the scalar value 0 for the given :code:`shape` and :code:`dtype`.
+    Returns a tensor filled with the scalar value 0 for the given :code:`shape` and :code:`dtype`.
 
     :param shape: Shape of the new array, e.g., (8, 16) or (8, )
     :type shape: tuple of ints
@@ -608,9 +608,9 @@ def broadcast(input, other, _builder=None):
     """
     Tries to broadcast the two given blocks to a common compatible shape.
 
-    :param input: The first input block.
+    :param input: The first input tensor.
     :type input: Block
-    :param other: The second input block.
+    :param other: The second input tensor.
     :type other: Block
     """
     return frontend.broadcast_impl(input, other, _builder)
@@ -619,9 +619,9 @@ def broadcast(input, other, _builder=None):
 @builtin
 def broadcast_to(input, shape, _builder=None):
     """
-    Tries to broadcast the given block to a new :code:`shape`.
+    Tries to broadcast the given tensor to a new :code:`shape`.
 
-    :param input: The input block.
+    :param input: The input tensor.
     :type input: Block
     :param shape: The desired shape.
     :type shape: Tuple[int]
@@ -634,9 +634,9 @@ def cat(input, other, _builder=None):
     """
     Concatenate the given blocks
 
-    :param input: The first input block.
+    :param input: The first input tensor.
     :type input:
-    :param other: The second input block.
+    :param other: The second input tensor.
     :type other:
     """
     return frontend.cat(input, other, _builder)
@@ -645,9 +645,9 @@ def cat(input, other, _builder=None):
 @builtin
 def reshape(input, shape, _builder=None):
     """
-    Tries to reshape the given block to a new shape.
+    Tries to reshape the given tensor to a new shape.
 
-    :param input: The input block.
+    :param input: The input tensor.
     :type input:
     :param shape: The desired shape.
     :type shape: Tuple[int]
@@ -669,10 +669,10 @@ def dot(input, other, allow_tf32=True, _builder=None):
 
     The two blocks must be two dimensionals and have compatible inner dimensions.
 
-    :param input: The first block to be multiplied.
-    :type input: 2D block of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
-    :param other: The second block to be multiplied.
-    :type other: 2D block of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
+    :param input: The first tensor to be multiplied.
+    :type input: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
+    :param other: The second tensor to be multiplied.
+    :type other: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
     """
     return frontend.dot(input, other, allow_tf32, _builder)
 
@@ -685,7 +685,7 @@ def dot(input, other, allow_tf32=True, _builder=None):
 @builtin
 def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", volatile=False, _builder=None):
     """
-    Return a block of data whose values are, elementwise, loaded from memory at location defined by :code:`pointer`.
+    Return a tensor of data whose values are, elementwise, loaded from memory at location defined by :code:`pointer`.
 
     :code:`mask` and :code:`other` are implicitly broadcast to :code:`pointer.shape`.
 
@@ -706,13 +706,13 @@ def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", 
 @builtin
 def store(pointer, value, mask=None, _builder=None):
     """
-    Stores :code:`value` block of elements in memory, element-wise, at the memory locations specified by :code:`pointer`.
+    Stores :code:`value` tensor of elements in memory, element-wise, at the memory locations specified by :code:`pointer`.
 
     :code:`value` is implicitly broadcast to :code:`pointer.shape` and typecast to :code:`pointer.dtype.element_ty`.
 
     :param pointer: The memory locations where the elements of :code:`value` are stored.
     :type pointer: Block of dtype=triton.PointerDType
-    :param value: The block of elements to be stored.
+    :param value: The tensor of elements to be stored.
     :type value: Block
     :param mask: If mask[idx] is false, do not store :code:`value[idx]` at :code:`pointer[idx]`.
     :type mask: Block of triton.int1, optional
@@ -801,7 +801,7 @@ def atomic_xor(pointer, val, mask=None, _builder=None):
 @builtin
 def where(condition, x, y, _builder=None):
     """
-    Returns a block of elements from either :code:`x` or :code:`y`, depending on :code:`condition`.
+    Returns a tensor of elements from either :code:`x` or :code:`y`, depending on :code:`condition`.
 
     Note that :code:`x` and :code:`y` are always evaluated regardless of the value of :code:`condition`.
 
@@ -885,7 +885,7 @@ def _add_reduction_docstr(name):
 
     def _decorator(func):
         docstr = """
-    Returns the {name} of all elements in the :code:`input` block along the provided :code:`axis`
+    Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
 
     :param input: the input values
     :param axis: the dimension along which the reduction should be done
@@ -973,9 +973,9 @@ def minimum(x, y):
     """
     Computes the element-wise minimum of :code:`x` and :code:`y`.
 
-    :param input: the first input block
+    :param input: the first input tensor
     :type input: Block
-    :param other: the second input block
+    :param other: the second input tensor
     :type other: Block
     """
     return triton.language.where(x < y, x, y)
@@ -986,9 +986,9 @@ def maximum(x, y):
     """
     Computes the element-wise maximum of :code:`x` and :code:`y`.
 
-    :param input: the first input block
+    :param input: the first input tensor
     :type input: Block
-    :param other: the second input block
+    :param other: the second input tensor
     :type other: Block
     """
     return triton.language.where(x > y, x, y)
@@ -1014,7 +1014,7 @@ def ravel(x):
     """
     Returns a contiguous flattened view of :code:`x`
 
-    :param x: the input block
+    :param x: the input tensor
     :type x: Block
     """
     return triton.language.reshape(x, [x.numel])
