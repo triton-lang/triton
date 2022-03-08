@@ -24,6 +24,48 @@ import triton._C.libtriton.triton as _triton
 import triton.language as tl
 from .tools.disasm import extract
 
+class _SymbolTableValue:
+    def __init__(self, prev_in_scope, key, value):
+        self.prev_in_scope = prev_in_scope
+        self.key = key
+        self.value = value
+
+class _SymbolTableScope:
+    def __init__(self, symbol_table):
+        # last value of this scope
+        self.last = None
+        # the scope that we are shadowing
+        self.parent_scope = None
+        # reference to symbol table
+        self.st = symbol_table
+        self.st.curr_scope = self
+
+    def enter(self):
+        pass
+
+    def exit(self):
+        # delete all values corresponding to this scope
+        while self.last:
+            pass
+
+class _SymbolTable:
+    def __init__(self):
+        # name => [value]
+        self.top_map = {}
+        self.curr_scope = None
+
+    def get_value(self, name: str):
+        if name in self.top_map:
+            return self.top_map[name]
+        return None
+
+    def set_value(self, name: str, value) -> None:
+        st_value = _SymbolTableValue(self.curr_scope.last, value)
+        if name in self.top_map:
+            self.top_map[name].append(st_value)
+        else:
+            self.top_map[name] = [st_value]
+        self.curr_scope.last = st_value
 
 class CodeGenerator(ast.NodeVisitor):
     def __init__(self, context, prototype, gscope, attributes, constants, kwargs):
