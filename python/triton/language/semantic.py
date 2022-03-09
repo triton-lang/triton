@@ -21,11 +21,11 @@ class IncompatibleTypeErrorimpl(Exception):
 ##                              Programming Model
 ##===----------------------------------------------------------------------===##
 
-def program_id(axis: tl.constexpr, builder: ir.builder) -> tl.tensor:
-  return tl.tensor(builder.create_get_program_id(axis.value), tl.int32)
+def program_id(axis: int, builder: ir.builder) -> tl.tensor:
+  return tl.tensor(builder.create_get_program_id(axis), tl.int32)
 
-def num_programs(axis: tl.constexpr, builder: ir.builder) -> tl.tensor:
-  return tl.tensor(builder.create_get_num_programs(axis.value), tl.int32)
+def num_programs(axis: int, builder: ir.builder) -> tl.tensor:
+  return tl.tensor(builder.create_get_num_programs(axis), tl.int32)
 
 #===----------------------------------------------------------------------===//
 #                               Implicit Casting Utilities
@@ -114,18 +114,20 @@ def add(input: tl.tensor,
   input, other = binary_op_type_checking_impl(input, other, builder, True, True)
   input_scalar_ty = input.type.scalar
   other_scalar_ty = other.type.scalar
+  print(input)
+  print(other)
   # offset + ptr
   # ptr + offset
   if other_scalar_ty.is_ptr() and not input_scalar_ty.is_ptr():
     input, other = other, input
   if input_scalar_ty.is_ptr():
-    return tl.tensor(builder.create_gep(input, [other]), input.type)
+    return tl.tensor(builder.create_gep(input.handle, [other.handle]), input.type)
   # float + float
   elif input_scalar_ty.is_floating():
-    return tl.tensor(builder.create_fadd(input, other), input.type)
+    return tl.tensor(builder.create_fadd(input.handle, other.handle), input.type)
   # int + int
   elif input_scalar_ty.is_int():
-    return tl.tensor(builder.create_add(input, other), input.type)
+    return tl.tensor(builder.create_add(input.handle, other.handle), input.type)
   assert False
 
 def sub(input: tl.tensor,
