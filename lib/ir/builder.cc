@@ -51,14 +51,8 @@ value *builder::get_int1(bool val)
 value *builder::get_int32(int32_t val)
 { return constant_int::get(type::get_int32_ty(ctx_), val);}
 
-value *builder::get_uint32(uint32_t val)
-{ return constant_int::get(type::get_uint32_ty(ctx_), val);}
-
 value *builder::get_int64(int64_t val)
 { return constant_int::get(type::get_int64_ty(ctx_), val);}
-
-value *builder::get_uint64(uint64_t val)
-{ return constant_int::get(type::get_uint64_ty(ctx_), val);}
 
 value *builder::get_float16(float val)
 { return constant_fp::get(type::get_fp16_ty(ctx_), val); }
@@ -89,18 +83,6 @@ type *builder::get_int32_ty()
 
 type *builder::get_int64_ty()
 { return type::get_int64_ty(ctx_); }
-
-type *builder::get_uint8_ty()
-{ return type::get_uint8_ty(ctx_); }
-
-type *builder::get_uint16_ty()
-{ return type::get_uint16_ty(ctx_); }
-
-type *builder::get_uint32_ty()
-{ return type::get_uint32_ty(ctx_); }
-
-type *builder::get_uint64_ty()
-{ return type::get_uint64_ty(ctx_); }
 
 type *builder::get_half_ty()
 { return type::get_fp16_ty(ctx_); }

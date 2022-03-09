@@ -626,7 +626,6 @@ void init_triton_ir(py::module &&m) {
       .def("is_ptr", &ir::type::is_pointer_ty)
       .def("is_int", static_cast<bool (ir::type::*)() const>(&ir::type::is_integer_ty))
       .def("is_floating", &ir::type::is_floating_point_ty)
-      .def("is_int_signed", &ir::type::is_integer_signed)
       .def("is_block", &ir::type::is_block_ty)
       .def("is_void", &ir::type::is_void_ty)
       .def("is_bool", &ir::type::is_bool_ty)
@@ -635,11 +634,11 @@ void init_triton_ir(py::module &&m) {
       .def("is_bf16", &ir::type::is_bf16_ty)
       .def("is_fp32", &ir::type::is_fp32_ty)
       .def("is_fp64", &ir::type::is_fp64_ty)
-      .def("is_int1", [](ir::type *self) { return self->is_integer_ty(1, ir::signedness::SIGNED); })
-      .def("is_int8", [](ir::type *self) { return self->is_integer_ty(8, ir::signedness::SIGNED); })
-      .def("is_int16", [](ir::type *self) { return self->is_integer_ty(16, ir::signedness::SIGNED); })
-      .def("is_int32", [](ir::type *self) { return self->is_integer_ty(32, ir::signedness::SIGNED); })
-      .def("is_int64", [](ir::type *self) { return self->is_integer_ty(64, ir::signedness::SIGNED); })
+      .def("is_int1", [](ir::type *self) { return self->is_integer_ty(1); })
+      .def("is_int8", [](ir::type *self) { return self->is_integer_ty(8); })
+      .def("is_int16", [](ir::type *self) { return self->is_integer_ty(16); })
+      .def("is_int32", [](ir::type *self) { return self->is_integer_ty(32); })
+      .def("is_int64", [](ir::type *self) { return self->is_integer_ty(64); })
       .def("is_int_or_tileint", &ir::type::is_int_or_tileint_ty)
 
       .def("repr", &ir::type::repr)
@@ -647,7 +646,6 @@ void init_triton_ir(py::module &&m) {
       .def_property_readonly("scalar", &ir::type::get_scalar_ty)
       .def_property_readonly("context", &ir::type::get_context, ret::reference)
       .def_property_readonly("int_bitwidth", &ir::type::get_integer_bitwidth)
-      .def_property_readonly("int_signedness", &ir::type::get_integer_signedness)
       .def_property_readonly("primitive_bitwidth", &ir::type::get_primitive_size_in_bits);
 
   py::class_<ir::pointer_type, ir::type>(m, "pointer_type")

@@ -57,8 +57,9 @@ private:
   void push_function(function *fn) { functions_.push_back(fn); }
 
 public:
-  module(const std::string &name);
-  const std::string& get_name();
+  module(const std::string &name, builder &builder): name_(name), builder_(builder) {}
+  builder &get_builder() { return builder_; };
+  const std::string& get_name() { return name_; };
 
   // Functions
   const functions_list_t &get_function_list() const { return functions_; }
@@ -77,6 +78,7 @@ public:
 
 private:
   std::string name_;
+  builder &builder_;
   functions_list_t functions_;
   symbols_map_t symbols_;
   std::vector<ir::alloc_const*> allocs_;
