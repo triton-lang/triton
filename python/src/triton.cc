@@ -544,11 +544,6 @@ void init_triton_ir(py::module &&m) {
   using ret = py::return_value_policy;
   using namespace pybind11::literals;
 
-  py::enum_<ir::signedness>(m, "SIGNEDNESS")
-      .value("SIGNED", ir::signedness::SIGNED)
-      .value("UNSIGNED", ir::signedness::UNSIGNED)
-      .export_values();
-
   py::enum_<ir::load_inst::CACHE_MODIFIER>(m, "CACHE_MODIFIER")
       .value("NONE", ir::load_inst::NONE)
       .value("CA", ir::load_inst::CA)
@@ -624,10 +619,6 @@ void init_triton_ir(py::module &&m) {
       .def("get_int16", &ir::type::get_int16_ty, ret::reference)
       .def("get_int32", &ir::type::get_int32_ty, ret::reference)
       .def("get_int64", &ir::type::get_int64_ty, ret::reference)
-      .def("get_uint8", &ir::type::get_uint8_ty, ret::reference)
-      .def("get_uint16", &ir::type::get_uint16_ty, ret::reference)
-      .def("get_uint32", &ir::type::get_uint32_ty, ret::reference)
-      .def("get_uint64", &ir::type::get_uint64_ty, ret::reference)
       .def("get_fp_mantissa_width", &ir::type::get_fp_mantissa_width, ret::reference)
 
       .def("get_block_shapes", &ir::type::get_block_shapes)
@@ -649,10 +640,6 @@ void init_triton_ir(py::module &&m) {
       .def("is_int16", [](ir::type *self) { return self->is_integer_ty(16, ir::signedness::SIGNED); })
       .def("is_int32", [](ir::type *self) { return self->is_integer_ty(32, ir::signedness::SIGNED); })
       .def("is_int64", [](ir::type *self) { return self->is_integer_ty(64, ir::signedness::SIGNED); })
-      .def("is_uint8", [](ir::type *self) { return self->is_integer_ty(8, ir::signedness::UNSIGNED); })
-      .def("is_uint16", [](ir::type *self) { return self->is_integer_ty(16, ir::signedness::UNSIGNED); })
-      .def("is_uint32", [](ir::type *self) { return self->is_integer_ty(32, ir::signedness::UNSIGNED); })
-      .def("is_uint64", [](ir::type *self) { return self->is_integer_ty(64, ir::signedness::UNSIGNED); })
       .def("is_int_or_tileint", &ir::type::is_int_or_tileint_ty)
 
       .def("repr", &ir::type::repr)
@@ -712,21 +699,10 @@ void init_triton_ir(py::module &&m) {
       .def("ret_void", &ir::builder::create_ret_void, ret::reference)
       .def("get_insert_block", &ir::builder::get_insert_block, ret::reference)
       .def("set_insert_block", (void (ir::builder::*)(ir::basic_block *)) & ir::builder::set_insert_point)
-      // constants
-      .def("get_int1", &ir::builder::get_int1, ret::reference)
-      .def("get_int32", &ir::builder::get_int32, ret::reference)
-      .def("get_int64", &ir::builder::get_int64, ret::reference)
-      .def("get_uint32", &ir::builder::get_uint32, ret::reference)
-      .def("get_uint64", &ir::builder::get_uint64, ret::reference)
-      .def("get_float16", &ir::builder::get_float16, ret::reference)
-      .def("get_float32", &ir::builder::get_float32, ret::reference)
-      .def("get_range", &ir::builder::get_range, ret::reference)
       // Constants
       .def("get_int1", &ir::builder::get_int1, ret::reference)
       .def("get_int32", &ir::builder::get_int32, ret::reference)
       .def("get_int64", &ir::builder::get_int64, ret::reference)
-      .def("get_uint32", &ir::builder::get_uint32, ret::reference)
-      .def("get_uint64", &ir::builder::get_uint64, ret::reference)
       .def("get_float16", &ir::builder::get_float16, ret::reference)
       .def("get_float32", &ir::builder::get_float32, ret::reference)
       .def("get_range", &ir::builder::get_range, ret::reference)
@@ -737,10 +713,6 @@ void init_triton_ir(py::module &&m) {
       .def("get_int16_ty", &ir::builder::get_int16_ty, ret::reference)
       .def("get_int32_ty", &ir::builder::get_int32_ty, ret::reference)
       .def("get_int64_ty", &ir::builder::get_int64_ty, ret::reference)
-      .def("get_uint8_ty", &ir::builder::get_uint8_ty, ret::reference)
-      .def("get_uint16_ty", &ir::builder::get_uint16_ty, ret::reference)
-      .def("get_uint32_ty", &ir::builder::get_uint32_ty, ret::reference)
-      .def("get_uint64_ty", &ir::builder::get_uint64_ty, ret::reference)
       .def("get_half_ty", &ir::builder::get_half_ty, ret::reference)
       .def("get_float_ty", &ir::builder::get_float_ty, ret::reference)
       .def("get_double_ty", &ir::builder::get_double_ty, ret::reference)
