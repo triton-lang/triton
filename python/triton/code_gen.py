@@ -11,61 +11,17 @@ import tempfile
 import textwrap
 import time
 import warnings
-from typing import Dict
 from numpy import isin
 
 import torch
 from filelock import FileLock
 
-from typing import Dict, Set, Tuple, Union, Optional
+from typing import Dict, Set, Tuple, Union, Optional, List
 
 import triton
 import triton._C.libtriton.triton as _triton
 import triton.language as tl
 from .tools.disasm import extract
-
-class _SymbolTableValue:
-    def __init__(self, prev_in_scope, key, value):
-        self.prev_in_scope = prev_in_scope
-        self.key = key
-        self.value = value
-
-class _SymbolTableScope:
-    def __init__(self, symbol_table):
-        # last value of this scope
-        self.last = None
-        # the scope that we are shadowing
-        self.parent_scope = None
-        # reference to symbol table
-        self.st = symbol_table
-        self.st.curr_scope = self
-
-    def enter(self):
-        pass
-
-    def exit(self):
-        # delete all values corresponding to this scope
-        while self.last:
-            pass
-
-class _SymbolTable:
-    def __init__(self):
-        # name => [value]
-        self.top_map = {}
-        self.curr_scope = None
-
-    def get_value(self, name: str):
-        if name in self.top_map:
-            return self.top_map[name]
-        return None
-
-    def set_value(self, name: str, value) -> None:
-        st_value = _SymbolTableValue(self.curr_scope.last, value)
-        if name in self.top_map:
-            self.top_map[name].append(st_value)
-        else:
-            self.top_map[name] = [st_value]
-        self.curr_scope.last = st_value
 
 class CodeGenerator(ast.NodeVisitor):
     def __init__(self, context, prototype, gscope, attributes, constants, kwargs):
@@ -90,10 +46,8 @@ class CodeGenerator(ast.NodeVisitor):
         # SSA-construction
         # [name, bb] => tl.tensor
         self.lvalues: Dict[Tuple[str, _triton.ir.basic_block], tl.tensor] = {}
-        # [name, bb] => tl.dtype
-        self.ltypes = {}
         # [name, bb] => ir.phi
-        self.incomplete_phis: Dict[Tuple[str, _triton.ir.basic_block], _triton.ir.phi_node] = {}
+        self.incomplete_phis: Dict[_triton.ir.basic_block, List[_triton.ir.phi_node]] = {}
         self.sealed_blocks: Set[_triton.ir.basic_block] = set()
 
     def get_value(self, name):
@@ -122,8 +76,8 @@ class CodeGenerator(ast.NodeVisitor):
         #     self.module.set_value(name, value.handle)
         #     self.module.set_type(name, value.handle.type)
         if isinstance(value, tl.tensor):
+            # TODO: unify set_value() & _set_value()
             self._set_value(name, self.builder.get_insert_block(), value)
-            # set type?
         self.lscope[name] = value
 
     #
@@ -143,28 +97,39 @@ class CodeGenerator(ast.NodeVisitor):
 
     def _get_value_recursive(self, name: str, bb: _triton.ir.basic_block) -> tl.tensor:
         preds = bb.get_predecessors()
+        type = self.lscope[name].type
         if bb not in self.sealed_blocks:
-            result = self._make_phi(ty.to_ir(self.builder), 1, bb)
+            result = self._make_phi(type, len(preds), bb)
             self.incomplete_phis[(name, bb)] = result
         elif len(preds) == 1: # one predecessor: No phi needed
             result = self._get_value(name, preds[0])
-        else: # break potential cycles with operandless phi
+        else: # multiple preds
             assert len(preds) > 1
-            phi = self._make_phi(, 1, bb)
+            phi = self._make_phi(type, len(preds), bb)
             self._set_value(name, bb, phi)
             result = self._add_phi_operands(name, phi)
+        # TODO: we can add try_remove_trivial_phi() here
         self._set_value(name, bb, result)
         return result
 
-    def _make_phi(type: _triton.ir.type,
+    # returns a phi tensor, which encausulate an ir.phi_node
+    def _make_phi(self,
+                  type: tl.dtype,
                   num_values: int,
-                  bb: _triton.ir.basic_block) -> _triton.ir.phi_node:
-        raise NotImplementedError(".")
+                  bb: _triton.ir.basic_block) -> tl.tensor:
+        insert = bb.get_first_non_phi()
+        if insert != bb.end():
+            self.builder.set_insert_point(insert)
+        ir_phi = self.builder.create_phi(type.to_ir(self.builder), num_values)
+        if insert != bb.end():
+            self.builder.set_insert_point(bb)
+        return tl.tensor(ir_phi, type)
 
     # complete a phi node
     def _add_phi_operands(self, name: str, phi: _triton.ir.phi_node) -> _triton.ir.phi_node:
-        if phi.is_complete():
-            return phi
+        # # TODO: this doesn't seem correct
+        # if phi.is_complete():
+        #     return phi
         bb = phi.get_parent()
         for pred in bb.get_predecessors():
             v = self._get_value(name, pred)
@@ -176,7 +141,12 @@ class CodeGenerator(ast.NodeVisitor):
         # TODO: metadatas (?)
 
     def _seal_block(self, bb: _triton.ir.basic_block):
-        pass
+        # complete all incomplete phis
+        for name, phi in self.incomplete_phis[bb]:
+            self._add_phi_operands(name, phi)
+            # TODO: set_value()?
+        self.sealed_blocks.add(bb)
+        # TODO: del items in self.incomplete_phis
 
     def is_triton_tensor(self, value):
         return isinstance(value, tl.tensor)
