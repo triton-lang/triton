@@ -98,7 +98,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     def _get_value_recursive(self, name: str, bb: _triton.ir.basic_block) -> triton.language.tensor:
         preds = bb.get_predecessors()
-        type = self.lscope[name].type
+        type = self.lscope[name].dtype
         if bb not in self.sealed_blocks:
             result = self._make_phi(type, len(preds), bb)
             self.incomplete_phis[bb].append((name, result))

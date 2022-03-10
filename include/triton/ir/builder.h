@@ -57,6 +57,7 @@ public:
   type *get_uint32_ty();
   type *get_uint64_ty();
   type *get_half_ty();
+  type *get_bf16_ty();
   type *get_float_ty();
   type *get_double_ty();
   // Insert

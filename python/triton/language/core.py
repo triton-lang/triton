@@ -177,6 +177,8 @@ class dtype:
             return builder.get_int64_ty()
         elif self.name == 'fp16':
             return builder.get_half_ty()
+        elif self.name == 'bf16':
+            return builder.get_bf16_ty()
         elif self.name == 'fp32':
             return builder.get_float_ty()
         elif self.name == 'fp64':
@@ -426,16 +428,16 @@ class tensor:
             self.numel *= s
         self.numel = constexpr(self.numel)
         # Data-type wrapper
-        self.type = type
+        self.dtype = type
         # # if type is not provided, infer from ir type
-        # if not self.type:
-        #     self.type = tensor._to_dtype(self.handle.type)
+        # if not self.dtype:
+        #     self.dtype = tensor._to_dtype(self.handle.type)
         # Shape is a constexpr
         self.shape = [constexpr(s) for s in self.shape]
 
     def __str__(self) -> str:
         # ex. "float32[3,4]"
-        return str(self.type) + '[' + ','.join(str(s) for s in self.shape) + ']'
+        return str(self.dtype) + '[' + ','.join(str(s) for s in self.shape) + ']'
 
     @builtin
     def __add__(self, other, _builder=None):

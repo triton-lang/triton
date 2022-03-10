@@ -712,6 +712,7 @@ void init_triton_ir(py::module &&m) {
       .def("get_int32_ty", &ir::builder::get_int32_ty, ret::reference)
       .def("get_int64_ty", &ir::builder::get_int64_ty, ret::reference)
       .def("get_half_ty", &ir::builder::get_half_ty, ret::reference)
+      .def("get_bf16_ty", &ir::builder::get_bf16_ty, ret::reference)
       .def("get_float_ty", &ir::builder::get_float_ty, ret::reference)
       .def("get_double_ty", &ir::builder::get_double_ty, ret::reference)
       // terminator instructions
