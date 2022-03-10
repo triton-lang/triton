@@ -88,8 +88,6 @@ class CodeGenerator(ast.NodeVisitor):
         if not bb:
             bb = self.builder.get_insert_block()
         # local value numbering
-        print(f'try get value {name} from {bb}')
-        print(self.lvalues.keys())
         if (name, bb) in self.lvalues:
             return self.lvalues[(name, bb)]
         # global value numbering\
@@ -220,8 +218,6 @@ class CodeGenerator(ast.NodeVisitor):
                     fn.args[idx].name = arg_name
                     arg_values.append(triton.language.tensor(fn.args[idx], self.prototype.param_types[idx]))
                     idx += 1
-
-        print(f'prototype: {self.prototype}')
         if inline:
             for arg_name, arg_value in zip(arg_names, arg_values):
                 self.set_value(arg_name, arg_value)
@@ -712,10 +708,10 @@ class Kernel:
             'i16': triton.language.int16,
             'i32': triton.language.int32,
             'i64': triton.language.int64,
-            'u8': triton.language.int8,
-            'u16': triton.language.int16,
-            'u32': triton.language.int32,
-            'u64': triton.language.int64,
+            'u8': triton.language.uint8,
+            'u16': triton.language.uint16,
+            'u32': triton.language.uint32,
+            'u64': triton.language.uint64,
         }
         # convert torch.Tensor to Triton IR pointers
         if hasattr(obj, 'data_ptr'):
@@ -746,7 +742,6 @@ class Kernel:
         context = _triton.ir.context()
         # get just-in-time proto-type of kernel
         fn_args = [arg for i, arg in enumerate(wargs) if i not in constants]
-        print(fn_args)
         arg_types = [Kernel._to_triton_ir(arg) for arg in fn_args]
         ret_type = triton.language.void
         prototype = triton.language.function_type(ret_type, arg_types)

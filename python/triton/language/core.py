@@ -4,6 +4,7 @@ from ctypes import pointer
 from enum import Enum
 from functools import wraps
 from typing import List, Tuple, Optional
+from numpy import block
 
 import triton
 from triton._C.libtriton.triton import ir
@@ -59,20 +60,29 @@ class dtype:
         if name in dtype.SINT_TYPES:
             self.int_signedness = dtype.SIGNEDNESS.SIGNED
             self.int_bitwidth = int(name.split('int')[-1])
+            self.primitive_bitwidth = self.int_bitwidth
         elif name in dtype.UINT_TYPES:
             self.int_signedness = dtype.SIGNEDNESS.UNSIGNED
             self.int_bitwidth = int(name.split('int')[-1])
+            self.primitive_bitwidth = self.int_bitwidth
         elif name in dtype.FP_TYPES:
             if name == 'fp8':
                 self.fp_mantissa_width = 3
+                self.primitive_bitwidth = 8
             elif name == 'fp16':
                 self.fp_mantissa_width = 10
+                self.primitive_bitwidth = 16 
             elif name == 'bf16':
                 self.fp_mantissa_width = 7
+                self.primitive_bitwidth = 16
             elif name == 'fp32':
                 self.fp_mantissa_width = 23
+                self.primitive_bitwidth = 32
             elif name == 'fp64':
                 self.fp_mantissa_width = 53
+                self.primitive_bitwidth = 64
+        elif name == 'void':
+            self.primitive_bitwidth = 0
         
     def is_fp8(self):
         return self.name == 'fp8'
@@ -171,9 +181,12 @@ class dtype:
             return builder.get_float_ty()
         elif self.name == 'fp64':
             return builder.get_double_ty()
-        raise CompilationError(f'fail to covert {self} to ir type')
+        raise ValueError(f'fail to covert {self} to ir type')
 
     def __str__(self):
+        return self.name
+
+    def __repr__(self):
         return self.name
 
     @property
@@ -191,6 +204,8 @@ class pointer_type(dtype):
             raise TypeError('element_ty is a {type(element_ty).__name__}.')
         self.element_ty = element_ty
         self.address_space = address_space
+
+        self.name = self.__str__()
 
     def to_ir(self, builder: ir.builder) -> ir.pointer_type:
         return ir.type.make_ptr(self.element_ty.to_ir(builder), 1)
@@ -221,12 +236,20 @@ class block_type(dtype):
     def __init__(self, element_ty: dtype, shape: List[int]):
         self.element_ty = element_ty
         self.shape = shape
+        self.numel = 1
+        for s in self.shape:
+            self.numel *= s
+
+        self.name = self.__str__()
 
     def to_ir(self, builder: ir.builder) -> ir.block_type:
         return ir.type.make_block(self.element_ty.to_ir(builder), self.shape)
 
     def __str__(self):
         return f'<{self.shape}, {self.element_ty}>'
+
+    def __repr__(self):
+        return self.__str__()
 
     def is_block(self):
         return True
@@ -366,9 +389,19 @@ class constexpr:
 
 
 class tensor:
+    # infer dtype from ir type
     @staticmethod
-    def _init_dtype(ir_type):
+    def _to_dtype(ir_type):
+        # block type
+        if ir_type.is_block():
+            scalar_ty = tensor._to_dtype(ir_type.scalar)
+            return block_type(scalar_ty, ir_type.get_block_shapes())
+        # pointer type
+        if ir_type.is_ptr():
+            element_ty = tensor._to_dtype(ir_type.element)
+            return pointer_type(element_ty)
         # primitive type
+        if ir_type.is_void(): return void
         if ir_type.is_int1(): return int1
         if ir_type.is_int8(): return int8
         if ir_type.is_int16(): return int16
@@ -379,13 +412,9 @@ class tensor:
         if ir_type.is_bf16(): return bfloat16
         if ir_type.is_fp32(): return float32
         if ir_type.is_fp64(): return float64
-        # pointer type
-        if ir_type.is_ptr():
-            element_ty = tensor._init_dtype(ir_type.element)
-            return pointer_type(element_ty)
-        raise ValueError(f"Unsupported type {ir_type}")
+        raise ValueError(f"Unsupported type {ir_type.repr()}")
 
-    def __init__(self, handle, type: dtype = None):
+    def __init__(self, handle, type: dtype):
         # IR handle
         self.handle = handle
         # Block shape
@@ -398,9 +427,9 @@ class tensor:
         self.numel = constexpr(self.numel)
         # Data-type wrapper
         self.type = type
-        # if type is not provided, infer from ir type
-        if not self.type:
-            self.type = tensor._init_dtype(self.handle.type.scalar)
+        # # if type is not provided, infer from ir type
+        # if not self.type:
+        #     self.type = tensor._to_dtype(self.handle.type)
         # Shape is a constexpr
         self.shape = [constexpr(s) for s in self.shape]
 
@@ -556,7 +585,7 @@ class tensor:
             elif sl == slice(None, None, None):
                 dst_shape.append(src_shape[curr].value)
                 curr += 1
-        ret = reshape(self, dst_shape, _builder)
+        ret = semantic.reshape(self, dst_shape, _builder)
         return ret
 
     @builtin
