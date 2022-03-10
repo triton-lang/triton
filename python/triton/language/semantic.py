@@ -116,9 +116,7 @@ def add(input: tl.tensor,
   other_scalar_ty = other.type.scalar
   print('add(...)')
   print(input)
-  print(input.type.is_block())
   print(other)
-  print(other.type.is_block())
   # offset + ptr
   # ptr + offset
   if other_scalar_ty.is_ptr() and not input_scalar_ty.is_ptr():
@@ -446,13 +444,15 @@ def broadcast_impl_shape(input: tl.tensor,
                          shape: List[int],
                          builder: ir.builder) -> tl.tensor:
   if not input.type.is_block():
-    return builder.create_splat(input, shape)
+    ret_ty = tl.block_type(input.type, shape)
+    return tl.tensor(builder.create_splat(input.handle, shape), ret_ty)
   src_shape = input.type.get_block_shapes()
   if len(src_shape) != len(shape):
     raise ValueError("Cannot broadcast")
   if shape == src_shape:
     return input
-  return builder.create_broadcast(input, shape)
+  ret_ty = tl.block_type(input.type.scalar, shape)
+  return tl.tensor(builder.create_broadcast(input.handle, shape), ret_ty)
 
 def broadcast_impl_value(lhs: tl.tensor,
                          rhs: tl.tensor,
@@ -466,12 +466,12 @@ def broadcast_impl_value(lhs: tl.tensor,
 
   # make_shape_compatible(block, scalar)
   if lhs_ty.is_block() and not rhs_ty.is_block():
-    ret_ty = lhs_ty
-    rhs = tl.tensor(builder.create_splat(rhs.handle, lhs_ty.get_block_shapes()), ret_ty)
+    rhs_ty = tl.block_type(rhs_ty.scalar, lhs_ty.shape)
+    rhs = tl.tensor(builder.create_splat(rhs.handle, lhs_ty.get_block_shapes()), rhs_ty)
   # make_shape_compatible(scalar, block)
   elif not lhs_ty.is_block() and rhs_ty.is_block():
-    ret_ty = rhs_ty
-    lhs = tl.tensor(builder.create_splat(lhs.handle, rhs_ty.get_block_shapes()), ret_ty)
+    lhs_ty = tl.block_type(lhs_ty.scalar, rhs_ty.shape)
+    lhs = tl.tensor(builder.create_splat(lhs.handle, rhs_ty.get_block_shapes()), lhs_ty)
   # make_shape_compatible(block, block)
   elif lhs_ty.is_block() and rhs_ty.is_block():
     lhs_shape = lhs_ty.get_block_shapes()
@@ -638,7 +638,7 @@ def load(ptr: tl.tensor,
   if other:
     other = cast(other, ptr.type.scalar.element, builder)
   ptr_ty = ptr.type.scalar
-  elt_ty = ptr_ty.element
+  elt_ty = ptr_ty.element_ty
   # treat bool* as tl.int8*
   if elt_ty == tl.int1:
     elt_ty = tl.int8
@@ -697,7 +697,7 @@ def store(ptr: tl.tensor,
   if mask:
     mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
   ptr_ty = ptr.type.scalar
-  elt_ty = ptr_ty.element
+  elt_ty = ptr_ty.element_ty
   # treat bool* as tl.int8*
   if elt_ty == tl.int1:
     elt_ty = tl.int8
@@ -710,7 +710,7 @@ def store(ptr: tl.tensor,
     return tl.tensor(builder.create_store(ptr.handle, val.handle))
   if not mask.type.scalar.is_bool():
     raise ValueError("Mask must have boolean scalar type")
-  return tl.tensor(builder.create_masked_store(ptr.handle, val.handle, mask.handle))
+  return tl.tensor(builder.create_masked_store(ptr.handle, val.handle, mask.handle), tl.void)
 
 #########
 # atomic

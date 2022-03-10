@@ -88,7 +88,8 @@ class CodeGenerator(ast.NodeVisitor):
         if not bb:
             bb = self.builder.get_insert_block()
         # local value numbering
-        print(f'get value {name}')
+        print(f'try get value {name} from {bb}')
+        print(self.lvalues.keys())
         if (name, bb) in self.lvalues:
             return self.lvalues[(name, bb)]
         # global value numbering\
@@ -200,8 +201,6 @@ class CodeGenerator(ast.NodeVisitor):
         if inline:
             pass
         else:
-            print(self.builder)
-            print(self.builder.context)
             fn = self.module.get_or_insert_function(node.name, self.prototype.to_ir(self.builder))
             arg_values = []
             idx = 0
@@ -219,18 +218,22 @@ class CodeGenerator(ast.NodeVisitor):
                         attr = _triton.ir.attribute(attr, self.attributes[i])
                         fn.add_attr(idx + 1, attr)
                     fn.args[idx].name = arg_name
-                    arg_values.append(fn.args[idx])
+                    arg_values.append(triton.language.tensor(fn.args[idx], self.prototype.param_types[idx]))
                     idx += 1
 
-        for arg_name, arg_value in zip(arg_names, arg_values):
-            self.set_value(arg_name, arg_value)
+        print(f'prototype: {self.prototype}')
         if inline:
+            for arg_name, arg_value in zip(arg_names, arg_values):
+                self.set_value(arg_name, arg_value)
             self.visit_compound_statement(node.body)
             return self.last_ret
         else:
             entry = _triton.ir.basic_block.create(self.builder.context, "entry", fn)
             self._seal_block(entry)
             self.builder.set_insert_block(entry)
+            # args are in the entry bb
+            for arg_name, arg_value in zip(arg_names, arg_values):
+                self.set_value(arg_name, arg_value)
             # visit function body
             self.visit_compound_statement(node.body)
             # finalize function
@@ -276,11 +279,12 @@ class CodeGenerator(ast.NodeVisitor):
         if not isinstance(values, tuple):
             values = [values]
         for name, value in zip(names, values):
+            # TODO: can we store constexpr here to support constant folding?
             # by default, constexpr are assigned into python variable
             if isinstance(value, triton.language.constexpr):
                 value = value.value
             if not isinstance(value, triton.language.tensor):
-                value = triton.language.core._to_ir(value, self.builder)
+                value = triton.language.core._to_tensor(value, self.builder)
             self.set_value(name, value)
 
     def visit_AugAssign(self, node):
@@ -532,7 +536,6 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Call(self, node):
         fn = self.visit(node.func)
-        print(sys.modules[fn.__module__])
         if isinstance(fn, triton.language.constexpr):
             fn = fn.value
         kws = dict()
@@ -743,6 +746,7 @@ class Kernel:
         context = _triton.ir.context()
         # get just-in-time proto-type of kernel
         fn_args = [arg for i, arg in enumerate(wargs) if i not in constants]
+        print(fn_args)
         arg_types = [Kernel._to_triton_ir(arg) for arg in fn_args]
         ret_type = triton.language.void
         prototype = triton.language.function_type(ret_type, arg_types)
