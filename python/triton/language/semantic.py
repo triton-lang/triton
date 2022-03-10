@@ -114,8 +114,11 @@ def add(input: tl.tensor,
   input, other = binary_op_type_checking_impl(input, other, builder, True, True)
   input_scalar_ty = input.type.scalar
   other_scalar_ty = other.type.scalar
+  print('add(...)')
   print(input)
+  print(input.type.is_block())
   print(other)
+  print(other.type.is_block())
   # offset + ptr
   # ptr + offset
   if other_scalar_ty.is_ptr() and not input_scalar_ty.is_ptr():
@@ -411,7 +414,9 @@ def not_equal(input: tl.tensor,
 #===----------------------------------------------------------------------===//
 
 def arange(start: int, end: int, builder: ir.builder) -> tl.tensor:
-  return tl.tensor(builder.get_range(start, end), tl.int32)
+  shape = [end-start]
+  ret_ty = tl.block_type(tl.int32, shape)
+  return tl.tensor(builder.get_range(start, end), ret_ty)
 
 def zeros(shape: List[int], dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
   _0 = ir.constant.get_null_value(dtype.to_ir(builder))
@@ -454,6 +459,10 @@ def broadcast_impl_value(lhs: tl.tensor,
                          builder: ir.builder) -> tl.tensor:
   lhs_ty = lhs.type
   rhs_ty = rhs.type
+
+  print(f'try to broadcast {lhs} and {rhs}')
+  print(f'is lhs block: {lhs_ty.is_block()}')
+  print(f'is rhs block: {rhs_ty.is_block()}')
 
   # make_shape_compatible(block, scalar)
   if lhs_ty.is_block() and not rhs_ty.is_block():
@@ -605,7 +614,7 @@ def cast(input: tl.tensor,
     if src_ty.is_bool():
       other = builder.create_splat(other, src_ty.get_block_shapes())
     return tl.tensor(builder.create_icmpNE(input.handle, other), dst_ty)
-  assert False
+  assert False, f'cannot cast {input} to {dst_ty}'
 
 #===----------------------------------------------------------------------===//
 #                               Memory Operators

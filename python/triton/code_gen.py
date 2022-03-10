@@ -22,7 +22,6 @@ from typing import Dict, Set, Tuple, Union, Optional, List
 
 import triton
 import triton._C.libtriton.triton as _triton
-# import triton.language as tl
 from .tools.disasm import extract
 
 class CodeGenerator(ast.NodeVisitor):
@@ -201,7 +200,9 @@ class CodeGenerator(ast.NodeVisitor):
         if inline:
             pass
         else:
-            fn = self.module.get_or_insert_function(node.name, self.prototype)
+            print(self.builder)
+            print(self.builder.context)
+            fn = self.module.get_or_insert_function(node.name, self.prototype.to_ir(self.builder))
             arg_values = []
             idx = 0
             for i, arg_name in enumerate(arg_names):
@@ -691,37 +692,36 @@ class Kernel:
             return 'str'
         raise NotImplementedError(f'could not compute type name for {obj}')
 
-    # TODO: should use frontend types?
     @staticmethod
-    def _to_triton_ir(context, obj):
+    def _to_triton_ir(obj):
         type_map = {
-            'I': _triton.ir.type.get_int32,
-            'L': _triton.ir.type.get_int64,
-            'f': _triton.ir.type.get_fp32,
-            'B': _triton.ir.type.get_int1,
-            'f8': _triton.ir.type.get_fp8,
-            'f16': _triton.ir.type.get_fp16,
-            'bf16': _triton.ir.type.get_bf16,
-            'f32': _triton.ir.type.get_fp32,
-            'f64': _triton.ir.type.get_fp64,
-            'i1': _triton.ir.type.get_int1,
-            'i8': _triton.ir.type.get_int8,
-            'i16': _triton.ir.type.get_int16,
-            'i32': _triton.ir.type.get_int32,
-            'i64': _triton.ir.type.get_int64,
-            'u8': _triton.ir.type.get_int8,
-            'u16': _triton.ir.type.get_int16,
-            'u32': _triton.ir.type.get_int32,
-            'u64': _triton.ir.type.get_int64,
+            'I': triton.language.int32,
+            'L': triton.language.int64,
+            'f': triton.language.float32,
+            'B': triton.language.int1,
+            'f8': triton.language.float8,
+            'f16': triton.language.float16,
+            'bf16': triton.language.bfloat16,
+            'f32': triton.language.float32,
+            'f64': triton.language.float64,
+            'i1': triton.language.int1,
+            'i8': triton.language.int8,
+            'i16': triton.language.int16,
+            'i32': triton.language.int32,
+            'i64': triton.language.int64,
+            'u8': triton.language.int8,
+            'u16': triton.language.int16,
+            'u32': triton.language.int32,
+            'u64': triton.language.int64,
         }
         # convert torch.Tensor to Triton IR pointers
         if hasattr(obj, 'data_ptr'):
             name = Kernel._type_name(obj)
-            elt_ty = type_map[name](context)
-            return _triton.ir.type.make_ptr(elt_ty, 1)
-        # default path returns triton.ir.type directly
+            elt_ty = type_map[name]
+            return triton.language.pointer_type(elt_ty, 1)
+        # default path returns triton.language.type directly
         name = Kernel._type_name(obj)
-        return type_map[name](context)
+        return type_map[name]
 
     @staticmethod
     def pow2_divisor(N):
@@ -743,9 +743,9 @@ class Kernel:
         context = _triton.ir.context()
         # get just-in-time proto-type of kernel
         fn_args = [arg for i, arg in enumerate(wargs) if i not in constants]
-        arg_types = [Kernel._to_triton_ir(context, arg) for arg in fn_args]
-        ret_type = _triton.ir.type.get_void(context)
-        prototype = _triton.ir.type.make_function(ret_type, arg_types)
+        arg_types = [Kernel._to_triton_ir(arg) for arg in fn_args]
+        ret_type = triton.language.void
+        prototype = triton.language.function_type(ret_type, arg_types)
         # generate Triton-IR
         # export symbols visible from self.fn into code-generator object
         gscope = self.fn.__globals__

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ctypes import pointer
 
 from enum import Enum
 from functools import wraps
@@ -28,7 +29,7 @@ def _to_tensor(x, builder):
         return _to_tensor(x.value, builder)
     elif isinstance(x, tensor):
         return x
-    assert False
+    assert False, f'cannot convert {x} to tensor'
 
 
 def builtin(fn):
@@ -46,6 +47,7 @@ class dtype:
     SINT_TYPES = ['int1', 'int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['uint8', 'uint16', 'uint32', 'uint64']
     FP_TYPES = ['fp8', 'fp16', 'bf16', 'fp32', 'fp64']
+    OTHER_TYPES = ['void']
 
     class SIGNEDNESS(Enum):
         SIGNED = 0
@@ -53,7 +55,7 @@ class dtype:
 
     def __init__(self, name):
         self.name = name
-        assert name in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES, name
+        assert name in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.OTHER_TYPES, name
         if name in dtype.SINT_TYPES:
             self.int_signedness = dtype.SIGNEDNESS.SIGNED
             self.int_bitwidth = int(name.split('int')[-1])
@@ -135,12 +137,25 @@ class dtype:
     def is_ptr(self):
         return False
 
+    def __eq__(self, other: dtype):
+        if not isinstance(other, dtype):
+            return False
+        return self.name == other.name
+
+    def __ne__(self, other: dtype):
+        return not self.__eq__(other)
+
+    def __hash__(self):
+        return hash((self.name,))
+
     @property
     def scalar(self):
         return self
 
     def to_ir(self, builder: ir.builder) -> ir.type:
-        if self.name == 'int1':
+        if self.name == 'void':
+            return builder.get_void_ty()
+        elif self.name == 'int1':
             return builder.get_int1_ty()
         elif self.name == 'int8' or self.name == 'uint8':
             return builder.get_int8_ty()
@@ -156,6 +171,7 @@ class dtype:
             return builder.get_float_ty()
         elif self.name == 'fp64':
             return builder.get_double_ty()
+        raise CompilationError(f'fail to covert {self} to ir type')
 
     def __str__(self):
         return self.name
@@ -185,6 +201,14 @@ class pointer_type(dtype):
     def is_ptr(self):
         return True
 
+    def __eq__(self, other: pointer_type) -> bool:
+        if not isinstance(other, pointer_type):
+            return False
+        return self.element_ty == other.element_ty and self.address_space == other.address_space
+
+    def __ne__(self, other: pointer_type) -> bool:
+        return not self.__eq__(other)
+
     @property
     def scalar(self):
         return self
@@ -204,12 +228,35 @@ class block_type(dtype):
     def is_block(self):
         return True
 
+    def get_block_shapes(self) -> List[int]:
+        return self.shape
+
+    def __eq__(self, other: block_type) -> bool:
+        if not isinstance(other, block_type):
+            return False
+        return self.element_ty == other.element_ty and self.shape == other.shape
+
+    def __ne__(self, other: block_type) -> bool:
+        return not self.__eq__(other)
+
     @property
     def scalar(self):
         return self.element_ty
 
+class function_type(dtype):
+    def __init__(self, ret_type: dtype, param_types: List[dtype]) -> None:
+        self.ret_type = ret_type
+        self.param_types = param_types
+
+    def __str__(self):
+        raise NotImplementedError('')
+
+    def to_ir(self, builder: ir.builder):
+        ir_param_types = [ty.to_ir(builder) for ty in self.param_types]
+        return ir.type.make_function(self.ret_type.to_ir(builder), ir_param_types)
 
 # scalar types
+void = dtype('void')
 int1 = dtype('int1')
 int8 = dtype('int8')
 int16 = dtype('int16')
