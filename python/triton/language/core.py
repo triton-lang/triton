@@ -786,6 +786,9 @@ def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", 
     :param cache_modifier: changes cache option in nvidia ptx
     'type cache_modifier: str, optional
     """
+    # other can be constexpr
+    if other:
+        other = _to_tensor(other, _builder)
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
     volatile = _constexpr_to_value(volatile)

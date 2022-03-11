@@ -525,8 +525,6 @@ def cast(input: tl.tensor,
          dst_ty: tl.dtype,
          builder: ir.builder) -> tl.tensor:
   src_ty = input.dtype
-  # print(f'casting {input} to {dst_ty}')
-  # print(f'src_ty.is_block(): {src_ty.is_block()}')
   if src_ty.is_block():
     dst_ty = tl.block_type(dst_ty, input.dtype.get_block_shapes())
   if src_ty == dst_ty:
@@ -915,14 +913,17 @@ def reduce_impl(input: tl.tensor, axis: int, builder: ir.builder, name: str,
   # on GPUs
   if scalar_ty.is_int() and scalar_ty.int_bitwidth <= 32:
     input = cast(input, tl.int32, builder)
-  
+
   # get result type
   shape = input.dtype.shape
-  del shape[axis]
-  if len(shape) == 0:
+  ret_shape = []
+  for i, s in enumerate(shape):
+    if i != axis:
+      ret_shape.append(s)
+  if len(ret_shape) == 0:
     res_ty = scalar_ty
   else:
-    res_ty = tl.block_type(scalar_ty, shape)
+    res_ty = tl.block_type(ret_shape, shape)
 
   if scalar_ty.is_floating():
     return tl.tensor(builder.create_reduce(input.handle, FLOAT_OP, axis), res_ty)
@@ -987,6 +988,6 @@ def max_contiguous(x: tl.tensor, value: int) -> tl.tensor:
   return x
 
 def debug_barrier(builder: ir.builder) -> tl.tensor:
-  return tl.tensor(builder.create_barrier(), tl.void)
+  return tl.tensor(builder.create_barrier(''), tl.void)
 
 
