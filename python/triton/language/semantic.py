@@ -1,7 +1,5 @@
 from __future__ import annotations # remove after python 3.11
 
-# from .core import tl.dtype, tl.pointer_type, tl.block_type, tl.tensor, 
-# tl.int1, tl.int8, tl.int32, tl.int64, tl.float16, tl.float32, tl.float64
 from . import core as tl
 from typing import List, Tuple, Optional
 from triton._C.libtriton.triton import ir
@@ -449,7 +447,7 @@ def broadcast_impl_shape(input: tl.tensor,
     return tl.tensor(builder.create_splat(input.handle, shape), ret_ty)
   src_shape = input.dtype.get_block_shapes()
   if len(src_shape) != len(shape):
-    raise ValueError("Cannot broadcast")
+    raise ValueError(f"Cannot broadcast, rank mismatch: {src_shape}, {shape}")
   if shape == src_shape:
     return input
   ret_ty = tl.block_type(input.dtype.scalar, shape)
@@ -923,7 +921,7 @@ def reduce_impl(input: tl.tensor, axis: int, builder: ir.builder, name: str,
   if len(ret_shape) == 0:
     res_ty = scalar_ty
   else:
-    res_ty = tl.block_type(ret_shape, shape)
+    res_ty = tl.block_type(scalar_ty, ret_shape)
 
   if scalar_ty.is_floating():
     return tl.tensor(builder.create_reduce(input.handle, FLOAT_OP, axis), res_ty)

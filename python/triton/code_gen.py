@@ -427,8 +427,8 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_While(self, node):
         current_bb = self.builder.get_insert_block()
-        loop_bb = _triton.ir.basic_block.create(self.module.builder.context, "loop", current_bb.parent)
-        next_bb = _triton.ir.basic_block.create(self.module.builder.context, "postloop", current_bb.parent)
+        loop_bb = _triton.ir.basic_block.create(self.builder.context, "loop", current_bb.parent)
+        next_bb = _triton.ir.basic_block.create(self.builder.context, "postloop", current_bb.parent)
 
         def continue_fn():
             cond = self.visit(node.test)
@@ -494,8 +494,8 @@ class CodeGenerator(ast.NodeVisitor):
         step_node = ast.AugAssign(target=st_target, op=ast.Add(), value=arg_2)
         # code generation
         current_bb = self.builder.get_insert_block()
-        loop_bb = _triton.ir.basic_block.create(self.module.builder.context, "loop", current_bb.parent)
-        next_bb = _triton.ir.basic_block.create(self.module.builder.context, "postloop", current_bb.parent)
+        loop_bb = _triton.ir.basic_block.create(self.builder.context, "loop", current_bb.parent)
+        next_bb = _triton.ir.basic_block.create(self.builder.context, "postloop", current_bb.parent)
 
         def continue_fn():
             self.visit(step_node)

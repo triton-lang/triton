@@ -459,6 +459,7 @@ class tensor:
         return semantic.sub(self, other, _builder)
 
     def __rsub__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
         return semantic.sub(other, self, _builder)
 
     @builtin
@@ -842,48 +843,57 @@ def _add_atomic_docstr(name):
 @builtin
 @_add_atomic_docstr("compare-and-swap")
 def atomic_cas(pointer, cmp, val, _builder=None):
+    cmp = _to_tensor(cmp, _builder)
+    val = _to_tensor(cmp, _builder)
     return semantic.atomic_cas(pointer, cmp, val, _builder)
 
 
 @builtin
 @_add_atomic_docstr("exchange")
 def atomic_xchg(pointer, val, mask=None, _builder=None):
+    val = _to_tensor(val, _builder)
     return semantic.atomic_xchg(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("add")
 def atomic_add(pointer, val, mask=None, _builder=None):
+    val = _to_tensor(val, _builder)
     return semantic.atomic_add(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("max")
 def atomic_max(pointer, val, mask=None, _builder=None):
+    val = _to_tensor(val, _builder)
     return semantic.atomic_max(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("min")
 def atomic_min(pointer, val, mask=None, _builder=None):
+    val = _to_tensor(val, _builder)
     return semantic.atomic_min(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical and")
 def atomic_and(pointer, val, mask=None, _builder=None):
+    val = _to_tensor(val, _builder)
     return semantic.atomic_and(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical or")
 def atomic_or(pointer, val, mask=None, _builder=None):
+    val = _to_tensor(val, _builder)
     return semantic.atomic_or(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical xor")
 def atomic_xor(pointer, val, mask=None, _builder=None):
+    val = _to_tensor(val, _builder)
     return semantic.atomic_xor(pointer, val, mask, _builder)
 
 
@@ -920,6 +930,8 @@ def where(condition, x, y, _builder=None):
 
 @builtin
 def umulhi(x, y, _builder=None):
+    x = _to_tensor(x, _builder)
+    y = _to_tensor(y, _builder)
     return semantic.umulhi(x, y, _builder)
 
 
