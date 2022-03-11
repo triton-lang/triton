@@ -209,7 +209,7 @@ def fdiv(input: tl.tensor,
     raise ValueError("both operands of fdiv must have floating poscalar type")
   input, other = binary_op_type_checking_impl(input, other, builder, False, False, False, True)
   ret = builder.create_fdiv(input, other)
-  ret.set_fdiv_ieee_rounding(ieee_rounding.value)
+  ret.set_fdiv_ieee_rounding(ieee_rounding)
   return tl.tensor(ret, input.dtype)
 
 def mod(input: tl.tensor,
@@ -525,6 +525,8 @@ def cast(input: tl.tensor,
          dst_ty: tl.dtype,
          builder: ir.builder) -> tl.tensor:
   src_ty = input.dtype
+  # print(f'casting {input} to {dst_ty}')
+  # print(f'src_ty.is_block(): {src_ty.is_block()}')
   if src_ty.is_block():
     dst_ty = tl.block_type(dst_ty, input.dtype.get_block_shapes())
   if src_ty == dst_ty:
@@ -888,12 +890,17 @@ def where(condition: tl.tensor,
     x = broadcast_impl_shape(x, condition.dtype.get_block_shapes(), builder)
     y = broadcast_impl_shape(y, condition.dtype.get_block_shapes(), builder)
   
+  # TODO: we need to check x's and y's shape?
   x_ty = x.dtype.scalar
   y_ty = y.dtype.scalar
   ty = computation_type_impl(x_ty, y_ty, div_or_mod=False)
   x = cast(x, ty, builder)
   y = cast(y, ty, builder)
-  return tl.tensor(builder.create_select(condition.handle, x.handle, y.handle), ty)
+  if x.dtype.is_block():
+    ret_ty = tl.block_type(ty, x.dtype.shape)
+  else:
+    ret_ty = ty
+  return tl.tensor(builder.create_select(condition.handle, x.handle, y.handle), ret_ty)
 
 
 #===----------------------------------------------------------------------===//
@@ -923,29 +930,29 @@ def reduce_impl(input: tl.tensor, axis: int, builder: ir.builder, name: str,
     return tl.tensor(builder.create_reduce(input.handle, INT_OP, axis), res_ty)
   assert False
 
-def min(input: tl.tensor, axis: tl.constexpr, builder: ir.builder) -> tl.tensor:
-  return reduce_impl(input, axis.value, builder, "min", ir.REDUCE_OP.FMIN, ir.REDUCE_OP.MIN)
+def min(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
+  return reduce_impl(input, axis, builder, "min", ir.REDUCE_OP.FMIN, ir.REDUCE_OP.MIN)
 
-def max(input: tl.tensor, axis: tl.constexpr, builder: ir.builder) -> tl.tensor:
-  return reduce_impl(input, axis.value, builder, "max", ir.REDUCE_OP.FMAX, ir.REDUCE_OP.MAX)
+def max(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
+  return reduce_impl(input, axis, builder, "max", ir.REDUCE_OP.FMAX, ir.REDUCE_OP.MAX)
 
-def sum(input: tl.tensor, axis: tl.constexpr, builder: ir.builder) -> tl.tensor:
-  return reduce_impl(input, axis.value, builder, "sum", ir.REDUCE_OP.FADD, ir.REDUCE_OP.ADD)
+def sum(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
+  return reduce_impl(input, axis, builder, "sum", ir.REDUCE_OP.FADD, ir.REDUCE_OP.ADD)
 
-def xor_sum(input: tl.tensor, axis: tl.constexpr, builder: ir.builder) -> tl.tensor:
+def xor_sum(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
   scalar_ty = input.dtype.scalar
   if not scalar_ty.is_int():
     raise ValueError("xor_sum only supported for integers")
-  return reduce_impl(input, axis.value, builder, "sum", ir.REDUCE_OP.XOR, ir.REDUCE_OP.XOR)
+  return reduce_impl(input, axis, builder, "sum", ir.REDUCE_OP.XOR, ir.REDUCE_OP.XOR)
 
 
 #===----------------------------------------------------------------------===//
 #                               Math
 #===----------------------------------------------------------------------===//
 
-def umulhi(x: tl.tensor,  y: tl.tensor, builder: ir.builder) -> tl.tensor:
-  binary_op_type_checking_impl(x, y, builder)
-  return tl.tensor(builder.insert(ir.umulhi_inst.create(x.handle, y.handle)), x.dtype)
+def umulhi(x: tl.tensor, y: tl.tensor, builder: ir.builder) -> tl.tensor:
+  x, y = binary_op_type_checking_impl(x, y, builder)
+  return tl.tensor(builder.create_umulhi(x.handle, y.handle), x.dtype)
 
 def exp(x: tl.tensor, builder: ir.builder) -> tl.tensor:
   return tl.tensor(builder.create_exp(x.handle), x.dtype)

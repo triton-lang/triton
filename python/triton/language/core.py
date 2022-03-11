@@ -13,15 +13,16 @@ from . import semantic
 def _to_tensor(x, builder):
     if isinstance(x, bool):
         return tensor(builder.get_int1(x), int1)
+    # Note: compile-time const integers are represented by unsigned values
     elif isinstance(x, int):
         if -2**31 <= x < 2**31:
             return tensor(builder.get_int32(x), int32)
         elif 2**31 <= x < 2**32:
-            return tensor(builder.get_int32(x), uint32)
+            return tensor(builder.get_uint32(x), uint32)
         elif -2**63 <= x < 2**63:
             return tensor(builder.get_int64(x), int64)
         elif 2**63 <= x < 2**64:
-            return tensor(builder.get_int64(x), uint64)
+            return tensor(builder.get_uint64(x), uint64)
         else:
             raise RuntimeError(f'Nonrepresentable integer {x}.')
     elif isinstance(x, float):
@@ -239,6 +240,9 @@ class pointer_type(dtype):
 class block_type(dtype):
     def __init__(self, element_ty: dtype, shape: List[int]):
         self.element_ty = element_ty
+        # FIXME:
+        # block_type's shape is a list of int
+        # while tensor's shape is a list of constexpr
         self.shape = shape
         self.numel = 1
         for s in self.shape:
@@ -604,7 +608,10 @@ class tensor:
 # -----------------------
 # SPMD Programming Model
 # -----------------------
-
+def _constexpr_to_value(v):
+    if isinstance(v, constexpr):
+        return v.value
+    return v
 
 @builtin
 def program_id(axis, _builder=None):
@@ -621,8 +628,8 @@ def program_id(axis, _builder=None):
     #     npg0 = num_programs(0, _builder)
     #     npg1 = num_programs(0, _builder)
     #     return pid0 + pid1*npg0 + pid2*npg0*npg1
-    assert isinstance(axis, constexpr)
-    return semantic.program_id(axis.value, _builder)
+    axis = _constexpr_to_value(axis)
+    return semantic.program_id(axis, _builder)
 
 
 @builtin
@@ -633,8 +640,8 @@ def num_programs(axis, _builder=None):
     :param axis: The axis of the 3D launch grid. Has to be either 0, 1 or 2.
     :type axis: int
     """
-    assert isinstance(axis, constexpr)
-    return semantic.num_programs(axis.value, _builder)
+    axis = _constexpr_to_value(axis)
+    return semantic.num_programs(axis, _builder)
 
 
 # -----------------------
@@ -652,8 +659,9 @@ def arange(start, end, _builder=None):
     :param stop: End of the interval. Must be a power of two >= start.
     :type stop: int
     """
-    assert isinstance(start, constexpr) and isinstance(end, constexpr)
-    return semantic.arange(start.value, end.value, _builder)
+    start = _constexpr_to_value(start)
+    end = _constexpr_to_value(end)
+    return semantic.arange(start, end, _builder)
 
 
 @builtin
@@ -751,8 +759,7 @@ def dot(input, other, allow_tf32=True, _builder=None):
     :param other: The second tensor to be multiplied.
     :type other: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
     """
-    if isinstance(allow_tf32, constexpr):
-        allow_tf32 = allow_tf32.value
+    allow_tf32 = _constexpr_to_value(allow_tf32)
     return semantic.dot(input, other, allow_tf32, _builder)
 
 
@@ -779,12 +786,9 @@ def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", 
     :param cache_modifier: changes cache option in nvidia ptx
     'type cache_modifier: str, optional
     """
-    if isinstance(cache_modifier, constexpr):
-        cache_modifier = cache_modifier.value
-    if isinstance(eviction_policy, constexpr):
-        eviction_policy = eviction_policy.value
-    if isinstance(volatile, constexpr):
-        volatile = volatile.value
+    cache_modifier = _constexpr_to_value(cache_modifier)
+    eviction_policy = _constexpr_to_value(eviction_policy)
+    volatile = _constexpr_to_value(volatile)
     return semantic.load(pointer, mask, other, cache_modifier, eviction_policy, volatile, _builder)
 
 
@@ -802,6 +806,7 @@ def store(pointer, value, mask=None, _builder=None):
     :param mask: If mask[idx] is false, do not store :code:`value[idx]` at :code:`pointer[idx]`.
     :type mask: Block of triton.int1, optional
     """
+    # value can be constexpr
     value = _to_tensor(value, _builder)
     return semantic.store(pointer, value, mask, _builder)
 
@@ -901,6 +906,8 @@ def where(condition, x, y, _builder=None):
     :param x: values selected at indices where condition is True.
     :param y: values selected at indices where condition is False.
     """
+    x = _to_tensor(x, _builder)
+    y = _to_tensor(y, _builder)
     return semantic.where(condition, x, y, _builder)
 
 
@@ -910,12 +917,12 @@ def where(condition, x, y, _builder=None):
 
 @builtin
 def umulhi(x, y, _builder=None):
-    raise NotImplementedError('Do not use')
-    return umulhi(x, y, _builder)
+    return semantic.umulhi(x, y, _builder)
 
 
 @builtin
 def fdiv(x, y, ieee_rounding=False, _builder=None):
+    ieee_rounding = _constexpr_to_value(ieee_rounding)
     return semantic.fdiv(x, y, ieee_rounding, _builder)
 
 
@@ -986,24 +993,28 @@ def _add_reduction_docstr(name):
 @builtin
 @_add_reduction_docstr("maximum")
 def max(input, axis, _builder=None):
+    axis = _constexpr_to_value(axis)
     return semantic.max(input, axis, _builder)
 
 
 @builtin
 @_add_reduction_docstr("minimum")
 def min(input, axis, _builder=None):
+    axis = _constexpr_to_value(axis)
     return semantic.min(input, axis, _builder)
 
 
 @builtin
 @_add_reduction_docstr("sum")
 def sum(input, axis, _builder=None):
+    axis = _constexpr_to_value(axis)
     return semantic.sum(input, axis, _builder)
 
 
 @builtin
 @_add_reduction_docstr("xor sum")
 def xor_sum(input, axis, _builder=None):
+    axis = _constexpr_to_value(axis)
     return semantic.xor_sum(input, axis, _builder)
 
 

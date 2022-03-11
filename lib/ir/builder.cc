@@ -48,10 +48,10 @@ void builder::set_insert_point(basic_block *block){
 value *builder::get_int1(bool val)
 { return constant_int::get(type::get_int1_ty(ctx_), val); }
 
-value *builder::get_int32(int32_t val)
+value *builder::get_int32(uint32_t val)
 { return constant_int::get(type::get_int32_ty(ctx_), val);}
 
-value *builder::get_int64(int64_t val)
+value *builder::get_int64(uint64_t val)
 { return constant_int::get(type::get_int64_ty(ctx_), val);}
 
 value *builder::get_float16(float val)

@@ -699,8 +699,10 @@ void init_triton_ir(py::module &&m) {
       .def("set_insert_block", (void (ir::builder::*)(ir::basic_block *)) & ir::builder::set_insert_point)
       // Constants
       .def("get_int1", &ir::builder::get_int1, ret::reference)
-      .def("get_int32", &ir::builder::get_int32, ret::reference)
-      .def("get_int64", &ir::builder::get_int64, ret::reference)
+      .def("get_int32", [](ir::builder *self, int32_t v) { return self->get_int32((uint32_t)v); }, ret::reference)
+      .def("get_uint32", &ir::builder::get_int32, ret::reference)
+      .def("get_int64", [](ir::builder *self, int64_t v) { return self->get_int64((uint64_t)v); }, ret::reference)
+      .def("get_uint64", &ir::builder::get_int64, ret::reference)
       .def("get_float16", &ir::builder::get_float16, ret::reference)
       .def("get_float32", &ir::builder::get_float32, ret::reference)
       .def("get_range", &ir::builder::get_range, ret::reference)
