@@ -4,7 +4,7 @@ from ctypes import pointer
 from enum import Enum
 from functools import wraps
 from typing import List, Tuple, Optional
-from numpy import block
+from numpy import block, isin
 
 import triton
 from triton._C.libtriton.triton import ir
@@ -175,6 +175,8 @@ class dtype:
             return builder.get_int32_ty()
         elif self.name == 'int64' or self.name == 'uint64':
             return builder.get_int64_ty()
+        elif self.name == 'fp8':
+            return builder.get_fp8_ty()
         elif self.name == 'fp16':
             return builder.get_half_ty()
         elif self.name == 'bf16':
@@ -592,7 +594,8 @@ class tensor:
 
     @builtin
     def to(self, dtype, bitcast=False, _builder=None):
-        # dtype = dtype.handle(_builder)
+        if isinstance(bitcast, constexpr):
+            bitcast = bitcast.value
         if bitcast:
             return semantic.bitcast(self, dtype, _builder)
         return semantic.cast(self, dtype, _builder)
@@ -748,6 +751,8 @@ def dot(input, other, allow_tf32=True, _builder=None):
     :param other: The second tensor to be multiplied.
     :type other: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
     """
+    if isinstance(allow_tf32, constexpr):
+        allow_tf32 = allow_tf32.value
     return semantic.dot(input, other, allow_tf32, _builder)
 
 
@@ -774,6 +779,12 @@ def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", 
     :param cache_modifier: changes cache option in nvidia ptx
     'type cache_modifier: str, optional
     """
+    if isinstance(cache_modifier, constexpr):
+        cache_modifier = cache_modifier.value
+    if isinstance(eviction_policy, constexpr):
+        eviction_policy = eviction_policy.value
+    if isinstance(volatile, constexpr):
+        volatile = volatile.value
     return semantic.load(pointer, mask, other, cache_modifier, eviction_policy, volatile, _builder)
 
 
@@ -791,6 +802,7 @@ def store(pointer, value, mask=None, _builder=None):
     :param mask: If mask[idx] is false, do not store :code:`value[idx]` at :code:`pointer[idx]`.
     :type mask: Block of triton.int1, optional
     """
+    value = _to_tensor(value, _builder)
     return semantic.store(pointer, value, mask, _builder)
 
 

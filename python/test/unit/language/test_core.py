@@ -995,8 +995,9 @@ def test_noop(device='cuda'):
 
 @pytest.mark.parametrize("value, value_type", [
     (-1, 'i32'), (0, 'i32'), (1, None), (-2**31, 'i32'), (2**31 - 1, 'i32'),
-    (2**31, 'u32'), (2**32 - 1, 'u32'), (2**32, 'i64'), (2**63 - 1, 'i64'),
-    (-2**63, 'i64'), (2**63, 'u64'), (2**64 - 1, 'u64')
+    (2**32, 'i64'), (2**63 - 1, 'i64'), (-2**63, 'i64'),
+    # TODO: Now we don't have uint in IR, do we have better ways to test this?
+    # (2**31, 'u32'), (2**32 - 1, 'u32'), (2**63, 'u64'), (2**64 - 1, 'u64')
 ])
 def test_value_specialization(value: int, value_type: str, device='cuda') -> None:
 

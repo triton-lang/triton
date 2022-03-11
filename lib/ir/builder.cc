@@ -84,6 +84,9 @@ type *builder::get_int32_ty()
 type *builder::get_int64_ty()
 { return type::get_int64_ty(ctx_); }
 
+type *builder::get_fp8_ty()
+{ return type::get_fp8_ty(ctx_); }
+
 type *builder::get_half_ty()
 { return type::get_fp16_ty(ctx_); }
 

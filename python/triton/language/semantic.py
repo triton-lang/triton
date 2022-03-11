@@ -419,7 +419,7 @@ def arange(start: int, end: int, builder: ir.builder) -> tl.tensor:
 
 def zeros(shape: List[int], dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
   _0 = ir.constant.get_null_value(dtype.to_ir(builder))
-  ret_ty = tl.block_type(tl.dtype, shape)
+  ret_ty = tl.block_type(dtype, shape)
   return tl.tensor(builder.create_splat(_0, shape), ret_ty)
 
 #===----------------------------------------------------------------------===//
@@ -559,7 +559,7 @@ def cast(input: tl.tensor,
   if src_sca_ty.is_int() and dst_sca_ty.is_int() and \
     (src_sca_ty.int_bitwidth != dst_sca_ty.int_bitwidth or
      src_sca_ty.int_signedness != dst_sca_ty.int_signedness):
-    sign_extend = src_sca_ty.is_int_signed() and src_sca_ty != builder.get_int1_ty()
+    sign_extend = src_sca_ty.is_int_signed() and not src_sca_ty.is_bool()
     return tl.tensor(builder.create_int_cast(input.handle,
                                              dst_ty.to_ir(builder), sign_extend),
                       dst_ty)

@@ -1071,6 +1071,7 @@ class JITFunction:
         assert isinstance(tree.body[0], ast.FunctionDef)
         return tree
 
+    # Called by CodeGenerator.visit_Call()
     def __call__(self, *args, generator: CodeGenerator, **kwargs):
         try:
             from inspect import getcallargs
@@ -1079,17 +1080,22 @@ class JITFunction:
             arg_values = [arg if isinstance(arg, triton.language.tensor)
                           else triton.language.constexpr(arg) for arg in arg_values]
 
+            # Record values in the caller (parent scope)
             gscope = generator.gscope.copy()
             lscope = generator.lscope.copy()
-            # values = generator.module.get_values().copy()
+
+            # TODO: clear values other than args
+            lvalues = generator.lvalues.copy()
             # types = generator.module.get_types().copy()
             generator.gscope = sys.modules[self.fn.__module__].__dict__
             generator.lscope = dict()
             ret = generator.visit_FunctionDef(self.parse().body[0], inline=True, arg_values=arg_values)
             generator.gscope = gscope
             generator.lscope = lscope
-            # generator.module.set_values(values)
+
+            generator.lvalues = lvalues
             # generator.module.set_types(types)
+
             return ret
         except Exception as e:
             node = generator.last_node
