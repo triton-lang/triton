@@ -601,6 +601,23 @@ void init_triton_ir(py::module &&m) {
         else
           throw std::runtime_error("set_fdiv_ieee_rounding");
       })
+      .def("is_phi", [](ir::value *self) {
+        if (auto *pn = dynamic_cast<ir::phi_node*>(self))
+          return true;
+        return false;
+      })
+      .def("ops", [](ir::value *self) {
+        if (auto *instr = dynamic_cast<ir::instruction*>(self)) {
+          return instr->ops();
+        }
+        throw std::runtime_error("cannot use ops()");
+      })
+      .def("replace_all_uses_with", &ir::value::replace_all_uses_with)
+      .def("erase_from_parent", [](ir::value *self) {
+        if (auto *instr = dynamic_cast<ir::instruction*>(self))
+          return instr->erase_from_parent();
+        throw std::runtime_error("cannot use erase_from_parent");
+      })
       .def_property("name", &ir::value::get_name, &ir::value::set_name)
       .def_property_readonly("type", &ir::value::get_type);
 
@@ -685,6 +702,14 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<ir::module>(m, "module")
       .def(py::init<std::string, ir::builder &>())
+      .def("set_instr_metadata", [](ir::module *self, const std::string &name, ir::value *value) {
+        const auto metadatas = self->get_metadatas();
+        auto it = metadatas.find(name);
+        if (it != metadatas.end())
+          if (auto *instr = dynamic_cast<ir::instruction*>(value)) {
+            instr->set_metadata(it->second.first, it->second.second);
+          }
+      })
       .def("get_or_insert_function", &ir::module::get_or_insert_function, ret::reference);
 
   using eattr = ir::attribute_kind_t;

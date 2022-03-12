@@ -106,7 +106,7 @@ class CodeGenerator(ast.NodeVisitor):
     def _get_tensor_recursive(self, name: str, bb: _triton.ir.basic_block) -> triton.language.tensor:
         preds = bb.get_predecessors()
         type = self.lscope[name].dtype
-        # some preds haven't been filled, create phi as the value
+        # some preds haven't been filled, create a phi as a proxy of the value
         if bb not in self.sealed_blocks:
             result = self._make_phi(type, len(preds), bb)
             if bb in self.incomplete_phis:
@@ -136,31 +136,41 @@ class CodeGenerator(ast.NodeVisitor):
             self.builder.set_insert_block(bb)
         return triton.language.tensor(ir_phi, type)
 
-    # complete a phi node
+    # complete a phi node. (TODO: rename this as _complete_phis?)
+    # Note: since we try to remove tryival phi, the return tensor might not be a phi
     def _add_phi_operands(self, name: str,
-                          phi: triton.language.tensor) -> triton:
-        # # TODO: this doesn't seem correct
-        # if phi.is_complete():
-        #     return phi
+                          phi: triton.language.tensor) -> triton.language.tensor:
         bb = phi.handle.get_parent()
         for pred in bb.get_predecessors():
             v = self._get_tensor(name, pred)
             phi.handle.add_incoming(v.handle, pred)
-        # TODO: try to remove trivial phis
-        # v = self._remove_trivial_phi(phi)
+        phi = self._try_remove_trivial_phi(phi)
         return phi
 
     def _set_value(self, name: str, bb: _triton.ir.basic_block, value: triton.language.tensor) -> None:
         self.lvalues[(name, bb)] = value
-        # TODO: metadatas (?)
+        # TODO: why we need this?
+        self.module.set_instr_metadata(name, value.handle)
 
     def _seal_block(self, bb: _triton.ir.basic_block):
         # complete all incomplete phis
         if bb in self.incomplete_phis:
             for name, phi in self.incomplete_phis[bb].items():
-                self._add_phi_operands(name, phi)
+                result = self._add_phi_operands(name, phi)
+                # it's possible that this phi is trivial
+                self._set_value(name, bb, result)
             del self.incomplete_phis[bb]
         self.sealed_blocks.add(bb)
+
+    def _try_remove_trivial_phi(self, phi: triton.language.tensor) -> triton.language.tensor:
+        unique_handles = {op for op in phi.handle.ops() if op != phi.handle}
+        if len(unique_handles) != 1: # non-trivial phi
+            return phi
+        v = unique_handles.pop()
+        phi.handle.replace_all_uses_with(v)
+        phi.handle.erase_from_parent()
+        # TODO: remove trivial phis recursively
+        return triton.language.tensor(v, phi.dtype)
 
     def is_triton_tensor(self, value):
         return isinstance(value, triton.language.tensor)

@@ -73,7 +73,7 @@ public:
   const std::map<std::string, ir::value*>& globals() const    { return globals_; }
   // Metadata
   void add_metadata(const std::string &name, md_pair_t x)     { metadatas_[name] = x; }
-
+  const std::map<std::string, md_pair_t> &get_metadatas() const { return metadatas_; }
   void print(std::ostream &os);
 
 private:
