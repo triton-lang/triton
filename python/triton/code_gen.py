@@ -158,7 +158,8 @@ class CodeGenerator(ast.NodeVisitor):
             for name, phi in self.incomplete_phis[bb].items():
                 result = self._add_phi_operands(name, phi)
                 # it's possible that this phi is trivial
-                self._set_value(name, bb, result)
+                if self._get_tensor(name, bb).handle == phi.handle:
+                    self._set_value(name, bb, result)
             del self.incomplete_phis[bb]
         self.sealed_blocks.add(bb)
 
