@@ -206,7 +206,7 @@ def fdiv(input: tl.tensor,
   if not input_scalar_ty.is_floating() or not other_scalar_ty.is_floating():
     raise ValueError("both operands of fdiv must have floating poscalar type")
   input, other = binary_op_type_checking_impl(input, other, builder, False, False, False, True)
-  ret = builder.create_fdiv(input, other)
+  ret = builder.create_fdiv(input.handle, other.handle)
   ret.set_fdiv_ieee_rounding(ieee_rounding)
   return tl.tensor(ret, input.dtype)
 
@@ -972,17 +972,11 @@ def sqrt(x: tl.tensor, builder: ir.builder) -> tl.tensor:
 ##
 
 def multiple_of(x: tl.tensor, value: int) -> tl.tensor:
-  i = x.handle
-  if not i:
-    assert False
-  i.set_metadata(ir.metadata.multiple_of, value)
+  x.handle.multiple_of(value)
   return x
 
 def max_contiguous(x: tl.tensor, value: int) -> tl.tensor:
-  i = x.handle
-  if not i:
-    assert False
-  i.set_metadata(ir.metadata.max_contiguous, value)
+  x.handle.max_contiguous(value)
   return x
 
 def debug_barrier(builder: ir.builder) -> tl.tensor:

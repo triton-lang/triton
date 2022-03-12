@@ -87,8 +87,8 @@ def _layer_norm_bwd_dx_fused(DX, DY, DW, DB, X, W, B, M, V, Lock, stride, N, eps
     # write-back dx
     tl.store(DX + cols, dx, mask=mask)
     # accumulate partial sums for dw/db
-    partial_dw = (dy * xhat).to(w.dtype)
-    partial_db = (dy).to(w.dtype)
+    partial_dw = (dy * xhat).to(w.dtype.scalar)
+    partial_db = (dy).to(w.dtype.scalar)
     while tl.atomic_cas(Lock, 0, 1) == 1:
         pass
     count = tl.load(Count)

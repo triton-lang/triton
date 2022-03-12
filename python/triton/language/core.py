@@ -681,6 +681,7 @@ def zeros(shape, dtype, _builder=None):
         if not isinstance(d.value, int):
             raise TypeError(f"Shape element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
     shape = [x.value for x in shape]
+    dtype = _constexpr_to_value(dtype)
     return semantic.zeros(shape, dtype, _builder)
 
 
@@ -787,7 +788,9 @@ def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", 
     :param cache_modifier: changes cache option in nvidia ptx
     'type cache_modifier: str, optional
     """
-    # other can be constexpr
+    # mask, other can be constexpr
+    if mask:
+        mask = _to_tensor(mask, _builder)
     if other:
         other = _to_tensor(other, _builder)
     cache_modifier = _constexpr_to_value(cache_modifier)
@@ -812,6 +815,8 @@ def store(pointer, value, mask=None, _builder=None):
     """
     # value can be constexpr
     value = _to_tensor(value, _builder)
+    if mask:
+        mask = _to_tensor(mask, _builder)
     return semantic.store(pointer, value, mask, _builder)
 
 
@@ -919,6 +924,7 @@ def where(condition, x, y, _builder=None):
     :param x: values selected at indices where condition is True.
     :param y: values selected at indices where condition is False.
     """
+    condition = _to_tensor(condition, _builder)
     x = _to_tensor(x, _builder)
     y = _to_tensor(y, _builder)
     return semantic.where(condition, x, y, _builder)
@@ -1048,7 +1054,8 @@ def multiple_of(input, value, _builder=None):
     """
     Let the compiler knows that the values in :code:`input` are all multiples of :code:`value`.
     """
-    return semantic.multiple_of(input, value, _builder)
+    value = _constexpr_to_value(value)
+    return semantic.multiple_of(input, value)
 
 
 @builtin
@@ -1056,7 +1063,8 @@ def max_contiguous(input, value, _builder=None):
     """
     Let the compiler knows that the `value` first values in :code:`input` are contiguous.
     """
-    return semantic.max_contiguous(input, value, _builder)
+    value = _constexpr_to_value(value)
+    return semantic.max_contiguous(input, value)
 
 
 # -----------------------

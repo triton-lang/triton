@@ -11,10 +11,12 @@
 #include <pybind11/buffer_info.h>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
+#include <pybind11/stl_bind.h>
 #include <pybind11/stl.h>
 #include "Python.h"
 #include <regex>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include "llvm/IR/Module.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -571,6 +573,7 @@ void init_triton_ir(py::module &&m) {
       .value("AND", ir::atomic_rmw_op_t::And)
       .value("OR", ir::atomic_rmw_op_t::Or)
       .value("XOR", ir::atomic_rmw_op_t::Xor)
+      .value("XCHG", ir::atomic_rmw_op_t::Xchg)
       .value("MAX", ir::atomic_rmw_op_t::Max)
       .value("MIN", ir::atomic_rmw_op_t::Min)
       .value("UMIN", ir::atomic_rmw_op_t::UMin)
@@ -579,9 +582,27 @@ void init_triton_ir(py::module &&m) {
   py::class_<ir::context>(m, "context")
       .def(py::init<>());
 
-  auto value = py::class_<ir::value>(m, "value");
-  value.def_property("name", &ir::value::get_name, &ir::value::set_name);
-  value.def_property_readonly("type", &ir::value::get_type);
+  py::class_<ir::value>(m, "value")
+      .def("multiple_of", [](ir::value *self, int val) {
+        if (auto *instr = dynamic_cast<ir::instruction*>(self)) {
+          instr->set_metadata(ir::metadata::multiple_of, val);
+        } else
+          throw std::runtime_error("multiple_of");
+      })
+      .def("max_contiguous", [](ir::value *self, int val) {
+        if (auto *instr = dynamic_cast<ir::instruction*>(self)) {
+          instr->set_metadata(ir::metadata::max_contiguous, val);
+        } else
+          throw std::runtime_error("max_contiguous");
+      })
+      .def("set_fdiv_ieee_rounding", [](ir::value *self, bool val) {
+        if (auto *instr = dynamic_cast<ir::binary_operator*>(self))
+          instr->set_fdiv_ieee_rounding(val);
+        else
+          throw std::runtime_error("set_fdiv_ieee_rounding");
+      })
+      .def_property("name", &ir::value::get_name, &ir::value::set_name)
+      .def_property_readonly("type", &ir::value::get_type);
 
   py::class_<ir::user, ir::value>(m, "user");
 
@@ -601,8 +622,12 @@ void init_triton_ir(py::module &&m) {
       .def_property_readonly("value", &ir::constant_fp::get_value)
       .def("get", [](ir::type* ty, double val) { return ir::constant_fp::get(ty, val); }, ret::reference);
 
-  py::class_<ir::instruction, ir::user>(m, "instruction");
-  py::class_<ir::phi_node, ir::user>(m, "phi_node");
+  py::class_<ir::instruction, ir::user>(m, "instruction")
+      .def("get_parent", [](ir::instruction *self) {
+        return self->get_parent();
+      }, ret::reference);
+  py::class_<ir::phi_node, ir::instruction>(m, "phi_node")
+      .def("add_incoming", &ir::phi_node::add_incoming);
 
   py::class_<ir::type>(m, "type")
       .def("make_ptr", &ir::pointer_type::get, ret::reference)
@@ -685,6 +710,12 @@ void init_triton_ir(py::module &&m) {
   py::class_<ir::basic_block, ir::value>(m, "basic_block")
       .def("create", &ir::basic_block::create, ret::reference)
       .def("get_predecessors", &ir::basic_block::get_predecessors, ret::reference)
+      .def("get_first_non_phi", [](ir::basic_block *self) -> ir::instruction* {
+        ir::basic_block::iterator it = self->get_first_non_phi();
+        if (it == self->end())
+          return nullptr;
+        return *it;
+      }, ret::reference)
       .def_property_readonly("parent", &ir::basic_block::get_parent, ret::reference);
 
   py::class_<ir::builder>(m, "builder", py::dynamic_attr())
@@ -695,8 +726,27 @@ void init_triton_ir(py::module &&m) {
       .def("br", &ir::builder::create_br, ret::reference)
       .def("cond_br", &ir::builder::create_cond_br, ret::reference)
       .def("ret_void", &ir::builder::create_ret_void, ret::reference)
+      // insertion block/point, insert points are represented as (*bb, *instr)
       .def("get_insert_block", &ir::builder::get_insert_block, ret::reference)
       .def("set_insert_block", (void (ir::builder::*)(ir::basic_block *)) & ir::builder::set_insert_point)
+      .def("get_insert_point", [](ir::builder *self) {
+        ir::basic_block *bb = self->get_insert_block();
+        ir::basic_block::iterator it = self->get_insert_point();
+        ir::instruction *instr = it == bb->end() ? nullptr : *it;
+        return std::make_pair(bb, instr);
+      }, ret::reference)
+      .def("set_insert_point", [](ir::builder *self, std::pair<ir::basic_block*, ir::instruction*> pt) {
+        ir::basic_block *bb = pt.first;
+        ir::instruction *instr = pt.second;
+        if (instr) {
+          if (bb != instr->get_parent())
+            throw std::runtime_error("invalid insertion point, instr not in bb");
+          self->set_insert_point(instr);
+        } else {
+          assert(bb);
+          self->set_insert_point(bb);
+        }
+      })
       // Constants
       .def("get_int1", &ir::builder::get_int1, ret::reference)
       .def("get_int32", [](ir::builder *self, int32_t v) { return self->get_int32((uint32_t)v); }, ret::reference)
@@ -734,6 +784,8 @@ void init_triton_ir(py::module &&m) {
       .def("create_fp_trunc", &ir::builder::create_fp_trunc, ret::reference)
       .def("create_int_cast", &ir::builder::create_int_cast, ret::reference)
       .def("create_downcast", &ir::builder::create_downcast, ret::reference)
+      // phi
+      .def("create_phi", &ir::builder::create_phi, ret::reference)
       // Binary instructions
       .def("create_insert_nuwnswb_binop", &ir::builder::create_insert_nuwnswb_binop, ret::reference)
       .def("create_fmul", &ir::builder::create_fmul, ret::reference)

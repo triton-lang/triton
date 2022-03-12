@@ -31,6 +31,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.prototype = prototype
         self.gscope = gscope
         self.lscope = dict()
+        self.is_arg_lscope = dict() # name => is_arg: {str: bool}
         self.attributes = attributes
         self.constants = constants
         self.kwargs = kwargs
@@ -47,11 +48,16 @@ class CodeGenerator(ast.NodeVisitor):
         # SSA-construction
         # [name, bb] => triton.language.tensor
         self.lvalues: Dict[Tuple[str, _triton.ir.basic_block], triton.language.tensor] = {}
-        # [name, bb] => ir.phi
-        self.incomplete_phis: Dict[_triton.ir.basic_block, List[_triton.ir.phi_node]] = {}
+        # bb => {name => phi}
+        self.incomplete_phis = {}
         self.sealed_blocks: Set[_triton.ir.basic_block] = set()
 
     def get_value(self, name):
+        ''' This function:
+        1. make sure `name` is defined
+        2. if `name` is triton.language.tensor, get stored tensor by calling 
+           `self._get_tensor()`
+        '''
         # search node.id in local scope
         ret = None
         if name in self.lscope:
@@ -64,77 +70,84 @@ class CodeGenerator(ast.NodeVisitor):
             ret = self.builtins[name]
         else:
             raise ValueError(f'{name} is not defined')
-        if self.is_triton_tensor(ret):
-            return self._get_value(name)
-            # handle = self._get_value(name)
-            # return triton.language.tensor(handle, ret.type)
+        if self.is_triton_tensor(ret) and not self.is_arg_lscope[name]:
+            return self._get_tensor(name)
         return ret
 
-    def set_value(self, name: str, value: Union[triton.language.tensor, triton.language.constexpr]) -> None:
-        # if isinstance(value, _triton.ir.value):
-        #     value = triton.language.tensor(value)
-        # if isinstance(value, triton.language.tensor):
-        #     self.module.set_value(name, value.handle)
-        #     self.module.set_type(name, value.handle.type)
-        if isinstance(value, triton.language.tensor):
-            # TODO: unify set_value() & _set_value()
-            self._set_value(name, self.builder.get_insert_block(), value)
+    def set_value(self, name: str,
+                  value: Union[triton.language.tensor, triton.language.constexpr],
+                  is_arg: bool = False) -> None:
+        ''' This function:
+          called by visit_Assign() & visit_FuncDef() to store left value (lvalue)
+        1. record local defined name (FIXME: should consider control flow)
+        2. store tensor in self.lvalue
+        '''
         self.lscope[name] = value
+        # if this value is an argument, we don't need to create phis for it
+        self.is_arg_lscope[name] = is_arg
+        if isinstance(value, triton.language.tensor) and not is_arg:
+            self._set_value(name, self.builder.get_insert_block(), value)
 
     #
     # SSA-construction
     #
-    def _get_value(self, name: str, bb: Optional[_triton.ir.basic_block] = None) -> triton.language.tensor:
+    def _get_tensor(self, name: str, bb: Optional[_triton.ir.basic_block] = None) -> triton.language.tensor:
         if not bb:
             bb = self.builder.get_insert_block()
         # local value numbering
         if (name, bb) in self.lvalues:
             return self.lvalues[(name, bb)]
-        # global value numbering\
-        result: triton.language.tensor = self._get_value_recursive(name, bb)
-        # TODO: revisit insert point
-        self.builder.set_insert_point(bb)
+        # global value numbering
+        saved_insert_point = self.builder.get_insert_point()
+        result = self._get_tensor_recursive(name, bb)
+        self.builder.set_insert_point(saved_insert_point)
         return result
 
-    def _get_value_recursive(self, name: str, bb: _triton.ir.basic_block) -> triton.language.tensor:
+    def _get_tensor_recursive(self, name: str, bb: _triton.ir.basic_block) -> triton.language.tensor:
         preds = bb.get_predecessors()
         type = self.lscope[name].dtype
+        # some preds haven't been filled, create phi as the value
         if bb not in self.sealed_blocks:
             result = self._make_phi(type, len(preds), bb)
-            self.incomplete_phis[bb].append((name, result))
-        elif len(preds) == 1: # one predecessor: No phi needed
-            result = self._get_value(name, preds[0])
+            if bb in self.incomplete_phis:
+                self.incomplete_phis[bb][name] = result
+            else:
+                self.incomplete_phis[bb] = {name: result}
+        elif len(preds) == 1:
+            # one predecessor: no phi needed, try get value from pred
+            result = self._get_tensor(name, preds[0])
         else: # multiple preds
-            assert len(preds) > 1
+            assert len(preds) > 1, f'{name} is an undefined name (cannot find in the entry block)'
             phi = self._make_phi(type, len(preds), bb)
             self._set_value(name, bb, phi)
             result = self._add_phi_operands(name, phi)
-        # TODO: we can add try_remove_trivial_phi() here
         self._set_value(name, bb, result)
         return result
 
-    # returns a phi tensor, which encausulate an ir.phi_node
+    # returns a new phi tensor, which encausulate an ir.phi_node
     def _make_phi(self,
                   type: triton.language.dtype,
                   num_values: int,
                   bb: _triton.ir.basic_block) -> triton.language.tensor:
-        insert = bb.get_first_non_phi()
-        if insert != bb.end():
-            self.builder.set_insert_point(insert)
+        instr = bb.get_first_non_phi()
+        self.builder.set_insert_point((bb, instr))
         ir_phi = self.builder.create_phi(type.to_ir(self.builder), num_values)
-        if insert != bb.end():
-            self.builder.set_insert_point(bb)
+        if instr:
+            self.builder.set_insert_block(bb)
         return triton.language.tensor(ir_phi, type)
 
     # complete a phi node
-    def _add_phi_operands(self, name: str, phi: _triton.ir.phi_node) -> _triton.ir.phi_node:
+    def _add_phi_operands(self, name: str,
+                          phi: triton.language.tensor) -> triton:
         # # TODO: this doesn't seem correct
         # if phi.is_complete():
         #     return phi
-        bb = phi.get_parent()
+        bb = phi.handle.get_parent()
         for pred in bb.get_predecessors():
-            v = self._get_value(name, pred)
-            phi.add_incoming(v.handle, pred)
+            v = self._get_tensor(name, pred)
+            phi.handle.add_incoming(v.handle, pred)
+        # TODO: try to remove trivial phis
+        # v = self._remove_trivial_phi(phi)
         return phi
 
     def _set_value(self, name: str, bb: _triton.ir.basic_block, value: triton.language.tensor) -> None:
@@ -142,14 +155,12 @@ class CodeGenerator(ast.NodeVisitor):
         # TODO: metadatas (?)
 
     def _seal_block(self, bb: _triton.ir.basic_block):
-        # TODO
-        return
         # complete all incomplete phis
-        for name, phi in self.incomplete_phis[bb]:
-            self._add_phi_operands(name, phi)
-            # TODO: set_value()?
+        if bb in self.incomplete_phis:
+            for name, phi in self.incomplete_phis[bb].items():
+                self._add_phi_operands(name, phi)
+            del self.incomplete_phis[bb]
         self.sealed_blocks.add(bb)
-        del self.incomplete_phis[bb]
 
     def is_triton_tensor(self, value):
         return isinstance(value, triton.language.tensor)
@@ -218,18 +229,16 @@ class CodeGenerator(ast.NodeVisitor):
                     fn.args[idx].name = arg_name
                     arg_values.append(triton.language.tensor(fn.args[idx], self.prototype.param_types[idx]))
                     idx += 1
+
+        for arg_name, arg_value in zip(arg_names, arg_values):
+            self.set_value(arg_name, arg_value, is_arg=True)
         if inline:
-            for arg_name, arg_value in zip(arg_names, arg_values):
-                self.set_value(arg_name, arg_value)
             self.visit_compound_statement(node.body)
             return self.last_ret
         else:
             entry = _triton.ir.basic_block.create(self.builder.context, "entry", fn)
             self._seal_block(entry)
             self.builder.set_insert_block(entry)
-            # args are in the entry bb
-            for arg_name, arg_value in zip(arg_names, arg_values):
-                self.set_value(arg_name, arg_value)
             # visit function body
             self.visit_compound_statement(node.body)
             # finalize function
