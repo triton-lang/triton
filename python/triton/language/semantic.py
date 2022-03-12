@@ -863,12 +863,14 @@ def dot(lhs: tl.tensor,
   assert lhs.dtype.is_block() and rhs.dtype.is_block()
   if lhs.dtype.is_int():
     _0 = builder.get_int32(0)
+    ret_scalar_ty = tl.int32
   else:
     _0 = builder.get_float32(0)
+    ret_scalar_ty = tl.float32
   M = lhs.dtype.shape[0]
   N = rhs.dtype.shape[1]
   _0 = builder.create_splat(_0, [M, N])
-  ret_ty = tl.block_type(lhs.dtype.scalar, [M, N])
+  ret_ty = tl.block_type(ret_scalar_ty, [M, N])
   return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32),
                    ret_ty)
 
