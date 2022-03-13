@@ -84,7 +84,7 @@ class dtype:
                 self.primitive_bitwidth = 64
         elif name == 'void':
             self.primitive_bitwidth = 0
-        
+
     def is_fp8(self):
         return self.name == 'fp8'
 
@@ -276,6 +276,7 @@ class block_type(dtype):
     @property
     def scalar(self):
         return self.element_ty
+
 
 class function_type(dtype):
     def __init__(self, ret_type: dtype, param_types: List[dtype]) -> None:

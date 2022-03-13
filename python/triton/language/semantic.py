@@ -1,9 +1,8 @@
-from __future__ import annotations # remove after python 3.11
+from __future__ import annotations  # remove after python 3.11
 
 from . import core as tl
 from typing import List, Tuple, Optional
 from triton._C.libtriton.triton import ir
-
 
 
 ## Create custom exception that prints message "hello"
@@ -87,9 +86,9 @@ def check_ptr_type_impl(type_a: tl.dtype, type_b: tl.dtype, allow_ptr_a: bool) -
 def binary_op_type_checking_impl(lhs: tl.tensor,
                                  rhs: tl.tensor,
                                  builder: ir.builder,
-                                 allow_lhs_ptr = False, allow_rhs_ptr = False,
-                                 arithmetic_check = True, div_or_mod = False
-                                ) -> Tuple[tl.tensor, tl.tensor]:
+                                 allow_lhs_ptr=False, allow_rhs_ptr=False,
+                                 arithmetic_check=True, div_or_mod=False
+                                 ) -> Tuple[tl.tensor, tl.tensor]:
     # implicit broadcasting
     lhs, rhs = broadcast_impl_value(lhs, rhs, builder)
     # implicit typecasting
@@ -349,8 +348,8 @@ def greater_equal(input: tl.tensor,
     assert False
 
 def less_than(input: tl.tensor,
-               other: tl.tensor,
-               builder: ir.builder) -> tl.tensor:
+              other: tl.tensor,
+              builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder)
     scalar_ty = input.dtype.scalar
     # float < float
@@ -411,7 +410,7 @@ def not_equal(input: tl.tensor,
 #===----------------------------------------------------------------------===//
 
 def arange(start: int, end: int, builder: ir.builder) -> tl.tensor:
-    shape = [end-start]
+    shape = [end - start]
     ret_ty = tl.block_type(tl.int32, shape)
     return tl.tensor(builder.get_range(start, end), ret_ty)
 
@@ -515,7 +514,7 @@ def bitcast(input: tl.tensor,
     dst_bits = dst_sca_ty.primitive_bitwidth
     if src_bits != dst_bits:
         raise ValueError("Cannot bitcast data-type of size " + str(src_bits) +
-                                 "to data-type of size " + str(dst_bits))
+                         "to data-type of size " + str(dst_bits))
     return tl.tensor(builder.create_bitcast(input.handle, dst_ty.to_ir(builder)),
                       dst_ty)
 
@@ -582,15 +581,15 @@ def cast(input: tl.tensor,
                               dst_ty)
         else:
             return tl.tensor(builder.create_si_to_fp(input.handle,
-                                                      dst_ty.to_ir(builder)),
-                              dst_ty)
+                                                     dst_ty.to_ir(builder)),
+                             dst_ty)
 
     # ptr => int
     if src_sca_ty.is_ptr() and dst_sca_ty.is_int():
         bitwidth = dst_sca_ty.int_bitwidth
         if bitwidth == 64:
             return tl.tensor(builder.create_cast(ir.PtrToInt, input.handle, dst_ty.to_ir(builder)),
-                              dst_ty)
+                             dst_ty)
         if bitwidth == 1:
             return not_equal(cast(input, tl.int64, builder),
                              tl.tensor(builder.get_int64(0), tl.int64),
@@ -641,7 +640,7 @@ def load(ptr: tl.tensor,
         ptr = cast(ptr, ptr_ty, builder)
 
     # cache modifier
-    cache = ir.CACHE_MODIFIER.NONE; # default
+    cache = ir.CACHE_MODIFIER.NONE  # default
     if cache_modifier:
         if cache_modifier == ".ca":
             cache = ir.CACHE_MODIFIER.CA
@@ -651,7 +650,7 @@ def load(ptr: tl.tensor,
             raise ValueError(f"Cache modifier {cache_modifier} not supported")
 
     # eviction policy
-    eviction = ir.EVICTION_POLICY.NORMAL; #default
+    eviction = ir.EVICTION_POLICY.NORMAL  #default
     if eviction_policy:
         if eviction_policy == "evict_last":
             eviction = ir.EVICTION_POLICY.EVICT_LAST
@@ -671,7 +670,7 @@ def load(ptr: tl.tensor,
 
     if not mask and not other:
         return tl.tensor(builder.create_load(ptr.handle, cache, eviction, is_volatile),
-                          dst_ty)
+                         dst_ty)
     if not mask:
         raise ValueError("`other` cannot be provided without `mask`")
 
@@ -682,10 +681,10 @@ def load(ptr: tl.tensor,
         other = tl.tensor(other_ir, dst_ty)
 
     return tl.tensor(builder.create_masked_load(ptr.handle,
-                                                 mask.handle,
-                                                 other.handle,
-                                                 cache, eviction, is_volatile),
-                      dst_ty)
+                                                mask.handle,
+                                                other.handle,
+                                                cache, eviction, is_volatile),
+                     dst_ty)
 
 def store(ptr: tl.tensor,
           val: tl.tensor,
@@ -758,13 +757,13 @@ def atomic_max(ptr: tl.tensor,
                                                        ptr.handle,
                                                        val.handle,
                                                        mask.handle),
-                              val.dtype)
+                             val.dtype)
         else:
             return tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.UMAX,
                                                        ptr.handle,
                                                        val.handle,
                                                        mask.handle),
-                              val.dtype)
+                             val.dtype)
     # for float
     # return atomic_smax(i_ptr, i_val) if val >= 0
     # return atomic_umin(i_ptr, i_val) if val < 0
@@ -786,16 +785,16 @@ def atomic_min(ptr: tl.tensor,
     if sca_ty.is_int():
         if sca_ty.is_int_signed():
             return tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.MIN,
-                                                        ptr.handle,
-                                                        val.handle,
-                                                        mask.handle),
-                              val.dtype)
+                                                       ptr.handle,
+                                                       val.handle,
+                                                       mask.handle),
+                             val.dtype)
         else:
             return tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.UMIN,
-                                                        ptr.handle,
-                                                        val.handle,
-                                                        mask.handle),
-                              val.dtype)
+                                                       ptr.handle,
+                                                       val.handle,
+                                                       mask.handle),
+                             val.dtype)
     # for float
     # return atomic_smin(i_ptr, i_val) if val >= 0
     # return atomic_umax(i_ptr, i_val) if val < 0
@@ -804,15 +803,15 @@ def atomic_min(ptr: tl.tensor,
     pos = greater_equal(val, tl.tensor(ir.constant_float.get(sca_ty.to_ir(builder), 0), sca_ty), builder)
     neg = less_than(val, tl.tensor(ir.constant_float.get(sca_ty.to_ir(builder), 0), sca_ty), builder)
     pos_ret = tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.MIN,
-                                                   i_ptr.handle,
-                                                   i_val.handle,
-                                                   and_(mask, pos, builder).handle),
-                         i_val.dtype)
+                                                  i_ptr.handle,
+                                                  i_val.handle,
+                                                  and_(mask, pos, builder).handle),
+                        i_val.dtype)
     neg_ret = tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.UMAX,
-                                                   i_ptr.handle,
-                                                   i_val.handle,
-                                                   and_(mask, neg, builder).handle),
-                         i_val.dtype)
+                                                  i_ptr.handle,
+                                                  i_val.handle,
+                                                  and_(mask, neg, builder).handle),
+                        i_val.dtype)
     return where(pos, pos_ret, neg_ret, builder)
 
 def atomic_add(ptr: tl.tensor,
