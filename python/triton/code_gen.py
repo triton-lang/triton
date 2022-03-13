@@ -985,24 +985,25 @@ class JITFunction:
             with FileLock(bin_lock_path):
                 with open(bin_cache_path, 'rb') as f:
                     binary = pickle.load(f)["binary"]
-        if binary is None:
-            compile = dict(arg_types=arg_types, device=device, attributes=attributes, constants=constants, num_warps=num_warps, num_stages=num_stages)
-            if JITFunction.cache_hook is not None:
-                name = self.__name__
-                info = key.split('-')[-3:]
-                num_warps, num_stages, sig = info[0], info[1], info[2].split('_')[1:]
-                # make signature human-readable
-                arg_reprs = []
-                for arg_name, arg_sig in zip(self.arg_names, sig):
-                    arg_reprs.append(f'{arg_name}: {arg_sig}')
-                # assemble the repr
-                arg_reprs = ", ".join(arg_reprs)
-                repr = f"{name}[num_warps={num_warps}, num_stages={num_stages}]({arg_reprs})"
-                noop = JITFunction.cache_hook(key=key, repr=repr, fn=self, compile={"key": key, **compile}, is_manual_warmup=is_manual_warmup)
-                if noop:
-                    return True
 
-            binary = self._compile(**compile)
+        compile = dict(arg_types=arg_types, device=device, attributes=attributes, constants=constants, num_warps=num_warps, num_stages=num_stages)
+        if JITFunction.cache_hook is not None:
+            name = self.__name__
+            info = key.split('-')[-3:]
+            num_warps, num_stages, sig = info[0], info[1], info[2].split('_')[1:]
+            # make signature human-readable
+            arg_reprs = []
+            for arg_name, arg_sig in zip(self.arg_names, sig):
+                arg_reprs.append(f'{arg_name}: {arg_sig}')
+            # assemble the repr
+            arg_reprs = ", ".join(arg_reprs)
+            repr = f"{name}[num_warps={num_warps}, num_stages={num_stages}]({arg_reprs})"
+            noop = JITFunction.cache_hook(key=key, repr=repr, fn=self, compile={"key": key, **compile}, is_manual_warmup=is_manual_warmup, already_compiled=binary is not None)
+            if noop:
+                return True
+
+            if binary is None:
+                binary = self._compile(**compile)
             if bin_cache_path:
                 assert bin_lock_path is not None
                 with FileLock(bin_lock_path):
