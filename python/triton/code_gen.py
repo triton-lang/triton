@@ -1002,16 +1002,18 @@ class JITFunction:
             if noop:
                 return True
 
-            if binary is None:
-                binary = self._compile(**compile)
-            if bin_cache_path:
-                assert bin_lock_path is not None
-                with FileLock(bin_lock_path):
-                    with open(bin_cache_path + ".tmp", "wb") as f:
-                        pickle.dump({"binary": binary, "key": key}, f)
-                    os.rename(bin_cache_path + ".tmp", bin_cache_path)
+        if binary is None:
+            binary = self._compile(**compile)
+
+        if bin_cache_path:
+            assert bin_lock_path is not None
+            with FileLock(bin_lock_path):
+                with open(bin_cache_path + ".tmp", "wb") as f:
+                    pickle.dump({"binary": binary, "key": key}, f)
+                os.rename(bin_cache_path + ".tmp", bin_cache_path)
 
         self.bin_cache[key] = LoadedBinary(device, binary)
+        return False
 
     def _compile(self, arg_types, device, attributes, constants, num_warps, num_stages):
         # create IR module
