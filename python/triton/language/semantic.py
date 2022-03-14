@@ -860,7 +860,7 @@ def dot(lhs: tl.tensor,
         allow_tf32: bool,
         builder: ir.builder) -> tl.tensor:
     assert lhs.dtype.is_block() and rhs.dtype.is_block()
-    if lhs.dtype.is_int():
+    if lhs.dtype.scalar.is_int():
         _0 = builder.get_int32(0)
         ret_scalar_ty = tl.int32
     else:
