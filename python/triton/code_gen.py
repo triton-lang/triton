@@ -13,16 +13,16 @@ import tempfile
 import textwrap
 import time
 import warnings
-from numpy import isin
+from typing import Dict, Optional, Set, Tuple, Union
 
 import torch
 from filelock import FileLock
-
-from typing import Dict, Set, Tuple, Union, Optional, List
+from numpy import isin
 
 import triton
 import triton._C.libtriton.triton as _triton
 from .tools.disasm import extract
+
 
 class CodeGenerator(ast.NodeVisitor):
     def __init__(self, context, prototype, gscope, attributes, constants, kwargs):
@@ -31,7 +31,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.prototype = prototype
         self.gscope = gscope
         self.lscope = dict()
-        self.is_arg_lscope = dict() # name => is_arg: {str: bool}
+        self.is_arg_lscope = dict()  # name => is_arg: {str: bool}
         self.attributes = attributes
         self.constants = constants
         self.kwargs = kwargs
@@ -55,7 +55,7 @@ class CodeGenerator(ast.NodeVisitor):
     def get_value(self, name):
         ''' This function:
         1. make sure `name` is defined
-        2. if `name` is triton.language.tensor, get stored tensor by calling 
+        2. if `name` is triton.language.tensor, get stored tensor by calling
            `self._get_tensor()`
         '''
         # search node.id in local scope
@@ -116,7 +116,7 @@ class CodeGenerator(ast.NodeVisitor):
         elif len(preds) == 1:
             # one predecessor: no phi needed, try get value from pred
             result = self._get_tensor(name, preds[0])
-        else: # multiple preds
+        else:  # multiple preds
             assert len(preds) > 1, f'{name} is an undefined name (cannot find in the entry block)'
             phi = self._make_phi(type, len(preds), bb)
             self._set_value(name, bb, phi)
@@ -165,7 +165,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     def _try_remove_trivial_phi(self, phi: triton.language.tensor) -> triton.language.tensor:
         unique_handles = {op for op in phi.handle.ops() if op != phi.handle}
-        if len(unique_handles) != 1: # non-trivial phi
+        if len(unique_handles) != 1:  # non-trivial phi
             return phi
         v = unique_handles.pop()
         phi.handle.replace_all_uses_with(v)

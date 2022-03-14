@@ -1,14 +1,16 @@
 from __future__ import annotations
-from ctypes import pointer
 
+from ctypes import pointer
 from enum import Enum
 from functools import wraps
-from typing import List, Tuple, Optional
+from typing import List, Optional, Tuple
+
 from numpy import block, isin
 
 import triton
-from triton._C.libtriton.triton import ir
 from . import semantic
+from triton._C.libtriton.triton import ir
+
 
 def _to_tensor(x, builder):
     if isinstance(x, bool):
@@ -72,7 +74,7 @@ class dtype:
                 self.primitive_bitwidth = 8
             elif name == 'fp16':
                 self.fp_mantissa_width = 10
-                self.primitive_bitwidth = 16 
+                self.primitive_bitwidth = 16
             elif name == 'bf16':
                 self.fp_mantissa_width = 7
                 self.primitive_bitwidth = 16
@@ -84,7 +86,7 @@ class dtype:
                 self.primitive_bitwidth = 64
         elif name == 'void':
             self.primitive_bitwidth = 0
-        
+
     def is_fp8(self):
         return self.name == 'fp8'
 
@@ -277,6 +279,7 @@ class block_type(dtype):
     def scalar(self):
         return self.element_ty
 
+
 class function_type(dtype):
     def __init__(self, ret_type: dtype, param_types: List[dtype]) -> None:
         self.ret_type = ret_type
@@ -288,6 +291,7 @@ class function_type(dtype):
     def to_ir(self, builder: ir.builder):
         ir_param_types = [ty.to_ir(builder) for ty in self.param_types]
         return ir.type.make_function(self.ret_type.to_ir(builder), ir_param_types)
+
 
 # scalar types
 void = dtype('void')
@@ -613,6 +617,7 @@ def _constexpr_to_value(v):
     if isinstance(v, constexpr):
         return v.value
     return v
+
 
 @builtin
 def program_id(axis, _builder=None):
