@@ -234,8 +234,8 @@ def mod(input: tl.tensor,
     # % int
     elif scalar_ty.is_int():
         if scalar_ty.int_signedness != other_scalar_ty.int_signedness:
-            raise ValueError("Cannot mod " + scalar_ty.__repr__() + " by " + other_scalar_ty.__repr__() +
-                             " because they have different signedness;"
+            raise ValueError("Cannot mod " + scalar_ty.__repr__() + " by " + other_scalar_ty.__repr__() + " "
+                             "because they have different signedness;"
                              "this is unlikely to result in a useful answer. Cast them to the same signedness.")
         if scalar_ty.is_int_signed():
             return tl.tensor(builder.create_srem(input.handle, other.handle), input.dtype)
@@ -514,8 +514,8 @@ def broadcast_impl_value(lhs: tl.tensor,
             elif left == right:
                 ret_shape.append(left)
             else:
-                raise ValueError("Cannot make_shape_compatible: incompatible dimensions at index " + str(i) +
-                                 ": " + str(left) + " and " + str(right))
+                raise ValueError("Cannot make_shape_compatible: incompatible dimensions "
+                                 "at index " + str(i) + ": " + str(left) + " and " + str(right))
         if lhs_shape != ret_shape:
             ret_ty = tl.block_type(lhs_ty.scalar, ret_shape)
             lhs = tl.tensor(builder.create_broadcast(lhs.handle, ret_shape), ret_ty)
@@ -546,8 +546,8 @@ def bitcast(input: tl.tensor,
     src_bits = src_sca_ty.primitive_bitwidth
     dst_bits = dst_sca_ty.primitive_bitwidth
     if src_bits != dst_bits:
-        raise ValueError("Cannot bitcast data-type of size " + str(src_bits) +
-                         "to data-type of size " + str(dst_bits))
+        raise ValueError("Cannot bitcast data-type of size " + str(src_bits) + "to "
+                         "data-type of size " + str(dst_bits))
     return tl.tensor(builder.create_bitcast(input.handle, dst_ty.to_ir(builder)),
                      dst_ty)
 
@@ -588,8 +588,7 @@ def cast(input: tl.tensor,
 
     # Int cast
     if src_sca_ty.is_int() and dst_sca_ty.is_int() and \
-        (src_sca_ty.int_bitwidth != dst_sca_ty.int_bitwidth or
-         src_sca_ty.int_signedness != dst_sca_ty.int_signedness):
+       (src_sca_ty.int_bitwidth != dst_sca_ty.int_bitwidth or src_sca_ty.int_signedness != dst_sca_ty.int_signedness):
         sign_extend = src_sca_ty.is_int_signed() and not src_sca_ty.is_bool()
         return tl.tensor(builder.create_int_cast(input.handle,
                                                  dst_ty.to_ir(builder), sign_extend),

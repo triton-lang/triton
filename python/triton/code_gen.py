@@ -17,7 +17,6 @@ from typing import Dict, Optional, Set, Tuple, Union
 
 import torch
 from filelock import FileLock
-from numpy import isin
 
 import triton
 import triton._C.libtriton.triton as _triton

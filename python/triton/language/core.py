@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from ctypes import pointer
 from enum import Enum
 from functools import wraps
-from typing import List, Optional, Tuple
-
-from numpy import block, isin
+from typing import List
 
 import triton
 from . import semantic
@@ -191,9 +188,6 @@ class dtype:
         raise ValueError(f'fail to covert {self} to ir type')
 
     def __str__(self):
-        return self.name
-
-    def __repr__(self):
         return self.name
 
     @property
