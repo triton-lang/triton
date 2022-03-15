@@ -104,7 +104,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     def _get_tensor_recursive(self, name: str, bb: _triton.ir.basic_block) -> triton.language.tensor:
         preds = bb.get_predecessors()
-        type = self.lscope[name].dtype
+        type = self.lscope[name].type
         # some preds haven't been filled, create a phi as a proxy of the value
         if bb not in self.sealed_blocks:
             result = self._make_phi(type, len(preds), bb)
@@ -170,7 +170,7 @@ class CodeGenerator(ast.NodeVisitor):
         phi.handle.replace_all_uses_with(v)
         phi.handle.erase_from_parent()
         # TODO: remove trivial phis recursively
-        return triton.language.tensor(v, phi.dtype)
+        return triton.language.tensor(v, phi.type)
 
     def is_triton_tensor(self, value):
         return isinstance(value, triton.language.tensor)

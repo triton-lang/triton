@@ -431,12 +431,9 @@ class tensor:
         for s in self.shape:
             self.numel *= s
         self.numel = constexpr(self.numel)
-        # Data-type wrapper
-        self.dtype = type
-        # # if type is not provided, infer from ir type
-        # if not self.dtype:
-        #     self.dtype = tensor._to_dtype(self.handle.type)
-        # Shape is a constexpr
+        self.type = type  # Tensor type (can be block_type)
+        # Following the practice in pytorch, dtype is scalar type
+        self.dtype = type.scalar
         self.shape = [constexpr(s) for s in self.shape]
 
     def __str__(self) -> str:
