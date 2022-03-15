@@ -76,7 +76,7 @@ def reset_tmp_dir():
 def test_reuse():
     counter = 0
 
-    def inc_counter(key, binary, repr):
+    def inc_counter(*args, **kwargs):
         nonlocal counter
         counter += 1
     JITFunction.cache_hook = inc_counter
@@ -91,7 +91,7 @@ def test_reuse():
 def test_specialize(mode):
     counter = 0
 
-    def inc_counter(key, binary, repr):
+    def inc_counter(*args, **kwargs):
         nonlocal counter
         counter += 1
     JITFunction.cache_hook = inc_counter
