@@ -77,7 +77,7 @@ def reset_tmp_dir():
 def test_reuse():
     counter = 0
 
-    def inc_counter(key, binary, repr):
+    def inc_counter(*args, **kwargs):
         nonlocal counter
         counter += 1
     JITFunction.cache_hook = inc_counter
@@ -92,7 +92,7 @@ def test_reuse():
 def test_specialize(mode):
     counter = 0
 
-    def inc_counter(key, binary, repr):
+    def inc_counter(*args, **kwargs):
         nonlocal counter
         counter += 1
     JITFunction.cache_hook = inc_counter
@@ -118,9 +118,9 @@ def test_value_specialization(value: int, value_type: str, device='cuda') -> Non
 
     cache_str = None
 
-    def get_cache_str(key, binary, repr):
+    def get_cache_str(*args, **kwargs):
         nonlocal cache_str
-        cache_str = key.split('-')
+        cache_str = kwargs['key'].split('-')
     triton.code_gen.JITFunction.cache_hook = get_cache_str
     reset_tmp_dir()
     x = torch.tensor([3.14159], device='cuda')

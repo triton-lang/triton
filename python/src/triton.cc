@@ -300,8 +300,12 @@ void init_triton_runtime(py::module &&m) {
 
     // get cached binary
     py::str key(cache_key);
-    if(!bin_cache.contains(key))
-      add_to_cache(key, args, device, num_warps, num_stages);
+    py::bool_ noop = false;
+    if(!bin_cache.contains(key)) {
+      noop = add_to_cache(key, args, device, num_warps, num_stages);
+    }
+    if (noop)
+      return (py::object)py::none();
     py::object bin = bin_cache[key];
 
     // get grid
@@ -530,6 +534,7 @@ void init_triton_codegen(py::module &&m) {
           return hip_compile_ttir(name, ir, device, num_warps, num_stages, asm_map);
       }, py::return_value_policy::take_ownership);
   m.def("load_binary", [](backend_t backend, const std::string& name, asm_map_t &asm_map, size_t n_shared_bytes, uint64_t dev){
+	py::gil_scoped_release allow_threads;
         if(backend == CUDA)
           return cu_load_binary(name, asm_map, n_shared_bytes, dev);
         if(backend == ROCM)
