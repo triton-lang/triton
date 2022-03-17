@@ -152,6 +152,29 @@ else()
     add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
 endif()
 
+# MLIR
+find_package(MLIR 14 REQUIRED CONFIG)
+include(TableGen) # required by AddMLIR
+include(AddLLVM)
+include(AddMLIR)
+include(HandleLLVMOptions) # human-friendly error message
+
+include_directories(${MLIR_INCLUDE_DIRS})
+include_directories(${PROJECT_SOURCE_DIR}/include)
+include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
+
+add_subdirectory(lib)
+# lib
+add_library(triton)
+# add_subdirectory(ir)
+target_link_libraries(triton
+  PUBLIC
+  TRITONIR
+#   # optimizations
+#   MLIRPass
+#   MLIRTransforms
+)
+
 target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
 
 if(WIN32)
