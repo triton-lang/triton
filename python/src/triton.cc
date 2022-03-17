@@ -906,12 +906,7 @@ void init_triton_ir(py::module &&m) {
       // Intrinsics
       // These have no place in the IR, and hopefully they can be removed at some point
       .def("create_umulhi", &ir::builder::create_umulhi, ret::reference)
-      .def("create_copy_to_shared", &ir::builder::create_copy_to_shared, ret::reference)
-      .def("create_masked_load_async", &ir::builder::create_masked_load_async, ret::reference)
-      .def("create_copy_from_shared", &ir::builder::create_copy_from_shared, ret::reference)
-      .def("create_barrier", &ir::builder::create_barrier, ret::reference)
-      .def("create_async_wait", &ir::builder::create_async_wait, ret::reference)
-      .def("create_prefetch_s", &ir::builder::create_prefetch_s, ret::reference);
+      .def("create_barrier", &ir::builder::create_barrier, ret::reference);
 }
 
 void init_triton(py::module &m) {

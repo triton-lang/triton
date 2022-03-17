@@ -819,6 +819,49 @@ class Kernel:
         return _triton.runtime.launch(wargs, self.fn.do_not_specialize, self.fn.cache_key + cc, self.fn.arg_names, device, stream,
                                       self.fn.bin_cache, num_warps, num_stages, self.add_to_cache, grid)
 
+    # Compile to ttir, for the propose of testing MLIR rewriting
+    def compile_to_ttir(self, *wargs, grid, num_warps=4, num_stages=2, **kwargs):
+        # TODO: share code with _compile & __call__
+
+        # preparing args
+        tensor_idxs = [i for i, arg in enumerate(wargs) if hasattr(arg, 'data_ptr')]
+        # attributes
+        attributes = dict()
+        for i, arg in enumerate(wargs):
+            if i in self.fn.do_not_specialize:
+                continue
+            if isinstance(arg, int):
+                attributes[i] = Kernel.pow2_divisor(arg)
+            elif i in tensor_idxs:
+                addr = arg.data_ptr()
+                range_size = _triton.runtime.get_pointer_range_size(addr)
+                attributes[i] = min(Kernel.pow2_divisor(addr),
+                                    Kernel.pow2_divisor(range_size))
+        # transforms ints whose value is one into constants for just-in-time compilation
+        constants = {i: arg for i, arg in enumerate(wargs) if isinstance(arg, int) and arg == 1 and i not in self.fn.do_not_specialize}
+        constants.update({i: arg.value for i, arg in enumerate(wargs) if isinstance(arg, triton.language.constexpr)})
+        constants.update({i: None for i, arg in enumerate(wargs) if arg is None})
+        arg_types = [Kernel._to_python_ir(arg) for i, arg in enumerate(wargs) if i not in constants]
+
+        # create IR module
+        context = _triton.ir.context()
+        # get just-in-time proto-type of kernel
+        arg_types = [Kernel._to_triton_ir(arg) for arg in arg_types]
+        ret_type = triton.language.void
+        prototype = triton.language.function_type(ret_type, arg_types)
+        # generate Triton-IR
+        # export symbols visible from self into code-generator object
+        gscope = self.__globals__
+        generator = CodeGenerator(context, prototype, gscope=gscope, attributes=attributes, constants=constants, kwargs=dict())
+        try:
+            generator.visit(self.parse())
+        except Exception as e:
+            node = generator.last_node
+            if node is None or isinstance(e, (NotImplementedError, CompilationError)):
+                raise e
+            raise CompilationError(self.src, node) from e
+        return generator.module
+
 
 class Launcher:
     def __init__(self, kernel, grid):
