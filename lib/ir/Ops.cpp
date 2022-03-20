@@ -1,15 +1,16 @@
+#include "triton/ir/Dialect.h"
+#include "triton/ir/Types.h"
+
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OperationSupport.h"
-#include "triton/Dialect.h"
-#include "triton/Types.h"
 
 #define GET_OP_CLASSES
-#include "triton/Ops.cpp.inc"
+#include "triton/ir/Ops.cpp.inc"
 
 // enum attribute definitions
-#include "triton/OpsEnums.cpp.inc"
+#include "triton/ir/OpsEnums.cpp.inc"
 
 namespace mlir {
 namespace triton {

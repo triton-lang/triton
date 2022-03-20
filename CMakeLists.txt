@@ -141,19 +141,24 @@ if(BUILD_PYTHON_MODULE)
 endif()
 
 
-# Triton
-file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
-if (WIN32 AND BUILD_PYTHON_MODULE)
-    find_package(Python3 REQUIRED COMPONENTS Development)
-    Python3_add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
-    set_target_properties(triton PROPERTIES SUFFIX ".pyd")
-    set_target_properties(triton PROPERTIES PREFIX "lib")
-else()
-    add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
-endif()
+# # Triton
+# file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
+# if (WIN32 AND BUILD_PYTHON_MODULE)
+#     find_package(Python3 REQUIRED COMPONENTS Development)
+#     Python3_add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
+#     set_target_properties(triton PROPERTIES SUFFIX ".pyd")
+#     set_target_properties(triton PROPERTIES PREFIX "lib")
+# else()
+#     add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
+# endif()
+
 
 # MLIR
-find_package(MLIR 14 REQUIRED CONFIG)
+find_package(MLIR REQUIRED CONFIG PATHS ${LLVM_LIBRARY_DIR}/cmake/mlir)
+
+list(APPEND CMAKE_MODULE_PATH ${LLVM_LIBRARY_DIR}/cmake/llvm)
+list(APPEND CMAKE_MODULE_PATH ${LLVM_LIBRARY_DIR}/cmake/mlir)
+
 include(TableGen) # required by AddMLIR
 include(AddLLVM)
 include(AddMLIR)
@@ -162,17 +167,17 @@ include(HandleLLVMOptions) # human-friendly error message
 include_directories(${MLIR_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
+# link_directories(${LLVM_LIBRARY_DIR})
 
+add_subdirectory(include)
 add_subdirectory(lib)
-# lib
-add_library(triton)
-# add_subdirectory(ir)
+
+add_library(triton SHARED ${PYTHON_SRC})
+
 target_link_libraries(triton
-  PUBLIC
-  TRITONIR
-#   # optimizations
-#   MLIRPass
-#   MLIRTransforms
+  TritonIR
+  TritonDriver
+  TritonCodeGen
 )
 
 target_link_options(triton PRIVATE ${LLVM_LDFLAGS})

@@ -1,12 +1,34 @@
-add_mlir_dialect_library(TRITONIR
+add_mlir_dialect_library(TritonIR
   Dialect.cpp
   Ops.cpp
   Types.cpp
 
+  DEPENDS
+  TritonTableGen
+
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRArithmetic
-  MLIRControlFlow
-  MLIRFunc
+
+  # Since LLVM 15
+  # MLIRControlFlow
+  # MLIRFunc
+  # else
+  MLIRStandard
+
   MLIRTensor
 )
+
+# add_library(TritonIR
+#   Dialect.cpp
+#   Ops.cpp
+#   Types.cpp
+# )
+
+# target_link_libraries(TritonIR PUBLIC
+#   MLIRIR
+#   MLIRArithmetic
+#   MLIRControlFlow
+#   MLIRFunc
+#   MLIRTensor
+# )
