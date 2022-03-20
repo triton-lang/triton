@@ -27,8 +27,11 @@ def Triton_Dialect : Dialect {
   let dependentDialects = [
     "arith::ArithmeticDialect",
     "tensor::TensorDialect",
-    "cf::ControlFlowDialect",
-    "func::FuncDialect"
+    "StandardOpsDialect",
+
+    // Since LLVM 15
+    // "cf::ControlFlowDialect",
+    // "func::FuncDialect"
   ];
 
   let extraClassDeclaration = [{

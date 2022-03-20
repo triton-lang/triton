@@ -1,5 +1,5 @@
-#include "triton/Dialect.h"
-#include "triton/Types.h"
+#include "triton/ir/Dialect.h"
+#include "triton/ir/Types.h"
 
 using namespace mlir;
 using namespace mlir::triton;

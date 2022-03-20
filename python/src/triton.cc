@@ -2,11 +2,15 @@
 #include "triton/codegen/target.h"
 #include "triton/driver/error.h"
 #include "triton/driver/llvm.h"
-#include "triton/ir/builder.h"
-#include "triton/ir/enums.h"
-#include "triton/ir/function.h"
-#include "triton/ir/module.h"
-#include "triton/ir/print.h"
+
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/MLIRContext.h"
+
+#include "llvm/IR/Module.h"
+#include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/Verifier.h"
+
 #include <optional>
 #include <pybind11/buffer_info.h>
 #include <pybind11/functional.h>
@@ -18,9 +22,6 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include "llvm/IR/Module.h"
-#include "llvm/IR/LegacyPassManager.h"
-#include "llvm/IR/Verifier.h"
 
 namespace py = pybind11;
 namespace ir = triton::ir;
@@ -748,7 +749,7 @@ void init_triton_ir(py::module &&m) {
       }, ret::reference)
       .def_property_readonly("parent", &ir::basic_block::get_parent, ret::reference);
 
-  py::class_<ir::builder>(m, "builder", py::dynamic_attr())
+  py::class_<mlir::OpBuilder>(m, "builder", py::dynamic_attr())
       .def(py::init<ir::context &>())
       // getters
       .def_property_readonly("context", &ir::builder::get_context, ret::reference)
@@ -788,10 +789,10 @@ void init_triton_ir(py::module &&m) {
       .def("get_range", &ir::builder::get_range, ret::reference)
       // Types
       .def("get_void_ty", &ir::builder::get_void_ty, ret::reference)
-      .def("get_int1_ty", &ir::builder::get_int1_ty, ret::reference)
-      .def("get_int8_ty", &ir::builder::get_int8_ty, ret::reference)
+      .def("get_int1_ty", &mlir::OpBuilder::getI1Type, ret::reference)
+      .def("get_int8_ty", &mlir::OpBuilder::getI8Type, ret::reference)
       .def("get_int16_ty", &ir::builder::get_int16_ty, ret::reference)
-      .def("get_int32_ty", &ir::builder::get_int32_ty, ret::reference)
+      .def("get_int32_ty", &mlir::OpBuilder::getI32Type, ret::reference)
       .def("get_int64_ty", &ir::builder::get_int64_ty, ret::reference)
       .def("get_fp8_ty", &ir::builder::get_fp8_ty, ret::reference)
       .def("get_half_ty", &ir::builder::get_half_ty, ret::reference)

@@ -1,1 +1,1 @@
-add_subdirectory(ir)
+add_subdirectory(triton/ir)

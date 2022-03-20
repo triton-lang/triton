@@ -36,13 +36,13 @@ std::vector<int> segment_blocks(tensor_3d &layout, tensor_3d &idx, int max_width
   std::vector<int> current(H, 0);
   int num = 0;
   std::vector<int> lut(H * M * N * 4);
-  for (size_t h = 0; h < H; h++) {
+  for (ssize_t h = 0; h < H; h++) {
     // surrounding indices
     std::vector<int> ii_left(max_width, -1);
     std::vector<std::vector<int>> ii_top(max_width, std::vector<int>(N, -1));
     // start the dynamic programming algorithm
-    for (size_t m = 0; m < M; m++) {
-      for (size_t n = 0; n < N; n++) {
+    for (ssize_t m = 0; m < M; m++) {
+      for (ssize_t n = 0; n < N; n++) {
         int v = layout(h, m, n);
         if (v == 0)
           continue;
@@ -70,8 +70,8 @@ std::vector<int> segment_blocks(tensor_3d &layout, tensor_3d &idx, int max_width
         if (width != max_width)
           continue;
         // retained blocks are set to zeros
-        for (size_t km = 0; km < max_width; km++)
-          for (size_t kn = 0; kn < max_width; kn++) {
+        for (ssize_t km = 0; km < max_width; km++)
+          for (ssize_t kn = 0; kn < max_width; kn++) {
             int mm = ii_top[km][n];
             int nn = ii_left[kn];
             if (mm < 0 || nn < 0)
