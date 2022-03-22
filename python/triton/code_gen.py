@@ -554,6 +554,7 @@ class CompilationError(Exception):
         # this is necessary to make CompilationError picklable
         return (type(self), (self.src, self.node))
 
+
 class OutOfResources(Exception):
     def __init__(self, required, limit, name):
         self.message = f'out of resource: {name}, '\
