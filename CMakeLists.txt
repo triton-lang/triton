@@ -174,10 +174,15 @@ add_subdirectory(lib)
 
 add_library(triton SHARED ${PYTHON_SRC})
 
+find_package(PythonLibs REQUIRED)
+
 target_link_libraries(triton
   TritonIR
   TritonDriver
-  TritonCodeGen
+  # TritonCodeGen
+
+  MLIRCAPIIR
+  ${PYTHON_LIBRARIES}
 )
 
 target_link_options(triton PRIVATE ${LLVM_LDFLAGS})

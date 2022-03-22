@@ -91,6 +91,25 @@ def TT_FpToFp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape, NoSideEffect,
 //
 // Load/Store Ops
 //
+def TT_CacheModifierAttr : I32EnumAttr<
+    "CacheModifier", "",
+    [
+        I32EnumAttrCase<"NONE", 1, "none">,
+        I32EnumAttrCase<"CA", 2, "ca">,
+        I32EnumAttrCase<"CG", 3, "cg">,
+    ]> {
+    let cppNamespace = "::mlir::triton";
+}
+def TT_EvictionPolicyAttr : I32EnumAttr<
+    "EvictionPolicy", "",
+    [
+        I32EnumAttrCase<"NORMAL", 1, "normal">,
+        I32EnumAttrCase<"EVICT_FIRST", 2, "evict_first">,
+        I32EnumAttrCase<"EVICT_LAST", 3, "evict_last">
+    ]> {
+    let cppNamespace = "::mlir::triton";
+}
+
 def TT_LoadOp : TT_Op<"load", [SameOperandsAndResultShape]> {
     let summary = "load";
 
@@ -157,10 +176,13 @@ def TT_RedOpAttr : I32EnumAttr<
     /*name*/"RedOp", /*summary*/"",
     /*case*/
     [
-        I32EnumAttrCase</*sym*/"SUM", 1, /*str*/"sum">,
+        I32EnumAttrCase</*sym*/"ADD", 1, /*str*/"add">,
         I32EnumAttrCase<"MAX", 2, "max">,
         I32EnumAttrCase<"MIN", 3, "min">,
-        I32EnumAttrCase<"XOR_SUM", 4, "xor_sum">
+        I32EnumAttrCase<"FADD", 4, "fadd">,
+        I32EnumAttrCase<"FMAX", 5, "fmax">,
+        I32EnumAttrCase<"FMIN", 6, "fmin">,
+        I32EnumAttrCase<"XOR", 7, "xor">
     ]> {
     let cppNamespace = "::mlir::triton";
 }
@@ -179,10 +201,11 @@ def TT_AtomicRMWAttr : I32EnumAttr<
         I32EnumAttrCase<"OR", 2, "or">,
         I32EnumAttrCase<"XOR", 3, "xor">,
         I32EnumAttrCase<"ADD", 4, "add">,
-        I32EnumAttrCase<"MAX", 5, "max">,
-        I32EnumAttrCase<"MIN", 6, "min">,
-        I32EnumAttrCase<"UMAX", 7, "umax">,
-        I32EnumAttrCase<"UMIN", 8, "umin">
+        I32EnumAttrCase<"FADD", 5, "fadd">,
+        I32EnumAttrCase<"MAX", 6, "max">,
+        I32EnumAttrCase<"MIN", 7, "min">,
+        I32EnumAttrCase<"UMAX", 8, "umax">,
+        I32EnumAttrCase<"UMIN", 9, "umin">
     ]> {
     let cppNamespace = "::mlir::triton";
 }
