@@ -1,5 +1,4 @@
 # flake8: noqa: F821,F841
-import copy
 import itertools
 import re
 from typing import Optional, Union
@@ -585,7 +584,6 @@ def test_f8_f16_roundtrip():
 
     f8_output_tensor = torch.empty_like(f16, dtype=torch.int8)
     f8_output = triton.reinterpret(f8_output_tensor, tl.float8)
-    print(f16.dtype, f8_output.dtype)
     copy_kernel[grid](f16, f8_output, n_elements, BLOCK_SIZE=1024)
 
     assert torch.all(f8_tensor == f8_output_tensor)
@@ -991,27 +989,6 @@ def test_noop(device='cuda'):
         pass
     x = to_triton(numpy_random((1,), dtype_str='int32'), device=device)
     kernel[(1, )](x)
-
-
-@pytest.mark.parametrize("value, value_type", [
-    (-1, 'i32'), (0, 'i32'), (1, None), (-2**31, 'i32'), (2**31 - 1, 'i32'),
-    (2**31, 'u32'), (2**32 - 1, 'u32'), (2**32, 'i64'), (2**63 - 1, 'i64'),
-    (-2**63, 'i64'), (2**63, 'u64'), (2**64 - 1, 'u64')
-])
-def test_value_specialization(value: int, value_type: str, device='cuda') -> None:
-
-    @triton.jit
-    def kernel(VALUE, X):
-        pass
-
-    x = torch.tensor([3.14159], device='cuda')
-    pgm = kernel[(1, )](value, x)
-
-    # Parse out the type of the 'VALUE' parameter from the Triton IR.
-    triton_ir = pgm.asm['ttir']
-    ir_value_match = re.match(r'\s*def void kernel\((\w+) VALUE ', triton_ir)
-    ir_value_type = None if ir_value_match is None else ir_value_match.group(1)
-    assert ir_value_type == value_type
 
 
 @pytest.mark.parametrize(
