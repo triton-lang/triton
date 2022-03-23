@@ -70,18 +70,14 @@ namespace triton{
 namespace driver{
 
 void init_llvm() {
-  static bool init = false;
-  if(!init){
-    LLVMInitializeNVPTXTargetInfo();
-    LLVMInitializeNVPTXTarget();
-    LLVMInitializeNVPTXTargetMC();
-    LLVMInitializeNVPTXAsmPrinter();
-    LLVMInitializeAMDGPUTargetInfo();
-    LLVMInitializeAMDGPUTarget();
-    LLVMInitializeAMDGPUTargetMC();
-    LLVMInitializeAMDGPUAsmPrinter();
-    init = true;
-  }
+  LLVMInitializeNVPTXTargetInfo();
+  LLVMInitializeNVPTXTarget();
+  LLVMInitializeNVPTXTargetMC();
+  LLVMInitializeNVPTXAsmPrinter();
+  LLVMInitializeAMDGPUTargetInfo();
+  LLVMInitializeAMDGPUTarget();
+  LLVMInitializeAMDGPUTargetMC();
+  LLVMInitializeAMDGPUAsmPrinter();
 }
 
 
@@ -169,8 +165,6 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version){
   // verify and store llvm
   llvm::legacy::PassManager pm;
   pm.add(llvm::createVerifierPass());
-  // pm.add(llvm::createDeadCodeEliminationPass());
-  // pm.add(llvm::createEarlyCSEPass());
   pm.run(*module);
   // module->print(llvm::outs(), nullptr);
 
