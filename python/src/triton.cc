@@ -653,7 +653,6 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<MlirOperation>(m, "operation")
       .def("add_entry_block", [](MlirOperation &self) -> MlirBlock {
-        // if (auto FunctionOp = unwrap(self)->dyn_cast<mlir::FuncOp>()) {
         if (auto info = unwrap(self)->getRegisteredInfo()) {
           if (mlir::TypeID::get<mlir::FuncOp>() == info->getTypeID()) {
             auto FunctionOp = mlir::FuncOp::getFromOpaquePointer(unwrap(self));
@@ -1044,9 +1043,27 @@ void init_triton_ir(py::module &&m) {
           unwrap(lhs), unwrap(rhs)
         )));
       }, ret::reference)
-      // .def("create_fcmpOGT", &ir::builder::create_fcmpOGT, ret::reference)
-      // .def("create_fcmpOLE", &ir::builder::create_fcmpOLE, ret::reference)
-      // .def("create_fcmpOGE", &ir::builder::create_fcmpOGE, ret::reference)
+      .def("create_fcmpOGT", [](mlir::OpBuilder &self, MlirValue &lhs, MlirValue &rhs) -> MlirValue {
+        auto loc = self.getUnknownLoc();
+        return wrap(mlir::Value(self.create<mlir::arith::CmpFOp>(
+          loc, mlir::arith::CmpFPredicate::OGT,
+          unwrap(lhs), unwrap(rhs)
+        )));
+      }, ret::reference)
+      .def("create_fcmpOLE", [](mlir::OpBuilder &self, MlirValue &lhs, MlirValue &rhs) -> MlirValue {
+        auto loc = self.getUnknownLoc();
+        return wrap(mlir::Value(self.create<mlir::arith::CmpFOp>(
+          loc, mlir::arith::CmpFPredicate::OLE,
+          unwrap(lhs), unwrap(rhs)
+        )));
+      }, ret::reference)
+      .def("create_fcmpOGE", [](mlir::OpBuilder &self, MlirValue &lhs, MlirValue &rhs) -> MlirValue {
+        auto loc = self.getUnknownLoc();
+        return wrap(mlir::Value(self.create<mlir::arith::CmpFOp>(
+          loc, mlir::arith::CmpFPredicate::OGE,
+          unwrap(lhs), unwrap(rhs)
+        )));
+      }, ret::reference)
       // .def("create_fcmpOEQ", &ir::builder::create_fcmpOEQ, ret::reference)
       // .def("create_fcmpONE", &ir::builder::create_fcmpONE, ret::reference)
       // .def("create_fcmpULT", &ir::builder::create_fcmpULT, ret::reference)
