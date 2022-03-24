@@ -17,7 +17,6 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Verifier.h"
 
-#include <llvm-6.0/llvm/ADT/SmallVector.h>
 #include <optional>
 #include <pybind11/buffer_info.h>
 #include <pybind11/functional.h>
