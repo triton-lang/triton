@@ -121,7 +121,7 @@ libLLVMCoroutines.a
 libLLVMAnalysis.a
 )
 endif()
-include_directories("${LLVM_INCLUDE_DIRS}")
+include_directories(${LLVM_INCLUDE_DIRS})
 
 # Python module
 if(BUILD_PYTHON_MODULE)
