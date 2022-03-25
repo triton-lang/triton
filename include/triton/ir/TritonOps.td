@@ -145,13 +145,20 @@ def TT_GEPOp : TT_Op<"getelementptr", [NoSideEffect, SameOperandsAndResultShape]
 //
 // Shape Manipulation Ops
 //
-// def TT_CatOp : TT_Op<"cat", []>;
 def TT_BroadcastOp : TT_Op<"broadcast", [SameOperandsAndResultElementType]> {
     let summary = "broadcast";
 
     let arguments = (ins TT_Type:$src);
 
     let results = (outs TT_Type:$result);
+}
+
+def TT_CatOp : TT_Op<"cat", [SameOperandsAndResultElementType]> {
+    let summary = "concatenate 2 tensors";
+
+    let arguments = (ins TT_Tensor:$lhs, TT_Tensor:$rhs);
+
+    let results = (outs TT_Tensor:$result);
 }
 
 //
