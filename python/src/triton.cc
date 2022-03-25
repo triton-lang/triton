@@ -1063,14 +1063,62 @@ void init_triton_ir(py::module &&m) {
           unwrap(lhs), unwrap(rhs)
         )));
       }, ret::reference)
-      // .def("create_fcmpOEQ", &ir::builder::create_fcmpOEQ, ret::reference)
-      // .def("create_fcmpONE", &ir::builder::create_fcmpONE, ret::reference)
-      // .def("create_fcmpULT", &ir::builder::create_fcmpULT, ret::reference)
-      // .def("create_fcmpUGT", &ir::builder::create_fcmpUGT, ret::reference)
-      // .def("create_fcmpULE", &ir::builder::create_fcmpULE, ret::reference)
-      // .def("create_fcmpUGE", &ir::builder::create_fcmpUGE, ret::reference)
-      // .def("create_fcmpUEQ", &ir::builder::create_fcmpUEQ, ret::reference)
-      // .def("create_fcmpUNE", &ir::builder::create_fcmpUNE, ret::reference)
+      .def("create_fcmpOEQ", [](mlir::OpBuilder &self, MlirValue &lhs, MlirValue &rhs) -> MlirValue {
+        auto loc = self.getUnknownLoc();
+        return wrap(mlir::Value(self.create<mlir::arith::CmpFOp>(
+          loc, mlir::arith::CmpFPredicate::OEQ,
+          unwrap(lhs), unwrap(rhs)
+        )));
+      }, ret::reference)
+      .def("create_fcmpONE", [](mlir::OpBuilder &self, MlirValue &lhs, MlirValue &rhs) -> MlirValue {
+        auto loc = self.getUnknownLoc();
+        return wrap(mlir::Value(self.create<mlir::arith::CmpFOp>(
+          loc, mlir::arith::CmpFPredicate::ONE,
+          unwrap(lhs), unwrap(rhs)
+        )));
+      }, ret::reference)
+      .def("create_fcmpULT", [](mlir::OpBuilder &self, MlirValue &lhs, MlirValue &rhs) -> MlirValue {
+        auto loc = self.getUnknownLoc();
+        return wrap(mlir::Value(self.create<mlir::arith::CmpFOp>(
+          loc, mlir::arith::CmpFPredicate::ULT,
+          unwrap(lhs), unwrap(rhs)
+        )));
+      }, ret::reference)
+      .def("create_fcmpUGT", [](mlir::OpBuilder &self, MlirValue &lhs, MlirValue &rhs) -> MlirValue {
+        auto loc = self.getUnknownLoc();
+        return wrap(mlir::Value(self.create<mlir::arith::CmpFOp>(
+          loc, mlir::arith::CmpFPredicate::UGT,
+          unwrap(lhs), unwrap(rhs)
+        )));
+      }, ret::reference)
+      .def("create_fcmpULE", [](mlir::OpBuilder &self, MlirValue &lhs, MlirValue &rhs) -> MlirValue {
+        auto loc = self.getUnknownLoc();
+        return wrap(mlir::Value(self.create<mlir::arith::CmpFOp>(
+          loc, mlir::arith::CmpFPredicate::ULE,
+          unwrap(lhs), unwrap(rhs)
+        )));
+      }, ret::reference)
+      .def("create_fcmpUGE", [](mlir::OpBuilder &self, MlirValue &lhs, MlirValue &rhs) -> MlirValue {
+        auto loc = self.getUnknownLoc();
+        return wrap(mlir::Value(self.create<mlir::arith::CmpFOp>(
+          loc, mlir::arith::CmpFPredicate::UGE,
+          unwrap(lhs), unwrap(rhs)
+        )));
+      }, ret::reference)
+      .def("create_fcmpUEQ", [](mlir::OpBuilder &self, MlirValue &lhs, MlirValue &rhs) -> MlirValue {
+        auto loc = self.getUnknownLoc();
+        return wrap(mlir::Value(self.create<mlir::arith::CmpFOp>(
+          loc, mlir::arith::CmpFPredicate::UEQ,
+          unwrap(lhs), unwrap(rhs)
+        )));
+      }, ret::reference)
+      .def("create_fcmpUNE", [](mlir::OpBuilder &self, MlirValue &lhs, MlirValue &rhs) -> MlirValue {
+        auto loc = self.getUnknownLoc();
+        return wrap(mlir::Value(self.create<mlir::arith::CmpFOp>(
+          loc, mlir::arith::CmpFPredicate::UNE,
+          unwrap(lhs), unwrap(rhs)
+        )));
+      }, ret::reference)
       // // Logical
       // .def("create_and", &ir::builder::create_and, ret::reference)
       // .def("create_xor", &ir::builder::create_xor, ret::reference)
