@@ -145,7 +145,6 @@ public:
       case FP16TyID: return "f16";
       case FP32TyID: return "f32";
       case FP64TyID: return "f64";
-      case BF16TyID: return "bf16";
       case LabelTyID: return "label";
       case MetadataTyID: return "md";
       case TokenTyID: return "tok";

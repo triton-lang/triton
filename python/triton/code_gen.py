@@ -1130,7 +1130,7 @@ class JITFunction:
         # generate Triton-IR
         # export symbols visible from self into code-generator object
         gscope = self.__globals__
-        generator = CodeGenerator(context, prototype, gscope=gscope, attributes=attributes, constants=constants, kwargs=dict())
+        generator = CodeGenerator(context, prototype, gscope=gscope, attributes=attributes, constants=constants)
         try:
             generator.visit(self.parse())
         except Exception as e:

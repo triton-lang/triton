@@ -88,17 +88,6 @@ public:
   // Setters
   void set_continue_fn(std::function<ir::value*()> fn);
   // Getters
-<<<<<<< HEAD
-  const std::map<val_key_t, value*>& get_values() { return values_; }
-  const std::map<std::string, type*>& get_types() { return types_; }
-  void set_values(const std::map<val_key_t, value*>& values) { values_ = values; }
-  void set_types(const std::map<std::string, type*>& types) { types_ = types; }
-
-  value *get_value(const std::string& name, basic_block* block);
-  value *get_value(const std::string& name);
-  void set_type(const std::string& name, ir::type* ty) { types_[name] = ty; }
-=======
->>>>>>> .
   const std::string& get_name();
   std::function<ir::value*()> get_continue_fn();
   // Functions
