@@ -30,7 +30,6 @@ class CodeGenerator(ast.NodeVisitor):
         self.prototype = prototype
         self.gscope = gscope
         self.lscope = dict()
-        self.is_arg_lscope = dict()  # name => is_arg: {str: bool}
         self.attributes = attributes
         self.constants = constants
         self.kwargs = kwargs
@@ -69,30 +68,25 @@ class CodeGenerator(ast.NodeVisitor):
             ret = self.builtins[name]
         else:
             raise ValueError(f'{name} is not defined')
-        if self.is_triton_tensor(ret) and not self.is_arg_lscope[name]:
-            return self._get_tensor(name)
+        if self.is_triton_tensor(ret):
+            return self._get_tensor(name, self.builder.get_insert_block())
         return ret
 
     def set_value(self, name: str,
-                  value: Union[triton.language.tensor, triton.language.constexpr],
-                  is_arg: bool = False) -> None:
+                  value: Union[triton.language.tensor, triton.language.constexpr]) -> None:
         ''' This function:
           called by visit_Assign() & visit_FuncDef() to store left value (lvalue)
         1. record local defined name (FIXME: should consider control flow)
         2. store tensor in self.lvalue
         '''
         self.lscope[name] = value
-        # if this value is an argument, we don't need to create phis for it
-        self.is_arg_lscope[name] = is_arg
-        if isinstance(value, triton.language.tensor) and not is_arg:
+        if isinstance(value, triton.language.tensor):
             self._set_value(name, self.builder.get_insert_block(), value)
 
     #
     # SSA-construction
     #
-    def _get_tensor(self, name: str, bb: Optional[_triton.ir.basic_block] = None) -> triton.language.tensor:
-        if not bb:
-            bb = self.builder.get_insert_block()
+    def _get_tensor(self, name: str, bb: _triton.ir.basic_block) -> triton.language.tensor:
         # local value numbering
         if (name, bb) in self.lvalues:
             return self.lvalues[(name, bb)]
@@ -115,8 +109,9 @@ class CodeGenerator(ast.NodeVisitor):
         elif len(preds) == 1:
             # one predecessor: no phi needed, try get value from pred
             result = self._get_tensor(name, preds[0])
+        elif len(preds) == 0:
+            result = self._get_tensor(name, None)
         else:  # multiple preds
-            assert len(preds) > 1, f'{name} is an undefined name (cannot find in the entry block)'
             phi = self._make_phi(type, len(preds), bb)
             self._set_value(name, bb, phi)
             result = self._add_phi_operands(name, phi)
@@ -241,7 +236,7 @@ class CodeGenerator(ast.NodeVisitor):
                     idx += 1
 
         for arg_name, arg_value in zip(arg_names, arg_values):
-            self.set_value(arg_name, arg_value, is_arg=True)
+            self.set_value(arg_name, arg_value)
         if inline:
             self.visit_compound_statement(node.body)
             return self.last_ret
