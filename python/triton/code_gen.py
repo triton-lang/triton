@@ -47,7 +47,7 @@ def mangle_fn(name, arg_tys, constants):
     # doesn't mangle ret type, which must be a function of arg tys
     mangled_arg_names = '_'.join([mangle_ty(ty) for ty in arg_tys])
     mangled_constants = '_'.join([f'{i}c{constants[i]}' for i in sorted(constants)])
-    mangled_constants.replace('.','x')
+    mangled_constants = mangled_constants.replace('.','x')
     return f'{name}__{mangled_arg_names}__{mangled_constants}'
 
 
@@ -151,6 +151,7 @@ class CodeGenerator(ast.NodeVisitor):
         fn.set_is_kernel(self.is_kernel)
         arg_values = []
         idx = 0
+        print(fn_name, self.is_kernel, self.constants)
         for i, arg_name in enumerate(arg_names):
             if i in self.constants:
                 cst = self.constants[i]
@@ -1130,7 +1131,7 @@ class JITFunction:
         # generate Triton-IR
         # export symbols visible from self into code-generator object
         gscope = self.__globals__
-        generator = CodeGenerator(context, prototype, gscope=gscope, attributes=attributes, constants=constants)
+        generator = CodeGenerator(context, prototype, gscope=gscope, attributes=attributes, constants=constants, is_kernel=True)
         try:
             generator.visit(self.parse())
         except Exception as e:

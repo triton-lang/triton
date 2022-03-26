@@ -585,7 +585,6 @@ def test_f8_f16_roundtrip():
 
     f8_output_tensor = torch.empty_like(f16, dtype=torch.int8)
     f8_output = triton.reinterpret(f8_output_tensor, tl.float8)
-    print(f16.dtype, f8_output.dtype)
     copy_kernel[grid](f16, f8_output, n_elements, BLOCK_SIZE=1024)
 
     assert torch.all(f8_tensor == f8_output_tensor)
@@ -1009,8 +1008,8 @@ def test_value_specialization(value: int, value_type: str, device='cuda') -> Non
 
     # Parse out the type of the 'VALUE' parameter from the Triton IR.
     triton_ir = pgm.asm['ttir']
-    ir_value_match = re.match(r'\s*def void kernel\((\w+) VALUE ', triton_ir)
-    ir_value_type = None if ir_value_match is None else ir_value_match.group(1)
+    ir_value_match = re.match(r'\s*def void (\w+)\((\w+) VALUE ', triton_ir)
+    ir_value_type = None if ir_value_match is None else ir_value_match.group(2)
     assert ir_value_type == value_type
 
 
