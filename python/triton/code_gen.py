@@ -1031,16 +1031,15 @@ class JITFunction:
             # Record values in the caller (parent scope)
             gscope = generator.gscope.copy()
             lscope = generator.lscope.copy()
-
-            # TODO: clear values other than args
             lvalues = generator.lvalues.copy()
 
             generator.gscope = sys.modules[self.fn.__module__].__dict__
             generator.lscope = dict()
+            generator.lvalues = dict()
             ret = generator.visit_FunctionDef(self.parse().body[0], inline=True, arg_values=arg_values)
+
             generator.gscope = gscope
             generator.lscope = lscope
-
             generator.lvalues = lvalues
 
             return ret
