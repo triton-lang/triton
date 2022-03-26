@@ -1039,7 +1039,7 @@ class JITFunction:
 
             # TODO: clear values other than args
             lvalues = generator.lvalues.copy()
-            # types = generator.module.get_types().copy()
+
             generator.gscope = sys.modules[self.fn.__module__].__dict__
             generator.lscope = dict()
             ret = generator.visit_FunctionDef(self.parse().body[0], inline=True, arg_values=arg_values)
@@ -1047,7 +1047,6 @@ class JITFunction:
             generator.lscope = lscope
 
             generator.lvalues = lvalues
-            # generator.module.set_types(types)
 
             return ret
         except Exception as e:

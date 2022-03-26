@@ -464,8 +464,13 @@ def reshape(input: tl.tensor,
 
 
 def cat(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder) -> tl.tensor:
-    # TODO: check types
-    return tl.tensor(builder.create_cat(lhs.handle, rhs.handle), lhs.type)
+    assert lhs.type.is_block() and rhs.type.is_block()
+    assert lhs.type.shape[1:] == rhs.type.shape[1:]
+    scalar_ty = lhs.type.scalar
+    ret_shape = lhs.type.shape
+    ret_shape[0] = lhs.type.shape[0] + rhs.type.shape[0]
+    ret_ty = tl.block_type(scalar_ty, ret_shape)
+    return tl.tensor(builder.create_cat(lhs.handle, rhs.handle), ret_ty)
 
 
 def broadcast_impl_shape(input: tl.tensor,
