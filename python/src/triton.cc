@@ -834,13 +834,17 @@ void init_triton_ir(py::module &&m) {
         }
         throw std::runtime_error("invalid function type");
       })
-      // // Structured control flow
-      // .def("create_scf_for", [](mlir::OpBuilder &self) {
-      //   return self.create<mlir::scf::ForOp>(/*fill this*/);
-      // })
-      // .def("create_scf_yield")
-      // .def("create_scf_if")
-      // .def("create_scf_while")
+      // Structured control flow
+      .def("create_for", [](mlir::OpBuilder &self, MlirValue &lb, MlirValue &ub,
+                            MlirValue &step) {
+        auto loc = self.getUnknownLoc();
+        return wrap(
+          self.create<mlir::scf::ForOp>(loc, unwrap(lb), unwrap(ub), unwrap(step))
+        );
+      })
+      // .def("create_yield")
+      // .def("create_if")
+      // .def("create_while")
 
       // miscellious
       .def("create_make_range", [](mlir::OpBuilder &self, int start, int end) -> MlirValue {

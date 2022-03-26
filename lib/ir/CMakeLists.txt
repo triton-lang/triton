@@ -17,4 +17,5 @@ add_mlir_dialect_library(TritonIR
   MLIRStandard
 
   MLIRTensor
+  MLIRSCF
 )
