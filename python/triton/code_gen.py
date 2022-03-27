@@ -151,7 +151,6 @@ class CodeGenerator(ast.NodeVisitor):
         fn.set_is_kernel(self.is_kernel)
         arg_values = []
         idx = 0
-        print(fn_name, self.is_kernel, self.constants)
         for i, arg_name in enumerate(arg_names):
             if i in self.constants:
                 cst = self.constants[i]
@@ -531,9 +530,9 @@ class CodeGenerator(ast.NodeVisitor):
             constexprs = [i for i, arg in enumerate(args) if isinstance(arg, triton.language.constexpr)]
             constants = {i: args[i] for i in constexprs}
             # generate call
-            args = [arg for i, arg in enumerate(args) if i not in constexprs]
-            arg_vals = [arg.handle for arg in args]
-            arg_types = [arg.handle.type for i, arg in enumerate(args) if i not in constexprs]
+            args = [None if i in constexprs else arg for i, arg in enumerate(args)]
+            arg_vals = [arg.handle for arg in args if arg is not None]
+            arg_types = [arg.type for arg in arg_vals]
             fn_name = mangle_fn(fn.__name__, arg_types, constants)
             # generate function def if necessary
             if not self.module.has_function(fn_name):
@@ -549,24 +548,28 @@ class CodeGenerator(ast.NodeVisitor):
         if hasattr(fn, '__self__') and self.is_triton_object(fn.__self__) or \
             sys.modules[fn.__module__] is triton.language.core:
             ret = fn(*args, _builder=self.builder, **kws)
+        if fn in self.builtins.values():
+            args = [arg.value if isinstance(arg, triton.language.constexpr) else arg
+                    for arg in args]
+            ret = fn(*args, **kws)
         # special case: dynamic parallelism
         # in this case the core primitive returns a proxy
-        if isinstance(ret, triton.language.core.LaunchProxy):
-            ret_type  = _triton.ir.type.get_void(self.builder.context)
-            arg_tys = [x.type for x in ret.args]
-            prototype = _triton.ir.type.make_function(ret_type, arg_tys)
-            gscope = sys.modules[ret.fn.fn.__module__].__dict__
-            constants = ret.constants
-            fn_name = mangle_fn(ret.fn.__name__, arg_tys, ret.constants)
-            # TODO: clean-up attributes handling in function
-            if not self.module.has_function(fn_name):
-                attributes = {i: list(arg.parent.get_attrs(arg))[0].value for i, arg in enumerate(ret.args) \
-                        if isinstance(arg, _triton.ir.argument) and arg.parent.has_attr(i + 1) }
-                generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, is_kernel=True)
-                generator.visit(ret.fn.parse())
-            symbol = self.module.get_function(fn_name)
-            # TODO: should ret.args not include any constants ?
-            ret = self.builder.launch(symbol, ret.args, ret.grid, ret.num_warps)
+        # if isinstance(ret, triton.language.core.LaunchProxy):
+        #     ret_type  = _triton.ir.type.get_void(self.builder.context)
+        #     arg_tys = [x.type for x in ret.args]
+        #     prototype = _triton.ir.type.make_function(ret_type, arg_tys)
+        #     gscope = sys.modules[ret.fn.fn.__module__].__dict__
+        #     constants = ret.constants
+        #     fn_name = mangle_fn(ret.fn.__name__, arg_tys, ret.constants)
+        #     # TODO: clean-up attributes handling in function
+        #     if not self.module.has_function(fn_name):
+        #         attributes = {i: list(arg.parent.get_attrs(arg))[0].value for i, arg in enumerate(ret.args) \
+        #                 if isinstance(arg, _triton.ir.argument) and arg.parent.has_attr(i + 1) }
+        #         generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, is_kernel=True)
+        #         generator.visit(ret.fn.parse())
+        #     symbol = self.module.get_function(fn_name)
+        #     # TODO: should ret.args not include any constants ?
+        #     ret = self.builder.launch(symbol, ret.args, ret.grid, ret.num_warps)
         return ret
         # return fn(*args, **kws)
 

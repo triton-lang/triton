@@ -875,7 +875,7 @@ def sigmoid(x):
 
 @triton.jit
 @_add_math_1arg_docstr("softmax")
-def softmax(x, ieee_rounding=False):
+def softmax(x, ieee_rounding: constexpr=False):
     z = x - triton.language.max(x, 0)
     num = triton.language.exp(z)
     den = triton.language.sum(num, 0)
