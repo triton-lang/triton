@@ -73,7 +73,6 @@ def add(x: torch.Tensor, y: torch.Tensor):
     add_kernel[grid](x, y, output, n_elements, time_start, time_end, BLOCK_SIZE=1024)
     # We return a handle to z but, since `torch.cuda.synchronize()` hasn't been called, the kernel is still
     # running asynchronously at this point.
-    print((time_end, time_start))
     return output
 
 
