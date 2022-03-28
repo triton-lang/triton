@@ -971,6 +971,27 @@ private:
   constant_int* last_;
 };
 
+/* timing utilities */
+class clock_inst: public instruction{
+  clock_inst(context &ctx, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "clock"; }
+  _TRITON_DEFINE_CLONE(clock_inst)
+  _TRITON_DEFINE_ACCEPT(clock_inst)
+
+public:
+  static clock_inst* create(context &ctx, const std::string &name = "", instruction *next = nullptr);
+};
+
+class globaltimer_inst: public instruction{
+  globaltimer_inst(context &ctx, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "globaltimer"; }
+  _TRITON_DEFINE_CLONE(globaltimer_inst)
+  _TRITON_DEFINE_ACCEPT(globaltimer_inst)
+
+public:
+  static globaltimer_inst* create(context &ctx, const std::string &name = "", instruction *next = nullptr);
+};
+
 
 }
 }

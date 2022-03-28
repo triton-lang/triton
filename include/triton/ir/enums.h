@@ -165,6 +165,8 @@ enum value_id_t: unsigned {
   INST_MAKE_RANGE_STA,
   INST_MAKE_RANGE,
   INST_PREFETCH_S,
+  INST_GLOBALTIMER,
+  INST_CLOCK,
 };
 
 

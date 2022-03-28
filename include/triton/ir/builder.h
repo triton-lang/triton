@@ -28,7 +28,9 @@ public:
   // Constructor
   builder(context &ctx);
   // Getters
-  const context& get_context() { return ctx_; }
+  // const context& get_context() const { return ctx_; }
+  context& get_context() { return ctx_; }
+
   // Setters
   void set_insert_point(iterator instr);
   void set_insert_point(instruction* i);

@@ -101,6 +101,10 @@ struct dispatch{
   static ir::value *sin(ir::value *x, ir::builder *builder);
   static ir::value *sqrt(ir::value *x, ir::builder *builder);
 
+  // utilities
+  static ir::value *globaltimer(ir::builder *builder);
+  static ir::value *clock(ir::builder *builder);
+
   // internal (debug/optimization)
   static ir::value *multiple_of(ir::value *x, int value, ir::builder *builder);
   static ir::value *max_contiguous(ir::value *x, int value, ir::builder *builder);
