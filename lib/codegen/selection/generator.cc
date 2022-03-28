@@ -1093,10 +1093,10 @@ void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
       case tt::Xchg: name = "exch", s_ty = "b"; break;
     }
     std::string s_vec = vec == 2 ? "x2" : "";
-    std::string mod = nbits == 32 ? "" : ".noftz";
+    std::string mod = nbits == 16 ? ".noftz" : "";
 
     std::string asm_str = "@$1 atom.global.gpu." + name + mod + "." + s_ty + s_nbits + s_vec + " $0, [$2" + offset + "], $3;";
-    std::string ty_id = nbits*vec == 32 ? "r" : "h";
+    std::string ty_id = nbits*vec == 64 ? "l" : (nbits*vec == 32 ? "r" : "h");
     std::string constraint = "=" + ty_id + ",b,l," + ty_id;
     // create inline asm
     InlineAsm *iasm = InlineAsm::get(fn_ty, asm_str, constraint, true);
@@ -2596,6 +2596,18 @@ Instruction* generator::add_barrier() {
 void generator::visit_barrier_inst(ir::barrier_inst*) {
   add_barrier();
 }
+
+void generator::visit_clock_inst(ir::clock_inst* clock){
+  InlineAsm *iasm = InlineAsm::get(FunctionType::get(builder_->getInt64Ty(), {}), "mov.u64 $0, %clock64;", "=l", true);
+  vals_[clock][{}] = call(iasm);
+}
+
+void generator::visit_globaltimer_inst(ir::globaltimer_inst* timer){
+  InlineAsm *iasm = InlineAsm::get(FunctionType::get(builder_->getInt64Ty(), {}), "mov.u64 $0, %globaltimer;", "=l", true);
+  vals_[timer][{}] = call(iasm);
+}
+
+
 
 void generator::visit_prefetch_s_inst(ir::prefetch_s_inst *i) {
   ir::value *v = i->get_operand(0);

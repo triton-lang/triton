@@ -614,6 +614,9 @@ void init_triton_frontend(py::module &&m) {
   m.def("cos", &ir::dispatch::cos, ret::reference);
   m.def("sin", &ir::dispatch::sin, ret::reference);
   m.def("sqrt", &ir::dispatch::sqrt, ret::reference);
+  // utilities
+  m.def("clock", &ir::dispatch::clock, ret::reference);
+  m.def("globaltimer", &ir::dispatch::globaltimer, ret::reference);
   // internal (debugging only)
   m.def("multiple_of", &ir::dispatch::multiple_of, ret::reference);
   m.def("max_contiguous", &ir::dispatch::max_contiguous, ret::reference);
