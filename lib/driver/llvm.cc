@@ -204,7 +204,6 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version){
 }
 
 std::string ptx_to_cubin(const std::string& ptx, const std::string& ptxas, int cc) {
-  std::cout << ptx << std::endl;
   // compile ptx with ptxas
   char _fsrc[L_tmpnam];
   char _flog[L_tmpnam];
