@@ -796,9 +796,11 @@ def xor_sum(input, axis, _builder=None):
 # Utilities
 # -----------------------
 
+
 @builtin
 def globaltimer(_builder=None):
     return frontend.globaltimer(_builder)
+
 
 @builtin
 def clock(_builder=None):
