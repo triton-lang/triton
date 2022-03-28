@@ -46,7 +46,8 @@ def mangle_ty(type):
 def mangle_fn(name, arg_tys, constants):
     # doesn't mangle ret type, which must be a function of arg tys
     mangled_arg_names = '_'.join([mangle_ty(ty) for ty in arg_tys])
-    mangled_constants = '_'.join([f'{i}c{constants[i]}' for i in sorted(constants)])
+    key = lambda x: x.__name__ if isinstance(x, JITFunction) else repr(x)
+    mangled_constants = '_'.join([f'{i}c{key(constants[i])}' for i in sorted(constants)])
     mangled_constants = mangled_constants.replace('.','x')
     return f'{name}__{mangled_arg_names}__{mangled_constants}'
 
@@ -130,6 +131,7 @@ class CodeGenerator(ast.NodeVisitor):
             ret = ret.handle
         if isinstance(ret, triton.language.constexpr):
             ret = triton.language.core._to_ir(ret, self.builder)
+        # TODO: should return tl.block
         return self.builder.ret(ret)
 
     def visit_FunctionDef(self, node):
@@ -505,26 +507,14 @@ class CodeGenerator(ast.NodeVisitor):
         for keyword in node.keywords:
             kws.update(self.visit(keyword))
         args = [self.visit(arg) for arg in node.args]
+    
+
         if isinstance(fn, JITFunction):
-            # handle defaults
-            off = len(fn.arg_names) - len(args)
-            if off > 0:
-                for arg in fn.arg_defaults[-off:]:
-                    args.append(arg)
-                    new_arg = triton.language.core._to_ir(arg, self.builder)
-                    args.append(triton.language.block(new_arg))
-            # handle type annotation
-            # NOTE: for now, only `constexpr` annotation is supported
-            for i, arg in enumerate(args):
-                if isinstance(arg, triton.language.constexpr):
-                    continue
-                if i in fn.annotations:
-                    assert fn.annotations[i] is triton.language.constexpr
-                    if not isinstance(args[i], fn.annotations[i]):
-                        args[i] = fn.annotations[i](arg)
-                elif not self.is_triton_object(arg):
-                    new_arg = triton.language.core._to_ir(arg, self.builder)
-                    args[i] = triton.language.block(new_arg)
+            from inspect import getcallargs
+            args = getcallargs(fn.fn, *args, **kws)
+            args = [args[name] for name in fn.arg_names]
+            args = [arg if isinstance(arg, triton.language.block)
+                          else triton.language.constexpr(arg) for arg in args]
             # generate function def
             attributes = dict()
             constexprs = [i for i, arg in enumerate(args) if isinstance(arg, triton.language.constexpr)]
@@ -543,6 +533,8 @@ class CodeGenerator(ast.NodeVisitor):
                 generator.visit(fn.parse())
             symbol = self.module.get_function(fn_name)
             ret = self.builder.call(symbol, arg_vals)
+            if not ret.type.is_void() and not ret.type.is_struct():
+                ret = triton.language.block(ret)
             return ret
         # built-in function
         if hasattr(fn, '__self__') and self.is_triton_object(fn.__self__) or \
