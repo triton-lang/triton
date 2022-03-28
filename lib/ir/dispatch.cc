@@ -854,6 +854,16 @@ ir::value *dispatch::sqrt(ir::value *x, ir::builder *builder) {
   return builder->create_sqrt(x);
 }
 
+//
+
+ir::value *dispatch::globaltimer(ir::builder *builder) {
+  return builder->insert(globaltimer_inst::create(builder->get_context()));
+}
+
+ir::value *dispatch::clock(ir::builder *builder) {
+  return builder->insert(clock_inst::create(builder->get_context()));
+
+}
 
 //
 
