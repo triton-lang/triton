@@ -13,7 +13,7 @@ import tempfile
 import textwrap
 import time
 import warnings
-from typing import Dict, Optional, Set, Tuple, Union
+from typing import Dict, Set, Tuple, Union
 
 import torch
 from filelock import FileLock
