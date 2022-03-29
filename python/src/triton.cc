@@ -890,6 +890,9 @@ void init_triton_ir(py::module &&m) {
       // atomic
       .def("create_atomic_cas", &ir::builder::create_atomic_cas, ret::reference)
       .def("create_atomic_rmw", &ir::builder::create_atomic_rmw, ret::reference)
+      // Utilities
+      .def("create_clock", &ir::builder::create_clock, ret::reference)
+      .def("create_globaltimer", &ir::builder::create_globaltimer, ret::reference)
 
       // Built-in instruction
       .def("create_get_program_id", &ir::builder::create_get_program_id, ret::reference)

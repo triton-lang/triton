@@ -158,6 +158,9 @@ public:
   value *create_atomic_or(value *ptr, value *val, value *msk);
   value *create_atomic_xor(value *ptr, value *val, value *msk);
   value *create_atomic_xchg(value *ptr, value *val, value *msk);
+  // Utilities
+  value *create_clock();
+  value *create_globaltimer();
   // Built-in instruction
   value *create_get_program_id(unsigned axis);
   value *create_get_num_programs(unsigned axis);

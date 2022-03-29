@@ -1,3 +1,4 @@
+#include <bits/types/clock_t.h>
 #include <string>
 #include <algorithm>
 #include <iostream>
@@ -342,6 +343,15 @@ DEFINE_ATOMIC_RMW_INSTR(atomic_and, ir::atomic_rmw_op_t::And)
 DEFINE_ATOMIC_RMW_INSTR(atomic_or, ir::atomic_rmw_op_t::Or)
 DEFINE_ATOMIC_RMW_INSTR(atomic_xor, ir::atomic_rmw_op_t::Xor)
 DEFINE_ATOMIC_RMW_INSTR(atomic_xchg, ir::atomic_rmw_op_t::Xchg)
+
+// Utilities
+value *builder::create_clock() {
+  return insert(clock_inst::create(ctx_));
+}
+
+value *builder::create_globaltimer() {
+  return insert(globaltimer_inst::create(ctx_));
+}
 
 //===----------------------------------------------------------------------===//
 //                               built-in instructions

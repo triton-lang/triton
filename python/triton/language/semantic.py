@@ -995,6 +995,17 @@ def xor_sum(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
     return reduce_impl(input, axis, builder, "sum", ir.REDUCE_OP.XOR, ir.REDUCE_OP.XOR)
 
 
+# -----------------------
+# Utilities
+# -----------------------
+
+def clock(builder: ir.builder) -> tl.tensor:
+    return tl.tensor(builder.create_clock(), tl.int64)
+
+
+def globaltimer(builder: ir.builder) -> tl.tensor:
+    return tl.tensor(builder.create_globaltimer, tl.int64)
+
 # ===----------------------------------------------------------------------===
 #                               Math
 # ===----------------------------------------------------------------------===
