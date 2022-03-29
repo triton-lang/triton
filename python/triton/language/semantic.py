@@ -1006,6 +1006,7 @@ def clock(builder: ir.builder) -> tl.tensor:
 def globaltimer(builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_globaltimer, tl.int64)
 
+
 # ===----------------------------------------------------------------------===
 #                               Math
 # ===----------------------------------------------------------------------===
