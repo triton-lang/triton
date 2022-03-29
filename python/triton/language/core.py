@@ -1034,6 +1034,19 @@ def xor_sum(input, axis, _builder=None):
     axis = _constexpr_to_value(axis)
     return semantic.xor_sum(input, axis, _builder)
 
+# -----------------------
+# Utilities
+# -----------------------
+
+
+@builtin
+def globaltimer(_builder=None):
+    return frontend.globaltimer(_builder)
+
+
+@builtin
+def clock(_builder=None):
+    return frontend.clock(_builder)
 
 # -----------------------
 # Internal for debugging

@@ -649,9 +649,13 @@ class CompilationError(Exception):
         self.message = f'at {node.lineno}:{node.col_offset}:\n'
         self.message += '\n'.join(src.split('\n')[:node.lineno])
         self.message += '\n' + ' ' * node.col_offset + '^'
+        self.src = src
+        self.node = node
         super().__init__(self.message)
+
+    def __reduce__(self):
         # this is necessary to make CompilationError picklable
-        self.args = (src, node)
+        return (type(self), (self.src, self.node))
 
 
 class OutOfResources(Exception):
@@ -659,8 +663,14 @@ class OutOfResources(Exception):
         self.message = f'out of resource: {name}, '\
                        f'Required: {required}, '\
                        f'Hardware limit: {limit}'
+        self.required = required
+        self.limit = limit
+        self.name = name
         super().__init__(self.message)
-        self.args = (required, limit, name)
+
+    def __reduce__(self):
+        # this is necessary to make CompilationError picklable
+        return (type(self), (self.required, self.limit, self.name))
 
 
 class Kernel:
@@ -792,6 +802,10 @@ class Kernel:
         # handle annotations
         for pos, _type in self.fn.annotations.items():
             wargs[pos] = _type(wargs[pos])
+        # check that tensors are on GPU.
+        for arg in wargs:
+            if hasattr(arg, 'data_ptr'):
+                assert arg.is_cuda, "All tensors must be on GPU!"
         # query device index and cuda stream
         device = torch.cuda.current_device()
         torch.cuda.set_device(device)

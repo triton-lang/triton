@@ -70,18 +70,14 @@ namespace triton{
 namespace driver{
 
 void init_llvm() {
-  static bool init = false;
-  if(!init){
-    LLVMInitializeNVPTXTargetInfo();
-    LLVMInitializeNVPTXTarget();
-    LLVMInitializeNVPTXTargetMC();
-    LLVMInitializeNVPTXAsmPrinter();
-    LLVMInitializeAMDGPUTargetInfo();
-    LLVMInitializeAMDGPUTarget();
-    LLVMInitializeAMDGPUTargetMC();
-    LLVMInitializeAMDGPUAsmPrinter();
-    init = true;
-  }
+  LLVMInitializeNVPTXTargetInfo();
+  LLVMInitializeNVPTXTarget();
+  LLVMInitializeNVPTXTargetMC();
+  LLVMInitializeNVPTXAsmPrinter();
+  LLVMInitializeAMDGPUTargetInfo();
+  LLVMInitializeAMDGPUTarget();
+  LLVMInitializeAMDGPUTargetMC();
+  LLVMInitializeAMDGPUAsmPrinter();
 }
 
 
@@ -169,21 +165,20 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version){
   // verify and store llvm
   llvm::legacy::PassManager pm;
   pm.add(llvm::createVerifierPass());
-  // pm.add(llvm::createDeadCodeEliminationPass());
-  // pm.add(llvm::createEarlyCSEPass());
   pm.run(*module);
   // module->print(llvm::outs(), nullptr);
 
   // create machine
   module->setTargetTriple(triple);
   std::string error;
+  llvm::TargetMachine* machine;
   auto target = llvm::TargetRegistry::lookupTarget(module->getTargetTriple(), error);
   llvm::TargetOptions opt;
   opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
   opt.UnsafeFPMath = false;
   opt.NoInfsFPMath = false;
   opt.NoNaNsFPMath = true;
-  llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), proc, features, opt,
+  machine = target->createTargetMachine(module->getTargetTriple(), proc, features, opt,
                                                              llvm::Reloc::PIC_, llvm::None, llvm::CodeGenOpt::Aggressive);
   // set data layout
   if(layout.empty())
