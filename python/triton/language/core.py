@@ -209,7 +209,7 @@ class pointer_type(dtype):
         self.name = self.__str__()
 
     def to_ir(self, builder: ir.builder) -> ir.pointer_type:
-        return ir.type.make_ptr(self.element_ty.to_ir(builder), 1)
+        return builder.get_ptr_ty(self.element_ty.to_ir(builder), 1)
 
     def __str__(self):
         return f'pointer<{self.element_ty}>'
@@ -247,7 +247,7 @@ class block_type(dtype):
         self.name = self.__str__()
 
     def to_ir(self, builder: ir.builder) -> ir.block_type:
-        return ir.type.make_block(self.element_ty.to_ir(builder), self.shape)
+        return builder.get_block_ty(self.element_ty.to_ir(builder), self.shape)
 
     def __str__(self):
         return f'<{self.shape}, {self.element_ty}>'
@@ -275,8 +275,8 @@ class block_type(dtype):
 
 
 class function_type(dtype):
-    def __init__(self, ret_type: dtype, param_types: List[dtype]) -> None:
-        self.ret_type = ret_type
+    def __init__(self, ret_types: List[dtype], param_types: List[dtype]) -> None:
+        self.ret_types = ret_types
         self.param_types = param_types
 
     def __str__(self):
@@ -284,7 +284,8 @@ class function_type(dtype):
 
     def to_ir(self, builder: ir.builder):
         ir_param_types = [ty.to_ir(builder) for ty in self.param_types]
-        return ir.type.make_function(self.ret_type.to_ir(builder), ir_param_types)
+        ret_types = [ret_type.to_ir(builder) for ret_type in self.ret_types]
+        return builder.get_function_ty(ir_param_types, ret_types)
 
 
 # scalar types
@@ -425,8 +426,8 @@ class tensor:
         self.handle = handle
         # Block shape
         self.shape = (1, )
-        if self.handle.type.is_block():
-            self.shape = self.handle.type.shape
+        if type.is_block():
+            self.shape = type.shape
         self.numel = 1
         for s in self.shape:
             self.numel *= s

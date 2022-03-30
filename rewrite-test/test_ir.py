@@ -17,10 +17,12 @@ i64_ty = builder.get_int64_ty()
 
 f16_ty = builder.get_half_ty()
 
-f16_ptr_ty = builder.get_ptr_ty(f16_ty)
+f16_ptr_ty = builder.get_ptr_ty(f16_ty, 1)
 
 func_ty = builder.get_function_ty([f16_ptr_ty, f16_ptr_ty, f16_ptr_ty], [])
 func = builder.create_function('foo', func_ty)
+
+module.push_back(func)
 
 # ...
 entry = func.add_entry_block()
@@ -51,5 +53,5 @@ builder.create_store(c_ptrs, c)
 
 # func.dump()
 
-module.push_back(func)
+
 module.dump()
