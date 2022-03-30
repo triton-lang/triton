@@ -641,6 +641,23 @@ void init_triton_ir(py::module &&m) {
   // // py::class_<ir::undef_value, ir::constant>(m, "undef")
   // //     .def("get", &ir::undef_value::get, ret::reference);
 
+  py::class_<MlirModule>(m, "module")
+      // .def("set_attr")
+      .def("dump", [](MlirModule &self) -> void {
+        unwrap(self).dump();
+      })
+      .def("push_back", [](MlirModule &self, MlirOperation &funcOperation) {
+        if (auto info = unwrap(funcOperation)->getRegisteredInfo()) {
+          if (mlir::TypeID::get<mlir::FuncOp>() == info->getTypeID()) {
+            auto funcOp = mlir::FuncOp::getFromOpaquePointer(unwrap(funcOperation));
+            unwrap(self).push_back(funcOp);
+          } else
+            throw std::runtime_error("Only FuncOp can call push_back");
+        } else
+          throw std::runtime_error("Unknown error");
+      })
+      ;
+
   py::class_<MlirType>(m, "type")
       .def("is_integer", [](MlirType &self) -> bool {
         return mlirTypeIsAInteger(self);
@@ -654,8 +671,8 @@ void init_triton_ir(py::module &&m) {
       .def("add_entry_block", [](MlirOperation &self) -> MlirBlock {
         if (auto info = unwrap(self)->getRegisteredInfo()) {
           if (mlir::TypeID::get<mlir::FuncOp>() == info->getTypeID()) {
-            auto FunctionOp = mlir::FuncOp::getFromOpaquePointer(unwrap(self));
-            mlir::Block *entry = FunctionOp.addEntryBlock();
+            auto funcOp = mlir::FuncOp::getFromOpaquePointer(unwrap(self));
+            mlir::Block *entry = funcOp.addEntryBlock();
             return wrap(entry);
           }
           throw std::runtime_error("Only FuncOp can call add_entry_block");
@@ -716,6 +733,10 @@ void init_triton_ir(py::module &&m) {
       .def(py::init<mlir::MLIRContext *>())
       // // getters
       // .def_property_readonly("context", &ir::builder::get_context, ret::reference);
+      .def("create_module", [](mlir::OpBuilder &self) -> MlirModule {
+        auto loc = self.getUnknownLoc();
+        return wrap(self.create<mlir::ModuleOp>(loc));
+      })
       // // control flow
       // .def("br", &ir::builder::create_br, ret::reference)
       // .def("cond_br", &ir::builder::create_cond_br, ret::reference)

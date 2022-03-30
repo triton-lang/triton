@@ -26,7 +26,7 @@ from .tools.disasm import extract
 class CodeGenerator(ast.NodeVisitor):
     def __init__(self, context, prototype, gscope, attributes, constants, kwargs):
         self.builder = _triton.ir.builder(context)
-        self.module = _triton.ir.module('', self.builder)
+        self.module = self.builder.create_module()
         self.prototype = prototype
         self.gscope = gscope
         self.lscope = dict()
