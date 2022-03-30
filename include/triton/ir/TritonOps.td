@@ -114,7 +114,9 @@ def TT_EvictionPolicyAttr : I32EnumAttr<
 def TT_LoadOp : TT_Op<"load", [SameOperandsAndResultShape]> {
     let summary = "load";
 
-    let arguments = (ins TT_PtrTensor:$ptr, BoolLike:$mask, TT_Type:$other);
+    let arguments = (ins TT_PtrTensor:$ptr, BoolLike:$mask, TT_Type:$other,
+                         TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict,
+                         BoolAttr:$isVolatile);
 
     let results = (outs TT_Type:$result);
 

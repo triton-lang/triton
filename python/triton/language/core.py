@@ -280,7 +280,7 @@ class function_type(dtype):
         self.param_types = param_types
 
     def __str__(self):
-        return f'fn ({self.param_types}) -> {self.ret_type}'
+        return f'fn ({self.param_types}) -> {self.ret_types}'
 
     def to_ir(self, builder: ir.builder):
         ir_param_types = [ty.to_ir(builder) for ty in self.param_types]
