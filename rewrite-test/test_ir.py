@@ -6,7 +6,7 @@ ctx.load_triton()
 # TODO
 builder = ir.builder(ctx)
 
-# module = builder.create_module()
+module = builder.create_module()
 
 
 i1_ty = builder.get_int1_ty()
@@ -49,7 +49,7 @@ c_ptrs = builder.create_broadcast(entry.arg(2), [128])
 c_ptrs = builder.create_gep(c_ptrs, offsets)
 builder.create_store(c_ptrs, c)
 
-func.dump()
+# func.dump()
 
-# module.push_back(func)
-# module.dump()
+module.push_back(func)
+module.dump()
