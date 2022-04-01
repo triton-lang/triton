@@ -312,7 +312,7 @@ def minus(input: tl.tensor,
     input_sca_ty = input.type.scalar
     if input_sca_ty.is_ptr():
         raise ValueError("wrong type argument to unary minus (" + input_sca_ty.__repr__() + ")")
-    _0 = tl.tensor(ir.constant.get_null_value(input_sca_ty.to_ir(builder)), input_sca_ty)
+    _0 = tl.tensor(builder.get_null_value(input_sca_ty.to_ir(builder)), input_sca_ty)
     return sub(_0, input, builder)
 
 
@@ -442,7 +442,7 @@ def arange(start: int, end: int, builder: ir.builder) -> tl.tensor:
 
 
 def zeros(shape: List[int], dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
-    _0 = ir.constant.get_null_value(dtype.to_ir(builder))
+    _0 = builder.get_null_value(dtype.to_ir(builder))
     ret_ty = tl.block_type(dtype, shape)
     return tl.tensor(builder.create_splat(_0, shape), ret_ty)
 
