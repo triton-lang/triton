@@ -28,6 +28,7 @@ def Triton_Dialect : Dialect {
     "arith::ArithmeticDialect",
     "tensor::TensorDialect",
     "StandardOpsDialect",
+    "scf::SCFDialect"
 
     // Since LLVM 15
     // "cf::ControlFlowDialect",
