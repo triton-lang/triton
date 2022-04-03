@@ -20,6 +20,7 @@ import triton
 import triton._C.libtriton.triton as _triton
 from .tools.disasm import extract
 
+
 def mangle_ty(type):
     if type.is_ptr():
         return 'P' + mangle_ty(type.element)
