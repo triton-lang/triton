@@ -1034,15 +1034,18 @@ def test_value_specialization_overflow(value: int, overflow: bool, device='cuda'
 # test dynamic parallelism
 # -------------------------
 
+
 @triton.jit
 def mult(x, alpha):
     tl.store(x + tl.program_id(0), alpha)
+
 
 @triton.jit
 def stub(X, alpha, grid_0, grid_1, grid_2):
     tl.launch(mult, [X, alpha], [grid_0, grid_1, grid_2])
 
-def test_dyn_par(cond = True, device='cuda'):
+
+def test_dyn_par(cond=True, device='cuda'):
     n_pids = 10
     # pids = torch.arange(n_pids, device=device)
     # alpha = 2.0

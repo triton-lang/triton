@@ -44,12 +44,13 @@ def mangle_ty(type):
         return f'{elt}S{shape}S'
     assert False, "Unsupport type"
 
+
 def mangle_fn(name, arg_tys, constants):
     # doesn't mangle ret type, which must be a function of arg tys
     mangled_arg_names = '_'.join([mangle_ty(ty) for ty in arg_tys])
     key = lambda x: x.__name__ if isinstance(x, JITFunction) else repr(x)
     mangled_constants = '_'.join([f'{i}c{key(constants[i])}' for i in sorted(constants)])
-    mangled_constants = mangled_constants.replace('.','x')
+    mangled_constants = mangled_constants.replace('.', 'x')
     return f'{name}__{mangled_arg_names}__{mangled_constants}'
 
 
@@ -90,7 +91,7 @@ class CodeGenerator(ast.NodeVisitor):
                 break
         return stmts and isinstance(stmt, ast.Return)
 
-    def __init__(self, context, prototype, gscope, attributes, constants, module = None, is_kernel = False):
+    def __init__(self, context, prototype, gscope, attributes, constants, module=None, is_kernel=False):
         self.builder = _triton.ir.builder(context)
         self.value_constructor = _triton.ir.value_constructor(self.builder)
         self.module = _triton.ir.module('', self.builder) if module is None else module
@@ -170,8 +171,7 @@ class CodeGenerator(ast.NodeVisitor):
                 fn.args[idx].name = arg_name
                 arg_values.append(fn.args[idx])
                 idx += 1
-        
-                
+
         insert_pt = self.builder.get_insert_block()
         entry = _triton.ir.basic_block.create(self.builder.context, "entry", fn)
         self.builder.set_insert_block(entry)
@@ -180,14 +180,13 @@ class CodeGenerator(ast.NodeVisitor):
             self.set_value(arg_name, arg_value)
         # visit function body
         has_ret = self.visit_compound_statement(node.body)
-        # finalize 
+        # finalize
         if not has_ret:
             self.builder.ret_void()
         else:
             self.module.reset_ret_ty(fn_name, self.last_ret.type)
         # self.module.reset_ret_type(node.name)
         self.builder.set_insert_block(insert_pt)
-            
 
     def visit_arguments(self, node):
         arg_names = []
@@ -266,7 +265,7 @@ class CodeGenerator(ast.NodeVisitor):
         mode = type(args[0])
         # tuple of values -- create a struct
         if len(args) > 1 and mode == triton.language.block\
-            and all([type(arg) == mode for arg in args]):
+                and all([type(arg) == mode for arg in args]):
             args = [arg.handle for arg in args]
             tys = [arg.type for arg in args]
             struct_ty = _triton.ir.struct_type.get(tys, True)
@@ -508,14 +507,13 @@ class CodeGenerator(ast.NodeVisitor):
         for keyword in node.keywords:
             kws.update(self.visit(keyword))
         args = [self.visit(arg) for arg in node.args]
-    
 
         if isinstance(fn, JITFunction):
             from inspect import getcallargs
             args = getcallargs(fn.fn, *args, **kws)
             args = [args[name] for name in fn.arg_names]
             args = [arg if isinstance(arg, triton.language.block)
-                          else triton.language.constexpr(arg) for arg in args]
+                    else triton.language.constexpr(arg) for arg in args]
             # generate function def
             attributes = dict()
             constexprs = [i for i, arg in enumerate(args) if isinstance(arg, triton.language.constexpr)]
@@ -527,7 +525,7 @@ class CodeGenerator(ast.NodeVisitor):
             fn_name = mangle_fn(fn.__name__, arg_types, constants)
             # generate function def if necessary
             if not self.module.has_function(fn_name):
-                ret_type  = _triton.ir.type.get_void(self.builder.context)
+                ret_type = _triton.ir.type.get_void(self.builder.context)
                 prototype = _triton.ir.type.make_function(ret_type, arg_types)
                 gscope = sys.modules[fn.fn.__module__].__dict__
                 generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module)
@@ -539,7 +537,7 @@ class CodeGenerator(ast.NodeVisitor):
             return ret
         # built-in function
         if hasattr(fn, '__self__') and self.is_triton_object(fn.__self__) or \
-            sys.modules[fn.__module__] is triton.language.core:
+                sys.modules[fn.__module__] is triton.language.core:
             ret = fn(*args, _builder=self.builder, **kws)
         if fn in self.builtins.values():
             args = [arg.value if isinstance(arg, triton.language.constexpr) else arg
@@ -1300,6 +1298,7 @@ def jit(*args, **kwargs):
 #     return ForwardDeclaration(name, ret_ty, arg_tys)
 
 ######
+
 
 def cdiv(x, y):
     return (x + y - 1) // y

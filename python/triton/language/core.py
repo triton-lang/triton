@@ -875,7 +875,7 @@ def sigmoid(x):
 
 @triton.jit
 @_add_math_1arg_docstr("softmax")
-def softmax(x, ieee_rounding: constexpr=False):
+def softmax(x, ieee_rounding: constexpr = False):
     z = x - triton.language.max(x, 0)
     num = triton.language.exp(z)
     den = triton.language.sum(num, 0)
@@ -933,6 +933,7 @@ def zeros_like(input):
 # Dynamic Parallelism
 # -----------------------
 
+
 class LaunchProxy:
 
     def __init__(self, fn, args, constants, grid, num_warps) -> None:
@@ -941,6 +942,7 @@ class LaunchProxy:
         self.constants = constants
         self.num_warps = num_warps
         self.fn = fn
+
 
 @builtin
 def launch(fn, args, grid, num_warps=None, _builder=None):
