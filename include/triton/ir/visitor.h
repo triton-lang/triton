@@ -81,6 +81,8 @@ class async_wait_inst;
 class make_range_dyn;
 class make_range;
 class prefetch_s_inst;
+class clock_inst;
+class globaltimer_inst;
 
 class make_range_sta;
 class undef_value;
@@ -168,6 +170,8 @@ public:
   virtual void visit_make_range(make_range*) = 0;
   virtual void visit_prefetch_s_inst(prefetch_s_inst*) = 0;
   virtual void visit_function(function*) = 0;
+  virtual void visit_clock_inst(clock_inst*) = 0;
+  virtual void visit_globaltimer_inst(globaltimer_inst*) = 0;
 
   virtual void visit_undef_value(undef_value*) = 0;
   virtual void visit_constant_int(constant_int*) = 0;

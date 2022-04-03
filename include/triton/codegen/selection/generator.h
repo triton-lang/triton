@@ -189,6 +189,8 @@ public:
   void visit_async_wait_inst(ir::async_wait_inst*);
 //  void visit_make_range_dyn(ir::make_range_dyn*);
   void visit_make_range(ir::make_range*);
+  void visit_clock_inst(ir::clock_inst*);
+  void visit_globaltimer_inst(ir::globaltimer_inst*);
 //  void visit_make_range_sta(ir::make_range_sta*);
   void visit_undef_value(ir::undef_value*);
   void visit_constant_int(ir::constant_int*);
@@ -198,6 +200,7 @@ public:
   void visit_basic_block(ir::basic_block*);
   void visit_argument(ir::argument*);
   void visit(ir::module &, llvm::Module &);
+
 
   // layouts
   void visit_layout_mma(analysis::mma_layout*);

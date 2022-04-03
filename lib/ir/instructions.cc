@@ -959,8 +959,7 @@ copy_from_shared_inst* copy_from_shared_inst::create(value *arg, const std::stri
 }
 
 // barrier
-barrier_inst::barrier_inst(context &ctx, const std::string &name,
-                                                       instruction *next)
+barrier_inst::barrier_inst(context &ctx, const std::string &name, instruction *next)
   : instruction(type::get_void_ty(ctx), INST_BARRIER, 0, name, next) { }
 
 barrier_inst* barrier_inst::create(context &ctx, const std::string &name, instruction *next) {
@@ -979,27 +978,21 @@ prefetch_s_inst *prefetch_s_inst::create(context &ctx, value *arg, int inc, cons
   return new prefetch_s_inst(ctx, arg, inc, name, next);
 }
 
-//// nv_dynamic_program_idx
-//make_range_dyn::make_range_dyn(type *ty, const std::string &name, instruction *next)
-//  : instruction(ty, INST_MAKE_RANGE_DYN, 0, name, next) { }
+// global timer
+globaltimer_inst::globaltimer_inst(context &ctx, const std::string &name, instruction *next)
+  : instruction(type::get_int64_ty(ctx), INST_GLOBALTIMER, 0, name, next) { }
 
-//make_range_dyn* make_range_dyn::create(type *ty, const std::string &name, instruction *next) {
-//  return new make_range_dyn(ty, name, next);
-//}
+globaltimer_inst* globaltimer_inst::create(context &ctx, const std::string &name, instruction *next) {
+  return new globaltimer_inst(ctx, name, next);
+}
 
-//// nv_static_program_idx
-//make_range_sta::make_range_sta(make_range *range)
-//  : constant(range->get_type(), 0), range_(range) { }
+// clock
+clock_inst::clock_inst(context &ctx, const std::string &name, instruction *next)
+  : instruction(type::get_int64_ty(ctx), INST_CLOCK, 0, name, next) { }
 
-//make_range* make_range_sta::get_range() const
-//{ return range_; }
-
-//make_range_sta* make_range_sta::get(make_range* range) {
-//  static std::map<make_range*, make_range_sta*> cache;
-//  if(cache.find(range) == cache.end())
-//    cache.insert({range, new make_range_sta(range)});
-//  return cache.at(range);
-//}
+clock_inst* clock_inst::create(context &ctx, const std::string &name, instruction *next) {
+  return new clock_inst(ctx, name, next);
+}
 
 
 // make_range
