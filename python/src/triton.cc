@@ -740,6 +740,9 @@ void init_triton_ir(py::module &&m) {
         return self.getBody(idx);
       }, ret::reference)
       .def("dump", [](mlir::OpState &self) { self->dump(); })
+      .def("append_operand", [](mlir::OpState &self, mlir::Value &val) {
+        self->insertOperands(self->getNumOperands(), val);
+      })
       ;
   // scf Ops
   py::class_<mlir::scf::ForOp, mlir::OpState>(m, "ForOp");
@@ -889,9 +892,9 @@ void init_triton_ir(py::module &&m) {
         auto loc = self.getUnknownLoc();
         return self.create<mlir::scf::ForOp>(loc, lb, ub, step, initArgs);
       })
-      .def("create_if_of", [](mlir::OpBuilder &self, mlir::Value &condition) -> mlir::scf::IfOp {
+      .def("create_if_op", [](mlir::OpBuilder &self, std::vector<mlir::Type> &retTypes, mlir::Value &condition, bool withElse) -> mlir::scf::IfOp {
         auto loc = self.getUnknownLoc();
-        return self.create<mlir::scf::IfOp>(loc, condition);
+        return self.create<mlir::scf::IfOp>(loc, retTypes, condition, withElse);
       })
       .def("create_yield_op", [](mlir::OpBuilder &self, std::vector<mlir::Value> &yields) -> mlir::scf::YieldOp {
         auto loc = self.getUnknownLoc();
