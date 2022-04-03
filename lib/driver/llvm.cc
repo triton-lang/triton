@@ -203,8 +203,8 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version){
   return result;
 }
 
+
 std::string ptx_to_cubin(const std::string& ptx, const std::string& ptxas, int cc) {
-  // std::cout << ptx << std::endl;
   // compile ptx with ptxas
   char _fsrc[L_tmpnam];
   char _flog[L_tmpnam];
@@ -219,7 +219,7 @@ std::string ptx_to_cubin(const std::string& ptx, const std::string& ptxas, int c
   ofs.close();
   std::string cmd;
   int err;
-  cmd = ptxas + " -v -c --gpu-name=sm_" + std::to_string(cc) + " " + fsrc + " -o " + fsrc + ".o 2> " + flog;
+  cmd = ptxas + " -v --gpu-name=sm_" + std::to_string(cc) + " " + fsrc + " -o " + fsrc + ".o 2> " + flog;
   err = system(cmd.c_str());
   if(err != 0){
     std::ifstream _log(_flog);
@@ -232,25 +232,10 @@ std::string ptx_to_cubin(const std::string& ptx, const std::string& ptxas, int c
   std::ifstream _cubin(_fbin, std::ios::binary );
   std::string cubin(std::istreambuf_iterator<char>(_cubin), {});
   _cubin.close();
-  CUlinkState link_state;
-  // TODO: fix path
-  // TODO: only add if necessary
-  CUjit_option options[1];
-   void* optionVals[1];
-   options[0] = CU_JIT_LTO;
-   optionVals[0] = (void*)0;
-  dispatch::cuLinkCreate_v2(0, options, optionVals, &link_state);
-  dispatch::cuLinkAddFile_v2(link_state, CU_JIT_INPUT_LIBRARY, "/usr/local/cuda/lib64/libcudadevrt.a", 0, nullptr, nullptr);
-  dispatch::cuLinkAddFile_v2(link_state, CU_JIT_INPUT_PTX, fsrc.c_str(), 0, nullptr, nullptr);
-  size_t cubin_size;
-  void* cubin_data;
-  dispatch::cuLinkComplete(link_state, &cubin_data, &cubin_size);
-  cubin = std::string((char*)cubin_data, cubin_size);
-  dispatch::cuModuleLoadDataEx(&ret, cubin_data, 0, nullptr, nullptr);
-  dispatch::cuLinkDestroy(link_state);
   unlink(_fsrc);
   unlink(_flog);
   unlink(_fbin);
+  dispatch::cuModuleLoadData(&ret, cubin.c_str());
   return cubin;
 }
 
