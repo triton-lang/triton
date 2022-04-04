@@ -174,6 +174,7 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version){
   init_llvm();
   // verify and store llvm
   llvm::legacy::PassManager pm;
+//  pm.add(llvm::createPrintModulePass(llvm::outs()));
   pm.add(llvm::createVerifierPass());
   pm.run(*module);
   // module->print(llvm::outs(), nullptr);
@@ -212,6 +213,7 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version){
   while(find_and_replace(result, "\t// end inline asm", "\n", ""));
   return result;
 }
+
 
 std::string ptx_to_cubin(const std::string& ptx, const std::string& ptxas, int cc) {
   // compile ptx with ptxas

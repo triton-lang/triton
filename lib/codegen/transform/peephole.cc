@@ -150,32 +150,53 @@ bool peephole::rewrite_unit_red(ir::instruction *value, ir::builder& builder){
 }
 
 bool peephole::rewrite_mult(ir::instruction *value, ir::builder& builder) {
-    auto binop = dynamic_cast<ir::binary_operator*>(value);
-    if(binop && binop->get_op() == ir::binary_op_t::Mul) {
-      ir::value *lhs = binop->get_operand(0);
-      ir::value *rhs = binop->get_operand(1);
-      ir::constant_int *_1_lhs = nullptr;
-      if(ir::splat_inst *splat = dynamic_cast<ir::splat_inst*>(lhs)){
-        auto *cst = dynamic_cast<ir::constant_int*>(splat->get_operand(0));
-        if(cst && cst->get_value() == 1)
-          _1_lhs = cst;
-      }
-      ir::constant_int *_1_rhs = nullptr;
-      if(ir::splat_inst *splat = dynamic_cast<ir::splat_inst*>(rhs)){
-        auto *cst = dynamic_cast<ir::constant_int*>(splat->get_operand(0));
-        if(cst && cst->get_value() == 1)
-          _1_rhs = cst;
-      }
-      if(_1_lhs){
-        binop->replace_all_uses_with(rhs);
-        return true;
-      }
-      else if(_1_rhs){
-        binop->replace_all_uses_with(lhs);
-        return true;
-      }
+  auto binop = dynamic_cast<ir::binary_operator*>(value);
+  if(binop && binop->get_op() == ir::binary_op_t::Mul) {
+    ir::value *lhs = binop->get_operand(0);
+    ir::value *rhs = binop->get_operand(1);
+    ir::constant_int *_1_lhs = nullptr;
+    if(ir::splat_inst *splat = dynamic_cast<ir::splat_inst*>(lhs)){
+      auto *cst = dynamic_cast<ir::constant_int*>(splat->get_operand(0));
+      if(cst && cst->get_value() == 1)
+        _1_lhs = cst;
     }
+    ir::constant_int *_1_rhs = nullptr;
+    if(ir::splat_inst *splat = dynamic_cast<ir::splat_inst*>(rhs)){
+      auto *cst = dynamic_cast<ir::constant_int*>(splat->get_operand(0));
+      if(cst && cst->get_value() == 1)
+        _1_rhs = cst;
+    }
+    if(_1_lhs){
+      binop->replace_all_uses_with(rhs);
+      return true;
+    }
+    else if(_1_rhs){
+      binop->replace_all_uses_with(lhs);
+      return true;
+    }
+  }
+  return false;
+}
+
+bool peephole::rewrite_insert_extract(ir::instruction *value, ir::builder& builder){
+  auto extracted = dynamic_cast<ir::extract_value_inst*>(value);
+  if(!extracted)
     return false;
+  size_t extract_idx = extracted->get_idx();
+  ir::value* agg = extracted->get_operand(0);
+  auto insert = dynamic_cast<ir::insert_value_inst*>(agg);
+  while(insert){
+    agg = insert->get_operand(0);
+    ir::value* inserted = insert->get_operand(1);
+    size_t insert_idx = insert->get_idx();
+    insert = dynamic_cast<ir::insert_value_inst*>(agg);
+    if(extract_idx == insert_idx){
+      extracted->replace_all_uses_with(inserted);
+      return true;
+    }
+    insert = dynamic_cast<ir::insert_value_inst*>(agg);
+  }
+  return false;
 }
 
 
@@ -291,6 +312,7 @@ void peephole::run(ir::module &mod) {
       was_modified = was_modified || rewrite_mult(i, builder);
       // was_modified = was_modified || rewrite_cts_cfs(i, builder);
 //      was_modified = was_modified || rewrite_trans_phi(i, builder);
+      was_modified = was_modified || rewrite_insert_extract(i, builder);
       was_modified = was_modified || rewrite_unit_red(i, builder);
       was_modified = was_modified || rewrite_gep_ptr_min_off_plus_off(i, builder);
       // TODO: DOESN'T WORK FOR VECTORIZED MASKED LOAD
