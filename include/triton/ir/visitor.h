@@ -11,6 +11,9 @@ class value;
 
 class instruction;
 
+class call_inst;
+class launch_inst;
+
 class phi_node;
 class binary_operator;
 class getelementptr_inst;
@@ -41,6 +44,9 @@ class unmasked_load_inst;
 class masked_load_inst;
 class unmasked_store_inst;
 class masked_store_inst;
+
+class extract_value_inst;
+class insert_value_inst;
 
 class retile_inst;
 class reshape_inst;
@@ -105,6 +111,8 @@ public:
   virtual ~visitor() {}
 
   virtual void visit_value(ir::value*);
+  virtual void visit_call_inst(ir::call_inst*) = 0;
+  virtual void visit_launch_inst(ir::launch_inst*) = 0;
 
   virtual void visit_basic_block(basic_block*) = 0;
   virtual void visit_argument(argument*) = 0;
@@ -131,6 +139,9 @@ public:
   virtual void visit_cos_inst(cos_inst*) = 0;
   virtual void visit_sin_inst(sin_inst*) = 0;
   virtual void visit_log_inst(log_inst*) = 0;
+
+  virtual void visit_extract_value_inst(extract_value_inst*) = 0;
+  virtual void visit_insert_value_inst(insert_value_inst*) = 0;
 
   virtual void visit_reshape_inst(reshape_inst*) = 0;
   virtual void visit_splat_inst(splat_inst*) = 0;

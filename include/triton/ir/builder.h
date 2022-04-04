@@ -22,6 +22,7 @@ class phi_node;
 
 /* Builder */
 class builder{
+public:
   typedef basic_block::iterator iterator;
 
 public:
@@ -75,6 +76,7 @@ public:
   value* create_br(basic_block *dest);
   value* create_cond_br(value *cond, basic_block* if_dest, basic_block* else_dest);
   value* create_ret_void();
+  value* create_ret(value *ret);
   // Cast instructions
   value *create_cast(cast_op_t op, value *v, type *dst_ty);
   value* create_ptr_to_int(value *src, type *dst_ty);
@@ -86,6 +88,9 @@ public:
   value* create_fp_trunc(value *src, type *dst_ty);
   value* create_int_cast(value *src, type *dst_ty, bool is_signed);
   value *create_downcast(value *arg);
+  // Call instruction
+  value* create_call(function* fn, const std::vector<value*>& args);
+  value* create_launch(function* fn, const std::vector<value*>& args, const std::vector<value*>& grid, value* num_warps);
   // Phi instruction
   phi_node* create_phi(type *ty, unsigned num_reserved);
   // Binary instructions
@@ -142,6 +147,9 @@ public:
   value *create_store(value *ptr, value *val);
   value *create_masked_load(value *arg, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache, load_inst::EVICTION_POLICY eviction, bool is_volatile);
   value *create_masked_store(value *ptr, value *val, value *mask);
+  // Struct instructions
+  value *create_insert_value(value* val, value *elt, size_t idx);
+  value *create_extract_value(value* val, size_t idx);
   // Block instruction
   value *create_splat(value *arg, const type::block_shapes_t &shapes);
   value *create_reshape(value *arg, const type::block_shapes_t &shapes);

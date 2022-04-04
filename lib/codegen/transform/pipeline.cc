@@ -134,6 +134,7 @@ void pipeline::run(ir::module &mod) {
   ir::builder &builder = mod.get_builder();
   const int num_stages = num_stages_;
   std::vector<std::pair<ir::phi_node*, std::vector<ir::value*>>> preheader_loads; // Used to reorder loads
+
   for(auto info: to_pipeline){
     ir::load_inst* load = info.load;
     ir::phi_node* ptr   = info.ptr;

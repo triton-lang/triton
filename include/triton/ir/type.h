@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #ifndef _TRITON_IR_TYPE_H_
 #define _TRITON_IR_TYPE_H_
@@ -73,6 +73,8 @@ public:
   type *get_tile_element_ty() const;
   unsigned get_pointer_address_space() const;
   type *get_pointer_element_ty() const;
+  unsigned get_struct_numel() const { return contained_tys_.size(); }
+  type *get_struct_type(unsigned int i) const { return contained_tys_[i]; }
 
   // primitive predicates
   bool is_void_ty() const               { return id_ == VoidTyID; }
@@ -91,6 +93,7 @@ public:
   bool is_bool_ty() const               { return is_integer_ty(1); }
   bool is_pointer_ty() const            { return id_ == PointerTyID; }
   bool is_block_ty() const               { return id_ == BlockTyID; }
+  bool is_struct_ty() const             { return id_ == StructTyID; }
 
   // Composite predicates
   bool is_int_or_tileint_ty();
@@ -138,10 +141,10 @@ public:
     switch(id_) {
       case VoidTyID: return "void";
       case FP8TyID: return "fp8";
+      case BF16TyID: return "bf16";
       case FP16TyID: return "f16";
       case FP32TyID: return "f32";
       case FP64TyID: return "f64";
-      case BF16TyID: return "bf16";
       case LabelTyID: return "label";
       case MetadataTyID: return "md";
       case TokenTyID: return "tok";
@@ -194,6 +197,16 @@ public:
   type* get_type_at_index(value *idx) const;
 };
 
+class struct_type: public composite_type {
+public:
+  struct_type(const contained_tys_vec_t& tys, bool is_packed);
+  unsigned get_num_types() const { return contained_tys_.size(); }
+  static struct_type* get(const contained_tys_vec_t& tys, bool is_packed);
+
+private:
+  bool is_packed_;
+};
+
 class block_type: public composite_type {
 private:
   block_type(type *ty, const block_shapes_t &shapes);
@@ -242,6 +255,7 @@ public:
   ty_iterator       params_end()         { return contained_tys_.end(); }
   type*    get_param_ty(unsigned i) const { return contained_tys_.at(1 + i);   }
   type*    get_return_ty()          const { return contained_tys_.at(0);       }
+  void     reset_ret_ty(type* ty)         { contained_tys_[0] = ty;}
   // factory methods
   static function_type* get(type *ret_ty, const std::vector<type*>& param_tys);
 };
