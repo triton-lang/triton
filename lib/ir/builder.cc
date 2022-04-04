@@ -106,18 +106,19 @@ type *builder::get_double_ty()
 //===----------------------------------------------------------------------===//
 
 value* builder::create_br(basic_block *dest){
-  dest->add_predecessor(block_);
   return insert(branch_inst::create(dest));
 }
 
 value* builder::create_cond_br(value *cond, basic_block *if_dest, basic_block *else_dest){
-  if_dest->add_predecessor(block_);
-  else_dest->add_predecessor(block_);
   return insert(branch_inst::create(cond, if_dest, else_dest));
 }
 
 value *builder::create_ret_void() {
   return insert(return_inst::create(ctx_));
+}
+
+value *builder::create_ret(value* val) {
+  return insert(return_inst::create(ctx_, val));
 }
 
 //===----------------------------------------------------------------------===//
@@ -152,6 +153,19 @@ value* builder::create_int_cast(value *src, type *dst_ty, bool is_signed){
 
 phi_node* builder::create_phi(type *ty, unsigned num_reserved){
   return insert(phi_node::create(ty, num_reserved));
+}
+
+//===----------------------------------------------------------------------===//
+//                               call instructions
+//===----------------------------------------------------------------------===//
+
+value *builder::create_call(function* fn, const std::vector<value*>& args){
+  return insert(call_inst::create(fn, args));
+}
+
+value* builder::create_launch(function* fn, const std::vector<value*>& args, const std::vector<value*>& grid, value* num_warps){
+  return insert(launch_inst::create(fn, args, grid, num_warps));
+
 }
 
 //===----------------------------------------------------------------------===//
@@ -298,6 +312,19 @@ value *builder::create_masked_store(value *ptr, value *val, value *mask){
   return insert(masked_store_inst::create(ptr, val, mask));
 }
 
+//===----------------------------------------------------------------------===//
+//                               struct instructions
+//===----------------------------------------------------------------------===//
+
+
+// Struct instructions
+value *builder::create_insert_value(value* val, value *elt, size_t idx){
+  return insert(insert_value_inst::create(val, elt, idx));
+}
+
+value *builder::create_extract_value(value* val, size_t idx) {
+  return insert(extract_value_inst::create(val, idx));
+}
 //===----------------------------------------------------------------------===//
 //                               block instructions
 //===----------------------------------------------------------------------===//

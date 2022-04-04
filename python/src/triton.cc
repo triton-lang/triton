@@ -699,11 +699,30 @@ void init_triton_ir(py::module &&m) {
       .def_property_readonly("element", &ir::pointer_type::get_element_ty, ret::reference)
       .def_property_readonly("address_space", &ir::pointer_type::get_pointer_address_space, ret::reference);
 
-  py::class_<ir::function_type, ir::type>(m, "function_type");
+  py::class_<ir::function_type, ir::type>(m, "function_type")
+      .def_property_readonly("ret_ty", &ir::function_type::get_return_ty)
+      .def_property_readonly("arg_tys", [](ir::function_type* self){ 
+        return std::vector<ir::type*>(self->params_begin(), self->params_end());
+      });
+
   py::class_<ir::integer_type, ir::type>(m, "integer_type");
+
   py::class_<ir::block_type, ir::type>(m, "block_type")
       .def_property_readonly("shape", &ir::block_type::get_shapes)
       .def_property_readonly("numel", &ir::type::get_tile_num_elements);
+  
+  py::class_<ir::struct_type, ir::type>(m, "struct_type")
+      .def("get", &ir::struct_type::get, ret::reference)
+      .def_property_readonly("num_types", &ir::struct_type::get_num_types);
+
+  py::class_<ir::value_constructor>(m, "value_constructor")
+      .def(py::init<ir::builder&>())
+      .def("seal_block", &ir::value_constructor::seal_block)
+      .def("set_value", (void (ir::value_constructor::*)(const std::string &, ir::value *)) & ir::value_constructor::set_value)
+      .def("set_type", &ir::value_constructor::set_type)
+      .def("get_value", (ir::value * (ir::value_constructor::*)(const std::string &)) & ir::value_constructor::get_value, ret::reference)
+      .def("get_values", &ir::value_constructor::get_values, ret::reference)
+      .def("set_values", &ir::value_constructor::set_values);
 
   py::class_<ir::module>(m, "module")
       .def(py::init<std::string, ir::builder &>())
@@ -716,6 +735,11 @@ void init_triton_ir(py::module &&m) {
           }
       })
       .def("get_or_insert_function", &ir::module::get_or_insert_function, ret::reference);
+      .def("has_function", &ir::module::has_function)
+      .def("get_function", &ir::module::get_function, ret::reference)
+      .def("get_or_insert_function", &ir::module::get_or_insert_function, ret::reference)
+      .def("reset_ret_ty", &ir::module::reset_ret_ty)
+      .def_property_readonly("builder", &ir::module::get_builder, ret::reference);
 
   using eattr = ir::attribute_kind_t;
   py::enum_<eattr>(m, "attribute_kind")
@@ -728,14 +752,20 @@ void init_triton_ir(py::module &&m) {
       .value("not_implemented", eattr::not_implemented);
 
   py::class_<ir::attribute>(m, "attribute")
-      .def(py::init<eattr, int>());
+      .def(py::init<eattr, int>())
+      .def_property_readonly("value", &ir::attribute::get_value);
 
   py::class_<ir::function>(m, "function")
       .def_property_readonly("args", &ir::function::args)
       .def_property_readonly("attrs", &ir::function::attrs)
-      .def("add_attr", &ir::function::add_attr);
+      .def("set_is_kernel", &ir::function::set_is_kernel)
+      .def("add_attr", &ir::function::add_attr)
+      .def("has_attr", &ir::function::has_attr)
+      .def("get_attrs", &ir::function::get_attributes);
 
-  py::class_<ir::argument, ir::value>(m, "argument");
+  py::class_<ir::argument, ir::value>(m, "argument")
+      .def_property_readonly("parent", &ir::argument::get_parent, ret::reference)
+      .def_property_readonly("arg_no", &ir::argument::get_arg_no);
 
   py::class_<ir::basic_block, ir::value>(m, "basic_block")
       .def("create", &ir::basic_block::create, ret::reference)
@@ -748,11 +778,15 @@ void init_triton_ir(py::module &&m) {
       }, ret::reference)
       .def_property_readonly("parent", &ir::basic_block::get_parent, ret::reference);
 
+  py::class_<ir::builder::iterator>(m, "bb_iterator");
+
   py::class_<ir::builder>(m, "builder", py::dynamic_attr())
       .def(py::init<ir::context &>())
       // getters
       .def_property_readonly("context", &ir::builder::get_context, ret::reference)
       // control flow
+      .def("call", &ir::builder::create_call, ret::reference)
+      .def("launch", &ir::builder::create_launch, ret::reference)
       .def("br", &ir::builder::create_br, ret::reference)
       .def("cond_br", &ir::builder::create_cond_br, ret::reference)
       .def("ret_void", &ir::builder::create_ret_void, ret::reference)

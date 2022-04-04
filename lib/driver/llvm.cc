@@ -94,6 +94,7 @@ static bool find_and_replace(std::string& str, const std::string& begin, const s
 }
 
 std::string path_to_ptxas(int& version) {
+  std::vector<std::string> rets;
   std::string ret;
   // search pathes for ptxas
   std::vector<std::string> ptxas_prefixes = {"", "/usr/local/cuda/bin/"};
@@ -105,8 +106,10 @@ std::string path_to_ptxas(int& version) {
   for(std::string prefix: ptxas_prefixes){
     std::string ptxas = prefix + "ptxas";
     bool works = tools::exec(ptxas + " --version 2>&1", ret) == 0;
-    if(works)
+    if(works) {
       working_ptxas.push_back(ptxas);
+      rets.push_back(ret);
+    }
   }
   // error if no working ptxas was found
   if(working_ptxas.empty())
@@ -116,13 +119,20 @@ std::string path_to_ptxas(int& version) {
   // parse version
   std::regex version_regex("release (\\d+)\\.(\\d+)");
   std::smatch match;
-  if(std::regex_search(ret, match, version_regex)){
-    int major = std::stoi(match[1]);
-    int minor = std::stoi(match[2]);
-    version = major*1000 + minor*10;
+  bool found = false;
+  // currently choosing the first ptxas. Other logics can be implemented in future
+  for(std::string ret : rets) {
+    if(std::regex_search(ret, match, version_regex)){
+      int major = std::stoi(match[1]);
+      int minor = std::stoi(match[2]);
+      version = major*1000 + minor*10;
+      found = true;
+      break;
+    }
   }
-  else
-    throw std::runtime_error("couldn't parse ptxas version: " + ret);
+  if ( not found) {
+    throw std::runtime_error("Error in parsing version");
+  }
   return ptxas;
 }
 
@@ -164,6 +174,7 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version){
   init_llvm();
   // verify and store llvm
   llvm::legacy::PassManager pm;
+//  pm.add(llvm::createPrintModulePass(llvm::outs()));
   pm.add(llvm::createVerifierPass());
   pm.run(*module);
   // module->print(llvm::outs(), nullptr);
@@ -202,6 +213,7 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version){
   while(find_and_replace(result, "\t// end inline asm", "\n", ""));
   return result;
 }
+
 
 std::string ptx_to_cubin(const std::string& ptx, const std::string& ptxas, int cc) {
   // compile ptx with ptxas

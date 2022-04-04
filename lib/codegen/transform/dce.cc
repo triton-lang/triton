@@ -3,6 +3,7 @@
 #include "triton/ir/basic_block.h"
 #include "triton/ir/module.h"
 #include "triton/ir/utils.h"
+#include <iostream>
 
 namespace triton {
 namespace codegen{
@@ -28,6 +29,8 @@ void dce::run(ir::module &mod) {
         case ir::INST_ATOMIC_CAS:
         case ir::INST_ATOMIC_RMW:
         case ir::INST_ATOMIC_EXCH:
+        case ir::INST_CALL:
+        case ir::INST_LAUNCH:
         case ir::INST_BARRIER: {
           work_list.push_back(i);
           marked.insert(i);
@@ -64,6 +67,7 @@ void dce::run(ir::module &mod) {
         to_delete.push_back(i);
     }
   }
+
 
   // delete
   for(ir::instruction* i: to_delete)

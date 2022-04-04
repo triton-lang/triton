@@ -174,7 +174,26 @@ bool composite_type::index_valid(value *idx) const{
 }
 
 //===----------------------------------------------------------------------===//
-//                               tile_type class
+//                               struct_type class
+//===----------------------------------------------------------------------===//
+
+struct_type::struct_type(const contained_tys_vec_t& tys, bool is_packed)
+  : composite_type(tys[0]->get_context(), StructTyID), is_packed_(is_packed) {
+ contained_tys_ = tys;
+}
+
+struct_type* struct_type::get(const contained_tys_vec_t& tys, bool is_packed) {
+  assert(tys.size());
+  context_impl* impl = tys[0]->get_context().p_impl.get();
+  struct_type *& entry = impl->struct_tys[tys];
+  if(!entry)
+    entry = new struct_type(tys, is_packed);
+  return  entry;
+}
+
+
+//===----------------------------------------------------------------------===//
+//                               block_type class
 //===----------------------------------------------------------------------===//
 
 block_type::block_type(type *ty, const block_shapes_t &shapes)

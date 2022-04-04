@@ -991,6 +991,27 @@ def test_noop(device='cuda'):
     kernel[(1, )](x)
 
 
+@pytest.mark.parametrize("value, value_type", [
+    (-1, 'i32'), (0, 'i32'), (1, None), (-2**31, 'i32'), (2**31 - 1, 'i32'),
+    (2**31, 'u32'), (2**32 - 1, 'u32'), (2**32, 'i64'), (2**63 - 1, 'i64'),
+    (-2**63, 'i64'), (2**63, 'u64'), (2**64 - 1, 'u64')
+])
+def test_value_specialization(value: int, value_type: str, device='cuda') -> None:
+
+    @triton.jit
+    def kernel(VALUE, X):
+        pass
+
+    x = torch.tensor([3.14159], device='cuda')
+    pgm = kernel[(1, )](value, x)
+
+    # Parse out the type of the 'VALUE' parameter from the Triton IR.
+    triton_ir = pgm.asm['ttir']
+    ir_value_match = re.match(r'\s*def void (\w+)\((\w+) VALUE ', triton_ir)
+    ir_value_type = None if ir_value_match is None else ir_value_match.group(2)
+    assert ir_value_type == value_type
+
+
 @pytest.mark.parametrize(
     "value, overflow",
     [(2**64 - 1, False), (2**64, True), (-2**63, False), (-2**63 - 1, True)]
@@ -1008,3 +1029,28 @@ def test_value_specialization_overflow(value: int, overflow: bool, device='cuda'
             kernel[(1, )](value, x)
     else:
         kernel[(1, )](value, x)
+# -------------------------
+# test dynamic parallelism
+# -------------------------
+
+
+@triton.jit
+def mult(x, alpha):
+    tl.store(x + tl.program_id(0), alpha)
+
+
+@triton.jit
+def stub(X, alpha, grid_0, grid_1, grid_2):
+    tl.launch(mult, [X, alpha], [grid_0, grid_1, grid_2])
+
+
+def test_dyn_par(cond=True, device='cuda'):
+    n_pids = 10
+    # pids = torch.arange(n_pids, device=device)
+    # alpha = 2.0
+    # x_ref = pids * alpha
+    x_tri = torch.full((10,), fill_value=-1., device=device)
+    # cond = torch.tensor([cond], device=device)
+    stub[(1,)](x_tri, 3.14, n_pids, 1, 1)
+    print(x_tri)
+    # triton.testing.assert_almost_equal(x_ref, x_tri)
