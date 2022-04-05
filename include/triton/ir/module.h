@@ -58,6 +58,7 @@ public:
   void seal_block(basic_block *block);
   // Metadata
   void add_metadata(const std::string &name, md_pair_t x)     { metadatas_[name] = x; }
+  const std::map<std::string, md_pair_t> &get_metadatas() const { return metadatas_; }
 
 private:
   ir::builder& builder_;
@@ -112,8 +113,6 @@ public:
   void register_global(const std::string& name, ir::value *x) { globals_[name] = x; }
   const std::map<std::string, ir::value*>& globals() const    { return globals_; }
   // Metadata
-  void add_metadata(const std::string &name, md_pair_t x)     { metadatas_[name] = x; }
-  const std::map<std::string, md_pair_t> &get_metadatas() const { return metadatas_; }
   void print(std::ostream &os);
 
 private:

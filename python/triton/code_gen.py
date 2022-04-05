@@ -25,9 +25,9 @@ from .tools.disasm import extract
 
 def mangle_ty(type):
     if type.is_ptr():
-        return 'P' + mangle_ty(type.element)
+        return 'P' + mangle_ty(type.element_ty)
     if type.is_int():
-        return 'i' + str(type.get_int_width())
+        return 'i' + str(type.int_bitwidth)
     if type.is_fp8():
         return 'fp8'
     if type.is_fp16():
@@ -103,17 +103,17 @@ class CodeGenerator(ast.NodeVisitor):
             ret = self.builtins[name]
         else:
             raise ValueError(f'{name} is not defined')
-        if isinstance(ret, triton.language.block):
-            handle = self.value_constructor.get_value(name)
-            return triton.language.block(handle)
+        if self.is_triton_tensor(ret):
+            return self._get_tensor(name, self.builder.get_insert_block())
         return ret
 
-    def set_value(self, name, value):
-        if isinstance(value, _triton.ir.value):
-            value = triton.language.block(value)
-        if isinstance(value, triton.language.block):
-            self.value_constructor.set_value(name, value.handle)
-            self.value_constructor.set_type(name, value.handle.type)
+    def set_value(self, name: str,
+                  value: Union[triton.language.tensor, triton.language.constexpr]) -> None:
+        ''' This function:
+          called by visit_Assign() & visit_FuncDef() to store left value (lvalue)
+        1. record local defined name (FIXME: should consider control flow)
+        2. store tensor in self.lvalue
+        '''
         self.lscope[name] = value
         if isinstance(value, triton.language.tensor):
             self._set_value(name, self.builder.get_insert_block(), value)
@@ -253,7 +253,7 @@ class CodeGenerator(ast.NodeVisitor):
         if isinstance(ret, _triton.ir.value):
             ret = self.builder.ret(ret)
             return ret
-        if isinstance(ret, triton.language.block):
+        if isinstance(ret, triton.language.tensor):
             ret = ret.handle
         if isinstance(ret, triton.language.constexpr):
             ret = triton.language.core._to_ir(ret, self.builder)
@@ -274,8 +274,8 @@ class CodeGenerator(ast.NodeVisitor):
                 init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation)
             self.visit(init_node)
         # initialize function
-        fn_name = mangle_fn(node.name, self.prototype.arg_tys, self.constants)
-        fn = self.module.get_or_insert_function(fn_name, self.prototype)
+        fn_name = mangle_fn(node.name, self.prototype.param_types, self.constants)
+        fn = self.module.get_or_insert_function(fn_name, self.prototype.to_ir(self.builder))
         fn.set_is_kernel(self.is_kernel)
         arg_values = []
         idx = 0
@@ -389,7 +389,7 @@ class CodeGenerator(ast.NodeVisitor):
         args = [self.visit(x) for x in node.elts]
         mode = type(args[0])
         # tuple of values -- create a struct
-        if len(args) > 1 and mode == triton.language.block\
+        if len(args) > 1 and mode == triton.language.tensor\
                 and all([type(arg) == mode for arg in args]):
             args = [arg.handle for arg in args]
             tys = [arg.type for arg in args]
@@ -637,7 +637,7 @@ class CodeGenerator(ast.NodeVisitor):
             from inspect import getcallargs
             args = getcallargs(fn.fn, *args, **kws)
             args = [args[name] for name in fn.arg_names]
-            args = [arg if isinstance(arg, triton.language.block)
+            args = [arg if isinstance(arg, triton.language.tensor)
                     else triton.language.constexpr(arg) for arg in args]
             # generate function def
             attributes = dict()
@@ -658,7 +658,7 @@ class CodeGenerator(ast.NodeVisitor):
             symbol = self.module.get_function(fn_name)
             ret = self.builder.call(symbol, arg_vals)
             if not ret.type.is_void() and not ret.type.is_struct():
-                ret = triton.language.block(ret)
+                ret = triton.language.tensor(ret)
             return ret
         # built-in function
         if hasattr(fn, '__self__') and self.is_triton_object(fn.__self__) or \

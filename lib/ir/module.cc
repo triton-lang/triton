@@ -133,28 +133,9 @@ void value_constructor::seal_block(ir::basic_block *block){
 
 /* Module */
 
-module::module(const std::string &name, builder &builder)
-  : name_(name), builder_(builder) {
-}
 
 void module::reset_ret_ty(const std::string& name, type* ty) {
   get_function(name)->get_fn_type()->reset_ret_ty(ty);
-}
-
-ir::builder& module::get_builder() {
-  return builder_;
-}
-
-void module::set_continue_fn(std::function<ir::value*()> fn) {
-  continue_fn_ = fn;
-}
-
-std::function<ir::value*()> module::get_continue_fn() {
-  return continue_fn_;
-}
-
-const std::string& module::get_name() {
-  return name_;
 }
 
 /* functions */

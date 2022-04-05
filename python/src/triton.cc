@@ -722,19 +722,19 @@ void init_triton_ir(py::module &&m) {
       .def("set_type", &ir::value_constructor::set_type)
       .def("get_value", (ir::value * (ir::value_constructor::*)(const std::string &)) & ir::value_constructor::get_value, ret::reference)
       .def("get_values", &ir::value_constructor::get_values, ret::reference)
-      .def("set_values", &ir::value_constructor::set_values);
+      .def("set_values", &ir::value_constructor::set_values)
+      .def("set_instr_metadata", [](ir::value_constructor *self, const std::string &name, ir::value *value) {
+          const auto metadatas = self->get_metadatas();
+          auto it = metadatas.find(name);
+          if (it != metadatas.end())
+            if (auto *instr = dynamic_cast<ir::instruction*>(value)) {
+              instr->set_metadata(it->second.first, it->second.second);
+            }
+        });
+
 
   py::class_<ir::module>(m, "module")
       .def(py::init<std::string, ir::builder &>())
-      .def("set_instr_metadata", [](ir::module *self, const std::string &name, ir::value *value) {
-        const auto metadatas = self->get_metadatas();
-        auto it = metadatas.find(name);
-        if (it != metadatas.end())
-          if (auto *instr = dynamic_cast<ir::instruction*>(value)) {
-            instr->set_metadata(it->second.first, it->second.second);
-          }
-      })
-      .def("get_or_insert_function", &ir::module::get_or_insert_function, ret::reference);
       .def("has_function", &ir::module::has_function)
       .def("get_function", &ir::module::get_function, ret::reference)
       .def("get_or_insert_function", &ir::module::get_or_insert_function, ret::reference)
@@ -768,7 +768,7 @@ void init_triton_ir(py::module &&m) {
       .def_property_readonly("arg_no", &ir::argument::get_arg_no);
 
   py::class_<ir::basic_block, ir::value>(m, "basic_block")
-      .def("create", &ir::basic_block::create, ret::reference)
+      .def("create", &ir::basic_block::create, ret::reference, py::arg(), py::arg(), py::arg() = nullptr)
       .def("get_predecessors", &ir::basic_block::get_predecessors, ret::reference)
       .def("get_first_non_phi", [](ir::basic_block *self) -> ir::instruction* {
         ir::basic_block::iterator it = self->get_first_non_phi();
