@@ -57,28 +57,12 @@ def mangle_fn(name, arg_tys, constants):
     ret = f'{name}__{mangled_arg_names}__{mangled_constants}'
     return ret
 
-
-class CodeGenerator(ast.NodeVisitor):
-    def __init__(self, context, prototype, gscope, attributes, constants, kwargs):
-        self.builder = _triton.ir.builder(context)
-        self.module = _triton.ir.module('', self.builder)
-        self.prototype = prototype
+class ValueConstructor:
+    def __init__(self, module, builder, gscope)-> None:
         self.gscope = gscope
         self.lscope = dict()
-        self.attributes = attributes
-        self.constants = constants
-        self.kwargs = kwargs
-        self.last_node = None
-        self.builtins = {
-            'range': range,
-            'min': triton.language.minimum,
-            'float': float,
-            'int': int,
-            'print': print,
-            'isinstance': isinstance,
-            'getattr': getattr,
-        }
-        # SSA-construction
+        self.builder = builder
+        self.module = module
         # [name, bb] => triton.language.tensor
         self.lvalues: Dict[Tuple[str, _triton.ir.basic_block], triton.language.tensor] = {}
         # bb => {name => phi}
@@ -202,26 +186,17 @@ class CodeGenerator(ast.NodeVisitor):
         # TODO: remove trivial phis recursively
         return triton.language.tensor(v, phi.type)
 
+
     def is_triton_tensor(self, value):
         return isinstance(value, triton.language.tensor)
 
-    #
-    # AST visitor
-    #
-    def visit_compound_statement(self, stmts):
-        for stmt in stmts:
-            self.last_ret = self.visit(stmt)
-            if isinstance(stmt, ast.Return):
-                break
-        return stmts and isinstance(stmt, ast.Return)
+
+class CodeGenerator(ast.NodeVisitor):
 
     def __init__(self, context, prototype, gscope, attributes, constants, module=None, is_kernel=False):
         self.builder = _triton.ir.builder(context)
-        self.value_constructor = _triton.ir.value_constructor(self.builder)
         self.module = _triton.ir.module('', self.builder) if module is None else module
         self.prototype = prototype
-        self.gscope = gscope
-        self.lscope = dict()
         self.attributes = attributes
         self.constants = constants
         self.last_node = None
@@ -235,6 +210,20 @@ class CodeGenerator(ast.NodeVisitor):
             'isinstance': isinstance,
             'getattr': getattr,
         }
+        self.value_constructor = ValueConstructor(self.module, self.builder, gscope)
+
+
+    #
+    # AST visitor
+    #
+    def visit_compound_statement(self, stmts):
+        for stmt in stmts:
+            self.last_ret = self.visit(stmt)
+            if isinstance(stmt, ast.Return):
+                break
+        return stmts and isinstance(stmt, ast.Return)
+
+
 
     def visit_Module(self, node):
         ast.NodeVisitor.generic_visit(self, node)
@@ -299,9 +288,9 @@ class CodeGenerator(ast.NodeVisitor):
         insert_pt = self.builder.get_insert_block()
         entry = _triton.ir.basic_block.create(self.builder.context, "entry", fn)
         self.builder.set_insert_block(entry)
-        self.value_constructor.seal_block(entry)
+        self.value_constructor._seal_block(entry)
         for arg_name, arg_value in zip(arg_names, arg_values):
-            self.set_value(arg_name, arg_value)
+            self.value_constructor.set_value(arg_name, arg_value)
         # visit function body
         has_ret = self.visit_compound_statement(node.body)
         # finalize
@@ -330,13 +319,13 @@ class CodeGenerator(ast.NodeVisitor):
         value = self.visit(node.value)
         # constexpr
         if annotation == triton.language.constexpr:
-            if target in self.lscope:
+            if target in self.value_constructor.lscope:
                 raise ValueError(f'{target} is already defined.'
                                  f' constexpr cannot be reassigned.')
             if not isinstance(value, triton.language.constexpr):
                 value = triton.language.constexpr(value)
-            self.lscope[target] = value
-            return self.lscope[target]
+            self.value_constructor.lscope[target] = value
+            return self.value_constructor.lscope[target]
         # default: call visit_Assign
         return self.visit_Assign(node)
 
@@ -364,7 +353,7 @@ class CodeGenerator(ast.NodeVisitor):
                 value = value.value
             if not isinstance(value, triton.language.tensor):
                 value = triton.language.core._to_tensor(value, self.builder)
-            self.set_value(name, value)
+            self.value_constructor.set_value(name, value)
 
     def visit_AugAssign(self, node):
         name = node.target.id
@@ -372,12 +361,12 @@ class CodeGenerator(ast.NodeVisitor):
         rhs = ast.BinOp(lhs, node.op, node.value)
         assign = ast.Assign(targets=[node.target], value=rhs)
         self.visit(assign)
-        return self.get_value(name)
+        return self.value_constructor.get_value(name)
 
     def visit_Name(self, node):
         if type(node.ctx) == ast.Store:
             return node.id
-        return self.get_value(node.id)
+        return self.value_constructor.get_value(node.id)
 
     def visit_Store(self, node):
         ast.NodeVisitor.generic_visit(self, node)
@@ -437,9 +426,9 @@ class CodeGenerator(ast.NodeVisitor):
             then_bb = _triton.ir.basic_block.create(self.builder.context, "then", current_bb.parent)
             else_bb = _triton.ir.basic_block.create(self.builder.context, "else", current_bb.parent) if node.orelse else None
             endif_bb = _triton.ir.basic_block.create(self.builder.context, "endif", current_bb.parent)
-            self.value_constructor.seal_block(then_bb)
+            self.value_constructor._seal_block(then_bb)
             if else_bb:
-                self.value_constructor.seal_block(else_bb)
+                self.value_constructor._seal_block(else_bb)
                 self.builder.cond_br(cond.handle, then_bb, else_bb)
             else:
                 self.builder.cond_br(cond.handle, then_bb, endif_bb)
@@ -454,7 +443,7 @@ class CodeGenerator(ast.NodeVisitor):
                 # TODO: last statement is a terminator?
                 if not is_terminator:
                     self.builder.br(endif_bb)
-            self.value_constructor.seal_block(endif_bb)
+            self.value_constructor._seal_block(endif_bb)
             self.builder.set_insert_block(endif_bb)
         else:
             if isinstance(cond, triton.language.constexpr):
@@ -533,9 +522,9 @@ class CodeGenerator(ast.NodeVisitor):
         self.visit_compound_statement(node.body)
         continue_fn()
         stop_bb = self.builder.get_insert_block()
-        self.value_constructor.seal_block(stop_bb)
-        self.value_constructor.seal_block(loop_bb)
-        self.value_constructor.seal_block(next_bb)
+        self.value_constructor._seal_block(stop_bb)
+        self.value_constructor._seal_block(loop_bb)
+        self.value_constructor._seal_block(next_bb)
         self.builder.set_insert_block(next_bb)
 
         for stmt in node.orelse:
@@ -565,7 +554,7 @@ class CodeGenerator(ast.NodeVisitor):
             range = iterator(*iter_args)
             if len(range) <= 10:
                 for i in iterator(*iter_args):
-                    self.lscope[node.target.id] = triton.language.constexpr(i)
+                    self.value_constructor.lscope[node.target.id] = triton.language.constexpr(i)
                     self.visit_compound_statement(node.body)
                     for stmt in node.orelse:
                         ast.NodeVisitor.generic_visit(self, stmt)
@@ -604,9 +593,9 @@ class CodeGenerator(ast.NodeVisitor):
         # TODO: handle case where body breaks control flow
         continue_fn()
         stop_bb = self.builder.get_insert_block()
-        self.value_constructor.seal_block(stop_bb)
-        self.value_constructor.seal_block(loop_bb)
-        self.value_constructor.seal_block(next_bb)
+        self.value_constructor._seal_block(stop_bb)
+        self.value_constructor._seal_block(loop_bb)
+        self.value_constructor._seal_block(next_bb)
         self.builder.set_insert_block(next_bb)
 
         for stmt in node.orelse:
