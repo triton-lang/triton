@@ -36,6 +36,16 @@ unsigned type::get_primitive_size_in_bits() const {
 unsigned type::get_integer_bitwidth() const
 { assert(id_ == IntegerTyID); return ((integer_type*)(this))->get_bitwidth(); }
 
+signedness type::get_integer_signedness() const
+{ assert(id_ == IntegerTyID); return ((integer_type*)(this))->get_signedness(); }
+
+bool type::is_integer_signed() const {
+  if (id_ != IntegerTyID) {
+    throw std::logic_error("type is " + repr() + ", not integer");
+  }
+  return ((integer_type*)(this))->get_signedness() == signedness::SIGNED;
+}
+
 unsigned type::get_tile_bitwidth() const
 { return ((block_type*)(this))->get_bitwidth(); }
 
@@ -135,6 +145,10 @@ integer_type *type::get_int16_ty(context &ctx) { return &ctx.p_impl->int16_ty; }
 integer_type *type::get_int32_ty(context &ctx) { return &ctx.p_impl->int32_ty; }
 integer_type *type::get_int64_ty(context &ctx) { return &ctx.p_impl->int64_ty; }
 integer_type *type::get_int128_ty(context &ctx) { return &ctx.p_impl->int128_ty; }
+integer_type *type::get_uint8_ty(context &ctx) { return &ctx.p_impl->uint8_ty; }
+integer_type *type::get_uint16_ty(context &ctx) { return &ctx.p_impl->uint16_ty; }
+integer_type *type::get_uint32_ty(context &ctx) { return &ctx.p_impl->uint32_ty; }
+integer_type *type::get_uint64_ty(context &ctx) { return &ctx.p_impl->uint64_ty; }
 
 
 
@@ -174,7 +188,26 @@ bool composite_type::index_valid(value *idx) const{
 }
 
 //===----------------------------------------------------------------------===//
-//                               tile_type class
+//                               struct_type class
+//===----------------------------------------------------------------------===//
+
+struct_type::struct_type(const contained_tys_vec_t& tys, bool is_packed)
+  : composite_type(tys[0]->get_context(), StructTyID), is_packed_(is_packed) {
+ contained_tys_ = tys;
+}
+
+struct_type* struct_type::get(const contained_tys_vec_t& tys, bool is_packed) {
+  assert(tys.size());
+  context_impl* impl = tys[0]->get_context().p_impl.get();
+  struct_type *& entry = impl->struct_tys[tys];
+  if(!entry)
+    entry = new struct_type(tys, is_packed);
+  return  entry;
+}
+
+
+//===----------------------------------------------------------------------===//
+//                               block_type class
 //===----------------------------------------------------------------------===//
 
 block_type::block_type(type *ty, const block_shapes_t &shapes)

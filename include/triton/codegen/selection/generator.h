@@ -24,6 +24,7 @@ namespace llvm{
   class IRBuilder;
   class ArrayType;
   class Function;
+  class StructType;
 }
 
 namespace triton{
@@ -114,6 +115,8 @@ private:
 private:
   Type *cvt(ir::type *ty);
   llvm::Attribute cvt(ir::attribute attr);
+  llvm::StructType* packed_type(ir::value* i);
+  void forward_declare(ir::function* fn);
 
 public:
   generator(analysis::axes *a_axes,
@@ -125,6 +128,8 @@ public:
             unsigned num_warps);
 
   void visit_value(ir::value* v);
+  void visit_call_inst(ir::call_inst*);
+  void visit_launch_inst(ir::launch_inst *);
   void visit_phi_node(ir::phi_node*);
   void visit_binary_operator(ir::binary_operator*);
   void visit_getelementptr_inst(ir::getelementptr_inst*);
@@ -148,6 +153,8 @@ public:
   void visit_unmasked_store_inst(ir::unmasked_store_inst*);
   void visit_masked_store_inst(ir::masked_store_inst*);
   void visit_cat_inst(ir::cat_inst*);
+  void visit_extract_value_inst(ir::extract_value_inst *);
+  void visit_insert_value_inst(ir::insert_value_inst *);
   void visit_reshape_inst(ir::reshape_inst*);
   void visit_splat_inst(ir::splat_inst*);
   void visit_broadcast_inst(ir::broadcast_inst*);
@@ -182,6 +189,8 @@ public:
   void visit_async_wait_inst(ir::async_wait_inst*);
 //  void visit_make_range_dyn(ir::make_range_dyn*);
   void visit_make_range(ir::make_range*);
+  void visit_clock_inst(ir::clock_inst*);
+  void visit_globaltimer_inst(ir::globaltimer_inst*);
 //  void visit_make_range_sta(ir::make_range_sta*);
   void visit_undef_value(ir::undef_value*);
   void visit_constant_int(ir::constant_int*);
@@ -191,6 +200,7 @@ public:
   void visit_basic_block(ir::basic_block*);
   void visit_argument(ir::argument*);
   void visit(ir::module &, llvm::Module &);
+
 
   // layouts
   void visit_layout_mma(analysis::mma_layout*);
@@ -239,6 +249,7 @@ private:
   /// triton bb -> llvm bb
   std::map<ir::value*, BasicBlock *> bbs_;
   std::map<ir::value*, std::vector<int>> ords_;
+  std::map<ir::value*, Function*> fns_;
 
   // helper for creating llvm values
   adder add;

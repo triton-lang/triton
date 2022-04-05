@@ -95,6 +95,9 @@ enum value_id_t: unsigned {
     INSTRUCTIONS
    * ------------ */
   INST_BEGIN,
+  // call
+  INST_CALL,
+  INST_LAUNCH,
   // phi
   INST_PHI,
   // arithmetic
@@ -129,6 +132,9 @@ enum value_id_t: unsigned {
   INST_MASKED_LOAD_ASYNC,
   INST_UNMASKED_STORE,
   INST_MASKED_STORE,
+  // struct
+  INST_EXTRACT_VALUE,
+  INST_INSERT_VALUE,
   // retile
   INST_RESHAPE,
   INST_SPLAT,
@@ -165,6 +171,8 @@ enum value_id_t: unsigned {
   INST_MAKE_RANGE_STA,
   INST_MAKE_RANGE,
   INST_PREFETCH_S,
+  INST_GLOBALTIMER,
+  INST_CLOCK,
 };
 
 
