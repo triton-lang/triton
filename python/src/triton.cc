@@ -888,7 +888,7 @@ void init_triton_ir(py::module &&m) {
       }, ret::reference)
       .def("create_block_with_parent", [](mlir::OpBuilder &self, mlir::Region &parent) -> mlir::Block* {
         return self.createBlock(&parent);
-      })
+      }, ret::reference)
       .def("new_block", [](mlir::OpBuilder &self) -> mlir::Block* {
         return new mlir::Block();
       }, ret::reference)
