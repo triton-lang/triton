@@ -14,6 +14,7 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Verifier.h"
 
+#include <llvm-6.0/llvm/ADT/SmallVector.h>
 #include <optional>
 #include <pybind11/buffer_info.h>
 #include <pybind11/functional.h>
@@ -653,12 +654,14 @@ void init_triton_ir(py::module &&m) {
       .def("size", [](mlir::Region &self) {
         return self.getBlocks().size();
       })
+      .def("empty", &mlir::Region::empty)
       ;
 
   py::class_<mlir::Block>(m, "block")
       .def("arg", [](mlir::Block &self, int index) -> mlir::BlockArgument {
         return self.getArgument(index);
       })
+      .def("get_num_arguments", &mlir::Block::getNumArguments)
       .def("dump", &mlir::Block::dump)
       .def("move_before", &mlir::Block::moveBefore)
       .def("insert_before", &mlir::Block::insertBefore)
@@ -674,7 +677,14 @@ void init_triton_ir(py::module &&m) {
       .def("replace_use_in_block_with", [](mlir::Block &self, mlir::Value &v, mlir::Value &newVal) {
         v.replaceUsesWithIf(newVal, [&](mlir::OpOperand &operand){
           mlir::Operation *user = operand.getOwner();
-          return user->getBlock() == &self;
+          mlir::Block *currentBlock = user->getBlock();
+          while (currentBlock) {
+            if (currentBlock == &self)
+              return true;
+            // Move up one level
+            currentBlock = currentBlock->getParent()->getParentOp()->getBlock();
+          }
+          return false;
         });
       })
       ;
@@ -886,8 +896,11 @@ void init_triton_ir(py::module &&m) {
         mlir::Region *parent = self.getBlock()->getParent();
         return self.createBlock(parent);
       }, ret::reference)
-      .def("create_block_with_parent", [](mlir::OpBuilder &self, mlir::Region &parent) -> mlir::Block* {
-        return self.createBlock(&parent);
+      .def("create_block_with_parent", [](mlir::OpBuilder &self, mlir::Region &parent, 
+                                          std::vector<mlir::Type> &argTypes) -> mlir::Block* {
+        auto argLoc = self.getUnknownLoc();
+        llvm::SmallVector<mlir::Location, 8> argLocs(argTypes.size(), argLoc);
+        return self.createBlock(&parent, {}, argTypes, argLocs);
       }, ret::reference)
       .def("new_block", [](mlir::OpBuilder &self) -> mlir::Block* {
         return new mlir::Block();
