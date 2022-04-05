@@ -36,7 +36,6 @@ class alloc_const;
 
 class value_constructor {
   typedef std::pair<std::string, basic_block*> val_key_t;
-  typedef std::pair<ir::metadata::kind_t, unsigned> md_pair_t;
 
 private:
   phi_node *make_phi(type *ty, unsigned num_values, basic_block *block);
@@ -57,8 +56,6 @@ public:
   // Seal block -- no more predecessors will be added
   void seal_block(basic_block *block);
   // Metadata
-  void add_metadata(const std::string &name, md_pair_t x)     { metadatas_[name] = x; }
-  const std::map<std::string, md_pair_t> &get_metadatas() const { return metadatas_; }
 
 private:
   ir::builder& builder_;
@@ -67,13 +64,13 @@ private:
   std::set<basic_block*> sealed_blocks_;
   std::map<basic_block*, std::map<std::string, phi_node*>> incomplete_phis_;
   std::map<value*, value**> current_phi_;
-  std::map<std::string, md_pair_t> metadatas_;
 };
 
 /* Module */
 
 class module {
   typedef std::pair<std::string, basic_block*> val_key_t;
+  typedef std::pair<ir::metadata::kind_t, unsigned> md_pair_t;
   friend class function;
 
 public:
@@ -114,6 +111,8 @@ public:
   const std::map<std::string, ir::value*>& globals() const    { return globals_; }
   // Metadata
   void print(std::ostream &os);
+  void add_metadata(const std::string &name, md_pair_t x)     { metadatas_[name] = x; }
+  const std::map<std::string, md_pair_t> &get_metadatas() const { return metadatas_; }
 
 private:
   std::string name_;
@@ -122,6 +121,7 @@ private:
   symbols_map_t symbols_;
   std::vector<ir::alloc_const*> allocs_;
   std::map<std::string, ir::value*> globals_;
+  std::map<std::string, md_pair_t> metadatas_;
 };
 
 }

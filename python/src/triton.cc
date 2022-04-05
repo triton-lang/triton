@@ -674,6 +674,7 @@ void init_triton_ir(py::module &&m) {
       .def("is_int", static_cast<bool (ir::type::*)() const>(&ir::type::is_integer_ty))
       .def("is_floating", &ir::type::is_floating_point_ty)
       .def("is_block", &ir::type::is_block_ty)
+      .def("is_struct", &ir::type::is_struct_ty)
       .def("is_void", &ir::type::is_void_ty)
       .def("is_bool", &ir::type::is_bool_ty)
       .def("is_fp8", &ir::type::is_fp8_ty)
@@ -715,30 +716,20 @@ void init_triton_ir(py::module &&m) {
       .def("get", &ir::struct_type::get, ret::reference)
       .def_property_readonly("num_types", &ir::struct_type::get_num_types);
 
-  py::class_<ir::value_constructor>(m, "value_constructor")
-      .def(py::init<ir::builder&>())
-      .def("seal_block", &ir::value_constructor::seal_block)
-      .def("set_value", (void (ir::value_constructor::*)(const std::string &, ir::value *)) & ir::value_constructor::set_value)
-      .def("set_type", &ir::value_constructor::set_type)
-      .def("get_value", (ir::value * (ir::value_constructor::*)(const std::string &)) & ir::value_constructor::get_value, ret::reference)
-      .def("get_values", &ir::value_constructor::get_values, ret::reference)
-      .def("set_values", &ir::value_constructor::set_values)
-      .def("set_instr_metadata", [](ir::value_constructor *self, const std::string &name, ir::value *value) {
-          const auto metadatas = self->get_metadatas();
-          auto it = metadatas.find(name);
-          if (it != metadatas.end())
-            if (auto *instr = dynamic_cast<ir::instruction*>(value)) {
-              instr->set_metadata(it->second.first, it->second.second);
-            }
-        });
-
-
   py::class_<ir::module>(m, "module")
       .def(py::init<std::string, ir::builder &>())
       .def("has_function", &ir::module::has_function)
       .def("get_function", &ir::module::get_function, ret::reference)
       .def("get_or_insert_function", &ir::module::get_or_insert_function, ret::reference)
       .def("reset_ret_ty", &ir::module::reset_ret_ty)
+      .def("set_instr_metadata", [](ir::module *self, const std::string &name, ir::value *value) {
+          const auto metadatas = self->get_metadatas();
+          auto it = metadatas.find(name);
+          if (it != metadatas.end())
+            if (auto *instr = dynamic_cast<ir::instruction*>(value)) {
+              instr->set_metadata(it->second.first, it->second.second);
+            }
+    })
       .def_property_readonly("builder", &ir::module::get_builder, ret::reference);
 
   using eattr = ir::attribute_kind_t;

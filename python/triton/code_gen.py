@@ -57,6 +57,9 @@ def mangle_fn(name, arg_tys, constants):
     ret = f'{name}__{mangled_arg_names}__{mangled_constants}'
     return ret
 
+def is_triton_tensor(value):
+    return isinstance(value, triton.language.tensor)
+
 class ValueConstructor:
     def __init__(self, module, builder, gscope)-> None:
         self.gscope = gscope
@@ -87,7 +90,7 @@ class ValueConstructor:
             ret = self.builtins[name]
         else:
             raise ValueError(f'{name} is not defined')
-        if self.is_triton_tensor(ret):
+        if is_triton_tensor(ret):
             return self._get_tensor(name, self.builder.get_insert_block())
         return ret
 
@@ -187,13 +190,12 @@ class ValueConstructor:
         return triton.language.tensor(v, phi.type)
 
 
-    def is_triton_tensor(self, value):
-        return isinstance(value, triton.language.tensor)
 
 
 class CodeGenerator(ast.NodeVisitor):
 
     def __init__(self, context, prototype, gscope, attributes, constants, module=None, is_kernel=False):
+        self.prototypes = dict()
         self.builder = _triton.ir.builder(context)
         self.module = _triton.ir.module('', self.builder) if module is None else module
         self.prototype = prototype
@@ -238,16 +240,10 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Return(self, node):
         ret = self.visit(node.value)
         if ret is None:
-            return self.builder.ret_void()
+            return triton.language.tensor(None, triton.language.void)
         if isinstance(ret, _triton.ir.value):
             ret = self.builder.ret(ret)
-            return ret
-        if isinstance(ret, triton.language.tensor):
-            ret = ret.handle
-        if isinstance(ret, triton.language.constexpr):
-            ret = triton.language.core._to_ir(ret, self.builder)
-        # TODO: should return tl.block
-        return self.builder.ret(ret)
+        return triton.language.core._to_tensor(ret, self.builder)
 
     def visit_FunctionDef(self, node):
         arg_names, kwarg_names = self.visit(node.args)
@@ -282,7 +278,7 @@ class CodeGenerator(ast.NodeVisitor):
                     attr = _triton.ir.attribute(attr, self.attributes[i])
                     fn.add_attr(idx + 1, attr)
                 fn.args[idx].name = arg_name
-                arg_values.append(fn.args[idx])
+                arg_values.append(triton.language.tensor(fn.args[idx], self.prototype.param_types[idx]))
                 idx += 1
 
         insert_pt = self.builder.get_insert_block()
@@ -297,8 +293,9 @@ class CodeGenerator(ast.NodeVisitor):
         if not has_ret:
             self.builder.ret_void()
         else:
-            self.module.reset_ret_ty(fn_name, self.last_ret.type)
-        # self.module.reset_ret_type(node.name)
+            # a bit hacky: we only know the return type at the last moment so we update type info here
+            self.module.reset_ret_ty(fn_name, self.last_ret.type.to_ir(self.builder))
+            self.prototype.ret_type = self.last_ret.type
         self.builder.set_insert_block(insert_pt)
 
     def visit_arguments(self, node):
@@ -410,9 +407,9 @@ class CodeGenerator(ast.NodeVisitor):
             ast.BitOr: '__or__',
             ast.BitXor: '__xor__',
         }[type(node.op)]
-        if self.is_triton_tensor(lhs):
+        if is_triton_tensor(lhs):
             return getattr(lhs, fn)(rhs, _builder=self.builder)
-        elif self.is_triton_tensor(rhs):
+        elif is_triton_tensor(rhs):
             fn = fn[:2] + 'r' + fn[2:]
             return getattr(rhs, fn)(lhs, _builder=self.builder)
         else:
@@ -484,9 +481,9 @@ class CodeGenerator(ast.NodeVisitor):
             ast.Gt: '__gt__',
             ast.GtE: '__ge__',
         }[type(node.ops[0])]
-        if self.is_triton_tensor(lhs):
+        if is_triton_tensor(lhs):
             return getattr(lhs, fn)(rhs, _builder=self.builder)
-        elif self.is_triton_tensor(rhs):
+        elif is_triton_tensor(rhs):
             fn = fn[:2] + 'r' + fn[2:]
             return getattr(rhs, fn)(lhs, _builder=self.builder)
         else:
@@ -504,7 +501,7 @@ class CodeGenerator(ast.NodeVisitor):
             ast.UAdd: '__pos__',
             ast.Invert: '__invert__',
         }[type(node.op)]
-        if self.is_triton_tensor(op):
+        if is_triton_tensor(op):
             return getattr(op, fn)(_builder=self.builder)
         return getattr(op, fn)()
 
@@ -534,7 +531,7 @@ class CodeGenerator(ast.NodeVisitor):
         assert node.ctx.__class__.__name__ == "Load"
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
-        if self.is_triton_tensor(lhs):
+        if is_triton_tensor(lhs):
             return lhs.__getitem__(slices, _builder=self.builder)
         return lhs[slices]
 
@@ -635,23 +632,23 @@ class CodeGenerator(ast.NodeVisitor):
             # generate call
             args = [None if i in constexprs else arg for i, arg in enumerate(args)]
             arg_vals = [arg.handle for arg in args if arg is not None]
-            arg_types = [arg.type for arg in arg_vals]
+            arg_types = [arg.type for arg in args if arg is not None]
             fn_name = mangle_fn(fn.__name__, arg_types, constants)
             # generate function def if necessary
             if not self.module.has_function(fn_name):
-                ret_type = _triton.ir.type.get_void(self.builder.context)
-                prototype = _triton.ir.type.make_function(ret_type, arg_types)
+                ret_type = triton.language.void
+                prototype = triton.language.function_type(ret_type, arg_types)
                 gscope = sys.modules[fn.fn.__module__].__dict__
                 generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module)
                 generator.visit(fn.parse())
+                self.prototypes[fn_name] = prototype
             symbol = self.module.get_function(fn_name)
             ret = self.builder.call(symbol, arg_vals)
             if not ret.type.is_void() and not ret.type.is_struct():
-                ret = triton.language.tensor(ret)
+                ret = triton.language.tensor(ret, self.prototypes[fn_name].ret_type)
             return ret
         # built-in function
-        if hasattr(fn, '__self__') and self.is_triton_object(fn.__self__) or \
-                sys.modules[fn.__module__] is triton.language.core:
+        if sys.modules[fn.__module__] is triton.language.core:
             ret = fn(*args, _builder=self.builder, **kws)
         if fn in self.builtins.values():
             args = [arg.value if isinstance(arg, triton.language.constexpr) else arg
