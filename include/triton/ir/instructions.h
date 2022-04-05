@@ -81,6 +81,51 @@ private:
   value_id_t id_;
 };
 
+//===----------------------------------------------------------------------===//
+//                               call_inst classes
+//===----------------------------------------------------------------------===//
+
+class call_inst: public instruction {
+private:
+  std::string repr_impl() const;
+  call_inst(ir::function* fn, const std::vector<ir::value*>& values, const std::string& name, instruction* next);
+
+public:
+  static call_inst* create(ir::function* fn, const std::vector<ir::value*>& values, const std::string &name = "", instruction *next = nullptr);
+  ir::function* get_fn() { return fn_; }
+
+  _TRITON_DEFINE_CLONE(call_inst)
+  _TRITON_DEFINE_ACCEPT(call_inst)
+
+private:
+  ir::function* fn_;
+};
+
+class launch_inst: public instruction {
+private:
+  std::string repr_impl() const { return "launch"; }
+  launch_inst(ir::function* fn, const std::vector<ir::value*>& values, const std::vector<ir::value*>& grid, ir::value* num_warps,
+              const std::string &name = "", instruction *next = nullptr);
+
+public:
+  static launch_inst* create(ir::function* fn, const std::vector<ir::value*>& values, const std::vector<ir::value*>& grid, ir::value* num_warps,
+                             const std::string& name = "", instruction* next = nullptr);
+
+  ir::function* get_fn();
+  std::vector<ir::value*> get_values();
+  std::vector<ir::value*> get_grid();
+  ir::value* get_num_warps();
+
+
+  _TRITON_DEFINE_CLONE(launch_inst)
+  _TRITON_DEFINE_ACCEPT(launch_inst)
+
+private:
+  unsigned val_begin;
+  unsigned val_end;
+  unsigned grid_begin;
+  unsigned grid_end;
+};
 
 //===----------------------------------------------------------------------===//
 //                               phi_node classes
@@ -547,6 +592,44 @@ public:
 };
 
 //===----------------------------------------------------------------------===//
+//                               struct classes
+//===----------------------------------------------------------------------===//
+
+// insert_value
+
+class insert_value_inst: public instruction {
+private:
+  std::string repr_impl() const { return "insertvalue"; }
+  insert_value_inst(value *val, value *elt, size_t idx, const std::string &name, instruction *next);
+
+public:
+  static insert_value_inst* create(value *val, value* elt, size_t idx, const std::string &name = "", instruction *next = nullptr);
+  size_t get_idx() { return idx_; }
+  _TRITON_DEFINE_CLONE(insert_value_inst)
+  _TRITON_DEFINE_ACCEPT(insert_value_inst)
+
+private:
+  size_t idx_;
+};
+
+// extract_value
+
+class extract_value_inst: public instruction {
+private:
+  std::string repr_impl() const { return "extractvalue"; }
+  extract_value_inst(value *val, size_t idx, const std::string &name, instruction *next);
+
+public:
+  static extract_value_inst* create(value *val, size_t idx, const std::string &name = "", instruction *next = nullptr);
+  size_t get_idx() { return idx_; }
+  _TRITON_DEFINE_CLONE(extract_value_inst)
+  _TRITON_DEFINE_ACCEPT(extract_value_inst)
+
+private:
+  size_t idx_;
+};
+
+//===----------------------------------------------------------------------===//
 //                               retile_inst classes
 //===----------------------------------------------------------------------===//
 
@@ -969,6 +1052,27 @@ public:
 private:
   constant_int* first_;
   constant_int* last_;
+};
+
+/* timing utilities */
+class clock_inst: public instruction{
+  clock_inst(context &ctx, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "clock"; }
+  _TRITON_DEFINE_CLONE(clock_inst)
+  _TRITON_DEFINE_ACCEPT(clock_inst)
+
+public:
+  static clock_inst* create(context &ctx, const std::string &name = "", instruction *next = nullptr);
+};
+
+class globaltimer_inst: public instruction{
+  globaltimer_inst(context &ctx, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "globaltimer"; }
+  _TRITON_DEFINE_CLONE(globaltimer_inst)
+  _TRITON_DEFINE_ACCEPT(globaltimer_inst)
+
+public:
+  static globaltimer_inst* create(context &ctx, const std::string &name = "", instruction *next = nullptr);
 };
 
 

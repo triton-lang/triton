@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import ast
 import builtins
 import functools
@@ -13,7 +11,7 @@ import tempfile
 import textwrap
 import time
 import warnings
-from typing import Dict, Optional, Set, Tuple, Union
+from typing import Dict
 
 import torch
 from filelock import FileLock
@@ -23,40 +21,43 @@ import triton._C.libtriton.triton as _triton
 from .tools.disasm import extract
 
 
-class CodeGenerator(ast.NodeVisitor):
-    def __init__(self, context, prototype, gscope, attributes, constants, kwargs):
-        self.builder = _triton.ir.builder(context)
-        self.module = _triton.ir.module('', self.builder)
-        self.prototype = prototype
-        self.gscope = gscope
-        self.lscope = dict()
-        self.is_arg_lscope = dict()  # name => is_arg: {str: bool}
-        self.attributes = attributes
-        self.constants = constants
-        self.kwargs = kwargs
-        self.last_node = None
-        self.builtins = {
-            'range': range,
-            'min': triton.language.minimum,
-            'float': float,
-            'int': int,
-            'print': print,
-            'isinstance': isinstance,
-            'getattr': getattr,
-        }
-        # SSA-construction
-        # [name, bb] => triton.language.tensor
-        self.lvalues: Dict[Tuple[str, _triton.ir.basic_block], triton.language.tensor] = {}
-        # bb => {name => phi}
-        self.incomplete_phis = {}
-        self.sealed_blocks: Set[_triton.ir.basic_block] = set()
+def mangle_ty(type):
+    if type.is_ptr():
+        return 'P' + mangle_ty(type.element)
+    if type.is_int():
+        return 'i' + str(type.get_int_width())
+    if type.is_fp8():
+        return 'fp8'
+    if type.is_fp16():
+        return 'fp16'
+    if type.is_bf16():
+        return 'bf16'
+    if type.is_fp32():
+        return 'fp32'
+    if type.is_fp64():
+        return 'fp64'
+    if type.is_void():
+        return 'V'
+    if type.is_block():
+        elt = mangle_ty(type.scalar)
+        shape = '_'.join(map(str, type.shape))
+        return f'{elt}S{shape}S'
+    assert False, "Unsupport type"
 
+
+def mangle_fn(name, arg_tys, constants):
+    # doesn't mangle ret type, which must be a function of arg tys
+    mangled_arg_names = '_'.join([mangle_ty(ty) for ty in arg_tys])
+    key = lambda x: x.__name__ if isinstance(x, JITFunction) else repr(x)
+    mangled_constants = '_'.join([f'{i}c{key(constants[i])}' for i in sorted(constants)])
+    mangled_constants = mangled_constants.replace('.', '_d_')
+    mangled_constants = mangled_constants.replace("'", '_sq_')
+    ret = f'{name}__{mangled_arg_names}__{mangled_constants}'
+    return ret
+
+
+class CodeGenerator(ast.NodeVisitor):
     def get_value(self, name):
-        ''' This function:
-        1. make sure `name` is defined
-        2. if `name` is triton.language.tensor, get stored tensor by calling
-           `self._get_tensor()`
-        '''
         # search node.id in local scope
         ret = None
         if name in self.lscope:
@@ -69,121 +70,49 @@ class CodeGenerator(ast.NodeVisitor):
             ret = self.builtins[name]
         else:
             raise ValueError(f'{name} is not defined')
-        if self.is_triton_tensor(ret) and not self.is_arg_lscope[name]:
-            return self._get_tensor(name)
+        if isinstance(ret, triton.language.block):
+            handle = self.value_constructor.get_value(name)
+            return triton.language.block(handle)
         return ret
 
-    def set_value(self, name: str,
-                  value: Union[triton.language.tensor, triton.language.constexpr],
-                  is_arg: bool = False) -> None:
-        ''' This function:
-          called by visit_Assign() & visit_FuncDef() to store left value (lvalue)
-        1. record local defined name (FIXME: should consider control flow)
-        2. store tensor in self.lvalue
-        '''
+    def set_value(self, name, value):
+        if isinstance(value, _triton.ir.value):
+            value = triton.language.block(value)
+        if isinstance(value, triton.language.block):
+            self.value_constructor.set_value(name, value.handle)
+            self.value_constructor.set_type(name, value.handle.type)
         self.lscope[name] = value
-        # if this value is an argument, we don't need to create phis for it
-        self.is_arg_lscope[name] = is_arg
-        if isinstance(value, triton.language.tensor) and not is_arg:
-            self._set_value(name, self.builder.get_insert_block(), value)
 
-    #
-    # SSA-construction
-    #
-    def _get_tensor(self, name: str, bb: Optional[_triton.ir.basic_block] = None) -> triton.language.tensor:
-        if not bb:
-            bb = self.builder.get_insert_block()
-        # local value numbering
-        if (name, bb) in self.lvalues:
-            return self.lvalues[(name, bb)]
-        # global value numbering
-        saved_insert_point = self.builder.get_insert_point()
-        result = self._get_tensor_recursive(name, bb)
-        self.builder.set_insert_point(saved_insert_point)
-        return result
+    def is_triton_object(self, value):
+        return isinstance(value, triton.language.block)
 
-    def _get_tensor_recursive(self, name: str, bb: _triton.ir.basic_block) -> triton.language.tensor:
-        preds = bb.get_predecessors()
-        type = self.lscope[name].type
-        # some preds haven't been filled, create a phi as a proxy of the value
-        if bb not in self.sealed_blocks:
-            result = self._make_phi(type, len(preds), bb)
-            if bb in self.incomplete_phis:
-                self.incomplete_phis[bb][name] = result
-            else:
-                self.incomplete_phis[bb] = {name: result}
-        elif len(preds) == 1:
-            # one predecessor: no phi needed, try get value from pred
-            result = self._get_tensor(name, preds[0])
-        else:  # multiple preds
-            assert len(preds) > 1, f'{name} is an undefined name (cannot find in the entry block)'
-            phi = self._make_phi(type, len(preds), bb)
-            self._set_value(name, bb, phi)
-            result = self._add_phi_operands(name, phi)
-        self._set_value(name, bb, result)
-        return result
-
-    # returns a new phi tensor, which encausulate an ir.phi_node
-    def _make_phi(self,
-                  type: triton.language.dtype,
-                  num_values: int,
-                  bb: _triton.ir.basic_block) -> triton.language.tensor:
-        instr = bb.get_first_non_phi()
-        self.builder.set_insert_point((bb, instr))
-        ir_phi = self.builder.create_phi(type.to_ir(self.builder), num_values)
-        if instr:
-            self.builder.set_insert_block(bb)
-        return triton.language.tensor(ir_phi, type)
-
-    # complete a phi node. (TODO: rename this as _complete_phis?)
-    # Note: since we try to remove tryival phi, the return tensor might not be a phi
-    def _add_phi_operands(self, name: str,
-                          phi: triton.language.tensor) -> triton.language.tensor:
-        bb = phi.handle.get_parent()
-        for pred in bb.get_predecessors():
-            v = self._get_tensor(name, pred)
-            phi.handle.add_incoming(v.handle, pred)
-        phi = self._try_remove_trivial_phi(phi)
-        return phi
-
-    def _set_value(self, name: str, bb: _triton.ir.basic_block, value: triton.language.tensor) -> None:
-        self.lvalues[(name, bb)] = value
-        # TODO: why we need this?
-        self.module.set_instr_metadata(name, value.handle)
-
-    def _seal_block(self, bb: _triton.ir.basic_block):
-        # complete all incomplete phis
-        if bb in self.incomplete_phis:
-            for name, phi in self.incomplete_phis[bb].items():
-                result = self._add_phi_operands(name, phi)
-                # it's possible that this phi is trivial
-                if self._get_tensor(name, bb).handle == phi.handle:
-                    self._set_value(name, bb, result)
-            del self.incomplete_phis[bb]
-        self.sealed_blocks.add(bb)
-
-    def _try_remove_trivial_phi(self, phi: triton.language.tensor) -> triton.language.tensor:
-        unique_handles = {op for op in phi.handle.ops() if op != phi.handle}
-        if len(unique_handles) != 1:  # non-trivial phi
-            return phi
-        v = unique_handles.pop()
-        phi.handle.replace_all_uses_with(v)
-        phi.handle.erase_from_parent()
-        # TODO: remove trivial phis recursively
-        return triton.language.tensor(v, phi.type)
-
-    def is_triton_tensor(self, value):
-        return isinstance(value, triton.language.tensor)
-
-    #
-    # AST visitor
-    #
     def visit_compound_statement(self, stmts):
         for stmt in stmts:
             self.last_ret = self.visit(stmt)
             if isinstance(stmt, ast.Return):
                 break
         return stmts and isinstance(stmt, ast.Return)
+
+    def __init__(self, context, prototype, gscope, attributes, constants, module=None, is_kernel=False):
+        self.builder = _triton.ir.builder(context)
+        self.value_constructor = _triton.ir.value_constructor(self.builder)
+        self.module = _triton.ir.module('', self.builder) if module is None else module
+        self.prototype = prototype
+        self.gscope = gscope
+        self.lscope = dict()
+        self.attributes = attributes
+        self.constants = constants
+        self.last_node = None
+        self.is_kernel = is_kernel
+        self.builtins = {
+            'range': range,
+            'min': triton.language.minimum,
+            'float': float,
+            'int': int,
+            'print': print,
+            'isinstance': isinstance,
+            'getattr': getattr,
+        }
 
     def visit_Module(self, node):
         ast.NodeVisitor.generic_visit(self, node)
@@ -199,9 +128,17 @@ class CodeGenerator(ast.NodeVisitor):
         ret = self.visit(node.value)
         if ret is None:
             return self.builder.ret_void()
-        return ret
+        if isinstance(ret, _triton.ir.value):
+            ret = self.builder.ret(ret)
+            return ret
+        if isinstance(ret, triton.language.block):
+            ret = ret.handle
+        if isinstance(ret, triton.language.constexpr):
+            ret = triton.language.core._to_ir(ret, self.builder)
+        # TODO: should return tl.block
+        return self.builder.ret(ret)
 
-    def visit_FunctionDef(self, node, inline=False, arg_values=None):
+    def visit_FunctionDef(self, node):
         arg_names, kwarg_names = self.visit(node.args)
         # initialize defaults
         for i, default_value in enumerate(node.args.defaults):
@@ -214,45 +151,44 @@ class CodeGenerator(ast.NodeVisitor):
             else:
                 init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation)
             self.visit(init_node)
-        # store keyword arguments in local scope
-        self.lscope[kwarg_names] = self.kwargs
         # initialize function
-        if inline:
-            pass
-        else:
-            fn = self.module.get_or_insert_function(node.name, self.prototype.to_ir(self.builder))
-            arg_values = []
-            idx = 0
-            for i, arg_name in enumerate(arg_names):
-                if i in self.constants:
-                    cst = self.constants[i]
-                    if not isinstance(cst, triton.language.constexpr):
-                        cst = triton.language.constexpr(self.constants[i])
-                    arg_values.append(cst)
-                else:
-                    if i in self.attributes:
-                        is_ptr = fn.args[idx].type.is_ptr()
-                        attr = 'aligned' if is_ptr else 'multiple_of'
-                        attr = getattr(_triton.ir.attribute_kind, attr)
-                        attr = _triton.ir.attribute(attr, self.attributes[i])
-                        fn.add_attr(idx + 1, attr)
-                    fn.args[idx].name = arg_name
-                    arg_values.append(triton.language.tensor(fn.args[idx], self.prototype.param_types[idx]))
-                    idx += 1
+        fn_name = mangle_fn(node.name, self.prototype.arg_tys, self.constants)
+        fn = self.module.get_or_insert_function(fn_name, self.prototype)
+        fn.set_is_kernel(self.is_kernel)
+        arg_values = []
+        idx = 0
+        for i, arg_name in enumerate(arg_names):
+            if i in self.constants:
+                cst = self.constants[i]
+                if not isinstance(cst, triton.language.constexpr):
+                    cst = triton.language.constexpr(self.constants[i])
+                arg_values.append(cst)
+            else:
+                if i in self.attributes:
+                    is_ptr = fn.args[idx].type.is_ptr()
+                    attr = 'aligned' if is_ptr else 'multiple_of'
+                    attr = getattr(_triton.ir.attribute_kind, attr)
+                    attr = _triton.ir.attribute(attr, self.attributes[i])
+                    fn.add_attr(idx + 1, attr)
+                fn.args[idx].name = arg_name
+                arg_values.append(fn.args[idx])
+                idx += 1
 
+        insert_pt = self.builder.get_insert_block()
+        entry = _triton.ir.basic_block.create(self.builder.context, "entry", fn)
+        self.builder.set_insert_block(entry)
+        self.value_constructor.seal_block(entry)
         for arg_name, arg_value in zip(arg_names, arg_values):
-            self.set_value(arg_name, arg_value, is_arg=True)
-        if inline:
-            self.visit_compound_statement(node.body)
-            return self.last_ret
-        else:
-            entry = _triton.ir.basic_block.create(self.builder.context, "entry", fn)
-            self._seal_block(entry)
-            self.builder.set_insert_block(entry)
-            # visit function body
-            self.visit_compound_statement(node.body)
-            # finalize function
+            self.set_value(arg_name, arg_value)
+        # visit function body
+        has_ret = self.visit_compound_statement(node.body)
+        # finalize
+        if not has_ret:
             self.builder.ret_void()
+        else:
+            self.module.reset_ret_ty(fn_name, self.last_ret.type)
+        # self.module.reset_ret_type(node.name)
+        self.builder.set_insert_block(insert_pt)
 
     def visit_arguments(self, node):
         arg_names = []
@@ -293,13 +229,18 @@ class CodeGenerator(ast.NodeVisitor):
             names = [names]
         if not isinstance(values, tuple):
             values = [values]
+        if isinstance(values[0], _triton.ir.value):
+            struct = values[0]
+            ty = struct.type
+            if ty.is_struct():
+                values = [self.builder.extract_value(struct, i) for i in range(ty.num_types)]
+        assert len(values) == len(names)
         for name, value in zip(names, values):
-            # TODO: can we store constexpr here to support constant folding?
             # by default, constexpr are assigned into python variable
             if isinstance(value, triton.language.constexpr):
                 value = value.value
-            if not isinstance(value, triton.language.tensor):
-                value = triton.language.core._to_tensor(value, self.builder)
+            if not isinstance(value, triton.language.block):
+                value = triton.language.core._to_ir(value, self.builder)
             self.set_value(name, value)
 
     def visit_AugAssign(self, node):
@@ -323,14 +264,25 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Tuple(self, node):
         args = [self.visit(x) for x in node.elts]
+        mode = type(args[0])
+        # tuple of values -- create a struct
+        if len(args) > 1 and mode == triton.language.block\
+                and all([type(arg) == mode for arg in args]):
+            args = [arg.handle for arg in args]
+            tys = [arg.type for arg in args]
+            struct_ty = _triton.ir.struct_type.get(tys, True)
+            ret = _triton.ir.undef.get(struct_ty)
+            for i, arg in enumerate(args):
+                ret = self.builder.insert_value(ret, arg, i)
+            return ret
         return tuple(args)
 
     def visit_BinOp(self, node):
         lhs = self.visit(node.left)
         rhs = self.visit(node.right)
-        if isinstance(lhs, triton.language.constexpr):
+        if isinstance(lhs, triton.language.core.constexpr):
             lhs = lhs.value
-        if isinstance(rhs, triton.language.constexpr):
+        if isinstance(rhs, triton.language.core.constexpr):
             rhs = rhs.value
         fn = {
             ast.Add: '__add__',
@@ -346,9 +298,9 @@ class CodeGenerator(ast.NodeVisitor):
             ast.BitOr: '__or__',
             ast.BitXor: '__xor__',
         }[type(node.op)]
-        if self.is_triton_tensor(lhs):
+        if self.is_triton_object(lhs):
             return getattr(lhs, fn)(rhs, _builder=self.builder)
-        elif self.is_triton_tensor(rhs):
+        elif self.is_triton_object(rhs):
             fn = fn[:2] + 'r' + fn[2:]
             return getattr(rhs, fn)(lhs, _builder=self.builder)
         else:
@@ -356,15 +308,15 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_If(self, node):
         cond = self.visit(node.test)
-        if isinstance(cond, triton.language.tensor):
+        if isinstance(cond, triton.language.block):
             cond = cond.to(triton.language.int1, _builder=self.builder)
             current_bb = self.builder.get_insert_block()
             then_bb = _triton.ir.basic_block.create(self.builder.context, "then", current_bb.parent)
             else_bb = _triton.ir.basic_block.create(self.builder.context, "else", current_bb.parent) if node.orelse else None
             endif_bb = _triton.ir.basic_block.create(self.builder.context, "endif", current_bb.parent)
-            self._seal_block(then_bb)
+            self.value_constructor.seal_block(then_bb)
             if else_bb:
-                self._seal_block(else_bb)
+                self.value_constructor.seal_block(else_bb)
                 self.builder.cond_br(cond.handle, then_bb, else_bb)
             else:
                 self.builder.cond_br(cond.handle, then_bb, endif_bb)
@@ -379,7 +331,7 @@ class CodeGenerator(ast.NodeVisitor):
                 # TODO: last statement is a terminator?
                 if not is_terminator:
                     self.builder.br(endif_bb)
-            self._seal_block(endif_bb)
+            self.value_constructor.seal_block(endif_bb)
             self.builder.set_insert_block(endif_bb)
         else:
             if isinstance(cond, triton.language.constexpr):
@@ -404,9 +356,9 @@ class CodeGenerator(ast.NodeVisitor):
         assert len(node.ops) == 1
         lhs = self.visit(node.left)
         rhs = self.visit(node.comparators[0])
-        if isinstance(lhs, triton.language.constexpr):
+        if isinstance(lhs, triton.language.core.constexpr):
             lhs = lhs.value
-        if isinstance(rhs, triton.language.constexpr):
+        if isinstance(rhs, triton.language.core.constexpr):
             rhs = rhs.value
         if type(node.ops[0]) == ast.Is:
             return triton.language.constexpr(lhs is rhs)
@@ -420,9 +372,9 @@ class CodeGenerator(ast.NodeVisitor):
             ast.Gt: '__gt__',
             ast.GtE: '__ge__',
         }[type(node.ops[0])]
-        if self.is_triton_tensor(lhs):
+        if self.is_triton_object(lhs):
             return getattr(lhs, fn)(rhs, _builder=self.builder)
-        elif self.is_triton_tensor(rhs):
+        elif self.is_triton_object(rhs):
             fn = fn[:2] + 'r' + fn[2:]
             return getattr(rhs, fn)(lhs, _builder=self.builder)
         else:
@@ -433,21 +385,21 @@ class CodeGenerator(ast.NodeVisitor):
         if type(node.op) == ast.Not:
             assert isinstance(op, triton.language.constexpr), "`not` only supported for constexpr at the moment"
             return triton.language.constexpr(not op)
-        if isinstance(op, triton.language.constexpr):
+        if isinstance(op, triton.language.core.constexpr):
             op = op.value
         fn = {
             ast.USub: '__neg__',
             ast.UAdd: '__pos__',
             ast.Invert: '__invert__',
         }[type(node.op)]
-        if self.is_triton_tensor(op):
+        if self.is_triton_object(op):
             return getattr(op, fn)(_builder=self.builder)
         return getattr(op, fn)()
 
     def visit_While(self, node):
         current_bb = self.builder.get_insert_block()
-        loop_bb = _triton.ir.basic_block.create(self.builder.context, "loop", current_bb.parent)
-        next_bb = _triton.ir.basic_block.create(self.builder.context, "postloop", current_bb.parent)
+        loop_bb = _triton.ir.basic_block.create(self.module.builder.context, "loop", current_bb.parent)
+        next_bb = _triton.ir.basic_block.create(self.module.builder.context, "postloop", current_bb.parent)
 
         def continue_fn():
             cond = self.visit(node.test)
@@ -458,9 +410,9 @@ class CodeGenerator(ast.NodeVisitor):
         self.visit_compound_statement(node.body)
         continue_fn()
         stop_bb = self.builder.get_insert_block()
-        self._seal_block(stop_bb)
-        self._seal_block(loop_bb)
-        self._seal_block(next_bb)
+        self.value_constructor.seal_block(stop_bb)
+        self.value_constructor.seal_block(loop_bb)
+        self.value_constructor.seal_block(next_bb)
         self.builder.set_insert_block(next_bb)
 
         for stmt in node.orelse:
@@ -470,7 +422,7 @@ class CodeGenerator(ast.NodeVisitor):
         assert node.ctx.__class__.__name__ == "Load"
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
-        if self.is_triton_tensor(lhs):
+        if self.is_triton_object(lhs):
             return lhs.__getitem__(slices, _builder=self.builder)
         return lhs[slices]
 
@@ -513,8 +465,8 @@ class CodeGenerator(ast.NodeVisitor):
         step_node = ast.AugAssign(target=st_target, op=ast.Add(), value=arg_2)
         # code generation
         current_bb = self.builder.get_insert_block()
-        loop_bb = _triton.ir.basic_block.create(self.builder.context, "loop", current_bb.parent)
-        next_bb = _triton.ir.basic_block.create(self.builder.context, "postloop", current_bb.parent)
+        loop_bb = _triton.ir.basic_block.create(self.module.builder.context, "loop", current_bb.parent)
+        next_bb = _triton.ir.basic_block.create(self.module.builder.context, "postloop", current_bb.parent)
 
         def continue_fn():
             self.visit(step_node)
@@ -529,9 +481,9 @@ class CodeGenerator(ast.NodeVisitor):
         # TODO: handle case where body breaks control flow
         continue_fn()
         stop_bb = self.builder.get_insert_block()
-        self._seal_block(stop_bb)
-        self._seal_block(loop_bb)
-        self._seal_block(next_bb)
+        self.value_constructor.seal_block(stop_bb)
+        self.value_constructor.seal_block(loop_bb)
+        self.value_constructor.seal_block(next_bb)
         self.builder.set_insert_block(next_bb)
 
         for stmt in node.orelse:
@@ -557,15 +509,62 @@ class CodeGenerator(ast.NodeVisitor):
         for keyword in node.keywords:
             kws.update(self.visit(keyword))
         args = [self.visit(arg) for arg in node.args]
+
         if isinstance(fn, JITFunction):
-            return fn(*args, generator=self, **kws)
-        if hasattr(fn, '__self__') and self.is_triton_tensor(fn.__self__) or \
+            from inspect import getcallargs
+            args = getcallargs(fn.fn, *args, **kws)
+            args = [args[name] for name in fn.arg_names]
+            args = [arg if isinstance(arg, triton.language.block)
+                    else triton.language.constexpr(arg) for arg in args]
+            # generate function def
+            attributes = dict()
+            constexprs = [i for i, arg in enumerate(args) if isinstance(arg, triton.language.constexpr)]
+            constants = {i: args[i] for i in constexprs}
+            # generate call
+            args = [None if i in constexprs else arg for i, arg in enumerate(args)]
+            arg_vals = [arg.handle for arg in args if arg is not None]
+            arg_types = [arg.type for arg in arg_vals]
+            fn_name = mangle_fn(fn.__name__, arg_types, constants)
+            # generate function def if necessary
+            if not self.module.has_function(fn_name):
+                ret_type = _triton.ir.type.get_void(self.builder.context)
+                prototype = _triton.ir.type.make_function(ret_type, arg_types)
+                gscope = sys.modules[fn.fn.__module__].__dict__
+                generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module)
+                generator.visit(fn.parse())
+            symbol = self.module.get_function(fn_name)
+            ret = self.builder.call(symbol, arg_vals)
+            if not ret.type.is_void() and not ret.type.is_struct():
+                ret = triton.language.block(ret)
+            return ret
+        # built-in function
+        if hasattr(fn, '__self__') and self.is_triton_object(fn.__self__) or \
                 sys.modules[fn.__module__] is triton.language.core:
-            return fn(*args, _builder=self.builder, **kws)
+            ret = fn(*args, _builder=self.builder, **kws)
         if fn in self.builtins.values():
             args = [arg.value if isinstance(arg, triton.language.constexpr) else arg
                     for arg in args]
-        return fn(*args, **kws)
+            ret = fn(*args, **kws)
+        # special case: dynamic parallelism
+        # in this case the core primitive returns a proxy
+        # if isinstance(ret, triton.language.core.LaunchProxy):
+        #     ret_type  = _triton.ir.type.get_void(self.builder.context)
+        #     arg_tys = [x.type for x in ret.args]
+        #     prototype = _triton.ir.type.make_function(ret_type, arg_tys)
+        #     gscope = sys.modules[ret.fn.fn.__module__].__dict__
+        #     constants = ret.constants
+        #     fn_name = mangle_fn(ret.fn.__name__, arg_tys, ret.constants)
+        #     # TODO: clean-up attributes handling in function
+        #     if not self.module.has_function(fn_name):
+        #         attributes = {i: list(arg.parent.get_attrs(arg))[0].value for i, arg in enumerate(ret.args) \
+        #                 if isinstance(arg, _triton.ir.argument) and arg.parent.has_attr(i + 1) }
+        #         generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, is_kernel=True)
+        #         generator.visit(ret.fn.parse())
+        #     symbol = self.module.get_function(fn_name)
+        #     # TODO: should ret.args not include any constants ?
+        #     ret = self.builder.launch(symbol, ret.args, ret.grid, ret.num_warps)
+        return ret
+        # return fn(*args, **kws)
 
     def visit_Constant(self, node):
         return triton.language.constexpr(node.value)
@@ -654,9 +653,13 @@ class CompilationError(Exception):
         self.message = f'at {node.lineno}:{node.col_offset}:\n'
         self.message += '\n'.join(src.split('\n')[:node.lineno])
         self.message += '\n' + ' ' * node.col_offset + '^'
+        self.src = src
+        self.node = node
         super().__init__(self.message)
+
+    def __reduce__(self):
         # this is necessary to make CompilationError picklable
-        self.args = (src, node)
+        return (type(self), (self.src, self.node))
 
 
 class OutOfResources(Exception):
@@ -664,8 +667,14 @@ class OutOfResources(Exception):
         self.message = f'out of resource: {name}, '\
                        f'Required: {required}, '\
                        f'Hardware limit: {limit}'
+        self.required = required
+        self.limit = limit
+        self.name = name
         super().__init__(self.message)
-        self.args = (required, limit, name)
+
+    def __reduce__(self):
+        # this is necessary to make CompilationError picklable
+        return (type(self), (self.required, self.limit, self.name))
 
 
 class Kernel:
@@ -689,7 +698,7 @@ class Kernel:
         }
         if hasattr(obj, 'data_ptr'):
             return type_names[obj.dtype]
-        if isinstance(obj, triton.language.constexpr):
+        if isinstance(obj, triton.language.core.constexpr):
             obj = obj.value
         if isinstance(obj, int):
             if -2**31 <= obj < 2**31:
@@ -721,34 +730,34 @@ class Kernel:
         return 'scalar', name
 
     @staticmethod
-    def _to_triton_ir(obj):
+    def _to_triton_ir(context, obj):
         which, name = obj
         type_map = {
-            'I': triton.language.int32,
-            'L': triton.language.int64,
-            'f': triton.language.float32,
-            'B': triton.language.int1,
-            'f8': triton.language.float8,
-            'f16': triton.language.float16,
-            'bf16': triton.language.bfloat16,
-            'f32': triton.language.float32,
-            'f64': triton.language.float64,
-            'i1': triton.language.int1,
-            'i8': triton.language.int8,
-            'i16': triton.language.int16,
-            'i32': triton.language.int32,
-            'i64': triton.language.int64,
-            'u8': triton.language.uint8,
-            'u16': triton.language.uint16,
-            'u32': triton.language.uint32,
-            'u64': triton.language.uint64,
+            'I': _triton.ir.type.get_int32,
+            'L': _triton.ir.type.get_int64,
+            'f': _triton.ir.type.get_fp32,
+            'B': _triton.ir.type.get_int1,
+            'f8': _triton.ir.type.get_fp8,
+            'f16': _triton.ir.type.get_fp16,
+            'bf16': _triton.ir.type.get_bf16,
+            'f32': _triton.ir.type.get_fp32,
+            'f64': _triton.ir.type.get_fp64,
+            'i1': _triton.ir.type.get_int1,
+            'i8': _triton.ir.type.get_int8,
+            'i16': _triton.ir.type.get_int16,
+            'i32': _triton.ir.type.get_int32,
+            'i64': _triton.ir.type.get_int64,
+            'u8': _triton.ir.type.get_uint8,
+            'u16': _triton.ir.type.get_uint16,
+            'u32': _triton.ir.type.get_uint32,
+            'u64': _triton.ir.type.get_uint64,
         }
         # convert torch.Tensor to Triton IR pointers
         if which == 'ptr':
-            elt_ty = type_map[name]
-            return triton.language.pointer_type(elt_ty, 1)
+            elt_ty = type_map[name](context)
+            return _triton.ir.type.make_ptr(elt_ty, 1)
         # default path returns triton.ir.type directly
-        return type_map[name]
+        return type_map[name](context)
 
     @staticmethod
     def pow2_divisor(N):
@@ -767,6 +776,7 @@ class Kernel:
 
     def add_to_cache(self, key, wargs, device_idx, num_warps, num_stages):
         tensor_idxs = [i for i, arg in enumerate(wargs) if hasattr(arg, 'data_ptr')]
+
         # attributes
         attributes = dict()
         for i, arg in enumerate(wargs):
@@ -979,7 +989,7 @@ class JITFunction:
 
     cache_hook = None
 
-    def __init__(self, fn, version=None, do_not_specialize=None):
+    def __init__(self, fn, version=None, inline=True, do_not_specialize=None):
         # information of wrapped function
         self.fn = fn
         self.module = fn.__module__
@@ -988,6 +998,7 @@ class JITFunction:
         self.arg_defaults = [v.default for v in signature.parameters.values()]
 
         self.version = version
+        self.inline = inline
         self.src = textwrap.dedent(inspect.getsource(fn))
         self.src = self.src[self.src.find("def"):]
         self.do_not_specialize = [] if do_not_specialize is None else do_not_specialize
@@ -1002,6 +1013,8 @@ class JITFunction:
         # annotations
         self.annotations = {self.arg_names.index(name): ty for name, ty in fn.__annotations__.items()}
         self.__annotations__ = fn.__annotations__
+        # constexprs
+        self.constexprs = [self.arg_names.index(ann) for ann in self.__annotations__.keys()]
         # forward docs
         self.__doc__ = fn.__doc__
         self.__name__ = fn.__name__
@@ -1028,37 +1041,8 @@ class JITFunction:
         assert isinstance(tree.body[0], ast.FunctionDef)
         return tree
 
-    # Called by CodeGenerator.visit_Call()
-    def __call__(self, *args, generator: CodeGenerator, **kwargs):
-        try:
-            from inspect import getcallargs
-            arg_values = getcallargs(self.fn, *args, **kwargs)
-            arg_values = [arg_values[name] for name in self.arg_names]
-            arg_values = [arg if isinstance(arg, triton.language.tensor)
-                          else triton.language.constexpr(arg) for arg in arg_values]
-
-            # Record values in the caller (parent scope)
-            gscope = generator.gscope.copy()
-            lscope = generator.lscope.copy()
-
-            # TODO: clear values other than args
-            lvalues = generator.lvalues.copy()
-            # types = generator.module.get_types().copy()
-            generator.gscope = sys.modules[self.fn.__module__].__dict__
-            generator.lscope = dict()
-            ret = generator.visit_FunctionDef(self.parse().body[0], inline=True, arg_values=arg_values)
-            generator.gscope = gscope
-            generator.lscope = lscope
-
-            generator.lvalues = lvalues
-            # generator.module.set_types(types)
-
-            return ret
-        except Exception as e:
-            node = generator.last_node
-            if node is None or isinstance(e, (NotImplementedError, CompilationError)):
-                raise e
-            raise CompilationError(self.src, node) from e
+    def __call__(self, *args, **kwargs):
+        raise RuntimeError("Cannot call @triton.jit'd outside of the scope of a kernel.")
 
     # - when `.src` attribute is set, cache path needs
     #   to be reinitialized
@@ -1137,13 +1121,13 @@ class JITFunction:
         # create IR module
         context = _triton.ir.context()
         # get just-in-time proto-type of kernel
-        arg_types = [Kernel._to_triton_ir(arg) for arg in arg_types]
-        ret_type = triton.language.void
-        prototype = triton.language.function_type(ret_type, arg_types)
+        arg_types = [Kernel._to_triton_ir(context, arg) for arg in arg_types]
+        ret_type = _triton.ir.type.get_void(context)
+        prototype = _triton.ir.type.make_function(ret_type, arg_types)
         # generate Triton-IR
         # export symbols visible from self into code-generator object
         gscope = self.__globals__
-        generator = CodeGenerator(context, prototype, gscope=gscope, attributes=attributes, constants=constants, kwargs=dict())
+        generator = CodeGenerator(context, prototype, gscope=gscope, attributes=attributes, constants=constants, is_kernel=True)
         try:
             generator.visit(self.parse())
         except Exception as e:
@@ -1303,8 +1287,20 @@ def jit(*args, **kwargs):
             return JITFunction(fn, **kwargs)
         return decorator
 
+######
+
+# class ForwardDeclaration:
+
+#     def __init__(self, name, ret_ty, arg_tys) -> None:
+#         self.name = name
+#         self.ret_ty = ret_ty
+#         self.arg_tys = arg_tys
+
+# def forward_declare(name, ret_ty, arg_tys):
+#     return ForwardDeclaration(name, ret_ty, arg_tys)
 
 ######
+
 
 def cdiv(x, y):
     return (x + y - 1) // y

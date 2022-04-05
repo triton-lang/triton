@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #ifndef _TRITON_IR_TYPE_H_
 #define _TRITON_IR_TYPE_H_
@@ -15,6 +15,8 @@ class context;
 class value;
 class integer_type;
 class constant_int;
+
+enum class signedness { SIGNED, UNSIGNED };
 
 /* Type */
 class type {
@@ -59,6 +61,8 @@ public:
   // type attributes
   unsigned get_fp_mantissa_width() const;
   unsigned get_integer_bitwidth() const;
+  signedness get_integer_signedness() const;
+  bool is_integer_signed() const;
   unsigned get_tile_bitwidth() const;
   unsigned get_primitive_size_in_bits() const;
   type *get_scalar_ty() const;
@@ -69,6 +73,8 @@ public:
   type *get_tile_element_ty() const;
   unsigned get_pointer_address_space() const;
   type *get_pointer_element_ty() const;
+  unsigned get_struct_numel() const { return contained_tys_.size(); }
+  type *get_struct_type(unsigned int i) const { return contained_tys_[i]; }
 
   // primitive predicates
   bool is_void_ty() const               { return id_ == VoidTyID; }
@@ -81,9 +87,13 @@ public:
   bool is_metadata_ty() const           { return id_ == MetadataTyID; }
   bool is_token_ty() const              { return id_ == TokenTyID; }
   bool is_integer_ty() const            { return id_ == IntegerTyID; }
+  bool is_integer_ty(unsigned bitwidth, signedness sn) {
+    return is_integer_ty() && get_integer_bitwidth() == bitwidth && get_integer_signedness() == sn;
+  }
   bool is_bool_ty() const               { return is_integer_ty(1); }
   bool is_pointer_ty() const            { return id_ == PointerTyID; }
   bool is_block_ty() const               { return id_ == BlockTyID; }
+  bool is_struct_ty() const             { return id_ == StructTyID; }
 
   // Composite predicates
   bool is_int_or_tileint_ty();
@@ -108,6 +118,10 @@ public:
   static integer_type *get_int32_ty(context &ctx);
   static integer_type *get_int64_ty(context &ctx);
   static integer_type *get_int128_ty(context &ctx);
+  static integer_type *get_uint8_ty(context &ctx);
+  static integer_type *get_uint16_ty(context &ctx);
+  static integer_type *get_uint32_ty(context &ctx);
+  static integer_type *get_uint64_ty(context &ctx);
 
   // repr
   std::string tile_repr() const {
@@ -127,14 +141,14 @@ public:
     switch(id_) {
       case VoidTyID: return "void";
       case FP8TyID: return "fp8";
+      case BF16TyID: return "bf16";
       case FP16TyID: return "f16";
       case FP32TyID: return "f32";
       case FP64TyID: return "f64";
-      case BF16TyID: return "bf16";
       case LabelTyID: return "label";
       case MetadataTyID: return "md";
       case TokenTyID: return "tok";
-      case IntegerTyID: return ("i") + std::to_string(get_integer_bitwidth());
+      case IntegerTyID: return (is_integer_signed() ? "i" : "u") + std::to_string(get_integer_bitwidth());
       case FunctionTyID: return "fn";
       case PointerTyID: return get_pointer_element_ty()->repr() + "*";
       case StructTyID: return "struct";
@@ -157,18 +171,21 @@ class integer_type: public type {
 
 private:
   // constructors
-  integer_type(context &ctx, unsigned bitwidth)
-    : type(ctx, IntegerTyID), bitwidth_(bitwidth) {}
+  integer_type(context &ctx, unsigned bitwidth, signedness sn)
+    : type(ctx, IntegerTyID), bitwidth_(bitwidth), signedness_(sn){ }
 
 public:
   // accessors
   unsigned get_bitwidth() const { return bitwidth_; }
+
+  signedness get_signedness() const { return signedness_; }
 
   // factory methods
   static integer_type* get(context &ctx, unsigned width);
 
 private:
   unsigned bitwidth_;
+  signedness signedness_;
 };
 
 class composite_type: public type{
@@ -178,6 +195,16 @@ protected:
 public:
   bool index_valid(value *idx) const;
   type* get_type_at_index(value *idx) const;
+};
+
+class struct_type: public composite_type {
+public:
+  struct_type(const contained_tys_vec_t& tys, bool is_packed);
+  unsigned get_num_types() const { return contained_tys_.size(); }
+  static struct_type* get(const contained_tys_vec_t& tys, bool is_packed);
+
+private:
+  bool is_packed_;
 };
 
 class block_type: public composite_type {
@@ -228,6 +255,7 @@ public:
   ty_iterator       params_end()         { return contained_tys_.end(); }
   type*    get_param_ty(unsigned i) const { return contained_tys_.at(1 + i);   }
   type*    get_return_ty()          const { return contained_tys_.at(0);       }
+  void     reset_ret_ty(type* ty)         { contained_tys_[0] = ty;}
   // factory methods
   static function_type* get(type *ret_ty, const std::vector<type*>& param_tys);
 };

@@ -26,11 +26,13 @@ public:
   type fp8_ty, fp16_ty, bf16_ty, fp32_ty, fp64_ty;
   // integer types
   integer_type int1_ty, int8_ty, int16_ty, int32_ty, int64_ty, int128_ty;
+  integer_type uint8_ty, uint16_ty, uint32_ty, uint64_ty;
   // Pointer types
   std::map<std::pair<type*, unsigned>, std::unique_ptr<pointer_type>> ptr_tys;
   // Block types
   std::map<std::pair<type*, type::block_shapes_t>, std::unique_ptr<block_type>> block_tys;
-
+  // Struct types
+  std::map<type::contained_tys_vec_t, struct_type*> struct_tys;
   // Int constants
   std::map<std::pair<type*, uint64_t>, std::unique_ptr<constant_int>> int_constants_;
   // Float constants

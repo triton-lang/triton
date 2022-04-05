@@ -1,5 +1,6 @@
 #include <cassert>
 #include <iostream>
+#include <algorithm>
 #include "triton/ir/value.h"
 #include "triton/ir/instructions.h"
 
@@ -17,11 +18,11 @@ value::value(type *ty, const std::string &name): ty_(ty){
 }
 
 void value::add_use(user *arg) {
-  users_.insert(arg);
+  users_.push_back(arg);
 }
 
 value::users_t::iterator value::erase_use(user *arg){
-  auto it = users_.find(arg);
+  auto it = std::find(users_.begin(), users_.end(), arg);
   if(it == users_.end())
     return it;
   return users_.erase(it);
