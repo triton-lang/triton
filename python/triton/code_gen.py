@@ -425,22 +425,31 @@ class CodeGenerator(ast.NodeVisitor):
                 if loop_defs[name].type == liveins[name].type:
                     # these are loop-carried values
                     names.append(name)
-                    ret_types.append(loop_defs[name].type.to_ir(self.builder))
+                    ret_types.append(loop_defs[name].type)
                     init_args.append(liveins[name])
                     yields.append(loop_defs[name])
 
         self.builder.set_insertion_point_to_end(insert_block)
-        while_op = self.builder.create_while_op(ret_types, init_args)
+        while_op = self.builder.create_while_op([ty.to_ir(self.builder) for ty in ret_types],
+                                                [arg.handle for arg in init_args])
         # merge the condition region
-        before_block = self.builder.create_block_with_parent(while_op.get_before())
+        before_block = self.builder.create_block_with_parent(while_op.get_before(), 
+                                                             [ty.to_ir(self.builder) for ty in ret_types])
         cond_block.merge_block_before(before_block)
         self.builder.set_insertion_point_to_end(before_block)
-        self.builder.create_condtion_op(cond.handle, [])
+        # create CondtionOp: e.g., scf.condition(%cond) %arg0, %arg1, ...
+        self.builder.create_condtion_op(cond.handle, [before_block.arg(i) for i in range(len(init_args))])
         # merge the loop body
-        after_block = self.builder.create_block_with_parent(while_op.get_after())
+        after_block = self.builder.create_block_with_parent(while_op.get_after(),
+                                                            [ty.to_ir(self.builder) for ty in ret_types])
         loop_block.merge_block_before(after_block)
         self.builder.set_insertion_point_to_end(after_block)
         self.builder.create_yield_op([y.handle for y in yields])
+
+        # update global_uses in while_op
+        for i, name in enumerate(names):
+            before_block.replace_use_in_block_with(init_args[i].handle, before_block.arg(i))
+            after_block.replace_use_in_block_with(init_args[i].handle, after_block.arg(i))
 
         self.builder.set_insertion_point_to_end(insert_block)
         self.lscope = liveins
