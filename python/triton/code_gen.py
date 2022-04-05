@@ -241,9 +241,9 @@ class CodeGenerator(ast.NodeVisitor):
         ret = self.visit(node.value)
         if ret is None:
             return triton.language.tensor(None, triton.language.void)
-        if isinstance(ret, _triton.ir.value):
-            ret = self.builder.ret(ret)
-        return triton.language.core._to_tensor(ret, self.builder)
+        ret = triton.language.core._to_tensor(ret, self.builder)
+        ret = triton.language.tensor(self.builder.ret(ret.handle), ret.type)
+        return ret
 
     def visit_FunctionDef(self, node):
         arg_names, kwarg_names = self.visit(node.args)

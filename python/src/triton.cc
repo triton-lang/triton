@@ -781,6 +781,7 @@ void init_triton_ir(py::module &&m) {
       .def("br", &ir::builder::create_br, ret::reference)
       .def("cond_br", &ir::builder::create_cond_br, ret::reference)
       .def("ret_void", &ir::builder::create_ret_void, ret::reference)
+      .def("ret", &ir::builder::create_ret, ret::reference)
       // insertion block/point, insert points are represented as (*bb, *instr)
       .def("get_insert_block", &ir::builder::get_insert_block, ret::reference)
       .def("set_insert_block", (void (ir::builder::*)(ir::basic_block *)) & ir::builder::set_insert_point)
