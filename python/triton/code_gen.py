@@ -337,11 +337,11 @@ class CodeGenerator(ast.NodeVisitor):
             names = [names]
         if not isinstance(values, tuple):
             values = [values]
-        if isinstance(values[0], _triton.ir.value):
-            struct = values[0]
-            ty = struct.type
-            if ty.is_struct():
-                values = [self.builder.extract_value(struct, i) for i in range(ty.num_types)]
+        if isinstance(values[0].type, triton.language.tuple_type):
+            struct = values[0].handle
+            tys = values[0].type.element_types
+            values = [self.builder.extract_value(struct, i) for i in range(len(tys))]
+            values = [triton.language.tensor(v, ty) for v, ty in zip(values, tys)]
         assert len(values) == len(names)
         for name, value in zip(names, values):
             # TODO: can we store constexpr here to support constant folding?
@@ -377,12 +377,11 @@ class CodeGenerator(ast.NodeVisitor):
         # tuple of values -- create a struct
         if len(args) > 1 and mode == triton.language.tensor\
                 and all([type(arg) == mode for arg in args]):
-            args = [arg.handle for arg in args]
-            tys = [arg.type for arg in args]
-            struct_ty = _triton.ir.struct_type.get(tys, True)
-            ret = _triton.ir.undef.get(struct_ty)
+            tuple_ty = triton.language.tuple_type([arg.type for arg in args])
+            ret = _triton.ir.undef.get(tuple_ty.to_ir(self.builder))
             for i, arg in enumerate(args):
-                ret = self.builder.insert_value(ret, arg, i)
+                ret = self.builder.insert_value(ret, arg.handle, i)
+            ret = triton.language.tensor(ret, tuple_ty)
             return ret
         return tuple(args)
 
@@ -644,7 +643,7 @@ class CodeGenerator(ast.NodeVisitor):
                 self.prototypes[fn_name] = prototype
             symbol = self.module.get_function(fn_name)
             ret = self.builder.call(symbol, arg_vals)
-            if not ret.type.is_void() and not ret.type.is_struct():
+            if not ret.type.is_void():
                 ret = triton.language.tensor(ret, self.prototypes[fn_name].ret_type)
             return ret
         # built-in function

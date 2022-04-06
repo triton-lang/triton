@@ -932,6 +932,9 @@ void init_triton_ir(py::module &&m) {
       .def("create_sqrt", &ir::builder::create_sqrt, ret::reference)
       .def("create_reduce", &ir::builder::create_reduce, ret::reference)
       .def("create_select", &ir::builder::create_select, ret::reference)
+      // struct
+      .def("insert_value", &ir::builder::create_insert_value, ret::reference)
+      .def("extract_value", &ir::builder::create_extract_value, ret::reference)
       // Intrinsics
       // These have no place in the IR, and hopefully they can be removed at some point
       .def("create_umulhi", &ir::builder::create_umulhi, ret::reference)
