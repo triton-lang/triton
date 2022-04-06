@@ -204,8 +204,8 @@ class ValueConstructor:
 
 class CodeGenerator(ast.NodeVisitor):
 
-    def __init__(self, context, prototype, gscope, attributes, constants, module=None, is_kernel=False):
-        self.prototypes = dict()
+    def __init__(self, context, prototype, gscope, attributes, constants, prototypes=None, module=None, is_kernel=False):
+        self.prototypes = dict() if prototypes is None else prototypes
         self.builder = _triton.ir.builder(context)
         self.module = _triton.ir.module('', self.builder) if module is None else module
         self.prototype = prototype
@@ -262,6 +262,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.visit(init_node)
         # initialize function
         fn_name = mangle_fn(node.name, self.prototype.param_types, self.constants)
+        self.prototypes[fn_name] = self.prototype
         fn = self.module.get_or_insert_function(fn_name, self.prototype.to_ir(self.builder))
         fn.set_is_kernel(self.is_kernel)
         arg_values = []
@@ -641,9 +642,8 @@ class CodeGenerator(ast.NodeVisitor):
                 ret_type = triton.language.void
                 prototype = triton.language.function_type(ret_type, arg_types)
                 gscope = sys.modules[fn.fn.__module__].__dict__
-                generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module)
+                generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, prototypes=self.prototypes, module=self.module)
                 generator.visit(fn.parse())
-                self.prototypes[fn_name] = prototype
             symbol = self.module.get_function(fn_name)
             ret = self.builder.call(symbol, arg_vals)
             if not ret.type.is_void():
