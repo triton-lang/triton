@@ -1047,13 +1047,13 @@ def stub(X, alpha, grid_0, grid_1, grid_2):
     tl.launch(mult, [X, alpha], [grid_0, grid_1, grid_2])
 
 
-def test_dyn_par(cond=True, device='cuda'):
-    n_pids = 10
-    # pids = torch.arange(n_pids, device=device)
-    # alpha = 2.0
-    # x_ref = pids * alpha
-    x_tri = torch.full((10,), fill_value=-1., device=device)
-    # cond = torch.tensor([cond], device=device)
-    stub[(1,)](x_tri, 3.14, n_pids, 1, 1)
-    print(x_tri)
-    # triton.testing.assert_almost_equal(x_ref, x_tri)
+# def test_dyn_par(cond=True, device='cuda'):
+#     n_pids = 10
+#     # pids = torch.arange(n_pids, device=device)
+#     # alpha = 2.0
+#     # x_ref = pids * alpha
+#     x_tri = torch.full((10,), fill_value=-1., device=device)
+#     # cond = torch.tensor([cond], device=device)
+#     stub[(1,)](x_tri, 3.14, n_pids, 1, 1)
+#     print(x_tri)
+#     # triton.testing.assert_almost_equal(x_ref, x_tri)
