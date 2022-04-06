@@ -23,26 +23,26 @@ import triton._C.libtriton.triton as _triton
 from .tools.disasm import extract
 
 
-def mangle_ty(type):
-    if type.is_ptr():
-        return 'P' + mangle_ty(type.element_ty)
-    if type.is_int():
-        return 'i' + str(type.int_bitwidth)
-    if type.is_fp8():
+def mangle_ty(ty):
+    if ty.is_ptr():
+        return 'P' + mangle_ty(ty.element_ty)
+    if ty.is_int():
+        return 'i' + str(ty.int_bitwidth)
+    if ty.is_fp8():
         return 'fp8'
-    if type.is_fp16():
+    if ty.is_fp16():
         return 'fp16'
-    if type.is_bf16():
+    if ty.is_bf16():
         return 'bf16'
-    if type.is_fp32():
+    if ty.is_fp32():
         return 'fp32'
-    if type.is_fp64():
+    if ty.is_fp64():
         return 'fp64'
-    if type.is_void():
+    if ty.is_void():
         return 'V'
-    if type.is_block():
-        elt = mangle_ty(type.scalar)
-        shape = '_'.join(map(str, type.shape))
+    if ty.is_block():
+        elt = mangle_ty(ty.scalar)
+        shape = '_'.join(map(str, ty.shape))
         return f'{elt}S{shape}S'
     assert False, "Unsupport type"
 
@@ -71,6 +71,16 @@ class ValueConstructor:
         # bb => {name => phi}
         self.incomplete_phis = {}
         self.sealed_blocks: Set[_triton.ir.basic_block] = set()
+        #
+        self.builtins = {
+            'range': range,
+            'min': triton.language.minimum,
+            'float': float,
+            'int': int,
+            'print': print,
+            'isinstance': isinstance,
+            'getattr': getattr,
+        }
 
     def get_value(self, name):
         ''' This function:
@@ -203,15 +213,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.constants = constants
         self.last_node = None
         self.is_kernel = is_kernel
-        self.builtins = {
-            'range': range,
-            'min': triton.language.minimum,
-            'float': float,
-            'int': int,
-            'print': print,
-            'isinstance': isinstance,
-            'getattr': getattr,
-        }
+        
         self.value_constructor = ValueConstructor(self.module, self.builder, gscope)
 
 
@@ -240,7 +242,7 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Return(self, node):
         ret = self.visit(node.value)
         if ret is None:
-            return triton.language.tensor(None, triton.language.void)
+            return triton.language.tensor(self.builder.ret_void(), triton.language.void)
         ret = triton.language.core._to_tensor(ret, self.builder)
         ret = triton.language.tensor(self.builder.ret(ret.handle), ret.type)
         return ret
@@ -540,7 +542,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_For(self, node):
         iterator = self.visit(node.iter.func)
-        if iterator != self.builtins['range']:
+        if iterator != self.value_constructor.builtins['range']:
             raise RuntimeError('Only `range` iterator currently supported')
         # static for loops: all iterator arguments are constexpr
         iter_args = [self.visit(arg) for arg in node.iter.args]
@@ -650,7 +652,7 @@ class CodeGenerator(ast.NodeVisitor):
         # built-in function
         if sys.modules[fn.__module__] is triton.language.core:
             ret = fn(*args, _builder=self.builder, **kws)
-        if fn in self.builtins.values():
+        if fn in self.value_constructor.builtins.values():
             args = [arg.value if isinstance(arg, triton.language.constexpr) else arg
                     for arg in args]
             ret = fn(*args, **kws)

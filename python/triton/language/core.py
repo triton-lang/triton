@@ -139,7 +139,7 @@ class dtype:
         return self.is_int1()
 
     def is_void(self):
-        raise RuntimeError("Not implemented")
+        return self.name == 'void'
 
     def is_block(self):
         return False
