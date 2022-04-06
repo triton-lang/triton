@@ -41,10 +41,8 @@ public:
   iterator get_insert_point() { return insert_point_;}
   // Constants
   value *get_int1(bool val);
-  value *get_int32(int32_t val);
-  value *get_int64(int64_t val);
-  value *get_uint32(uint32_t val);
-  value *get_uint64(uint64_t val);
+  value *get_int32(uint32_t val);
+  value *get_int64(uint64_t val);
   value *get_float16(float val);
   value *get_float32(float val);
   value *get_range(int32_t lo, int32_t hi);
@@ -55,11 +53,9 @@ public:
   type *get_int16_ty();
   type *get_int32_ty();
   type *get_int64_ty();
-  type *get_uint8_ty();
-  type *get_uint16_ty();
-  type *get_uint32_ty();
-  type *get_uint64_ty();
+  type *get_fp8_ty();
   type *get_half_ty();
+  type *get_bf16_ty();
   type *get_float_ty();
   type *get_double_ty();
   // Insert
@@ -78,7 +74,9 @@ public:
   value* create_ret_void();
   value* create_ret(value *ret);
   // Cast instructions
+  value* create_bitcast(value *src, type *dest_ty);
   value *create_cast(cast_op_t op, value *v, type *dst_ty);
+  value* create_int_to_ptr(value *src, type *dst_ty);
   value* create_ptr_to_int(value *src, type *dst_ty);
   value* create_si_to_fp(value *src, type *dst_ty);
   value* create_ui_to_fp(value *src, type *dst_ty);
@@ -100,11 +98,11 @@ public:
   value *create_frem(value *lhs, value *rhs);
   value *create_fadd(value *lhs, value *rhs);
   value *create_fsub(value *lhs, value *rhs);
-  value *create_mul(value *lhs, value *rhs, bool has_nuw = false, bool has_nsw = false);
   value *create_sdiv(value *lhs, value *rhs);
   value *create_udiv(value *lhs, value *rhs);
   value *create_srem(value *lhs, value *rhs);
   value *create_urem(value *lhs, value *rhs);
+  value *create_mul(value *lhs, value *rhs, bool has_nuw = false, bool has_nsw = false);
   value *create_add(value *lhs, value *rhs, bool has_nuw = false, bool has_nsw = false);
   value *create_sub(value *lhs, value *rhs, bool has_nuw = false, bool has_nsw = false);
   value *create_shl(value *lhs, value *rhs, bool has_nuw = false, bool has_nsw = false);
@@ -155,11 +153,25 @@ public:
   value *create_reshape(value *arg, const type::block_shapes_t &shapes);
   value *create_cat(value *lhs, value *rhs);
   value *create_broadcast(value *arg, const type::block_shapes_t &shapes);
+  // Atomic instruction
+  value *create_atomic_cas(value *ptr, value *cmp, value *val);
+  value *create_atomic_rmw(atomic_rmw_op_t op, value *ptr, value *val, value *msk);
+  value *create_atomic_max(value *ptr, value *val, value *msk);
+  value *create_atomic_umax(value *ptr, value *val, value *msk);
+  value *create_atomic_min(value *ptr, value *val, value *msk);
+  value *create_atomic_umin(value *ptr, value *val, value *msk);
+  value *create_atomic_fadd(value *ptr, value *val, value *msk);
+  value *create_atomic_add(value *ptr, value *val, value *msk);
+  value *create_atomic_and(value *ptr, value *val, value *msk);
+  value *create_atomic_or(value *ptr, value *val, value *msk);
+  value *create_atomic_xor(value *ptr, value *val, value *msk);
+  value *create_atomic_xchg(value *ptr, value *val, value *msk);
+  // Utilities
+  value *create_clock();
+  value *create_globaltimer();
   // Built-in instruction
   value *create_get_program_id(unsigned axis);
   value *create_get_num_programs(unsigned axis);
-  value *create_atomic_cas(value *ptr, value *cmp, value *val);
-  value *create_atomic_rmw(ir::atomic_rmw_op_t op, value *ptr, value *val, value *msk);
   value *create_exp(value* arg);
   value *create_cos(value* arg);
   value *create_sin(value* arg);
