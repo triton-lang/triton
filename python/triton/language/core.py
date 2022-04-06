@@ -1203,14 +1203,14 @@ def zeros_like(input):
 # -----------------------
 
 
-class LaunchProxy:
+# class LaunchProxy:
 
-    def __init__(self, fn, args, constants, grid, num_warps) -> None:
-        self.args = args
-        self.grid = grid
-        self.constants = constants
-        self.num_warps = num_warps
-        self.fn = fn
+#     def __init__(self, fn, args, constants, grid, num_warps) -> None:
+#         self.args = args
+#         self.grid = grid
+#         self.constants = constants
+#         self.num_warps = num_warps
+#         self.fn = fn
 
 
 # @builtin
