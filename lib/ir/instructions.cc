@@ -377,8 +377,8 @@ cast_inst *cast_inst::create_integer_cast(value *arg, type *ty, bool is_signed, 
   unsigned arg_bits = arg_ty->get_scalar_ty()->get_integer_bitwidth();
   unsigned dst_bits = ty->get_scalar_ty()->get_integer_bitwidth();
   cast_op_t op = (arg_bits == dst_bits ? cast_op_t::BitCast :
-            (arg_bits > dst_bits  ? cast_op_t::Trunc :
-            (is_signed            ? cast_op_t::SExt : cast_op_t::ZExt)));
+                   (arg_bits > dst_bits  ? cast_op_t::Trunc :
+                   (is_signed            ? cast_op_t::SExt : cast_op_t::ZExt)));
   return create(op, arg, ty, name, next);
 }
 

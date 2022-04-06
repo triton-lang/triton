@@ -36,7 +36,6 @@ class alloc_const;
 
 class value_constructor {
   typedef std::pair<std::string, basic_block*> val_key_t;
-  typedef std::pair<ir::metadata::kind_t, unsigned> md_pair_t;
 
 private:
   phi_node *make_phi(type *ty, unsigned num_values, basic_block *block);
@@ -57,7 +56,6 @@ public:
   // Seal block -- no more predecessors will be added
   void seal_block(basic_block *block);
   // Metadata
-  void add_metadata(const std::string &name, md_pair_t x)     { metadatas_[name] = x; }
 
 private:
   ir::builder& builder_;
@@ -66,13 +64,13 @@ private:
   std::set<basic_block*> sealed_blocks_;
   std::map<basic_block*, std::map<std::string, phi_node*>> incomplete_phis_;
   std::map<value*, value**> current_phi_;
-  std::map<std::string, md_pair_t> metadatas_;
 };
 
 /* Module */
 
 class module {
   typedef std::pair<std::string, basic_block*> val_key_t;
+  typedef std::pair<ir::metadata::kind_t, unsigned> md_pair_t;
   friend class function;
 
 public:
@@ -83,13 +81,10 @@ private:
   void push_function(function *fn) { functions_.push_back(fn); }
 
 public:
-  module(const std::string &name, builder& builder);
-  builder& get_builder();
-  // Setters
-  void set_continue_fn(std::function<ir::value*()> fn);
-  // Getters
-  const std::string& get_name();
-  std::function<ir::value*()> get_continue_fn();
+  module(const std::string &name, builder &builder): name_(name), builder_(builder) {}
+  builder &get_builder() { return builder_; };
+  const std::string& get_name() { return name_; };
+
   // Functions
   const functions_list_t &get_function_list() const { return functions_; }
   functions_list_t &get_function_list()             { return functions_; }
@@ -114,17 +109,19 @@ public:
   // Register global
   void register_global(const std::string& name, ir::value *x) { globals_[name] = x; }
   const std::map<std::string, ir::value*>& globals() const    { return globals_; }
-  //
+  // Metadata
   void print(std::ostream &os);
+  void add_metadata(const std::string &name, md_pair_t x)     { metadatas_[name] = x; }
+  const std::map<std::string, md_pair_t> &get_metadatas() const { return metadatas_; }
 
 private:
   std::string name_;
-  builder& builder_;
+  builder &builder_;
   functions_list_t functions_;
   symbols_map_t symbols_;
-  std::function<ir::value*()> continue_fn_;
   std::vector<ir::alloc_const*> allocs_;
   std::map<std::string, ir::value*> globals_;
+  std::map<std::string, md_pair_t> metadatas_;
 };
 
 }
