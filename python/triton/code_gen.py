@@ -337,7 +337,8 @@ class CodeGenerator(ast.NodeVisitor):
             names = [names]
         if not isinstance(values, tuple):
             values = [values]
-        if isinstance(values[0].type, triton.language.tuple_type):
+        if isinstance(values[0], triton.language.tensor) \
+            and isinstance(values[0].type, triton.language.tuple_type):
             struct = values[0].handle
             tys = values[0].type.element_types
             values = [self.builder.extract_value(struct, i) for i in range(len(tys))]
