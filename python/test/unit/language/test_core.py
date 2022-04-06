@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 import torch
 from numpy.random import RandomState
+from triton.code_gen import JITFunction
 
 import triton
 import triton._C.libtriton.triton as _triton
@@ -992,11 +993,16 @@ def test_noop(device='cuda'):
 
 
 @pytest.mark.parametrize("value, value_type", [
-    (-1, 'i32'), (0, 'i32'), (1, None), (-2**31, 'i32'), (2**31 - 1, 'i32'),
+    (-1, 'i32'), (0, 'i32'), (-2**31, 'i32'), (2**31 - 1, 'i32'),
     (2**31, 'u32'), (2**32 - 1, 'u32'), (2**32, 'i64'), (2**63 - 1, 'i64'),
     (-2**63, 'i64'), (2**63, 'u64'), (2**64 - 1, 'u64')
 ])
 def test_value_specialization(value: int, value_type: str, device='cuda') -> None:
+    spec_type = None
+    def cache_hook(*args, **kwargs):
+        nonlocal spec_type
+        spec_type = kwargs["compile"]["arg_types"][0][1] 
+    JITFunction.cache_hook = cache_hook
 
     @triton.jit
     def kernel(VALUE, X):
@@ -1005,12 +1011,8 @@ def test_value_specialization(value: int, value_type: str, device='cuda') -> Non
     x = torch.tensor([3.14159], device='cuda')
     pgm = kernel[(1, )](value, x)
 
-    # Parse out the type of the 'VALUE' parameter from the Triton IR.
-    triton_ir = pgm.asm['ttir']
-    ir_value_match = re.match(r'\s*def void (\w+)\((\w+) VALUE ', triton_ir)
-    ir_value_type = None if ir_value_match is None else ir_value_match.group(2)
-    assert ir_value_type == value_type
-
+    JITFunction.cache_hook = None
+    assert spec_type == value_type
 
 @pytest.mark.parametrize(
     "value, overflow",
