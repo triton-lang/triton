@@ -998,9 +998,10 @@ def test_noop(device='cuda'):
 ])
 def test_value_specialization(value: int, value_type: str, device='cuda') -> None:
     spec_type = None
+
     def cache_hook(*args, **kwargs):
         nonlocal spec_type
-        spec_type = kwargs["compile"]["arg_types"][0][1] 
+        spec_type = kwargs["compile"]["arg_types"][0][1]
     JITFunction.cache_hook = cache_hook
 
     @triton.jit
@@ -1012,6 +1013,7 @@ def test_value_specialization(value: int, value_type: str, device='cuda') -> Non
 
     JITFunction.cache_hook = None
     assert spec_type == value_type
+
 
 @pytest.mark.parametrize(
     "value, overflow",

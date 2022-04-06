@@ -125,7 +125,7 @@ class dtype:
 
     def is_uint64(self):
         return self.name == 'uint64'
-    
+
     def is_floating(self):
         return self.name in dtype.FP_TYPES
 
@@ -286,6 +286,7 @@ class function_type(dtype):
         ir_param_types = [ty.to_ir(builder) for ty in self.param_types]
         return ir.type.make_function(self.ret_type.to_ir(builder), ir_param_types)
 
+
 class tuple_type(dtype):
     def __init__(self, element_types: List[dtype]) -> None:
         self.element_types = element_types
@@ -296,6 +297,7 @@ class tuple_type(dtype):
     def to_ir(self, builder: ir.builder):
         ir_element_types = [ty.to_ir(builder) for ty in self.element_types]
         return ir.struct_type.get(ir_element_types, True)
+
 
 # scalar types
 void = dtype('void')

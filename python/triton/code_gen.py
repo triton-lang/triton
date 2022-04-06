@@ -57,11 +57,13 @@ def mangle_fn(name, arg_tys, constants):
     ret = f'{name}__{mangled_arg_names}__{mangled_constants}'
     return ret
 
+
 def is_triton_tensor(value):
     return isinstance(value, triton.language.tensor)
 
+
 class ValueConstructor:
-    def __init__(self, module, builder, gscope)-> None:
+    def __init__(self, module, builder, gscope) -> None:
         self.gscope = gscope
         self.lscope = dict()
         self.builder = builder
@@ -200,8 +202,6 @@ class ValueConstructor:
         return triton.language.tensor(v, phi.type)
 
 
-
-
 class CodeGenerator(ast.NodeVisitor):
 
     def __init__(self, context, prototype, gscope, attributes, constants, prototypes=None, module=None, is_kernel=False):
@@ -213,21 +213,19 @@ class CodeGenerator(ast.NodeVisitor):
         self.constants = constants
         self.last_node = None
         self.is_kernel = is_kernel
-        
-        self.value_constructor = ValueConstructor(self.module, self.builder, gscope)
 
+        self.value_constructor = ValueConstructor(self.module, self.builder, gscope)
 
     #
     # AST visitor
     #
+
     def visit_compound_statement(self, stmts):
         for stmt in stmts:
             self.last_ret = self.visit(stmt)
             if isinstance(stmt, ast.Return):
                 break
         return stmts and isinstance(stmt, ast.Return)
-
-
 
     def visit_Module(self, node):
         ast.NodeVisitor.generic_visit(self, node)
@@ -341,7 +339,7 @@ class CodeGenerator(ast.NodeVisitor):
         if not isinstance(values, tuple):
             values = [values]
         if isinstance(values[0], triton.language.tensor) \
-            and isinstance(values[0].type, triton.language.tuple_type):
+                and isinstance(values[0].type, triton.language.tuple_type):
             struct = values[0].handle
             tys = values[0].type.element_types
             values = [self.builder.extract_value(struct, i) for i in range(len(tys))]
