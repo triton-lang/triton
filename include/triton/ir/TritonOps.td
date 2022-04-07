@@ -195,6 +195,10 @@ def TT_GetNumProgramsOp : TT_Op<"get_num_programs"> {
 def TT_DotOp : TT_Op<"dot", [NoSideEffect, SameOperandsAndResultShape]> {
     let summary = "dot";
 
+    let description = [{
+        $d = matrix_multiply($a, $b) + $c
+    }];
+
     let arguments = (ins TT_FpIntTensor:$a, TT_FpIntTensor:$b, TT_FpIntTensor:$c);
 
     let results = (outs TT_FpIntTensor:$d);
@@ -278,6 +282,12 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas"> {
 // TODO: should have ConstantLike as Trait
 def TT_MakeRangeOp : TT_Op<"make_range", [NoSideEffect]> {
     let summary = "make range";
+
+    let description = [{
+        Returns an 1D int32 tensor.
+
+        Values span from $start to $end (exclusive), with step = 1
+    }];
 
     let arguments = (ins I32Attr:$start, I32Attr:$end);
 
