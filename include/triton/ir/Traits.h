@@ -25,6 +25,9 @@ public:
         if (numElements > 1048576)
           return op->emitError("Maximum allowed number of elements is 1048576, but ")
                  << *op << " has more than that";
+        if ((numElements & (numElements - 1)) != 0)
+          return op->emitError("Number of elements must be power-of-two, but ")
+                 << *op << " doesn't follow the rule";
       }
     }
 
@@ -36,6 +39,9 @@ public:
         if (numElements > 1048576)
           return op->emitError("Maximum allowed number of elements is 1048576, but ")
                  << *op << " has more than that";
+        if ((numElements & (numElements - 1)) != 0)
+          return op->emitError("Number of elements must be power-of-two, but ")
+                 << *op << " doesn't follow the rule";
       }
     }
 
