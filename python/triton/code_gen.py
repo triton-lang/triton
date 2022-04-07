@@ -502,6 +502,10 @@ class CodeGenerator(ast.NodeVisitor):
         ub = triton.language.core._to_tensor(ub, self.builder).handle
         step = triton.language.core._to_tensor(step, self.builder).handle
 
+        lb = self.builder.create_to_index(lb)
+        ub = self.builder.create_to_index(ub)
+        step = self.builder.create_to_index(step)
+
         insert_block = self.builder.get_insertion_block()
 
         block = self.builder.create_block()
@@ -1210,8 +1214,8 @@ class JITFunction:
         context.load_triton()
         # get just-in-time proto-type of kernel
         arg_types = [Kernel._to_triton_ir(arg) for arg in arg_types]
-        ret_type = triton.language.void
-        prototype = triton.language.function_type([ret_type], arg_types)
+        ret_types = []
+        prototype = triton.language.function_type(ret_types, arg_types)
         # generate Triton-IR
         # export symbols visible from self into code-generator object
         gscope = self.__globals__

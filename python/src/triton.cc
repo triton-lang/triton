@@ -964,6 +964,11 @@ void init_triton_ir(py::module &&m) {
       })
       // .def("create_int_cast", &ir::builder::create_int_cast)
       // .def("create_downcast", &ir::builder::create_downcast)
+      .def("create_to_index", [](mlir::OpBuilder &self, mlir::Value &input) -> mlir::Value {
+        auto loc = self.getUnknownLoc();
+        return self.create<mlir::arith::IndexCastOp>(loc, input, self.getIndexType());
+      })
+
       .def("create_fmul", [](mlir::OpBuilder &self, mlir::Value &lhs, mlir::Value &rhs) -> mlir::Value {
         auto loc = self.getUnknownLoc();
         return self.create<mlir::arith::MulFOp>(loc, lhs, rhs);
