@@ -39,11 +39,12 @@ def TT_Tensor : AnyTypeOf<[TT_FpIntTensor, TT_PtrTensor]>;
 def TT_Type : AnyTypeOf<[TT_Float, TT_FloatTensor, TT_Int, TT_IntegerTensor, 
                          TT_AnyPtr, TT_PtrTensor]>;
 
+def TensorSizeTrait : NativeOpTrait<"TensorSizeTrait">;
 //
 // Op Base
 //
 class TT_Op<string mnemonic, list<Trait> traits = []> :
-    Op<Triton_Dialect, mnemonic, traits>;
+    Op<Triton_Dialect, mnemonic, !listconcat(traits, [TensorSizeTrait])>;
 
 //
 // CastOps
@@ -136,6 +137,8 @@ def TT_StoreOp : TT_Op<"store", [SameOperandsShape]> {
         // for args with default values
         OpBuilder<(ins "Value":$ptr, "Value":$value)>,
     ];
+
+    // let assemblyFormat = "$ptr `,` $value `,` $mask `,` attr-dict";
 }
 
 def TT_GEPOp : TT_Op<"getelementptr", [NoSideEffect, SameOperandsAndResultShape]> {
@@ -179,6 +182,8 @@ def TT_GetProgramIdOp : TT_Op<"get_program_id"> {
     let arguments = (ins I32Attr:$axis);
 
     let results = (outs I32:$result);
+
+    let assemblyFormat = "attr-dict `:` type($result)";
 }
 
 def TT_GetNumProgramsOp : TT_Op<"get_num_programs"> {
@@ -277,6 +282,8 @@ def TT_MakeRangeOp : TT_Op<"make_range", [NoSideEffect]> {
     let arguments = (ins I32Attr:$start, I32Attr:$end);
 
     let results = (outs TT_IntegerTensor:$result);
+
+    let assemblyFormat = "attr-dict `:` type($result)";
 }
 
 #endif // Triton_OPS

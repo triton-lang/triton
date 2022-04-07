@@ -1,6 +1,8 @@
 #ifndef TRITON_IR_DIALECT_H_
 #define TRITON_IR_DIALECT_H_
 
+#include "triton/ir/Traits.h"
+
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
