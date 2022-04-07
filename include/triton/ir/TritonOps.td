@@ -156,7 +156,7 @@ def TT_GEPOp : TT_Op<"getelementptr", [NoSideEffect, SameOperandsAndResultShape]
 def TT_ReshapeOp : TT_Op<"reshape", [SameOperandsAndResultElementType]> {
     let summary = "reshape";
 
-    let arguments = (ins TT_Tensor:$src, I64ArrayAttr:$shape);
+    let arguments = (ins TT_Tensor:$src);
 
     let results = (outs TT_Tensor:$result);
 }

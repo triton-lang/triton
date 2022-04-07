@@ -1192,7 +1192,7 @@ void init_triton_ir(py::module &&m) {
         auto loc = self.getUnknownLoc();
         auto argType = arg.getType().dyn_cast<mlir::RankedTensorType>().getElementType();
         return self.create<mlir::triton::ReshapeOp>(
-          loc, mlir::RankedTensorType::get(shape, argType), arg, self.getI64ArrayAttr(shape)
+          loc, mlir::RankedTensorType::get(shape, argType), arg
         );
       })
       .def("create_cat", [](mlir::OpBuilder &self, mlir::Value &lhs, mlir::Value &rhs) -> mlir::Value {
