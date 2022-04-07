@@ -24,6 +24,7 @@ from .tools.disasm import extract
 
 current_stream = lambda device: torch.cuda.current_stream(device).cuda_stream
 
+
 def mangle_ty(ty):
     if ty.is_ptr():
         return 'P' + mangle_ty(ty.element_ty)
@@ -932,8 +933,8 @@ class Kernel:
         cache_key = self.fn.cache_key + cc
         # query current stream
         stream = current_stream(device)
-        return _triton.runtime.launch(wargs, self.fn.do_not_specialize, cache_key, self.fn.arg_names, 
-                                      device, stream, self.fn.bin_cache, num_warps, num_stages, self.add_to_cache, 
+        return _triton.runtime.launch(wargs, self.fn.do_not_specialize, cache_key, self.fn.arg_names,
+                                      device, stream, self.fn.bin_cache, num_warps, num_stages, self.add_to_cache,
                                       grid)
 
 
