@@ -690,18 +690,6 @@ void init_triton_ir(py::module &&m) {
       })
       ;
 
-  // py::class_<mlir::ModuleOp>(m, "module")
-  //     .def(py::init<std::string, ir::builder &>())
-  //     .def("set_instr_metadata", [](ir::module *self, const std::string &name, ir::value *value) {
-  //       const auto metadatas = self->get_metadatas();
-  //       auto it = metadatas.find(name);
-  //       if (it != metadatas.end())
-  //         if (auto *instr = dynamic_cast<ir::instruction*>(value)) {
-  //           instr->set_metadata(it->second.first, it->second.second);
-  //         }
-  //     })
-  //     .def("get_or_insert_function", &ir::module::get_or_insert_function, ret::reference);
-
   // using eattr = ir::attribute_kind_t;
   // py::enum_<eattr>(m, "attribute_kind")
   //     .value("readonly", eattr::readonly)
@@ -714,19 +702,6 @@ void init_triton_ir(py::module &&m) {
 
   // py::class_<mlir::Attribute>(m, "attribute");
   //     // .def(py::init<eattr, int>());
-
-  py::class_<mlir::FuncOp>(m, "function")
-      // .def_property_readonly("args", &ir::function::args)
-      // .def_property_readonly("attrs", &ir::function::attrs)
-      // .def("add_attr", &ir::function::add_attr);
-      .def("args", [](mlir::FuncOp &self, unsigned idx) -> mlir::BlockArgument {
-        return self.getArgument(idx);
-      })
-      .def("add_entry_block", [](mlir::FuncOp &self) -> mlir::Block* {
-        return self.addEntryBlock();
-      }, ret::reference)
-      .def("dump", [](mlir::FuncOp &self) { self.dump(); })
-      ;
 
   // Ops
   py::class_<mlir::OpState>(m, "OpState")
@@ -769,6 +744,17 @@ void init_triton_ir(py::module &&m) {
     .def("push_back", [](mlir::ModuleOp &self, mlir::FuncOp &funcOp) -> void {
       self.push_back(funcOp);
     })
+    ;
+
+  py::class_<mlir::FuncOp, mlir::OpState>(m, "function")
+    // .def_property_readonly("attrs", &ir::function::attrs)
+    // .def("add_attr", &ir::function::add_attr);
+    .def("args", [](mlir::FuncOp &self, unsigned idx) -> mlir::BlockArgument {
+      return self.getArgument(idx);
+    })
+    .def("add_entry_block", [](mlir::FuncOp &self) -> mlir::Block* {
+      return self.addEntryBlock();
+    }, ret::reference)
     ;
 
   py::class_<mlir::OpBuilder::InsertPoint>(m, "InsertPoint");
