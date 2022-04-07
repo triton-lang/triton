@@ -24,7 +24,7 @@ def TT_Float : AnyTypeOf<[F16, BF16, F32, F64], "floating-point">;
 def TT_FloatTensor : TensorOf<[TT_Float]>;
 
 // IntegerType
-def TT_Int : AnyTypeOf<[I8, I16, I32, I64], "integer">;
+def TT_Int : AnyTypeOf<[I1, I8, I16, I32, I64], "integer">;
 def TT_IntegerTensor : TensorOf<[TT_Int]>;
 def TT_I1Tensor : TensorOf<[I1]>;
 
@@ -194,7 +194,7 @@ def TT_GetNumProgramsOp : TT_Op<"get_num_programs"> {
     let results = (outs I32:$result);
 }
 
-def TT_DotOp : TT_Op<"dot", [NoSideEffect, SameOperandsAndResultShape]> {
+def TT_DotOp : TT_Op<"dot", [NoSideEffect]> {
     let summary = "dot";
 
     let description = [{
