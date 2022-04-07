@@ -123,8 +123,10 @@ def TT_LoadOp : TT_Op<"load", [SameOperandsAndResultShape]> {
 
     let builders = [
         // for args with default values
-        OpBuilder<(ins "Value":$ptr)>,
-        OpBuilder<(ins "Value":$ptr, "Value":$mask)>
+        OpBuilder<(ins "Value":$ptr, "triton::CacheModifier":$cache,
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+        OpBuilder<(ins "Value":$ptr, "Value":$mask, "triton::CacheModifier":$cache,
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>
     ];
 }
 
@@ -199,7 +201,7 @@ def TT_DotOp : TT_Op<"dot", [NoSideEffect, SameOperandsAndResultShape]> {
         $d = matrix_multiply($a, $b) + $c
     }];
 
-    let arguments = (ins TT_FpIntTensor:$a, TT_FpIntTensor:$b, TT_FpIntTensor:$c);
+    let arguments = (ins TT_FpIntTensor:$a, TT_FpIntTensor:$b, TT_FpIntTensor:$c, BoolAttr:$allowTF32);
 
     let results = (outs TT_FpIntTensor:$d);
 }
