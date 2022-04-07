@@ -6,6 +6,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Verifier.h"
 
 #include "triton/ir/Dialect.h"
 #include "triton/ir/Types.h"
@@ -741,6 +742,9 @@ void init_triton_ir(py::module &&m) {
       .def("dump", [](mlir::OpState &self) { self->dump(); })
       .def("append_operand", [](mlir::OpState &self, mlir::Value &val) {
         self->insertOperands(self->getNumOperands(), val);
+      })
+      .def("verify", [](mlir::OpState &self) -> bool {
+        return mlir::succeeded(mlir::verify(self.getOperation()));
       })
       ;
   // scf Ops
