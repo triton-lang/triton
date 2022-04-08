@@ -35,6 +35,8 @@ def Triton_Dialect : Dialect {
     // "func::FuncDialect"
   ];
 
+  // let useDefaultTypePrinterParser = 0;
+
   let extraClassDeclaration = [{
     void registerTypes();
   }];
