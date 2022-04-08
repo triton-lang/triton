@@ -1,55 +1,38 @@
 #include "triton/ir/Dialect.h"
 #include "triton/ir/Types.h"
+#include "mlir/IR/DialectImplementation.h" // required by `Types.cpp.inc`
+#include "llvm/ADT/TypeSwitch.h" // required by `Types.cpp.inc`
 
 using namespace mlir;
 using namespace mlir::triton;
 
-// F8 & BF8
-Float8Type Float8Type::get(MLIRContext *context) {
-  return Base::get(context);
-}
-
-BFloat8Type BFloat8Type::get(MLIRContext *context) {
-  return Base::get(context);
-}
-
-//===----------------------------------------------------------------------===//
-// PointerType
-//===----------------------------------------------------------------------===//
-struct triton::detail::PointerTypeStorage : public TypeStorage {
-  using KeyTy = std::pair<Type, unsigned>;
-
-  static PointerTypeStorage *construct(TypeStorageAllocator &allocator,
-                                       const KeyTy &key) {
-    return new (allocator.allocate<PointerTypeStorage>()) PointerTypeStorage(key);
-  }
-
-  bool operator==(const KeyTy &key) const {
-    return key == KeyTy(pointeeType, addressSpace);
-  }
-
-  PointerTypeStorage(const KeyTy &key)
-      : pointeeType(key.first), addressSpace(key.second) {}
-
-  Type pointeeType;
-  unsigned addressSpace;
-};
-
-PointerType PointerType::get(Type pointeeType) {
-  return Base::get(pointeeType.getContext(), pointeeType, 0);
-}
-
-PointerType PointerType::get(Type pointeeType, unsigned addressSpace) {
-    return Base::get(pointeeType.getContext(), pointeeType, addressSpace);
-}
-
-Type PointerType::getPointeeType() const  { return getImpl()->pointeeType; }
-
-unsigned PointerType::getAddressSpace() const { return getImpl()->addressSpace; }
+#define GET_TYPEDEF_CLASSES
+#include "triton/ir/Types.cpp.inc"
 
 //===----------------------------------------------------------------------===//
 // Triton Dialect
 //===----------------------------------------------------------------------===//
 void TritonDialect::registerTypes() {
-  addTypes<Float8Type, BFloat8Type, PointerType>();
+  addTypes<
+#define GET_TYPEDEF_LIST
+#include "triton/ir/Types.cpp.inc"
+  >();
+}
+
+Type PointerType::parse(AsmParser &parser) {
+  if (parser.parseLess())
+    return Type();
+
+  Type pointeeType;
+  if (parser.parseType(pointeeType))
+    return Type();
+
+  if (parser.parseGreater())
+    return Type();
+
+  return PointerType::get(pointeeType, 0);
+}
+
+void PointerType::print(AsmPrinter &printer) const {
+  printer << "<" << getPointeeType() << ">";
 }
