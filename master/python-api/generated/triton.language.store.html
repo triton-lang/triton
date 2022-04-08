@@ -201,13 +201,13 @@
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.store">
 <span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">store</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pointer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.store" title="Permalink to this definition">¶</a></dt>
-<dd><p>Stores <code class="code docutils literal notranslate"><span class="pre">value</span></code> block of elements in memory, element-wise, at the memory locations specified by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p>
+<dd><p>Stores <code class="code docutils literal notranslate"><span class="pre">value</span></code> tensor of elements in memory, element-wise, at the memory locations specified by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p>
 <p><code class="code docutils literal notranslate"><span class="pre">value</span></code> is implicitly broadcast to <code class="code docutils literal notranslate"><span class="pre">pointer.shape</span></code> and typecast to <code class="code docutils literal notranslate"><span class="pre">pointer.dtype.element_ty</span></code>.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>pointer</strong> (<em>Block of dtype=triton.PointerDType</em>) – The memory locations where the elements of <code class="code docutils literal notranslate"><span class="pre">value</span></code> are stored.</p></li>
-<li><p><strong>value</strong> (<em>Block</em>) – The block of elements to be stored.</p></li>
+<li><p><strong>value</strong> (<em>Block</em>) – The tensor of elements to be stored.</p></li>
 <li><p><strong>mask</strong> (<em>Block of triton.int1</em><em>, </em><em>optional</em>) – If mask[idx] is false, do not store <code class="code docutils literal notranslate"><span class="pre">value[idx]</span></code> at <code class="code docutils literal notranslate"><span class="pre">pointer[idx]</span></code>.</p></li>
 </ul>
 </dd>

@@ -278,7 +278,7 @@
 <td><p>Returns contiguous values within the open interval [<code class="code docutils literal notranslate"><span class="pre">start</span></code>, <code class="code docutils literal notranslate"><span class="pre">end</span></code>).</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.zeros.html#triton.language.zeros" title="triton.language.zeros"><code class="xref py py-obj docutils literal notranslate"><span class="pre">zeros</span></code></a></p></td>
-<td><p>Returns a block filled with the scalar value 0 for the given <code class="code docutils literal notranslate"><span class="pre">shape</span></code> and <code class="code docutils literal notranslate"><span class="pre">dtype</span></code>.</p></td>
+<td><p>Returns a tensor filled with the scalar value 0 for the given <code class="code docutils literal notranslate"><span class="pre">shape</span></code> and <code class="code docutils literal notranslate"><span class="pre">dtype</span></code>.</p></td>
 </tr>
 </tbody>
 </table>
@@ -292,10 +292,10 @@
 </colgroup>
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.broadcast_to.html#triton.language.broadcast_to" title="triton.language.broadcast_to"><code class="xref py py-obj docutils literal notranslate"><span class="pre">broadcast_to</span></code></a></p></td>
-<td><p>Tries to broadcast the given block to a new <code class="code docutils literal notranslate"><span class="pre">shape</span></code>.</p></td>
+<td><p>Tries to broadcast the given tensor to a new <code class="code docutils literal notranslate"><span class="pre">shape</span></code>.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.reshape.html#triton.language.reshape" title="triton.language.reshape"><code class="xref py py-obj docutils literal notranslate"><span class="pre">reshape</span></code></a></p></td>
-<td><p>Tries to reshape the given block to a new shape.</p></td>
+<td><p>Tries to reshape the given tensor to a new shape.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.ravel.html#triton.language.ravel" title="triton.language.ravel"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ravel</span></code></a></p></td>
 <td><p>Returns a contiguous flattened view of <code class="code docutils literal notranslate"><span class="pre">x</span></code></p></td>
@@ -326,10 +326,10 @@
 </colgroup>
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.load.html#triton.language.load" title="triton.language.load"><code class="xref py py-obj docutils literal notranslate"><span class="pre">load</span></code></a></p></td>
-<td><p>Return a block of data whose values are, elementwise, loaded from memory at location defined by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p></td>
+<td><p>Return a tensor of data whose values are, elementwise, loaded from memory at location defined by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.store.html#triton.language.store" title="triton.language.store"><code class="xref py py-obj docutils literal notranslate"><span class="pre">store</span></code></a></p></td>
-<td><p>Stores <code class="code docutils literal notranslate"><span class="pre">value</span></code> block of elements in memory, element-wise, at the memory locations specified by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p></td>
+<td><p>Stores <code class="code docutils literal notranslate"><span class="pre">value</span></code> tensor of elements in memory, element-wise, at the memory locations specified by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.atomic_cas.html#triton.language.atomic_cas" title="triton.language.atomic_cas"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_cas</span></code></a></p></td>
 <td><p>Performs an atomic compare-and-swap at the memory location specified by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p></td>
@@ -349,7 +349,7 @@
 </colgroup>
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.where.html#triton.language.where" title="triton.language.where"><code class="xref py py-obj docutils literal notranslate"><span class="pre">where</span></code></a></p></td>
-<td><p>Returns a block of elements from either <code class="code docutils literal notranslate"><span class="pre">x</span></code> or <code class="code docutils literal notranslate"><span class="pre">y</span></code>, depending on <code class="code docutils literal notranslate"><span class="pre">condition</span></code>.</p></td>
+<td><p>Returns a tensor of elements from either <code class="code docutils literal notranslate"><span class="pre">x</span></code> or <code class="code docutils literal notranslate"><span class="pre">y</span></code>, depending on <code class="code docutils literal notranslate"><span class="pre">condition</span></code>.</p></td>
 </tr>
 </tbody>
 </table>
@@ -395,13 +395,13 @@
 </colgroup>
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.max.html#triton.language.max" title="triton.language.max"><code class="xref py py-obj docutils literal notranslate"><span class="pre">max</span></code></a></p></td>
-<td><p>Returns the maximum of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> block along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
+<td><p>Returns the maximum of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> tensor along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.min.html#triton.language.min" title="triton.language.min"><code class="xref py py-obj docutils literal notranslate"><span class="pre">min</span></code></a></p></td>
-<td><p>Returns the minimum of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> block along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
+<td><p>Returns the minimum of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> tensor along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.sum.html#triton.language.sum" title="triton.language.sum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sum</span></code></a></p></td>
-<td><p>Returns the sum of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> block along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
+<td><p>Returns the sum of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> tensor along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
 </tr>
 </tbody>
 </table>
