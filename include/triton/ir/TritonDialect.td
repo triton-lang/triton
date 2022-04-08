@@ -16,17 +16,12 @@ def Triton_Dialect : Dialect {
     Dependent Dialects:
       * Arithmetic:
         * addf, addi, andi, cmpf, cmpi, divf, fptosi, ...
-      * Tensor:
-        * reshape (?)
-      * ControlFlow:
-        * bf, cond_bf
-      * Func:
-        * call, return
+      * StructuredControlFlow:
+        * ForOp, IfOp, WhileOp, YieldOp, ConditionOp
   }];
 
   let dependentDialects = [
     "arith::ArithmeticDialect",
-    "tensor::TensorDialect",
     "StandardOpsDialect",
     "scf::SCFDialect"
 
@@ -34,8 +29,6 @@ def Triton_Dialect : Dialect {
     // "cf::ControlFlowDialect",
     // "func::FuncDialect"
   ];
-
-  // let useDefaultTypePrinterParser = 0;
 
   let extraClassDeclaration = [{
     void registerTypes();
