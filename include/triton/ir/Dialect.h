@@ -7,9 +7,7 @@
 #include "mlir/IR/Dialect.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/SCF/SCF.h"
-// #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 
 #include "triton/ir/Dialect.h.inc"
 
