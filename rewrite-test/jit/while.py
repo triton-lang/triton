@@ -26,12 +26,13 @@ def nested_cf(X, lb, ub, Z):
   if lb < ub:
     for z in range(0, Z):
       a += 2.0
-    # a += 2.0
   else:
-    # a *= 2.0
     while a < 1.2:
       a *= 2.0
+      for _ in range(0, Z, 2):
+        a *= -3.3
   a -= 1.0
 
 mod, _ = nested_cf.compile_to_ttir(3, 4, 5, 6, grid=(1,))
 assert mod.verify(), mod.str()
+mod.dump()
