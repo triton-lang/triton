@@ -146,7 +146,17 @@ def test_nested():
         }
         scf.yield %10 : f32
       } else {
-        scf.yield %arg5 : f32
+        %7 = scf.while (%arg6 = %arg5) : (f32) -> f32 {
+          %cst_1 = arith.constant 1.200000e+00 : f32
+          %8 = arith.cmpf olt, %arg6, %cst_1 : f32
+          scf.condition(%8) %arg6 : f32
+        } do {
+        ^bb0(%arg6: f32):
+          %cst_1 = arith.constant 2.000000e+00 : f32
+          %8 = arith.mulf %arg6, %cst_1 : f32
+          scf.yield %8 : f32
+        }
+        scf.yield %7 : f32
       }
       scf.yield %6 : f32
     }
@@ -163,11 +173,14 @@ def test_nested():
       if lb < ub:
         for z in range(0, Z):
           a += 2.0
+      else:
+        while a < 1.2:
+          a *= 2.0
     a -= 1.0
 
   mod, _ = nested_cf.compile_to_ttir(3, 4, 5, 6, grid=(1,))
   generated_ir = mod.str()
-  assert mod.verify()
+  assert mod.verify(), generated_ir
   assert ref_ir == generated_ir
 
 def test_matmul():

@@ -32,7 +32,7 @@ def TT_Pointer : TritonTypeDef<"Pointer", "ptr"> {
     let summary = "pointer type";
 
     let description = [{
-        TODO
+        Triton PointerType
     }];
 
     let parameters = (ins "Type":$pointeeType, "int":$addressSpace);
