@@ -9,11 +9,10 @@ add_mlir_dialect_library(TritonIR
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRArithmetic
+  MLIRSCF
 
   # Since LLVM 15
-  # MLIRControlFlow
   # MLIRFunc
   # else
   MLIRStandard
-  MLIRSCF
 )
