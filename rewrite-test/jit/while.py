@@ -13,9 +13,25 @@ def generic_while(lb, value):
   while c <= 0:
     c += 1
 
-locks = torch.zeros(32, dtype=torch.int32, device='cuda')
-mod_atomic, ctx_atomic = atomic.compile_to_ttir(locks, grid=(1,))
-mod_atomic.dump()
+# locks = torch.zeros(32, dtype=torch.int32, device='cuda')
+# mod_atomic, ctx_atomic = atomic.compile_to_ttir(locks, grid=(1,))
+# mod_atomic.dump()
 
-mod_generic_while, ctx_generic_while = generic_while.compile_to_ttir(8, 9, grid=(1,))
-mod_generic_while.dump()
+# mod_generic_while, ctx_generic_while = generic_while.compile_to_ttir(8, 9, grid=(1,))
+# mod_generic_while.dump()
+
+@triton.jit
+def nested_cf(X, lb, ub, Z):
+  a = 0.0
+  if lb < ub:
+    for z in range(0, Z):
+      a += 2.0
+    # a += 2.0
+  else:
+    # a *= 2.0
+    while a < 1.2:
+      a *= 2.0
+  a -= 1.0
+
+mod, _ = nested_cf.compile_to_ttir(3, 4, 5, 6, grid=(1,))
+assert mod.verify(), mod.str()
