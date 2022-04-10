@@ -15,7 +15,8 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Verifier.h"
 
-#include <llvm-6.0/llvm/ADT/SmallVector.h>
+#include "llvm/Support/raw_ostream.h"
+
 #include <optional>
 #include <pybind11/buffer_info.h>
 #include <pybind11/functional.h>
@@ -715,6 +716,12 @@ void init_triton_ir(py::module &&m) {
         return self.getBody(idx);
       }, ret::reference)
       .def("dump", [](mlir::OpState &self) { self->dump(); })
+      .def("str", [](mlir::OpState &self) -> std::string {
+        std::string str;
+        llvm::raw_string_ostream os(str);
+        self->print(os);
+        return str;
+      })
       .def("append_operand", [](mlir::OpState &self, mlir::Value &val) {
         self->insertOperands(self->getNumOperands(), val);
       })
