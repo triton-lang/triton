@@ -47,3 +47,5 @@ except:
 
 mod_nested_if, ctx_nested_if = nested_if.compile_to_ttir(2, 4, 3, grid=(1,))
 mod_nested_if.dump()
+
+print(mod_nested_if.str())
