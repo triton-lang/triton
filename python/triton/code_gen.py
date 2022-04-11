@@ -393,9 +393,9 @@ class CodeGenerator(ast.NodeVisitor):
         lhs = self.visit(node.left)
         rhs = self.visit(node.right)
         if isinstance(lhs, triton.language.constexpr):
-            lhs = lhs.value
+            lhs = triton.language.core._to_tensor(lhs.value, self.builder)
         if isinstance(rhs, triton.language.constexpr):
-            rhs = rhs.value
+            rhs = triton.language.core._to_tensor(rhs.value, self.builder)
         fn = {
             ast.Add: '__add__',
             ast.Sub: '__sub__',
@@ -469,9 +469,9 @@ class CodeGenerator(ast.NodeVisitor):
         lhs = self.visit(node.left)
         rhs = self.visit(node.comparators[0])
         if isinstance(lhs, triton.language.constexpr):
-            lhs = lhs.value
+            lhs = triton.language.core._to_tensor(lhs.value, self.builder)
         if isinstance(rhs, triton.language.constexpr):
-            rhs = rhs.value
+            rhs = triton.language.core._to_tensor(rhs.value, self.builder)
         if type(node.ops[0]) == ast.Is:
             return triton.language.constexpr(lhs is rhs)
         if type(node.ops[0]) == ast.IsNot:
