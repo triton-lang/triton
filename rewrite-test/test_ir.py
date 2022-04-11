@@ -23,6 +23,7 @@ func_ty = builder.get_function_ty([f16_ptr_ty, f16_ptr_ty, f16_ptr_ty], [])
 func = builder.create_function('foo', func_ty)
 
 module.push_back(func)
+module.set_attr("num_warps", builder.get_int32_attr(4))
 
 # ...
 entry = func.add_entry_block()
@@ -31,23 +32,23 @@ offsets = builder.create_make_range(0, 128)
 pid = builder.create_get_program_id(0)
 _128 = builder.get_int32(128)
 offset = builder.create_add(pid, _128)
-offset = builder.create_broadcast(offset, [128])
+offset = builder.create_splat(offset, [128])
 offsets = builder.create_add(offset, offsets)
 
 
-a_ptrs = builder.create_broadcast(entry.arg(0), [128])
-b_ptrs = builder.create_broadcast(entry.arg(1), [128])
+a_ptrs = builder.create_splat(entry.arg(0), [128])
+b_ptrs = builder.create_splat(entry.arg(1), [128])
 
 a_ptrs = builder.create_gep(a_ptrs, offsets)
 b_ptrs = builder.create_gep(b_ptrs, offsets)
 
-a = builder.create_load(a_ptrs)
-b = builder.create_load(b_ptrs)
+a = builder.create_load(a_ptrs, ir.CACHE_MODIFIER.NONE, ir.EVICTION_POLICY.NORMAL, False)
+b = builder.create_load(b_ptrs, ir.CACHE_MODIFIER.NONE, ir.EVICTION_POLICY.NORMAL, False)
 
 c = builder.create_fadd(a, b)
-# c.set_attr("ieee_rounding", builder.get_bool_attr(True))
+c.set_attr("ieee_rounding", builder.get_bool_attr(True))
 
-c_ptrs = builder.create_broadcast(entry.arg(2), [128])
+c_ptrs = builder.create_splat(entry.arg(2), [128])
 c_ptrs = builder.create_gep(c_ptrs, offsets)
 builder.create_store(c_ptrs, c)
 
