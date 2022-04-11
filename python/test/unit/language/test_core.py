@@ -86,30 +86,30 @@ def patch_kernel(template, to_replace):
 
 @pytest.mark.parametrize("dtype_x", [dtype_x for dtype_x in dtypes])
 def test_empty_kernel(dtype_x, device='cuda'):
-    SIZE = 128
+    IZE = 128
 
     @triton.jit
-    def kernel(X, SIZE: tl.constexpr):
+    def kernel(X, IZE: tl.constexpr):
         pass
-    x = to_triton(numpy_random(SIZE, dtype_str=dtype_x), device=device)
-    kernel[(1, )](x, SIZE=SIZE, num_warps=4)
+    x = to_triton(numpy_random(IZE, dtype_str=dtype_x), device=device)
+    kernel[(1, )](x, IZE=IZE, num_warps=4)
 
 
 # generic test functions
 def _test_unary(dtype_x, expr, numpy_expr=None, device='cuda'):
-    SIZE = 128
+    IZE = 128
     # define the kernel / launch-grid
 
     @triton.jit
-    def kernel(Z, X, SIZE: tl.constexpr):
-        off = tl.arange(0, SIZE)
+    def kernel(Z, X, IZE: tl.constexpr):
+        off = tl.arange(0, IZE)
         x = tl.load(X + off)
         z = GENERATE_TEST_HERE
         tl.store(Z + off, z)
 
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': expr})
     # inputs
-    x = numpy_random(SIZE, dtype_str=dtype_x)
+    x = numpy_random(IZE, dtype_str=dtype_x)
     if 'log' in expr:
         x = np.abs(x) + 0.01
     # reference result
@@ -117,7 +117,7 @@ def _test_unary(dtype_x, expr, numpy_expr=None, device='cuda'):
     # triton result
     x_tri = to_triton(x, device=device)
     z_tri = to_triton(np.empty_like(z_ref), device=device)
-    kernel[(1, )](z_tri, x_tri, SIZE=SIZE, num_warps=4)
+    kernel[(1, )](z_tri, x_tri, IZE=IZE, num_warps=4)
     # compare
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
 
@@ -154,12 +154,12 @@ def _binary_op_dtype_override(a: str, b: str) -> Optional[np.dtype]:
 
 
 def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y='real', device='cuda', y_low=None, y_high=None):
-    SIZE = 128
+    IZE = 128
     # define the kernel / launch-grid
 
     @triton.jit
-    def kernel(Z, X, Y, SIZE: tl.constexpr):
-        off = tl.arange(0, SIZE)
+    def kernel(Z, X, Y, IZE: tl.constexpr):
+        off = tl.arange(0, IZE)
         x = tl.load(X + off)
         y = tl.load(Y + off)
         z = GENERATE_TEST_HERE
@@ -168,8 +168,8 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': expr})
     # inputs
     rs = RandomState(17)
-    x = numpy_random(SIZE, dtype_str=dtype_x, rs=rs)
-    y = numpy_random(SIZE, dtype_str=dtype_y, rs=rs, low=y_low, high=y_high)
+    x = numpy_random(IZE, dtype_str=dtype_x, rs=rs)
+    y = numpy_random(IZE, dtype_str=dtype_y, rs=rs, low=y_low, high=y_high)
     if mode_x == 'nan':
         x[:] = float('nan')
     if mode_y == 'nan':
@@ -182,8 +182,8 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
     # triton result
     x_tri = to_triton(x, device=device)
     y_tri = to_triton(y, device=device)
-    z_tri = to_triton(np.empty(SIZE, dtype=z_ref.dtype), device=device)
-    kernel[(1, )](z_tri, x_tri, y_tri, SIZE=SIZE, num_warps=4)
+    z_tri = to_triton(np.empty(IZE, dtype=z_ref.dtype), device=device)
+    kernel[(1, )](z_tri, x_tri, y_tri, IZE=IZE, num_warps=4)
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=expr, rtol=0.01)
 
 
@@ -388,9 +388,9 @@ def test_index1d(expr, dtype_str, device='cuda'):
 
     # Triton kernel
     @triton.jit
-    def kernel(Z, X, SIZE: tl.constexpr):
-        m = tl.arange(0, SIZE)
-        n = tl.arange(0, SIZE)
+    def kernel(Z, X, IZE: tl.constexpr):
+        m = tl.arange(0, IZE)
+        n = tl.arange(0, IZE)
         x = tl.load(X_PTR_EXPR)
         z = GENERATE_TEST_HERE
         tl.store(Z_PTR_EXPR, z)
@@ -409,7 +409,7 @@ def test_index1d(expr, dtype_str, device='cuda'):
     # triton result
     z_tri = to_triton(np.empty_like(z_ref), device=device)
     x_tri = to_triton(x)
-    kernel[(1, )](z_tri, x_tri, num_warps=1, SIZE=shape_x[0])
+    kernel[(1, )](z_tri, x_tri, num_warps=1, IZE=shape_x[0])
     # compare
     assert (z_ref == to_numpy(z_tri)).all()
 
@@ -1032,28 +1032,43 @@ def test_value_specialization_overflow(value: int, overflow: bool, device='cuda'
             kernel[(1, )](value, x)
     else:
         kernel[(1, )](value, x)
-# -------------------------
-# test dynamic parallelism
-# -------------------------
 
 
-@triton.jit
-def mult(x, alpha):
-    tl.store(x + tl.program_id(0), alpha)
+# ----------------
+# test constexpr
+# ----------------
 
+@pytest.mark.parametrize("op", ['+', '-', '*', '/', '%', '<', '>'])
+@pytest.mark.parametrize("is_lhs_constexpr", [False, True])
+@pytest.mark.parametrize("is_rhs_constexpr", [True, False])
+def test_bin_op_constexpr(op, is_lhs_constexpr, is_rhs_constexpr):
+    
+    @triton.jit
+    def kernel(Z, X, Y):
+        x = tl.load(X)
+        y = tl.load(Y)
+        z = GENERATE_TEST_HERE
+        tl.store(Z, z)
 
-@triton.jit
-def stub(X, alpha, grid_0, grid_1, grid_2):
-    tl.launch(mult, [X, alpha], [grid_0, grid_1, grid_2])
+    x_str = "3.14" if is_lhs_constexpr else "x"
+    y_str = "4.13" if is_rhs_constexpr else "y"
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f"{x_str} {op} {y_str}"})
+    x = numpy_random((1,), dtype_str="float32")
+    y = numpy_random((1,), dtype_str="float32")
+    z = np.array(eval(f"{x_str} {op} {y_str}"))
+    x_tri = to_triton(x)
+    y_tri = to_triton(y)
+    z_tri = to_triton(np.empty((1,), dtype=z.dtype))
+    kernel[(1,)](z_tri, x_tri, y_tri)
+    np.testing.assert_allclose(z, to_numpy(z_tri))
 
+def test_constexpr_shape():
 
-# def test_dyn_par(cond=True, device='cuda'):
-#     n_pids = 10
-#     # pids = torch.arange(n_pids, device=device)
-#     # alpha = 2.0
-#     # x_ref = pids * alpha
-#     x_tri = torch.full((10,), fill_value=-1., device=device)
-#     # cond = torch.tensor([cond], device=device)
-#     stub[(1,)](x_tri, 3.14, n_pids, 1, 1)
-#     print(x_tri)
-#     # triton.testing.assert_almost_equal(x_ref, x_tri)
+    @triton.jit
+    def kernel(X):
+        off = tl.arange(0, 128 + 128)
+        tl.store(X + off, off)
+    
+    x_tri = to_triton(np.empty((256, ), dtype=np.int32))
+    kernel[(1,)](x_tri)
+    np.testing.assert_equal(to_numpy(x_tri), np.arange(0, 256))

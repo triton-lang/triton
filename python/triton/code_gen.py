@@ -390,12 +390,10 @@ class CodeGenerator(ast.NodeVisitor):
         return tuple(args)
 
     def visit_BinOp(self, node):
+        # visit operand
         lhs = self.visit(node.left)
         rhs = self.visit(node.right)
-        if isinstance(lhs, triton.language.constexpr):
-            lhs = triton.language.core._to_tensor(lhs.value, self.builder)
-        if isinstance(rhs, triton.language.constexpr):
-            rhs = triton.language.core._to_tensor(rhs.value, self.builder)
+        # get function name
         fn = {
             ast.Add: '__add__',
             ast.Sub: '__sub__',
@@ -410,6 +408,17 @@ class CodeGenerator(ast.NodeVisitor):
             ast.BitOr: '__or__',
             ast.BitXor: '__xor__',
         }[type(node.op)]
+        # return a new constexpr if both arg are constexprs
+        is_lhs_constexpr = isinstance(lhs, triton.language.constexpr)
+        is_rhs_constexpr = isinstance(rhs, triton.language.constexpr)
+        if is_lhs_constexpr and is_rhs_constexpr:
+            return triton.language.constexpr(getattr(lhs.value, fn)(rhs.value))
+        # if one argument is a constexpr, convert it to tensor
+        if is_lhs_constexpr:
+            lhs = triton.language.core._to_tensor(lhs.value, self.builder)
+        if is_rhs_constexpr:
+            rhs = triton.language.core._to_tensor(rhs.value, self.builder)
+        # call operator
         if is_triton_tensor(lhs):
             return getattr(lhs, fn)(rhs, _builder=self.builder)
         elif is_triton_tensor(rhs):
@@ -468,14 +477,12 @@ class CodeGenerator(ast.NodeVisitor):
         assert len(node.ops) == 1
         lhs = self.visit(node.left)
         rhs = self.visit(node.comparators[0])
-        if isinstance(lhs, triton.language.constexpr):
-            lhs = triton.language.core._to_tensor(lhs.value, self.builder)
-        if isinstance(rhs, triton.language.constexpr):
-            rhs = triton.language.core._to_tensor(rhs.value, self.builder)
+        # handle `is`` and `is not``
         if type(node.ops[0]) == ast.Is:
             return triton.language.constexpr(lhs is rhs)
         if type(node.ops[0]) == ast.IsNot:
             return triton.language.constexpr(lhs is not rhs)
+        # function name
         fn = {
             ast.Eq: '__eq__',
             ast.NotEq: '__ne__',
@@ -484,6 +491,19 @@ class CodeGenerator(ast.NodeVisitor):
             ast.Gt: '__gt__',
             ast.GtE: '__ge__',
         }[type(node.ops[0])]
+        # return a new constexpr if both arg are constexprs
+        is_lhs_constexpr = isinstance(lhs, triton.language.constexpr)
+        is_rhs_constexpr = isinstance(rhs, triton.language.constexpr)
+        if is_lhs_constexpr and is_rhs_constexpr:
+            return triton.language.constexpr(getattr(lhs.value, fn)(rhs.value))
+
+        # one argument is a constexpr
+        if isinstance(lhs, triton.language.constexpr):
+            lhs = triton.language.core._to_tensor(lhs.value, self.builder)
+        if isinstance(rhs, triton.language.constexpr):
+            rhs = triton.language.core._to_tensor(rhs.value, self.builder)
+        
+        # call operator
         if is_triton_tensor(lhs):
             return getattr(lhs, fn)(rhs, _builder=self.builder)
         elif is_triton_tensor(rhs):
