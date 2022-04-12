@@ -509,16 +509,15 @@ class CodeGenerator(ast.NodeVisitor):
         if type(node.op) == ast.Not:
             assert isinstance(op, triton.language.constexpr), "`not` only supported for constexpr at the moment"
             return triton.language.constexpr(not op)
-        if isinstance(op, triton.language.constexpr):
-            op = op.value
         fn = {
             ast.USub: '__neg__',
             ast.UAdd: '__pos__',
             ast.Invert: '__invert__',
         }[type(node.op)]
-        if is_triton_tensor(op):
-            return getattr(op, fn)(_builder=self.builder)
-        return getattr(op, fn)()
+        if isinstance(op, triton.language.constexpr):
+            return triton.language.constexpr(getattr(op.value, fn)())
+        assert is_triton_tensor(op)
+        return getattr(op, fn)(_builder=self.builder)
 
     def visit_While(self, node):
         current_bb = self.builder.get_insert_block()
