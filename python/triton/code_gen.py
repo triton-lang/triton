@@ -474,6 +474,10 @@ class CodeGenerator(ast.NodeVisitor):
         assert len(node.ops) == 1
         lhs = self.visit(node.left)
         rhs = self.visit(node.comparators[0])
+        is_lhs_constexpr = isinstance(lhs, triton.language.constexpr)
+        is_rhs_constexpr = isinstance(rhs, triton.language.constexpr)
+        lhs = lhs.value if is_lhs_constexpr else lhs
+        rhs = rhs.value if is_rhs_constexpr else rhs
         # handle `is`` and `is not``
         if type(node.ops[0]) == ast.Is:
             return triton.language.constexpr(lhs is rhs)
@@ -489,20 +493,16 @@ class CodeGenerator(ast.NodeVisitor):
             ast.GtE: '__ge__',
         }[type(node.ops[0])]
         # return a new constexpr if both arg are constexprs
-        is_lhs_constexpr = isinstance(lhs, triton.language.constexpr)
-        is_rhs_constexpr = isinstance(rhs, triton.language.constexpr)
         if is_lhs_constexpr and is_rhs_constexpr:
-            return triton.language.constexpr(getattr(lhs.value, fn)(rhs.value))
+            return triton.language.constexpr(getattr(lhs, fn)(rhs))
         # call operator
-        lhs = lhs.value if is_lhs_constexpr else lhs
-        rhs = rhs.value if is_rhs_constexpr else rhs
         if is_triton_tensor(lhs):
             return getattr(lhs, fn)(rhs, _builder=self.builder)
         elif is_triton_tensor(rhs):
             fn = fn[:2] + 'r' + fn[2:]
             return getattr(rhs, fn)(lhs, _builder=self.builder)
         else:
-            return getattr(lhs, fn)(rhs)
+            assert False
 
     def visit_UnaryOp(self, node):
         op = self.visit(node.operand)
