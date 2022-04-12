@@ -667,6 +667,7 @@ class CodeGenerator(ast.NodeVisitor):
             args = [arg.value if isinstance(arg, triton.language.constexpr) else arg
                     for arg in args]
             ret = fn(*args, **kws)
+            ret = triton.language.core._to_tensor(ret, self.builder)
         # special case: dynamic parallelism
         # in this case the core primitive returns a proxy
         # if isinstance(ret, triton.language.core.LaunchProxy):
