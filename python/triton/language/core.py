@@ -433,12 +433,12 @@ class tensor:
     def __mod__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.mod(self, other, _builder)
-    
+
     @builtin
     def __rmod__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.mod(other, self, _builder)
-    
+
     # unary operators
     @builtin
     def __neg__(self, _builder=None):

@@ -1042,7 +1042,7 @@ def test_value_specialization_overflow(value: int, overflow: bool, device='cuda'
 @pytest.mark.parametrize("is_lhs_constexpr", [False, True])
 @pytest.mark.parametrize("is_rhs_constexpr", [True, False])
 def test_bin_op_constexpr(op, is_lhs_constexpr, is_rhs_constexpr):
-    
+
     @triton.jit
     def kernel(Z, X, Y):
         x = tl.load(X)
@@ -1062,13 +1062,14 @@ def test_bin_op_constexpr(op, is_lhs_constexpr, is_rhs_constexpr):
     kernel[(1,)](z_tri, x_tri, y_tri)
     np.testing.assert_allclose(z, to_numpy(z_tri))
 
+
 def test_constexpr_shape():
 
     @triton.jit
     def kernel(X):
         off = tl.arange(0, 128 + 128)
         tl.store(X + off, off)
-    
+
     x_tri = to_triton(np.empty((256, ), dtype=np.int32))
     kernel[(1,)](x_tri)
     np.testing.assert_equal(to_numpy(x_tri), np.arange(0, 256))
