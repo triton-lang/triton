@@ -413,12 +413,9 @@ class CodeGenerator(ast.NodeVisitor):
         is_rhs_constexpr = isinstance(rhs, triton.language.constexpr)
         if is_lhs_constexpr and is_rhs_constexpr:
             return triton.language.constexpr(getattr(lhs.value, fn)(rhs.value))
-        # if one argument is a constexpr, convert it to tensor
-        if is_lhs_constexpr:
-            lhs = triton.language.core._to_tensor(lhs.value, self.builder)
-        if is_rhs_constexpr:
-            rhs = triton.language.core._to_tensor(rhs.value, self.builder)
         # call operator
+        lhs = lhs.value if is_lhs_constexpr else lhs
+        rhs = rhs.value if is_rhs_constexpr else rhs
         if is_triton_tensor(lhs):
             return getattr(lhs, fn)(rhs, _builder=self.builder)
         elif is_triton_tensor(rhs):
@@ -496,14 +493,9 @@ class CodeGenerator(ast.NodeVisitor):
         is_rhs_constexpr = isinstance(rhs, triton.language.constexpr)
         if is_lhs_constexpr and is_rhs_constexpr:
             return triton.language.constexpr(getattr(lhs.value, fn)(rhs.value))
-
-        # one argument is a constexpr
-        if isinstance(lhs, triton.language.constexpr):
-            lhs = triton.language.core._to_tensor(lhs.value, self.builder)
-        if isinstance(rhs, triton.language.constexpr):
-            rhs = triton.language.core._to_tensor(rhs.value, self.builder)
-        
         # call operator
+        lhs = lhs.value if is_lhs_constexpr else lhs
+        rhs = rhs.value if is_rhs_constexpr else rhs
         if is_triton_tensor(lhs):
             return getattr(lhs, fn)(rhs, _builder=self.builder)
         elif is_triton_tensor(rhs):
