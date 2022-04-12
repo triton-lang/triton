@@ -390,12 +390,14 @@ class CodeGenerator(ast.NodeVisitor):
         return tuple(args)
 
     def visit_BinOp(self, node):
+        # visit operand
         lhs = self.visit(node.left)
         rhs = self.visit(node.right)
-        if isinstance(lhs, triton.language.constexpr):
-            lhs = lhs.value
-        if isinstance(rhs, triton.language.constexpr):
-            rhs = rhs.value
+        is_lhs_constexpr = isinstance(lhs, triton.language.constexpr)
+        is_rhs_constexpr = isinstance(rhs, triton.language.constexpr)
+        lhs = lhs.value if is_lhs_constexpr else lhs
+        rhs = rhs.value if is_rhs_constexpr else rhs
+        # get function name
         fn = {
             ast.Add: '__add__',
             ast.Sub: '__sub__',
@@ -410,6 +412,10 @@ class CodeGenerator(ast.NodeVisitor):
             ast.BitOr: '__or__',
             ast.BitXor: '__xor__',
         }[type(node.op)]
+        # return a new constexpr if both arg are constexprs
+        if is_lhs_constexpr and is_rhs_constexpr:
+            return triton.language.constexpr(getattr(lhs, fn)(rhs))
+        # call operator
         if is_triton_tensor(lhs):
             return getattr(lhs, fn)(rhs, _builder=self.builder)
         elif is_triton_tensor(rhs):
@@ -468,14 +474,16 @@ class CodeGenerator(ast.NodeVisitor):
         assert len(node.ops) == 1
         lhs = self.visit(node.left)
         rhs = self.visit(node.comparators[0])
-        if isinstance(lhs, triton.language.constexpr):
-            lhs = lhs.value
-        if isinstance(rhs, triton.language.constexpr):
-            rhs = rhs.value
+        is_lhs_constexpr = isinstance(lhs, triton.language.constexpr)
+        is_rhs_constexpr = isinstance(rhs, triton.language.constexpr)
+        lhs = lhs.value if is_lhs_constexpr else lhs
+        rhs = rhs.value if is_rhs_constexpr else rhs
+        # handle `is`` and `is not``
         if type(node.ops[0]) == ast.Is:
             return triton.language.constexpr(lhs is rhs)
         if type(node.ops[0]) == ast.IsNot:
             return triton.language.constexpr(lhs is not rhs)
+        # function name
         fn = {
             ast.Eq: '__eq__',
             ast.NotEq: '__ne__',
@@ -484,29 +492,32 @@ class CodeGenerator(ast.NodeVisitor):
             ast.Gt: '__gt__',
             ast.GtE: '__ge__',
         }[type(node.ops[0])]
+        # return a new constexpr if both arg are constexprs
+        if is_lhs_constexpr and is_rhs_constexpr:
+            return triton.language.constexpr(getattr(lhs, fn)(rhs))
+        # call operator
         if is_triton_tensor(lhs):
             return getattr(lhs, fn)(rhs, _builder=self.builder)
         elif is_triton_tensor(rhs):
             fn = fn[:2] + 'r' + fn[2:]
             return getattr(rhs, fn)(lhs, _builder=self.builder)
         else:
-            return getattr(lhs, fn)(rhs)
+            assert False
 
     def visit_UnaryOp(self, node):
         op = self.visit(node.operand)
         if type(node.op) == ast.Not:
             assert isinstance(op, triton.language.constexpr), "`not` only supported for constexpr at the moment"
             return triton.language.constexpr(not op)
-        if isinstance(op, triton.language.constexpr):
-            op = op.value
         fn = {
             ast.USub: '__neg__',
             ast.UAdd: '__pos__',
             ast.Invert: '__invert__',
         }[type(node.op)]
-        if is_triton_tensor(op):
-            return getattr(op, fn)(_builder=self.builder)
-        return getattr(op, fn)()
+        if isinstance(op, triton.language.constexpr):
+            return triton.language.constexpr(getattr(op.value, fn)())
+        assert is_triton_tensor(op)
+        return getattr(op, fn)(_builder=self.builder)
 
     def visit_While(self, node):
         current_bb = self.builder.get_insert_block()
@@ -656,6 +667,10 @@ class CodeGenerator(ast.NodeVisitor):
             args = [arg.value if isinstance(arg, triton.language.constexpr) else arg
                     for arg in args]
             ret = fn(*args, **kws)
+            if isinstance(ret, (bool, int, float)):
+                ret = triton.language.core.constexpr(ret)
+            else:
+                ret = triton.language.core._to_tensor(ret, self.builder)
         # special case: dynamic parallelism
         # in this case the core primitive returns a proxy
         # if isinstance(ret, triton.language.core.LaunchProxy):
