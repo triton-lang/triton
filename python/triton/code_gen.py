@@ -393,6 +393,10 @@ class CodeGenerator(ast.NodeVisitor):
         # visit operand
         lhs = self.visit(node.left)
         rhs = self.visit(node.right)
+        is_lhs_constexpr = isinstance(lhs, triton.language.constexpr)
+        is_rhs_constexpr = isinstance(rhs, triton.language.constexpr)
+        lhs = lhs.value if is_lhs_constexpr else lhs
+        rhs = rhs.value if is_rhs_constexpr else rhs
         # get function name
         fn = {
             ast.Add: '__add__',
@@ -409,13 +413,9 @@ class CodeGenerator(ast.NodeVisitor):
             ast.BitXor: '__xor__',
         }[type(node.op)]
         # return a new constexpr if both arg are constexprs
-        is_lhs_constexpr = isinstance(lhs, triton.language.constexpr)
-        is_rhs_constexpr = isinstance(rhs, triton.language.constexpr)
         if is_lhs_constexpr and is_rhs_constexpr:
-            return triton.language.constexpr(getattr(lhs.value, fn)(rhs.value))
+            return triton.language.constexpr(getattr(lhs, fn)(rhs))
         # call operator
-        lhs = lhs.value if is_lhs_constexpr else lhs
-        rhs = rhs.value if is_rhs_constexpr else rhs
         if is_triton_tensor(lhs):
             return getattr(lhs, fn)(rhs, _builder=self.builder)
         elif is_triton_tensor(rhs):
