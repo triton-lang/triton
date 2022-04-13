@@ -29,6 +29,7 @@ def current_cuda_stream(device_idx=0):
     # own faster current stream lookup.
     return torch.cuda.current_stream().cuda_stream
 
+
 def mangle_ty(ty):
     if ty.is_ptr():
         return 'P' + mangle_ty(ty.element_ty)
