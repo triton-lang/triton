@@ -22,6 +22,7 @@ import triton
 import triton._C.libtriton.triton as _triton
 from .tools.disasm import extract
 
+
 def current_cuda_stream(device_idx=0):
     # Torch's torch.cuda.current_stream() is slow. We provide this
     # function to give the user an opportunity to monkey-patch their
