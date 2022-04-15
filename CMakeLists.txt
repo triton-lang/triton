@@ -181,7 +181,10 @@ target_link_libraries(triton
   TritonDriver
   # TritonCodeGen
 
-  MLIRCAPIIR
+  # optimizations
+  MLIRPass
+  MLIRTransforms
+
   ${PYTHON_LIBRARIES}
 )
 

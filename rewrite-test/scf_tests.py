@@ -2,12 +2,14 @@ import pytest
 
 import triton
 import triton.language as tl
+import triton._C.libtriton.triton as _triton
+
 
 import torch
 
 def test_if():
   ref_ir = """module {
-  func @only_if(%arg0: i32, %arg1: i32, %arg2: i32) {
+  func @only_if__i32_i32_i32__(%arg0: i32, %arg1: i32, %arg2: i32) {
     %cst = arith.constant -1.000000e+00 : f32
     %0 = arith.cmpi sgt, %arg2, %arg0 : i32
     %1 = scf.if %0 -> (f32) {
@@ -36,7 +38,7 @@ def test_if():
 
 def test_if_else():
   ref_ir = """module {
-  func @if_else(%arg0: i32, %arg1: i32, %arg2: i32) {
+  func @if_else__i32_i32_i32__(%arg0: i32, %arg1: i32, %arg2: i32) {
     %0 = arith.cmpi sgt, %arg2, %arg0 : i32
     %1 = scf.if %0 -> (f32) {
       %cst = arith.constant 0.000000e+00 : f32
@@ -65,7 +67,7 @@ def test_if_else():
 
 def test_for():
   ref_ir = """module {
-  func @for_loop(%arg0: i32) {
+  func @for_loop__i32__(%arg0: i32) {
     %cst = arith.constant 1.000000e+00 : f32
     %c0_i32 = arith.constant 0 : i32
     %c1_i32 = arith.constant 1 : i32
@@ -95,7 +97,7 @@ def test_for():
 
 def test_while():
   ref_ir = """module {
-  func @generic_while(%arg0: i32) {
+  func @generic_while__i32__(%arg0: i32) {
     %c-1_i32 = arith.constant -1 : i32
     %0 = scf.while (%arg1 = %c-1_i32) : (i32) -> i32 {
       %c0_i32 = arith.constant 0 : i32
@@ -124,7 +126,7 @@ def test_while():
 
 def test_nested():
   ref_ir = """module {
-  func @nested_cf(%arg0: i32, %arg1: i32, %arg2: i32, %arg3: i32) {
+  func @nested_cf__i32_i32_i32_i32__(%arg0: i32, %arg1: i32, %arg2: i32, %arg3: i32) {
     %cst = arith.constant 0.000000e+00 : f32
     %c0_i32 = arith.constant 0 : i32
     %c1_i32 = arith.constant 1 : i32
@@ -402,4 +404,14 @@ def test_matmul():
   )
   verify = mod.verify()
   assert verify
-  assert ref_ir == mod.str()
+  # assert ref_ir == mod.str()
+  print(mod.str())
+
+  pm = _triton.ir.pass_manager(ctx)
+  pm.add_inliner_pass()
+  pm.run(mod)
+
+  verify = mod.verify()
+  assert verify
+  # assert ref_ir == mod.str()
+  print(mod.str())
