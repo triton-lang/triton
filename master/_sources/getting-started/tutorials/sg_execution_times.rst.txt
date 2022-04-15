@@ -5,16 +5,16 @@
 
 Computation times
 =================
-**14:02.386** total execution time for **getting-started_tutorials** files:
+**14:03.991** total execution time for **getting-started_tutorials** files:
 
 +---------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_03-matrix-multiplication.py` (``03-matrix-multiplication.py``) | 06:43.515 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_03-matrix-multiplication.py` (``03-matrix-multiplication.py``) | 06:37.755 | 0.0 MB |
 +---------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_02-fused-softmax.py` (``02-fused-softmax.py``)                 | 03:24.847 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_02-fused-softmax.py` (``02-fused-softmax.py``)                 | 03:28.192 | 0.0 MB |
 +---------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_05-layer-norm.py` (``05-layer-norm.py``)                       | 02:15.333 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_05-layer-norm.py` (``05-layer-norm.py``)                       | 02:15.414 | 0.0 MB |
 +---------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_01-vector-add.py` (``01-vector-add.py``)                       | 01:38.363 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_01-vector-add.py` (``01-vector-add.py``)                       | 01:42.289 | 0.0 MB |
 +---------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_04-low-memory-dropout.py` (``04-low-memory-dropout.py``)       | 00:00.327 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_04-low-memory-dropout.py` (``04-low-memory-dropout.py``)       | 00:00.341 | 0.0 MB |
 +---------------------------------------------------------------------------------------------------------+-----------+--------+
