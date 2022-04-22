@@ -4,7 +4,6 @@ import subprocess
 import sys
 from contextlib import contextmanager
 
-import psutil
 import torch
 
 import triton._C.libtriton.triton as _triton
@@ -369,6 +368,7 @@ def cuda_memcheck(**target_kwargs):
     def decorator(test_fn):
         @functools.wraps(test_fn)
         def wrapper(*args, **kwargs):
+            import psutil
             ppid_name = psutil.Process(os.getppid()).name()
             run_cuda_memcheck = target_kwargs.items() <= kwargs.items()
             if run_cuda_memcheck and ppid_name != "cuda-memcheck":
