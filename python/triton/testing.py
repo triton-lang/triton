@@ -1,9 +1,11 @@
+import functools
 import os
 import subprocess
 import sys
-import psutil, functools
-import torch
 from contextlib import contextmanager
+
+import psutil
+import torch
 
 import triton._C.libtriton.triton as _triton
 from .code_gen import OutOfResources
