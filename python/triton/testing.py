@@ -387,6 +387,21 @@ def cuda_memcheck(**target_kwargs):
     return decorator
 
 
+def nvsmi_attr(attrs):
+    attrs = ",".join(attrs)
+    cmd = [
+        "nvidia-smi",
+        "-i",
+        "0",
+        "--query-gpu=" + attrs,
+        "--format=csv,noheader,nounits",
+    ]
+    out = subprocess.check_output(cmd)
+    ret = out.decode(sys.stdout.encoding).split(",")
+    ret = [int(x) for x in ret]
+    return ret
+
+
 @contextmanager
 def set_gpu_clock(ref_sm_clock=1350, ref_mem_clock=1215):
     try:
