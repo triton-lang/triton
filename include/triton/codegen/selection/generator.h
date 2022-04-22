@@ -4,6 +4,7 @@
 #define _TRITON_SELECTION_GENERATOR_H_
 
 #include "triton/ir/visitor.h"
+#include "triton/ir/instructions.h"
 #include "triton/codegen/analysis/layout.h"
 #include <functional>
 
@@ -261,6 +262,9 @@ private:
 
   /// Record prefetch instrs that needs to be moved
   std::map<ir::value*, std::vector<Value*>> prefetch_latch_to_bb_;
+
+  // Eviction policies
+  std::map<ir::load_inst::EVICTION_POLICY, Value*> policies_;
 };
 
 }
