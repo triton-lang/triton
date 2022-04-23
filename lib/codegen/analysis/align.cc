@@ -146,10 +146,12 @@ std::vector<align::cst_info> align::populate_is_constant_cmp(ir::cmp_inst* x) {
     // and rhs (resp. lhs) is made of M constants that are multiples of N
     // then comparisons have M constants
     int min_multiple = std::min(lhs_multiple_of[d], rhs_multiple_of[d]);
-    if(lhs_max_contiguous[d] == rhs[d].num_cst)
+    if(rhs[d].num_cst % lhs_max_contiguous[d] == 0)
       ax = {std::min<int>(min_multiple, lhs_max_contiguous[d]), 0};
-    else if(rhs_max_contiguous[d] == lhs[d].num_cst)
+    else if(lhs[d].num_cst % rhs_max_contiguous[d] == 0)
       ax = {std::min<int>(min_multiple, rhs_max_contiguous[d]), 0};
+    x->print(std::cout);
+    std::cout << ax.num_cst  << " " << min_multiple << " " << lhs_max_contiguous[0] << " " << rhs[d].num_cst << " " << rhs_max_contiguous[0] << std::endl;
     result.push_back(ax);
   }
   return add_to_cache(x, result, is_constant_);
