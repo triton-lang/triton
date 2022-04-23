@@ -744,6 +744,7 @@ void generator::visit_load_inst(ir::load_inst* x){
     auto   ord = ords_.at(op);
     size_t aln = alignment_->get(op, ord[0]);
     size_t max_eq = mx ? alignment_->get_cst_info(mx->get_mask_operand())[ord[0]].num_cst : 1;
+    max_eq = std::max<size_t>(max_eq, 1);
     aln = std::min(aln, max_eq);
     auto layout = layouts_->get(x)->to_scanline();
     if(layout){
@@ -902,6 +903,7 @@ void generator::visit_store_inst(ir::store_inst * x){
     size_t aln = alignment_->get(ptr_op, ord[0]);
     size_t nts = axes_.at(a_axes_->get(x->get_pointer_operand(), ord[0])).contiguous;
     size_t max_eq = mx ? alignment_->get_cst_info(mx->get_mask_operand())[ord[0]].num_cst : 1;
+    max_eq = std::max<size_t>(max_eq, 1);
     aln = std::min(aln, max_eq);
     vec  = std::min(nts, aln);
   }
