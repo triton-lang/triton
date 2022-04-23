@@ -12,6 +12,7 @@ namespace ir {
   class phi_node;
   class splat_inst;
   class cast_inst;
+  class cmp_inst;
   class reshape_inst;
   class broadcast_inst;
   class binary_operator;
@@ -35,6 +36,7 @@ private:
   std::vector<cst_info> populate_is_constant_reshape(ir::reshape_inst* x);
   std::vector<cst_info> populate_is_constant_broadcast(ir::broadcast_inst* x);
   std::vector<cst_info> populate_is_constant_binop(ir::binary_operator* x);
+  std::vector<cst_info> populate_is_constant_cmp(ir::cmp_inst* x);
   std::vector<cst_info> populate_is_constant_gep(ir::getelementptr_inst* x);
   std::vector<cst_info> populate_is_constant_default(ir::value* v);
   std::vector<cst_info> populate_is_constant(ir::value *v);
@@ -65,6 +67,7 @@ public:
   void run(ir::module &mod);
   unsigned get(ir::value* v, unsigned ax) const;
   std::vector<unsigned> contiguous(ir::value* v) const;
+  std::vector<cst_info> get_cst_info(ir::value* v) const;
 
 private:
   std::map<ir::value*, std::vector<cst_info>> is_constant_;
