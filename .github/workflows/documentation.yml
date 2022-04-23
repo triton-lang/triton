@@ -18,6 +18,11 @@ jobs:
         with:
           ref: 'gh-pages'
 
+      - name: Clear docs
+        run: |
+          rm -r /tmp/triton-docs
+        continue-on-error: true
+
       - name: Checkout branch
         uses: actions/checkout@v1
 
@@ -31,7 +36,6 @@ jobs:
         run: |
           git branch
           # update docs
-          rm -r /tmp/triton-docs; 
           mkdir /tmp/triton-docs;
           mv docs/_build/html/* /tmp/triton-docs/
           git checkout gh-pages

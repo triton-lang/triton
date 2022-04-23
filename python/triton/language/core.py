@@ -337,68 +337,6 @@ class constexpr:
     def __repr__(self) -> str:
         return f"constexpr[{self.value}]"
 
-    def __add__(self, other):
-        return self.value + other.value
-
-    def __radd__(self, other):
-        return other.value + self.value
-
-    def __sub__(self, other):
-        return self.value - other.value
-
-    def __rsub__(self, other):
-        return other.value - self.value
-
-    def __mul__(self, other):
-        return self.value * other.value
-
-    def __rmul__(self, other):
-        return other.value * self.value
-
-    def __truediv__(self, other):
-        return self.value / other.value
-
-    def __rtruediv__(self, other):
-        return other.value / self.value
-
-    def __floordiv__(self, other):
-        return self.value // other.value
-
-    def __rfloordiv__(self, other):
-        return other.value // self.value
-
-    #
-
-    def __gt__(self, other):
-        return self.value > other.value
-
-    def __rgt__(self, other):
-        return other.value > self.value
-
-    def __ge__(self, other):
-        return self.value >= other.value
-
-    def __rge__(self, other):
-        return other.value >= self.value
-
-    def __lt__(self, other):
-        return self.value < other.value
-
-    def __rlt__(self, other):
-        return other.value < self.value
-
-    def __le__(self, other):
-        return self.value <= other.value
-
-    def __rle__(self, other):
-        return other.value <= self.value
-
-    def __eq__(self, other):
-        return self.value == other.value
-
-    def __ne__(self, other):
-        return self.value != other.value
-
     def __bool__(self):
         return bool(self.value)
 
@@ -442,6 +380,9 @@ class tensor:
         self.numel = 1
         for s in self.shape:
             self.numel *= s
+        is_pow2 = (self.numel and (not(self.numel & (self.numel - 1))))
+        if not is_pow2:
+            raise ValueError("Triton tensors must have a power-of-two number of elements")
         self.numel = constexpr(self.numel)
         self.type = type  # Tensor type (can be block_type)
         # Following the practice in pytorch, dtype is scalar type
@@ -495,6 +436,11 @@ class tensor:
     def __mod__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.mod(self, other, _builder)
+
+    @builtin
+    def __rmod__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.mod(other, self, _builder)
 
     # unary operators
     @builtin
@@ -564,6 +510,7 @@ class tensor:
 
     @builtin
     def __rlt__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
         return semantic.less_than(other, self, _builder)
 
     # <=
