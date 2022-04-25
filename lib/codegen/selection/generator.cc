@@ -784,7 +784,7 @@ void generator::visit_load_inst(ir::load_inst* x){
     int tot_width = nbits*vec;
     int width = std::min(tot_width, max_word_width);
     int n_words = std::max(1, tot_width / width);
-    bool has_evict_policy = x->get_eviction_policy() != ir::load_inst::NORMAL;
+    bool has_evict_policy = (x->get_eviction_policy() != ir::load_inst::NORMAL) && tgt_->as_nvidia()->sm() >= 80;
     // -----
     // create inline asm string
     // -----
@@ -2904,6 +2904,7 @@ void generator::visit_function(ir::function* fn) {
   }
   builder_->SetInsertPoint(bbs_[fn->blocks()[0]]);
   // create policies
+  if(tgt_->as_nvidia()->sm() >= 80)
   for(ir::load_inst::EVICTION_POLICY evict: {ir::load_inst::EVICT_FIRST, ir::load_inst::EVICT_LAST}){
     std::string policy = (evict == ir::load_inst::EVICT_FIRST) ? "evict_first" : "evict_last";
     std::string asm_str = "createpolicy.fractional.L2::" + policy + ".b64 $0;";
