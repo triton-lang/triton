@@ -37,7 +37,7 @@ if(WIN32)
     add_subdirectory(deps/dlfcn-win32/src ${CMAKE_BINARY_DIR}/dlfcn-win32)
 endif()
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -std=gnu++17")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17")
 
 
 ##########
@@ -162,7 +162,7 @@ list(APPEND CMAKE_MODULE_PATH ${LLVM_LIBRARY_DIR}/cmake/mlir)
 include(TableGen) # required by AddMLIR
 include(AddLLVM)
 include(AddMLIR)
-include(HandleLLVMOptions) # human-friendly error message
+# include(HandleLLVMOptions) # human-friendly error message
 
 include_directories(${MLIR_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR}/include)
@@ -174,18 +174,15 @@ add_subdirectory(lib)
 
 add_library(triton SHARED ${PYTHON_SRC})
 
-find_package(PythonLibs REQUIRED)
+# find_package(PythonLibs REQUIRED)
 
 target_link_libraries(triton
+  ${PYTHON_LIBRARIES}
   TritonIR
   TritonDriver
-  # TritonCodeGen
-
   # optimizations
   MLIRPass
   MLIRTransforms
-
-  ${PYTHON_LIBRARIES}
 )
 
 target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
