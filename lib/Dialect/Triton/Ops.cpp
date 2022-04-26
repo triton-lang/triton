@@ -1,5 +1,5 @@
-#include "triton/ir/Dialect.h"
-#include "triton/ir/Types.h"
+#include "triton/Dialect/Triton/Dialect.h"
+#include "triton/Dialect/Triton/Types.h"
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -38,10 +38,10 @@ static Type getPointerTypeFromTensor(Type type) {
 }
 
 #define GET_OP_CLASSES
-#include "triton/ir/Ops.cpp.inc"
+#include "triton/Dialect/Triton/Ops.cpp.inc"
 
 // enum attribute definitions
-#include "triton/ir/OpsEnums.cpp.inc"
+#include "triton/Dialect/Triton/OpsEnums.cpp.inc"
 
 namespace mlir {
 namespace triton {
