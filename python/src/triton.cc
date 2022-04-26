@@ -12,8 +12,8 @@
 #include "mlir/Transforms/Passes.h"
 
 
-#include "triton/ir/Dialect.h"
-#include "triton/ir/Types.h"
+#include "triton/Dialect/Triton/Dialect.h"
+#include "triton/Dialect/Triton/Types.h"
 
 #include "llvm/IR/Module.h"
 #include "llvm/IR/LegacyPassManager.h"
