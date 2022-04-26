@@ -942,9 +942,9 @@ class Kernel:
             assert _type == triton.language.constexpr, "only constexpr annotations are supported for now"
             wargs[pos] = _type(wargs[pos])
         # check that tensors are on GPU.
-        for arg in wargs:
-            if hasattr(arg, 'data_ptr'):
-                assert arg.is_cuda, "All tensors must be on GPU!"
+        # for arg in wargs:
+        #     if hasattr(arg, 'data_ptr'):
+        #         assert arg.is_cuda, "All tensors must be on GPU!"
         # set device (i.e., make sure torch has the context initialized)
         device = torch.cuda.current_device()
         torch.cuda.set_device(device)
