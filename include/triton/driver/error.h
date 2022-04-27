@@ -19,7 +19,8 @@ namespace triton
   namespace nvrtc
   {
 
-#define TRITON_CREATE_NVRTC_EXCEPTION(name, msg) class name: public std::exception { public: const char * what() const throw(){ return "NVRTC: Error- " msg; } }
+#define TRITON_CREATE_NVRTC_EXCEPTION(name, msg) \
+class name: public std::exception { public: const char * what() const throw() override { return "NVRTC: Error- " msg; } }
 
   TRITON_CREATE_NVRTC_EXCEPTION(out_of_memory              ,"out of memory");
   TRITON_CREATE_NVRTC_EXCEPTION(program_creation_failure   ,"program creation failure");
@@ -38,7 +39,8 @@ namespace triton
   {
   class base: public std::exception{};
 
-#define TRITON_CREATE_CUDA_EXCEPTION(name, msg) class name: public base { public:const char * what() const throw(){ return "CUDA: Error- " msg; } }
+#define TRITON_CREATE_CUDA_EXCEPTION(name, msg) \
+class name: public base { public:const char * what() const throw() override { return "CUDA: Error- " msg; } }
 
 
   TRITON_CREATE_CUDA_EXCEPTION(invalid_value                   ,"invalid value");
@@ -106,7 +108,8 @@ namespace triton
   {
   class base: public std::exception{};
 
-#define TRITON_CREATE_CUBLAS_EXCEPTION(name, msg) class name: public base { public: const char * what() const throw(){ return "CUBLAS: Error- " msg; } }
+#define TRITON_CREATE_CUBLAS_EXCEPTION(name, msg) \
+class name: public base { public: const char * what() const throw() override { return "CUBLAS: Error- " msg; } }
 
   TRITON_CREATE_CUBLAS_EXCEPTION(not_initialized              ,"not initialized");
   TRITON_CREATE_CUBLAS_EXCEPTION(alloc_failed                 ,"alloc failed");
@@ -124,7 +127,8 @@ namespace triton
 
   namespace cudnn
   {
-#define TRITON_CREATE_CUDNN_EXCEPTION(name, msg) class name: public std::exception { public: const char * what() const throw(){ return "CUDNN: Error- " msg; } }
+#define TRITON_CREATE_CUDNN_EXCEPTION(name, msg) \
+class name: public std::exception { public: const char * what() const throw() override { return "CUDNN: Error- " msg; } }
 
   TRITON_CREATE_CUDNN_EXCEPTION(not_initialized              ,"not initialized");
   TRITON_CREATE_CUDNN_EXCEPTION(alloc_failed                 ,"allocation failed");
@@ -148,7 +152,8 @@ namespace triton
   {
   class base: public std::exception{};
 
-#define TRITON_CREATE_HIP_EXCEPTION(name, msg) class name: public base { public:const char * what() const throw(){ return "HIP: Error- " msg; } }
+#define TRITON_CREATE_HIP_EXCEPTION(name, msg) \
+class name: public base { public:const char * what() const throw() override { return "HIP: Error- " msg; } }
 
 
   TRITON_CREATE_HIP_EXCEPTION(invalid_value                   ,"invalid value");

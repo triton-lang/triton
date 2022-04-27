@@ -1,1 +1,1 @@
-add_subdirectory(triton/ir)
+add_subdirectory(triton/Dialect)
