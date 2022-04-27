@@ -1,5 +1,5 @@
-#include "triton/Dialect/Triton/Dialect.h"
-#include "triton/Dialect/Triton/Types.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"

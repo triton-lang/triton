@@ -12,8 +12,10 @@
 #include "mlir/Transforms/Passes.h"
 
 
-#include "triton/Dialect/Triton/Dialect.h"
-#include "triton/Dialect/Triton/Types.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
+
+#include "triton/Dialect/Triton/Transforms/Passes.h"
 
 #include "llvm/IR/Module.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -1331,6 +1333,9 @@ void init_triton_ir(py::module &&m) {
       })
       .def("add_canonicalizer_pass", [](mlir::PassManager &self) {
         self.addPass(mlir::createCanonicalizerPass());
+      })
+      .def("add_triton_combine_pass", [](mlir::PassManager &self) {
+        self.addPass(mlir::triton::createCombineOpsPass());
       })
       ;
 }
