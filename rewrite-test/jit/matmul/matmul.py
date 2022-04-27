@@ -1,5 +1,7 @@
 import triton
 import triton.language as tl
+import triton._C.libtriton.triton as _triton
+
 
 import torch
 
@@ -91,5 +93,14 @@ mod, ctx = matmul_kernel.compile_to_ttir(
   64, 64, 32,
   8, grid=(2,)
 )
+
+assert mod.verify()
 mod.dump()
-mod.verify()
+
+pm = _triton.ir.pass_manager(ctx)
+pm.add_inliner_pass()
+pm.add_canonicalizer_pass()
+pm.run(mod)
+
+assert mod.verify()
+mod.dump()

@@ -55,16 +55,12 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(ir::module &ir, llvm::LLVMC
   dce.run(ir);  
   disassociate.run(ir);
   dce.run(ir);
-  align.run(ir);
-  axes.run(ir);
-  layouts.run(ir);
+  align.run(ir);  axes.run(ir);  layouts.run(ir);
   peephole.run(ir);
   dce.run(ir);
   if (target->is_gpu())
     cts.run(ir);
-  align.run(ir);
-  axes.run(ir);
-  layouts.run(ir);
+  align.run(ir);  axes.run(ir);  layouts.run(ir);
   coalesce.run(ir);
   dce.run(ir);
   align.run(ir);
@@ -72,14 +68,10 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(ir::module &ir, llvm::LLVMC
   if (target->is_gpu())
     cts.run(ir);
   dce.run(ir);
-  align.run(ir);
-  axes.run(ir);
-  layouts.run(ir);
+  align.run(ir);  axes.run(ir);  layouts.run(ir);
   peephole.run(ir);
   dce.run(ir);
-  align.run(ir);
-  axes.run(ir);
-  layouts.run(ir);
+  align.run(ir);  axes.run(ir);  layouts.run(ir);
   swizzle.run(ir);
   liveness.run(ir);
   allocation.run(ir);
