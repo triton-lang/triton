@@ -95,5 +95,18 @@ void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state, ::
   state.addTypes({resultType});
 }
 
+//-- DotOp --
+
+//-- BroadcastOp --
+OpFoldResult BroadcastOp::fold(ArrayRef<Attribute> operands) {
+  auto constOperand = src().getDefiningOp<arith::ConstantOp>();
+  if (!constOperand)
+    return {};
+
+  auto shapedType = getType().cast<ShapedType>();
+
+  return SplatElementsAttr::get(shapedType, {constOperand.getValue()});
+}
+
 } // namespace triton
 } // namespace mlir
