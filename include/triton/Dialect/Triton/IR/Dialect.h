@@ -9,8 +9,8 @@
 #include "mlir/Dialect/SCF/SCF.h"
 
 #include "triton/Dialect/Triton/IR/Traits.h"
-#include "triton/Dialect/Triton/Dialect.h.inc"
-#include "triton/Dialect/Triton/OpsEnums.h.inc"
+#include "triton/Dialect/Triton/IR/Dialect.h.inc"
+#include "triton/Dialect/Triton/IR/OpsEnums.h.inc"
 
 #define GET_OP_CLASSES
 #include "triton/Dialect/Triton/IR/Ops.h.inc"

@@ -198,7 +198,7 @@ def TT_GEPOp : TT_Op<"getelementptr",
 //
 // Shape Manipulation Ops
 //
-def TT_ReshapeOp : TT_Op<"reshape", [SameOperandsAndResultElementType]> {
+def TT_ReshapeOp : TT_Op<"reshape", [NoSideEffect, SameOperandsAndResultElementType]> {
     let summary = "reshape";
 
     let arguments = (ins TT_Tensor:$src);
@@ -208,7 +208,7 @@ def TT_ReshapeOp : TT_Op<"reshape", [SameOperandsAndResultElementType]> {
     let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
 }
 
-def TT_BroadcastOp : TT_Op<"broadcast", [SameOperandsAndResultElementType]> {
+def TT_BroadcastOp : TT_Op<"broadcast", [NoSideEffect, SameOperandsAndResultElementType]> {
     let summary = "broadcast";
 
     let arguments = (ins TT_Type:$src);
@@ -220,7 +220,7 @@ def TT_BroadcastOp : TT_Op<"broadcast", [SameOperandsAndResultElementType]> {
     let hasFolder = 1;
 }
 
-def TT_CatOp : TT_Op<"cat", [SameOperandsAndResultElementType]> {
+def TT_CatOp : TT_Op<"cat", [NoSideEffect, SameOperandsAndResultElementType]> {
     let summary = "concatenate 2 tensors";
 
     let arguments = (ins TT_Tensor:$lhs, TT_Tensor:$rhs);

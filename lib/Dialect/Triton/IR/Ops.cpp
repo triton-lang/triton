@@ -38,10 +38,10 @@ static Type getPointerTypeFromTensor(Type type) {
 }
 
 #define GET_OP_CLASSES
-#include "triton/Dialect/Triton/Ops.cpp.inc"
+#include "triton/Dialect/Triton/IR/Ops.cpp.inc"
 
 // enum attribute definitions
-#include "triton/Dialect/Triton/OpsEnums.cpp.inc"
+#include "triton/Dialect/Triton/IR/OpsEnums.cpp.inc"
 
 namespace mlir {
 namespace triton {

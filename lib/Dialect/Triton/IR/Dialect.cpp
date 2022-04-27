@@ -8,7 +8,7 @@
 #include "mlir/IR/DialectImplementation.h"
 
 
-#include "triton/Dialect/Triton/Dialect.cpp.inc"
+#include "triton/Dialect/Triton/IR/Dialect.cpp.inc"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -18,7 +18,7 @@ void TritonDialect::initialize() {
 
   addOperations<
 #define GET_OP_LIST
-#include "triton/Dialect/Triton/Ops.cpp.inc"
+#include "triton/Dialect/Triton/IR/Ops.cpp.inc"
                >();
 
   // We can also add interface here.
