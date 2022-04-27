@@ -49,7 +49,7 @@ def TritonGPUCoalescedEncodingAttr : TritonGPU_Attr<"TritonGPUCoalescedEncoding"
   let description = [{
 An encoding where each warp owns a contiguous portion of the target tensor. This is typically the kind of data layout
 consumed (and returned) by LoadInst.
-For example, a row-major coalesced layout may distribute a 32x16 tensor over 2 warps (i.e. 64 threads) as follows:
+For example, a row-major coalesced layout may distribute a 64x16 tensor over 2 warps (i.e. 64 threads) as follows:
 
                           thread tile size 2
                         - - - - - - /\ - - - - - -
@@ -61,12 +61,13 @@ size }  ....
                       -----------------------------/\-----------------------------------
                                             block tile size 8
 
-                      A_{16, 0}[T0]   A_{16, 1}[T0]   ... A_{16, 6}[T3]  A_{16, 7}[T3]       A_{16, 8}[T0]  A_{16, 9}[T0]  ... A_{16, 14}[T3]  A_{16, 15}[T3]
-                      A_{17, 0}[T4]   A_{17, 1}[T4]   ... A_{17, 6}[T7]  A_{17, 7}[T7]       A_{17, 8}[T4]  A_{17, 9}[T4]  ... A_{17, 14}[T7]  A_{17, 15}[T7]
-                      ....
-                      A_{30, 0}[T56]  A_{30, 1}[T56]  ... A_{30, 6}[T59] A_{30, 7}[T59]      A_{30, 8}[T56] A_{30, 9}[T56] ... A_{30, 14}[T59] A_{30, 15}[T59]
-                      A_{31, 0}[T60]  A_{31, 1}[T60]  ... A_{31, 6}[T63] A_{31, 7}[T63]      A_{31, 8}[T60] A_{31, 9}[T60] ... A_{31, 14}[T63] A_{31, 15}[T63]
       
+                      A_{32, 0}[T0]  A_{32, 1}[T0]  ...  A_{32, 6}[T3]  A_{32, 7}[T3]        A_{32, 8}[T0]  A_{32, 9}[T0]  ... A_{32, 14}[T3]  A_{32, 15}[T3]
+                      A_{33, 0}[T0]  A_{33, 1}[T0]  ...  A_{33, 6}[T3]  A_{33, 7}[T3]        A_{33, 8}[T0]  A_{33, 9}[T0]  ... A_{33, 14}[T3]  A_{33, 15}[T3]
+
+                      A_{62, 0}[T60]  A_{62, 1}[T60]  ...  A_{62, 6}[T63] A_{62, 7}[T63]     A_{62, 8}[T60] A_{62, 9}[T60] ... A_{62, 14}[T63] A_{62, 15}[T63]
+                      A_{63, 0}[T60]  A_{63, 1}[T60]  ...  A_{63, 6}[T63] A_{63, 7}[T63]     A_{63, 8}[T60] A_{63, 9}[T60] ... A_{63, 14}[T63] A_{63, 15}[T63]
+
 And the associated TritonGPU MLIR
 #SMEM = #triton_gpu.encoding<{
   threadTileSize = {2, 2}
