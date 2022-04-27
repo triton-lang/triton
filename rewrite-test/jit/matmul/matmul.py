@@ -99,6 +99,7 @@ mod.dump()
 
 pm = _triton.ir.pass_manager(ctx)
 pm.add_inliner_pass()
+pm.add_triton_combine_pass()
 pm.add_canonicalizer_pass()
 pm.run(mod)
 

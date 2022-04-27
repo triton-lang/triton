@@ -179,6 +179,7 @@ add_library(triton SHARED ${PYTHON_SRC})
 target_link_libraries(triton
   ${PYTHON_LIBRARIES}
   TritonIR
+  TritonTransforms
   TritonDriver
   # optimizations
   MLIRPass

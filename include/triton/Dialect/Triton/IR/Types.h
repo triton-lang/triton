@@ -5,6 +5,6 @@
 #include "mlir/IR/Types.h"
 
 #define GET_TYPEDEF_CLASSES
-#include "triton/Dialect/Triton/Types.h.inc"
+#include "triton/Dialect/Triton/IR/Types.h.inc"
 
 #endif // TRITON_IR_TYPES_H_
