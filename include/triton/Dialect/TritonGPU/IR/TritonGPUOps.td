@@ -1,10 +1,13 @@
 #ifndef TRITONGPU_OPS
 #define TRITONGPU_OPS
 
-include "TritonGPUDialect.td"
-// include ""
+include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
+include "triton/Dialect/Triton/IR/TritonTypes.td"
+include "mlir/IR/OpBase.td"
+include "mlir/Interfaces/SideEffectInterfaces.td" // NoSideEffect
+include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 
-def TTG_Op<string mnemonic, list<Trait> traits = []> :
+class TTG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonGPU_Dialect, mnemonic, traits>;
 
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",

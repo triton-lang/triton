@@ -1,5 +1,5 @@
-#ifndef TRITON_IR_DIALECT_H_
-#define TRITON_IR_DIALECT_H_
+#ifndef TRITON_DIALECT_TRITON_IR_DIALECT_H_
+#define TRITON_DIALECT_TRITON_IR_DIALECT_H_
 
 
 #include "mlir/IR/BuiltinOps.h"
