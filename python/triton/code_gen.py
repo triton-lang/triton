@@ -358,6 +358,8 @@ class CodeGenerator(ast.NodeVisitor):
             # by default, constexpr are assigned into python variable
             if isinstance(value, triton.language.constexpr):
                 value = value.value
+            if value is None:
+                raise ValueError(f'Cannot assign None to non-constexpr `{name}`. Please annotate as `: tl.constexpr`')
             if not isinstance(value, triton.language.tensor):
                 value = triton.language.core._to_tensor(value, self.builder)
             self.value_constructor.set_value(name, value)
@@ -719,7 +721,7 @@ class CodeGenerator(ast.NodeVisitor):
         ast.NodeVisitor.generic_visit(self, node)
 
     def visit_NoneType(self, node):
-        return None
+        return triton.language.constexpr(None)
 
     def visit(self, node):
         if node is not None:
