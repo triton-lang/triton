@@ -721,7 +721,7 @@ class CodeGenerator(ast.NodeVisitor):
         ast.NodeVisitor.generic_visit(self, node)
 
     def visit_NoneType(self, node):
-        return triton.language.constexpr(None)
+        return None
 
     def visit(self, node):
         if node is not None:
