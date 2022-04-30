@@ -27,6 +27,8 @@ def _to_tensor(x, builder):
     elif isinstance(x, float):
         return tensor(builder.get_float32(x), float32)
     elif isinstance(x, constexpr):
+        if x.value is None:
+            return None
         return _to_tensor(x.value, builder)
     elif isinstance(x, tensor):
         return x
