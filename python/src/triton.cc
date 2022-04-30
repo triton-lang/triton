@@ -12,9 +12,9 @@
 #include "mlir/Transforms/Passes.h"
 
 
+#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPU.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
-
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 
 #include "llvm/IR/Module.h"
@@ -1336,6 +1336,9 @@ void init_triton_ir(py::module &&m) {
       })
       .def("add_triton_combine_pass", [](mlir::PassManager &self) {
         self.addPass(mlir::triton::createCombineOpsPass());
+      })
+      .def("add_convert_triton_to_tritongpu_pass", [](mlir::PassManager &self) {
+        self.addPass(mlir::triton::createConvertTritonToTritonGPUPass());
       })
       ;
 }
