@@ -9,6 +9,9 @@
 
 #include "triton/Dialect/TritonGPU/IR/Dialect.h.inc"
 
+#define GET_ATTRDEF_CLASSES
+#include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.h.inc"
+
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Ops.h.inc"
 
