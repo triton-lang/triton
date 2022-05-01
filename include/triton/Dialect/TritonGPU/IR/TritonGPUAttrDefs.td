@@ -2,6 +2,7 @@
 #define TRITONGPU_ATTRDEFS
 
 include "TritonGPUDialect.td"
+// include "mlir/IR/TensorEncoding.td"
 
 class TritonGPU_Attr<string name, list<Trait> traits = []>
   : AttrDef<TritonGPU_Dialect, name, traits>;
@@ -43,7 +44,7 @@ And the associated TritonGPU MLIR
   );
 }
 
-def TritonGPUCoalescedEncodingAttr : TritonGPU_Attr<"TritonGPUCoalescedEncoding"> {
+def TritonGPUDistributedEncodingAttr : TritonGPU_Attr<"TritonGPUDistributedEncoding"> {
   let mnemonic = "coalesced encoding";
 
   let description = [{
@@ -81,7 +82,9 @@ And the associated TritonGPU MLIR
   let parameters = (
     ins
     ArrayRefParameter<"unsigned">:$threadTileSize,
-    ArrayRefParameter<"unsigned">:$blockTileSize
+    ArrayRefParameter<"unsigned">:$blockTileSize,
+    // fastest-changing axis first
+    ArrayRefParameter<"unsigned">:$order
   );
 
   // let genVerifyDecl = 1;
@@ -90,7 +93,7 @@ And the associated TritonGPU MLIR
 def TritonGPUMmaEncodingAttr : TritonGPU_Attr<"TritonGPUMmaEncoding"> {
   let mnemonic = "mma encoding";
 
-  let description = [{TODO: I think we may be able to implement it as a special-case of Coalesced encoding with maybe one more warpTileSize attribute!}];
+  let description = [{TODO: I think we may be able to implement it as a special-case of Distributed encoding with maybe one more warpTileSize attribute!}];
 
   let parameters = (
     ins
