@@ -41,6 +41,10 @@ void TritonGPUSharedEncodingAttr::print(mlir::AsmPrinter &printer) const {
 }
 
 void TritonGPUDialect::initialize() {
+  addAttributes<
+#define GET_ATTRDEF_LIST
+#include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.cpp.inc"
+      >();
   addOperations<
 #define GET_OP_LIST
 #include "triton/Dialect/TritonGPU/IR/Ops.cpp.inc"
