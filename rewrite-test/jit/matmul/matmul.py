@@ -94,8 +94,8 @@ mod, ctx = matmul_kernel.compile_to_ttir(
   8, grid=(2,)
 )
 
-assert mod.verify()
-mod.dump()
+# assert mod.verify()
+# mod.dump()
 
 pm = _triton.ir.pass_manager(ctx)
 pm.add_inliner_pass()
@@ -104,5 +104,5 @@ pm.add_canonicalizer_pass()
 pm.add_convert_triton_to_tritongpu_pass()
 pm.run(mod)
 
-assert mod.verify()
-mod.dump()
+# assert mod.verify()
+# mod.dump()

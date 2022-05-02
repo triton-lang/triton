@@ -1,7 +1,8 @@
-from tarfile import BLOCKSIZE
 import torch
 import triton
 import triton.language as tl
+import triton._C.libtriton.triton as _triton
+
 
 
 @triton.jit
