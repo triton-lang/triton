@@ -26,7 +26,7 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
     assert(numElements > numThreads);
     assert(numElements % numThreads == 0);
 
-    // assert no encoding?
+    // or assert no encoding?
 
     // Now we assume:
     //   contiguous = 1, order = 0, 1, 2, ..., 
@@ -62,14 +62,26 @@ TritonGPUConversionTarget::TritonGPUConversionTarget(
                scf::ReduceOp, scf::ReduceReturnOp>();
   
   addDynamicallyLegalDialect<arith::ArithmeticDialect>([&](Operation *op) {
-    if (typeConverter.isLegal(op))
+    if (typeConverter.isLegal(op)) {
+      // llvm::errs() << *op << " is dyanamically legal\n";
       return true;
+    }
+    // if (typeConverter.isLegal(op->getOperandTypes()))
+    //   llvm::errs() << *op << " is illegal with legal operands\n";
+    // if (typeConverter.isLegal(op->getResultTypes())) {
+    //   llvm::errs() << *op << " is illegal with legal results\n";
+    //   llvm::errs() << "operand0: " << op->getOperand(0) << "\n"
+    //                << "operand1: " << op->getOperand(1) << "\n";
+    // }
     return false;
   });
 
   addDynamicallyLegalDialect<triton::TritonDialect>([&](Operation *op) {
     if (typeConverter.isLegal(op))
       return true;
+    // llvm::errs() << *op << " is illegal\n"
+    //              << "inside ...\n"
+    //              << *op->getParentOp() << "\n";
     return false;
   });
 
