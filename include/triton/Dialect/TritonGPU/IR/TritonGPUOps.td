@@ -11,6 +11,10 @@ include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 
 def TT_BoolTensor : TensorOf<[I1]>;
 
+def TT_BoolLike : AnyTypeOf<[I1, TT_BoolTensor]>;
+def TT_IntegerLike : AnyTypeOf<[TT_Int, TT_IntegerTensor]>;
+def TT_FloatLike : AnyTypeOf<[TT_Float, TT_FloatTensor]>;
+
 class TTG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonGPU_Dialect, mnemonic, traits>;
 
@@ -38,10 +42,10 @@ def TTG_CmpIOp : TTG_Op<"cmpi"> {
   let description = [{}];
 
   let arguments = (ins Arith_CmpIPredicateAttr:$predicate,
-                       TT_IntegerTensor:$lhs,
-                       TT_IntegerTensor:$rhs);
+                       TT_IntegerLike:$lhs,
+                       TT_IntegerLike:$rhs);
 
-  let results = (outs TT_BoolTensor:$result);
+  let results = (outs TT_BoolLike:$result);
 }
 
 def TTG_CmpFOp : TTG_Op<"cmpf"> {
@@ -50,10 +54,10 @@ def TTG_CmpFOp : TTG_Op<"cmpf"> {
   let description = [{}];
 
   let arguments = (ins Arith_CmpFPredicateAttr:$predicate,
-                       TT_FloatTensor:$lhs,
-                       TT_FloatTensor:$rhs);
+                       TT_FloatLike:$lhs,
+                       TT_FloatLike:$rhs);
 
-  let results = (outs TT_BoolTensor:$result);
+  let results = (outs TT_BoolLike:$result);
 }
 
 #endif
