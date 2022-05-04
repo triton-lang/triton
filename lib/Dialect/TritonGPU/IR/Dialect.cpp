@@ -19,7 +19,11 @@ TritonGPUDistributedEncodingAttr::parse(mlir::AsmParser &parser, mlir::Type type
 }
 
 void TritonGPUDistributedEncodingAttr::print(mlir::AsmPrinter &printer) const {
-  llvm_unreachable("Not implemented");
+  printer << "<"
+          << "threadTileSize = " << getThreadTileSize()
+          << ", blockTileSize = " << getBlockTileSize()
+          << ", order = " << getOrder()
+          << ">";
 }
 
 mlir::Attribute 
