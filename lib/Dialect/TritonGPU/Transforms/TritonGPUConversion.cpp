@@ -50,7 +50,9 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
   // materailizations
   addArgumentMaterialization([&](OpBuilder &builder, RankedTensorType tensorType,
                                  ValueRange inputs, Location loc) {
-    // llvm::errs() << "Trying to materialize target... " << inputs[0] << "\n";
+    llvm::errs() << "Trying to materialize target... " << inputs[0] << "\n"
+                 << "in: \n";
+    inputs[0].dyn_cast<BlockArgument>().getOwner()->getParentOp()->getParentOp()->print(llvm::errs());
     llvm_unreachable("Not implemented");
     return llvm::None;
   });
