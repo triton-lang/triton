@@ -3326,7 +3326,7 @@ void generator::finalize_phi_node(ir::phi_node *x) {
   }
 }
 
-StructType* generator::packed_type(ir::value* i){
+void generator::packed_type(ir::value* i){
   Type* dtype = cvt(i->get_type()->get_tile_element_ty());
   auto* layout = dynamic_cast<analysis::scanline_layout*>(layouts_->get(i));
   assert(layout);
