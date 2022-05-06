@@ -34,14 +34,14 @@ def _layer_norm_fwd_fused(
     _mean = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
     for off in range(0, N, BLOCK_SIZE):
         cols = off + tl.arange(0, BLOCK_SIZE)
-        a = tl.load(A + cols, mask=cols<N, other=0.)#, eviction_policy="evict_last")
+        a = tl.load(A + cols, mask=cols<N, other=0., eviction_policy="evict_last")
         _mean += a
     mean = tl.sum(_mean, axis = 0) / N
     # compute variance
     _var = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
     for off in range(0, N, BLOCK_SIZE):
         cols = off + tl.arange(0, BLOCK_SIZE)
-        a = tl.load(A + cols, mask=cols<N, other=0.)#, eviction_policy="evict_last")
+        a = tl.load(A + cols, mask=cols<N, other=0., eviction_policy="evict_last")
         a = tl.where(cols<N, a - mean, 0.)
         _var += a * a
     var = tl.sum(_var, axis = 0) / N
@@ -53,9 +53,9 @@ def _layer_norm_fwd_fused(
     for off in range(0, N, BLOCK_SIZE):
         cols = off + tl.arange(0, BLOCK_SIZE)
         mask = cols < N
+        a = tl.load(A + cols, mask=mask, other=0., eviction_policy="evict_first")
         weight = tl.load(Weight + cols, mask=mask)
         bias = tl.load(Bias + cols, mask=mask)
-        a = tl.load(A + cols, mask=mask, other=0.)#, eviction_policy="evict_first")
         a_hat = (a - mean) * rstd
         out = a_hat * weight + bias
         # # write-back
@@ -153,11 +153,10 @@ class LayerNorm(torch.autograd.Function):
         # Less than 64KB per feature: enqueue fused kernel
         BLOCK_SIZE = triton.next_power_of_2(N)
         BLOCK_SIZE = max(BLOCK_SIZE, 128)
-        BLOCK_SIZE = min(BLOCK_SIZE, 4096)
+        # BLOCK_SIZE = min(BLOCK_SIZE, 4096)
         # heuristics for number of warps
         num_warps = min(max(BLOCK_SIZE // 256, 1), 8)
         # enqueue kernel
-        print(weight)
         _layer_norm_fwd_fused[(M,)](y, x_arg, weight, bias, mean, rstd,
                                     x_arg.stride(0), N, eps,
                                     BLOCK_SIZE=BLOCK_SIZE, num_warps=num_warps)
@@ -240,10 +239,10 @@ def test_layer_norm(M, N, dtype, eps=1e-5, device='cuda'):
         styles=[('blue', '-'), ('green', '-'), ('orange', '-')],
         ylabel='GB/s',
         plot_name='layer-norm-backward',
-        args={'M': 4096, 'dtype': torch.float16, 'mode': 'backward'}
+        args={'M': 4096, 'dtype': torch.float16, 'mode': 'forward'}
     )
 )
-def bench_layer_norm(M, N, dtype, provider, mode='forward', eps=1e-5, device='cuda'):
+def bench_layer_norm(M, N, dtype, provider, mode, eps=1e-5, device='cuda'):
     # create data
     x_shape = (M, N)
     w_shape = (x_shape[-1], )
@@ -273,5 +272,5 @@ def bench_layer_norm(M, N, dtype, provider, mode='forward', eps=1e-5, device='cu
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
 
-test_layer_norm(1151, 8192, torch.float16)
-# bench_layer_norm.run(save_path='.', print_data=True)
+# test_layer_norm(1151, 8192, torch.float16)
+bench_layer_norm.run(save_path='.', print_data=True)
