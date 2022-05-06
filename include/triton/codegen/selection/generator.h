@@ -116,7 +116,7 @@ private:
 private:
   Type *cvt(ir::type *ty);
   llvm::Attribute cvt(ir::attribute attr);
-  llvm::StructType* packed_type(ir::value* i);
+  void packed_type(ir::value* i);
   void forward_declare(ir::function* fn);
 
 public:
