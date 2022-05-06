@@ -153,7 +153,7 @@ class LayerNorm(torch.autograd.Function):
         # Less than 64KB per feature: enqueue fused kernel
         BLOCK_SIZE = triton.next_power_of_2(N)
         BLOCK_SIZE = max(BLOCK_SIZE, 128)
-        # BLOCK_SIZE = min(BLOCK_SIZE, 4096)
+        BLOCK_SIZE = min(BLOCK_SIZE, 4096)
         # heuristics for number of warps
         num_warps = min(max(BLOCK_SIZE // 256, 1), 8)
         # enqueue kernel
@@ -238,7 +238,7 @@ def test_layer_norm(M, N, dtype, eps=1e-5, device='cuda'):
         line_names=['Triton', 'Torch'] + (['Apex'] if HAS_APEX else []),
         styles=[('blue', '-'), ('green', '-'), ('orange', '-')],
         ylabel='GB/s',
-        plot_name='layer-norm-backward',
+        plot_name='layer-norm',
         args={'M': 4096, 'dtype': torch.float16, 'mode': 'forward'}
     )
 )
