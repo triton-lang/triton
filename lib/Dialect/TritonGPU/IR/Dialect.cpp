@@ -41,7 +41,11 @@ TritonGPUSharedEncodingAttr::parse(mlir::AsmParser &parser, ::mlir::Type type) {
 }
 
 void TritonGPUSharedEncodingAttr::print(mlir::AsmPrinter &printer) const {
-  llvm_unreachable("Not implemented");
+  printer << "<"
+          // << "threadTileSize = " << getThreadTileSize()
+          // << ", blockTileSize = " << getBlockTileSize()
+          // << ", order = " << getOrder()
+          << ">";
 }
 
 void TritonGPUDialect::initialize() {
