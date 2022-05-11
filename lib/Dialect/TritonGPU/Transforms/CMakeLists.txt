@@ -1,10 +1,12 @@
-add_mlir_dialect_library(TritonGPUConversion
+add_mlir_dialect_library(TritonGPUTransforms
+  Pipeline.cpp
   TritonGPUConversion.cpp
 
-  # ADDITIONAL_HEADER_DIRS
+  DEPENDS
+  TritonGPUTransformsIncGen
 
   LINK_LIBS PUBLIC
   TritonIR
   TritonGPUIR
-  # MLIRTransformUtils
+  MLIRTransformUtils
 )

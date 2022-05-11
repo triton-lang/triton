@@ -182,6 +182,8 @@ target_link_libraries(triton
   TritonTransforms
   TritonDriver
   TritonToTritonGPU
+  TritonGPUIR
+  TritonGPUTransforms
   # optimizations
   MLIRPass
   MLIRTransforms
