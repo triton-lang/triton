@@ -616,8 +616,9 @@ void layouts::run(ir::module &mod) {
       unsigned axis = red->get_axis();
       // shape
       auto shapes = arg->get_type()->get_block_shapes();
-      scanline_layout *layout = get(arg)->to_scanline();
-      shapes[axis] = layout->mts(axis);
+      distributed_layout* layout = dynamic_cast<analysis::distributed_layout*>(arg);
+      shapes[axis] = layout->shape_per_cta(axis) / layout->contig_per_thread(axis);
+      
       // create layout
       layouts_[id] = new shared_layout(layout, axes_->get(arg), shapes, {red}, red->get_type()->get_scalar_ty(), align_, tgt_);
       tmp_[red] = id;
