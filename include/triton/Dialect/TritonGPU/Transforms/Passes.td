@@ -3,7 +3,7 @@
 
 include "mlir/Pass/PassBase.td"
 
-def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::FuncOp"> {
+def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
   let summary = "pipeline";
 
   let description = [{

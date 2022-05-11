@@ -16,6 +16,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
+#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 
 #include "llvm/IR/Module.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -1339,6 +1340,9 @@ void init_triton_ir(py::module &&m) {
       })
       .def("add_convert_triton_to_tritongpu_pass", [](mlir::PassManager &self) {
         self.addPass(mlir::triton::createConvertTritonToTritonGPUPass());
+      })
+      .def("add_tritongpu_pipeline_pass", [](mlir::PassManager &self) {
+        self.addPass(mlir::createTritonGPUPipelinePass());
       })
       ;
 }
