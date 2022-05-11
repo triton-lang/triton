@@ -35,14 +35,14 @@ def _layer_norm_fwd_fused(
     _mean = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
     for off in range(0, N, BLOCK_SIZE):
         cols = off + tl.arange(0, BLOCK_SIZE)
-        a = tl.load(A + cols, mask=cols<N, other=0., eviction_policy="evict_last").to(tl.float32)
+        a = tl.load(A + cols, mask=cols<N, other=0.).to(tl.float32)
         _mean += a
     mean = tl.sum(_mean, axis = 0) / N
     # compute variance
     _var = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
     for off in range(0, N, BLOCK_SIZE):
         cols = off + tl.arange(0, BLOCK_SIZE)
-        a = tl.load(A + cols, mask=cols<N, other=0., eviction_policy="evict_last").to(tl.float32)
+        a = tl.load(A + cols, mask=cols<N, other=0.).to(tl.float32)
         a = tl.where(cols<N, a - mean, 0.)
         _var += a * a
     var = tl.sum(_var, axis = 0) / N
@@ -56,7 +56,7 @@ def _layer_norm_fwd_fused(
         mask = cols < N
         weight = tl.load(Weight + cols, mask=mask)
         bias = tl.load(Bias + cols, mask=mask)
-        a = tl.load(A + cols, mask=mask, other=0., eviction_policy="evict_first").to(tl.float32)
+        a = tl.load(A + cols, mask=mask, other=0.).to(tl.float32)
         a_hat = (a - mean) * rstd
         out = a_hat * weight + bias
         # # write-back
@@ -263,7 +263,7 @@ def test_layer_norm(M, N, dtype, eps=1e-5, device='cuda'):
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=['N'],
-        x_vals=[512 * i for i in range(2, 32)],
+        x_vals=[512 * i for i in range(1, 32)],
         line_arg='provider',
         line_vals=['triton', 'torch'] + (['apex'] if HAS_APEX else []),
         line_names=['Triton', 'Torch'] + (['Apex'] if HAS_APEX else []),

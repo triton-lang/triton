@@ -32,6 +32,8 @@ def _to_tensor(x, builder):
         return _to_tensor(x.value, builder)
     elif isinstance(x, tensor):
         return x
+    elif x is None:
+        return None
     assert False, f'cannot convert {x} to tensor'
 
 
