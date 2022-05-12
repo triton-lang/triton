@@ -3,9 +3,11 @@ Layer Normalization
 ====================
 """
 
+import torch
+
 import triton
 import triton.language as tl
-import torch
+
 try:
     # This is https://github.com/NVIDIA/apex, NOT the apex on PyPi, so it
     # should not be added to extras_require in setup.py.
