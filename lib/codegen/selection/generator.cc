@@ -1182,9 +1182,13 @@ void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
   if(atom->get_type()->is_block_ty()){
     int ld = ords_.at(ptr)[0];
     unsigned alignment = alignment_->get(ptr, ld);
-    vec = std::min<int>(layouts_->get(ptr)->to_scanline()->nts(ld), alignment);
-    vec = std::min(vec, val->get_type()->get_tile_element_ty()->is_fp16_ty() ? 2 : 1);
+    analysis::scanline_layout* scanline = layouts_->get(ptr)->to_scanline();
+    if(scanline){
+      vec = std::min<int>(scanline->nts(ld), alignment);
+      vec = std::min(vec, val->get_type()->get_tile_element_ty()->is_fp16_ty() ? 2 : 1);
+    }
   }
+
 
   for(int i = 0; i < idxs_.at(val).size(); i += vec){
     auto idx = idxs_[val][i];

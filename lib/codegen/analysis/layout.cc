@@ -616,7 +616,7 @@ void layouts::run(ir::module &mod) {
       unsigned axis = red->get_axis();
       // shape
       auto shapes = arg->get_type()->get_block_shapes();
-      distributed_layout* layout = dynamic_cast<analysis::distributed_layout*>(arg);
+      distributed_layout* layout = dynamic_cast<analysis::distributed_layout*>(get(arg));
       shapes[axis] = layout->shape_per_cta(axis) / layout->contig_per_thread(axis);
       
       // create layout

@@ -61,6 +61,7 @@ void coalesce::run(ir::module &mod) {
     if(dynamic_cast<ir::store_inst*>(i) || dynamic_cast<ir::atomic_rmw_inst*>(i))
     if(ir::value* op = i->get_operand(1))
     if(op->get_type()->is_block_ty())
+    if(op->get_type()->get_tile_rank() == 2)
     if(layout_->get(op)->to_mma()){
       ir::instruction* new_op = ir::cvt_layout_inst::create(op);
       builder.set_insert_point(i);
