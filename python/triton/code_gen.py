@@ -822,6 +822,7 @@ class Kernel:
             torch.float32: 'f32',
             torch.float64: 'f64',
             torch.bool: 'i1',
+            torch.uint8: 'u8',
             torch.int8: 'i8',
             torch.int16: 'i16',
             torch.int32: 'i32',
