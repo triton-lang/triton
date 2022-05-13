@@ -21,7 +21,6 @@ class type {
 public:
   typedef std::vector<unsigned>	         block_shapes_t;
 
-protected:
   typedef std::vector<type*>                  contained_tys_vec_t;
   typedef contained_tys_vec_t::iterator       ty_iterator;
   typedef contained_tys_vec_t::const_iterator const_ty_iterator;
