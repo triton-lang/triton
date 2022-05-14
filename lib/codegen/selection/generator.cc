@@ -2523,10 +2523,11 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
     default: throw std::runtime_error("unreachable");
   }
   ir::value *arg = x->get_operand(0);
-  if(arg->get_type()->get_tile_rank() == 1)
-    visit_reduce1d_inst(x, do_acc, neutral);
-  else
+  analysis::scanline_layout* scanline = layouts_->get(x->get_operand(0))->to_scanline();
+  if(scanline && scanline->get_order()[0] == x->get_axis())
     visit_reducend_inst_fast(x, do_acc, neutral);
+  else
+    visit_reducend_inst(x, do_acc, neutral);
 }
 
 /**
