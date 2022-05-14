@@ -475,6 +475,7 @@ protected:
   std::string get_eviction_policy_repr() const {
     if (eviction_ == EVICT_FIRST) return ".L1::evict_first";
     if (eviction_ == EVICT_LAST) return ".L2::evict_last";
+    return "";
   }
   EVICTION_POLICY eviction_;
   CACHE_MODIFIER cache_;
