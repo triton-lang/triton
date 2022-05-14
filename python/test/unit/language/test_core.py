@@ -644,7 +644,7 @@ def test_f16_to_f8_rounding():
     )
     assert torch.all(
         torch.logical_not(mismatch)
-    ), f"{f16_input[mismatch]=} {f16_output[mismatch]=} {abs_error[mismatch]=} {min_error[mismatch]=}"
+    ), f"f16_input[mismatch]={f16_input[mismatch]} f16_output[mismatch]={f16_output[mismatch]} abs_error[mismatch]={abs_error[mismatch]} min_error[mismatch]={min_error[mismatch]}"
 
 
 # ---------------
