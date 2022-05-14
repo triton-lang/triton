@@ -680,7 +680,7 @@ reduce_configs1 = [
                              for axis in [1]
 ]
 reduce_configs2 = [
-    ('float32', shape, 1) for shape in [(32, 64), (64, 128), (128, 256), (128, 16)]
+    ('float32', shape, 1) for shape in [(2, 32), (4, 128), (32, 64), (64, 128), (128, 256), (32, 1024)]
 ]
 @pytest.mark.parametrize("dtype_str, shape, axis", reduce_configs1 + reduce_configs2)
 def test_reduce2d(dtype_str, shape, axis, device='cuda'):

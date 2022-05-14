@@ -2373,7 +2373,7 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
   std::vector<int> order = layout->get_order();
   unsigned mts = layout->mts(order[0]);
   unsigned nts = layout->nts(order[0]);
-  unsigned per_thread = shapes[order[0]] / mts;
+  unsigned col_per_thread = shapes[order[0]] / mts;
   auto idxs = idxs_.at(arg);
   size_t n_elts = idxs.size();
   //
@@ -2385,41 +2385,43 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
   Value* lane = urem(thread, i32(32));
   size_t warps_per_inner = std::max<int>(mts/32, 1);
   Value* warp_i = udiv(warp, i32(warps_per_inner));
-  // std::cout << per_thread << std::endl;
+  unsigned row_per_thread = std::max<int>(32/mts, 1);
 
-  for(size_t i = 0; i < n_elts/per_thread; i ++){
+  for(size_t i = 0; i < n_elts/col_per_thread; i++){
     Value* acc;
     // reduce within thread
-    for(size_t j = 0; j < per_thread; j++){
-      Value* val = vals_[arg][idxs[i*per_thread + j]];
+    for(size_t j = 0; j < col_per_thread; j++){
+      Value* val = vals_[arg][idxs[i*col_per_thread + j]];
       acc = (j == 0) ? val : do_acc(acc, val);
     }
     // reduce within warp
     for(int k = std::min<int>(mts, 32)/2 ; k > 0; k >>= 1)
       acc = do_acc(acc, shfl_sync(acc, k));
     // store warp result in shared memory
-    add_barrier();
-    store(neutral, gep(base, lane));
-    add_barrier();
-    store(acc, gep(base, warp));
-    add_barrier();
-    // reduce across warps
-    Value *cond = icmp_eq(warp, i32(0));
-    Instruction *barrier = add_barrier();
-    builder_->SetInsertPoint(barrier->getParent());
-    Instruction* dummy = builder_->CreateRet(nullptr);
-    Instruction *term = llvm::SplitBlockAndInsertIfThen(cond, barrier, false);
-    dummy->removeFromParent();
-    builder_->SetInsertPoint(term);
-    Value* ret = load(gep(base, thread));
-    for(int k = (mts/32)/2; k > 0; k >>= 1){
-      Value *current = shfl_sync(ret, k);
-      ret = do_acc(ret, current);
+    Value* ret = acc;
+    if(mts >= 32){
+      add_barrier();
+      store(neutral, gep(base, lane));
+      add_barrier();
+      store(acc, gep(base, warp));
+      add_barrier();
+      // reduce across warps
+      Value *cond = icmp_eq(warp, i32(0));
+      Instruction *barrier = add_barrier();
+      builder_->SetInsertPoint(barrier->getParent());
+      Instruction* dummy = builder_->CreateRet(nullptr);
+      Instruction *term = llvm::SplitBlockAndInsertIfThen(cond, barrier, false);
+      dummy->removeFromParent();
+      builder_->SetInsertPoint(term);
+      ret = load(gep(base, thread));
+      for(int k = (mts/32)/2; k > 0; k >>= 1){
+        Value *current = shfl_sync(ret, k);
+        ret = do_acc(ret, current);
+      }
+      store(ret, gep(base, thread));
+      builder_->SetInsertPoint(barrier->getParent());
+      ret = load(gep(base, warp));
     }
-    store(ret, gep(base, thread));
-
-    builder_->SetInsertPoint(barrier->getParent());
-    ret = load(gep(base, warp));
     vals_[x][idxs_[x][i]] = ret;
   }
 }
