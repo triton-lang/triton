@@ -676,9 +676,16 @@ def test_reduce1d(dtype_str, shape, device='cuda'):
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
 
 
-@pytest.mark.parametrize("dtype_str, shape, axis", [
-    (dtype, (1, 1024), 1) for dtype in ['float32', 'uint32']
-])
+reduce_configs1 = [
+    (dtype, (1, 1024), axis) for dtype in ['float32', 'uint32']
+    for axis in [1]
+]
+reduce_configs2 = [
+    ('float32', shape, 1) for shape in [(2, 32), (4, 128), (32, 64), (64, 128), (128, 256), (32, 1024)]
+]
+
+
+@pytest.mark.parametrize("dtype_str, shape, axis", reduce_configs1 + reduce_configs2)
 def test_reduce2d(dtype_str, shape, axis, device='cuda'):
     # triton kernel
     @triton.jit
