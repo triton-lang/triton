@@ -2365,6 +2365,65 @@ void generator::visit_reduce1d_inst(ir::reduce_inst* x, std::function<Value*(Val
 /**
  * \brief Code Generation for `reduce` (ND case)
  */
+void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value*(Value*,Value*)> do_acc, Value *neutral){
+  //
+  ir::value *arg = x->get_operand(0);
+  analysis::scanline_layout* layout = layouts_->get(arg)->to_scanline();
+  std::vector<unsigned> shapes = layout->get_shape();
+  std::vector<int> order = layout->get_order();
+  unsigned mts = layout->mts(order[0]);
+  unsigned nts = layout->nts(order[0]);
+  unsigned per_thread = shapes[order[0]] / mts;
+  auto idxs = idxs_.at(arg);
+  size_t n_elts = idxs.size();
+  //
+  Type *ret_ty = cvt(x->get_type()->get_scalar_ty());
+  unsigned addr_space = shmem_->getType()->getPointerAddressSpace();
+  Value *base = bit_cast(shmem_, ptr_ty(ret_ty, addr_space));
+  Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
+  Value* warp = udiv(thread, i32(32));
+  Value* lane = urem(thread, i32(32));
+  size_t warps_per_inner = std::max<int>(mts/32, 1);
+  Value* warp_i = udiv(warp, i32(warps_per_inner));
+  // std::cout << per_thread << std::endl;
+
+  for(size_t i = 0; i < n_elts/per_thread; i ++){
+    Value* acc;
+    // reduce within thread
+    for(size_t j = 0; j < per_thread; j++){
+      Value* val = vals_[arg][idxs[i*per_thread + j]];
+      acc = (j == 0) ? val : do_acc(acc, val);
+    }
+    // reduce within warp
+    for(int k = std::min<int>(mts, 32)/2 ; k > 0; k >>= 1)
+      acc = do_acc(acc, shfl_sync(acc, k));
+    // store warp result in shared memory
+    add_barrier();
+    store(neutral, gep(base, lane));
+    add_barrier();
+    store(acc, gep(base, warp));
+    add_barrier();
+    // reduce across warps
+    Value *cond = icmp_eq(warp, i32(0));
+    Instruction *barrier = add_barrier();
+    builder_->SetInsertPoint(barrier->getParent());
+    Instruction* dummy = builder_->CreateRet(nullptr);
+    Instruction *term = llvm::SplitBlockAndInsertIfThen(cond, barrier, false);
+    dummy->removeFromParent();
+    builder_->SetInsertPoint(term);
+    Value* ret = load(gep(base, thread));
+    for(int k = (mts/32)/2; k > 0; k >>= 1){
+      Value *current = shfl_sync(ret, k);
+      ret = do_acc(ret, current);
+    }
+    store(ret, gep(base, thread));
+
+    builder_->SetInsertPoint(barrier->getParent());
+    ret = load(gep(base, warp));
+    vals_[x][idxs_[x][i]] = ret;
+  }
+}
+
 void generator::visit_reducend_inst(ir::reduce_inst* x, std::function<Value*(Value*,Value*)> do_acc, Value *neutral) {
   ir::value *arg = x->get_operand(0);
   Type *ty = cvt(x->get_type()->get_scalar_ty());
@@ -2465,7 +2524,7 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
   if(arg->get_type()->get_tile_rank() == 1)
     visit_reduce1d_inst(x, do_acc, neutral);
   else
-    visit_reducend_inst(x, do_acc, neutral);
+    visit_reducend_inst_fast(x, do_acc, neutral);
 }
 
 /**
