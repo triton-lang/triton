@@ -21,7 +21,9 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
 
   let constructor = "mlir::triton::gpu::createPipelinePass";
 
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::arith::ArithmeticDialect"];
 }
 
 #endif
