@@ -76,6 +76,7 @@ void coalesce::run(ir::module &mod) {
     if(ir::value* op = i->get_operand(0))
     if(op->get_type()->is_block_ty())
     if(op->get_type()->get_tile_rank() == 2)
+    if(invalidated.find(layout_->get(op)) == invalidated.end())
     if(layout_->get(op)->to_mma()){
       ir::instruction* new_op = ir::cvt_layout_inst::create(op);
       builder.set_insert_point(i);
