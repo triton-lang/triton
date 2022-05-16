@@ -269,7 +269,9 @@ scf::ForOp LoopPipeliner::createNewForOp() {
       Value newMask = builder.create<arith::AndIOp>(mask.getLoc(),
                                                     splatCond,
                                                     nextMapping.lookupOrDefault(mask));
-      nextMapping.map(mask, newMask);
+      // if mask is defined outside the loop, don't update the map more than once
+      if (!(forOp.isDefinedOutsideOfLoop(mask) && nextMapping.contains(mask)))
+        nextMapping.map(mask, newMask);
     }
     Operation *nextOp = builder.clone(*op, nextMapping);
     // update mapping of results
