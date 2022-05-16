@@ -1316,6 +1316,7 @@ class JITFunction:
         pm.add_convert_triton_to_tritongpu_pass()
         pm.add_tritongpu_pipeline_pass()
         pm.add_canonicalizer_pass()
+        pm.add_triton_gpu_combine_pass()
         pm.run(mod)
         return mod
 

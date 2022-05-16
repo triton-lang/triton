@@ -1,7 +1,7 @@
 #ifndef TRITONGPU_ATTRDEFS
 #define TRITONGPU_ATTRDEFS
 
-include "TritonGPUDialect.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 // include "mlir/IR/TensorEncoding.td"
 
 class TritonGPU_Attr<string name, list<Trait> traits = []>
