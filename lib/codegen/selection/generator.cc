@@ -2320,12 +2320,18 @@ inline Value* generator::shfl_sync(Value* acc, int32_t i){
 void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value*(Value*,Value*)> do_acc, Value *neutral){
   //
   ir::value *arg = x->get_operand(0);
-  analysis::scanline_layout* layout = layouts_->get(arg)->to_scanline();
+  analysis::distributed_layout* layout = dynamic_cast<analysis::distributed_layout*>(layouts_->get(arg));
   std::vector<unsigned> shapes = layout->get_shape();
   std::vector<int> order = layout->get_order();
-  unsigned mts = layout->mts(order[0]);
-  unsigned nts = layout->nts(order[0]);
-  unsigned col_per_thread = shapes[order[0]] / mts;
+  // unsigned mts = layout->mts(order[0]);
+  // unsigned shuffle_width = std::min<int>(mts, 32);
+  // size_t warps_per_inner = std::max<int>(mts/32, 1);
+
+  unsigned shuffle_width = 4; 
+  unsigned warps_per_inner = 2;
+
+  unsigned col_per_thread = 16;
+  // unsigned col_per_thread = 2 * shapes[order[0]] / layout->shape_per_cta(order[0]);
   auto idxs = idxs_.at(arg);
   size_t n_elts = idxs.size();
   //
@@ -2335,9 +2341,7 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
   Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
   Value* warp = udiv(thread, i32(32));
   Value* lane = urem(thread, i32(32));
-  size_t warps_per_inner = std::max<int>(mts/32, 1);
   Value* warp_i = udiv(warp, i32(warps_per_inner));
-  unsigned row_per_thread = std::max<int>(32/mts, 1);
 
   for(size_t i = 0; i < n_elts/col_per_thread; i++){
     Value* acc;
@@ -2347,11 +2351,11 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
       acc = (j == 0) ? val : do_acc(acc, val);
     }
     // reduce within warp
-    for(int k = std::min<int>(mts, 32)/2 ; k > 0; k >>= 1)
+    for(int k = shuffle_width/2 ; k > 0; k >>= 1)
       acc = do_acc(acc, shfl_sync(acc, k));
     // store warp result in shared memory
     Value* ret = acc;
-    if(mts >= 32){
+    if(warps_per_inner > 1){
       add_barrier();
       store(neutral, gep(base, lane));
       add_barrier();
@@ -2366,7 +2370,7 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
       dummy->removeFromParent();
       builder_->SetInsertPoint(term);
       ret = load(gep(base, thread));
-      for(int k = (mts/32)/2; k > 0; k >>= 1){
+      for(int k = warps_per_inner/2; k > 0; k >>= 1){
         Value *current = shfl_sync(ret, k);
         ret = do_acc(ret, current);
       }
@@ -2476,10 +2480,10 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
   }
   ir::value *arg = x->get_operand(0);
   analysis::scanline_layout* scanline = layouts_->get(x->get_operand(0))->to_scanline();
-  if(scanline && scanline->get_order()[0] == x->get_axis())
+  // if(scanline && scanline->get_order()[0] == x->get_axis())
     visit_reducend_inst_fast(x, do_acc, neutral);
-  else
-    visit_reducend_inst(x, do_acc, neutral);
+  // else
+    // visit_reducend_inst(x, do_acc, neutral);
 }
 
 /**

@@ -72,19 +72,19 @@ void coalesce::run(ir::module &mod) {
     }
     // coalesce before reduce
     // It's dirty, but the backend is being rewritten from scratch. :)
-    if(dynamic_cast<ir::reduce_inst*>(i))
-    if(ir::value* op = i->get_operand(0))
-    if(op->get_type()->is_block_ty())
-    if(op->get_type()->get_tile_rank() == 2)
-    if(invalidated.find(layout_->get(op)) == invalidated.end())
-    if(layout_->get(op)->to_mma()){
-      ir::instruction* new_op = ir::cvt_layout_inst::create(op);
-      builder.set_insert_point(i);
-      builder.insert(new_op);
-      op->replace_all_uses_with(new_op);
-      new_op->replace_uses_of_with(new_op, op);
-      invalidated.insert(layout_->get(op));
-    }
+    // if(dynamic_cast<ir::reduce_inst*>(i))
+    // if(ir::value* op = i->get_operand(0))
+    // if(op->get_type()->is_block_ty())
+    // if(op->get_type()->get_tile_rank() == 2)
+    // if(invalidated.find(layout_->get(op)) == invalidated.end())
+    // if(layout_->get(op)->to_mma()){
+    //   ir::instruction* new_op = ir::cvt_layout_inst::create(op);
+    //   builder.set_insert_point(i);
+    //   builder.insert(new_op);
+    //   op->replace_all_uses_with(new_op);
+    //   new_op->replace_uses_of_with(new_op, op);
+    //   invalidated.insert(layout_->get(op));
+    // }
     // uncoalesce after load
     if(auto x = dynamic_cast<ir::load_inst*>(i))
     if(x->get_type()->is_block_ty())
