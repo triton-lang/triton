@@ -6,6 +6,12 @@
 namespace mlir {
 std::unique_ptr<Pass> createTritonGPUPipelinePass();
 
+namespace triton {
+namespace gpu {
+std::unique_ptr<Pass> createCombineOpsPass();
+}
+}
+
 // /// Generate the code for registering passes.
 // #define GEN_PASS_REGISTRATION
 // #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"

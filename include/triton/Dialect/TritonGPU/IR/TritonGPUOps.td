@@ -5,6 +5,7 @@ include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 include "mlir/Dialect/Arithmetic/IR/ArithmeticBase.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
+include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td" // NoSideEffect
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
@@ -33,7 +34,18 @@ def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
   let arguments = (ins I32Attr:$num);
 }
 
-// def TTG_CopyAsyncOp : TTG_Op<"copy_async"> {}
+def TTG_CopyAsyncOp : TTG_Op<"copy_async",
+                             [MemoryEffects<[MemRead, MemWrite]>]> {
+  let summary = "copy async";
+
+  let arguments = (ins TT_PtrTensor:$ptr, BoolLike:$mask, TT_Type:$other,
+                       TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict,
+                       BoolAttr:$isVolatile);
+
+  let results = (outs TT_Type:$result);
+
+  // let assemblyFormat = "$ptr`,` $mask`,` $other attr-dict `:` type($result)";
+}
 
 // Port Arith_CmpIOp & Arith_CmpFOp to TritonGPU.
 def TTG_CmpIOp : TTG_Op<"cmpi"> {
