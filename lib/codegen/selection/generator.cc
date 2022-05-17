@@ -737,6 +737,9 @@ void generator::visit_uncond_branch_inst(ir::uncond_branch_inst* br) {
  * \brief Code Generation for a (synchronous) `load`
  */
 void generator::visit_load_inst(ir::load_inst* x){
+  BasicBlock *current = builder_->GetInsertBlock();
+  Module *module = current->getModule();
+  Value *tid = tgt_->get_local_id(module, *builder_, 0);
   ir::value *op = x->get_pointer_operand();
   ir::masked_load_inst *mx = dynamic_cast<ir::masked_load_inst*>(x);
   Type* ty  = cvt(op->get_type()->get_scalar_ty()->get_pointer_element_ty());
@@ -776,6 +779,9 @@ void generator::visit_load_inst(ir::load_inst* x){
         in_off = 0;
     }
     Value *pred = mx ? vals_[mx->get_mask_operand()][idx] : builder_->getTrue();
+    // if(!op->get_type()->is_block_ty()){
+    //   pred = builder_->CreateAnd(pred, icmp_eq(tid, i32(0)));
+    // }
     Value *other = mx ? vals_[mx->get_false_value_operand()][idx] : nullptr;
     size_t nbits = dtsize*8;
     // pack sub-words (< 32/64bits) into words
@@ -879,6 +885,18 @@ void generator::visit_load_inst(ir::load_inst* x){
   
     
     Value *_ret = call(inlineAsm, args);
+    // if(!op->get_type()->is_block_ty()){
+    //   Value* cond = icmp_eq(tid, i32(0));
+    //   Value* shptr = bit_cast(shmem_, ptr_ty(_ret->getType(), 3));
+    //   Instruction* bar = add_barrier();
+    //   Instruction *term = llvm::SplitBlockAndInsertIfThen(cond, bar, false);
+    //   builder_->SetInsertPoint(term);
+    //   store(_ret, shptr);
+    //   builder_->SetInsertPoint(bar->getParent());
+    //   _ret = load(shptr);
+    //   add_barrier();
+    // }
+      
     // ---
     // extract and store return values
     // ---
@@ -2334,8 +2352,8 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
 
   unsigned shuffle_width = 0;
   unsigned warps_per_inner = 0;
-  if(layout->to_scanline()){
-    unsigned mts = layout->mts(order[0]);
+  if(analysis::scanline_layout* scanline = layout->to_scanline()){
+    unsigned mts = scanline->mts(order[0]);
     shuffle_width = std::min<int>(mts, 32);
     warps_per_inner = std::max<int>(mts/32, 1);
   }
@@ -2378,6 +2396,7 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
     Value* x_idx = idxs_[x][i][0];
     Value* st_off = add(mul(x_idx, i32(warps_per_inner)), warp_j);
     call(st_shared, {icmp_eq(lane_j, i32(0)), gep(base, st_off), acc});
+    vals_[x][idxs_[x][i]] = acc;
   }
   add_barrier();
   // at this point, partial accumulator synchronized in shared memory
