@@ -88,6 +88,7 @@ Value* geper::operator()(Value *ptr, Value* off, const std::string& name){
 #define f16_ty               builder_->getHalfTy()
 #define bf16_ty              builder_->getBFloatTy()
 #define f32_ty               builder_->getFloatTy()
+#define i1_ty                builder_->getInt1Ty()
 #define i8_ty                builder_->getInt8Ty()
 #define i16_ty               builder_->getInt16Ty()
 #define i32_ty               builder_->getInt32Ty()
@@ -2323,12 +2324,25 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
   analysis::distributed_layout* layout = dynamic_cast<analysis::distributed_layout*>(layouts_->get(arg));
   std::vector<unsigned> shapes = layout->get_shape();
   std::vector<int> order = layout->get_order();
-  // unsigned mts = layout->mts(order[0]);
-  // unsigned shuffle_width = std::min<int>(mts, 32);
-  // size_t warps_per_inner = std::max<int>(mts/32, 1);
 
-  unsigned shuffle_width = 4; 
-  unsigned warps_per_inner = 2;
+  Type* sca_ty = cvt(arg->get_type()->get_scalar_ty());
+  FunctionType *st_shared_ty = FunctionType::get(void_ty, {i1_ty, ptr_ty(sca_ty, 3), sca_ty}, false);
+  InlineAsm *st_shared = InlineAsm::get(st_shared_ty, "@$0 st.shared.b32 [$1], $2;", "b,r,r", true);
+  FunctionType *ld_shared_ty = FunctionType::get(sca_ty, {i1_ty, ptr_ty(sca_ty, 3)}, false);
+  InlineAsm *ld_shared = InlineAsm::get(ld_shared_ty, "@$1 ld.shared.b32 $0, [$2];", "=r,b,r", true);
+
+
+  unsigned shuffle_width = 0;
+  unsigned warps_per_inner = 0;
+  if(layout->to_scanline()){
+    unsigned mts = layout->mts(order[0]);
+    shuffle_width = std::min<int>(mts, 32);
+    warps_per_inner = std::max<int>(mts/32, 1);
+  }
+  else if(layout->to_mma()){
+    shuffle_width = 4; 
+    warps_per_inner = 2;
+  }
 
   unsigned col_per_thread = 16;
   // unsigned col_per_thread = 2 * shapes[order[0]] / layout->shape_per_cta(order[0]);
@@ -2342,7 +2356,14 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
   Value* warp = udiv(thread, i32(32));
   Value* lane = urem(thread, i32(32));
   Value* warp_i = udiv(warp, i32(warps_per_inner));
-
+  Value* warp_j = urem(warp, i32(warps_per_inner));
+  // preds
+  Value* is_lane0 = icmp_eq(lane, i32(0));
+  Value* is_warp0 = icmp_eq(warp, i32(0));
+  Value* is_thread0 = icmp_eq(thread, i32(0));
+  Value* lane_j = urem(lane, i32(shuffle_width));
+  Value* first_lane_in_col = icmp_eq(lane_j, i32(0));
+  // compute partial sum for each warp, and store to shared memory
   for(size_t i = 0; i < n_elts/col_per_thread; i++){
     Value* acc;
     // reduce within thread
@@ -2353,33 +2374,24 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
     // reduce within warp
     for(int k = shuffle_width/2 ; k > 0; k >>= 1)
       acc = do_acc(acc, shfl_sync(acc, k));
-    // store warp result in shared memory
-    Value* ret = acc;
-    if(warps_per_inner > 1){
-      add_barrier();
-      store(neutral, gep(base, lane));
-      add_barrier();
-      store(acc, gep(base, warp));
-      add_barrier();
-      // reduce across warps
-      Value *cond = icmp_eq(warp, i32(0));
-      Instruction *barrier = add_barrier();
-      builder_->SetInsertPoint(barrier->getParent());
-      Instruction* dummy = builder_->CreateRet(nullptr);
-      Instruction *term = llvm::SplitBlockAndInsertIfThen(cond, barrier, false);
-      dummy->removeFromParent();
-      builder_->SetInsertPoint(term);
-      ret = load(gep(base, thread));
-      for(int k = warps_per_inner/2; k > 0; k >>= 1){
-        Value *current = shfl_sync(ret, k);
-        ret = do_acc(ret, current);
-      }
-      store(ret, gep(base, thread));
-      builder_->SetInsertPoint(barrier->getParent());
-      ret = load(gep(base, warp));
-    }
-    vals_[x][idxs_[x][i]] = ret;
+    // store partial result to shared memory
+    Value* x_idx = idxs_[x][i][0];
+    Value* st_off = add(mul(x_idx, i32(warps_per_inner)), warp_j);
+    call(st_shared, {icmp_eq(lane_j, i32(0)), gep(base, st_off), acc});
   }
+  add_barrier();
+  // at this point, partial accumulator synchronized in shared memory
+  // Just need to reduce `warp_per_inner` numbers in shared memory
+  // for `warp_per_inner == 1`: no need to reduce
+  for(size_t i = 0; i < n_elts/col_per_thread; i++){
+    Value* x_idx = idxs_[x][i][0];
+    Value* ld_off = add(mul(x_idx, i32(warps_per_inner)), lane_j);
+    Value* acc = call(ld_shared, {icmp_ult(lane_j, i32(warps_per_inner)), gep(base, ld_off)});
+    for(int k = warps_per_inner/2 ; k > 0; k >>= 1)
+      acc = do_acc(acc, shfl_sync(acc, k));
+    vals_[x][idxs_[x][i]] = acc;
+  }
+  add_barrier();
 }
 
 void generator::visit_reducend_inst(ir::reduce_inst* x, std::function<Value*(Value*,Value*)> do_acc, Value *neutral) {
@@ -2483,7 +2495,7 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
   // if(scanline && scanline->get_order()[0] == x->get_axis())
     visit_reducend_inst_fast(x, do_acc, neutral);
   // else
-    // visit_reducend_inst(x, do_acc, neutral);
+  //   visit_reducend_inst(x, do_acc, neutral);
 }
 
 /**
