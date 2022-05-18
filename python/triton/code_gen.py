@@ -57,7 +57,7 @@ def mangle_ty(ty):
 def mangle_fn(name, arg_tys, constants):
     # doesn't mangle ret type, which must be a function of arg tys
     mangled_arg_names = '_'.join([mangle_ty(ty) for ty in arg_tys])
-    key = lambda x: x.__name__ if isinstance(x, JITFunction) else repr(x)
+    key = lambda x: x.cache_key if isinstance(x, JITFunction) else repr(x)
     mangled_constants = '_'.join([f'{i}c{key(constants[i])}' for i in sorted(constants)])
     mangled_constants = mangled_constants.replace('.', '_d_')
     mangled_constants = mangled_constants.replace("'", '_sq_')

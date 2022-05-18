@@ -2704,12 +2704,12 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
   unsigned in_vec = 1;
   ir::value *arg = cts->get_operand(0);
   analysis::shared_layout* out_layout = layouts_->get(cts)->to_shared();
-  analysis::scanline_layout* in_layout = layouts_->get(arg)->to_scanline();
+  analysis::distributed_layout* in_layout = dynamic_cast<analysis::distributed_layout*>(layouts_->get(arg));
   auto out_order = out_layout->get_order();
   auto in_order = in_layout->get_order();
   // tiles
   if(out_order == in_order)
-    in_vec = in_layout->nts(in_order[0]);
+    in_vec = in_layout->contig_per_thread(in_order[0]);
   int out_vec = swizzle_->get_vec(out_layout);
   int min_vec = std::min<int>(out_vec, in_vec);
   int s = std::max<int>(out_vec / in_vec, 1);
@@ -2717,8 +2717,11 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
   int per_phase = swizzle_->get_per_phase(out_layout);
   int max_phase = swizzle_->get_max_phase(out_layout);
   //
-  int in_ld = in_layout->get_shape()[in_order[0]] / in_layout->mts(in_order[0]);
-  int n_shared_1 = std::max<int>(per_phase*max_phase / in_layout->mts(in_order[1]), 1);
+  int mts_0 = in_layout->shape_per_cta(in_order[0]) / in_layout->contig_per_thread(in_order[0]);
+  int mts_1 = in_layout->shape_per_cta(in_order[1]) / in_layout->contig_per_thread(in_order[1]);
+
+  int in_ld = in_layout->get_shape()[in_order[0]] / mts_0;
+  int n_shared_1 = std::max<int>(per_phase*max_phase / mts_1, 1);
   int n_shared_0 = std::max<int>(in_vec    / out_vec, 1);
 
   BasicBlock* CurrBB = builder_->GetInsertBlock();
@@ -2739,8 +2742,8 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
       // input ptr info
       int id_0 = id % (in_ld/min_vec);
       int id_1 = id / (in_ld/min_vec);
-      int off_0 = id_0 / n_shared_0 * n_shared_0 * in_layout->mts(in_order[0]);
-      int off_1 = id_1 / n_shared_1 * n_shared_1 * in_layout->mts(in_order[1]);
+      int off_0 = id_0 / n_shared_0 * n_shared_0 * mts_0;
+      int off_1 = id_1 / n_shared_1 * n_shared_1 * mts_1;
       int off = (off_1*shapes[in_order[0]] + off_0);
       std::pair<int, int> key = {id_1  % n_shared_1, id_0 % n_shared_0};
       if(ptrs.find(key) == ptrs.end()){
