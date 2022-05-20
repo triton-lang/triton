@@ -1259,8 +1259,13 @@ void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
     // create inline asm
     InlineAsm *iasm = InlineAsm::get(fn_ty, asm_str, constraint, true);
     // call asm
-    if(atom->get_type()->is_block_ty())
-      vals_[atom][idx] = call(iasm, (ArrayRef<Value*>{rmw_msk, rmw_ptr, rmw_val}));
+    if(atom->get_type()->is_block_ty()){
+      Value* thread_id  = axes_.at(a_axes_->get(val, 0)).thread_id;
+      Module *mod = builder_->GetInsertBlock()->getModule();
+      Value *tid = tgt_->get_local_id(mod, *builder_, 0);
+      Value* msk = icmp_eq(urem(tid, i32(4)), i32(0));
+      vals_[atom][idx] = call(iasm, (ArrayRef<Value*>{msk, rmw_ptr, rmw_val}));
+    }
     else{
       Module *mod = builder_->GetInsertBlock()->getModule();
       tgt_->add_memfence(mod, *builder_);
@@ -2341,7 +2346,6 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
   ir::value *arg = x->get_operand(0);
   analysis::distributed_layout* layout = dynamic_cast<analysis::distributed_layout*>(layouts_->get(arg));
   std::vector<unsigned> shapes = layout->get_shape();
-  std::vector<int> order = layout->get_order();
 
   Type* sca_ty = cvt(arg->get_type()->get_scalar_ty());
   FunctionType *st_shared_ty = FunctionType::get(void_ty, {i1_ty, ptr_ty(sca_ty, 3), sca_ty}, false);
@@ -2352,20 +2356,36 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
 
   unsigned shuffle_width = 0;
   unsigned warps_per_inner = 0;
+  auto arg_vals = vals_.at(arg);
+  std::vector<indices_t> arg_idxs = idxs_.at(arg);
+  size_t n_elts = arg_idxs.size();
+  unsigned col_per_thread;
   if(analysis::scanline_layout* scanline = layout->to_scanline()){
+    std::vector<int> order = layout->get_order();
     unsigned mts = scanline->mts(order[0]);
     shuffle_width = std::min<int>(mts, 32);
     warps_per_inner = std::max<int>(mts/32, 1);
+    col_per_thread = shapes[order[0]] / mts;
   }
   else if(layout->to_mma()){
     shuffle_width = 4; 
-    warps_per_inner = 2;
+    warps_per_inner = 4;
+    col_per_thread = 16;
+    std::vector<indices_t> new_arg_idxs;
+    for(int i = 0; i < n_elts/col_per_thread; i++){
+      for(size_t j = 0; j < col_per_thread; j+=4){
+        new_arg_idxs.push_back(arg_idxs[i*col_per_thread+j]);
+        new_arg_idxs.push_back(arg_idxs[i*col_per_thread+j+1]);
+      }
+      for(size_t j = 0; j < col_per_thread; j+=4){
+        new_arg_idxs.push_back(arg_idxs[i*col_per_thread+j+2]);
+        new_arg_idxs.push_back(arg_idxs[i*col_per_thread+j+3]);
+      }
+    }
+    arg_idxs = new_arg_idxs;
   }
 
-  unsigned col_per_thread = 16;
   // unsigned col_per_thread = 2 * shapes[order[0]] / layout->shape_per_cta(order[0]);
-  auto idxs = idxs_.at(arg);
-  size_t n_elts = idxs.size();
   //
   Type *ret_ty = cvt(x->get_type()->get_scalar_ty());
   unsigned addr_space = shmem_->getType()->getPointerAddressSpace();
@@ -2381,12 +2401,13 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
   Value* is_thread0 = icmp_eq(thread, i32(0));
   Value* lane_j = urem(lane, i32(shuffle_width));
   Value* first_lane_in_col = icmp_eq(lane_j, i32(0));
+  add_barrier();
   // compute partial sum for each warp, and store to shared memory
   for(size_t i = 0; i < n_elts/col_per_thread; i++){
     Value* acc;
     // reduce within thread
     for(size_t j = 0; j < col_per_thread; j++){
-      Value* val = vals_[arg][idxs[i*col_per_thread + j]];
+      Value* val = arg_vals[arg_idxs[i*col_per_thread + j]];
       acc = (j == 0) ? val : do_acc(acc, val);
     }
     // reduce within warp
@@ -2404,9 +2425,9 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
   // for `warp_per_inner == 1`: no need to reduce
   for(size_t i = 0; i < n_elts/col_per_thread; i++){
     Value* x_idx = idxs_[x][i][0];
-    Value* ld_off = add(mul(x_idx, i32(warps_per_inner)), lane_j);
-    Value* acc = call(ld_shared, {icmp_ult(lane_j, i32(warps_per_inner)), gep(base, ld_off)});
-    for(int k = warps_per_inner/2 ; k > 0; k >>= 1)
+    Value* ld_off = add(mul(x_idx, i32(warps_per_inner)), urem(lane_j, i32(warps_per_inner)));
+    Value* acc = call(ld_shared, {builder_->getInt1(true), gep(base, ld_off)});
+    for(int k = warps_per_inner/2; k > 0; k >>= 1)
       acc = do_acc(acc, shfl_sync(acc, k));
     vals_[x][idxs_[x][i]] = acc;
   }
