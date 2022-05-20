@@ -2061,12 +2061,12 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
 
   // create mma & unpack result, m, n, k are offsets in mat
   auto call_mma = [&](unsigned m, unsigned n, unsigned k) {
-      unsigned cols_per_thread = num_rep_m * 2;
+      unsigned cols_per_thread = num_rep_n * 2;
       std::vector<size_t> idx = {
-        (m + 0) + (n*2 + 0)*cols_per_thread,
-        (m + 0) + (n*2 + 1)*cols_per_thread,
-        (m + 1) + (n*2 + 0)*cols_per_thread,
-        (m + 1) + (n*2 + 1)*cols_per_thread
+        (m + 0)*cols_per_thread + (n*2 + 0),
+        (m + 0)*cols_per_thread + (n*2 + 1),
+        (m + 1)*cols_per_thread + (n*2 + 0),
+        (m + 1)*cols_per_thread + (n*2 + 1)
       };
       Value *nc = call(mma_ty, mma_fn, 
                        {ha[{m, k}], ha[{m+1, k}], ha[{m, k+1}], ha[{m+1, k+1}],
@@ -2354,35 +2354,33 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
   InlineAsm *ld_shared = InlineAsm::get(ld_shared_ty, "@$1 ld.shared.b32 $0, [$2];", "=r,b,r", true);
 
 
+  Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
+  Value* warp = udiv(thread, i32(32));
+  Value* lane = urem(thread, i32(32));
+
   unsigned shuffle_width = 0;
   unsigned warps_per_inner = 0;
   auto arg_vals = vals_.at(arg);
   std::vector<indices_t> arg_idxs = idxs_.at(arg);
   size_t n_elts = arg_idxs.size();
   unsigned col_per_thread;
+  Value* warp_i;
+  Value* warp_j;
   if(analysis::scanline_layout* scanline = layout->to_scanline()){
     std::vector<int> order = layout->get_order();
     unsigned mts = scanline->mts(order[0]);
     shuffle_width = std::min<int>(mts, 32);
     warps_per_inner = std::max<int>(mts/32, 1);
     col_per_thread = shapes[order[0]] / mts;
+    warp_i = udiv(warp, i32(warps_per_inner));
+    warp_j = urem(warp, i32(warps_per_inner));
   }
   else if(layout->to_mma()){
     shuffle_width = 4; 
     warps_per_inner = 4;
     col_per_thread = 16;
-    std::vector<indices_t> new_arg_idxs;
-    for(int i = 0; i < n_elts/col_per_thread; i++){
-      for(size_t j = 0; j < col_per_thread; j+=4){
-        new_arg_idxs.push_back(arg_idxs[i*col_per_thread+j]);
-        new_arg_idxs.push_back(arg_idxs[i*col_per_thread+j+1]);
-      }
-      for(size_t j = 0; j < col_per_thread; j+=4){
-        new_arg_idxs.push_back(arg_idxs[i*col_per_thread+j+2]);
-        new_arg_idxs.push_back(arg_idxs[i*col_per_thread+j+3]);
-      }
-    }
-    arg_idxs = new_arg_idxs;
+    warp_i = axes_.at(a_axes_->get(arg, 0)).thread_id;
+    warp_j = axes_.at(a_axes_->get(arg, 1)).thread_id;
   }
 
   // unsigned col_per_thread = 2 * shapes[order[0]] / layout->shape_per_cta(order[0]);
@@ -2390,11 +2388,6 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
   Type *ret_ty = cvt(x->get_type()->get_scalar_ty());
   unsigned addr_space = shmem_->getType()->getPointerAddressSpace();
   Value *base = bit_cast(shmem_, ptr_ty(ret_ty, addr_space));
-  Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
-  Value* warp = udiv(thread, i32(32));
-  Value* lane = urem(thread, i32(32));
-  Value* warp_i = udiv(warp, i32(warps_per_inner));
-  Value* warp_j = urem(warp, i32(warps_per_inner));
   // preds
   Value* is_lane0 = icmp_eq(lane, i32(0));
   Value* is_warp0 = icmp_eq(warp, i32(0));
@@ -2408,6 +2401,7 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
     // reduce within thread
     for(size_t j = 0; j < col_per_thread; j++){
       Value* val = arg_vals[arg_idxs[i*col_per_thread + j]];
+      // acc = (j == 0) ? val : do_acc(acc, val);
       acc = (j == 0) ? val : do_acc(acc, val);
     }
     // reduce within warp
@@ -2417,12 +2411,10 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
     Value* x_idx = idxs_[x][i][0];
     Value* st_off = add(mul(x_idx, i32(warps_per_inner)), warp_j);
     call(st_shared, {icmp_eq(lane_j, i32(0)), gep(base, st_off), acc});
-    vals_[x][idxs_[x][i]] = acc;
   }
   add_barrier();
   // at this point, partial accumulator synchronized in shared memory
   // Just need to reduce `warp_per_inner` numbers in shared memory
-  // for `warp_per_inner == 1`: no need to reduce
   for(size_t i = 0; i < n_elts/col_per_thread; i++){
     Value* x_idx = idxs_[x][i][0];
     Value* ld_off = add(mul(x_idx, i32(warps_per_inner)), urem(lane_j, i32(warps_per_inner)));
@@ -3089,8 +3081,7 @@ void generator::visit_layout_mma(analysis::mma_layout* layout) {
   else{
     /* warp offset */
     Value *warp_0 = urem(warp, i32(layout->wpt(0)));
-    Value *warp_12 = udiv(warp, i32(layout->wpt(0)));
-    Value *warp_1 = urem(warp_12, i32(layout->wpt(1)));
+    Value *warp_1 = urem(udiv(warp, i32(layout->wpt(0))), i32(layout->wpt(1)));
     Value *off_warp_m = mul(warp_0, i32(layout->spw(0)));
     Value *off_warp_n = mul(warp_1, i32(layout->spw(1)));
     Value *off_lane_m = urem(lane, _16);

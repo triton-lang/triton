@@ -209,14 +209,15 @@ mma_layout::mma_layout(size_t num_warps,
     rep_ = {2*pack_size_0, 2*pack_size_1, 1};
     spw_ = {fpw_[0]*4*rep_[0], fpw_[1]*4*rep_[1], 1};
     contig_per_thread_ = {1, 1};
+    order_ = {0, 1};
   }
   else{
     // fpw_ = {1, 1, 1};
     spw_ = mma_instr_shape_.at(tensor_core_type_); // e.g., {16, 8, 16} for f32.f16.f16.f32
     contig_per_thread_ = {1, 2};
+    order_ = {1, 0};
     // rep_ = {2,  2, 1};
   }
-  order_ = {0, 1};
 
   /* warps per tile */
   wpt_ = {1, 1, 1};
