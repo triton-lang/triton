@@ -1260,10 +1260,12 @@ void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
     InlineAsm *iasm = InlineAsm::get(fn_ty, asm_str, constraint, true);
     // call asm
     if(atom->get_type()->is_block_ty()){
-      Value* thread_id  = axes_.at(a_axes_->get(val, 0)).thread_id;
       Module *mod = builder_->GetInsertBlock()->getModule();
       Value *tid = tgt_->get_local_id(mod, *builder_, 0);
-      Value* msk = icmp_eq(urem(tid, i32(4)), i32(0));
+      Value* warp = axes_.at(layouts_->get(val)->get_axis(1)).thread_id;
+      Value* msk = rmw_msk;
+      msk = and_(msk, icmp_eq(warp, i32(0)));
+      msk = and_(msk, icmp_eq(urem(tid, i32(4)), i32(0)));
       vals_[atom][idx] = call(iasm, (ArrayRef<Value*>{msk, rmw_ptr, rmw_val}));
     }
     else{
