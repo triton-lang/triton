@@ -513,6 +513,7 @@ def test_atomic_rmw(op, dtype_x_str, mode, device='cuda'):
     else:
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
 
+
 def test_atomic_cas():
     # 1. make sure that atomic_cas changes the original value (Lock)
     @triton.jit
@@ -542,9 +543,12 @@ def test_atomic_cas():
     serialized_add[(64,)](data, Lock)
     triton.testing.assert_almost_equal(data, ref)
 
+
 # ---------------
 # test cast
 # ---------------
+
+
 @pytest.mark.parametrize("dtype_x, dtype_z, bitcast", [
     (dtype_x, dtype_z, False)
     for dtype_x in dtypes
