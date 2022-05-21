@@ -2379,7 +2379,7 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
   }
   else if(layout->to_mma()){
     shuffle_width = 4; 
-    warps_per_inner = 4;
+    warps_per_inner = layout->to_mma()->wpt(1);
     col_per_thread = 16;
     warp_i = axes_.at(a_axes_->get(arg, 0)).thread_id;
     warp_j = axes_.at(a_axes_->get(arg, 1)).thread_id;
@@ -2425,7 +2425,7 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
       acc = do_acc(acc, shfl_sync(acc, k));
     vals_[x][idxs_[x][i]] = acc;
   }
-  add_barrier();
+  // add_barrier();
 }
 
 void generator::visit_reducend_inst(ir::reduce_inst* x, std::function<Value*(Value*,Value*)> do_acc, Value *neutral) {
