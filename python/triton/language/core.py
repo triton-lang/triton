@@ -821,7 +821,7 @@ def _add_atomic_docstr(name):
 @_add_atomic_docstr("compare-and-swap")
 def atomic_cas(pointer, cmp, val, _builder=None):
     cmp = _to_tensor(cmp, _builder)
-    val = _to_tensor(cmp, _builder)
+    val = _to_tensor(val, _builder)
     return semantic.atomic_cas(pointer, cmp, val, _builder)
 
 
