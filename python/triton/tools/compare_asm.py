@@ -16,8 +16,9 @@ parser.add_argument('--dir1', dest='dir1', required=True,
                     help="Triton cache dir 1")
 parser.add_argument('--asm', dest='asm',
                     choices=['ttir', 'llir', 'ptx', 'cubin'], required=True)
-# parser.add_argument('--ignore-only', dest='ignore', action='store_true')
-# parser.set_defaults(ignore=True)
+parser.add_argument('--early-stop', dest='early_stop', action='store_true',
+                    help="Stop after first diff")
+parser.set_defaults(early_stop=True)
 parser.add_argument('--diff-out0', dest='diff_out0', required=True,
                     help="output file path for kernels in dir0")
 parser.add_argument('--diff-out1', dest='diff_out1', required=True,
@@ -62,6 +63,8 @@ for key in dir0_files:
   if asm0[asm] != asm1[asm]:
     diff_keys.append(key)
 
+if args.early_stops:
+  diff_keys = diff_keys[:1]
 if diff_keys:
   with open(args.diff_out0, 'w') as f0, open(args.diff_out1, 'w') as f1:
     for key in diff_keys:
