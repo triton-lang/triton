@@ -91,7 +91,8 @@ mod, ctx = matmul_kernel.compile_to_ttir(
   b.stride(0), b.stride(1),
   c.stride(0), c.stride(1),
   128, 128, 128,
-  8, grid=(2,)
+  8, grid=(2,),
+  num_stages=4
 )
 
 assert mod.verify()
