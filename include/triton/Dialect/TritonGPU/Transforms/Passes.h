@@ -4,7 +4,7 @@
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-std::unique_ptr<Pass> createTritonGPUPipelinePass();
+std::unique_ptr<Pass> createTritonGPUPipelinePass(int numStages);
 
 namespace triton {
 namespace gpu {

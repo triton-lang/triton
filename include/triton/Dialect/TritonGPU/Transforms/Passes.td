@@ -24,6 +24,12 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::scf::SCFDialect",
                            "mlir::arith::ArithmeticDialect"];
+
+  let options = [
+    Option<"numStages", "num-stages",
+           "int32_t", /*default*/"2",
+           "number of pipeline stages">
+  ];
 }
 
 def TritonGPUCombineOps : Pass<"tritongpu-combine", "mlir::ModuleOp"> {
