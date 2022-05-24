@@ -593,7 +593,7 @@ class CodeGenerator(ast.NodeVisitor):
         arg_2 = node.iter.args[2] if len(node.iter.args) > 2 else ast.Num(1)
         # init node
         init_node = ast.Assign(targets=[st_target], value=arg_0)
-        
+
         # step node
         pos_cond_node = ast.Compare(ld_target, [ast.Lt()], [arg_1])
         neg_cond_node = ast.Compare(ld_target, [ast.Gt()], [arg_1])
