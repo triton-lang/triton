@@ -3,8 +3,9 @@
 #ifndef _TRITON_TOOLS_THREAD_GRAPH_H_
 #define _TRITON_TOOLS_THREAD_GRAPH_H_
 
+#include "llvm/ADT/SetVector.h"
+
 #include <map>
-#include <set>
 #include <vector>
 #include <iostream>
 
@@ -13,21 +14,21 @@ namespace tools{
 
 template<class node_t>
 class graph {
-  typedef std::map<node_t, std::set<node_t>> edges_t;
+  typedef std::map<node_t, llvm::SetVector<node_t>> edges_t;
 
 public:
   typedef std::map<size_t, std::vector<node_t>> cmap_t;
   typedef std::map<node_t, size_t> nmap_t;
 
 private:
-  void connected_components_impl(node_t x, std::set<node_t> &nodes,
+  void connected_components_impl(node_t x, llvm::SetVector<node_t> &nodes,
                                  nmap_t* nmap, cmap_t* cmap, int id) const {
     if(nmap)
       (*nmap)[x] = id;
     if(cmap)
       (*cmap)[id].push_back(x);
-    if(nodes.find(x) != nodes.end()) {
-      nodes.erase(x);
+    if (nodes.count(x)) {
+      nodes.remove(x);
       for(const node_t &y: edges_.at(x))
         connected_components_impl(y, nodes, nmap, cmap, id);
     }
@@ -39,7 +40,7 @@ public:
       cmap->clear();
     if(nmap)
       nmap->clear();
-    std::set<node_t> nodes = nodes_;
+    llvm::SetVector<node_t> nodes = nodes_;
     unsigned id = 0;
     while(!nodes.empty()){
       connected_components_impl(*nodes.begin(), nodes, nmap, cmap, id++);
@@ -59,7 +60,7 @@ public:
   }
 
 private:
-  std::set<node_t> nodes_;
+  llvm::SetVector<node_t> nodes_;
   edges_t edges_;
 };
 
