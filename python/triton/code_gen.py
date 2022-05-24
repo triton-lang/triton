@@ -15,17 +15,20 @@ import time
 import warnings
 from typing import Dict, Set, Tuple, Union
 
+from filelock import FileLock
+
 import torch
+import triton
+import triton._C.libtriton.triton as _triton
+
+from .tools.disasm import extract
+
 try:
     from torch._C import _cuda_getCurrentRawStream as get_cuda_stream
 except ImportError:
     get_cuda_stream = lambda dev_idx: torch.cuda.current_stream(dev_idx).cuda_stream
 
-from filelock import FileLock
 
-import triton
-import triton._C.libtriton.triton as _triton
-from .tools.disasm import extract
 
 
 def current_cuda_stream(device_idx=0):
