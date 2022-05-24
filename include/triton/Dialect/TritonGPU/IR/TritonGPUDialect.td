@@ -8,6 +8,8 @@ def TritonGPU_Dialect : Dialect {
 
   let cppNamespace = "::mlir::triton::gpu";
 
+  let hasOperationAttrVerify = 1;
+
   let description = [{
     Triton GPU Dialect.
   }];

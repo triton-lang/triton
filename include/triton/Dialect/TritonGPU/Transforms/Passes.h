@@ -9,6 +9,8 @@ std::unique_ptr<Pass> createTritonGPUPipelinePass(int numStages);
 namespace triton {
 namespace gpu {
 std::unique_ptr<Pass> createCombineOpsPass();
+
+std::unique_ptr<Pass> createTritonGPUVerifier();
 }
 }
 

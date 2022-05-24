@@ -1320,8 +1320,8 @@ class JITFunction:
         pm.add_tritongpu_pipeline_pass(num_stages)
         pm.add_canonicalizer_pass()
         pm.add_triton_gpu_combine_pass()
-        pm.run(mod)
-        return mod
+        pm.add_triton_gpu_verifier_pass()
+        return pm.run(mod)
 
 
     def __getitem__(self, grid):

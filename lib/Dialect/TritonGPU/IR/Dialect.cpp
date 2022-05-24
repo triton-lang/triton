@@ -62,3 +62,12 @@ void TritonGPUDialect::initialize() {
 
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Ops.cpp.inc"
+
+
+// verify TritonGPU ops
+mlir::LogicalResult
+TritonGPUDialect::verifyOperationAttribute(mlir::Operation *op,
+                                           mlir::NamedAttribute attr) {
+  // TODO: fill this.
+  return success();
+}
