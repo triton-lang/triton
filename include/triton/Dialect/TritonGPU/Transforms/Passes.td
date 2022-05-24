@@ -51,4 +51,14 @@ def TritonGPUCombineOps : Pass<"tritongpu-combine", "mlir::ModuleOp"> {
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonGPUVerifier : Pass<"tritongpu-verifier", "mlir::ModuleOp"> {
+  let summary = "verify TritonGPU IR";
+
+  let description = [{}];
+
+  let constructor = "mlir::triton::gpu::createTritonGPUVerifier";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+}
+
 #endif

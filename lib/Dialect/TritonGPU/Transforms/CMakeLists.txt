@@ -5,6 +5,7 @@ add_public_tablegen_target(TritonGPUCombineIncGen)
 add_mlir_dialect_library(TritonGPUTransforms
   Combine.cpp
   Pipeline.cpp
+  Verifier.cpp
   TritonGPUConversion.cpp
 
   DEPENDS

@@ -98,7 +98,8 @@ mod, ctx = matmul_kernel.compile_to_ttir(
 assert mod.verify()
 mod.dump()
 
-mod = matmul_kernel.compile_ttir_to_llir(mod, ctx)
+res = matmul_kernel.compile_ttir_to_llir(mod, ctx)
 
 assert mod.verify()
+assert res
 mod.dump()
