@@ -29,8 +29,6 @@ except ImportError:
     get_cuda_stream = lambda dev_idx: torch.cuda.current_stream(dev_idx).cuda_stream
 
 
-
-
 def current_cuda_stream(device_idx=0):
     # Torch's torch.cuda.current_stream() is slow. We provide this
     # function to give the user an opportunity to monkey-patch their
@@ -918,7 +916,6 @@ class Kernel:
     def __init__(self, fn):
         self.fn = fn
         self.cache_key = {}
-
 
     def add_to_cache(self, key, wargs, device_idx, num_warps, num_stages):
         tensor_idxs = [i for i, arg in enumerate(wargs) if hasattr(arg, 'data_ptr')]
