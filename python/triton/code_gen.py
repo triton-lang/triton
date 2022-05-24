@@ -619,7 +619,9 @@ class CodeGenerator(ast.NodeVisitor):
         # promote it to right type
         init_val = self.value_constructor.get_value(node.target.id)
         promote = lambda a, b: triton.language.semantic.computation_type_impl(a, b, False)
-        ty = promote(iter_args[0].type, iter_args[1].type) if len(iter_args) > 1 else iter_args[0].type
+        start_ty = triton.language.core._to_tensor(iter_args[0], self.builder).type
+        stop_ty = triton.language.core._to_tensor(iter_args[1], self.builder).type if len(iter_args) > 1 else None
+        ty = promote(start_ty, stop_ty) if len(iter_args) > 1 else start_ty
         casted = triton.language.semantic.cast(init_val, ty, self.builder)
         self.value_constructor.set_value(node.target.id, casted)
         # create cond
