@@ -16,12 +16,11 @@ import time
 import warnings
 from typing import Dict, Set, Tuple, Union
 
+import torch
 from filelock import FileLock
 
-import torch
 import triton
 import triton._C.libtriton.triton as _triton
-
 from .tools.disasm import extract
 
 try:
