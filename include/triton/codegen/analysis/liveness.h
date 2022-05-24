@@ -1,11 +1,13 @@
 #ifndef TDL_INCLUDE_IR_CODEGEN_LIVENESS_H
 #define TDL_INCLUDE_IR_CODEGEN_LIVENESS_H
 
-#include <map>
-#include <set>
-#include <vector>
 #include "triton/codegen/analysis/layout.h"
 #include "triton/tools/graph.h"
+
+#include "llvm/ADT/MapVector.h"
+
+#include <set>
+#include <vector>
 
 namespace triton{
 
@@ -42,14 +44,14 @@ struct segment {
 
 class liveness {
 private:
-  typedef std::map<shared_layout*, segment>    intervals_map_t;
+  typedef llvm::MapVector<shared_layout*, segment>    intervals_map_t;
 
 public:
   // constructor
   liveness(layouts *l): layouts_(l){ }
   // accessors
   const intervals_map_t& get()  const { return intervals_; }
-  segment get(shared_layout* v)  const { return intervals_.at(v); }
+  segment get(shared_layout* v)  const { return intervals_.lookup(v); }
   // run
   void run(ir::module &mod);
 
