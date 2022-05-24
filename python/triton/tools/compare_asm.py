@@ -5,9 +5,9 @@ example:
 python compare_asm.py --dir0=triton-works/ --dir1=triton-fails/ --asm=ttir \
        --diff-out0=diff-works.ll --diff-out1=diff-fails.ll
 '''
-import pickle
 import argparse
 import os
+import pickle
 
 parser = argparse.ArgumentParser(description="unpickle")
 parser.add_argument('--dir0', dest='dir0', required=True,
