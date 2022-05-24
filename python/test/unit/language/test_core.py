@@ -514,9 +514,41 @@ def test_atomic_rmw(op, dtype_x_str, mode, device='cuda'):
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
 
 
+def test_atomic_cas():
+    # 1. make sure that atomic_cas changes the original value (Lock)
+    @triton.jit
+    def change_value(Lock):
+        tl.atomic_cas(Lock, 0, 1)
+
+    Lock = torch.zeros((1,), device='cuda', dtype=torch.int32)
+    change_value[(1,)](Lock)
+
+    assert(Lock[0] == 1)
+
+    # 2. only one block enters the critical section
+    @triton.jit
+    def serialized_add(data, Lock):
+        ptrs = data + tl.arange(0, 128)
+        while tl.atomic_cas(Lock, 0, 1) == 1:
+            pass
+
+        tl.store(ptrs, tl.load(ptrs) + 1.0)
+
+        # release lock
+        tl.atomic_xchg(Lock, 0)
+
+    Lock = torch.zeros((1,), device='cuda', dtype=torch.int32)
+    data = torch.zeros((128,), device='cuda', dtype=torch.float32)
+    ref = torch.full((128,), 64.0)
+    serialized_add[(64,)](data, Lock)
+    triton.testing.assert_almost_equal(data, ref)
+
+
 # ---------------
 # test cast
 # ---------------
+
+
 @pytest.mark.parametrize("dtype_x, dtype_z, bitcast", [
     (dtype_x, dtype_z, False)
     for dtype_x in dtypes
@@ -644,7 +676,7 @@ def test_f16_to_f8_rounding():
     )
     assert torch.all(
         torch.logical_not(mismatch)
-    ), f"{f16_input[mismatch]=} {f16_output[mismatch]=} {abs_error[mismatch]=} {min_error[mismatch]=}"
+    ), f"f16_input[mismatch]={f16_input[mismatch]} f16_output[mismatch]={f16_output[mismatch]} abs_error[mismatch]={abs_error[mismatch]} min_error[mismatch]={min_error[mismatch]}"
 
 
 # ---------------
@@ -676,9 +708,16 @@ def test_reduce1d(dtype_str, shape, device='cuda'):
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
 
 
-@pytest.mark.parametrize("dtype_str, shape, axis", [
-    (dtype, (1, 1024), 1) for dtype in ['float32', 'uint32']
-])
+reduce_configs1 = [
+    (dtype, (1, 1024), axis) for dtype in ['float32', 'uint32']
+    for axis in [1]
+]
+reduce_configs2 = [
+    ('float32', shape, 1) for shape in [(2, 32), (4, 128), (32, 64), (64, 128), (128, 256), (32, 1024)]
+]
+
+
+@pytest.mark.parametrize("dtype_str, shape, axis", reduce_configs1 + reduce_configs2)
 def test_reduce2d(dtype_str, shape, axis, device='cuda'):
     # triton kernel
     @triton.jit
