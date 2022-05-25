@@ -840,6 +840,7 @@ void init_triton_ir(py::module &&m) {
       .def("create_fp_trunc", &ir::builder::create_fp_trunc, ret::reference)
       .def("create_int_cast", &ir::builder::create_int_cast, ret::reference)
       .def("create_downcast", &ir::builder::create_downcast, ret::reference)
+      .def("create_int_to_ptr", &ir::builder::create_int_to_ptr, ret::reference)
       // phi
       .def("create_phi", &ir::builder::create_phi, ret::reference)
       // Binary instructions
