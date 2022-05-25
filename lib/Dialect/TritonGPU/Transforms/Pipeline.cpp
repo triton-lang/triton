@@ -2,8 +2,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 
 #include "mlir/IR/BlockAndValueMapping.h"
-#include <llvm-6.0/llvm/Support/ErrorHandling.h>
-#include <llvm-6.0/llvm/Support/raw_ostream.h>
 
 //===----------------------------------------------------------------------===//
 //
