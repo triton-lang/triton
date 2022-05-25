@@ -40,6 +40,7 @@ private:
           return dotOp.emitError() << name << "'s type should be of RankedTensorType";
       }
 
+      Attribute cLayout;
       for (auto it : llvm::zip(llvm::SmallVector<Type>{cType, dType},
                               llvm::SmallVector<char>{'c', 'd'})) {
         Type type = std::get<0>(it);
@@ -48,8 +49,13 @@ private:
           Attribute encoding = tensorType.getEncoding();
           if (!encoding)
             return dotOp.emitError() << name << " should have encoding";
-          if (!encoding.isa<triton::gpu::TritonGPUMmaEncodingAttr>())
-            return dotOp.emitError() << name << " should be of mma layout";
+          if (!encoding.isa<triton::gpu::TritonGPUMmaEncodingAttr>() && 
+              !encoding.isa<triton::gpu::TritonGPUDistributedEncodingAttr>())
+            return dotOp.emitError() << name << " should be of distributed layout";
+          if (name == 'c')
+            cLayout = encoding;
+          else if (encoding != cLayout)
+            return dotOp.emitError() << "d & c should have the same layout";
         } else
           return dotOp.emitError() << name
                                    << "'s type should be of RankedTensorType";
