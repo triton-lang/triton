@@ -35,7 +35,13 @@ def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
 }
 
 def TTG_CopyAsyncOp : TTG_Op<"copy_async",
-                             [MemoryEffects<[MemRead, MemWrite]>]> {
+                             [MemoryEffects<[MemRead, MemWrite]>,
+                              TypesMatchWith<"infer mask type from ptr type",
+                                              "ptr", "mask",
+                                              "getI1SameShape($_self)">,
+                              TypesMatchWith<"infer other type from ptr type",
+                                             "ptr", "other",
+                                             "getPointeeType($_self)">]> {
   let summary = "copy async";
 
   let arguments = (ins TT_PtrTensor:$ptr, BoolLike:$mask, TT_Type:$other,
@@ -44,7 +50,7 @@ def TTG_CopyAsyncOp : TTG_Op<"copy_async",
 
   let results = (outs TT_Type:$result);
 
-  // let assemblyFormat = "$ptr`,` $mask`,` $other attr-dict `:` type($result)";
+  let assemblyFormat = "$ptr`,` $mask`,` $other attr-dict `:` type($ptr) `->` type($result)";
 }
 
 // Port Arith_CmpIOp & Arith_CmpFOp to TritonGPU.
