@@ -5,7 +5,6 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
 #include "../PassDetail.h"
-#include <llvm-6.0/llvm/Support/ErrorHandling.h>
 
 using namespace mlir;
 using namespace mlir::triton;

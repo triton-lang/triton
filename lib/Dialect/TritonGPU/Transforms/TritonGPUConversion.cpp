@@ -2,7 +2,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <algorithm>
-#include <llvm-6.0/llvm/Support/ErrorHandling.h>
 
 using namespace mlir;
 
@@ -24,7 +23,11 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
     int64_t numElements = tensorType.getNumElements();
 
     // TODO: we should raise exception here.
-    assert(numElements > numThreads);
+    if (!(numElements >= numThreads)) {
+      llvm::errs() << tensorType << " has " << numElements << " numElements "
+                   << " smaller than numThreads (" << numThreads << ")";
+      assert(false);
+    }
     assert(numElements % numThreads == 0);
 
     // or assert no encoding?
