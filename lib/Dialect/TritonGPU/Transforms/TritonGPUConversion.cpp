@@ -92,17 +92,17 @@ TritonGPUConversionTarget::TritonGPUConversionTarget(
   });
 
 
-  // We have requirements for the data layouts
-  addDynamicallyLegalOp<triton::DotOp>([this](triton::DotOp dotOp) -> bool {
-    Attribute aEncoding = dotOp.a().getType().cast<RankedTensorType>().getEncoding();
-    Attribute bEncoding = dotOp.b().getType().cast<RankedTensorType>().getEncoding();
-    if (aEncoding && aEncoding.isa<triton::gpu::TritonGPUSharedEncodingAttr>() &&
-        bEncoding && bEncoding.isa<triton::gpu::TritonGPUSharedEncodingAttr>())
-      return true;
-    // TODO: we should delete this
-    if (this->typeConverter.isLegal(dotOp))
-      return true;
-    return false;
-  });
+  // // We have requirements for the data layouts
+  // addDynamicallyLegalOp<triton::DotOp>([this](triton::DotOp dotOp) -> bool {
+  //   Attribute aEncoding = dotOp.a().getType().cast<RankedTensorType>().getEncoding();
+  //   Attribute bEncoding = dotOp.b().getType().cast<RankedTensorType>().getEncoding();
+  //   if (aEncoding && aEncoding.isa<triton::gpu::TritonGPUSharedEncodingAttr>() &&
+  //       bEncoding && bEncoding.isa<triton::gpu::TritonGPUSharedEncodingAttr>())
+  //     return true;
+  //   // TODO: we should delete this
+  //   if (this->typeConverter.isLegal(dotOp))
+  //     return true;
+  //   return false;
+  // });
 
 }
