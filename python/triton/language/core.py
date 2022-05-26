@@ -341,22 +341,22 @@ class constexpr:
 
     def __bool__(self):
         return bool(self.value)
-    
+
     def __ge__(self, other):
         other = other.value if isinstance(other, constexpr) else other
         return self.value >= other
-    
+
     def __gt__(self, other):
         other = other.value if isinstance(other, constexpr) else other
-        return self.value >  other
+        return self.value > other
 
     def __le__(self, other):
         other = other.value if isinstance(other, constexpr) else other
         return self.value <= other
-    
+
     def __lt__(self, other):
         other = other.value if isinstance(other, constexpr) else other
-        return self.value <  other
+        return self.value < other
 
     def __eq__(self, other):
         other = other.value if isinstance(other, constexpr) else other
