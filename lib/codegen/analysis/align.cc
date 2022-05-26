@@ -507,6 +507,9 @@ std::vector<unsigned> align::populate_starting_multiple_default(ir::value* v) {
 
 unsigned get_max_multiple(int val){
   if(val == 0) return 1 << 31;
+  if(val % 128 == 0) return 128;
+  if(val % 64 == 0) return 64;
+  if(val % 32 == 0) return 32;
   if(val % 16 == 0) return 16;
   if(val % 8 == 0) return 8;
   if(val % 4 == 0) return 4;
@@ -527,7 +530,7 @@ std::vector<unsigned> align::populate_starting_multiple(ir::value *v){
   if(auto *x = dynamic_cast<ir::binary_operator*>(v))
     return populate_starting_multiple_binop(x);
   if(auto *x = dynamic_cast<ir::constant_int*>(v))
-    return add_to_cache(x, {std::min<unsigned>(x->get_value(), 128)}, starting_multiple_);
+    return add_to_cache(x, {get_max_multiple(x->get_value())}, starting_multiple_);
   if(auto *x = dynamic_cast<ir::make_range*>(v))
     return add_to_cache(x, {get_max_multiple(x->get_first()->get_value())}, starting_multiple_);
   if(auto *x = dynamic_cast<ir::getelementptr_inst*>(v))
