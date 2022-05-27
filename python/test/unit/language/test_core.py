@@ -910,7 +910,7 @@ def test_arange(start, device='cuda'):
 def test_masked_load_shared_memory(dtype, device='cuda'):
     M = 32
     N = 32
-    K = 8
+    K = 16
 
     in1 = torch.rand((M, K), dtype=dtype, device=device)
     in2 = torch.rand((K, N), dtype=dtype, device=device)
