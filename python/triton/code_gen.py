@@ -1150,6 +1150,11 @@ class DependenciesFinder(ast.NodeVisitor):
         self.ret = hashlib.md5(self.ret).hexdigest()
 
 
+def default_cache_dir():
+    import getpass
+    return f'/tmp/triton_{getpass.getuser()}'
+
+
 class JITFunction:
 
     cache_hook = None
@@ -1235,7 +1240,7 @@ class JITFunction:
         hashed_key = hashlib.md5(key.encode("utf-8")).hexdigest()
 
         # create cache directory
-        cache_dir = os.environ.get('TRITON_CACHE_DIR', '/tmp/triton/')
+        cache_dir = os.environ.get('TRITON_CACHE_DIR', default_cache_dir())
         if cache_dir:
             os.makedirs(cache_dir, exist_ok=True)
 
