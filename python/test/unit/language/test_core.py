@@ -1106,6 +1106,7 @@ def test_constexpr_shape():
 # test if
 # -------------
 
+
 def test_if():
 
     @triton.jit

@@ -34,7 +34,7 @@ def add_kernel(
     # for instance, if you had a vector of length 256 and block_size of 64, the programs
     # would each access the elements [0:64, 64:128, 128:192, 192:256].
     # Note that offsets is a list of pointers
-    for block_start in range(pid*BLOCK_SIZE, n_elements, tl.num_programs(0)*BLOCK_SIZE):
+    for block_start in range(pid * BLOCK_SIZE, n_elements, tl.num_programs(0) * BLOCK_SIZE):
         offsets = block_start + tl.arange(0, BLOCK_SIZE)
         # Create a mask to guard memory operations against out-of-bounds accesses
         mask = offsets < n_elements
