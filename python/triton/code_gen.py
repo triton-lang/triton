@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 import warnings
 from typing import Dict, Set, Tuple, Union
@@ -22,12 +23,17 @@ import triton
 import triton._C.libtriton.triton as _triton
 from .tools.disasm import extract
 
+try:
+    from torch._C import _cuda_getCurrentRawStream as get_cuda_stream
+except ImportError:
+    get_cuda_stream = lambda dev_idx: torch.cuda.current_stream(dev_idx).cuda_stream
+
 
 def current_cuda_stream(device_idx=0):
     # Torch's torch.cuda.current_stream() is slow. We provide this
     # function to give the user an opportunity to monkey-patch their
     # own faster current stream lookup.
-    return torch.cuda.current_stream().cuda_stream
+    return get_cuda_stream(device_idx)
 
 
 def mangle_ty(ty):
@@ -578,13 +584,17 @@ class CodeGenerator(ast.NodeVisitor):
                     for stmt in node.orelse:
                         ast.NodeVisitor.generic_visit(self, stmt)
                 return
+
         # create nodes
         st_target = ast.Name(id=node.target.id, ctx=ast.Store())
         ld_target = ast.Name(id=node.target.id, ctx=ast.Load())
         arg_0 = node.iter.args[0] if len(node.iter.args) > 1 else ast.Num(0)
         arg_1 = node.iter.args[1] if len(node.iter.args) > 1 else node.iter.args[0]
         arg_2 = node.iter.args[2] if len(node.iter.args) > 2 else ast.Num(1)
+        # init node
         init_node = ast.Assign(targets=[st_target], value=arg_0)
+
+        # step node
         pos_cond_node = ast.Compare(ld_target, [ast.Lt()], [arg_1])
         neg_cond_node = ast.Compare(ld_target, [ast.Gt()], [arg_1])
         pos_step_node = ast.Compare(arg_2, [ast.Gt()], [ast.Num(0)])
@@ -604,7 +614,17 @@ class CodeGenerator(ast.NodeVisitor):
             cond = build_cond()
             return self.builder.cond_br(cond.handle, loop_bb, next_bb)
 
+        # init loop induction variable
         self.visit(init_node)
+        # promote it to right type
+        init_val = self.value_constructor.get_value(node.target.id)
+        promote = lambda a, b: triton.language.semantic.computation_type_impl(a, b, False)
+        start_ty = triton.language.core._to_tensor(iter_args[0], self.builder).type
+        stop_ty = triton.language.core._to_tensor(iter_args[1], self.builder).type if len(iter_args) > 1 else None
+        ty = promote(start_ty, stop_ty) if len(iter_args) > 1 else start_ty
+        casted = triton.language.semantic.cast(init_val, ty, self.builder)
+        self.value_constructor.set_value(node.target.id, casted)
+        # create cond
         cond = build_cond()
         self.builder.cond_br(cond.handle, loop_bb, next_bb)
         self.builder.set_insert_block(loop_bb)
@@ -909,6 +929,7 @@ class Kernel:
 
     def __init__(self, fn):
         self.fn = fn
+        self.cache_key = {}
 
     def add_to_cache(self, key, wargs, device_idx, num_warps, num_stages):
         tensor_idxs = [i for i, arg in enumerate(wargs) if hasattr(arg, 'data_ptr')]
@@ -950,12 +971,11 @@ class Kernel:
         #         assert arg.is_cuda, "All tensors must be on GPU!"
         # set device (i.e., make sure torch has the context initialized)
         device = torch.cuda.current_device()
-        torch.cuda.set_device(device)
-        # query compute capability
-        cc = torch.cuda.get_device_capability(device)
-        cc = str(cc[0]) + '-' + str(cc[1])
-        cache_key = self.fn.cache_key + cc
-        # query current stream
+        if device not in self.cache_key:
+            cc = torch.cuda.get_device_capability(device)
+            cc = str(cc[0]) + '-' + str(cc[1])
+            self.cache_key[device] = self.fn.cache_key + cc
+        cache_key = self.cache_key[device]
         stream = current_cuda_stream(device)
         return _triton.runtime.launch(wargs, self.fn.do_not_specialize, cache_key, self.fn.arg_names,
                                       device, stream, self.fn.bin_cache, num_warps, num_stages, self.add_to_cache,
@@ -1058,27 +1078,40 @@ class Autotuner:
         return self.kernel(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
 
 
-@functools.lru_cache()
+_version_key_lock = threading.Lock()
+_version_key = None
+
+
 def version_key():
-    import pkgutil
-    contents = []
-    # frontend
-    with open(triton.code_gen.__file__, "rb") as f:
-        contents += [hashlib.md5(f.read()).hexdigest()]
-    # backend
-    with open(triton._C.libtriton.__file__, "rb") as f:
-        contents += [hashlib.md5(f.read()).hexdigest()]
-    # language
-    language_path = os.path.join(*triton.__path__, 'language')
-    for lib in pkgutil.iter_modules([language_path]):
-        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+    global _version_key
+
+    if _version_key is not None:
+        return _version_key
+
+    with _version_key_lock:
+        if _version_key is not None:
+            return _version_key
+
+        import pkgutil
+        contents = []
+        # frontend
+        with open(triton.code_gen.__file__, "rb") as f:
             contents += [hashlib.md5(f.read()).hexdigest()]
-    # ptxas version
-    try:
-        ptxas_version = hashlib.md5(subprocess.check_output(["ptxas", "--version"])).hexdigest()
-    except Exception:
-        ptxas_version = ''
-    return '-'.join(triton.__version__) + '-' + ptxas_version + '-' + '-'.join(contents)
+        # backend
+        with open(triton._C.libtriton.__file__, "rb") as f:
+            contents += [hashlib.md5(f.read()).hexdigest()]
+        # language
+        language_path = os.path.join(*triton.__path__, 'language')
+        for lib in pkgutil.iter_modules([language_path]):
+            with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+                contents += [hashlib.md5(f.read()).hexdigest()]
+        # ptxas version
+        try:
+            ptxas_version = hashlib.md5(subprocess.check_output(["ptxas", "--version"])).hexdigest()
+        except Exception:
+            ptxas_version = ''
+        _version_key = '-'.join(triton.__version__) + '-' + ptxas_version + '-' + '-'.join(contents)
+        return _version_key
 
 
 class DependenciesFinder(ast.NodeVisitor):
@@ -1115,6 +1148,11 @@ class DependenciesFinder(ast.NodeVisitor):
             func.hash = finder.ret
         self.ret = (self.ret + func.hash).encode("utf-8")
         self.ret = hashlib.md5(self.ret).hexdigest()
+
+
+def default_cache_dir():
+    import getpass
+    return f'/tmp/triton_{getpass.getuser()}'
 
 
 class JITFunction:
@@ -1202,7 +1240,7 @@ class JITFunction:
         hashed_key = hashlib.md5(key.encode("utf-8")).hexdigest()
 
         # create cache directory
-        cache_dir = os.environ.get('TRITON_CACHE_DIR', '/tmp/triton/')
+        cache_dir = os.environ.get('TRITON_CACHE_DIR', default_cache_dir())
         if cache_dir:
             os.makedirs(cache_dir, exist_ok=True)
 
