@@ -35,6 +35,7 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
     // Now we assume:
     //   contiguous = 1, order = 0, 1, 2, ..., 
     llvm::SmallVector<unsigned> threadTileSize(rank, 1); // naive layout
+    llvm::SmallVector<unsigned> warpTileSize(rank, 1);
     llvm::SmallVector<unsigned> blockTileSize(rank);
     llvm::SmallVector<unsigned> order(rank);
     int remainingThreads = numThreads;
@@ -45,8 +46,8 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
       remainingThreads /= blockTileSize[dim];
       // TODO: will we need repetition?
     }
-    Attribute encoding = triton::gpu::TritonGPUDistributedEncodingAttr::get(
-        context, threadTileSize, blockTileSize, order);
+    Attribute encoding = triton::gpu::TritonGPUShardedEncodingAttr::get(
+        context, threadTileSize, warpTileSize, blockTileSize, order);
     return RankedTensorType::get(shape, elementType, encoding);
   });
 
