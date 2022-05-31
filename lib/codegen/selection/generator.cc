@@ -3208,7 +3208,9 @@ void generator::visit_basic_block(ir::basic_block * block) {
   BasicBlock *parent = bbs_[block];
   builder_->SetInsertPoint(parent);
   for(ir::instruction *i: block->get_inst_list()){
+    // i->print(std::cout);
     visit_value(i);
+    // std::cout << "done" << std::endl;
   }
   // Update ir bb -> llvm bb mapping
   bbs_[block] = builder_->GetInsertBlock();
