@@ -666,6 +666,7 @@ def test_reduce1d(dtype_str, shape, device='cuda'):
 
     rs = RandomState(17)
     x = numpy_random((shape,), dtype_str=dtype_str, rs=rs)
+    x[:] = 1
     # numpy result
     z_ref = np.sum(x).astype(getattr(np, dtype_str))
     # triton result

@@ -2350,10 +2350,15 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
   std::vector<unsigned> shapes = layout->get_shape();
 
   Type* sca_ty = cvt(arg->get_type()->get_scalar_ty());
+  size_t n_bits = sca_ty->getPrimitiveSizeInBits();
+
+  std::string n_bits_str = std::to_string(n_bits);
+  std::string cst = (n_bits == 64) ? "l" : "r";
+
   FunctionType *st_shared_ty = FunctionType::get(void_ty, {i1_ty, ptr_ty(sca_ty, 3), sca_ty}, false);
-  InlineAsm *st_shared = InlineAsm::get(st_shared_ty, "@$0 st.shared.b32 [$1], $2;", "b,r,r", true);
+  InlineAsm *st_shared = InlineAsm::get(st_shared_ty, "@$0 st.shared.b" + n_bits_str + " [$1], $2;", "b," + cst + "," + cst, true);
   FunctionType *ld_shared_ty = FunctionType::get(sca_ty, {i1_ty, ptr_ty(sca_ty, 3)}, false);
-  InlineAsm *ld_shared = InlineAsm::get(ld_shared_ty, "@$1 ld.shared.b32 $0, [$2];", "=r,b,r", true);
+  InlineAsm *ld_shared = InlineAsm::get(ld_shared_ty, "@$1 ld.shared.b" + n_bits_str + " $0, [$2];", "=" + cst + ",b," + cst, true);
 
 
   Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
@@ -2410,7 +2415,8 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
     for(int k = shuffle_width/2 ; k > 0; k >>= 1)
       acc = do_acc(acc, shfl_sync(acc, k));
     // store partial result to shared memory
-    Value* x_idx = idxs_[x][i][0];
+    auto x_idxs = idxs_[x][i];
+    Value* x_idx = x_idxs.empty() ? builder_->getInt32(0) : x_idxs[0];
     Value* st_off = add(mul(x_idx, i32(warps_per_inner)), warp_j);
     call(st_shared, {icmp_eq(lane_j, i32(0)), gep(base, st_off), acc});
   }
@@ -2418,7 +2424,8 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
   // at this point, partial accumulator synchronized in shared memory
   // Just need to reduce `warp_per_inner` numbers in shared memory
   for(size_t i = 0; i < n_elts/col_per_thread; i++){
-    Value* x_idx = idxs_[x][i][0];
+    auto x_idxs = idxs_[x][i];
+    Value* x_idx = x_idxs.empty() ? builder_->getInt32(0) : x_idxs[0];
     Value* ld_off = add(mul(x_idx, i32(warps_per_inner)), urem(lane_j, i32(warps_per_inner)));
     Value* acc = call(ld_shared, {builder_->getInt1(true), gep(base, ld_off)});
     for(int k = warps_per_inner/2; k > 0; k >>= 1)
@@ -2525,11 +2532,15 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
     default: throw std::runtime_error("unreachable");
   }
   ir::value *arg = x->get_operand(0);
+  int cc = tgt_->as_nvidia()->sm();
   analysis::scanline_layout* scanline = layouts_->get(x->get_operand(0))->to_scanline();
-  // if(scanline && scanline->get_order()[0] == x->get_axis())
+  analysis::mma_layout* mma = layouts_->get(x->get_operand(0))->to_mma();
+  bool is_coalesced_scanline = scanline && (scanline->get_order()[0] == x->get_axis());
+  bool is_a100_mma = mma && (cc >= 80) && (x->get_axis() == 1);
+  if(is_coalesced_scanline || is_a100_mma)
     visit_reducend_inst_fast(x, do_acc, neutral);
-  // else
-  //   visit_reducend_inst(x, do_acc, neutral);
+  else
+    visit_reducend_inst(x, do_acc, neutral);
 }
 
 /**
