@@ -1201,13 +1201,9 @@ void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
   if(atom->get_type()->is_block_ty()){
     int ld = ords_.at(ptr)[0];
     unsigned alignment = alignment_->get(ptr, ld);
-    analysis::scanline_layout* scanline = layouts_->get(ptr)->to_scanline();
-    if(scanline){
-      vec = std::min<int>(scanline->nts(ld), alignment);
-      vec = std::min(vec, val->get_type()->get_tile_element_ty()->is_fp16_ty() ? 2 : 1);
-    }
+    vec = std::min<int>(layouts_->get(ptr)->to_scanline()->nts(ld), alignment);
+    vec = std::min(vec, val->get_type()->get_tile_element_ty()->is_fp16_ty() ? 2 : 1);
   }
-
 
   for(int i = 0; i < idxs_.at(val).size(); i += vec){
     auto idx = idxs_[val][i];
@@ -1259,15 +1255,8 @@ void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
     // create inline asm
     InlineAsm *iasm = InlineAsm::get(fn_ty, asm_str, constraint, true);
     // call asm
-    if(atom->get_type()->is_block_ty()){
-      Module *mod = builder_->GetInsertBlock()->getModule();
-      Value *tid = tgt_->get_local_id(mod, *builder_, 0);
-      Value* warp = axes_.at(layouts_->get(val)->get_axis(1)).thread_id;
-      Value* msk = rmw_msk;
-      msk = and_(msk, icmp_eq(warp, i32(0)));
-      msk = and_(msk, icmp_eq(urem(tid, i32(4)), i32(0)));
-      vals_[atom][idx] = call(iasm, (ArrayRef<Value*>{msk, rmw_ptr, rmw_val}));
-    }
+    if(atom->get_type()->is_block_ty())
+      vals_[atom][idx] = call(iasm, (ArrayRef<Value*>{rmw_msk, rmw_ptr, rmw_val}));
     else{
       Module *mod = builder_->GetInsertBlock()->getModule();
       tgt_->add_memfence(mod, *builder_);
