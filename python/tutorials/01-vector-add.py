@@ -34,17 +34,17 @@ def add_kernel(
     # for instance, if you had a vector of length 256 and block_size of 64, the programs
     # would each access the elements [0:64, 64:128, 128:192, 192:256].
     # Note that offsets is a list of pointers
-    for block_start in range(pid * BLOCK_SIZE, n_elements, tl.num_programs(0) * BLOCK_SIZE):
-        offsets = block_start + tl.arange(0, BLOCK_SIZE)
-        # Create a mask to guard memory operations against out-of-bounds accesses
-        mask = offsets < n_elements
-        # Load x and y from DRAM, masking out any extra elements in case the input is not a
-        # multiple of the block size
-        x = tl.load(x_ptr + offsets, mask=mask)
-        y = tl.load(y_ptr + offsets, mask=mask)
-        output = x + y
-        # Write x + y back to DRAM
-        tl.store(output_ptr + offsets, output, mask=mask)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    # Create a mask to guard memory operations against out-of-bounds accesses
+    mask = offsets < n_elements
+    # Load x and y from DRAM, masking out any extra elements in case the input is not a
+    # multiple of the block size
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    # Write x + y back to DRAM
+    tl.store(output_ptr + offsets, output, mask=mask)
 
 
 # %%
@@ -60,8 +60,7 @@ def add(x: torch.Tensor, y: torch.Tensor):
     # The SPMD launch grid denotes the number of kernel instances that run in parallel.
     # It is analogous to CUDA launch grids. It can be either Tuple[int], or Callable(metaparameters) -> Tuple[int]
     # In this case, we use a 1D grid where the size is the number of blocks
-    # grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
-    grid = 128,
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
     # NOTE:
     #  - each torch.tensor object is implicitly converted into a pointer to its first element.
     #  - `triton.jit`'ed functions can be index with a launch grid to obtain a callable GPU kernel
