@@ -46,6 +46,11 @@ y = torch.rand(size, device='cuda')
 z = torch.empty_like(x)
 # add_kernel[(1,)](x, y, z, size, 256)
 # print(add_kernel[(1,)].kernel.compile_to_ttir())
-mod, ctx = add_kernel.compile_to_ttir(x, y, z, size, 128, 8, grid=(1,))
+mod, ctx = add_kernel.compile_to_ttir(
+    x, y, z, size, 128, 8, grid=(1,), num_stages=4)
 mod.dump()
 # print(mod)
+
+res = add_kernel.compile_ttir_to_llir(mod, ctx)
+
+mod.dump()
