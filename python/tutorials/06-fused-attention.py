@@ -20,9 +20,6 @@ def _kernel(
     BLOCK_M: tl.constexpr, BLOCK_DMODEL : tl.constexpr, 
     BLOCK_N: tl.constexpr,
 ):
-    #------------#
-    #- Prologue -#
-    #------------#
     off_hz = tl.program_id(0)
     off_z = off_hz // H
     off_h = off_hz % H
@@ -49,13 +46,12 @@ def _kernel(
                 + off_h * stride_vh \
                 + off_vk[:, None] * stride_vk \
                 + off_vn[None, :] * stride_vn
-    # initialize pointer to m and l
+    # initialize pointer to workaround scratchpad
     t_ptrs = TMP + off_hz*stride_hzt + offs_qm
-
+    # compute acc, m_i, l_i
     acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
-
     num_blocks_for_row = start_am + 1
     for start_n in range(0, num_blocks_for_row):
         q = tl.load(q_ptrs) # BUG: fails when moved out of the loop
@@ -94,6 +90,7 @@ def _kernel(
                  + off_h * stride_oh \
                  + offs_om[:, None] * stride_om \
                  + offs_on[None, :] * stride_on
+    # write-back
     tl.store(out_ptrs, acc)
 
 
