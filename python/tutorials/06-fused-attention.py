@@ -97,14 +97,13 @@ def _kernel(
     tl.store(out_ptrs, acc)
 
 
-##############
-#  MAIN API  #
-##############
 class _attention(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, q, k, v):
         BLOCK = 128
+        D_MODEL = q.shape[-1]
+        assert D_MODEL == 64
         # shape constraints
         Lq, Lk = q.shape[-1], k.shape[-2]
         assert Lq == Lk
@@ -120,7 +119,7 @@ class _attention(torch.autograd.Function):
             o.stride(0), o.stride(1), o.stride(2), o.stride(3),
             q.shape[0], q.shape[1],
             BLOCK_M=BLOCK, BLOCK_N=BLOCK, 
-            BLOCK_DMODEL = 64, num_warps=4,
+            BLOCK_DMODEL = D_MODEL, num_warps=4,
         )
         return o
     
