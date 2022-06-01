@@ -125,15 +125,9 @@ attention = _attention.apply
 @pytest.mark.parametrize('Z, H, N_CTX, D_MODEL', [(2, 3, 1024, 64)])
 def test_op(Z, H, N_CTX, D_MODEL, dtype=torch.float16):
     torch.manual_seed(20)
-    BLOCK_M, BLOCK_N = 128, 128
     q = .5*torch.randn((Z, H, N_CTX, D_MODEL), dtype=dtype, device="cuda", requires_grad=True)
     k = .5*torch.randn((Z, H, D_MODEL, N_CTX), dtype=dtype, device="cuda", requires_grad=True)
     v = .5*torch.randn((Z, H, N_CTX, D_MODEL), dtype=dtype, device="cuda", requires_grad=True)
-    # create triangular layout
-    layout = torch.randint(2, (H, N_CTX//BLOCK_M, N_CTX//BLOCK_N))
-    layout[:] = 1
-    for h in range(H):
-        layout[h, :, :] = torch.tril(layout[h, :, :])
     # triton implementation
     tri_out = attention(q, k, v)
     # reference implementation
