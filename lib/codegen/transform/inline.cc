@@ -117,41 +117,55 @@ void inliner::run(ir::module &mod) {
 
     for(ir::call_inst* call: callsites)
       do_inline(call->get_fn(), call, mod.get_builder(), callsites);
-
-    // eliminate fall through
-    for (ir::function* fn : mod.get_function_list()) {
-      for (auto it = fn->blocks().begin(); it != fn->blocks().end(); ) {
-        ir::basic_block* block = *it;
-        // if the dest block has a single pred, this is a trivial edge.
-        // collapse it
-        std::vector<ir::basic_block*> preds = block->get_predecessors();
-        if (preds.size() != 1) {
-          ++it;
-          continue;
-        }
-        assert(preds[0] != block && "dead block should have been eliminated");
-
-        ir::basic_block *the_pred = preds[0];
-        if (auto *br = dynamic_cast<ir::uncond_branch_inst*>(&the_pred->back())) {
-          for (ir::instruction *i : block->get_inst_list())
-            i->set_parent(the_pred);
-          // merge block into the_pred and delete block
-          the_pred->get_inst_list().splice(
-            std::prev(the_pred->get_inst_list().end()), block->get_inst_list()
-          );
-          block->replace_all_uses_with(the_pred);
-
-          // delete the unconditional branch from pred
-          the_pred->get_inst_list().pop_back();
-
-          it = fn->blocks().erase(it);
-        } else
-          ++it;
-      }
-    }
   }
 
+  // eliminate fall through
+  for (ir::function* fn : mod.get_function_list()) {
+    // std::cout << "After inlining...\n";
+    // fn->print(std::cout);
+    // std::cout << std::endl;
+    bool changed = false;
 
+    for (auto it = fn->blocks().begin(); it != fn->blocks().end(); ) {
+      ir::basic_block* block = *it;
+      // if the dest block has a single pred, this is a trivial edge.
+      // collapse it
+      std::vector<ir::basic_block*> preds = block->get_predecessors();
+      if (preds.size() != 1) {
+        ++it;
+        continue;
+      }
+      assert(preds[0] != block && "dead block should have been eliminated");
+
+      ir::basic_block *the_pred = preds[0];
+      if (auto *br = dynamic_cast<ir::uncond_branch_inst*>(&the_pred->back())) {
+        // fold single entry phis
+        while (auto *phi = dynamic_cast<ir::phi_node*>(*block->begin())) {
+          // TODO: loop phi?
+          assert(phi->get_num_incoming() == 1);
+          phi->replace_all_uses_with(phi->get_incoming_value(0));
+          phi->erase_from_parent();
+        }
+
+        for (ir::basic_block *succ : block->get_successors())
+          succ->replace_phi_uses_with(block, the_pred);
+        for (ir::instruction *i : block->get_inst_list())
+          i->set_parent(the_pred);
+        // merge block into the_pred and delete block
+        the_pred->get_inst_list().splice(
+          std::prev(the_pred->get_inst_list().end()), block->get_inst_list()
+        );
+
+        // delete the unconditional branch from pred
+        the_pred->get_inst_list().pop_back();
+
+        it = fn->blocks().erase(it);
+
+        changed = true;
+      } else
+        ++it;
+    }
+  }
 }
 
 }
