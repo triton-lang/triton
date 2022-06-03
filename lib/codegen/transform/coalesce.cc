@@ -52,7 +52,6 @@ coalesce::coalesce(analysis::align* align, analysis::layouts *layouts)
 //}
 
 void coalesce::run(ir::module &mod) {
-  std::set<analysis::data_layout*> invalidated;
   ir::builder& builder = mod.get_builder();
   // add layout conversion instructions
   for(ir::function *fn: mod.get_function_list())
@@ -62,28 +61,11 @@ void coalesce::run(ir::module &mod) {
     if(dynamic_cast<ir::store_inst*>(i) || dynamic_cast<ir::atomic_rmw_inst*>(i))
     if(ir::value* op = i->get_operand(1))
     if(op->get_type()->is_block_ty())
-    if(op->get_type()->get_tile_rank() == 2)
-    if(invalidated.find(layout_->get(op)) == invalidated.end())
     if(layout_->get(op)->to_mma()){
       ir::instruction* new_op = ir::cvt_layout_inst::create(op);
       builder.set_insert_point(i);
       builder.insert(new_op);
       i->replace_uses_of_with(op, new_op);
-    }
-    // coalesce before copy_to_shared
-    // It's dirty, but the backend is being rewritten from scratch. :)
-    if(dynamic_cast<ir::copy_to_shared_inst*>(i))
-    if(ir::value* op = i->get_operand(0))
-    if(op->get_type()->is_block_ty())
-    if(op->get_type()->get_tile_rank() == 2)
-    if(invalidated.find(layout_->get(op)) == invalidated.end())
-    if(layout_->get(op)->to_mma()){
-      ir::instruction* new_op = ir::cvt_layout_inst::create(op);
-      builder.set_insert_point(i);
-      builder.insert(new_op);
-      op->replace_all_uses_with(new_op);
-      new_op->replace_uses_of_with(new_op, op);
-      invalidated.insert(layout_->get(op));
     }
     // uncoalesce after load
     if(auto x = dynamic_cast<ir::load_inst*>(i))
@@ -138,7 +120,6 @@ void coalesce::run(ir::module &mod) {
       }
       if(in_contig.size() <= 1 || out_contig==in_contig)
         continue;
-      std::cout << "3!!" << std::endl;
       builder.set_insert_point_after(val_inst);
       auto new_val = builder.insert(ir::cvt_layout_inst::create(val_inst));
       x->replace_uses_of_with(val_inst, new_val);
