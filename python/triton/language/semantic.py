@@ -559,7 +559,7 @@ def cast(input: tl.tensor,
          dst_ty: tl.dtype,
          builder: ir.builder) -> tl.tensor:
     src_ty = input.type
-    if src_ty.is_block():
+    if src_ty.is_block() and not dst_ty.is_block():
         dst_ty = tl.block_type(dst_ty, input.type.get_block_shapes())
     if src_ty == dst_ty:
         return input
@@ -905,6 +905,10 @@ def dot(lhs: tl.tensor,
         allow_tf32: bool,
         builder: ir.builder) -> tl.tensor:
     assert lhs.type.is_block() and rhs.type.is_block()
+    assert len(lhs.shape) == 2 and len(rhs.shape) == 2
+    assert lhs.shape[-1] == rhs.shape[0]
+    assert lhs.shape[0] >= 16 and lhs.shape[1] >= 16 and rhs.shape[1] >= 16,\
+        "small blocks not supported!"
     if lhs.type.scalar.is_int():
         _0 = builder.get_int32(0)
         ret_scalar_ty = tl.int32

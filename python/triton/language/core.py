@@ -32,6 +32,8 @@ def _to_tensor(x, builder):
         return _to_tensor(x.value, builder)
     elif isinstance(x, tensor):
         return x
+    elif x is None:
+        return None
     assert False, f'cannot convert {x} to tensor'
 
 
@@ -341,6 +343,26 @@ class constexpr:
 
     def __bool__(self):
         return bool(self.value)
+
+    def __ge__(self, other):
+        other = other.value if isinstance(other, constexpr) else other
+        return self.value >= other
+
+    def __gt__(self, other):
+        other = other.value if isinstance(other, constexpr) else other
+        return self.value > other
+
+    def __le__(self, other):
+        other = other.value if isinstance(other, constexpr) else other
+        return self.value <= other
+
+    def __lt__(self, other):
+        other = other.value if isinstance(other, constexpr) else other
+        return self.value < other
+
+    def __eq__(self, other):
+        other = other.value if isinstance(other, constexpr) else other
+        return self.value == other
 
     def __call__(self, *args, **kwds):
         return self.value(*args, **kwds)
@@ -806,7 +828,7 @@ def _add_atomic_docstr(name):
 @_add_atomic_docstr("compare-and-swap")
 def atomic_cas(pointer, cmp, val, _builder=None):
     cmp = _to_tensor(cmp, _builder)
-    val = _to_tensor(cmp, _builder)
+    val = _to_tensor(val, _builder)
     return semantic.atomic_cas(pointer, cmp, val, _builder)
 
 
