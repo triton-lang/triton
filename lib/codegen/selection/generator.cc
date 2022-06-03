@@ -2359,7 +2359,7 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
   auto arg_vals = vals_.at(arg);
   std::vector<indices_t> arg_idxs = idxs_.at(arg);
   size_t n_elts = arg_idxs.size();
-  unsigned col_per_thread;
+  unsigned col_per_thread = 0;
   Value* warp_i;
   Value* warp_j;
   if(analysis::scanline_layout* scanline = layout->to_scanline()){
