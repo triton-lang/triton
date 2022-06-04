@@ -171,6 +171,7 @@ include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
 
 add_subdirectory(include)
 add_subdirectory(lib)
+add_subdirectory(bin)
 
 add_library(triton SHARED ${PYTHON_SRC})
 
