@@ -4,14 +4,14 @@
   threadTileSize = [1, 1],
   warpTileSize = [32, 1],
   blockTileSize = [64, 1],
-  order = [0, 1]
+  order = [0]
 }>
 
 #reg2 = #triton_gpu.sharded_layout<{
   threadTileSize = [2, 1],
   warpTileSize = [64, 1],
   blockTileSize = [128, 1],
-  order = [0, 1]
+  order = [0]
 }>
 
 func @add(%arg0: tensor<256xi32, #reg>, %arg1: tensor<256xi32, #reg>) {
