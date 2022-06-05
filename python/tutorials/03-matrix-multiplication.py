@@ -306,8 +306,6 @@ if triton.testing.allclose(triton_output, torch_output):
 else:
     print("❌ Triton and Torch differ")
 
-print(matmul_kernel.cache_key)
-exit()
 # %%
 # Benchmark
 # --------------
