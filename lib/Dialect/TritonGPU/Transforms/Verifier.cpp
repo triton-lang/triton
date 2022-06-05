@@ -50,7 +50,7 @@ private:
           if (!encoding)
             return dotOp.emitError() << name << " should have encoding";
           if (!encoding.isa<triton::gpu::TritonGPUMmaEncodingAttr>() && 
-              !encoding.isa<triton::gpu::TritonGPUShardedEncodingAttr>())
+              !encoding.isa<triton::gpu::TritonGPUBlockedEncodingAttr>())
             return dotOp.emitError() << name << " should be of distributed layout";
           if (name == 'c')
             cLayout = encoding;

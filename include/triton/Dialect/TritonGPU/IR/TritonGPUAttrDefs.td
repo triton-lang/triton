@@ -48,8 +48,8 @@ And the associated TritonGPU MLIR
   );
 }
 
-def TritonGPUShardedEncodingAttr : TritonGPU_Attr<"TritonGPUShardedEncoding"> {
-  let mnemonic = "sharded_layout";
+def TritonGPUBlockedEncodingAttr : TritonGPU_Attr<"TritonGPUBlockedEncoding"> {
+  let mnemonic = "blocked_layout";
 
   let description = [{
 An encoding where each warp owns a contiguous portion of the target tensor. This is typically the kind of data layout
@@ -74,7 +74,7 @@ size }  ....
                       A_{63, 0}[T60]  A_{63, 1}[T60]  ...  A_{63, 6}[T63] A_{63, 7}[T63]     A_{63, 8}[T60] A_{63, 9}[T60] ... A_{63, 14}[T63] A_{63, 15}[T63]
 
 And the associated TritonGPU MLIR
-#LAYOUT = #triton_gpu.sharded_layout<{
+#LAYOUT = #triton_gpu.blocked_layout<{
   threadTileSize = {2, 2}
   blockTileSize = {32, 8}
 }>

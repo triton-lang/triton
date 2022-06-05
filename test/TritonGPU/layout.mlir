@@ -1,13 +1,13 @@
 // RUN: triton-opt %s -split-input-file -verify-diagnostics
 
-#reg = #triton_gpu.sharded_layout<{
+#reg = #triton_gpu.blocked_layout<{
   threadTileSize = [1, 1],
   warpTileSize = [32, 1],
   blockTileSize = [64, 1],
   order = [0]
 }>
 
-#reg2 = #triton_gpu.sharded_layout<{
+#reg2 = #triton_gpu.blocked_layout<{
   threadTileSize = [2, 1],
   warpTileSize = [64, 1],
   blockTileSize = [128, 1],

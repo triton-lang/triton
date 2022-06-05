@@ -1,3 +1,5 @@
+// RUN: triton-opt %s -tritongpu-verifier -verify-diagnostics
+
 module {
   func @add_kernel__Pfp32_Pfp32_Pfp32_i32_i32_i32__(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: !tt.ptr<f32>, %arg3: i32, %arg4: i32, %arg5: i32) {
     %0 = tt.get_program_id {axis = 0 : i32} : i32
