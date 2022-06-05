@@ -46,7 +46,7 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
       remainingThreads /= blockTileSize[dim];
       // TODO: will we need repetition?
     }
-    Attribute encoding = triton::gpu::TritonGPUShardedEncodingAttr::get(
+    Attribute encoding = triton::gpu::TritonGPUBlockedEncodingAttr::get(
         context, threadTileSize, warpTileSize, blockTileSize, order);
     return RankedTensorType::get(shape, elementType, encoding);
   });

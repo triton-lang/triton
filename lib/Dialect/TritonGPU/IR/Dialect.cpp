@@ -37,7 +37,7 @@ static LogicalResult parseIntArrayAttr(AsmParser &parser,
 #include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.cpp.inc"
 
 Attribute 
-TritonGPUShardedEncodingAttr::parse(AsmParser &parser, Type type) {
+TritonGPUBlockedEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseLess().failed())
     return {};
   // Parse the data as a dictionary
@@ -94,14 +94,14 @@ TritonGPUShardedEncodingAttr::parse(AsmParser &parser, Type type) {
     }
   }
 
-  return parser.getChecked<TritonGPUShardedEncodingAttr>(parser.getContext(),
+  return parser.getChecked<TritonGPUBlockedEncodingAttr>(parser.getContext(),
                                                          threadTileSize,
                                                          warpTileSize,
                                                          blockTileSize,
                                                          order);
 }
 
-void TritonGPUShardedEncodingAttr::print(mlir::AsmPrinter &printer) const {
+void TritonGPUBlockedEncodingAttr::print(mlir::AsmPrinter &printer) const {
   printer << "<{"
           << "threadTileSize = [" << getThreadTileSize() << "]"
           << ", warpTileSize = [" << getWarpTileSize() << "]"
