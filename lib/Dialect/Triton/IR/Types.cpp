@@ -30,7 +30,8 @@ Type PointerType::parse(AsmParser &parser) {
   if (parser.parseGreater())
     return Type();
 
-  return PointerType::get(pointeeType, 0);
+  // TODO: also print address space?
+  return PointerType::get(pointeeType, 1);
 }
 
 void PointerType::print(AsmPrinter &printer) const {
