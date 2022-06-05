@@ -102,12 +102,12 @@ TritonGPUShardedEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void TritonGPUShardedEncodingAttr::print(mlir::AsmPrinter &printer) const {
-  printer << "<"
+  printer << "<{"
           << "threadTileSize = [" << getThreadTileSize() << "]"
           << ", warpTileSize = [" << getWarpTileSize() << "]"
           << ", blockTileSize = [" << getBlockTileSize() << "]"
           << ", order = [" << getOrder() << "]"
-          << ">";
+          << "}>";
 }
 
 Attribute 
@@ -175,11 +175,11 @@ TritonGPUSharedEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void TritonGPUSharedEncodingAttr::print(AsmPrinter &printer) const {
-  printer << "<"
+  printer << "<{"
           << "vec = " << getVec()
           << ", perPhase = " << getPerPhase()
           << ", order = [" << getOrder() << "]"
-          << ">";
+          << "}>";
 }
 
 void TritonGPUDialect::initialize() {
