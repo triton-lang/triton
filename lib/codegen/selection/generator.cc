@@ -1550,12 +1550,12 @@ void generator::visit_mma884(ir::dot_inst* C, ir::value *A, ir::value *B, ir::va
 namespace {
 class mma16816_smem_loader {
 public:
-  mma16816_smem_loader(int wpt, std::vector<int> order, int k_order, 
+  mma16816_smem_loader(int wpt, int rep, std::vector<int> order, int k_order, 
                        std::vector<unsigned> tile_shape, 
                        std::vector<int> instr_shape, std::vector<int> mat_shape, 
                        int per_phase, int max_phase, int dtsize, Builder *builder, 
                        adder add, multiplier mul, geper gep)
-                      : wpt_(wpt), order_(order), k_order_(k_order), tile_shape_(tile_shape),
+                      : wpt_(wpt), rep_(rep), order_(order), k_order_(k_order), tile_shape_(tile_shape),
                         instr_shape_(instr_shape), mat_shape_(mat_shape), 
                         per_phase_(per_phase), max_phase_(max_phase), dtsize_(dtsize), builder_(builder),
                         add(add), mul(mul), gep(gep) {
@@ -1592,8 +1592,8 @@ public:
 
   std::vector<Value*> compute_offs(Value *warp_off, Value *lane) {
     // TODO: this needs to be moved to constructor (and extracted to arr_order)
-    mat_arr_stride_  = (k_order_ == 1) ? 1 : wpt_;
-    warp_off_stride_ = instr_shape_[k_order_^1] / mat_shape_[k_order_^1];
+    mat_arr_stride_  = 1;
+    warp_off_stride_ = rep_ * instr_shape_[k_order_^1] / mat_shape_[k_order_^1];
     // start matrix logic offset (rename it as base_mat_off?)
     Value *mat_off[2] = {nullptr, nullptr};
 
@@ -1872,6 +1872,7 @@ public:
 
 private:
   int wpt_;
+  int rep_;
   std::vector<int> order_;
   int k_order_;
   std::vector<unsigned> tile_shape_;
@@ -2018,7 +2019,7 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   // m  s0_1(1), s1_1(3)) |  (stride in num of matrices(mat_stride_ak): 2)
   // -----------
   //   *num_rep_m (stride in num of matrices(mat_stride_am): 2*layout->wpt(0))
-  mma16816_smem_loader a_loader(layout->wpt(0), ord_a, /*k_order*/1, shape_a, 
+  mma16816_smem_loader a_loader(layout->wpt(0), layout->rep(0), ord_a, /*k_order*/1, shape_a, 
                                 {mma_instr_m, mma_instr_k}, {mat_shape_m, mat_shape_k}, 
                                 per_phase_a, max_phase_a, dtsize_a, builder_, add, mul, gep);
   std::vector<Value*> off_a = a_loader.compute_offs(warp_m, lane);
@@ -2029,7 +2030,7 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   // k  s0_1(1), |                  | s1_1(3)) | (stride in num of matrices(mat_stride_bn): wpt(1))
   // -----------
   //   *num_rep_k (stride in num of matrices(mat_stride_bk): 2)
-  mma16816_smem_loader b_loader(layout->wpt(1), ord_b, /*k_order*/0, shape_b,
+  mma16816_smem_loader b_loader(layout->wpt(1), layout->rep(1), ord_b, /*k_order*/0, shape_b,
                                 {mma_instr_k, mma_instr_n}, {mat_shape_k, mat_shape_n},
                                 per_phase_b, max_phase_b, dtsize_b, builder_, add, mul, gep);
   std::vector<Value*> off_b = b_loader.compute_offs(warp_n, lane);
@@ -3090,8 +3091,8 @@ void generator::visit_layout_mma(analysis::mma_layout* layout) {
     /* warp offset */
     Value *warp_0 = urem(warp, i32(layout->wpt(0)));
     Value *warp_1 = urem(udiv(warp, i32(layout->wpt(0))), i32(layout->wpt(1)));
-    Value *off_warp_m = mul(warp_0, i32(layout->spw(0)));
-    Value *off_warp_n = mul(warp_1, i32(layout->spw(1)));
+    Value *off_warp_m = mul(warp_0, i32(layout->spw(0)*layout->rep(0)));
+    Value *off_warp_n = mul(warp_1, i32(layout->spw(1)*layout->rep(1)));
     Value *off_lane_m = urem(lane, _16);
     Value *off_lane_n = urem(lane, _8);
     /* offsets */
@@ -3104,13 +3105,15 @@ void generator::visit_layout_mma(analysis::mma_layout* layout) {
     // c offset
     Value *off_c_m = add(udiv(lane, _4), off_warp_m);
     Value *off_c_n = add(mul(_2, urem(lane, _4)), off_warp_n);
-    for(unsigned m = 0; m < shape[0]; m+=layout->shape_per_cta(0)){
-      idx_m.push_back(add(off_c_m, i32(m)));
-      idx_m.push_back(add(off_c_m, i32(m + 8)));
+    for(unsigned m = 0; m < shape[0]; m+=layout->shape_per_cta(0)*layout->rep(0))
+    for(unsigned mm = 0; mm < layout->rep(0); mm++){
+      idx_m.push_back(add(off_c_m, i32(m + mm*layout->spw(0) + 0)));
+      idx_m.push_back(add(off_c_m, i32(m + mm*layout->spw(0) + 8)));
     }
-    for(unsigned n = 0; n < shape[1]; n+=layout->shape_per_cta(1)){
-      idx_n.push_back(add(off_c_n, i32(n)));
-      idx_n.push_back(add(off_c_n, i32(n + 1)));
+    for(unsigned n = 0; n < shape[1]; n+=layout->shape_per_cta(1)*layout->rep(1))
+    for(unsigned nn = 0; nn < layout->rep(1); nn++){
+      idx_n.push_back(add(off_c_n, i32(n + nn*layout->spw(1) + 0)));
+      idx_n.push_back(add(off_c_n, i32(n + nn*layout->spw(1) + 1)));
     }
     /* axes */
     axes_[layout->get_axis(0)] = distributed_axis{1, idx_m, warp_0};

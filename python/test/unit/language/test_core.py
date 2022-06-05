@@ -809,8 +809,8 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                          [(epilogue, allow_tf32, dtype)
                           for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols']
                           for allow_tf32 in [True, False]
-                          for dtype in ['float32', 'int8']
-                          if not (allow_tf32 and (dtype == 'int8'))])
+                          for dtype in ['float32', 'float16', 'int8']
+                          if not (allow_tf32 and (dtype in ['float16', 'int8']))])
 def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
     cc = _triton.runtime.cc(_triton.runtime.backend.CUDA, torch.cuda.current_device())
     if cc < 80:
@@ -844,7 +844,7 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
             z += tl.load(ZCs)[None, :]
         tl.store(Zs, z)
     # input
-    M, N, K = 64, 64, 32
+    M, N, K = 128, 128, 32
     rs = RandomState(17)
     x = numpy_random((M, K), dtype_str=dtype, rs=rs)
     y = numpy_random((K, N), dtype_str=dtype, rs=rs)
