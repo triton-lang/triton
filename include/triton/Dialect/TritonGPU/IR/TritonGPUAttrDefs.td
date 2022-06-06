@@ -130,7 +130,7 @@ def TritonGPUMmaEncodingAttr : TritonGPU_Attr<"TritonGPUMmaEncoding"> {
     // TODO: should we rename this as blockTileSize? (consistent naming with Distributed layout)
     ArrayRefParameter<"unsigned">:$shapePerTile,
     // TODO: should Distributed layout also 
-    ArrayRefParameter<"unsigned">:$reptitions,
+    ArrayRefParameter<"unsigned">:$repetitions,
     ArrayRefParameter<"unsigned">:$contigPerThread
     // "AffineMap":$warpOrdering,
     // "AffineMap":$blockOrdering

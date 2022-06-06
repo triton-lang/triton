@@ -19,7 +19,7 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
     ...
   }];
 
-  let constructor = "mlir::triton::gpu::createPipelinePass";
+  let constructor = "mlir::createTritonGPUPipelinePass()";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::scf::SCFDialect",
@@ -45,7 +45,7 @@ def TritonGPUCombineOps : Pass<"tritongpu-combine", "mlir::ModuleOp"> {
     convert_layout(%src, #LAYOUT) => %src if %src.layout() == #LAYOUT
   }];
 
-  let constructor = "mlir::triton::gpu::createCombineOpsPass";
+  let constructor = "mlir::createTritonGPUCombineOpsPass()";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
@@ -56,7 +56,7 @@ def TritonGPUVerifier : Pass<"tritongpu-verifier", "mlir::ModuleOp"> {
 
   let description = [{}];
 
-  let constructor = "mlir::triton::gpu::createTritonGPUVerifier";
+  let constructor = "mlir::createTritonGPUVerifier()";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
 }

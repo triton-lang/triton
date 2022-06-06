@@ -26,6 +26,8 @@ def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
   let arguments = (ins TT_Tensor:$src);
 
   let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
 }
 
 def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {

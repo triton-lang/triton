@@ -1353,10 +1353,10 @@ void init_triton_ir(py::module &&m) {
         self.addPass(mlir::createTritonGPUPipelinePass(numStages));
       })
       .def("add_triton_gpu_combine_pass", [](mlir::PassManager &self) {
-        self.addPass(mlir::triton::gpu::createCombineOpsPass());
+        self.addPass(mlir::createTritonGPUCombineOpsPass());
       })
       .def("add_triton_gpu_verifier_pass", [](mlir::PassManager &self) {
-        self.addPass(mlir::triton::gpu::createTritonGPUVerifier());
+        self.addPass(mlir::createTritonGPUVerifier());
       })
       ;
 }

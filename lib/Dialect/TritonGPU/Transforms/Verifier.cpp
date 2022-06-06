@@ -100,6 +100,6 @@ private:
   }
 };
 
-std::unique_ptr<Pass> triton::gpu::createTritonGPUVerifier() {
+std::unique_ptr<Pass> mlir::createTritonGPUVerifier() {
   return std::make_unique<TritonGPUVerifier>();
 }
