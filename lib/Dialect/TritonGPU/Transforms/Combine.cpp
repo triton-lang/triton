@@ -45,6 +45,6 @@ public:
   }
 };
 
-std::unique_ptr<Pass> triton::gpu::createCombineOpsPass() {
+std::unique_ptr<Pass> mlir::createTritonGPUCombineOpsPass() {
   return std::make_unique<TritonGPUCombineOpsPass>();
 }

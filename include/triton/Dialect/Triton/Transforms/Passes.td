@@ -14,7 +14,7 @@ def TritonCombineOps : Pass</*cli-arg*/"triton-combine", /*Op*/"mlir::ModuleOp">
         load(ptrs, broadcast(cond), other)
   }];
 
-  let constructor = "mlir::triton::createCombineOpsPass";
+  let constructor = "mlir::triton::createCombineOpsPass()";
 
   let dependentDialects = ["mlir::arith::ArithmeticDialect",
                            /*SelectOp*/"mlir::StandardOpsDialect"];

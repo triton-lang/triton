@@ -126,7 +126,7 @@ def TT_GEPOp : TT_Op<"getelementptr",
 
     let results = (outs TT_PtrTensor:$result);
 
-    let assemblyFormat = "$ptr `,` $offset `,` attr-dict `:` type($result)";
+    let assemblyFormat = "$ptr `,` $offset attr-dict `:` type($result)";
 }
 
 
