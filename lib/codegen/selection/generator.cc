@@ -1592,7 +1592,7 @@ public:
 
   std::vector<Value*> compute_offs(Value *warp_off, Value *lane) {
     // TODO: this needs to be moved to constructor (and extracted to arr_order)
-    mat_arr_stride_  = 1;
+    mat_arr_stride_  = (k_order_ == 1 || dtsize_ == 16) ? 1 : wpt_;
     warp_off_stride_ = rep_ * instr_shape_[k_order_^1] / mat_shape_[k_order_^1];
     // start matrix logic offset (rename it as base_mat_off?)
     Value *mat_off[2] = {nullptr, nullptr};
