@@ -853,9 +853,9 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
             den = tl.sum(num, 1)
             z = num / den[:, None]
         if CHAIN_DOT:
-            tl.store(Zs, z)
-            tl.debug_barrier()
-            z = tl.dot(tl.load(Zs), tl.load(Ws))
+            # tl.store(Zs, z)
+            # tl.debug_barrier()
+            z = tl.dot(z.to(tl.float16), tl.load(Ws))
         tl.store(Zs, z)
     # input
     M, N, K = 128, 128, 32
@@ -869,7 +869,7 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
         w = (w.view('uint32') & np.uint32(0xffffe000)).view('float32')
     x_tri = to_triton(x, device=device)
     y_tri = to_triton(y, device=device)
-    w_tri = to_triton(y, device=device)
+    w_tri = to_triton(w, device=device)
     # triton result
     z = numpy_random((M, N), dtype_str=dtype, rs=rs)
     z_tri = to_triton(z, device=device)
