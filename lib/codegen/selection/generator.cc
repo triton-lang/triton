@@ -2377,7 +2377,8 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
   else if(layout->to_mma()){
     shuffle_width = 4; 
     warps_per_inner = layout->to_mma()->wpt(1);
-    col_per_thread = 16;
+    col_per_thread = axes_.at(a_axes_->get(arg, 1)).values.size();
+
     warp_i = axes_.at(a_axes_->get(arg, 0)).thread_id;
     warp_j = axes_.at(a_axes_->get(arg, 1)).thread_id;
   }
@@ -3214,7 +3215,6 @@ void generator::visit_basic_block(ir::basic_block * block) {
   BasicBlock *parent = bbs_[block];
   builder_->SetInsertPoint(parent);
   for(ir::instruction *i: block->get_inst_list()){
-    // i->print(std::cout);
     visit_value(i);
     // std::cout << "done" << std::endl;
   }

@@ -809,8 +809,8 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                          [(epilogue, allow_tf32, dtype)
                           for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
                           for allow_tf32 in [True, False]
-                          for dtype in ['float32', 'float16', 'int8']
-                          if not (allow_tf32 and (dtype in ['float16', 'int8']))])
+                          for dtype in ['float16']
+                          if not (allow_tf32 and (dtype in ['float16']))])
 def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
     cc = _triton.runtime.cc(_triton.runtime.backend.CUDA, torch.cuda.current_device())
     if cc < 80:
@@ -895,7 +895,9 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
     if epilogue == 'add-cols':
         z_ref += z[0,:][None, :]
     if epilogue == 'softmax':
-        z_ref = np.softmax(z_ref, axis=-1)
+        num = np.exp(z_ref - np.max(z_ref, axis=-1, keepdims=True))
+        denom = np.sum(num, axis=-1, keepdims=True)
+        z_ref = num / denom
     if epilogue == 'chain-dot':
         z_ref = np.matmul(z_ref, w)
     # compare
