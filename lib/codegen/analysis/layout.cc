@@ -216,9 +216,14 @@ mma_layout::mma_layout(size_t num_warps,
     order_ = {1, 0};
     // axis 1 is repeated 2 times so each warp has a 16x16 tile
     // that can be directly reused as the LHS of another dot
-    rep_ = {1,  2};
+    bool is_bf16fp16 = tensor_core_type_ == mma_layout::FP32_FP16_FP16_FP32 ||
+                       tensor_core_type_ == mma_layout::FP32_BF16_BF16_FP32;
+    rep_ = {1, 1};
+    if(is_bf16fp16) 
+      rep_ = {1,  2};
     // e.g., {16, 8, 16} for f32.f16.f16.f32
-    spw_ = mma_instr_shape_.at(tensor_core_type_); 
+    auto instr_shape = mma_instr_shape_.at(tensor_core_type_); 
+    spw_ = {instr_shape[0]*rep_[0], instr_shape[1]*rep_[1]};
   }
 
   /* warps per tile */

@@ -1937,8 +1937,8 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   const int per_phase_b = swizzle_->get_per_phase(layout_b);
   const int max_phase_b = swizzle_->get_max_phase(layout_b);
 
-  const int num_rep_m = shapes[0] / layout->shape_per_cta(0);
-  const int num_rep_n = shapes[1] / layout->shape_per_cta(1);
+  const int num_rep_m = shapes[0] / layout->shape_per_cta(0) * layout->rep(0);
+  const int num_rep_n = shapes[1] / layout->shape_per_cta(1) * layout->rep(1);
   const int num_rep_k = std::max<int>(NK/mma_instr_k, 1);
 
   // floating point types
@@ -3091,8 +3091,8 @@ void generator::visit_layout_mma(analysis::mma_layout* layout) {
     /* warp offset */
     Value *warp_0 = urem(warp, i32(layout->wpt(0)));
     Value *warp_1 = urem(udiv(warp, i32(layout->wpt(0))), i32(layout->wpt(1)));
-    Value *off_warp_m = mul(warp_0, i32(layout->spw(0)*layout->rep(0)));
-    Value *off_warp_n = mul(warp_1, i32(layout->spw(1)*layout->rep(1)));
+    Value *off_warp_m = mul(warp_0, i32(layout->spw(0)));
+    Value *off_warp_n = mul(warp_1, i32(layout->spw(1)));
     Value *off_lane_m = urem(lane, _16);
     Value *off_lane_n = urem(lane, _8);
     /* offsets */
@@ -3105,15 +3105,15 @@ void generator::visit_layout_mma(analysis::mma_layout* layout) {
     // c offset
     Value *off_c_m = add(udiv(lane, _4), off_warp_m);
     Value *off_c_n = add(mul(_2, urem(lane, _4)), off_warp_n);
-    for(unsigned m = 0; m < shape[0]; m+=layout->shape_per_cta(0)*layout->rep(0))
+    for(unsigned m = 0; m < shape[0]; m+=layout->shape_per_cta(0))
     for(unsigned mm = 0; mm < layout->rep(0); mm++){
-      idx_m.push_back(add(off_c_m, i32(m + mm*layout->spw(0) + 0)));
-      idx_m.push_back(add(off_c_m, i32(m + mm*layout->spw(0) + 8)));
+      idx_m.push_back(add(off_c_m, i32(m + mm*layout->spw(0)/layout->rep(0) + 0)));
+      idx_m.push_back(add(off_c_m, i32(m + mm*layout->spw(0)/layout->rep(0) + 8)));
     }
-    for(unsigned n = 0; n < shape[1]; n+=layout->shape_per_cta(1)*layout->rep(1))
+    for(unsigned n = 0; n < shape[1]; n+=layout->shape_per_cta(1))
     for(unsigned nn = 0; nn < layout->rep(1); nn++){
-      idx_n.push_back(add(off_c_n, i32(n + nn*layout->spw(1) + 0)));
-      idx_n.push_back(add(off_c_n, i32(n + nn*layout->spw(1) + 1)));
+      idx_n.push_back(add(off_c_n, i32(n + nn*layout->spw(1)/layout->rep(1) + 0)));
+      idx_n.push_back(add(off_c_n, i32(n + nn*layout->spw(1)/layout->rep(1) + 1)));
     }
     /* axes */
     axes_[layout->get_axis(0)] = distributed_axis{1, idx_m, warp_0};
