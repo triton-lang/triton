@@ -11,7 +11,7 @@ template <typename T> class OperationPass;
 namespace triton{
 
 std::unique_ptr<OperationPass<ModuleOp>> 
-createConvertTritonToTritonGPUPass();
+createConvertTritonToTritonGPUPass(int numWarps = 4);
 
 }
 } // namespace mlir
