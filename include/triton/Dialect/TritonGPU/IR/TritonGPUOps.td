@@ -53,6 +53,9 @@ def TTG_CopyAsyncOp : TTG_Op<"copy_async",
   let results = (outs TT_Type:$result);
 
   let assemblyFormat = "$ptr`,` $mask`,` $other attr-dict `:` type($ptr) `->` type($result)";
+
+  // result needs to be of shared layout
+  let verifier = [{ return ::verify(*this); }];
 }
 
 // Port Arith_CmpIOp & Arith_CmpFOp to TritonGPU.

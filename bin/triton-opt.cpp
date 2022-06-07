@@ -4,6 +4,8 @@
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 
+#include "triton/Conversion/Passes.h"
+
 #include "mlir/IR/Dialect.h"
 #include "mlir/InitAllPasses.h"
 #include "mlir/Support/MlirOptMain.h"
@@ -13,6 +15,7 @@ int main(int argc, char **argv) {
   mlir::registerAllPasses();
   mlir::registerTritonPasses();
   mlir::registerTritonGPUPasses();
+  mlir::triton::registerConvertTritonToTritonGPUPass();
 
   // TODO: register Triton & TritonGPU passes
   mlir::DialectRegistry registry;
