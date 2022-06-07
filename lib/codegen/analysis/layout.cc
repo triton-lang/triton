@@ -258,6 +258,8 @@ mma_layout::mma_layout(size_t num_warps,
     } while (changed);
   }
 
+  // std::cout << wpt_[0] << " " << wpt_[1] << std::endl;
+
   /* shape per block */
   shape_per_cta_ = {spw_[0]*wpt_[0], spw_[1]*wpt_[1], 1};
 }

@@ -820,7 +820,7 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
             pytest.skip("Only test tf32 on devices with sm >= 80")
 
     M, N, K = 128, 128, 64
-    num_warps = 8
+    num_warps = 4
 
     # triton kernel
     @triton.jit
