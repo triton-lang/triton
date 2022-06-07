@@ -2025,29 +2025,53 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   // m  s0_1(1), s1_1(3)) |  (stride in num of matrices(mat_stride_ak): 2)
   // -----------
   //   *num_rep_m (stride in num of matrices(mat_stride_am): 2*layout->wpt(0))
-  analysis::shared_layout* layout_a = layouts_->get(C->get_operand(0))->to_shared();
-  const int per_phase_a = swizzle_->get_per_phase(layout_a);
-  const int max_phase_a = swizzle_->get_max_phase(layout_a);
-  mma16816_smem_loader a_loader(layout->wpt(0), layout->rep(0), ord_a, /*k_order*/1, shape_a, 
-                                {mma_instr_m, mma_instr_k}, {mat_shape_m, mat_shape_k}, 
-                                per_phase_a, max_phase_a, dtsize_a, builder_, add, mul, gep);
-  std::vector<Value*> off_a = a_loader.compute_offs(warp_m, lane);
-  int num_ptr_a = a_loader.get_num_ptr();
-  // pointers
-  std::vector<Value*> ptrs_a(num_ptr_a);
-  for(int i = 0; i < num_ptr_a; i++)
-    ptrs_a[i] = bit_cast(gep(shmems_[A], {off_a[i]}), smem_ptr_ty);
-  // loading function
   std::function<void(int,int,int,bool)> load_a;
-  load_a = [&](int m, int k, int inc, bool is_prefetch) {
+  analysis::shared_layout* layout_a = layouts_->get(C->get_operand(0))->to_shared();
+  bool is_a_shared = layout_a != nullptr;
+  if(is_a_shared) {
+    const int per_phase_a = swizzle_->get_per_phase(layout_a);
+    const int max_phase_a = swizzle_->get_max_phase(layout_a);
+    mma16816_smem_loader a_loader(layout->wpt(0), layout->rep(0), ord_a, /*k_order*/1, shape_a, 
+                                  {mma_instr_m, mma_instr_k}, {mat_shape_m, mat_shape_k}, 
+                                  per_phase_a, max_phase_a, dtsize_a, builder_, add, mul, gep);
+    std::vector<Value*> off_a = a_loader.compute_offs(warp_m, lane);
+    int num_ptr_a = a_loader.get_num_ptr();
+    // pointers
+    std::vector<Value*> ptrs_a(num_ptr_a);
+    for(int i = 0; i < num_ptr_a; i++)
+      ptrs_a[i] = bit_cast(gep(shmems_[A], {off_a[i]}), smem_ptr_ty);
+    // loading function
+    load_a = [&,a_loader,ptrs_a](int m, int k, int inc, bool is_prefetch) mutable {
       auto [ha0, ha1, ha2, ha3] = a_loader.load_x4(m, k, inc, is_prefetch, phiA, shared_pre_ptr_[layout_a],
-                                                   shared_next_ptr_[layout_a], off_a, ptrs_a, 
-                                                   ldmatrix_ty, smem_ptr_ty, prefetch_latch_to_bb_);
+                                                  shared_next_ptr_[layout_a], off_a, ptrs_a, 
+                                                  ldmatrix_ty, smem_ptr_ty, prefetch_latch_to_bb_);
       register_lds2(ha, m,   k,   inc, ha0, is_prefetch);
       register_lds2(ha, m+1, k,   inc, ha1, is_prefetch);
       register_lds2(ha, m,   k+1, inc, ha2, is_prefetch);
       register_lds2(ha, m+1, k+1, inc, ha3, is_prefetch);
-  };
+    };
+  }
+  else {
+    load_a = [&](int m, int k, int inc, bool is_prefetch) {
+      int ldm = 0;
+      Value* ha0 = UndefValue::get(fp16x2_ty);
+      Value* ha1 = UndefValue::get(fp16x2_ty);
+      Value* ha2 = UndefValue::get(fp16x2_ty);
+      Value* ha3 = UndefValue::get(fp16x2_ty);
+      ha0 = builder_->CreateInsertElement(ha0, vals_[A][idxs_[A][(m+0)*ldm + 0]], i32(0));
+      ha0 = builder_->CreateInsertElement(ha0, vals_[A][idxs_[A][(m+0)*ldm + 1]], i32(1));
+      ha1 = builder_->CreateInsertElement(ha1, vals_[A][idxs_[A][(m+1)*ldm + 0]], i32(0));
+      ha1 = builder_->CreateInsertElement(ha1, vals_[A][idxs_[A][(m+1)*ldm + 1]], i32(1));
+      ha2 = builder_->CreateInsertElement(ha2, vals_[A][idxs_[A][(m+0)*ldm + 2]], i32(0));
+      ha2 = builder_->CreateInsertElement(ha2, vals_[A][idxs_[A][(m+0)*ldm + 3]], i32(1));
+      ha3 = builder_->CreateInsertElement(ha3, vals_[A][idxs_[A][(m+1)*ldm + 2]], i32(0));
+      ha3 = builder_->CreateInsertElement(ha3, vals_[A][idxs_[A][(m+1)*ldm + 3]], i32(1));
+      ha[{m, k}] = ha0;
+      ha[{m+1, k}] = ha1;
+      ha[{m, k+1}] = ha2;
+      ha[{m+1, k+1}] = ha3;
+    };
+  }
 
 
   // | -> n (col-major)
