@@ -819,6 +819,9 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
         elif dtype == 'float32' and allow_tf32:
             pytest.skip("Only test tf32 on devices with sm >= 80")
 
+    M, N, K = 128, 128, 64
+    num_warps = 8
+
     # triton kernel
     @triton.jit
     def kernel(X, stride_xm, stride_xk,
@@ -858,7 +861,6 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
             z = tl.dot(z.to(tl.float16), tl.load(Ws))
         tl.store(Zs, z)
     # input
-    M, N, K = 128, 128, 32
     rs = RandomState(17)
     x = numpy_random((M, K), dtype_str=dtype, rs=rs)
     y = numpy_random((K, N), dtype_str=dtype, rs=rs)
@@ -885,7 +887,8 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
                          ADD_COLS=epilogue == 'add-cols',
                          DO_SOFTMAX = epilogue=='softmax',
                          CHAIN_DOT = epilogue=='chain-dot',
-                         ALLOW_TF32=allow_tf32)
+                         ALLOW_TF32=allow_tf32,
+                         num_warps=num_warps)
     # torch result
     z_ref = np.matmul(x, y)
     if epilogue == 'add-matrix':

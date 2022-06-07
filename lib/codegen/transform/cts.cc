@@ -93,7 +93,7 @@ void cts::run(ir::module &mod) {
       analysis::mma_layout* mma_lhs = layouts_->get(lhs)->to_mma();
       // TODO: V100
       bool is_lhs_shmem = !(mma_lhs && ty->get_primitive_size_in_bits() == 16);
-      if(is_lhs_shmem)
+      // if(is_lhs_shmem)
         shmem_ops.insert(lhs);
       shmem_ops.insert(i->get_operand(1));
     }
