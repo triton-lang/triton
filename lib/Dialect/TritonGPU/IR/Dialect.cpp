@@ -276,6 +276,17 @@ static Type getPointeeType(Type type) {
 }
 }
 
+static LogicalResult verify(CopyAsyncOp op) {
+  Type resType = op.getResult().getType();
+  if (auto tensorType = resType.dyn_cast<RankedTensorType>()) {
+    Attribute encoding = tensorType.getEncoding();
+    if (!encoding.isa<TritonGPUSharedEncodingAttr>())
+      return op.emitOpError("copy_async should return a shared memory tensor");
+  } else
+    return op.emitOpError("copy_async should return a tensor");
+  return success();
+}
+
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Ops.cpp.inc"
 
