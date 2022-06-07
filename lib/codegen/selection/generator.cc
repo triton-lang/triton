@@ -1905,6 +1905,7 @@ private:
  */
 //TODO: clean-up
 void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::value *D, unsigned NK) {
+  std::cout << "MMA" << std::endl;
   const std::vector<unsigned>& shapes = C->get_type()->get_block_shapes();
   std::map<std::vector<Value*>, std::vector<Value*>> fcs;
   for(indices_t idx: idxs_.at(C)){
@@ -1917,8 +1918,6 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   auto ord_a = layouts_->get(A)->get_order();
   auto ord_b = layouts_->get(B)->get_order();
   analysis::mma_layout* layout = layouts_->get(C)->to_mma();
-  analysis::shared_layout* layout_a = (analysis::shared_layout*)layouts_->get(C->get_operand(0));
-  analysis::shared_layout* layout_b = (analysis::shared_layout*)layouts_->get(C->get_operand(1));
   bool is_a_row = ord_a[0] == 1;
   bool is_b_row = ord_b[0] == 1;
 
@@ -1932,10 +1931,6 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   const int mat_shape_n = mat_shape[1];
   const int mat_shape_k = mat_shape[2];
 
-  const int per_phase_a = swizzle_->get_per_phase(layout_a);
-  const int max_phase_a = swizzle_->get_max_phase(layout_a);
-  const int per_phase_b = swizzle_->get_per_phase(layout_b);
-  const int max_phase_b = swizzle_->get_max_phase(layout_b);
 
   const int num_rep_m = shapes[0] / layout->shape_per_cta(0) * layout->rep(0);
   const int num_rep_n = shapes[1] / layout->shape_per_cta(1) * layout->rep(1);
@@ -2000,8 +1995,8 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
 
   BasicBlock* CurrBB = builder_->GetInsertBlock();
   BasicBlock* FirstBB = &CurrBB->getParent()->getEntryBlock();
-  if(FirstBB != CurrBB)
-    builder_->SetInsertPoint(FirstBB->getTerminator());
+  // if(FirstBB != CurrBB)
+  //   builder_->SetInsertPoint(FirstBB->getTerminator());
 
   Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
   Value *lane   = urem(thread, i32(32));
@@ -2014,47 +2009,84 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   size_t dtsize_a = A->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
   size_t dtsize_b = B->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
 
+  ir::phi_node* phiA = dynamic_cast<ir::phi_node*>(A);
+  ir::phi_node* phiB = dynamic_cast<ir::phi_node*>(B);
+  auto register_lds2 =
+    [&](std::map<std::pair<unsigned, unsigned>, Value*>& vals, int mn, int k, int inc, Value* val, bool is_prefetch) {
+      if (k < 2 && is_prefetch) {
+        ir::basic_block* inc_block = phiA->get_incoming_block(inc);
+        lazy_phi_incs_.push_back(std::make_tuple((PHINode*)vals[{mn, k}], val, inc_block));
+      } else
+        vals[{mn, k}] = val;
+  };
+
   // | -> k (row-major), since we have ldmatrix.trans, we only need to change stride
   // v (s0_0(0), s1_0(2), | *num_rep_k
   // m  s0_1(1), s1_1(3)) |  (stride in num of matrices(mat_stride_ak): 2)
   // -----------
   //   *num_rep_m (stride in num of matrices(mat_stride_am): 2*layout->wpt(0))
+  analysis::shared_layout* layout_a = layouts_->get(C->get_operand(0))->to_shared();
+  const int per_phase_a = swizzle_->get_per_phase(layout_a);
+  const int max_phase_a = swizzle_->get_max_phase(layout_a);
   mma16816_smem_loader a_loader(layout->wpt(0), layout->rep(0), ord_a, /*k_order*/1, shape_a, 
                                 {mma_instr_m, mma_instr_k}, {mat_shape_m, mat_shape_k}, 
                                 per_phase_a, max_phase_a, dtsize_a, builder_, add, mul, gep);
   std::vector<Value*> off_a = a_loader.compute_offs(warp_m, lane);
   int num_ptr_a = a_loader.get_num_ptr();
+  // pointers
+  std::vector<Value*> ptrs_a(num_ptr_a);
+  for(int i = 0; i < num_ptr_a; i++)
+    ptrs_a[i] = bit_cast(gep(shmems_[A], {off_a[i]}), smem_ptr_ty);
+  // loading function
+  std::function<void(int,int,int,bool)> load_a;
+  load_a = [&](int m, int k, int inc, bool is_prefetch) {
+      auto [ha0, ha1, ha2, ha3] = a_loader.load_x4(m, k, inc, is_prefetch, phiA, shared_pre_ptr_[layout_a],
+                                                   shared_next_ptr_[layout_a], off_a, ptrs_a, 
+                                                   ldmatrix_ty, smem_ptr_ty, prefetch_latch_to_bb_);
+      register_lds2(ha, m,   k,   inc, ha0, is_prefetch);
+      register_lds2(ha, m+1, k,   inc, ha1, is_prefetch);
+      register_lds2(ha, m,   k+1, inc, ha2, is_prefetch);
+      register_lds2(ha, m+1, k+1, inc, ha3, is_prefetch);
+  };
+
 
   // | -> n (col-major)
   // v (s0_0(0), | (stride: wpt(1)) | s1_0(2)  | *num_rep_n
   // k  s0_1(1), |                  | s1_1(3)) | (stride in num of matrices(mat_stride_bn): wpt(1))
   // -----------
   //   *num_rep_k (stride in num of matrices(mat_stride_bk): 2)
+  analysis::shared_layout* layout_b = layouts_->get(C->get_operand(1))->to_shared();
+  const int per_phase_b = swizzle_->get_per_phase(layout_b);
+  const int max_phase_b = swizzle_->get_max_phase(layout_b);
   mma16816_smem_loader b_loader(layout->wpt(1), layout->rep(1), ord_b, /*k_order*/0, shape_b,
                                 {mma_instr_k, mma_instr_n}, {mat_shape_k, mat_shape_n},
                                 per_phase_b, max_phase_b, dtsize_b, builder_, add, mul, gep);
   std::vector<Value*> off_b = b_loader.compute_offs(warp_n, lane);
+  // pointers
   int num_ptr_b = b_loader.get_num_ptr();
-
-  builder_->SetInsertPoint(CurrBB);
-  // A pointer
-  std::vector<Value*> ptrs_a(num_ptr_a);
-  for(int i = 0; i < num_ptr_a; i++)
-    ptrs_a[i] = bit_cast(gep(shmems_[A], {off_a[i]}), smem_ptr_ty);
-  // B pointer
   std::vector<Value*> ptrs_b(num_ptr_b);
   for(int i = 0; i < num_ptr_b; i++)
     ptrs_b[i] = bit_cast(gep(shmems_[B], {off_b[i]}), smem_ptr_ty);
+  // loading function
+  std::function<void(int,int,int,bool)> load_b;
+  load_b = [&](int n, int k, int inc, bool is_prefetch) {
+      auto [hb0, hb1, hb2, hb3] = b_loader.load_x4(k, n, inc, is_prefetch, phiB, shared_pre_ptr_[layout_b],
+                                                   shared_next_ptr_[layout_b], off_b, ptrs_b, 
+                                                   ldmatrix_ty, smem_ptr_ty, prefetch_latch_to_bb_);
+      register_lds2(hb, n,   k,   inc, hb0, is_prefetch);
+      register_lds2(hb, n+1, k,   inc, hb2, is_prefetch);
+      register_lds2(hb, n,   k+1, inc, hb1, is_prefetch);
+      register_lds2(hb, n+1, k+1, inc, hb3, is_prefetch);
+  };
 
-  InlineAsm *mma_fn = InlineAsm::get(mma_ty, layout->get_ptx_instr() +
+  // create mma & unpack result, m, n, k are offsets in mat
+  auto call_mma = [&](unsigned m, unsigned n, unsigned k) {
+      InlineAsm *mma_fn = InlineAsm::get(mma_ty, layout->get_ptx_instr() +
                                              " {$0, $1, $2, $3},"
                                              " {$4, $5, $6, $7},"
                                              " {$8, $9},"
                                              " {$10, $11, $12, $13};",
                                              "=r,=r,=r,=r,r,r,r,r,r,r,0,1,2,3", true);
-
-  // create mma & unpack result, m, n, k are offsets in mat
-  auto call_mma = [&](unsigned m, unsigned n, unsigned k) {
       unsigned cols_per_thread = num_rep_n * 2;
       std::vector<size_t> idx = {
         (m + 0)*cols_per_thread + (n*2 + 0),
@@ -2071,39 +2103,6 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
       fc[idx[2]] = extract_val(nc, std::vector<unsigned>{2});
       fc[idx[3]] = extract_val(nc, std::vector<unsigned>{3});
   };
-
-  ir::phi_node* phiA = dynamic_cast<ir::phi_node*>(A);
-  ir::phi_node* phiB = dynamic_cast<ir::phi_node*>(B);
-
-  auto register_lds2 =
-    [&](std::map<std::pair<unsigned, unsigned>, Value*>& vals, int mn, int k, int inc, Value* val, bool is_prefetch) {
-      if (k < 2 && is_prefetch) {
-        ir::basic_block* inc_block = phiA->get_incoming_block(inc);
-        lazy_phi_incs_.push_back(std::make_tuple((PHINode*)vals[{mn, k}], val, inc_block));
-      } else
-        vals[{mn, k}] = val;
-  };
-
-  auto load_a = [&](int m, int k, int inc, bool is_prefetch) {
-      auto [ha0, ha1, ha2, ha3] = a_loader.load_x4(m, k, inc, is_prefetch, phiA, shared_pre_ptr_[layout_a],
-                                                   shared_next_ptr_[layout_a], off_a, ptrs_a, 
-                                                   ldmatrix_ty, smem_ptr_ty, prefetch_latch_to_bb_);
-      register_lds2(ha, m,   k,   inc, ha0, is_prefetch);
-      register_lds2(ha, m+1, k,   inc, ha1, is_prefetch);
-      register_lds2(ha, m,   k+1, inc, ha2, is_prefetch);
-      register_lds2(ha, m+1, k+1, inc, ha3, is_prefetch);
-  };
-
-  auto load_b = [&](int n, int k, int inc, bool is_prefetch) {
-      auto [hb0, hb1, hb2, hb3] = b_loader.load_x4(k, n, inc, is_prefetch, phiB, shared_pre_ptr_[layout_b],
-                                                   shared_next_ptr_[layout_b], off_b, ptrs_b, 
-                                                   ldmatrix_ty, smem_ptr_ty, prefetch_latch_to_bb_);
-      register_lds2(hb, n,   k,   inc, hb0, is_prefetch);
-      register_lds2(hb, n+1, k,   inc, hb2, is_prefetch);
-      register_lds2(hb, n,   k+1, inc, hb1, is_prefetch);
-      register_lds2(hb, n+1, k+1, inc, hb3, is_prefetch);
-  };
-
   if (C->is_prefetched()) {
       // create phis
       builder_->SetInsertPoint(CurrBB->getFirstNonPHI());

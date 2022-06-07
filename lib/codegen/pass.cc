@@ -36,10 +36,10 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(ir::module &ir, llvm::LLVMC
   codegen::analysis::align align;
   codegen::transform::inliner inliner;
   codegen::analysis::axes axes;
-  codegen::transform::cts cts(cts_use_async);
   codegen::transform::pipeline pipeline(cts_use_async, num_stages);
   codegen::transform::disassociate disassociate;
   codegen::analysis::layouts layouts(&axes, &align, num_warps, target);
+  codegen::transform::cts cts(&layouts, cts_use_async);
   codegen::analysis::liveness liveness(&layouts);
   codegen::analysis::swizzle swizzle(&layouts, target);
   codegen::analysis::allocation allocation(&liveness);
@@ -89,6 +89,8 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(ir::module &ir, llvm::LLVMC
   prefetch_s.run(ir);
   barriers.run(ir);
   // ir.print(std::cout);
+  // ir.print(std::cout);
+  // exit(1);
   isel.visit(ir, *llvm);
   shared_static = allocation.allocated_size();
   return llvm;

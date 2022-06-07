@@ -1,8 +1,10 @@
+#include "triton/codegen/analysis/layout.h"
 #include "triton/codegen/transform/cts.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
 #include "triton/ir/instructions.h"
+#include "triton/ir/utils.h"
 #include <iostream>
 
 namespace triton {
@@ -10,9 +12,21 @@ namespace codegen{
 namespace transform{
 
 
-inline bool is_shmem_op(ir::instruction* i, int op) {
-  if(i->get_id() == ir::INST_DOT)
-    return op==0 || op==1;
+bool cts::is_shmem_op(ir::instruction* i, int op) {
+  if(i->get_id() == ir::INST_DOT){
+    // std::cout << i << " " << i->get_operand(0) << " " << layouts_->has(i->get_operand(0)) << " " << layouts_->has(i->get_operand(1)) << std::endl;
+    // FP16 MMA layout can be kept in register for the LHS
+    // Anything else has to be in shared memory
+    // ir::value* lhs = i->get_operand(0);
+    // if(op == 0){
+      // i->print(std::cout);
+    //   std::cout << layouts_->has(lhs) << std::endl;
+    //   analysis::mma_layout* mma_lhs = layouts_->get(lhs)->to_mma();
+    //   bool is_lhs_shmem = !(mma_lhs && lhs->get_type()->get_primitive_size_in_bits() == 16);
+    //   // return is_lhs_shmem;
+    // }
+    return op == 0 || op == 1;
+  }
   if(i->get_id() == ir::INST_COPY_FROM_SHARED)
     return op==0;
   if(i->get_id() == ir::INST_TRANS)
@@ -20,7 +34,7 @@ inline bool is_shmem_op(ir::instruction* i, int op) {
   return false;
 }
 
-inline bool is_shmem_res(ir::value* v){
+bool cts::is_shmem_res(ir::value* v){
   ir::instruction* i = dynamic_cast<ir::instruction*>(v);
   if(!i)
     return false;
@@ -69,26 +83,50 @@ void cts::add_copy(ir::instruction *parent, ir::value *x, ir::builder &builder, 
 }
 
 void cts::run(ir::module &mod) {
+  // Precompute where copies should be added
+  std::set<ir::value*> shmem_ops;
+  std::set<ir::value*> shmem_res;
+  ir::for_each_instruction(mod, [&](ir::instruction* i) {
+    if(i->get_id() == ir::INST_DOT){
+      ir::value* lhs = i->get_operand(0);
+      ir::type* ty = lhs->get_type()->get_scalar_ty();
+      analysis::mma_layout* mma_lhs = layouts_->get(lhs)->to_mma();
+      // TODO: V100
+      bool is_lhs_shmem = !(mma_lhs && ty->get_primitive_size_in_bits() == 16);
+      // if(is_lhs_shmem)
+        shmem_ops.insert(lhs);
+      shmem_ops.insert(i->get_operand(1));
+    }
+      // std::cout << i << " " << i->get_operand(0) << " " << layouts_->has(i->get_operand(0)) << " " << layouts_->has(i->get_operand(1)) << std::endl;
+      // FP16 MMA layout can be kept in register for the LHS
+      // Anything else has to be in shared memory
+      // if(op == 0){
+        // i->print(std::cout);
+      //   std::cout << layouts_->has(lhs) << std::endl;
+      //   // return is_lhs_shmem;
+      // }
+    if(i->get_id() == ir::INST_COPY_FROM_SHARED)
+      shmem_ops.insert(i->get_operand(0));
+    if(i->get_id() == ir::INST_TRANS)
+      shmem_ops.insert(i->get_operand(0));
+    if(i->get_id() == ir::INST_TRANS ||
+       i->get_id() == ir::INST_COPY_TO_SHARED ||
+       i->get_id() == ir::INST_MASKED_LOAD_ASYNC)
+      shmem_res.insert(i);
+  });
+
   // Add shared copies
   ir::builder &builder = mod.get_builder();
-  for(ir::function* fn: mod.get_function_list()){
-    for(ir::basic_block* block: fn->blocks())
-    for(ir::instruction* i: block->get_inst_list()){
-      size_t num_op = i->get_num_operands();
+  ir::for_each_instruction(mod, [&](ir::instruction* i) {
+    size_t num_op = i->get_num_operands();
+    for(size_t k = 0; k < num_op; k++){
+      ir::value* op = i->get_operand(k);
       // copy to shared operands
-      for(size_t k = 0; k < num_op; k++)
-        if(is_shmem_op(i, k)){
-          add_copy(i, i->get_operand(k), builder, true);
-        }
-      // copy from shared operands
-      for(size_t k = 0; k < num_op; k++)
-        if(!dynamic_cast<ir::phi_node*>(i) &&
-           !is_shmem_op(i,k) &&
-           is_shmem_res(i->get_operand(k))){
-          add_copy(i, i->get_operand(k), builder, false);
-        }
+      bool is_shmem_op = shmem_ops.find(op) != shmem_ops.end();
+      if(is_shmem_op)
+        add_copy(i, op, builder, true);
     }
-  }
+  });
 }
 
 
