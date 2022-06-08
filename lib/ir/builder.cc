@@ -412,8 +412,8 @@ value *builder::create_log(value *arg){
   return insert(log_inst::create(arg));
 }
 
-value *builder::create_dot(value *A, value *B, value *C, bool allow_tf32) {
-  return insert(dot_inst::create_nn(A, B, C, allow_tf32));
+value *builder::create_dot(value *A, value *B, value *C, bool trans_a, bool trans_b, bool allow_tf32) {
+  return insert(dot_inst::create(A, B, C, trans_a, trans_b, allow_tf32));
 }
 
 value *builder::create_trans(value *A, const std::vector<int>& perm) {

@@ -819,8 +819,9 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
         elif dtype == 'float32' and allow_tf32:
             pytest.skip("Only test tf32 on devices with sm >= 80")
 
-    M, N, K = 128, 128, 64
+    M, N, K = 128, 128, 128
     num_warps = 8
+    trans_a, trans_b = True, False
 
     # triton kernel
     @triton.jit
@@ -831,7 +832,8 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
                BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
                ADD_MATRIX: tl.constexpr, ADD_ROWS: tl.constexpr, ADD_COLS: tl.constexpr,
                ALLOW_TF32: tl.constexpr,
-               DO_SOFTMAX: tl.constexpr, CHAIN_DOT: tl.constexpr):
+               DO_SOFTMAX: tl.constexpr, CHAIN_DOT: tl.constexpr,
+               TRANS_A: tl.constexpr, TRANS_B: tl.constexpr):
         off_m = tl.arange(0, BLOCK_M)
         off_n = tl.arange(0, BLOCK_N)
         off_l = tl.arange(0, BLOCK_N)
@@ -840,7 +842,7 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
         Ys = Y + off_k[:, None] * stride_yk + off_n[None, :] * stride_yn
         Ws = W + off_n[:, None] * stride_wn + off_l[None, :] * stride_wl
         Zs = Z + off_m[:, None] * stride_zm + off_n[None, :] * stride_zn
-        z = tl.dot(tl.load(Xs), tl.load(Ys), allow_tf32=ALLOW_TF32)
+        z = tl.dot(tl.load(Xs), tl.load(Ys), trans_a=TRANS_A, trans_b=TRANS_B, allow_tf32=ALLOW_TF32)
         if ADD_MATRIX:
             z += tl.load(Zs)
         if ADD_ROWS:
@@ -881,6 +883,7 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
                          y_tri, y_tri.stride(0), y_tri.stride(1),
                          w_tri, w_tri.stride(0), w_tri.stride(1),
                          z_tri, z_tri.stride(0), z_tri.stride(1),
+                         TRANS_A=trans_a, TRANS_B=trans_b,
                          BLOCK_M=M, BLOCK_K=K, BLOCK_N=N,
                          ADD_MATRIX=epilogue == 'add-matrix',
                          ADD_ROWS=epilogue == 'add-rows',
@@ -890,7 +893,9 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
                          ALLOW_TF32=allow_tf32,
                          num_warps=num_warps)
     # torch result
-    z_ref = np.matmul(x, y)
+    x_ref = x.T if trans_a else x
+    y_ref = y.T if trans_b else y
+    z_ref = np.matmul(x_ref, y_ref)
     if epilogue == 'add-matrix':
         z_ref += z
     if epilogue == 'add-rows':

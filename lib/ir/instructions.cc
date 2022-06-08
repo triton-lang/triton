@@ -679,7 +679,7 @@ instruction* downcast_inst::create(value *arg, const std::string &name, instruct
 
 dot_inst::dot_inst(value *A, value *B, value *C, TransT AT, TransT BT, bool allow_tf32,
                          const std::string &name, instruction *next)
-    : builtin_inst(C->get_type(), INST_DOT, 3, name, next) {
+    : builtin_inst(C->get_type(), INST_DOT, 3, name, next), AT_(AT), BT_(BT){
   set_operand(0, A);
   set_operand(1, B);
   set_operand(2, C);

@@ -1915,7 +1915,11 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   auto shape_a = A->get_type()->get_block_shapes();
   auto shape_b = B->get_type()->get_block_shapes();
   auto ord_a = layouts_->get(A)->get_order();
+  if(C->is_trans_a()) 
+    std::swap(ord_a[0], ord_a[1]);
   auto ord_b = layouts_->get(B)->get_order();
+  if(C->is_trans_b())
+    std::swap(ord_b[0], ord_b[1]);
   analysis::mma_layout* layout = layouts_->get(C)->to_mma();
   bool is_a_row = ord_a[0] == 1;
   bool is_b_row = ord_b[0] == 1;
@@ -2538,6 +2542,7 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
     case ir::reduce_inst::FMAX: return max_num(x, y);
     case ir::reduce_inst::FMIN: return min_num(x, y);
     case ir::reduce_inst::XOR: return xor_(x, y);
+
     default: throw std::runtime_error("unreachable");
     }
   };

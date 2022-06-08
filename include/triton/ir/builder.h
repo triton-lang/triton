@@ -176,7 +176,7 @@ public:
   value *create_cos(value* arg);
   value *create_sin(value* arg);
   value *create_log(value* arg);
-  value *create_dot(value *A, value *B, value *C, bool allow_tf32);
+  value *create_dot(value *A, value *B, value *C, bool trans_a, bool trans_b, bool allow_tf32);
   value *create_trans(value *A, const std::vector<int> &perm = {});
   value *create_sqrt(value *A);
   value *create_reduce(value *A, reduce_inst::op_t op, unsigned axis);

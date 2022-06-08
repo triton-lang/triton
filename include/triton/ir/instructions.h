@@ -856,6 +856,8 @@ public:
   bool is_prefetched() const { return is_prefetched_; }
   void set_prefetched(bool is_prefetched) { is_prefetched_ = is_prefetched; }
   bool allow_tf32() const { return allow_tf32_; }
+  bool is_trans_a() const { return AT_ == Trans; }
+  bool is_trans_b() const { return BT_ == Trans; }
 
 public:
   static instruction *create(value *A, value *B, value *C, bool AT, bool BT, bool allow_tf32, const std::string &name = "", instruction *next = nullptr);
@@ -872,6 +874,8 @@ private:
   DataType C_type_ = DataType::FP32;
   DataType A_type_ = DataType::FP16;
   DataType B_type_ = DataType::FP16;
+  TransT AT_;
+  TransT BT_;
 };
 
 //class outer_inst: public builtin_inst {
