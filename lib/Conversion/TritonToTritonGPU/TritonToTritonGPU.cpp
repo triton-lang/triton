@@ -177,9 +177,6 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
     auto newDot = rewriter.replaceOpWithNewOp<triton::DotOp>(
       op, retType, a, b, adaptor.c(), adaptor.allowTF32()
     );
-    // auto newDot = rewriter.create<triton::DotOp>(op.getLoc(), retType, 
-    //   a, b, adaptor.c(), adaptor.allowTF32());
-    // rewriter.replaceOp(op, {newDot});
     return success();
   }
 };
