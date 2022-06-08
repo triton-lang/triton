@@ -821,7 +821,7 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
 
     M, N, K = 128, 128, 128
     num_warps = 8
-    trans_a, trans_b = True, False
+    trans_a, trans_b = False, True
 
     # triton kernel
     @triton.jit
@@ -864,8 +864,8 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
         tl.store(Zs, z)
     # input
     rs = RandomState(17)
-    x = numpy_random((M, K), dtype_str=dtype, rs=rs)
-    y = numpy_random((K, N), dtype_str=dtype, rs=rs)
+    x = numpy_random((K, M) if trans_a else (M, K), dtype_str=dtype, rs=rs)
+    y = numpy_random((N, K) if trans_b else (K, N), dtype_str=dtype, rs=rs)
     w = numpy_random((N, N), dtype_str=dtype, rs=rs)
     if allow_tf32:
         x = (x.view('uint32') & np.uint32(0xffffe000)).view('float32')

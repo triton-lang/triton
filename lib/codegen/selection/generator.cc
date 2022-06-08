@@ -1905,6 +1905,7 @@ private:
  */
 //TODO: clean-up
 void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::value *D, unsigned NK) {
+  std::cout << "visiting mma" << std::endl;
   const std::vector<unsigned>& shapes = C->get_type()->get_block_shapes();
   std::map<std::vector<Value*>, std::vector<Value*>> fcs;
   for(indices_t idx: idxs_.at(C)){
@@ -1915,11 +1916,16 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   auto shape_a = A->get_type()->get_block_shapes();
   auto shape_b = B->get_type()->get_block_shapes();
   auto ord_a = layouts_->get(A)->get_order();
-  if(C->is_trans_a()) 
+  if(C->is_trans_a()){
     std::swap(ord_a[0], ord_a[1]);
+    std::swap(shape_a[0], shape_a[1]);
+  }
   auto ord_b = layouts_->get(B)->get_order();
-  if(C->is_trans_b())
+  if(C->is_trans_b()){
     std::swap(ord_b[0], ord_b[1]);
+    std::swap(shape_b[0], shape_b[1]);
+  }
+  NK = shape_a[1];
   analysis::mma_layout* layout = layouts_->get(C)->to_mma();
   bool is_a_row = ord_a[0] == 1;
   bool is_b_row = ord_b[0] == 1;
@@ -2195,6 +2201,7 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
       i = 0;
     vals_[C][idx] = fcs.at(key)[i++];
   };
+  std::cout << "visited" << std::endl;
 }
 
 /**

@@ -26,7 +26,7 @@ class cts {
 private:
   bool is_shmem_op(ir::instruction* i, int op);
   bool is_shmem_res(ir::value* i);
-  void add_copy(ir::instruction *parent, ir::value *x, ir::builder &builder, bool to_shared);
+void add_copy(ir::instruction *parent, ir::value *x, ir::builder &builder, bool to_shared, std::map<ir::value*,ir::value*>& copies);
 
 public:
   cts(analysis::layouts* layouts, bool use_async = false): layouts_(layouts), use_async_(use_async) {}

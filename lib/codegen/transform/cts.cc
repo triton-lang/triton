@@ -49,7 +49,7 @@ bool cts::is_shmem_res(ir::value* v){
 
 
 // run pass on module
-void cts::add_copy(ir::instruction *parent, ir::value *x, ir::builder &builder, bool to_shared) {
+void cts::add_copy(ir::instruction *parent, ir::value *x, ir::builder &builder, bool to_shared, std::map<ir::value*, ir::value*>& copies) {
   auto *i = dynamic_cast<ir::instruction*>(x);
   // not an instruction
   if(!i) {
@@ -65,7 +65,7 @@ void cts::add_copy(ir::instruction *parent, ir::value *x, ir::builder &builder, 
   // phi node
   if(auto* phi = dynamic_cast<ir::phi_node*>(x)) {
     for(unsigned i = 0; i < phi->get_num_incoming(); ++i)
-      add_copy(phi, phi->get_incoming_value(i), builder, to_shared);
+      add_copy(phi, phi->get_incoming_value(i), builder, to_shared, copies);
     return;
   }
   // already in shared memory
@@ -79,7 +79,8 @@ void cts::add_copy(ir::instruction *parent, ir::value *x, ir::builder &builder, 
   }
   else
     copy = builder.create_copy_from_shared(x);
-  parent->replace_uses_of_with(x, copy);
+  copies.insert({x, copy});
+  parent->replace_uses_of_with(x, copies.at(x));
 }
 
 void cts::run(ir::module &mod) {
@@ -116,6 +117,7 @@ void cts::run(ir::module &mod) {
   });
 
   // Add shared copies
+  std::map<ir::value*, ir::value*> copies;
   ir::builder &builder = mod.get_builder();
   ir::for_each_instruction(mod, [&](ir::instruction* i) {
     size_t num_op = i->get_num_operands();
@@ -124,7 +126,7 @@ void cts::run(ir::module &mod) {
       // copy to shared operands
       bool is_shmem_op = shmem_ops.find(op) != shmem_ops.end();
       if(is_shmem_op)
-        add_copy(i, op, builder, true);
+        add_copy(i, op, builder, true, copies);
     }
   });
 }
