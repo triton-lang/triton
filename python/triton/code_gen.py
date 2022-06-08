@@ -769,16 +769,18 @@ class Binary:
 
 class LoadedBinary:
     def __init__(self, device: int, bin: Binary):
-        module, kernel = _triton.code_gen.load_binary(bin.backend,
-                                                      bin.name,
-                                                      bin.asm,
-                                                      bin.shared_mem,
-                                                      device)
+        module, kernel, n_regs, n_spills = _triton.code_gen.load_binary(bin.backend,
+                                                                        bin.name,
+                                                                        bin.asm,
+                                                                        bin.shared_mem,
+                                                                        device)
         self.bin = bin
         self.asm = bin.asm
         self.sass = ''
         self.module = module
         self.kernel = kernel
+        self.n_regs = n_regs
+        self.n_spills = n_spills
         self.device = device
         self.shared_mem = bin.shared_mem
 
