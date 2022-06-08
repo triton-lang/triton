@@ -2052,7 +2052,14 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   }
   else {
     load_a = [&](int m, int k, int inc, bool is_prefetch) {
-      int ldm = num_rep_k*4;
+      distributed_axis ax_n = axes_.at(a_axes_->get(A, 1));
+      int ldm = ax_n.values.size();
+      if(ldm != num_rep_k*4)
+        throw std::runtime_error("Internal compiler error when trying to fuse matmuls!");
+      // std::cout << m << " " << k << std::endl;
+      // std::cout << idxs_[A].size() << std::endl;
+      // std::cout << (m+1)*ldm + k*2 + 3 << std::endl;
+      // int ldm = num_rep_k*4;
       Value* ha0 = UndefValue::get(fp16x2_ty);
       Value* ha1 = UndefValue::get(fp16x2_ty);
       Value* ha2 = UndefValue::get(fp16x2_ty);

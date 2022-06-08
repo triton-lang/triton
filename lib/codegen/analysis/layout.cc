@@ -240,22 +240,31 @@ mma_layout::mma_layout(size_t num_warps,
     }while(wpt_nm1 != wpt_);
   } else {
     bool changed = false;
-    do {
-      changed = false;
-      if (wpt_[0] * wpt_[1] * wpt_[2] >= num_warps)
-        break;
-      if (shape_[0] / spw_[0] / wpt_[0] >= shape_[1] / (spw_[1]*2) / wpt_[1]) {
-        if (wpt_[0] < shape_[0] / spw_[0]) {
-          wpt_[0] *= 2;
-          changed = true;
+    // try to have a warp own entire rows of the output
+    // this makes it easier to fuse multiple mmas by fusing
+    // registers
+    if(shape[0] / spw_[0] >= num_warps){
+      wpt_[1] = 1;
+      wpt_[0] = num_warps;
+    }
+    else{
+      do {
+        changed = false;
+        if (wpt_[0] * wpt_[1] * wpt_[2] >= num_warps)
+          break;
+        if (shape_[0] / spw_[0] / wpt_[0] >= shape_[1] / (spw_[1]*2) / wpt_[1]) {
+          if (wpt_[0] < shape_[0] / spw_[0]) {
+            wpt_[0] *= 2;
+            changed = true;
+          }
+        } else {
+          if (wpt_[1] < shape_[1] / (spw_[1]*2)) {
+            wpt_[1] *= 2;
+            changed = true;
+          }
         }
-      } else {
-        if (wpt_[1] < shape_[1] / (spw_[1]*2)) {
-          wpt_[1] *= 2;
-          changed = true;
-        }
-      }
-    } while (changed);
+      } while(changed);
+    }
   }
 
   // std::cout << wpt_[0] << " " << wpt_[1] << std::endl;
