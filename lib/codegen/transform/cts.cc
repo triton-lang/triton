@@ -89,11 +89,12 @@ void cts::run(ir::module &mod) {
   std::set<ir::value*> shmem_res;
   ir::for_each_instruction(mod, [&](ir::instruction* i) {
     if(i->get_id() == ir::INST_DOT){
+      ir::dot_inst* dot = dynamic_cast<ir::dot_inst*>(i);
       ir::value* lhs = i->get_operand(0);
       ir::type* ty = lhs->get_type()->get_scalar_ty();
       analysis::mma_layout* mma_lhs = layouts_->get(lhs)->to_mma();
       // TODO: V100
-      bool is_lhs_shmem = !(mma_lhs && ty->get_primitive_size_in_bits() == 16);
+      bool is_lhs_shmem = !(mma_lhs && ty->get_primitive_size_in_bits() == 16 && !dot->is_trans_a());
       if(is_lhs_shmem)
         shmem_ops.insert(lhs);
       shmem_ops.insert(i->get_operand(1));

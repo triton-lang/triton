@@ -2615,7 +2615,9 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
   auto in_ord = in_layout->get_order();
   auto out_ord = out_layout->get_order();
   Value *base;
-  base = gep(shmem_, i32(alloc_->offset(layouts_->get(layouts_->tmp(out)))));
+  int off = alloc_->offset(layouts_->get(layouts_->tmp(out)));
+  // std::cout << off << std::endl;
+  base = gep(shmem_, i32(off));
   base = bit_cast(base, ptr_ty(ty, 3));
   std::vector<int> n_reps;
   for(int i = 0; i < shape.size(); i++){
