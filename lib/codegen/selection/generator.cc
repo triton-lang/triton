@@ -1905,7 +1905,6 @@ private:
  */
 //TODO: clean-up
 void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::value *D, unsigned NK) {
-  std::cout << "visiting mma" << std::endl;
   const std::vector<unsigned>& shapes = C->get_type()->get_block_shapes();
   std::map<std::vector<Value*>, std::vector<Value*>> fcs;
   for(indices_t idx: idxs_.at(C)){
@@ -1927,8 +1926,6 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   }
   NK = shape_a[1];
   analysis::mma_layout* layout = layouts_->get(C)->to_mma();
-  bool is_a_row = ord_a[0] == 1;
-  bool is_b_row = ord_b[0] == 1;
 
   std::vector<int> mma_instr_shape = layout->get_mma_instr_shape();
   const int mma_instr_m = mma_instr_shape[0];
@@ -2098,8 +2095,18 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   analysis::shared_layout* layout_b = layouts_->get(C->get_operand(1))->to_shared();
   const int per_phase_b = swizzle_->get_per_phase(layout_b);
   const int max_phase_b = swizzle_->get_max_phase(layout_b);
-  mma16816_smem_loader b_loader(layout->wpt(1), layout->rep(1), ord_b, /*k_order*/0, shape_b,
-                                {mma_instr_k, mma_instr_n}, {mat_shape_k, mat_shape_n},
+  std::vector<int> mma_instr_b{mma_instr_k, mma_instr_n};
+  std::vector<int> mat_shape_b{mat_shape_k, mat_shape_n};
+  int k_order_b = 0;
+  // if(C->is_trans_b()){
+    // std::swap(mma_instr_b[0], mma_instr_b[1]);
+    // std::swap(mat_shape_b[0], mat_shape_b[1]);
+    // k_order_b = k_order_b ^ 1;
+    // std::swap(ord_b[0], ord_b[1]);
+    // std::swap(shape_b[0], shape_b[1]);
+  // }
+  mma16816_smem_loader b_loader(layout->wpt(1), layout->rep(1), ord_b, k_order_b, shape_b,
+                                mma_instr_b, mat_shape_b,
                                 per_phase_b, max_phase_b, dtsize_b, builder_, add, mul, gep);
   std::vector<Value*> off_b = b_loader.compute_offs(warp_n, lane);
   // pointers
@@ -2201,7 +2208,7 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
       i = 0;
     vals_[C][idx] = fcs.at(key)[i++];
   };
-  std::cout << "visited" << std::endl;
+
 }
 
 /**
