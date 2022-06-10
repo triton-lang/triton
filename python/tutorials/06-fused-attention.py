@@ -126,8 +126,6 @@ class _attention(torch.autograd.Function):
             BLOCK_DMODEL = 64, num_warps=4,
             num_stages=1,
         )
-        # print(pgm.asm["ttir"])
-        # exit()
         ctx.save_for_backward(q, k, v, o, l, m)
         ctx.BLOCK = BLOCK
         ctx.grid = grid
