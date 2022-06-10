@@ -8,25 +8,25 @@ import pytest
 # ********************************************************
 
 @triton.jit
-def _kernel(
+def _fwd_kernel(
     Q, K, V,
-    TMP, stride_hzt, #NOTE: scratchpad buffer to workaround a compiler bug
+    TMP, L, M, #NOTE: TMP is a scratchpad buffer to workaround a compiler bug
     Out, 
     stride_qz, stride_qh, stride_qm, stride_qk,
     stride_kz, stride_kh, stride_kk, stride_kn,
     stride_vz, stride_vh, stride_vk, stride_vn,
     stride_oz, stride_oh, stride_om, stride_on,
-    Z, H, 
+    Z, H, N_CTX,
     BLOCK_M: tl.constexpr, BLOCK_DMODEL : tl.constexpr, 
     BLOCK_N: tl.constexpr,
 ):
     off_hz = tl.program_id(0)
     off_z = off_hz // H
     off_h = off_hz % H
-    start_am = tl.program_id(1)
-    start_bn = 0
+    start_qm = tl.num_programs(1) - 1 - tl.program_id(1)
+    start_kn = 0
     # initialize pointers to Q
-    offs_qm = start_am * BLOCK_M + tl.arange(0, BLOCK_M) 
+    offs_qm = start_qm * BLOCK_M + tl.arange(0, BLOCK_M) 
     offs_qk = tl.arange(0, BLOCK_DMODEL)
     q_ptrs = Q + (off_z * stride_qz \
                 + off_h * stride_qh \
@@ -34,7 +34,7 @@ def _kernel(
                 + offs_qk[None, :] * stride_qk)
     # initialize pointers to K
     offs_kk = tl.arange(0, BLOCK_DMODEL)
-    offs_kn = start_bn * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_kn = start_kn * BLOCK_N + tl.arange(0, BLOCK_N)
     k_ptrs = K + (off_z * stride_kz \
                 + off_h * stride_kh \
                 + offs_kn[None, :] * stride_kn \
@@ -46,16 +46,16 @@ def _kernel(
                 + off_h * stride_vh \
                 + off_vk[:, None] * stride_vk \
                 + off_vn[None, :] * stride_vn
-    # initialize pointer to workaround scratchpad
-    t_ptrs = TMP + off_hz*stride_hzt + offs_qm
-    # compute acc, m_i, l_i
+    # initialize pointer to m and l
+    t_ptrs = TMP + off_hz*N_CTX + offs_qm
+
     acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
-    num_blocks_for_row = start_am + 1
+
+    num_blocks_for_row = start_qm + 1
     for start_n in range(0, num_blocks_for_row):
         q = tl.load(q_ptrs) # BUG: fails when moved out of the loop
-        v = tl.load(v_ptrs)
         # -- compute qk ----
         k = tl.load(k_ptrs)
         qk = tl.dot(q, k)
@@ -78,11 +78,18 @@ def _kernel(
         acc_scale = tl.load(t_ptrs) # BUG: have to store and immediately load
         acc = acc * acc_scale[:, None]
         # update acc
+        v = tl.load(v_ptrs)
         acc += tl.dot(p, v)
         k_ptrs += BLOCK_N*stride_kn
         v_ptrs += BLOCK_N*stride_vk
         l_i = l_i_new
         m_i = m_i_new
+    
+    # write back l and m
+    l_ptrs = L   + off_hz*N_CTX + offs_qm
+    m_ptrs = M   + off_hz*N_CTX + offs_qm
+    tl.store(l_ptrs, l_i)
+    tl.store(m_ptrs, m_i)
     # initialize pointers to output
     offs_om = offs_qm
     offs_on = tl.arange(0, BLOCK_DMODEL)
@@ -90,7 +97,6 @@ def _kernel(
                  + off_h * stride_oh \
                  + offs_om[:, None] * stride_om \
                  + offs_on[None, :] * stride_on
-    # write-back
     tl.store(out_ptrs, acc)
 
 
@@ -99,25 +105,32 @@ class _attention(torch.autograd.Function):
     @staticmethod
     def forward(ctx, q, k, v):
         BLOCK = 128
-        D_MODEL = q.shape[-1]
-        assert D_MODEL == 64
         # shape constraints
         Lq, Lk = q.shape[-1], k.shape[-2]
         assert Lq == Lk
         o = torch.empty_like(q)
         grid = (q.shape[0]*q.shape[1], triton.cdiv(q.shape[2], BLOCK))
-        tmp = torch.empty((q.shape[0]*q.shape[1], q.shape[2]), device=q.device, dtype=torch.float16)
-        _kernel[grid](
+        tmp = torch.empty((q.shape[0]*q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
+        l   = torch.empty((q.shape[0]*q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
+        m   = torch.empty((q.shape[0]*q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
+        pgm = _fwd_kernel[grid](
             q, k, v,
-            tmp, tmp.stride(0), o, 
+            tmp, l, m, 
+            o, 
             q.stride(0), q.stride(1), q.stride(2), q.stride(3),
             k.stride(0), k.stride(1), k.stride(2), k.stride(3),
             v.stride(0), v.stride(1), v.stride(2), v.stride(3),
             o.stride(0), o.stride(1), o.stride(2), o.stride(3),
-            q.shape[0], q.shape[1],
+            q.shape[0], q.shape[1], q.shape[2],
             BLOCK_M=BLOCK, BLOCK_N=BLOCK, 
-            BLOCK_DMODEL = D_MODEL, num_warps=4,
+            BLOCK_DMODEL = 64, num_warps=4,
+            num_stages=1,
         )
+        # print(pgm.asm["ttir"])
+        # exit()
+        ctx.save_for_backward(q, k, v, o, l, m)
+        ctx.BLOCK = BLOCK
+        ctx.grid = grid
         return o
     
 attention = _attention.apply
@@ -143,7 +156,7 @@ def test_op(Z, H, N_CTX, D_MODEL, dtype=torch.float16):
 
 
 benchmarks = [
-    (64, 16, 1024, 64)
+    (16, 64, 1024, 64)
 ]
 
 @pytest.mark.parametrize('Z, H, N_CTX, D_MODEL', benchmarks)
