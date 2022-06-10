@@ -794,7 +794,7 @@ void generator::visit_load_inst(ir::load_inst* x){
     int width = std::min(tot_width, max_word_width);
     int n_words = std::max(1, tot_width / width);
     bool has_evict_policy = (x->get_eviction_policy() != ir::load_inst::NORMAL) && tgt_->as_nvidia()->sm() >= 80;
-    has_evict_policy = false; // currently disable until supported in `store`
+    // has_evict_policy = false; // currently disable until supported in `store`
     // -----
     // create inline asm string
     // -----
@@ -2616,7 +2616,7 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
   auto out_ord = out_layout->get_order();
   Value *base;
   int off = alloc_->offset(layouts_->get(layouts_->tmp(out)));
-  // std::cout << off << std::endl;
+   // std::cout << off << std::endl;
   base = gep(shmem_, i32(off));
   base = bit_cast(base, ptr_ty(ty, 3));
   std::vector<int> n_reps;
