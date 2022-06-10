@@ -207,3 +207,5 @@ if(BUILD_PYTHON_MODULE AND NOT WIN32)
     endif()
     target_link_libraries(triton ${CUTLASS_LIBRARIES} ${PYTHON_LDFLAGS})
 endif()
+
+add_subdirectory(test)
