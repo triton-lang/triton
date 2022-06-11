@@ -3289,7 +3289,10 @@ void generator::init_idx(ir::value *v) {
   std::vector<distributed_axis> axes(rank);
   std::vector<int> ord(rank);
   // compute axes
+  // std::cout << "axes" << std::endl;
   for(size_t d = 0; d < shapes.size(); d++){
+    // std::cout << d << " " << shapes[d] << std::endl;
+    // std::cout << a_axes_->get(v, d) << std::endl;
     if(shapes[d] > 1){
       unsigned x = a_axes_->get(v, d);
       axes[d] = axes_.at(x);
@@ -3299,6 +3302,7 @@ void generator::init_idx(ir::value *v) {
       axes[d].values = {i32(0)};
     }
   }
+  // std::cout << "axes ok" << std::endl;
   // compute order
   analysis::data_layout* layout = layouts_->get(v);
   std::iota(ord.begin(), ord.end(), 0);
