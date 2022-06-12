@@ -79,6 +79,8 @@ class CMakeBuild(build_ext):
 
     def build_extension(self, ext):
         llvm_include_dir, llvm_library_dir = get_llvm()
+        # lit is used by the test suite
+        lit_dir = shutil.which('lit')
         self.debug = True
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
@@ -99,7 +101,8 @@ class CMakeBuild(build_ext):
             # '-DPYTHON_EXECUTABLE=' + sys.executable,
             # '-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
             "-DTRITON_LLVM_BUILD_DIR=" + llvm_build_dir,
-            "-DPYTHON_INCLUDE_DIRS=" + ";".join(python_include_dirs)
+            "-DPYTHON_INCLUDE_DIRS=" + ";".join(python_include_dirs),
+            "-DLLVM_EXTERNAL_LIT=" + lit_dir
         ]
         # configuration
         cfg = "Debug" if self.debug else "Release"
@@ -118,6 +121,11 @@ class CMakeBuild(build_ext):
         env = os.environ.copy()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=self.build_temp)
+
+        # run tests. Note: this depends on llvm-lit
+        # -DLLVM_EXTERNAL_LIT=<path-to-lit.py>
+        # Note: get_llvm_lit_path(...) in llvm/cmake/modules/AddLLVM.cmake
+        subprocess.call(["cmake", "--build", ".", "--target", "check-triton"], cwd=self.build_temp, env=env)
 
 
 setup(

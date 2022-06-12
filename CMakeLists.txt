@@ -177,6 +177,9 @@ add_library(triton SHARED ${PYTHON_SRC})
 
 # find_package(PythonLibs REQUIRED)
 
+set(TRITON_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+set(TRITON_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
+
 target_link_libraries(triton
   ${PYTHON_LIBRARIES}
   TritonIR
