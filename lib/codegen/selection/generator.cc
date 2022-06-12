@@ -3130,7 +3130,8 @@ void generator::visit_layout_scanline(analysis::scanline_layout* layout) {
     full_thread_id = udiv(full_thread_id, dim_k);
     thread_id[order[k]] = rem;
   }
-  thread_id[order[dim - 1]] = full_thread_id;
+  Constant *dim_k = i32(layout->mts(order[dim - 1]));
+  thread_id[order[dim - 1]] = urem(full_thread_id, dim_k);
   // Create axes
   for(unsigned k = 0; k < dim; k++) {
     int nts = layout->nts(k);
