@@ -10,7 +10,7 @@ configure_lit_site_cfg(
 )
 
 set(TRITON_TEST_DEPENDS
-  FileCheck count not
+  # FileCheck count not
   triton-opt
 )
 

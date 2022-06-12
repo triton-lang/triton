@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -tritongpu-verifier -verify-diagnostics
+// RUN: triton-opt %s -verify-diagnostics
 
 module {
   func @add_kernel__Pfp32_Pfp32_Pfp32_i32_i32_i32__(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: !tt.ptr<f32>, %arg3: i32, %arg4: i32, %arg5: i32) {
@@ -11,9 +11,9 @@ module {
     %5 = tt.broadcast %arg3 : (i32) -> tensor<256xi32>
     %6 = arith.cmpi slt, %4, %5 : tensor<256xi32>
     %7 = tt.broadcast %arg0 : (!tt.ptr<f32>) -> tensor<256x!tt.ptr<f32>>
-    %8 = tt.getelementptr %7, %4, : tensor<256x!tt.ptr<f32>>
+    %8 = tt.getelementptr %7, %4 : tensor<256x!tt.ptr<f32>>
     %9 = tt.broadcast %arg1 : (!tt.ptr<f32>) -> tensor<256x!tt.ptr<f32>>
-    %10 = tt.getelementptr %9, %4, : tensor<256x!tt.ptr<f32>>
+    %10 = tt.getelementptr %9, %4 : tensor<256x!tt.ptr<f32>>
     %cst = arith.constant 0.000000e+00 : f32
     %11 = tt.broadcast %cst : (f32) -> tensor<256xf32>
     %c0_i32 = arith.constant 0 : i32
@@ -31,13 +31,13 @@ module {
       %22 = arith.addf %19, %21 : tensor<256xf32>
       %23 = arith.addf %arg7, %22 : tensor<256xf32>
       %24 = tt.broadcast %arg5 : (i32) -> tensor<256xi32>
-      %25 = tt.getelementptr %arg8, %24, : tensor<256x!tt.ptr<f32>>
+      %25 = tt.getelementptr %arg8, %24 : tensor<256x!tt.ptr<f32>>
       %26 = tt.broadcast %arg5 : (i32) -> tensor<256xi32>
-      %27 = tt.getelementptr %arg9, %26, : tensor<256x!tt.ptr<f32>>
+      %27 = tt.getelementptr %arg9, %26 : tensor<256x!tt.ptr<f32>>
       scf.yield %23, %25, %27 : tensor<256xf32>, tensor<256x!tt.ptr<f32>>, tensor<256x!tt.ptr<f32>>
     }
     %16 = tt.broadcast %arg2 : (!tt.ptr<f32>) -> tensor<256x!tt.ptr<f32>>
-    %17 = tt.getelementptr %16, %4, : tensor<256x!tt.ptr<f32>>
+    %17 = tt.getelementptr %16, %4 : tensor<256x!tt.ptr<f32>>
     tt.store %17, %15#0, %6, : tensor<256xf32>
     return
   }

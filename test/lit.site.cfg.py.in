@@ -17,7 +17,7 @@ config.enable_bindings_python = @MLIR_ENABLE_BINDINGS_PYTHON@
 
 
 import lit.llvm
-lit.llvminitialize(lit_config, config)
+lit.llvm.initialize(lit_config, config)
 
 # Let the main config do the real work
 lit_config.load_config(config, "@TRITON_SOURCE_DIR@/test/lit.cfg.py")
