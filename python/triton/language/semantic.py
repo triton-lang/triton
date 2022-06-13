@@ -565,7 +565,6 @@ def cast(input: tl.tensor,
         return input
     src_sca_ty = src_ty.scalar
     dst_sca_ty = dst_ty.scalar
-
     # bf16 <=> (not fp32)
     if (src_sca_ty.is_bf16() and not dst_sca_ty.is_fp32()) or \
        (dst_sca_ty.is_bf16() and not src_sca_ty.is_fp32()):
@@ -601,9 +600,7 @@ def cast(input: tl.tensor,
     if src_sca_ty.is_floating() and dst_sca_ty.is_int():
         # TODO: is this correct?
         if dst_sca_ty.is_bool():
-            return tl.tensor(builder.create_fp_to_ui(input.handle,
-                                                     dst_ty.to_ir(builder)),
-                             dst_ty)
+            return not_equal(input, tl._to_tensor(0, builder), builder)
         else:
             return tl.tensor(builder.create_fp_to_si(input.handle,
                                                      dst_ty.to_ir(builder)),
@@ -735,8 +732,8 @@ def store(ptr: tl.tensor,
     elt_ty = ptr_ty.element_ty
     # treat bool* as tl.int8*
     if elt_ty == tl.int1:
-        elt_ty = tl.int8
-        ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
+        elt_ty_ptr = tl.int8
+        ptr_ty = tl.pointer_type(elt_ty_ptr, ptr_ty.address_space)
         ptr = cast(ptr, ptr_ty, builder)
 
     # cast to target data-type
