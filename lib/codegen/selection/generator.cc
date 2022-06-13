@@ -742,11 +742,13 @@ void generator::visit_load_inst(ir::load_inst* x){
   BasicBlock *current = builder_->GetInsertBlock();
   Module *module = current->getModule();
   Value *tid = tgt_->get_local_id(module, *builder_, 0);
+  Value *lane = urem(tid, i32(32));
   ir::value *op = x->get_pointer_operand();
   ir::masked_load_inst *mx = dynamic_cast<ir::masked_load_inst*>(x);
   Type* ty  = cvt(op->get_type()->get_scalar_ty()->get_pointer_element_ty());
   // compute vector width
   size_t vec = 1;
+  bool is_mma_first_row = false;
   if(op->get_type()->is_block_ty()){
     auto   ord = ords_.at(op);
     size_t aln = alignment_->get(op, ord[0]);
@@ -755,11 +757,14 @@ void generator::visit_load_inst(ir::load_inst* x){
       max_eq = std::max<size_t>(max_eq, 1);
       aln = std::min(aln, max_eq);
     }
-    auto layout = layouts_->get(x)->to_scanline();
-    if(layout){
-      size_t nts = layout->nts(ord[0]);
-      vec = std::min(nts, aln);
-    }
+    analysis::distributed_layout* layout = dynamic_cast<analysis::distributed_layout*>(layouts_->get(x));
+    assert(layout);
+
+    vec = std::min<size_t>(layout->contig_per_thread(ord[0]), aln);
+    is_mma_first_row = (ord.size() == 1) && layout->to_mma() && 
+                       (a_axes_->get(x, 0) == layouts_->get(x)->get_axis(1));
+    if(is_mma_first_row)
+      vec = 2;
   }
   // code generation
   auto idxs = idxs_.at(x);
