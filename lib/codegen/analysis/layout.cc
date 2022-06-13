@@ -623,6 +623,13 @@ void layouts::run(ir::module &mod) {
       // create layout
       layouts_[id] = new shared_layout(layout, axes_->get(arg), shapes, {red}, red->get_type()->get_scalar_ty(), align_, tgt_);
       tmp_[red] = id;
+
+      if (red->with_index()) {
+        id++;
+        auto *int32_type = ir::type::get_int32_ty(red->get_type()->get_context());
+        layouts_[id] = new shared_layout(layout, axes_->get(arg), shapes, {red}, int32_type, align_, tgt_);
+        tmp_index_[red] = id;
+      }
     }
     if(auto *val = dynamic_cast<ir::cvt_layout_inst*>(i)){
       distributed_layout* out_layout = dynamic_cast<distributed_layout*>(get(val));

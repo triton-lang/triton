@@ -176,9 +176,9 @@ public:
   void visit_trans_inst(ir::trans_inst*);
   void visit_sqrt_inst(ir::sqrt_inst*);
   Value* shfl_sync(Value* acc, int32_t i);
-  void visit_reduce1d_inst(ir::reduce_inst*, std::function<Value*(Value*,Value*)>, Value*);
   void visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value*(Value*,Value*)> do_acc, Value *neutral);
   void visit_reducend_inst(ir::reduce_inst*, std::function<Value*(Value*,Value*)>, Value*);
+  void visit_reducend_inst_with_index(ir::reduce_inst*, std::function<Value*(Value*,Value*)>, Value*);
   void visit_reduce_inst(ir::reduce_inst*);
   void visit_select_inst(ir::select_inst*);
   void visit_layout_convert(ir::value *out, ir::value *in);

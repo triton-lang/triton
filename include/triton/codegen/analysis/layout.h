@@ -322,6 +322,8 @@ public:
   std::map<size_t, data_layout*> &get_all()                   { return layouts_; }
   bool has_tmp(ir::value* i)                                  { return tmp_.find(i) != tmp_.end(); }
   int tmp(ir::value* i)                                       { return tmp_.at(i);}
+  int has_tmp_index(ir::value* i)                             { return tmp_index_.find(i) != tmp_index_.end(); }
+  int tmp_index(ir::value* i)                                 { return tmp_index_.at(i);}
   void copy(ir::value* dst, ir::value* src)                   { groups_[dst] = groups_[src]; }
   // execution
   void run(ir::module &mod);
@@ -336,6 +338,7 @@ private:
   std::map<size_t, std::vector<ir::value*>> values_;
   std::map<size_t, data_layout*> layouts_;
   std::map<ir::value*, size_t> tmp_;
+  std::map<ir::value*, size_t> tmp_index_;
 };
 
 }

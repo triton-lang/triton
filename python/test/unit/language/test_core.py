@@ -690,7 +690,7 @@ def test_f16_to_f8_rounding():
 
 @pytest.mark.parametrize("op, dtype_str, shape",
                          [(op, dtype, shape)
-                          for op in ['min', 'max', 'sum']
+                          for op in ['min', 'max', 'argmin', 'argmax', 'sum']
                           for dtype in dtypes
                           for shape in [32, 64, 128, 512]])
 def test_reduce1d(op, dtype_str, shape, device='cuda'):
@@ -707,7 +707,8 @@ def test_reduce1d(op, dtype_str, shape, device='cuda'):
     # limit the range of integers so that the sum does not overflow
     x = numpy_random((shape,), dtype_str=dtype_str, rs=rs)
     x_tri = to_triton(x, device=device)
-    numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min}[op]
+    numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min,
+                'argmin': np.argmin, 'argmax': np.argmax}[op]
     # numpy result
     z_ref = numpy_op(x).astype(getattr(np, dtype_str))
     # triton result
@@ -722,12 +723,12 @@ def test_reduce1d(op, dtype_str, shape, device='cuda'):
 
 reduce_configs1 = [
     (op, dtype, (1, 1024), axis) for dtype in dtypes
-    for op in ['min', 'max', 'sum']
+    for op in ['min', 'max', 'argmin', 'argmax', 'sum']
     for axis in [1]
 ]
 reduce_configs2 = [
     (op, 'float32', shape, 1)
-    for op in ['min', 'max', 'sum']
+    for op in ['min', 'max', 'argmin', 'argmax', 'sum']
     for shape in [(2, 32), (4, 32), (4, 128), (32, 64), (64, 128), (128, 256), (32, 1024)]
 ]
 
@@ -749,12 +750,13 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
     # limit the range of integers so that the sum does not overflow
     x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
     x_tri = to_triton(x)
-    numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min}[op]
+    numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min,
+                'argmin': np.argmin, 'argmax': np.argmax}[op]
     # numpy result
     z_ref = numpy_op(x, axis=axis).astype(getattr(np, dtype_str))
     # triton result
     z_tri = to_triton(numpy_random((shape[0],), dtype_str=dtype_str, rs=rs), device=device)
-    binary = kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)
+    kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)
     # compare
     if op == 'sum':
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)

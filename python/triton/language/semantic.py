@@ -988,8 +988,16 @@ def min(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
     return reduce_impl(input, axis, builder, "min", ir.REDUCE_OP.FMIN, ir.REDUCE_OP.MIN)
 
 
+def argmin(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
+    return reduce_impl(input, axis, builder, "argmin", ir.REDUCE_OP.ARGFMIN, ir.REDUCE_OP.ARGMIN)
+
+
 def max(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
     return reduce_impl(input, axis, builder, "max", ir.REDUCE_OP.FMAX, ir.REDUCE_OP.MAX)
+
+
+def argmax(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
+    return reduce_impl(input, axis, builder, "argmax", ir.REDUCE_OP.ARGFMAX, ir.REDUCE_OP.ARGMAX)
 
 
 def sum(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
