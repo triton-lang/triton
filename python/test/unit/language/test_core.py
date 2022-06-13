@@ -691,7 +691,7 @@ def test_f16_to_f8_rounding():
 @pytest.mark.parametrize("dtype_str, shape",
                          [(dtype, shape)
                           for dtype in dtypes
-                          for shape in [128, 512]])
+                          for shape in [32, 64, 128, 512]])
 def test_reduce1d(dtype_str, shape, device='cuda'):
 
     # triton kernel
