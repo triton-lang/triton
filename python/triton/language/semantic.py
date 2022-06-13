@@ -959,6 +959,13 @@ def reduce_impl(input: tl.tensor, axis: int, builder: ir.builder, name: str,
     if scalar_ty.is_int() and scalar_ty.int_bitwidth <= 32:
         input = cast(input, tl.int32, builder)
 
+    # choose the right unsigned operation
+    if scalar_ty.is_int_unsigned():
+        if INT_OP is ir.REDUCE_OP.MIN:
+            INT_OP = ir.REDUCE_OP.UMIN
+        elif INT_OP is ir.REDUCE_OP.MAX:
+            INT_OP = ir.REDUCE_OP.UMAX
+
     # get result type
     shape = input.type.shape
     ret_shape = []

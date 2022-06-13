@@ -571,6 +571,8 @@ void init_triton_ir(py::module &&m) {
       .value("FADD", ir::reduce_inst::FADD)
       .value("MIN", ir::reduce_inst::MIN)
       .value("MAX", ir::reduce_inst::MAX)
+      .value("UMIN", ir::reduce_inst::UMIN)
+      .value("UMAX", ir::reduce_inst::UMAX)
       .value("FMIN", ir::reduce_inst::FMIN)
       .value("FMAX", ir::reduce_inst::FMAX)
       .value("XOR", ir::reduce_inst::XOR);

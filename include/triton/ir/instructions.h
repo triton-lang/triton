@@ -913,7 +913,7 @@ public:
 class reduce_inst: public builtin_inst {
 public:
   enum op_t{
-    ADD, SUB, MAX, MIN,
+    ADD, SUB, MAX, MIN, UMAX, UMIN,
     FADD, FSUB, FMAX, FMIN,
     XOR
   };
