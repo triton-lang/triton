@@ -119,6 +119,8 @@ Value* geper::operator()(Value *ptr, Value* off, const std::string& name){
 #define icmp_eq(...)         builder_->CreateICmpEQ(__VA_ARGS__)
 #define icmp_sge(...)        builder_->CreateICmpSGE(__VA_ARGS__)
 #define icmp_sle(...)        builder_->CreateICmpSLE(__VA_ARGS__)
+#define icmp_uge(...)        builder_->CreateICmpUGE(__VA_ARGS__)
+#define icmp_ule(...)        builder_->CreateICmpULE(__VA_ARGS__)
 #define icmp_ult(...)        builder_->CreateICmpULT(__VA_ARGS__)
 #define insert_elt(...)      builder_->CreateInsertElement(__VA_ARGS__)
 #define intrinsic(...)       builder_->CreateIntrinsic(__VA_ARGS__)
@@ -2498,6 +2500,8 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
     case ir::reduce_inst::SUB: return sub(x, y);
     case ir::reduce_inst::MAX: return select(icmp_sge(x, y), x, y);
     case ir::reduce_inst::MIN: return select(icmp_sle(x, y), x, y);
+    case ir::reduce_inst::UMAX: return select(icmp_uge(x, y), x, y);
+    case ir::reduce_inst::UMIN: return select(icmp_ule(x, y), x, y);
     case ir::reduce_inst::FADD: return fadd(x, y);
     case ir::reduce_inst::FSUB: return fsub(x, y);
     case ir::reduce_inst::FMAX: return max_num(x, y);
@@ -2510,9 +2514,11 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
   Value *neutral;
   switch(op) {
     case ir::reduce_inst::ADD: neutral = ConstantInt::get(ty, 0); break;
-    case ir::reduce_inst::SUB:  neutral = ConstantInt::get(ty, 0); break;
-    case ir::reduce_inst::MAX:  neutral = ConstantInt::get(ty, INT32_MIN); break;
-    case ir::reduce_inst::MIN:  neutral = ConstantInt::get(ty, INT32_MAX); break;
+    case ir::reduce_inst::SUB: neutral = ConstantInt::get(ty, 0); break;
+    case ir::reduce_inst::MAX: neutral = ConstantInt::get(ty, INT32_MIN); break;
+    case ir::reduce_inst::MIN: neutral = ConstantInt::get(ty, INT32_MAX); break;
+    case ir::reduce_inst::UMAX: neutral = ConstantInt::get(ty, 0); break;
+    case ir::reduce_inst::UMIN: neutral = ConstantInt::get(ty, UINT32_MAX); break;
     case ir::reduce_inst::FADD: neutral = ConstantFP::get(ty, 0); break;
     case ir::reduce_inst::FSUB: neutral = ConstantFP::get(ty, 0); break;
     case ir::reduce_inst::FMAX: neutral = ConstantFP::get(ty, -INFINITY); break;
