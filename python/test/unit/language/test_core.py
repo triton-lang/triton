@@ -557,6 +557,7 @@ def test_atomic_cas():
     ('float32', 'bfloat16', False),
     ('bfloat16', 'float32', False),
     ('float32', 'int32', True),
+    ('float32', 'int1', False),
 ] + [
     (f'uint{x}', f'int{x}', True) for x in [8, 16, 32, 64]
 ] + [
@@ -565,6 +566,8 @@ def test_atomic_cas():
 def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
     # This is tricky because numpy doesn't have bfloat, and torch doesn't have uints.
     x0 = 43 if dtype_x in int_dtypes else 43.5
+    if dtype_x in float_dtypes and dtype_z == 'int1':
+        x0 = 0.5
     if dtype_x.startswith('bfloat'):
         x_tri = torch.tensor([x0], dtype=getattr(torch, dtype_x), device=device)
     else:
@@ -578,11 +581,12 @@ def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
         z = x.to(Z.dtype.element_ty, bitcast=BITCAST)
         tl.store(Z, z)
 
+    dtype_z_np = dtype_z if dtype_z != 'int1' else 'bool_'
     # triton result
     if dtype_z.startswith('bfloat'):
         z_tri = torch.empty((1,), dtype=getattr(torch, dtype_z), device=device)
     else:
-        z_tri = to_triton(np.empty((1, ), dtype=getattr(np, dtype_z)), device=device)
+        z_tri = to_triton(np.empty((1, ), dtype=getattr(np, dtype_z_np)), device=device)
     kernel[(1, )](x_tri, z_tri, BITCAST=bitcast)
     # torch result
     if dtype_z.startswith('bfloat') or dtype_x.startswith('bfloat'):
@@ -591,9 +595,9 @@ def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
         assert z_tri == z_ref
     else:
         if bitcast:
-            z_ref = x.view(getattr(np, dtype_z))
+            z_ref = x.view(getattr(np, dtype_z_np))
         else:
-            z_ref = x.astype(getattr(np, dtype_z))
+            z_ref = x.astype(getattr(np, dtype_z_np))
         assert to_numpy(z_tri) == z_ref
 
 
