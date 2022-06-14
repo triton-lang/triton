@@ -27,10 +27,11 @@ def get_llvm():
         return '', ''
     # download if nothing is installed
     name = 'clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04'
-    dir = '/tmp'
+    dir = os.path.join(os.environ["HOME"], ".triton", "llvm")
     llvm_include_dir = '{dir}/{name}/include'.format(dir=dir, name=name)
     llvm_library_dir = '{dir}/{name}/lib'.format(dir=dir, name=name)
     if not os.path.exists(llvm_library_dir):
+        os.makedirs(dir, exist_ok=True)
         try:
             shutil.rmtree(os.path.join(dir, name))
         except Exception:

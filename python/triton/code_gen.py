@@ -1158,8 +1158,7 @@ class DependenciesFinder(ast.NodeVisitor):
 
 
 def default_cache_dir():
-    import getpass
-    return f'/tmp/triton_{getpass.getuser()}'
+    return os.path.join(os.environ["HOME"], ".triton", "cache")
 
 
 class JITFunction:
