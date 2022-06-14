@@ -315,6 +315,7 @@ public:
   // accessors
   unsigned layout_of(ir::value *value) const                  { return groups_.at(value); }
   bool has(ir::value* value) const { return groups_.find(value) != groups_.end(); }
+  bool has(size_t id)                                         { return layouts_.find(id) != layouts_.end(); }
   const std::vector<ir::value*>& values_of(unsigned id) const { return values_.at(id); }
   size_t num_layouts() const                                  { return values_.size();}
   data_layout* get(size_t id)                                 { return layouts_.at(id); }

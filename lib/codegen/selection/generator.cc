@@ -2430,73 +2430,11 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
 
 void generator::visit_reducend_inst(ir::reduce_inst* x, std::function<Value*(Value*,Value*)> do_acc, Value *neutral) {
   ir::value *arg = x->get_operand(0);
-  Type *ty = cvt(x->get_type()->get_scalar_ty());
   unsigned axis = x->get_axis();
+  auto with_index = x->with_index();
 
   // reduce within thread
-  std::map<indices_t, Value*> accs;
-  for(indices_t idx: idxs_.at(arg)){
-    indices_t pidx = idx;
-    pidx[axis] = i32(0);
-    Value *current = vals_[arg][idx];
-    bool is_first = accs.find(pidx) == accs.end();
-    accs[pidx] = is_first ? current : do_acc(accs[pidx], current);
-  };
-
-  // reduce within blocks
-  analysis::data_layout* layout = layouts_->get(layouts_->tmp(x));
-  Value *base = shared_ptr_.at(layout);
-  auto shape  = layout->get_shape();
-  auto order  = layout->get_order();
-  int  space = base->getType()->getPointerAddressSpace();
-  Value *ptr = bit_cast(base, ptr_ty(ty, space));
-  Value *lane = axes_.at(a_axes_->get(arg, axis)).thread_id;
-  for(auto& x: accs) {
-    // current element being computed
-    Value *&acc = x.second;
-    indices_t write_idx = x.first;
-    write_idx[axis] = lane;
-    // shared memory write  pointer
-    Value *write_off = shared_off(shape, order, write_idx);
-    Value *write_ptr = gep(ptr, write_off);
-    // initialize shared memory
-    add_barrier();
-    store(acc, write_ptr);
-    // build result
-    indices_t idx(write_idx.size(), i32(0));
-    for(size_t i = shape[axis]/2; i > 0; i >>= 1){
-      idx[axis] = i32(i);
-      // read pointer
-      Value *read_msk = icmp_ult(lane, i32(i));
-      Value *read_off = select(read_msk, shared_off(shape, order, idx), i32(0));
-      Value *read_ptr = gep(write_ptr, read_off);
-      add_barrier();
-      // update accumulator
-      acc = do_acc(acc, load(read_ptr));
-      add_barrier();
-      store(acc, write_ptr);
-    }
-  }
-  add_barrier();
-
-  // write back
-  for(indices_t idx: idxs_.at(x)){
-    indices_t read_idx = idx;
-    read_idx.insert(read_idx.begin() + axis, i32(0));
-    Value *read_off = shared_off(shape, order, read_idx);
-    Value *read_ptr = gep(ptr, read_off);
-    vals_[x][idx] = load(read_ptr);
-  };
-}
-
-void generator::visit_reducend_inst_with_index(ir::reduce_inst* x, std::function<Value*(Value*,Value*)> do_compare, Value *neutral) {
-  ir::value *arg = x->get_operand(0);
-  Type *ty = cvt(x->get_type()->get_scalar_ty());
-  Type *index_ty = IntegerType::get(*ctx_, 32);
-  unsigned axis = x->get_axis();
-
-  // reduce within thread
-  // index-><current min/max value, current min/max index>
+  // index-><current reduced value, current min/max index (optional)>
   std::map<indices_t, std::pair<Value*, Value*>> accs;
   for(indices_t idx: idxs_.at(arg)){
     indices_t pidx = idx;
@@ -2506,23 +2444,35 @@ void generator::visit_reducend_inst_with_index(ir::reduce_inst* x, std::function
     if (is_first) {
       accs[pidx] = std::make_pair(current, idx[axis]);
     } else {
-      Value *ret = do_compare(accs[pidx].first, current);
-      accs[pidx] = std::make_pair(select(ret, accs[pidx].first, current),
-                                  select(ret, accs[pidx].second, idx[axis]));
+      auto *ret = do_acc(accs[pidx].first, current);
+      if (with_index) {
+        accs[pidx] = std::make_pair(select(ret, accs[pidx].first, current),
+                                    select(ret, accs[pidx].second, idx[axis]));
+      } else {
+        accs[pidx] = std::make_pair(ret, idx[axis]);
+      }
     }
   };
 
   // reduce within blocks
-  analysis::data_layout* layout = layouts_->get(layouts_->tmp(x));
-  analysis::data_layout* index_layout = layouts_->get(layouts_->tmp_index(x));
-  Value *base = shared_ptr_.at(layout);
-  Value *index_base = shared_ptr_.at(index_layout);
-  auto shape  = layout->get_shape();
-  auto order  = layout->get_order();
-  int  space = base->getType()->getPointerAddressSpace();
-  int  index_space = index_base->getType()->getPointerAddressSpace();
-  Value *ptr = bit_cast(base, ptr_ty(ty, space));
-  Value *index_ptr = bit_cast(index_base, ptr_ty(index_ty, index_space));
+  auto get_layout_and_ptr = [&](size_t id, Type *ty) -> auto {
+    analysis::data_layout* layout = layouts_->get(id);
+    Value *base = shared_ptr_.at(layout);
+    auto shape  = layout->get_shape();
+    int  space = base->getType()->getPointerAddressSpace();
+    Value *ptr = bit_cast(base, ptr_ty(ty, space));
+    return std::make_tuple(layout, ptr);
+  };
+
+  auto [data_layout, data_ptr] =
+      get_layout_and_ptr(layouts_->tmp(x), cvt(x->get_type()->get_scalar_ty()));
+  auto [index_layout, index_ptr] =
+      with_index ? get_layout_and_ptr(layouts_->tmp_index(x),
+                                      IntegerType::get(*ctx_, 32))
+                 : std::make_tuple(data_layout, data_ptr);
+
+  auto shape  = data_layout->get_shape();
+  auto order  = data_layout->get_order();
   Value *lane = axes_.at(a_axes_->get(arg, axis)).thread_id;
   for(auto& x: accs) {
     // current element being computed
@@ -2530,14 +2480,16 @@ void generator::visit_reducend_inst_with_index(ir::reduce_inst* x, std::function
     Value *&acc_index = x.second.second;
     indices_t write_idx = x.first;
     write_idx[axis] = lane;
-    // shared memory write pointer
+    // shared memory write  pointer
     Value *write_off = shared_off(shape, order, write_idx);
-    Value *write_ptr = gep(ptr, write_off);
+    Value *write_ptr = gep(data_ptr, write_off);
     Value *index_write_ptr = gep(index_ptr, write_off);
     // initialize shared memory
     add_barrier();
     store(acc, write_ptr);
-    store(acc_index, index_write_ptr);
+    if (with_index) {
+      store(acc_index, index_write_ptr);
+    }
     // build result
     indices_t idx(write_idx.size(), i32(0));
     for(size_t i = shape[axis]/2; i > 0; i >>= 1){
@@ -2550,12 +2502,18 @@ void generator::visit_reducend_inst_with_index(ir::reduce_inst* x, std::function
       add_barrier();
       // update accumulator
       Value *current = load(read_ptr);
-      Value *ret = do_compare(acc, current);
-      acc = select(ret, acc, current);
-      acc_index = select(ret, acc_index, load(index_read_ptr));
+      if (with_index) {
+        Value *ret = do_acc(acc, current);
+        acc = select(ret, acc, current);
+        acc_index = select(ret, acc_index, load(index_read_ptr));
+      } else {
+        acc = do_acc(acc, current);
+      }
       add_barrier();
       store(acc, write_ptr);
-      store(acc_index, index_write_ptr);
+      if (with_index) {
+        store(acc_index, index_write_ptr);
+      }
     }
   }
   add_barrier();
@@ -2565,8 +2523,8 @@ void generator::visit_reducend_inst_with_index(ir::reduce_inst* x, std::function
     indices_t read_idx = idx;
     read_idx.insert(read_idx.begin() + axis, i32(0));
     Value *read_off = shared_off(shape, order, read_idx);
-    Value *index_read_ptr = gep(index_ptr, read_off);
-    vals_[x][idx] = load(index_read_ptr);
+    Value *read_ptr = with_index ? gep(index_ptr, read_off) : gep(data_ptr, read_off);
+    vals_[x][idx] = load(read_ptr);
   };
 }
 
@@ -2584,7 +2542,7 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
     case ir::reduce_inst::ARGUMAX: return icmp_uge(x, y);
     case ir::reduce_inst::ARGUMIN: return icmp_ule(x, y);
     case ir::reduce_inst::ARGMAX: return icmp_sge(x, y);
-    case ir::reduce_inst::ARGMIN: return icmp_sge(x, y);
+    case ir::reduce_inst::ARGMIN: return icmp_sle(x, y);
     case ir::reduce_inst::UMAX: return select(icmp_uge(x, y), x, y);
     case ir::reduce_inst::UMIN: return select(icmp_ule(x, y), x, y);
     case ir::reduce_inst::MAX: return select(icmp_sge(x, y), x, y);
@@ -2592,8 +2550,8 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
     case ir::reduce_inst::FADD: return fadd(x, y);
     case ir::reduce_inst::FSUB: return fsub(x, y);
     case ir::reduce_inst::ARGFMAX: return fcmp_oge(x, y);
-    case ir::reduce_inst::FMAX: return max_num(x, y);
     case ir::reduce_inst::ARGFMIN: return fcmp_ole(x, y);
+    case ir::reduce_inst::FMAX: return max_num(x, y);
     case ir::reduce_inst::FMIN: return min_num(x, y);
     case ir::reduce_inst::XOR: return xor_(x, y);
     default: throw std::runtime_error("unreachable");
@@ -2615,8 +2573,8 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
     case ir::reduce_inst::FADD: neutral = ConstantFP::get(ty, 0); break;
     case ir::reduce_inst::FSUB: neutral = ConstantFP::get(ty, 0); break;
     case ir::reduce_inst::ARGFMAX: neutral = ConstantFP::get(ty, -INFINITY); break;
-    case ir::reduce_inst::FMAX: neutral = ConstantFP::get(ty, -INFINITY); break;
     case ir::reduce_inst::ARGFMIN: neutral = ConstantFP::get(ty, INFINITY); break;
+    case ir::reduce_inst::FMAX: neutral = ConstantFP::get(ty, -INFINITY); break;
     case ir::reduce_inst::FMIN: neutral = ConstantFP::get(ty, INFINITY); break;
     case ir::reduce_inst::XOR: neutral = ConstantInt::get(ty, 0); break;
     default: throw std::runtime_error("unreachable");
@@ -2627,9 +2585,7 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
   analysis::mma_layout* mma = layouts_->get(x->get_operand(0))->to_mma();
   bool is_coalesced_scanline = scanline && (scanline->get_order()[0] == x->get_axis());
   bool is_a100_mma = mma && (cc >= 80) && (x->get_axis() == 1);
-  if(x->with_index())
-    visit_reducend_inst_with_index(x, do_acc, neutral);
-  else if(is_coalesced_scanline || is_a100_mma)
+  if(!x->with_index() && (is_coalesced_scanline || is_a100_mma))
     visit_reducend_inst_fast(x, do_acc, neutral);
   else
     visit_reducend_inst(x, do_acc, neutral);
