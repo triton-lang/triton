@@ -326,6 +326,16 @@ public:
   int has_tmp_index(ir::value* i)                             { return tmp_index_.find(i) != tmp_index_.end(); }
   int tmp_index(ir::value* i)                                 { return tmp_index_.at(i);}
   void copy(ir::value* dst, ir::value* src)                   { groups_[dst] = groups_[src]; }
+
+  // layout checkers
+  bool is_scanline(ir::instruction* i);
+
+  bool is_coalesced_scanline(ir::instruction* i);
+
+  bool is_mma(ir::instruction* i);
+
+  bool is_a100_mma(ir::instruction* i);
+
   // execution
   void run(ir::module &mod);
 

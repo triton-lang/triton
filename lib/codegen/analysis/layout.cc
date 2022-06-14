@@ -588,6 +588,31 @@ void layouts::create(size_t id, const std::vector<ir::value*>& values) {
   }
 }
 
+// layout checkers
+bool layouts::is_scanline(ir::instruction *i) {
+  return this->get(i->get_operand(0))->to_scanline() != nullptr;
+}
+
+bool layouts::is_coalesced_scanline(ir::instruction *i) {
+  if (auto *red = dynamic_cast<ir::reduce_inst *>(i)) {
+    auto *scanline = this->get(i->get_operand(0))->to_scanline();
+    return scanline && scanline->get_order()[0] == red->get_axis();
+  }
+  return false;
+}
+
+bool layouts::is_mma(ir::instruction *i) {
+  return this->get(i->get_operand(0))->to_mma() != nullptr;
+}
+
+bool layouts::is_a100_mma(ir::instruction *i) {
+  if (auto *red = dynamic_cast<ir::reduce_inst *>(i)) {
+    return is_mma(red) && (tgt_->as_nvidia()->sm() >= 80) &&
+           (red->get_axis() == 1);
+  }
+  return false;
+}
+
 void layouts::run(ir::module &mod) {
   // make graph
   graph_.clear();
@@ -612,18 +637,23 @@ void layouts::run(ir::module &mod) {
 //    std::cout << "layout: " << std::endl;
 //    i->print(std::cout);
     if(auto *red = dynamic_cast<ir::reduce_inst*>(i)) {
-      id++;
       ir::value *arg = red->get_operand(0);
-      unsigned axis = red->get_axis();
+      distributed_layout *layout =
+          dynamic_cast<analysis::distributed_layout *>(get(arg));
       // shape
       auto shapes = arg->get_type()->get_block_shapes();
-      distributed_layout* layout = dynamic_cast<analysis::distributed_layout*>(get(arg));
-      shapes[axis] = layout->shape_per_cta(axis) / layout->contig_per_thread(axis);
-      
+      unsigned axis = red->get_axis();
+      shapes[axis] =
+          layout->shape_per_cta(axis) / layout->contig_per_thread(axis);
+      bool is_coalesced_scanline = this->is_coalesced_scanline(red);
+      bool is_a100_mma = this->is_a100_mma(red);
+      // skip layout for tensor cores and coalesced 
       // create layout
-      layouts_[id] = new shared_layout(layout, axes_->get(arg), shapes, {red}, red->get_type()->get_scalar_ty(), align_, tgt_);
-      tmp_[red] = id;
-
+      if (!(is_coalesced_scanline || is_a100_mma)) {
+        id++;
+        layouts_[id] = new shared_layout(layout, axes_->get(arg), shapes, {red}, red->get_type()->get_scalar_ty(), align_, tgt_);
+        tmp_[red] = id;
+      }
       if (red->with_index()) {
         id++;
         auto *int32_type = ir::type::get_int32_ty(red->get_type()->get_context());

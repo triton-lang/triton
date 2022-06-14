@@ -2337,8 +2337,9 @@ inline Value* generator::shfl_sync(Value* acc, int32_t i){
  * \brief Code Generation for `reduce` (ND case)
  */
 void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value*(Value*,Value*)> do_acc, Value *neutral){
-  //
   ir::value *arg = x->get_operand(0);
+  const auto with_index = x->with_index();
+  unsigned axis = x->get_axis();
   analysis::distributed_layout* layout = dynamic_cast<analysis::distributed_layout*>(layouts_->get(arg));
   std::vector<unsigned> shapes = layout->get_shape();
 
@@ -2353,7 +2354,6 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
   FunctionType *ld_shared_ty = FunctionType::get(sca_ty, {i1_ty, ptr_ty(sca_ty, 3)}, false);
   InlineAsm *ld_shared = InlineAsm::get(ld_shared_ty, "@$1 ld.shared.b" + n_bits_str + " $0, [$2];", "=" + cst + ",b," + cst, true);
 
-
   Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
   Value* warp = udiv(thread, i32(32));
   Value* lane = urem(thread, i32(32));
@@ -2364,7 +2364,6 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
   std::vector<indices_t> arg_idxs = idxs_.at(arg);
   size_t n_elts = arg_idxs.size();
   unsigned col_per_thread = 0;
-  Value* warp_i;
   Value* warp_j;
   if(analysis::scanline_layout* scanline = layout->to_scanline()){
     std::vector<int> order = layout->get_order();
@@ -2372,14 +2371,12 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
     shuffle_width = std::min<int>(mts, 32);
     warps_per_inner = std::max<int>(mts/32, 1);
     col_per_thread = shapes[order[0]] / mts;
-    warp_i = udiv(warp, i32(warps_per_inner));
     warp_j = urem(warp, i32(warps_per_inner));
   }
   else if(layout->to_mma()){
     shuffle_width = 4; 
     warps_per_inner = layout->to_mma()->wpt(1);
     col_per_thread = 16;
-    warp_i = axes_.at(a_axes_->get(arg, 0)).thread_id;
     warp_j = axes_.at(a_axes_->get(arg, 1)).thread_id;
   }
 
@@ -2388,30 +2385,54 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
   Type *ret_ty = cvt(x->get_type()->get_scalar_ty());
   unsigned addr_space = shmem_->getType()->getPointerAddressSpace();
   Value *base = bit_cast(shmem_, ptr_ty(ret_ty, addr_space));
+  Value *index_base = with_index ? shared_ptr_.at(layouts_->get(layouts_->tmp_index(x))) : nullptr;
+
   // preds
   Value* is_lane0 = icmp_eq(lane, i32(0));
   Value* is_warp0 = icmp_eq(warp, i32(0));
   Value* is_thread0 = icmp_eq(thread, i32(0));
   Value* lane_j = urem(lane, i32(shuffle_width));
-  Value* first_lane_in_col = icmp_eq(lane_j, i32(0));
   add_barrier();
   // compute partial sum for each warp, and store to shared memory
   for(size_t i = 0; i < n_elts/col_per_thread; i++){
-    Value* acc;
+    std::pair<Value*, Value*> acc;
     // reduce within thread
     for(size_t j = 0; j < col_per_thread; j++){
-      Value* val = arg_vals[arg_idxs[i*col_per_thread + j]];
-      // acc = (j == 0) ? val : do_acc(acc, val);
-      acc = (j == 0) ? val : do_acc(acc, val);
+      auto arg_idx = arg_idxs[i*col_per_thread + j];
+      Value* val = arg_vals[arg_idx];
+      bool is_first = j == 0;
+      if (is_first) {
+        acc = std::make_pair(val, arg_idx[axis]);
+      } else {
+        auto *ret = do_acc(acc.first, val);
+        if (with_index) {
+          acc = std::make_pair(select(ret, acc.first, val),
+                               select(ret, acc.second, arg_idx[axis]));
+        } else {
+          acc = std::make_pair(ret, arg_idx[axis]);
+        }
+      }
     }
     // reduce within warp
-    for(int k = shuffle_width/2 ; k > 0; k >>= 1)
-      acc = do_acc(acc, shfl_sync(acc, k));
+    for(int k = shuffle_width/2 ; k > 0; k >>= 1) {
+      auto *val = shfl_sync(acc.first, k);
+      auto *ret = do_acc(acc.first, val);
+      if (with_index) {
+        auto *idx = shfl_sync(acc.second, k);
+        acc = std::make_pair(select(ret, acc.first, val),
+                             select(ret, acc.second, idx));
+      } else {
+        acc = std::make_pair(ret, nullptr);
+      }
+    }
     // store partial result to shared memory
     auto x_idxs = idxs_[x][i];
     Value* x_idx = x_idxs.empty() ? builder_->getInt32(0) : x_idxs[0];
     Value* st_off = add(mul(x_idx, i32(warps_per_inner)), warp_j);
-    call(st_shared, {icmp_eq(lane_j, i32(0)), gep(base, st_off), acc});
+    call(st_shared, {icmp_eq(lane_j, i32(0)), gep(base, st_off), acc.first});
+    if (with_index) {
+      call(st_shared, {icmp_eq(lane_j, i32(0)), gep(index_base, st_off), acc.first});
+    }
   }
   add_barrier();
   // at this point, partial accumulator synchronized in shared memory
@@ -2420,10 +2441,20 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
     auto x_idxs = idxs_[x][i];
     Value* x_idx = x_idxs.empty() ? builder_->getInt32(0) : x_idxs[0];
     Value* ld_off = add(mul(x_idx, i32(warps_per_inner)), urem(lane_j, i32(warps_per_inner)));
-    Value* acc = call(ld_shared, {builder_->getInt1(true), gep(base, ld_off)});
-    for(int k = warps_per_inner/2; k > 0; k >>= 1)
-      acc = do_acc(acc, shfl_sync(acc, k));
-    vals_[x][idxs_[x][i]] = acc;
+    Value* acc_val = call(ld_shared, {builder_->getInt1(true), gep(base, ld_off)});
+    Value* acc_index = call(ld_shared, {builder_->getInt1(true), gep(index_base, ld_off)});
+    for(int k = warps_per_inner/2; k > 0; k >>= 1) {
+      auto *val = shfl_sync(acc_val, k);
+      auto *ret = do_acc(acc_val, val);
+      if (with_index) {
+        auto *idx = shfl_sync(acc_index, k);
+        acc_val = select(ret, acc_val, val);
+        acc_index = select(ret, acc_index, idx);
+      } else {
+        acc_val = ret;
+      }
+    }
+    vals_[x][idxs_[x][i]] = with_index ? acc_index : acc_val;
   }
   // add_barrier();
 }
@@ -2580,12 +2611,9 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
     default: throw std::runtime_error("unreachable");
   }
   ir::value *arg = x->get_operand(0);
-  int cc = tgt_->as_nvidia()->sm();
-  analysis::scanline_layout* scanline = layouts_->get(x->get_operand(0))->to_scanline();
-  analysis::mma_layout* mma = layouts_->get(x->get_operand(0))->to_mma();
-  bool is_coalesced_scanline = scanline && (scanline->get_order()[0] == x->get_axis());
-  bool is_a100_mma = mma && (cc >= 80) && (x->get_axis() == 1);
-  if(!x->with_index() && (is_coalesced_scanline || is_a100_mma))
+  bool is_coalesced_scanline = layouts_->is_coalesced_scanline(x);
+  bool is_a100_mma = layouts_->is_a100_mma(x);
+  if (is_coalesced_scanline || is_a100_mma)
     visit_reducend_inst_fast(x, do_acc, neutral);
   else
     visit_reducend_inst(x, do_acc, neutral);
