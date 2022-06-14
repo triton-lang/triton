@@ -85,6 +85,9 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(ir::module &ir, llvm::LLVMC
   axes.run(ir);
   layouts.run(ir);
   swizzle.run(ir);
+  std::cout << "---" << std::endl;
+  ir.print(std::cout);
+  std::cout << "---" << std::endl;
   liveness.run(ir);
   allocation.run(ir);
   prefetch_s.run(ir);

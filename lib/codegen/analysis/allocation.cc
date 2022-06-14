@@ -92,8 +92,10 @@ void allocation::run(ir::module &mod) {
   }
   // Save maximum size of induced memory space
   allocated_size_ = 0;
-  for(shared_layout* x: V)
+  for(shared_layout* x: V){
     allocated_size_ = std::max<size_t>(allocated_size_, starts[x] + x->get_size());
+    std::cout << "start: " << starts[x] << " | end: " << starts[x] + x->get_size() << std::endl;
+  }
 }
 
 }

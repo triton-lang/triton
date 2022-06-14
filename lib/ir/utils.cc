@@ -43,6 +43,13 @@ std::vector<basic_block*> cfg::reverse_post_order(function* fn) {
   return result;
 }
 
+void for_each_instruction_backward(module &mod, const std::function<void (instruction *)> &do_work) {
+  for(ir::function *fn: mod.get_function_list())
+  for(ir::basic_block *block: cfg::post_order(fn))
+  for(ir::instruction *i: block->get_inst_list())
+    do_work(i);
+}
+
 void for_each_instruction(module &mod, const std::function<void (instruction *)> &do_work) {
   for(ir::function *fn: mod.get_function_list())
   for(ir::basic_block *block: cfg::reverse_post_order(fn))
