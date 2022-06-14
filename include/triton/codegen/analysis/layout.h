@@ -308,7 +308,13 @@ private:
 
   void create(size_t id, const std::vector<ir::value*>& values);
 
-public:
+  void create_tmp_layout(size_t id, data_layout* arg,
+                         const std::vector<int>& axes,
+                         const std::vector<unsigned>& shape,
+                         ir::instruction* i,
+                         bool is_index = false);
+
+ public:
   // constructor
   layouts(analysis::axes *axes, analysis::align *align, size_t num_warps, target* tgt);
 

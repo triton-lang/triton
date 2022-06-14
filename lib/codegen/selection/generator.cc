@@ -2354,6 +2354,12 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
   FunctionType *ld_shared_ty = FunctionType::get(sca_ty, {i1_ty, ptr_ty(sca_ty, 3)}, false);
   InlineAsm *ld_shared = InlineAsm::get(ld_shared_ty, "@$1 ld.shared.b" + n_bits_str + " $0, [$2];", "=" + cst + ",b," + cst, true);
 
+  Type* index_ty = IntegerType::get(*ctx_, 32);
+  FunctionType *st_shared_index_ty = FunctionType::get(void_ty, {i1_ty, ptr_ty(index_ty, 3), index_ty}, false);
+  InlineAsm *st_shared_index = InlineAsm::get(st_shared_index_ty, "@$0 st.shared.b32 [$1], $2;", "b,r,r", true);
+  FunctionType *ld_shared_index_ty = FunctionType::get(index_ty, {i1_ty, ptr_ty(index_ty, 3)}, false);
+  InlineAsm *ld_shared_index = InlineAsm::get(ld_shared_index_ty, "@$1 ld.shared.b32 $0, [$2];", "=r,b,r", true);
+
   Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
   Value* warp = udiv(thread, i32(32));
   Value* lane = urem(thread, i32(32));
@@ -2382,9 +2388,10 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
 
   // unsigned col_per_thread = 2 * shapes[order[0]] / layout->shape_per_cta(order[0]);
   //
-  Type *ret_ty = cvt(x->get_type()->get_scalar_ty());
+  Type* ret_ty = cvt(x->get_type()->get_scalar_ty());
+  analysis::data_layout* data_layout = layouts_->get(layouts_->tmp(x));
   unsigned addr_space = shmem_->getType()->getPointerAddressSpace();
-  Value *base = bit_cast(shmem_, ptr_ty(ret_ty, addr_space));
+  Value *base = bit_cast(shared_ptr_.at(data_layout), ptr_ty(ret_ty, addr_space));
   Value *index_base = with_index ? shared_ptr_.at(layouts_->get(layouts_->tmp_index(x))) : nullptr;
 
   // preds
@@ -2431,7 +2438,7 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
     Value* st_off = add(mul(x_idx, i32(warps_per_inner)), warp_j);
     call(st_shared, {icmp_eq(lane_j, i32(0)), gep(base, st_off), acc.first});
     if (with_index) {
-      call(st_shared, {icmp_eq(lane_j, i32(0)), gep(index_base, st_off), acc.first});
+      call(st_shared_index, {icmp_eq(lane_j, i32(0)), gep(index_base, st_off), acc.second});
     }
   }
   add_barrier();
@@ -2442,7 +2449,7 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
     Value* x_idx = x_idxs.empty() ? builder_->getInt32(0) : x_idxs[0];
     Value* ld_off = add(mul(x_idx, i32(warps_per_inner)), urem(lane_j, i32(warps_per_inner)));
     Value* acc_val = call(ld_shared, {builder_->getInt1(true), gep(base, ld_off)});
-    Value* acc_index = call(ld_shared, {builder_->getInt1(true), gep(index_base, ld_off)});
+    Value* acc_index = with_index ? call(ld_shared_index, {builder_->getInt1(true), gep(index_base, ld_off)}) : nullptr;
     for(int k = warps_per_inner/2; k > 0; k >>= 1) {
       auto *val = shfl_sync(acc_val, k);
       auto *ret = do_acc(acc_val, val);
@@ -2458,6 +2465,7 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
   }
   // add_barrier();
 }
+
 
 void generator::visit_reducend_inst(ir::reduce_inst* x, std::function<Value*(Value*,Value*)> do_acc, Value *neutral) {
   ir::value *arg = x->get_operand(0);
