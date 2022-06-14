@@ -153,15 +153,58 @@ def test_op(Z, H, N_CTX, D_MODEL, dtype=torch.float16):
     triton.testing.assert_almost_equal(ref_out, tri_out)
 
 
-benchmarks = [
-    (16, 64, 1024, 64)
-]
 
-@pytest.mark.parametrize('Z, H, N_CTX, D_MODEL', benchmarks)
-def test_perf(Z, H, N_CTX, D_MODEL, dtype=torch.float16):
-    q = torch.randn((Z, H, N_CTX, D_MODEL), dtype=dtype, device="cuda", requires_grad=True)
-    k = torch.randn((Z, H, D_MODEL, N_CTX), dtype=dtype, device="cuda", requires_grad=True)
-    v = torch.randn((Z, H, N_CTX, D_MODEL), dtype=dtype, device="cuda", requires_grad=True)
-    fn = lambda: attention(q, k, v)
-    ms = triton.testing.do_bench(fn, percentiles=None, warmup=25, rep=500)
-    print(ms)
+try:
+    from src.flash_attn_interface import flash_attn_func
+    HAS_FLASH = True
+except:
+    HAS_FLASH = False
+
+BATCH, N_HEADS, N_CTX, D_HEAD = 4, 64, 1024, 64
+# vary batch size for fixed heads / seq
+batch_bench = triton.testing.Benchmark(
+    x_names=['BATCH'],
+    x_vals=[2**i for i in range(0, 8)],
+    line_arg='provider',
+    line_vals=['triton'] + (['flash'] if HAS_FLASH else []),
+    line_names=['Triton'] + (['Flash'] if HAS_FLASH else []),
+    styles=[('red', '-'), ('blue', '-')],
+    ylabel='ms',
+    plot_name=f'fused-attention-seq{N_CTX}-head{N_HEADS}-d{D_HEAD}',
+    args={'H': N_HEADS, 'N_CTX': N_CTX, 'D_MODEL': D_HEAD, 'dtype': torch.float16}
+)
+# vary seq length for fixed head and batch=4
+seq_bench = triton.testing.Benchmark(
+    x_names=['N_CTX'],
+    x_vals=[2**i for i in range(10, 16)],
+    line_arg='provider',
+    line_vals=['triton'] + (['flash'] if HAS_FLASH else []),
+    line_names=['Triton'] + (['Flash'] if HAS_FLASH else []),
+    styles=[('red', '-'), ('blue', '-')],
+    ylabel='ms',
+    plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}',
+    args={'H': D_HEAD, 'BATCH': BATCH, 'D_MODEL': D_HEAD, 'dtype': torch.float16}
+)
+
+@triton.testing.perf_report([batch_bench, seq_bench])
+def bench_flash_attention(BATCH, H, N_CTX, D_MODEL, provider, dtype=torch.float16, device="cuda"):
+    warmup = 25
+    rep = 75
+    if provider == "triton":
+        q = torch.randn((BATCH, H, N_CTX, D_MODEL), dtype=dtype, device="cuda", requires_grad=True)
+        k = torch.randn((BATCH, H, D_MODEL, N_CTX), dtype=dtype, device="cuda", requires_grad=True)
+        v = torch.randn((BATCH, H, N_CTX, D_MODEL), dtype=dtype, device="cuda", requires_grad=True)
+        fn = lambda: attention(q, k, v)
+        ms = triton.testing.do_bench(fn, percentiles=None, warmup=warmup, rep=rep)
+        return ms
+    if provider == "flash":
+        lengths = torch.full((BATCH,), fill_value=N_CTX, device=device)
+        cu_seqlens = torch.zeros((BATCH + 1,), device=device, dtype=torch.int32)
+        cu_seqlens[1:] = lengths.cumsum(0)
+        qkv = torch.randn((BATCH*N_CTX, 3, H, D_MODEL), dtype=dtype, device=device, requires_grad=True)
+        fn = lambda: flash_attn_func(qkv, cu_seqlens, 0., N_CTX, causal=True)
+        ms = triton.testing.do_bench(fn, percentiles=None, warmup=warmup, rep=rep)
+        return ms
+
+
+bench_flash_attention.run(save_path='.', print_data=True)

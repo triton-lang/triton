@@ -1101,6 +1101,7 @@ void generator::visit_exp_inst(ir::exp_inst* x){
   InlineAsm *ex2 = InlineAsm::get(fn_ty, "ex2.approx.f32 $0, $0;", "=f,0", false);
   for(auto idx: idxs_.at(x)){
     Value *ex2arg = fmul(vals_[x->get_operand(0)][idx], log2e);
+    // Value *ex2arg = vals_[x->get_operand(0)][idx];
     vals_[x][idx] = call(ex2, std::vector<llvm::Value*>{ex2arg});
   }
 }
