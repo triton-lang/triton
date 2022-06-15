@@ -1006,6 +1006,7 @@ def argmax(input, axis, _builder=None):
     axis = _constexpr_to_value(axis)
     return semantic.argmax(input, axis, _builder)
 
+
 @builtin
 @_add_reduction_docstr("minimum")
 def min(input, axis, _builder=None):
@@ -1018,6 +1019,7 @@ def min(input, axis, _builder=None):
 def argmin(input, axis, _builder=None):
     axis = _constexpr_to_value(axis)
     return semantic.argmin(input, axis, _builder)
+
 
 @builtin
 @_add_reduction_docstr("sum")
