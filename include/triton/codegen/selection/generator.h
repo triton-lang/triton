@@ -118,8 +118,15 @@ private:
   llvm::Attribute cvt(ir::attribute attr);
   void packed_type(ir::value* i);
   void forward_declare(ir::function* fn);
+  Value *cast_shared_layout_ptr(analysis::data_layout *layout, Type *ty);
 
-public:
+ private:
+  typedef std::function<void(
+      std::pair<Value *, Value *> &acc, std::function<Value *()> load_value_fn,
+      std::function<Value *()> load_index_fn, bool is_first)>
+      acc_fn_t;
+
+ public:
   generator(analysis::axes *a_axes,
             analysis::layouts *layouts,
             analysis::align *alignment,
@@ -176,9 +183,8 @@ public:
   void visit_trans_inst(ir::trans_inst*);
   void visit_sqrt_inst(ir::sqrt_inst*);
   Value* shfl_sync(Value* acc, int32_t i);
-  void visit_reduce1d_inst(ir::reduce_inst*, std::function<Value*(Value*,Value*)>, Value*);
-  void visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value*(Value*,Value*)> do_acc, Value *neutral);
-  void visit_reducend_inst(ir::reduce_inst*, std::function<Value*(Value*,Value*)>, Value*);
+  void visit_reducend_inst_fast(ir::reduce_inst* x, acc_fn_t do_acc, Value *neutral);
+  void visit_reducend_inst(ir::reduce_inst* x, acc_fn_t do_acc, Value *neutral);
   void visit_reduce_inst(ir::reduce_inst*);
   void visit_select_inst(ir::select_inst*);
   void visit_layout_convert(ir::value *out, ir::value *in);

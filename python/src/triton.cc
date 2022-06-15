@@ -573,8 +573,14 @@ void init_triton_ir(py::module &&m) {
       .value("MAX", ir::reduce_inst::MAX)
       .value("UMIN", ir::reduce_inst::UMIN)
       .value("UMAX", ir::reduce_inst::UMAX)
+      .value("ARGMIN", ir::reduce_inst::ARGMIN)
+      .value("ARGMAX", ir::reduce_inst::ARGMAX)
+      .value("ARGUMIN", ir::reduce_inst::ARGUMIN)
+      .value("ARGUMAX", ir::reduce_inst::ARGUMAX)
       .value("FMIN", ir::reduce_inst::FMIN)
       .value("FMAX", ir::reduce_inst::FMAX)
+      .value("ARGFMIN", ir::reduce_inst::ARGFMIN)
+      .value("ARGFMAX", ir::reduce_inst::ARGFMAX)
       .value("XOR", ir::reduce_inst::XOR);
   
   py::enum_<ir::atomic_rmw_op_t>(m, "ATOMIC_OP")
