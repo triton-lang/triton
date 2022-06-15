@@ -2336,7 +2336,7 @@ inline Value* generator::shfl_sync(Value* acc, int32_t i){
 /**
  * \brief Code Generation for `reduce` (ND case)
  */
-void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value*(Value*,Value*)> do_acc, Value *neutral){
+void generator::visit_reducend_inst_fast(ir::reduce_inst* x, acc_fn_t do_acc, Value *neutral){
   ir::value *arg = x->get_operand(0);
   const auto with_index = x->with_index();
   unsigned axis = x->get_axis();
@@ -2345,7 +2345,6 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
 
   Type* sca_ty = cvt(arg->get_type()->get_scalar_ty());
   size_t n_bits = sca_ty->getPrimitiveSizeInBits();
-
   std::string n_bits_str = std::to_string(n_bits);
   std::string cst = (n_bits == 64) ? "l" : "r";
 
@@ -2371,16 +2370,15 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
   size_t n_elts = arg_idxs.size();
   unsigned col_per_thread = 0;
   Value* warp_j;
-  if(analysis::scanline_layout* scanline = layout->to_scanline()){
+  if (analysis::scanline_layout *scanline = layout->to_scanline()) {
     std::vector<int> order = layout->get_order();
     unsigned mts = scanline->mts(order[0]);
     shuffle_width = std::min<int>(mts, 32);
-    warps_per_inner = std::max<int>(mts/32, 1);
+    warps_per_inner = std::max<int>(mts / 32, 1);
     col_per_thread = shapes[order[0]] / mts;
     warp_j = urem(warp, i32(warps_per_inner));
-  }
-  else if(layout->to_mma()){
-    shuffle_width = 4; 
+  } else if (layout->to_mma()) {
+    shuffle_width = 4;
     warps_per_inner = layout->to_mma()->wpt(1);
     col_per_thread = 16;
     warp_j = axes_.at(a_axes_->get(arg, 1)).thread_id;
@@ -2406,31 +2404,17 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
     // reduce within thread
     for(size_t j = 0; j < col_per_thread; j++){
       auto arg_idx = arg_idxs[i*col_per_thread + j];
-      Value* val = arg_vals[arg_idx];
       bool is_first = j == 0;
-      if (is_first) {
-        acc = std::make_pair(val, arg_idx[axis]);
-      } else {
-        auto *ret = do_acc(acc.first, val);
-        if (with_index) {
-          acc = std::make_pair(select(ret, acc.first, val),
-                               select(ret, acc.second, arg_idx[axis]));
-        } else {
-          acc = std::make_pair(ret, arg_idx[axis]);
-        }
-      }
+      do_acc(
+          acc, [&]() -> Value * { return arg_vals[arg_idx]; },
+          [&]() -> Value * { return arg_idx[axis]; }, is_first);
     }
+
     // reduce within warp
     for(int k = shuffle_width/2 ; k > 0; k >>= 1) {
-      auto *val = shfl_sync(acc.first, k);
-      auto *ret = do_acc(acc.first, val);
-      if (with_index) {
-        auto *idx = shfl_sync(acc.second, k);
-        acc = std::make_pair(select(ret, acc.first, val),
-                             select(ret, acc.second, idx));
-      } else {
-        acc = std::make_pair(ret, nullptr);
-      }
+      do_acc(
+          acc, [&]() -> Value * { return shfl_sync(acc.first, k); },
+          [&]() -> Value * { return shfl_sync(acc.second, k); }, false);
     }
     // store partial result to shared memory
     auto x_idxs = idxs_[x][i];
@@ -2448,26 +2432,21 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, std::function<Value
     auto x_idxs = idxs_[x][i];
     Value* x_idx = x_idxs.empty() ? builder_->getInt32(0) : x_idxs[0];
     Value* ld_off = add(mul(x_idx, i32(warps_per_inner)), urem(lane_j, i32(warps_per_inner)));
-    Value* acc_val = call(ld_shared, {builder_->getInt1(true), gep(base, ld_off)});
-    Value* acc_index = with_index ? call(ld_shared_index, {builder_->getInt1(true), gep(index_base, ld_off)}) : nullptr;
+    std::pair<Value*, Value*> acc;
+    acc.first = call(ld_shared, {builder_->getInt1(true), gep(base, ld_off)});
+    acc.second = with_index ? call(ld_shared_index, {builder_->getInt1(true), gep(index_base, ld_off)}) : nullptr;
     for(int k = warps_per_inner/2; k > 0; k >>= 1) {
-      auto *val = shfl_sync(acc_val, k);
-      auto *ret = do_acc(acc_val, val);
-      if (with_index) {
-        auto *idx = shfl_sync(acc_index, k);
-        acc_val = select(ret, acc_val, val);
-        acc_index = select(ret, acc_index, idx);
-      } else {
-        acc_val = ret;
-      }
+      do_acc(
+          acc, [&]() -> Value * { return shfl_sync(acc.first, k); },
+          [&]() -> Value * { return shfl_sync(acc.second, k); }, false);
     }
-    vals_[x][idxs_[x][i]] = with_index ? acc_index : acc_val;
+    vals_[x][idxs_[x][i]] = with_index ? acc.second : acc.first;
   }
   // add_barrier();
 }
 
 
-void generator::visit_reducend_inst(ir::reduce_inst* x, std::function<Value*(Value*,Value*)> do_acc, Value *neutral) {
+void generator::visit_reducend_inst(ir::reduce_inst* x, acc_fn_t do_acc, Value *neutral) {
   ir::value *arg = x->get_operand(0);
   unsigned axis = x->get_axis();
   auto with_index = x->with_index();
@@ -2478,19 +2457,10 @@ void generator::visit_reducend_inst(ir::reduce_inst* x, std::function<Value*(Val
   for(indices_t idx: idxs_.at(arg)){
     indices_t pidx = idx;
     pidx[axis] = i32(0);
-    Value *current = vals_[arg][idx];
     bool is_first = accs.find(pidx) == accs.end();
-    if (is_first) {
-      accs[pidx] = std::make_pair(current, idx[axis]);
-    } else {
-      auto *ret = do_acc(accs[pidx].first, current);
-      if (with_index) {
-        accs[pidx] = std::make_pair(select(ret, accs[pidx].first, current),
-                                    select(ret, accs[pidx].second, idx[axis]));
-      } else {
-        accs[pidx] = std::make_pair(ret, idx[axis]);
-      }
-    }
+    do_acc(
+        accs[pidx], [&]() -> Value * { return vals_[arg][idx]; },
+        [&]() -> Value * { return idx[axis]; }, is_first);
   };
 
   // reduce within blocks
@@ -2515,8 +2485,7 @@ void generator::visit_reducend_inst(ir::reduce_inst* x, std::function<Value*(Val
   Value *lane = axes_.at(a_axes_->get(arg, axis)).thread_id;
   for(auto& x: accs) {
     // current element being computed
-    Value *&acc = x.second.first;
-    Value *&acc_index = x.second.second;
+    std::pair<Value *, Value *> acc = x.second;
     indices_t write_idx = x.first;
     write_idx[axis] = lane;
     // shared memory write  pointer
@@ -2525,9 +2494,9 @@ void generator::visit_reducend_inst(ir::reduce_inst* x, std::function<Value*(Val
     Value *index_write_ptr = gep(index_ptr, write_off);
     // initialize shared memory
     add_barrier();
-    store(acc, write_ptr);
+    store(acc.first, write_ptr);
     if (with_index) {
-      store(acc_index, index_write_ptr);
+      store(acc.second, index_write_ptr);
     }
     // build result
     indices_t idx(write_idx.size(), i32(0));
@@ -2540,18 +2509,13 @@ void generator::visit_reducend_inst(ir::reduce_inst* x, std::function<Value*(Val
       Value *index_read_ptr = gep(index_write_ptr, read_off);
       add_barrier();
       // update accumulator
-      Value *current = load(read_ptr);
-      if (with_index) {
-        Value *ret = do_acc(acc, current);
-        acc = select(ret, acc, current);
-        acc_index = select(ret, acc_index, load(index_read_ptr));
-      } else {
-        acc = do_acc(acc, current);
-      }
+      do_acc(
+          acc, [&]() -> Value * { return load(read_ptr); },
+          [&]() -> Value * { return load(index_read_ptr); }, false);
       add_barrier();
-      store(acc, write_ptr);
+      store(acc.first, write_ptr);
       if (with_index) {
-        store(acc_index, index_write_ptr);
+        store(acc.second, index_write_ptr);
       }
     }
   }
@@ -2574,7 +2538,7 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
   Type *ty = cvt(x->get_type()->get_scalar_ty());
   // accumulation function
   ir::reduce_inst::op_t op = x->get_op();
-  auto do_acc = [&](Value *x, Value *y) -> Value* {
+  auto do_acc_op = [&](Value *x, Value *y) -> Value* {
     switch(op){
     case ir::reduce_inst::ADD: return add(x, y);
     case ir::reduce_inst::SUB: return sub(x, y);
@@ -2596,6 +2560,27 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
     default: throw std::runtime_error("unreachable");
     }
   };
+
+  auto do_acc = [&](std::pair<Value *, Value *> &acc,
+                    std::function<Value *()> load_value_fn,
+                    std::function<Value *()> load_index_fn,
+                    bool is_first) -> void {
+    auto *val = load_value_fn();
+    if (x->with_index()) {
+      auto *index = load_index_fn();
+      if (is_first) {
+        acc.first = val;
+        acc.second = index;
+      } else {
+        Value *ret = do_acc_op(acc.first, val);
+        acc.first = select(ret, acc.first, val);
+        acc.second = select(ret, acc.second, index);
+      }
+    } else {
+      acc.first = is_first ? val : do_acc_op(acc.first, val);
+    }
+  };
+
   // neutral element
   Value *neutral;
   switch(op) {
