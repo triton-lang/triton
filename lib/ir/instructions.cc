@@ -494,13 +494,13 @@ getelementptr_inst *getelementptr_inst::create(value *ptr, const std::vector<val
 //===----------------------------------------------------------------------===//
 
 // io_inst
-io_inst::io_inst(type *ty, value_id_t id, unsigned num_ops, const std::string &name, instruction *next)
-  : instruction(ty, id, num_ops, name, next)
+io_inst::io_inst(type *ty, value_id_t id, unsigned num_ops, EVICTION_POLICY eviction, const std::string &name, instruction *next)
+  : instruction(ty, id, num_ops, name, next), eviction_(eviction)
 { }
 
 // load_inst
 load_inst::load_inst(value *ptr, value_id_t id, unsigned num_ops, load_inst::CACHE_MODIFIER cache, EVICTION_POLICY eviction, bool is_volatile, const std::string &name, instruction *next)
-  : io_inst(get_pointee_type(ptr->get_type()), id, num_ops, name, next), cache_(cache), eviction_(eviction), is_volatile_(is_volatile)
+  : io_inst(get_pointee_type(ptr->get_type()), id, num_ops, eviction, name, next), cache_(cache), is_volatile_(is_volatile)
 { }
 
 // load
@@ -557,34 +557,35 @@ masked_load_async_inst* masked_load_async_inst::create(value *ptr, value *mask, 
 
 // store
 
-store_inst::store_inst(value *ptr, value_id_t id, unsigned num_ops, const std::string &name, instruction *next)
-  : io_inst(type::get_void_ty(ptr->get_type()->get_context()), id, num_ops, name, next)
+store_inst::store_inst(value *ptr, value_id_t id, unsigned num_ops, EVICTION_POLICY eviction, const std::string &name, instruction *next)
+  : io_inst(type::get_void_ty(ptr->get_type()->get_context()), id, num_ops, eviction, name, next)
 { }
 
 // unmasked_store
-unmasked_store_inst::unmasked_store_inst(value *ptr, value *val,
+unmasked_store_inst::unmasked_store_inst(value *ptr, value *val, EVICTION_POLICY eviction,
                                          const std::string &name, instruction *next)
-    : store_inst(ptr, INST_UNMASKED_STORE, 2, name, next)  {
+    : store_inst(ptr, INST_UNMASKED_STORE, 2, eviction, name, next)  {
   set_operand(0, ptr);
   set_operand(1, val);
 }
 
-unmasked_store_inst* unmasked_store_inst::create(value *ptr, value *val,
+unmasked_store_inst* unmasked_store_inst::create(value *ptr, value *val, EVICTION_POLICY eviction,
                                                  const std::string &name, instruction *next) {
-  return new unmasked_store_inst(ptr, val, name, next);
+  return new unmasked_store_inst(ptr, val, eviction, name, next);
 }
 
 // masked store
-masked_store_inst::masked_store_inst(value *ptr, value *val, value *mask,
+masked_store_inst::masked_store_inst(value *ptr, value *val, value *mask, EVICTION_POLICY eviction,
                                      const std::string &name, instruction *next)
-  : store_inst(ptr, INST_MASKED_STORE, 3, name, next) {
+  : store_inst(ptr, INST_MASKED_STORE, 3, eviction, name, next) {
   set_operand(0, ptr);
   set_operand(1, val);
   set_operand(2, mask);
 }
 
-masked_store_inst* masked_store_inst::create(value *ptr, value *val, value *mask, const std::string &name, instruction *next)  {
-  return new masked_store_inst(ptr, val, mask, name, next);
+masked_store_inst* masked_store_inst::create(value *ptr, value *val, value *mask, EVICTION_POLICY eviction, 
+                                             const std::string &name, instruction *next)  {
+  return new masked_store_inst(ptr, val, mask, eviction, name, next);
 }
 
 //===----------------------------------------------------------------------===//

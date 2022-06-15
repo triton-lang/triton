@@ -782,7 +782,7 @@ def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", 
 
 
 @builtin
-def store(pointer, value, mask=None, _builder=None):
+def store(pointer, value, eviction_policy="", mask=None, _builder=None):
     """
     Stores :code:`value` tensor of elements in memory, element-wise, at the memory locations specified by :code:`pointer`.
 
@@ -799,7 +799,7 @@ def store(pointer, value, mask=None, _builder=None):
     value = _to_tensor(value, _builder)
     if mask is not None:
         mask = _to_tensor(mask, _builder)
-    return semantic.store(pointer, value, mask, _builder)
+    return semantic.store(pointer, value, mask, eviction_policy, _builder)
 
 
 # -----------------------

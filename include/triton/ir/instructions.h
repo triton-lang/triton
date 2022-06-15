@@ -435,13 +435,31 @@ private:
 //===----------------------------------------------------------------------===//
 
 class io_inst: public instruction {
+public:
+
+  enum EVICTION_POLICY : uint32_t {
+    NORMAL=0,
+    EVICT_FIRST,
+    EVICT_LAST,
+  };
+
 protected:
-  io_inst(type *ty, value_id_t id, unsigned num_ops,
+  io_inst(type *ty, value_id_t id, unsigned num_ops, EVICTION_POLICY eviction,
           const std::string &name = "", instruction *next = nullptr);
+
+  std::string get_eviction_policy_repr() const {
+    if (eviction_ == EVICT_FIRST) return ".L1::evict_first";
+    if (eviction_ == EVICT_LAST) return ".L2::evict_last";
+    return "";
+  }
 
 public:
   // accessors
   value *get_pointer_operand() { return get_operand(0); }
+  EVICTION_POLICY get_eviction_policy() const { return eviction_; }
+
+protected:
+  EVICTION_POLICY eviction_;
 };
 
 // load
@@ -453,14 +471,8 @@ public:
     CG,
   };
 
-  enum EVICTION_POLICY : uint32_t {
-    NORMAL=0,
-    EVICT_FIRST,
-    EVICT_LAST,
-  };
 
   CACHE_MODIFIER get_cache_modifier() const { return cache_; }
-  EVICTION_POLICY get_eviction_policy() const { return eviction_; }
   bool get_is_volatile() const { return is_volatile_; }
 
 protected:
@@ -472,12 +484,6 @@ protected:
     if (cache_ == CG) return ".cg";
     return ""; 
   }
-  std::string get_eviction_policy_repr() const {
-    if (eviction_ == EVICT_FIRST) return ".L1::evict_first";
-    if (eviction_ == EVICT_LAST) return ".L2::evict_last";
-    return "";
-  }
-  EVICTION_POLICY eviction_;
   CACHE_MODIFIER cache_;
 
   std::string get_volatile_repr() {
@@ -553,7 +559,7 @@ public:
 // store
 class store_inst: public io_inst {
 protected:
-  store_inst(value *ptr, value_id_t id, unsigned num_ops,
+  store_inst(value *ptr, value_id_t id, unsigned num_ops, EVICTION_POLICY eviction,
             const std::string &name = "", instruction *next = nullptr);
 
 public:
@@ -564,11 +570,11 @@ public:
 class unmasked_store_inst: public store_inst{
 private:
   std::string repr_impl() const { return "unmasked_store"; }
-  unmasked_store_inst(value *ptr, value *v, const std::string &name, instruction *next);
+  unmasked_store_inst(value *ptr, value *v, EVICTION_POLICY eviction, const std::string &name, instruction *next);
 
 public:
   // factory method
-  static unmasked_store_inst* create(value* ptr, value *v,
+  static unmasked_store_inst* create(value* ptr, value *v, EVICTION_POLICY eviction,
                                     const std::string &name = "",
                                     instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(unmasked_store_inst)
@@ -578,14 +584,14 @@ public:
 class masked_store_inst: public store_inst{
 private:
   std::string repr_impl() const { return "masked_store"; }
-  masked_store_inst(value *ptr, value *v, value *mask,
+  masked_store_inst(value *ptr, value *v, value *mask, EVICTION_POLICY eviction,
                     const std::string &name, instruction *next);
 
 public:
   // accessors
   value *get_mask_operand() { return get_operand(2); }
   // factory method
-  static masked_store_inst* create(value *ptr, value *v, value *mask,
+  static masked_store_inst* create(value *ptr, value *v, value *mask, EVICTION_POLICY eviction,
                                    const std::string &name = "",
                                    instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(masked_store_inst)
@@ -755,6 +761,8 @@ private:
 class atomic_inst: public io_inst {
 public:
   using io_inst::io_inst;
+  atomic_inst(type *ty, value_id_t id, unsigned num_ops, const std::string &name, instruction *next):
+    io_inst(ty, id, num_ops, NORMAL, name, next) {}
 };
 
 class atomic_rmw_inst: public atomic_inst {

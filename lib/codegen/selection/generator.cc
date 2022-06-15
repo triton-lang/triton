@@ -761,8 +761,9 @@ void generator::visit_load_inst(ir::load_inst* x){
     assert(layout);
 
     vec = std::min<size_t>(layout->contig_per_thread(ord[0]), aln);
-    is_mma_first_row = (ord.size() == 1) && layout->to_mma() && 
-                       (a_axes_->get(x, 0) == layouts_->get(x)->get_axis(1));
+    // TODO: generalize
+    is_mma_first_row = (ord.size() >= 1) && layout->to_mma() && 
+                       (a_axes_->get(x, ord[0]) == layouts_->get(x)->get_axis(1));
     if(is_mma_first_row)
       vec = 2;
   }
@@ -798,7 +799,7 @@ void generator::visit_load_inst(ir::load_inst* x){
     int tot_width = nbits*vec;
     int width = std::min(tot_width, max_word_width);
     int n_words = std::max(1, tot_width / width);
-    bool has_evict_policy = (x->get_eviction_policy() != ir::load_inst::NORMAL) && tgt_->as_nvidia()->sm() >= 80;
+    bool has_l2_evict_policy = (x->get_eviction_policy() != ir::load_inst::NORMAL) && tgt_->as_nvidia()->sm() >= 80;
     // has_evict_policy = false; // currently disable until supported in `store`
     // -----
     // create inline asm string
@@ -813,7 +814,7 @@ void generator::visit_load_inst(ir::load_inst* x){
     if (x->get_cache_modifier() == ir::load_inst::CG) asm_oss << ".cg";
     if (x->get_eviction_policy() == ir::load_inst::EVICT_FIRST) asm_oss << ".L1::evict_first";
     if (x->get_eviction_policy() == ir::load_inst::EVICT_LAST) asm_oss << ".L1::evict_last";
-    if (has_evict_policy) asm_oss << ".L2::cache_hint";
+    if (has_l2_evict_policy) asm_oss << ".L2::cache_hint";
     if(n_words > 1)
       asm_oss << ".v" << n_words; // vector width
     asm_oss << ".b" << width; // word size
@@ -825,7 +826,7 @@ void generator::visit_load_inst(ir::load_inst* x){
     asm_oss << "}";
     asm_oss << ", [ $" << n_words + 1; // load
     asm_oss << " + " << in_off << "]"; // constant offset
-    if (has_evict_policy) asm_oss << ", $" << n_words + 2;
+    if (has_l2_evict_policy) asm_oss << ", $" << n_words + 2;
     asm_oss << ";";
     bool has_other = other && (other != UndefValue::get(other->getType()));
     std::vector<Value *> others;
@@ -847,7 +848,7 @@ void generator::visit_load_inst(ir::load_inst* x){
       if(ConstantInt* cst = dyn_cast<ConstantInt>(v))
         asm_oss << "0x" << std::hex << cst->getSExtValue();
       else{
-        asm_oss << "$" << n_words + has_evict_policy +  2 + ii;
+        asm_oss << "$" << n_words + has_l2_evict_policy +  2 + ii;
         others.push_back(v);
       }
       asm_oss.flags(flags);
@@ -862,7 +863,7 @@ void generator::visit_load_inst(ir::load_inst* x){
     std::vector<Type*> arg_tys = {pred->getType(), ptr->getType()};
     for(Value *v: others)
         arg_tys.push_back(v->getType());
-    if (has_evict_policy) 
+    if (has_l2_evict_policy) 
       arg_tys.push_back(i64_ty);
     FunctionType *asm_ty = FunctionType::get(ret_ty, arg_tys, false);
     // ---
@@ -878,7 +879,7 @@ void generator::visit_load_inst(ir::load_inst* x){
       asm_cstrt += ",";
       asm_cstrt += (width == 64) ? "l" : ((width == 32) ? "r" : "c");
     }
-    if (has_evict_policy) 
+    if (has_l2_evict_policy) 
       asm_cstrt += ",l";
     // ---
     // finally call inline ASM
@@ -887,7 +888,7 @@ void generator::visit_load_inst(ir::load_inst* x){
     std::vector<Value*> args = {pred, ptr};
     for(Value *v: others)
         args.push_back(v);
-    if (has_evict_policy)
+    if (has_l2_evict_policy)
       args.push_back(policies_.at(x->get_eviction_policy()));
   
     
@@ -938,6 +939,9 @@ void generator::visit_store_inst(ir::store_inst * x){
   // operands
   ir::value *ptr_op = x->get_pointer_operand();
   ir::value *val_op = x->get_value_operand();
+  ir::value *msk_op = nullptr;
+  if(auto* msk_st = dynamic_cast<ir::masked_store_inst*>(x))
+    msk_op = msk_st->get_mask_operand();
   // vector size
   size_t vec = 1;
   if(val_op->get_type()->is_block_ty()){
@@ -950,35 +954,100 @@ void generator::visit_store_inst(ir::store_inst * x){
       aln = std::min(aln, max_eq);
     }
     vec  = std::min(nts, aln);
+    if(x->get_eviction_policy() != ir::store_inst::EVICTION_POLICY::NORMAL)
+      vec = 2;
   }
+  bool has_l2_evict_policy = (x->get_eviction_policy() != ir::load_inst::NORMAL) && tgt_->as_nvidia()->sm() >= 80;
   auto idxs    = idxs_.at(val_op);
   Type *ty = cvt(val_op->get_type()->get_scalar_ty());
   if (ty->isBFloatTy()) // llvm11-nvptx cannot select bf16 store
     ty = f16_ty;
   for(size_t i = 0; i < idxs.size(); i += vec){
-    auto idx = idxs[i];
-    // pointer
+    indices_t idx = idxs[i];
+    // pointers
     Value *ptr = vals_[ptr_op][idx];
-    // vectorize
-    Type *v_ty = vec_ty(ty, vec);
-    ptr = bit_cast(ptr, v_ty->getPointerTo(1));
-    // value
-    Value* val = UndefValue::get(v_ty);
-    for(size_t ii = 0; ii < vec; ii++)
-      val = insert_elt(val, bit_cast(vals_.at(val_op)[idxs[i + ii]], ty), ii);
-    if(mx){
-      Value *msk = vals_[mx->get_mask_operand()][idx];
-      Instruction *no_op = intrinsic(Intrinsic::donothing, {}, {});
-      builder_->SetInsertPoint(no_op->getParent());
-      Instruction* dummy = builder_->CreateRet(nullptr);
-      Instruction *term = llvm::SplitBlockAndInsertIfThen(msk, no_op, false);
-      dummy->removeFromParent();
-      builder_->SetInsertPoint(term);
-      store(val, ptr);
-      builder_->SetInsertPoint(no_op);
+    size_t dtsize = std::max<int>(1, val_op->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8);
+    GetElementPtrInst *in_gep = dyn_cast<GetElementPtrInst>(ptr);
+    size_t in_off;
+    if(in_gep){
+        ConstantInt* cst = dyn_cast<ConstantInt>(in_gep->idx_begin());
+        in_off = cst ? cst->getValue().getSExtValue()*dtsize : 0;
+        ptr = cst ? in_gep->getPointerOperand() : in_gep;
     }
-    else
-      store(val, ptr);
+    else{
+        in_off = 0;
+    }
+    // mask
+    Value *pred = msk_op ? vals_[msk_op][idx] : builder_->getTrue();
+    size_t nbits = dtsize*8;
+    // pack sub-words (< 32/64bits) into words
+    // each load has width min(nbits*vec, 32/64)
+    // and there are (nbits * vec)/width of them
+    int max_word_width = std::max<int>(32, nbits);
+    int tot_width = nbits*vec;
+    int width = std::min(tot_width, max_word_width);
+    int n_words = std::max(1, tot_width / width);
+    // -----
+    // create inline asm string
+    // -----
+    std::ostringstream asm_oss;
+    asm_oss << "@$0"; // predicate
+    asm_oss << " st.global";
+    if (has_l2_evict_policy) asm_oss << ".L2::cache_hint";
+    if(n_words > 1)
+      asm_oss << ".v" << n_words; // vector width
+    asm_oss << ".b" << width; // word size
+    asm_oss << " [ $1 + " << in_off << "]";
+    asm_oss << " , {";
+    for(int i = 0; i < n_words; i++){ // return values
+      if(i > 0) asm_oss << ",";
+      asm_oss << "$" << 2 + i;
+    }
+    asm_oss << "}";
+    if (has_l2_evict_policy) asm_oss << ", $" << n_words + 2;
+    asm_oss << ";";
+    // ----
+    // create inline ASM signature
+    // ---
+    Type* val_arg_ty = IntegerType::get(*ctx_, width);
+    std::vector<Type*> arg_tys = {pred->getType(), ptr->getType()};
+    for(int ii = 0; ii < n_words; ii++)
+      arg_tys.push_back(val_arg_ty);
+    if (has_l2_evict_policy) 
+      arg_tys.push_back(i64_ty);
+    FunctionType *asm_ty = FunctionType::get(builder_->getVoidTy(), arg_tys, false);
+    // ---
+    // create inline ASM constraints
+    // ---
+    std::string asm_cstrt = "b,l";
+    for(int ii = 0; ii < n_words; ii++){
+      asm_cstrt += ",";
+      asm_cstrt += (width == 64) ? "l" : ((width == 32) ? "r" : "c");
+    }
+    if (has_l2_evict_policy) 
+      asm_cstrt += ",l";
+    // ---
+    // finally call inline ASM
+    // ---
+    InlineAsm *_asm = InlineAsm::get(asm_ty, asm_oss.str(), asm_cstrt, true);
+    std::vector<Value*> args = {pred, ptr};
+    for(unsigned int ii = 0; ii < n_words; ii++){
+      size_t n_subw = width / nbits;
+      Type *ty = cvt(val_op->get_type()->get_scalar_ty());
+      if(ty->isIntegerTy(1))
+        ty = builder_->getInt8Ty();
+      Value* curr = UndefValue::get(vec_ty(ty, n_subw));
+      for(unsigned int jj = 0; jj < n_subw; jj++){
+        Value* new_elt = vals_[val_op][idxs[i + ii*n_subw + jj]];
+        if(new_elt->getType()->isIntegerTy(1))
+          new_elt = builder_->CreateSExt(new_elt, builder_->getInt8Ty());
+        curr = builder_->CreateInsertElement(curr, new_elt, jj);
+      }
+      args.push_back(bit_cast(curr, val_arg_ty));
+    }
+    if (has_l2_evict_policy)
+      args.push_back(policies_.at(x->get_eviction_policy()));
+    call(_asm, args);
   }
 }
 void generator::visit_unmasked_store_inst(ir::unmasked_store_inst* x) {

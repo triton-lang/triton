@@ -142,9 +142,9 @@ public:
   value *create_or(value *lhs, value *rhs);
   // Input/Output
   value *create_load(value *arg, load_inst::CACHE_MODIFIER cache, load_inst::EVICTION_POLICY eviction, bool is_volatile);
-  value *create_store(value *ptr, value *val);
+  value *create_store(value *ptr, value *val, store_inst::EVICTION_POLICY eviction);
   value *create_masked_load(value *arg, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache, load_inst::EVICTION_POLICY eviction, bool is_volatile);
-  value *create_masked_store(value *ptr, value *val, value *mask);
+  value *create_masked_store(value *ptr, value *val, value *mask, store_inst::EVICTION_POLICY eviction);
   // Struct instructions
   value *create_insert_value(value* val, value *elt, size_t idx);
   value *create_extract_value(value* val, size_t idx);

@@ -647,6 +647,17 @@ def cast(input: tl.tensor,
 #                               Memory Operators
 # ===----------------------------------------------------------------------===//
 
+def _parse_eviction_policy(eviction_policy):
+    eviction = ir.EVICTION_POLICY.NORMAL  # default
+    if eviction_policy:
+        if eviction_policy == "evict_last":
+            eviction = ir.EVICTION_POLICY.EVICT_LAST
+        elif eviction_policy == "evict_first":
+            eviction = ir.EVICTION_POLICY.EVICT_FIRST
+        else:
+            raise ValueError(f"Eviction policy {eviction_policy} not supported")
+    return eviction
+
 
 def load(ptr: tl.tensor,
          mask: Optional[tl.tensor],
@@ -684,14 +695,7 @@ def load(ptr: tl.tensor,
             raise ValueError(f"Cache modifier {cache_modifier} not supported")
 
     # eviction policy
-    eviction = ir.EVICTION_POLICY.NORMAL  # default
-    if eviction_policy:
-        if eviction_policy == "evict_last":
-            eviction = ir.EVICTION_POLICY.EVICT_LAST
-        elif eviction_policy == "evict_first":
-            eviction = ir.EVICTION_POLICY.EVICT_FIRST
-        else:
-            raise ValueError(f"Eviction policy {eviction_policy} not supported")
+    eviction = _parse_eviction_policy(eviction_policy)
 
     if ptr.type.is_block():
         shape = ptr.type.get_block_shapes()
@@ -721,6 +725,7 @@ def load(ptr: tl.tensor,
 def store(ptr: tl.tensor,
           val: tl.tensor,
           mask: Optional[tl.tensor],
+          eviction_policy: str,
           builder: ir.builder) -> tl.tensor:
     if not ptr.type.scalar.is_ptr():
         raise ValueError("Pointer argument of store instruction is " + ptr.type.__repr__())
@@ -735,14 +740,15 @@ def store(ptr: tl.tensor,
         elt_ty_ptr = tl.int8
         ptr_ty = tl.pointer_type(elt_ty_ptr, ptr_ty.address_space)
         ptr = cast(ptr, ptr_ty, builder)
-
+    # eviction policy
+    eviction = _parse_eviction_policy(eviction_policy)
     # cast to target data-type
     val = cast(val, elt_ty, builder)
     if not mask:
-        return tl.tensor(builder.create_store(ptr.handle, val.handle), tl.void)
+        return tl.tensor(builder.create_store(ptr.handle, val.handle, eviction), tl.void)
     if not mask.type.scalar.is_bool():
         raise ValueError("Mask must have boolean scalar type")
-    return tl.tensor(builder.create_masked_store(ptr.handle, val.handle, mask.handle), tl.void)
+    return tl.tensor(builder.create_masked_store(ptr.handle, val.handle, mask.handle, eviction), tl.void)
 
 #########
 # atomic
