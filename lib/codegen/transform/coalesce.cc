@@ -138,7 +138,6 @@ void coalesce::run(ir::module &mod) {
       }
       if(in_contig.size() <= 1 || out_contig==in_contig)
         continue;
-      std::cout << "3!!" << std::endl;
       builder.set_insert_point_after(val_inst);
       auto new_val = builder.insert(ir::cvt_layout_inst::create(val_inst));
       x->replace_uses_of_with(val_inst, new_val);
