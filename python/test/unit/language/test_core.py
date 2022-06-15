@@ -734,9 +734,10 @@ reduce_configs1 = [
     for axis in [1]
 ]
 reduce_configs2 = [
-    (op, 'float32', shape, 1)
+    (op, 'float32', shape, axis)
     for op in ['min', 'max', 'argmin', 'argmax', 'sum']
     for shape in [(2, 32), (4, 32), (4, 128), (32, 64), (64, 128), (128, 256), (32, 1024)]
+    for axis in [0, 1]
 ]
 
 
@@ -749,7 +750,10 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
         range_n = tl.arange(0, BLOCK_N)
         x = tl.load(X + range_m[:, None] * BLOCK_N + range_n[None, :])
         z = GENERATE_TEST_HERE
-        tl.store(Z + range_m, z)
+        if AXIS == 1:
+            tl.store(Z + range_m, z)
+        else:
+            tl.store(Z + range_n, z)
 
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{op}(x, axis=AXIS)'})
     # input
@@ -763,7 +767,7 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
     # numpy result
     z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
     # triton result
-    z_tri = to_triton(numpy_random((shape[0],), dtype_str=z_dtype_str, rs=rs),
+    z_tri = to_triton(numpy_random((shape[1 - axis],), dtype_str=z_dtype_str, rs=rs),
                       device=device)
     kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)
     z_tri = to_numpy(z_tri)
@@ -774,8 +778,8 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
         if op == 'argmin' or op == 'argmax':
             # argmin and argmax can have multiple valid indices.
             # so instead we compare the values pointed by indices
-            z_ref_index = np.expand_dims(z_ref, axis=axis) 
-            z_tri_index = np.expand_dims(z_tri, axis=axis) 
+            z_ref_index = np.expand_dims(z_ref, axis=axis)
+            z_tri_index = np.expand_dims(z_tri, axis=axis)
             z_ref_value = np.take_along_axis(x, z_ref_index, axis=axis)
             z_tri_value = np.take_along_axis(x, z_tri_index, axis=axis)
             np.testing.assert_equal(z_ref_value, z_tri_value)
