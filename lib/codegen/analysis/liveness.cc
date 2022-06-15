@@ -27,7 +27,7 @@ void liveness::run(ir::module &mod) {
 
   std::map<ir::user*, std::set<shared_layout*>> live_out;
   std::map<ir::user*, std::set<shared_layout*>> live_in;
-  // while(true){
+  while(true){
     bool changed = false;
     ir::for_each_instruction_backward(mod, [&](ir::instruction* i){
       // gen
@@ -56,9 +56,9 @@ void liveness::run(ir::module &mod) {
       live_out[i] = new_live_out;
       live_in[i] = new_live_in;
     });
-  //   if(!changed)
-  //     break;
-  // }
+    if(!changed)
+      break;
+  }
 
 
   // Assigns index to each instruction
