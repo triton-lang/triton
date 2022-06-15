@@ -118,14 +118,15 @@ private:
   llvm::Attribute cvt(ir::attribute attr);
   void packed_type(ir::value* i);
   void forward_declare(ir::function* fn);
+  Value *cast_shared_layout_ptr(analysis::data_layout *layout, Type *ty);
 
-private:
- typedef std::function<void(
-     std::pair<Value *, Value *> &acc, std::function<Value *()> load_value_fn,
-     std::function<Value *()> load_index_fn, bool is_first)>
-     acc_fn_t;
+ private:
+  typedef std::function<void(
+      std::pair<Value *, Value *> &acc, std::function<Value *()> load_value_fn,
+      std::function<Value *()> load_index_fn, bool is_first)>
+      acc_fn_t;
 
-public:
+ public:
   generator(analysis::axes *a_axes,
             analysis::layouts *layouts,
             analysis::align *alignment,
