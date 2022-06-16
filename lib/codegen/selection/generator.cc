@@ -2201,6 +2201,9 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
       register_lds2(hb, n+1, k+1, inc, hb3, is_prefetch);
   };
 
+  // builder_->SetInsertPoint(CurrBB);
+
+
   // create mma & unpack result, m, n, k are offsets in mat
   auto call_mma = [&](unsigned m, unsigned n, unsigned k) {
       InlineAsm *mma_fn = InlineAsm::get(mma_ty, layout->get_ptx_instr() +
@@ -2917,8 +2920,8 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
         off_0 = add(mul(xor_(udiv(off_0, i32(s)), phase),i32(s)), urem(off_0, i32(s)));
         off_0 = mul(off_0 , i32(min_vec));
         Value* off = add(off_0, off_1);
-        builder_->SetInsertPoint(CurrBB);
         ptrs[key] = gep(shmems_.at(cts), {off});
+        builder_->SetInsertPoint(CurrBB);
       }
       int off_0 = id_0 / n_shared_0 * n_shared_0 * mts_0;
       int off_1 = id_1 / n_shared_1 * n_shared_1 * mts_1;
