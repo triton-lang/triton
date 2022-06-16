@@ -160,7 +160,7 @@ try:
 except:
     HAS_FLASH = False
 
-BATCH, N_HEADS, N_CTX, D_HEAD = 4, 64, 1024, 64
+BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
 # vary batch size for fixed heads / seq
 batch_bench = triton.testing.Benchmark(
     x_names=['BATCH'],
@@ -189,7 +189,7 @@ seq_bench = triton.testing.Benchmark(
 @triton.testing.perf_report([batch_bench, seq_bench])
 def bench_flash_attention(BATCH, H, N_CTX, D_MODEL, provider, dtype=torch.float16, device="cuda"):
     warmup = 25
-    rep = 75
+    rep = 500
     if provider == "triton":
         q = torch.randn((BATCH, H, N_CTX, D_MODEL), dtype=dtype, device="cuda", requires_grad=True)
         k = torch.randn((BATCH, H, D_MODEL, N_CTX), dtype=dtype, device="cuda", requires_grad=True)

@@ -2867,18 +2867,34 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
   //
   int mts_0 = in_layout->shape_per_cta(in_order[0]) / in_layout->contig_per_thread(in_order[0]);
   int mts_1 = in_layout->shape_per_cta(in_order[1]) / in_layout->contig_per_thread(in_order[1]);
+  if(in_layout->to_mma()){
+    mts_0 = 4 * in_layout->to_mma()->wpt(in_order[0]);
+    mts_1 = 8 * in_layout->to_mma()->wpt(in_order[1]);
+    std::cout << mts_0 << " " << mts_1 << std::endl;
+    per_phase = 1;
+    max_phase = 2;
+  }
 
   int in_ld = in_layout->get_shape()[in_order[0]] / mts_0;
-  int n_shared_1 = std::max<int>(per_phase*max_phase / mts_1, 1);
   int n_shared_0 = std::max<int>(in_vec    / out_vec, 1);
+  int n_shared_1 = std::max<int>(per_phase*max_phase / mts_1, 1);
+  if(in_layout->to_mma()){
+    n_shared_0 = 32;
+    n_shared_1 = 32;
+  }
 
   BasicBlock* CurrBB = builder_->GetInsertBlock();
   BasicBlock* FirstBB = &CurrBB->getParent()->getEntryBlock();
   auto shapes = cts->get_type()->get_block_shapes();
 
+  std::cout << "----" << std::endl;
+  std::cout << out_vec << " " << in_vec << " " << mts_0 << " " << mts_1 << " " << in_ld << std::endl;
+  std::cout << "----" << std::endl;
+
   // store to shared
   Value *current = nullptr;
   std::map<std::pair<int, int>, Value*> ptrs;
+  std::cout << idxs_.at(arg).size() << std::endl;
   for(int i = 0; i < idxs_.at(arg).size(); i++){
     auto idx = idxs_[arg][i];
     Value *in_value = vals_[arg][idx];
@@ -2890,9 +2906,7 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
       // input ptr info
       int id_0 = id % (in_ld/min_vec);
       int id_1 = id / (in_ld/min_vec);
-      int off_0 = id_0 / n_shared_0 * n_shared_0 * mts_0;
-      int off_1 = id_1 / n_shared_1 * n_shared_1 * mts_1;
-      int off = (off_1*shapes[in_order[0]] + off_0);
+      // std::cout << id_0 << " " << id_1 << " " << in_ld << " " << std::endl;
       std::pair<int, int> key = {id_1  % n_shared_1, id_0 % n_shared_0};
       if(ptrs.find(key) == ptrs.end()){
         if(FirstBB->getTerminator())
@@ -2911,6 +2925,9 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
         builder_->SetInsertPoint(CurrBB);
         ptrs[key] = gep(shmems_.at(cts), {off});
       }
+      int off_0 = id_0 / n_shared_0 * n_shared_0 * mts_0;
+      int off_1 = id_1 / n_shared_1 * n_shared_1 * mts_1;
+      int off = (off_1*shapes[in_order[0]] + off_0);
       Value* ptr = gep(ptrs[key], {i32(off)});
       ptr = bit_cast(ptr, current->getType()->getPointerTo(3));
       // asm

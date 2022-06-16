@@ -821,7 +821,7 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
 
     M, N, K = 128, 128, 128
     num_warps = 8
-    trans_a, trans_b = False, True
+    trans_a, trans_b = True, False
 
     # triton kernel
     @triton.jit
@@ -860,7 +860,7 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
         if CHAIN_DOT:
             # tl.store(Zs, z)
             # tl.debug_barrier()
-            z = tl.dot(z.to(tl.float16), tl.load(Ws))
+            z = tl.dot(z.to(tl.float16), tl.load(Ws), trans_a=TRANS_A)
         tl.store(Zs, z)
     # input
     rs = RandomState(17)
@@ -907,7 +907,7 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
         denom = np.sum(num, axis=-1, keepdims=True)
         z_ref = num / denom
     if epilogue == 'chain-dot':
-        z_ref = np.matmul(z_ref, w)
+        z_ref = np.matmul(z_ref.T if trans_a else z_ref, w)
     # compare
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
     # make sure ld/st are vectorized
