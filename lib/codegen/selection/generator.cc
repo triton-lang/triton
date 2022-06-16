@@ -2878,8 +2878,8 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
   int n_shared_0 = std::max<int>(in_vec    / out_vec, 1);
   int n_shared_1 = std::max<int>(per_phase*max_phase / mts_1, 1);
   if(in_layout->to_mma()){
-    n_shared_0 = 16;
-    n_shared_1 = 2;
+    n_shared_0 = 8;
+    n_shared_1 = 1;
   }
 
   BasicBlock* CurrBB = builder_->GetInsertBlock();
@@ -2922,6 +2922,10 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
       }
       int off_0 = id_0 / n_shared_0 * n_shared_0 * mts_0;
       int off_1 = id_1 / n_shared_1 * n_shared_1 * mts_1;
+      if(in_layout->to_mma()){
+        off_0 = id_0/n_shared_0*n_shared_0*8;
+        off_1 = id_1/n_shared_1*n_shared_1*8;
+      }
       int off = (off_1*shapes[in_order[0]] + off_0);
       Value* ptr = gep(ptrs[key], {i32(off)});
       ptr = bit_cast(ptr, current->getType()->getPointerTo(3));
