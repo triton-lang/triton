@@ -2870,31 +2870,26 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
   if(in_layout->to_mma()){
     mts_0 = 4 * in_layout->to_mma()->wpt(in_order[0]);
     mts_1 = 8 * in_layout->to_mma()->wpt(in_order[1]);
-    std::cout << mts_0 << " " << mts_1 << std::endl;
     per_phase = 1;
-    max_phase = 2;
+    max_phase = 8;
   }
 
   int in_ld = in_layout->get_shape()[in_order[0]] / mts_0;
   int n_shared_0 = std::max<int>(in_vec    / out_vec, 1);
   int n_shared_1 = std::max<int>(per_phase*max_phase / mts_1, 1);
   if(in_layout->to_mma()){
-    n_shared_0 = 32;
-    n_shared_1 = 32;
+    n_shared_0 = 16;
+    n_shared_1 = 2;
   }
 
   BasicBlock* CurrBB = builder_->GetInsertBlock();
   BasicBlock* FirstBB = &CurrBB->getParent()->getEntryBlock();
   auto shapes = cts->get_type()->get_block_shapes();
 
-  std::cout << "----" << std::endl;
-  std::cout << out_vec << " " << in_vec << " " << mts_0 << " " << mts_1 << " " << in_ld << std::endl;
-  std::cout << "----" << std::endl;
 
   // store to shared
   Value *current = nullptr;
   std::map<std::pair<int, int>, Value*> ptrs;
-  std::cout << idxs_.at(arg).size() << std::endl;
   for(int i = 0; i < idxs_.at(arg).size(); i++){
     auto idx = idxs_[arg][i];
     Value *in_value = vals_[arg][idx];
