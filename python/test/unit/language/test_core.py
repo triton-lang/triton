@@ -1216,3 +1216,37 @@ def test_num_warps_pow2():
     _kernel[(1,)](dst=dst, num_warps=1)
     _kernel[(1,)](dst=dst, num_warps=2)
     _kernel[(1,)](dst=dst, num_warps=4)
+
+
+@pytest.mark.parametrize("dtype_str", dtypes)
+def test_broadcast(dtype_str):
+    SIZE = 128
+    @triton.jit
+    def kernel(X, Y, SIZE: tl.constexpr):
+        x_offs = tl.arange(0, SIZE)[:]
+        y_offs = tl.arange(0, SIZE)[:, None] * SIZE + tl.arange(0, SIZE)[None, :]
+        # broadcast value
+        x = tl.load(X + x_offs)
+        # broadcast shape
+        GENERATE_TEST_HERE
+        
+    # inputs
+    kernel1 = patch_kernel(kernel, {'GENERATE_TEST_HERE': "tl.store(Y + y_offs, x[:])"})
+    kernel2 = patch_kernel(kernel, {'GENERATE_TEST_HERE': "tl.store(Y + y_offs, x[None, :])"})
+    rs = RandomState(17)
+    x = numpy_random(SIZE, dtype_str=dtype_str, rs=rs)
+    y = numpy_random((SIZE, SIZE), dtype_str=dtype_str)
+    x_tri = to_triton(x, device='cuda')
+    y_tri = to_triton(y, device='cuda')
+    # compute reference
+    y[:] = x[:]
+    # compute triton reference
+    try:
+        kernel1[(1,)](x_tri, y_tri, SIZE)
+    except triton.code_gen.CompilationError:
+        np.testing.assert_(True)
+    except:
+        np.testing.assert_(False)
+    kernel2[(1,)](x_tri, y_tri, SIZE)
+    y_tri = to_numpy(y_tri)   
+    np.testing.assert_equal(y, y_tri)
