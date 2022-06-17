@@ -3127,7 +3127,7 @@ void generator::visit_function(ir::function* fn) {
   if(tgt_->as_nvidia()->sm() >= 80)
   for(ir::load_inst::EVICTION_POLICY evict: {ir::load_inst::EVICT_FIRST, ir::load_inst::EVICT_LAST}){
     std::string policy = (evict == ir::load_inst::EVICT_FIRST) ? "evict_first" : "evict_last";
-    std::string asm_str = "createpolicy.fractional.L2::" + policy + ".b64 $0;";
+    std::string asm_str = "createpolicy.fractional.L2::" + policy + ".b64 $0, 1.0;";
     InlineAsm* iasm = InlineAsm::get(FunctionType::get(i64_ty, {}), asm_str, "=l", false);
     policies_[evict] = call(iasm);
   }
