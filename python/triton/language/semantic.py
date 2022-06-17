@@ -971,10 +971,14 @@ def reduce_impl(input: tl.tensor, axis: int, builder: ir.builder, name: str,
 
     # choose the right unsigned operation
     if scalar_ty.is_int_unsigned():
-        if INT_OP is ir.REDUCE_OP.MIN:
-            INT_OP = ir.REDUCE_OP.UMIN
-        elif INT_OP is ir.REDUCE_OP.MAX:
-            INT_OP = ir.REDUCE_OP.UMAX
+        int_op_to_unit = {
+            ir.REDUCE_OP.MIN: ir.REDUCE_OP.UMIN,
+            ir.REDUCE_OP.MAX: ir.REDUCE_OP.UMAX,
+            ir.REDUCE_OP.ARGMIN: ir.REDUCE_OP.ARGUMIN,
+            ir.REDUCE_OP.ARGMAX: ir.REDUCE_OP.ARGUMAX,
+        }
+        if INT_OP in int_op_to_unit:
+            INT_OP = int_op_to_unit[INT_OP]
 
     # get result type
     shape = input.type.shape
@@ -998,8 +1002,16 @@ def min(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
     return reduce_impl(input, axis, builder, "min", ir.REDUCE_OP.FMIN, ir.REDUCE_OP.MIN)
 
 
+def argmin(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
+    return reduce_impl(input, axis, builder, "argmin", ir.REDUCE_OP.ARGFMIN, ir.REDUCE_OP.ARGMIN)
+
+
 def max(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
     return reduce_impl(input, axis, builder, "max", ir.REDUCE_OP.FMAX, ir.REDUCE_OP.MAX)
+
+
+def argmax(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
+    return reduce_impl(input, axis, builder, "argmax", ir.REDUCE_OP.ARGFMAX, ir.REDUCE_OP.ARGMAX)
 
 
 def sum(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:

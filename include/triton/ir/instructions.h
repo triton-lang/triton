@@ -926,7 +926,9 @@ class reduce_inst: public builtin_inst {
 public:
   enum op_t{
     ADD, SUB, MAX, MIN, UMAX, UMIN,
+    ARGMAX, ARGMIN, ARGUMAX, ARGUMIN,
     FADD, FSUB, FMAX, FMIN,
+    ARGFMAX, ARGFMIN,
     XOR
   };
 
@@ -944,11 +946,18 @@ public:
   static instruction* create(value *arg, op_t op, unsigned axis, const std::string &name = "", instruction *next = nullptr);
   unsigned get_axis() const { return axis_; }
   op_t get_op() const { return op_; }
+  bool with_index() const {
+    return with_index_ops_.find(op_) != with_index_ops_.end();
+  }
 
 private:
-  unsigned axis_;
-  op_t op_;
+ const static inline std::set<op_t> with_index_ops_ = {
+     op_t::ARGMAX,  op_t::ARGMIN,  op_t::ARGUMAX,
+     op_t::ARGUMIN, op_t::ARGFMAX, op_t::ARGFMIN};
+ unsigned axis_;
+ op_t op_;
 };
+
 
 class select_inst: public builtin_inst {
 private:

@@ -690,7 +690,7 @@ def test_f16_to_f8_rounding():
 
 @pytest.mark.parametrize("op, dtype_str, shape",
                          [(op, dtype, shape)
-                          for op in ['min', 'max', 'sum']
+                          for op in ['min', 'max', 'argmin', 'argmax', 'sum']
                           for dtype in dtypes
                           for shape in [32, 64, 128, 512]])
 def test_reduce1d(op, dtype_str, shape, device='cuda'):
@@ -707,28 +707,37 @@ def test_reduce1d(op, dtype_str, shape, device='cuda'):
     # limit the range of integers so that the sum does not overflow
     x = numpy_random((shape,), dtype_str=dtype_str, rs=rs)
     x_tri = to_triton(x, device=device)
-    numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min}[op]
+    numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min,
+                'argmin': np.argmin, 'argmax': np.argmax}[op]
     # numpy result
-    z_ref = numpy_op(x).astype(getattr(np, dtype_str))
+    z_dtype_str = 'int32' if op == 'argmin' or op == 'argmax' else dtype_str
+    z_ref = numpy_op(x).astype(getattr(np, z_dtype_str))
     # triton result
-    z_tri = to_triton(numpy_random((1,), dtype_str=dtype_str, rs=rs), device=device)
+    z_tri = to_triton(numpy_random((1,), dtype_str=z_dtype_str, rs=rs), device=device)
     kernel[(1,)](x_tri, z_tri, BLOCK=shape)
+    z_tri = to_numpy(z_tri)
     # compare
     if op == 'sum':
-        np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
+        np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
     else:
-        np.testing.assert_equal(z_ref, to_numpy(z_tri))
+        if op == 'argmin' or op == 'argmax':
+            # argmin and argmax can have multiple valid indices.
+            # so instead we compare the values pointed by indices
+            np.testing.assert_equal(x[z_ref], x[z_tri])
+        else:
+            np.testing.assert_equal(z_ref, z_tri)
 
 
 reduce_configs1 = [
     (op, dtype, (1, 1024), axis) for dtype in dtypes
-    for op in ['min', 'max', 'sum']
+    for op in ['min', 'max', 'argmin', 'argmax', 'sum']
     for axis in [1]
 ]
 reduce_configs2 = [
-    (op, 'float32', shape, 1)
-    for op in ['min', 'max', 'sum']
+    (op, 'float32', shape, axis)
+    for op in ['min', 'max', 'argmin', 'argmax', 'sum']
     for shape in [(2, 32), (4, 32), (4, 128), (32, 64), (64, 128), (128, 256), (32, 1024)]
+    for axis in [0, 1]
 ]
 
 
@@ -741,7 +750,10 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
         range_n = tl.arange(0, BLOCK_N)
         x = tl.load(X + range_m[:, None] * BLOCK_N + range_n[None, :])
         z = GENERATE_TEST_HERE
-        tl.store(Z + range_m, z)
+        if AXIS == 1:
+            tl.store(Z + range_m, z)
+        else:
+            tl.store(Z + range_n, z)
 
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{op}(x, axis=AXIS)'})
     # input
@@ -749,17 +761,30 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
     # limit the range of integers so that the sum does not overflow
     x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
     x_tri = to_triton(x)
-    numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min}[op]
+    numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min,
+                'argmin': np.argmin, 'argmax': np.argmax}[op]
+    z_dtype_str = 'int32' if op == 'argmin' or op == 'argmax' else dtype_str
     # numpy result
-    z_ref = numpy_op(x, axis=axis).astype(getattr(np, dtype_str))
+    z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
     # triton result
-    z_tri = to_triton(numpy_random((shape[0],), dtype_str=dtype_str, rs=rs), device=device)
-    binary = kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)
+    z_tri = to_triton(numpy_random((shape[1 - axis],), dtype_str=z_dtype_str, rs=rs),
+                      device=device)
+    kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)
+    z_tri = to_numpy(z_tri)
     # compare
     if op == 'sum':
-        np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
+        np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
     else:
-        np.testing.assert_equal(z_ref, to_numpy(z_tri))
+        if op == 'argmin' or op == 'argmax':
+            # argmin and argmax can have multiple valid indices.
+            # so instead we compare the values pointed by indices
+            z_ref_index = np.expand_dims(z_ref, axis=axis)
+            z_tri_index = np.expand_dims(z_tri, axis=axis)
+            z_ref_value = np.take_along_axis(x, z_ref_index, axis=axis)
+            z_tri_value = np.take_along_axis(x, z_tri_index, axis=axis)
+            np.testing.assert_equal(z_ref_value, z_tri_value)
+        else:
+            np.testing.assert_equal(z_ref, z_tri)
 
 # ---------------
 # test permute
