@@ -1223,31 +1223,29 @@ def test_broadcast(dtype_str):
     SIZE = 128
 
     @triton.jit
-    def kernel(X, Y, SIZE: tl.constexpr):
-        x_offs = tl.arange(0, SIZE)[:]
+    def kernel(X, Y, SIZE1: tl.constexpr, SIZE2: tl.constexpr, SIZE: tl.constexpr):
+        x_offs = tl.arange(0, SIZE1)[:, None] * SIZE2 + tl.arange(0, SIZE2)[None, :]
         y_offs = tl.arange(0, SIZE)[:, None] * SIZE + tl.arange(0, SIZE)[None, :]
         # broadcast value
         x = tl.load(X + x_offs)
         # broadcast shape
-        GENERATE_TEST_HERE
+        tl.store(Y + y_offs, x)
 
     # inputs
-    kernel1 = patch_kernel(kernel, {'GENERATE_TEST_HERE': "tl.store(Y + y_offs, x[:])"})
-    kernel2 = patch_kernel(kernel, {'GENERATE_TEST_HERE': "tl.store(Y + y_offs, x[None, :])"})
     rs = RandomState(17)
-    x = numpy_random(SIZE, dtype_str=dtype_str, rs=rs)
+    x = numpy_random((SIZE, SIZE), dtype_str=dtype_str, rs=rs)
     y = numpy_random((SIZE, SIZE), dtype_str=dtype_str)
     x_tri = to_triton(x, device='cuda')
     y_tri = to_triton(y, device='cuda')
-    # compute reference
-    y[:] = x[:]
-    # compute triton reference
     try:
-        kernel1[(1,)](x_tri, y_tri, SIZE)
-    except triton.code_gen.CompilationError:
+        kernel[(1,)](x_tri, y_tri, SIZE // 2, SIZE * 2, SIZE)
+    except triton.code_gen.CompilationError as e:
         np.testing.assert_(True)
     except BaseException:
         np.testing.assert_(False)
-    kernel2[(1,)](x_tri, y_tri, SIZE)
+    # compute reference
+    y[:] = x[0, :]
+    # compute triton reference
+    kernel[(1,)](x_tri, y_tri, 1, SIZE, SIZE)
     y_tri = to_numpy(y_tri)
     np.testing.assert_equal(y, y_tri)
