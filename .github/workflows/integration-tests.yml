@@ -11,13 +11,22 @@ on:
 jobs:
 
   Integration-Tests:
-    
+
     runs-on: self-hosted
+    strategy:
+      matrix:
+        python-version: '3.6 - 3.9'
 
     steps:
 
       - name: Checkout
         uses: actions/checkout@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: ${{ matrix.python-version }}
+        run: python --version
 
       - name: Clear cache
         run: |
