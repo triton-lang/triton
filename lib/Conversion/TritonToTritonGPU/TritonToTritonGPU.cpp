@@ -342,9 +342,13 @@ public:
     //    mlir::scf::populateSCFStructurealTypeConversionsAndLegality(...) here?
     populateSCFPatterns(typeConverter, patterns);
 
-    if(failed(applyPartialConversion(mod, target, 
-                                      std::move(patterns))))
+    if(failed(applyPartialConversion(mod, target, std::move(patterns))))
         return signalPassFailure();
+
+    // update layouts
+    //  broadcast src => multicast, dst => broadcasted
+    if(failed(target.refineLayouts(mod, numWarps)))
+      return signalPassFailure();
   }
 };
 
