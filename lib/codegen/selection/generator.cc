@@ -2511,8 +2511,6 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, acc_fn_t do_acc, Va
     shuffle_width = 4;
     warps_per_inner = layout->to_mma()->wpt(1);
     col_per_thread = axes_.at(a_axes_->get(arg, 1)).values.size();
-
-    warp_i = axes_.at(a_axes_->get(arg, 0)).thread_id;
     warp_j = axes_.at(a_axes_->get(arg, 1)).thread_id;
   } 
   assert(warp_j != nullptr);
@@ -2531,7 +2529,8 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, acc_fn_t do_acc, Va
   Value* is_warp0 = icmp_eq(warp, i32(0));
   Value* is_thread0 = icmp_eq(thread, i32(0));
   Value* lane_j = urem(lane, i32(shuffle_width));
-  add_barrier();
+  if(warps_per_inner > 1)
+    add_barrier();
   // compute partial sum for each warp, and store to shared memory
   for(size_t i = 0; i < n_elts/col_per_thread; i++){
     std::pair<Value*, Value*> acc;
@@ -2553,13 +2552,21 @@ void generator::visit_reducend_inst_fast(ir::reduce_inst* x, acc_fn_t do_acc, Va
     // store partial result to shared memory
     auto x_idxs = idxs_[x][i];
     Value* x_idx = x_idxs.empty() ? builder_->getInt32(0) : x_idxs[0];
-    Value* st_off = add(mul(x_idx, i32(warps_per_inner)), warp_j);
-    call(st_shared, {icmp_eq(lane_j, i32(0)), gep(base, st_off), acc.first});
-    if (with_index) {
-      call(st_shared_index,
-           {icmp_eq(lane_j, i32(0)), gep(index_base, st_off), acc.second});
+    // single warp on the reduce dimension -- no need to use shmem
+    if(warps_per_inner==1){
+      vals_[x][idxs_[x][i]] = with_index ? acc.second : acc.first;
+    }
+    else{
+      Value* st_off = add(mul(x_idx, i32(warps_per_inner)), warp_j);
+      call(st_shared, {icmp_eq(lane_j, i32(0)), gep(base, st_off), acc.first});
+      if (with_index) {
+        call(st_shared_index,
+            {icmp_eq(lane_j, i32(0)), gep(index_base, st_off), acc.second});
+      }
     }
   }
+  if(warps_per_inner==1)
+    return;
   add_barrier();
   // at this point, partial accumulator synchronized in shared memory
   // Just need to reduce `warp_per_inner` numbers in shared memory
