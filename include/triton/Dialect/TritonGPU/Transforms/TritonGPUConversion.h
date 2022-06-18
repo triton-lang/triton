@@ -20,9 +20,8 @@ private:
 };
 
 class TritonGPUConversionTarget : public ConversionTarget {
-  TritonGPUTypeConverter &typeConverter;
 public:
-  explicit TritonGPUConversionTarget(MLIRContext &ctx, TritonGPUTypeConverter &typeConverter);
+  explicit TritonGPUConversionTarget(MLIRContext &ctx);
 };
 
 } // namespace mlir

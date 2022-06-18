@@ -73,8 +73,7 @@ public:
 };
 
 void populateArithmeticPatternsAndLegality(
-    TritonGPUTypeConverter& typeConverter, RewritePatternSet &patterns,
-    TritonGPUConversionTarget &target){
+    RewritePatternSet &patterns, TritonGPUConversionTarget &target){
   // --------------
   // Add legality and rewrite pattern rules for operations
   // from the Arithmetic dialect. The basic premise is that
@@ -128,7 +127,7 @@ void populateArithmeticPatternsAndLegality(
                // Cast Ops
                ArithGenericPattern<arith::TruncIOp>,
                ArithGenericPattern<arith::TruncFOp>
-              >(typeConverter, context);
+              >(context);
 }
 
 //
@@ -235,9 +234,7 @@ struct TritonReducePattern : public OpConversionPattern<triton::ReduceOp> {
   }
 };
 
-void populateTritonPatterns(
-  TritonGPUTypeConverter& typeConverter, RewritePatternSet &patterns
-) {
+void populateTritonPatterns(RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
   patterns.add<TritonGenericPattern<triton::ReshapeOp>,
                TritonGenericPattern<triton::BroadcastOp>,
@@ -247,7 +244,7 @@ void populateTritonPatterns(
                TritonDotPattern,
                TritonLoadPattern,
                TritonStorePattern
-              >(typeConverter, context);
+              >(context);
 }
 
 //
@@ -310,12 +307,9 @@ struct SCFYieldPattern : public OpConversionPattern<scf::YieldOp> {
   }
 };
 
-void populateSCFPatterns(
-  TritonGPUTypeConverter &typeConverter, RewritePatternSet &patterns
-) {
+void populateSCFPatterns(RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
-  patterns.add<SCFYieldPattern, SCFForPattern
-              >(typeConverter, context);
+  patterns.add<SCFYieldPattern, SCFForPattern>(context);
 }
 
 
@@ -330,17 +324,16 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
     int numThreads = numWarps * 32;
-    // type converter
-    TritonGPUTypeConverter typeConverter(context, numThreads);
-    TritonGPUConversionTarget target(*context, typeConverter);
+
+    TritonGPUConversionTarget target(*context);
     // rewrite patterns
     RewritePatternSet patterns(context);
     // add rules
-    populateArithmeticPatternsAndLegality(typeConverter, patterns, target);
-    populateTritonPatterns(typeConverter, patterns);
+    populateArithmeticPatternsAndLegality(patterns, target);
+    populateTritonPatterns(patterns);
     // TODO: can we use 
     //    mlir::scf::populateSCFStructurealTypeConversionsAndLegality(...) here?
-    populateSCFPatterns(typeConverter, patterns);
+    populateSCFPatterns(patterns);
 
     if(failed(applyPartialConversion(mod, target, 
                                       std::move(patterns))))
