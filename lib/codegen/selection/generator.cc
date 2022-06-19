@@ -767,7 +767,7 @@ void generator::visit_load_inst(ir::load_inst* x){
     is_mma_first_row = (ord.size() >= 1) && layout->to_mma() && 
                        (a_axes_->get(x, ord[0]) == layouts_->get(x)->get_axis(1));
     if(is_mma_first_row)
-      vec = 2;
+      vec = std::min<size_t>(2, aln);
   }
   // code generation
   auto idxs = idxs_.at(x);
@@ -957,7 +957,7 @@ void generator::visit_store_inst(ir::store_inst * x){
     }
     vec  = std::min(nts, aln);
     if(x->get_eviction_policy() != ir::store_inst::EVICTION_POLICY::NORMAL)
-      vec = 2;
+      vec = std::min<size_t>(2, aln);
   }
   bool has_l2_evict_policy = (x->get_eviction_policy() != ir::load_inst::NORMAL) && tgt_->as_nvidia()->sm() >= 80;
   auto idxs    = idxs_.at(val_op);
