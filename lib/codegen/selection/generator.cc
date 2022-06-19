@@ -1200,11 +1200,20 @@ void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
 
   // vector size
   int vec = 1;
+  Value *mask = builder_->getInt1(true);
   if(atom->get_type()->is_block_ty()){
     int ld = ords_.at(ptr)[0];
     unsigned alignment = alignment_->get(ptr, ld);
     vec = std::min<int>(layouts_->get(ptr)->to_scanline()->nts(ld), alignment);
     vec = std::min(vec, val->get_type()->get_tile_element_ty()->is_fp16_ty() ? 2 : 1);
+    // Since the scanline layout may assign the same idx for multiple thread.
+    // We have to avoid duplicate atomic operations
+    auto *val_layout = layouts_->get(val)->to_scanline();
+    auto &shape = val_layout->get_shape();
+    auto numel = 1;
+    std::for_each(shape.begin(), shape.end(), [&](auto dim) { numel *= dim; });
+    Value *thread_id = tgt_->get_local_id(mod_, *builder_, 0);
+    mask = icmp_ult(mul(thread_id, i32(idxs_.at(val).size())), i32(numel));
   }
 
   for(int i = 0; i < idxs_.at(val).size(); i += vec){
@@ -1214,6 +1223,7 @@ void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
       rmw_val = insert_elt(rmw_val, vals_[val][idxs_[val][i+ii]], ii);
     Value *rmw_ptr = vals_[ptr][idx];
     Value *rmw_msk = vals_[msk][idx];
+    rmw_msk = and_(rmw_msk, mask);
     if(vec == 1)
       rmw_val = extract_elt(rmw_val, i32(0));
     Type* ty = rmw_val->getType();
