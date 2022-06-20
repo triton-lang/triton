@@ -119,7 +119,7 @@ void liveness::run(ir::module &mod) {
     shared_layout* layout = x.second->to_shared();
     if(!layout)
       continue;
-    std::cout << intervals_[layout].start << " " << intervals_[layout].end << std::endl;
+    // std::cout << intervals_[layout].start << " " << intervals_[layout].end << std::endl;
   }
 
   
