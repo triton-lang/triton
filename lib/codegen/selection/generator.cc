@@ -2074,12 +2074,12 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   // left-hand-side values
   std::map<std::pair<unsigned, unsigned>, Value*> ha;
   std::map<std::pair<unsigned, unsigned>, Value*> hb;
-  // if true, this will move pointer declarations to the entry basic block
 
   BasicBlock* CurrBB = builder_->GetInsertBlock();
   BasicBlock* FirstBB = &CurrBB->getParent()->getEntryBlock();
-  bool licm_ptrs = false;
-  licm_ptrs = (FirstBB != CurrBB);
+
+  // if true, this will move pointer declarations to the entry basic block
+  bool licm_ptrs = (FirstBB != CurrBB);
   if(licm_ptrs)
     builder_->SetInsertPoint(FirstBB->getTerminator());
 
@@ -3015,8 +3015,8 @@ void generator::visit_copy_to_shared_inst(ir::copy_to_shared_inst* cts) {
         off_0 = add(mul(xor_(udiv(off_0, i32(s)), phase),i32(s)), urem(off_0, i32(s)));
         off_0 = mul(off_0 , i32(min_vec));
         Value* off = add(off_0, off_1);
-        ptrs[key] = gep(shmems_.at(cts), {off});
         builder_->SetInsertPoint(CurrBB);
+        ptrs[key] = gep(shmems_.at(cts), {off});
       }
       int off_0 = id_0 / n_shared_0 * n_shared_0 * mts_0;
       int off_1 = id_1 / n_shared_1 * n_shared_1 * mts_1;
