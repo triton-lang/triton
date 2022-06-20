@@ -485,7 +485,7 @@ def broadcast_impl_shape(input: tl.tensor,
     for i in range(len(src_shape)):
         if shape[i] != src_shape[i] and src_shape[i] != 1:
             raise ValueError(f"Cannot broadcast, the expanded size of the tensor ({shape[i]})"
-                             f"must match the existing size ({src_shape[1]}) at non-singleton dimension"
+                             f" must match the existing size ({src_shape[1]}) at non-singleton dimension"
                              f" {i}: {src_shape}, {shape}")
     ret_ty = tl.block_type(input.type.scalar, shape)
     return tl.tensor(builder.create_broadcast(input.handle, shape), ret_ty)

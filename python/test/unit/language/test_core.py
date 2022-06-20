@@ -385,6 +385,8 @@ def test_index1d(expr, dtype_str, device='cuda'):
     rank_y = expr.count(',') + 1
     shape_x = [32 for _ in range(rank_x)]
     shape_z = [32 for _ in range(rank_y)]
+    shape_z_rank_mismatch = [32 for _ in range(rank_y)]
+    shape_z_dim_mismatch = [64 for _ in range(rank_y)]
 
     # Triton kernel
     @triton.jit
@@ -395,12 +397,17 @@ def test_index1d(expr, dtype_str, device='cuda'):
         z = GENERATE_TEST_HERE
         tl.store(Z_PTR_EXPR, z)
 
-    to_replace = {
-        'X_PTR_EXPR': make_ptr_str('X', shape_x),
-        'Z_PTR_EXPR': make_ptr_str('Z', shape_z),
-        'GENERATE_TEST_HERE': expr,
-    }
-    kernel = patch_kernel(kernel, to_replace)
+    def generate_kernel(shape_x, shape_z):
+        to_replace = {
+            'X_PTR_EXPR': make_ptr_str('X', shape_x),
+            'Z_PTR_EXPR': make_ptr_str('Z', shape_z),
+            'GENERATE_TEST_HERE': expr,
+        }
+        return patch_kernel(kernel, to_replace)
+
+    kernel_match = generate_kernel(shape_x, shape_z)
+    kernel_dim_mismatch = generate_kernel(shape_x, shape_z_dim_mismatch)
+    kernel_rank_mismatch = generate_kernel(shape_x, shape_z_rank_mismatch)
 
     # torch result
     x = numpy_random(shape_x, dtype_str=dtype_str)
@@ -409,9 +416,20 @@ def test_index1d(expr, dtype_str, device='cuda'):
     # triton result
     z_tri = to_triton(np.empty_like(z_ref), device=device)
     x_tri = to_triton(x)
-    kernel[(1, )](z_tri, x_tri, num_warps=1, SIZE=shape_x[0])
+    kernel_match[(1, )](z_tri, x_tri, num_warps=1, SIZE=shape_x[0])
     # compare
     assert (z_ref == to_numpy(z_tri)).all()
+
+    def catch_compilation_error(kernel):
+        try:
+            kernel[(1, )](z_tri, x_tri, num_warps=1, SIZE=shape_x[0])
+        except triton.code_gen.CompilationError as e:
+            np.testing.assert_(True)
+        except BaseException:
+            np.testing.assert_(False)
+
+    catch_compilation_error(kernel_dim_mismatch)
+    catch_compilation_error(kernel_rank_mismatch)
 
 
 # ---------------
@@ -1216,36 +1234,3 @@ def test_num_warps_pow2():
     _kernel[(1,)](dst=dst, num_warps=1)
     _kernel[(1,)](dst=dst, num_warps=2)
     _kernel[(1,)](dst=dst, num_warps=4)
-
-
-@pytest.mark.parametrize("dtype_str", dtypes)
-def test_broadcast(dtype_str):
-    SIZE = 128
-
-    @triton.jit
-    def kernel(X, Y, SIZE1: tl.constexpr, SIZE2: tl.constexpr, SIZE: tl.constexpr):
-        x_offs = tl.arange(0, SIZE1)[:, None] * SIZE2 + tl.arange(0, SIZE2)[None, :]
-        y_offs = tl.arange(0, SIZE)[:, None] * SIZE + tl.arange(0, SIZE)[None, :]
-        # broadcast value
-        x = tl.load(X + x_offs)
-        # broadcast shape
-        tl.store(Y + y_offs, x)
-
-    # inputs
-    rs = RandomState(17)
-    x = numpy_random((SIZE, SIZE), dtype_str=dtype_str, rs=rs)
-    y = numpy_random((SIZE, SIZE), dtype_str=dtype_str)
-    x_tri = to_triton(x, device='cuda')
-    y_tri = to_triton(y, device='cuda')
-    try:
-        kernel[(1,)](x_tri, y_tri, SIZE // 2, SIZE * 2, SIZE)
-    except triton.code_gen.CompilationError as e:
-        np.testing.assert_(True)
-    except BaseException:
-        np.testing.assert_(False)
-    # compute reference
-    y[:] = x[0, :]
-    # compute triton reference
-    kernel[(1,)](x_tri, y_tri, 1, SIZE, SIZE)
-    y_tri = to_numpy(y_tri)
-    np.testing.assert_equal(y, y_tri)
