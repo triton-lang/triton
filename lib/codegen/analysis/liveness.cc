@@ -14,13 +14,14 @@ namespace analysis{
 void liveness::run(ir::module &mod) {
   intervals_.clear();
 
-  std::map<ir::value*, shared_layout*> layouts_map;
+  std::map<ir::value*, std::set<shared_layout*>> layouts_map;
   for(auto &x: layouts_->get_all()){
     shared_layout* layout = x.second->to_shared();
     if(!layout)
       continue;
-    for(ir::value* v:layout->get_values())
-      layouts_map[v] = layout;
+    for(ir::value* v:layout->get_values()){
+      layouts_map[v].insert(layout);
+    }
   }
 
 
@@ -33,12 +34,18 @@ void liveness::run(ir::module &mod) {
       // gen
       std::set<shared_layout*> gen;
       for(ir::value* v: i->ops())
-      if(layouts_map.find(v) != layouts_map.end())
-        gen.insert(layouts_map.at(v));
+      for(shared_layout* layout: layouts_map[v])
+        gen.insert(layout);
       // kill
       std::set<shared_layout*> kill;
-      if(layouts_map.find(i) != layouts_map.end())
-        kill.insert(layouts_map.at(i));
+      for(shared_layout* layout: layouts_map[i])
+        kill.insert(layout);
+      // temporaries are handled separately
+      if(layouts_->has_tmp(i)){
+        gen.insert(layouts_->get(layouts_->tmp(i))->to_shared());
+        kill.insert(layouts_->get(layouts_->tmp(i))->to_shared());
+      }
+
       // new sets
       std::set<shared_layout*> live_out_minus_kill;
       std::set_difference(live_out[i].begin(), live_out[i].end(), kill.begin(), kill.end(), 
@@ -76,35 +83,6 @@ void liveness::run(ir::module &mod) {
       intervals_[layout] = segment{INT32_MAX, 0};
   }
 
-
-
-
-  // // create live intervals
-  // for(auto &x: layouts_->get_all()) {
-  //   shared_layout* layout = x.second->to_shared();
-  //   if(!layout)
-  //     continue;
-  //   // users
-  //   std::set<ir::user*> users;
-  //   for(ir::value *v: layout->get_values()){
-  //     for(ir::user *u: v->get_users())
-  //       users.insert(u);
-  //   } 
-  //   // compute intervals
-  //   unsigned start = INT32_MAX;
-  //   for(ir::value *v: layout->get_values())
-  //     if(indices.find(v) != indices.end())
-  //       start = std::min(start, indices.at(v));
-  //   unsigned end = 0;
-  //   for(ir::user *u: users)
-  //     if(indices.find(u) != indices.end())
-  //       end = std::max(end, indices.at(u));
-  //   if(end == 0)
-  //     end = start + 1;
-  //   intervals_[layout] = segment{start, end};
-  // }
-
-
   for(auto& x: live_out)
   for(shared_layout* layout: x.second)
     intervals_[layout].start = std::min<int>(intervals_[layout].start, indices[x.first]);
@@ -119,7 +97,6 @@ void liveness::run(ir::module &mod) {
     shared_layout* layout = x.second->to_shared();
     if(!layout)
       continue;
-    // std::cout << intervals_[layout].start << " " << intervals_[layout].end << std::endl;
   }
 
   
