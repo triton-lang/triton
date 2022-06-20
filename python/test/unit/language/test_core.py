@@ -385,7 +385,7 @@ def test_index1d(expr, dtype_str, device='cuda'):
     rank_y = expr.count(',') + 1
     shape_x = [32 for _ in range(rank_x)]
     shape_z = [32 for _ in range(rank_y)]
-    shape_z_rank_mismatch = [32 for _ in range(rank_y)]
+    shape_z_rank_mismatch = [32 for _ in range(rank_y + 1)]
     shape_z_dim_mismatch = [64 for _ in range(rank_y)]
 
     # Triton kernel
