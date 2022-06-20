@@ -2077,8 +2077,8 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
 
   BasicBlock* CurrBB = builder_->GetInsertBlock();
   BasicBlock* FirstBB = &CurrBB->getParent()->getEntryBlock();
-  // if(FirstBB != CurrBB)
-  //   builder_->SetInsertPoint(FirstBB->getTerminator());
+  if(FirstBB != CurrBB)
+    builder_->SetInsertPoint(FirstBB->getTerminator());
 
   Value* thread = tgt_->get_local_id(mod_, *builder_, 0);
   Value *lane   = urem(thread, i32(32));
@@ -2111,6 +2111,8 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   analysis::shared_layout* layout_a = layouts_->get(C->get_operand(0))->to_shared();
   bool is_a_shared = layout_a != nullptr;
   if(is_a_shared) {
+    if(FirstBB != CurrBB)
+      builder_->SetInsertPoint(FirstBB->getTerminator());
     const int per_phase_a = swizzle_->get_per_phase(layout_a);
     const int max_phase_a = swizzle_->get_max_phase(layout_a);
     mma16816_smem_loader a_loader(layout->wpt(0), ord_a, /*k_order*/1, shape_a, 
@@ -2118,12 +2120,13 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
                                   per_phase_a, max_phase_a, dtsize_a, builder_, add, mul, gep);
     std::vector<Value*> off_a = a_loader.compute_offs(warp_m, lane);
     int num_ptr_a = a_loader.get_num_ptr();
+    builder_->SetInsertPoint(CurrBB);
     // pointers
     std::vector<Value*> ptrs_a(num_ptr_a);
     for(int i = 0; i < num_ptr_a; i++)
       ptrs_a[i] = bit_cast(gep(shmems_[A], {off_a[i]}), smem_ptr_ty);
     // loading function
-    load_a = [&,a_loader,ptrs_a](int m, int k, int inc, bool is_prefetch) mutable {
+    load_a = [&,a_loader,ptrs_a,off_a](int m, int k, int inc, bool is_prefetch) mutable {
       auto [ha0, ha1, ha2, ha3] = a_loader.load_x4(m, k, inc, is_prefetch, phiA, shared_pre_ptr_[layout_a],
                                                   shared_next_ptr_[layout_a], off_a, ptrs_a, 
                                                   ldmatrix_ty, smem_ptr_ty, prefetch_latch_to_bb_);
@@ -2162,6 +2165,8 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
     };
   }
 
+  if(FirstBB != CurrBB)
+    builder_->SetInsertPoint(FirstBB->getTerminator());
 
   // | -> n (col-major)
   // v (s0_0(0), | (stride: wpt(1)) | s1_0(2)  | *num_rep_n
@@ -2181,10 +2186,12 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
     // std::swap(ord_b[0], ord_b[1]);
     // std::swap(shape_b[0], shape_b[1]);
   // }
+
   mma16816_smem_loader b_loader(layout->wpt(1), ord_b, k_order_b, shape_b,
                                 mma_instr_b, mat_shape_b,
                                 per_phase_b, max_phase_b, dtsize_b, builder_, add, mul, gep);
   std::vector<Value*> off_b = b_loader.compute_offs(warp_n, lane);
+  builder_->SetInsertPoint(CurrBB);
   // pointers
   int num_ptr_b = b_loader.get_num_ptr();
   std::vector<Value*> ptrs_b(num_ptr_b);
@@ -2202,7 +2209,6 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
       register_lds2(hb, n+1, k+1, inc, hb3, is_prefetch);
   };
 
-  // builder_->SetInsertPoint(CurrBB);
 
 
   // create mma & unpack result, m, n, k are offsets in mat
