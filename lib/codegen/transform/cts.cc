@@ -13,20 +13,8 @@ namespace transform{
 
 
 bool cts::is_shmem_op(ir::instruction* i, int op) {
-  if(i->get_id() == ir::INST_DOT){
-    // std::cout << i << " " << i->get_operand(0) << " " << layouts_->has(i->get_operand(0)) << " " << layouts_->has(i->get_operand(1)) << std::endl;
-    // FP16 MMA layout can be kept in register for the LHS
-    // Anything else has to be in shared memory
-    // ir::value* lhs = i->get_operand(0);
-    // if(op == 0){
-      // i->print(std::cout);
-    //   std::cout << layouts_->has(lhs) << std::endl;
-    //   analysis::mma_layout* mma_lhs = layouts_->get(lhs)->to_mma();
-    //   bool is_lhs_shmem = !(mma_lhs && lhs->get_type()->get_primitive_size_in_bits() == 16);
-    //   // return is_lhs_shmem;
-    // }
+  if(i->get_id() == ir::INST_DOT)
     return op == 0 || op == 1;
-  }
   if(i->get_id() == ir::INST_COPY_FROM_SHARED)
     return op==0;
   if(i->get_id() == ir::INST_TRANS)
@@ -94,19 +82,11 @@ void cts::run(ir::module &mod) {
       ir::type* ty = lhs->get_type()->get_scalar_ty();
       analysis::mma_layout* mma_lhs = layouts_->get(lhs)->to_mma();
       // TODO: V100
-      bool is_lhs_shmem = !(mma_lhs && ty->get_primitive_size_in_bits() == 16 && !dot->is_trans_a());
+      bool is_lhs_shmem = !(mma_lhs && has_sm80_ && ty->get_primitive_size_in_bits() == 16 && !dot->is_trans_a());
       if(is_lhs_shmem)
         shmem_ops.insert(lhs);
       shmem_ops.insert(i->get_operand(1));
     }
-      // std::cout << i << " " << i->get_operand(0) << " " << layouts_->has(i->get_operand(0)) << " " << layouts_->has(i->get_operand(1)) << std::endl;
-      // FP16 MMA layout can be kept in register for the LHS
-      // Anything else has to be in shared memory
-      // if(op == 0){
-        // i->print(std::cout);
-      //   std::cout << layouts_->has(lhs) << std::endl;
-      //   // return is_lhs_shmem;
-      // }
     if(i->get_id() == ir::INST_COPY_FROM_SHARED)
       shmem_ops.insert(i->get_operand(0));
     if(i->get_id() == ir::INST_TRANS)

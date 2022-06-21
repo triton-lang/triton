@@ -647,6 +647,7 @@ def cast(input: tl.tensor,
 #                               Memory Operators
 # ===----------------------------------------------------------------------===//
 
+
 def _parse_eviction_policy(eviction_policy):
     eviction = ir.EVICTION_POLICY.NORMAL  # default
     if eviction_policy:
@@ -922,8 +923,8 @@ def dot(a: tl.tensor,
     else:
         _0 = builder.get_float32(0)
         ret_scalar_ty = tl.float32
-    M = a.type.shape[in_a^1]
-    N = b.type.shape[in_b^1]
+    M = a.type.shape[in_a ^ 1]
+    N = b.type.shape[in_b ^ 1]
     _0 = builder.create_splat(_0, [M, N])
     ret_ty = tl.block_type(ret_scalar_ty, [M, N])
     ret = builder.create_dot(a.handle, b.handle, _0, trans_a, trans_b, allow_tf32)

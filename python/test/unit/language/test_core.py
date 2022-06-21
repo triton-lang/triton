@@ -913,8 +913,8 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
                          ADD_MATRIX=epilogue == 'add-matrix',
                          ADD_ROWS=epilogue == 'add-rows',
                          ADD_COLS=epilogue == 'add-cols',
-                         DO_SOFTMAX = epilogue=='softmax',
-                         CHAIN_DOT = epilogue=='chain-dot',
+                         DO_SOFTMAX=epilogue == 'softmax',
+                         CHAIN_DOT=epilogue == 'chain-dot',
                          ALLOW_TF32=allow_tf32,
                          num_warps=num_warps)
     # torch result
@@ -924,9 +924,9 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
     if epilogue == 'add-matrix':
         z_ref += z
     if epilogue == 'add-rows':
-        z_ref += z[:,0][:, None]
+        z_ref += z[:, 0][:, None]
     if epilogue == 'add-cols':
-        z_ref += z[0,:][None, :]
+        z_ref += z[0, :][None, :]
     if epilogue == 'softmax':
         num = np.exp(z_ref - np.max(z_ref, axis=-1, keepdims=True))
         denom = np.sum(num, axis=-1, keepdims=True)

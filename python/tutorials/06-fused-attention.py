@@ -1,7 +1,8 @@
+import pytest
 import torch
+
 import triton
 import triton.language as tl
-import pytest
 
 # fmt: off
 
@@ -31,13 +32,13 @@ def _fwd_kernel(
     q_ptrs = Q + (off_z * stride_qz \
                 + off_h * stride_qh \
                 + offs_qm[:, None] * stride_qm \
-                + offs_qk[None, :] * stride_qk)
+                + offs_qk[None,:] * stride_qk)
     # initialize pointers to K
     offs_kk = tl.arange(0, BLOCK_DMODEL)
     offs_kn = start_kn * BLOCK_N + tl.arange(0, BLOCK_N)
     k_ptrs = K + (off_z * stride_kz \
                 + off_h * stride_kh \
-                + offs_kn[None, :] * stride_kn \
+                + offs_kn[None,:] * stride_kn \
                 + offs_kk[:, None] * stride_kk)
     # initialize pointers to V
     off_vk = tl.arange(0, BLOCK_N)
@@ -45,7 +46,7 @@ def _fwd_kernel(
     v_ptrs = V +  off_z * stride_vz \
                 + off_h * stride_vh \
                 + off_vk[:, None] * stride_vk \
-                + off_vn[None, :] * stride_vn
+                + off_vn[None,:] * stride_vn
     # initialize pointer to m and l
     t_ptrs = TMP + off_hz*N_CTX + offs_qm
 
@@ -59,7 +60,7 @@ def _fwd_kernel(
         # -- compute qk ----
         k = tl.load(k_ptrs)
         qk = tl.dot(q, k)
-        qk = tl.where(offs_qm[:, None] >= (start_n*BLOCK_N + offs_kn[None, :]), qk, float("-inf"))
+        qk = tl.where(offs_qm[:, None] >= (start_n*BLOCK_N + offs_kn[None,:]), qk, float("-inf"))
         # -- compute m_ij, p, l_ij
         m_ij = tl.max(qk, 1)
         p = tl.exp(qk - m_ij[:, None])
@@ -84,7 +85,7 @@ def _fwd_kernel(
         v_ptrs += BLOCK_N*stride_vk
         l_i = l_i_new
         m_i = m_i_new
-    
+
     # write back l and m
     l_ptrs = L   + off_hz*N_CTX + offs_qm
     m_ptrs = M   + off_hz*N_CTX + offs_qm
@@ -96,7 +97,7 @@ def _fwd_kernel(
     out_ptrs = Out + off_z * stride_oz \
                  + off_h * stride_oh \
                  + offs_om[:, None] * stride_om \
-                 + offs_on[None, :] * stride_on
+                 + offs_on[None,:] * stride_on
     tl.store(out_ptrs, acc)
 
 
@@ -130,7 +131,7 @@ class _attention(torch.autograd.Function):
         ctx.BLOCK = BLOCK
         ctx.grid = grid
         return o
-    
+
 attention = _attention.apply
 
 @pytest.mark.parametrize('Z, H, N_CTX, D_MODEL', [(2, 3, 1024, 64)])
@@ -146,7 +147,7 @@ def test_op(Z, H, N_CTX, D_MODEL, dtype=torch.float16):
     ref_qk = torch.matmul(q, k)
     for z in range(Z):
         for h in range(H):
-            ref_qk[:,:,M==0] = float("-inf")
+            ref_qk[:,:, M==0] = float("-inf")
     ref_qk = torch.softmax(ref_qk, dim=-1)
     ref_out = torch.matmul(ref_qk, v)
     # compare

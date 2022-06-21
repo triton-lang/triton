@@ -31,15 +31,15 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(ir::module &ir, llvm::LLVMC
   std::string name = ir.get_function_list()[0]->get_name();
   std::unique_ptr<llvm::Module> llvm(new llvm::Module(name, ctx));
   // optimizations
-  bool cts_use_async = target->as_nvidia() && target->as_nvidia()->sm() >= 80;
+  bool has_sm80 = target->as_nvidia() && target->as_nvidia()->sm() >= 80;
   // create passes
   codegen::analysis::align align;
   codegen::transform::inliner inliner;
   codegen::analysis::axes axes;
-  codegen::transform::pipeline pipeline(cts_use_async, num_stages);
+  codegen::transform::pipeline pipeline(has_sm80, num_stages);
   codegen::transform::disassociate disassociate;
   codegen::analysis::layouts layouts(&axes, &align, num_warps, target);
-  codegen::transform::cts cts(&layouts, cts_use_async);
+  codegen::transform::cts cts(&layouts, has_sm80);
   codegen::analysis::liveness liveness(&layouts);
   codegen::analysis::swizzle swizzle(&layouts, target);
   codegen::analysis::allocation allocation(&liveness);

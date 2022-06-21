@@ -29,11 +29,11 @@ private:
 void add_copy(ir::instruction *parent, ir::value *x, ir::builder &builder, bool to_shared, std::map<ir::value*,ir::value*>& copies);
 
 public:
-  cts(analysis::layouts* layouts, bool use_async = false): layouts_(layouts), use_async_(use_async) {}
+  cts(analysis::layouts* layouts, bool has_sm80 = false): layouts_(layouts), has_sm80_(has_sm80) {}
   void run(ir::module &mod);
 
 private:
-  bool use_async_;
+  bool has_sm80_;
   analysis::layouts* layouts_;
 };
 
