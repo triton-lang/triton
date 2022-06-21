@@ -18,60 +18,48 @@ def _fwd_kernel(
     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
-    off_hz = tl.program_id(0)
-    off_z = off_hz // H
-    off_h = off_hz % H
-    start_qm = tl.num_programs(1) - 1 - tl.program_id(1)
-    start_kn = 0
-    # initialize pointers to Q
-    offs_qm = start_qm * BLOCK_M + tl.arange(0, BLOCK_M)
-    offs_qk = tl.arange(0, BLOCK_DMODEL)
-    q_ptrs = Q + (off_z * stride_qz
-                  + off_h * stride_qh
-                  + offs_qm[:, None] * stride_qm
-                  + offs_qk[None, :] * stride_qk)
-    # initialize pointers to K
-    offs_kk = tl.arange(0, BLOCK_DMODEL)
-    offs_kn = start_kn * BLOCK_N + tl.arange(0, BLOCK_N)
-    k_ptrs = K + (off_z * stride_kz
-                  + off_h * stride_kh
-                  + offs_kn[None, :] * stride_kn
-                  + offs_kk[:, None] * stride_kk)
-    # initialize pointers to V
-    off_vk = tl.arange(0, BLOCK_N)
-    off_vn = tl.arange(0, BLOCK_DMODEL)
-    v_ptrs = V + off_z * stride_vz \
-        + off_h * stride_vh \
-        + off_vk[:, None] * stride_vk \
-        + off_vn[None, :] * stride_vn
+    start_qm = tl.program_id(0)
+    off_hz = tl.program_id(1)
+    # initialize offsets
+    offs_m = start_qm * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_n = tl.arange(0, BLOCK_N)
+    offs_d = tl.arange(0, BLOCK_DMODEL)
+    off_q = off_hz * stride_qh + offs_m[:, None] * stride_qm + offs_d[None, :] * stride_qk
+    off_k = off_hz * stride_qh + offs_n[:, None] * stride_kn + offs_d[None, :] * stride_kk
+    off_v = off_hz * stride_qh + offs_n[:, None] * stride_qm + offs_d[None, :] * stride_qk
+    # Initialize pointers to Q, K, V
+    q_ptrs = Q + off_q
+    k_ptrs = K + off_k
+    v_ptrs = V + off_v
     # initialize pointer to m and l
-    t_ptrs = TMP + off_hz * N_CTX + offs_qm
+    t_ptrs = TMP + off_hz * N_CTX + offs_m
 
     acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
 
-    num_blocks_for_row = start_qm + 1
-    for start_n in range(0, num_blocks_for_row):
-        q = tl.load(q_ptrs)  # BUG: fails when moved out of the loop
+    q = tl.load(q_ptrs)
+    for start_n in range(0, start_qm + 1):
         # -- compute qk ----
         k = tl.load(k_ptrs)
-        qk = tl.dot(q, k)
-        qk = tl.where(offs_qm[:, None] >= (start_n * BLOCK_N + offs_kn[None, :]), qk, float("-inf"))
+        qk = tl.dot(q, k, trans_b=True)
+        qk += tl.where(offs_m[:, None] >= (start_n * BLOCK_N + offs_n[None, :]), 0, float("-inf"))
         # -- compute m_ij, p, l_ij
         m_ij = tl.max(qk, 1)
         p = tl.exp(qk - m_ij[:, None])
         l_ij = tl.sum(p, 1)
         # -- update m_i and l_i
         m_i_new = tl.maximum(m_i, m_ij)
-        l_i_new = tl.exp(m_i - m_i_new) * l_i + tl.exp(m_ij - m_i_new) * l_ij
+        alpha = tl.exp(m_i - m_i_new)
+        beta = tl.exp(m_ij - m_i_new)
+        l_i_new = alpha * l_i + beta * l_ij
         # -- update output accumulator --
         # scale p
-        p_scale = tl.exp(m_ij - m_i_new) / l_i_new
+        p_scale = beta / l_i_new
         p = p * p_scale[:, None]
         p = p.to(tl.float16)
         # scale acc
-        acc_scale = l_i / l_i_new * tl.exp(m_i - m_i_new)
+        acc_scale = l_i / l_i_new * alpha
         tl.store(t_ptrs, acc_scale)
         acc_scale = tl.load(t_ptrs)  # BUG: have to store and immediately load
         acc = acc * acc_scale[:, None]
@@ -80,21 +68,21 @@ def _fwd_kernel(
         acc += tl.dot(p, v)
         k_ptrs += BLOCK_N * stride_kn
         v_ptrs += BLOCK_N * stride_vk
+        # r_ptrs += BLOCK_N
         l_i = l_i_new
         m_i = m_i_new
 
+    start_qm = tl.program_id(0)
+    offs_m = start_qm * BLOCK_M + tl.arange(0, BLOCK_M)
     # write back l and m
-    l_ptrs = L + off_hz * N_CTX + offs_qm
-    m_ptrs = M + off_hz * N_CTX + offs_qm
+    l_ptrs = L + off_hz * N_CTX + offs_m
+    m_ptrs = M + off_hz * N_CTX + offs_m
     tl.store(l_ptrs, l_i)
     tl.store(m_ptrs, m_i)
     # initialize pointers to output
-    offs_om = offs_qm
-    offs_on = tl.arange(0, BLOCK_DMODEL)
-    out_ptrs = Out + off_z * stride_oz \
-        + off_h * stride_oh \
-        + offs_om[:, None] * stride_om \
-        + offs_on[None, :] * stride_on
+    offs_n = tl.arange(0, BLOCK_DMODEL)
+    off_out = off_hz * stride_oh + offs_m[:, None] * stride_om + offs_n[None, :] * stride_on
+    out_ptrs = Out + off_out
     tl.store(out_ptrs, acc)
 
 
@@ -107,13 +95,13 @@ class _attention(torch.autograd.Function):
         Lq, Lk = q.shape[-1], k.shape[-2]
         assert Lq == Lk
         o = torch.empty_like(q)
-        grid = (q.shape[0] * q.shape[1], triton.cdiv(q.shape[2], BLOCK))
+        grid = (triton.cdiv(q.shape[2], BLOCK), q.shape[0] * q.shape[1])
         tmp = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
-        l = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
+        L = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         m = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
-        pgm = _fwd_kernel[grid](
+        _fwd_kernel[grid](
             q, k, v,
-            tmp, l, m,
+            tmp, L, m,
             o,
             q.stride(0), q.stride(1), q.stride(2), q.stride(3),
             k.stride(0), k.stride(1), k.stride(2), k.stride(3),
@@ -124,7 +112,7 @@ class _attention(torch.autograd.Function):
             BLOCK_DMODEL=64, num_warps=4,
             num_stages=1,
         )
-        ctx.save_for_backward(q, k, v, o, l, m)
+        ctx.save_for_backward(q, k, v, o, L, m)
         ctx.BLOCK = BLOCK
         ctx.grid = grid
         return o
