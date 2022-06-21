@@ -4,9 +4,8 @@ import torch
 import triton
 import triton.language as tl
 
-# fmt: off
 
-# ********************************************************
+# fmt: off
 
 @triton.jit
 def _fwd_kernel(
