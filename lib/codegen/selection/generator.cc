@@ -1042,6 +1042,7 @@ void generator::visit_store_inst(ir::store_inst * x){
         Value* new_elt = vals_[val_op][idxs[i + ii*n_subw + jj]];
         if(new_elt->getType()->isIntegerTy(1))
           new_elt = builder_->CreateSExt(new_elt, builder_->getInt8Ty());
+        new_elt = bit_cast(new_elt, ty);
         curr = builder_->CreateInsertElement(curr, new_elt, jj);
       }
       args.push_back(bit_cast(curr, val_arg_ty));

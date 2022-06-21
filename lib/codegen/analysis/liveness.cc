@@ -68,6 +68,7 @@ void liveness::run(ir::module &mod) {
   }
 
 
+
   // Assigns index to each instruction
   std::map<ir::value*, slot_index> indices;
   slot_index index = 0;
@@ -83,13 +84,13 @@ void liveness::run(ir::module &mod) {
       intervals_[layout] = segment{INT32_MAX, 0};
   }
 
-  for(auto& x: live_out)
+  for(auto& x: live_in)
   for(shared_layout* layout: x.second)
     intervals_[layout].start = std::min<int>(intervals_[layout].start, indices[x.first]);
 
   for(auto& x: live_in)
   for(shared_layout* layout: x.second){
-    intervals_[layout].end = std::max<int>(intervals_[layout].end, indices[x.first]);
+    intervals_[layout].end = std::max<int>(intervals_[layout].end, indices[x.first] + 1);
   }
 
   
