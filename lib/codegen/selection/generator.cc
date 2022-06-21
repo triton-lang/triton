@@ -2078,7 +2078,9 @@ void generator::visit_mma16816(ir::dot_inst* C, ir::value *A, ir::value *B, ir::
   BasicBlock* FirstBB = &CurrBB->getParent()->getEntryBlock();
 
   // if true, this will move pointer declarations to the entry basic block
-  bool licm_ptrs = (FirstBB != CurrBB);
+  // not prefetched cases tend to be more limited in resource usage
+  // so we don't pre-compute ptrs to save registers
+  bool licm_ptrs = C->is_prefetched() && (FirstBB != CurrBB);
   if(licm_ptrs)
     builder_->SetInsertPoint(FirstBB->getTerminator());
 
