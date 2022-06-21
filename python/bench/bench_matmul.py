@@ -5,7 +5,7 @@ import triton
 
 def rounded_linspace(low, high, steps, div):
     ret = torch.linspace(low, high, steps)
-    ret = (ret.int() + div - 1) // div * div
+    ret = torch.div(ret.int() + div - 1, div, rounding_mode='trunc') * div
     ret = torch.unique(ret)
     return list(map(int, ret))
 
