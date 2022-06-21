@@ -964,6 +964,8 @@ void generator::visit_store_inst(ir::store_inst * x){
   Type *ty = cvt(val_op->get_type()->get_scalar_ty());
   if (ty->isBFloatTy()) // llvm11-nvptx cannot select bf16 store
     ty = f16_ty;
+  if(ty->isIntegerTy(1))
+    ty = builder_->getInt8Ty();
   for(size_t i = 0; i < idxs.size(); i += vec){
     indices_t idx = idxs[i];
     // pointers
@@ -1035,9 +1037,6 @@ void generator::visit_store_inst(ir::store_inst * x){
     std::vector<Value*> args = {pred, ptr};
     for(unsigned int ii = 0; ii < n_words; ii++){
       size_t n_subw = width / nbits;
-      Type *ty = cvt(val_op->get_type()->get_scalar_ty());
-      if(ty->isIntegerTy(1))
-        ty = builder_->getInt8Ty();
       Value* curr = UndefValue::get(vec_ty(ty, n_subw));
       for(unsigned int jj = 0; jj < n_subw; jj++){
         Value* new_elt = vals_[val_op][idxs[i + ii*n_subw + jj]];
