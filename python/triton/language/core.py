@@ -825,7 +825,6 @@ def atomic_cas(pointer, cmp, val, _builder=None):
     return semantic.atomic_cas(pointer, cmp, val, _builder)
 
 
-@builtin
 def _add_atomic_docstr(name):
 
     def _decorator(func):
