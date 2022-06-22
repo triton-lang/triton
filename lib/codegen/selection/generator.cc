@@ -1366,6 +1366,18 @@ void generator::visit_mma884(ir::dot_inst* C, ir::value *A, ir::value *B, ir::va
   // order
   auto ord_a = layouts_->get(A)->get_order();
   auto ord_b = layouts_->get(B)->get_order();
+  bool is_a_trans = C->is_trans_a();
+  // is_a_trans = false;
+  if(C->is_trans_a()){
+    std::swap(ord_a[0], ord_a[1]);
+    std::swap(shape_a[0], shape_a[1]);
+    std::swap(offset_a_m_, offset_a_k_);
+  }
+  // std::cout << "visiting" << std::endl;
+  // if(C->is_trans_b()){
+  //   std::swap(ord_b[0], ord_b[1]);
+    // std::swap(shape_b[0], shape_b[1]);
+  // }
   // layouts
   analysis::mma_layout*    layout_c = layouts_->get(C)->to_mma();
   analysis::shared_layout* layout_a = layouts_->get(A)->to_shared();
@@ -1396,6 +1408,12 @@ void generator::visit_mma884(ir::dot_inst* C, ir::value *A, ir::value *B, ir::va
   int max_phase_b = swizzle_->get_max_phase(layout_b);
   int step_b0   = is_b_row ? stride_rep_n : stride_rep_k;
   int num_ptr_b = std::max(2 * per_phase_b * max_phase_b / step_b0, 1);
+
+
+  // max_phase_a = 4;
+  // vec_a = 8;
+  // std::cout << per_phase_a << " " << max_phase_a << " " << step_a0 << " " << num_ptr_a << " " << stride_am << " " << stride_ak << " " << stride_a0 << " " << stride_a1 << std::endl;
+  // std::cout << vec_a << " " << vec_b << std::endl;
 
   /* --------------------------------- */
   /* --- pre-compute pointer lanes --- */
@@ -1622,6 +1640,8 @@ void generator::visit_mma884(ir::dot_inst* C, ir::value *A, ir::value *B, ir::va
   // write back accumulators
   for(size_t i = 0; i < idxs_.at(C).size(); i++)
     vals_[C][idxs_[C][i]] = acc[i];
+  
+  std::cout << "done" << std::endl;
 }
 
 namespace {

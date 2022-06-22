@@ -37,7 +37,7 @@ void swizzle::run(ir::module &) {
       if(tgt_->as_nvidia() && tgt_->as_nvidia()->sm() < 80){
         int inner = mma_dot_a ? 0 : 1;
         per_phase_[layout] = per_phase;
-        max_phase_[layout] = (ord[inner] == 1 ? 8 : 4) / per_phase_[layout];
+        max_phase_[layout] = (ord[inner] == 1 ? 4 : 4) / per_phase_[layout];
         if(mma_dot_a)
           vec_[layout] = 2*layouts_->get(mma_dot_a)->to_mma()->rep(0);
         else

@@ -88,7 +88,7 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(ir::module &ir, llvm::LLVMC
   // std::cout << "---" << std::endl;
   // ir.print(std::cout);
   // std::cout << "---" << std::endl;
-  ir.print(std::cout);
+  // ir.print(std::cout);
   liveness.run(ir);
   allocation.run(ir);
   prefetch_s.run(ir);
