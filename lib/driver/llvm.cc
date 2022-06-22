@@ -45,10 +45,12 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/GlobalValue.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/ExecutionEngine/SectionMemoryManager.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/IPO.h"
 
 // begin AMD stuff
 #include "llvm/Support/FileSystem.h"
@@ -149,7 +151,7 @@ int vptx(int version){
   throw std::runtime_error("Triton requires CUDA 10+");
 }
 
-std::string llir_to_ptx(llvm::Module* module, int cc, int version){
+std::string llir_to_ptx(llvm::Module* module, int cc, int version, bool link){
   // LLVM version in use may not officially support target hardware
   int max_nvvm_cc = 75;
   int max_nvvm_ptx = 74;
@@ -189,17 +191,32 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version){
   opt.UnsafeFPMath = false;
   opt.NoInfsFPMath = false;
   opt.NoNaNsFPMath = true;
-  machine = target->createTargetMachine(module->getTargetTriple(), proc, features, opt,
-                                                             llvm::Reloc::PIC_, llvm::None, llvm::CodeGenOpt::Aggressive);
+  machine = target->createTargetMachine(
+      module->getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
+      llvm::None, llvm::CodeGenOpt::Aggressive);
   // set data layout
   if(layout.empty())
     module->setDataLayout(machine->createDataLayout());
   else
     module->setDataLayout(layout);
+  
+  std::set<llvm::StringRef> function_names; 
   // emit machine code
-  for (llvm::Function &f : module->functions())
+  for (llvm::Function &f : module->functions()) {
     f.addFnAttr(llvm::Attribute::AlwaysInline);
+    function_names.insert(f.getFunction().getName());
+  }
+
   llvm::legacy::PassManager pass;
+  if (link) {
+    pass.add(
+        llvm::createInternalizePass([&](const llvm::GlobalValue& v) -> bool {
+          if (function_names.count(v.getName()) != 0) {
+            return true;
+          }
+          return false;
+        }));
+  }
   llvm::raw_svector_ostream stream(buffer);
   // emit
   machine->addPassesToEmitFile(pass, stream, nullptr, llvm::CodeGenFileType::CGFT_AssemblyFile);

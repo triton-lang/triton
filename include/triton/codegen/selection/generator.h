@@ -209,11 +209,14 @@ public:
   void visit_layout_scanline(analysis::scanline_layout*);
   void visit_layout_shared(analysis::shared_layout*);
 
+  std::unique_ptr<Module> get_libdevice_module();
+  void init_libdevice_module();
 
 private:
   LLVMContext *ctx_;
   Builder* builder_;
   Module *mod_;
+  std::unique_ptr<Module> libdevice_mod_;
 
   analysis::axes *a_axes_;
   analysis::swizzle *swizzle_;

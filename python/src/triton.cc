@@ -483,14 +483,14 @@ std::tuple<std::string, asm_map_t, int> cu_compile_ttir(const std::string& name,
   std::string ptxas_path = drv::path_to_ptxas(version);
   // Triton-IR -> NVPTX LLVM-IR
   triton::codegen::nvidia_cu_target target(cc);
-  auto llvm = triton::codegen::add_passes_to_emit_bin(ir, ctx, &target, cc, num_warps, num_stages, n_shared_bytes);
+  auto[llvm, link] = triton::codegen::add_passes_to_emit_bin(ir, ctx, &target, cc, num_warps, num_stages, n_shared_bytes);
   std::string tmp;
   llvm::raw_string_ostream llir(tmp);
   llir << *llvm;
   llir.flush();
   asm_map["llir"] = py::cast(tmp);
   // LLVM-IR -> PTX
-  std::string ptx = drv::llir_to_ptx(llvm.get(), cc, version);
+  std::string ptx = drv::llir_to_ptx(llvm.get(), cc, version, link);
   asm_map["ptx"] = py::cast(ptx);
   // PTX -> Binary
   std::string cubin = drv::ptx_to_cubin(ptx, ptxas_path, cc);
@@ -509,7 +509,7 @@ std::tuple<std::string, asm_map_t, int> hip_compile_ttir(const std::string& name
   // Triton-IR -> NVPTX LLVM-IR
   triton::codegen::amd_cl_target target;
   int n_shared_bytes;
-  auto llvm = triton::codegen::add_passes_to_emit_bin(ir, ctx, &target, 70, num_warps, num_stages, n_shared_bytes);
+  auto[llvm, link] = triton::codegen::add_passes_to_emit_bin(ir, ctx, &target, 70, num_warps, num_stages, n_shared_bytes);
   std::string tmp;
   llvm::raw_string_ostream llir(tmp);
   llir << *llvm;
