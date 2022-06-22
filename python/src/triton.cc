@@ -482,7 +482,7 @@ std::tuple<std::string, asm_map_t, int> cu_compile_ttir(const std::string& name,
   triton::codegen::nvidia_cu_target target(cc);
   int n_shared_bytes;
   auto llvm = triton::codegen::add_passes_to_emit_bin(
-      ir, ctx, &target, cc, num_warps, num_stages, n_shared_bytes);
+      ir, ctx, &target, num_warps, num_stages, n_shared_bytes);
   std::string tmp;
   llvm::raw_string_ostream llir(tmp);
   llir << *llvm;
@@ -509,7 +509,7 @@ std::tuple<std::string, asm_map_t, int> hip_compile_ttir(const std::string& name
   triton::codegen::amd_cl_target target;
   int n_shared_bytes;
   auto llvm = triton::codegen::add_passes_to_emit_bin(
-      ir, ctx, &target, 70, num_warps, num_stages, n_shared_bytes);
+      ir, ctx, &target, num_warps, num_stages, n_shared_bytes);
   std::string tmp;
   llvm::raw_string_ostream llir(tmp);
   llir << *llvm;

@@ -85,7 +85,7 @@ static std::unique_ptr<llvm::Module> link_libdevice(
 // TODO:
 // There should be a proper pass manager there!
 std::unique_ptr<llvm::Module> add_passes_to_emit_bin(
-    ir::module& ir, llvm::LLVMContext& ctx, codegen::target* target, int cc,
+    ir::module& ir, llvm::LLVMContext& ctx, codegen::target* target,
     int num_warps, int num_stages, int& shared_static) {
   // generate llvm code
   std::string name = ir.get_function_list()[0]->get_name();

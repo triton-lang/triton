@@ -215,6 +215,10 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version) {
   else
     module->setDataLayout(layout);
 
+  // emit machine code
+  // XXX(Keren): nvvm functions shouldn't be inlined?
+  //for (llvm::Function &f : module->functions())
+  //  f.addFnAttr(llvm::Attribute::AlwaysInline);
   llvm::legacy::PassManager pass;
   llvm::raw_svector_ostream stream(buffer);
   // emit

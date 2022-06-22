@@ -31,7 +31,7 @@ namespace codegen {
 // TODO:
 // There should be a proper pass manager there!
 std::unique_ptr<llvm::Module> add_passes_to_emit_bin(
-    ir::module &ir, llvm::LLVMContext &ctx, codegen::target *target, int sm,
+    ir::module &ir, llvm::LLVMContext &ctx, codegen::target *target,
     int num_warps, int num_stages, int &shared_static);
 
 }  // namespace codegen
