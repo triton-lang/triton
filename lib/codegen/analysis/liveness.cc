@@ -17,7 +17,7 @@ void liveness::run(ir::module &mod) {
   std::map<ir::value*, std::set<shared_layout*>> layouts_map;
   for(auto &x: layouts_->get_all()){
     shared_layout* layout = x.second->to_shared();
-    if(!layout)
+    if(!layout || layout->is_tmp())
       continue;
     for(ir::value* v:layout->get_values()){
       layouts_map[v].insert(layout);
@@ -26,10 +26,10 @@ void liveness::run(ir::module &mod) {
 
 
 
-  std::map<ir::user*, std::set<shared_layout*>> live_out;
   std::map<ir::user*, std::set<shared_layout*>> live_in;
   while(true){
     bool changed = false;
+    ir::instruction* last_inst = nullptr;
     ir::for_each_instruction_backward(mod, [&](ir::instruction* i){
       // gen
       std::set<shared_layout*> gen;
@@ -45,27 +45,37 @@ void liveness::run(ir::module &mod) {
         gen.insert(layouts_->get(layouts_->tmp(i))->to_shared());
         kill.insert(layouts_->get(layouts_->tmp(i))->to_shared());
       }
+      // live-out
+      std::set<shared_layout*> live_out;
+      std::vector<ir::instruction*> succs = {last_inst};
+      if(i == i->get_parent()->get_inst_list().back())
+        for(ir::basic_block* succ: i->get_parent()->get_successors())
+          succs.push_back(succ->get_inst_list().front());
+      for(ir::instruction* succ: succs)
+      for(shared_layout* layout: live_in[succ])
+      if(!layout->is_tmp())
+        live_out.insert(layout);
 
       // new sets
       std::set<shared_layout*> live_out_minus_kill;
-      std::set_difference(live_out[i].begin(), live_out[i].end(), kill.begin(), kill.end(), 
+      std::set_difference(live_out.begin(), live_out.end(), kill.begin(), kill.end(), 
                           std::inserter(live_out_minus_kill, live_out_minus_kill.end()));
       std::set<shared_layout*> new_live_in;
       std::set_union(gen.begin(), gen.end(), live_out_minus_kill.begin(), live_out_minus_kill.end(),
                       std::inserter(new_live_in, new_live_in.end()));
-      std::set<shared_layout*> new_live_out;
-      for(ir::user* u: i->get_users())
-      for(shared_layout* layout: live_in[u])
-        new_live_out.insert(layout);
       
-      changed = changed || (new_live_out != live_out[i]);
       changed = changed || (new_live_in != live_in[i]);
-      live_out[i] = new_live_out;
       live_in[i] = new_live_in;
+      last_inst = i;
     });
     if(!changed)
       break;
   }
+    
+  // ir::for_each_instruction(mod, [&](ir::instruction* i){
+  //   i->print(std::cout);
+  //   std::cout << " live_in: " << live_in[i].size() << std::endl;
+  // });
 
 
 
@@ -98,6 +108,7 @@ void liveness::run(ir::module &mod) {
     shared_layout* layout = x.second->to_shared();
     if(!layout)
       continue;
+    // std::cout << intervals_[layout].start << " " << intervals_[layout].end << std::endl;
   }
 
   

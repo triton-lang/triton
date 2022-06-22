@@ -439,8 +439,8 @@ shared_layout::shared_layout(data_layout *arg,
                                  const std::vector<unsigned>& shape,
                                  const std::vector<ir::value *> &values,
                                  ir::type *ty,
-                                 analysis::align* align, target *tgt)
-    : data_layout(SHARED, axes, shape, values, align), ty_(ty), tgt_(tgt) {
+                                 analysis::align* align, target *tgt, bool is_tmp)
+    : data_layout(SHARED, axes, shape, values, align), ty_(ty), tgt_(tgt), is_tmp_(is_tmp){
 
   size_ = 0;
   arg_layout_ = arg;
@@ -628,7 +628,7 @@ void layouts::create_tmp_layout(size_t id, data_layout *arg,
                                 ir::instruction *i, bool is_index) {
   ir::type *ty = is_index ? ir::type::get_int32_ty(i->get_type()->get_context())
                           : i->get_type()->get_scalar_ty();
-  layouts_[id] = new shared_layout(arg, axes, shape, {i}, ty, align_, tgt_);
+  layouts_[id] = new shared_layout(arg, axes, shape, {i}, ty, align_, tgt_, true);
   if (is_index) {
     tmp_index_[i] = id;
   } else {
