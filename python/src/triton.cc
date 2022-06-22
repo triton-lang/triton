@@ -19,7 +19,6 @@
 #include <stdexcept>
 #include <string>
 #include "llvm/IR/Module.h"
-#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Verifier.h"
 
 namespace py = pybind11;
@@ -470,8 +469,6 @@ std::tuple<uint64_t, uint64_t, uint64_t, uint64_t> hip_load_binary(const std::st
 std::tuple<std::string, asm_map_t, int> cu_compile_ttir(const std::string& name, ir::module &ir, 
                                                                uint64_t device, int num_warps, int num_stages,
                                                                asm_map_t &asm_map){
-
-  int n_shared_bytes;
   py::gil_scoped_release allow_threads;
   llvm::LLVMContext ctx;
   // device properties
@@ -483,14 +480,16 @@ std::tuple<std::string, asm_map_t, int> cu_compile_ttir(const std::string& name,
   std::string ptxas_path = drv::path_to_ptxas(version);
   // Triton-IR -> NVPTX LLVM-IR
   triton::codegen::nvidia_cu_target target(cc);
-  auto[llvm, link] = triton::codegen::add_passes_to_emit_bin(ir, ctx, &target, cc, num_warps, num_stages, n_shared_bytes);
+  int n_shared_bytes;
+  auto llvm = triton::codegen::add_passes_to_emit_bin(
+      ir, ctx, &target, cc, num_warps, num_stages, n_shared_bytes);
   std::string tmp;
   llvm::raw_string_ostream llir(tmp);
   llir << *llvm;
   llir.flush();
   asm_map["llir"] = py::cast(tmp);
   // LLVM-IR -> PTX
-  std::string ptx = drv::llir_to_ptx(llvm.get(), cc, version, link);
+  std::string ptx = drv::llir_to_ptx(llvm.get(), cc, version);
   asm_map["ptx"] = py::cast(ptx);
   // PTX -> Binary
   std::string cubin = drv::ptx_to_cubin(ptx, ptxas_path, cc);
@@ -509,7 +508,8 @@ std::tuple<std::string, asm_map_t, int> hip_compile_ttir(const std::string& name
   // Triton-IR -> NVPTX LLVM-IR
   triton::codegen::amd_cl_target target;
   int n_shared_bytes;
-  auto[llvm, link] = triton::codegen::add_passes_to_emit_bin(ir, ctx, &target, 70, num_warps, num_stages, n_shared_bytes);
+  auto llvm = triton::codegen::add_passes_to_emit_bin(
+      ir, ctx, &target, 70, num_warps, num_stages, n_shared_bytes);
   std::string tmp;
   llvm::raw_string_ostream llir(tmp);
   llir << *llvm;

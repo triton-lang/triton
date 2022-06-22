@@ -25,6 +25,7 @@
 #endif
 #include <memory>
 #include <regex>
+#include <filesystem>
 #include "triton/driver/llvm.h"
 #include "triton/driver/dispatch.h"
 #include "triton/driver/error.h"
@@ -151,7 +152,21 @@ int vptx(int version){
   throw std::runtime_error("Triton requires CUDA 10+");
 }
 
-std::string llir_to_ptx(llvm::Module* module, int cc, int version, bool link){
+std::string path_to_libdevice() {
+  // search pathes for libdevice
+  std::string triton_libdevice = tools::getenv("TRITON_LIBDEVICE_PATH");
+  if (triton_libdevice.empty() || !std::filesystem::exists(triton_libdevice)) {
+    triton_libdevice = "/usr/local/cuda/nvvm/libdevice/libdevice.10.bc";
+    if (!std::filesystem::exists(triton_libdevice)) {
+      throw std::runtime_error(
+          "`libdevice` was not found in TRITON_LIBDEVICE_PATH or "
+          "/usr/local/cuda/nvvm/libdevice/");
+    }
+  }
+  return triton_libdevice;
+}
+
+std::string llir_to_ptx(llvm::Module* module, int cc, int version) {
   // LLVM version in use may not officially support target hardware
   int max_nvvm_cc = 75;
   int max_nvvm_ptx = 74;
@@ -199,24 +214,8 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version, bool link){
     module->setDataLayout(machine->createDataLayout());
   else
     module->setDataLayout(layout);
-  
-  std::set<llvm::StringRef> function_names; 
-  // emit machine code
-  for (llvm::Function &f : module->functions()) {
-    f.addFnAttr(llvm::Attribute::AlwaysInline);
-    function_names.insert(f.getFunction().getName());
-  }
 
   llvm::legacy::PassManager pass;
-  if (link) {
-    pass.add(
-        llvm::createInternalizePass([&](const llvm::GlobalValue& v) -> bool {
-          if (function_names.count(v.getName()) != 0) {
-            return true;
-          }
-          return false;
-        }));
-  }
   llvm::raw_svector_ostream stream(buffer);
   // emit
   machine->addPassesToEmitFile(pass, stream, nullptr, llvm::CodeGenFileType::CGFT_AssemblyFile);
@@ -230,7 +229,6 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version, bool link){
   while(find_and_replace(result, "\t// end inline asm", "\n", ""));
   return result;
 }
-
 
 std::string ptx_to_cubin(const std::string& ptx, const std::string& ptxas, int cc) {
   // compile ptx with ptxas

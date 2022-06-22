@@ -14,19 +14,77 @@
 #include "triton/codegen/transform/pipeline.h"
 #include "triton/codegen/transform/prefetch.h"
 #include "triton/codegen/transform/inline.h"
+#include "triton/driver/llvm.h"
 #include "triton/ir/function.h"
 #include "triton/ir/module.h"
 #include "triton/ir/print.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/IRReader/IRReader.h"
+#include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Linker/Linker.h"
+#include "llvm/Support/SourceMgr.h"
+
 namespace triton {
 namespace codegen {
 
+static std::unique_ptr<llvm::Module> link_libdevice(
+    ir::module& ir, llvm::LLVMContext& ctx,
+    std::unique_ptr<llvm::Module> llvm) {
+  std::string module_path = driver::path_to_libdevice();
+  llvm::SMDiagnostic err;
+  auto libdevice_mod = llvm::parseIRFile(module_path, err, ctx);
+  if (!libdevice_mod) {
+    throw std::runtime_error("Failed to load libdevice at " + module_path);
+  }
+
+  // Set triple and data layout of libdevice to match the target module
+  if (llvm::Linker::linkModules(*llvm, std::move(libdevice_mod))) {
+    throw std::runtime_error("Failed to link libdevice at " + module_path);
+  }
+
+  // Internalize all device functions
+  std::set<llvm::StringRef> function_names;
+  for (auto& func : ir.get_function_list()) {
+    function_names.insert(func->get_name());
+  }
+  llvm::legacy::PassManager pass;
+  pass.add(llvm::createInternalizePass([&](const llvm::GlobalValue& v) -> bool {
+    if (function_names.count(v.getName()) != 0) {
+      return true;
+    }
+    return false;
+  }));
+
+  // Add nvvm reflect flags to llvm module
+  // (i32 4 indicates that the value set here overrides the value in another
+  // module we link with. See the LangRef <LangRef.html#module-flags-metadata>
+  // for details.)
+  llvm::Type* I32 = llvm::Type::getInt32Ty(ctx);
+  llvm::Metadata* md_four =
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(I32, 4));
+  llvm::Metadata* md_name = llvm::MDString::get(ctx, "nvvm-reflect-ftz");
+  llvm::Metadata* md_one =
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(I32, 1));
+  llvm::MDNode* reflect = llvm::MDNode::get(ctx, {md_four, md_name, md_one});
+  llvm->addModuleFlag(reflect);
+
+  // Cleanup unused functions caused by reflection
+  llvm::PassManagerBuilder builder;
+  builder.OptLevel = 3;
+  builder.SizeLevel = 0;
+  builder.populateModulePassManager(pass);
+
+  pass.run(*llvm);
+  return llvm;
+}
+
 // TODO:
 // There should be a proper pass manager there!
-std::pair<std::unique_ptr<llvm::Module>, bool> add_passes_to_emit_bin(
+std::unique_ptr<llvm::Module> add_passes_to_emit_bin(
     ir::module& ir, llvm::LLVMContext& ctx, codegen::target* target, int cc,
     int num_warps, int num_stages, int& shared_static) {
   // generate llvm code
@@ -93,12 +151,12 @@ std::pair<std::unique_ptr<llvm::Module>, bool> add_passes_to_emit_bin(
   // ir.print(std::cout);
   isel.visit(ir, *llvm);
   shared_static = allocation.allocated_size();
-  bool link = false;
-  if (isel.get_libdevice_module()) {
-    llvm::Linker::linkModules(*llvm, std::move(isel.get_libdevice_module()));
+  if (isel.has_libdevice_functions()) {
+    llvm = link_libdevice(ir, ctx, std::move(llvm));
   }
-  return std::make_pair(std::move(llvm), link);
+  return llvm;
 }
+
 
 } // namespace codegen
 } // namespace triton

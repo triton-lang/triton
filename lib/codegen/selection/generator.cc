@@ -20,8 +20,6 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/InlineAsm.h"
-#include "llvm/IRReader/IRReader.h"
-#include "llvm/Support/SourceMgr.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 namespace triton{
@@ -1102,15 +1100,6 @@ void generator::visit_exp_inst(ir::exp_inst* x){
   }
 }
 
-std::unique_ptr<Module> generator::get_libdevice_module() {
-  StringRef module_path = "/usr/local/cuda/nvvm/libdevice/libdevice.10.bc";
-  SMDiagnostic err;
-  auto libdevice_mod = parseIRFile(module_path, err, *ctx_);
-  return libdevice_mod;
-}
-
-void generator::init_libdevice_module() {
-}
 
 /**
  * \brief Code Generation for `cos`
@@ -1120,6 +1109,7 @@ void generator::visit_cos_inst(ir::cos_inst* x){
   //FunctionType *fn_ty = FunctionType::get(f32_ty, tys, false);
   //InlineAsm *cos = InlineAsm::get(fn_ty, "cos.approx.f32 $0, $0;", "=f,0", false);
   // Replace it with acos to test libdevice for now
+  init_libdevice_functions();
   FunctionType *FT =
       FunctionType::get(f32_ty, f32_ty, false);
   Function *F = llvm::cast<llvm::Function>(
@@ -1127,7 +1117,7 @@ void generator::visit_cos_inst(ir::cos_inst* x){
   for(auto idx: idxs_.at(x)){
     vals_[x][idx] = call(F, std::vector<llvm::Value*>{vals_[x->get_operand(0)][idx]});
   }
- }
+}
 
 /**
  * \brief Code Generation for `umulhi`
