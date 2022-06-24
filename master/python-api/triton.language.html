@@ -151,9 +151,13 @@
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#atomic-ops">Atomic Ops</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.atomic_cas.html">triton.language.atomic_cas</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.atomic_xchg.html">triton.language.atomic_xchg</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.atomic_add.html">triton.language.atomic_add</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.atomic_max.html">triton.language.atomic_max</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.atomic_min.html">triton.language.atomic_min</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.atomic_and.html">triton.language.atomic_and</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.atomic_or.html">triton.language.atomic_or</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.atomic_xor.html">triton.language.atomic_xor</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#comparison-ops">Comparison ops</a><ul>
@@ -417,14 +421,26 @@
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.atomic_cas.html#triton.language.atomic_cas" title="triton.language.atomic_cas"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_cas</span></code></a></p></td>
 <td><p>Performs an atomic compare-and-swap at the memory location specified by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.atomic_add.html#triton.language.atomic_add" title="triton.language.atomic_add"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_add</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.atomic_xchg.html#triton.language.atomic_xchg" title="triton.language.atomic_xchg"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_xchg</span></code></a></p></td>
+<td><p>Performs an atomic exchange at the memory location specified by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.atomic_add.html#triton.language.atomic_add" title="triton.language.atomic_add"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_add</span></code></a></p></td>
 <td><p>Performs an atomic add at the memory location specified by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.atomic_max.html#triton.language.atomic_max" title="triton.language.atomic_max"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_max</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.atomic_max.html#triton.language.atomic_max" title="triton.language.atomic_max"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_max</span></code></a></p></td>
 <td><p>Performs an atomic max at the memory location specified by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.atomic_min.html#triton.language.atomic_min" title="triton.language.atomic_min"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_min</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.atomic_min.html#triton.language.atomic_min" title="triton.language.atomic_min"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_min</span></code></a></p></td>
 <td><p>Performs an atomic min at the memory location specified by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.atomic_and.html#triton.language.atomic_and" title="triton.language.atomic_and"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_and</span></code></a></p></td>
+<td><p>Performs an atomic logical and at the memory location specified by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.atomic_or.html#triton.language.atomic_or" title="triton.language.atomic_or"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_or</span></code></a></p></td>
+<td><p>Performs an atomic logical or at the memory location specified by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.atomic_xor.html#triton.language.atomic_xor" title="triton.language.atomic_xor"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_xor</span></code></a></p></td>
+<td><p>Performs an atomic logical xor at the memory location specified by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p></td>
 </tr>
 </tbody>
 </table>
