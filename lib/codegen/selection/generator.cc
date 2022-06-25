@@ -3665,6 +3665,7 @@ void generator::finalize_phi_node(ir::phi_node *x) {
     for(indices_t idx: idxs_.at(x)){
       PHINode *phi = (PHINode*)vals_[x][idx];
       Value *inc = vals_[x->get_incoming_value(n)][idx];
+      // x->print(std::cout);
       phi->addIncoming(inc, block);
     }
   }

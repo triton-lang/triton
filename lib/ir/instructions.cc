@@ -69,6 +69,7 @@ void phi_node::set_incoming_block(unsigned i, basic_block *block){
 
 // Add incoming
 void phi_node::add_incoming(value *v, basic_block *block){
+  assert(v && "PHI node got a null value!!");
   resize_ops(get_num_operands() + 1);
   blocks_.resize(get_num_operands() + 1);
   set_incoming_value(get_num_operands() - 1, v);
