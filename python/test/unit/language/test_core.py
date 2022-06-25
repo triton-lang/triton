@@ -815,8 +815,8 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
     z_tri_contiguous = to_triton(np.empty_like(x), device=device)
     x_tri = to_triton(x, device=device)
     pgm = kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1),
-                             z_tri, z_tri.stride(1), z_tri.stride(0),
-                             BLOCK_M=shape[0], BLOCK_N=shape[1])
+                         z_tri, z_tri.stride(1), z_tri.stride(0),
+                         BLOCK_M=shape[0], BLOCK_N=shape[1])
     pgm_contiguous = kernel[(1, 1)](x_tri, x_tri.stride(1), x_tri.stride(0),
                                     z_tri_contiguous, z_tri_contiguous.stride(0), z_tri_contiguous.stride(1),
                                     BLOCK_M=shape[0], BLOCK_N=shape[1])

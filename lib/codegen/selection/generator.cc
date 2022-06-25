@@ -2658,7 +2658,7 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
       in_layout->to_mma() ? out_layout->get_order() : in_layout->get_order();
   auto out_ord =
       out_layout->to_mma() ? in_layout->get_order() : out_layout->get_order();
-  // out_ord[0] == 0 and in_order[0] == 0 means the first dimension is
+  // out_ord[0] == 0 or in_order[0] == 0 means the first dimension is
   // non-contiguous. in_vec can be greater than 0 only if both out_ord[0] and
   // and in_ord[0] are contiguous.
   int in_vec = out_ord[0] == 0  ? 1
