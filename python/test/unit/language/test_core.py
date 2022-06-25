@@ -844,9 +844,9 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
         elif dtype == 'float32' and allow_tf32:
             pytest.skip("Only test tf32 on devices with sm >= 80")
 
-    M, N, K = 128, 128, 128
+    M, N, K = 128, 128, 64
     num_warps = 8
-    trans_a, trans_b = True, False
+    trans_a, trans_b = False, False
 
     # triton kernel
     @triton.jit
@@ -889,9 +889,9 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
         tl.store(Zs, z)
     # input
     rs = RandomState(17)
-    x = numpy_random((K, M) if trans_a else (M, K), dtype_str=dtype, rs=rs)
-    y = numpy_random((N, K) if trans_b else (K, N), dtype_str=dtype, rs=rs)
-    w = numpy_random((N, N), dtype_str=dtype, rs=rs)
+    x = numpy_random((K, M) if trans_a else (M, K), dtype_str=dtype, rs=rs)*.1
+    y = numpy_random((N, K) if trans_b else (K, N), dtype_str=dtype, rs=rs)*.1
+    w = numpy_random((N, N), dtype_str=dtype, rs=rs)*.1
     if allow_tf32:
         x = (x.view('uint32') & np.uint32(0xffffe000)).view('float32')
         y = (y.view('uint32') & np.uint32(0xffffe000)).view('float32')
@@ -900,7 +900,7 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
     y_tri = to_triton(y, device=device)
     w_tri = to_triton(w, device=device)
     # triton result
-    z = numpy_random((M, N), dtype_str=dtype, rs=rs)
+    z = 1 + numpy_random((M, N), dtype_str=dtype, rs=rs)*.1
     z_tri = to_triton(z, device=device)
     if epilogue == 'trans':
         z_tri = torch.as_strided(z_tri, (M, N), z_tri.stride()[::-1])

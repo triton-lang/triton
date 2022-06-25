@@ -45,6 +45,10 @@ void liveness::run(ir::module &mod) {
         gen.insert(layouts_->get(layouts_->tmp(i))->to_shared());
         kill.insert(layouts_->get(layouts_->tmp(i))->to_shared());
       }
+      if(layouts_->has_tmp_index(i)){
+        gen.insert(layouts_->get(layouts_->tmp_index(i))->to_shared());
+        kill.insert(layouts_->get(layouts_->tmp_index(i))->to_shared());
+      }
       // live-out
       std::set<shared_layout*> live_out;
       std::vector<ir::instruction*> succs = {last_inst};
