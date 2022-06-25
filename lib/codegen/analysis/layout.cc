@@ -234,7 +234,15 @@ mma_layout::mma_layout(size_t num_warps,
     // try to have a warp own entire rows of the output
     // this makes it easier to fuse multiple mmas by fusing
     // registers
-    if(shape[0] / spw_[0] >= num_warps){
+    bool one_warp_per_row = false;
+    for(ir::value* v: values)
+    for(ir::user* u: v->get_users()){
+      auto* dot = dynamic_cast<ir::dot_inst*>(u);
+      if((dot && dot->get_operand(2)!=v) || !layout_a->to_shared())
+        one_warp_per_row = shape[0] / spw_[0] >= num_warps;
+    }
+
+    if(one_warp_per_row){
       wpt_[1] = 1;
       wpt_[0] = num_warps;
     }
