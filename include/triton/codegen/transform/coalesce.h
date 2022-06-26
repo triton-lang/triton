@@ -32,11 +32,12 @@ private:
   ir::value* rematerialize(ir::value *v, ir::builder& builder, std::map<ir::value*, ir::value*>& seen);
 
 public:
-  coalesce(analysis::align* align, triton::codegen::analysis::layouts *layouts);
+  coalesce(analysis::align* align, triton::codegen::analysis::layouts *layouts, bool has_sm80);
   triton::ir::value *simplify(ir::instruction* i, triton::ir::builder &builder);
   void run(ir::module &mod);
 
 private:
+  bool has_sm80_;
   analysis::align* align_;
   analysis::layouts* layout_;
 };

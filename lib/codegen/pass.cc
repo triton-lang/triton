@@ -45,7 +45,7 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(ir::module &ir, llvm::LLVMC
   codegen::analysis::allocation allocation(&liveness);
   codegen::transform::dce dce;
   codegen::transform::peephole peephole(target, &layouts);
-  codegen::transform::coalesce coalesce(&align, &layouts);
+  codegen::transform::coalesce coalesce(&align, &layouts, has_sm80);
   codegen::transform::prefetch prefetch_s(target);
   codegen::transform::membar barriers(&liveness, &layouts, &allocation, &prefetch_s, target);
   codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target, num_warps);

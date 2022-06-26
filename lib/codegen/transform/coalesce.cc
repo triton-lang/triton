@@ -12,8 +12,8 @@ namespace triton {
 namespace codegen{
 namespace transform{
 
-coalesce::coalesce(analysis::align* align, analysis::layouts *layouts)
-  : align_(align), layout_(layouts) { }
+coalesce::coalesce(analysis::align* align, analysis::layouts *layouts, bool has_sm80)
+  : align_(align), layout_(layouts), has_sm80_(has_sm80) { }
 
 
 // simplify layout conversions using the following simple rules:
@@ -72,26 +72,28 @@ void coalesce::run(ir::module &mod) {
       i->replace_uses_of_with(op, new_op);
     }
     // coalesce before copy_to_shared
-    // It's dirty, but the backend is being rewritten from scratch. :)
-    // if(dynamic_cast<ir::copy_to_shared_inst*>(i))
-    // if(ir::value* op = i->get_operand(0))
-    // if(op->get_type()->is_block_ty())
-    // if(op->get_type()->get_tile_rank() == 2)
-    // if(invalidated.find(layout_->get(op)) == invalidated.end())
-    // if(layout_->get(op)->to_mma()){
-    //   ir::instruction* new_op = ir::cvt_layout_inst::create(op);
-    //   builder.set_insert_point(i);
-    //   builder.insert(new_op);
-    //   op->replace_all_uses_with(new_op);
-    //   new_op->replace_uses_of_with(new_op, op);
-    //   invalidated.insert(layout_->get(op));
-    // }
+    // only necessary for sm < 80 as Ampere+ can handle reduction
+    // on MMA layout
+    if(!has_sm80_)
+    if(dynamic_cast<ir::copy_to_shared_inst*>(i) || dynamic_cast<ir::reduce_inst*>(i))
+    if(ir::value* op = i->get_operand(0))
+    if(op->get_type()->is_block_ty())
+    if(op->get_type()->get_tile_rank() == 2)
+    if(invalidated.find(layout_->get(op)) == invalidated.end())
+    if(layout_->get(op)->to_mma()){
+      ir::instruction* new_op = ir::cvt_layout_inst::create(op);
+      builder.set_insert_point(i);
+      builder.insert(new_op);
+      op->replace_all_uses_with(new_op);
+      new_op->replace_uses_of_with(new_op, op);
+      invalidated.insert(layout_->get(op));
+    }
     // uncoalesce after load
     if(auto x = dynamic_cast<ir::load_inst*>(i))
     if(x->get_type()->is_block_ty())
     if(x->get_type()->get_tile_rank()==2)
     if(layout_->get(x)->to_mma())
-    if(dynamic_cast<ir::io_inst*>(i)->get_eviction_policy()==ir::io_inst::NORMAL){
+    if(!has_sm80_ || dynamic_cast<ir::io_inst*>(i)->get_eviction_policy()==ir::io_inst::NORMAL){
         builder.set_insert_point_after(x);
         ir::instruction* new_x = ir::cvt_layout_inst::create(x);
         builder.insert(new_x);

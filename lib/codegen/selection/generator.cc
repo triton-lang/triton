@@ -955,8 +955,14 @@ void generator::visit_store_inst(ir::store_inst * x){
       max_eq = std::max<size_t>(max_eq, 1);
       aln = std::min(aln, max_eq);
     }
-    vec  = std::min(nts, aln);
-    if(x->get_eviction_policy() != ir::store_inst::EVICTION_POLICY::NORMAL)
+    analysis::distributed_layout* layout = dynamic_cast<analysis::distributed_layout*>(layouts_->get(ptr_op));
+    assert(layout);
+    // vec  = std::min(nts, aln);
+    vec = std::min<size_t>(layout->contig_per_thread(ord[0]), aln);
+    // TODO: generalize
+    bool is_mma_first_row = (ord.size() >= 1) && layout->to_mma() && 
+                       (a_axes_->get(ptr_op, ord[0]) == layouts_->get(ptr_op)->get_axis(1));
+    if(is_mma_first_row)
       vec = std::min<size_t>(2, aln);
   }
   bool has_l2_evict_policy = (x->get_eviction_policy() != ir::load_inst::NORMAL) && tgt_->as_nvidia()->sm() >= 80;
@@ -1640,8 +1646,6 @@ void generator::visit_mma884(ir::dot_inst* C, ir::value *A, ir::value *B, ir::va
   // write back accumulators
   for(size_t i = 0; i < idxs_.at(C).size(); i++)
     vals_[C][idxs_[C][i]] = acc[i];
-  
-  std::cout << "done" << std::endl;
 }
 
 namespace {
