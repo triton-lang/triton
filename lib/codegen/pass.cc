@@ -31,27 +31,28 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(ir::module &ir, llvm::LLVMC
   std::string name = ir.get_function_list()[0]->get_name();
   std::unique_ptr<llvm::Module> llvm(new llvm::Module(name, ctx));
   // optimizations
-  bool cts_use_async = target->as_nvidia() && target->as_nvidia()->sm() >= 80;
+  bool has_sm80 = target->as_nvidia() && target->as_nvidia()->sm() >= 80;
   // create passes
   codegen::analysis::align align;
   codegen::transform::inliner inliner;
   codegen::analysis::axes axes;
-  codegen::transform::cts cts(cts_use_async);
-  codegen::transform::pipeline pipeline(cts_use_async, num_stages);
+  codegen::transform::pipeline pipeline(has_sm80, num_stages);
   codegen::transform::disassociate disassociate;
   codegen::analysis::layouts layouts(&axes, &align, num_warps, target);
+  codegen::transform::cts cts(&layouts, has_sm80);
   codegen::analysis::liveness liveness(&layouts);
   codegen::analysis::swizzle swizzle(&layouts, target);
   codegen::analysis::allocation allocation(&liveness);
   codegen::transform::dce dce;
   codegen::transform::peephole peephole(target, &layouts);
-  codegen::transform::coalesce coalesce(&align, &layouts);
+  codegen::transform::coalesce coalesce(&align, &layouts, has_sm80);
   codegen::transform::prefetch prefetch_s(target);
   codegen::transform::membar barriers(&liveness, &layouts, &allocation, &prefetch_s, target);
   codegen::generator isel(&axes, &layouts, &align, &allocation, &swizzle, target, num_warps);
   // run passes
   inliner.run(ir);
   dce.run(ir);
+  // ir.print(std::cout);
   peephole.run(ir);
   dce.run(ir);
   pipeline.run(ir);
@@ -84,10 +85,15 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(ir::module &ir, llvm::LLVMC
   axes.run(ir);
   layouts.run(ir);
   swizzle.run(ir);
+  // std::cout << "---" << std::endl;
+  // ir.print(std::cout);
+  // std::cout << "---" << std::endl;
+  // ir.print(std::cout);
   liveness.run(ir);
   allocation.run(ir);
   prefetch_s.run(ir);
   barriers.run(ir);
+  // exit(1);
   // ir.print(std::cout);
   isel.visit(ir, *llvm);
   shared_static = allocation.allocated_size();

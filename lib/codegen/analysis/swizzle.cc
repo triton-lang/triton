@@ -28,12 +28,15 @@ void swizzle::run(ir::module &) {
       }
       auto ord = layout->get_order();
       scanline_layout* in_layout = dynamic_cast<scanline_layout*>(layout->get_arg_layout());
-      if(!in_layout)
-        continue;
+      int per_phase = 1;
       int dtsize = layout->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
+      if(in_layout)
+        per_phase = std::max<int>(128 / (in_layout->mts(ord[0])*in_layout->nts(ord[0])*dtsize), 1);
+      else
+        per_phase = 1;
       if(tgt_->as_nvidia() && tgt_->as_nvidia()->sm() < 80){
         int inner = mma_dot_a ? 0 : 1;
-        per_phase_[layout] = std::max<int>(128 / (in_layout->mts(ord[0])*in_layout->nts(ord[0])*dtsize), 1);
+        per_phase_[layout] = per_phase;
         max_phase_[layout] = (ord[inner] == 1 ? 8 : 4) / per_phase_[layout];
         if(mma_dot_a)
           vec_[layout] = 2*layouts_->get(mma_dot_a)->to_mma()->rep(0);
@@ -46,7 +49,7 @@ void swizzle::run(ir::module &) {
           max_phase_[layout] = 1;
           vec_[layout] = 1;
         } else {
-          per_phase_[layout] = std::max<int>(128 / (in_layout->mts(ord[0])*in_layout->nts(ord[0])*dtsize), 1);
+          per_phase_[layout] = per_phase;
           max_phase_[layout] = layout->get_mma_strided() / per_phase_[layout];
           vec_[layout]       = layout->get_mma_vec();
         }

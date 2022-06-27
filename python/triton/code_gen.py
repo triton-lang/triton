@@ -211,7 +211,7 @@ class ValueConstructor:
             return phi
         v = unique_handles.pop()
         phi.handle.replace_all_uses_with(v)
-        phi.handle.erase_from_parent()
+        # phi.handle.erase_from_parent()
         # TODO: remove trivial phis recursively
         return triton.language.tensor(v, phi.type)
 

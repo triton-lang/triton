@@ -15,18 +15,26 @@ namespace ir {
 }
 
 namespace codegen{
+
+namespace analysis{
+class layouts;
+}
+
 namespace transform{
 
 class cts {
 private:
-  void add_copy(ir::instruction *parent, ir::value *x, ir::builder &builder, bool to_shared);
+  bool is_shmem_op(ir::instruction* i, int op);
+  bool is_shmem_res(ir::value* i);
+void add_copy(ir::instruction *parent, ir::value *x, ir::builder &builder, bool to_shared, std::map<ir::value*,ir::value*>& copies);
 
 public:
-  cts(bool use_async = false): use_async_(use_async) {}
+  cts(analysis::layouts* layouts, bool has_sm80 = false): layouts_(layouts), has_sm80_(has_sm80) {}
   void run(ir::module &mod);
 
 private:
-  bool use_async_;
+  bool has_sm80_;
+  analysis::layouts* layouts_;
 };
 
 }
