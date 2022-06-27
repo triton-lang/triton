@@ -258,7 +258,8 @@ public:
                 const std::vector<unsigned>& shapes,
                 const std::vector<ir::value *> &values_,
                 ir::type *ty,
-                analysis::align* align, target *tgt);
+                analysis::align* align, target *tgt,
+                bool is_tmp = false);
   void accept(layout_visitor* vst) { vst->visit_layout_shared(this); }
   // accessors
   size_t get_size()                         { return size_; }
@@ -276,6 +277,7 @@ public:
   int  get_mma_strided()                    { return mma_strided_; }
   bool allow_swizzle() const                { return allow_swizzle_; }
   data_layout* get_arg_layout()             { return arg_layout_; }
+  bool is_tmp() const                       { return is_tmp_; }
 
 private:
   size_t size_;
@@ -290,6 +292,7 @@ private:
   int mma_strided_;
   bool allow_swizzle_ = true;
   target *tgt_;
+  bool is_tmp_;
 };
 
 

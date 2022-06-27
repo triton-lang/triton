@@ -1,8 +1,10 @@
+#include "triton/codegen/analysis/layout.h"
 #include "triton/codegen/transform/cts.h"
 #include "triton/ir/module.h"
 #include "triton/ir/function.h"
 #include "triton/ir/basic_block.h"
 #include "triton/ir/instructions.h"
+#include "triton/ir/utils.h"
 #include <iostream>
 
 namespace triton {
@@ -10,9 +12,9 @@ namespace codegen{
 namespace transform{
 
 
-inline bool is_shmem_op(ir::instruction* i, int op) {
+bool cts::is_shmem_op(ir::instruction* i, int op) {
   if(i->get_id() == ir::INST_DOT)
-    return op==0 || op==1;
+    return op == 0 || op == 1;
   if(i->get_id() == ir::INST_COPY_FROM_SHARED)
     return op==0;
   if(i->get_id() == ir::INST_TRANS)
@@ -20,7 +22,7 @@ inline bool is_shmem_op(ir::instruction* i, int op) {
   return false;
 }
 
-inline bool is_shmem_res(ir::value* v){
+bool cts::is_shmem_res(ir::value* v){
   ir::instruction* i = dynamic_cast<ir::instruction*>(v);
   if(!i)
     return false;
@@ -35,7 +37,7 @@ inline bool is_shmem_res(ir::value* v){
 
 
 // run pass on module
-void cts::add_copy(ir::instruction *parent, ir::value *x, ir::builder &builder, bool to_shared) {
+void cts::add_copy(ir::instruction *parent, ir::value *x, ir::builder &builder, bool to_shared, std::map<ir::value*, ir::value*>& copies) {
   auto *i = dynamic_cast<ir::instruction*>(x);
   // not an instruction
   if(!i) {
@@ -51,7 +53,7 @@ void cts::add_copy(ir::instruction *parent, ir::value *x, ir::builder &builder, 
   // phi node
   if(auto* phi = dynamic_cast<ir::phi_node*>(x)) {
     for(unsigned i = 0; i < phi->get_num_incoming(); ++i)
-      add_copy(phi, phi->get_incoming_value(i), builder, to_shared);
+      add_copy(phi, phi->get_incoming_value(i), builder, to_shared, copies);
     return;
   }
   // already in shared memory
@@ -65,30 +67,49 @@ void cts::add_copy(ir::instruction *parent, ir::value *x, ir::builder &builder, 
   }
   else
     copy = builder.create_copy_from_shared(x);
-  parent->replace_uses_of_with(x, copy);
+  copies.insert({x, copy});
+  parent->replace_uses_of_with(x, copies.at(x));
 }
 
 void cts::run(ir::module &mod) {
-  // Add shared copies
-  ir::builder &builder = mod.get_builder();
-  for(ir::function* fn: mod.get_function_list()){
-    for(ir::basic_block* block: fn->blocks())
-    for(ir::instruction* i: block->get_inst_list()){
-      size_t num_op = i->get_num_operands();
-      // copy to shared operands
-      for(size_t k = 0; k < num_op; k++)
-        if(is_shmem_op(i, k)){
-          add_copy(i, i->get_operand(k), builder, true);
-        }
-      // copy from shared operands
-      for(size_t k = 0; k < num_op; k++)
-        if(!dynamic_cast<ir::phi_node*>(i) &&
-           !is_shmem_op(i,k) &&
-           is_shmem_res(i->get_operand(k))){
-          add_copy(i, i->get_operand(k), builder, false);
-        }
+  // Precompute where copies should be added
+  std::set<ir::value*> shmem_ops;
+  std::set<ir::value*> shmem_res;
+  ir::for_each_instruction(mod, [&](ir::instruction* i) {
+    if(i->get_id() == ir::INST_DOT){
+      ir::dot_inst* dot = dynamic_cast<ir::dot_inst*>(i);
+      ir::value* lhs = i->get_operand(0);
+      ir::type* ty = lhs->get_type()->get_scalar_ty();
+      analysis::mma_layout* mma_lhs = layouts_->get(lhs)->to_mma();
+      // TODO: V100
+      bool is_lhs_shmem = !(mma_lhs && has_sm80_ && ty->get_primitive_size_in_bits() == 16 && !dot->is_trans_a());
+      if(is_lhs_shmem)
+        shmem_ops.insert(lhs);
+      shmem_ops.insert(i->get_operand(1));
     }
-  }
+    if(i->get_id() == ir::INST_COPY_FROM_SHARED)
+      shmem_ops.insert(i->get_operand(0));
+    if(i->get_id() == ir::INST_TRANS)
+      shmem_ops.insert(i->get_operand(0));
+    if(i->get_id() == ir::INST_TRANS ||
+       i->get_id() == ir::INST_COPY_TO_SHARED ||
+       i->get_id() == ir::INST_MASKED_LOAD_ASYNC)
+      shmem_res.insert(i);
+  });
+
+  // Add shared copies
+  std::map<ir::value*, ir::value*> copies;
+  ir::builder &builder = mod.get_builder();
+  ir::for_each_instruction(mod, [&](ir::instruction* i) {
+    size_t num_op = i->get_num_operands();
+    for(size_t k = 0; k < num_op; k++){
+      ir::value* op = i->get_operand(k);
+      // copy to shared operands
+      bool is_shmem_op = shmem_ops.find(op) != shmem_ops.end();
+      if(is_shmem_op)
+        add_copy(i, op, builder, true, copies);
+    }
+  });
 }
 
 

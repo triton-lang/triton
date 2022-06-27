@@ -732,7 +732,7 @@ def reshape(input, shape, _builder=None):
 
 
 @builtin
-def dot(input, other, allow_tf32=True, _builder=None):
+def dot(input, other, trans_a=False, trans_b=False, allow_tf32=True, _builder=None):
     """
     Returns the matrix product of two blocks.
 
@@ -744,7 +744,7 @@ def dot(input, other, allow_tf32=True, _builder=None):
     :type other: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
     """
     allow_tf32 = _constexpr_to_value(allow_tf32)
-    return semantic.dot(input, other, allow_tf32, _builder)
+    return semantic.dot(input, other, trans_a, trans_b, allow_tf32, _builder)
 
 
 # -----------------------
@@ -782,7 +782,7 @@ def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", 
 
 
 @builtin
-def store(pointer, value, mask=None, _builder=None):
+def store(pointer, value, eviction_policy="", mask=None, _builder=None):
     """
     Stores :code:`value` tensor of elements in memory, element-wise, at the memory locations specified by :code:`pointer`.
 
@@ -799,7 +799,7 @@ def store(pointer, value, mask=None, _builder=None):
     value = _to_tensor(value, _builder)
     if mask is not None:
         mask = _to_tensor(mask, _builder)
-    return semantic.store(pointer, value, mask, _builder)
+    return semantic.store(pointer, value, mask, eviction_policy, _builder)
 
 
 # -----------------------

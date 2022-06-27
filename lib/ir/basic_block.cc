@@ -26,7 +26,10 @@ void basic_block::replace_phi_uses_with(basic_block* before, basic_block* after)
     auto* curr_phi = dynamic_cast<ir::phi_node*>(i);
     if(!curr_phi)
       break;
-    curr_phi->replace_uses_of_with(before, after);
+    // curr_phi->replace_uses_of_with(before, after);
+    for (size_t idx = 0; idx < curr_phi->get_num_incoming(); ++idx)
+    if (curr_phi->get_incoming_block(idx) == before)
+      curr_phi->set_incoming_block(idx, after);
   }
 }
 
