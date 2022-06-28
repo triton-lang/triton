@@ -782,7 +782,7 @@ def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", 
 
 
 @builtin
-def store(pointer, value, eviction_policy="", mask=None, _builder=None):
+def store(pointer, value, mask=None, eviction_policy="", _builder=None):
     """
     Stores :code:`value` tensor of elements in memory, element-wise, at the memory locations specified by :code:`pointer`.
 
