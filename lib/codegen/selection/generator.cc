@@ -2851,23 +2851,28 @@ void generator::visit_prefetch_s_inst(ir::prefetch_s_inst *i) {
     }
   }
 }
-
-void generator::visit_async_wait_inst(ir::async_wait_inst* i) {
-  std::string asm_str = "cp.async.wait_group " + std::to_string(i->get_N()) + ";";
-  InlineAsm *iasm = InlineAsm::get(FunctionType::get(void_ty, {}), asm_str, "", true);
+void generator::visit_async_wait_inst(ir::async_wait_inst* i) { std::string asm_str = "cp.async.wait_group " + std::to_string(i->get_N()) + ";"; InlineAsm *iasm = InlineAsm::get(FunctionType::get(void_ty, {}), asm_str, "", true);
   call(iasm);
 }
 
 /**
- * \brief Code Generation for `cos`
+ * \brief Code Generation for `extern_elementwise`
  */
-void generator::visit_extern_elementwise_inst(ir::extern_elementwise_inst* i) {
-  FunctionType *FT =
-      FunctionType::get(f32_ty, f32_ty, false);
+void generator::visit_extern_elementwise_inst(ir::extern_elementwise_inst *i) {
+  std::vector<Type *> operand_types;
+  for (size_t j = 0; j < i->get_num_operands(); j++) {
+    operand_types.push_back(cvt(i->get_operand(j)->get_type()));
+  }
+  Type *ret_type = cvt(i->get_type());
+  FunctionType *FT = FunctionType::get(ret_type, operand_types, false);
   Function *F = llvm::cast<llvm::Function>(
-      mod_->getOrInsertFunction("__nv_cosf", FT).getCallee());
-  for(auto idx: idxs_.at(i)){
-    vals_[i][idx] = call(F, std::vector<llvm::Value*>{vals_[i->get_operand(0)][idx]});
+      mod_->getOrInsertFunction(i->get_name(), FT).getCallee());
+  for (auto idx : idxs_.at(i)) {
+    std::vector<llvm::Value *> args;
+    for (size_t j = 0; j < i->get_num_operands(); j++) {
+      args.push_back(vals_[i->get_operand(j)][idx]);
+    }
+    vals_[i][idx] = call(F, args);
   }
 }
 
@@ -3447,6 +3452,8 @@ void generator::visit(ir::module &src, llvm::Module &dst) {
     visit_function(fn);
 }
 
+void generator::install_extern_lib(const std::string &lib_name, const std::string &lib_path) {
+}
 
 }
 }

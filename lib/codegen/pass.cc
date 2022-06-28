@@ -31,54 +31,38 @@
 namespace triton {
 namespace codegen {
 
-static std::unique_ptr<llvm::Module> link_libdevice(
+static std::unique_ptr<llvm::Module> link_extern_libs(
+    const std::set<std::string> &extern_libs,
     ir::module& ir, llvm::LLVMContext& ctx,
     std::unique_ptr<llvm::Module> llvm) {
-  std::string module_path = driver::path_to_libdevice();
-  llvm::SMDiagnostic err;
-  auto libdevice_mod = llvm::parseIRFile(module_path, err, ctx);
-  if (!libdevice_mod) {
-    throw std::runtime_error("Failed to load libdevice at " + module_path);
-  }
-
-  // Set triple and data layout of libdevice to match the target module
-  if (llvm::Linker::linkModules(*llvm, std::move(libdevice_mod))) {
-    throw std::runtime_error("Failed to link libdevice at " + module_path);
-  }
-
-  // Internalize all device functions
-  std::set<llvm::StringRef> function_names;
-  for (auto& func : ir.get_function_list()) {
-    function_names.insert(func->get_name());
-  }
-  llvm::legacy::PassManager pass;
-  pass.add(llvm::createInternalizePass([&](const llvm::GlobalValue& v) -> bool {
-    if (function_names.count(v.getName()) != 0) {
-      return true;
+  for (const auto& extern_lib : extern_libs) {
+    llvm::SMDiagnostic err;
+    auto mod = llvm::parseIRFile(extern_lib, err, ctx);
+    if (!mod) {
+      throw std::runtime_error("Failed to load extern at " + extern_lib);
     }
-    return false;
-  }));
 
-  // Add nvvm reflect flags to llvm module
-  // (i32 4 indicates that the value set here overrides the value in another
-  // module we link with. See the LangRef <LangRef.html#module-flags-metadata>
-  // for details.)
-  llvm::Type* I32 = llvm::Type::getInt32Ty(ctx);
-  llvm::Metadata* md_four =
-      llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(I32, 4));
-  llvm::Metadata* md_name = llvm::MDString::get(ctx, "nvvm-reflect-ftz");
-  llvm::Metadata* md_one =
-      llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(I32, 1));
-  llvm::MDNode* reflect = llvm::MDNode::get(ctx, {md_four, md_name, md_one});
-  llvm->addModuleFlag(reflect);
+    // Set triple and data layout of libdevice to match the target module
+    if (llvm::Linker::linkModules(*llvm, std::move(mod))) {
+      throw std::runtime_error("Failed to link libdevice at " + extern_lib);
+    }
 
-  // Cleanup unused functions caused by reflection
-  llvm::PassManagerBuilder builder;
-  builder.OptLevel = 3;
-  builder.SizeLevel = 0;
-  builder.populateModulePassManager(pass);
+    // Internalize all device functions
+    std::set<llvm::StringRef> function_names;
+    for (auto& func : ir.get_function_list()) {
+      function_names.insert(func->get_name());
+    }
+    llvm::legacy::PassManager pass;
+    pass.add(llvm::createInternalizePass([&](const llvm::GlobalValue& v) -> bool {
+      if (function_names.count(v.getName()) != 0) {
+        return true;
+      }
+      return false;
+    }));
 
-  pass.run(*llvm);
+
+    pass.run(*llvm);
+  }
   return llvm;
 }
 
@@ -151,8 +135,9 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(
   // ir.print(std::cout);
   isel.visit(ir, *llvm);
   shared_static = allocation.allocated_size();
-  if (isel.has_libdevice_functions()) {
-    llvm = link_libdevice(ir, ctx, std::move(llvm));
+  if (isel.get_extern_libs().size() > 0) {
+    llvm =
+        link_extern_libs(isel.get_extern_libs(), ir, ctx, std::move(llvm));
   }
   return llvm;
 }

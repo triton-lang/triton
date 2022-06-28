@@ -177,6 +177,8 @@ public:
   virtual void visit_constant_int(constant_int*) = 0;
   virtual void visit_constant_fp(constant_fp*) = 0;
   virtual void visit_alloc_const(alloc_const*) = 0;
+
+  virtual void visit_extern_elementwise_inst(extern_elementwise_inst*) = 0;
 };
 
 }

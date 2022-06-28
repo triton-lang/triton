@@ -169,6 +169,11 @@ public:
   // Utilities
   value *create_clock();
   value *create_globaltimer();
+  // Extern instruction
+  value *create_extern_elementwise(const std::string &extern_lib_path,
+                                   const std::string &name,
+                                   const std::vector<value *> &args,
+                                   type *dst_ty);
   // Built-in instruction
   value *create_get_program_id(unsigned axis);
   value *create_get_num_programs(unsigned axis);

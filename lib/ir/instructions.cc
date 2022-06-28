@@ -986,6 +986,25 @@ globaltimer_inst* globaltimer_inst::create(context &ctx, const std::string &name
   return new globaltimer_inst(ctx, name, next);
 }
 
+// extern elementwise
+extern_elementwise_inst::extern_elementwise_inst(
+    context &ctx, const std::vector<value *> &args, type *ret_ty,
+    const std::string &extern_lib_path, const std::string &name,
+    instruction *next)
+    : instruction(ret_ty, INST_EXTERN_ELEMENTWISE, args.size(), name, next),
+      extern_lib_path_(extern_lib_path) {
+  for (size_t i = 0; i < args.size(); i++) {
+    set_operand(i, args[i]);
+  }
+}
+
+extern_elementwise_inst* extern_elementwise_inst::create(
+    context &ctx, const std::vector<value *> &args, type *ret_ty,
+    const std::string &extern_lib_path, const std::string &name,
+    instruction *next) {
+  return new extern_elementwise_inst(ctx, args, ret_ty, extern_lib_path, name, next);
+}
+
 // clock
 clock_inst::clock_inst(context &ctx, const std::string &name, instruction *next)
   : instruction(type::get_int64_ty(ctx), INST_CLOCK, 0, name, next) { }

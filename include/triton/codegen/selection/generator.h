@@ -6,6 +6,7 @@
 #include "triton/ir/visitor.h"
 #include "triton/ir/instructions.h"
 #include "triton/codegen/analysis/layout.h"
+#include "triton/codegen/extern_lib.h"
 #include <functional>
 
 // forward
@@ -193,6 +194,7 @@ public:
   void visit_make_range(ir::make_range*);
   void visit_clock_inst(ir::clock_inst*);
   void visit_globaltimer_inst(ir::globaltimer_inst*);
+  void visit_extern_elementwise_inst(ir::extern_elementwise_inst*);
 //  void visit_make_range_sta(ir::make_range_sta*);
   void visit_undef_value(ir::undef_value*);
   void visit_constant_int(ir::constant_int*);
@@ -210,15 +212,15 @@ public:
   void visit_layout_shared(analysis::shared_layout*);
 
   // libdevice
-  bool has_libdevice_functions() { return has_libdevice_functions_; }
-
-  void init_libdevice_functions() { has_libdevice_functions_ = true; }
+  void install_extern_lib(const std::string &lib_name, const std::string &lib_path);
+  std::set<std::string> &get_extern_libs();
 
  private:
   LLVMContext *ctx_;
   Builder* builder_;
   Module *mod_;
-  bool has_libdevice_functions_ = false;
+
+  std::map<std::string, std::unique_ptr<ExternLib>> extern_libs_;
 
   analysis::axes *a_axes_;
   analysis::swizzle *swizzle_;

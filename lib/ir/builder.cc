@@ -384,9 +384,10 @@ value *builder::create_globaltimer() {
 
 value *builder::create_extern_elementwise(const std::string &extern_lib_path,
                                           const std::string &name,
-                                          const std::vector<value *> &args) {
+                                          const std::vector<value *> &args,
+                                          type *dst_ty) {
   return insert(
-      extern_elementwise_inst::create(ctx_, args, extern_lib_path, name));
+      extern_elementwise_inst::create(ctx_, args, dst_ty, extern_lib_path, name));
 }
 
 //===----------------------------------------------------------------------===//
