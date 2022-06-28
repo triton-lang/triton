@@ -117,7 +117,7 @@ class Libdevice:
     # @core.builtin
     # def <op_name>(<args>, _builder=None):
     #   arg_type_symbol_dict = {[arg_type]: {(symbol, ret_type)}}
-    #   return extern.dispatch(<path>, <args>, <arg_type_dict>, _builder)
+    #   return extern.dispatch("libdevice", <path>, <args>, <arg_type_symbol_dict>, _builder)
     import_str = "from . import core, extern\n"
     functions_str = "core.builtin\n"
     for symbols in self._symbol_groups.values():
@@ -126,7 +126,7 @@ class Libdevice:
         func_name_str += f"{arg_name}, "
       func_name_str += "_builder=None):\n"
 
-      return_str = f"return extern.dispatch({self.path}, "
+      return_str = f"return extern.dispatch(libdevice, {self.path}, "
       for arg_name in symbol.arg_names:
         return_str += f"[{arg_name}, "
       return_str += "], "
@@ -138,12 +138,12 @@ class Libdevice:
           arg_type_symbol_dict_str += arg_type + ","
         arg_type_symbol_dict_str += f"]: {(symbol.name, symbol.ret_type)},"
       arg_type_symbol_dict_str += "}"
-      
-      return_str += arg_type_symbol_dict_str 
+
+      return_str += arg_type_symbol_dict_str
       return_str += ", _builder)\n"
 
       functions_str += func_name_str + return_str + "\n"
-    
+
     with open(f"{output_dir}/libdevice.py", "w") as f:
       f.write(functions_str)
       f.close()

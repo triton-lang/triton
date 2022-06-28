@@ -170,8 +170,9 @@ public:
   value *create_clock();
   value *create_globaltimer();
   // Extern instruction
-  value *create_extern_elementwise(const std::string &extern_lib_path,
-                                   const std::string &name,
+  value *create_extern_elementwise(const std::string &lib_name,
+                                   const std::string &lib_path,
+                                   const std::string &symbol_name,
                                    const std::vector<value *> &args,
                                    type *dst_ty);
   // Built-in instruction

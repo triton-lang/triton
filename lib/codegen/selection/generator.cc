@@ -2874,6 +2874,7 @@ void generator::visit_extern_elementwise_inst(ir::extern_elementwise_inst *i) {
     }
     vals_[i][idx] = call(F, args);
   }
+  add_extern_lib(i->get_lib_name(), i->get_lib_path());
 }
 
 //void generator::visit_make_range_dyn(ir::make_range_dyn* x) {
@@ -3452,7 +3453,13 @@ void generator::visit(ir::module &src, llvm::Module &dst) {
     visit_function(fn);
 }
 
-void generator::install_extern_lib(const std::string &lib_name, const std::string &lib_path) {
+void generator::add_extern_lib(const std::string &lib_name, const std::string &lib_path) {
+  if (extern_libs_.count(lib_name) == 0) {
+    extern_libs_.emplace(lib_name, lib_path);
+  } else if (extern_libs_.at(lib_name)->path() != lib_path) {
+    throw std::runtime_error("A library has multiple paths (1) " + lib_path +
+                             " (2) " + extern_libs_.at(lib_name)->path());
+  }
 }
 
 }

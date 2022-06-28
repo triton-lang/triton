@@ -212,8 +212,11 @@ public:
   void visit_layout_shared(analysis::shared_layout*);
 
   // libdevice
-  void install_extern_lib(const std::string &lib_name, const std::string &lib_path);
-  std::set<std::string> &get_extern_libs();
+  void add_extern_lib(const std::string &lib_name, const std::string &lib_path);
+
+  const std::map<std::string, std::unique_ptr<ExternLib>> &get_extern_libs() {
+    return extern_libs_;
+  }
 
  private:
   LLVMContext *ctx_;

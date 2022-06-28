@@ -152,20 +152,6 @@ int vptx(int version){
   throw std::runtime_error("Triton requires CUDA 10+");
 }
 
-std::string path_to_libdevice() {
-  // search pathes for libdevice
-  std::string triton_libdevice = tools::getenv("TRITON_LIBDEVICE_PATH");
-  if (triton_libdevice.empty() || !std::filesystem::exists(triton_libdevice)) {
-    triton_libdevice = "/usr/local/cuda/nvvm/libdevice/libdevice.10.bc";
-    if (!std::filesystem::exists(triton_libdevice)) {
-      throw std::runtime_error(
-          "`libdevice` was not found in TRITON_LIBDEVICE_PATH or "
-          "/usr/local/cuda/nvvm/libdevice/");
-    }
-  }
-  return triton_libdevice;
-}
-
 std::string llir_to_ptx(llvm::Module* module, int cc, int version) {
   // LLVM version in use may not officially support target hardware
   int max_nvvm_cc = 75;
