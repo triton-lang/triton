@@ -925,7 +925,8 @@ void init_triton_ir(py::module &&m) {
       // Utilities
       .def("create_clock", &ir::builder::create_clock, ret::reference)
       .def("create_globaltimer", &ir::builder::create_globaltimer, ret::reference)
-
+      // Extern instruction
+      .def("create_extern_elementwise", &ir::builder::create_extern_elementwise, ret::reference)
       // Built-in instruction
       .def("create_get_program_id", &ir::builder::create_get_program_id, ret::reference)
       .def("create_get_num_programs", &ir::builder::create_get_num_programs, ret::reference)

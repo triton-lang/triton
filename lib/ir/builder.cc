@@ -40,7 +40,6 @@ void builder::set_insert_point(basic_block *block){
   insert_point_ = block->end();
 }
 
-
 //===----------------------------------------------------------------------===//
 //                               convenience functions
 //===----------------------------------------------------------------------===//
@@ -377,6 +376,17 @@ value *builder::create_clock() {
 
 value *builder::create_globaltimer() {
   return insert(globaltimer_inst::create(ctx_));
+}
+
+//===----------------------------------------------------------------------===//
+//                               externs
+//===----------------------------------------------------------------------===//
+
+value *builder::create_extern_elementwise(const std::string &extern_lib_path,
+                                          const std::string &name,
+                                          const std::vector<value *> &args) {
+  return insert(
+      extern_elementwise_inst::create(ctx_, args, extern_lib_path, name));
 }
 
 //===----------------------------------------------------------------------===//

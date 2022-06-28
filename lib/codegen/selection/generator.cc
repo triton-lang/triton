@@ -1105,17 +1105,11 @@ void generator::visit_exp_inst(ir::exp_inst* x){
  * \brief Code Generation for `cos`
  */
 void generator::visit_cos_inst(ir::cos_inst* x){
-  //std::vector<llvm::Type*> tys = {f32_ty};
-  //FunctionType *fn_ty = FunctionType::get(f32_ty, tys, false);
-  //InlineAsm *cos = InlineAsm::get(fn_ty, "cos.approx.f32 $0, $0;", "=f,0", false);
-  // Replace it with acos to test libdevice for now
-  init_libdevice_functions();
-  FunctionType *FT =
-      FunctionType::get(f32_ty, f32_ty, false);
-  Function *F = llvm::cast<llvm::Function>(
-      mod_->getOrInsertFunction("__nv_cosf", FT).getCallee());
+  std::vector<llvm::Type*> tys = {f32_ty};
+  FunctionType *fn_ty = FunctionType::get(f32_ty, tys, false);
+  InlineAsm *cos = InlineAsm::get(fn_ty, "cos.approx.f32 $0, $0;", "=f,0", false);
   for(auto idx: idxs_.at(x)){
-    vals_[x][idx] = call(F, std::vector<llvm::Value*>{vals_[x->get_operand(0)][idx]});
+    vals_[x][idx] = call(cos, std::vector<llvm::Value*>{vals_[x->get_operand(0)][idx]});
   }
 }
 
@@ -2862,6 +2856,19 @@ void generator::visit_async_wait_inst(ir::async_wait_inst* i) {
   std::string asm_str = "cp.async.wait_group " + std::to_string(i->get_N()) + ";";
   InlineAsm *iasm = InlineAsm::get(FunctionType::get(void_ty, {}), asm_str, "", true);
   call(iasm);
+}
+
+/**
+ * \brief Code Generation for `cos`
+ */
+void generator::visit_extern_elementwise_inst(ir::extern_elementwise_inst* i) {
+  FunctionType *FT =
+      FunctionType::get(f32_ty, f32_ty, false);
+  Function *F = llvm::cast<llvm::Function>(
+      mod_->getOrInsertFunction("__nv_cosf", FT).getCallee());
+  for(auto idx: idxs_.at(i)){
+    vals_[i][idx] = call(F, std::vector<llvm::Value*>{vals_[i->get_operand(0)][idx]});
+  }
 }
 
 //void generator::visit_make_range_dyn(ir::make_range_dyn* x) {
