@@ -36,11 +36,9 @@ static std::unique_ptr<llvm::Module> link_extern_libs(
     const std::map<std::string, std::unique_ptr<ExternLib>>& extern_libs,
     ir::module& ir, llvm::LLVMContext& ctx,
     std::unique_ptr<llvm::Module> llvm) {
-  for (const auto& extern_lib : extern_libs) {
-    extern_lib->install(ctx, llvm);
+  for (const auto& iter : extern_libs) {
+    iter.second->install(ctx, llvm);
   }
-
-  llvm::legacy::PassManager pass;
 
   // Internalize all device functions
   std::set<llvm::StringRef> function_names;

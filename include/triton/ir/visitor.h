@@ -84,6 +84,8 @@ class prefetch_s_inst;
 class clock_inst;
 class globaltimer_inst;
 
+class extern_elementwise_inst;
+
 class make_range_sta;
 class undef_value;
 class constant_int;
