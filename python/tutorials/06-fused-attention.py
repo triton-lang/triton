@@ -147,7 +147,7 @@ try:
 except BaseException:
     HAS_FLASH = False
 
-BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
+BATCH, N_HEADS, N_CTX, D_HEAD = 4, 64, 2048, 64
 # vary batch size for fixed heads / seq
 batch_bench = triton.testing.Benchmark(
     x_names=['BATCH'],
