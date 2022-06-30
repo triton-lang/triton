@@ -6,6 +6,7 @@ from typing import Optional, Union
 import numpy as np
 import pytest
 import torch
+import sys
 from numpy.random import RandomState
 
 import triton
@@ -754,7 +755,7 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
     z_ref = numpy_op(x, axis=axis).astype(getattr(np, dtype_str))
     # triton result
     z_tri = to_triton(numpy_random((shape[0],), dtype_str=dtype_str, rs=rs), device=device)
-    binary = kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)
+    kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)
     # compare
     if op == 'sum':
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
@@ -1191,3 +1192,47 @@ def test_num_warps_pow2():
     _kernel[(1,)](dst=dst, num_warps=1)
     _kernel[(1,)](dst=dst, num_warps=2)
     _kernel[(1,)](dst=dst, num_warps=4)
+
+# -------------
+# test extern
+# -------------
+
+
+@pytest.mark.parametrize("dtype_str, expr",
+                         [('int32', 'libdevice.ffs'),
+                          ('float32', 'libdevice.pow')])
+def test_libdevice_ffs(dtype_str, expr):
+    try:
+        import triton.language.libdevice as libdevice
+    except ModuleNotFoundError:
+        pytest.skip("libdevice is not installed")
+
+    @triton.jit
+    def kernel(X, Y, BLOCK: tl.constexpr):
+        x = tl.load(X + tl.arange(0, BLOCK))
+        y = GENERATE_TEST_HERE
+        tl.store(Y, y)
+
+    shape = (128, )
+    rs = RandomState(17)
+    # limit the range of integers so that the sum does not overflow
+    x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
+
+    if expr == 'libdevice.ffs':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'libdevice.fabsf(x)'})
+        y_ref = np.zeros(shape, dtype=x.dtype)
+        for i in range(shape[0]):
+            y_ref[i] = (x[i] & -x[i]).bit_length() - 1
+    elif expr == 'libdevice.pow':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'libdevice.pow(x, x)'})
+        y_ref = np.power(x, x)
+
+    x_tri = to_triton(x)
+    # triton result
+    y_tri = to_triton(numpy_random((shape[0],), dtype_str=dtype_str, rs=rs), device='cuda')
+    kernel[(1,)](x_tri, y_tri, BLOCK=shape[0])
+    # compare
+    if expr == 'libdevice.ffs':
+        np.testing.assert_equal(y_ref, to_numpy(y_tri))
+    else:
+        np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)

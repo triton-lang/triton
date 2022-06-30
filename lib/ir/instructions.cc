@@ -993,7 +993,7 @@ extern_elementwise_inst::extern_elementwise_inst(
     const std::string &symbol_name, instruction *next)
     : instruction(ret_ty, INST_EXTERN_ELEMENTWISE, args.size(), symbol_name,
                   next),
-      lib_name_(lib_name_),
+      lib_name_(lib_name),
       lib_path_(lib_path) {
   for (size_t i = 0; i < args.size(); i++) {
     set_operand(i, args[i]);

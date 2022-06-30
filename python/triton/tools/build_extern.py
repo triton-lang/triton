@@ -138,26 +138,54 @@ class Libdevice(ExternLibrary):
         arg_strs = func_strs[1].split(",")
         arg_types = []
         arg_names = []
-        for arg_str in arg_strs:
+        for i, arg_str in enumerate(arg_strs):
             arg_type = convert_type(arg_str.split()[0])
             if arg_type is None:
                 return None
-            arg_name = arg_str.split()[1].replace("%", "").replace(")", "")
+            arg_name = 'arg' + str(i)
             arg_types.append(arg_type)
             arg_names.append(arg_name)
         return Symbol(func_name, op_name, ret_type, arg_names, arg_types)
 
     def _group_symbols(self):
         # The following cases are grouped together:
-        # op_name, <u>op_name<ll/f>
+        # op_name, <u/ull/ll>op_name<ll/f/i/if>
         for symbol in self._symbols.values():
             op_name = symbol.op_name
-            if op_name.startswith("u"):
-                op_name = op_name[1:]
+            if "max" in op_name:
+                op_name = "max"
+            elif "min" in op_name:
+                op_name = "min"
+            elif "abs" in op_name:
+                op_name = "abs"
+            elif op_name.startswith("ull"):
+                if "2" not in op_name:
+                    # e.g., ullmax->max
+                    op_name = op_name[3:]
+                else:
+                    # e.g., ull2double->ll2double
+                    op_name = op_name[1:]
+            elif op_name.startswith("u"):
+                if "2" not in op_name:
+                    # e.g., uhadd->hadd
+                    op_name = op_name[1:]
+                else:
+                    # e.g., uint2double_rn->int2double_rn
+                    op_name = op_name[1:]
+            elif op_name.startswith("ll"):
+                if "2" not in op_name:
+                    # e.g., llmax->max
+                    op_name = op_name[2:]
+            elif op_name.endswith("i"):
+                op_name = op_name[:-1]
+            elif op_name.endswith("if"):
+                op_name = op_name[:-2]
             elif op_name.endswith("ll"):
                 op_name = op_name[:-2]
             elif op_name.endswith("f"):
                 op_name = op_name[:-1]
+            # Update op_name
+            symbol._op_name = op_name
             if op_name in self._symbol_groups:
                 self._symbol_groups[op_name].append(symbol)
             else:
