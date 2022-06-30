@@ -212,11 +212,9 @@ mma_layout::mma_layout(size_t num_warps,
     order_ = {0, 1};
   }
   else{
-    // fpw_ = {1, 1, 1};
     spw_ = mma_instr_shape_.at(tensor_core_type_); // e.g., {16, 8, 16} for f32.f16.f16.f32
     contig_per_thread_ = {1, 2};
     order_ = {1, 0};
-    // rep_ = {2,  2, 1};
   }
 
   /* warps per tile */
@@ -233,23 +231,44 @@ mma_layout::mma_layout(size_t num_warps,
     }while(wpt_nm1 != wpt_);
   } else {
     bool changed = false;
-    do {
-      changed = false;
-      if (wpt_[0] * wpt_[1] * wpt_[2] >= num_warps)
-        break;
-      if (shape_[0] / spw_[0] / wpt_[0] >= shape_[1] / (spw_[1]*2) / wpt_[1]) {
-        if (wpt_[0] < shape_[0] / spw_[0]) {
-          wpt_[0] *= 2;
-          changed = true;
+    // try to have a warp own entire rows of the output
+    // this makes it easier to fuse multiple mmas by fusing
+    // registers
+    bool one_warp_per_row = false;
+    for(ir::value* v: values)
+    for(ir::user* u: v->get_users()){
+      auto* dot = dynamic_cast<ir::dot_inst*>(u);
+      auto* cts = dynamic_cast<ir::copy_to_shared_inst*>(u);
+      if((dot && dot->get_operand(2)!=v) || !layout_a->to_shared() || cts)
+        one_warp_per_row = shape[0] / spw_[0] >= num_warps;
+    }
+    // std::cout << one_warp_per_row << std::endl;
+
+    if(one_warp_per_row){
+      wpt_[1] = 1;
+      wpt_[0] = num_warps;
+    }
+    else{
+      do {
+        changed = false;
+        if (wpt_[0] * wpt_[1] * wpt_[2] >= num_warps)
+          break;
+        if (shape_[0] / spw_[0] / wpt_[0] >= shape_[1] / (spw_[1]*2) / wpt_[1]) {
+          if (wpt_[0] < shape_[0] / spw_[0]) {
+            wpt_[0] *= 2;
+            changed = true;
+          }
+        } else {
+          if (wpt_[1] < shape_[1] / (spw_[1]*2)) {
+            wpt_[1] *= 2;
+            changed = true;
+          }
         }
-      } else {
-        if (wpt_[1] < shape_[1] / (spw_[1]*2)) {
-          wpt_[1] *= 2;
-          changed = true;
-        }
-      }
-    } while (changed);
+      } while(changed);
+    }
   }
+
+  // std::cout << wpt_[0] << " " << wpt_[1] << std::endl;
 
   /* shape per block */
   shape_per_cta_ = {spw_[0]*wpt_[0], spw_[1]*wpt_[1], 1};
@@ -430,8 +449,8 @@ shared_layout::shared_layout(data_layout *arg,
                                  const std::vector<unsigned>& shape,
                                  const std::vector<ir::value *> &values,
                                  ir::type *ty,
-                                 analysis::align* align, target *tgt)
-    : data_layout(SHARED, axes, shape, values, align), ty_(ty), tgt_(tgt) {
+                                 analysis::align* align, target *tgt, bool is_tmp)
+    : data_layout(SHARED, axes, shape, values, align), ty_(ty), tgt_(tgt), is_tmp_(is_tmp){
 
   size_ = 0;
   arg_layout_ = arg;
@@ -619,7 +638,7 @@ void layouts::create_tmp_layout(size_t id, data_layout *arg,
                                 ir::instruction *i, bool is_index) {
   ir::type *ty = is_index ? ir::type::get_int32_ty(i->get_type()->get_context())
                           : i->get_type()->get_scalar_ty();
-  layouts_[id] = new shared_layout(arg, axes, shape, {i}, ty, align_, tgt_);
+  layouts_[id] = new shared_layout(arg, axes, shape, {i}, ty, align_, tgt_, true);
   if (is_index) {
     tmp_index_[i] = id;
   } else {

@@ -112,7 +112,7 @@ public:
   static function *create(function_type *ty, linkage_types_t linkage,
                           const std::string &name, module *mod);
   // blocks
-  const blocks_t &blocks() { return blocks_; }
+        blocks_t &blocks() { return blocks_; }
   const blocks_t &blocks() const { return blocks_; }
   void insert_block(basic_block* block, basic_block *next = nullptr);
 
