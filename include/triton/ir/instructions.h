@@ -1098,7 +1098,6 @@ class extern_elementwise_inst : public instruction {
   std::string lib_name_ = "";
   std::string lib_path_ = "";
 };
-
 }
 }
 

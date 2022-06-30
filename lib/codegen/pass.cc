@@ -24,7 +24,6 @@
 #include "triton/codegen/transform/peephole.h"
 #include "triton/codegen/transform/pipeline.h"
 #include "triton/codegen/transform/prefetch.h"
-#include "triton/driver/llvm.h"
 #include "triton/ir/function.h"
 #include "triton/ir/module.h"
 #include "triton/ir/print.h"
@@ -32,10 +31,10 @@
 namespace triton {
 namespace codegen {
 
-static std::unique_ptr<llvm::Module> link_extern_libs(
+static void link_extern_libs(
     const std::map<std::string, std::unique_ptr<ExternLib>>& extern_libs,
     ir::module& ir, llvm::LLVMContext& ctx,
-    std::unique_ptr<llvm::Module> llvm) {
+    std::unique_ptr<llvm::Module>& llvm) {
   for (const auto& iter : extern_libs) {
     iter.second->install(ctx, llvm);
   }
@@ -59,7 +58,6 @@ static std::unique_ptr<llvm::Module> link_extern_libs(
   builder.populateModulePassManager(pass);
 
   pass.run(*llvm);
-  return llvm;
 }
 
 // TODO:
@@ -132,7 +130,7 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(
   isel.visit(ir, *llvm);
   shared_static = allocation.allocated_size();
   if (isel.get_extern_libs().size() > 0) {
-    llvm = link_extern_libs(isel.get_extern_libs(), ir, ctx, std::move(llvm));
+    link_extern_libs(isel.get_extern_libs(), ir, ctx, llvm);
   }
   return llvm;
 }

@@ -13,6 +13,9 @@ namespace triton {
 
 namespace codegen {
 
+///
+/// \brief ExternLib is a class that represents a library of external functions.
+///
 class ExternLib {
  public:
   ExternLib(const std::string &name, const std::string &path)
@@ -24,11 +27,20 @@ class ExternLib {
 
   virtual const std::string &path() const { return path_; }
 
+  ///
+  /// \brief Load the library and return the module.
+  ///
   std::unique_ptr<llvm::Module> load(llvm::LLVMContext &ctx);
 
+  ///
+  /// \brief Link the module into the given module.
+  ///
   void link(llvm::LLVMContext &ctx, std::unique_ptr<llvm::Module> &llvm,
             std::unique_ptr<llvm::Module> &mod);
 
+  ///
+  /// \brief Run load, link, and opt on the module.
+  ///
   virtual void install(llvm::LLVMContext &ctx,
                        std::unique_ptr<llvm::Module> &llvm) {
     auto mod = load(ctx);
@@ -36,6 +48,9 @@ class ExternLib {
     opt(ctx, llvm);
   }
 
+  ///
+  /// \brief Run opt on the module.
+  ///
   virtual void opt(llvm::LLVMContext &ctx,
                    std::unique_ptr<llvm::Module> &llvm) = 0;
 
@@ -44,6 +59,9 @@ class ExternLib {
   std::string path_;
 };
 
+///
+/// \brief Concrete class for NVIDIA's libdevice library.
+///
 class LibDevice final : public ExternLib {
  public:
   LibDevice(const std::string &name, const std::string &path)
@@ -51,7 +69,8 @@ class LibDevice final : public ExternLib {
 
   virtual ~LibDevice() = default;
 
-  virtual void opt(llvm::LLVMContext &ctx, std::unique_ptr<llvm::Module> &llvm);
+  virtual void opt(llvm::LLVMContext &ctx,
+                   std::unique_ptr<llvm::Module> &llvm) override;
 };
 
 }  // namespace codegen

@@ -1,6 +1,6 @@
-from abc import ABC, abstractmethod
 import argparse
 import subprocess
+from abc import ABC, abstractmethod
 
 
 class Symbol:

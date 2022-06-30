@@ -1000,11 +1000,12 @@ extern_elementwise_inst::extern_elementwise_inst(
   }
 }
 
-extern_elementwise_inst* extern_elementwise_inst::create(
+extern_elementwise_inst *extern_elementwise_inst::create(
     context &ctx, const std::vector<value *> &args, type *ret_ty,
-    const std::string &lib_name, const std::string &lib_path, const std::string &symbol_name,
-    instruction *next) {
-  return new extern_elementwise_inst(ctx, args, ret_ty, lib_name, lib_path, symbol_name, next);
+    const std::string &lib_name, const std::string &lib_path,
+    const std::string &symbol_name, instruction *next) {
+  return new extern_elementwise_inst(ctx, args, ret_ty, lib_name, lib_path,
+                                     symbol_name, next);
 }
 
 // clock

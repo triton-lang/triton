@@ -211,9 +211,15 @@ public:
   void visit_layout_scanline(analysis::scanline_layout*);
   void visit_layout_shared(analysis::shared_layout*);
 
-  // libdevice
+  ///
+  /// \brief Add a new external library based on given name and path if it
+  /// doesn't exist
+  ///
   void add_extern_lib(const std::string &lib_name, const std::string &lib_path);
 
+  ///
+  /// \brief get all external libraries
+  ///
   const std::map<std::string, std::unique_ptr<ExternLib>> &get_extern_libs() {
     return extern_libs_;
   }

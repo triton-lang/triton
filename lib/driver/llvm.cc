@@ -25,7 +25,6 @@
 #endif
 #include <memory>
 #include <regex>
-#include <filesystem>
 #include "triton/driver/llvm.h"
 #include "triton/driver/dispatch.h"
 #include "triton/driver/error.h"
@@ -46,12 +45,10 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/IR/LegacyPassManager.h"
-#include "llvm/IR/GlobalValue.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/ExecutionEngine/SectionMemoryManager.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Scalar.h"
-#include "llvm/Transforms/IPO.h"
 
 // begin AMD stuff
 #include "llvm/Support/FileSystem.h"
@@ -152,7 +149,7 @@ int vptx(int version){
   throw std::runtime_error("Triton requires CUDA 10+");
 }
 
-std::string llir_to_ptx(llvm::Module* module, int cc, int version) {
+std::string llir_to_ptx(llvm::Module* module, int cc, int version){
   // LLVM version in use may not officially support target hardware
   int max_nvvm_cc = 75;
   int max_nvvm_ptx = 74;
@@ -192,19 +189,16 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version) {
   opt.UnsafeFPMath = false;
   opt.NoInfsFPMath = false;
   opt.NoNaNsFPMath = true;
-  machine = target->createTargetMachine(
-      module->getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
-      llvm::None, llvm::CodeGenOpt::Aggressive);
+  machine = target->createTargetMachine(module->getTargetTriple(), proc, features, opt,
+                                                             llvm::Reloc::PIC_, llvm::None, llvm::CodeGenOpt::Aggressive);
   // set data layout
   if(layout.empty())
     module->setDataLayout(machine->createDataLayout());
   else
     module->setDataLayout(layout);
-
   // emit machine code
-  // XXX(Keren): nvvm functions shouldn't be inlined?
-  //for (llvm::Function &f : module->functions())
-  //  f.addFnAttr(llvm::Attribute::AlwaysInline);
+  for (llvm::Function &f : module->functions())
+    f.addFnAttr(llvm::Attribute::AlwaysInline);
   llvm::legacy::PassManager pass;
   llvm::raw_svector_ostream stream(buffer);
   // emit
@@ -219,6 +213,7 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version) {
   while(find_and_replace(result, "\t// end inline asm", "\n", ""));
   return result;
 }
+
 
 std::string ptx_to_cubin(const std::string& ptx, const std::string& ptxas, int cc) {
   // compile ptx with ptxas
@@ -367,4 +362,3 @@ hipModule_t amdgpu_to_hipmodule(const std::string& path) {
 
 }
 }
-

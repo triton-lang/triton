@@ -174,7 +174,7 @@ public:
                                    const std::string &lib_path,
                                    const std::string &symbol_name,
                                    const std::vector<value *> &args,
-                                   type *dst_ty);
+                                   type *ret_ty);
   // Built-in instruction
   value *create_get_program_id(unsigned axis);
   value *create_get_num_programs(unsigned axis);

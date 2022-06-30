@@ -1100,7 +1100,6 @@ void generator::visit_exp_inst(ir::exp_inst* x){
   }
 }
 
-
 /**
  * \brief Code Generation for `cos`
  */
@@ -2851,7 +2850,10 @@ void generator::visit_prefetch_s_inst(ir::prefetch_s_inst *i) {
     }
   }
 }
-void generator::visit_async_wait_inst(ir::async_wait_inst* i) { std::string asm_str = "cp.async.wait_group " + std::to_string(i->get_N()) + ";"; InlineAsm *iasm = InlineAsm::get(FunctionType::get(void_ty, {}), asm_str, "", true);
+
+void generator::visit_async_wait_inst(ir::async_wait_inst *i) {
+  std::string asm_str = "cp.async.wait_group " + std::to_string(i->get_N()) + ";";
+  InlineAsm *iasm = InlineAsm::get(FunctionType::get(void_ty, {}), asm_str, "", true);
   call(iasm);
 }
 
@@ -2864,15 +2866,16 @@ void generator::visit_extern_elementwise_inst(ir::extern_elementwise_inst *i) {
     operand_types.push_back(cvt(i->get_operand(j)->get_type()));
   }
   Type *ret_type = cvt(i->get_type());
-  FunctionType *FT = FunctionType::get(ret_type, operand_types, false);
+  FunctionType *FT =
+      FunctionType::get(ret_type, std::move(operand_types), false);
   Function *F = llvm::cast<llvm::Function>(
       mod_->getOrInsertFunction(i->get_name(), FT).getCallee());
   for (auto idx : idxs_.at(i)) {
     std::vector<llvm::Value *> args;
     for (size_t j = 0; j < i->get_num_operands(); j++) {
-      args.push_back(vals_[i->get_operand(j)][idx]);
+      args.emplace_back(vals_[i->get_operand(j)][idx]);
     }
-    vals_[i][idx] = call(F, args);
+    vals_[i][idx] = call(F, std::move(args));
   }
   add_extern_lib(i->get_lib_name(), i->get_lib_path());
 }
@@ -3453,7 +3456,8 @@ void generator::visit(ir::module &src, llvm::Module &dst) {
     visit_function(fn);
 }
 
-void generator::add_extern_lib(const std::string &lib_name, const std::string &lib_path) {
+void generator::add_extern_lib(const std::string &lib_name,
+                               const std::string &lib_path) {
   if (extern_libs_.count(lib_name) == 0) {
     if (lib_name == "libdevice") {
       extern_libs_[lib_name] = std::make_unique<LibDevice>(lib_name, lib_path);
@@ -3466,5 +3470,5 @@ void generator::add_extern_lib(const std::string &lib_name, const std::string &l
   }
 }
 
-}
-}
+}  // namespace codegen
+}  // namespace triton
