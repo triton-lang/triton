@@ -802,6 +802,7 @@ void generator::visit_load_inst(ir::load_inst* x){
     int width = std::min(tot_width, max_word_width);
     int n_words = std::max(1, tot_width / width);
     bool has_l2_evict_policy = (x->get_eviction_policy() != ir::load_inst::NORMAL) && tgt_->as_nvidia()->sm() >= 80;
+    has_l2_evict_policy = false;
     // has_evict_policy = false; // currently disable until supported in `store`
     // -----
     // create inline asm string
@@ -966,6 +967,7 @@ void generator::visit_store_inst(ir::store_inst * x){
       vec = std::min<size_t>(2, aln);
   }
   bool has_l2_evict_policy = (x->get_eviction_policy() != ir::load_inst::NORMAL) && tgt_->as_nvidia()->sm() >= 80;
+  has_l2_evict_policy = false;
   auto idxs    = idxs_.at(val_op);
   Type *ty = cvt(val_op->get_type()->get_scalar_ty());
   if (ty->isBFloatTy()) // llvm11-nvptx cannot select bf16 store
