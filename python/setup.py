@@ -15,6 +15,20 @@ from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 
 
+# Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
+def check_env_flag(name: str, default: str = "") -> bool:
+    return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
+
+
+def get_build_type():
+    if check_env_flag("DEBUG"):
+        return "Debug"
+    elif check_env_flag("REL_WITH_DEB_INFO"):
+        return "RelWithDebInfo"
+    else:
+        return "Release"
+
+
 def get_llvm():
     # tries to find system LLVM
     versions = ['-11.0', '-11', '-11-64']
@@ -82,12 +96,8 @@ class CMakeBuild(build_ext):
         llvm_include_dir, llvm_library_dir = get_llvm()
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
-        build_suffix = 'debug' if build_ext.debug == 1 else 'release'
-        llvm_build_dir = os.path.join(tempfile.gettempdir(), "llvm-" + build_suffix)
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
-        if not os.path.exists(llvm_build_dir):
-            os.makedirs(llvm_build_dir)
         # python directories
         python_include_dirs = [distutils.sysconfig.get_python_inc()] + ['/usr/local/cuda/include']
         cmake_args = [
@@ -98,11 +108,10 @@ class CMakeBuild(build_ext):
             "-DLLVM_LIBRARY_DIR=" + llvm_library_dir,
             # '-DPYTHON_EXECUTABLE=' + sys.executable,
             # '-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
-            "-DTRITON_LLVM_BUILD_DIR=" + llvm_build_dir,
             "-DPYTHON_INCLUDE_DIRS=" + ";".join(python_include_dirs)
         ]
         # configuration
-        cfg = "Debug" if build_ext.debug == 1 else "Release"
+        cfg = get_build_type()
         build_args = ["--config", cfg]
 
         if platform.system() == "Windows":
