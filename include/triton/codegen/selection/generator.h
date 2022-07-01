@@ -205,21 +205,15 @@ public:
   void visit_argument(ir::argument*);
   void visit(ir::module &, llvm::Module &);
 
-
   // layouts
   void visit_layout_mma(analysis::mma_layout*);
   void visit_layout_scanline(analysis::scanline_layout*);
   void visit_layout_shared(analysis::shared_layout*);
 
-  ///
-  /// \brief Add a new external library based on given name and path if it
-  /// doesn't exist
-  ///
+  // Add a new external library based on given name and path if it doesn't exist
   void add_extern_lib(const std::string &lib_name, const std::string &lib_path);
 
-  ///
-  /// \brief get all external libraries
-  ///
+  // Get all external libraries
   const std::map<std::string, std::unique_ptr<ExternLib>> &get_extern_libs() {
     return extern_libs_;
   }

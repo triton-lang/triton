@@ -352,13 +352,13 @@ class CodeGenerator(ast.NodeVisitor):
             names = [names]
         if not isinstance(values, tuple):
             values = [values]
+        print(values)
         if isinstance(values[0], triton.language.tensor) \
                 and isinstance(values[0].type, triton.language.tuple_type):
             struct = values[0].handle
             tys = values[0].type.element_types
             values = [self.builder.extract_value(struct, i) for i in range(len(tys))]
             values = [triton.language.tensor(v, ty) for v, ty in zip(values, tys)]
-        assert len(values) == len(names)
         for name, value in zip(names, values):
             # TODO: can we store constexpr here to support constant folding?
             # by default, constexpr are assigned into python variable
@@ -689,7 +689,8 @@ class CodeGenerator(ast.NodeVisitor):
                 ret = triton.language.tensor(ret, self.prototypes[fn_name].ret_type)
             return ret
         # built-in function
-        if sys.modules[fn.__module__] is triton.language.core:
+        if sys.modules[fn.__module__] is triton.language.core or \
+                sys.modules[fn.__module__] is triton.language.libdevice:
             ret = fn(*args, _builder=self.builder, **kws)
         if fn in self.value_constructor.builtins.values():
             args = [arg.value if isinstance(arg, triton.language.constexpr) else arg
@@ -751,7 +752,8 @@ class CodeGenerator(ast.NodeVisitor):
             # methods but we can't move to that without breaking Python 3.6 and 3.7.
             warnings.simplefilter("ignore", DeprecationWarning)  # python 3.9
             warnings.simplefilter("ignore", PendingDeprecationWarning)  # python 3.8
-            return super().visit(node)
+            name = super().visit(node)
+            return name
 
     def generic_visit(self, node):
         typename = type(node).__name__

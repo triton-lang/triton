@@ -39,7 +39,6 @@ static void link_extern_libs(
     iter.second->install(ctx, llvm);
   }
 
-  // Internalize all device functions
   std::set<llvm::StringRef> function_names;
   for (auto& func : ir.get_function_list()) {
     function_names.insert(func->get_name());
@@ -47,8 +46,10 @@ static void link_extern_libs(
   llvm::legacy::PassManager pass;
   pass.add(llvm::createInternalizePass([&](const llvm::GlobalValue& v) -> bool {
     if (function_names.count(v.getName()) != 0) {
+      // Preserve global functions
       return true;
     }
+    // Internalize all device functions
     return false;
   }));
 

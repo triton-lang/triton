@@ -3,6 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from functools import wraps
 from typing import List
+from numpy import isin
 
 import triton
 from . import semantic
@@ -249,7 +250,10 @@ class block_type(dtype):
         self.shape = shape
         self.numel = 1
         for s in self.shape:
-            self.numel *= s
+            if isinstance(s, constexpr):
+                self.numel *= s.value
+            else:
+                self.numel *= s
 
         self.name = self.__str__()
 

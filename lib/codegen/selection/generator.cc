@@ -2863,9 +2863,10 @@ void generator::visit_async_wait_inst(ir::async_wait_inst *i) {
 void generator::visit_extern_elementwise_inst(ir::extern_elementwise_inst *i) {
   std::vector<Type *> operand_types;
   for (size_t j = 0; j < i->get_num_operands(); j++) {
-    operand_types.push_back(cvt(i->get_operand(j)->get_type()));
+    operand_types.push_back(
+        cvt(i->get_operand(j)->get_type()->get_scalar_ty()));
   }
-  Type *ret_type = cvt(i->get_type());
+  Type *ret_type = cvt(i->get_type()->get_scalar_ty());
   FunctionType *FT =
       FunctionType::get(ret_type, std::move(operand_types), false);
   Function *F = llvm::cast<llvm::Function>(

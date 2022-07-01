@@ -1201,7 +1201,7 @@ def test_num_warps_pow2():
 @pytest.mark.parametrize("dtype_str, expr",
                          [('int32', 'libdevice.ffs'),
                           ('float32', 'libdevice.pow')])
-def test_libdevice_ffs(dtype_str, expr):
+def test_libdevice(dtype_str, expr):
     try:
         import triton.language.libdevice as libdevice
     except ModuleNotFoundError:
@@ -1219,12 +1219,12 @@ def test_libdevice_ffs(dtype_str, expr):
     x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
 
     if expr == 'libdevice.ffs':
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'libdevice.fabsf(x)'})
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.ffs(x)'})
         y_ref = np.zeros(shape, dtype=x.dtype)
         for i in range(shape[0]):
-            y_ref[i] = (x[i] & -x[i]).bit_length() - 1
+            y_ref[i] = (int(x[i]) & int(-x[i])).bit_length() - 1
     elif expr == 'libdevice.pow':
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'libdevice.pow(x, x)'})
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.pow(x, x)'})
         y_ref = np.power(x, x)
 
     x_tri = to_triton(x)

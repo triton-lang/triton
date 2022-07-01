@@ -35,7 +35,7 @@ class ExternLib {
   ///
   /// \brief Link the module into the given module.
   ///
-  void link(llvm::LLVMContext &ctx, std::unique_ptr<llvm::Module> &llvm,
+  void link(std::unique_ptr<llvm::Module> &llvm,
             std::unique_ptr<llvm::Module> &mod);
 
   ///
@@ -44,7 +44,7 @@ class ExternLib {
   virtual void install(llvm::LLVMContext &ctx,
                        std::unique_ptr<llvm::Module> &llvm) {
     auto mod = load(ctx);
-    link(ctx, llvm, mod);
+    link(llvm, mod);
     opt(ctx, llvm);
   }
 

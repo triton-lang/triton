@@ -19,14 +19,14 @@ std::unique_ptr<llvm::Module> ExternLib::load(llvm::LLVMContext& ctx) {
     throw std::runtime_error("Failed to load extern lib " + this->name_ +
                              " at " + this->path_);
   }
+  return mod;
 }
 
-void ExternLib::link(llvm::LLVMContext& ctx,
-                     std::unique_ptr<llvm::Module>& llvm,
+void ExternLib::link(std::unique_ptr<llvm::Module>& llvm,
                      std::unique_ptr<llvm::Module>& mod) {
   // Set triple and data layout to match the target module
-  llvm->setTargetTriple(mod->getTargetTriple());
-  llvm->setDataLayout(mod->getDataLayout());
+  mod->setTargetTriple(llvm->getTargetTriple());
+  mod->setDataLayout(llvm->getDataLayout());
   if (llvm::Linker::linkModules(*llvm, std::move(mod))) {
     throw std::runtime_error("Failed to link extern lib " + this->name_ +
                              " at " + this->path_);

@@ -226,11 +226,11 @@ class Libdevice(ExternLibrary):
 
             arg_type_symbol_dict_str = "{"
             for symbol in symbols:
-                arg_type_symbol_dict_str += "["
+                arg_type_symbol_dict_str += "("
                 for arg_type in symbol.arg_types:
                     arg_type_symbol_dict_str += f"core.dtype(\"{arg_type}\"),"
                 ret_type = f"core.dtype(\"{symbol.ret_type}\")"
-                arg_type_symbol_dict_str += "]: {(\"" + symbol.name + "\", " + ret_type + ")},"
+                arg_type_symbol_dict_str += "): (\"" + symbol.name + "\", " + ret_type + "),"
             arg_type_symbol_dict_str += "}"
 
             return_str += arg_type_symbol_dict_str
