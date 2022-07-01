@@ -436,6 +436,9 @@ def not_equal(input: tl.tensor,
 
 
 def arange(start: int, end: int, builder: ir.builder) -> tl.tensor:
+    if not isinstance(start, int) or not isinstance(end, int):
+        raise ValueError("arange's arguments must be of type tl.constexpr")
+
     shape = [end - start]
     ret_ty = tl.block_type(tl.int32, shape)
     return tl.tensor(builder.get_range(start, end), ret_ty)
