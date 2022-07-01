@@ -80,10 +80,9 @@ class CMakeBuild(build_ext):
 
     def build_extension(self, ext):
         llvm_include_dir, llvm_library_dir = get_llvm()
-        self.debug = True
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
-        build_suffix = 'debug' if self.debug else 'release'
+        build_suffix = 'debug' if build_ext.debug == 1 else 'release'
         llvm_build_dir = os.path.join(tempfile.gettempdir(), "llvm-" + build_suffix)
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
@@ -103,7 +102,7 @@ class CMakeBuild(build_ext):
             "-DPYTHON_INCLUDE_DIRS=" + ";".join(python_include_dirs)
         ]
         # configuration
-        cfg = "Debug" if self.debug else "Release"
+        cfg = "Debug" if build_ext.debug == 1 else "Release"
         build_args = ["--config", cfg]
 
         if platform.system() == "Windows":
