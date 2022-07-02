@@ -39,6 +39,8 @@ static void link_extern_libs(
     iter.second->install(ctx, llvm);
   }
 
+  llvm->print(llvm::outs(), nullptr);
+
   std::set<llvm::StringRef> function_names;
   for (auto& func : ir.get_function_list()) {
     function_names.insert(func->get_name());
@@ -52,6 +54,10 @@ static void link_extern_libs(
     // Internalize all device functions
     return false;
   }));
+
+  llvm::legacy::PassManager pm;
+  pm.add(llvm::createVerifierPass());
+  pm.run(*llvm);
 
   llvm::PassManagerBuilder builder;
   builder.OptLevel = 3;
@@ -101,6 +107,7 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(
   dce.run(ir);
   align.run(ir);
   axes.run(ir);
+  ir.print(std::cout);
   layouts.run(ir);
   peephole.run(ir);
   dce.run(ir);

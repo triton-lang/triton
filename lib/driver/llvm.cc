@@ -74,10 +74,10 @@ void init_llvm() {
   LLVMInitializeNVPTXTarget();
   LLVMInitializeNVPTXTargetMC();
   LLVMInitializeNVPTXAsmPrinter();
-  LLVMInitializeAMDGPUTargetInfo();
-  LLVMInitializeAMDGPUTarget();
-  LLVMInitializeAMDGPUTargetMC();
-  LLVMInitializeAMDGPUAsmPrinter();
+  //LLVMInitializeAMDGPUTargetInfo();
+  //LLVMInitializeAMDGPUTarget();
+  //LLVMInitializeAMDGPUTargetMC();
+  //LLVMInitializeAMDGPUAsmPrinter();
 }
 
 

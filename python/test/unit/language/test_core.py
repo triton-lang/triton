@@ -1211,7 +1211,7 @@ def test_libdevice(dtype_str, expr):
     def kernel(X, Y, BLOCK: tl.constexpr):
         x = tl.load(X + tl.arange(0, BLOCK))
         y = GENERATE_TEST_HERE
-        tl.store(Y, y)
+        tl.store(Y + tl.arange(0, BLOCK), y)
 
     shape = (128, )
     rs = RandomState(17)

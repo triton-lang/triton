@@ -69,9 +69,9 @@ else()
 libLLVMNVPTXCodeGen.a
 libLLVMNVPTXDesc.a
 libLLVMNVPTXInfo.a
-libLLVMAMDGPUDisassembler.a
+#libLLVMAMDGPUDisassembler.a
 libLLVMMCDisassembler.a
-libLLVMAMDGPUCodeGen.a
+#libLLVMAMDGPUCodeGen.a
 libLLVMMIRParser.a
 libLLVMGlobalISel.a
 libLLVMSelectionDAG.a
@@ -96,10 +96,10 @@ libLLVMProfileData.a
 libLLVMObject.a
 libLLVMTextAPI.a
 libLLVMBitReader.a
-libLLVMAMDGPUAsmParser.a
+#libLLVMAMDGPUAsmParser.a
 libLLVMMCParser.a
-libLLVMAMDGPUDesc.a
-libLLVMAMDGPUUtils.a
+#libLLVMAMDGPUDesc.a
+#libLLVMAMDGPUUtils.a
 libLLVMMC.a
 libLLVMDebugInfoCodeView.a
 libLLVMDebugInfoMSF.a
@@ -107,7 +107,7 @@ libLLVMCore.a
 libLLVMRemarks.a
 libLLVMBitstreamReader.a
 libLLVMBinaryFormat.a
-libLLVMAMDGPUInfo.a
+#libLLVMAMDGPUInfo.a
 libLLVMSupport.a
 libLLVMDemangle.a
 libLLVMPasses.a

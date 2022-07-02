@@ -79,8 +79,10 @@ class CMakeBuild(build_ext):
             self.build_extension(ext)
 
     def build_extension(self, ext):
-        llvm_include_dir, llvm_library_dir = get_llvm()
-        self.debug = False
+        #llvm_include_dir, llvm_library_dir = get_llvm()
+        llvm_include_dir = "/root/code/spack/opt/spack/linux-ubuntu20.04-zen2/gcc-9.4.0/llvm-11.0.1-nggr7g7zvy2zwuqa5kljlp2womxexar6/include"
+        llvm_library_dir = "/root/code/spack/opt/spack/linux-ubuntu20.04-zen2/gcc-9.4.0/llvm-11.0.1-nggr7g7zvy2zwuqa5kljlp2womxexar6/lib"
+        self.debug = True
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
         build_suffix = 'debug' if self.debug else 'release'

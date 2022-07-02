@@ -249,11 +249,10 @@ class block_type(dtype):
         # while tensor's shape is a list of constexpr
         self.shape = shape
         self.numel = 1
-        for s in self.shape:
+        for i, s in enumerate(self.shape):
             if isinstance(s, constexpr):
-                self.numel *= s.value
-            else:
-                self.numel *= s
+                self.shape[i] = s.value
+            self.numel *= self.shape[i]
 
         self.name = self.__str__()
 

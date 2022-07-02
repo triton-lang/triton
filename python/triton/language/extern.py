@@ -27,9 +27,8 @@ def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dic
     else:
         symbol = arg_type_symbol_dict[arg_types][0]
         ret_type = arg_type_symbol_dict[arg_types][1]
-        print(ret_shape)
-        block_ret_type = core.block_type(ret_type, ret_shape)
-        return core.tensor(func(lib_name, lib_path, symbol, arg_list, ret_type.to_ir(_builder)), block_ret_type)
+        ret_type = core.block_type(ret_type, ret_shape) if ret_shape is not None else ret_type
+        return core.tensor(func(lib_name, lib_path, symbol, arg_list, ret_type.to_ir(_builder)), ret_type)
 
 
 def elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, _builder=None):
