@@ -1277,3 +1277,30 @@ def test_num_warps_pow2():
     _kernel[(1,)](dst=dst, num_warps=1)
     _kernel[(1,)](dst=dst, num_warps=2)
     _kernel[(1,)](dst=dst, num_warps=4)
+
+
+def test_boolop_and():
+    @triton.jit
+    def kernel(cond1_ptr, cond2_ptr, buf1, buf2):
+        pid = tl.program_id(0)
+        cond1 = tl.load(cond1_ptr)
+        cond2 = tl.load(cond2_ptr)
+        if pid == 0:
+            if cond1 and cond2:
+                tl.store(buf2, tl.load(buf1))
+
+    for dtype in [torch.bool, torch.int32]:
+        cond1 = torch.empty(1, dtype=dtype, device='cuda')
+        cond2 = torch.empty(1, dtype=dtype, device='cuda')
+        buf1 = torch.rand(1, dtype=torch.float32, device='cuda')
+        
+        for c1 in [True, False]:
+            for c2 in [True, False]:
+                buf2 = torch.zeros(1, dtype=torch.float32, device='cuda')
+                cond1[0], cond2[0] = c1, c2
+                kernel[(1,)](cond1, cond2, buf1, buf2)
+
+                if c1 and c2:
+                    assert torch.allclose(buf1, buf2)
+                else:
+                    assert torch.all(buf2 == 0)
