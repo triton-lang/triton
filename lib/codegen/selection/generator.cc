@@ -2845,6 +2845,8 @@ void generator::visit_layout_convert(ir::value *out, ir::value *in){
   int pad = std::max(in_vec, out_vec);
   Value *in_ld = i32(shape[in_ord[0]] + pad);
   Value *out_ld = i32(shape[out_ord[0]] + pad);
+  // if(in_layout->to_mma())
+  //   std::cout << in->get_type()->get_scalar_ty()->is_fp32_ty() << " " << in_layout->to_mma()->wpt(1) << std::endl;
   for(int i = 0; i < n_reps[0]; i++)
   for(int j = 0; j < n_reps[1]; j++){
     int max_ii, max_jj;

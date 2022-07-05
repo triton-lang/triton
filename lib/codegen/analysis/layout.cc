@@ -242,7 +242,6 @@ mma_layout::mma_layout(size_t num_warps,
       if((dot && dot->get_operand(2)!=v) || !layout_a->to_shared() || cts)
         one_warp_per_row = shape[0] / spw_[0] >= num_warps;
     }
-    // std::cout << one_warp_per_row << std::endl;
 
     if(one_warp_per_row){
       wpt_[1] = 1;
