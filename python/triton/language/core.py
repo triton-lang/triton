@@ -370,6 +370,16 @@ class constexpr:
     def __call__(self, *args, **kwds):
         return self.value(*args, **kwds)
 
+    def to(self, dtype, bitcast=False, _builder=None):
+        if dtype in [float8, float16, bfloat16]:
+            raise ValueError("floating point constexpr must be float64")
+        if dtype.is_int():
+            ret_ty = int
+        elif dtype.is_bool():
+            ret_ty = bool
+        elif dtype.is_floating():
+            ret_ty = float
+        return constexpr(ret_ty(self.value))
 
 class tensor:
     # infer dtype from ir type
