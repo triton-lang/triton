@@ -381,6 +381,7 @@ class constexpr:
             ret_ty = float
         return constexpr(ret_ty(self.value))
 
+
 class tensor:
     # infer dtype from ir type
     @staticmethod
