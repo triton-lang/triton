@@ -48,11 +48,12 @@ config.test_source_root = os.path.dirname(__file__)
 # test_exec_root: The root path where tests should be run.
 config.test_exec_root = os.path.join(config.triton_obj_root, 'test')
 config.triton_tools_dir = os.path.join(config.triton_obj_root, 'bin')
+config.filecheck_dir = os.path.join(config.triton_obj_root, 'bin', 'FileCheck')
+tool_dirs = [config.triton_tools_dir, config.llvm_tools_dir, config.filecheck_dir]
 
 # Tweak the PATH to include the tools dir.
-llvm_config.with_environment('PATH', config.llvm_tools_dir, append_path=True)
-
-tool_dirs = [config.triton_tools_dir, config.llvm_tools_dir]
+for d in tool_dirs:
+    llvm_config.with_environment('PATH', d, append_path=True)
 tools = [
     'triton-opt',
     ToolSubst('%PYTHON', config.python_executable, unresolved='ignore'),
