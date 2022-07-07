@@ -1,4 +1,4 @@
-// RUN triton-opt %s -convert-triton-to-tritongpu
+// RUN: triton-opt %s -convert-triton-to-tritongpu
 
 func @ops() {
   %a = arith.constant dense<1.00e+00> : tensor<128x32xf16>

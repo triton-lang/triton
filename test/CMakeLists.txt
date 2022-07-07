@@ -10,8 +10,8 @@ configure_lit_site_cfg(
 )
 
 set(TRITON_TEST_DEPENDS
-  # FileCheck count not
   triton-opt
+  FileCheck
 )
 
 add_lit_testsuite(check-triton "Running the triton regression tests"
