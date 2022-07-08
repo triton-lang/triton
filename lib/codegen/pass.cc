@@ -39,8 +39,6 @@ static void link_extern_libs(
     iter.second->install(ctx, llvm);
   }
 
-  llvm->print(llvm::outs(), nullptr);
-
   std::set<llvm::StringRef> function_names;
   for (auto& func : ir.get_function_list()) {
     function_names.insert(func->get_name());

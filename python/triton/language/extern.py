@@ -58,13 +58,15 @@ def elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: 
 
         :return: the return value of the function
     '''
-    dispatch_args = []
+    dispatch_args = args.copy()
     if len(args) == 1:
-        dispatch_args[0] = core._to_tensor(args[0], _builder)
+        dispatch_args[0] = core._to_tensor(dispatch_args[0], _builder)
         ret_shape = dispatch_args[0].shape
     elif len(args) == 2:
+        dispatch_args[0] = core._to_tensor(dispatch_args[0], _builder)
+        dispatch_args[1] = core._to_tensor(dispatch_args[1], _builder)
         dispatch_args[0], dispatch_args[1] = semantic.binary_op_type_checking_impl(
-            core._to_tensor(args[0], _builder), core._to_tensor(args[1], _builder), _builder)
+            dispatch_args[0], dispatch_args[1], _builder)
         ret_shape = dispatch_args[0].shape
     else:
         return ValueError("elementwise function takes 1 or 2 arguments")
