@@ -1222,7 +1222,7 @@ def test_libdevice(dtype_str, expr):
         kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.ffs(x)'})
         y_ref = np.zeros(shape, dtype=x.dtype)
         for i in range(shape[0]):
-            y_ref[i] = (int(x[i]) & int(-x[i])).bit_length() - 1
+            y_ref[i] = (int(x[i]) & int(-x[i])).bit_length()
     elif expr == 'libdevice.pow':
         # numpy does not allow negative factors in power, so we use abs()
         x = np.abs(x)
