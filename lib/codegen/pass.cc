@@ -110,7 +110,8 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(
   layouts.run(ir);
   peephole.run(ir);
   dce.run(ir);
-  if (target->is_gpu()) cts.run(ir);
+  if (target->is_gpu())
+    cts.run(ir);
   align.run(ir);
   axes.run(ir);
   layouts.run(ir);
@@ -118,7 +119,8 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(
   dce.run(ir);
   align.run(ir);
   dce.run(ir);
-  if (target->is_gpu()) cts.run(ir);
+  if (target->is_gpu())
+    cts.run(ir);
   dce.run(ir);
   align.run(ir);
   axes.run(ir);

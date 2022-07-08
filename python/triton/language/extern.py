@@ -1,7 +1,5 @@
 from __future__ import annotations  # remove after python 3.11
 
-from functools import wraps
-
 from . import core, semantic
 
 
@@ -60,15 +58,18 @@ def elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: 
 
         :return: the return value of the function
     '''
+    dispatch_args = []
     if len(args) == 1:
-        ret_shape = args[0].shape
+        dispatch_args[0] = core._to_tensor(args[0], _builder)
+        ret_shape = dispatch_args[0].shape
     elif len(args) == 2:
-        args[0], args[1] = semantic.binary_op_type_checking_impl(args[0], args[1], _builder)
-        ret_shape = args[0].shape
+        dispatch_args[0], dispatch_args[1] = semantic.binary_op_type_checking_impl(
+            core._to_tensor(args[0], _builder), core._to_tensor(args[1], _builder), _builder)
+        ret_shape = dispatch_args[0].shape
     else:
         return ValueError("elementwise function takes 1 or 2 arguments")
     func = getattr(_builder, "create_extern_elementwise")
-    return dispatch(func, lib_name, lib_path, args, arg_type_symbol_dict, ret_shape, _builder)
+    return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_shape, _builder)
 
 
 class ExternalFunction:

@@ -35,9 +35,11 @@ void ExternLib::link(std::unique_ptr<llvm::Module>& llvm,
 
 void LibDevice::opt(llvm::LLVMContext& ctx, std::unique_ptr<llvm::Module>& llvm) {
   // Add nvvm reflect flags to llvm module
-  // (i32 4 indicates that the value set here overrides the value in another
-  // module we link with. See the LangRef <LangRef.html#module-flags-metadata>
-  // for details.)
+  // https://llvm.org/docs/LangRef.html#module-flags-metadata
+  // i32 4: Override the other module.
+  // i32 1: Emit an error
+  // If both modules specify Override, but the values differ, an error
+  // will be emitted.
   llvm::Type* I32 = llvm::Type::getInt32Ty(ctx);
   llvm::Metadata* md_four =
       llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(I32, 4));
