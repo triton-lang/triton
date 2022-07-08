@@ -10,7 +10,6 @@
 #include "llvm/Support/SourceMgr.h"
 
 namespace triton {
-
 namespace codegen {
 
 ///
@@ -74,7 +73,6 @@ class LibDevice final : public ExternLib {
 };
 
 }  // namespace codegen
-
 }  // namespace triton
 
 #endif

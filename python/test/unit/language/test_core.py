@@ -1,12 +1,12 @@
 # flake8: noqa: F821,F841
 import itertools
 import re
+import sys
 from typing import Optional, Union
 
 import numpy as np
 import pytest
 import torch
-import sys
 from numpy.random import RandomState
 
 import triton

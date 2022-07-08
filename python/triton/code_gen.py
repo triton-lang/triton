@@ -750,8 +750,7 @@ class CodeGenerator(ast.NodeVisitor):
             # methods but we can't move to that without breaking Python 3.6 and 3.7.
             warnings.simplefilter("ignore", DeprecationWarning)  # python 3.9
             warnings.simplefilter("ignore", PendingDeprecationWarning)  # python 3.8
-            name = super().visit(node)
-            return name
+            return super().visit(node)
 
     def generic_visit(self, node):
         typename = type(node).__name__

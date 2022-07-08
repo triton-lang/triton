@@ -142,5 +142,5 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(
   return llvm;
 }
 
-}  // namespace codegen
-}  // namespace triton
+} // namespace codegen
+} // namespace triton

@@ -1,7 +1,8 @@
 from __future__ import annotations  # remove after python 3.11
 
-from . import core, semantic
 from functools import wraps
+
+from . import core, semantic
 
 
 def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, ret_shape: tuple, _builder=None):
@@ -87,6 +88,6 @@ class ExternalFunction:
 
 def extern(fn):
     '''
-        A decorator for external functions 
+        A decorator for external functions
     '''
     return ExternalFunction(fn)

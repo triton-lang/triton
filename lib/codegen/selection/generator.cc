@@ -2851,7 +2851,7 @@ void generator::visit_prefetch_s_inst(ir::prefetch_s_inst *i) {
   }
 }
 
-void generator::visit_async_wait_inst(ir::async_wait_inst *i) {
+void generator::visit_async_wait_inst(ir::async_wait_inst* i) {
   std::string asm_str = "cp.async.wait_group " + std::to_string(i->get_N()) + ";";
   InlineAsm *iasm = InlineAsm::get(FunctionType::get(void_ty, {}), asm_str, "", true);
   call(iasm);
