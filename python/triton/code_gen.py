@@ -352,7 +352,6 @@ class CodeGenerator(ast.NodeVisitor):
             names = [names]
         if not isinstance(values, tuple):
             values = [values]
-        print(values)
         if isinstance(values[0], triton.language.tensor) \
                 and isinstance(values[0].type, triton.language.tuple_type):
             struct = values[0].handle
@@ -689,8 +688,7 @@ class CodeGenerator(ast.NodeVisitor):
                 ret = triton.language.tensor(ret, self.prototypes[fn_name].ret_type)
             return ret
         # built-in function
-        if sys.modules[fn.__module__] is triton.language.core or \
-                sys.modules[fn.__module__] is triton.language.libdevice:
+        if sys.modules[fn.__module__] is triton.language.core or isinstance(fn, triton.language.extern.ExternalFunction):
             ret = fn(*args, _builder=self.builder, **kws)
         if fn in self.value_constructor.builtins.values():
             args = [arg.value if isinstance(arg, triton.language.constexpr) else arg

@@ -34,9 +34,14 @@ def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: tl.constexpr = N_ROUNDS_DEFAUL
 
 @triton.jit
 def philox(seed, c0, c1, c2, c3, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
-    seed = seed.to(tl.uint64)
-    seed_hi = ((seed >> 32) & 0xffffffff).to(tl.uint32)
-    seed_lo = (seed & 0xffffffff).to(tl.uint32)
+    if isinstance(seed, tl.constexpr):
+        seed = seed.value
+        seed_hi = (seed >> 32) & 0xffffffff
+        seed_lo = seed & 0xffffffff
+    else:
+        seed = seed.to(tl.uint64)
+        seed_hi = ((seed >> 32) & 0xffffffff).to(tl.uint32)
+        seed_lo = (seed & 0xffffffff).to(tl.uint32)
     return philox_impl(c0, c1, c2, c3, seed_lo, seed_hi, n_rounds)
 
 
@@ -90,7 +95,10 @@ def uint32_to_uniform_float(x):
     """
     Numerically stable function to convert a random uint32 into a random float uniformly sampled in [0, 1).
     """
-    x = x.to(tl.int32, bitcast=True)
+    if isinstance(x, tl.constexpr):
+        x = x.value
+    else:
+        x = x.to(tl.int32, bitcast=True)
     max = 4.656613e-10  # = 1/MAX_INT = 1/2147483647.
     x = tl.where(x < 0, -x - 1, x)
     return x * max
@@ -105,7 +113,10 @@ def rand(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     :param seed: The seed for generating random numbers.
     :param offsets: The offsets to generate random numbers for.
     """
-    offset = offset.to(tl.uint32, bitcast=True)
+    if isinstance(offset, tl.constexpr):
+        offset = offset.value
+    else:
+        offset = offset.to(tl.uint32, bitcast=True)
     source = randint(seed, offset, n_rounds)
     return uint32_to_uniform_float(source)
 
@@ -119,7 +130,10 @@ def rand4x(seed, offsets, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     :param seed: The seed for generating random numbers.
     :param offsets: The offsets to generate random numbers for.
     """
-    offsets = offsets.to(tl.uint32, bitcast=True)
+    if isinstance(offsets, tl.constexpr):
+        offsets = offsets.value
+    else:
+        offsets = offsets.to(tl.uint32, bitcast=True)
     i1, i2, i3, i4 = randint4x(seed, offsets, n_rounds)
     u1 = uint32_to_uniform_float(i1)
     u2 = uint32_to_uniform_float(i2)

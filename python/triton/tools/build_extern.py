@@ -205,7 +205,7 @@ class Libdevice(ExternLibrary):
 
     def _output_stubs(self):
         # Generate python functions in the following format:
-        # @core.builtin
+        # @extern.extern
         # def <op_name>(<args>, _builder=None):
         #   arg_type_symbol_dict = {[arg_type]: {(symbol, ret_type)}}
         #   return extern.dispatch("libdevice", <path>, <args>, <arg_type_symbol_dict>, _builder)
@@ -213,7 +213,7 @@ class Libdevice(ExternLibrary):
         file_str = ""
         func_str = ""
         for symbols in self._symbol_groups.values():
-            func_str += "@core.builtin\n"
+            func_str += "@extern.extern\n"
             func_name_str = f"def {symbols[0].op_name}("
             for arg_name in symbols[0].arg_names:
                 func_name_str += f"{arg_name}, "

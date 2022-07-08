@@ -1,7 +1,23 @@
+from __future__ import annotations  # remove after python 3.11
+
 from . import core, semantic
+from functools import wraps
 
 
 def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, ret_shape: tuple, _builder=None):
+    '''
+        Dispatch a function to a library
+
+        :param func: the function to dispatch
+        :param lib_name: the name of the library
+        :param lib_path: the path of the library
+        :param args: the arguments of the function
+        :param arg_type_symbol_dict: the type of the arguments
+        :param ret_shape: the shape of the return value
+        :param _builder: the builder
+
+        :return: the return value of the function
+    '''
     if len(arg_type_symbol_dict) == 0:
         raise ValueError("arg_type_symbol_dict is empty")
 
@@ -32,12 +48,45 @@ def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dic
 
 
 def elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, _builder=None):
+    '''
+        Dispatch an elementwise function to a library
+
+        :param lib_name: the name of the library
+        :param lib_path: the path of the library
+        :param args: the arguments of the function
+        :param arg_type_symbol_dict: the type of the arguments
+        :param _builder: the builder
+
+        :return: the return value of the function
+    '''
     if len(args) == 1:
         ret_shape = args[0].shape
     elif len(args) == 2:
         args[0], args[1] = semantic.binary_op_type_checking_impl(args[0], args[1], _builder)
         ret_shape = args[0].shape
     else:
-        return ValueError("elementwise takes 1 or 2 arguments")
+        return ValueError("elementwise function takes 1 or 2 arguments")
     func = getattr(_builder, "create_extern_elementwise")
     return dispatch(func, lib_name, lib_path, args, arg_type_symbol_dict, ret_shape, _builder)
+
+
+class ExternalFunction:
+    '''
+        A wrapper for external functions
+    '''
+
+    def __init__(self, fn):
+        self.fn = fn
+
+    def __call__(self, *args, **kwargs):
+        if '_builder' not in kwargs or \
+           kwargs['_builder'] is None:
+            raise ValueError("Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)")
+        return self.fn(*args, **kwargs)
+
+
+def extern(fn):
+    '''
+        A decorator for external functions 
+    '''
+    return ExternalFunction(fn)

@@ -107,7 +107,6 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(
   dce.run(ir);
   align.run(ir);
   axes.run(ir);
-  ir.print(std::cout);
   layouts.run(ir);
   peephole.run(ir);
   dce.run(ir);
