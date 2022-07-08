@@ -436,6 +436,9 @@ def not_equal(input: tl.tensor,
 
 
 def arange(start: int, end: int, builder: ir.builder) -> tl.tensor:
+    if not isinstance(start, int) or not isinstance(end, int):
+        raise ValueError("arange's arguments must be of type tl.constexpr")
+
     shape = [end - start]
     ret_ty = tl.block_type(tl.int32, shape)
     return tl.tensor(builder.get_range(start, end), ret_ty)
@@ -482,6 +485,11 @@ def broadcast_impl_shape(input: tl.tensor,
         raise ValueError(f"Cannot broadcast, rank mismatch: {src_shape}, {shape}")
     if shape == src_shape:
         return input
+    for i in range(len(src_shape)):
+        if shape[i] != src_shape[i] and src_shape[i] != 1:
+            raise ValueError(f"Cannot broadcast, the expanded size of the tensor ({shape[i]})"
+                             f" must match the existing size ({src_shape[1]}) at non-singleton dimension"
+                             f" {i}: {src_shape}, {shape}")
     ret_ty = tl.block_type(input.type.scalar, shape)
     return tl.tensor(builder.create_broadcast(input.handle, shape), ret_ty)
 
@@ -648,6 +656,18 @@ def cast(input: tl.tensor,
 # ===----------------------------------------------------------------------===//
 
 
+def _parse_eviction_policy(eviction_policy):
+    eviction = ir.EVICTION_POLICY.NORMAL  # default
+    if eviction_policy:
+        if eviction_policy == "evict_last":
+            eviction = ir.EVICTION_POLICY.EVICT_LAST
+        elif eviction_policy == "evict_first":
+            eviction = ir.EVICTION_POLICY.EVICT_FIRST
+        else:
+            raise ValueError(f"Eviction policy {eviction_policy} not supported")
+    return eviction
+
+
 def load(ptr: tl.tensor,
          mask: Optional[tl.tensor],
          other: Optional[tl.tensor],
@@ -684,14 +704,7 @@ def load(ptr: tl.tensor,
             raise ValueError(f"Cache modifier {cache_modifier} not supported")
 
     # eviction policy
-    eviction = ir.EVICTION_POLICY.NORMAL  # default
-    if eviction_policy:
-        if eviction_policy == "evict_last":
-            eviction = ir.EVICTION_POLICY.EVICT_LAST
-        elif eviction_policy == "evict_first":
-            eviction = ir.EVICTION_POLICY.EVICT_FIRST
-        else:
-            raise ValueError(f"Eviction policy {eviction_policy} not supported")
+    eviction = _parse_eviction_policy(eviction_policy)
 
     if ptr.type.is_block():
         shape = ptr.type.get_block_shapes()
@@ -721,6 +734,7 @@ def load(ptr: tl.tensor,
 def store(ptr: tl.tensor,
           val: tl.tensor,
           mask: Optional[tl.tensor],
+          eviction_policy: str,
           builder: ir.builder) -> tl.tensor:
     if not ptr.type.scalar.is_ptr():
         raise ValueError("Pointer argument of store instruction is " + ptr.type.__repr__())
@@ -735,14 +749,15 @@ def store(ptr: tl.tensor,
         elt_ty_ptr = tl.int8
         ptr_ty = tl.pointer_type(elt_ty_ptr, ptr_ty.address_space)
         ptr = cast(ptr, ptr_ty, builder)
-
+    # eviction policy
+    eviction = _parse_eviction_policy(eviction_policy)
     # cast to target data-type
     val = cast(val, elt_ty, builder)
     if not mask:
-        return tl.tensor(builder.create_store(ptr.handle, val.handle), tl.void)
+        return tl.tensor(builder.create_store(ptr.handle, val.handle, eviction), tl.void)
     if not mask.type.scalar.is_bool():
         raise ValueError("Mask must have boolean scalar type")
-    return tl.tensor(builder.create_masked_store(ptr.handle, val.handle, mask.handle), tl.void)
+    return tl.tensor(builder.create_masked_store(ptr.handle, val.handle, mask.handle, eviction), tl.void)
 
 #########
 # atomic
@@ -897,27 +912,31 @@ def atomic_xchg(ptr: tl.tensor,
 # ===----------------------------------------------------------------------===//
 
 
-def dot(lhs: tl.tensor,
-        rhs: tl.tensor,
+def dot(a: tl.tensor,
+        b: tl.tensor,
+        trans_a: bool,
+        trans_b: bool,
         allow_tf32: bool,
         builder: ir.builder) -> tl.tensor:
-    assert lhs.type.is_block() and rhs.type.is_block()
-    assert len(lhs.shape) == 2 and len(rhs.shape) == 2
-    assert lhs.shape[-1] == rhs.shape[0]
-    assert lhs.shape[0] >= 16 and lhs.shape[1] >= 16 and rhs.shape[1] >= 16,\
+    in_a = 1 if not trans_a else 0
+    in_b = 1 if trans_b else 0
+    assert a.type.is_block() and b.type.is_block()
+    assert len(a.shape) == 2 and len(b.shape) == 2
+    assert a.shape[in_a] == b.shape[in_b]
+    assert a.shape[0] >= 16 and a.shape[1] >= 16 and b.shape[1] >= 16,\
         "small blocks not supported!"
-    if lhs.type.scalar.is_int():
+    if a.type.scalar.is_int():
         _0 = builder.get_int32(0)
         ret_scalar_ty = tl.int32
     else:
         _0 = builder.get_float32(0)
         ret_scalar_ty = tl.float32
-    M = lhs.type.shape[0]
-    N = rhs.type.shape[1]
+    M = a.type.shape[in_a ^ 1]
+    N = b.type.shape[in_b ^ 1]
     _0 = builder.create_splat(_0, [M, N])
     ret_ty = tl.block_type(ret_scalar_ty, [M, N])
-    return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32),
-                     ret_ty)
+    ret = builder.create_dot(a.handle, b.handle, _0, trans_a, trans_b, allow_tf32)
+    return tl.tensor(ret, ret_ty)
 
 
 # ===----------------------------------------------------------------------===//
@@ -961,10 +980,14 @@ def reduce_impl(input: tl.tensor, axis: int, builder: ir.builder, name: str,
 
     # choose the right unsigned operation
     if scalar_ty.is_int_unsigned():
-        if INT_OP is ir.REDUCE_OP.MIN:
-            INT_OP = ir.REDUCE_OP.UMIN
-        elif INT_OP is ir.REDUCE_OP.MAX:
-            INT_OP = ir.REDUCE_OP.UMAX
+        int_op_to_unit = {
+            ir.REDUCE_OP.MIN: ir.REDUCE_OP.UMIN,
+            ir.REDUCE_OP.MAX: ir.REDUCE_OP.UMAX,
+            ir.REDUCE_OP.ARGMIN: ir.REDUCE_OP.ARGUMIN,
+            ir.REDUCE_OP.ARGMAX: ir.REDUCE_OP.ARGUMAX,
+        }
+        if INT_OP in int_op_to_unit:
+            INT_OP = int_op_to_unit[INT_OP]
 
     # get result type
     shape = input.type.shape
@@ -988,8 +1011,16 @@ def min(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
     return reduce_impl(input, axis, builder, "min", ir.REDUCE_OP.FMIN, ir.REDUCE_OP.MIN)
 
 
+def argmin(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
+    return reduce_impl(input, axis, builder, "argmin", ir.REDUCE_OP.ARGFMIN, ir.REDUCE_OP.ARGMIN)
+
+
 def max(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
     return reduce_impl(input, axis, builder, "max", ir.REDUCE_OP.FMAX, ir.REDUCE_OP.MAX)
+
+
+def argmax(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
+    return reduce_impl(input, axis, builder, "argmax", ir.REDUCE_OP.ARGFMAX, ir.REDUCE_OP.ARGMAX)
 
 
 def sum(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:

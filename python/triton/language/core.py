@@ -372,6 +372,17 @@ class constexpr:
     def __call__(self, *args, **kwds):
         return self.value(*args, **kwds)
 
+    def to(self, dtype, bitcast=False, _builder=None):
+        if dtype in [float8, float16, bfloat16]:
+            raise ValueError("floating point constexpr must be float64")
+        if dtype.is_int():
+            ret_ty = int
+        elif dtype.is_bool():
+            ret_ty = bool
+        elif dtype.is_floating():
+            ret_ty = float
+        return constexpr(ret_ty(self.value))
+
 
 class tensor:
     # infer dtype from ir type
@@ -734,7 +745,7 @@ def reshape(input, shape, _builder=None):
 
 
 @builtin
-def dot(input, other, allow_tf32=True, _builder=None):
+def dot(input, other, trans_a=False, trans_b=False, allow_tf32=True, _builder=None):
     """
     Returns the matrix product of two blocks.
 
@@ -746,7 +757,7 @@ def dot(input, other, allow_tf32=True, _builder=None):
     :type other: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
     """
     allow_tf32 = _constexpr_to_value(allow_tf32)
-    return semantic.dot(input, other, allow_tf32, _builder)
+    return semantic.dot(input, other, trans_a, trans_b, allow_tf32, _builder)
 
 
 # -----------------------
@@ -784,7 +795,7 @@ def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", 
 
 
 @builtin
-def store(pointer, value, mask=None, _builder=None):
+def store(pointer, value, mask=None, eviction_policy="", _builder=None):
     """
     Stores :code:`value` tensor of elements in memory, element-wise, at the memory locations specified by :code:`pointer`.
 
@@ -801,12 +812,31 @@ def store(pointer, value, mask=None, _builder=None):
     value = _to_tensor(value, _builder)
     if mask is not None:
         mask = _to_tensor(mask, _builder)
-    return semantic.store(pointer, value, mask, _builder)
+    return semantic.store(pointer, value, mask, eviction_policy, _builder)
 
 
 # -----------------------
 # Atomic Memory Operations
 # -----------------------
+
+@builtin
+def atomic_cas(pointer, cmp, val, _builder=None):
+    """
+        Performs an atomic compare-and-swap at the memory location specified by :code:`pointer`.
+
+        Return the data stored at :code:`pointer` before the atomic operation.
+
+        :param pointer: The memory locations to compare-and-swap.
+        :type pointer: Block of dtype=triton.PointerDType
+        :param cmp: The values expected to be found in the atomic object
+        :type cmp: Block of dtype=`pointer.dtype.element_ty`
+        :param val: The values to copy in case the expected value matches the contained value.
+        :type val: Block of dtype=`pointer.dtype.element_ty`
+    """
+    cmp = _to_tensor(cmp, _builder)
+    val = _to_tensor(val, _builder)
+    return semantic.atomic_cas(pointer, cmp, val, _builder)
+
 
 def _add_atomic_docstr(name):
 
@@ -816,25 +846,17 @@ def _add_atomic_docstr(name):
 
     Return the data stored at :code:`pointer` before the atomic operation.
 
-    :param pointer: The memory locations to compare-and-swap.
+    :param pointer: The memory locations to apply {name}.
     :type pointer: Block of dtype=triton.PointerDType
-    :param cmp: The values expected to be found in the atomic object
-    :type cmp: Block of dtype=`pointer.dtype.element_ty`
-    :param val: The values to copy in case the expected value matches the contained value.
+    :param val: The values to {name} in the atomic object.
     :type val: Block of dtype=`pointer.dtype.element_ty`
+    :param mask: If mask[idx] is false, do not apply {name}.
+    :type mask: Block of triton.int1, optional
     """
         func.__doc__ = docstr.format(name=name)
         return func
 
     return _decorator
-
-
-@builtin
-@_add_atomic_docstr("compare-and-swap")
-def atomic_cas(pointer, cmp, val, _builder=None):
-    cmp = _to_tensor(cmp, _builder)
-    val = _to_tensor(val, _builder)
-    return semantic.atomic_cas(pointer, cmp, val, _builder)
 
 
 @builtin
@@ -1003,10 +1025,24 @@ def max(input, axis, _builder=None):
 
 
 @builtin
+@_add_reduction_docstr("maximum index")
+def argmax(input, axis, _builder=None):
+    axis = _constexpr_to_value(axis)
+    return semantic.argmax(input, axis, _builder)
+
+
+@builtin
 @_add_reduction_docstr("minimum")
 def min(input, axis, _builder=None):
     axis = _constexpr_to_value(axis)
     return semantic.min(input, axis, _builder)
+
+
+@builtin
+@_add_reduction_docstr("minimum index")
+def argmin(input, axis, _builder=None):
+    axis = _constexpr_to_value(axis)
+    return semantic.argmin(input, axis, _builder)
 
 
 @builtin

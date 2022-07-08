@@ -22,6 +22,7 @@ public:
 };
 
 void for_each_instruction(ir::module& mod, const std::function<void(triton::ir::instruction*)> &fn);
+void for_each_instruction_backward(module &mod, const std::function<void (instruction *)> &do_work);
 void for_each_value(ir::module& mod, const std::function<void(triton::ir::value *)> &fn);
 
 }

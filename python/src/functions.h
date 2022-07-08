@@ -353,9 +353,6 @@ ir::value *sqrt(ir::value *input, ir::builder *builder) {
   return builder->create_sqrt(input);
 };
 
-/*----------------------------------------------
- definition of triton.min
- ----------------------------------------------*/
 ir::value *reduce_impl(ir::value *input, unsigned int axis, ir::builder *builder, const std::string &name,
                        ir::reduce_inst::op_t FLOAT_OP, ir::reduce_inst::op_t INT_OP) {
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
@@ -367,11 +364,24 @@ ir::value *reduce_impl(ir::value *input, unsigned int axis, ir::builder *builder
     throw_not_int_or_float(name);
 }
 
+/*----------------------------------------------
+ definition of triton.min
+ ----------------------------------------------*/
 std::string min_docstr = R"pbdoc(
     Returns the minimum value of `input`.
  )pbdoc";
 ir::value *min(ir::value *input, unsigned int axis, ir::builder *builder) {
   return reduce_impl(input, axis, builder, "min", ir::reduce_inst::FMIN, ir::reduce_inst::MIN);
+};
+
+/*----------------------------------------------
+ definition of triton.arg_min
+ ----------------------------------------------*/
+std::string min_docstr = R"pbdoc(
+    Returns the minimum value's index of `input`.
+ )pbdoc";
+ir::value *argmin(ir::value *input, unsigned int axis, ir::builder *builder) {
+  return reduce_impl(input, axis, builder, "argmin", ir::reduce_inst::ARGFMIN, ir::reduce_inst::ARGMIN);
 };
 
 /*----------------------------------------------
@@ -382,6 +392,16 @@ std::string max_docstr = R"pbdoc(
  )pbdoc";
 ir::value *max(ir::value *input, unsigned int axis, ir::builder *builder) {
   return reduce_impl(input, axis, builder, "max", ir::reduce_inst::FMAX, ir::reduce_inst::MAX);
+};
+
+/*----------------------------------------------
+ definition of triton.arg_max
+ ----------------------------------------------*/
+std::string max_docstr = R"pbdoc(
+    Returns the maximum value's index of `input`.
+ )pbdoc";
+ir::value *argmax(ir::value *input, unsigned int axis, ir::builder *builder) {
+  return reduce_impl(input, axis, builder, "argmax", ir::reduce_inst::ARGFMAX, ir::reduce_inst::ARGMAX);
 };
 
 /*----------------------------------------------

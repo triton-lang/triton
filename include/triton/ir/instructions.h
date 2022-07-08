@@ -435,13 +435,31 @@ private:
 //===----------------------------------------------------------------------===//
 
 class io_inst: public instruction {
+public:
+
+  enum EVICTION_POLICY : uint32_t {
+    NORMAL=0,
+    EVICT_FIRST,
+    EVICT_LAST,
+  };
+
 protected:
-  io_inst(type *ty, value_id_t id, unsigned num_ops,
+  io_inst(type *ty, value_id_t id, unsigned num_ops, EVICTION_POLICY eviction,
           const std::string &name = "", instruction *next = nullptr);
+
+  std::string get_eviction_policy_repr() const {
+    if (eviction_ == EVICT_FIRST) return ".L1::evict_first";
+    if (eviction_ == EVICT_LAST) return ".L2::evict_last";
+    return "";
+  }
 
 public:
   // accessors
   value *get_pointer_operand() { return get_operand(0); }
+  EVICTION_POLICY get_eviction_policy() const { return eviction_; }
+
+protected:
+  EVICTION_POLICY eviction_;
 };
 
 // load
@@ -453,14 +471,8 @@ public:
     CG,
   };
 
-  enum EVICTION_POLICY : uint32_t {
-    NORMAL=0,
-    EVICT_FIRST,
-    EVICT_LAST,
-  };
 
   CACHE_MODIFIER get_cache_modifier() const { return cache_; }
-  EVICTION_POLICY get_eviction_policy() const { return eviction_; }
   bool get_is_volatile() const { return is_volatile_; }
 
 protected:
@@ -472,12 +484,6 @@ protected:
     if (cache_ == CG) return ".cg";
     return ""; 
   }
-  std::string get_eviction_policy_repr() const {
-    if (eviction_ == EVICT_FIRST) return ".L1::evict_first";
-    if (eviction_ == EVICT_LAST) return ".L2::evict_last";
-    return "";
-  }
-  EVICTION_POLICY eviction_;
   CACHE_MODIFIER cache_;
 
   std::string get_volatile_repr() {
@@ -553,7 +559,7 @@ public:
 // store
 class store_inst: public io_inst {
 protected:
-  store_inst(value *ptr, value_id_t id, unsigned num_ops,
+  store_inst(value *ptr, value_id_t id, unsigned num_ops, EVICTION_POLICY eviction,
             const std::string &name = "", instruction *next = nullptr);
 
 public:
@@ -564,11 +570,11 @@ public:
 class unmasked_store_inst: public store_inst{
 private:
   std::string repr_impl() const { return "unmasked_store"; }
-  unmasked_store_inst(value *ptr, value *v, const std::string &name, instruction *next);
+  unmasked_store_inst(value *ptr, value *v, EVICTION_POLICY eviction, const std::string &name, instruction *next);
 
 public:
   // factory method
-  static unmasked_store_inst* create(value* ptr, value *v,
+  static unmasked_store_inst* create(value* ptr, value *v, EVICTION_POLICY eviction,
                                     const std::string &name = "",
                                     instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(unmasked_store_inst)
@@ -578,14 +584,14 @@ public:
 class masked_store_inst: public store_inst{
 private:
   std::string repr_impl() const { return "masked_store"; }
-  masked_store_inst(value *ptr, value *v, value *mask,
+  masked_store_inst(value *ptr, value *v, value *mask, EVICTION_POLICY eviction,
                     const std::string &name, instruction *next);
 
 public:
   // accessors
   value *get_mask_operand() { return get_operand(2); }
   // factory method
-  static masked_store_inst* create(value *ptr, value *v, value *mask,
+  static masked_store_inst* create(value *ptr, value *v, value *mask, EVICTION_POLICY eviction,
                                    const std::string &name = "",
                                    instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(masked_store_inst)
@@ -755,6 +761,8 @@ private:
 class atomic_inst: public io_inst {
 public:
   using io_inst::io_inst;
+  atomic_inst(type *ty, value_id_t id, unsigned num_ops, const std::string &name, instruction *next):
+    io_inst(ty, id, num_ops, NORMAL, name, next) {}
 };
 
 class atomic_rmw_inst: public atomic_inst {
@@ -856,6 +864,8 @@ public:
   bool is_prefetched() const { return is_prefetched_; }
   void set_prefetched(bool is_prefetched) { is_prefetched_ = is_prefetched; }
   bool allow_tf32() const { return allow_tf32_; }
+  bool is_trans_a() const { return AT_ == Trans; }
+  bool is_trans_b() const { return BT_ == Trans; }
 
 public:
   static instruction *create(value *A, value *B, value *C, bool AT, bool BT, bool allow_tf32, const std::string &name = "", instruction *next = nullptr);
@@ -872,6 +882,8 @@ private:
   DataType C_type_ = DataType::FP32;
   DataType A_type_ = DataType::FP16;
   DataType B_type_ = DataType::FP16;
+  TransT AT_;
+  TransT BT_;
 };
 
 //class outer_inst: public builtin_inst {
@@ -914,7 +926,9 @@ class reduce_inst: public builtin_inst {
 public:
   enum op_t{
     ADD, SUB, MAX, MIN, UMAX, UMIN,
+    ARGMAX, ARGMIN, ARGUMAX, ARGUMIN,
     FADD, FSUB, FMAX, FMIN,
+    ARGFMAX, ARGFMIN,
     XOR
   };
 
@@ -932,11 +946,18 @@ public:
   static instruction* create(value *arg, op_t op, unsigned axis, const std::string &name = "", instruction *next = nullptr);
   unsigned get_axis() const { return axis_; }
   op_t get_op() const { return op_; }
+  bool with_index() const {
+    return with_index_ops_.find(op_) != with_index_ops_.end();
+  }
 
 private:
-  unsigned axis_;
-  op_t op_;
+ const static inline std::set<op_t> with_index_ops_ = {
+     op_t::ARGMAX,  op_t::ARGMIN,  op_t::ARGUMAX,
+     op_t::ARGUMIN, op_t::ARGFMAX, op_t::ARGFMIN};
+ unsigned axis_;
+ op_t op_;
 };
+
 
 class select_inst: public builtin_inst {
 private:

@@ -3,11 +3,6 @@ include(ExternalProject)
 
 set(CMAKE_CXX_STANDARD 17)
 
-if(NOT TRITON_LLVM_BUILD_DIR)
-    set(TRITON_LLVM_BUILD_DIR ${CMAKE_BINARY_DIR})
-endif()
-
-
 project(triton)
 include(CTest)
 if(NOT WIN32)

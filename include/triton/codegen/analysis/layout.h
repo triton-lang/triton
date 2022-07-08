@@ -258,7 +258,8 @@ public:
                 const std::vector<unsigned>& shapes,
                 const std::vector<ir::value *> &values_,
                 ir::type *ty,
-                analysis::align* align, target *tgt);
+                analysis::align* align, target *tgt,
+                bool is_tmp = false);
   void accept(layout_visitor* vst) { vst->visit_layout_shared(this); }
   // accessors
   size_t get_size()                         { return size_; }
@@ -276,6 +277,7 @@ public:
   int  get_mma_strided()                    { return mma_strided_; }
   bool allow_swizzle() const                { return allow_swizzle_; }
   data_layout* get_arg_layout()             { return arg_layout_; }
+  bool is_tmp() const                       { return is_tmp_; }
 
 private:
   size_t size_;
@@ -290,6 +292,7 @@ private:
   int mma_strided_;
   bool allow_swizzle_ = true;
   target *tgt_;
+  bool is_tmp_;
 };
 
 
@@ -308,13 +311,20 @@ private:
 
   void create(size_t id, const std::vector<ir::value*>& values);
 
-public:
+  void create_tmp_layout(size_t id, data_layout* arg,
+                         const std::vector<int>& axes,
+                         const std::vector<unsigned>& shape,
+                         ir::instruction* i,
+                         bool is_index = false);
+
+ public:
   // constructor
   layouts(analysis::axes *axes, analysis::align *align, size_t num_warps, target* tgt);
 
   // accessors
   unsigned layout_of(ir::value *value) const                  { return groups_.at(value); }
   bool has(ir::value* value) const { return groups_.find(value) != groups_.end(); }
+  bool has(size_t id)                                         { return layouts_.find(id) != layouts_.end(); }
   const std::vector<ir::value*>& values_of(unsigned id) const { return values_.at(id); }
   size_t num_layouts() const                                  { return values_.size();}
   data_layout* get(size_t id)                                 { return layouts_.at(id); }
@@ -322,7 +332,19 @@ public:
   std::map<size_t, data_layout*> &get_all()                   { return layouts_; }
   bool has_tmp(ir::value* i)                                  { return tmp_.find(i) != tmp_.end(); }
   int tmp(ir::value* i)                                       { return tmp_.at(i);}
+  int has_tmp_index(ir::value* i)                             { return tmp_index_.find(i) != tmp_index_.end(); }
+  int tmp_index(ir::value* i)                                 { return tmp_index_.at(i);}
   void copy(ir::value* dst, ir::value* src)                   { groups_[dst] = groups_[src]; }
+
+  // layout checkers
+  bool is_scanline(ir::instruction* i);
+
+  bool is_coalesced_scanline(ir::instruction* i);
+
+  bool is_mma(ir::instruction* i);
+
+  bool is_a100_mma(ir::instruction* i);
+
   // execution
   void run(ir::module &mod);
 
@@ -336,6 +358,7 @@ private:
   std::map<size_t, std::vector<ir::value*>> values_;
   std::map<size_t, data_layout*> layouts_;
   std::map<ir::value*, size_t> tmp_;
+  std::map<ir::value*, size_t> tmp_index_;
 };
 
 }

@@ -299,16 +299,16 @@ value *builder::create_load(value *ptr, load_inst::CACHE_MODIFIER cache, load_in
   return insert(unmasked_load_inst::create(ptr, cache, eviction, is_volatile));
 }
 
-value *builder::create_store(value *ptr, value *val){
-  return insert(unmasked_store_inst::create(ptr, val));
+value *builder::create_store(value *ptr, value *val, store_inst::EVICTION_POLICY eviction){
+  return insert(unmasked_store_inst::create(ptr, val, eviction));
 }
 
 value *builder::create_masked_load(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache, load_inst::EVICTION_POLICY eviction, bool is_volatile){
   return insert(masked_load_inst::create(ptr, mask, false_value, cache, eviction, is_volatile));
 }
 
-value *builder::create_masked_store(value *ptr, value *val, value *mask){
-  return insert(masked_store_inst::create(ptr, val, mask));
+value *builder::create_masked_store(value *ptr, value *val, value *mask, store_inst::EVICTION_POLICY eviction){
+  return insert(masked_store_inst::create(ptr, val, mask, eviction));
 }
 
 //===----------------------------------------------------------------------===//
@@ -425,8 +425,8 @@ value *builder::create_log(value *arg){
   return insert(log_inst::create(arg));
 }
 
-value *builder::create_dot(value *A, value *B, value *C, bool allow_tf32) {
-  return insert(dot_inst::create_nn(A, B, C, allow_tf32));
+value *builder::create_dot(value *A, value *B, value *C, bool trans_a, bool trans_b, bool allow_tf32) {
+  return insert(dot_inst::create(A, B, C, trans_a, trans_b, allow_tf32));
 }
 
 value *builder::create_trans(value *A, const std::vector<int>& perm) {
