@@ -809,15 +809,10 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
     # numpy result
     z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
     # triton result
-<<<<<<< HEAD
-    z_tri = to_triton(numpy_random((shape[0],), dtype_str=dtype_str, rs=rs), device=device)
-    kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)
-=======
     z_tri = to_triton(numpy_random((shape[1 - axis],), dtype_str=z_dtype_str, rs=rs),
                       device=device)
     kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)
     z_tri = to_numpy(z_tri)
->>>>>>> origin/master
     # compare
     if op == 'sum':
         np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
