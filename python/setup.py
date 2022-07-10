@@ -36,7 +36,7 @@ def get_llvm():
     paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
     paths = [p for p in paths if p is not None]
     if paths:
-        return paths[0]
+        return ''
     if platform.system() == "Windows":
         raise RuntimeError("Triton is not supported on Windows")
     # download if nothing is installed
@@ -102,7 +102,10 @@ class CMakeBuild(build_ext):
             self.build_extension(ext, llvm_dir)
 
     def build_external(self, ext, llvm_dir):
-        llvm_dis_path = os.path.join(llvm_dir, "bin", "llvm-dis")
+        if llvm_dir == "":
+            llvm_dis_path = distutils.spawn.find_executable("llvm-dis")
+        else:
+            llvm_dis_path = os.path.join(llvm_dir, "bin", "llvm-dis")
         if self.enable_libdevice:
             build_extern.build(llvm_dis_path, os.path.join(self.cuda_dir, "nvvm", "libdevice", "libdevice.10.bc"),
                                "libdevice", ext.externlib_dir)
@@ -114,8 +117,8 @@ class CMakeBuild(build_ext):
             os.makedirs(self.build_temp)
         # configuration
         python_include_dirs = [distutils.sysconfig.get_python_inc()] + [self.cuda_dir + "/include"]
-        llvm_include_dir = os.path.join(llvm_dir, "include")
-        llvm_library_dir = os.path.join(llvm_dir, "lib")
+        llvm_include_dir = os.path.join(llvm_dir, "include") if llvm_dir != "" else ""
+        llvm_library_dir = os.path.join(llvm_dir, "lib") if llvm_dir != "" else ""
         cmake_args = [
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
             "-DBUILD_TUTORIALS=OFF",
