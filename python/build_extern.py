@@ -289,11 +289,12 @@ def build(llvm_dis_path, lib_path, lib_name, output_dir):
     extern_lib.generate_stub_file(output_dir)
 
 
-parser = argparse.ArgumentParser()
-parser.add_argument("-llvm", dest="llvm_dis_path", help="path to llvm-dis", default="llvm-dis")
-parser.add_argument("--lib-path", dest="lib_path", help="path to the extern library")
-parser.add_argument("--lib-name", dest="lib_name", help="name of the extern library")
-parser.add_argument("-o", dest="output_dir", help="output file path", default="/tmp/")
-args = parser.parse_args()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-llvm", dest="llvm_dis_path", help="path to llvm-dis", default="llvm-dis")
+    parser.add_argument("--lib-path", dest="lib_path", help="path to the extern library")
+    parser.add_argument("--lib-name", dest="lib_name", help="name of the extern library")
+    parser.add_argument("-o", dest="output_dir", help="output file path", default="/tmp/")
+    args = parser.parse_args()
 
-build(args.llvm_dis_path, args.lib_path, args.lib_name, args.output_dir)
+    build(args.llvm_dis_path, args.lib_path, args.lib_name, args.output_dir)
