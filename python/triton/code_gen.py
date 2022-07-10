@@ -358,6 +358,7 @@ class CodeGenerator(ast.NodeVisitor):
             tys = values[0].type.element_types
             values = [self.builder.extract_value(struct, i) for i in range(len(tys))]
             values = [triton.language.tensor(v, ty) for v, ty in zip(values, tys)]
+        assert len(values) == len(names)
         for name, value in zip(names, values):
             # TODO: can we store constexpr here to support constant folding?
             # by default, constexpr are assigned into python variable
