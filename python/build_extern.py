@@ -71,7 +71,7 @@ class ExternLibrary(ABC):
         self._name = name
         self._path = path
         self._symbols = {}
-        self._format = True
+        self._format = False
 
     @property
     def name(self):

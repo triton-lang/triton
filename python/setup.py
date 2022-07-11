@@ -34,8 +34,9 @@ def get_llvm():
     versions = ['-11.0', '-11', '-11-64']
     supported = ['llvm-config{v}'.format(v=v) for v in versions]
     paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
-    paths = [p for p in paths if p is not None]
-    if paths:
+    llvm_config_paths = [p for p in paths if p is not None]
+    llvm_dis_path = distutils.spawn.find_executable('llvm-dis')
+    if llvm_config_paths and llvm_dis_path:
         return ''
     if platform.system() == "Windows":
         raise RuntimeError("Triton is not supported on Windows")
