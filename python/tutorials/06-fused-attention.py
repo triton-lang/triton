@@ -94,18 +94,18 @@ def _fwd_kernel(
 
 @triton.jit
 def _bwd_preprocess(
-    O, DO, L,
+    Out, DO, L,
     NewDO, Delta,
     BLOCK_M: tl.constexpr, D_HEAD: tl.constexpr,
 ):
     off_m = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
     off_n = tl.arange(0, D_HEAD)
     # load
-    o = tl.load(O + off_m[:, None] * D_HEAD + off_n[None, :]).to(tl.float32)
+    o = tl.load(Out + off_m[:, None] * D_HEAD + off_n[None, :]).to(tl.float32)
     do = tl.load(DO + off_m[:, None] * D_HEAD + off_n[None, :]).to(tl.float32)
-    l = tl.load(L + off_m).to(tl.float32)
+    denom = tl.load(L + off_m).to(tl.float32)
     # compute
-    do = do / l[:, None]
+    do = do / denom[:, None]
     delta = tl.sum(o * do, axis=1)
     # write-back
     tl.store(NewDO + off_m[:, None] * D_HEAD + off_n[None, :], do)
@@ -114,7 +114,7 @@ def _bwd_preprocess(
 
 @triton.jit
 def _bwd_kernel(
-    Q, K, V, sm_scale, O, DO,
+    Q, K, V, sm_scale, Out, DO,
     DQ, DK, DV,
     L, M,
     D,
@@ -243,7 +243,7 @@ class _attention(torch.autograd.Function):
             do_scaled, delta,
             BLOCK_M=ctx.BLOCK, D_HEAD=ctx.BLOCK_DMODEL,
         )
-        pgm = _bwd_kernel[(ctx.grid[1],)](
+        _bwd_kernel[(ctx.grid[1],)](
             q, k, v, ctx.sm_scale,
             o, do_scaled,
             dq, dk, dv,
@@ -267,7 +267,6 @@ attention = _attention.apply
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(3, 2, 2048, 64)])
 def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     torch.manual_seed(20)
-    BLOCK_M, BLOCK_N = 128, 128
     q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0, std=.5).requires_grad_()
     k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0, std=.5).requires_grad_()
     v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0, std=.5).requires_grad_()
