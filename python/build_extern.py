@@ -71,7 +71,7 @@ class ExternLibrary(ABC):
         self._name = name
         self._path = path
         self._symbols = {}
-        self._format = False
+        self._format = True
 
     @property
     def name(self):
@@ -105,6 +105,7 @@ class ExternLibrary(ABC):
             if self._format:
                 subprocess.Popen(["autopep8", "-a", "-r", "-i", output_file],
                                  stdout=subprocess.PIPE).communicate()
+                subprocess.Popen(["isort", output_file], stdout=subprocess.PIPE).communicate()
 
 
 class Libdevice(ExternLibrary):
