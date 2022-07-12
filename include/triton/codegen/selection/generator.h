@@ -220,7 +220,6 @@ private:
   void add_extern_lib(const std::string &lib_name, const std::string &lib_path);
 
   // Get all external libraries
-  // XXX: It is a hack to return unique_ptr<> here.
   const ExternLibMap &get_extern_lib_map() {
     return extern_lib_map_;
   }

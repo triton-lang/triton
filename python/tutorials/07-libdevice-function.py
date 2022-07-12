@@ -7,7 +7,7 @@ Please refer to https://docs.nvidia.com/cuda/libdevice-users-guide/index.html re
 
 In `trition/language/libdevice.py`, we try to aggregate functions with the same computation but different data types together.
 For example, both `__nv_asin` and `__nvasinf` calculate the principal value of the arc sine of the input, but `__nv_asin` operates on `double` and `__nv_asinf` operates on `float`.
-Using triton, you can simply call `tl.libdevice.asinf`. 
+Using triton, you can simply call `tl.libdevice.asinf`.
 triton automatically selects the correct underlying device function to invoke based on input and output types.
 """
 
@@ -23,9 +23,9 @@ import triton.language as tl
 
 @triton.jit
 def asin_kernel(
-    x_ptr,  
+    x_ptr,
     y_ptr,
-    n_elements, 
+    n_elements,
     BLOCK_SIZE: tl.constexpr,
 ):
     pid = tl.program_id(axis=0)
@@ -34,13 +34,13 @@ def asin_kernel(
     mask = offsets < n_elements
     x = tl.load(x_ptr + offsets, mask=mask)
     x = tl.libdevice.asin(x)
-    # Write x + y back to DRAM
     tl.store(y_ptr + offsets, x, mask=mask)
 
 # %%
 #  Using the default libdevice library path
 # --------------------------
 # We can use the default libdevice library path encoded in `triton/language/libdevice.py`
+
 
 torch.manual_seed(0)
 size = 98432
@@ -65,7 +65,7 @@ print(
 
 output_triton = torch.empty_like(x)
 asin_kernel[grid](x, output_triton, n_elements, BLOCK_SIZE=1024,
-                 extern_libs={'libdevice': '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'})
+                  extern_libs={'libdevice': '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'})
 print(output_torch)
 print(output_triton)
 print(
