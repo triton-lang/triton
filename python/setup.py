@@ -66,13 +66,11 @@ class CMakeExtension(Extension):
 
 class CMakeBuild(build_ext):
 
-    user_options = build_ext.user_options + [('base-dir=', None, 'base directory of Triton'),
-                                             ('cuda-dir=', None, 'CUDA directory')]
+    user_options = build_ext.user_options + [('base-dir=', None, 'base directory of Triton')]
 
     def initialize_options(self):
         build_ext.initialize_options(self)
         self.base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-        self.cuda_dir = "/usr/local/cuda"
 
     def finalize_options(self):
         build_ext.finalize_options(self)
@@ -100,7 +98,7 @@ class CMakeBuild(build_ext):
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
         # python directories
-        python_include_dirs = [distutils.sysconfig.get_python_inc()] + [self.cuda_dir + "/include"]
+        python_include_dirs = [distutils.sysconfig.get_python_inc()]
         cmake_args = [
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
             "-DBUILD_TUTORIALS=OFF",
