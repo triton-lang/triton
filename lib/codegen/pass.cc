@@ -153,7 +153,7 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(
   if (isel.get_extern_lib_map().size() > 0) {
     // If there's any extern lib calls,
     // we need to link them in.
-    link_extern_libs(isel.get_extern_lib_map(), extern_lib_map, ir, ctx, llvm);
+    link_extern_libs(extern_lib_map, isel.get_extern_lib_map(), ir, ctx, llvm);
   }
 
   return llvm;
