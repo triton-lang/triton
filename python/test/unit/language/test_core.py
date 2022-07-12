@@ -1309,7 +1309,7 @@ def test_num_warps_pow2():
 
 @pytest.mark.parametrize("dtype_str, expr, lib_path",
                          [('int32', 'libdevice.ffs', ''),
-                          ('float32', 'libdevice.pow', '/usr/local/cuda/nvvm/libdevice/libdevice.bc')])
+                          ('float32', 'libdevice.pow', '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc')])
 def test_libdevice(dtype_str, expr, lib_path):
 
     @triton.jit
