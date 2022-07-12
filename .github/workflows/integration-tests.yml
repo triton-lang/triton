@@ -27,7 +27,6 @@ jobs:
       - name: Install Triton
         run: |
           alias python='python3'
-          sudo apt install -y libncurses5
           cd python
           pip3 install -e '.[tests]'
 
