@@ -3767,15 +3767,11 @@ void generator::visit(ir::module &src, llvm::Module &dst) {
 
 void generator::add_extern_lib(const std::string &lib_name,
                                const std::string &lib_path) {
-  if (extern_libs_.count(lib_name) == 0) {
-    if (lib_name == "libdevice") {
-      extern_libs_[lib_name] = std::make_unique<LibDevice>(lib_name, lib_path);
-    } else {
-      throw std::runtime_error("Unknown external library: " + lib_name);
-    }
-  } else if (extern_libs_.at(lib_name)->path() != lib_path) {
+  if (extern_lib_map_.count(lib_name) == 0) {
+    extern_lib_map_[lib_name] = create_extern_lib(lib_name, lib_path);
+  } else if (extern_lib_map_.at(lib_name)->path() != lib_path) {
     throw std::runtime_error("A library has multiple paths (1) " + lib_path +
-                             " (2) " + extern_libs_.at(lib_name)->path());
+                             " (2) " + extern_lib_map_.at(lib_name)->path());
   }
 }
 

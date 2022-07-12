@@ -1307,14 +1307,10 @@ def test_num_warps_pow2():
 # -------------
 
 
-@pytest.mark.parametrize("dtype_str, expr",
-                         [('int32', 'libdevice.ffs'),
-                          ('float32', 'libdevice.pow')])
-def test_libdevice(dtype_str, expr):
-    try:
-        import triton.language.libdevice as libdevice
-    except ModuleNotFoundError:
-        pytest.skip("libdevice is not installed")
+@pytest.mark.parametrize("dtype_str, expr, lib_path",
+                         [('int32', 'libdevice.ffs', ''),
+                          ('float32', 'libdevice.pow', '/usr/local/cuda/nvvm/libdevice/libdevice.bc')])
+def test_libdevice(dtype_str, expr, lib_path):
 
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
@@ -1341,7 +1337,7 @@ def test_libdevice(dtype_str, expr):
     x_tri = to_triton(x)
     # triton result
     y_tri = to_triton(numpy_random((shape[0],), dtype_str=dtype_str, rs=rs), device='cuda')
-    kernel[(1,)](x_tri, y_tri, BLOCK=shape[0])
+    kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], extern_libs={'libdevice': lib_path})
     # compare
     if expr == 'libdevice.ffs':
         np.testing.assert_equal(y_ref, to_numpy(y_tri))

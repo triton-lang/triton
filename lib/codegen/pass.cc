@@ -31,12 +31,20 @@
 namespace triton {
 namespace codegen {
 
-static void link_extern_libs(
-    const std::map<std::string, std::unique_ptr<ExternLib>>& extern_libs,
-    ir::module& ir, llvm::LLVMContext& ctx,
-    std::unique_ptr<llvm::Module>& llvm) {
-  for (const auto& iter : extern_libs) {
-    iter.second->install(ctx, llvm);
+static void link_extern_libs(const ExternLibMap& user_extern_lib_map,
+                             const ExternLibMap& target_extern_lib_map,
+                             ir::module& ir, llvm::LLVMContext& ctx,
+                             std::unique_ptr<llvm::Module>& llvm) {
+  for (const auto& iter : target_extern_lib_map) {
+    auto &lib_name = iter.first;
+    if (user_extern_lib_map.count(lib_name) != 0 &&
+        user_extern_lib_map.at(lib_name)->path() != "") {
+      // If the user specified a path for this library, use it.
+      user_extern_lib_map.at(lib_name)->install(ctx, llvm);
+    } else {
+      // Otherwise, use the default path.
+      iter.second->install(ctx, llvm);
+    }
   }
 
   std::set<llvm::StringRef> function_names;
@@ -69,7 +77,8 @@ static void link_extern_libs(
 // There should be a proper pass manager there!
 std::unique_ptr<llvm::Module> add_passes_to_emit_bin(
     ir::module& ir, llvm::LLVMContext& ctx, codegen::target* target,
-    int num_warps, int num_stages, int& shared_static) {
+    int num_warps, int num_stages, int& shared_static,
+    const ExternLibMap& extern_lib_map) {
   // generate llvm code
   std::string name = ir.get_function_list()[0]->get_name();
   std::unique_ptr<llvm::Module> llvm(new llvm::Module(name, ctx));
@@ -109,8 +118,7 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(
   layouts.run(ir);
   peephole.run(ir);
   dce.run(ir);
-  if (target->is_gpu())
-    cts.run(ir);
+  if (target->is_gpu()) cts.run(ir);
   align.run(ir);
   axes.run(ir);
   layouts.run(ir);
@@ -118,8 +126,7 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(
   dce.run(ir);
   align.run(ir);
   dce.run(ir);
-  if (target->is_gpu())
-    cts.run(ir);
+  if (target->is_gpu()) cts.run(ir);
   dce.run(ir);
   align.run(ir);
   axes.run(ir);
@@ -142,11 +149,15 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(
   // ir.print(std::cout);
   isel.visit(ir, *llvm);
   shared_static = allocation.allocated_size();
-  if (isel.get_extern_libs().size() > 0) {
-    link_extern_libs(isel.get_extern_libs(), ir, ctx, llvm);
+
+  if (isel.get_extern_lib_map().size() > 0) {
+    // If there's any extern lib calls,
+    // we need to link them in.
+    link_extern_libs(isel.get_extern_lib_map(), extern_lib_map, ir, ctx, llvm);
   }
+
   return llvm;
 }
 
-} // namespace codegen
-} // namespace triton
+}  // namespace codegen
+}  // namespace triton

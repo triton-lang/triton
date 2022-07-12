@@ -50,5 +50,14 @@ void LibDevice::opt(llvm::LLVMContext& ctx, std::unique_ptr<llvm::Module>& llvm)
   llvm->addModuleFlag(reflect);
 }
 
+std::unique_ptr<ExternLib> create_extern_lib(const std::string& lib_name,
+                                             const std::string& lib_path) {
+  if (lib_name == "libdevice") {
+    return std::make_unique<LibDevice>(lib_name, lib_path);
+  } else {
+    throw std::runtime_error("Unknown external library: " + lib_name);
+  }
+}
+
 }  // namespace codegen
 }  // namespace triton

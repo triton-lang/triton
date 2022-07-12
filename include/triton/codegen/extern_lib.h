@@ -59,6 +59,11 @@ class ExternLib {
 };
 
 ///
+/// \brief ExternLibMap is a map of ExternLibs from their names to their paths.
+///
+typedef std::map<std::string, std::unique_ptr<ExternLib>> ExternLibMap;
+
+///
 /// \brief Concrete class for NVIDIA's libdevice library.
 ///
 class LibDevice final : public ExternLib {
@@ -71,6 +76,12 @@ class LibDevice final : public ExternLib {
   virtual void opt(llvm::LLVMContext &ctx,
                    std::unique_ptr<llvm::Module> &llvm) override;
 };
+
+///
+/// \brief Create an ExternLib instance based on the name and path.
+///
+std::unique_ptr<ExternLib> create_extern_lib(const std::string &lib_name,
+                                             const std::string &lib_path);
 
 }  // namespace codegen
 }  // namespace triton

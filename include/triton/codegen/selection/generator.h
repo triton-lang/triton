@@ -220,8 +220,9 @@ private:
   void add_extern_lib(const std::string &lib_name, const std::string &lib_path);
 
   // Get all external libraries
-  const std::map<std::string, std::unique_ptr<ExternLib>> &get_extern_libs() {
-    return extern_libs_;
+  // XXX: It is a hack to return unique_ptr<> here.
+  const ExternLibMap &get_extern_lib_map() {
+    return extern_lib_map_;
   }
 
  private:
@@ -229,7 +230,7 @@ private:
   Builder* builder_;
   Module *mod_;
 
-  std::map<std::string, std::unique_ptr<ExternLib>> extern_libs_;
+  std::map<std::string, std::unique_ptr<ExternLib>> extern_lib_map_;
 
   analysis::axes *a_axes_;
   analysis::swizzle *swizzle_;
