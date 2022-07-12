@@ -211,7 +211,7 @@ class Libdevice(ExternLibrary):
         #   arg_type_symbol_dict = {[arg_type]: {(symbol, ret_type)}}
         #   return extern.dispatch("libdevice", <path>, <args>, <arg_type_symbol_dict>, _builder)
         import_str = "from . import core, extern\n"
-        file_str = ""
+        header_str = "LIBDEVICE_PATH = \"{}\"\n".format(self._path)
         func_str = ""
         for symbols in self._symbol_groups.values():
             func_str += "@extern.extern\n"
@@ -220,7 +220,7 @@ class Libdevice(ExternLibrary):
                 func_name_str += f"{arg_name}, "
             func_name_str += "_builder=None):\n"
 
-            return_str = f"\treturn extern.elementwise(\"{self._name}\", \"{self.path}\", ["
+            return_str = f"\treturn extern.elementwise(\"{self._name}\", LIBDEVICE_PATH, ["
             for arg_name in symbols[0].arg_names:
                 return_str += f"{arg_name}, "
             return_str += "], "
@@ -238,7 +238,7 @@ class Libdevice(ExternLibrary):
             return_str += ", _builder)\n"
 
             func_str += func_name_str + return_str + "\n"
-        file_str += import_str + func_str
+        file_str = import_str + header_str + func_str
 
         return file_str
 
