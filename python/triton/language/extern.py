@@ -69,7 +69,18 @@ def elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: 
             dispatch_args[0], dispatch_args[1], _builder)
         ret_shape = dispatch_args[0].shape
     else:
-        return ValueError("elementwise function takes 1 or 2 arguments")
+        for i in range(len(dispatch_args)):
+            dispatch_args[i] = core._to_tensor(dispatch_args[i], _builder)
+        broadcast_arg = dispatch_args[0]
+        # Get the broadcast shape over all the arguments
+        for i in range(len(dispatch_args)):
+            _, broadcast_arg = semantic.binary_op_type_checking_impl(
+                dispatch_args[i], broadcast_arg, _builder)
+        # Change the shape of each argument based on the broadcast shape
+        for i in range(len(dispatch_args)):
+            dispatch_args[i], _ = semantic.binary_op_type_checking_impl(
+                dispatch_args[i], broadcast_arg, _builder)
+        ret_shape = broadcast_arg.shape
     func = getattr(_builder, "create_extern_elementwise")
     return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_shape, _builder)
 

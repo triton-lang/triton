@@ -1308,7 +1308,8 @@ def test_num_warps_pow2():
 
 @pytest.mark.parametrize("dtype_str, expr, lib_path",
                          [('int32', 'libdevice.ffs', ''),
-                          ('float32', 'libdevice.pow', '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc')])
+                          ('float32', 'libdevice.pow', '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'),
+                          ('float64', 'libdevice.norm4d', '')])
 def test_libdevice(dtype_str, expr, lib_path):
 
     @triton.jit
@@ -1332,6 +1333,9 @@ def test_libdevice(dtype_str, expr, lib_path):
         x = np.abs(x)
         kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.pow(x, x)'})
         y_ref = np.power(x, x)
+    elif expr == 'libdevice.norm4d':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.norm4d(x, x, x, x)'})
+        y_ref = np.sqrt(4 * np.power(x, 2))
 
     x_tri = to_triton(x)
     # triton result

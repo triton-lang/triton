@@ -59,8 +59,16 @@ def convert_type(type_str):
         return None
 
 
+def to_unsigned(type_str):
+    if type_str == "int32":
+        return "uint32"
+    elif type_str == "int64":
+        return "uint64"
+    else:
+        return type_str
+
 class ExternLibrary(ABC):
-    def __init__(self, name: str, path: str, format: bool = True) -> None:
+    def __init__(self, name: str, path: str, format: bool = True, grouping: bool = True) -> None:
         '''
         Abstract class for extern library.
 
@@ -72,6 +80,7 @@ class ExternLibrary(ABC):
         self._path = path
         self._symbols = {}
         self._format = True
+        self._grouping = grouping
 
     @property
     def name(self):
@@ -84,6 +93,10 @@ class ExternLibrary(ABC):
     @property
     def symbols(self):
         return self._symbols
+
+    @property
+    def grouping(self):
+        return self._grouping
 
     @abstractmethod
     def parse_symbols(self, input_file):
@@ -146,11 +159,24 @@ class Libdevice(ExternLibrary):
             arg_name = 'arg' + str(i)
             arg_types.append(arg_type)
             arg_names.append(arg_name)
+        if op_name == "sad":
+            # Special case for sad, where the last argument is an unsigned int
+            arg_types[-1] = to_unsigned(arg_types[-1])
+        elif op_name.startswith("u"):
+            # LLVM does not differentiate between signed and unsigned integer type.
+            # We have to convert the types to unsigned
+            ret_type = to_unsigned(ret_type)
+            for i, arg_type in enumerate(arg_types):
+                arg_types[i] = to_unsigned(arg_type)
         return Symbol(func_name, op_name, ret_type, arg_names, arg_types)
 
     def _group_symbols(self):
+        symbol_set = {}
+        for symbol in self._symbols.values():
+            op_name = symbol.op_name
+            symbol_set[op_name] = symbol
         # The following cases are grouped together:
-        # op_name, <u/ull/ll>op_name<ll/f/i/if>
+        # op_name, <u/ull/ll>op_name<ll/f/i>
         for symbol in self._symbols.values():
             op_name = symbol.op_name
             if "max" in op_name:
@@ -159,6 +185,18 @@ class Libdevice(ExternLibrary):
                 op_name = "min"
             elif "abs" in op_name:
                 op_name = "abs"
+            elif "pow" in op_name and "fast" in op_name:
+                op_name = "pow"
+            elif "round" in op_name:
+                if "llround" in op_name:
+                    op_name = "llround"
+                else:
+                    op_name = "round"
+            elif "rint" in op_name:
+                if "llrint" in op_name:
+                    op_name = "llrint"
+                else:
+                    op_name = "rint"
             elif op_name.startswith("ull"):
                 if "2" not in op_name:
                     # e.g., ullmax->max
@@ -177,16 +215,15 @@ class Libdevice(ExternLibrary):
                 if "2" not in op_name:
                     # e.g., llmax->max
                     op_name = op_name[2:]
-            elif op_name.endswith("i"):
-                op_name = op_name[:-1]
-            elif op_name.endswith("if"):
-                op_name = op_name[:-2]
             elif op_name.endswith("ll"):
                 op_name = op_name[:-2]
             elif op_name.endswith("f"):
                 op_name = op_name[:-1]
-            # Update op_name
-            symbol._op_name = op_name
+            if op_name in symbol_set:
+                # Update op_name only if there's an existing symbol
+                symbol._op_name = op_name
+            else:
+                op_name = symbol._op_name
             if op_name in self._symbol_groups:
                 self._symbol_groups[op_name].append(symbol)
             else:
@@ -211,7 +248,8 @@ class Libdevice(ExternLibrary):
         #   arg_type_symbol_dict = {[arg_type]: {(symbol, ret_type)}}
         #   return extern.dispatch("libdevice", <path>, <args>, <arg_type_symbol_dict>, _builder)
         import_str = "from . import core, extern\n"
-        header_str = "LIBDEVICE_PATH = \"{}\"\n".format(self._path)
+        import_str += "import os\n"
+        header_str = f"LIBDEVICE_PATH = os.path.dirname(os.path.abspath(__file__)) + \"/libdevice.10.bc\"\n"
         func_str = ""
         for symbols in self._symbol_groups.values():
             func_str += "@extern.extern\n"
@@ -223,7 +261,7 @@ class Libdevice(ExternLibrary):
             return_str = f"\treturn extern.elementwise(\"{self._name}\", LIBDEVICE_PATH, ["
             for arg_name in symbols[0].arg_names:
                 return_str += f"{arg_name}, "
-            return_str += "], "
+            return_str += "], \n"
 
             arg_type_symbol_dict_str = "{"
             for symbol in symbols:
@@ -231,7 +269,7 @@ class Libdevice(ExternLibrary):
                 for arg_type in symbol.arg_types:
                     arg_type_symbol_dict_str += f"core.dtype(\"{arg_type}\"),"
                 ret_type = f"core.dtype(\"{symbol.ret_type}\")"
-                arg_type_symbol_dict_str += "): (\"" + symbol.name + "\", " + ret_type + "),"
+                arg_type_symbol_dict_str += "): (\"" + symbol.name + "\", " + ret_type + "),\n"
             arg_type_symbol_dict_str += "}"
 
             return_str += arg_type_symbol_dict_str
