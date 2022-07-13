@@ -84,6 +84,8 @@ class prefetch_s_inst;
 class clock_inst;
 class globaltimer_inst;
 
+class extern_elementwise_inst;
+
 class make_range_sta;
 class undef_value;
 class constant_int;
@@ -177,6 +179,8 @@ public:
   virtual void visit_constant_int(constant_int*) = 0;
   virtual void visit_constant_fp(constant_fp*) = 0;
   virtual void visit_alloc_const(alloc_const*) = 0;
+
+  virtual void visit_extern_elementwise_inst(extern_elementwise_inst*) = 0;
 };
 
 }

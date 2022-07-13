@@ -1300,3 +1300,49 @@ def test_num_warps_pow2():
     _kernel[(1,)](dst=dst, num_warps=1)
     _kernel[(1,)](dst=dst, num_warps=2)
     _kernel[(1,)](dst=dst, num_warps=4)
+
+# -------------
+# test extern
+# -------------
+
+
+@pytest.mark.parametrize("dtype_str, expr, lib_path",
+                         [('int32', 'libdevice.ffs', ''),
+                          ('float32', 'libdevice.pow', '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'),
+                          ('float64', 'libdevice.norm4d', '')])
+def test_libdevice(dtype_str, expr, lib_path):
+
+    @triton.jit
+    def kernel(X, Y, BLOCK: tl.constexpr):
+        x = tl.load(X + tl.arange(0, BLOCK))
+        y = GENERATE_TEST_HERE
+        tl.store(Y + tl.arange(0, BLOCK), y)
+
+    shape = (128, )
+    rs = RandomState(17)
+    # limit the range of integers so that the sum does not overflow
+    x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
+
+    if expr == 'libdevice.ffs':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.ffs(x)'})
+        y_ref = np.zeros(shape, dtype=x.dtype)
+        for i in range(shape[0]):
+            y_ref[i] = (int(x[i]) & int(-x[i])).bit_length()
+    elif expr == 'libdevice.pow':
+        # numpy does not allow negative factors in power, so we use abs()
+        x = np.abs(x)
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.pow(x, x)'})
+        y_ref = np.power(x, x)
+    elif expr == 'libdevice.norm4d':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.norm4d(x, x, x, x)'})
+        y_ref = np.sqrt(4 * np.power(x, 2))
+
+    x_tri = to_triton(x)
+    # triton result
+    y_tri = to_triton(numpy_random((shape[0],), dtype_str=dtype_str, rs=rs), device='cuda')
+    kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], extern_libs={'libdevice': lib_path})
+    # compare
+    if expr == 'libdevice.ffs':
+        np.testing.assert_equal(y_ref, to_numpy(y_tri))
+    else:
+        np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)

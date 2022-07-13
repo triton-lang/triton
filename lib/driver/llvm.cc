@@ -358,8 +358,5 @@ hipModule_t amdgpu_to_hipmodule(const std::string& path) {
   return ret;
 }
 
-
-
-}
-}
-
+}  // namespace driver
+}  // namespace triton
