@@ -98,7 +98,7 @@ class CMakeBuild(build_ext):
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
         # python directories
-        python_include_dirs = [distutils.sysconfig.get_python_inc()] + ['/usr/local/cuda/include']
+        python_include_dirs = [distutils.sysconfig.get_python_inc()]
         cmake_args = [
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
             "-DBUILD_TUTORIALS=OFF",

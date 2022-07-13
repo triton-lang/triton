@@ -3,6 +3,7 @@
 
 
 #include <memory>
+#include "extern_lib.h"
 
 namespace llvm{
   class Module;
@@ -30,12 +31,10 @@ namespace codegen{
 
 // TODO:
 // There should be a proper pass manager there!
-std::unique_ptr<llvm::Module> add_passes_to_emit_bin(ir::module &ir, llvm::LLVMContext& ctx,
-                                                     codegen::target* target,
-                                                     int sm, int num_warps,
-                                                     int num_stages, int &shared_static);
-
-
+std::unique_ptr<llvm::Module> add_passes_to_emit_bin(
+    ir::module &ir, llvm::LLVMContext &ctx, codegen::target *target,
+    int num_warps, int num_stages, int &shared_static,
+    const ExternLibMap &extern_libs);
 }
 }
 

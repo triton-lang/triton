@@ -689,7 +689,7 @@ class CodeGenerator(ast.NodeVisitor):
                 ret = triton.language.tensor(ret, self.prototypes[fn_name].ret_type)
             return ret
         # built-in function
-        if sys.modules[fn.__module__] is triton.language.core:
+        if sys.modules[fn.__module__] is triton.language.core or isinstance(fn, triton.language.extern.ExternalFunction):
             ret = fn(*args, _builder=self.builder, **kws)
         if fn in self.value_constructor.builtins.values():
             args = [arg.value if isinstance(arg, triton.language.constexpr) else arg
@@ -933,7 +933,7 @@ class Kernel:
         self.fn = fn
         self.cache_key = {}
 
-    def add_to_cache(self, key, wargs, device_idx, num_warps, num_stages):
+    def add_to_cache(self, key, wargs, device_idx, num_warps, num_stages, extern_libs):
         tensor_idxs = [i for i, arg in enumerate(wargs) if hasattr(arg, 'data_ptr')]
 
         # attributes
@@ -953,9 +953,10 @@ class Kernel:
         constants.update({i: arg.value for i, arg in enumerate(wargs) if isinstance(arg, triton.language.constexpr)})
         constants.update({i: None for i, arg in enumerate(wargs) if arg is None})
         arg_types = [Kernel._to_python_ir(arg) for i, arg in enumerate(wargs) if i not in constants]
-        return self.fn._warmup(key, arg_types=arg_types, device=device_idx, attributes=attributes, constants=constants, num_warps=num_warps, num_stages=num_stages, is_manual_warmup=False)
+        return self.fn._warmup(key, arg_types=arg_types, device=device_idx, attributes=attributes, constants=constants, num_warps=num_warps, num_stages=num_stages,
+                               extern_libs=extern_libs, is_manual_warmup=False)
 
-    def __call__(self, *wargs, grid, num_warps=4, num_stages=2, **kwargs):
+    def __call__(self, *wargs, grid, num_warps=4, num_stages=2, extern_libs={}, **kwargs):
         assert num_warps != 0 and (num_warps & (num_warps - 1)) == 0, f"num_warps={num_warps} must be a power of 2."
         # handle arguments passed by name
         kwargs = {self.fn.arg_names.index(name): value for name, value in kwargs.items()}
@@ -985,7 +986,7 @@ class Kernel:
         cache_key = self.cache_key[device]
         stream = current_cuda_stream(device)
         return _triton.runtime.launch(wargs, self.fn.do_not_specialize, cache_key, self.fn.arg_names,
-                                      device, stream, self.fn.bin_cache, num_warps, num_stages, self.add_to_cache,
+                                      device, stream, self.fn.bin_cache, num_warps, num_stages, extern_libs, self.add_to_cache,
                                       grid)
 
 
@@ -1242,7 +1243,7 @@ class JITFunction:
     def warmup(self, compile):
         return self._warmup(**compile, is_manual_warmup=True)
 
-    def _warmup(self, key, arg_types, device, attributes, constants, num_warps, num_stages, is_manual_warmup):
+    def _warmup(self, key, arg_types, device, attributes, constants, num_warps, num_stages, extern_libs, is_manual_warmup):
         hashed_key = hashlib.md5(key.encode("utf-8")).hexdigest()
 
         # create cache directory
@@ -1264,7 +1265,7 @@ class JITFunction:
                 with open(bin_cache_path, 'rb') as f:
                     binary = pickle.load(f)["binary"]
 
-        compile = dict(arg_types=arg_types, device=device, attributes=attributes, constants=constants, num_warps=num_warps, num_stages=num_stages)
+        compile = dict(arg_types=arg_types, device=device, attributes=attributes, constants=constants, num_warps=num_warps, num_stages=num_stages, extern_libs=extern_libs)
         if JITFunction.cache_hook is not None:
             name = self.__name__
             info = key.split('-')[-3:]
@@ -1293,7 +1294,7 @@ class JITFunction:
         self.bin_cache[key] = LoadedBinary(device, binary)
         return False
 
-    def _compile(self, arg_types, device, attributes, constants, num_warps, num_stages):
+    def _compile(self, arg_types, device, attributes, constants, num_warps, num_stages, extern_libs):
         # create IR module
         context = _triton.ir.context()
         # get just-in-time proto-type of kernel
@@ -1316,7 +1317,7 @@ class JITFunction:
             backend = _triton.runtime.backend.CUDA
         else:
             backend = _triton.runtime.backend.ROCM
-        name, asm, shared_mem = _triton.code_gen.compile_ttir(backend, generator.module, device, num_warps, num_stages)
+        name, asm, shared_mem = _triton.code_gen.compile_ttir(backend, generator.module, device, num_warps, num_stages, extern_libs)
         max_shared_memory = _triton.runtime.max_shared_memory(backend, device)
         if shared_mem > max_shared_memory:
             raise OutOfResources(shared_mem, max_shared_memory, "shared memory")

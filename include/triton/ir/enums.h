@@ -154,6 +154,8 @@ enum value_id_t: unsigned {
   INST_COS,
   INST_SIN,
   INST_LOG,
+  // extern
+  INST_EXTERN_ELEMENTWISE,
   // array arithmetic
   INST_TRANS,
   INST_REDUCE,

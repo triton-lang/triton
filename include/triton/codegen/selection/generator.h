@@ -6,6 +6,7 @@
 #include "triton/ir/visitor.h"
 #include "triton/ir/instructions.h"
 #include "triton/codegen/analysis/layout.h"
+#include "triton/codegen/extern_lib.h"
 #include <functional>
 
 // forward
@@ -199,6 +200,7 @@ private:
   void visit_make_range(ir::make_range*);
   void visit_clock_inst(ir::clock_inst*);
   void visit_globaltimer_inst(ir::globaltimer_inst*);
+  void visit_extern_elementwise_inst(ir::extern_elementwise_inst*);
 //  void visit_make_range_sta(ir::make_range_sta*);
   void visit_undef_value(ir::undef_value*);
   void visit_constant_int(ir::constant_int*);
@@ -209,17 +211,25 @@ private:
   void visit_argument(ir::argument*);
   void visit(ir::module &, llvm::Module &);
 
-
   // layouts
   void visit_layout_mma(analysis::mma_layout*);
   void visit_layout_scanline(analysis::scanline_layout*);
   void visit_layout_shared(analysis::shared_layout*);
 
+  // Add a new external library based on given name and path if it doesn't exist
+  void add_extern_lib(const std::string &lib_name, const std::string &lib_path);
 
-private:
+  // Get all external libraries
+  const ExternLibMap &get_extern_lib_map() {
+    return extern_lib_map_;
+  }
+
+ private:
   LLVMContext *ctx_;
   Builder* builder_;
   Module *mod_;
+
+  std::map<std::string, std::unique_ptr<ExternLib>> extern_lib_map_;
 
   analysis::axes *a_axes_;
   analysis::swizzle *swizzle_;
