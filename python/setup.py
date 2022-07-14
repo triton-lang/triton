@@ -141,7 +141,11 @@ setup(
         "filelock",
         "torch",
     ],
-    package_data={"triton/ops": ["*.c"], "triton/ops/blocksparse": ["*.c"]},
+    package_data={
+        "triton/ops": ["*.c"],
+        "triton/ops/blocksparse": ["*.c"],
+        "triton/language": ["*.bc"],
+    },
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={"build_ext": CMakeBuild},
