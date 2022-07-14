@@ -46,7 +46,7 @@
     
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="triton" href="../../python-api/triton.html" />
+    <link rel="next" title="Fused Attention" href="06-fused-attention.html" />
     <link rel="prev" title="Low-Memory Dropout" href="04-low-memory-dropout.html" /> 
 </head>
 
@@ -101,6 +101,8 @@
 <li class="toctree-l2"><a class="reference internal" href="03-matrix-multiplication.html">Matrix Multiplication</a></li>
 <li class="toctree-l2"><a class="reference internal" href="04-low-memory-dropout.html">Low-Memory Dropout</a></li>
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Layer Normalization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="06-fused-attention.html">Fused Attention</a></li>
+<li class="toctree-l2"><a class="reference internal" href="07-libdevice-function.html">Libdevice function</a></li>
 </ul>
 </li>
 </ul>
@@ -196,34 +198,34 @@ to download the full example code</p>
           N      Triton       Torch        Apex
 0    1024.0  585.142849  277.694907  468.114273
 1    1536.0  630.153868  323.368435  511.999982
-2    2048.0  682.666643  334.367358  520.126988
-3    2560.0  694.237267  365.714281  518.481028
-4    3072.0  712.347810  378.092307  501.551037
-5    3584.0  725.873439  384.859062  458.751978
-6    4096.0  728.177767  381.023256  458.293714
-7    4608.0  670.254540  396.387087  426.173427
-8    5120.0  694.237267  397.669909  426.666652
-9    5632.0  704.000002  396.969169  413.357796
-10   6144.0  702.171410  402.885254  411.313806
+2    2048.0  668.734716  337.814445  528.516136
+3    2560.0  694.237267  362.477870  512.000013
+4    3072.0  712.347810  375.206126  501.551037
+5    3584.0  725.873439  384.859062  451.527536
+6    4096.0  728.177767  381.023256  455.111095
+7    4608.0  670.254540  396.387087  421.302872
+8    5120.0  688.403381  395.748783  422.268057
+9    5632.0  698.542675  396.969169  409.599997
+10   6144.0  702.171410  402.885254  409.600010
 11   6656.0  700.631610  400.360920  400.360920
-12   7168.0  695.078767  396.844306  388.772874
-13   7680.0  682.666656  393.846167  387.634072
-14   8192.0  642.509816  393.609605  372.363633
-15   8704.0  627.315309  389.005597  380.502740
-16   9216.0  606.814809  407.337026  383.999986
-17   9728.0  589.575753  409.599987  383.369452
-18  10240.0  566.920437  408.578556  382.803739
-19  10752.0  549.623009  411.559798  381.445676
-20  11264.0  536.380957  406.826188  373.134567
-21  11776.0  523.377770  410.492372  377.587162
-22  12288.0  517.389457  414.784810  383.251457
-23  12800.0  505.679014  410.420828  376.470582
-24  13312.0  494.180982  405.699062  376.976995
-25  13824.0  482.934503  411.888257  379.389355
-26  14336.0  471.967074  406.695045  374.185964
-27  14848.0  461.297068  408.192434  375.304904
-28  15360.0  454.269882  406.214870  378.092307
-29  15872.0  447.887117  407.627589  376.225175
+12   7168.0  678.627194  386.154893  384.859062
+13   7680.0  682.666656  391.337574  386.415087
+14   8192.0  645.674867  390.095241  376.643677
+15   8704.0  624.502255  390.095225  379.465939
+16   9216.0  604.327881  405.098894  383.002605
+17   9728.0  585.142883  409.599987  382.427505
+18  10240.0  564.965524  409.600010  382.803739
+19  10752.0  546.133312  410.577576  380.601764
+20  11264.0  531.634232  395.228063  370.069806
+21  11776.0  520.486200  409.599991  376.831982
+22  12288.0  516.031509  413.911572  383.251457
+23  12800.0  504.433489  410.420828  375.779805
+24  13312.0  494.180982  405.699062  376.310952
+25  13824.0  481.882350  411.888257  378.739711
+26  14336.0  471.967074  401.709294  372.969090
+27  14848.0  461.297068  407.492270  375.898745
+28  15360.0  453.431739  406.887417  378.092307
+29  15872.0  447.098578  406.323209  376.225175
 </pre></div>
 </div>
 <div class="line-block">
@@ -354,17 +356,19 @@ to download the full example code</p>
     <span class="n">cols</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
     <span class="n">dw</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
     <span class="n">db</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">):</span>
-        <span class="n">rows</span> <span class="o">=</span> <span class="n">i</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
-        <span class="n">mask</span> <span class="o">=</span> <span class="p">(</span><span class="n">rows</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">M</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">cols</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">&lt;</span> <span class="n">N</span><span class="p">)</span>
-        <span class="n">offs</span> <span class="o">=</span> <span class="n">rows</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">N</span> <span class="o">+</span> <span class="n">cols</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>
-        <span class="n">a</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">A</span> <span class="o">+</span> <span class="n">offs</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mf">0.</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-        <span class="n">dout</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">DOut</span> <span class="o">+</span> <span class="n">offs</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mf">0.</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-        <span class="n">mean</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">Mean</span> <span class="o">+</span> <span class="n">rows</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">rows</span> <span class="o">&lt;</span> <span class="n">M</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mf">0.</span><span class="p">)</span>
-        <span class="n">rstd</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">Var</span> <span class="o">+</span> <span class="n">rows</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">rows</span> <span class="o">&lt;</span> <span class="n">M</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mf">0.</span><span class="p">)</span>
-        <span class="n">a_hat</span> <span class="o">=</span> <span class="p">(</span><span class="n">a</span> <span class="o">-</span> <span class="n">mean</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">])</span> <span class="o">*</span> <span class="n">rstd</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span>
-        <span class="n">dw</span> <span class="o">+=</span> <span class="n">dout</span> <span class="o">*</span> <span class="n">a_hat</span>
-        <span class="n">db</span> <span class="o">+=</span> <span class="n">dout</span>
+    <span class="n">UNROLL</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="mi">4</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span> <span class="o">*</span> <span class="n">UNROLL</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">j</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">UNROLL</span><span class="p">):</span>
+            <span class="n">rows</span> <span class="o">=</span> <span class="n">i</span> <span class="o">+</span> <span class="n">j</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_M</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+            <span class="n">mask</span> <span class="o">=</span> <span class="p">(</span><span class="n">rows</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">M</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">cols</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">&lt;</span> <span class="n">N</span><span class="p">)</span>
+            <span class="n">offs</span> <span class="o">=</span> <span class="n">rows</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">N</span> <span class="o">+</span> <span class="n">cols</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>
+            <span class="n">a</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">A</span> <span class="o">+</span> <span class="n">offs</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mf">0.</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+            <span class="n">dout</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">DOut</span> <span class="o">+</span> <span class="n">offs</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mf">0.</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+            <span class="n">mean</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">Mean</span> <span class="o">+</span> <span class="n">rows</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">rows</span> <span class="o">&lt;</span> <span class="n">M</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mf">0.</span><span class="p">)</span>
+            <span class="n">rstd</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">Var</span> <span class="o">+</span> <span class="n">rows</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">rows</span> <span class="o">&lt;</span> <span class="n">M</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mf">0.</span><span class="p">)</span>
+            <span class="n">a_hat</span> <span class="o">=</span> <span class="p">(</span><span class="n">a</span> <span class="o">-</span> <span class="n">mean</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">])</span> <span class="o">*</span> <span class="n">rstd</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span>
+            <span class="n">dw</span> <span class="o">+=</span> <span class="n">dout</span> <span class="o">*</span> <span class="n">a_hat</span>
+            <span class="n">db</span> <span class="o">+=</span> <span class="n">dout</span>
     <span class="n">sum_dw</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">dw</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">sum_db</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">DW</span> <span class="o">+</span> <span class="n">cols</span><span class="p">,</span> <span class="n">sum_dw</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">cols</span> <span class="o">&lt;</span> <span class="n">N</span><span class="p">)</span>
@@ -437,7 +441,15 @@ to download the full example code</p>
             <span class="n">BLOCK_SIZE_N</span><span class="o">=</span><span class="n">ctx</span><span class="o">.</span><span class="n">BLOCK_SIZE</span><span class="p">,</span>
             <span class="n">num_warps</span><span class="o">=</span><span class="n">ctx</span><span class="o">.</span><span class="n">num_warps</span><span class="p">,</span>
         <span class="p">)</span>
-        <span class="c1"># accumulate partial sums in separate kernel</span>
+        <span class="k">if</span> <span class="n">N</span> <span class="o">&gt;</span> <span class="mi">10240</span><span class="p">:</span>
+            <span class="n">BLOCK_SIZE_N</span> <span class="o">=</span> <span class="mi">128</span>
+            <span class="n">BLOCK_SIZE_M</span> <span class="o">=</span> <span class="mi">32</span>
+            <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">4</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># maximize occupancy for small N</span>
+            <span class="n">BLOCK_SIZE_N</span> <span class="o">=</span> <span class="mi">16</span>
+            <span class="n">BLOCK_SIZE_M</span> <span class="o">=</span> <span class="mi">16</span>
+            <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">8</span>
         <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">meta</span><span class="p">:</span> <span class="p">[</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_N&quot;</span><span class="p">])]</span>
         <span class="n">_layer_norm_bwd_dwdb</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>
             <span class="n">a</span><span class="p">,</span> <span class="n">dout</span><span class="p">,</span>
@@ -446,17 +458,11 @@ to download the full example code</p>
             <span class="n">dbias</span><span class="p">,</span>
             <span class="n">M</span><span class="p">,</span>
             <span class="n">N</span><span class="p">,</span>
-            <span class="n">BLOCK_SIZE_M</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>
-            <span class="n">BLOCK_SIZE_N</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span>
+            <span class="n">BLOCK_SIZE_M</span><span class="o">=</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span>
+            <span class="n">BLOCK_SIZE_N</span><span class="o">=</span><span class="n">BLOCK_SIZE_N</span><span class="p">,</span>
+            <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span>
         <span class="p">)</span>
-        <span class="k">return</span> <span class="p">(</span><span class="n">da</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="n">dweight</span><span class="p">,</span> <span class="n">dbias</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span>
-                <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span>
-                <span class="kc">None</span><span class="p">,</span>
-                <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span>
-                <span class="kc">None</span><span class="p">,</span>
-                <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span>
-                <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span>
-                <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">da</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="n">dweight</span><span class="p">,</span> <span class="n">dbias</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
 
 
 <span class="k">def</span> <span class="nf">layer_norm</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">normalized_shape</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">bias</span><span class="p">,</span> <span class="n">eps</span><span class="p">):</span>
@@ -537,7 +543,7 @@ to download the full example code</p>
 <span class="n">bench_layer_norm</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s1">&#39;.&#39;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 5 minutes  24.641 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 5 minutes  32.552 seconds)</p>
 <div class="sphx-glr-footer class sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-05-layer-norm-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/935c0dd0fbeb4b2e69588471cbb2d4b2/05-layer-norm.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">05-layer-norm.py</span></code></a></p>
@@ -555,7 +561,7 @@ to download the full example code</p>
           </div>
           <footer>
     <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
-        <a href="../../python-api/triton.html" class="btn btn-neutral float-right" title="triton" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="06-fused-attention.html" class="btn btn-neutral float-right" title="Fused Attention" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
         <a href="04-low-memory-dropout.html" class="btn btn-neutral float-left" title="Low-Memory Dropout" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
     </div>
 

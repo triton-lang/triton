@@ -122,6 +122,48 @@ To install the dependencies for the tutorials:
    :hidden:
 
    /getting-started/tutorials/05-layer-norm
+
+.. raw:: html
+
+    <div class="sphx-glr-thumbcontainer" tooltip="Fused Attention">
+
+.. only:: html
+
+ .. figure:: /getting-started/tutorials/images/thumb/sphx_glr_06-fused-attention_thumb.png
+     :alt: Fused Attention
+
+     :ref:`sphx_glr_getting-started_tutorials_06-fused-attention.py`
+
+.. raw:: html
+
+    </div>
+
+
+.. toctree::
+   :hidden:
+
+   /getting-started/tutorials/06-fused-attention
+
+.. raw:: html
+
+    <div class="sphx-glr-thumbcontainer" tooltip="In trition/language/libdevice.py, we try to aggregate functions with the same computation but d...">
+
+.. only:: html
+
+ .. figure:: /getting-started/tutorials/images/thumb/sphx_glr_07-libdevice-function_thumb.png
+     :alt: Libdevice function
+
+     :ref:`sphx_glr_getting-started_tutorials_07-libdevice-function.py`
+
+.. raw:: html
+
+    </div>
+
+
+.. toctree::
+   :hidden:
+
+   /getting-started/tutorials/07-libdevice-function
 .. raw:: html
 
     <div class="sphx-glr-clear"></div>
