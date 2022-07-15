@@ -65,6 +65,9 @@ static Attribute parseBlocked(AsmParser &parser, Type type) {
     } else if (attr.getName() == "order") {
       if (parseIntArrayAttr(parser, attr, order, "order").failed())
         return {};
+    } else if (attr.getName() == "broadcastAxis") {
+      if (parseIntArrayAttr(parser, attr, broadcastAxis, "broadcastAxis").failed())
+        return {};
     } else {
       parser.emitError(parser.getNameLoc(), "unexpected key: ")
           << attr.getName().strref();
