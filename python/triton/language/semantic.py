@@ -775,6 +775,7 @@ def atomic_cas(ptr: tl.tensor,
                val: tl.tensor,
                builder: ir.builder) -> tl.tensor:
     # TODO: type checking
+    # supported bit width: 16, 32, 64
     return tl.tensor(builder.create_atomic_cas(ptr.handle, cmp.handle, val.handle), val.type)
 
 
@@ -784,6 +785,9 @@ def atom_red_typechecking_impl(ptr: tl.tensor,
                                builder: ir.builder) -> Tuple[tl.tensor, tl.tensor, tl.tensor]:
     if not ptr.type.scalar.is_ptr():
         raise ValueError("Pointer argument of store instruction is " + ptr.type.__repr__())
+    # TODO: type checking
+    # supported type: f32, f64, i32, i64, u32, u64, (f16, atomic_add only)
+    # not supported type: i1, i8, i16, bf16
     if ptr.type.is_block():
         if mask:
             mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)

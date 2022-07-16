@@ -84,7 +84,7 @@ def patch_kernel(template, to_replace):
     return kernel
 
 
-@pytest.mark.parametrize("dtype_x", [dtype_x for dtype_x in dtypes])
+@pytest.mark.parametrize("dtype_x", [dtype_x for dtype_x in dtypes] + ["bfloat16"])
 def test_empty_kernel(dtype_x, device='cuda'):
     SIZE = 128
 
@@ -211,7 +211,7 @@ def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
 # test binary ops
 # ---------------
 
-
+# TODO: bf16
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [
     (dtype_x, dtype_y, op)
     for op in ['+', '-', '*', '/', '%']
@@ -223,7 +223,7 @@ def test_bin_op(dtype_x, dtype_y, op, device='cuda'):
     if op == '%' and dtype_x in int_dtypes + uint_dtypes and dtype_y in int_dtypes + uint_dtypes:
         # LLVM has 'numpy.fmod', not 'numpy.remainder', semantics on integer remainders.
         numpy_expr = 'np.fmod(x, y)'
-    elif op in ('/', '%') and dtype_x in ('int16', 'float16') and dtype_y in ('int16', 'float16'):
+    elif op in ('/', '%') and dtype_x in ('int16', 'float16', 'bfloat16') and dtype_y in ('int16', 'float16', 'bfloat16'):
         # Triton promotes 16-bit floating-point / and % to 32-bit because there
         # are no native div or FRem operations on float16. Since we have to
         # convert anyway, we may as well take the accuracy bump.
@@ -263,6 +263,7 @@ def test_floordiv(dtype_x, dtype_y, device='cuda'):
 # ---------------
 # test bitwise ops
 # ---------------
+# TODO: bf16
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [
     (dtype_x, dtype_y, op)
     for op in ['&', '|', '^']
@@ -305,7 +306,7 @@ def test_shift_op(dtype_x, dtype_y, op, device='cuda'):
 # ---------------
 ops = ['==', '!=', '>', '<', '>=', '<=']
 
-
+# TODO: bf16, but cast to fp16 (?)
 @pytest.mark.parametrize("dtype_x, dtype_y, op, mode_x, mode_y",
                          # real
                          [
@@ -336,6 +337,7 @@ def test_compare_op(dtype_x, dtype_y, op, mode_x, mode_y, device='cuda'):
 # ---------------
 # test unary ops
 # ---------------
+# TODO: bf16
 @pytest.mark.parametrize("dtype_x, expr", [
     (dtype_x, ' -x') for dtype_x in dtypes
 ] + [
@@ -350,7 +352,6 @@ def test_unary_op(dtype_x, expr, device='cuda'):
 # @pytest.mark.paramterize("expr", [
 #     'exp', 'log', 'cos', 'sin'
 # ])
-
 
 @pytest.mark.parametrize("expr", [
     'exp', 'log', 'cos', 'sin'
@@ -728,7 +729,7 @@ def test_f16_to_f8_rounding():
 # test reduce
 # ---------------
 
-
+# TODO: bfloat16
 @pytest.mark.parametrize("op, dtype_str, shape",
                          [(op, dtype, shape)
                           for op in ['min', 'max', 'argmin', 'argmax', 'sum']
@@ -768,7 +769,7 @@ def test_reduce1d(op, dtype_str, shape, device='cuda'):
         else:
             np.testing.assert_equal(z_ref, z_tri)
 
-
+# TODO: bfloat16
 reduce_configs1 = [
     (op, dtype, (1, 1024), axis) for dtype in dtypes
     for op in ['min', 'max', 'argmin', 'argmax', 'sum']
@@ -831,7 +832,7 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
 # test permute
 # ---------------
 
-
+# TODO: bfloat16
 @pytest.mark.parametrize("dtype_str, shape, perm",
                          [(dtype, shape, perm)
                           for dtype in ['float16', 'float32']
@@ -1037,6 +1038,7 @@ def test_arange(start, device='cuda'):
 # 'bfloat16': torch.bfloat16,
 # Testing masked loads with an intermate copy to shared memory run.
 
+# TODO: test bfloat16 masked load
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
 def test_masked_load_shared_memory(dtype, device='cuda'):
