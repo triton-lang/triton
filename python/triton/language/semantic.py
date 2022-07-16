@@ -58,14 +58,20 @@ def computation_type_impl(a_ty: tl.dtype, b_ty: tl.dtype, div_or_mod: bool) -> t
         return tl.float32
     # 3 ) if one operand is half, the other is implicitly converted to half
     #     unless we're doing / or %, which do not exist natively in PTX for fp16.
+    #     Supported PTX op: add, sub, mul, fma, neg, abs, min, max, tanh, ex2, setp
     if a_ty.is_fp16() or b_ty.is_fp16():
         if div_or_mod:
             return tl.float32
         else:
             return tl.float16
+    # 4) if one is bf16, the other is implicitly converted to bf16
+    #    Supported PTX op: fma, neg, abs, min, max, tensor cores
+    #    NOT supported: add, sub, mul, setp, tanh, ex2
+    if a_ty.is_bf16() or b_ty.is_bf16():
+        return tl.float32 if div_or_mod else tl.bfloat16
     if not a_ty.is_int() or not b_ty.is_int():
         assert False
-    # 4 ) both operands are integer and undergo
+    # 5 ) both operands are integer and undergo
     #    integer promotion
     if div_or_mod and a_ty.int_signedness != b_ty.int_signedness:
         raise ValueError("Cannot use /, #, or % with " + a_ty.__repr__() + " and " + b_ty.__repr__() + " because they have different signedness;"
