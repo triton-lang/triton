@@ -15,7 +15,7 @@ import triton._C.libtriton.triton as _triton
                          )
 def test_op(M, N, dtype, mode):
     cc = _triton.runtime.cc(_triton.runtime.backend.CUDA, torch.cuda.current_device())
-    if cc < 80 and DTYPE == "bfloat16":
+    if cc < 80 and dtype == "bfloat16":
         pytest.skip("Only test bfloat16 on devices with sm >= 80")
     dtype = {'bfloat16': torch.bfloat16, 'float16': torch.float16, 'float32': torch.float32}[dtype]
     # create inputs

@@ -44,7 +44,7 @@ def numpy_random(shape, dtype_str, rs: Optional[RandomState] = None, low=None, h
     elif dtype_str in float_dtypes:
         return rs.normal(0, 1, shape).astype(dtype_str)
     elif dtype_str == 'bfloat16':
-        return (rs.normal(0, 1, shape).astype('float32').view('uint32') \
+        return (rs.normal(0, 1, shape).astype('float32').view('uint32')
                 & np.uint32(0xffff0000)).view('float32')
     else:
         raise RuntimeError(f'Unknown dtype {dtype_str}')
@@ -242,6 +242,7 @@ def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
 # test binary ops
 # ---------------
 
+
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [
     (dtype_x, dtype_y, op)
     for op in ['+', '-', '*', '/', '%']
@@ -335,6 +336,7 @@ def test_shift_op(dtype_x, dtype_y, op, device='cuda'):
 # ---------------
 ops = ['==', '!=', '>', '<', '>=', '<=']
 
+
 @pytest.mark.parametrize("dtype_x, dtype_y, op, mode_x, mode_y",
                          # real
                          [
@@ -379,6 +381,7 @@ def test_unary_op(dtype_x, expr, device='cuda'):
 # @pytest.mark.paramterize("expr", [
 #     'exp', 'log', 'cos', 'sin'
 # ])
+
 
 @pytest.mark.parametrize("expr", [
     'exp', 'log', 'cos', 'sin'
@@ -779,6 +782,7 @@ def test_where(dtype):
 # test reduce
 # ---------------
 
+
 @pytest.mark.parametrize("op, dtype_str, shape",
                          [(op, dtype, shape)
                           for op in ['min', 'max', 'argmin', 'argmax', 'sum']
@@ -826,6 +830,7 @@ def test_reduce1d(op, dtype_str, shape, device='cuda'):
             np.testing.assert_equal(x[z_ref], x[z_tri])
         else:
             np.testing.assert_equal(z_ref, z_tri)
+
 
 reduce_configs1 = [
     (op, dtype, (1, 1024), axis) for dtype in dtypes + ['bfloat16']
@@ -896,6 +901,7 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
 # ---------------
 # test permute
 # ---------------
+
 
 @pytest.mark.parametrize("dtype_str, shape, perm",
                          [(dtype, shape, perm)
@@ -1101,6 +1107,7 @@ def test_arange(start, device='cuda'):
 # ---------------
 # 'bfloat16': torch.bfloat16,
 # Testing masked loads with an intermate copy to shared memory run.
+
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
 def test_masked_load_shared_memory(dtype, device='cuda'):
