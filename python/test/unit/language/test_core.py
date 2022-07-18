@@ -63,8 +63,7 @@ def to_triton(x: np.ndarray, device='cuda', dst_type=None) -> Union[TensorWrappe
         return reinterpret(torch.tensor(x_signed, device=device), getattr(tl, t))
     else:
         if t == 'float32' and dst_type == 'bfloat16':
-            return torch.tensor((x.view('uint32') & np.uint32(0xffff0000)).view('float32'),
-                                 device=device).bfloat16()
+            return torch.tensor(x, device=device).bfloat16()
         return torch.tensor(x, device=device)
 
 
@@ -336,7 +335,6 @@ def test_shift_op(dtype_x, dtype_y, op, device='cuda'):
 # ---------------
 ops = ['==', '!=', '>', '<', '>=', '<=']
 
-# TODO: bf16, but cast to fp16 (?)
 @pytest.mark.parametrize("dtype_x, dtype_y, op, mode_x, mode_y",
                          # real
                          [
@@ -754,20 +752,40 @@ def test_f16_to_f8_rounding():
     ), f"f16_input[mismatch]={f16_input[mismatch]} f16_output[mismatch]={f16_output[mismatch]} abs_error[mismatch]={abs_error[mismatch]} min_error[mismatch]={min_error[mismatch]}"
 
 
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
+def test_where(dtype):
+    @triton.jit
+    def where_kernel(decide_ptr, a_ptr, b_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(axis=0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        decide = tl.load(decide_ptr + offsets, mask=mask)
+        a = tl.load(a_ptr + offsets, mask=mask)
+        b = tl.load(b_ptr + offsets, mask=mask)
+        output = tl.where(decide, a, b)
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    N = 1_000
+    decide = torch.rand(N, device='cuda') > 0.5
+    a = torch.rand(N, device='cuda', dtype=dtype)
+    b = torch.rand(N, device='cuda', dtype=dtype)
+    output = torch.empty_like(a)
+
+    grid = lambda meta: (triton.cdiv(N, meta['BLOCK_SIZE']),)
+    where_kernel[grid](decide, a, b, output, N, BLOCK_SIZE=1024)
+
+    assert torch.all(torch.where(decide, a, b) == output)
+
 # ---------------
 # test reduce
 # ---------------
 
-# TODO: bfloat16
 @pytest.mark.parametrize("op, dtype_str, shape",
                          [(op, dtype, shape)
-                          for op in ['min', 'max', 
-                        #   'argmin', 'argmax', 'sum']
-                        'sum']
+                          for op in ['min', 'max', 'argmin', 'argmax', 'sum']
                           for dtype in dtypes + ['bfloat16']
                           for shape in [32, 64, 128, 512]])
 def test_reduce1d(op, dtype_str, shape, device='cuda'):
-
+    check_type_supported(dtype_str)  # bfloat16 on cc < 80 will not be tested
     # triton kernel
     @triton.jit
     def kernel(X, Z, BLOCK: tl.constexpr):
@@ -784,10 +802,18 @@ def test_reduce1d(op, dtype_str, shape, device='cuda'):
                 'argmin': np.argmin, 'argmax': np.argmax}[op]
     # numpy result
     z_dtype_str = 'int32' if op == 'argmin' or op == 'argmax' else dtype_str
-    z_dtype_str = 'float32' if dtype_str == 'bfloat16' else dtype_str
-    z_ref = numpy_op(x).astype(getattr(np, z_dtype_str))
+    z_tri_dtype_str = z_dtype_str
+    if op not in ['argmin', 'argmax'] and dtype_str == 'bfloat16':
+        z_dtype_str = 'float32'
+        z_ref = numpy_op(x).astype(getattr(np, z_dtype_str))
+        # trunc mantissa for a fair comparison of accuracy
+        z_ref = (z_ref.view('uint32') & np.uint32(0xffff0000)).view('float32')
+        z_tri_dtype_str = 'bfloat16'
+    else:
+        z_ref = numpy_op(x).astype(getattr(np, z_dtype_str))
     # triton result
-    z_tri = to_triton(numpy_random((1,), dtype_str=z_dtype_str, rs=rs), device=device)
+    z_tri = to_triton(numpy_random((1,), dtype_str=z_dtype_str, rs=rs),
+                      device=device, dst_type=z_tri_dtype_str)
     kernel[(1,)](x_tri, z_tri, BLOCK=shape)
     z_tri = to_numpy(z_tri)
     # compare
@@ -801,9 +827,8 @@ def test_reduce1d(op, dtype_str, shape, device='cuda'):
         else:
             np.testing.assert_equal(z_ref, z_tri)
 
-# TODO: bfloat16
 reduce_configs1 = [
-    (op, dtype, (1, 1024), axis) for dtype in dtypes
+    (op, dtype, (1, 1024), axis) for dtype in dtypes + ['bfloat16']
     for op in ['min', 'max', 'argmin', 'argmax', 'sum']
     for axis in [1]
 ]
@@ -838,11 +863,19 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
     numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min,
                 'argmin': np.argmin, 'argmax': np.argmax}[op]
     z_dtype_str = 'int32' if op == 'argmin' or op == 'argmax' else dtype_str
+    z_tri_dtype_str = z_dtype_str
     # numpy result
-    z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
+    if op not in ['argmin', 'argmax'] and dtype_str == 'bfloat16':
+        z_dtype_str = 'float32'
+        z_tri_dtype_str = 'bfloat16'
+        z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
+        # trunc mantissa for a fair comparison of accuracy
+        z_ref = (z_ref.view('uint32') & np.uint32(0xffff0000)).view('float32')
+    else:
+        z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
     # triton result
     z_tri = to_triton(numpy_random((shape[1 - axis],), dtype_str=z_dtype_str, rs=rs),
-                      device=device)
+                      device=device, dst_type=z_tri_dtype_str)
     kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)
     z_tri = to_numpy(z_tri)
     # compare
@@ -864,14 +897,13 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
 # test permute
 # ---------------
 
-# TODO: bfloat16
 @pytest.mark.parametrize("dtype_str, shape, perm",
                          [(dtype, shape, perm)
-                          for dtype in ['float16', 'float32']
+                          for dtype in ['bfloat16', 'float16', 'float32']
                              for shape in [(64, 64), (128, 128)]
                              for perm in [(1, 0)]])
 def test_permute(dtype_str, shape, perm, device='cuda'):
-
+    check_type_supported(dtype_str)  # bfloat16 on cc < 80 will not be tested
     # triton kernel
     @triton.jit
     def kernel(X, stride_xm, stride_xn,
@@ -885,16 +917,16 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
     # input
     x = numpy_random(shape, dtype_str=dtype_str)
     # triton result
-    z_tri = to_triton(np.empty_like(x), device=device)
-    z_tri_contiguous = to_triton(np.empty_like(x), device=device)
-    x_tri = to_triton(x, device=device)
+    z_tri = to_triton(np.empty_like(x), device=device, dst_type=dtype_str)
+    z_tri_contiguous = to_triton(np.empty_like(x), device=device, dst_type=dtype_str)
+    x_tri = to_triton(x, device=device, dst_type=dtype_str)
     pgm = kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1),
                          z_tri, z_tri.stride(1), z_tri.stride(0),
                          BLOCK_M=shape[0], BLOCK_N=shape[1])
     pgm_contiguous = kernel[(1, 1)](x_tri, x_tri.stride(1), x_tri.stride(0),
                                     z_tri_contiguous, z_tri_contiguous.stride(0), z_tri_contiguous.stride(1),
                                     BLOCK_M=shape[0], BLOCK_N=shape[1])
-    # torch result
+    # numpy result
     z_ref = x.transpose(*perm)
     # compare
     triton.testing.assert_almost_equal(z_tri, z_ref)
@@ -1070,10 +1102,10 @@ def test_arange(start, device='cuda'):
 # 'bfloat16': torch.bfloat16,
 # Testing masked loads with an intermate copy to shared memory run.
 
-# TODO: test bfloat16 masked load
-
-@pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
 def test_masked_load_shared_memory(dtype, device='cuda'):
+    check_type_supported(dtype)  # bfloat16 on cc < 80 will not be tested
+
     M = 32
     N = 32
     K = 16
