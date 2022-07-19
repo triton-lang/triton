@@ -240,6 +240,7 @@ void populateTritonPatterns(
 ) {
   MLIRContext *context = patterns.getContext();
   patterns.add<TritonGenericPattern<triton::ReshapeOp>,
+               TritonGenericPattern<triton::SplatOp>,
                TritonGenericPattern<triton::BroadcastOp>,
                TritonGenericPattern<triton::GEPOp>,
                TritonReducePattern,

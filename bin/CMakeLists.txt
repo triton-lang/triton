@@ -10,10 +10,14 @@ add_llvm_executable(triton-opt triton-opt.cpp)
 # TODO: what's this?
 # llvm_update_compile_flags(triton-opt)
 target_link_libraries(triton-opt PRIVATE
+  TritonAnalysis
   TritonTransforms
   TritonGPUTransforms
   ${dialect_libs}
   ${conversion_libs}
+  # tests
+  TritonTestAnalysis
+  # MLIR core
   MLIROptLib
   MLIRPass
   MLIRTransforms

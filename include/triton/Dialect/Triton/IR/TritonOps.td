@@ -143,8 +143,20 @@ def TT_ReshapeOp : TT_Op<"reshape", [NoSideEffect, SameOperandsAndResultElementT
     let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
 }
 
+def TT_SplatOp : TT_Op<"splat", [NoSideEffect, SameOperandsAndResultElementType]> {
+    let summary = "splat";
+
+    let arguments = (ins TT_Type:$src);
+
+    let results = (outs TT_Tensor:$result);
+
+    let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
+
+    let hasFolder = 1;
+}
+
 def TT_BroadcastOp : TT_Op<"broadcast", [NoSideEffect, SameOperandsAndResultElementType]> {
-    let summary = "broadcast";
+    let summary = "broadcast. No left-padding as of now.";
 
     let arguments = (ins TT_Type:$src);
 
