@@ -207,7 +207,6 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
     # triton result
     x_tri = to_triton(x, device=device, dst_type=dtype_x)
     y_tri = to_triton(y, device=device, dst_type=dtype_y)
-    # TODO: check dst_type
     z_tri = to_triton(np.empty(SIZE, dtype=z_ref.dtype), device=device)
     kernel[(1, )](z_tri, x_tri, y_tri, SIZE=SIZE, num_warps=4)
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=expr, rtol=0.01)
