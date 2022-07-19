@@ -101,7 +101,7 @@ def check_type_supported(dtype):
     skip test if dtype is not supported on the current device
     '''
     cc = _triton.runtime.cc(_triton.runtime.backend.CUDA, torch.cuda.current_device())
-    if cc < 80 and (dtype is tl.bfloat16 or dtype == "bfloat16"):
+    if cc < 80 and (dtype is tl.bfloat16 or dtype == "bfloat16" or dtype is torch.bfloat16):
         pytest.skip("bfloat16 is only supported on NVGPU with cc >= 80")
 
 
