@@ -766,6 +766,7 @@ def test_f16_to_f8_rounding():
                           for shape in [32, 64, 128, 512]])
 def test_reduce1d(op, dtype_str, shape, device='cuda'):
     check_type_supported(dtype_str)  # bfloat16 on cc < 80 will not be tested
+
     # triton kernel
     @triton.jit
     def kernel(X, Z, BLOCK: tl.constexpr):
@@ -886,6 +887,7 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
                              for perm in [(1, 0)]])
 def test_permute(dtype_str, shape, perm, device='cuda'):
     check_type_supported(dtype_str)  # bfloat16 on cc < 80 will not be tested
+
     # triton kernel
     @triton.jit
     def kernel(X, stride_xm, stride_xn,
