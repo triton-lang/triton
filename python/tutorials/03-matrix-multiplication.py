@@ -236,8 +236,8 @@ def matmul_kernel(
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # you can fuse arbitrary activation functions here
     # while the accumulator is still in FP32!
-    if ACTIVATION:
-        accumulator = ACTIVATION(accumulator)
+    if ACTIVATION == "leaky_relu":
+        accumulator = leaky_relu(accumulator)
     c = accumulator.to(tl.float16)
 
     # -----------------------------------------------------------
@@ -347,7 +347,7 @@ def benchmark(M, N, K, provider):
         )
     if provider == 'triton + relu':
         ms, min_ms, max_ms = triton.testing.do_bench(
-            lambda: matmul(a, b, activation=leaky_relu)
+            lambda: matmul(a, b, activation="leaky_relu")
         )
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)

@@ -238,6 +238,11 @@ void parse_args(py::list& args, py::list do_not_specialize, const std::string& f
       // argument is `constexpr`
       if(py::hasattr(arg, "value")){
         py::object value = arg.attr("value");
+        std::string ty_str = value.attr("__class__").attr("__name__").cast<std::string>();
+        if (ty_str == "JITFunction") {
+          throw std::runtime_error(
+              "JITFunction is not supported as a constexpr argument");
+        }
         py::object name = arg_names[i];
         constants[name] = value;
         py::object repr = py::repr(value);
