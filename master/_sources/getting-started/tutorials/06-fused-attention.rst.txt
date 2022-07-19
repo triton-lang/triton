@@ -20,7 +20,7 @@
 
 Fused Attention
 ===============
-This is a Triton implementation of the Flash Attention algorithm 
+This is a Triton implementation of the Flash Attention algorithm
 (see: Dao et al., https://arxiv.org/pdf/2205.14135v2.pdf; Rabe and Staats https://arxiv.org/pdf/2112.05682v2.pdf)
 
 .. GENERATED FROM PYTHON SOURCE LINES 7-355
@@ -385,7 +385,7 @@ This is a Triton implementation of the Flash Attention algorithm
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  0.071 seconds)
+   **Total running time of the script:** ( 0 minutes  0.073 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:
