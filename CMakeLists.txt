@@ -183,6 +183,7 @@ set(TRITON_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 target_link_libraries(triton
   ${PYTHON_LIBRARIES}
   TritonIR
+  TritonAnalysis
   TritonTransforms
   TritonDriver
   TritonToTritonGPU

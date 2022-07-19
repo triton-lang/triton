@@ -33,6 +33,8 @@ def Triton_Dialect : Dialect {
   let extraClassDeclaration = [{
     void registerTypes();
   }];
+
+  let hasConstantMaterializer = 1;
 }
 
 #endif // TRITON_DIALECT

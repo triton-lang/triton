@@ -199,14 +199,8 @@ class CodeGenerator(ast.NodeVisitor):
                 arg_values.append(cst)
             else:
                 pass
-                # TODO: ...
-                # if i in self.attributes:
-                #     is_ptr = fn.args[idx].type.is_ptr()
-                #     attr = 'aligned' if is_ptr else 'multiple_of'
-                #     attr = getattr(_triton.ir.attribute_kind, attr)
-                #     attr = _triton.ir.attribute(attr, self.attributes[i])
-                #     fn.add_attr(idx + 1, attr)
-                # fn.args[idx].name = arg_name
+                if i in self.attributes:
+                    fn.set_arg_attr(idx, "tt.divisibility", self.attributes[i])
                 arg_values.append(triton.language.tensor(fn.args(idx), self.prototype.param_types[idx]))
                 idx += 1
 
@@ -1307,8 +1301,13 @@ class JITFunction:
             raise CompilationError(self.src, node) from e
         # cache num_warps & num_stages
         self.num_warps, self.num_stages = num_warps, num_stages
+        # run simple SCCP and DCE here to clean-up the generated IR
+        mod = generator.module
+        pm = _triton.ir.pass_manager(context)
+        pm.add_canonicalizer_pass()
+        pm.run(mod)
         # FIXME: now we need to return context, otherwise it will be deleted
-        return generator.module, context
+        return mod, context
     
     def compile_ttir_to_llir(self, mod, ctx):
         num_warps, num_stages = self.num_warps, self.num_stages

@@ -97,14 +97,22 @@ void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state, ::
 
 //-- DotOp --
 
+//-- SplatOp --
+OpFoldResult SplatOp::fold(ArrayRef<Attribute> operands) {
+  auto constOperand = src().getDefiningOp<arith::ConstantOp>();
+  if (!constOperand)
+    return {};
+  auto shapedType = getType().cast<ShapedType>();
+  auto ret = SplatElementsAttr::get(shapedType, {constOperand.getValue()});
+  return ret;
+}
+
 //-- BroadcastOp --
 OpFoldResult BroadcastOp::fold(ArrayRef<Attribute> operands) {
   auto constOperand = src().getDefiningOp<arith::ConstantOp>();
   if (!constOperand)
     return {};
-
   auto shapedType = getType().cast<ShapedType>();
-
   return SplatElementsAttr::get(shapedType, {constOperand.getValue()});
 }
 

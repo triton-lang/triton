@@ -23,3 +23,8 @@ void TritonDialect::initialize() {
 
   // We can also add interface here.
 }
+
+Operation *TritonDialect::materializeConstant(OpBuilder &builder, Attribute value,
+                                          Type type, Location loc) {
+  return builder.create<arith::ConstantOp>(loc, type, value);
+}

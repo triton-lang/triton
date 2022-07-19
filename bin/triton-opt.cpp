@@ -10,11 +10,17 @@
 #include "mlir/InitAllPasses.h"
 #include "mlir/Support/MlirOptMain.h"
 
+namespace mlir{
+namespace test{
+void registerTestAlignmentPass();
+}
+}
 
 int main(int argc, char **argv) {
   mlir::registerAllPasses();
   mlir::registerTritonPasses();
   mlir::registerTritonGPUPasses();
+  mlir::test::registerTestAlignmentPass();
   mlir::triton::registerConvertTritonToTritonGPUPass();
 
   // TODO: register Triton & TritonGPU passes

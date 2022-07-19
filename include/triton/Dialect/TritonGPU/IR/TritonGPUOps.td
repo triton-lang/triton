@@ -59,6 +59,9 @@ def TTG_CopyAsyncOp : TTG_Op<"copy_async",
 }
 
 // Port Arith_CmpIOp & Arith_CmpFOp to TritonGPU.
+// This is needed because Arith's Cmp ops don't
+// handle encodings
+// https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Arithmetic/IR/ArithmeticOps.td#L111
 def TTG_CmpIOp : TTG_Op<"cmpi"> {
   let summary = "integer comparison operation";
 
