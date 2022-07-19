@@ -755,29 +755,6 @@ def test_f16_to_f8_rounding():
     ), f"f16_input[mismatch]={f16_input[mismatch]} f16_output[mismatch]={f16_output[mismatch]} abs_error[mismatch]={abs_error[mismatch]} min_error[mismatch]={min_error[mismatch]}"
 
 
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
-def test_where(dtype):
-    @triton.jit
-    def where_kernel(decide_ptr, a_ptr, b_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-        offsets = tl.program_id(axis=0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-        mask = offsets < n_elements
-        decide = tl.load(decide_ptr + offsets, mask=mask)
-        a = tl.load(a_ptr + offsets, mask=mask)
-        b = tl.load(b_ptr + offsets, mask=mask)
-        output = tl.where(decide, a, b)
-        tl.store(output_ptr + offsets, output, mask=mask)
-
-    N = 1_000
-    decide = torch.rand(N, device='cuda') > 0.5
-    a = torch.rand(N, device='cuda', dtype=dtype)
-    b = torch.rand(N, device='cuda', dtype=dtype)
-    output = torch.empty_like(a)
-
-    grid = lambda meta: (triton.cdiv(N, meta['BLOCK_SIZE']),)
-    where_kernel[grid](decide, a, b, output, N, BLOCK_SIZE=1024)
-
-    assert torch.all(torch.where(decide, a, b) == output)
-
 # ---------------
 # test reduce
 # ---------------
