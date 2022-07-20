@@ -143,10 +143,10 @@ def test_constexpr_not_callable() -> None:
         kernel[(1, )](x, c="str")
     except BaseException:
         error = True
-    assert error == False
+    assert error is False
     # try and catch
     try:
         kernel[(1, )](x, c=tl.abs)
     except BaseException:
         error = True
-    assert error == True
+    assert error is True
