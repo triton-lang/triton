@@ -64,12 +64,13 @@ def computation_type_impl(a_ty: tl.dtype, b_ty: tl.dtype, div_or_mod: bool) -> t
             return tl.float32
         else:
             return tl.float16
-    # 4) if one is bf16, the other is implicitly converted to bf16
-    #    Supported PTX op: fma, neg, abs, min, max, tensor cores
-    #    NOT supported: add, sub, mul, setp, tanh, ex2
-    # TODO: bf16 + f16 -> f16 (?), pytorch: bf16 + f16 -> f32
+    # 4) return bf16 only if both operands are of bf16
     if a_ty.is_bf16() or b_ty.is_bf16():
-        return tl.float32 if div_or_mod else tl.bfloat16
+        if div_or_mod:
+            return tl.float32
+        if a_ty.is_bf16() and b_ty.is_bf16():
+            return tl.bfloat16
+        return tl.float32
     if not a_ty.is_int() or not b_ty.is_int():
         assert False
     # 5 ) both operands are integer and undergo
@@ -775,8 +776,9 @@ def atomic_cas(ptr: tl.tensor,
                cmp: tl.tensor,
                val: tl.tensor,
                builder: ir.builder) -> tl.tensor:
-    # TODO: type checking
-    # supported bit width: 16, 32, 64
+    element_ty = ptr.type.scalar.element_ty
+    if element_ty.primitive_bitwidth not in [16, 32, 64]:
+        raise ValueError("atomic_cas only supports elements with width {16, 32, 64}")
     return tl.tensor(builder.create_atomic_cas(ptr.handle, cmp.handle, val.handle), val.type)
 
 
@@ -787,8 +789,7 @@ def atom_red_typechecking_impl(ptr: tl.tensor,
                                builder: ir.builder) -> Tuple[tl.tensor, tl.tensor, tl.tensor]:
     if not ptr.type.scalar.is_ptr():
         raise ValueError("Pointer argument of store instruction is " + ptr.type.__repr__())
-    # supported type: f32, f64, i32, i64, u32, u64, (f16, atomic_add only)
-    # not supported type: i1, i8, i16, bf16
+
     element_ty = ptr.type.scalar.element_ty
     if element_ty is tl.float16 and op != 'add':
         raise ValueError("atomic_" + op + " does not support fp16")
