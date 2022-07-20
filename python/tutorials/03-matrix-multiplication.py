@@ -261,7 +261,7 @@ def leaky_relu(x):
 # and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel
 
 
-def matmul(a, b, activation=None):
+def matmul(a, b, activation=""):
     # checks constraints
     assert a.shape[1] == b.shape[0], "incompatible dimensions"
     assert a.is_contiguous(), "matrix A must be contiguous"

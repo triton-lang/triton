@@ -130,3 +130,23 @@ def test_value_specialization(value: int, value_type: str, device='cuda') -> Non
     cache_str_match = re.match(r'_(\w+)\[multipleof\(\d+\)]_float32\*\[multipleof\(16\)\]', cache_str[-1])
     spec_type = None if cache_str_match is None else cache_str_match.group(1)
     assert spec_type == value_type
+
+
+def test_constexpr_not_callable() -> None:
+    @triton.jit
+    def kernel(X, c: tl.constexpr):
+        tl.store(X, 2)
+
+    x = torch.empty(1, dtype=torch.int32, device='cuda')
+    error = False
+    try:
+        kernel[(1, )](x, c="str")
+    except BaseException:
+        error = True
+    assert error == False
+    # try and catch
+    try:
+        kernel[(1, )](x, c=tl.abs)
+    except BaseException:
+        error = True
+    assert error == True
