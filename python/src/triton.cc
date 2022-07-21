@@ -236,8 +236,14 @@ void parse_args(py::list& args, py::list do_not_specialize, const std::string& f
         continue;
       }
       // argument is `constexpr`
-      if(py::hasattr(arg, "value")){
+      if (py::hasattr(arg, "value")) {
         py::object value = arg.attr("value");
+        // check if value is a callable object using PyCallable_Check
+        if (PyCallable_Check(value.ptr())) {
+          throw std::runtime_error(
+              "constant argument cannot be a callable object: " +
+              std::string(py::str(arg)));
+        }
         py::object name = arg_names[i];
         constants[name] = value;
         py::object repr = py::repr(value);
