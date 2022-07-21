@@ -673,7 +673,7 @@ def cast(input: tl.tensor,
     if src_sca_ty.is_ptr() and dst_sca_ty.is_int():
         bitwidth = dst_sca_ty.int_bitwidth
         if bitwidth == 64:
-            return tl.tensor(builder.create_cast(ir.PtrToInt, input.handle, dst_ty.to_ir(builder)),
+            return tl.tensor(builder.create_ptr_to_int(input.handle, dst_ty.to_ir(builder)),
                              dst_ty)
         if bitwidth == 1:
             return not_equal(cast(input, tl.int64, builder),
@@ -986,16 +986,8 @@ def where(condition: tl.tensor,
         x = broadcast_impl_shape(x, condition.type.get_block_shapes(), builder)
         y = broadcast_impl_shape(y, condition.type.get_block_shapes(), builder)
 
-    # TODO: we need to check x's and y's shape?
-    x_ty = x.type.scalar
-    y_ty = y.type.scalar
-    ty = computation_type_impl(x_ty, y_ty, div_or_mod=False)
-    x = cast(x, ty, builder)
-    y = cast(y, ty, builder)
-    if x.type.is_block():
-        ret_ty = tl.block_type(ty, x.type.shape)
-    else:
-        ret_ty = ty
+    x, y = binary_op_type_checking_impl(x, y, builder, True, True)
+    ret_ty = x.type
     return tl.tensor(builder.create_select(condition.handle, x.handle, y.handle), ret_ty)
 
 
