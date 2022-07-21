@@ -402,12 +402,12 @@ def test_where(dtype):
 
     grid = lambda meta: (triton.cdiv(SIZE, meta['BLOCK_SIZE']),)
     where_kernel[grid](decide_tri, x_tri, y_tri, z_tri, SIZE, BLOCK_SIZE=1024, TEST_POINTERS=False)
-    np.testing.assert_allclose(z, to_numpy(z_tri))
+    assert (z == to_numpy(z_tri)).all()
 
     # test selecting pointers
     grid = lambda meta: (triton.cdiv(SIZE, meta['BLOCK_SIZE']),)
     where_kernel[grid](decide_tri, x_tri, y_tri, z_tri, SIZE, BLOCK_SIZE=1024, TEST_POINTERS=True)
-    np.testing.assert_allclose(z, to_numpy(z_tri))
+    assert (z == to_numpy(z_tri)).all()
 
 
 # ---------------
