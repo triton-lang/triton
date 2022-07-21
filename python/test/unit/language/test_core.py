@@ -366,29 +366,48 @@ def test_compare_op(dtype_x, dtype_y, op, mode_x, mode_y, device='cuda'):
 # ---------------
 # test where
 # ---------------
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32, torch.int16, torch.int32])
-def test_pointer_where(dtype):
+@pytest.mark.parametrize("dtype", dtypes + ['bfloat16'])
+def test_where(dtype):
+    check_type_supported(dtype)
+
     @triton.jit
-    def where_kernel(decide_ptr, a_ptr, b_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    def where_kernel(decide_ptr, a_ptr, b_ptr, output_ptr, n_elements,
+                     BLOCK_SIZE: tl.constexpr,
+                     TEST_POINTERS: tl.constexpr):
         offsets = tl.program_id(axis=0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
         mask = offsets < n_elements
         decide = tl.load(decide_ptr + offsets, mask=mask)
         a_ptrs = a_ptr + offsets
         b_ptrs = b_ptr + offsets
-        ptrs = tl.where(decide, a_ptrs, b_ptrs)
-        output = tl.load(ptrs, mask=mask)
+        if TEST_POINTERS:
+            ptrs = tl.where(decide, a_ptrs, b_ptrs)
+            output = tl.load(ptrs, mask=mask)
+        else:
+            a = tl.load(a_ptrs, mask=mask)
+            b = tl.load(b_ptrs, mask=mask)
+            output = tl.where(decide, a, b)
         tl.store(output_ptr + offsets, output, mask=mask)
 
-    N = 1_000
-    decide = torch.rand(N, device='cuda') > 0.5
-    a = torch.zeros(N, device='cuda', dtype=dtype)
-    b = torch.ones(N, device='cuda', dtype=dtype)
-    output = torch.empty_like(a)
+    SIZE = 1_000
+    rs = RandomState(17)
+    decide = numpy_random(SIZE, 'float32', rs) > 0.5
+    x = numpy_random(SIZE, dtype_str=dtype, rs=rs)
+    y = numpy_random(SIZE, dtype_str=dtype, rs=rs)
+    z = np.where(decide, x, y)
 
-    grid = lambda meta: (triton.cdiv(N, meta['BLOCK_SIZE']),)
-    where_kernel[grid](decide, a, b, output, N, BLOCK_SIZE=1024)
+    decide_tri = to_triton(decide, device='cuda')
+    x_tri = to_triton(x, device='cuda', dst_type=dtype)
+    y_tri = to_triton(y, device='cuda', dst_type=dtype)
+    z_tri = to_triton(np.empty(SIZE, dtype=z.dtype), device='cuda', dst_type=dtype)
 
-    assert torch.all(torch.where(decide, a, b) == output)
+    grid = lambda meta: (triton.cdiv(SIZE, meta['BLOCK_SIZE']),)
+    where_kernel[grid](decide_tri, x_tri, y_tri, z_tri, SIZE, BLOCK_SIZE=1024, TEST_POINTERS=False)
+    np.testing.assert_allclose(z, to_numpy(z_tri))
+
+    # test selecting pointers
+    grid = lambda meta: (triton.cdiv(SIZE, meta['BLOCK_SIZE']),)
+    where_kernel[grid](decide_tri, x_tri, y_tri, z_tri, SIZE, BLOCK_SIZE=1024, TEST_POINTERS=True)
+    np.testing.assert_allclose(z, to_numpy(z_tri))
 
 
 # ---------------
