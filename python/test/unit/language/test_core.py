@@ -378,12 +378,12 @@ def test_where(dtype):
     check_type_supported(dtype)
 
     @triton.jit
-    def where_kernel(decide_ptr, a_ptr, b_ptr, output_ptr, n_elements,
+    def where_kernel(cond_ptr, a_ptr, b_ptr, output_ptr, n_elements,
                      BLOCK_SIZE: tl.constexpr,
                      TEST_POINTERS: tl.constexpr):
         offsets = tl.program_id(axis=0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
         mask = offsets < n_elements
-        decide = tl.load(decide_ptr + offsets, mask=mask)
+        decide = tl.load(cond_ptr + offsets, mask=mask)
         if TEST_POINTERS:
             a = tl.load(a_ptr + offsets, mask=mask).to(tl.pi32_t)
             b = tl.load(b_ptr + offsets, mask=mask).to(tl.pi32_t)
@@ -395,18 +395,18 @@ def test_where(dtype):
 
     SIZE = 1_000
     rs = RandomState(17)
-    decide = numpy_random(SIZE, 'bool', rs)
+    cond = numpy_random(SIZE, 'bool', rs)
     x = numpy_random(SIZE, dtype_str=dtype, rs=rs)
     y = numpy_random(SIZE, dtype_str=dtype, rs=rs)
-    z = np.where(decide, x, y)
+    z = np.where(cond, x, y)
 
-    decide_tri = to_triton(decide, device='cuda')
+    cond_tri = to_triton(cond, device='cuda')
     x_tri = to_triton(x, device='cuda', dst_type=dtype)
     y_tri = to_triton(y, device='cuda', dst_type=dtype)
     z_tri = to_triton(np.empty(SIZE, dtype=z.dtype), device='cuda', dst_type=dtype)
 
     grid = lambda meta: (triton.cdiv(SIZE, meta['BLOCK_SIZE']),)
-    where_kernel[grid](decide_tri, x_tri, y_tri, z_tri, SIZE, BLOCK_SIZE=1024, TEST_POINTERS=select_ptrs)
+    where_kernel[grid](cond_tri, x_tri, y_tri, z_tri, SIZE, BLOCK_SIZE=1024, TEST_POINTERS=select_ptrs)
     assert (z == to_numpy(z_tri)).all()
 
 
