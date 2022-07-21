@@ -637,7 +637,7 @@ def cast(input: tl.tensor,
     if src_sca_ty.is_ptr() and dst_sca_ty.is_int():
         bitwidth = dst_sca_ty.int_bitwidth
         if bitwidth == 64:
-            return tl.tensor(builder.create_cast(ir.PtrToInt, input.handle, dst_ty.to_ir(builder)),
+            return tl.tensor(builder.create_ptr_to_int(input.handle, dst_ty.to_ir(builder)),
                              dst_ty)
         if bitwidth == 1:
             return not_equal(cast(input, tl.int64, builder),

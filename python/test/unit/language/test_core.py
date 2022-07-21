@@ -17,6 +17,7 @@ int_dtypes = ['int8', 'int16', 'int32', 'int64']
 uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
 float_dtypes = ['float16', 'float32', 'float64']
 dtypes = int_dtypes + uint_dtypes + float_dtypes
+dtypes_with_bfloat16 = dtypes + ['bfloat16']
 
 
 def _bitwidth(dtype: str) -> int:
@@ -46,6 +47,8 @@ def numpy_random(shape, dtype_str, rs: Optional[RandomState] = None, low=None, h
     elif dtype_str == 'bfloat16':
         return (rs.normal(0, 1, shape).astype('float32').view('uint32')
                 & np.uint32(0xffff0000)).view('float32')
+    elif dtype_str in ['bool', 'int1', 'bool_']:
+        return rs.normal(0, 1, shape) > 0.0
     else:
         raise RuntimeError(f'Unknown dtype {dtype_str}')
 
@@ -245,8 +248,8 @@ def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [
     (dtype_x, dtype_y, op)
     for op in ['+', '-', '*', '/', '%']
-    for dtype_x in dtypes + ['bfloat16']
-    for dtype_y in dtypes + ['bfloat16']
+    for dtype_x in dtypes_with_bfloat16
+    for dtype_y in dtypes_with_bfloat16
 ])
 def test_bin_op(dtype_x, dtype_y, op, device='cuda'):
     expr = f' x {op} y'
@@ -296,8 +299,8 @@ def test_floordiv(dtype_x, dtype_y, device='cuda'):
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [
     (dtype_x, dtype_y, op)
     for op in ['&', '|', '^']
-    for dtype_x in dtypes + ['bfloat16']
-    for dtype_y in dtypes + ['bfloat16']
+    for dtype_x in dtypes + dtypes_with_bfloat16
+    for dtype_y in dtypes + dtypes_with_bfloat16
 ])
 def test_bitwise_op(dtype_x, dtype_y, op, device='cuda'):
     expr = f'x {op} y'
@@ -366,8 +369,12 @@ def test_compare_op(dtype_x, dtype_y, op, mode_x, mode_y, device='cuda'):
 # ---------------
 # test where
 # ---------------
-@pytest.mark.parametrize("dtype", dtypes + ['bfloat16'])
+@pytest.mark.parametrize("dtype", dtypes_with_bfloat16 + ["*int32"])
 def test_where(dtype):
+    select_ptrs = False
+    if dtype == "*int32":
+        dtype = "int64"
+        select_ptrs = True
     check_type_supported(dtype)
 
     @triton.jit
@@ -377,20 +384,18 @@ def test_where(dtype):
         offsets = tl.program_id(axis=0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
         mask = offsets < n_elements
         decide = tl.load(decide_ptr + offsets, mask=mask)
-        a_ptrs = a_ptr + offsets
-        b_ptrs = b_ptr + offsets
         if TEST_POINTERS:
-            ptrs = tl.where(decide, a_ptrs, b_ptrs)
-            output = tl.load(ptrs, mask=mask)
+            a = tl.load(a_ptr + offsets, mask=mask).to(tl.pi32_t)
+            b = tl.load(b_ptr + offsets, mask=mask).to(tl.pi32_t)
         else:
-            a = tl.load(a_ptrs, mask=mask)
-            b = tl.load(b_ptrs, mask=mask)
-            output = tl.where(decide, a, b)
+            a = tl.load(a_ptr + offsets, mask=mask)
+            b = tl.load(b_ptr + offsets, mask=mask)
+        output = tl.where(decide, a, b)
         tl.store(output_ptr + offsets, output, mask=mask)
 
     SIZE = 1_000
     rs = RandomState(17)
-    decide = numpy_random(SIZE, 'float32', rs) > 0.5
+    decide = numpy_random(SIZE, 'bool', rs)
     x = numpy_random(SIZE, dtype_str=dtype, rs=rs)
     y = numpy_random(SIZE, dtype_str=dtype, rs=rs)
     z = np.where(decide, x, y)
@@ -401,12 +406,7 @@ def test_where(dtype):
     z_tri = to_triton(np.empty(SIZE, dtype=z.dtype), device='cuda', dst_type=dtype)
 
     grid = lambda meta: (triton.cdiv(SIZE, meta['BLOCK_SIZE']),)
-    where_kernel[grid](decide_tri, x_tri, y_tri, z_tri, SIZE, BLOCK_SIZE=1024, TEST_POINTERS=False)
-    assert (z == to_numpy(z_tri)).all()
-
-    # test selecting pointers
-    grid = lambda meta: (triton.cdiv(SIZE, meta['BLOCK_SIZE']),)
-    where_kernel[grid](decide_tri, x_tri, y_tri, z_tri, SIZE, BLOCK_SIZE=1024, TEST_POINTERS=True)
+    where_kernel[grid](decide_tri, x_tri, y_tri, z_tri, SIZE, BLOCK_SIZE=1024, TEST_POINTERS=select_ptrs)
     assert (z == to_numpy(z_tri)).all()
 
 
@@ -414,7 +414,7 @@ def test_where(dtype):
 # test unary ops
 # ---------------
 @pytest.mark.parametrize("dtype_x, expr", [
-    (dtype_x, ' -x') for dtype_x in dtypes + ['bfloat16']
+    (dtype_x, ' -x') for dtype_x in dtypes_with_bfloat16
 ] + [
     (dtype_x, ' ~x') for dtype_x in int_dtypes
 ])
@@ -809,7 +809,7 @@ def test_f16_to_f8_rounding():
 @pytest.mark.parametrize("op, dtype_str, shape",
                          [(op, dtype, shape)
                           for op in ['min', 'max', 'argmin', 'argmax', 'sum']
-                          for dtype in dtypes + ['bfloat16']
+                          for dtype in dtypes_with_bfloat16
                           for shape in [32, 64, 128, 512]])
 def test_reduce1d(op, dtype_str, shape, device='cuda'):
     check_type_supported(dtype_str)  # bfloat16 on cc < 80 will not be tested
@@ -857,7 +857,7 @@ def test_reduce1d(op, dtype_str, shape, device='cuda'):
 
 
 reduce_configs1 = [
-    (op, dtype, (1, 1024), axis) for dtype in dtypes + ['bfloat16']
+    (op, dtype, (1, 1024), axis) for dtype in dtypes_with_bfloat16
     for op in ['min', 'max', 'argmin', 'argmax', 'sum']
     for axis in [1]
 ]
