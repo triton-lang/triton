@@ -236,8 +236,14 @@ void parse_args(py::list& args, py::list do_not_specialize, const std::string& f
         continue;
       }
       // argument is `constexpr`
-      if(py::hasattr(arg, "value")){
+      if (py::hasattr(arg, "value")) {
         py::object value = arg.attr("value");
+        // check if value is a callable object using PyCallable_Check
+        if (PyCallable_Check(value.ptr())) {
+          throw std::runtime_error(
+              "constant argument cannot be a callable object: " +
+              std::string(py::str(arg)));
+        }
         py::object name = arg_names[i];
         constants[name] = value;
         py::object repr = py::repr(value);
@@ -872,6 +878,7 @@ void init_triton_ir(py::module &&m) {
       .def("create_int_cast", &ir::builder::create_int_cast, ret::reference)
       .def("create_downcast", &ir::builder::create_downcast, ret::reference)
       .def("create_int_to_ptr", &ir::builder::create_int_to_ptr, ret::reference)
+      .def("create_ptr_to_int", &ir::builder::create_ptr_to_int, ret::reference)
       // phi
       .def("create_phi", &ir::builder::create_phi, ret::reference)
       // Binary instructions
