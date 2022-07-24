@@ -183,8 +183,8 @@ def test_rand_limits():
     @triton.jit
     def kernel(input, output, n: tl.constexpr):
         idx = tl.arange(0, n)
-        x=tl.load(input + idx)
-        y=tl.random.uint32_to_uniform_float(x)
+        x = tl.load(input + idx)
+        y = tl.random.uint32_to_uniform_float(x)
         tl.store(output + idx, y)
 
     min_max_int32 = torch.tensor([
