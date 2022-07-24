@@ -27,7 +27,7 @@ unsigned type::get_primitive_size_in_bits() const {
     case BF16TyID: return 16;
     case FP32TyID: return 32;
     case FP64TyID: return 64;
-    case IntegerTyID: return ((integer_type*)(this))->get_bitwidth();
+    case IntegerTyID: return std::max<int>(8, ((integer_type*)(this))->get_bitwidth());
     case BlockTyID:  return ((block_type*)(this))->get_bitwidth();
     default: return 0;
   }
