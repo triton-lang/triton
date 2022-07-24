@@ -461,6 +461,11 @@ class tensor:
         return semantic.floordiv(self, other, _builder)
 
     @builtin
+    def __rfloordiv__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.floordiv(other, self, _builder)
+
+    @builtin
     def __mod__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.mod(self, other, _builder)
