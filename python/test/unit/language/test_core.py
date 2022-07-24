@@ -1363,6 +1363,20 @@ def test_constexpr_shape():
     kernel[(1,)](x_tri)
     np.testing.assert_equal(to_numpy(x_tri), np.arange(0, 256))
 
+
+def test_constexpr_scalar_shape():
+
+    @triton.jit
+    def kernel(X, s):
+        off = tl.arange(0, 256)
+        val = off % (256 // s)
+        tl.store(X + off, val)
+
+    x_tri = to_triton(np.empty((256, ), dtype=np.int32))
+    kernel[(1,)](x_tri, 32)
+    np.testing.assert_equal(to_numpy(x_tri), np.arange(0, 256) % 8)
+
+
 # -------------
 # test if
 # -------------
