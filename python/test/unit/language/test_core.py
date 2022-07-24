@@ -1327,7 +1327,7 @@ def test_value_specialization_overflow(value: int, overflow: bool, device='cuda'
 # test constexpr
 # ----------------
 
-@pytest.mark.parametrize("op", ['+', '-', '*', '/', '//', '%', '<', '>'])
+@pytest.mark.parametrize("op", ['+', '-', '*', '/', '%', '<', '>'])
 @pytest.mark.parametrize("is_lhs_constexpr", [False, True])
 @pytest.mark.parametrize("is_rhs_constexpr", [True, False])
 def test_bin_op_constexpr(op, is_lhs_constexpr, is_rhs_constexpr):
