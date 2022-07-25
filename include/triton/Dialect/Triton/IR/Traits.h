@@ -17,6 +17,13 @@ class TensorSizeTrait : public TraitBase<ConcreteType, TensorSizeTrait> {
 public:
   // TODO: move impl to .cc files
   static LogicalResult verifyTrait(Operation *op) {
+    // The rationale for this number is to prevent users from creating programs
+    // that would have catastrophic register pressure and cause the compiler to
+    // hang. 
+    // Since H100 has 256KB registers, we should allow users to create tensors
+    // of size up to 256K elements. It will spill for datatypes wider than 1B,
+    // but we probably should limit number of elements (rather than bytes) to
+    // keep specs simple
     int constexpr maxElement = 1048576;
     for (auto opType : op->getOperandTypes()) {
       if (auto tensorType = opType.dyn_cast<RankedTensorType>()) {
