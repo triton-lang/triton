@@ -140,6 +140,7 @@ setup(
         "cmake",
         "filelock",
         "torch",
+        "lit",
     ],
     package_data={"triton/ops": ["*.c"], "triton/ops/blocksparse": ["*.c"]},
     include_package_data=True,
