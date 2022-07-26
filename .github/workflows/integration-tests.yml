@@ -4,8 +4,7 @@ on:
   workflow_dispatch:
   pull_request:
     branches:
-      - master
-      - v2.0
+      - main
 
 
 jobs:
@@ -21,7 +20,7 @@ jobs:
 
       - name: Clear cache
         run: |
-          rm -r /tmp/triton/
+          rm -r ~/.triton/
         continue-on-error: true
 
       - name: Install Triton

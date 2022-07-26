@@ -764,19 +764,26 @@ void init_triton_ir(py::module &&m) {
       .def("get_after", &mlir::scf::WhileOp::getAfter, ret::reference);
   py::class_<mlir::scf::ConditionOp, mlir::OpState>(m, "CondtionOp");
 
-  py::class_<mlir::ModuleOp, mlir::OpState>(m, "module")
-    .def("dump", &mlir::ModuleOp::dump)
-    .def("push_back", [](mlir::ModuleOp &self, mlir::FuncOp &funcOp) -> void {
-      self.push_back(funcOp);
-    })
-    .def("has_function", [](mlir::ModuleOp &self, std::string &funcName) -> bool {
-      if (self.lookupSymbol(funcName))
-        return true;
-      return false;
-    })
-    .def("get_function", [](mlir::ModuleOp &self, std::string &funcName) -> mlir::FuncOp {
-      return self.lookupSymbol<mlir::FuncOp>(funcName);
-    })
+  // dynamic_attr is used to transfer ownership of the MLIR context to the module
+  py::class_<mlir::ModuleOp, mlir::OpState>(m, "module", py::dynamic_attr())
+      .def("dump", &mlir::ModuleOp::dump)
+      .def("str", [](mlir::ModuleOp &self) -> std::string {
+        std::string str;
+        llvm::raw_string_ostream os(str);
+        self.print(os);
+        return str;
+      })
+      .def("push_back", [](mlir::ModuleOp &self, mlir::FuncOp &funcOp) -> void {
+        self.push_back(funcOp);
+      })
+      .def("has_function", [](mlir::ModuleOp &self, std::string &funcName) -> bool {
+        if (self.lookupSymbol(funcName))
+          return true;
+        return false;
+      })
+      .def("get_function", [](mlir::ModuleOp &self, std::string &funcName) -> mlir::FuncOp {
+        return self.lookupSymbol<mlir::FuncOp>(funcName);
+      })
     ;
 
   py::class_<mlir::FuncOp, mlir::OpState>(m, "function")
