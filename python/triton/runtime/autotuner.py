@@ -1,8 +1,10 @@
 from __future__ import annotations
+
 import builtins
 import time
 from typing import Dict
 
+from ..testing import do_bench
 
 
 class Autotuner:
@@ -57,7 +59,7 @@ class Autotuner:
                 config.pre_hook(self.nargs)
             self.hook(args)
             self.kernel(*args, num_warps=config.num_warps, num_stages=config.num_stages, **current)
-        return triton.testing.do_bench(kernel_call)
+        return do_bench(kernel_call)
 
     def __call__(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
@@ -199,4 +201,3 @@ def heuristics(values):
         return fn
 
     return decorator
-

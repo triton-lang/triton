@@ -8,6 +8,7 @@ import os
 import subprocess
 import tempfile
 import textwrap
+
 import triton
 import triton._C.libtriton.triton as _triton
 from ..tools.disasm import extract
@@ -15,6 +16,7 @@ from ..tools.disasm import extract
 # -----------------------------------------------------------------------------
 # Binary
 # -----------------------------------------------------------------------------
+
 
 class Binary:
     def __init__(self, backend, name, asm, shared_mem, num_warps):
@@ -63,11 +65,11 @@ class LoadedBinary:
 # Kernel
 # -----------------------------------------------------------------------------
 
+
 class Kernel:
 
     def __call__(self, *args, grid, num_warps=4, num_stages=3, **kwargs):
         raise RuntimeError("Not implemented. Public repo implementation will be rewritten to reduce latency.")
-
 
 
 # -----------------------------------------------------------------------------
@@ -117,6 +119,7 @@ class DependenciesFinder(ast.NodeVisitor):
 # -----------------------------------------------------------------------------
 # JITFunction
 # -----------------------------------------------------------------------------
+
 
 @functools.lru_cache()
 def version_key():
@@ -232,7 +235,7 @@ class JITFunction:
 
             def __call__(self, *wargs, **kwargs):
                 return self.kernel(*wargs, **kwargs, grid=self.grid)
-                
+
         return Launcher(self._init_kernel(), grid)
 
     def __repr__(self):
@@ -241,6 +244,7 @@ class JITFunction:
 # -----------------------------------------------------------------------------
 # `jit` decorator
 # -----------------------------------------------------------------------------
+
 
 def jit(*args, **kwargs):
     """
