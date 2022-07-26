@@ -8,8 +8,4 @@ void init_cutlass(pybind11::module &m);
 PYBIND11_MODULE(libtriton, m) {
   m.doc() = "Python bindings to the C++ Triton API";
   init_triton(m);
-  init_superblocking(m);
-#ifdef WITH_CUTLASS_BINDINGS
-  init_cutlass(m);
-#endif
 }
