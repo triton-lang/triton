@@ -6,12 +6,11 @@ on:
     branches:
       - main
 
-
 jobs:
 
   Integration-Tests:
     
-    runs-on: self-hosted
+    runs-on: ubuntu-20.04
 
     steps:
 
@@ -23,32 +22,23 @@ jobs:
           rm -r ~/.triton/
         continue-on-error: true
 
+      - name: Check imports
+        run: |
+          pip install isort
+          isort -c ./python || ( echo '::error title=Imports not sorted::Please run \"isort ./python\"' ; exit 1 )
+
+      - name: Check style
+        run: |
+          pip install autopep8
+          autopep8 -a -r -d --exit-code ./python || ( echo '::error title=Style issues::Please run \"autopep8 -a -r -i ./python\"' ; exit 1 )
+
+      - name: Flake8
+        run: |
+          pip install flake8
+          flake8 --config ./python/setup.cfg ./python || ( echo '::error::Flake8 failed; see logs for errors.' ; exit 1 )
+
       - name: Install Triton
         run: |
           alias python='python3'
           cd python
           pip3 install -e '.[tests]'
-
-      - name: Check imports
-        run: "isort -c ./python || ( echo '::error title=Imports not sorted::Please run \"isort ./python\"' ; exit 1 )"
-
-      - name: Check style
-        run: "autopep8 -a -r -d --exit-code ./python || ( echo '::error title=Style issues::Please run \"autopep8 -a -r -i ./python\"' ; exit 1 )"
-
-      - name: Flake8
-        run: "flake8 --config ./python/setup.cfg ./python || ( echo '::error::Flake8 failed; see logs for errors.' ; exit 1 )"
-
-      - name: Unit tests
-        run: |
-          cd python/test/unit
-          pytest -vs .
-
-      - name: Regression tests
-        run: |
-          cd python/test/regression
-          sudo nvidia-smi -i 0 -pm 1
-          sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
-          sudo nvidia-smi -i 0 --lock-memory-clocks=877,877
-          pytest -vs .
-          sudo nvidia-smi -i 0 -rgc
-          sudo nvidia-smi -i 0 -rmc

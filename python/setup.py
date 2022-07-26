@@ -16,15 +16,6 @@ from setuptools.command.build_ext import build_ext
 
 
 def get_llvm():
-    # tries to find system LLVM
-    versions = ['-14.0', '-14', '-14-64']
-    supported = ['llvm-config{v}'.format(v=v) for v in versions]
-    paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
-    paths = [p for p in paths if p is not None]
-    if paths:
-        return '', ''
-    if platform.system() == "Windows":
-        return '', ''
     # download if nothing is installed
     name = 'clang+llvm-14.0.0-x86_64-linux-gnu-ubuntu-18.04'
     dir = '/tmp'

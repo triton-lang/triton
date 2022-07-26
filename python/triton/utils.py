@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import torch
 
 
@@ -16,6 +17,7 @@ def next_power_of_2(n):
     n |= n >> 16
     n += 1
     return n
+
 
 class TensorWrapper:
     def __init__(self, base, dtype):
