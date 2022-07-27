@@ -3,16 +3,15 @@
 #ifndef _TRITON_TOOLS_THREAD_GRAPH_H_
 #define _TRITON_TOOLS_THREAD_GRAPH_H_
 
+#include <iostream>
 #include <map>
 #include <set>
 #include <vector>
-#include <iostream>
 
 namespace triton {
-namespace tools{
+namespace tools {
 
-template<class node_t>
-class graph {
+template <class node_t> class graph {
   typedef std::map<node_t, std::set<node_t>> edges_t;
 
 public:
@@ -21,27 +20,27 @@ public:
 
 private:
   void connected_components_impl(node_t x, std::set<node_t> &nodes,
-                                 nmap_t* nmap, cmap_t* cmap, int id) const {
-    if(nmap)
+                                 nmap_t *nmap, cmap_t *cmap, int id) const {
+    if (nmap)
       (*nmap)[x] = id;
-    if(cmap)
+    if (cmap)
       (*cmap)[id].push_back(x);
-    if(nodes.find(x) != nodes.end()) {
+    if (nodes.find(x) != nodes.end()) {
       nodes.erase(x);
-      for(const node_t &y: edges_.at(x))
+      for (const node_t &y : edges_.at(x))
         connected_components_impl(y, nodes, nmap, cmap, id);
     }
   }
 
 public:
   void connected_components(cmap_t *cmap, nmap_t *nmap) const {
-    if(cmap)
+    if (cmap)
       cmap->clear();
-    if(nmap)
+    if (nmap)
       nmap->clear();
     std::set<node_t> nodes = nodes_;
     unsigned id = 0;
-    while(!nodes.empty()){
+    while (!nodes.empty()) {
       connected_components_impl(*nodes.begin(), nodes, nmap, cmap, id++);
     }
   }
@@ -63,7 +62,7 @@ private:
   edges_t edges_;
 };
 
-}
-}
+} // namespace tools
+} // namespace triton
 
 #endif

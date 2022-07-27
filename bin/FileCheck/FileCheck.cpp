@@ -57,9 +57,8 @@ static cl::opt<bool> NoCanonicalizeWhiteSpace(
     "strict-whitespace",
     cl::desc("Do not treat all horizontal whitespace as equivalent"));
 
-static cl::opt<bool> IgnoreCase(
-    "ignore-case",
-    cl::desc("Use case-insensitive matching"));
+static cl::opt<bool> IgnoreCase("ignore-case",
+                                cl::desc("Use case-insensitive matching"));
 
 static cl::list<std::string> ImplicitCheckNot(
     "implicit-check-not",
@@ -168,12 +167,6 @@ static cl::list<unsigned> DumpInputContexts(
              "default is 5.\n"));
 
 typedef cl::list<std::string>::const_iterator prefix_iterator;
-
-
-
-
-
-
 
 static void DumpCommandLine(int argc, char **argv) {
   errs() << "FileCheck command line: ";
@@ -613,8 +606,7 @@ static void DumpAnnotatedInput(raw_ostream &OS, const FileCheckRequest &Req,
     ElidedLinesOS.enable_colors(true);
   auto AnnotationItr = Annotations.begin(), AnnotationEnd = Annotations.end();
   for (unsigned Line = 1;
-       InputFilePtr != InputFileEnd || AnnotationItr != AnnotationEnd;
-       ++Line) {
+       InputFilePtr != InputFileEnd || AnnotationItr != AnnotationEnd; ++Line) {
     const unsigned char *InputFileLine = InputFilePtr;
 
     // Compute the previous and next line included by the filter.
@@ -691,8 +683,7 @@ static void DumpAnnotatedInput(raw_ostream &OS, const FileCheckRequest &Req,
     unsigned InputLineWidth = InputFilePtr - InputFileLine;
 
     // Print any annotations.
-    while (AnnotationItr != AnnotationEnd &&
-           AnnotationItr->InputLine == Line) {
+    while (AnnotationItr != AnnotationEnd && AnnotationItr->InputLine == Line) {
       WithColor COS(*LineOS, AnnotationItr->Marker.Color, /*Bold=*/true,
                     /*BG=*/false, TheColorMode);
       // The two spaces below are where the ": " appears on input lines.

@@ -22,26 +22,23 @@
 #ifndef TDL_TOOLS_SYS_GETENV_HPP
 #define TDL_TOOLS_SYS_GETENV_HPP
 
-#include <string>
 #include <cstdlib>
+#include <string>
 
-namespace triton
-{
+namespace triton {
 
-namespace tools
-{
+namespace tools {
 
-    inline std::string getenv(const char * name)
-    {
-        const char * cstr = std::getenv(name);
-        if(!cstr)
-            return "";
-        std::string result(cstr);
-        return result;
-    }
-
+inline std::string getenv(const char *name) {
+  const char *cstr = std::getenv(name);
+  if (!cstr)
+    return "";
+  std::string result(cstr);
+  return result;
 }
 
-}
+} // namespace tools
+
+} // namespace triton
 
 #endif

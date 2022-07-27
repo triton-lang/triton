@@ -15,5 +15,4 @@
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Ops.h.inc"
 
-
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_

@@ -10,7 +10,6 @@
 
 namespace mlir {
 
-
 //===----------------------------------------------------------------------===//
 // AxisInfo
 //===----------------------------------------------------------------------===//
@@ -25,26 +24,25 @@ public:
 
 public:
   // Default constructor
-  AxisInfo(): AxisInfo({}, {}, {}) { }
+  AxisInfo() : AxisInfo({}, {}, {}) {}
   // Construct contiguity info with known contiguity
   AxisInfo(ContiguityT knownContiguity, DivisibilityT knownDivisibility,
            ConstancyT knownConstancy)
-    : contiguity(knownContiguity), divisibility(knownDivisibility), 
-      constancy(knownConstancy), rank(contiguity.size()) { 
-      assert(knownDivisibility.size() == rank);
-      assert(knownConstancy.size() == rank);
-    }
-  
-  
+      : contiguity(knownContiguity), divisibility(knownDivisibility),
+        constancy(knownConstancy), rank(contiguity.size()) {
+    assert(knownDivisibility.size() == rank);
+    assert(knownConstancy.size() == rank);
+  }
+
   // Accessors
-  int getContiguity(size_t d) const { return contiguity[d];   }
-  const ContiguityT& getContiguity() const { return contiguity; }
+  int getContiguity(size_t d) const { return contiguity[d]; }
+  const ContiguityT &getContiguity() const { return contiguity; }
 
   int getDivisibility(size_t d) const { return divisibility[d]; }
-  const DivisibilityT& getDivisibility() const { return divisibility; }
+  const DivisibilityT &getDivisibility() const { return divisibility; }
 
-  int getConstancy(size_t d) const { return constancy[d];    }
-  const ConstancyT& getConstancy() const { return constancy; }
+  int getConstancy(size_t d) const { return constancy[d]; }
+  const ConstancyT &getConstancy() const { return constancy; }
 
   int getRank() const { return rank; }
 
@@ -56,13 +54,13 @@ public:
   }
 
   /// The pessimistic value state of the contiguity is unknown.
-  static AxisInfo getPessimisticValueState(MLIRContext *context) 
-  { return AxisInfo(); }
+  static AxisInfo getPessimisticValueState(MLIRContext *context) {
+    return AxisInfo();
+  }
   static AxisInfo getPessimisticValueState(Value value);
 
   // The gcd of both arguments for each dimension
-  static AxisInfo join(const AxisInfo &lhs,
-                       const AxisInfo &rhs);
+  static AxisInfo join(const AxisInfo &lhs, const AxisInfo &rhs);
 
 private:
   /// The _contiguity_ information maps the `d`-th
@@ -81,7 +79,7 @@ private:
   /// [19, 23, 27, 31]
   /// Would have contiguity [2, 1].
   ContiguityT contiguity;
-  
+
   /// The _divisibility_ information maps the `d`-th
   /// dimension to the largest power-of-two that
   /// divides the first element of all the values along it
@@ -107,39 +105,36 @@ private:
   /// [16, 16, 16, 16, 20, 20, 20, 20]
   /// would have constancy [1, 4]
   ConstancyT constancy;
-  
+
   // number of dimensions of the lattice
   int rank;
 };
 
-
-class AxisInfoAnalysis
-    : public ForwardDataFlowAnalysis<AxisInfo> {
+class AxisInfoAnalysis : public ForwardDataFlowAnalysis<AxisInfo> {
 
 private:
   static const int maxPow2Divisor = 65536;
- 
-  int highestPowOf2Divisor(int n){
-    if(n==0)
+
+  int highestPowOf2Divisor(int n) {
+    if (n == 0)
       return maxPow2Divisor;
     return (n & (~(n - 1)));
   }
 
-  AxisInfo visitBinaryOp(Operation* op, AxisInfo lhsInfo, AxisInfo rhsInfo,
-                         const std::function<int(AxisInfo,AxisInfo,int)>& getContiguity,
-                         const std::function<int(AxisInfo,AxisInfo,int)>& getDivisibility,
-                         const std::function<int(AxisInfo,AxisInfo,int)>& getConstancy);
+  AxisInfo visitBinaryOp(
+      Operation *op, AxisInfo lhsInfo, AxisInfo rhsInfo,
+      const std::function<int(AxisInfo, AxisInfo, int)> &getContiguity,
+      const std::function<int(AxisInfo, AxisInfo, int)> &getDivisibility,
+      const std::function<int(AxisInfo, AxisInfo, int)> &getConstancy);
 
 public:
   using ForwardDataFlowAnalysis<AxisInfo>::ForwardDataFlowAnalysis;
 
-  ChangeResult visitOperation(Operation *op,
-                      ArrayRef<LatticeElement<AxisInfo> *> operands) override;
-
+  ChangeResult
+  visitOperation(Operation *op,
+                 ArrayRef<LatticeElement<AxisInfo> *> operands) override;
 };
 
-
-}
- 
+} // namespace mlir
 
 #endif

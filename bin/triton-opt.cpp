@@ -10,11 +10,11 @@
 #include "mlir/InitAllPasses.h"
 #include "mlir/Support/MlirOptMain.h"
 
-namespace mlir{
-namespace test{
+namespace mlir {
+namespace test {
 void registerTestAlignmentPass();
 }
-}
+} // namespace mlir
 
 int main(int argc, char **argv) {
   mlir::registerAllPasses();
@@ -25,13 +25,11 @@ int main(int argc, char **argv) {
 
   // TODO: register Triton & TritonGPU passes
   mlir::DialectRegistry registry;
-  registry.insert<mlir::triton::TritonDialect,
-                  mlir::triton::gpu::TritonGPUDialect,
-                  mlir::arith::ArithmeticDialect,
-                  mlir::StandardOpsDialect,
-                  mlir::scf::SCFDialect>();
+  registry
+      .insert<mlir::triton::TritonDialect, mlir::triton::gpu::TritonGPUDialect,
+              mlir::arith::ArithmeticDialect, mlir::StandardOpsDialect,
+              mlir::scf::SCFDialect>();
 
-  return mlir::asMainReturnCode(
-      mlir::MlirOptMain(argc, argv, "Triton (GPU) optimizer driver\n", registry)
-  );
+  return mlir::asMainReturnCode(mlir::MlirOptMain(
+      argc, argv, "Triton (GPU) optimizer driver\n", registry));
 }

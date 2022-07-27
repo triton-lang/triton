@@ -7,7 +7,6 @@
 
 #include "mlir/IR/DialectImplementation.h"
 
-
 #include "triton/Dialect/Triton/IR/Dialect.cpp.inc"
 
 using namespace mlir;
@@ -19,12 +18,13 @@ void TritonDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
 #include "triton/Dialect/Triton/IR/Ops.cpp.inc"
-               >();
+      >();
 
   // We can also add interface here.
 }
 
-Operation *TritonDialect::materializeConstant(OpBuilder &builder, Attribute value,
-                                          Type type, Location loc) {
+Operation *TritonDialect::materializeConstant(OpBuilder &builder,
+                                              Attribute value, Type type,
+                                              Location loc) {
   return builder.create<arith::ConstantOp>(loc, type, value);
 }

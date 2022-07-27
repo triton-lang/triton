@@ -5,7 +5,6 @@
 
 using namespace mlir;
 
-
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
@@ -37,28 +36,30 @@ private:
           if (!encoding.isa<triton::gpu::TritonGPUSharedEncodingAttr>())
             return dotOp.emitError() << name << " should be of shared layout";
         } else
-          return dotOp.emitError() << name << "'s type should be of RankedTensorType";
+          return dotOp.emitError()
+                 << name << "'s type should be of RankedTensorType";
       }
 
       Attribute cLayout;
       for (auto it : llvm::zip(llvm::SmallVector<Type>{cType, dType},
-                              llvm::SmallVector<char>{'c', 'd'})) {
+                               llvm::SmallVector<char>{'c', 'd'})) {
         Type type = std::get<0>(it);
         char name = std::get<1>(it);
         if (auto tensorType = type.dyn_cast<RankedTensorType>()) {
           Attribute encoding = tensorType.getEncoding();
           if (!encoding)
             return dotOp.emitError() << name << " should have encoding";
-          if (!encoding.isa<triton::gpu::TritonGPUMmaEncodingAttr>() && 
+          if (!encoding.isa<triton::gpu::TritonGPUMmaEncodingAttr>() &&
               !encoding.isa<triton::gpu::TritonGPUBlockedEncodingAttr>())
-            return dotOp.emitError() << name << " should be of distributed layout";
+            return dotOp.emitError()
+                   << name << " should be of distributed layout";
           if (name == 'c')
             cLayout = encoding;
           else if (encoding != cLayout)
             return dotOp.emitError() << "d & c should have the same layout";
         } else
-          return dotOp.emitError() << name
-                                   << "'s type should be of RankedTensorType";
+          return dotOp.emitError()
+                 << name << "'s type should be of RankedTensorType";
       }
 
       // signalPassFailure();
@@ -89,7 +90,7 @@ private:
   }
 
   void verifyImpl(Operation *op) {
-    if(verifySingleOp(op).failed())
+    if (verifySingleOp(op).failed())
       signalPassFailure();
 
     // verify that all child regions are ok

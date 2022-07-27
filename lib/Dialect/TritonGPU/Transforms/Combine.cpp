@@ -27,8 +27,8 @@ namespace {
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-class TritonGPUCombineOpsPass 
-  : public TritonGPUCombineOpsBase<TritonGPUCombineOpsPass> {
+class TritonGPUCombineOpsPass
+    : public TritonGPUCombineOpsBase<TritonGPUCombineOpsPass> {
 public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
