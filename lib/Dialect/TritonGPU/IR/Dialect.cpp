@@ -11,7 +11,7 @@ using namespace mlir::triton::gpu;
 // parse an array of integers
 static LogicalResult parseIntArrayAttr(AsmParser &parser,
                                        const NamedAttribute &attr,
-                                       /*SmallVector<unsigned, 2>*/ auto &res,
+                                       SmallVector<unsigned, 2> &res,
                                        StringRef desc) {
   auto arrayAttr = attr.getValue().dyn_cast<ArrayAttr>();
   if (!arrayAttr) {
@@ -84,7 +84,8 @@ static Attribute parseBlocked(AsmParser &parser, Type type) {
       broadcastAxis);
 }
 
-static void printBlocked(AsmPrinter &printer, auto *attr) {
+template <class T>
+static void printBlocked(AsmPrinter &printer, const T *attr) {
   printer << "<{"
           << "threadTileSize = [" << attr->getThreadTileSize() << "]"
           << ", warpTileSize = [" << attr->getWarpTileSize() << "]"
@@ -95,7 +96,7 @@ static void printBlocked(AsmPrinter &printer, auto *attr) {
 }
 
 Attribute TritonGPUBlockedEncodingAttr::parse(AsmParser &parser, Type type) {
-  parseBlocked(parser, type);
+  return parseBlocked(parser, type);
 }
 
 void TritonGPUBlockedEncodingAttr::print(mlir::AsmPrinter &printer) const {
@@ -104,7 +105,7 @@ void TritonGPUBlockedEncodingAttr::print(mlir::AsmPrinter &printer) const {
 
 Attribute TritonGPUBlockedMulticastEncodingAttr::parse(AsmParser &parser,
                                                        Type type) {
-  parseBlocked(parser, type);
+  return parseBlocked(parser, type);
 }
 
 void TritonGPUBlockedMulticastEncodingAttr::print(AsmPrinter &printer) const {
@@ -163,7 +164,7 @@ static Attribute parseMma(AsmParser &parser, Type type) {
       shapePerTile, repetitions, contigPerThread, broadcastAxis);
 }
 
-static void printMma(AsmPrinter &printer, auto *attr) {
+template <class T> static void printMma(AsmPrinter &printer, T *attr) {
   printer << "<{"
           << "fragmentPerWarp = [" << attr->getFragmentPerWarp() << "]"
           << ", shapePerWarp = [" << attr->getShapePerWarp() << "]"
@@ -276,12 +277,14 @@ public:
                    attr.dyn_cast<TritonGPUBlockedMulticastEncodingAttr>()) {
       os << "blocked_multicast";
       TritonGPUOpAsmInterface::printBlocked(blockedMulticastAttr, os);
+      return AliasResult::FinalAlias;
     }
     OpAsmDialectInterface::getAlias(attr, os);
+    return AliasResult::FinalAlias;
   }
 
 private:
-  static void printMma(const auto &attr, raw_ostream &os) {
+  static void printMma(const TritonGPUMmaEncodingAttr &attr, raw_ostream &os) {
     TritonGPUOpAsmInterface::printArray(attr.getFragmentPerWarp(), os);
     TritonGPUOpAsmInterface::printArray(attr.getShapePerWarp(), os);
     TritonGPUOpAsmInterface::printArray(attr.getWarpPerTile(), os);
@@ -290,14 +293,15 @@ private:
     TritonGPUOpAsmInterface::printArray(attr.getContigPerThread(), os);
   }
 
-  static void printShared(const auto &attr, raw_ostream &os) {
+  static void printShared(const TritonGPUSharedEncodingAttr &attr,
+                          raw_ostream &os) {
     os << "_" << attr.getVec();
     os << "_" << attr.getPerPhase();
     os << "_" << attr.getMaxPhase();
     TritonGPUOpAsmInterface::printArray(attr.getOrder(), os);
   }
 
-  static void printBlocked(const auto &attr, raw_ostream &os) {
+  template <class T> static void printBlocked(const T &attr, raw_ostream &os) {
     TritonGPUOpAsmInterface::printArray(attr.getThreadTileSize(), os);
     TritonGPUOpAsmInterface::printArray(attr.getWarpTileSize(), os);
     TritonGPUOpAsmInterface::printArray(attr.getBlockTileSize(), os);
@@ -305,7 +309,7 @@ private:
     TritonGPUOpAsmInterface::printArray(attr.getBroadcastAxis(), os);
   }
 
-  static void printArray(const auto &array, raw_ostream &os,
+  static void printArray(const ArrayRef<unsigned> &array, raw_ostream &os,
                          const std::string &delimiter = "x") {
     os << "_";
     if (array.empty()) {
