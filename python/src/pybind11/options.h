@@ -15,51 +15,65 @@ NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
 
 class options {
 public:
+  // Default RAII constructor, which leaves settings as they currently are.
+  options() : previous_state(global_state()) {}
 
-    // Default RAII constructor, which leaves settings as they currently are.
-    options() : previous_state(global_state()) {}
+  // Class is non-copyable.
+  options(const options &) = delete;
+  options &operator=(const options &) = delete;
 
-    // Class is non-copyable.
-    options(const options&) = delete;
-    options& operator=(const options&) = delete;
+  // Destructor, which restores settings that were in effect before.
+  ~options() { global_state() = previous_state; }
 
-    // Destructor, which restores settings that were in effect before.
-    ~options() {
-        global_state() = previous_state;
-    }
+  // Setter methods (affect the global state):
 
-    // Setter methods (affect the global state):
+  options &disable_user_defined_docstrings() & {
+    global_state().show_user_defined_docstrings = false;
+    return *this;
+  }
 
-    options& disable_user_defined_docstrings() & { global_state().show_user_defined_docstrings = false; return *this; }
+  options &enable_user_defined_docstrings() & {
+    global_state().show_user_defined_docstrings = true;
+    return *this;
+  }
 
-    options& enable_user_defined_docstrings() & { global_state().show_user_defined_docstrings = true; return *this; }
+  options &disable_function_signatures() & {
+    global_state().show_function_signatures = false;
+    return *this;
+  }
 
-    options& disable_function_signatures() & { global_state().show_function_signatures = false; return *this; }
+  options &enable_function_signatures() & {
+    global_state().show_function_signatures = true;
+    return *this;
+  }
 
-    options& enable_function_signatures() & { global_state().show_function_signatures = true; return *this; }
+  // Getter methods (return the global state):
 
-    // Getter methods (return the global state):
+  static bool show_user_defined_docstrings() {
+    return global_state().show_user_defined_docstrings;
+  }
 
-    static bool show_user_defined_docstrings() { return global_state().show_user_defined_docstrings; }
+  static bool show_function_signatures() {
+    return global_state().show_function_signatures;
+  }
 
-    static bool show_function_signatures() { return global_state().show_function_signatures; }
-
-    // This type is not meant to be allocated on the heap.
-    void* operator new(size_t) = delete;
+  // This type is not meant to be allocated on the heap.
+  void *operator new(size_t) = delete;
 
 private:
+  struct state {
+    bool show_user_defined_docstrings =
+        true; //< Include user-supplied texts in docstrings.
+    bool show_function_signatures =
+        true; //< Include auto-generated function signatures in docstrings.
+  };
 
-    struct state {
-        bool show_user_defined_docstrings = true;  //< Include user-supplied texts in docstrings.
-        bool show_function_signatures = true;      //< Include auto-generated function signatures in docstrings.
-    };
+  static state &global_state() {
+    static state instance;
+    return instance;
+  }
 
-    static state &global_state() {
-        static state instance;
-        return instance;
-    }
-
-    state previous_state;
+  state previous_state;
 };
 
 NAMESPACE_END(PYBIND11_NAMESPACE)

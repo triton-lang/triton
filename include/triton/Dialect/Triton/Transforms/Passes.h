@@ -13,6 +13,6 @@ std::unique_ptr<Pass> createCombineOpsPass();
 #define GEN_PASS_REGISTRATION
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
 
-}
+} // namespace mlir
 
 #endif

@@ -7,11 +7,8 @@
 #include <stdexcept>
 #include <string>
 
-namespace triton
-{
-namespace tools
-{
-
+namespace triton {
+namespace tools {
 
 #ifdef _WIN32
 #define popen _popen
@@ -19,12 +16,12 @@ namespace tools
 #endif
 
 #ifndef WEXITSTATUS
-#define WEXITSTATUS(stat_val) ((unsigned)(stat_val) & 255)
+#define WEXITSTATUS(stat_val) ((unsigned)(stat_val)&255)
 #endif
 
-int exec(const std::string& cmd, std::string& result) {
+int exec(const std::string &cmd, std::string &result) {
   char buffer[128];
-  FILE* pipe = popen(cmd.c_str(), "r");
+  FILE *pipe = popen(cmd.c_str(), "r");
   if (!pipe)
     return 0;
   result.clear();
@@ -37,10 +34,9 @@ int exec(const std::string& cmd, std::string& result) {
   }
   int status = pclose(pipe);
   return WEXITSTATUS(status);
-
 }
 
-}
-}
+} // namespace tools
+} // namespace triton
 
 #endif

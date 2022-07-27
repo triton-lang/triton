@@ -3,18 +3,17 @@
 
 #include <memory>
 
-namespace mlir{
+namespace mlir {
 
 class ModuleOp;
 template <typename T> class OperationPass;
 
-namespace triton{
+namespace triton {
 
-std::unique_ptr<OperationPass<ModuleOp>> 
+std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonToTritonGPUPass(int numWarps = 4);
 
 }
 } // namespace mlir
-
 
 #endif

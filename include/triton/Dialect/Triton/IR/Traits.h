@@ -19,7 +19,7 @@ public:
   static LogicalResult verifyTrait(Operation *op) {
     // The rationale for this number is to prevent users from creating programs
     // that would have catastrophic register pressure and cause the compiler to
-    // hang. 
+    // hang.
     // Since H100 has 256KB registers, we should allow users to create tensors
     // of size up to 256K elements. It will spill for datatypes wider than 1B,
     // but we probably should limit number of elements (rather than bytes) to
@@ -31,8 +31,8 @@ public:
         for (int64_t s : tensorType.getShape())
           numElements *= s;
         if (numElements > maxElement)
-          return op->emitError("Maximum allowed number of elements is ") << maxElement << ", but "
-                 << *op << " has more than that";
+          return op->emitError("Maximum allowed number of elements is ")
+                 << maxElement << ", but " << *op << " has more than that";
         if ((numElements & (numElements - 1)) != 0)
           return op->emitError("Number of elements must be power-of-two, but ")
                  << *op << " doesn't follow the rule";
@@ -45,8 +45,8 @@ public:
         for (int64_t s : tensorType.getShape())
           numElements *= s;
         if (numElements > maxElement)
-          return op->emitError("Maximum allowed number of elements is ") << maxElement << ", but "
-                 << *op << " has more than that";
+          return op->emitError("Maximum allowed number of elements is ")
+                 << maxElement << ", but " << *op << " has more than that";
         if ((numElements & (numElements - 1)) != 0)
           return op->emitError("Number of elements must be power-of-two, but ")
                  << *op << " doesn't follow the rule";
@@ -57,7 +57,7 @@ public:
   }
 };
 
-}
-}
+} // namespace OpTrait
+} // namespace mlir
 
 #endif
