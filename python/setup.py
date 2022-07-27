@@ -17,7 +17,9 @@ from setuptools.command.build_ext import build_ext
 
 def get_llvm():
     # download if nothing is installed
-    name = 'clang+llvm-14.0.0-x86_64-linux-gnu-ubuntu-18.04'
+    system = platform.system()
+    suffix = {"Linux": "linux-gnu-ubuntu-18.04", "Darwin": "apple-darwin"}[system]
+    name = f'clang+llvm-14.0.0-x86_64-{suffix}'
     dir = '/tmp'
     llvm_include_dir = '{dir}/{name}/include'.format(dir=dir, name=name)
     llvm_library_dir = '{dir}/{name}/lib'.format(dir=dir, name=name)
