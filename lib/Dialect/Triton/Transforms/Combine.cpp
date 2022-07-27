@@ -13,143 +13,43 @@
 using namespace mlir;
 
 namespace {
-// dot(a, b, 0) + c => dot(a, b, c)
-class CombineDotOp : public mlir::RewritePattern {
-public:
-  CombineDotOp(mlir::MLIRContext *context)
-      : mlir::RewritePattern(mlir::RewritePattern::MatchAnyOpTypeTag(), 1,
-                             context) {}
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    if (llvm::isa<mlir::arith::AddIOp, mlir::arith::AddFOp>(op)) {
-      if (isCandidate(op->getOperand(0)).succeeded()) {
-        auto dotOp = op->getOperand(0).getDefiningOp<mlir::triton::DotOp>();
-        rewriter.replaceOpWithNewOp<mlir::triton::DotOp>(
-            op, dotOp->getResultTypes().front(), dotOp.a(), dotOp.b(),
-            op->getOperand(1), dotOp.allowTF32());
-        return mlir::success();
-      } else if (isCandidate(op->getOperand(1)).succeeded()) {
-        auto dotOp = op->getOperand(1).getDefiningOp<mlir::triton::DotOp>();
-        rewriter.replaceOpWithNewOp<mlir::triton::DotOp>(
-            op, dotOp->getResultTypes().front(), dotOp.a(), dotOp.b(),
-            op->getOperand(0), dotOp.allowTF32());
-        return mlir::success();
-      }
-    }
-    return mlir::failure();
-  }
 
-private:
-  // Is this value a dot and has 0 as `c`.
-  mlir::LogicalResult isCandidate(mlir::Value val) const {
-    if (auto dot = val.getDefiningOp<mlir::triton::DotOp>()) {
-      if (isZero(dot.c()))
-        return mlir::success();
-    }
-    return mlir::failure();
-  }
-
-  bool isZero(mlir::Value val) const {
-    if (mlir::matchPattern(val, mlir::m_Zero()) ||
-        mlir::matchPattern(val, mlir::m_AnyZeroFloat()))
+bool isZero(mlir::Value val) {
+  if (mlir::matchPattern(val, mlir::m_Zero()) ||
+      mlir::matchPattern(val, mlir::m_AnyZeroFloat()))
+    return true;
+  // broadcast(constant_0)
+  if (auto bc = val.getDefiningOp<mlir::triton::BroadcastOp>()) {
+    if (mlir::matchPattern(bc.src(), mlir::m_Zero()) ||
+        mlir::matchPattern(bc.src(), mlir::m_AnyZeroFloat()))
       return true;
-    // broadcast(constant_0)
-    if (auto bc = val.getDefiningOp<mlir::triton::BroadcastOp>()) {
-      if (mlir::matchPattern(bc.src(), mlir::m_Zero()) ||
-          mlir::matchPattern(bc.src(), mlir::m_AnyZeroFloat()))
-        return true;
-    }
-    return false;
   }
-};
+  return false;
+}
 
-// gep(gep(%ptr, %idx0), %idx1) => gep(%ptr, AddI(%idx0, %idx1))
-//   Note: leave (sub %c0, %c0) canceling to ArithmeticDialect
-//         (ref: ArithmeticCanonicalization.td)
-class CombineGEPOp : public mlir::RewritePattern {
-public:
-  CombineGEPOp(mlir::MLIRContext *context)
-      : mlir::RewritePattern(mlir::RewritePattern::MatchAnyOpTypeTag(), 1,
-                             context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    if (llvm::isa<mlir::triton::GEPOp>(op)) {
-      if (auto gep2 = op->getOperand(0).getDefiningOp<mlir::triton::GEPOp>()) {
-        auto loc = op->getLoc();
-        mlir::Value newIdx = rewriter.create<mlir::arith::AddIOp>(
-            loc, op->getOperand(1), gep2->getOperand(1));
-        rewriter.replaceOpWithNewOp<mlir::triton::GEPOp>(
-            op, op->getResultTypes().front(), gep2->getOperand(0), newIdx);
-        return mlir::success();
-      }
-    }
-    return mlir::failure();
+bool isBroadcastConstantCombinable(Attribute value) {
+  if (auto denseValue = value.dyn_cast<DenseElementsAttr>()) {
+    return denseValue.isSplat();
   }
-};
+  return value.isa<FloatAttr, IntegerAttr>();
+}
 
-// select(cond, load(ptrs, broadcast(cond), ???), other)
-//   => load(ptrs, broadcast(cond), other)
-class CombineSelectMaskedLoadOp : public mlir::RewritePattern {
-public:
-  CombineSelectMaskedLoadOp(mlir::MLIRContext *context)
-      : mlir::RewritePattern(mlir::RewritePattern::MatchAnyOpTypeTag(), 1,
-                             context) {}
+DenseElementsAttr getConstantValue(Builder &builder, Attribute value,
+                                   Value bcast_res) {
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    if (llvm::isa<mlir::SelectOp>(op)) {
-      if (auto load = op->getOperand(1).getDefiningOp<mlir::triton::LoadOp>()) {
-        mlir::Value cond = op->getOperand(0);
-        if (auto bc = load.mask().getDefiningOp<mlir::triton::BroadcastOp>()) {
-          if (bc.src().getDefiningOp() == cond.getDefiningOp()) {
-            rewriter.replaceOpWithNewOp<mlir::triton::LoadOp>(
-                op, op->getResultTypes().front(), load.ptr(), load.mask(),
-                op->getOperand(2), load.cache(), load.evict(),
-                load.isVolatile());
-            return mlir::success();
-          }
-        }
-      }
-    }
-    return mlir::failure();
+  Type resType = bcast_res.getType();
+  DenseElementsAttr res;
+  if (auto denseValue = value.dyn_cast<DenseElementsAttr>()) {
+    res =
+        DenseElementsAttr::get(resType, denseValue.getSplatValue<Attribute>());
+  } else {
+    res = DenseElementsAttr::get(resType, value);
   }
-};
+  return res;
+}
 
-// broadcast(cst) => cst
-// TODO: move this to .td file
-class CombineBroadcastConstantOp : public mlir::RewritePattern {
-public:
-  CombineBroadcastConstantOp(mlir::MLIRContext *context)
-      : mlir::RewritePattern(mlir::RewritePattern::MatchAnyOpTypeTag(), 1,
-                             context) {}
+#include "TritonCombine.inc"
 
-  LogicalResult matchAndRewrite(Operation *op,
-                                PatternRewriter &rewriter) const override {
-    if (auto broadcast = llvm::dyn_cast<triton::BroadcastOp>(op)) {
-      if (auto cst = broadcast.src().getDefiningOp<arith::ConstantOp>()) {
-        Attribute value = cst.getValue();
-        Type resType = broadcast.getResult().getType();
-        if (auto denseValue = value.dyn_cast<DenseElementsAttr>()) {
-          if (!denseValue.isSplat())
-            return failure();
-          value = DenseElementsAttr::get(resType,
-                                         denseValue.getSplatValue<Attribute>());
-        } else {
-          if (!value.isa<FloatAttr, IntegerAttr>())
-            return failure();
-          value = DenseElementsAttr::get(resType, value);
-        }
-        rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, value, resType);
-        return success();
-      }
-    }
-    return failure();
-  }
-};
 } // anonymous namespace
 
 #define GEN_PASS_CLASSES
@@ -162,11 +62,15 @@ public:
     mlir::RewritePatternSet patterns(context);
     mlir::ModuleOp m = getOperation();
 
-    patterns.add<CombineDotOp>(context);
-    patterns.add<CombineSelectMaskedLoadOp>(context);
-    patterns.add<CombineGEPOp>(context);
-    patterns.add<CombineBroadcastConstantOp>(context);
-    // patterns.add<CombineReduceOp>(context);
+    // Dot Add %{
+    patterns.add<CombineDotAddIPattern>(context);
+    patterns.add<CombineDotAddFPattern>(context);
+    patterns.add<CombineDotAddIRevPattern>(context);
+    patterns.add<CombineDotAddFRevPattern>(context);
+    // %}
+    patterns.add<CombineSelectMaskedLoadPattern>(context);
+    patterns.add<CombineGEPPattern>(context);
+    patterns.add<CombineBroadcastConstantPattern>(context);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
