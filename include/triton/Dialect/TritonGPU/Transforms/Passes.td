@@ -7,16 +7,7 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
   let summary = "pipeline";
 
   let description = [{
-    scf.for() {
-      %a = load %a_ptr;
-      %b = load %b_ptr;
-
-      %d = dot %a, %b, %c;
-    }
-
-    =>
-
-    ...
+    TODO  
   }];
 
   let constructor = "mlir::createTritonGPUPipelinePass()";

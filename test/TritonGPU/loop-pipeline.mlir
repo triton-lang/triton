@@ -1,45 +1,12 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-pipeline=num-stages=3 -canonicalize -tritongpu-verifier
 // RUN: triton-opt %s -split-input-file -tritongpu-pipeline=num-stages=3 -canonicalize -tritongpu-verifier | FileCheck %s
 
 // 4 warps
 // matmul: 128x32 @ 32x128 -> 128x128
-#AL = #triton_gpu.blocked_layout<{
-  threadTileSize = [1, 4],
-  warpTileSize = [4, 32],
-  blockTileSize = [16, 32],
-  order = [1, 0]
-}>
-
-#BL = #triton_gpu.blocked_layout<{
-  threadTileSize = [1, 4],
-  warpTileSize = [1, 128],
-  blockTileSize = [4, 128],
-  order = [1, 0]
-}>
-
-#A = #triton_gpu.shared_layout<{
-  vec = 2,
-  perPhase = 2,
-  maxPhase = 4,
-  order = [1, 0]
-}>
-
-#B = #triton_gpu.shared_layout<{
-  vec = 2,
-  perPhase = 2,
-  maxPhase = 4,
-  order = [1, 0]
-}>
-
-// TODO: check this
-#C = #triton_gpu.mma_layout<{
-  fragmentPerWarp = [1, 1],
-  shapePerWarp = [16, 8],
-  warpPerTile = [2, 2],
-  shapePerTile = [32, 16],
-  repetitions = [4, 4],
-  contigPerThread = [1, 8]
-}>
+#AL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#BL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#A = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#B = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#C = #triton_gpu.mma<{version = 2, warpsPerCTA = [4, 1]}>
 
 // CHECK: func @matmul_loop
 // CHECK: %[[A0:.*]] = triton_gpu.copy_async

@@ -133,8 +133,8 @@ def TT_GEPOp : TT_Op<"getelementptr",
 //
 // Shape Manipulation Ops
 //
-def TT_ReshapeOp : TT_Op<"reshape", [NoSideEffect, SameOperandsAndResultElementType]> {
-    let summary = "reshape";
+def TT_ViewOp : TT_Op<"view", [NoSideEffect, SameOperandsAndResultElementType]> {
+    let summary = "view";
 
     let arguments = (ins TT_Tensor:$src);
 

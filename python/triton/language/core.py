@@ -565,7 +565,7 @@ class tensor:
             elif sl == slice(None, None, None):
                 dst_shape.append(src_shape[curr].value)
                 curr += 1
-        ret = semantic.reshape(self, dst_shape, _builder)
+        ret = semantic.view(self, dst_shape, _builder)
         return ret
 
     @builtin

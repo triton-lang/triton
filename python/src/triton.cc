@@ -1471,14 +1471,14 @@ void init_triton_ir(py::module &&m) {
              self.create<mlir::triton::StoreOp>(loc, ptrs, val, mask);
            })
       // Block instruction
-      .def("create_reshape",
+      .def("create_view",
            [](mlir::OpBuilder &self, mlir::Value &arg,
               std::vector<int64_t> &shape) -> mlir::Value {
              auto loc = self.getUnknownLoc();
              auto argType = arg.getType()
                                 .dyn_cast<mlir::RankedTensorType>()
                                 .getElementType();
-             return self.create<mlir::triton::ReshapeOp>(
+             return self.create<mlir::triton::ViewOp>(
                  loc, mlir::RankedTensorType::get(shape, argType), arg);
            })
       .def("create_cat",
