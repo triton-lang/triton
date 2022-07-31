@@ -10,7 +10,7 @@ func @permute_2d(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 {t
   // CHECK-NEXT: Contiguity: [128] ; Divisibility: [65536] ; Constancy: [1]
   %1 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
   // CHECK-NEXT: Contiguity: [128, 1] ; Divisibility: [65536, 1] ; Constancy: [1, 1]
-  %2 = tt.reshape %0 : (tensor<128xi32>) -> tensor<128x1xi32>
+  %2 = tt.view %0 : (tensor<128xi32>) -> tensor<128x1xi32>
   // CHECK-NEXT: Contiguity: [1, 1] ; Divisibility: [16, 16] ; Constancy: [128, 1]
   %3 = tt.splat %arg1 : (i32) -> tensor<128x1xi32>
   // CHECK-NEXT: Contiguity: [1, 1] ; Divisibility: [1048576, 16] ; Constancy: [1, 1]
@@ -20,7 +20,7 @@ func @permute_2d(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 {t
   // CHECK-NEXT: Contiguity: [1, 1] ; Divisibility: [16, 16] ; Constancy: [1, 1]
   %6 = tt.getelementptr %5, %4 : tensor<128x1x!tt.ptr<f32>>
   // CHECK-NEXT: Contiguity: [1, 128] ; Divisibility: [1, 65536] ; Constancy: [1, 1]
-  %7 = tt.reshape %1 : (tensor<128xi32>) -> tensor<1x128xi32>
+  %7 = tt.view %1 : (tensor<128xi32>) -> tensor<1x128xi32>
   // CHECK-NEXT: Contiguity: [1, 1] ; Divisibility: [16, 16] ; Constancy: [1, 128]
   %8 = tt.broadcast %6 : (tensor<128x1x!tt.ptr<f32>>) -> tensor<128x128x!tt.ptr<f32>>
   // CHECK-NEXT: Contiguity: [1, 128] ; Divisibility: [1, 65536] ; Constancy: [128, 1]
@@ -28,13 +28,13 @@ func @permute_2d(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 {t
   // CHECK-NEXT: Contiguity: [1, 128] ; Divisibility: [1, 16] ; Constancy: [1, 1]
   %10 = tt.getelementptr %8, %9 : tensor<128x128x!tt.ptr<f32>>
   // CHECK-NEXT: Contiguity: [128, 1] ; Divisibility: [65536, 1] ; Constancy: [1, 1]
-  %11 = tt.reshape %0 : (tensor<128xi32>) -> tensor<128x1xi32>
+  %11 = tt.view %0 : (tensor<128xi32>) -> tensor<128x1xi32>
   // CHECK-NEXT: Contiguity: [1, 1] ; Divisibility: [16, 16] ; Constancy: [128, 1]
   %12 = tt.splat %arg2 : (!tt.ptr<f32>) -> tensor<128x1x!tt.ptr<f32>>
   // CHECK-NEXT: Contiguity: [128, 1] ; Divisibility: [16, 1] ; Constancy: [1, 1]
   %13 = tt.getelementptr %12, %11 : tensor<128x1x!tt.ptr<f32>>
   // CHECK-NEXT: Contiguity: [1, 128] ; Divisibility: [1, 65536] ; Constancy: [1, 1]
-  %14 = tt.reshape %1 : (tensor<128xi32>) -> tensor<1x128xi32>
+  %14 = tt.view %1 : (tensor<128xi32>) -> tensor<1x128xi32>
   // CHECK-NEXT: Contiguity: [1, 1] ; Divisibility: [16, 16] ; Constancy: [1, 128]
   %15 = tt.splat %arg3 : (i32) -> tensor<1x128xi32>
   // CHECK-NEXT: Contiguity: [1, 1] ; Divisibility: [16, 1048576] ; Constancy: [1, 1]

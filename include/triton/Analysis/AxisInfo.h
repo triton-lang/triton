@@ -18,16 +18,14 @@ namespace mlir {
 /// Axis information is represented by a std::map<int, int>
 class AxisInfo {
 public:
-  typedef std::vector<int> ContiguityT;
-  typedef std::vector<int> DivisibilityT;
-  typedef std::vector<int> ConstancyT;
+  typedef SmallVector<int, 4> DimVectorT;
 
 public:
   // Default constructor
   AxisInfo() : AxisInfo({}, {}, {}) {}
   // Construct contiguity info with known contiguity
-  AxisInfo(ContiguityT knownContiguity, DivisibilityT knownDivisibility,
-           ConstancyT knownConstancy)
+  AxisInfo(DimVectorT knownContiguity, DimVectorT knownDivisibility,
+           DimVectorT knownConstancy)
       : contiguity(knownContiguity), divisibility(knownDivisibility),
         constancy(knownConstancy), rank(contiguity.size()) {
     assert(knownDivisibility.size() == rank);
@@ -36,13 +34,13 @@ public:
 
   // Accessors
   int getContiguity(size_t d) const { return contiguity[d]; }
-  const ContiguityT &getContiguity() const { return contiguity; }
+  const DimVectorT &getContiguity() const { return contiguity; }
 
   int getDivisibility(size_t d) const { return divisibility[d]; }
-  const DivisibilityT &getDivisibility() const { return divisibility; }
+  const DimVectorT &getDivisibility() const { return divisibility; }
 
   int getConstancy(size_t d) const { return constancy[d]; }
-  const ConstancyT &getConstancy() const { return constancy; }
+  const DimVectorT &getConstancy() const { return constancy; }
 
   int getRank() const { return rank; }
 
@@ -78,7 +76,7 @@ private:
   /// [18, 22, 26, 30]
   /// [19, 23, 27, 31]
   /// Would have contiguity [2, 1].
-  ContiguityT contiguity;
+  DimVectorT contiguity;
 
   /// The _divisibility_ information maps the `d`-th
   /// dimension to the largest power-of-two that
@@ -93,7 +91,7 @@ private:
   /// [14, 18, 22, 26]
   /// [15, 19, 23, 27]
   //  would have divisibility [4, 1]
-  DivisibilityT divisibility;
+  DimVectorT divisibility;
 
   /// The _constancy_ information maps the `d`-th
   /// dimension to the length of the shortest
@@ -104,7 +102,7 @@ private:
   /// [8, 8, 8, 8, 12, 12, 12, 12]
   /// [16, 16, 16, 16, 20, 20, 20, 20]
   /// would have constancy [1, 4]
-  ConstancyT constancy;
+  DimVectorT constancy;
 
   // number of dimensions of the lattice
   int rank;

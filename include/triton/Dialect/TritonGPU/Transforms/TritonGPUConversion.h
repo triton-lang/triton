@@ -13,11 +13,11 @@ namespace mlir {
 
 class TritonGPUTypeConverter : public TypeConverter {
 public:
-  TritonGPUTypeConverter(MLIRContext *context, int numThreads);
+  TritonGPUTypeConverter(MLIRContext *context, int numWarps);
 
 private:
   MLIRContext *context;
-  int numThreads;
+  int numWarps;
 };
 
 class TritonGPUConversionTarget : public ConversionTarget {
@@ -26,9 +26,6 @@ class TritonGPUConversionTarget : public ConversionTarget {
 public:
   explicit TritonGPUConversionTarget(MLIRContext &ctx,
                                      TritonGPUTypeConverter &typeConverter);
-
-  /// update layouts & insert ConvertLayoutOp if necessary
-  LogicalResult refineLayouts(ModuleOp mod, int numThreads);
 };
 
 } // namespace mlir
