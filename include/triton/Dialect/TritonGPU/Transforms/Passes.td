@@ -23,6 +23,24 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
   ];
 }
 
+def TritonGPUCoalesce: Pass<"tritongpu-coalesce", "mlir::ModuleOp"> {
+  let summary = "coalesce";
+
+  let description = [{
+    TODO  
+  }];
+
+  let constructor = "mlir::createTritonGPUCoalescePass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+
+  let options = [
+    Option<"numWarps", "num-warps",
+          "int32_t", /*default*/"4",
+          "number of warps">
+  ];
+}
+
 def TritonGPUCombineOps : Pass<"tritongpu-combine", "mlir::ModuleOp"> {
   let summary = "combine triton gpu ops";
 

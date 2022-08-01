@@ -5,8 +5,8 @@ import triton.language as tl
 
 # triton kernel
 @triton.jit
-def kernel(X, stride_xm, stride_xn,
-           Z, stride_zm, stride_zn,
+def kernel(X, stride_xm,
+           Z, stride_zn,
            BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
     off_m = tl.arange(0, BLOCK_M)
     off_n = tl.arange(0, BLOCK_N)
@@ -15,5 +15,5 @@ def kernel(X, stride_xm, stride_xn,
     tl.store(Zs, tl.load(Xs))
 
 
-ret = triton.compile(kernel, "*fp32,i32,i32,*fp32,i32,i32", constants={"BLOCK_M": 64, "BLOCK_N": 64}, output="ttgir")
+ret = triton.compile(kernel, "*fp32,i32,*fp32,i32", constants={"BLOCK_M": 64, "BLOCK_N": 64}, output="ttgir")
 print(ret)

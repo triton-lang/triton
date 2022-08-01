@@ -6,6 +6,8 @@
 namespace mlir {
 std::unique_ptr<Pass> createTritonGPUPipelinePass(int numStages = 2);
 
+std::unique_ptr<Pass> createTritonGPUCoalescePass();
+
 std::unique_ptr<Pass> createTritonGPUCombineOpsPass();
 
 std::unique_ptr<Pass> createTritonGPUVerifier();
