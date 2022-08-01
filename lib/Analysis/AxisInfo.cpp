@@ -94,7 +94,8 @@ ChangeResult AxisInfoAnalysis::visitOperation(
   AxisInfo curr;
   // This preserves the input axes (e.g., cast):
   if (llvm::isa<arith::ExtSIOp, arith::ExtUIOp, arith::TruncIOp,
-                triton::PtrToIntOp, triton::IntToPtrOp>(op))
+                triton::PtrToIntOp, triton::IntToPtrOp,
+                triton::gpu::ConvertLayoutOp>(op))
     curr = operands[0]->getValue();
   // Constant ranges
   if (triton::MakeRangeOp make_range =
