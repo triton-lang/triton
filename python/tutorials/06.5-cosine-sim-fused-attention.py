@@ -13,8 +13,8 @@ import torch.nn.functional as F
 import triton
 import triton.language as tl
 
-F16_EPS = 1 / 1024
-MAX_ATTN_LOGITS_SHIFT = math.log(F16_EPS)
+FP32_EPS = 1e-12
+MAX_ATTN_LOGITS_SHIFT = math.log(1 / 1024)
 
 def l2norm(t):
     return F.normalize(t, dim=-1)
@@ -77,7 +77,7 @@ def _fwd_kernel(
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     # write back l and m
     l_ptrs = L + off_hz * N_CTX + offs_m
-    l_i = tl.maximum(l_i, F16_EPS)
+    l_i = tl.maximum(l_i, FP32_EPS)
     tl.store(l_ptrs, l_i)
     # initialize pointers to output
     offs_n = tl.arange(0, BLOCK_DMODEL)
