@@ -113,7 +113,6 @@ def _bwd_preprocess(
 def _bwd_kernel(
     Q, K, V, sm_scale, Out, DO,
     DQ, DK, DV,
-    L,
     D,
     stride_qz, stride_qh, stride_qm, stride_qk,
     stride_kz, stride_kh, stride_kn, stride_kk,
@@ -149,7 +148,6 @@ def _bwd_kernel(
         dq_ptrs = DQ + (offs_qm[:, None] * stride_qm + offs_k[None, :] * stride_qk)
         # pointer to row-wise quantities in value-like data
         D_ptrs = D + off_hz * N_CTX
-        L_ptrs = L + off_hz * N_CTX
         # initialize dv amd dk
         dv = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
         dk = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
@@ -165,7 +163,6 @@ def _bwd_kernel(
             # NOTE: `do` is pre-divided by `l`; no normalization here
             qk = tl.dot(q, k, trans_b=True)
             qk = tl.where(offs_m_curr[:, None] >= (offs_n[None, :]), qk, float('-inf'))
-            l = tl.load(L_ptrs + offs_m_curr)
             qk_shift = MAX_ATTN_LOGITS_SHIFT + sm_scale
             p = tl.exp(qk * sm_scale - qk_shift)
             # compute dv
@@ -244,7 +241,6 @@ class _attention_with_l2normed_qk(torch.autograd.Function):
             q, k, v, ctx.sm_scale,
             o, do_scaled,
             dq, dk, dv,
-            l,
             delta,
             q.stride(0), q.stride(1), q.stride(2), q.stride(3),
             k.stride(0), k.stride(1), k.stride(2), k.stride(3),
