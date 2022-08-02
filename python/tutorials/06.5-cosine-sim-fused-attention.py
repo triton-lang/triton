@@ -91,18 +91,21 @@ def _fwd_kernel(
 
 @triton.jit
 def _bwd_preprocess(
-    Out, DO,
-    Delta,
+    Out, DO, L,
+    NewDO, Delta,
     BLOCK_M: tl.constexpr, D_HEAD: tl.constexpr,
 ):
     off_m = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
     off_n = tl.arange(0, D_HEAD)
     # load
-    do = tl.load(DO + off_m[:, None] * D_HEAD + off_n[None, :]).to(tl.float32)
     o = tl.load(Out + off_m[:, None] * D_HEAD + off_n[None, :]).to(tl.float32)
+    do = tl.load(DO + off_m[:, None] * D_HEAD + off_n[None, :]).to(tl.float32)
+    denom = tl.load(L + off_m).to(tl.float32)
     # compute
+    do = do / denom[:, None]
     delta = tl.sum(o * do, axis=1)
     # write-back
+    tl.store(NewDO + off_m[:, None] * D_HEAD + off_n[None, :], do)
     tl.store(Delta + off_m, delta)
 
 
@@ -164,7 +167,7 @@ def _bwd_kernel(
             qk = tl.where(offs_m_curr[:, None] >= (offs_n[None, :]), qk, float('-inf'))
             l = tl.load(L_ptrs + offs_m_curr)
             qk_shift = MAX_ATTN_LOGITS_SHIFT + sm_scale
-            p = tl.exp(qk * sm_scale - qk_shift) / l[:, None]
+            p = tl.exp(qk * sm_scale - qk_shift)
             # compute dv
             do = tl.load(do_ptrs)
             dv += tl.dot(p.to(tl.float16), do, trans_a=True)
@@ -230,15 +233,16 @@ class _attention_with_l2normed_qk(torch.autograd.Function):
         dq = torch.zeros_like(q, dtype=torch.float32)
         dk = torch.empty_like(k)
         dv = torch.empty_like(v)
+        do_scaled = torch.empty_like(do)
         delta = torch.empty_like(l)
         _bwd_preprocess[(ctx.grid[0] * ctx.grid[1], )](
-            o, do,
-            delta,
+            o, do, l,
+            do_scaled, delta,
             BLOCK_M=ctx.BLOCK, D_HEAD=ctx.BLOCK_DMODEL,
         )
         _bwd_kernel[(ctx.grid[1],)](
             q, k, v, ctx.sm_scale,
-            o, do,
+            o, do_scaled,
             dq, dk, dv,
             l,
             delta,
