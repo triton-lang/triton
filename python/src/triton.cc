@@ -758,6 +758,9 @@ void init_triton_ir(py::module &&m) {
       .def("has_function", &ir::module::has_function)
       .def("get_function", &ir::module::get_function, ret::reference)
       .def("get_or_insert_function", &ir::module::get_or_insert_function, ret::reference)
+      .def("print", [](ir::module *self) {
+          self->print(std::cout);
+      })
       .def("reset_ret_ty", &ir::module::reset_ret_ty)
       .def("set_instr_metadata", [](ir::module *self, const std::string &name, ir::value *value) {
           const auto metadatas = self->get_metadatas();
