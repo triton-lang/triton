@@ -6,11 +6,15 @@ This is a Triton implementation of the Flash Attention algorithm for Cosine Simi
 """
 
 import pytest
+import math
 import torch
 import torch.nn.functional as F
 
 import triton
 import triton.language as tl
+
+F16_EPS = 1 / 1024
+MAX_ATTN_LOGITS_SHIFT = math.log(F16_EPS)
 
 def l2norm(t):
     return F.normalize(t, dim=-1)
@@ -57,7 +61,8 @@ def _fwd_kernel(
         qk = qk * sm_scale
         qk += tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), 0, float('-inf'))
         # -- compute p, l_ij
-        p = tl.exp(qk - sm_scale)
+        qk_shift = MAX_ATTN_LOGITS_SHIFT + sm_scale
+        p = tl.exp(qk - qk_shift)
         l_ij = tl.sum(p, 1)
         # -- update output accumulator --
         # update acc
@@ -72,6 +77,7 @@ def _fwd_kernel(
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     # write back l and m
     l_ptrs = L + off_hz * N_CTX + offs_m
+    l_i = tl.maximum(l_i, F16_EPS)
     tl.store(l_ptrs, l_i)
     # initialize pointers to output
     offs_n = tl.arange(0, BLOCK_DMODEL)
@@ -157,7 +163,8 @@ def _bwd_kernel(
             qk = tl.dot(q, k, trans_b=True)
             qk = tl.where(offs_m_curr[:, None] >= (offs_n[None, :]), qk, float('-inf'))
             l = tl.load(L_ptrs + offs_m_curr)
-            p = tl.exp(qk * sm_scale - sm_scale) / l[:, None]
+            qk_shift = MAX_ATTN_LOGITS_SHIFT + sm_scale
+            p = tl.exp(qk * sm_scale - qk_shift) / l[:, None]
             # compute dv
             do = tl.load(do_ptrs)
             dv += tl.dot(p.to(tl.float16), do, trans_a=True)
