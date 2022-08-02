@@ -59,14 +59,14 @@ def _fwd_kernel(
         # -- compute p, l_ij
         p = tl.exp(qk - sm_scale)
         l_ij = tl.sum(p, 1)
-        l_i_new = l_i + l_ij
         # -- update output accumulator --
         # update acc
         v = tl.load(v_ptrs + start_n * stride_vk)
         p = p.to(tl.float16)
         acc += tl.dot(p, v)
         # update l_i
-        l_i  = l_i_new
+        l_i  += l_ij
+
     # rematerialize offsets to save registers
     start_m = tl.program_id(0)
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
