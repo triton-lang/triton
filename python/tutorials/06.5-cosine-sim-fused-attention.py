@@ -63,7 +63,7 @@ def _fwd_kernel(
         # update acc
         v = tl.load(v_ptrs + start_n * stride_vk)
         p = p.to(tl.float16)
-        acc += tl.dot(p, v)
+        acc += tl.dot(p, v) / N_CTX
         # update l_i
         l_i  += l_ij
 
@@ -79,7 +79,7 @@ def _fwd_kernel(
     out_ptrs = Out + off_o
     # final scaling of acc
     l_i = tl.load(l_ptrs)
-    acc = acc / l_i[:, None]
+    acc = acc * (N_CTX / l_i[:, None])
     tl.store(out_ptrs, acc)
 
 
