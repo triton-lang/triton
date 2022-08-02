@@ -60,14 +60,6 @@ def _fwd_kernel(
         p = tl.exp(qk - sm_scale)
         l_ij = tl.sum(p, 1)
         l_i_new = l_i + l_ij
-        # scale p
-        p_scale = 1 / l_i_new
-        p = p * p_scale[:, None]
-        # scale acc
-        acc_scale = l_i / l_i_new
-        tl.store(t_ptrs, acc_scale)
-        acc_scale = tl.load(t_ptrs)
-        acc = acc * acc_scale[:, None]
         # -- update output accumulator --
         # update acc
         v = tl.load(v_ptrs + start_n * stride_vk)
@@ -86,6 +78,8 @@ def _fwd_kernel(
     off_o = off_hz * stride_oh + offs_m[:, None] * stride_om + offs_n[None, :] * stride_on
     out_ptrs = Out + off_o
     # final scaling of acc
+    l_i = tl.load(l_ptrs)
+    acc = acc / l_i[:, None]
     tl.store(out_ptrs, acc)
 
 
@@ -252,7 +246,7 @@ class _attention_with_l2normed_qk(torch.autograd.Function):
         )
         return dq, dk, dv, None
 
-def torch_cosine_sim_attention(q, k, v, scale = 16):
+def torch_cosine_sim_attention(q, k, v, scale = 10):
     Lq, Lk, device = q.shape[-2], k.shape[-2], q.device
     q, k = map(l2norm, (q, k))
     sim = (q @ k.transpose(-1, -2)) * scale
@@ -260,7 +254,7 @@ def torch_cosine_sim_attention(q, k, v, scale = 16):
     sim = sim.masked_fill(mask, float('-inf'))
     return sim.softmax(dim=-1) @ v
 
-def triton_cosine_sim_attention(q, k, v, scale = 16):
+def triton_cosine_sim_attention(q, k, v, scale = 10):
     q, k = map(l2norm, (q, k))
     return _attention_with_l2normed_qk.apply(q, k, v, scale)
 
@@ -270,7 +264,7 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0, std=.5).requires_grad_()
     k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0, std=.5).requires_grad_()
     v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0, std=.5).requires_grad_()
-    sm_scale = 16
+    sm_scale = 10
     dout = torch.randn_like(q)
     # reference implementation
     ref_out = torch_cosine_sim_attention(q, k, v, scale=sm_scale)
