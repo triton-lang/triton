@@ -24,4 +24,25 @@ def ConvertTritonToTritonGPU: Pass<"convert-triton-to-tritongpu", "mlir::ModuleO
    ];
 }
 
+
+def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"> {
+    let summary = "Convert TritonGPU to LLVM";
+    let description = [{
+
+    }];
+    let constructor = "mlir::triton::createConvertTritonGPUToLLVMPass()";
+
+    let dependentDialects = ["mlir::arith::ArithmeticDialect",
+                             "mlir::StandardOpsDialect",
+                             "mlir::scf::SCFDialect",
+                             "mlir::triton::TritonDialect",
+                             "mlir::triton::gpu::TritonGPUDialect"];
+
+   let options = [
+       Option<"numWarps", "num-warps",
+              "int32_t", /*default*/"4",
+              "number of warps">
+   ];
+}
+
 #endif
