@@ -13,7 +13,8 @@
 namespace mlir {
 namespace test {
 void registerTestAlignmentPass();
-}
+void registerTestAllocationPass();
+} // namespace test
 } // namespace mlir
 
 int main(int argc, char **argv) {
@@ -21,6 +22,7 @@ int main(int argc, char **argv) {
   mlir::registerTritonPasses();
   mlir::registerTritonGPUPasses();
   mlir::test::registerTestAlignmentPass();
+  mlir::test::registerTestAllocationPass();
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::registerConvertTritonGPUToLLVMPass();
 
