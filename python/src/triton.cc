@@ -11,6 +11,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
 
+#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVM.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPU.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
@@ -1634,8 +1635,12 @@ void init_triton_ir(py::module &&m) {
            [](mlir::PassManager &self) {
              self.addPass(mlir::createTritonGPUCombineOpsPass());
            })
-      .def("add_triton_gpu_verifier_pass", [](mlir::PassManager &self) {
-        self.addPass(mlir::createTritonGPUVerifier());
+      .def("add_triton_gpu_verifier_pass",
+           [](mlir::PassManager &self) {
+             self.addPass(mlir::createTritonGPUVerifier());
+           })
+      .def("triton_gpu_to_llvm", [](mlir::PassManager &self) {
+        self.addPass(mlir::triton::createConvertTritonGPUToLLVMPass());
       });
 }
 

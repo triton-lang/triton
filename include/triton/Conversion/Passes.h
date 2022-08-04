@@ -1,6 +1,7 @@
 #ifndef TRITON_CONVERSION_PASSES_H
 #define TRITON_CONVERSION_PASSES_H
 
+#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVM.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPU.h"
 
 namespace mlir {
