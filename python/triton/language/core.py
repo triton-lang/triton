@@ -556,17 +556,21 @@ class tensor:
     def __getitem__(self, slices, _builder=None):
         if isinstance(slices, slice):
             slices = [slices]
-        src_shape = self.shape
-        dst_shape = []
-        curr = 0
-        for sl in slices:
+        ret = self
+        n_inserted = 0
+        for dim, sl in enumerate(slices):
             if isinstance(sl, constexpr) and sl.value is None:
-                dst_shape.append(1)
+                ret = semantic.expand_dims(ret, dim + n_inserted, _builder)
+                n_inserted += 1
             elif sl == slice(None, None, None):
-                dst_shape.append(src_shape[curr].value)
-                curr += 1
-        ret = semantic.view(self, dst_shape, _builder)
+                pass
+            else:
+                assert False, "unsupported"
         return ret
+
+    # x[:, None, :, None]
+    # x = expand_dims(x, axis=1)
+    # x = expand_dims(x, axis=2)
 
     @builtin
     def to(self, dtype, bitcast=False, _builder=None):

@@ -133,6 +133,16 @@ def TT_GEPOp : TT_Op<"getelementptr",
 //
 // Shape Manipulation Ops
 //
+def TT_ExpandDimsOp : TT_Op<"expand_dims", [NoSideEffect, SameOperandsAndResultElementType]> {
+    let summary = "expand_dims";
+
+    let arguments = (ins TT_Tensor:$src, I32Attr:$axis);
+
+    let results = (outs TT_Tensor:$result);
+
+    let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
+}
+
 def TT_ViewOp : TT_Op<"view", [NoSideEffect, SameOperandsAndResultElementType]> {
     let summary = "view";
 
