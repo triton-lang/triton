@@ -463,6 +463,13 @@ def view(input: tl.tensor,
     return tl.tensor(builder.create_view(input.handle, dst_shape), ret_ty)
 
 
+def expand_dims(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
+    dst_shape = [s for s in input.type.shape]
+    dst_shape.insert(axis, 1)
+    ret_ty = tl.block_type(input.type.scalar, dst_shape)
+    return tl.tensor(builder.create_expand_dims(input.handle, axis), ret_ty)
+
+
 def cat(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder) -> tl.tensor:
     # TODO: check types
     return tl.tensor(builder.create_cat(lhs.handle, rhs.handle), lhs.type)
