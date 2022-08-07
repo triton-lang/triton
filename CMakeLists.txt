@@ -176,15 +176,17 @@ add_library(triton SHARED ${PYTHON_SRC})
 set(TRITON_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(TRITON_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 
+get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
+get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
+
 target_link_libraries(triton
   ${PYTHON_LIBRARIES}
-  TritonIR
   TritonAnalysis
   TritonTransforms
-  TritonDriver
-  TritonToTritonGPU
-  TritonGPUIR
   TritonGPUTransforms
+  TritonDriver
+  ${dialect_libs}
+  ${conversion_libs}
   # optimizations
   MLIRPass
   MLIRTransforms
