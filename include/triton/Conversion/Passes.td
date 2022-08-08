@@ -37,12 +37,6 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
                              "mlir::scf::SCFDialect",
                              "mlir::triton::TritonDialect",
                              "mlir::triton::gpu::TritonGPUDialect"];
-
-   let options = [
-       Option<"numWarps", "num-warps",
-              "int32_t", /*default*/"4",
-              "number of warps">
-   ];
 }
 
 #endif

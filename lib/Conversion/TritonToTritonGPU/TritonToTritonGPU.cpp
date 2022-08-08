@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
+#include "llvm/ADT/APSInt.h"
 #include <numeric>
 
 using namespace mlir;
@@ -375,6 +376,8 @@ void populateSCFPatterns(TritonGPUTypeConverter &typeConverter,
 class ConvertTritonToTritonGPU
     : public ConvertTritonToTritonGPUBase<ConvertTritonToTritonGPU> {
 public:
+  ConvertTritonToTritonGPU() = default;
+  // constructor with some parameters set explicitly.
   ConvertTritonToTritonGPU(int numWarps) { this->numWarps = numWarps; }
 
   void runOnOperation() override {
@@ -395,6 +398,13 @@ public:
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
       return signalPassFailure();
 
+    auto inti = llvm::APSInt(32, false);
+    auto i32_ty = IntegerType::get(mod->getContext(), 32);
+
+    mod->setAttr(
+        AttrNumWarpsName,
+        IntegerAttr::get(i32_ty, llvm::APInt(32, numWarps.getValue())));
+
     // update layouts
     //  broadcast src => multicast, dst => broadcasted
     // if (failed(target.refineLayouts(mod, numWarps)))
@@ -407,4 +417,9 @@ public:
 std::unique_ptr<OperationPass<ModuleOp>>
 mlir::triton::createConvertTritonToTritonGPUPass(int numWarps) {
   return std::make_unique<::ConvertTritonToTritonGPU>(numWarps);
+}
+
+std::unique_ptr<OperationPass<ModuleOp>>
+mlir::triton::createConvertTritonToTritonGPUPass() {
+  return std::make_unique<::ConvertTritonToTritonGPU>();
 }

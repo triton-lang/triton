@@ -5,7 +5,11 @@
 // CHECK: .target sm_80
 // CHECK: .address_size 64
 
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+
 func @test_empty_kernel(%lb : index, %A : !tt.ptr<f16>) {
 
   return
+}
+
 }
