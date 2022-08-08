@@ -5,8 +5,10 @@
 #include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPU.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include <numeric>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -163,7 +165,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
   }
 
 private:
-  int NumWarps{-1};
+  int NumWarps{0};
 };
 
 struct ReturnOpConversion : public ConvertOpToLLVMPattern<::mlir::ReturnOp> {
@@ -188,6 +190,24 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<::mlir::ReturnOp> {
   }
 };
 
+// Extract numWarps information from TritonGPU module, return 0 if failed.
+// This is a naive implementation, it assumes that all the blocked layout should
+// have the same numWarps setting in a module, it just find a blocked layout
+// encoding and return the warpsPerCTA field.
+int extractNumWarps(mlir::ModuleOp module) {
+  int numWarps{};
+  if (module->hasAttr(AttrNumWarpsName))
+    numWarps = module->getAttr(AttrNumWarpsName)
+                   .dyn_cast<IntegerAttr>()
+                   .getValue()
+                   .getZExtValue();
+  else
+    llvm::report_fatal_error(
+        "TritonGPU module should contain a triton_gpu.num-warps attribute");
+
+  return numWarps;
+}
+
 } // namespace
 
 void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
@@ -200,8 +220,6 @@ class ConvertTritonGPUToLLVM
     : public ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
 public:
   ConvertTritonGPUToLLVM() = default;
-  // For manually overwrite the numWarps option
-  explicit ConvertTritonGPUToLLVM(int numWarps) { this->numWarps = numWarps; }
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -214,6 +232,8 @@ public:
     // Add arith's patterns to help convert scalar expression to LLVM.
     mlir::arith::populateArithmeticToLLVMConversionPatterns(typeConverter,
                                                             patterns);
+
+    int numWarps = extractNumWarps(mod);
 
     populateTritonToLLVMPatterns(typeConverter, patterns, numWarps);
 
