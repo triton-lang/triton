@@ -69,18 +69,21 @@ Value* geper::operator()(Value *ptr, Value* off, const std::string& name){
   if(auto* gep = dyn_cast<GetElementPtrInst>(ptr))
   if(ConstantInt* cst1 = dyn_cast<ConstantInt>(gep->idx_begin()))
   if(ConstantInt* cst2 = dyn_cast<ConstantInt>(off)){
-    return (*builder_)->CreateGEP(gep->getPointerOperand(),
-                                  (*builder_)->CreateAdd(cst1, cst2));
+    return (*builder_)->CreateGEP(gep->getPointerOperand()->getType()->getScalarType()->getPointerElementType(),
+                                  gep->getPointerOperand(), (*builder_)->CreateAdd(cst1, cst2));
   }
   // ptr + (off + cst) -> (ptr + off) + cst
   if(auto* bin = dyn_cast<BinaryOperator>(off))
   if(bin->getOpcode() == llvm::BinaryOperator::BinaryOps::Add)
   if(ConstantInt* cst = dyn_cast<ConstantInt>(bin->getOperand(1))){
-    return (*builder_)->CreateGEP((*builder_)->CreateGEP(ptr, bin->getOperand(0)),
-                                  bin->getOperand(1));
+    Value *gep = (*builder_)->CreateGEP(ptr->getType()->getScalarType()->getPointerElementType(),
+                                        ptr, bin->getOperand(0));
+    return (*builder_)->CreateGEP(gep->getType()->getScalarType()->getPointerElementType(),
+                                  gep, bin->getOperand(1));
   }
   // default
- return (*builder_)->CreateGEP(ptr, off, name);
+  return (*builder_)->CreateGEP(ptr->getType()->getScalarType()->getPointerElementType(),
+                                ptr, off, name);
 }
 
 //Value* geper::operator()(Type *ty, Value *ptr, std::vector<Value *> vals, const std::string &name) {
