@@ -20,6 +20,15 @@ public:
 
 namespace triton {
 
+// Names for identifying different NVVM annotations. It is used as attribute
+// names in MLIR modules. Refer to
+// https://docs.nvidia.com/cuda/nvvm-ir-spec/index.html#supported-properties for
+// the full list.
+struct NVVMMetadataField {
+  static constexpr char MaxNTid[] = "nvvm.maxntid";
+  static constexpr char Kernel[] = "nvvm.kernel";
+};
+
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass();
 
 } // namespace triton
