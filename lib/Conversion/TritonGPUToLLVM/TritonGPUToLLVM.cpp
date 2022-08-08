@@ -155,7 +155,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
     auto i32 = IntegerType::get(ctx, 32);
     // Set an attribute for maxntidx, it could be used in latter LLVM codegen
     // for `nvvm.annotation` metadata.
-    newFuncOp->setAttr("nvvm.maxntidx",
+    newFuncOp->setAttr(NVVMMetadataField::MaxNTid,
                        rewriter.getIntegerAttr(i32, 32 * NumWarps));
 
     rewriter.eraseOp(funcOp);
