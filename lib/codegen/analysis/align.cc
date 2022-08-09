@@ -103,15 +103,15 @@ std::vector<align::cst_info> align::populate_is_constant_reshape(ir::reshape_ins
     cst_info ax ;
     if(x_shapes[d] == 1)
       ax = {1, op_cst[current].value};
-    else if(!is_skewed
-            && x_shapes[d] == op_shapes[current])
+    else if (!is_skewed && current < op_shapes.size() &&
+             x_shapes[d] == op_shapes[current]) {
       ax = {x_shapes[d], op_cst[current++].value};
-    else {
+    } else {
       is_skewed = true;
       ax = {x_shapes[d], 0};
     }
     result.push_back(ax);
-  }
+    }
   return add_to_cache(x, result, is_constant_);
 }
 
@@ -268,10 +268,10 @@ std::vector<unsigned> align::populate_max_contiguous_reshape(ir::reshape_inst* x
   for(size_t d = 0; d < shapes.size(); d ++){
     if(shapes[d] == 1)
       result.push_back(1);
-    else if(!is_skewed
-            && shapes[d] == op_shapes[current])
+    else if (!is_skewed && current < op_shapes.size() &&
+             shapes[d] == op_shapes[current]) {
       result.push_back(op_mc[current++]);
-    else {
+    } else {
       is_skewed = true;
       result.push_back(1);
     }
@@ -409,10 +409,10 @@ std::vector<unsigned> align::populate_starting_multiple_reshape(ir::reshape_inst
   for(size_t d = 0; d < shapes.size(); d ++){
     if(shapes[d] == 1)
       result[d] = 1;
-    else if(!is_skewed
-            && shapes[d] == op_shapes[current])
+    else if (!is_skewed && current < op_shapes.size() &&
+             op_shapes[current] == shapes[d]) {
       result[d] = op[current++];
-    else {
+    } else {
       is_skewed = true;
       result[d] = 1;
     }
