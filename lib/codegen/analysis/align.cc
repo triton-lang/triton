@@ -99,19 +99,19 @@ std::vector<align::cst_info> align::populate_is_constant_reshape(ir::reshape_ins
   auto op_cst = populate_is_constant(op);
   unsigned current = 0;
   bool is_skewed = false;
-  for(size_t d = 0; d < x_shapes.size(); d ++){
-    cst_info ax ;
-    if(x_shapes[d] == 1)
+  for (size_t d = 0; d < x_shapes.size(); d++) {
+    cst_info ax;
+    if (x_shapes[d] == 1 && current < op_cst.size()) {
       ax = {1, op_cst[current].value};
-    else if (!is_skewed && current < op_shapes.size() &&
-             x_shapes[d] == op_shapes[current]) {
+    } else if (!is_skewed && current < op_shapes.size() &&
+               x_shapes[d] == op_shapes[current]) {
       ax = {x_shapes[d], op_cst[current++].value};
     } else {
       is_skewed = true;
       ax = {x_shapes[d], 0};
     }
     result.push_back(ax);
-    }
+  }
   return add_to_cache(x, result, is_constant_);
 }
 
