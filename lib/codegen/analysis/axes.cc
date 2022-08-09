@@ -35,7 +35,8 @@ void axes::update_graph_reshape(ir::instruction *i) {
   unsigned current = 0;
   bool is_skewed = false;
   for(unsigned d = 0; d < res_shapes.size(); d ++){
-    bool same_shape = res_shapes[d] == op_shapes[current];
+    bool same_shape =
+        current < op_shapes.size() && res_shapes[d] == op_shapes[current];
     // either add edge between axis or just add a node in the graph
     if(!is_skewed && same_shape)
       graph_.add_edge({i, d}, {op, current++});
