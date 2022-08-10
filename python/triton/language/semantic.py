@@ -1090,13 +1090,17 @@ def sqrt(x: tl.tensor, builder: ir.builder) -> tl.tensor:
 
 ##
 
-def multiple_of(x: tl.tensor, value: int) -> tl.tensor:
-    x.handle.multiple_of(value)
+def multiple_of(x: tl.tensor, values: List[int]) -> tl.tensor:
+    if len(x.shape) != len(values):
+        raise ValueError("Shape of input to multiple_of does not match the length of values")
+    x.handle.multiple_of(values)
     return x
 
 
-def max_contiguous(x: tl.tensor, value: int) -> tl.tensor:
-    x.handle.max_contiguous(value)
+def max_contiguous(x: tl.tensor, values: List[int]) -> tl.tensor:
+    if len(x.shape) != len(values):
+        raise ValueError("Shape of input to max_contiguous does not match the length of values")
+    x.handle.max_contiguous(values)
     return x
 
 
