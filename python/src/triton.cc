@@ -625,13 +625,13 @@ void init_triton_ir(py::module &&m) {
       .def(py::init<>());
 
   py::class_<ir::value>(m, "value")
-      .def("multiple_of", [](ir::value *self, int val) {
+      .def("multiple_of", [](ir::value *self, std::vector<unsigned> val) {
         if (auto *instr = dynamic_cast<ir::instruction*>(self)) {
           instr->set_metadata(ir::metadata::multiple_of, val);
         } else
           throw std::runtime_error("multiple_of");
       })
-      .def("max_contiguous", [](ir::value *self, int val) {
+      .def("max_contiguous", [](ir::value *self, std::vector<unsigned> val) {
         if (auto *instr = dynamic_cast<ir::instruction*>(self)) {
           instr->set_metadata(ir::metadata::max_contiguous, val);
         } else
