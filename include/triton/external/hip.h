@@ -1,3 +1,6 @@
+#ifndef __external_hip_h__
+#define __external_hip_h__
+
 /*
  * @brief hipError_t
  * @enum
@@ -286,3 +289,5 @@ typedef enum hipFuncCache_t {
 #define HIP_LAUNCH_PARAM_BUFFER_POINTER ((void*)0x01)
 #define HIP_LAUNCH_PARAM_BUFFER_SIZE ((void*)0x02)
 #define HIP_LAUNCH_PARAM_END ((void*)0x03)
+
+#endif

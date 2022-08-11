@@ -1,4 +1,5 @@
-#include "triton/driver/dispatch.h"
+#include "triton/external/CUDA/cuda.h"
+#include "triton/external/hip.h"
 #include <string>
 
 namespace llvm {
