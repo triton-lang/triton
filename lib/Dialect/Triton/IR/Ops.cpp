@@ -112,8 +112,19 @@ OpFoldResult BroadcastOp::fold(ArrayRef<Attribute> operands) {
   auto constOperand = src().getDefiningOp<arith::ConstantOp>();
   if (!constOperand)
     return {};
+
   auto shapedType = getType().cast<ShapedType>();
-  return SplatElementsAttr::get(shapedType, {constOperand.getValue()});
+  auto value = constOperand.getValue();
+  if (auto denseElemsAttr = value.dyn_cast<DenseElementsAttr>()) {
+    if (!denseElemsAttr.isSplat())
+      return {};
+    return SplatElementsAttr::get(shapedType,
+                                  denseElemsAttr.getSplatValue<Attribute>());
+  } else if (value.getType().isIntOrIndexOrFloat()) {
+    return SplatElementsAttr::get(shapedType, value);
+  } else {
+    return {};
+  }
 }
 
 } // namespace triton

@@ -8,6 +8,38 @@
 using namespace mlir;
 using namespace mlir::triton::gpu;
 
+static LogicalResult parseIntAttrValue(AsmParser &parser, const Attribute &attr,
+                                       unsigned &value, StringRef desc) {
+  auto intAttr = attr.dyn_cast<IntegerAttr>();
+  if (!intAttr) {
+    parser.emitError(parser.getNameLoc(), "expected an integer type in ")
+        << desc;
+    return failure();
+  }
+  if (intAttr.getType().isSignedInteger()) {
+    int64_t attrVal = intAttr.getSInt();
+    if (attrVal < 0) {
+      parser.emitError(parser.getNameLoc(),
+                       "expected an unsigned integer value in ")
+          << desc;
+      return failure();
+    }
+    value = attrVal;
+  } else if (intAttr.getType().isSignlessInteger()) {
+    int64_t attrVal = intAttr.getInt();
+    if (attrVal < 0) {
+      parser.emitError(parser.getNameLoc(),
+                       "expected an unsigned integer value in ")
+          << desc;
+      return failure();
+    }
+    value = attrVal;
+  } else {
+    value = intAttr.getUInt();
+  }
+  return success();
+}
+
 // parse an array of integers
 static LogicalResult parseIntArrayAttr(AsmParser &parser,
                                        const NamedAttribute &attr,
@@ -19,26 +51,17 @@ static LogicalResult parseIntArrayAttr(AsmParser &parser,
     return failure();
   }
   for (Attribute i : arrayAttr) {
-    auto intAttr = i.dyn_cast<IntegerAttr>();
-    if (!intAttr) {
-      parser.emitError(parser.getNameLoc(), "expected an integer value in ")
-          << desc;
+    unsigned value;
+    if (parseIntAttrValue(parser, i, value, desc).failed())
       return failure();
-    }
-    res.push_back(intAttr.getUInt());
+    res.push_back(value);
   }
   return success();
 };
 
 static LogicalResult parseUInt(AsmParser &parser, const NamedAttribute &attr,
                                unsigned &value, StringRef desc) {
-  auto intAttr = attr.getValue().dyn_cast<IntegerAttr>();
-  if (!intAttr) {
-    parser.emitError(parser.getNameLoc(), "expected an integer ") << desc;
-    return failure();
-  }
-  value = intAttr.getUInt();
-  return success();
+  return parseIntAttrValue(parser, attr.getValue(), value, desc);
 };
 
 //===----------------------------------------------------------------------===//
@@ -214,8 +237,7 @@ public:
       os << "blocked";
       return AliasResult::FinalAlias;
     }
-    OpAsmDialectInterface::getAlias(attr, os);
-    return AliasResult::FinalAlias;
+    return OpAsmDialectInterface::getAlias(attr, os);
   }
 };
 
