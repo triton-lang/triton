@@ -33,11 +33,13 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
     let constructor = "mlir::triton::createConvertTritonGPUToLLVMPass()";
 
     let dependentDialects = ["mlir::arith::ArithmeticDialect",
-                             "mlir::StandardOpsDialect",
+                             "mlir::gpu::GPUDialect",
                              "mlir::scf::SCFDialect",
                              "mlir::LLVM::LLVMDialect",
                              "mlir::triton::TritonDialect",
-                             "mlir::triton::gpu::TritonGPUDialect"];
+                             "mlir::triton::gpu::TritonGPUDialect",
+                             "mlir::NVVM::NVVMDialect",
+                             "mlir::StandardOpsDialect"];
 }
 
 #endif
