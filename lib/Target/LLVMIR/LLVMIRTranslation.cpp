@@ -4,6 +4,8 @@
 #include "mlir/ExecutionEngine/OptUtils.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
+#include "mlir/Pass/Pass.h"
+#include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
@@ -77,7 +79,7 @@ void extractNVVMMetadata(mlir::ModuleOp module,
 }
 
 std::unique_ptr<llvm::Module>
-TranslateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
+translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
   auto context = module->getContext();
   DialectRegistry registry;
   registerLLVMDialectTranslation(registry);
@@ -112,6 +114,27 @@ TranslateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
   }
 
   return llvmModule;
+}
+
+std::unique_ptr<llvm::Module>
+translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
+                           mlir::ModuleOp module) {
+  mlir::PassManager pm(module->getContext());
+  applyPassManagerCLOptions(pm);
+
+  pm.addPass(createConvertTritonGPUToLLVMPass());
+
+  if (failed(pm.run(module))) {
+    llvm::errs() << "Pass execution failed";
+    return nullptr;
+  }
+
+  auto llvmir = translateLLVMToLLVMIR(llvmContext, module);
+  if (!llvmir) {
+    llvm::errs() << "Translate to LLVM IR failed";
+  }
+
+  return llvmir;
 }
 
 } // namespace triton

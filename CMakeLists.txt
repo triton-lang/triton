@@ -69,7 +69,7 @@ if("${LLVM_LIBRARY_DIR}" STREQUAL "")
 # sometimes we don't want to use llvm-config, since it may have been downloaded for some specific linux distros
 else()
     set(LLVM_LDFLAGS "-L${LLVM_LIBRARY_DIR}")
-    set(LLVM_LIBRARIES 
+    set(LLVM_LIBRARIES
 libLLVMNVPTXCodeGen.a
 libLLVMNVPTXDesc.a
 libLLVMNVPTXInfo.a
@@ -185,11 +185,18 @@ target_link_libraries(triton
   TritonTransforms
   TritonGPUTransforms
   TritonDriver
+  TritonLLVMIR
+  TritonPTX
   ${dialect_libs}
   ${conversion_libs}
   # optimizations
   MLIRPass
   MLIRTransforms
+  MLIRIR
+  MLIRLLVMIR
+  MLIRSupport
+  MLIRTargetLLVMIRExport
+  MLIRExecutionEngine
 )
 
 target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
