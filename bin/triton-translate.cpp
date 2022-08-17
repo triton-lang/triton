@@ -100,7 +100,6 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
   llvm::InitLLVM y(argc, argv);
 
   registerAsmPrinterCLOptions();
-
   registerMLIRContextCLOptions();
   llvm::cl::ParseCommandLineOptions(argc, argv, toolName);
 
@@ -118,7 +117,7 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
   }
 
   llvm::LLVMContext llvmContext;
-  auto llvmir = TranslateLLVMToLLVMIR(&llvmContext, *module);
+  auto llvmir = translateTritonGPUToLLVMIR(&llvmContext, *module);
   if (!llvmir) {
     llvm::errs() << "Translate to LLVM IR failed";
   }

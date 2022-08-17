@@ -14,9 +14,14 @@ class ModuleOp;
 namespace mlir {
 namespace triton {
 
+// Translate TritonGPU dialect to LLVMIR, return null if failed.
+std::unique_ptr<llvm::Module>
+translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
+                           mlir::ModuleOp module);
+
 // Translate mlir LLVM dialect to LLVMIR, return null if failed.
 std::unique_ptr<llvm::Module>
-TranslateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module);
+translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module);
 
 } // namespace triton
 } // namespace mlir

@@ -791,13 +791,28 @@ def optimize_tritongpu_ir(mod, num_stages):
     return mod
 
 
-def make_ptx(mod):
-    # TODO
-    return mod
+def make_ptx(mod, device):
+    '''
+    Translate TritonGPU module to PTX code.
+    :param mod: a TritonGPU dialect module
+    :return: str
+    '''
+    return _triton.translate_triton_gpu_to_ptx(mod, device)
 
 
-def compile(fn, signature, constants=dict(), attributes=dict(), num_warps=4, num_stages=3, output="ttgir"):
-    assert output in ["ttir", "ttgir", "ptx"]
+def make_cubin(ptx, device):
+    '''
+    Compile TritonGPU module to cubin.
+    :param ptx: ptx code
+    :param device: CUDA device
+    :return: str
+    '''
+    return _triton.compile_ptx_to_cubin(ptx, device)
+
+
+def compile(fn, signature, device=-1, constants=dict(), attributes=dict(), num_warps=4, num_stages=3, output="ttgir"):
+    valid_outputs = ("ttir", "ttgir", "ptx", "cubin")
+    assert output in valid_outputs, "output should be one of [%s], but get \"%s\"" % (','.join(valid_outputs), output)
     # triton-ir
     module = make_triton_ir(fn, signature, constants, attributes)
     if output == "ttir":
@@ -807,7 +822,15 @@ def compile(fn, signature, constants=dict(), attributes=dict(), num_warps=4, num
     module = optimize_tritongpu_ir(module, num_stages)
     if output == "ttgir":
         return module.str()
-    # ptx
+
+    assert device >= 0, "device should be provided."
+
+    ptx = make_ptx(module, device)
     if output == "ptx":
-        return make_ptx(module)
+        return ptx
+
+    cubin = make_cubin(ptx, device)
+    if output == "cubin":
+        return cubin
+
     assert False
