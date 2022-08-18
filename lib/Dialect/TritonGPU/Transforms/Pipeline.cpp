@@ -47,6 +47,9 @@ class LoopPipeliner {
 
   void setValueMapping(Value origin, Value newValue, int stage);
 
+  /// return true if this op uses any of `loads`
+  bool isDirectUserOfAsyncLoad(Operation &op);
+
 public:
   LoopPipeliner(scf::ForOp forOp, int numStages)
       : forOp(forOp), numStages(numStages) {
@@ -94,6 +97,19 @@ void LoopPipeliner::collectDeps(Value v, int stages, DenseSet<Value> &deps) {
     for (Value op : v.getDefiningOp()->getOperands())
       collectDeps(op, stages, deps);
   }
+}
+
+bool LoopPipeliner::isDirectUserOfAsyncLoad(Operation &op) {
+  for (Value loadOp : loads) {
+    assert(loadOp.hasOneUse() &&
+           "load should only have one use (ConvertLayout)");
+    Value loadUseResult = loadOp.getUsers().begin()->getResult(0);
+    for (Value opOperand : op.getOperands()) {
+      if (opOperand == loadUseResult)
+        return true;
+    }
+  }
+  return false;
 }
 
 /// A load instruction can be pipelined if:
@@ -318,7 +334,14 @@ scf::ForOp LoopPipeliner::createNewForOp() {
     mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
 
   // 2.1 clone the loop body, replace original args with args of the new ForOp
+  // Insert async wait if necessary.
+  bool asyncWaitInserted = false;
   for (Operation &op : forOp.getBody()->without_terminator()) {
+    if (!asyncWaitInserted && isDirectUserOfAsyncLoad(op)) {
+      asyncWaitInserted = true;
+      builder.create<triton::gpu::AsyncWaitOp>(op.getLoc(),
+                                               loads.size() * (numStages - 1));
+    }
     Operation *newOp = builder.clone(op, mapping);
     // update mapping of results
     for (unsigned dstIdx : llvm::seq(unsigned(0), op.getNumResults()))
