@@ -20,7 +20,7 @@ class TTG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonGPU_Dialect, mnemonic, traits>;
 
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
-                                 [NoSideEffect, SameOperandsAndResultType]> {
+                                 [NoSideEffect]> {
   let summary = "convert layout";
 
   let arguments = (ins TT_Tensor:$src);
@@ -65,7 +65,7 @@ def TTG_CopyAsyncOp : TTG_Op<"copy_async",
 // This is needed because Arith's Cmp ops don't
 // handle encodings
 // https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Arithmetic/IR/ArithmeticOps.td#L111
-def TTG_CmpIOp : TTG_Op<"cmpi"> {
+def TTG_CmpIOp : TTG_Op<"cmpi", [NoSideEffect]> {
   let summary = "integer comparison operation";
 
   let description = [{}];

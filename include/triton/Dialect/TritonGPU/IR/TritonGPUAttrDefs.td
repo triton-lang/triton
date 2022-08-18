@@ -37,7 +37,7 @@ Right now, Triton implements two classes of layouts: shared, and distributed.
 // Shared Layout Encoding
 //===----------------------------------------------------------------------===//
 
-def TritonGPUSharedEncodingAttr : TritonGPU_Attr<"TritonGPUSharedEncoding"> {
+def SharedEncodingAttr : TritonGPU_Attr<"SharedEncoding"> {
   let mnemonic = "shared";
 
   let description = [{
@@ -70,9 +70,7 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
 // Distributed Layout Encoding
 //===----------------------------------------------------------------------===//
 
-class TritonGPUDistributedEncodingAttr : TritonGPU_Attr<"TritonGPUDistributedEncoding"> {
-  let mnemonic = "distributed";
-
+class DistributedEncoding<string name> : TritonGPU_Attr<name> {
   let description = [{
 Distributed encodings have a layout function that is entirely characterized
 by a d-dimensional tensor L. Note that L doesn't need to have the same shape
@@ -97,12 +95,11 @@ L(A) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
   }];
 }
 
-
 //===----------------------------------------------------------------------===//
 // Blocked Layout Encoding
 //===----------------------------------------------------------------------===//
 
-def TritonGPUBlockedEncodingAttr : TritonGPU_Attr<"TritonGPUBlockedEncoding"> {
+def BlockedEncodingAttr : DistributedEncoding<"BlockedEncoding"> {
   let mnemonic = "blocked";
 
   let description = [{
@@ -174,6 +171,10 @@ for
     }]>
   ];
 
+  let extraClassDeclaration = [{
+    SliceEncodingAttr squeeze(int axis);
+  }];
+
 
   let parameters = (
     ins
@@ -197,7 +198,7 @@ for
 //===----------------------------------------------------------------------===//
 // TODO: MMAv1 and MMAv2 should be two instances of the same class
 
-def TritonGPUMmaEncodingAttr : TritonGPU_Attr<"TritonGPUMmaEncoding"> {
+def MmaEncodingAttr : DistributedEncoding<"MmaEncoding"> {
   let mnemonic = "mma";
 
   let description = [{
@@ -280,6 +281,35 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     ins
     "unsigned":$version,
     ArrayRefParameter<"unsigned">:$warpsPerCTA
+  );
+}
+
+def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
+  let mnemonic = "slice";
+
+  let description = [{
+    TODO: improve docs
+
+    A = [x  x  x  x  x  x  x  x]
+        [x  x  x  x  x  x  x  x]
+    L_parent = [0  1  2  3 ]
+               [4  5  6  7 ]
+               [8  9  10 11]
+               [12 13 14 15]
+    dim = 0
+
+    Then the data of A would be distributed as follow between the 16 CUDA threads:
+    L(A) = [ {0,4,8,12} , {1,5,9,13} , ... {3,7,11,15} ]
+
+    This is useful for constructing the inverse layout of an expand_dims operation during some optimization passes.
+
+  }];
+  
+  let parameters = (
+    ins
+    "unsigned":$dim,
+    // TODO: constraint here to only take distributed encodings
+    "Attribute":$parent
   );
 }
 
