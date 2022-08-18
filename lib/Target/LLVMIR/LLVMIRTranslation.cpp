@@ -8,8 +8,10 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
+#include "mlir/Transforms/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVM.h"
 #include "triton/driver/llvm.h"
 #include "llvm/IR/Constants.h"
@@ -82,7 +84,8 @@ std::unique_ptr<llvm::Module>
 translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
   auto context = module->getContext();
   DialectRegistry registry;
-  registerLLVMDialectTranslation(registry);
+  mlir::registerLLVMDialectTranslation(registry);
+  mlir::registerNVVMDialectTranslation(registry);
   context->appendDialectRegistry(registry);
 
   llvm::DenseMap<llvm::StringRef, NVVMMetadata> nvvmMetadata;
@@ -123,6 +126,8 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
   applyPassManagerCLOptions(pm);
 
   pm.addPass(createConvertTritonGPUToLLVMPass());
+  // Conanicalize to eliminate the remaining UnrealizedConversionCastOp
+  pm.addPass(mlir::createCanonicalizerPass());
 
   if (failed(pm.run(module))) {
     llvm::errs() << "Pass execution failed";
