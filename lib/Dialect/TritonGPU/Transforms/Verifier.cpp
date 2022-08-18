@@ -33,7 +33,7 @@ private:
           Attribute encoding = tensorType.getEncoding();
           if (!encoding)
             return dotOp.emitError() << name << " should have encoding";
-          if (!encoding.isa<triton::gpu::TritonGPUSharedEncodingAttr>())
+          if (!encoding.isa<triton::gpu::SharedEncodingAttr>())
             return dotOp.emitError() << name << " should be of shared layout";
         } else
           return dotOp.emitError()
@@ -49,8 +49,8 @@ private:
           Attribute encoding = tensorType.getEncoding();
           if (!encoding)
             return dotOp.emitError() << name << " should have encoding";
-          if (!encoding.isa<triton::gpu::TritonGPUMmaEncodingAttr>() &&
-              !encoding.isa<triton::gpu::TritonGPUBlockedEncodingAttr>())
+          if (!encoding.isa<triton::gpu::MmaEncodingAttr>() &&
+              !encoding.isa<triton::gpu::BlockedEncodingAttr>())
             return dotOp.emitError()
                    << name << " should be of distributed layout";
           if (name == 'c')

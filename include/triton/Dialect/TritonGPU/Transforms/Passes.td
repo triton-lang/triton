@@ -60,6 +60,19 @@ def TritonGPUCombineOps : Pass<"tritongpu-combine", "mlir::ModuleOp"> {
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonGPUCanonicalizeLoops: Pass<"tritongpu-canonicalize-loops", "mlir::ModuleOp"> {
+  let summary = "canonicalize scf.ForOp ops";
+
+  let description = [{
+    This implements some optimizations that are missing in the standard scf.ForOp
+    canonicalizer.
+  }];
+
+  let constructor = "mlir::createTritonGPUCanonicalizeLoopsPass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+}
+
 def TritonGPUVerifier : Pass<"tritongpu-verifier", "mlir::ModuleOp"> {
   let summary = "verify TritonGPU IR";
 

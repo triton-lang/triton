@@ -225,7 +225,7 @@ def TT_DotOp : TT_Op<"dot", [NoSideEffect,
     // let hasCanonicalizer = 1;
 }
 
-def TT_ReduceOp : TT_Op<"reduce"> {
+def TT_ReduceOp : TT_Op<"reduce", [NoSideEffect]> {
     let summary = "reduce";
 
     let arguments = (ins TT_RedOpAttr:$redOp, TT_Tensor:$operand, I32Attr:$axis);

@@ -43,8 +43,7 @@ private:
       auto type = result.getType();
       if (auto tensorType = type.dyn_cast<RankedTensorType>()) {
         auto encoding = tensorType.getEncoding();
-        if (encoding &&
-            encoding.isa<triton::gpu::TritonGPUSharedEncodingAttr>()) {
+        if (encoding && encoding.isa<triton::gpu::SharedEncodingAttr>()) {
           // Bytes could be a different value once we support padding or other
           // allocation policies.
           auto bytes = tensorType.getNumElements() *
