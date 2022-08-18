@@ -48,7 +48,8 @@ def TTG_CopyAsyncOp : TTG_Op<"copy_async",
 
   let arguments = (ins TT_PtrTensor:$ptr, BoolLike:$mask, TT_Type:$other,
                        TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict,
-                       BoolAttr:$isVolatile);
+                       BoolAttr:$isVolatile,
+                       BoolAttr:$isOtherUnspecified);
 
   let results = (outs TT_Type:$result);
 

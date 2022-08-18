@@ -226,7 +226,7 @@ void LoopPipeliner::emitPrologue() {
           newOp = builder.create<triton::gpu::CopyAsyncOp>(
               op->getLoc(), loadsMapping[loadOp].getType(), loadOp.ptr(),
               loadOp.mask(), loadOp.other(), loadOp.cache(), loadOp.evict(),
-              loadOp.isVolatile());
+              loadOp.isVolatile(), loadOp.isOtherUnspecified());
         } else
           llvm_unreachable("This should be LoadOp");
       } else
@@ -380,7 +380,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
           nextMapping.lookupOrDefault(loadOp.ptr()),
           nextMapping.lookupOrDefault(loadOp.mask()),
           nextMapping.lookupOrDefault(loadOp.other()), loadOp.cache(),
-          loadOp.evict(), loadOp.isVolatile());
+          loadOp.evict(), loadOp.isVolatile(), loadOp.isOtherUnspecified());
     } else
       nextOp = builder.clone(*op, nextMapping);
     // llvm::errs() << "epilogue cloning...: " << *op << "\n";

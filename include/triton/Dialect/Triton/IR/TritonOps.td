@@ -80,7 +80,7 @@ def TT_LoadOp : TT_Op<"load",
 
     let arguments = (ins TT_PtrTensor:$ptr, BoolLike:$mask, TT_Type:$other,
                          TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict,
-                         BoolAttr:$isVolatile);
+                         BoolAttr:$isVolatile, BoolAttr:$isOtherUnspecified);
 
     let results = (outs TT_Type:$result);
 
@@ -89,7 +89,8 @@ def TT_LoadOp : TT_Op<"load",
         OpBuilder<(ins "Value":$ptr, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
         OpBuilder<(ins "Value":$ptr, "Value":$mask, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile,
+                       "bool":$isOtherUnspecified)>
     ];
 
     let assemblyFormat = "$ptr`,` $mask`,` $other attr-dict `:` type($result)";

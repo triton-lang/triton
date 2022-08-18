@@ -230,7 +230,8 @@ struct TritonLoadPattern : public OpConversionPattern<triton::LoadOp> {
     Type retType = getTypeConverter()->convertType(op.getType());
     rewriter.replaceOpWithNewOp<triton::LoadOp>(
         op, retType, adaptor.ptr(), adaptor.mask(), adaptor.other(),
-        adaptor.cache(), adaptor.evict(), adaptor.isVolatile());
+        adaptor.cache(), adaptor.evict(), adaptor.isVolatile(),
+        adaptor.isOtherUnspecified());
     return success();
   }
 };
