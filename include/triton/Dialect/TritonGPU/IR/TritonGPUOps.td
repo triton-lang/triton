@@ -34,6 +34,8 @@ def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
   let summary = "async wait";
 
   let arguments = (ins I32Attr:$num);
+
+  let assemblyFormat = "attr-dict";
 }
 
 def TTG_CopyAsyncOp : TTG_Op<"copy_async",
