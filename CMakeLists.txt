@@ -197,6 +197,7 @@ target_link_libraries(triton
   MLIRSupport
   MLIRTargetLLVMIRExport
   MLIRExecutionEngine
+  MLIRNVVMToLLVMIRTranslation
 )
 
 target_link_options(triton PRIVATE ${LLVM_LDFLAGS})

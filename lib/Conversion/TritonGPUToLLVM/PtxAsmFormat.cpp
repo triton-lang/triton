@@ -61,7 +61,7 @@ std::string PtxInstr::Operand::dump() const {
   if (repr)
     return repr(idx);
   if (!isList())
-    return llvm::formatv("%{0}", idx);
+    return llvm::formatv("${0}", idx);
   llvm::SmallVector<std::string> oprs;
   for (auto *opr : list)
     oprs.push_back(opr->dump());
@@ -72,7 +72,7 @@ PtxInstr::Operand *PtxIOInstr::newAddrOperand(mlir::Value addr,
                                               StringRef constraint, int off) {
   auto *opr = newOperand(addr, constraint);
   opr->repr = [off](int idx) -> std::string {
-    return llvm::formatv("[ %{0} + {1} ]", idx, off);
+    return llvm::formatv("[ ${0} + {1} ]", idx, off);
   };
 
   return opr;
