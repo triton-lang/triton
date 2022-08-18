@@ -1,6 +1,7 @@
 #ifndef TRITON_DIALECT_TRITON_IR_DIALECT_H_
 #define TRITON_DIALECT_TRITON_IR_DIALECT_H_
 
+#include "mlir/Dialect/GPU/GPUDialect.h"
 #include "mlir/Dialect/SCF/SCF.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/BuiltinOps.h"

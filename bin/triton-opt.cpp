@@ -14,6 +14,7 @@ namespace mlir {
 namespace test {
 void registerTestAlignmentPass();
 void registerTestAllocationPass();
+void registerTestMembarPass();
 } // namespace test
 } // namespace mlir
 
@@ -23,6 +24,7 @@ int main(int argc, char **argv) {
   mlir::registerTritonGPUPasses();
   mlir::test::registerTestAlignmentPass();
   mlir::test::registerTestAllocationPass();
+  mlir::test::registerTestMembarPass();
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::registerConvertTritonGPUToLLVMPass();
 
