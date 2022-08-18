@@ -19,24 +19,29 @@ struct TestAllocationPass
   void runOnOperation() override {
     Operation *operation = getOperation();
     auto &os = llvm::errs();
-    os << "Testing: " << operation->getName() << "\n";
-    AllocationAnalysis analysis(operation);
+    // Convert to std::string can remove quotes from op_name
+    auto op_name = SymbolTable::getSymbolName(operation).getValue().str();
+    os << op_name << "\n";
+    Allocation allocation(operation);
     operation->walk([&](Operation *op) {
+      auto scratchBufferId = allocation.getBufferId(op);
+      if (scratchBufferId != Allocation::InvalidBufferId) {
+        size_t offset = allocation.getOffset(scratchBufferId);
+        size_t size = allocation.getAllocatedSize(scratchBufferId);
+        os << "scratch offset = " << offset << ", size = " << size << "\n";
+      }
       if (op->getNumResults() < 1)
         return;
       for (Value result : op->getResults()) {
-        Type type = result.getType();
-        if (auto tensorType = type.dyn_cast<RankedTensorType>()) {
-          Attribute encoding = tensorType.getEncoding();
-          if (encoding.isa<triton::gpu::TritonGPUSharedEncodingAttr>()) {
-            size_t offset = analysis.getOffset(result);
-            size_t size = analysis.getAllocatedSize(result);
-            os << "offset = " << offset << ", size = " << size << "\n";
-          }
+        auto bufferId = allocation.getBufferId(result);
+        if (bufferId != Allocation::InvalidBufferId) {
+          size_t offset = allocation.getOffset(bufferId);
+          size_t size = allocation.getAllocatedSize(bufferId);
+          os << "offset = " << offset << ", size = " << size << "\n";
         }
       }
     });
-    os << "size = " << analysis.getSharedMemorySize() << "\n";
+    os << "size = " << allocation.getSharedMemorySize() << "\n";
   }
 };
 

@@ -228,13 +228,13 @@ def TT_DotOp : TT_Op<"dot", [NoSideEffect,
 def TT_ReduceOp : TT_Op<"reduce"> {
     let summary = "reduce";
 
-    let arguments = (ins TT_RedOpAttr:$redOp, TT_Type:$operand, I32Attr:$axis);
+    let arguments = (ins TT_RedOpAttr:$redOp, TT_Tensor:$operand, I32Attr:$axis);
 
-    let results = (outs TT_Type:$result);
+    let results = (outs TT_Tensor:$result);
 
-    // let builders = [
-    //     OpBuilder<(ins "triton::RedOp":$redOp, "value":$operand, "int":$axis)>,
-    // ];
+    let builders = [
+        OpBuilder<(ins "triton::RedOp":$redOp, "Value":$operand, "int":$axis)>,
+    ];
 
     let assemblyFormat = "$operand attr-dict `:` type($operand) `->` type($result)";
 }

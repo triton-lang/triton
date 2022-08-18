@@ -4,23 +4,28 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/Support/raw_ostream.h"
-#include <limits>
 
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include <atomic>
+#include <limits>
 
 namespace mlir {
 
+namespace triton {
+class AllocationAnalysis;
+}
+
 /// Modified from llvm-15.0: llvm/ADT/AddressRanges.h
-/// A class that represents an address range. The range is specified using
-/// a start and an end address: [Start, End).
-template <typename AddrT> class Range {
+/// A class that represents a range, specified using a start and an end values:
+/// [Start, End).
+template <typename T> class Range {
 public:
   Range() {}
-  Range(AddrT S, AddrT E) : Start(S), End(E) { assert(Start <= End); }
-  AddrT start() const { return Start; }
-  AddrT end() const { return End; }
-  AddrT size() const { return End - Start; }
-  bool contains(AddrT Addr) const { return Start <= Addr && Addr < End; }
+  Range(T S, T E) : Start(S), End(E) { assert(Start <= End); }
+  T start() const { return Start; }
+  T end() const { return End; }
+  T size() const { return End - Start; }
+  bool contains(T Addr) const { return Start <= Addr && Addr < End; }
   bool intersects(const Range &R) const {
     return Start < R.End && R.Start < End;
   }
@@ -33,83 +38,122 @@ public:
   }
 
 private:
-  AddrT Start = std::numeric_limits<AddrT>::min();
-  AddrT End = std::numeric_limits<AddrT>::max();
+  T Start = std::numeric_limits<T>::min();
+  T End = std::numeric_limits<T>::max();
 };
 
-//===----------------------------------------------------------------------===//
-// Shared Memory Allocation Analysis
-//===----------------------------------------------------------------------===//
-class AllocationAnalysis {
+class Allocation {
 public:
-  using ValueSizeMapT = llvm::DenseMap<Value, size_t>;
+  /// A unique identifier for shared memory buffers
+  using BufferId = size_t;
+  static constexpr BufferId InvalidBufferId =
+      std::numeric_limits<BufferId>::max();
 
-public:
   /// Creates a new Allocation analysis that computes the shared memory
   /// information for all associated shared memory values.
-  AllocationAnalysis(Operation *operation) : operation(operation) { run(); }
+  Allocation(Operation *operation) : operation(operation) { run(); }
 
   /// Returns the operation this analysis was constructed from.
   Operation *getOperation() const { return operation; }
 
-  /// Returns the offset of the given value in the shared memory.
-  size_t getOffset(Value value) const { return valueOffset.lookup(value); }
+  /// Returns the offset of the given buffer in the shared memory.
+  size_t getOffset(BufferId bufferId) const {
+    return bufferSet.lookup(bufferId).offset;
+  }
 
-  /// Returns the size of the given value in the shared memory.
-  size_t getAllocatedSize(Value value) const { return valueSize.lookup(value); }
+  /// Returns the size of the given buffer in the shared memory.
+  size_t getAllocatedSize(BufferId bufferId) const {
+    return bufferSet.lookup(bufferId).size;
+  }
+
+  /// Returns the buffer id of the given value.
+  BufferId getBufferId(Value value) const {
+    if (valueBuffer.count(value)) {
+      return valueBuffer.lookup(value)->id;
+    } else {
+      return InvalidBufferId;
+    }
+  }
+
+  /// Returns the scratch buffer id of the given value.
+  BufferId getBufferId(Operation *operation) const {
+    if (opScratch.count(operation)) {
+      return opScratch.lookup(operation)->id;
+    } else {
+      return InvalidBufferId;
+    }
+  }
 
   /// Returns the size of total shared memory allocated
   size_t getSharedMemorySize() const { return sharedMemorySize; }
 
-private:
-  /// Value -> Range
-  /// Use MapVector to ensure determinism.
-  using ValueRangeMapT = llvm::MapVector<Value, Range<size_t>>;
-  /// Start -> Range
-  using TripleMapT = std::multimap<size_t, Range<size_t>>;
-  /// Nodes -> Nodes
-  using GraphT = DenseMap<Value, DenseSet<Value>>;
+  bool isIntersected(BufferId lhsId, BufferId rhsId) const {
+    if (lhsId == InvalidBufferId || rhsId == InvalidBufferId)
+      return false;
+    auto lhsBuffer = bufferSet.lookup(lhsId);
+    auto rhsBuffer = bufferSet.lookup(rhsId);
+    return lhsBuffer.intersects(rhsBuffer);
+  }
 
+private:
+  /// A class that represents a shared memory buffer
+  struct BufferT {
+    enum class BufferKind { Explicit, Scratch };
+
+    /// MT: thread-safe
+    inline static std::atomic<BufferId> nextId = 0;
+
+    BufferKind kind;
+    BufferId id;
+    size_t size;
+    size_t offset;
+
+    bool operator==(const BufferT &other) const { return id == other.id; }
+    bool operator<(const BufferT &other) const { return id < other.id; }
+
+    BufferT() : BufferT(BufferKind::Explicit) {}
+    BufferT(BufferKind kind) : BufferT(kind, 0, 0) {}
+    BufferT(BufferKind kind, size_t size) : BufferT(kind, size, 0) {}
+    BufferT(BufferKind kind, size_t size, size_t offset)
+        : kind(kind), size(size), offset(offset), id(nextId++) {}
+
+    bool intersects(const BufferT &other) const {
+      return Range<size_t>(offset, offset + size)
+          .intersects(Range<size_t>(other.offset, other.offset + other.size));
+    }
+  };
+
+  /// Op -> Scratch Buffer
+  using OpScratchMapT = DenseMap<Operation *, BufferT *>;
+  /// Value -> Explicit Buffer
+  using ValueBufferMapT = DenseMap<Value, BufferT *>;
+  /// BufferId -> Buffer
+  using BufferSetT = DenseMap<BufferId, BufferT>;
   /// Runs allocation analysis on the given top-level operation.
   void run();
 
-  /// Resolves liveness of all values involved under the root operation.
-  void resolveLiveness(ValueRangeMapT &valueRangeMap);
-
-  /// Computes the shared memory offsets for all related values.
-  /// Paper: Algorithms for Compile-Time Memory Optimization
-  /// (https://www.cs.utexas.edu/users/harrison/papers/compile-time.pdf)
-  void computeOffsets(const ValueRangeMapT &valueRangeMap);
-
-  /// Gets shared memory value and size from valueRangeMap.
-  void getSharedMemoryValuesAndSizes(const ValueRangeMapT &valueRangeMap,
-                                     SmallVector<Value> &sharedMemoryValues);
-
-  /// Computes the initial shared memory offsets.
-  void calculateSharedMemoryStarts(const ValueRangeMapT &valueRangeMap,
-                                   const SmallVector<Value> &sharedMemoryValues,
-                                   ValueSizeMapT &sharedMemoryStart);
-
-  /// Builds a graph of all shared memory values. Edges are created between
-  /// between shared memory values that are overlapping.
-  void buildInterferenceGraph(const ValueRangeMapT &valueRangeMap,
-                              const SmallVector<Value> &sharedMemoryValues,
-                              const ValueSizeMapT &sharedMemoryStart,
-                              GraphT &interference);
-
-  /// Finalizes shared memory offsets considering interference.
-  void allocateSharedMemory(const ValueRangeMapT &valueRangeMap,
-                            const SmallVector<Value> &sharedMemoryValues,
-                            const ValueSizeMapT &sharedMemoryStart,
-                            const GraphT &interference);
+private:
+  template <BufferT::BufferKind Kind, typename KeyType, typename... Args>
+  void addBuffer(KeyType &key, Args &&... args) {
+    auto buffer = BufferT(Kind, std::forward<Args>(args)...);
+    bufferSet[buffer.id] = std::move(buffer);
+    if constexpr (Kind == BufferT::BufferKind::Explicit) {
+      valueBuffer[key] = &bufferSet[buffer.id];
+    } else {
+      opScratch[key] = &bufferSet[buffer.id];
+    }
+  }
 
 private:
   Operation *operation;
-  ValueSizeMapT valueOffset;
-  ValueSizeMapT valueSize;
+  OpScratchMapT opScratch;
+  ValueBufferMapT valueBuffer;
+  BufferSetT bufferSet;
   size_t sharedMemorySize = 0;
+
+  friend class triton::AllocationAnalysis;
 };
 
 } // namespace mlir
 
-#endif
+#endif // TRITON_ANALYSIS_ALLOCATION_H
