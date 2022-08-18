@@ -45,16 +45,20 @@ func @test_combine_gep_pattern(%base: !tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>> {
 }
 
 // CHECK-LABEL: @test_combine_select_masked_load_pattern
-func @test_combine_select_masked_load_pattern(%ptr: tensor<8x!tt.ptr<f32>>, %cond: i1) -> tensor<8xf32> {
+func @test_combine_select_masked_load_pattern(%ptr: tensor<8x!tt.ptr<f32>>, %cond: i1) -> (tensor<8xf32>, tensor<8xf32>) {
     %mask = tt.broadcast %cond : (i1) -> tensor<8xi1>
     %false_val = arith.constant dense<0.0> : tensor<8xf32>
 
-    // CHECK: %[[res:.*]] = tt.load %{{.*}}, %{{.*}}, %{{.*}} {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<8xf32>
-    %x = tt.load %ptr, %mask, %false_val {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<8xf32>
+    // CHECK: %[[res1:.*]] = tt.load %{{.*}}, %{{.*}}, %{{.*}} {cache = 1 : i32, evict = 1 : i32, isOtherUnspecified = false, isVolatile = false} : tensor<8xf32>
+    %x = tt.load %ptr, %mask, %false_val {cache = 1 : i32, evict = 1 : i32, isOtherUnspecified = false, isVolatile = false} : tensor<8xf32>
     %0 = select %cond, %x, %false_val : tensor<8xf32>
 
-    // CHECK: return %[[res]] : tensor<8xf32>
-    return %0 : tensor<8xf32>
+    // CHECK: %[[res2:.*]] = tt.load %{{.*}}, %{{.*}}, %{{.*}} {cache = 1 : i32, evict = 1 : i32, isOtherUnspecified = true, isVolatile = false} : tensor<8xf32>
+    %y = tt.load %ptr, %mask, %false_val {cache = 1 : i32, evict = 1 : i32, isOtherUnspecified = true, isVolatile = false} : tensor<8xf32>
+    %1 = select %cond, %y, %false_val : tensor<8xf32>
+
+    // CHECK: return %[[res1]], %[[res2]] : tensor<8xf32>, tensor<8xf32>
+    return %0, %1 : tensor<8xf32>, tensor<8xf32>
 }
 
 // CHECK-LABEL: @test_combine_broadcast_constant_pattern

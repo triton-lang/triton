@@ -92,6 +92,8 @@ void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
       ::mlir::triton::EvictionPolicyAttr::get(builder.getContext(), evict));
   state.addAttribute(isVolatileAttrName(state.name),
                      builder.getBoolAttr(isVolatile));
+  state.addAttribute(isOtherUnspecifiedAttrName(state.name),
+                     builder.getBoolAttr(false));
   state.addTypes({resultType});
 }
 

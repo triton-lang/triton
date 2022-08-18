@@ -706,23 +706,17 @@ def load(ptr: tl.tensor,
     else:
         dst_ty = elt_ty
 
-    if not mask and not other:
+    if not mask:
+        if other:
+            raise ValueError("`other` cannot be provided without `mask`")
         return tl.tensor(builder.create_load(ptr.handle, cache, eviction, is_volatile),
                          dst_ty)
-    if not mask:
-        raise ValueError("`other` cannot be provided without `mask`")
-
-    if not other:
-        other_ir = ir.undef.get(elt_ty.to_ir(builder))
-        if ptr.type.is_block():
-            other_ir = builder.create_splat(other_ir, ptr.type.get_block_shapes())
-        other = tl.tensor(other_ir, dst_ty)
-
-    return tl.tensor(builder.create_masked_load(ptr.handle,
-                                                mask.handle,
-                                                other.handle,
-                                                cache, eviction, is_volatile),
-                     dst_ty)
+    else:
+        return tl.tensor(builder.create_masked_load(ptr.handle,
+                                                    mask.handle,
+                                                    other.handle if other else None,
+                                                    cache, eviction, is_volatile),
+                         dst_ty)
 
 
 def store(ptr: tl.tensor,

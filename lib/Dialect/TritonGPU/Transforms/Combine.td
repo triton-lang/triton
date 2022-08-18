@@ -7,8 +7,8 @@ include "triton/Dialect/Triton/IR/TritonOps.td"
 // convert_layout(load(...), #L) => copy_async(...); barrier 
 //   if #L is smem_layout
 def CopyAsyncOptPattern : Pat<
-  (TTG_ConvertLayoutOp:$res (TT_LoadOp $ptr, $mask, $other, $cache, $evict, $isVolatile)),
-  (TTG_CopyAsyncOp $ptr, $mask, $other, $cache, $evict, $isVolatile),
+  (TTG_ConvertLayoutOp:$res (TT_LoadOp $ptr, $mask, $other, $cache, $evict, $isVolatile, $isOtherUnspecified)),
+  (TTG_CopyAsyncOp $ptr, $mask, $other, $cache, $evict, $isVolatile, $isOtherUnspecified),
   [(Constraint<CPred<"isSharedLayout($0)">> $res)]>;
 
 // ConvertLayout(ConvertLayout(x, #L0), #L1) => ConvertLayout(x, #L1)
