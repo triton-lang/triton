@@ -24,10 +24,10 @@ module {
     %15:3 = scf.for %arg6 = %12 to %13 step %14 iter_args(%arg7 = %11, %arg8 = %8, %arg9 = %10) -> (tensor<256xf32>, tensor<256x!tt.ptr<f32>>, tensor<256x!tt.ptr<f32>>) {
       %cst_0 = arith.constant 0.000000e+00 : f32
       %18 = tt.broadcast %cst_0 : (f32) -> tensor<256xf32>
-      %19 = tt.load %arg8, %6, %18 {cache = 1 : i32, evict = 1 : i32, isOtherUnspecified = false, isVolatile = false} : tensor<256xf32>
+      %19 = tt.load %arg8, %6, %18 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32>
       %cst_1 = arith.constant 0.000000e+00 : f32
       %20 = tt.broadcast %cst_1 : (f32) -> tensor<256xf32>
-      %21 = tt.load %arg9, %6, %20 {cache = 1 : i32, evict = 1 : i32, isOtherUnspecified = false, isVolatile = false} : tensor<256xf32>
+      %21 = tt.load %arg9, %6, %20 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32>
       %22 = arith.addf %19, %21 : tensor<256xf32>
       %23 = arith.addf %arg7, %22 : tensor<256xf32>
       %24 = tt.broadcast %arg5 : (i32) -> tensor<256xi32>

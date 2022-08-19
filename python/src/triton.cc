@@ -1321,16 +1321,10 @@ void init_triton_ir(py::module &&m) {
              if (other.has_value()) {
                return self.create<mlir::triton::LoadOp>(
                    loc, resultType, ptrs, mask, other.value(), cacheModifier,
-                   evictionPolicy, isVolatile, false);
+                   evictionPolicy, isVolatile);
              } else {
-               mlir::Value dummy_other = self.create<mlir::arith::ConstantOp>(
-                   loc, resultType,
-                   mlir::DenseElementsAttr::get(resultType,
-                                                self.getZeroAttr(elementType)));
                return self.create<mlir::triton::LoadOp>(
-                   loc, mlir::RankedTensorType::get(shape, elementType), ptrs,
-                   mask, dummy_other, cacheModifier, evictionPolicy, isVolatile,
-                   true);
+                   loc, ptrs, mask, cacheModifier, evictionPolicy, isVolatile);
              }
            })
       .def("create_masked_store",
