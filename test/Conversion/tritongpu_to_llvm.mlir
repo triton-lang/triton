@@ -4,7 +4,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
 // CHECK: llvm.func @test_empty_kernel(%arg0: i32, %arg1: !llvm.ptr<f16, 1>)
 // Here the 128 comes from the 4 in module attribute multiples 32
-// CHECK:  attributes {nvvm.maxntid = 128 : si32} {{.*}}
+// CHECK:  attributes {nvvm.kernel = 1 : ui1, nvvm.maxntid = 128 : si32} {{.*}}
 func @test_empty_kernel(%lb : index, %A : !tt.ptr<f16>) {
 
   // CHECK:  llvm.return
@@ -58,7 +58,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
 // -----
 
-// TODO: Pending on the support of isSplat constant 
+// TODO: Pending on the support of isSplat constant
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: masked_load_const_other
@@ -82,7 +82,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     // CHECK: llvm.mlir.undef
     // CHECK: %[[T0:.*]] = llvm.extractvalue
     // CHECK: %[[T1:.*]] = llvm.extractvalue
-    %0 = tt.view %arg : (tensor<256xf32, #blocked0>) -> tensor<256x1xf32,#blocked2> 
+    %0 = tt.view %arg : (tensor<256xf32, #blocked0>) -> tensor<256x1xf32,#blocked2>
     // CHECK: llvm.mlir.undef
     // CHECK: llvm.insertvalue %[[T0]]
     // CHECK: llvm.insertvalue %[[T0]]
@@ -92,7 +92,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     // CHECK: llvm.insertvalue %[[T1]]
     // CHECK: llvm.insertvalue %[[T1]]
     // CHECK: llvm.insertvalue %[[T1]]
-    %1 = tt.broadcast %0 : (tensor<256x1xf32,#blocked2>) -> tensor<256x4xf32, #blocked2> 
+    %1 = tt.broadcast %0 : (tensor<256x1xf32,#blocked2>) -> tensor<256x4xf32, #blocked2>
     return
   }
 }
@@ -116,7 +116,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
-  // CHECK-LABEL: basic_addf 
+  // CHECK-LABEL: basic_addf
   func @basic_addf(%arg0 : tensor<256xf32,#blocked0>, %arg1 : tensor<256xf32,#blocked0>) {
     // CHECK: llvm.fadd
     // CHECK: llvm.fadd
@@ -141,7 +141,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 // -----
 
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
-  // CHECK-LABEL: basic_program_id 
+  // CHECK-LABEL: basic_program_id
   func @basic_program_id() {
     // CHECK: nvvm.read.ptx.sreg.ctaid.x : i32
     %0 = tt.get_program_id {axis = 0 : i32} : i32
