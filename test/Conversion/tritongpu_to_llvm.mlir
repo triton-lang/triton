@@ -21,7 +21,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
   func @basic_load(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf32, #blocked0>) {
     // CHECK: llvm.inline_asm
     // CHECK: llvm.inline_asm
-    %1 = tt.load %a_ptr_init, %cst, %cst_0 {cache = 1 : i32, evict = 1 : i32, isOtherUnspecified = false, isVolatile = false} : tensor<256xf32, #blocked0>
+    %1 = tt.load %a_ptr_init, %cst, %cst_0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
     return
   }
 }
@@ -36,7 +36,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     // CHECK-SAME: ld.global.v4.b32
     // CHECK: llvm.inline_asm
     // CHECK-SAME: ld.global.v4.b32
-    %1 = tt.load %a_ptr_init, %cst, %cst_0 {cache = 1 : i32, evict = 1 : i32, isOtherUnspecified = false, isVolatile = false} : tensor<256xf32, #blocked0>
+    %1 = tt.load %a_ptr_init, %cst, %cst_0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
     return
   }
 }
@@ -51,7 +51,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     // CHECK-SAME: ld.global.v2.b32
     // CHECK: llvm.inline_asm
     // CHECK-SAME: ld.global.v2.b32
-    %1 = tt.load %a_ptr_init, %cst, %cst_0 {cache = 1 : i32, evict = 1 : i32, isOtherUnspecified = false, isVolatile = false} : tensor<256xf16, #blocked0>
+    %1 = tt.load %a_ptr_init, %cst, %cst_0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf16, #blocked0>
     return
   }
 }
@@ -64,7 +64,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: masked_load_const_other
   func @masked_load_const_other(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>) {
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<256xf32, #blocked0>
-    %1 = tt.load %a_ptr_init, %cst, %cst_0 {cache = 1 : i32, evict = 1 : i32, isOtherUnspecified = false, isVolatile = false} : tensor<256xf32, #blocked0>
+    %1 = tt.load %a_ptr_init, %cst, %cst_0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
     return
   }
 }

@@ -73,14 +73,14 @@ def TT_LoadOp : TT_Op<"load",
                        TypesMatchWith<"infer mask type from result type",
                                       "result", "mask",
                                       "getI1SameShape($_self)">,
-                       TypesMatchWith<"infer other type from result type",
+                       TypesMatchWith<"infer other type from result type or none",
                                       "result", "other",
-                                      "$_self">]> {
+                                      "$_self", "($_op.getOperands().size() == 2) || std::equal_to<>()">]> {
     let summary = "load";
 
-    let arguments = (ins TT_PtrTensor:$ptr, BoolLike:$mask, TT_Type:$other,
+    let arguments = (ins TT_PtrTensor:$ptr, BoolLike:$mask, Optional<TT_Type>:$other,
                          TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict,
-                         BoolAttr:$isVolatile, BoolAttr:$isOtherUnspecified);
+                         BoolAttr:$isVolatile);
 
     let results = (outs TT_Type:$result);
 
@@ -89,11 +89,10 @@ def TT_LoadOp : TT_Op<"load",
         OpBuilder<(ins "Value":$ptr, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
         OpBuilder<(ins "Value":$ptr, "Value":$mask, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile,
-                       "bool":$isOtherUnspecified)>
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>
     ];
 
-    let assemblyFormat = "$ptr`,` $mask`,` $other attr-dict `:` type($result)";
+    let assemblyFormat = "operands attr-dict `:` type($result)";
 }
 
 def TT_StoreOp : TT_Op<"store",

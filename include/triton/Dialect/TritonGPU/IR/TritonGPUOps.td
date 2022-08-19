@@ -48,10 +48,14 @@ def TTG_CopyAsyncOp : TTG_Op<"copy_async",
                                              "getPointeeType($_self)">]> {
   let summary = "copy async";
 
-  let arguments = (ins TT_PtrTensor:$ptr, BoolLike:$mask, TT_Type:$other,
+  let arguments = (ins TT_PtrTensor:$ptr, BoolLike:$mask, Optional<TT_Type>:$other,
                        TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict,
-                       BoolAttr:$isVolatile,
-                       BoolAttr:$isOtherUnspecified);
+                       BoolAttr:$isVolatile);
+
+  let builders = [
+      OpBuilder<(ins "Value":$ptr, "Value":$mask, "triton::CacheModifier":$cache,
+                     "triton::EvictionPolicy":$evict, "bool":$isVolatile)>
+  ];
 
   let results = (outs TT_Type:$result);
 
