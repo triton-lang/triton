@@ -171,6 +171,11 @@ struct FuncOpConversion : public FuncOpConversionBase {
       return failure();
 
     auto ctx = funcOp->getContext();
+
+    // Set an attribute to indicate this function is a kernel entry.
+    newFuncOp->setAttr(NVVMMetadataField::Kernel,
+                       rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
+
     // Set an attribute for maxntidx, it could be used in latter LLVM codegen
     // for `nvvm.annotation` metadata.
     newFuncOp->setAttr(

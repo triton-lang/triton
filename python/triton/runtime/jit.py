@@ -8,18 +8,32 @@ import os
 import subprocess
 import tempfile
 import textwrap
+from typing import Any, Dict, List
+
+import torch
 
 import triton
 import triton._C.libtriton.triton as _triton
+from ..compiler import compile
 from ..tools.disasm import extract
+
+try:
+    from torch._C import _cuda_getCurrentRawStream as get_cuda_stream
+except ImportError:
+    get_cuda_stream = lambda dev_idx: torch.cuda.current_stream(dev_idx).cuda_stream
 
 # -----------------------------------------------------------------------------
 # Binary
 # -----------------------------------------------------------------------------
 
+VALID_BACKENDS: List[str] = (
+    _triton.runtime.backend.CUDA,
+)
+
 
 class Binary:
-    def __init__(self, backend, name, asm, shared_mem, num_warps):
+    def __init__(self, backend: str, name: str, asm: Dict[str, str], shared_mem: int, num_warps: int):
+        assert backend in VALID_BACKENDS, "backend should within [%s], but get a \"%s\"" % (', '.join(VALID_BACKENDS), backend)
         self.backend = backend
         self.name = name
         self.asm = asm
@@ -29,11 +43,11 @@ class Binary:
 
 class LoadedBinary:
     def __init__(self, device: int, bin: Binary):
-        module, kernel = _triton.code_gen.load_binary(bin.backend,
-                                                      bin.name,
-                                                      bin.asm,
-                                                      bin.shared_mem,
-                                                      device)
+        module, kernel = _triton.load_binary(bin.backend,
+                                             bin.name,
+                                             bin.asm,
+                                             bin.shared_mem,
+                                             device)
         self.bin = bin
         self.asm = bin.asm
         self.sass = ''
@@ -240,6 +254,44 @@ class JITFunction:
 
     def __repr__(self):
         return f"JITFunction({self.module}:{self.fn.__name__})"
+
+
+def build_kernel(fn: JITFunction,
+                 fn_type: str,
+                 device: int,
+                 constants: Dict[str, Any],
+                 num_warps: int = 4,
+                 num_stages: int = 3,
+                 ) -> LoadedBinary:
+    cubin, shem_size, kernel_name = compile(fn, fn_type, device=device, constants=constants, num_warps=num_warps, num_stages=num_stages, output="cubin")
+    assert cubin
+    assert kernel_name
+
+    backend = _triton.runtime.backend.CUDA
+
+    max_shared_memory = _triton.runtime.max_shared_memory(backend, device)
+    assert shem_size <= max_shared_memory, "shared memory out of resource, max size is %d, but want %s" % (max_shared_memory, shem_size)
+
+    asm = dict(cubin=cubin)
+    binary = Binary(backend, kernel_name, asm, shem_size, num_warps)
+    loaded_binary = LoadedBinary(device, binary)
+    return loaded_binary
+
+
+def launch_kernel(fn: JITFunction, binary: LoadedBinary, grid, num_warps, num_stages, *wargs, **kwargs):
+    kwargs = {fn.arg_names.index(name): value for name, value in kwargs.items()}
+    wargs = list(wargs)
+    for i, pos in enumerate(sorted(kwargs)):
+        wargs.insert(pos + i, kwargs[pos])
+    assert len(wargs) == len(fn.arg_names), "Function argument list not match, need %d but get %d args" % (len(fn.arg_names), len(wargs))
+
+    device = torch.cuda.current_device()
+    torch.cuda.set_device(device)
+    stream = get_cuda_stream(device)
+
+    _triton.runtime.launch_binary(binary, wargs, fn.do_not_specialize, fn.arg_names,
+                                  stream, num_warps, num_stages, grid)
+
 
 # -----------------------------------------------------------------------------
 # `jit` decorator

@@ -19,7 +19,9 @@ Type i8Ty(MLIRContext *ctx) {
 Type u32Ty(MLIRContext *ctx) {
   return IntegerType::get(ctx, 32, IntegerType::Signless);
 }
-Type u1Ty(MLIRContext *ctx) { return IntegerType::get(ctx, 1); }
+Type u1Ty(MLIRContext *ctx) {
+  return IntegerType::get(ctx, 1, IntegerType::Unsigned);
+}
 
 // Float types
 Type f16Ty(MLIRContext *ctx) { return FloatType::getF16(ctx); }
