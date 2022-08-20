@@ -5,20 +5,20 @@
 
 Computation times
 =================
-**17:19.771** total execution time for **getting-started_tutorials** files:
+**17:23.396** total execution time for **getting-started_tutorials** files:
 
 +---------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_03-matrix-multiplication.py` (``03-matrix-multiplication.py``) | 06:32.425 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_03-matrix-multiplication.py` (``03-matrix-multiplication.py``) | 06:34.019 | 0.0 MB |
 +---------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_05-layer-norm.py` (``05-layer-norm.py``)                       | 05:36.947 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_05-layer-norm.py` (``05-layer-norm.py``)                       | 05:34.799 | 0.0 MB |
 +---------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_02-fused-softmax.py` (``02-fused-softmax.py``)                 | 03:28.831 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_02-fused-softmax.py` (``02-fused-softmax.py``)                 | 03:30.496 | 0.0 MB |
 +---------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_01-vector-add.py` (``01-vector-add.py``)                       | 01:41.469 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_01-vector-add.py` (``01-vector-add.py``)                       | 01:43.980 | 0.0 MB |
 +---------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_06-fused-attention.py` (``06-fused-attention.py``)             | 00:00.077 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_06-fused-attention.py` (``06-fused-attention.py``)             | 00:00.080 | 0.0 MB |
 +---------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_04-low-memory-dropout.py` (``04-low-memory-dropout.py``)       | 00:00.012 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_04-low-memory-dropout.py` (``04-low-memory-dropout.py``)       | 00:00.013 | 0.0 MB |
 +---------------------------------------------------------------------------------------------------------+-----------+--------+
 | :ref:`sphx_glr_getting-started_tutorials_07-libdevice-function.py` (``07-libdevice-function.py``)       | 00:00.010 | 0.0 MB |
 +---------------------------------------------------------------------------------------------------------+-----------+--------+
