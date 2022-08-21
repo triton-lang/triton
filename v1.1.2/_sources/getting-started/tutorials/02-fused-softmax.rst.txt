@@ -292,11 +292,11 @@ We will then compare its performance against (1) :code:`torch.softmax` and (2) t
     3     640.0  682.666684      640.000002   160.000000
     4     768.0  722.823517      664.216187   162.754967
     ..      ...         ...             ...          ...
-    93  12160.0  814.058574      406.179533   198.936606
-    94  12288.0  814.111783      415.661740   199.298541
+    93  12160.0  814.058574      406.179533   198.834951
+    94  12288.0  814.111783      416.101597   199.197579
     95  12416.0  812.498981      412.149375   198.854847
     96  12544.0  812.566838      412.971190   199.111113
-    97  12672.0  812.633240      412.097543   199.264875
+    97  12672.0  812.633240      412.097543   199.167004
 
     [98 rows x 4 columns]
 
@@ -314,7 +314,7 @@ In the above plot, we can see that:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 3 minutes  21.143 seconds)
+   **Total running time of the script:** ( 3 minutes  21.863 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_02-fused-softmax.py:
