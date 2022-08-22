@@ -14,7 +14,7 @@
 // CHECK: %[[A1:.*]] = triton_gpu.copy_async
 // CHECK: %[[B1:.*]] = triton_gpu.copy_async
 // CHECK: scf.for {{.*}} iter_args({{.*}}, {{.*}}, {{.*}}, %[[arg_a0:.*]] = %[[A0]], %[[arg_a1:.*]] = %[[A1]], %[[arg_b0:.*]] = %[[B0]], %[[arg_b1:.*]] = %[[B1]], {{.*}})
-// CHECK:   triton_gpu.async_wait {num = 4 : i32}
+// CHECK:   triton_gpu.async_wait {num = 2 : i32}
 // CHECK:   tt.dot %[[arg_a0]], %[[arg_b0]], {{.*}}
 // CHECK:   %[[NEXT_A:.*]] = triton_gpu.copy_async
 // CHECK:   %[[NEXT_B:.*]] = triton_gpu.copy_async
@@ -55,7 +55,7 @@ func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B
 // CHECK:   %[[A1:.*]] = triton_gpu.copy_async
 // CHECK:   %[[B1:.*]] = triton_gpu.copy_async
 // CHECK:   scf.for {{.*}} iter_args({{.*}}, {{.*}}, {{.*}}, %[[arg_a0:.*]] = %[[A0]], %[[arg_a1:.*]] = %[[A1]], %[[arg_b0:.*]] = %[[B0]], %[[arg_b1:.*]] = %[[B1]], {{.*}})
-// CHECK:   triton_gpu.async_wait {num = 4 : i32}
+// CHECK:   triton_gpu.async_wait {num = 2 : i32}
 // CHECK:     tt.dot %[[arg_a0]], %[[arg_b0]], {{.*}}
 // CHECK:     %[[NEXT_A:.*]] = triton_gpu.copy_async
 // CHECK:     %[[NEXT_B:.*]] = triton_gpu.copy_async
@@ -95,7 +95,7 @@ func @matmul_loop_nested(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f
 // CHECK: %[[B0:.*]] = triton_gpu.copy_async
 // CHECK: %[[B1:.*]] = triton_gpu.copy_async
 // CHECK: scf.for {{.*}} iter_args({{.*}}, {{.*}}, %[[arg_b0:.*]] = %[[B0]], %[[arg_b1:.*]] = %[[B1]], {{.*}})
-// CHECK:   triton_gpu.async_wait {num = 2 : i32}
+// CHECK:   triton_gpu.async_wait {num = 1 : i32}
 // CHECK:   tt.dot {{.*}}, %[[arg_b0]], {{.*}}
 // CHECK:   %[[NEXT_B:.*]] = triton_gpu.copy_async
 // CHECK:   scf.yield {{.*}}, {{.*}}, %[[arg_b1]], %[[NEXT_B]]
