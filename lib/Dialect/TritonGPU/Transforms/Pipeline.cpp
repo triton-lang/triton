@@ -337,8 +337,9 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (!asyncWaitInserted && isDirectUserOfAsyncLoad(op)) {
       asyncWaitInserted = true;
+      assert(numStages >= 2);
       builder.create<triton::gpu::AsyncWaitOp>(op.getLoc(),
-                                               loads.size() * (numStages - 1));
+                                               loads.size() * (numStages - 2));
     }
     Operation *newOp = builder.clone(op, mapping);
     // update mapping of results
