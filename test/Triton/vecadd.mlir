@@ -38,7 +38,7 @@ module {
     }
     %16 = tt.broadcast %arg2 : (!tt.ptr<f32>) -> tensor<256x!tt.ptr<f32>>
     %17 = tt.getelementptr %16, %4 : tensor<256x!tt.ptr<f32>>
-    tt.store %17, %15#0, %6, : tensor<256xf32>
+    tt.store %17, %15#0, %6 : tensor<256xf32>
     return
   }
 }
@@ -124,7 +124,7 @@ module {
 //     }
 //     %53 = tt.broadcast %arg2 : (!tt.ptr<f32>) -> tensor<256x!tt.ptr<f32>, #triton_gpu<"coalesced encoding<threadTileSize = 1, blockTileSize = 32, order = 0>">>
 //     %54 = tt.getelementptr %53, %4, : tensor<256x!tt.ptr<f32>, #triton_gpu<"coalesced encoding<threadTileSize = 1, blockTileSize = 32, order = 0>">>
-//     tt.store %54, %52#0, %6, : tensor<256xf32, #triton_gpu<"coalesced encoding<threadTileSize = 1, blockTileSize = 32, order = 0>">>
+//     tt.store %54, %52#0, %6 : tensor<256xf32, #triton_gpu<"coalesced encoding<threadTileSize = 1, blockTileSize = 32, order = 0>">>
 //     return
 //   }
 // }

@@ -40,26 +40,27 @@ def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
 
 def TTG_CopyAsyncOp : TTG_Op<"copy_async",
                              [MemoryEffects<[MemRead, MemWrite]>,
+                              SameVariadicOperandSize,
                               TypesMatchWith<"infer mask type from ptr type",
-                                              "ptr", "mask",
-                                              "getI1SameShape($_self)">,
+                                             "ptr", "mask", "getI1SameShape($_self)",
+                                             "($_op.getOperands().size() <= 1) || std::equal_to<>()">,
                               TypesMatchWith<"infer other type from ptr type",
-                                             "ptr", "other",
-                                             "getPointeeType($_self)">]> {
+                                             "ptr", "other", "getPointeeType($_self)",
+                                             "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
   let summary = "copy async";
 
-  let arguments = (ins TT_PtrTensor:$ptr, BoolLike:$mask, Optional<TT_Type>:$other,
+  let arguments = (ins TT_PtrTensor:$ptr, Optional<I1Tensor>:$mask, Optional<TT_Type>:$other,
                        TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict,
                        BoolAttr:$isVolatile);
 
   let builders = [
-      OpBuilder<(ins "Value":$ptr, "Value":$mask, "triton::CacheModifier":$cache,
-                     "triton::EvictionPolicy":$evict, "bool":$isVolatile)>
+      OpBuilder<(ins "Value":$ptr, "triton::CacheModifier":$cache,
+                     "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
   ];
 
   let results = (outs TT_Type:$result);
 
-  let assemblyFormat = "$ptr`,` $mask`,` $other attr-dict `:` type($ptr) `->` type($result)";
+  let assemblyFormat = "operands attr-dict `:` type($ptr) `->` type($result)";
 
   // result needs to be of shared layout
   let verifier = [{ return ::verify(*this); }];

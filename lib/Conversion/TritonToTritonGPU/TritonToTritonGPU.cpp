@@ -226,10 +226,9 @@ struct TritonLoadPattern : public OpConversionPattern<triton::LoadOp> {
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Type retType = getTypeConverter()->convertType(op.getType());
     rewriter.replaceOpWithNewOp<triton::LoadOp>(
-        op, retType, adaptor.ptr(), adaptor.mask(), adaptor.other(),
-        adaptor.cache(), adaptor.evict(), adaptor.isVolatile());
+        op, adaptor.ptr(), adaptor.mask(), adaptor.other(), adaptor.cache(),
+        adaptor.evict(), adaptor.isVolatile());
     return success();
   }
 };

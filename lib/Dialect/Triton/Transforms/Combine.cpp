@@ -52,6 +52,46 @@ DenseElementsAttr getConstantValue(Builder &builder, Attribute value,
 
 } // anonymous namespace
 
+// select(cond, load(ptrs, broadcast(cond), ???), other)
+//   => load(ptrs, broadcast(cond), other)
+class CombineSelectMaskedLoadPattern : public mlir::RewritePattern {
+public:
+  CombineSelectMaskedLoadPattern(mlir::MLIRContext *context)
+      : mlir::RewritePattern(mlir::SelectOp::getOperationName(), 3, context,
+                             {triton::LoadOp::getOperationName()}) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto selectOp = llvm::dyn_cast<mlir::SelectOp>(op);
+    if (!selectOp)
+      return mlir::failure();
+
+    mlir::Value trueValue = selectOp.getTrueValue();
+    mlir::Value falseValue = selectOp.getFalseValue();
+
+    auto *loadOpCandidate = trueValue.getDefiningOp();
+    auto loadOp = llvm::dyn_cast<triton::LoadOp>(loadOpCandidate);
+    if (!loadOp)
+      return mlir::failure();
+
+    mlir::Value mask = loadOp.mask();
+    if (!mask)
+      return mlir::failure();
+
+    auto *broadcastOpCandidate = mask.getDefiningOp();
+    auto broadcastOp =
+        llvm::dyn_cast<triton::BroadcastOp>(broadcastOpCandidate);
+    if (!broadcastOp)
+      return mlir::failure();
+
+    rewriter.replaceOpWithNewOp<triton::LoadOp>(
+        op, loadOp.ptr(), loadOp.mask(), falseValue, loadOp.cache(),
+        loadOp.evict(), loadOp.isVolatile());
+    return mlir::success();
+  }
+};
+
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
 

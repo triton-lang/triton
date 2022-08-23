@@ -37,12 +37,6 @@ def CombineGEPPattern : Pat<
         (TT_GEPOp (TT_GEPOp $ptr, $idx0), $idx1),
         (TT_GEPOp $ptr, (Arith_AddIOp $idx0, $idx1))>;
 
-// select(cond, load(ptrs, broadcast(cond), ???), other)
-//   => load(ptrs, broadcast(cond), other)
-def CombineSelectMaskedLoadPattern : Pat<
-    (SelectOp $cond, (TT_LoadOp $ptrs, (TT_BroadcastOp:$bcast_res $cond), $other, $cache, $evict, $isVolatile), $falseValue),
-    (TT_LoadOp $ptrs, $bcast_res, $falseValue, $cache, $evict, $isVolatile)>;
-
 // broadcast(cst) => cst
 def getConstantValue : NativeCodeCall<"getConstantValue($_builder, $0, $1)">;
 def CombineBroadcastConstantPattern : Pat<
