@@ -258,9 +258,9 @@ void parse_args(py::list &args, py::list do_not_specialize,
 
 void parse_args(py::list &args, py::list &arg_names, std::string &params,
                 size_t &params_size, py::dict constants) {
-  char *params_ptr = params.data();
-
   size_t len = PyList_Size(args.ptr());
+  params.reserve(8 * len); // 8 max bytes by argument
+  char *params_ptr = params.data();
   for (int i = 0; i < len; i++) {
     py::object arg = args[i];
     auto arg_ptr = arg.ptr();
