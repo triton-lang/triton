@@ -29,7 +29,7 @@ func @test_store_splat(%ptr: !tt.ptr<f32>) {
   %vs = tt.splat %a : (f32) -> tensor<128xf32>
   %mask = tt.splat %true : (i1) -> tensor<128xi1>
 
-  // CHECK: %{{.*}} = llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "@$0 st.global.v32.b1 [ $1 + 0 ], { $2 };",
+  // CHECK: %{{.*}} = llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "@$0 st.global.b32 [ $1 + 0 ], { $2 };",
   // CHECK-SAME: "b,l,r" %{{.*}}, %{{.*}}, %{{.*}} : (i1, !llvm.ptr<f32, 1>, i32) -> !llvm.struct<()>
   tt.store %ptrs, %vs, %mask, {} : tensor<128xf32>
 
