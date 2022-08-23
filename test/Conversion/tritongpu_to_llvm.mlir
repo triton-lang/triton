@@ -186,7 +186,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     // CHECK-SAME: st.global.b32 [ ${{.*}} + 0 ], { ${{.*}} };", "b,l,r" %{{.*}}, %{{.*}}, %{{.*}} : (i1, !llvm.ptr<f32, 1>, i32) -> !llvm.struct<()>
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
     // CHECK-SAME: st.global.b32 [ ${{.*}} + 0 ], { ${{.*}} };", "b,l,r" %{{.*}}, %{{.*}}, %{{.*}} : (i1, !llvm.ptr<f32, 1>, i32) -> !llvm.struct<()>
-    tt.store %ptrs, %vals, %mask, {} : tensor<256xf32, #blocked0>
+    tt.store %ptrs, %vals, %mask : tensor<256xf32, #blocked0>
     return
   }
 }

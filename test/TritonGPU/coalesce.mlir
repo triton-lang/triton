@@ -3,7 +3,7 @@
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked2 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>
-  
+
 
 // CHECK: [[row_layout:#.*]] = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
 // CHECK: [[col_layout:#.*]] = #triton_gpu.blocked<{sizePerThread = [4, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [0, 1]}>
@@ -15,9 +15,9 @@
 // CHECK: [[store_val:%.*]] = triton_gpu.convert_layout {{.*}} -> tensor<64x64xf32, [[col_layout]]>
 // CHECK: [[store_mask:%.*]] = triton_gpu.convert_layout {{.*}} -> tensor<64x64xi1, [[col_layout]]>
 // CHECK: tt.store [[store_ptr]], [[store_val]], [[store_mask]]
-func @transpose(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, 
-                %arg1: i32 {tt.divisibility = 16 : i32}, 
-                %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, 
+func @transpose(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
+                %arg1: i32 {tt.divisibility = 16 : i32},
+                %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32},
                 %arg3: i32 {tt.divisibility = 16 : i32}) {
   %cst = arith.constant dense<true> : tensor<64x64xi1, #blocked1>
   %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked1>
@@ -41,6 +41,6 @@ func @transpose(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
   %17 = triton_gpu.convert_layout %16 : (tensor<64x64xi32, #blocked2>) -> tensor<64x64xi32, #blocked1>
   %18 = tt.getelementptr %15, %17 : tensor<64x64x!tt.ptr<f32>, #blocked1>
   %19 = tt.load %10, %cst, %cst_0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64x64xf32, #blocked1>
-  tt.store %18, %19, %cst, : tensor<64x64xf32, #blocked1>
+  tt.store %18, %19, %cst : tensor<64x64xf32, #blocked1>
   return
 }
