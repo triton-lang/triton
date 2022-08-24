@@ -60,7 +60,10 @@ def TTG_CopyAsyncOp : TTG_Op<"copy_async",
 
   let results = (outs TT_Type:$result);
 
-  let assemblyFormat = "operands attr-dict `:` type($ptr) `->` type($result)";
+  // let assemblyFormat = "operands attr-dict `:` type($ptr) `->` type($result)";
+  let parser = [{ return parseCopyAsyncOp(parser, result); }];
+
+  let printer = [{ return printCopyAsyncOp(p, *this); }];
 
   // result needs to be of shared layout
   let verifier = [{ return ::verify(*this); }];
