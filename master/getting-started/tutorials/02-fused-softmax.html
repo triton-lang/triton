@@ -371,17 +371,17 @@ We will then compare its performance against (1) <code class="code docutils lite
 <p class="sphx-glr-script-out">Out:</p>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>softmax-performance:
           N      Triton  Torch (native)  Torch (jit)
-0     256.0  512.000001      546.133347   188.321838
+0     256.0  546.133347      546.133347   186.181817
 1     384.0  614.400016      585.142862   153.600004
-2     512.0  655.360017      585.142849   154.566038
+2     512.0  655.360017      606.814814   154.566038
 3     640.0  706.206879      640.000002   160.000000
-4     768.0  722.823517      664.216187   163.839992
+4     768.0  722.823517      664.216187   162.754967
 ..      ...         ...             ...          ...
-93  12160.0  812.359066      405.755985   198.936606
-94  12288.0  812.429770      415.661740   199.096718
-95  12416.0  812.498981      412.149375   198.755369
-96  12544.0  810.925276      412.971190   198.913776
-97  12672.0  811.007961      412.097543   199.069228
+93  12160.0  812.359066      406.179533   198.936606
+94  12288.0  812.429770      415.661740   199.197579
+95  12416.0  812.498981      412.149375   198.854847
+96  12544.0  811.745227      412.971190   199.111113
+97  12672.0  811.007961      412.097543   199.167004
 
 [98 rows x 4 columns]
 </pre></div>
@@ -394,7 +394,7 @@ We will then compare its performance against (1) <code class="code docutils lite
 Note however that the PyTorch <cite>softmax</cite> operation is more general and will works on tensors of any shape.</p></li>
 </ul>
 </div></blockquote>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 3 minutes  29.122 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 3 minutes  31.941 seconds)</p>
 <div class="sphx-glr-footer class sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-02-fused-softmax-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/d91442ac2982c4e0cc3ab0f43534afbc/02-fused-softmax.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">02-fused-softmax.py</span></code></a></p>
