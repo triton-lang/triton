@@ -27,7 +27,13 @@ def test_vecadd_no_scf():
         z_ptrs = z_ptr + offset
         tl.store(z_ptrs, z)
 
-    ptx, shem_size, kernel_name = triton.compile(kernel, "*fp32,i32,*fp32,i32,*fp32,i32", constants={"BLOCK_SIZE_N": 256}, num_warps=NUM_WARPS, device=0, output="ptx")
+    # TODO: add this to CI, to make sure the the compilation flow is at lease OK
+    #       before we have GPU machines for CI.
+    # ptx, shem_size, kernel_name = triton.compile(kernel,
+    #                                              "*fp32,i32,*fp32,i32,*fp32,i32",
+    #                                              constants={"BLOCK_SIZE_N": 256},
+    #                                              num_warps=NUM_WARPS,
+    #                                              device=0, output="ptx")
 
     torch.zeros([10], device=torch.device('cuda'))
     device = torch.cuda.current_device()

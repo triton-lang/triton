@@ -772,6 +772,7 @@ def make_triton_ir(fn, signature, constants=dict(), attributes=dict()):
 
 def optimize_triton_ir(mod):
     pm = _triton.ir.pass_manager(mod.context)
+    pm.enable_debug()
     pm.add_inliner_pass()
     pm.add_canonicalizer_pass()
     pm.run(mod)
@@ -780,6 +781,7 @@ def optimize_triton_ir(mod):
 
 def make_tritongpu_ir(mod, num_warps):
     pm = _triton.ir.pass_manager(mod.context)
+    pm.enable_debug()
     pm.add_inliner_pass()
     pm.add_triton_combine_pass()
     pm.add_canonicalizer_pass()
@@ -791,6 +793,7 @@ def make_tritongpu_ir(mod, num_warps):
 
 def optimize_tritongpu_ir(mod, num_stages):
     pm = _triton.ir.pass_manager(mod.context)
+    pm.enable_debug()
     pm.add_tritongpu_pipeline_pass(num_stages)
     pm.add_canonicalizer_pass()
     pm.add_cse_pass()
