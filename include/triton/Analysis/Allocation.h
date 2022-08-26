@@ -14,7 +14,12 @@ namespace mlir {
 
 namespace triton {
 class AllocationAnalysis;
-}
+
+SmallVector<unsigned>
+getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
+                             unsigned &outVec);
+
+} // namespace triton
 
 /// Modified from llvm-15.0: llvm/ADT/AddressRanges.h
 /// A class that represents an interval, specified using a start and an end

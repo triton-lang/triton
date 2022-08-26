@@ -19,6 +19,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 #include "triton/Target/PTX/PTXTranslation.h"
+#include "triton/tools/sys/getenv.hpp"
 
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
@@ -98,14 +99,6 @@ long pow2_divisor(long N) {
   if (N % 2 == 0)
     return 2;
   return 1;
-}
-
-bool getBoolEnv(const std::string &env) {
-  const char *s = std::getenv(env.c_str());
-  std::string str(s ? s : "");
-  std::transform(str.begin(), str.end(), str.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
-  return (str == "on" || str == "true" || str == "1");
 }
 
 // Returns something like "int16", whether dtype is a torch.dtype or
@@ -1635,7 +1628,7 @@ void init_triton_ir(py::module &&m) {
                  /*shouldPrintBeforePass=*/nullptr,
                  /*shouldPrintAfterPass=*/
                  [](mlir::Pass *pass, mlir::Operation *) {
-                   return getBoolEnv("MLIR_ENABLE_DUMP");
+                   return ::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
                  },
                  /*printModuleScope=*/false,
                  /*printAfterOnlyOnChange=*/true,

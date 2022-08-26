@@ -1,4 +1,5 @@
 #include "mlir/Analysis/DataFlowAnalysis.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "llvm/Support/raw_ostream.h"
 #include <iostream>
 
@@ -42,6 +43,11 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
   if (BlockArgument blockArg = value.dyn_cast<BlockArgument>()) {
     Operation *op = blockArg.getOwner()->getParentOp();
     if (FuncOp fun = dyn_cast<FuncOp>(op)) {
+      Attribute attr =
+          fun.getArgAttr(blockArg.getArgNumber(), "tt.divisibility");
+      if (attr)
+        divHint = attr.cast<IntegerAttr>().getValue().getZExtValue();
+    } else if (auto fun = dyn_cast<LLVM::LLVMFuncOp>(op)) {
       Attribute attr =
           fun.getArgAttr(blockArg.getArgNumber(), "tt.divisibility");
       if (attr)
@@ -202,6 +208,13 @@ ChangeResult AxisInfoAnalysis::visitOperation(
       constancy.push_back(opShape[d] == 1 ? retShape[d] : 1);
     }
     curr = AxisInfo(contiguity, divisibility, constancy);
+  }
+  // UnrealizedConversionCast
+  // This is needed by TritonGPUToLLVM, to get AxisInfo when the graph is
+  // in the process of a PartialConversion, where UnrealizedConversionCast
+  // may exist
+  if (llvm::isa<mlir::UnrealizedConversionCastOp>(op)) {
+    curr = operands[0]->getValue();
   }
   if (curr.getRank() == 0) {
     return markAllPessimisticFixpoint(op->getResults());
