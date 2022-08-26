@@ -10,7 +10,7 @@ jobs:
 
   Integration-Tests:
     
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
 
     steps:
 
@@ -19,7 +19,7 @@ jobs:
 
       - name: Clear cache
         run: |
-          rm -r ~/.triton/
+          rm -r ~/.triton/cache/
         continue-on-error: true
 
       - name: Check imports
@@ -34,7 +34,7 @@ jobs:
         
       - name: Check cpp style
         run: |
-          sudo apt-get install clang-format
+          sudo apt-get install -y clang-format
           find . -regex '.*\.\(cpp\|hpp\|h\|cc\)' -not -path "./python/build/*" -not -path "./include/triton/external/*" -print0 | xargs -0 -n1 clang-format -style=file --dry-run -Werror -i ||
           (echo '::error title=Style issues:: Please run `find . -regex ".*\.\(cpp\|hpp\|h\|cc\)" -not -path "./python/build/*" -not -path "./include/triton/external/*" -print0 | xargs -0 -n1 clang-format -style=file -i`' ; exit 1)
 
@@ -61,4 +61,4 @@ jobs:
       - name: Run python tests
         run: |
           cd python/tests
-          # pytest
+          pytest
