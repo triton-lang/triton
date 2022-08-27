@@ -581,6 +581,13 @@ def cast(input: tl.tensor,
         return input
     src_sca_ty = src_ty.scalar
     dst_sca_ty = dst_ty.scalar
+    # fp8 <=> bf16/fp16
+    if (src_sca_ty.is_bf16() or src_sca_ty.is_fp16()) and dst_sca_ty.is_fp8():
+        return tl.tensor(builder.create_fp_trunc(input.handle, dst_ty.to_ir(builder)),
+                         dst_ty)
+    if src_sca_ty.is_fp8() and (dst_sca_ty.is_bf16() or dst_sca_ty.is_fp16()):
+       return tl.tensor(builder.create_fp_ext(input.handle, dst_ty.to_ir(builder)),
+                         dst_ty)
     # bf16 <=> (not fp32)
     if (src_sca_ty.is_bf16() and not dst_sca_ty.is_fp32()) or \
        (dst_sca_ty.is_bf16() and not src_sca_ty.is_fp32()):

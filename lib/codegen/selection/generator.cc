@@ -636,15 +636,14 @@ std::tuple<Value*, Value*, Value*, Value*> generator::fp16x4_to_fp8x4(Value *in0
 }
 
 std::tuple<Value*, Value*, Value*, Value*> generator::fp8x4_to_bf16x4(Value *in0, Value *in1, Value *in2, Value *in3) {
-  // sign = (fp8 & 0x8000) << 8;
-  // nosign = (fp8 & 0x7FFF) << 8;
-  // Add 120 (127-7) to compensate the difference in exponent bias
-  // bf16 = (nosign >> (8-4) + (127 - 7) << 7) | sign;
-  // bf16 = (nosign >> 4 + 0x3c00) | sign;
+  // current exp offset: 15
+  // Add 112 (127-15) to compensate the difference in exponent bias
+  // bf16 = (nosign >> (8-4) + 112 << 7) | sign;
+  // bf16 = (nosign >> 4 + 0x3800) | sign;
   Type *ret_ty = StructType::get(*ctx_, {vec_ty(bf16_ty, 2), vec_ty(bf16_ty, 2)});
   InlineAsm *ptx = InlineAsm::get(FunctionType::get(ret_ty, {i32_ty}, false),
   "{"
-  ".reg .b32 a<2>, sign<2>, nosign<2>, b<2>;"
+  ".reg .b32 a<2>, sign<2>, nosign<2>, b<2>; \n\t"
   "prmt.b32 a0, 0, $2, 0x5040; \n\t" // 0xdcba => 0xb0a0
   "prmt.b32 a1, 0, $2, 0x7060; \n\t" // 0xdcba => 0xd0c0
   "and.b32 sign0, a0, 0x80008000; \n\t"
@@ -653,8 +652,8 @@ std::tuple<Value*, Value*, Value*, Value*> generator::fp8x4_to_bf16x4(Value *in0
   "and.b32 nosign1, a1, 0x7fff7fff; \n\t"
   "shr.b32 nosign0, nosign0, 4; \n\t"
   "shr.b32 nosign1, nosign1, 4; \n\t"
-  "add.u32 nosign0, nosign0, 0x3c003c00; \n\t"
-  "add.u32 nosign1, nosign1, 0x3c003c00; \n\t"
+  "add.u32 nosign0, nosign0, 0x38003800; \n\t"
+  "add.u32 nosign1, nosign1, 0x38003800; \n\t"
   "or.b32 $0, sign0, nosign0; \n\t"
   "or.b32 $1, sign1, nosign1; \n\t"
   "}", "=r,=r,r", false);
@@ -675,52 +674,53 @@ std::tuple<Value*, Value*, Value*, Value*> generator::fp8x4_to_bf16x4(Value *in0
 }
 
 std::tuple<Value*, Value*, Value*, Value*> generator::bf16x4_to_fp8x4(Value *in0, Value *in1, Value *in2, Value *in3) {
-  /* Assuming fp8 exponent offset is 7. bf16 exponent offset is 127.
-     Max value in fp8: 0b01110111 (0x77),
-                  bf16: 0x4370 exp: 7+127 = 134 (0x86), mantissa: 0b111'0000
+  /* Assuming fp8 exponent offset is 16. bf16 exponent offset is 127.
+     Max value in fp8: 0b01111111 (0x7f),
+                  bf16: 3ff0
      Min value in fp8: 0b00000000 (0x00)
-                  bf16: 0x3c05 exp: -7+127 = 120 (0x78), mantissa: 0b000'0111
-     if (nosign(bf16) > 0x4370)
-       fp8 = 0x78;  // INF
-     else if (nosign(bf16) <= 0x3c05)
-       fp8 = 0x0;  // 0
-     else {
-       // @note: +0x8 is for "rounding to nearest zero"
-       fp8 = (nosign(bf16) - (120 << 7) + 0x8) << 4;
-     }
-     return fp8 | sign;
+                  bf16: 0x3c00
+     // @note: +0x8 is for "rounding to nearest zero"
+     fp8 = (nosign(bf16) - (112 << 7) + 0x8) << 4;
+     return fp8 | sign;  // also permute bytes
   */
   InlineAsm *ptx = InlineAsm::get(FunctionType::get({vec_ty(i8_ty, 4)}, {i32_ty, i32_ty}, false),
   "{\n\t"
-  "and.b32 sign0, $0, 0x80008000;  \n\t"
-  "and.b32 sign1, $1, 0x80008000;  \n\t"
-  "prmt.b32 sign, sign1, sign0, 0x7531; \n\t"
-  "and.b32 nosign0, $0, 0x7fff7fff; \n\t"
-  "and.b32 nosign1, $1, 0x7fff7fff; \n\t"
-  "prmt.b32 a0, nosign0, 0, 0x3276; \n\t" // bf16x2: 0xdcba => 0x00dc
-  "prmt.b32 a1, nosign0, 0, 0x1054; \n\t" // bf16x2: 0xdcba => 0x00ba
-  "prmt.b32 a2, nosign1, 0, 0x3276; \n\t" // bf16x2: 0xdcba => 0x00dc
-  "prmt.b32 a3, nosign1, 0, 0x1054; \n\t" // bf16x2: 0xdcba => 0x00ba
-  "setp.gt.u32 isinf0, a0, 0x4380; \n\t"
-  "setp.le.u32 iszero0, a0, 0x3c05; \n\t"
-  "setp.gt.u32 isinf1, a1, 0x4380; \n\t"
-  "setp.le.u32 iszero1, a1, 0x3c05; \n\t"
-  "setp.gt.u32 isinf2, a2, 0x4380; \n\t"
-  "setp.le.u32 iszero2, a2, 0x3c05; \n\t"
-  "setp.gt.u32 isinf3, a3, 0x4380; \n\t"
-  "setp.le.u32 iszero3, a3, 0x3c05; \n\t"
-  "selp.u32 b0, 0x78, b0, isinf0; \n\t"
-  "selp.u32 b0, 0, b0, iszero0;\n\t"
-  "selp.u32 b1, 0x78, b1, isinf0; \n\t"
-  "selp.u32 b1, 0, b1, iszero0;\n\t"
-  "selp.u32 b2, 0x78, b2, isinf0; \n\t"
-  "selp.u32 b2, 0, b2, iszero0;\n\t"
-  "selp.u32 b3, 0x78, b3, isinf0; \n\t"
-  "selp.u32 b3, 0, b3, iszero0; \n\t"
-  "prmt.b32 b01, b1, b0, 0x7632; \n\t"
-  "prmt.b32 b23, b3, b2, 0x7632; \n\t"
-  "prmt.b32 res, b23, b01, 0x7531; \n\t"
-  "and.b32 $0, res, sign; \n\t" // restore signs
+  ".reg .u32 sign, sign<2>, nosign, nosign<2>; \n\t"
+  ".reg .u32 fp8_min, fp8_max, rn_, zero; \n\t"
+  "mov.u32 fp8_min, 0x38003800; \n\t"
+  "mov.u32 fp8_max, 0x3ff03ff0; \n\t"
+  "mov.u32 rn_, 0x80008; \n\t"
+  "mov.u32 zero, 0; \n\t"
+  "and.b32 sign0, $1, 0x80008000;  \n\t"
+  "and.b32 sign1, $2, 0x80008000;  \n\t"
+  "prmt.b32 sign, sign0, sign1, 0x7531; \n\t"
+  "and.b32 nosign0, $1, 0x7fff7fff; \n\t"
+  "and.b32 nosign1, $2, 0x7fff7fff; \n\t"
+
+  ".reg .u32 nosign_0_<2>, nosign_1_<2>; \n\t"  // nosign = clamp(nosign, min, max)
+  "and.b32 nosign_0_0, nosign0, 0xffff0000; \n\t"
+  "max.u32 nosign_0_0, nosign_0_0, 0x38000000; \n\t"
+  "min.u32 nosign_0_0, nosign_0_0, 0x3ff00000; \n\t"
+  "and.b32 nosign_0_1, nosign0, 0x0000ffff; \n\t"
+  "max.u32 nosign_0_1, nosign_0_1, 0x3800; \n\t"
+  "min.u32 nosign_0_1, nosign_0_1, 0x3ff0; \n\t"
+  "or.b32 nosign0, nosign_0_0, nosign_0_1; \n\t"
+  "and.b32 nosign_1_0, nosign1, 0xffff0000; \n\t"
+  "max.u32 nosign_1_0, nosign_1_0, 0x38000000; \n\t"
+  "min.u32 nosign_1_0, nosign_1_0, 0x3ff00000; \n\t"
+  "and.b32 nosign_1_1, nosign1, 0x0000ffff; \n\t"
+  "max.u32 nosign_1_1, nosign_1_1, 0x3800; \n\t"
+  "min.u32 nosign_1_1, nosign_1_1, 0x3ff0; \n\t"
+  "or.b32 nosign1, nosign_1_0, nosign_1_1; \n\t"
+
+  "add.u32 nosign0, nosign0, rn_; \n\t"  // round to nearest zero
+  "add.u32 nosign1, nosign1, rn_; \n\t"
+  "sub.u32 nosign0, nosign0, 0x38003800; \n\t"  // compensate offset
+  "sub.u32 nosign1, nosign1, 0x38003800; \n\t"
+  "shr.u32 nosign0, nosign0, 4; \n\t"
+  "shr.u32 nosign1, nosign1, 4; \n\t"
+  "prmt.b32 nosign, nosign0, nosign1, 0x6420; \n\t"
+  "or.b32 $0, nosign, sign; \n\t"
   ""
   "}", "=r,r,r", false);
   Value *packed_in0 = UndefValue::get(vec_ty(bf16_ty, 2));
