@@ -569,10 +569,10 @@ std::tuple<Value*, Value*, Value*, Value*> generator::fp8x4_to_fp16x4(Value *in0
   "prmt.b32 a1, 0, $2, 0x7060;            \n\t" // If input is 0xdcba set a1 to 0xd0c0
   "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n\t" // b0 = a0 & 0x7fff7fff (strip sign)
   "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n\t" // b1 = a1 & 0x7fff7fff (strip sign)
-  "shr.b32  b0, b0, 1;                    \n\t" // b0 <<= 1 (shift into fp16 poistion)
-  "shr.b32  b1, b1, 1;                    \n\t" // b1 <<= 1 (shift into fp16 position)
-  "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n\t" // out0 = b0 | (0x80008000 | a0) (restore sign)
-  "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n\t" // out1 = b1 | (0x80008000 | a1) (restore sign)
+  "shr.b32  b0, b0, 1;                    \n\t" // b0 >>= 1 (shift into fp16 poistion)
+  "shr.b32  b1, b1, 1;                    \n\t" // b1 >>= 1 (shift into fp16 position)
+  "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n\t" // out0 = b0 | (0x80008000 & a0) (restore sign)
+  "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n\t" // out1 = b1 | (0x80008000 & a1) (restore sign)
   "}", "=r,=r,r", false);
   Value *packed_in = UndefValue::get(vec_ty(i8_ty, 4));
   packed_in = insert_elt(packed_in, in0, (uint64_t)0);
@@ -621,6 +621,110 @@ std::tuple<Value*, Value*, Value*, Value*> generator::fp16x4_to_fp8x4(Value *in0
   "}", "=r,r,r", false);
   Value *packed_in0 = UndefValue::get(vec_ty(f16_ty, 2));
   Value *packed_in1 = UndefValue::get(vec_ty(f16_ty, 2));
+  packed_in0 = insert_elt(packed_in0, in0, (int)0);
+  packed_in0 = insert_elt(packed_in0, in1, (int)1);
+  packed_in1 = insert_elt(packed_in1, in2, (int)0);
+  packed_in1 = insert_elt(packed_in1, in3, (int)1);
+  Value *in_arg0 = bit_cast(packed_in0, i32_ty);
+  Value *in_arg1 = bit_cast(packed_in1, i32_ty);
+  Value *ret = call(ptx, {in_arg0, in_arg1});
+  Value *ret0 = extract_elt(ret, (int)0);
+  Value *ret1 = extract_elt(ret, (int)1);
+  Value *ret2 = extract_elt(ret, (int)2);
+  Value *ret3 = extract_elt(ret, (int)3);
+  return std::make_tuple(ret0, ret1, ret2, ret3);
+}
+
+std::tuple<Value*, Value*, Value*, Value*> generator::fp8x4_to_bf16x4(Value *in0, Value *in1, Value *in2, Value *in3) {
+  // sign = (fp8 & 0x8000) << 8;
+  // nosign = (fp8 & 0x7FFF) << 8;
+  // Add 120 (127-7) to compensate the difference in exponent bias
+  // bf16 = (nosign >> (8-4) + (127 - 7) << 7) | sign;
+  // bf16 = (nosign >> 4 + 0x3c00) | sign;
+  Type *ret_ty = StructType::get(*ctx_, {vec_ty(bf16_ty, 2), vec_ty(bf16_ty, 2)});
+  InlineAsm *ptx = InlineAsm::get(FunctionType::get(ret_ty, {i32_ty}, false),
+  "{"
+  ".reg .b32 a<2>, sign<2>, nosign<2>, b<2>;"
+  "prmt.b32 a0, 0, $2, 0x5040; \n\t" // 0xdcba => 0xb0a0
+  "prmt.b32 a1, 0, $2, 0x7060; \n\t" // 0xdcba => 0xd0c0
+  "and.b32 sign0, a0, 0x80008000; \n\t"
+  "and.b32 sign1, a1, 0x80008000; \n\t"
+  "and.b32 nosign0, a0, 0x7fff7fff; \n\t"
+  "and.b32 nosign1, a1, 0x7fff7fff; \n\t"
+  "shr.b32 nosign0, nosign0, 4; \n\t"
+  "shr.b32 nosign1, nosign1, 4; \n\t"
+  "add.u32 nosign0, nosign0, 0x3c003c00; \n\t"
+  "add.u32 nosign1, nosign1, 0x3c003c00; \n\t"
+  "or.b32 $0, sign0, nosign0; \n\t"
+  "or.b32 $1, sign1, nosign1; \n\t"
+  "}", "=r,=r,r", false);
+  Value *packed_in = UndefValue::get(vec_ty(i8_ty, 4));
+  packed_in = insert_elt(packed_in, in0, (uint64_t)0);
+  packed_in = insert_elt(packed_in, in1, (uint64_t)1);
+  packed_in = insert_elt(packed_in, in2, (uint64_t)2);
+  packed_in = insert_elt(packed_in, in3, (uint64_t)3);
+  Value *in = bit_cast(packed_in, i32_ty);
+  Value *ret = call(ptx, {in});
+  Value *packed_ret0 = extract_val(ret, {0});
+  Value *packed_ret1 = extract_val(ret, {1});
+  Value *ret0 = extract_elt(packed_ret0, (uint64_t)0);
+  Value *ret1 = extract_elt(packed_ret0, (uint64_t)1);
+  Value *ret2 = extract_elt(packed_ret1, (uint64_t)0);
+  Value *ret3 = extract_elt(packed_ret1, (uint64_t)1);
+  return std::make_tuple(ret0, ret1, ret2, ret3);
+}
+
+std::tuple<Value*, Value*, Value*, Value*> generator::bf16x4_to_fp8x4(Value *in0, Value *in1, Value *in2, Value *in3) {
+  /* Assuming fp8 exponent offset is 7. bf16 exponent offset is 127.
+     Max value in fp8: 0b01110111 (0x77),
+                  bf16: 0x4370 exp: 7+127 = 134 (0x86), mantissa: 0b111'0000
+     Min value in fp8: 0b00000000 (0x00)
+                  bf16: 0x3c05 exp: -7+127 = 120 (0x78), mantissa: 0b000'0111
+     if (nosign(bf16) > 0x4370)
+       fp8 = 0x78;  // INF
+     else if (nosign(bf16) <= 0x3c05)
+       fp8 = 0x0;  // 0
+     else {
+       // @note: +0x8 is for "rounding to nearest zero"
+       fp8 = (nosign(bf16) - (120 << 7) + 0x8) << 4;
+     }
+     return fp8 | sign;
+  */
+  InlineAsm *ptx = InlineAsm::get(FunctionType::get({vec_ty(i8_ty, 4)}, {i32_ty, i32_ty}, false),
+  "{\n\t"
+  "and.b32 sign0, $0, 0x80008000;  \n\t"
+  "and.b32 sign1, $1, 0x80008000;  \n\t"
+  "prmt.b32 sign, sign1, sign0, 0x7531; \n\t"
+  "and.b32 nosign0, $0, 0x7fff7fff; \n\t"
+  "and.b32 nosign1, $1, 0x7fff7fff; \n\t"
+  "prmt.b32 a0, nosign0, 0, 0x3276; \n\t" // bf16x2: 0xdcba => 0x00dc
+  "prmt.b32 a1, nosign0, 0, 0x1054; \n\t" // bf16x2: 0xdcba => 0x00ba
+  "prmt.b32 a2, nosign1, 0, 0x3276; \n\t" // bf16x2: 0xdcba => 0x00dc
+  "prmt.b32 a3, nosign1, 0, 0x1054; \n\t" // bf16x2: 0xdcba => 0x00ba
+  "setp.gt.u32 isinf0, a0, 0x4380; \n\t"
+  "setp.le.u32 iszero0, a0, 0x3c05; \n\t"
+  "setp.gt.u32 isinf1, a1, 0x4380; \n\t"
+  "setp.le.u32 iszero1, a1, 0x3c05; \n\t"
+  "setp.gt.u32 isinf2, a2, 0x4380; \n\t"
+  "setp.le.u32 iszero2, a2, 0x3c05; \n\t"
+  "setp.gt.u32 isinf3, a3, 0x4380; \n\t"
+  "setp.le.u32 iszero3, a3, 0x3c05; \n\t"
+  "selp.u32 b0, 0x78, b0, isinf0; \n\t"
+  "selp.u32 b0, 0, b0, iszero0;\n\t"
+  "selp.u32 b1, 0x78, b1, isinf0; \n\t"
+  "selp.u32 b1, 0, b1, iszero0;\n\t"
+  "selp.u32 b2, 0x78, b2, isinf0; \n\t"
+  "selp.u32 b2, 0, b2, iszero0;\n\t"
+  "selp.u32 b3, 0x78, b3, isinf0; \n\t"
+  "selp.u32 b3, 0, b3, iszero0; \n\t"
+  "prmt.b32 b01, b1, b0, 0x7632; \n\t"
+  "prmt.b32 b23, b3, b2, 0x7632; \n\t"
+  "prmt.b32 res, b23, b01, 0x7531; \n\t"
+  "and.b32 $0, res, sign; \n\t" // restore signs
+  ""
+  "}", "=r,r,r", false);
+  Value *packed_in0 = UndefValue::get(vec_ty(bf16_ty, 2));
+  Value *packed_in1 = UndefValue::get(vec_ty(bf16_ty, 2));
   packed_in0 = insert_elt(packed_in0, in0, (int)0);
   packed_in0 = insert_elt(packed_in0, in1, (int)1);
   packed_in1 = insert_elt(packed_in1, in2, (int)0);
@@ -685,6 +789,11 @@ void generator::visit_cast_inst(ir::cast_inst* x) {
         return fp8x4_to_fp16x4(a, b, c, d);
       if(op_sca_ty->is_fp8_ty() && ret_sca_ty->is_fp32_ty())
         return fp8x4_to_fp32x4(a, b, c, d);
+      // fp8 <> bf16
+      if(op_sca_ty->is_fp8_ty() && ret_sca_ty->is_bf16_ty())
+        return fp8x4_to_bf16x4(a, b, c, d);
+      if (op_sca_ty->is_bf16_ty() && ret_sca_ty->is_fp8_ty())
+        return bf16x4_to_fp8x4(a, b, c, d);
       throw std::runtime_error("unsupported conversion");
     };
     for(size_t i = 0; i < x_idxs.size(); i+=4){
