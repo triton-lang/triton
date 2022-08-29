@@ -723,6 +723,7 @@ def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
 def test_f8_xf16_roundtrip(dtype):
     """Tests that converting an f8 to f16 and back to f8 doesn't change its value"""
     check_type_supported(dtype)
+
     @triton.jit
     def copy_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
         offsets = tl.program_id(axis=0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
@@ -754,6 +755,7 @@ def test_xf16_to_f8_rounding(dtype):
     for all xf16 |xf16 - fromf8(tof8(xf16))| == min
     over all f8 |xf16 - fromf8(f8)|"""
     check_type_supported(dtype)
+
     @triton.jit
     def copy_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
         offsets = tl.program_id(axis=0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
