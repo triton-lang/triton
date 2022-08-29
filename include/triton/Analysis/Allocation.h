@@ -3,6 +3,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -46,6 +47,8 @@ class Allocation {
 public:
   /// A unique identifier for shared memory buffers
   using BufferId = size_t;
+  using BufferIdSetT = DenseSet<BufferId>;
+
   static constexpr BufferId InvalidBufferId =
       std::numeric_limits<BufferId>::max();
 
@@ -67,12 +70,28 @@ public:
   }
 
   /// Returns the buffer id of the given value.
+  /// This interface only returns the allocated buffer id.
+  /// If you want to get all the buffer ids that are associated with the given
+  /// value, including alias buffers, use getBufferIds.
   BufferId getBufferId(Value value) const {
     if (valueBuffer.count(value)) {
       return valueBuffer.lookup(value)->id;
     } else {
       return InvalidBufferId;
     }
+  }
+
+  /// Returns all the buffer ids of the given value, including alias buffers.
+  BufferIdSetT getBufferIds(Value value) const {
+    BufferIdSetT bufferIds;
+    auto allocBufferId = getBufferId(value);
+    if (allocBufferId != InvalidBufferId)
+      bufferIds.insert(allocBufferId);
+    for (auto *buffer : aliasBuffer.lookup(value)) {
+      if (buffer->id != InvalidBufferId)
+        bufferIds.insert(buffer->id);
+    }
+    return bufferIds;
   }
 
   /// Returns the scratch buffer id of the given value.
@@ -126,7 +145,9 @@ private:
   /// Op -> Scratch Buffer
   using OpScratchMapT = DenseMap<Operation *, BufferT *>;
   /// Value -> Explicit Buffer
-  using ValueBufferMapT = DenseMap<Value, BufferT *>;
+  using ValueBufferMapT = llvm::MapVector<Value, BufferT *>;
+  /// Value -> Alias Buffer
+  using AliasBufferMapT = llvm::MapVector<Value, llvm::SetVector<BufferT *>>;
   /// BufferId -> Buffer
   using BufferSetT = DenseMap<BufferId, BufferT>;
   /// Runs allocation analysis on the given top-level operation.
@@ -144,10 +165,15 @@ private:
     }
   }
 
+  void addAlias(Value value, Value alloc) {
+    aliasBuffer[value].insert(valueBuffer[alloc]);
+  }
+
 private:
   Operation *operation;
   OpScratchMapT opScratch;
   ValueBufferMapT valueBuffer;
+  AliasBufferMapT aliasBuffer;
   BufferSetT bufferSet;
   size_t sharedMemorySize = 0;
 

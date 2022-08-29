@@ -12,6 +12,7 @@
 
 namespace mlir {
 namespace test {
+void registerTestAliasPass();
 void registerTestAlignmentPass();
 void registerTestAllocationPass();
 void registerTestMembarPass();
@@ -22,6 +23,7 @@ int main(int argc, char **argv) {
   mlir::registerAllPasses();
   mlir::registerTritonPasses();
   mlir::registerTritonGPUPasses();
+  mlir::test::registerTestAliasPass();
   mlir::test::registerTestAlignmentPass();
   mlir::test::registerTestAllocationPass();
   mlir::test::registerTestMembarPass();
