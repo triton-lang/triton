@@ -746,16 +746,11 @@ def test_f8_xf16_roundtrip(dtype):
     assert torch.all(f8_tensor == f8_output_tensor)
 
 
-@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
-def test_xf16_to_f8_rounding(dtype):
-    """Takes all xfloat16s, converts them to float8 and back to xfloat16.
-    Checks that the absolute error is the minimum over all float8.
-
+def test_f16_to_f8_rounding():
+    """Takes all float16s, converts them to float8 and back to float16. Checks that the absolute
+    error is the minimum over all float8.
     Or the same explanation a bit mathier:
-    for all xf16 |xf16 - fromf8(tof8(xf16))| == min
-    over all f8 |xf16 - fromf8(f8)|"""
-    check_type_supported(dtype)
-
+    for all f16 |f16 - fromf8(tof8(f16))| == min over all f8 |f16 - fromf8(f8)|"""
     @triton.jit
     def copy_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
         offsets = tl.program_id(axis=0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
@@ -764,42 +759,48 @@ def test_xf16_to_f8_rounding(dtype):
         output = input
         tl.store(output_ptr + offsets, output, mask=mask)
 
-    xf16_input = torch.arange(-int(2 ** (16 - 1)), int(2 ** (16 - 1)), device='cuda', dtype=torch.int16).view(dtype)
-    n_elements = xf16_input.numel()
-    f8_output_tensor = torch.empty_like(xf16_input, dtype=torch.int8)
+    # torch.view with a dtype isn't supported in triton's torch yet so use numpy's view
+    f16_input_np = (
+        np.array(
+            range(-int(2 ** (16 - 1)), int(2 ** (16 - 1))), dtype=np.int16,
+        )
+        .view(np.float16)
+    )
+    f16_input = torch.tensor(f16_input_np, dtype=torch.float16, device='cuda')
+    n_elements = f16_input.numel()
+    f8_output_tensor = torch.empty_like(f16_input, dtype=torch.int8)
     f8_output = triton.reinterpret(f8_output_tensor, tl.float8)
     grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
-    copy_kernel[grid](xf16_input, f8_output, n_elements, BLOCK_SIZE=1024)
+    copy_kernel[grid](f16_input, f8_output, n_elements, BLOCK_SIZE=1024)
 
-    xf16_output = torch.empty_like(xf16_input, dtype=dtype)
-    copy_kernel[grid](f8_output, xf16_output, n_elements, BLOCK_SIZE=1024)
+    f16_output = torch.empty_like(f16_input, dtype=torch.float16)
+    copy_kernel[grid](f8_output, f16_output, n_elements, BLOCK_SIZE=1024)
 
-    abs_error = torch.abs(xf16_input - xf16_output)
+    abs_error = torch.abs(f16_input - f16_output)
 
-    all_f8_vals_tensor = torch.arange(0, 256, device='cuda', dtype=torch.uint8)
+    all_f8_vals_tensor = torch.tensor(range(2 ** 8), dtype=torch.uint8, device='cuda')
     all_f8_vals = triton.reinterpret(all_f8_vals_tensor, tl.float8)
-    all_f8_vals_in_xf16 = torch.empty_like(all_f8_vals_tensor, dtype=dtype)
-    copy_kernel[grid](all_f8_vals, all_f8_vals_in_xf16, n_elements=256, BLOCK_SIZE=1024)
+    all_f8_vals_in_f16 = torch.empty_like(all_f8_vals_tensor, dtype=torch.float16)
+    copy_kernel[grid](all_f8_vals, all_f8_vals_in_f16, n_elements=256, BLOCK_SIZE=1024)
 
-    all_finite_f8_vals_in_xf16 = all_f8_vals_in_xf16[
-        torch.isfinite(all_f8_vals_in_xf16)
+    all_finite_f8_vals_in_f16 = all_f8_vals_in_f16[
+        torch.isfinite(all_f8_vals_in_f16)
     ]
 
     min_error = torch.min(
         torch.abs(
-            xf16_input.reshape((-1, 1))
-            - all_finite_f8_vals_in_xf16.reshape((1, -1))
+            f16_input.reshape((-1, 1))
+            - all_finite_f8_vals_in_f16.reshape((1, -1))
         ),
         dim=1,
     )[0]
     # 1.9375 is float8 max
     mismatch = torch.logical_and(
-        abs_error != min_error, torch.logical_and(torch.isfinite(xf16_input),
-                                                  torch.abs(xf16_input) < 1.9375)
+        abs_error != min_error, torch.logical_and(torch.isfinite(f16_input), torch.abs(f16_input) < 1.9375)
     )
     assert torch.all(
         torch.logical_not(mismatch)
-    ), f"xf16_input[mismatch]={xf16_input[mismatch]} xf16_output[mismatch]={xf16_output[mismatch]} abs_error[mismatch]={abs_error[mismatch]} min_error[mismatch]={min_error[mismatch]}"
+    ), f"f16_input[mismatch]={f16_input[mismatch]} f16_output[mismatch]={f16_output[mismatch]} abs_error[mismatch]={abs_error[mismatch]} min_error[mismatch]={min_error[mismatch]}"
 
 
 # ---------------
