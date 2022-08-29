@@ -586,7 +586,7 @@ def cast(input: tl.tensor,
         return tl.tensor(builder.create_fp_trunc(input.handle, dst_ty.to_ir(builder)),
                          dst_ty)
     if src_sca_ty.is_fp8() and (dst_sca_ty.is_bf16() or dst_sca_ty.is_fp16()):
-       return tl.tensor(builder.create_fp_ext(input.handle, dst_ty.to_ir(builder)),
+        return tl.tensor(builder.create_fp_ext(input.handle, dst_ty.to_ir(builder)),
                          dst_ty)
     # bf16 <=> (not fp32)
     if (src_sca_ty.is_bf16() and not dst_sca_ty.is_fp32()) or \
