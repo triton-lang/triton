@@ -540,22 +540,22 @@ void generator::visit_fcmp_inst(ir::fcmp_inst* x) {
 
 
 std::tuple<Value*, Value*, Value*, Value*> generator::fp32x4_to_fp8x4(Value *in0, Value *in1, Value *in2, Value *in3){
-  in0 = fp32_to_bf16(in0);
-  in1 = fp32_to_bf16(in1);
-  in2 = fp32_to_bf16(in2);
-  in3 = fp32_to_bf16(in3);
+  in0 = cast(llvm::Instruction::FPTrunc, in0, f16_ty);
+  in1 = cast(llvm::Instruction::FPTrunc, in1, f16_ty);
+  in2 = cast(llvm::Instruction::FPTrunc, in2, f16_ty);
+  in3 = cast(llvm::Instruction::FPTrunc, in3, f16_ty);
   Value *ret0, *ret1, *ret2, *ret3;
-  std::tie(ret0, ret1, ret2, ret3) = bf16x4_to_fp8x4(in0, in1, in2, in3);
+  std::tie(ret0, ret1, ret2, ret3) = fp16x4_to_fp8x4(in0, in1, in2, in3);
   return std::make_tuple(ret0, ret1, ret2, ret3);
 }
 
 std::tuple<Value*, Value*, Value*, Value*> generator::fp8x4_to_fp32x4(Value *in0, Value *in1, Value *in2, Value *in3){
    Value *ret0, *ret1, *ret2, *ret3;
-   std::tie(ret0, ret1, ret2, ret3) = fp8x4_to_bf16x4(in0, in1, in2, in3);
-   ret0 = bf16_to_fp32(ret0);
-   ret1 = bf16_to_fp32(ret1);
-   ret2 = bf16_to_fp32(ret2);
-   ret3 = bf16_to_fp32(ret3);
+   std::tie(ret0, ret1, ret2, ret3) = fp8x4_to_fp16x4(in0, in1, in2, in3);
+   ret0 = cast(llvm::Instruction::FPExt, ret0, f32_ty);
+   ret1 = cast(llvm::Instruction::FPExt, ret1, f32_ty);
+   ret2 = cast(llvm::Instruction::FPExt, ret2, f32_ty);
+   ret3 = cast(llvm::Instruction::FPExt, ret3, f32_ty);
    return std::make_tuple(ret0, ret1, ret2, ret3);
 }
 
