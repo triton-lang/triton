@@ -151,21 +151,17 @@ func @longlive(%A : !tt.ptr<f16>) {
 
 // CHECK-LABEL: scratch
 func @scratch() {
-  // CHECK: offset = 0, size = 512
-  %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A>
-  // CHECK-NEXT: offset = 1056, size = 1024
-  %a = tt.cat %cst0, %cst0 {axis = 0} : (tensor<16x16xf16, #A>, tensor<16x16xf16, #A>) -> tensor<32x16xf16, #A>
-  // CHECK-NEXT: scratch offset = 32, size = 1024
-  // CHECK-NEXT: offset = 0, size = 32
-  %b = tt.reduce %a {redOp = 1 : i32, axis = 0 : i32} : tensor<32x16xf16, #A> -> tensor<16xf16, #A>
+  %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
+  // CHECK: scratch offset = 0, size = 512
+  %b = tt.reduce %cst0 {redOp = 1 : i32, axis = 0 : i32} : tensor<16x16xf16, #AL> -> tensor<16xf16, #AL>
   return
-  // CHECK-NEXT: size = 2080
+  // CHECK-NEXT: size = 512
 }
 
 // B0 -> (B1) -> B0
 // Memory used by B1 can be reused by B0.
-// CHECK-LABEL: multi_blocks_reuse
-func @multi_blocks_reuse(%i1 : i1) {
+// CHECK-LABEL: if
+func @if(%i1 : i1) {
   // CHECK: offset = 0, size = 512
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A>
   // CHECK-NEXT: offset = 512, size = 512
@@ -188,8 +184,8 @@ func @multi_blocks_reuse(%i1 : i1) {
 
 // B0 -> (B1) -> (B2) -> B0
 // Memory used by B0 cannot be reused by B1 or B2.
-// CHECK-LABEL: multi_blocks_noreuse
-func @multi_blocks_noreuse(%i1 : i1) {
+// CHECK-LABEL: if_else
+func @if_else(%i1 : i1) {
   // CHECK: offset = 0, size = 512
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A>
   // CHECK-NEXT: offset = 512, size = 512
@@ -211,4 +207,52 @@ func @multi_blocks_noreuse(%i1 : i1) {
   %a = tt.cat %cst0, %cst1 {axis = 0} : (tensor<16x16xf16, #A>, tensor<16x16xf16, #A>) -> tensor<32x16xf16, #A>
   return
   // CHECK-NEXT: size = 3072
+}
+
+// Block arguments and yields are memory aliases that do not trigger a new
+// allocation.
+// CHECK-LABEL: for
+func @for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
+  // CHECK: offset = 0, size = 8192
+  %a_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A>
+  // CHECK-NEXT: offset = 8192, size = 8192
+  %b_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A>
+  // CHECK-NEXT: offset = 16384, size = 8192
+  %c_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A>
+  %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (tensor<128x32xf16, #A>, tensor<128x32xf16, #A>, tensor<128x32xf16, #A>) {
+    scf.yield %b_shared, %a_shared, %a_shared : tensor<128x32xf16, #A>, tensor<128x32xf16, #A>, tensor<128x32xf16, #A>
+  }
+  return
+  // CHECK-NEXT: size = 24576
+}
+
+// a_shared_init, b_shared_init, and c_shared_init's liveness ranges are span over the entire function before cst2.
+// So they cannot be reused by cst0 and cst1, but can be reused by cst2.
+// CHECK-LABEL: for_if_for
+func @for_if_for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
+  // CHECK: offset = 0, size = 8192
+  %a_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A>
+  // CHECK-NEXT: offset = 8192, size = 8192
+  %b_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A>
+  // CHECK-NEXT: offset = 16384, size = 8192
+  %c_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A>
+  %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (tensor<128x32xf16, #A>, tensor<128x32xf16, #A>, tensor<128x32xf16, #A>) {
+    %c_shared_next = scf.for %jv = %lb to %ub step %step iter_args(%c_shared_next = %c_shared) -> (tensor<128x32xf16, #A>) {
+      %c_shared_next_next = scf.if %i1 -> tensor<128x32xf16, #A> {
+        // CHECK-NEXT: offset = 24576, size = 8192
+        %cst0 = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A>
+        scf.yield %cst0 : tensor<128x32xf16, #A>
+      } else {
+        // CHECK-NEXT: offset = 32768, size = 8192
+        %cst1 = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A>
+        scf.yield %cst1 : tensor<128x32xf16, #A>
+      }
+      scf.yield %c_shared_next_next : tensor<128x32xf16, #A>
+    }
+    scf.yield %a_shared, %b_shared, %c_shared_next : tensor<128x32xf16, #A>, tensor<128x32xf16, #A>, tensor<128x32xf16, #A>
+  }
+  // CHECK-NEXT: offset = 0, size = 8192
+  %cst2 = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A>
+  return
+  // CHECK-NEXT: size = 40960
 }

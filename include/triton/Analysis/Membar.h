@@ -33,7 +33,7 @@ public:
 
 private:
   struct RegionInfo {
-    using BufferIdSetT = DenseSet<Allocation::BufferId>;
+    using BufferIdSetT = Allocation::BufferIdSetT;
 
     BufferIdSetT syncReadBuffers;
     BufferIdSetT syncWriteBuffers;
