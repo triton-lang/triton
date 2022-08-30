@@ -982,6 +982,35 @@ void generator::visit_log_inst(ir::log_inst* x){
 /**
  * \brief Code Generation for `atomic_cas`
  */
+#if defined(USE_ROCM)
+void generator::visit_atomic_cas_inst(ir::atomic_cas_inst* cas) {
+  BasicBlock *current = builder_->GetInsertBlock();
+  Module *module = current->getModule();
+  Value *tid = tgt_->get_local_id(module, *builder_, 0);
+  Value *pred = icmp_eq(tid, i32(0));
+  BasicBlock *tid_0_bb = BasicBlock::Create(*ctx_, "tid_0", current->getParent());
+  BasicBlock *tid_0_done_bb = BasicBlock::Create(*ctx_, "tid_0_done", current->getParent());
+  add_barrier();
+  tgt_->add_memfence(module, *builder_);
+  cond_br(pred, tid_0_bb, tid_0_done_bb);
+  builder_->SetInsertPoint(tid_0_bb);
+  Value *cas_ptr = vals_[cas->get_operand(0)][{}];
+  Value *cas_cmp = vals_[cas->get_operand(1)][{}];
+  Value *cas_val = vals_[cas->get_operand(2)][{}];
+  Value *old = atomic_cmp_xchg(cas_ptr, cas_cmp, cas_val, MaybeAlign(), AtomicOrdering::Monotonic, AtomicOrdering::Monotonic);
+  old = extract_val(old, std::vector<unsigned>{0});
+  Value *atom_ptr;
+  atom_ptr = gep(shmem_, i32(alloc_->offset(layouts_->get(layouts_->tmp(cas)))), "");
+  atom_ptr = bit_cast(atom_ptr, ptr_ty(old->getType(), 3));
+  store(old, atom_ptr);
+  br(tid_0_done_bb);
+  builder_->SetInsertPoint(tid_0_done_bb);
+  tgt_->add_memfence(module, *builder_);
+  add_barrier();
+  vals_[cas][{}] = load(atom_ptr);
+  add_barrier();
+}
+#else
 void generator::visit_atomic_cas_inst(ir::atomic_cas_inst* cas) {
   BasicBlock *current = builder_->GetInsertBlock();
   Module *module = current->getModule();
@@ -1016,11 +1045,33 @@ void generator::visit_atomic_cas_inst(ir::atomic_cas_inst* cas) {
   vals_[cas][{}] = load(atom_ptr);
   add_barrier();
 }
+#endif // defined(USE_ROCM)
 
 /**
  * \brief Code Generation for `atomic_rmw`
  */
 void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
+#if defined(USE_ROCM)
+  if(atom->get_op()==ir::atomic_rmw_op_t::Xchg) {
+    BasicBlock *current = builder_->GetInsertBlock();
+    Module *module = current->getModule();
+    Value *rmw_ptr = vals_[atom->get_operand(0)][{}];
+    Value *rmw_val = vals_[atom->get_operand(1)][{}];
+    Value *tid = tgt_->get_local_id(module, *builder_, 0);
+    Value *pred = icmp_eq(tid, i32(0));
+    BasicBlock *tid_0_bb = BasicBlock::Create(*ctx_, "tid_0", current->getParent());
+    BasicBlock *tid_0_done_bb = BasicBlock::Create(*ctx_, "tid_0_done", current->getParent());
+    tgt_->add_memfence(module, *builder_);
+    add_barrier();
+    cond_br(pred, tid_0_bb, tid_0_done_bb);
+    builder_->SetInsertPoint(tid_0_bb);
+    atomic_rmw(AtomicRMWInst::Xchg, rmw_ptr, rmw_val, MaybeAlign(), AtomicOrdering::Monotonic, SyncScope::System);
+    br(tid_0_done_bb);
+    builder_->SetInsertPoint(tid_0_done_bb);
+    tgt_->add_memfence(module, *builder_);
+    return;
+  }
+#endif
   ir::value* ptr = atom->get_operand(0);
   ir::value* val = atom->get_operand(1);
   ir::value* msk = atom->get_operand(2);
