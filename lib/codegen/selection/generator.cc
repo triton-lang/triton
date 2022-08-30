@@ -127,7 +127,7 @@ Value* geper::operator()(Value *ptr, Value* off, const std::string& name){
 #define icmp_ult(...)        builder_->CreateICmpULT(__VA_ARGS__)
 #define insert_elt(...)      builder_->CreateInsertElement(__VA_ARGS__)
 #define intrinsic(...)       builder_->CreateIntrinsic(__VA_ARGS__)
-#define load(...)            builder_->CreateLoad(__VA_ARGS__)
+#define load(ptr)            builder_->CreateLoad(ptr->getType()->getPointerElementType(), ptr)
 #define lshr(...)            builder_->CreateLShr(__VA_ARGS__)
 #define max_num(...)         builder_->CreateMaxNum(__VA_ARGS__)
 #define min_num(...)         builder_->CreateMinNum(__VA_ARGS__)
