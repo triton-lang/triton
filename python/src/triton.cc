@@ -249,7 +249,7 @@ std::tuple<std::string, asm_map_t, int> hip_compile_ttir(const std::string& name
   llir.flush();
   asm_map["llir"] = py::cast(tmp);
   // LLVM-IR -> HSA-CO
-  std::string path = drv::llir_to_amdgpu(llvm.get(), "gfx908");
+  std::string path = drv::llir_to_amdgpu(llvm.get(), STRINGIFY(MI_GPU_ARCH));
   asm_map["hsaco"] = py::cast(path);
   return std::make_tuple(name, asm_map, n_shared_bytes);
 }

@@ -268,7 +268,7 @@ std::string llir_to_amdgpu(llvm::Module* module, const std::string& _proc) {
   std::string triple = "amdgcn-amd-amdhsa";
   std::string layout = "";
   std::string features="+sramecc,-xnack";
-  std::string proc = "gfx908";
+  std::string proc = STRINGIFY(MI_GPU_ARCH);
   // name kernel
   auto in_time_t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
   std::stringstream cur_time;
