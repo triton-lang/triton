@@ -7,7 +7,6 @@ namespace mlir {
 
 void MembarAnalysis::run() {
   auto *operation = allocation->getOperation();
-  operation->getContext()->getOrLoadDialect<mlir::gpu::GPUDialect>();
   RegionInfo regionInfo;
   OpBuilder builder(operation);
   dfsOperation(operation, &regionInfo, &builder);

@@ -17,24 +17,24 @@ class AllocationAnalysis;
 }
 
 /// Modified from llvm-15.0: llvm/ADT/AddressRanges.h
-/// A class that represents a range, specified using a start and an end values:
-/// [Start, End).
-template <typename T> class Range {
+/// A class that represents an interval, specified using a start and an end
+/// values: [Start, End).
+template <typename T> class Interval {
 public:
-  Range() {}
-  Range(T S, T E) : Start(S), End(E) { assert(Start <= End); }
+  Interval() {}
+  Interval(T S, T E) : Start(S), End(E) { assert(Start <= End); }
   T start() const { return Start; }
   T end() const { return End; }
   T size() const { return End - Start; }
   bool contains(T Addr) const { return Start <= Addr && Addr < End; }
-  bool intersects(const Range &R) const {
+  bool intersects(const Interval &R) const {
     return Start < R.End && R.Start < End;
   }
-  bool operator==(const Range &R) const {
+  bool operator==(const Interval &R) const {
     return Start == R.Start && End == R.End;
   }
-  bool operator!=(const Range &R) const { return !(*this == R); }
-  bool operator<(const Range &R) const {
+  bool operator!=(const Interval &R) const { return !(*this == R); }
+  bool operator<(const Interval &R) const {
     return std::make_pair(Start, End) < std::make_pair(R.Start, R.End);
   }
 
@@ -137,8 +137,9 @@ private:
         : kind(kind), size(size), offset(offset), id(nextId++) {}
 
     bool intersects(const BufferT &other) const {
-      return Range<size_t>(offset, offset + size)
-          .intersects(Range<size_t>(other.offset, other.offset + other.size));
+      return Interval<size_t>(offset, offset + size)
+          .intersects(
+              Interval<size_t>(other.offset, other.offset + other.size));
     }
   };
 
