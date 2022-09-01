@@ -192,12 +192,12 @@ target_link_libraries(triton
   # optimizations
   MLIRPass
   MLIRTransforms
-  MLIRIR
   MLIRLLVMIR
   MLIRSupport
   MLIRTargetLLVMIRExport
   MLIRExecutionEngine
   MLIRNVVMToLLVMIRTranslation
+  MLIRIR
 )
 
 target_link_options(triton PRIVATE ${LLVM_LDFLAGS})

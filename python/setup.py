@@ -15,11 +15,22 @@ from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 
 
+# Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
+def check_env_flag(name: str, default: str = "") -> bool:
+    return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
+
+
 def get_llvm():
     # download if nothing is installed
     system = platform.system()
-    suffix = {"Linux": "linux-gnu-ubuntu-18.04", "Darwin": "apple-darwin"}[system]
-    name = f'clang+llvm-14.0.0-x86_64-{suffix}'
+    system_suffix = {"Linux": "linux-gnu-ubuntu-18.04", "Darwin": "apple-darwin"}[system]
+    use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
+    if use_assert_enabled_llvm:
+        name = 'llvm+mlir-14.0.0-x86_64-{}-assert'.format(system_suffix)
+        url = "https://github.com/shintaro-iwasaki/llvm-releases/releases/download/llvm-14.0.0-329fda39c507/{}.tar.xz".format(name)
+    else:
+        name = 'clang+llvm-14.0.0-x86_64-{}'.format(system_suffix)
+        url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-14.0.0/{}.tar.xz".format(name)
     dir = '/tmp'
     llvm_include_dir = '{dir}/{name}/include'.format(dir=dir, name=name)
     llvm_library_dir = '{dir}/{name}/lib'.format(dir=dir, name=name)
@@ -28,7 +39,6 @@ def get_llvm():
             shutil.rmtree(os.path.join(dir, name))
         except Exception:
             pass
-        url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-14.0.0/{name}.tar.xz".format(name=name)
         print('downloading and extracting ' + url + '...')
         ftpstream = urllib.request.urlopen(url)
         file = tarfile.open(fileobj=ftpstream, mode="r|xz")
