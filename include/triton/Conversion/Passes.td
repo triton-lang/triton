@@ -6,11 +6,12 @@ include "mlir/Pass/PassBase.td"
 def ConvertTritonToTritonGPU: Pass<"convert-triton-to-tritongpu", "mlir::ModuleOp"> {
     let summary = "Convert Triton to TritonGPU";
     let description = [{
-        
+
     }];
     let constructor = "mlir::triton::createConvertTritonToTritonGPUPass()";
 
     let dependentDialects = ["mlir::arith::ArithmeticDialect",
+                             "mlir::math::MathDialect",
                              "mlir::StandardOpsDialect",
                              // TODO: Does this pass depend on SCF?
                              "mlir::scf::SCFDialect",
@@ -33,6 +34,7 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
     let constructor = "mlir::triton::createConvertTritonGPUToLLVMPass()";
 
     let dependentDialects = ["mlir::arith::ArithmeticDialect",
+                             "mlir::math::MathDialect",
                              "mlir::gpu::GPUDialect",
                              "mlir::scf::SCFDialect",
                              "mlir::LLVM::LLVMDialect",

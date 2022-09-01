@@ -234,11 +234,15 @@ class pointer_type(dtype):
 
 
 class block_type(dtype):
-    def __init__(self, element_ty: dtype, shape: List[int]):
+    def __init__(self, element_ty: dtype, shape: List):
         self.element_ty = element_ty
-        # FIXME:
-        # block_type's shape is a list of int
-        # while tensor's shape is a list of constexpr
+
+        # Note that block_type's shape is a list of int
+        # while tensor's shape is a list of constexpr.
+        assert shape
+        if isinstance(shape[0], constexpr):
+            shape = [s.value for s in shape]
+
         self.shape = shape
         self.numel = 1
         for s in self.shape:

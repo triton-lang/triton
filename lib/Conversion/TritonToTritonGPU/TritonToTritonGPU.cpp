@@ -7,13 +7,12 @@
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "llvm/ADT/APSInt.h"
 #include <numeric>
-
 using namespace mlir;
 using namespace mlir::triton;
 
 namespace {
 
-template <class Op> class ArithGenericPattern : public OpConversionPattern<Op> {
+template <class Op> class GenericOpPattern : public OpConversionPattern<Op> {
 public:
   using OpConversionPattern<Op>::OpConversionPattern;
 
@@ -23,6 +22,7 @@ public:
     Type retType = this->getTypeConverter()->convertType(op.getType());
     Op res =
         rewriter.replaceOpWithNewOp<Op>(op, retType, adaptor.getOperands());
+
     return success();
   }
 };
@@ -98,32 +98,41 @@ void populateArithmeticPatternsAndLegality(
   // Rewrite rule
   // patterns.add<ConvertArithmeticOp>(typeConverter, context);
   patterns.add<
-      ArithConstantPattern, ArithGenericPattern<arith::AddIOp>,
-      ArithGenericPattern<arith::SubIOp>, ArithGenericPattern<arith::MulIOp>,
-      ArithGenericPattern<arith::DivUIOp>, ArithGenericPattern<arith::DivSIOp>,
-      ArithGenericPattern<arith::CeilDivUIOp>,
-      ArithGenericPattern<arith::CeilDivSIOp>,
-      ArithGenericPattern<arith::FloorDivSIOp>,
-      ArithGenericPattern<arith::RemUIOp>, ArithGenericPattern<arith::RemSIOp>,
-      ArithGenericPattern<arith::AndIOp>, ArithGenericPattern<arith::OrIOp>,
-      ArithGenericPattern<arith::XOrIOp>, ArithGenericPattern<arith::ShLIOp>,
-      ArithGenericPattern<arith::ShRUIOp>,
-      ArithGenericPattern<arith::ShRSIOp>, // NegFOp
+      ArithConstantPattern, GenericOpPattern<arith::AddIOp>,
+      GenericOpPattern<arith::SubIOp>, GenericOpPattern<arith::MulIOp>,
+      GenericOpPattern<arith::DivUIOp>, GenericOpPattern<arith::DivSIOp>,
+      GenericOpPattern<arith::CeilDivUIOp>,
+      GenericOpPattern<arith::CeilDivSIOp>,
+      GenericOpPattern<arith::FloorDivSIOp>, GenericOpPattern<arith::RemUIOp>,
+      GenericOpPattern<arith::RemSIOp>, GenericOpPattern<arith::AndIOp>,
+      GenericOpPattern<arith::OrIOp>, GenericOpPattern<arith::XOrIOp>,
+      GenericOpPattern<arith::ShLIOp>, GenericOpPattern<arith::ShRUIOp>,
+      GenericOpPattern<arith::ShRSIOp>, // NegFOp
       // Floating point
-      ArithGenericPattern<arith::AddFOp>, ArithGenericPattern<arith::SubFOp>,
+      GenericOpPattern<arith::AddFOp>, GenericOpPattern<arith::SubFOp>,
       // MaxMin
-      ArithGenericPattern<arith::MaxFOp>, ArithGenericPattern<arith::MaxSIOp>,
-      ArithGenericPattern<arith::MaxUIOp>, ArithGenericPattern<arith::MinFOp>,
-      ArithGenericPattern<arith::MinSIOp>, ArithGenericPattern<arith::MinUIOp>,
+      GenericOpPattern<arith::MaxFOp>, GenericOpPattern<arith::MaxSIOp>,
+      GenericOpPattern<arith::MaxUIOp>, GenericOpPattern<arith::MinFOp>,
+      GenericOpPattern<arith::MinSIOp>, GenericOpPattern<arith::MinUIOp>,
       // Floating point
-      ArithGenericPattern<arith::MulFOp>, ArithGenericPattern<arith::DivFOp>,
-      ArithGenericPattern<arith::RemFOp>,
+      GenericOpPattern<arith::MulFOp>, GenericOpPattern<arith::DivFOp>,
+      GenericOpPattern<arith::RemFOp>,
       // Cmp
       ArithCmpPattern<arith::CmpIOp, triton::gpu::CmpIOp>,
       ArithCmpPattern<arith::CmpFOp, triton::gpu::CmpFOp>,
       // Cast Ops
-      ArithGenericPattern<arith::TruncIOp>,
-      ArithGenericPattern<arith::TruncFOp>>(typeConverter, context);
+      GenericOpPattern<arith::TruncIOp>, GenericOpPattern<arith::TruncFOp>>(
+      typeConverter, context);
+}
+
+void populateMathPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
+                                     RewritePatternSet &patterns,
+                                     TritonGPUConversionTarget &target) {
+  MLIRContext *context = patterns.getContext();
+  // Rewrite rule
+  patterns.add<GenericOpPattern<math::ExpOp>, GenericOpPattern<math::CosOp>,
+               GenericOpPattern<math::SinOp>, GenericOpPattern<math::LogOp>,
+               GenericOpPattern<math::SqrtOp>>(typeConverter, context);
 }
 
 //
@@ -246,6 +255,20 @@ struct TritonStorePattern : public OpConversionPattern<triton::StoreOp> {
   }
 };
 
+struct TritonExtElemwisePattern
+    : public OpConversionPattern<triton::ExtElemwiseOp> {
+  using OpConversionPattern<triton::ExtElemwiseOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::ExtElemwiseOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<triton::ExtElemwiseOp>(
+        op, typeConverter->convertType(op.getType()), adaptor.args(),
+        adaptor.libname(), adaptor.libpath(), adaptor.symbol());
+    return success();
+  }
+};
+
 template <class Op>
 struct TritonGenericPattern : public OpConversionPattern<Op> {
   using OpConversionPattern<Op>::OpConversionPattern;
@@ -302,7 +325,8 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       TritonGenericPattern<triton::SplatOp>, TritonBroadcastPattern,
       TritonGenericPattern<triton::GEPOp>, TritonReducePattern,
       TritonExpandDimsPattern, TritonMakeRangePattern, TritonDotPattern,
-      TritonLoadPattern, TritonStorePattern>(typeConverter, context);
+      TritonLoadPattern, TritonStorePattern, TritonExtElemwisePattern>(
+      typeConverter, context);
 }
 
 //
@@ -389,6 +413,7 @@ public:
     RewritePatternSet patterns(context);
     // add rules
     populateArithmeticPatternsAndLegality(typeConverter, patterns, target);
+    populateMathPatternsAndLegality(typeConverter, patterns, target);
     populateTritonPatterns(typeConverter, patterns);
     // TODO: can we use
     //    mlir::scf::populateSCFStructurealTypeConversionsAndLegality(...) here?
