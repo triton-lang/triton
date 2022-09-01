@@ -721,18 +721,11 @@ struct StoreOpConversion
       PTXBuilder ptxBuilder;
       auto &ptxStoreInstr = *ptxBuilder.create<PtxIOInstr>("st");
 
-      Value maskVal =
-          llMask ? maskElems[vecIdx]
-                 : createLLVMIntegerConstant(rewriter, loc, getTypeConverter(),
-                                             rewriter.getIntegerType(1), 1);
-      ptxStoreInstr.predicate(maskVal, "b").global().b(width).v(nWords);
-
       llvm::SmallVector<std::string> asmArgs;
 
       Type valArgTy = IntegerType::get(ctx, width);
       auto wordTy = VectorType::get(wordNElems, valueElemTy);
 
-      auto *asmAddr = ptxBuilder.newAddrOperand(ptrElems[vecIdx], "l", in_off);
       auto *asmArgList = ptxBuilder.newListOperand();
       for (int wordIdx = 0; wordIdx < nWords; wordIdx++) {
         // llWord is a width-len composition
@@ -757,13 +750,21 @@ struct StoreOpConversion
         asmArgList->listAppend(ptxBuilder.newOperand(llWord, constraint));
       }
 
+      Value maskVal =
+          llMask ? maskElems[vecIdx]
+                 : createLLVMIntegerConstant(rewriter, loc, getTypeConverter(),
+                                             rewriter.getIntegerType(1), 1);
+      ptxStoreInstr.predicate(maskVal, "b").global().b(width).v(nWords);
+
+      auto *asmAddr = ptxBuilder.newAddrOperand(ptrElems[vecIdx], "l", in_off);
+
       ptxStoreInstr(asmAddr, asmArgList);
       Type boolTy = getTypeConverter()->convertType(rewriter.getIntegerType(1));
       llvm::SmallVector<Type> argTys({boolTy, ptr.getType()});
       for (int i = 0; i < nWords; i++)
         argTys.push_back(valArgTy);
 
-      auto ASMReturnTy = LLVM::LLVMStructType::getLiteral(ctx, /*returnTy*/ {});
+      auto ASMReturnTy = LLVM::LLVMVoidType::get(ctx);
 
       auto inlineAsm = rewriter.create<LLVM::InlineAsmOp>(
           loc, ASMReturnTy, ptxBuilder.getAllMLIRArgs(), // operands
@@ -1028,13 +1029,21 @@ struct LoadOpConversion
       // create inline asm string
       // ---
 
-      const std::string writeConstrait =
-          (width == 64) ? "=l" : ((width == 32) ? "=r" : "=c");
       const std::string readConstrait =
           (width == 64) ? "l" : ((width == 32) ? "r" : "c");
+      const std::string writeConstrait =
+          (width == 64) ? "=l" : ((width == 32) ? "=r" : "=c");
 
       PTXBuilder ptxBuilder;
       PtxIOInstr &ld = *ptxBuilder.create<PtxIOInstr>("ld");
+
+      // prepare asm operands
+      auto *dstsOpr = ptxBuilder.newListOperand();
+      for (int i = 0; i < n_words; i++) {
+        auto *opr = ptxBuilder.newOperand(writeConstrait); // =r operations
+        dstsOpr->listAppend(opr);
+      }
+      auto *addrOpr = ptxBuilder.newAddrOperand(ptr, "l", in_off);
 
       // Define the instruction opcode
       ld.predicate(pred, "b")
@@ -1048,14 +1057,6 @@ struct LoadOpConversion
           .o("L1::cache_hint", has_l2_evict_policy)
           .v(n_words)
           .b(width);
-
-      // prepare asm operands
-      auto *dstsOpr = ptxBuilder.newListOperand();
-      for (int i = 0; i < n_words; i++) {
-        auto *opr = ptxBuilder.newOperand(writeConstrait); // =r operations
-        dstsOpr->listAppend(opr);
-      }
-      auto *addrOpr = ptxBuilder.newAddrOperand(ptr, "l", in_off);
 
       PTXBuilder::Operand *evictOpr{};
       // Here lack a mlir::Value to bind to this operation, so disabled.

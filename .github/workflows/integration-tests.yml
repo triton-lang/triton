@@ -47,7 +47,7 @@ jobs:
         run: |
           alias python='python3'
           cd python
-          pip3 install -e '.[tests]'
+          TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
 
       - name: Run lit tests
         run: |
