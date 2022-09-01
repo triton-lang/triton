@@ -52,6 +52,7 @@ target_link_libraries(triton-translate PRIVATE
         MLIRSupport
         MLIRTransforms
         MLIRExecutionEngine
+        MLIRMathToLLVM
         MLIRTransformUtils
         MLIRLLVMToLLVMIRTranslation
         MLIRNVVMToLLVMIRTranslation

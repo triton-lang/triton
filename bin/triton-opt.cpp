@@ -32,10 +32,10 @@ int main(int argc, char **argv) {
 
   // TODO: register Triton & TritonGPU passes
   mlir::DialectRegistry registry;
-  registry
-      .insert<mlir::triton::TritonDialect, mlir::triton::gpu::TritonGPUDialect,
-              mlir::arith::ArithmeticDialect, mlir::StandardOpsDialect,
-              mlir::scf::SCFDialect, mlir::gpu::GPUDialect>();
+  registry.insert<mlir::triton::TritonDialect,
+                  mlir::triton::gpu::TritonGPUDialect, mlir::math::MathDialect,
+                  mlir::arith::ArithmeticDialect, mlir::StandardOpsDialect,
+                  mlir::scf::SCFDialect, mlir::gpu::GPUDialect>();
 
   return mlir::asMainReturnCode(mlir::MlirOptMain(
       argc, argv, "Triton (GPU) optimizer driver\n", registry));

@@ -36,9 +36,9 @@ OwningOpRef<ModuleOp> loadMLIRModule(llvm::StringRef inputFilename,
   }
 
   mlir::DialectRegistry registry;
-  registry
-      .insert<TritonDialect, triton::gpu::TritonGPUDialect,
-              arith::ArithmeticDialect, StandardOpsDialect, scf::SCFDialect>();
+  registry.insert<TritonDialect, triton::gpu::TritonGPUDialect,
+                  mlir::math::MathDialect, arith::ArithmeticDialect,
+                  StandardOpsDialect, scf::SCFDialect>();
 
   context.appendDialectRegistry(registry);
 

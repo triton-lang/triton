@@ -671,7 +671,8 @@ class CodeGenerator(ast.NodeVisitor):
                     results.append(triton.language.tensor(call_op.get_result(i), callee_ret_type[i]))
                 return tuple(results)
         if hasattr(fn, '__self__') and self.is_triton_tensor(fn.__self__) or \
-                sys.modules[fn.__module__] is triton.language.core:
+                sys.modules[fn.__module__] is triton.language.core or \
+                isinstance(fn, triton.language.extern.ExternalFunction):
             return fn(*args, _builder=self.builder, **kws)
         if fn in self.builtins.values():
             args = [arg.value if isinstance(arg, triton.language.constexpr) else arg

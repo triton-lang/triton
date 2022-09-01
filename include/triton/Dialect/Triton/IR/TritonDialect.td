@@ -16,12 +16,15 @@ def Triton_Dialect : Dialect {
     Dependent Dialects:
       * Arithmetic:
         * addf, addi, andi, cmpf, cmpi, divf, fptosi, ...
+      * Math:
+        * exp, sin, cos, log, ...
       * StructuredControlFlow:
         * ForOp, IfOp, WhileOp, YieldOp, ConditionOp
   }];
 
   let dependentDialects = [
     "arith::ArithmeticDialect",
+    "math::MathDialect",
     "StandardOpsDialect",
     "scf::SCFDialect",
     "gpu::GPUDialect",

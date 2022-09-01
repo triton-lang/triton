@@ -1542,7 +1542,16 @@ void init_triton_ir(py::module &&m) {
              return self.create<mlir::triton::AtomicRMWOp>(loc, dstType, rmwOp,
                                                            ptr, val, mask);
            })
-
+      // External
+      .def("create_external_elementwise",
+           [](mlir::OpBuilder &self, const std::string &libName,
+              const std::string &libPath, const std::string &symbol,
+              std::vector<mlir::Value> &argList,
+              mlir::Type retType) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::triton::ExtElemwiseOp>(
+                 loc, retType, argList, libName, libPath, symbol);
+           })
       // Built-in instruction
       .def("create_get_program_id",
            [](mlir::OpBuilder &self, int axis) -> mlir::Value {
@@ -1563,12 +1572,32 @@ void init_triton_ir(py::module &&m) {
              return self.create<mlir::triton::DotOp>(loc, c.getType(), a, b, c,
                                                      allowTF32);
            })
-      // .def("create_exp", &ir::builder::create_exp, ret::reference)
-      // .def("create_cos", &ir::builder::create_cos, ret::reference)
-      // .def("create_sin", &ir::builder::create_sin, ret::reference)
-      // .def("create_log", &ir::builder::create_log, ret::reference)
+      .def("create_exp",
+           [](mlir::OpBuilder &self, mlir::Value &val) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::math::ExpOp>(loc, val);
+           })
+      .def("create_cos",
+           [](mlir::OpBuilder &self, mlir::Value &val) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::math::CosOp>(loc, val);
+           })
+      .def("create_sin",
+           [](mlir::OpBuilder &self, mlir::Value &val) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::math::SinOp>(loc, val);
+           })
+      .def("create_log",
+           [](mlir::OpBuilder &self, mlir::Value &val) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::math::LogOp>(loc, val);
+           })
+      .def("create_sqrt",
+           [](mlir::OpBuilder &self, mlir::Value &val) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::math::SqrtOp>(loc, val);
+           })
       // .def("create_trans", &ir::builder::create_trans, ret::reference)
-      // .def("create_sqrt", &ir::builder::create_sqrt, ret::reference)
       .def("create_reduce",
            [](mlir::OpBuilder &self, mlir::Value &operand,
               mlir::triton::RedOp redOp, int axis) -> mlir::Value {

@@ -4,6 +4,7 @@
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/LLVMCommon/LoweringOptions.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
 #include "mlir/Dialect/GPU/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -1328,9 +1329,10 @@ public:
     populateTritonToLLVMPatterns(typeConverter, patterns, numWarps,
                                  *axisAnalysis, 10 /*benefit*/);
 
-    // Add arith's patterns to help convert scalar expression to LLVM.
+    // Add arith/math's patterns to help convert scalar expression to LLVM.
     mlir::arith::populateArithmeticToLLVMConversionPatterns(typeConverter,
                                                             patterns);
+    mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
 
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
 

@@ -284,6 +284,26 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas"> {
 }
 
 //
+// External Function Ops
+//
+def TT_ExtElemwiseOp : TT_Op<"ext_elemwise", [NoSideEffect, Elementwise, SameOperandsAndResultShape,
+                                              SameVariadicOperandSize]> {
+    let summary = "ext_elemwise";
+
+    let description = [{
+        call an external function $symbol implemented in $libpath/$libname with $args
+
+        return $libpath/$libname:$symbol($args...)
+    }];
+
+    let arguments = (ins Variadic<TT_Tensor>:$args, StrAttr:$libname, StrAttr:$libpath, StrAttr:$symbol);
+
+    let results = (outs TT_Tensor:$result);
+
+    let assemblyFormat = "operands attr-dict `:` type(operands) `->` type($result)";
+}
+
+//
 // Intrinsics
 //
 // TODO: should have ConstantLike as Trait
