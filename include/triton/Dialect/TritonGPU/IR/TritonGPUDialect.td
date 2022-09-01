@@ -15,7 +15,8 @@ def TritonGPU_Dialect : Dialect {
   }];
 
   let dependentDialects = [
-    "triton::TritonDialect"
+    "triton::TritonDialect",
+    "mlir::gpu::GPUDialect"
   ];
 }
 

@@ -80,7 +80,8 @@ def TritonGPUVerifier : Pass<"tritongpu-verifier", "mlir::ModuleOp"> {
 
   let constructor = "mlir::createTritonGPUVerifier()";
 
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::gpu::GPUDialect"];
 }
 
 #endif
