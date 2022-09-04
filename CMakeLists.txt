@@ -220,3 +220,5 @@ if(BUILD_PYTHON_MODULE AND NOT WIN32)
 endif()
 
 add_subdirectory(test)
+
+add_subdirectory(unittest)

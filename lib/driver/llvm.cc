@@ -20,9 +20,13 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #include <fstream>
+
+#if defined __has_include
 #if __has_include(<unistd.h>)
 #include <unistd.h>
 #endif
+#endif
+
 #include "triton/driver/dispatch.h"
 #include "triton/driver/error.h"
 #include "triton/driver/llvm.h"
@@ -87,8 +91,10 @@ static bool find_and_replace(std::string &str, const std::string &begin,
                              const std::string &end,
                              const std::string &target) {
   size_t start_replace = str.find(begin);
-  size_t end_replace = str.find(end, start_replace);
   if (start_replace == std::string::npos)
+    return false;
+  size_t end_replace = str.find(end, start_replace);
+  if (end_replace == std::string::npos)
     return false;
   str.replace(start_replace, end_replace + 1 - start_replace, target);
   return true;
@@ -104,7 +110,7 @@ std::string path_to_ptxas(int &version) {
     ptxas_prefixes.insert(ptxas_prefixes.begin(), triton_ptxas);
   // see what path for ptxas are valid
   std::vector<std::string> working_ptxas;
-  for (std::string prefix : ptxas_prefixes) {
+  for (const std::string &prefix : ptxas_prefixes) {
     std::string ptxas = prefix + "ptxas";
     bool works = tools::exec(ptxas + " --version 2>&1", ret) == 0;
     if (works) {
@@ -124,19 +130,21 @@ std::string path_to_ptxas(int &version) {
   bool found = false;
   // currently choosing the first ptxas. Other logics can be implemented in
   // future
-  for (std::string ret : rets) {
-    if (std::regex_search(ret, match, version_regex)) {
+  size_t i = 0;
+  while (i < rets.size()) {
+    if (std::regex_search(rets[i], match, version_regex)) {
       int major = std::stoi(match[1]);
       int minor = std::stoi(match[2]);
       version = major * 1000 + minor * 10;
       found = true;
       break;
     }
+    ++i;
   }
   if (not found) {
     throw std::runtime_error("Error in parsing version");
   }
-  return ptxas;
+  return working_ptxas[i];
 }
 
 int vptx(int version) {
