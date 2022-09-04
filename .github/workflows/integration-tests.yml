@@ -9,7 +9,7 @@ on:
 jobs:
 
   Integration-Tests:
-    
+
     runs-on: self-hosted
 
     steps:
@@ -31,7 +31,7 @@ jobs:
         run: |
           pip install autopep8
           autopep8 -a -r -d --exit-code ./python || ( echo '::error title=Style issues::Please run \"autopep8 -a -r -i ./python\"' ; exit 1 )
-        
+
       - name: Check cpp style
         run: |
           sudo apt-get install -y clang-format
@@ -62,3 +62,9 @@ jobs:
         run: |
           cd python/tests
           pytest
+
+      - name: Run CXX unittests
+        run: |
+          cd python/
+          cd "build/$(ls build)"
+          ctest
