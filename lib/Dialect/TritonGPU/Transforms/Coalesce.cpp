@@ -10,7 +10,6 @@ using namespace mlir::triton;
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
 struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
-
   Attribute getCoalescedEncoding(AxisInfoAnalysis &axisInfo, Value ptr,
                                  int numWarps) {
     auto origType = ptr.getType().cast<RankedTensorType>();

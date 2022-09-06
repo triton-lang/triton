@@ -29,7 +29,6 @@ def test_empty_kernel_cubin_compile():
 def test_empty_kernel_launch():
     device = torch.cuda.current_device()
     binary = runtime.build_kernel(empty_kernel, "*fp32,i32,i32",
-                                  device=device,
                                   constants={"BLOCK": 256},
                                   num_warps=4,
                                   num_stages=3)
@@ -38,11 +37,9 @@ def test_empty_kernel_launch():
     )
 
     A = torch.zeros([1024], device="cuda")
-    runtime.launch_kernel(fn=empty_kernel,
-                          binary=binary,
+    runtime.launch_kernel(kernel=binary,
                           grid=grid,
-                          num_warps=4,
-                          num_stages=3,
+                          device=device,
                           X=A,
                           stride_xm=256,
                           BLOCK=tl.constexpr(256))
