@@ -341,25 +341,25 @@ void LoopPipeliner::emitPrologue() {
         }
         // load => copy async
         if (auto loadOp = llvm::dyn_cast<triton::LoadOp>(op)) {
-          Value mask = lookupOrDefault(loadOp.mask(), stage);
-          Value newMask;
-          if (mask) {
-            Value splatCond = builder.create<triton::SplatOp>(
-                mask.getLoc(), mask.getType(), loopCond);
-            newMask =
-                builder.create<arith::AndIOp>(mask.getLoc(), mask, splatCond);
-          } else {
-            newMask = builder.create<triton::SplatOp>(
-                loopCond.getLoc(), getI1SameShape(loadOp), loopCond);
-          }
-          // TODO: check if the hardware supports async copy
-          newOp = builder.create<triton::gpu::InsertSliceAsyncOp>(
+          auto sliceType =
+              loadsMapping[loadOp].getType().cast<RankedTensorType>();
+          Value sliceIndex = builder.create<arith::IndexCastOp>(
+              iv.getLoc(), builder.getI32Type(), iv);
+          Value insertAsyncOp = builder.create<triton::gpu::InsertSliceAsyncOp>(
               op->getLoc(), loadsBuffer[loadOp].getType(),
               lookupOrDefault(loadOp.ptr(), stage),
               loadStageBuffer[loadOp][stage], pipelineIterIdx, newMask,
               lookupOrDefault(loadOp.other(), stage), loadOp.cache(),
               loadOp.evict(), loadOp.isVolatile(), /*axis*/ 0);
-          loadStageBuffer[loadOp].push_back(newOp->getResult(0));
+          // extract slice
+          newOp = builder.create<tensor::ExtractSliceOp>(
+              op->getLoc(), sliceType, insertAsyncOp,
+              SmallVector<OpFoldResult>{iv, intAttr(0), intAttr(0)},
+              SmallVector<OpFoldResult>{intAttr(1),
+                                        intAttr(sliceType.getShape()[0]),
+                                        intAttr(sliceType.getShape()[1])},
+              SmallVector<OpFoldResult>{intAttr(1), intAttr(1), intAttr(1)});
+
         } else
           llvm_unreachable("This should be LoadOp");
       } else {
@@ -546,9 +546,8 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   Value extractSliceIndex = builder.create<arith::RemSIOp>(
       nextIV.getLoc(), loopIterIdx,
       builder.create<arith::ConstantIntOp>(nextIV.getLoc(), numStages, 32));
-  extractSliceIndex = builder.create<arith::IndexCastOp>(
-      extractSliceIndex.getLoc(), builder.getIndexType(), extractSliceIndex);
-
+  Value extractSliceIndex = builder.create<arith::IndexCastOp>(
+      nextIV.getLoc(), builder.getIndexType(), sliceIndex);
   for (Operation *op : orderedDeps) {
     Operation *nextOp = nullptr;
     // update loading mask
@@ -576,11 +575,8 @@ scf::ForOp LoopPipeliner::createNewForOp() {
           insertSliceIndex, newMask,
           nextMapping.lookupOrDefault(loadOp.other()), loadOp.cache(),
           loadOp.evict(), loadOp.isVolatile(), /*axis*/ 0);
-      nextBuffers.push_back(insertAsyncOp);
+
       auto sliceType = loadsMapping[loadOp].getType().cast<RankedTensorType>();
-      sliceType = RankedTensorType::get(sliceType.getShape(),
-                                        sliceType.getElementType(),
-                                        loadsBufferType[loadOp].getEncoding());
       nextOp = builder.create<tensor::ExtractSliceOp>(
           op->getLoc(), sliceType, insertAsyncOp,
           SmallVector<OpFoldResult>{extractSliceIndex, intAttr(0), intAttr(0)},
@@ -588,6 +584,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
                                     intAttr(sliceType.getShape()[0]),
                                     intAttr(sliceType.getShape()[1])},
           SmallVector<OpFoldResult>{intAttr(1), intAttr(1), intAttr(1)});
+
       extractSlices.push_back(nextOp->getResult(0));
     } else
       nextOp = builder.clone(*op, nextMapping);
