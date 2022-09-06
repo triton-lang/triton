@@ -1649,6 +1649,10 @@ void init_triton_ir(py::module &&m) {
       .def(
           "add_sccp_pass",
           [](mlir::PassManager &self) { self.addPass(mlir::createSCCPPass()); })
+      .def("add_coalesce_pass",
+           [](mlir::PassManager &self) {
+             self.addPass(mlir::createTritonGPUCoalescePass());
+           })
       .def("add_symbol_dce_pass",
            [](mlir::PassManager &self) {
              self.addPass(mlir::createSymbolDCEPass());

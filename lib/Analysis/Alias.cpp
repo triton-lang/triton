@@ -27,9 +27,9 @@ ChangeResult SharedMemoryAliasAnalysis::visitOperation(
     if (isSharedEncoding(result)) {
       aliasInfo.insert(result);
       pessimistic = false;
+    } else {
+      llvm::errs() << "op: " << op->getName() << "\n";
     }
-  } else {
-    llvm::errs() << "op: " << op->getName() << "\n";
   }
   // XXX(Keren): triton ops don't support aliasing yet.
   // else if (auto viewOp = dyn_cast<triton::ViewOp>(op) ||
