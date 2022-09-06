@@ -32,6 +32,8 @@ class LoopPipeliner {
   SetVector<Value> loads;
   /// the value that each load will be mapped to (after layout conversion)
   DenseMap<Value, Value> loadsMapping;
+  /// load => buffer
+  DenseMap<Value, Value> loadsBuffer;
 
   /// value (in loop) => value at stage N
   DenseMap<Value, SmallVector<Value>> valueMapping;
@@ -46,8 +48,14 @@ class LoopPipeliner {
 
   void setValueMapping(Value origin, Value newValue, int stage);
 
+  Value lookupOrDefault(Value origin, int stage);
+
   /// return true if this op uses any of `loads`
   bool isDirectUserOfAsyncLoad(Operation &op);
+
+  /// returns a empty buffer of size <numStages, ...>
+  triton::gpu::AllocTensorOp allocateEmptyBuffer(Operation *op,
+                                                 OpBuilder &builder);
 
 public:
   LoopPipeliner(scf::ForOp forOp, int numStages)
@@ -73,6 +81,12 @@ void LoopPipeliner::setValueMapping(Value origin, Value newValue, int stage) {
   if (valueMapping.find(origin) == valueMapping.end())
     valueMapping[origin] = SmallVector<Value>(numStages);
   valueMapping[origin][stage] = newValue;
+}
+
+Value LoopPipeliner::lookupOrDefault(Value origin, int stage) {
+  if (valueMapping.find(origin) == valueMapping.end())
+    return origin;
+  return valueMapping[origin][stage];
 }
 
 void LoopPipeliner::collectDeps(Value v, int stages, DenseSet<Value> &deps) {
@@ -111,6 +125,25 @@ bool LoopPipeliner::isDirectUserOfAsyncLoad(Operation &op) {
   return false;
 }
 
+triton::gpu::AllocTensorOp
+LoopPipeliner::allocateEmptyBuffer(Operation *op, OpBuilder &builder) {
+  // allocate a buffer for each pipelined tensor
+  // shape: e.g. (numStages==4), <32x64xbf16> -> <4x32x64xbf16>
+  Value convertLayout = loadsMapping[op->getResult(0)];
+  if (auto tensorType = convertLayout.getType().dyn_cast<RankedTensorType>()) {
+    SmallVector<int64_t> shape(tensorType.getShape().begin(),
+                               tensorType.getShape().end());
+    shape.insert(shape.begin(), numStages);
+    Type elementType = tensorType.getElementType();
+    // The encoding of the buffer is similar to the original tensor
+    Attribute encoding = tensorType.getEncoding();
+    auto bufferType = RankedTensorType::get(shape, elementType, encoding);
+    return builder.create<triton::gpu::AllocTensorOp>(convertLayout.getLoc(),
+                                                      bufferType);
+  }
+  llvm_unreachable("Async copy's return should be of RankedTensorType");
+}
+
 /// A load instruction can be pipelined if:
 ///   - the load doesn't depend on any other loads (after loop peeling)
 ///   - (?) this load is not a loop-invariant value (we should run LICM before
@@ -136,13 +169,6 @@ LogicalResult LoopPipeliner::initialize() {
       collectDeps(op, numStages - 1, deps);
     loadDeps[loadOp] = deps;
   }
-
-  // for (triton::LoadOp loadOp : allLoads) {
-  //   llvm::errs() << loadOp << " depends on: #" << loadDeps[loadOp].size() <<
-  //   " values\n"; for (Value dep : loadDeps[loadOp])
-  //     llvm::errs() << dep << "\n";
-  //   llvm::errs() << "\n";
-  // }
 
   // Don't pipeline loads that depend on other loads
   // (Because if a load depends on another load, this load needs to wait on the
@@ -234,29 +260,40 @@ void LoopPipeliner::emitPrologue() {
     for (Operation *op : orderedDeps) {
       Operation *newOp = nullptr;
       if (loads.contains(op->getResult(0))) {
+        // Allocate empty buffer
+        if (stage == 0)
+          loadsBuffer[op->getResult(0)] = allocateEmptyBuffer(op, builder);
         // load => copy async
         // TODO: check if the hardware supports copyasync
         if (auto loadOp = llvm::dyn_cast<triton::LoadOp>(op)) {
-          newOp = builder.create<triton::gpu::CopyAsyncOp>(
-              op->getLoc(), loadsMapping[loadOp].getType(), loadOp.ptr(),
-              loadOp.mask(), loadOp.other(), loadOp.cache(), loadOp.evict(),
-              loadOp.isVolatile());
+          Value sliceIndex = builder.create<arith::IndexCastOp>(
+              iv.getLoc(), builder.getI32Type(), iv);
+          Value insertAsyncOp = builder.create<triton::gpu::InsertSliceAsyncOp>(
+              op->getLoc(), loadsBuffer[loadOp].getType(),
+              lookupOrDefault(loadOp.ptr(), stage), loadsBuffer[loadOp],
+              sliceIndex, lookupOrDefault(loadOp.mask(), stage),
+              lookupOrDefault(loadOp.other(), stage), loadOp.cache(),
+              loadOp.evict(), loadOp.isVolatile(), /*axis*/ 0);
+          newOp = builder.create<triton::gpu::ExtractSliceOp>(
+              op->getLoc(), loadsMapping[loadOp].getType(), insertAsyncOp,
+              sliceIndex, /*axis*/ 0);
         } else
           llvm_unreachable("This should be LoadOp");
-      } else
+      } else {
         newOp = builder.clone(*op);
-
-      for (unsigned opIdx = 0; opIdx < op->getNumOperands(); ++opIdx) {
-        auto it = valueMapping.find(op->getOperand(opIdx));
-        if (it != valueMapping.end()) {
-          Value v = it->second[stage];
-          assert(v);
-          newOp->setOperand(opIdx, v);
-        } // else, op at opIdx is a loop-invariant value
+        // Update loop-carried uses
+        for (unsigned opIdx = 0; opIdx < op->getNumOperands(); ++opIdx) {
+          auto it = valueMapping.find(op->getOperand(opIdx));
+          if (it != valueMapping.end()) {
+            Value v = it->second[stage];
+            assert(v);
+            newOp->setOperand(opIdx, v);
+          } // else, op at opIdx is a loop-invariant value
+        }
       }
 
       // If this is a load/async_copy, we need to update the mask
-      if (llvm::isa<triton::LoadOp, triton::gpu::CopyAsyncOp>(newOp)) {
+      if (llvm::isa<triton::LoadOp, triton::gpu::InsertSliceAsyncOp>(newOp)) {
         Value mask = newOp->getOperand(1);
         // assert(I1 or TensorOf<[I1]>);
         OpBuilder::InsertionGuard g(builder);
@@ -265,7 +302,11 @@ void LoopPipeliner::emitPrologue() {
             mask.getLoc(), mask.getType(), loopCond);
         Value newMask =
             builder.create<arith::AndIOp>(mask.getLoc(), mask, splatCond);
-        newOp->setOperand(1, newMask);
+        // TODO: better way to do this?
+        if (llvm::isa<triton::LoadOp>(newOp))
+          newOp->setOperand(1, newMask);
+        else // InsertSliceAsyncOp
+          newOp->setOperand(3, newMask);
       }
 
       // update mapping of results
@@ -283,6 +324,17 @@ void LoopPipeliner::emitPrologue() {
                 newOp->getResult(dstIdx), stage + 1);
         }
       }
+    }
+  }
+
+  // async.wait & extract_slice
+  Operation *asyncWait = builder.create<triton::gpu::AsyncWaitOp>(
+      loads[0].getLoc(), loads.size() * (numStages - 2));
+  for (int i = numStages - 2; i >= 0; --i) {
+    for (auto it = loads.rbegin(); it != loads.rend(); ++it) {
+      // move extract_slice after asyncWait
+      Value load = *it;
+      valueMapping[loadsMapping[load]][i].getDefiningOp()->moveAfter(asyncWait);
     }
   }
 }
@@ -333,14 +385,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
 
   // 2.1 clone the loop body, replace original args with args of the new ForOp
   // Insert async wait if necessary.
-  bool asyncWaitInserted = false;
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!asyncWaitInserted && isDirectUserOfAsyncLoad(op)) {
-      asyncWaitInserted = true;
-      assert(numStages >= 2);
-      builder.create<triton::gpu::AsyncWaitOp>(op.getLoc(),
-                                               loads.size() * (numStages - 2));
-    }
     Operation *newOp = builder.clone(op, mapping);
     // update mapping of results
     for (unsigned dstIdx : llvm::seq(unsigned(0), op.getNumResults()))
@@ -385,8 +430,17 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   Value nextLoopCond =
       builder.create<arith::CmpIOp>(nextIV.getLoc(), arith::CmpIPredicate::slt,
                                     nextIV, newForOp.getUpperBound());
+
+  // slice index
+  SmallVector<Value> extractSlices;
+  Value sliceIndex = builder.create<arith::IndexCastOp>(
+      nextIV.getLoc(), builder.getI32Type(), nextIV);
+  sliceIndex = builder.create<arith::RemSIOp>(
+      nextIV.getLoc(), sliceIndex,
+      builder.create<arith::ConstantIntOp>(nextIV.getLoc(), numStages, 32));
   for (Operation *op : orderedDeps) {
     Operation *nextOp = nullptr;
+    // TODO(da): does this work if loadOp has no mask?
     // update loading mask
     if (loads.contains(op->getResult(0))) {
       auto loadOp = llvm::cast<triton::LoadOp>(op);
@@ -401,16 +455,18 @@ scf::ForOp LoopPipeliner::createNewForOp() {
         if (!(forOp.isDefinedOutsideOfLoop(mask) && nextMapping.contains(mask)))
           nextMapping.map(mask, newMask);
       }
-      // TODO: more elegant way to do this?
-      nextOp = builder.create<triton::gpu::CopyAsyncOp>(
-          op->getLoc(), loadsMapping[op->getResult(0)].getType(),
-          nextMapping.lookupOrDefault(loadOp.ptr()),
-          nextMapping.lookupOrDefault(loadOp.mask()),
+      Value insertAsyncOp = builder.create<triton::gpu::InsertSliceAsyncOp>(
+          op->getLoc(), loadsBuffer[loadOp].getType(),
+          nextMapping.lookupOrDefault(loadOp.ptr()), loadsBuffer[loadOp],
+          sliceIndex, nextMapping.lookupOrDefault(loadOp.mask()),
           nextMapping.lookupOrDefault(loadOp.other()), loadOp.cache(),
-          loadOp.evict(), loadOp.isVolatile());
+          loadOp.evict(), loadOp.isVolatile(), /*axis*/ 0);
+      nextOp = builder.create<triton::gpu::ExtractSliceOp>(
+          op->getLoc(), loadsMapping[loadOp].getType(), insertAsyncOp,
+          sliceIndex, /*axis*/ 0);
+      extractSlices.push_back(nextOp->getResult(0));
     } else
       nextOp = builder.clone(*op, nextMapping);
-    // llvm::errs() << "epilogue cloning...: " << *op << "\n";
     // update mapping of results
     for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
       nextMapping.map(op->getResult(dstIdx), nextOp->getResult(dstIdx));
@@ -425,6 +481,14 @@ scf::ForOp LoopPipeliner::createNewForOp() {
         }
       }
     }
+  }
+
+  // async.wait & extract_slice
+  Operation *asyncWait = builder.create<triton::gpu::AsyncWaitOp>(
+      loads[0].getLoc(), loads.size() * (numStages - 2));
+  for (auto it = extractSlices.rbegin(); it != extractSlices.rend(); ++it) {
+    // move extract_slice after asyncWait
+    it->getDefiningOp()->moveAfter(asyncWait);
   }
 
   // Finally, the YieldOp, need to sync with the order of newLoopArgs
