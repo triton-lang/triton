@@ -18,6 +18,18 @@ def TritonGPU_Dialect : Dialect {
     "triton::TritonDialect",
     "mlir::gpu::GPUDialect"
   ];
+
+  let extraClassDeclaration = [{
+    static std::string getNumWarpsAttrName() { return "triton_gpu.num-warps"; }
+    static int getNumWarps(ModuleOp mod) { 
+      if(!mod->hasAttr("triton_gpu.num-warps"))
+        llvm::report_fatal_error(
+            "TritonGPU module should contain a triton_gpu.num-warps attribute");
+      return mod->getAttr("triton_gpu.num-warps").cast<IntegerAttr>().getInt();
+    }
+  }];
+  
+
 }
 
 #endif
