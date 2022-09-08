@@ -581,6 +581,13 @@ def cast(input: tl.tensor,
         return input
     src_sca_ty = src_ty.scalar
     dst_sca_ty = dst_ty.scalar
+    # fp8 <=> bf16/fp16
+    if (src_sca_ty.is_bf16() or src_sca_ty.is_fp16()) and dst_sca_ty.is_fp8():
+        return tl.tensor(builder.create_fp_trunc(input.handle, dst_ty.to_ir(builder)),
+                         dst_ty)
+    if src_sca_ty.is_fp8() and (dst_sca_ty.is_bf16() or dst_sca_ty.is_fp16()):
+        return tl.tensor(builder.create_fp_ext(input.handle, dst_ty.to_ir(builder)),
+                         dst_ty)
     # bf16 <=> (not fp32)
     if (src_sca_ty.is_bf16() and not dst_sca_ty.is_fp32()) or \
        (dst_sca_ty.is_bf16() and not src_sca_ty.is_fp32()):
@@ -1090,13 +1097,17 @@ def sqrt(x: tl.tensor, builder: ir.builder) -> tl.tensor:
 
 ##
 
-def multiple_of(x: tl.tensor, value: int) -> tl.tensor:
-    x.handle.multiple_of(value)
+def multiple_of(x: tl.tensor, values: List[int]) -> tl.tensor:
+    if len(x.shape) != len(values):
+        raise ValueError("Shape of input to multiple_of does not match the length of values")
+    x.handle.multiple_of(values)
     return x
 
 
-def max_contiguous(x: tl.tensor, value: int) -> tl.tensor:
-    x.handle.max_contiguous(value)
+def max_contiguous(x: tl.tensor, values: List[int]) -> tl.tensor:
+    if len(x.shape) != len(values):
+        raise ValueError("Shape of input to max_contiguous does not match the length of values")
+    x.handle.max_contiguous(values)
     return x
 
 

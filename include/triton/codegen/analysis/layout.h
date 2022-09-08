@@ -211,7 +211,8 @@ private:
   TensorCoreType tensor_core_type_ = FP32_FP16_FP16_FP32;
 };
 
-struct scanline_layout: public distributed_layout {
+class scanline_layout: public distributed_layout {
+public:
   scanline_layout(size_t num_warps,
                     const std::vector<int>& axes,
                     const std::vector<unsigned>& shape,
@@ -225,7 +226,7 @@ struct scanline_layout: public distributed_layout {
   int contig_per_thread(size_t k) { return nts_.at(k); }
 
   int per_thread(size_t k) { return contig_per_thread(k) * shape_[k] / shape_per_cta(k);}
-public:
+private:
   // micro tile size. The size of a tile held by a thread block.
   std::vector<int> mts_;
   // nano tile size. The size of a tile held by a thread.

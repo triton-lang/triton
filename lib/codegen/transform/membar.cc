@@ -36,6 +36,9 @@ int membar::group_of(ir::value* v, std::vector<ir::value*> &async_write) {
   else{
     if(layouts_->has_tmp(v))
       return async_write.size() - 1;
+    // // Ignore copy_to_shared. It won't modify async behavior.
+    // if(dynamic_cast<ir::copy_to_shared_inst*>(v))
+    //   return 0;
     auto it = std::find(async_write.begin(), async_write.end(), v);
     return std::distance(async_write.begin(), it);
   }

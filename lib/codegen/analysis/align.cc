@@ -366,9 +366,9 @@ std::vector<unsigned> align::populate_max_contiguous(ir::value *v){
   if(max_contiguous_.find(v) != max_contiguous_.end())
     return max_contiguous_.at(v);
   if(auto *x = dynamic_cast<ir::instruction*>(v)){
-    unsigned max_contiguous = x->get_metadata(ir::metadata::max_contiguous);
-    if(max_contiguous > 0)
-      return add_to_cache(x, {max_contiguous}, max_contiguous_);
+    std::vector<unsigned> max_contiguous = x->get_metadata(ir::metadata::max_contiguous);
+    if(!max_contiguous.empty())
+      return add_to_cache(x, max_contiguous, max_contiguous_);
   }
   if(auto *x = dynamic_cast<ir::cast_inst*>(v))
     return populate_max_contiguous_cast(x);
@@ -521,9 +521,9 @@ std::vector<unsigned> align::populate_starting_multiple(ir::value *v){
   if(starting_multiple_.find(v) != starting_multiple_.end())
     return starting_multiple_.at(v);
   if(auto *x = dynamic_cast<ir::instruction*>(v)){
-    unsigned multiple_of = x->get_metadata(ir::metadata::multiple_of);
-    if(multiple_of > 0)
-      return add_to_cache(x, {multiple_of}, starting_multiple_);
+    std::vector<unsigned> multiple_of = x->get_metadata(ir::metadata::multiple_of);
+    if(!multiple_of.empty())
+      return add_to_cache(x, multiple_of, starting_multiple_);
   }
   if(auto *x = dynamic_cast<ir::cast_inst*>(v))
     return populate_starting_multiple_cast(x);

@@ -59,8 +59,8 @@ public:
   std::string repr() const                                    { return repr_impl(); }
   // metadata
   void set_metadata(ir::metadata::kind_t kind,
-                    unsigned value)                           { metadatas_[kind] = value;}
-  unsigned get_metadata(ir::metadata::kind_t kind)            { return metadatas_[kind];}
+                    std::vector<unsigned> value)                           { metadatas_[kind] = value;}
+  std::vector<unsigned> get_metadata(ir::metadata::kind_t kind)            { return metadatas_[kind];}
   // cloning
   ir::instruction* clone() {
     ir::instruction* res = clone_impl();
@@ -77,7 +77,7 @@ public:
 
 private:
   basic_block *parent_;
-  std::map<ir::metadata::kind_t, unsigned> metadatas_;
+  std::map<ir::metadata::kind_t, std::vector<unsigned>> metadatas_;
   value_id_t id_;
 };
 

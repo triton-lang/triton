@@ -70,7 +70,7 @@ private:
 
 class module {
   typedef std::pair<std::string, basic_block*> val_key_t;
-  typedef std::pair<ir::metadata::kind_t, unsigned> md_pair_t;
+  typedef std::pair<ir::metadata::kind_t, std::vector<unsigned>> md_pair_t;
   friend class function;
 
 public:
