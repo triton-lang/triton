@@ -16,6 +16,7 @@ function(add_triton_ut)
           ${__SRCS})
   target_link_libraries(
           ${__NAME}
+          PRIVATE
           GTest::gtest_main
           gmock
           ${__LIBS})
