@@ -39,11 +39,13 @@ private:
 
   /// Initializes explicitly defined shared memory values for a given operation.
   void getExplicitValueSize(Operation *op) {
-    /// Values returned from scf.yield will not be allocated even though they
-    /// have the shared encoding.
-    /// For example: %a = scf.if -> yield
-    /// %a must be allocated elsewhere by other operations.
-    if (!maybeSharedAllocationOp(op)) {
+    // Values returned from scf.yield will not be allocated even though they
+    // have the shared encoding.
+    // For example: %a = scf.if -> yield
+    // %a must be allocated elsewhere by other operations.
+    // FIXME(Keren): extract and insert are always alias for now
+    if (!maybeSharedAllocationOp(op) || isa<triton::gpu::ExtractSliceOp>(op) ||
+        isa<triton::gpu::InsertSliceAsyncOp>(op)) {
       return;
     }
 

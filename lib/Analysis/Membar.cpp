@@ -45,19 +45,25 @@ void MembarAnalysis::transfer(Operation *op, RegionInfo *regionInfo,
   if (op->getNumResults() < 1)
     return;
 
-  if (dyn_cast<scf::ForOp>(op) || dyn_cast<scf::IfOp>(op) ||
-      dyn_cast<scf::YieldOp>(op)) {
-    // Do not insert barriers before control flow operations.
+  if (isa<scf::ForOp>(op) || isa<scf::IfOp>(op) || isa<scf::YieldOp>(op) ||
+      isa<triton::gpu::ExtractSliceOp>(op) ||
+      isa<triton::gpu::InsertSliceAsyncOp>(op) ||
+      isa<triton::gpu::AllocTensorOp>(op)) {
+    // Do not insert barriers before control flow operations and
+    // alloc/extract/insert
+    // alloc is an allocation op without memory write.
+    // In contrast, arith.constant is an allocation op with memory write.
+    // FIXME(Keren): extract and insert are always alias for now
     return;
   }
 
-  if (dyn_cast<gpu::BarrierOp>(op)) {
+  if (isa<gpu::BarrierOp>(op)) {
     // If the current op is a barrier, we sync previous reads and writes
     regionInfo->sync();
     return;
   }
 
-  if (dyn_cast<triton::gpu::AsyncWaitOp>(op)) {
+  if (isa<triton::gpu::AsyncWaitOp>(op)) {
     // If the current op is an async wait, we insert a barrier op and sync
     // previous reads and writes.
     OpBuilder::InsertionGuard g(*builder);

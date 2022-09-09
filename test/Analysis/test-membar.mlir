@@ -56,6 +56,8 @@ func @war_single_block(%A : !tt.ptr<f16>) {
   %a1 = triton_gpu.convert_layout %a1_ : (tensor<128x32xf16, #AL>) -> tensor<128x32xf16, #A>
   // CHECK: Membar 5
   %a2 = triton_gpu.convert_layout %a1 : (tensor<128x32xf16, #A>) -> tensor<128x32xf16, #AL>
+  // a2's liveness range ends here, and a3 and a2 have the same address range.
+  // So it makes sense to have a WAR dependency between a2 and a3.
   // CHECK-NEXT: Membar 7
   %a3 = triton_gpu.convert_layout %a1_ : (tensor<128x32xf16, #AL>) -> tensor<128x32xf16, #A>
   return
@@ -79,6 +81,41 @@ func @async_wait() {
   triton_gpu.async_wait {num = 4 : i32}
   // CHECK-NEXT: Membar 4
   %a_ = triton_gpu.convert_layout %a : (tensor<32x16xf16, #A>) -> tensor<32x16xf16, #AL>
+  return
+}
+
+// CHECK-LABEL: alloc
+func @alloc() {
+  %cst0 = triton_gpu.alloc_tensor : tensor<16x16xf16, #A>
+  %a = tt.cat %cst0, %cst0 {axis = 0} : (tensor<16x16xf16, #A>, tensor<16x16xf16, #A>) -> tensor<32x16xf16, #A>
+  // CHECK: Membar 2
+  %b = triton_gpu.convert_layout %a : (tensor<32x16xf16, #A>) -> tensor<32x16xf16, #AL>
+  return
+}
+
+// CHECK-LABEL: extract_slice
+func @extract_slice() {
+  %cst0 = arith.constant dense<0.000000e+00> : tensor<1x16x16xf16, #A>
+  %index = arith.constant 0 : i32
+  %cst1 = triton_gpu.extract_slice %cst0, %index { axis = 0 : i32 } : tensor<1x16x16xf16, #A> -> tensor<16x16xf16, #A>
+  // CHECK: Membar 3
+  %cst2 = triton_gpu.convert_layout %cst1 : (tensor<16x16xf16, #A>) -> tensor<16x16xf16, #AL>
+  // CHECK-NEXT: Membar 5
+  %cst3 = triton_gpu.convert_layout %cst2 : (tensor<16x16xf16, #AL>) -> tensor<16x16xf16, #A>
+  return
+}
+
+// CHECK-LABEL: insert_slice_async
+func @insert_slice_async(%A : !tt.ptr<f16>, %i1 : i1) {
+  %a_ptr = tt.broadcast %A : (!tt.ptr<f16>) -> tensor<16x16x!tt.ptr<f16>, #AL>
+  %mask = tt.splat %i1 : (i1) -> tensor<16x16xi1, #AL>
+  %other = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
+  %tensor = triton_gpu.alloc_tensor : tensor<1x16x16xf16, #A>
+  %index = arith.constant 0 : i32
+  %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index, %mask, %other {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isOtherUnspecified = false, isVolatile = false} : tensor<16x16x!tt.ptr<f16>, #AL> -> tensor<1x16x16xf16, #A>
+  %b = tt.cat %a, %a {axis = 0} : (tensor<1x16x16xf16, #A>, tensor<1x16x16xf16, #A>) -> tensor<2x16x16xf16, #A>
+  // CHECK: Membar 7
+  %c = tt.cat %b, %b {axis = 0} : (tensor<2x16x16xf16, #A>, tensor<2x16x16xf16, #A>) -> tensor<4x16x16xf16, #A>
   return
 }
 

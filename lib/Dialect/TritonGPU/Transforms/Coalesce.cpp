@@ -69,7 +69,7 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     // convert output types
     SmallVector<Type, 4> newTypes;
     for (auto t : op->getResultTypes()) {
-      bool is_async = std::is_same<T, triton::gpu::CopyAsyncOp>::value;
+      bool is_async = std::is_same<T, triton::gpu::InsertSliceAsyncOp>::value;
       newTypes.push_back(is_async ? t : convertType(t));
     }
     // construct new op with the new encoding
@@ -106,9 +106,9 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
       builder.setInsertionPoint(curr);
       if (auto load = dyn_cast<triton::LoadOp>(curr))
         coalesceOp<triton::LoadOp>(axisInfo, curr, load.ptr(), builder);
-      if (auto load = dyn_cast<triton::gpu::CopyAsyncOp>(curr))
-        coalesceOp<triton::gpu::CopyAsyncOp>(axisInfo, curr, load.ptr(),
-                                             builder);
+      if (auto load = dyn_cast<triton::gpu::InsertSliceAsyncOp>(curr))
+        coalesceOp<triton::gpu::InsertSliceAsyncOp>(axisInfo, curr, load.src(),
+                                                    builder);
       if (auto store = dyn_cast<triton::StoreOp>(curr))
         coalesceOp<triton::StoreOp>(axisInfo, curr, store.ptr(), builder);
     });

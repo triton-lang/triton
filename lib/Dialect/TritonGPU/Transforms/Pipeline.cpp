@@ -275,7 +275,7 @@ void LoopPipeliner::emitPrologue() {
           loadStageBuffer[op->getResult(0)] = {loadsBuffer[op->getResult(0)]};
         }
         // load => copy async
-        // TODO: check if the hardware supports copyasync
+        // TODO: check if the hardware supports async copy
         if (auto loadOp = llvm::dyn_cast<triton::LoadOp>(op)) {
           newOp = builder.create<triton::gpu::InsertSliceAsyncOp>(
               op->getLoc(), loadsBuffer[loadOp].getType(),
