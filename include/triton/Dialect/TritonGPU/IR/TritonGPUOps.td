@@ -38,37 +38,6 @@ def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
   let assemblyFormat = "attr-dict";
 }
 
-def TTG_CopyAsyncOp : TTG_Op<"copy_async",
-                             [MemoryEffects<[MemRead, MemWrite]>,
-                              SameVariadicOperandSize,
-                              TypesMatchWith<"infer mask type from ptr type",
-                                             "ptr", "mask", "getI1SameShape($_self)",
-                                             "($_op.getOperands().size() <= 1) || std::equal_to<>()">,
-                              TypesMatchWith<"infer other type from ptr type",
-                                             "ptr", "other", "getPointeeType($_self)",
-                                             "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
-  let summary = "copy async";
-
-  let arguments = (ins TT_PtrTensor:$ptr, Optional<I1Tensor>:$mask, Optional<TT_Type>:$other,
-                       TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict,
-                       BoolAttr:$isVolatile);
-
-  let builders = [
-      OpBuilder<(ins "Value":$ptr, "triton::CacheModifier":$cache,
-                     "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
-  ];
-
-  let results = (outs TT_Tensor:$result);
-
-  // let assemblyFormat = "operands attr-dict `:` type($ptr) `->` type($result)";
-  let parser = [{ return parseCopyAsyncOp(parser, result); }];
-
-  let printer = [{ return printCopyAsyncOp(p, *this); }];
-
-  // result needs to be of shared layout
-  let verifier = [{ return ::verify(*this); }];
-}
-
 // Port Arith_CmpIOp & Arith_CmpFOp to TritonGPU.
 // This is needed because Arith's Cmp ops don't
 // handle encodings
@@ -110,7 +79,7 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
 
   let description = [{
       This operation inserts a tensor `$src` into another tensor `$dst` as specified by the operation’s
-      `$offset` argument and `$axis` attribute.
+      `$index` argument and `$axis` attribute.
 
       It returns a copy of `$dst` with the proper slice updated asynchronously with the value of `$src`.
       This operation is non-blocking, and `$results` will have the updated value after the corresponding async_wait.
@@ -119,7 +88,7 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
 
       * src: the tensor that is inserted.
       * dst: the tensor into which the `$src` tensor is inserted.
-      * offset: the offset of the `$src` tensor at the given `$axis` from which the `$dst` tensor is inserted into
+      * index: the index of the `$src` tensor at the given `$axis` from which the `$dst` tensor is inserted into
       * mask: optional tensor-rank number of boolean masks which specify which
               elements of the `$src` tensor are inserted into the `$dst` tensor.
       * other: optional tensor-rank number of other tensors which specify what
@@ -136,24 +105,24 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
 
       ```
       %1 = triton_gpu.alloc_tensor : tensor<2x32xf32>
-      %2 = triton_gpu.insert_slice_async %0, %1, %offset { axis = 0 } : tensor<32x!tt.ptr<f32>, #AL> -> tensor<2x32xf32, #A>
+      %2 = triton_gpu.insert_slice_async %0, %1, %index { axis = 0 } : tensor<32x!tt.ptr<f32>, #AL> -> tensor<2x32xf32, #A>
       triiton_gpu.async_wait { num = 0 : i32 }
       ```
   }];
 
-  let arguments = (ins TT_PtrTensor:$src, TT_Tensor:$dst, I32:$offset,
+  let arguments = (ins TT_PtrTensor:$src, TT_Tensor:$dst, I32:$index,
                        Optional<I1Tensor>:$mask, Optional<TT_Type>:$other,
                        TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict,
                        BoolAttr:$isVolatile, I32Attr:$axis);
 
   let builders = [
-      OpBuilder<(ins "Value":$src, "Value":$dst, "Value":$offset,
+      OpBuilder<(ins "Value":$src, "Value":$dst, "Value":$index,
                      "triton::CacheModifier":$cache,
                      "triton::EvictionPolicy":$evict, "bool":$isVolatile, "int":$axis)>,
-      OpBuilder<(ins "Value":$src, "Value":$dst, "Value":$offset, "Value":$mask,
+      OpBuilder<(ins "Value":$src, "Value":$dst, "Value":$index, "Value":$mask,
                      "triton::CacheModifier":$cache,
                      "triton::EvictionPolicy":$evict, "bool":$isVolatile, "int":$axis)>,
-      OpBuilder<(ins "Value":$src, "Value":$dst, "Value":$offset,
+      OpBuilder<(ins "Value":$src, "Value":$dst, "Value":$index,
                      "Value":$mask, "Value":$other,
                      "triton::CacheModifier":$cache,
                      "triton::EvictionPolicy":$evict, "bool":$isVolatile, "int":$axis)>,
@@ -163,7 +132,7 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
 
   //let assemblyFormat = [{
   //  $src `,` $dst ``
-  //  $offset, $mask, $other
+  //  $index, $mask, $other
   //  attr-dict `:` type($src) `->` type($dst)
   //}];
 
@@ -180,26 +149,26 @@ def TTG_ExtractSliceOp : TTG_Op<"extract_slice", [NoSideEffect, InferTypeOpInter
   let summary = "extract slice";
   let description = [{
     The "extract_slice" operation extracts a `$result` tensor from a `$src` tensor as
-    specified by the operation's `$offset` and `$axis` arguments.
+    specified by the operation's `$index` and `$axis` arguments.
 
     The extract_slice operation supports the following arguments:
 
     * src: the tensor that is extracted from.
-    * offset: the offset at the given `$axis` from which the `$src` tensor is extracted
+    * index: the index at the given `$axis` from which the `$src` tensor is extracted
 
     Example:
 
     ```
     // Rank-reducing extract_slice.
-    %1 = tensor.extract_slice %0, %offset {axis = 0} : tensor<8x16x4xf32> -> tensor<1x16x4xf32>
+    %1 = tensor.extract_slice %0, %index {axis = 0} : tensor<8x16x4xf32> -> tensor<1x16x4xf32>
     ```
   }];
 
-  let arguments = (ins TT_Tensor:$src, I32:$offset, I32Attr:$axis);
+  let arguments = (ins TT_Tensor:$src, I32:$index, I32Attr:$axis);
 
   let results = (outs TT_Tensor:$result);
 
-  let assemblyFormat = [{$src `,` $offset attr-dict `:` type($src) `->` type($result)}];
+  let assemblyFormat = [{$src `,` $index attr-dict `:` type($src) `->` type($result)}];
 
   let extraClassDeclaration = [{
     static ::mlir::LogicalResult inferReturnTypes(::mlir::MLIRContext *context,

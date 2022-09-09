@@ -119,7 +119,9 @@ public:
       return mlir::failure();
 
     auto blacklist = [](Operation *op) {
-      if (isa<triton::gpu::CopyAsyncOp, triton::LoadOp, triton::StoreOp>(op))
+      if (isa<triton::gpu::ExtractSliceOp, triton::gpu::AllocTensorOp,
+              triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp>(
+              op))
         return true;
       if (isa<scf::YieldOp, scf::ForOp>(op))
         return true;
