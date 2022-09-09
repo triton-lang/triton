@@ -16,18 +16,16 @@
 // CHECK: %[[A1BUFFER:.*]] = triton_gpu.insert_slice_async
 // CHECK: %[[B1BUFFER:.*]] = triton_gpu.insert_slice_async
 // CHECK:   triton_gpu.async_wait {num = 2 : i32}
-// CHECK: %[[A0:.*]] = triton_gpu.extract_slice %[[A0BUFFER]]
-// CHECK: %[[B0:.*]] = triton_gpu.extract_slice %[[B0BUFFER]]
-// CHECK: %[[A1:.*]] = triton_gpu.extract_slice %[[A1BUFFER]]
-// CHECK: %[[B1:.*]] = triton_gpu.extract_slice %[[B1BUFFER]]
-// CHECK: scf.for {{.*}} iter_args({{.*}}, {{.*}}, {{.*}}, %[[arg_a0:.*]] = %[[A0]], %[[arg_a1:.*]] = %[[A1]], %[[arg_b0:.*]] = %[[B0]], %[[arg_b1:.*]] = %[[B1]], {{.*}})
+// CHECK: %[[A0:.*]] = triton_gpu.extract_slice %[[A1BUFFER]]
+// CHECK: %[[B0:.*]] = triton_gpu.extract_slice %[[B1BUFFER]]
+// CHECK: scf.for {{.*}} iter_args({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[arg_a0:.*]] = %[[A0]], %[[arg_b0:.*]] = %[[B0]], {{.*}})
 // CHECK:   tt.dot %[[arg_a0]], %[[arg_b0]], {{.*}}
 // CHECK:   %[[NEXT_A_BUFFER:.*]] = triton_gpu.insert_slice_async
 // CHECK:   %[[NEXT_B_BUFFER:.*]] = triton_gpu.insert_slice_async
 // CHECK:   triton_gpu.async_wait {num = 2 : i32}
 // CHECK:   %[[NEXT_A:.*]] = triton_gpu.extract_slice %[[NEXT_A_BUFFER]]
 // CHECK:   %[[NEXT_B:.*]] = triton_gpu.extract_slice %[[NEXT_B_BUFFER]]
-// CHECK:   scf.yield {{.*}}, {{.*}}, {{.*}}, %[[arg_a1]], %[[NEXT_A]], %[[arg_b1]], %[[NEXT_B]]
+// CHECK:   scf.yield {{.*}}, {{.*}}, {{.*}}, %[[NEXT_A_BUFFER]], %[[NEXT_B_BUFFER]], %[[NEXT_A]], %[[NEXT_B]]
 func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
   %a_ptr_init = tt.broadcast %A : (!tt.ptr<f16>) -> tensor<128x32x!tt.ptr<f16>, #AL>
   %b_ptr_init = tt.broadcast %B : (!tt.ptr<f16>) -> tensor<32x128x!tt.ptr<f16>, #BL>
@@ -66,18 +64,16 @@ func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B
 // CHECK:   %[[A1BUFFER:.*]] = triton_gpu.insert_slice_async
 // CHECK:   %[[B1BUFFER:.*]] = triton_gpu.insert_slice_async
 // CHECK:   triton_gpu.async_wait {num = 2 : i32}
-// CHECK:   %[[A0:.*]] = triton_gpu.extract_slice %[[A0BUFFER]]
-// CHECK:   %[[B0:.*]] = triton_gpu.extract_slice %[[B0BUFFER]]
-// CHECK:   %[[A1:.*]] = triton_gpu.extract_slice %[[A1BUFFER]]
-// CHECK:   %[[B1:.*]] = triton_gpu.extract_slice %[[B1BUFFER]]
-// CHECK:   scf.for {{.*}} iter_args({{.*}}, {{.*}}, {{.*}}, %[[arg_a0:.*]] = %[[A0]], %[[arg_a1:.*]] = %[[A1]], %[[arg_b0:.*]] = %[[B0]], %[[arg_b1:.*]] = %[[B1]], {{.*}})
+// CHECK:   %[[A0:.*]] = triton_gpu.extract_slice %[[A1BUFFER]]
+// CHECK:   %[[B0:.*]] = triton_gpu.extract_slice %[[B1BUFFER]]
+// CHECK:   scf.for {{.*}} iter_args({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[arg_a0:.*]] = %[[A0]], %[[arg_b0:.*]] = %[[B0]], {{.*}})
 // CHECK:     tt.dot %[[arg_a0]], %[[arg_b0]], {{.*}}
 // CHECK:     %[[NEXT_A_BUFFER:.*]] = triton_gpu.insert_slice_async
 // CHECK:     %[[NEXT_B_BUFFER:.*]] = triton_gpu.insert_slice_async
 // CHECK:     triton_gpu.async_wait {num = 2 : i32}
 // CHECK:     %[[NEXT_A:.*]] = triton_gpu.extract_slice %[[NEXT_A_BUFFER]]
 // CHECK:     %[[NEXT_B:.*]] = triton_gpu.extract_slice %[[NEXT_B_BUFFER]]
-// CHECK:     scf.yield {{.*}}, {{.*}}, {{.*}}, %[[arg_a1]], %[[NEXT_A]], %[[arg_b1]], %[[NEXT_B]]
+// CHECK:     scf.yield {{.*}}, {{.*}}, {{.*}}, %[[NEXT_A_BUFFER]], %[[NEXT_B_BUFFER]], %[[NEXT_A]], %[[NEXT_B]]
 func @matmul_loop_nested(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
   scf.for %iv0 = %lb to %ub step %step {
     %a_ptr_init = tt.broadcast %A : (!tt.ptr<f16>) -> tensor<128x32x!tt.ptr<f16>, #AL>
@@ -114,14 +110,13 @@ func @matmul_loop_nested(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f
 // CHECK: %[[B0BUFFER:.*]] = triton_gpu.insert_slice_async
 // CHECK: %[[B1BUFFER:.*]] = triton_gpu.insert_slice_async
 // CHECK: triton_gpu.async_wait {num = 1 : i32}
-// CHECK: %[[B0:.*]] = triton_gpu.extract_slice %[[B0BUFFER]]
-// CHECK: %[[B1:.*]] = triton_gpu.extract_slice %[[B1BUFFER]]
-// CHECK: scf.for {{.*}} iter_args({{.*}}, {{.*}}, %[[arg_b0:.*]] = %[[B0]], %[[arg_b1:.*]] = %[[B1]], {{.*}})
+// CHECK: %[[B0:.*]] = triton_gpu.extract_slice %[[B1BUFFER]]
+// CHECK: scf.for {{.*}} iter_args({{.*}}, {{.*}}, {{.*}}, %[[arg_b0:.*]] = %[[B0]], {{.*}})
 // CHECK:   tt.dot {{.*}}, %[[arg_b0]], {{.*}}
 // CHECK:   %[[NEXT_B_BUFFER:.*]] = triton_gpu.insert_slice_async
 // CHECK:   triton_gpu.async_wait {num = 1 : i32}
 // CHECK:   %[[NEXT_B:.*]] = triton_gpu.extract_slice %[[NEXT_B_BUFFER]]
-// CHECK:   scf.yield {{.*}}, {{.*}}, %[[arg_b1]], %[[NEXT_B]]
+// CHECK:   scf.yield {{.*}}, {{.*}}, %[[NEXT_B_BUFFER]], %[[NEXT_B]]
 func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
   %a_ptr_init = tt.broadcast %A : (!tt.ptr<f16>) -> tensor<128x32x!tt.ptr<f16>, #AL>
   %b_ptr_init = tt.broadcast %B : (!tt.ptr<f16>) -> tensor<32x128x!tt.ptr<f16>, #BL>
