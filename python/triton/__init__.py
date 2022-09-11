@@ -7,7 +7,7 @@ __version__ = '2.0.0'
 import torch
 # submodules
 from .utils import *
-from .runtime import jit, Config, autotune, heuristics
+from .runtime import jit, Config, autotune, heuristics, JITFunction
 from .compiler import compile
 from . import language
 from . import testing

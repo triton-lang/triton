@@ -11,7 +11,7 @@ from numpy.random import RandomState
 import triton
 import triton._C.libtriton.triton as _triton
 import triton.language as tl
-from triton.code_gen import JITFunction, TensorWrapper, reinterpret
+from triton.runtime.jit import JITFunction, TensorWrapper, reinterpret
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
 uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']

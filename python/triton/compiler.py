@@ -5,7 +5,6 @@ from collections import defaultdict
 import sys
 import warnings
 from typing import Any, Dict, Tuple, Union
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import triton
 import triton._C.libtriton.triton as _triton
@@ -823,7 +822,8 @@ def make_triton_ir(fn, signature, specialization, constants):
         raise CompilationError(fn.src, node) from e
     ret = generator.module
     # module takes ownership of the context
-    return ret, context
+    ret.context = context
+    return ret, generator
 
 
 def make_ptx(mod: Any, device: int) -> Tuple[str, int]:
@@ -864,7 +864,7 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     assert output in valid_outputs, "output should be one of [%s], but get \"%s\"" % (','.join(valid_outputs), output)
 
     # triton-ir
-    module, context = make_triton_ir(fn, signature, specialization, constants)
+    module, _ = make_triton_ir(fn, signature, specialization, constants)
     if output == "ttir":
         return module
 
@@ -909,7 +909,7 @@ def quiet():
     try:
         yield
     finally:
-        sys.stdout, sys.stderr = old_stdout, 
+        sys.stdout, sys.stderr = old_stdout, old_stderr
 
 def _build(name, src, path):
   libcuda = shutil.which("libcuda.so")
@@ -1218,13 +1218,14 @@ def make_shared_object(fn, signature, num_warps, binaries, tmpdir):
     src_path = os.path.join(tmpdir, "main.cpp")
     with open(src_path, "w") as f:
         f.write(src)
-    bin_path = _build(fn.__name__, src_path, tmpdir)
+    with quiet():
+      bin_path = _build(fn.__name__, src_path, tmpdir)
     with open(bin_path, "rb") as f:
         return f.read()
 
 
 def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, configs = None):
-    ref, module = make_triton_ir(fn, signature, _triton.code_gen.instance_descriptor(), constants)
+    ref, _ = make_triton_ir(fn, signature, _triton.code_gen.instance_descriptor(), constants)
     # we get the kernel, i.e. the first function generated in the module
     fns = ref.get_functions()
     if configs is None:

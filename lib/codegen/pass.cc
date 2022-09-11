@@ -33,41 +33,35 @@ namespace triton
   namespace codegen
   {
 
-    static void link_extern_libs(const ExternLibMap &user_extern_lib_map,
-                                 const ExternLibMap &target_extern_lib_map,
-                                 ir::module &ir, llvm::LLVMContext &ctx,
-                                 std::unique_ptr<llvm::Module> &llvm)
-    {
-      for (const auto &iter : target_extern_lib_map)
-      {
+    static void link_extern_libs(const ExternLibMap& user_extern_lib_map,
+                                 const ExternLibMap& target_extern_lib_map,
+                                 ir::module& ir, llvm::LLVMContext& ctx,
+                                 std::unique_ptr<llvm::Module>& llvm) {
+      for (const auto& iter : target_extern_lib_map) {
         auto &lib_name = iter.first;
         if (user_extern_lib_map.count(lib_name) != 0 &&
-            user_extern_lib_map.at(lib_name)->path() != "")
-        {
+            user_extern_lib_map.at(lib_name)->path() != "") {
           // If the user specified a path for this library, use it.
           user_extern_lib_map.at(lib_name)->install(ctx, llvm);
-        }
-        else
-        {
+        } else {
           // Otherwise, use the default path.
           iter.second->install(ctx, llvm);
         }
       }
 
       std::set<llvm::StringRef> function_names;
-      for (auto &func : ir.get_function_list())
-      {
+      for (auto& func : ir.get_function_list()) {
         function_names.insert(func->get_name());
       }
       llvm::legacy::PassManager pass;
-      pass.add(llvm::createInternalizePass([&](const llvm::GlobalValue &v) -> bool
-                                           {
-    if (function_names.count(v.getName()) != 0) {
-      // Preserve global functions
-      return true;
-    }
-    // Internalize all device functions
-    return false; }));
+      pass.add(llvm::createInternalizePass([&](const llvm::GlobalValue& v) -> bool {
+        if (function_names.count(v.getName()) != 0) {
+          // Preserve global functions
+          return true;
+        }
+        // Internalize all device functions
+        return false;
+      }));
 
       llvm::legacy::PassManager pm;
       pm.add(llvm::createVerifierPass());
@@ -157,7 +151,7 @@ namespace triton
       barriers.run(ir);
       // exit(1);
       // ir.print(std::cout);
-      ir.print(std::cout);
+      // ir.print(std::cout);
       isel.visit(ir, *llvm);
       shared_static = allocation.allocated_size();
 

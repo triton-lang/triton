@@ -154,7 +154,7 @@ class JITFunction:
 
     @staticmethod
     def _key_of(arg):
-        if isinstance(arg, torch.Tensor):
+        if hasattr(arg, "dtype"):
             return arg.dtype
         elif isinstance(arg, int):
             return 'i32' if arg < 2**31 else 'i64'
@@ -167,7 +167,7 @@ class JITFunction:
     
     @staticmethod
     def _spec_of(arg):
-        if isinstance(arg, torch.Tensor):
+        if hasattr(arg, "data_ptr"):
             return (arg.data_ptr() % 16 == 0)
         elif isinstance(arg, int):
             return (arg % 16 == 0, arg == 1)
@@ -176,7 +176,7 @@ class JITFunction:
     @staticmethod
     def _get_config(*args):
         def is_divisible_by_16(x):
-            if isinstance(x, torch.Tensor):
+            if hasattr(x, "data_ptr"):
                 return x.data_ptr() % 16 == 0
             elif isinstance(x, int):
                 return x % 16 == 0
@@ -189,9 +189,10 @@ class JITFunction:
 
     @staticmethod
     def _type_of(key):
-        if isinstance(key, torch.dtype):
+        if isinstance(key, (torch.dtype, triton.language.dtype)):
             ty = {
               torch.float16: 'fp16',
+              torch.bfloat16: 'bf16',
               torch.float32: 'fp32',
               torch.float64: 'fp64',
               torch.uint8: 'u8',
@@ -199,6 +200,11 @@ class JITFunction:
               torch.int16: 'i16',
               torch.int32: 'i32',
               torch.int64: 'i64',
+
+              triton.language.uint8: 'u8',
+              triton.language.uint16: 'u16',
+              triton.language.uint32: 'u32',
+              triton.language.uint64: 'u64',
             }[key]
             return f'*{ty}'
         if key is None:
@@ -223,7 +229,7 @@ class JITFunction:
         # cache key for argument specialization
         specializations = []
         for arg in regular_args:
-            specializations += [f'({arg}.data_ptr() % 16 == 0) if isinstance({arg}, torch.Tensor) '
+            specializations += [f'({arg}.data_ptr() % 16 == 0) if hasattr({arg}, "data_ptr") '
                                 f'else ({arg} % 16 == 0, {arg} == 1) if isinstance({arg}, int) '
                                 f'else (False,)']
         spec_keys = ', '.join(specializations)
@@ -265,7 +271,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         exec(src, scope)
         return scope[self.fn.__name__]
 
-    def __init__(self, fn, version=None):
+    def __init__(self, fn, version=None, do_not_specialize=None):
         self.fn = fn
         self.module = fn.__module__
         # function signature information
@@ -495,3 +501,32 @@ def jit(*args, **kwargs):
         def decorator(fn):
             return JITFunction(fn, **kwargs)
         return decorator
+
+
+class TensorWrapper:
+    def __init__(self, base, dtype):
+        self.dtype = dtype
+        self.base = base
+        self.is_cuda = base.is_cuda
+        self.device = base.device
+
+    def data_ptr(self):
+        return self.base.data_ptr()
+
+    def __str__(self) -> str:
+        return f'TensorWrapper[{self.dtype}]({self.base})'
+
+
+def reinterpret(tensor, dtype):
+    if isinstance(tensor, TensorWrapper):
+        if dtype == tensor.base.dtype:
+            # Reinterpreting to the original interpretation; return the base.
+            return tensor.base
+        else:
+            # Reinterpreting a wrapped tensor to a different type.
+            return TensorWrapper(tensor.base, dtype)
+    elif isinstance(tensor, torch.Tensor):
+        # A new wrapper is needed around an unwrapped tensor.
+        return TensorWrapper(tensor, dtype)
+    else:
+        raise TypeError(f'Cannot reinterpret a {type(tensor)}.')

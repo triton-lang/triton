@@ -7,7 +7,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton.code_gen import JITFunction
+from triton.runtime.jit import JITFunction
 
 tmpdir = ".tmp"
 

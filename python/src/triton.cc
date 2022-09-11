@@ -521,7 +521,7 @@ std::tuple<std::string, asm_map_t, int> cu_compile_ttir(
     int num_stages, asm_map_t &asm_map,
     const triton::codegen::ExternLibMap &extern_lib_map)
 {
-  // py::gil_scoped_release allow_threads;
+  py::gil_scoped_release allow_threads;
   llvm::LLVMContext ctx;
   // device properties
   CUdevice dev = (CUdevice)device;
