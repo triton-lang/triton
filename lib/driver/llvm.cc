@@ -177,7 +177,7 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version){
 //  pm.add(llvm::createPrintModulePass(llvm::outs()));
   pm.add(llvm::createVerifierPass());
   pm.run(*module);
-  module->print(llvm::outs(), nullptr);
+  // module->print(llvm::outs(), nullptr);
 
   // create machine
   module->setTargetTriple(triple);

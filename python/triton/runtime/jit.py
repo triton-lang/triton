@@ -227,12 +227,20 @@ class JITFunction:
                                 f'else ({arg} % 16 == 0, {arg} == 1) if isinstance({arg}, int) '
                                 f'else (False,)']
         spec_keys = ', '.join(specializations)
+        grid_args = ','.join([f'"{arg}": {arg}' for arg in self.arg_names])
 
         src = f"""
 def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, stream=None):
     sig_key =  ({regular_keys}, {constexpr_keys})
     spec_key = ({spec_keys})
     key = (version_key, sig_key, spec_key)
+    if callable(grid):
+        grid = grid({{{grid_args}}})
+    grid_0 = grid[0]
+    grid_1 = grid[1] if len(grid) > 1 else 1
+    grid_2 = grid[2] if len(grid) > 2 else 1
+      
+   
     if stream is None:
       stream = get_cuda_stream(None)
     try:
@@ -247,7 +255,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
       configs = [self._get_config(*args)]
       device = 0
       bin = triton.compile(self, signature, device, constants, num_warps, num_stages, configs=configs)
-      bin.c_wrapper(grid[0], grid[1], grid[2], stream, *args)
+      bin.c_wrapper(grid_0, grid_1, grid_2, stream, *args)
       self.cache[key] = bin
       return bin
 """

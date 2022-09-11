@@ -218,7 +218,7 @@ class ValueConstructor:
 
 class CodeGenerator(ast.NodeVisitor):
 
-    def __init__(self, context, prototype, gscope, attributes, constants, prototypes=None, module=None, is_kernel=False):
+    def __init__(self, context, prototype, gscope, attributes, constants, function_name, prototypes=None, module=None, is_kernel=False):
         self.prototypes = dict() if prototypes is None else prototypes
         self.builder = _triton.ir.builder(context)
         self.module = _triton.ir.module('', self.builder) if module is None else module
@@ -226,6 +226,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.attributes = attributes
         self.constants = constants
         self.last_node = None
+        self.function_name = function_name
         self.is_kernel = is_kernel
 
         self.value_constructor = ValueConstructor(self.module, self.builder, gscope)
@@ -273,9 +274,8 @@ class CodeGenerator(ast.NodeVisitor):
                 init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation)
             self.visit(init_node)
         # initialize function
-        fn_name = mangle_fn(node.name, self.prototype.param_types, self.constants)
-        self.prototypes[fn_name] = self.prototype
-        fn = self.module.get_or_insert_function(fn_name, self.prototype.to_ir(self.builder))
+        self.prototypes[self.function_name] = self.prototype
+        fn = self.module.get_or_insert_function(self.function_name, self.prototype.to_ir(self.builder))
         fn.set_is_kernel(self.is_kernel)
         arg_values = []
         idx = 0
@@ -681,7 +681,7 @@ class CodeGenerator(ast.NodeVisitor):
                 ret_type = triton.language.void
                 prototype = triton.language.function_type(ret_type, arg_types)
                 gscope = sys.modules[fn.fn.__module__].__dict__
-                generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, prototypes=self.prototypes, module=self.module)
+                generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, function_name=fn_name, prototypes=self.prototypes, module=self.module)
                 generator.visit(fn.parse())
             symbol = self.module.get_function(fn_name)
             ret = self.builder.call(symbol, arg_vals)
@@ -813,7 +813,7 @@ def make_triton_ir(fn, signature, specialization, constants):
     function_name = '_'.join([fn.__name__, kernel_suffix(signature, specialization)])
     new_constants = {k: 1 for k in specialization.equal_to_1}
     new_attrs = {k: ("tt.multiple_of", 16) for k in specialization.divisible_by_16}
-    generator = CodeGenerator(context, prototype, gscope=gscope, constants=constants|new_constants, attributes=new_attrs, is_kernel=True)
+    generator = CodeGenerator(context, prototype, gscope=gscope, constants=constants|new_constants, function_name=function_name, attributes=new_attrs, is_kernel=True)
     try:
         generator.visit(fn.parse())
     except Exception as e:
@@ -872,7 +872,6 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     assert torch.version.hip is None
     backend = _triton.runtime.backend.CUDA
     extern_libs = {}
-    torch.cuda.set_device(0)
     name, asm, shared_mem = _triton.code_gen.compile_ttir(backend, module, device, num_warps, num_stages, extern_libs)
     return asm, shared_mem, name
   
@@ -1236,12 +1235,10 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
     # retrieve cached shared object if it exists
     if cache_manager.has_file():
         return CompiledKernel(fn.__name__, cache_manager.bin_path)
-    # compile all the configs in parallel
-    futures = []
-    with ThreadPoolExecutor() as executor:
-        for config in configs:
-            futures.append(executor.submit(_compile, fn, signature, device, constants, config, num_warps, num_stages, "cubin"))
-    binaries = [future.result() for future in as_completed(futures)]
+    # compile all the configs
+    binaries = []
+    for config in configs:
+        binaries.append(_compile(fn, signature, device, constants, config, num_warps, num_stages, "cubin"))
     # generate and compile glue code into shared object
     with tempfile.TemporaryDirectory() as tmpdir:
       so = make_shared_object(fn, signature, num_warps, binaries, tmpdir)
