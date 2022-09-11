@@ -1,16 +1,24 @@
 from __future__ import annotations
+import hashlib
+from filelock import FileLock
+import pickle
+import torch
+import setuptools
+import sysconfig
+import shutil
+import io
+import contextlib
 
 import ast
-from collections import defaultdict
+import os
 import sys
+import tempfile
 import warnings
+from collections import defaultdict
 from typing import Any, Dict, Tuple, Union
 
 import triton
 import triton._C.libtriton.triton as _triton
-
-import tempfile
-import os
 
 
 def str_to_ty(name):
@@ -35,6 +43,7 @@ def str_to_ty(name):
         "B": triton.language.int1,
     }
     return tys[name]
+
 
 def mangle_ty(ty):
     if ty.is_ptr():
@@ -287,7 +296,7 @@ class CodeGenerator(ast.NodeVisitor):
                     cst = triton.language.constexpr(self.constants[i])
                 arg_values.append(cst)
                 if i not in self.constexprs:
-                  idx += 1
+                    idx += 1
             else:
                 if i in self.attributes:
                     is_ptr = fn.args[idx].type.is_ptr()
@@ -789,19 +798,20 @@ class OutOfResources(Exception):
         # this is necessary to make CompilationError picklable
         return (type(self), (self.required, self.limit, self.name))
 
+
 def kernel_suffix(signature, specialization):
     tys = signature.split(',')
     # suffix format:
     # <argid><'c' if equal to 1><'d' if divisible by 16>
     suffix = ''
     for i, _ in enumerate(tys):
-      suffix += str(i)
-      if i in specialization.equal_to_1:
-        suffix += 'c'
-      if i in specialization.divisible_by_16:
-        suffix += 'd'
+        suffix += str(i)
+        if i in specialization.equal_to_1:
+            suffix += 'c'
+        if i in specialization.divisible_by_16:
+            suffix += 'd'
     return suffix
-    
+
 
 def make_triton_ir(fn, signature, specialization, constants):
     context = _triton.ir.context()
@@ -815,9 +825,9 @@ def make_triton_ir(fn, signature, specialization, constants):
     function_name = '_'.join([fn.__name__, kernel_suffix(signature, specialization)])
     new_constants = {k: 1 for k in specialization.equal_to_1}
     new_attrs = {k: ("multiple_of", 16) for k in specialization.divisible_by_16}
-    
+
     prototype = triton.language.function_type(triton.language.void, arg_types)
-    generator = CodeGenerator(context, prototype, gscope=gscope, constants=constants|new_constants, function_name=function_name, constexprs=constants, attributes=new_attrs, is_kernel=True)
+    generator = CodeGenerator(context, prototype, gscope=gscope, constants=constants | new_constants, function_name=function_name, constexprs=constants, attributes=new_attrs, is_kernel=True)
     try:
         generator.visit(fn.parse())
     except Exception as e:
@@ -864,6 +874,7 @@ def ptx_get_kernel_name(ptx: str) -> str:
         if line.startswith('// .globl'):
             return line.split()[-1]
 
+
 def _compile(fn, signature: str, device: int = -1, constants=dict(), specialization=_triton.code_gen.instance_descriptor(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, output: str = "ttgir") -> Tuple[str, int, str]:
     valid_outputs = ("ttir", "ttgir", "ptx", "cubin")
     assert output in valid_outputs, "output should be one of [%s], but get \"%s\"" % (','.join(valid_outputs), output)
@@ -877,38 +888,32 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     assert torch.version.hip is None
     backend = _triton.runtime.backend.CUDA
     if extern_libs is None:
-      extern_libs = dict()
+        extern_libs = dict()
     name, asm, shared_mem = _triton.code_gen.compile_ttir(backend, module, device, num_warps, num_stages, extern_libs)
     return asm, shared_mem, name
-  
+
+
 def ty_to_cpp(ty):
-  if ty[0] == '*':
-    return "CUdeviceptr"
-  return {
-    "i1": "bool",
-    "i8": "int8_t",
-    "i16": "int16_t",
-    "i32": "int32_t",
-    "i64": "int64_t",
-    "u32": "uint32_t",
-    "u64": "uint64_t",
-    "f32": "float",
-  }[ty]
+    if ty[0] == '*':
+        return "CUdeviceptr"
+    return {
+        "i1": "bool",
+        "i8": "int8_t",
+        "i16": "int16_t",
+        "i32": "int32_t",
+        "i64": "int64_t",
+        "u32": "uint32_t",
+        "u64": "uint64_t",
+        "f32": "float",
+    }[ty]
 
 
 def generate_name_initializer(signature):
     src = "int i = 0;\n"
     tys = signature.split(',')
     for i, ty in enumerate(tys):
-      src
+        src
 
-
-import contextlib
-import io
-import shutil
-import torch
-import setuptools
-import sysconfig
 
 @contextlib.contextmanager
 def quiet():
@@ -919,41 +924,43 @@ def quiet():
     finally:
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
+
 def _build(name, src, path):
-  libcuda = shutil.which("libcuda.so")
-  # add framework
-  extra_compile_args = []
-  library_dirs = [os.path.dirname(libcuda)]
-  include_dirs = [path, "/usr/local/cuda/include/"]
-  libraries = ['cuda']
-  # extra arguments
-  extra_link_args = []
-  # create extension module
-  ext = setuptools.Extension(
-      name = name,
-      language = 'c++',
-      sources = [src],
-      include_dirs = include_dirs,
-      extra_compile_args = extra_compile_args + ['-O3'],
-      extra_link_args = extra_link_args,
-      library_dirs = library_dirs,
-      libraries = libraries,
-  )
-  # build extension module
-  args = ['build_ext']
-  args.append('--build-temp=' + path)
-  args.append('--build-lib=' + path)
-  args.append('-q')
-  args = dict(
-      name = name,
-      ext_modules = [ext],
-      script_args = args,
-  ) 
-  # with quiet():
-  setuptools.setup(**args)
-  suffix = sysconfig.get_config_var('EXT_SUFFIX')
-  so = os.path.join(path, '{name}{suffix}'.format(name=name, suffix=suffix))
-  return so
+    libcuda = shutil.which("libcuda.so")
+    # add framework
+    extra_compile_args = []
+    library_dirs = [os.path.dirname(libcuda)]
+    include_dirs = [path, "/usr/local/cuda/include/"]
+    libraries = ['cuda']
+    # extra arguments
+    extra_link_args = []
+    # create extension module
+    ext = setuptools.Extension(
+        name=name,
+        language='c++',
+        sources=[src],
+        include_dirs=include_dirs,
+        extra_compile_args=extra_compile_args + ['-O3'],
+        extra_link_args=extra_link_args,
+        library_dirs=library_dirs,
+        libraries=libraries,
+    )
+    # build extension module
+    args = ['build_ext']
+    args.append('--build-temp=' + path)
+    args.append('--build-lib=' + path)
+    args.append('-q')
+    args = dict(
+        name=name,
+        ext_modules=[ext],
+        script_args=args,
+    )
+    # with quiet():
+    setuptools.setup(**args)
+    suffix = sysconfig.get_config_var('EXT_SUFFIX')
+    so = os.path.join(path, '{name}{suffix}'.format(name=name, suffix=suffix))
+    return so
+
 
 def generate_torch_glue(kernel_name, signature, num_warps, binaries, tmpdir):
     headers = dict()
@@ -962,27 +969,27 @@ def generate_torch_glue(kernel_name, signature, num_warps, binaries, tmpdir):
     assert len(binaries) == 1, "AoT compilation not yet supported"
 
     for bin, shmem_size, name in binaries:
-      assert len(name) < 1024
-      initializer = f"""
+        assert len(name) < 1024
+        initializer = f"""
 const char* {name}_ptx = R"({bin["ptx"]})";
 unsigned char {name}_bin[] = {{ {','.join(map(hex, bin["cubin"]))} }};
 unsigned int {name}_shmem = {shmem_size};"""
-      headers[name] = os.path.join(tmpdir, f"{name}.h")
-      with open(headers[name], "w") as f:
-        f.write(initializer)
+        headers[name] = os.path.join(tmpdir, f"{name}.h")
+        with open(headers[name], "w") as f:
+            f.write(initializer)
 
     # generate glue code
     n_args = len(tys)
     src = ""
     for bin, shmem_size, name in binaries:
-      src += f"#include \"{name}.h\"\n"
+        src += f"#include \"{name}.h\"\n"
     src += f"""
 #include \"cuda.h\"
 #include <Python.h>
 
 inline void gpuAssert(CUresult code, const char *file, int line)
 {{
-   if (code != CUDA_SUCCESS) 
+   if (code != CUDA_SUCCESS)
    {{
       const char* str;
       cuGetErrorString(code, &str);
@@ -1020,32 +1027,33 @@ void init_function(const char* name, const unsigned char* src, size_t n_shared_b
 
     func_init = '\n  '.join(f"init_function(\"{name}\", {name}_bin, {name}_shmem, device);" for _, _, name in binaries)
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in enumerate(tys))
+
     def _extracted_type(ty):
-      if ty[0] == '*':
-        return "PyObject*"
-      if ty[0] == 'i':
-        return "long"
-      return {
-        'u32': 'uint32_t',
-        'u64': 'uint64_t',
-        'fp32': 'float',
-        'fp64': 'double',
-      }[ty]
-    
+        if ty[0] == '*':
+            return "PyObject*"
+        if ty[0] == 'i':
+            return "long"
+        return {
+            'u32': 'uint32_t',
+            'u64': 'uint64_t',
+            'fp32': 'float',
+            'fp64': 'double',
+        }[ty]
+
     def format_of(ty):
-      return {
-        "PyObject*": "O",
-        "float": "f",
-        "double": "d",
-        "long": "l",
-        "uint32_t": "I",
-        "int32_t": "i",
-        "uint64_t": "K",
-        "int64_t": "L",
-      }[ty]
+        return {
+            "PyObject*": "O",
+            "float": "f",
+            "double": "d",
+            "long": "l",
+            "uint32_t": "I",
+            "int32_t": "i",
+            "uint64_t": "K",
+            "int64_t": "L",
+        }[ty]
 
     format = "iiil" + ''.join([format_of(_extracted_type(ty)) for ty in tys])
- 
+
     src += f"""
 void init_module(CUdevice device) {{
   {func_init}
@@ -1126,7 +1134,7 @@ PyMODINIT_FUNC PyInit_{kernel_name}() {{
 """
 
     for _, _, name in binaries:
-      src += f"""
+        src += f"""
   PyObject *py_{name}_ptx = PyUnicode_FromString({name}_ptx);
   PyDict_SetItemString(ptx, "{name}", py_{name}_ptx);
   Py_DECREF(py_{name}_ptx);
@@ -1138,16 +1146,12 @@ PyMODINIT_FUNC PyInit_{kernel_name}() {{
 }}
 """
 
-
     return src
-
-import hashlib
-from filelock import FileLock
-import pickle
 
 
 def default_cache_dir():
     return os.path.join(os.environ["HOME"], ".triton", "cache")
+
 
 class CacheManager:
 
@@ -1162,7 +1166,7 @@ class CacheManager:
         if self.cache_dir:
             self.bin_path = os.path.join(self.cache_dir, self.key + ".so")
             self.lock_path = self.bin_path + ".lock"
-    
+
     def has_file(self):
         return self.bin_path and os.path.exists(self.bin_path)
 
@@ -1183,24 +1187,25 @@ def make_cache_key(fn, signature, configs, constants, num_warps, num_stages):
     key = hashlib.md5(key.encode("utf-8")).hexdigest()
     return key
 
+
 def make_shared_object(fn, signature, num_warps, binaries, tmpdir):
     src = generate_torch_glue(fn.__name__, signature, num_warps, binaries, tmpdir)
     src_path = os.path.join(tmpdir, "main.c")
     with open(src_path, "w") as f:
         f.write(src)
     with quiet():
-      bin_path = _build(fn.__name__, src_path, tmpdir)
+        bin_path = _build(fn.__name__, src_path, tmpdir)
     with open(bin_path, "rb") as f:
         return f.read()
 
 
-def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs = None, configs = None):
+def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
     # we get the kernel, i.e. the first function generated in the module
     if configs is None:
-      assert False, "automatic specialization is not supported yet"
-      ref, _ = make_triton_ir(fn, signature, _triton.code_gen.instance_descriptor(), constants)
-      fns = ref.get_functions()
-      configs = _triton.infer_specialization_configs(fns[0])
+        assert False, "automatic specialization is not supported yet"
+        ref, _ = make_triton_ir(fn, signature, _triton.code_gen.instance_descriptor(), constants)
+        fns = ref.get_functions()
+        configs = _triton.infer_specialization_configs(fns[0])
     # cache manager
     cache_key = make_cache_key(fn, signature, configs, constants, num_warps, num_stages)
     cache_manager = CacheManager(cache_key)
@@ -1213,7 +1218,7 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
         binaries.append(_compile(fn, signature, device, constants, config, num_warps, num_stages, extern_libs, "cubin"))
     # generate and compile glue code into shared object
     with tempfile.TemporaryDirectory() as tmpdir:
-      so = make_shared_object(fn, signature, num_warps, binaries, tmpdir)
+        so = make_shared_object(fn, signature, num_warps, binaries, tmpdir)
 
     # write shared object to cache
     cache_manager.put(so)
@@ -1230,12 +1235,11 @@ class CompiledKernel:
         self.c_wrapper = getattr(mod, fn_name)
         ptx = getattr(mod, "ptx")
         if(len(ptx) == 1):
-          self.asm = {"ptx": list(ptx.values())[0]}
+            self.asm = {"ptx": list(ptx.values())[0]}
 
-    
     def __getitem__(self, grid):
         def runner(*args, stream=None):
             if stream is None:
-              stream = torch.cuda.current_stream().cuda_stream
+                stream = torch.cuda.current_stream().cuda_stream
             self.c_wrapper(grid[0], grid[1], grid[2], stream, *args)
         return runner

@@ -79,6 +79,7 @@ class LoadedBinary:
 # Dependencies Finder
 # -----------------------------------------------------------------------------
 
+
 class DependenciesFinder(ast.NodeVisitor):
     """
     This AST visitor is used to find dependencies of a JITFunction. This can
@@ -123,6 +124,7 @@ class DependenciesFinder(ast.NodeVisitor):
 # JITFunction
 # -----------------------------------------------------------------------------
 
+
 @functools.lru_cache()
 def version_key():
     import pkgutil
@@ -159,20 +161,20 @@ class JITFunction:
             return arg.dtype
         elif isinstance(arg, int):
             if -2**31 <= arg and arg <= 2**31 - 1:
-              return "i32"
+                return "i32"
             elif 2**31 <= arg and arg <= 2**32 - 1:
-              return "u32"
+                return "u32"
             elif 2**63 <= arg and arg <= 2**64 - 1:
-              return "u64"
+                return "u64"
             else:
-              return "i64"
+                return "i64"
         elif isinstance(arg, float):
             return 'f32'
         elif arg is None:
             return None
         else:
             raise TypeError(f'Unsupported type {type(arg)} for {arg}')
-    
+
     @staticmethod
     def _spec_of(arg):
         if hasattr(arg, "data_ptr"):
@@ -199,22 +201,22 @@ class JITFunction:
     def _type_of(key):
         if isinstance(key, (torch.dtype, triton.language.dtype)):
             ty = {
-              torch.bool: 'i1',
-              torch.float16: 'fp16',
-              torch.bfloat16: 'bf16',
-              torch.float32: 'fp32',
-              torch.float64: 'fp64',
-              torch.uint8: 'u8',
-              torch.int8: 'i8',
-              torch.int16: 'i16',
-              torch.int32: 'i32',
-              torch.int64: 'i64',
+                torch.bool: 'i1',
+                torch.float16: 'fp16',
+                torch.bfloat16: 'bf16',
+                torch.float32: 'fp32',
+                torch.float64: 'fp64',
+                torch.uint8: 'u8',
+                torch.int8: 'i8',
+                torch.int16: 'i16',
+                torch.int32: 'i32',
+                torch.int64: 'i64',
 
-              triton.language.uint8: 'u8',
-              triton.language.uint16: 'u16',
-              triton.language.uint32: 'u32',
-              triton.language.uint64: 'u64',
-              triton.language.float8: 'fp8',
+                triton.language.uint8: 'u8',
+                triton.language.uint16: 'u16',
+                triton.language.uint32: 'u32',
+                triton.language.uint64: 'u64',
+                triton.language.float8: 'fp8',
             }[key]
             return f'*{ty}'
         if key is None:
@@ -223,20 +225,20 @@ class JITFunction:
         return key
 
     def _make_signature(self, key):
-        signature = ",".join([self._type_of(k) for i, k in enumerate(key) \
-                          if i not in self.constexprs])
+        signature = ",".join([self._type_of(k) for i, k in enumerate(key)
+                              if i not in self.constexprs])
         constants = {i: k for i, k in enumerate(key) if i in self.constexprs}
         return signature, constants
-    
+
     def _call_hook(self, key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
         if JITFunction.cache_hook is None:
-          return False
+            return False
         # TODO: assemble compilation-key into human-readable format
         # name = self.fn.__name__
         # arg_reprs = ', '.join([f'{name}: {ty}' for name, ty in zip(self.arg_names, sig_key)])
         # repr = f"{name}[num_warps={num_warps}, num_stages={num_stages}]({arg_reprs})"
         repr = ''
-        
+
         class LegacyCompiler:
             def __init__(self):
                 pass
@@ -245,12 +247,11 @@ class JITFunction:
                 bin = triton.compile(**kwargs)
                 self.cache[key] = bin
 
-        kwargs = dict(fn=self, signature=signature, device=device, constants=constants, 
-                     num_warps=num_warps, num_stages=num_stages, extern_libs=extern_libs,
-                     configs=configs)
+        kwargs = dict(fn=self, signature=signature, device=device, constants=constants,
+                      num_warps=num_warps, num_stages=num_stages, extern_libs=extern_libs,
+                      configs=configs)
 
         return JITFunction.cache_hook(key=key, repr=repr, fn=LegacyCompiler(), compile={"key": key, **kwargs}, is_manual_warmup=False, already_compiled=False)
-
 
     def _make_launcher(self):
         regular_args = [f'{arg}' for i, arg in enumerate(self.arg_names) if not i in self.constexprs]
@@ -303,8 +304,8 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         return bin
       return None
 """
-        scope = {"version_key": version_key(), "get_cuda_stream": get_cuda_stream, 
-                 "self": self, "_spec_of": self._spec_of, "_key_of": self._key_of, 
+        scope = {"version_key": version_key(), "get_cuda_stream": get_cuda_stream,
+                 "self": self, "_spec_of": self._spec_of, "_key_of": self._key_of,
                  "cache": self.cache, "triton": triton, "torch": torch}
         exec(src, scope)
         return scope[self.fn.__name__]
@@ -315,7 +316,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         # function signature information
         signature = inspect.signature(fn)
         self.arg_names = [v.name for v in signature.parameters.values()]
-        self.has_defaults = any([v.default!=inspect._empty for v in signature.parameters.values()])
+        self.has_defaults = any([v.default != inspect._empty for v in signature.parameters.values()])
         # function source code (without decorators)
         self.src = textwrap.dedent(inspect.getsource(fn))
         self.src = self.src[self.src.find("def"):]
@@ -381,7 +382,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         memorizes the grid.
         """
         def launcher(*args, **kwargs):
-          return self.run(*args, grid=grid, **kwargs)
+            return self.run(*args, grid=grid, **kwargs)
         return launcher
 
     def __repr__(self):
