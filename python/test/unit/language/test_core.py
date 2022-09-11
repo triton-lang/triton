@@ -1209,7 +1209,7 @@ def test_load_cache_modifier(cache):
         assert 'ld.global.cg' not in ptx
 
 
-@pytest.mark.parametrize("N", [8, 10, 11, 1024])
+@pytest.mark.parametrize("N", [16, 10, 11, 1024])
 def test_vectorization(N):
     src = torch.empty(1024, device='cuda')
     dst = torch.empty(1024, device='cuda')
@@ -1221,10 +1221,8 @@ def test_vectorization(N):
         tl.store(dst + offsets, x, mask=offsets < N)
     pgm = _kernel[(1,)](dst, src, N=N, BLOCK_SIZE=src.shape[0])
     ptx = pgm.asm["ptx"]
-    if N % 4 == 0:
+    if N % 16 == 0:
         assert "ld.global.v4.b32" in ptx
-    elif N % 2 == 0:
-        assert "ld.global.v2.b32" in ptx
     else:
         assert "ld.global.b32" in ptx
     # triton.testing.assert_almost_equal(dst, src[:N])
@@ -1292,7 +1290,7 @@ def test_value_specialization(value: int, value_type: str, device='cuda') -> Non
 
     def cache_hook(*args, **kwargs):
         nonlocal spec_type
-        spec_type = kwargs["compile"]["arg_types"][0][1]
+        spec_type = kwargs["compile"]["signature"].split(",")[0]
     JITFunction.cache_hook = cache_hook
 
     @triton.jit

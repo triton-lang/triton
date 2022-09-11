@@ -1,4 +1,4 @@
-from __future__ import annotations
+from __future__ import annotations, division
 
 import ast
 import functools
@@ -151,6 +151,7 @@ def version_key():
 class JITFunction:
 
     cache_hook = None
+    divisibility = 16
 
     @staticmethod
     def _key_of(arg):
@@ -168,7 +169,7 @@ class JITFunction:
     @staticmethod
     def _spec_of(arg):
         if hasattr(arg, "data_ptr"):
-            return (arg.data_ptr() % 16 == 0)
+            return (arg.data_ptr() % JITFunction.divisibility == 0)
         elif isinstance(arg, int):
             return (arg % 16 == 0, arg == 1)
         return (arg is None, )
@@ -177,9 +178,9 @@ class JITFunction:
     def _get_config(*args):
         def is_divisible_by_16(x):
             if hasattr(x, "data_ptr"):
-                return x.data_ptr() % 16 == 0
+                return x.data_ptr() % JITFunction.divisibility == 0
             elif isinstance(x, int):
-                return x % 16 == 0
+                return x % JITFunction.divisibility == 0
             if x is None:
                 return True
             return False
@@ -219,6 +220,30 @@ class JITFunction:
                           if i not in self.constexprs])
         constants = {i: k for i, k in enumerate(key) if i in self.constexprs}
         return signature, constants
+    
+    def _call_hook(self, key, signature, device, constants, num_warps, num_stages, configs):
+        if JITFunction.cache_hook is None:
+          return False
+        # TODO: assemble compilation-key into human-readable format
+        # name = self.fn.__name__
+        # arg_reprs = ', '.join([f'{name}: {ty}' for name, ty in zip(self.arg_names, sig_key)])
+        # repr = f"{name}[num_warps={num_warps}, num_stages={num_stages}]({arg_reprs})"
+        repr = ''
+        
+        class LegacyCompiler:
+            def __init__(self):
+                pass
+
+            def warmup(kwargs):
+                bin = triton.compile(**kwargs)
+                self.cache[key] = bin
+
+        kwargs = dict(fn=self, signature=signature, device=device, constants=constants, 
+                     num_warps=num_warps, num_stages=num_stages, 
+                     configs=configs)
+
+        return JITFunction.cache_hook(key=key, repr=repr, fn=LegacyCompiler(), compile={"key": key, **kwargs}, is_manual_warmup=False, already_compiled=False)
+
 
     def _make_launcher(self):
         regular_args = [f'{arg}' for i, arg in enumerate(self.arg_names) if not i in self.constexprs]
@@ -231,8 +256,8 @@ class JITFunction:
         # cache key for argument specialization
         specializations = []
         for arg in regular_args:
-            specializations += [f'({arg}.data_ptr() % 16 == 0) if hasattr({arg}, "data_ptr") '
-                                f'else ({arg} % 16 == 0, {arg} == 1) if isinstance({arg}, int) '
+            specializations += [f'({arg}.data_ptr() % {JITFunction.divisibility} == 0) if hasattr({arg}, "data_ptr") '
+                                f'else ({arg} % {JITFunction.divisibility} == 0, {arg} == 1) if isinstance({arg}, int) '
                                 f'else (False,)']
         spec_keys = ', '.join(specializations)
         grid_args = ','.join([f'"{arg}": {arg}' for arg in self.arg_names])
@@ -261,10 +286,12 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
       constants |= {{i: None for i, arg in enumerate(args) if arg is None}}
       configs = [self._get_config(*args)]
       device = 0
-      bin = triton.compile(self, signature, device, constants, num_warps, num_stages, configs=configs)
-      bin.c_wrapper(grid_0, grid_1, grid_2, stream, *args)
-      self.cache[key] = bin
-      return bin
+      if not self._call_hook(key, signature, device, constants, num_warps, num_stages, configs):
+        bin = triton.compile(self, signature, device, constants, num_warps, num_stages, configs=configs)
+        bin.c_wrapper(grid_0, grid_1, grid_2, stream, *args)
+        self.cache[key] = bin
+        return bin
+      return None
 """
         scope = {"version_key": version_key(), "get_cuda_stream": get_cuda_stream, 
                  "self": self, "_spec_of": self._spec_of, "_key_of": self._key_of, 
