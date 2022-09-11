@@ -7,7 +7,7 @@ from contextlib import contextmanager
 import torch
 
 import triton._C.libtriton.triton as _triton
-from .code_gen import OutOfResources
+from .compiler import OutOfResources
 
 try:
     import triton._C.libtriton.cutlass as _cutlass

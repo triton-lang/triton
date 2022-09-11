@@ -1,40 +1,40 @@
 from __future__ import annotations
 
 import ast
-import builtins
-import functools
-import hashlib
-import inspect
-import os
-import pickle
-import subprocess
+from collections import defaultdict
 import sys
-import tempfile
-import textwrap
-import threading
-import time
 import warnings
-from typing import Dict, Set, Tuple, Union
-
-import torch
-from filelock import FileLock
+from typing import Any, Dict, Tuple, Union
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import triton
 import triton._C.libtriton.triton as _triton
-from .tools.disasm import extract
 
-try:
-    from torch._C import _cuda_getCurrentRawStream as get_cuda_stream
-except ImportError:
-    get_cuda_stream = lambda dev_idx: torch.cuda.current_stream(dev_idx).cuda_stream
+import tempfile
+import os
 
 
-def current_cuda_stream(device_idx=0):
-    # Torch's torch.cuda.current_stream() is slow. We provide this
-    # function to give the user an opportunity to monkey-patch their
-    # own faster current stream lookup.
-    return get_cuda_stream(device_idx)
-
+def str_to_ty(name):
+    if name[0] == "*":
+        ty = str_to_ty(name[1:])
+        return triton.language.pointer_type(ty)
+    tys = {
+        "fp8": triton.language.float8,
+        "fp16": triton.language.float16,
+        "bf16": triton.language.bfloat16,
+        "fp32": triton.language.float32,
+        "fp64": triton.language.float64,
+        "i8": triton.language.int8,
+        "i16": triton.language.int16,
+        "i32": triton.language.int32,
+        "i64": triton.language.int64,
+        "u8": triton.language.uint8,
+        "u16": triton.language.uint16,
+        "u32": triton.language.uint32,
+        "u64": triton.language.uint64,
+        "B": triton.language.int1,
+    }
+    return tys[name]
 
 def mangle_ty(ty):
     if ty.is_ptr():
@@ -63,7 +63,7 @@ def mangle_ty(ty):
 def mangle_fn(name, arg_tys, constants):
     # doesn't mangle ret type, which must be a function of arg tys
     mangled_arg_names = '_'.join([mangle_ty(ty) for ty in arg_tys])
-    key = lambda x: x.__name__ if isinstance(x, JITFunction) else repr(x)
+    key = lambda x: x.__name__ if isinstance(x, triton.runtime.JITFunction) else repr(x)
     mangled_constants = '_'.join([f'{i}c{key(constants[i])}' for i in sorted(constants)])
     mangled_constants = mangled_constants.replace('.', '_d_')
     mangled_constants = mangled_constants.replace("'", '_sq_')
@@ -290,7 +290,7 @@ class CodeGenerator(ast.NodeVisitor):
                     is_ptr = fn.args[idx].type.is_ptr()
                     attr = 'aligned' if is_ptr else 'multiple_of'
                     attr = getattr(_triton.ir.attribute_kind, attr)
-                    attr = _triton.ir.attribute(attr, self.attributes[i])
+                    attr = _triton.ir.attribute(attr, self.attributes[i][1])
                     fn.add_attr(idx + 1, attr)
                 fn.args[idx].name = arg_name
                 arg_values.append(triton.language.tensor(fn.args[idx], self.prototype.param_types[idx]))
@@ -661,7 +661,7 @@ class CodeGenerator(ast.NodeVisitor):
             kws.update(self.visit(keyword))
         args = [self.visit(arg) for arg in node.args]
 
-        if isinstance(fn, JITFunction):
+        if isinstance(fn, triton.runtime.JITFunction):
             from inspect import getcallargs
             args = getcallargs(fn.fn, *args, **kws)
             args = [args[name] for name in fn.arg_names]
@@ -758,52 +758,6 @@ class CodeGenerator(ast.NodeVisitor):
         raise NotImplementedError("Unsupported node: {}".format(typename))
 
 
-class Binary:
-    def __init__(self, backend, name, asm, shared_mem, num_warps):
-        self.backend = backend
-        self.name = name
-        self.asm = asm
-        self.shared_mem = shared_mem
-        self.num_warps = num_warps
-
-
-class LoadedBinary:
-    def __init__(self, device: int, bin: Binary):
-        module, kernel, n_regs, n_spills = _triton.code_gen.load_binary(bin.backend,
-                                                                        bin.name,
-                                                                        bin.asm,
-                                                                        bin.shared_mem,
-                                                                        device)
-        self.bin = bin
-        self.asm = bin.asm
-        self.sass = ''
-        self.module = module
-        self.kernel = kernel
-        self.n_regs = n_regs
-        self.n_spills = n_spills
-        self.device = device
-        self.shared_mem = bin.shared_mem
-
-    def __call__(self, stream, args, grid_0, grid_1=1, grid_2=1):
-        _triton.runtime.enqueue(self.bin.backend, stream, self.kernel,
-                                grid_0, grid_1, grid_2,
-                                self.bin.num_warps * 32, 1, 1,
-                                args, self.bin.shared_mem)
-
-    def get_sass(self, fun=None):
-        if self.sass:
-            return self.sass
-        fd, path = tempfile.mkstemp()
-        try:
-            with open(fd, 'wb') as cubin:
-                cubin.write(self.asm['cubin'])
-            self.sass = extract(path, fun)
-        finally:
-            os.remove(path)
-        self.asm['sass'] = self.sass
-        return self.sass
-
-
 class CompilationError(Exception):
     def __init__(self, src, node):
         self.message = f'at {node.lineno}:{node.col_offset}:\n'
@@ -832,695 +786,486 @@ class OutOfResources(Exception):
         # this is necessary to make CompilationError picklable
         return (type(self), (self.required, self.limit, self.name))
 
+def kernel_suffix(signature, specialization):
+    tys = signature.split(',')
+    # suffix format:
+    # <argid><'c' if equal to 1><'d' if divisible by 16>
+    suffix = ''
+    for i, _ in enumerate(tys):
+      suffix += str(i)
+      if i in specialization.equal_to_1:
+        suffix += 'c'
+      if i in specialization.divisible_by_16:
+        suffix += 'd'
+    return suffix
+    
 
-class Kernel:
-
-    @staticmethod
-    def _type_name(obj):
-        type_names = {
-            triton.language.float8: 'f8',
-            torch.bfloat16: 'bf16',
-            torch.float16: 'f16',
-            torch.float32: 'f32',
-            torch.float64: 'f64',
-            torch.bool: 'i1',
-            torch.uint8: 'u8',
-            torch.int8: 'i8',
-            torch.int16: 'i16',
-            torch.int32: 'i32',
-            torch.int64: 'i64',
-            triton.language.uint8: 'u8',
-            triton.language.uint16: 'u16',
-            triton.language.uint32: 'u32',
-            triton.language.uint64: 'u64',
-        }
-        if hasattr(obj, 'data_ptr'):
-            return type_names[obj.dtype]
-        if isinstance(obj, triton.language.constexpr):
-            obj = obj.value
-        if isinstance(obj, int):
-            if -2**31 <= obj < 2**31:
-                return 'i32'
-            elif 2**31 <= obj < 2**32:
-                return 'u32'
-            elif -2**63 <= obj < 2**63:
-                return 'i64'
-            elif 2**63 <= obj < 2**64:
-                return 'u64'
-            else:
-                raise ValueError(f'integer overflow representing {obj}')
-        if isinstance(obj, float):
-            return 'f'
-        if isinstance(obj, bool):
-            return 'B'
-        if isinstance(obj, str):
-            return 'str'
-        raise NotImplementedError(f'could not compute type name for {obj}')
-
-    @staticmethod
-    def _to_python_ir(obj):
-        # convert torch.Tensor to Triton IR pointers
-        if hasattr(obj, 'data_ptr'):
-            name = Kernel._type_name(obj)
-            return 'ptr', name
-        # default path returns triton.ir.type directly
-        name = Kernel._type_name(obj)
-        return 'scalar', name
-
-    @staticmethod
-    def _to_triton_ir(obj):
-        which, name = obj
-        type_map = {
-            'I': triton.language.int32,
-            'L': triton.language.int64,
-            'f': triton.language.float32,
-            'B': triton.language.int1,
-            'f8': triton.language.float8,
-            'f16': triton.language.float16,
-            'bf16': triton.language.bfloat16,
-            'f32': triton.language.float32,
-            'f64': triton.language.float64,
-            'i1': triton.language.int1,
-            'i8': triton.language.int8,
-            'i16': triton.language.int16,
-            'i32': triton.language.int32,
-            'i64': triton.language.int64,
-            'u8': triton.language.uint8,
-            'u16': triton.language.uint16,
-            'u32': triton.language.uint32,
-            'u64': triton.language.uint64,
-        }
-        # convert torch.Tensor to Triton IR pointers
-        if which == 'ptr':
-            elt_ty = type_map[name]
-            return triton.language.pointer_type(elt_ty, 1)
-        # default path returns triton.ir.type directly
-        return type_map[name]
-
-    @staticmethod
-    def pow2_divisor(N):
-        if N % 16 == 0:
-            return 16
-        if N % 8 == 0:
-            return 8
-        if N % 4 == 0:
-            return 4
-        if N % 2 == 0:
-            return 2
-        return 1
-
-    def __init__(self, fn):
-        self.fn = fn
-        self.cache_key = {}
-
-    def add_to_cache(self, key, wargs, device_idx, num_warps, num_stages, extern_libs):
-        tensor_idxs = [i for i, arg in enumerate(wargs) if hasattr(arg, 'data_ptr')]
-
-        # attributes
-        attributes = dict()
-        for i, arg in enumerate(wargs):
-            if i in self.fn.do_not_specialize:
-                continue
-            if isinstance(arg, int):
-                attributes[i] = Kernel.pow2_divisor(arg)
-            elif i in tensor_idxs:
-                addr = arg.data_ptr()
-                range_size = _triton.runtime.get_pointer_range_size(addr)
-                attributes[i] = min(Kernel.pow2_divisor(addr),
-                                    Kernel.pow2_divisor(range_size))
-        # transforms ints whose value is one into constants for just-in-time compilation
-        constants = {i: arg for i, arg in enumerate(wargs) if isinstance(arg, int) and arg == 1 and i not in self.fn.do_not_specialize}
-        constants.update({i: arg.value for i, arg in enumerate(wargs) if isinstance(arg, triton.language.constexpr)})
-        constants.update({i: None for i, arg in enumerate(wargs) if arg is None})
-        arg_types = [Kernel._to_python_ir(arg) for i, arg in enumerate(wargs) if i not in constants]
-        return self.fn._warmup(key, arg_types=arg_types, device=device_idx, attributes=attributes, constants=constants, num_warps=num_warps, num_stages=num_stages,
-                               extern_libs=extern_libs, is_manual_warmup=False)
-
-    def __call__(self, *wargs, grid, num_warps=4, num_stages=2, extern_libs={}, **kwargs):
-        assert num_warps != 0 and (num_warps & (num_warps - 1)) == 0, f"num_warps={num_warps} must be a power of 2."
-        # handle arguments passed by name
-        kwargs = {self.fn.arg_names.index(name): value for name, value in kwargs.items()}
-        wargs = list(wargs)
-        for i, pos in enumerate(sorted(kwargs)):
-            wargs.insert(pos + i, kwargs[pos])
-        if len(wargs) != len(self.fn.arg_names):
-            raise TypeError(f"Function takes {len(self.fn.arg_names)} positional arguments but {len(wargs)} were given")
-        # handle annotations
-        for pos, _type in self.fn.annotations.items():
-            assert _type == triton.language.constexpr, "only constexpr annotations are supported for now"
-            wargs[pos] = _type(wargs[pos])
-        # check that tensors are on GPU.
-        # for arg in wargs:
-        #     if hasattr(arg, 'data_ptr'):
-        #         assert arg.is_cuda, "All tensors must be on GPU!"
-        # set device (i.e., make sure torch has the context initialized)
-        device = torch.cuda.current_device()
-        # torch creates new thread for backward pass that may have uninitlialized context
-        # no way to know if this function should or shouldn't initialize the cuda context
-        # so we're being conservative here
-        torch.cuda.set_device(device)
-        if device not in self.cache_key:
-            cc = torch.cuda.get_device_capability(device)
-            cc = str(cc[0]) + '-' + str(cc[1])
-            self.cache_key[device] = self.fn.cache_key + cc
-        cache_key = self.cache_key[device]
-        stream = current_cuda_stream(device)
-        return _triton.runtime.launch(wargs, self.fn.do_not_specialize, cache_key, self.fn.arg_names,
-                                      device, stream, self.fn.bin_cache, num_warps, num_stages, extern_libs, self.add_to_cache,
-                                      grid)
+def make_triton_ir(fn, signature, specialization, constants):
+    context = _triton.ir.context()
+    # create kernel prototype
+    cst_key = lambda i: fn.arg_names.index(i) if isinstance(i, str) else i
+    constants = {cst_key(key): value for key, value in constants.items()}
+    arg_types = signature.replace(' ', '').split(',')
+    arg_types = [str_to_ty(x) for x in arg_types]
+    prototype = triton.language.function_type(triton.language.void, arg_types)
+    # visit kernel AST
+    gscope = fn.__globals__.copy()
+    function_name = '_'.join([fn.__name__, kernel_suffix(signature, specialization)])
+    new_constants = {k: 1 for k in specialization.equal_to_1}
+    new_attrs = {k: ("tt.multiple_of", 16) for k in specialization.divisible_by_16}
+    generator = CodeGenerator(context, prototype, gscope=gscope, constants=constants|new_constants, attributes=new_attrs, is_kernel=True)
+    try:
+        generator.visit(fn.parse())
+    except Exception as e:
+        node = generator.last_node
+        if node is None or isinstance(e, (NotImplementedError, CompilationError)):
+            raise e
+        raise CompilationError(fn.src, node) from e
+    ret = generator.module
+    # module takes ownership of the context
+    return ret, context
 
 
-class Launcher:
-    def __init__(self, kernel, grid):
-        self.kernel = kernel
-        self.grid = grid
-
-    def __call__(self, *wargs, **kwargs):
-        return self.kernel(*wargs, **kwargs, grid=self.grid)
-
-
-class Autotuner:
-    def __init__(self, kernel, arg_names, configs, key, reset_to_zero, prune_configs_by: Dict = None):
-        '''
-        :param prune_configs_by: a dict of functions that are used to prune configs, fields:
-            'perf_model': performance model used to predicate running time with different configs, returns running time
-            'top_k': number of configs to bench
-            'prune_num_stages_by'(optional): a function used to prune num_stages. It take configs:List[Config] as its input, and returns pruned configs.
-        '''
-        if not configs:
-            self.configs = [Config(dict(), num_warps=4, num_stages=2)]
-        else:
-            self.configs = configs
-        self.key_idx = [arg_names.index(k) for k in key]
-        self.cache = dict()
-        self.kernel = kernel
-        # hook to reset all required tensor to zeros before relaunching a kernel
-        self.hook = lambda args: 0
-        if reset_to_zero is not None:
-            self.reset_idx = [arg_names.index(k) for k in reset_to_zero]
-
-            def _hook(args):
-                for i in self.reset_idx:
-                    args[i].zero_()
-            self.hook = _hook
-        self.arg_names = arg_names
-        # prune configs
-        if prune_configs_by:
-            perf_model, top_k = prune_configs_by['perf_model'], prune_configs_by['top_k']
-            if 'early_config_prune' in prune_configs_by:
-                early_config_prune = prune_configs_by['early_config_prune']
-        else:
-            perf_model, top_k, early_config_prune = None, None, None
-        self.perf_model, self.configs_top_k = perf_model, top_k
-        self.early_config_prune = early_config_prune
-
-    def _bench(self, *args, config, **meta):
-        # check for conflicts, i.e. meta-parameters both provided
-        # as kwargs and by the autotuner
-        conflicts = meta.keys() & config.kwargs.keys()
-        if conflicts:
-            raise ValueError(
-                f"Conflicting meta-parameters: {', '.join(conflicts)}."
-                " Make sure that you don't re-define auto-tuned symbols."
-            )
-        # augment meta-parameters with tunable ones
-        current = dict(meta, **config.kwargs)
-
-        def kernel_call():
-            if config.pre_hook:
-                config.pre_hook(self.nargs)
-            self.hook(args)
-            self.kernel(*args, num_warps=config.num_warps, num_stages=config.num_stages, **current)
-        return triton.testing.do_bench(kernel_call)
-
-    def __call__(self, *args, **kwargs):
-        self.nargs = dict(zip(self.arg_names, args))
-        if len(self.configs) > 1:
-            key = tuple([args[i] for i in self.key_idx])
-            if key not in self.cache:
-                # prune configs
-                pruned_configs = self.configs
-                if self.early_config_prune:
-                    pruned_configs = self.early_config_prune(self.configs, self.nargs)
-                if self.perf_model:
-                    top_k = self.configs_top_k
-                    if isinstance(top_k, float) and top_k <= 1.0:
-                        top_k = int(len(self.configs) * top_k)
-                    if len(pruned_configs) > top_k:
-                        est_timing = {config: self.perf_model(**self.nargs, **kwargs, **config.kwargs, num_stages=config.num_stages, num_warps=config.num_warps) for config in pruned_configs}
-                        pruned_configs = sorted(est_timing.keys(), key=lambda x: est_timing[x])[:top_k]
-                bench_start = time.time()
-                timings = {config: self._bench(*args, config=config, **kwargs)
-                           for config in pruned_configs}
-                bench_end = time.time()
-                self.bench_time = bench_end - bench_start
-                self.cache[key] = builtins.min(timings, key=timings.get)
-                self.hook(args)
-                self.configs_timings = timings
-            config = self.cache[key]
-        else:
-            config = self.configs[0]
-        self.best_config = config
-        if config.pre_hook is not None:
-            config.pre_hook(self.nargs)
-        return self.kernel(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
+def make_ptx(mod: Any, device: int) -> Tuple[str, int]:
+    '''
+    Translate TritonGPU module to PTX code.
+    :param mod: a TritonGPU dialect module
+    :return:
+        - PTX code
+        - shared memory alloaction size
+    '''
+    return _triton.translate_triton_gpu_to_ptx(mod, device)
 
 
-_version_key_lock = threading.Lock()
-_version_key = None
+def make_cubin(ptx, device):
+    '''
+    Compile TritonGPU module to cubin.
+    :param ptx: ptx code
+    :param device: CUDA device
+    :return: str
+    '''
+    return _triton.compile_ptx_to_cubin(ptx, device)
 
 
-def version_key():
-    global _version_key
+def ptx_get_kernel_name(ptx: str) -> str:
+    '''
+    Get kernel name from PTX code.
+    This Kernel name is required when launching the kernel.
+    '''
+    # There is a name mangling in PTX codegen, so the original kernel names in Triton IR are not available in PTX/cubin.
+    assert ptx
+    for line in ptx.split('\n'):
+        line = line.strip()
+        if line.startswith('// .globl'):
+            return line.split()[-1]
 
-    if _version_key is not None:
-        return _version_key
+def _compile(fn, signature: str, device: int = -1, constants=dict(), specialization=_triton.code_gen.instance_descriptor(), num_warps: int = 4, num_stages: int = 3, output: str = "ttgir") -> Tuple[str, int, str]:
+    valid_outputs = ("ttir", "ttgir", "ptx", "cubin")
+    assert output in valid_outputs, "output should be one of [%s], but get \"%s\"" % (','.join(valid_outputs), output)
 
-    with _version_key_lock:
-        if _version_key is not None:
-            return _version_key
+    # triton-ir
+    module, context = make_triton_ir(fn, signature, specialization, constants)
+    if output == "ttir":
+        return module
 
-        import pkgutil
-        contents = []
-        # frontend
-        with open(triton.code_gen.__file__, "rb") as f:
-            contents += [hashlib.md5(f.read()).hexdigest()]
-        # backend
-        with open(triton._C.libtriton.__file__, "rb") as f:
-            contents += [hashlib.md5(f.read()).hexdigest()]
-        # language
-        language_path = os.path.join(*triton.__path__, 'language')
-        for lib in pkgutil.iter_modules([language_path]):
-            with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
-                contents += [hashlib.md5(f.read()).hexdigest()]
-        # ptxas version
-        try:
-            ptxas_version = hashlib.md5(subprocess.check_output(["ptxas", "--version"])).hexdigest()
-        except Exception:
-            ptxas_version = ''
-        _version_key = '-'.join(triton.__version__) + '-' + ptxas_version + '-' + '-'.join(contents)
-        return _version_key
+    assert output == "cubin"
+    assert torch.version.hip is None
+    backend = _triton.runtime.backend.CUDA
+    extern_libs = {}
+    torch.cuda.set_device(0)
+    name, asm, shared_mem = _triton.code_gen.compile_ttir(backend, module, device, num_warps, num_stages, extern_libs)
+    return asm, shared_mem, name
+  
+def ty_to_cpp(ty):
+  if ty[0] == '*':
+    return "CUdeviceptr"
+  return {
+    "i1": "bool",
+    "i8": "int8_t",
+    "i16": "int16_t",
+    "i32": "int32_t",
+    "i64": "int64_t",
+    "f32": "float",
+  }[ty]
 
 
-class DependenciesFinder(ast.NodeVisitor):
+def generate_name_initializer(signature):
+    src = "int i = 0;\n"
+    tys = signature.split(',')
+    for i, ty in enumerate(tys):
+      src
 
-    def __init__(self, globals, src) -> None:
-        super().__init__()
-        self.ret = hashlib.md5(src.encode("utf-8")).hexdigest()
-        self.globals = globals
 
-    def visit_Name(self, node):
-        return self.globals.get(node.id, None)
+import contextlib
+import io
+import shutil
+import torch
+import setuptools
+import sysconfig
 
-    def visit_Attribute(self, node):
-        lhs = self.visit(node.value)
-        while isinstance(lhs, ast.Attribute):
-            lhs = self.visit(lhs.value)
-        if lhs is None or lhs is triton:
-            return None
-        return getattr(lhs, node.attr)
+@contextlib.contextmanager
+def quiet():
+    old_stdout, old_stderr = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = io.StringIO(), io.StringIO()
+    try:
+        yield
+    finally:
+        sys.stdout, sys.stderr = old_stdout, 
 
-    def visit_Call(self, node):
-        func = self.visit(node.func)
-        if func is None:
-            return
-        if inspect.isbuiltin(func):
-            return
-        if func.__module__ and func.__module__.startswith('triton.'):
-            return
-        assert isinstance(func, triton.JITFunction)
-        if func.hash is None:
-            tree = ast.parse(func.src)
-            finder = DependenciesFinder(func.__globals__, func.src)
-            finder.visit(tree)
-            func.hash = finder.ret
-        self.ret = (self.ret + func.hash).encode("utf-8")
-        self.ret = hashlib.md5(self.ret).hexdigest()
+def _build(name, src, path):
+  libcuda = shutil.which("libcuda.so")
+  # add framework
+  extra_compile_args = []
+  prefix = os.path.dirname(torch.__file__)
+  library_dirs = [os.path.dirname(libcuda), os.path.join(prefix, 'lib')]
+  include_dirs = [path,
+                  "/usr/local/cuda/include/",
+                  os.path.join(prefix, 'lib', 'include'),
+                  os.path.join(prefix, 'lib', 'include', 'torch', 'csrc', 'api', 'include'),
+                  os.path.join(prefix, 'include'),
+                  os.path.join(prefix, 'include', 'torch', 'csrc', 'api', 'include')]
+  libraries = ['cuda']
+  abi = torch._C._GLIBCXX_USE_CXX11_ABI
+  extra_compile_args += ['-D_GLIBCXX_USE_CXX11_ABI={abi}'.format(abi=abi)]
+  # extra arguments
+  extra_link_args = []
+  # create extension module
+  ext = setuptools.Extension(
+      name = name,
+      language = 'c++',
+      sources = [src],
+      include_dirs = include_dirs,
+      extra_compile_args = extra_compile_args + ['-g0'],
+      extra_link_args = extra_link_args,
+      library_dirs = library_dirs,
+      libraries = libraries,
+  )
+  # build extension module
+  args = ['build_ext']
+  args.append('--build-temp=' + path)
+  args.append('--build-lib=' + path)
+  args.append('-q')
+  args = dict(
+      name = name,
+      ext_modules = [ext],
+      script_args = args,
+  ) 
+  # with quiet():
+  setuptools.setup(**args)
+  suffix = sysconfig.get_config_var('EXT_SUFFIX')
+  so = os.path.join(path, '{name}{suffix}'.format(name=name, suffix=suffix))
+  return so
+
+def generate_torch_glue(kernel_name, signature, num_warps, binaries, tmpdir):
+    headers = dict()
+    tys = signature.split(',')
+    # write all cubins to header files
+    for bin, shmem_size, name in binaries:
+      assert len(name) < 1024
+      initializer = f"""
+const char* {name}_ptx = R"({bin["ptx"]})";
+unsigned char {name}_bin[] = {{ {','.join(map(hex, bin["cubin"]))} }};
+unsigned char {name}_shmem = {shmem_size};"""
+      headers[name] = os.path.join(tmpdir, f"{name}.h")
+      with open(headers[name], "w") as f:
+        f.write(initializer)
+
+    # generate glue code
+    n_args = len(tys)
+    src = ""
+    for bin, shmem_size, name in binaries:
+      src += f"#include \"{name}.h\"\n"
+    src += f"""
+#include <unordered_map>
+#include \"cuda.h\"
+#include <Python.h>
+
+inline void gpuAssert(CUresult code, const char *file, int line, bool abort=true)
+{{
+   if (code != CUDA_SUCCESS) 
+   {{
+      const char* str;
+      cuGetErrorString(code, &str);
+      fprintf(stderr,\"GPUassert: %s %s %d\\n\", str, file, line);
+      if (abort) exit(code);
+   }}
+}}
+#define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
+
+std::unordered_map<std::string, CUmodule> modules;
+std::unordered_map<std::string, CUfunction> functions;
+
+void init_function(const char* name, const unsigned char* src, size_t n_shared_bytes, int64_t device){{
+  CUmodule mod;
+  CUfunction fun;
+  CUDA_CHECK(cuModuleLoadData(&mod, src));
+  CUDA_CHECK(cuModuleGetFunction(&fun, mod, name));
+  // set dynamic shared memory if necessary
+  int shared_optin;
+  CUDA_CHECK(cuDeviceGetAttribute(&shared_optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, device));
+  if (n_shared_bytes > 49152 && shared_optin > 49152) {{
+    CUDA_CHECK(cuFuncSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED));
+    int shared_total, shared_static;
+    int n_spills, n_reg;
+    CUDA_CHECK(cuDeviceGetAttribute(&shared_total, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR, device));
+    CUDA_CHECK(cuFuncGetAttribute(&shared_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun));
+    CUDA_CHECK(cuFuncGetAttribute(&n_spills, CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, fun));
+    CUDA_CHECK(cuFuncGetAttribute(&n_reg, CU_FUNC_ATTRIBUTE_NUM_REGS, fun));
+    CUDA_CHECK(cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin - shared_static));
+  }}
+  modules[name] = mod;
+  functions[name] = fun;
+}}
+"""
+
+    func_init = '\n  '.join(f"init_function(\"{name}\", {name}_bin, {name}_shmem, device);" for _, _, name in binaries)
+    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in enumerate(tys))
+    def _extracted_type(ty):
+      if ty[0] == '*':
+        return "PyObject*"
+      if ty[0] == 'i':
+        return "long"
+      return {
+        'fp32': 'float',
+        'fp64': 'double',
+      }[ty]
+    
+    def format_of(ty):
+      if ty == "PyObject*":
+        return "O"
+      return ty[0]
+
+    format = "iiil" + ''.join([format_of(_extracted_type(ty)) for ty in tys])
+ 
+    src += f"""
+void init_module(CUdevice device) {{
+  {func_init}
+}}
+
+
+extern "C" {{
+
+const char* fallback = \"{kernel_name}_{''.join(map(str, range(len(tys))))}\";
+
+
+void _{kernel_name}(int gridX, int gridY, int gridZ, CUstream stream, {arg_decls}) {{
+  CUcontext ctx;
+  CUdevice device;
+  CUDA_CHECK(cuStreamGetCtx(stream, &ctx));
+  CUDA_CHECK(cuCtxGetDevice(&device));
+
+  // TODO: machine may have heterogeneous devices
+  if (functions.empty())
+    init_module(device);
+
+  char func_key[256] = \"{kernel_name}_\";
+  int idx = {len(kernel_name)} + 1;
+"""
+
+    for i, ty in enumerate(tys):
+      if i >= 10:
+        src += f"  func_key[idx++] = '{i//10}';\n"
+      src += f"  func_key[idx++] = '{i%10}';"
+      if ty[0]=='i':
+        src += f"""
+  if (arg{i} == 1) func_key[idx++] = 'c';
+  if (arg{i} % 16 == 0) func_key[idx++] = 'd';
+"""
+      if ty[0]=="*":
+        src += f"""
+  if ((uintptr_t)arg{i} % 16 == 0) func_key[idx++] = 'd';
+"""
+
+
+    src += f"""  func_key[idx] = '\\0';
+
+
+  const char* func_name = func_key;
+  auto it = functions.find(func_name);
+  if(it == functions.end()) {{
+    if({len(binaries)} == 1) {{
+      throw std::runtime_error("Unreachable. Please report.");
+    }}
+    // TODO: error message
+    func_name = fallback;
+  }}
+  CUfunction func = functions.at(func_name);
+  void *params[] = {{ {', '.join(f"&arg{i}" if tys[i][0]=='*' else f"(void*)&arg{i}" for i in range(n_args))} }};
+  CUDA_CHECK(cuLaunchKernel(func, gridX, gridY, gridZ, 32*{num_warps}, 1, 1, 0, stream, params, 0));
+}}
+
+
+inline CUdeviceptr getPointer(PyObject *obj, int idx) {{
+  if (PyLong_Check(obj)) {{
+    return (CUdeviceptr)PyLong_AsUnsignedLongLong(obj);
+  }}
+  if (obj == Py_None) {{
+    return (CUdeviceptr)0;
+  }}
+  PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
+  if(ptr)
+    ptr = PyObject_CallNoArgs(ptr);
+  if (ptr == NULL) {{
+    throw std::runtime_error("pointer argument at index " + std::to_string(idx) + 
+                             "must either be uint64 or have data_ptr method");
+  }}
+  if (!PyLong_Check(ptr)) {{
+    throw std::runtime_error("`data_ptr` method of pointer argument at index" + std::to_string(idx) +
+                             "must return uint64");
+  }}
+  return (CUdeviceptr)PyLong_AsUnsignedLongLong(ptr);
+
+}}
+
+static PyObject* {kernel_name}(PyObject* self, PyObject* args) {{
+  int gridX, gridY, gridZ;
+  uint64_t stream;
+  {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in enumerate(tys)])}
+  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &stream, {', '.join(f"&_arg{i}" for i, ty in enumerate(tys))})) {{
+    return NULL;
+  }}
+
+  _{kernel_name}(gridX, gridY, gridZ, (CUstream)stream, {', '.join(f"getPointer(_arg{i},{i})" if ty[0]=="*" else f"_arg{i}"for i, ty in enumerate(tys))});
+
+
+  // return None
+  Py_INCREF(Py_None);
+  return Py_None;
+}}
+
+static PyMethodDef ModuleMethods[] = {{
+  {{"{kernel_name}", {kernel_name}, METH_VARARGS, "Call {kernel_name} kernel"}},
+  {{NULL, NULL, 0, NULL}} // sentinel
+}};
+
+static struct PyModuleDef ModuleDef = {{
+  PyModuleDef_HEAD_INIT,
+  \"{kernel_name}\",
+  NULL, //documentation
+  -1, //size
+  ModuleMethods
+}};
+
+PyMODINIT_FUNC PyInit_{kernel_name}() {{
+  PyObject *m = PyModule_Create(&ModuleDef);
+  if(m == NULL) {{
+    return NULL;
+  }}
+  PyModule_AddFunctions(m, ModuleMethods);
+  PyObject *ptx = PyDict_New();
+"""
+
+    for _, _, name in binaries:
+      src += f"""
+  PyObject *py_{name}_ptx = PyUnicode_FromString({name}_ptx);
+  PyDict_SetItemString(ptx, "{name}", py_{name}_ptx);
+  Py_DECREF(py_{name}_ptx);
+"""
+
+    src += f"""
+  PyModule_AddObject(m, "ptx", ptx);
+  return m;
+}}
+
+}}
+"""
+
+    return src
+
+import hashlib
+from filelock import FileLock
+import pickle
 
 
 def default_cache_dir():
     return os.path.join(os.environ["HOME"], ".triton", "cache")
 
+class CacheManager:
 
-class JITFunction:
+    def __init__(self, key):
+        self.key = key
+        self.bin_path = None
+        self.lock_path = None
+        # if caching is enabled, get the lock and bin path
+        self.cache_dir = os.environ.get('TRITON_CACHE_DIR', default_cache_dir())
+        if self.cache_dir:
+            os.makedirs(self.cache_dir, exist_ok=True)
+        if self.cache_dir:
+            self.bin_path = os.path.join(self.cache_dir, self.key + ".so")
+            self.lock_path = self.bin_path + ".lock"
+    
+    def has_file(self):
+        return self.bin_path and os.path.exists(self.bin_path)
 
-    cache_hook = None
+    def put(self, binary):
+        if self.bin_path:
+            assert self.lock_path is not None
+            with FileLock(self.lock_path):
+                with open(self.bin_path + ".tmp", "wb") as f:
+                    f.write(binary)
+                os.rename(self.bin_path + ".tmp", self.bin_path)
 
-    def __init__(self, fn, version=None, inline=True, do_not_specialize=None):
-        # information of wrapped function
-        self.fn = fn
-        self.module = fn.__module__
-        signature = inspect.signature(fn)
-        self.arg_names = [v.name for v in signature.parameters.values()]
-        self.arg_defaults = [v.default for v in signature.parameters.values()]
 
-        self.version = version
-        self.inline = inline
-        self.src = textwrap.dedent(inspect.getsource(fn))
-        self.src = self.src[self.src.find("def"):]
-        self.do_not_specialize = [] if do_not_specialize is None else do_not_specialize
-        self.do_not_specialize = [self.arg_names.index(arg) if isinstance(arg, str) else arg for arg in self.do_not_specialize]
-        # cache for callable driver objects (e.g. CUkernel)
-        self.bin_cache = dict()
-        self.hash = None
-        # JITFunction can be instantiated as kernel
-        # when called with a grid using __getitem__
-        self.kernel_decorators = []
-        self.kernel = None
-        # annotations
-        self.annotations = {self.arg_names.index(name): ty for name, ty in fn.__annotations__.items()}
-        self.__annotations__ = fn.__annotations__
-        # constexprs
-        self.constexprs = [self.arg_names.index(ann) for ann in self.__annotations__.keys()]
-        # forward docs
-        self.__doc__ = fn.__doc__
-        self.__name__ = fn.__name__
-        self.__globals__ = fn.__globals__
-        self.__module__ = fn.__module__
+def make_cache_key(fn, signature, configs, constants, num_warps, num_stages):
+    # Get unique key for the compiled code
+    get_conf_key = lambda conf: (sorted(conf.divisible_by_16), sorted(conf.equal_to_1))
+    configs_key = [get_conf_key(conf) for conf in configs]
+    key = f"{fn.cache_key}-{signature}-{configs_key}-{constants}-{num_warps}-{num_stages}"
+    key = hashlib.md5(key.encode("utf-8")).hexdigest()
+    return key
 
-    @property
-    @functools.lru_cache()
-    def cache_key(self):
-        # TODO : hash should be attribute of `self`
-        if self.hash is None:
-            dependencies_finder = DependenciesFinder(globals=self.__globals__, src=self.src)
-            dependencies_finder.visit(self.parse())
-            self.hash = dependencies_finder.ret + version_key()
-        return self.hash
+def make_shared_object(fn, signature, num_warps, binaries, tmpdir):
+    src = generate_torch_glue(fn.__name__, signature, num_warps, binaries, tmpdir)
+    src_path = os.path.join(tmpdir, "main.cpp")
+    with open(src_path, "w") as f:
+        f.write(src)
+    bin_path = _build(fn.__name__, src_path, tmpdir)
+    with open(bin_path, "rb") as f:
+        return f.read()
 
-    # we do not parse `src` in the constructor because
-    # the user might want to monkey-patch self.src dynamically.
-    # Some unit tests do this, for example.
-    def parse(self):
-        tree = ast.parse(self.src)
-        assert isinstance(tree, ast.Module)
-        assert len(tree.body) == 1
-        assert isinstance(tree.body[0], ast.FunctionDef)
-        return tree
 
-    def __call__(self, *args, **kwargs):
-        raise RuntimeError("Cannot call @triton.jit'd outside of the scope of a kernel.")
+def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, configs = None):
+    ref, module = make_triton_ir(fn, signature, _triton.code_gen.instance_descriptor(), constants)
+    # we get the kernel, i.e. the first function generated in the module
+    fns = ref.get_functions()
+    if configs is None:
+      configs = _triton.infer_specialization_configs(fns[0])
+    # cache manager
+    cache_key = make_cache_key(fn, signature, configs, constants, num_warps, num_stages)
+    cache_manager = CacheManager(cache_key)
+    # retrieve cached shared object if it exists
+    if cache_manager.has_file():
+        return CompiledKernel(fn.__name__, cache_manager.bin_path)
+    # compile all the configs in parallel
+    futures = []
+    with ThreadPoolExecutor() as executor:
+        for config in configs:
+            futures.append(executor.submit(_compile, fn, signature, device, constants, config, num_warps, num_stages, "cubin"))
+    binaries = [future.result() for future in as_completed(futures)]
+    # generate and compile glue code into shared object
+    with tempfile.TemporaryDirectory() as tmpdir:
+      so = make_shared_object(fn, signature, num_warps, binaries, tmpdir)
+    # write shared object to cache
+    cache_manager.put(so)
+    return CompiledKernel(fn.__name__, cache_manager.bin_path)
 
-    # - when `.src` attribute is set, cache path needs
-    #   to be reinitialized
-    # - when kernel decorators change, cached kernel
-    #   needs to be cleared
-    def __setattr__(self, name, value):
-        if name == 'kernel_decorators':
-            self.kernel = None
-        super(JITFunction, self).__setattr__(name, value)
-        if name == 'src':
-            self.hash = None
-            JITFunction.cache_key.fget.cache_clear()
 
-    def _init_kernel(self):
-        if self.kernel is None:
-            self.kernel = Kernel(self)
-            for decorator in reversed(self.kernel_decorators):
-                self.kernel = decorator(self.kernel)
-        return self.kernel
+class CompiledKernel:
 
-    def warmup(self, compile):
-        return self._warmup(**compile, is_manual_warmup=True)
+    def __init__(self, fn_name, data_path):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(fn_name, data_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self.c_wrapper = getattr(mod, fn_name)
+        ptx = getattr(mod, "ptx")
+        if(len(ptx) == 1):
+          self.asm = {"ptx": list(ptx.values())[0]}
 
-    def _warmup(self, key, arg_types, device, attributes, constants, num_warps, num_stages, extern_libs, is_manual_warmup):
-        hashed_key = hashlib.md5(key.encode("utf-8")).hexdigest()
-
-        # create cache directory
-        cache_dir = os.environ.get('TRITON_CACHE_DIR', default_cache_dir())
-        if cache_dir:
-            os.makedirs(cache_dir, exist_ok=True)
-
-        if cache_dir:
-            bin_cache_path = os.path.join(cache_dir, hashed_key)
-            bin_lock_path = bin_cache_path + ".lock"
-        else:
-            bin_cache_path = None
-            bin_lock_path = None
-
-        binary = None
-        if bin_cache_path and os.path.exists(bin_cache_path):
-            assert bin_lock_path is not None
-            with FileLock(bin_lock_path):
-                with open(bin_cache_path, 'rb') as f:
-                    binary = pickle.load(f)["binary"]
-
-        compile = dict(arg_types=arg_types, device=device, attributes=attributes, constants=constants, num_warps=num_warps, num_stages=num_stages, extern_libs=extern_libs)
-        if JITFunction.cache_hook is not None:
-            name = self.__name__
-            info = key.split('-')[-3:]
-            num_warps, num_stages, sig = info[0], info[1], info[2].split('_')[1:]
-            # make signature human-readable
-            arg_reprs = []
-            for arg_name, arg_sig in zip(self.arg_names, sig):
-                arg_reprs.append(f'{arg_name}: {arg_sig}')
-            # assemble the repr
-            arg_reprs = ", ".join(arg_reprs)
-            repr = f"{name}[num_warps={num_warps}, num_stages={num_stages}]({arg_reprs})"
-            noop = JITFunction.cache_hook(key=key, repr=repr, fn=self, compile={"key": key, **compile}, is_manual_warmup=is_manual_warmup, already_compiled=binary is not None)
-            if noop:
-                return True
-
-        if binary is None:
-            binary = self._compile(**compile)
-
-        if bin_cache_path:
-            assert bin_lock_path is not None
-            with FileLock(bin_lock_path):
-                with open(bin_cache_path + ".tmp", "wb") as f:
-                    pickle.dump({"binary": binary, "key": key}, f)
-                os.rename(bin_cache_path + ".tmp", bin_cache_path)
-
-        self.bin_cache[key] = LoadedBinary(device, binary)
-        return False
-
-    def _compile(self, arg_types, device, attributes, constants, num_warps, num_stages, extern_libs):
-        # create IR module
-        context = _triton.ir.context()
-        # get just-in-time proto-type of kernel
-        arg_types = [Kernel._to_triton_ir(arg) for arg in arg_types]
-        ret_type = triton.language.void
-        prototype = triton.language.function_type(ret_type, arg_types)
-        # generate Triton-IR
-        # export symbols visible from self into code-generator object
-        gscope = self.__globals__
-        generator = CodeGenerator(context, prototype, gscope=gscope, attributes=attributes, constants=constants, is_kernel=True)
-        try:
-            generator.visit(self.parse())
-        except Exception as e:
-            node = generator.last_node
-            if node is None or isinstance(e, (NotImplementedError, CompilationError)):
-                raise e
-            raise CompilationError(self.src, node) from e
-        # Compile to machine code
-        if torch.version.hip is None:
-            backend = _triton.runtime.backend.CUDA
-        else:
-            backend = _triton.runtime.backend.ROCM
-        name, asm, shared_mem = _triton.code_gen.compile_ttir(backend, generator.module, device, num_warps, num_stages, extern_libs)
-        max_shared_memory = _triton.runtime.max_shared_memory(backend, device)
-        if shared_mem > max_shared_memory:
-            raise OutOfResources(shared_mem, max_shared_memory, "shared memory")
-        return Binary(backend, name, asm, shared_mem, num_warps)
-
+    
     def __getitem__(self, grid):
-        return Launcher(self._init_kernel(), grid)
-
-    def __repr__(self):
-        return f"JITFunction({self.module}:{self.fn.__name__})"
-
-
-class Config:
-    """
-    An object that represents a possible kernel configuration for the auto-tuner to try.
-
-    :ivar meta: a dictionary of meta-parameters to pass to the kernel as keyword arguments.
-    :type meta: dict[Str, Any]
-    :ivar num_warps: the number of warps to use for the kernel when compiled for GPUs. For example, if
-                      `num_warps=8`, then each kernel instance will be automatically parallelized to
-                      cooperatively execute using `8 * 32 = 256` threads.
-    :type num_warps: int
-    :ivar num_stages: the number of stages that the compiler should use when software-pipelining loops.
-                       Mostly useful for matrix multiplication workloads on SM80+ GPUs.
-    :type num_stages: int
-    :ivar pre_hook: a function that will be called before the kernel is called. Parameters of this
-                    function are args.
-    """
-
-    def __init__(self, kwargs, num_warps=4, num_stages=2, pre_hook=None):
-        self.kwargs = kwargs
-        self.num_warps = num_warps
-        self.num_stages = num_stages
-        self.pre_hook = pre_hook
-
-    def __str__(self):
-        res = []
-        for k, v in self.kwargs.items():
-            res.append(f'{k}: {v}')
-        res.append(f'num_warps: {self.num_warps}')
-        res.append(f'num_stages: {self.num_stages}')
-        return ', '.join(res)
-
-
-def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
-    """
-    Decorator for auto-tuning a :code:`triton.jit`'d function.
-
-    .. highlight:: python
-    .. code-block:: python
-
-        @triton.autotune(configs=[
-            triton.Config(meta={'BLOCK_SIZE': 128}, num_warps=4),
-            triton.Config(meta={'BLOCK_SIZE': 1024}, num_warps=8),
-          ],
-          key=['x_size'] # the two above configs will be evaluated anytime
-                         # the value of x_size changes
-        )
-        @triton.jit
-        def kernel(x_ptr, x_size, **META):
-            BLOCK_SIZE = META['BLOCK_SIZE']
-
-    :note: When all the configurations are evaluated, the kernel will run multiple time.
-           This means that whatever value the kernel updates will be updated multiple times.
-           To avoid this undesired behavior, you can use the `reset_to_zero` argument, which
-           reset the value of the provided tensor to `zero` before running any configuration.
-
-    :param configs: a list of :code:`triton.Config` objects
-    :type configs: list[triton.Config]
-    :param key: a list of argument names whose change in value will trigger the evaluation of all provided configs.
-    :type key: list[str]
-    :param prune_configs_by: a dict of functions that are used to prune configs, fields:
-        'perf_model': performance model used to predicate running time with different configs, returns running time
-        'top_k': number of configs to bench
-        'early_config_prune'(optional): a function used to do early prune (eg, num_stages). It take configs:List[Config] as its input, and returns pruned configs.
-    :param reset_to_zero: a list of argument names whose value will be reset to zero before evaluating any configs.
-    :type reset_to_zero: list[str]
-    """
-    def decorator(fn):
-        def wrapper(kernel):
-            return Autotuner(kernel, fn.arg_names, configs, key, reset_to_zero, prune_configs_by)
-
-        fn.kernel_decorators.append(wrapper)
-        return fn
-
-    return decorator
-
-
-def heuristics(values):
-    """
-    Decorator for specifying how the values of certain meta-parameters may be computed.
-    This is useful for cases where auto-tuning is prohibitevely expensive, or just not applicable.
-
-    .. highlight:: python
-    .. code-block:: python
-
-        @triton.heuristics(values={'BLOCK_SIZE': lambda args: 2 ** int(math.ceil(math.log2(args[1])))})
-        @triton.jit
-        def kernel(x_ptr, x_size, **META):
-            BLOCK_SIZE = META['BLOCK_SIZE'] # smallest power-of-two >= x_size
-
-
-    .param values: a dictionary of meta-parameter names and functions that compute the value of the meta-parameter.
-                   each such function takes a list of positional arguments as input.
-    .type values: dict[str, Callable[[list[Any]], Any]]
-    """
-    def decorator(fn):
-        def wrapper(kernel):
-            def fun(*args, **meta):
-                for v, heur in values.items():
-                    assert v not in meta
-                    meta[v] = heur({**dict(zip(fn.arg_names, args)), **meta})
-                return kernel(*args, **meta)
-            return fun
-
-        fn.kernel_decorators.append(wrapper)
-        return fn
-
-    return decorator
-
-
-def jit(*args, **kwargs):
-    """
-    Decorator for JIT-compiling a function using the Triton compiler.
-
-    :note: When a jit'd function is called, :code:`torch.tensor` arguments are implicitly converted to pointers using the :code:`.data_ptr()` method.
-
-    :note: This function will be compiled and run on the GPU. It will only have access to:
-
-           * python primitives,
-           * objects within the triton.language package,
-           * arguments to this function,
-           * other jit'd functions
-
-    :param fn: the function to be jit-compiled
-    :type fn: Callable
-    """
-    if args:
-        assert len(args) == 1
-        assert callable(args[0])
-        return JITFunction(args[0], **kwargs)
-    else:
-        def decorator(fn):
-            return JITFunction(fn, **kwargs)
-        return decorator
-
-######
-
-# class ForwardDeclaration:
-
-#     def __init__(self, name, ret_ty, arg_tys) -> None:
-#         self.name = name
-#         self.ret_ty = ret_ty
-#         self.arg_tys = arg_tys
-
-# def forward_declare(name, ret_ty, arg_tys):
-#     return ForwardDeclaration(name, ret_ty, arg_tys)
-
-######
-
-
-def cdiv(x, y):
-    return (x + y - 1) // y
-
-
-def next_power_of_2(n):
-    """Return the smallest power of 2 greater than or equal to n"""
-    n -= 1
-    n |= n >> 1
-    n |= n >> 2
-    n |= n >> 4
-    n |= n >> 8
-    n |= n >> 16
-    n += 1
-    return n
-
-######
-
-
-class TensorWrapper:
-    def __init__(self, base, dtype):
-        self.dtype = dtype
-        self.base = base
-        self.is_cuda = base.is_cuda
-        self.device = base.device
-
-    def data_ptr(self):
-        return self.base.data_ptr()
-
-    def __str__(self) -> str:
-        return f'TensorWrapper[{self.dtype}]({self.base})'
-
-
-def reinterpret(tensor, dtype):
-    if isinstance(tensor, TensorWrapper):
-        if dtype == tensor.base.dtype:
-            # Reinterpreting to the original interpretation; return the base.
-            return tensor.base
-        else:
-            # Reinterpreting a wrapped tensor to a different type.
-            return TensorWrapper(tensor.base, dtype)
-    elif isinstance(tensor, torch.Tensor):
-        # A new wrapper is needed around an unwrapped tensor.
-        return TensorWrapper(tensor, dtype)
-    else:
-        raise TypeError(f'Cannot reinterpret a {type(tensor)}.')
+        def runner(*args, stream=None):
+            if stream is None:
+              stream = torch.cuda.current_stream().cuda_stream
+            self.c_wrapper(grid[0], grid[1], grid[2], stream, *args)
+        return runner
