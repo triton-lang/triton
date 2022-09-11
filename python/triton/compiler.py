@@ -864,7 +864,7 @@ def ptx_get_kernel_name(ptx: str) -> str:
         if line.startswith('// .globl'):
             return line.split()[-1]
 
-def _compile(fn, signature: str, device: int = -1, constants=dict(), specialization=_triton.code_gen.instance_descriptor(), num_warps: int = 4, num_stages: int = 3, output: str = "ttgir") -> Tuple[str, int, str]:
+def _compile(fn, signature: str, device: int = -1, constants=dict(), specialization=_triton.code_gen.instance_descriptor(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, output: str = "ttgir") -> Tuple[str, int, str]:
     valid_outputs = ("ttir", "ttgir", "ptx", "cubin")
     assert output in valid_outputs, "output should be one of [%s], but get \"%s\"" % (','.join(valid_outputs), output)
 
@@ -876,7 +876,8 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     assert output == "cubin"
     assert torch.version.hip is None
     backend = _triton.runtime.backend.CUDA
-    extern_libs = {}
+    if extern_libs is None:
+      extern_libs = dict()
     name, asm, shared_mem = _triton.code_gen.compile_ttir(backend, module, device, num_warps, num_stages, extern_libs)
     return asm, shared_mem, name
   
@@ -1026,6 +1027,7 @@ void init_function(const char* name, const unsigned char* src, size_t n_shared_b
         return "long"
       return {
         'u32': 'uint32_t',
+        'u64': 'uint64_t',
         'fp32': 'float',
         'fp64': 'double',
       }[ty]
@@ -1192,7 +1194,7 @@ def make_shared_object(fn, signature, num_warps, binaries, tmpdir):
         return f.read()
 
 
-def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, configs = None):
+def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs = None, configs = None):
     # we get the kernel, i.e. the first function generated in the module
     if configs is None:
       assert False, "automatic specialization is not supported yet"
@@ -1208,7 +1210,7 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
     # compile all the configs
     binaries = []
     for config in configs:
-        binaries.append(_compile(fn, signature, device, constants, config, num_warps, num_stages, "cubin"))
+        binaries.append(_compile(fn, signature, device, constants, config, num_warps, num_stages, extern_libs, "cubin"))
     # generate and compile glue code into shared object
     with tempfile.TemporaryDirectory() as tmpdir:
       so = make_shared_object(fn, signature, num_warps, binaries, tmpdir)

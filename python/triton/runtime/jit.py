@@ -158,10 +158,12 @@ class JITFunction:
         if hasattr(arg, "dtype"):
             return arg.dtype
         elif isinstance(arg, int):
-            if -0x80000000 <= arg and arg <= 0x7FFFFFFF:
+            if -2**31 <= arg and arg <= 2**31 - 1:
               return "i32"
-            elif 0x80000000 <= arg and arg <= 0xFFFFFFFF:
+            elif 2**31 <= arg and arg <= 2**32 - 1:
               return "u32"
+            elif 2**63 <= arg and arg <= 2**64 - 1:
+              return "u64"
             else:
               return "i64"
         elif isinstance(arg, float):
@@ -226,7 +228,7 @@ class JITFunction:
         constants = {i: k for i, k in enumerate(key) if i in self.constexprs}
         return signature, constants
     
-    def _call_hook(self, key, signature, device, constants, num_warps, num_stages, configs):
+    def _call_hook(self, key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
         if JITFunction.cache_hook is None:
           return False
         # TODO: assemble compilation-key into human-readable format
@@ -244,7 +246,7 @@ class JITFunction:
                 self.cache[key] = bin
 
         kwargs = dict(fn=self, signature=signature, device=device, constants=constants, 
-                     num_warps=num_warps, num_stages=num_stages, 
+                     num_warps=num_warps, num_stages=num_stages, extern_libs=extern_libs,
                      configs=configs)
 
         return JITFunction.cache_hook(key=key, repr=repr, fn=LegacyCompiler(), compile={"key": key, **kwargs}, is_manual_warmup=False, already_compiled=False)
@@ -268,10 +270,13 @@ class JITFunction:
         grid_args = ','.join([f'"{arg}": {arg}' for arg in self.arg_names])
 
         src = f"""
-def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, stream=None):
+def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, extern_libs=None, stream=None):
     sig_key =  ({regular_keys}, {constexpr_keys})
     spec_key = ({spec_keys})
     key = (version_key, sig_key, spec_key)
+    if not extern_libs is None:
+      key = (key, tuple(extern_libs.items()))
+    assert num_warps > 0 and (num_warps & (num_warps - 1)) == 0, "num_warps must be a power of 2"
     if callable(grid):
         grid = grid({{{grid_args}}})
     grid_size = len(grid)
@@ -291,8 +296,8 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
       constants |= {{i: None for i, arg in enumerate(args) if arg is None}}
       configs = [self._get_config(*args)]
       device = 0
-      if not self._call_hook(key, signature, device, constants, num_warps, num_stages, configs):
-        bin = triton.compile(self, signature, device, constants, num_warps, num_stages, configs=configs)
+      if not self._call_hook(key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
+        bin = triton.compile(self, signature, device, constants, num_warps, num_stages, extern_libs=extern_libs, configs=configs)
         bin.c_wrapper(grid_0, grid_1, grid_2, stream, *args)
         self.cache[key] = bin
         return bin

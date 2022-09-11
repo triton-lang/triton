@@ -1317,7 +1317,7 @@ def test_value_specialization_overflow(value: int, overflow: bool, device='cuda'
     x = torch.tensor([3.14159], device='cuda')
 
     if overflow:
-        with pytest.raises(RuntimeError, match='integer overflow'):
+        with pytest.raises(OverflowError, match='int too large'):
             kernel[(1, )](value, x)
     else:
         kernel[(1, )](value, x)
