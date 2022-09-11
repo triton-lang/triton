@@ -889,6 +889,8 @@ def ty_to_cpp(ty):
     "i16": "int16_t",
     "i32": "int32_t",
     "i64": "int64_t",
+    "u32": "uint32_t",
+    "u64": "uint64_t",
     "f32": "float",
   }[ty]
 
@@ -1023,14 +1025,22 @@ void init_function(const char* name, const unsigned char* src, size_t n_shared_b
       if ty[0] == 'i':
         return "long"
       return {
+        'u32': 'uint32_t',
         'fp32': 'float',
         'fp64': 'double',
       }[ty]
     
     def format_of(ty):
-      if ty == "PyObject*":
-        return "O"
-      return ty[0]
+      return {
+        "PyObject*": "O",
+        "float": "f",
+        "double": "d",
+        "long": "l",
+        "uint32_t": "I",
+        "int32_t": "i",
+        "uint64_t": "K",
+        "int64_t": "L",
+      }[ty]
 
     format = "iiil" + ''.join([format_of(_extracted_type(ty)) for ty in tys])
  
@@ -1125,6 +1135,7 @@ PyMODINIT_FUNC PyInit_{kernel_name}() {{
   return m;
 }}
 """
+
 
     return src
 

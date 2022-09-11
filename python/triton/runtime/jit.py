@@ -158,7 +158,12 @@ class JITFunction:
         if hasattr(arg, "dtype"):
             return arg.dtype
         elif isinstance(arg, int):
-            return 'i32' if arg < 2**31 else 'i64'
+            if -0x80000000 <= arg and arg <= 0x7FFFFFFF:
+              return "i32"
+            elif 0x80000000 <= arg and arg <= 0xFFFFFFFF:
+              return "u32"
+            else:
+              return "i64"
         elif isinstance(arg, float):
             return 'f32'
         elif arg is None:
