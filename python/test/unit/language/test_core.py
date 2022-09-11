@@ -273,7 +273,7 @@ def test_bin_op(dtype_x, dtype_y, op, device='cuda'):
     elif (op in ('%', '/') and
           ((dtype_x in int_dtypes and dtype_y in uint_dtypes) or
            (dtype_x in uint_dtypes and dtype_y in int_dtypes))):
-        with pytest.raises(triton.code_gen.CompilationError) as exc_info:
+        with pytest.raises(triton.CompilationError) as exc_info:
             _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device)
         assert re.match('Cannot use .* because they have different signedness', str(exc_info.value.__cause__))
     else:
@@ -311,7 +311,7 @@ def test_bitwise_op(dtype_x, dtype_y, op, device='cuda'):
     else:
         numpy_expr = None
     if 'float' in dtype_x + dtype_y:
-        with pytest.raises(triton.code_gen.CompilationError) as exc_info:
+        with pytest.raises(triton.CompilationError) as exc_info:
             _test_binary(dtype_x, dtype_y, expr, numpy_expr='np.array([])', device=device)
         # The CompilationError must have been caused by a C++ exception with this text.
         assert re.match('invalid operands of type', str(exc_info.value.__cause__))
@@ -500,7 +500,7 @@ def test_index1d(expr, dtype_str, device='cuda'):
     def catch_compilation_error(kernel):
         try:
             kernel[(1, )](z_tri, x_tri, num_warps=1, SIZE=shape_x[0])
-        except triton.code_gen.CompilationError as e:
+        except triton.CompilationError as e:
             np.testing.assert_(True)
         except BaseException:
             np.testing.assert_(False)

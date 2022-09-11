@@ -18,6 +18,7 @@ def str_to_ty(name):
         ty = str_to_ty(name[1:])
         return triton.language.pointer_type(ty)
     tys = {
+        "i1": triton.language.int1,
         "fp8": triton.language.float8,
         "fp16": triton.language.float16,
         "bf16": triton.language.bfloat16,
@@ -217,7 +218,8 @@ class ValueConstructor:
 
 class CodeGenerator(ast.NodeVisitor):
 
-    def __init__(self, context, prototype, gscope, attributes, constants, function_name, prototypes=None, module=None, is_kernel=False):
+    def __init__(self, context, prototype, gscope, attributes, constants, function_name, constexprs=None, prototypes=None, module=None, is_kernel=False):
+        self.constexprs = dict() if constexprs is None else constexprs
         self.prototypes = dict() if prototypes is None else prototypes
         self.builder = _triton.ir.builder(context)
         self.module = _triton.ir.module('', self.builder) if module is None else module
@@ -284,6 +286,8 @@ class CodeGenerator(ast.NodeVisitor):
                 if not isinstance(cst, triton.language.constexpr):
                     cst = triton.language.constexpr(self.constants[i])
                 arg_values.append(cst)
+                if i not in self.constexprs:
+                  idx += 1
             else:
                 if i in self.attributes:
                     is_ptr = fn.args[idx].type.is_ptr()
@@ -308,7 +312,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.builder.ret_void()
         else:
             # a bit hacky: we only know the return type at the last moment so we update type info here
-            self.module.reset_ret_ty(fn_name, self.last_ret.type.to_ir(self.builder))
+            self.module.reset_ret_ty(self.function_name, self.last_ret.type.to_ir(self.builder))
             self.prototype.ret_type = self.last_ret.type
         self.builder.set_insert_block(insert_pt)
 
@@ -805,14 +809,15 @@ def make_triton_ir(fn, signature, specialization, constants):
     cst_key = lambda i: fn.arg_names.index(i) if isinstance(i, str) else i
     constants = {cst_key(key): value for key, value in constants.items()}
     arg_types = signature.replace(' ', '').split(',')
-    arg_types = [str_to_ty(x) for x in arg_types]
-    prototype = triton.language.function_type(triton.language.void, arg_types)
+    arg_types = [str_to_ty(x) for i, x in enumerate(arg_types) if i not in constants]
     # visit kernel AST
     gscope = fn.__globals__.copy()
     function_name = '_'.join([fn.__name__, kernel_suffix(signature, specialization)])
     new_constants = {k: 1 for k in specialization.equal_to_1}
-    new_attrs = {k: ("tt.multiple_of", 16) for k in specialization.divisible_by_16}
-    generator = CodeGenerator(context, prototype, gscope=gscope, constants=constants|new_constants, function_name=function_name, attributes=new_attrs, is_kernel=True)
+    new_attrs = {k: ("multiple_of", 16) for k in specialization.divisible_by_16}
+    
+    prototype = triton.language.function_type(triton.language.void, arg_types)
+    generator = CodeGenerator(context, prototype, gscope=gscope, constants=constants|new_constants, function_name=function_name, constexprs=constants, attributes=new_attrs, is_kernel=True)
     try:
         generator.visit(fn.parse())
     except Exception as e:
@@ -915,17 +920,9 @@ def _build(name, src, path):
   libcuda = shutil.which("libcuda.so")
   # add framework
   extra_compile_args = []
-  prefix = os.path.dirname(torch.__file__)
-  library_dirs = [os.path.dirname(libcuda), os.path.join(prefix, 'lib')]
-  include_dirs = [path,
-                  "/usr/local/cuda/include/",
-                  os.path.join(prefix, 'lib', 'include'),
-                  os.path.join(prefix, 'lib', 'include', 'torch', 'csrc', 'api', 'include'),
-                  os.path.join(prefix, 'include'),
-                  os.path.join(prefix, 'include', 'torch', 'csrc', 'api', 'include')]
+  library_dirs = [os.path.dirname(libcuda)]
+  include_dirs = [path, "/usr/local/cuda/include/"]
   libraries = ['cuda']
-  abi = torch._C._GLIBCXX_USE_CXX11_ABI
-  extra_compile_args += ['-D_GLIBCXX_USE_CXX11_ABI={abi}'.format(abi=abi)]
   # extra arguments
   extra_link_args = []
   # create extension module
@@ -934,7 +931,7 @@ def _build(name, src, path):
       language = 'c++',
       sources = [src],
       include_dirs = include_dirs,
-      extra_compile_args = extra_compile_args + ['-g0'],
+      extra_compile_args = extra_compile_args + ['-O3'],
       extra_link_args = extra_link_args,
       library_dirs = library_dirs,
       libraries = libraries,
@@ -959,12 +956,14 @@ def generate_torch_glue(kernel_name, signature, num_warps, binaries, tmpdir):
     headers = dict()
     tys = signature.split(',')
     # write all cubins to header files
+    assert len(binaries) == 1, "AoT compilation not yet supported"
+
     for bin, shmem_size, name in binaries:
       assert len(name) < 1024
       initializer = f"""
 const char* {name}_ptx = R"({bin["ptx"]})";
 unsigned char {name}_bin[] = {{ {','.join(map(hex, bin["cubin"]))} }};
-unsigned char {name}_shmem = {shmem_size};"""
+unsigned int {name}_shmem = {shmem_size};"""
       headers[name] = os.path.join(tmpdir, f"{name}.h")
       with open(headers[name], "w") as f:
         f.write(initializer)
@@ -975,24 +974,23 @@ unsigned char {name}_shmem = {shmem_size};"""
     for bin, shmem_size, name in binaries:
       src += f"#include \"{name}.h\"\n"
     src += f"""
-#include <unordered_map>
 #include \"cuda.h\"
 #include <Python.h>
 
-inline void gpuAssert(CUresult code, const char *file, int line, bool abort=true)
+inline void gpuAssert(CUresult code, const char *file, int line)
 {{
    if (code != CUDA_SUCCESS) 
    {{
       const char* str;
       cuGetErrorString(code, &str);
       fprintf(stderr,\"GPUassert: %s %s %d\\n\", str, file, line);
-      if (abort) exit(code);
+      exit(code);
    }}
 }}
 #define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
-std::unordered_map<std::string, CUmodule> modules;
-std::unordered_map<std::string, CUfunction> functions;
+CUmodule module = 0;
+CUfunction function = 0;
 
 void init_function(const char* name, const unsigned char* src, size_t n_shared_bytes, int64_t device){{
   CUmodule mod;
@@ -1012,8 +1010,8 @@ void init_function(const char* name, const unsigned char* src, size_t n_shared_b
     CUDA_CHECK(cuFuncGetAttribute(&n_reg, CU_FUNC_ATTRIBUTE_NUM_REGS, fun));
     CUDA_CHECK(cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin - shared_static));
   }}
-  modules[name] = mod;
-  functions[name] = fun;
+  module = mod;
+  function = fun;
 }}
 """
 
@@ -1042,11 +1040,6 @@ void init_module(CUdevice device) {{
 }}
 
 
-extern "C" {{
-
-const char* fallback = \"{kernel_name}_{''.join(map(str, range(len(tys))))}\";
-
-
 void _{kernel_name}(int gridX, int gridY, int gridZ, CUstream stream, {arg_decls}) {{
   CUcontext ctx;
   CUdevice device;
@@ -1054,47 +1047,15 @@ void _{kernel_name}(int gridX, int gridY, int gridZ, CUstream stream, {arg_decls
   CUDA_CHECK(cuCtxGetDevice(&device));
 
   // TODO: machine may have heterogeneous devices
-  if (functions.empty())
+  if(function == 0)
     init_module(device);
 
-  char func_key[256] = \"{kernel_name}_\";
-  int idx = {len(kernel_name)} + 1;
-"""
-
-    for i, ty in enumerate(tys):
-      if i >= 10:
-        src += f"  func_key[idx++] = '{i//10}';\n"
-      src += f"  func_key[idx++] = '{i%10}';"
-      if ty[0]=='i':
-        src += f"""
-  if (arg{i} == 1) func_key[idx++] = 'c';
-  if (arg{i} % 16 == 0) func_key[idx++] = 'd';
-"""
-      if ty[0]=="*":
-        src += f"""
-  if ((uintptr_t)arg{i} % 16 == 0) func_key[idx++] = 'd';
-"""
-
-
-    src += f"""  func_key[idx] = '\\0';
-
-
-  const char* func_name = func_key;
-  auto it = functions.find(func_name);
-  if(it == functions.end()) {{
-    if({len(binaries)} == 1) {{
-      throw std::runtime_error("Unreachable. Please report.");
-    }}
-    // TODO: error message
-    func_name = fallback;
-  }}
-  CUfunction func = functions.at(func_name);
   void *params[] = {{ {', '.join(f"&arg{i}" if tys[i][0]=='*' else f"(void*)&arg{i}" for i in range(n_args))} }};
-  CUDA_CHECK(cuLaunchKernel(func, gridX, gridY, gridZ, 32*{num_warps}, 1, 1, 0, stream, params, 0));
+  CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*{num_warps}, 1, 1, {name}_shmem, stream, params, 0));
 }}
 
 
-inline CUdeviceptr getPointer(PyObject *obj, int idx) {{
+CUdeviceptr getPointer(PyObject *obj, int idx) {{
   if (PyLong_Check(obj)) {{
     return (CUdeviceptr)PyLong_AsUnsignedLongLong(obj);
   }}
@@ -1105,12 +1066,10 @@ inline CUdeviceptr getPointer(PyObject *obj, int idx) {{
   if(ptr)
     ptr = PyObject_CallNoArgs(ptr);
   if (ptr == NULL) {{
-    throw std::runtime_error("pointer argument at index " + std::to_string(idx) + 
-                             "must either be uint64 or have data_ptr method");
+    PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
   }}
   if (!PyLong_Check(ptr)) {{
-    throw std::runtime_error("`data_ptr` method of pointer argument at index" + std::to_string(idx) +
-                             "must return uint64");
+    PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
   }}
   return (CUdeviceptr)PyLong_AsUnsignedLongLong(ptr);
 
@@ -1165,8 +1124,6 @@ PyMODINIT_FUNC PyInit_{kernel_name}() {{
   PyModule_AddObject(m, "ptx", ptx);
   return m;
 }}
-
-}}
 """
 
     return src
@@ -1215,7 +1172,7 @@ def make_cache_key(fn, signature, configs, constants, num_warps, num_stages):
 
 def make_shared_object(fn, signature, num_warps, binaries, tmpdir):
     src = generate_torch_glue(fn.__name__, signature, num_warps, binaries, tmpdir)
-    src_path = os.path.join(tmpdir, "main.cpp")
+    src_path = os.path.join(tmpdir, "main.c")
     with open(src_path, "w") as f:
         f.write(src)
     with quiet():
@@ -1225,10 +1182,11 @@ def make_shared_object(fn, signature, num_warps, binaries, tmpdir):
 
 
 def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, configs = None):
-    ref, _ = make_triton_ir(fn, signature, _triton.code_gen.instance_descriptor(), constants)
     # we get the kernel, i.e. the first function generated in the module
-    fns = ref.get_functions()
     if configs is None:
+      assert False, "automatic specialization is not supported yet"
+      ref, _ = make_triton_ir(fn, signature, _triton.code_gen.instance_descriptor(), constants)
+      fns = ref.get_functions()
       configs = _triton.infer_specialization_configs(fns[0])
     # cache manager
     cache_key = make_cache_key(fn, signature, configs, constants, num_warps, num_stages)
@@ -1243,6 +1201,7 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
     # generate and compile glue code into shared object
     with tempfile.TemporaryDirectory() as tmpdir:
       so = make_shared_object(fn, signature, num_warps, binaries, tmpdir)
+
     # write shared object to cache
     cache_manager.put(so)
     return CompiledKernel(fn.__name__, cache_manager.bin_path)

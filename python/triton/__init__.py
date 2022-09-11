@@ -8,7 +8,7 @@ import torch
 # submodules
 from .utils import *
 from .runtime import jit, Config, autotune, heuristics, JITFunction
-from .compiler import compile
+from .compiler import compile, CompilationError
 from . import language
 from . import testing
 from . import ops

@@ -191,6 +191,7 @@ class JITFunction:
     def _type_of(key):
         if isinstance(key, (torch.dtype, triton.language.dtype)):
             ty = {
+              torch.bool: 'i1',
               torch.float16: 'fp16',
               torch.bfloat16: 'bf16',
               torch.float32: 'fp32',
@@ -205,6 +206,7 @@ class JITFunction:
               triton.language.uint16: 'u16',
               triton.language.uint32: 'u32',
               triton.language.uint64: 'u64',
+              triton.language.float8: 'fp8',
             }[key]
             return f'*{ty}'
         if key is None:
@@ -242,16 +244,15 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     key = (version_key, sig_key, spec_key)
     if callable(grid):
         grid = grid({{{grid_args}}})
+    grid_size = len(grid)
     grid_0 = grid[0]
-    grid_1 = grid[1] if len(grid) > 1 else 1
-    grid_2 = grid[2] if len(grid) > 2 else 1
-      
-   
+    grid_1 = grid[1] if grid_size > 1 else 1
+    grid_2 = grid[2] if grid_size > 2 else 1
     if stream is None:
       stream = get_cuda_stream(None)
     try:
       bin = cache[key]
-      bin.c_wrapper(grid[0], grid[1], grid[2], stream, {args})
+      bin.c_wrapper(grid_0, grid_1, grid_2, stream, {args})
       return bin
     except KeyError:
       # kernel not cached -- compile
