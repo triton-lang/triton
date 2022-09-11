@@ -254,7 +254,7 @@ class JITFunction:
         return JITFunction.cache_hook(key=key, repr=repr, fn=LegacyCompiler(), compile={"key": key, **kwargs}, is_manual_warmup=False, already_compiled=False)
 
     def _make_launcher(self):
-        regular_args = [f'{arg}' for i, arg in enumerate(self.arg_names) if not i in self.constexprs]
+        regular_args = [f'{arg}' for i, arg in enumerate(self.arg_names) if i not in self.constexprs]
         constexpr_args = [f'{arg}' for i, arg in enumerate(self.arg_names) if i in self.constexprs]
         args = ', '.join(regular_args)
         # cache key for regular argument type

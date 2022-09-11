@@ -1,21 +1,18 @@
 from __future__ import annotations
 import hashlib
 from filelock import FileLock
-import pickle
 import torch
 import setuptools
 import sysconfig
 import shutil
 import io
 import contextlib
-
 import ast
 import os
 import sys
 import tempfile
 import warnings
-from collections import defaultdict
-from typing import Any, Dict, Tuple, Union
+from typing import Any, Dict, Tuple, Union, Set
 
 import triton
 import triton._C.libtriton.triton as _triton
@@ -978,6 +975,35 @@ unsigned int {name}_shmem = {shmem_size};"""
         with open(headers[name], "w") as f:
             f.write(initializer)
 
+    func_init = '\n  '.join(f"init_function(\"{name}\", {name}_bin, {name}_shmem, device);" for _, _, name in binaries)
+    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in enumerate(tys))
+
+    def _extracted_type(ty):
+        if ty[0] == '*':
+            return "PyObject*"
+        if ty[0] == 'i':
+            return "long"
+        return {
+            'u32': 'uint32_t',
+            'u64': 'uint64_t',
+            'fp32': 'float',
+            'fp64': 'double',
+        }[ty]
+
+    def format_of(ty):
+        return {
+            "PyObject*": "O",
+            "float": "f",
+            "double": "d",
+            "long": "l",
+            "uint32_t": "I",
+            "int32_t": "i",
+            "uint64_t": "K",
+            "int64_t": "L",
+        }[ty]
+
+    format = "iiil" + ''.join([format_of(_extracted_type(ty)) for ty in tys])
+
     # generate glue code
     n_args = len(tys)
     src = ""
@@ -1023,38 +1049,7 @@ void init_function(const char* name, const unsigned char* src, size_t n_shared_b
   module = mod;
   function = fun;
 }}
-"""
 
-    func_init = '\n  '.join(f"init_function(\"{name}\", {name}_bin, {name}_shmem, device);" for _, _, name in binaries)
-    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in enumerate(tys))
-
-    def _extracted_type(ty):
-        if ty[0] == '*':
-            return "PyObject*"
-        if ty[0] == 'i':
-            return "long"
-        return {
-            'u32': 'uint32_t',
-            'u64': 'uint64_t',
-            'fp32': 'float',
-            'fp64': 'double',
-        }[ty]
-
-    def format_of(ty):
-        return {
-            "PyObject*": "O",
-            "float": "f",
-            "double": "d",
-            "long": "l",
-            "uint32_t": "I",
-            "int32_t": "i",
-            "uint64_t": "K",
-            "int64_t": "L",
-        }[ty]
-
-    format = "iiil" + ''.join([format_of(_extracted_type(ty)) for ty in tys])
-
-    src += f"""
 void init_module(CUdevice device) {{
   {func_init}
 }}
@@ -1140,10 +1135,10 @@ PyMODINIT_FUNC PyInit_{kernel_name}() {{
   Py_DECREF(py_{name}_ptx);
 """
 
-    src += f"""
+    src += """
   PyModule_AddObject(m, "ptx", ptx);
   return m;
-}}
+}
 """
 
     return src
@@ -1234,7 +1229,7 @@ class CompiledKernel:
         spec.loader.exec_module(mod)
         self.c_wrapper = getattr(mod, fn_name)
         ptx = getattr(mod, "ptx")
-        if(len(ptx) == 1):
+        if len(ptx) == 1:
             self.asm = {"ptx": list(ptx.values())[0]}
 
     def __getitem__(self, grid):
