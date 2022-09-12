@@ -169,7 +169,7 @@ class JITFunction:
             else:
                 return "i64"
         elif isinstance(arg, float):
-            return 'f32'
+            return 'fp32'
         elif arg is None:
             return None
         else:

@@ -8,7 +8,7 @@ from ..testing import do_bench
 
 
 class Autotuner:
-    def __init__(self, kernel, arg_names, configs, key, reset_to_zero, prune_configs_by: Dict = None):
+    def __init__(self, run, arg_names, configs, key, reset_to_zero, prune_configs_by: Dict = None):
         '''
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
             'perf_model': performance model used to predicate running time with different configs, returns running time
@@ -21,7 +21,7 @@ class Autotuner:
             self.configs = configs
         self.key_idx = [arg_names.index(k) for k in key]
         self.cache = dict()
-        self.kernel = kernel
+        self.run = run
         # hook to reset all required tensor to zeros before relaunching a kernel
         self.hook = lambda args: 0
         if reset_to_zero is not None:
@@ -58,7 +58,7 @@ class Autotuner:
             if config.pre_hook:
                 config.pre_hook(self.nargs)
             self.hook(args)
-            self.kernel(*args, num_warps=config.num_warps, num_stages=config.num_stages, **current)
+            self.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **current)
         return do_bench(kernel_call)
 
     def __call__(self, *args, **kwargs):
@@ -91,7 +91,7 @@ class Autotuner:
         self.best_config = config
         if config.pre_hook is not None:
             config.pre_hook(self.nargs)
-        return self.kernel(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
+        return self.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
 
 
 class Config:
@@ -165,6 +165,17 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
         return fn
     return decorator
 
+class Heuristics:
+
+    def __init__(self, kernel, arg_names, values) -> None:
+        self.run = kernel
+        self.values = values
+        self.arg_names = arg_names
+
+    def __call__(self, *args, **kwargs):
+        for v, heur in self.values.items():
+            kwargs[v] = heur({**dict(zip(self.arg_names, args)), **kwargs})
+        return self.run(*args, **kwargs)
 
 def heuristics(values):
     """
@@ -185,13 +196,7 @@ def heuristics(values):
     .type values: dict[str, Callable[[list[Any]], Any]]
     """
     def decorator(fn):
-        old_run = fn.run
-
-        def new_run(*args, **meta):
-            for v, heur in values.items():
-                meta[v] = heur({**dict(zip(fn.arg_names, args)), **meta})
-            return old_run(*args, **meta)
-        fn.run = new_run
+        fn.run = Heuristics(fn.run, fn.arg_names, values)
         return fn
 
     return decorator
