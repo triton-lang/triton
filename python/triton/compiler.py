@@ -2,20 +2,21 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import functools
 import hashlib
 import io
 import os
 import shutil
+import subprocess
 import sys
 import sysconfig
 import tempfile
 import warnings
 from typing import Any, Dict, Set, Tuple, Union
-import functools
+
 import setuptools
 import torch
 from filelock import FileLock
-import subprocess
 
 import triton
 import triton._C.libtriton.triton as _triton
