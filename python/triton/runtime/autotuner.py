@@ -185,11 +185,11 @@ def heuristics(values):
     .type values: dict[str, Callable[[list[Any]], Any]]
     """
     def decorator(fn):
+        old_run = fn.run
         def new_run(*args, **meta):
             for v, heur in values.items():
-                assert v not in meta
                 meta[v] = heur({**dict(zip(fn.arg_names, args)), **meta})
-            return fn.run(*args, **meta)
+            return old_run(*args, **meta)
         fn.run = new_run
         return fn
 
