@@ -227,8 +227,8 @@ class ValueConstructor:
 
 class CodeGenerator(ast.NodeVisitor):
 
-    def __init__(self, context, prototype, gscope, attributes, constants, function_name, constexprs=None, prototypes=None, module=None, is_kernel=False):
-        self.constexprs = dict() if constexprs is None else constexprs
+    def __init__(self, context, prototype, gscope, attributes, constants, function_name, spec_to_1=None, prototypes=None, module=None, is_kernel=False):
+        self.spec_to_1 = set() if spec_to_1 is None else spec_to_1
         self.prototypes = dict() if prototypes is None else prototypes
         self.builder = _triton.ir.builder(context)
         self.module = _triton.ir.module('', self.builder) if module is None else module
@@ -295,7 +295,7 @@ class CodeGenerator(ast.NodeVisitor):
                 if not isinstance(cst, triton.language.constexpr):
                     cst = triton.language.constexpr(self.constants[i])
                 arg_values.append(cst)
-                if i not in self.constexprs:
+                if i in self.spec_to_1:
                     idx += 1
             else:
                 if i in self.attributes:
@@ -829,7 +829,7 @@ def make_triton_ir(fn, signature, specialization, constants):
     all_constants.update(new_constants)
 
     prototype = triton.language.function_type(triton.language.void, arg_types)
-    generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name, constexprs=constants, attributes=new_attrs, is_kernel=True)
+    generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name, spec_to_1=specialization.equal_to_1, attributes=new_attrs, is_kernel=True)
     try:
         generator.visit(fn.parse())
     except Exception as e:
