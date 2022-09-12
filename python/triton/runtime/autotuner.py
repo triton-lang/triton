@@ -186,6 +186,7 @@ def heuristics(values):
     """
     def decorator(fn):
         old_run = fn.run
+
         def new_run(*args, **meta):
             for v, heur in values.items():
                 meta[v] = heur({**dict(zip(fn.arg_names, args)), **meta})
