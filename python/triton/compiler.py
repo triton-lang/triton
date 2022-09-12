@@ -1,18 +1,20 @@
 from __future__ import annotations
-import hashlib
-from filelock import FileLock
-import torch
-import setuptools
-import sysconfig
-import shutil
-import io
-import contextlib
+
 import ast
+import contextlib
+import hashlib
+import io
 import os
+import shutil
 import sys
+import sysconfig
 import tempfile
 import warnings
-from typing import Any, Dict, Tuple, Union, Set
+from typing import Any, Dict, Set, Tuple, Union
+
+import setuptools
+import torch
+from filelock import FileLock
 
 import triton
 import triton._C.libtriton.triton as _triton
