@@ -294,7 +294,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
       # kernel not cached -- compile
       args = [{args}]
       signature, constants = self._make_signature(sig_key)
-      constants |= {{i: None for i, arg in enumerate(args) if arg is None}}
+      constants = constants | {{i: None for i, arg in enumerate(args) if arg is None}}
       configs = [self._get_config(*args)]
       device = 0
       if not self._call_hook(key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
