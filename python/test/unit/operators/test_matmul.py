@@ -80,7 +80,7 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     kernel = triton.ops._matmul.kernel
     kernel.run.configs = configs
     # kernel.run = kernel.run.run.run
-    
+
     # get matrix shape
     M = BLOCK_M if M is None else M
     N = BLOCK_N if N is None else N

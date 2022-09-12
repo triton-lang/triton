@@ -165,6 +165,7 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
         return fn
     return decorator
 
+
 class Heuristics:
 
     def __init__(self, kernel, arg_names, values) -> None:
@@ -176,6 +177,7 @@ class Heuristics:
         for v, heur in self.values.items():
             kwargs[v] = heur({**dict(zip(self.arg_names, args)), **kwargs})
         return self.run(*args, **kwargs)
+
 
 def heuristics(values):
     """
