@@ -824,9 +824,10 @@ def make_triton_ir(fn, signature, specialization, constants):
     function_name = '_'.join([fn.__name__, kernel_suffix(signature, specialization)])
     new_constants = {k: 1 for k in specialization.equal_to_1}
     new_attrs = {k: ("multiple_of", 16) for k in specialization.divisible_by_16}
+    constants.update(new_constants)
 
     prototype = triton.language.function_type(triton.language.void, arg_types)
-    generator = CodeGenerator(context, prototype, gscope=gscope, constants=constants | new_constants, function_name=function_name, constexprs=constants, attributes=new_attrs, is_kernel=True)
+    generator = CodeGenerator(context, prototype, gscope=gscope, constants=constants, function_name=function_name, constexprs=constants, attributes=new_attrs, is_kernel=True)
     try:
         generator.visit(fn.parse())
     except Exception as e:
