@@ -1087,8 +1087,11 @@ CUdeviceptr getPointer(PyObject *obj, int idx) {{
     return (CUdeviceptr)0;
   }}
   PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
-  if(ptr)
-    ptr = PyObject_CallNoArgs(ptr);
+  if(ptr){{
+    PyObject *empty_tuple = PyTuple_New(0);
+    ptr = PyObject_Call(ptr, empty_tuple, NULL);
+    Py_DECREF(empty_tuple);
+  }}
   if (ptr == NULL) {{
     PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
   }}
