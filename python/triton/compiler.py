@@ -11,10 +11,11 @@ import sysconfig
 import tempfile
 import warnings
 from typing import Any, Dict, Set, Tuple, Union
-
+import functools
 import setuptools
 import torch
 from filelock import FileLock
+import subprocess
 
 import triton
 import triton._C.libtriton.triton as _triton
@@ -925,11 +926,16 @@ def quiet():
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
 
+@functools.lru_cache()
+def libcuda_dir():
+    loc = subprocess.check_output(["whereis", "libcuda.so"]).decode().strip().split()[-1]
+    return os.path.dirname(loc)
+
+
 def _build(name, src, path):
-    libcuda = shutil.which("libcuda.so")
     # add framework
     extra_compile_args = []
-    library_dirs = [os.path.dirname(libcuda)]
+    library_dirs = [libcuda_dir()]
     include_dirs = [path, "/usr/local/cuda/include/"]
     libraries = ['cuda']
     # extra arguments
