@@ -228,7 +228,7 @@ def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=N
     TILE_N = 128
     # compute output
     grid = lambda meta: [triton.cdiv(BS3, meta['TILE_N']), width, BS0]
-    _dsd_kernel[grid](
+    pgm = _dsd_kernel[grid](
         a, b, c,
         a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),
         b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),
@@ -237,6 +237,11 @@ def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=N
         TILE_M=block, TILE_N=TILE_N, TILE_K=min(block, 32), BLOCK=block, num_stages=4,
         num_warps=4, GROUP_SIZE_M=4,
     )
+    # print(pgm.asm["ptx"])
+    print(a.stride())
+    print(b.stride())
+    print(c.stride())
+    print(BS3, AS1)
     # exit()
     return c
 
