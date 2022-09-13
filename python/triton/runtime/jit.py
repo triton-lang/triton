@@ -265,7 +265,7 @@ class JITFunction:
         specializations = []
         for i, arg in enumerate(regular_args):
             if i in self.do_not_specialize:
-              continue
+                continue
             specializations += [f'({arg}.data_ptr() % {JITFunction.divisibility} == 0) if hasattr({arg}, "data_ptr") '
                                 f'else ({arg} % {JITFunction.divisibility} == 0, {arg} == 1) if isinstance({arg}, int) '
                                 f'else (False,)']
@@ -300,7 +300,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
       for i, arg in constants.items():
         if callable(arg):
           raise TypeError(f"Callable constexpr at index {i} is not supported")
-        
+
       configs = [self._get_config(*args)]
       device = 0
       if not self._call_hook(key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
