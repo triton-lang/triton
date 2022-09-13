@@ -1079,7 +1079,6 @@ void _{kernel_name}(int gridX, int gridY, int gridZ, CUstream stream, {arg_decls
   CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*{num_warps}, 1, 1, {name}_shmem, stream, params, 0));
 }}
 
-
 CUdeviceptr getPointer(PyObject *obj, int idx) {{
   if (PyLong_Check(obj)) {{
     return (CUdeviceptr)PyLong_AsUnsignedLongLong(obj);
@@ -1090,18 +1089,18 @@ CUdeviceptr getPointer(PyObject *obj, int idx) {{
   PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
   if(ptr){{
     PyObject *empty_tuple = PyTuple_New(0);
-    ptr = PyObject_Call(ptr, empty_tuple, NULL);
+    PyObject *ret = PyObject_Call(ptr, empty_tuple, NULL);
     Py_DECREF(empty_tuple);
+    Py_DECREF(ptr);
+    if (!PyLong_Check(ret)) {{
+      PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
+    }}
+    return (CUdeviceptr)PyLong_AsUnsignedLongLong(ret);
   }}
-  if (ptr == NULL) {{
-    PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
-  }}
-  if (!PyLong_Check(ptr)) {{
-    PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
-  }}
-  return (CUdeviceptr)PyLong_AsUnsignedLongLong(ptr);
-
+  PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
+  return (CUdeviceptr)0;
 }}
+
 
 static PyObject* {kernel_name}(PyObject* self, PyObject* args) {{
   int gridX, gridY, gridZ;
