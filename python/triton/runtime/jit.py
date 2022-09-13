@@ -185,8 +185,7 @@ class JITFunction:
             return (arg % 16 == 0, arg == 1)
         return (arg is None, )
 
-    @staticmethod
-    def _get_config(*args):
+    def _get_config(self, *args):
         def is_divisible_by_16(x):
             if hasattr(x, "data_ptr"):
                 return x.data_ptr() % JITFunction.divisibility == 0
@@ -195,8 +194,8 @@ class JITFunction:
             if x is None:
                 return True
             return False
-        divisible_by_16 = {i for i, arg in enumerate(args) if is_divisible_by_16(arg)}
-        equal_to_1 = {i for i, arg in enumerate(args) if isinstance(arg, int) and arg == 1}
+        divisible_by_16 = {i for i, arg in enumerate(args) if is_divisible_by_16(arg) and i not in self.do_not_specialize}
+        equal_to_1 = {i for i, arg in enumerate(args) if isinstance(arg, int) and arg == 1 and i not in self.do_not_specialize}
         return _triton.code_gen.instance_descriptor(divisible_by_16, equal_to_1)
 
     @staticmethod
@@ -236,10 +235,9 @@ class JITFunction:
         if JITFunction.cache_hook is None:
             return False
         # TODO: assemble compilation-key into human-readable format
-        # name = self.fn.__name__
-        # arg_reprs = ', '.join([f'{name}: {ty}' for name, ty in zip(self.arg_names, sig_key)])
-        # repr = f"{name}[num_warps={num_warps}, num_stages={num_stages}]({arg_reprs})"
-        repr = ''
+        name = self.fn.__name__
+        arg_reprs = ', '.join([f'{name}: {ty}' for name, ty in zip(self.arg_names, key[1])])
+        repr = f"{name}[num_warps={num_warps}, num_stages={num_stages}]({arg_reprs})"
 
         class LegacyCompiler:
             def __init__(self):
@@ -267,7 +265,7 @@ class JITFunction:
         specializations = []
         for i, arg in enumerate(regular_args):
             if i in self.do_not_specialize:
-              pass
+              continue
             specializations += [f'({arg}.data_ptr() % {JITFunction.divisibility} == 0) if hasattr({arg}, "data_ptr") '
                                 f'else ({arg} % {JITFunction.divisibility} == 0, {arg} == 1) if isinstance({arg}, int) '
                                 f'else (False,)']
@@ -299,6 +297,10 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
       args = [{args}]
       signature, constants = self._make_signature(sig_key)
       constants.update({{i: None for i, arg in enumerate(args) if arg is None}})
+      for i, arg in constants.items():
+        if callable(arg):
+          raise TypeError(f"Callable constexpr at index {i} is not supported")
+        
       configs = [self._get_config(*args)]
       device = 0
       if not self._call_hook(key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
@@ -317,13 +319,13 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     def __init__(self, fn, version=None, do_not_specialize=None):
         self.fn = fn
         self.module = fn.__module__
-        # specialization hints
-        self.do_not_specialize = [] if do_not_specialize is None else do_not_specialize
-        self.do_not_specialize = set([self.arg_names.index(arg) if isinstance(arg, str) else arg for arg in self.do_not_specialize])
         # function signature information
         signature = inspect.signature(fn)
         self.arg_names = [v.name for v in signature.parameters.values()]
         self.has_defaults = any([v.default != inspect._empty for v in signature.parameters.values()])
+        # specialization hints
+        self.do_not_specialize = [] if do_not_specialize is None else do_not_specialize
+        self.do_not_specialize = set([self.arg_names.index(arg) if isinstance(arg, str) else arg for arg in self.do_not_specialize])
         # function source code (without decorators)
         self.src = textwrap.dedent(inspect.getsource(fn))
         self.src = self.src[self.src.find("def"):]
