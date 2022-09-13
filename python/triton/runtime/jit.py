@@ -265,7 +265,9 @@ class JITFunction:
         constexpr_keys = ', '.join(constexpr_args)
         # cache key for argument specialization
         specializations = []
-        for arg in regular_args:
+        for i, arg in enumerate(regular_args):
+            if i in self.do_not_specialize:
+              pass
             specializations += [f'({arg}.data_ptr() % {JITFunction.divisibility} == 0) if hasattr({arg}, "data_ptr") '
                                 f'else ({arg} % {JITFunction.divisibility} == 0, {arg} == 1) if isinstance({arg}, int) '
                                 f'else (False,)']
@@ -315,6 +317,9 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     def __init__(self, fn, version=None, do_not_specialize=None):
         self.fn = fn
         self.module = fn.__module__
+        # specialization hints
+        self.do_not_specialize = [] if do_not_specialize is None else do_not_specialize
+        self.do_not_specialize = set([self.arg_names.index(arg) if isinstance(arg, str) else arg for arg in self.do_not_specialize])
         # function signature information
         signature = inspect.signature(fn)
         self.arg_names = [v.name for v in signature.parameters.values()]
