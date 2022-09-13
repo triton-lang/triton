@@ -34,6 +34,26 @@ namespace LLVM {
 
 static StringRef getStructAttrsAttrName() { return "llvm.struct_attrs"; }
 
+namespace {
+
+// Create a 32-bit integer constant.
+Value createConstantI32(Location loc, PatternRewriter &rewriter, int32_t v) {
+  auto i32ty = rewriter.getIntegerType(32);
+  return rewriter.create<LLVM::ConstantOp>(loc, i32ty,
+                                           IntegerAttr::get(i32ty, v));
+}
+
+// Add other specification if needed...
+
+} // namespace
+
+#define udiv(...) rewriter.create<LLVM::UDivOp>(loc, __VA_ARGS__)
+#define urem(...) rewriter.create<LLVM::URemOp>(loc, __VA_ARGS__)
+#define add(...) rewriter.create<LLVM::AddOp>(loc, __VA_ARGS__)
+#define mul(...) rewriter.create<LLVM::MulOp>(loc, __VA_ARGS__)
+#define xor_(...) rewriter.create<LLVM::XOrOp>(loc, __VA_ARGS__)
+#define constI32(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
+
 } // namespace LLVM
 } // namespace mlir
 
@@ -334,6 +354,16 @@ public:
                                            PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit) {}
 
+  Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) const {
+    auto llvmIndexTy = this->getTypeConverter()->getIndexType();
+    auto cast = rewriter.create<UnrealizedConversionCastOp>(
+        loc, TypeRange{llvmIndexTy},
+        ValueRange{rewriter.create<::mlir::gpu::ThreadIdOp>(
+            loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x)});
+    Value threadId = cast.getResult(0);
+    return threadId;
+  }
+
   SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
                                  Location loc, Value linear,
                                  ArrayRef<unsigned> shape,
@@ -361,9 +391,8 @@ public:
         Value dimSize = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(),
             en.value());
-        multiDim[rank - 1 - en.index()] =
-            rewriter.create<LLVM::URemOp>(loc, remained, dimSize);
-        remained = rewriter.create<LLVM::UDivOp>(loc, remained, dimSize);
+        multiDim[rank - 1 - en.index()] = urem(remained, dimSize);
+        remained = udiv(remained, dimSize);
       }
       multiDim[0] = remained;
     }
@@ -378,14 +407,10 @@ public:
                               const BlockedEncodingAttr &blocked_layout,
                               ArrayRef<int64_t> shape) const {
     auto llvmIndexTy = this->getTypeConverter()->getIndexType();
-    auto cast = b.create<UnrealizedConversionCastOp>(
-        loc, TypeRange{llvmIndexTy},
-        ValueRange{b.create<::mlir::gpu::ThreadIdOp>(
-            loc, b.getIndexType(), ::mlir::gpu::Dimension::x)});
-    Value threadId = cast.getResult(0);
+    Value threadId = getThreadId(b, loc);
     Value warpSize = createIndexAttrConstant(b, loc, llvmIndexTy, 32);
-    Value laneId = b.create<LLVM::URemOp>(loc, threadId, warpSize);
-    Value warpId = b.create<LLVM::UDivOp>(loc, threadId, warpSize);
+    Value laneId = urem(threadId, warpSize);
+    Value warpId = udiv(threadId, warpSize);
     auto sizePerThread = blocked_layout.getSizePerThread();
     auto threadsPerWarp = blocked_layout.getThreadsPerWarp();
     auto warpsPerCTA = blocked_layout.getWarpsPerCTA();
@@ -1243,6 +1268,447 @@ public:
     return success();
   }
 };
+
+/// ====================== dot codegen begin ==========================
+
+class MMA16816SmemLoader {
+public:
+  MMA16816SmemLoader(int wpt, ArrayRef<int> order, int kOrder,
+                     ArrayRef<unsigned> tileShape, ArrayRef<int> instrShape,
+                     ArrayRef<int> matShape, int perPhase, int maxPhase,
+                     int elemBytes, ConversionPatternRewriter &rewriter,
+                     const Location &location)
+      : wpt(wpt), order(order), kOrder(kOrder), tileShape(tileShape),
+        instrShape(instrShape), matShape(matShape), perPhase(perPhase),
+        maxPhase(maxPhase), elemBytes(elemBytes), rewriter(rewriter), loc(loc) {
+    cMatShape = matShape[order[0]];
+    sMatShape = matShape[order[1]];
+
+    cTileStride = tileShape[order[1]];
+    sTileStride = tileShape[order[0]];
+
+    // rule: k must be the fast-changing axis.
+    needTrans = kOrder != order[0];
+    canUseLdmatrix = elemBytes == 2 || (!needTrans); // b16
+
+    if (canUseLdmatrix) {
+      // Each CTA, the warps is arranged as [1xwpt] if not transposed,
+      // otherwise [wptx1], each warp will perform a mma.
+      numPtr =
+          tileShape[order[0]] / (needTrans ? wpt : 1) / instrShape[order[0]];
+    } else {
+      numPtr = tileShape[order[0]] / wpt / matShape[order[0]];
+    }
+
+    numPtr = std::max<int>(numPtr, 2); // ?
+
+    // Special rule for i8/u8, 4 ptrs for each matrix
+    if (!canUseLdmatrix && elemBytes == 1)
+      numPtr *= 4;
+
+    int loadStrideInMat[2];
+    loadStrideInMat[kOrder] =
+        2; // instrShape[kOrder] / matShape[kOrder], always 2
+    loadStrideInMat[kOrder ^ 1] =
+        wpt * (instrShape[order[1]] / matShape[order[1]]);
+
+    pLoadStrideInMat = loadStrideInMat[order[0]];
+    sMatStride =
+        loadStrideInMat[order[1]] / (instrShape[order[1]] / matShape[order[1]]);
+
+    matArrStride = kOrder == 1 ? 1 : wpt;
+    warpOffStride = instrShape[kOrder ^ 1] / matShape[kOrder ^ 1];
+  }
+
+  // lane = thread % 32
+  // warpOff = (thread/32) % wpt(0)
+  llvm::SmallVector<Value> computeOffsets(Value warpOff, Value lane) {
+    if (canUseLdmatrix)
+      return computeLdmatrixMatOffs(warpOff, lane);
+  }
+
+  // Compute the offset to the matrix this thread(indexed by warpOff and lane)
+  // mapped to. The details: For ldmatrix.m8n8 instruction, each matrix is 8x8
+  // x16bits.
+  SmallVector<Value> computeLdmatrixMatOffs(Value warpOff, Value lane) {
+    MLIRContext *ctx = warpOff.getContext();
+
+    // 4x4 matrices
+    Value c = urem(lane, constI32(8));
+    Value s = udiv(lane, constI32(8)); // sub-warp-id
+
+    // Decompose s => s_0, s_1, that is 2x2 mat
+    Value s0 = urem(s, constI32(2));
+    Value s1 = udiv(s, constI32(2));
+
+    // We use different orders for a and b for better performance. Here the arr
+    // is the row in matrix, each ldmatrix.m8n8 has 8 rows/arrs.
+    Value kMatArr = kOrder == 1 ? s1 : s0;
+    Value nkMatArr = kOrder == 1 ? s0 : s1;
+
+    // matrix coordinate in a CTA
+    Value matOff[2];
+    matOff[kOrder ^ 1] = add(
+        mul(warpOff, constI32(warpOffStride)),  // mma offset
+        mul(nkMatArr, constI32(matArrStride))); // matrix offset inside a mma
+    matOff[kOrder] = kMatArr;
+
+    // Physical offset (before swizzling)
+    Value cMatOff = matOff[order[0]];
+    Value sMatOff = matOff[order[1]];
+
+    Value sOffInMat = c; // \in [0, 8)
+
+    SmallVector<Value> offs(numPtr);
+    Value phase = urem(udiv(sOffInMat, constI32(perPhase)), constI32(maxPhase));
+    Value sOff = add(sOffInMat, mul(sMatOff, constI32(sMatShape)));
+    for (int i = 0; i < numPtr; ++i) {
+      Value cMatOffI = add(cMatOff, constI32(i * pLoadStrideInMat));
+      cMatOffI = xor_(cMatOffI, phase);
+      offs[i] = add(mul(cMatOffI, constI32(cMatShape)),
+                    mul(sOff, constI32(sTileStride)));
+    }
+
+    return offs;
+  }
+
+  SmallVector<Value> computTF32MatOffs(Value warpOff, Value lane) {
+    Value cOffInMat = udiv(lane, constI32(4));
+    Value sOffInMat = urem(lane, constI32(4));
+
+    Value phase = urem(udiv(sOffInMat, constI32(perPhase)), constI32(maxPhase));
+    SmallVector<Value, 2> offs(numPtr);
+    for (int mat = 0; mat < 4; ++mat) {
+      int kMatArrInt = kOrder == 1 ? mat / 2 : mat % 2;
+      int nkMatArrInt = kOrder == 1 ? mat % 2 : mat / 2;
+      if (kMatArrInt > 0)
+        continue;
+      // TODO ...
+    }
+  }
+
+private:
+  int wpt;
+  int kOrder;
+  ArrayRef<unsigned> tileShape;
+  ArrayRef<int> instrShape;
+  ArrayRef<int> matShape;
+  int perPhase;
+  int maxPhase;
+  int elemBytes;
+  ConversionPatternRewriter &rewriter;
+
+  int cMatShape;
+  int sMatShape;
+
+  int cTileStride;
+  int sTileStride;
+
+  bool needTrans;
+  bool canUseLdmatrix;
+
+  int numPtr;
+
+  int pLoadStrideInMat;
+  int sMatStride;
+
+  int matArrStride;
+  int warpOffStride;
+
+  ArrayRef<int> order;
+
+  const Location &loc;
+};
+
+struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
+  explicit DotOpConversion(LLVMTypeConverter &typeConverter,
+                           PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern(typeConverter, benefit) {}
+
+  enum class TensorCoreType : uint8_t {
+    // floating-point tensor core instr
+    FP32_FP16_FP16_FP32 = 0, // default
+    FP32_BF16_BF16_FP32,
+    FP32_TF32_TF32_FP32,
+    // integer tensor core instr
+    INT32_INT1_INT1_INT32, // Not implemented
+    INT32_INT4_INT4_INT32, // Not implemented
+    INT32_INT8_INT8_INT32, // Not implemented
+    //
+    NOT_APPLICABLE,
+  };
+
+  LogicalResult
+  matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    // D = A * B + C
+    Value A = op.a();
+    Value B = op.b();
+    Value C = op.c();
+    Value D = op.getResult();
+    MLIRContext *ctx = op->getContext();
+    bool allowTF32 = op.allowTF32();
+
+    // Here we assume the DotOp's operands always comes from shared memory.
+    auto AShape = A.getType().cast<RankedTensorType>().getShape();
+    size_t reduceAxis = 1;
+    unsigned K = AShape[reduceAxis];
+    bool isOuter = K == 1;
+    bool isMMA = D.getType()
+                     .cast<RankedTensorType>()
+                     .getEncoding()
+                     .isa<MmaEncodingAttr>();
+    MmaEncodingAttr mmaLayout;
+    if (isMMA)
+      mmaLayout = D.getType()
+                      .cast<RankedTensorType>()
+                      .getEncoding()
+                      .cast<MmaEncodingAttr>();
+
+    if (!isOuter && isMMA) {
+      if (mmaLayout.getVersion() == 1)
+        return convertMMA884(op, adaptor, rewriter);
+      if (mmaLayout.getVersion() == 2)
+        return convertMMA16816(op, adaptor, rewriter);
+      llvm::report_fatal_error(
+          "Unsupported MMA kind found when converting DotOp to LLVM.");
+    }
+
+    if (op.getType().cast<RankedTensorType>().getElementType().isF32() &&
+        A.getType().cast<RankedTensorType>().getElementType().isF32())
+      return convertFMADot(op, adaptor, rewriter);
+
+    llvm::report_fatal_error(
+        "Unsupported DotOp found when converting TritonGPU to LLVM.");
+  }
+
+private:
+  /// Convert to mma.m8n8k4
+  LogicalResult convertMMA884(triton::DotOp op, OpAdaptor adapter,
+                              ConversionPatternRewriter &rewriter) const;
+
+  // Convert to mma.m16n8k16
+  LogicalResult convertMMA16816(triton::DotOp op, OpAdaptor adapter,
+                                ConversionPatternRewriter &rewriter) const;
+
+  LogicalResult convertFMADot(triton::DotOp op, OpAdaptor adapter,
+                              ConversionPatternRewriter &rewriter) const;
+
+private:
+};
+
+struct DotOpConversionHelper {
+  using TensorCoreType = DotOpConversion::TensorCoreType;
+
+  explicit DotOpConversionHelper(DotOp dot)
+      : dot(dot), mmaType(getMmaType(dot)) {}
+
+  ArrayRef<int> getMmaInstrShape() const {
+    assert(mmaType != TensorCoreType::NOT_APPLICABLE &&
+           "Unknown mma type found.");
+    return mmaInstrShape.at(mmaType);
+  }
+
+  ArrayRef<int> getMmaMatShape() const {
+    assert(mmaType != TensorCoreType::NOT_APPLICABLE &&
+           "Unknown mma type found.");
+    return mmaMatShape.at(mmaType);
+  }
+
+  int getVec() const {
+    assert(mmaType != TensorCoreType::NOT_APPLICABLE &&
+           "Unknown mma type found.");
+    return mmaInstrVec.at(mmaType);
+  }
+
+  StringRef getMmaInstr() const {
+    assert(mmaType != TensorCoreType::NOT_APPLICABLE &&
+           "Unknown mma type found.");
+    return mmaInstrPtx.at(mmaType);
+  }
+
+  static TensorCoreType getMmaType(triton::DotOp op) {
+    Value A = op.a();
+    Value B = op.b();
+    auto aTy = A.getType().cast<RankedTensorType>();
+    auto bTy = B.getType().cast<RankedTensorType>();
+    // d = a*b + c
+    auto dTy = op.d().getType().cast<RankedTensorType>();
+    auto mmaLayout = dTy.getEncoding().cast<MmaEncodingAttr>();
+
+    if (dTy.getElementType().isF32()) {
+      if (aTy.getElementType().isF16() && bTy.getElementType().isF16())
+        return TensorCoreType::FP32_FP16_FP16_FP32;
+      if (aTy.getElementType().isBF16() && bTy.getElementType().isBF16())
+        return TensorCoreType::FP32_BF16_BF16_FP32;
+      if (aTy.getElementType().isF32() && bTy.getElementType().isF32() &&
+          op.allowTF32())
+        return TensorCoreType::FP32_TF32_TF32_FP32;
+    } else if (dTy.getElementType().isInteger(32)) {
+      if (aTy.getElementType().isInteger(8) &&
+          bTy.getElementType().isInteger(8))
+        return TensorCoreType::INT32_INT8_INT8_INT32;
+    }
+
+    return TensorCoreType::NOT_APPLICABLE;
+  }
+
+private:
+  TensorCoreType mmaType;
+
+  // Used on nvidia GPUs mma layout .version == 2
+  // Refer to
+  // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-storage
+  // for more details.
+  inline static const std::map<TensorCoreType, llvm::SmallVector<int>>
+      mmaInstrShape = {
+          {TensorCoreType::FP32_FP16_FP16_FP32, {16, 8, 16}},
+          {TensorCoreType::FP32_BF16_BF16_FP32, {16, 8, 16}},
+          {TensorCoreType::FP32_TF32_TF32_FP32, {16, 8, 8}},
+
+          {TensorCoreType::INT32_INT1_INT1_INT32, {16, 8, 256}},
+          {TensorCoreType::INT32_INT4_INT4_INT32, {16, 8, 64}},
+          {TensorCoreType::INT32_INT8_INT8_INT32, {16, 8, 32}},
+  };
+
+  // shape of matrices loaded by ldmatrix (m-n-k, for mxk & kxn matrices)
+  // Refer to
+  // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-instructions-ldmatrix
+  // for more details.
+  inline static const std::map<TensorCoreType, llvm::SmallVector<int>>
+      mmaMatShape = {
+          {TensorCoreType::FP32_FP16_FP16_FP32, {8, 8, 8}},
+          {TensorCoreType::FP32_BF16_BF16_FP32, {8, 8, 8}},
+          {TensorCoreType::FP32_TF32_TF32_FP32, {8, 8, 4}},
+
+          {TensorCoreType::INT32_INT1_INT1_INT32, {8, 8, 64}},
+          {TensorCoreType::INT32_INT4_INT4_INT32, {8, 8, 32}},
+          {TensorCoreType::INT32_INT8_INT8_INT32, {8, 8, 16}},
+  };
+
+  // Supported mma instruction in PTX.
+  // Refer to
+  // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-instructions-for-mma
+  // for more details.
+  inline static const std::map<TensorCoreType, std::string> mmaInstrPtx = {
+      {TensorCoreType::FP32_FP16_FP16_FP32,
+       "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32"},
+      {TensorCoreType::FP32_BF16_BF16_FP32,
+       "mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32"},
+      {TensorCoreType::FP32_TF32_TF32_FP32,
+       "mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32"},
+
+      {TensorCoreType::INT32_INT1_INT1_INT32,
+       "mma.sync.aligned.m16n8k256.row.col.s32.b1.b1.s32.xor.popc"},
+      {TensorCoreType::INT32_INT4_INT4_INT32,
+       "mma.sync.aligned.m16n8k64.row.col.satfinite.s32.s4.s4.s32"},
+      {TensorCoreType::INT32_INT8_INT8_INT32,
+       "mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32"},
+  };
+
+  // vector length per ldmatrix (16*8/elelment_size_in_bits)
+  inline static const std::map<TensorCoreType, uint8_t> mmaInstrVec = {
+      {TensorCoreType::FP32_FP16_FP16_FP32, 8},
+      {TensorCoreType::FP32_BF16_BF16_FP32, 8},
+      {TensorCoreType::FP32_TF32_TF32_FP32, 4},
+
+      {TensorCoreType::INT32_INT1_INT1_INT32, 128},
+      {TensorCoreType::INT32_INT4_INT4_INT32, 32},
+      {TensorCoreType::INT32_INT8_INT8_INT32, 16},
+  };
+
+private:
+  DotOp dot;
+};
+
+LogicalResult
+DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
+                                 ConversionPatternRewriter &rewriter) const {
+  Location loc = op->getLoc();
+  MLIRContext *ctx = op->getContext();
+  // D = A * B + C
+  Value A = op.a();
+  Value B = op.b();
+  Value C = op.c();
+  Value D = op.getResult();
+  bool allowTF32 = op.allowTF32();
+
+  auto aShape = A.getType().cast<RankedTensorType>().getShape();
+  auto bShape = B.getType().cast<RankedTensorType>().getShape();
+  auto dShape = D.getType().cast<RankedTensorType>().getShape();
+
+  auto aLayout = A.getType()
+                     .cast<RankedTensorType>()
+                     .getEncoding()
+                     .cast<BlockedEncodingAttr>();
+  auto bLayout = A.getType()
+                     .cast<RankedTensorType>()
+                     .getEncoding()
+                     .cast<BlockedEncodingAttr>();
+
+  auto mmaLayout = D.getType()
+                       .cast<RankedTensorType>()
+                       .getEncoding()
+                       .cast<MmaEncodingAttr>();
+
+  auto aOrder = aLayout.getOrder();
+  auto bOrder = bLayout.getOrder();
+  auto wpt = mmaLayout.getWarpsPerCTA();
+
+  DotOpConversionHelper helper(op);
+
+  int NK = aShape[1];
+
+  auto mmaInstrShape = helper.getMmaInstrShape();
+  const int mmaInstrM = mmaInstrShape[0];
+  const int mmaInstrN = mmaInstrShape[1];
+  const int mmaInstrK = mmaInstrShape[2];
+
+  auto matShape = helper.getMmaMatShape();
+  const int matShapeM = matShape[0];
+  const int matShapeN = matShape[1];
+  const int matShapeK = matShape[2];
+
+  const int numRepM = dShape[0] / wpt[0];
+  const int numRepN = dShape[1] / wpt[1];
+  const int numRepK = std::max<int>(NK / mmaInstrK, 1);
+
+  Value head = getThreadId(rewriter, loc);
+  Value lane = urem(head, constI32(32));
+  Value warp = udiv(head, constI32(32));
+  Value warpMN = udiv(warp, constI32(wpt[0]));
+  Value warpM = urem(warp, constI32(wpt[0]));
+  Value warpN = urem(warpMN, constI32(wpt[1]));
+
+  size_t aElemBytes =
+      A.getType().cast<RankedTensorType>().getElementTypeBitWidth() / 8;
+  size_t bElemBytes =
+      B.getType().cast<RankedTensorType>().getElementTypeBitWidth() / 8;
+
+  std::map<std::pair<unsigned, unsigned>, Value> ha;
+  std::map<std::pair<unsigned, unsigned>, Value> hb;
+
+  auto registerLds2 = [&](decltype(ha) &vals, int mn, int k, int inc, Value val,
+                          bool isPrefetch) {
+    assert((!isPrefetch) && "prefetch is not supported yet");
+    vals[{mn, k}] = val;
+  };
+
+  auto callMma = [&](unsigned m, unsigned n, unsigned k) {
+    PTXBuilder builder;
+
+    auto res = builder.newListOperand();
+    res->listAppend(builder.newOperand("=r"));
+    res->listAppend(builder.newOperand("=r"));
+    res->listAppend(builder.newOperand("=r"));
+    res->listAppend(builder.newOperand("=r"));
+
+    auto instr = builder.create(helper.getMmaInstr().str());
+  };
+}
+
+/// ====================== mma codegen end ============================
 
 class TritonGPUToLLVMTypeConverter : public LLVMTypeConverter {
 public:
