@@ -295,8 +295,6 @@ class CodeGenerator(ast.NodeVisitor):
                 if not isinstance(cst, triton.language.constexpr):
                     cst = triton.language.constexpr(self.constants[i])
                 arg_values.append(cst)
-                if i in self.spec_to_1:
-                    idx += 1
             else:
                 if i in self.attributes:
                     is_ptr = fn.args[idx].type.is_ptr()
@@ -818,8 +816,6 @@ def make_triton_ir(fn, signature, specialization, constants):
     # create kernel prototype
     cst_key = lambda i: fn.arg_names.index(i) if isinstance(i, str) else i
     constants = {cst_key(key): value for key, value in constants.items()}
-    arg_types = signature.replace(' ', '').split(',')
-    arg_types = [str_to_ty(x) for i, x in enumerate(arg_types) if i not in constants]
     # visit kernel AST
     gscope = fn.__globals__.copy()
     function_name = '_'.join([fn.__name__, kernel_suffix(signature, specialization)])
@@ -827,9 +823,11 @@ def make_triton_ir(fn, signature, specialization, constants):
     new_attrs = {k: ("multiple_of", 16) for k in specialization.divisible_by_16}
     all_constants = constants.copy()
     all_constants.update(new_constants)
+    arg_types = signature.replace(' ', '').split(',')
+    arg_types = [str_to_ty(x) for i, x in enumerate(arg_types) if i not in all_constants]
 
     prototype = triton.language.function_type(triton.language.void, arg_types)
-    generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name, spec_to_1=specialization.equal_to_1, attributes=new_attrs, is_kernel=True)
+    generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name, attributes=new_attrs, is_kernel=True)
     try:
         generator.visit(fn.parse())
     except Exception as e:
@@ -969,7 +967,7 @@ def _build(name, src, path):
     return so
 
 
-def generate_torch_glue(kernel_name, signature, num_warps, binaries, tmpdir):
+def generate_torch_glue(kernel_name, config, signature, num_warps, binaries, tmpdir):
     headers = dict()
     tys = signature.split(',')
     # write all cubins to header files
@@ -1075,7 +1073,7 @@ void _{kernel_name}(int gridX, int gridY, int gridZ, CUstream stream, {arg_decls
   if(function == 0)
     init_module(device);
 
-  void *params[] = {{ {', '.join(f"&arg{i}" if tys[i][0]=='*' else f"(void*)&arg{i}" for i in range(n_args))} }};
+  void *params[] = {{ {', '.join(f"&arg{i}" if tys[i][0]=='*' else f"(void*)&arg{i}" for i in range(n_args) if i not in config.equal_to_1)} }};
   CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*{num_warps}, 1, 1, {name}_shmem, stream, params, 0));
 }}
 
@@ -1196,8 +1194,8 @@ def make_cache_key(fn, signature, configs, constants, num_warps, num_stages):
     return key
 
 
-def make_shared_object(fn, signature, num_warps, binaries, tmpdir):
-    src = generate_torch_glue(fn.__name__, signature, num_warps, binaries, tmpdir)
+def make_shared_object(fn, config, signature, num_warps, binaries, tmpdir):
+    src = generate_torch_glue(fn.__name__, config, signature, num_warps, binaries, tmpdir)
     src_path = os.path.join(tmpdir, "main.c")
     with open(src_path, "w") as f:
         f.write(src)
@@ -1214,6 +1212,7 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
         ref, _ = make_triton_ir(fn, signature, _triton.code_gen.instance_descriptor(), constants)
         fns = ref.get_functions()
         configs = _triton.infer_specialization_configs(fns[0])
+    assert len(configs) == 1
     # cache manager
     cache_key = make_cache_key(fn, signature, configs, constants, num_warps, num_stages)
     cache_manager = CacheManager(cache_key)
@@ -1226,7 +1225,7 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
         binaries.append(_compile(fn, signature, device, constants, config, num_warps, num_stages, extern_libs, "cubin"))
     # generate and compile glue code into shared object
     with tempfile.TemporaryDirectory() as tmpdir:
-        so = make_shared_object(fn, signature, num_warps, binaries, tmpdir)
+        so = make_shared_object(fn, configs[0], signature, num_warps, binaries, tmpdir)
 
     # write shared object to cache
     cache_manager.put(so)
