@@ -26,129 +26,111 @@ namespace py = pybind11;
 namespace ir = triton::ir;
 namespace drv = triton::driver;
 
+
 /*****************************************************************************/
 /* Python bindings for triton::driver                                        */
 /*****************************************************************************/
 // information query
-template <CUdevice_attribute attr>
-int cuGetInfo(CUdevice device)
-{
+template<CUdevice_attribute attr>
+int cuGetInfo(CUdevice device) {
   int res;
   drv::dispatch::cuDeviceGetAttribute(&res, attr, device);
   return res;
 }
 
-template <hipDeviceAttribute_t attr>
-int hipGetInfo(hipDevice_t device)
-{
+template<hipDeviceAttribute_t attr>
+int hipGetInfo(hipDevice_t device) {
   int res;
   drv::dispatch::hipDeviceGetAttribute(&res, attr, device);
   return res;
 }
 
-enum backend_t
-{
+enum backend_t {
   HOST,
   CUDA,
   ROCM,
 };
 
-void cu_enable_peer_access(uint64_t peer_ptr)
-{
+void cu_enable_peer_access(uint64_t peer_ptr){
   CUcontext context;
   drv::dispatch::cuPointerGetAttribute(&context, CU_POINTER_ATTRIBUTE_CONTEXT, peer_ptr);
-  try
-  {
-    drv::dispatch::cuCtxEnablePeerAccess(context, 0);
-  }
-  catch (drv::exception::cuda::peer_access_already_enabled)
-  {
-  }
+  try {
+      drv::dispatch::cuCtxEnablePeerAccess(context, 0);
+  } catch (drv::exception::cuda::peer_access_already_enabled) {}
 }
 
 void host_enqueue(uint64_t stream, uint64_t kernel,
                   uint64_t grid_0, uint64_t grid_1, uint64_t grid_2,
                   uint64_t block_0, uint64_t block_1, uint64_t block_2,
-                  void *args_ptr, size_t args_size, int64_t shared_mem)
-{
+                  void* args_ptr, size_t args_size, int64_t shared_mem){
   throw std::runtime_error("unsupported");
-  // auto hst = kernel->module()->hst();
-  // hst_->futures->reserve(hst_->futures->size() + grid[0]*grid[1]*grid[2]);
-  // char* params = new char[args_size];
-  // std::memcpy((void*)params, (void*)args, args_size);
-  // for(size_t i = 0; i < grid[0]; i++)
-  //   for(size_t j = 0; j < grid[1]; j++)
-  //     for(size_t k = 0; k < grid[2]; k++)
-  //       hst_->futures->emplace_back(hst_->pool->enqueue(hst->fn, (char**)params, int32_t(i), int32_t(j), int32_t(k)));
+// auto hst = kernel->module()->hst();
+// hst_->futures->reserve(hst_->futures->size() + grid[0]*grid[1]*grid[2]);
+// char* params = new char[args_size];
+// std::memcpy((void*)params, (void*)args, args_size);
+// for(size_t i = 0; i < grid[0]; i++)
+//   for(size_t j = 0; j < grid[1]; j++)
+//     for(size_t k = 0; k < grid[2]; k++)
+//       hst_->futures->emplace_back(hst_->pool->enqueue(hst->fn, (char**)params, int32_t(i), int32_t(j), int32_t(k)));
 }
 
 void cu_enqueue(uint64_t stream, uint64_t kernel,
                 uint64_t grid_0, uint64_t grid_1, uint64_t grid_2,
                 uint64_t block_0, uint64_t block_1, uint64_t block_2,
-                void *args_ptr, size_t args_size, int64_t shared_mem)
-{
+                void* args_ptr, size_t args_size, int64_t shared_mem){
   void *config[] = {
-      CU_LAUNCH_PARAM_BUFFER_POINTER, (void *)args_ptr,
-      CU_LAUNCH_PARAM_BUFFER_SIZE, &args_size,
-      CU_LAUNCH_PARAM_END};
-  drv::dispatch::cuLaunchKernel((CUfunction)kernel, grid_0, grid_1, grid_2,
-                                block_0, block_1, block_2,
+      CU_LAUNCH_PARAM_BUFFER_POINTER, (void*)args_ptr,
+      CU_LAUNCH_PARAM_BUFFER_SIZE,    &args_size,
+      CU_LAUNCH_PARAM_END
+  };
+  drv::dispatch::cuLaunchKernel((CUfunction)kernel, grid_0, grid_1, grid_2, 
+                                block_0, block_1, block_2, 
                                 shared_mem, (CUstream)stream, nullptr, config);
 }
 
 void hip_enqueue(uint64_t stream, uint64_t kernel,
-                 uint64_t grid_0, uint64_t grid_1, uint64_t grid_2,
-                 uint64_t block_0, uint64_t block_1, uint64_t block_2,
-                 void *args_ptr, size_t args_size, int64_t shared_mem)
-{
+                uint64_t grid_0, uint64_t grid_1, uint64_t grid_2,
+                uint64_t block_0, uint64_t block_1, uint64_t block_2,
+                void* args_ptr, size_t args_size, int64_t shared_mem) {
   void *config[] = {
-      HIP_LAUNCH_PARAM_BUFFER_POINTER, (void *)args_ptr,
-      HIP_LAUNCH_PARAM_BUFFER_SIZE, &args_size,
-      HIP_LAUNCH_PARAM_END};
-  drv::dispatch::hipModuleLaunchKernel((hipFunction_t)kernel, grid_0, grid_1, grid_2,
-                                       block_0, block_1, block_2,
-                                       shared_mem, (hipStream_t)stream, nullptr, config);
+      HIP_LAUNCH_PARAM_BUFFER_POINTER, (void*)args_ptr,
+      HIP_LAUNCH_PARAM_BUFFER_SIZE,    &args_size,
+      HIP_LAUNCH_PARAM_END
+  };
+  drv::dispatch::hipModuleLaunchKernel((hipFunction_t)kernel, grid_0, grid_1, grid_2, 
+                                block_0, block_1, block_2, 
+                                shared_mem, (hipStream_t)stream, nullptr, config);
+
 }
 
-long pow2_divisor(long N)
-{
-  if (N % 16 == 0)
-    return 16;
-  if (N % 8 == 0)
-    return 8;
-  if (N % 4 == 0)
-    return 4;
-  if (N % 2 == 0)
-    return 2;
-  return 1;
+long pow2_divisor(long N){
+    if(N % 16 == 0) return 16;
+    if(N % 8 == 0) return 8;
+    if(N % 4 == 0) return 4;
+    if(N % 2 == 0) return 2;
+    return 1;
 }
 
 // Returns something like "int16", whether dtype is a torch.dtype or
 // triton.language.dtype.
-std::string dtype_cache_key_part(const py::object &dtype)
-{
-  if (py::hasattr(dtype, "cache_key_part"))
-  {
+std::string dtype_cache_key_part(const py::object& dtype) {
+  if (py::hasattr(dtype, "cache_key_part")) {
     // Presumed to be a triton.language.dtype.
     return std::string(py::str(py::getattr(dtype, "cache_key_part")));
-  }
-  else
-  {
+  } else {
     // Remove 'torch.' prefix from repr of torch.dtype.
     py::object repr = py::repr(dtype);
     size_t repr_len = PyUnicode_GET_LENGTH(repr.ptr());
-    const char *repr_ptr = (const char *)PyUnicode_1BYTE_DATA(repr.ptr());
-    if (repr_len <= 6 || strncmp(repr_ptr, "torch.", 6))
-    {
+    const char* repr_ptr = (const char*)PyUnicode_1BYTE_DATA(repr.ptr());
+    if (repr_len <= 6 || strncmp(repr_ptr, "torch.", 6)) {
       throw std::logic_error("invalid dtype: " + std::string(repr_ptr, repr_len));
     }
     return std::string(repr_ptr + 6, repr_len - 6);
   }
 }
 
-size_t get_pointer_range_size(uint64_t addr)
-{
-  if (addr == 0)
+size_t get_pointer_range_size(uint64_t addr){
+  if(addr == 0)
     return 0;
   size_t size;
   drv::dispatch::cuPointerGetAttribute(&size, CU_POINTER_ATTRIBUTE_RANGE_SIZE, (CUdeviceptr)addr);
@@ -156,151 +138,132 @@ size_t get_pointer_range_size(uint64_t addr)
 }
 
 // Launch
-void parse_args(py::list &args, py::list do_not_specialize, const std::string &func_key, py::list &arg_names,
-                std::string &cache_key, std::string &params, size_t &params_size, py::dict constants,
-                int num_warps, int num_stages, py::dict &extern_libs)
-{
-  size_t len = PyList_Size(args.ptr());
-  params.reserve(8 * len); // 8 max bytes by argument
-  char *params_ptr = &params[0];
-  cache_key = func_key;
-  cache_key += "-" + std::to_string(num_warps);
-  cache_key += "-" + std::to_string(num_stages);
-  cache_key += "-";
-  for (int i = 0; i < len; i++)
-  {
-    cache_key += "_";
-    py::int_ py_i = py::int_(i);
-    bool specialize = !do_not_specialize.contains(py_i);
-    py::object arg = args[i];
-    auto arg_ptr = arg.ptr();
+void parse_args(py::list& args, py::list do_not_specialize, const std::string& func_key, py::list& arg_names,
+                std::string& cache_key, std::string& params, size_t& params_size, py::dict constants,
+                int num_warps, int num_stages, py::dict& extern_libs) {
+    size_t len = PyList_Size(args.ptr());
+    params.reserve(8*len); // 8 max bytes by argument
+    char* params_ptr = &params[0];
+    cache_key = func_key;
+    cache_key += "-" + std::to_string(num_warps);
+    cache_key += "-" + std::to_string(num_stages);
+    cache_key += "-";
+    for(int i = 0; i < len; i++){
+      cache_key += "_";
+      py::int_ py_i = py::int_(i);
+      bool specialize = !do_not_specialize.contains(py_i);
+      py::object arg = args[i];
+      auto arg_ptr = arg.ptr();
 
-    // argument is `long`
-    if (PyLong_Check(arg_ptr))
-    {
-      int overflow;
-      long long value = PyLong_AsLongLongAndOverflow(arg_ptr, &overflow);
-      // values equal to 1 are specialized
-      if (specialize && (value == 1))
-      {
-        cache_key += "1";
+      // argument is `long`
+      if(PyLong_Check(arg_ptr)){
+        int overflow;
+        long long value = PyLong_AsLongLongAndOverflow(arg_ptr, &overflow);
+        // values equal to 1 are specialized
+        if(specialize && (value == 1)){
+          cache_key += "1";
+          continue;
+        }
+        // int32, uint32, int64, and uint64 have different kernels
+        if (!overflow && -0x8000'0000LL <= value && value <= 0x7FFF'FFFFLL) {
+          cache_key += "int32";
+          params_ptr = (char*)(((uintptr_t)params_ptr + 3) & (-4));
+          std::memcpy(params_ptr, &value, 4);
+          params_ptr += 4;
+        } else if (!overflow && 0x8000'0000LL <= value && value <= 0xFFFF'FFFFLL) {
+          cache_key += "uint32";
+          params_ptr = (char*)(((uintptr_t)params_ptr + 3) & (-4));
+          std::memcpy(params_ptr, &value, 4);
+          params_ptr += 4;
+        } else if (!overflow) {
+          cache_key += "int64";
+          params_ptr = (char*)(((uintptr_t)params_ptr + 7) & (-8));
+          std::memcpy(params_ptr, &value, 8);
+          params_ptr += 8;
+        } else {
+          if (PyErr_Occurred()) {
+            throw std::logic_error("An error occurred?");
+          }
+          unsigned long long unsigned_value = PyLong_AsUnsignedLongLong(arg_ptr);
+          if (PyErr_Occurred()) {
+            throw std::runtime_error("integer overflow in argument: " + std::string(py::str(arg)));
+          }
+          cache_key += "uint64";
+          params_ptr = (char*)(((uintptr_t)params_ptr + 7) & (-8));
+          std::memcpy(params_ptr, &unsigned_value, 8);
+          params_ptr += 8;
+        }
+        if(!specialize)
+          continue;
+        // values divisible by small powers of 2 are specialized
+        cache_key += "[multipleof(";
+        cache_key += std::to_string(pow2_divisor(value));
+        cache_key += ")]";
         continue;
       }
-      // int32, uint32, int64, and uint64 have different kernels
-      if (!overflow && -0x8000'0000LL <= value && value <= 0x7FFF'FFFFLL)
-      {
-        cache_key += "int32";
-        params_ptr = (char *)(((uintptr_t)params_ptr + 3) & (-4));
+      // argument is `float`
+      if(PyFloat_Check(arg_ptr)){
+        cache_key += "float32";
+        float value = PyFloat_AsDouble(arg_ptr);
+        params_ptr = (char*)(((uintptr_t)params_ptr + 3) & (-4));
         std::memcpy(params_ptr, &value, 4);
         params_ptr += 4;
+        continue;
       }
-      else if (!overflow && 0x8000'0000LL <= value && value <= 0xFFFF'FFFFLL)
-      {
-        cache_key += "uint32";
-        params_ptr = (char *)(((uintptr_t)params_ptr + 3) & (-4));
-        std::memcpy(params_ptr, &value, 4);
-        params_ptr += 4;
+      // argument is `bool`
+      if(PyBool_Check(arg_ptr)){
+        cache_key += "bool";
+        bool value =  arg_ptr == Py_True ? true : false;
+        std::memcpy(params_ptr, &value, 1);
+        params_ptr += 1;
+        continue;
       }
-      else if (!overflow)
-      {
-        cache_key += "int64";
-        params_ptr = (char *)(((uintptr_t)params_ptr + 7) & (-8));
+      // argument is tensor
+      if(py::hasattr(arg, "data_ptr")){
+        py::object data_ptr = arg.attr("data_ptr")();
+        long value = data_ptr.cast<long>();
+        params_ptr = (char*)(((uintptr_t)params_ptr + 7) & (-8));
+        // copy param
         std::memcpy(params_ptr, &value, 8);
         params_ptr += 8;
-      }
-      else
-      {
-        if (PyErr_Occurred())
-        {
-          throw std::logic_error("An error occurred?");
-        }
-        unsigned long long unsigned_value = PyLong_AsUnsignedLongLong(arg_ptr);
-        if (PyErr_Occurred())
-        {
-          throw std::runtime_error("integer overflow in argument: " + std::string(py::str(arg)));
-        }
-        cache_key += "uint64";
-        params_ptr = (char *)(((uintptr_t)params_ptr + 7) & (-8));
-        std::memcpy(params_ptr, &unsigned_value, 8);
-        params_ptr += 8;
-      }
-      if (!specialize)
+        // udpate cache key
+        cache_key += dtype_cache_key_part(arg.attr("dtype"));
+        cache_key += "*";
+        cache_key += "[multipleof(";
+        size_t range_size = get_pointer_range_size(value);
+        cache_key += std::to_string(std::min(pow2_divisor(value), pow2_divisor(range_size)));
+        cache_key += ")]";
         continue;
-      // values divisible by small powers of 2 are specialized
-      cache_key += "[multipleof(";
-      cache_key += std::to_string(pow2_divisor(value));
-      cache_key += ")]";
-      continue;
-    }
-    // argument is `float`
-    if (PyFloat_Check(arg_ptr))
-    {
-      cache_key += "float32";
-      float value = PyFloat_AsDouble(arg_ptr);
-      params_ptr = (char *)(((uintptr_t)params_ptr + 3) & (-4));
-      std::memcpy(params_ptr, &value, 4);
-      params_ptr += 4;
-      continue;
-    }
-    // argument is `bool`
-    if (PyBool_Check(arg_ptr))
-    {
-      cache_key += "bool";
-      bool value = arg_ptr == Py_True ? true : false;
-      std::memcpy(params_ptr, &value, 1);
-      params_ptr += 1;
-      continue;
-    }
-    // argument is tensor
-    if (py::hasattr(arg, "data_ptr"))
-    {
-      py::object data_ptr = arg.attr("data_ptr")();
-      long value = data_ptr.cast<long>();
-      params_ptr = (char *)(((uintptr_t)params_ptr + 7) & (-8));
-      // copy param
-      std::memcpy(params_ptr, &value, 8);
-      params_ptr += 8;
-      // udpate cache key
-      cache_key += dtype_cache_key_part(arg.attr("dtype"));
-      cache_key += "*";
-      cache_key += "[multipleof(";
-      size_t range_size = get_pointer_range_size(value);
-      cache_key += std::to_string(std::min(pow2_divisor(value), pow2_divisor(range_size)));
-      cache_key += ")]";
-      continue;
-    }
-    // argument is `constexpr`
-    if (py::hasattr(arg, "value"))
-    {
-      py::object value = arg.attr("value");
-      // check if value is a callable object using PyCallable_Check
-      if (PyCallable_Check(value.ptr()))
-      {
-        throw std::runtime_error(
-            "constant argument cannot be a callable object: " +
-            std::string(py::str(arg)));
       }
-      py::object name = arg_names[i];
-      constants[name] = value;
-      py::object repr = py::repr(value);
-      const char *start = (const char *)PyUnicode_1BYTE_DATA(repr.ptr());
-      size_t len = PyUnicode_GET_LENGTH(repr.ptr());
-      cache_key += std::string(start, len);
-      continue;
+      // argument is `constexpr`
+      if (py::hasattr(arg, "value")) {
+        py::object value = arg.attr("value");
+        // check if value is a callable object using PyCallable_Check
+        if (PyCallable_Check(value.ptr())) {
+          throw std::runtime_error(
+              "constant argument cannot be a callable object: " +
+              std::string(py::str(arg)));
+        }
+        py::object name = arg_names[i];
+        constants[name] = value;
+        py::object repr = py::repr(value);
+        const char* start = (const char*)PyUnicode_1BYTE_DATA(repr.ptr());
+        size_t len = PyUnicode_GET_LENGTH(repr.ptr());
+        cache_key += std::string(start, len);
+        continue;
+      }
+      std::string ty_str = arg.attr("__class__").attr("__name__").cast<std::string>();
+      if(ty_str == "NoneType"){
+        cache_key += "None";
+        continue;
+      }
+      std::string err_msg = "Received type '" + ty_str + "' for argument " + std::to_string(i) + "."
+                            + " Only int, float, bool, torch.Tensor, and triton.language.constexpr are supported.";
+      throw std::runtime_error(err_msg);
     }
-    std::string ty_str = arg.attr("__class__").attr("__name__").cast<std::string>();
-    if (ty_str == "NoneType")
-    {
-      cache_key += "None";
-      continue;
-    }
-    std::string err_msg = "Received type '" + ty_str + "' for argument " + std::to_string(i) + "." + " Only int, float, bool, torch.Tensor, and triton.language.constexpr are supported.";
-    throw std::runtime_error(err_msg);
-  }
   params_size = (std::ptrdiff_t)(params_ptr - &params[0]);
 
-  for (auto item : extern_libs)
-  {
+  for (auto item : extern_libs) {
     cache_key += "-" + item.first.cast<std::string>();
     cache_key += "_" + item.second.cast<std::string>();
   }
@@ -308,8 +271,7 @@ void parse_args(py::list &args, py::list do_not_specialize, const std::string &f
 
 //
 
-void init_triton_runtime(py::module &&m)
-{
+void init_triton_runtime(py::module &&m) {
 
   // m.def("current_stream", [](uint64_t device){
   //   return (uint64_t)(c10::cuda::getCurrentCUDAStream(device).stream());
@@ -317,26 +279,27 @@ void init_triton_runtime(py::module &&m)
 
   // wrap backend_t
   py::enum_<backend_t>(m, "backend")
-      .value("HOST", HOST)
-      .value("CUDA", CUDA)
-      .value("ROCM", ROCM)
-      .export_values();
+    .value("HOST", HOST)
+    .value("CUDA", CUDA)
+    .value("ROCM", ROCM)
+    .export_values();
 
   // enable peer-to-peer
-  m.def("enable_peer_access", [](backend_t backend, uint64_t peer_ptr)
-        {
+  m.def("enable_peer_access", [](backend_t backend, uint64_t peer_ptr) {
       if (backend != CUDA)
         throw std::runtime_error("P2P only supported on CUDA devices!");
-      cu_enable_peer_access(peer_ptr); });
+      cu_enable_peer_access(peer_ptr);
+    }
+  );
 
   // get range size for the given pointer
   m.def("get_pointer_range_size", &get_pointer_range_size);
 
+
   // cache key
-  m.def("launch", [](py::list args, py::list do_not_specialize, const std::string &func_key, py::list &arg_names,
-                     py::object device, py::int_ stream, py::dict bin_cache, py::int_ num_warps, py::int_ num_stages,
-                     py::dict extern_libs, py::function add_to_cache, py::object grid)
-        {
+  m.def("launch", [](py::list args, py::list do_not_specialize, const std::string& func_key, py::list& arg_names, 
+                     py::object device, py::int_ stream, py::dict bin_cache, py::int_ num_warps, py::int_ num_stages, 
+                     py::dict extern_libs, py::function add_to_cache, py::object grid){
     // parse arguments to compute cache key, compile-time constants and packed kernel arguments
     long _num_warps = PyLong_AsLong(num_warps.ptr());
     long _num_stages = PyLong_AsLong(num_stages.ptr());
@@ -387,60 +350,60 @@ void init_triton_runtime(py::module &&m)
                                     _num_warps*32, 1, 1, shared_mem, (CUstream)_stream, 
                                      nullptr, config);
    }
-    return bin; });
+    return bin;
+  });
 
-  m.def("cc", [](backend_t backend, uint64_t device) -> int
-        {
+  m.def("cc", [](backend_t backend, uint64_t device) -> int {
     if (backend == CUDA) {
       CUdevice dev = (CUdevice)device;
       int major = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>(dev);
       int minor = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR>(dev);
       return major*10 + minor;
     }
-    return -1; });
+    return -1;
+  });
 
   // query maximum shared memory
-  m.def("max_shared_memory", [](backend_t backend, uint64_t device)
-        {
+  m.def("max_shared_memory", [](backend_t backend, uint64_t device) {
       if (backend == HOST)
         return 0;
       if(backend == CUDA) 
         return cuGetInfo<CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN>(device);
       if(backend == ROCM)
         return hipGetInfo<hipDeviceAttributeMaxSharedMemoryPerBlock>(device);
-      return -1; });
+      return -1;
+  });
 
   // query DRAM & L2 cache
-  m.def("memory_clock_rate", [](backend_t backend, uint64_t device)
-        {
+  m.def("memory_clock_rate", [](backend_t backend, uint64_t device) {
     if (backend == CUDA) return cuGetInfo<CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE>(device);
-    return -1; });
-  m.def("global_memory_bus_width", [](backend_t backend, uint64_t device)
-        {
+    return -1;
+  });
+  m.def("global_memory_bus_width", [](backend_t backend, uint64_t device) {
     if (backend == CUDA) return cuGetInfo<CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH>(device);
-    return -1; });
-  m.def("l2_cache_size", [](backend_t backend, uint64_t device)
-        {
+    return -1;
+  });
+  m.def("l2_cache_size", [](backend_t backend, uint64_t device) {
     if (backend == CUDA) return cuGetInfo<CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE>(device);
-    return -1; });
+    return -1;
+  });
 
   // query clock rate (in kilohertz)
-  m.def("clock_rate", [](backend_t backend, uint64_t device)
-        {
+  m.def("clock_rate", [](backend_t backend, uint64_t device) {
     if (backend == CUDA) return cuGetInfo<CU_DEVICE_ATTRIBUTE_CLOCK_RATE>(device);
-    return -1; });
+    return -1;
+  });
 
-  m.def("num_sm", [](backend_t backend, uint64_t device)
-        {
+  m.def("num_sm", [](backend_t backend, uint64_t device) {
     if (backend == CUDA) return cuGetInfo<CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT>(device);
-    return -1; });
+    return -1;
+  });
 
   // enqueue
   m.def("enqueue", [](backend_t backend, uint64_t stream, uint64_t kernel,
                       uint64_t grid_0, uint64_t grid_1, uint64_t grid_2,
                       uint64_t block_0, uint64_t block_1, uint64_t block_2,
-                      const std::string &args, int64_t shared_mem)
-        {
+                      const std::string &args, int64_t shared_mem){
     void* args_ptr = (void*)args.data();
     size_t args_size = args.size();
     // release the gil in case the enqueue blocks
@@ -451,7 +414,10 @@ void init_triton_runtime(py::module &&m)
     if(backend == CUDA)
       cu_enqueue(stream, kernel, grid_0, grid_1, grid_2, block_0, block_1, block_2, args_ptr, args_size, shared_mem);
     if(backend == ROCM)
-      hip_enqueue(stream, kernel, grid_0, grid_1, grid_2, block_0, block_1, block_2, args_ptr, args_size, shared_mem); });
+      hip_enqueue(stream, kernel, grid_0, grid_1, grid_2, block_0, block_1, block_2, args_ptr, args_size, shared_mem);
+  });
+
+  
 }
 
 /*****************************************************************************/
@@ -459,16 +425,15 @@ void init_triton_runtime(py::module &&m)
 /*****************************************************************************/
 typedef std::map<std::string, py::object> asm_map_t;
 
-// ---------------------------------------
+// --------------------------------------- 
 // Load provided assembly code into driver
-// ---------------------------------------
+// --------------------------------------- 
 
 // CUDA
-std::tuple<uint64_t, uint64_t, uint64_t, uint64_t> cu_load_binary(const std::string &name, asm_map_t &asm_map, size_t n_shared_bytes, uint64_t dev)
-{
+std::tuple<uint64_t, uint64_t, uint64_t, uint64_t> cu_load_binary(const std::string& name, asm_map_t &asm_map, size_t n_shared_bytes, uint64_t dev){
   // load assembly
   std::string assembly;
-  if (asm_map.find("cubin") != asm_map.end())
+  if(asm_map.find("cubin") != asm_map.end())
     assembly = py::cast<std::string>(asm_map["cubin"]);
   else
     assembly = py::cast<std::string>(asm_map["ptx"]);
@@ -486,8 +451,7 @@ std::tuple<uint64_t, uint64_t, uint64_t, uint64_t> cu_load_binary(const std::str
   // set dynamic shared memory if necessary
   int shared_optin;
   drv::dispatch::cuDeviceGetAttribute(&shared_optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, dev);
-  if (n_shared_bytes > 49152 && shared_optin > 49152)
-  {
+  if(n_shared_bytes > 49152 && shared_optin > 49152){
     drv::dispatch::cuFuncSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED);
     int shared_total, shared_static;
     drv::dispatch::cuDeviceGetAttribute(&shared_total, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR, dev);
@@ -498,8 +462,7 @@ std::tuple<uint64_t, uint64_t, uint64_t, uint64_t> cu_load_binary(const std::str
 }
 
 // ROCM
-std::tuple<uint64_t, uint64_t, uint64_t, uint64_t> hip_load_binary(const std::string &name, asm_map_t &asm_map, size_t n_shared_bytes, uint64_t dev)
-{
+std::tuple<uint64_t, uint64_t, uint64_t, uint64_t> hip_load_binary(const std::string& name, asm_map_t &asm_map, size_t n_shared_bytes, uint64_t dev){
   py::bytes _assembly = asm_map["hsaco"];
   std::string assembly = py::cast<std::string>(_assembly);
   // HSA-CO -> hipModule
@@ -511,23 +474,22 @@ std::tuple<uint64_t, uint64_t, uint64_t, uint64_t> hip_load_binary(const std::st
   return std::make_tuple((uint64_t)mod, (uint64_t)fun, 0, 0);
 }
 
-// ---------------------------------------
+// --------------------------------------- 
 // Compile Triton-IR to assembly
-// ---------------------------------------
+// --------------------------------------- 
 
 // CUDA
 std::tuple<std::string, asm_map_t, int> cu_compile_ttir(
     const std::string &name, ir::module &ir, uint64_t device, int num_warps,
     int num_stages, asm_map_t &asm_map,
-    const triton::codegen::ExternLibMap &extern_lib_map)
-{
+    const triton::codegen::ExternLibMap &extern_lib_map) {
   py::gil_scoped_release allow_threads;
   llvm::LLVMContext ctx;
   // device properties
   CUdevice dev = (CUdevice)device;
   size_t major = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>(dev);
   size_t minor = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR>(dev);
-  size_t cc = major * 10 + minor;
+  size_t cc = major*10 + minor;
   int version;
   std::string ptxas_path = drv::path_to_ptxas(version);
   // Triton-IR -> NVPTX LLVM-IR
@@ -545,8 +507,7 @@ std::tuple<std::string, asm_map_t, int> cu_compile_ttir(
   asm_map["ptx"] = py::cast(ptx);
   // PTX -> Binary
   std::string cubin = drv::ptx_to_cubin(ptx, ptxas_path, cc);
-  if (!cubin.empty())
-  {
+  if(!cubin.empty()){
     py::bytes bytes(cubin);
     asm_map["cubin"] = bytes;
   }
@@ -557,8 +518,7 @@ std::tuple<std::string, asm_map_t, int> cu_compile_ttir(
 std::tuple<std::string, asm_map_t, int> hip_compile_ttir(
     const std::string &name, ir::module &ir, uint64_t device, int num_warps,
     int num_stages, asm_map_t &asm_map,
-    const triton::codegen::ExternLibMap &extern_lib_map)
-{
+    const triton::codegen::ExternLibMap &extern_lib_map) {
   llvm::LLVMContext ctx;
   // Triton-IR -> NVPTX LLVM-IR
   triton::codegen::amd_cl_target target;
@@ -576,13 +536,11 @@ std::tuple<std::string, asm_map_t, int> hip_compile_ttir(
   return std::make_tuple(name, asm_map, n_shared_bytes);
 }
 
-void init_triton_codegen(py::module &&m)
-{
+void init_triton_codegen(py::module &&m) {
   m.def(
       "compile_ttir",
       [](backend_t backend, ir::module &ir, uint64_t device, int num_warps,
-         int num_stages, py::dict &extern_libs)
-      {
+         int num_stages, py::dict& extern_libs) {
         std::string name = ir.get_function_list()[0]->get_name();
         // record asm as we generate
         asm_map_t asm_map;
@@ -592,28 +550,26 @@ void init_triton_codegen(py::module &&m)
         llvm::LLVMContext ctx;
         // construct extern lib map
         triton::codegen::ExternLibMap extern_lib_map;
-        for (auto item : extern_libs)
-        {
+        for (auto item : extern_libs) {
           auto name = item.first.cast<std::string>();
           auto path = item.second.cast<std::string>();
           extern_lib_map.emplace(
               name, triton::codegen::create_extern_lib(name, path));
         }
-        if (backend == CUDA)
+        if(backend == CUDA)
           return cu_compile_ttir(name, ir, device, num_warps, num_stages, asm_map, extern_lib_map);
         assert(backend == ROCM);
         return hip_compile_ttir(name, ir, device, num_warps, num_stages, asm_map, extern_lib_map);
       },
       py::return_value_policy::take_ownership);
-  m.def(
-      "load_binary", [](backend_t backend, const std::string &name, asm_map_t &asm_map, size_t n_shared_bytes, uint64_t dev)
-      {
+  m.def("load_binary", [](backend_t backend, const std::string& name, asm_map_t &asm_map, size_t n_shared_bytes, uint64_t dev){
 	py::gil_scoped_release allow_threads;
         if(backend == CUDA)
           return cu_load_binary(name, asm_map, n_shared_bytes, dev);
         assert(backend == ROCM);
-        return hip_load_binary(name, asm_map, n_shared_bytes, dev); },
-      py::return_value_policy::take_ownership);
+        return hip_load_binary(name, asm_map, n_shared_bytes, dev);
+      }, py::return_value_policy::take_ownership);
+  
 
   struct InstanceDescriptor
   {
@@ -628,12 +584,12 @@ void init_triton_codegen(py::module &&m)
       .def_readonly("equal_to_1", &InstanceDescriptor::equalTo1);
 }
 
+
 /*****************************************************************************/
 /* Python bindings for triton::ir                                            */
 /*****************************************************************************/
 
-void init_triton_ir(py::module &&m)
-{
+void init_triton_ir(py::module &&m) {
   using ret = py::return_value_policy;
   using namespace pybind11::literals;
 
@@ -642,13 +598,13 @@ void init_triton_ir(py::module &&m)
       .value("CA", ir::load_inst::CA)
       .value("CG", ir::load_inst::CG)
       .export_values();
-
+  
   py::enum_<ir::load_inst::EVICTION_POLICY>(m, "EVICTION_POLICY")
       .value("NORMAL", ir::load_inst::NORMAL)
       .value("EVICT_FIRST", ir::load_inst::EVICT_FIRST)
       .value("EVICT_LAST", ir::load_inst::EVICT_LAST)
       .export_values();
-
+  
   py::enum_<ir::reduce_inst::op_t>(m, "REDUCE_OP")
       .value("ADD", ir::reduce_inst::ADD)
       .value("FADD", ir::reduce_inst::FADD)
@@ -665,7 +621,7 @@ void init_triton_ir(py::module &&m)
       .value("ARGFMIN", ir::reduce_inst::ARGFMIN)
       .value("ARGFMAX", ir::reduce_inst::ARGFMAX)
       .value("XOR", ir::reduce_inst::XOR);
-
+  
   py::enum_<ir::atomic_rmw_op_t>(m, "ATOMIC_OP")
       .value("ADD", ir::atomic_rmw_op_t::Add)
       .value("FADD", ir::atomic_rmw_op_t::FAdd)
@@ -682,41 +638,41 @@ void init_triton_ir(py::module &&m)
       .def(py::init<>());
 
   py::class_<ir::value>(m, "value")
-      .def("multiple_of", [](ir::value *self, std::vector<unsigned> val)
-           {
+      .def("multiple_of", [](ir::value *self, std::vector<unsigned> val) {
         if (auto *instr = dynamic_cast<ir::instruction*>(self)) {
           instr->set_metadata(ir::metadata::multiple_of, val);
         } else
-          throw std::runtime_error("multiple_of"); })
-      .def("max_contiguous", [](ir::value *self, std::vector<unsigned> val)
-           {
+          throw std::runtime_error("multiple_of");
+      })
+      .def("max_contiguous", [](ir::value *self, std::vector<unsigned> val) {
         if (auto *instr = dynamic_cast<ir::instruction*>(self)) {
           instr->set_metadata(ir::metadata::max_contiguous, val);
         } else
-          throw std::runtime_error("max_contiguous"); })
-      .def("set_fdiv_ieee_rounding", [](ir::value *self, bool val)
-           {
+          throw std::runtime_error("max_contiguous");
+      })
+      .def("set_fdiv_ieee_rounding", [](ir::value *self, bool val) {
         if (auto *instr = dynamic_cast<ir::binary_operator*>(self))
           instr->set_fdiv_ieee_rounding(val);
         else
-          throw std::runtime_error("set_fdiv_ieee_rounding"); })
-      .def("is_phi", [](ir::value *self)
-           {
+          throw std::runtime_error("set_fdiv_ieee_rounding");
+      })
+      .def("is_phi", [](ir::value *self) {
         if (auto *pn = dynamic_cast<ir::phi_node*>(self))
           return true;
-        return false; })
-      .def("ops", [](ir::value *self)
-           {
+        return false;
+      })
+      .def("ops", [](ir::value *self) {
         if (auto *instr = dynamic_cast<ir::instruction*>(self)) {
           return instr->ops();
         }
-        throw std::runtime_error("cannot use ops()"); })
+        throw std::runtime_error("cannot use ops()");
+      })
       .def("replace_all_uses_with", &ir::value::replace_all_uses_with)
-      .def("erase_from_parent", [](ir::value *self)
-           {
+      .def("erase_from_parent", [](ir::value *self) {
         if (auto *instr = dynamic_cast<ir::instruction*>(self))
           return instr->erase_from_parent();
-        throw std::runtime_error("cannot use erase_from_parent"); })
+        throw std::runtime_error("cannot use erase_from_parent");
+      })
       .def_property("name", &ir::value::get_name, &ir::value::set_name)
       .def_property_readonly("type", &ir::value::get_type);
 
@@ -731,23 +687,17 @@ void init_triton_ir(py::module &&m)
 
   py::class_<ir::constant_int, ir::constant>(m, "constant_int")
       .def_property_readonly("value", &ir::constant_int::get_value)
-      .def("__int__", [](ir::constant_int *self)
-           { return self->get_value(); })
-      .def("__bool__", [](ir::constant_int *self)
-           { return self->get_value(); });
+      .def("__int__", [](ir::constant_int *self) { return self->get_value(); })
+      .def("__bool__", [](ir::constant_int *self) { return self->get_value(); });
 
   py::class_<ir::constant_fp, ir::constant>(m, "constant_float")
       .def_property_readonly("value", &ir::constant_fp::get_value)
-      .def(
-          "get", [](ir::type *ty, double val)
-          { return ir::constant_fp::get(ty, val); },
-          ret::reference);
+      .def("get", [](ir::type* ty, double val) { return ir::constant_fp::get(ty, val); }, ret::reference);
 
   py::class_<ir::instruction, ir::user>(m, "instruction")
-      .def(
-          "get_parent", [](ir::instruction *self)
-          { return self->get_parent(); },
-          ret::reference);
+      .def("get_parent", [](ir::instruction *self) {
+        return self->get_parent();
+      }, ret::reference);
   py::class_<ir::phi_node, ir::instruction>(m, "phi_node")
       .def("add_incoming", &ir::phi_node::add_incoming);
 
@@ -782,16 +732,11 @@ void init_triton_ir(py::module &&m)
       .def("is_bf16", &ir::type::is_bf16_ty)
       .def("is_fp32", &ir::type::is_fp32_ty)
       .def("is_fp64", &ir::type::is_fp64_ty)
-      .def("is_int1", [](ir::type *self)
-           { return self->is_integer_ty(1); })
-      .def("is_int8", [](ir::type *self)
-           { return self->is_integer_ty(8); })
-      .def("is_int16", [](ir::type *self)
-           { return self->is_integer_ty(16); })
-      .def("is_int32", [](ir::type *self)
-           { return self->is_integer_ty(32); })
-      .def("is_int64", [](ir::type *self)
-           { return self->is_integer_ty(64); })
+      .def("is_int1", [](ir::type *self) { return self->is_integer_ty(1); })
+      .def("is_int8", [](ir::type *self) { return self->is_integer_ty(8); })
+      .def("is_int16", [](ir::type *self) { return self->is_integer_ty(16); })
+      .def("is_int32", [](ir::type *self) { return self->is_integer_ty(32); })
+      .def("is_int64", [](ir::type *self) { return self->is_integer_ty(64); })
       .def("is_int_or_tileint", &ir::type::is_int_or_tileint_ty)
 
       .def("repr", &ir::type::repr)
@@ -807,15 +752,16 @@ void init_triton_ir(py::module &&m)
 
   py::class_<ir::function_type, ir::type>(m, "function_type")
       .def_property_readonly("ret_ty", &ir::function_type::get_return_ty)
-      .def_property_readonly("arg_tys", [](ir::function_type *self)
-                             { return std::vector<ir::type *>(self->params_begin(), self->params_end()); });
+      .def_property_readonly("arg_tys", [](ir::function_type* self){ 
+        return std::vector<ir::type*>(self->params_begin(), self->params_end());
+      });
 
   py::class_<ir::integer_type, ir::type>(m, "integer_type");
 
   py::class_<ir::block_type, ir::type>(m, "block_type")
       .def_property_readonly("shape", &ir::block_type::get_shapes)
       .def_property_readonly("numel", &ir::type::get_tile_num_elements);
-
+  
   py::class_<ir::struct_type, ir::type>(m, "struct_type")
       .def("get", &ir::struct_type::get, ret::reference)
       .def_property_readonly("num_types", &ir::struct_type::get_num_types);
@@ -823,20 +769,21 @@ void init_triton_ir(py::module &&m)
   py::class_<ir::module>(m, "module", py::dynamic_attr())
       .def(py::init<std::string, ir::builder &>())
       .def("has_function", &ir::module::has_function)
-      .def("get_functions", &ir::module::get_function_list, ret::reference)
       .def("get_function", &ir::module::get_function, ret::reference)
+      .def("get_functions", &ir::module::get_function_list, ret::reference)
       .def("get_or_insert_function", &ir::module::get_or_insert_function, ret::reference)
-      .def("print", [](ir::module *self)
-           { self->print(std::cout); })
+      .def("print", [](ir::module *self) {
+          self->print(std::cout);
+      })
       .def("reset_ret_ty", &ir::module::reset_ret_ty)
-      .def("set_instr_metadata", [](ir::module *self, const std::string &name, ir::value *value)
-           {
+      .def("set_instr_metadata", [](ir::module *self, const std::string &name, ir::value *value) {
           const auto metadatas = self->get_metadatas();
           auto it = metadatas.find(name);
           if (it != metadatas.end())
             if (auto *instr = dynamic_cast<ir::instruction*>(value)) {
               instr->set_metadata(it->second.first, it->second.second);
-            } })
+            }
+    })
       .def_property_readonly("builder", &ir::module::get_builder, ret::reference);
 
   using eattr = ir::attribute_kind_t;
@@ -868,14 +815,12 @@ void init_triton_ir(py::module &&m)
   py::class_<ir::basic_block, ir::value>(m, "basic_block")
       .def("create", &ir::basic_block::create, ret::reference, py::arg(), py::arg(), py::arg() = nullptr)
       .def("get_predecessors", &ir::basic_block::get_predecessors, ret::reference)
-      .def(
-          "get_first_non_phi", [](ir::basic_block *self) -> ir::instruction *
-          {
+      .def("get_first_non_phi", [](ir::basic_block *self) -> ir::instruction* {
         ir::basic_block::iterator it = self->get_first_non_phi();
         if (it == self->end())
           return nullptr;
-        return *it; },
-          ret::reference)
+        return *it;
+      }, ret::reference)
       .def_property_readonly("parent", &ir::basic_block::get_parent, ret::reference);
 
   py::class_<ir::builder::iterator>(m, "bb_iterator");
@@ -893,17 +838,14 @@ void init_triton_ir(py::module &&m)
       .def("ret", &ir::builder::create_ret, ret::reference)
       // insertion block/point, insert points are represented as (*bb, *instr)
       .def("get_insert_block", &ir::builder::get_insert_block, ret::reference)
-      .def("set_insert_block", (void(ir::builder::*)(ir::basic_block *)) & ir::builder::set_insert_point)
-      .def(
-          "get_insert_point", [](ir::builder *self)
-          {
+      .def("set_insert_block", (void (ir::builder::*)(ir::basic_block *)) & ir::builder::set_insert_point)
+      .def("get_insert_point", [](ir::builder *self) {
         ir::basic_block *bb = self->get_insert_block();
         ir::basic_block::iterator it = self->get_insert_point();
         ir::instruction *instr = it == bb->end() ? nullptr : *it;
-        return std::make_pair(bb, instr); },
-          ret::reference)
-      .def("set_insert_point", [](ir::builder *self, std::pair<ir::basic_block *, ir::instruction *> pt)
-           {
+        return std::make_pair(bb, instr);
+      }, ret::reference)
+      .def("set_insert_point", [](ir::builder *self, std::pair<ir::basic_block*, ir::instruction*> pt) {
         ir::basic_block *bb = pt.first;
         ir::instruction *instr = pt.second;
         if (instr) {
@@ -913,18 +855,13 @@ void init_triton_ir(py::module &&m)
         } else {
           assert(bb);
           self->set_insert_point(bb);
-        } })
+        }
+      })
       // Constants
       .def("get_int1", &ir::builder::get_int1, ret::reference)
-      .def(
-          "get_int32", [](ir::builder *self, int32_t v)
-          { return self->get_int32((uint32_t)v); },
-          ret::reference)
+      .def("get_int32", [](ir::builder *self, int32_t v) { return self->get_int32((uint32_t)v); }, ret::reference)
       .def("get_uint32", &ir::builder::get_int32, ret::reference)
-      .def(
-          "get_int64", [](ir::builder *self, int64_t v)
-          { return self->get_int64((uint64_t)v); },
-          ret::reference)
+      .def("get_int64", [](ir::builder *self, int64_t v) { return self->get_int64((uint64_t)v); }, ret::reference)
       .def("get_uint64", &ir::builder::get_int64, ret::reference)
       .def("get_float16", &ir::builder::get_float16, ret::reference)
       .def("get_float32", &ir::builder::get_float32, ret::reference)
@@ -968,28 +905,28 @@ void init_triton_ir(py::module &&m)
       .def("create_frem", &ir::builder::create_frem, ret::reference)
       .def("create_fadd", &ir::builder::create_fadd, ret::reference)
       .def("create_fsub", &ir::builder::create_fsub, ret::reference)
-      .def("create_mul", &ir::builder::create_mul, ret::reference,
-           py::arg("lhs"), py::arg("rhs"),
-           py::arg("has_nuw") = false, py::arg("has_nsw") = false)
+      .def("create_mul", &ir::builder::create_mul, ret::reference, 
+                          py::arg("lhs"), py::arg("rhs"), 
+                          py::arg("has_nuw")=false, py::arg("has_nsw")=false)
       .def("create_sdiv", &ir::builder::create_sdiv, ret::reference)
       .def("create_udiv", &ir::builder::create_udiv, ret::reference)
       .def("create_srem", &ir::builder::create_srem, ret::reference)
       .def("create_urem", &ir::builder::create_urem, ret::reference)
-      .def("create_add", &ir::builder::create_add, ret::reference,
-           py::arg("lhs"), py::arg("rhs"),
-           py::arg("has_nuw") = false, py::arg("has_nsw") = false)
+      .def("create_add", &ir::builder::create_add, ret::reference, 
+                          py::arg("lhs"), py::arg("rhs"), 
+                          py::arg("has_nuw")=false, py::arg("has_nsw")=false)
       .def("create_sub", &ir::builder::create_sub, ret::reference,
-           py::arg("lhs"), py::arg("rhs"),
-           py::arg("has_nuw") = false, py::arg("has_nsw") = false)
+                          py::arg("lhs"), py::arg("rhs"), 
+                          py::arg("has_nuw")=false, py::arg("has_nsw")=false)
       .def("create_shl", &ir::builder::create_shl, ret::reference,
-           py::arg("lhs"), py::arg("rhs"),
-           py::arg("has_nuw") = false, py::arg("has_nsw") = false)
+                          py::arg("lhs"), py::arg("rhs"), 
+                          py::arg("has_nuw")=false, py::arg("has_nsw")=false)
       .def("create_lshr", &ir::builder::create_lshr, ret::reference,
-           py::arg("lhs"), py::arg("rhs"),
-           py::arg("has_nuw") = false, py::arg("has_nsw") = false)
+                          py::arg("lhs"), py::arg("rhs"), 
+                          py::arg("has_nuw")=false, py::arg("has_nsw")=false)
       .def("create_ashr", &ir::builder::create_ashr, ret::reference,
-           py::arg("lhs"), py::arg("rhs"),
-           py::arg("has_nuw") = false, py::arg("has_nsw") = false)
+                          py::arg("lhs"), py::arg("rhs"), 
+                          py::arg("has_nuw")=false, py::arg("has_nsw")=false)
       // GEP
       .def("create_gep", &ir::builder::create_gep, ret::reference)
       // Comparison (int)
@@ -1066,8 +1003,7 @@ void init_triton_ir(py::module &&m)
       .def("create_prefetch_s", &ir::builder::create_prefetch_s, ret::reference);
 }
 
-void init_triton(py::module &m)
-{
+void init_triton(py::module &m) {
   py::module subm = m.def_submodule("triton");
   init_triton_codegen(std::move(subm.def_submodule("code_gen")));
   init_triton_runtime(std::move(subm.def_submodule("runtime")));
