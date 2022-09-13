@@ -159,6 +159,8 @@ class JITFunction:
     def _key_of(arg):
         if hasattr(arg, "dtype"):
             return arg.dtype
+        elif isinstance(arg, bool):
+            return "i1"
         elif isinstance(arg, int):
             if -2**31 <= arg and arg <= 2**31 - 1:
                 return "i32"

@@ -237,7 +237,6 @@ def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=N
         TILE_M=block, TILE_N=TILE_N, TILE_K=min(block, 32), BLOCK=block, num_stages=4,
         num_warps=4, GROUP_SIZE_M=4,
     )
-    print(pgm.asm["ptx"])
     # exit()
     return c
 

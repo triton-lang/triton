@@ -819,7 +819,8 @@ def make_triton_ir(fn, signature, specialization, constants):
     # visit kernel AST
     gscope = fn.__globals__.copy()
     function_name = '_'.join([fn.__name__, kernel_suffix(signature, specialization)])
-    new_constants = {k: 1 for k in specialization.equal_to_1}
+    tys = signature.split(',')
+    new_constants = {k: True if tys[k]=="i1" else 1 for k in specialization.equal_to_1}
     new_attrs = {k: ("multiple_of", 16) for k in specialization.divisible_by_16}
     all_constants = constants.copy()
     all_constants.update(new_constants)
@@ -897,7 +898,7 @@ def ty_to_cpp(ty):
     if ty[0] == '*':
         return "CUdeviceptr"
     return {
-        "i1": "bool",
+        "i1": "int32_t",
         "i8": "int8_t",
         "i16": "int16_t",
         "i32": "int32_t",
@@ -967,7 +968,7 @@ def _build(name, src, path):
     return so
 
 
-def generate_torch_glue(kernel_name, config, signature, num_warps, binaries, tmpdir):
+def generate_torch_glue(kernel_name, constants, signature, num_warps, binaries, tmpdir):
     headers = dict()
     tys = signature.split(',')
     # write all cubins to header files
@@ -989,9 +990,10 @@ unsigned int {name}_shmem = {shmem_size};"""
     def _extracted_type(ty):
         if ty[0] == '*':
             return "PyObject*"
-        if ty[0] == 'i':
-            return "long"
         return {
+            'i1': 'int32_t',
+            'i32': 'int32_t',
+            'i64': 'int64_t',
             'u32': 'uint32_t',
             'u64': 'uint64_t',
             'fp32': 'float',
@@ -1010,7 +1012,7 @@ unsigned int {name}_shmem = {shmem_size};"""
             "int64_t": "L",
         }[ty]
 
-    format = "iiil" + ''.join([format_of(_extracted_type(ty)) for ty in tys])
+    format = "iiiK" + ''.join([format_of(_extracted_type(ty)) for ty in tys])
 
     # generate glue code
     n_args = len(tys)
@@ -1073,7 +1075,7 @@ void _{kernel_name}(int gridX, int gridY, int gridZ, CUstream stream, {arg_decls
   if(function == 0)
     init_module(device);
 
-  void *params[] = {{ {', '.join(f"&arg{i}" if tys[i][0]=='*' else f"(void*)&arg{i}" for i in range(n_args) if i not in config.equal_to_1)} }};
+  void *params[] = {{ {', '.join(f"&arg{i}" for i in range(n_args) if i not in constants)} }};
   CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*{num_warps}, 1, 1, {name}_shmem, stream, params, 0));
 }}
 
@@ -1194,8 +1196,8 @@ def make_cache_key(fn, signature, configs, constants, num_warps, num_stages):
     return key
 
 
-def make_shared_object(fn, config, signature, num_warps, binaries, tmpdir):
-    src = generate_torch_glue(fn.__name__, config, signature, num_warps, binaries, tmpdir)
+def make_shared_object(fn, constants, signature, num_warps, binaries, tmpdir):
+    src = generate_torch_glue(fn.__name__, constants, signature, num_warps, binaries, tmpdir)
     src_path = os.path.join(tmpdir, "main.c")
     with open(src_path, "w") as f:
         f.write(src)
@@ -1225,7 +1227,9 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
         binaries.append(_compile(fn, signature, device, constants, config, num_warps, num_stages, extern_libs, "cubin"))
     # generate and compile glue code into shared object
     with tempfile.TemporaryDirectory() as tmpdir:
-        so = make_shared_object(fn, configs[0], signature, num_warps, binaries, tmpdir)
+        all_constants = set(constants.keys())
+        all_constants.update(configs[0].equal_to_1)
+        so = make_shared_object(fn, all_constants, signature, num_warps, binaries, tmpdir)
 
     # write shared object to cache
     cache_manager.put(so)
