@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
   pull_request:
     branches:
-      - main
+      - triton-mlir
 
 jobs:
 
   Integration-Tests:
 
-    runs-on: self-hosted
+    runs-on: [self-hosted, A10]
 
     steps:
 
