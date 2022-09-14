@@ -11,6 +11,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PtxAsmFormat.h"
@@ -52,6 +53,10 @@ Value createConstantI32(Location loc, PatternRewriter &rewriter, int32_t v) {
 #define add(...) rewriter.create<LLVM::AddOp>(loc, __VA_ARGS__)
 #define mul(...) rewriter.create<LLVM::MulOp>(loc, __VA_ARGS__)
 #define xor_(...) rewriter.create<LLVM::XOrOp>(loc, __VA_ARGS__)
+#define bit_cast(...) rewriter.create<LLVM::BitcastOp>(loc, __VA_ARGS__)
+#define gep(...) rewriter.create<LLVM::GEPOp>(loc, __VA_ARGS__)
+#define ptr_ty(...) LLVM::LLVMPointerType::get(__VA_ARGS__)
+#define extract_val(...) rewriter.create<LLVM::ExtractValueOp>(loc, __VA_ARGS__)
 #define constI32(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
 
 } // namespace LLVM
@@ -409,6 +414,7 @@ public:
     auto llvmIndexTy = this->getTypeConverter()->getIndexType();
     Value threadId = getThreadId(b, loc);
     Value warpSize = createIndexAttrConstant(b, loc, llvmIndexTy, 32);
+    auto &rewriter = b;
     Value laneId = urem(threadId, warpSize);
     Value warpId = udiv(threadId, warpSize);
     auto sizePerThread = blocked_layout.getSizePerThread();
@@ -1273,14 +1279,15 @@ public:
 
 class MMA16816SmemLoader {
 public:
-  MMA16816SmemLoader(int wpt, ArrayRef<int> order, int kOrder,
-                     ArrayRef<unsigned> tileShape, ArrayRef<int> instrShape,
+  MMA16816SmemLoader(int wpt, ArrayRef<uint32_t> order, int kOrder,
+                     ArrayRef<int64_t> tileShape, ArrayRef<int> instrShape,
                      ArrayRef<int> matShape, int perPhase, int maxPhase,
                      int elemBytes, ConversionPatternRewriter &rewriter,
                      const Location &location)
       : wpt(wpt), order(order), kOrder(kOrder), tileShape(tileShape),
         instrShape(instrShape), matShape(matShape), perPhase(perPhase),
-        maxPhase(maxPhase), elemBytes(elemBytes), rewriter(rewriter), loc(loc) {
+        maxPhase(maxPhase), elemBytes(elemBytes), rewriter(rewriter), loc(loc),
+        ctx(rewriter.getContext()) {
     cMatShape = matShape[order[0]];
     sMatShape = matShape[order[1]];
 
@@ -1326,6 +1333,8 @@ public:
     if (canUseLdmatrix)
       return computeLdmatrixMatOffs(warpOff, lane);
   }
+
+  int getNumPtr() const { return numPtr; }
 
   // Compute the offset to the matrix this thread(indexed by warpOff and lane)
   // mapped to. The details: For ldmatrix.m8n8 instruction, each matrix is 8x8
@@ -1387,10 +1396,76 @@ public:
     }
   }
 
+  std::tuple<Value, Value, Value, Value>
+  loadX4(int mat0, int mat1, int inc, ArrayRef<Value> offs,
+         ArrayRef<Value> ptrs, Type ldmatrixRetTy, Type shemPtrTy) {
+    assert(mat0 % 2 == 0 && mat1 % 2 == 0 &&
+           "smem matrix load must be aligned");
+    int matIdx[2] = {mat0, mat1};
+    int k = matIdx[kOrder];
+
+    int ptrIdx{-1};
+    if (canUseLdmatrix)
+      ptrIdx = matIdx[order[0]] / (instrShape[order[0]] / matShape[order[0]]);
+    else if (elemBytes == 4 && needTrans) // tf32 & trans
+      ptrIdx = matIdx[order[0]];
+    else // i8 & trans
+      ptrIdx = matIdx[order[0]] * 4;
+
+    // prefetch logic removed here.
+    auto getPtr = [&](int idx) { return ptrs[idx]; };
+
+    Value ptr = getPtr(ptrIdx);
+
+    Value resV4;
+    if (canUseLdmatrix) {
+      int sOffset =
+          matIdx[order[1]] * sMatStride * sMatShape * sTileStride * elemBytes;
+      PTXBuilder builder;
+
+      auto resArgs = builder.newListOperand();
+      for (int i = 0; i < 4; i++)
+        resArgs->listAppend(builder.newOperand("=r"));
+      auto addrArg = builder.newAddrOperand(ptr, "r", sOffset);
+
+      auto ldmatrix = builder.create("ldmatrix.sync.aligned.m8n8.x4")
+                          ->o("trans", /*predicate=*/needTrans)
+                          .o("shared.b16");
+      ldmatrix(resArgs, addrArg);
+
+      auto inlineAsm = rewriter.create<LLVM::InlineAsmOp>(
+          loc, ldmatrixRetTy, builder.getAllMLIRArgs(), // operands
+          builder.dump(),                               // asm_string
+          builder.getConstrains(),                      // constraints
+          true,                                         // has_side_effects
+          false,                                        // is_align_stack
+          LLVM::AsmDialectAttr::get(ctx,
+                                    LLVM::AsmDialect::AD_ATT), // asm_dialect
+          ArrayAttr::get(ctx, {})                              // operand_attrs
+      );
+
+      auto getIntAttr = [&](int v) {
+        return ArrayAttr::get(ctx, {IntegerAttr::get(type::i32Ty(ctx), 0)});
+      };
+
+      Value resV4 = inlineAsm.getRes();
+      return std::make_tuple(
+          extract_val(type::i32Ty(ctx), resV4, getIntAttr(0)),
+          extract_val(type::i32Ty(ctx), resV4, getIntAttr(1)),
+          extract_val(type::i32Ty(ctx), resV4, getIntAttr(2)),
+          extract_val(type::i32Ty(ctx), resV4, getIntAttr(3)));
+    } else if (elemBytes == 4 &&
+               needTrans) { // Use lds.32 to load tf32 matrices
+      assert(false && "Not implemented yet");
+    } else if (elemBytes == 1 && needTrans) {
+      assert(false && "Not implemented yet");
+    }
+  }
+
 private:
   int wpt;
   int kOrder;
-  ArrayRef<unsigned> tileShape;
+  ArrayRef<int64_t> tileShape;
   ArrayRef<int> instrShape;
   ArrayRef<int> matShape;
   int perPhase;
@@ -1415,9 +1490,11 @@ private:
   int matArrStride;
   int warpOffStride;
 
-  ArrayRef<int> order;
+  ArrayRef<uint32_t> order;
 
   const Location &loc;
+
+  MLIRContext *ctx{};
 };
 
 struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
@@ -1495,14 +1572,45 @@ private:
   LogicalResult convertFMADot(triton::DotOp op, OpAdaptor adapter,
                               ConversionPatternRewriter &rewriter) const;
 
-private:
+  Value getShemAddr(Value op) const {
+    llvm::report_fatal_error("NOT IMPLEMENTED");
+  }
 };
 
 struct DotOpConversionHelper {
   using TensorCoreType = DotOpConversion::TensorCoreType;
 
+  Value A, B, D;
+  RankedTensorType ATensorTy, BTensorTy, DTensorTy;
+  MLIRContext *ctx{};
+
   explicit DotOpConversionHelper(DotOp dot)
-      : dot(dot), mmaType(getMmaType(dot)) {}
+      : dot(dot), mmaType(getMmaType(dot)) {
+    A = dot.a();
+    B = dot.b();
+    D = dot.d();
+    ctx = dot->getContext();
+
+    ATensorTy = A.getType().cast<RankedTensorType>();
+    BTensorTy = B.getType().cast<RankedTensorType>();
+    DTensorTy = D.getType().cast<RankedTensorType>();
+  }
+
+  Type getShemPtrTy() const {
+    switch (mmaType) {
+    case TensorCoreType::FP32_FP16_FP16_FP32:
+      return ptr_ty(type::f16Ty(ctx), 3);
+    case TensorCoreType::FP32_BF16_BF16_FP32:
+      return ptr_ty(type::bf16Ty(ctx), 3);
+    case TensorCoreType::FP32_TF32_TF32_FP32:
+      return ptr_ty(type::f32Ty(ctx), 3);
+    case TensorCoreType::INT32_INT8_INT8_INT32:
+      return ptr_ty(type::i8Ty(ctx), 3);
+    default:
+      llvm::report_fatal_error("mma16816 data type not supported");
+    }
+    return Type{};
+  }
 
   ArrayRef<int> getMmaInstrShape() const {
     assert(mmaType != TensorCoreType::NOT_APPLICABLE &&
@@ -1634,26 +1742,16 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
   Value D = op.getResult();
   bool allowTF32 = op.allowTF32();
 
-  auto aShape = A.getType().cast<RankedTensorType>().getShape();
-  auto bShape = B.getType().cast<RankedTensorType>().getShape();
-  auto dShape = D.getType().cast<RankedTensorType>().getShape();
+  auto aTensorTy = A.getType().cast<RankedTensorType>();
+  auto bTensorTy = B.getType().cast<RankedTensorType>();
+  auto dTensorTy = D.getType().cast<RankedTensorType>();
 
-  auto aLayout = A.getType()
-                     .cast<RankedTensorType>()
-                     .getEncoding()
-                     .cast<BlockedEncodingAttr>();
-  auto bLayout = A.getType()
-                     .cast<RankedTensorType>()
-                     .getEncoding()
-                     .cast<BlockedEncodingAttr>();
+  auto aShape = aTensorTy.getShape();
+  auto bShape = bTensorTy.getShape();
+  auto dShape = dTensorTy.getShape();
 
-  auto mmaLayout = D.getType()
-                       .cast<RankedTensorType>()
-                       .getEncoding()
-                       .cast<MmaEncodingAttr>();
+  auto mmaLayout = dTensorTy.getEncoding().cast<MmaEncodingAttr>();
 
-  auto aOrder = aLayout.getOrder();
-  auto bOrder = bLayout.getOrder();
   auto wpt = mmaLayout.getWarpsPerCTA();
 
   DotOpConversionHelper helper(op);
@@ -1681,10 +1779,8 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
   Value warpM = urem(warp, constI32(wpt[0]));
   Value warpN = urem(warpMN, constI32(wpt[1]));
 
-  size_t aElemBytes =
-      A.getType().cast<RankedTensorType>().getElementTypeBitWidth() / 8;
-  size_t bElemBytes =
-      B.getType().cast<RankedTensorType>().getElementTypeBitWidth() / 8;
+  size_t aElemBytes = aTensorTy.getElementTypeBitWidth() / 8;
+  size_t bElemBytes = bTensorTy.getElementTypeBitWidth() / 8;
 
   std::map<std::pair<unsigned, unsigned>, Value> ha;
   std::map<std::pair<unsigned, unsigned>, Value> hb;
@@ -1694,6 +1790,29 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
     assert((!isPrefetch) && "prefetch is not supported yet");
     vals[{mn, k}] = val;
   };
+
+  if (auto aSharedLayout =
+          aTensorTy.getEncoding().dyn_cast<SharedEncodingAttr>()) {
+    const int perPhaseA = aSharedLayout.getPerPhase();
+    const int maxPhaseA = aSharedLayout.getMaxPhase();
+    MMA16816SmemLoader aLoader(
+        mmaLayout.getWarpsPerCTA()[0] /*wpt*/,
+        aSharedLayout.getOrder() /*order*/, 1 /*kOrder*/, aShape /*tileShape*/,
+        {mmaInstrM, mmaInstrK} /*instrShape*/,
+        {matShapeM, matShapeK} /*matShape*/, perPhaseA /*perShape*/,
+        maxPhaseA /*maxPhase*/, aElemBytes /*elemBytes*/, rewriter /*rewriter*/,
+        loc);
+    SmallVector<Value> offs = aLoader.computeOffsets(warpM, lane);
+    int numPtr = aLoader.getNumPtr();
+    SmallVector<Value> ptrs(numPtr);
+
+    Type shemPtrTy = helper.getShemPtrTy();
+    for (int i = 0; i < numPtr; i++) {
+      auto shemBase = getShemAddr(A);
+      ptrs[i] = bit_cast(
+          shemPtrTy, gep(shemBase.getType(), shemBase, ValueRange({offs[i]})));
+    }
+  }
 
   auto callMma = [&](unsigned m, unsigned n, unsigned k) {
     PTXBuilder builder;
