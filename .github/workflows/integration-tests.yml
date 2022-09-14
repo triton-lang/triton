@@ -5,14 +5,13 @@ on:
   pull_request:
     branches:
       - master
-      - v2.0
 
 
 jobs:
 
   Integration-Tests:
     
-    runs-on: self-hosted
+    runs-on: [self-hosted, V100]
 
     steps:
 
