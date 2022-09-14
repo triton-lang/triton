@@ -286,8 +286,10 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     grid_0 = grid[0]
     grid_1 = grid[1] if grid_size > 1 else 1
     grid_2 = grid[2] if grid_size > 2 else 1
+    device = torch.cuda.current_device()
+    torch.cuda.set_device(device)
     if stream is None:
-      stream = get_cuda_stream(None)
+      stream = get_cuda_stream(device)
     try:
       bin = cache[key]
       bin.c_wrapper(grid_0, grid_1, grid_2, stream, {args})
