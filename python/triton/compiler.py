@@ -1035,10 +1035,10 @@ inline void gpuAssert(CUresult code, const char *file, int line)
 }}
 #define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
-CUmodule module = 0;
-CUfunction function = 0;
+static CUmodule module = 0;
+static CUfunction function = 0;
 
-void init_function(const char* name, const unsigned char* src, size_t n_shared_bytes, int64_t device){{
+static void init_function(const char* name, const unsigned char* src, size_t n_shared_bytes, int64_t device){{
   CUmodule mod;
   CUfunction fun;
   CUDA_CHECK(cuModuleLoadData(&mod, src));
@@ -1060,7 +1060,7 @@ void init_function(const char* name, const unsigned char* src, size_t n_shared_b
   function = fun;
 }}
 
-void init_module(CUdevice device) {{
+static void init_module(CUdevice device) {{
   {func_init}
 }}
 
@@ -1072,8 +1072,9 @@ void _{kernel_name}(int gridX, int gridY, int gridZ, CUstream stream, {arg_decls
   CUDA_CHECK(cuCtxGetDevice(&device));
 
   // TODO: machine may have heterogeneous devices
-  if(function == 0)
+  if(function == 0){{
     init_module(device);
+  }}
 
   void *params[] = {{ {', '.join(f"&arg{i}" for i in range(n_args) if i not in constants)} }};
   CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*{num_warps}, 1, 1, {name}_shmem, stream, params, 0));
