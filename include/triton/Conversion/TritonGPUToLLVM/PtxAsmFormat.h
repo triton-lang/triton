@@ -123,7 +123,7 @@ struct PTXBuilder {
 
   Operand *newAddrOperand(mlir::Value addr, StringRef constraint, int off = 0);
 
-  llvm::SmallVector<Operand *> getAllArgs() const;
+  llvm::SmallVector<Operand *, 4> getAllArgs() const;
 
   llvm::SmallVector<Value, 4> getAllMLIRArgs() const;
 
