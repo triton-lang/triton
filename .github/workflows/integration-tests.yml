@@ -10,7 +10,7 @@ jobs:
 
   Integration-Tests:
 
-    runs-on: self-hosted
+    runs-on: [self-hosted, A10]
 
     steps:
 
