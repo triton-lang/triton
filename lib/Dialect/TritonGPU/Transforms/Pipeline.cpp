@@ -347,16 +347,13 @@ void LoopPipeliner::emitPrologue() {
   // async.wait & extract_slice
   Operation *asyncWait = builder.create<triton::gpu::AsyncWaitOp>(
       loads[0].getLoc(), loads.size() * (numStages - 2));
+  loopIterIdx = builder.create<arith::ConstantIntOp>(iv.getLoc(), 0, 32);
   for (Value loadOp : loads) {
     Value extractSlice = builder.create<triton::gpu::ExtractSliceOp>(
         loadOp.getLoc(), loadsMapping[loadOp].getType(),
-        loadStageBuffer[loadOp][numStages - 1],
-        builder.create<arith::ConstantIntOp>(loadOp.getLoc(), 0, 32),
-        /*axis*/ 0);
+        loadStageBuffer[loadOp][numStages - 1], loopIterIdx, /*axis*/ 0);
     loadsExtract[loadOp] = extractSlice;
   }
-
-  loopIterIdx = builder.create<arith::ConstantIntOp>(iv.getLoc(), 0, 32);
 }
 
 scf::ForOp LoopPipeliner::createNewForOp() {
