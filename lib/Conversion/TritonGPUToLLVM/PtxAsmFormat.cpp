@@ -124,7 +124,7 @@ std::string PTXInstrExecution::dump() const {
     if (!pred->repr)
       os << "@" << pred->dump() << " ";
     else
-      os << pred->repr(pred->idx);
+      os << pred->repr(pred->idx) << " ";
 
   std::string instrRepr = strJoin(instr->instrParts, ".");
 

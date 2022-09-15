@@ -59,7 +59,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 // -----
 
 // TODO: Pending on the support of isSplat constant
-#blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: masked_load_const_other
   func @masked_load_const_other(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>) {
@@ -86,16 +86,104 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
     %7 = tt.splat %arg1 : (!tt.ptr<f32>) -> tensor<256x!tt.ptr<f32>, #blocked0>
     %8 = tt.getelementptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>
 
-    // CHECK: ld.global.v4.b32
+    // Load 4 elements from vector0
+    // CHECK: "@${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
+    // CHECK: "@${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
+    // CHECK: "@${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
+    // CHECK: "@${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
+
+    // Load 4 elements from vector1
+    // CHECK: "@${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
+    // CHECK: "@${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
+    // CHECK: "@${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
+    // CHECK: "@${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
+
     %9 = tt.load %6 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
-    // CHECK: ld.global.v4.b32
     %10 = tt.load %8 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
     %11 = arith.addf %9, %10 : tensor<256xf32, #blocked0>
     %12 = tt.splat %arg2 : (!tt.ptr<f32>) -> tensor<256x!tt.ptr<f32>, #blocked0>
     %13 = tt.getelementptr %12, %4 : tensor<256x!tt.ptr<f32>, #blocked0>
 
     // Store 4 elements to global
-    // CHECK: st.global.b32.v4
+    // CHECK: @${{.*}} st.global.b32 [ ${{.*}} + 0 ], { ${{.*}} };
+    // CHECK: @${{.*}} st.global.b32 [ ${{.*}} + 0 ], { ${{.*}} };
+    // CHECK: @${{.*}} st.global.b32 [ ${{.*}} + 0 ], { ${{.*}} };
+    // CHECK: @${{.*}} st.global.b32 [ ${{.*}} + 0 ], { ${{.*}} };
+    tt.store %13, %11 : tensor<256xf32, #blocked0>
+    return
+  }
+}
+
+// -----
+
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
+module attributes {"triton_gpu.num-warps" = 2 : i32} {
+  // CHECK-LABEL: kernel__Pfp32_Pfp32_Pfp32_i32__3c256_vec4
+  func @kernel__Pfp32_Pfp32_Pfp32_i32__3c256_vec4(%arg0: !tt.ptr<f32> {tt.divisibility = 4 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 4 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 4 : i32}, %arg3: i32) {
+    %c256_i32 = arith.constant 256 : i32
+    %0 = tt.get_program_id {axis = 0 : i32} : i32
+    %1 = arith.muli %0, %c256_i32 : i32
+    %2 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked0>
+    %3 = tt.splat %1 : (i32) -> tensor<256xi32, #blocked0>
+    %4 = arith.addi %3, %2 : tensor<256xi32, #blocked0>
+    %5 = tt.splat %arg0 : (!tt.ptr<f32>) -> tensor<256x!tt.ptr<f32>, #blocked0>
+    %6 = tt.getelementptr %5, %4 : tensor<256x!tt.ptr<f32>, #blocked0>
+    %7 = tt.splat %arg1 : (!tt.ptr<f32>) -> tensor<256x!tt.ptr<f32>, #blocked0>
+    %8 = tt.getelementptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>
+
+    // Load 4 elements from A with single one vectorized load instruction
+    // CHECK: @${{.*}} ld.global.v4.b32 { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+
+    // Load 4 elements from B with single one vectorized load instruction
+    // CHECK: @${{.*}} ld.global.v4.b32 { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+
+    %9 = tt.load %6 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
+    %10 = tt.load %8 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
+    %11 = arith.addf %9, %10 : tensor<256xf32, #blocked0>
+    %12 = tt.splat %arg2 : (!tt.ptr<f32>) -> tensor<256x!tt.ptr<f32>, #blocked0>
+    %13 = tt.getelementptr %12, %4 : tensor<256x!tt.ptr<f32>, #blocked0>
+
+    // Store 4 elements to global with single one vectorized store instruction
+    // CHECK: @$5 st.global.b32.v4 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} };
+    tt.store %13, %11 : tensor<256xf32, #blocked0>
+    return
+  }
+}
+
+// -----
+
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"triton_gpu.num-warps" = 1 : i32} {
+  // CHECK-LABEL: kernel__Pfp32_Pfp32_Pfp32_i32__3c256_vec8
+  func @kernel__Pfp32_Pfp32_Pfp32_i32__3c256_vec8(%arg0: !tt.ptr<f32> {tt.divisibility = 4 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 4 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 4 : i32}, %arg3: i32) {
+    %c256_i32 = arith.constant 256 : i32
+    %0 = tt.get_program_id {axis = 0 : i32} : i32
+    %1 = arith.muli %0, %c256_i32 : i32
+    %2 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked0>
+    %3 = tt.splat %1 : (i32) -> tensor<256xi32, #blocked0>
+    %4 = arith.addi %3, %2 : tensor<256xi32, #blocked0>
+    %5 = tt.splat %arg0 : (!tt.ptr<f32>) -> tensor<256x!tt.ptr<f32>, #blocked0>
+    %6 = tt.getelementptr %5, %4 : tensor<256x!tt.ptr<f32>, #blocked0>
+    %7 = tt.splat %arg1 : (!tt.ptr<f32>) -> tensor<256x!tt.ptr<f32>, #blocked0>
+    %8 = tt.getelementptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>
+
+    // Load 8 elements from A with two vectorized load instruction
+    // CHECK: @${{.*}} ld.global.v4.b32 { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+    // CHECK: @${{.*}} ld.global.v4.b32 { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+
+    // Load 8 elements from B with two vectorized load instruction
+    // CHECK: @${{.*}} ld.global.v4.b32 { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+    // CHECK: @${{.*}} ld.global.v4.b32 { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+
+    %9 = tt.load %6 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
+    %10 = tt.load %8 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
+    %11 = arith.addf %9, %10 : tensor<256xf32, #blocked0>
+    %12 = tt.splat %arg2 : (!tt.ptr<f32>) -> tensor<256x!tt.ptr<f32>, #blocked0>
+    %13 = tt.getelementptr %12, %4 : tensor<256x!tt.ptr<f32>, #blocked0>
+
+    // Store 8 elements to global with two vectorized store instruction
+    // CHECK: @$5 st.global.b32.v4 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} };
+    // CHECK: @$5 st.global.b32.v4 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} };
     tt.store %13, %11 : tensor<256xf32, #blocked0>
     return
   }

@@ -375,7 +375,7 @@ public:
   //       be eliminated in the consequent MLIR/LLVM optimization
   SmallVector<SmallVector<Value>>
   emitIndicesForBlockedLayout(Location loc, ConversionPatternRewriter &b,
-                              const BlockedEncodingAttr &blocked_layout,
+                              const BlockedEncodingAttr &blockedLayout,
                               ArrayRef<int64_t> shape) const {
     auto llvmIndexTy = this->getTypeConverter()->getIndexType();
     auto cast = b.create<UnrealizedConversionCastOp>(
@@ -383,17 +383,18 @@ public:
         ValueRange{b.create<::mlir::gpu::ThreadIdOp>(
             loc, b.getIndexType(), ::mlir::gpu::Dimension::x)});
     Value threadId = cast.getResult(0);
-    Value warpSize = createIndexAttrConstant(b, loc, llvmIndexTy, 32);
+    Value warpSize = createIndexAttrConstant(
+        b, loc, llvmIndexTy, product(blockedLayout.getThreadsPerWarp()));
     Value laneId = b.create<LLVM::URemOp>(loc, threadId, warpSize);
     Value warpId = b.create<LLVM::UDivOp>(loc, threadId, warpSize);
-    auto sizePerThread = blocked_layout.getSizePerThread();
-    auto threadsPerWarp = blocked_layout.getThreadsPerWarp();
-    auto warpsPerCTA = blocked_layout.getWarpsPerCTA();
-    auto order = blocked_layout.getOrder();
+    auto sizePerThread = blockedLayout.getSizePerThread();
+    auto threadsPerWarp = blockedLayout.getThreadsPerWarp();
+    auto warpsPerCTA = blockedLayout.getWarpsPerCTA();
+    auto order = blockedLayout.getOrder();
     unsigned rank = shape.size();
     SmallVector<Value, 4> threadIds(rank);
 
-    // step 1, delinearize threadId to get the base index
+    // step 1, delinearise threadId to get the base index
     SmallVector<Value> multiDimWarpId =
         delinearize(b, loc, warpId, warpsPerCTA, order);
     SmallVector<Value> multiDimThreadId =
@@ -619,15 +620,15 @@ struct LoadStoreConversionBase : public ConvertTritonGPUOpToLLVMPatternBase {
     // should have the largest contiguous.
     auto order = layout.getOrder();
     unsigned align = getAlignment(ptr, layout);
-
     auto getTensorShape = [](Value val) -> ArrayRef<int64_t> {
       auto ty = val.getType().cast<RankedTensorType>();
       auto shape = ty.getShape();
       return shape;
     };
 
-    // unsigned contigPerThread = layout.getSizePerThread()[order[0]];
-    unsigned contigPerThread = getElemsPerThread(layout, getTensorShape(ptr));
+    unsigned elemsPerThread = getElemsPerThread(layout, getTensorShape(ptr));
+    unsigned contigPerThread =
+        std::min<unsigned>(layout.getSizePerThread()[order[0]], elemsPerThread);
 
     unsigned vec = std::min(align, contigPerThread);
 

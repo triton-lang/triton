@@ -31,6 +31,7 @@ translateTritonGPUToPTX(mlir::ModuleOp module, uint64_t device) {
   int version;
   std::string ptxasPath;
   getCuCCAndVersionFromDevice(device, &cc, &version, &ptxasPath);
+  llvm::outs() << "ptxaspath: " << ptxasPath << "\n";
 
   llvm::LLVMContext ctx;
   auto llModule = mlir::triton::translateTritonGPUToLLVMIR(&ctx, module);
