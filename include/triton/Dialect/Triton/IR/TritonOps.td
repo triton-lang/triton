@@ -29,22 +29,26 @@ def TT_IntToPtrOp : TT_Op<"int_to_ptr", [SameOperandsAndResultShape, NoSideEffec
                                          /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
     let summary = "Cast int64 to pointer";
 
-    let arguments = (ins I64Tensor:$from);
+    let arguments = (ins TT_I64Like:$from);
 
-    let results = (outs TT_PtrTensor:$result);
+    let results = (outs TT_PtrLike:$result);
+
+    let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
 }
 
 def TT_PtrToIntOp : TT_Op<"ptr_to_int", [SameOperandsAndResultShape, NoSideEffect,
-                                      /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
+                                         /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
     let summary = "Cast pointer to int64";
 
-    let arguments = (ins TT_PtrTensor:$from);
+    let arguments = (ins TT_PtrLike:$from);
 
-    let results = (outs I64Tensor:$result);
+    let results = (outs TT_I64Like:$result);
+
+    let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
 }
 
 def TT_FpToFp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape, NoSideEffect,
-                                /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
+                                   /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
     let summary = "Floating point casting for custom types";
 
     let description = [{
@@ -54,9 +58,11 @@ def TT_FpToFp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape, NoSideEffect,
         BF8 <-> F8, FP16, FP32
     }];
 
-    let arguments = (ins TT_FloatTensor:$from);
+    let arguments = (ins TT_FloatLike:$from);
 
-    let results = (outs TT_FloatTensor:$result);
+    let results = (outs TT_FloatLike:$result);
+
+    let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
 
     // TODO: We need a verifier here.
 }
@@ -127,16 +133,16 @@ def TT_StoreOp : TT_Op<"store",
     let hasCanonicalizer = 1;
 }
 
-def TT_GEPOp : TT_Op<"getelementptr",
+def TT_AddPtrOp : TT_Op<"addptr",
                      [NoSideEffect, SameOperandsAndResultShape,
                       TypesMatchWith<"result type matches ptr type",
                                      "result", "ptr", "$_self">,
                       TypesMatchWith<"result shape matches offset shape",
                                      "result", "offset",
                                      "getI32SameShape($_self)">]> {
-    let arguments = (ins TT_PtrTensor:$ptr, I32Tensor:$offset);
+    let arguments = (ins TT_PtrLike:$ptr, TT_I32Like:$offset);
 
-    let results = (outs TT_PtrTensor:$result);
+    let results = (outs TT_PtrLike:$result);
 
     let assemblyFormat = "$ptr `,` $offset attr-dict `:` type($result)";
 }
@@ -278,7 +284,7 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas"> {
         return $old
     }];
 
-    let arguments = (ins TT_Pointer:$ptr, TT_Type:$cmp, TT_Type:$val);
+    let arguments = (ins TT_Ptr:$ptr, TT_Type:$cmp, TT_Type:$val);
 
     let results = (outs TT_Type:$result);
 }
@@ -318,7 +324,7 @@ def TT_MakeRangeOp : TT_Op<"make_range", [NoSideEffect]> {
 
     let arguments = (ins I32Attr:$start, I32Attr:$end);
 
-    let results = (outs TT_IntegerTensor:$result);
+    let results = (outs TT_IntTensor:$result);
 
     let assemblyFormat = "attr-dict `:` type($result)";
 }

@@ -8,7 +8,7 @@ def TritonCombineOps : Pass</*cli-arg*/"triton-combine", /*Op*/"mlir::ModuleOp">
   let description = [{
     dot(a, b, 0) + c => dot(a, b, c)
 
-    gep(gep(ptr, idx0), idx1) => gep(ptr, AddI(idx0, idx1))
+    addptr(addptr(ptr, idx0), idx1) => addptr(ptr, AddI(idx0, idx1))
 
     select(cond, load(ptrs, broadcast(cond), ???), other) =>
         load(ptrs, broadcast(cond), other)

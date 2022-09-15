@@ -194,7 +194,7 @@ public:
     patterns.add<CombineDotAddFRevPattern>(context);
     // %}
     patterns.add<CombineSelectMaskedLoadPattern>(context);
-    patterns.add<CombineGEPPattern>(context);
+    patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastConstantPattern>(context);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())

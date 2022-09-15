@@ -82,9 +82,9 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
     %3 = tt.splat %1 : (i32) -> tensor<256xi32, #blocked0>
     %4 = arith.addi %3, %2 : tensor<256xi32, #blocked0>
     %5 = tt.splat %arg0 : (!tt.ptr<f32>) -> tensor<256x!tt.ptr<f32>, #blocked0>
-    %6 = tt.getelementptr %5, %4 : tensor<256x!tt.ptr<f32>, #blocked0>
+    %6 = tt.addptr %5, %4 : tensor<256x!tt.ptr<f32>, #blocked0>
     %7 = tt.splat %arg1 : (!tt.ptr<f32>) -> tensor<256x!tt.ptr<f32>, #blocked0>
-    %8 = tt.getelementptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>
+    %8 = tt.addptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>
 
     // CHECK: ld.global.v4.b32
     %9 = tt.load %6 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
@@ -92,7 +92,7 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
     %10 = tt.load %8 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
     %11 = arith.addf %9, %10 : tensor<256xf32, #blocked0>
     %12 = tt.splat %arg2 : (!tt.ptr<f32>) -> tensor<256x!tt.ptr<f32>, #blocked0>
-    %13 = tt.getelementptr %12, %4 : tensor<256x!tt.ptr<f32>, #blocked0>
+    %13 = tt.addptr %12, %4 : tensor<256x!tt.ptr<f32>, #blocked0>
 
     // Store 4 elements to global
     // CHECK: st.global.b32.v4
@@ -104,7 +104,7 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
 
 
 // TODO: Add a testcase to verify the optimization when ptr of the LoadOp
-//       is from a GEP with const idx
+//       is from an addptr with const idx
 
 // -----
 
@@ -187,11 +187,11 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
-  // CHECK-LABEL: basic_gep
-  func @basic_gep(%arg0 : tensor<256x!tt.ptr<f32>,#blocked0>, %arg1 : tensor<256xi32,#blocked0>) {
+  // CHECK-LABEL: basic_addptr
+  func @basic_addptr(%arg0 : tensor<256x!tt.ptr<f32>,#blocked0>, %arg1 : tensor<256xi32,#blocked0>) {
     // CHECK: llvm.getelementptr
     // CHECK: llvm.getelementptr
-    %0 = tt.getelementptr %arg0, %arg1 : tensor<256x!tt.ptr<f32>, #blocked0>
+    %0 = tt.addptr %arg0, %arg1 : tensor<256x!tt.ptr<f32>, #blocked0>
     return
   }
 }
