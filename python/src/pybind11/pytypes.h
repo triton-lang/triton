@@ -112,12 +112,12 @@ public:
   template <
       return_value_policy policy = return_value_policy::automatic_reference,
       typename... Args>
-  object operator()(Args &&... args) const;
+  object operator()(Args &&...args) const;
   template <
       return_value_policy policy = return_value_policy::automatic_reference,
       typename... Args>
   PYBIND11_DEPRECATED("call(...) was deprecated in favor of operator()(...)")
-  object call(Args &&... args) const;
+  object call(Args &&...args) const;
 
   /// Equivalent to ``obj is other`` in Python.
   bool is(object_api const &other) const {
@@ -1109,7 +1109,7 @@ public:
     return std::string(buffer, (size_t)length);
   }
 
-  template <typename... Args> str format(Args &&... args) const {
+  template <typename... Args> str format(Args &&...args) const {
     return attr("format")(std::forward<Args>(args)...);
   }
 
@@ -1282,11 +1282,9 @@ public:
   template <typename T,
             detail::enable_if_t<std::is_integral<T>::value, int> = 0>
   operator T() const {
-    return std::is_unsigned<T>::value
-               ? detail::as_unsigned<T>(m_ptr)
-               : sizeof(T) <= sizeof(long)
-                     ? (T)PyLong_AsLong(m_ptr)
-                     : (T)PYBIND11_LONG_AS_LONGLONG(m_ptr);
+    return std::is_unsigned<T>::value  ? detail::as_unsigned<T>(m_ptr)
+           : sizeof(T) <= sizeof(long) ? (T)PyLong_AsLong(m_ptr)
+                                       : (T)PYBIND11_LONG_AS_LONGLONG(m_ptr);
   }
 };
 
@@ -1438,7 +1436,7 @@ public:
             // defer the collector
             typename collector =
                 detail::deferred_t<detail::unpacking_collector<>, Args...>>
-  explicit dict(Args &&... args)
+  explicit dict(Args &&...args)
       : dict(collector(std::forward<Args>(args)...).kwargs()) {}
 
   size_t size() const { return (size_t)PyDict_Size(m_ptr); }

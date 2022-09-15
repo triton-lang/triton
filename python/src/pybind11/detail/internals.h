@@ -297,7 +297,7 @@ inline type_map<type_info *> &registered_local_types_cpp() {
 /// duration -- the internal strings are only cleared when the program exits or
 /// after interpreter shutdown (when embedding), and so are suitable for c-style
 /// strings needed by Python internals (such as PyTypeObject's tp_name).
-template <typename... Args> const char *c_str(Args &&... args) {
+template <typename... Args> const char *c_str(Args &&...args) {
   auto &strings = get_internals().static_strings;
   strings.emplace_front(std::forward<Args>(args)...);
   return strings.front().c_str();

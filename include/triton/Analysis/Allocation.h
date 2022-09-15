@@ -156,7 +156,7 @@ private:
 
 private:
   template <BufferT::BufferKind Kind, typename KeyType, typename... Args>
-  void addBuffer(KeyType &key, Args &&... args) {
+  void addBuffer(KeyType &key, Args &&...args) {
     auto buffer = BufferT(Kind, std::forward<Args>(args)...);
     bufferSet[buffer.id] = std::move(buffer);
     if constexpr (Kind == BufferT::BufferKind::Explicit) {
