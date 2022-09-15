@@ -10,12 +10,6 @@ include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td" // NoSideEffect
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 
-def TT_BoolTensor : TensorOf<[I1]>;
-
-def TT_BoolLike : AnyTypeOf<[I1, TT_BoolTensor]>;
-def TT_IntegerLike : AnyTypeOf<[TT_Int, TT_IntegerTensor]>;
-def TT_FloatLike : AnyTypeOf<[TT_Float, TT_FloatTensor]>;
-
 class TTG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonGPU_Dialect, mnemonic, traits>;
 
@@ -48,8 +42,8 @@ def TTG_CmpIOp : TTG_Op<"cmpi", [NoSideEffect]> {
   let description = [{}];
 
   let arguments = (ins Arith_CmpIPredicateAttr:$predicate,
-                       TT_IntegerLike:$lhs,
-                       TT_IntegerLike:$rhs);
+                       TT_IntLike:$lhs,
+                       TT_IntLike:$rhs);
 
   let results = (outs TT_BoolLike:$result);
 }
@@ -66,7 +60,7 @@ def TTG_CmpFOp : TTG_Op<"cmpf"> {
   let results = (outs TT_BoolLike:$result);
 }
 
-def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async", 
+def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
                                     [SameVariadicOperandSize,
                                      MemoryEffects<[MemRead, MemWrite]>,
                                      TypesMatchWith<"infer mask type from src type",
@@ -94,7 +88,7 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
       * other: optional tensor-rank number of other tensors which specify what
               values are inserted into the `$dst` tensor if the corresponding
               element of the `$mask` tensor is false.
-      
+
       In the future, we may decompose this operation into a sequence of:
 
       * `async` operation to specify a sequence of asynchronous operations
@@ -191,7 +185,7 @@ def TTG_AllocTensorOp : TTG_Op<"alloc_tensor", [NoSideEffect]> {
     Note: This op can be repalced to a `bufferization.alloc_tensor` in LLVM 16.
   }];
 
-  let assemblyFormat = [{attr-dict `:` type($result)}]; 
+  let assemblyFormat = [{attr-dict `:` type($result)}];
 
   let results = (outs TT_Tensor:$result);
 

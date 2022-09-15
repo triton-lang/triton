@@ -121,7 +121,7 @@ def add(input: tl.tensor,
     if other_scalar_ty.is_ptr() and not input_scalar_ty.is_ptr():
         input, other = other, input
     if input_scalar_ty.is_ptr():
-        return tl.tensor(builder.create_gep(input.handle, other.handle), input.type)
+        return tl.tensor(builder.create_addptr(input.handle, other.handle), input.type)
     # float + float
     elif input_scalar_ty.is_floating():
         return tl.tensor(builder.create_fadd(input.handle, other.handle), input.type)
@@ -138,7 +138,7 @@ def sub(input: tl.tensor,
     scalar_ty = input.type.scalar
     # ptr - offset
     if scalar_ty.is_ptr():
-        return tl.tensor(builder.create_gep(input.handle, minus(other, builder).handle),
+        return tl.tensor(builder.create_addptr(input.handle, minus(other, builder).handle),
                          input.type)
     # float - float
     if scalar_ty.is_floating():

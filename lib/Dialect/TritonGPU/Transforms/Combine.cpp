@@ -203,7 +203,7 @@ bool tryLegalizeOp(Operation *op, DenseSet<Value> toPreserve,
                                  targetType.getEncoding());
   };
   bool hasSameTypes = op->getDialect()->getNamespace() == "arith" ||
-                      isa<triton::SplatOp, triton::GEPOp>(op);
+                      isa<triton::SplatOp, triton::AddPtrOp>(op);
   if (hasSameTypes) {
     // replace argument types
     for (auto arg : llvm::enumerate(op->getOperands())) {
