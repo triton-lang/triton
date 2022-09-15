@@ -278,7 +278,7 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas"> {
         return $old
     }];
 
-    let arguments = (ins TT_Pointer:$ptr, TT_Type:$cmp, TT_Type:$val);
+    let arguments = (ins TT_Ptr:$ptr, TT_Type:$cmp, TT_Type:$val);
 
     let results = (outs TT_Type:$result);
 }
@@ -318,7 +318,7 @@ def TT_MakeRangeOp : TT_Op<"make_range", [NoSideEffect]> {
 
     let arguments = (ins I32Attr:$start, I32Attr:$end);
 
-    let results = (outs TT_IntegerTensor:$result);
+    let results = (outs TT_IntTensor:$result);
 
     let assemblyFormat = "attr-dict `:` type($result)";
 }

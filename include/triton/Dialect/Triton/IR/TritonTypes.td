@@ -12,18 +12,26 @@ class TritonTypeDef<string name, string _mnemonic>
     let mnemonic = _mnemonic;
 }
 
+// Floating-point Type
 def F8 : TritonTypeDef<"Float8", "f8">;
 def BF8 : TritonTypeDef<"BFloat8", "bf8">;
 
 def TT_Float : AnyTypeOf<[F16, BF16, F32, F64], "floating-point">;
 def TT_FloatTensor : TensorOf<[TT_Float]>;
+def TT_FloatLike : AnyTypeOf<[TT_Float, TT_FloatTensor]>;
 
-// IntegerType
+// Boolean Type
+// TT_Bool -> I1
+def TT_BoolTensor : TensorOf<[I1]>;
+def TT_BoolLike : AnyTypeOf<[I1, TT_BoolTensor]>;
+
+// Integer Type
 def TT_Int : AnyTypeOf<[I1, I8, I16, I32, I64], "integer">;
-def TT_IntegerTensor : TensorOf<[TT_Int]>;
+def TT_IntTensor : TensorOf<[TT_Int]>;
+def TT_IntLike : AnyTypeOf<[TT_Int, TT_IntTensor]>;
 
-// PointerType
-def TT_Pointer : TritonTypeDef<"Pointer", "ptr"> {
+// Pointer Type
+def TT_Ptr : TritonTypeDef<"Pointer", "ptr"> {
     let summary = "pointer type";
 
     let description = [{
@@ -43,12 +51,12 @@ def TT_Pointer : TritonTypeDef<"Pointer", "ptr"> {
 
     let skipDefaultBuilders = 1;
 }
-def TT_PtrTensor : TensorOf<[TT_Pointer]>;
+def TT_PtrTensor : TensorOf<[TT_Ptr]>;
+def TT_PtrLike : AnyTypeOf<[TT_Ptr, TT_PtrTensor]>;
 
-def TT_FpIntTensor : AnyTypeOf<[TT_FloatTensor, TT_IntegerTensor]>;
+def TT_FpIntTensor : AnyTypeOf<[TT_FloatTensor, TT_IntTensor]>;
 def TT_Tensor : AnyTypeOf<[TT_FpIntTensor, TT_PtrTensor]>;
 
-def TT_Type : AnyTypeOf<[TT_Float, TT_FloatTensor, TT_Int, TT_IntegerTensor, 
-                         TT_Pointer, TT_PtrTensor]>;
+def TT_Type : AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike]>;
 
 #endif
