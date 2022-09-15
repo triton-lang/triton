@@ -48,8 +48,15 @@ protected:
     initializer();
     if (cache == nullptr) {
       cache = dlsym(lib_h, name);
-      if (cache == 0)
+      if (cache == 0) {
+#ifdef __EXCEPTIONS
         throw std::runtime_error("dlsym unable to load function");
+#else
+        std::cerr << "Triton: dlsym unable to load function `" << name << "`"
+                  << std::endl;
+        std::abort();
+#endif
+      }
     }
     FunPtrT fptr;
     *reinterpret_cast<void **>(&fptr) = cache;
