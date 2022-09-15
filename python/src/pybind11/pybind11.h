@@ -74,7 +74,7 @@ public:
 
   /// Construct a cpp_function from a vanilla function pointer
   template <typename Return, typename... Args, typename... Extra>
-  cpp_function(Return (*f)(Args...), const Extra &... extra) {
+  cpp_function(Return (*f)(Args...), const Extra &...extra) {
     initialize(f, f, extra...);
   }
 
@@ -82,14 +82,14 @@ public:
   /// state)
   template <typename Func, typename... Extra,
             typename = detail::enable_if_t<detail::is_lambda<Func>::value>>
-  cpp_function(Func &&f, const Extra &... extra) {
+  cpp_function(Func &&f, const Extra &...extra) {
     initialize(std::forward<Func>(f),
                (detail::function_signature_t<Func> *)nullptr, extra...);
   }
 
   /// Construct a cpp_function from a class method (non-const)
   template <typename Return, typename Class, typename... Arg, typename... Extra>
-  cpp_function(Return (Class::*f)(Arg...), const Extra &... extra) {
+  cpp_function(Return (Class::*f)(Arg...), const Extra &...extra) {
     initialize(
         [f](Class *c, Arg... args) -> Return { return (c->*f)(args...); },
         (Return(*)(Class *, Arg...)) nullptr, extra...);
@@ -97,7 +97,7 @@ public:
 
   /// Construct a cpp_function from a class method (const)
   template <typename Return, typename Class, typename... Arg, typename... Extra>
-  cpp_function(Return (Class::*f)(Arg...) const, const Extra &... extra) {
+  cpp_function(Return (Class::*f)(Arg...) const, const Extra &...extra) {
     initialize(
         [f](const Class *c, Arg... args) -> Return { return (c->*f)(args...); },
         (Return(*)(const Class *, Arg...)) nullptr, extra...);
@@ -114,7 +114,7 @@ protected:
 
   /// Special internal constructor for functors, lambda functions, etc.
   template <typename Func, typename Return, typename... Args, typename... Extra>
-  void initialize(Func &&f, Return (*)(Args...), const Extra &... extra) {
+  void initialize(Func &&f, Return (*)(Args...), const Extra &...extra) {
     using namespace detail;
     struct capture {
       remove_reference_t<Func> f;
@@ -924,7 +924,7 @@ public:
       details on the ``Extra&& ... extra`` argument, see section :ref:`extras`.
   \endrst */
   template <typename Func, typename... Extra>
-  module &def(const char *name_, Func &&f, const Extra &... extra) {
+  module &def(const char *name_, Func &&f, const Extra &...extra) {
     cpp_function func(std::forward<Func>(f), name(name_), scope(*this),
                       sibling(getattr(*this, name_, none())), extra...);
     // NB: allow overwriting here because cpp_function sets up a chain with the
@@ -1104,8 +1104,8 @@ protected:
 
 /// Set the pointer to operator new if it exists. The cast is needed because it
 /// can be overloaded.
-template <typename T, typename = void_t<decltype(
-                          static_cast<void *(*)(size_t)>(T::operator new))>>
+template <typename T, typename = void_t<decltype(static_cast<void *(*)(size_t)>(
+                          T::operator new))>>
 void set_operator_new(type_record *r) {
   r->operator_new = &T::operator new;
 }
@@ -1204,7 +1204,7 @@ public:
   PYBIND11_OBJECT(class_, generic_type, PyType_Check)
 
   template <typename... Extra>
-  class_(handle scope, const char *name, const Extra &... extra) {
+  class_(handle scope, const char *name, const Extra &...extra) {
     using namespace detail;
 
     // MI can only be specified via class_ template options, not constructor
@@ -1263,7 +1263,7 @@ public:
   static void add_base(detail::type_record &) {}
 
   template <typename Func, typename... Extra>
-  class_ &def(const char *name_, Func &&f, const Extra &... extra) {
+  class_ &def(const char *name_, Func &&f, const Extra &...extra) {
     cpp_function cf(method_adaptor<type>(std::forward<Func>(f)), name(name_),
                     is_method(*this), sibling(getattr(*this, name_, none())),
                     extra...);
@@ -1272,7 +1272,7 @@ public:
   }
 
   template <typename Func, typename... Extra>
-  class_ &def_static(const char *name_, Func &&f, const Extra &... extra) {
+  class_ &def_static(const char *name_, Func &&f, const Extra &...extra) {
     static_assert(
         !std::is_member_function_pointer<Func>::value,
         "def_static(...) called with a non-static member function pointer");
@@ -1284,43 +1284,42 @@ public:
 
   template <detail::op_id id, detail::op_type ot, typename L, typename R,
             typename... Extra>
-  class_ &def(const detail::op_<id, ot, L, R> &op, const Extra &... extra) {
+  class_ &def(const detail::op_<id, ot, L, R> &op, const Extra &...extra) {
     op.execute(*this, extra...);
     return *this;
   }
 
   template <detail::op_id id, detail::op_type ot, typename L, typename R,
             typename... Extra>
-  class_ &def_cast(const detail::op_<id, ot, L, R> &op,
-                   const Extra &... extra) {
+  class_ &def_cast(const detail::op_<id, ot, L, R> &op, const Extra &...extra) {
     op.execute_cast(*this, extra...);
     return *this;
   }
 
   template <typename... Args, typename... Extra>
   class_ &def(const detail::initimpl::constructor<Args...> &init,
-              const Extra &... extra) {
+              const Extra &...extra) {
     init.execute(*this, extra...);
     return *this;
   }
 
   template <typename... Args, typename... Extra>
   class_ &def(const detail::initimpl::alias_constructor<Args...> &init,
-              const Extra &... extra) {
+              const Extra &...extra) {
     init.execute(*this, extra...);
     return *this;
   }
 
   template <typename... Args, typename... Extra>
   class_ &def(detail::initimpl::factory<Args...> &&init,
-              const Extra &... extra) {
+              const Extra &...extra) {
     std::move(init).execute(*this, extra...);
     return *this;
   }
 
   template <typename... Args, typename... Extra>
   class_ &def(detail::initimpl::pickle_factory<Args...> &&pf,
-              const Extra &... extra) {
+              const Extra &...extra) {
     std::move(pf).execute(*this, extra...);
     return *this;
   }
@@ -1352,7 +1351,7 @@ public:
   }
 
   template <typename C, typename D, typename... Extra>
-  class_ &def_readwrite(const char *name, D C::*pm, const Extra &... extra) {
+  class_ &def_readwrite(const char *name, D C::*pm, const Extra &...extra) {
     static_assert(
         std::is_same<C, type>::value || std::is_base_of<C, type>::value,
         "def_readwrite() requires a class member (or base class member)");
@@ -1367,7 +1366,7 @@ public:
 
   template <typename C, typename D, typename... Extra>
   class_ &def_readonly(const char *name, const D C::*pm,
-                       const Extra &... extra) {
+                       const Extra &...extra) {
     static_assert(
         std::is_same<C, type>::value || std::is_base_of<C, type>::value,
         "def_readonly() requires a class member (or base class member)");
@@ -1379,8 +1378,7 @@ public:
   }
 
   template <typename D, typename... Extra>
-  class_ &def_readwrite_static(const char *name, D *pm,
-                               const Extra &... extra) {
+  class_ &def_readwrite_static(const char *name, D *pm, const Extra &...extra) {
     cpp_function fget([pm](object) -> const D & { return *pm; }, scope(*this)),
         fset([pm](object, const D &value) { *pm = value; }, scope(*this));
     def_property_static(name, fget, fset, return_value_policy::reference,
@@ -1390,7 +1388,7 @@ public:
 
   template <typename D, typename... Extra>
   class_ &def_readonly_static(const char *name, const D *pm,
-                              const Extra &... extra) {
+                              const Extra &...extra) {
     cpp_function fget([pm](object) -> const D & { return *pm; }, scope(*this));
     def_property_readonly_static(name, fget, return_value_policy::reference,
                                  extra...);
@@ -1400,7 +1398,7 @@ public:
   /// Uses return_value_policy::reference_internal by default
   template <typename Getter, typename... Extra>
   class_ &def_property_readonly(const char *name, const Getter &fget,
-                                const Extra &... extra) {
+                                const Extra &...extra) {
     return def_property_readonly(name, cpp_function(method_adaptor<type>(fget)),
                                  return_value_policy::reference_internal,
                                  extra...);
@@ -1409,14 +1407,14 @@ public:
   /// Uses cpp_function's return_value_policy by default
   template <typename... Extra>
   class_ &def_property_readonly(const char *name, const cpp_function &fget,
-                                const Extra &... extra) {
+                                const Extra &...extra) {
     return def_property(name, fget, nullptr, extra...);
   }
 
   /// Uses return_value_policy::reference by default
   template <typename Getter, typename... Extra>
   class_ &def_property_readonly_static(const char *name, const Getter &fget,
-                                       const Extra &... extra) {
+                                       const Extra &...extra) {
     return def_property_readonly_static(
         name, cpp_function(fget), return_value_policy::reference, extra...);
   }
@@ -1425,20 +1423,20 @@ public:
   template <typename... Extra>
   class_ &def_property_readonly_static(const char *name,
                                        const cpp_function &fget,
-                                       const Extra &... extra) {
+                                       const Extra &...extra) {
     return def_property_static(name, fget, nullptr, extra...);
   }
 
   /// Uses return_value_policy::reference_internal by default
   template <typename Getter, typename Setter, typename... Extra>
   class_ &def_property(const char *name, const Getter &fget, const Setter &fset,
-                       const Extra &... extra) {
+                       const Extra &...extra) {
     return def_property(name, fget, cpp_function(method_adaptor<type>(fset)),
                         extra...);
   }
   template <typename Getter, typename... Extra>
   class_ &def_property(const char *name, const Getter &fget,
-                       const cpp_function &fset, const Extra &... extra) {
+                       const cpp_function &fset, const Extra &...extra) {
     return def_property(name, cpp_function(method_adaptor<type>(fget)), fset,
                         return_value_policy::reference_internal, extra...);
   }
@@ -1446,15 +1444,14 @@ public:
   /// Uses cpp_function's return_value_policy by default
   template <typename... Extra>
   class_ &def_property(const char *name, const cpp_function &fget,
-                       const cpp_function &fset, const Extra &... extra) {
+                       const cpp_function &fset, const Extra &...extra) {
     return def_property_static(name, fget, fset, is_method(*this), extra...);
   }
 
   /// Uses return_value_policy::reference by default
   template <typename Getter, typename... Extra>
   class_ &def_property_static(const char *name, const Getter &fget,
-                              const cpp_function &fset,
-                              const Extra &... extra) {
+                              const cpp_function &fset, const Extra &...extra) {
     return def_property_static(name, cpp_function(fget), fset,
                                return_value_policy::reference, extra...);
   }
@@ -1462,8 +1459,7 @@ public:
   /// Uses cpp_function's return_value_policy by default
   template <typename... Extra>
   class_ &def_property_static(const char *name, const cpp_function &fget,
-                              const cpp_function &fset,
-                              const Extra &... extra) {
+                              const cpp_function &fset, const Extra &...extra) {
     static_assert(
         0 == detail::constexpr_sum(std::is_base_of<arg, Extra>::value...),
         "Argument annotations are not allowed for properties");
@@ -1782,7 +1778,7 @@ public:
   using Scalar = typename std::underlying_type<Type>::type;
 
   template <typename... Extra>
-  enum_(const handle &scope, const char *name, const Extra &... extra)
+  enum_(const handle &scope, const char *name, const Extra &...extra)
       : class_<Type>(scope, name, extra...), m_base(*this, scope) {
     constexpr bool is_arithmetic =
         detail::any_of<std::is_same<arithmetic, Extra>...>::value;
@@ -1898,7 +1894,7 @@ template <return_value_policy Policy = return_value_policy::reference_internal,
           typename Iterator, typename Sentinel,
           typename ValueType = decltype(*std::declval<Iterator>()),
           typename... Extra>
-iterator make_iterator(Iterator first, Sentinel last, Extra &&... extra) {
+iterator make_iterator(Iterator first, Sentinel last, Extra &&...extra) {
   typedef detail::iterator_state<Iterator, Sentinel, false, Policy> state;
 
   if (!detail::get_type_info(typeid(state), false)) {
@@ -1929,7 +1925,7 @@ template <return_value_policy Policy = return_value_policy::reference_internal,
           typename Iterator, typename Sentinel,
           typename KeyType = decltype((*std::declval<Iterator>()).first),
           typename... Extra>
-iterator make_key_iterator(Iterator first, Sentinel last, Extra &&... extra) {
+iterator make_key_iterator(Iterator first, Sentinel last, Extra &&...extra) {
   typedef detail::iterator_state<Iterator, Sentinel, true, Policy> state;
 
   if (!detail::get_type_info(typeid(state), false)) {
@@ -1958,7 +1954,7 @@ iterator make_key_iterator(Iterator first, Sentinel last, Extra &&... extra) {
 /// supporting `std::begin()`/`std::end()`
 template <return_value_policy Policy = return_value_policy::reference_internal,
           typename Type, typename... Extra>
-iterator make_iterator(Type &value, Extra &&... extra) {
+iterator make_iterator(Type &value, Extra &&...extra) {
   return make_iterator<Policy>(std::begin(value), std::end(value), extra...);
 }
 
@@ -1966,7 +1962,7 @@ iterator make_iterator(Type &value, Extra &&... extra) {
 /// supporting `std::begin()`/`std::end()`
 template <return_value_policy Policy = return_value_policy::reference_internal,
           typename Type, typename... Extra>
-iterator make_key_iterator(Type &value, Extra &&... extra) {
+iterator make_key_iterator(Type &value, Extra &&...extra) {
   return make_key_iterator<Policy>(std::begin(value), std::end(value),
                                    extra...);
 }
@@ -2106,7 +2102,7 @@ NAMESPACE_END(detail)
 
 template <return_value_policy policy = return_value_policy::automatic_reference,
           typename... Args>
-void print(Args &&... args) {
+void print(Args &&...args) {
   auto c = detail::collect_arguments<policy>(std::forward<Args>(args)...);
   detail::print(c.args(), c.kwargs());
 }

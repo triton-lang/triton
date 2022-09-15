@@ -432,7 +432,7 @@ NAMESPACE_END(detail)
 template <typename Vector, typename holder_type = std::unique_ptr<Vector>,
           typename... Args>
 class_<Vector, holder_type> bind_vector(handle scope, std::string const &name,
-                                        Args &&... args) {
+                                        Args &&...args) {
   using Class_ = class_<Vector, holder_type>;
 
   // If the value_type is unregistered (e.g. a converting type) or is itself
@@ -596,7 +596,7 @@ NAMESPACE_END(detail)
 template <typename Map, typename holder_type = std::unique_ptr<Map>,
           typename... Args>
 class_<Map, holder_type> bind_map(handle scope, const std::string &name,
-                                  Args &&... args) {
+                                  Args &&...args) {
   using KeyType = typename Map::key_type;
   using MappedType = typename Map::mapped_type;
   using Class_ = class_<Map, holder_type>;

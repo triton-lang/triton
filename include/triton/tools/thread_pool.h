@@ -35,7 +35,7 @@ public:
   }
 
   template <class F, class... Args>
-  auto enqueue(F &&f, Args &&... args)
+  auto enqueue(F &&f, Args &&...args)
       -> std::future<typename std::result_of<F(Args...)>::type> {
     using return_type = typename std::result_of<F(Args...)>::type;
 

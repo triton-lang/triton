@@ -104,7 +104,7 @@ constexpr descr<N, Ts...> concat(const descr<N, Ts...> &descr) {
 }
 
 template <size_t N, typename... Ts, typename... Args>
-constexpr auto concat(const descr<N, Ts...> &d, const Args &... args)
+constexpr auto concat(const descr<N, Ts...> &d, const Args &...args)
     -> decltype(std::declval<descr<N + 2, Ts...>>() + concat(args...)) {
   return d + _(", ") + concat(args...);
 }

@@ -66,13 +66,13 @@ template <typename /*Class*/> constexpr bool is_alias(void *) { return false; }
 template <
     typename Class, typename... Args,
     detail::enable_if_t<std::is_constructible<Class, Args...>::value, int> = 0>
-inline Class *construct_or_initialize(Args &&... args) {
+inline Class *construct_or_initialize(Args &&...args) {
   return new Class(std::forward<Args>(args)...);
 }
 template <
     typename Class, typename... Args,
     detail::enable_if_t<!std::is_constructible<Class, Args...>::value, int> = 0>
-inline Class *construct_or_initialize(Args &&... args) {
+inline Class *construct_or_initialize(Args &&...args) {
   return new Class{std::forward<Args>(args)...};
 }
 
@@ -200,7 +200,7 @@ void construct(value_and_holder &v_h, Alias<Class> &&result, bool) {
 template <typename... Args> struct constructor {
   template <typename Class, typename... Extra,
             enable_if_t<!Class::has_alias, int> = 0>
-  static void execute(Class &cl, const Extra &... extra) {
+  static void execute(Class &cl, const Extra &...extra) {
     cl.def(
         "__init__",
         [](value_and_holder &v_h, Args... args) {
@@ -214,7 +214,7 @@ template <typename... Args> struct constructor {
             enable_if_t<Class::has_alias &&
                             std::is_constructible<Cpp<Class>, Args...>::value,
                         int> = 0>
-  static void execute(Class &cl, const Extra &... extra) {
+  static void execute(Class &cl, const Extra &...extra) {
     cl.def(
         "__init__",
         [](value_and_holder &v_h, Args... args) {
@@ -232,7 +232,7 @@ template <typename... Args> struct constructor {
             enable_if_t<Class::has_alias &&
                             !std::is_constructible<Cpp<Class>, Args...>::value,
                         int> = 0>
-  static void execute(Class &cl, const Extra &... extra) {
+  static void execute(Class &cl, const Extra &...extra) {
     cl.def(
         "__init__",
         [](value_and_holder &v_h, Args... args) {
@@ -249,7 +249,7 @@ template <typename... Args> struct alias_constructor {
             enable_if_t<Class::has_alias &&
                             std::is_constructible<Alias<Class>, Args...>::value,
                         int> = 0>
-  static void execute(Class &cl, const Extra &... extra) {
+  static void execute(Class &cl, const Extra &...extra) {
     cl.def(
         "__init__",
         [](value_and_holder &v_h, Args... args) {
@@ -280,7 +280,7 @@ struct factory<Func, void_type (*)(), Return(Args...)> {
   // either already be an alias instance, or the alias needs to be constructible
   // from a `Class &&` argument.
   template <typename Class, typename... Extra>
-  void execute(Class &cl, const Extra &... extra) && {
+  void execute(Class &cl, const Extra &...extra) && {
 #if defined(PYBIND11_CPP14)
     cl.def(
         "__init__",
@@ -323,7 +323,7 @@ struct factory<CFunc, AFunc, CReturn(CArgs...), AReturn(AArgs...)> {
   // the direct class (i.e. not inherited), the alias factory when `self` is a
   // Python-side subtype.
   template <typename Class, typename... Extra>
-  void execute(Class &cl, const Extra &... extra) && {
+  void execute(Class &cl, const Extra &...extra) && {
     static_assert(Class::has_alias,
                   "The two-argument version of `py::init()` can "
                   "only be used if the class has an alias");
@@ -389,7 +389,7 @@ struct pickle_factory<Get, Set, RetState(Self), NewInstance(ArgState)> {
       : get(std::forward<Get>(get)), set(std::forward<Set>(set)) {}
 
   template <typename Class, typename... Extra>
-  void execute(Class &cl, const Extra &... extra) && {
+  void execute(Class &cl, const Extra &...extra) && {
     cl.def("__getstate__", std::move(get));
 
 #if defined(PYBIND11_CPP14)
