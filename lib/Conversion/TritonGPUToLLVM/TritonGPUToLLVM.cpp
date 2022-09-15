@@ -1382,23 +1382,12 @@ public:
   }
 
   SmallVector<Value> computTF32MatOffs(Value warpOff, Value lane) {
-    Value cOffInMat = udiv(lane, constI32(4));
-    Value sOffInMat = urem(lane, constI32(4));
-
-    Value phase = urem(udiv(sOffInMat, constI32(perPhase)), constI32(maxPhase));
-    SmallVector<Value, 2> offs(numPtr);
-    for (int mat = 0; mat < 4; ++mat) {
-      int kMatArrInt = kOrder == 1 ? mat / 2 : mat % 2;
-      int nkMatArrInt = kOrder == 1 ? mat % 2 : mat / 2;
-      if (kMatArrInt > 0)
-        continue;
-      // TODO ...
-    }
+    assert(false && "Not implemented");
   }
 
   std::tuple<Value, Value, Value, Value>
-  loadX4(int mat0, int mat1, int inc, ArrayRef<Value> offs,
-         ArrayRef<Value> ptrs, Type ldmatrixRetTy, Type shemPtrTy) {
+  loadX4(int mat0, int mat1, ArrayRef<Value> offs, ArrayRef<Value> ptrs,
+         Type ldmatrixRetTy, Type shemPtrTy) const {
     assert(mat0 % 2 == 0 && mat1 % 2 == 0 &&
            "smem matrix load must be aligned");
     int matIdx[2] = {mat0, mat1};
@@ -1612,6 +1601,41 @@ struct DotOpConversionHelper {
     return Type{};
   }
 
+  // The type of a matrix that loaded by either a ldmatrix or composed lds.
+  Type getMatType() const {
+    Type fp32Ty = type::f32Ty(ctx);
+    Type fp16x2Ty = VectorType::get({2}, type::f16Ty(ctx));
+    Type bf16x2Ty = VectorType::get({2}, type::bf16Ty(ctx));
+    // floating point types
+    Type fp16x2Pack4Ty =
+        LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp16x2Ty));
+    Type bf16x2Pack4Ty =
+        LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, bf16x2Ty));
+    Type fp32Pack4Ty =
+        LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp32Ty));
+    // integer types
+    Type i8x4Ty = VectorType::get({4}, type::i8Ty(ctx));
+    Type i8x4Pack4Ty =
+        LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i8x4Ty));
+    Type i32Pack4Ty = LLVM::LLVMStructType::getLiteral(
+        ctx, SmallVector<Type>(4, type::i32Ty(ctx)));
+
+    switch (mmaType) {
+    case TensorCoreType::FP32_FP16_FP16_FP32:
+      return fp16x2Pack4Ty;
+    case TensorCoreType::FP32_BF16_BF16_FP32:
+      return bf16x2Pack4Ty;
+    case TensorCoreType::FP32_TF32_TF32_FP32:
+      return fp32Pack4Ty;
+    case TensorCoreType::INT32_INT8_INT8_INT32:
+      return i8x4Pack4Ty;
+    default:
+      llvm::report_fatal_error("Unsupported mma type found");
+    }
+
+    return Type{};
+  }
+
   ArrayRef<int> getMmaInstrShape() const {
     assert(mmaType != TensorCoreType::NOT_APPLICABLE &&
            "Unknown mma type found.");
@@ -1785,11 +1809,13 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
   std::map<std::pair<unsigned, unsigned>, Value> ha;
   std::map<std::pair<unsigned, unsigned>, Value> hb;
 
-  auto registerLds2 = [&](decltype(ha) &vals, int mn, int k, int inc, Value val,
-                          bool isPrefetch) {
-    assert((!isPrefetch) && "prefetch is not supported yet");
+  // the original register_lds2, but discard the prefetch logic.
+  auto ld2 = [&](decltype(ha) &vals, int mn, int k, Value val) {
     vals[{mn, k}] = val;
   };
+
+  // Args: (int m, int k), ignore prefetch here
+  std::function<void(int, int)> loadA;
 
   if (auto aSharedLayout =
           aTensorTy.getEncoding().dyn_cast<SharedEncodingAttr>()) {
@@ -1807,21 +1833,33 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
     SmallVector<Value> ptrs(numPtr);
 
     Type shemPtrTy = helper.getShemPtrTy();
+    auto shemBase = getShemAddr(A);
     for (int i = 0; i < numPtr; i++) {
-      auto shemBase = getShemAddr(A);
       ptrs[i] = bit_cast(
           shemPtrTy, gep(shemBase.getType(), shemBase, ValueRange({offs[i]})));
     }
+
+    loadA = [&, aLoader, ptrs, offs](int m, int k) {
+      auto [ha0, ha1, ha2, ha3] = aLoader.loadX4(
+          m, k, offs, ptrs, helper.getMatType(), helper.getShemPtrTy());
+      ld2(ha, m, k, ha0);
+      ld2(ha, m + 1, k, ha1);
+      ld2(ha, m, k + 1, ha2);
+      ld2(ha, m + 1, k + 1, ha3);
+    };
+  } else {
+    assert(false && "Not implemented yet.");
   }
+
+  // Load B
+  // TODO unify load A and load B.
 
   auto callMma = [&](unsigned m, unsigned n, unsigned k) {
     PTXBuilder builder;
 
-    auto res = builder.newListOperand();
-    res->listAppend(builder.newOperand("=r"));
-    res->listAppend(builder.newOperand("=r"));
-    res->listAppend(builder.newOperand("=r"));
-    res->listAppend(builder.newOperand("=r"));
+    auto retArgs = builder.newListOperand();
+    for (int i = 0; i < 4; ++i)
+      retArgs->listAppend(builder.newOperand("=r"));
 
     auto instr = builder.create(helper.getMmaInstr().str());
   };
