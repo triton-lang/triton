@@ -1245,13 +1245,13 @@ void init_triton_ir(py::module &&m) {
              return mlir::Value(
                  self.create<mlir::arith::ShRSIOp>(loc, lhs, rhs));
            })
-      // GEP
-      .def("create_gep",
+      // AddPtr (similar to GEP)
+      .def("create_addptr",
            [](mlir::OpBuilder &self, mlir::Value &ptr,
               mlir::Value &offset) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             return self.create<mlir::triton::GEPOp>(loc, ptr.getType(), ptr,
-                                                     offset);
+             return self.create<mlir::triton::AddPtrOp>(loc, ptr.getType(), ptr,
+                                                        offset);
            })
       // Comparison (int)
       .def("create_icmpSLE",

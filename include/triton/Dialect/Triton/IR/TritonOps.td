@@ -127,7 +127,7 @@ def TT_StoreOp : TT_Op<"store",
     let hasCanonicalizer = 1;
 }
 
-def TT_GEPOp : TT_Op<"getelementptr",
+def TT_AddPtrOp : TT_Op<"addptr",
                      [NoSideEffect, SameOperandsAndResultShape,
                       TypesMatchWith<"result type matches ptr type",
                                      "result", "ptr", "$_self">,
