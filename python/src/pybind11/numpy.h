@@ -1299,10 +1299,10 @@ private:
 #define PYBIND11_FIELD_DESCRIPTOR_EX(T, Field, Name)                           \
   ::pybind11::detail::field_descriptor {                                       \
     Name, offsetof(T, Field), sizeof(decltype(std::declval<T>().Field)),       \
-        ::pybind11::format_descriptor<decltype(                                \
-            std::declval<T>().Field)>::format(),                               \
-        ::pybind11::detail::npy_format_descriptor<decltype(                    \
-            std::declval<T>().Field)>::dtype()                                 \
+        ::pybind11::format_descriptor<                                         \
+            decltype(std::declval<T>().Field)>::format(),                      \
+        ::pybind11::detail::npy_format_descriptor<                             \
+            decltype(std::declval<T>().Field)>::dtype()                        \
   }
 
 // Extract name, offset and format descriptor for a struct field
@@ -1576,10 +1576,9 @@ broadcast_trivial broadcast(const std::array<buffer_info, N> &buffers,
     }
   }
 
-  return trivial_broadcast_c
-             ? broadcast_trivial::c_trivial
-             : trivial_broadcast_f ? broadcast_trivial::f_trivial
-                                   : broadcast_trivial::non_trivial;
+  return trivial_broadcast_c   ? broadcast_trivial::c_trivial
+         : trivial_broadcast_f ? broadcast_trivial::f_trivial
+                               : broadcast_trivial::non_trivial;
 }
 
 template <typename T> struct vectorize_arg {
@@ -1643,7 +1642,7 @@ private:
   //       we can store vectorized buffer_infos in an array (argument VIndex has
   //       its buffer at index BIndex in the array).
   template <size_t... Index, size_t... VIndex, size_t... BIndex>
-  object run(typename vectorize_arg<Args>::type &... args,
+  object run(typename vectorize_arg<Args>::type &...args,
              index_sequence<Index...> i_seq, index_sequence<VIndex...> vi_seq,
              index_sequence<BIndex...> bi_seq) {
 
