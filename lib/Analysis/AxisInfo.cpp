@@ -126,7 +126,7 @@ ChangeResult AxisInfoAnalysis::visitOperation(
     }
   }
   // Addition
-  if (llvm::isa<arith::AddIOp, triton::GEPOp>(op)) {
+  if (llvm::isa<arith::AddIOp, triton::AddPtrOp>(op)) {
     auto newContiguity = [&](AxisInfo lhs, AxisInfo rhs, int d) {
       return std::max(gcd(lhs.getContiguity(d), rhs.getConstancy(d)),
                       gcd(lhs.getConstancy(d), rhs.getContiguity(d)));
