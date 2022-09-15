@@ -66,7 +66,7 @@ llvm::SmallVector<Value, 4> PTXBuilder::getAllMLIRArgs() const {
   return res;
 }
 
-SmallVector<PTXBuilder::Operand *> PTXBuilder::getAllArgs() const {
+SmallVector<PTXBuilder::Operand *, 4> PTXBuilder::getAllArgs() const {
   llvm::SmallVector<Operand *, 4> res;
   for (auto &x : argArchive)
     if (!x->isList())
