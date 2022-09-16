@@ -569,7 +569,7 @@ std::tuple<Value*, Value*, Value*, Value*> generator::fp8x4_to_fp16x4(Value *in0
   "prmt.b32 a1, 0, $2, 0x7060;            \n\t" // If input is 0xdcba set a1 to 0xd0c0
   "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n\t" // b0 = a0 & 0x7fff7fff (strip sign)
   "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n\t" // b1 = a1 & 0x7fff7fff (strip sign)
-  "shr.b32  b0, b0, 1;                    \n\t" // b0 >>= 1 (shift into fp16 poistion)
+  "shr.b32  b0, b0, 1;                    \n\t" // b0 >>= 1 (shift into fp16 position)
   "shr.b32  b1, b1, 1;                    \n\t" // b1 >>= 1 (shift into fp16 position)
   "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n\t" // out0 = b0 | (0x80008000 & a0) (restore sign)
   "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n\t" // out1 = b1 | (0x80008000 & a1) (restore sign)

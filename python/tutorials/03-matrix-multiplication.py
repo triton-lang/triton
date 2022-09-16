@@ -18,7 +18,7 @@ You will specifically learn about:
 # They are notoriously hard to optimize, hence their implementation is generally done by
 # hardware vendors themselves as part of so-called "kernel libraries" (e.g., cuBLAS).
 # Unfortunately, these libraries are often proprietary and cannot be easily customized
-# to accomodate the needs of modern deep learning workloads (e.g., fused activation functions).
+# to accommodate the needs of modern deep learning workloads (e.g., fused activation functions).
 # In this tutorial, you will learn how to implement efficient matrix multiplications by
 # yourself with Triton, in a way that is easy to customize and extend.
 #

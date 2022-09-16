@@ -92,7 +92,7 @@ public:
 //-------------------------
 void SlotTracker::process_module() {
   // Nothing to do at the moment.
-  // Create slots for global variable & unamed functions & ...
+  // Create slots for global variable & unnamed functions & ...
   module_processed = true;
 }
 
