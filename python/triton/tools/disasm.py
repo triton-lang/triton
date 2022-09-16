@@ -104,7 +104,7 @@ def extract(file_path, fun):
             # peek the next line
             line = sass_lines[line_idx].decode()
         # Print sass
-        # label naming convension: LBB#i
+        # label naming convention: LBB#i
         for idx, (ctrl, asm) in enumerate(asm_buffer):
             # Print label if this is BRA target
             offset = idx * 16

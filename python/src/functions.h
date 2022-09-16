@@ -253,7 +253,7 @@ ir::value *dot(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
 std::string where_docstr = R"pbdoc(
     Returns a block of elements from either `x` or `y`, depending on `condition`.
     Note that `x` and `y` are always evaluated regardless of the value of `condition`.
-    If you want to avoid unintented memory operations, use the `mask` arguments in `triton.load` and `triton.store` instead.
+    If you want to avoid unintended memory operations, use the `mask` arguments in `triton.load` and `triton.store` instead.
 
     :param condition: When True (nonzero), yield x, otherwise yield y.
     :type condition: Block of triton.bool

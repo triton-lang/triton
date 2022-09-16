@@ -379,7 +379,7 @@ def cuda_memcheck(**target_kwargs):
                 test_id = kwargs['request'].node.callspec.id
                 cmd = f"{path}::{test_fn.__name__}[{test_id}]"
                 out = subprocess.run(["cuda-memcheck", "pytest", "-vs", cmd], capture_output=True, env=env)
-                assert out.returncode == 0, "cuda-memcheck returned an error: bounds checkng failed"
+                assert out.returncode == 0, "cuda-memcheck returned an error: bounds checking failed"
                 assert "ERROR SUMMARY: 0 errors" in str(out.stdout)
             else:
                 test_fn(*args, **kwargs)
