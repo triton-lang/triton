@@ -25,7 +25,7 @@
 #  LLVM_VERSION_STRING - Full LLVM version string (e.g. 6.0.0svn).
 #  LLVM_VERSION_BASE_STRING - Base LLVM version string without git/svn suffix (e.g. 6.0.0).
 #
-# Note: The variable names were chosen in conformance with the offical CMake
+# Note: The variable names were chosen in conformance with the official CMake
 # guidelines, see ${CMAKE_ROOT}/Modules/readme.txt.
 
 # Try suffixed versions to pick up the newest LLVM install available on Debian

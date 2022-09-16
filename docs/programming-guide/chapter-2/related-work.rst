@@ -14,7 +14,7 @@ Traditional compilers typically rely on intermediate representations, such as LL
 Program Representation
 +++++++++++++++++++++++
 
-Polyhedral compilation is a vast area of research. In this section we only outline the most basic aspects of this topic, but readers interested in the solid mathematical foundations underneath may refer to the ample litterature on linear and integer programming.
+Polyhedral compilation is a vast area of research. In this section we only outline the most basic aspects of this topic, but readers interested in the solid mathematical foundations underneath may refer to the ample literature on linear and integer programming.
 
 .. table::
     :widths: 50 50

@@ -25,7 +25,7 @@ class LoopPipeliner {
   /// cache forOp we are working on
   scf::ForOp forOp;
 
-  /// cahce YieldOp for this forOp
+  /// cache YieldOp for this forOp
   scf::YieldOp yieldOp;
 
   /// loads to be pipelined
