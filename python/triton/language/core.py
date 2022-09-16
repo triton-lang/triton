@@ -192,7 +192,7 @@ class dtype:
             return builder.get_float_ty()
         elif self.name == 'fp64':
             return builder.get_double_ty()
-        raise ValueError(f'fail to covert {self} to ir type')
+        raise ValueError(f'fail to convert {self} to ir type')
 
     def __str__(self):
         return self.name
@@ -925,7 +925,7 @@ def where(condition, x, y, _builder=None):
 
     Note that :code:`x` and :code:`y` are always evaluated regardless of the value of :code:`condition`.
 
-    If you want to avoid unintented memory operations, use the :code:`mask` arguments in `triton.load` and `triton.store` instead.
+    If you want to avoid unintended memory operations, use the :code:`mask` arguments in `triton.load` and `triton.store` instead.
 
     The shape of :code:`x` and :code:`y` are both broadcast to the shape of :code:`condition`.
     :code:`x` and :code:`y` must have the data type.
