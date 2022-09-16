@@ -239,8 +239,9 @@ class block_type(dtype):
 
         # Note that block_type's shape is a list of int
         # while tensor's shape is a list of constexpr.
-        assert shape
-        if isinstance(shape[0], constexpr):
+
+        # shape can be empty ([]) when an input is a 0D tensor.
+        if shape and isinstance(shape[0], constexpr):
             shape = [s.value for s in shape]
 
         self.shape = shape
