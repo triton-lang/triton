@@ -328,7 +328,7 @@ def dsd_lut(layout, block, step, trans, device):
     # create increments
     incs = torch.stack((B_incs, A_incs), dim=1).view(-1).contiguous()
     # pad by a factor 2*MAX_NUM_STAGES
-    # to accomodate pre-fetching inside the kernel
+    # to accommodate pre-fetching inside the kernel
     pad = torch.zeros(20, device=incs.device, dtype=incs.dtype)
     incs = torch.cat((incs, pad))
     # create lut

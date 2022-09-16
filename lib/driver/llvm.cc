@@ -103,7 +103,7 @@ static bool find_and_replace(std::string &str, const std::string &begin,
 std::string path_to_ptxas(int &version) {
   std::vector<std::string> rets;
   std::string ret;
-  // search pathes for ptxas
+  // search paths for ptxas
   std::vector<std::string> ptxas_prefixes = {"", "/usr/local/cuda/bin/"};
   std::string triton_ptxas = tools::getenv("TRITON_PTXAS_PATH");
   if (!triton_ptxas.empty())

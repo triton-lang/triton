@@ -53,7 +53,7 @@ def mangle_ty(ty):
         elt = mangle_ty(ty.scalar)
         shape = '_'.join(map(str, ty.shape))
         return f'{elt}S{shape}S'
-    assert False, "Unsupport type"
+    assert False, "Unsupported type"
 
 
 def mangle_fn(name, arg_tys, constants):
@@ -464,7 +464,7 @@ class CodeGenerator(ast.NodeVisitor):
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
 
-            # condtion (the before region)
+            # condition (the before region)
             cond_block = self.builder.create_block()
             self.builder.set_insertion_point_to_start(cond_block)
             cond = self.visit(node.test)
