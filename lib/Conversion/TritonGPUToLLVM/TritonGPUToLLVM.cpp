@@ -1332,6 +1332,14 @@ public:
   llvm::SmallVector<Value> computeOffsets(Value warpOff, Value lane) {
     if (canUseLdmatrix)
       return computeLdmatrixMatOffs(warpOff, lane);
+    else if (elemBytes == 4 && needTrans)
+      assert(false && "Not implemented yet");
+    else if (elemBytes == 1 && needTrans)
+      assert(false && "Not implemented yet");
+    else
+      llvm::report_fatal_error("Invalid smem load config");
+
+    return {};
   }
 
   int getNumPtr() const { return numPtr; }
@@ -1449,6 +1457,7 @@ public:
     } else if (elemBytes == 1 && needTrans) {
       assert(false && "Not implemented yet");
     }
+    return std::make_tuple(Value{}, Value{}, Value{}, Value{});
   }
 
 private:
@@ -1555,7 +1564,7 @@ private:
                               ConversionPatternRewriter &rewriter) const;
 
   // Convert to mma.m16n8k16
-  LogicalResult convertMMA16816(triton::DotOp op, OpAdaptor adapter,
+  LogicalResult convertMMA16816(triton::DotOp a, OpAdaptor adapter,
                                 ConversionPatternRewriter &rewriter) const;
 
   LogicalResult convertFMADot(triton::DotOp op, OpAdaptor adapter,
@@ -1629,6 +1638,29 @@ struct DotOpConversionHelper {
       return fp32Pack4Ty;
     case TensorCoreType::INT32_INT8_INT8_INT32:
       return i8x4Pack4Ty;
+    default:
+      llvm::report_fatal_error("Unsupported mma type found");
+    }
+
+    return Type{};
+  }
+
+  Type getMmaRetType() const {
+    Type fp32Ty = type::f32Ty(ctx);
+    Type i32Ty = type::i32Ty(ctx);
+    Type fp32x4Ty =
+        LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp32Ty));
+    Type i32x4Ty =
+        LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i32Ty));
+    switch (mmaType) {
+    case TensorCoreType::FP32_FP16_FP16_FP32:
+      return fp32x4Ty;
+    case TensorCoreType::FP32_BF16_BF16_FP32:
+      return fp32x4Ty;
+    case TensorCoreType::FP32_TF32_TF32_FP32:
+      return fp32x4Ty;
+    case TensorCoreType::INT32_INT8_INT8_INT32:
+      return i32x4Ty;
     default:
       llvm::report_fatal_error("Unsupported mma type found");
     }
@@ -1814,55 +1846,125 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
     vals[{mn, k}] = val;
   };
 
-  // Args: (int m, int k), ignore prefetch here
-  std::function<void(int, int)> loadA;
+  // Load A or B matrix.
+  auto getLoadMatrixFn =
+      [&](Value tensor, int wpt, int kOrder, ArrayRef<int> instrShape,
+          ArrayRef<int> matShape, Value warpId,
+          decltype(ha) &vals) -> std::function<void(int, int)> {
+    auto tensorTy = tensor.getType().cast<RankedTensorType>();
+    // We assumes that the input operand of Dot should be from shared layout.
+    // TODO(Superjomn) Consider other layouts if needed later.
+    auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
+    const int perPhase = sharedLayout.getPerPhase();
+    const int maxPhase = sharedLayout.getMaxPhase();
+    const int elemBytes = tensorTy.getElementTypeBitWidth() / 8;
 
-  if (auto aSharedLayout =
-          aTensorTy.getEncoding().dyn_cast<SharedEncodingAttr>()) {
-    const int perPhaseA = aSharedLayout.getPerPhase();
-    const int maxPhaseA = aSharedLayout.getMaxPhase();
-    MMA16816SmemLoader aLoader(
-        mmaLayout.getWarpsPerCTA()[0] /*wpt*/,
-        aSharedLayout.getOrder() /*order*/, 1 /*kOrder*/, aShape /*tileShape*/,
-        {mmaInstrM, mmaInstrK} /*instrShape*/,
-        {matShapeM, matShapeK} /*matShape*/, perPhaseA /*perShape*/,
-        maxPhaseA /*maxPhase*/, aElemBytes /*elemBytes*/, rewriter /*rewriter*/,
-        loc);
-    SmallVector<Value> offs = aLoader.computeOffsets(warpM, lane);
-    int numPtr = aLoader.getNumPtr();
-    SmallVector<Value> ptrs(numPtr);
+    MMA16816SmemLoader loader(
+        wpt, sharedLayout.getOrder(), kOrder, tensorTy.getShape() /*tileShape*/,
+        instrShape, matShape, perPhase, maxPhase, elemBytes, rewriter, loc);
+    SmallVector<Value> offs = loader.computeOffsets(warpId, lane);
 
-    Type shemPtrTy = helper.getShemPtrTy();
-    auto shemBase = getShemAddr(A);
-    for (int i = 0; i < numPtr; i++) {
+    const int numPtrs = loader.getNumPtr();
+    SmallVector<Value> ptrs(numPtrs);
+
+    Type smemPtrTy = helper.getShemPtrTy();
+    auto smemBase = getShemAddr(tensor);
+    for (int i = 0; i < numPtrs; i++) {
       ptrs[i] = bit_cast(
-          shemPtrTy, gep(shemBase.getType(), shemBase, ValueRange({offs[i]})));
+          smemPtrTy, gep(smemBase.getType(), smemBase, ValueRange({offs[i]})));
     }
 
-    loadA = [&, aLoader, ptrs, offs](int m, int k) {
-      auto [ha0, ha1, ha2, ha3] = aLoader.loadX4(
-          m, k, offs, ptrs, helper.getMatType(), helper.getShemPtrTy());
-      ld2(ha, m, k, ha0);
-      ld2(ha, m + 1, k, ha1);
-      ld2(ha, m, k + 1, ha2);
-      ld2(ha, m + 1, k + 1, ha3);
+    // (a, b) is the coordinate.
+    auto load = [&, loader, ptrs, offs](int a, int b) {
+      auto [ha0, ha1, ha2, ha3] = loader.loadX4(
+          (kOrder == 1) ? a : b /*mat0*/, (kOrder == 1) ? b : a /*mat1*/, offs,
+          ptrs, helper.getMatType(), helper.getShemPtrTy());
+      ld2(vals, a, b, ha0);
+      ld2(vals, a + 1, b, ha1);
+      ld2(vals, a, b + 1, ha2);
+      ld2(vals, a + 1, b + 1, ha3);
     };
-  } else {
-    assert(false && "Not implemented yet.");
-  }
+
+    return load;
+  };
+
+  std::function<void(int, int)> loadA = getLoadMatrixFn(
+      A, mmaLayout.getWarpsPerCTA()[0] /*wpt*/, 1 /*kOrder*/,
+      {mmaInstrM, mmaInstrK} /*instrShpae*/,
+      {matShapeM, matShapeK} /*matShape*/, warpM /*warpId*/, ha /*vals*/);
+  std::function<void(int, int)> loadB = getLoadMatrixFn(
+      B, mmaLayout.getWarpsPerCTA()[1] /*wpt*/, 0 /*kOrder*/,
+      {mmaInstrK, mmaInstrN} /*instrShpae*/,
+      {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/, hb /*vals*/);
 
   // Load B
   // TODO unify load A and load B.
 
+  SmallVector<Value> fc(numRepM * numRepN * 2);
   auto callMma = [&](unsigned m, unsigned n, unsigned k) {
     PTXBuilder builder;
+
+    auto &mma = *builder.create(helper.getMmaInstr().str());
 
     auto retArgs = builder.newListOperand();
     for (int i = 0; i < 4; ++i)
       retArgs->listAppend(builder.newOperand("=r"));
+    auto aArg0 = builder.newOperand(ha[{m, k}], "r");
+    auto aArg1 = builder.newOperand(ha[{m + 1, k}], "r");
+    auto aArg2 = builder.newOperand(ha[{m, k + 1}], "r");
+    auto aArg3 = builder.newOperand(ha[{m + 1, k}], "r");
+    auto bArg0 = builder.newOperand(ha[{n, k}], "r");
+    auto bArg1 = builder.newOperand(ha[{n, k + 1}], "r");
 
-    auto instr = builder.create(helper.getMmaInstr().str());
+    mma(retArgs, aArg0, aArg1, aArg2, aArg3, bArg0, bArg1);
+
+    auto inlineAsm = rewriter.create<LLVM::InlineAsmOp>(
+        loc, helper.getMmaRetType(), builder.getAllMLIRArgs(), // operands
+        builder.dump(),                                        // asm_string
+        builder.getConstrains(),                               // constraints
+        true,  // has_side_effects
+        false, // is_align_stack
+        LLVM::AsmDialectAttr::get(ctx,
+                                  LLVM::AsmDialect::AD_ATT), // asm_dialect
+        ArrayAttr::get(ctx, {})                              // operand_attrs
+    );
+
+    auto mmaOut = inlineAsm.getRes();
+    auto getIntAttr = [&](int v) {
+      return ArrayAttr::get(ctx, {IntegerAttr::get(type::i32Ty(ctx), 0)});
+    };
+
+    const unsigned mStride = numRepN * 2;
+
+    fc[(m + 0) * mStride + (n * 2 + 0)] =
+        extract_val(type::f32Ty(ctx), mmaOut, getIntAttr(0));
+    fc[(m + 0) * mStride + (n * 2 + 1)] =
+        extract_val(type::f32Ty(ctx), mmaOut, getIntAttr(0));
+    fc[(m + 1) * mStride + (n * 2 + 0)] =
+        extract_val(type::f32Ty(ctx), mmaOut, getIntAttr(0));
+    fc[(m + 1) * mStride + (n * 2 + 1)] =
+        extract_val(type::f32Ty(ctx), mmaOut, getIntAttr(0));
   };
+
+  // Main program
+
+  for (unsigned k = 0; k < numRepK; k++) {
+    for (unsigned m = 0; m < numRepM; m++)
+      loadA(2 * m, 2 * k);
+    for (unsigned n = 0; n < numRepN; n += 2)
+      loadB(n, 2 * k);
+    for (unsigned m = 0; m < numRepM; m++)
+      for (unsigned n = 0; n < numRepN; n++)
+        callMma(2 * m, n, 2 * k);
+  }
+
+  // replace with new packed result
+  Type structTy = LLVM::LLVMStructType::getLiteral(
+      ctx, SmallVector<Type>(fc.size(), type::f32Ty(ctx)));
+  Value res = getStructFromElements(loc, fc, rewriter, structTy);
+  rewriter.replaceOp(op, res);
+
+  return success();
 }
 
 /// ====================== mma codegen end ============================
