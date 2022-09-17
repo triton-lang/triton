@@ -222,7 +222,7 @@ void parse_args(py::list &args, py::list do_not_specialize,
       // copy param
       std::memcpy(params_ptr, &value, 8);
       params_ptr += 8;
-      // udpate cache key
+      // update cache key
       cache_key += dtype_cache_key_part(arg.attr("dtype"));
       cache_key += "*";
       cache_key += "[multipleof(";
@@ -323,7 +323,7 @@ void parse_args(py::list &args, py::list &arg_names, std::string &params,
       // copy param
       std::memcpy(params_ptr, &value, 8);
       params_ptr += 8;
-      // udpate cache key
+      // update cache key
       continue;
     }
     // argument is `constexpr`
