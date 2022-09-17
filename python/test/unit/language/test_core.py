@@ -1290,7 +1290,7 @@ def test_value_specialization(value: int, value_type: str, device='cuda') -> Non
 
     def cache_hook(*args, **kwargs):
         nonlocal spec_type
-        spec_type = kwargs["compile"]["signature"].split(",")[0]
+        spec_type = kwargs["compile"]["signature"][0]
     JITFunction.cache_hook = cache_hook
 
     @triton.jit
