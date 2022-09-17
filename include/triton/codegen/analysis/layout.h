@@ -246,7 +246,7 @@ struct N_buffer_info_t {
   std::map<ir::value*, int> firsts_idx;
 };
 
-// abstract for dot and coresponding smem values
+// abstract for dot and corresponding smem values
 class shared_layout: public data_layout {
 private:
   static bool is_loop_latch(ir::phi_node *phi, ir::instruction *terminator);

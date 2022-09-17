@@ -66,7 +66,7 @@ def mangle_ty(ty):
         elt = mangle_ty(ty.scalar)
         shape = '_'.join(map(str, ty.shape))
         return f'{elt}S{shape}S'
-    assert False, "Unsupport type"
+    assert False, "Unsupported type"
 
 
 def mangle_fn(name, arg_tys, constants):

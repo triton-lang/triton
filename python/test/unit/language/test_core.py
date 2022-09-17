@@ -55,7 +55,7 @@ def numpy_random(shape, dtype_str, rs: Optional[RandomState] = None, low=None, h
 
 def to_triton(x: np.ndarray, device='cuda', dst_type=None) -> Union[TensorWrapper, torch.Tensor]:
     '''
-    Note: We need dst_type becasue the type of x can be different from dst_type.
+    Note: We need dst_type because the type of x can be different from dst_type.
           For example: x is of type `float32`, dst_type is `bfloat16`.
           If dst_type is None, we infer dst_type from x.
     '''
@@ -424,7 +424,7 @@ def test_unary_op(dtype_x, expr, device='cuda'):
 # ----------------
 # test math ops
 # ----------------
-# @pytest.mark.paramterize("expr", [
+# @pytest.mark.parametrize("expr", [
 #     'exp', 'log', 'cos', 'sin'
 # ])
 
