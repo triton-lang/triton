@@ -64,16 +64,6 @@ OwningOpRef<ModuleOp> loadMLIRModule(llvm::StringRef inputFilename,
     return nullptr;
   }
 
-  mlir::PassManager pm(module->getContext());
-  applyPassManagerCLOptions(pm);
-
-  pm.addPass(createConvertTritonGPUToLLVMPass());
-
-  if (failed(pm.run(module->getOperation()))) {
-    llvm::errs() << "Pass execution failed";
-    return nullptr;
-  }
-
   return module;
 }
 

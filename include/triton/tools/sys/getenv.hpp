@@ -22,6 +22,7 @@
 #ifndef TDL_TOOLS_SYS_GETENV_HPP
 #define TDL_TOOLS_SYS_GETENV_HPP
 
+#include <algorithm>
 #include <cstdlib>
 #include <string>
 
@@ -35,6 +36,14 @@ inline std::string getenv(const char *name) {
     return "";
   std::string result(cstr);
   return result;
+}
+
+inline bool getBoolEnv(const std::string &env) {
+  const char *s = std::getenv(env.c_str());
+  std::string str(s ? s : "");
+  std::transform(str.begin(), str.end(), str.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+  return (str == "on" || str == "true" || str == "1");
 }
 
 } // namespace tools

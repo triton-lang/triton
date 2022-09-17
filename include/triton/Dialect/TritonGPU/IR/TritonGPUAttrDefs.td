@@ -31,6 +31,10 @@ Then, attaching $\mathcal{L} to a tensor $T$ would mean that:
 
 Right now, Triton implements two classes of layouts: shared, and distributed.
   }];
+
+  code extraBaseClassDeclaration = [{
+    unsigned getElemsPerThread(ArrayRef<int64_t> shape) const;
+  }];
 }
 
 //===----------------------------------------------------------------------===//
@@ -64,6 +68,8 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
     "unsigned":$vec, "unsigned":$perPhase, "unsigned":$maxPhase,
     ArrayRefParameter<"unsigned", "order of axes by the rate of changing">:$order
   );
+
+  let extraClassDeclaration = extraBaseClassDeclaration;
 }
 
 //===----------------------------------------------------------------------===//
@@ -93,6 +99,8 @@ Then the data of A would be distributed as follow between the 16 CUDA threads:
 L(A) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
          {4,12}, {5,13}, {6,14}, {7,15}, {4,12}, {5, 13}, {6, 14}, {7, 15} ]
   }];
+
+  let extraClassDeclaration = extraBaseClassDeclaration;
 }
 
 //===----------------------------------------------------------------------===//
@@ -171,10 +179,9 @@ for
     }]>
   ];
 
-  let extraClassDeclaration = [{
+  let extraClassDeclaration = extraBaseClassDeclaration # [{
     SliceEncodingAttr squeeze(int axis);
   }];
-
 
   let parameters = (
     ins
@@ -282,6 +289,8 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     "unsigned":$version,
     ArrayRefParameter<"unsigned">:$warpsPerCTA
   );
+
+  let extraClassDeclaration = extraBaseClassDeclaration;
 }
 
 def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
@@ -311,6 +320,8 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
     // TODO: constraint here to only take distributed encodings
     "Attribute":$parent
   );
+
+  let extraClassDeclaration = extraBaseClassDeclaration;
 }
 
 

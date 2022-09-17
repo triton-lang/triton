@@ -8,6 +8,11 @@
 
 #include <algorithm>
 #include <limits>
+#include <numeric>
+
+using ::mlir::triton::gpu::BlockedEncodingAttr;
+using ::mlir::triton::gpu::MmaEncodingAttr;
+using ::mlir::triton::gpu::SharedEncodingAttr;
 
 namespace mlir {
 
@@ -15,6 +20,54 @@ namespace mlir {
 // Shared Memory Allocation Analysis
 //===----------------------------------------------------------------------===//
 namespace triton {
+
+SmallVector<unsigned>
+getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
+                             unsigned &outVec) {
+  auto srcTy = op.src().getType().cast<RankedTensorType>();
+  auto dstTy = op.result().getType().cast<RankedTensorType>();
+  Attribute srcLayout = srcTy.getEncoding();
+  Attribute dstLayout = dstTy.getEncoding();
+  assert(srcLayout && dstLayout &&
+         "Unexpect layout in getScratchConfigForCvtLayout()");
+  unsigned rank = dstTy.getRank();
+  SmallVector<unsigned> paddedRepShape(rank);
+  // TODO: move to TritonGPUAttrDefs.h.inc
+  auto getShapePerCTA = [&](const Attribute &layout, unsigned d) -> unsigned {
+    if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
+      return blockedLayout.getSizePerThread()[d] *
+             blockedLayout.getThreadsPerWarp()[d] *
+             blockedLayout.getWarpsPerCTA()[d];
+    } else {
+      assert(0 && "Unimplemented usage of getShapePerCTA");
+      return 0;
+    }
+  };
+  if (srcLayout.isa<BlockedEncodingAttr>() &&
+      dstLayout.isa<BlockedEncodingAttr>()) {
+    auto srcBlockedLayout = srcLayout.cast<BlockedEncodingAttr>();
+    auto dstBlockedLayout = dstLayout.cast<BlockedEncodingAttr>();
+    auto inOrd = srcBlockedLayout.getOrder();
+    auto outOrd = dstBlockedLayout.getOrder();
+    // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
+    //       that we cannot do vectorization.
+    inVec = outOrd[0] == 0  ? 1
+            : inOrd[0] == 0 ? 1
+                            : srcBlockedLayout.getSizePerThread()[inOrd[0]];
+    outVec =
+        outOrd[0] == 0 ? 1 : dstBlockedLayout.getSizePerThread()[outOrd[0]];
+    unsigned pad = std::max(inVec, outVec);
+    for (unsigned d = 0; d < rank; ++d) {
+      paddedRepShape[d] = std::max(
+          std::min<unsigned>(srcTy.getShape()[d], getShapePerCTA(srcLayout, d)),
+          std::min<unsigned>(dstTy.getShape()[d],
+                             getShapePerCTA(dstLayout, d)));
+    }
+    paddedRepShape[outOrd[0]] += pad;
+  }
+  return paddedRepShape;
+}
+
 class AllocationAnalysis {
 public:
   AllocationAnalysis(Operation *operation, Allocation *allocation)
@@ -73,6 +126,27 @@ private:
                      tensorType.getElementTypeBitWidth() / 8;
         allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
       }
+    } else if (auto cvtLayout = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
+      auto srcTy = cvtLayout.src().getType().cast<RankedTensorType>();
+      auto dstTy = cvtLayout.result().getType().cast<RankedTensorType>();
+      auto srcEncoding = srcTy.getEncoding();
+      auto dstEncoding = dstTy.getEncoding();
+      if (srcEncoding.isa<SharedEncodingAttr>() ||
+          dstEncoding.isa<SharedEncodingAttr>()) {
+        // Only blocked -> blocked conversion requires for scratch allocation
+        return;
+      }
+      // ConvertLayoutOp with both input/output non-shared_layout
+      // TODO: Besides of implementing ConvertLayoutOp via shared memory, it's
+      //       also possible to realize it with other approaches in restricted
+      //       conditions, such as warp-shuffle
+      unsigned inVec = 0;
+      unsigned outVec = 0;
+      auto smemShape = getScratchConfigForCvtLayout(cvtLayout, inVec, outVec);
+      unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
+                                       std::multiplies{});
+      auto bytes = elems * srcTy.getElementTypeBitWidth() / 8;
+      allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
     }
   }
 
