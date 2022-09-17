@@ -5,10 +5,11 @@ import time
 from typing import Dict
 
 from ..testing import do_bench
+from .jit import KernelInterface
 
 
-class Autotuner:
-    def __init__(self, run, arg_names, configs, key, reset_to_zero, prune_configs_by: Dict = None):
+class Autotuner(KernelInterface):
+    def __init__(self, fn, arg_names, configs, key, reset_to_zero, prune_configs_by: Dict = None):
         '''
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
             'perf_model': performance model used to predicate running time with different configs, returns running time
@@ -21,7 +22,6 @@ class Autotuner:
             self.configs = configs
         self.key_idx = [arg_names.index(k) for k in key]
         self.cache = dict()
-        self.run = run
         # hook to reset all required tensor to zeros before relaunching a kernel
         self.hook = lambda args: 0
         if reset_to_zero is not None:
@@ -41,6 +41,7 @@ class Autotuner:
             perf_model, top_k, early_config_prune = None, None, None
         self.perf_model, self.configs_top_k = perf_model, top_k
         self.early_config_prune = early_config_prune
+        self.fn = fn
 
     def _bench(self, *args, config, **meta):
         # check for conflicts, i.e. meta-parameters both provided
@@ -58,10 +59,10 @@ class Autotuner:
             if config.pre_hook:
                 config.pre_hook(self.nargs)
             self.hook(args)
-            self.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **current)
+            self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **current)
         return do_bench(kernel_call)
 
-    def __call__(self, *args, **kwargs):
+    def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
         if len(self.configs) > 1:
             key = tuple([args[i] for i in self.key_idx])
@@ -91,7 +92,7 @@ class Autotuner:
         self.best_config = config
         if config.pre_hook is not None:
             config.pre_hook(self.nargs)
-        return self.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
+        return self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
 
 
 class Config:
@@ -161,22 +162,22 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
     :type reset_to_zero: list[str]
     """
     def decorator(fn):
-        fn.run = Autotuner(fn.run, fn.arg_names, configs, key, reset_to_zero, prune_configs_by)
-        return fn
+        return Autotuner(fn, fn.arg_names, configs, key, reset_to_zero, prune_configs_by)
+
     return decorator
 
 
-class Heuristics:
+class Heuristics(KernelInterface):
 
-    def __init__(self, kernel, arg_names, values) -> None:
-        self.run = kernel
+    def __init__(self, fn, arg_names, values) -> None:
+        self.fn = fn
         self.values = values
         self.arg_names = arg_names
 
-    def __call__(self, *args, **kwargs):
+    def run(self, *args, **kwargs):
         for v, heur in self.values.items():
             kwargs[v] = heur({**dict(zip(self.arg_names, args)), **kwargs})
-        return self.run(*args, **kwargs)
+        return self.fn.run(*args, **kwargs)
 
 
 def heuristics(values):
@@ -198,7 +199,6 @@ def heuristics(values):
     .type values: dict[str, Callable[[list[Any]], Any]]
     """
     def decorator(fn):
-        fn.run = Heuristics(fn.run, fn.arg_names, values)
-        return fn
+        return Heuristics(fn, fn.arg_names, values)
 
     return decorator

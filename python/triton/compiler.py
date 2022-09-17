@@ -271,7 +271,7 @@ class CodeGenerator(ast.NodeVisitor):
         return ret
 
     def visit_FunctionDef(self, node):
-        arg_names, kwarg_names = self.visit(node.args)
+        arg_names, arg_annotations, kwarg_names = self.visit(node.args)
         # initialize defaults
         for i, default_value in enumerate(node.args.defaults):
             arg_node = node.args.args[-i - 1]
@@ -289,22 +289,22 @@ class CodeGenerator(ast.NodeVisitor):
         fn.set_is_kernel(self.is_kernel)
         arg_values = []
         idx = 0
-        for i, arg_name in enumerate(arg_names):
+        for i, (arg_name, annotation) in enumerate(zip(arg_names, arg_annotations)):
             if i in self.constants:
                 cst = self.constants[i]
                 if not isinstance(cst, triton.language.constexpr):
                     cst = triton.language.constexpr(self.constants[i])
                 arg_values.append(cst)
-            else:
-                if i in self.attributes:
-                    is_ptr = fn.args[idx].type.is_ptr()
-                    attr = 'aligned' if is_ptr else 'multiple_of'
-                    attr = getattr(_triton.ir.attribute_kind, attr)
-                    attr = _triton.ir.attribute(attr, self.attributes[i][1])
-                    fn.add_attr(idx + 1, attr)
-                fn.args[idx].name = arg_name
-                arg_values.append(triton.language.tensor(fn.args[idx], self.prototype.param_types[idx]))
-                idx += 1
+                continue
+            if i in self.attributes:
+                is_ptr = fn.args[idx].type.is_ptr()
+                attr = 'aligned' if is_ptr else 'multiple_of'
+                attr = getattr(_triton.ir.attribute_kind, attr)
+                attr = _triton.ir.attribute(attr, self.attributes[i][1])
+                fn.add_attr(idx + 1, attr)
+            fn.args[idx].name = arg_name
+            arg_values.append(triton.language.tensor(fn.args[idx], self.prototype.param_types[idx]))
+            idx += 1
 
         insert_pt = self.builder.get_insert_block()
         entry = _triton.ir.basic_block.create(self.builder.context, "entry", fn)
@@ -325,14 +325,17 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_arguments(self, node):
         arg_names = []
+        arg_annotations = []
         for arg in node.args:
-            arg_names += [self.visit(arg)]
+            curr = self.visit(arg)
+            arg_names += [curr[0]]
+            arg_annotations += [curr[1]]
         kwarg_names = self.visit(node.kwarg)
-        return arg_names, kwarg_names
+        return arg_names, arg_annotations, kwarg_names
 
     def visit_arg(self, node):
         ast.NodeVisitor.generic_visit(self, node)
-        return node.arg
+        return node.arg, node.annotation
 
     def visit_AnnAssign(self, node):
         # extract attributes
@@ -798,11 +801,10 @@ class OutOfResources(Exception):
 
 
 def kernel_suffix(signature, specialization):
-    tys = signature.split(',')
     # suffix format:
     # <argid><'c' if equal to 1><'d' if divisible by 16>
     suffix = ''
-    for i, _ in enumerate(tys):
+    for i, _ in enumerate(signature):
         suffix += str(i)
         if i in specialization.equal_to_1:
             suffix += 'c'
@@ -818,14 +820,13 @@ def make_triton_ir(fn, signature, specialization, constants):
     constants = {cst_key(key): value for key, value in constants.items()}
     # visit kernel AST
     gscope = fn.__globals__.copy()
-    function_name = '_'.join([fn.__name__, kernel_suffix(signature, specialization)])
-    tys = signature.split(',')
+    function_name = '_'.join([fn.__name__, kernel_suffix(signature.values(), specialization)])
+    tys = list(signature.values())
     new_constants = {k: True if tys[k] == "i1" else 1 for k in specialization.equal_to_1}
     new_attrs = {k: ("multiple_of", 16) for k in specialization.divisible_by_16}
     all_constants = constants.copy()
     all_constants.update(new_constants)
-    arg_types = signature.replace(' ', '').split(',')
-    arg_types = [str_to_ty(x) for i, x in enumerate(arg_types) if i not in all_constants]
+    arg_types = [str_to_ty(v) for k, v in signature.items() if k not in constants]
 
     prototype = triton.language.function_type(triton.language.void, arg_types)
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name, attributes=new_attrs, is_kernel=True)
@@ -970,7 +971,7 @@ def _build(name, src, path):
 
 def generate_torch_glue(kernel_name, constants, signature, num_warps, binaries, tmpdir):
     headers = dict()
-    tys = signature.split(',')
+
     # write all cubins to header files
     assert len(binaries) == 1, "AoT compilation not yet supported"
 
@@ -985,7 +986,7 @@ unsigned int {name}_shmem = {shmem_size};"""
             f.write(initializer)
 
     func_init = '\n  '.join(f"init_function(\"{name}\", {name}_bin, {name}_shmem, device);" for _, _, name in binaries)
-    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in enumerate(tys))
+    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     def _extracted_type(ty):
         if ty[0] == '*':
@@ -1012,10 +1013,9 @@ unsigned int {name}_shmem = {shmem_size};"""
             "int64_t": "L",
         }[ty]
 
-    format = "iiiK" + ''.join([format_of(_extracted_type(ty)) for ty in tys])
+    format = "iiiK" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
 
     # generate glue code
-    n_args = len(tys)
     src = ""
     for bin, shmem_size, name in binaries:
         src += f"#include \"{name}.h\"\n"
@@ -1027,10 +1027,13 @@ inline void gpuAssert(CUresult code, const char *file, int line)
 {{
    if (code != CUDA_SUCCESS)
    {{
+      const char* prefix = "Triton Error [CUDA]: ";
       const char* str;
       cuGetErrorString(code, &str);
-      fprintf(stderr,\"GPUassert: %s %s %d\\n\", str, file, line);
-      exit(code);
+      char err[1024] = {{0}};
+      strcat(err, prefix);
+      strcat(err, str);
+      PyErr_SetString(PyExc_RuntimeError, err);
    }}
 }}
 #define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
@@ -1075,8 +1078,10 @@ void _{kernel_name}(int gridX, int gridY, int gridZ, CUstream stream, {arg_decls
   if(function == 0){{
     init_module(device);
   }}
-
-  void *params[] = {{ {', '.join(f"&arg{i}" for i in range(n_args) if i not in constants)} }};
+  void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
+  gridX = gridX < 1 ? 1 : gridX;
+  gridY = gridY < 1 ? 1 : gridY;
+  gridZ = gridZ < 1 ? 1 : gridZ;
   CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*{num_warps}, 1, 1, {name}_shmem, stream, params, 0));
 }}
 
@@ -1106,14 +1111,17 @@ CUdeviceptr getPointer(PyObject *obj, int idx) {{
 static PyObject* {kernel_name}(PyObject* self, PyObject* args) {{
   int gridX, gridY, gridZ;
   uint64_t stream;
-  {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in enumerate(tys)])}
-  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &stream, {', '.join(f"&_arg{i}" for i, ty in enumerate(tys))})) {{
+  {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
+  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &stream, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
     return NULL;
   }}
 
-  _{kernel_name}(gridX, gridY, gridZ, (CUstream)stream, {', '.join(f"getPointer(_arg{i},{i})" if ty[0]=="*" else f"_arg{i}"for i, ty in enumerate(tys))});
+  _{kernel_name}(gridX, gridY, gridZ, (CUstream)stream, {', '.join(f"getPointer(_arg{i},{i})" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
 
 
+  if(PyErr_Occurred()) {{
+    return NULL;
+  }}
   // return None
   Py_INCREF(Py_None);
   return Py_None;
@@ -1191,7 +1199,7 @@ def make_cache_key(fn, signature, configs, constants, num_warps, num_stages):
     # Get unique key for the compiled code
     get_conf_key = lambda conf: (sorted(conf.divisible_by_16), sorted(conf.equal_to_1))
     configs_key = [get_conf_key(conf) for conf in configs]
-    key = f"{fn.cache_key}-{signature}-{configs_key}-{constants}-{num_warps}-{num_stages}"
+    key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}"
     key = hashlib.md5(key.encode("utf-8")).hexdigest()
     return key
 

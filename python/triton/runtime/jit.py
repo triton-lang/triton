@@ -150,7 +150,20 @@ def version_key():
     return '-'.join(triton.__version__) + '-' + ptxas_version + '-' + '-'.join(contents)
 
 
-class JITFunction:
+class KernelInterface:
+
+    def __getitem__(self, grid):
+        """
+        A JIT function is launched with: fn[grid](*args, **kwargs).
+        Hence JITFunction.__getitem__ returns a callable proxy that
+        memorizes the grid.
+        """
+        def launcher(*args, **kwargs):
+            return self.run(*args, grid=grid, **kwargs)
+        return launcher
+
+
+class JITFunction(KernelInterface):
 
     cache_hook = None
     divisibility = 16
@@ -225,11 +238,13 @@ class JITFunction:
         assert isinstance(key, str)
         return key
 
-    def _make_signature(self, key):
-        signature = ",".join([self._type_of(k) for i, k in enumerate(key)
-                              if i not in self.constexprs])
-        constants = {i: k for i, k in enumerate(key) if i in self.constexprs}
-        return signature, constants
+    def _make_signature(self, sig_key):
+        signature = ",".join([self._type_of(k) for i, k in enumerate(sig_key)])
+        return signature
+
+    def _make_constants(self, constexpr_key):
+        constants = {i: k for i, k in zip(self.constexprs, constexpr_key)}
+        return constants
 
     def _call_hook(self, key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
         if JITFunction.cache_hook is None:
@@ -258,7 +273,7 @@ class JITFunction:
         constexpr_args = [f'{arg}' for i, arg in enumerate(self.arg_names) if i in self.constexprs]
         args = ', '.join(regular_args)
         # cache key for regular argument type
-        regular_keys = ', '.join([f'_key_of({arg})' for arg in regular_args])
+        sig_keys = ', '.join([f'_key_of({arg})' for arg in regular_args])
         # cache key for constexpr argument values
         constexpr_keys = ', '.join(constexpr_args)
         # cache key for argument specialization
@@ -274,9 +289,10 @@ class JITFunction:
 
         src = f"""
 def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, extern_libs=None, stream=None):
-    sig_key =  ({regular_keys}, {constexpr_keys})
-    spec_key = ({spec_keys})
-    key = (version_key, sig_key, spec_key)
+    sig_key =  {sig_keys},
+    constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else tuple()}
+    spec_key = {f'{spec_keys},' if len(spec_keys) > 0 else tuple()}
+    key = (version_key, sig_key, constexpr_key, spec_key)
     if not extern_libs is None:
       key = (key, tuple(extern_libs.items()))
     assert num_warps > 0 and (num_warps & (num_warps - 1)) == 0, "num_warps must be a power of 2"
@@ -294,16 +310,21 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
       bin = cache[key]
       bin.c_wrapper(grid_0, grid_1, grid_2, stream, {args})
       return bin
+    # kernel not cached -- compile
     except KeyError:
-      # kernel not cached -- compile
+      # build dict of constant values
       args = [{args}]
-      signature, constants = self._make_signature(sig_key)
+      configs = [self._get_config(*args)]
+      constants = self._make_constants(constexpr_key)
       constants.update({{i: None for i, arg in enumerate(args) if arg is None}})
+      constants.update({{i: 1 for i in configs[0].equal_to_1}})
+      # build kernel signature -- doesn't include specialized arguments
+      all_args = {', '.join([f'{arg}' for arg in self.arg_names])}
+      signature = {{ i: self._type_of(_key_of(arg)) for i, arg in enumerate(all_args) if i not in self.constexprs }}
+      # build stub signature -- includes arguments that are specialized
       for i, arg in constants.items():
         if callable(arg):
           raise TypeError(f"Callable constexpr at index {i} is not supported")
-
-      configs = [self._get_config(*args)]
       device = 0
       if not self._call_hook(key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
         bin = triton.compile(self, signature, device, constants, num_warps, num_stages, extern_libs=extern_libs, configs=configs)
@@ -321,6 +342,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     def __init__(self, fn, version=None, do_not_specialize=None):
         self.fn = fn
         self.module = fn.__module__
+        self.version = version
         # function signature information
         signature = inspect.signature(fn)
         self.arg_names = [v.name for v in signature.parameters.values()]
@@ -385,16 +407,6 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         if name == 'src':
             self.hash = None
             JITFunction.cache_key.fget.cache_clear()
-
-    def __getitem__(self, grid):
-        """
-        A JIT function is launched with: fn[grid](*args, **kwargs).
-        Hence JITFunction.__getitem__ returns a callable proxy that
-        memorizes the grid.
-        """
-        def launcher(*args, **kwargs):
-            return self.run(*args, grid=grid, **kwargs)
-        return launcher
 
     def __repr__(self):
         return f"JITFunction({self.module}:{self.fn.__name__})"
