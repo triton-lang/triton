@@ -8,7 +8,7 @@ jobs:
 
   Build-Documentation:
     
-    runs-on: self-hosted
+    runs-on: [self-hosted, V100]
 
     steps:
 
