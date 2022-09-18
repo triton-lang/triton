@@ -1079,10 +1079,9 @@ void _{kernel_name}(int gridX, int gridY, int gridZ, CUstream stream, {arg_decls
     init_module(device);
   }}
   void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
-  gridX = gridX < 1 ? 1 : gridX;
-  gridY = gridY < 1 ? 1 : gridY;
-  gridZ = gridZ < 1 ? 1 : gridZ;
-  CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*{num_warps}, 1, 1, {name}_shmem, stream, params, 0));
+  if(gridX*gridY*gridZ > 0){{
+    CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*{num_warps}, 1, 1, {name}_shmem, stream, params, 0));
+  }}
 }}
 
 CUdeviceptr getPointer(PyObject *obj, int idx) {{
