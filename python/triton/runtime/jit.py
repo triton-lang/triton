@@ -180,7 +180,7 @@ class JITFunction(KernelInterface):
         if key is None:
             return '*i8'
         assert isinstance(key, str)
-        return
+        return key
 
     def _make_signature(self, sig_key):
         signature = ",".join([self._type_of(k) for i, k in enumerate(sig_key)])
