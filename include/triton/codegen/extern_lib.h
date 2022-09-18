@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <string>
+#include <map>
 
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"

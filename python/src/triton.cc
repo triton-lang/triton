@@ -574,6 +574,19 @@ void init_triton_codegen(py::module &&m) {
         assert(backend == ROCM);
         return hip_load_binary(name, asm_map, n_shared_bytes, dev);
       }, py::return_value_policy::take_ownership);
+  
+
+  struct InstanceDescriptor
+  {
+    std::unordered_set<int> divisibleBy16;
+    std::unordered_set<int> equalTo1;
+  };
+
+  py::class_<InstanceDescriptor>(m, "instance_descriptor")
+      .def(py::init<>())
+      .def(py::init<std::unordered_set<int>, std::unordered_set<int>>())
+      .def_readonly("divisible_by_16", &InstanceDescriptor::divisibleBy16)
+      .def_readonly("equal_to_1", &InstanceDescriptor::equalTo1);
 }
 
 
@@ -758,10 +771,11 @@ void init_triton_ir(py::module &&m) {
       .def("get", &ir::struct_type::get, ret::reference)
       .def_property_readonly("num_types", &ir::struct_type::get_num_types);
 
-  py::class_<ir::module>(m, "module")
+  py::class_<ir::module>(m, "module", py::dynamic_attr())
       .def(py::init<std::string, ir::builder &>())
       .def("has_function", &ir::module::has_function)
       .def("get_function", &ir::module::get_function, ret::reference)
+      .def("get_functions", &ir::module::get_function_list, ret::reference)
       .def("get_or_insert_function", &ir::module::get_or_insert_function, ret::reference)
       .def("print", [](ir::module *self) {
           self->print(std::cout);

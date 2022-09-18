@@ -106,11 +106,11 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(
   // run passes
   inliner.run(ir);
   dce.run(ir);
-  // ir.print(std::cout);
   peephole.run(ir);
   dce.run(ir);
   pipeline.run(ir);
   dce.run(ir);
+  // ir.print(std::cout);
   disassociate.run(ir);
   dce.run(ir);
   align.run(ir);
