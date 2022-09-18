@@ -1146,7 +1146,7 @@ static struct PyModuleDef ModuleDef = {{
   ModuleMethods
 }};
 
-PyMODINIT_FUNC PyInit_{kernel_name}() {{
+PyMODINIT_FUNC PyInit_{kernel_name}(void) {{
   PyObject *m = PyModule_Create(&ModuleDef);
   if(m == NULL) {{
     return NULL;
