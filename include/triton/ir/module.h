@@ -87,7 +87,6 @@ public:
 
   // Functions
   const functions_list_t &get_function_list() const { return functions_; }
-  functions_list_t &get_function_list()             { return functions_; }
   function *get_function(const std::string& name)   {
     if(symbols_.find(name) == symbols_.end())
       throw std::runtime_error("function " + name + " is not declared");
