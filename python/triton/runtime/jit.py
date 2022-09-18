@@ -8,6 +8,7 @@ import os
 import subprocess
 import tempfile
 import textwrap
+from collections import namedtuple
 from typing import Any, Dict, List, Optional
 
 import torch
@@ -209,7 +210,8 @@ class JITFunction(KernelInterface):
             return False
         divisible_by_16 = {i for i, arg in enumerate(args) if is_divisible_by_16(arg) and i not in self.do_not_specialize}
         equal_to_1 = {i for i, arg in enumerate(args) if isinstance(arg, int) and arg == 1 and i not in self.do_not_specialize}
-        return _triton.code_gen.instance_descriptor(divisible_by_16, equal_to_1)
+        return namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1"])(tuple(divisible_by_16), tuple(equal_to_1))
+        # return _triton.code_gen.instance_descriptor(divisible_by_16, equal_to_1)
 
     @staticmethod
     def _type_of(key):
@@ -236,7 +238,7 @@ class JITFunction(KernelInterface):
         if key is None:
             return '*i8'
         assert isinstance(key, str)
-        return key
+        return
 
     def _make_signature(self, sig_key):
         signature = ",".join([self._type_of(k) for i, k in enumerate(sig_key)])
@@ -249,24 +251,23 @@ class JITFunction(KernelInterface):
     def _call_hook(self, key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
         if JITFunction.cache_hook is None:
             return False
-        # TODO: assemble compilation-key into human-readable format
         name = self.fn.__name__
+        module = self.fn.__module__
         arg_reprs = ', '.join([f'{name}: {ty}' for name, ty in zip(self.arg_names, key[1])])
         repr = f"{name}[num_warps={num_warps}, num_stages={num_stages}]({arg_reprs})"
+        key = str(key)
 
         class LegacyCompiler:
-            def __init__(self):
+            def __init__(self, module, name):
+                self.module = module
+                self.name = name
                 pass
 
-            def warmup(kwargs):
-                bin = triton.compile(**kwargs)
-                self.cache[key] = bin
-
-        kwargs = dict(fn=self, signature=signature, device=device, constants=constants,
+        kwargs = dict(signature=signature, device=device, constants=constants,
                       num_warps=num_warps, num_stages=num_stages, extern_libs=extern_libs,
                       configs=configs)
 
-        return JITFunction.cache_hook(key=key, repr=repr, fn=LegacyCompiler(), compile={"key": key, **kwargs}, is_manual_warmup=False, already_compiled=False)
+        return JITFunction.cache_hook(key=key, repr=repr, fn=LegacyCompiler(module, name), compile={"key": key, **kwargs}, is_manual_warmup=False, already_compiled=False)
 
     def _make_launcher(self):
         regular_args = [f'{arg}' for i, arg in enumerate(self.arg_names) if i not in self.constexprs]
@@ -314,7 +315,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     except KeyError:
       # build dict of constant values
       args = [{args}]
-      configs = [self._get_config(*args)]
+      configs = self._get_config(*args),
       constants = self._make_constants(constexpr_key)
       constants.update({{i: None for i, arg in enumerate(args) if arg is None}})
       constants.update({{i: 1 for i in configs[0].equal_to_1}})
