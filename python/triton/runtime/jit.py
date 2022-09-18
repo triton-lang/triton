@@ -6,17 +6,12 @@ import hashlib
 import inspect
 import os
 import subprocess
-import tempfile
 import textwrap
 from collections import namedtuple
-from typing import Any, Dict, List, Optional
 
 import torch
 
 import triton
-import triton._C.libtriton.triton as _triton
-from ..compiler import compile
-from ..tools.disasm import extract
 
 try:
     from torch._C import _cuda_getCurrentRawStream as get_cuda_stream
@@ -358,8 +353,6 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
 
     def __repr__(self):
         return f"JITFunction({self.module}:{self.fn.__name__})"
-
-
 
 
 # -----------------------------------------------------------------------------
