@@ -1300,14 +1300,14 @@ public:
 
     if (canUseLdmatrix) {
       // Each CTA, the warps is arranged as [1xwpt] if not transposed,
-      // otherwise [wptx1], each warp will perform a mma.
+      // otherwise [wptx1], and each warp will perform a mma.
       numPtr =
           tileShape[order[0]] / (needTrans ? wpt : 1) / instrShape[order[0]];
     } else {
       numPtr = tileShape[order[0]] / wpt / matShape[order[0]];
     }
 
-    numPtr = std::max<int>(numPtr, 2); // ?
+    numPtr = std::max<int>(numPtr, 2);
 
     // Special rule for i8/u8, 4 ptrs for each matrix
     if (!canUseLdmatrix && elemBytes == 1)
@@ -1323,6 +1323,7 @@ public:
     sMatStride =
         loadStrideInMat[order[1]] / (instrShape[order[1]] / matShape[order[1]]);
 
+    // Each matArr contains warpOffStride matrices.
     matArrStride = kOrder == 1 ? 1 : wpt;
     warpOffStride = instrShape[kOrder ^ 1] / matShape[kOrder ^ 1];
   }
@@ -1333,9 +1334,9 @@ public:
     if (canUseLdmatrix)
       return computeLdmatrixMatOffs(warpOff, lane);
     else if (elemBytes == 4 && needTrans)
-      assert(false && "Not implemented yet");
+      return computeB32MatOffs(warpOff, lane);
     else if (elemBytes == 1 && needTrans)
-      assert(false && "Not implemented yet");
+      return computeB8MatOffs(warpOff, lane);
     else
       llvm::report_fatal_error("Invalid smem load config");
 
@@ -1345,36 +1346,49 @@ public:
   int getNumPtr() const { return numPtr; }
 
   // Compute the offset to the matrix this thread(indexed by warpOff and lane)
-  // mapped to. The details: For ldmatrix.m8n8 instruction, each matrix is 8x8
-  // x16bits.
-  SmallVector<Value> computeLdmatrixMatOffs(Value warpOff, Value lane) {
-    MLIRContext *ctx = warpOff.getContext();
+  // mapped to.
+  SmallVector<Value> computeLdmatrixMatOffs(Value warpId, Value lane) {
+    MLIRContext *ctx = warpId.getContext();
 
     // 4x4 matrices
     Value c = urem(lane, constI32(8));
     Value s = udiv(lane, constI32(8)); // sub-warp-id
 
-    // Decompose s => s_0, s_1, that is 2x2 mat
+    // Decompose s => s_0, s_1, that is the coordinate in 2x2 matrices in a warp
     Value s0 = urem(s, constI32(2));
     Value s1 = udiv(s, constI32(2));
 
-    // We use different orders for a and b for better performance. Here the arr
-    // is the row in matrix, each ldmatrix.m8n8 has 8 rows/arrs.
+    // We use different orders for a and b for better performance.
     Value kMatArr = kOrder == 1 ? s1 : s0;
     Value nkMatArr = kOrder == 1 ? s0 : s1;
 
-    // matrix coordinate in a CTA
+    // matrix coordinate inside a CTA, the matrix layout is [2x2wpt] for A and
+    // [2wptx2] for B. e.g. Setting wpt=3, The data layout for A(kOrder=1) is
+    //   |0 0 1 1 2 2| -> 0,1,2 are the warpids
+    //   |0 0 1 1 2 2|
+    //
+    // for B(kOrder=0) is
+    //   |0 0|  -> 0,1,2 are the warpids
+    //   |1 1|
+    //   |2 2|
+    //   |0 0|
+    //   |1 1|
+    //   |2 2|
+    // Note, for each warp, it handles a 2x2 matrices, that is the coordinate
+    // address (s0,s1) annotates.
+
     Value matOff[2];
     matOff[kOrder ^ 1] = add(
-        mul(warpOff, constI32(warpOffStride)),  // mma offset
-        mul(nkMatArr, constI32(matArrStride))); // matrix offset inside a mma
+        mul(warpId, constI32(warpOffStride)),   // warp offset
+        mul(nkMatArr, constI32(matArrStride))); // matrix offset inside a warp
     matOff[kOrder] = kMatArr;
 
     // Physical offset (before swizzling)
     Value cMatOff = matOff[order[0]];
     Value sMatOff = matOff[order[1]];
 
-    Value sOffInMat = c; // \in [0, 8)
+    // row offset inside a matrix, each matrix has 8 rows.
+    Value sOffInMat = c;
 
     SmallVector<Value> offs(numPtr);
     Value phase = urem(udiv(sOffInMat, constI32(perPhase)), constI32(maxPhase));
@@ -1389,8 +1403,80 @@ public:
     return offs;
   }
 
-  SmallVector<Value> computTF32MatOffs(Value warpOff, Value lane) {
-    assert(false && "Not implemented");
+  // Compute 32-bit matrix offset.
+  SmallVector<Value> computeB32MatOffs(Value warpOff, Value lane) {
+    // Load tf32 matrices with lds32
+    Value cOffInMat = udiv(lane, constI32(4));
+    Value sOffInMat = urem(lane, constI32(4));
+
+    Value phase = urem(udiv(sOffInMat, constI32(perPhase)), constI32(maxPhase));
+    SmallVector<Value> offs(numPtr);
+
+    for (int mat = 0; mat < 4; ++mat) { // Load 4 mats each time
+      int kMatArrInt = kOrder == 1 ? mat / 2 : mat % 2;
+      int nkMatArrInt = kOrder == 1 ? mat % 2 : mat / 2;
+      if (kMatArrInt > 0) // we don't need pointers for k
+        continue;
+      Value kMatArr = constI32(kMatArrInt);
+      Value nkMatArr = constI32(nkMatArrInt);
+
+      Value cMatOff = add(mul(warpOff, constI32(warpOffStride)),
+                          mul(nkMatArr, constI32(matArrStride)));
+      Value sMatOff = kMatArr;
+      Value sOff = add(sOffInMat, mul(sMatOff, constI32(sMatShape)));
+      // FIXME: (kOrder == 1?) is really dirty hack
+      for (int i = 0; i < numPtr / 2; ++i) {
+        Value cMatOffI = add(
+            cMatOff, constI32(i * pLoadStrideInMat * (kOrder == 1 ? 1 : 2)));
+        cMatOffI = xor_(cMatOffI, phase);
+        Value cOff = add(cOffInMat, mul(cMatOffI, constI32(cMatShape)));
+        cOff = urem(cOff, constI32(tileShape[order[0]]));
+        sOff = urem(sOff, constI32(tileShape[order[1]]));
+        offs[2 * i + nkMatArrInt] = add(cOff, mul(sOff, constI32(sTileStride)));
+      }
+    }
+    return offs;
+  }
+
+  // compute 8-bit matrix offset.
+  SmallVector<Value> computeB8MatOffs(Value warpOff, Value lane) {
+    assert(needTrans && "Only used in transpose mode.");
+    Value cOffInMat = udiv(lane, constI32(4));
+    Value sOffInMat =
+        mul(urem(lane, constI32(4)), constI32(4)); // each thread load 4 cols
+
+    SmallVector<Value> offs(numPtr);
+    for (int mat = 0; mat < 4; ++mat) {
+      int kMatArrInt = kOrder == 1 ? mat / 2 : mat % 2;
+      int nkMatArrInt = kOrder == 1 ? mat % 2 : mat / 2;
+      if (kMatArrInt > 0) // we don't need pointers for k
+        continue;
+      Value kMatArr = constI32(kMatArrInt);
+      Value nkMatArr = constI32(nkMatArrInt);
+
+      Value cMatOff = add(mul(warpOff, constI32(warpOffStride)),
+                          mul(nkMatArr, constI32(matArrStride)));
+      Value sMatOff = kMatArr;
+
+      for (int loadx4Off = 0; loadx4Off < numPtr / 8; ++loadx4Off) {
+        for (int elemOff = 0; elemOff < 4; ++elemOff) {
+          int ptrOff = loadx4Off * 8 + nkMatArrInt * 4 + elemOff;
+          Value cMatOffI = add(cMatOff, constI32(loadx4Off * pLoadStrideInMat *
+                                                 (kOrder == 1 ? 1 : 2)));
+          Value sOffInMatElem = add(sOffInMat, constI32(elemOff));
+
+          // disable swizzling ...
+
+          Value cOff = add(cOffInMat, mul(cMatOffI, constI32(cMatShape)));
+          Value sOff = add(sOffInMatElem, mul(sMatOff, constI32(sMatShape)));
+          // To prevent out-of-bound access when tile is too small.
+          cOff = urem(cOff, constI32(tileShape[order[0]]));
+          sOff = urem(sOff, constI32(tileShape[order[1]]));
+          offs[ptrOff] = add(cOff, mul(sOff, constI32(sTileStride)));
+        }
+      }
+    }
+    return offs;
   }
 
   std::tuple<Value, Value, Value, Value>
