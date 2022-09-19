@@ -1,3 +1,4 @@
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -16,6 +17,10 @@ using namespace mlir;
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
 namespace {
+class Prefetcher {
+
+};
+
 class LoopPipeliner {
   /// comments on numStages:
   ///   [0, numStages-1) are in the prologue
@@ -243,6 +248,9 @@ void LoopPipeliner::emitPrologue() {
     setValueMapping(arg, operand.get(), 0);
   }
 
+  // helper to construct int attribute
+  auto intAttr = [&](int64_t val) { return builder.getI64IntegerAttr(val); };
+
   // prologue from [0, numStage-1)
   Value iv = forOp.getLowerBound();
   pipelineIterIdx = builder.create<arith::ConstantIntOp>(iv.getLoc(), 0, 32);
@@ -349,15 +357,23 @@ void LoopPipeliner::emitPrologue() {
       loads[0].getLoc(), loads.size() * (numStages - 2));
   loopIterIdx = builder.create<arith::ConstantIntOp>(iv.getLoc(), 0, 32);
   for (Value loadOp : loads) {
-    Value extractSlice = builder.create<triton::gpu::ExtractSliceOp>(
-        loadOp.getLoc(), loadsMapping[loadOp].getType(),
-        loadStageBuffer[loadOp][numStages - 1], loopIterIdx, /*axis*/ 0);
+    auto sliceType = loadsMapping[loadOp].getType().cast<RankedTensorType>();
+    Value extractSlice = builder.create<tensor::ExtractSliceOp>(
+        loadOp.getLoc(), sliceType,
+        loadStageBuffer[loadOp][numStages - 1],
+        SmallVector<OpFoldResult>{intAttr(0), intAttr(0), intAttr(0)},
+        SmallVector<OpFoldResult>{intAttr(1),
+                                  intAttr(sliceType.getShape()[0]),
+                                  intAttr(sliceType.getShape()[1])},
+        SmallVector<OpFoldResult>{intAttr(1), intAttr(1), intAttr(1)}
+    );
     loadsExtract[loadOp] = extractSlice;
   }
 }
 
 scf::ForOp LoopPipeliner::createNewForOp() {
   OpBuilder builder(forOp);
+  auto intAttr = [&](int64_t v) { return builder.getI64IntegerAttr(v); };
 
   // order of new args:
   //   (original args),
@@ -466,6 +482,9 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   Value extractSliceIndex = builder.create<arith::RemSIOp>(
       nextIV.getLoc(), loopIterIdx,
       builder.create<arith::ConstantIntOp>(nextIV.getLoc(), numStages, 32));
+  extractSliceIndex = builder.create<arith::IndexCastOp>(
+    extractSliceIndex.getLoc(), builder.getIndexType(), extractSliceIndex
+  );
 
   for (Operation *op : orderedDeps) {
     Operation *nextOp = nullptr;
@@ -492,9 +511,15 @@ scf::ForOp LoopPipeliner::createNewForOp() {
           nextMapping.lookupOrDefault(loadOp.other()), loadOp.cache(),
           loadOp.evict(), loadOp.isVolatile(), /*axis*/ 0);
       nextBuffers.push_back(insertAsyncOp);
-      nextOp = builder.create<triton::gpu::ExtractSliceOp>(
-          op->getLoc(), loadsMapping[loadOp].getType(), insertAsyncOp,
-          extractSliceIndex, /*axis*/ 0);
+      auto sliceType = loadsMapping[loadOp].getType().cast<RankedTensorType>();
+      nextOp = builder.create<tensor::ExtractSliceOp>(
+        op->getLoc(), sliceType, insertAsyncOp,
+          SmallVector<OpFoldResult>{extractSliceIndex, intAttr(0), intAttr(0)},
+          SmallVector<OpFoldResult>{intAttr(1),
+                                    intAttr(sliceType.getShape()[0]),
+                                    intAttr(sliceType.getShape()[1])},
+          SmallVector<OpFoldResult>{intAttr(1), intAttr(1), intAttr(1)});
+      // nextOp->dump();
       extractSlices.push_back(nextOp->getResult(0));
     } else
       nextOp = builder.clone(*op, nextMapping);

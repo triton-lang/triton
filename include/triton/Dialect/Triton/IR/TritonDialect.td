@@ -28,6 +28,7 @@ def Triton_Dialect : Dialect {
     "StandardOpsDialect",
     "scf::SCFDialect",
     "gpu::GPUDialect",
+    "tensor::TensorDialect",
 
     // Since LLVM 15
     // "cf::ControlFlowDialect",
