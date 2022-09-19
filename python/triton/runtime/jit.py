@@ -12,6 +12,7 @@ from collections import namedtuple
 import torch
 
 import triton
+from triton.utils import MockTensor
 
 try:
     from torch._C import _cuda_getCurrentRawStream as get_cuda_stream
@@ -363,24 +364,6 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
 
     def __repr__(self):
         return f"JITFunction({self.module}:{self.fn.__name__})"
-
-
-class MockTensor:
-    """
-    Can be used in place of real tensors when calling:
-        kernel.warmup(MockTensor(torch.float32), ...)
-    """
-    @staticmethod
-    def wrap_dtype(arg):
-        if isinstance(arg, torch.dtype):
-            return MockTensor(arg)
-        return arg
-
-    def __init__(self, dtype):
-        self.dtype = dtype
-
-    def data_ptr(self):
-        return 0  # optimistically assumes multiple of 16
 
 
 # -----------------------------------------------------------------------------
