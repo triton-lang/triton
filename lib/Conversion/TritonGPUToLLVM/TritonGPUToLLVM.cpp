@@ -1728,8 +1728,9 @@ public:
     return offs;
   }
 
-  // Compute 32-bit matrix offset.
+  // Compute 32-bit matrix offsets.
   SmallVector<Value> computeB32MatOffs(Value warpOff, Value lane) {
+    assert(needTrans && "Only used in transpose mode.");
     // Load tf32 matrices with lds32
     Value cOffInMat = udiv(lane, i32_val(4));
     Value sOffInMat = urem(lane, i32_val(4));
@@ -1804,6 +1805,7 @@ public:
     return offs;
   }
 
+  // Load 4 matrices and returns 4 vec<2> elements.
   std::tuple<Value, Value, Value, Value>
   loadX4(int mat0, int mat1, ArrayRef<Value> offs, ArrayRef<Value> ptrs,
          Type ldmatrixRetTy, Type shemPtrTy) const {
@@ -1817,8 +1819,10 @@ public:
       ptrIdx = matIdx[order[0]] / (instrShape[order[0]] / matShape[order[0]]);
     else if (elemBytes == 4 && needTrans) // tf32 & trans
       ptrIdx = matIdx[order[0]];
-    else // i8 & trans
+    else if (elemBytes == 1 && needTrans)
       ptrIdx = matIdx[order[0]] * 4;
+    else
+      llvm::report_fatal_error("unsupported mma type found");
 
     // prefetch logic removed here.
     auto getPtr = [&](int idx) { return ptrs[idx]; };
@@ -1832,12 +1836,14 @@ public:
       PTXBuilder builder;
 
       auto resArgs = builder.newListOperand();
+
+      // ldmatrix.m8n8.x4 returns 4x2xfp16(that is 4xb32) elements for a thread.
       for (int i = 0; i < 4; i++)
         resArgs->listAppend(builder.newOperand("=r"));
       auto addrArg = builder.newAddrOperand(ptr, "r", sOffset);
 
       auto ldmatrix = builder.create("ldmatrix.sync.aligned.m8n8.x4")
-                          ->o("trans", /*predicate=*/needTrans)
+                          ->o("trans", needTrans /*predicate*/)
                           .o("shared.b16");
       ldmatrix(resArgs, addrArg);
 
@@ -1853,10 +1859,11 @@ public:
       );
 
       auto getIntAttr = [&](int v) {
-        return ArrayAttr::get(ctx, {IntegerAttr::get(type::i32Ty(ctx), 0)});
+        return ArrayAttr::get(ctx, {IntegerAttr::get(type::i32Ty(ctx), v)});
       };
 
-      Value resV4 = inlineAsm.getRes();
+      Value resV4 = inlineAsm.getRes(); // 4xi32, each is composed of 2xf16
+                                        // elements(adjacent columns in a row)
       return std::make_tuple(
           extract_val(type::i32Ty(ctx), resV4, getIntAttr(0)),
           extract_val(type::i32Ty(ctx), resV4, getIntAttr(1)),
@@ -2197,6 +2204,7 @@ private:
   DotOp dot;
 };
 
+
 LogicalResult
 DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
                                  ConversionPatternRewriter &rewriter) const {
@@ -2220,6 +2228,8 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
   auto mmaLayout = dTensorTy.getEncoding().cast<MmaEncodingAttr>();
 
   auto wpt = mmaLayout.getWarpsPerCTA();
+
+  // TODO(Superjomn) Process C->is_trans_a() logic
 
   DotOpConversionHelper helper(op);
 
@@ -2339,7 +2349,7 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
 
     auto mmaOut = inlineAsm.getRes();
     auto getIntAttr = [&](int v) {
-      return ArrayAttr::get(ctx, {IntegerAttr::get(type::i32Ty(ctx), 0)});
+      return ArrayAttr::get(ctx, {IntegerAttr::get(type::i32Ty(ctx), v)});
     };
 
     const unsigned mStride = numRepN * 2;
@@ -2347,11 +2357,11 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
     fc[(m + 0) * mStride + (n * 2 + 0)] =
         extract_val(type::f32Ty(ctx), mmaOut, getIntAttr(0));
     fc[(m + 0) * mStride + (n * 2 + 1)] =
-        extract_val(type::f32Ty(ctx), mmaOut, getIntAttr(0));
+        extract_val(type::f32Ty(ctx), mmaOut, getIntAttr(1));
     fc[(m + 1) * mStride + (n * 2 + 0)] =
-        extract_val(type::f32Ty(ctx), mmaOut, getIntAttr(0));
+        extract_val(type::f32Ty(ctx), mmaOut, getIntAttr(2));
     fc[(m + 1) * mStride + (n * 2 + 1)] =
-        extract_val(type::f32Ty(ctx), mmaOut, getIntAttr(0));
+        extract_val(type::f32Ty(ctx), mmaOut, getIntAttr(3));
   };
 
   // Main program
