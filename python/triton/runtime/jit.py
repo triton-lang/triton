@@ -101,9 +101,16 @@ class KernelInterface:
         Hence JITFunction.__getitem__ returns a callable proxy that
         memorizes the grid.
         """
-        def launcher(*args, **kwargs):
-            return self.run(*args, grid=grid, **kwargs)
-        return launcher
+        class Launcher:
+            @staticmethod
+            def __call__(*args, **kwargs):
+                return self.run(*args, grid=grid, **kwargs)
+
+            @staticmethod
+            def warmup(*args, **kwargs):
+                return self.warmup(*args, grid=grid, **kwargs)
+
+        return Launcher()
 
 
 class JITFunction(KernelInterface):
@@ -231,7 +238,7 @@ class JITFunction(KernelInterface):
         grid_args = ','.join([f'"{arg}": {arg}' for arg in self.arg_names])
 
         src = f"""
-def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, extern_libs=None, stream=None):
+def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False):
     sig_key =  {sig_keys},
     constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else tuple()}
     spec_key = {f'{spec_keys},' if len(spec_keys) > 0 else tuple()}
@@ -247,11 +254,12 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     grid_2 = grid[2] if grid_size > 2 else 1
     device = torch.cuda.current_device()
     torch.cuda.set_device(device)
-    if stream is None:
+    if stream is None and not warmup:
       stream = get_cuda_stream(device)
     try:
       bin = cache[key]
-      bin.c_wrapper(grid_0, grid_1, grid_2, stream, {args})
+      if not warmup:
+          bin.c_wrapper(grid_0, grid_1, grid_2, stream, {args})
       return bin
     # kernel not cached -- compile
     except KeyError:
@@ -271,7 +279,8 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
       device = 0
       if not self._call_hook(key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
         bin = triton.compile(self, signature, device, constants, num_warps, num_stages, extern_libs=extern_libs, configs=configs)
-        bin.c_wrapper(grid_0, grid_1, grid_2, stream, *args)
+        if not warmup:
+            bin.c_wrapper(grid_0, grid_1, grid_2, stream, *args)
         self.cache[key] = bin
         return bin
       return None
@@ -317,7 +326,6 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         self.__module__ = fn.__module__
 
     @property
-    @functools.lru_cache()
     def cache_key(self):
         # TODO : hash should be attribute of `self`
         if self.hash is None:
@@ -325,6 +333,9 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
             dependencies_finder.visit(self.parse())
             self.hash = dependencies_finder.ret + version_key()
         return self.hash
+
+    def warmup(self, *args, **kwargs):
+        return self.run(*map(MockTensor.wrap_dtype, args), **kwargs, warmup=True)
 
     # we do not parse `src` in the constructor because
     # the user might want to monkey-patch self.src dynamically.
@@ -349,10 +360,27 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         #   to be reinitialized
         if name == 'src':
             self.hash = None
-            JITFunction.cache_key.fget.cache_clear()
 
     def __repr__(self):
         return f"JITFunction({self.module}:{self.fn.__name__})"
+
+
+class MockTensor:
+    """
+    Can be used in place of real tensors when calling:
+        kernel.warmup(MockTensor(torch.float32), ...)
+    """
+    @staticmethod
+    def wrap_dtype(arg):
+        if isinstance(arg, torch.dtype):
+            return MockTensor(arg)
+        return arg
+
+    def __init__(self, dtype):
+        self.dtype = dtype
+
+    def data_ptr(self):
+        return 0  # optimistically assumes multiple of 16
 
 
 # -----------------------------------------------------------------------------
