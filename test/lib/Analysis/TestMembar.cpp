@@ -29,7 +29,7 @@ struct TestMembarPass
     MembarAnalysis analysis(&allocation);
     size_t operationId = 0;
     operation->walk<WalkOrder::PreOrder>([&](Operation *op) {
-      if (dyn_cast<gpu::BarrierOp>(op)) {
+      if (isa<gpu::BarrierOp>(op)) {
         os << "Membar " << operationId << "\n";
       }
       if (op->getNumRegions() == 0) {

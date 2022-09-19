@@ -20,10 +20,10 @@ std::string strJoin(llvm::ArrayRef<std::string> strs,
 
 PTXInstr::Operand *
 PTXBuilder::newOperand(mlir::Value value, StringRef constraint,
-                       std::function<std::string(int)> formater) {
+                       std::function<std::string(int)> formatter) {
   argArchive.emplace_back(std::make_unique<Operand>(value, constraint));
   auto *opr = argArchive.back().get();
-  opr->repr = formater;
+  opr->repr = formatter;
   opr->idx = oprCounter++;
   return opr;
 }
@@ -49,7 +49,7 @@ PTXBuilder::Operand *PTXBuilder::newConstantOperand(int v) {
   return newConstantOperand(ss.str());
 }
 
-std::string PTXBuilder::getConstrains() const {
+std::string PTXBuilder::getConstraints() const {
   auto args = getAllArgs();
   llvm::SmallVector<std::string, 4> argReprs;
   for (auto arg : args)
@@ -66,7 +66,7 @@ llvm::SmallVector<Value, 4> PTXBuilder::getAllMLIRArgs() const {
   return res;
 }
 
-SmallVector<PTXBuilder::Operand *> PTXBuilder::getAllArgs() const {
+SmallVector<PTXBuilder::Operand *, 4> PTXBuilder::getAllArgs() const {
   llvm::SmallVector<Operand *, 4> res;
   for (auto &x : argArchive)
     if (!x->isList())
@@ -78,7 +78,7 @@ std::string PTXInstr::Operand::dump() const {
   if (repr)
     return repr(idx);
   if (!isList())
-    return llvm::formatv("${0}", idx);
+    return "$" + std::to_string(idx);
 
   llvm::SmallVector<std::string> oprs;
   for (auto *opr : list)
@@ -90,7 +90,9 @@ PTXInstr::Operand *PTXBuilder::newAddrOperand(mlir::Value addr,
                                               StringRef constraint, int off) {
   auto *opr = newOperand(addr, constraint);
   opr->repr = [off](int idx) -> std::string {
-    return llvm::formatv("[ ${0} + {1} ]", idx, off);
+    std::stringstream ss;
+    ss << "[ $" << idx << " + " << off << " ]";
+    return ss.str();
   };
 
   return opr;
@@ -98,14 +100,24 @@ PTXInstr::Operand *PTXBuilder::newAddrOperand(mlir::Value addr,
 
 std::string PTXBuilder::dump() const {
   llvm::SmallVector<std::string> lines;
-  for (auto &instr : instrs) {
-    lines.push_back(instr->dump());
+  for (auto &exec : executions) {
+    lines.push_back(exec->dump());
   }
 
-  return strJoin(lines, "\n\t");
+  return strJoin(lines, "\r\n");
 }
 
-std::string PTXInstrCommon::dump() const {
+PTXInstrExecution &PTXInstrCommon::call(ArrayRef<Operand *> oprs) {
+  builder->executions.emplace_back(
+      std::make_unique<PTXInstrExecution>(this, oprs));
+  return *builder->executions.back();
+}
+
+PTXInstrExecution &PTXInstrCommon::operator()(ArrayRef<Operand *> oprs) {
+  return call(oprs);
+}
+
+std::string PTXInstrExecution::dump() const {
   std::string osStr;
   llvm::raw_string_ostream os(osStr);
   if (pred)
@@ -114,7 +126,7 @@ std::string PTXInstrCommon::dump() const {
     else
       os << pred->repr(pred->idx);
 
-  std::string instrRepr = strJoin(instrParts, ".");
+  std::string instrRepr = strJoin(instr->instrParts, ".");
 
   llvm::SmallVector<std::string, 4> argReprs;
   for (auto *arg : argsInOrder) {
@@ -128,7 +140,8 @@ std::string PTXInstrCommon::dump() const {
   return osStr;
 }
 
-SmallVector<PTXInstrCommon::Operand *> PTXInstrCommon::getArgList() const {
+SmallVector<PTXInstrExecution::Operand *>
+PTXInstrExecution::getArgList() const {
   SmallVector<Operand *> args;
   for (auto *arg : argsInOrder) {
     if (arg->isList())
@@ -137,12 +150,6 @@ SmallVector<PTXInstrCommon::Operand *> PTXInstrCommon::getArgList() const {
       args.push_back(arg);
   }
   return args;
-}
-
-void PTXInstrCommon::operator()(ArrayRef<Operand *> oprs) {
-  for (auto *opr : oprs) {
-    addOperand(opr);
-  }
 }
 } // namespace triton
 } // namespace mlir

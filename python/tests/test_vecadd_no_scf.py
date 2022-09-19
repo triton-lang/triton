@@ -48,6 +48,7 @@ def vecadd_no_scf_tester(num_warps, block_size):
 
 
 def test_vecadd_no_scf():
+    vecadd_no_scf_tester(num_warps=4, block_size=256)
     vecadd_no_scf_tester(num_warps=2, block_size=256)
     vecadd_no_scf_tester(num_warps=1, block_size=256)
 

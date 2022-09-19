@@ -30,12 +30,12 @@ def CombineDotAddFRevPattern : Pat<
         [(Constraint<CPred<"isZero($0)">> $c)]>;
 
 
-// gep(gep(%ptr, %idx0), %idx1) => gep(%ptr, AddI(%idx0, %idx1))
+// addptr(addptr(%ptr, %idx0), %idx1) => addptr(%ptr, AddI(%idx0, %idx1))
 //   Note: leave (sub %c0, %c0) canceling to ArithmeticDialect
 //         (ref: ArithmeticCanonicalization.td)
-def CombineGEPPattern : Pat<
-        (TT_GEPOp (TT_GEPOp $ptr, $idx0), $idx1),
-        (TT_GEPOp $ptr, (Arith_AddIOp $idx0, $idx1))>;
+def CombineAddPtrPattern : Pat<
+        (TT_AddPtrOp (TT_AddPtrOp $ptr, $idx0), $idx1),
+        (TT_AddPtrOp $ptr, (Arith_AddIOp $idx0, $idx1))>;
 
 // broadcast(cst) => cst
 def getConstantValue : NativeCodeCall<"getConstantValue($_builder, $0, $1)">;

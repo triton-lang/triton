@@ -19,6 +19,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 #include "triton/Target/PTX/PTXTranslation.h"
+#include "triton/tools/sys/getenv.hpp"
 
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
@@ -98,14 +99,6 @@ long pow2_divisor(long N) {
   if (N % 2 == 0)
     return 2;
   return 1;
-}
-
-bool getBoolEnv(const std::string &env) {
-  const char *s = std::getenv(env.c_str());
-  std::string str(s ? s : "");
-  std::transform(str.begin(), str.end(), str.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
-  return (str == "on" || str == "true" || str == "1");
 }
 
 // Returns something like "int16", whether dtype is a torch.dtype or
@@ -229,7 +222,7 @@ void parse_args(py::list &args, py::list do_not_specialize,
       // copy param
       std::memcpy(params_ptr, &value, 8);
       params_ptr += 8;
-      // udpate cache key
+      // update cache key
       cache_key += dtype_cache_key_part(arg.attr("dtype"));
       cache_key += "*";
       cache_key += "[multipleof(";
@@ -330,7 +323,7 @@ void parse_args(py::list &args, py::list &arg_names, std::string &params,
       // copy param
       std::memcpy(params_ptr, &value, 8);
       params_ptr += 8;
-      // udpate cache key
+      // update cache key
       continue;
     }
     // argument is `constexpr`
@@ -1245,13 +1238,13 @@ void init_triton_ir(py::module &&m) {
              return mlir::Value(
                  self.create<mlir::arith::ShRSIOp>(loc, lhs, rhs));
            })
-      // GEP
-      .def("create_gep",
+      // AddPtr (similar to GEP)
+      .def("create_addptr",
            [](mlir::OpBuilder &self, mlir::Value &ptr,
               mlir::Value &offset) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             return self.create<mlir::triton::GEPOp>(loc, ptr.getType(), ptr,
-                                                     offset);
+             return self.create<mlir::triton::AddPtrOp>(loc, ptr.getType(), ptr,
+                                                        offset);
            })
       // Comparison (int)
       .def("create_icmpSLE",
@@ -1635,7 +1628,7 @@ void init_triton_ir(py::module &&m) {
                  /*shouldPrintBeforePass=*/nullptr,
                  /*shouldPrintAfterPass=*/
                  [](mlir::Pass *pass, mlir::Operation *) {
-                   return getBoolEnv("MLIR_ENABLE_DUMP");
+                   return ::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
                  },
                  /*printModuleScope=*/false,
                  /*printAfterOnlyOnChange=*/true,

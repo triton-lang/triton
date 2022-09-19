@@ -39,6 +39,37 @@ static Type getPointeeType(Type type) {
   return Type();
 }
 
+namespace gpu {
+
+// TODO: Inheritation of layout attributes
+unsigned getElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
+  size_t rank = shape.size();
+  if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
+    return blockedLayout.getElemsPerThread(shape);
+  } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+    return sliceLayout.getElemsPerThread(shape);
+  } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+    return mmaLayout.getElemsPerThread(shape);
+  } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
+    return sharedLayout.getElemsPerThread(shape);
+  } else {
+    assert(0 && "getElemsPerThread not implemented");
+    return 0;
+  }
+}
+
+unsigned getShapePerCTA(const Attribute &layout, unsigned d) {
+  if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
+    return blockedLayout.getSizePerThread()[d] *
+           blockedLayout.getThreadsPerWarp()[d] *
+           blockedLayout.getWarpsPerCTA()[d];
+  } else {
+    assert(0 && "Unimplemented usage of getShapePerCTA");
+    return 0;
+  }
+};
+
+} // namespace gpu
 } // namespace triton
 } // namespace mlir
 
@@ -106,6 +137,55 @@ static LogicalResult parseUInt(AsmParser &parser, const NamedAttribute &attr,
 
 SliceEncodingAttr BlockedEncodingAttr::squeeze(int axis) {
   return SliceEncodingAttr::get(getContext(), axis, *this);
+}
+
+unsigned BlockedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
+  size_t rank = shape.size();
+  assert(rank == getSizePerThread().size() &&
+         "unexpected rank in BlockedEncodingAttr::getElemsPerThread");
+  SmallVector<unsigned> elemsPerThreadPerDim(rank);
+  for (size_t i = 0; i < rank; ++i) {
+    unsigned t =
+        getSizePerThread()[i] * getThreadsPerWarp()[i] * getWarpsPerCTA()[i];
+    elemsPerThreadPerDim[i] =
+        ceil<unsigned>(shape[i], t) * getSizePerThread()[i];
+  }
+  return product<unsigned>(elemsPerThreadPerDim);
+}
+
+unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
+  size_t rank = shape.size();
+  auto parent = getParent();
+  unsigned dim = getDim();
+  if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
+    assert(rank == blockedParent.getSizePerThread().size() - 1 &&
+           "unexpected rank in SliceEncodingAttr::getElemsPerThread");
+    SmallVector<int64_t> paddedShape(rank + 1);
+    for (unsigned d = 0; d < rank + 1; ++d) {
+      if (d < dim)
+        paddedShape[d] = shape[d];
+      else if (d == dim)
+        paddedShape[d] = 1;
+      else
+        paddedShape[d] = shape[d - 1];
+    }
+    return blockedParent.getElemsPerThread(paddedShape);
+  } else {
+    assert(0 && "getElemsPerThread not implemented");
+    return 0;
+  }
+}
+
+unsigned MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
+  // TODO:
+  assert(0 && "MmaEncodingAttr::getElemsPerThread not implemented");
+  return 0;
+}
+
+unsigned SharedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
+  // TODO:
+  assert(0 && "SharedEncodingAttr::getElemsPerThread not implemented");
+  return 0;
 }
 
 //===----------------------------------------------------------------------===//
@@ -293,44 +373,6 @@ void SharedEncodingAttr::print(AsmPrinter &printer) const {
 }
 
 //===----------------------------------------------------------------------===//
-// CopyAsyncOp
-//===----------------------------------------------------------------------===//
-
-ParseResult parseCopyAsyncOp(OpAsmParser &parser, OperationState &result) {
-  SmallVector<OpAsmParser::OperandType, 4> allOperands;
-  Type resultTypes[1], ptrType;
-  SMLoc allOperandLoc = parser.getCurrentLocation();
-  if (parser.parseOperandList(allOperands) ||
-      parser.parseOptionalAttrDict(result.attributes) || parser.parseColon() ||
-      parser.parseCustomTypeWithFallback(ptrType) || parser.parseArrow() ||
-      parser.parseCustomTypeWithFallback(resultTypes[0]))
-    return failure();
-  result.addTypes(resultTypes);
-
-  SmallVector<Type> operandTypes;
-  operandTypes.push_back(ptrType); // ptr
-  if (allOperands.size() >= 2)
-    operandTypes.push_back(triton::getI1SameShape(ptrType)); // mask
-  if (allOperands.size() >= 3)
-    operandTypes.push_back(triton::getPointeeType(ptrType)); // other
-
-  if (parser.resolveOperands(allOperands, operandTypes, allOperandLoc,
-                             result.operands))
-    return failure();
-  return success();
-}
-
-void printCopyAsyncOp(OpAsmPrinter &printer, CopyAsyncOp copyAsyncOp) {
-  printer << " ";
-  printer << copyAsyncOp.getOperation()->getOperands();
-  printer.printOptionalAttrDict(copyAsyncOp->getAttrs(), /*elidedAttrs=*/{});
-  printer << " : ";
-  printer.printStrippedAttrOrType(copyAsyncOp.ptr().getType());
-  printer << " -> ";
-  printer.printStrippedAttrOrType(copyAsyncOp.result().getType());
-}
-
-//===----------------------------------------------------------------------===//
 // InsertSliceAsyncOp
 //===----------------------------------------------------------------------===//
 
@@ -350,7 +392,7 @@ ParseResult parseInsertSliceAsyncOp(OpAsmParser &parser,
   operandTypes.push_back(srcType); // src
   operandTypes.push_back(dstType); // dst
   operandTypes.push_back(
-      IntegerType::get(parser.getBuilder().getContext(), 32)); // offset
+      IntegerType::get(parser.getBuilder().getContext(), 32)); // index
   if (allOperands.size() >= 4)
     operandTypes.push_back(triton::getI1SameShape(srcType)); // mask
   if (allOperands.size() >= 5)
@@ -389,6 +431,8 @@ mlir::LogicalResult ExtractSliceOp::inferReturnTypes(
   auto axis = attributes.get("axis").cast<IntegerAttr>().getInt();
   if (axis < 0 || axis > srcShape.size())
     return failure();
+  // Since we only extract a slice from a certain index on the axis,
+  // the dims before the axis can be dropped.
   auto dstShape = srcShape.drop_front(axis + 1);
   auto returnType =
       RankedTensorType::get(dstShape, srcType.getElementType(), encoding);
@@ -438,16 +482,10 @@ void TritonGPUDialect::initialize() {
 // Verification
 //===----------------------------------------------------------------------===//
 
-static LogicalResult verify(CopyAsyncOp op) {
-  if (!isSharedEncoding(op.getResult())) {
-    return op.emitOpError("copy_async should return a shared memory tensor");
-  }
-  return success();
-}
-
 static LogicalResult verify(InsertSliceAsyncOp op) {
   if (!isSharedEncoding(op.getResult())) {
-    return op.emitOpError("copy_async should return a shared memory tensor");
+    return op.emitOpError(
+        "insert_slice_async should return a shared memory tensor");
   }
   return success();
 }

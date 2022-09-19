@@ -121,7 +121,7 @@ def add(input: tl.tensor,
     if other_scalar_ty.is_ptr() and not input_scalar_ty.is_ptr():
         input, other = other, input
     if input_scalar_ty.is_ptr():
-        return tl.tensor(builder.create_gep(input.handle, other.handle), input.type)
+        return tl.tensor(builder.create_addptr(input.handle, other.handle), input.type)
     # float + float
     elif input_scalar_ty.is_floating():
         return tl.tensor(builder.create_fadd(input.handle, other.handle), input.type)
@@ -138,7 +138,7 @@ def sub(input: tl.tensor,
     scalar_ty = input.type.scalar
     # ptr - offset
     if scalar_ty.is_ptr():
-        return tl.tensor(builder.create_gep(input.handle, minus(other, builder).handle),
+        return tl.tensor(builder.create_addptr(input.handle, minus(other, builder).handle),
                          input.type)
     # float - float
     if scalar_ty.is_floating():
@@ -508,8 +508,21 @@ def broadcast_impl_value(lhs: tl.tensor,
     elif lhs_ty.is_block() and rhs_ty.is_block():
         lhs_shape = lhs_ty.get_block_shapes()
         rhs_shape = rhs_ty.get_block_shapes()
-        if len(lhs_shape) != len(rhs_shape):
-            raise ValueError("Cannot make_shape_compatible: blocks must have the same rank")
+
+        if len(lhs_shape) < len(rhs_shape):
+            # Add new axes to lhs
+            for dim in range(len(lhs_shape), len(rhs_shape)):
+                lhs = tl.tensor(builder.create_expand_dims(lhs.handle, dim), tl.block_type(lhs_ty.scalar, lhs_shape + [1]))
+                lhs_ty = lhs.type
+                lhs_shape = lhs_ty.get_block_shapes()
+        elif len(rhs_shape) < len(lhs_shape):
+            # Add new axes to rhs
+            for dim in range(len(rhs_shape), len(lhs_shape)):
+                rhs = tl.tensor(builder.create_expand_dims(rhs.handle, dim), tl.block_type(rhs_ty.scalar, rhs_shape + [1]))
+                rhs_ty = rhs.type
+                rhs_shape = rhs_ty.get_block_shapes()
+        assert len(rhs_shape) == len(lhs_shape)
+
         ret_shape = []
         for i in range(len(lhs_shape)):
             left = lhs_shape[i]
@@ -962,10 +975,7 @@ def reduce_impl(input: tl.tensor, axis: int, builder: ir.builder, name: str,
     for i, s in enumerate(shape):
         if i != axis:
             ret_shape.append(s)
-    if len(ret_shape) == 0:
-        res_ty = scalar_ty
-    else:
-        res_ty = tl.block_type(scalar_ty, ret_shape)
+    res_ty = tl.block_type(scalar_ty, ret_shape)
 
     if scalar_ty.is_floating():
         return tl.tensor(builder.create_reduce(input.handle, FLOAT_OP, axis), res_ty)

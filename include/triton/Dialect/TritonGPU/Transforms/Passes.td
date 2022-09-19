@@ -39,9 +39,6 @@ def TritonGPUCombineOps : Pass<"tritongpu-combine", "mlir::ModuleOp"> {
   let summary = "combine triton gpu ops";
 
   let description = [{
-    convert_layout(load(%ptr, %mask, %other), #SMEM_LAYOUT) => 
-      copy_async(%ptr, %mask, %other), barrier
-
     convert_layout(convert_layout(%src, #LAYOUT_0), #LAYOUT_1) =>
       convert_layout(%src, #LAYOUT_1)
 

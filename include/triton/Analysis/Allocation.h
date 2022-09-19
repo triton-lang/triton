@@ -14,7 +14,12 @@ namespace mlir {
 
 namespace triton {
 class AllocationAnalysis;
-}
+
+SmallVector<unsigned>
+getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
+                             unsigned &outVec);
+
+} // namespace triton
 
 /// Modified from llvm-15.0: llvm/ADT/AddressRanges.h
 /// A class that represents an interval, specified using a start and an end
@@ -156,7 +161,7 @@ private:
 
 private:
   template <BufferT::BufferKind Kind, typename KeyType, typename... Args>
-  void addBuffer(KeyType &key, Args &&... args) {
+  void addBuffer(KeyType &key, Args &&...args) {
     auto buffer = BufferT(Kind, std::forward<Args>(args)...);
     bufferSet[buffer.id] = std::move(buffer);
     if constexpr (Kind == BufferT::BufferKind::Explicit) {

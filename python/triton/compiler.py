@@ -53,7 +53,7 @@ def mangle_ty(ty):
         elt = mangle_ty(ty.scalar)
         shape = '_'.join(map(str, ty.shape))
         return f'{elt}S{shape}S'
-    assert False, "Unsupport type"
+    assert False, "Unsupported type"
 
 
 def mangle_fn(name, arg_tys, constants):
@@ -464,7 +464,7 @@ class CodeGenerator(ast.NodeVisitor):
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
 
-            # condtion (the before region)
+            # condition (the before region)
             cond_block = self.builder.create_block()
             self.builder.set_insertion_point_to_start(cond_block)
             cond = self.visit(node.test)
@@ -752,8 +752,11 @@ def make_triton_ir(fn, signature, constants=dict(), attributes=dict()):
     # create kernel prototype
     constants = {fn.arg_names.index(name): value for name, value in constants.items()}
     attributes = {fn.arg_names.index(name): value for name, value in attributes.items()}
-    arg_types = signature.replace(' ', '').split(',')
-    arg_types = [str_to_ty(x) for x in arg_types]
+    if signature.replace(' ', '') != '':
+        arg_types = signature.replace(' ', '').split(',')
+        arg_types = [str_to_ty(x) for x in arg_types]
+    else:
+        arg_types = []
     prototype = triton.language.function_type([], arg_types)
     # visit kernel AST
     gscope = fn.__globals__.copy()

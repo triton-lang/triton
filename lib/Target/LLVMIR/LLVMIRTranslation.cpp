@@ -14,6 +14,7 @@
 #include "mlir/Transforms/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVM.h"
 #include "triton/driver/llvm.h"
+#include "triton/tools/sys/getenv.hpp"
 #include "llvm/IR/Constants.h"
 
 namespace mlir {
@@ -124,6 +125,17 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
                            mlir::ModuleOp module) {
   mlir::PassManager pm(module->getContext());
   applyPassManagerCLOptions(pm);
+  auto printingFlags = mlir::OpPrintingFlags();
+  printingFlags.elideLargeElementsAttrs(16);
+  pm.enableIRPrinting(
+      /*shouldPrintBeforePass=*/nullptr,
+      /*shouldPrintAfterPass=*/
+      [](mlir::Pass *pass, mlir::Operation *) {
+        return ::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
+      },
+      /*printModuleScope=*/false,
+      /*printAfterOnlyOnChange=*/true,
+      /*printAfterOnlyOnFailure*/ false, llvm::dbgs(), printingFlags);
 
   pm.addPass(createConvertTritonGPUToLLVMPass());
   // Conanicalize to eliminate the remaining UnrealizedConversionCastOp
