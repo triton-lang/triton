@@ -969,6 +969,13 @@ def _build(name, src, path):
     return so
 
 
+def binary_name_to_header_name(name):
+    if len(name) > 128:
+        # avoid filename too long errors (filename limit is 255)
+        name = "kernel_" + hashlib.sha256(name.encode("utf-8")).hexdigest()
+    return f"{name}.h"
+
+
 def generate_torch_glue(kernel_name, constants, signature, num_warps, binaries, tmpdir):
     headers = dict()
 
@@ -981,7 +988,7 @@ def generate_torch_glue(kernel_name, constants, signature, num_warps, binaries, 
 const char* {name}_ptx = R"({bin["ptx"]})";
 unsigned char {name}_bin[] = {{ {','.join(map(hex, bin["cubin"]))} }};
 unsigned int {name}_shmem = {shmem_size};"""
-        headers[name] = os.path.join(tmpdir, f"{name}.h")
+        headers[name] = os.path.join(tmpdir, binary_name_to_header_name(name))
         with open(headers[name], "w") as f:
             f.write(initializer)
 
@@ -1018,7 +1025,7 @@ unsigned int {name}_shmem = {shmem_size};"""
     # generate glue code
     src = ""
     for bin, shmem_size, name in binaries:
-        src += f"#include \"{name}.h\"\n"
+        src += f"#include \"{headers[name]}\"\n"
     src += f"""
 #include \"cuda.h\"
 #include <Python.h>
