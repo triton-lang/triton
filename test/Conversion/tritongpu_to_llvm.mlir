@@ -422,6 +422,23 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   }
 }
 
+// -----
+
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
+#shared0 = #triton_gpu.shared<{vec = 1, perPhase=2, maxPhase=8 ,order = [1, 0]}>
+#mma0 = #triton_gpu.mma<{version=2, warpsPerCTA=[1,1]}>
+module attributes {"triton_gpu.num-warps" = 1 : i32} {
+  func @convert_dot(%A: tensor<16x16xf16, #blocked0>, %B: tensor<16x16xf16, #blocked0>) {
+    %AA = triton_gpu.convert_layout %A : (tensor<16x16xf16, #blocked0>) -> tensor<16x16xf16, #shared0>
+    %BB = triton_gpu.convert_layout %B : (tensor<16x16xf16, #blocked0>) -> tensor<16x16xf16, #shared0>
+    %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma0>
+    %D = tt.dot %AA, %BB, %cst0 {allowTF32 = true} : tensor<16x16xf16, #shared0> * tensor<16x16xf16, #shared0> -> tensor<16x16xf32, #mma0>
+
+    return
+  }
+}
+
+
 // TODO: problems in MLIR's parser on slice layout
 // #blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
 // module attributes {"triton_gpu.num-warps" = 1 : i32} {

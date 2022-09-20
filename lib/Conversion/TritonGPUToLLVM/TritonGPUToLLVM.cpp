@@ -62,6 +62,7 @@ Value createConstantI32(Location loc, PatternRewriter &rewriter, int32_t v) {
 #define ptr_ty(...) LLVM::LLVMPointerType::get(__VA_ARGS__)
 #define extract_val(...) rewriter.create<LLVM::ExtractValueOp>(loc, __VA_ARGS__)
 #define i32_val(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
+#define i32_ty() rewriter.getIntegerType(32)
 
 } // namespace LLVM
 } // namespace mlir
@@ -204,9 +205,8 @@ struct FuncOpConversion : public FuncOpConversionBase {
 
     // Set an attribute for maxntidx, it could be used in latter LLVM codegen
     // for `nvvm.annotation` metadata.
-    newFuncOp->setAttr(
-        NVVMMetadataField::MaxNTid,
-        rewriter.getIntegerAttr(type::i32Ty(ctx), 32 * NumWarps));
+    newFuncOp->setAttr(NVVMMetadataField::MaxNTid,
+                       rewriter.getIntegerAttr(i32_ty(), 32 * NumWarps));
 
     rewriter.eraseOp(funcOp);
     return success();
@@ -851,11 +851,11 @@ struct StoreOpConversion
             elem = rewriter.create<LLVM::SExtOp>(loc, type::i8Ty(ctx), elem);
           elem = rewriter.create<LLVM::BitcastOp>(loc, valueElemTy, elem);
 
+          Type u32Ty = typeConverter->convertType(type::u32Ty(ctx));
           llWord = rewriter.create<LLVM::InsertElementOp>(
               loc, wordTy, llWord, elem,
               rewriter.create<LLVM::ConstantOp>(
-                  loc, type::u32Ty(ctx),
-                  IntegerAttr::get(type::u32Ty(ctx), elemIdx)));
+                  loc, u32Ty, IntegerAttr::get(u32Ty, elemIdx)));
         }
         llWord = rewriter.create<LLVM::BitcastOp>(loc, valArgTy, llWord);
         std::string constraint =
@@ -1389,7 +1389,7 @@ public:
                             PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::gpu::ConvertLayoutOp>(converter,
                                                                       benefit),
-        allocation_(allocation), smem_(smem) {}
+        allocation(allocation), smem(smem) {}
 
   LogicalResult
   matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
@@ -1404,13 +1404,13 @@ public:
     if ((!srcLayout.isa<BlockedEncodingAttr>()) ||
         (!dstLayout.isa<BlockedEncodingAttr>())) {
       // TODO: not implemented
-      assert(0 &&
-             "convert_layout except for blocked -> blocked is not implemented");
+      llvm::errs()
+          << "convert_layout except for blocked -> blocked is not implemented";
       return failure();
     }
     auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
-    Value smemBase = getSharedMemoryBase(loc, rewriter, smem_, allocation_,
-                                         op.getOperation());
+    Value smemBase =
+        getSharedMemoryBase(loc, rewriter, smem, allocation, op.getOperation());
     auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
     smemBase = rewriter.create<LLVM::BitcastOp>(loc, elemPtrTy, smemBase);
 
@@ -1596,8 +1596,8 @@ private:
     }
   }
 
-  const Allocation *allocation_;
-  Value smem_;
+  const Allocation *allocation;
+  Value smem;
 };
 
 /// ====================== dot codegen begin ==========================
@@ -1859,16 +1859,18 @@ public:
       );
 
       auto getIntAttr = [&](int v) {
-        return ArrayAttr::get(ctx, {IntegerAttr::get(type::i32Ty(ctx), v)});
+        return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty(), v)});
       };
 
       Value resV4 = inlineAsm.getRes(); // 4xi32, each is composed of 2xf16
                                         // elements(adjacent columns in a row)
-      return std::make_tuple(
-          extract_val(type::i32Ty(ctx), resV4, getIntAttr(0)),
-          extract_val(type::i32Ty(ctx), resV4, getIntAttr(1)),
-          extract_val(type::i32Ty(ctx), resV4, getIntAttr(2)),
-          extract_val(type::i32Ty(ctx), resV4, getIntAttr(3)));
+
+      Type fp16x2Ty = VectorType::get({2}, type::f16Ty(ctx));
+
+      return std::make_tuple(extract_val(fp16x2Ty, resV4, getIntAttr(0)),
+                             extract_val(fp16x2Ty, resV4, getIntAttr(1)),
+                             extract_val(fp16x2Ty, resV4, getIntAttr(2)),
+                             extract_val(fp16x2Ty, resV4, getIntAttr(3)));
     } else if (elemBytes == 4 &&
                needTrans) { // Use lds.32 to load tf32 matrices
       assert(false && "Not implemented yet");
@@ -1913,11 +1915,26 @@ private:
   MLIRContext *ctx{};
 };
 
-struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
-  explicit DotOpConversion(LLVMTypeConverter &typeConverter,
-                           PatternBenefit benefit = 1)
-      : ConvertTritonGPUOpToLLVMPattern(typeConverter, benefit) {}
+bool isSplatLikeAndEqual(Value value, float v) {
+  bool res{};
+  if (auto constv = dyn_cast<arith::ConstantOp>(value.getDefiningOp())) {
+    auto tensorTy = constv.getType().cast<RankedTensorType>();
+    Type elemTy = tensorTy.getElementType();
 
+    if (auto attr = constv.getValue().dyn_cast<SplatElementsAttr>()) {
+      if (!attr.isSplat())
+        return false;
+      if (elemTy.isInteger(32) && attr.template getValues<int>()[0] == v)
+        res = true;
+      else if (elemTy.isF32() && attr.template getValues<float>()[0] == v) {
+        res = true;
+      }
+    }
+  }
+  return res;
+}
+
+struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
   enum class TensorCoreType : uint8_t {
     // floating-point tensor core instr
     FP32_FP16_FP16_FP32 = 0, // default
@@ -1931,6 +1948,12 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
     NOT_APPLICABLE,
   };
 
+  explicit DotOpConversion(LLVMTypeConverter &typeConverter,
+                           const Allocation *allocation, Value smem,
+                           PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern(typeConverter, benefit),
+        allocation(allocation), smem(smem) {}
+
   LogicalResult
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -1942,6 +1965,9 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
     Value D = op.getResult();
     MLIRContext *ctx = op->getContext();
     bool allowTF32 = op.allowTF32();
+
+    bool isCZero = isSplatLikeAndEqual(C, 0.f);
+    assert(isCZero && "Currently only C=0 is supported");
 
     // Here we assume the DotOp's operands always comes from shared memory.
     auto AShape = A.getType().cast<RankedTensorType>().getShape();
@@ -1977,20 +2003,30 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
   }
 
 private:
-  /// Convert to mma.m8n8k4
-  LogicalResult convertMMA884(triton::DotOp op, OpAdaptor adapter,
-                              ConversionPatternRewriter &rewriter) const;
-
   // Convert to mma.m16n8k16
   LogicalResult convertMMA16816(triton::DotOp a, OpAdaptor adapter,
                                 ConversionPatternRewriter &rewriter) const;
+  /// Convert to mma.m8n8k4
+  LogicalResult convertMMA884(triton::DotOp op, OpAdaptor adapter,
+                              ConversionPatternRewriter &rewriter) const {
+    assert(false && "Not implemented yet.");
+    return failure();
+  }
 
   LogicalResult convertFMADot(triton::DotOp op, OpAdaptor adapter,
-                              ConversionPatternRewriter &rewriter) const;
-
-  Value getShemAddr(Value op) const {
-    llvm::report_fatal_error("NOT IMPLEMENTED");
+                              ConversionPatternRewriter &rewriter) const {
+    assert(false && "Not implemented yet.");
+    return failure();
   }
+
+  Value getSmemAddr(Value value, Location loc,
+                    ConversionPatternRewriter &rewriter) const {
+    return getSharedMemoryBase(loc, rewriter, smem, allocation,
+                               value.getDefiningOp());
+  }
+
+  const Allocation *allocation;
+  Value smem;
 };
 
 struct DotOpConversionHelper {
@@ -2204,7 +2240,6 @@ private:
   DotOp dot;
 };
 
-
 LogicalResult
 DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
                                  ConversionPatternRewriter &rewriter) const {
@@ -2245,8 +2280,9 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
   const int matShapeN = matShape[1];
   const int matShapeK = matShape[2];
 
-  const int numRepM = dShape[0] / wpt[0];
-  const int numRepN = dShape[1] / wpt[1];
+  // shape / shape_per_cta
+  const int numRepM = std::max<int>(dShape[0] / (wpt[0] * mmaInstrM), 1);
+  const int numRepN = std::max<int>(dShape[1] / (wpt[1] * mmaInstrN), 1);
   const int numRepK = std::max<int>(NK / mmaInstrK, 1);
 
   Value head = getThreadId(rewriter, loc);
@@ -2289,7 +2325,7 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
     SmallVector<Value> ptrs(numPtrs);
 
     Type smemPtrTy = helper.getShemPtrTy();
-    auto smemBase = getShemAddr(tensor);
+    auto smemBase = getSmemAddr(tensor, loc, rewriter);
     for (int i = 0; i < numPtrs; i++) {
       ptrs[i] = bit_cast(
           smemPtrTy, gep(smemBase.getType(), smemBase, ValueRange({offs[i]})));
@@ -2318,7 +2354,8 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
       {mmaInstrK, mmaInstrN} /*instrShpae*/,
       {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/, hb /*vals*/);
 
-  SmallVector<Value> fc(numRepM * numRepN * 2);
+  const unsigned mStride = numRepN * 2;
+  SmallVector<Value> fc(numRepM * mStride + numRepN * 2);
   auto callMma = [&](unsigned m, unsigned n, unsigned k) {
     PTXBuilder builder;
 
@@ -2349,10 +2386,8 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
 
     auto mmaOut = inlineAsm.getRes();
     auto getIntAttr = [&](int v) {
-      return ArrayAttr::get(ctx, {IntegerAttr::get(type::i32Ty(ctx), v)});
+      return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty(), v)});
     };
-
-    const unsigned mStride = numRepN * 2;
 
     fc[(m + 0) * mStride + (n * 2 + 0)] =
         extract_val(type::f32Ty(ctx), mmaOut, getIntAttr(0));
@@ -2379,6 +2414,10 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
   // replace with new packed result
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(fc.size(), type::f32Ty(ctx)));
+  for (int i = 0; i < fc.size(); i++) {
+    llvm::outs() << i << " " << fc[i] << "\n";
+  }
+  llvm::outs() << "structTy: " << structTy << "\n";
   Value res = getStructFromElements(loc, fc, rewriter, structTy);
   rewriter.replaceOp(op, res);
 
@@ -2417,11 +2456,9 @@ public:
                                  convertType(type.getElementType()));
       return LLVM::LLVMStructType::getLiteral(&getContext(), types);
     } else if (auto mma_layout = layout.dyn_cast<MmaEncodingAttr>()) {
-      // TODO: Not implemented
-      return llvm::None;
+      return type;
     } else if (auto shared_layout = layout.dyn_cast<SharedEncodingAttr>()) {
-      // TODO: Not implemented
-      return llvm::None;
+      return type;
     }
     return llvm::None;
   }
@@ -2454,6 +2491,7 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<ViewLikeOpConversion<triton::ViewOp>>(typeConverter, benefit);
   patterns.add<ViewLikeOpConversion<triton::ExpandDimsOp>>(typeConverter,
                                                            benefit);
+  patterns.add<DotOpConversion>(typeConverter, allocation, smem, benefit);
 }
 
 class ConvertTritonGPUToLLVM
@@ -2478,7 +2516,7 @@ public:
     // step 2: Allocate for shared memories
     // step 3: Convert the rest of ops via partial conversion
     // The reason for a seperation between 1/3 is that, step 2 is out of
-    // the scope of Dialect Conversion, thus we need to make sure the smem_
+    // the scope of Dialect Conversion, thus we need to make sure the smem
     // is not revised during the conversion of step 3.
     RewritePatternSet func_patterns(context);
     func_patterns.add<FuncOpConversion>(typeConverter, numWarps, 1 /*benefit*/);
@@ -2495,7 +2533,7 @@ public:
     // patterns.
     RewritePatternSet patterns(context);
     populateTritonToLLVMPatterns(typeConverter, patterns, numWarps,
-                                 *axisAnalysis, &allocation, smem_,
+                                 *axisAnalysis, &allocation, smem,
                                  10 /*benefit*/);
 
     // Add arith/math's patterns to help convert scalar expression to LLVM.
@@ -2521,7 +2559,7 @@ protected:
   void initSharedMemory(size_t size,
                         TritonGPUToLLVMTypeConverter &typeConverter);
 
-  Value smem_;
+  Value smem;
 };
 
 void ConvertTritonGPUToLLVM::initSharedMemory(
@@ -2540,7 +2578,7 @@ void ConvertTritonGPUToLLVM::initSharedMemory(
   assert(funcs.size() == 1 &&
          "Inliner pass is expected before TritonGPUToLLVM");
   b.setInsertionPointToStart(&funcs[0].getBody().front());
-  smem_ = b.create<LLVM::AddressOfOp>(loc, global);
+  smem = b.create<LLVM::AddressOfOp>(loc, global);
 }
 
 } // namespace
