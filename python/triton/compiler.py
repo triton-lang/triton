@@ -20,6 +20,10 @@ from filelock import FileLock
 import triton
 import triton._C.libtriton.triton as _triton
 
+import shutil
+import subprocess
+from sysconfig import get_paths
+
 
 def str_to_ty(name):
     if name[0] == "*":
@@ -917,57 +921,6 @@ def generate_name_initializer(signature):
         src
 
 
-@contextlib.contextmanager
-def quiet():
-    old_stdout, old_stderr = sys.stdout, sys.stderr
-    sys.stdout, sys.stderr = io.StringIO(), io.StringIO()
-    try:
-        yield
-    finally:
-        sys.stdout, sys.stderr = old_stdout, old_stderr
-
-
-@functools.lru_cache()
-def libcuda_dir():
-    loc = subprocess.check_output(["whereis", "libcuda.so"]).decode().strip().split()[-1]
-    return os.path.dirname(loc)
-
-
-def _build(name, src, path):
-    # add framework
-    extra_compile_args = []
-    library_dirs = [libcuda_dir()]
-    include_dirs = [path, "/usr/local/cuda/include/"]
-    libraries = ['cuda']
-    # extra arguments
-    extra_link_args = []
-    # create extension module
-    ext = setuptools.Extension(
-        name=name,
-        language='c++',
-        sources=[src],
-        include_dirs=include_dirs,
-        extra_compile_args=extra_compile_args + ['-O3'],
-        extra_link_args=extra_link_args,
-        library_dirs=library_dirs,
-        libraries=libraries,
-    )
-    # build extension module
-    args = ['build_ext']
-    args.append('--build-temp=' + path)
-    args.append('--build-lib=' + path)
-    args.append('-q')
-    args = dict(
-        name=name,
-        ext_modules=[ext],
-        script_args=args,
-    )
-    # with quiet():
-    setuptools.setup(**args)
-    suffix = sysconfig.get_config_var('EXT_SUFFIX')
-    so = os.path.join(path, '{name}{suffix}'.format(name=name, suffix=suffix))
-    return so
-
 
 def binary_name_to_header_name(name):
     if len(name) > 128:
@@ -1030,7 +983,7 @@ unsigned int {name}_shmem = {shmem_size};"""
 #include \"cuda.h\"
 #include <Python.h>
 
-inline void gpuAssert(CUresult code, const char *file, int line)
+static inline void gpuAssert(CUresult code, const char *file, int line)
 {{
    if (code != CUDA_SUCCESS)
    {{
@@ -1048,7 +1001,7 @@ inline void gpuAssert(CUresult code, const char *file, int line)
 static CUmodule module = 0;
 static CUfunction function = 0;
 
-static void init_function(const char* name, const unsigned char* src, size_t n_shared_bytes, int64_t device){{
+static inline void init_function(const char* name, const unsigned char* src, size_t n_shared_bytes, int64_t device){{
   CUmodule mod;
   CUfunction fun;
   CUDA_CHECK(cuModuleLoadData(&mod, src));
@@ -1070,7 +1023,7 @@ static void init_function(const char* name, const unsigned char* src, size_t n_s
   function = fun;
 }}
 
-static void init_module(CUdevice device) {{
+static inline void init_module(CUdevice device) {{
   {func_init}
 }}
 
@@ -1209,16 +1162,70 @@ def make_cache_key(fn, signature, configs, constants, num_warps, num_stages):
     key = hashlib.md5(key.encode("utf-8")).hexdigest()
     return key
 
+# utilties for generating and compiling C wrappers
 
-def make_shared_object(fn, constants, signature, num_warps, binaries, tmpdir):
-    src = generate_torch_glue(fn.__name__, constants, signature, num_warps, binaries, tmpdir)
-    src_path = os.path.join(tmpdir, "main.c")
-    with open(src_path, "w") as f:
-        f.write(src)
+@functools.lru_cache()
+def libcuda_dir():
+    loc = subprocess.check_output(["whereis", "libcuda.so"]).decode().strip().split()[-1]
+    return os.path.dirname(loc)
+
+@contextlib.contextmanager
+def quiet():
+    old_stdout, old_stderr = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = io.StringIO(), io.StringIO()
+    try:
+        yield
+    finally:
+        sys.stdout, sys.stderr = old_stdout, old_stderr
+
+def _build(name, src, srcdir):
+    cuda_lib_dir = libcuda_dir()
+    cu_include_dir = "/usr/local/cuda/include"
+    suffix = sysconfig.get_config_var('EXT_SUFFIX')
+    so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
+    # try to avoid setuptools if possible
+    cc = os.environ.get("CC")
+    if cc is None:
+      # TODO: support more things here.
+      clang = shutil.which("clang")
+      gcc = shutil.which("gcc")
+      cc = gcc if gcc is not None else clang
+    py_include_dir = get_paths()["include"]
+    ret = subprocess.check_call([cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}",  f"-I{srcdir}", "-shared", "-fPIC", f"-L{cuda_lib_dir}", f"-lcuda", "-o", so])
+    if ret == 0:
+      return so
+    # fallback on setuptools
+    extra_compile_args = []
+    library_dirs = [cuda_lib_dir]
+    include_dirs = [srcdir, cu_include_dir]
+    libraries = ['cuda']
+    # extra arguments
+    extra_link_args = []
+    # create extension module
+    ext = setuptools.Extension(
+        name=name,
+        language='c',
+        sources=[src],
+        include_dirs=include_dirs,
+        extra_compile_args=extra_compile_args + ['-O3'],
+        extra_link_args=extra_link_args,
+        library_dirs=library_dirs,
+        libraries=libraries,
+    )
+    # build extension module
+    args = ['build_ext']
+    args.append('--build-temp=' + srcdir)
+    args.append('--build-lib=' + srcdir)
+    args.append('-q')
+    args = dict(
+        name=name,
+        ext_modules=[ext],
+        script_args=args,
+    )
     with quiet():
-        bin_path = _build(fn.__name__, src_path, tmpdir)
-    with open(bin_path, "rb") as f:
-        return f.read()
+      setuptools.setup(**args)
+    return so
+
 
 
 def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
@@ -1243,10 +1250,14 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
     with tempfile.TemporaryDirectory() as tmpdir:
         all_constants = set(constants.keys())
         all_constants.update(configs[0].equal_to_1)
-        so = make_shared_object(fn, all_constants, signature, num_warps, binaries, tmpdir)
+        src = generate_torch_glue(fn.__name__, constants, signature, num_warps, binaries, tmpdir)
+        src_path = os.path.join(tmpdir, "main.c")
+        with open(src_path, "w") as f:
+            f.write(src)
+        so = _build(fn.__name__, src_path, tmpdir)
+        with open(so, "rb") as f:
+          cache_manager.put(f.read())
 
-    # write shared object to cache
-    cache_manager.put(so)
     return CompiledKernel(fn.__name__, cache_manager.bin_path)
 
 
