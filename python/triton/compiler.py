@@ -6,11 +6,13 @@ import functools
 import hashlib
 import io
 import os
+import shutil
 import subprocess
 import sys
 import sysconfig
 import tempfile
 import warnings
+from sysconfig import get_paths
 from typing import Any, Dict, Set, Tuple, Union
 
 import setuptools
@@ -19,10 +21,6 @@ from filelock import FileLock
 
 import triton
 import triton._C.libtriton.triton as _triton
-
-import shutil
-import subprocess
-from sysconfig import get_paths
 
 
 def str_to_ty(name):
@@ -921,7 +919,6 @@ def generate_name_initializer(signature):
         src
 
 
-
 def binary_name_to_header_name(name):
     if len(name) > 128:
         # avoid filename too long errors (filename limit is 255)
@@ -1164,10 +1161,12 @@ def make_cache_key(fn, signature, configs, constants, num_warps, num_stages):
 
 # utilties for generating and compiling C wrappers
 
+
 @functools.lru_cache()
 def libcuda_dir():
     loc = subprocess.check_output(["whereis", "libcuda.so"]).decode().strip().split()[-1]
     return os.path.dirname(loc)
+
 
 @contextlib.contextmanager
 def quiet():
@@ -1178,6 +1177,7 @@ def quiet():
     finally:
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
+
 def _build(name, src, srcdir):
     cuda_lib_dir = libcuda_dir()
     cu_include_dir = "/usr/local/cuda/include"
@@ -1186,14 +1186,14 @@ def _build(name, src, srcdir):
     # try to avoid setuptools if possible
     cc = os.environ.get("CC")
     if cc is None:
-      # TODO: support more things here.
-      clang = shutil.which("clang")
-      gcc = shutil.which("gcc")
-      cc = gcc if gcc is not None else clang
+        # TODO: support more things here.
+        clang = shutil.which("clang")
+        gcc = shutil.which("gcc")
+        cc = gcc if gcc is not None else clang
     py_include_dir = get_paths()["include"]
-    ret = subprocess.check_call([cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}",  f"-I{srcdir}", "-shared", "-fPIC", f"-L{cuda_lib_dir}", f"-lcuda", "-o", so])
+    ret = subprocess.check_call([cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", f"-L{cuda_lib_dir}", "-lcuda", "-o", so])
     if ret == 0:
-      return so
+        return so
     # fallback on setuptools
     extra_compile_args = []
     library_dirs = [cuda_lib_dir]
@@ -1223,9 +1223,8 @@ def _build(name, src, srcdir):
         script_args=args,
     )
     with quiet():
-      setuptools.setup(**args)
+        setuptools.setup(**args)
     return so
-
 
 
 def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
@@ -1256,7 +1255,7 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
             f.write(src)
         so = _build(fn.__name__, src_path, tmpdir)
         with open(so, "rb") as f:
-          cache_manager.put(f.read())
+            cache_manager.put(f.read())
 
     return CompiledKernel(fn.__name__, cache_manager.bin_path)
 
