@@ -926,23 +926,7 @@ def binary_name_to_header_name(name):
     return f"{name}.h"
 
 
-def generate_torch_glue(kernel_name, constants, signature, num_warps, binaries, tmpdir):
-    headers = dict()
-
-    # write all cubins to header files
-    assert len(binaries) == 1, "AoT compilation not yet supported"
-
-    for bin, shmem_size, name in binaries:
-        assert len(name) < 1024
-        initializer = f"""
-const char* {name}_ptx = R"({bin["ptx"]})";
-unsigned char {name}_bin[] = {{ {','.join(map(hex, bin["cubin"]))} }};
-unsigned int {name}_shmem = {shmem_size};"""
-        headers[name] = os.path.join(tmpdir, binary_name_to_header_name(name))
-        with open(headers[name], "w") as f:
-            f.write(initializer)
-
-    func_init = '\n  '.join(f"init_function(\"{name}\", {name}_bin, {name}_shmem, device);" for _, _, name in binaries)
+def generate_torch_glue(kernel_name, constants, signature):
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     def _extracted_type(ty):
@@ -970,12 +954,9 @@ unsigned int {name}_shmem = {shmem_size};"""
             "int64_t": "L",
         }[ty]
 
-    format = "iiiK" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
+    format = "iiiiiKK" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
 
     # generate glue code
-    src = ""
-    for bin, shmem_size, name in binaries:
-        src += f"#include \"{headers[name]}\"\n"
     src += f"""
 #include \"cuda.h\"
 #include <Python.h>
@@ -996,38 +977,15 @@ static inline void gpuAssert(CUresult code, const char *file, int line)
 #define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
 
-void load_kernel(const char* name, const char* src, size_t n_shared_bytes, int64_t device){{
-  CUmodule mod;
-  CUfunction fun;
-  CUDA_CHECK(cuModuleLoadData(&mod, src));
-  CUDA_CHECK(cuModuleGetFunction(&fun, mod, name));
-  // set dynamic shared memory if necessary
-  int shared_optin;
-  CUDA_CHECK(cuDeviceGetAttribute(&shared_optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, device));
-  if (n_shared_bytes > 49152 && shared_optin > 49152) {{
-    CUDA_CHECK(cuFuncSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED));
-    int shared_total, shared_static;
-    int n_spills, n_reg;
-    CUDA_CHECK(cuDeviceGetAttribute(&shared_total, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR, device));
-    CUDA_CHECK(cuFuncGetAttribute(&shared_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun));
-    CUDA_CHECK(cuFuncGetAttribute(&n_spills, CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, fun));
-    CUDA_CHECK(cuFuncGetAttribute(&n_reg, CU_FUNC_ATTRIBUTE_NUM_REGS, fun));
-    CUDA_CHECK(cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin - shared_static));
-  }}
-  module = mod;
-  function = fun;
-  return Py_BuildValue("(KK)", (uint64_t)module, (uint64_t)function);
-}}
-
-
-void _{kernel_name}(int gridX, int gridY, int gridZ, CUstream stream, CUfunction function, {arg_decls}) {{
+void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, CUstream stream, CUfunction function, {arg_decls}) {{
   void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
   if(gridX*gridY*gridZ > 0){{
-    CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*{num_warps}, 1, 1, {name}_shmem, stream, params, 0));
+    CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
   }}
 }}
 
-CUdeviceptr getPointer(PyObject *obj, int idx) {{
+
+inline CUdeviceptr getPointer(PyObject *obj, int idx) {{
   if (PyLong_Check(obj)) {{
     return (CUdeviceptr)PyLong_AsUnsignedLongLong(obj);
   }}
@@ -1050,15 +1008,16 @@ CUdeviceptr getPointer(PyObject *obj, int idx) {{
 }}
 
 
-static PyObject* {kernel_name}(PyObject* self, PyObject* args) {{
+static PyObject* launch(PyObject* self, PyObject* args) {{
   int gridX, gridY, gridZ;
-  uint64_t stream;
+  uint64_t _stream;
+  uint64_t _function;
   {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &stream, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
+  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &_stream, &_function, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
     return NULL;
   }}
 
-  _{kernel_name}(gridX, gridY, gridZ, (CUstream)stream, {', '.join(f"getPointer(_arg{i},{i})" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
+  _launch(gridX, gridY, gridZ, (CUstream)stream, (CUfunction)function, {', '.join(f"getPointer(_arg{i},{i})" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
 
 
   if(PyErr_Occurred()) {{
@@ -1088,18 +1047,6 @@ PyMODINIT_FUNC PyInit_{kernel_name}(void) {{
     return NULL;
   }}
   PyModule_AddFunctions(m, ModuleMethods);
-  PyObject *ptx = PyDict_New();
-"""
-
-    for _, _, name in binaries:
-        src += f"""
-  PyObject *py_{name}_ptx = PyUnicode_FromString({name}_ptx);
-  PyDict_SetItemString(ptx, "{name}", py_{name}_ptx);
-  Py_DECREF(py_{name}_ptx);
-"""
-
-    src += """
-  PyModule_AddObject(m, "ptx", ptx);
   return m;
 }
 """
@@ -1228,13 +1175,9 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
     if cache_manager.has_file():
         return CompiledKernel(fn.__name__, cache_manager.bin_path)
     # compile all the configs
-    binaries = []
-    for config in configs:
-        binaries.append(_compile(fn, signature, device, constants, config, num_warps, num_stages, extern_libs, "cubin"))
+    binary = _compile(fn, signature, device, constants, configs[0], num_warps, num_stages, extern_libs, "cubin")
     # generate and compile glue code into shared object
     with tempfile.TemporaryDirectory() as tmpdir:
-        all_constants = set(constants.keys())
-        all_constants.update(configs[0].equal_to_1)
         src = generate_torch_glue(fn.__name__, constants, signature, num_warps, binaries, tmpdir)
         src_path = os.path.join(tmpdir, "main.c")
         with open(src_path, "w") as f:

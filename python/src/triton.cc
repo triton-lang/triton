@@ -430,13 +430,6 @@ void init_triton_runtime(py::module &&m) {
 /*****************************************************************************/
 typedef std::map<std::string, py::object> asm_map_t;
 
-
-// CUDA
-std::tuple<uint64_t, uint64_t, uint64_t, uint64_t> cu_load_binary(const std::string& name, const std::string& data, size_t n_shared_bytes, uint64_t device){
-
-}
-
-
 // --------------------------------------- 
 // Compile Triton-IR to assembly
 // --------------------------------------- 
@@ -460,7 +453,6 @@ void init_triton_codegen(py::module &&m) {
             extern_lib_map.emplace(
                 name, triton::codegen::create_extern_lib(name, path));
           }
-          llvm::LLVMContext ctx;
           // device properties
           CUdevice dev = (CUdevice)device;
           size_t major = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>(dev);
