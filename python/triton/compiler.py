@@ -995,10 +995,8 @@ static inline void gpuAssert(CUresult code, const char *file, int line)
 }}
 #define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
-static CUmodule module = 0;
-static CUfunction function = 0;
 
-static inline void init_function(const char* name, const unsigned char* src, size_t n_shared_bytes, int64_t device){{
+void load_kernel(const char* name, const char* src, size_t n_shared_bytes, int64_t device){{
   CUmodule mod;
   CUfunction fun;
   CUDA_CHECK(cuModuleLoadData(&mod, src));
@@ -1018,20 +1016,11 @@ static inline void init_function(const char* name, const unsigned char* src, siz
   }}
   module = mod;
   function = fun;
-}}
-
-static inline void init_module(CUdevice device) {{
-  {func_init}
+  return Py_BuildValue("(KK)", (uint64_t)module, (uint64_t)function);
 }}
 
 
-void _{kernel_name}(int gridX, int gridY, int gridZ, CUstream stream, {arg_decls}) {{
-  // TODO: machine may have heterogeneous devices
-  if(function == 0){{
-    CUdevice device;
-    CUDA_CHECK(cuCtxGetDevice(&device));
-    init_module(device);
-  }}
+void _{kernel_name}(int gridX, int gridY, int gridZ, CUstream stream, CUfunction function, {arg_decls}) {{
   void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
   if(gridX*gridY*gridZ > 0){{
     CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*{num_warps}, 1, 1, {name}_shmem, stream, params, 0));
