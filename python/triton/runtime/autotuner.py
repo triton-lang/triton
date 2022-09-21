@@ -68,16 +68,7 @@ class Autotuner(KernelInterface):
             key = tuple([args[i] for i in self.key_idx])
             if key not in self.cache:
                 # prune configs
-                pruned_configs = self.configs
-                if self.early_config_prune:
-                    pruned_configs = self.early_config_prune(self.configs, self.nargs)
-                if self.perf_model:
-                    top_k = self.configs_top_k
-                    if isinstance(top_k, float) and top_k <= 1.0:
-                        top_k = int(len(self.configs) * top_k)
-                    if len(pruned_configs) > top_k:
-                        est_timing = {config: self.perf_model(**self.nargs, **kwargs, **config.kwargs, num_stages=config.num_stages, num_warps=config.num_warps) for config in pruned_configs}
-                        pruned_configs = sorted(est_timing.keys(), key=lambda x: est_timing[x])[:top_k]
+                pruned_configs = self.prune_configs(kwargs)
                 bench_start = time.time()
                 timings = {config: self._bench(*args, config=config, **kwargs)
                            for config in pruned_configs}
@@ -93,6 +84,35 @@ class Autotuner(KernelInterface):
         if config.pre_hook is not None:
             config.pre_hook(self.nargs)
         return self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
+
+    def prune_configs(self, kwargs):
+        pruned_configs = self.configs
+        if self.early_config_prune:
+            pruned_configs = self.early_config_prune(self.configs, self.nargs)
+        if self.perf_model:
+            top_k = self.configs_top_k
+            if isinstance(top_k, float) and top_k <= 1.0:
+                top_k = int(len(self.configs) * top_k)
+            if len(pruned_configs) > top_k:
+                est_timing = {
+                    config: self.perf_model(**self.nargs, **kwargs, **config.kwargs, num_stages=config.num_stages,
+                                            num_warps=config.num_warps)
+                    for config in pruned_configs
+                }
+                pruned_configs = sorted(est_timing.keys(), key=lambda x: est_timing[x])[:top_k]
+        return pruned_configs
+
+    def warmup(self, *args, **kwargs):
+        self.nargs = dict(zip(self.arg_names, args))
+        for config in self.prune_configs(kwargs):
+            self.fn.warmup(
+                *args,
+                num_warps=config.num_warps,
+                num_stages=config.num_stages,
+                **kwargs,
+                **config.kwargs,
+            )
+        self.nargs = None
 
 
 class Config:
