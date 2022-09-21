@@ -1307,6 +1307,49 @@ struct AddPtrOpConversion
   }
 };
 
+struct ExtractSliceOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::ExtractSliceOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::ExtractSliceOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::ExtractSliceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto srcTy = op.src().getType().dyn_cast<RankedTensorType>();
+    auto srcLayout = srcTy.getEncoding().dyn_cast<SharedEncodingAttr>();
+    assert(srcLayout && "Unexpected resultLayout in ExtractSliceOpConversion");
+
+    // Example:
+    // %dst = extract_slice %src, %index {axis = 2}
+    // src.shape = [11, 2, 3, 4, 1]
+    // dst.offset = [11, 2, %index, 4, 1]
+    auto srcShape = srcTy.getShape();
+    auto axis =
+        op->getAttrOfType<IntegerAttr>("axis").cast<IntegerAttr>().getInt();
+    SmallVector<Value> indices;
+    for (unsigned i = 0; i < srcShape.size(); ++i) {
+      if (i == axis) {
+        indices.push_back(adaptor.index());
+      } else {
+        auto mlirI32Attr = rewriter.getI32IntegerAttr(srcShape[i]);
+        auto llvmI32Type =
+            typeConverter->convertType(rewriter.getIntegerType(32));
+        indices.push_back(
+            rewriter.create<LLVM::ConstantOp>(loc, llvmI32Type, mlirI32Attr));
+      }
+    }
+
+    auto resultTy = op.getType().dyn_cast<RankedTensorType>();
+    Type elemTy =
+        this->getTypeConverter()->convertType(resultTy.getElementType());
+    Value resultVal =
+        rewriter.create<LLVM::GEPOp>(loc, elemTy, adaptor.src(), indices);
+    rewriter.replaceOp(op, resultVal);
+    return success();
+  }
+};
+
 template <typename SourceOp, typename DestOp>
 class BinaryOpConversion : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
 public:
@@ -1626,6 +1669,7 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
                                                                 benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
+  patterns.add<ExtractSliceOpConversion>(typeConverter, benefit);
   patterns.add<ConvertLayoutOpConversion>(typeConverter, allocation, smem,
                                           benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
