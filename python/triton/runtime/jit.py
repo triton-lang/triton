@@ -102,16 +102,9 @@ class KernelInterface:
         Hence JITFunction.__getitem__ returns a callable proxy that
         memorizes the grid.
         """
-        class Launcher:
-            @staticmethod
-            def __call__(*args, **kwargs):
-                return self.run(*args, grid=grid, **kwargs)
-
-            @staticmethod
-            def warmup(*args, **kwargs):
-                return self.warmup(*args, grid=grid, **kwargs)
-
-        return Launcher()
+        def launcher(*args, **kwargs):
+            return self.run(*args, grid=grid, **kwargs)
+        return launcher
 
 
 class JITFunction(KernelInterface):
