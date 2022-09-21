@@ -166,9 +166,9 @@ def test_jit_warmup_cache() -> None:
         32,
     ]
     assert len(kernel_add.cache) == 0
-    kernel_add[(1,)].warmup(torch.float32, torch.float32, torch.float32, 32)
+    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
     assert len(kernel_add.cache) == 1
-    kernel_add[(1,)].warmup(*args)
+    kernel_add.warmup(*args, grid=(1,))
     assert len(kernel_add.cache) == 1
-    kernel_add[(1,)](*args)
+    kernel_add.warmup(*args, grid=(1,))
     assert len(kernel_add.cache) == 1
