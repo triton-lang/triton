@@ -60,7 +60,14 @@ Value createConstantI32(Location loc, PatternRewriter &rewriter, int32_t v) {
 #define bit_cast(...) rewriter.create<LLVM::BitcastOp>(loc, __VA_ARGS__)
 #define gep(...) rewriter.create<LLVM::GEPOp>(loc, __VA_ARGS__)
 #define ptr_ty(...) LLVM::LLVMPointerType::get(__VA_ARGS__)
+#define insert_val(...) rewriter.create<LLVM::InsertValueOp>(loc, __VA_ARGS__)
 #define extract_val(...) rewriter.create<LLVM::ExtractValueOp>(loc, __VA_ARGS__)
+#define insert_element(...)                                                    \
+  rewriter.create<LLVM::InsertElementOp>(loc, __VA_ARGS__)
+#define extract_element(...)                                                   \
+  rewriter.create<LLVM::ExtractElementOp>(loc, __VA_ARGS__)
+#define address_of(...) rewriter.create<LLVM::AddressOfOp>(loc, __VA_ARGS__)
+
 #define i32_val(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
 #define i32_ty() rewriter.getIntegerType(32)
 
@@ -256,9 +263,8 @@ Value getStructFromElements(Location loc, ValueRange resultVals,
                             Type structType) {
   Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
   for (auto v : llvm::enumerate(resultVals)) {
-    llvmStruct = rewriter.create<LLVM::InsertValueOp>(
-        loc, structType, llvmStruct, v.value(),
-        rewriter.getI64ArrayAttr(v.index()));
+    llvmStruct = insert_val(structType, llvmStruct, v.value(),
+                            rewriter.getI64ArrayAttr(v.index()));
   }
   return llvmStruct;
 }
@@ -310,8 +316,7 @@ struct ConvertTritonGPUOpToLLVMPatternBase {
     for (unsigned i = 0; i < elems; ++i) {
       Type type =
           llvmStruct.getType().cast<LLVM::LLVMStructType>().getBody()[i];
-      results[i] = rewriter.create<LLVM::ExtractValueOp>(
-          loc, type, llvmStruct, rewriter.getI64ArrayAttr(i));
+      results[i] = extract_val(type, llvmStruct, rewriter.getI64ArrayAttr(i));
     }
     return results;
   }
@@ -389,22 +394,20 @@ public:
         Value dimSize = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(),
             std::get<1>(z));
-        linear = rewriter.create<LLVM::AddOp>(
-            loc, rewriter.create<LLVM::MulOp>(loc, linear, dimSize),
-            std::get<0>(z));
+        linear = add(mul(linear, dimSize), std::get<0>(z));
       }
     }
     return linear;
   }
 
   SmallVector<Value>
-  emitBaseIndexForBlockedLayout(Location loc, ConversionPatternRewriter &b,
+  emitBaseIndexForBlockedLayout(Location loc,
+                                ConversionPatternRewriter &rewriter,
                                 const BlockedEncodingAttr &blocked_layout,
                                 ArrayRef<int64_t> shape) const {
     auto llvmIndexTy = this->getTypeConverter()->getIndexType();
-    Value threadId = getThreadId(b, loc);
-    Value warpSize = createIndexAttrConstant(b, loc, llvmIndexTy, 32);
-    auto &rewriter = b;
+    Value threadId = getThreadId(rewriter, loc);
+    Value warpSize = createIndexAttrConstant(rewriter, loc, llvmIndexTy, 32);
     Value laneId = urem(threadId, warpSize);
     Value warpId = udiv(threadId, warpSize);
     auto sizePerThread = blocked_layout.getSizePerThread();
@@ -415,9 +418,9 @@ public:
 
     // step 1, delinearize threadId to get the base index
     SmallVector<Value> multiDimWarpId =
-        delinearize(b, loc, warpId, warpsPerCTA, order);
+        delinearize(rewriter, loc, warpId, warpsPerCTA, order);
     SmallVector<Value> multiDimThreadId =
-        delinearize(b, loc, laneId, threadsPerWarp, order);
+        delinearize(rewriter, loc, laneId, threadsPerWarp, order);
     SmallVector<Value> multiDimBase(rank);
     for (unsigned k = 0; k < rank; ++k) {
       // Wrap around multiDimWarpId/multiDimThreadId incase
@@ -425,24 +428,22 @@ public:
       unsigned maxWarps =
           ceil<unsigned>(shape[k], sizePerThread[k] * threadsPerWarp[k]);
       unsigned maxThreads = ceil<unsigned>(shape[k], sizePerThread[k]);
-      multiDimWarpId[k] = b.create<LLVM::URemOp>(
-          loc, multiDimWarpId[k],
-          createIndexAttrConstant(b, loc, llvmIndexTy, maxWarps));
-      multiDimThreadId[k] = b.create<LLVM::URemOp>(
-          loc, multiDimThreadId[k],
-          createIndexAttrConstant(b, loc, llvmIndexTy, maxThreads));
+      multiDimWarpId[k] =
+          urem(multiDimWarpId[k],
+               createIndexAttrConstant(rewriter, loc, llvmIndexTy, maxWarps));
+      multiDimThreadId[k] =
+          urem(multiDimThreadId[k],
+               createIndexAttrConstant(rewriter, loc, llvmIndexTy, maxThreads));
       // multiDimBase[k] = (multiDimThreadId[k] +
       //                    multiDimWarpId[k] * threadsPerWarp[k]) *
       //                   sizePerThread[k];
-      Value threadsPerWarpK =
-          createIndexAttrConstant(b, loc, llvmIndexTy, threadsPerWarp[k]);
+      Value threadsPerWarpK = createIndexAttrConstant(
+          rewriter, loc, llvmIndexTy, threadsPerWarp[k]);
       Value sizePerThreadK =
-          createIndexAttrConstant(b, loc, llvmIndexTy, sizePerThread[k]);
-      multiDimBase[k] = b.create<LLVM::MulOp>(
-          loc, sizePerThreadK,
-          b.create<LLVM::AddOp>(
-              loc, multiDimThreadId[k],
-              b.create<LLVM::MulOp>(loc, multiDimWarpId[k], threadsPerWarpK)));
+          createIndexAttrConstant(rewriter, loc, llvmIndexTy, sizePerThread[k]);
+      multiDimBase[k] =
+          mul(sizePerThreadK, add(multiDimThreadId[k],
+                                  mul(multiDimWarpId[k], threadsPerWarpK)));
     }
     return multiDimBase;
   }
@@ -463,7 +464,7 @@ public:
   }
 
   SmallVector<SmallVector<Value>>
-  emitIndicesForSliceLayout(Location loc, ConversionPatternRewriter &b,
+  emitIndicesForSliceLayout(Location loc, ConversionPatternRewriter &rewriter,
                             const SliceEncodingAttr &sliceLayout,
                             ArrayRef<int64_t> shape) const {
     auto parent = sliceLayout.getParent();
@@ -480,8 +481,8 @@ public:
           paddedShape[d] = shape[d - 1];
         }
       }
-      auto paddedIndices =
-          emitIndicesForBlockedLayout(loc, b, blockedParent, paddedShape);
+      auto paddedIndices = emitIndicesForBlockedLayout(
+          loc, rewriter, blockedParent, paddedShape);
       unsigned numIndices = paddedIndices.size();
       SmallVector<SmallVector<Value>> resultIndices(numIndices);
       for (unsigned i = 0; i < numIndices; ++i) {
@@ -510,7 +511,7 @@ public:
   //       be eliminated in the consequent MLIR/LLVM optimization. We might
   //       implement a indiceCache if necessary.
   SmallVector<SmallVector<Value>>
-  emitIndicesForBlockedLayout(Location loc, ConversionPatternRewriter &b,
+  emitIndicesForBlockedLayout(Location loc, ConversionPatternRewriter &rewriter,
                               const BlockedEncodingAttr &blockedLayout,
                               ArrayRef<int64_t> shape) const {
     auto llvmIndexTy = this->getTypeConverter()->getIndexType();
@@ -525,7 +526,7 @@ public:
 
     // step 1, delinearize threadId to get the base index
     auto multiDimBase =
-        emitBaseIndexForBlockedLayout(loc, b, blockedLayout, shape);
+        emitBaseIndexForBlockedLayout(loc, rewriter, blockedLayout, shape);
 
     // step 2, get offset of each element
     unsigned elemsPerThread = 1;
@@ -574,10 +575,10 @@ public:
             multiDimNanoTileId[k] *
                 (sizePerThread[k] * threadsPerWarp[k] * warpsPerCTA[k]) +
             multiElemsInNanoTileId[k];
-        multiDimIdx[n][k] = b.create<LLVM::AddOp>(
-            loc, multiDimBase[k],
-            createIndexAttrConstant(b, loc, llvmIndexTy,
-                                    offset[k][reorderedMultiDimId]));
+        multiDimIdx[n][k] =
+            add(multiDimBase[k],
+                createIndexAttrConstant(rewriter, loc, llvmIndexTy,
+                                        offset[k][reorderedMultiDimId]));
       }
     }
 
@@ -594,7 +595,7 @@ public:
     size_t offset = allocation->getOffset(bufferId);
     auto llvmIndexTy = this->getTypeConverter()->getIndexType();
     Value offVal = createIndexAttrConstant(rewriter, loc, llvmIndexTy, offset);
-    Value base = rewriter.create<LLVM::GEPOp>(loc, ptrTy, smem, offVal);
+    Value base = gep(ptrTy, smem, offVal);
     return base;
   }
 };
@@ -612,7 +613,7 @@ Value convertSplatLikeOp(Type elemType, Type resType, Value constVal,
   auto tensorTy = resType.cast<RankedTensorType>();
   auto layout = tensorTy.getEncoding();
   auto srcType = typeConverter->convertType(elemType);
-  auto llSrc = rewriter.create<LLVM::BitcastOp>(loc, srcType, constVal);
+  auto llSrc = bit_cast(srcType, constVal);
   size_t numElemsPerThread = getElemsPerThread(layout, tensorTy.getShape());
   llvm::SmallVector<Value, 4> elems(numElemsPerThread, llSrc);
   llvm::SmallVector<Type, 4> elemTypes(elems.size(), srcType);
@@ -849,15 +850,15 @@ struct StoreOpConversion
           Value elem = valueElems[elemOffset];
           if (elem.getType().isInteger(1))
             elem = rewriter.create<LLVM::SExtOp>(loc, type::i8Ty(ctx), elem);
-          elem = rewriter.create<LLVM::BitcastOp>(loc, valueElemTy, elem);
+          elem = bit_cast(valueElemTy, elem);
 
           Type u32Ty = typeConverter->convertType(type::u32Ty(ctx));
-          llWord = rewriter.create<LLVM::InsertElementOp>(
-              loc, wordTy, llWord, elem,
-              rewriter.create<LLVM::ConstantOp>(
-                  loc, u32Ty, IntegerAttr::get(u32Ty, elemIdx)));
+          llWord =
+              insert_element(wordTy, llWord, elem,
+                             rewriter.create<LLVM::ConstantOp>(
+                                 loc, u32Ty, IntegerAttr::get(u32Ty, elemIdx)));
         }
-        llWord = rewriter.create<LLVM::BitcastOp>(loc, valArgTy, llWord);
+        llWord = bit_cast(valArgTy, llWord);
         std::string constraint =
             (width == 64) ? "l" : ((width == 32) ? "r" : "c");
         asmArgList->listAppend(ptxBuilder.newOperand(llWord, constraint));
@@ -1053,8 +1054,7 @@ struct MakeRangeOpConversion
     SmallVector<Value> retVals(elems);
     for (auto multiDim : llvm::enumerate(idxs)) {
       assert(multiDim.value().size() == 1);
-      retVals[multiDim.index()] =
-          rewriter.create<LLVM::AddOp>(loc, multiDim.value()[0], start);
+      retVals[multiDim.index()] = add(multiDim.value()[0], start);
     }
     SmallVector<Type> types(elems, elemTy);
     Type structTy = LLVM::LLVMStructType::getLiteral(getContext(), types);
@@ -1213,11 +1213,9 @@ struct LoadOpConversion
             Value falseVal = otherElems[vecStart + ii * size + s];
             Value sVal = createIndexAttrConstant(
                 rewriter, loc, this->getTypeConverter()->getIndexType(), s);
-            v = rewriter.create<LLVM::InsertElementOp>(loc, vecTy, v, falseVal,
-                                                       sVal);
+            v = insert_element(vecTy, v, falseVal, sVal);
           }
-          v = rewriter.create<LLVM::BitcastOp>(
-              loc, IntegerType::get(getContext(), width), v);
+          v = bit_cast(IntegerType::get(getContext(), width), v);
 
           PTXInstr::Operand *opr{};
           if (otherIsSplatConstInt) {
@@ -1258,14 +1256,13 @@ struct LoadOpConversion
       for (unsigned int ii = 0; ii < nWords; ii++) {
         Value curr;
         if (retTy.isa<LLVM::LLVMStructType>()) {
-          curr = rewriter.create<LLVM::ExtractValueOp>(
-              loc, IntegerType::get(getContext(), width), ret,
-              rewriter.getI64ArrayAttr(ii));
+          curr = extract_val(IntegerType::get(getContext(), width), ret,
+                             rewriter.getI64ArrayAttr(ii));
         } else {
           curr = ret;
         }
-        curr = rewriter.create<LLVM::BitcastOp>(
-            loc, LLVM::getFixedVectorType(valueElemTy, width / valueElemNbits),
+        curr = bit_cast(
+            LLVM::getFixedVectorType(valueElemTy, width / valueElemNbits),
             curr);
         rets.push_back(curr);
       }
@@ -1273,8 +1270,7 @@ struct LoadOpConversion
       for (size_t ii = 0; ii < vec; ii++) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(), ii % tmp);
-        Value loaded = rewriter.create<LLVM::ExtractElementOp>(
-            loc, valueElemTy, rets[ii / tmp], vecIdx);
+        Value loaded = extract_element(valueElemTy, rets[ii / tmp], vecIdx);
         loadedVals.push_back(loaded);
       }
     } // end vec
@@ -1328,8 +1324,7 @@ struct AddPtrOpConversion
         getElementsFromStruct(loc, adaptor.offset(), elems, rewriter);
     SmallVector<Value> resultVals(elems);
     for (unsigned i = 0; i < elems; ++i) {
-      resultVals[i] =
-          rewriter.create<LLVM::GEPOp>(loc, elemTy, ptrs[i], offsets[i]);
+      resultVals[i] = gep(elemTy, ptrs[i], offsets[i]);
     }
     Value view = getStructFromElements(loc, resultVals, rewriter, structTy);
     rewriter.replaceOp(op, view);
@@ -1412,7 +1407,7 @@ public:
     Value smemBase =
         getSharedMemoryBase(loc, rewriter, smem, allocation, op.getOperation());
     auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
-    smemBase = rewriter.create<LLVM::BitcastOp>(loc, elemPtrTy, smemBase);
+    smemBase = bit_cast(elemPtrTy, smemBase);
 
     auto shape = dstTy.getShape();
     unsigned rank = dstTy.getRank();
@@ -1557,8 +1552,8 @@ private:
             getMultiDimIndex<unsigned>(elemId, layout.getSizePerThread());
         SmallVector<Value> multiDimOffset(rank);
         for (unsigned d = 0; d < rank; ++d) {
-          multiDimOffset[d] = rewriter.create<LLVM::AddOp>(
-              loc, multiDimOffsetFirstElem[d],
+          multiDimOffset[d] = add(
+              multiDimOffsetFirstElem[d],
               createIndexAttrConstant(rewriter, loc, llvmIndexTy,
                                       multiDimCTAInRepId[d] * shapePerCTA[d] +
                                           multiDimElemId[d]));
@@ -1567,18 +1562,16 @@ private:
             linearize(rewriter, loc, reorder<Value>(multiDimOffset, outOrd),
                       reorder<unsigned>(paddedRepShape, outOrd));
         auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
-        Value ptr =
-            rewriter.create<LLVM::GEPOp>(loc, elemPtrTy, smemBase, offset);
+        Value ptr = gep(elemPtrTy, smemBase, offset);
         auto vecTy = VectorType::get(vec, llvmElemTy);
-        ptr = rewriter.create<LLVM::BitcastOp>(
-            loc, LLVM::LLVMPointerType::get(vecTy, 3), ptr);
+        ptr = bit_cast(LLVM::LLVMPointerType::get(vecTy, 3), ptr);
         if (stNotRd) {
           Value valVec = rewriter.create<LLVM::UndefOp>(loc, vecTy);
           for (unsigned v = 0; v < vec; ++v) {
             Value vVal = createIndexAttrConstant(
                 rewriter, loc, getTypeConverter()->getIndexType(), v);
-            valVec = rewriter.create<LLVM::InsertElementOp>(
-                loc, vecTy, valVec,
+            valVec = insert_element(
+                vecTy, valVec,
                 vals[elemId + linearCTAId * accumSizePerThread + v], vVal);
           }
           rewriter.create<LLVM::StoreOp>(loc, valVec, ptr);
@@ -1588,8 +1581,7 @@ private:
             Value vVal = createIndexAttrConstant(
                 rewriter, loc, getTypeConverter()->getIndexType(), v);
             vals[elemId + linearCTAId * accumSizePerThread + v] =
-                rewriter.create<LLVM::ExtractElementOp>(loc, llvmElemTy, valVec,
-                                                        vVal);
+                extract_element(llvmElemTy, valVec, vVal);
           }
         }
       }
