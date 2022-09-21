@@ -1915,23 +1915,11 @@ private:
   MLIRContext *ctx{};
 };
 
-bool isSplatLikeAndEqual(Value value, float v) {
-  bool res{};
-  if (auto constv = dyn_cast<arith::ConstantOp>(value.getDefiningOp())) {
-    auto tensorTy = constv.getType().cast<RankedTensorType>();
-    Type elemTy = tensorTy.getElementType();
-
-    if (auto attr = constv.getValue().dyn_cast<SplatElementsAttr>()) {
-      if (!attr.isSplat())
-        return false;
-      if (elemTy.isInteger(32) && attr.template getValues<int>()[0] == v)
-        res = true;
-      else if (elemTy.isF32() && attr.template getValues<float>()[0] == v) {
-        res = true;
-      }
-    }
-  }
-  return res;
+bool isSplatLike(Value value) {
+  if (auto constv = dyn_cast<arith::ConstantOp>(value.getDefiningOp()))
+    if (auto attr = constv.getValue().dyn_cast<SplatElementsAttr>())
+      return attr.isSplat();
+  return false;
 }
 
 struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
@@ -1966,8 +1954,7 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
     MLIRContext *ctx = op->getContext();
     bool allowTF32 = op.allowTF32();
 
-    bool isCZero = isSplatLikeAndEqual(C, 0.f);
-    assert(isCZero && "Currently only C=0 is supported");
+    assert(isSplatLike(C) && "Currently only splat-like C is supported now");
 
     // Here we assume the DotOp's operands always comes from shared memory.
     auto AShape = A.getType().cast<RankedTensorType>().getShape();
@@ -2032,7 +2019,8 @@ private:
 struct DotOpConversionHelper {
   using TensorCoreType = DotOpConversion::TensorCoreType;
 
-  Value A, B, D;
+  Value A, B, C, D;
+  MmaEncodingAttr mmaLayout;
   RankedTensorType ATensorTy, BTensorTy, DTensorTy;
   MLIRContext *ctx{};
 
@@ -2040,12 +2028,48 @@ struct DotOpConversionHelper {
       : dot(dot), mmaType(getMmaType(dot)) {
     A = dot.a();
     B = dot.b();
+    C = dot.c();
     D = dot.d();
     ctx = dot->getContext();
+    mmaLayout = C.getType()
+                    .cast<RankedTensorType>()
+                    .getEncoding()
+                    .cast<MmaEncodingAttr>();
 
     ATensorTy = A.getType().cast<RankedTensorType>();
     BTensorTy = B.getType().cast<RankedTensorType>();
     DTensorTy = D.getType().cast<RankedTensorType>();
+  }
+
+  // Load SplatLike C which contains a constVal. It simply returns 4 fp32
+  // constVal.
+  SmallVector<Value> loadSplatLikeC(Value C, Location loc,
+                                    ConversionPatternRewriter &rewriter) {
+    assert(isSplatLike(C));
+
+    int numRes = getMmaInstrShape()[0] * getMmaInstrShape()[1] / 32;
+    if (auto constv = llvm::dyn_cast<arith::ConstantOp>(C.getDefiningOp())) {
+      if (auto attr = constv.getValue().dyn_cast<SplatElementsAttr>()) {
+        Type elemType = attr.getElementType();
+        if (elemType.isInteger(32)) {
+          int v = attr.getSplatValue<int>();
+          return SmallVector<Value>(numRes, i32_val(v));
+        } else if (elemType.isInteger(8)) {
+          int v = attr.getSplatValue<int8_t>();
+          auto newv = rewriter.create<arith::ConstantOp>(
+              loc, elemType, IntegerAttr::get(elemType, v));
+          return SmallVector<Value>(numRes, newv);
+        } else if (elemType.isF32()) {
+          int v = attr.getSplatValue<float>();
+          auto newv = rewriter.create<arith::ConstantOp>(
+              loc, elemType, FloatAttr::get(elemType, v));
+          return SmallVector<Value>(numRes, newv);
+        }
+      }
+    }
+
+    assert(false && "Not supported type.");
+    return {};
   }
 
   Type getShemPtrTy() const {
@@ -2368,10 +2392,22 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
     auto aArg1 = builder.newOperand(ha[{m + 1, k}], "r");
     auto aArg2 = builder.newOperand(ha[{m, k + 1}], "r");
     auto aArg3 = builder.newOperand(ha[{m + 1, k}], "r");
+
     auto bArg0 = builder.newOperand(ha[{n, k}], "r");
     auto bArg1 = builder.newOperand(ha[{n, k + 1}], "r");
 
-    mma(retArgs, aArg0, aArg1, aArg2, aArg3, bArg0, bArg1);
+    // Currently, we only support a SplatLike C. For the other cases, e.g., C in
+    // shared layout or blocked layout, we will support them by expanding
+    // convert_layout.
+    auto hc = helper.loadSplatLikeC(C, loc, rewriter);
+    assert(hc.size() == 4UL && "Only splat-like C is supported now");
+    auto cArg0 = builder.newOperand(hc[0], "0"); // reuse the output registers
+    auto cArg1 = builder.newOperand(hc[1], "1");
+    auto cArg2 = builder.newOperand(hc[2], "2");
+    auto cArg3 = builder.newOperand(hc[3], "3");
+
+    mma({retArgs, aArg0, aArg1, aArg2, aArg3, bArg0, bArg1, cArg0, cArg1, cArg2,
+         cArg3});
 
     auto inlineAsm = rewriter.create<LLVM::InlineAsmOp>(
         loc, helper.getMmaRetType(), builder.getAllMLIRArgs(), // operands
@@ -2407,17 +2443,14 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
     for (unsigned n = 0; n < numRepN; n += 2)
       loadB(n, 2 * k);
     for (unsigned m = 0; m < numRepM; m++)
-      for (unsigned n = 0; n < numRepN; n++)
+      for (unsigned n = 0; n < numRepN; n++) {
         callMma(2 * m, n, 2 * k);
+      }
   }
 
   // replace with new packed result
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(fc.size(), type::f32Ty(ctx)));
-  for (int i = 0; i < fc.size(); i++) {
-    llvm::outs() << i << " " << fc[i] << "\n";
-  }
-  llvm::outs() << "structTy: " << structTy << "\n";
   Value res = getStructFromElements(loc, fc, rewriter, structTy);
   rewriter.replaceOp(op, res);
 
