@@ -150,3 +150,25 @@ def test_constexpr_not_callable() -> None:
     except BaseException:
         error = True
     assert error is True
+
+
+def test_jit_warmup_cache() -> None:
+    @triton.jit
+    def kernel_add(a, b, o, N: tl.constexpr):
+        idx = tl.arange(0, N)
+        tl.store(o + idx,
+                 tl.load(a + idx) + tl.load(b + idx))
+
+    args = [
+        torch.randn(32, dtype=torch.float32, device="cuda"),
+        torch.randn(32, dtype=torch.float32, device="cuda"),
+        torch.randn(32, dtype=torch.float32, device="cuda"),
+        32,
+    ]
+    assert len(kernel_add.cache) == 0
+    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    assert len(kernel_add.cache) == 1
+    kernel_add.warmup(*args, grid=(1,))
+    assert len(kernel_add.cache) == 1
+    kernel_add.warmup(*args, grid=(1,))
+    assert len(kernel_add.cache) == 1
