@@ -1067,6 +1067,10 @@ def default_cache_dir():
     return os.path.join(os.environ["HOME"], ".triton", "cache")
 
 
+def default_cuda_dir():
+    return os.path.join("/usr", "local", "cuda")
+
+
 class CacheManager:
 
     def __init__(self, key):
@@ -1121,7 +1125,8 @@ def quiet():
 
 def _build(name, src, srcdir):
     cuda_lib_dir = libcuda_dir()
-    cu_include_dir = "/usr/local/cuda/include"
+    cuda_path = os.environ.get('CUDA_PATH', default_cuda_dir())
+    cu_include_dir = os.path.join(cuda_path, "include")
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
