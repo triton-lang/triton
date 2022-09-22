@@ -1202,12 +1202,16 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
     # retrieve cached shared object if it exists
     fn_cache_key = make_fn_cache_key(fn.cache_key, signature, configs, constants, num_warps, num_stages)
     fn_cache_manager = CacheManager(fn_cache_key)
+    ptx_name = f"{name}.ptx"
     cubin_name = f"{name}.cubin"
     data_name = f"{name}.json"
-    if not fn_cache_manager.has_file(cubin_name) or not fn_cache_manager.has_file(data_name):
+    if not fn_cache_manager.has_file(cubin_name) or \
+       not fn_cache_manager.has_file(data_name) or \
+       not fn_cache_manager.has_file(ptx_name):
         asm, shared, kernel_name = _compile(fn, signature, device, constants, configs[0], num_warps, num_stages, extern_libs, "cubin")
         metadata = {"name": kernel_name, "shared": shared, "num_warps": num_warps, "num_stages": num_stages}
         fn_cache_manager.put(asm["cubin"], cubin_name)
+        fn_cache_manager.put(asm["ptx"], ptx_name, binary=False)
         fn_cache_manager.put(json.dumps(metadata), data_name, binary=False)
 
     return CompiledKernel(name, so_cache_manager._make_path(so_name), fn_cache_manager.cache_dir)
@@ -1222,18 +1226,23 @@ class CompiledKernel:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         self.c_wrapper = getattr(mod, "launch")
-        # initialize cuModule and data
+        # initialize metadata
         with open(os.path.join(cache_dir, f"{fn_name}.json")) as f:
             metadata = json.load(f)
         self.shared = metadata["shared"]
         self.num_warps = metadata["num_warps"]
         self.num_stages = metadata["num_stages"]
-        cu_path = os.path.join(cache_dir, f"{fn_name}.cubin")
+        # initialize asm dict
+        self.asm = dict()
+        with open(os.path.join(cache_dir, f"{fn_name}.cubin"), "rb") as f:
+            self.asm["cubin"] = f.read()
+        with open(os.path.join(cache_dir, f"{fn_name}.ptx"), "r") as f:
+            self.asm["ptx"] = f.read()
+        
         device = torch.cuda.current_device()
-        with open(cu_path, "rb") as cubin:
-            mod, func, n_regs, n_spills = _triton.code_gen.load_binary(metadata["name"], cubin.read(), self.shared, device)
-            self.cu_module = mod
-            self.cu_function = func
+        mod, func, n_regs, n_spills = _triton.code_gen.load_binary(metadata["name"], self.asm["cubin"], self.shared, device)
+        self.cu_module = mod
+        self.cu_function = func
 
     def __getitem__(self, grid):
         def runner(*args, stream=None):
