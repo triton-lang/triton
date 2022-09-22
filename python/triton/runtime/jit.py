@@ -253,7 +253,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     try:
       bin = cache[key]
       if not warmup:
-          bin.c_wrapper(grid_0, grid_1, grid_2, stream, {args})
+          bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, {args})
       return bin
     # kernel not cached -- compile
     except KeyError:
@@ -274,7 +274,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
       if not self._call_hook(key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
         bin = triton.compile(self, signature, device, constants, num_warps, num_stages, extern_libs=extern_libs, configs=configs)
         if not warmup:
-            bin.c_wrapper(grid_0, grid_1, grid_2, stream, *args)
+            bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, *args)
         self.cache[key] = bin
         return bin
       return None
