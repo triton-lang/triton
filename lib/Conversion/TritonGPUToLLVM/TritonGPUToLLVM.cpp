@@ -1600,11 +1600,11 @@ public:
                      ArrayRef<int64_t> tileShape, ArrayRef<int> instrShape,
                      ArrayRef<int> matShape, int perPhase, int maxPhase,
                      int elemBytes, ConversionPatternRewriter &rewriter,
-                     const Location &location)
+                     TypeConverter *typeConverter, const Location &loc)
       : wpt(wpt), order(order), kOrder(kOrder), tileShape(tileShape),
         instrShape(instrShape), matShape(matShape), perPhase(perPhase),
-        maxPhase(maxPhase), elemBytes(elemBytes), rewriter(rewriter), loc(loc),
-        ctx(rewriter.getContext()) {
+        maxPhase(maxPhase), elemBytes(elemBytes), rewriter(rewriter),
+        typeConverter(typeConverter), loc(loc), ctx(rewriter.getContext()) {
     cMatShape = matShape[order[0]];
     sMatShape = matShape[order[1]];
 
@@ -1874,6 +1874,7 @@ public:
 
 private:
   int wpt;
+  ArrayRef<uint32_t> order;
   int kOrder;
   ArrayRef<int64_t> tileShape;
   ArrayRef<int> instrShape;
@@ -1882,6 +1883,9 @@ private:
   int maxPhase;
   int elemBytes;
   ConversionPatternRewriter &rewriter;
+  TypeConverter *typeConverter{};
+  const Location &loc;
+  MLIRContext *ctx{};
 
   int cMatShape;
   int sMatShape;
@@ -1899,12 +1903,6 @@ private:
 
   int matArrStride;
   int warpOffStride;
-
-  ArrayRef<uint32_t> order;
-
-  const Location &loc;
-
-  MLIRContext *ctx{};
 };
 
 bool isSplatLike(Value value) {
@@ -2332,9 +2330,10 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
     const int maxPhase = sharedLayout.getMaxPhase();
     const int elemBytes = tensorTy.getElementTypeBitWidth() / 8;
 
-    MMA16816SmemLoader loader(
-        wpt, sharedLayout.getOrder(), kOrder, tensorTy.getShape() /*tileShape*/,
-        instrShape, matShape, perPhase, maxPhase, elemBytes, rewriter, loc);
+    MMA16816SmemLoader loader(wpt, sharedLayout.getOrder(), kOrder,
+                              tensorTy.getShape() /*tileShape*/, instrShape,
+                              matShape, perPhase, maxPhase, elemBytes, rewriter,
+                              typeConverter, loc);
     SmallVector<Value> offs = loader.computeOffsets(warpId, lane);
 
     const int numPtrs = loader.getNumPtr();

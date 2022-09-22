@@ -43,7 +43,7 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
       return 0;
     }
   };
-  // blocke -> blocked
+  // blocked -> blocked
   if (srcLayout.isa<BlockedEncodingAttr>() &&
       dstLayout.isa<BlockedEncodingAttr>()) {
     auto srcBlockedLayout = srcLayout.cast<BlockedEncodingAttr>();
