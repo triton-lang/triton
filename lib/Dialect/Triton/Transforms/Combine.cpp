@@ -71,7 +71,7 @@ public:
     mlir::Value falseValue = selectOp.getFalseValue();
 
     auto *loadOpCandidate = trueValue.getDefiningOp();
-    auto loadOp = llvm::dyn_cast<triton::LoadOp>(loadOpCandidate);
+    auto loadOp = llvm::dyn_cast_or_null<triton::LoadOp>(loadOpCandidate);
     if (!loadOp)
       return mlir::failure();
 
@@ -81,7 +81,7 @@ public:
 
     auto *broadcastOpCandidate = mask.getDefiningOp();
     auto broadcastOp =
-        llvm::dyn_cast<triton::BroadcastOp>(broadcastOpCandidate);
+        llvm::dyn_cast_or_null<triton::BroadcastOp>(broadcastOpCandidate);
     if (!broadcastOp)
       return mlir::failure();
 
@@ -106,7 +106,8 @@ struct CanonicalizeMaskedLoadPattern
     if (!mask)
       return mlir::failure();
 
-    auto constantMask = llvm::dyn_cast<arith::ConstantOp>(mask.getDefiningOp());
+    auto constantMask =
+        llvm::dyn_cast_or_null<arith::ConstantOp>(mask.getDefiningOp());
     if (!constantMask)
       return mlir::failure();
 
@@ -152,7 +153,8 @@ struct CanonicalizeMaskedStorePattern
     if (!mask)
       return mlir::failure();
 
-    auto constantMask = llvm::dyn_cast<arith::ConstantOp>(mask.getDefiningOp());
+    auto constantMask =
+        llvm::dyn_cast_or_null<arith::ConstantOp>(mask.getDefiningOp());
     if (!constantMask)
       return mlir::failure();
 

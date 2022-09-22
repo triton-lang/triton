@@ -301,9 +301,17 @@ void LoopPipeliner::emitPrologue() {
       }
 
       // If this is a load/async_copy, we need to update the mask
-      if (llvm::isa<triton::LoadOp, triton::gpu::InsertSliceAsyncOp>(newOp)) {
-        Value mask = llvm::isa<triton::LoadOp>(newOp) ? newOp->getOperand(1)
-                                                      : newOp->getOperand(3);
+      if (Value mask = [&]() {
+            if (auto loadOp = llvm::dyn_cast<triton::LoadOp>(newOp)) {
+              return loadOp.mask();
+            } else if (auto insertSliceAsyncOp =
+                           llvm::dyn_cast<triton::gpu::InsertSliceAsyncOp>(
+                               newOp)) {
+              return insertSliceAsyncOp.mask();
+            } else {
+              return mlir::Value();
+            }
+          }()) {
         // assert(I1 or TensorOf<[I1]>);
         OpBuilder::InsertionGuard g(builder);
         // TODO: move this out of the loop
