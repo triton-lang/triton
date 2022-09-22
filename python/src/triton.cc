@@ -487,7 +487,7 @@ void init_triton_codegen(py::module &&m) {
   // --------------------------------------- 
   // Load provided assembly code into driver
   // --------------------------------------- 
-  m.def("load_binary", [](backend_t backend, const std::string& name, const std::string& data, size_t n_shared_bytes, uint64_t device){
+  m.def("load_binary", [](const std::string& name, const std::string& data, size_t n_shared_bytes, uint64_t device){
 	      py::gil_scoped_release allow_threads;
         // create driver handles
         CUfunction fun;

@@ -15,6 +15,7 @@ import warnings
 from sysconfig import get_paths
 from typing import Any, Dict, Set, Tuple, Union
 
+import json
 import setuptools
 import torch
 from filelock import FileLock
@@ -926,7 +927,7 @@ def binary_name_to_header_name(name):
     return f"{name}.h"
 
 
-def generate_torch_glue(kernel_name, constants, signature):
+def generate_launcher(identifier, constants, signature):
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     def _extracted_type(ty):
@@ -957,7 +958,7 @@ def generate_torch_glue(kernel_name, constants, signature):
     format = "iiiiiKK" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
 
     # generate glue code
-    src += f"""
+    src = f"""
 #include \"cuda.h\"
 #include <Python.h>
 
@@ -985,7 +986,7 @@ void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, 
 }}
 
 
-inline CUdeviceptr getPointer(PyObject *obj, int idx) {{
+static inline CUdeviceptr getPointer(PyObject *obj, int idx) {{
   if (PyLong_Check(obj)) {{
     return (CUdeviceptr)PyLong_AsUnsignedLongLong(obj);
   }}
@@ -1012,12 +1013,14 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   int gridX, gridY, gridZ;
   uint64_t _stream;
   uint64_t _function;
+  int num_warps;
+  int shared_memory;
   {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &_stream, &_function, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
+  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
     return NULL;
   }}
 
-  _launch(gridX, gridY, gridZ, (CUstream)stream, (CUfunction)function, {', '.join(f"getPointer(_arg{i},{i})" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
+  _launch(gridX, gridY, gridZ, num_warps, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"getPointer(_arg{i},{i})" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
 
 
   if(PyErr_Occurred()) {{
@@ -1029,26 +1032,26 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
 }}
 
 static PyMethodDef ModuleMethods[] = {{
-  {{"{kernel_name}", {kernel_name}, METH_VARARGS, "Call {kernel_name} kernel"}},
+  {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
   {{NULL, NULL, 0, NULL}} // sentinel
 }};
 
 static struct PyModuleDef ModuleDef = {{
   PyModuleDef_HEAD_INIT,
-  \"{kernel_name}\",
+  \"launcher\",
   NULL, //documentation
   -1, //size
   ModuleMethods
 }};
 
-PyMODINIT_FUNC PyInit_{kernel_name}(void) {{
+PyMODINIT_FUNC PyInit_launcher(void) {{
   PyObject *m = PyModule_Create(&ModuleDef);
   if(m == NULL) {{
     return NULL;
   }}
   PyModule_AddFunctions(m, ModuleMethods);
   return m;
-}
+}}
 """
 
     return src
@@ -1062,35 +1065,35 @@ class CacheManager:
 
     def __init__(self, key):
         self.key = key
-        self.bin_path = None
         self.lock_path = None
-        # if caching is enabled, get the lock and bin path
+        # create cache directory if it doesn't exist
         self.cache_dir = os.environ.get('TRITON_CACHE_DIR', default_cache_dir())
         if self.cache_dir:
+            self.cache_dir = os.path.join(self.cache_dir, self.key)
+            self.lock_path = os.path.join(self.cache_dir, "lock")
             os.makedirs(self.cache_dir, exist_ok=True)
-        if self.cache_dir:
-            self.bin_path = os.path.join(self.cache_dir, self.key + ".so")
-            self.lock_path = self.bin_path + ".lock"
 
-    def has_file(self):
-        return self.bin_path and os.path.exists(self.bin_path)
+    def _make_path(self, filename):
+        return os.path.join(self.cache_dir, filename)
 
-    def put(self, binary):
-        if self.bin_path:
-            assert self.lock_path is not None
-            with FileLock(self.lock_path):
-                with open(self.bin_path + ".tmp", "wb") as f:
-                    f.write(binary)
-                os.rename(self.bin_path + ".tmp", self.bin_path)
+    def has_file(self, filename):
+        if not self.cache_dir:
+            return False
+        return os.path.exists(self._make_path(filename))
+
+    def put(self, data, filename, binary=True):
+        if not self.cache_dir:
+            return
+        assert self.lock_path is not None
+        filepath = self._make_path(filename)
+        with FileLock(self.lock_path):
+            # use tempfile to be robust against program interruptions
+            mode = "wb" if binary else "w"
+            with open(filepath + ".tmp", mode) as f:
+                f.write(data)
+            os.rename(filepath + ".tmp", filepath)
 
 
-def make_cache_key(fn, signature, configs, constants, num_warps, num_stages):
-    # Get unique key for the compiled code
-    get_conf_key = lambda conf: (sorted(conf.divisible_by_16), sorted(conf.equal_to_1))
-    configs_key = [get_conf_key(conf) for conf in configs]
-    key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}"
-    key = hashlib.md5(key.encode("utf-8")).hexdigest()
-    return key
 
 # utilties for generating and compiling C wrappers
 
@@ -1159,51 +1162,81 @@ def _build(name, src, srcdir):
         setuptools.setup(**args)
     return so
 
+def make_so_cache_key(signature, constants):
+    # Get unique key for the compiled code
+    signature = {k: 'ptr' if v[0] == '*' else v for k, v in signature.items()}
+    key = f"{''.join(signature.values())}{constants}"
+    key = hashlib.md5(key.encode("utf-8")).hexdigest()
+    return key
+
+def make_fn_cache_key(fn_hash, signature, configs, constants, num_warps, num_stages):
+    # Get unique key for the compiled code
+    get_conf_key = lambda conf: (sorted(conf.divisible_by_16), sorted(conf.equal_to_1))
+    configs_key = [get_conf_key(conf) for conf in configs]
+    key = f"{fn_hash}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}"
+    key = hashlib.md5(key.encode("utf-8")).hexdigest()
+    return key
 
 def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
     # we get the kernel, i.e. the first function generated in the module
-    if configs is None:
-        assert False, "automatic specialization is not supported yet"
-        ref, _ = make_triton_ir(fn, signature, _triton.code_gen.instance_descriptor(), constants)
-        fns = ref.get_functions()
-        configs = _triton.infer_specialization_configs(fns[0])
     assert len(configs) == 1
     # cache manager
-    cache_key = make_cache_key(fn, signature, configs, constants, num_warps, num_stages)
-    cache_manager = CacheManager(cache_key)
-    # retrieve cached shared object if it exists
-    if cache_manager.has_file():
-        return CompiledKernel(fn.__name__, cache_manager.bin_path)
-    # compile all the configs
-    binary = _compile(fn, signature, device, constants, configs[0], num_warps, num_stages, extern_libs, "cubin")
-    # generate and compile glue code into shared object
-    with tempfile.TemporaryDirectory() as tmpdir:
-        src = generate_torch_glue(fn.__name__, constants, signature, num_warps, binaries, tmpdir)
-        src_path = os.path.join(tmpdir, "main.c")
-        with open(src_path, "w") as f:
-            f.write(src)
-        so = _build(fn.__name__, src_path, tmpdir)
-        with open(so, "rb") as f:
-            cache_manager.put(f.read())
+    name = fn.__name__
+    # name of files that are cached
+    so_cache_key = make_so_cache_key(signature, constants)
+    so_cache_manager = CacheManager(so_cache_key)
+    so_name = f"{name}.so"
+    # retrieve stub from cache if it exists
+    if not so_cache_manager.has_file(so_name):
+        with tempfile.TemporaryDirectory() as tmpdir:
+          src = generate_launcher(name, constants, signature)
+          src_path = os.path.join(tmpdir, "main.c")
+          with open(src_path, "w") as f:
+              f.write(src)
+          so = _build(fn.__name__, src_path, tmpdir)
+          with open(so, "rb") as f:
+              so_cache_manager.put(f.read(), so_name, binary=True)
 
-    return CompiledKernel(fn.__name__, cache_manager.bin_path)
+    # retrieve cached shared object if it exists
+    fn_cache_key = make_fn_cache_key(fn.cache_key, signature, configs, constants, num_warps, num_stages)
+    fn_cache_manager = CacheManager(fn_cache_key)
+    cubin_name = f"{name}.cubin"
+    data_name = f"{name}.json"
+    if not fn_cache_manager.has_file(cubin_name) or not fn_cache_manager.has_file(data_name):
+        asm, shared, kernel_name = _compile(fn, signature, device, constants, configs[0], num_warps, num_stages, extern_libs, "cubin")
+        metadata = {"name": kernel_name, "shared": shared, "num_warps": num_warps, "num_stages": num_stages}
+        fn_cache_manager.put(asm["cubin"], cubin_name)
+        fn_cache_manager.put(json.dumps(metadata), data_name, binary=False)
+    
+    return CompiledKernel(name, so_cache_manager._make_path(so_name), fn_cache_manager.cache_dir)
 
 
 class CompiledKernel:
 
-    def __init__(self, fn_name, data_path):
+    def __init__(self, fn_name, so_path, cache_dir):
+        # initialize launcher
         import importlib.util
-        spec = importlib.util.spec_from_file_location(fn_name, data_path)
+        spec = importlib.util.spec_from_file_location("launcher", so_path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        self.c_wrapper = getattr(mod, fn_name)
-        ptx = getattr(mod, "ptx")
-        if len(ptx) == 1:
-            self.asm = {"ptx": list(ptx.values())[0]}
+        self.c_wrapper = getattr(mod, "launch")
+        # initialize cuModule and data
+        with open(os.path.join(cache_dir, f"{fn_name}.json")) as f:
+            metadata = json.load(f)
+        self.shared = metadata["shared"]
+        self.num_warps = metadata["num_warps"]
+        self.num_stages = metadata["num_stages"]
+        cu_path = os.path.join(cache_dir, f"{fn_name}.cubin")
+        device = torch.cuda.current_device()
+        with open(cu_path, "rb") as cubin:
+          mod, func, n_regs, n_spills = _triton.code_gen.load_binary(metadata["name"], cubin.read(), self.shared, device)
+          self.cu_module = mod
+          self.cu_function = func
+
 
     def __getitem__(self, grid):
         def runner(*args, stream=None):
             if stream is None:
                 stream = torch.cuda.current_stream().cuda_stream
-            self.c_wrapper(grid[0], grid[1], grid[2], stream, *args)
+            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.shared, stream, self.cu_function, *args)
         return runner
