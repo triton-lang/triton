@@ -5,6 +5,7 @@ import contextlib
 import functools
 import hashlib
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -15,7 +16,6 @@ import warnings
 from sysconfig import get_paths
 from typing import Any, Dict, Set, Tuple, Union
 
-import json
 import setuptools
 import torch
 from filelock import FileLock
@@ -1094,7 +1094,6 @@ class CacheManager:
             os.rename(filepath + ".tmp", filepath)
 
 
-
 # utilties for generating and compiling C wrappers
 
 
@@ -1162,12 +1161,14 @@ def _build(name, src, srcdir):
         setuptools.setup(**args)
     return so
 
+
 def make_so_cache_key(signature, constants):
     # Get unique key for the compiled code
     signature = {k: 'ptr' if v[0] == '*' else v for k, v in signature.items()}
     key = f"{''.join(signature.values())}{constants}"
     key = hashlib.md5(key.encode("utf-8")).hexdigest()
     return key
+
 
 def make_fn_cache_key(fn_hash, signature, configs, constants, num_warps, num_stages):
     # Get unique key for the compiled code
@@ -1176,6 +1177,7 @@ def make_fn_cache_key(fn_hash, signature, configs, constants, num_warps, num_sta
     key = f"{fn_hash}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}"
     key = hashlib.md5(key.encode("utf-8")).hexdigest()
     return key
+
 
 def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
     # we get the kernel, i.e. the first function generated in the module
@@ -1189,13 +1191,13 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
     # retrieve stub from cache if it exists
     if not so_cache_manager.has_file(so_name):
         with tempfile.TemporaryDirectory() as tmpdir:
-          src = generate_launcher(name, constants, signature)
-          src_path = os.path.join(tmpdir, "main.c")
-          with open(src_path, "w") as f:
-              f.write(src)
-          so = _build(fn.__name__, src_path, tmpdir)
-          with open(so, "rb") as f:
-              so_cache_manager.put(f.read(), so_name, binary=True)
+            src = generate_launcher(name, constants, signature)
+            src_path = os.path.join(tmpdir, "main.c")
+            with open(src_path, "w") as f:
+                f.write(src)
+            so = _build(fn.__name__, src_path, tmpdir)
+            with open(so, "rb") as f:
+                so_cache_manager.put(f.read(), so_name, binary=True)
 
     # retrieve cached shared object if it exists
     fn_cache_key = make_fn_cache_key(fn.cache_key, signature, configs, constants, num_warps, num_stages)
@@ -1207,7 +1209,7 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
         metadata = {"name": kernel_name, "shared": shared, "num_warps": num_warps, "num_stages": num_stages}
         fn_cache_manager.put(asm["cubin"], cubin_name)
         fn_cache_manager.put(json.dumps(metadata), data_name, binary=False)
-    
+
     return CompiledKernel(name, so_cache_manager._make_path(so_name), fn_cache_manager.cache_dir)
 
 
@@ -1229,10 +1231,9 @@ class CompiledKernel:
         cu_path = os.path.join(cache_dir, f"{fn_name}.cubin")
         device = torch.cuda.current_device()
         with open(cu_path, "rb") as cubin:
-          mod, func, n_regs, n_spills = _triton.code_gen.load_binary(metadata["name"], cubin.read(), self.shared, device)
-          self.cu_module = mod
-          self.cu_function = func
-
+            mod, func, n_regs, n_spills = _triton.code_gen.load_binary(metadata["name"], cubin.read(), self.shared, device)
+            self.cu_module = mod
+            self.cu_function = func
 
     def __getitem__(self, grid):
         def runner(*args, stream=None):
