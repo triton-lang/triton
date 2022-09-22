@@ -26,6 +26,9 @@ endif()
 # Compiler flags
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+# Third-party
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third-party/pybind11/include)
+
 if(WIN32)
     SET(BUILD_SHARED_LIBS OFF)
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/deps/dlfcn-win32/src)
