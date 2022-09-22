@@ -304,6 +304,13 @@ public:
                                            PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit) {}
 
+  explicit ConvertTritonGPUOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                           const Allocation *allocation,
+                                           Value smem,
+                                           PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
+        allocation(allocation), smem(smem) {}
+
   SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
                                  Location loc, Value linear,
                                  ArrayRef<unsigned> shape,
@@ -554,12 +561,12 @@ public:
     return multiDimIdx;
   }
 
+  template <typename T>
   Value getSharedMemoryBase(Location loc, ConversionPatternRewriter &rewriter,
-                            Value smem, const Allocation *allocation,
-                            Operation *op) const {
+                            T value) const {
     auto ptrTy = LLVM::LLVMPointerType::get(
-        this->getTypeConverter()->convertType(rewriter.getIntegerType(8)), 3);
-    auto bufferId = allocation->getBufferId(op);
+        this->getTypeConverter()->convertType(rewriter.getI8Type()), 3);
+    auto bufferId = allocation->getBufferId(value);
     assert(bufferId != Allocation::InvalidBufferId && "BufferId not found");
     size_t offset = allocation->getOffset(bufferId);
     auto llvmIndexTy = this->getTypeConverter()->getIndexType();
@@ -567,6 +574,10 @@ public:
     Value base = rewriter.create<LLVM::GEPOp>(loc, ptrTy, smem, offVal);
     return base;
   }
+
+protected:
+  const Allocation *allocation;
+  Value smem;
 };
 
 // Convert SplatOp or arith::ConstantOp with SplatElementsAttr to a
@@ -1307,6 +1318,27 @@ struct AddPtrOpConversion
   }
 };
 
+struct AllocTensorOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::AllocTensorOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::AllocTensorOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::AllocTensorOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    Value smemBase = getSharedMemoryBase(loc, rewriter, op.getResult());
+    auto resultTy = op.getType().dyn_cast<RankedTensorType>();
+    auto llvmElemTy =
+        getTypeConverter()->convertType(resultTy.getElementType());
+    auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
+    Value resultVal =
+        rewriter.create<LLVM::BitcastOp>(loc, elemPtrTy, smemBase);
+    rewriter.replaceOp(op, resultVal);
+    return success();
+  }
+};
+
 struct ExtractSliceOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::ExtractSliceOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -1320,31 +1352,26 @@ struct ExtractSliceOpConversion
     auto srcLayout = srcTy.getEncoding().dyn_cast<SharedEncodingAttr>();
     assert(srcLayout && "Unexpected resultLayout in ExtractSliceOpConversion");
 
-    // Example:
-    // %dst = extract_slice %src, %index {axis = 2}
-    // src.shape = [11, 2, 3, 4, 1]
-    // dst.offset = [11, 2, %index, 4, 1]
-    auto srcShape = srcTy.getShape();
+    // axis > 0 will result in non-contiguous memory access if the result tensor
+    // is an alias of the source tensor.
     auto axis =
         op->getAttrOfType<IntegerAttr>("axis").cast<IntegerAttr>().getInt();
-    SmallVector<Value> indices;
-    for (unsigned i = 0; i < srcShape.size(); ++i) {
-      if (i == axis) {
-        indices.push_back(adaptor.index());
-      } else {
-        auto mlirI32Attr = rewriter.getI32IntegerAttr(srcShape[i]);
-        auto llvmI32Type =
-            typeConverter->convertType(rewriter.getIntegerType(32));
-        indices.push_back(
-            rewriter.create<LLVM::ConstantOp>(loc, llvmI32Type, mlirI32Attr));
-      }
-    }
+    assert(axis == 0 && "Only axis=0 is supported for now");
 
-    auto resultTy = op.getType().dyn_cast<RankedTensorType>();
-    Type elemTy =
-        this->getTypeConverter()->convertType(resultTy.getElementType());
+    // Example:
+    // %dst = extract_slice %src, %index {axis = 0}
+    // src.shape = [11, 2, 3, 4, 1]
+    // offset = %index * 2 * 3 * 4 * 1
+    auto dstTy = op.getType().dyn_cast<RankedTensorType>();
+    auto base = product<int64_t>(dstTy.getShape());
+    auto baseVal = createIndexAttrConstant(
+        rewriter, loc, getTypeConverter()->getIndexType(), base);
+    Value offset = rewriter.create<LLVM::MulOp>(loc, adaptor.index(), baseVal);
+
+    auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
+    auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
     Value resultVal =
-        rewriter.create<LLVM::GEPOp>(loc, elemTy, adaptor.src(), indices);
+        rewriter.create<LLVM::GEPOp>(loc, elemPtrTy, adaptor.src(), offset);
     rewriter.replaceOp(op, resultVal);
     return success();
   }
@@ -1397,13 +1424,6 @@ public:
   using ConvertTritonGPUOpToLLVMPattern<
       triton::gpu::ConvertLayoutOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  ConvertLayoutOpConversion(LLVMTypeConverter &converter,
-                            const Allocation *allocation, Value smem,
-                            PatternBenefit benefit)
-      : ConvertTritonGPUOpToLLVMPattern<triton::gpu::ConvertLayoutOp>(converter,
-                                                                      benefit),
-        allocation_(allocation), smem_(smem) {}
-
   LogicalResult
   matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -1422,8 +1442,7 @@ public:
       return failure();
     }
     auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
-    Value smemBase = getSharedMemoryBase(loc, rewriter, smem_, allocation_,
-                                         op.getOperation());
+    Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
     smemBase = rewriter.create<LLVM::BitcastOp>(loc, elemPtrTy, smemBase);
 
@@ -1608,9 +1627,6 @@ private:
       }
     }
   }
-
-  const Allocation *allocation_;
-  Value smem_;
 };
 
 class TritonGPUToLLVMTypeConverter : public LLVMTypeConverter {
@@ -1642,12 +1658,12 @@ public:
       SmallVector<Type, 4> types(numElementsPerThread,
                                  convertType(type.getElementType()));
       return LLVM::LLVMStructType::getLiteral(&getContext(), types);
-    } else if (auto mma_layout = layout.dyn_cast<MmaEncodingAttr>()) {
+    } else if (auto mma_layout = layout.dyn_cast_or_null<MmaEncodingAttr>()) {
       // TODO: Not implemented
-      return llvm::None;
-    } else if (auto shared_layout = layout.dyn_cast<SharedEncodingAttr>()) {
-      // TODO: Not implemented
-      return llvm::None;
+      return type;
+    } else if (auto shared_layout =
+                   layout.dyn_cast_or_null<SharedEncodingAttr>()) {
+      return LLVM::LLVMPointerType::get(convertType(type.getElementType()), 3);
     }
     return llvm::None;
   }
@@ -1669,7 +1685,10 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
                                                                 benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
-  patterns.add<ExtractSliceOpConversion>(typeConverter, benefit);
+  patterns.add<AllocTensorOpConversion>(typeConverter, allocation, smem,
+                                        benefit);
+  patterns.add<ExtractSliceOpConversion>(typeConverter, allocation, smem,
+                                         benefit);
   patterns.add<ConvertLayoutOpConversion>(typeConverter, allocation, smem,
                                           benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
