@@ -28,6 +28,20 @@ def get_build_type():
         return "Release"
 
 
+def check_submodule():
+    submodule_paths = ["third-party/pybind11/include/pybind11"]
+    if not all([os.path.exists(p) for p in submodule_paths]):
+        print("initializing submodules ...")
+        try:
+            cwd = os.path.abspath(os.path.dirname(__file__))
+            subprocess.check_call(["git", "submodule", "update", "--init", "--recursive"], cwd=cwd)
+            print("submodule initialization succeeded")
+        except Exception:
+            print("submodule initialization failed")
+            print(" Please run:\n\tgit submodule update --init --recursive")
+            exit(-1)
+
+
 def get_llvm():
     # tries to find system LLVM
     versions = ['-11.0', '-11', '-11-64']
@@ -92,6 +106,7 @@ class CMakeBuild(build_ext):
             self.build_extension(ext)
 
     def build_extension(self, ext):
+        check_submodule()
         llvm_include_dir, llvm_library_dir = get_llvm()
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
