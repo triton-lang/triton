@@ -1238,7 +1238,7 @@ class CompiledKernel:
             self.asm["cubin"] = f.read()
         with open(os.path.join(cache_dir, f"{fn_name}.ptx"), "r") as f:
             self.asm["ptx"] = f.read()
-        
+
         device = torch.cuda.current_device()
         mod, func, n_regs, n_spills = _triton.code_gen.load_binary(metadata["name"], self.asm["cubin"], self.shared, device)
         self.cu_module = mod
