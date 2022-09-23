@@ -585,12 +585,13 @@ public:
     return multiDimIdx;
   }
 
+  template <typename T>
   Value getSharedMemoryBase(Location loc, ConversionPatternRewriter &rewriter,
                             Value smem, const Allocation *allocation,
-                            Operation *op) const {
+                            T value) const {
     auto ptrTy = LLVM::LLVMPointerType::get(
         this->getTypeConverter()->convertType(rewriter.getIntegerType(8)), 3);
-    auto bufferId = allocation->getBufferId(op);
+    auto bufferId = allocation->getBufferId(value);
     assert(bufferId != Allocation::InvalidBufferId && "BufferId not found");
     size_t offset = allocation->getOffset(bufferId);
     auto llvmIndexTy = this->getTypeConverter()->getIndexType();
@@ -1399,8 +1400,6 @@ public:
     if ((!srcLayout.isa<BlockedEncodingAttr>()) ||
         (!dstLayout.isa<BlockedEncodingAttr>())) {
       // TODO: not implemented
-      llvm::errs()
-          << "convert_layout except for blocked -> blocked is not implemented";
       return failure();
     }
     auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
@@ -1996,12 +1995,6 @@ private:
     return failure();
   }
 
-  Value getSmemAddr(Value value, Location loc,
-                    ConversionPatternRewriter &rewriter) const {
-    return getSharedMemoryBase(loc, rewriter, smem, allocation,
-                               value.getDefiningOp());
-  }
-
   const Allocation *allocation;
   Value smem;
 };
@@ -2340,7 +2333,9 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
     SmallVector<Value> ptrs(numPtrs);
 
     Type smemPtrTy = helper.getShemPtrTy();
-    auto smemBase = getSmemAddr(tensor, loc, rewriter);
+    auto smemBase =
+        getSharedMemoryBase(loc, rewriter, smem, allocation, tensor);
+
     for (int i = 0; i < numPtrs; i++) {
       ptrs[i] = bit_cast(
           smemPtrTy, gep(smemBase.getType(), smemBase, ValueRange({offs[i]})));
