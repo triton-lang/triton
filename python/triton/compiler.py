@@ -877,6 +877,8 @@ def ptx_get_kernel_name(ptx: str) -> str:
 instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1"], defaults=[set(), set()])
 
 def _compile(fn, signature: str, device: int = -1, constants=dict(), specialization=instance_descriptor(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, output: str = "ttgir") -> Tuple[str, int, str]:
+    if isinstance(signature, str):
+      signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
     valid_outputs = ("ttir", "ttgir", "ptx", "cubin")
     assert output in valid_outputs, "output should be one of [%s], but get \"%s\"" % (','.join(valid_outputs), output)
 
@@ -885,6 +887,7 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     module = optimize_triton_ir(module)
     if output == "ttir":
         return module.str()
+    
 
     # tritongpu-ir
     module = make_tritongpu_ir(module, num_warps)
