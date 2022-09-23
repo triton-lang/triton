@@ -28,10 +28,25 @@ def get_build_type():
         return "Release"
 
 
+def use_system_llvm():
+    if platform.system() == "Windows":
+        return True
+    versions = ['-11.0', '-11', '-11-64']
+    supported = ['llvm-config{v}'.format(v=v) for v in versions]
+    paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
+    return any(p is not None for p in paths)
+
+
 def get_thirdparty_packages(triton_cache_path):
     packages = [
         ("pybind11", "pybind11-2.10.0", "https://github.com/pybind/pybind11/archive/refs/tags/v2.10.0.tar.gz", "include/pybind11/pybind11.h", "PYBIND11_INCLUDE_DIR", "")
     ]
+    if not use_system_llvm():
+        # donwload LLVM if no suitable system LLVM is installed
+        packages.append(
+            ("llvm", "clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04", "https://github.com/llvm/llvm-project/releases/download/llvmorg-11.0.1/clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04.tar.xz", "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR")
+        )
+
     thirdparty_cmake_args = []
     for package, name, url, test_file, include_flag, lib_flag in packages:
         package_root_dir = os.path.join(triton_cache_path, package)
@@ -52,35 +67,6 @@ def get_thirdparty_packages(triton_cache_path):
         if lib_flag:
             thirdparty_cmake_args.append("-D{}={}/lib".format(lib_flag, package_dir))
     return thirdparty_cmake_args
-
-
-def get_llvm(triton_cache_path):
-    # tries to find system LLVM
-    versions = ['-11.0', '-11', '-11-64']
-    supported = ['llvm-config{v}'.format(v=v) for v in versions]
-    paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
-    paths = [p for p in paths if p is not None]
-    if paths:
-        return '', ''
-    if platform.system() == "Windows":
-        return '', ''
-    # download if nothing is installed
-    name = 'clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04'
-    dir = os.path.join(triton_cache_path, "llvm")
-    llvm_include_dir = '{dir}/{name}/include'.format(dir=dir, name=name)
-    llvm_library_dir = '{dir}/{name}/lib'.format(dir=dir, name=name)
-    if not os.path.exists(llvm_library_dir):
-        os.makedirs(dir, exist_ok=True)
-        try:
-            shutil.rmtree(os.path.join(dir, name))
-        except Exception:
-            pass
-        url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-11.0.1/{name}.tar.xz".format(name=name)
-        print('downloading and extracting ' + url + '...')
-        ftpstream = urllib.request.urlopen(url)
-        file = tarfile.open(fileobj=ftpstream, mode="r|xz")
-        file.extractall(path=dir)
-    return llvm_include_dir, llvm_library_dir
 
 
 class CMakeExtension(Extension):
@@ -120,7 +106,6 @@ class CMakeBuild(build_ext):
     def build_extension(self, ext):
         triton_cache_path = os.path.join(os.environ["HOME"], ".triton")
         thirdparty_cmake_args = get_thirdparty_packages(triton_cache_path)
-        llvm_include_dir, llvm_library_dir = get_llvm(triton_cache_path)
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
         if not os.path.exists(self.build_temp):
@@ -131,8 +116,6 @@ class CMakeBuild(build_ext):
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
             "-DBUILD_TUTORIALS=OFF",
             "-DBUILD_PYTHON_MODULE=ON",
-            "-DLLVM_INCLUDE_DIRS=" + llvm_include_dir,
-            "-DLLVM_LIBRARY_DIR=" + llvm_library_dir,
             # '-DPYTHON_EXECUTABLE=' + sys.executable,
             # '-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
             "-DPYTHON_INCLUDE_DIRS=" + ";".join(python_include_dirs)
