@@ -884,17 +884,7 @@ struct StoreOpConversion
 
       auto ASMReturnTy = LLVM::LLVMVoidType::get(ctx);
 
-      auto inlineAsm = rewriter.create<LLVM::InlineAsmOp>(
-          loc, ASMReturnTy, ptxBuilder.getAllMLIRArgs(), // operands
-          ptxBuilder.dump(),                             // asm_string
-          ptxBuilder.getConstraints(),                   // constraints
-          // TODO(Superjomn) determine the side effect.
-          true,  // has_side_effects
-          false, // is_align_stack
-          LLVM::AsmDialectAttr::get(ctx,
-                                    LLVM::AsmDialect::AD_ATT), // asm_dialect
-          ArrayAttr::get(ctx, {})                              // operand_attrs
-      );
+      ptxBuilder.launch(rewriter, loc, ASMReturnTy);
     }
     rewriter.eraseOp(op);
     return success();
@@ -1240,14 +1230,7 @@ struct LoadOpConversion
       // TODO: if (has_l2_evict_policy)
       auto asmDialectAttr = LLVM::AsmDialectAttr::get(rewriter.getContext(),
                                                       LLVM::AsmDialect::AD_ATT);
-      auto inlineAsmOp = rewriter.create<LLVM::InlineAsmOp>(
-          loc, retTy, /*operands=*/ptxBuilder.getAllMLIRArgs(),
-          /*asm_string=*/ptxBuilder.dump(),
-          /*constraints=*/ptxBuilder.getConstraints(),
-          /*has_side_effects=*/true,
-          /*is_align_stack=*/false, /*asm_dialect=*/asmDialectAttr,
-          /*operand_attrs=*/ArrayAttr());
-      Value ret = inlineAsmOp.getResult(0);
+      Value ret = ptxBuilder.launch(rewriter, loc, retTy);
 
       // ---
       // extract and store return values
@@ -1839,23 +1822,13 @@ public:
                           .o("shared.b16");
       ldmatrix(resArgs, addrArg);
 
-      auto inlineAsm = rewriter.create<LLVM::InlineAsmOp>(
-          loc, ldmatrixRetTy, builder.getAllMLIRArgs(), // operands
-          builder.dump(),                               // asm_string
-          builder.getConstraints(),                     // constraints
-          true,                                         // has_side_effects
-          false,                                        // is_align_stack
-          LLVM::AsmDialectAttr::get(ctx,
-                                    LLVM::AsmDialect::AD_ATT), // asm_dialect
-          ArrayAttr::get(ctx, {})                              // operand_attrs
-      );
+      Value resV4 = builder.launch(
+          rewriter, loc, ldmatrixRetTy); // 4xi32, each is composed of 2xf16
+      // elements(adjacent columns in a row)
 
       auto getIntAttr = [&](int v) {
         return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty(), v)});
       };
-
-      Value resV4 = inlineAsm.getRes(); // 4xi32, each is composed of 2xf16
-                                        // elements(adjacent columns in a row)
 
       Type fp16x2Ty = VectorType::get({2}, type::f16Ty(ctx));
 
@@ -2376,42 +2349,34 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
 
     auto &mma = *builder.create(helper.getMmaInstr().str());
 
-    auto retArgs = builder.newListOperand();
-    for (int i = 0; i < 4; ++i)
-      retArgs->listAppend(builder.newOperand("=r"));
-    auto aArg0 = builder.newOperand(ha[{m, k}], "r");
-    auto aArg1 = builder.newOperand(ha[{m + 1, k}], "r");
-    auto aArg2 = builder.newOperand(ha[{m, k + 1}], "r");
-    auto aArg3 = builder.newOperand(ha[{m + 1, k}], "r");
+    auto retArgs = builder.newListOperand(4, "=r");
 
-    auto bArg0 = builder.newOperand(ha[{n, k}], "r");
-    auto bArg1 = builder.newOperand(ha[{n, k + 1}], "r");
+    auto aArgs = builder.newListOperand({
+        {ha[{m, k}], "r"},
+        {ha[{m + 1, k}], "r"},
+        {ha[{m, k + 1}], "r"},
+        {ha[{m + 1, k + 1}], "r"},
+    });
+
+    auto bArgs =
+        builder.newListOperand({{hb[{n, k}], "r"}, {hb[{n, k + 1}], "r"}});
 
     // Currently, we only support a SplatLike C. For the other cases, e.g., C in
     // shared layout or blocked layout, we will support them by expanding
     // convert_layout.
     auto hc = helper.loadSplatLikeC(C, loc, rewriter);
     assert(hc.size() == 4UL && "Only splat-like C is supported now");
-    auto cArg0 = builder.newOperand(hc[0], "0"); // reuse the output registers
-    auto cArg1 = builder.newOperand(hc[1], "1");
-    auto cArg2 = builder.newOperand(hc[2], "2");
-    auto cArg3 = builder.newOperand(hc[3], "3");
 
-    mma({retArgs, aArg0, aArg1, aArg2, aArg3, bArg0, bArg1, cArg0, cArg1, cArg2,
-         cArg3});
+    auto cArgs = builder.newListOperand();
+    for (int i = 0; i < hc.size(); i++) {
+      cArgs->listAppend(builder.newOperand(
+          hc[i], std::to_string(i))); // reuse the output registers
+    }
 
-    auto inlineAsm = rewriter.create<LLVM::InlineAsmOp>(
-        loc, helper.getMmaRetType(), builder.getAllMLIRArgs(), // operands
-        builder.dump(),                                        // asm_string
-        builder.getConstraints(),                              // constraints
-        true,  // has_side_effects
-        false, // is_align_stack
-        LLVM::AsmDialectAttr::get(ctx,
-                                  LLVM::AsmDialect::AD_ATT), // asm_dialect
-        ArrayAttr::get(ctx, {})                              // operand_attrs
-    );
+    mma(retArgs, aArgs, bArgs, cArgs);
 
-    auto mmaOut = inlineAsm.getRes();
+    Value mmaOut = builder.launch(rewriter, loc, helper.getMmaRetType());
+
     auto getIntAttr = [&](int v) {
       return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty(), v)});
     };

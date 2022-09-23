@@ -8,6 +8,9 @@
 #include <string>
 
 namespace mlir {
+class ConversionPatternRewriter;
+class Location;
+
 namespace triton {
 using llvm::StringRef;
 
@@ -104,6 +107,31 @@ struct PTXBuilder {
   // Create a list of operands.
   Operand *newListOperand() { return newOperand(); }
 
+  Operand *newListOperand(ArrayRef<std::pair<mlir::Value, std::string>> items) {
+    auto *list = newOperand();
+    for (auto &item : items) {
+      list->listAppend(newOperand(item.first, item.second));
+    }
+    return list;
+  }
+
+  Operand *newListOperand(unsigned count, mlir::Value val,
+                          const std::string &constraint) {
+    auto *list = newOperand();
+    for (int i = 0; i < count; i++) {
+      list->listAppend(newOperand(val, constraint));
+    }
+    return list;
+  }
+
+  Operand *newListOperand(unsigned count, const std::string &constraint) {
+    auto *list = newOperand();
+    for (int i = 0; i < count; i++) {
+      list->listAppend(newOperand(constraint));
+    }
+    return list;
+  }
+
   // Create a new operand. It will not add to operand list.
   // @value: the MLIR value bind to this operand.
   // @constraint: ASM operand constraint, .e.g. "=r"
@@ -130,6 +158,11 @@ struct PTXBuilder {
   std::string getConstraints() const;
 
   std::string dump() const;
+
+  mlir::Value launch(ConversionPatternRewriter &rewriter, Location loc,
+                     Type resTy, bool hasSideEffect = true,
+                     bool isAlignStack = false,
+                     ArrayRef<Attribute> attrs = {}) const;
 
 private:
   Operand *newOperand() {
