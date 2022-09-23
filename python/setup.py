@@ -28,8 +28,8 @@ def get_build_type():
         return "Release"
 
 
-def check_submodule():
-    submodule_paths = ["third-party/pybind11/include/pybind11"]
+def check_submodule(base_dir: str):
+    submodule_paths = ["{}/third-party/pybind11/include/pybind11".format(base_dir)]
     if not all([os.path.exists(p) for p in submodule_paths]):
         print("initializing submodules ...")
         try:
@@ -72,9 +72,9 @@ def get_llvm():
 
 
 class CMakeExtension(Extension):
-    def __init__(self, name, path, sourcedir=""):
+    def __init__(self, name, path, source_dir=""):
         Extension.__init__(self, name, sources=[])
-        self.sourcedir = os.path.abspath(sourcedir)
+        self.source_dir = os.path.abspath(source_dir)
         self.path = path
 
 
@@ -106,7 +106,7 @@ class CMakeBuild(build_ext):
             self.build_extension(ext)
 
     def build_extension(self, ext):
-        check_submodule()
+        check_submodule(self.base_dir)
         llvm_include_dir, llvm_library_dir = get_llvm()
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
