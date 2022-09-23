@@ -19,6 +19,24 @@ def next_power_of_2(n):
     return n
 
 
+class MockTensor:
+    """
+    Can be used in place of real tensors when calling:
+        kernel.warmup(MockTensor(torch.float32), ...)
+    """
+    @staticmethod
+    def wrap_dtype(arg):
+        if isinstance(arg, torch.dtype):
+            return MockTensor(arg)
+        return arg
+
+    def __init__(self, dtype):
+        self.dtype = dtype
+
+    def data_ptr(self):
+        return 0  # optimistically assumes multiple of 16
+
+
 class TensorWrapper:
     def __init__(self, base, dtype):
         self.dtype = dtype

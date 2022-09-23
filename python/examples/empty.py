@@ -1,5 +1,6 @@
 import triton
 import triton.language as tl
+import torch
 
 
 @triton.jit
@@ -7,4 +8,5 @@ def kernel(X, stride_xm, stride_xn, BLOCK: tl.constexpr):
     pass
 
 
-ret = triton.compile(kernel, "*fp32,i32,i32", constants={"BLOCK": 256}, output="ttgir")
+X = torch.randn(1, device="cuda")
+kernel[(1,)](X, 1, 1, BLOCK=1024)

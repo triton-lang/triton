@@ -1,2 +1,2 @@
-from .autotuner import Config, autotune, heuristics  # noqa: F401
-from .jit import JITFunction, build_kernel, jit, launch_kernel  # noqa: F401
+from .autotuner import Config, Heuristics, autotune, heuristics  # noqa: F401
+from .jit import JITFunction, KernelInterface, version_key  # noqa: F401
