@@ -177,9 +177,9 @@ unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
 }
 
 unsigned MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
-  // TODO:
-  assert(0 && "MmaEncodingAttr::getElemsPerThread not implemented");
-  return 0;
+  int threads = product(getWarpsPerCTA());
+  int numElem = product(shape);
+  return numElem / threads;
 }
 
 unsigned SharedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
