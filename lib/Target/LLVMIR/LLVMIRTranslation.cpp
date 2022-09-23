@@ -66,7 +66,7 @@ void extractNVVMMetadata(mlir::ModuleOp module,
     // maxntid
     if (op->hasAttr(NVVMMetadataField::MaxNTid)) {
       auto attr = op->getAttr(NVVMMetadataField::MaxNTid);
-      meta.maxntidx = attr.dyn_cast<IntegerAttr>().getSInt();
+      meta.maxntidx = attr.dyn_cast<IntegerAttr>().getInt();
       hasMetadata = true;
     }
 
