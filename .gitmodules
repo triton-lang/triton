@@ -1,3 +1,6 @@
 [submodule "deps/dlfcn-win32"]
 	path = deps/dlfcn-win32
 	url = https://github.com/dlfcn-win32/dlfcn-win32.git
+[submodule "third-party/pybind11"]
+	path = third-party/pybind11
+	url = https://github.com/pybind/pybind11.git
