@@ -17,9 +17,6 @@ using namespace mlir;
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
 namespace {
-class Prefetcher {
-
-};
 
 class LoopPipeliner {
   /// comments on numStages:

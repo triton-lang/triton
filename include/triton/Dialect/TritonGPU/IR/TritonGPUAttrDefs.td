@@ -324,5 +324,20 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
   let extraClassDeclaration = extraBaseClassDeclaration;
 }
 
+def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding"> {
+  let mnemonic = "dot_op";
+
+  let description = [{}];
+
+  let parameters = (
+    ins
+    "unsigned":$opNum,
+    "Attribute":$parent
+  );
+
+  // TODO: what's this?
+  // let extraClassDeclaration = extraBaseClassDeclaration;
+}
+
 
 #endif
