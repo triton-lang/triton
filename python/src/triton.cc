@@ -544,7 +544,6 @@ void init_triton_runtime(py::module &&m) {
 /*****************************************************************************/
 typedef std::map<std::string, py::object> asm_map_t;
 
-
 /*****************************************************************************/
 /* Python bindings for triton::ir                                            */
 /*****************************************************************************/
@@ -1683,8 +1682,11 @@ void init_triton_translation(py::module &m) {
           return bytes;
         });
 
-  m.def("load_binary", [](const std::string& name, const std::string& data, size_t n_shared_bytes, uint64_t device){
-	      py::gil_scoped_release allow_threads;
+  m.def(
+      "load_binary",
+      [](const std::string &name, const std::string &data,
+         size_t n_shared_bytes, uint64_t device) {
+        py::gil_scoped_release allow_threads;
         // create driver handles
         CUfunction fun;
         CUmodule mod;
@@ -1693,21 +1695,31 @@ void init_triton_translation(py::module &m) {
         // get allocated registers and spilled registers from the function
         int n_regs = 0;
         int n_spills = 0;
-        drv::dispatch::cuFuncGetAttribute(&n_regs, CU_FUNC_ATTRIBUTE_NUM_REGS, fun);
-        drv::dispatch::cuFuncGetAttribute(&n_spills, CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, fun);
+        drv::dispatch::cuFuncGetAttribute(&n_regs, CU_FUNC_ATTRIBUTE_NUM_REGS,
+                                          fun);
+        drv::dispatch::cuFuncGetAttribute(
+            &n_spills, CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, fun);
         n_spills /= 4;
         // set dynamic shared memory if necessary
         int shared_optin;
-        drv::dispatch::cuDeviceGetAttribute(&shared_optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, device);
-        if(n_shared_bytes > 49152 && shared_optin > 49152){
+        drv::dispatch::cuDeviceGetAttribute(
+            &shared_optin,
+            CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, device);
+        if (n_shared_bytes > 49152 && shared_optin > 49152) {
           drv::dispatch::cuFuncSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED);
           int shared_total, shared_static;
-          drv::dispatch::cuDeviceGetAttribute(&shared_total, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR, device);
-          drv::dispatch::cuFuncGetAttribute(&shared_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun);
-          drv::dispatch::cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin - shared_static);
+          drv::dispatch::cuDeviceGetAttribute(
+              &shared_total,
+              CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR, device);
+          drv::dispatch::cuFuncGetAttribute(
+              &shared_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun);
+          drv::dispatch::cuFuncSetAttribute(
+              fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+              shared_optin - shared_static);
         }
-        return std::make_tuple((uint64_t)mod, (uint64_t)fun, (uint64_t)n_regs, (uint64_t)n_spills);
-      }, 
+        return std::make_tuple((uint64_t)mod, (uint64_t)fun, (uint64_t)n_regs,
+                               (uint64_t)n_spills);
+      },
       py::return_value_policy::take_ownership);
 }
 

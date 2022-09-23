@@ -3,7 +3,6 @@ from torch.testing import assert_allclose
 
 import triton
 import triton.language as tl
-import triton.runtime as runtime
 
 
 def vecadd_no_scf_tester(num_warps, block_size):
@@ -22,15 +21,13 @@ def vecadd_no_scf_tester(num_warps, block_size):
         z_ptrs = z_ptr + offset
         tl.store(z_ptrs, z)
 
-    
-
     x = torch.randn((block_size,), device='cuda', dtype=torch.float32)
     y = torch.randn((block_size,), device='cuda', dtype=torch.float32)
     z = torch.empty((block_size,), device=x.device, dtype=x.dtype)
 
     grid = lambda EA: (x.shape.numel() // block_size,)
     kernel[grid](x_ptr=x, y_ptr=y, z_ptr=z, BLOCK_SIZE_N=block_size, num_warps=num_warps)
-    
+
     golden_z = x + y
     assert_allclose(z, golden_z, rtol=1e-7, atol=1e-7)
 

@@ -1,8 +1,6 @@
 import torch
-
 import triton
 import triton.language as tl
-import triton.runtime as runtime
 
 # trigger the torch.device implicitly to ensure cuda context initialization
 torch.zeros([10], device=torch.device('cuda'))
@@ -17,9 +15,9 @@ def test_empty_kernel_cubin_compile():
 
     device = torch.cuda.current_device()
     kernel = triton.compile(empty_kernel,
-                           "*fp32,i32,i32",
-                           device=device,
-                           constants={"BLOCK": 256})
+                            "*fp32,i32,i32",
+                            device=device,
+                            constants={"BLOCK": 256})
 
     assert len(kernel.asm["cubin"]) > 0
 

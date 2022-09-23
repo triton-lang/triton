@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-from collections import namedtuple
 import contextlib
 import functools
 import hashlib
@@ -14,8 +13,9 @@ import sys
 import sysconfig
 import tempfile
 import warnings
+from collections import namedtuple
 from sysconfig import get_paths
-from typing import Any, Dict, Set, Tuple, Union
+from typing import Any, Dict, Tuple, Union
 
 import setuptools
 import torch
@@ -732,6 +732,7 @@ class CodeGenerator(ast.NodeVisitor):
         typename = type(node).__name__
         raise NotImplementedError("Unsupported node: {}".format(typename))
 
+
 class CompilationError(Exception):
     def __init__(self, src, node):
         self.message = f'at {node.lineno}:{node.col_offset}:\n'
@@ -775,6 +776,7 @@ def kernel_suffix(signature, specialization):
 
 # ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
+
 
 def make_triton_ir(fn, signature, specialization, constants):
     context = _triton.ir.context()
@@ -874,11 +876,13 @@ def ptx_get_kernel_name(ptx: str) -> str:
         if line.startswith('// .globl'):
             return line.split()[-1]
 
+
 instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1"], defaults=[set(), set()])
+
 
 def _compile(fn, signature: str, device: int = -1, constants=dict(), specialization=instance_descriptor(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, output: str = "ttgir") -> Tuple[str, int, str]:
     if isinstance(signature, str):
-      signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
+        signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
     valid_outputs = ("ttir", "ttgir", "ptx", "cubin")
     assert output in valid_outputs, "output should be one of [%s], but get \"%s\"" % (','.join(valid_outputs), output)
 
@@ -887,7 +891,6 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     module = optimize_triton_ir(module)
     if output == "ttir":
         return module.str()
-    
 
     # tritongpu-ir
     module = make_tritongpu_ir(module, num_warps)
@@ -907,7 +910,6 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
         return cubin, ptx, shem_size, kernel_name
 
     assert False
-
 
 
 # ------------------------------------------------------------------------------
@@ -1185,10 +1187,10 @@ def make_fn_cache_key(fn_hash, signature, configs, constants, num_warps, num_sta
 
 def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
     if isinstance(signature, str):
-      signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
+        signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
     # we get the kernel, i.e. the first function generated in the module
     if configs is None:
-      configs = [instance_descriptor()]
+        configs = [instance_descriptor()]
     assert len(configs) == 1
     # cache manager
     name = fn.__name__
@@ -1258,6 +1260,4 @@ class CompiledKernel:
             if stream is None:
                 stream = torch.cuda.current_stream().cuda_stream
             self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.shared, stream, self.cu_function, *args)
-        return 
-
-
+        return
