@@ -2,8 +2,9 @@ import triton
 import triton.language as tl
 
 
+# TODO: function with no arguments don't work
 @triton.jit
-def cast_check():
+def cast_check(X):
     zero_0d = tl.zeros([], dtype=tl.float32)
     zero_1d = tl.zeros([2], dtype=tl.float32)
     zero_2d_21 = tl.zeros([2, 1], dtype=tl.float32)
@@ -48,9 +49,9 @@ def cast_check():
 
 
 def test_cast_check():
-    kernel = triton.compile(cast_check,
-                            signature="",
+    kernel = triton.compiler._compile(cast_check,
+                            signature="*fp32",
                             device=0,
-                            output="ttir")
+                            output="ttgir")
     assert (kernel)
     # TODO: Check types of the results
