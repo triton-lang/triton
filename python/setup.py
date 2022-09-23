@@ -9,6 +9,7 @@ import sys
 import tarfile
 import urllib.request
 from distutils.version import LooseVersion
+from typing import NamedTuple
 
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
@@ -38,34 +39,42 @@ def use_system_llvm():
 
 
 def get_thirdparty_packages(triton_cache_path):
+    class Package(NamedTuple):
+        package: str
+        name: str
+        url: str
+        test_file: str
+        include_flag: str
+        lib_flag: str
+
     packages = [
-        ("pybind11", "pybind11-2.10.0", "https://github.com/pybind/pybind11/archive/refs/tags/v2.10.0.tar.gz", "include/pybind11/pybind11.h", "PYBIND11_INCLUDE_DIR", "")
+        Package("pybind11", "pybind11-2.10.0", "https://github.com/pybind/pybind11/archive/refs/tags/v2.10.0.tar.gz", "include/pybind11/pybind11.h", "PYBIND11_INCLUDE_DIR", "")
     ]
     if not use_system_llvm():
         # donwload LLVM if no suitable system LLVM is installed
         packages.append(
-            ("llvm", "clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04", "https://github.com/llvm/llvm-project/releases/download/llvmorg-11.0.1/clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04.tar.xz", "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR")
+            Package("llvm", "clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04", "https://github.com/llvm/llvm-project/releases/download/llvmorg-11.0.1/clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04.tar.xz", "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR")
         )
 
     thirdparty_cmake_args = []
-    for package, name, url, test_file, include_flag, lib_flag in packages:
-        package_root_dir = os.path.join(triton_cache_path, package)
-        package_dir = os.path.join(package_root_dir, name)
-        test_file_path = os.path.join(package_dir, test_file)
+    for p in packages:
+        package_root_dir = os.path.join(triton_cache_path, p.package)
+        package_dir = os.path.join(package_root_dir, p.name)
+        test_file_path = os.path.join(package_dir, p.test_file)
         if not os.path.exists(test_file_path):
             try:
                 shutil.rmtree(package_root_dir)
             except Exception:
                 pass
             os.makedirs(package_root_dir, exist_ok=True)
-            print('downloading and extracting {} ...'.format(url))
-            ftpstream = urllib.request.urlopen(url)
+            print('downloading and extracting {} ...'.format(p.url))
+            ftpstream = urllib.request.urlopen(p.url)
             file = tarfile.open(fileobj=ftpstream, mode="r|*")
             file.extractall(path=package_root_dir)
-        if include_flag:
-            thirdparty_cmake_args.append("-D{}={}/include".format(include_flag, package_dir))
-        if lib_flag:
-            thirdparty_cmake_args.append("-D{}={}/lib".format(lib_flag, package_dir))
+        if p.include_flag:
+            thirdparty_cmake_args.append("-D{}={}/include".format(p.include_flag, package_dir))
+        if p.lib_flag:
+            thirdparty_cmake_args.append("-D{}={}/lib".format(p.lib_flag, package_dir))
     return thirdparty_cmake_args
 
 
