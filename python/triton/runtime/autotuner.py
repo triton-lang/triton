@@ -5,10 +5,11 @@ import time
 from typing import Dict
 
 from ..testing import do_bench
+from .jit import KernelInterface
 
 
-class Autotuner:
-    def __init__(self, kernel, arg_names, configs, key, reset_to_zero, prune_configs_by: Dict = None):
+class Autotuner(KernelInterface):
+    def __init__(self, fn, arg_names, configs, key, reset_to_zero, prune_configs_by: Dict = None):
         '''
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
             'perf_model': performance model used to predicate running time with different configs, returns running time
@@ -21,7 +22,6 @@ class Autotuner:
             self.configs = configs
         self.key_idx = [arg_names.index(k) for k in key]
         self.cache = dict()
-        self.kernel = kernel
         # hook to reset all required tensor to zeros before relaunching a kernel
         self.hook = lambda args: 0
         if reset_to_zero is not None:
@@ -41,6 +41,7 @@ class Autotuner:
             perf_model, top_k, early_config_prune = None, None, None
         self.perf_model, self.configs_top_k = perf_model, top_k
         self.early_config_prune = early_config_prune
+        self.fn = fn
 
     def _bench(self, *args, config, **meta):
         # check for conflicts, i.e. meta-parameters both provided
@@ -58,25 +59,16 @@ class Autotuner:
             if config.pre_hook:
                 config.pre_hook(self.nargs)
             self.hook(args)
-            self.kernel(*args, num_warps=config.num_warps, num_stages=config.num_stages, **current)
+            self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **current)
         return do_bench(kernel_call)
 
-    def __call__(self, *args, **kwargs):
+    def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
         if len(self.configs) > 1:
             key = tuple([args[i] for i in self.key_idx])
             if key not in self.cache:
                 # prune configs
-                pruned_configs = self.configs
-                if self.early_config_prune:
-                    pruned_configs = self.early_config_prune(self.configs, self.nargs)
-                if self.perf_model:
-                    top_k = self.configs_top_k
-                    if isinstance(top_k, float) and top_k <= 1.0:
-                        top_k = int(len(self.configs) * top_k)
-                    if len(pruned_configs) > top_k:
-                        est_timing = {config: self.perf_model(**self.nargs, **kwargs, **config.kwargs, num_stages=config.num_stages, num_warps=config.num_warps) for config in pruned_configs}
-                        pruned_configs = sorted(est_timing.keys(), key=lambda x: est_timing[x])[:top_k]
+                pruned_configs = self.prune_configs(kwargs)
                 bench_start = time.time()
                 timings = {config: self._bench(*args, config=config, **kwargs)
                            for config in pruned_configs}
@@ -91,13 +83,41 @@ class Autotuner:
         self.best_config = config
         if config.pre_hook is not None:
             config.pre_hook(self.nargs)
-        return self.kernel(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
+        return self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
+
+    def prune_configs(self, kwargs):
+        pruned_configs = self.configs
+        if self.early_config_prune:
+            pruned_configs = self.early_config_prune(self.configs, self.nargs)
+        if self.perf_model:
+            top_k = self.configs_top_k
+            if isinstance(top_k, float) and top_k <= 1.0:
+                top_k = int(len(self.configs) * top_k)
+            if len(pruned_configs) > top_k:
+                est_timing = {
+                    config: self.perf_model(**self.nargs, **kwargs, **config.kwargs, num_stages=config.num_stages,
+                                            num_warps=config.num_warps)
+                    for config in pruned_configs
+                }
+                pruned_configs = sorted(est_timing.keys(), key=lambda x: est_timing[x])[:top_k]
+        return pruned_configs
+
+    def warmup(self, *args, **kwargs):
+        self.nargs = dict(zip(self.arg_names, args))
+        for config in self.prune_configs(kwargs):
+            self.fn.warmup(
+                *args,
+                num_warps=config.num_warps,
+                num_stages=config.num_stages,
+                **kwargs,
+                **config.kwargs,
+            )
+        self.nargs = None
 
 
 class Config:
     """
     An object that represents a possible kernel configuration for the auto-tuner to try.
-
     :ivar meta: a dictionary of meta-parameters to pass to the kernel as keyword arguments.
     :type meta: dict[Str, Any]
     :ivar num_warps: the number of warps to use for the kernel when compiled for GPUs. For example, if
@@ -129,10 +149,8 @@ class Config:
 def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
     """
     Decorator for auto-tuning a :code:`triton.jit`'d function.
-
     .. highlight:: python
     .. code-block:: python
-
         @triton.autotune(configs=[
             triton.Config(meta={'BLOCK_SIZE': 128}, num_warps=4),
             triton.Config(meta={'BLOCK_SIZE': 1024}, num_warps=8),
@@ -143,12 +161,10 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
         @triton.jit
         def kernel(x_ptr, x_size, **META):
             BLOCK_SIZE = META['BLOCK_SIZE']
-
     :note: When all the configurations are evaluated, the kernel will run multiple time.
            This means that whatever value the kernel updates will be updated multiple times.
            To avoid this undesired behavior, you can use the `reset_to_zero` argument, which
            reset the value of the provided tensor to `zero` before running any configuration.
-
     :param configs: a list of :code:`triton.Config` objects
     :type configs: list[triton.Config]
     :param key: a list of argument names whose change in value will trigger the evaluation of all provided configs.
@@ -161,43 +177,39 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
     :type reset_to_zero: list[str]
     """
     def decorator(fn):
-        def wrapper(kernel):
-            return Autotuner(kernel, fn.arg_names, configs, key, reset_to_zero, prune_configs_by)
-
-        fn.kernel_decorators.append(wrapper)
-        return fn
+        return Autotuner(fn, fn.arg_names, configs, key, reset_to_zero, prune_configs_by)
 
     return decorator
+
+
+class Heuristics(KernelInterface):
+
+    def __init__(self, fn, arg_names, values) -> None:
+        self.fn = fn
+        self.values = values
+        self.arg_names = arg_names
+
+    def run(self, *args, **kwargs):
+        for v, heur in self.values.items():
+            kwargs[v] = heur({**dict(zip(self.arg_names, args)), **kwargs})
+        return self.fn.run(*args, **kwargs)
 
 
 def heuristics(values):
     """
     Decorator for specifying how the values of certain meta-parameters may be computed.
     This is useful for cases where auto-tuning is prohibitevely expensive, or just not applicable.
-
     .. highlight:: python
     .. code-block:: python
-
         @triton.heuristics(values={'BLOCK_SIZE': lambda args: 2 ** int(math.ceil(math.log2(args[1])))})
         @triton.jit
         def kernel(x_ptr, x_size, **META):
             BLOCK_SIZE = META['BLOCK_SIZE'] # smallest power-of-two >= x_size
-
-
     .param values: a dictionary of meta-parameter names and functions that compute the value of the meta-parameter.
                    each such function takes a list of positional arguments as input.
     .type values: dict[str, Callable[[list[Any]], Any]]
     """
     def decorator(fn):
-        def wrapper(kernel):
-            def fun(*args, **meta):
-                for v, heur in values.items():
-                    assert v not in meta
-                    meta[v] = heur({**dict(zip(fn.arg_names, args)), **meta})
-                return kernel(*args, **meta)
-            return fun
-
-        fn.kernel_decorators.append(wrapper)
-        return fn
+        return Heuristics(fn, fn.arg_names, values)
 
     return decorator
