@@ -43,7 +43,6 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
       return 0;
     }
   };
-  // blocked -> blocked
   if (srcLayout.isa<BlockedEncodingAttr>() &&
       dstLayout.isa<BlockedEncodingAttr>()) {
     auto srcBlockedLayout = srcLayout.cast<BlockedEncodingAttr>();
@@ -66,14 +65,6 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
     }
     paddedRepShape[outOrd[0]] += pad;
   }
-  // blocked -> shared
-  if (srcLayout.isa<BlockedEncodingAttr>() &&
-      dstLayout.isa<SharedEncodingAttr>()) {
-    auto sharedLayout = dstLayout.cast<SharedEncodingAttr>();
-    for (int v : dstTy.getShape())
-      paddedRepShape.push_back(v);
-  }
-
   return paddedRepShape;
 }
 
@@ -140,8 +131,9 @@ private:
       auto dstTy = cvtLayout.result().getType().cast<RankedTensorType>();
       auto srcEncoding = srcTy.getEncoding();
       auto dstEncoding = dstTy.getEncoding();
-      if (srcEncoding.isa<SharedEncodingAttr>()) {
-        // only block->block and block->shared is supported now
+      if (srcEncoding.isa<SharedEncodingAttr>() ||
+          dstEncoding.isa<SharedEncodingAttr>()) {
+        // Only blocked -> blocked conversion requires for scratch allocation
         return;
       }
       // ConvertLayoutOp with both input/output non-shared_layout
