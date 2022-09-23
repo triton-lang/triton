@@ -1181,7 +1181,11 @@ def make_fn_cache_key(fn_hash, signature, configs, constants, num_warps, num_sta
 
 
 def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
+    if isinstance(signature, str):
+      signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
     # we get the kernel, i.e. the first function generated in the module
+    if configs is None:
+      configs = [instance_descriptor()]
     assert len(configs) == 1
     # cache manager
     name = fn.__name__

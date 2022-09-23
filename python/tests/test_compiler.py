@@ -16,30 +16,18 @@ def empty_kernel(X, stride_xm, BLOCK: tl.constexpr):
 def test_empty_kernel_cubin_compile():
 
     device = torch.cuda.current_device()
-    cubin = triton.compile(empty_kernel,
+    kernel = triton.compile(empty_kernel,
                            "*fp32,i32,i32",
                            device=device,
-                           constants={"BLOCK": 256},
-                           output="cubin")
+                           constants={"BLOCK": 256})
 
-    print('cubin size:', len(cubin))
-    assert len(cubin) > 0
+    assert len(kernel.asm["cubin"]) > 0
 
 
 def test_empty_kernel_launch():
-    device = torch.cuda.current_device()
-    binary = runtime.build_kernel(empty_kernel, "*fp32,i32,i32",
-                                  constants={"BLOCK": 256},
-                                  num_warps=4,
-                                  num_stages=3)
     grid = lambda META: (
         triton.cdiv(1024, META['BLOCK']) * triton.cdiv(1024, META['BLOCK']),
     )
 
     A = torch.zeros([1024], device="cuda")
-    runtime.launch_kernel(kernel=binary,
-                          grid=grid,
-                          device=device,
-                          X=A,
-                          stride_xm=256,
-                          BLOCK=tl.constexpr(256))
+    empty_kernel[grid](X=A, stride_xm=256, BLOCK=256)
