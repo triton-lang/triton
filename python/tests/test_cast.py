@@ -50,8 +50,8 @@ def cast_check(X):
 
 def test_cast_check():
     kernel = triton.compiler._compile(cast_check,
-                            signature="*fp32",
-                            device=0,
-                            output="ttgir")
+                                      signature="*fp32",
+                                      device=0,
+                                      output="ttgir")
     assert (kernel)
     # TODO: Check types of the results
