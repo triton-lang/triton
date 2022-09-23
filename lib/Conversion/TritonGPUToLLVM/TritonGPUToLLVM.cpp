@@ -1449,13 +1449,6 @@ public:
   using ConvertTritonGPUOpToLLVMPattern<
       triton::gpu::ConvertLayoutOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  ConvertLayoutOpConversion(LLVMTypeConverter &converter,
-                            const Allocation *allocation, Value smem,
-                            PatternBenefit benefit)
-      : ConvertTritonGPUOpToLLVMPattern<triton::gpu::ConvertLayoutOp>(converter,
-                                                                      benefit),
-        allocation(allocation), smem(smem) {}
-
   LogicalResult
   matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -1469,8 +1462,6 @@ public:
     if ((!srcLayout.isa<BlockedEncodingAttr>()) ||
         (!dstLayout.isa<BlockedEncodingAttr>())) {
       // TODO: not implemented
-      llvm::errs()
-          << "convert_layout except for blocked -> blocked is not implemented";
       return failure();
     }
     auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
@@ -1656,9 +1647,6 @@ private:
       }
     }
   }
-
-  const Allocation *allocation;
-  Value smem;
 };
 
 /// ====================== dot codegen begin ==========================
@@ -1995,11 +1983,8 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
     NOT_APPLICABLE,
   };
 
-  explicit DotOpConversion(LLVMTypeConverter &typeConverter,
-                           const Allocation *allocation, Value smem,
-                           PatternBenefit benefit = 1)
-      : ConvertTritonGPUOpToLLVMPattern(typeConverter, benefit),
-        allocation(allocation), smem(smem) {}
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::DotOp>::ConvertTritonGPUOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
@@ -2064,9 +2049,6 @@ private:
     assert(false && "Not implemented yet.");
     return failure();
   }
-
-  const Allocation *allocation;
-  Value smem;
 };
 
 struct DotOpConversionHelper {
