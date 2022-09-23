@@ -2065,11 +2065,6 @@ private:
     return failure();
   }
 
-  Value getSmemAddr(Value value, Location loc,
-                    ConversionPatternRewriter &rewriter) const {
-    return getSharedMemoryBase(loc, rewriter, value.getDefiningOp());
-  }
-
   const Allocation *allocation;
   Value smem;
 };
@@ -2408,7 +2403,7 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
     SmallVector<Value> ptrs(numPtrs);
 
     Type smemPtrTy = helper.getShemPtrTy();
-    auto smemBase = getSmemAddr(tensor, loc, rewriter);
+    auto smemBase = getSharedMemoryBase(loc, rewriter, tensor);
     for (int i = 0; i < numPtrs; i++) {
       ptrs[i] = bit_cast(
           smemPtrTy, gep(smemBase.getType(), smemBase, ValueRange({offs[i]})));

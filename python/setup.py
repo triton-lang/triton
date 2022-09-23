@@ -20,8 +20,8 @@ def check_env_flag(name: str, default: str = "") -> bool:
     return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
 
 
-def check_submodule():
-    submodule_paths = ["third-party/pybind11/include/pybind11"]
+def check_submodule(base_dir: str):
+    submodule_paths = ["{}/third-party/pybind11/include/pybind11".format(base_dir)]
     if not all([os.path.exists(p) for p in submodule_paths]):
         print("initializing submodules ...")
         try:
@@ -95,7 +95,7 @@ class CMakeBuild(build_ext):
             self.build_extension(ext)
 
     def build_extension(self, ext):
-        check_submodule()
+        check_submodule(self.base_dir)
         llvm_include_dir, llvm_library_dir = get_llvm()
         # lit is used by the test suite
         lit_dir = shutil.which('lit')
