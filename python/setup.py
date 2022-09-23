@@ -20,6 +20,20 @@ def check_env_flag(name: str, default: str = "") -> bool:
     return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
 
 
+def check_submodule():
+    submodule_paths = ["third-party/pybind11/include/pybind11"]
+    if not all([os.path.exists(p) for p in submodule_paths]):
+        print("initializing submodules ...")
+        try:
+            cwd = os.path.abspath(os.path.dirname(__file__))
+            subprocess.check_call(["git", "submodule", "update", "--init", "--recursive"], cwd=cwd)
+            print("submodule initialization succeeded")
+        except Exception:
+            print("submodule initialization failed")
+            print(" Please run:\n\tgit submodule update --init --recursive")
+            exit(-1)
+
+
 def get_llvm():
     # download if nothing is installed
     system = platform.system()
@@ -81,6 +95,7 @@ class CMakeBuild(build_ext):
             self.build_extension(ext)
 
     def build_extension(self, ext):
+        check_submodule()
         llvm_include_dir, llvm_library_dir = get_llvm()
         # lit is used by the test suite
         lit_dir = shutil.which('lit')
