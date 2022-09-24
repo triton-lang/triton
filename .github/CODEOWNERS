@@ -5,16 +5,16 @@
 *       @ptillet
 
 # Analyses
-include/triton/Analysis/Alias.h @Jokeren
-include/triton/Analysis/Allocation.h @Jokeren
-include/triton/Analysis/AxisInfo.h @ptillet
-include/triton/Analysis/Membar.h @Jokeren
-include/triton/Analysis/Utility.h @Jokeren
+*/Analysis/Alias[.h, .cpp] @Jokeren
+*/Analysis/Allocation[.h, .cpp] @Jokeren
+*/Analysis/Membar.[h, .cpp] @Jokeren
+*/Analysis/Utility[.h, .cpp] @Jokeren
+*/Analysis/AxisInfo[.h, .cpp] @ptillet
 
 # Conversions
-include/triton/Conversion/TritonGPUToLLVM/ @goostavz @Superjomn
-include/triton/Conversion/TritonToTritonGPU/ @daadaada
+*/Conversion/TritonGPUToLLVM/ @goostavz @Superjomn
+*/Conversion/TritonToTritonGPU/ @daadaada
 
 # Targets
-include/triton/Target/LLVMIR/ @goostavz @Superjomn
-include/triton/Target/PTX/ @goostavz @Superjomn
+*/Target/LLVMIR/ @goostavz @Superjomn
+*/Target/PTX/ @goostavz @Superjomn
