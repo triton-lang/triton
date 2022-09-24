@@ -239,14 +239,12 @@ std::string ptx_to_cubin(const std::string& ptx, const std::string& ptxas, int c
     unlink(_flog);
     throw std::runtime_error("Internal Triton PTX codegen error: \n" + log);
   }
-  CUmodule ret;
   std::ifstream _cubin(_fbin, std::ios::binary );
   std::string cubin(std::istreambuf_iterator<char>(_cubin), {});
   _cubin.close();
   unlink(_fsrc);
   unlink(_flog);
   unlink(_fbin);
-  dispatch::cuModuleLoadData(&ret, cubin.c_str());
   return cubin;
 }
 
