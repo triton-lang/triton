@@ -1,7 +1,7 @@
+import multiprocessing
 import os
 import re
 import shutil
-import multiprocessing
 from collections import namedtuple
 
 import pytest
