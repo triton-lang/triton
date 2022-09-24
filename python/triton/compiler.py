@@ -880,7 +880,10 @@ def ptx_get_kernel_name(ptx: str) -> str:
             return line.split()[-1]
 
 
-def _compile(fn, signature: str, device: int = -1, constants=dict(), specialization=_triton.code_gen.instance_descriptor(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, output: str = "ttgir") -> Tuple[str, int, str]:
+def _compile(fn, signature: str, device: int = -1, constants=dict(),
+             specialization=_triton.code_gen.instance_descriptor(),
+             num_warps: int = 4, num_stages: int = 3, extern_libs=None,
+             output: str = "ttgir", cc=0) -> Tuple[str, int, str]:
     valid_outputs = ("ttir", "ttgir", "ptx", "cubin")
     assert output in valid_outputs, "output should be one of [%s], but get \"%s\"" % (','.join(valid_outputs), output)
 
@@ -894,7 +897,7 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     backend = _triton.runtime.backend.CUDA
     if extern_libs is None:
         extern_libs = dict()
-    name, asm, shared_mem = _triton.code_gen.compile_ttir(backend, module, device, num_warps, num_stages, extern_libs)
+    name, asm, shared_mem = _triton.code_gen.compile_ttir(backend, module, device, num_warps, num_stages, extern_libs, cc)
     return asm, shared_mem, name
 
 
@@ -1179,7 +1182,8 @@ def make_fn_cache_key(fn_hash, signature, configs, constants, num_warps, num_sta
     return key
 
 
-def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
+def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4,
+            num_stages: int = 3, extern_libs=None, configs=None, cc=0, warm_cache_only=False):
     # we get the kernel, i.e. the first function generated in the module
     assert len(configs) == 1
     # cache manager
@@ -1208,18 +1212,22 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
     if not fn_cache_manager.has_file(cubin_name) or \
        not fn_cache_manager.has_file(data_name) or \
        not fn_cache_manager.has_file(ptx_name):
-        asm, shared, kernel_name = _compile(fn, signature, device, constants, configs[0], num_warps, num_stages, extern_libs, "cubin")
+        asm, shared, kernel_name = _compile(fn, signature, device, constants, configs[0], num_warps, num_stages,
+                                            extern_libs, "cubin", cc)
         metadata = {"name": kernel_name, "shared": shared, "num_warps": num_warps, "num_stages": num_stages}
         fn_cache_manager.put(asm["cubin"], cubin_name)
         fn_cache_manager.put(asm["ptx"], ptx_name, binary=False)
         fn_cache_manager.put(json.dumps(metadata), data_name, binary=False)
 
-    return CompiledKernel(name, so_cache_manager._make_path(so_name), fn_cache_manager.cache_dir)
+    if warm_cache_only:
+        return  # load_binary() requires a valid cuda context
+
+    return CompiledKernel(name, so_cache_manager._make_path(so_name), fn_cache_manager.cache_dir, device)
 
 
 class CompiledKernel:
 
-    def __init__(self, fn_name, so_path, cache_dir):
+    def __init__(self, fn_name, so_path, cache_dir, device):
         # initialize launcher
         import importlib.util
         spec = importlib.util.spec_from_file_location("launcher", so_path)
@@ -1239,7 +1247,6 @@ class CompiledKernel:
         with open(os.path.join(cache_dir, f"{fn_name}.ptx"), "r") as f:
             self.asm["ptx"] = f.read()
 
-        device = torch.cuda.current_device()
         mod, func, n_regs, n_spills = _triton.code_gen.load_binary(metadata["name"], self.asm["cubin"], self.shared, device)
         self.cu_module = mod
         self.cu_function = func
