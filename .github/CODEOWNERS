@@ -1,0 +1,55 @@
+# These owners will be the default owners for everything in
+# the repo. Unless a later match takes precedence,
+# @global-owner1 and @global-owner2 will be requested for
+# review when someone opens a pull request.
+*       @ptillet
+
+# --------
+# Analyses
+# --------
+# Alias analysis
+include/triton/Analysis/Alias.h @Jokeren
+lib/Analysis/Alias.cpp @Jokeren
+# Allocation analysis
+include/triton/Analysis/Allocation.h @Jokeren
+lib/Analysis/Allocation.cpp @Jokeren
+# Membar analysis
+include/triton/Analysis/Membar.h @Jokeren
+lib/Analysis/Membar.cpp @Jokeren
+# AxisInfo analysis
+include/triton/Analysis/AxisInfo.h @ptillet
+lib/Analysis/AxisInfo.cpp @ptillet
+# Utilities
+include/triton/Analysis/Utility.h @Jokeren
+lib/Analysis/Utility.cpp @Jokeren
+
+# ----------
+# Dialects
+# ----------
+# Pipeline pass
+lib/Dialect/TritonGPU/Transforms/Pipeline.cpp @daadaada
+# Coalesce pass
+lib/Dialect/TritonGPU/Transforms/Coalesce.cpp @ptillet
+# Layout simplification pass
+lib/Dialect/TritonGPU/Transforms/Combine.cpp @ptillet
+
+# -----------
+# Conversions
+# -----------
+# TritonGPUToLLVM
+include/triton/Conversion/TritonGPUToLLVM/ @goostavz @Superjomn
+lib/Conversions/TritonGPUToLLVM @goostavz @Superjomn
+# TritonToTritonGPU
+include/triton/Conversion/TritonToTritonGPU/ @daadaada
+lib/Dialect/TritonGPU/Transforms/TritonGPUConversion.cpp @daadaada
+
+
+# -------
+# Targets
+# -------
+# LLVMIR
+include/triton/Target/LLVMIR/ @goostavz @Superjomn
+lib/Target/LLVMIR @goostavz @Superjomn
+# PTX
+include/triton/Target/PTX/ @goostavz @Superjomn
+lib/Target/PTX @goostavz @Superjomn
