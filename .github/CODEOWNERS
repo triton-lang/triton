@@ -1,0 +1,20 @@
+# These owners will be the default owners for everything in
+# the repo. Unless a later match takes precedence,
+# @global-owner1 and @global-owner2 will be requested for
+# review when someone opens a pull request.
+*       @ptillet
+
+# Analyses
+*/Analysis/Alias[.h, .cpp] @Jokeren
+*/Analysis/Allocation[.h, .cpp] @Jokeren
+*/Analysis/Membar.[h, .cpp] @Jokeren
+*/Analysis/Utility[.h, .cpp] @Jokeren
+*/Analysis/AxisInfo[.h, .cpp] @ptillet
+
+# Conversions
+*/Conversion/TritonGPUToLLVM/ @goostavz @Superjomn
+*/Conversion/TritonToTritonGPU/ @daadaada
+
+# Targets
+*/Target/LLVMIR/ @goostavz @Superjomn
+*/Target/PTX/ @goostavz @Superjomn
