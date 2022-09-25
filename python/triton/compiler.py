@@ -843,7 +843,7 @@ def optimize_tritongpu_ir(mod, num_stages):
     return mod
 
 
-def make_ptx(mod: Any, device: int) -> Tuple[str, int]:
+def make_ptx(mod: Any, compute_capability: int, ptx_version: int) -> Tuple[str, int]:
     '''
     Translate TritonGPU module to PTX code.
     :param mod: a TritonGPU dialect module
@@ -851,17 +851,17 @@ def make_ptx(mod: Any, device: int) -> Tuple[str, int]:
         - PTX code
         - shared memory alloaction size
     '''
-    return _triton.translate_triton_gpu_to_ptx(mod, device)
+    return _triton.translate_triton_gpu_to_ptx(mod, compute_capability, ptx_version)
 
 
-def make_cubin(ptx, device):
+def make_cubin(ptx: str, compute_capability: int):
     '''
     Compile TritonGPU module to cubin.
     :param ptx: ptx code
     :param device: CUDA device
     :return: str
     '''
-    return _triton.compile_ptx_to_cubin(ptx, device)
+    return _triton.compile_ptx_to_cubin(ptx, compute_capability)
 
 
 def ptx_get_kernel_name(ptx: str) -> str:
@@ -875,6 +875,32 @@ def ptx_get_kernel_name(ptx: str) -> str:
         line = line.strip()
         if line.startswith('// .globl'):
             return line.split()[-1]
+
+@functools.lru_cache
+def ptx_get_version(cuda_version) -> int:
+    '''
+    Get the highest PTX version supported by the current CUDA driver.
+    '''
+    assert isinstance(cuda_version, str)
+    major, minor = map(int, cuda_version.split('.'))
+    version = major*1000 + minor*10
+    if version >= 11040:
+      return 74
+    if version >= 11030:
+      return 73
+    if version >= 11020:
+      return 72
+    if version >= 11010:
+      return 71
+    if version >= 11000:
+      return 70
+    if version >= 10020:
+      return 65
+    if version >= 10010:
+      return 64
+    if version >= 10000:
+      return 63
+    raise RuntimeError("Triton only support CUDA 10.0 or higher")
 
 
 instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1"], defaults=[set(), set()])
@@ -900,12 +926,15 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
         return module.str()
 
     assert device >= 0, "device should be provided."
-    ptx, shem_size = make_ptx(module, device)
+    compute_capability = torch.cuda.get_device_capability(device)
+    compute_capability = compute_capability[0] * 10 + compute_capability[1]
+    ptx_version = ptx_get_version(torch.version.cuda)
+    ptx, shem_size = make_ptx(module, compute_capability, ptx_version)
     kernel_name = ptx_get_kernel_name(ptx)
     if output == "ptx":
         return ptx, shem_size, kernel_name
 
-    cubin = make_cubin(ptx, device)
+    cubin = make_cubin(ptx, compute_capability)
     if output == "cubin":
         return cubin, ptx, shem_size, kernel_name
 

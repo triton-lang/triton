@@ -1,5 +1,4 @@
 ﻿#include "triton/driver/error.h"
-#include "triton/driver/llvm.h"
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -20,6 +19,7 @@
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 #include "triton/Target/PTX/PTXTranslation.h"
 #include "triton/tools/sys/getenv.hpp"
+#include "triton/tools/sys/exec.hpp"
 
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
@@ -44,7 +44,56 @@ namespace py = pybind11;
 // namespace ir = triton::ir;
 namespace drv = triton::driver;
 
-using triton::cuGetInfo;
+template <CUdevice_attribute attr> int cuGetInfo(CUdevice device) {
+  int res;
+  drv::dispatch::cuDeviceGetAttribute(&res, attr, device);
+  return res;
+}
+
+static std::string path_to_ptxas() {
+  std::vector<std::string> rets;
+  std::string ret;
+  // search paths for ptxas
+  std::vector<std::string> ptxas_prefixes = {"", "/usr/local/cuda/bin/"};
+  std::string triton_ptxas = triton::tools::getenv("TRITON_PTXAS_PATH");
+  if (!triton_ptxas.empty())
+    ptxas_prefixes.insert(ptxas_prefixes.begin(), triton_ptxas);
+  // see what path for ptxas are valid
+  std::vector<std::string> working_ptxas;
+  for (const std::string &prefix : ptxas_prefixes) {
+    std::string ptxas = prefix + "ptxas";
+    bool works = triton::tools::exec(ptxas + " --version 2>&1", ret) == 0;
+    if (works) {
+      working_ptxas.push_back(ptxas);
+      rets.push_back(ret);
+    }
+  }
+  // error if no working ptxas was found
+  if (working_ptxas.empty())
+    std::cerr << ("`ptxas` was searched in TRITON_PTXAS_PATH, "
+                             "/usr/local/cuda/bin/ or PATH"
+                             " but a working version could not be found.") << std::endl;
+  std::string ptxas = working_ptxas.front();
+  // parse version
+  std::regex version_regex("release (\\d+)\\.(\\d+)");
+  std::smatch match;
+  bool found = false;
+  // currently choosing the first ptxas. Other logics can be implemented in
+  // future
+  size_t i = 0;
+  while (i < rets.size()) {
+    if (std::regex_search(rets[i], match, version_regex)) {
+      found = true;
+      break;
+    }
+    ++i;
+  }
+  if (not found) {
+    std::cerr << "Error in parsing version" << std::endl;
+  }
+  return working_ptxas[i];
+}
+
 
 enum backend_t {
   HOST,
@@ -1225,26 +1274,17 @@ void init_triton_translation(py::module &m) {
   });
 
   m.def("translate_triton_gpu_to_ptx",
-        [](mlir::ModuleOp module, uint64_t device)
-            -> std::tuple<std::string /*ptx code*/, size_t /*shem size*/> {
-          auto [ptxCode, cc, version, ptxasPath] =
-              triton::translateTritonGPUToPTX(module, device);
-
+        [](mlir::ModuleOp module, int capability, int version) -> std::tuple<std::string, int> {
+          auto ptxCode = triton::translateTritonGPUToPTX(module, capability, version);
           mlir::PassManager pm(module->getContext());
           auto pass = std::make_unique<mlir::Allocation>(module);
-          size_t size = pass->getSharedMemorySize();
-
-          return std::make_tuple(ptxCode, size);
+          return std::make_tuple(ptxCode, pass->getSharedMemorySize());
         });
 
   m.def("compile_ptx_to_cubin",
-        [](const std::string &ptxCode, uint64_t device) -> py::object {
+        [](const std::string &ptxCode, int capability) -> py::object {
           py::gil_scoped_release allow_threads;
-          int version;
-          int cc;
-          std::string ptxasPath;
-          triton::getCuCCAndVersionFromDevice(device, &cc, &version,
-                                              &ptxasPath);
+          std::string ptxasPath = path_to_ptxas();
 
           // compile ptx with ptxas
           char _fsrc[L_tmpnam];
@@ -1260,7 +1300,7 @@ void init_triton_translation(py::module &m) {
           ofs.close();
           std::string cmd;
           int err;
-          cmd = ptxasPath + " -v --gpu-name=sm_" + std::to_string(cc) + " " + fsrc +
+          cmd = ptxasPath + " -v --gpu-name=sm_" + std::to_string(capability) + " " + fsrc +
                 " -o " + fsrc + ".o 2> " + flog;
           err = system(cmd.c_str());
           if (err != 0) {
