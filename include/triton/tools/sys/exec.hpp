@@ -25,13 +25,10 @@ int exec(const std::string &cmd, std::string &result) {
   if (!pipe)
     return 0;
   result.clear();
-  try {
-    while (fgets(buffer, sizeof buffer, pipe) != NULL)
-      result += buffer;
-  } catch (...) {
-    pclose(pipe);
-    return 0;
-  }
+
+  while (fgets(buffer, sizeof buffer, pipe) != NULL)
+    result += buffer;
+
   int status = pclose(pipe);
   return WEXITSTATUS(status);
 }
