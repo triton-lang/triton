@@ -372,6 +372,45 @@ void SharedEncodingAttr::print(AsmPrinter &printer) const {
           << "}>";
 }
 
+
+//===----------------------------------------------------------------------===//
+// DotOperand Encoding
+//===----------------------------------------------------------------------===//
+Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
+  if (parser.parseLess().failed())
+    return {};
+  // Parse the data as a dictionary
+  DictionaryAttr dict;
+  if (parser.parseAttribute(dict).failed())
+    return {};
+  if (parser.parseGreater().failed())
+    return {};
+
+  unsigned opNum = 0;
+  Attribute parent;
+
+  for (const NamedAttribute &attr : dict) {
+    if (attr.getName() == "opNum") {
+      if (parseUInt(parser, attr, opNum, "opNum").failed())
+        return {};
+    }
+    if (attr.getName() == "parent") {
+      if (parser.parseAttribute(parent).failed())
+        return {};
+    }
+  }
+
+  return parser.getChecked<DotOperandEncodingAttr>(parser.getContext(), opNum,
+                                                   parent);
+}
+
+void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
+  printer << "<{"
+          << "opNum = " << getOpNum() << ", "
+          << "parent = " << getParent() << "}>";
+}
+
+
 //===----------------------------------------------------------------------===//
 // InsertSliceAsyncOp
 //===----------------------------------------------------------------------===//

@@ -23,6 +23,20 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
   ];
 }
 
+def TritonGPUPrefetch : Pass<"tritongpu-prefetch", "mlir::ModuleOp"> {
+  let summary = "prefetch";
+
+  let description = [{
+    TODO  
+  }];
+
+  let constructor = "mlir::createTritonGPUPrefetchPass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::arith::ArithmeticDialect"];
+}
+
 def TritonGPUCoalesce: Pass<"tritongpu-coalesce", "mlir::ModuleOp"> {
   let summary = "coalesce";
 
