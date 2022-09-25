@@ -50,50 +50,6 @@ template <CUdevice_attribute attr> int cuGetInfo(CUdevice device) {
   return res;
 }
 
-static std::string path_to_ptxas() {
-  std::vector<std::string> rets;
-  std::string ret;
-  // search paths for ptxas
-  std::vector<std::string> ptxas_prefixes = {"", "/usr/local/cuda/bin/"};
-  std::string triton_ptxas = triton::tools::getenv("TRITON_PTXAS_PATH");
-  if (!triton_ptxas.empty())
-    ptxas_prefixes.insert(ptxas_prefixes.begin(), triton_ptxas);
-  // see what path for ptxas are valid
-  std::vector<std::string> working_ptxas;
-  for (const std::string &prefix : ptxas_prefixes) {
-    std::string ptxas = prefix + "ptxas";
-    bool works = triton::tools::exec(ptxas + " --version 2>&1", ret) == 0;
-    if (works) {
-      working_ptxas.push_back(ptxas);
-      rets.push_back(ret);
-    }
-  }
-  // error if no working ptxas was found
-  if (working_ptxas.empty())
-    std::cerr << ("`ptxas` was searched in TRITON_PTXAS_PATH, "
-                             "/usr/local/cuda/bin/ or PATH"
-                             " but a working version could not be found.") << std::endl;
-  std::string ptxas = working_ptxas.front();
-  // parse version
-  std::regex version_regex("release (\\d+)\\.(\\d+)");
-  std::smatch match;
-  bool found = false;
-  // currently choosing the first ptxas. Other logics can be implemented in
-  // future
-  size_t i = 0;
-  while (i < rets.size()) {
-    if (std::regex_search(rets[i], match, version_regex)) {
-      found = true;
-      break;
-    }
-    ++i;
-  }
-  if (not found) {
-    std::cerr << "Error in parsing version" << std::endl;
-  }
-  return working_ptxas[i];
-}
-
 
 enum backend_t {
   HOST,
@@ -1282,9 +1238,8 @@ void init_triton_translation(py::module &m) {
         });
 
   m.def("compile_ptx_to_cubin",
-        [](const std::string &ptxCode, int capability) -> py::object {
+        [](const std::string &ptxCode, const std::string &ptxasPath, int capability) -> py::object {
           py::gil_scoped_release allow_threads;
-          std::string ptxasPath = path_to_ptxas();
 
           // compile ptx with ptxas
           char _fsrc[L_tmpnam];

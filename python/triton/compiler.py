@@ -23,6 +23,7 @@ from filelock import FileLock
 
 import triton
 import triton._C.libtriton.triton as _triton
+import re
 
 
 def str_to_ty(name):
@@ -854,14 +855,14 @@ def make_ptx(mod: Any, compute_capability: int, ptx_version: int) -> Tuple[str, 
     return _triton.translate_triton_gpu_to_ptx(mod, compute_capability, ptx_version)
 
 
-def make_cubin(ptx: str, compute_capability: int):
+def make_cubin(ptx: str, ptxas: str, compute_capability: int):
     '''
     Compile TritonGPU module to cubin.
     :param ptx: ptx code
     :param device: CUDA device
     :return: str
     '''
-    return _triton.compile_ptx_to_cubin(ptx, compute_capability)
+    return _triton.compile_ptx_to_cubin(ptx, ptxas, compute_capability)
 
 
 def ptx_get_kernel_name(ptx: str) -> str:
@@ -903,6 +904,20 @@ def ptx_get_version(cuda_version) -> int:
     raise RuntimeError("Triton only support CUDA 10.0 or higher")
 
 
+def path_to_ptxas():
+    prefixes = [os.environ.get("TRITON_PTXAS_PATH", ""), "", "/usr/local/cuda/"]
+    for prefix in prefixes:
+        ptxas = os.path.join(prefix, "bin", "ptxas")
+        if os.path.exists(ptxas):
+          result = subprocess.check_output([ptxas, "--version"], stderr=subprocess.STDOUT)
+          if result is not None:
+            version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
+            if version is not None:
+              return ptxas, version.group(1)
+    raise RuntimeError("Cannot find ptxas")
+
+
+
 instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1"], defaults=[set(), set()])
 
 
@@ -911,6 +926,7 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
         signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
     valid_outputs = ("ttir", "ttgir", "ptx", "cubin")
     assert output in valid_outputs, "output should be one of [%s], but get \"%s\"" % (','.join(valid_outputs), output)
+
 
     # triton-ir
     module, _ = make_triton_ir(fn, signature, specialization, constants)
@@ -926,15 +942,16 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
         return module.str()
 
     assert device >= 0, "device should be provided."
+    ptxas, cuda_version = path_to_ptxas()
     compute_capability = torch.cuda.get_device_capability(device)
     compute_capability = compute_capability[0] * 10 + compute_capability[1]
-    ptx_version = ptx_get_version(torch.version.cuda)
+    ptx_version = ptx_get_version(cuda_version)
     ptx, shem_size = make_ptx(module, compute_capability, ptx_version)
     kernel_name = ptx_get_kernel_name(ptx)
     if output == "ptx":
         return ptx, shem_size, kernel_name
 
-    cubin = make_cubin(ptx, compute_capability)
+    cubin = make_cubin(ptx, ptxas, compute_capability)
     if output == "cubin":
         return cubin, ptx, shem_size, kernel_name
 
