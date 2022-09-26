@@ -1609,8 +1609,10 @@ public:
                      ArrayRef<int> matShape, int perPhase, int maxPhase,
                      int elemBytes, ConversionPatternRewriter &rewriter,
                      TypeConverter *typeConverter, const Location &loc)
-      : wpt(wpt), order(order), kOrder(kOrder), tileShape(tileShape),
-        instrShape(instrShape), matShape(matShape), perPhase(perPhase),
+      : wpt(wpt), order(order.begin(), order.end()), kOrder(kOrder),
+        tileShape(tileShape.begin(), tileShape.end()),
+        instrShape(instrShape.begin(), instrShape.end()),
+        matShape(matShape.begin(), matShape.end()), perPhase(perPhase),
         maxPhase(maxPhase), elemBytes(elemBytes), rewriter(rewriter),
         typeConverter(typeConverter), loc(loc), ctx(rewriter.getContext()) {
     cMatShape = matShape[order[0]];
@@ -1813,6 +1815,7 @@ public:
     int k = matIdx[kOrder];
 
     int ptrIdx{-1};
+
     if (canUseLdmatrix)
       ptrIdx = matIdx[order[0]] / (instrShape[order[0]] / matShape[order[0]]);
     else if (elemBytes == 4 && needTrans) // tf32 & trans
@@ -1867,20 +1870,21 @@ public:
       int sOffsetArrElem = 1 * (sMatStride * sMatShape) * sTileStride;
 
       Value elems[4];
+      Type elemTy = type::f32Ty(ctx);
       if (kOrder == 1) {
-        elems[0] = load(gep(type::f32Ty(ctx), ptr, i32_val(sOffsetElem)));
-        elems[1] = load(gep(type::f32Ty(ctx), ptr2, i32_val(sOffsetElem)));
-        elems[2] = load(
-            gep(type::f32Ty(ctx), ptr, i32_val(sOffsetElem + sOffsetArrElem)));
-        elems[3] = load(
-            gep(type::f32Ty(ctx), ptr2, i32_val(sOffsetElem + sOffsetArrElem)));
+        elems[0] = load(gep(elemTy, ptr, i32_val(sOffsetElem)));
+        elems[1] = load(gep(elemTy, ptr2, i32_val(sOffsetElem)));
+        elems[2] =
+            load(gep(elemTy, ptr, i32_val(sOffsetElem + sOffsetArrElem)));
+        elems[3] =
+            load(gep(elemTy, ptr2, i32_val(sOffsetElem + sOffsetArrElem)));
       } else {
-        elems[0] = load(gep(type::f32Ty(ctx), ptr, i32_val(sOffsetElem)));
-        elems[2] = load(gep(type::f32Ty(ctx), ptr2, i32_val(sOffsetElem)));
-        elems[1] = load(
-            gep(type::f32Ty(ctx), ptr, i32_val(sOffsetElem + sOffsetArrElem)));
-        elems[3] = load(
-            gep(type::f32Ty(ctx), ptr2, i32_val(sOffsetElem + sOffsetArrElem)));
+        elems[0] = load(gep(elemTy, ptr, i32_val(sOffsetElem)));
+        elems[2] = load(gep(elemTy, ptr2, i32_val(sOffsetElem)));
+        elems[1] =
+            load(gep(elemTy, ptr, i32_val(sOffsetElem + sOffsetArrElem)));
+        elems[3] =
+            load(gep(elemTy, ptr2, i32_val(sOffsetElem + sOffsetArrElem)));
       }
 
       return {elems[0], elems[1], elems[2], elems[3]};
@@ -1949,6 +1953,8 @@ public:
           i32Elems[m] = bit_cast(i32_ty, i8v4Elems[m]);
         }
       }
+
+      return {i32Elems[0], i32Elems[1], i32Elems[2], i32Elems[3]};
     }
 
     assert(false && "Invalid smem load");
@@ -1957,11 +1963,11 @@ public:
 
 private:
   int wpt;
-  ArrayRef<uint32_t> order;
+  SmallVector<uint32_t> order;
   int kOrder;
-  ArrayRef<int64_t> tileShape;
-  ArrayRef<int> instrShape;
-  ArrayRef<int> matShape;
+  SmallVector<int64_t> tileShape;
+  SmallVector<int> instrShape;
+  SmallVector<int> matShape;
   int perPhase;
   int maxPhase;
   int elemBytes;
@@ -2184,6 +2190,23 @@ struct DotOpConversionHelper {
     return Type{};
   }
 
+  Type getLoadElemTy() {
+    switch (mmaType) {
+    case TensorCoreType::FP32_FP16_FP16_FP32:
+      return vec_ty(type::f16Ty(ctx), 2);
+    case TensorCoreType::FP32_BF16_BF16_FP32:
+      return vec_ty(type::bf16Ty(ctx), 2);
+    case TensorCoreType::FP32_TF32_TF32_FP32:
+      return type::f32Ty(ctx);
+    case TensorCoreType::INT32_INT8_INT8_INT32:
+      return type::i32Ty(ctx);
+    default:
+      llvm::report_fatal_error("Unsupported mma type found");
+    }
+
+    return Type{};
+  }
+
   Type getMmaRetType() const {
     Type fp32Ty = type::f32Ty(ctx);
     Type i32Ty = type::i32Ty(ctx);
@@ -2370,9 +2393,10 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
   const int numRepN = std::max<int>(dShape[1] / (wpt[1] * mmaInstrN), 1);
   const int numRepK = std::max<int>(NK / mmaInstrK, 1);
 
-  Value head = getThreadId(rewriter, loc);
-  Value lane = urem(head, i32_val(32));
-  Value warp = udiv(head, i32_val(32));
+  Value _32 = i32_val(32);
+  Value thread = getThreadId(rewriter, loc);
+  Value lane = urem(thread, _32);
+  Value warp = udiv(thread, _32);
   Value warpMN = udiv(warp, i32_val(wpt[0]));
   Value warpM = urem(warp, i32_val(wpt[0]));
   Value warpN = urem(warpMN, i32_val(wpt[1]));
@@ -2384,7 +2408,7 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
   std::map<std::pair<unsigned, unsigned>, Value> hb;
 
   // the original register_lds2, but discard the prefetch logic.
-  auto ld2 = [&](decltype(ha) &vals, int mn, int k, Value val) {
+  auto ld2 = [](decltype(ha) &vals, int mn, int k, Value val) {
     vals[{mn, k}] = val;
   };
 
@@ -2400,6 +2424,7 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
     const int perPhase = sharedLayout.getPerPhase();
     const int maxPhase = sharedLayout.getMaxPhase();
     const int elemBytes = tensorTy.getElementTypeBitWidth() / 8;
+    auto order = sharedLayout.getOrder();
 
     MMA16816SmemLoader loader(wpt, sharedLayout.getOrder(), kOrder,
                               tensorTy.getShape() /*tileShape*/, instrShape,
@@ -2417,28 +2442,50 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
           smemPtrTy, gep(smemBase.getType(), smemBase, ValueRange({offs[i]})));
     }
 
+    bool needTrans = kOrder != order[0];
+
     // (a, b) is the coordinate.
-    auto load = [&, loader, ptrs, offs](int a, int b) {
+    auto load = [&, loader, ptrs, offs, needTrans](int a, int b) {
       auto [ha0, ha1, ha2, ha3] = loader.loadX4(
           (kOrder == 1) ? a : b /*mat0*/, (kOrder == 1) ? b : a /*mat1*/, offs,
           ptrs, helper.getMatType(), helper.getShemPtrTy());
-      ld2(vals, a, b, ha0);
-      ld2(vals, a + 1, b, ha1);
-      ld2(vals, a, b + 1, ha2);
-      ld2(vals, a + 1, b + 1, ha3);
+      if (!needTrans) {
+        ld2(vals, a, b, ha0);
+        ld2(vals, a + 1, b, ha1);
+        ld2(vals, a, b + 1, ha2);
+        ld2(vals, a + 1, b + 1, ha3);
+      } else {
+        ld2(vals, a, b, ha0);
+        ld2(vals, a + 1, b, ha2);
+        ld2(vals, a, b + 1, ha1);
+        ld2(vals, a + 1, b + 1, ha3);
+      }
     };
 
     return load;
   };
 
-  std::function<void(int, int)> loadA = getLoadMatrixFn(
-      A, mmaLayout.getWarpsPerCTA()[0] /*wpt*/, 1 /*kOrder*/,
-      {mmaInstrM, mmaInstrK} /*instrShpae*/,
-      {matShapeM, matShapeK} /*matShape*/, warpM /*warpId*/, ha /*vals*/);
+  std::function<void(int, int)> loadA;
   std::function<void(int, int)> loadB = getLoadMatrixFn(
       B, mmaLayout.getWarpsPerCTA()[1] /*wpt*/, 0 /*kOrder*/,
       {mmaInstrK, mmaInstrN} /*instrShpae*/,
       {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/, hb /*vals*/);
+
+  if (aTensorTy.getEncoding()
+          .dyn_cast<SharedEncodingAttr>()) { // load from smem
+    loadA = getLoadMatrixFn(A, mmaLayout.getWarpsPerCTA()[0] /*wpt*/,
+                            1 /*kOrder*/, {mmaInstrM, mmaInstrK} /*instrShpae*/,
+                            {matShapeM, matShapeK} /*matShape*/,
+                            warpM /*warpId*/, ha /*vals*/);
+  } else if (auto blockedLayout =
+                 aTensorTy.getEncoding()
+                     .dyn_cast<BlockedEncodingAttr>()) { // load from registers,
+                                                         // used in gemm fuse
+    // TODO(Superjomn) Port the logic.
+    assert(false && "Loading A from register is not supported yet.");
+  } else {
+    assert(false && "A's layout is not supported.");
+  }
 
   const unsigned mStride = numRepN * 2;
   SmallVector<Value> fc(numRepM * mStride + numRepN * 2);
