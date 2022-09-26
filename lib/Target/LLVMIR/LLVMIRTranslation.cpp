@@ -13,7 +13,6 @@
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVM.h"
-#include "triton/driver/llvm.h"
 #include "triton/tools/sys/getenv.hpp"
 #include "llvm/IR/Constants.h"
 
@@ -99,7 +98,6 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
   }
 
   // Initialize LLVM targets.
-  ::triton::driver::init_llvm();
   mlir::ExecutionEngine::setupTargetTriple(llvmModule.get());
 
   auto optPipeline = mlir::makeOptimizingTransformer(
