@@ -23,11 +23,11 @@ def math_kernel(x1_ptr, x2_ptr, x3_ptr, x4_ptr, n, BLOCK_SIZE: tl.constexpr):
 
 
 def test_empty_kernel_cubin_compile():
-    kernel = triton.compile(math_kernel,
-                            "*fp32,*fp32,*fp32,*fp32,i32",
-                            device=0,
-                            constants={"BLOCK_SIZE": 256},
-                            output="ttgir")  # "cubin"
+    kernel = triton.compiler._compile(math_kernel,
+                                      "*fp32,*fp32,*fp32,*fp32,i32",
+                                      device=0,
+                                      constants={"BLOCK_SIZE": 256},
+                                      output="ttgir")  # "cubin"
     assert kernel
     # TODO: Check if the values are correct.
     # TODO: Cover all the math operators
