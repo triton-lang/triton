@@ -84,8 +84,11 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, int width,
   rewriter.create<LLVM::InsertElementOp>(loc, __VA_ARGS__)
 #define extract_element(...)                                                   \
   rewriter.create<LLVM::ExtractElementOp>(loc, __VA_ARGS__)
+#define load(...) rewriter.create<LLVM::LoadOp>(loc, __VA_ARGS__)
+#define store(val, ptr) rewriter.create<LLVM::StoreOp>(loc, val, ptr)
 #define address_of(...) rewriter.create<LLVM::AddressOfOp>(loc, __VA_ARGS__)
-#define i32_ty() rewriter.getIntegerType(32)
+#define i32_ty rewriter.getIntegerType(32)
+#define vec_ty(type, num) VectorType::get(num, type)
 
 // Creator for constant
 #define i32_val(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
@@ -237,7 +240,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
     // Set an attribute for maxntidx, it could be used in latter LLVM codegen
     // for `nvvm.annotation` metadata.
     newFuncOp->setAttr(NVVMMetadataField::MaxNTid,
-                       rewriter.getIntegerAttr(i32_ty(), 32 * NumWarps));
+                       rewriter.getIntegerAttr(i32_ty, 32 * NumWarps));
 
     rewriter.eraseOp(funcOp);
     return success();
@@ -505,7 +508,8 @@ public:
     }
   }
 
-  // Emit indices calculation within each ConversionPattern
+  // Emit indices calculation within each ConversionPattern, and returns a
+  // [elemsPerThread X rank] index matrix.
   // TODO: [goostavz] Double confirm the redundant indices calculations will
   //       be eliminated in the consequent MLIR/LLVM optimization. We might
   //       implement a indiceCache if necessary.
@@ -544,26 +548,26 @@ public:
                                   threadOffset * sizePerThread[k] + elemOffset);
     }
     // step 3, add offset to base, and reorder the sequence of indices to
-    // guarantee that elems in a same sizePerThread are adjacent in order
-    SmallVector<SmallVector<Value>> multiDimIdx(elemsPerThread);
-    unsigned accumSizePerThread = product<unsigned>(sizePerThread);
+    // guarantee that elems in the same sizePerThread are adjacent in order
+    SmallVector<SmallVector<Value>> multiDimIdx(elemsPerThread,
+                                                SmallVector<Value>(rank));
+    unsigned totalSizePerThread = product<unsigned>(sizePerThread);
     SmallVector<unsigned> threadsPerDim(rank);
-    for (unsigned k = 0; k < rank; ++k) {
+    for (unsigned k = 0; k < rank; ++k)
       threadsPerDim[k] = ceil<unsigned>(shape[k], sizePerThread[k]);
-    }
+
     for (unsigned n = 0; n < elemsPerThread; ++n) {
-      unsigned linearNanoTileId = n / accumSizePerThread;
-      unsigned linearNanoTileElemId = n % accumSizePerThread;
+      unsigned linearNanoTileId = n / totalSizePerThread;
+      unsigned linearNanoTileElemId = n % totalSizePerThread;
       SmallVector<unsigned> multiDimNanoTileId =
           getMultiDimIndex<unsigned>(linearNanoTileId, threadsPerDim);
-      SmallVector<unsigned> multiElemsInNanoTileId =
+      SmallVector<unsigned> multiDimNanoTileElemId =
           getMultiDimIndex<unsigned>(linearNanoTileElemId, sizePerThread);
-      multiDimIdx[n].resize(rank);
       for (unsigned k = 0; k < rank; ++k) {
         unsigned reorderedMultiDimId =
             multiDimNanoTileId[k] *
                 (sizePerThread[k] * threadsPerWarp[k] * warpsPerCTA[k]) +
-            multiElemsInNanoTileId[k];
+            multiDimNanoTileElemId[k];
         multiDimIdx[n][k] =
             add(multiDimBase[k], idx_val(offset[k][reorderedMultiDimId]));
       }
@@ -600,19 +604,17 @@ protected:
 Value convertSplatLikeOp(Type elemType, Type resType, Value constVal,
                          TypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, Location loc) {
-
   auto tensorTy = resType.cast<RankedTensorType>();
   auto layout = tensorTy.getEncoding();
   auto srcType = typeConverter->convertType(elemType);
   auto llSrc = bit_cast(srcType, constVal);
-  size_t numElemsPerThread = getElemsPerThread(layout, tensorTy.getShape());
-  llvm::SmallVector<Value, 4> elems(numElemsPerThread, llSrc);
+  size_t elemsPerThread = getElemsPerThread(layout, tensorTy.getShape());
+  llvm::SmallVector<Value, 4> elems(elemsPerThread, llSrc);
   llvm::SmallVector<Type, 4> elemTypes(elems.size(), srcType);
   auto structTy =
       LLVM::LLVMStructType::getLiteral(rewriter.getContext(), elemTypes);
 
-  auto llStruct = getStructFromElements(loc, elems, rewriter, structTy);
-  return llStruct;
+  return getStructFromElements(loc, elems, rewriter, structTy);
 }
 
 struct SplatOpConversion
@@ -709,7 +711,7 @@ struct LoadStoreConversionBase : public ConvertTritonGPUOpToLLVMPatternBase {
     assert(layout && "unexpected layout in getLayout");
     auto shape = ty.getShape();
     unsigned valueElems = layout.getElemsPerThread(shape);
-    return std::make_tuple(layout, valueElems);
+    return {layout, valueElems};
   }
 
   unsigned getAlignment(Value val, const BlockedEncodingAttr &layout) const {
@@ -828,7 +830,7 @@ struct StoreOpConversion
       llvm::SmallVector<std::string> asmArgs;
 
       Type valArgTy = IntegerType::get(ctx, width);
-      auto wordTy = VectorType::get(wordNElems, valueElemTy);
+      auto wordTy = vec_ty(valueElemTy, wordNElems);
 
       auto *asmArgList = ptxBuilder.newListOperand();
       for (int wordIdx = 0; wordIdx < nWords; wordIdx++) {
@@ -1419,6 +1421,7 @@ public:
     if ((!srcLayout.isa<BlockedEncodingAttr>()) ||
         (!dstLayout.isa<BlockedEncodingAttr>())) {
       // TODO: not implemented
+      llvm::errs() << "Unsupported ConvertLayout found";
       return failure();
     }
     auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
@@ -1453,6 +1456,7 @@ public:
         return {};
       }
     };
+
     SmallVector<unsigned> numReplicates(rank);
     SmallVector<unsigned> inNumCTAsEachRep(rank);
     SmallVector<unsigned> outNumCTAsEachRep(rank);
@@ -1461,8 +1465,8 @@ public:
     auto srcShapePerCTA = getShapePerCTA(srcLayout.cast<BlockedEncodingAttr>());
     auto dstShapePerCTA = getShapePerCTA(dstLayout.cast<BlockedEncodingAttr>());
     for (unsigned d = 0; d < rank; ++d) {
-      unsigned inPerCTA = std::min(unsigned(shape[d]), srcShapePerCTA[d]);
-      unsigned outPerCTA = std::min(unsigned(shape[d]), dstShapePerCTA[d]);
+      unsigned inPerCTA = std::min<unsigned>(shape[d], srcShapePerCTA[d]);
+      unsigned outPerCTA = std::min<unsigned>(shape[d], dstShapePerCTA[d]);
       unsigned maxPerCTA = std::max(inPerCTA, outPerCTA);
       numReplicates[d] = ceil<unsigned>(shape[d], maxPerCTA);
       inNumCTAsEachRep[d] = maxPerCTA / inPerCTA;
@@ -1569,7 +1573,7 @@ private:
                       reorder<unsigned>(paddedRepShape, outOrd));
         auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
         Value ptr = gep(elemPtrTy, smemBase, offset);
-        auto vecTy = VectorType::get(vec, llvmElemTy);
+        auto vecTy = vec_ty(llvmElemTy, vec);
         ptr = bit_cast(LLVM::LLVMPointerType::get(vecTy, 3), ptr);
         if (stNotRd) {
           Value valVec = rewriter.create<LLVM::UndefOp>(loc, vecTy);
@@ -1580,9 +1584,9 @@ private:
                 vecTy, valVec,
                 vals[elemId + linearCTAId * accumSizePerThread + v], vVal);
           }
-          rewriter.create<LLVM::StoreOp>(loc, valVec, ptr);
+          store(valVec, ptr);
         } else {
-          Value valVec = rewriter.create<LLVM::LoadOp>(loc, ptr);
+          Value valVec = load(ptr);
           for (unsigned v = 0; v < vec; ++v) {
             Value vVal = createIndexAttrConstant(
                 rewriter, loc, getTypeConverter()->getIndexType(), v);
@@ -1597,6 +1601,7 @@ private:
 
 /// ====================== dot codegen begin ==========================
 
+// Data loader for mma.16816 instruction.
 class MMA16816SmemLoader {
 public:
   MMA16816SmemLoader(int wpt, ArrayRef<uint32_t> order, int kOrder,
@@ -1637,7 +1642,7 @@ public:
     loadStrideInMat[kOrder] =
         2; // instrShape[kOrder] / matShape[kOrder], always 2
     loadStrideInMat[kOrder ^ 1] =
-        wpt * (instrShape[order[1]] / matShape[order[1]]);
+        wpt * (instrShape[kOrder ^ 1] / matShape[kOrder ^ 1]);
 
     pLoadStrideInMat = loadStrideInMat[order[0]];
     sMatStride =
@@ -1668,8 +1673,6 @@ public:
   // Compute the offset to the matrix this thread(indexed by warpOff and lane)
   // mapped to.
   SmallVector<Value> computeLdmatrixMatOffs(Value warpId, Value lane) {
-    MLIRContext *ctx = warpId.getContext();
-
     // 4x4 matrices
     Value c = urem(lane, i32_val(8));
     Value s = udiv(lane, i32_val(8)); // sub-warp-id
@@ -1819,7 +1822,9 @@ public:
     else
       llvm::report_fatal_error("unsupported mma type found");
 
-    // prefetch logic removed here.
+    // The main difference with the original triton code is we removed the
+    // prefetch-related logic here for the upstream optimizer phase should take
+    // care with it, and that is transparent in dot conversion.
     auto getPtr = [&](int idx) { return ptrs[idx]; };
 
     Value ptr = getPtr(ptrIdx);
@@ -1830,11 +1835,8 @@ public:
           matIdx[order[1]] * sMatStride * sMatShape * sTileStride * elemBytes;
       PTXBuilder builder;
 
-      auto resArgs = builder.newListOperand();
-
       // ldmatrix.m8n8.x4 returns 4x2xfp16(that is 4xb32) elements for a thread.
-      for (int i = 0; i < 4; i++)
-        resArgs->listAppend(builder.newOperand("=r"));
+      auto resArgs = builder.newListOperand(4, "=r");
       auto addrArg = builder.newAddrOperand(ptr, "r", sOffset);
 
       auto ldmatrix = builder.create("ldmatrix.sync.aligned.m8n8.x4")
@@ -1842,27 +1844,115 @@ public:
                           .o("shared.b16");
       ldmatrix(resArgs, addrArg);
 
-      Value resV4 = builder.launch(
-          rewriter, loc, ldmatrixRetTy); // 4xi32, each is composed of 2xf16
-      // elements(adjacent columns in a row)
+      // The result type is 4xi32, each i32 is composed of 2xf16
+      // elements(adjacent two columns in a row)
+      Value resV4 = builder.launch(rewriter, loc, ldmatrixRetTy);
 
       auto getIntAttr = [&](int v) {
-        return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty(), v)});
+        return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
       };
 
-      Type fp16x2Ty = VectorType::get({2}, type::f16Ty(ctx));
+      Type fp16x2Ty = vec_ty(type::f16Ty(ctx), 2);
 
-      return std::make_tuple(extract_val(fp16x2Ty, resV4, getIntAttr(0)),
-                             extract_val(fp16x2Ty, resV4, getIntAttr(1)),
-                             extract_val(fp16x2Ty, resV4, getIntAttr(2)),
-                             extract_val(fp16x2Ty, resV4, getIntAttr(3)));
+      return {extract_val(fp16x2Ty, resV4, getIntAttr(0)),
+              extract_val(fp16x2Ty, resV4, getIntAttr(1)),
+              extract_val(fp16x2Ty, resV4, getIntAttr(2)),
+              extract_val(fp16x2Ty, resV4, getIntAttr(3))};
     } else if (elemBytes == 4 &&
                needTrans) { // Use lds.32 to load tf32 matrices
-      assert(false && "Not implemented yet");
+      Value ptr2 = getPtr(ptrIdx + 1);
+      assert(sMatStride == 1);
+      int sOffsetElem =
+          matIdx[order[1]] * (sMatStride * sMatShape) * sTileStride;
+      int sOffsetArrElem = 1 * (sMatStride * sMatShape) * sTileStride;
+
+      Value elems[4];
+      if (kOrder == 1) {
+        elems[0] = load(gep(type::f32Ty(ctx), ptr, i32_val(sOffsetElem)));
+        elems[1] = load(gep(type::f32Ty(ctx), ptr2, i32_val(sOffsetElem)));
+        elems[2] = load(
+            gep(type::f32Ty(ctx), ptr, i32_val(sOffsetElem + sOffsetArrElem)));
+        elems[3] = load(
+            gep(type::f32Ty(ctx), ptr2, i32_val(sOffsetElem + sOffsetArrElem)));
+      } else {
+        elems[0] = load(gep(type::f32Ty(ctx), ptr, i32_val(sOffsetElem)));
+        elems[2] = load(gep(type::f32Ty(ctx), ptr2, i32_val(sOffsetElem)));
+        elems[1] = load(
+            gep(type::f32Ty(ctx), ptr, i32_val(sOffsetElem + sOffsetArrElem)));
+        elems[3] = load(
+            gep(type::f32Ty(ctx), ptr2, i32_val(sOffsetElem + sOffsetArrElem)));
+      }
+
+      return {elems[0], elems[1], elems[2], elems[3]};
     } else if (elemBytes == 1 && needTrans) {
-      assert(false && "Not implemented yet");
+      std::array<std::array<Value, 4>, 2> ptrs;
+      ptrs[0] = {
+          getPtr(ptrIdx),
+          getPtr(ptrIdx + 1),
+          getPtr(ptrIdx + 2),
+          getPtr(ptrIdx + 3),
+      };
+
+      ptrs[1] = {
+          getPtr(ptrIdx + 4),
+          getPtr(ptrIdx + 5),
+          getPtr(ptrIdx + 6),
+          getPtr(ptrIdx + 7),
+      };
+
+      assert(sMatStride == 1);
+      int sOffsetElem =
+          matIdx[order[1]] * (sMatStride * sMatShape) * sTileStride;
+      int sOffsetArrElem = 1 * (sMatStride * sMatShape) * sTileStride;
+
+      std::array<Value, 4> i8v4Elems;
+      std::array<Value, 4> i32Elems;
+      i8v4Elems.fill(
+          rewriter.create<LLVM::UndefOp>(loc, vec_ty(type::i8Ty(ctx), 4)));
+
+      Value i8Elems[4][4];
+      Type elemTy = type::i8Ty(ctx);
+      if (kOrder == 1) {
+        Value offset = i32_val(sOffsetElem);
+
+        for (int i = 0; i < 2; i++)
+          for (int j = 0; j < 4; j++)
+            i8Elems[i][j] = load(gep(elemTy, ptrs[i][j], offset));
+
+        offset = i32_val(sOffsetElem + sOffsetArrElem);
+        for (int i = 2; i < 4; i++)
+          for (int j = 0; j < 4; j++)
+            i8Elems[i][j] = load(gep(elemTy, ptrs[i - 2][j], offset));
+
+        for (int m = 0; m < 4; ++m) {
+          for (int e = 0; e < 4; ++e)
+            i8v4Elems[m] = insert_element(i8v4Elems[m].getType(), i8v4Elems[m],
+                                          i8Elems[m][e], i32_val(e));
+          i32Elems[m] = bit_cast(i32_ty, i8v4Elems[m]);
+        }
+      } else { // k first
+        Value offset = i32_val(sOffsetElem);
+        for (int j = 0; j < 4; j++)
+          i8Elems[0][j] = load(gep(elemTy, ptrs[0][j], offset));
+        for (int j = 0; j < 4; j++)
+          i8Elems[2][j] = load(gep(elemTy, ptrs[1][j], offset));
+        offset = i32_val(sOffsetElem + sOffsetArrElem);
+        for (int j = 0; j < 4; j++)
+          i8Elems[1][j] = load(gep(elemTy, ptrs[0][j], offset));
+        for (int j = 0; j < 4; j++)
+          i8Elems[3][j] = load(gep(elemTy, ptrs[1][j], offset));
+
+        for (int m = 0; m < 4; ++m) {
+          for (int e = 0; e < 4; ++e)
+            i8v4Elems[m] = insert_element(i8v4Elems[m].getType(), i8v4Elems[m],
+                                          i8Elems[m][e], i32_val(e));
+          i32Elems[m] = bit_cast(i32_ty, i8v4Elems[m]);
+        }
+      }
     }
-    return std::make_tuple(Value{}, Value{}, Value{}, Value{});
+
+    assert(false && "Invalid smem load");
+    return {Value{}, Value{}, Value{}, Value{}};
   }
 
 private:
@@ -2062,8 +2152,8 @@ struct DotOpConversionHelper {
   // The type of a matrix that loaded by either a ldmatrix or composed lds.
   Type getMatType() const {
     Type fp32Ty = type::f32Ty(ctx);
-    Type fp16x2Ty = VectorType::get({2}, type::f16Ty(ctx));
-    Type bf16x2Ty = VectorType::get({2}, type::bf16Ty(ctx));
+    Type fp16x2Ty = vec_ty(type::f16Ty(ctx), 2);
+    Type bf16x2Ty = vec_ty(type::bf16Ty(ctx), 2);
     // floating point types
     Type fp16x2Pack4Ty =
         LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp16x2Ty));
@@ -2072,7 +2162,7 @@ struct DotOpConversionHelper {
     Type fp32Pack4Ty =
         LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp32Ty));
     // integer types
-    Type i8x4Ty = VectorType::get({4}, type::i8Ty(ctx));
+    Type i8x4Ty = vec_ty(type::i8Ty(ctx), 4);
     Type i8x4Pack4Ty =
         LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i8x4Ty));
     Type i32Pack4Ty = LLVM::LLVMStructType::getLiteral(
@@ -2386,7 +2476,7 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
     Value mmaOut = builder.launch(rewriter, loc, helper.getMmaRetType());
 
     auto getIntAttr = [&](int v) {
-      return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty(), v)});
+      return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
     };
 
     fc[(m + 0) * mStride + (n * 2 + 0)] =
