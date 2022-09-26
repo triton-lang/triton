@@ -843,7 +843,7 @@ struct StoreOpConversion
       const bool hasL2EvictPolicy = false;
 
       PTXBuilder ptxBuilder;
-      auto &ptxStoreInstr = *ptxBuilder.create<PtxIOInstr>("st");
+      auto &ptxStoreInstr = *ptxBuilder.create<PTXIOInstr>("st");
 
       llvm::SmallVector<std::string> asmArgs;
 
@@ -1162,7 +1162,7 @@ struct LoadOpConversion
       const bool hasL2EvictPolicy = false;
 
       PTXBuilder ptxBuilder;
-      auto &ld = *ptxBuilder.create<PtxIOInstr>("ld");
+      auto &ld = *ptxBuilder.create<PTXIOInstr>("ld");
 
       // TODO(Superjomn) Need to check masks before vectorize the load for all
       // the values share one predicate? Here assume all the mask values are
@@ -1379,8 +1379,7 @@ struct ExtractSliceOpConversion
 
     // axis > 0 will result in non-contiguous memory access if the result tensor
     // is an alias of the source tensor.
-    auto axis =
-        op->getAttrOfType<IntegerAttr>("axis").cast<IntegerAttr>().getInt();
+    auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
     assert(axis == 0 && "Only axis=0 is supported for now");
 
     // Example:
@@ -2535,6 +2534,56 @@ public:
   }
 };
 
+struct AsyncWaitOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::AsyncWaitOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::AsyncWaitOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::AsyncWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    PTXBuilder ptxBuilder;
+    auto &inst = *ptxBuilder.create<PTXCpAsyncWaitGroupInstr>();
+    int num = op->getAttrOfType<IntegerAttr>("num").getInt();
+    inst(ptxBuilder.newConstantOperand(num));
+
+    auto ctx = op.getContext();
+    auto loc = op.getLoc();
+    auto ASMReturnTy = LLVM::LLVMVoidType::get(ctx);
+    auto inlineAsm = rewriter.create<LLVM::InlineAsmOp>(
+        loc, ASMReturnTy, ptxBuilder.getAllMLIRArgs(), // operands
+        ptxBuilder.dump(),                             // asm_string
+        ptxBuilder.getConstraints(),                   // constraints
+        false,                                         // has_side_effects
+        false,                                         // is_align_stack
+        LLVM::AsmDialectAttr::get(ctx,
+                                  LLVM::AsmDialect::AD_ATT), // asm_dialect
+        ArrayAttr::get(ctx, {})                              // operand_attrs
+    );
+  }
+};
+
+struct InsertSliceAsyncOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::InsertSliceAsyncOp>,
+      public LoadStoreConversionBase {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::InsertSliceAsyncOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  InsertSliceAsyncOpConversion(LLVMTypeConverter &converter,
+                               AxisInfoAnalysis &axisAnalysisPass,
+                               PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::gpu::InsertSliceAsyncOp>(
+            converter, benefit),
+        LoadStoreConversionBase(axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::InsertSliceAsyncOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto ctx = op.getContext();
+  }
+};
+
 void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns, int numWarps,
                                   AxisInfoAnalysis &axisInfoAnalysis,
@@ -2544,6 +2593,7 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<AllocTensorOpConversion>(typeConverter, allocation, smem,
                                         benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
+  patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
   patterns.add<BinaryOpConversion<arith::AddIOp, LLVM::AddOp>>(typeConverter,
                                                                benefit);
   patterns.add<BinaryOpConversion<arith::AddFOp, LLVM::FAddOp>>(typeConverter,
@@ -2558,6 +2608,8 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<ExtractSliceOpConversion>(typeConverter, allocation, smem,
                                          benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
+  patterns.add<InsertSliceAsyncOpConversion>(typeConverter, axisInfoAnalysis,
+                                             benefit);
   patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<MakeRangeOpConversion>(typeConverter, benefit);
   patterns.add<ReturnOpConversion>(typeConverter, benefit);
