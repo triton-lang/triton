@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -23,7 +24,6 @@ from filelock import FileLock
 
 import triton
 import triton._C.libtriton.triton as _triton
-import re
 
 
 def str_to_ty(name):
@@ -843,6 +843,7 @@ def optimize_tritongpu_ir(mod, num_stages):
     pm.run(mod)
     return mod
 
+
 def make_llvm_ir(mod):
     return _triton.translate_triton_gpu_to_llvmir(mod)
 
@@ -880,6 +881,7 @@ def ptx_get_kernel_name(ptx: str) -> str:
         if line.startswith('// .globl'):
             return line.split()[-1]
 
+
 @functools.lru_cache
 def ptx_get_version(cuda_version) -> int:
     '''
@@ -887,23 +889,23 @@ def ptx_get_version(cuda_version) -> int:
     '''
     assert isinstance(cuda_version, str)
     major, minor = map(int, cuda_version.split('.'))
-    version = major*1000 + minor*10
+    version = major * 1000 + minor * 10
     if version >= 11040:
-      return 74
+        return 74
     if version >= 11030:
-      return 73
+        return 73
     if version >= 11020:
-      return 72
+        return 72
     if version >= 11010:
-      return 71
+        return 71
     if version >= 11000:
-      return 70
+        return 70
     if version >= 10020:
-      return 65
+        return 65
     if version >= 10010:
-      return 64
+        return 64
     if version >= 10000:
-      return 63
+        return 63
     raise RuntimeError("Triton only support CUDA 10.0 or higher")
 
 
@@ -912,13 +914,12 @@ def path_to_ptxas():
     for prefix in prefixes:
         ptxas = os.path.join(prefix, "bin", "ptxas")
         if os.path.exists(ptxas):
-          result = subprocess.check_output([ptxas, "--version"], stderr=subprocess.STDOUT)
-          if result is not None:
-            version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
-            if version is not None:
-              return ptxas, version.group(1)
+            result = subprocess.check_output([ptxas, "--version"], stderr=subprocess.STDOUT)
+            if result is not None:
+                version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
+                if version is not None:
+                    return ptxas, version.group(1)
     raise RuntimeError("Cannot find ptxas")
-
 
 
 instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1"], defaults=[set(), set()])
@@ -929,7 +930,6 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
         signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
     valid_outputs = ("ttir", "ttgir", "ptx", "cubin")
     assert output in valid_outputs, "output should be one of [%s], but get \"%s\"" % (','.join(valid_outputs), output)
-
 
     # triton-ir
     module, _ = make_triton_ir(fn, signature, specialization, constants)
@@ -942,7 +942,7 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     module = optimize_tritongpu_ir(module, num_stages)
     if output == "ttgir":
         return module.str()
-    
+
     # llvm-ir
     llvm_ir = make_llvm_ir(module)
 
@@ -1323,7 +1323,6 @@ class CompiledKernel:
         return
 
 
-
 class CudaUtils(object):
 
     def __new__(cls):
@@ -1345,7 +1344,7 @@ class CudaUtils(object):
               const char* prefix = "Triton Error [CUDA]: ";
               const char* str;
               cuGetErrorString(code, &str);
-              char err[1024] = {{0}};
+              char err[1024] = {0};
               strcat(err, prefix);
               strcat(err, str);
               PyErr_SetString(PyExc_RuntimeError, err);
@@ -1432,5 +1431,6 @@ class CudaUtils(object):
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         self.load_binary = mod.load_binary
+
 
 cuda_utils = CudaUtils()

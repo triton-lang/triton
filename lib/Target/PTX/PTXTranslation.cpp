@@ -12,7 +12,6 @@
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 
-#include <regex>
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/ExecutionEngine/SectionMemoryManager.h"
 #include "llvm/IR/IRBuilder.h"
@@ -30,9 +29,9 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include <regex>
 
 namespace triton {
-
 
 extern "C" {
 int set_curterm(char *nterm) { return 0; }
@@ -132,7 +131,7 @@ static std::string llir_to_ptx(llvm::Module *module, int capability, int ptx) {
   return result;
 }
 
-std::string translateLLVMIRToPTX(llvm::Module& module, int cc, int version) {
+std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version) {
   auto ptxCode = llir_to_ptx(&module, cc, version);
   return ptxCode;
 }
