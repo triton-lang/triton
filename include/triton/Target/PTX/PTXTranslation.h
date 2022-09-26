@@ -1,8 +1,6 @@
 #ifndef TRITON_TARGET_PTXTRANSLATION_H
 #define TRITON_TARGET_PTXTRANSLATION_H
 
-#include "triton/driver/dispatch.h"
-
 #include <string>
 
 namespace mlir {
