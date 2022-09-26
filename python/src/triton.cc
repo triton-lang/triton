@@ -331,7 +331,7 @@ void init_triton_ir(py::module &&m) {
       if (!module)
         throw std::runtime_error("Parse MLIR file failed.");
 
-      return *module;
+      return module->clone();
   }, ret::take_ownership);
 
 
