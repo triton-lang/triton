@@ -364,14 +364,11 @@ void LoopPipeliner::emitPrologue() {
   for (Value loadOp : loads) {
     auto sliceType = loadsMapping[loadOp].getType().cast<RankedTensorType>();
     Value extractSlice = builder.create<tensor::ExtractSliceOp>(
-        loadOp.getLoc(), sliceType,
-        loadStageBuffer[loadOp][numStages - 1],
+        loadOp.getLoc(), sliceType, loadStageBuffer[loadOp][numStages - 1],
         SmallVector<OpFoldResult>{intAttr(0), intAttr(0), intAttr(0)},
-        SmallVector<OpFoldResult>{intAttr(1),
-                                  intAttr(sliceType.getShape()[0]),
+        SmallVector<OpFoldResult>{intAttr(1), intAttr(sliceType.getShape()[0]),
                                   intAttr(sliceType.getShape()[1])},
-        SmallVector<OpFoldResult>{intAttr(1), intAttr(1), intAttr(1)}
-    );
+        SmallVector<OpFoldResult>{intAttr(1), intAttr(1), intAttr(1)});
     loadsExtract[loadOp] = extractSlice;
   }
 }
@@ -488,8 +485,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
       nextIV.getLoc(), loopIterIdx,
       builder.create<arith::ConstantIntOp>(nextIV.getLoc(), numStages, 32));
   extractSliceIndex = builder.create<arith::IndexCastOp>(
-    extractSliceIndex.getLoc(), builder.getIndexType(), extractSliceIndex
-  );
+      extractSliceIndex.getLoc(), builder.getIndexType(), extractSliceIndex);
 
   for (Operation *op : orderedDeps) {
     Operation *nextOp = nullptr;
@@ -518,7 +514,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
       nextBuffers.push_back(insertAsyncOp);
       auto sliceType = loadsMapping[loadOp].getType().cast<RankedTensorType>();
       nextOp = builder.create<tensor::ExtractSliceOp>(
-        op->getLoc(), sliceType, insertAsyncOp,
+          op->getLoc(), sliceType, insertAsyncOp,
           SmallVector<OpFoldResult>{extractSliceIndex, intAttr(0), intAttr(0)},
           SmallVector<OpFoldResult>{intAttr(1),
                                     intAttr(sliceType.getShape()[0]),

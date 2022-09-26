@@ -59,27 +59,22 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrefetch,
 
   // k => (prefetchWidth, k - prefetchWidth)
   int64_t kIdx = opIdx == 0 ? 1 : 0;
-  offset[kIdx] = isPrefetch? 0 : prefetchWidth;
-  shape[kIdx] = isPrefetch? prefetchWidth : (shape[kIdx] - prefetchWidth);
-
+  offset[kIdx] = isPrefetch ? 0 : prefetchWidth;
+  shape[kIdx] = isPrefetch ? prefetchWidth : (shape[kIdx] - prefetchWidth);
 
   Value newSmem = builder.create<tensor::ExtractSliceOp>(
-    v.getLoc(),
-    // TODO: encoding?
-    RankedTensorType::get(shape, elementType, type.getEncoding()),
-    v,
-    SmallVector<OpFoldResult>{intAttr(offset[0]), intAttr(offset[1])},
-    SmallVector<OpFoldResult>{intAttr(shape[0]), intAttr(shape[1])},
-    SmallVector<OpFoldResult>{intAttr(1), intAttr(1)}
-  );
+      v.getLoc(),
+      // TODO: encoding?
+      RankedTensorType::get(shape, elementType, type.getEncoding()), v,
+      SmallVector<OpFoldResult>{intAttr(offset[0]), intAttr(offset[1])},
+      SmallVector<OpFoldResult>{intAttr(shape[0]), intAttr(shape[1])},
+      SmallVector<OpFoldResult>{intAttr(1), intAttr(1)});
 
-  auto dotOperandEnc = 
-    triton::gpu::DotOperandEncodingAttr::get(builder.getContext(), opIdx,
-                                              mmaEncoding);
+  auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
+      builder.getContext(), opIdx, mmaEncoding);
   Value prefetchSlice = builder.create<triton::gpu::ConvertLayoutOp>(
-    v.getLoc(),
-    RankedTensorType::get(shape, elementType, dotOperandEnc), newSmem
-  );
+      v.getLoc(), RankedTensorType::get(shape, elementType, dotOperandEnc),
+      newSmem);
 
   return prefetchSlice;
 }
@@ -131,16 +126,18 @@ void Prefetcher::emitPrologue() {
   OpBuilder builder(forOp);
 
   for (Value dot : dots) {
-    auto mmaEncoding = dot.getType().cast<RankedTensorType>().getEncoding()
-                          .cast<triton::gpu::MmaEncodingAttr>();
+    auto mmaEncoding = dot.getType()
+                           .cast<RankedTensorType>()
+                           .getEncoding()
+                           .cast<triton::gpu::MmaEncodingAttr>();
     if (Value aDef = dot2aDef.lookup(dot)) {
-      Value newA = generatePrefetch(aDef, 0, /*isPrefetch*/true, mmaEncoding,
-                                    builder);
+      Value newA =
+          generatePrefetch(aDef, 0, /*isPrefetch*/ true, mmaEncoding, builder);
       operand2headDef[dot.getDefiningOp<triton::DotOp>().a()] = newA;
     }
     if (Value bDef = dot2bDef.lookup(dot)) {
-      Value newB = generatePrefetch(bDef, 1, /*isPrefetch*/true, mmaEncoding,
-                                    builder);
+      Value newB =
+          generatePrefetch(bDef, 1, /*isPrefetch*/ true, mmaEncoding, builder);
       operand2headDef[dot.getDefiningOp<triton::DotOp>().b()] = newB;
     }
   }
@@ -158,7 +155,7 @@ scf::ForOp Prefetcher::createNewForOp() {
     if (Value b = dot2bArg.lookup(dot))
       loopArgs.push_back(operand2headDef[b]);
   }
-  
+
   auto newForOp = builder.create<scf::ForOp>(
       forOp.getLoc(), forOp.getLowerBound(), forOp.getUpperBound(),
       forOp.getStep(), loopArgs);
@@ -171,22 +168,28 @@ scf::ForOp Prefetcher::createNewForOp() {
   for (Operation &op : forOp.getBody()->without_terminator()) {
     Operation *newOp = nullptr;
     if (auto dot = dyn_cast<triton::DotOp>(&op)) {
-      auto mmaEncoding = dot.getType().cast<RankedTensorType>().getEncoding()
-                            .cast<triton::gpu::MmaEncodingAttr>();
+      auto mmaEncoding = dot.getType()
+                             .cast<RankedTensorType>()
+                             .getEncoding()
+                             .cast<triton::gpu::MmaEncodingAttr>();
       // prefetched dot
       Operation *firstDot = builder.clone(*dot, mapping);
       if (Value a = operand2headDef.lookup(dot.a()))
-        firstDot->setOperand(0, newForOp.getRegionIterArgForOpOperand(*a.use_begin()));
+        firstDot->setOperand(
+            0, newForOp.getRegionIterArgForOpOperand(*a.use_begin()));
       if (Value b = operand2headDef.lookup(dot.b()))
-        firstDot->setOperand(1, newForOp.getRegionIterArgForOpOperand(*b.use_begin()));
+        firstDot->setOperand(
+            1, newForOp.getRegionIterArgForOpOperand(*b.use_begin()));
 
       // remaining part (Note it's possible that dot.a() is not in mapping)
       Value aRem = mapping.lookupOrNull(dot.a());
       Value bRem = mapping.lookupOrNull(dot.b());
       if (Value a = dot2aArg.lookup(dot))
-        aRem = generatePrefetch(mapping.lookup(a), 0, false, mmaEncoding, builder);
+        aRem =
+            generatePrefetch(mapping.lookup(a), 0, false, mmaEncoding, builder);
       if (Value b = dot2bArg.lookup(dot))
-        bRem = generatePrefetch(mapping.lookup(b), 1, false, mmaEncoding, builder);
+        bRem =
+            generatePrefetch(mapping.lookup(b), 1, false, mmaEncoding, builder);
       newOp = builder.clone(*dot, mapping);
       // Use sliced a & b
       if (aRem && aRem != mapping.lookup(dot.a()))
@@ -207,13 +210,16 @@ scf::ForOp Prefetcher::createNewForOp() {
   for (Value v : forOp.getBody()->getTerminator()->getOperands())
     yieldValues.push_back(mapping.lookup(v));
   for (Value dot : dots) {
-    auto mmaEncoding = dot.getType().cast<RankedTensorType>().getEncoding()
-                          .cast<triton::gpu::MmaEncodingAttr>();
-    // TODO: This is wrong. Should be define of yield.
+    auto mmaEncoding = dot.getType()
+                           .cast<RankedTensorType>()
+                           .getEncoding()
+                           .cast<triton::gpu::MmaEncodingAttr>();
     if (Value a = dot2aYield.lookup(dot))
-      yieldValues.push_back(generatePrefetch(mapping.lookup(a), 0, true, mmaEncoding, builder));
+      yieldValues.push_back(
+          generatePrefetch(mapping.lookup(a), 0, true, mmaEncoding, builder));
     if (Value b = dot2bYield.lookup(dot))
-      yieldValues.push_back(generatePrefetch(mapping.lookup(b), 1, true, mmaEncoding, builder));
+      yieldValues.push_back(
+          generatePrefetch(mapping.lookup(b), 1, true, mmaEncoding, builder));
   }
   // Update ops of yield
   builder.create<scf::YieldOp>(yieldOp.getLoc(), yieldValues);
@@ -246,7 +252,6 @@ struct PrefetchPass : public TritonGPUPrefetchBase<PrefetchPass> {
 };
 
 } // anonymous namespace
-
 
 std::unique_ptr<Pass> mlir::createTritonGPUPrefetchPass() {
   return std::make_unique<PrefetchPass>();

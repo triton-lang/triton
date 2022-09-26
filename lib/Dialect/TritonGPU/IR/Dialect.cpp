@@ -372,7 +372,6 @@ void SharedEncodingAttr::print(AsmPrinter &printer) const {
           << "}>";
 }
 
-
 //===----------------------------------------------------------------------===//
 // DotOperand Encoding
 //===----------------------------------------------------------------------===//
@@ -409,7 +408,6 @@ void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
           << "opNum = " << getOpNum() << ", "
           << "parent = " << getParent() << "}>";
 }
-
 
 //===----------------------------------------------------------------------===//
 // InsertSliceAsyncOp
