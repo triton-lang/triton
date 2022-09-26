@@ -56,7 +56,7 @@ jobs:
       - name: Check cpp style
         if: ${{ matrix.runner != 'macos-latest' }}
         run: |
-          sudo apt-get install -y clang-format
+          pip install clang-format
           find . -regex '.*\.\(cpp\|hpp\|h\|cc\)' -not -path "./python/build/*" -not -path "./include/triton/external/*" -print0 | xargs -0 -n1 clang-format -style=file --dry-run -Werror -i ||
           (echo '::error title=Style issues:: Please run `find . -regex ".*\.\(cpp\|hpp\|h\|cc\)" -not -path "./python/build/*" -not -path "./include/triton/external/*" -print0 | xargs -0 -n1 clang-format -style=file -i`' ; exit 1)
 

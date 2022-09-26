@@ -177,9 +177,9 @@ unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
 }
 
 unsigned MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
-  // TODO:
-  assert(0 && "MmaEncodingAttr::getElemsPerThread not implemented");
-  return 0;
+  int threads = product(getWarpsPerCTA());
+  int numElem = product(shape);
+  return numElem / threads;
 }
 
 unsigned SharedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
@@ -470,9 +470,10 @@ mlir::LogicalResult ExtractSliceOp::inferReturnTypes(
   auto axis = attributes.get("axis").cast<IntegerAttr>().getInt();
   if (axis < 0 || axis > srcShape.size())
     return failure();
-  // Since we only extract a slice from a certain index on the axis,
-  // the dims before the axis can be dropped.
-  auto dstShape = srcShape.drop_front(axis + 1);
+  SmallVector<int64_t, 4> dstShape;
+  for (int i = 0; i < srcShape.size(); i++)
+    if (i != axis)
+      dstShape.push_back(srcShape[i]);
   auto returnType =
       RankedTensorType::get(dstShape, srcType.getElementType(), encoding);
   inferredReturnTypes.assign({returnType});

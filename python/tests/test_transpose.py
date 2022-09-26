@@ -4,7 +4,6 @@ from torch.testing import assert_allclose
 
 import triton
 import triton.language as tl
-import triton.runtime as runtime
 
 
 @triton.jit
@@ -40,29 +39,9 @@ def kernel(x_ptr, stride_xm,
     [2, 128, 64]
 ])
 def test_convert_layout_impl(NUM_WARPS, SIZE_M, SIZE_N):
-    # TODO: this is to initialize the cuda context since it is not properly
-    #       dealed with in the existing runtime, remove this when the runtime
-    #       is updated
-    torch.zeros([10], device=torch.device('cuda'))
-    device = torch.cuda.current_device()
-    binary = runtime.build_kernel(kernel,
-                                  "*fp32,i32,*fp32,i32",
-                                  constants={"SIZE_M": SIZE_M,
-                                             "SIZE_N": SIZE_N},
-                                  num_warps=NUM_WARPS,
-                                  num_stages=3)
     grid = lambda META: (1, )
-
     x = torch.randn((SIZE_M, SIZE_N), device='cuda', dtype=torch.float32)
     z = torch.empty((SIZE_N, SIZE_M), device=x.device, dtype=x.dtype)
-    runtime.launch_kernel(kernel=binary,
-                          device=device,
-                          grid=grid,
-                          x_ptr=x,
-                          stride_xm=x.stride(0),
-                          z_ptr=z,
-                          stride_zn=z.stride(0),
-                          SIZE_M=tl.constexpr(SIZE_M),
-                          SIZE_N=tl.constexpr(SIZE_N))
+    kernel[grid](x_ptr=x, stride_xm=x.stride(0), z_ptr=z, stride_zn=z.stride(0), SIZE_M=SIZE_M, SIZE_N=SIZE_N, num_warps=NUM_WARPS)
     golden_z = torch.t(x)
     assert_allclose(z, golden_z, rtol=1e-7, atol=1e-7)
