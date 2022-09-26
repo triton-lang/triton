@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-pipeline=num-stages=3 -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritongpu-pipeline=num-stages=3 -tritongpu-prefetch -canonicalize | FileCheck %s
 
 // 4 warps
 // matmul: 128x32 @ 32x128 -> 128x128
