@@ -940,19 +940,19 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     # tritongpu-ir
     module = make_tritongpu_ir(module, num_warps)
     module = optimize_tritongpu_ir(module, num_stages)
-    shem_size = _triton.get_shared_memory_size(module)
     if output == "ttgir":
         return module.str()
     
     # llvm-ir
-    module = make_llvm_ir(module)
+    llvm_ir = make_llvm_ir(module)
 
     assert device >= 0, "device should be provided."
     ptxas, cuda_version = path_to_ptxas()
     compute_capability = torch.cuda.get_device_capability(device)
     compute_capability = compute_capability[0] * 10 + compute_capability[1]
     ptx_version = ptx_get_version(cuda_version)
-    ptx = make_ptx(module, compute_capability, ptx_version)
+    ptx = make_ptx(llvm_ir, compute_capability, ptx_version)
+    shem_size = _triton.get_shared_memory_size(module)
     kernel_name = ptx_get_kernel_name(ptx)
     if output == "ptx":
         return ptx, shem_size, kernel_name
