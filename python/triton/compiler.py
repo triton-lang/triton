@@ -1026,6 +1026,7 @@ def generate_launcher(identifier, constants, signature):
     src = f"""
 #include \"cuda.h\"
 #include <Python.h>
+
 static inline void gpuAssert(CUresult code, const char *file, int line)
 {{
    if (code != CUDA_SUCCESS)
@@ -1039,13 +1040,16 @@ static inline void gpuAssert(CUresult code, const char *file, int line)
       PyErr_SetString(PyExc_RuntimeError, err);
    }}
 }}
+
 #define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
+
 void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, CUstream stream, CUfunction function, {arg_decls}) {{
   void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
   if(gridX*gridY*gridZ > 0){{
     CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
   }}
 }}
+
 static inline CUdeviceptr getPointer(PyObject *obj, int idx) {{
   if (PyLong_Check(obj)) {{
     return (CUdeviceptr)PyLong_AsUnsignedLongLong(obj);
@@ -1067,6 +1071,7 @@ static inline CUdeviceptr getPointer(PyObject *obj, int idx) {{
   PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
   return (CUdeviceptr)0;
 }}
+
 static PyObject* launch(PyObject* self, PyObject* args) {{
   int gridX, gridY, gridZ;
   uint64_t _stream;
@@ -1085,10 +1090,12 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   Py_INCREF(Py_None);
   return Py_None;
 }}
+
 static PyMethodDef ModuleMethods[] = {{
   {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
   {{NULL, NULL, 0, NULL}} // sentinel
 }};
+
 static struct PyModuleDef ModuleDef = {{
   PyModuleDef_HEAD_INIT,
   \"launcher\",
@@ -1096,6 +1103,7 @@ static struct PyModuleDef ModuleDef = {{
   -1, //size
   ModuleMethods
 }};
+
 PyMODINIT_FUNC PyInit_launcher(void) {{
   PyObject *m = PyModule_Create(&ModuleDef);
   if(m == NULL) {{
@@ -1297,7 +1305,7 @@ class CompiledKernel:
             self.asm["ptx"] = f.read()
 
         device = torch.cuda.current_device()
-        mod, func, n_regs, n_spills = _triton.load_binary(metadata["name"], self.asm["cubin"], self.shared, device)
+        mod, func, n_regs, n_spills = cuda_utils.load_binary(metadata["name"], self.asm["cubin"], self.shared, device)
         self.cu_module = mod
         self.cu_function = func
 
@@ -1307,3 +1315,116 @@ class CompiledKernel:
                 stream = torch.cuda.current_stream().cuda_stream
             self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.shared, stream, self.cu_function, *args)
         return
+
+
+
+class CudaUtils(object):
+
+    def __new__(cls):
+        if not hasattr(cls, 'instance'):
+            cls.instance = super(CudaUtils, cls).__new__(cls)
+        return cls.instance
+
+    def _generate_src(self):
+        return f"""
+        #include <cuda.h>
+
+        #include \"cuda.h\"
+        #include <Python.h>
+
+        static inline void gpuAssert(CUresult code, const char *file, int line)
+        {{
+           if (code != CUDA_SUCCESS)
+           {{
+              const char* prefix = "Triton Error [CUDA]: ";
+              const char* str;
+              cuGetErrorString(code, &str);
+              char err[1024] = {{0}};
+              strcat(err, prefix);
+              strcat(err, str);
+              PyErr_SetString(PyExc_RuntimeError, err);
+           }}
+        }}
+
+        #define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
+
+        static PyObject* loadBinary(PyObject* self, PyObject* args) {{
+            const char* name;
+            const char* data;
+            Py_ssize_t data_size;
+            int shared;
+            int device;
+            if(!PyArg_ParseTuple(args, "ss#ii", &name, &data, &data_size, &shared, &device)) {{
+                return NULL;
+            }}
+            CUfunction fun;
+            CUmodule mod;
+            int32_t n_regs = 0;
+            int32_t n_spills = 0;
+            Py_BEGIN_ALLOW_THREADS;
+            // create driver handles
+            CUDA_CHECK(cuModuleLoadData(&mod, data));
+            CUDA_CHECK(cuModuleGetFunction(&fun, mod, name));
+            // get allocated registers and spilled registers from the function
+            CUDA_CHECK(cuFuncGetAttribute(&n_regs, CU_FUNC_ATTRIBUTE_NUM_REGS, fun));
+            CUDA_CHECK(cuFuncGetAttribute(&n_spills, CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, fun));
+            n_spills /= 4;
+            // set dynamic shared memory if necessary
+            int shared_optin;
+            CUDA_CHECK(cuDeviceGetAttribute(&shared_optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, device));
+            if (shared > 49152 && shared_optin > 49152) {{
+              CUDA_CHECK(cuFuncSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED));
+              int shared_total, shared_static;
+              CUDA_CHECK(cuDeviceGetAttribute(&shared_total, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR, device));
+              CUDA_CHECK(cuFuncGetAttribute(&shared_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun));
+              CUDA_CHECK(cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin - shared_static));
+            }}
+            Py_END_ALLOW_THREADS;
+
+            if(PyErr_Occurred()) {{
+              return NULL;
+            }}
+            return Py_BuildValue("(KKii)", (uint64_t)mod, (uint64_t)fun, n_regs, n_spills);
+        }}
+
+        static PyMethodDef ModuleMethods[] = {{
+          {{"load_binary", loadBinary, METH_VARARGS, "Load provided cubin into CUDA driver"}},
+          {{NULL, NULL, 0, NULL}} // sentinel
+        }};
+
+        static struct PyModuleDef ModuleDef = {{
+          PyModuleDef_HEAD_INIT,
+          \"cuda_utils\",
+          NULL, //documentation
+          -1, //size
+          ModuleMethods
+        }};
+
+        PyMODINIT_FUNC PyInit_cuda_utils(void) {{
+          PyObject *m = PyModule_Create(&ModuleDef);
+          if(m == NULL) {{
+            return NULL;
+          }}
+          PyModule_AddFunctions(m, ModuleMethods);
+          return m;
+        }}
+        """
+
+    def __init__(self):
+        cache = CacheManager("cuda_utils")
+        if not cache.has_file("main.so"):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                src = self._generate_src()
+                src_path = os.path.join(tmpdir, "main.c")
+                with open(src_path, "w") as f:
+                    f.write(src)
+                so = _build("cuda_utils", src_path, tmpdir)
+                with open(so, "rb") as f:
+                    cache.put(f.read(), "main.so", binary=True)
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("cuda_utils", cache._make_path("main.so"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self.load_binary = mod.load_binary
+
+cuda_utils = CudaUtils()
