@@ -58,16 +58,17 @@ unsigned getElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
   }
 }
 
-unsigned getShapePerCTA(const Attribute &layout, unsigned d) {
-  if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
-    return blockedLayout.getSizePerThread()[d] *
-           blockedLayout.getThreadsPerWarp()[d] *
-           blockedLayout.getWarpsPerCTA()[d];
-  } else {
-    assert(0 && "Unimplemented usage of getShapePerCTA");
-    return 0;
+SmallVector<unsigned> getShapePerCTA(const BlockedEncodingAttr &layout) {
+  auto sizePerThread = layout.getSizePerThread();
+  auto threadsPerWarp = layout.getThreadsPerWarp();
+  auto warpsPerCTA = layout.getWarpsPerCTA();
+  unsigned rank = sizePerThread.size();
+  SmallVector<unsigned> shapePerCTA(rank);
+  for (unsigned k = 0; k < rank; ++k) {
+    shapePerCTA[k] = sizePerThread[k] * threadsPerWarp[k] * warpsPerCTA[k];
   }
-};
+  return shapePerCTA;
+}
 
 } // namespace gpu
 } // namespace triton
@@ -143,14 +144,14 @@ unsigned BlockedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   size_t rank = shape.size();
   assert(rank == getSizePerThread().size() &&
          "unexpected rank in BlockedEncodingAttr::getElemsPerThread");
-  SmallVector<unsigned> elemsPerThreadPerDim(rank);
-  for (size_t i = 0; i < rank; ++i) {
-    unsigned t =
-        getSizePerThread()[i] * getThreadsPerWarp()[i] * getWarpsPerCTA()[i];
-    elemsPerThreadPerDim[i] =
-        ceil<unsigned>(shape[i], t) * getSizePerThread()[i];
+  SmallVector<unsigned> elemsPerThread(rank);
+  for (size_t d = 0; d < rank; ++d) {
+    unsigned elemsPerCTAThreads =
+        getSizePerThread()[d] * getThreadsPerWarp()[d] * getWarpsPerCTA()[d];
+    unsigned rep = ceil<unsigned>(shape[d], elemsPerCTAThreads);
+    elemsPerThread[d] = rep * getSizePerThread()[d];
   }
-  return product<unsigned>(elemsPerThreadPerDim);
+  return product<unsigned>(elemsPerThread);
 }
 
 unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {

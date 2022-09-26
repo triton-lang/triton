@@ -48,10 +48,28 @@ Value createConstantI32(Location loc, PatternRewriter &rewriter, int32_t v) {
                                            IntegerAttr::get(i32ty, v));
 }
 
+// Create a index type constant.
+Value createIndexConstant(OpBuilder &builder, Location loc,
+
+                          TypeConverter *converter, int64_t value) {
+  Type ty = converter->convertType(builder.getIndexType());
+  return builder.create<LLVM::ConstantOp>(loc, ty,
+                                          builder.getIntegerAttr(ty, value));
+}
+
+// Create an integer constant of \param width bits.
+Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, int width,
+                                int64_t value) {
+  Type ty = builder.getIntegerType(width);
+  return builder.create<LLVM::ConstantOp>(loc, ty,
+                                          builder.getIntegerAttr(ty, value));
+}
+
 // Add other specification if needed...
 
 } // namespace
 
+// Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
 #define udiv(...) rewriter.create<LLVM::UDivOp>(loc, __VA_ARGS__)
 #define urem(...) rewriter.create<LLVM::URemOp>(loc, __VA_ARGS__)
 #define add(...) rewriter.create<LLVM::AddOp>(loc, __VA_ARGS__)
@@ -67,9 +85,15 @@ Value createConstantI32(Location loc, PatternRewriter &rewriter, int32_t v) {
 #define extract_element(...)                                                   \
   rewriter.create<LLVM::ExtractElementOp>(loc, __VA_ARGS__)
 #define address_of(...) rewriter.create<LLVM::AddressOfOp>(loc, __VA_ARGS__)
-
-#define i32_val(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
 #define i32_ty() rewriter.getIntegerType(32)
+
+// Creator for constant
+#define i32_val(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
+#define int_val(width, val)                                                    \
+  LLVM::createLLVMIntegerConstant(rewriter, loc, width, val)
+#define idx_val(...)                                                           \
+  LLVM::createIndexConstant(rewriter, loc, this->getTypeConverter(),           \
+                            __VA_ARGS__)
 
 } // namespace LLVM
 } // namespace mlir
@@ -245,19 +269,6 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<::mlir::ReturnOp> {
   }
 };
 
-static Value createIndexAttrConstant(OpBuilder &builder, Location loc,
-                                     Type resultType, int64_t value) {
-  return builder.create<LLVM::ConstantOp>(
-      loc, resultType, builder.getIntegerAttr(builder.getIndexType(), value));
-}
-
-static Value createLLVMIntegerConstant(OpBuilder &builder, Location loc,
-                                       LLVMTypeConverter *converter, Type ty,
-                                       int64_t value) {
-  return builder.create<LLVM::ConstantOp>(loc, converter->convertType(ty),
-                                          builder.getIntegerAttr(ty, value));
-}
-
 Value getStructFromElements(Location loc, ValueRange resultVals,
                             ConversionPatternRewriter &rewriter,
                             Type structType) {
@@ -270,42 +281,36 @@ Value getStructFromElements(Location loc, ValueRange resultVals,
 }
 
 template <typename T>
-static SmallVector<T> getMultiDimIndex(T linear_index, ArrayRef<T> shape) {
-  // sizes {a, b, c, d}  ->  acc_mul {b*c*d, c*d, d, 1}
+static SmallVector<T> getMultiDimIndex(T linearIndex, ArrayRef<T> shape) {
+  // shape: {a, b, c, d}  ->  accMul: {b*c*d, c*d, d, 1}
   size_t rank = shape.size();
-  T acc_mul = 1;
-  for (size_t i = 1; i < rank; ++i) {
-    acc_mul *= shape[i];
-  }
-  T linear_remain = linear_index;
-  SmallVector<T> multidim_index(rank);
+  T accMul = product(shape.drop_front());
+  T linearRemain = linearIndex;
+  SmallVector<T> multiDimIndex(rank);
   for (size_t i = 0; i < rank; ++i) {
-    multidim_index[i] = linear_remain / acc_mul;
-    linear_remain = linear_remain % acc_mul;
+    multiDimIndex[i] = linearRemain / accMul;
+    linearRemain = linearRemain % accMul;
     if (i != (rank - 1)) {
-      acc_mul = acc_mul / shape[i + 1];
+      accMul = accMul / shape[i + 1];
     }
   }
-  return multidim_index;
+  return multiDimIndex;
 }
 
 template <typename T>
-static T getLinearIndex(ArrayRef<T> multidim_index, ArrayRef<T> shape) {
-  assert(multidim_index.size() == shape.size());
-  // sizes {a, b, c, d}  ->  acc_mul {b*c*d, c*d, d, 1}
+static T getLinearIndex(ArrayRef<T> multiDimIndex, ArrayRef<T> shape) {
+  assert(multiDimIndex.size() == shape.size());
+  // shape: {a, b, c, d}  ->  accMul: {b*c*d, c*d, d, 1}
   size_t rank = shape.size();
-  T acc_mul = 1;
-  for (size_t i = 1; i < rank; ++i) {
-    acc_mul *= shape[i];
-  }
-  T linear_index = 0;
+  T accMul = product(shape.drop_front());
+  T linearIndex = 0;
   for (size_t i = 0; i < rank; ++i) {
-    linear_index += multidim_index[i] * acc_mul;
+    linearIndex += multiDimIndex[i] * accMul;
     if (i != (rank - 1)) {
-      acc_mul = acc_mul / shape[i + 1];
+      accMul = accMul / shape[i + 1];
     }
   }
-  return linear_index;
+  return linearIndex;
 }
 
 struct ConvertTritonGPUOpToLLVMPatternBase {
@@ -343,16 +348,15 @@ public:
     return threadId;
   }
 
+  // Convert an \param index to a multi-dim coordinate given \param shape and
+  // \param order.
   SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
                                  Location loc, Value linear,
                                  ArrayRef<unsigned> shape,
                                  ArrayRef<unsigned> order) const {
     unsigned rank = shape.size();
     assert(rank == order.size());
-    SmallVector<unsigned> reordered(rank);
-    for (unsigned i = 0; i < rank; ++i) {
-      reordered[i] = shape[order[i]];
-    }
+    auto reordered = reorder(shape, order);
     auto reorderedMultiDim = delinearize(rewriter, loc, linear, reordered);
     SmallVector<Value> multiDim(rank);
     for (unsigned i = 0; i < rank; ++i) {
@@ -372,9 +376,7 @@ public:
     } else {
       Value remained = linear;
       for (auto &&en : llvm::enumerate(llvm::reverse(shape.drop_front()))) {
-        Value dimSize = createIndexAttrConstant(
-            rewriter, loc, this->getTypeConverter()->getIndexType(),
-            en.value());
+        Value dimSize = idx_val(en.value());
         multiDim[rank - 1 - en.index()] = urem(remained, dimSize);
         remained = udiv(remained, dimSize);
       }
@@ -386,20 +388,19 @@ public:
   Value linearize(ConversionPatternRewriter &rewriter, Location loc,
                   ArrayRef<Value> multiDim, ArrayRef<unsigned> shape) const {
     int rank = multiDim.size();
-    Value linear = createIndexAttrConstant(
-        rewriter, loc, this->getTypeConverter()->getIndexType(), 0);
+    Value linear = idx_val(0);
     if (rank > 0) {
       linear = multiDim.front();
-      for (auto &&z : llvm::zip(multiDim.drop_front(), shape.drop_front())) {
-        Value dimSize = createIndexAttrConstant(
-            rewriter, loc, this->getTypeConverter()->getIndexType(),
-            std::get<1>(z));
-        linear = add(mul(linear, dimSize), std::get<0>(z));
+      for (auto [dim, shape] :
+           llvm::zip(multiDim.drop_front(), shape.drop_front())) {
+        Value dimSize = idx_val(shape);
+        linear = add(mul(linear, dimSize), dim);
       }
     }
     return linear;
   }
 
+  // Get an index-base for each dimension for a \param blocked_layout.
   SmallVector<Value>
   emitBaseIndexForBlockedLayout(Location loc,
                                 ConversionPatternRewriter &rewriter,
@@ -407,7 +408,7 @@ public:
                                 ArrayRef<int64_t> shape) const {
     auto llvmIndexTy = this->getTypeConverter()->getIndexType();
     Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = createIndexAttrConstant(rewriter, loc, llvmIndexTy, 32);
+    Value warpSize = idx_val(32);
     Value laneId = urem(threadId, warpSize);
     Value warpId = udiv(threadId, warpSize);
     auto sizePerThread = blocked_layout.getSizePerThread();
@@ -428,19 +429,13 @@ public:
       unsigned maxWarps =
           ceil<unsigned>(shape[k], sizePerThread[k] * threadsPerWarp[k]);
       unsigned maxThreads = ceil<unsigned>(shape[k], sizePerThread[k]);
-      multiDimWarpId[k] =
-          urem(multiDimWarpId[k],
-               createIndexAttrConstant(rewriter, loc, llvmIndexTy, maxWarps));
-      multiDimThreadId[k] =
-          urem(multiDimThreadId[k],
-               createIndexAttrConstant(rewriter, loc, llvmIndexTy, maxThreads));
+      multiDimWarpId[k] = urem(multiDimWarpId[k], idx_val(maxWarps));
+      multiDimThreadId[k] = urem(multiDimThreadId[k], idx_val(maxThreads));
       // multiDimBase[k] = (multiDimThreadId[k] +
       //                    multiDimWarpId[k] * threadsPerWarp[k]) *
       //                   sizePerThread[k];
-      Value threadsPerWarpK = createIndexAttrConstant(
-          rewriter, loc, llvmIndexTy, threadsPerWarp[k]);
-      Value sizePerThreadK =
-          createIndexAttrConstant(rewriter, loc, llvmIndexTy, sizePerThread[k]);
+      Value threadsPerWarpK = idx_val(threadsPerWarp[k]);
+      Value sizePerThreadK = idx_val(sizePerThread[k]);
       multiDimBase[k] =
           mul(sizePerThreadK, add(multiDimThreadId[k],
                                   mul(multiDimWarpId[k], threadsPerWarpK)));
@@ -473,25 +468,22 @@ public:
     if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
       SmallVector<int64_t> paddedShape(rank + 1);
       for (unsigned d = 0; d < rank + 1; ++d) {
-        if (d < dim) {
+        if (d < dim)
           paddedShape[d] = shape[d];
-        } else if (d == dim) {
+        else if (d == dim)
           paddedShape[d] = 1;
-        } else {
+        else
           paddedShape[d] = shape[d - 1];
-        }
       }
       auto paddedIndices = emitIndicesForBlockedLayout(
           loc, rewriter, blockedParent, paddedShape);
       unsigned numIndices = paddedIndices.size();
       SmallVector<SmallVector<Value>> resultIndices(numIndices);
-      for (unsigned i = 0; i < numIndices; ++i) {
-        for (unsigned d = 0; d < rank + 1; ++d) {
-          if (d != dim) {
+      for (unsigned i = 0; i < numIndices; ++i)
+        for (unsigned d = 0; d < rank + 1; ++d)
+          if (d != dim)
             resultIndices[i].push_back(paddedIndices[i][d]);
-          }
-        }
-      }
+
       return resultIndices;
 
     } else if (auto sliceParent = parent.dyn_cast<SliceEncodingAttr>()) {
@@ -519,23 +511,16 @@ public:
     auto threadsPerWarp = blockedLayout.getThreadsPerWarp();
     auto warpsPerCTA = blockedLayout.getWarpsPerCTA();
     unsigned rank = shape.size();
-    SmallVector<unsigned> shapePerCTA(rank);
-    for (unsigned k = 0; k < rank; ++k) {
-      shapePerCTA[k] = sizePerThread[k] * threadsPerWarp[k] * warpsPerCTA[k];
-    }
+    SmallVector<unsigned> shapePerCTA = getShapePerCTA(blockedLayout);
 
     // step 1, delinearize threadId to get the base index
     auto multiDimBase =
         emitBaseIndexForBlockedLayout(loc, rewriter, blockedLayout, shape);
 
     // step 2, get offset of each element
-    unsigned elemsPerThread = 1;
+    unsigned elemsPerThread = blockedLayout.getElemsPerThread(shape);
     SmallVector<SmallVector<unsigned>> offset(rank);
-    SmallVector<unsigned> multiDimElemsPerThread(rank);
     for (unsigned k = 0; k < rank; ++k) {
-      multiDimElemsPerThread[k] =
-          ceil<unsigned>(shape[k], shapePerCTA[k]) * sizePerThread[k];
-      elemsPerThread *= multiDimElemsPerThread[k];
       // 1 block in minimum if shape[k] is less than shapePerCTA[k]
       for (unsigned blockOffset = 0;
            blockOffset < ceil<unsigned>(shape[k], shapePerCTA[k]);
@@ -551,24 +536,21 @@ public:
                                       threadsPerWarp[k] +
                                   threadOffset * sizePerThread[k] + elemOffset);
     }
-    // step 3, add offset to base, and reorder the sequence of indices,
-    //         to guarantee that elems in a same sizePerThread are adjacent in
-    //         order
+    // step 3, add offset to base, and reorder the sequence of indices to
+    // guarantee that elems in a same sizePerThread are adjacent in order
     SmallVector<SmallVector<Value>> multiDimIdx(elemsPerThread);
-    unsigned accumSizePerThread =
-        std::accumulate(sizePerThread.begin(), sizePerThread.end(), 1,
-                        std::multiplies<unsigned>());
+    unsigned accumSizePerThread = product<unsigned>(sizePerThread);
     SmallVector<unsigned> threadsPerDim(rank);
     for (unsigned k = 0; k < rank; ++k) {
       threadsPerDim[k] = ceil<unsigned>(shape[k], sizePerThread[k]);
     }
     for (unsigned n = 0; n < elemsPerThread; ++n) {
       unsigned linearNanoTileId = n / accumSizePerThread;
-      unsigned linearElemsInNanoTileId = n % accumSizePerThread;
+      unsigned linearNanoTileElemId = n % accumSizePerThread;
       SmallVector<unsigned> multiDimNanoTileId =
           getMultiDimIndex<unsigned>(linearNanoTileId, threadsPerDim);
       SmallVector<unsigned> multiElemsInNanoTileId =
-          getMultiDimIndex<unsigned>(linearElemsInNanoTileId, sizePerThread);
+          getMultiDimIndex<unsigned>(linearNanoTileElemId, sizePerThread);
       multiDimIdx[n].resize(rank);
       for (unsigned k = 0; k < rank; ++k) {
         unsigned reorderedMultiDimId =
@@ -576,9 +558,7 @@ public:
                 (sizePerThread[k] * threadsPerWarp[k] * warpsPerCTA[k]) +
             multiElemsInNanoTileId[k];
         multiDimIdx[n][k] =
-            add(multiDimBase[k],
-                createIndexAttrConstant(rewriter, loc, llvmIndexTy,
-                                        offset[k][reorderedMultiDimId]));
+            add(multiDimBase[k], idx_val(offset[k][reorderedMultiDimId]));
       }
     }
 
@@ -594,7 +574,7 @@ public:
     assert(bufferId != Allocation::InvalidBufferId && "BufferId not found");
     size_t offset = allocation->getOffset(bufferId);
     auto llvmIndexTy = this->getTypeConverter()->getIndexType();
-    Value offVal = createIndexAttrConstant(rewriter, loc, llvmIndexTy, offset);
+    Value offVal = idx_val(offset);
     Value base = gep(ptrTy, smem, offVal);
     return base;
   }
@@ -867,10 +847,7 @@ struct StoreOpConversion
       // TODO(Superjomn) Need to check masks before vectorize the load for all
       // the values share one predicate? Here assume all the mask values are
       // the same.
-      Value maskVal =
-          llMask ? maskElems[vecStart]
-                 : createLLVMIntegerConstant(rewriter, loc, getTypeConverter(),
-                                             rewriter.getIntegerType(1), 1);
+      Value maskVal = llMask ? maskElems[vecStart] : int_val(1, 1);
       ptxStoreInstr.global().b(width).v(nWords);
 
       auto *asmAddr =
@@ -1146,10 +1123,7 @@ struct LoadOpConversion
       // TODO(Superjomn) Need to check masks before vectorize the load for all
       // the values share one predicate? Here assume all the mask values are
       // the same.
-      Value pred =
-          mask ? maskElems[vecStart]
-               : createLLVMIntegerConstant(rewriter, loc, getTypeConverter(),
-                                           rewriter.getIntegerType(1), 1);
+      Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
 
       const std::string readConstraint =
           (width == 64) ? "l" : ((width == 32) ? "r" : "c");
@@ -1249,7 +1223,7 @@ struct LoadOpConversion
             curr);
         rets.push_back(curr);
       }
-      int tmp = (width / valueElemNbits);
+      int tmp = width / valueElemNbits;
       for (size_t ii = 0; ii < vec; ii++) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(), ii % tmp);
@@ -1424,11 +1398,11 @@ public:
     SmallVector<unsigned> outNumCTAsEachRep(rank);
     SmallVector<unsigned> inNumCTAs(rank);
     SmallVector<unsigned> outNumCTAs(rank);
+    auto srcShapePerCTA = getShapePerCTA(srcLayout.cast<BlockedEncodingAttr>());
+    auto dstShapePerCTA = getShapePerCTA(dstLayout.cast<BlockedEncodingAttr>());
     for (unsigned d = 0; d < rank; ++d) {
-      unsigned inPerCTA =
-          std::min(unsigned(shape[d]), getShapePerCTA(srcLayout, d));
-      unsigned outPerCTA =
-          std::min(unsigned(shape[d]), getShapePerCTA(dstLayout, d));
+      unsigned inPerCTA = std::min(unsigned(shape[d]), srcShapePerCTA[d]);
+      unsigned outPerCTA = std::min(unsigned(shape[d]), dstShapePerCTA[d]);
       unsigned maxPerCTA = std::max(inPerCTA, outPerCTA);
       numReplicates[d] = ceil<unsigned>(shape[d], maxPerCTA);
       inNumCTAsEachRep[d] = maxPerCTA / inPerCTA;
@@ -1480,17 +1454,6 @@ public:
   }
 
 private:
-  template <typename T>
-  SmallVector<T> reorder(ArrayRef<T> input, ArrayRef<unsigned> order) const {
-    size_t rank = order.size();
-    assert(input.size() == rank);
-    SmallVector<T> result(rank);
-    for (auto it : llvm::enumerate(order)) {
-      result[rank - 1 - it.value()] = input[it.index()];
-    }
-    return result;
-  };
-
   void processReplicaBlocked(Location loc, ConversionPatternRewriter &rewriter,
                              bool stNotRd, RankedTensorType type,
                              ArrayRef<unsigned> numCTAsEachRep,

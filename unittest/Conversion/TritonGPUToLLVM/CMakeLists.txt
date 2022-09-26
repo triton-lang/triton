@@ -1,5 +1,5 @@
 add_triton_ut(
-	NAME PtxAsmFormatTest
+	NAME TestPtxAsmFormat
 	SRCS PtxAsmFormatTest.cpp
 	LIBS TritonGPUToLLVM
 )

@@ -22,7 +22,7 @@ namespace gpu {
 
 unsigned getElemsPerThread(Attribute layout, ArrayRef<int64_t> shape);
 
-unsigned getShapePerCTA(const Attribute &layout, unsigned d);
+SmallVector<unsigned> getShapePerCTA(const BlockedEncodingAttr &layout);
 
 } // namespace gpu
 } // namespace triton

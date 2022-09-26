@@ -1,5 +1,5 @@
 add_triton_ut(
-  NAME TritonAnalysisTests
+  NAME TestTritonAnalysis
   SRCS UtilityTest.cpp
   LIBS TritonAnalysis
 )
