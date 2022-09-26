@@ -1311,6 +1311,9 @@ class CompiledKernel:
             self.asm["ptx"] = f.read()
 
         device = torch.cuda.current_device()
+        global cuda_utils
+        if cuda_utils is None:
+          cuda_utils = CudaUtils()
         mod, func, n_regs, n_spills = cuda_utils.load_binary(metadata["name"], self.asm["cubin"], self.shared, device)
         self.cu_module = mod
         self.cu_function = func
@@ -1421,7 +1424,6 @@ class CudaUtils(object):
         cache = CacheManager(key)
         fname = "cuda_utils.so"
         if not cache.has_file(fname):
-            print("compiling")
             with tempfile.TemporaryDirectory() as tmpdir:
                 src_path = os.path.join(tmpdir, "main.c")
                 with open(src_path, "w") as f:
@@ -1436,4 +1438,4 @@ class CudaUtils(object):
         self.load_binary = mod.load_binary
 
 
-cuda_utils = CudaUtils()
+cuda_utils = None
