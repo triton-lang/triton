@@ -1313,7 +1313,7 @@ class CompiledKernel:
         device = torch.cuda.current_device()
         global cuda_utils
         if cuda_utils is None:
-          cuda_utils = CudaUtils()
+            cuda_utils = CudaUtils()
         mod, func, n_regs, n_spills = cuda_utils.load_binary(metadata["name"], self.asm["cubin"], self.shared, device)
         self.cu_module = mod
         self.cu_function = func
