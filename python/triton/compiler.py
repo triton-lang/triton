@@ -843,6 +843,9 @@ def optimize_tritongpu_ir(mod, num_stages):
     pm.run(mod)
     return mod
 
+def make_llvm_ir(mod):
+    return _triton.translate_triton_gpu_to_llvmir(mod)
+
 
 def make_ptx(mod: Any, compute_capability: int, ptx_version: int) -> Tuple[str, int]:
     '''
@@ -852,7 +855,7 @@ def make_ptx(mod: Any, compute_capability: int, ptx_version: int) -> Tuple[str, 
         - PTX code
         - shared memory alloaction size
     '''
-    return _triton.translate_triton_gpu_to_ptx(mod, compute_capability, ptx_version)
+    return _triton.translate_llvmir_to_ptx(mod, compute_capability, ptx_version)
 
 
 def make_cubin(ptx: str, ptxas: str, compute_capability: int):
@@ -937,16 +940,19 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     # tritongpu-ir
     module = make_tritongpu_ir(module, num_warps)
     module = optimize_tritongpu_ir(module, num_stages)
-
+    shem_size = _triton.get_shared_memory_size(module)
     if output == "ttgir":
         return module.str()
+    
+    # llvm-ir
+    module = make_llvm_ir(module)
 
     assert device >= 0, "device should be provided."
     ptxas, cuda_version = path_to_ptxas()
     compute_capability = torch.cuda.get_device_capability(device)
     compute_capability = compute_capability[0] * 10 + compute_capability[1]
     ptx_version = ptx_get_version(cuda_version)
-    ptx, shem_size = make_ptx(module, compute_capability, ptx_version)
+    ptx = make_ptx(module, compute_capability, ptx_version)
     kernel_name = ptx_get_kernel_name(ptx)
     if output == "ptx":
         return ptx, shem_size, kernel_name

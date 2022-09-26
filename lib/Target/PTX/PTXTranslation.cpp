@@ -132,10 +132,8 @@ static std::string llir_to_ptx(llvm::Module *module, int capability, int ptx) {
   return result;
 }
 
-std::string translateTritonGPUToPTX(mlir::ModuleOp module, int cc, int version) {
-  llvm::LLVMContext ctx;
-  auto llModule = mlir::triton::translateTritonGPUToLLVMIR(&ctx, module);
-  auto ptxCode = llir_to_ptx(llModule.get(), cc, version);
+std::string translateLLVMIRToPTX(llvm::Module& module, int cc, int version) {
+  auto ptxCode = llir_to_ptx(&module, cc, version);
   return ptxCode;
 }
 

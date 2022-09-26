@@ -7,6 +7,9 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
 
+#include "mlir/Parser.h"
+#include "mlir/Support/FileUtilities.h"
+
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVM.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPU.h"
@@ -22,6 +25,9 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/IRReader/IRReader.h"
+
+#include "llvm/Support/SourceMgr.h"
 
 #include <Python.h>
 #include <cctype>
@@ -294,6 +300,42 @@ void init_triton_ir(py::module &&m) {
            [](mlir::ModuleOp &self, std::string &funcName) -> mlir::FuncOp {
              return self.lookupSymbol<mlir::FuncOp>(funcName);
            });
+  
+
+   m.def("parse_mlir_module", [](const std::string& inputFilename,
+                                mlir::MLIRContext &context) {
+      
+      // open file
+      std::string errorMessage;
+      auto input = mlir::openInputFile(inputFilename, &errorMessage);
+      if (!input)
+        throw std::runtime_error(errorMessage);
+
+      // initialize registry
+      mlir::DialectRegistry registry;
+      registry.insert<mlir::triton::TritonDialect, 
+                      mlir::triton::gpu::TritonGPUDialect,
+                      mlir::math::MathDialect, 
+                      mlir::arith::ArithmeticDialect,
+                      mlir::StandardOpsDialect, 
+                      mlir::scf::SCFDialect>();
+
+      context.appendDialectRegistry(registry);
+      context.loadAllAvailableDialects();
+      context.allowUnregisteredDialects();
+
+      // parse module
+      llvm::SourceMgr sourceMgr;
+      sourceMgr.AddNewSourceBuffer(std::move(input), llvm::SMLoc());
+      mlir::OwningOpRef<mlir::ModuleOp> module(mlir::parseSourceFile(sourceMgr, &context));
+      if (!module)
+        throw std::runtime_error("Parse MLIR file failed.");
+
+      return *module;
+  }, ret::take_ownership);
+
+
+
 
   py::class_<mlir::FuncOp, mlir::OpState>(m, "function")
       // .def_property_readonly("attrs", &ir::function::attrs)
@@ -1154,26 +1196,41 @@ void init_triton_ir(py::module &&m) {
       });
 }
 
+  
 void init_triton_translation(py::module &m) {
-  m.def("translate_triton_gpu_to_llvmir", [](mlir::ModuleOp op) -> std::string {
+
+  using ret = py::return_value_policy;
+
+
+  m.def("get_shared_memory_size", [](mlir::ModuleOp module){
+    auto pass = std::make_unique<mlir::Allocation>(module);
+    return pass->getSharedMemorySize();
+  });
+
+  m.def("translate_triton_gpu_to_llvmir", [](mlir::ModuleOp op) {
     llvm::LLVMContext llvmContext;
     auto llvmModule =
         ::mlir::triton::translateTritonGPUToLLVMIR(&llvmContext, op);
-
+    
     std::string str;
     llvm::raw_string_ostream os(str);
     llvmModule->print(os, nullptr);
     os.flush();
     return str;
-  });
+  }, ret::take_ownership);
 
-  m.def("translate_triton_gpu_to_ptx",
-        [](mlir::ModuleOp module, int capability, int version) -> std::tuple<std::string, int> {
-          auto ptxCode = triton::translateTritonGPUToPTX(module, capability, version);
-          mlir::PassManager pm(module->getContext());
-          auto pass = std::make_unique<mlir::Allocation>(module);
-          return std::make_tuple(ptxCode, pass->getSharedMemorySize());
-        });
+
+  m.def("translate_llvmir_to_ptx",
+        [](const std::string llvmIR, int capability, int version) -> std::string {
+    // create LLVM module from C++
+    llvm::LLVMContext context;
+    std::unique_ptr<llvm::MemoryBuffer> buffer = llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
+    llvm::SMDiagnostic error;
+    std::unique_ptr<llvm::Module> module = llvm::parseIR(buffer->getMemBufferRef(), error, context);
+    // translate module to PTX
+    auto ptxCode = triton::translateLLVMIRToPTX(*module, capability, version);
+    return ptxCode;
+  }, ret::take_ownership);
 
   m.def("compile_ptx_to_cubin",
         [](const std::string &ptxCode, const std::string &ptxasPath, int capability) -> py::object {
