@@ -51,6 +51,8 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
       srcBlockedLayout ? srcBlockedLayout.getSizePerThread()[inOrd[0]] : 2;
   unsigned dstContigPerThread =
       dstBlockedLayout ? dstBlockedLayout.getSizePerThread()[outOrd[0]] : 2;
+  // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
+  //       that we cannot do vectorization.
   inVec = outOrd[0] == 0 ? 1 : inOrd[0] == 0 ? 1 : srcContigPerThread;
   outVec = outOrd[0] == 0 ? 1 : dstContigPerThread;
 
