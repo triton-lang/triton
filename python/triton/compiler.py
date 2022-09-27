@@ -570,6 +570,9 @@ class CodeGenerator(ast.NodeVisitor):
                         ast.NodeVisitor.generic_visit(self, stmt)
                 return
 
+        
+
+
         # collect lower bound (lb), upper bound (ub), and step
         lb = self.visit(node.iter.args[0] if len(node.iter.args) > 1 else ast.Num(0))
         ub = self.visit(node.iter.args[1] if len(node.iter.args) > 1 else node.iter.args[0])
@@ -582,6 +585,7 @@ class CodeGenerator(ast.NodeVisitor):
         lb = self.builder.create_to_index(lb)
         ub = self.builder.create_to_index(ub)
         step = self.builder.create_to_index(step)
+        # initialize target
 
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr

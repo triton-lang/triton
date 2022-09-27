@@ -226,6 +226,7 @@ bool tryLegalizeOp(Operation *op, DenseSet<Value> toPreserve,
 std::pair<SmallVector<Value, 4>, scf::ForOp>
 tryConvertIterArg(scf::ForOp &forOp, mlir::PatternRewriter &rewriter, size_t i,
                   Type newType) {
+  forOp.getInductionVar();
   auto newEncoding = newType.cast<RankedTensorType>().getEncoding();
   auto ctx = forOp.getContext();
   auto isInLoop = [&](Operation *op) { return op->getParentOp() == forOp; };
