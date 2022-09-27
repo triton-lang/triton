@@ -486,7 +486,6 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   }
 }
 
-
 // TODO: problems in MLIR's parser on slice layout
 // #blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
 // module attributes {"triton_gpu.num-warps" = 1 : i32} {
@@ -495,3 +494,24 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 //     return
 //   }
 // }
+
+// -----
+
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
+#mma = #triton_gpu.mma<{version = 2, warpsPerCTA = [2, 2]}>
+module attributes {"triton_gpu.num-warps" = 1 : i32} {
+  // CHECK: llvm.mlir.global internal @global_smem() {addr_space = 3 : i32} : !llvm.array<2560 x i8>
+  // CHECK-LABEL: convert_layout_mma_block
+  func @convert_layout_mma_blocked(%arg0: tensor<32x16xf32, #mma>) {
+    // CHECK: nvvm.barrier0
+    // CHECK: llvm.store
+    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
+    // CHECK: llvm.store
+    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
+    // CHECK: nvvm.barrier0
+    // CHECK: llvm.load
+    // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
+    %0 = triton_gpu.convert_layout %arg0 : (tensor<32x16xf32, #mma>) -> tensor<32x16xf32, #blocked0>
+    return
+  }
+}
