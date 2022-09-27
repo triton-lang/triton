@@ -58,16 +58,53 @@ unsigned getElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
   }
 }
 
-unsigned getShapePerCTA(const Attribute &layout, unsigned d) {
+SmallVector<unsigned> getSizePerThread(Attribute layout) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
-    return blockedLayout.getSizePerThread()[d] *
-           blockedLayout.getThreadsPerWarp()[d] *
-           blockedLayout.getWarpsPerCTA()[d];
+    return SmallVector<unsigned>(blockedLayout.getSizePerThread().begin(),
+                                 blockedLayout.getSizePerThread().end());
+  } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+    assert(mmaLayout.getVersion() == 2 &&
+           "mmaLayout version = 1 is not implemented yet");
+    return SmallVector<unsigned>{2, 2};
+  } else {
+    assert(0 && "getSizePerThread not implemented");
+    return {};
+  }
+}
+
+SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
+  SmallVector<unsigned> shape;
+  if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
+    for (int d = 0, n = blockedLayout.getOrder().size(); d < n; ++d)
+      shape.push_back(blockedLayout.getSizePerThread()[d] *
+                      blockedLayout.getThreadsPerWarp()[d] *
+                      blockedLayout.getWarpsPerCTA()[d]);
+  } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+    assert(mmaLayout.getVersion() == 2 &&
+           "mmaLayout version = 1 is not implemented yet");
+    return {16 * mmaLayout.getWarpsPerCTA()[0],
+            8 * mmaLayout.getWarpsPerCTA()[1]};
   } else {
     assert(0 && "Unimplemented usage of getShapePerCTA");
-    return 0;
   }
-};
+
+  return shape;
+}
+
+SmallVector<unsigned> getOrder(const Attribute &layout) {
+  if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
+    return SmallVector<unsigned>(blockedLayout.getOrder().begin(),
+                                 blockedLayout.getOrder().end());
+  } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+    return SmallVector<unsigned>{1, 0};
+  } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
+    return SmallVector<unsigned>(sharedLayout.getOrder().begin(),
+                                 sharedLayout.getOrder().end());
+  } else {
+    assert(0 && "Unimplemented usage of getOrder");
+    return {};
+  }
+}
 
 } // namespace gpu
 } // namespace triton
@@ -141,16 +178,17 @@ SliceEncodingAttr BlockedEncodingAttr::squeeze(int axis) {
 
 unsigned BlockedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   size_t rank = shape.size();
-  assert(rank == getSizePerThread().size() &&
+  auto sizePerThread = getSizePerThread();
+  auto warpsPerCTA = getWarpsPerCTA();
+  auto threadsPerWarp = getThreadsPerWarp();
+  assert(rank == sizePerThread.size() &&
          "unexpected rank in BlockedEncodingAttr::getElemsPerThread");
-  SmallVector<unsigned> elemsPerThreadPerDim(rank);
+  SmallVector<unsigned> elemsPerThread(rank);
   for (size_t i = 0; i < rank; ++i) {
-    unsigned t =
-        getSizePerThread()[i] * getThreadsPerWarp()[i] * getWarpsPerCTA()[i];
-    elemsPerThreadPerDim[i] =
-        ceil<unsigned>(shape[i], t) * getSizePerThread()[i];
+    unsigned t = sizePerThread[i] * threadsPerWarp[i] * warpsPerCTA[i];
+    elemsPerThread[i] = ceil<unsigned>(shape[i], t) * sizePerThread[i];
   }
-  return product<unsigned>(elemsPerThreadPerDim);
+  return product<unsigned>(elemsPerThread);
 }
 
 unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
