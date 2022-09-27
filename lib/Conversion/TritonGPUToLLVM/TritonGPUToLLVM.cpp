@@ -58,7 +58,7 @@ Value createIndexConstant(OpBuilder &builder, Location loc,
 }
 
 // Create an integer constant of \param width bits.
-Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, int width,
+Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
                                 int64_t value) {
   Type ty = builder.getIntegerType(width);
   return builder.create<LLVM::ConstantOp>(loc, ty,

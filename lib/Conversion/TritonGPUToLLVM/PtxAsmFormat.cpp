@@ -12,7 +12,7 @@ std::string strJoin(llvm::ArrayRef<std::string> strs,
                     llvm::StringRef delimiter) {
   std::string osStr;
   llvm::raw_string_ostream os(osStr);
-  for (size_t i = 0; !strs.empty() && i < strs.size() - 1; i++)
+  for (size_t i = 0; !strs.empty() && i < strs.size() - 1; ++i)
     os << strs[i] << delimiter;
   if (!strs.empty())
     os << strs.back();
@@ -85,11 +85,11 @@ mlir::Value PTXBuilder::launch(ConversionPatternRewriter &rewriter,
       loc, resTy, getAllMLIRArgs(), // operands
       dump(),                       // asm_string
       getConstraints(),             // constraints
-      true,                         // has_side_effects
-      false,                        // is_align_stack
+      hasSideEffect,                // has_side_effects
+      isAlignStack,                 // is_align_stack
       LLVM::AsmDialectAttr::get(ctx,
                                 LLVM::AsmDialect::AD_ATT), // asm_dialect
-      ArrayAttr::get(ctx, {})                              // operand_attrs
+      ArrayAttr::get(ctx, attrs)                           // operand_attrs
   );
 
   return inlineAsm.getRes();

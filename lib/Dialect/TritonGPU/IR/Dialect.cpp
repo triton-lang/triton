@@ -433,7 +433,7 @@ mlir::LogicalResult ExtractSliceOp::inferReturnTypes(
   if (axis < 0 || axis > srcShape.size())
     return failure();
   SmallVector<int64_t, 4> dstShape;
-  for (int i = 0; i < srcShape.size(); i++)
+  for (int i = 0; i < srcShape.size(); ++i)
     if (i != axis)
       dstShape.push_back(srcShape[i]);
   auto returnType =
