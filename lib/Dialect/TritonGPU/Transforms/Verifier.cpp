@@ -70,7 +70,7 @@ private:
     if (auto storeOp = llvm::dyn_cast<triton::StoreOp>(op)) {
       // TODO: fill this
     }
-    if (auto gepOp = llvm::dyn_cast<triton::GEPOp>(op)) {
+    if (auto addptrOp = llvm::dyn_cast<triton::AddPtrOp>(op)) {
       // TODO: fill this
     }
     // Triton builtin Ops

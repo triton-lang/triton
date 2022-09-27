@@ -1231,7 +1231,7 @@ public:
   }
 
   template <typename T> using cast_op_type = void *&;
-  operator void * &() { return value; }
+  operator void *&() { return value; }
   static constexpr auto name = _("capsule");
 
 private:
@@ -1336,9 +1336,12 @@ template <typename StringType, bool IsView = false> struct string_caster {
 #endif
     }
 
-    object utfNbytes = reinterpret_steal<object>(PyUnicode_AsEncodedString(
-        load_src.ptr(),
-        UTF_N == 8 ? "utf-8" : UTF_N == 16 ? "utf-16" : "utf-32", nullptr));
+    object utfNbytes = reinterpret_steal<object>(
+        PyUnicode_AsEncodedString(load_src.ptr(),
+                                  UTF_N == 8    ? "utf-8"
+                                  : UTF_N == 16 ? "utf-16"
+                                                : "utf-32",
+                                  nullptr));
     if (!utfNbytes) {
       PyErr_Clear();
       return false;
@@ -1377,20 +1380,21 @@ template <typename StringType, bool IsView = false> struct string_caster {
 private:
   static handle decode_utfN(const char *buffer, ssize_t nbytes) {
 #if !defined(PYPY_VERSION)
-    return UTF_N == 8
-               ? PyUnicode_DecodeUTF8(buffer, nbytes, nullptr)
-               : UTF_N == 16
-                     ? PyUnicode_DecodeUTF16(buffer, nbytes, nullptr, nullptr)
-                     : PyUnicode_DecodeUTF32(buffer, nbytes, nullptr, nullptr);
+    return UTF_N == 8 ? PyUnicode_DecodeUTF8(buffer, nbytes, nullptr)
+           : UTF_N == 16
+               ? PyUnicode_DecodeUTF16(buffer, nbytes, nullptr, nullptr)
+               : PyUnicode_DecodeUTF32(buffer, nbytes, nullptr, nullptr);
 #else
     // PyPy seems to have multiple problems related to PyUnicode_UTF*: the UTF8
     // version sometimes segfaults for unknown reasons, while the UTF16 and 32
     // versions require a non-const char * arguments, which is also a nuisance,
     // so bypass the whole thing by just passing the encoding as a string value,
     // which works properly:
-    return PyUnicode_Decode(
-        buffer, nbytes,
-        UTF_N == 8 ? "utf-8" : UTF_N == 16 ? "utf-16" : "utf-32", nullptr);
+    return PyUnicode_Decode(buffer, nbytes,
+                            UTF_N == 8    ? "utf-8"
+                            : UTF_N == 16 ? "utf-16"
+                                          : "utf-32",
+                            nullptr);
 #endif
   }
 
@@ -1495,11 +1499,12 @@ public:
     if (StringCaster::UTF_N == 8 && str_len > 1 && str_len <= 4) {
       unsigned char v0 = static_cast<unsigned char>(value[0]);
       size_t char0_bytes =
-          !(v0 & 0x80) ? 1 :            // low bits only: 0-127
-              (v0 & 0xE0) == 0xC0 ? 2 : // 0b110xxxxx - start of 2-byte sequence
-                  (v0 & 0xF0) == 0xE0 ? 3
-                                      : // 0b1110xxxx - start of 3-byte sequence
-                      4;                // 0b11110xxx - start of 4-byte sequence
+          !(v0 & 0x80) ? 1 : // low bits only: 0-127
+              (v0 & 0xE0) == 0xC0 ? 2
+                                  : // 0b110xxxxx - start of 2-byte sequence
+              (v0 & 0xF0) == 0xE0 ? 3
+                                  : // 0b1110xxxx - start of 3-byte sequence
+              4;                    // 0b11110xxx - start of 4-byte sequence
 
       if (char0_bytes == str_len) {
         // If we have a 128-255 value, we can decode it into a single char:
@@ -2040,7 +2045,7 @@ tuple make_tuple() {
 
 template <return_value_policy policy = return_value_policy::automatic_reference,
           typename... Args>
-tuple make_tuple(Args &&... args_) {
+tuple make_tuple(Args &&...args_) {
   constexpr size_t size = sizeof...(Args);
   std::array<object, size> args{
       {reinterpret_steal<object>(detail::make_caster<Args>::cast(
@@ -2261,7 +2266,7 @@ private:
 template <return_value_policy policy> class simple_collector {
 public:
   template <typename... Ts>
-  explicit simple_collector(Ts &&... values)
+  explicit simple_collector(Ts &&...values)
       : m_args(pybind11::make_tuple<policy>(std::forward<Ts>(values)...)) {}
 
   const tuple &args() const & { return m_args; }
@@ -2285,7 +2290,7 @@ private:
 /// Python function call
 template <return_value_policy policy> class unpacking_collector {
 public:
-  template <typename... Ts> explicit unpacking_collector(Ts &&... values) {
+  template <typename... Ts> explicit unpacking_collector(Ts &&...values) {
     // Tuples aren't (easily) resizable so a list is needed for collection,
     // but the actual function call strictly requires a tuple.
     auto args_list = list();
@@ -2407,7 +2412,7 @@ private:
 /// Collect only positional arguments for a Python function call
 template <return_value_policy policy, typename... Args,
           typename = enable_if_t<all_of<is_positional<Args>...>::value>>
-simple_collector<policy> collect_arguments(Args &&... args) {
+simple_collector<policy> collect_arguments(Args &&...args) {
   return simple_collector<policy>(std::forward<Args>(args)...);
 }
 
@@ -2415,7 +2420,7 @@ simple_collector<policy> collect_arguments(Args &&... args) {
 /// when needed)
 template <return_value_policy policy, typename... Args,
           typename = enable_if_t<!all_of<is_positional<Args>...>::value>>
-unpacking_collector<policy> collect_arguments(Args &&... args) {
+unpacking_collector<policy> collect_arguments(Args &&...args) {
   // Following argument order rules for generalized unpacking according to PEP
   // 448
   static_assert(constexpr_last<is_positional, Args...>() <
@@ -2430,14 +2435,14 @@ unpacking_collector<policy> collect_arguments(Args &&... args) {
 
 template <typename Derived>
 template <return_value_policy policy, typename... Args>
-object object_api<Derived>::operator()(Args &&... args) const {
+object object_api<Derived>::operator()(Args &&...args) const {
   return detail::collect_arguments<policy>(std::forward<Args>(args)...)
       .call(derived().ptr());
 }
 
 template <typename Derived>
 template <return_value_policy policy, typename... Args>
-object object_api<Derived>::call(Args &&... args) const {
+object object_api<Derived>::call(Args &&...args) const {
   return operator()<policy>(std::forward<Args>(args)...);
 }
 

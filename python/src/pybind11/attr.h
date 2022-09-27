@@ -554,13 +554,13 @@ struct process_attribute<keep_alive<Nurse, Patient>>
 
 /// Recursively iterate over variadic template arguments
 template <typename... Args> struct process_attributes {
-  static void init(const Args &... args, function_record *r) {
+  static void init(const Args &...args, function_record *r) {
     int unused[] = {
         0, (process_attribute<typename std::decay<Args>::type>::init(args, r),
             0)...};
     ignore_unused(unused);
   }
-  static void init(const Args &... args, type_record *r) {
+  static void init(const Args &...args, type_record *r) {
     int unused[] = {
         0, (process_attribute<typename std::decay<Args>::type>::init(args, r),
             0)...};

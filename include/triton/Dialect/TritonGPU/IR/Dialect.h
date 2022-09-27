@@ -16,4 +16,16 @@
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Ops.h.inc"
 
+namespace mlir {
+namespace triton {
+namespace gpu {
+
+unsigned getElemsPerThread(Attribute layout, ArrayRef<int64_t> shape);
+
+unsigned getShapePerCTA(const Attribute &layout, unsigned d);
+
+} // namespace gpu
+} // namespace triton
+} // namespace mlir
+
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_

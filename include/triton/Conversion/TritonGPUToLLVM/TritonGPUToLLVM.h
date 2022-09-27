@@ -18,6 +18,14 @@ public:
                                       mlir::LLVMTypeConverter &typeConverter);
 };
 
+class TritonLLVMFunctionConversionTarget : public ConversionTarget {
+  mlir::LLVMTypeConverter &typeConverter;
+
+public:
+  explicit TritonLLVMFunctionConversionTarget(
+      MLIRContext &ctx, mlir::LLVMTypeConverter &typeConverter);
+};
+
 namespace triton {
 
 // Names for identifying different NVVM annotations. It is used as attribute

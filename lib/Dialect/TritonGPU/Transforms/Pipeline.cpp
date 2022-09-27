@@ -25,7 +25,7 @@ class LoopPipeliner {
   /// cache forOp we are working on
   scf::ForOp forOp;
 
-  /// cahce YieldOp for this forOp
+  /// cache YieldOp for this forOp
   scf::YieldOp yieldOp;
 
   /// loads to be pipelined
@@ -301,9 +301,17 @@ void LoopPipeliner::emitPrologue() {
       }
 
       // If this is a load/async_copy, we need to update the mask
-      if (llvm::isa<triton::LoadOp, triton::gpu::InsertSliceAsyncOp>(newOp)) {
-        Value mask = llvm::isa<triton::LoadOp>(newOp) ? newOp->getOperand(1)
-                                                      : newOp->getOperand(3);
+      if (Value mask = [&]() {
+            if (auto loadOp = llvm::dyn_cast<triton::LoadOp>(newOp)) {
+              return loadOp.mask();
+            } else if (auto insertSliceAsyncOp =
+                           llvm::dyn_cast<triton::gpu::InsertSliceAsyncOp>(
+                               newOp)) {
+              return insertSliceAsyncOp.mask();
+            } else {
+              return mlir::Value();
+            }
+          }()) {
         // assert(I1 or TensorOf<[I1]>);
         OpBuilder::InsertionGuard g(builder);
         // TODO: move this out of the loop
@@ -347,16 +355,13 @@ void LoopPipeliner::emitPrologue() {
   // async.wait & extract_slice
   Operation *asyncWait = builder.create<triton::gpu::AsyncWaitOp>(
       loads[0].getLoc(), loads.size() * (numStages - 2));
+  loopIterIdx = builder.create<arith::ConstantIntOp>(iv.getLoc(), 0, 32);
   for (Value loadOp : loads) {
     Value extractSlice = builder.create<triton::gpu::ExtractSliceOp>(
         loadOp.getLoc(), loadsMapping[loadOp].getType(),
-        loadStageBuffer[loadOp][numStages - 1],
-        builder.create<arith::ConstantIntOp>(loadOp.getLoc(), 0, 32),
-        /*axis*/ 0);
+        loadStageBuffer[loadOp][numStages - 1], loopIterIdx, /*axis*/ 0);
     loadsExtract[loadOp] = extractSlice;
   }
-
-  loopIterIdx = builder.create<arith::ConstantIntOp>(iv.getLoc(), 0, 32);
 }
 
 scf::ForOp LoopPipeliner::createNewForOp() {

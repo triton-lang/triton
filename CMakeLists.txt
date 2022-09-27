@@ -184,7 +184,6 @@ target_link_libraries(triton
   TritonAnalysis
   TritonTransforms
   TritonGPUTransforms
-  TritonDriver
   TritonLLVMIR
   TritonPTX
   ${dialect_libs}

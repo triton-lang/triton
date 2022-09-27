@@ -20,10 +20,10 @@ std::string strJoin(llvm::ArrayRef<std::string> strs,
 
 PTXInstr::Operand *
 PTXBuilder::newOperand(mlir::Value value, StringRef constraint,
-                       std::function<std::string(int)> formater) {
+                       std::function<std::string(int)> formatter) {
   argArchive.emplace_back(std::make_unique<Operand>(value, constraint));
   auto *opr = argArchive.back().get();
-  opr->repr = formater;
+  opr->repr = formatter;
   opr->idx = oprCounter++;
   return opr;
 }
@@ -66,7 +66,7 @@ llvm::SmallVector<Value, 4> PTXBuilder::getAllMLIRArgs() const {
   return res;
 }
 
-SmallVector<PTXBuilder::Operand *> PTXBuilder::getAllArgs() const {
+SmallVector<PTXBuilder::Operand *, 4> PTXBuilder::getAllArgs() const {
   llvm::SmallVector<Operand *, 4> res;
   for (auto &x : argArchive)
     if (!x->isList())

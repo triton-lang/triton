@@ -13,7 +13,7 @@
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVM.h"
-#include "triton/driver/llvm.h"
+#include "triton/tools/sys/getenv.hpp"
 #include "llvm/IR/Constants.h"
 
 namespace mlir {
@@ -65,7 +65,7 @@ void extractNVVMMetadata(mlir::ModuleOp module,
     // maxntid
     if (op->hasAttr(NVVMMetadataField::MaxNTid)) {
       auto attr = op->getAttr(NVVMMetadataField::MaxNTid);
-      meta.maxntidx = attr.dyn_cast<IntegerAttr>().getSInt();
+      meta.maxntidx = attr.dyn_cast<IntegerAttr>().getInt();
       hasMetadata = true;
     }
 
@@ -98,7 +98,6 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
   }
 
   // Initialize LLVM targets.
-  ::triton::driver::init_llvm();
   mlir::ExecutionEngine::setupTargetTriple(llvmModule.get());
 
   auto optPipeline = mlir::makeOptimizingTransformer(
@@ -124,6 +123,17 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
                            mlir::ModuleOp module) {
   mlir::PassManager pm(module->getContext());
   applyPassManagerCLOptions(pm);
+  auto printingFlags = mlir::OpPrintingFlags();
+  printingFlags.elideLargeElementsAttrs(16);
+  pm.enableIRPrinting(
+      /*shouldPrintBeforePass=*/nullptr,
+      /*shouldPrintAfterPass=*/
+      [](mlir::Pass *pass, mlir::Operation *) {
+        return ::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
+      },
+      /*printModuleScope=*/false,
+      /*printAfterOnlyOnChange=*/true,
+      /*printAfterOnlyOnFailure*/ false, llvm::dbgs(), printingFlags);
 
   pm.addPass(createConvertTritonGPUToLLVMPass());
   // Conanicalize to eliminate the remaining UnrealizedConversionCastOp

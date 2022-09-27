@@ -44,7 +44,7 @@ class PTXInstrExecution;
 //
 // builder.getAllMlirArgs() // get {pVal, iVal, jVal, kVal}
 //
-// To get the string containing all the contraints with "," seperated,
+// To get the string containing all the constraints with "," separated,
 // builder.getConstraints() // get "=r,r,k"
 //
 // PTXBuilder can build a PTX asm with multiple instructions, sample code:
@@ -107,10 +107,10 @@ struct PTXBuilder {
   // Create a new operand. It will not add to operand list.
   // @value: the MLIR value bind to this operand.
   // @constraint: ASM operand constraint, .e.g. "=r"
-  // @formater: extra format to represent this operand in ASM code, default is
-  //            "%{0}".format(operand.idx).
+  // @formatter: extra format to represent this operand in ASM code, default is
+  //             "%{0}".format(operand.idx).
   Operand *newOperand(mlir::Value value, StringRef constraint,
-                      std::function<std::string(int idx)> formater = nullptr);
+                      std::function<std::string(int idx)> formatter = nullptr);
 
   // Create a new operand which is written to, that is, the constraint starts
   // with "=", e.g. "=r".
@@ -123,7 +123,7 @@ struct PTXBuilder {
 
   Operand *newAddrOperand(mlir::Value addr, StringRef constraint, int off = 0);
 
-  llvm::SmallVector<Operand *> getAllArgs() const;
+  llvm::SmallVector<Operand *, 4> getAllArgs() const;
 
   llvm::SmallVector<Value, 4> getAllMLIRArgs() const;
 
