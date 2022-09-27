@@ -833,11 +833,11 @@ struct StoreOpConversion
       auto wordTy = vec_ty(valueElemTy, wordNElems);
 
       auto *asmArgList = ptxBuilder.newListOperand();
-      for (int wordIdx = 0; wordIdx < nWords; wordIdx++) {
+      for (int wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         // llWord is a width-len composition
         Value llWord = rewriter.create<LLVM::UndefOp>(loc, wordTy);
         // Insert each value element to the composition
-        for (int elemIdx = 0; elemIdx < wordNElems; elemIdx++) {
+        for (int elemIdx = 0; elemIdx < wordNElems; ++elemIdx) {
           const size_t elemOffset = vecStart + wordIdx * wordNElems + elemIdx;
           assert(elemOffset < valueElems.size());
           Value elem = valueElems[elemOffset];
@@ -869,7 +869,7 @@ struct StoreOpConversion
       ptxStoreInstr(asmAddr, asmArgList).predicate(maskVal, "b");
       Type boolTy = getTypeConverter()->convertType(rewriter.getIntegerType(1));
       llvm::SmallVector<Type> argTys({boolTy, ptr.getType()});
-      for (int i = 0; i < nWords; i++)
+      for (int i = 0; i < nWords; ++i)
         argTys.push_back(valArgTy);
 
       auto ASMReturnTy = LLVM::LLVMVoidType::get(ctx);
@@ -1145,7 +1145,7 @@ struct LoadOpConversion
 
       // prepare asm operands
       auto *dstsOpr = ptxBuilder.newListOperand();
-      for (int wordIdx = 0; wordIdx < nWords; wordIdx++) {
+      for (int wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         auto *opr = ptxBuilder.newOperand(writeConstraint); // =r operations
         dstsOpr->listAppend(opr);
       }
@@ -1178,7 +1178,7 @@ struct LoadOpConversion
 
       SmallVector<Value> others;
       if (other) {
-        for (size_t ii = 0; ii < nWords; ii++) {
+        for (size_t ii = 0; ii < nWords; ++ii) {
           PTXInstr &mov = *ptxBuilder.create<>("mov");
           mov.o("u", width);
 
@@ -1186,7 +1186,7 @@ struct LoadOpConversion
 
           auto vecTy = LLVM::getFixedVectorType(valueElemTy, size);
           Value v = rewriter.create<LLVM::UndefOp>(loc, vecTy);
-          for (size_t s = 0; s < size; s++) {
+          for (size_t s = 0; s < size; ++s) {
             Value falseVal = otherElems[vecStart + ii * size + s];
             Value sVal = createIndexAttrConstant(
                 rewriter, loc, this->getTypeConverter()->getIndexType(), s);
@@ -1223,7 +1223,7 @@ struct LoadOpConversion
       // extract and store return values
       // ---
       SmallVector<Value> rets;
-      for (unsigned int ii = 0; ii < nWords; ii++) {
+      for (unsigned int ii = 0; ii < nWords; ++ii) {
         Value curr;
         if (retTy.isa<LLVM::LLVMStructType>()) {
           curr = extract_val(IntegerType::get(getContext(), width), ret,
@@ -1237,7 +1237,7 @@ struct LoadOpConversion
         rets.push_back(curr);
       }
       int tmp = width / valueElemNbits;
-      for (size_t ii = 0; ii < vec; ii++) {
+      for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(), ii % tmp);
         Value loaded = extract_element(valueElemTy, rets[ii / tmp], vecIdx);
@@ -1919,13 +1919,13 @@ public:
       if (kOrder == 1) {
         Value offset = i32_val(sOffsetElem);
 
-        for (int i = 0; i < 2; i++)
-          for (int j = 0; j < 4; j++)
+        for (int i = 0; i < 2; ++i)
+          for (int j = 0; j < 4; ++j)
             i8Elems[i][j] = load(gep(elemTy, ptrs[i][j], offset));
 
         offset = i32_val(sOffsetElem + sOffsetArrElem);
-        for (int i = 2; i < 4; i++)
-          for (int j = 0; j < 4; j++)
+        for (int i = 2; i < 4; ++i)
+          for (int j = 0; j < 4; ++j)
             i8Elems[i][j] = load(gep(elemTy, ptrs[i - 2][j], offset));
 
         for (int m = 0; m < 4; ++m) {
@@ -1936,14 +1936,14 @@ public:
         }
       } else { // k first
         Value offset = i32_val(sOffsetElem);
-        for (int j = 0; j < 4; j++)
+        for (int j = 0; j < 4; ++j)
           i8Elems[0][j] = load(gep(elemTy, ptrs[0][j], offset));
-        for (int j = 0; j < 4; j++)
+        for (int j = 0; j < 4; ++j)
           i8Elems[2][j] = load(gep(elemTy, ptrs[1][j], offset));
         offset = i32_val(sOffsetElem + sOffsetArrElem);
-        for (int j = 0; j < 4; j++)
+        for (int j = 0; j < 4; ++j)
           i8Elems[1][j] = load(gep(elemTy, ptrs[0][j], offset));
-        for (int j = 0; j < 4; j++)
+        for (int j = 0; j < 4; ++j)
           i8Elems[3][j] = load(gep(elemTy, ptrs[1][j], offset));
 
         for (int m = 0; m < 4; ++m) {
@@ -2437,7 +2437,7 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
 
     Type smemPtrTy = helper.getShemPtrTy();
     auto smemBase = getSharedMemoryBase(loc, rewriter, tensor);
-    for (int i = 0; i < numPtrs; i++) {
+    for (int i = 0; i < numPtrs; ++i) {
       ptrs[i] = bit_cast(
           smemPtrTy, gep(smemBase.getType(), smemBase, ValueRange({offs[i]})));
     }
@@ -2513,7 +2513,7 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
     assert(hc.size() == 4UL && "Only splat-like C is supported now");
 
     auto cArgs = builder.newListOperand();
-    for (int i = 0; i < hc.size(); i++) {
+    for (int i = 0; i < hc.size(); ++i) {
       cArgs->listAppend(builder.newOperand(
           hc[i], std::to_string(i))); // reuse the output registers
     }
@@ -2538,13 +2538,13 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
 
   // Main program
 
-  for (unsigned k = 0; k < numRepK; k++) {
-    for (unsigned m = 0; m < numRepM; m++)
+  for (unsigned k = 0; k < numRepK; ++k) {
+    for (unsigned m = 0; m < numRepM; ++m)
       loadA(2 * m, 2 * k);
     for (unsigned n = 0; n < numRepN; n += 2)
       loadB(n, 2 * k);
-    for (unsigned m = 0; m < numRepM; m++)
-      for (unsigned n = 0; n < numRepN; n++) {
+    for (unsigned m = 0; m < numRepM; ++m)
+      for (unsigned n = 0; n < numRepN; ++n) {
         callMma(2 * m, n, 2 * k);
       }
   }

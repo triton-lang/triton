@@ -118,7 +118,7 @@ struct PTXBuilder {
   Operand *newListOperand(unsigned count, mlir::Value val,
                           const std::string &constraint) {
     auto *list = newOperand();
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < count; ++i) {
       list->listAppend(newOperand(val, constraint));
     }
     return list;
@@ -126,7 +126,7 @@ struct PTXBuilder {
 
   Operand *newListOperand(unsigned count, const std::string &constraint) {
     auto *list = newOperand();
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < count; ++i) {
       list->listAppend(newOperand(constraint));
     }
     return list;
