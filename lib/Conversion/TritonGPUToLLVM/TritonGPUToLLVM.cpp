@@ -1089,7 +1089,6 @@ struct LoadOpConversion
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-
     Value ptr = op.ptr();
     Value mask = op.mask();
     Value other = op.other();
@@ -2560,6 +2559,9 @@ struct AsyncWaitOpConversion
                                   LLVM::AsmDialect::AD_ATT), // asm_dialect
         ArrayAttr::get(ctx, {})                              // operand_attrs
     );
+
+    rewriter.replaceOp(op, inlineAsm.getResults());
+    return success();
   }
 };
 
@@ -2579,8 +2581,7 @@ struct InsertSliceAsyncOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::InsertSliceAsyncOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    auto ctx = op.getContext();
+    
   }
 };
 
