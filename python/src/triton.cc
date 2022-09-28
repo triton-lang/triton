@@ -1167,6 +1167,8 @@ void init_triton_ir(py::module &&m) {
            })
       .def("add_cse_pass",
            [](mlir::PassManager &self) { self.addPass(mlir::createCSEPass()); })
+      .def("add_licm_pass",
+            [](mlir::PassManager &self) { self.addPass(mlir::createLoopInvariantCodeMotionPass()); })
       .def("add_triton_combine_pass",
            [](mlir::PassManager &self) {
              self.addPass(mlir::triton::createCombineOpsPass());
