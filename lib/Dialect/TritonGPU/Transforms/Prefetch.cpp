@@ -1,3 +1,30 @@
+//===----------------------------------------------------------------------===//
+//
+// This pass tries to prefetch operands (a and b) of tt.dot.
+// Those ConvertLayoutOps will be lowered to shared memory loads.
+//
+// For example:
+// %a: tensor<128x32xf16, #enc>
+// scf.for %iv = ... iter_args(%a_arg = %a, ...) {
+//   %d = tt.dot %a_arg, %b, %c
+//   ...
+//   scf.yield %a_next, ...
+// }
+//
+// will be translated to
+//
+// %a: tensor<128x32xf16, #enc>
+// %a_tmp = tensor.extract_slice %a[0, 0] [128, 16]
+// %a_prefetch = triton_gpu.convert_layout %a_tmp
+// scf.for %iv = ... iter_args(%a_buf = %a, ..., %a_prefetch_arg = %a_prefetch) {
+//   %x = tt.dot %a_arg, %b, %c
+//   %a_tmp_rem = tensor.extract_slice %a_buf[0, 16] [128, 16]
+//   %a_prefetch_next = triton_gpu.convert_layout %a_tmp_rem
+//   ...
+//   scf.yield %next_a, ..., %a_prefetch_next
+// }
+//===----------------------------------------------------------------------===//
+
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
