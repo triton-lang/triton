@@ -16,7 +16,8 @@
 // %a: tensor<128x32xf16, #enc>
 // %a_tmp = tensor.extract_slice %a[0, 0] [128, 16]
 // %a_prefetch = triton_gpu.convert_layout %a_tmp
-// scf.for %iv = ... iter_args(%a_buf = %a, ..., %a_prefetch_arg = %a_prefetch) {
+// scf.for %iv = ... iter_args(%a_buf = %a, ..., %a_prefetch_arg = %a_prefetch)
+// {
 //   %x = tt.dot %a_arg, %b, %c
 //   %a_tmp_rem = tensor.extract_slice %a_buf[0, 16] [128, 16]
 //   %a_prefetch_next = triton_gpu.convert_layout %a_tmp_rem
