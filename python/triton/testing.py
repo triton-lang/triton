@@ -102,7 +102,6 @@ def allclose(x, y, tol=1e-2):
     diff = abs(x - y)
     x_max = torch.max(x)
     y_max = torch.max(y)
-    tol = 1e-2
     err = torch.max(diff) / torch.max(x_max, y_max)
     return err <= tol
 
