@@ -406,7 +406,7 @@ public:
         oldAcc.getLoc(), newRetType, oldAcc);
     auto newDot = rewriter.create<triton::DotOp>(
         dotOp.getLoc(), newRetType, dotOp.getOperand(0), dotOp.getOperand(1),
-        newAcc, dotOp.allowTF32());
+        newAcc, dotOp.allowTF32(), dotOp.transA(), dotOp.transB());
 
     rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
         op, oldRetType, newDot.getResult());

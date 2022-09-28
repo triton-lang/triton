@@ -42,7 +42,7 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
   addArgumentMaterialization([&](OpBuilder &builder,
                                  RankedTensorType tensorType, ValueRange inputs,
                                  Location loc) {
-    llvm_unreachable("Not implemented");
+    llvm_unreachable("Argument rematerialization not implemented");
     return llvm::None;
   });
 
@@ -50,7 +50,7 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
   // convert origValue to newValue
   addSourceMaterialization([&](OpBuilder &builder, RankedTensorType tensorType,
                                ValueRange inputs, Location loc) {
-    llvm_unreachable("Not implemented");
+    llvm_unreachable("Source rematerialization not implemented");
     return llvm::None;
   });
 

@@ -47,7 +47,7 @@ def _fwd_kernel(
     q = tl.load(q_ptrs)
     # loop over k, v and update accumulator
     for start_n in range(0, (start_m + 1) * BLOCK_M, BLOCK_N):
-        start_n = tl.multiple_of(start_n, BLOCK_N)
+        # start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
         k = tl.load(k_ptrs + start_n * stride_kn)
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)

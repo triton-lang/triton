@@ -32,10 +32,10 @@ def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
   let assemblyFormat = "attr-dict";
 }
 
-// Port Arith_CmpIOp & Arith_CmpFOp to TritonGPU.
-// This is needed because Arith's Cmp ops don't
+// Port Arith_CmpIOp & Arith_CmpFOp & Std_SelectOp to TritonGPU.
+// This is needed because these ops don't
 // handle encodings
-// https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Arithmetic/IR/ArithmeticOps.td#L111
+// e.g., https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Arithmetic/IR/ArithmeticOps.td#L111
 def TTG_CmpIOp : TTG_Op<"cmpi", [NoSideEffect]> {
   let summary = "integer comparison operation";
 
@@ -59,6 +59,20 @@ def TTG_CmpFOp : TTG_Op<"cmpf"> {
 
   let results = (outs TT_BoolLike:$result);
 }
+
+// TODO: migrate to arith::SelectOp on LLVM16
+def TTG_SelectOp : TTG_Op<"select"> {
+  let summary = "select operation";
+
+  let description = [{}];
+
+  let arguments = (ins TT_BoolLike:$condition,
+                       TT_Tensor:$true_value,
+                       TT_Tensor:$false_value);
+
+  let results = (outs TT_Tensor:$result);
+}
+
 
 def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
                                     [SameVariadicOperandSize,
