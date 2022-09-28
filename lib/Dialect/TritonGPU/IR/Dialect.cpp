@@ -87,7 +87,6 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
   } else {
     assert(0 && "Unimplemented usage of getShapePerCTA");
   }
-
   return shape;
 }
 
@@ -104,7 +103,7 @@ SmallVector<unsigned> getOrder(const Attribute &layout) {
     assert(0 && "Unimplemented usage of getOrder");
     return {};
   }
-}
+};
 
 } // namespace gpu
 } // namespace triton
@@ -215,9 +214,12 @@ unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
 }
 
 unsigned MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
-  int threads = product(getWarpsPerCTA());
-  int numElem = product(shape);
-  return numElem / threads;
+  size_t rank = shape.size();
+  assert(rank == 2 && "Unexpected rank of mma layout");
+  assert(getVersion() == 2 && "mmaLayout version = 1 is not implemented yet");
+  unsigned elemsCol = ceil<unsigned>(shape[0], 16 * getWarpsPerCTA()[0]) * 2;
+  unsigned elemsRow = ceil<unsigned>(shape[1], 8 * getWarpsPerCTA()[1]) * 2;
+  return elemsCol * elemsRow;
 }
 
 unsigned SharedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
