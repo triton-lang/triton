@@ -331,12 +331,11 @@ def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding"> {
 
   let parameters = (
     ins
-    "unsigned":$opNum,
+    "unsigned":$opIdx,
     "Attribute":$parent
   );
 
-  // TODO: what's this?
-  // let extraClassDeclaration = extraBaseClassDeclaration;
+  let extraClassDeclaration = extraBaseClassDeclaration;
 }
 
 

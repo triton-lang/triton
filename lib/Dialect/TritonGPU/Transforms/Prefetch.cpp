@@ -36,6 +36,8 @@ class Prefetcher {
                          Attribute mmaEncoding, OpBuilder &builder);
 
 public:
+  Prefetcher() = delete;
+
   Prefetcher(scf::ForOp forOp) : forOp(forOp) {
     yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
   }
@@ -82,12 +84,12 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrefetch,
 LogicalResult Prefetcher::initialize() {
   Block *loop = forOp.getBody();
 
-  SmallVector<triton::DotOp> allDots;
+  SmallVector<triton::DotOp> dotsInFor;
   for (Operation &op : *loop)
     if (auto dotOp = dyn_cast<triton::DotOp>(op))
-      allDots.push_back(dotOp);
+      dotsInFor.push_back(dotOp);
 
-  if (allDots.empty())
+  if (dotsInFor.empty())
     return failure();
 
   auto getIncomingOp = [this](Value v) -> Value {
@@ -104,7 +106,7 @@ LogicalResult Prefetcher::initialize() {
   };
 
   // Only prefetch loop arg
-  for (triton::DotOp dot : allDots) {
+  for (triton::DotOp dot : dotsInFor) {
     if (Value op = getIncomingOp(dot.a())) {
       dot2aDef[dot] = op;
       dot2aArg[dot] = dot.a();
@@ -205,7 +207,7 @@ scf::ForOp Prefetcher::createNewForOp() {
       mapping.map(op.getResult(dstIdx), newOp->getResult(dstIdx));
   }
 
-  // prefetch next itartion
+  // prefetch next iteration
   SmallVector<Value> yieldValues;
   for (Value v : forOp.getBody()->getTerminator()->getOperands())
     yieldValues.push_back(mapping.lookup(v));

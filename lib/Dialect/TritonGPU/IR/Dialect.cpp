@@ -385,12 +385,12 @@ Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseGreater().failed())
     return {};
 
-  unsigned opNum = 0;
+  unsigned opIdx = 0;
   Attribute parent;
 
   for (const NamedAttribute &attr : dict) {
-    if (attr.getName() == "opNum") {
-      if (parseUInt(parser, attr, opNum, "opNum").failed())
+    if (attr.getName() == "opIdx") {
+      if (parseUInt(parser, attr, opIdx, "opIdx").failed())
         return {};
     }
     if (attr.getName() == "parent") {
@@ -399,13 +399,13 @@ Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
     }
   }
 
-  return parser.getChecked<DotOperandEncodingAttr>(parser.getContext(), opNum,
+  return parser.getChecked<DotOperandEncodingAttr>(parser.getContext(), opIdx,
                                                    parent);
 }
 
 void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
   printer << "<{"
-          << "opNum = " << getOpNum() << ", "
+          << "opIdx = " << getOpIdx() << ", "
           << "parent = " << getParent() << "}>";
 }
 
