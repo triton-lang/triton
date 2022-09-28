@@ -69,8 +69,6 @@ def _fwd_kernel(
         p = p * p_scale[:, None]
         # scale acc
         acc_scale = l_i / l_i_new * alpha
-        tl.store(t_ptrs, acc_scale)
-        acc_scale = tl.load(t_ptrs)  # BUG: have to store and immediately load
         acc = acc * acc_scale[:, None]
         # update acc
         v = tl.load(v_ptrs + start_n * stride_vk)

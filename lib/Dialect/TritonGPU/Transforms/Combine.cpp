@@ -113,6 +113,10 @@ public:
                   mlir::PatternRewriter &rewriter) const override {
     if (!llvm::isa<triton::gpu::ConvertLayoutOp>(cvt))
       return mlir::failure();
+    // we don't want to rematerialize any conversion to/from shared
+    // if (isSharedLayout(cvt->getResults()[0]) || isSharedLayout(cvt->getOperand(0)))
+    //   return mlir::failure();
+
     // constants/splat are handled separately
     Operation *op = cvt->getOperand(0).getDefiningOp();
     if (!op)
@@ -333,6 +337,10 @@ public:
   matchAndRewrite(mlir::Operation *_cvtOp,
                   mlir::PatternRewriter &rewriter) const override {
     auto cvt = cast<triton::gpu::ConvertLayoutOp>(_cvtOp);
+    // we don't want to rematerialize any conversion to/from shared
+    // if (isSharedLayout(cvt->getResults()[0]) || isSharedLayout(cvt->getOperand(0)))
+    //   return mlir::failure();
+    //
     auto forOp = dyn_cast<scf::ForOp>(cvt->getParentOp());
     if (!forOp)
       return mlir::failure();

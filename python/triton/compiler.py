@@ -853,6 +853,7 @@ def optimize_tritongpu_ir(mod, num_stages):
     pm.add_cse_pass()
     pm.add_coalesce_pass()
     pm.add_triton_gpu_combine_pass()
+    pm.add_cse_pass()
     pm.add_triton_gpu_verifier_pass()
     pm.run(mod)
     return mod
@@ -954,9 +955,9 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
 
     # tritongpu-ir
     module = make_tritongpu_ir(module, num_warps)
+    module = optimize_tritongpu_ir(module, num_stages)
     print(module.str())
     exit(1)
-    module = optimize_tritongpu_ir(module, num_stages)
     if output == "ttgir":
         return module.str()
 
