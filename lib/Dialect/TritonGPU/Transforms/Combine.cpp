@@ -120,8 +120,8 @@ public:
 
     auto blacklist = [](Operation *op) {
       if (isa<triton::gpu::ExtractSliceOp, triton::gpu::AllocTensorOp,
-              triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp>(
-              op))
+              triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp,
+              triton::DotOp>(op))
         return true;
       if (isa<scf::YieldOp, scf::ForOp>(op))
         return true;

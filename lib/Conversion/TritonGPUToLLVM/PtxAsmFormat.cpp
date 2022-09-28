@@ -1,4 +1,6 @@
 #include "triton/Conversion/TritonGPUToLLVM/PtxAsmFormat.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Transforms/DialectConversion.h"
 #include "llvm/Support/raw_ostream.h"
 #include <sstream> // unify to llvm::raw_string_ostream ?
 
@@ -10,7 +12,7 @@ std::string strJoin(llvm::ArrayRef<std::string> strs,
                     llvm::StringRef delimiter) {
   std::string osStr;
   llvm::raw_string_ostream os(osStr);
-  for (size_t i = 0; !strs.empty() && i < strs.size() - 1; i++)
+  for (size_t i = 0; !strs.empty() && i < strs.size() - 1; ++i)
     os << strs[i] << delimiter;
   if (!strs.empty())
     os << strs.back();
@@ -72,6 +74,25 @@ SmallVector<PTXBuilder::Operand *, 4> PTXBuilder::getAllArgs() const {
     if (!x->isList())
       res.push_back(x.get());
   return res;
+}
+
+mlir::Value PTXBuilder::launch(ConversionPatternRewriter &rewriter,
+                               Location loc, Type resTy, bool hasSideEffect,
+                               bool isAlignStack,
+                               ArrayRef<Attribute> attrs) const {
+  auto *ctx = rewriter.getContext();
+  auto inlineAsm = rewriter.create<LLVM::InlineAsmOp>(
+      loc, resTy, getAllMLIRArgs(), // operands
+      dump(),                       // asm_string
+      getConstraints(),             // constraints
+      hasSideEffect,                // has_side_effects
+      isAlignStack,                 // is_align_stack
+      LLVM::AsmDialectAttr::get(ctx,
+                                LLVM::AsmDialect::AD_ATT), // asm_dialect
+      ArrayAttr::get(ctx, attrs)                           // operand_attrs
+  );
+
+  return inlineAsm.getRes();
 }
 
 std::string PTXInstr::Operand::dump() const {
@@ -151,5 +172,6 @@ PTXInstrExecution::getArgList() const {
   }
   return args;
 }
+
 } // namespace triton
 } // namespace mlir
