@@ -2622,7 +2622,7 @@ struct AsyncWaitOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     PTXBuilder ptxBuilder;
     auto &asyncWaitOp = *ptxBuilder.create<PTXCpAsyncWaitGroupInstr>();
-    int num = op->getAttrOfType<IntegerAttr>("num").getInt();
+    auto num = op->getAttrOfType<IntegerAttr>("num").getInt();
     asyncWaitOp(ptxBuilder.newConstantOperand(num));
 
     auto ctx = op.getContext();

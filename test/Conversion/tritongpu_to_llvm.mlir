@@ -331,6 +331,17 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
 // -----
 
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+  // CHECK-LABEL: basic_async_wait
+  func @basic_async_wait() {
+    // CHECK: cp.async.wait_group 0x4
+    triton_gpu.async_wait {num = 4: i32}
+    return
+  }
+}
+
+// -----
+
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK: basic_splat
