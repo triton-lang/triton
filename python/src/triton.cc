@@ -437,46 +437,51 @@ typedef std::map<std::string, py::object> asm_map_t;
 void init_triton_codegen(py::module &&m) {
   m.def("compile_ttir",
       [](backend_t backend, ir::module &ir, uint64_t device, int num_warps, int num_stages, py::dict& extern_libs, size_t cc) {
-          py::gil_scoped_release allow_threads;
-          std::string name = ir.get_function_list()[0]->get_name();
-          // record asm as we generate
-          asm_map_t asm_map;
           std::ostringstream ttir;
-          ir.print(ttir);
-          asm_map["ttir"] = py::cast(ttir.str());
-          llvm::LLVMContext ctx;
-          // construct extern lib map
-          triton::codegen::ExternLibMap extern_lib_map;
-          for (auto item : extern_libs) {
-            auto name = item.first.cast<std::string>();
-            auto path = item.second.cast<std::string>();
-            extern_lib_map.emplace(
-                name, triton::codegen::create_extern_lib(name, path));
-          }
-          // device properties
-          if (cc == 0) {
-            CUdevice dev = (CUdevice)device;
-            size_t major = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>(dev);
-            size_t minor = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR>(dev);
-            cc = major*10 + minor;
-          }
-          int version;
-          std::string ptxas_path = drv::path_to_ptxas(version);
-          // Triton-IR -> NVPTX LLVM-IR
-          triton::codegen::nvidia_cu_target target(cc);
           int n_shared_bytes;
-          auto llvm = triton::codegen::add_passes_to_emit_bin(
-              ir, ctx, &target, num_warps, num_stages, n_shared_bytes, extern_lib_map);
           std::string tmp;
-          llvm::raw_string_ostream llir(tmp);
-          llir << *llvm;
-          llir.flush();
+          std::string ptx;
+          std::string cubin;
+          std::string name;
+          { // Scope where the GIL is released
+            py::gil_scoped_release allow_threads;
+            name = ir.get_function_list()[0]->get_name();
+            ir.print(ttir);
+            llvm::LLVMContext ctx;
+            // construct extern lib map
+            triton::codegen::ExternLibMap extern_lib_map;
+            for (auto item : extern_libs) {
+              auto name = item.first.cast<std::string>();
+              auto path = item.second.cast<std::string>();
+              extern_lib_map.emplace(
+                  name, triton::codegen::create_extern_lib(name, path));
+            }
+            // device properties
+            if (cc == 0) {
+              CUdevice dev = (CUdevice)device;
+              size_t major = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR>(dev);
+              size_t minor = cuGetInfo<CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR>(dev);
+              cc = major*10 + minor;
+            }
+            int version;
+            std::string ptxas_path = drv::path_to_ptxas(version);
+            // Triton-IR -> NVPTX LLVM-IR
+            triton::codegen::nvidia_cu_target target(cc);
+            auto llvm = triton::codegen::add_passes_to_emit_bin(
+                ir, ctx, &target, num_warps, num_stages, n_shared_bytes, extern_lib_map);
+            llvm::raw_string_ostream llir(tmp);
+            llir << *llvm;
+            llir.flush();
+            // LLVM-IR -> PTX
+            ptx = drv::llir_to_ptx(llvm.get(), cc, version);
+            // PTX -> Binary
+            cubin = drv::ptx_to_cubin(ptx, ptxas_path, cc);
+          }
+          asm_map_t asm_map;
+          asm_map["ttir"] = py::cast(ttir.str());
           asm_map["llir"] = py::cast(tmp);
-          // LLVM-IR -> PTX
-          std::string ptx = drv::llir_to_ptx(llvm.get(), cc, version);
           asm_map["ptx"] = py::cast(ptx);
-          // PTX -> Binary
-          std::string cubin = drv::ptx_to_cubin(ptx, ptxas_path, cc);
+
           if(!cubin.empty()){
             py::bytes bytes(cubin);
             asm_map["cubin"] = bytes;
