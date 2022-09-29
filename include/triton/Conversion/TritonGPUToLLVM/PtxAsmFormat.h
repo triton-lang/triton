@@ -190,6 +190,7 @@ struct PTXInstrCommon {
   using Operand = PTXBuilder::Operand;
 
   // clang-format off
+  PTXInstrExecution& operator()() { return call({}); }
   PTXInstrExecution& operator()(Operand* a) { return call({a}); }
   PTXInstrExecution& operator()(Operand* a, Operand* b) { return call({a, b}); }
   PTXInstrExecution& operator()(Operand* a, Operand* b, Operand* c) { return call({a, b, c}); }
@@ -283,13 +284,15 @@ struct PTXCpAsyncWaitGroupInstr : public PTXCpAsyncInstrBase {
   }
 };
 
-struct PTXCpAsyncPrefetchInstr : public PTXCpAsyncInstrBase {
-  explicit PTXCpAsyncPrefetchInstr(PTXBuilder *builder,
-                                   triton::CacheModifier modifier)
+struct PTXCpAsyncLoadInstr : public PTXCpAsyncInstrBase {
+  explicit PTXCpAsyncLoadInstr(PTXBuilder *builder,
+                               triton::CacheModifier modifier,
+                               triton::EvictionPolicy policy)
       : PTXCpAsyncInstrBase(builder) {
     o(triton::stringifyCacheModifier(modifier).str());
     o("shared");
     o("global");
+    o("L2::" + triton::stringifyEvictionPolicy(policy).str());
   }
 };
 

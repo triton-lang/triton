@@ -32,6 +32,7 @@ using ::mlir::triton::gpu::getElemsPerThread;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getSizePerThread;
+using ::mlir::triton::gpu::getThreadsPerCTA;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
@@ -691,16 +692,9 @@ struct LoadStoreConversionBase : public ConvertTritonGPUOpToLLVMPatternBase {
     if (!value)
       return {};
 
-    auto ty = value.getType().cast<RankedTensorType>();
-    auto shape = ty.getShape();
+    auto shape = value.getType().cast<RankedTensorType>().getShape();
     // Here, we assume that all inputs should have a blockedLayout
-
     unsigned valueElems = layout.getElemsPerThread(shape);
-
-    auto llvmElemTy = typeConverter->convertType(ty.getElementType());
-    auto llvmElemPtrPtrTy =
-        LLVM::LLVMPointerType::get(LLVM::LLVMPointerType::get(llvmElemTy));
-
     auto valueVals = getElementsFromStruct(loc, llValue, valueElems, rewriter);
     return valueVals;
   }
@@ -2629,25 +2623,16 @@ struct AsyncWaitOpConversion
   matchAndRewrite(triton::gpu::AsyncWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     PTXBuilder ptxBuilder;
-    auto &inst = *ptxBuilder.create<PTXCpAsyncWaitGroupInstr>();
+    auto &asyncWaitOp = *ptxBuilder.create<PTXCpAsyncWaitGroupInstr>();
     int num = op->getAttrOfType<IntegerAttr>("num").getInt();
-    inst(ptxBuilder.newConstantOperand(num));
+    asyncWaitOp(ptxBuilder.newConstantOperand(num));
 
     auto ctx = op.getContext();
     auto loc = op.getLoc();
-    auto ASMReturnTy = LLVM::LLVMVoidType::get(ctx);
-    auto inlineAsm = rewriter.create<LLVM::InlineAsmOp>(
-        loc, ASMReturnTy, ptxBuilder.getAllMLIRArgs(), // operands
-        ptxBuilder.dump(),                             // asm_string
-        ptxBuilder.getConstraints(),                   // constraints
-        false,                                         // has_side_effects
-        false,                                         // is_align_stack
-        LLVM::AsmDialectAttr::get(ctx,
-                                  LLVM::AsmDialect::AD_ATT), // asm_dialect
-        ArrayAttr::get(ctx, {})                              // operand_attrs
-    );
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+    auto ret = ptxBuilder.launch(rewriter, loc, voidTy);
 
-    rewriter.replaceOp(op, inlineAsm.getResults());
+    rewriter.replaceOp(op, ret);
     return success();
   }
 };
@@ -2668,7 +2653,169 @@ struct InsertSliceAsyncOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::InsertSliceAsyncOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    
+    // insert_slice_async %src, %dst, %index, %mask, %other
+    auto loc = op.getLoc();
+    Value src = op.src();
+    Value dst = op.dst();
+    Value res = op.result();
+    Value mask = op.mask();
+    Value other = op.other();
+    assert(allocation->getBufferId(res) == allocation->getBufferId(dst) &&
+           "Only support in-place insert_slice_async for now");
+
+    auto srcTy = src.getType().cast<RankedTensorType>();
+    auto resTy = dst.getType().cast<RankedTensorType>();
+    auto srcBlockedLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
+    auto resSharedLayout = resTy.getEncoding().cast<SharedEncodingAttr>();
+    auto srcShape = srcTy.getShape();
+    assert(srcShape.size() == 2 &&
+           "Unexpected rank of insert_slice_async");
+
+    Value llDst = adaptor.dst();
+    Value llSrc = adaptor.src();
+    Value llMask = adaptor.mask();
+    Value llOther = adaptor.other();
+    Value llIndex = adaptor.index();
+
+    // %src
+    auto srcElems = getLLVMElems(src, llSrc, srcBlockedLayout,
+                                 getTypeConverter(), rewriter, loc);
+    auto srcElemTy = srcTy.getElementType();
+
+    // %dst
+    auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
+    assert(axis == 0 && "Only axis=0 is supported for now");
+    auto dstBase = createIndexAttrConstant(rewriter, loc,
+                                           getTypeConverter()->getIndexType(),
+                                           product<int64_t>(resTy.getShape()));
+    Value offset = rewriter.create<LLVM::MulOp>(loc, adaptor.index(), dstBase);
+    auto dstElemTy = getTypeConverter()->convertType(resTy.getElementType());
+    Value dstElemBase = rewriter.create<LLVM::GEPOp>(
+        loc, LLVM::LLVMPointerType::get(dstElemTy, 3), llDst, offset);
+
+    // %mask
+    SmallVector<Value> maskElems;
+    if (llMask) {
+      maskElems = getLLVMElems(mask, llMask, srcBlockedLayout,
+                               getTypeConverter(), rewriter, loc);
+      assert(srcElems.size() == maskElems.size());
+    }
+
+    // %other
+    // XXX(Keren): Incorporating the constant optimization here if needed.
+    SmallVector<Value> otherElems;
+    if (llOther) {
+      otherElems = getLLVMElems(other, llOther, srcBlockedLayout,
+                                getTypeConverter(), rewriter, loc);
+      assert(srcElems.size() == otherElems.size());
+    }
+
+    unsigned inVec = getVectorizeSize(src, srcBlockedLayout);
+    unsigned outVec = resSharedLayout.getVec();
+    unsigned minVec = std::min(outVec, inVec);
+    unsigned numElems = getElemsPerThread(srcBlockedLayout, srcShape);
+    unsigned perPhase = resSharedLayout.getPerPhase();
+    unsigned maxPhase = resSharedLayout.getMaxPhase();
+    auto sizePerThread = srcBlockedLayout.getSizePerThread();
+    auto threadsPerWarp = srcBlockedLayout.getThreadsPerWarp();
+    auto warpsPerCTA = srcBlockedLayout.getWarpsPerCTA();
+    auto threadsPerCTA = getThreadsPerCTA(srcBlockedLayout);
+
+    auto inOrder = srcBlockedLayout.getOrder();
+    auto outOrder = resSharedLayout.getOrder();
+    // A sharedLayout encoding has a "vec" parameter.
+    // If the following condition is true, it means we have to remap from
+    // blocked layout to shared layout.
+    // - On the row dimension, if perPhase * maxPhase > threadsPerCTA[inOrder[1]],
+    // - On the column dimension, if inVec > outVec
+    auto numReadsPerThreadRow =
+        std::max<unsigned>(perPhase * maxPhase / threadsPerCTA[inOrder[1]], 1);
+    auto numReadsPerThreadCol = std::max<unsigned>(inVec / outVec, 1);
+
+    auto srcIndices = emitIndices(loc, rewriter, srcBlockedLayout, srcShape);
+    DenseMap<std::pair<unsigned, unsigned>, Value> tileOffsetMap;
+    // <BaseOffset, TileOffset>
+    for (unsigned vecIdx = 0; vecIdx < numElems; vecIdx += minVec) {
+      //            baseOffsetCol = 0   baseOffsetCol = 1 * 128
+      //                -/\-              -/\-
+      //               [|x x| x x x x ... |x x| x x x x x]
+      //               [|x x| x x x x ... |x x| x x x x x]  
+      // baseOffsetRow [|x x| x x x x ... |x x| x x x x x]
+      //               [|x x| x x x x ... |x x| x x x x x]
+      auto vecIdxCol = vecIdx % (sizePerThread[inOrder[0]] / minVec);
+      auto vecIdxRow = vecIdx / (sizePerThread[inOrder[0]] / minVec);
+      auto baseOffsetCol = vecIdxCol / numReadsPerThreadCol *
+                        numReadsPerThreadCol * threadsPerCTA[inOrder[0]];
+      auto baseOffsetRow = vecIdxRow / numReadsPerThreadRow *
+                        numReadsPerThreadRow * threadsPerCTA[inOrder[1]];
+      auto baseOffset = (baseOffsetRow * srcShape[inOrder[0]] + baseOffsetCol);
+      // A thread tile
+      //  tileVecIdxCol=0   tileVecIdxCol=3
+      //       -/\-            -/\-   sizePerThread[inOrder[0]]
+      //     | [x x]   ...    [x x] |
+      //     | [x x]   ...    [x x] |
+      //     | [x x]   ...    [x x] | 
+      //     | [x x]   ...    [x x] |
+      auto tileVecIdxCol = vecIdxCol % numReadsPerThreadCol;
+      auto tileVecIdxRow = vecIdxRow % numReadsPerThreadRow;
+
+      if (!tileOffsetMap.count({tileVecIdxRow, tileVecIdxCol})) {
+        auto srcIdx = srcIndices[tileVecIdxRow * sizePerThread[inOrder[0]]];
+        Value phase = urem(udiv(srcIdx[inOrder[1]], i32_val(perPhase)),
+                           i32_val(maxPhase));
+        Value rowOffset = mul(srcIdx[inOrder[1]], i32_val(srcShape[inOrder[0]]));
+        // Swizzling
+        // Since the swizzling index is related to outVec, and we know minVec
+        // already, inVec doesn't matter
+        //
+        // Example1:
+        // outVec = 2, inVec = 2, minVec = 2
+        // outVec = 2, inVec = 4, minVec = 2
+        //     | [1 2] [3 4]  ... [15 16] |
+        //     | [3 4] [5 6]  ... [1 2]   |
+        // Example2:
+        // outVec = 4, inVec = 2, minVec = 2
+        //     | [1 2] [3 4]  ... [15 16] |
+        //     | [3 4] [5 6]  ... [1 2]   |
+        //                  |
+        //                 \|/
+        //     | [1 2 3 4] [5 6 7 8] ... [13 14 15 16] |
+        //     | [5 6 7 8] [9 10 11 12] ... [1 2 3 4]  |
+        Value colOffset = add(srcIdx[inOrder[0]], i32_val(tileVecIdxCol * minVec));
+        // colOffset / minVec / (outVec / minVec) = colOffset / outVec
+        // Equivalent to:
+        // Value swizzleIdx = udiv(udiv(colOffset, i32_val(minVec)), i32_val(outVec));
+        Value swizzleIdx = udiv(colOffset, i32_val(outVec));
+        Value swizzleColOffset = add(mul(xor_(swizzleIdx, phase), outVec),
+                                     urem(colOffset, i32_val(outVec)));
+        tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}] =
+            add(rowOffset, swizzleColOffset);
+      }
+  
+      // XXX(Keren): Tune CG and CA here.
+      auto srcVecSize = (srcTy.getElementTypeBitWidth() / 8) * inVec;
+      CacheModifier srcCacheModifier =
+          srcVecSize == 16 ? CacheModifier::CG : CacheModifier::CG;
+      PTXBuilder ptxBuilder;
+      auto &copyAsyncOp =
+          *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier, op.evict());
+      
+      // TODO(Keren): Support %other
+
+      // Prepare asm operands
+      Value pred = mask ? maskElems[vecIdx] : int_val(1, 1);
+      auto tileOffset = tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}];
+      auto *dstOperand = ptxBuilder.newAddrOperand(tileOffset, "r");
+      auto *srcOperand = ptxBuilder.newAddrOperand(srcElems[vecIdx], "l");
+      auto *cpSize = ptxBuilder.newConstantOperand(srcVecSize);
+      copyAsyncOp(dstOperand, srcOperand, cpSize).predicate(pred, "b");
+
+      auto &asyncWaitOp = *ptxBuilder.create<PTXCpAsyncCommitGroupInstr>();
+      asyncWaitOp();
+
+      auto voidTy = LLVM::LLVMVoidType::get(getContext());
+      ptxBuilder.launch(rewriter, loc, voidTy);
+    }
   }
 };
 
