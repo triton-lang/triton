@@ -356,29 +356,39 @@ public:
     mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
     if (cvtSlices.empty())
       return failure();
-    // if other operands are in the loop
-    // then we don't touch anything
-    Operation *op = cvtSlices.front();
-    for (Value _arg : op->getOperands()) {
-      Operation *arg = _arg.getDefiningOp();
-      if (arg && isInLoop(arg) && (arg != cvt))
-        return failure();
-    }
     // otherwise, we push the conversion forward
     // since we'll be able to move it out of
     // the loop once it reaches the yield op
     // op(cvt(arg_0), arg_1, ..., arg_n)
     // -> cvt(op(arg_0, cvt(arg_1), ..., cvt(arg_n)))
+    size_t numAddedCvts = 0;
     BlockAndValueMapping mapping;
+    Operation *op = cvtSlices.front();
+    llvm::outs() << "op: " << *op << "\n";
     for (Value arg : op->getOperands()) {
       if (arg.getDefiningOp() == cvt)
         mapping.map(arg, cvt.getOperand());
-      else {
+      else if(cvt.getOperand().getType() != arg.getType()) {
         auto cvtI = rewriter.create<triton::gpu::ConvertLayoutOp>(
             arg.getLoc(), cvt.getOperand().getType(), arg);
         mapping.map(arg, cvtI);
+        // if we've created more than one conversion in the loop
+        // we stop everything
+        Operation *argOp = arg.getDefiningOp();
+        if(argOp && isInLoop(argOp)){
+          numAddedCvts++;
+          if(numAddedCvts > 1){ 
+            for(auto kv: mapping.getValueMap()){
+              // llvm::outs() << "erasing " << kv.second << "\n";
+              kv.second.getDefiningOp()->erase();
+            }
+            return failure();
+          }
+        }
       }
     }
+
+    //
     Operation *newOp = rewriter.clone(*op, mapping);
     newOp->getResult(0).setType(cvt.getOperand().getType());
     auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
@@ -438,7 +448,7 @@ public:
 
     patterns.add<SimplifyConversion>(context);
     // patterns.add<PullConversionToSource>(context);
-    // patterns.add<PushConversionToSink>(context);
+    patterns.add<PushConversionToSink>(context);
     // patterns.add<MoveArgConvertOutOfLoop>(context);
     patterns.add<BlockedToMMA>(context);
 
