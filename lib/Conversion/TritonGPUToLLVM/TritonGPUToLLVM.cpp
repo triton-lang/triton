@@ -1171,7 +1171,6 @@ struct LoadOpConversion
       else
         ld(dstsOpr, addrOpr, evictOpr).predicate(pred, "b");
 
-      SmallVector<Value> others;
       if (other) {
         for (size_t ii = 0; ii < nWords; ++ii) {
           PTXInstr &mov = *ptxBuilder.create<>("mov");
@@ -1194,7 +1193,6 @@ struct LoadOpConversion
             opr = ptxBuilder.newConstantOperand(splatVal);
           } else {
             opr = ptxBuilder.newOperand(v, readConstraint);
-            others.push_back(v);
           }
 
           mov(dstsOpr->listGet(ii), opr).predicateNot(pred, "b");
@@ -2668,8 +2666,9 @@ struct InsertSliceAsyncOpConversion
     auto srcBlockedLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
     auto resSharedLayout = resTy.getEncoding().cast<SharedEncodingAttr>();
     auto srcShape = srcTy.getShape();
-    assert(srcShape.size() == 2 &&
-           "Unexpected rank of insert_slice_async");
+    assert(srcShape.size() == 2 && ("insert_slice_async: Unexpected rank of " +
+                                    std::to_string(srcShape.size()))
+                                       .c_str());
 
     Value llDst = adaptor.dst();
     Value llSrc = adaptor.src();
@@ -2684,7 +2683,9 @@ struct InsertSliceAsyncOpConversion
 
     // %dst
     auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
-    assert(axis == 0 && "Only axis=0 is supported for now");
+    assert(axis == 0 && ("insert_slice_async: axis = " + std::to_string(axis) +
+                         " not supported. Only axis=0 is valid for now")
+                            .c_str());
     auto dstBase = createIndexAttrConstant(rewriter, loc,
                                            getTypeConverter()->getIndexType(),
                                            product<int64_t>(resTy.getShape()));
@@ -2705,6 +2706,8 @@ struct InsertSliceAsyncOpConversion
     // XXX(Keren): Incorporating the constant optimization here if needed.
     SmallVector<Value> otherElems;
     if (llOther) {
+      // TODO(Keren): support others
+      assert(false && "insert_slice_async: Other value not supported yet");
       otherElems = getLLVMElems(other, llOther, srcBlockedLayout,
                                 getTypeConverter(), rewriter, loc);
       assert(srcElems.size() == otherElems.size());
@@ -2726,35 +2729,38 @@ struct InsertSliceAsyncOpConversion
     // A sharedLayout encoding has a "vec" parameter.
     // If the following condition is true, it means we have to remap from
     // blocked layout to shared layout.
-    // - On the row dimension, if perPhase * maxPhase > threadsPerCTA[inOrder[1]],
+    // - On the row dimension, if perPhase * maxPhase >
+    // threadsPerCTA[inOrder[1]],
     // - On the column dimension, if inVec > outVec
     auto numReadsPerThreadRow =
         std::max<unsigned>(perPhase * maxPhase / threadsPerCTA[inOrder[1]], 1);
     auto numReadsPerThreadCol = std::max<unsigned>(inVec / outVec, 1);
 
     auto srcIndices = emitIndices(loc, rewriter, srcBlockedLayout, srcShape);
+    // <<tileVecIdxRow, tileVecIdxCol>, TileOffset>
     DenseMap<std::pair<unsigned, unsigned>, Value> tileOffsetMap;
-    // <BaseOffset, TileOffset>
+    PTXBuilder ptxBuilder;
     for (unsigned vecIdx = 0; vecIdx < numElems; vecIdx += minVec) {
+      // minVec = 2, inVec = 4, outVec = 2
       //            baseOffsetCol = 0   baseOffsetCol = 1 * 128
       //                -/\-              -/\-
       //               [|x x| x x x x ... |x x| x x x x x]
-      //               [|x x| x x x x ... |x x| x x x x x]  
+      //               [|x x| x x x x ... |x x| x x x x x]
       // baseOffsetRow [|x x| x x x x ... |x x| x x x x x]
       //               [|x x| x x x x ... |x x| x x x x x]
       auto vecIdxCol = vecIdx % (sizePerThread[inOrder[0]] / minVec);
       auto vecIdxRow = vecIdx / (sizePerThread[inOrder[0]] / minVec);
       auto baseOffsetCol = vecIdxCol / numReadsPerThreadCol *
-                        numReadsPerThreadCol * threadsPerCTA[inOrder[0]];
+                           numReadsPerThreadCol * threadsPerCTA[inOrder[0]];
       auto baseOffsetRow = vecIdxRow / numReadsPerThreadRow *
-                        numReadsPerThreadRow * threadsPerCTA[inOrder[1]];
+                           numReadsPerThreadRow * threadsPerCTA[inOrder[1]];
       auto baseOffset = (baseOffsetRow * srcShape[inOrder[0]] + baseOffsetCol);
       // A thread tile
       //  tileVecIdxCol=0   tileVecIdxCol=3
       //       -/\-            -/\-   sizePerThread[inOrder[0]]
       //     | [x x]   ...    [x x] |
       //     | [x x]   ...    [x x] |
-      //     | [x x]   ...    [x x] | 
+      //     | [x x]   ...    [x x] |
       //     | [x x]   ...    [x x] |
       auto tileVecIdxCol = vecIdxCol % numReadsPerThreadCol;
       auto tileVecIdxRow = vecIdxRow % numReadsPerThreadRow;
@@ -2763,7 +2769,8 @@ struct InsertSliceAsyncOpConversion
         auto srcIdx = srcIndices[tileVecIdxRow * sizePerThread[inOrder[0]]];
         Value phase = urem(udiv(srcIdx[inOrder[1]], i32_val(perPhase)),
                            i32_val(maxPhase));
-        Value rowOffset = mul(srcIdx[inOrder[1]], i32_val(srcShape[inOrder[0]]));
+        Value rowOffset =
+            mul(srcIdx[inOrder[1]], i32_val(srcShape[inOrder[0]]));
         // Swizzling
         // Since the swizzling index is related to outVec, and we know minVec
         // already, inVec doesn't matter
@@ -2781,41 +2788,55 @@ struct InsertSliceAsyncOpConversion
         //                 \|/
         //     | [1 2 3 4] [5 6 7 8] ... [13 14 15 16] |
         //     | [5 6 7 8] [9 10 11 12] ... [1 2 3 4]  |
-        Value colOffset = add(srcIdx[inOrder[0]], i32_val(tileVecIdxCol * minVec));
+        Value colOffset =
+            add(srcIdx[inOrder[0]], i32_val(tileVecIdxCol * minVec));
         // colOffset / minVec / (outVec / minVec) = colOffset / outVec
         // Equivalent to:
-        // Value swizzleIdx = udiv(udiv(colOffset, i32_val(minVec)), i32_val(outVec));
+        // Value swizzleIdx = udiv(udiv(colOffset, i32_val(minVec)),
+        // i32_val(outVec));
         Value swizzleIdx = udiv(colOffset, i32_val(outVec));
-        Value swizzleColOffset = add(mul(xor_(swizzleIdx, phase), outVec),
-                                     urem(colOffset, i32_val(outVec)));
+        Value swizzleColOffset =
+            add(mul(xor_(swizzleIdx, phase), i32_val(outVec)),
+                urem(colOffset, i32_val(outVec)));
         tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}] =
             add(rowOffset, swizzleColOffset);
       }
-  
+
+      // 16 * 8 = 128bits
+      auto maxBitWidth =
+          std::max<unsigned>(128, srcTy.getElementTypeBitWidth());
+      auto vecBitWidth = srcTy.getElementTypeBitWidth() * minVec;
+      auto bitWidth = std::min<unsigned>(maxBitWidth, vecBitWidth);
+      auto numWords = vecBitWidth / bitWidth;
+      auto numWordElems = bitWidth / srcTy.getElementTypeBitWidth();
+
       // XXX(Keren): Tune CG and CA here.
       auto srcVecSize = (srcTy.getElementTypeBitWidth() / 8) * inVec;
       CacheModifier srcCacheModifier =
-          srcVecSize == 16 ? CacheModifier::CG : CacheModifier::CG;
-      PTXBuilder ptxBuilder;
-      auto &copyAsyncOp =
-          *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier, op.evict());
-      
-      // TODO(Keren): Support %other
+          bitWidth == 16 ? CacheModifier::CG : CacheModifier::CG;
 
-      // Prepare asm operands
-      Value pred = mask ? maskElems[vecIdx] : int_val(1, 1);
-      auto tileOffset = tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}];
-      auto *dstOperand = ptxBuilder.newAddrOperand(tileOffset, "r");
-      auto *srcOperand = ptxBuilder.newAddrOperand(srcElems[vecIdx], "l");
-      auto *cpSize = ptxBuilder.newConstantOperand(srcVecSize);
-      copyAsyncOp(dstOperand, srcOperand, cpSize).predicate(pred, "b");
+      for (int wordIdx = 0; wordIdx < numWords; ++wordIdx) {
+        auto &copyAsyncOp = *ptxBuilder.create<PTXCpAsyncLoadInstr>(
+            srcCacheModifier, op.evict());
 
-      auto &asyncWaitOp = *ptxBuilder.create<PTXCpAsyncCommitGroupInstr>();
-      asyncWaitOp();
-
-      auto voidTy = LLVM::LLVMVoidType::get(getContext());
-      ptxBuilder.launch(rewriter, loc, voidTy);
+        // TODO(Superjomn) Need to check masks before vectorize the load for all
+        // the values share one predicate? Here assume all the mask values are
+        // the same.
+        Value pred =
+            mask ? maskElems[vecIdx + wordIdx * numWordElems] : int_val(1, 1);
+        auto tileOffset = tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}];
+        auto *dstOperand = ptxBuilder.newAddrOperand(tileOffset, "r");
+        auto *srcOperand = ptxBuilder.newAddrOperand(srcElems[vecIdx], "l");
+        auto *cpSize = ptxBuilder.newConstantOperand(srcVecSize);
+        copyAsyncOp(dstOperand, srcOperand, cpSize).predicate(pred, "b");
+      }
     }
+
+    ptxBuilder.create<PTXCpAsyncCommitGroupInstr>()->operator()();
+    auto voidTy = LLVM::LLVMVoidType::get(getContext());
+    auto ret = ptxBuilder.launch(rewriter, loc, voidTy);
+    rewriter.replaceOp(op, ret);
+    return success();
   }
 };
 
