@@ -162,18 +162,10 @@ public:
     if (isSharedLayout(cvt->getResults()[0]) ||
         isSharedLayout(cvt->getOperand(0)))
       return mlir::failure();
-
     // determine whether layout conversions can be folded into a given operation
     auto can_fold_conversion = [&](Operation *op) {
-      if (isa<triton::gpu::ConvertLayoutOp>(op)) {
-        // conversions in for loops interfere with the
-        // push-to-sink pass. Need a better cost model if how many conversions
-        // we can actually remove by moving them to the beginning of the block
-        auto forOp = dyn_cast<scf::ForOp>(cvt->getParentOp());
-        if (!forOp &&
-            (cvt->getResult(0).getType() == op->getOperand(0).getType()))
-          return true;
-      }
+      if (isa<triton::gpu::ConvertLayoutOp>(op))
+        return cvt->getResult(0).getType() == op->getOperand(0).getType();
       if (isa<arith::ConstantOp, triton::MakeRangeOp, triton::SplatOp>(op))
         return true;
       return false;
@@ -190,7 +182,7 @@ public:
     };
     // we first get the backward dependencies into the conversion
     // stopping whenever the conversion can be folded
-    // this will be our list of operations to rematerialize
+    // this will be our potential list of operations to rematerialize
     SetVector<Operation *> depIntoOps;
     mlir::getBackwardSlice(cvt, &depIntoOps, [&](Operation *op) {
       return !can_fold_conversion(op) && op->getResult(0) &&
@@ -216,11 +208,6 @@ public:
     // for each operation `op`, we convert cvt(op(arg_0, arg_1, ..., arg_n))
     // into op(cvt_0(arg_0), cvt_1(arg_1), ..., cvt_n(arg_n))
     FuncOp parentFunc = cvt->getParentOfType<FuncOp>();
-    // llvm::outs() << "converting...\n";
-    // llvm::outs() << cvt->getParentOfType<FuncOp>() << "\n";
-    // llvm::outs() << "to rematerialize\n";
-    // for (Operation *op : depIntoOps)
-    //   llvm::outs() << *op << "\n";
     SetVector<Operation *> seen;
     BlockAndValueMapping mapping;
     rematerializeCvt(cvt, rewriter, depIntoOps, seen, mapping);
