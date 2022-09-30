@@ -78,7 +78,7 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 #define add(...) rewriter.create<LLVM::AddOp>(loc, __VA_ARGS__)
 #define mul(...) rewriter.create<LLVM::MulOp>(loc, __VA_ARGS__)
 #define xor_(...) rewriter.create<LLVM::XOrOp>(loc, __VA_ARGS__)
-#define bit_cast(...) rewriter.create<LLVM::BitcastOp>(loc, __VA_ARGS__)
+#define bitcast(...) rewriter.create<LLVM::BitcastOp>(loc, __VA_ARGS__)
 #define gep(...) rewriter.create<LLVM::GEPOp>(loc, __VA_ARGS__)
 #define ptr_ty(...) LLVM::LLVMPointerType::get(__VA_ARGS__)
 #define insert_val(...) rewriter.create<LLVM::InsertValueOp>(loc, __VA_ARGS__)
@@ -610,7 +610,7 @@ Value convertSplatLikeOp(Type elemType, Type resType, Value constVal,
   auto tensorTy = resType.cast<RankedTensorType>();
   auto layout = tensorTy.getEncoding();
   auto srcType = typeConverter->convertType(elemType);
-  auto llSrc = bit_cast(srcType, constVal);
+  auto llSrc = bitcast(srcType, constVal);
   size_t elemsPerThread = getElemsPerThread(layout, tensorTy.getShape());
   llvm::SmallVector<Value, 4> elems(elemsPerThread, llSrc);
   llvm::SmallVector<Type, 4> elemTypes(elems.size(), srcType);
@@ -686,7 +686,6 @@ struct LoadStoreConversionBase : public ConvertTritonGPUOpToLLVMPatternBase {
   // Get corresponding LLVM element values of \param value.
   SmallVector<Value> getLLVMElems(Value value, Value llValue,
                                   const BlockedEncodingAttr &layout,
-                                  TypeConverter *typeConverter,
                                   ConversionPatternRewriter &rewriter,
                                   Location loc) const {
     if (!value)
@@ -784,15 +783,15 @@ struct StoreOpConversion
     auto [layout, numElems] = getLayout(ptr);
 
     auto ptrElems =
-        getLLVMElems(ptr, llPtr, layout, getTypeConverter(), rewriter, loc);
+        getLLVMElems(ptr, llPtr, layout, rewriter, loc);
     auto valueElems =
-        getLLVMElems(value, llValue, layout, getTypeConverter(), rewriter, loc);
+        getLLVMElems(value, llValue, layout, rewriter, loc);
     assert(ptrElems.size() == valueElems.size());
 
     SmallVector<Value> maskElems;
     if (llMask) {
       maskElems =
-          getLLVMElems(mask, llMask, layout, getTypeConverter(), rewriter, loc);
+          getLLVMElems(mask, llMask, layout, rewriter, loc);
       assert(valueElems.size() == maskElems.size());
     }
 
@@ -839,7 +838,7 @@ struct StoreOpConversion
           Value elem = valueElems[elemOffset];
           if (elem.getType().isInteger(1))
             elem = rewriter.create<LLVM::SExtOp>(loc, type::i8Ty(ctx), elem);
-          elem = bit_cast(valueElemTy, elem);
+          elem = bitcast(valueElemTy, elem);
 
           Type u32Ty = typeConverter->convertType(type::u32Ty(ctx));
           llWord =
@@ -847,7 +846,7 @@ struct StoreOpConversion
                              rewriter.create<LLVM::ConstantOp>(
                                  loc, u32Ty, IntegerAttr::get(u32Ty, elemIdx)));
         }
-        llWord = bit_cast(valArgTy, llWord);
+        llWord = bitcast(valArgTy, llWord);
         std::string constraint =
             (width == 64) ? "l" : ((width == 32) ? "r" : "c");
         asmArgList->listAppend(ptxBuilder.newOperand(llWord, constraint));
@@ -1074,13 +1073,13 @@ struct LoadOpConversion
     auto [layout, numElems] = getLayout(ptr);
 
     auto ptrElems =
-        getLLVMElems(ptr, llPtr, layout, getTypeConverter(), rewriter, loc);
+        getLLVMElems(ptr, llPtr, layout, rewriter, loc);
     assert(ptrElems.size() == numElems);
 
     SmallVector<Value> maskElems;
     if (llMask) {
       maskElems =
-          getLLVMElems(mask, llMask, layout, getTypeConverter(), rewriter, loc);
+          getLLVMElems(mask, llMask, layout, rewriter, loc);
       assert(ptrElems.size() == maskElems.size());
     }
 
@@ -1106,7 +1105,7 @@ struct LoadOpConversion
     }
 
     auto otherElems =
-        getLLVMElems(other, llOther, layout, getTypeConverter(), rewriter, loc);
+        getLLVMElems(other, llOther, layout, rewriter, loc);
 
     SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
@@ -1186,7 +1185,7 @@ struct LoadOpConversion
                 rewriter, loc, this->getTypeConverter()->getIndexType(), s);
             v = insert_element(vecTy, v, falseVal, sVal);
           }
-          v = bit_cast(IntegerType::get(getContext(), width), v);
+          v = bitcast(IntegerType::get(getContext(), width), v);
 
           PTXInstr::Operand *opr{};
           if (otherIsSplatConstInt) {
@@ -1224,7 +1223,7 @@ struct LoadOpConversion
         } else {
           curr = ret;
         }
-        curr = bit_cast(
+        curr = bitcast(
             LLVM::getFixedVectorType(valueElemTy, width / valueElemNbits),
             curr);
         rets.push_back(curr);
@@ -1342,12 +1341,11 @@ struct ExtractSliceOpConversion
     auto base = product<int64_t>(dstTy.getShape());
     auto baseVal = createIndexAttrConstant(
         rewriter, loc, getTypeConverter()->getIndexType(), base);
-    Value offset = rewriter.create<LLVM::MulOp>(loc, adaptor.index(), baseVal);
+    Value offset = mul(adaptor.index(), baseVal);
 
     auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
-    Value resultVal =
-        rewriter.create<LLVM::GEPOp>(loc, elemPtrTy, adaptor.src(), offset);
+    Value resultVal = mul(elemPtrTy, adaptor.src(), offset);
     rewriter.replaceOp(op, resultVal);
     return success();
   }
@@ -1421,7 +1419,7 @@ public:
     auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
-    smemBase = bit_cast(elemPtrTy, smemBase);
+    smemBase = bitcast(elemPtrTy, smemBase);
 
     auto shape = dstTy.getShape();
     unsigned rank = dstTy.getRank();
@@ -1589,7 +1587,7 @@ private:
         auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
         Value ptr = gep(elemPtrTy, smemBase, offset);
         auto vecTy = vec_ty(llvmElemTy, vec);
-        ptr = bit_cast(LLVM::LLVMPointerType::get(vecTy, 3), ptr);
+        ptr = bitcast(LLVM::LLVMPointerType::get(vecTy, 3), ptr);
         if (stNotRd) {
           Value valVec = rewriter.create<LLVM::UndefOp>(loc, vecTy);
           for (unsigned v = 0; v < vec; ++v) {
@@ -1947,7 +1945,7 @@ public:
           for (int e = 0; e < 4; ++e)
             i8v4Elems[m] = insert_element(i8v4Elems[m].getType(), i8v4Elems[m],
                                           i8Elems[m][e], i32_val(e));
-          i32Elems[m] = bit_cast(i32_ty, i8v4Elems[m]);
+          i32Elems[m] = bitcast(i32_ty, i8v4Elems[m]);
         }
       } else { // k first
         Value offset = i32_val(sOffsetElem);
@@ -1965,7 +1963,7 @@ public:
           for (int e = 0; e < 4; ++e)
             i8v4Elems[m] = insert_element(i8v4Elems[m].getType(), i8v4Elems[m],
                                           i8Elems[m][e], i32_val(e));
-          i32Elems[m] = bit_cast(i32_ty, i8v4Elems[m]);
+          i32Elems[m] = bitcast(i32_ty, i8v4Elems[m]);
         }
       }
 
@@ -2453,7 +2451,7 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
     Type smemPtrTy = helper.getShemPtrTy();
     for (int i = 0; i < numPtrs; ++i) {
       ptrs[i] =
-          bit_cast(smemPtrTy, gep(smemPtrTy, llTensor, ValueRange({offs[i]})));
+          bitcast(smemPtrTy, gep(smemPtrTy, llTensor, ValueRange({offs[i]})));
     }
 
     bool needTrans = kOrder != order[0];
@@ -2642,10 +2640,11 @@ struct InsertSliceAsyncOpConversion
       triton::gpu::InsertSliceAsyncOp>::ConvertTritonGPUOpToLLVMPattern;
 
   InsertSliceAsyncOpConversion(LLVMTypeConverter &converter,
+                               const Allocation *allocation, Value smem,
                                AxisInfoAnalysis &axisAnalysisPass,
                                PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::gpu::InsertSliceAsyncOp>(
-            converter, benefit),
+            converter, allocation, smem, benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
   LogicalResult
@@ -2658,7 +2657,7 @@ struct InsertSliceAsyncOpConversion
     Value res = op.result();
     Value mask = op.mask();
     Value other = op.other();
-    assert(allocation->getBufferId(res) == allocation->getBufferId(dst) &&
+    assert(allocation->getBufferId(res) == Allocation::InvalidBufferId &&
            "Only support in-place insert_slice_async for now");
 
     auto srcTy = src.getType().cast<RankedTensorType>();
@@ -2677,8 +2676,7 @@ struct InsertSliceAsyncOpConversion
     Value llIndex = adaptor.index();
 
     // %src
-    auto srcElems = getLLVMElems(src, llSrc, srcBlockedLayout,
-                                 getTypeConverter(), rewriter, loc);
+    auto srcElems = getLLVMElems(src, llSrc, srcBlockedLayout, rewriter, loc);
     auto srcElemTy = srcTy.getElementType();
 
     // %dst
@@ -2689,28 +2687,26 @@ struct InsertSliceAsyncOpConversion
     auto dstBase = createIndexAttrConstant(rewriter, loc,
                                            getTypeConverter()->getIndexType(),
                                            product<int64_t>(resTy.getShape()));
-    Value offset = rewriter.create<LLVM::MulOp>(loc, adaptor.index(), dstBase);
+    Value offset = mul(llIndex, dstBase);
     auto dstPtrTy = LLVM::LLVMPointerType::get(
         getTypeConverter()->convertType(resTy.getElementType()), 3);
-    Value dstPtrBase =
-        rewriter.create<LLVM::GEPOp>(loc, dstPtrTy, llDst, offset);
+    Value dstPtrBase = gep(dstPtrTy, llDst, offset);
 
     // %mask
     SmallVector<Value> maskElems;
     if (llMask) {
-      maskElems = getLLVMElems(mask, llMask, srcBlockedLayout,
-                               getTypeConverter(), rewriter, loc);
+      maskElems = getLLVMElems(mask, llMask, srcBlockedLayout, rewriter, loc);
       assert(srcElems.size() == maskElems.size());
     }
 
     // %other
-    // XXX(Keren): Incorporating the constant optimization here if needed.
     SmallVector<Value> otherElems;
     if (llOther) {
-      // TODO(Keren): support others
+      // TODO(Keren): support "other" tensor.
+      // It's not necessary for now because the pipeline pass will skip
+      // generating insert_slice_async if the load op has any "other" tensor.
       assert(false && "insert_slice_async: Other value not supported yet");
-      otherElems = getLLVMElems(other, llOther, srcBlockedLayout,
-                                getTypeConverter(), rewriter, loc);
+      otherElems = getLLVMElems(other, llOther, srcBlockedLayout, rewriter, loc);
       assert(srcElems.size() == otherElems.size());
     }
 
@@ -2867,7 +2863,7 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<ExtractSliceOpConversion>(typeConverter, allocation, smem,
                                          benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
-  patterns.add<InsertSliceAsyncOpConversion>(typeConverter, axisInfoAnalysis,
+  patterns.add<InsertSliceAsyncOpConversion>(typeConverter, allocation, smem, axisInfoAnalysis,
                                              benefit);
   patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<MakeRangeOpConversion>(typeConverter, benefit);
