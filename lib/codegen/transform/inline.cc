@@ -60,11 +60,24 @@ void inliner::do_inline(ir::function* fn, ir::call_inst* callsite, ir::builder& 
     builder.set_insert_point(new_block);
     for(ir::instruction* old_inst: old_block->get_inst_list()){
       ir::instruction* new_inst = old_inst->clone();
-      // replace basic block
-      for(size_t k = 0; k < new_blocks.size(); k++)
-        new_inst->replace_uses_of_with(fn->blocks()[k], new_blocks[k]);
       inst_map[old_inst] = new_inst;
       builder.insert(new_inst);
+    }
+  }
+  // update basic blocks
+  for(size_t i = 0; i < new_blocks.size(); i++) {
+    for (ir::instruction* new_inst: new_blocks[i]->get_inst_list()) {
+      // replace basic use cases
+      for(size_t k = 0; k < new_blocks.size(); k++)
+         new_inst->replace_uses_of_with(fn->blocks()[k], new_blocks[k]);
+      if(ir::phi_node* phi = dynamic_cast<ir::phi_node*>(new_inst)) {
+        // additionally replace basic blocks of phi-nodes since
+        // replace_uses_of_with() does not replace them.
+        for(unsigned in = 0; in < phi->get_num_incoming(); in++)
+          for(size_t k = 0; k < new_blocks.size(); k++)
+            if (phi->get_incoming_block(in) == fn->blocks()[k])
+              phi->set_incoming_block(in, new_blocks[k]);
+      }
     }
   }
   // replace operands of instructions after constructing inst_map
