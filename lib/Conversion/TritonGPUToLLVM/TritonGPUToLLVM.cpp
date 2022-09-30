@@ -89,6 +89,7 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
   rewriter.create<LLVM::ExtractElementOp>(loc, __VA_ARGS__)
 #define load(...) rewriter.create<LLVM::LoadOp>(loc, __VA_ARGS__)
 #define store(val, ptr) rewriter.create<LLVM::StoreOp>(loc, val, ptr)
+#define select(...) rewriter.create<LLVM::SelectOp>(loc, __VA_ARGS__)
 #define address_of(...) rewriter.create<LLVM::AddressOfOp>(loc, __VA_ARGS__)
 #define i32_ty rewriter.getIntegerType(32)
 #define vec_ty(type, num) VectorType::get(num, type)
@@ -782,16 +783,13 @@ struct StoreOpConversion
 
     auto [layout, numElems] = getLayout(ptr);
 
-    auto ptrElems =
-        getLLVMElems(ptr, llPtr, layout, rewriter, loc);
-    auto valueElems =
-        getLLVMElems(value, llValue, layout, rewriter, loc);
+    auto ptrElems = getLLVMElems(ptr, llPtr, layout, rewriter, loc);
+    auto valueElems = getLLVMElems(value, llValue, layout, rewriter, loc);
     assert(ptrElems.size() == valueElems.size());
 
     SmallVector<Value> maskElems;
     if (llMask) {
-      maskElems =
-          getLLVMElems(mask, llMask, layout, rewriter, loc);
+      maskElems = getLLVMElems(mask, llMask, layout, rewriter, loc);
       assert(valueElems.size() == maskElems.size());
     }
 
@@ -1072,14 +1070,12 @@ struct LoadOpConversion
 
     auto [layout, numElems] = getLayout(ptr);
 
-    auto ptrElems =
-        getLLVMElems(ptr, llPtr, layout, rewriter, loc);
+    auto ptrElems = getLLVMElems(ptr, llPtr, layout, rewriter, loc);
     assert(ptrElems.size() == numElems);
 
     SmallVector<Value> maskElems;
     if (llMask) {
-      maskElems =
-          getLLVMElems(mask, llMask, layout, rewriter, loc);
+      maskElems = getLLVMElems(mask, llMask, layout, rewriter, loc);
       assert(ptrElems.size() == maskElems.size());
     }
 
@@ -1104,8 +1100,7 @@ struct LoadOpConversion
       splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
     }
 
-    auto otherElems =
-        getLLVMElems(other, llOther, layout, rewriter, loc);
+    auto otherElems = getLLVMElems(other, llOther, layout, rewriter, loc);
 
     SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
@@ -1331,7 +1326,7 @@ struct ExtractSliceOpConversion
     // axis > 0 will result in non-contiguous memory access if the result tensor
     // is an alias of the source tensor.
     auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
-    assert(axis == 0 && "Only axis=0 is supported for now");
+    assert(axis == 0 && "extract_slice: Only axis=0 is supported for now");
 
     // Example:
     // %dst = extract_slice %src, %index {axis = 0}
@@ -2665,9 +2660,8 @@ struct InsertSliceAsyncOpConversion
     auto srcBlockedLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
     auto resSharedLayout = resTy.getEncoding().cast<SharedEncodingAttr>();
     auto srcShape = srcTy.getShape();
-    assert(srcShape.size() == 2 && ("insert_slice_async: Unexpected rank of " +
-                                    std::to_string(srcShape.size()))
-                                       .c_str());
+    assert(srcShape.size() == 2 &&
+           "insert_slice_async: Unexpected rank of %src");
 
     Value llDst = adaptor.dst();
     Value llSrc = adaptor.src();
@@ -2681,9 +2675,7 @@ struct InsertSliceAsyncOpConversion
 
     // %dst
     auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
-    assert(axis == 0 && ("insert_slice_async: axis = " + std::to_string(axis) +
-                         " not supported. Only axis=0 is valid for now")
-                            .c_str());
+    assert(axis == 0 && "insert_slice_async: Only axis=0 is supported for now");
     auto dstBase = createIndexAttrConstant(rewriter, loc,
                                            getTypeConverter()->getIndexType(),
                                            product<int64_t>(resTy.getShape()));
@@ -2706,7 +2698,8 @@ struct InsertSliceAsyncOpConversion
       // It's not necessary for now because the pipeline pass will skip
       // generating insert_slice_async if the load op has any "other" tensor.
       assert(false && "insert_slice_async: Other value not supported yet");
-      otherElems = getLLVMElems(other, llOther, srcBlockedLayout, rewriter, loc);
+      otherElems =
+          getLLVMElems(other, llOther, srcBlockedLayout, rewriter, loc);
       assert(srcElems.size() == otherElems.size());
     }
 
@@ -2723,15 +2716,15 @@ struct InsertSliceAsyncOpConversion
 
     auto inOrder = srcBlockedLayout.getOrder();
     auto outOrder = resSharedLayout.getOrder();
-    // A sharedLayout encoding has a "vec" parameter.
-    // If the following condition is true, it means we have to remap from
-    // blocked layout to shared layout.
-    // - On the row dimension, if perPhase * maxPhase >
-    // threadsPerCTA[inOrder[1]],
-    // - On the column dimension, if inVec > outVec
-    auto numReadsPerThreadRow =
+    // If perPhase * maxPhase > threadsPerCTA, we need to swizzle over elements
+    // across phases.
+    // If perPhase * maxPhase == threadsPerCTA, swizzle is not allowd
+    auto numSwizzleRows =
         std::max<unsigned>(perPhase * maxPhase / threadsPerCTA[inOrder[1]], 1);
-    auto numReadsPerThreadCol = std::max<unsigned>(inVec / outVec, 1);
+    // A sharedLayout encoding has a "vec" parameter.
+    // On the column dimension, if inVec > outVec, it means we have to divide
+    // single vector read into multiple ones
+    auto numVecCols = std::max<unsigned>(inVec / outVec, 1);
 
     auto srcIndices = emitIndices(loc, rewriter, srcBlockedLayout, srcShape);
     // <<tileVecIdxRow, tileVecIdxCol>, TileOffset>
@@ -2747,10 +2740,10 @@ struct InsertSliceAsyncOpConversion
       //               [|x x| x x x x ... |x x| x x x x x]
       auto vecIdxCol = vecIdx % (sizePerThread[inOrder[0]] / minVec);
       auto vecIdxRow = vecIdx / (sizePerThread[inOrder[0]] / minVec);
-      auto baseOffsetCol = vecIdxCol / numReadsPerThreadCol *
-                           numReadsPerThreadCol * threadsPerCTA[inOrder[0]];
-      auto baseOffsetRow = vecIdxRow / numReadsPerThreadRow *
-                           numReadsPerThreadRow * threadsPerCTA[inOrder[1]];
+      auto baseOffsetCol =
+          vecIdxCol / numVecCols * numVecCols * threadsPerCTA[inOrder[0]];
+      auto baseOffsetRow = vecIdxRow / numSwizzleRows * numSwizzleRows *
+                           threadsPerCTA[inOrder[1]];
       auto baseOffset = (baseOffsetRow * srcShape[inOrder[0]] + baseOffsetCol);
       // A thread tile
       //  tileVecIdxCol=0   tileVecIdxCol=3
@@ -2759,8 +2752,8 @@ struct InsertSliceAsyncOpConversion
       //     | [x x]   ...    [x x] |
       //     | [x x]   ...    [x x] |
       //     | [x x]   ...    [x x] |
-      auto tileVecIdxCol = vecIdxCol % numReadsPerThreadCol;
-      auto tileVecIdxRow = vecIdxRow % numReadsPerThreadRow;
+      auto tileVecIdxCol = vecIdxCol % numVecCols;
+      auto tileVecIdxRow = vecIdxRow % numSwizzleRows;
 
       if (!tileOffsetMap.count({tileVecIdxRow, tileVecIdxCol})) {
         auto srcIdx = srcIndices[tileVecIdxRow * sizePerThread[inOrder[0]]];
@@ -2809,25 +2802,30 @@ struct InsertSliceAsyncOpConversion
       auto numWordElems = bitWidth / srcTy.getElementTypeBitWidth();
 
       // XXX(Keren): Tune CG and CA here.
-      auto srcVecSize = (srcTy.getElementTypeBitWidth() / 8) * inVec;
       CacheModifier srcCacheModifier =
-          bitWidth == 16 ? CacheModifier::CG : CacheModifier::CG;
+          bitWidth == 128 ? CacheModifier::CG : CacheModifier::CA;
+      assert(bitWidth == 128 || bitWidth == 64 || bitWidth == 32);
 
       for (int wordIdx = 0; wordIdx < numWords; ++wordIdx) {
         auto &copyAsyncOp = *ptxBuilder.create<PTXCpAsyncLoadInstr>(
             srcCacheModifier, op.evict());
 
-        // TODO(Superjomn) Need to check masks before vectorize the load for all
-        // the values share one predicate? Here assume all the mask values are
-        // the same.
-        Value pred =
-            mask ? maskElems[vecIdx + wordIdx * numWordElems] : int_val(1, 1);
         auto tileOffset = tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}];
         auto *dstOperand =
             ptxBuilder.newAddrOperand(tileOffset, "r", baseOffset);
         auto *srcOperand = ptxBuilder.newAddrOperand(srcElems[vecIdx], "l");
-        auto *cpSize = ptxBuilder.newConstantOperand(srcVecSize);
-        copyAsyncOp(dstOperand, srcOperand, cpSize).predicate(pred, "b");
+        auto *copySize = ptxBuilder.newConstantOperand(bitWidth);
+        auto *srcSize = copySize;
+        if (op.mask()) {
+          // We don't use predicate in this case, setting src-size to 0
+          // if there's any mask. cp.async will automatically fill the
+          // remaining slots with 0 if cp-size > src-size.
+          // XXX(Keren): Always assume other = 0 for now.
+          auto selectOp = select(maskElems[vecIdx + wordIdx * numWordElems],
+                                 i32_val(bitWidth), i32_val(0));
+          srcSize = ptxBuilder.newOperand(selectOp, "r");
+        }
+        copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
       }
     }
 
@@ -2863,8 +2861,8 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<ExtractSliceOpConversion>(typeConverter, allocation, smem,
                                          benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
-  patterns.add<InsertSliceAsyncOpConversion>(typeConverter, allocation, smem, axisInfoAnalysis,
-                                             benefit);
+  patterns.add<InsertSliceAsyncOpConversion>(typeConverter, allocation, smem,
+                                             axisInfoAnalysis, benefit);
   patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<MakeRangeOpConversion>(typeConverter, benefit);
   patterns.add<ReturnOpConversion>(typeConverter, benefit);
