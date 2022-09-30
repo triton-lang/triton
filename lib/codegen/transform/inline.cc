@@ -53,34 +53,54 @@ void inliner::do_inline(ir::function* fn, ir::call_inst* callsite, ir::builder& 
   for(size_t k = 0; k < fn->args().size(); k++)
     arg_map[fn->args()[k]] = callsite->ops()[k];
   std::vector<ir::basic_block*> rpo = ir::cfg::reverse_post_order(fn);
+  // clone instructions
   for(size_t i = 0; i < new_blocks.size(); i++){
     ir::basic_block* old_block = fn->blocks()[i];
     ir::basic_block* new_block = new_blocks[i];
     builder.set_insert_point(new_block);
     for(ir::instruction* old_inst: old_block->get_inst_list()){
-      // clone instruction
       ir::instruction* new_inst = old_inst->clone();
-      // replace basic block
-      for(size_t k = 0; k < new_blocks.size(); k++)
-        new_inst->replace_uses_of_with(fn->blocks()[k], new_blocks[k]);
-      // replace values
-      for(size_t k = 0; k < new_inst->get_num_operands(); k++){
-        ir::value* op = new_inst->get_operand(k);
-        if(auto arg_op = dynamic_cast<ir::argument*>(op))
-          new_inst->set_operand(k, arg_map.at(arg_op));
-        if(auto inst_op = dynamic_cast<ir::instruction*>(op))
-          if(inst_map.find(inst_op) != inst_map.end())
-            new_inst->set_operand(k, inst_map.at(inst_op));
-      }
-       // `ret` instruction is a special case:
-      // instead of returning we need to branch to after the function call
-      if(ir::return_inst* ret = dynamic_cast<ir::return_inst*>(new_inst)){
-        if(ir::value* ret_val = ret->get_return_value())
-          exit_val->add_incoming(ret_val, new_block);
-        new_inst = ir::branch_inst::create(exit);
-      }
       inst_map[old_inst] = new_inst;
       builder.insert(new_inst);
+    }
+  }
+  // update basic blocks
+  for(size_t i = 0; i < new_blocks.size(); i++) {
+    for (ir::instruction* new_inst: new_blocks[i]->get_inst_list()) {
+      // replace basic use cases
+      for(size_t k = 0; k < new_blocks.size(); k++)
+         new_inst->replace_uses_of_with(fn->blocks()[k], new_blocks[k]);
+      if(ir::phi_node* phi = dynamic_cast<ir::phi_node*>(new_inst)) {
+        // additionally replace basic blocks of phi-nodes since
+        // replace_uses_of_with() does not replace them.
+        for(unsigned in = 0; in < phi->get_num_incoming(); in++)
+          for(size_t k = 0; k < new_blocks.size(); k++)
+            if (phi->get_incoming_block(in) == fn->blocks()[k])
+              phi->set_incoming_block(in, new_blocks[k]);
+      }
+    }
+  }
+  // replace operands of instructions after constructing inst_map
+  for (auto& it: inst_map) {
+    ir::instruction* new_inst = it.second;
+    for(size_t k = 0; k < new_inst->get_num_operands(); k++) {
+      ir::value* op = new_inst->get_operand(k);
+      if(auto arg_op = dynamic_cast<ir::argument*>(op))
+        new_inst->set_operand(k, arg_map.at(arg_op));
+      if(auto inst_op = dynamic_cast<ir::instruction*>(op))
+        if(inst_map.find(inst_op) != inst_map.end())
+          new_inst->set_operand(k, inst_map.at(inst_op));
+    }
+    // handles a ret instruciton.
+    // instead of returning we need to branch to after the function call
+    if(ir::return_inst* ret = dynamic_cast<ir::return_inst*>(new_inst)) {
+      if(ir::value* ret_val = ret->get_return_value())
+        exit_val->add_incoming(ret_val, new_inst->get_parent());
+      // replace ret with branch
+      ir::instruction* new_br_inst = ir::branch_inst::create(exit);
+      builder.set_insert_point(new_inst->get_parent());
+      builder.insert(new_br_inst);
+      new_inst->erase_from_parent();
     }
   }
   if(exit_val->get_num_incoming() == 1)
