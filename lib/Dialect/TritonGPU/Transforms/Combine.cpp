@@ -108,69 +108,12 @@ public:
     return targetTensorType.getEncoding();
   }
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *cvt,
-                  mlir::PatternRewriter &rewriter) const override {
-    if (!llvm::isa<triton::gpu::ConvertLayoutOp>(cvt))
-      return mlir::failure();
-    // we don't want to rematerialize any conversion to/from shared
-    if (isSharedLayout(cvt->getResults()[0]) || isSharedLayout(cvt->getOperand(0)))
-      return mlir::failure();
-
-    // constants/splat are handled separately
+  SmallVector<Operation *, 4>
+  rematerializeCvt(mlir::Operation *cvt,
+                   mlir::PatternRewriter &rewriter) const {
+    rewriter.startRootUpdate(cvt);
     Operation *op = cvt->getOperand(0).getDefiningOp();
-    if (!op)
-      return mlir::failure();
-
-    auto blacklist = [](Operation *op) {
-      if (isa<triton::gpu::ExtractSliceOp, triton::gpu::AllocTensorOp,
-              triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp,
-              triton::DotOp>(op))
-        return true;
-      if (isa<scf::YieldOp, scf::ForOp>(op))
-        return true;
-      return false;
-    };
-
-    // find all the ops that the conversion depends on
-    SetVector<Operation *> depIntoOps;
-    mlir::getBackwardSlice(cvt, &depIntoOps, [&](Operation *op) {
-      return !blacklist(op) && op->getResult(0) &&
-             (op->getResult(0).getParentBlock() ==
-              cvt->getResult(0).getParentBlock());
-    });
-    // find all the ops that depend on something expensive
-    // to rematerialize and break the dependency
-    // chain there
-    SetVector<Operation *> blacklistedOps;
-    mlir::getBackwardSlice(cvt, &blacklistedOps, blacklist);
-    for (Operation *op : blacklistedOps) {
-      SetVector<Operation *> toRemove;
-      mlir::getBackwardSlice(op, &toRemove);
-      depIntoOps.set_subtract(toRemove);
-    }
-    // if there is nothing that can benefit from moving conversions
-    // in the remaining op, we don't do anything
-    auto it = llvm::find_if(depIntoOps, [&](Operation *op) {
-      if (isa<triton::gpu::ConvertLayoutOp>(op)) {
-        // conversions in for loops interfere with the
-        // push-to-sink pass. Need a better cost model if how many conversions
-        // we can actually remove by moving them to the beginning of the block
-        auto forOp = dyn_cast<scf::ForOp>(cvt->getParentOp());
-        if (!forOp &&
-            (cvt->getResult(0).getType() == op->getOperand(0).getType()))
-          return true;
-      }
-      if (isa<arith::ConstantOp, triton::MakeRangeOp, triton::SplatOp>(op))
-        return true;
-      return false;
-    });
-    if (it == depIntoOps.end()) {
-      return mlir::failure();
-    }
-
-    // We convert cvt(op(arg_0, arg_1, ..., arg_n))
-    // into op(cvt_0(arg_0), cvt_1(arg_1), ..., cvt_n(arg_n))
+    SmallVector<Operation *, 4> newConversions;
     BlockAndValueMapping mapping;
     for (Value argI : op->getOperands()) {
       // Compute new argument types
@@ -184,11 +127,81 @@ public:
       auto cvtI = rewriter.create<triton::gpu::ConvertLayoutOp>(
           op->getLoc(), newArgType, argI);
       cvtI->moveBefore(op);
+      newConversions.push_back(cvtI);
       mapping.map(argI, cvtI);
     }
     Operation *newOp = rewriter.clone(*op, mapping);
     newOp->getResult(0).setType(cvt->getResult(0).getType());
-    rewriter.replaceOp(cvt, newOp->getResults());
+    cvt->replaceAllUsesWith(newOp->getResults());
+    rewriter.finalizeRootUpdate(cvt);
+    return newConversions;
+  }
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *cvt,
+                  mlir::PatternRewriter &rewriter) const override {
+    if (!llvm::isa<triton::gpu::ConvertLayoutOp>(cvt))
+      return mlir::failure();
+    // we don't touch block arguments
+    Operation *op = cvt->getOperand(0).getDefiningOp();
+    if (!op)
+      return mlir::failure();
+    // we don't want to rematerialize any conversion to/from shared
+    if (isSharedLayout(cvt->getResults()[0]) ||
+        isSharedLayout(cvt->getOperand(0)))
+      return mlir::failure();
+
+    // determine whether layout conversions can be folded into a given operation
+    auto can_fold_conversion = [&](Operation *op) {
+      if (isa<triton::gpu::ConvertLayoutOp>(op)) {
+        // conversions in for loops interfere with the
+        // push-to-sink pass. Need a better cost model if how many conversions
+        // we can actually remove by moving them to the beginning of the block
+        auto forOp = dyn_cast<scf::ForOp>(cvt->getParentOp());
+        if (!forOp &&
+            (cvt->getResult(0).getType() == op->getOperand(0).getType()))
+          return true;
+      }
+      if (isa<arith::ConstantOp, triton::MakeRangeOp, triton::SplatOp>(op))
+        return true;
+      return false;
+    };
+    // determine whether an operation is expensive to rematerialize
+    auto expensive_to_remat = [](Operation *op) {
+      if (isa<triton::gpu::ExtractSliceOp, triton::gpu::AllocTensorOp,
+              triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp,
+              triton::DotOp>(op))
+        return true;
+      if (isa<scf::YieldOp, scf::ForOp>(op))
+        return true;
+      return false;
+    };
+    // we first get the backward dependencies into the conversion
+    // stopping whenever the conversion can be folded
+    // this will be our list of operations to rematerialize
+    SetVector<Operation *> depIntoOps;
+    mlir::getBackwardSlice(cvt, &depIntoOps, [&](Operation *op) {
+      return !can_fold_conversion(op) && op->getResult(0) &&
+             (op->getResult(0).getParentBlock() ==
+              cvt->getResult(0).getParentBlock());
+    });
+    // if there is anything expensive to rematerialize, we don't do anything
+    if (llvm::find_if(depIntoOps, expensive_to_remat) != depIntoOps.end()) {
+      return mlir::failure();
+    }
+    // we only rematerialize if all the conversions that we create get folded
+    for (Operation *op : depIntoOps) {
+      for (Value arg : op->getOperands()) {
+        bool is_backpropagated = depIntoOps.contains(arg.getDefiningOp());
+        bool is_foldable = can_fold_conversion(arg.getDefiningOp());
+        if (!is_backpropagated && !is_foldable)
+          return mlir::failure();
+      }
+    }
+    // we can now rematerialize all operations into depIntoOps recursively
+    // for each operation `op`, we convert cvt(op(arg_0, arg_1, ..., arg_n))
+    // into op(cvt_0(arg_0), cvt_1(arg_1), ..., cvt_n(arg_n))
+    auto newCvt = rematerializeCvt(cvt, rewriter);
 
     return mlir::success();
   }
@@ -338,9 +351,13 @@ public:
                   mlir::PatternRewriter &rewriter) const override {
     auto cvt = cast<triton::gpu::ConvertLayoutOp>(_cvtOp);
     // we don't want to rematerialize any conversion to/from shared
-    if (isSharedLayout(cvt->getResults()[0]) || isSharedLayout(cvt->getOperand(0)))
+    if (isSharedLayout(cvt->getResults()[0]) ||
+        isSharedLayout(cvt->getOperand(0)))
       return mlir::failure();
     //
+    auto targetEncoding =
+        cvt.getOperand().getType().cast<RankedTensorType>().getEncoding();
+
     auto forOp = dyn_cast<scf::ForOp>(cvt->getParentOp());
     if (!forOp)
       return mlir::failure();
@@ -356,39 +373,36 @@ public:
     mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
     if (cvtSlices.empty())
       return failure();
-    // otherwise, we push the conversion forward
+    // we try push the conversion forward
     // since we'll be able to move it out of
     // the loop once it reaches the yield op
     // op(cvt(arg_0), arg_1, ..., arg_n)
     // -> cvt(op(arg_0, cvt(arg_1), ..., cvt(arg_n)))
-    size_t numAddedCvts = 0;
     BlockAndValueMapping mapping;
     Operation *op = cvtSlices.front();
-    llvm::outs() << "op: " << *op << "\n";
     for (Value arg : op->getOperands()) {
-      if (arg.getDefiningOp() == cvt)
+      auto argTensorType = arg.getType().cast<RankedTensorType>();
+      Operation *argOp = arg.getDefiningOp();
+      if (argOp == cvt)
         mapping.map(arg, cvt.getOperand());
-      else if(cvt.getOperand().getType() != arg.getType()) {
+      else if (argTensorType.getEncoding() != targetEncoding) {
+        // adds a conversion
+        auto newArgType = RankedTensorType::get(argTensorType.getShape(),
+                                                argTensorType.getElementType(),
+                                                targetEncoding);
+        if (argOp)
+          rewriter.setInsertionPointAfter(argOp);
         auto cvtI = rewriter.create<triton::gpu::ConvertLayoutOp>(
-            arg.getLoc(), cvt.getOperand().getType(), arg);
-        mapping.map(arg, cvtI);
-        // if we've created more than one conversion in the loop
-        // we stop everything
-        Operation *argOp = arg.getDefiningOp();
-        if(argOp && isInLoop(argOp)){
-          numAddedCvts++;
-          if(numAddedCvts > 1){ 
-            for(auto kv: mapping.getValueMap()){
-              // llvm::outs() << "erasing " << kv.second << "\n";
-              kv.second.getDefiningOp()->erase();
-            }
-            return failure();
-          }
+            arg.getLoc(), newArgType, arg);
+        // we've added an unremovable conversion inside of the loop
+        // then we cancel everything and we're done
+        if (argOp && isInLoop(argOp)) {
+          return failure();
         }
+        mapping.map(arg, cvtI);
       }
     }
-
-    //
+    rewriter.setInsertionPoint(op);
     Operation *newOp = rewriter.clone(*op, mapping);
     newOp->getResult(0).setType(cvt.getOperand().getType());
     auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
@@ -447,9 +461,9 @@ public:
     mlir::RewritePatternSet patterns(context);
 
     patterns.add<SimplifyConversion>(context);
-    // patterns.add<PullConversionToSource>(context);
+    patterns.add<PullConversionToSource>(context);
     patterns.add<PushConversionToSink>(context);
-    // patterns.add<MoveArgConvertOutOfLoop>(context);
+    patterns.add<MoveArgConvertOutOfLoop>(context);
     patterns.add<BlockedToMMA>(context);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
