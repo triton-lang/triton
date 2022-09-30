@@ -367,12 +367,16 @@ void shared_layout::extract_double_bufferable(ir::value *v, std::shared_ptr<doub
     res.reset(new double_buffer_info_t{value_1, value_0, phi});
 }
 
-static bool is_smem(ir::value* v) {
-  if (dynamic_cast<ir::copy_to_shared_inst*>(v) ||
-      dynamic_cast<ir::masked_load_async_inst*>(v))
-    return true;
-  else
-    return false;
+static bool is_smem_in(ir::value* v, const ir::basic_block* bb) {
+  if (ir::instruction *instr = dynamic_cast<ir::instruction*>(v)) {
+    if (instr->get_parent() != bb)
+      return false;
+    if (dynamic_cast<ir::copy_to_shared_inst*>(v) ||
+        dynamic_cast<ir::masked_load_async_inst*>(v)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /// param:
@@ -387,14 +391,14 @@ static bool is_multistage_pipe_phi(ir::phi_node* phi, ir::basic_block* bb0, ir::
     ir::basic_block *cbb0 = cphi->get_incoming_block(0);
     ir::basic_block *cbb1 = cphi->get_incoming_block(1);
 
-    if (is_smem(c0)) {
+    if (is_smem_in(c0, cbb0)) {
       assert(cbb0 == bb0);
       values_0.push_back(c0);
       if (auto phi1 = dynamic_cast<ir::phi_node*>(c1)) {
         next = phi1;
         continue;
       } else {
-        if (is_smem(c1)) {
+        if (is_smem_in(c1, cbb1)) {
           value_1 = c1;
           assert(cbb1 == bb1);
           return true;
