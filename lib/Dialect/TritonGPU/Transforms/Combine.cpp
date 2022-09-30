@@ -6,8 +6,11 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "mlir/Transforms/Passes.h"
+#include "mlir/Transforms/RegionUtils.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 
@@ -108,17 +111,22 @@ public:
     return targetTensorType.getEncoding();
   }
 
-  SmallVector<Operation *, 4>
-  rematerializeCvt(mlir::Operation *cvt,
-                   mlir::PatternRewriter &rewriter) const {
+  void rematerializeCvt(mlir::Operation *cvt, mlir::PatternRewriter &rewriter,
+                        SetVector<Operation *> &toRemat,
+                        SetVector<Operation *> &seen,
+                        BlockAndValueMapping &mapping) const {
+    if (seen.contains(cvt))
+      return;
+    seen.insert(cvt);
     rewriter.startRootUpdate(cvt);
     Operation *op = cvt->getOperand(0).getDefiningOp();
-    SmallVector<Operation *, 4> newConversions;
-    BlockAndValueMapping mapping;
+    SmallVector<triton::gpu::ConvertLayoutOp, 4> cvts;
     for (Value argI : op->getOperands()) {
       // Compute new argument types
       auto oldArgType = argI.getType().dyn_cast<RankedTensorType>();
       if (!oldArgType)
+        continue;
+      if (mapping.contains(argI))
         continue;
       auto newEncoding = invertEncoding(cvt->getResultTypes()[0], op);
       auto newArgType = RankedTensorType::get(
@@ -127,14 +135,18 @@ public:
       auto cvtI = rewriter.create<triton::gpu::ConvertLayoutOp>(
           op->getLoc(), newArgType, argI);
       cvtI->moveBefore(op);
-      newConversions.push_back(cvtI);
+      if (toRemat.contains(argI.getDefiningOp()))
+        cvts.push_back(cvtI);
       mapping.map(argI, cvtI);
     }
     Operation *newOp = rewriter.clone(*op, mapping);
+    newOp->moveBefore(op);
     newOp->getResult(0).setType(cvt->getResult(0).getType());
     cvt->replaceAllUsesWith(newOp->getResults());
+    for (auto cvtI : cvts)
+      rematerializeCvt(cvtI, rewriter, toRemat, seen, mapping);
     rewriter.finalizeRootUpdate(cvt);
-    return newConversions;
+    rewriter.eraseOp(cvt);
   }
 
   mlir::LogicalResult
@@ -186,6 +198,8 @@ public:
               cvt->getResult(0).getParentBlock());
     });
     // if there is anything expensive to rematerialize, we don't do anything
+    if (depIntoOps.empty())
+      return mlir::failure();
     if (llvm::find_if(depIntoOps, expensive_to_remat) != depIntoOps.end()) {
       return mlir::failure();
     }
@@ -201,8 +215,15 @@ public:
     // we can now rematerialize all operations into depIntoOps recursively
     // for each operation `op`, we convert cvt(op(arg_0, arg_1, ..., arg_n))
     // into op(cvt_0(arg_0), cvt_1(arg_1), ..., cvt_n(arg_n))
-    auto newCvt = rematerializeCvt(cvt, rewriter);
-
+    FuncOp parentFunc = cvt->getParentOfType<FuncOp>();
+    // llvm::outs() << "converting...\n";
+    // llvm::outs() << cvt->getParentOfType<FuncOp>() << "\n";
+    // llvm::outs() << "to rematerialize\n";
+    // for (Operation *op : depIntoOps)
+    //   llvm::outs() << *op << "\n";
+    SetVector<Operation *> seen;
+    BlockAndValueMapping mapping;
+    rematerializeCvt(cvt, rewriter, depIntoOps, seen, mapping);
     return mlir::success();
   }
 };
