@@ -2690,9 +2690,10 @@ struct InsertSliceAsyncOpConversion
                                            getTypeConverter()->getIndexType(),
                                            product<int64_t>(resTy.getShape()));
     Value offset = rewriter.create<LLVM::MulOp>(loc, adaptor.index(), dstBase);
-    auto dstElemTy = getTypeConverter()->convertType(resTy.getElementType());
-    Value dstElemBase = rewriter.create<LLVM::GEPOp>(
-        loc, LLVM::LLVMPointerType::get(dstElemTy, 3), llDst, offset);
+    auto dstPtrTy = LLVM::LLVMPointerType::get(
+        getTypeConverter()->convertType(resTy.getElementType()), 3);
+    Value dstPtrBase =
+        rewriter.create<LLVM::GEPOp>(loc, dstPtrTy, llDst, offset);
 
     // %mask
     SmallVector<Value> maskElems;
@@ -2798,8 +2799,9 @@ struct InsertSliceAsyncOpConversion
         Value swizzleColOffset =
             add(mul(xor_(swizzleIdx, phase), i32_val(outVec)),
                 urem(colOffset, i32_val(outVec)));
+        Value tileOffset = add(rowOffset, swizzleColOffset);
         tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}] =
-            add(rowOffset, swizzleColOffset);
+            gep(dstPtrTy, dstPtrBase, tileOffset);
       }
 
       // 16 * 8 = 128bits
@@ -2825,7 +2827,8 @@ struct InsertSliceAsyncOpConversion
         Value pred =
             mask ? maskElems[vecIdx + wordIdx * numWordElems] : int_val(1, 1);
         auto tileOffset = tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}];
-        auto *dstOperand = ptxBuilder.newAddrOperand(tileOffset, "r");
+        auto *dstOperand =
+            ptxBuilder.newAddrOperand(tileOffset, "r", baseOffset);
         auto *srcOperand = ptxBuilder.newAddrOperand(srcElems[vecIdx], "l");
         auto *cpSize = ptxBuilder.newConstantOperand(srcVecSize);
         copyAsyncOp(dstOperand, srcOperand, cpSize).predicate(pred, "b");
