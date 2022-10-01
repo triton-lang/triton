@@ -394,6 +394,26 @@ public:
     auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
     auto isInLoop = [&](Operation *op) { return op->getParentOp() == forOp; };
 
+    // determine whether layout conversions can be folded into a given operation
+    auto can_fold_conversion = [&](Operation *op) {
+      if (isa<triton::gpu::ConvertLayoutOp>(op))
+        return op != cvt;
+      // return cvt->getResult(0).getType() == op->getOperand(0).getType();
+      if (isa<scf::YieldOp>(op))
+        return true;
+      return false;
+    };
+    // determine whether an operation is expensive to rematerialize
+    auto expensive_to_remat = [](Operation *op) {
+      if (isa<triton::gpu::ExtractSliceOp, triton::gpu::AllocTensorOp,
+              triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp,
+              triton::DotOp>(op))
+        return true;
+      if (isa<scf::YieldOp, scf::ForOp>(op))
+        return true;
+      return false;
+    };
+
     SetVector<Operation *> cvtSlices;
     auto filter = [&](Operation *op) {
       return isInLoop(op) && !isa<triton::LoadOp>(op) &&
