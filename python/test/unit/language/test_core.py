@@ -409,6 +409,7 @@ def test_where(dtype):
     where_kernel[grid](cond_tri, x_tri, y_tri, z_tri, SIZE, BLOCK_SIZE=1024, TEST_POINTERS=select_ptrs)
     assert (z == to_numpy(z_tri)).all()
 
+
 def test_where_broadcast():
     @triton.jit
     def where_kernel(cond_ptr, a_ptr, out_ptr, BLOCK_SIZE: tl.constexpr):
@@ -427,7 +428,7 @@ def test_where_broadcast():
     mask = numpy_random(SIZE, 'bool', rs=rs)
     z = np.where(mask, x, 0)
     cond_tri = to_triton(mask, device="cuda")
-    x_tri = to_triton(x, device='cuda', dst_type = dtype)
+    x_tri = to_triton(x, device='cuda', dst_type=dtype)
     z_tri = to_triton(np.empty((SIZE, SIZE), dtype=z.dtype), device='cuda', dst_type=dtype)
     where_kernel[(1,)](cond_tri, x_tri, z_tri, SIZE)
     assert (z == to_numpy(z_tri)).all()
@@ -435,6 +436,8 @@ def test_where_broadcast():
 # ---------------
 # test unary ops
 # ---------------
+
+
 @pytest.mark.parametrize("dtype_x, expr", [
     (dtype_x, ' -x') for dtype_x in dtypes_with_bfloat16
 ] + [
