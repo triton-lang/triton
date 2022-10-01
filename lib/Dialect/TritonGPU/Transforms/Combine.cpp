@@ -415,14 +415,21 @@ public:
     };
 
     SetVector<Operation *> cvtSlices;
-    auto filter = [&](Operation *op) {
-      return isInLoop(op) && !isa<triton::LoadOp>(op) &&
-             !isa<triton::DotOp>(op) && !isa<scf::YieldOp>(op) &&
-             !isa<triton::gpu::ConvertLayoutOp>(op);
-    };
-    mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
+    mlir::getForwardSlice(cvt.getResult(), &cvtSlices, [&](Operation *op) {
+      return !can_fold_conversion(op) && op->getResult(0) &&
+             (op->getResult(0).getParentBlock() ==
+              cvt->getResult(0).getParentBlock());
+    });
     if (cvtSlices.empty())
       return failure();
+    // if there is anything expensive to rematerialize, we don't do anything
+    auto it = llvm::find_if(cvtSlices, expensive_to_remat);
+    if (cvtSlices.empty())
+      return mlir::failure();
+    if (it != cvtSlices.end()) {
+      return mlir::failure();
+    }
+
     // we try push the conversion forward
     // since we'll be able to move it out of
     // the loop once it reaches the yield op
@@ -446,7 +453,8 @@ public:
             arg.getLoc(), newArgType, arg);
         // we've added an unremovable conversion inside of the loop
         // then we cancel everything and we're done
-        if (argOp && isInLoop(argOp)) {
+        if (argOp && isInLoop(argOp) && !can_fold_conversion(argOp)) {
+
           return failure();
         }
         mapping.map(arg, cvtI);
