@@ -973,8 +973,9 @@ def where(condition: tl.tensor,
           builder: ir.builder) -> tl.tensor:
     condition = cast(condition, tl.int1, builder)
     if condition.type.is_block():
-        x = broadcast_impl_shape(x, condition.type.get_block_shapes(), builder)
-        y = broadcast_impl_shape(y, condition.type.get_block_shapes(), builder)
+        condition, x = broadcast_impl_value(condition, x, builder)
+        x, y = broadcast_impl_value(x, y, builder)
+        condition, x = broadcast_impl_value(condition, x, builder)
 
     x, y = binary_op_type_checking_impl(x, y, builder, True, True)
     ret_ty = x.type
