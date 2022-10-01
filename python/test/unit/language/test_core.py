@@ -409,6 +409,28 @@ def test_where(dtype):
     where_kernel[grid](cond_tri, x_tri, y_tri, z_tri, SIZE, BLOCK_SIZE=1024, TEST_POINTERS=select_ptrs)
     assert (z == to_numpy(z_tri)).all()
 
+def test_where_broadcast():
+    @triton.jit
+    def where_kernel(cond_ptr, a_ptr, out_ptr, BLOCK_SIZE: tl.constexpr):
+        xoffsets = tl.reshape(tl.arange(0, BLOCK_SIZE), [BLOCK_SIZE, 1])
+        yoffsets = tl.reshape(tl.arange(0, BLOCK_SIZE), [1, BLOCK_SIZE])
+
+        mask = tl.load(cond_ptr + yoffsets)
+        vals = tl.load(a_ptr + yoffsets + BLOCK_SIZE * xoffsets)
+        res = tl.where(mask, vals, 0.)
+        tl.store(out_ptr + yoffsets + BLOCK_SIZE * xoffsets, res)
+
+    SIZE = 32
+    dtype = 'float32'
+    rs = RandomState(17)
+    x = numpy_random((SIZE, SIZE), dtype_str=dtype, rs=rs)
+    mask = numpy_random(SIZE, 'bool', rs=rs)
+    z = np.where(mask, x, 0)
+    cond_tri = to_triton(mask, device="cuda")
+    x_tri = to_triton(x, device='cuda', dst_type = dtype)
+    z_tri = to_triton(np.empty((SIZE, SIZE), dtype=z.dtype), device='cuda', dst_type=dtype)
+    where_kernel[(1,)](cond_tri, x_tri, z_tri, SIZE)
+    assert (z == to_numpy(z_tri)).all()
 
 # ---------------
 # test unary ops
