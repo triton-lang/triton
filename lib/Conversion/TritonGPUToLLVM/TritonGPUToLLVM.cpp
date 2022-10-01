@@ -2657,6 +2657,7 @@ struct InsertSliceAsyncOpConversion
 
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto resTy = dst.getType().cast<RankedTensorType>();
+    auto resElemTy = resTy.getElementType();
     auto srcBlockedLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
     auto resSharedLayout = resTy.getEncoding().cast<SharedEncodingAttr>();
     auto srcShape = srcTy.getShape();
@@ -2671,7 +2672,6 @@ struct InsertSliceAsyncOpConversion
 
     // %src
     auto srcElems = getLLVMElems(src, llSrc, srcBlockedLayout, rewriter, loc);
-    auto srcElemTy = srcTy.getElementType();
 
     // %dst
     auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
@@ -2795,11 +2795,11 @@ struct InsertSliceAsyncOpConversion
 
       // 16 * 8 = 128bits
       auto maxBitWidth =
-          std::max<unsigned>(128, srcTy.getElementTypeBitWidth());
-      auto vecBitWidth = srcTy.getElementTypeBitWidth() * minVec;
+          std::max<unsigned>(128, resElemTy.getIntOrFloatBitWidth());
+      auto vecBitWidth = resElemTy.getIntOrFloatBitWidth() * minVec;
       auto bitWidth = std::min<unsigned>(maxBitWidth, vecBitWidth);
       auto numWords = vecBitWidth / bitWidth;
-      auto numWordElems = bitWidth / srcTy.getElementTypeBitWidth();
+      auto numWordElems = bitWidth / resElemTy.getIntOrFloatBitWidth();
 
       // XXX(Keren): Tune CG and CA here.
       CacheModifier srcCacheModifier =
