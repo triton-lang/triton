@@ -133,7 +133,7 @@ public:
       // Create new argument
       auto cvtI = rewriter.create<triton::gpu::ConvertLayoutOp>(
           op->getLoc(), newArgType, argI);
-      cvtI->moveBefore(op);
+      cvtI->moveAfter(argI.getDefiningOp());
       if (toRemat.contains(argI.getDefiningOp()))
         cvts.push_back(cvtI);
       mapping.map(argI, cvtI);
@@ -164,6 +164,19 @@ public:
     // determine whether layout conversions can be folded into a given operation
     // llvm::outs() << "trying to convert " << *cvt << " and " << *op << "\n";
     auto can_fold_conversion = [&](Operation *op) {
+      // if `cvt` is in a loop and `op` doesn't depend on any other variables in
+      // that loop
+      auto forParent = cvt->getParentOfType<mlir::scf::ForOp>();
+      if (forParent) {
+        auto isInLoop = [&](Value v) {
+          return v.getDefiningOp() &&
+                 v.getDefiningOp()->getParentOfType<mlir::scf::ForOp>() ==
+                     forParent;
+        };
+        if (std::find_if(op->operand_begin(), op->operand_end(), isInLoop) ==
+            op->operand_end())
+          return true;
+      }
       if (isa<triton::gpu::ConvertLayoutOp>(op))
         return op != cvt;
       // return cvt->getResult(0).getType() == op->getOperand(0).getType();
