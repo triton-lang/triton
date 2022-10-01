@@ -856,6 +856,7 @@ def optimize_tritongpu_ir(mod, num_stages):
     pm.add_triton_gpu_combine_pass()
     pm.add_cse_pass()
     pm.add_triton_gpu_verifier_pass()
+    pm.add_licm_pass()
     pm.run(mod)
     return mod
 

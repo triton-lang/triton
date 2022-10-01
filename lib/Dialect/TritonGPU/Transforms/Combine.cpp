@@ -104,9 +104,8 @@ public:
   Attribute invertEncoding(Type targetType, Operation *op) const {
     RankedTensorType targetTensorType = targetType.cast<RankedTensorType>();
     if (auto expand_dims = dyn_cast<triton::ExpandDimsOp>(op)) {
-      return targetTensorType.getEncoding()
-          .cast<triton::gpu::BlockedEncodingAttr>()
-          .squeeze(expand_dims.axis());
+      return triton::gpu::SliceEncodingAttr::get(
+          getContext(), expand_dims.axis(), targetTensorType.getEncoding());
     }
     return targetTensorType.getEncoding();
   }
@@ -163,9 +162,11 @@ public:
         isSharedLayout(cvt->getOperand(0)))
       return mlir::failure();
     // determine whether layout conversions can be folded into a given operation
+    // llvm::outs() << "trying to convert " << *cvt << " and " << *op << "\n";
     auto can_fold_conversion = [&](Operation *op) {
       if (isa<triton::gpu::ConvertLayoutOp>(op))
-        return cvt->getResult(0).getType() == op->getOperand(0).getType();
+        return op != cvt;
+      // return cvt->getResult(0).getType() == op->getOperand(0).getType();
       if (isa<arith::ConstantOp, triton::MakeRangeOp, triton::SplatOp>(op))
         return true;
       return false;
@@ -192,7 +193,13 @@ public:
     // if there is anything expensive to rematerialize, we don't do anything
     if (depIntoOps.empty())
       return mlir::failure();
-    if (llvm::find_if(depIntoOps, expensive_to_remat) != depIntoOps.end()) {
+    auto it = llvm::find_if(depIntoOps, expensive_to_remat);
+    if (it != depIntoOps.end()) {
+      // if (isa<arith::TruncFOp>(op))
+      //   for (Operation *op : depIntoOps)
+      //     llvm::outs() << *op << "\n";
+      // llvm::outs() << "contains something expensive to rematerialize at "
+      //              << **it << "\n";
       return mlir::failure();
     }
     // we only rematerialize if all the conversions that we create get folded
@@ -269,6 +276,7 @@ tryConvertIterArg(scf::ForOp &forOp, mlir::PatternRewriter &rewriter, size_t i,
   BlockAndValueMapping mapping;
   for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs()))
     mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
+  mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
   // traverse all ops in the loop
   for (Operation &op : forOp.getBody()->without_terminator()) {
     // we clone the op
@@ -336,6 +344,7 @@ public:
           auto newFor = tryConvertIterArg(forOp, rewriter, iterArg.index(),
                                           (*fwdCvtIt)->getResult(0).getType());
           rewriter.replaceOp(forOp, newFor.first);
+          // llvm::outs() << newFor.second << "\n";
           return success();
         }
       }

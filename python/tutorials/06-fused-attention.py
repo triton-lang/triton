@@ -57,26 +57,26 @@ def _fwd_kernel(
         # -- compute m_ij, p, l_ij
         m_ij = tl.max(qk, 1)
         p = tl.exp(qk - m_ij[:, None])
-        l_ij = tl.sum(p, 1)
+        # l_ij = tl.sum(p, 1)
         # -- update m_i and l_i
-        m_i_new = tl.maximum(m_i, m_ij)
-        alpha = tl.exp(m_i - m_i_new)
-        beta = tl.exp(m_ij - m_i_new)
-        l_i_new = alpha * l_i + beta * l_ij
+        # m_i_new = tl.maximum(m_i, m_ij)
+        # alpha = tl.exp(m_i - m_i_new)
+        # beta = tl.exp(m_ij - m_i_new)
+        # l_i_new = alpha * l_i + beta * l_ij
         # -- update output accumulator --
         # scale p
-        p_scale = beta / l_i_new
-        p = p * p_scale[:, None]
+        # p_scale = beta / l_i_new
+        # p = p * p_scale[:, None]
         # scale acc
-        acc_scale = l_i / l_i_new * alpha
-        acc = acc * acc_scale[:, None]
+        # acc_scale = l_i / l_i_new * alpha
+        # acc = acc * acc_scale[:, None]
         # update acc
         v = tl.load(v_ptrs + start_n * stride_vk)
         p = p.to(tl.float16)
         acc += tl.dot(p, v)
         # update m_i and l_i
-        l_i = l_i_new
-        m_i = m_i_new
+        # l_i = l_i_new
+        # m_i = m_i_new
     # rematerialize offsets to save registers
     start_m = tl.program_id(0)
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
