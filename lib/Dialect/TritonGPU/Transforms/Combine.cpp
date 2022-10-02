@@ -39,7 +39,7 @@ class SimplifyConversion : public mlir::RewritePattern {
 public:
   SimplifyConversion(mlir::MLIRContext *context)
       : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
-                             2, context) {}
+                             4, context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
@@ -164,6 +164,8 @@ public:
     // determine whether layout conversions can be folded into a given operation
     // llvm::outs() << "trying to convert " << *cvt << " and " << *op << "\n";
     auto can_fold_conversion = [&](Operation *op) {
+      if (!op)
+        return false;
       // if `cvt` is in a loop and `op` doesn't depend on any other variables in
       // that loop
       auto forParent = cvt->getParentOfType<mlir::scf::ForOp>();
@@ -186,6 +188,8 @@ public:
     };
     // determine whether an operation is expensive to rematerialize
     auto expensive_to_remat = [](Operation *op) {
+      if (!op)
+        return true;
       if (isa<triton::gpu::ExtractSliceOp, triton::gpu::AllocTensorOp,
               triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp,
               triton::DotOp>(op))
@@ -357,7 +361,6 @@ public:
           auto newFor = tryConvertIterArg(forOp, rewriter, iterArg.index(),
                                           (*fwdCvtIt)->getResult(0).getType());
           rewriter.replaceOp(forOp, newFor.first);
-          // llvm::outs() << newFor.second << "\n";
           return success();
         }
       }
@@ -453,16 +456,17 @@ public:
             arg.getLoc(), newArgType, arg);
         // we've added an unremovable conversion inside of the loop
         // then we cancel everything and we're done
-        if (argOp && isInLoop(argOp) && !can_fold_conversion(argOp)) {
-
+        if (argOp && isInLoop(argOp) && !can_fold_conversion(argOp))
           return failure();
-        }
         mapping.map(arg, cvtI);
       }
     }
     rewriter.setInsertionPoint(op);
     Operation *newOp = rewriter.clone(*op, mapping);
-    newOp->getResult(0).setType(cvt.getOperand().getType());
+    auto origOpType = op->getResult(0).getType().cast<RankedTensorType>();
+    auto newRetType = RankedTensorType::get(
+        origOpType.getShape(), origOpType.getElementType(), targetEncoding);
+    newOp->getResult(0).setType(newRetType);
     auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
         newOp->getLoc(), cvt.getResult().getType(), newOp->getResult(0));
     rewriter.replaceOp(op, newCvt->getResults());
