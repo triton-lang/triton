@@ -1137,7 +1137,7 @@ def _build(name, src, srcdir):
         return so
     # fallback on setuptools
     extra_compile_args = []
-    library_dirs = [cuda_lib_dir]
+    library_dirs = cuda_lib_dirs
     include_dirs = [srcdir, cu_include_dir]
     libraries = ['cuda']
     # extra arguments
