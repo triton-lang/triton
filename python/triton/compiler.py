@@ -1104,7 +1104,7 @@ class CacheManager:
 @functools.lru_cache()
 def libcuda_dirs():
     locs = subprocess.check_output(["whereis", "libcuda.so"]).decode().strip().split()[1:]
-    return [ os.path.dirname(loc) for loc in locs ]
+    return [os.path.dirname(loc) for loc in locs]
 
 
 @contextlib.contextmanager
@@ -1131,7 +1131,7 @@ def _build(name, src, srcdir):
         cc = gcc if gcc is not None else clang
     py_include_dir = get_paths()["include"]
     cc_cmd = [cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
-    cc_cmd += [ f"-L{dir}" for dir in cuda_lib_dirs ]
+    cc_cmd += [f"-L{dir}" for dir in cuda_lib_dirs]
     ret = subprocess.check_call(cc_cmd)
     if ret == 0:
         return so
