@@ -22,7 +22,6 @@ from filelock import FileLock
 
 import triton
 import triton._C.libtriton.triton as _triton
-
 from .tools.disasm import extract
 
 
