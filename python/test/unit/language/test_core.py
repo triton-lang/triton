@@ -678,7 +678,7 @@ def test_atomic_cas():
     Lock = torch.zeros((1,), device='cuda', dtype=torch.int32)
     change_value[(1,)](Lock)
 
-    assert(Lock[0] == 1)
+    assert (Lock[0] == 1)
 
     # 2. only one block enters the critical section
     @triton.jit
