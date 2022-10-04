@@ -430,7 +430,6 @@ def test_where_broadcast():
         res = tl.where(mask, vals, 0.)
         tl.store(out_ptr + yoffsets + BLOCK_SIZE * xoffsets, res)
 
-
     SIZE = 32
     dtype = 'float32'
     rs = RandomState(17)
