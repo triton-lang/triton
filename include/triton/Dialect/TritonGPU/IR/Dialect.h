@@ -24,6 +24,8 @@ unsigned getElemsPerThread(Attribute layout, ArrayRef<int64_t> shape);
 
 SmallVector<unsigned> getSizePerThread(Attribute layout);
 
+SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout);
+
 SmallVector<unsigned> getShapePerCTA(const Attribute &layout);
 
 SmallVector<unsigned> getOrder(const Attribute &layout);
