@@ -2779,7 +2779,8 @@ struct AsyncWaitOpConversion
     auto voidTy = LLVM::LLVMVoidType::get(ctx);
     auto ret = ptxBuilder.launch(rewriter, loc, voidTy);
 
-    rewriter.replaceOp(op, ret);
+    // Safe to remove the op since it doesn't have any return value.
+    rewriter.eraseOp(op);
     return success();
   }
 };
