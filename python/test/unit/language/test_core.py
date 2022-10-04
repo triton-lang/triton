@@ -421,6 +421,15 @@ def test_where_broadcast():
         res = tl.where(mask, vals, 0.)
         tl.store(out_ptr + yoffsets + BLOCK_SIZE * xoffsets, res)
 
+    @triton.jit
+    def where_scalar_condition(a_ptr, out_ptr, BLOCK_SIZE: tl.constexpr):
+        xoffsets = tl.reshape(tl.arange(0, BLOCK_SIZE), [BLOCK_SIZE, 1])
+        yoffsets = tl.reshape(tl.arange(0, BLOCK_SIZE), [1, BLOCK_SIZE])
+        mask = 0
+        vals = tl.load(a_ptr + yoffsets + BLOCK_SIZE * xoffsets)
+        res = tl.where(mask, vals, 0.)
+        tl.store(out_ptr + yoffsets + BLOCK_SIZE * xoffsets, res)
+
     SIZE = 32
     dtype = 'float32'
     rs = RandomState(17)
@@ -431,6 +440,9 @@ def test_where_broadcast():
     x_tri = to_triton(x, device='cuda', dst_type=dtype)
     z_tri = to_triton(np.empty((SIZE, SIZE), dtype=z.dtype), device='cuda', dst_type=dtype)
     where_kernel[(1,)](cond_tri, x_tri, z_tri, SIZE)
+    assert (z == to_numpy(z_tri)).all()
+    where_scalar_condition[(1,)](x_tri, z_tri, SIZE)
+    z = np.where(0, x, 0)
     assert (z == to_numpy(z_tri)).all()
 
 # ---------------

@@ -978,6 +978,8 @@ def where(condition: tl.tensor,
         condition, x = broadcast_impl_value(condition, x, builder)
 
     x, y = binary_op_type_checking_impl(x, y, builder, True, True)
+    if not condition.type.is_block():
+        condition, _ = broadcast_impl_value(condition, x, builder)
     ret_ty = x.type
     return tl.tensor(builder.create_select(condition.handle, x.handle, y.handle), ret_ty)
 
