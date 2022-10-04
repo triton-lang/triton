@@ -1565,7 +1565,7 @@ void ConvertLayoutOpConversion::processReplica(
       auto elemPtrTy = ptr_ty(llvmElemTy, 3);
       Value ptr = gep(elemPtrTy, smemBase, offset);
       auto vecTy = vec_ty(llvmElemTy, vec);
-      ptr = bit_cast(ptr_ty(vecTy, 3), ptr);
+      ptr = bitcast(ptr_ty(vecTy, 3), ptr);
       if (stNotRd) {
         Value valVec = undef(vecTy);
         for (unsigned v = 0; v < vec; ++v) {
@@ -1598,7 +1598,7 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
   auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
   Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
   auto elemPtrTy = ptr_ty(llvmElemTy, 3);
-  smemBase = bit_cast(elemPtrTy, smemBase);
+  smemBase = bitcast(elemPtrTy, smemBase);
   auto shape = dstTy.getShape();
   unsigned rank = dstTy.getRank();
   SmallVector<unsigned> numReplicates(rank);
@@ -1716,7 +1716,7 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
   Value minVecVal = idx_val(minVec);
   Value smemBase = getSharedMemoryBase(loc, rewriter, dst);
   auto elemPtrTy = ptr_ty(getTypeConverter()->convertType(elemTy), 3);
-  smemBase = bit_cast(elemPtrTy, smemBase);
+  smemBase = bitcast(elemPtrTy, smemBase);
   unsigned numWordsEachRep = product<unsigned>(wordsInEachRep);
   SmallVector<Value> wordVecs(numWordsEachRep);
   for (unsigned i = 0; i < numElems; ++i) {
@@ -1767,7 +1767,7 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
 
         // step 3: store
         Value smemAddr = gep(elemPtrTy, smemBase, offset);
-        smemAddr = bit_cast(ptr_ty(wordTy, 3), smemAddr);
+        smemAddr = bitcast(ptr_ty(wordTy, 3), smemAddr);
         store(wordVecs[linearWordIdx], smemAddr);
       }
     }

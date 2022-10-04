@@ -101,7 +101,7 @@ struct PTXBuilder {
   };
 
   template <typename INSTR = PTXInstr, typename... Args>
-  INSTR *create(Args &&... args) {
+  INSTR *create(Args &&...args) {
     instrs.emplace_back(std::make_unique<INSTR>(this, args...));
     return static_cast<INSTR *>(instrs.back().get());
   }

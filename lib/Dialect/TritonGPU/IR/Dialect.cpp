@@ -77,7 +77,7 @@ SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     for (int d = 0, n = blockedLayout.getOrder().size(); d < n; ++d)
       threads.push_back(blockedLayout.getThreadsPerWarp()[d] *
-                      blockedLayout.getWarpsPerCTA()[d]);
+                        blockedLayout.getWarpsPerCTA()[d]);
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     assert(0 && "Unimplemented usage of MmaEncodingAttr");
   } else {
