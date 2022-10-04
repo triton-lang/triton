@@ -2911,6 +2911,7 @@ struct InsertSliceAsyncOpConversion
         // Since the swizzling index is related to outVec, and we know minVec
         // already, inVec doesn't matter
         //
+        // (Numbers represent row indices)
         // Example1:
         // outVec = 2, inVec = 2, minVec = 2
         // outVec = 2, inVec = 4, minVec = 2
@@ -2918,10 +2919,6 @@ struct InsertSliceAsyncOpConversion
         //     | [3 4] [5 6]  ... [1 2]   |
         // Example2:
         // outVec = 4, inVec = 2, minVec = 2
-        //     | [1 2] [3 4]  ... [15 16] |
-        //     | [3 4] [5 6]  ... [1 2]   |
-        //                  |
-        //                 \|/
         //     | [1 2 3 4] [5 6 7 8] ... [13 14 15 16] |
         //     | [5 6 7 8] [9 10 11 12] ... [1 2 3 4]  |
         auto srcIdx = srcIndices[tileVecIdxRow * sizePerThread[inOrder[0]]];
