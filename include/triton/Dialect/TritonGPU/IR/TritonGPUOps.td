@@ -14,7 +14,7 @@ class TTG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonGPU_Dialect, mnemonic, traits>;
 
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
-                                 [NoSideEffect]> {
+                                 [SameOperandsAndResultShape, NoSideEffect]> {
   let summary = "convert layout";
 
   let arguments = (ins TT_Tensor:$src);
