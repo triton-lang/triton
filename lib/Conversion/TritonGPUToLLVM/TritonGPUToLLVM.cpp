@@ -1340,7 +1340,7 @@ struct ExtractSliceOpConversion
 
     auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
-    Value resultVal = mul(elemPtrTy, adaptor.src(), offset);
+    Value resultVal = gep(elemPtrTy, adaptor.src(), offset);
     rewriter.replaceOp(op, resultVal);
     return success();
   }
@@ -2719,8 +2719,8 @@ struct InsertSliceAsyncOpConversion
     // If perPhase * maxPhase > threadsPerCTA, we need to swizzle over elements
     // across phases.
     // If perPhase * maxPhase == threadsPerCTA, swizzle is not allowd
-    auto numSwizzleRows =
-        std::max<unsigned>(perPhase * maxPhase / threadsPerCTA[inOrder[1]], 1);
+    auto numSwizzleRows = std::max<unsigned>(
+        (perPhase * maxPhase) / threadsPerCTA[inOrder[1]], 1);
     // A sharedLayout encoding has a "vec" parameter.
     // On the column dimension, if inVec > outVec, it means we have to divide
     // single vector read into multiple ones
@@ -2729,15 +2729,16 @@ struct InsertSliceAsyncOpConversion
     auto srcIndices = emitIndices(loc, rewriter, srcBlockedLayout, srcShape);
     // <<tileVecIdxRow, tileVecIdxCol>, TileOffset>
     DenseMap<std::pair<unsigned, unsigned>, Value> tileOffsetMap;
-    PTXBuilder ptxBuilder;
-    for (unsigned vecIdx = 0; vecIdx < numElems; vecIdx += minVec) {
+    for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
       // minVec = 2, inVec = 4, outVec = 2
-      //            baseOffsetCol = 0   baseOffsetCol = 1 * 128
-      //                -/\-              -/\-
-      //               [|x x| x x x x ... |x x| x x x x x]
-      //               [|x x| x x x x ... |x x| x x x x x]
-      // baseOffsetRow [|x x| x x x x ... |x x| x x x x x]
-      //               [|x x| x x x x ... |x x| x x x x x]
+      //   baseOffsetCol = 0   baseOffsetCol = 0
+      //   tileVecIdxCol = 0   tileVecIdxCol = 1
+      //                -/\-   -/\-
+      //               [|x x| |x x| x x x x x]
+      //               [|x x| |x x| x x x x x]
+      // baseOffsetRow [|x x| |x x| x x x x x]
+      //               [|x x| |x x| x x x x x]
+      auto vecIdx = elemIdx / minVec;
       auto vecIdxCol = vecIdx % (sizePerThread[inOrder[0]] / minVec);
       auto vecIdxRow = vecIdx / (sizePerThread[inOrder[0]] / minVec);
       auto baseOffsetCol =
@@ -2745,22 +2746,10 @@ struct InsertSliceAsyncOpConversion
       auto baseOffsetRow = vecIdxRow / numSwizzleRows * numSwizzleRows *
                            threadsPerCTA[inOrder[1]];
       auto baseOffset = (baseOffsetRow * srcShape[inOrder[0]] + baseOffsetCol);
-      // A thread tile
-      //  tileVecIdxCol=0   tileVecIdxCol=3
-      //       -/\-            -/\-   sizePerThread[inOrder[0]]
-      //     | [x x]   ...    [x x] |
-      //     | [x x]   ...    [x x] |
-      //     | [x x]   ...    [x x] |
-      //     | [x x]   ...    [x x] |
       auto tileVecIdxCol = vecIdxCol % numVecCols;
       auto tileVecIdxRow = vecIdxRow % numSwizzleRows;
 
       if (!tileOffsetMap.count({tileVecIdxRow, tileVecIdxCol})) {
-        auto srcIdx = srcIndices[tileVecIdxRow * sizePerThread[inOrder[0]]];
-        Value phase = urem(udiv(srcIdx[inOrder[1]], i32_val(perPhase)),
-                           i32_val(maxPhase));
-        Value rowOffset =
-            mul(srcIdx[inOrder[1]], i32_val(srcShape[inOrder[0]]));
         // Swizzling
         // Since the swizzling index is related to outVec, and we know minVec
         // already, inVec doesn't matter
@@ -2778,12 +2767,13 @@ struct InsertSliceAsyncOpConversion
         //                 \|/
         //     | [1 2 3 4] [5 6 7 8] ... [13 14 15 16] |
         //     | [5 6 7 8] [9 10 11 12] ... [1 2 3 4]  |
+        auto srcIdx = srcIndices[tileVecIdxRow * sizePerThread[inOrder[0]]];
+        Value phase = urem(udiv(srcIdx[inOrder[1]], i32_val(perPhase)),
+                           i32_val(maxPhase));
+        Value rowOffset =
+            mul(srcIdx[inOrder[1]], i32_val(srcShape[inOrder[0]]));
         Value colOffset =
             add(srcIdx[inOrder[0]], i32_val(tileVecIdxCol * minVec));
-        // colOffset / minVec / (outVec / minVec) = colOffset / outVec
-        // Equivalent to:
-        // Value swizzleIdx = udiv(udiv(colOffset, i32_val(minVec)),
-        // i32_val(outVec));
         Value swizzleIdx = udiv(colOffset, i32_val(outVec));
         Value swizzleColOffset =
             add(mul(xor_(swizzleIdx, phase), i32_val(outVec)),
@@ -2807,6 +2797,7 @@ struct InsertSliceAsyncOpConversion
       assert(bitWidth == 128 || bitWidth == 64 || bitWidth == 32);
 
       for (int wordIdx = 0; wordIdx < numWords; ++wordIdx) {
+        PTXBuilder ptxBuilder;
         auto &copyAsyncOp = *ptxBuilder.create<PTXCpAsyncLoadInstr>(
             srcCacheModifier, op.evict());
 
@@ -2826,12 +2817,14 @@ struct InsertSliceAsyncOpConversion
           srcSize = ptxBuilder.newOperand(selectOp, "r");
         }
         copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
+        ptxBuilder.launch(rewriter, loc, LLVM::LLVMVoidType::get(getContext()));
       }
     }
 
+    PTXBuilder ptxBuilder;
     ptxBuilder.create<PTXCpAsyncCommitGroupInstr>()->operator()();
-    auto voidTy = LLVM::LLVMVoidType::get(getContext());
-    auto ret = ptxBuilder.launch(rewriter, loc, voidTy);
+    auto ret =
+        ptxBuilder.launch(rewriter, loc, LLVM::LLVMVoidType::get(getContext()));
     rewriter.replaceOp(op, ret);
     return success();
   }

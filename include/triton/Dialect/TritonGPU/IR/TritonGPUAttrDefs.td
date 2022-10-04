@@ -60,10 +60,6 @@ are stored contiguously
 _ _ _ _ /\_ _ _ _
 A_{2, 2}  A_{2, 3}  A_{2, 0}  A_{2, 1} ...   [phase 1] \ per phase = 2
 A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
-
-Reference:
-"DEVELOPING CUDA KERNELS TO PUSH TENSOR CORES TO PUSH THE ABSOLUTE LIMIT ON NVIDIA A100"
-Andrew Kerr, May 21, 2020, GTC 2020
   }];
 
   let parameters = (
