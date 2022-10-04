@@ -169,6 +169,7 @@ for
         int dim = order[_dim];
         int maxNumThreads = int(shape[dim]) / sizePerThread[dim];
         warpsPerCTA[dim] = std::clamp(remainingWarps, 1, maxNumThreads);
+        maxNumThreads = maxNumThreads / warpsPerCTA[dim];
         threadsPerWarp[dim] = std::clamp(remainingLanes, 1, maxNumThreads);
         remainingWarps /= warpsPerCTA[dim];
         remainingLanes /= threadsPerWarp[dim];
