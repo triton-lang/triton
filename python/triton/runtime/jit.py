@@ -109,6 +109,7 @@ class KernelInterface:
 
 class JITFunction(KernelInterface):
 
+    # Hook for inspecting compiled functions and modules
     cache_hook = None
     divisibility = 16
 
@@ -253,7 +254,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     try:
       bin = cache[key]
       if not warmup:
-          bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, {args})
+          bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, triton.compiler.CompiledKernel.launch_enter_hook, triton.compiler.CompiledKernel.launch_exit_hook, bin, {args})
       return bin
     # kernel not cached -- compile
     except KeyError:
@@ -264,7 +265,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
       constants.update({{i: None for i, arg in enumerate(args) if arg is None}})
       constants.update({{i: 1 for i in configs[0].equal_to_1}})
       # build kernel signature -- doesn't include specialized arguments
-      all_args = {', '.join([f'{arg}' for arg in self.arg_names])},
+      all_args = {', '.join([f'{arg}' for arg in self.arg_names])}
       signature = {{ i: self._type_of(_key_of(arg)) for i, arg in enumerate(all_args) if i not in self.constexprs }}
       # build stub signature -- includes arguments that are specialized
       for i, arg in constants.items():
@@ -274,7 +275,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
       if not self._call_hook(key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
         bin = triton.compile(self, signature, device, constants, num_warps, num_stages, extern_libs=extern_libs, configs=configs)
         if not warmup:
-            bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, *args)
+            bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, triton.compiler.CompiledKernel.launch_enter_hook, triton.compiler.CompiledKernel.launch_exit_hook, bin, *args)
         self.cache[key] = bin
         return bin
       return None
