@@ -259,12 +259,12 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     except KeyError:
       # build dict of constant values
       args = [{args}]
-      configs = self._get_config(*args),
+      all_args = {', '.join([f'{arg}' for arg in self.arg_names])},
+      configs = self._get_config(*all_args),
       constants = self._make_constants(constexpr_key)
-      constants.update({{i: None for i, arg in enumerate(args) if arg is None}})
+      constants.update({{i: None for i, arg in enumerate(all_args) if arg is None}})
       constants.update({{i: 1 for i in configs[0].equal_to_1}})
       # build kernel signature -- doesn't include specialized arguments
-      all_args = {', '.join([f'{arg}' for arg in self.arg_names])},
       signature = {{ i: self._type_of(_key_of(arg)) for i, arg in enumerate(all_args) if i not in self.constexprs }}
       # build stub signature -- includes arguments that are specialized
       for i, arg in constants.items():
