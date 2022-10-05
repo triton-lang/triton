@@ -826,7 +826,7 @@ def make_triton_ir(fn, signature, specialization, constants):
     gscope = fn.__globals__.copy()
     function_name = '_'.join([fn.__name__, kernel_suffix(signature.values(), specialization)])
     tys = list(signature.values())
-    new_constants = {k: True if tys[k] == "i1" else 1 for k in specialization.equal_to_1}
+    new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in specialization.equal_to_1}
     new_attrs = {k: ("multiple_of", 16) for k in specialization.divisible_by_16}
     all_constants = constants.copy()
     all_constants.update(new_constants)
