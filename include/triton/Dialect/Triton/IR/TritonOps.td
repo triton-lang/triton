@@ -254,6 +254,7 @@ def TT_ReduceOp : TT_Op<"reduce", [NoSideEffect]> {
     ];
 
     let assemblyFormat = "$operand attr-dict `:` type($operand) `->` type($result)";
+
 }
 
 def TT_AtomicRMWOp : TT_Op<"atomic_rmw"> {
