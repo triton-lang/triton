@@ -1072,7 +1072,7 @@ def generate_launcher(constants, signature):
             "int64_t": "L",
         }[ty]
 
-    format = "iiiiiKK" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
+    format = "iiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
 
     # generate glue code
     src = f"""
@@ -1130,11 +1130,37 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   uint64_t _function;
   int num_warps;
   int shared_memory;
+  PyObject *launch_enter_hook = NULL;
+  PyObject *launch_exit_hook = NULL;
+  PyObject *compiled_kernel = NULL;
+  PyObject *hook_ret = NULL;
   {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
+  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
     return NULL;
   }}
+
+  if (launch_enter_hook != Py_None) {{
+    PyObject *new_args = PyTuple_Pack(1, compiled_kernel);
+    hook_ret = PyObject_CallObject(launch_enter_hook, new_args);
+    Py_DECREF(new_args);
+  }}
+
   _launch(gridX, gridY, gridZ, num_warps, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"getPointer(_arg{i},{i})" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
+
+  if (launch_exit_hook != Py_None) {{
+    PyObject *new_args = NULL;
+    if (hook_ret) {{
+        new_args = PyTuple_Pack(2, compiled_kernel, hook_ret);
+    }} else {{
+        new_args = PyTuple_Pack(1, compiled_kernel);
+    }}
+    hook_ret = PyObject_CallObject(launch_exit_hook, new_args);
+    Py_DECREF(new_args);
+  }}
+
+  if (hook_ret) {{
+      Py_DECREF(hook_ret);
+  }}
   if(PyErr_Occurred()) {{
     return NULL;
   }}
@@ -1497,6 +1523,10 @@ def compile(fn, **kwargs):
 
 class CompiledKernel:
 
+    # Hooks for external tools to monitor the execution of triton kernels
+    launch_enter_hook = None
+    launch_exit_hook = None
+
     def __init__(self, so_path, metadata, asm):
         # initialize launcher
         import importlib.util
@@ -1538,7 +1568,8 @@ class CompiledKernel:
         def runner(*args, stream=None):
             if stream is None:
                 stream = torch.cuda.current_stream().cuda_stream
-            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.shared, stream, self.cu_function, *args)
+            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.shared, stream, self.cu_function,
+                           CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args)
         return runner
 
     def get_sass(self, fun=None):
