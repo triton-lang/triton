@@ -826,7 +826,7 @@ def make_triton_ir(fn, signature, specialization, constants):
     gscope = fn.__globals__.copy()
     function_name = '_'.join([fn.__name__, kernel_suffix(signature.values(), specialization)])
     tys = list(signature.values())
-    new_constants = {k: True if tys[k] == "i1" else 1 for k in specialization.equal_to_1}
+    new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in specialization.equal_to_1}
     new_attrs = {k: ("multiple_of", 16) for k in specialization.divisible_by_16}
     all_constants = constants.copy()
     all_constants.update(new_constants)
@@ -1130,6 +1130,12 @@ def libcuda_dirs():
     return [os.path.dirname(loc) for loc in locs]
 
 
+@functools.lru_cache()
+def cuda_home_dirs():
+    default_dir = "/usr/local/cuda"
+    return os.getenv("CUDA_HOME", default=default_dir)
+
+
 @contextlib.contextmanager
 def quiet():
     old_stdout, old_stderr = sys.stdout, sys.stderr
@@ -1142,7 +1148,7 @@ def quiet():
 
 def _build(name, src, srcdir):
     cuda_lib_dirs = libcuda_dirs()
-    cu_include_dir = "/usr/local/cuda/include"
+    cu_include_dir = os.path.join(cuda_home_dirs(), "include")
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
