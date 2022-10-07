@@ -34,7 +34,9 @@ You can install the Python package from source by running the following commands
 .. code-block:: bash
 
       git clone https://github.com/openai/triton.git;
-      cd triton/python;
+      cd triton;
+      git submodule update --init --recursive;
+      cd python;
       pip install cmake; # build time dependency
       pip install -e .
 
