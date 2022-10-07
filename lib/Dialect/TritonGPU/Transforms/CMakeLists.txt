@@ -7,6 +7,7 @@ add_mlir_dialect_library(TritonGPUTransforms
   CanonicalizeLoops.cpp
   Combine.cpp
   Pipeline.cpp
+  Swizzle.cpp
   Verifier.cpp
   TritonGPUConversion.cpp
 
