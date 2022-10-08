@@ -120,8 +120,8 @@ public:
 
     auto blacklist = [](Operation *op) {
       if (isa<triton::gpu::ExtractSliceOp, triton::gpu::AllocTensorOp,
-              triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp>(
-              op))
+              triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp,
+              triton::DotOp>(op))
         return true;
       if (isa<scf::YieldOp, scf::ForOp>(op))
         return true;
@@ -306,6 +306,8 @@ public:
         auto fwdCvtIt = std::find_if(opIt, fwdEndIt, isCvt);
         auto bwdCvtIt = std::find_if(bwdBeginIt, opIt, isCvt);
 
+        if (!iterArg.value().getType().isa<RankedTensorType>())
+          continue;
         if (fwdCvtIt != fwdEndIt) {
           auto newFor = tryConvertIterArg(forOp, rewriter, iterArg.index(),
                                           (*fwdCvtIt)->getResult(0).getType());
