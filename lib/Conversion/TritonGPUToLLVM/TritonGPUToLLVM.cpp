@@ -3121,6 +3121,12 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
                                                                benefit);
   patterns.add<BinaryOpConversion<arith::MulFOp, LLVM::FMulOp>>(typeConverter,
                                                                 benefit);
+
+  patterns.add<BinaryOpConversion<arith::AndIOp, LLVM::AndOp>>(typeConverter,
+                                                               benefit);
+  patterns.add<BinaryOpConversion<arith::OrIOp, LLVM::OrOp>>(typeConverter,
+                                                             benefit);
+
   patterns.add<CmpIOpConversion>(typeConverter, benefit);
   patterns.add<CmpFOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
