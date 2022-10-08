@@ -1366,13 +1366,15 @@ struct ExtractSliceOpConversion
   }
 };
 
-template <typename SourceOp, typename DestOp>
-class BinaryOpConversion : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
+// A CRTP style of base class.
+template <typename SourceOp, typename DestOp, typename ConcreteT>
+class BinaryOpConversionBase
+    : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
 public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
-  explicit BinaryOpConversion(LLVMTypeConverter &typeConverter,
-                              PatternBenefit benefit = 1)
+  explicit BinaryOpConversionBase(LLVMTypeConverter &typeConverter,
+                                  PatternBenefit benefit = 1)
       : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit) {}
 
   LogicalResult
@@ -1393,17 +1395,135 @@ public:
         this->getTypeConverter()->convertType(resultTy.getElementType());
     SmallVector<Type> types(elems, elemTy);
     Type structTy = LLVM::LLVMStructType::getLiteral(this->getContext(), types);
-    auto lhss =
-        this->getElementsFromStruct(loc, adaptor.getLhs(), elems, rewriter);
-    auto rhss =
-        this->getElementsFromStruct(loc, adaptor.getRhs(), elems, rewriter);
+
+    auto *concreteThis = static_cast<const ConcreteT *>(this);
+    auto lhss = this->getElementsFromStruct(loc, concreteThis->getLhs(adaptor),
+                                            elems, rewriter);
+    auto rhss = this->getElementsFromStruct(loc, concreteThis->getRhs(adaptor),
+                                            elems, rewriter);
     SmallVector<Value> resultVals(elems);
     for (unsigned i = 0; i < elems; ++i) {
-      resultVals[i] = rewriter.create<DestOp>(loc, elemTy, lhss[i], rhss[i]);
+      resultVals[i] = concreteThis->createDestOp(op, rewriter, elemTy, lhss[i],
+                                                 rhss[i], loc);
     }
     Value view = getStructFromElements(loc, resultVals, rewriter, structTy);
     rewriter.replaceOp(op, view);
     return success();
+  }
+};
+
+template <typename SourceOp, typename DestOp>
+struct BinaryOpConversion
+    : public BinaryOpConversionBase<SourceOp, DestOp,
+                                    BinaryOpConversion<SourceOp, DestOp>> {
+
+  explicit BinaryOpConversion(LLVMTypeConverter &typeConverter,
+                              PatternBenefit benefit = 1)
+      : BinaryOpConversionBase<SourceOp, DestOp,
+                               BinaryOpConversion<SourceOp, DestOp>>(
+            typeConverter, benefit) {}
+
+  using OpAdaptor = typename SourceOp::Adaptor;
+  // An interface to support variant DestOp builder.
+  DestOp createDestOp(SourceOp op, ConversionPatternRewriter &rewriter,
+                      Type elemTy, Value lhs, Value rhs, Location loc) const {
+    return rewriter.create<DestOp>(loc, elemTy, lhs, rhs);
+  }
+
+  // Get the left operand of the op.
+  Value getLhs(OpAdaptor adaptor) const { return adaptor.getLhs(); }
+  // Get the right operand of the op.
+  Value getRhs(OpAdaptor adaptor) const { return adaptor.getRhs(); }
+};
+
+struct CmpIOpConversion
+    : public BinaryOpConversionBase<triton::gpu::CmpIOp, LLVM::ICmpOp,
+                                    CmpIOpConversion> {
+  explicit CmpIOpConversion(LLVMTypeConverter &typeConverter,
+                            PatternBenefit benefit = 1)
+      : BinaryOpConversionBase(typeConverter, benefit) {}
+
+  // An interface to support variant DestOp builder.
+  LLVM::ICmpOp createDestOp(triton::gpu::CmpIOp op,
+                            ConversionPatternRewriter &rewriter, Type elemTy,
+                            Value lhs, Value rhs, Location loc) const {
+    return rewriter.create<LLVM::ICmpOp>(
+        loc, elemTy, ArithCmpIPredicteToLLVM(op.predicate()), lhs, rhs);
+  }
+
+  // Get the left operand of the op.
+  Value getLhs(OpAdaptor adaptor) const { return adaptor.lhs(); }
+  // Get the right operand of the op.
+  Value getRhs(OpAdaptor adaptor) const { return adaptor.rhs(); }
+
+  static LLVM::ICmpPredicate
+  ArithCmpIPredicteToLLVM(arith::CmpIPredicate predicate) {
+    switch (predicate) {
+#define __PRED_ENUM(item__)                                                    \
+  case arith::CmpIPredicate::item__:                                           \
+    return LLVM::ICmpPredicate::item__
+
+      __PRED_ENUM(eq);
+      __PRED_ENUM(ne);
+      __PRED_ENUM(sgt);
+      __PRED_ENUM(sge);
+      __PRED_ENUM(slt);
+      __PRED_ENUM(sle);
+      __PRED_ENUM(ugt);
+      __PRED_ENUM(uge);
+      __PRED_ENUM(ult);
+      __PRED_ENUM(ule);
+
+#undef __PRED_ENUM
+    }
+  }
+};
+
+struct CmpFOpConversion
+    : public BinaryOpConversionBase<triton::gpu::CmpFOp, LLVM::ICmpOp,
+                                    CmpFOpConversion> {
+  explicit CmpFOpConversion(LLVMTypeConverter &typeConverter,
+                            PatternBenefit benefit = 1)
+      : BinaryOpConversionBase(typeConverter, benefit) {}
+
+  // An interface to support variant DestOp builder.
+  LLVM::FCmpOp createDestOp(triton::gpu::CmpFOp op,
+                            ConversionPatternRewriter &rewriter, Type elemTy,
+                            Value lhs, Value rhs, Location loc) const {
+    return rewriter.create<LLVM::FCmpOp>(
+        loc, elemTy, ArithCmpFPredicteToLLVM(op.predicate()), lhs, rhs);
+  }
+
+  // Get the left operand of the op.
+  Value getLhs(OpAdaptor adaptor) const { return adaptor.lhs(); }
+  // Get the right operand of the op.
+  Value getRhs(OpAdaptor adaptor) const { return adaptor.rhs(); }
+
+  static LLVM::FCmpPredicate
+  ArithCmpFPredicteToLLVM(arith::CmpFPredicate predicate) {
+    switch (predicate) {
+#define __PRED_ENUM(item__, item1__)                                           \
+  case arith::CmpFPredicate::item__:                                           \
+    return LLVM::FCmpPredicate::item1__
+
+      __PRED_ENUM(OEQ, oeq);
+      __PRED_ENUM(ONE, one);
+      __PRED_ENUM(OGT, ogt);
+      __PRED_ENUM(OGE, oge);
+      __PRED_ENUM(OLT, olt);
+      __PRED_ENUM(OLE, ole);
+      __PRED_ENUM(ORD, ord);
+      __PRED_ENUM(UEQ, ueq);
+      __PRED_ENUM(UGT, ugt);
+      __PRED_ENUM(ULT, ult);
+      __PRED_ENUM(ULE, ule);
+      __PRED_ENUM(UNE, une);
+      __PRED_ENUM(UNO, uno);
+      __PRED_ENUM(AlwaysTrue, _true);
+      __PRED_ENUM(AlwaysFalse, _false);
+
+#undef __PRED_ENUM
+    }
   }
 };
 
@@ -3001,6 +3121,8 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
                                                                benefit);
   patterns.add<BinaryOpConversion<arith::MulFOp, LLVM::FMulOp>>(typeConverter,
                                                                 benefit);
+  patterns.add<CmpIOpConversion>(typeConverter, benefit);
+  patterns.add<CmpFOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
   patterns.add<ConvertLayoutOpConversion>(typeConverter, allocation, smem,
                                           benefit);
