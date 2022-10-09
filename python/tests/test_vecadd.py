@@ -26,11 +26,13 @@ def test_vecadd_scf_no_mask(num_warps, block_size, iter_size):
             offset = pid * block_size + tl.arange(0, iter_size)
             x_ptrs = x_ptr + offset
             y_ptrs = y_ptr + offset
+
             x = tl.load(x_ptrs)
             y = tl.load(y_ptrs)
             z = x + y
             z_ptrs = z_ptr + offset
             tl.store(z_ptrs, z)
+
             x_ptr += iter_size
             y_ptr += iter_size
             z_ptr += iter_size
@@ -66,8 +68,9 @@ def test_vecadd_scf_mask(shape, num_warps, block_size, iter_size):
         @num_elements: number of elements
         '''
         pid = tl.program_id(axis=0)
-        offset = pid * block_size + tl.arange(0, iter_size)
         for i in range(math.ceil(block_size / iter_size)):
+            # TODO: a bug here, if put the offset outside the forloop, there will be a GPU mis-aligned error.
+            offset = pid * block_size + tl.arange(0, iter_size)
             x_ptrs = x_ptr + offset
             y_ptrs = y_ptr + offset
 

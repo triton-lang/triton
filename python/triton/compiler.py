@@ -18,7 +18,6 @@ from collections import namedtuple
 from sysconfig import get_paths
 from typing import Any, Dict, Tuple, Union
 
-import astunparse
 import setuptools
 import torch
 from filelock import FileLock
@@ -722,21 +721,6 @@ class CodeGenerator(ast.NodeVisitor):
         else:
             return getattr(lhs, fn)(rhs)
 
-        return
-
-        print(astunparse.unparse(node))
-        values = node.values
-        print('values', [astunparse.unparse(v) for v in values])
-        print('op', node.op)
-        if isinstance(node.value, bool):
-            return node.value
-        elif isinstance(node.value, int):
-            return self.builder.create_icmpNE(node.value, 0)
-        elif isinstance(node.value, float):
-            return self.builder.create_fcmpNE(node.value, 0.)
-        else:
-            raise NotImplementedError("Unsupported BoolOp with value: {}".format(node.value))
-
     if sys.version_info < (3, 8):
         def visit_NameConstant(self, node):
             return triton.language.constexpr(node.value)
@@ -983,7 +967,6 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
 
     # llvm-ir
     llvm_ir = make_llvm_ir(module)
-    print(llvm_ir)
 
     assert device >= 0, "device should be provided."
     ptxas, cuda_version = path_to_ptxas()
