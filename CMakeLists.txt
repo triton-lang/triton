@@ -49,7 +49,8 @@ endif()
 ##########
 # LLVM
 ##########
-if("${LLVM_LIBRARY_DIR}" STREQUAL "")
+if (NOT MLIR_DIR)
+  if(NOT LLVM_LIBRARY_DIR)
     if(WIN32)
       find_package(LLVM 13 REQUIRED COMPONENTS nvptx amdgpu)
 
@@ -68,66 +69,67 @@ if("${LLVM_LIBRARY_DIR}" STREQUAL "")
     if(APPLE)
       set(CMAKE_OSX_DEPLOYMENT_TARGET "10.14")
     endif()
-# sometimes we don't want to use llvm-config, since it may have been downloaded for some specific linux distros
-else()
+  # sometimes we don't want to use llvm-config, since it may have been downloaded for some specific linux distros
+  else()
     set(LLVM_LDFLAGS "-L${LLVM_LIBRARY_DIR}")
     set(LLVM_LIBRARIES
-libLLVMNVPTXCodeGen.a
-libLLVMNVPTXDesc.a
-libLLVMNVPTXInfo.a
-libLLVMAMDGPUDisassembler.a
-libLLVMMCDisassembler.a
-libLLVMAMDGPUCodeGen.a
-libLLVMMIRParser.a
-libLLVMGlobalISel.a
-libLLVMSelectionDAG.a
-libLLVMipo.a
-libLLVMInstrumentation.a
-libLLVMVectorize.a
-libLLVMLinker.a
-libLLVMIRReader.a
-libLLVMAsmParser.a
-libLLVMFrontendOpenMP.a
-libLLVMAsmPrinter.a
-libLLVMDebugInfoDWARF.a
-libLLVMCodeGen.a
-libLLVMTarget.a
-libLLVMScalarOpts.a
-libLLVMInstCombine.a
-libLLVMAggressiveInstCombine.a
-libLLVMTransformUtils.a
-libLLVMBitWriter.a
-libLLVMAnalysis.a
-libLLVMProfileData.a
-libLLVMObject.a
-libLLVMTextAPI.a
-libLLVMBitReader.a
-libLLVMAMDGPUAsmParser.a
-libLLVMMCParser.a
-libLLVMAMDGPUDesc.a
-libLLVMAMDGPUUtils.a
-libLLVMMC.a
-libLLVMDebugInfoCodeView.a
-libLLVMDebugInfoMSF.a
-libLLVMCore.a
-libLLVMRemarks.a
-libLLVMBitstreamReader.a
-libLLVMBinaryFormat.a
-libLLVMAMDGPUInfo.a
-libLLVMSupport.a
-libLLVMDemangle.a
-libLLVMPasses.a
-libLLVMAnalysis.a
-libLLVMTransformUtils.a
-libLLVMScalarOpts.a
-libLLVMTransformUtils.a
-libLLVMipo.a
-libLLVMObjCARCOpts.a
-libLLVMCoroutines.a
-libLLVMAnalysis.a
-)
+      libLLVMNVPTXCodeGen.a
+      libLLVMNVPTXDesc.a
+      libLLVMNVPTXInfo.a
+      libLLVMAMDGPUDisassembler.a
+      libLLVMMCDisassembler.a
+      libLLVMAMDGPUCodeGen.a
+      libLLVMMIRParser.a
+      libLLVMGlobalISel.a
+      libLLVMSelectionDAG.a
+      libLLVMipo.a
+      libLLVMInstrumentation.a
+      libLLVMVectorize.a
+      libLLVMLinker.a
+      libLLVMIRReader.a
+      libLLVMAsmParser.a
+      libLLVMFrontendOpenMP.a
+      libLLVMAsmPrinter.a
+      libLLVMDebugInfoDWARF.a
+      libLLVMCodeGen.a
+      libLLVMTarget.a
+      libLLVMScalarOpts.a
+      libLLVMInstCombine.a
+      libLLVMAggressiveInstCombine.a
+      libLLVMTransformUtils.a
+      libLLVMBitWriter.a
+      libLLVMAnalysis.a
+      libLLVMProfileData.a
+      libLLVMObject.a
+      libLLVMTextAPI.a
+      libLLVMBitReader.a
+      libLLVMAMDGPUAsmParser.a
+      libLLVMMCParser.a
+      libLLVMAMDGPUDesc.a
+      libLLVMAMDGPUUtils.a
+      libLLVMMC.a
+      libLLVMDebugInfoCodeView.a
+      libLLVMDebugInfoMSF.a
+      libLLVMCore.a
+      libLLVMRemarks.a
+      libLLVMBitstreamReader.a
+      libLLVMBinaryFormat.a
+      libLLVMAMDGPUInfo.a
+      libLLVMSupport.a
+      libLLVMDemangle.a
+      libLLVMPasses.a
+      libLLVMAnalysis.a
+      libLLVMTransformUtils.a
+      libLLVMScalarOpts.a
+      libLLVMTransformUtils.a
+      libLLVMipo.a
+      libLLVMObjCARCOpts.a
+      libLLVMCoroutines.a
+      libLLVMAnalysis.a
+    )
+  endif()
+  set (MLIR_DIR ${LLVM_LIBRARY_DIR}/cmake/mlir)
 endif()
-include_directories(${LLVM_INCLUDE_DIRS})
 
 # Python module
 if(TRITON_BUILD_PYTHON_MODULE)
@@ -152,10 +154,10 @@ endif()
 
 
 # MLIR
-find_package(MLIR REQUIRED CONFIG PATHS ${LLVM_LIBRARY_DIR}/cmake/mlir)
+find_package(MLIR REQUIRED CONFIG PATHS ${MLIR_DIR})
 
-list(APPEND CMAKE_MODULE_PATH ${LLVM_LIBRARY_DIR}/cmake/llvm)
-list(APPEND CMAKE_MODULE_PATH ${LLVM_LIBRARY_DIR}/cmake/mlir)
+list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
+list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
 
 include(TableGen) # required by AddMLIR
 include(AddLLVM)
@@ -163,6 +165,7 @@ include(AddMLIR)
 # include(HandleLLVMOptions) # human-friendly error message
 
 include_directories(${MLIR_INCLUDE_DIRS})
+include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
 # link_directories(${LLVM_LIBRARY_DIR})
