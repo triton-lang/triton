@@ -3,6 +3,8 @@ include(ExternalProject)
 
 set(CMAKE_CXX_STANDARD 17)
 
+set(CMAKE_INCLUDE_CURRENT_DIR ON)
+
 if(NOT TRITON_LLVM_BUILD_DIR)
     set(TRITON_LLVM_BUILD_DIR ${CMAKE_BINARY_DIR})
 endif()
