@@ -41,4 +41,5 @@ def Triton_Dialect : Dialect {
   let hasConstantMaterializer = 1;
 }
 
+
 #endif // TRITON_DIALECT

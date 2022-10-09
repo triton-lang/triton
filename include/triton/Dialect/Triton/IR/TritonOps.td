@@ -4,6 +4,7 @@
 include "triton/Dialect/Triton/IR/TritonDialect.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
+include "triton/Dialect/Triton/IR/TritonAttrInterfaces.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td" // NoSideEffect
 include "mlir/Interfaces/ControlFlowInterfaces.td" // BranchOpInterface
@@ -328,5 +329,21 @@ def TT_MakeRangeOp : TT_Op<"make_range", [NoSideEffect]> {
 
     let assemblyFormat = "attr-dict `:` type($result)";
 }
+
+def LayoutVerificationAttrInterface : AttrInterface<"LayoutVerificationAttrInterface"> {
+
+  let description = [{
+    An interface that ov errides hooks for verifying if this attribute is a valid as a layout
+    for the given operation.
+  }];
+
+  let methods = [
+    InterfaceMethod<
+      "This is an example of a non-static hook to an operation.",
+      "unsigned", "verifyLayoutForArg", (ins "::mlir::Operation *":$op, "unsigned":$argNo)
+    >,
+  ];
+}
+
 
 #endif // Triton_OPS

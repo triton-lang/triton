@@ -7,6 +7,7 @@
 
 #include "mlir/IR/DialectImplementation.h"
 
+#include "triton/Dialect/Triton/IR/AttrInterfaces.h.inc"
 #include "triton/Dialect/Triton/IR/Dialect.cpp.inc"
 
 using namespace mlir;
@@ -27,4 +28,18 @@ Operation *TritonDialect::materializeConstant(OpBuilder &builder,
                                               Attribute value, Type type,
                                               Location loc) {
   return builder.create<arith::ConstantOp>(loc, type, value);
+}
+
+//===----------------------------------------------------------------------===//
+// Verification
+//===----------------------------------------------------------------------===//
+
+static LogicalResult verify(DotOp op) {
+  auto lhsEncoding =
+      op.getOperand(0).getType().cast<RankedTensorType>().getEncoding();
+  if (auto interface =
+          lhsEncoding.dyn_cast<LayoutVerificationAttrInterface>()) {
+  }
+
+  return success();
 }
