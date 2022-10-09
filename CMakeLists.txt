@@ -17,8 +17,8 @@ if(NOT WIN32)
 endif()
 
 # Options
-option(BUILD_TUTORIALS "Build C++ Triton tutorials" ON)
-option(BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
+option(TRITON_BUILD_TUTORIALS "Build C++ Triton tutorials" ON)
+option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 
 # Default build type
 if(NOT CMAKE_BUILD_TYPE)
@@ -130,7 +130,7 @@ endif()
 include_directories(${LLVM_INCLUDE_DIRS})
 
 # Python module
-if(BUILD_PYTHON_MODULE)
+if(TRITON_BUILD_PYTHON_MODULE)
     message(STATUS "Adding Python module")
     set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
     include_directories("." ${PYTHON_SRC_PATH} ${PYTHON_INCLUDE_DIRS})
@@ -141,7 +141,7 @@ endif()
 
 # # Triton
 # file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
-# if (WIN32 AND BUILD_PYTHON_MODULE)
+# if (WIN32 AND TRITON_BUILD_PYTHON_MODULE)
 #     find_package(Python3 REQUIRED COMPONENTS Development)
 #     Python3_add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
 #     set_target_properties(triton PROPERTIES SUFFIX ".pyd")
@@ -211,7 +211,7 @@ else()
 endif()
 
 
-if(BUILD_PYTHON_MODULE AND NOT WIN32)
+if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
     set(CMAKE_SHARED_LIBRARY_SUFFIX ".so")
     # Check if the platform is MacOS
     if(APPLE)
