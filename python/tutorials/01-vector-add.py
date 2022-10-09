@@ -3,9 +3,9 @@ Vector Addition
 =================
 In this tutorial, you will write a simple vector addition using Triton and learn about:
 
-- The basic programming model of Triton
+- The basic programming model of Triton.
 - The `triton.jit` decorator, which is used to define Triton kernels.
-- The best practices for validating and benchmarking your custom ops against native reference implementations
+- The best practices for validating and benchmarking your custom ops against native reference implementations.
 """
 
 # %%
@@ -49,7 +49,7 @@ def add_kernel(
 
 # %%
 # Let's also declare a helper function to (1) allocate the `z` tensor
-# and (2) enqueue the above kernel with appropriate grid/block sizes.
+# and (2) enqueue the above kernel with appropriate grid/block sizes:
 
 
 def add(x: torch.Tensor, y: torch.Tensor):
@@ -58,7 +58,7 @@ def add(x: torch.Tensor, y: torch.Tensor):
     assert x.is_cuda and y.is_cuda and output.is_cuda
     n_elements = output.numel()
     # The SPMD launch grid denotes the number of kernel instances that run in parallel.
-    # It is analogous to CUDA launch grids. It can be either Tuple[int], or Callable(metaparameters) -> Tuple[int]
+    # It is analogous to CUDA launch grids. It can be either Tuple[int], or Callable(metaparameters) -> Tuple[int].
     # In this case, we use a 1D grid where the size is the number of blocks:
     grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
     # NOTE:
@@ -94,7 +94,7 @@ print(
 # Benchmark
 # -----------
 # We can now benchmark our custom op on vectors of increasing sizes to get a sense of how it does relative to PyTorch.
-# To make things easier, Triton has a set of built-in utilities that allow us to concisely plot the performance of your custom ops
+# To make things easier, Triton has a set of built-in utilities that allow us to concisely plot the performance of your custom ops.
 # for different problem sizes.
 
 
@@ -103,13 +103,13 @@ print(
         x_names=['size'],  # Argument names to use as an x-axis for the plot.
         x_vals=[
             2 ** i for i in range(12, 28, 1)
-        ],  # Different possible values for `x_name`
+        ],  # Different possible values for `x_name`.
         x_log=True,  # x axis is logarithmic.
         line_arg='provider',  # Argument name whose value corresponds to a different line in the plot.
         line_vals=['triton', 'torch'],  # Possible values for `line_arg`.
         line_names=['Triton', 'Torch'],  # Label name for the lines.
         styles=[('blue', '-'), ('green', '-')],  # Line styles.
-        ylabel='GB/s',  # Label name for the y-axis
+        ylabel='GB/s',  # Label name for the y-axis.
         plot_name='vector-add-performance',  # Name for the plot. Used also as a file name for saving the plot.
         args={},  # Values for function arguments not in `x_names` and `y_name`.
     )
@@ -127,5 +127,5 @@ def benchmark(size, provider):
 
 # %%
 # We can now run the decorated function above. Pass `print_data=True` to see the performance number, `show_plots=True` to plot them, and/or
-# `save_path='/path/to/results/' to save them to disk along with raw CSV data
+# `save_path='/path/to/results/' to save them to disk along with raw CSV data:
 benchmark.run(print_data=True, show_plots=True)
