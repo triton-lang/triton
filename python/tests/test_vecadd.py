@@ -213,10 +213,3 @@ def test_vecadd_no_scf_masked_randomly():
 ])
 def test_vecadd_fcmp_no_scf_masked(num_warps, block_size, shape):
     vecadd_fcmp_no_scf_tester(num_warps, block_size, shape)
-
-
-if __name__ == '__main__':
-    test_vecadd_scf_mask(shape=(128, 3),
-                         num_warps=2,
-                         block_size=128,
-                         iter_size=1)

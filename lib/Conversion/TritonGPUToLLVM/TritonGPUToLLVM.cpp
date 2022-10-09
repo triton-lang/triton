@@ -1494,11 +1494,12 @@ struct CmpIOpConversion
 
 #undef __PRED_ENUM
     }
+    return LLVM::ICmpPredicate::eq;
   }
 };
 
 struct CmpFOpConversion
-    : public BinaryOpConversionBase<triton::gpu::CmpFOp, LLVM::ICmpOp,
+    : public BinaryOpConversionBase<triton::gpu::CmpFOp, LLVM::FCmpOp,
                                     CmpFOpConversion> {
   explicit CmpFOpConversion(LLVMTypeConverter &typeConverter,
                             PatternBenefit benefit = 1)
@@ -1542,6 +1543,7 @@ struct CmpFOpConversion
 
 #undef __PRED_ENUM
     }
+    return LLVM::FCmpPredicate::_true;
   }
 };
 
