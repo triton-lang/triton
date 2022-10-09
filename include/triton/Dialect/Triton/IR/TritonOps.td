@@ -4,12 +4,12 @@
 include "triton/Dialect/Triton/IR/TritonDialect.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
-include "triton/Dialect/Triton/IR/TritonAttrInterfaces.td"
+include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td" // NoSideEffect
 include "mlir/Interfaces/ControlFlowInterfaces.td" // BranchOpInterface
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
-
+include "mlir/Interfaces/SideEffectInterfaces.td" // NoSideEffect
 
 def TensorSizeTrait : NativeOpTrait<"TensorSizeTrait">;
 //
@@ -240,7 +240,11 @@ def TT_DotOp : TT_Op<"dot", [NoSideEffect,
 
     let assemblyFormat = "$a`,` $b`,` $c attr-dict `:` type($a) `*` type($b) `->` type($d)";
 
-    // let hasCanonicalizer = 1;
+    let extraClassDeclaration = [{
+        LogicalResult verifyImpl();
+    }];
+
+    let verifier = [{ return this->verifyImpl(); }];
 }
 
 def TT_ReduceOp : TT_Op<"reduce", [NoSideEffect]> {
@@ -329,21 +333,5 @@ def TT_MakeRangeOp : TT_Op<"make_range", [NoSideEffect]> {
 
     let assemblyFormat = "attr-dict `:` type($result)";
 }
-
-def LayoutVerificationAttrInterface : AttrInterface<"LayoutVerificationAttrInterface"> {
-
-  let description = [{
-    An interface that ov errides hooks for verifying if this attribute is a valid as a layout
-    for the given operation.
-  }];
-
-  let methods = [
-    InterfaceMethod<
-      "This is an example of a non-static hook to an operation.",
-      "unsigned", "verifyLayoutForArg", (ins "::mlir::Operation *":$op, "unsigned":$argNo)
-    >,
-  ];
-}
-
 
 #endif // Triton_OPS
