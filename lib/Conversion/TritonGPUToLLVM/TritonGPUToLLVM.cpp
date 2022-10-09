@@ -6,6 +6,7 @@
 #include "mlir/Conversion/LLVMCommon/LoweringOptions.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
+#include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
 #include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
 #include "mlir/Dialect/GPU/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -1295,24 +1296,33 @@ struct AddPtrOpConversion
   matchAndRewrite(triton::AddPtrOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto resultTy = op.getType().dyn_cast<RankedTensorType>();
-    auto resultLayout = resultTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
-    assert(resultLayout && "Unexpected resultLayout in AddPtrOpConversion");
-    auto resultShape = resultTy.getShape();
-    unsigned elems = resultLayout.getElemsPerThread(resultShape);
-    Type elemTy =
-        this->getTypeConverter()->convertType(resultTy.getElementType());
-    SmallVector<Type> types(elems, elemTy);
-    Type structTy = LLVM::LLVMStructType::getLiteral(getContext(), types);
-    auto ptrs = getElementsFromStruct(loc, adaptor.ptr(), elems, rewriter);
-    auto offsets =
-        getElementsFromStruct(loc, adaptor.offset(), elems, rewriter);
-    SmallVector<Value> resultVals(elems);
-    for (unsigned i = 0; i < elems; ++i) {
-      resultVals[i] = gep(elemTy, ptrs[i], offsets[i]);
+    auto resultTy = op.getType();
+    auto resultTensorTy = resultTy.dyn_cast<RankedTensorType>();
+    if (resultTensorTy) {
+      auto resultLayout =
+          resultTensorTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
+      assert(resultLayout && "Unexpected resultLayout in AddPtrOpConversion");
+      auto resultShape = resultTensorTy.getShape();
+      unsigned elems = resultLayout.getElemsPerThread(resultShape);
+      Type elemTy =
+          getTypeConverter()->convertType(resultTensorTy.getElementType());
+      SmallVector<Type> types(elems, elemTy);
+      Type structTy = LLVM::LLVMStructType::getLiteral(getContext(), types);
+      auto ptrs = getElementsFromStruct(loc, adaptor.ptr(), elems, rewriter);
+      auto offsets =
+          getElementsFromStruct(loc, adaptor.offset(), elems, rewriter);
+      SmallVector<Value> resultVals(elems);
+      for (unsigned i = 0; i < elems; ++i) {
+        resultVals[i] = gep(elemTy, ptrs[i], offsets[i]);
+      }
+      Value view = getStructFromElements(loc, resultVals, rewriter, structTy);
+      rewriter.replaceOp(op, view);
+    } else {
+      assert(resultTy.isa<triton::PointerType>());
+      Type llResultTy = getTypeConverter()->convertType(resultTy);
+      Value result = gep(llResultTy, adaptor.ptr(), adaptor.offset());
+      rewriter.replaceOp(op, result);
     }
-    Value view = getStructFromElements(loc, resultVals, rewriter, structTy);
-    rewriter.replaceOp(op, view);
     return success();
   }
 };
@@ -3202,6 +3212,7 @@ public:
     mlir::arith::populateArithmeticToLLVMConversionPatterns(typeConverter,
                                                             patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
+    mlir::populateStdToLLVMConversionPatterns(typeConverter, patterns);
 
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
 
@@ -3258,6 +3269,7 @@ TritonLLVMConversionTarget::TritonLLVMConversionTarget(
   // addIllegalDialect<triton::TritonDialect>();
   // addIllegalDialect<triton::gpu::TritonGPUDialect>();
   addIllegalDialect<mlir::gpu::GPUDialect>();
+  addIllegalDialect<mlir::StandardOpsDialect>();
   addLegalOp<mlir::UnrealizedConversionCastOp>();
 }
 
