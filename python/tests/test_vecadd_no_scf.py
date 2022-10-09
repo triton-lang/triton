@@ -1,4 +1,5 @@
 import math
+import random
 
 import pytest
 import torch
@@ -61,7 +62,7 @@ def vecadd_fcmp_tester(num_warps, block_size, shape):
         y = tl.load(y_ptrs, mask=io_mask)
 
         z = x + y
-        val_mask = (offset < n_elements) and (z > 1.)
+        val_mask = offset < n_elements and z > 0.
 
         z_ptrs = z_ptr + offset
         tl.store(z_ptrs, z, mask=val_mask)
@@ -73,12 +74,11 @@ def vecadd_fcmp_tester(num_warps, block_size, shape):
     grid = lambda EA: (math.ceil(x.shape.numel() / block_size),)
     kernel[grid](x_ptr=x, y_ptr=y, z_ptr=z, n_elements=x.shape.numel(), BLOCK_SIZE_N=block_size, num_warps=num_warps)
 
-    golden_z = x + y
-    for i in range(shape[0]):
-        golden_z[i] = golden_z[i] if golden_z[i] > 0. else 0.
+    golden_z: torch.Tensor = x + y
+    gz_data = torch.flatten(golden_z)
+    for i in range(golden_z.numel()):
+        gz_data[i] = gz_data[i] if gz_data[i] > 0. else 0.
 
-    print('z:', z)
-    print('goldern_z', golden_z)
     assert_close(z, golden_z, rtol=1e-7, atol=1e-7)
 
 
@@ -104,6 +104,19 @@ def test_vecadd__no_scf_masked(num_warps, block_size, shape):
     vecadd_tester(num_warps, block_size, shape)
 
 
+def test_vecadd_no_scf_masked_randomly():
+    random.seed(0)  # fix seed to make random test reproducible
+    for i in range(10):
+        num_elements = random.randint(128, 2048)
+        shape = (num_elements,)
+        max_warps = num_elements // 32  # floor div
+        for num_warps in range(1, max_warps):
+            is_power2 = num_warps & (num_warps - 1) == 0 and num_warps != 0
+            if not is_power2: continue
+            block_size = min(32, num_warps * 32)
+            vecadd_tester(num_warps, block_size, shape)
+
+
 @pytest.mark.parametrize('num_warps, block_size, shape', [
     [1, 128, (256 + 1,)],
     [1, 256, (256 + 1,)],
@@ -115,4 +128,4 @@ def test_vecadd_fcmp_no_scf_masked(num_warps, block_size, shape):
 
 
 if __name__ == '__main__':
-    test_vecadd_fcmp_no_scf_masked(num_warps=1, block_size=128, shape=(256,))
+    test_vecadd_no_scf_masked_randomly()

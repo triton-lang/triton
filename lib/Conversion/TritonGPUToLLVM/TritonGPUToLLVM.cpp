@@ -113,16 +113,16 @@ namespace type = mlir::triton::type;
 
 class TritonGPUToLLVMTypeConverter;
 
-// TODO: keep these before we have better debug log utilities
+// TODO[goostavz]: Remove these methods after we have better debug log utilities
 template <typename T>
-void print_array(ArrayRef<T> array, const std::string &str) {
-  std::cout << str << ": ";
+void printArray(ArrayRef<T> array, const std::string &info) {
+  std::cout << info << ": ";
   for (const T &e : array)
     std::cout << e << ",";
   std::cout << std::endl;
 }
-template <typename T> void print_scalar(const T &e, const std::string &str) {
-  std::cout << str << ": " << e << std::endl;
+template <typename T> void printScalar(const T &e, const std::string &info) {
+  std::cout << info << ": " << e << std::endl;
 }
 
 // FuncOpConversion/FuncOpConversionBase is borrowed from
@@ -807,14 +807,22 @@ struct StoreOpConversion
     auto valueElems = getLLVMElems(value, llValue, layout, rewriter, loc);
     assert(ptrElems.size() == valueElems.size());
 
+    // Determine the vectorization size
+    size_t vec = getVectorizeSize(ptr, layout);
     SmallVector<Value> maskElems;
     if (llMask) {
       maskElems = getLLVMElems(mask, llMask, layout, rewriter, loc);
       assert(valueElems.size() == maskElems.size());
-    }
+      auto maskOrder = mask.getType()
+                           .cast<RankedTensorType>()
+                           .getEncoding()
+                           .cast<BlockedEncodingAttr>()
+                           .getOrder();
 
-    // Determine the vectorization size
-    size_t vec = getVectorizeSize(ptr, layout);
+      auto maskAxis = getAxisInfo(mask);
+      size_t maskAlign = std::max<int>(maskAxis->getConstancy(maskOrder[0]), 1);
+      vec = std::min(vec, maskAlign);
+    }
 
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
