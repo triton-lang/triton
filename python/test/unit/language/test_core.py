@@ -772,7 +772,7 @@ def test_store_bool():
     grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
     copy_kernel[grid](src, dst, n_elements, BLOCK_SIZE=1024)
 
-    assert torch.all(src.to(dtype=torch.uint8) == dst.to(dtype=torch.uint8))
+    assert (to_numpy(src).view('uint8') == to_numpy(dst).view('uint8')).all()
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
