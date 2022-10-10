@@ -1,6 +1,5 @@
 // RUN: triton-opt %s -split-input-file -tritongpu-swizzle | FileCheck %s
 
-
 #shared = #triton_gpu.shared<{vec=1, perPhase=1, maxPhase=1 ,order = [1, 0]}>
 #mma1w = #triton_gpu.mma<{version=2, warpsPerCTA=[1, 1]}>
 #mma2w = #triton_gpu.mma<{version=2, warpsPerCTA=[1, 2]}>
@@ -29,7 +28,6 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     return
   }
 }
-
 
 // A w4 128x32 [vec, per, max] 8 2 4
 // B w4 32x128 [vec, per, max] 8 1 8
