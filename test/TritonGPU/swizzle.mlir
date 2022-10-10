@@ -37,8 +37,6 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
   }
 }
 
-// A w4 128x32 [vec, per, max] 8 2 4
-// B w4 32x128 [vec, per, max] 8 1 8
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: swizzle_mma_f16_128x128x32_w4
   func @swizzle_mma_f16_128x128x32_w4(%A: tensor<128x32xf16, #shared>, %B: tensor<32x128xf16, #shared>) {
@@ -50,8 +48,6 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
   }
 }
 
-// A w2 32x32 [vec, per, max] 8 2 4
-// B w2 32x32 [vec, per, max] 8 2 4
 module attributes {"triton_gpu.num-warps" = 2 : i32} {
   // CHECK-LABEL: swizzle_mma_f16_32x32x32_w2
   func @swizzle_mma_f16_32x32x32_w2(%A: tensor<32x32xf16, #shared>, %B: tensor<32x32xf16, #shared>) {
@@ -63,8 +59,6 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
   }
 }
 
-// A w1 16x16 [vec, per, max] 8 4 2
-// B w1 16x16 [vec, per, max] 8 4 2
 module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: swizzle_mma_f16_16x16x16_w1
   func @swizzle_mma_f16_16x16x16_w1(%A: tensor<16x16xf16, #shared>, %B: tensor<16x16xf16, #shared>) {
