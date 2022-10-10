@@ -121,6 +121,14 @@ value *builder::create_ret(value* val) {
 }
 
 //===----------------------------------------------------------------------===//
+//                               dequantize instructions
+//===----------------------------------------------------------------------===//
+
+value* builder::create_dequantize(value *src, value *scale, value *shift, type *dst_ty){
+  return insert(dequantize_inst::create(src, scale, shift, dst_ty));
+}
+
+//===----------------------------------------------------------------------===//
 //                               cast instructions
 //===----------------------------------------------------------------------===//
 #define DEFINE_CAST_INSTR(SUFFIX, OPCODE)\
