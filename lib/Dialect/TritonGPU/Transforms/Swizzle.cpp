@@ -27,7 +27,7 @@ struct SwizzlePass : public TritonGPUSwizzleBase<SwizzlePass> {
     auto order = tyEncoding.getOrder();
     // number of rows per phase
     int perPhase = 128 / (ty.getShape()[order[0]] *
-                          ty.getElementType().getIntOrFloatBitWidth());
+                          (ty.getElementType().getIntOrFloatBitWidth() / 8));
     perPhase = std::max<int>(perPhase, 1);
     // index of the inner dimension in `order`
     int inner = (opIdx == 0) ? 0 : 1;
