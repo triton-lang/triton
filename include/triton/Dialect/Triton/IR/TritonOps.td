@@ -20,8 +20,6 @@ def SameOperandsEncoding : NativeOpTrait<"SameOperandsEncoding">;
 //
 class TT_Op<string mnemonic, list<Trait> traits = []> :
     Op<Triton_Dialect, mnemonic, !listconcat(traits, [TensorSizeTrait])> {
-
-    let verifier = [{ return TritonDialect::verifyLayout(*this); }];
 }
 
 //
@@ -211,27 +209,8 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas", [SameOperandsAndResultShape,
 //
 // Shape Manipulation Ops
 //
-def TT_ExpandDimsOp : TT_Op<"expand_dims", [NoSideEffect, SameOperandsAndResultElementType]> {
-    let summary = "expand_dims";
-
-    let arguments = (ins TT_Tensor:$src, I32Attr:$axis);
-
-    let results = (outs TT_Tensor:$result);
-
-    let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
-}
-
-def TT_ViewOp : TT_Op<"view", [NoSideEffect, SameOperandsAndResultElementType]> {
-    let summary = "view";
-
-    let arguments = (ins TT_Tensor:$src);
-
-    let results = (outs TT_Tensor:$result);
-
-    let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
-}
-
-def TT_SplatOp : TT_Op<"splat", [NoSideEffect, SameOperandsAndResultElementType]> {
+def TT_SplatOp : TT_Op<"splat", [NoSideEffect, 
+                                 SameOperandsAndResultElementType]> {
     let summary = "splat";
 
     let arguments = (ins TT_Type:$src);
@@ -243,7 +222,32 @@ def TT_SplatOp : TT_Op<"splat", [NoSideEffect, SameOperandsAndResultElementType]
     let hasFolder = 1;
 }
 
-def TT_BroadcastOp : TT_Op<"broadcast", [NoSideEffect, SameOperandsAndResultElementType]> {
+def TT_ExpandDimsOp : TT_Op<"expand_dims", [NoSideEffect, 
+                                            DeclareOpInterfaceMethods<InferTypeOpInterface>, 
+                                            SameOperandsAndResultElementType]> {
+    let summary = "expand_dims";
+
+    let arguments = (ins TT_Tensor:$src, I32Attr:$axis);
+
+    let results = (outs TT_Tensor:$result);
+
+    let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
+}
+
+def TT_ViewOp : TT_Op<"view", [NoSideEffect, 
+                               SameOperandsAndResultElementType]> {
+    let summary = "view";
+
+    let arguments = (ins TT_Tensor:$src);
+
+    let results = (outs TT_Tensor:$result);
+
+    let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
+
+}
+
+def TT_BroadcastOp : TT_Op<"broadcast", [NoSideEffect, 
+                                         SameOperandsAndResultElementType]> {
     let summary = "broadcast. No left-padding as of now.";
 
     let arguments = (ins TT_Type:$src);
@@ -255,7 +259,8 @@ def TT_BroadcastOp : TT_Op<"broadcast", [NoSideEffect, SameOperandsAndResultElem
     let hasFolder = 1;
 }
 
-def TT_CatOp : TT_Op<"cat", [NoSideEffect, SameOperandsAndResultElementType]> {
+def TT_CatOp : TT_Op<"cat", [NoSideEffect, 
+                             SameOperandsAndResultElementType]> {
     let summary = "concatenate 2 tensors";
 
     let arguments = (ins TT_Tensor:$lhs, TT_Tensor:$rhs);
@@ -287,7 +292,8 @@ def TT_GetNumProgramsOp : TT_Op<"get_num_programs"> {
 //
 // Dot Op
 //
-def TT_DotOp : TT_Op<"dot", [NoSideEffect,
+def TT_DotOp : TT_Op<"dot", [NoSideEffect, 
+                             DeclareOpInterfaceMethods<InferTypeOpInterface>,
                              TypesMatchWith<"result's type matches accumulator's type",
                                             "d", "c", "$_self">]> {
     let summary = "dot";
@@ -306,7 +312,8 @@ def TT_DotOp : TT_Op<"dot", [NoSideEffect,
 //
 // Reduce Op
 //
-def TT_ReduceOp : TT_Op<"reduce", [NoSideEffect]> {
+def TT_ReduceOp : TT_Op<"reduce", [NoSideEffect,
+                                   DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
     let summary = "reduce";
 
     let arguments = (ins TT_RedOpAttr:$redOp, TT_Tensor:$operand, I32Attr:$axis);
@@ -339,6 +346,7 @@ def TT_ExtElemwiseOp : TT_Op<"ext_elemwise", [NoSideEffect, Elementwise, SameOpe
     let results = (outs TT_Tensor:$result);
 
     let assemblyFormat = "operands attr-dict `:` type(operands) `->` type($result)";
+
 }
 
 //

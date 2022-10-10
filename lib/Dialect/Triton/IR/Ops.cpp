@@ -160,16 +160,60 @@ void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
 }
 
 //-- DotOp --
+mlir::LogicalResult mlir::triton::DotOp::inferReturnTypes(
+    MLIRContext *context, Optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  // type is the same as the accumulator
+  auto accTy = operands[2].getType().cast<RankedTensorType>();
+  inferredReturnTypes.push_back(accTy);
+  return mlir::success();
+}
+
+//-- ReduceOp --
+mlir::LogicalResult mlir::triton::ReduceOp::inferReturnTypes(
+    MLIRContext *context, Optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  // infer shape
+  auto argTy = operands[0].getType().cast<RankedTensorType>();
+  auto argShape = argTy.getShape().vec();
+  int axis = attributes.get("axis").cast<IntegerAttr>().getInt();
+  argShape.erase(argShape.begin() + axis);
+  // infer encoding
+
+  // create type
+  auto argEltTy = argTy.getElementType();
+  inferredReturnTypes.push_back(RankedTensorType::get(argShape, argEltTy));
+  return mlir::success();
+}
 
 //-- SplatOp --
 OpFoldResult SplatOp::fold(ArrayRef<Attribute> operands) {
   auto constOperand = src().getDefiningOp<arith::ConstantOp>();
   if (!constOperand)
     return {};
-
   auto shapedType = getType().cast<ShapedType>();
   auto ret = SplatElementsAttr::get(shapedType, {constOperand.getValue()});
   return ret;
+}
+
+//-- ExpandDimsOp --
+mlir::LogicalResult mlir::triton::ExpandDimsOp::inferReturnTypes(
+    MLIRContext *context, Optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  // infer shape
+  auto argTy = operands[0].getType().cast<RankedTensorType>();
+  auto argShape = argTy.getShape().vec();
+  int axis = attributes.get("axis").cast<IntegerAttr>().getInt();
+  argShape.insert(argShape.begin() + axis, 1);
+  // infer encoding
+
+  // create type
+  auto argEltTy = argTy.getElementType();
+  inferredReturnTypes.push_back(RankedTensorType::get(argShape, argEltTy));
+  return mlir::success();
 }
 
 //-- BroadcastOp --
