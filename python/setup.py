@@ -97,8 +97,8 @@ class CMakeBuild(build_ext):
         python_include_dirs = [distutils.sysconfig.get_python_inc()] + ['/usr/local/cuda/include']
         cmake_args = [
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
-            "-DBUILD_TUTORIALS=OFF",
-            "-DBUILD_PYTHON_MODULE=ON",
+            "-DTRITON_BUILD_TUTORIALS=OFF",
+            "-DTRITON_BUILD_PYTHON_MODULE=ON",
             "-DLLVM_INCLUDE_DIRS=" + llvm_include_dir,
             "-DLLVM_LIBRARY_DIR=" + llvm_library_dir,
             # '-DPYTHON_EXECUTABLE=' + sys.executable,
