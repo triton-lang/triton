@@ -761,8 +761,10 @@ def store(ptr: tl.tensor,
     elt_ty = ptr_ty.element_ty
     # treat bool* as tl.int8*
     if elt_ty == tl.int1:
-        elt_ty_ptr = tl.int8
-        ptr_ty = tl.pointer_type(elt_ty_ptr, ptr_ty.address_space)
+        # convert to bool first and then store as int8
+        val = cast(val, tl.int1, builder)
+        elt_ty = tl.int8
+        ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
         ptr = cast(ptr, ptr_ty, builder)
     # eviction policy
     eviction = _parse_eviction_policy(eviction_policy)
