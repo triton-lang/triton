@@ -285,6 +285,22 @@ def xor_(input: tl.tensor,
     return tl.tensor(builder.create_xor(input.handle, other.handle), input.type)
 
 
+def logical_and(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
+    if not input.type.is_int1():
+        input = bitcast(input, tl.dtype("int1"), builder)
+    if not other.type.is_int1():
+        other = bitcast(other, tl.dtype("int1"), builder)
+    return and_(input, other, builder)
+
+
+def logical_or(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
+    if not input.type.is_int1():
+        input = bitcast(input, tl.dtype("int1"), builder)
+    if not other.type.is_int1():
+        other = bitcast(other, tl.dtype("int1"), builder)
+    return or_(input, other, builder)
+
+
 def lshr(input: tl.tensor,
          other: tl.tensor,
          builder: ir.builder) -> tl.tensor:
