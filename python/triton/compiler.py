@@ -699,6 +699,28 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Constant(self, node):
         return triton.language.constexpr(node.value)
 
+    def visit_BoolOp(self, node: ast.BoolOp):
+        assert len(node.values) == 2
+        lhs = self.visit(node.values[0])
+        rhs = self.visit(node.values[1])
+        if isinstance(lhs, triton.language.constexpr):
+            lhs = lhs.value
+        if isinstance(rhs, triton.language.constexpr):
+            rhs = rhs.value
+
+        fn = {
+            ast.And: 'logical_and',
+            ast.Or: 'logical_or',
+        }[type(node.op)]
+
+        if self.is_triton_tensor(lhs):
+            return getattr(lhs, fn)(rhs, _builder=self.builder)
+        elif self.is_triton_tensor(rhs):
+            fn = fn[:2] + 'r' + fn[2:]
+            return getattr(rhs, fn)(lhs, _builder=self.builder)
+        else:
+            return getattr(lhs, fn)(rhs)
+
     if sys.version_info < (3, 8):
         def visit_NameConstant(self, node):
             return triton.language.constexpr(node.value)
