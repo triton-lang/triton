@@ -708,11 +708,11 @@ class CodeGenerator(ast.NodeVisitor):
         if isinstance(rhs, triton.language.constexpr):
             rhs = rhs.value
 
-        # op is either And or Or
         fn = {
-            ast.And: '__and__',
-            ast.Or: '__or__',
+            ast.And: 'bool_and',
+            ast.Or: 'bool_or',
         }[type(node.op)]
+
         if self.is_triton_tensor(lhs):
             return getattr(lhs, fn)(rhs, _builder=self.builder)
         elif self.is_triton_tensor(rhs):

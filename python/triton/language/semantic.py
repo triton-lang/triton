@@ -285,6 +285,22 @@ def xor_(input: tl.tensor,
     return tl.tensor(builder.create_xor(input.handle, other.handle), input.type)
 
 
+def bool_and(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
+    if not input.type.is_int1():
+        input = bitcast(input, tl.dtype("int1"), builder)
+    if not other.type.is_int1():
+        other = bitcast(other, tl.dtype("int1"), builder)
+    return and_(input, other, builder)
+
+
+def bool_or(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
+    if not input.type.is_int1():
+        input = bitcast(input, builder.get_int1_ty(), builder)
+    if not other.type.is_int1():
+        other = bitcast(other, builder.get_int1_ty(), builder)
+    return or_(input, other, builder)
+
+
 def lshr(input: tl.tensor,
          other: tl.tensor,
          builder: ir.builder) -> tl.tensor:
