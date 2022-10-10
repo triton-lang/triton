@@ -1,12 +1,12 @@
 #include "triton/Dialect/Triton/IR/Traits.h"
 
 static mlir::LogicalResult verifySameEncoding(mlir::Type tyA, mlir::Type tyB) {
-  auto encA = tyA.dyn_cast<mlir::RankedTensorType>();
-  auto encB = tyA.dyn_cast<mlir::RankedTensorType>();
+  using namespace mlir;
+  auto encA = tyA.dyn_cast<RankedTensorType>();
+  auto encB = tyA.dyn_cast<RankedTensorType>();
   if (!encA || !encB)
-    return mlir::success();
-  return encA.getEncoding() == encB.getEncoding() ? mlir::success()
-                                                  : mlir::failure();
+    return success();
+  return encA.getEncoding() == encB.getEncoding() ? success() : failure();
 }
 
 mlir::LogicalResult
