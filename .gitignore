@@ -7,3 +7,6 @@ python/build/
 python/triton.egg-info/
 python/triton/_C/libtriton.pyd
 python/triton/_C/libtriton.so
+
+.vscode
+.vs

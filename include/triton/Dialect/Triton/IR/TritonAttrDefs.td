@@ -16,7 +16,7 @@ def TT_CacheModifierAttr : I32EnumAttr<
 def TT_EvictionPolicyAttr : I32EnumAttr<
     "EvictionPolicy", "",
     [
-        I32EnumAttrCase<"NORMAL", 1, "normal">,
+        I32EnumAttrCase<"NORMAL", 1, "evict_normal">,
         I32EnumAttrCase<"EVICT_FIRST", 2, "evict_first">,
         I32EnumAttrCase<"EVICT_LAST", 3, "evict_last">
     ]> {

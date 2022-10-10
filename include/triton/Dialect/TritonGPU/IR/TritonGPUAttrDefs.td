@@ -54,7 +54,7 @@ in memory. For example, a swizzled row-major layout could store its data
 as follows:
 
 A_{0, 0}  A_{0, 1}  A_{0, 2}  A_{0, 3} ...   [phase 0] \ per_phase = 2
-A_{1, 0}  A_{0, 1}  A_{1, 2}  A_{1, 3} ...   [phase 0] /
+A_{1, 0}  A_{1, 1}  A_{1, 2}  A_{1, 3} ...   [phase 0] /
 groups of vec=2 elements
 are stored contiguously
 _ _ _ _ /\_ _ _ _
