@@ -150,7 +150,7 @@ def vecadd_fcmp_no_scf_tester(num_warps, block_size, shape):
         y = tl.load(y_ptrs, mask=io_mask)
 
         z = x + y
-        val_mask = offset < n_elements and z > 0.
+        val_mask = offset < n_elements and (z < 0. or z > 1.)
 
         z_ptrs = z_ptr + offset
         tl.store(z_ptrs, z, mask=val_mask)
@@ -165,7 +165,7 @@ def vecadd_fcmp_no_scf_tester(num_warps, block_size, shape):
     golden_z: torch.Tensor = x + y
     gz_data = torch.flatten(golden_z)
     for i in range(golden_z.numel()):
-        gz_data[i] = gz_data[i] if gz_data[i] > 0. else 0.
+        gz_data[i] = gz_data[i] if gz_data[i] < 0. or gz_data[i] > 1. else 0.
 
     assert_close(z, golden_z, rtol=1e-7, atol=1e-7)
 

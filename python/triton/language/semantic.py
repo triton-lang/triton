@@ -295,9 +295,9 @@ def bool_and(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tens
 
 def bool_or(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
     if not input.type.is_int1():
-        input = bitcast(input, builder.get_int1_ty(), builder)
+        input = bitcast(input, tl.dtype("int1"), builder)
     if not other.type.is_int1():
-        other = bitcast(other, builder.get_int1_ty(), builder)
+        other = bitcast(other, tl.dtype("int1"), builder)
     return or_(input, other, builder)
 
 
