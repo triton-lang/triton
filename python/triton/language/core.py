@@ -556,14 +556,14 @@ class tensor:
         return semantic.not_equal(self, other, _builder)
 
     @builtin
-    def bool_and(self, other, _builder=None):
+    def logical_and(self, other, _builder=None):
         other = _to_tensor(other, _builder)
-        return semantic.bool_and(self, other, _builder)
+        return semantic.logical_and(self, other, _builder)
 
     @builtin
-    def bool_or(self, other, _builder=None):
+    def logical_or(self, other, _builder=None):
         other = _to_tensor(other, _builder)
-        return semantic.bool_or(self, other, _builder)
+        return semantic.logical_or(self, other, _builder)
 
     @builtin
     def __getitem__(self, slices, _builder=None):

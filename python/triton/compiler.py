@@ -709,8 +709,8 @@ class CodeGenerator(ast.NodeVisitor):
             rhs = rhs.value
 
         fn = {
-            ast.And: 'bool_and',
-            ast.Or: 'bool_or',
+            ast.And: 'logical_and',
+            ast.Or: 'logical_or',
         }[type(node.op)]
 
         if self.is_triton_tensor(lhs):
