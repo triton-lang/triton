@@ -209,7 +209,10 @@ mlir::LogicalResult mlir::triton::ExpandDimsOp::inferReturnTypes(
   int axis = attributes.get("axis").cast<IntegerAttr>().getInt();
   argShape.insert(argShape.begin() + axis, 1);
   // infer encoding
-
+  Attribute argEncoding = argTy.getEncoding();
+  if (argEncoding) {
+    Dialect &dialect = argEncoding.getDialect();
+  }
   // create type
   auto argEltTy = argTy.getElementType();
   inferredReturnTypes.push_back(RankedTensorType::get(argShape, argEltTy));
