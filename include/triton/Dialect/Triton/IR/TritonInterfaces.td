@@ -1,5 +1,5 @@
-#ifndef TRITON_DIALECT
-#define TRITON_DIALECT
+#ifndef TRITON_INTERFACES
+#define TRITON_INTERFACES
 
 include "mlir/IR/OpBase.td"
 
@@ -13,9 +13,9 @@ def LayoutVerificationAttrInterface : AttrInterface<"LayoutVerificationAttrInter
   let methods = [
     InterfaceMethod<
       "This is an example of a non-static hook to an operation.",
-      "unsigned", "verifyLayoutForArg", (ins "::mlir::Operation *":$op, "unsigned":$argNo)
+      "::mlir::LogicalResult", "verifyLayoutForArg", (ins "::mlir::Operation *":$op, "unsigned":$argNo)
     >,
   ];
 }
 
-#endif // TRITON_DIALECT
+#endif // TRITON_INTERFACES

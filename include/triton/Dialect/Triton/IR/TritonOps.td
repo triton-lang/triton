@@ -12,11 +12,17 @@ include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 include "mlir/Interfaces/SideEffectInterfaces.td" // NoSideEffect
 
 def TensorSizeTrait : NativeOpTrait<"TensorSizeTrait">;
+def SameOperandsAndResultEncoding : NativeOpTrait<"SameOperandsAndResultEncoding">;
+def SameOperandsEncoding : NativeOpTrait<"SameOperandsEncoding">;
+
 //
 // Op Base
 //
 class TT_Op<string mnemonic, list<Trait> traits = []> :
-    Op<Triton_Dialect, mnemonic, !listconcat(traits, [TensorSizeTrait])>;
+    Op<Triton_Dialect, mnemonic, !listconcat(traits, [TensorSizeTrait])> {
+
+    let verifier = [{ return TritonDialect::verifyLayout(*this); }];
+}
 
 //
 // CastOps
@@ -26,7 +32,9 @@ class TT_Op<string mnemonic, list<Trait> traits = []> :
 //   fptoui, fptosi, uitofp, sitofp,
 //   extf, tructf,
 //   extui, extsi, tructi
-def TT_IntToPtrOp : TT_Op<"int_to_ptr", [SameOperandsAndResultShape, NoSideEffect,
+def TT_IntToPtrOp : TT_Op<"int_to_ptr", [SameOperandsAndResultShape, 
+                                         SameOperandsAndResultEncoding, 
+                                         NoSideEffect,
                                          /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
     let summary = "Cast int64 to pointer";
 
@@ -37,7 +45,9 @@ def TT_IntToPtrOp : TT_Op<"int_to_ptr", [SameOperandsAndResultShape, NoSideEffec
     let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
 }
 
-def TT_PtrToIntOp : TT_Op<"ptr_to_int", [SameOperandsAndResultShape, NoSideEffect,
+def TT_PtrToIntOp : TT_Op<"ptr_to_int", [SameOperandsAndResultShape, 
+                                         SameOperandsAndResultEncoding,
+                                         NoSideEffect,
                                          /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
     let summary = "Cast pointer to int64";
 
@@ -48,7 +58,9 @@ def TT_PtrToIntOp : TT_Op<"ptr_to_int", [SameOperandsAndResultShape, NoSideEffec
     let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
 }
 
-def TT_FpToFp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape, NoSideEffect,
+def TT_FpToFp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape, 
+                                   SameOperandsAndResultEncoding,
+                                   NoSideEffect,
                                    /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
     let summary = "Floating point casting for custom types";
 
@@ -69,10 +81,32 @@ def TT_FpToFp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape, NoSideEffect,
 }
 
 //
+// Pointer Arith Ops
+//
+
+def TT_AddPtrOp : TT_Op<"addptr",
+                     [NoSideEffect, 
+                     SameOperandsAndResultShape,
+                     SameOperandsAndResultEncoding,
+                      TypesMatchWith<"result type matches ptr type",
+                                     "result", "ptr", "$_self">,
+                      TypesMatchWith<"result shape matches offset shape",
+                                     "result", "offset",
+                                     "getI32SameShape($_self)">]> {
+    let arguments = (ins TT_PtrLike:$ptr, TT_I32Like:$offset);
+
+    let results = (outs TT_PtrLike:$result);
+
+    let assemblyFormat = "$ptr `,` $offset attr-dict `:` type($result)";
+}
+
+
+//
 // Load/Store Ops
 //
 def TT_LoadOp : TT_Op<"load",
                       [SameOperandsAndResultShape,
+                       SameOperandsAndResultEncoding,
                        SameVariadicOperandSize,
                        MemoryEffects<[MemRead]>,
                        TypesMatchWith<"infer ptr type from result type",
@@ -111,6 +145,7 @@ def TT_LoadOp : TT_Op<"load",
 
 def TT_StoreOp : TT_Op<"store",
                        [SameOperandsShape,
+                        SameOperandsEncoding,
                         MemoryEffects<[MemWrite]>,
                         TypesMatchWith<"infer ptr type from value type",
                                        "value", "ptr",
@@ -134,18 +169,42 @@ def TT_StoreOp : TT_Op<"store",
     let hasCanonicalizer = 1;
 }
 
-def TT_AddPtrOp : TT_Op<"addptr",
-                     [NoSideEffect, SameOperandsAndResultShape,
-                      TypesMatchWith<"result type matches ptr type",
-                                     "result", "ptr", "$_self">,
-                      TypesMatchWith<"result shape matches offset shape",
-                                     "result", "offset",
-                                     "getI32SameShape($_self)">]> {
-    let arguments = (ins TT_PtrLike:$ptr, TT_I32Like:$offset);
+//
+// Atomic Op
+//
+def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
+                                          SameOperandsAndResultEncoding]> {
+    let summary = "atomic rmw";
 
-    let results = (outs TT_PtrLike:$result);
+    let description = [{
+        load data at $ptr, do $rmw_op with $val, and store result to $ptr.
 
-    let assemblyFormat = "$ptr `,` $offset attr-dict `:` type($result)";
+        return old value at $ptr
+    }];
+
+    let arguments = (ins TT_AtomicRMWAttr:$atomic_rmw_op, TT_PtrTensor:$ptr,
+                         TT_Type:$val, I1Tensor:$mask);
+
+    let results = (outs TT_Type:$result);
+}
+
+def TT_AtomicCASOp : TT_Op<"atomic_cas", [SameOperandsAndResultShape,
+                                          SameOperandsAndResultEncoding]> {
+    let summary = "atomic cas";
+
+    let description = [{
+        compare $cmp with data $old at location $ptr,
+
+        if $old == $cmp, store $val to $ptr,
+
+        else store $old to $ptr,
+
+        return $old
+    }];
+
+    let arguments = (ins TT_Ptr:$ptr, TT_Type:$cmp, TT_Type:$val);
+
+    let results = (outs TT_Type:$result);
 }
 
 
@@ -207,7 +266,7 @@ def TT_CatOp : TT_Op<"cat", [NoSideEffect, SameOperandsAndResultElementType]> {
 }
 
 //
-// builtin Ops
+// SPMD Ops
 //
 def TT_GetProgramIdOp : TT_Op<"get_program_id"> {
     let arguments = (ins I32Attr:$axis);
@@ -225,6 +284,9 @@ def TT_GetNumProgramsOp : TT_Op<"get_num_programs"> {
     let assemblyFormat = "attr-dict `:` type($result)";
 }
 
+//
+// Dot Op
+//
 def TT_DotOp : TT_Op<"dot", [NoSideEffect,
                              TypesMatchWith<"result's type matches accumulator's type",
                                             "d", "c", "$_self">]> {
@@ -239,14 +301,11 @@ def TT_DotOp : TT_Op<"dot", [NoSideEffect,
     let results = (outs TT_FpIntTensor:$d);
 
     let assemblyFormat = "$a`,` $b`,` $c attr-dict `:` type($a) `*` type($b) `->` type($d)";
-
-    let extraClassDeclaration = [{
-        LogicalResult verifyImpl();
-    }];
-
-    let verifier = [{ return this->verifyImpl(); }];
 }
 
+//
+// Reduce Op
+//
 def TT_ReduceOp : TT_Op<"reduce", [NoSideEffect]> {
     let summary = "reduce";
 
@@ -261,43 +320,11 @@ def TT_ReduceOp : TT_Op<"reduce", [NoSideEffect]> {
     let assemblyFormat = "$operand attr-dict `:` type($operand) `->` type($result)";
 }
 
-def TT_AtomicRMWOp : TT_Op<"atomic_rmw"> {
-    let summary = "atomic rmw";
-
-    let description = [{
-        load data at $ptr, do $rmw_op with $val, and store result to $ptr.
-
-        return old value at $ptr
-    }];
-
-    let arguments = (ins TT_AtomicRMWAttr:$atomic_rmw_op, TT_PtrTensor:$ptr,
-                         TT_Type:$val, I1Tensor:$mask);
-
-    let results = (outs TT_Type:$result);
-}
-
-def TT_AtomicCASOp : TT_Op<"atomic_cas"> {
-    let summary = "atomic cas";
-
-    let description = [{
-        compare $cmp with data $old at location $ptr,
-
-        if $old == $cmp, store $val to $ptr,
-
-        else store $old to $ptr,
-
-        return $old
-    }];
-
-    let arguments = (ins TT_Ptr:$ptr, TT_Type:$cmp, TT_Type:$val);
-
-    let results = (outs TT_Type:$result);
-}
-
 //
-// External Function Ops
+// External elementwise op
 //
 def TT_ExtElemwiseOp : TT_Op<"ext_elemwise", [NoSideEffect, Elementwise, SameOperandsAndResultShape,
+                                              SameOperandsAndResultEncoding,
                                               SameVariadicOperandSize]> {
     let summary = "ext_elemwise";
 
@@ -315,7 +342,7 @@ def TT_ExtElemwiseOp : TT_Op<"ext_elemwise", [NoSideEffect, Elementwise, SameOpe
 }
 
 //
-// Intrinsics
+// Make Range Op
 //
 // TODO: should have ConstantLike as Trait
 def TT_MakeRangeOp : TT_Op<"make_range", [NoSideEffect]> {

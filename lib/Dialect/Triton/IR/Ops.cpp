@@ -6,8 +6,6 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OperationSupport.h"
 
-#include "triton/Dialect/Triton/IR/AttrInterfaces.h.inc"
-
 namespace mlir {
 namespace triton {
 
@@ -192,25 +190,6 @@ OpFoldResult BroadcastOp::fold(ArrayRef<Attribute> operands) {
   } else {
     return {};
   }
-}
-
-// -- verification
-LogicalResult DotOp::verifyImpl() {
-  for (auto operand : getOperands()) {
-    auto opType = operand.getType().dyn_cast<RankedTensorType>();
-    if (!opType)
-      continue;
-    auto opEncoding = opType.getEncoding();
-    if (!opEncoding)
-      continue;
-
-    if (auto interface =
-            opEncoding.dyn_cast<LayoutVerificationAttrInterface>()) {
-      llvm::outs() << "implements interface?\n";
-      return failure();
-    }
-  }
-  return success();
 }
 
 } // namespace triton

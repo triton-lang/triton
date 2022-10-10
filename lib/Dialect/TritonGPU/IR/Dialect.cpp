@@ -569,3 +569,23 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
   // TODO: fill this.
   return success();
 }
+
+//===----------------------------------------------------------------------===//
+// Verification interfaces
+//===----------------------------------------------------------------------===//
+
+LogicalResult SharedEncodingAttr::verifyLayoutForArg(Operation *op,
+                                                     unsigned argNo) const {
+  if (mlir::isa<DotOp>(op))
+    return (argNo == 0 || argNo == 1) ? success() : failure();
+  if (mlir::isa<ExtractSliceOp>(op))
+    return success();
+  // TODO: cat/reduce on main branch doesn't use shared memory
+  // but shuffle things. We should preserve this behavior for the first
+  // MLIR release
+  if (mlir::isa<CatOp>(op))
+    return success();
+  if (mlir::isa<ReduceOp>(op))
+    return success();
+  return failure();
+}

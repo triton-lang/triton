@@ -2,6 +2,7 @@
 #define TRITONGPU_ATTRDEFS
 
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
+include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 
 //===----------------------------------------------------------------------===//
 // TritonGPU Attribute Definitions
@@ -34,6 +35,7 @@ Right now, Triton implements two classes of layouts: shared, and distributed.
 
   code extraBaseClassDeclaration = [{
     unsigned getElemsPerThread(ArrayRef<int64_t> shape) const;
+    ::mlir::LogicalResult verifyLayoutForArg(::mlir::Operation* op, unsigned argNo) const;
   }];
 }
 
@@ -41,7 +43,7 @@ Right now, Triton implements two classes of layouts: shared, and distributed.
 // Shared Layout Encoding
 //===----------------------------------------------------------------------===//
 
-def SharedEncodingAttr : TritonGPU_Attr<"SharedEncoding"> {
+def SharedEncodingAttr : TritonGPU_Attr<"SharedEncoding", [LayoutVerificationAttrInterface]> {
   let mnemonic = "shared";
 
   let description = [{
