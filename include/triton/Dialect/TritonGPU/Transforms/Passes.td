@@ -76,15 +76,4 @@ def TritonGPUCanonicalizeLoops: Pass<"tritongpu-canonicalize-loops", "mlir::Modu
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
 }
 
-def TritonGPUVerifier : Pass<"tritongpu-verifier", "mlir::ModuleOp"> {
-  let summary = "verify TritonGPU IR";
-
-  let description = [{}];
-
-  let constructor = "mlir::createTritonGPUVerifier()";
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::gpu::GPUDialect"];
-}
-
 #endif
