@@ -199,6 +199,7 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type retType = getTypeConverter()->convertType(op.getType());
+    Attribute dEncoding = retType.cast<RankedTensorType>().getEncoding();
     // a & b must be of smem layout
     auto aType = adaptor.a().getType().cast<RankedTensorType>();
     auto bType = adaptor.b().getType().cast<RankedTensorType>();
@@ -209,16 +210,16 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
     Value a = adaptor.a();
     Value b = adaptor.b();
     SmallVector<unsigned, 2> order{1, 0};
-    if (!aEncoding.isa<triton::gpu::SharedEncodingAttr>()) {
+    if (!aEncoding.isa<triton::gpu::DotOperandEncodingAttr>()) {
       Attribute encoding =
-          triton::gpu::SharedEncodingAttr::get(getContext(), 1, 1, 1, order);
+          triton::gpu::DotOperandEncodingAttr::get(getContext(), 0, dEncoding);
       auto dstType = RankedTensorType::get(aType.getShape(),
                                            aType.getElementType(), encoding);
       a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), dstType, a);
     }
-    if (!bEncoding.isa<triton::gpu::SharedEncodingAttr>()) {
+    if (!bEncoding.isa<triton::gpu::DotOperandEncodingAttr>()) {
       Attribute encoding =
-          triton::gpu::SharedEncodingAttr::get(getContext(), 1, 1, 1, order);
+          triton::gpu::DotOperandEncodingAttr::get(getContext(), 1, dEncoding);
       auto dstType = RankedTensorType::get(bType.getShape(),
                                            bType.getElementType(), encoding);
       b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), dstType, b);

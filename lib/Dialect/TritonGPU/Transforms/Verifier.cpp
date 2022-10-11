@@ -33,8 +33,8 @@ private:
           Attribute encoding = tensorType.getEncoding();
           if (!encoding)
             return dotOp.emitError() << name << " should have encoding";
-          if (!encoding.isa<triton::gpu::SharedEncodingAttr>())
-            return dotOp.emitError() << name << " should be of shared layout";
+          if (!encoding.isa<triton::gpu::DotOperandEncodingAttr>())
+            return dotOp.emitError() << name << " should be of dot operand layout";
         } else
           return dotOp.emitError()
                  << name << "'s type should be of RankedTensorType";

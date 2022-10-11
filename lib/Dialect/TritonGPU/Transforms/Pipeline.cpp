@@ -203,7 +203,7 @@ LogicalResult LoopPipeliner::initialize() {
         if (auto tensorType = convertLayout.getResult()
                                   .getType()
                                   .dyn_cast<RankedTensorType>()) {
-          if (tensorType.getEncoding().isa<triton::gpu::SharedEncodingAttr>()) {
+          if (tensorType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>()) {
             isCandiate = true;
             loadsMapping[loadOp] = convertLayout;
           }
