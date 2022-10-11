@@ -1197,10 +1197,10 @@ def _build(name, src, srcdir):
     return so
 
 
-def make_so_cache_key(signature, constants):
+def make_so_cache_key(version_hash, signature, constants):
     # Get unique key for the compiled code
     signature = {k: 'ptr' if v[0] == '*' else v for k, v in signature.items()}
-    key = f"{''.join(signature.values())}{constants}"
+    key = f"{version_hash}-{''.join(signature.values())}{constants}"
     key = hashlib.md5(key.encode("utf-8")).hexdigest()
     return key
 
@@ -1221,7 +1221,7 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
     # cache manager
     name = fn.__name__
     # name of files that are cached
-    so_cache_key = make_so_cache_key(signature, constants)
+    so_cache_key = make_so_cache_key(triton.jit.version_key(), signature, constants)
     so_cache_manager = CacheManager(so_cache_key)
     so_name = f"{name}.so"
     # retrieve stub from cache if it exists
