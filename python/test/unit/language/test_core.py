@@ -1191,13 +1191,13 @@ def test_arange(start, device='cuda'):
 # ---------------
 
 
-@pytest.mark.parametrize("dtype_str", torch_dtypes)
-def test_masked_load(dtype_str, device='cuda'):
+@pytest.mark.parametrize("dtype_str, size, size_diff", [(dtype_str, size, size_diff) for dtype_str in torch_dtypes for size in [128, 512] for size_diff in [1, 2, 3, 4]])
+def test_masked_load(dtype_str, size, size_diff, device='cuda'):
     dtype = getattr(torch, dtype_str)
     check_type_supported(dtype)  # bfloat16 on cc < 80 will not be tested
 
-    input_size = 126
-    output_size = 128
+    input_size = size - size_diff
+    output_size = size
     if dtype_str == 'bool':
         input = torch.randint(0, 2, (input_size,), dtype=dtype, device=device)
     elif dtype_str in int_dtypes or dtype_str in uint_dtypes:
@@ -1218,7 +1218,7 @@ def test_masked_load(dtype_str, device='cuda'):
     _kernel[(1,)](input, output, input_size, output_size)
 
     reference_out = input
-    reference_out = torch.cat((reference_out, torch.ones((2,), dtype=dtype, device=device)))
+    reference_out = torch.cat((reference_out, torch.ones((size_diff,), dtype=dtype, device=device)))
     triton.testing.allclose(output, reference_out)
 
 
