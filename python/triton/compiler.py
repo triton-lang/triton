@@ -1221,7 +1221,7 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
     # cache manager
     name = fn.__name__
     # name of files that are cached
-    so_cache_key = make_so_cache_key(triton.jit.version_key(), signature, constants)
+    so_cache_key = make_so_cache_key(triton.runtime.jit.version_key(), signature, constants)
     so_cache_manager = CacheManager(so_cache_key)
     so_name = f"{name}.so"
     # retrieve stub from cache if it exists
