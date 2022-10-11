@@ -107,7 +107,6 @@ class CMakeBuild(build_ext):
             "-DPYTHON_INCLUDE_DIRS=" + ";".join(python_include_dirs),
             "-DLLVM_EXTERNAL_LIT=" + lit_dir
         ]
-        print('\n'.join(cmake_args))
         # configuration
         cfg = "Debug" if self.debug else "Release"
         build_args = ["--config", cfg]
