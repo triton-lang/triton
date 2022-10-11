@@ -337,11 +337,11 @@ static T getLinearIndex(ArrayRef<T> multiDimIndex, ArrayRef<T> shape) {
 
 struct ConvertTritonGPUOpToLLVMPatternBase {
   static SmallVector<Value>
-  getElementsFromStruct(Location loc, Value llvmStruct, unsigned elems,
+  getElementsFromStruct(Location loc, Value llvmStruct,
                         ConversionPatternRewriter &rewriter) {
-    SmallVector<Value> results(elems);
     ArrayRef<Type> types =
         llvmStruct.getType().cast<LLVM::LLVMStructType>().getBody();
+    SmallVector<Value> results(types.size());
     for (unsigned i = 0; i < types.size(); ++i) {
       Type type = types[i];
       results[i] = extract_val(type, llvmStruct, rewriter.getI64ArrayAttr(i));
@@ -716,8 +716,7 @@ struct LoadStoreConversionBase : public ConvertTritonGPUOpToLLVMPatternBase {
 
     auto shape = value.getType().cast<RankedTensorType>().getShape();
     // Here, we assume that all inputs should have a blockedLayout
-    unsigned valueElems = layout.getElemsPerThread(shape);
-    auto valueVals = getElementsFromStruct(loc, llValue, valueElems, rewriter);
+    auto valueVals = getElementsFromStruct(loc, llValue, rewriter);
     return valueVals;
   }
 
@@ -978,7 +977,7 @@ struct BroadcastOpConversion
 
     unsigned srcElems = srcLayout.getElemsPerThread(srcShape);
     auto elemTy = resultTy.getElementType();
-    auto srcVals = getElementsFromStruct(loc, src, srcElems, rewriter);
+    auto srcVals = getElementsFromStruct(loc, src, rewriter);
     unsigned resultElems = resultLayout.getElemsPerThread(resultShape);
     SmallVector<Value> resultVals(resultElems);
     for (unsigned i = 0; i < srcElems; ++i) {
@@ -1026,8 +1025,7 @@ struct ViewLikeOpConversion : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
         this->getTypeConverter()->convertType(resultTy.getElementType());
     SmallVector<Type> types(elems, elemTy);
     Type structTy = LLVM::LLVMStructType::getLiteral(this->getContext(), types);
-    auto vals =
-        this->getElementsFromStruct(loc, adaptor.src(), elems, rewriter);
+    auto vals = this->getElementsFromStruct(loc, adaptor.src(), rewriter);
     Value view = getStructFromElements(loc, vals, rewriter, structTy);
     rewriter.replaceOp(op, view);
     return success();
@@ -1309,9 +1307,8 @@ struct AddPtrOpConversion
           getTypeConverter()->convertType(resultTensorTy.getElementType());
       SmallVector<Type> types(elems, elemTy);
       Type structTy = LLVM::LLVMStructType::getLiteral(getContext(), types);
-      auto ptrs = getElementsFromStruct(loc, adaptor.ptr(), elems, rewriter);
-      auto offsets =
-          getElementsFromStruct(loc, adaptor.offset(), elems, rewriter);
+      auto ptrs = getElementsFromStruct(loc, adaptor.ptr(), rewriter);
+      auto offsets = getElementsFromStruct(loc, adaptor.offset(), rewriter);
       SmallVector<Value> resultVals(elems);
       for (unsigned i = 0; i < elems; ++i) {
         resultVals[i] = gep(elemTy, ptrs[i], offsets[i]);
@@ -1417,9 +1414,9 @@ public:
 
     auto *concreteThis = static_cast<const ConcreteT *>(this);
     auto lhss = this->getElementsFromStruct(loc, concreteThis->getLhs(adaptor),
-                                            elems, rewriter);
+                                            rewriter);
     auto rhss = this->getElementsFromStruct(loc, concreteThis->getRhs(adaptor),
-                                            elems, rewriter);
+                                            rewriter);
     SmallVector<Value> resultVals(elems);
     for (unsigned i = 0; i < elems; ++i) {
       resultVals[i] = concreteThis->createDestOp(op, rewriter, elemTy, lhss[i],
@@ -1762,7 +1759,7 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
   // Potentially we need to store for multiple CTAs in this replication
   unsigned accumNumReplicates = product<unsigned>(numReplicates);
   unsigned elems = getElemsPerThread(srcLayout, srcTy.getShape());
-  auto vals = getElementsFromStruct(loc, adaptor.src(), elems, rewriter);
+  auto vals = getElementsFromStruct(loc, adaptor.src(), rewriter);
   unsigned inVec = 0;
   unsigned outVec = 0;
   auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
@@ -1825,7 +1822,7 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
   unsigned perPhase = dstSharedLayout.getPerPhase();
   unsigned maxPhase = dstSharedLayout.getMaxPhase();
   unsigned numElems = getElemsPerThread(srcBlockedLayout, srcShape);
-  auto inVals = getElementsFromStruct(loc, adaptor.src(), numElems, rewriter);
+  auto inVals = getElementsFromStruct(loc, adaptor.src(), rewriter);
   unsigned srcAccumSizeInThreads =
       product<unsigned>(srcBlockedLayout.getSizePerThread());
   auto elemTy = srcTy.getElementType();
@@ -2954,7 +2951,7 @@ private:
 
   ValueTable getValuesFromDotOperandLayoutStruct(Value value, int n0, int n1) {
     auto elems = ConvertTritonGPUOpToLLVMPatternBase::getElementsFromStruct(
-        loc, value, 2 * n0 * 2 * n1, rewriter);
+        loc, value, rewriter);
 
     int offset{};
     ValueTable vals;
