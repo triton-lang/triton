@@ -289,8 +289,9 @@ Attribute BlockedEncodingAttr::parse(AsmParser &parser, Type type) {
     }
   }
 
-  return parser.getChecked<BlockedEncodingAttr>(
+  auto ret = parser.getChecked<BlockedEncodingAttr>(
       parser.getContext(), sizePerThread, threadsPerWarp, warpsPerCTA, order);
+  return ret;
 }
 
 void BlockedEncodingAttr::print(mlir::AsmPrinter &printer) const {
@@ -347,27 +348,13 @@ void MmaEncodingAttr::print(AsmPrinter &printer) const {
 Attribute SliceEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseLess().failed())
     return {};
-  // Parse the data as a dictionary
-  DictionaryAttr dict;
-  if (parser.parseAttribute(dict).failed())
+  NamedAttrList attrs;
+  if (parser.parseOptionalAttrDict(attrs).failed())
     return {};
   if (parser.parseGreater().failed())
     return {};
-
-  unsigned dim = 0;
-  Attribute parent;
-
-  for (const NamedAttribute &attr : dict) {
-    if (attr.getName() == "dim") {
-      if (parseUInt(parser, attr, dim, "dim").failed())
-        return {};
-    }
-    if (attr.getName() == "parent") {
-      if (parser.parseAttribute(parent).failed())
-        return {};
-    }
-  }
-
+  unsigned dim = attrs.get("dim").cast<IntegerAttr>().getInt();
+  Attribute parent = attrs.get("parent");
   return parser.getChecked<SliceEncodingAttr>(parser.getContext(), dim, parent);
 }
 
