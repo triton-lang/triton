@@ -986,8 +986,8 @@ void generator::visit_load_inst(ir::load_inst* x){
         ir::value *false_val = mx->get_false_value_operand();
         v = insert_elt(v, vals_[false_val][idxs[i + ii*size + s]], s);
       }
-      // PTX doesn't support mov.u8, so we need to use mov.u16
       v = bit_cast(v, IntegerType::get(*ctx_, width));
+      // PTX doesn't support mov.u8, so we need to use mov.u16
       auto mov_width = width < 16 ? 16 : width;
       asm_oss << "\n        ";
       asm_oss << "@!$" << n_words << " mov.u" << mov_width;
