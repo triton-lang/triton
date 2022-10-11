@@ -17,4 +17,24 @@
 #define GET_OP_CLASSES
 #include "triton/Dialect/Triton/IR/Ops.h.inc"
 
+namespace mlir {
+namespace triton {
+
+class DialectInferLayoutInterface
+    : public DialectInterface::Base<DialectInferLayoutInterface> {
+public:
+  DialectInferLayoutInterface(Dialect *dialect) : Base(dialect) {}
+
+  virtual LogicalResult
+  inferReduceOpEncoding(Attribute operandEncoding, int axis,
+                        Attribute &resultEncoding) const = 0;
+
+  virtual LogicalResult
+  inferExpandDimsOpEncoding(Attribute operandEncoding, int axis,
+                            Attribute &resultEncoding) const = 0;
+};
+
+} // namespace triton
+} // namespace mlir
+
 #endif // TRITON_IR_DIALECT_H_

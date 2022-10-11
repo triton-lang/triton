@@ -43,7 +43,7 @@ Right now, Triton implements two classes of layouts: shared, and distributed.
 // Shared Layout Encoding
 //===----------------------------------------------------------------------===//
 
-def SharedEncodingAttr : TritonGPU_Attr<"SharedEncoding", [LayoutVerificationAttrInterface]> {
+def SharedEncodingAttr : TritonGPU_Attr<"SharedEncoding"> {
   let mnemonic = "shared";
 
   let description = [{

@@ -36,7 +36,6 @@ def Triton_Dialect : Dialect {
 
   let extraClassDeclaration = [{
     void registerTypes();
-    static LogicalResult verifyLayout(Operation *op);
   }];
 
   let hasConstantMaterializer = 1;

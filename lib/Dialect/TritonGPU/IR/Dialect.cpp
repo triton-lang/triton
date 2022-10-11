@@ -3,6 +3,7 @@
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -522,6 +523,35 @@ public:
   }
 };
 
+struct TritonGPUInferLayoutInterface
+    : public triton::DialectInferLayoutInterface {
+  using DialectInferLayoutInterface::DialectInferLayoutInterface;
+
+  LogicalResult inferReduceOpEncoding(Attribute operandEncoding, int axis,
+                                      Attribute &resultEncoding) const {
+    resultEncoding = SliceEncodingAttr::get(getDialect()->getContext(), axis,
+                                            operandEncoding);
+    return success();
+  }
+
+  LogicalResult inferExpandDimsOpEncoding(Attribute operandEncoding, int axis,
+                                          Attribute &resultEncoding) const {
+    auto sliceEncoding = operandEncoding.dyn_cast<SliceEncodingAttr>();
+    if (!sliceEncoding) {
+      llvm::report_fatal_error(
+          "ExpandDimsOp operand encoding must be SliceEncodingAttr");
+      return failure();
+    }
+    if (sliceEncoding.getDim() != axis) {
+      llvm::report_fatal_error(
+          "Incompatible slice dimension for ExpandDimsOp operand");
+      return failure();
+    }
+    resultEncoding = sliceEncoding.getParent();
+    return success();
+  }
+};
+
 void TritonGPUDialect::initialize() {
   addAttributes<
 #define GET_ATTRDEF_LIST
@@ -532,6 +562,7 @@ void TritonGPUDialect::initialize() {
 #include "triton/Dialect/TritonGPU/IR/Ops.cpp.inc"
       >();
   addInterfaces<TritonGPUOpAsmInterface>();
+  addInterfaces<TritonGPUInferLayoutInterface>();
 }
 
 //===----------------------------------------------------------------------===//
@@ -568,24 +599,4 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
                                                          NamedAttribute attr) {
   // TODO: fill this.
   return success();
-}
-
-//===----------------------------------------------------------------------===//
-// Verification interfaces
-//===----------------------------------------------------------------------===//
-
-LogicalResult SharedEncodingAttr::verifyLayoutForArg(Operation *op,
-                                                     unsigned argNo) const {
-  if (mlir::isa<DotOp>(op))
-    return (argNo == 0 || argNo == 1) ? success() : failure();
-  if (mlir::isa<ExtractSliceOp>(op))
-    return success();
-  // TODO: cat/reduce on main branch doesn't use shared memory
-  // but shuffle things. We should preserve this behavior for the first
-  // MLIR release
-  if (mlir::isa<CatOp>(op))
-    return success();
-  if (mlir::isa<ReduceOp>(op))
-    return success();
-  return failure();
 }
