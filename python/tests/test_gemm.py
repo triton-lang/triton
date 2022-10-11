@@ -50,3 +50,10 @@ def test_gemm_impl(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS):
     golden = torch.matmul(a, b)
     torch.set_printoptions(profile="full")
     assert_close(c, golden, rtol=1e-3, atol=1e-3, check_dtype=False)
+
+
+if __name__ == '__main__':
+    #test_gemm_impl(128, 256, 32, 4)
+    #test_gemm_impl(256, 128, 16, 4)
+    test_gemm_impl(128, 16, 32, 4)
+    #test_gemm_impl(32, 128, 64, 4)
