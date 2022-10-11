@@ -8,6 +8,8 @@ std::unique_ptr<Pass> createTritonGPUPipelinePass(int numStages = 2);
 
 std::unique_ptr<Pass> createTritonGPUCanonicalizeLoopsPass();
 
+std::unique_ptr<Pass> createTritonGPUSwizzlePass();
+
 std::unique_ptr<Pass> createTritonGPUCoalescePass();
 
 std::unique_ptr<Pass> createTritonGPUCombineOpsPass();
