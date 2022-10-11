@@ -1313,10 +1313,10 @@ def _build(name, src, srcdir):
     return so
 
 
-def make_so_cache_key(signature, constants):
+def make_so_cache_key(version_hash, signature, constants):
     # Get unique key for the compiled code
     signature = {k: 'ptr' if v[0] == '*' else v for k, v in signature.items()}
-    key = f"{''.join(signature.values())}{constants}"
+    key = f"{version_hash}-{''.join(signature.values())}{constants}"
     key = hashlib.md5(key.encode("utf-8")).hexdigest()
     return key
 
@@ -1351,7 +1351,7 @@ def read_or_execute(cache_manager, force_compile, file_name, metadata,
 
 def make_stub(name, signature, constants):
     # name of files that are cached
-    so_cache_key = make_so_cache_key(signature, constants)
+    so_cache_key = make_so_cache_key(triton.runtime.jit.version_key(), signature, constants)
     so_cache_manager = CacheManager(so_cache_key)
     so_name = f"{name}.so"
     # retrieve stub from cache if it exists
