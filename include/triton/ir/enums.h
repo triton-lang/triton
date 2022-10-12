@@ -108,6 +108,8 @@ enum value_id_t: unsigned {
   // cmp
   INST_ICMP,
   INST_FCMP,
+  // dequantize
+  INST_DEQUANTIZE,
   // cast
   INST_CAST_TRUNC,
   INST_CAST_ZEXT,

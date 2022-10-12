@@ -152,7 +152,15 @@ private:
   std::tuple<Value*, Value*, Value*, Value*> bf16x4_to_fp8x4(Value *in0, Value *in1, Value *in2, Value *in3);
   Value* bf16_to_fp32(Value *in0);
   Value* fp32_to_bf16(Value *in0);
-
+  std::tuple<Value*, Value*, Value*, Value*, Value*, Value*, Value*, Value*> int16_to_float16x8(
+    Value *in0, Value *scale_x512, Value *shift
+  );
+  std::tuple<Value*, Value*, Value*, Value*, Value*, Value*, Value*, Value*> int32_to_float16x8(
+    Value *in0, Value *scale_x512, Value *shift
+  );
+  std::tuple<Value*, Value*, Value*, Value*> int32_to_float16x4(Value *in0, Value *scale_x512, Value *shift);
+  std::tuple<Value*, Value*> prepare_scale_shift(Value *scale, Value *shift);
+  void visit_dequantize_inst(ir::dequantize_inst*);
   void visit_cast_inst(ir::cast_inst*);
   void visit_return_inst(ir::return_inst*);
   void visit_cond_branch_inst(ir::cond_branch_inst*);
@@ -265,7 +273,7 @@ private:
   /// idx for multi-stage pipeline
   std::map<analysis::data_layout*, Value*> read_smem_idx_;
   std::map<analysis::data_layout*, Value*> write_smem_idx_;
-  
+
   /// triton bb -> llvm bb
   std::map<ir::value*, BasicBlock *> bbs_;
   std::map<ir::value*, std::vector<int>> ords_;
