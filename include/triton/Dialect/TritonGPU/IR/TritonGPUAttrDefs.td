@@ -2,6 +2,7 @@
 #define TRITONGPU_ATTRDEFS
 
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
+include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 
 //===----------------------------------------------------------------------===//
 // TritonGPU Attribute Definitions
@@ -34,6 +35,7 @@ Right now, Triton implements two classes of layouts: shared, and distributed.
 
   code extraBaseClassDeclaration = [{
     unsigned getElemsPerThread(ArrayRef<int64_t> shape) const;
+    ::mlir::LogicalResult verifyLayoutForArg(::mlir::Operation* op, unsigned argNo) const;
   }];
 }
 
@@ -301,15 +303,15 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
     TODO: improve docs
 
     A = [x  x  x  x  x  x  x  x]
-        [x  x  x  x  x  x  x  x]
-    L_parent = [0  1  2  3 ]
-               [4  5  6  7 ]
-               [8  9  10 11]
-               [12 13 14 15]
+
+    parent = [0  1  2  3 ]
+             [4  5  6  7 ]
+             [8  9  10 11]
+             [12 13 14 15]
     dim = 0
 
     Then the data of A would be distributed as follow between the 16 CUDA threads:
-    L(A) = [ {0,4,8,12} , {1,5,9,13} , ... {3,7,11,15} ]
+    L(A) = [ {0,4,8,12} , {1,5,9,13} , ... {3,7,11,15}, {0,4,8,12} , ..., {3,7,11,15} ]
 
     This is useful for constructing the inverse layout of an expand_dims operation during some optimization passes.
 

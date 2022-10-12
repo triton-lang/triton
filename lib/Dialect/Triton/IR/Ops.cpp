@@ -160,16 +160,86 @@ void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
 }
 
 //-- DotOp --
+mlir::LogicalResult mlir::triton::DotOp::inferReturnTypes(
+    MLIRContext *context, Optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  // type is the same as the accumulator
+  auto accTy = operands[2].getType().cast<RankedTensorType>();
+  inferredReturnTypes.push_back(accTy);
+  return mlir::success();
+}
+
+//-- ReduceOp --
+mlir::LogicalResult mlir::triton::ReduceOp::inferReturnTypes(
+    MLIRContext *context, Optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  // infer shape
+  Value arg = operands[0];
+  auto argTy = arg.getType().cast<RankedTensorType>();
+  auto retShape = argTy.getShape().vec();
+  int axis = attributes.get("axis").cast<IntegerAttr>().getInt();
+  retShape.erase(retShape.begin() + axis);
+  // infer encoding
+  Attribute argEncoding = argTy.getEncoding();
+  Attribute retEncoding;
+  if (argEncoding) {
+    Dialect &dialect = argEncoding.getDialect();
+    auto inferLayoutInterface = dyn_cast<DialectInferLayoutInterface>(&dialect);
+    if (inferLayoutInterface
+            ->inferReduceOpEncoding(argEncoding, axis, retEncoding)
+            .failed()) {
+      llvm::report_fatal_error("failed to infer layout for ReduceOp");
+      return mlir::failure();
+    }
+  }
+  // create type
+  auto argEltTy = argTy.getElementType();
+  inferredReturnTypes.push_back(
+      RankedTensorType::get(retShape, argEltTy, retEncoding));
+  return mlir::success();
+}
 
 //-- SplatOp --
 OpFoldResult SplatOp::fold(ArrayRef<Attribute> operands) {
   auto constOperand = src().getDefiningOp<arith::ConstantOp>();
   if (!constOperand)
     return {};
-
   auto shapedType = getType().cast<ShapedType>();
   auto ret = SplatElementsAttr::get(shapedType, {constOperand.getValue()});
   return ret;
+}
+
+//-- ExpandDimsOp --
+mlir::LogicalResult mlir::triton::ExpandDimsOp::inferReturnTypes(
+    MLIRContext *context, Optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  // infer shape
+  auto arg = operands[0];
+  auto argTy = arg.getType().cast<RankedTensorType>();
+  auto retShape = argTy.getShape().vec();
+  int axis = attributes.get("axis").cast<IntegerAttr>().getInt();
+  retShape.insert(retShape.begin() + axis, 1);
+  // infer encoding
+  Attribute argEncoding = argTy.getEncoding();
+  Attribute retEncoding;
+  if (argEncoding) {
+    Dialect &dialect = argEncoding.getDialect();
+    auto inferLayoutInterface = dyn_cast<DialectInferLayoutInterface>(&dialect);
+    if (inferLayoutInterface
+            ->inferExpandDimsOpEncoding(argEncoding, axis, retEncoding)
+            .failed()) {
+      llvm::report_fatal_error("failed to infer layout for ExpandDimsOp");
+      return mlir::failure();
+    }
+  }
+  // create type
+  auto argEltTy = argTy.getElementType();
+  inferredReturnTypes.push_back(
+      RankedTensorType::get(retShape, argEltTy, retEncoding));
+  return mlir::success();
 }
 
 //-- BroadcastOp --
