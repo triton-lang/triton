@@ -273,7 +273,7 @@ def TT_CatOp : TT_Op<"cat", [NoSideEffect,
 //
 // SPMD Ops
 //
-def TT_GetProgramIdOp : TT_Op<"get_program_id"> {
+def TT_GetProgramIdOp : TT_Op<"get_program_id", [NoSideEffect]> {
     let arguments = (ins I32Attr:$axis);
 
     let results = (outs I32:$result);
@@ -281,7 +281,7 @@ def TT_GetProgramIdOp : TT_Op<"get_program_id"> {
     let assemblyFormat = "attr-dict `:` type($result)";
 }
 
-def TT_GetNumProgramsOp : TT_Op<"get_num_programs"> {
+def TT_GetNumProgramsOp : TT_Op<"get_num_programs", [NoSideEffect]> {
     let arguments = (ins I32Attr:$axis);
 
     let results = (outs I32:$result);

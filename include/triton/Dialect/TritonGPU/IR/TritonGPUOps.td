@@ -48,7 +48,7 @@ def TTG_CmpIOp : TTG_Op<"cmpi", [NoSideEffect]> {
   let results = (outs TT_BoolLike:$result);
 }
 
-def TTG_CmpFOp : TTG_Op<"cmpf"> {
+def TTG_CmpFOp : TTG_Op<"cmpf", [NoSideEffect]> {
   let summary = "floating-point comparison operation";
 
   let description = [{}];
@@ -61,7 +61,7 @@ def TTG_CmpFOp : TTG_Op<"cmpf"> {
 }
 
 // TODO: migrate to arith::SelectOp on LLVM16
-def TTG_SelectOp : TTG_Op<"select"> {
+def TTG_SelectOp : TTG_Op<"select", [NoSideEffect]> {
   let summary = "select operation";
 
   let description = [{}];

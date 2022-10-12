@@ -103,11 +103,18 @@ public:
 
   Attribute invertEncoding(Type targetType, Operation *op) const {
     RankedTensorType targetTensorType = targetType.cast<RankedTensorType>();
+    auto targetEncoding = targetTensorType.getEncoding();
     if (auto expand_dims = dyn_cast<triton::ExpandDimsOp>(op)) {
       return triton::gpu::SliceEncodingAttr::get(
-          getContext(), expand_dims.axis(), targetTensorType.getEncoding());
+          getContext(), expand_dims.axis(), targetEncoding);
     }
-    return targetTensorType.getEncoding();
+    if (auto reduce = dyn_cast<triton::ReduceOp>(op)) {
+      return targetType.cast<RankedTensorType>()
+          .getEncoding()
+          .cast<triton::gpu::SliceEncodingAttr>()
+          .getParent();
+    }
+    return targetEncoding;
   }
 
   void rematerializeCvt(mlir::Operation *cvt, mlir::PatternRewriter &rewriter,
@@ -133,7 +140,10 @@ public:
       // Create new argument
       auto cvtI = rewriter.create<triton::gpu::ConvertLayoutOp>(
           op->getLoc(), newArgType, argI);
-      cvtI->moveAfter(argI.getDefiningOp());
+      if (argI.getDefiningOp())
+        cvtI->moveAfter(argI.getDefiningOp());
+      else
+        cvtI->moveBefore(op);
       if (toRemat.contains(argI.getDefiningOp()))
         cvts.push_back(cvtI);
       mapping.map(argI, cvtI);
@@ -162,7 +172,6 @@ public:
         isSharedLayout(cvt->getOperand(0)))
       return mlir::failure();
     // determine whether layout conversions can be folded into a given operation
-    // llvm::outs() << "trying to convert " << *cvt << " and " << *op << "\n";
     auto can_fold_conversion = [&](Operation *op) {
       if (!op)
         return false;
@@ -212,20 +221,24 @@ public:
       return mlir::failure();
     auto it = llvm::find_if(depIntoOps, expensive_to_remat);
     if (it != depIntoOps.end()) {
-      // if (isa<arith::TruncFOp>(op))
-      //   for (Operation *op : depIntoOps)
-      //     llvm::outs() << *op << "\n";
-      // llvm::outs() << "contains something expensive to rematerialize at "
-      //              << **it << "\n";
       return mlir::failure();
     }
     // we only rematerialize if all the conversions that we create get folded
     for (Operation *op : depIntoOps) {
       for (Value arg : op->getOperands()) {
-        bool is_backpropagated = depIntoOps.contains(arg.getDefiningOp());
-        bool is_foldable = can_fold_conversion(arg.getDefiningOp());
-        if (!is_backpropagated && !is_foldable)
+        Operation *argOp = arg.getDefiningOp();
+        // we allow iteration arguments of a loop since they can be moved out
+        if (!argOp) {
+          Operation *ownerParent =
+              arg.cast<BlockArgument>().getOwner()->getParentOp();
+          if (isa<scf::ForOp>(ownerParent))
+            continue;
+        }
+        bool is_backpropagated = depIntoOps.contains(argOp);
+        bool is_foldable = can_fold_conversion(argOp);
+        if (!is_backpropagated && !is_foldable) {
           return mlir::failure();
+        }
       }
     }
     // we can now rematerialize all operations into depIntoOps recursively
@@ -399,7 +412,8 @@ public:
     auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
     auto isInLoop = [&](Operation *op) { return op->getParentOp() == forOp; };
 
-    // determine whether layout conversions can be folded into a given operation
+    // determine whether layout conversions can be folded into a given
+    // operation
     auto can_fold_conversion = [&](Operation *op) {
       if (isa<triton::gpu::ConvertLayoutOp>(op))
         return op != cvt;
@@ -410,9 +424,9 @@ public:
     };
     // determine whether an operation is expensive to rematerialize
     auto expensive_to_remat = [](Operation *op) {
-      if (isa<triton::gpu::ExtractSliceOp, triton::gpu::AllocTensorOp,
-              triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp,
-              triton::DotOp>(op))
+      if (isa<triton::ReduceOp, triton::gpu::ExtractSliceOp,
+              triton::gpu::AllocTensorOp, triton::gpu::InsertSliceAsyncOp,
+              triton::LoadOp, triton::StoreOp, triton::DotOp>(op))
         return true;
       if (isa<scf::YieldOp, scf::ForOp>(op))
         return true;
@@ -469,6 +483,7 @@ public:
     auto newRetType = RankedTensorType::get(
         origOpType.getShape(), origOpType.getElementType(), targetEncoding);
     newOp->getResult(0).setType(newRetType);
+    // llvm::outs() << *newOp << "\n";
     auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
         newOp->getLoc(), cvt.getResult().getType(), newOp->getResult(0));
     rewriter.replaceOp(op, newCvt->getResults());
@@ -530,8 +545,10 @@ public:
     patterns.add<MoveArgConvertOutOfLoop>(context);
     patterns.add<BlockedToMMA>(context);
 
-    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
+    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
+      // llvm_report_fatal_error("TritonGPUCombineOpsPass failed");
       signalPassFailure();
+    }
   }
 };
 
