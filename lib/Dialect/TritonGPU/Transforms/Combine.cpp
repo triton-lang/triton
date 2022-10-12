@@ -525,9 +525,9 @@ public:
     mlir::RewritePatternSet patterns(context);
 
     patterns.add<SimplifyConversion>(context);
-    // patterns.add<PullConversionToSource>(context);
+    patterns.add<PullConversionToSource>(context);
     patterns.add<PushConversionToSink>(context);
-    // patterns.add<MoveArgConvertOutOfLoop>(context);
+    patterns.add<MoveArgConvertOutOfLoop>(context);
     patterns.add<BlockedToMMA>(context);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
