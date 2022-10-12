@@ -2696,7 +2696,7 @@ struct MMA16816ConversionHelper {
     A = op.a();
     B = op.b();
     C = op.c();
-    D = op.c();
+    D = op.getResult();
 
     aTensorTy = A.getType().cast<RankedTensorType>();
     bTensorTy = B.getType().cast<RankedTensorType>();
@@ -2755,7 +2755,7 @@ struct MMA16816ConversionHelper {
       assert(false && "A's layout is not supported.");
     }
 
-    // step1. Preform loading.
+    // step1. Perform loading.
     for (unsigned m = 0; m < numRepM; ++m)
       for (unsigned k = 0; k < numRepK; ++k)
         loadFn(2 * m, 2 * k);
@@ -2805,9 +2805,7 @@ struct MMA16816ConversionHelper {
         b, std::max(numRepN / 2, 1), numRepK);
 
     const int fcSize = 4 * numRepM * numRepN;
-    SmallVector<Value> fc(fcSize);
-    for (int i = 0; i < fc.size(); i++)
-      fc[i] = c;
+    SmallVector<Value> fc(fcSize, c);
 
     auto callMma = [&](unsigned m, unsigned n, unsigned k) {
       unsigned colsPerThread = numRepN * 2;
