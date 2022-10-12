@@ -193,7 +193,7 @@ struct TritonExpandDimsPattern
     // construct new op
     auto newSrc = rewriter.create<triton::gpu::ConvertLayoutOp>(
         op.getLoc(), newArgType, adaptor.src());
-    rewriter.replaceOpWithNewOp<triton::ExpandDimsOp>(op, retType, newSrc,
+    rewriter.replaceOpWithNewOp<triton::ExpandDimsOp>(op, newSrc,
                                                       adaptor.axis());
     return success();
   }
@@ -317,9 +317,8 @@ struct TritonReducePattern : public OpConversionPattern<triton::ReduceOp> {
   LogicalResult
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Type retType = this->getTypeConverter()->convertType(op.getType());
     auto newOp = rewriter.replaceOpWithNewOp<triton::ReduceOp>(
-        op, retType, adaptor.redOp(), adaptor.operand(), adaptor.axis());
+        op, adaptor.redOp(), adaptor.operand(), adaptor.axis());
     return success();
   }
 };
