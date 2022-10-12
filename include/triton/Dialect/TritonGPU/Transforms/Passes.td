@@ -51,6 +51,18 @@ def TritonGPUCombineOps : Pass<"tritongpu-combine", "mlir::ModuleOp"> {
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonGPUSwizzle : Pass<"tritongpu-swizzle", "mlir::ModuleOp"> {
+  let summary = "swizzle";
+
+  let description = [{
+    Inserts conversions to swizzled layout so as to avoid shared memory bank conflicts.
+  }];
+
+  let constructor = "mlir::createTritonGPUSwizzlePass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+}
+
 def TritonGPUCanonicalizeLoops: Pass<"tritongpu-canonicalize-loops", "mlir::ModuleOp"> {
   let summary = "canonicalize scf.ForOp ops";
 
@@ -62,17 +74,6 @@ def TritonGPUCanonicalizeLoops: Pass<"tritongpu-canonicalize-loops", "mlir::Modu
   let constructor = "mlir::createTritonGPUCanonicalizeLoopsPass()";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
-}
-
-def TritonGPUVerifier : Pass<"tritongpu-verifier", "mlir::ModuleOp"> {
-  let summary = "verify TritonGPU IR";
-
-  let description = [{}];
-
-  let constructor = "mlir::createTritonGPUVerifier()";
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::gpu::GPUDialect"];
 }
 
 #endif

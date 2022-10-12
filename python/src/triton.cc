@@ -3,6 +3,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
 
+#include "mlir/Conversion/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
@@ -1186,12 +1187,12 @@ void init_triton_ir(py::module &&m) {
            [](mlir::PassManager &self) {
              self.addPass(mlir::createTritonGPUCombineOpsPass());
            })
-      .def("add_triton_gpu_verifier_pass",
+      .def("add_triton_gpu_to_llvm",
            [](mlir::PassManager &self) {
-             self.addPass(mlir::createTritonGPUVerifier());
+             self.addPass(mlir::triton::createConvertTritonGPUToLLVMPass());
            })
-      .def("add_triton_gpu_to_llvm", [](mlir::PassManager &self) {
-        self.addPass(mlir::triton::createConvertTritonGPUToLLVMPass());
+      .def("add_scf_to_cfg", [](mlir::PassManager &self) {
+        self.addPass(mlir::createLowerToCFGPass());
       });
 }
 
@@ -1210,6 +1211,8 @@ void init_triton_translation(py::module &m) {
         llvm::LLVMContext llvmContext;
         auto llvmModule =
             ::mlir::triton::translateTritonGPUToLLVMIR(&llvmContext, op);
+        if (!llvmModule)
+          llvm::report_fatal_error("Failed to translate TritonGPU to LLVM IR.");
 
         std::string str;
         llvm::raw_string_ostream os(str);
