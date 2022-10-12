@@ -41,4 +41,7 @@ def Triton_Dialect : Dialect {
   let hasConstantMaterializer = 1;
 }
 
+include "triton/Dialect/Triton/IR/TritonTypes.td"
+
+
 #endif // TRITON_DIALECT
