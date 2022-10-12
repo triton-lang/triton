@@ -73,6 +73,8 @@ public:
   value* create_cond_br(value *cond, basic_block* if_dest, basic_block* else_dest);
   value* create_ret_void();
   value* create_ret(value *ret);
+  // Dequantize instructions
+  value* create_dequantize(value *src, value *scale, value *shift, type *dest_ty);
   // Cast instructions
   value* create_bitcast(value *src, type *dest_ty);
   value *create_cast(cast_op_t op, value *v, type *dst_ty);

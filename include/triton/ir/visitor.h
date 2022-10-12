@@ -20,6 +20,7 @@ class getelementptr_inst;
 
 class icmp_inst;
 class fcmp_inst;
+class dequantize_inst;
 class cast_inst;
 class trunc_inst;
 class z_ext_inst;
@@ -124,6 +125,7 @@ public:
 
   virtual void visit_icmp_inst(icmp_inst*) = 0;
   virtual void visit_fcmp_inst(fcmp_inst*) = 0;
+  virtual void visit_dequantize_inst(dequantize_inst*) = 0;
   virtual void visit_cast_inst(cast_inst*) = 0;
 
   virtual void visit_return_inst(return_inst*) = 0;
