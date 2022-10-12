@@ -1216,8 +1216,10 @@ void generator::visit_load_inst(ir::load_inst* x){
         v = insert_elt(v, vals_[false_val][idxs[i + ii*size + s]], s);
       }
       v = bit_cast(v, IntegerType::get(*ctx_, width));
+      // PTX doesn't support mov.u8, so we need to use mov.u16
+      auto mov_width = width < 16 ? 16 : width;
       asm_oss << "\n        ";
-      asm_oss << "@!$" << n_words << " mov.u" << width;
+      asm_oss << "@!$" << n_words << " mov.u" << mov_width;
       asm_oss << " $" << ii << ", ";
       std::ios_base::fmtflags flags(asm_oss.flags());
       if(ConstantInt* cst = dyn_cast<ConstantInt>(v))
