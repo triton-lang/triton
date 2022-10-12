@@ -274,6 +274,24 @@ protected:
   unary_inst(type *ty, value_id_t id, value *v, const std::string &name, instruction *next);
 };
 
+//===----------------------------------------------------------------------===//
+//                               dequantize_inst classes
+//===----------------------------------------------------------------------===//
+
+class dequantize_inst: public instruction{
+private:
+  std::string repr_impl() const override { return "dequantize"; }
+
+protected:
+  dequantize_inst(type *ty, value *v, value *scale, value *shift, const std::string &name, instruction *next);
+
+public:
+  static dequantize_inst *create(value *arg, value *scale, value *shift, type *ty,
+                           const std::string &name = "", instruction *next = nullptr);
+
+  _TRITON_DEFINE_CLONE(dequantize_inst)
+  _TRITON_DEFINE_ACCEPT(dequantize_inst)
+};
 
 //===----------------------------------------------------------------------===//
 //                               cast_inst classes
@@ -482,7 +500,7 @@ protected:
   std::string get_cache_modifier_repr() const {
     if (cache_ == CA) return ".ca";
     if (cache_ == CG) return ".cg";
-    return ""; 
+    return "";
   }
   CACHE_MODIFIER cache_;
 
@@ -850,16 +868,16 @@ public:
 class dot_inst: public builtin_inst {
 public:
   enum TransT { NoTrans, Trans };
-  enum DataType { 
-    FP8, FP16, BF16, TF32, FP32, 
-    INT1, INT4, INT8, INT32, 
+  enum DataType {
+    FP8, FP16, BF16, TF32, FP32,
+    INT1, INT4, INT8, INT32,
     UNKNOWN,
   };
 
 private:
   dot_inst(value *A, value *B, value *C, TransT AT, TransT BT, bool allow_tf32, const std::string &name, instruction *next);
   std::string repr_impl() const { return "dot"; }
-  
+
 public:
   bool is_prefetched() const { return is_prefetched_; }
   void set_prefetched(bool is_prefetched) { is_prefetched_ = is_prefetched; }
@@ -1046,11 +1064,11 @@ class prefetch_s_inst : public instruction {
   std::string repr_impl() const { return "prefetch_s"; }
   _TRITON_DEFINE_CLONE(prefetch_s_inst)
   _TRITON_DEFINE_ACCEPT(prefetch_s_inst)
-  
+
   /// inc_: 0->first, 1->latch
   int inc_ = 0;
 public:
-  prefetch_s_inst(context &ctx, value *arg, int inc, const std::string &name, instruction *next) 
+  prefetch_s_inst(context &ctx, value *arg, int inc, const std::string &name, instruction *next)
     : instruction(type::get_void_ty(ctx), INST_PREFETCH_S, 1, name, next), inc_(inc) {
     set_operand(0, arg);
   }

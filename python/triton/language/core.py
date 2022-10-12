@@ -686,6 +686,20 @@ def zeros(shape, dtype, _builder=None):
 
 
 # -----------------------
+# dequantize
+# -----------------------
+
+
+@builtin
+def dequantize(input, scale, shift, nbit, dst_ty=float16, _builder=None):
+    """
+    Tries to dequantize the input to given dtype
+    """
+    nbit = _constexpr_to_value(nbit)
+    return semantic.dequantize(input, scale, shift, nbit, dst_ty, _builder)
+
+
+# -----------------------
 # Shape Manipulation
 # -----------------------
 
