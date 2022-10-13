@@ -494,8 +494,8 @@ public:
 
     patterns.add<SimplifyConversion>(context);
     patterns.add<RematerializeBackward>(context);
-    patterns.add<RematerializeForward>(context);
-    patterns.add<MoveConvertOutOfLoop>(context);
+    // patterns.add<RematerializeForward>(context);
+    // patterns.add<MoveConvertOutOfLoop>(context);
     patterns.add<BlockedToMMA>(context);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
