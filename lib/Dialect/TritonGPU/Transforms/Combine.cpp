@@ -220,46 +220,13 @@ public:
     if (numCvts > 0)
       return mlir::failure();
 
-    // determine whether layout conversions can be folded into a given operation
-    auto can_fold_conversion = [&](Operation *op) {
-      if (!op)
-        return false;
-      // if `cvt` is in a loop and `op` doesn't depend on any other variables in
-      // that loop
-      auto forParent = cvt->getParentOfType<mlir::scf::ForOp>();
-      if (forParent) {
-        auto isInLoop = [&](Value v) {
-          return v.getDefiningOp() &&
-                 v.getDefiningOp()->getParentOfType<mlir::scf::ForOp>() ==
-                     forParent;
-        };
-        if (std::find_if(op->operand_begin(), op->operand_end(), isInLoop) ==
-            op->operand_end())
-          return true;
-      }
-      if (isa<triton::gpu::ConvertLayoutOp>(op))
-        return op != cvt;
-      // return cvt->getResult(0).getType() == op->getOperand(0).getType();
-      if (isa<arith::ConstantOp, triton::MakeRangeOp, triton::SplatOp>(op))
-        return true;
-      return false;
-    };
-    // we first get the backward dependencies into the conversion
-    // stopping whenever the conversion can be folded
-    // this will be our potential list of operations to rematerialize
-    SetVector<Operation *> depIntoOps;
-    mlir::getBackwardSlice(cvt, &depIntoOps, [&](Operation *op) {
-      return !can_fold_conversion(op) && op->getResult(0) &&
-             (op->getResult(0).getParentBlock() ==
-              cvt->getResult(0).getParentBlock());
-    });
     // we can now rematerialize all operations into depIntoOps recursively
     // for each operation `op`, we convert cvt(op(arg_0, arg_1, ..., arg_n))
     // into op(cvt_0(arg_0), cvt_1(arg_1), ..., cvt_n(arg_n))
     FuncOp parentFunc = cvt->getParentOfType<FuncOp>();
     SetVector<Operation *> seen;
     BlockAndValueMapping mapping;
-    rematerializeCvt(cvt, rewriter, depIntoOps, seen, mapping);
+    rematerializeCvt(cvt, rewriter, processed, seen, mapping);
     return mlir::success();
   }
 };
@@ -494,8 +461,8 @@ public:
 
     patterns.add<SimplifyConversion>(context);
     patterns.add<RematerializeBackward>(context);
-    // patterns.add<RematerializeForward>(context);
-    // patterns.add<MoveConvertOutOfLoop>(context);
+    patterns.add<RematerializeForward>(context);
+    patterns.add<MoveConvertOutOfLoop>(context);
     patterns.add<BlockedToMMA>(context);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
