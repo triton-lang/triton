@@ -103,6 +103,18 @@ static Attribute invertEncoding(Attribute targetEncoding, Operation *op) {
   return targetEncoding;
 }
 
+inline bool expensive_to_remat(Operation *op) {
+  if (!op)
+    return true;
+  if (isa<triton::gpu::ExtractSliceOp, triton::gpu::AllocTensorOp,
+          triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp,
+          triton::DotOp>(op))
+    return true;
+  if (isa<scf::YieldOp, scf::ForOp>(op))
+    return true;
+  return false;
+};
+
 // Layout conversions are expensive. They require going through
 // shared memory, which is orders of magnitude slower than
 // other non-i/o operations in the dialect.
@@ -173,11 +185,46 @@ public:
     if (isSharedLayout(cvt->getResults()[0]) ||
         isSharedLayout(cvt->getOperand(0)))
       return mlir::failure();
+
+    SetVector<Operation *> processed;
+    SetVector<Operation *> queue;
+    queue.insert(cvt);
+    int numCvts = 1;
+    while (!queue.empty()) {
+      Operation *curr = queue.pop_back_val();
+      // If the current operation is expensive to rematerialize,
+      // we stop everything
+      if (expensive_to_remat(curr))
+        break;
+      // a conversion will be removed here (i.e. transfered to operands)
+      numCvts -= 1;
+      // done processing
+      processed.insert(curr);
+      // add all operands to the queue
+      for (Value argI : curr->getOperands()) {
+        Operation *opArgI = argI.getDefiningOp();
+        if (!opArgI || processed.contains(opArgI) ||
+            (opArgI->getBlock() != curr->getBlock()))
+          continue;
+        // if the conversion can be folded into opArgI then
+        // we actually haven't added anny conversion
+        if (isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
+                triton::MakeRangeOp, triton::SplatOp>(*opArgI))
+          continue;
+        // we add one conversion for the current operand
+        numCvts += 1;
+        queue.insert(opArgI);
+      }
+    }
+    if (numCvts > 0)
+      return mlir::failure();
+
     // determine whether layout conversions can be folded into a given operation
     auto can_fold_conversion = [&](Operation *op) {
       if (!op)
         return false;
-      // if `cvt` is in a loop and `op` doesn't depend on any other variables in
+      // if `cvt` is in a loop and `op` doesn't depend on any other variables
+      // in
       // that loop
       auto forParent = cvt->getParentOfType<mlir::scf::ForOp>();
       if (forParent) {
@@ -197,18 +244,6 @@ public:
         return true;
       return false;
     };
-    // determine whether an operation is expensive to rematerialize
-    auto expensive_to_remat = [](Operation *op) {
-      if (!op)
-        return true;
-      if (isa<triton::gpu::ExtractSliceOp, triton::gpu::AllocTensorOp,
-              triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp,
-              triton::DotOp>(op))
-        return true;
-      if (isa<scf::YieldOp, scf::ForOp>(op))
-        return true;
-      return false;
-    };
     // we first get the backward dependencies into the conversion
     // stopping whenever the conversion can be folded
     // this will be our potential list of operations to rematerialize
@@ -218,31 +253,6 @@ public:
              (op->getResult(0).getParentBlock() ==
               cvt->getResult(0).getParentBlock());
     });
-    // if there is anything expensive to rematerialize, we don't do anything
-    if (depIntoOps.empty())
-      return mlir::failure();
-    auto it = llvm::find_if(depIntoOps, expensive_to_remat);
-    if (it != depIntoOps.end()) {
-      return mlir::failure();
-    }
-    // we only rematerialize if all the conversions that we create get folded
-    for (Operation *op : depIntoOps) {
-      for (Value arg : op->getOperands()) {
-        Operation *argOp = arg.getDefiningOp();
-        // we allow iteration arguments of a loop since they can be moved out
-        if (!argOp) {
-          Operation *ownerParent =
-              arg.cast<BlockArgument>().getOwner()->getParentOp();
-          if (isa<scf::ForOp>(ownerParent))
-            continue;
-        }
-        bool is_backpropagated = depIntoOps.contains(argOp);
-        bool is_foldable = can_fold_conversion(argOp);
-        if (!is_backpropagated && !is_foldable) {
-          return mlir::failure();
-        }
-      }
-    }
     // we can now rematerialize all operations into depIntoOps recursively
     // for each operation `op`, we convert cvt(op(arg_0, arg_1, ..., arg_n))
     // into op(cvt_0(arg_0), cvt_1(arg_1), ..., cvt_n(arg_n))
