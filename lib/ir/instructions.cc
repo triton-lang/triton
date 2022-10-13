@@ -324,6 +324,21 @@ unary_inst::unary_inst(type *ty, value_id_t id, value *v, const std::string &nam
 }
 
 //===----------------------------------------------------------------------===//
+//                               dequantize_inst classes
+//===----------------------------------------------------------------------===//
+
+dequantize_inst::dequantize_inst(type *ty, value *v, value *scale, value *shift, const std::string &name, instruction *next)
+  : instruction(ty, INST_DEQUANTIZE, 3, name, next) {
+  set_operand(0, v);
+  set_operand(1, scale);
+  set_operand(2, shift);
+}
+
+dequantize_inst *dequantize_inst::create(value *arg, value *scale, value *shift, type *ty, const std::string &name, instruction *next){
+  return new dequantize_inst(ty, arg, scale, shift, name, next);
+}
+
+//===----------------------------------------------------------------------===//
 //                               cast_inst classes
 //===----------------------------------------------------------------------===//
 
@@ -584,7 +599,7 @@ masked_store_inst::masked_store_inst(value *ptr, value *val, value *mask, EVICTI
   set_operand(2, mask);
 }
 
-masked_store_inst* masked_store_inst::create(value *ptr, value *val, value *mask, EVICTION_POLICY eviction, 
+masked_store_inst* masked_store_inst::create(value *ptr, value *val, value *mask, EVICTION_POLICY eviction,
                                              const std::string &name, instruction *next)  {
   return new masked_store_inst(ptr, val, mask, eviction, name, next);
 }

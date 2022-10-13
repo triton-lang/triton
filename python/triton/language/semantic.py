@@ -544,6 +544,31 @@ def broadcast_impl_value(lhs: tl.tensor,
     # (scalar, scalar) => returns original blocks
     return lhs, rhs
 
+
+#######
+# dequantize
+#######
+
+def dequantize(input: tl.tensor,
+               scale: tl.tensor,
+               shift: tl.tensor,
+               nbit: int,
+               dst_ty: tl.dtype,
+               builder: ir.builder) -> tl.tensor:
+    input_ty = input.type
+    assert input_ty.is_block()
+    assert input_ty.element_ty.is_int32() or input_ty.element_ty.is_int16()
+    assert nbit in [2, 4, 8]
+    assert dst_ty == tl.float16
+
+    shape = input_ty.get_block_shapes()
+    factor = input_ty.element_ty.primitive_bitwidth // nbit
+    dst_shape = shape[:-1] + [factor * shape[-1]]
+
+    dst_ty = tl.block_type(dst_ty, dst_shape)
+    return tl.tensor(builder.create_dequantize(input.handle, scale.handle, shift.handle, dst_ty.to_ir(builder)), dst_ty)
+
+
 #######
 # cast
 #######
