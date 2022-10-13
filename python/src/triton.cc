@@ -97,7 +97,9 @@ void hip_enqueue(uint64_t stream, uint64_t kernel,
   drv::dispatch::hipModuleLaunchKernel((hipFunction_t)kernel, grid_0, grid_1, grid_2, 
                                 block_0, block_1, block_2, 
                                 shared_mem, (hipStream_t)stream, nullptr, config);
-
+#ifdef DEBUG_ROCM
+  drv::dispatch::hipGetLastError();                                
+#endif
 }
 
 void init_triton_runtime(py::module &&m) {
