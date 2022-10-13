@@ -846,15 +846,10 @@ struct StoreOpConversion
       // TODO(Superjomn) Deal with cache policy here.
       const bool hasL2EvictPolicy = false;
 
-      PTXBuilder ptxBuilder;
-      auto &ptxStoreInstr = *ptxBuilder.create<PTXIOInstr>("st");
-
-      llvm::SmallVector<std::string> asmArgs;
-
       Type valArgTy = IntegerType::get(ctx, width);
       auto wordTy = vec_ty(valueElemTy, wordNElems);
 
-      auto *asmArgList = ptxBuilder.newListOperand();
+      SmallVector<std::pair<Value, std::string>> asmArgs;
       for (int wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         // llWord is a width-len composition
         Value llWord = rewriter.create<LLVM::UndefOp>(loc, wordTy);
@@ -876,23 +871,25 @@ struct StoreOpConversion
         llWord = bitcast(valArgTy, llWord);
         std::string constraint =
             (width == 64) ? "l" : ((width == 32) ? "r" : "c");
-        asmArgList->listAppend(ptxBuilder.newOperand(llWord, constraint));
+        asmArgs.emplace_back(llWord, constraint);
       }
 
-      // TODO(Superjomn) Need to check masks before vectorize the load for
-      // the values share one predicate? Here assume all the mask values are
-      // the same.
+      // Prepare the PTX inline asm.
+      PTXBuilder ptxBuilder;
+      auto *asmArgList = ptxBuilder.newListOperand(asmArgs);
+
       Value maskVal = llMask ? maskElems[vecStart] : int_val(1, 1);
-      ptxStoreInstr.global().b(width).v(nWords);
 
       auto *asmAddr =
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
 
+      auto &ptxStoreInstr =
+          ptxBuilder.create<PTXIOInstr>("st")->global().b(width).v(nWords);
       ptxStoreInstr(asmAddr, asmArgList).predicate(maskVal, "b");
+
       Type boolTy = getTypeConverter()->convertType(rewriter.getIntegerType(1));
       llvm::SmallVector<Type> argTys({boolTy, ptr.getType()});
-      for (int i = 0; i < nWords; ++i)
-        argTys.push_back(valArgTy);
+      argTys.insert(argTys.end(), nWords, valArgTy);
 
       auto ASMReturnTy = LLVM::LLVMVoidType::get(ctx);
 
@@ -1101,15 +1098,23 @@ struct LoadOpConversion
 
     auto ptrElems = getLLVMElems(ptr, llPtr, layout, rewriter, loc);
     assert(ptrElems.size() == numElems);
+    // Determine the vectorization size
+    size_t vec = getVectorizeSize(ptr, layout);
 
     SmallVector<Value> maskElems;
     if (llMask) {
       maskElems = getLLVMElems(mask, llMask, layout, rewriter, loc);
       assert(ptrElems.size() == maskElems.size());
-    }
+      auto maskOrder = mask.getType()
+                           .cast<RankedTensorType>()
+                           .getEncoding()
+                           .cast<BlockedEncodingAttr>()
+                           .getOrder();
 
-    // Determine the vectorization size
-    size_t vec = getVectorizeSize(ptr, layout);
+      auto maskAxis = getAxisInfo(mask);
+      size_t maskAlign = std::max<int>(maskAxis->getConstancy(maskOrder[0]), 1);
+      vec = std::min(vec, maskAlign);
+    }
 
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
@@ -1151,9 +1156,6 @@ struct LoadOpConversion
       PTXBuilder ptxBuilder;
       auto &ld = *ptxBuilder.create<PTXIOInstr>("ld");
 
-      // TODO(Superjomn) Need to check masks before vectorize the load for all
-      // the values share one predicate? Here assume all the mask values are
-      // the same.
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
 
       const std::string readConstraint =
