@@ -5,6 +5,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Verifier.h"
+#include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
@@ -89,33 +90,28 @@ public:
 //
 // -----------------------------------------------------------------------------
 
+static Attribute invertEncoding(Attribute targetEncoding, Operation *op) {
+  if (auto expand_dims = dyn_cast<triton::ExpandDimsOp>(op)) {
+    return triton::gpu::SliceEncodingAttr::get(
+        op->getContext(), expand_dims.axis(), targetEncoding);
+  }
+  if (auto reduce = dyn_cast<triton::ReduceOp>(op)) {
+    return targetEncoding.cast<triton::gpu::SliceEncodingAttr>().getParent();
+  }
+  return targetEncoding;
+}
+
 // Layout conversions are expensive. They require going through
 // shared memory, which is orders of magnitude slower than
 // other non-i/o operations in the dialect.
 // It therefore makes sense to remove them whenever possible,
 // even if it means rematerializing all values whose definitions
 // are reachable from it without passing through any memory operation.
-class PullConversionToSource : public mlir::RewritePattern {
+class RematerializeBackward : public mlir::RewritePattern {
 public:
-  PullConversionToSource(mlir::MLIRContext *context)
+  RematerializeBackward(mlir::MLIRContext *context)
       : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
                              2, context) {}
-
-  Attribute invertEncoding(Type targetType, Operation *op) const {
-    RankedTensorType targetTensorType = targetType.cast<RankedTensorType>();
-    auto targetEncoding = targetTensorType.getEncoding();
-    if (auto expand_dims = dyn_cast<triton::ExpandDimsOp>(op)) {
-      return triton::gpu::SliceEncodingAttr::get(
-          getContext(), expand_dims.axis(), targetEncoding);
-    }
-    if (auto reduce = dyn_cast<triton::ReduceOp>(op)) {
-      return targetType.cast<RankedTensorType>()
-          .getEncoding()
-          .cast<triton::gpu::SliceEncodingAttr>()
-          .getParent();
-    }
-    return targetEncoding;
-  }
 
   void rematerializeCvt(mlir::Operation *cvt, mlir::PatternRewriter &rewriter,
                         SetVector<Operation *> &toRemat,
@@ -134,7 +130,8 @@ public:
         continue;
       if (mapping.contains(argI))
         continue;
-      auto newEncoding = invertEncoding(cvt->getResultTypes()[0], op);
+      auto newEncoding = invertEncoding(
+          cvt->getResultTypes()[0].cast<RankedTensorType>().getEncoding(), op);
       auto newArgType = RankedTensorType::get(
           oldArgType.getShape(), oldArgType.getElementType(), newEncoding);
       // Create new argument
@@ -388,9 +385,9 @@ public:
 //
 // -----------------------------------------------------------------------------
 
-class PushConversionToSink : public mlir::RewritePattern {
+class RematerializeForward : public mlir::RewritePattern {
 public:
-  PushConversionToSink(mlir::MLIRContext *context)
+  RematerializeForward(mlir::MLIRContext *context)
       : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
                              2, context) {}
 
@@ -445,9 +442,8 @@ public:
     auto it = llvm::find_if(cvtSlices, expensive_to_remat);
     if (cvtSlices.empty())
       return mlir::failure();
-    if (it != cvtSlices.end()) {
+    if (it != cvtSlices.end())
       return mlir::failure();
-    }
 
     // we try push the conversion forward
     // since we'll be able to move it out of
@@ -462,28 +458,47 @@ public:
       if (argOp == cvt)
         mapping.map(arg, cvt.getOperand());
       else if (argTensorType.getEncoding() != targetEncoding) {
-        // adds a conversion
-        auto newArgType = RankedTensorType::get(argTensorType.getShape(),
-                                                argTensorType.getElementType(),
-                                                targetEncoding);
         if (argOp)
           rewriter.setInsertionPointAfter(argOp);
-        auto cvtI = rewriter.create<triton::gpu::ConvertLayoutOp>(
-            arg.getLoc(), newArgType, arg);
         // we've added an unremovable conversion inside of the loop
         // then we cancel everything and we're done
         if (argOp && isInLoop(argOp) && !can_fold_conversion(argOp))
           return failure();
+        // adds a conversion
+        auto argShape = argTensorType.getShape();
+        auto argType = argTensorType.getElementType();
+
+        auto newArgType = RankedTensorType::get(
+            argTensorType.getShape(), argTensorType.getElementType(),
+            invertEncoding(targetEncoding, op));
+        auto cvtI = rewriter.create<triton::gpu::ConvertLayoutOp>(
+            arg.getLoc(), newArgType, arg);
         mapping.map(arg, cvtI);
       }
     }
+    llvm::outs() << "OP: " << *op << "\n";
     rewriter.setInsertionPoint(op);
     Operation *newOp = rewriter.clone(*op, mapping);
-    auto origOpType = op->getResult(0).getType().cast<RankedTensorType>();
-    auto newRetType = RankedTensorType::get(
-        origOpType.getShape(), origOpType.getElementType(), targetEncoding);
+    Type newRetType;
+    if (auto typeInference = dyn_cast<mlir::InferTypeOpInterface>(*newOp)) {
+      llvm::outs() << "EXPAND DIM? " << *op << "\n"
+                   << *newOp << "\n"
+                   << *cvt << "\n";
+      SmallVector<Type, 4> inferredReturnTypes;
+      if (typeInference
+              .inferReturnTypes(newOp->getContext(), newOp->getLoc(),
+                                newOp->getOperands(),
+                                newOp->getAttrDictionary(), newOp->getRegions(),
+                                inferredReturnTypes)
+              .failed())
+        return failure();
+      newRetType = inferredReturnTypes[0];
+    } else {
+      auto origOpType = op->getResult(0).getType().cast<RankedTensorType>();
+      newRetType = RankedTensorType::get(
+          origOpType.getShape(), origOpType.getElementType(), targetEncoding);
+    }
     newOp->getResult(0).setType(newRetType);
-    // llvm::outs() << *newOp << "\n";
     auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
         newOp->getLoc(), cvt.getResult().getType(), newOp->getResult(0));
     rewriter.replaceOp(op, newCvt->getResults());
@@ -540,8 +555,8 @@ public:
     mlir::RewritePatternSet patterns(context);
 
     patterns.add<SimplifyConversion>(context);
-    patterns.add<PullConversionToSource>(context);
-    patterns.add<PushConversionToSink>(context);
+    patterns.add<RematerializeBackward>(context);
+    patterns.add<RematerializeForward>(context);
     patterns.add<MoveArgConvertOutOfLoop>(context);
     patterns.add<BlockedToMMA>(context);
 
