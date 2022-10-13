@@ -3300,7 +3300,7 @@ void generator::visit_extern_elementwise_inst(ir::extern_elementwise_inst *i) {
   FunctionType *FT =
       FunctionType::get(ret_type, std::move(operand_types), false);
   Function *F = llvm::cast<llvm::Function>(
-      mod_->getOrInsertFunction(i->get_name(), FT).getCallee());
+      mod_->getOrInsertFunction(i->get_symbol_name(), FT).getCallee());
   for (auto idx : idxs_.at(i)) {
     std::vector<llvm::Value *> args;
     for (size_t j = 0; j < i->get_num_operands(); j++) {

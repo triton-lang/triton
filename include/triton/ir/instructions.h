@@ -1116,6 +1116,7 @@ class extern_elementwise_inst : public instruction {
 
   const std::string &get_lib_name() const { return lib_name_; }
   const std::string &get_lib_path() const { return lib_path_; }
+  const std::string &get_symbol_name() const { return symbol_name_; }
 
  private:
   std::string lib_name_;
