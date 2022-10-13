@@ -187,11 +187,12 @@ public:
       return mlir::failure();
 
     SetVector<Operation *> processed;
-    SetVector<Operation *> queue;
-    queue.insert(cvt);
+    std::vector<Operation *> queue;
+    queue.push_back(cvt);
     int numCvts = 1;
     while (!queue.empty()) {
-      Operation *curr = queue.pop_back_val();
+      Operation *curr = queue.back();
+      queue.pop_back();
       // If the current operation is expensive to rematerialize,
       // we stop everything
       if (expensive_to_remat(curr))
@@ -213,7 +214,7 @@ public:
           continue;
         // we add one conversion for the current operand
         numCvts += 1;
-        queue.insert(opArgI);
+        queue.push_back(opArgI);
       }
     }
     if (numCvts > 0)
@@ -223,8 +224,7 @@ public:
     auto can_fold_conversion = [&](Operation *op) {
       if (!op)
         return false;
-      // if `cvt` is in a loop and `op` doesn't depend on any other variables
-      // in
+      // if `cvt` is in a loop and `op` doesn't depend on any other variables in
       // that loop
       auto forParent = cvt->getParentOfType<mlir::scf::ForOp>();
       if (forParent) {
