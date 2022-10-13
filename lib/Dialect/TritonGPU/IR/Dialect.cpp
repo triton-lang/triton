@@ -378,26 +378,13 @@ void SharedEncodingAttr::print(AsmPrinter &printer) const {
 Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseLess().failed())
     return {};
-  // Parse the data as a dictionary
-  DictionaryAttr dict;
-  if (parser.parseAttribute(dict).failed())
+  NamedAttrList attrs;
+  if (parser.parseOptionalAttrDict(attrs).failed())
     return {};
   if (parser.parseGreater().failed())
     return {};
-
-  unsigned opIdx = 0;
-  Attribute parent;
-
-  for (const NamedAttribute &attr : dict) {
-    if (attr.getName() == "opIdx") {
-      if (parseUInt(parser, attr, opIdx, "opIdx").failed())
-        return {};
-    }
-    if (attr.getName() == "parent") {
-      if (parser.parseAttribute(parent).failed())
-        return {};
-    }
-  }
+  unsigned opIdx = attrs.get("opIdx").cast<IntegerAttr>().getInt();
+  Attribute parent = attrs.get("parent");
 
   return parser.getChecked<DotOperandEncodingAttr>(parser.getContext(), opIdx,
                                                    parent);
