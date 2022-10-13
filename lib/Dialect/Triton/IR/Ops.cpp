@@ -149,6 +149,9 @@ void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
     }
   }
   state.addAttribute(
+      operand_segment_sizesAttrName(state.name),
+      builder.getI32VectorAttr({1, (mask ? 1 : 0), (other ? 1 : 0)}));
+  state.addAttribute(
       cacheAttrName(state.name),
       ::mlir::triton::CacheModifierAttr::get(builder.getContext(), cache));
   state.addAttribute(
