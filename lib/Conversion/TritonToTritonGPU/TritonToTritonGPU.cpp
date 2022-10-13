@@ -245,8 +245,8 @@ struct TritonLoadPattern : public OpConversionPattern<triton::LoadOp> {
     if (op.getNumOperands() == 2) { // ptr & mask
       rewriter.replaceOpWithNewOp<triton::LoadOp>(
           op, typeConverter->convertType(op.getType()), adaptor.ptr(),
-          adaptor.getOperands()[1], adaptor.other(), adaptor.cache(), adaptor.evict(),
-          adaptor.isVolatile());
+          adaptor.getOperands()[1], adaptor.other(), adaptor.cache(),
+          adaptor.evict(), adaptor.isVolatile());
     } else {
       rewriter.replaceOpWithNewOp<triton::LoadOp>(
           op, typeConverter->convertType(op.getType()), adaptor.ptr(),
