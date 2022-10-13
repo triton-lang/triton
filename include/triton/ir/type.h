@@ -129,6 +129,7 @@ public:
       case VoidTyID: return "void";
       case FP8TyID: return "fp8";
       case FP16TyID: return "f16";
+      case BF16TyID: return "bf16";
       case FP32TyID: return "f32";
       case FP64TyID: return "f64";
       case LabelTyID: return "label";

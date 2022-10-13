@@ -94,6 +94,7 @@ Value* geper::operator()(Value *ptr, Value* off, const std::string& name){
 // types
 #define void_ty              builder_->getVoidTy()
 #define f16_ty               builder_->getHalfTy()
+#define bf16_ty              builder_->getInt16Ty()
 #define f32_ty               builder_->getFloatTy()
 #define f64_ty               builder_->getDoubleTy()
 #define i8_ty               builder_->getInt8Ty()
@@ -296,8 +297,8 @@ void generator::visit_phi_node(ir::phi_node* x) {
  */
 void generator::visit_binary_operator(ir::binary_operator*x) {
   using ll = llvm::Instruction::BinaryOps;
+  using tt = ir::binary_op_t;
   auto cvt = [](ir::binary_op_t op){
-    using tt = ir::binary_op_t;
     switch(op) {
       case tt::Add: return ll::Add;
       case tt::FAdd: return ll::FAdd;
@@ -323,13 +324,47 @@ void generator::visit_binary_operator(ir::binary_operator*x) {
   for(indices_t idx: idxs_.at(x)){
     Value *lhs = vals_[x->get_operand(0)][idx];
     Value *rhs = vals_[x->get_operand(1)][idx];
-    auto op = cvt(x->get_op());
-    if(op == ll::Add)
-       vals_[x][idx] = add(lhs, rhs);
-     else if(op == ll::Mul)
-       vals_[x][idx] = mul(lhs, rhs);
-     else
-       vals_[x][idx] = bin_op(op, lhs, rhs);
+    if (x->get_operand(0)->get_type()->get_scalar_ty()->is_bf16_ty()) {
+      assert(x->get_operand(1)->get_type()->get_scalar_ty()->is_bf16_ty());
+      if (x->get_op() == tt::FAdd) {
+        InlineAsm *bf16_add_asm =
+          InlineAsm::get(FunctionType::get(bf16_ty, {bf16_ty, bf16_ty}, false),
+                          "v_lshlrev_b32 $1, 16, $1 "
+                          "v_lshlrev_b32 $2, 16, $2 "
+                          "v_add_f32 $0, $1, $2 "
+                          "v_lshrrev_b32 $0, 16, $0 ",
+                          "=v,v,v", false);
+        vals_[x][idx] = builder_->CreateCall(bf16_add_asm, {lhs, rhs});
+      } else if (x->get_op() == tt::FSub) {  // a - b = b * (-1.0) + a
+        InlineAsm *bf16_sub_asm =
+          InlineAsm::get(FunctionType::get(bf16_ty, {bf16_ty, bf16_ty}, false),
+                          "v_lshlrev_b32 $1, 16, $1 "
+                          "v_lshlrev_b32 $2, 16, $2 "
+                          "v_sub_f32 $0, $1, $2 "
+                          "v_lshrrev_b32 $0, 16, $0 ",
+                          "=v,v,v", false);
+        vals_[x][idx] = builder_->CreateCall(bf16_sub_asm, {lhs, rhs});
+      } else if (x->get_op() == tt::FMul) {  // a * b = a*b + 0
+        InlineAsm *bf16_mul_asm =
+          InlineAsm::get(FunctionType::get(bf16_ty, {bf16_ty, bf16_ty}, false),
+                          "v_lshlrev_b32 $1, 16, $1 "
+                          "v_lshlrev_b32 $2, 16, $2 "
+                          "v_mul_f32 $0, $1, $2 "
+                          "v_lshrrev_b32 $0, 16, $0 ",
+                          "=v,v,v", false);
+        vals_[x][idx] = builder_->CreateCall(bf16_mul_asm, {lhs, rhs});
+      } else
+        throw std::runtime_error("invalid bin op for bf16");
+    }
+    else {
+      auto op = cvt(x->get_op());
+      if(op == ll::Add)
+        vals_[x][idx] = add(lhs, rhs);
+      else if(op == ll::Mul)
+        vals_[x][idx] = mul(lhs, rhs);
+      else
+        vals_[x][idx] = bin_op(op, lhs, rhs);
+    }
   }
 }
 
