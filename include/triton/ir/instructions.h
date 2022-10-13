@@ -1101,7 +1101,8 @@ class extern_elementwise_inst : public instruction {
   extern_elementwise_inst(context &ctx, const std::vector<value *> &args,
                           type *dst_ty, const std::string &lib_name,
                           const std::string &extern_lib_path,
-                          const std::string &symbol_name, instruction *next);
+                          const std::string &symbol_name,
+                          const std::string &name, instruction *next);
   std::string repr_impl() const { return "extern_elementwise"; }
   _TRITON_DEFINE_CLONE(extern_elementwise_inst)
   _TRITON_DEFINE_ACCEPT(extern_elementwise_inst)
@@ -1110,14 +1111,16 @@ class extern_elementwise_inst : public instruction {
   static extern_elementwise_inst *create(
       context &ctx, const std::vector<value *> &args, type *dst_ty,
       const std::string &lib_name = "", const std::string &lib_path = "",
-      const std::string &symbol_name = "", instruction *next = nullptr);
+      const std::string &symbol_name = "", const std::string &name = "",
+      instruction *next = nullptr);
 
   const std::string &get_lib_name() const { return lib_name_; }
   const std::string &get_lib_path() const { return lib_path_; }
 
  private:
-  std::string lib_name_ = "";
-  std::string lib_path_ = "";
+  std::string lib_name_;
+  std::string lib_path_;
+  std::string symbol_name_;
 };
 }
 }

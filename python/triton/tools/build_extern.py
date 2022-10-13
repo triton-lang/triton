@@ -51,9 +51,9 @@ def convert_type(type_str):
     elif type_str == "u64":
         return "uint64"
     elif type_str == "float":
-        return "fp32"
+        return "float32"
     elif type_str == "double":
-        return "fp64"
+        return "float64"
     else:
         # ignore other types, such as pointer types
         return None
@@ -268,8 +268,8 @@ class Libdevice(ExternLibrary):
             for symbol in symbols:
                 arg_type_symbol_dict_str += "("
                 for arg_type in symbol.arg_types:
-                    arg_type_symbol_dict_str += f"core.dtype(\"{arg_type}\"),"
-                ret_type = f"core.dtype(\"{symbol.ret_type}\")"
+                    arg_type_symbol_dict_str += f"core.{arg_type},"
+                ret_type = f"core.{symbol.ret_type}"
                 arg_type_symbol_dict_str += "): (\"" + symbol.name + "\", " + ret_type + "),\n"
             arg_type_symbol_dict_str += "}"
 
