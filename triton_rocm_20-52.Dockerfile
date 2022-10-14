@@ -11,4 +11,4 @@ RUN export TRITON_USE_ROCM=ON MI_GPU_ARCH=gfx90a
 #    docker run -it --rm --network=host --group-add video --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --name triton --ipc=host --shm-size 16G --device=/dev/kfd --device=/dev/dri triton_rocm52:latest
 # 3. run core unit tests on a rocm machine
 #    cd ~/triton/python
-#    pytest --verbose test/unit/operators/test_matmul.py | tee test_core.log
+#    pytest --verbose test/unit/language/test_core.py | tee test_core.log
