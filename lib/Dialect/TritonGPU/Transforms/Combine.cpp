@@ -92,6 +92,7 @@ public:
 
 static LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
                                     Attribute &ret) {
+  ret = targetEncoding;
   if (auto expand_dims = dyn_cast<triton::ExpandDimsOp>(op)) {
     ret = triton::gpu::SliceEncodingAttr::get(
         op->getContext(), expand_dims.axis(), targetEncoding);
@@ -103,7 +104,6 @@ static LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
       return failure();
     ret = sliceEncoding.getParent();
   }
-  ret = targetEncoding;
   return success();
 }
 
@@ -188,14 +188,15 @@ public:
       layout.insert(currLayout);
       // add all operands to the queue
       for (Value argI : currOp->getOperands()) {
+        Operation *opArgI = argI.getDefiningOp();
+        if (!opArgI)
+          continue;
         // this operand needs to be converted
         Attribute newEncoding;
-        if (failed(
-                invertEncoding(currLayout, argI.getDefiningOp(), newEncoding)))
+        if (failed(invertEncoding(currLayout, opArgI, newEncoding)))
           return mlir::failure();
         toConvert.push_back({argI, newEncoding});
         //
-        Operation *opArgI = argI.getDefiningOp();
         if (!opArgI || processed.contains(opArgI) ||
             (opArgI->getBlock() != cvt->getBlock()))
           continue;
