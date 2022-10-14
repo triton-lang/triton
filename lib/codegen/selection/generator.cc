@@ -1085,9 +1085,14 @@ void generator::visit_atomic_cas_inst(ir::atomic_cas_inst* cas) {
 /**
  * \brief Code Generation for `atomic_rmw`
  */
-void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
 #if defined(USE_ROCM)
-  if(atom->get_op()==ir::atomic_rmw_op_t::Xchg) {
+void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
+  if (atom->get_op() == ir::atomic_rmw_op_t::Add ||
+      atom->get_op() == ir::atomic_rmw_op_t::Max ||
+      atom->get_op() == ir::atomic_rmw_op_t::Min ||
+      atom->get_op() == ir::atomic_rmw_op_t::UMax ||
+      atom->get_op() == ir::atomic_rmw_op_t::UMin ||
+      atom->get_op() == ir::atomic_rmw_op_t::Xchg) {
     BasicBlock *current = builder_->GetInsertBlock();
     Module *module = current->getModule();
     Value *rmw_ptr = vals_[atom->get_operand(0)][{}];
@@ -1100,14 +1105,41 @@ void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
     add_barrier();
     cond_br(pred, tid_0_bb, tid_0_done_bb);
     builder_->SetInsertPoint(tid_0_bb);
-    atomic_rmw(AtomicRMWInst::Xchg, rmw_ptr, rmw_val, MaybeAlign(), AtomicOrdering::Monotonic, SyncScope::System);
+    AtomicRMWInst::BinOp binop;
+    switch (atom->get_op()) {
+    case ir::atomic_rmw_op_t::Add:
+      binop = AtomicRMWInst::Add;
+      break;
+    case ir::atomic_rmw_op_t::Max:
+      binop = AtomicRMWInst::Max;
+      break;
+    case ir::atomic_rmw_op_t::Min:
+      binop = AtomicRMWInst::Min;
+      break;
+    case ir::atomic_rmw_op_t::UMax:
+      binop = AtomicRMWInst::UMax;
+      break;
+    case ir::atomic_rmw_op_t::UMin:
+      binop = AtomicRMWInst::UMin;
+      break;
+    case ir::atomic_rmw_op_t::Xchg:
+      binop = AtomicRMWInst::Xchg;
+      break;
+    default:
+      throw std::runtime_error("Not supported!");
+    }
+    atomic_rmw(binop, rmw_ptr, rmw_val, MaybeAlign(), AtomicOrdering::Monotonic,
+               SyncScope::System);
     br(tid_0_done_bb);
     builder_->SetInsertPoint(tid_0_done_bb);
     tgt_->add_memfence(module, *builder_);
     return;
   }
-#endif
-  ir::value* ptr = atom->get_operand(0);
+  throw std::runtime_error("Not supported!");
+}
+#else // defined(USE_ROCM)
+void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
+  ir::value *ptr = atom->get_operand(0);
   ir::value* val = atom->get_operand(1);
   ir::value* msk = atom->get_operand(2);
 
@@ -1189,6 +1221,7 @@ void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
     }
   }
 }
+#endif // defined(USE_ROCM)
 
 /**
  * \brief Code Generation for `mma.884` (V100)

@@ -390,7 +390,7 @@ def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
         z_ref = torch.from_numpy(z_ref).to(device)
     else:
         z_ref = x.to(z_tri.dtype)
-    triton.testing.assert_almost_equal(z_ref, z_tri, 1)
+    triton.testing.assert_almost_equal(z_ref, z_tri)
 
 # ---------------
 # test reduce
