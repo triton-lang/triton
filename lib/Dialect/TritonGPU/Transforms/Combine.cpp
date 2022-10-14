@@ -115,6 +115,26 @@ inline bool expensive_to_remat(Operation *op) {
   return false;
 };
 
+Operation *cloneWithInferType(mlir::PatternRewriter &rewriter, Operation *op,
+                              BlockAndValueMapping &mapping) {
+  Operation *newOp = rewriter.clone(*op, mapping);
+  auto origType = op->getResult(0).getType().cast<RankedTensorType>();
+  auto newType = RankedTensorType::get(
+      origType.getShape(), origType.getElementType(),
+      newOp->getOperand(0).getType().cast<RankedTensorType>().getEncoding());
+  newOp->getResult(0).setType(newType);
+  auto typeInfer = dyn_cast<InferTypeOpInterface>(newOp);
+  if (typeInfer) {
+    SmallVector<Type, 1> newType;
+    auto sucess = typeInfer.inferReturnTypes(
+        newOp->getContext(), newOp->getLoc(), newOp->getOperands(),
+        newOp->getAttrDictionary(), newOp->getRegions(), newType);
+    if (success)
+      newOp->getResult(0).setType(newType.front());
+  }
+  return newOp;
+}
+
 // Layout conversions are expensive. They require going through
 // shared memory, which is orders of magnitude slower than
 // other non-i/o operations in the dialect.
@@ -185,48 +205,92 @@ public:
     if (isSharedLayout(cvt->getResults()[0]) ||
         isSharedLayout(cvt->getOperand(0)))
       return mlir::failure();
-
+    auto targetType = cvt->getResultTypes()[0].cast<RankedTensorType>();
+    // DFS
     SetVector<Operation *> processed;
-    std::vector<Operation *> queue;
-    queue.push_back(cvt);
+    SetVector<Attribute> layout;
+    std::vector<std::pair<Operation *, Attribute>> queue;
+    std::vector<std::pair<Value, Attribute>> toConvert;
+    queue.push_back({cvt, targetType.getEncoding()});
     int numCvts = 1;
     while (!queue.empty()) {
-      Operation *curr = queue.back();
+      Operation *currOp;
+      Attribute currLayout;
+      std::tie(currOp, currLayout) = queue.back();
       queue.pop_back();
       // If the current operation is expensive to rematerialize,
       // we stop everything
-      if (expensive_to_remat(curr))
+      if (expensive_to_remat(currOp))
         break;
       // a conversion will be removed here (i.e. transfered to operands)
       numCvts -= 1;
       // done processing
-      processed.insert(curr);
+      processed.insert(currOp);
+      layout.insert(currLayout);
       // add all operands to the queue
-      for (Value argI : curr->getOperands()) {
+      for (Value argI : currOp->getOperands()) {
+        // this operand needs to be converted
+        auto newEncoding = invertEncoding(currLayout, currOp);
+        toConvert.push_back({argI, newEncoding});
+        //
         Operation *opArgI = argI.getDefiningOp();
         if (!opArgI || processed.contains(opArgI) ||
-            (opArgI->getBlock() != curr->getBlock()))
+            (opArgI->getBlock() != currOp->getBlock()))
           continue;
         // if the conversion can be folded into opArgI then
         // we actually haven't added anny conversion
         if (isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
                 triton::MakeRangeOp, triton::SplatOp>(*opArgI))
           continue;
-        // we add one conversion for the current operand
+        // we add one expensive conversion for the current operand
         numCvts += 1;
-        queue.push_back(opArgI);
+        queue.push_back({opArgI, newEncoding});
       }
     }
+    // if rematerialization would add more conversions than it removes
+    // then we don't do it
     if (numCvts > 0)
       return mlir::failure();
+
+    FuncOp parentFunc = cvt->getParentOfType<FuncOp>();
+
+    BlockAndValueMapping mapping;
+    for (int i = toConvert.size() - 1; i >= 0; i--) {
+      // unpack information
+      Value currOperand;
+      Attribute targetLayout;
+      std::tie(currOperand, targetLayout) = toConvert[i];
+      // rematerialize the operand if necessary
+      Operation *currOperation = currOperand.getDefiningOp();
+      if (processed.contains(currOperation)) {
+        currOperation = cloneWithInferType(rewriter, currOperation, mapping);
+        currOperand = currOperation->getResult(0);
+        // TODO: set type
+      }
+      if (i == 0)
+        break;
+      // compute target type for the layout cast
+      auto currType = currOperand.getType().cast<RankedTensorType>();
+      auto newType = RankedTensorType::get(
+          currType.getShape(), currType.getElementType(), targetLayout);
+      auto newOperand = rewriter.create<triton::gpu::ConvertLayoutOp>(
+          currOperation->getLoc(), newType, currOperand);
+      if (currOperation)
+        newOperand->moveAfter(currOperation);
+      mapping.map(currOperand, newOperand);
+    }
+    rewriter.replaceOp(cvt, mapping.lookup(cvt->getOperand(0)));
+
+    // llvm::outs() << "AFTER\n----------\n" << parentFunc << "\n";
+    // exit(1);
 
     // we can now rematerialize all operations into depIntoOps recursively
     // for each operation `op`, we convert cvt(op(arg_0, arg_1, ..., arg_n))
     // into op(cvt_0(arg_0), cvt_1(arg_1), ..., cvt_n(arg_n))
-    FuncOp parentFunc = cvt->getParentOfType<FuncOp>();
-    SetVector<Operation *> seen;
-    BlockAndValueMapping mapping;
-    rematerializeCvt(cvt, rewriter, processed, seen, mapping);
+    // FuncOp parentFunc = cvt->getParentOfType<FuncOp>();
+    // SetVector<Operation *> seen;
+    // BlockAndValueMapping mapping2;
+    // rematerializeCvt(cvt, rewriter, processed, seen, mapping2);
     return mlir::success();
   }
 };

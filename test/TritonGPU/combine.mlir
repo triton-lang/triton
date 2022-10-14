@@ -4,8 +4,8 @@
 #layout1 = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
 // CHECK: [[target_layout:#.*]] = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-// CHECK: [[col_layout:#.*]] = #triton_gpu.blocked<{sizePerThread = [4, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [0, 1]}>
 // CHECK: [[row_layout:#.*]] = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+// CHECK: [[col_layout:#.*]] = #triton_gpu.blocked<{sizePerThread = [4, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [0, 1]}>
 // CHECK: [[col_layout_novec:#.*]] = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 
 func @cst() -> tensor<1024xi32, #layout1> {
@@ -45,9 +45,9 @@ func @remat(%arg0: i32) -> tensor<1024xi32, #layout1> {
   // CHECK: %1 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, [[target_layout]]>
   // CHECK: %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, [[target_layout]]>
   // CHECK: %3 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, [[target_layout]]>
-  // CHECK: %4 = arith.muli %1, %3 : tensor<1024xi32, [[target_layout]]>
-  // CHECK: %5 = arith.muli %0, %2 : tensor<1024xi32, [[target_layout]]>
-  // CHECK: %6 = arith.addi %5, %4 : tensor<1024xi32, [[target_layout]]>
+  // CHECK: %4 = arith.muli %0, %2 : tensor<1024xi32, [[target_layout]]>
+  // CHECK: %5 = arith.muli %1, %3 : tensor<1024xi32, [[target_layout]]>
+  // CHECK: %6 = arith.addi %4, %5 : tensor<1024xi32, [[target_layout]]>
   // CHECK: return %6 : tensor<1024xi32, [[target_layout]]>
 }
 
