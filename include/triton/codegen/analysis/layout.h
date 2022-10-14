@@ -137,7 +137,8 @@ private:
   std::vector<int> rep_;
 };
 
-struct scanline_layout: public distributed_layout {
+class scanline_layout: public distributed_layout {
+public:
   scanline_layout(size_t num_warps,
                     const std::vector<int>& axes,
                     const std::vector<unsigned>& shape,
@@ -149,7 +150,7 @@ struct scanline_layout: public distributed_layout {
   int mts(size_t k) { return mts_.at(k); }
   int nts(size_t k) { return nts_.at(k); }
 
-public:
+private:
   // micro tile size. The size of a tile held by a thread block.
   std::vector<int> mts_;
   // nano tile size. The size of a tile held by a thread.

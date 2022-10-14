@@ -181,7 +181,8 @@ public:
   static hipError_t hipEventElapsedTime(float *pMilliseconds, hipEvent_t hStart, hipEvent_t hEnd);
   static hipError_t hipEventRecord(hipEvent_t hEvent, hipStream_t hStream);
   static hipError_t hipEventDestroy(hipEvent_t hEvent);
-
+  // error handling
+  static hipError_t hipGetLastError(void);
 
 
 private:
@@ -306,6 +307,8 @@ private:
   static void* hipEventElapsedTime_;
   static void* hipEventRecord_;
   static void* hipEventDestroy_;
+  // error handling
+  static void* hipGetLastError_;
 };
 
 }

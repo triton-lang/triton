@@ -61,8 +61,12 @@ def mask_tensor(x, mask, block, value=0):
 def assert_almost_equal(x, y, decimal=2, err_msg=''):
     import numpy.testing as npt
     if isinstance(x, torch.Tensor):
+        if x.dtype == torch.bfloat16:
+            x = x.float()
         x = x.cpu().detach().numpy()
     if isinstance(y, torch.Tensor):
+        if y.dtype == torch.bfloat16:
+            y = y.float()
         y = y.cpu().detach().numpy()
     npt.assert_array_almost_equal(x, y, err_msg=err_msg, decimal=decimal)
 
@@ -97,7 +101,7 @@ def random(shape, dtype, device):
         return torch.randint(0, 2, shape, dtype=dtype, device=device)
     if dtype in [torch.int8, torch.int16, torch.int32, torch.int64]:
         return torch.randint(1, 32, shape, dtype=dtype, device=device)
-    if dtype in [torch.float16, torch.float32, torch.float64]:
+    if dtype in [torch.float16, torch.bfloat16, torch.float32, torch.float64]:
         return torch.normal(0, 1, shape, dtype=dtype, device=device)
     raise RuntimeError(f'Unknown dtype {dtype}')
 
