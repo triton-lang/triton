@@ -90,17 +90,21 @@ public:
 //
 // -----------------------------------------------------------------------------
 
-static Attribute invertEncoding(Attribute targetEncoding, Operation *op) {
+static LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
+                                    Attribute &ret) {
   if (auto expand_dims = dyn_cast<triton::ExpandDimsOp>(op)) {
-    return triton::gpu::SliceEncodingAttr::get(
+    ret = triton::gpu::SliceEncodingAttr::get(
         op->getContext(), expand_dims.axis(), targetEncoding);
   }
   if (auto reduce = dyn_cast<triton::ReduceOp>(op)) {
-    auto ret =
-        targetEncoding.cast<triton::gpu::SliceEncodingAttr>().getParent();
-    return ret;
+    auto sliceEncoding =
+        targetEncoding.dyn_cast<triton::gpu::SliceEncodingAttr>();
+    if (!sliceEncoding)
+      return failure();
+    ret = sliceEncoding.getParent();
   }
-  return targetEncoding;
+  ret = targetEncoding;
+  return success();
 }
 
 inline bool expensive_to_remat(Operation *op) {
@@ -147,51 +151,6 @@ public:
       : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
                              2, context) {}
 
-  void rematerializeCvt(mlir::Operation *cvt, mlir::PatternRewriter &rewriter,
-                        SetVector<Operation *> &toRemat,
-                        SetVector<Operation *> &seen,
-                        BlockAndValueMapping &mapping) const {
-    if (seen.contains(cvt))
-      return;
-    seen.insert(cvt);
-    rewriter.startRootUpdate(cvt);
-    Operation *op = cvt->getOperand(0).getDefiningOp();
-    SmallVector<triton::gpu::ConvertLayoutOp, 4> cvts;
-    for (Value argI : op->getOperands()) {
-      // Compute new argument types
-      auto oldArgType = argI.getType().dyn_cast<RankedTensorType>();
-      if (!oldArgType)
-        continue;
-      if (mapping.contains(argI))
-        continue;
-      auto oldEncoding =
-          cvt->getResultTypes()[0].cast<RankedTensorType>().getEncoding();
-      auto newEncoding = invertEncoding(oldEncoding, op);
-      auto newArgType = RankedTensorType::get(
-          oldArgType.getShape(), oldArgType.getElementType(), newEncoding);
-      // Create new argument
-      auto cvtI = rewriter.create<triton::gpu::ConvertLayoutOp>(
-          op->getLoc(), newArgType, argI);
-      if (argI.getDefiningOp())
-        cvtI->moveAfter(argI.getDefiningOp());
-      else {
-        Block *parent = argI.cast<BlockArgument>().getOwner();
-        cvtI->moveBefore(&parent->front());
-      }
-      if (toRemat.contains(argI.getDefiningOp()))
-        cvts.push_back(cvtI);
-      mapping.map(argI, cvtI);
-    }
-    Operation *newOp = rewriter.clone(*op, mapping);
-    newOp->moveBefore(op);
-    newOp->getResult(0).setType(cvt->getResult(0).getType());
-    cvt->replaceAllUsesWith(newOp->getResults());
-    for (auto cvtI : cvts)
-      rematerializeCvt(cvtI, rewriter, toRemat, seen, mapping);
-    rewriter.finalizeRootUpdate(cvt);
-    rewriter.eraseOp(cvt);
-  }
-
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *cvt,
                   mlir::PatternRewriter &rewriter) const override {
@@ -230,12 +189,15 @@ public:
       // add all operands to the queue
       for (Value argI : currOp->getOperands()) {
         // this operand needs to be converted
-        auto newEncoding = invertEncoding(currLayout, currOp);
+        Attribute newEncoding;
+        if (failed(
+                invertEncoding(currLayout, argI.getDefiningOp(), newEncoding)))
+          return mlir::failure();
         toConvert.push_back({argI, newEncoding});
         //
         Operation *opArgI = argI.getDefiningOp();
         if (!opArgI || processed.contains(opArgI) ||
-            (opArgI->getBlock() != currOp->getBlock()))
+            (opArgI->getBlock() != cvt->getBlock()))
           continue;
         // if the conversion can be folded into opArgI then
         // we actually haven't added anny conversion
@@ -253,6 +215,8 @@ public:
       return mlir::failure();
 
     FuncOp parentFunc = cvt->getParentOfType<FuncOp>();
+    // llvm::outs() << "--------\nConverting " << *cvt << " in " << parentFunc
+    //              << "\n---------\n";
 
     BlockAndValueMapping mapping;
     for (int i = toConvert.size() - 1; i >= 0; i--) {
@@ -260,12 +224,12 @@ public:
       Value currOperand;
       Attribute targetLayout;
       std::tie(currOperand, targetLayout) = toConvert[i];
+      // llvm::outs() << "current " << currOperand << "\n";
       // rematerialize the operand if necessary
       Operation *currOperation = currOperand.getDefiningOp();
       if (processed.contains(currOperation)) {
         currOperation = cloneWithInferType(rewriter, currOperation, mapping);
         currOperand = currOperation->getResult(0);
-        // TODO: set type
       }
       if (i == 0)
         break;
@@ -274,23 +238,12 @@ public:
       auto newType = RankedTensorType::get(
           currType.getShape(), currType.getElementType(), targetLayout);
       auto newOperand = rewriter.create<triton::gpu::ConvertLayoutOp>(
-          currOperation->getLoc(), newType, currOperand);
+          currOperand.getLoc(), newType, currOperand);
       if (currOperation)
         newOperand->moveAfter(currOperation);
       mapping.map(currOperand, newOperand);
     }
     rewriter.replaceOp(cvt, mapping.lookup(cvt->getOperand(0)));
-
-    // llvm::outs() << "AFTER\n----------\n" << parentFunc << "\n";
-    // exit(1);
-
-    // we can now rematerialize all operations into depIntoOps recursively
-    // for each operation `op`, we convert cvt(op(arg_0, arg_1, ..., arg_n))
-    // into op(cvt_0(arg_0), cvt_1(arg_1), ..., cvt_n(arg_n))
-    // FuncOp parentFunc = cvt->getParentOfType<FuncOp>();
-    // SetVector<Operation *> seen;
-    // BlockAndValueMapping mapping2;
-    // rematerializeCvt(cvt, rewriter, processed, seen, mapping2);
     return mlir::success();
   }
 };
@@ -525,8 +478,8 @@ public:
 
     patterns.add<SimplifyConversion>(context);
     patterns.add<RematerializeBackward>(context);
-    patterns.add<RematerializeForward>(context);
-    patterns.add<MoveConvertOutOfLoop>(context);
+    // patterns.add<RematerializeForward>(context);
+    // patterns.add<MoveConvertOutOfLoop>(context);
     patterns.add<BlockedToMMA>(context);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
