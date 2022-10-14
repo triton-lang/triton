@@ -369,9 +369,6 @@ def test_atomic_rmw(op, dtype_x, mode, device='cuda'):
     ('float32', 'int32', True)
 ])
 def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
-    if torch.version.hip is not None:
-        assert 'bfloat' not in dtype_x 
-        assert 'bfloat' not in dtype_z
 
     SIZE = 1024
     x = triton.testing.random((SIZE, ), dtype=cvt[dtype_x], device=device)

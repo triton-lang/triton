@@ -17,3 +17,7 @@ hipModule_t amdgpu_to_hipmodule(const std::string& path);
 
 }
 }
+
+#define STRINGIFY_HELPER(X) #X
+#define STRINGIFY(X) STRINGIFY_HELPER(X)
+

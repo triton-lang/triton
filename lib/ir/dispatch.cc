@@ -47,6 +47,8 @@ ir::type *computation_type(ir::type* a_ty, ir::type* b_ty){
   //     converted to half
   if(a_ty->is_fp16_ty() || b_ty->is_fp16_ty())
     return type::get_fp16_ty(ctx);
+  if(a_ty->is_bf16_ty() || b_ty->is_bf16_ty())
+    return type::get_bf16_ty(ctx);
   if(!a_ty->is_integer_ty() || !b_ty->is_integer_ty())
     throw_unreachable("augment_types");
   // 4 ) both operands are integer and undergo
