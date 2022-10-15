@@ -167,11 +167,11 @@ void init_triton_ir(py::module &&m) {
              }
            })
       .def("replace_all_uses_with",
-            [](mlir::Value &self, mlir::Value &newValue) {
-              self.replaceAllUsesWith(newValue);
-            })
-           
-           ;
+           [](mlir::Value &self, mlir::Value &newValue) {
+             self.replaceAllUsesWith(newValue);
+           })
+
+      ;
   py::class_<mlir::BlockArgument, mlir::Value>(m, "block_arguement");
 
   py::class_<mlir::Region>(m, "region")
@@ -518,8 +518,8 @@ void init_triton_ir(py::module &&m) {
              auto loc = self.getUnknownLoc();
              if (auto funcTy = funcType.dyn_cast<mlir::FunctionType>()) {
                mlir::ArrayRef<mlir::NamedAttribute> attrs = {
-                  mlir::NamedAttribute(self.getStringAttr("sym_visibility"), self.getStringAttr(visibility))
-               };
+                   mlir::NamedAttribute(self.getStringAttr("sym_visibility"),
+                                        self.getStringAttr(visibility))};
                return self.create<mlir::FuncOp>(loc, funcName, funcTy, attrs);
              }
              throw std::runtime_error("invalid function type");
@@ -651,11 +651,11 @@ void init_triton_ir(py::module &&m) {
                                                           self.getIndexType());
            })
       .def("create_index_to_si",
-            [](mlir::OpBuilder &self, mlir::Value &input) -> mlir::Value {
-              auto loc = self.getUnknownLoc();
-              return self.create<mlir::arith::IndexCastOp>(loc, input,
-                                                            self.getI32Type());
-            })
+           [](mlir::OpBuilder &self, mlir::Value &input) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::arith::IndexCastOp>(loc, input,
+                                                          self.getI32Type());
+           })
 
       .def("create_fmul",
            [](mlir::OpBuilder &self, mlir::Value &lhs,
@@ -1073,8 +1073,8 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_dot",
            [](mlir::OpBuilder &self, mlir::Value &a, mlir::Value &b,
-              mlir::Value &c, 
-              bool allowTF32, bool transA, bool transB) -> mlir::Value {
+              mlir::Value &c, bool allowTF32, bool transA,
+              bool transB) -> mlir::Value {
              auto loc = self.getUnknownLoc();
              return self.create<mlir::triton::DotOp>(loc, c.getType(), a, b, c,
                                                      allowTF32, transA, transB);
@@ -1123,8 +1123,7 @@ void init_triton_ir(py::module &&m) {
              auto loc = self.getUnknownLoc();
              return self.create<mlir::SelectOp>(loc, condition, trueValue,
                                                 falseValue);
-           })
-      ;
+           });
 
   py::class_<mlir::PassManager>(m, "pass_manager")
       .def(py::init<mlir::MLIRContext *>())
@@ -1144,8 +1143,11 @@ void init_triton_ir(py::module &&m) {
                  printingFlags);
            })
       .def("run",
-           [](mlir::PassManager &self, mlir::ModuleOp &mod) -> bool {
-             return mlir::succeeded(self.run(mod.getOperation()));
+           [](mlir::PassManager &self, mlir::ModuleOp &mod) {
+             // TODO: maybe dump module to file and print error for better
+             // diagnostics
+             if (mlir::failed(self.run(mod.getOperation())))
+               throw std::runtime_error("PassManager::run failed");
            })
       .def(
           "add_sccp_pass",
@@ -1169,7 +1171,9 @@ void init_triton_ir(py::module &&m) {
       .def("add_cse_pass",
            [](mlir::PassManager &self) { self.addPass(mlir::createCSEPass()); })
       .def("add_licm_pass",
-            [](mlir::PassManager &self) { self.addPass(mlir::createLoopInvariantCodeMotionPass()); })
+           [](mlir::PassManager &self) {
+             self.addPass(mlir::createLoopInvariantCodeMotionPass());
+           })
       .def("add_triton_combine_pass",
            [](mlir::PassManager &self) {
              self.addPass(mlir::triton::createCombineOpsPass());

@@ -75,8 +75,8 @@ def _fwd_kernel(
         p = p.to(tl.float16)
         acc += tl.dot(p, v)
         # update m_i and l_i
-        # l_i = l_i_new
-        # m_i = m_i_new
+        l_i = l_i_new
+        m_i = m_i_new
     # rematerialize offsets to save registers
     start_m = tl.program_id(0)
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)

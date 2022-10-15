@@ -188,15 +188,13 @@ public:
       layout.insert(currLayout);
       // add all operands to the queue
       for (Value argI : currOp->getOperands()) {
+        Attribute newEncoding;
+        if (failed(invertEncoding(currLayout, currOp, newEncoding)))
+          return mlir::failure();
+        toConvert.push_back({argI, newEncoding});
         Operation *opArgI = argI.getDefiningOp();
         if (!opArgI)
           continue;
-        // this operand needs to be converted
-        Attribute newEncoding;
-        if (failed(invertEncoding(currLayout, opArgI, newEncoding)))
-          return mlir::failure();
-        toConvert.push_back({argI, newEncoding});
-        //
         if (!opArgI || processed.contains(opArgI) ||
             (opArgI->getBlock() != cvt->getBlock()))
           continue;
@@ -216,8 +214,13 @@ public:
       return mlir::failure();
 
     FuncOp parentFunc = cvt->getParentOfType<FuncOp>();
-    // llvm::outs() << "--------\nConverting " << *cvt << " in " << parentFunc
-    //              << "\n---------\n";
+    bool test = cvt->getResult(0)
+                    .getType()
+                    .cast<RankedTensorType>()
+                    .getEncoding()
+                    .isa<triton::gpu::MmaEncodingAttr>();
+    // if (test)
+    //   llvm::outs() << "--------\nConverting " << *cvt << "\n---------\n";
 
     BlockAndValueMapping mapping;
     for (int i = toConvert.size() - 1; i >= 0; i--) {
@@ -225,7 +228,8 @@ public:
       Value currOperand;
       Attribute targetLayout;
       std::tie(currOperand, targetLayout) = toConvert[i];
-      // llvm::outs() << "current " << currOperand << "\n";
+      // if (test)
+      //   llvm::outs() << "current " << currOperand << "\n";
       // rematerialize the operand if necessary
       Operation *currOperation = currOperand.getDefiningOp();
       if (processed.contains(currOperation)) {
@@ -479,8 +483,8 @@ public:
 
     patterns.add<SimplifyConversion>(context);
     patterns.add<RematerializeBackward>(context);
-    // patterns.add<RematerializeForward>(context);
-    // patterns.add<MoveConvertOutOfLoop>(context);
+    patterns.add<RematerializeForward>(context);
+    patterns.add<MoveConvertOutOfLoop>(context);
     patterns.add<BlockedToMMA>(context);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
