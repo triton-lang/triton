@@ -3320,13 +3320,16 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
     default: throw std::runtime_error("unreachable");
   }
   ir::value *arg = x->get_operand(0);
-  if(arg->get_type()->get_tile_rank() == 1)
-    visit_reduce1d_inst(x, do_acc, neutral);
-  else
-    bool is_coalesced_scanline = layouts_->is_coalesced_scanline(x);
-    bool is_a100_mma = layouts_->is_a100_mma(x);
-    if (is_coalesced_scanline || is_a100_mma)
+#ifdef USE_ROCM
+  visit_reducend_inst(x, do_acc, neutral);
+#else
+  bool is_coalesced_scanline = layouts_->is_coalesced_scanline(x);
+  bool is_a100_mma = layouts_->is_a100_mma(x);
+  if (is_coalesced_scanline || is_a100_mma)
     visit_reducend_inst_fast(x, do_acc, neutral);
+  else
+    visit_reducend_inst(x, do_acc, neutral);
+#endif
 }
 
 /**
