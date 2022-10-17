@@ -327,7 +327,7 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
   let extraClassDeclaration = extraBaseClassDeclaration;
 }
 
-// This is compied from a WIP PR.
+// This is copied from a WIP PR.
 // TODO[Superjomn]: Remove it in the final PR.
 def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding"> {
   let mnemonic = "dot_op";
