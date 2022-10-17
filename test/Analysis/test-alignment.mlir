@@ -89,7 +89,7 @@ func @store_constant_align(%addr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %n:
 
 // This IR is dumped from vecadd test.
 // Note, the hint {tt.divisibility = 16 : i32} for %n_elements affects the alignment of mask.
-func @kernel_0d1d2d3d(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %n_elements: i32 {tt.divisibility = 16 : i32}) {
+func @vecadd_mask_align_16(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %n_elements: i32 {tt.divisibility = 16 : i32}) {
   %c64_i32 = arith.constant 64 : i32
   %0 = tt.get_program_id {axis = 0 : i32} : i32
   %1 = arith.muli %0, %c64_i32 : i32
@@ -117,7 +117,7 @@ func @kernel_0d1d2d3d(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !
 
 // This IR is dumped from vecadd test.
 // Note, there is no divisibility hint for %n_elements, Triton should assume its divisibility to be 1 by default.
-func @kernel_0d1d2d3(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %n_elements: i32) {
+func @vecadd_mask_align_1(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %n_elements: i32) {
   %c64_i32 = arith.constant 64 : i32
   %0 = tt.get_program_id {axis = 0 : i32} : i32
   %1 = arith.muli %0, %c64_i32 : i32
