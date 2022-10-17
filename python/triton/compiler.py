@@ -904,7 +904,7 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(),
 
 def ty_to_cpp(ty):
     if ty[0] == '*':
-        return "CUdeviceptr"
+        return "hipDeviceptr_t"
     return {
         "i1": "int32_t",
         "i8": "int8_t",
@@ -962,17 +962,18 @@ def generate_launcher(identifier, constants, signature):
     format = "iiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
 
     # generate glue code
-    src = f"""
-#include \"cuda.h\"
+    if torch.version.hip is not None:
+        src = f"""
+#define __HIP_PLATFORM_AMD__
+#include <hip/hip_runtime.h>
 #include <Python.h>
 
-static inline void gpuAssert(CUresult code, const char *file, int line)
+static inline void gpuAssert(hipError_t code, const char *file, int line)
 {{
-   if (code != CUDA_SUCCESS)
+   if (code != HIP_SUCCESS)
    {{
       const char* prefix = "Triton Error [CUDA]: ";
-      const char* str;
-      cuGetErrorString(code, &str);
+      const char* str = hipGetErrorString(code);
       char err[1024] = {{0}};
       strcat(err, prefix);
       strcat(err, str);
@@ -982,20 +983,20 @@ static inline void gpuAssert(CUresult code, const char *file, int line)
 #define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
 
-void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, CUstream stream, CUfunction function, {arg_decls}) {{
+void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, hipStream_t stream, hipFunction_t function, {arg_decls}) {{
   void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
   if(gridX*gridY*gridZ > 0){{
-    CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
+    hipLaunchKernel(function, dim3(gridX, gridY, gridZ), dim3(32*num_warps, 1, 1), 0 ,0, stream);
   }}
 }}
 
 
-static inline CUdeviceptr getPointer(PyObject *obj, int idx) {{
+static inline hipDeviceptr_t getPointer(PyObject *obj, int idx) {{
   if (PyLong_Check(obj)) {{
-    return (CUdeviceptr)PyLong_AsUnsignedLongLong(obj);
+    return (hipDeviceptr_t)PyLong_AsUnsignedLongLong(obj);
   }}
   if (obj == Py_None) {{
-    return (CUdeviceptr)0;
+    return (hipDeviceptr_t)0;
   }}
   PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
   if(ptr){{
@@ -1006,10 +1007,10 @@ static inline CUdeviceptr getPointer(PyObject *obj, int idx) {{
     if (!PyLong_Check(ret)) {{
       PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
     }}
-    return (CUdeviceptr)PyLong_AsUnsignedLongLong(ret);
+    return (hipDeviceptr_t)PyLong_AsUnsignedLongLong(ret);
   }}
   PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
-  return (CUdeviceptr)0;
+  return (hipDeviceptr_t)0;
 }}
 
 
@@ -1034,7 +1035,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
     Py_DECREF(new_args);
   }}
 
-  _launch(gridX, gridY, gridZ, num_warps, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"getPointer(_arg{i},{i})" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
+  _launch(gridX, gridY, gridZ, num_warps, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function, {', '.join(f"getPointer(_arg{i},{i})" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
 
   if (launch_exit_hook != Py_None) {{
     PyObject *new_args = NULL;
@@ -1129,12 +1130,20 @@ def libcuda_dirs():
     locs = subprocess.check_output(["whereis", "libcuda.so"]).decode().strip().split()[1:]
     return [os.path.dirname(loc) for loc in locs]
 
+@functools.lru_cache()
+def libhip_dirs():
+    return ["/opt/rocm/lib/libamdhip64.so"]
+
 
 @functools.lru_cache()
 def cuda_home_dirs():
     default_dir = "/usr/local/cuda"
     return os.getenv("CUDA_HOME", default=default_dir)
 
+@functools.lru_cache()
+def hip_home_dirs():
+    default_dir = "/opt/rocm"
+    return os.getenv("HIP_HOME", default=default_dir)
 
 @contextlib.contextmanager
 def quiet():
@@ -1147,8 +1156,13 @@ def quiet():
 
 
 def _build(name, src, srcdir):
-    cuda_lib_dirs = libcuda_dirs()
-    cu_include_dir = os.path.join(cuda_home_dirs(), "include")
+    if torch.version.hip is not None:
+        hip_lib_dirs = libhip_dirs()
+        hip_include_dir = os.path.join(hip_home_dirs(), "include")
+    else:
+        cuda_lib_dirs = libcuda_dirs()
+        cu_include_dir = os.path.join(cuda_home_dirs(), "include")
+        
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
@@ -1159,16 +1173,26 @@ def _build(name, src, srcdir):
         gcc = shutil.which("gcc")
         cc = gcc if gcc is not None else clang
     py_include_dir = get_paths()["include"]
-    cc_cmd = [cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
-    cc_cmd += [f"-L{dir}" for dir in cuda_lib_dirs]
+    if torch.version.hip is not None:
+       cc_cmd = [cc, src, "-O3", f"-I{hip_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
+       cc_cmd += [f"-L{dir}" for dir in hip_lib_dirs]
+    else:
+        cc_cmd = [cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
+        cc_cmd += [f"-L{dir}" for dir in cuda_lib_dirs]
     ret = subprocess.check_call(cc_cmd)
     if ret == 0:
         return so
     # fallback on setuptools
     extra_compile_args = []
-    library_dirs = cuda_lib_dirs
-    include_dirs = [srcdir, cu_include_dir]
-    libraries = ['cuda']
+    if torch.version.hip is not None:
+        library_dirs = hip_lib_dirs
+        include_dirs = [srcdir, hip_include_dir]
+        libraries = ['cuda']
+    else:
+        library_dirs = cuda_lib_dirs
+        include_dirs = [srcdir, cu_include_dir]
+        libraries = ['cuda']
+    
     # extra arguments
     extra_link_args = []
     # create extension module
