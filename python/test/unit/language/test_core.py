@@ -116,7 +116,7 @@ def test_empty_kernel(dtype_x, device='cuda'):
     @triton.jit
     def kernel(X, SIZE: tl.constexpr):
         pass
-    check_type_supported(dtype_x)
+    # check_type_supported(dtype_x)
     x = to_triton(numpy_random(SIZE, dtype_str=dtype_x), device=device, dst_type=dtype_x)
     kernel[(1, )](x, SIZE=SIZE, num_warps=4)
 
