@@ -986,7 +986,7 @@ static inline void gpuAssert(hipError_t code, const char *file, int line)
 void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, hipStream_t stream, hipFunction_t function, {arg_decls}) {{
   void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
   if(gridX*gridY*gridZ > 0){{
-    hipLaunchKernel(function, dim3(gridX, gridY, gridZ), dim3(32*num_warps, 1, 1), 0 ,0, stream);
+    hipModuleLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0);
   }}
 }}
 
