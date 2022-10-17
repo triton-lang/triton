@@ -90,7 +90,7 @@ void check(CUresult err)
   case CUDA_ERROR_NOT_PERMITTED                  : throw not_permitted();
   case CUDA_ERROR_NOT_SUPPORTED                  : throw not_supported();
   case CUDA_ERROR_UNKNOWN                        : throw unknown();
-  default                                        : throw unknown();
+  default                                        : throw std::runtime_error("unimplemented code: " + std::to_string(err));
   }
 }
 

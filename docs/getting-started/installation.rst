@@ -34,17 +34,19 @@ You can install the Python package from source by running the following commands
 .. code-block:: bash
 
       git clone https://github.com/openai/triton.git;
-      cd triton/python;
+      cd triton;
+      git submodule update --init --recursive;
+      cd python;
       pip install cmake; # build time dependency
       pip install -e .
 
-Note that, if llvm-11 is not present on your system, the setup.py script will download the official LLVM11 static libraries link against that.
+Note that, if llvm-11 is not present on your system and you are on linux, the setup.py script will download the official LLVM11 static libraries link against that. For windows users, LLVM must be installed and configured in PATH.
 
 You can then test your installation by running the unit tests:
 
 .. code-block:: bash
 
-      pip install -r requirements-test.txt
+      pip install -e '.[tests]'
       pytest -vs test/unit/
 
 and the benchmarks

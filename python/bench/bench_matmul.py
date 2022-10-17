@@ -1,11 +1,11 @@
-import triton
 import torch
-import os
+
+import triton
 
 
 def rounded_linspace(low, high, steps, div):
     ret = torch.linspace(low, high, steps)
-    ret = (ret.int() + div - 1) // div * div
+    ret = torch.div(ret.int() + div - 1, div, rounding_mode='trunc') * div
     ret = torch.unique(ret)
     return list(map(int, ret))
 
@@ -29,16 +29,16 @@ square_confs = [
 transformer_confs = [
     triton.testing.Benchmark(
         x_names=[x],
-        x_vals = rounded_linspace(NK//16, NK, 32, 128),
+        x_vals=rounded_linspace(NK // 16, NK, 32, 128),
         line_arg="provider",
         line_vals=["cublas", "triton", "cutlass"],
         line_names=["cuBLAS", "Triton", "CUTLASS"],
         ylabel="TFLOPS",
         plot_name=f"matmul-M{M}-{'NK'.replace(x, '')}{NK}",
-        args= {"M": M, 'NK'.replace(x,''): NK, "AT": False, "BT": False, "dtype": torch.float16}
-    ) for NK in [12288]\
-      for i, x in enumerate(["N", "K"])\
-      for M in [2048]
+        args={"M": M, 'NK'.replace(x, ''): NK, "AT": False, "BT": False, "dtype": torch.float16}
+    ) for NK in [12288]
+    for i, x in enumerate(["N", "K"])
+    for M in [2048]
 ]
 
 
@@ -46,9 +46,10 @@ transformer_confs = [
 def bench_op(M, N, K, AT, BT, dtype, provider, warmup=25, rep=75):
     a = torch.rand((K, M) if AT else (M, K), device="cuda", dtype=dtype)
     b = torch.rand((N, K) if BT else (K, N), device="cuda", dtype=dtype)
-    if AT: a = a.t()
-    if BT: b = b.t()
-    num_flops = 2 * M * N * K
+    if AT:
+        a = a.t()
+    if BT:
+        b = b.t()
     tflops = lambda ms: 2. * M * N * K / ms * 1e-9
     if provider == "cublas":
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), warmup=warmup, rep=rep)
@@ -61,6 +62,6 @@ def bench_op(M, N, K, AT, BT, dtype, provider, warmup=25, rep=75):
         try:
             ms, min_ms, max_ms = triton.testing.do_bench(lambda: cutlass_matmul(a, b), warmup=warmup, rep=rep)
             return tflops(ms), tflops(max_ms), tflops(min_ms)
-        except:
+        except Exception:
             return None
     return None

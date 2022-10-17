@@ -5,14 +5,13 @@ on:
   pull_request:
     branches:
       - master
-      - v2.0
 
 
 jobs:
 
   Integration-Tests:
     
-    runs-on: self-hosted
+    runs-on: [self-hosted, V100]
 
     steps:
 
@@ -21,14 +20,23 @@ jobs:
 
       - name: Clear cache
         run: |
-          rm -r /tmp/triton/
+          rm -r ~/.triton/
         continue-on-error: true
 
       - name: Install Triton
         run: |
           alias python='python3'
           cd python
-          pip3 install -e .
+          pip3 install -e '.[tests]'
+
+      - name: Check imports
+        run: "isort -c ./python || ( echo '::error title=Imports not sorted::Please run \"isort ./python\"' ; exit 1 )"
+
+      - name: Check style
+        run: "autopep8 -a -r -d --exit-code ./python || ( echo '::error title=Style issues::Please run \"autopep8 -a -r -i ./python\"' ; exit 1 )"
+
+      - name: Flake8
+        run: "flake8 --config ./python/setup.cfg ./python || ( echo '::error::Flake8 failed; see logs for errors.' ; exit 1 )"
 
       - name: Unit tests
         run: |
@@ -44,4 +52,3 @@ jobs:
           pytest -vs .
           sudo nvidia-smi -i 0 -rgc
           sudo nvidia-smi -i 0 -rmc
-

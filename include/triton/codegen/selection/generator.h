@@ -4,7 +4,9 @@
 #define _TRITON_SELECTION_GENERATOR_H_
 
 #include "triton/ir/visitor.h"
+#include "triton/ir/instructions.h"
 #include "triton/codegen/analysis/layout.h"
+#include "triton/codegen/extern_lib.h"
 #include <functional>
 
 // forward
@@ -24,6 +26,7 @@ namespace llvm{
   class IRBuilder;
   class ArrayType;
   class Function;
+  class StructType;
 }
 
 namespace triton{
@@ -114,8 +117,17 @@ private:
 private:
   Type *cvt(ir::type *ty);
   llvm::Attribute cvt(ir::attribute attr);
+  void packed_type(ir::value* i);
+  void forward_declare(ir::function* fn);
+  Value *cast_shared_layout_ptr(analysis::data_layout *layout, Type *ty);
 
-public:
+ private:
+  typedef std::function<void(
+      std::pair<Value *, Value *> &acc, std::function<Value *()> load_value_fn,
+      std::function<Value *()> load_index_fn, bool is_first)>
+      acc_fn_t;
+
+ public:
   generator(analysis::axes *a_axes,
             analysis::layouts *layouts,
             analysis::align *alignment,
@@ -125,6 +137,8 @@ public:
             unsigned num_warps);
 
   void visit_value(ir::value* v);
+  void visit_call_inst(ir::call_inst*);
+  void visit_launch_inst(ir::launch_inst *);
   void visit_phi_node(ir::phi_node*);
   void visit_binary_operator(ir::binary_operator*);
   void visit_getelementptr_inst(ir::getelementptr_inst*);
@@ -134,9 +148,19 @@ public:
   std::tuple<Value*, Value*, Value*, Value*> fp32x4_to_fp8x4(Value *in0, Value *in1, Value *in2, Value *in3);
   std::tuple<Value*, Value*, Value*, Value*> fp8x4_to_fp16x4(Value *in0, Value *in1, Value *in2, Value *in3);
   std::tuple<Value*, Value*, Value*, Value*> fp16x4_to_fp8x4(Value *in0, Value *in1, Value *in2, Value *in3);
+  std::tuple<Value*, Value*, Value*, Value*> fp8x4_to_bf16x4(Value *in0, Value *in1, Value *in2, Value *in3);
+  std::tuple<Value*, Value*, Value*, Value*> bf16x4_to_fp8x4(Value *in0, Value *in1, Value *in2, Value *in3);
   Value* bf16_to_fp32(Value *in0);
   Value* fp32_to_bf16(Value *in0);
-
+  std::tuple<Value*, Value*, Value*, Value*, Value*, Value*, Value*, Value*> int16_to_float16x8(
+    Value *in0, Value *scale_x512, Value *shift
+  );
+  std::tuple<Value*, Value*, Value*, Value*, Value*, Value*, Value*, Value*> int32_to_float16x8(
+    Value *in0, Value *scale_x512, Value *shift
+  );
+  std::tuple<Value*, Value*, Value*, Value*> int32_to_float16x4(Value *in0, Value *scale_x512, Value *shift);
+  std::tuple<Value*, Value*> prepare_scale_shift(Value *scale, Value *shift);
+  void visit_dequantize_inst(ir::dequantize_inst*);
   void visit_cast_inst(ir::cast_inst*);
   void visit_return_inst(ir::return_inst*);
   void visit_cond_branch_inst(ir::cond_branch_inst*);
@@ -148,6 +172,8 @@ public:
   void visit_unmasked_store_inst(ir::unmasked_store_inst*);
   void visit_masked_store_inst(ir::masked_store_inst*);
   void visit_cat_inst(ir::cat_inst*);
+  void visit_extract_value_inst(ir::extract_value_inst *);
+  void visit_insert_value_inst(ir::insert_value_inst *);
   void visit_reshape_inst(ir::reshape_inst*);
   void visit_splat_inst(ir::splat_inst*);
   void visit_broadcast_inst(ir::broadcast_inst*);
@@ -168,8 +194,8 @@ public:
   void visit_trans_inst(ir::trans_inst*);
   void visit_sqrt_inst(ir::sqrt_inst*);
   Value* shfl_sync(Value* acc, int32_t i);
-  void visit_reduce1d_inst(ir::reduce_inst*, std::function<Value*(Value*,Value*)>, Value*);
-  void visit_reducend_inst(ir::reduce_inst*, std::function<Value*(Value*,Value*)>, Value*);
+  void visit_reducend_inst_fast(ir::reduce_inst* x, acc_fn_t do_acc, Value *neutral);
+  void visit_reducend_inst(ir::reduce_inst* x, acc_fn_t do_acc, Value *neutral);
   void visit_reduce_inst(ir::reduce_inst*);
   void visit_select_inst(ir::select_inst*);
   void visit_layout_convert(ir::value *out, ir::value *in);
@@ -182,6 +208,9 @@ public:
   void visit_async_wait_inst(ir::async_wait_inst*);
 //  void visit_make_range_dyn(ir::make_range_dyn*);
   void visit_make_range(ir::make_range*);
+  void visit_clock_inst(ir::clock_inst*);
+  void visit_globaltimer_inst(ir::globaltimer_inst*);
+  void visit_extern_elementwise_inst(ir::extern_elementwise_inst*);
 //  void visit_make_range_sta(ir::make_range_sta*);
   void visit_undef_value(ir::undef_value*);
   void visit_constant_int(ir::constant_int*);
@@ -197,11 +226,20 @@ public:
   void visit_layout_scanline(analysis::scanline_layout*);
   void visit_layout_shared(analysis::shared_layout*);
 
+  // Add a new external library based on given name and path if it doesn't exist
+  void add_extern_lib(const std::string &lib_name, const std::string &lib_path);
 
-private:
+  // Get all external libraries
+  const ExternLibMap &get_extern_lib_map() {
+    return extern_lib_map_;
+  }
+
+ private:
   LLVMContext *ctx_;
   Builder* builder_;
   Module *mod_;
+
+  std::map<std::string, std::unique_ptr<ExternLib>> extern_lib_map_;
 
   analysis::axes *a_axes_;
   analysis::swizzle *swizzle_;
@@ -235,10 +273,11 @@ private:
   /// idx for multi-stage pipeline
   std::map<analysis::data_layout*, Value*> read_smem_idx_;
   std::map<analysis::data_layout*, Value*> write_smem_idx_;
-  
+
   /// triton bb -> llvm bb
   std::map<ir::value*, BasicBlock *> bbs_;
   std::map<ir::value*, std::vector<int>> ords_;
+  std::map<ir::value*, Function*> fns_;
 
   // helper for creating llvm values
   adder add;
@@ -250,6 +289,9 @@ private:
 
   /// Record prefetch instrs that needs to be moved
   std::map<ir::value*, std::vector<Value*>> prefetch_latch_to_bb_;
+
+  // Eviction policies
+  std::map<ir::load_inst::EVICTION_POLICY, Value*> policies_;
 };
 
 }

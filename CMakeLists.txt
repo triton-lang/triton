@@ -33,6 +33,9 @@ endif()
 # Compiler flags
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+# Third-party
+include_directories(${PYBIND11_INCLUDE_DIR})
+
 if(WIN32)
     SET(BUILD_SHARED_LIBS OFF)
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/deps/dlfcn-win32/src)
@@ -76,7 +79,7 @@ if("${LLVM_LIBRARY_DIR}" STREQUAL "")
 # sometimes we don't want to use llvm-config, since it may have been downloaded for some specific linux distros
 else()
     set(LLVM_LDFLAGS "-L${LLVM_LIBRARY_DIR}")
-    set(LLVM_LIBRARIES 
+    set(LLVM_LIBRARIES
 libLLVMNVPTXCodeGen.a
 libLLVMNVPTXDesc.a
 libLLVMNVPTXInfo.a
@@ -175,7 +178,7 @@ target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
 if(WIN32)
     target_link_libraries(triton PRIVATE ${LLVM_LIBRARIES} dl) # dl is from dlfcn-win32
 else()
-    target_link_libraries(triton ${LLVM_LIBRARIES} z ${TERMINFO_LIBRARY})
+    target_link_libraries(triton ${LLVM_LIBRARIES} z)
 endif()
 
 

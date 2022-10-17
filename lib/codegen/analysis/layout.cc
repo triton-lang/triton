@@ -23,17 +23,65 @@ inline unsigned clamp(unsigned x, unsigned a, unsigned b) {
   return std::min(std::max(x, lo), hi);
 }
 
-inline bool is_hmma_c(ir::value *v){
+inline bool is_hmma_c(ir::value *v, int sm){
   bool result = false;
   if(auto *x = dynamic_cast<ir::dot_inst*>(v)){
     ir::value *a = x->get_operand(0);
     ir::type *a_ty = a->get_type();
     ir::value *b = x->get_operand(1);
     ir::type *b_ty = b->get_type();
-    result = a_ty->get_scalar_ty()->is_fp16_ty() &&
-             b_ty->get_scalar_ty()->is_fp16_ty();
+    result = (a_ty->get_scalar_ty()->is_fp16_ty() && b_ty->get_scalar_ty()->is_fp16_ty()) ||
+             (a_ty->get_scalar_ty()->is_bf16_ty() && b_ty->get_scalar_ty()->is_bf16_ty()) ||
+             (a_ty->get_scalar_ty()->is_fp32_ty() && b_ty->get_scalar_ty()->is_fp32_ty() && 
+              x->allow_tf32() && sm >= 80) ||
+             (a_ty->get_scalar_ty()->is_integer_ty(8) && b_ty->get_scalar_ty()->is_integer_ty(8) && 
+              sm >= 80);
   }
   return result;
+}
+
+static mma_layout::TensorCoreType get_mma_type(ir::value *v) {
+  mma_layout::TensorCoreType mma_type;
+  if (auto* dot = dynamic_cast<ir::dot_inst*>(v)) {
+    ir::value* a = dot->get_operand(0);
+    ir::value* b = dot->get_operand(1);
+    ir::type* a_ty = a->get_type();
+    ir::type* b_ty = b->get_type();
+    ir::type* c_ty = v->get_type();
+
+    if (c_ty->get_scalar_ty()->is_fp32_ty()) {
+      // floating point tensor cores
+      if (a_ty->get_scalar_ty()->is_fp16_ty() && b_ty->get_scalar_ty()->is_fp16_ty()) {
+        mma_type = mma_layout::FP32_FP16_FP16_FP32;
+        return mma_type;
+      }
+      if (a_ty->get_scalar_ty()->is_bf16_ty() && b_ty->get_scalar_ty()->is_bf16_ty()) {
+        mma_type = mma_layout::FP32_BF16_BF16_FP32;
+        return mma_type;
+      }
+      if (a_ty->get_scalar_ty()->is_fp32_ty() && b_ty->get_scalar_ty()->is_fp32_ty() 
+          && dot->allow_tf32()) {
+        mma_type = mma_layout::FP32_TF32_TF32_FP32;
+        return mma_type;
+      }
+    } else if (c_ty->get_scalar_ty()->is_integer_ty(32)) {
+      // throw std::runtime_error("integer tensor cores are not yet supported");
+      // // integer tensor cores
+      // if (a_ty->get_scalar_ty()->is_integer_ty(1) && b_ty->get_scalar_ty()->is_integer_ty(1)) {
+      //   mma_type = mma_layout::INT32_INT1_INT1_INT32;
+      //   return mma_type;
+      // }
+      // if (a_ty->get_scalar_ty()->is_integer_ty(4) && b_ty->get_scalar_ty()->is_integer_ty(4)) {
+      //   mma_type = mma_layout::INT32_INT4_INT4_INT32;
+      //   return mma_type;
+      // }
+      if (a_ty->get_scalar_ty()->is_integer_ty(8) && b_ty->get_scalar_ty()->is_integer_ty(8)) {
+        mma_type = mma_layout::INT32_INT8_INT8_INT32;
+        return mma_type;
+      }
+    }
+  }
+  return mma_layout::NOT_APPLICABLE;
 }
 
 inline void extract_io_use(ir::value *v, std::set<ir::value*>& result) {
@@ -52,11 +100,12 @@ inline void extract_dot_use(ir::value *v, ir::value*& result, size_t n) {
   }
 }
 
-inline void extract_hmma_dot_use(ir::value *v, ir::value*& result, size_t n) {
+inline void extract_hmma_dot_use(ir::value *v, ir::value*& result, size_t n, int sm) {
   for(ir::user* u: v->get_users()){
     auto i = dynamic_cast<ir::dot_inst*>(u);
-    if(i && is_hmma_c(i) && i->get_operand(n) == v)
+    if(i && is_hmma_c(i, sm) && i->get_operand(n) == v) {
       result = i;
+    }
   }
 }
 
@@ -142,7 +191,9 @@ mma_layout::mma_layout(size_t num_warps,
                        const std::vector<unsigned>& shape,
                        const std::vector<ir::value *> &values,
                        analysis::align* align, target* tgt,
-                       shared_layout *layout_a, shared_layout *layout_b): distributed_layout(MMA, axes, shape, values, align) {
+                       shared_layout *layout_a, shared_layout *layout_b,
+                       ir::value *dot): distributed_layout(MMA, axes, shape, values, align) {
+  tensor_core_type_ = get_mma_type(dot);
   /* fragments per warp */
   // try to make things as square as possible to maximize data re-use
   if(tgt->as_nvidia() && tgt->as_nvidia()->sm() < 80){
@@ -157,25 +208,67 @@ mma_layout::mma_layout(size_t num_warps,
     int pack_size_1 = (is_b_row && !is_b_vec4) ? 2 : 1;
     rep_ = {2*pack_size_0, 2*pack_size_1, 1};
     spw_ = {fpw_[0]*4*rep_[0], fpw_[1]*4*rep_[1], 1};
+    contig_per_thread_ = {1, 1};
+    order_ = {0, 1};
   }
   else{
-    fpw_ = {1, 1, 1};
-    spw_ = {16, 8, 1};
-    rep_ = {2,  2, 1};
+    spw_ = mma_instr_shape_.at(tensor_core_type_); // e.g., {16, 8, 16} for f32.f16.f16.f32
+    contig_per_thread_ = {1, 2};
+    order_ = {1, 0};
   }
-  order_ = {0, 1};
 
   /* warps per tile */
-  // try to make things as square as possible to maximize data re-use
   wpt_ = {1, 1, 1};
-  std::vector<int> wpt_nm1;
-  do{
-    wpt_nm1 = wpt_;
-    if(wpt_[0] * wpt_[1] * wpt_[2] < num_warps)
-      wpt_[0] = clamp(wpt_[0]*2, 1, shape_[0] / spw_[0]);
-    if(wpt_[0] * wpt_[1] * wpt_[2] < num_warps)
-      wpt_[1] = clamp(wpt_[1]*2, 1, shape_[1] / spw_[1]);
-  }while(wpt_nm1 != wpt_);
+  // try to make warp-level tiles as square as possible to maximize data re-use
+  if (tgt->as_nvidia()->sm() < 80) {
+    std::vector<int> wpt_nm1;
+    do{
+      wpt_nm1 = wpt_;
+      if(wpt_[0] * wpt_[1] * wpt_[2] < num_warps)
+        wpt_[0] = clamp(wpt_[0]*2, 1, shape_[0] / spw_[0]);
+      if(wpt_[0] * wpt_[1] * wpt_[2] < num_warps)
+        wpt_[1] = clamp(wpt_[1]*2, 1, shape_[1] / spw_[1]);
+    }while(wpt_nm1 != wpt_);
+  } else {
+    bool changed = false;
+    // try to have a warp own entire rows of the output
+    // this makes it easier to fuse multiple mmas by fusing
+    // registers
+    bool one_warp_per_row = false;
+    for(ir::value* v: values)
+    for(ir::user* u: v->get_users()){
+      auto* dot = dynamic_cast<ir::dot_inst*>(u);
+      auto* cts = dynamic_cast<ir::copy_to_shared_inst*>(u);
+      if((dot && dot->get_operand(2)!=v) || !layout_a->to_shared() || cts)
+        one_warp_per_row = shape[0] / spw_[0] >= num_warps;
+    }
+    // std::cout << one_warp_per_row << std::endl;
+
+    if(one_warp_per_row){
+      wpt_[1] = 1;
+      wpt_[0] = num_warps;
+    }
+    else{
+      do {
+        changed = false;
+        if (wpt_[0] * wpt_[1] * wpt_[2] >= num_warps)
+          break;
+        if (shape_[0] / spw_[0] / wpt_[0] >= shape_[1] / (spw_[1]*2) / wpt_[1]) {
+          if (wpt_[0] < shape_[0] / spw_[0]) {
+            wpt_[0] *= 2;
+            changed = true;
+          }
+        } else {
+          if (wpt_[1] < shape_[1] / (spw_[1]*2)) {
+            wpt_[1] *= 2;
+            changed = true;
+          }
+        }
+      } while(changed);
+    }
+  }
+
+  // std::cout << wpt_[0] << " " << wpt_[1] << std::endl;
 
   /* shape per block */
   shape_per_cta_ = {spw_[0]*wpt_[0], spw_[1]*wpt_[1], 1};
@@ -198,8 +291,6 @@ scanline_layout::scanline_layout(size_t num_warps,
   bool is_dot = std::any_of(values.begin(), values.end(),
                             [&](ir::value* v) { return dynamic_cast<ir::dot_inst*>(v); });
 
-
-
   std::vector<ir::value*> ptrs;
   for(ir::value *v: values)
      for(ir::user *usr: v->get_users())
@@ -214,7 +305,6 @@ scanline_layout::scanline_layout(size_t num_warps,
     int nbits = ptr->get_type()->get_pointer_element_ty()->get_scalar_ty()->get_primitive_size_in_bits();
     contiguous = std::max<int>(contiguous, std::min<int>(align->get(ptr, i), 128 / nbits));
   }
-
 
   nts_[i] = clamp(size / num_threads, 1, std::min<int>(contiguous, shape_[i]));
   mts_[i] = clamp(num_threads, 1, shape_[i] / nts_[i]);
@@ -277,12 +367,16 @@ void shared_layout::extract_double_bufferable(ir::value *v, std::shared_ptr<doub
     res.reset(new double_buffer_info_t{value_1, value_0, phi});
 }
 
-static bool is_smem(ir::value* v) {
-  if (dynamic_cast<ir::copy_to_shared_inst*>(v) ||
-      dynamic_cast<ir::masked_load_async_inst*>(v))
-    return true;
-  else
-    return false;
+static bool is_smem_in(ir::value* v, const ir::basic_block* bb) {
+  if (ir::instruction *instr = dynamic_cast<ir::instruction*>(v)) {
+    if (instr->get_parent() != bb)
+      return false;
+    if (dynamic_cast<ir::copy_to_shared_inst*>(v) ||
+        dynamic_cast<ir::masked_load_async_inst*>(v)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /// param:
@@ -297,14 +391,14 @@ static bool is_multistage_pipe_phi(ir::phi_node* phi, ir::basic_block* bb0, ir::
     ir::basic_block *cbb0 = cphi->get_incoming_block(0);
     ir::basic_block *cbb1 = cphi->get_incoming_block(1);
 
-    if (is_smem(c0)) {
+    if (is_smem_in(c0, cbb0)) {
       assert(cbb0 == bb0);
       values_0.push_back(c0);
       if (auto phi1 = dynamic_cast<ir::phi_node*>(c1)) {
         next = phi1;
         continue;
       } else {
-        if (is_smem(c1)) {
+        if (is_smem_in(c1, cbb1)) {
           value_1 = c1;
           assert(cbb1 == bb1);
           return true;
@@ -359,7 +453,8 @@ shared_layout::shared_layout(data_layout *arg,
                                  const std::vector<unsigned>& shape,
                                  const std::vector<ir::value *> &values,
                                  ir::type *ty,
-                                 analysis::align* align): data_layout(SHARED, axes, shape, values, align), ty_(ty) {
+                                 analysis::align* align, target *tgt, bool is_tmp)
+    : data_layout(SHARED, axes, shape, values, align), ty_(ty), tgt_(tgt), is_tmp_(is_tmp){
 
   size_ = 0;
   arg_layout_ = arg;
@@ -385,11 +480,34 @@ shared_layout::shared_layout(data_layout *arg,
   for(ir::value* v: values){
     extract_dot_use(v, dot_a, 0);
     extract_dot_use(v, dot_b, 1);
-    extract_hmma_dot_use(v, hmma_dot_a, 0);
-    extract_hmma_dot_use(v, hmma_dot_b, 1);
+    extract_hmma_dot_use(v, hmma_dot_a, /*op*/0, tgt_->as_nvidia()->sm());
+    extract_hmma_dot_use(v, hmma_dot_b, /*op*/1, tgt_->as_nvidia()->sm());
   }
   hmma_dot_a_ = hmma_dot_a;
   hmma_dot_b_ = hmma_dot_b;
+
+  // Update mma_vec
+  if (hmma_dot_a_) {
+    assert(order_.size() == 2);
+    std::vector<int> mat_shape = mma_layout::mma_mat_shape_.at(get_mma_type(hmma_dot_a_));
+    mma_vec_     = order_[0] == 1 ? mat_shape[2] : mat_shape[0]; // k : m
+    mma_strided_ = order_[0] == 1 ? mat_shape[0] : mat_shape[2];
+
+    // for now, disable swizzle when using lds.8
+    if (get_mma_type(hmma_dot_a_) == mma_layout::INT32_INT8_INT8_INT32)
+      if (order_[0] == 0) // need transpose
+        allow_swizzle_ = false;
+  } else if (hmma_dot_b_) {
+    assert(order_.size() == 2);
+    std::vector<int> mat_shape = mma_layout::mma_mat_shape_.at(get_mma_type(hmma_dot_b_));
+    mma_vec_     = order_[0] == 1 ? mat_shape[1] : mat_shape[2]; // n : k
+    mma_strided_ = order_[0] == 1 ? mat_shape[2] : mat_shape[1];
+
+    // for now, disable swizzle when using lds.8
+    if (get_mma_type(hmma_dot_b_) == mma_layout::INT32_INT8_INT8_INT32)
+      if (order_[0] == 1) // need transpose
+        allow_swizzle_ = false;
+  }
 
   // size
   size_ = ty_->get_primitive_size_in_bits() / 8;
@@ -454,7 +572,8 @@ void layouts::make_graph(ir::instruction *i) {
 void layouts::create(size_t id, const std::vector<ir::value*>& values) {
 //  if(layouts_.find(id) != layouts_.end())
 //    return;
-  auto it_hmma_c = std::find_if(values.begin(), values.end(), &is_hmma_c);
+  auto it_hmma_c = std::find_if(values.begin(), values.end(), 
+                               [&](ir::value* v){ return is_hmma_c(v, tgt_->as_nvidia()->sm()); });
   auto cmp = [](ir::value* x, ir::value *y) {
     std::pair<int, int> xx = {x->get_type()->get_tile_rank(), x->get_type()->get_tile_num_elements()};
     std::pair<int, int> yy = {y->get_type()->get_tile_rank(), y->get_type()->get_tile_num_elements()};
@@ -476,16 +595,58 @@ void layouts::create(size_t id, const std::vector<ir::value*>& values) {
     ir::value *b = dot->get_operand(1);
     create(groups_.at(a), values_.at(groups_.at(a)));
     create(groups_.at(b), values_.at(groups_.at(b)));
-    layouts_[id] = new mma_layout(num_warps_, axes, shapes, values, align_, tgt_, (shared_layout*)layouts_.at(groups_.at(a)), (shared_layout*)layouts_.at(groups_.at(b)));
+    layouts_[id] = new mma_layout(num_warps_, axes, shapes, values, align_, tgt_, 
+                                  (shared_layout*)layouts_.at(groups_.at(a)), 
+                                  (shared_layout*)layouts_.at(groups_.at(b)),
+                                  dot);
   }
   else if(it_cts != values.end()){
     ir::instruction *cts = (ir::instruction*)*it_cts;
     ir::value *arg = cts->get_operand(0);
     create(groups_.at(arg), values_.at(groups_.at(arg)));
-    layouts_[id] = new shared_layout(get(arg), axes, shapes, values, largest->get_type()->get_scalar_ty(), align_);
+    layouts_[id] = new shared_layout(get(arg), axes, shapes, values, largest->get_type()->get_scalar_ty(), align_, tgt_);
   }
   else{
     layouts_[id] = new scanline_layout(num_warps_, axes, shapes, values, align_, tgt_);
+  }
+}
+
+// layout checkers
+bool layouts::is_scanline(ir::instruction *i) {
+  return this->get(i->get_operand(0))->to_scanline() != nullptr;
+}
+
+bool layouts::is_coalesced_scanline(ir::instruction *i) {
+  if (auto *red = dynamic_cast<ir::reduce_inst *>(i)) {
+    auto *scanline = this->get(i->get_operand(0))->to_scanline();
+    return scanline && scanline->get_order()[0] == red->get_axis();
+  }
+  return false;
+}
+
+bool layouts::is_mma(ir::instruction *i) {
+  return this->get(i->get_operand(0))->to_mma() != nullptr;
+}
+
+bool layouts::is_a100_mma(ir::instruction *i) {
+  if (auto *red = dynamic_cast<ir::reduce_inst *>(i)) {
+    return is_mma(red) && (tgt_->as_nvidia()->sm() >= 80) &&
+           (red->get_axis() == 1);
+  }
+  return false;
+}
+
+void layouts::create_tmp_layout(size_t id, data_layout *arg,
+                                const std::vector<int> &axes,
+                                const std::vector<unsigned> &shape,
+                                ir::instruction *i, bool is_index) {
+  ir::type *ty = is_index ? ir::type::get_int32_ty(i->get_type()->get_context())
+                          : i->get_type()->get_scalar_ty();
+  layouts_[id] = new shared_layout(arg, axes, shape, {i}, ty, align_, tgt_, true);
+  if (is_index) {
+    tmp_index_[i] = id;
+  } else {
+    tmp_[i] = id;
   }
 }
 
@@ -510,35 +671,47 @@ void layouts::run(ir::module &mod) {
   // create temporaries
   size_t id = values_.size();
   ir::for_each_instruction(mod, [this, &id](ir::instruction* i) {
+//    std::cout << "layout: " << std::endl;
+//    i->print(std::cout);
     if(auto *red = dynamic_cast<ir::reduce_inst*>(i)) {
-      id++;
       ir::value *arg = red->get_operand(0);
-      unsigned axis = red->get_axis();
+      distributed_layout *layout =
+          dynamic_cast<analysis::distributed_layout *>(get(arg));
       // shape
       auto shapes = arg->get_type()->get_block_shapes();
-      scanline_layout *layout = get(arg)->to_scanline();
-      shapes[axis] = layout->mts(axis);
+      unsigned axis = red->get_axis();
+      shapes[axis] =
+          layout->shape_per_cta(axis) / layout->contig_per_thread(axis);
       // create layout
-      layouts_[id] = new shared_layout(layout, axes_->get(arg), shapes, {red}, red->get_type()->get_scalar_ty(), align_);
-      tmp_[red] = id;
+      id++;
+      create_tmp_layout(id, layout, axes_->get(arg), shapes, red);
+
+      if (red->with_index()) {
+        id++;
+        create_tmp_layout(id, layout, axes_->get(arg), shapes, red, true);
+      }
     }
     if(auto *val = dynamic_cast<ir::cvt_layout_inst*>(i)){
       distributed_layout* out_layout = dynamic_cast<distributed_layout*>(get(val));
       distributed_layout* in_layout = dynamic_cast<distributed_layout*>(get(i->get_operand(0)));
-      id++;
       size_t dim = val->get_type()->get_tile_rank();
       ir::type::block_shapes_t shape(dim);
       for(size_t k = 0; k < dim; k++){
         shape[k] = std::max(in_layout->shape_per_cta(k),
                             out_layout->shape_per_cta(k));
       }
-      layouts_[id] = new shared_layout(out_layout, axes_->get(val), shape, {val}, val->get_type()->get_scalar_ty(), align_);
-      tmp_[val] = id;
+      auto in_ord = in_layout->get_order();
+      auto out_ord = out_layout->get_order();
+      int in_vec = in_layout->contig_per_thread(in_ord[0]);
+      int out_vec = out_layout->contig_per_thread(out_ord[0]);
+      int pad = std::max(in_vec, out_vec);
+      shape[out_ord[0]] += pad;
+      id++;
+      create_tmp_layout(id, out_layout, axes_->get(val), shape, val);
     }
     if(auto *atom = dynamic_cast<ir::atomic_inst*>(i)){
       id++;
-      layouts_[id] = new shared_layout(nullptr, {}, {1}, {atom}, atom->get_type()->get_scalar_ty(), align_);
-      tmp_[atom] = id;
+      create_tmp_layout(id, nullptr, {}, {1}, atom);
     }
   });
 

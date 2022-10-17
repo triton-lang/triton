@@ -1,7 +1,7 @@
-import os
+import torch
+
 import triton
 import triton.language as tl
-import torch
 
 
 def next_power_of_2(n):
@@ -23,11 +23,10 @@ def num_warps(N):
     return 16
 
 
-@triton.heuristics({'num_warps': lambda *args, **meta: num_warps(args[4])})
-@triton.heuristics({'BLOCK': lambda *args, **meta: next_power_of_2(args[4])})
+@triton.heuristics({'num_warps': lambda nargs: num_warps(nargs['N'])})
+@triton.heuristics({'BLOCK': lambda nargs: next_power_of_2(nargs['N'])})
 @triton.jit
-def _forward(LOGITS, PROBS, IDX, LOSS, N, **meta):
-    BLOCK = meta['BLOCK']
+def _forward(LOGITS, PROBS, IDX, LOSS, N, BLOCK: tl.constexpr):
     row = tl.program_id(0)
     cols = tl.arange(0, BLOCK)
     idx = tl.load(IDX + row)
@@ -49,11 +48,10 @@ def _forward(LOGITS, PROBS, IDX, LOSS, N, **meta):
     tl.store(LOSS + row, probs)
 
 
-@triton.heuristics({'num_warps': lambda *args, **meta: num_warps(args[3])})
-@triton.heuristics({'BLOCK': lambda *args, **meta: next_power_of_2(args[3])})
+@triton.heuristics({'num_warps': lambda nargs: num_warps(nargs['N'])})
+@triton.heuristics({'BLOCK': lambda nargs: next_power_of_2(nargs['N'])})
 @triton.jit
-def _backward(PROBS, IDX, DPROBS, N, **meta):
-    BLOCK = meta['BLOCK']
+def _backward(PROBS, IDX, DPROBS, N, BLOCK: tl.constexpr):
     row = tl.program_id(0)
     cols = tl.arange(0, BLOCK)
     idx = tl.load(IDX + row)
@@ -67,7 +65,7 @@ def _backward(PROBS, IDX, DPROBS, N, **meta):
     # write result in-place in PROBS
     dout = tl.load(DPROBS + row)
     din = (probs - delta) * dout
-    tl.store(PROBS, din.to(tl.float16), mask=cols < N)
+    tl.store(PROBS, din.to(PROBS.dtype.element_ty), mask=cols < N)
 
 
 class _cross_entropy(torch.autograd.Function):
@@ -96,11 +94,9 @@ class _cross_entropy(torch.autograd.Function):
         """
         # load saved tensors
         neg_logprobs, indices = ctx.saved_tensors
-        # make kernel
-        device, dtype = neg_logprobs.device, neg_logprobs.dtype
-        n_cols = neg_logprobs.shape[-1]
         # run the kernel
         # neg_logprobs will be modified in place to become our gradient:
+        n_cols = neg_logprobs.shape[-1]
         grid = lambda opt: (neg_logprobs.numel() // n_cols, )
         _backward[grid](neg_logprobs, indices, dneg_logprobs, n_cols)
         return neg_logprobs, None

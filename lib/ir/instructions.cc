@@ -5,6 +5,7 @@
 #include "triton/ir/instructions.h"
 #include "triton/ir/constant.h"
 #include "triton/ir/type.h"
+#include "triton/ir/function.h"
 
 namespace triton{
 namespace ir{
@@ -68,6 +69,7 @@ void phi_node::set_incoming_block(unsigned i, basic_block *block){
 
 // Add incoming
 void phi_node::add_incoming(value *v, basic_block *block){
+  assert(v && "PHI node got a null value!!");
   resize_ops(get_num_operands() + 1);
   blocks_.resize(get_num_operands() + 1);
   set_incoming_value(get_num_operands() - 1, v);
@@ -77,6 +79,70 @@ void phi_node::add_incoming(value *v, basic_block *block){
 // Factory methods
 phi_node* phi_node::create(type *ty, unsigned num_reserved, const std::string &name, instruction *next){
   return new phi_node(ty, num_reserved, name, next);
+}
+
+//===----------------------------------------------------------------------===//
+//                               call_inst classes
+//===----------------------------------------------------------------------===//
+
+std::string call_inst::repr_impl() const { return "call " + fn_->get_name(); }
+
+call_inst::call_inst(ir::function* fn, const std::vector<ir::value*>& values, const std::string& name, instruction* next)
+  : instruction(fn->get_fn_type()->get_return_ty(), INST_CALL, values.size(), name, next), fn_(fn){
+  for(size_t i = 0; i < values.size(); i++)
+    set_operand(i, values.at(i));
+}
+
+call_inst* call_inst::create(ir::function* fn, const std::vector<ir::value*>& values, const std::string &name, instruction *next) {
+  return new call_inst(fn, values, name, next);
+}
+
+
+// launch
+
+launch_inst::launch_inst(ir::function* fn, const std::vector<ir::value*>& values, const std::vector<ir::value*>& grid, ir::value* num_warps, const std::string& name, instruction* next)
+  : instruction(fn->get_fn_type()->get_return_ty(), INST_LAUNCH, 1 + values.size() + grid.size() + 1, name, next){
+  int k = 0;
+  if(grid.size() != 3)
+    throw std::runtime_error("grid must have 3 elements");
+  set_operand(k++, fn);
+  val_begin = k;
+  for(ir::value* v: values)
+    set_operand(k++, v);
+  val_end = k;
+  grid_begin = k;
+  for(ir::value* g: grid)
+    set_operand(k++, g);
+  grid_end = k;
+  set_operand(k++, num_warps);
+}
+
+
+ir::function* launch_inst::get_fn() {
+  return (ir::function*)get_operand(0);
+}
+
+std::vector<ir::value*> launch_inst::get_values() {
+  std::vector<ir::value*> ret;
+  for(int i = val_begin; i < val_end; i++)
+    ret.push_back(get_operand(i));
+  return ret;
+}
+
+std::vector<ir::value*> launch_inst::get_grid() {
+  std::vector<ir::value*> ret;
+  for(int i = grid_begin; i < grid_end; i++)
+    ret.push_back(get_operand(i));
+  return ret;
+}
+
+ir::value* launch_inst::get_num_warps() {
+  return get_operand(grid_end);
+}
+
+
+launch_inst* launch_inst::create(ir::function *fn, const std::vector<ir::value *> &values, const std::vector<ir::value *> &grid, ir::value *num_warps, const std::string &name, instruction *next) {
+ return new launch_inst(fn, values, grid, num_warps, name, next);
 }
 
 
@@ -134,7 +200,7 @@ bool binary_operator::is_int_add_sub() const {
 
 
 binary_operator::binary_operator(binary_op_t op, value *lhs, value *rhs, type *ty, const std::string &name, instruction *next)
-    : instruction(ty, INST_BINOP, 2, name, next), op_(op){
+    : instruction(ty, INST_BINOP, 2, name, next), op_(op), fdiv_ieee_rnd_(false){
   set_operand(0, lhs);
   set_operand(1, rhs);
 }
@@ -232,6 +298,7 @@ icmp_inst::icmp_inst(type *ty, cmp_pred_t pred,
 
 icmp_inst* icmp_inst::create(cmp_pred_t pred, value *lhs, value *rhs, const std::string &name, instruction *next){
   assert(is_int_predicate(pred));
+  assert(lhs->get_type() == rhs->get_type());
   type *res_ty = make_cmp_result_type(lhs->get_type());
   return new icmp_inst(res_ty, pred, lhs, rhs, name, next);
 }
@@ -254,6 +321,21 @@ fcmp_inst* fcmp_inst::create(cmp_pred_t pred, value *lhs, value *rhs, const std:
 unary_inst::unary_inst(type *ty, value_id_t id, value *v, const std::string &name, instruction *next)
     : instruction(ty, id, 1, name, next) {
   set_operand(0, v);
+}
+
+//===----------------------------------------------------------------------===//
+//                               dequantize_inst classes
+//===----------------------------------------------------------------------===//
+
+dequantize_inst::dequantize_inst(type *ty, value *v, value *scale, value *shift, const std::string &name, instruction *next)
+  : instruction(ty, INST_DEQUANTIZE, 3, name, next) {
+  set_operand(0, v);
+  set_operand(1, scale);
+  set_operand(2, shift);
+}
+
+dequantize_inst *dequantize_inst::create(value *arg, value *scale, value *shift, type *ty, const std::string &name, instruction *next){
+  return new dequantize_inst(ty, arg, scale, shift, name, next);
 }
 
 //===----------------------------------------------------------------------===//
@@ -311,8 +393,8 @@ cast_inst *cast_inst::create_integer_cast(value *arg, type *ty, bool is_signed, 
   unsigned arg_bits = arg_ty->get_scalar_ty()->get_integer_bitwidth();
   unsigned dst_bits = ty->get_scalar_ty()->get_integer_bitwidth();
   cast_op_t op = (arg_bits == dst_bits ? cast_op_t::BitCast :
-            (arg_bits > dst_bits  ? cast_op_t::Trunc :
-            (is_signed            ? cast_op_t::SExt : cast_op_t::ZExt)));
+                   (arg_bits > dst_bits  ? cast_op_t::Trunc :
+                   (is_signed            ? cast_op_t::SExt : cast_op_t::ZExt)));
   return create(op, arg, ty, name, next);
 }
 
@@ -323,7 +405,7 @@ cast_inst *cast_inst::create_integer_cast(value *arg, type *ty, bool is_signed, 
 
 // return_inst
 return_inst::return_inst(context &ctx, value *ret_val, instruction *next)
-    : terminator_inst(type::get_void_ty(ctx), INST_RETURN, ret_val!=nullptr, "", next){
+    : terminator_inst(ret_val?ret_val->get_type():type::get_void_ty(ctx), INST_RETURN, ret_val!=nullptr, "", next){
   if(ret_val)
     set_operand(0, ret_val);
 }
@@ -428,13 +510,13 @@ getelementptr_inst *getelementptr_inst::create(value *ptr, const std::vector<val
 //===----------------------------------------------------------------------===//
 
 // io_inst
-io_inst::io_inst(type *ty, value_id_t id, unsigned num_ops, const std::string &name, instruction *next)
-  : instruction(ty, id, num_ops, name, next)
+io_inst::io_inst(type *ty, value_id_t id, unsigned num_ops, EVICTION_POLICY eviction, const std::string &name, instruction *next)
+  : instruction(ty, id, num_ops, name, next), eviction_(eviction)
 { }
 
 // load_inst
-load_inst::load_inst(value *ptr, value_id_t id, unsigned num_ops, load_inst::CACHE_MODIFIER cache, const std::string &name, instruction *next)
-  : io_inst(get_pointee_type(ptr->get_type()), id, num_ops, name, next), cache_(cache)
+load_inst::load_inst(value *ptr, value_id_t id, unsigned num_ops, load_inst::CACHE_MODIFIER cache, EVICTION_POLICY eviction, bool is_volatile, const std::string &name, instruction *next)
+  : io_inst(get_pointee_type(ptr->get_type()), id, num_ops, eviction, name, next), cache_(cache), is_volatile_(is_volatile)
 { }
 
 // load
@@ -447,77 +529,110 @@ type *load_inst::get_pointee_type(type *ty) {
 }
 
 // unmasked_load
-unmasked_load_inst::unmasked_load_inst(value *ptr, load_inst::CACHE_MODIFIER cache, const std::string &name, instruction *next)
-  : load_inst(ptr, INST_UNMASKED_LOAD, 1, cache, name, next) {
+unmasked_load_inst::unmasked_load_inst(value *ptr, load_inst::CACHE_MODIFIER cache,load_inst::EVICTION_POLICY eviction, bool is_volatile, const std::string &name, instruction *next)
+  : load_inst(ptr, INST_UNMASKED_LOAD, 1, cache, eviction, is_volatile, name, next) {
   set_operand(0, ptr);
 }
 
-unmasked_load_inst* unmasked_load_inst::create(value *ptr, load_inst::CACHE_MODIFIER cache, const std::string &name, instruction *next) {
-  return new unmasked_load_inst(ptr, cache, name, next);
+unmasked_load_inst* unmasked_load_inst::create(value *ptr, load_inst::CACHE_MODIFIER cache, load_inst::EVICTION_POLICY eviction, bool is_volatile, const std::string &name, instruction *next) {
+  return new unmasked_load_inst(ptr, cache, eviction, is_volatile, name, next);
 }
 
 // masked load
-masked_load_inst::masked_load_inst(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache,
+masked_load_inst::masked_load_inst(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache, load_inst::EVICTION_POLICY eviction,
+                                   bool is_volatile,
                                    const std::string &name, instruction *next)
-  : load_inst(ptr, INST_MASKED_LOAD, 3, cache, name, next) {
+  : load_inst(ptr, INST_MASKED_LOAD, 3, cache, eviction, is_volatile, name, next) {
   set_operand(0, ptr);
   set_operand(1, mask);
   set_operand(2, false_value);
 }
 
 masked_load_inst* masked_load_inst::create(value *ptr, value *mask, value *false_value,
-                                           load_inst::CACHE_MODIFIER cache,
+                                           load_inst::CACHE_MODIFIER cache, load_inst::EVICTION_POLICY eviction,
+                                           bool is_volatile,
                                            const std::string &name, instruction *next) {
-  return new masked_load_inst(ptr, mask, false_value, cache, name, next);
+  return new masked_load_inst(ptr, mask, false_value, cache, eviction, is_volatile, name, next);
 }
 
 // masked load async
 masked_load_async_inst::masked_load_async_inst(value *ptr, value *mask, value *false_value,
-                                   load_inst::CACHE_MODIFIER cache,
+                                   load_inst::CACHE_MODIFIER cache, load_inst::EVICTION_POLICY eviction,
                                    const std::string &name, instruction *next)
-  : load_inst(ptr, INST_MASKED_LOAD_ASYNC, 3, cache, name, next) {
+  : load_inst(ptr, INST_MASKED_LOAD_ASYNC, 3, cache, eviction, false, name, next) {
   set_operand(0, ptr);
   set_operand(1, mask);
   set_operand(2, false_value);
 }
 
 masked_load_async_inst* masked_load_async_inst::create(value *ptr, value *mask, value *false_value,
-                                           load_inst::CACHE_MODIFIER cache,
+                                           load_inst::CACHE_MODIFIER cache, EVICTION_POLICY eviction,
                                            const std::string &name, instruction *next) {
-  return new masked_load_async_inst(ptr, mask, false_value, cache, name, next);
+  return new masked_load_async_inst(ptr, mask, false_value, cache, eviction, name, next);
 }
 
 // store
 
-store_inst::store_inst(value *ptr, value_id_t id, unsigned num_ops, const std::string &name, instruction *next)
-  : io_inst(type::get_void_ty(ptr->get_type()->get_context()), id, num_ops, name, next)
+store_inst::store_inst(value *ptr, value_id_t id, unsigned num_ops, EVICTION_POLICY eviction, const std::string &name, instruction *next)
+  : io_inst(type::get_void_ty(ptr->get_type()->get_context()), id, num_ops, eviction, name, next)
 { }
 
 // unmasked_store
-unmasked_store_inst::unmasked_store_inst(value *ptr, value *val,
+unmasked_store_inst::unmasked_store_inst(value *ptr, value *val, EVICTION_POLICY eviction,
                                          const std::string &name, instruction *next)
-    : store_inst(ptr, INST_UNMASKED_STORE, 2, name, next)  {
+    : store_inst(ptr, INST_UNMASKED_STORE, 2, eviction, name, next)  {
   set_operand(0, ptr);
   set_operand(1, val);
 }
 
-unmasked_store_inst* unmasked_store_inst::create(value *ptr, value *val,
+unmasked_store_inst* unmasked_store_inst::create(value *ptr, value *val, EVICTION_POLICY eviction,
                                                  const std::string &name, instruction *next) {
-  return new unmasked_store_inst(ptr, val, name, next);
+  return new unmasked_store_inst(ptr, val, eviction, name, next);
 }
 
 // masked store
-masked_store_inst::masked_store_inst(value *ptr, value *val, value *mask,
+masked_store_inst::masked_store_inst(value *ptr, value *val, value *mask, EVICTION_POLICY eviction,
                                      const std::string &name, instruction *next)
-  : store_inst(ptr, INST_MASKED_STORE, 3, name, next) {
+  : store_inst(ptr, INST_MASKED_STORE, 3, eviction, name, next) {
   set_operand(0, ptr);
   set_operand(1, val);
   set_operand(2, mask);
 }
 
-masked_store_inst* masked_store_inst::create(value *ptr, value *val, value *mask, const std::string &name, instruction *next)  {
-  return new masked_store_inst(ptr, val, mask, name, next);
+masked_store_inst* masked_store_inst::create(value *ptr, value *val, value *mask, EVICTION_POLICY eviction,
+                                             const std::string &name, instruction *next)  {
+  return new masked_store_inst(ptr, val, mask, eviction, name, next);
 }
+
+//===----------------------------------------------------------------------===//
+//                               struct classes
+//===----------------------------------------------------------------------===//
+
+// insert value
+
+insert_value_inst::insert_value_inst(value *val, value *elt, size_t idx, const std::string& name, instruction *next)
+  : instruction(val->get_type(), INST_INSERT_VALUE, 2, name, next), idx_(idx) {
+  set_operand(0, val);
+  set_operand(1, elt);
+}
+
+insert_value_inst* insert_value_inst::create(value *val, value *elt, size_t idx, const std::string& name, instruction *next){
+  return new insert_value_inst(val, elt, idx, name, next);
+}
+
+
+// extract value
+
+extract_value_inst::extract_value_inst(value *val, size_t idx, const std::string& name, instruction *next)
+  : instruction(val->get_type()->get_struct_type(idx), INST_EXTRACT_VALUE, 1, name, next), idx_(idx) {
+  set_operand(0, val);
+}
+
+extract_value_inst* extract_value_inst::create(value *val, size_t idx, const std::string& name, instruction *next){
+  return new extract_value_inst(val, idx, name, next);
+}
+
+
 //===----------------------------------------------------------------------===//
 //                               retile_inst classes
 //===----------------------------------------------------------------------===//
@@ -572,44 +687,48 @@ instruction* downcast_inst::create(value *arg, const std::string &name, instruct
   return new downcast_inst(arg->get_type()->get_scalar_ty(), INST_DOWNCAST, arg, name, next);
 }
 
+
+
+
 //===----------------------------------------------------------------------===//
 //                               matmul_inst classes
 //===----------------------------------------------------------------------===//
 
-dot_inst::dot_inst(value *A, value *B, value *C, TransT AT, TransT BT,
+dot_inst::dot_inst(value *A, value *B, value *C, TransT AT, TransT BT, bool allow_tf32,
                          const std::string &name, instruction *next)
-    : builtin_inst(C->get_type(), INST_DOT, 3, name, next) {
+    : builtin_inst(C->get_type(), INST_DOT, 3, name, next), AT_(AT), BT_(BT){
   set_operand(0, A);
   set_operand(1, B);
   set_operand(2, C);
+  allow_tf32_ = allow_tf32;
 }
 
 instruction *dot_inst::create(value *A, value *B, value *C,
-                              bool AT, bool BT,
+                              bool AT, bool BT, bool allow_tf32,
                               const std::string &name, instruction *next) {
   TransT OPA = AT ? Trans : NoTrans;
   TransT OPB = BT ? Trans : NoTrans;
-  return new dot_inst(A, B, C, OPA, OPB, name, next);
+  return new dot_inst(A, B, C, OPA, OPB, allow_tf32, name, next);
 }
 
-instruction *dot_inst::create_nn(value *A, value *B, value *C,
+instruction *dot_inst::create_nn(value *A, value *B, value *C, bool allow_tf32,
                                  const std::string &name, instruction *next) {
-  return new dot_inst(A, B, C, NoTrans, NoTrans, name, next);
+  return new dot_inst(A, B, C, NoTrans, NoTrans, allow_tf32, name, next);
 }
 
-instruction *dot_inst::create_nt(value *A, value *B, value *C,
+instruction *dot_inst::create_nt(value *A, value *B, value *C, bool allow_tf32,
                                  const std::string &name, instruction *next) {
-  return new dot_inst(A, B, C, NoTrans, Trans, name, next);
+  return new dot_inst(A, B, C, NoTrans, Trans, allow_tf32, name, next);
 }
 
-instruction *dot_inst::create_tn(value *A, value *B, value *C,
+instruction *dot_inst::create_tn(value *A, value *B, value *C, bool allow_tf32,
                                  const std::string &name, instruction *next) {
-  return new dot_inst(A, B, C, Trans, NoTrans, name, next);
+  return new dot_inst(A, B, C, Trans, NoTrans, allow_tf32, name, next);
 }
 
-instruction *dot_inst::create_tt(value *A, value *B, value *C,
+instruction *dot_inst::create_tt(value *A, value *B, value *C, bool allow_tf32,
                                  const std::string &name, instruction *next) {
-  return new dot_inst(A, B, C, Trans, Trans, name, next);
+  return new dot_inst(A, B, C, Trans, Trans, allow_tf32, name, next);
 }
 
 //===----------------------------------------------------------------------===//
@@ -857,8 +976,7 @@ copy_from_shared_inst* copy_from_shared_inst::create(value *arg, const std::stri
 }
 
 // barrier
-barrier_inst::barrier_inst(context &ctx, const std::string &name,
-                                                       instruction *next)
+barrier_inst::barrier_inst(context &ctx, const std::string &name, instruction *next)
   : instruction(type::get_void_ty(ctx), INST_BARRIER, 0, name, next) { }
 
 barrier_inst* barrier_inst::create(context &ctx, const std::string &name, instruction *next) {
@@ -877,27 +995,44 @@ prefetch_s_inst *prefetch_s_inst::create(context &ctx, value *arg, int inc, cons
   return new prefetch_s_inst(ctx, arg, inc, name, next);
 }
 
-//// nv_dynamic_program_idx
-//make_range_dyn::make_range_dyn(type *ty, const std::string &name, instruction *next)
-//  : instruction(ty, INST_MAKE_RANGE_DYN, 0, name, next) { }
+// global timer
+globaltimer_inst::globaltimer_inst(context &ctx, const std::string &name, instruction *next)
+  : instruction(type::get_int64_ty(ctx), INST_GLOBALTIMER, 0, name, next) { }
 
-//make_range_dyn* make_range_dyn::create(type *ty, const std::string &name, instruction *next) {
-//  return new make_range_dyn(ty, name, next);
-//}
+globaltimer_inst* globaltimer_inst::create(context &ctx, const std::string &name, instruction *next) {
+  return new globaltimer_inst(ctx, name, next);
+}
 
-//// nv_static_program_idx
-//make_range_sta::make_range_sta(make_range *range)
-//  : constant(range->get_type(), 0), range_(range) { }
+// extern elementwise
+extern_elementwise_inst::extern_elementwise_inst(
+    context &ctx, const std::vector<value *> &args, type *ret_ty,
+    const std::string &lib_name, const std::string &lib_path,
+    const std::string &symbol_name, const std::string &name, instruction *next)
+    : instruction(ret_ty, INST_EXTERN_ELEMENTWISE, args.size(), name, next),
+      lib_name_(lib_name),
+      lib_path_(lib_path),
+      symbol_name_(symbol_name) {
+  for (size_t i = 0; i < args.size(); i++) {
+    set_operand(i, args[i]);
+  }
+}
 
-//make_range* make_range_sta::get_range() const
-//{ return range_; }
+extern_elementwise_inst *extern_elementwise_inst::create(
+    context &ctx, const std::vector<value *> &args, type *ret_ty,
+    const std::string &lib_name, const std::string &lib_path,
+    const std::string &symbol_name, const std::string &name,
+    instruction *next) {
+  return new extern_elementwise_inst(ctx, args, ret_ty, lib_name, lib_path,
+                                     symbol_name, name, next);
+}
 
-//make_range_sta* make_range_sta::get(make_range* range) {
-//  static std::map<make_range*, make_range_sta*> cache;
-//  if(cache.find(range) == cache.end())
-//    cache.insert({range, new make_range_sta(range)});
-//  return cache.at(range);
-//}
+// clock
+clock_inst::clock_inst(context &ctx, const std::string &name, instruction *next)
+  : instruction(type::get_int64_ty(ctx), INST_CLOCK, 0, name, next) { }
+
+clock_inst* clock_inst::create(context &ctx, const std::string &name, instruction *next) {
+  return new clock_inst(ctx, name, next);
+}
 
 
 // make_range
@@ -919,8 +1054,6 @@ const constant_int* make_range::get_first() const {
 const constant_int* make_range::get_last() const {
   return last_;
 }
-
-
 
 }
 }

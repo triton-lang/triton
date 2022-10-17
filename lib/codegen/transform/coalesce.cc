@@ -12,46 +12,11 @@ namespace triton {
 namespace codegen{
 namespace transform{
 
-coalesce::coalesce(analysis::align* align, analysis::layouts *layouts)
-  : align_(align), layout_(layouts) { }
-
-
-// simplify layout conversions using the following simple rules:
-//   - cvt_1(cvt_2(x)) if convert1 is the inverse of convert2
-//   - cvt_1(elementwise(x, y)) = elementwise(convert(x), convert(y))
-//ir::value* coalesce::simplify(ir::instruction *inst, ir::builder& builder){
-//  ir::value* _op = inst->get_operand(0);
-//  ir::instruction* op = dynamic_cast<ir::instruction*>(_op);
-//  analysis::mma_layout* mma_in  = layout_->get(op)  ->to_mma();
-//  analysis::mma_layout* mma_out = layout_->get(inst)->to_mma();
-//  std::cout << 1 << std::endl;
-//  // i must be layout conversion instruction
-//  if(!mma_in && !mma_out)
-//    return inst;
-//  //   - cvt_1(cvt_2(x)) if convert1 is the inverse of convert2
-//  bool is_op_cvt = op->get_id() == ir::INST_CVT_LAYOUT;
-//  if((mma_in || mma_out) && is_op_cvt &&
-//     (layout_->get(inst) == layout_->get(op->get_operand(0))))
-//    return op->get_operand(0);
-//  //   - cvt_1(elementwise(x, y)) = elementwise(cvt_1(x), cvt_2(y))
-//  if(op->get_id() != ir::INST_BINOP && op->get_id() != ir::INST_GETELEMENTPTR)
-//    return inst;
-//  std::cout << 1 << std::endl;
-//  for(size_t i = 0; i < op->get_num_operands(); i++){
-//    ir::value* arg_i = op->get_operand(i);
-//    builder.set_insert_point(op);
-//    // create new layout transform
-//    ir::instruction* new_arg_i = inst->clone();
-//    builder.insert(new_arg_i);
-//    // set the right args
-//    new_arg_i->replace_uses_of_with(new_arg_i->get_operand(0), arg_i);
-//    op->replace_uses_of_with(arg_i, simplify(new_arg_i, builder));
-//  }
-//  std::cout << 2 << std::endl;
-//  return op;
-//}
+coalesce::coalesce(analysis::align* align, analysis::layouts *layouts, bool has_sm80)
+  : align_(align), layout_(layouts), has_sm80_(has_sm80) { }
 
 void coalesce::run(ir::module &mod) {
+  std::set<analysis::data_layout*> invalidated;
   ir::builder& builder = mod.get_builder();
   // add layout conversion instructions
   for(ir::function *fn: mod.get_function_list())
@@ -61,23 +26,43 @@ void coalesce::run(ir::module &mod) {
     if(dynamic_cast<ir::store_inst*>(i) || dynamic_cast<ir::atomic_rmw_inst*>(i))
     if(ir::value* op = i->get_operand(1))
     if(op->get_type()->is_block_ty())
-    if(layout_->get(op)->to_mma()){
+    if(op->get_type()->get_tile_ranks1() == 2)
+    if(invalidated.find(layout_->get(op)) == invalidated.end())
+    if(layout_->get(op)->to_mma())
+    if(dynamic_cast<ir::io_inst*>(i)->get_eviction_policy()==ir::io_inst::NORMAL){
       ir::instruction* new_op = ir::cvt_layout_inst::create(op);
       builder.set_insert_point(i);
       builder.insert(new_op);
       i->replace_uses_of_with(op, new_op);
     }
+    // coalesce before copy_to_shared
+    // only necessary for sm < 80 as Ampere+ can handle reduction
+    // on MMA layout
+    if(!has_sm80_)
+    if(dynamic_cast<ir::copy_to_shared_inst*>(i) || dynamic_cast<ir::reduce_inst*>(i))
+    if(ir::value* op = i->get_operand(0))
+    if(op->get_type()->is_block_ty())
+    if(op->get_type()->get_tile_ranks1() == 2)
+    if(invalidated.find(layout_->get(op)) == invalidated.end())
+    if(layout_->get(op)->to_mma()){
+      ir::instruction* new_op = ir::cvt_layout_inst::create(op);
+      builder.set_insert_point(i);
+      builder.insert(new_op);
+      op->replace_all_uses_with(new_op);
+      new_op->replace_uses_of_with(new_op, op);
+      invalidated.insert(layout_->get(op));
+    }
     // uncoalesce after load
     if(auto x = dynamic_cast<ir::load_inst*>(i))
     if(x->get_type()->is_block_ty())
-    if(x->get_type()->get_tile_rank()==2)
-    if(layout_->get(x)->to_mma()){
+    if(x->get_type()->get_tile_ranks1()==2)
+    if(layout_->get(x)->to_mma())
+    if(!has_sm80_ || dynamic_cast<ir::io_inst*>(i)->get_eviction_policy()==ir::io_inst::NORMAL){
         builder.set_insert_point_after(x);
         ir::instruction* new_x = ir::cvt_layout_inst::create(x);
         builder.insert(new_x);
         x->replace_all_uses_with(new_x);
         new_x->replace_uses_of_with(new_x, x);
-//        new_x->replace_uses_of_with(new_x, new_x);
     }
   }
   for(ir::function *fn: mod.get_function_list())
@@ -90,9 +75,11 @@ void coalesce::run(ir::module &mod) {
       auto out_contig = align_->contiguous(ptr);
       auto val_inst = dynamic_cast<ir::instruction*>(val);
       if(!val_inst)
-        break;
+        continue;
       if(dynamic_cast<ir::cvt_layout_inst*>(val))
-        break;
+        continue;
+      if(!val->get_type()->is_block_ty() || val->get_type()->get_tile_ranks1()==1)
+        continue;
       std::vector<unsigned> in_contig;
       std::vector<ir::instruction*> queue = {val_inst};
       std::set<ir::instruction*> seen;
@@ -101,6 +88,8 @@ void coalesce::run(ir::module &mod) {
         ir::instruction* curr = queue.back();
         seen.insert(curr);
         queue.pop_back();
+        if(auto dot_inst = dynamic_cast<ir::dot_inst*>(curr))
+          break;
         if(auto io_inst = dynamic_cast<ir::io_inst*>(curr)){
           in_contig = align_->contiguous(io_inst->get_pointer_operand());
           break;

@@ -34,15 +34,18 @@ def process_sig(app, what, name, obj, options, signature, return_annotation):
 def setup(app):
     """Customize function args retrieving to get args under decorator."""
     import sphinx
-    import triton
+    import os
 
     app.connect("autodoc-process-signature", process_sig)
+    os.system("pip install -e ../python")
+
 
     def forward_jit_fn(func):
         old = func
 
         def wrapped(obj, **kwargs):
-            if isinstance(obj, triton.code_gen.JITFunction):
+            import triton
+            if isinstance(obj, triton.runtime.JITFunction):
                 obj = obj.fn
             return old(obj)
 
@@ -52,7 +55,8 @@ def setup(app):
     old_documenter = sphinx.ext.autosummary.get_documenter
 
     def documenter(app, obj, parent):
-        if isinstance(obj, triton.code_gen.JITFunction):
+        import triton
+        if isinstance(obj, triton.runtime.JITFunction):
             obj = obj.fn
         return old_documenter(app, obj, parent)
 
@@ -66,8 +70,16 @@ def setup(app):
 import sys
 import os
 sys.path.insert(0, os.path.abspath('../python/'))
-extensions = ['sphinx.ext.autodoc', 'sphinx.ext.intersphinx', 'sphinx.ext.autosummary', 'sphinx.ext.coverage', 'sphinx.ext.napoleon']
+extensions = ['sphinx.ext.autodoc', 'sphinx.ext.intersphinx', 'sphinx.ext.autosummary', 'sphinx.ext.coverage', 'sphinx.ext.napoleon', 'sphinx_multiversion']
 autosummary_generate = True
+
+# versioning config
+smv_tag_whitelist = r'^(v1.1.2)$'
+smv_branch_whitelist = r'^master$'
+smv_remote_whitelist = None
+smv_released_pattern = r'^tags/.*$'
+smv_outputdir_format = '{ref.name}'
+smv_prefer_remote_refs = False
 
 # Sphinx gallery
 extensions += ['sphinx_gallery.gen_gallery']
@@ -85,6 +97,11 @@ sphinx_gallery_conf = {
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
+html_sidebars = {
+    '**': [
+        '_templates/versions.html',
+    ],
+}
 
 # The suffix(es) of source filenames.
 # You can specify multiple suffix as a list of string:

@@ -56,6 +56,17 @@ void axes::update_graph_trans(ir::instruction *i) {
     graph_.add_edge({i, perm[d]}, {op, d});
 }
 
+void axes::update_graph_dequantize(ir::instruction *i) {
+  auto *dequantize = static_cast<ir::dequantize_inst*>(i);
+  auto shapes = dequantize->get_type()->get_block_shapes();
+  ir::value *op = dequantize->get_operand(0);
+
+  // add edge except the last axis
+  for(unsigned d = 0; d < shapes.size() - 1; d ++){
+    graph_.add_edge({i, d}, {op, d});
+  }
+}
+
 void axes::update_graph_broadcast(ir::instruction *i) {
   auto *broadcast = static_cast<ir::broadcast_inst*>(i);
   auto shapes = broadcast->get_type()->get_block_shapes();
@@ -79,7 +90,7 @@ void axes::update_graph_dot(ir::instruction *i) {
     graph_.add_edge({dot, d}, {D, d});
 }
 
-void axes::update_graph_elementwise(ir::instruction *i, 
+void axes::update_graph_elementwise(ir::instruction *i,
                                     bool is_masked_load_async) {
   if(i->get_num_operands() == 0)
     return;
@@ -119,6 +130,7 @@ void axes::update_graph(ir::instruction *i) {
     case ir::INST_SPLAT:             return update_graph_no_edge(i);
     case ir::INST_CAT:               return update_graph_elementwise(i, true);
     case ir::INST_TRANS:             return update_graph_trans(i);
+    case ir::INST_DEQUANTIZE:        return update_graph_dequantize(i);
     case ir::INST_BROADCAST:         return update_graph_broadcast(i);
     case ir::INST_DOT:               return update_graph_dot(i);
     case ir::INST_COPY_TO_SHARED:    return update_graph_no_edge(i);
