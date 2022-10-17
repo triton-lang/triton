@@ -195,26 +195,33 @@ mlir::LogicalResult mlir::triton::ReduceOp::inferReturnTypes(
   // infer shape
   Value arg = operands[0];
   auto argTy = arg.getType().cast<RankedTensorType>();
+  auto argEltTy = argTy.getElementType();
   auto retShape = argTy.getShape().vec();
   int axis = attributes.get("axis").cast<IntegerAttr>().getInt();
   retShape.erase(retShape.begin() + axis);
-  // infer encoding
-  Attribute argEncoding = argTy.getEncoding();
-  Attribute retEncoding;
-  if (argEncoding) {
-    Dialect &dialect = argEncoding.getDialect();
-    auto inferLayoutInterface = dyn_cast<DialectInferLayoutInterface>(&dialect);
-    if (inferLayoutInterface
-            ->inferReduceOpEncoding(argEncoding, axis, retEncoding)
-            .failed()) {
-      llvm::report_fatal_error("failed to infer layout for ReduceOp");
-      return mlir::failure();
+  if (retShape.empty()) {
+    // 0d-tensor -> scalar
+    inferredReturnTypes.push_back(argEltTy);
+  } else {
+    // nd-tensor where n >= 1
+    // infer encoding
+    Attribute argEncoding = argTy.getEncoding();
+    Attribute retEncoding;
+    if (argEncoding) {
+      Dialect &dialect = argEncoding.getDialect();
+      auto inferLayoutInterface =
+          dyn_cast<DialectInferLayoutInterface>(&dialect);
+      if (inferLayoutInterface
+              ->inferReduceOpEncoding(argEncoding, axis, retEncoding)
+              .failed()) {
+        llvm::report_fatal_error("failed to infer layout for ReduceOp");
+        return mlir::failure();
+      }
     }
+    // create type
+    inferredReturnTypes.push_back(
+        RankedTensorType::get(retShape, argEltTy, retEncoding));
   }
-  // create type
-  auto argEltTy = argTy.getElementType();
-  inferredReturnTypes.push_back(
-      RankedTensorType::get(retShape, argEltTy, retEncoding));
   return mlir::success();
 }
 

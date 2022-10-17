@@ -317,7 +317,7 @@ def TT_ReduceOp : TT_Op<"reduce", [NoSideEffect,
 
     let arguments = (ins TT_RedOpAttr:$redOp, TT_Tensor:$operand, I32Attr:$axis);
 
-    let results = (outs TT_Tensor:$result);
+    let results = (outs TT_Type:$result);
 
     let builders = [
         OpBuilder<(ins "triton::RedOp":$redOp, "Value":$operand, "int":$axis)>,
