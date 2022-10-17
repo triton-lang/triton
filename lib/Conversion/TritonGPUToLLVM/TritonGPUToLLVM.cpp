@@ -2447,7 +2447,7 @@ struct DotOpConversionHelper {
     return {};
   }
 
-  void deduceMmaType(DotOp op) { mmaType = getMmaType(op); }
+  void deduceMmaType(DotOp op) const { mmaType = getMmaType(op); }
 
   Type getShemPtrTy() const {
     switch (mmaType) {
@@ -2591,7 +2591,7 @@ struct DotOpConversionHelper {
   }
 
 private:
-  TensorCoreType mmaType;
+  mutable TensorCoreType mmaType;
 
   // Used on nvidia GPUs mma layout .version == 2
   // Refer to
@@ -2684,7 +2684,6 @@ struct MMA16816ConversionHelper {
       : mmaLayout(mmaLayout), helper(mmaLayout), rewriter(rewriter),
         typeConverter(typeConverter), loc(loc), ctx(mmaLayout.getContext()),
         thread(thread) {
-
     wpt = mmaLayout.getWarpsPerCTA();
 
     auto mmaInstrShape = helper.getMmaInstrShape();
@@ -2783,6 +2782,8 @@ struct MMA16816ConversionHelper {
     Value b = op.b();
     Value c = op.c();
     Value d = op.d();
+
+    helper.deduceMmaType(op);
 
     auto aTensorTy = a.getType().cast<RankedTensorType>();
     auto bTensorTy = b.getType().cast<RankedTensorType>();
