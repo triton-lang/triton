@@ -269,100 +269,95 @@ namespace triton
     /* ------------------------ */
     //         HIP              //
     /* ------------------------ */
-
     std::string llir_to_amdgpu(llvm::Module *module, const std::string &_proc)
     {
       init_llvm();
+      // proc = std::get<0>(GetFeatureStrFromGCNArchName(rocminfo));
+      // features = std::get<1>(GetFeatureStrFromGCNArchName(rocminfo));
 
-      //  proc = std::get<0>(GetFeatureStrFromGCNArchName(rocminfo));
-      //  features = std::get<1>(GetFeatureStrFromGCNArchName(rocminfo));
+      // create
+      llvm::SmallVector<char, 0> buffer;
+      std::string triple = "amdgcn-amd-amdhsa";
+      std::string layout = "";
+      std::string features = "+sramecc,-xnack";
+      std::string proc = STRINGIFY(MI_GPU_ARCH);
+      // name kernel
+      auto in_time_t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+      std::stringstream cur_time;
+      cur_time << std::put_time(std::localtime(&in_time_t), "%Y-%m-%d--%I-%M-%S");
+      std::string kernel_name = module->getModuleIdentifier() + "_" + cur_time.str();
+      // verify and store llvm
+      llvm::legacy::PassManager pm;
+      pm.add(llvm::createVerifierPass());
+      pm.run(*module);
+      // create machine
+      module->setTargetTriple(triple);
+      std::string error;
+      auto target = llvm::TargetRegistry::lookupTarget(module->getTargetTriple(), error);
+      llvm::TargetOptions opt;
+      opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
+      opt.UnsafeFPMath = false;
+      opt.NoInfsFPMath = false;
+      opt.NoNaNsFPMath = true;
+      llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), proc, features, opt,
+                                                                 llvm::Reloc::PIC_, llvm::None,
+                                                                 llvm::CodeGenOpt::None);
+      // set data layout
+      if (layout.empty())
+        module->setDataLayout(machine->createDataLayout());
+      else
+        module->setDataLayout(layout);
+      // emit machine code
+      for (llvm::Function &f : module->functions())
+        f.addFnAttr(llvm::Attribute::AlwaysInline);
+      llvm::legacy::PassManager pass;
+      llvm::raw_svector_ostream stream(buffer);
 
-  // create
-  llvm::SmallVector<char, 0> buffer;
-  std::string triple = "amdgcn-amd-amdhsa";
-  std::string layout = "";
-  std::string features="+sramecc,-xnack";
-  std::string proc = STRINGIFY(MI_GPU_ARCH);
-  // name kernel
-  auto in_time_t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-  std::stringstream cur_time;
-  cur_time << std::put_time(std::localtime(&in_time_t), "%Y-%m-%d--%I-%M-%S");
-  std::string kernel_name = module->getModuleIdentifier() + "_" + cur_time.str();
-  // verify and store llvm
-  llvm::legacy::PassManager pm;
-  pm.add(llvm::createVerifierPass());
-  pm.run(*module);
-  // create machine
-  module->setTargetTriple(triple);
-  std::string error;
-  auto target = llvm::TargetRegistry::lookupTarget(module->getTargetTriple(), error);
-  llvm::TargetOptions opt;
-  opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
-  opt.UnsafeFPMath = false;
-  opt.NoInfsFPMath = false;
-  opt.NoNaNsFPMath = true;
-  llvm::TargetMachine *machine = target->createTargetMachine(module->getTargetTriple(), proc, features, opt,
-                                                             llvm::Reloc::PIC_, llvm::None,
-                                                             llvm::CodeGenOpt::None);
-  // set data layout
-  if(layout.empty())
-    module->setDataLayout(machine->createDataLayout());
-  else
-    module->setDataLayout(layout);
-  // emit machine code
-  for (llvm::Function &f : module->functions())
-    f.addFnAttr(llvm::Attribute::AlwaysInline);
-  llvm::legacy::PassManager pass;
-  llvm::raw_svector_ostream stream(buffer);
+      // create dump files
+      std::error_code ec;
 
-  // create dump files
-  std::error_code ec;
+      // Save GCN ISA binary.
+      std::string isabin_path = std::string("/tmp/") + kernel_name + std::string(".o");
+      std::unique_ptr<llvm::raw_fd_ostream> isabin_fs(
+          new llvm::raw_fd_ostream(isabin_path, ec, llvm::sys::fs::OF_Text));
+      if (ec)
+      {
+        std::cout << isabin_path << " was not created. error code: " << ec << std::endl;
+      }
 
-  // Save GCN ISA binary.
-  std::string isabin_path = std::string("/tmp/") + kernel_name + std::string(".o");
-  std::unique_ptr<llvm::raw_fd_ostream> isabin_fs(
-      new llvm::raw_fd_ostream(isabin_path, ec, llvm::sys::fs::OF_Text));
-  if (ec)
-  {
-    std::cout << isabin_path << " was not created. error code: " << ec << std::endl;
-  }
-
-  // emit
-  machine->addPassesToEmitFile(pass, *isabin_fs, nullptr, llvm::CGFT_ObjectFile);
-  pass.run(*module);
+      // emit
+      machine->addPassesToEmitFile(pass, *isabin_fs, nullptr, llvm::CGFT_ObjectFile);
+      pass.run(*module);
 
 #ifdef DEBUG_ROCM
-  std::cout << "Generating GCN ISA file" << std::endl;
-  llvm::SmallVector<char, 0> debugBuffer;
-  llvm::legacy::PassManager debugPass;
-  llvm::raw_svector_ostream debugStream(debugBuffer);
-  machine->addPassesToEmitFile(debugPass, debugStream, nullptr, llvm::CodeGenFileType::CGFT_AssemblyFile); // TODO:cause segfault on REM ops also cause @llvm.amdgcn.if bug
-  debugPass.run(*module);
+      std::cout << "Generating GCN ISA file" << std::endl;
+      llvm::SmallVector<char, 0> debugBuffer;
+      llvm::legacy::PassManager debugPass;
+      llvm::raw_svector_ostream debugStream(debugBuffer);
+      machine->addPassesToEmitFile(debugPass, debugStream, nullptr, llvm::CodeGenFileType::CGFT_AssemblyFile); // TODO:cause segfault on REM ops also cause @llvm.amdgcn.if bug
+      debugPass.run(*module);
 
-  // Save GCN ISA.
-  std::string amdgcn_path = std::string("/tmp/") + kernel_name + std::string(".gcn");
-  std::string result(debugBuffer.begin(), debugBuffer.end());
-  std::ofstream amdgcn(amdgcn_path);
-  amdgcn << result;
-  amdgcn.close();
+      // Save GCN ISA.
+      std::string amdgcn_path = std::string("/tmp/") + kernel_name + std::string(".gcn");
+      std::string result(debugBuffer.begin(), debugBuffer.end());
+      std::ofstream amdgcn(amdgcn_path);
+      amdgcn << result;
+      amdgcn.close();
 #endif
 
-  // generate HASCO file
-  std::string hsaco_path = std::string("/tmp/") + kernel_name + std::string(".hsaco");
-  std::string error_message;
-  int lld_result =
-      llvm::sys::ExecuteAndWait("/opt/rocm/llvm/bin/ld.lld",
-                                {"/opt/rocm/llvm/bin/ld.lld", "-flavor", "gnu", "-shared", "-o", hsaco_path, isabin_path},
-                                llvm::None, {}, 0, 0, &error_message);
-  if (lld_result)
-  {
-    std::cout << "ld.lld execute fail: " << std::endl;
-    std::cout << error_message << std::endl;
-    std::cout << lld_result << std::endl;
-  }
-
-  return hsaco_path;
-}
+      // generate HASCO file
+      std::string hsaco_path = std::string("/tmp/") + kernel_name + std::string(".hsaco");
+      std::string error_message;
+      int lld_result =
+          llvm::sys::ExecuteAndWait("/opt/rocm/llvm/bin/ld.lld",
+                                    {"/opt/rocm/llvm/bin/ld.lld", "-flavor", "gnu", "-shared", "-o", hsaco_path, isabin_path},
+                                    llvm::None, {}, 0, 0, &error_message);
+      if (lld_result)
+      {
+        std::cout << "ld.lld execute fail: " << std::endl;
+        std::cout << error_message << std::endl;
+        std::cout << lld_result << std::endl;
+      }
 
       return hsaco_path;
     }
