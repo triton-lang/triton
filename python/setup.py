@@ -13,6 +13,7 @@ from typing import NamedTuple
 
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
+import torch
 
 
 # Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
@@ -32,7 +33,8 @@ def get_build_type():
 def use_system_llvm():
     if platform.system() == "Windows":
         return True
-    versions = ['-11.0', '-11', '-11-64']
+    # versions = ['-11.0', '-11', '-11-64']
+    versions = ['-13.0', '-13', '-13-64']
     supported = ['llvm-config{v}'.format(v=v) for v in versions]
     paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
     return any(p is not None for p in paths)
@@ -53,7 +55,7 @@ def get_thirdparty_packages(triton_cache_path):
     if not use_system_llvm():
         # donwload LLVM if no suitable system LLVM is installed
         packages.append(
-            Package("llvm", "clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04", "https://github.com/llvm/llvm-project/releases/download/llvmorg-11.0.1/clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04.tar.xz", "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR")
+            Package("llvm", "clang+llvm-13.0.0-x86_64-linux-gnu-ubuntu-16.04", "https://github.com/llvm/llvm-project/releases/download/llvmorg-13.0.0/clang+llvm-13.0.0-x86_64-linux-gnu-ubuntu-16.04.tar.xz", "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR")
         )
 
     thirdparty_cmake_args = []
