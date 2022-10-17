@@ -210,7 +210,7 @@ ChangeResult AxisInfoAnalysis::visitOperation(
     curr = AxisInfo(contiguity, divisibility, constancy);
   }
 
-  // makeRange
+  // CmpI
   if ((llvm::dyn_cast<arith::CmpIOp>(op) ||
        llvm::dyn_cast<triton::gpu::CmpIOp>(op)) &&
       op->getResult(0).getType().dyn_cast<TensorType>()) {
