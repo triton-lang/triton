@@ -26,14 +26,15 @@ static Type getI32SameShape(Type type) {
   return i32Type;
 }
 
-static Type getPointerTypeFromTensor(Type type) {
+static Type getPointerTypeSameShape(Type type) {
   if (auto tensorType = type.dyn_cast<RankedTensorType>()) {
     Type elementType = tensorType.getElementType();
     auto shape = tensorType.getShape();
     PointerType ptrType = PointerType::get(elementType, 1);
     return RankedTensorType::get(shape, ptrType, tensorType.getEncoding());
+  } else {
+    return PointerType::get(type, 1);
   }
-  return Type();
 }
 
 // Parser & printer for assembly forms
@@ -49,7 +50,7 @@ ParseResult parseLoadOp(OpAsmParser &parser, OperationState &result) {
   result.addTypes(resultTypes);
 
   SmallVector<Type> operandTypes;
-  operandTypes.push_back(getPointerTypeFromTensor(resultTypes[0])); // ptr
+  operandTypes.push_back(getPointerTypeSameShape(resultTypes[0])); // ptr
   int hasMask = 0, hasOther = 0;
   if (allOperands.size() >= 2) {
     operandTypes.push_back(getI1SameShape(resultTypes[0])); // mask
@@ -92,8 +93,8 @@ ParseResult parseStoreOp(OpAsmParser &parser, OperationState &result) {
     return failure();
 
   SmallVector<Type> operandTypes;
-  operandTypes.push_back(getPointerTypeFromTensor(valueType)); // ptr
-  operandTypes.push_back(valueType);                           // value
+  operandTypes.push_back(getPointerTypeSameShape(valueType)); // ptr
+  operandTypes.push_back(valueType);                          // value
   if (allOperands.size() >= 3)
     operandTypes.push_back(getI1SameShape(valueType)); // mask
 

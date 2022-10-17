@@ -53,3 +53,25 @@ func @addptr_ops(%scalar_ptr: !tt.ptr<f32>, %scalar_i32: i32) {
   %2 = tt.addptr %tensor_ptr_1d, %tensor_i32_1d : tensor<16x!tt.ptr<f32>>
   return
 }
+
+func @load_store_ops_scalar(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %mask : i1) {
+  // Test if Load/Store ops can handle scalar values (see #XXX)
+  %other = arith.constant 0.0e+0 : f32
+
+  // load scalar
+  // CHECK: %[[L0:.*]] = tt.load %{{.*}} {cache = 1 : i32, evict = 1 : i32, isVolatile = true} : f32
+  %a = tt.load %ptr {cache = 1 : i32, evict = 1 : i32, isVolatile = true} : f32
+  // CHECK: %[[L1:.*]] = tt.load %{{.*}}, %{{.*}} {cache = 1 : i32, evict = 1 : i32, isVolatile = true} : f32
+  %b = tt.load %ptr, %mask {cache = 1 : i32, evict = 1 : i32, isVolatile = true} : f32
+  // CHECK: %[[L2:.*]] = tt.load %{{.*}}, %{{.*}}, %{{.*}} {cache = 1 : i32, evict = 1 : i32, isVolatile = true} : f32
+  %c = tt.load %ptr, %mask, %other {cache = 1 : i32, evict = 1 : i32, isVolatile = true} : f32
+
+  // store scalar
+  // CHECK: tt.store %{{.*}}, %[[L0]] : f32
+  tt.store %ptr, %a : f32
+  // CHECK: tt.store %{{.*}}, %[[L1]], %{{.*}} : f32
+  tt.store %ptr, %b, %mask : f32
+  // CHECK: tt.store %{{.*}}, %[[L2]], %{{.*}} : f32
+  tt.store %ptr, %c, %mask : f32
+  return
+}
