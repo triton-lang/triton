@@ -24,7 +24,7 @@ public:
   static argument* create(type *ty, const std::string &name,
                           function *parent = nullptr, unsigned arg_no = 0);
   function* get_parent() const;
-  unsigned get_arg_no() const;
+  unsigned  get_arg_no() const;
 
   void accept(visitor *v);
 
@@ -112,7 +112,7 @@ public:
   static function *create(function_type *ty, linkage_types_t linkage,
                           const std::string &name, module *mod);
   // blocks
-  const blocks_t &blocks() { return blocks_; }
+        blocks_t &blocks() { return blocks_; }
   const blocks_t &blocks() const { return blocks_; }
   void insert_block(basic_block* block, basic_block *next = nullptr);
 
@@ -121,6 +121,8 @@ public:
   const attr_map_t &attrs() { return attrs_; }
   bool has_attr(unsigned arg_id) const { return  attrs_.find(arg_id) != attrs_.end(); }
   std::set<attribute> get_attributes(const argument* arg) { return attrs_[arg->get_arg_no() + 1]; }
+  void set_is_kernel(bool new_val) { is_kernel_ = new_val; }
+  bool get_is_kernel() { return is_kernel_; }
 
   void print(std::ostream &os);
 
@@ -134,6 +136,7 @@ private:
   args_t args_;
   blocks_t blocks_;
   attr_map_t attrs_;
+  bool is_kernel_;
 };
 
 }

@@ -18,6 +18,9 @@ You will learn about:
 
 import torch
 
+import triton
+import triton.language as tl
+
 
 @torch.jit.script
 def naive_softmax(x):
@@ -59,17 +62,14 @@ def naive_softmax(x):
 # power-of-two number of elements, so we need to internally "pad" each row and guard the
 # memory operations properly if we want to handle any possible input shapes:
 
-import triton
-import triton.language as tl
-
 
 @triton.jit
 def softmax_kernel(
-    output_ptr, input_ptr, input_row_stride, output_row_stride, n_cols, **meta
+    output_ptr, input_ptr, input_row_stride, output_row_stride, n_cols,
+    BLOCK_SIZE: tl.constexpr
 ):
     # The rows of the softmax are independent, so we parallelize across those
     row_idx = tl.program_id(0)
-    BLOCK_SIZE = meta['BLOCK_SIZE']
     # The stride represents how much we need to increase the pointer to advance 1 row
     row_start_ptr = input_ptr + row_idx * input_row_stride
     # The block size is the next power of two greater than n_cols, so we can fit each
@@ -78,7 +78,7 @@ def softmax_kernel(
     input_ptrs = row_start_ptr + col_offsets
     # Load the row into SRAM, using a mask since BLOCK_SIZE may be > than n_cols
     row = tl.load(input_ptrs, mask=col_offsets < n_cols, other=-float('inf'))
-    # Substract maximum for numerical stability
+    # Subtract maximum for numerical stability
     row_minus_max = row - tl.max(row, axis=0)
     # Note that exponentials in Triton are fast but approximate (i.e., think __expf in CUDA)
     numerator = tl.exp(row_minus_max)
@@ -134,9 +134,9 @@ torch.manual_seed(0)
 x = torch.randn(1823, 781, device='cuda')
 y_triton = softmax(x)
 y_torch = torch.softmax(x, axis=1)
-print(torch.allclose(y_triton, y_torch))
+assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
 
-#%%
+# %%
 # As expected, the results are identical.
 
 # %%
@@ -187,5 +187,5 @@ benchmark.run(show_plots=True, print_data=True)
 # In the above plot, we can see that:
 #
 #  - Triton is 4x faster than the Torch JIT. This confirms our suspicions that the Torch JIT does not do any fusion here.
-#  - Triton is noticeably faster than :code:`torch.softmax` -- in addition to being **easier to read, understand and maintain**. 
+#  - Triton is noticeably faster than :code:`torch.softmax` -- in addition to being **easier to read, understand and maintain**.
 #    Note however that the PyTorch `softmax` operation is more general and will works on tensors of any shape.

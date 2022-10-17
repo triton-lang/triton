@@ -12,7 +12,9 @@ namespace ir {
   class phi_node;
   class splat_inst;
   class cast_inst;
+  class cmp_inst;
   class reshape_inst;
+  class dequantize_inst;
   class broadcast_inst;
   class binary_operator;
   class getelementptr_inst;
@@ -33,8 +35,10 @@ private:
   std::vector<cst_info> populate_is_constant_phi(ir::phi_node* x);
   std::vector<cst_info> populate_is_constant_splat(ir::splat_inst* x);
   std::vector<cst_info> populate_is_constant_reshape(ir::reshape_inst* x);
+  std::vector<cst_info> populate_is_constant_dequantize(ir::dequantize_inst* x);
   std::vector<cst_info> populate_is_constant_broadcast(ir::broadcast_inst* x);
   std::vector<cst_info> populate_is_constant_binop(ir::binary_operator* x);
+  std::vector<cst_info> populate_is_constant_cmp(ir::cmp_inst* x);
   std::vector<cst_info> populate_is_constant_gep(ir::getelementptr_inst* x);
   std::vector<cst_info> populate_is_constant_default(ir::value* v);
   std::vector<cst_info> populate_is_constant(ir::value *v);
@@ -42,6 +46,7 @@ private:
   std::vector<unsigned> populate_max_contiguous_phi(ir::phi_node* x);
   std::vector<unsigned> populate_max_contiguous_splat(ir::splat_inst* x);
   std::vector<unsigned> populate_max_contiguous_reshape(ir::reshape_inst* x);
+  std::vector<unsigned> populate_max_contiguous_dequantize(ir::dequantize_inst* x);
   std::vector<unsigned> populate_max_contiguous_broadcast(ir::broadcast_inst* x);
   std::vector<unsigned> populate_max_contiguous_binop(ir::binary_operator* x);
   std::vector<unsigned> populate_max_contiguous_gep(ir::getelementptr_inst* x);
@@ -52,6 +57,7 @@ private:
   std::vector<unsigned> populate_starting_multiple_phi(ir::phi_node* x);
   std::vector<unsigned> populate_starting_multiple_splat(ir::splat_inst* x);
   std::vector<unsigned> populate_starting_multiple_reshape(ir::reshape_inst* x);
+  std::vector<unsigned> populate_starting_multiple_dequantize(ir::dequantize_inst* x);
   std::vector<unsigned> populate_starting_multiple_broadcast(ir::broadcast_inst* x);
   std::vector<unsigned> populate_starting_multiple_binop(ir::binary_operator* x);
   std::vector<unsigned> populate_starting_multiple_gep(ir::getelementptr_inst* x);
@@ -65,6 +71,7 @@ public:
   void run(ir::module &mod);
   unsigned get(ir::value* v, unsigned ax) const;
   std::vector<unsigned> contiguous(ir::value* v) const;
+  std::vector<cst_info> get_cst_info(ir::value* v) const;
 
 private:
   std::map<ir::value*, std::vector<cst_info>> is_constant_;

@@ -36,6 +36,9 @@ int membar::group_of(ir::value* v, std::vector<ir::value*> &async_write) {
   else{
     if(layouts_->has_tmp(v))
       return async_write.size() - 1;
+    // // Ignore copy_to_shared. It won't modify async behavior.
+    // if(dynamic_cast<ir::copy_to_shared_inst*>(v))
+    //   return 0;
     auto it = std::find(async_write.begin(), async_write.end(), v);
     return std::distance(async_write.begin(), it);
   }
@@ -60,15 +63,22 @@ membar::val_set_t membar::intersect_with(const val_set_t& as, const val_set_t& b
       continue;
     analysis::shared_layout* a_layout = layouts_->get(a)->to_shared();
     analysis::shared_layout* a_tmp = layouts_->has_tmp(a) ? layouts_->get(layouts_->tmp(a))->to_shared() : nullptr;
+    analysis::shared_layout* a_tmp_index = layouts_->has_tmp_index(a) ? layouts_->get(layouts_->tmp_index(a))->to_shared() : nullptr;
     for(ir::value* b: bs){
       if(!b->get_type()->is_block_ty())
         continue;
       analysis::shared_layout* b_layout = layouts_->get(b)->to_shared();
       analysis::shared_layout* b_tmp = layouts_->has_tmp(b) ? layouts_->get(layouts_->tmp(b))->to_shared() : nullptr;
+      analysis::shared_layout* b_tmp_index = layouts_->has_tmp_index(b) ? layouts_->get(layouts_->tmp_index(b))->to_shared() : nullptr;
       if(intersect_with(a_layout, b_layout) ||
          intersect_with(a_layout, b_tmp) ||
+         intersect_with(a_layout, b_tmp_index) ||
          intersect_with(a_tmp, b_layout) ||
-         intersect_with(a_tmp, b_tmp))
+         intersect_with(a_tmp, b_tmp) ||
+         intersect_with(a_tmp, b_tmp_index) ||
+         intersect_with(a_tmp_index, b_layout) ||
+         intersect_with(a_tmp_index, b_tmp) ||
+         intersect_with(a_tmp_index, b_tmp_index))
         ret.insert(b);
     }
   }

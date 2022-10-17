@@ -13,7 +13,7 @@ whose state is generally composed of a bit mask tensor of the same shape as the 
 # %%
 # Baseline
 # -------------
-# The *dropout* operator was first introduced in [SRIVASTAVA2014]_ as a way to improve the performance 
+# The *dropout* operator was first introduced in [SRIVASTAVA2014]_ as a way to improve the performance
 # of deep neural networks in low-data regime (i.e. regularization).
 #
 # It takes a vector as input and produces a vector of the same shape as output. Each scalar in the
@@ -30,19 +30,20 @@ whose state is generally composed of a bit mask tensor of the same shape as the 
 
 import tabulate
 import torch
+
 import triton
 import triton.language as tl
 
+
 @triton.jit
 def _dropout(
-        x_ptr, # pointer to the input
-        x_keep_ptr, # pointer to a mask of 0s and 1s
-        output_ptr, # pointer to the output
-        n_elements, # number of elements in the `x` tensor
-        p, # probability that an element of `x` is changed to zero
-        **meta,
+        x_ptr,  # pointer to the input
+        x_keep_ptr,  # pointer to a mask of 0s and 1s
+        output_ptr,  # pointer to the output
+        n_elements,  # number of elements in the `x` tensor
+        p,  # probability that an element of `x` is changed to zero
+        BLOCK_SIZE: tl.constexpr,
 ):
-    BLOCK_SIZE = meta['BLOCK_SIZE']
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -63,6 +64,7 @@ def dropout(x, x_keep, p):
     grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
     _dropout[grid](x, x_keep, output, n_elements, p, BLOCK_SIZE=1024)
     return output
+
 
 # Input tensor
 x = torch.randn(size=(10,)).cuda()
@@ -88,7 +90,7 @@ print(tabulate.tabulate([
 # of persisting randomness across multiple invocations of the kernel.
 #
 # Pseudorandom number generation in Triton is simple! In this tutorial we will use the
-# :code:`triton.language.rand` function which generates a block of uniformly distributed :code:`float32` 
+# :code:`triton.language.rand` function which generates a block of uniformly distributed :code:`float32`
 # values in [0, 1), given a seed and a block of :code:`int32` offsets. But if you need it, Triton also provides
 # other :ref:`random number generation strategies <Random Number Generation>`.
 #
@@ -97,6 +99,7 @@ print(tabulate.tabulate([
 #
 # Let's put it all together.
 
+
 @triton.jit
 def _seeded_dropout(
         x_ptr,
@@ -104,10 +107,9 @@ def _seeded_dropout(
         n_elements,
         p,
         seed,
-        **meta,
+        BLOCK_SIZE: tl.constexpr,
 ):
     # compute memory offsets of elements handled by this instance
-    BLOCK_SIZE = meta['BLOCK_SIZE']
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)

@@ -61,7 +61,8 @@ bool peephole::rewrite_dot(ir::instruction *value, ir::builder& builder){
   // dot(a, b, c) + d -> dot(a, b, c + d)
   // d + dot(a, b, c) -> dot(a, b, c + d)
   auto add = dynamic_cast<ir::binary_operator*>(value);
-  if(add && add->get_op() == ir::binary_op_t::FAdd) {
+  if(add && (add->get_op() == ir::binary_op_t::FAdd || add->get_op() == ir::binary_op_t::Add)) {
+    bool is_int_dot = add->get_op() == ir::binary_op_t::Add;
     ir::value *lhs = add->get_operand(0);
     ir::value *rhs = add->get_operand(1);
     ir::dot_inst *lhs_dot = dynamic_cast<ir::dot_inst*>(lhs);
@@ -72,15 +73,21 @@ bool peephole::rewrite_dot(ir::instruction *value, ir::builder& builder){
     ir::value *other = (dot == lhs) ? rhs : lhs;
     ir::value *acc = dot->get_operand(2);
     ir::splat_inst *splat = dynamic_cast<ir::splat_inst*>(acc);
-    ir::constant_fp *_0 = nullptr;
+    ir::constant *_0 = nullptr;
     if(splat)
-      _0 = dynamic_cast<ir::constant_fp*>(splat->get_operand(0));
-    if(!(_0 && _0->get_value() == 0.0))
+      _0 = dynamic_cast<ir::constant*>(splat->get_operand(0));
+    if(!_0)
       return false;
+    if (auto *fp_0 = dynamic_cast<ir::constant_fp*>(_0))
+      if (fp_0->get_value() != 0.0)
+        return false;
+    if (auto *int_0 = dynamic_cast<ir::constant_int*>(_0))
+      if (int_0->get_value() != 0)
+        return false;
     ir::value *a = dot->get_operand(0);
     ir::value *b = dot->get_operand(1);
     builder.set_insert_point(add);
-    ir::value * new_dot = builder.insert(ir::dot_inst::create_nn(a, b, other, dot->get_name()));
+    ir::value * new_dot = builder.insert(ir::dot_inst::create(a, b, other, dot->is_trans_a(), dot->is_trans_b(), dot->allow_tf32(), dot->get_name()));
     add->replace_all_uses_with(new_dot);
     return true;
   }
@@ -116,7 +123,7 @@ bool peephole::rewrite_load_to_shared(ir::instruction *value, ir::builder& build
   int nts = layout->nts(layout->get_order()[0]);
   int dtsize = value->get_type()->get_scalar_ty()->get_primitive_size_in_bits() / 8;
   if(nts*dtsize >= 4){
-    ir::value* new_load = builder.create_masked_load_async(ptr, msk, val, ld->get_cache_modifier());
+    ir::value* new_load = builder.create_masked_load_async(ptr, msk, val, ld->get_cache_modifier(), ld->get_eviction_policy());
     copy_to_shared->replace_all_uses_with(new_load);
     return true;
   }
@@ -143,32 +150,53 @@ bool peephole::rewrite_unit_red(ir::instruction *value, ir::builder& builder){
 }
 
 bool peephole::rewrite_mult(ir::instruction *value, ir::builder& builder) {
-    auto binop = dynamic_cast<ir::binary_operator*>(value);
-    if(binop && binop->get_op() == ir::binary_op_t::Mul) {
-      ir::value *lhs = binop->get_operand(0);
-      ir::value *rhs = binop->get_operand(1);
-      ir::constant_int *_1_lhs = nullptr;
-      if(ir::splat_inst *splat = dynamic_cast<ir::splat_inst*>(lhs)){
-        auto *cst = dynamic_cast<ir::constant_int*>(splat->get_operand(0));
-        if(cst && cst->get_value() == 1)
-          _1_lhs = cst;
-      }
-      ir::constant_int *_1_rhs = nullptr;
-      if(ir::splat_inst *splat = dynamic_cast<ir::splat_inst*>(rhs)){
-        auto *cst = dynamic_cast<ir::constant_int*>(splat->get_operand(0));
-        if(cst && cst->get_value() == 1)
-          _1_rhs = cst;
-      }
-      if(_1_lhs){
-        binop->replace_all_uses_with(rhs);
-        return true;
-      }
-      else if(_1_rhs){
-        binop->replace_all_uses_with(lhs);
-        return true;
-      }
+  auto binop = dynamic_cast<ir::binary_operator*>(value);
+  if(binop && binop->get_op() == ir::binary_op_t::Mul) {
+    ir::value *lhs = binop->get_operand(0);
+    ir::value *rhs = binop->get_operand(1);
+    ir::constant_int *_1_lhs = nullptr;
+    if(ir::splat_inst *splat = dynamic_cast<ir::splat_inst*>(lhs)){
+      auto *cst = dynamic_cast<ir::constant_int*>(splat->get_operand(0));
+      if(cst && cst->get_value() == 1)
+        _1_lhs = cst;
     }
+    ir::constant_int *_1_rhs = nullptr;
+    if(ir::splat_inst *splat = dynamic_cast<ir::splat_inst*>(rhs)){
+      auto *cst = dynamic_cast<ir::constant_int*>(splat->get_operand(0));
+      if(cst && cst->get_value() == 1)
+        _1_rhs = cst;
+    }
+    if(_1_lhs){
+      binop->replace_all_uses_with(rhs);
+      return true;
+    }
+    else if(_1_rhs){
+      binop->replace_all_uses_with(lhs);
+      return true;
+    }
+  }
+  return false;
+}
+
+bool peephole::rewrite_insert_extract(ir::instruction *value, ir::builder& builder){
+  auto extracted = dynamic_cast<ir::extract_value_inst*>(value);
+  if(!extracted)
     return false;
+  size_t extract_idx = extracted->get_idx();
+  ir::value* agg = extracted->get_operand(0);
+  auto insert = dynamic_cast<ir::insert_value_inst*>(agg);
+  while(insert){
+    agg = insert->get_operand(0);
+    ir::value* inserted = insert->get_operand(1);
+    size_t insert_idx = insert->get_idx();
+    insert = dynamic_cast<ir::insert_value_inst*>(agg);
+    if(extract_idx == insert_idx){
+      extracted->replace_all_uses_with(inserted);
+      return true;
+    }
+    insert = dynamic_cast<ir::insert_value_inst*>(agg);
+  }
+  return false;
 }
 
 
@@ -207,7 +235,9 @@ bool peephole::rewrite_select_masked_load(ir::instruction *value, ir::builder& b
   ir::value* new_load = builder.create_masked_load(if_value->get_pointer_operand(),
                                                    if_value->get_mask_operand(),
                                                    select->get_else_value_op(),
-                                                   if_value->get_cache_modifier());
+                                                   if_value->get_cache_modifier(),
+                                                   if_value->get_eviction_policy(),
+                                                   if_value->get_is_volatile());
   select->replace_all_uses_with(new_load);
   return true;
 }
@@ -219,22 +249,22 @@ bool peephole::rewrite_cvt_layout(ir::instruction *value, ir::builder& builder){
   ir::instruction* op = dynamic_cast<ir::instruction*>(cvt->get_operand(0));
   if(!op)
     return false;
-  // convert(elementwise(x, y)) = elementwise(convert(x), convert(y))
-  if(op->get_id() == ir::INST_BINOP){
-    for(size_t i = 0; i < op->get_num_operands(); i++){
-      ir::value* arg_i = op->get_operand(i);
-      builder.set_insert_point(op);
-      // create new layout transform
-      ir::instruction* new_arg_i = cvt->clone();
-      layouts_->copy(new_arg_i, op);
-      builder.insert(new_arg_i);
-      // set the right args
-      new_arg_i->replace_uses_of_with(new_arg_i->get_operand(0), arg_i);
-      op->replace_uses_of_with(arg_i, new_arg_i);
-    }
-    cvt->replace_all_uses_with(op);
-    return true;
-  }
+//  // convert(elementwise(x, y)) = elementwise(convert(x), convert(y))
+//  if(op->get_id() == ir::INST_BINOP){
+//    for(size_t i = 0; i < op->get_num_operands(); i++){
+//      ir::value* arg_i = op->get_operand(i);
+//      builder.set_insert_point(op);
+//      // create new layout transform
+//      ir::instruction* new_arg_i = cvt->clone();
+//      layouts_->copy(new_arg_i, op);
+//      builder.insert(new_arg_i);
+//      // set the right args
+//      new_arg_i->replace_uses_of_with(new_arg_i->get_operand(0), arg_i);
+//      op->replace_uses_of_with(arg_i, new_arg_i);
+//    }
+//    cvt->replace_all_uses_with(op);
+//    return true;
+//  }
   auto cvt_op = dynamic_cast<ir::cvt_layout_inst*>(op);
   if(!cvt_op)
     return false;
@@ -282,9 +312,11 @@ void peephole::run(ir::module &mod) {
       was_modified = was_modified || rewrite_mult(i, builder);
       // was_modified = was_modified || rewrite_cts_cfs(i, builder);
 //      was_modified = was_modified || rewrite_trans_phi(i, builder);
+      was_modified = was_modified || rewrite_insert_extract(i, builder);
       was_modified = was_modified || rewrite_unit_red(i, builder);
       was_modified = was_modified || rewrite_gep_ptr_min_off_plus_off(i, builder);
-      was_modified = was_modified || rewrite_select_masked_load(i, builder);
+      // TODO: DOESN'T WORK FOR VECTORIZED MASKED LOAD
+//      was_modified = was_modified || rewrite_select_masked_load(i, builder);
       was_modified = was_modified || rewrite_cvt_layout(i, builder);
       if(tgt_->as_nvidia() && tgt_->as_nvidia()->sm() >= 80)
         was_modified = was_modified || rewrite_load_to_shared(i, builder);

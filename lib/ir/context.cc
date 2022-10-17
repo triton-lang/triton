@@ -24,9 +24,7 @@ context_impl::context_impl(context &ctx)
       int16_ty(ctx, 16),
       int32_ty(ctx, 32),
       int64_ty(ctx, 64),
-      int128_ty(ctx, 128){
-
-}
+      int128_ty(ctx, 128) {}
 
 //===----------------------------------------------------------------------===//
 //                                    context

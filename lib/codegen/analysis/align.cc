@@ -115,6 +115,18 @@ std::vector<align::cst_info> align::populate_is_constant_reshape(ir::reshape_ins
   return add_to_cache(x, result, is_constant_);
 }
 
+std::vector<align::cst_info> align::populate_is_constant_dequantize(ir::dequantize_inst* x) {
+  auto x_shapes = get_shapes(x);
+  std::vector<cst_info> result;
+  ir::value *op = x->get_operand(0);
+  auto op_shapes = op->get_type()->get_block_shapes();
+  auto op_cst = populate_is_constant(op);
+  for(size_t d = 0; d < x_shapes.size(); d++) {
+    result.push_back(op_cst[d]);
+  }
+  return add_to_cache(x, result, is_constant_);
+}
+
 std::vector<align::cst_info> align::populate_is_constant_broadcast(ir::broadcast_inst* x) {
   auto x_shapes = get_shapes(x);
   std::vector<cst_info> result;
@@ -129,6 +141,36 @@ std::vector<align::cst_info> align::populate_is_constant_broadcast(ir::broadcast
   return add_to_cache(x, result, is_constant_);
 }
 
+std::vector<align::cst_info> align::populate_is_constant_cmp(ir::cmp_inst* x) {
+  auto x_shapes = get_shapes(x);
+  std::vector<cst_info> result;
+  ir::value* lhs_op = x->get_operand(0);
+  ir::value* rhs_op = x->get_operand(1);
+  auto lhs = populate_is_constant(lhs_op);
+  auto rhs = populate_is_constant(rhs_op);
+  auto lhs_max_contiguous = populate_max_contiguous(lhs_op);
+  auto rhs_max_contiguous = populate_max_contiguous(rhs_op);
+  auto lhs_multiple_of = populate_starting_multiple(lhs_op);
+  auto rhs_multiple_of = populate_starting_multiple(rhs_op);
+  for(size_t d = 0; d < x_shapes.size(); d++) {
+    cst_info ax = {1, 0};
+    // Examples:
+    //   16 17 18 ... 32   <  24 24 24 ... 24 => equal in groups of 8
+    //   16 17 18 ... 32   <  20 20 20 ... 20 => equal in groups of 4
+    //   16 17 18 ... 32   <  16 16 16 ... 16 => equal in groups of 16
+    //
+    //   if LHS is a range of N continuous (or equal) elements that starts at M,
+    //   and RHS is a set of N constants that start at K
+    //   then the result in constant in groups of gcd(M, K)
+    if(rhs[d].num_cst % lhs_max_contiguous[d] == 0 ||
+       rhs[d].num_cst % lhs[d].num_cst == 0)
+      ax.num_cst = gcd(lhs_multiple_of[d], rhs_multiple_of[d]);
+    result.push_back(ax);
+  }
+  return add_to_cache(x, result, is_constant_);
+}
+
+
 std::vector<align::cst_info> align::populate_is_constant_binop(ir::binary_operator* x) {
   auto x_shapes = get_shapes(x);
   std::vector<cst_info> result;
@@ -136,12 +178,14 @@ std::vector<align::cst_info> align::populate_is_constant_binop(ir::binary_operat
   ir::value* rhs_op = x->get_operand(1);
   auto lhs = populate_is_constant(lhs_op);
   auto rhs = populate_is_constant(rhs_op);
-  auto max_contiguous = populate_max_contiguous(lhs_op);
+  auto lhs_max_contiguous = populate_max_contiguous(lhs_op);
+  auto rhs_max_contiguous = populate_max_contiguous(rhs_op);
+  auto lhs_multiple_of = populate_starting_multiple(lhs_op);
+  auto rhs_multiple_of = populate_starting_multiple(rhs_op);
   for(size_t d = 0; d < x_shapes.size(); d++) {
     cst_info ax;
     if(lhs[d].num_cst==0 && rhs[d].value && x->is_int_div()){
-      // todo might not be entirely true
-      unsigned num_constants = gcd(max_contiguous[d], rhs[d].value);
+      unsigned num_constants = gcd(lhs_max_contiguous[d], rhs[d].value);
       ax = {num_constants, 0};
     }
     else
@@ -180,10 +224,14 @@ std::vector<align::cst_info> align::populate_is_constant(ir::value *v) {
     return populate_is_constant_splat(x);
   if(auto *x = dynamic_cast<ir::reshape_inst*>(v))
     return populate_is_constant_reshape(x);
+  if(auto *x = dynamic_cast<ir::dequantize_inst*>(v))
+    return populate_is_constant_dequantize(x);
   if(auto *x = dynamic_cast<ir::broadcast_inst*>(v))
     return populate_is_constant_broadcast(x);
   if(auto *x = dynamic_cast<ir::binary_operator*>(v))
     return populate_is_constant_binop(x);
+  if(auto *x = dynamic_cast<ir::cmp_inst*>(v))
+    return populate_is_constant_cmp(x);
   if(auto *x = dynamic_cast<ir::getelementptr_inst*>(v))
     return populate_is_constant_gep(x);
   return populate_is_constant_default(v);
@@ -245,6 +293,23 @@ std::vector<unsigned> align::populate_max_contiguous_reshape(ir::reshape_inst* x
   return add_to_cache(x, result, max_contiguous_);
 }
 
+std::vector<unsigned> align::populate_max_contiguous_dequantize(ir::dequantize_inst* x) {
+  auto shapes = get_shapes(x);
+  std::vector<unsigned> result;
+  ir::value *op = x->get_operand(0);
+  auto ret_last_dim = (x->get_type()->get_block_shapes()).back();
+  auto op_last_dim = (op->get_type()->get_block_shapes()).back();
+  auto op_mc = populate_max_contiguous(op);
+  for(size_t d = 0; d < shapes.size(); d++) {
+    unsigned factor = 1;
+    if (d == shapes.size() - 1) {
+      factor = ret_last_dim / op_last_dim;
+    }
+    result.push_back(factor * op_mc[d]);
+  }
+  return add_to_cache(x, result, max_contiguous_);
+}
+
 std::vector<unsigned> align::populate_max_contiguous_broadcast(ir::broadcast_inst* x) {
   auto shapes = get_shapes(x);
   std::vector<unsigned> result;
@@ -285,8 +350,8 @@ std::vector<unsigned> align::populate_max_contiguous_binop(ir::binary_operator* 
     }
     if(x->is_int_add_sub()){
       unsigned lvalue = 1, rvalue = 1;
-      lvalue = gcd(rhs_max_contiguous[d], lhs_starting_multiple[d]);
-      rvalue = gcd(lhs_max_contiguous[d], rhs_starting_multiple[d]);
+      lvalue = gcd(rhs_max_contiguous[d], lhs_cst_info[d].num_cst);
+      rvalue = gcd(lhs_max_contiguous[d], rhs_cst_info[d].num_cst);
       value = std::max(lvalue, rvalue);
     }
     result.push_back(value);
@@ -332,9 +397,9 @@ std::vector<unsigned> align::populate_max_contiguous(ir::value *v){
   if(max_contiguous_.find(v) != max_contiguous_.end())
     return max_contiguous_.at(v);
   if(auto *x = dynamic_cast<ir::instruction*>(v)){
-    unsigned max_contiguous = x->get_metadata(ir::metadata::max_contiguous);
-    if(max_contiguous > 0)
-      return add_to_cache(x, {max_contiguous}, max_contiguous_);
+    std::vector<unsigned> max_contiguous = x->get_metadata(ir::metadata::max_contiguous);
+    if(!max_contiguous.empty())
+      return add_to_cache(x, max_contiguous, max_contiguous_);
   }
   if(auto *x = dynamic_cast<ir::cast_inst*>(v))
     return populate_max_contiguous_cast(x);
@@ -342,6 +407,8 @@ std::vector<unsigned> align::populate_max_contiguous(ir::value *v){
     return populate_max_contiguous_splat(x);
   if(auto *x = dynamic_cast<ir::reshape_inst*>(v))
     return populate_max_contiguous_reshape(x);
+  if(auto *x = dynamic_cast<ir::dequantize_inst*>(v))
+    return populate_max_contiguous_dequantize(x);
   if(auto *x = dynamic_cast<ir::broadcast_inst*>(v))
     return populate_max_contiguous_broadcast(x);
   if(auto *x = dynamic_cast<ir::binary_operator*>(v))
@@ -386,6 +453,23 @@ std::vector<unsigned> align::populate_starting_multiple_reshape(ir::reshape_inst
   return add_to_cache(x, result, starting_multiple_);
 }
 
+std::vector<unsigned> align::populate_starting_multiple_dequantize(ir::dequantize_inst* x){
+  auto shapes = get_shapes(x);
+  std::vector<unsigned> result;
+  ir::value *op = x->get_operand(0);
+  auto ret_last_dim = (x->get_type()->get_block_shapes()).back();
+  auto op_last_dim = (op->get_type()->get_block_shapes()).back();
+  auto op_multiple = populate_starting_multiple(op);
+  for(size_t d = 0; d < shapes.size(); d++) {
+    unsigned factor = 1;
+    if (d == shapes.size() - 1) {
+      factor = ret_last_dim / op_last_dim;
+    }
+    result.push_back(factor * op_multiple[d]);
+  }
+  return add_to_cache(x, result, starting_multiple_);
+}
+
 std::vector<unsigned> align::populate_starting_multiple_broadcast(ir::broadcast_inst* x){
   auto result = populate_starting_multiple(x->get_operand(0));
   return add_to_cache(x, result, starting_multiple_);
@@ -401,7 +485,7 @@ std::vector<unsigned> align::populate_starting_multiple_binop(ir::binary_operato
     if(x->is_int_add_sub())
       result[d] = gcd(lhs[d], rhs[d]);
     if(x->is_int_div())
-      result[d] = 1;
+      result[d] = (lhs[d] == (1 << 31)) ? 1 << 31 : 1;
     if(x->is_int_rem() && rhs[d] > 1){
       result[d] = gcd(lhs[d], rhs[d]);
     }
@@ -471,28 +555,42 @@ std::vector<unsigned> align::populate_starting_multiple_default(ir::value* v) {
   return add_to_cache(v, {1}, starting_multiple_);
 }
 
+unsigned get_max_multiple(int val){
+  if(val == 0) return 1 << 31;
+  if(val % 128 == 0) return 128;
+  if(val % 64 == 0) return 64;
+  if(val % 32 == 0) return 32;
+  if(val % 16 == 0) return 16;
+  if(val % 8 == 0) return 8;
+  if(val % 4 == 0) return 4;
+  if(val % 2 == 0) return 2;
+  return 1;
+}
+
 std::vector<unsigned> align::populate_starting_multiple(ir::value *v){
   if(starting_multiple_.find(v) != starting_multiple_.end())
     return starting_multiple_.at(v);
   if(auto *x = dynamic_cast<ir::instruction*>(v)){
-    unsigned multiple_of = x->get_metadata(ir::metadata::multiple_of);
-    if(multiple_of > 0)
-      return add_to_cache(x, {multiple_of}, starting_multiple_);
+    std::vector<unsigned> multiple_of = x->get_metadata(ir::metadata::multiple_of);
+    if(!multiple_of.empty())
+      return add_to_cache(x, multiple_of, starting_multiple_);
   }
   if(auto *x = dynamic_cast<ir::cast_inst*>(v))
     return populate_starting_multiple_cast(x);
   if(auto *x = dynamic_cast<ir::binary_operator*>(v))
     return populate_starting_multiple_binop(x);
   if(auto *x = dynamic_cast<ir::constant_int*>(v))
-    return add_to_cache(x, {std::min<unsigned>(x->get_value(), 128)}, starting_multiple_);
+    return add_to_cache(x, {get_max_multiple(x->get_value())}, starting_multiple_);
   if(auto *x = dynamic_cast<ir::make_range*>(v))
-    return add_to_cache(x, {(unsigned)x->get_first()->get_value()}, starting_multiple_);
+    return add_to_cache(x, {get_max_multiple(x->get_first()->get_value())}, starting_multiple_);
   if(auto *x = dynamic_cast<ir::getelementptr_inst*>(v))
     return populate_starting_multiple_gep(x);
   if(auto *x = dynamic_cast<ir::splat_inst*>(v))
     return populate_starting_multiple_splat(x);
   if(auto *x = dynamic_cast<ir::reshape_inst*>(v))
     return populate_starting_multiple_reshape(x);
+  if(auto *x = dynamic_cast<ir::dequantize_inst*>(v))
+    return populate_starting_multiple_dequantize(x);
   if(auto *x = dynamic_cast<ir::broadcast_inst*>(v))
     return populate_starting_multiple_broadcast(x);
   if(auto *x = dynamic_cast<ir::phi_node*>(v))
@@ -511,12 +609,15 @@ std::vector<unsigned> align::contiguous(ir::value* v) const {
   return max_contiguous_.at(v);
 }
 
+std::vector<align::cst_info> align::get_cst_info(ir::value* v) const {
+  return is_constant_.at(v);
+}
+
 
 void align::populate(ir::value *v) {
   populate_is_constant(v);
   populate_starting_multiple(v);
   populate_max_contiguous(v);
-
 }
 
 void align::run(ir::module &mod) {

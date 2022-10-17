@@ -25,6 +25,7 @@ private:
   void update_graph_reduce(ir::instruction *i);
   void update_graph_reshape(ir::instruction *i);
   void update_graph_trans(ir::instruction *i);
+  void update_graph_dequantize(ir::instruction *i);
   void update_graph_broadcast(ir::instruction *i);
   void update_graph_dot(ir::instruction *i);
   void update_graph_elementwise(ir::instruction *i,

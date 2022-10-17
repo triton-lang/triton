@@ -11,12 +11,16 @@ class value;
 
 class instruction;
 
+class call_inst;
+class launch_inst;
+
 class phi_node;
 class binary_operator;
 class getelementptr_inst;
 
 class icmp_inst;
 class fcmp_inst;
+class dequantize_inst;
 class cast_inst;
 class trunc_inst;
 class z_ext_inst;
@@ -41,6 +45,9 @@ class unmasked_load_inst;
 class masked_load_inst;
 class unmasked_store_inst;
 class masked_store_inst;
+
+class extract_value_inst;
+class insert_value_inst;
 
 class retile_inst;
 class reshape_inst;
@@ -75,6 +82,10 @@ class async_wait_inst;
 class make_range_dyn;
 class make_range;
 class prefetch_s_inst;
+class clock_inst;
+class globaltimer_inst;
+
+class extern_elementwise_inst;
 
 class make_range_sta;
 class undef_value;
@@ -103,6 +114,8 @@ public:
   virtual ~visitor() {}
 
   virtual void visit_value(ir::value*);
+  virtual void visit_call_inst(ir::call_inst*) = 0;
+  virtual void visit_launch_inst(ir::launch_inst*) = 0;
 
   virtual void visit_basic_block(basic_block*) = 0;
   virtual void visit_argument(argument*) = 0;
@@ -112,6 +125,7 @@ public:
 
   virtual void visit_icmp_inst(icmp_inst*) = 0;
   virtual void visit_fcmp_inst(fcmp_inst*) = 0;
+  virtual void visit_dequantize_inst(dequantize_inst*) = 0;
   virtual void visit_cast_inst(cast_inst*) = 0;
 
   virtual void visit_return_inst(return_inst*) = 0;
@@ -129,6 +143,9 @@ public:
   virtual void visit_cos_inst(cos_inst*) = 0;
   virtual void visit_sin_inst(sin_inst*) = 0;
   virtual void visit_log_inst(log_inst*) = 0;
+
+  virtual void visit_extract_value_inst(extract_value_inst*) = 0;
+  virtual void visit_insert_value_inst(insert_value_inst*) = 0;
 
   virtual void visit_reshape_inst(reshape_inst*) = 0;
   virtual void visit_splat_inst(splat_inst*) = 0;
@@ -157,11 +174,15 @@ public:
   virtual void visit_make_range(make_range*) = 0;
   virtual void visit_prefetch_s_inst(prefetch_s_inst*) = 0;
   virtual void visit_function(function*) = 0;
+  virtual void visit_clock_inst(clock_inst*) = 0;
+  virtual void visit_globaltimer_inst(globaltimer_inst*) = 0;
 
   virtual void visit_undef_value(undef_value*) = 0;
   virtual void visit_constant_int(constant_int*) = 0;
   virtual void visit_constant_fp(constant_fp*) = 0;
   virtual void visit_alloc_const(alloc_const*) = 0;
+
+  virtual void visit_extern_elementwise_inst(extern_elementwise_inst*) = 0;
 };
 
 }

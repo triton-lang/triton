@@ -18,6 +18,8 @@ constant *constant::get_null_value(type *ty) {
     return constant_int::get(ty, 0);
   case type::FP16TyID:
     return constant_fp::get(type::get_fp16_ty(ctx), 0);
+  case type::BF16TyID:
+    return constant_fp::get(type::get_bf16_ty(ctx), 0);
   case type::FP32TyID:
     return constant_fp::get(type::get_fp32_ty(ctx), 0);
   case type::FP64TyID:
@@ -47,10 +49,10 @@ constant_int *constant_int::get(type *ty, uint64_t value) {
   if (!ty->is_integer_ty())
     throw std::runtime_error("Cannot create constant_int with non integer ty");
   context_impl *impl = ty->get_context().p_impl.get();
-  constant_int *& cst = impl->int_constants_[std::make_pair(ty, value)];
-  if(cst == nullptr)
-    cst = new constant_int(ty, value);
-  return cst;
+  std::unique_ptr<constant_int> &cst = impl->int_constants_[std::make_pair(ty, value)];
+  if(!cst)
+    cst.reset(new constant_int(ty, value));
+  return cst.get();
 }
 
 
@@ -73,10 +75,10 @@ constant *constant_fp::get_zero_value_for_negation(type *ty) {
 
 constant *constant_fp::get(type *ty, double v){
   context_impl *impl = ty->get_context().p_impl.get();
-  constant_fp *&result = impl->fp_constants_[std::make_pair(ty, v)];
+  std::unique_ptr<constant_fp> &result = impl->fp_constants_[std::make_pair(ty, v)];
   if(!result)
-    result = new constant_fp(ty, v);
-  return result;
+    result.reset(new constant_fp(ty, v));
+  return result.get();
 }
 
 
@@ -86,10 +88,10 @@ undef_value::undef_value(type *ty)
 
 undef_value *undef_value::get(type *ty) {
   context_impl *impl = ty->get_context().p_impl.get();
-  undef_value *&result = impl->uv_constants_[ty];
+  std::unique_ptr<undef_value> &result = impl->uv_constants_[ty];
   if(!result)
-    result = new undef_value(ty);
-  return result;
+    result.reset(new undef_value(ty));
+  return result.get();
 }
 
 /* global value */

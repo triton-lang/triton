@@ -105,7 +105,7 @@ ir::value *cast(ir::value *input, type_code _dtype, ir::builder *builder) {
       other = builder->create_splat(other, src_ty->get_block_shapes());
     return builder->create_icmpNE(input, other);
   }
-  throw_not_implemented("cast");
+  throw_not_implemented("cast from " + src_sca_ty->repr() + " to " + dst_sca_ty->repr());
 }
 
 /*----------------------------------------------
@@ -253,7 +253,7 @@ ir::value *dot(ir::value *lhs, ir::value *rhs, ir::builder *builder) {
 std::string where_docstr = R"pbdoc(
     Returns a block of elements from either `x` or `y`, depending on `condition`.
     Note that `x` and `y` are always evaluated regardless of the value of `condition`.
-    If you want to avoid unintented memory operations, use the `mask` arguments in `triton.load` and `triton.store` instead.
+    If you want to avoid unintended memory operations, use the `mask` arguments in `triton.load` and `triton.store` instead.
 
     :param condition: When True (nonzero), yield x, otherwise yield y.
     :type condition: Block of triton.bool
@@ -353,9 +353,6 @@ ir::value *sqrt(ir::value *input, ir::builder *builder) {
   return builder->create_sqrt(input);
 };
 
-/*----------------------------------------------
- definition of triton.min
- ----------------------------------------------*/
 ir::value *reduce_impl(ir::value *input, unsigned int axis, ir::builder *builder, const std::string &name,
                        ir::reduce_inst::op_t FLOAT_OP, ir::reduce_inst::op_t INT_OP) {
   ir::type *scalar_ty = input->get_type()->get_scalar_ty();
@@ -367,11 +364,24 @@ ir::value *reduce_impl(ir::value *input, unsigned int axis, ir::builder *builder
     throw_not_int_or_float(name);
 }
 
+/*----------------------------------------------
+ definition of triton.min
+ ----------------------------------------------*/
 std::string min_docstr = R"pbdoc(
     Returns the minimum value of `input`.
  )pbdoc";
 ir::value *min(ir::value *input, unsigned int axis, ir::builder *builder) {
   return reduce_impl(input, axis, builder, "min", ir::reduce_inst::FMIN, ir::reduce_inst::MIN);
+};
+
+/*----------------------------------------------
+ definition of triton.arg_min
+ ----------------------------------------------*/
+std::string min_docstr = R"pbdoc(
+    Returns the minimum value's index of `input`.
+ )pbdoc";
+ir::value *argmin(ir::value *input, unsigned int axis, ir::builder *builder) {
+  return reduce_impl(input, axis, builder, "argmin", ir::reduce_inst::ARGFMIN, ir::reduce_inst::ARGMIN);
 };
 
 /*----------------------------------------------
@@ -382,6 +392,16 @@ std::string max_docstr = R"pbdoc(
  )pbdoc";
 ir::value *max(ir::value *input, unsigned int axis, ir::builder *builder) {
   return reduce_impl(input, axis, builder, "max", ir::reduce_inst::FMAX, ir::reduce_inst::MAX);
+};
+
+/*----------------------------------------------
+ definition of triton.arg_max
+ ----------------------------------------------*/
+std::string max_docstr = R"pbdoc(
+    Returns the maximum value's index of `input`.
+ )pbdoc";
+ir::value *argmax(ir::value *input, unsigned int axis, ir::builder *builder) {
+  return reduce_impl(input, axis, builder, "argmax", ir::reduce_inst::ARGFMAX, ir::reduce_inst::ARGMAX);
 };
 
 /*----------------------------------------------

@@ -29,8 +29,16 @@ void prefetch::run(ir::module &mod) {
   std::vector<ir::dot_inst*> to_prefetch;
   ir::for_each_instruction(mod, [&](ir::instruction *i) {
     if (auto *dot = dynamic_cast<ir::dot_inst*>(i)) {
-      // Now only do prefetching when dot is fp16
-      if (dot->get_operand(0)->get_type()->get_scalar_ty()->get_type_id() != ir::type::FP16TyID)
+      // Now only do prefetching when dot is using tensor cores
+      if (!(dot->get_operand(0)->get_type()->get_scalar_ty()->is_fp16_ty() ||
+            dot->get_operand(0)->get_type()->get_scalar_ty()->is_bf16_ty() ||
+            (dot->get_operand(0)->get_type()->get_scalar_ty()->is_fp32_ty() && dot->allow_tf32()
+             && tgt_->as_nvidia() && tgt_->as_nvidia()->sm() >= 80) || 
+            (dot->get_operand(0)->get_type()->get_scalar_ty()->is_integer_ty(8)
+             && dot->get_operand(1)->get_type()->get_scalar_ty()->is_integer_ty(8)
+             && tgt_->as_nvidia() && tgt_->as_nvidia()->sm() >= 80)
+           )
+         )
         return;
       auto *a = dynamic_cast<ir::phi_node*>(dot->get_operand(0));
       auto *b = dynamic_cast<ir::phi_node*>(dot->get_operand(1));

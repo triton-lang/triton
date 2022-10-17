@@ -27,7 +27,7 @@ unsigned type::get_primitive_size_in_bits() const {
     case BF16TyID: return 16;
     case FP32TyID: return 32;
     case FP64TyID: return 64;
-    case IntegerTyID: return ((integer_type*)(this))->get_bitwidth();
+    case IntegerTyID: return std::max<int>(8, ((integer_type*)(this))->get_bitwidth());
     case BlockTyID:  return ((block_type*)(this))->get_bitwidth();
     default: return 0;
   }
@@ -153,10 +153,10 @@ pointer_type* pointer_type::get(type *elt_ty, unsigned address_space){
   assert(is_valid_elt_ty(elt_ty) && "Invalid type for pointer element!");
   // look-up
   context_impl *impl = elt_ty->get_context().p_impl.get();
-  pointer_type *&entry = impl->ptr_tys[std::make_pair(elt_ty, address_space)];
+  std::unique_ptr<pointer_type> &entry = impl->ptr_tys[std::make_pair(elt_ty, address_space)];
   if(!entry)
-    entry = new pointer_type(elt_ty, address_space);
-  return entry;
+    entry.reset(new pointer_type(elt_ty, address_space));
+  return entry.get();
 }
 
 //===----------------------------------------------------------------------===//
@@ -174,7 +174,26 @@ bool composite_type::index_valid(value *idx) const{
 }
 
 //===----------------------------------------------------------------------===//
-//                               tile_type class
+//                               struct_type class
+//===----------------------------------------------------------------------===//
+
+struct_type::struct_type(const contained_tys_vec_t& tys, bool is_packed)
+  : composite_type(tys[0]->get_context(), StructTyID), is_packed_(is_packed) {
+ contained_tys_ = tys;
+}
+
+struct_type* struct_type::get(const contained_tys_vec_t& tys, bool is_packed) {
+  assert(tys.size());
+  context_impl* impl = tys[0]->get_context().p_impl.get();
+  struct_type *& entry = impl->struct_tys[tys];
+  if(!entry)
+    entry = new struct_type(tys, is_packed);
+  return  entry;
+}
+
+
+//===----------------------------------------------------------------------===//
+//                               block_type class
 //===----------------------------------------------------------------------===//
 
 block_type::block_type(type *ty, const block_shapes_t &shapes)
@@ -203,10 +222,10 @@ block_type* block_type::get(type *elt_ty, const block_shapes_t &shapes) {
   assert(is_valid_elt_ty(elt_ty) && "Invalid type for tile element!");
   // look-up
   context_impl *impl = elt_ty->get_context().p_impl.get();
-  block_type *&entry = impl->block_tys[std::make_pair(elt_ty, shapes)];
+  std::unique_ptr<block_type> &entry = impl->block_tys[std::make_pair(elt_ty, shapes)];
   if(!entry)
-    entry = new block_type(elt_ty, shapes);
-  return entry;
+    entry.reset(new block_type(elt_ty, shapes));
+  return entry.get();
 }
 
 block_type* block_type::get_same_shapes(type *ty, type *ref){

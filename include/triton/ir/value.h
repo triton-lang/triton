@@ -21,7 +21,7 @@ class visitor;
 
 class value {
 public:
-  typedef std::set<user*> users_t;
+  typedef std::vector<user*> users_t;
 
 public:
   // constructor
@@ -30,7 +30,7 @@ public:
   // uses
   void add_use(user* arg);
   users_t::iterator erase_use(user* arg);
-  const std::set<user*> &get_users() { return users_; }
+  const std::vector<user*> &get_users() { return users_; }
   void replace_all_uses_with(value *target);
   // name
   void set_name(const std::string &name);

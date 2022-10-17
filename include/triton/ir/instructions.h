@@ -59,8 +59,8 @@ public:
   std::string repr() const                                    { return repr_impl(); }
   // metadata
   void set_metadata(ir::metadata::kind_t kind,
-                    unsigned value)                           { metadatas_[kind] = value;}
-  unsigned get_metadata(ir::metadata::kind_t kind)            { return metadatas_[kind];}
+                    std::vector<unsigned> value)                           { metadatas_[kind] = value;}
+  std::vector<unsigned> get_metadata(ir::metadata::kind_t kind)            { return metadatas_[kind];}
   // cloning
   ir::instruction* clone() {
     ir::instruction* res = clone_impl();
@@ -77,10 +77,55 @@ public:
 
 private:
   basic_block *parent_;
-  std::map<ir::metadata::kind_t, unsigned> metadatas_;
+  std::map<ir::metadata::kind_t, std::vector<unsigned>> metadatas_;
   value_id_t id_;
 };
 
+//===----------------------------------------------------------------------===//
+//                               call_inst classes
+//===----------------------------------------------------------------------===//
+
+class call_inst: public instruction {
+private:
+  std::string repr_impl() const;
+  call_inst(ir::function* fn, const std::vector<ir::value*>& values, const std::string& name, instruction* next);
+
+public:
+  static call_inst* create(ir::function* fn, const std::vector<ir::value*>& values, const std::string &name = "", instruction *next = nullptr);
+  ir::function* get_fn() { return fn_; }
+
+  _TRITON_DEFINE_CLONE(call_inst)
+  _TRITON_DEFINE_ACCEPT(call_inst)
+
+private:
+  ir::function* fn_;
+};
+
+class launch_inst: public instruction {
+private:
+  std::string repr_impl() const { return "launch"; }
+  launch_inst(ir::function* fn, const std::vector<ir::value*>& values, const std::vector<ir::value*>& grid, ir::value* num_warps,
+              const std::string &name = "", instruction *next = nullptr);
+
+public:
+  static launch_inst* create(ir::function* fn, const std::vector<ir::value*>& values, const std::vector<ir::value*>& grid, ir::value* num_warps,
+                             const std::string& name = "", instruction* next = nullptr);
+
+  ir::function* get_fn();
+  std::vector<ir::value*> get_values();
+  std::vector<ir::value*> get_grid();
+  ir::value* get_num_warps();
+
+
+  _TRITON_DEFINE_CLONE(launch_inst)
+  _TRITON_DEFINE_ACCEPT(launch_inst)
+
+private:
+  unsigned val_begin;
+  unsigned val_end;
+  unsigned grid_begin;
+  unsigned grid_end;
+};
 
 //===----------------------------------------------------------------------===//
 //                               phi_node classes
@@ -117,6 +162,7 @@ private:
 //===----------------------------------------------------------------------===//
 //                               binary_operator classes
 //===----------------------------------------------------------------------===//
+
 class binary_operator: public instruction {
 public:
   typedef binary_op_t op_t;
@@ -145,6 +191,10 @@ public:
   bool is_shl()         const;
   bool is_shr()         const;
 
+  // Approx
+  void set_fdiv_ieee_rounding(bool rnd) { fdiv_ieee_rnd_ = rnd; }
+  bool get_fdiv_ieee_rounding() { return fdiv_ieee_rnd_; }
+
   // Wraps
   void set_has_no_unsigned_wrap(bool b = true) { has_no_unsigned_wrap_ = b; }
   void set_has_no_signed_wrap(bool b = true)   { has_no_signed_wrap_ = b; }
@@ -163,6 +213,8 @@ public:
   binary_op_t op_;
   bool has_no_unsigned_wrap_;
   bool has_no_signed_wrap_;
+
+  bool fdiv_ieee_rnd_;
 };
 
 
@@ -222,6 +274,24 @@ protected:
   unary_inst(type *ty, value_id_t id, value *v, const std::string &name, instruction *next);
 };
 
+//===----------------------------------------------------------------------===//
+//                               dequantize_inst classes
+//===----------------------------------------------------------------------===//
+
+class dequantize_inst: public instruction{
+private:
+  std::string repr_impl() const override { return "dequantize"; }
+
+protected:
+  dequantize_inst(type *ty, value *v, value *scale, value *shift, const std::string &name, instruction *next);
+
+public:
+  static dequantize_inst *create(value *arg, value *scale, value *shift, type *ty,
+                           const std::string &name = "", instruction *next = nullptr);
+
+  _TRITON_DEFINE_CLONE(dequantize_inst)
+  _TRITON_DEFINE_ACCEPT(dequantize_inst)
+};
 
 //===----------------------------------------------------------------------===//
 //                               cast_inst classes
@@ -383,13 +453,31 @@ private:
 //===----------------------------------------------------------------------===//
 
 class io_inst: public instruction {
+public:
+
+  enum EVICTION_POLICY : uint32_t {
+    NORMAL=0,
+    EVICT_FIRST,
+    EVICT_LAST,
+  };
+
 protected:
-  io_inst(type *ty, value_id_t id, unsigned num_ops,
+  io_inst(type *ty, value_id_t id, unsigned num_ops, EVICTION_POLICY eviction,
           const std::string &name = "", instruction *next = nullptr);
+
+  std::string get_eviction_policy_repr() const {
+    if (eviction_ == EVICT_FIRST) return ".L1::evict_first";
+    if (eviction_ == EVICT_LAST) return ".L2::evict_last";
+    return "";
+  }
 
 public:
   // accessors
   value *get_pointer_operand() { return get_operand(0); }
+  EVICTION_POLICY get_eviction_policy() const { return eviction_; }
+
+protected:
+  EVICTION_POLICY eviction_;
 };
 
 // load
@@ -399,33 +487,42 @@ public:
     NONE=0,
     CA,
     CG,
-  }; 
+  };
+
 
   CACHE_MODIFIER get_cache_modifier() const { return cache_; }
+  bool get_is_volatile() const { return is_volatile_; }
+
 protected:
-  load_inst(value *ptr, value_id_t id, unsigned num_ops, CACHE_MODIFIER cache,
+  load_inst(value *ptr, value_id_t id, unsigned num_ops, CACHE_MODIFIER cache, EVICTION_POLICY eviction,
+          bool is_volatile,
           const std::string &name = "", instruction *next = nullptr);
   std::string get_cache_modifier_repr() const {
     if (cache_ == CA) return ".ca";
     if (cache_ == CG) return ".cg";
-    return ""; 
+    return "";
   }
   CACHE_MODIFIER cache_;
 
+  std::string get_volatile_repr() {
+    return is_volatile_ ? ".volatile" : "";
+  }
+  bool is_volatile_;
+
 private:
   static type *get_pointee_type(type *ty);
-
 };
 
 // unmasked load
 class unmasked_load_inst: public load_inst {
 private:
   std::string repr_impl() const { return "unmasked_load" + get_cache_modifier_repr(); }
-  unmasked_load_inst(value *ptr, load_inst::CACHE_MODIFIER cache, const std::string &name, instruction *next);
+  unmasked_load_inst(value *ptr, load_inst::CACHE_MODIFIER cache, load_inst::EVICTION_POLICY eviction, bool is_volatile, const std::string &name, instruction *next);
 
 public:
   static unmasked_load_inst* create(value *ptr,
-                                    CACHE_MODIFIER cache,
+                                    CACHE_MODIFIER cache, EVICTION_POLICY eviction,
+                                    bool is_volatile,
                                     const std::string &name = "",
                                     instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(unmasked_load_inst)
@@ -436,7 +533,7 @@ public:
 class masked_load_inst: public load_inst {
 private:
   std::string repr_impl() const { return "masked_load" + get_cache_modifier_repr(); }
-  masked_load_inst(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache,
+  masked_load_inst(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache, load_inst::EVICTION_POLICY eviction, bool is_volatile,
                    const std::string &name, instruction *next);
 
 public:
@@ -445,7 +542,8 @@ public:
   value *get_false_value_operand() { return get_operand(2); }
   // factory method
   static masked_load_inst* create(value *ptr, value *mask, value *false_value,
-                                  CACHE_MODIFIER cache,
+                                  CACHE_MODIFIER cache, EVICTION_POLICY eviction,
+                                  bool is_volatile,
                                   const std::string &name = "",
                                   instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(masked_load_inst)
@@ -455,9 +553,10 @@ public:
 // masked load async
 class masked_load_async_inst: public load_inst {
 private:
-  std::string repr_impl() const { return "masked_load_async_async" + get_cache_modifier_repr(); }
-  masked_load_async_inst(value *ptr, value *mask, value *false_value, load_inst::CACHE_MODIFIER cache,
-                   const std::string &name, instruction *next);
+  std::string repr_impl() const { return "masked_load_async" + get_cache_modifier_repr(); }
+  masked_load_async_inst(value *ptr, value *mask, value *false_value,
+                         CACHE_MODIFIER cache, EVICTION_POLICY eviction,
+                         const std::string &name, instruction *next);
 
 public:
   // accessors
@@ -466,6 +565,7 @@ public:
   // factory method
   static masked_load_async_inst* create(value *ptr, value *mask, value *false_value,
                                   load_inst::CACHE_MODIFIER cache,
+                                  EVICTION_POLICY eviction,
                                   const std::string &name = "",
                                   instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(masked_load_async_inst)
@@ -477,7 +577,7 @@ public:
 // store
 class store_inst: public io_inst {
 protected:
-  store_inst(value *ptr, value_id_t id, unsigned num_ops,
+  store_inst(value *ptr, value_id_t id, unsigned num_ops, EVICTION_POLICY eviction,
             const std::string &name = "", instruction *next = nullptr);
 
 public:
@@ -488,11 +588,11 @@ public:
 class unmasked_store_inst: public store_inst{
 private:
   std::string repr_impl() const { return "unmasked_store"; }
-  unmasked_store_inst(value *ptr, value *v, const std::string &name, instruction *next);
+  unmasked_store_inst(value *ptr, value *v, EVICTION_POLICY eviction, const std::string &name, instruction *next);
 
 public:
   // factory method
-  static unmasked_store_inst* create(value* ptr, value *v,
+  static unmasked_store_inst* create(value* ptr, value *v, EVICTION_POLICY eviction,
                                     const std::string &name = "",
                                     instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(unmasked_store_inst)
@@ -502,18 +602,56 @@ public:
 class masked_store_inst: public store_inst{
 private:
   std::string repr_impl() const { return "masked_store"; }
-  masked_store_inst(value *ptr, value *v, value *mask,
+  masked_store_inst(value *ptr, value *v, value *mask, EVICTION_POLICY eviction,
                     const std::string &name, instruction *next);
 
 public:
   // accessors
   value *get_mask_operand() { return get_operand(2); }
   // factory method
-  static masked_store_inst* create(value *ptr, value *v, value *mask,
+  static masked_store_inst* create(value *ptr, value *v, value *mask, EVICTION_POLICY eviction,
                                    const std::string &name = "",
                                    instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(masked_store_inst)
   _TRITON_DEFINE_ACCEPT(masked_store_inst)
+};
+
+//===----------------------------------------------------------------------===//
+//                               struct classes
+//===----------------------------------------------------------------------===//
+
+// insert_value
+
+class insert_value_inst: public instruction {
+private:
+  std::string repr_impl() const { return "insertvalue"; }
+  insert_value_inst(value *val, value *elt, size_t idx, const std::string &name, instruction *next);
+
+public:
+  static insert_value_inst* create(value *val, value* elt, size_t idx, const std::string &name = "", instruction *next = nullptr);
+  size_t get_idx() { return idx_; }
+  _TRITON_DEFINE_CLONE(insert_value_inst)
+  _TRITON_DEFINE_ACCEPT(insert_value_inst)
+
+private:
+  size_t idx_;
+};
+
+// extract_value
+
+class extract_value_inst: public instruction {
+private:
+  std::string repr_impl() const { return "extractvalue"; }
+  extract_value_inst(value *val, size_t idx, const std::string &name, instruction *next);
+
+public:
+  static extract_value_inst* create(value *val, size_t idx, const std::string &name = "", instruction *next = nullptr);
+  size_t get_idx() { return idx_; }
+  _TRITON_DEFINE_CLONE(extract_value_inst)
+  _TRITON_DEFINE_ACCEPT(extract_value_inst)
+
+private:
+  size_t idx_;
 };
 
 //===----------------------------------------------------------------------===//
@@ -641,6 +779,8 @@ private:
 class atomic_inst: public io_inst {
 public:
   using io_inst::io_inst;
+  atomic_inst(type *ty, value_id_t id, unsigned num_ops, const std::string &name, instruction *next):
+    io_inst(ty, id, num_ops, NORMAL, name, next) {}
 };
 
 class atomic_rmw_inst: public atomic_inst {
@@ -728,24 +868,40 @@ public:
 class dot_inst: public builtin_inst {
 public:
   enum TransT { NoTrans, Trans };
+  enum DataType {
+    FP8, FP16, BF16, TF32, FP32,
+    INT1, INT4, INT8, INT32,
+    UNKNOWN,
+  };
 
 private:
-  dot_inst(value *A, value *B, value *C, TransT AT, TransT BT, const std::string &name, instruction *next);
+  dot_inst(value *A, value *B, value *C, TransT AT, TransT BT, bool allow_tf32, const std::string &name, instruction *next);
   std::string repr_impl() const { return "dot"; }
 
-  bool is_prefetched_ = false;
 public:
   bool is_prefetched() const { return is_prefetched_; }
   void set_prefetched(bool is_prefetched) { is_prefetched_ = is_prefetched; }
+  bool allow_tf32() const { return allow_tf32_; }
+  bool is_trans_a() const { return AT_ == Trans; }
+  bool is_trans_b() const { return BT_ == Trans; }
 
 public:
-  static instruction *create(value *A, value *B, value *C, bool AT, bool BT, const std::string &name = "", instruction *next = nullptr);
-  static instruction* create_nn(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
-  static instruction* create_nt(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
-  static instruction* create_tn(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
-  static instruction* create_tt(value *A, value *B, value *C, const std::string &name = "", instruction *next = nullptr);
+  static instruction *create(value *A, value *B, value *C, bool AT, bool BT, bool allow_tf32, const std::string &name = "", instruction *next = nullptr);
+  static instruction* create_nn(value *A, value *B, value *C, bool allow_tf32, const std::string &name = "", instruction *next = nullptr);
+  static instruction* create_nt(value *A, value *B, value *C, bool allow_tf32, const std::string &name = "", instruction *next = nullptr);
+  static instruction* create_tn(value *A, value *B, value *C, bool allow_tf32, const std::string &name = "", instruction *next = nullptr);
+  static instruction* create_tt(value *A, value *B, value *C, bool allow_tf32, const std::string &name = "", instruction *next = nullptr);
   _TRITON_DEFINE_CLONE(dot_inst)
   _TRITON_DEFINE_ACCEPT(dot_inst)
+
+private:
+  bool is_prefetched_ = false;
+  bool allow_tf32_ = false;
+  DataType C_type_ = DataType::FP32;
+  DataType A_type_ = DataType::FP16;
+  DataType B_type_ = DataType::FP16;
+  TransT AT_;
+  TransT BT_;
 };
 
 //class outer_inst: public builtin_inst {
@@ -787,8 +943,11 @@ public:
 class reduce_inst: public builtin_inst {
 public:
   enum op_t{
-    ADD, SUB, MAX, MIN,
-    FADD, FSUB, FMAX, FMIN
+    ADD, SUB, MAX, MIN, UMAX, UMIN,
+    ARGMAX, ARGMIN, ARGUMAX, ARGUMIN,
+    FADD, FSUB, FMAX, FMIN,
+    ARGFMAX, ARGFMIN,
+    XOR
   };
 
 private:
@@ -805,11 +964,18 @@ public:
   static instruction* create(value *arg, op_t op, unsigned axis, const std::string &name = "", instruction *next = nullptr);
   unsigned get_axis() const { return axis_; }
   op_t get_op() const { return op_; }
+  bool with_index() const {
+    return with_index_ops_.find(op_) != with_index_ops_.end();
+  }
 
 private:
-  unsigned axis_;
-  op_t op_;
+ const static inline std::set<op_t> with_index_ops_ = {
+     op_t::ARGMAX,  op_t::ARGMIN,  op_t::ARGUMAX,
+     op_t::ARGUMIN, op_t::ARGFMAX, op_t::ARGFMIN};
+ unsigned axis_;
+ op_t op_;
 };
+
 
 class select_inst: public builtin_inst {
 private:
@@ -898,11 +1064,11 @@ class prefetch_s_inst : public instruction {
   std::string repr_impl() const { return "prefetch_s"; }
   _TRITON_DEFINE_CLONE(prefetch_s_inst)
   _TRITON_DEFINE_ACCEPT(prefetch_s_inst)
-  
+
   /// inc_: 0->first, 1->latch
   int inc_ = 0;
 public:
-  prefetch_s_inst(context &ctx, value *arg, int inc, const std::string &name, instruction *next) 
+  prefetch_s_inst(context &ctx, value *arg, int inc, const std::string &name, instruction *next)
     : instruction(type::get_void_ty(ctx), INST_PREFETCH_S, 1, name, next), inc_(inc) {
     set_operand(0, arg);
   }
@@ -928,7 +1094,53 @@ private:
   constant_int* last_;
 };
 
+/* timing utilities */
+class clock_inst: public instruction{
+  clock_inst(context &ctx, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "clock"; }
+  _TRITON_DEFINE_CLONE(clock_inst)
+  _TRITON_DEFINE_ACCEPT(clock_inst)
 
+public:
+  static clock_inst* create(context &ctx, const std::string &name = "", instruction *next = nullptr);
+};
+
+class globaltimer_inst: public instruction{
+  globaltimer_inst(context &ctx, const std::string &name, instruction *next);
+  std::string repr_impl() const { return "globaltimer"; }
+  _TRITON_DEFINE_CLONE(globaltimer_inst)
+  _TRITON_DEFINE_ACCEPT(globaltimer_inst)
+
+public:
+  static globaltimer_inst* create(context &ctx, const std::string &name = "", instruction *next = nullptr);
+};
+
+class extern_elementwise_inst : public instruction {
+  extern_elementwise_inst(context &ctx, const std::vector<value *> &args,
+                          type *dst_ty, const std::string &lib_name,
+                          const std::string &extern_lib_path,
+                          const std::string &symbol_name,
+                          const std::string &name, instruction *next);
+  std::string repr_impl() const { return "extern_elementwise"; }
+  _TRITON_DEFINE_CLONE(extern_elementwise_inst)
+  _TRITON_DEFINE_ACCEPT(extern_elementwise_inst)
+
+ public:
+  static extern_elementwise_inst *create(
+      context &ctx, const std::vector<value *> &args, type *dst_ty,
+      const std::string &lib_name = "", const std::string &lib_path = "",
+      const std::string &symbol_name = "", const std::string &name = "",
+      instruction *next = nullptr);
+
+  const std::string &get_lib_name() const { return lib_name_; }
+  const std::string &get_lib_path() const { return lib_path_; }
+  const std::string &get_symbol_name() const { return symbol_name_; }
+
+ private:
+  std::string lib_name_;
+  std::string lib_path_;
+  std::string symbol_name_;
+};
 }
 }
 
