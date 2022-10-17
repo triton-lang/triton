@@ -1612,7 +1612,7 @@ private:
 
   // shared -> mma_operand
   LogicalResult
-  lowerSharedToMmaOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adapter,
+  lowerSharedToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adapter,
                           ConversionPatternRewriter &rewriter) const;
 };
 
@@ -1919,37 +1919,6 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
   barrier;
   rewriter.replaceOp(op, smemBase);
   return success();
-}
-
-LogicalResult ConvertLayoutOpConversion::lowerSharedToMmaOperand(
-    triton::gpu::ConvertLayoutOp op, OpAdaptor adapter,
-    ConversionPatternRewriter &rewriter) const {
-  auto loc = op.getLoc();
-  Value src = op.src();
-  Value dst = op.result();
-  auto srcTensorTy = src.getType().cast<RankedTensorType>();
-  auto dstTensorTy = dst.getType().cast<RankedTensorType>();
-
-  auto sharedLayout = srcTensorTy.getEncoding().cast<SharedEncodingAttr>();
-  auto mmaOperandLayout =
-      dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-
-  auto uses = op.getResult().getUses();
-  // check all the mma layout in uses are the same.
-  MmaEncodingAttr preMmaLayout;
-  for (auto &op : uses) {
-    auto dotOp = cast<DotOp>(op.getOwner());
-    auto mmaLayout = dotOp.getResult()
-                         .getType()
-                         .cast<RankedTensorType>()
-                         .getEncoding()
-                         .cast<MmaEncodingAttr>();
-    if (preMmaLayout)
-      assert(preMmaLayout == mmaLayout);
-    preMmaLayout = mmaLayout;
-  }
-
-  // We randomly get a mmaLayout for all of them are the same.
 }
 
 /// ====================== dot codegen begin ==========================
@@ -2702,7 +2671,6 @@ struct MMA16816ConversionHelper {
   // size_t aElemBytes{}, bElemBytes{};
 
   DotOpConversionHelper helper;
-  DotOpAdaptor adapter;
   ConversionPatternRewriter &rewriter;
   TypeConverter *typeConverter;
   Location loc;
@@ -2711,12 +2679,11 @@ struct MMA16816ConversionHelper {
   using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
 
   MMA16816ConversionHelper(MmaEncodingAttr mmaLayout, Value thread,
-                           DotOpAdaptor adapter,
                            ConversionPatternRewriter &rewriter,
                            TypeConverter *typeConverter, Location loc)
-      : mmaLayout(mmaLayout), helper(mmaLayout), adapter(adapter),
-        rewriter(rewriter), typeConverter(typeConverter), loc(loc),
-        ctx(mmaLayout.getContext()), thread(thread) {
+      : mmaLayout(mmaLayout), helper(mmaLayout), rewriter(rewriter),
+        typeConverter(typeConverter), loc(loc), ctx(mmaLayout.getContext()),
+        thread(thread) {
 
     wpt = mmaLayout.getWarpsPerCTA();
 
@@ -2997,6 +2964,56 @@ private:
   }
 };
 
+LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
+    triton::gpu::ConvertLayoutOp op, OpAdaptor adapter,
+    ConversionPatternRewriter &rewriter) const {
+  auto loc = op.getLoc();
+  Value src = op.src();
+  Value dst = op.result();
+  auto srcTensorTy = src.getType().cast<RankedTensorType>();
+  auto dstTensorTy = dst.getType().cast<RankedTensorType>();
+
+  auto sharedLayout = srcTensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto dotOperandLayout =
+      dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+
+  auto uses = op.getResult().getUses();
+  // check all the mma layout in uses are the same.
+  MmaEncodingAttr preMmaLayout;
+  for (auto &op : uses) {
+    auto dotOp = cast<DotOp>(op.getOwner());
+    auto mmaLayout = dotOp.getResult()
+                         .getType()
+                         .cast<RankedTensorType>()
+                         .getEncoding()
+                         .cast<MmaEncodingAttr>();
+    if (preMmaLayout)
+      assert(preMmaLayout == mmaLayout);
+    preMmaLayout = mmaLayout;
+  }
+
+  // We randomly get a mmaLayout for all of them are the same.
+  auto mmaLayout = preMmaLayout;
+
+  MMA16816ConversionHelper mmaHelper(mmaLayout, getThreadId(rewriter, loc),
+                                     rewriter, getTypeConverter(), op.getLoc());
+
+  Value res;
+  if (dotOperandLayout.getOpIdx() == 0) {
+    // operand $a
+    res = mmaHelper.loadA(src, adapter.src());
+  } else if (dotOperandLayout.getOpIdx() == 1) {
+    // operand $b
+    res = mmaHelper.loadB(src, adapter.src());
+  } else if (dotOperandLayout.getOpIdx() == 1) {
+    // operand $c
+    res = mmaHelper.loadC(src);
+  }
+
+  rewriter.replaceOp(op, res);
+  return success();
+}
+
 LogicalResult
 DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
                                  ConversionPatternRewriter &rewriter) const {
@@ -3007,8 +3024,7 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
                        .getEncoding()
                        .cast<MmaEncodingAttr>();
   MMA16816ConversionHelper mmaHelper(mmaLayout, getThreadId(rewriter, loc),
-                                     adapter, rewriter, getTypeConverter(),
-                                     loc);
+                                     rewriter, getTypeConverter(), loc);
 
   auto A = mmaHelper.loadA(op.a(), adapter.a());
   auto B = mmaHelper.loadB(op.b(), adapter.b());
