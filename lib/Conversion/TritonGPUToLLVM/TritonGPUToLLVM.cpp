@@ -2611,7 +2611,7 @@ struct DotOpConversionHelper {
   }
 
 private:
-  mutable TensorCoreType mmaType;
+  mutable TensorCoreType mmaType{TensorCoreType::NOT_APPLICABLE};
 
   // Used on nvidia GPUs mma layout .version == 2
   // Refer to
@@ -3068,7 +3068,7 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
   } else if (dotOperandLayout.getOpIdx() == 1) {
     // operand $b
     res = mmaHelper.loadB(src, adapter.src());
-  } else if (dotOperandLayout.getOpIdx() == 1) {
+  } else if (dotOperandLayout.getOpIdx() == 2) {
     // operand $c
     res = mmaHelper.loadC(src);
   }
