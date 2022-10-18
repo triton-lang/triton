@@ -2835,13 +2835,12 @@ struct MMA16816ConversionHelper {
   }
 
   // Conduct the Dot conversion.
-  // Input the \param a, \param b, \param c, all of them are result of loading.
-  LogicalResult convertDot(DotOp op, DotOpAdaptor adapter) const {
-    Value a = op.a();
-    Value b = op.b();
-    Value c = op.c();
-    Value d = op.d();
-
+  // \param a, \param b, \param c and \param d are DotOp operands.
+  // \param loadedA, \param loadedB, \param loadedC, all of them are result of
+  // loading.
+  LogicalResult convertDot(Value a, Value b, Value c, Value d, Value loadedA,
+                           Value loadedB, Value loadedC, DotOp op,
+                           DotOpAdaptor adapter) const {
     helper.deduceMmaType(op);
 
     auto aTensorTy = a.getType().cast<RankedTensorType>();
@@ -2860,12 +2859,13 @@ struct MMA16816ConversionHelper {
     int numRepN = getNumRepN(aTensorTy, dShape[1]);
     int numRepK = getNumRepK(aTensorTy, aShape[1]);
 
-    ValueTable ha = getValuesFromDotOperandLayoutStruct(a, numRepM, numRepK);
+    ValueTable ha =
+        getValuesFromDotOperandLayoutStruct(loadedA, numRepM, numRepK);
     ValueTable hb = getValuesFromDotOperandLayoutStruct(
-        b, std::max(numRepN / 2, 1), numRepK);
+        loadedB, std::max(numRepN / 2, 1), numRepK);
 
     const int fcSize = 4 * numRepM * numRepN;
-    SmallVector<Value> fc(fcSize, c);
+    SmallVector<Value> fc(fcSize, loadedC);
 
     auto callMma = [&](unsigned m, unsigned n, unsigned k) {
       unsigned colsPerThread = numRepN * 2;
@@ -3092,7 +3092,8 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
   auto B = mmaHelper.loadB(op.b(), adapter.b());
   auto C = mmaHelper.loadC(op.c());
 
-  return mmaHelper.convertDot(op);
+  return mmaHelper.convertDot(op.a(), op.b(), op.c(), op.d(), A, B, C, op,
+                              adapter);
 }
 
 /// ====================== mma codegen end ============================
