@@ -16,6 +16,9 @@
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVM.h"
 #include "triton/tools/sys/getenv.hpp"
 #include "llvm/IR/Constants.h"
+#include "llvm/Support/SourceMgr.h"
+#include "llvm/IRReader/IRReader.h"
+#include "llvm/Linker/Linker.h"
 
 namespace mlir {
 namespace triton {
@@ -145,10 +148,44 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
     llvm::errs() << "Pass execution failed";
     return nullptr;
   }
+  SmallVector<LLVM::LLVMFuncOp> funcs;
+  module.walk([&](LLVM::LLVMFuncOp func){
+    funcs.push_back(func);
+  });
+
+  static const std::string key("libpath:");
+  std::set<std::string> extern_libs;
+  for (auto &func : funcs) {
+    if (!func.isExternal())
+      continue;
+    auto attrs = func.getPassthroughAttr();
+    for (auto& attr : attrs) {
+      if (StringAttr sAttr = attr.dyn_cast<StringAttr>()) {
+        auto value = sAttr.str();
+        if (0 == value.find(key)) {
+          extern_libs.insert(value.substr(key.size()));
+        }
+      }
+    }
+  }
 
   auto llvmir = translateLLVMToLLVMIR(llvmContext, module);
   if (!llvmir) {
     llvm::errs() << "Translate to LLVM IR failed";
+  }
+
+  llvm::SMDiagnostic err;
+  for (auto& path : extern_libs) {
+    auto ext_mod = llvm::parseIRFile(path, err, *llvmContext);
+    if (!ext_mod) {
+      llvm::errs() <<"Failed to load extern lib ";
+    }
+    ext_mod->setTargetTriple(llvmir->getTargetTriple());
+    ext_mod->setDataLayout(llvmir->getDataLayout());
+
+    if (llvm::Linker::linkModules(*llvmir, std::move(ext_mod))) {
+      llvm::errs() <<"Failed to link extern lib ";
+    }
   }
 
   return llvmir;

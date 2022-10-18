@@ -3242,6 +3242,80 @@ struct InsertSliceAsyncOpConversion
   }
 };
 
+struct ExtElemwiseOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::ExtElemwiseOp> {
+  using ConvertTritonGPUOpToLLVMPattern<triton::ExtElemwiseOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::ExtElemwiseOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    StringRef funcName = op.symbol();
+    StringRef libpath = op.libpath();
+    if (funcName.empty() || libpath.empty())
+      return failure();
+
+    auto resultTy = op.getType().template dyn_cast<RankedTensorType>();
+    // ArithmeticToLLVM will handle the lowering of scalar ArithOps
+    if (!resultTy)
+      return failure();
+
+    Location loc = op->getLoc();
+    auto resultLayout =
+        resultTy.getEncoding().template dyn_cast<BlockedEncodingAttr>();
+    auto resultShape = resultTy.getShape();
+    assert(resultLayout && "Unexpected resultLayout in BinaryOpConversion");
+    unsigned elems = resultLayout.getElemsPerThread(resultShape);
+    Type elemTy =
+        this->getTypeConverter()->convertType(resultTy.getElementType());
+    SmallVector<Type> eleTys(elems, elemTy);
+    Type resultStructTy = LLVM::LLVMStructType::getLiteral(this->getContext(), eleTys);
+    auto operands = getOperands(rewriter, adaptor, elems, loc);
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp = appendOrGetFuncOp(rewriter, op, funcName, funcType);
+
+    SmallVector<Value> resultVals(elems);
+    for (unsigned i = 0; i < elems; ++i) {
+      resultVals[i] = rewriter.create<LLVM::CallOp>(loc, funcOp, operands[i]).getResult(0);
+    }
+    Value view = getStructFromElements(loc, resultVals, rewriter, resultStructTy);
+    rewriter.replaceOp(op, view);
+    return success();
+  }
+
+  SmallVector<SmallVector<Value>> getOperands(ConversionPatternRewriter &rewriter, OpAdaptor adaptor,
+    const unsigned elems, Location loc) const {
+    SmallVector<SmallVector<Value>> operands(elems);
+    for (auto operand : adaptor.getOperands()) {
+      auto sub_operands = this->getElementsFromStruct(loc, operand, rewriter);
+      for (int i=0; i<elems; ++i) {
+        operands[i].push_back(sub_operands[i]);
+      }
+    }
+    return operands;
+  }
+
+  Type getFunctionType(Type resultType, ValueRange operands) const {
+    SmallVector<Type> operandTypes(operands.getTypes());
+    return LLVM::LLVMFunctionType::get(resultType, operandTypes);
+  }
+
+  LLVM::LLVMFuncOp appendOrGetFuncOp(ConversionPatternRewriter& rewriter, triton::ExtElemwiseOp op, StringRef funcName,
+                                     Type funcType) const {
+    using LLVM::LLVMFuncOp;
+
+    auto funcAttr = StringAttr::get(op->getContext(), funcName);
+    Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(op, funcAttr);
+    if (funcOp)
+      return cast<LLVMFuncOp>(*funcOp);
+
+    mlir::OpBuilder b(op->getParentOfType<LLVMFuncOp>());
+    auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
+    ret.setPassthroughAttr(b.getArrayAttr({b.getStringAttr("libpath:" + op.libpath())}));
+    return ret;
+  }
+};
+
+
 void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns, int numWarps,
                                   AxisInfoAnalysis &axisInfoAnalysis,
@@ -3254,7 +3328,11 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
   patterns.add<BinaryOpConversion<arith::AddIOp, LLVM::AddOp>>(typeConverter,
                                                                benefit);
+  patterns.add<BinaryOpConversion<arith::SubIOp, LLVM::SubOp>>(typeConverter,
+                                                               benefit);
   patterns.add<BinaryOpConversion<arith::AddFOp, LLVM::FAddOp>>(typeConverter,
+                                                                benefit);
+  patterns.add<BinaryOpConversion<arith::SubFOp, LLVM::FSubOp>>(typeConverter,
                                                                 benefit);
   patterns.add<BinaryOpConversion<arith::MulIOp, LLVM::MulOp>>(typeConverter,
                                                                benefit);
@@ -3265,7 +3343,6 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
                                                                benefit);
   patterns.add<BinaryOpConversion<arith::OrIOp, LLVM::OrOp>>(typeConverter,
                                                              benefit);
-
   patterns.add<CmpIOpConversion>(typeConverter, benefit);
   patterns.add<CmpFOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
@@ -3285,6 +3362,8 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<ViewLikeOpConversion<triton::ExpandDimsOp>>(typeConverter,
                                                            benefit);
   patterns.add<DotOpConversion>(typeConverter, allocation, smem, benefit);
+
+  patterns.add<ExtElemwiseOpConversion>(typeConverter, benefit);
 }
 
 class ConvertTritonGPUToLLVM
