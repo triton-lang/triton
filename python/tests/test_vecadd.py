@@ -188,7 +188,7 @@ def test_vecadd_no_scf(num_warps, block_size, shape):
     [2, 256, (3, 256 + 7)],
     [4, 256, (3, 256 + 7)],
 ])
-def test_vecadd__no_scf_masked(num_warps, block_size, shape):
+def test_vecadd_no_scf_masked(num_warps, block_size, shape):
     vecadd_no_scf_tester(num_warps, block_size, shape)
 
 
