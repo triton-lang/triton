@@ -2805,7 +2805,7 @@ struct MMA16816ConversionHelper {
     auto tensorTy = tensor.getType().cast<RankedTensorType>();
     auto shape = tensorTy.getShape();
     auto [matShapeM, matShapeN, matShapeK] = getMmaMatShape(tensorTy);
-    auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaMatShape(tensorTy);
+    auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaInstrShape(tensorTy);
     int numRepK = getNumRepK(tensorTy, shape[0]);
     int numRepN = getNumRepN(tensorTy, shape[1]);
 
@@ -2855,7 +2855,7 @@ struct MMA16816ConversionHelper {
     int NK = aShape[1];
     // shape / shape_per_cta
     auto [matShapeM, matShapeN, matShapeK] = getMmaMatShape(aTensorTy);
-    auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaMatShape(aTensorTy);
+    auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaInstrShape(aTensorTy);
     int numRepM = getNumRepM(aTensorTy, dShape[0]);
     int numRepN = getNumRepN(aTensorTy, dShape[1]);
     int numRepK = getNumRepK(aTensorTy, aShape[1]);
