@@ -299,15 +299,10 @@ public:
     auto newArgFallback = rewriter.create<triton::gpu::ConvertLayoutOp>(
         newForOp.getLoc(), origType, newArg);
 
-    // SmallVector<Operation *> users(oldArg.getUsers());
-    // llvm::outs() << users.size() << "\n";
-
+    mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
     for (Operation &op : forOp.getBody()->without_terminator()) {
-
-      if (op.getResults().size() > 0 &&
-          op.getResults()[0] == origConversion.getResult()) {
+      if (&op == (Operation *)(&origConversion))
         continue;
-      }
       Operation *newOp = rewriter.clone(op, mapping);
       if (find(oldArg.getUsers(), &op) != oldArg.getUsers().end())
         newOp->replaceUsesOfWith(newArg, newArgFallback);
@@ -327,7 +322,6 @@ public:
     newResults[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
         rewriter.getUnknownLoc(), origType, newForOp->getResult(i));
     newResults[i].getDefiningOp()->moveAfter(newForOp);
-
     return newResults;
   }
 
@@ -470,7 +464,7 @@ public:
 
     patterns.add<SimplifyConversion>(context);
     patterns.add<RematerializeBackward>(context);
-    patterns.add<RematerializeForward>(context);
+    // patterns.add<RematerializeForward>(context);
     patterns.add<MoveConvertOutOfLoop>(context);
     patterns.add<BlockedToMMA>(context);
 
