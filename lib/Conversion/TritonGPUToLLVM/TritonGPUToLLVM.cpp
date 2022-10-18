@@ -2448,6 +2448,9 @@ struct DotOpConversionHelper {
   }
 
   void deduceMmaType(DotOp op) const { mmaType = getMmaType(op); }
+  void deduceMmaType(Type operandTy) const {
+    mmaType = getTensorCoreTypeFromOperand(operandTy);
+  }
 
   Type getShemPtrTy() const {
     switch (mmaType) {
@@ -2550,6 +2553,22 @@ struct DotOpConversionHelper {
     assert(mmaType != TensorCoreType::NOT_APPLICABLE &&
            "Unknown mma type found.");
     return mmaMatShape.at(mmaType);
+  }
+
+  // Deduce the TensorCoreType from either $a or $b's type. This method is not
+  // safe, but we cannot get the DotOp in some getmaMatShape usage case.
+  TensorCoreType getTensorCoreTypeFromOperand(Type operandTy) const {
+    auto tensorTy = operandTy.cast<RankedTensorType>();
+    auto elemTy = tensorTy.getElementType();
+    if (elemTy.isF16())
+      return TensorCoreType::FP32_FP16_FP16_FP32;
+    if (elemTy.isF32())
+      return TensorCoreType::FP32_TF32_TF32_FP32;
+    if (elemTy.isBF16())
+      return TensorCoreType::FP32_BF16_BF16_FP32;
+    if (elemTy.isInteger(8))
+      return TensorCoreType::INT32_INT8_INT8_INT32;
+    return TensorCoreType::NOT_APPLICABLE;
   }
 
   int getVec() const {
@@ -2664,9 +2683,9 @@ struct MMA16816ConversionHelper {
   MmaEncodingAttr mmaLayout;
   ArrayRef<unsigned int> wpt;
 
-  int mmaInstrM{-1}, mmaInstrN{-1}, mmaInstrK{-1};
-  int matShapeM{-1}, matShapeN{-1}, matShapeK{-1};
-  int numRepM{-1}, numRepN{-1}, numRepK{-1};
+  // int mmaInstrM{-1}, mmaInstrN{-1}, mmaInstrK{-1};
+  // int matShapeM{-1}, matShapeN{-1}, matShapeK{-1};
+  // int numRepM{-1}, numRepN{-1}, numRepK{-1};
   Value thread, lane, warp, warpMN, warpN, warpM;
   // size_t aElemBytes{}, bElemBytes{};
 
@@ -2686,16 +2705,6 @@ struct MMA16816ConversionHelper {
         thread(thread) {
     wpt = mmaLayout.getWarpsPerCTA();
 
-    auto mmaInstrShape = helper.getMmaInstrShape();
-    mmaInstrM = mmaInstrShape[0];
-    mmaInstrN = mmaInstrShape[1];
-    mmaInstrK = mmaInstrShape[2];
-
-    auto matShape = helper.getMmaMatShape();
-    matShapeM = matShape[0];
-    matShapeN = matShape[1];
-    matShapeK = matShape[2];
-
     // int NK = aShape[1];
     // // shape / shape_per_cta
     // numRepM = std::max<int>(dShape[0] / (wpt[0] * mmaInstrM), 1);
@@ -2713,12 +2722,55 @@ struct MMA16816ConversionHelper {
     // bElemBytes = bTensorTy.getElementTypeBitWidth() / 8;
   }
 
+  // Get the mmaInstrShape from either $a or $b.
+  std::tuple<int, int, int> getMmaInstrShape(Type operand) const {
+    helper.deduceMmaType(operand);
+    auto mmaInstrShape = helper.getMmaInstrShape();
+    int mmaInstrM = mmaInstrShape[0];
+    int mmaInstrN = mmaInstrShape[1];
+    int mmaInstrK = mmaInstrShape[2];
+    return std::make_tuple(mmaInstrM, mmaInstrN, mmaInstrK);
+  }
+
+  std::tuple<int, int, int> getMmaMatShape(Type operand) const {
+    helper.deduceMmaType(operand);
+    auto matShape = helper.getMmaMatShape();
+    int matShapeM = matShape[0];
+    int matShapeN = matShape[1];
+    int matShapeK = matShape[2];
+    return std::make_tuple(matShapeM, matShapeN, matShapeK);
+  }
+
+  // \param operand is either $a or $b's type.
+  inline int getNumRepM(Type operand, int M) const {
+    auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaInstrShape(operand);
+    return std::max<int>(M / (wpt[0] * mmaInstrM), 1);
+  }
+
+  // \param operand is either $a or $b's type.
+  inline int getNumRepN(Type operand, int N) const {
+    auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaInstrShape(operand);
+    return std::max<int>(N / (wpt[1] * mmaInstrN), 1);
+  }
+
+  // \param operand is either $a or $b's type.
+  inline int getNumRepK(Type operand, int K) const {
+    auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaInstrShape(operand);
+    return std::max<int>(K / mmaInstrK, 1);
+  }
+
   // Loading $a from smem to registers, returns a LLVM::Struct.
   Value loadA(Value tensor, Value llTensor) const {
     auto aTensorTy = tensor.getType().cast<RankedTensorType>();
+    auto shape = aTensorTy.getShape();
 
     ValueTable ha;
     std::function<void(int, int)> loadFn;
+    auto [matShapeM, matShapeN, matShapeK] = getMmaMatShape(aTensorTy);
+    auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaMatShape(aTensorTy);
+    int numRepM = getNumRepM(aTensorTy, shape[0]);
+    int numRepK = getNumRepK(aTensorTy, shape[1]);
+
     if (aTensorTy.getEncoding().isa<SharedEncodingAttr>()) {
       // load from smem
       loadFn = getLoadMatrixFn(
@@ -2749,6 +2801,13 @@ struct MMA16816ConversionHelper {
   // Loading $b from smem to registers, returns a LLVM::Struct.
   Value loadB(Value tensor, Value llTensor) {
     ValueTable hb;
+    auto tensorTy = tensor.getType().cast<RankedTensorType>();
+    auto shape = tensorTy.getShape();
+    auto [matShapeM, matShapeN, matShapeK] = getMmaMatShape(tensorTy);
+    auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaMatShape(tensorTy);
+    int numRepK = getNumRepK(tensorTy, shape[0]);
+    int numRepN = getNumRepN(tensorTy, shape[1]);
+
     auto loadFn = getLoadMatrixFn(
         tensor, llTensor, mmaLayout, mmaLayout.getWarpsPerCTA()[1] /*wpt*/,
         0 /*kOrder*/, {mmaInstrK, mmaInstrN} /*instrShpae*/,
@@ -2777,7 +2836,7 @@ struct MMA16816ConversionHelper {
 
   // Conduct the Dot conversion.
   // Input the \param a, \param b, \param c, all of them are result of loading.
-  LogicalResult convertDot(DotOp op) const {
+  LogicalResult convertDot(DotOp op, DotOpAdaptor adapter) const {
     Value a = op.a();
     Value b = op.b();
     Value c = op.c();
@@ -2795,9 +2854,11 @@ struct MMA16816ConversionHelper {
 
     int NK = aShape[1];
     // shape / shape_per_cta
-    int numRepM = std::max<int>(dShape[0] / (wpt[0] * mmaInstrM), 1);
-    int numRepN = std::max<int>(dShape[1] / (wpt[1] * mmaInstrN), 1);
-    int numRepK = std::max<int>(NK / mmaInstrK, 1);
+    auto [matShapeM, matShapeN, matShapeK] = getMmaMatShape(aTensorTy);
+    auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaMatShape(aTensorTy);
+    int numRepM = getNumRepM(aTensorTy, dShape[0]);
+    int numRepN = getNumRepN(aTensorTy, dShape[1]);
+    int numRepK = getNumRepK(aTensorTy, aShape[1]);
 
     ValueTable ha = getValuesFromDotOperandLayoutStruct(a, numRepM, numRepK);
     ValueTable hb = getValuesFromDotOperandLayoutStruct(
