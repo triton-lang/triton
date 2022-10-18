@@ -260,6 +260,8 @@ public:
 //
 // -----------------------------------------------------------------------------
 
+// int test = 0;
+
 class MoveConvertOutOfLoop : public mlir::RewritePattern {
 public:
   MoveConvertOutOfLoop(mlir::MLIRContext *context)
@@ -297,10 +299,15 @@ public:
     auto newArgFallback = rewriter.create<triton::gpu::ConvertLayoutOp>(
         newForOp.getLoc(), origType, newArg);
 
-    mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
+    // SmallVector<Operation *> users(oldArg.getUsers());
+    // llvm::outs() << users.size() << "\n";
+
     for (Operation &op : forOp.getBody()->without_terminator()) {
-      if (&op == (Operation *)(&origConversion))
+
+      if (op.getResults().size() > 0 &&
+          op.getResults()[0] == origConversion.getResult()) {
         continue;
+      }
       Operation *newOp = rewriter.clone(op, mapping);
       if (find(oldArg.getUsers(), &op) != oldArg.getUsers().end())
         newOp->replaceUsesOfWith(newArg, newArgFallback);
@@ -320,6 +327,7 @@ public:
     newResults[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
         rewriter.getUnknownLoc(), origType, newForOp->getResult(i));
     newResults[i].getDefiningOp()->moveAfter(newForOp);
+
     return newResults;
   }
 
@@ -330,7 +338,7 @@ public:
     auto isInLoop = [&](Operation *op) { return op->getParentOp() == forOp; };
     auto iterArgs = forOp.getRegionIterArgs();
     for (auto iterArg : llvm::enumerate(iterArgs)) {
-      // if(iterArg.index() != 1)
+      // if (iterArg.index() != 1)
       //   continue;
       // skip non-tensor types
       if (!iterArg.value().getType().isa<RankedTensorType>())
