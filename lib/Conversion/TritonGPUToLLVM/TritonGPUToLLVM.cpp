@@ -1566,6 +1566,10 @@ public:
         dstLayout.isa<SharedEncodingAttr>()) {
       return lowerBlockedToShared(op, adaptor, rewriter);
     }
+    if (srcLayout.isa<SharedEncodingAttr>() &&
+        dstLayout.isa<DotOperandEncodingAttr>()) {
+      return lowerSharedToDotOperand(op, adaptor, rewriter);
+    }
     if ((!srcLayout.isa<BlockedEncodingAttr>() &&
          !srcLayout.isa<MmaEncodingAttr>()) ||
         (!dstLayout.isa<BlockedEncodingAttr>() &&
@@ -1573,6 +1577,7 @@ public:
       // TODO: to be implemented
       return failure();
     }
+
     return lowerDistributedToDistributed(op, adaptor, rewriter);
   }
 
@@ -1613,7 +1618,7 @@ private:
 
   // shared -> mma_operand
   LogicalResult
-  lowerSharedToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adapter,
+  lowerSharedToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                           ConversionPatternRewriter &rewriter) const;
 };
 
@@ -2390,16 +2395,16 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
 
 private:
   // Convert to mma.m16n8k16
-  LogicalResult convertMMA16816(triton::DotOp a, OpAdaptor adapter,
+  LogicalResult convertMMA16816(triton::DotOp a, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const;
   /// Convert to mma.m8n8k4
-  LogicalResult convertMMA884(triton::DotOp op, OpAdaptor adapter,
+  LogicalResult convertMMA884(triton::DotOp op, OpAdaptor adaptor,
                               ConversionPatternRewriter &rewriter) const {
     assert(false && "Not implemented yet.");
     return failure();
   }
 
-  LogicalResult convertFMADot(triton::DotOp op, OpAdaptor adapter,
+  LogicalResult convertFMADot(triton::DotOp op, OpAdaptor adaptor,
                               ConversionPatternRewriter &rewriter) const {
     assert(false && "Not implemented yet.");
     return failure();
@@ -2841,7 +2846,7 @@ struct MMA16816ConversionHelper {
   // loading.
   LogicalResult convertDot(Value a, Value b, Value c, Value d, Value loadedA,
                            Value loadedB, Value loadedC, DotOp op,
-                           DotOpAdaptor adapter) const {
+                           DotOpAdaptor adaptor) const {
     helper.deduceMmaType(op);
 
     auto aTensorTy = a.getType().cast<RankedTensorType>();
@@ -3028,7 +3033,7 @@ private:
 };
 
 LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
-    triton::gpu::ConvertLayoutOp op, OpAdaptor adapter,
+    triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
     ConversionPatternRewriter &rewriter) const {
   auto loc = op.getLoc();
   Value src = op.src();
@@ -3064,10 +3069,10 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
   Value res;
   if (dotOperandLayout.getOpIdx() == 0) {
     // operand $a
-    res = mmaHelper.loadA(src, adapter.src());
+    res = mmaHelper.loadA(src, adaptor.src());
   } else if (dotOperandLayout.getOpIdx() == 1) {
     // operand $b
-    res = mmaHelper.loadB(src, adapter.src());
+    res = mmaHelper.loadB(src, adaptor.src());
   } else if (dotOperandLayout.getOpIdx() == 2) {
     // operand $c
     res = mmaHelper.loadC(src);
@@ -3078,7 +3083,7 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
 }
 
 LogicalResult
-DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
+DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adaptor,
                                  ConversionPatternRewriter &rewriter) const {
   auto loc = op.getLoc();
   auto mmaLayout = op.getResult()
@@ -3089,12 +3094,12 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
   MMA16816ConversionHelper mmaHelper(mmaLayout, getThreadId(rewriter, loc),
                                      rewriter, getTypeConverter(), loc);
 
-  auto A = mmaHelper.loadA(op.a(), adapter.a());
-  auto B = mmaHelper.loadB(op.b(), adapter.b());
+  auto A = mmaHelper.loadA(op.a(), adaptor.a());
+  auto B = mmaHelper.loadB(op.b(), adaptor.b());
   auto C = mmaHelper.loadC(op.c());
 
   return mmaHelper.convertDot(op.a(), op.b(), op.c(), op.d(), A, B, C, op,
-                              adapter);
+                              adaptor);
 }
 
 /// ====================== mma codegen end ============================
