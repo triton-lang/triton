@@ -241,7 +241,9 @@ class block_type(dtype):
         # while tensor's shape is a list of constexpr.
 
         # shape can be empty ([]) when an input is a 0D tensor.
-        if shape and isinstance(shape[0], constexpr):
+        if not shape:
+            raise TypeError('0d block_type is forbidden')
+        if isinstance(shape[0], constexpr):
             shape = [s.value for s in shape]
 
         self.shape = shape
