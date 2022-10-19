@@ -3,6 +3,7 @@
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -58,14 +59,65 @@ unsigned getElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
   }
 }
 
-unsigned getShapePerCTA(const Attribute &layout, unsigned d) {
+SmallVector<unsigned> getSizePerThread(Attribute layout) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
-    return blockedLayout.getSizePerThread()[d] *
-           blockedLayout.getThreadsPerWarp()[d] *
-           blockedLayout.getWarpsPerCTA()[d];
+    return SmallVector<unsigned>(blockedLayout.getSizePerThread().begin(),
+                                 blockedLayout.getSizePerThread().end());
+  } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+    assert(mmaLayout.getVersion() == 2 &&
+           "mmaLayout version = 1 is not implemented yet");
+    return SmallVector<unsigned>{2, 2};
+  } else {
+    assert(0 && "getSizePerThread not implemented");
+    return {};
+  }
+}
+
+SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout) {
+  SmallVector<unsigned> threads;
+  if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
+    for (int d = 0, n = blockedLayout.getOrder().size(); d < n; ++d)
+      threads.push_back(blockedLayout.getThreadsPerWarp()[d] *
+                        blockedLayout.getWarpsPerCTA()[d]);
+  } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+    assert(0 && "Unimplemented usage of MmaEncodingAttr");
   } else {
     assert(0 && "Unimplemented usage of getShapePerCTA");
-    return 0;
+  }
+
+  return threads;
+}
+
+SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
+  SmallVector<unsigned> shape;
+  if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
+    for (int d = 0, n = blockedLayout.getOrder().size(); d < n; ++d)
+      shape.push_back(blockedLayout.getSizePerThread()[d] *
+                      blockedLayout.getThreadsPerWarp()[d] *
+                      blockedLayout.getWarpsPerCTA()[d]);
+  } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+    assert(mmaLayout.getVersion() == 2 &&
+           "mmaLayout version = 1 is not implemented yet");
+    return {16 * mmaLayout.getWarpsPerCTA()[0],
+            8 * mmaLayout.getWarpsPerCTA()[1]};
+  } else {
+    assert(0 && "Unimplemented usage of getShapePerCTA");
+  }
+  return shape;
+}
+
+SmallVector<unsigned> getOrder(const Attribute &layout) {
+  if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
+    return SmallVector<unsigned>(blockedLayout.getOrder().begin(),
+                                 blockedLayout.getOrder().end());
+  } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+    return SmallVector<unsigned>{1, 0};
+  } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
+    return SmallVector<unsigned>(sharedLayout.getOrder().begin(),
+                                 sharedLayout.getOrder().end());
+  } else {
+    assert(0 && "Unimplemented usage of getOrder");
+    return {};
   }
 };
 
@@ -141,16 +193,17 @@ SliceEncodingAttr BlockedEncodingAttr::squeeze(int axis) {
 
 unsigned BlockedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   size_t rank = shape.size();
-  assert(rank == getSizePerThread().size() &&
+  auto sizePerThread = getSizePerThread();
+  auto warpsPerCTA = getWarpsPerCTA();
+  auto threadsPerWarp = getThreadsPerWarp();
+  assert(rank == sizePerThread.size() &&
          "unexpected rank in BlockedEncodingAttr::getElemsPerThread");
-  SmallVector<unsigned> elemsPerThreadPerDim(rank);
+  SmallVector<unsigned> elemsPerThread(rank);
   for (size_t i = 0; i < rank; ++i) {
-    unsigned t =
-        getSizePerThread()[i] * getThreadsPerWarp()[i] * getWarpsPerCTA()[i];
-    elemsPerThreadPerDim[i] =
-        ceil<unsigned>(shape[i], t) * getSizePerThread()[i];
+    unsigned t = sizePerThread[i] * threadsPerWarp[i] * warpsPerCTA[i];
+    elemsPerThread[i] = ceil<unsigned>(shape[i], t) * sizePerThread[i];
   }
-  return product<unsigned>(elemsPerThreadPerDim);
+  return product<unsigned>(elemsPerThread);
 }
 
 unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
@@ -177,9 +230,12 @@ unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
 }
 
 unsigned MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
-  int threads = product(getWarpsPerCTA());
-  int numElem = product(shape);
-  return numElem / threads;
+  size_t rank = shape.size();
+  assert(rank == 2 && "Unexpected rank of mma layout");
+  assert(getVersion() == 2 && "mmaLayout version = 1 is not implemented yet");
+  unsigned elemsCol = ceil<unsigned>(shape[0], 16 * getWarpsPerCTA()[0]) * 2;
+  unsigned elemsRow = ceil<unsigned>(shape[1], 8 * getWarpsPerCTA()[1]) * 2;
+  return elemsCol * elemsRow;
 }
 
 unsigned SharedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
@@ -233,8 +289,9 @@ Attribute BlockedEncodingAttr::parse(AsmParser &parser, Type type) {
     }
   }
 
-  return parser.getChecked<BlockedEncodingAttr>(
+  auto ret = parser.getChecked<BlockedEncodingAttr>(
       parser.getContext(), sizePerThread, threadsPerWarp, warpsPerCTA, order);
+  return ret;
 }
 
 void BlockedEncodingAttr::print(mlir::AsmPrinter &printer) const {
@@ -291,27 +348,13 @@ void MmaEncodingAttr::print(AsmPrinter &printer) const {
 Attribute SliceEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseLess().failed())
     return {};
-  // Parse the data as a dictionary
-  DictionaryAttr dict;
-  if (parser.parseAttribute(dict).failed())
+  NamedAttrList attrs;
+  if (parser.parseOptionalAttrDict(attrs).failed())
     return {};
   if (parser.parseGreater().failed())
     return {};
-
-  unsigned dim = 0;
-  Attribute parent;
-
-  for (const NamedAttribute &attr : dict) {
-    if (attr.getName() == "dim") {
-      if (parseUInt(parser, attr, dim, "dim").failed())
-        return {};
-    }
-    if (attr.getName() == "parent") {
-      if (parser.parseAttribute(parent).failed())
-        return {};
-    }
-  }
-
+  unsigned dim = attrs.get("dim").cast<IntegerAttr>().getInt();
+  Attribute parent = attrs.get("parent");
   return parser.getChecked<SliceEncodingAttr>(parser.getContext(), dim, parent);
 }
 
@@ -549,6 +592,7 @@ void TritonGPUDialect::initialize() {
 #include "triton/Dialect/TritonGPU/IR/Ops.cpp.inc"
       >();
   addInterfaces<TritonGPUOpAsmInterface>();
+  addInterfaces<TritonGPUInferLayoutInterface>();
 }
 
 //===----------------------------------------------------------------------===//

@@ -1,6 +1,6 @@
 import pytest
 import torch
-from torch.testing import assert_allclose
+from torch.testing import assert_close
 
 import triton
 import triton.language as tl
@@ -44,4 +44,4 @@ def test_convert_layout_impl(NUM_WARPS, SIZE_M, SIZE_N):
     z = torch.empty((SIZE_N, SIZE_M), device=x.device, dtype=x.dtype)
     kernel[grid](x_ptr=x, stride_xm=x.stride(0), z_ptr=z, stride_zn=z.stride(0), SIZE_M=SIZE_M, SIZE_N=SIZE_N, num_warps=NUM_WARPS)
     golden_z = torch.t(x)
-    assert_allclose(z, golden_z, rtol=1e-7, atol=1e-7)
+    assert_close(z, golden_z, rtol=1e-7, atol=1e-7, check_dtype=False)

@@ -10,50 +10,47 @@
 
 namespace mlir {
 namespace OpTrait {
-// TODO: should have `namespace triton {}` here
+
+// These functions are out-of-line implementations of the methods in the
+// corresponding trait classes.  This avoids them being template
+// instantiated/duplicated.
+namespace impl {
+LogicalResult verifySameOperandsAndResultEncoding(Operation *op);
+LogicalResult verifySameOperandsEncoding(Operation *op);
+// The rationale for this trait is to prevent users from creating programs
+// that would have catastrophic register pressure and cause the compiler to
+// hang.
+// Since H100 has 256KB registers, we should allow users to create tensors
+// of size up to 256K elements. It will spill for datatypes wider than 1B,
+// but we probably should limit number of elements (rather than bytes) to
+// keep specs simple
+int constexpr maxTensorNumElements = 1048576;
+LogicalResult verifyTensorSize(Operation *op);
+} // namespace impl
 
 template <class ConcreteType>
 class TensorSizeTrait : public TraitBase<ConcreteType, TensorSizeTrait> {
 public:
-  // TODO: move impl to .cc files
   static LogicalResult verifyTrait(Operation *op) {
-    // The rationale for this number is to prevent users from creating programs
-    // that would have catastrophic register pressure and cause the compiler to
-    // hang.
-    // Since H100 has 256KB registers, we should allow users to create tensors
-    // of size up to 256K elements. It will spill for datatypes wider than 1B,
-    // but we probably should limit number of elements (rather than bytes) to
-    // keep specs simple
-    int constexpr maxElement = 1048576;
-    for (auto opType : op->getOperandTypes()) {
-      if (auto tensorType = opType.dyn_cast<RankedTensorType>()) {
-        int64_t numElements = 1;
-        for (int64_t s : tensorType.getShape())
-          numElements *= s;
-        if (numElements > maxElement)
-          return op->emitError("Maximum allowed number of elements is ")
-                 << maxElement << ", but " << *op << " has more than that";
-        if ((numElements & (numElements - 1)) != 0)
-          return op->emitError("Number of elements must be power-of-two, but ")
-                 << *op << " doesn't follow the rule";
-      }
-    }
+    return impl::verifyTensorSize(op);
+  }
+};
 
-    for (auto opType : op->getResultTypes()) {
-      if (auto tensorType = opType.dyn_cast<RankedTensorType>()) {
-        int64_t numElements = 1;
-        for (int64_t s : tensorType.getShape())
-          numElements *= s;
-        if (numElements > maxElement)
-          return op->emitError("Maximum allowed number of elements is ")
-                 << maxElement << ", but " << *op << " has more than that";
-        if ((numElements & (numElements - 1)) != 0)
-          return op->emitError("Number of elements must be power-of-two, but ")
-                 << *op << " doesn't follow the rule";
-      }
-    }
+template <typename ConcreteType>
+class SameOperandsAndResultEncoding
+    : public TraitBase<ConcreteType, SameOperandsAndResultEncoding> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifySameOperandsAndResultEncoding(op);
+  }
+};
 
-    return success();
+template <typename ConcreteType>
+class SameOperandsEncoding
+    : public TraitBase<ConcreteType, SameOperandsEncoding> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifySameOperandsEncoding(op);
   }
 };
 

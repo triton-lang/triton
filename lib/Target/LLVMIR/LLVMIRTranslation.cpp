@@ -1,4 +1,5 @@
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
+#include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
 #include "mlir/ExecutionEngine/OptUtils.h"
@@ -13,7 +14,6 @@
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVM.h"
-#include "triton/driver/llvm.h"
 #include "triton/tools/sys/getenv.hpp"
 #include "llvm/IR/Constants.h"
 
@@ -99,7 +99,6 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
   }
 
   // Initialize LLVM targets.
-  ::triton::driver::init_llvm();
   mlir::ExecutionEngine::setupTargetTriple(llvmModule.get());
 
   auto optPipeline = mlir::makeOptimizingTransformer(
@@ -137,6 +136,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
       /*printAfterOnlyOnChange=*/true,
       /*printAfterOnlyOnFailure*/ false, llvm::dbgs(), printingFlags);
 
+  pm.addPass(mlir::createLowerToCFGPass());
   pm.addPass(createConvertTritonGPUToLLVMPass());
   // Conanicalize to eliminate the remaining UnrealizedConversionCastOp
   pm.addPass(mlir::createCanonicalizerPass());

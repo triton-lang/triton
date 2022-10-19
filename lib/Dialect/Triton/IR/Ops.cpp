@@ -50,21 +50,34 @@ ParseResult parseLoadOp(OpAsmParser &parser, OperationState &result) {
 
   SmallVector<Type> operandTypes;
   operandTypes.push_back(getPointerTypeFromTensor(resultTypes[0])); // ptr
-  if (allOperands.size() >= 2)
+  int hasMask = 0, hasOther = 0;
+  if (allOperands.size() >= 2) {
     operandTypes.push_back(getI1SameShape(resultTypes[0])); // mask
-  if (allOperands.size() >= 3)
+    hasMask = 1;
+  }
+  if (allOperands.size() >= 3) {
     operandTypes.push_back(resultTypes[0]); // other
+    hasOther = 1;
+  }
 
   if (parser.resolveOperands(allOperands, operandTypes, allOperandLoc,
                              result.operands))
     return failure();
+  // Deduce operand_segment_sizes from the number of the operands.
+  auto operand_segment_sizesAttrName =
+      LoadOp::operand_segment_sizesAttrName(result.name);
+  result.addAttribute(
+      operand_segment_sizesAttrName,
+      parser.getBuilder().getI32VectorAttr({1, hasMask, hasOther}));
   return success();
 }
 
 void printLoadOp(OpAsmPrinter &printer, LoadOp loadOp) {
   printer << " ";
   printer << loadOp.getOperation()->getOperands();
-  printer.printOptionalAttrDict(loadOp->getAttrs(), /*elidedAttrs=*/{});
+  // "operand_segment_sizes" can be deduced, so we don't print it.
+  printer.printOptionalAttrDict(loadOp->getAttrs(),
+                                {loadOp.operand_segment_sizesAttrName()});
   printer << " : ";
   printer.printStrippedAttrOrType(loadOp.result().getType());
 }
@@ -149,6 +162,9 @@ void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
     }
   }
   state.addAttribute(
+      operand_segment_sizesAttrName(state.name),
+      builder.getI32VectorAttr({1, (mask ? 1 : 0), (other ? 1 : 0)}));
+  state.addAttribute(
       cacheAttrName(state.name),
       ::mlir::triton::CacheModifierAttr::get(builder.getContext(), cache));
   state.addAttribute(
@@ -219,10 +235,40 @@ OpFoldResult SplatOp::fold(ArrayRef<Attribute> operands) {
   auto constOperand = src().getDefiningOp<arith::ConstantOp>();
   if (!constOperand)
     return {};
-
   auto shapedType = getType().cast<ShapedType>();
   auto ret = SplatElementsAttr::get(shapedType, {constOperand.getValue()});
   return ret;
+}
+
+//-- ExpandDimsOp --
+mlir::LogicalResult mlir::triton::ExpandDimsOp::inferReturnTypes(
+    MLIRContext *context, Optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  // infer shape
+  auto arg = operands[0];
+  auto argTy = arg.getType().cast<RankedTensorType>();
+  auto retShape = argTy.getShape().vec();
+  int axis = attributes.get("axis").cast<IntegerAttr>().getInt();
+  retShape.insert(retShape.begin() + axis, 1);
+  // infer encoding
+  Attribute argEncoding = argTy.getEncoding();
+  Attribute retEncoding;
+  if (argEncoding) {
+    Dialect &dialect = argEncoding.getDialect();
+    auto inferLayoutInterface = dyn_cast<DialectInferLayoutInterface>(&dialect);
+    if (inferLayoutInterface
+            ->inferExpandDimsOpEncoding(argEncoding, axis, retEncoding)
+            .failed()) {
+      llvm::report_fatal_error("failed to infer layout for ExpandDimsOp");
+      return mlir::failure();
+    }
+  }
+  // create type
+  auto argEltTy = argTy.getElementType();
+  inferredReturnTypes.push_back(
+      RankedTensorType::get(retShape, argEltTy, retEncoding));
+  return mlir::success();
 }
 
 //-- BroadcastOp --
