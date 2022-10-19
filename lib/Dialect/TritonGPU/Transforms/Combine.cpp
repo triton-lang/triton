@@ -383,7 +383,6 @@ public:
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *_cvtOp,
                   mlir::PatternRewriter &rewriter) const override {
-    llvm::outs() << "forward\n";
     auto cvt = cast<triton::gpu::ConvertLayoutOp>(_cvtOp);
     auto forOp = dyn_cast<scf::ForOp>(cvt->getParentOp());
     if (!forOp)
@@ -409,7 +408,6 @@ public:
         Operation *argOp = arg.getDefiningOp();
         if (argOp && (argOp != cvt) &&
             !isa<arith::ConstantOp, triton::SplatOp>(argOp)) {
-          llvm::outs() << "failed\n";
           return failure();
         }
       }
