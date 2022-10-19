@@ -546,38 +546,30 @@ struct TritonGPUInferLayoutInterface
   }
 
   LogicalResult inferExpandDimsOpEncoding(Attribute operandEncoding, int axis,
-                                          Attribute &resultEncoding) const {
+                                          Attribute &resultEncoding,
+                                          Optional<Location> location) const {
     auto sliceEncoding = operandEncoding.dyn_cast<SliceEncodingAttr>();
-    if (!sliceEncoding) {
-      llvm::report_fatal_error(
+    if (!sliceEncoding)
+      return emitOptionalError(location,
           "ExpandDimsOp operand encoding must be SliceEncodingAttr");
-      return failure();
-    }
-    if (sliceEncoding.getDim() != axis) {
-      llvm::report_fatal_error(
+    if (sliceEncoding.getDim() != axis)
+      return emitOptionalError(location,
           "Incompatible slice dimension for ExpandDimsOp operand");
-      return failure();
-    }
     resultEncoding = sliceEncoding.getParent();
     return success();
   }
 
   LogicalResult inferDotOpEncoding(Attribute operandEncoding, int opIdx,
-                                   Attribute retEncoding) {
-    if (auto dotOpEnc = dyn_cast<DotOperandEncodingAttr>(operandEncoding)) {
-      if (opIdx != dotOpEnc.opIdx()) {
-        llvm::report_fatal_error("Wrong opIdx");
-        return failure();
-      }
-      if (retEncoding != dotOpEnc.parend()) {
-        llvm::report_fatal_error("Incompatible parent encoding");
-        return failure();
-      }
-    } else {
-      llvm::report_fatal_error(
-          "Dot's a/b's encoding should be of DotOperandEncodingAttr");
-      return failure();
-    }
+                                   Attribute retEncoding,
+                                   Optional<Location> location) const {
+    if (auto dotOpEnc = operandEncoding.dyn_cast<DotOperandEncodingAttr>()) {
+      if (opIdx != dotOpEnc.getOpIdx())
+        return emitOptionalError(location, "Wrong opIdx");
+      if (retEncoding != dotOpEnc.getParent())
+        return emitOptionalError(location, "Incompatible parent encoding");
+    } else
+      return emitOptionalError(location,
+        "Dot's a/b's encoding should be of DotOperandEncodingAttr");
     return success();
   }
 };
