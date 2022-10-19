@@ -337,6 +337,23 @@ public:
       // skip non-tensor types
       if (!iterArg.value().getType().isa<RankedTensorType>())
         continue;
+      // we only move `iterArg` out of the loop if
+      //   - there is only a single conversion use
+      //   - moving this conversion out of the loop will not generate
+      //     any extra non-removable conversion
+      auto users = iterArg.value().getUsers();
+      // check first condition
+      SetVector<Type> cvtTargetTypes;
+      for (auto user : users)
+        if (isa<triton::gpu::ConvertLayoutOp>(user))
+          cvtTargetTypes.insert(user->getResults()[0].getType());
+      if (cvtTargetTypes.size() != 1)
+        continue;
+      // TODO: check second condition
+      for (auto user : users) {
+        if (isa<triton::gpu::ConvertLayoutOp>(user))
+          continue;
+      }
       // check
       for (auto op : iterArg.value().getUsers()) {
         auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
@@ -366,6 +383,7 @@ public:
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *_cvtOp,
                   mlir::PatternRewriter &rewriter) const override {
+    llvm::outs() << "forward\n";
     auto cvt = cast<triton::gpu::ConvertLayoutOp>(_cvtOp);
     auto forOp = dyn_cast<scf::ForOp>(cvt->getParentOp());
     if (!forOp)
@@ -382,20 +400,28 @@ public:
     mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
     if (cvtSlices.empty())
       return failure();
-    // if other operands are in the loop
-    // then we don't touch anything
-    Operation *op = cvtSlices.front();
-    for (Value _arg : op->getOperands()) {
-      Operation *arg = _arg.getDefiningOp();
-      if (arg && isInLoop(arg) && (arg != cvt))
+
+    for (Operation *op : cvtSlices) {
+      if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
+          !op->hasTrait<mlir::OpTrait::SameOperandsAndResultType>())
         return failure();
+      for (Value arg : op->getOperands()) {
+        Operation *argOp = arg.getDefiningOp();
+        if (argOp && (argOp != cvt) &&
+            !isa<arith::ConstantOp, triton::SplatOp>(argOp)) {
+          llvm::outs() << "failed\n";
+          return failure();
+        }
+      }
     }
+
     // otherwise, we push the conversion forward
     // since we'll be able to move it out of
     // the loop once it reaches the yield op
     // op(cvt(arg_0), arg_1, ..., arg_n)
     // -> cvt(op(arg_0, cvt(arg_1), ..., cvt(arg_n)))
     BlockAndValueMapping mapping;
+    auto op = cvtSlices.front();
     for (Value arg : op->getOperands()) {
       if (arg.getDefiningOp() == cvt)
         mapping.map(arg, cvt.getOperand());
@@ -464,7 +490,7 @@ public:
 
     patterns.add<SimplifyConversion>(context);
     patterns.add<RematerializeBackward>(context);
-    // patterns.add<RematerializeForward>(context);
+    patterns.add<RematerializeForward>(context);
     patterns.add<MoveConvertOutOfLoop>(context);
     patterns.add<BlockedToMMA>(context);
 
