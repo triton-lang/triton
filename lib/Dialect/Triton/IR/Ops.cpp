@@ -160,6 +160,59 @@ void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
 }
 
 //-- DotOp --
+mlir::LogicalResult mlir::triton::DotOp::inferReturnTypes(
+    MLIRContext *context, Optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  // type is the same as the accumulator
+  auto accTy = operands[2].getType().cast<RankedTensorType>();
+  inferredReturnTypes.push_back(accTy);
+
+  // verify encodings
+  auto aEnc = operands[0].getType().cast<RankedTensorType>().getEncoding();
+  auto bEnc = operands[1].getType().cast<RankedTensorType>().getEncoding();
+  if (aEnc) {
+    assert(bEnc);
+    Dialect &dialect = aEncoding.getDialect();
+    auto interface = dyn_cast<DialectInferLayoutInterface>(&dialect);
+    if (interface->inferDotOpEncoding(aEnc, 0).failed())
+      return mlir::failure();
+    if (interface->inferDotOpEncoding(bEnc, 1).failed())
+      return mlir::failure();
+  }
+  return mlir::success();
+}
+
+//-- ReduceOp --
+mlir::LogicalResult mlir::triton::ReduceOp::inferReturnTypes(
+    MLIRContext *context, Optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  // infer shape
+  Value arg = operands[0];
+  auto argTy = arg.getType().cast<RankedTensorType>();
+  auto retShape = argTy.getShape().vec();
+  int axis = attributes.get("axis").cast<IntegerAttr>().getInt();
+  retShape.erase(retShape.begin() + axis);
+  // infer encoding
+  Attribute argEncoding = argTy.getEncoding();
+  Attribute retEncoding;
+  if (argEncoding) {
+    Dialect &dialect = argEncoding.getDialect();
+    auto inferLayoutInterface = dyn_cast<DialectInferLayoutInterface>(&dialect);
+    if (inferLayoutInterface
+            ->inferReduceOpEncoding(argEncoding, axis, retEncoding)
+            .failed()) {
+      llvm::report_fatal_error("failed to infer layout for ReduceOp");
+      return mlir::failure();
+    }
+  }
+  // create type
+  auto argEltTy = argTy.getElementType();
+  inferredReturnTypes.push_back(
+      RankedTensorType::get(retShape, argEltTy, retEncoding));
+  return mlir::success();
+}
 
 //-- SplatOp --
 OpFoldResult SplatOp::fold(ArrayRef<Attribute> operands) {

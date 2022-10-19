@@ -491,6 +491,54 @@ public:
   }
 };
 
+struct TritonGPUInferLayoutInterface
+    : public triton::DialectInferLayoutInterface {
+  using DialectInferLayoutInterface::DialectInferLayoutInterface;
+
+  LogicalResult inferReduceOpEncoding(Attribute operandEncoding, int axis,
+                                      Attribute &resultEncoding) const {
+    resultEncoding = SliceEncodingAttr::get(getDialect()->getContext(), axis,
+                                            operandEncoding);
+    return success();
+  }
+
+  LogicalResult inferExpandDimsOpEncoding(Attribute operandEncoding, int axis,
+                                          Attribute &resultEncoding) const {
+    auto sliceEncoding = operandEncoding.dyn_cast<SliceEncodingAttr>();
+    if (!sliceEncoding) {
+      llvm::report_fatal_error(
+          "ExpandDimsOp operand encoding must be SliceEncodingAttr");
+      return failure();
+    }
+    if (sliceEncoding.getDim() != axis) {
+      llvm::report_fatal_error(
+          "Incompatible slice dimension for ExpandDimsOp operand");
+      return failure();
+    }
+    resultEncoding = sliceEncoding.getParent();
+    return success();
+  }
+
+  LogicalResult inferDotOpEncoding(Attribute operandEncoding, int opIdx,
+                                   Attribute retEncoding) {
+    if (auto dotOpEnc = dyn_cast<DotOperandEncodingAttr>(operandEncoding)) {
+      if (opIdx != dotOpEnc.opIdx()) {
+        llvm::report_fatal_error("Wrong opIdx");
+        return failure();
+      }
+      if (retEncoding != dotOpEnc.parend()) {
+        llvm::report_fatal_error("Incompatible parent encoding");
+        return failure();
+      }
+    } else {
+      llvm::report_fatal_error(
+          "Dot's a/b's encoding should be of DotOperandEncodingAttr");
+      return failure();
+    }
+    return success();
+  }
+};
+
 void TritonGPUDialect::initialize() {
   addAttributes<
 #define GET_ATTRDEF_LIST
