@@ -34,6 +34,44 @@ namespace {
 //
 // -----------------------------------------------------------------------------
 
+// convert(blocked, dot_operand) -> convert(blocked, mma) + convert(mma,
+// dot_operand)
+// this is a hack to accomodate some pattern seen in the fused attention kernel
+// can't think of a more generic solution right now -- will come back to it
+// later
+class DecomposeDotOperand : public mlir::RewritePattern {
+
+public:
+  DecomposeDotOperand(mlir::MLIRContext *context)
+      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
+                             1, context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    if (!llvm::isa<triton::gpu::ConvertLayoutOp>(op))
+      return mlir::failure();
+    auto convert = llvm::cast<triton::gpu::ConvertLayoutOp>(op);
+    auto srcType = convert.getOperand().getType().cast<RankedTensorType>();
+    auto dstType = convert.getType().cast<RankedTensorType>();
+    if (srcType.getEncoding().isa<triton::gpu::BlockedEncodingAttr>() &&
+        dstType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>()) {
+      auto tmpType =
+          RankedTensorType::get(dstType.getShape(), dstType.getElementType(),
+                                dstType.getEncoding()
+                                    .cast<triton::gpu::DotOperandEncodingAttr>()
+                                    .getParent());
+      auto tmp = rewriter.create<triton::gpu::ConvertLayoutOp>(
+          convert.getLoc(), tmpType, convert.getOperand());
+      auto newConvert = rewriter.create<triton::gpu::ConvertLayoutOp>(
+          convert.getLoc(), dstType, tmp);
+      rewriter.replaceOp(op, {newConvert});
+      return mlir::success();
+    }
+    return mlir::failure();
+  }
+};
+
 // Layout conversions can't deduce their return type automatically.
 // IIUC they are therefore not handled by DRR right now
 class SimplifyConversion : public mlir::RewritePattern {
@@ -47,6 +85,10 @@ public:
                   mlir::PatternRewriter &rewriter) const override {
     if (!llvm::isa<triton::gpu::ConvertLayoutOp>(op))
       return mlir::failure();
+    auto convert = llvm::cast<triton::gpu::ConvertLayoutOp>(op);
+    auto srcType = convert.getOperand().getType().cast<RankedTensorType>();
+    auto dstType = convert.getType().cast<RankedTensorType>();
+
     // convert to the same layout -- we can delete
     if (op->getResultTypes() == op->getOperandTypes()) {
       rewriter.replaceOp(op, op->getOperands());
@@ -58,6 +100,11 @@ public:
       return mlir::failure();
     // cvt(type2, cvt(type1, x)) -> cvt(type2, x)
     if (llvm::isa<triton::gpu::ConvertLayoutOp>(arg)) {
+      // hacky: prevent decomposedotOperand from being immediately recombined
+      auto dst_dotop =
+          dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+      if (dst_dotop && dst_dotop.getParent() == srcType.getEncoding())
+        return mlir::failure();
       rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
           op, op->getResultTypes().front(), arg->getOperand(0));
       return mlir::success();
@@ -487,6 +534,7 @@ public:
     mlir::RewritePatternSet patterns(context);
 
     patterns.add<SimplifyConversion>(context);
+    // patterns.add<DecomposeDotOperand>(context);
     patterns.add<RematerializeBackward>(context);
     patterns.add<RematerializeForward>(context);
     patterns.add<MoveConvertOutOfLoop>(context);
