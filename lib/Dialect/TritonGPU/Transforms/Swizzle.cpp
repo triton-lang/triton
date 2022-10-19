@@ -79,21 +79,26 @@ struct SwizzlePass : public TritonGPUSwizzleBase<SwizzlePass> {
         return;
       for (int opIdx : {0, 1}) {
         Value op = dotOp.getOperand(opIdx);
-        auto ty = op.getType().template cast<RankedTensorType>();
-        // compute new swizzled encoding
-        SwizzleInfo swizzle = getSwizzleMMA(opIdx, retEncoding, ty);
-        auto newEncoding = triton::gpu::SharedEncodingAttr::get(
-            &getContext(), swizzle.vec, swizzle.perPhase, swizzle.maxPhase,
-            ty.getEncoding()
-                .cast<triton::gpu::SharedEncodingAttr>()
-                .getOrder());
-        // create conversion
-        auto newType = RankedTensorType::get(ty.getShape(), ty.getElementType(),
-                                             newEncoding);
-        Operation *newOp = builder.create<triton::gpu::ConvertLayoutOp>(
-            op.getLoc(), newType, op);
-        // bind new op to dot operand
-        dotOp->replaceUsesOfWith(op, newOp->getResult(0));
+        // if the dot operand is of dot_op layout which is converted from
+        // shared layout
+        if (auto cvt = op.getDefiningOp<triton::gpu::ConvertLayoutOp>()) {
+          auto ty = cvt.src().getType().template cast<RankedTensorType>();
+          // compute new swizzled encoding
+          SwizzleInfo swizzle = getSwizzleMMA(opIdx, retEncoding, ty);
+          auto newEncoding = triton::gpu::SharedEncodingAttr::get(
+              &getContext(), swizzle.vec, swizzle.perPhase, swizzle.maxPhase,
+              ty.getEncoding()
+                  .cast<triton::gpu::SharedEncodingAttr>()
+                  .getOrder());
+          // create conversion
+          auto newType = RankedTensorType::get(ty.getShape(),
+                                               ty.getElementType(),
+                                               newEncoding);
+          Operation *newOp = builder.create<triton::gpu::ConvertLayoutOp>(
+              op.getLoc(), newType, op);
+          // bind new op to cvt operand
+          cvt->replaceUsesOfWith(op, newOp->getResult(0));
+        }
       }
     });
   }
