@@ -3,9 +3,11 @@
 #AL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #sliceAd0 = #triton_gpu.slice<{dim = 0, parent = #AL}>
 #BL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-#A = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
-#B = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#A_SMEM = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#B_SMEM = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 #C = #triton_gpu.mma<{version = 2, warpsPerCTA = [4, 1]}>
+#A = #triton_gpu.dot_op<{opIdx = 0, parent = #C}>
+#B = #triton_gpu.dot_op<{opIdx = 1, parent = #C}>
 
 // CHECK-LABEL: matmul_loop
 func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
@@ -55,14 +57,14 @@ func @reusable(%A : !tt.ptr<f16>) {
   %a1 = triton_gpu.convert_layout %a1_ : (tensor<128x32xf16, #AL>) -> tensor<128x32xf16, #A>
   %a2_ = tt.load %b_ptr, %cst3, %cst4 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf16, #AL>
   // CHECK-NEXT: offset = 8192, size = 8192
-  %a2 = triton_gpu.convert_layout %a2_ : (tensor<32x128xf16, #AL>) -> tensor<32x128xf16, #A>
+  %a2 = triton_gpu.convert_layout %a2_ : (tensor<32x128xf16, #AL>) -> tensor<32x128xf16, #B>
   %a3_ = tt.load %a_ptr, %cst1, %cst2 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x32xf16, #AL>
   // CHECK-NEXT: offset = 16384, size = 8192
   %a3 = triton_gpu.convert_layout %a3_ : (tensor<128x32xf16, #AL>) -> tensor<128x32xf16, #A>
   %c = tt.dot %a1, %a2, %c_init {allowTF32 = true} : tensor<128x32xf16, #A> * tensor<32x128xf16, #B> -> tensor<128x128xf32, #C>
   %a4_ = tt.load %b_ptr, %cst3, %cst4 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf16, #AL>
   // CHECK-NEXT: offset = 0, size = 8192
-  %a4 = triton_gpu.convert_layout %a4_ : (tensor<32x128xf16, #AL>) -> tensor<32x128xf16, #A>
+  %a4 = triton_gpu.convert_layout %a4_ : (tensor<32x128xf16, #AL>) -> tensor<32x128xf16, #B>
   %c1 = tt.dot %a3, %a4, %c {allowTF32 = true} : tensor<128x32xf16, #A> * tensor<32x128xf16, #B> -> tensor<128x128xf32, #C>
   return
   // CHECK-NEXT: size = 24576
@@ -156,7 +158,7 @@ func @alloc(%A : !tt.ptr<f16>) {
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A>
   %cst1 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
   // CHECK-NEXT: offset = 0, size = 512
-  %cst2 = triton_gpu.alloc_tensor : tensor<16x16xf16, #A>
+  %cst2 = triton_gpu.alloc_tensor : tensor<16x16xf16, #A_SMEM>
   return
   // CHECK-NEXT: size = 512
 }
@@ -176,9 +178,9 @@ func @insert_slice_async(%A : !tt.ptr<f16>, %i1 : i1) {
   %mask = tt.splat %i1 : (i1) -> tensor<16x16xi1, #AL>
   %other = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   // CHECK: offset = 0, size = 512
-  %tensor = arith.constant dense<0.000000e+00> : tensor<1x16x16xf16, #A>
+  %tensor = arith.constant dense<0.000000e+00> : tensor<1x16x16xf16, #A_SMEM>
   %index = arith.constant 0 : i32
-  %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index, %mask, %other {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isOtherUnspecified = false, isVolatile = false} : tensor<16x16x!tt.ptr<f16>, #AL> -> tensor<1x16x16xf16, #A>
+  %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index, %mask, %other {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isOtherUnspecified = false, isVolatile = false} : tensor<16x16x!tt.ptr<f16>, #AL> -> tensor<1x16x16xf16, #A_SMEM>
   return
   // CHECK-NEXT: size = 512
 }
@@ -186,9 +188,9 @@ func @insert_slice_async(%A : !tt.ptr<f16>, %i1 : i1) {
 // CHECK-LABEL: extract_slice
 func @extract_slice(%A : !tt.ptr<f16>) {
   // CHECK: offset = 0, size = 512
-  %cst0 = arith.constant dense<0.000000e+00> : tensor<1x16x16xf16, #A>
+  %cst0 = arith.constant dense<0.000000e+00> : tensor<1x16x16xf16, #A_SMEM>
   %index = arith.constant 0 : i32
-  %cst1 = triton_gpu.extract_slice %cst0, %index { axis = 0 : i32 } : tensor<1x16x16xf16, #A> -> tensor<16x16xf16, #A>
+  %cst1 = triton_gpu.extract_slice %cst0, %index { axis = 0 : i32 } : tensor<1x16x16xf16, #A_SMEM> -> tensor<16x16xf16, #A_SMEM>
   return
   // CHECK-NEXT: size = 512
 }
@@ -264,18 +266,18 @@ func @for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.p
 // CHECK-LABEL: for_if_slice
 func @for_if_slice(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
   // CHECK: offset = 0, size = 8192
-  %a_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A>
+  %a_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SMEM>
   // CHECK-NEXT: offset = 8192, size = 8192
-  %b_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A>
+  %b_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SMEM>
   // CHECK-NEXT: offset = 16384, size = 8192
-  %c_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A>
-  %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (tensor<128x32xf16, #A>, tensor<128x32xf16, #A>, tensor<128x32xf16, #A>) {
+  %c_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SMEM>
+  %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (tensor<128x32xf16, #A_SMEM>, tensor<128x32xf16, #A_SMEM>, tensor<128x32xf16, #A_SMEM>) {
     scf.if %i1 {
       %index = arith.constant 8 : i32
-      %cst0 = triton_gpu.extract_slice %a_shared, %index { axis = 0 : i32 } : tensor<128x32xf16, #A> -> tensor<32xf16, #A>
+      %cst0 = triton_gpu.extract_slice %a_shared, %index { axis = 0 : i32 } : tensor<128x32xf16, #A_SMEM> -> tensor<32xf16, #A_SMEM>
       scf.yield
     }
-    scf.yield %b_shared, %a_shared, %a_shared : tensor<128x32xf16, #A>, tensor<128x32xf16, #A>, tensor<128x32xf16, #A>
+    scf.yield %b_shared, %a_shared, %a_shared : tensor<128x32xf16, #A_SMEM>, tensor<128x32xf16, #A_SMEM>, tensor<128x32xf16, #A_SMEM>
   }
   return
   // CHECK-NEXT: size = 24576
