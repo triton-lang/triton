@@ -3044,24 +3044,9 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
   auto sharedLayout = srcTensorTy.getEncoding().cast<SharedEncodingAttr>();
   auto dotOperandLayout =
       dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-
-  auto uses = op.getResult().getUses();
-  // check all the mma layout in uses are the same.
-  MmaEncodingAttr preMmaLayout;
-  for (auto &op : uses) {
-    auto dotOp = cast<DotOp>(op.getOwner());
-    auto mmaLayout = dotOp.getResult()
-                         .getType()
-                         .cast<RankedTensorType>()
-                         .getEncoding()
-                         .cast<MmaEncodingAttr>();
-    if (preMmaLayout)
-      assert(preMmaLayout == mmaLayout);
-    preMmaLayout = mmaLayout;
-  }
-
-  // We randomly get a mmaLayout for all of them are the same.
-  auto mmaLayout = preMmaLayout;
+  MmaEncodingAttr mmaLayout =
+      dotOperandLayout.getParent().dyn_cast_or_null<MmaEncodingAttr>();
+  assert(mmaLayout);
 
   MMA16816ConversionHelper mmaHelper(mmaLayout, getThreadId(rewriter, loc),
                                      rewriter, getTypeConverter(), op.getLoc());
