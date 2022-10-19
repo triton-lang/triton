@@ -3094,12 +3094,31 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adaptor,
   MMA16816ConversionHelper mmaHelper(mmaLayout, getThreadId(rewriter, loc),
                                      rewriter, getTypeConverter(), loc);
 
-  auto A = mmaHelper.loadA(op.a(), adaptor.a());
-  auto B = mmaHelper.loadB(op.b(), adaptor.b());
-  auto C = mmaHelper.loadC(op.c());
+  Value A = op.a();
+  Value B = op.b();
+  auto ATensorTy = A.getType().cast<RankedTensorType>();
+  auto BTensorTy = B.getType().cast<RankedTensorType>();
 
-  return mmaHelper.convertDot(op.a(), op.b(), op.c(), op.d(), A, B, C, op,
-                              adaptor);
+  Value loadedA, loadedB, loadedC;
+  // We support two kinds of operand layouts: 1. both $a, $b are dot_operand
+  // layout, 2. both of them are shared layout.
+  if (ATensorTy.getEncoding().isa<DotOperandEncodingAttr>()) {
+    assert(BTensorTy.getEncoding().isa<DotOperandEncodingAttr>() &&
+           "Both $a and %b should be DotOperand layout.");
+    loadedA = adaptor.a();
+    loadedB = adaptor.b();
+  } else {
+    loadedA = mmaHelper.loadA(op.a(), adaptor.a());
+    loadedB = mmaHelper.loadB(op.b(), adaptor.b());
+  }
+
+  // TODO[Superjomn]: Process C as a mma layout.
+  // Currently, C is simply treated as a Splat Op, and the data layout is not
+  // mattered.
+  loadedC = mmaHelper.loadC(op.c());
+
+  return mmaHelper.convertDot(op.a(), op.b(), op.c(), op.d(), loadedA, loadedB,
+                              loadedC, op, adaptor);
 }
 
 /// ====================== mma codegen end ============================

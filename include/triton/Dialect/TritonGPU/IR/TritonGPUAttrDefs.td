@@ -330,7 +330,7 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
 // This is copied from a WIP PR.
 // TODO[Superjomn]: Remove it in the final PR.
 def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding"> {
-  let mnemonic = "dot_op";
+  let mnemonic = "dot_operand";
 
   let description = [{}];
 
