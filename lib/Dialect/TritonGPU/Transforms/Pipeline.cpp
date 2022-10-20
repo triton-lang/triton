@@ -158,44 +158,50 @@ RankedTensorType
 LoopPipeliner::getSwizzleType(ttg::DotOperandEncodingAttr dotOpEnc,
                               RankedTensorType ty) {
   int opIdx = dotOpEnc.getOpIdx();
-  auto mmaEnc = dotOpEnc.getParent().cast<ttg::MmaEncodingAttr>();
-  int version = mmaEnc.getVersion();
-  auto tyEncoding = ty.getEncoding().cast<ttg::BlockedEncodingAttr>();
-  auto order = tyEncoding.getOrder();
-  // number of rows per phase
-  int perPhase = 128 / (ty.getShape()[order[0]] *
-                        (ty.getElementType().getIntOrFloatBitWidth() / 8));
-  perPhase = std::max<int>(perPhase, 1);
   int vec = 1;
   int maxPhase = 1;
-  // index of the inner dimension in `order`
-  int inner = (opIdx == 0) ? 0 : 1;
-  if (version == 1) {
-    maxPhase = (order[inner] == 1 ? 8 : 4) / perPhase;
-    // TODO: handle rep (see
-    // https://github.com/openai/triton/blob/master/lib/codegen/analysis/layout.cc#L209)
-  } else if (version == 2) {
-    auto eltTy = ty.getElementType();
-    std::vector<size_t> mat_shape = {8, 8,
-                                      2 * 64 / eltTy.getIntOrFloatBitWidth()};
-    // for now, disable swizzle when using transposed int8 tensor cores
-    if (ty.getElementType().isInteger(8) && order[0] == inner)
-      perPhase = 1;
-    else {
-      if (opIdx == 0) {  // compute swizzling for A operand
-        vec = order[0] == 1 ? mat_shape[2] : mat_shape[0]; // k : m
-        int mmaStride = order[0] == 1 ? mat_shape[0] : mat_shape[2];
-        maxPhase = mmaStride / perPhase;
-      } else if (opIdx == 1) {  // compute swizzling for B operand
-        vec = order[0] == 1 ? mat_shape[1] : mat_shape[2]; // n : k
-        int mmaStride = order[0] == 1 ? mat_shape[2] : mat_shape[1];
-        maxPhase = mmaStride / perPhase;
-      } else
-        llvm_unreachable("invalid operand index");
-    }
-  } else  // version not in [1, 2]
-    llvm_unreachable("unsupported swizzling for provided MMA version");
+  int perPhase = 1;
+  llvm::ArrayRef<unsigned> order;
+  if (auto mmaEnc = dotOpEnc.getParent().dyn_cast<ttg::MmaEncodingAttr>()) {
+    int version = mmaEnc.getVersion();
+    auto tyEncoding = ty.getEncoding().cast<ttg::BlockedEncodingAttr>();
+    order = tyEncoding.getOrder();
+    // number of rows per phase
+    perPhase = 128 / (ty.getShape()[order[0]] *
+                          (ty.getElementType().getIntOrFloatBitWidth() / 8));
+    perPhase = std::max<int>(perPhase, 1);
 
+    // index of the inner dimension in `order`
+    int inner = (opIdx == 0) ? 0 : 1;
+    if (version == 1) {
+      maxPhase = (order[inner] == 1 ? 8 : 4) / perPhase;
+      // TODO: handle rep (see
+      // https://github.com/openai/triton/blob/master/lib/codegen/analysis/layout.cc#L209)
+    } else if (version == 2) {
+      auto eltTy = ty.getElementType();
+      std::vector<size_t> mat_shape = {8, 8,
+                                        2 * 64 / eltTy.getIntOrFloatBitWidth()};
+      // for now, disable swizzle when using transposed int8 tensor cores
+      if (ty.getElementType().isInteger(8) && order[0] == inner)
+        perPhase = 1;
+      else {
+        if (opIdx == 0) {  // compute swizzling for A operand
+          vec = order[0] == 1 ? mat_shape[2] : mat_shape[0]; // k : m
+          int mmaStride = order[0] == 1 ? mat_shape[0] : mat_shape[2];
+          maxPhase = mmaStride / perPhase;
+        } else if (opIdx == 1) {  // compute swizzling for B operand
+          vec = order[0] == 1 ? mat_shape[1] : mat_shape[2]; // n : k
+          int mmaStride = order[0] == 1 ? mat_shape[2] : mat_shape[1];
+          maxPhase = mmaStride / perPhase;
+        } else
+          llvm_unreachable("invalid operand index");
+      }
+    } else  // version not in [1, 2]
+      llvm_unreachable("unsupported swizzling for provided MMA version");
+  } else {  // If the layout of dot is not mma, we don't need to swizzle
+    auto blockedEnc = dotOpEnc.getParent().cast<ttg::BlockedEncodingAttr>();
+    order = blockedEnc.getOrder();
+  }
   auto newEncoding = ttg::SharedEncodingAttr::get(
     ty.getContext(), vec, perPhase, maxPhase, order
   );

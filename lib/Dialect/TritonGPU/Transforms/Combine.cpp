@@ -457,8 +457,24 @@ public:
     auto oldAcc = dotOp.getOperand(2);
     auto newAcc = rewriter.create<triton::gpu::ConvertLayoutOp>(
         oldAcc.getLoc(), newRetType, oldAcc);
+    Value a = dotOp.a();
+    Value b = dotOp.b();
+    auto oldAType = a.getType().cast<RankedTensorType>();
+    auto oldBType = b.getType().cast<RankedTensorType>();
+    auto newAType = RankedTensorType::get(
+      oldAType.getShape(), oldAType.getElementType(),
+      triton::gpu::DotOperandEncodingAttr::get(oldAType.getContext(), 0,
+                                               newRetType.getEncoding())
+    );
+    auto newBType = RankedTensorType::get(
+      oldBType.getShape(), oldBType.getElementType(),
+      triton::gpu::DotOperandEncodingAttr::get(oldBType.getContext(), 1,
+                                               newRetType.getEncoding())
+    );
+    a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), newAType, a);
+    b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), newBType, b);
     auto newDot = rewriter.create<triton::DotOp>(
-        dotOp.getLoc(), newRetType, dotOp.getOperand(0), dotOp.getOperand(1),
+        dotOp.getLoc(), newRetType, a, b,
         newAcc, dotOp.allowTF32());
 
     rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
