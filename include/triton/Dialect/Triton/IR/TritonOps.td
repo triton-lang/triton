@@ -272,7 +272,7 @@ def TT_CatOp : TT_Op<"cat", [NoSideEffect,
 //
 // SPMD Ops
 //
-def TT_GetProgramIdOp : TT_Op<"get_program_id"> {
+def TT_GetProgramIdOp : TT_Op<"get_program_id", [NoSideEffect]> {
     let arguments = (ins I32Attr:$axis);
 
     let results = (outs I32:$result);
@@ -280,7 +280,7 @@ def TT_GetProgramIdOp : TT_Op<"get_program_id"> {
     let assemblyFormat = "attr-dict `:` type($result)";
 }
 
-def TT_GetNumProgramsOp : TT_Op<"get_num_programs"> {
+def TT_GetNumProgramsOp : TT_Op<"get_num_programs", [NoSideEffect]> {
     let arguments = (ins I32Attr:$axis);
 
     let results = (outs I32:$result);
@@ -301,7 +301,7 @@ def TT_DotOp : TT_Op<"dot", [NoSideEffect,
         $d = matrix_multiply($a, $b) + $c
     }];
 
-    let arguments = (ins TT_FpIntTensor:$a, TT_FpIntTensor:$b, TT_FpIntTensor:$c, BoolAttr:$allowTF32);
+    let arguments = (ins TT_FpIntTensor:$a, TT_FpIntTensor:$b, TT_FpIntTensor:$c, BoolAttr:$allowTF32, BoolAttr:$transA, BoolAttr:$transB);
 
     let results = (outs TT_FpIntTensor:$d);
 
@@ -324,6 +324,7 @@ def TT_ReduceOp : TT_Op<"reduce", [NoSideEffect,
     ];
 
     let assemblyFormat = "$operand attr-dict `:` type($operand) `->` type($result)";
+
 }
 
 //
