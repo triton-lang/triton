@@ -571,8 +571,6 @@ class CodeGenerator(ast.NodeVisitor):
                         ast.NodeVisitor.generic_visit(self, stmt)
                 return
 
-        
-
         # collect lower bound (lb), upper bound (ub), and step
         lb = self.visit(node.iter.args[0] if len(node.iter.args) > 1 else ast.Num(0))
         ub = self.visit(node.iter.args[1] if len(node.iter.args) > 1 else node.iter.args[0])
@@ -630,14 +628,13 @@ class CodeGenerator(ast.NodeVisitor):
             # create YieldOp
             self.builder.set_insertion_point_to_end(for_op.get_body(0))
             if len(yields) > 0:
-              self.builder.create_yield_op([y.handle for y in yields])
+                self.builder.create_yield_op([y.handle for y in yields])
             for_op_region = for_op.get_body(0).get_parent()
             assert for_op_region.size() == 1, "We use SCF, so the loop body should only have one block"
             # replace global uses with block arguments
             for i, name in enumerate(names):
                 # arg0 is the induction variable
                 for_op.get_body(0).replace_use_in_block_with(init_args[i].handle, for_op.get_body(0).arg(i + 1))
-
 
         # update lscope & local_defs (ForOp defines new values)
         for i, name in enumerate(names):
@@ -976,7 +973,6 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     if output == "ttir":
         return module.str()
 
-
     # tritongpu-ir
     module = make_tritongpu_ir(module, num_warps)
     module = optimize_tritongpu_ir(module, num_stages)
@@ -985,7 +981,6 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
 
     print(module.str())
     exit(1)
-
 
     # llvm-ir
     llvm_ir = make_llvm_ir(module)
