@@ -1384,7 +1384,6 @@ struct ExtractSliceOpConversion
 };
 
 // A CRTP style of base class.
-// A CRTP style of base class.
 template <typename SourceOp, typename DestOp, typename ConcreteT>
 class ElementwiseOpConversionBase
     : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
