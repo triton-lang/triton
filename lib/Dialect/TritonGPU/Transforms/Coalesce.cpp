@@ -1,4 +1,5 @@
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include <numeric>
@@ -23,6 +24,11 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     std::sort(order.begin(), order.end(), [&](unsigned x, unsigned y) {
       return contiguity[x] > contiguity[y];
     });
+
+    int numElems = product(origType.getShape());
+    int numThreads = numWarps * 32;
+    int numElemsPerThread = std::max(numElems / numThreads, 1);
+
     // Thread tile size depends on memory alignment
     SmallVector<unsigned, 4> sizePerThread(rank, 1);
     PointerType ptrType = origType.getElementType().cast<PointerType>();
@@ -31,7 +37,8 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     unsigned maxContig = info.getContiguity(order[0]);
     unsigned alignment = std::min(maxMultiple, maxContig);
     unsigned perThread = std::min(alignment, 128 / numBits);
-    sizePerThread[order[0]] = perThread;
+    sizePerThread[order[0]] = std::min<int>(perThread, numElemsPerThread);
+
     SmallVector<unsigned> dims(rank);
     std::iota(dims.begin(), dims.end(), 0);
     // create encoding
@@ -63,9 +70,14 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     auto convertType = getTypeConverter(axisInfo, ptr, numWarps);
     // convert operands
     SmallVector<Value, 4> newArgs;
-    for (auto v : op->getOperands())
-      newArgs.push_back(builder.create<triton::gpu::ConvertLayoutOp>(
-          op->getLoc(), convertType(v.getType()), v));
+    for (auto v : op->getOperands()) {
+      auto vTy = v.getType().dyn_cast<RankedTensorType>();
+      if (vTy && !vTy.getEncoding().isa<triton::gpu::SharedEncodingAttr>())
+        newArgs.push_back(builder.create<triton::gpu::ConvertLayoutOp>(
+            op->getLoc(), convertType(v.getType()), v));
+      else
+        newArgs.push_back(v);
+    }
     // convert output types
     SmallVector<Type, 4> newTypes;
     for (auto t : op->getResultTypes()) {

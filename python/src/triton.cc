@@ -1104,8 +1104,11 @@ void init_triton_ir(py::module &&m) {
                  operand.getType().dyn_cast<mlir::RankedTensorType>();
              std::vector<int64_t> shape = inputTensorType.getShape();
              shape.erase(shape.begin() + axis);
-             auto resType = mlir::RankedTensorType::get(
-                 shape, inputTensorType.getElementType());
+             mlir::Type resType = inputTensorType.getElementType();
+             if (!shape.empty()) {
+               resType = mlir::RankedTensorType::get(
+                   shape, inputTensorType.getElementType());
+             }
              return self.create<mlir::triton::ReduceOp>(loc, resType, redOp,
                                                         operand, axis);
            })
@@ -1181,6 +1184,10 @@ void init_triton_ir(py::module &&m) {
       .def("add_triton_gpu_combine_pass",
            [](mlir::PassManager &self) {
              self.addPass(mlir::createTritonGPUCombineOpsPass());
+           })
+      .def("add_triton_gpu_swizzle_pass",
+           [](mlir::PassManager &self) {
+             self.addPass(mlir::createTritonGPUSwizzlePass());
            })
       .def("add_triton_gpu_to_llvm",
            [](mlir::PassManager &self) {
