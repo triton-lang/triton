@@ -559,7 +559,10 @@ class CodeGenerator(ast.NodeVisitor):
             raise RuntimeError('Only `range` iterator currently supported')
         # static for loops: all iterator arguments are constexpr
         iter_args = [self.visit(arg) for arg in node.iter.args]
-        is_static = all([isinstance(x, triton.language.constexpr) for x in iter_args])
+        static_unrolling = os.environ.get('TRITON_STATIC_LOOP_UNROLLING', False)
+        is_static = False
+        if static_unrolling:
+            is_static = all([isinstance(x, triton.language.constexpr) for x in iter_args])
         if is_static:
             iter_args = [arg.value for arg in iter_args]
             range = iterator(*iter_args)
@@ -875,6 +878,8 @@ def optimize_tritongpu_ir(mod, num_stages):
     pm.add_coalesce_pass()
     pm.add_triton_gpu_combine_pass()
     pm.add_licm_pass()
+    pm.add_triton_gpu_swizzle_pass()
+    pm.add_triton_gpu_combine_pass()
     pm.add_cse_pass()
     pm.run(mod)
     return mod
