@@ -1861,8 +1861,8 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
     unsigned linearIdxInNanoTile = i % srcAccumSizeInThreads;
     auto multiDimIdxInNanoTile = getMultiDimIndex<unsigned>(
         linearIdxInNanoTile, srcBlockedLayout.getSizePerThread());
-    multiDimIdxInNanoTile[inOrd[0]] /= minVec;
     unsigned pos = multiDimIdxInNanoTile[inOrd[0]] % minVec;
+    multiDimIdxInNanoTile[inOrd[0]] /= minVec;
     unsigned wordVecIdx =
         getLinearIndex<unsigned>(multiDimIdxInNanoTile, wordsInEachRep);
     wordVecs[wordVecIdx] =
