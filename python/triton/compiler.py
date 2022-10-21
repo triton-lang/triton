@@ -972,6 +972,7 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     module = optimize_triton_ir(module)
     if output == "ttir":
         return module.str()
+    
 
     # tritongpu-ir
     module = make_tritongpu_ir(module, num_warps)

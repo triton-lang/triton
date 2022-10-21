@@ -75,8 +75,8 @@ def _fwd_kernel(
         p = p.to(tl.float16)
         acc += tl.dot(p, v)
         # update m_i and l_i
-        # l_i = l_i_new
-        # m_i = m_i_new
+        l_i = l_i_new
+        m_i = m_i_new
     # rematerialize offsets to save registers
     start_m = tl.program_id(0)
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -212,19 +212,19 @@ class _attention(torch.autograd.Function):
         m = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         num_warps = 4 if Lk <= 64 else 8
 
-        # _fwd_kernel[grid](
-        #     q, k, v, sm_scale,
-        #     tmp, L, m,
-        #     o,
-        #     q.stride(0), q.stride(1), q.stride(2), q.stride(3),
-        #     k.stride(0), k.stride(1), k.stride(2), k.stride(3),
-        #     v.stride(0), v.stride(1), v.stride(2), v.stride(3),
-        #     o.stride(0), o.stride(1), o.stride(2), o.stride(3),
-        #     q.shape[0], q.shape[1], q.shape[2],
-        #     BLOCK_M=BLOCK, BLOCK_N=BLOCK,
-        #     BLOCK_DMODEL=Lk, num_warps=num_warps,
-        #     num_stages=1,
-        # )
+        _fwd_kernel[grid](
+            q, k, v, sm_scale,
+            tmp, L, m,
+            o,
+            q.stride(0), q.stride(1), q.stride(2), q.stride(3),
+            k.stride(0), k.stride(1), k.stride(2), k.stride(3),
+            v.stride(0), v.stride(1), v.stride(2), v.stride(3),
+            o.stride(0), o.stride(1), o.stride(2), o.stride(3),
+            q.shape[0], q.shape[1], q.shape[2],
+            BLOCK_M=BLOCK, BLOCK_N=BLOCK,
+            BLOCK_DMODEL=Lk, num_warps=num_warps,
+            num_stages=1,
+        )
         ctx.save_for_backward(q, k, v, o, L, m)
         ctx.BLOCK = BLOCK
         ctx.grid = grid
@@ -241,11 +241,11 @@ class _attention(torch.autograd.Function):
         dv = torch.empty_like(v)
         do_scaled = torch.empty_like(do)
         delta = torch.empty_like(l)
-        # _bwd_preprocess[(ctx.grid[0] * ctx.grid[1], )](
-        #     o, do, l,
-        #     do_scaled, delta,
-        #     BLOCK_M=ctx.BLOCK, D_HEAD=ctx.BLOCK_DMODEL,
-        # )
+        _bwd_preprocess[(ctx.grid[0] * ctx.grid[1], )](
+            o, do, l,
+            do_scaled, delta,
+            BLOCK_M=ctx.BLOCK, D_HEAD=ctx.BLOCK_DMODEL,
+        )
 
         num_warps = 4 if ctx.BLOCK_DMODEL <= 64 else 8
         _bwd_kernel[(ctx.grid[1],)](
