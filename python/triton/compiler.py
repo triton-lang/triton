@@ -979,9 +979,6 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     if output == "ttgir":
         return module.str()
 
-    print(module.str())
-    exit(1)
-
     # llvm-ir
     llvm_ir = make_llvm_ir(module)
 
