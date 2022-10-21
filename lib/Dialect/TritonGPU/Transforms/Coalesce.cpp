@@ -71,7 +71,8 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     // convert operands
     SmallVector<Value, 4> newArgs;
     for (auto v : op->getOperands()) {
-      if (v.getType().isa<RankedTensorType>())
+      auto vTy = v.getType().dyn_cast<RankedTensorType>();
+      if (vTy && !vTy.getEncoding().isa<triton::gpu::SharedEncodingAttr>())
         newArgs.push_back(builder.create<triton::gpu::ConvertLayoutOp>(
             op->getLoc(), convertType(v.getType()), v));
       else

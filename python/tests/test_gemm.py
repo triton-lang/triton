@@ -1,6 +1,6 @@
-import pytest
-import torch
-from torch.testing import assert_close
+# import pytest
+# import torch
+# from torch.testing import assert_close
 
 import triton
 import triton.language as tl
@@ -30,23 +30,23 @@ def matmul_kernel(
 # TODO: num_warps could only be 4 for now
 
 
-@pytest.mark.parametrize('SIZE_M,SIZE_N,SIZE_K,NUM_WARPS', [
-    [128, 256, 32, 4],
-    [256, 128, 16, 4],
-    [128, 16, 32, 4],
-    [32, 128, 64, 4],
-])
-def test_gemm_impl(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS):
-    a = torch.randn((SIZE_M, SIZE_K), device='cuda', dtype=torch.float16)
-    b = torch.randn((SIZE_K, SIZE_N), device='cuda', dtype=torch.float16)
-    c = torch.empty((SIZE_M, SIZE_N), device=a.device, dtype=torch.float32)
-    grid = lambda META: (1, )
-    matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c,
-                        stride_am=a.stride(0), stride_ak=a.stride(1),
-                        stride_bk=b.stride(0), stride_bn=b.stride(1),
-                        stride_cm=c.stride(0), stride_cn=c.stride(1),
-                        M=SIZE_M, N=SIZE_N, K=SIZE_K,
-                        num_warps=NUM_WARPS)
-    golden = torch.matmul(a, b)
-    torch.set_printoptions(profile="full")
-    assert_close(c, golden, rtol=1e-3, atol=1e-3, check_dtype=False)
+# @pytest.mark.parametrize('SIZE_M,SIZE_N,SIZE_K,NUM_WARPS', [
+#     [128, 256, 32, 4],
+#     [256, 128, 16, 4],
+#     [128, 16, 32, 4],
+#     [32, 128, 64, 4],
+# ])
+# def test_gemm_impl(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS):
+#     a = torch.randn((SIZE_M, SIZE_K), device='cuda', dtype=torch.float16)
+#     b = torch.randn((SIZE_K, SIZE_N), device='cuda', dtype=torch.float16)
+#     c = torch.empty((SIZE_M, SIZE_N), device=a.device, dtype=torch.float32)
+#     grid = lambda META: (1, )
+#     matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c,
+#                         stride_am=a.stride(0), stride_ak=a.stride(1),
+#                         stride_bk=b.stride(0), stride_bn=b.stride(1),
+#                         stride_cm=c.stride(0), stride_cn=c.stride(1),
+#                         M=SIZE_M, N=SIZE_N, K=SIZE_K,
+#                         num_warps=NUM_WARPS)
+#     golden = torch.matmul(a, b)
+#     torch.set_printoptions(profile="full")
+#     assert_close(c, golden, rtol=1e-3, atol=1e-3, check_dtype=False)
