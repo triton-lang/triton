@@ -991,7 +991,11 @@ def reduce_impl(input: tl.tensor, axis: int, builder: ir.builder, name: str,
     for i, s in enumerate(shape):
         if i != axis:
             ret_shape.append(s)
-    res_ty = tl.block_type(scalar_ty, ret_shape)
+    if ret_shape:
+        res_ty = tl.block_type(scalar_ty, ret_shape)
+    else:
+        # 0d-tensor -> scalar
+        res_ty = scalar_ty
 
     if scalar_ty.is_floating():
         return tl.tensor(builder.create_reduce(input.handle, FLOAT_OP, axis), res_ty)

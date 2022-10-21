@@ -62,7 +62,8 @@ def TTG_CmpFOp : TTG_Op<"cmpf"> {
 
 def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
                                     [SameVariadicOperandSize,
-                                     MemoryEffects<[MemRead, MemWrite]>,
+                                     // MemoryEffects<[MemRead]>, doesn't work with CSE but seems like it should?
+                                     NoSideEffect,
                                      TypesMatchWith<"infer mask type from src type",
                                                     "src", "mask", "getI1SameShape($_self)",
                                                     "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
