@@ -1,9 +1,11 @@
 
+import pytest
 import torch
+from torch.testing import assert_close
+
 import triton
 import triton.language as tl
-import pytest
-from torch.testing import assert_close
+
 
 @pytest.mark.parametrize('num_warps, block_size, iter_size', [
     [4, 256, 1],
@@ -36,6 +38,7 @@ def test_sin_no_mask(num_warps, block_size, iter_size):
 
     golden_y = torch.sin(x)
     assert_close(y, golden_y, rtol=1e-7, atol=1e-7)
+
 
 @pytest.mark.parametrize('num_warps, block_size, iter_size', [
     [4, 256, 1],
@@ -74,6 +77,7 @@ def test_fmin_no_mask(num_warps, block_size, iter_size):
 
     golden_z = torch.minimum(x, y)
     assert_close(z, golden_z, rtol=1e-7, atol=1e-7)
+
 
 @pytest.mark.parametrize('num_warps, block_size, iter_size', [
     [4, 256, 1],
