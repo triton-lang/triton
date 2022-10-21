@@ -40,7 +40,8 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
   if (TensorType ty = value.getType().dyn_cast<TensorType>())
     rank = ty.getRank();
   int divHint = 1;
-  if (BlockArgument blockArg = value.dyn_cast<BlockArgument>()) {
+  BlockArgument blockArg = value.dyn_cast<BlockArgument>();
+  if (blockArg && blockArg.getOwner()->isEntryBlock()) {
     Operation *op = blockArg.getOwner()->getParentOp();
     if (FuncOp fun = dyn_cast<FuncOp>(op)) {
       Attribute attr =
