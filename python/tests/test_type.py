@@ -46,14 +46,15 @@ def binop_type_check(X):
     d3 = zero_2d_21 + zero_2d_22
     d4 = zero_2d_22 + zero_2d_21
 
-    # triton doesn't support non-inlined functions that return something
+    # return a0, a1, a2, a3, a4, a5, a6, b1, b2, b3, b4, b5, c1, c2, c3, c4, c5, d1, d2, d3, d4
+    return a0, a3, a4, a5, a6, c1, c2, c3, c4, c5, d1, d2, d3, d4
 
 
 def test_binop_type_check():
     kernel = triton.compiler._compile(binop_type_check,
                                       signature="*fp32",
                                       device=0,
-                                      output="ttgir")
+                                      output="ttir")
     assert (kernel)
     # TODO: Check types of the results
 
@@ -74,6 +75,6 @@ def test_reduce_type_check():
     kernel = triton.compiler._compile(reduce_type_check,
                                       signature="*fp32",
                                       device=0,
-                                      output="ttgir")
+                                      output="ttir")
     assert (kernel)
     # TODO: Check types of the results
