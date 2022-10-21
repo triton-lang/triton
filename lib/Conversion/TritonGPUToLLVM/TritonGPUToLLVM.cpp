@@ -841,8 +841,8 @@ struct LoadOpConversion
     bool otherIsSplatConstInt = false;
     DenseElementsAttr constAttr;
     int64_t splatVal = 0;
-    if (valueElemTy.isa<IntegerType>() &&
-        matchPattern(op.other(), m_Constant(&constAttr)) &&
+    if (valueElemTy.isa<IntegerType>() && other &&
+        matchPattern(other, m_Constant(&constAttr)) &&
         constAttr.isSplat()) {
       otherIsSplatConstInt = true;
       splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
