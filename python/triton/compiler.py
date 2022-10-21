@@ -573,7 +573,6 @@ class CodeGenerator(ast.NodeVisitor):
 
         
 
-
         # collect lower bound (lb), upper bound (ub), and step
         lb = self.visit(node.iter.args[0] if len(node.iter.args) > 1 else ast.Num(0))
         ub = self.visit(node.iter.args[1] if len(node.iter.args) > 1 else node.iter.args[0])
@@ -616,6 +615,7 @@ class CodeGenerator(ast.NodeVisitor):
                         names.append(name)
                         init_args.append(triton.language.core._to_tensor(liveins[name], self.builder))
                         yields.append(triton.language.core._to_tensor(self.local_defs[name], self.builder))
+
             # create ForOp
             self.builder.set_insertion_point_to_end(insert_block)
             for_op = self.builder.create_for_op(lb, ub, step, [arg.handle for arg in init_args])
@@ -629,7 +629,8 @@ class CodeGenerator(ast.NodeVisitor):
 
             # create YieldOp
             self.builder.set_insertion_point_to_end(for_op.get_body(0))
-            self.builder.create_yield_op([y.handle for y in yields])
+            if len(yields) > 0:
+              self.builder.create_yield_op([y.handle for y in yields])
             for_op_region = for_op.get_body(0).get_parent()
             assert for_op_region.size() == 1, "We use SCF, so the loop body should only have one block"
             # replace global uses with block arguments
@@ -979,10 +980,11 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     # tritongpu-ir
     module = make_tritongpu_ir(module, num_warps)
     module = optimize_tritongpu_ir(module, num_stages)
-    print(module.str())
-    exit(1)
     if output == "ttgir":
         return module.str()
+
+    print(module.str())
+    exit(1)
 
 
     # llvm-ir

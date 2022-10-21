@@ -34,11 +34,12 @@ namespace {
 //
 // -----------------------------------------------------------------------------
 
-// convert(blocked, dot_operand) -> convert(blocked, mma) + convert(mma,
-// dot_operand)
-// this is a hack to accomodate some pattern seen in the fused attention kernel
-// we could probably remove this need if we had some way to
-// add conversions to trigger large amount of CSE
+// convert(blocked, dot_operand) ->
+// convert(blocked, mma) + convert(mma,  dot_operand)
+// if this value is itself the result of a dot operation
+// this is a hueiristics to accomodate some pattern seen in fused attention
+// kernels.
+// TODO: replace this by something more generic, i.e. layout-aware CSE
 class DecomposeDotOperand : public mlir::RewritePattern {
 
 public:

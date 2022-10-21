@@ -195,7 +195,7 @@ void init_triton_ir(py::module &&m) {
              if (self.getNumArguments() != 0)
                throw std::runtime_error(
                    "This block has arguments, don't merge");
-             dst.getOperations().splice(dst.end(), self.getOperations());
+             dst.getOperations().splice(dst.begin(), self.getOperations());
              self.dropAllUses();
              self.erase();
            })
