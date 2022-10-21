@@ -437,7 +437,7 @@ typedef std::map<std::string, py::object> asm_map_t;
 // ---------------------------------------
 
 void init_triton_codegen(py::module &&m) {
-  m.def("compile_ttir",
+  m.def("compile_ttir_to_ptx",
       [](backend_t backend, ir::module &ir, uint64_t device, int num_warps, int num_stages, py::dict& extern_libs, size_t cc) {
           std::ostringstream ttir;
           int n_shared_bytes;
@@ -487,6 +487,62 @@ void init_triton_codegen(py::module &&m) {
           if(!cubin.empty()){
             py::bytes bytes(cubin);
             asm_map["cubin"] = bytes;
+          }
+          return std::make_tuple(name, asm_map, n_shared_bytes);
+      },
+      py::return_value_policy::take_ownership);
+  
+  m.def("compile_ttir_to_amdgpu",
+      [](backend_t backend, ir::module &ir, uint64_t device, int num_warps, int num_stages, py::dict& extern_libs, size_t cc) {
+          std::ostringstream ttir;
+          int n_shared_bytes;
+          std::string tmp;
+          std::string amdgpu;
+          std::string hipmodule;
+          std::string name;
+          { 
+            // Scope where the GIL is released
+            py::gil_scoped_release allow_threads;
+            name = ir.get_function_list()[0]->get_name();
+            ir.print(ttir);
+            llvm::LLVMContext ctx;
+            // construct extern lib map
+            triton::codegen::ExternLibMap extern_lib_map;
+            for (auto item : extern_libs) {
+              auto name = item.first.cast<std::string>();
+              auto path = item.second.cast<std::string>();
+              extern_lib_map.emplace(
+                  name, triton::codegen::create_extern_lib(name, path));
+            }
+            // device properties
+            if (cc == 0) {
+              hipDevice_t dev = (hipDevice_t)device;
+              size_t major = hipGetInfo<hipDeviceAttributeComputeCapabilityMajor>(dev);
+              size_t minor = hipGetInfo<hipDeviceAttributeComputeCapabilityMinor>(dev);
+              cc = major*10 + minor;
+            }
+            int version;
+            // std::string ptxas_path = drv::path_to_ptxas(version);
+            // Triton-IR -> AMDGCN LLVM-IR
+            triton::codegen::amd_cl_target target;
+            auto llvm = triton::codegen::add_passes_to_emit_bin(
+                ir, ctx, &target, num_warps, num_stages, n_shared_bytes, extern_lib_map);
+            llvm::raw_string_ostream llir(tmp);
+            llir << *llvm;
+            llir.flush();
+            // LLVM-IR -> AMD HSACO
+            std::string amdgpu = drv::llir_to_amdgpu(llvm.get(), "gfx90a");
+            // HSACO -> GCN
+            hipModule_t hipmodule = drv::amdgpu_to_hipmodule(amdgpu);
+          }
+          asm_map_t asm_map;
+          asm_map["ttir"] = py::cast(ttir.str());
+          asm_map["llir"] = py::cast(tmp);
+          asm_map["amdgpu"] = py::cast(amdgpu);
+
+          if(!hipmodule.empty()){
+            py::bytes bytes(hipmodule);
+            asm_map["hipmodule"] = bytes;
           }
           return std::make_tuple(name, asm_map, n_shared_bytes);
       },
