@@ -172,6 +172,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
   auto llvmir = translateLLVMToLLVMIR(llvmContext, module);
   if (!llvmir) {
     llvm::errs() << "Translate to LLVM IR failed";
+    return nullptr;
   }
 
   llvm::SMDiagnostic err;
@@ -179,12 +180,14 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
     auto ext_mod = llvm::parseIRFile(path, err, *llvmContext);
     if (!ext_mod) {
       llvm::errs() <<"Failed to load extern lib ";
+      return nullptr;
     }
     ext_mod->setTargetTriple(llvmir->getTargetTriple());
     ext_mod->setDataLayout(llvmir->getDataLayout());
 
     if (llvm::Linker::linkModules(*llvmir, std::move(ext_mod))) {
       llvm::errs() <<"Failed to link extern lib ";
+      return nullptr;
     }
   }
 

@@ -3255,14 +3255,14 @@ struct ExtElemwiseOpConversion
     if (funcName.empty() || libpath.empty())
       return failure();
 
-    auto resultTy = op.getType().template dyn_cast<RankedTensorType>();
+    auto resultTy = op.getType().dyn_cast<RankedTensorType>();
     // ArithmeticToLLVM will handle the lowering of scalar ArithOps
     if (!resultTy)
       return failure();
 
     Location loc = op->getLoc();
     auto resultLayout =
-        resultTy.getEncoding().template dyn_cast<BlockedEncodingAttr>();
+        resultTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
     auto resultShape = resultTy.getShape();
     assert(resultLayout && "Unexpected resultLayout in BinaryOpConversion");
     unsigned elems = resultLayout.getElemsPerThread(resultShape);
