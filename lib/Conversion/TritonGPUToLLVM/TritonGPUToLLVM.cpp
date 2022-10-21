@@ -102,8 +102,9 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
 #define i32_ty rewriter.getIntegerType(32)
 #define f16_ty rewriter.getF16Type()
-#define f32_val(...) LLVM::createConstantF32(loc, rewriter, __VA_ARGS__)
+#define f32_ty rewriter.getF32Type()
 #define vec_ty(type, num) VectorType::get(num, type)
+#define f32_val(...) LLVM::createConstantF32(loc, rewriter, __VA_ARGS__)
 #define void_ty LLVM::LLVMVoidType::get(ctx)
 #define struct_ty(...) LLVM::LLVMStructType::getLiteral(__VA_ARGS__)
 
@@ -3060,35 +3061,34 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adapter,
     Value warp0 = urem(warp, i32_val(wpt[0]));
     Value warp12 = udiv(warp, i32_val(wpt[0]));
     Value warp1 = urem(warp12, i32_val(wpt[1]));
-    Value offWarpM = mul(warp0, i32_val(spw[0]));
-    Value offWarpN = mul(warp1, i32_val(spw[1]));
+    Value warpMOff = mul(warp0, i32_val(spw[0]));
+    Value warpNOff = mul(warp1, i32_val(spw[1]));
     // Quad offset
-    Value offQuadM = mul(udiv(and_(lane, _16), _4), i32_val(fpw[0]));
-    Value offQuadN = mul(udiv(and_(lane, _16), _4), i32_val(fpw[1]));
+    Value quadMOff = mul(udiv(and_(lane, _16), _4), i32_val(fpw[0]));
+    Value quadNOff = mul(udiv(and_(lane, _16), _4), i32_val(fpw[1]));
     // Pair offset
-    Value offPairM = udiv(urem(lane, _16), _4);
-    offPairM = urem(offPairM, i32_val(fpw[0]));
-    offPairM = mul(offPairM, _4);
-    Value offPairN = udiv(urem(lane, _16), _4);
-    offPairN = udiv(offPairN, i32_val(fpw[0]));
-    offPairN = urem(offPairN, i32_val(fpw[1]));
-    offPairN = mul(offPairN, _4);
-    offPairN = mul(offPairN, _4);
+    Value pairMOff = udiv(urem(lane, _16), _4);
+    pairMOff = urem(pairMOff, i32_val(fpw[0]));
+    pairMOff = mul(pairMOff, _4);
+    Value pairNOff = udiv(urem(lane, _16), _4);
+    pairNOff = udiv(pairNOff, i32_val(fpw[0]));
+    pairNOff = urem(pairNOff, i32_val(fpw[1]));
+    pairNOff = mul(pairNOff, _4);
     // scale
-    offPairM = mul(offPairM, i32_val(rep[0] / 2));
-    offQuadM = mul(offQuadM, i32_val(rep[0] / 2));
-    offPairN = mul(offPairN, i32_val(rep[1] / 2));
-    offQuadN = mul(offQuadN, i32_val(rep[1] / 2));
+    pairMOff = mul(pairMOff, i32_val(rep[0] / 2));
+    quadMOff = mul(quadMOff, i32_val(rep[0] / 2));
+    pairNOff = mul(pairNOff, i32_val(rep[1] / 2));
+    quadNOff = mul(quadNOff, i32_val(rep[1] / 2));
     // Quad pair offset
-    Value offLaneM = add(offPairM, offQuadM);
-    Value offLaneN = add(offPairN, offQuadN);
-    // a offset
-    Value offsetAM = add(offWarpM, offLaneM);
+    Value laneMOff = add(pairMOff, quadMOff);
+    Value laneNOff = add(pairNOff, quadNOff);
+    // A offset
+    Value offsetAM = add(warpMOff, laneMOff);
     Value offsetAK = and_(lane, _3);
-    // b offset
-    Value offsetBN = add(offWarpN, offLaneN);
+    // B offset
+    Value offsetBN = add(warpNOff, laneNOff);
     Value offsetBK = and_(lane, _3);
-    // i indice
+    // i indices
     Value offsetCM = add(and_(lane, _1), offsetAM);
     if (isARow) {
       offsetAM = add(offsetAM, urem(thread, _4));
@@ -3134,7 +3134,7 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adapter,
   Value offB1 = isBRow ? offsetBK : offsetBN;
   Value phaseB = urem(udiv(offB1, i32_val(perPhaseB)), i32_val(maxPhaseB));
   SmallVector<Value> offB(numPtrB);
-  for (int i = 0; i < numPtrB; i++) {
+  for (int i = 0; i < numPtrB; ++i) {
     Value offB0I = add(offB0, i32_val(i * (isBRow ? strideRepN : 4)));
     offB0I = udiv(offB0I, i32_val(vecB));
     offB0I = xor_(offB0I, phaseB);
@@ -3145,10 +3145,10 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adapter,
 
   // MMA intrinsic
 
-  Type bf16x2Ty = VectorType::get({2}, type::bf16Ty(ctx));
-  Type f32Ty = type::f32Ty(ctx);
+  Type f16x2Ty = vec_ty(f16_ty, 2);
   // One thread get 8 elements as result
-  Type retTy = LLVM::LLVMStructType::getLiteral(ctx, SmallVector(8, f32Ty));
+  Type retTy =
+      LLVM::LLVMStructType::getLiteral(ctx, SmallVector(8, type::f32Ty(ctx)));
 
   // prepare arguments
   SmallVector<Value> ptrA(numPtrA);
@@ -3161,16 +3161,15 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adapter,
   for (int i = 0; i < numPtrB; i++)
     ptrB[i] = gep(ptr_ty(f16_ty), smemB, offB[i]);
 
+  auto instrShape = helper.getMmaInstrShape();
+  unsigned numM = rep[0] * dShape[0] / (spw[0] * wpt[0]);
+  unsigned numN = rep[1] * dShape[1] / (spw[1] * wpt[0]);
+
+  size_t accSize = numM * numN * 8;
   // initialize accumulators
-  SmallVector<Value> acc;
   // TODO(Superjomn) Process C in convert_layout
   // NOTE, we just assume C is zero.
-  for (int i = 0; i < 8; i++)
-    acc.push_back(f32_val(0.f) /*C elem*/);
-
-  auto instrShape = helper.getMmaInstrShape();
-  unsigned numM = rep[0] * dShape[0] / (instrShape[0] * wpt[0]);
-  unsigned numN = rep[1] * dShape[1] / (instrShape[1] * wpt[0]);
+  SmallVector<Value> acc(accSize, f32_val(0.f));
 
   auto callMMA = [&](unsigned m, unsigned n, unsigned k) {
     auto ha = has[{m, k}];
@@ -3225,22 +3224,24 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adapter,
     auto getIntAttr = [&](int v) {
       return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
     };
+    llvm::outs() << "acc.size: " << acc.size() << "\n";
     for (unsigned i = 0; i < 8; i++)
-      acc[idx[i]] = extract_val(f32Ty, res, getIntAttr(i));
+      acc[idx[i]] = extract_val(f32_ty, res, getIntAttr(i));
   };
 
   auto ld = [&](decltype(has) &vals, int m, int k, Value val0, Value val1) {
     vals[{m, k}] = {val0, val1};
   };
 
-  Type f16x2Ty = vec_ty(f16_ty, 2);
+  Type f16PtrTy = ptr_ty(f16_ty);
+
   auto loadA = [&](int m, int K) {
     int offidx = (isARow ? K / 4 : m) % numPtrA;
-    Value thePtrA = gep(f16_ty, smemA, offA[offidx]);
+    Value thePtrA = gep(f16PtrTy, smemA, offA[offidx]);
 
     int stepAM = isARow ? m : m / numPtrA * numPtrA;
     int stepAK = isARow ? K / (numPtrA * vecA) * (numPtrA * vecA) : K;
-    Value pa = gep(f16_ty, thePtrA,
+    Value pa = gep(f16PtrTy, thePtrA,
                    i32_val(stepAM * strideRepM * strideAM + stepAK * strideAK));
     Type aPtrTy = ptr_ty(vec_ty(i32_ty, vecA / 2), 3);
     Value ha = load(bitcast(pa, aPtrTy));
@@ -3265,7 +3266,7 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adapter,
 
     int stepBN = isBRow ? n / numPtrB * numPtrB : n;
     int stepBK = isBRow ? K : K / (numPtrB * vecB) * (numPtrB * vecB);
-    Value pb = gep(f16_ty, thePtrB,
+    Value pb = gep(f16PtrTy, thePtrB,
                    i32_val(stepBN * strideRepN * strideBN + stepBK * strideBK));
     Value hb = load(bitcast(pb, ptr_ty(vec_ty(i32_ty, vecB / 2), 3)));
     // record lds that needs to be moved
@@ -3293,8 +3294,9 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adapter,
       }
 
   // write back accumulators
-
-  getStructFromElements(loc, acc, rewriter, Type{});
+  Type resTy = struct_ty(getContext(), SmallVector<Type>(acc.size(), f32_ty));
+  Value res = getStructFromElements(loc, acc, rewriter, resTy);
+  rewriter.replaceOp(op, res);
 
   return success();
 }
