@@ -893,14 +893,19 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(),
     if output == "ttir":
         return module
 
-    assert output == "cubin"
+    assert (output == "cubin" or output == "hsaco")
     if torch.version.hip is not None:
         backend = _triton.runtime.backend.ROCM
     else:
         backend = _triton.runtime.backend.CUDA
     if extern_libs is None:
         extern_libs = dict()
-    name, asm, shared_mem = _triton.code_gen.compile_ttir(backend, module, device, num_warps, num_stages, extern_libs, cc)
+    
+    # compile ttir
+    if torch.version.hip is not None:
+        name, asm, shared_mem = _triton.code_gen.compile_ttir_to_amdgpu(backend, module, device, num_warps, num_stages, extern_libs, cc)
+    else:
+        name, asm, shared_mem = _triton.code_gen.compile_ttir_to_ptx(backend, module, device, num_warps, num_stages, extern_libs, cc)
     return asm, shared_mem, name
 
 
@@ -1274,8 +1279,13 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
        not fn_cache_manager.has_file(ptx_name) or \
        not fn_cache_manager.has_file(ttir_name) or \
        not fn_cache_manager.has_file(llir_name):
-        asm, shared, kernel_name = _compile(fn, signature, device, constants, configs[0], num_warps, num_stages,
-                                            extern_libs, "cubin", cc)
+
+        if torch.version.hip is not None:
+            asm, shared, kernel_name = _compile(fn, signature, device, constants, configs[0], num_warps, num_stages,
+                                                extern_libs, "hsaco", cc)
+        else
+            asm, shared, kernel_name = _compile(fn, signature, device, constants, configs[0], num_warps, num_stages,
+                                                extern_libs, "cubin", cc)
         metadata = {"name": kernel_name, "shared": shared, "num_warps": num_warps, "num_stages": num_stages}
         fn_cache_manager.put(asm["cubin"], cubin_name)
         fn_cache_manager.put(asm["ptx"], ptx_name, binary=False)
