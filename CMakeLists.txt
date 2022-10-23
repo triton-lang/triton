@@ -171,6 +171,9 @@ include(AddLLVM)
 include(AddMLIR)
 include(HandleLLVMOptions) # human-friendly error message
 
+# Disable warnings that show up in external code (gtest;pybind11)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-covered-switch-default")
+
 include_directories(${MLIR_INCLUDE_DIRS})
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR}/include)

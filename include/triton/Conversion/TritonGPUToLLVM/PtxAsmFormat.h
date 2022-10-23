@@ -15,9 +15,9 @@ class Location;
 namespace triton {
 using llvm::StringRef;
 
-class PTXInstr;
-class PTXInstrCommon;
-class PTXInstrExecution;
+struct PTXInstr;
+struct PTXInstrCommon;
+struct PTXInstrExecution;
 
 // PTXBuilder helps to manage a PTX asm program consists of one or multiple
 // instructions.
@@ -172,8 +172,8 @@ private:
     return argArchive.back().get();
   }
 
-  friend class PTXInstr;
-  friend class PTXInstrCommon;
+  friend struct PTXInstr;
+  friend struct PTXInstrCommon;
 
 protected:
   llvm::SmallVector<std::unique_ptr<Operand>, 6> argArchive;
@@ -209,7 +209,7 @@ protected:
   PTXBuilder *builder{};
   llvm::SmallVector<std::string, 4> instrParts;
 
-  friend class PTXInstrExecution;
+  friend struct PTXInstrExecution;
 };
 
 template <class ConcreteT> struct PTXInstrBase : public PTXInstrCommon {

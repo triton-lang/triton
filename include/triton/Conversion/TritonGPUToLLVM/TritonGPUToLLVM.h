@@ -11,16 +11,12 @@ class ModuleOp;
 template <typename T> class OperationPass;
 
 class TritonLLVMConversionTarget : public ConversionTarget {
-  mlir::LLVMTypeConverter &typeConverter;
-
 public:
   explicit TritonLLVMConversionTarget(MLIRContext &ctx,
                                       mlir::LLVMTypeConverter &typeConverter);
 };
 
 class TritonLLVMFunctionConversionTarget : public ConversionTarget {
-  mlir::LLVMTypeConverter &typeConverter;
-
 public:
   explicit TritonLLVMFunctionConversionTarget(
       MLIRContext &ctx, mlir::LLVMTypeConverter &typeConverter);

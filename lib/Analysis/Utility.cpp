@@ -31,7 +31,7 @@ std::string getValueOperandName(Value value, AsmState &state) {
   std::string opName;
   llvm::raw_string_ostream ss(opName);
   value.printAsOperand(ss, state);
-  return std::move(opName);
+  return opName;
 }
 
 } // namespace mlir

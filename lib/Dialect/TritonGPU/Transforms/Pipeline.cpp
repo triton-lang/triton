@@ -81,7 +81,7 @@ public:
   /// create the new ForOp (add new args & insert prefetched ops)
   scf::ForOp createNewForOp();
 
-  friend class PipelinePass;
+  friend struct PipelinePass;
 };
 
 // helpers

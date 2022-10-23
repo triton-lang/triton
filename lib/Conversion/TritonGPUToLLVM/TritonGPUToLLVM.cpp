@@ -254,7 +254,6 @@ protected:
 /// FuncOp legalization pattern that converts MemRef arguments to pointers to
 /// MemRef descriptors (LLVM struct data types) containing all the MemRef type
 /// information.
-static constexpr StringRef kEmitIfaceAttrName = "llvm.emit_c_interface";
 struct FuncOpConversion : public FuncOpConversionBase {
   FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
                    PatternBenefit benefit)
@@ -2365,12 +2364,12 @@ public:
                      ArrayRef<int> matShape, int perPhase, int maxPhase,
                      int elemBytes, ConversionPatternRewriter &rewriter,
                      TypeConverter *typeConverter, const Location &loc)
-      : wpt(wpt), order(order.begin(), order.end()), kOrder(kOrder),
+      : order(order.begin(), order.end()), kOrder(kOrder),
         tileShape(tileShape.begin(), tileShape.end()),
         instrShape(instrShape.begin(), instrShape.end()),
         matShape(matShape.begin(), matShape.end()), perPhase(perPhase),
         maxPhase(maxPhase), elemBytes(elemBytes), rewriter(rewriter),
-        typeConverter(typeConverter), loc(loc), ctx(rewriter.getContext()) {
+        loc(loc), ctx(rewriter.getContext()) {
     cMatShape = matShape[order[0]];
     sMatShape = matShape[order[1]];
 
@@ -2588,7 +2587,6 @@ public:
 
     Value ptr = getPtr(ptrIdx);
 
-    Value resV4;
     if (canUseLdmatrix) {
       int sOffset =
           matIdx[order[1]] * sMatStride * sMatShape * sTileStride * elemBytes;
@@ -2719,7 +2717,6 @@ public:
   }
 
 private:
-  int wpt;
   SmallVector<uint32_t> order;
   int kOrder;
   SmallVector<int64_t> tileShape;
@@ -2729,7 +2726,6 @@ private:
   int maxPhase;
   int elemBytes;
   ConversionPatternRewriter &rewriter;
-  TypeConverter *typeConverter{};
   const Location &loc;
   MLIRContext *ctx{};
 
@@ -4191,7 +4187,7 @@ namespace mlir {
 
 TritonLLVMConversionTarget::TritonLLVMConversionTarget(
     MLIRContext &ctx, mlir::LLVMTypeConverter &typeConverter)
-    : ConversionTarget(ctx), typeConverter(typeConverter) {
+    : ConversionTarget(ctx) {
   addLegalDialect<LLVM::LLVMDialect>();
   addLegalDialect<NVVM::NVVMDialect>();
   // addIllegalDialect<triton::TritonDialect>();
@@ -4203,7 +4199,7 @@ TritonLLVMConversionTarget::TritonLLVMConversionTarget(
 
 TritonLLVMFunctionConversionTarget::TritonLLVMFunctionConversionTarget(
     MLIRContext &ctx, mlir::LLVMTypeConverter &typeConverter)
-    : ConversionTarget(ctx), typeConverter(typeConverter) {
+    : ConversionTarget(ctx) {
   addLegalDialect<LLVM::LLVMDialect>();
   // addLegalDialect<NVVM::NVVMDialect>();
   addIllegalOp<mlir::FuncOp>();

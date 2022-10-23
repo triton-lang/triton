@@ -1331,7 +1331,7 @@ void init_triton_translation(py::module &m) {
           std::string cubin(std::istreambuf_iterator<char>(_cubin), {});
           _cubin.close();
           py::bytes bytes(cubin);
-          return bytes;
+          return std::move(bytes);
         });
 
   m.def("add_external_libs",
@@ -1343,8 +1343,8 @@ void init_triton_translation(py::module &m) {
 
 void init_triton(py::module &m) {
   py::module subm = m.def_submodule("triton");
-  // init_triton_codegen(std::move(subm.def_submodule("code_gen")));
-  init_triton_runtime(std::move(subm.def_submodule("runtime")));
-  init_triton_ir(std::move(subm.def_submodule("ir")));
+  // init_triton_codegen(subm.def_submodule("code_gen"));
+  init_triton_runtime(subm.def_submodule("runtime"));
+  init_triton_ir(subm.def_submodule("ir"));
   init_triton_translation(subm);
 }
