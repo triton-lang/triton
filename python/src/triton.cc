@@ -26,6 +26,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
+#include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "llvm/Support/SourceMgr.h"
@@ -1301,37 +1302,34 @@ void init_triton_translation(py::module &m) {
           py::gil_scoped_release allow_threads;
 
           // compile ptx with ptxas
-          char _fsrc[L_tmpnam];
-          char _flog[L_tmpnam];
-          std::tmpnam(_fsrc);
-          std::tmpnam(_flog);
-          std::string fsrc = _fsrc;
-          std::string flog = _flog;
-          std::string fbin = fsrc + ".o";
+          llvm::SmallString<64> fsrc;
+          llvm::SmallString<64> flog;
+          llvm::sys::fs::createTemporaryFile("compile-ptx-src", "", fsrc);
+          llvm::sys::fs::createTemporaryFile("compile-ptx-log", "", flog);
+          std::string fbin = std::string(fsrc) + ".o";
+          llvm::FileRemover srcRemover(fsrc);
+          llvm::FileRemover logRemover(flog);
+          llvm::FileRemover binRemover(fbin);
+          const char *_fsrc = fsrc.c_str();
+          const char *_flog = flog.c_str();
           const char *_fbin = fbin.c_str();
-          std::ofstream ofs(fsrc);
+          std::ofstream ofs(_fsrc);
           ofs << ptxCode << std::endl;
           ofs.close();
           std::string cmd;
           int err;
           cmd = ptxasPath + " -v --gpu-name=sm_" + std::to_string(capability) +
-                " " + fsrc + " -o " + fsrc + ".o 2> " + flog;
+                " " + _fsrc + " -o " + _fsrc + ".o 2> " + _flog;
           err = system(cmd.c_str());
           if (err != 0) {
             std::ifstream _log(_flog);
             std::string log(std::istreambuf_iterator<char>(_log), {});
-            unlink(_fsrc);
-            unlink(_flog);
             throw std::runtime_error("Internal Triton PTX codegen error: \n" +
                                      log);
           }
           std::ifstream _cubin(_fbin, std::ios::binary);
           std::string cubin(std::istreambuf_iterator<char>(_cubin), {});
           _cubin.close();
-          unlink(_fsrc);
-          unlink(_flog);
-          unlink(_fbin);
-
           py::bytes bytes(cubin);
           return bytes;
         });

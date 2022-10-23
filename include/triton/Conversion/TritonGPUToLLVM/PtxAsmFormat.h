@@ -83,7 +83,7 @@ struct PTXBuilder {
     Operand() = default;
     Operand(const Operation &) = delete;
     Operand(Value value, StringRef constraint)
-        : value(value), constraint(constraint) {}
+        : constraint(constraint), value(value) {}
 
     bool isList() const { return !value && constraint.empty(); }
 
@@ -120,7 +120,7 @@ struct PTXBuilder {
   Operand *newListOperand(unsigned count, mlir::Value val,
                           const std::string &constraint) {
     auto *list = newOperand();
-    for (int i = 0; i < count; ++i) {
+    for (unsigned i = 0; i < count; ++i) {
       list->listAppend(newOperand(val, constraint));
     }
     return list;
@@ -128,7 +128,7 @@ struct PTXBuilder {
 
   Operand *newListOperand(unsigned count, const std::string &constraint) {
     auto *list = newOperand();
-    for (int i = 0; i < count; ++i) {
+    for (unsigned i = 0; i < count; ++i) {
       list->listAppend(newOperand(constraint));
     }
     return list;
@@ -309,7 +309,7 @@ struct PTXInstrExecution {
   PTXInstrExecution() = default;
   explicit PTXInstrExecution(PTXInstrCommon *instr,
                              llvm::ArrayRef<Operand *> oprs)
-      : instr(instr), argsInOrder(oprs.begin(), oprs.end()) {}
+      : argsInOrder(oprs.begin(), oprs.end()), instr(instr) {}
 
   // Prefix a predicate to the instruction.
   PTXInstrExecution &predicate(mlir::Value value, StringRef constraint = "b") {

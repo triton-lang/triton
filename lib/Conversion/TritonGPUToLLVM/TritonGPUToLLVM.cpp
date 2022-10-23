@@ -292,7 +292,6 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<::mlir::ReturnOp> {
   LogicalResult
   matchAndRewrite(ReturnOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
     unsigned numArguments = op.getNumOperands();
 
     // Currently, Triton kernel function always return nothing.
@@ -482,7 +481,6 @@ public:
                                 ConversionPatternRewriter &rewriter,
                                 const BlockedEncodingAttr &blocked_layout,
                                 ArrayRef<int64_t> shape) const {
-    auto llvmIndexTy = this->getTypeConverter()->getIndexType();
     Value threadId = getThreadId(rewriter, loc);
     Value warpSize = idx_val(32);
     Value laneId = urem(threadId, warpSize);
@@ -654,7 +652,6 @@ public:
     auto bufferId = allocation->getBufferId(value);
     assert(bufferId != Allocation::InvalidBufferId && "BufferId not found");
     size_t offset = allocation->getOffset(bufferId);
-    auto llvmIndexTy = this->getTypeConverter()->getIndexType();
     Value offVal = idx_val(offset);
     Value base = gep(ptrTy, smem, offVal);
     return base;
@@ -897,12 +894,11 @@ struct LoadOpConversion
       // TODO: optimization when ptr is GEP with constant offset
       size_t in_off = 0;
 
-      const int maxWordWidth = std::max<int>(32, valueElemNbits);
-      const int totalWidth = valueElemNbits * vec;
-      const int width = std::min(totalWidth, maxWordWidth);
-      const int nWords = std::max(1, totalWidth / width);
-      const int wordNElems = width / valueElemNbits;
-      const int vecNElems = totalWidth / valueElemNbits;
+      const size_t maxWordWidth = std::max<size_t>(32, valueElemNbits);
+      const size_t totalWidth = valueElemNbits * vec;
+      const size_t width = std::min(totalWidth, maxWordWidth);
+      const size_t nWords = std::max<size_t>(1, totalWidth / width);
+      const size_t wordNElems = width / valueElemNbits;
       assert(wordNElems * nWords * numVecs == numElems);
 
       // TODO(Superjomn) Add cache policy fields to StoreOp.
@@ -921,7 +917,7 @@ struct LoadOpConversion
 
       // prepare asm operands
       auto *dstsOpr = ptxBuilder.newListOperand();
-      for (int wordIdx = 0; wordIdx < nWords; ++wordIdx) {
+      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         auto *opr = ptxBuilder.newOperand(writeConstraint); // =r operations
         dstsOpr->listAppend(opr);
       }
@@ -988,8 +984,8 @@ struct LoadOpConversion
                        : retTys[0];
 
       // TODO: if (has_l2_evict_policy)
-      auto asmDialectAttr = LLVM::AsmDialectAttr::get(rewriter.getContext(),
-                                                      LLVM::AsmDialect::AD_ATT);
+      // auto asmDialectAttr = LLVM::AsmDialectAttr::get(rewriter.getContext(),
+      //                                                 LLVM::AsmDialect::AD_ATT);
       Value ret = ptxBuilder.launch(rewriter, loc, retTy);
 
       // ---
@@ -1080,27 +1076,25 @@ struct StoreOpConversion
       // TODO: optimization when ptr is AddPtr with constant offset
       size_t in_off = 0;
 
-      const int maxWordWidth = std::max<int>(32, valueElemNbits);
-      const int totalWidth = valueElemNbits * vec;
-      const int width = std::min(totalWidth, maxWordWidth);
-      const int nWords = std::max(1, totalWidth / width);
-      const int wordNElems = width / valueElemNbits;
-      const int vecNElems = totalWidth / valueElemNbits;
+      const size_t maxWordWidth = std::max<size_t>(32, valueElemNbits);
+      const size_t totalWidth = valueElemNbits * vec;
+      const size_t width = std::min(totalWidth, maxWordWidth);
+      const size_t nWords = std::max<size_t>(1, totalWidth / width);
+      const size_t wordNElems = width / valueElemNbits;
       assert(wordNElems * nWords * numVecs == numElems);
 
       // TODO(Superjomn) Add cache policy fields to StoreOp.
       // TODO(Superjomn) Deal with cache policy here.
-      const bool hasL2EvictPolicy = false;
 
       Type valArgTy = IntegerType::get(ctx, width);
       auto wordTy = vec_ty(valueElemTy, wordNElems);
 
       SmallVector<std::pair<Value, std::string>> asmArgs;
-      for (int wordIdx = 0; wordIdx < nWords; ++wordIdx) {
+      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         // llWord is a width-len composition
         Value llWord = rewriter.create<LLVM::UndefOp>(loc, wordTy);
         // Insert each value element to the composition
-        for (int elemIdx = 0; elemIdx < wordNElems; ++elemIdx) {
+        for (size_t elemIdx = 0; elemIdx < wordNElems; ++elemIdx) {
           const size_t elemOffset = vecStart + wordIdx * wordNElems + elemIdx;
           assert(elemOffset < valueElems.size());
           Value elem = valueElems[elemOffset];
@@ -1220,7 +1214,6 @@ struct BroadcastOpConversion
     }
 
     unsigned srcElems = getElemsPerThread(srcTy);
-    auto elemTy = resultTy.getElementType();
     auto srcVals = getElementsFromStruct(loc, src, rewriter);
     unsigned resultElems = getElemsPerThread(resultTy);
     SmallVector<Value> resultVals(resultElems);
@@ -1931,6 +1924,7 @@ struct CmpFOpConversion
       __PRED_ENUM(ORD, ord);
       __PRED_ENUM(UEQ, ueq);
       __PRED_ENUM(UGT, ugt);
+      __PRED_ENUM(UGE, uge);
       __PRED_ENUM(ULT, ult);
       __PRED_ENUM(ULE, ule);
       __PRED_ENUM(UNE, une);
@@ -2034,7 +2028,6 @@ void ConvertLayoutOpConversion::processReplica(
   auto rank = type.getRank();
   auto sizePerThread = getSizePerThread(layout);
   auto accumSizePerThread = product<unsigned>(sizePerThread);
-  auto llvmIndexTy = getTypeConverter()->getIndexType();
   SmallVector<unsigned> numCTAs(rank);
   auto shapePerCTA = getShapePerCTA(layout);
   for (unsigned d = 0; d < rank; ++d) {
@@ -2200,7 +2193,7 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
   }
   // Potentially we need to store for multiple CTAs in this replication
   unsigned accumNumReplicates = product<unsigned>(numReplicates);
-  unsigned elems = getElemsPerThread(srcTy);
+  // unsigned elems = getElemsPerThread(srcTy);
   auto vals = getElementsFromStruct(loc, adaptor.src(), rewriter);
   unsigned inVec = 0;
   unsigned outVec = 0;
@@ -2367,7 +2360,7 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
 // Data loader for mma.16816 instruction.
 class MMA16816SmemLoader {
 public:
-  MMA16816SmemLoader(int wpt, ArrayRef<uint32_t> order, int kOrder,
+  MMA16816SmemLoader(int wpt, ArrayRef<uint32_t> order, uint32_t kOrder,
                      ArrayRef<int64_t> tileShape, ArrayRef<int> instrShape,
                      ArrayRef<int> matShape, int perPhase, int maxPhase,
                      int elemBytes, ConversionPatternRewriter &rewriter,
@@ -2576,7 +2569,6 @@ public:
     assert(mat0 % 2 == 0 && mat1 % 2 == 0 &&
            "smem matrix load must be aligned");
     int matIdx[2] = {mat0, mat1};
-    int k = matIdx[kOrder];
 
     int ptrIdx{-1};
 
@@ -2786,14 +2778,10 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
   LogicalResult
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
     // D = A * B + C
     Value A = op.a();
-    Value B = op.b();
     Value C = op.c();
     Value D = op.getResult();
-    MLIRContext *ctx = op->getContext();
-    bool allowTF32 = op.allowTF32();
 
     // Here we assume the DotOp's operands always comes from shared memory.
     auto AShape = A.getType().cast<RankedTensorType>().getShape();
@@ -2951,8 +2939,6 @@ struct DotOpConversionHelper {
     Type i8x4Ty = vec_ty(type::i8Ty(ctx), 4);
     Type i8x4Pack4Ty =
         LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i8x4Ty));
-    Type i32Pack4Ty = LLVM::LLVMStructType::getLiteral(
-        ctx, SmallVector<Type>(4, type::i32Ty(ctx)));
 
     switch (mmaType) {
     case TensorCoreType::FP32_FP16_FP16_FP32:
@@ -3062,7 +3048,6 @@ struct DotOpConversionHelper {
     auto bTy = B.getType().cast<RankedTensorType>();
     // d = a*b + c
     auto dTy = op.d().getType().cast<RankedTensorType>();
-    auto mmaLayout = dTy.getEncoding().cast<MmaEncodingAttr>();
 
     if (dTy.getElementType().isF32()) {
       if (aTy.getElementType().isF16() && bTy.getElementType().isF16())
@@ -3281,8 +3266,8 @@ struct MMA16816ConversionHelper {
     }
 
     // step1. Perform loading.
-    for (unsigned m = 0; m < numRepM; ++m)
-      for (unsigned k = 0; k < numRepK; ++k)
+    for (int  m = 0; m < numRepM; ++m)
+      for (int k = 0; k < numRepK; ++k)
         loadFn(2 * m, 2 * k);
 
     // step2. Format the values to LLVM::Struct to passing to mma codegen.
@@ -3305,8 +3290,8 @@ struct MMA16816ConversionHelper {
         0 /*kOrder*/, {mmaInstrK, mmaInstrN} /*instrShpae*/,
         {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/, hb /*vals*/);
 
-    for (unsigned n = 0; n < std::max(numRepN / 2, 1); ++n) {
-      for (unsigned k = 0; k < numRepK; ++k)
+    for (int n = 0; n < std::max(numRepN / 2, 1); ++n) {
+      for (int k = 0; k < numRepK; ++k)
         loadFn(2 * n, 2 * k);
     }
 
@@ -3395,9 +3380,9 @@ struct MMA16816ConversionHelper {
             extract_val(type::f32Ty(ctx), mmaOut, getIntAttr(i));
     };
 
-    for (unsigned k = 0; k < numRepK; ++k)
-      for (unsigned m = 0; m < numRepM; ++m)
-        for (unsigned n = 0; n < numRepN; ++n)
+    for (int k = 0; k < numRepK; ++k)
+      for (int m = 0; m < numRepM; ++m)
+        for (int n = 0; n < numRepN; ++n)
           callMma(2 * m, n, 2 * k);
 
     // replace with new packed result
@@ -3486,8 +3471,8 @@ private:
   Value composeValuesToDotOperandLayoutStruct(const ValueTable &vals, int n0,
                                               int n1) const {
     std::vector<Value> elems;
-    for (unsigned m = 0; m < n0; ++m)
-      for (unsigned k = 0; k < n1; ++k) {
+    for (int  m = 0; m < n0; ++m)
+      for (int k = 0; k < n1; ++k) {
         elems.push_back(vals.at({2 * m, 2 * k}));
         elems.push_back(vals.at({2 * m, 2 * k + 1}));
         elems.push_back(vals.at({2 * m + 1, 2 * k}));
@@ -3711,7 +3696,7 @@ struct AsyncWaitOpConversion
     auto ctx = op.getContext();
     auto loc = op.getLoc();
     auto voidTy = void_ty(ctx);
-    auto ret = ptxBuilder.launch(rewriter, loc, voidTy);
+    ptxBuilder.launch(rewriter, loc, voidTy);
 
     // Safe to remove the op since it doesn't have any return value.
     rewriter.eraseOp(op);
@@ -3800,12 +3785,10 @@ struct InsertSliceAsyncOpConversion
     unsigned perPhase = resSharedLayout.getPerPhase();
     unsigned maxPhase = resSharedLayout.getMaxPhase();
     auto sizePerThread = srcBlockedLayout.getSizePerThread();
-    auto threadsPerWarp = srcBlockedLayout.getThreadsPerWarp();
-    auto warpsPerCTA = srcBlockedLayout.getWarpsPerCTA();
     auto threadsPerCTA = getThreadsPerCTA(srcBlockedLayout);
 
     auto inOrder = srcBlockedLayout.getOrder();
-    auto outOrder = resSharedLayout.getOrder();
+
     // If perPhase * maxPhase > threadsPerCTA, we need to swizzle over
     // elements across phases. If perPhase * maxPhase == threadsPerCTA,
     // swizzle is not allowd
@@ -3886,7 +3869,7 @@ struct InsertSliceAsyncOpConversion
       auto resByteWidth = resElemTy.getIntOrFloatBitWidth() / 8;
 
       auto tileOffset = tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}];
-      for (unsigned wordIdx = 0; wordIdx < numWords; ++wordIdx) {
+      for (size_t wordIdx = 0; wordIdx < numWords; ++wordIdx) {
         PTXBuilder ptxBuilder;
         auto wordElemIdx = wordIdx * numWordElems;
         auto &copyAsyncOp =

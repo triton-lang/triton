@@ -512,11 +512,11 @@ mlir::LogicalResult ExtractSliceOp::inferReturnTypes(
   auto encoding = srcType.getEncoding();
   auto srcShape = srcType.getShape();
   auto axis = attributes.get("axis").cast<IntegerAttr>().getInt();
-  if (axis < 0 || axis > srcShape.size())
+  if (axis < 0 || (size_t)axis > srcShape.size())
     return failure();
   SmallVector<int64_t, 4> dstShape;
-  for (int i = 0; i < srcShape.size(); i++)
-    if (i != axis)
+  for (size_t i = 0; i < srcShape.size(); i++)
+    if (i != (size_t)axis)
       dstShape.push_back(srcShape[i]);
   auto returnType =
       RankedTensorType::get(dstShape, srcType.getElementType(), encoding);
@@ -578,15 +578,15 @@ struct TritonGPUInferLayoutInterface
     : public triton::DialectInferLayoutInterface {
   using DialectInferLayoutInterface::DialectInferLayoutInterface;
 
-  LogicalResult inferReduceOpEncoding(Attribute operandEncoding, int axis,
-                                      Attribute &resultEncoding) const {
+  LogicalResult inferReduceOpEncoding(Attribute operandEncoding, unsigned axis,
+                                      Attribute &resultEncoding) const override {
     resultEncoding = SliceEncodingAttr::get(getDialect()->getContext(), axis,
                                             operandEncoding);
     return success();
   }
 
-  LogicalResult inferExpandDimsOpEncoding(Attribute operandEncoding, int axis,
-                                          Attribute &resultEncoding) const {
+  LogicalResult inferExpandDimsOpEncoding(Attribute operandEncoding, unsigned axis,
+                                          Attribute &resultEncoding) const override  {
     auto sliceEncoding = operandEncoding.dyn_cast<SliceEncodingAttr>();
     if (!sliceEncoding) {
       llvm::report_fatal_error(
