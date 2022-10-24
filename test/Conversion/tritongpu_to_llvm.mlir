@@ -642,8 +642,6 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   }
 }
 
-// -----
-
 // TODO: problems in MLIR's parser on slice layout
 // #blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
 // module attributes {"triton_gpu.num-warps" = 1 : i32} {
