@@ -58,14 +58,22 @@ def computation_type_impl(a_ty: tl.dtype, b_ty: tl.dtype, div_or_mod: bool) -> t
         return tl.float32
     # 3 ) if one operand is half, the other is implicitly converted to half
     #     unless we're doing / or %, which do not exist natively in PTX for fp16.
+    #     Supported PTX op: add, sub, mul, fma, neg, abs, min, max, tanh, ex2, setp
     if a_ty.is_fp16() or b_ty.is_fp16():
         if div_or_mod:
             return tl.float32
         else:
             return tl.float16
+    # 4) return bf16 only if both operands are of bf16
+    if a_ty.is_bf16() or b_ty.is_bf16():
+        if div_or_mod:
+            return tl.float32
+        if a_ty.is_bf16() and b_ty.is_bf16():
+            return tl.bfloat16
+        return tl.float32
     if not a_ty.is_int() or not b_ty.is_int():
         assert False
-    # 4 ) both operands are integer and undergo
+    # 5 ) both operands are integer and undergo
     #    integer promotion
     if div_or_mod and a_ty.int_signedness != b_ty.int_signedness:
         raise ValueError("Cannot use /, #, or % with " + a_ty.__repr__() + " and " + b_ty.__repr__() + " because they have different signedness;"
@@ -452,6 +460,9 @@ def not_equal(input: tl.tensor,
 
 
 def arange(start: int, end: int, builder: ir.builder) -> tl.tensor:
+    if not isinstance(start, int) or not isinstance(end, int):
+        raise ValueError("arange's arguments must be of type tl.constexpr")
+
     shape = [end - start]
     ret_ty = tl.block_type(tl.int32, shape)
     return tl.tensor(builder.create_make_range(start, end), ret_ty)
@@ -502,6 +513,11 @@ def broadcast_impl_shape(input: tl.tensor,
         raise ValueError(f"Cannot broadcast, rank mismatch: {src_shape}, {shape}")
     if shape == src_shape:
         return input
+    for i in range(len(src_shape)):
+        if shape[i] != src_shape[i] and src_shape[i] != 1:
+            raise ValueError(f"Cannot broadcast, the expanded size of the tensor ({shape[i]})"
+                             f" must match the existing size ({src_shape[1]}) at non-singleton dimension"
+                             f" {i}: {src_shape}, {shape}")
     ret_ty = tl.block_type(input.type.scalar, shape)
     return tl.tensor(builder.create_broadcast(input.handle, shape), ret_ty)
 
@@ -598,7 +614,13 @@ def cast(input: tl.tensor,
         return input
     src_sca_ty = src_ty.scalar
     dst_sca_ty = dst_ty.scalar
-
+    # fp8 <=> bf16/fp16
+    if (src_sca_ty.is_bf16() or src_sca_ty.is_fp16()) and dst_sca_ty.is_fp8():
+        return tl.tensor(builder.create_fp_trunc(input.handle, dst_ty.to_ir(builder)),
+                         dst_ty)
+    if src_sca_ty.is_fp8() and (dst_sca_ty.is_bf16() or dst_sca_ty.is_fp16()):
+        return tl.tensor(builder.create_fp_ext(input.handle, dst_ty.to_ir(builder)),
+                         dst_ty)
     # bf16 <=> (not fp32)
     if (src_sca_ty.is_bf16() and not dst_sca_ty.is_fp32()) or \
        (dst_sca_ty.is_bf16() and not src_sca_ty.is_fp32()):
@@ -783,16 +805,25 @@ def atomic_cas(ptr: tl.tensor,
                cmp: tl.tensor,
                val: tl.tensor,
                builder: ir.builder) -> tl.tensor:
-    # TODO: type checking
+    element_ty = ptr.type.scalar.element_ty
+    if element_ty.primitive_bitwidth not in [16, 32, 64]:
+        raise ValueError("atomic_cas only supports elements with width {16, 32, 64}")
     return tl.tensor(builder.create_atomic_cas(ptr.handle, cmp.handle, val.handle), val.type)
 
 
 def atom_red_typechecking_impl(ptr: tl.tensor,
                                val: tl.tensor,
                                mask: tl.tensor,
+                               op: str,
                                builder: ir.builder) -> Tuple[tl.tensor, tl.tensor, tl.tensor]:
     if not ptr.type.scalar.is_ptr():
         raise ValueError("Pointer argument of store instruction is " + ptr.type.__repr__())
+
+    element_ty = ptr.type.scalar.element_ty
+    if element_ty is tl.float16 and op != 'add':
+        raise ValueError("atomic_" + op + " does not support fp16")
+    if element_ty in [tl.int1, tl.int8, tl.int16, tl.bfloat16]:
+        raise ValueError("atomic_" + op + " does not support " + element_ty)
     if ptr.type.is_block():
         if mask:
             mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
@@ -813,7 +844,7 @@ def atomic_max(ptr: tl.tensor,
                val: tl.tensor,
                mask: tl.tensor,
                builder: ir.builder) -> tl.tensor:
-    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'max', builder)
     sca_ty = val.type.scalar
     # direct call to atomic_max for integers
     if sca_ty.is_int():
@@ -845,7 +876,7 @@ def atomic_min(ptr: tl.tensor,
                val: tl.tensor,
                mask: tl.tensor,
                builder: ir.builder) -> tl.tensor:
-    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'min', builder)
     sca_ty = val.type.scalar
     # direct call to atomic_min for integers
     if sca_ty.is_int():
@@ -885,7 +916,7 @@ def atomic_add(ptr: tl.tensor,
                val: tl.tensor,
                mask: tl.tensor,
                builder: ir.builder) -> tl.tensor:
-    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'add', builder)
     sca_ty = val.type.scalar
     op = ir.ATOMIC_OP.FADD if sca_ty.is_floating() else ir.ATOMIC_OP.ADD
     return tl.tensor(builder.create_atomic_rmw(op, ptr.handle, val.handle, mask.handle), val.type)
@@ -895,7 +926,7 @@ def atomic_and(ptr: tl.tensor,
                val: tl.tensor,
                mask: tl.tensor,
                builder: ir.builder) -> tl.tensor:
-    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'and', builder)
     return tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.AND, ptr.handle, val.handle, mask.handle), val.type)
 
 
@@ -903,7 +934,7 @@ def atomic_or(ptr: tl.tensor,
               val: tl.tensor,
               mask: tl.tensor,
               builder: ir.builder) -> tl.tensor:
-    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'or', builder)
     return tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.OR, ptr.handle, val.handle, mask.handle), val.type)
 
 
@@ -911,7 +942,7 @@ def atomic_xor(ptr: tl.tensor,
                val: tl.tensor,
                mask: tl.tensor,
                builder: ir.builder) -> tl.tensor:
-    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'xor', builder)
     return tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.XOR, ptr.handle, val.handle, mask.handle), val.type)
 
 
@@ -919,7 +950,7 @@ def atomic_xchg(ptr: tl.tensor,
                 val: tl.tensor,
                 mask: tl.tensor,
                 builder: ir.builder) -> tl.tensor:
-    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, builder)
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'xchg', builder)
     return tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.XCHG, ptr.handle, val.handle, mask.handle), val.type)
 
 # ===----------------------------------------------------------------------===//
@@ -961,16 +992,8 @@ def where(condition: tl.tensor,
         x = broadcast_impl_shape(x, condition.type.get_block_shapes(), builder)
         y = broadcast_impl_shape(y, condition.type.get_block_shapes(), builder)
 
-    # TODO: we need to check x's and y's shape?
-    x_ty = x.type.scalar
-    y_ty = y.type.scalar
-    ty = computation_type_impl(x_ty, y_ty, div_or_mod=False)
-    x = cast(x, ty, builder)
-    y = cast(y, ty, builder)
-    if x.type.is_block():
-        ret_ty = tl.block_type(ty, x.type.shape)
-    else:
-        ret_ty = ty
+    x, y = binary_op_type_checking_impl(x, y, builder, True, True)
+    ret_ty = x.type
     return tl.tensor(builder.create_select(condition.handle, x.handle, y.handle), ret_ty)
 
 
@@ -986,6 +1009,21 @@ def reduce_impl(input: tl.tensor, axis: int, builder: ir.builder, name: str,
     # on GPUs
     if scalar_ty.is_int() and scalar_ty.int_bitwidth <= 32:
         input = cast(input, tl.int32, builder)
+
+    # hardware doesn't support FMAX, FMIN, CMP for bfloat16
+    if scalar_ty is tl.bfloat16:
+        input = cast(input, tl.float32, builder)
+
+    # choose the right unsigned operation
+    if scalar_ty.is_int_unsigned():
+        int_op_to_unit = {
+            ir.REDUCE_OP.MIN: ir.REDUCE_OP.UMIN,
+            ir.REDUCE_OP.MAX: ir.REDUCE_OP.UMAX,
+            ir.REDUCE_OP.ARGMIN: ir.REDUCE_OP.ARGUMIN,
+            ir.REDUCE_OP.ARGMAX: ir.REDUCE_OP.ARGUMAX,
+        }
+        if INT_OP in int_op_to_unit:
+            INT_OP = int_op_to_unit[INT_OP]
 
     # get result type
     shape = input.type.shape
@@ -1056,13 +1094,17 @@ def sqrt(x: tl.tensor, builder: ir.builder) -> tl.tensor:
 
 ##
 
-def multiple_of(x: tl.tensor, value: int) -> tl.tensor:
-    x.handle.multiple_of(value)
+def multiple_of(x: tl.tensor, values: List[int]) -> tl.tensor:
+    if len(x.shape) != len(values):
+        raise ValueError("Shape of input to multiple_of does not match the length of values")
+    x.handle.multiple_of(values)
     return x
 
 
-def max_contiguous(x: tl.tensor, value: int) -> tl.tensor:
-    x.handle.max_contiguous(value)
+def max_contiguous(x: tl.tensor, values: List[int]) -> tl.tensor:
+    if len(x.shape) != len(values):
+        raise ValueError("Shape of input to max_contiguous does not match the length of values")
+    x.handle.max_contiguous(values)
     return x
 
 
