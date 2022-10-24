@@ -501,6 +501,7 @@ void init_triton_codegen(py::module &&m) {
           std::string hipmodule;
           std::string name;
           { 
+            std::cout << "triton.cc: compile_ttir_to_amdgpu:" << std::endl;
             // Scope where the GIL is released
             py::gil_scoped_release allow_threads;
             name = ir.get_function_list()[0]->get_name();
@@ -524,26 +525,27 @@ void init_triton_codegen(py::module &&m) {
             int version;
             // std::string ptxas_path = drv::path_to_ptxas(version);
             // Triton-IR -> AMDGCN LLVM-IR
+            std::cout << "\t" << ttir.str() << std::endl;
+            std::cout << "\t" << tmp << std::endl;
             triton::codegen::amd_cl_target target;
             auto llvm = triton::codegen::add_passes_to_emit_bin(
                 ir, ctx, &target, num_warps, num_stages, n_shared_bytes, extern_lib_map);
             llvm::raw_string_ostream llir(tmp);
             llir << *llvm;
             llir.flush();
-            // LLVM-IR -> AMD HSACO
+            // LLVM-IR -> AMDGPU
             std::string amdgpu = drv::llir_to_amdgpu(llvm.get(), "gfx90a");
-            // HSACO -> GCN
+            std::cout << "amdgpu = " << amdgpu << std::endl;
+            // AMDGPU -> Binary
             hipModule_t hipmodule = drv::amdgpu_to_hipmodule(amdgpu);
+            std::cout << "hipmodule = " << hipmodule << std::endl;
           }
           asm_map_t asm_map;
           asm_map["ttir"] = py::cast(ttir.str());
           asm_map["llir"] = py::cast(tmp);
           asm_map["amdgpu"] = py::cast(amdgpu);
-
-          if(!hipmodule.empty()){
-            py::bytes bytes(hipmodule);
-            asm_map["hipmodule"] = bytes;
-          }
+          asm_map["hipmodule"] = py::bytes(hipmodule);
+          
           return std::make_tuple(name, asm_map, n_shared_bytes);
       },
       py::return_value_policy::take_ownership);
