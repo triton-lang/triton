@@ -109,7 +109,7 @@ def check_type_supported(dtype):
         pytest.skip("bfloat16 is only supported on NVGPU with cc >= 80")
 
 
-@pytest.mark.parametrize("dtype_x", [dtype_x for dtype_x in dtypes] + ["bfloat16"])
+@pytest.mark.parametrize("dtype_x", [dtype_x for dtype_x in dtypes])
 def test_empty_kernel(dtype_x, device='cuda'):
     SIZE = 128
 
