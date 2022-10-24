@@ -3798,6 +3798,7 @@ Value *generator::cast_shared_layout_ptr(analysis::data_layout *layout,
 }
 
 void generator::visit_function(ir::function* fn) {
+  std::cout << "generator.cc: generator::visit_function:" << std::endl;
   idxs_.clear();
   vals_.clear();
   seen_.clear();
@@ -3807,6 +3808,7 @@ void generator::visit_function(ir::function* fn) {
 
 
   // set attributes
+  std::cout << "\t// set attributes" << std::endl;
   for(auto attr_pair: fn->attrs()){
     unsigned id = attr_pair.first;
     for(ir::attribute attr: attr_pair.second)
@@ -3817,6 +3819,7 @@ void generator::visit_function(ir::function* fn) {
     }
   }
   // set metadata
+  std::cout << "\t// set metadata" << std::endl;
   if(tgt_->is_gpu()){
       tgt_->set_kernel(*builder_, ctx, mod_, ret);
   #ifndef USE_ROCM
@@ -3829,9 +3832,11 @@ void generator::visit_function(ir::function* fn) {
   #endif
   }
   // set arguments
+  std::cout << "\t// set arguments" << std::endl;
   for(unsigned i = 0; i < fn->args().size(); i++)
     vals_[fn->args()[i]][{}] = &*(ret->arg_begin() + i);
   // create blocks
+  std::cout << "\t// create blocks" << std::endl;
   auto blocks = ir::cfg::reverse_post_order(fn);
   for(ir::basic_block *block: blocks) {
     BasicBlock *dst_block = BasicBlock::Create(ctx, block->get_name(), ret);
@@ -3839,6 +3844,8 @@ void generator::visit_function(ir::function* fn) {
   }
   builder_->SetInsertPoint(bbs_[fn->blocks()[0]]);
   // create policies
+#ifndef USE_ROCM
+  std::cout << "\t// create policies" << std::endl;
   if(tgt_->as_nvidia()->sm() >= 80)
   for(ir::load_inst::EVICTION_POLICY evict: {ir::load_inst::EVICT_FIRST, ir::load_inst::EVICT_LAST}){
     std::string policy = (evict == ir::load_inst::EVICT_FIRST) ? "evict_first" : "evict_last";
@@ -3846,17 +3853,22 @@ void generator::visit_function(ir::function* fn) {
     InlineAsm* iasm = InlineAsm::get(FunctionType::get(i64_ty, {}), asm_str, "=l", false);
     policies_[evict] = call(iasm);
   }
+#endif
   // initialize layouts
+  std::cout << "\t// initialize layouts" << std::endl;
   for(auto x: layouts_->get_all()){
     visit_layout(x.second);
   }
   // generate LLVM-IR code
+  std::cout << "\t// generate LLVM-IR code" << std::endl;
   for(ir::basic_block *block: blocks)
     visit_basic_block(block);
   // finalize
+  std::cout << "\t// verifyFunction" << std::endl;
   finalize_function(fn);
 
   // verifyFunction
+  std::cout << "\t// verifyFunction" << std::endl;
   llvm::verifyFunction(*ret);
 }
 
@@ -4276,6 +4288,7 @@ void generator::packed_type(ir::value* i){
 }
 
 void generator::visit(ir::module &src, llvm::Module &dst) {
+  std::cout << "generator.cc: generator::visit" << std::endl;
   mod_ = &dst;
   ctx_ = &dst.getContext();
   builder_ = new Builder(*ctx_);
