@@ -662,7 +662,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
     // CHECK-SAME: mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
     // CHECK: llvm.inline_asm
     // CHECK-SAME: mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
-    %D = tt.dot %AA, %BB, %cst0 {allowTF32 = true} : tensor<16x16xf16, #shared0> * tensor<16x16xf16, #shared0> -> tensor<16x16xf32, #mma0>
+    %D = tt.dot %AA, %BB, %cst0 {allowTF32 = true, transA = false, transB = false} : tensor<16x16xf16, #shared0> * tensor<16x16xf16, #shared0> -> tensor<16x16xf32, #mma0>
 
     return
   }

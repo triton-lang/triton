@@ -344,4 +344,23 @@ def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding"> {
 }
 
 
+def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding"> {
+  let mnemonic = "dot_op";
+
+  let description = [{
+In TritonGPU dialect, considering `d = tt.dot a, b, c`
+tt.dot's operands a and b must be of DotOperandEncodingAttr layout.
+a's opIdx is 0, b's opIdx is 1.
+The parend field in DotOperandEncodingAttr is the layout of d.
+  }];
+
+  let parameters = (
+    ins
+    "unsigned":$opIdx,
+    "Attribute":$parent
+  );
+
+  let extraClassDeclaration = extraBaseClassDeclaration;
+}
+
 #endif

@@ -930,6 +930,8 @@ def atomic_xchg(ptr: tl.tensor,
 def dot(lhs: tl.tensor,
         rhs: tl.tensor,
         allow_tf32: bool,
+        trans_a: bool,
+        trans_b: bool,
         builder: ir.builder) -> tl.tensor:
     assert lhs.type.is_block() and rhs.type.is_block()
     if lhs.type.scalar.is_int():
@@ -938,11 +940,11 @@ def dot(lhs: tl.tensor,
     else:
         _0 = builder.get_float32(0)
         ret_scalar_ty = tl.float32
-    M = lhs.type.shape[0]
-    N = rhs.type.shape[1]
+    M = lhs.type.shape[1 if trans_a else 0]
+    N = rhs.type.shape[0 if trans_b else 1]
     _0 = builder.create_splat(_0, [M, N])
     ret_ty = tl.block_type(ret_scalar_ty, [M, N])
-    return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32),
+    return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32, trans_a, trans_b),
                      ret_ty)
 
 
