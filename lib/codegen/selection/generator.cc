@@ -3864,7 +3864,7 @@ void generator::visit_function(ir::function* fn) {
   for(ir::basic_block *block: blocks)
     visit_basic_block(block);
   // finalize
-  std::cout << "\t// verifyFunction" << std::endl;
+  std::cout << "\t// finalize" << std::endl;
   finalize_function(fn);
 
   // verifyFunction
