@@ -132,6 +132,9 @@ class dtype:
     def is_int_signed(self):
         return self.name in dtype.SINT_TYPES
 
+    def is_int_unsigned(self):
+        return self.name in dtype.UINT_TYPES
+
     def is_int(self):
         return self.name in dtype.SINT_TYPES + dtype.UINT_TYPES
 
