@@ -11,6 +11,7 @@
 #include <numeric>
 
 using ::mlir::triton::gpu::BlockedEncodingAttr;
+using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
@@ -35,18 +36,22 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   SmallVector<unsigned> paddedRepShape(rank);
   auto srcBlockedLayout = srcLayout.dyn_cast<BlockedEncodingAttr>();
   auto srcMmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>();
+  auto srcDotLayout = srcLayout.dyn_cast<DotOperandEncodingAttr>();
   auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>();
   auto dstMmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>();
-  assert((srcBlockedLayout || srcMmaLayout) &&
+  auto dstDotLayout = dstLayout.dyn_cast<DotOperandEncodingAttr>();
+  assert((srcBlockedLayout || srcMmaLayout || srcDotLayout) &&
          "Unexpected srcLayout in getScratchConfigForCvtLayout");
-  assert((dstBlockedLayout || dstMmaLayout) &&
+  assert((dstBlockedLayout || dstMmaLayout || dstDotLayout) &&
          "Unexpected dstLayout in getScratchConfigForCvtLayout");
   assert(!(srcMmaLayout && dstMmaLayout) &&
          "Unexpected mma -> mma layout conversion");
-  auto inOrd =
-      srcMmaLayout ? dstBlockedLayout.getOrder() : srcBlockedLayout.getOrder();
-  auto outOrd =
-      dstMmaLayout ? srcBlockedLayout.getOrder() : dstBlockedLayout.getOrder();
+  assert(!(srcDotLayout && dstDotLayout) &&
+         "Unexpected dotOperand -> dotOperand layout conversion");
+  auto inOrd = (srcMmaLayout || srcDotLayout) ? dstBlockedLayout.getOrder()
+                                              : srcBlockedLayout.getOrder();
+  auto outOrd = (dstMmaLayout || dstDotLayout) ? srcBlockedLayout.getOrder()
+                                               : dstBlockedLayout.getOrder();
   unsigned srcContigPerThread =
       srcBlockedLayout ? srcBlockedLayout.getSizePerThread()[inOrd[0]] : 2;
   unsigned dstContigPerThread =
@@ -138,7 +143,8 @@ private:
       auto dstEncoding = dstTy.getEncoding();
       if (srcEncoding.isa<SharedEncodingAttr>() ||
           dstEncoding.isa<SharedEncodingAttr>()) {
-        // Only blocked -> blocked conversion requires for scratch allocation
+        // Only conversions between the blocked and mma layouts require scratch
+        // allocation.
         return;
       }
       // ConvertLayoutOp with both input/output non-shared_layout

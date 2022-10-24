@@ -12,21 +12,13 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 
 #include <memory>
 
 using namespace mlir;
-
-static bool isSharedLayout(Value v) {
-  if (auto tensorType = v.getType().dyn_cast<RankedTensorType>()) {
-    Attribute encoding = tensorType.getEncoding();
-    return encoding.isa<triton::gpu::SharedEncodingAttr>();
-  }
-  return false;
-}
-
 namespace {
 #include "TritonGPUCombine.inc"
 
@@ -189,9 +181,9 @@ static LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
 inline bool expensive_to_remat(Operation *op) {
   if (!op)
     return true;
-  if (isa<triton::gpu::ExtractSliceOp, triton::gpu::AllocTensorOp,
-          triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp,
-          triton::DotOp>(op))
+  if (isa<tensor::ExtractSliceOp, triton::gpu::ExtractSliceOp,
+          triton::gpu::AllocTensorOp, triton::gpu::InsertSliceAsyncOp,
+          triton::LoadOp, triton::StoreOp, triton::DotOp>(op))
     return true;
   if (isa<scf::YieldOp, scf::ForOp>(op))
     return true;
@@ -240,8 +232,8 @@ public:
     if (!op)
       return mlir::failure();
     // we don't want to rematerialize any conversion to/from shared
-    if (isSharedLayout(cvt->getResults()[0]) ||
-        isSharedLayout(cvt->getOperand(0)))
+    if (isSharedEncoding(cvt->getResults()[0]) ||
+        isSharedEncoding(cvt->getOperand(0)))
       return mlir::failure();
     // we don't handle conversions to DotOperandEncodingAttr
     // this is a heuristics to accomodate fused attention
@@ -342,8 +334,6 @@ public:
 // -----------------------------------------------------------------------------
 //
 // -----------------------------------------------------------------------------
-
-// int test = 0;
 
 class MoveConvertOutOfLoop : public mlir::RewritePattern {
 public:
@@ -550,15 +540,13 @@ public:
     auto oldAType = a.getType().cast<RankedTensorType>();
     auto oldBType = b.getType().cast<RankedTensorType>();
     auto newAType = RankedTensorType::get(
-      oldAType.getShape(), oldAType.getElementType(),
-      triton::gpu::DotOperandEncodingAttr::get(oldAType.getContext(), 0,
-                                               newRetType.getEncoding())
-    );
+        oldAType.getShape(), oldAType.getElementType(),
+        triton::gpu::DotOperandEncodingAttr::get(oldAType.getContext(), 0,
+                                                 newRetType.getEncoding()));
     auto newBType = RankedTensorType::get(
-      oldBType.getShape(), oldBType.getElementType(),
-      triton::gpu::DotOperandEncodingAttr::get(oldBType.getContext(), 1,
-                                               newRetType.getEncoding())
-    );
+        oldBType.getShape(), oldBType.getElementType(),
+        triton::gpu::DotOperandEncodingAttr::get(oldBType.getContext(), 1,
+                                                 newRetType.getEncoding()));
     a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), newAType, a);
     b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), newBType, b);
     auto newDot = rewriter.create<triton::DotOp>(

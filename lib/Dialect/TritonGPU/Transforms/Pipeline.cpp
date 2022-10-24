@@ -72,6 +72,7 @@ class LoopPipeliner {
   /// compute type of shared buffers (with swizzled shared layouts)
   RankedTensorType getSwizzleType(ttg::DotOperandEncodingAttr dotOpEnc,
                                   RankedTensorType tensorType);
+
 public:
   LoopPipeliner(scf::ForOp forOp, int numStages)
       : forOp(forOp), numStages(numStages) {
@@ -140,14 +141,14 @@ bool LoopPipeliner::isDirectUserOfAsyncLoad(Operation &op) {
   return false;
 }
 
-ttg::AllocTensorOp
-LoopPipeliner::allocateEmptyBuffer(Operation *op, OpBuilder &builder) {
+ttg::AllocTensorOp LoopPipeliner::allocateEmptyBuffer(Operation *op,
+                                                      OpBuilder &builder) {
   // allocate a buffer for each pipelined tensor
   // shape: e.g. (numStages==4), <32x64xbf16> -> <4x32x64xbf16>
   Value convertLayout = loadsMapping[op->getResult(0)];
   if (auto tensorType = convertLayout.getType().dyn_cast<RankedTensorType>()) {
-    return builder.create<ttg::AllocTensorOp>(convertLayout.getLoc(),
-                                            loadsBufferType[op->getResult(0)]);
+    return builder.create<ttg::AllocTensorOp>(
+        convertLayout.getLoc(), loadsBufferType[op->getResult(0)]);
   }
   llvm_unreachable("Async copy's return should be of RankedTensorType");
 }
@@ -168,7 +169,7 @@ LoopPipeliner::getSwizzleType(ttg::DotOperandEncodingAttr dotOpEnc,
     order = tyEncoding.getOrder();
     // number of rows per phase
     perPhase = 128 / (ty.getShape()[order[0]] *
-                          (ty.getElementType().getIntOrFloatBitWidth() / 8));
+                      (ty.getElementType().getIntOrFloatBitWidth() / 8));
     perPhase = std::max<int>(perPhase, 1);
 
     // index of the inner dimension in `order`
@@ -180,33 +181,31 @@ LoopPipeliner::getSwizzleType(ttg::DotOperandEncodingAttr dotOpEnc,
     } else if (version == 2) {
       auto eltTy = ty.getElementType();
       std::vector<size_t> mat_shape = {8, 8,
-                                        2 * 64 / eltTy.getIntOrFloatBitWidth()};
+                                       2 * 64 / eltTy.getIntOrFloatBitWidth()};
       // for now, disable swizzle when using transposed int8 tensor cores
       if (ty.getElementType().isInteger(8) && order[0] == inner)
         perPhase = 1;
       else {
-        if (opIdx == 0) {  // compute swizzling for A operand
+        if (opIdx == 0) { // compute swizzling for A operand
           vec = order[0] == 1 ? mat_shape[2] : mat_shape[0]; // k : m
           int mmaStride = order[0] == 1 ? mat_shape[0] : mat_shape[2];
           maxPhase = mmaStride / perPhase;
-        } else if (opIdx == 1) {  // compute swizzling for B operand
+        } else if (opIdx == 1) { // compute swizzling for B operand
           vec = order[0] == 1 ? mat_shape[1] : mat_shape[2]; // n : k
           int mmaStride = order[0] == 1 ? mat_shape[2] : mat_shape[1];
           maxPhase = mmaStride / perPhase;
         } else
           llvm_unreachable("invalid operand index");
       }
-    } else  // version not in [1, 2]
+    } else // version not in [1, 2]
       llvm_unreachable("unsupported swizzling for provided MMA version");
-  } else {  // If the layout of dot is not mma, we don't need to swizzle
+  } else { // If the layout of dot is not mma, we don't need to swizzle
     auto blockedEnc = dotOpEnc.getParent().cast<ttg::BlockedEncodingAttr>();
     order = blockedEnc.getOrder();
   }
-  auto newEncoding = ttg::SharedEncodingAttr::get(
-    ty.getContext(), vec, perPhase, maxPhase, order
-  );
-  SmallVector<int64_t> bufferShape(ty.getShape().begin(),
-                                   ty.getShape().end());
+  auto newEncoding = ttg::SharedEncodingAttr::get(ty.getContext(), vec,
+                                                  perPhase, maxPhase, order);
+  SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
   bufferShape.insert(bufferShape.begin(), numStages);
   return RankedTensorType::get(bufferShape, ty.getElementType(), newEncoding);
 }
@@ -255,17 +254,16 @@ LogicalResult LoopPipeliner::initialize() {
     if (isCandiate && loadOp.getResult().hasOneUse()) {
       isCandiate = false;
       Operation *use = *loadOp.getResult().getUsers().begin();
-      if (auto convertLayout =
-              llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
+      if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
         if (auto tensorType = convertLayout.getResult()
                                   .getType()
                                   .dyn_cast<RankedTensorType>()) {
           if (auto dotOpEnc = tensorType.getEncoding()
-                                     .dyn_cast<ttg::DotOperandEncodingAttr>()) {
+                                  .dyn_cast<ttg::DotOperandEncodingAttr>()) {
             isCandiate = true;
             loadsMapping[loadOp] = convertLayout;
-            loadsBufferType[loadOp] = getSwizzleType(dotOpEnc,
-                                    loadOp.getType().cast<RankedTensorType>());
+            loadsBufferType[loadOp] = getSwizzleType(
+                dotOpEnc, loadOp.getType().cast<RankedTensorType>());
           }
         }
       }
@@ -370,8 +368,7 @@ void LoopPipeliner::emitPrologue() {
             if (auto loadOp = llvm::dyn_cast<triton::LoadOp>(newOp)) {
               return loadOp.mask();
             } else if (auto insertSliceAsyncOp =
-                           llvm::dyn_cast<ttg::InsertSliceAsyncOp>(
-                               newOp)) {
+                           llvm::dyn_cast<ttg::InsertSliceAsyncOp>(newOp)) {
               return insertSliceAsyncOp.mask();
             } else {
               return mlir::Value();
@@ -423,9 +420,9 @@ void LoopPipeliner::emitPrologue() {
   loopIterIdx = builder.create<arith::ConstantIntOp>(iv.getLoc(), 0, 32);
   for (Value loadOp : loads) {
     auto sliceType = loadsMapping[loadOp].getType().cast<RankedTensorType>();
-    sliceType = RankedTensorType::get(sliceType.getShape(),
-                                      sliceType.getElementType(),
-                                      loadsBufferType[loadOp].getEncoding());
+    sliceType =
+        RankedTensorType::get(sliceType.getShape(), sliceType.getElementType(),
+                              loadsBufferType[loadOp].getEncoding());
     Value extractSlice = builder.create<tensor::ExtractSliceOp>(
         loadOp.getLoc(), sliceType, loadStageBuffer[loadOp][numStages - 1],
         SmallVector<OpFoldResult>{intAttr(0), intAttr(0), intAttr(0)},
@@ -618,14 +615,12 @@ scf::ForOp LoopPipeliner::createNewForOp() {
           auto tensorType = dotOperand.getType().cast<RankedTensorType>();
           if (!tensorType.getEncoding().isa<ttg::DotOperandEncodingAttr>()) {
             auto newEncoding = ttg::DotOperandEncodingAttr::get(
-              tensorType.getContext(), opIdx, dotType.getEncoding()
-            );
-            auto newType = RankedTensorType::get(tensorType.getShape(),
-                                                tensorType.getElementType(),
-                                                newEncoding);
-            return builder.create<ttg::ConvertLayoutOp>(
-              dotOperand.getLoc(), newType, dotOperand
-            );
+                tensorType.getContext(), opIdx, dotType.getEncoding());
+            auto newType =
+                RankedTensorType::get(tensorType.getShape(),
+                                      tensorType.getElementType(), newEncoding);
+            return builder.create<ttg::ConvertLayoutOp>(dotOperand.getLoc(),
+                                                        newType, dotOperand);
           }
           return dotOperand;
         };

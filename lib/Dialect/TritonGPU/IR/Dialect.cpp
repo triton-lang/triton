@@ -100,6 +100,25 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
            "mmaLayout version = 1 is not implemented yet");
     return {16 * mmaLayout.getWarpsPerCTA()[0],
             8 * mmaLayout.getWarpsPerCTA()[1]};
+  } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
+    auto parentLayout = dotLayout.getParent();
+    assert(parentLayout && "DotOperandEncodingAttr must have a parent");
+    if (auto parentMmaLayout = parentLayout.dyn_cast<MmaEncodingAttr>()) {
+      assert(parentMmaLayout.getVersion() == 2 &&
+             "mmaLayout version = 1 is not implemented yet");
+      auto parentShapePerCTA = getShapePerCTA(parentLayout);
+      auto opIdx = dotLayout.getOpIdx();
+      if (opIdx == 0) {
+        return {parentShapePerCTA[0], 16};
+      } else if (opIdx == 1) {
+        return {16, parentShapePerCTA[1]};
+      } else {
+        assert(0 && "DotOperandEncodingAttr opIdx must be 0 or 1");
+      }
+    } else {
+      assert(0 && "DotOperandEncodingAttr non-MmaEncodingAttr parent not "
+                  "supported yet");
+    }
   } else {
     assert(0 && "Unimplemented usage of getShapePerCTA");
   }
@@ -550,11 +569,11 @@ struct TritonGPUInferLayoutInterface
                                           Optional<Location> location) const {
     auto sliceEncoding = operandEncoding.dyn_cast<SliceEncodingAttr>();
     if (!sliceEncoding)
-      return emitOptionalError(location,
-          "ExpandDimsOp operand encoding must be SliceEncodingAttr");
+      return emitOptionalError(
+          location, "ExpandDimsOp operand encoding must be SliceEncodingAttr");
     if (sliceEncoding.getDim() != axis)
-      return emitOptionalError(location,
-          "Incompatible slice dimension for ExpandDimsOp operand");
+      return emitOptionalError(
+          location, "Incompatible slice dimension for ExpandDimsOp operand");
     resultEncoding = sliceEncoding.getParent();
     return success();
   }
@@ -568,8 +587,8 @@ struct TritonGPUInferLayoutInterface
       if (retEncoding != dotOpEnc.getParent())
         return emitOptionalError(location, "Incompatible parent encoding");
     } else
-      return emitOptionalError(location,
-        "Dot's a/b's encoding should be of DotOperandEncodingAttr");
+      return emitOptionalError(
+          location, "Dot's a/b's encoding should be of DotOperandEncodingAttr");
     return success();
   }
 };
