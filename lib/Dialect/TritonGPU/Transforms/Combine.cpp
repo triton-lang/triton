@@ -29,7 +29,7 @@ namespace {
 // convert(blocked, dot_operand) ->
 // convert(blocked, mma) + convert(mma,  dot_operand)
 // if this value is itself the result of a dot operation
-// this is a hueiristics to accomodate some pattern seen in fused attention
+// this is a heuristic to accomodate some pattern seen in fused attention
 // kernels.
 // TODO: replace this by something more generic, i.e. layout-aware CSE
 class DecomposeDotOperand : public mlir::RewritePattern {
