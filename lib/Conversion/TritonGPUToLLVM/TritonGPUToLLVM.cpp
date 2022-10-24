@@ -2689,11 +2689,7 @@ struct MMA16816ConversionHelper {
   MmaEncodingAttr mmaLayout;
   ArrayRef<unsigned int> wpt;
 
-  // int mmaInstrM{-1}, mmaInstrN{-1}, mmaInstrK{-1};
-  // int matShapeM{-1}, matShapeN{-1}, matShapeK{-1};
-  // int numRepM{-1}, numRepN{-1}, numRepK{-1};
   Value thread, lane, warp, warpMN, warpN, warpM;
-  // size_t aElemBytes{}, bElemBytes{};
 
   DotOpConversionHelper helper;
   ConversionPatternRewriter &rewriter;
@@ -2711,21 +2707,12 @@ struct MMA16816ConversionHelper {
         thread(thread) {
     wpt = mmaLayout.getWarpsPerCTA();
 
-    // int NK = aShape[1];
-    // // shape / shape_per_cta
-    // numRepM = std::max<int>(dShape[0] / (wpt[0] * mmaInstrM), 1);
-    // numRepN = std::max<int>(dShape[1] / (wpt[1] * mmaInstrN), 1);
-    // numRepK = std::max<int>(NK / mmaInstrK, 1);
-
     Value _32 = i32_val(32);
     lane = urem(thread, _32);
     warp = udiv(thread, _32);
     warpMN = udiv(warp, i32_val(wpt[0]));
     warpM = urem(warp, i32_val(wpt[0]));
     warpN = urem(warpMN, i32_val(wpt[1]));
-
-    // aElemBytes = aTensorTy.getElementTypeBitWidth() / 8;
-    // bElemBytes = bTensorTy.getElementTypeBitWidth() / 8;
   }
 
   // Get the mmaInstrShape from either $a or $b.
