@@ -116,7 +116,8 @@ void populateArithmeticPatternsAndLegality(
       // Cast Ops
       GenericOpPattern<arith::TruncIOp>, GenericOpPattern<arith::TruncFOp>,
       GenericOpPattern<arith::ExtUIOp>, GenericOpPattern<arith::ExtSIOp>,
-      GenericOpPattern<arith::SIToFPOp>>(typeConverter, context);
+      GenericOpPattern<arith::ExtFOp>, GenericOpPattern<arith::SIToFPOp>,
+      GenericOpPattern<arith::UIToFPOp>>(typeConverter, context);
 }
 
 // this shouldn't exist if mlir's SelectOp checked encodings properly

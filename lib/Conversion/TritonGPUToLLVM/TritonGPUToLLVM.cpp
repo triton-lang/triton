@@ -1471,6 +1471,7 @@ public:
   matchAndRewrite(SourceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto resultTy = op.getType().template dyn_cast<RankedTensorType>();
+
     // ArithmeticToLLVM will handle the lowering of scalar ArithOps
     if (!resultTy)
       return failure();
@@ -3186,6 +3187,10 @@ public:
     addConversion([&](RankedTensorType type) -> llvm::Optional<Type> {
       return convertTritonTensorType(type);
     });
+    // internally store bfloat16 as int16
+    addConversion([&](BFloat16Type type) -> llvm::Optional<Type> {
+      return IntegerType::get(type.getContext(), 16);
+    });
   }
 
   Type convertTritonPointerType(triton::PointerType type) {
@@ -3447,12 +3452,20 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
 #define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
   patterns.add<BinaryOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
 
-  POPULATE_BINARY_OP(arith::AddIOp, LLVM::AddOp)
+  POPULATE_BINARY_OP(arith::SubIOp, LLVM::SubOp) // -
+  POPULATE_BINARY_OP(arith::SubFOp, LLVM::FSubOp)
+  POPULATE_BINARY_OP(arith::AddIOp, LLVM::AddOp) // +
   POPULATE_BINARY_OP(arith::AddFOp, LLVM::FAddOp)
-  POPULATE_BINARY_OP(arith::MulIOp, LLVM::MulOp)
+  POPULATE_BINARY_OP(arith::MulIOp, LLVM::MulOp) // *
   POPULATE_BINARY_OP(arith::MulFOp, LLVM::FMulOp)
-  POPULATE_BINARY_OP(arith::AndIOp, LLVM::AndOp)
-  POPULATE_BINARY_OP(arith::OrIOp, LLVM::OrOp)
+  POPULATE_BINARY_OP(arith::DivFOp, LLVM::FDivOp) // /
+  POPULATE_BINARY_OP(arith::DivSIOp, LLVM::SDivOp)
+  POPULATE_BINARY_OP(arith::DivUIOp, LLVM::UDivOp)
+  POPULATE_BINARY_OP(arith::RemFOp, LLVM::FRemOp) // %
+  POPULATE_BINARY_OP(arith::RemSIOp, LLVM::SRemOp)
+  POPULATE_BINARY_OP(arith::RemUIOp, LLVM::URemOp)
+  POPULATE_BINARY_OP(arith::AndIOp, LLVM::AndOp) // &
+  POPULATE_BINARY_OP(arith::OrIOp, LLVM::OrOp)   // |
 #undef POPULATE_BINARY_OP
 
   patterns.add<CmpIOpConversion>(typeConverter, benefit);
@@ -3467,6 +3480,7 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   POPULATE_CAST_OP(arith::FPToSIOp, LLVM::FPToSIOp)
   POPULATE_CAST_OP(arith::UIToFPOp, LLVM::UIToFPOp)
   POPULATE_CAST_OP(arith::SIToFPOp, LLVM::SIToFPOp)
+  POPULATE_CAST_OP(arith::ExtFOp, LLVM::FPExtOp)
 #undef POPULATE_CAST_OP
 
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
