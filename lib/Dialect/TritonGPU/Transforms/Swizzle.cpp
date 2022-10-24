@@ -89,9 +89,8 @@ struct SwizzlePass : public TritonGPUSwizzleBase<SwizzlePass> {
                   .cast<triton::gpu::SharedEncodingAttr>()
                   .getOrder());
           // create conversion
-          auto newType = RankedTensorType::get(ty.getShape(),
-                                               ty.getElementType(),
-                                               newEncoding);
+          auto newType = RankedTensorType::get(
+              ty.getShape(), ty.getElementType(), newEncoding);
           Operation *newOp = builder.create<triton::gpu::ConvertLayoutOp>(
               op.getLoc(), newType, op);
           // bind new op to cvt operand
