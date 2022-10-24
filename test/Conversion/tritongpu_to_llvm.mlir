@@ -721,8 +721,8 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 #blocked2 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
 #mma = #triton_gpu.mma<{version = 2, warpsPerCTA = [2, 2]}>
 #shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#dot_operand_a = #triton_gpu.dot_operand<{opIdx=0, parent=#mma}>
-#dot_operand_b = #triton_gpu.dot_operand<{opIdx=1, parent=#mma}>
+#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma}>
+#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma}>
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   func @matmul_kernel_dot_operand_layout(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #mma>
@@ -759,7 +759,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     %a_mat = triton_gpu.convert_layout %26 : (tensor<128x32xf16, #shared>) -> tensor<128x32xf16, #dot_operand_a>
     %b_mat = triton_gpu.convert_layout %27 : (tensor<32x256xf16, #shared>) -> tensor<32x256xf16, #dot_operand_b>
 
-    %28 = tt.dot %a_mat, %b_mat, %cst {allowTF32 = true} : tensor<128x32xf16, #dot_operand_a> * tensor<32x256xf16, #dot_operand_b> -> tensor<128x256xf32, #mma>
+    %28 = tt.dot %a_mat, %b_mat, %cst {allowTF32 = true, transA = false, transB = false} : tensor<128x32xf16, #dot_operand_a> * tensor<32x256xf16, #dot_operand_b> -> tensor<128x256xf32, #mma>
     %29 = tt.splat %arg5 : (i32) -> tensor<128x1xi32, #blocked2>
     %30 = tt.splat %arg2 : (!tt.ptr<f32>) -> tensor<128x1x!tt.ptr<f32>, #blocked2>
     %31 = tt.expand_dims %11 {axis = 0 : i32} : (tensor<256xi32, #triton_gpu.slice<{dim = 0, parent = #blocked2}>>) -> tensor<1x256xi32, #blocked2>
