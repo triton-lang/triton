@@ -39,23 +39,23 @@ struct SwizzlePass : public TritonGPUSwizzleBase<SwizzlePass> {
       return SwizzleInfo{vec, perPhase, maxPhase};
     } else if (version == 2) {
       auto eltTy = ty.getElementType();
-      std::vector<size_t> mat_shape = {8, 8,
-                                       2 * 64 / eltTy.getIntOrFloatBitWidth()};
+      std::vector<size_t> matShape = {8, 8,
+                                      2 * 64 / eltTy.getIntOrFloatBitWidth()};
       // for now, disable swizzle when using transposed int8 tensor cores
-      bool is_int8_mma = ty.getElementType().isInteger(8);
-      if (is_int8_mma && order[0] == inner)
+      bool isInt8Mma = ty.getElementType().isInteger(8);
+      if (isInt8Mma && order[0] == inner)
         return noSwizzling;
       // compute swizzling for A operand
       if (opIdx == 0) {
-        int vec = order[0] == 1 ? mat_shape[2] : mat_shape[0]; // k : m
-        int mmaStride = order[0] == 1 ? mat_shape[0] : mat_shape[2];
+        int vec = order[0] == 1 ? matShape[2] : matShape[0]; // k : m
+        int mmaStride = order[0] == 1 ? matShape[0] : matShape[2];
         int maxPhase = mmaStride / perPhase;
         return SwizzleInfo{vec, perPhase, maxPhase};
       }
       // compute swizzling for B operand
       else if (opIdx == 1) {
-        int vec = order[0] == 1 ? mat_shape[1] : mat_shape[2]; // n : k
-        int mmaStride = order[0] == 1 ? mat_shape[2] : mat_shape[1];
+        int vec = order[0] == 1 ? matShape[1] : matShape[2]; // n : k
+        int mmaStride = order[0] == 1 ? matShape[2] : matShape[1];
         int maxPhase = mmaStride / perPhase;
         return SwizzleInfo{vec, perPhase, maxPhase};
       } else {
