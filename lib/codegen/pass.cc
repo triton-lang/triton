@@ -79,11 +79,13 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(
     ir::module& ir, llvm::LLVMContext& ctx, codegen::target* target,
     int num_warps, int num_stages, int& shared_static,
     const ExternLibMap& extern_lib_map) {
+  std::cout << "pass.cc: add_passes_to_emit_bin" << std::endl;
   // generate llvm code
   std::string name = ir.get_function_list()[0]->get_name();
   std::unique_ptr<llvm::Module> llvm(new llvm::Module(name, ctx));
   // optimizations
-  bool has_sm80 = target->as_nvidia() && target->as_nvidia()->sm() >= 80;
+  // bool has_sm80 = target->as_nvidia() && target->as_nvidia()->sm() >= 80;
+  bool has_sm80 = false;
   // create passes
   codegen::analysis::align align;
   codegen::transform::inliner inliner;
