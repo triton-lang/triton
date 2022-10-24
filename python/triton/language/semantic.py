@@ -930,6 +930,8 @@ def atomic_xchg(ptr: tl.tensor,
 def dot(lhs: tl.tensor,
         rhs: tl.tensor,
         allow_tf32: bool,
+        trans_a: bool,
+        trans_b: bool,
         builder: ir.builder) -> tl.tensor:
     assert lhs.type.is_block() and rhs.type.is_block()
     if lhs.type.scalar.is_int():
@@ -938,11 +940,11 @@ def dot(lhs: tl.tensor,
     else:
         _0 = builder.get_float32(0)
         ret_scalar_ty = tl.float32
-    M = lhs.type.shape[0]
-    N = rhs.type.shape[1]
+    M = lhs.type.shape[1 if trans_a else 0]
+    N = rhs.type.shape[0 if trans_b else 1]
     _0 = builder.create_splat(_0, [M, N])
     ret_ty = tl.block_type(ret_scalar_ty, [M, N])
-    return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32),
+    return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32, trans_a, trans_b),
                      ret_ty)
 
 
@@ -991,7 +993,11 @@ def reduce_impl(input: tl.tensor, axis: int, builder: ir.builder, name: str,
     for i, s in enumerate(shape):
         if i != axis:
             ret_shape.append(s)
-    res_ty = tl.block_type(scalar_ty, ret_shape)
+    if ret_shape:
+        res_ty = tl.block_type(scalar_ty, ret_shape)
+    else:
+        # 0d-tensor -> scalar
+        res_ty = scalar_ty
 
     if scalar_ty.is_floating():
         return tl.tensor(builder.create_reduce(input.handle, FLOAT_OP, axis), res_ty)

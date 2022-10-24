@@ -50,8 +50,6 @@ struct SwizzlePass : public TritonGPUSwizzleBase<SwizzlePass> {
         int vec = order[0] == 1 ? mat_shape[2] : mat_shape[0]; // k : m
         int mmaStride = order[0] == 1 ? mat_shape[0] : mat_shape[2];
         int maxPhase = mmaStride / perPhase;
-        std::cout << perPhase << " " << mat_shape[0] << " " << mat_shape[1]
-                  << " " << mat_shape[2] << std::endl;
         return SwizzleInfo{vec, perPhase, maxPhase};
       }
       // compute swizzling for B operand

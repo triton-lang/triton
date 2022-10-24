@@ -241,7 +241,9 @@ class block_type(dtype):
         # while tensor's shape is a list of constexpr.
 
         # shape can be empty ([]) when an input is a 0D tensor.
-        if shape and isinstance(shape[0], constexpr):
+        if not shape:
+            raise TypeError('0d block_type is forbidden')
+        if isinstance(shape[0], constexpr):
             shape = [s.value for s in shape]
 
         self.shape = shape
@@ -739,7 +741,7 @@ def reshape(input, shape, _builder=None):
 
 
 @builtin
-def dot(input, other, allow_tf32=True, _builder=None):
+def dot(input, other, allow_tf32=True, trans_a=False, trans_b=False, _builder=None):
     """
     Returns the matrix product of two blocks.
 
@@ -751,7 +753,7 @@ def dot(input, other, allow_tf32=True, _builder=None):
     :type other: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
     """
     allow_tf32 = _constexpr_to_value(allow_tf32)
-    return semantic.dot(input, other, allow_tf32, _builder)
+    return semantic.dot(input, other, allow_tf32, trans_a, trans_b, _builder)
 
 
 # -----------------------

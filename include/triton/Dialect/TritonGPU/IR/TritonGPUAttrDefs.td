@@ -346,5 +346,4 @@ The parend field in DotOperandEncodingAttr is the layout of d.
   let extraClassDeclaration = extraBaseClassDeclaration;
 }
 
-
 #endif

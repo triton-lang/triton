@@ -40,7 +40,8 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
   if (TensorType ty = value.getType().dyn_cast<TensorType>())
     rank = ty.getRank();
   int divHint = 1;
-  if (BlockArgument blockArg = value.dyn_cast<BlockArgument>()) {
+  BlockArgument blockArg = value.dyn_cast<BlockArgument>();
+  if (blockArg && blockArg.getOwner()->isEntryBlock()) {
     Operation *op = blockArg.getOwner()->getParentOp();
     if (FuncOp fun = dyn_cast<FuncOp>(op)) {
       Attribute attr =
@@ -209,6 +210,33 @@ ChangeResult AxisInfoAnalysis::visitOperation(
     }
     curr = AxisInfo(contiguity, divisibility, constancy);
   }
+
+  // CmpI
+  if ((llvm::dyn_cast<arith::CmpIOp>(op) ||
+       llvm::dyn_cast<triton::gpu::CmpIOp>(op)) &&
+      op->getResult(0).getType().dyn_cast<TensorType>()) {
+    auto resTy = op->getResult(0).getType().cast<TensorType>();
+    short rank = resTy.getRank();
+    auto lhsInfo = operands[0]->getValue();
+    auto rhsInfo = operands[1]->getValue();
+    auto shape = resTy.getShape();
+
+    AxisInfo::DimVectorT contiguity, divisibility, constancy;
+    for (short d = 0; d < rank; ++d) {
+      if (rhsInfo.getConstancy(d) % lhsInfo.getContiguity(d) == 0 ||
+          rhsInfo.getConstancy(d) % lhsInfo.getConstancy(d))
+        constancy.push_back(
+            gcd(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d)));
+      else
+        constancy.push_back(1);
+
+      divisibility.push_back(shape[d]);
+      contiguity.push_back(1);
+    }
+
+    curr = AxisInfo(contiguity, divisibility, constancy);
+  }
+
   // UnrealizedConversionCast
   // This is needed by TritonGPUToLLVM, to get AxisInfo when the graph is
   // in the process of a PartialConversion, where UnrealizedConversionCast
@@ -219,7 +247,8 @@ ChangeResult AxisInfoAnalysis::visitOperation(
   if (curr.getRank() == 0) {
     return markAllPessimisticFixpoint(op->getResults());
   }
-  // join all latice elements
+
+  // join all lattice elements
   ChangeResult result = ChangeResult::NoChange;
   for (Value value : op->getResults()) {
     result |= getLatticeElement(value).join(curr);
