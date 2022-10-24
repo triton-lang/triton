@@ -123,6 +123,7 @@ def test_fmad_rn_no_mask(num_warps, block_size, iter_size):
     golden_w = x * y + z
     assert_close(w, golden_w, rtol=1e-7, atol=1e-7)
 
+
 @pytest.mark.parametrize("dtype_str, expr, lib_path",
                          [('float32', 'libdevice.pow', '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'),
                           ('int32', 'libdevice.ffs', ''),
@@ -135,9 +136,9 @@ def test_libdevice(dtype_str, expr, lib_path):
         return kernel
 
     torch_type = {
-        "int32" : torch.int32,
-        "float32" : torch.float32,
-        "float64" : torch.float64
+        "int32": torch.int32,
+        "float32": torch.float32,
+        "float64": torch.float64
     }
 
     @triton.jit
@@ -150,7 +151,7 @@ def test_libdevice(dtype_str, expr, lib_path):
     # limit the range of integers so that the sum does not overflow
     x = None
     if dtype_str == "int32":
-        x = torch.randint(2**31-1, shape, dtype=torch_type[dtype_str], device="cuda")
+        x = torch.randint(2**31 - 1, shape, dtype=torch_type[dtype_str], device="cuda")
     else:
         x = torch.randn(shape, dtype=torch_type[dtype_str], device="cuda")
     if expr == 'libdevice.ffs':
@@ -168,7 +169,7 @@ def test_libdevice(dtype_str, expr, lib_path):
         y_ref = torch.sqrt(4 * torch.pow(x, 2))
 
     # triton result
-    y= torch.zeros(shape, dtype=x.dtype, device="cuda")
+    y = torch.zeros(shape, dtype=x.dtype, device="cuda")
     kernel[(1,)](x, y, BLOCK=shape[0], extern_libs={"libdevice": lib_path})
     # compare
     assert_close(y, y_ref)

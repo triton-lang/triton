@@ -884,11 +884,13 @@ def optimize_tritongpu_ir(mod, num_stages):
     pm.run(mod)
     return mod
 
+
 def add_external_libs(mod, libs):
     for name, path in libs.items():
         if len(name) == 0 or len(path) == 0:
             return
     _triton.add_external_libs(mod, list(libs.keys()), list(libs.values()))
+
 
 def make_llvm_ir(mod):
     return _triton.translate_triton_gpu_to_llvmir(mod)
