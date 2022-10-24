@@ -76,8 +76,8 @@ You will specifically learn about:
 #
 #  .. code-block:: python
 #
-#    a_ptrs += BLOCK_SIZE_K * stride_ak;
-#    b_ptrs += BLOCK_SIZE_K * stride_bk;
+#    pa += BLOCK_SIZE_K * stride_ak;
+#    pb += BLOCK_SIZE_K * stride_bk;
 #
 #
 # L2 Cache Optimizations
@@ -236,8 +236,8 @@ def matmul_kernel(
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # you can fuse arbitrary activation functions here
     # while the accumulator is still in FP32!
-    if ACTIVATION == "leaky_relu":
-        accumulator = leaky_relu(accumulator)
+    if ACTIVATION:
+        accumulator = ACTIVATION(accumulator)
     c = accumulator.to(tl.float16)
 
     # -----------------------------------------------------------
@@ -252,7 +252,6 @@ def matmul_kernel(
 # we can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`
 @triton.jit
 def leaky_relu(x):
-    x = x + 1
     return tl.where(x >= 0, x, 0.01 * x)
 
 
@@ -261,7 +260,7 @@ def leaky_relu(x):
 # and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel
 
 
-def matmul(a, b, activation=""):
+def matmul(a, b, activation=None):
     # checks constraints
     assert a.shape[1] == b.shape[0], "incompatible dimensions"
     assert a.is_contiguous(), "matrix A must be contiguous"
@@ -297,7 +296,7 @@ def matmul(a, b, activation=""):
 torch.manual_seed(0)
 a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
 b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-triton_output = matmul(a, b)
+triton_output = matmul(a, b, activation=None)
 torch_output = torch.matmul(a, b)
 print(f"triton_output={triton_output}")
 print(f"torch_output={torch_output}")
@@ -347,7 +346,7 @@ def benchmark(M, N, K, provider):
         )
     if provider == 'triton + relu':
         ms, min_ms, max_ms = triton.testing.do_bench(
-            lambda: matmul(a, b, activation="leaky_relu")
+            lambda: matmul(a, b, activation=leaky_relu)
         )
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
