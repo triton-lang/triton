@@ -644,32 +644,6 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 
 // -----
 
-// TODO(Keren): Enable this test when conversion from blocked to dot is implemented.
-#blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
-#mma0 = #triton_gpu.mma<{version=2, warpsPerCTA=[1,1]}>
-#dot0 = #triton_gpu.dot_op<{opIdx = 0, parent = #mma0}>
-#dot1 = #triton_gpu.dot_op<{opIdx = 1, parent = #mma0}>
-module attributes {"triton_gpu.num-warps" = 1 : i32} {
-  // CHECK-LABEL: convert_dot
-  func @convert_dot(%A: tensor<16x16xf16, #blocked0>, %B: tensor<16x16xf16, #blocked0>) {
-// COM:     %AA = triton_gpu.convert_layout %A : (tensor<16x16xf16, #blocked0>) -> tensor<16x16xf16, #dot0>
-// COM:     %BB = triton_gpu.convert_layout %B : (tensor<16x16xf16, #blocked0>) -> tensor<16x16xf16, #dot1>
-// COM:     %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma0>
-// COM:     // CHECK: llvm.inline_asm
-// COM:     // CHECK-SAME: ldmatrix.sync.aligned.m8n8.x4
-// COM:     // CHECK: llvm.inline_asm
-// COM:     // CHECK-SAME: ldmatrix.sync.aligned.m8n8.x4
-// COM: 
-// COM:     // CHECK: llvm.inline_asm
-// COM:     // CHECK-SAME: mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
-// COM:     // CHECK: llvm.inline_asm
-// COM:     // CHECK-SAME: mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
-// COM:     %D = tt.dot %AA, %BB, %cst0 {allowTF32 = true, transA = false, transB = false} : tensor<16x16xf16, #dot0> * tensor<16x16xf16, #dot1> -> tensor<16x16xf32, #mma0>
-// COM: 
-    return
-  }
-}
-
 // TODO: problems in MLIR's parser on slice layout
 // #blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
 // module attributes {"triton_gpu.num-warps" = 1 : i32} {
