@@ -125,11 +125,6 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=self.build_temp)
 
-        # run tests. Note: this depends on llvm-lit
-        # -DLLVM_EXTERNAL_LIT=<path-to-lit.py>
-        # Note: get_llvm_lit_path(...) in llvm/cmake/modules/AddLLVM.cmake
-        subprocess.call(["cmake", "--build", ".", "--target", "check-triton"], cwd=self.build_temp, env=env)
-
 
 setup(
     name="triton",
