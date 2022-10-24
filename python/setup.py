@@ -122,6 +122,7 @@ class CMakeBuild(build_ext):
             self.build_extension(ext)
 
     def build_extension(self, ext):
+        self.debug = True
         lit_dir = shutil.which('lit')
         triton_cache_path = os.path.join(os.environ["HOME"], ".triton")
         # lit is used by the test suite
