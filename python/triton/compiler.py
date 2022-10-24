@@ -893,7 +893,7 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(),
     if output == "ttir":
         return module
 
-    assert (output == "cubin" or output == "hsaco")
+    assert (output == "cubin" or output == "hipmodule")
     if torch.version.hip is not None:
         backend = _triton.runtime.backend.ROCM
     else:
@@ -1285,15 +1285,23 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
 
         if torch.version.hip is not None:
             asm, shared, kernel_name = _compile(fn, signature, device, constants, configs[0], num_warps, num_stages,
-                                                extern_libs, "hsaco", cc)
+                                                extern_libs, "hipmodule", cc)
+            # cache AMD assembly and binary
+            fn_cache_manager.put(asm["hipmodule"], cubin_name)
+            fn_cache_manager.put(asm["amdgpu"], ptx_name, binary=False)
         else:
             asm, shared, kernel_name = _compile(fn, signature, device, constants, configs[0], num_warps, num_stages,
                                                 extern_libs, "cubin", cc)
-        metadata = {"name": kernel_name, "shared": shared, "num_warps": num_warps, "num_stages": num_stages}
-        fn_cache_manager.put(asm["cubin"], cubin_name)
-        fn_cache_manager.put(asm["ptx"], ptx_name, binary=False)
+            # cache Nvidia assembly and binary
+            fn_cache_manager.put(asm["cubin"], cubin_name)
+            fn_cache_manager.put(asm["ptx"], ptx_name, binary=False)
+
+        # cache triton and llvm ir
         fn_cache_manager.put(asm["ttir"], ttir_name, binary=False)
         fn_cache_manager.put(asm["llir"], llir_name, binary=False)
+
+        # cache metadata
+        metadata = {"name": kernel_name, "shared": shared, "num_warps": num_warps, "num_stages": num_stages}
         fn_cache_manager.put(json.dumps(metadata), data_name, binary=False)
 
     if warm_cache_only:
