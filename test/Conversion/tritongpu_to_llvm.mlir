@@ -755,7 +755,9 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     %26 = triton_gpu.convert_layout %23 : (tensor<128x32xf16, #blocked0>) -> tensor<128x32xf16, #shared>
     %27 = triton_gpu.convert_layout %25 : (tensor<32x256xf16, #blocked1>) -> tensor<32x256xf16, #shared>
 
-    // add convert_layout for dot's operands $a and $b.
+    // add convert_layout[shared->dot_op] for dot's operands $a and $b.
+
+    // CHECK: ldmatrix.sync.aligned.m8n8.x4.shared.b16
     %a_mat = triton_gpu.convert_layout %26 : (tensor<128x32xf16, #shared>) -> tensor<128x32xf16, #dot_operand_a>
     %b_mat = triton_gpu.convert_layout %27 : (tensor<32x256xf16, #shared>) -> tensor<32x256xf16, #dot_operand_b>
 
