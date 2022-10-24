@@ -115,6 +115,7 @@ void populateArithmeticPatternsAndLegality(
       ArithCmpPattern<arith::CmpFOp, triton::gpu::CmpFOp>,
       // Cast Ops
       GenericOpPattern<arith::TruncIOp>, GenericOpPattern<arith::TruncFOp>,
+      GenericOpPattern<arith::ExtUIOp>, GenericOpPattern<arith::ExtSIOp>,
       GenericOpPattern<arith::SIToFPOp>>(typeConverter, context);
 }
 
