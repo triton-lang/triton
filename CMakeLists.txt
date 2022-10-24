@@ -5,11 +5,6 @@ set(CMAKE_CXX_STANDARD 17)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-if(NOT TRITON_LLVM_BUILD_DIR)
-    set(TRITON_LLVM_BUILD_DIR ${CMAKE_BINARY_DIR})
-endif()
-
-
 project(triton)
 include(CTest)
 if(NOT WIN32)
@@ -32,6 +27,9 @@ endif()
 
 # Compiler flags
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# Third-party
+include_directories(${PYBIND11_INCLUDE_DIR})
 
 if(WIN32)
     SET(BUILD_SHARED_LIBS OFF)
