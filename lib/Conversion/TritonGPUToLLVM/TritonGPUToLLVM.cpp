@@ -3068,6 +3068,7 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adaptor,
 
   Value A = op.a();
   Value B = op.b();
+  Value C = op.c();
   auto ATensorTy = A.getType().cast<RankedTensorType>();
   auto BTensorTy = B.getType().cast<RankedTensorType>();
 
@@ -3089,8 +3090,8 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adaptor,
   // mattered.
   loadedC = mmaHelper.loadC(op.c());
 
-  return mmaHelper.convertDot(op.a(), op.b(), op.c(), op.d(), loadedA, loadedB,
-                              loadedC, op, adaptor);
+  return mmaHelper.convertDot(A, B, C, op.d(), loadedA, loadedB, loadedC, op,
+                              adaptor);
 }
 
 /// ====================== mma codegen end ============================
