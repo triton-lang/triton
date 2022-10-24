@@ -20,6 +20,7 @@ from setuptools.command.build_ext import build_ext
 def check_env_flag(name: str, default: str = "") -> bool:
     return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
 
+
 def get_build_type():
     if check_env_flag("DEBUG"):
         return "Debug"
@@ -39,10 +40,12 @@ class Package(NamedTuple):
     include_flag: str
     lib_flag: str
 
+
 def get_pybind11_package_info():
     name = "pybind11-2.10.0"
     url = "https://github.com/pybind/pybind11/archive/refs/tags/v2.10.0.tar.gz"
     return Package("pybind11", name, url, "include/pybind11/pybind11.h", "PYBIND11_INCLUDE_DIR", "")
+
 
 def get_llvm_package_info():
     # download if nothing is installed
@@ -56,6 +59,7 @@ def get_llvm_package_info():
         name = 'clang+llvm-14.0.0-x86_64-{}'.format(system_suffix)
         url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-14.0.0/{}.tar.xz".format(name)
     return Package("llvm", name, url, "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR")
+
 
 def get_thirdparty_packages(triton_cache_path):
     packages = [get_pybind11_package_info(), get_llvm_package_info()]
@@ -81,6 +85,7 @@ def get_thirdparty_packages(triton_cache_path):
     return thirdparty_cmake_args
 
 # ---- cmake extension ----
+
 
 class CMakeExtension(Extension):
     def __init__(self, name, path, sourcedir=""):
