@@ -148,24 +148,28 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
     llvm::errs() << "Pass execution failed";
     return nullptr;
   }
+
+  std::map<std::string, std::string> extern_libs;
+  if (module.getOperation()->hasAttr("triton_gpu.externs")) {
+    auto dict = module.getOperation()->getAttr("triton_gpu.externs").dyn_cast<DictionaryAttr>();
+    for (auto& attr : dict) {
+      extern_libs[attr.getName().strref().trim().str()] =
+        attr.getValue().dyn_cast<StringAttr>().strref().trim().str();
+    }
+  }
+
   SmallVector<LLVM::LLVMFuncOp> funcs;
-  module.walk([&](LLVM::LLVMFuncOp func){
-    funcs.push_back(func);
+  module.walk([&](LLVM::LLVMFuncOp func) {
+    if (func.isExternal()) funcs.push_back(func);
   });
 
-  static const std::string key("libpath:");
-  std::set<std::string> extern_libs;
   for (auto &func : funcs) {
-    if (!func.isExternal())
-      continue;
-    auto attrs = func.getPassthroughAttr();
-    for (auto& attr : attrs) {
-      if (StringAttr sAttr = attr.dyn_cast<StringAttr>()) {
-        auto value = sAttr.str();
-        if (0 == value.find(key)) {
-          extern_libs.insert(value.substr(key.size()));
-        }
-      }
+    auto name = func.getOperation()->getAttr("libname").dyn_cast<StringAttr>();
+    auto path = func.getOperation()->getAttr("libpath").dyn_cast<StringAttr>();
+    if (name) {
+      std::string lib_name = name.str();
+      //if (extern_libs.count(lib_name) > 0) llvm::errs() << lib_name << " already exist";
+      extern_libs[lib_name] = path.str();
     }
   }
 
@@ -176,22 +180,40 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
   }
 
   llvm::SMDiagnostic err;
-  for (auto& path : extern_libs) {
-    auto ext_mod = llvm::parseIRFile(path, err, *llvmContext);
+  for (auto& lib : extern_libs) {
+    auto ext_mod = llvm::parseIRFile(lib.second, err, *llvmContext);
     if (!ext_mod) {
-      llvm::errs() <<"Failed to load extern lib ";
+      llvm::errs() <<"Failed to load extern lib " << lib.first;
       return nullptr;
     }
     ext_mod->setTargetTriple(llvmir->getTargetTriple());
     ext_mod->setDataLayout(llvmir->getDataLayout());
 
     if (llvm::Linker::linkModules(*llvmir, std::move(ext_mod))) {
-      llvm::errs() <<"Failed to link extern lib ";
+      llvm::errs() <<"Failed to link extern lib " << lib.first;
       return nullptr;
     }
   }
 
   return llvmir;
+}
+
+void addExternalLibs(mlir::ModuleOp& module, const std::vector<std::string>& names, const std::vector<std::string>& paths) {
+  if (names.empty() || names.size() != paths.size())
+    return;
+
+  llvm::SmallVector<NamedAttribute, 2> attrs;
+
+  for(size_t i=0; i<names.size(); ++i) {
+    auto name = StringAttr::get(module->getContext(), names[i]);
+    auto path = StringAttr::get(module->getContext(), paths[i]);
+    NamedAttribute attr(name, path);
+    attrs.push_back(attr);
+  }
+
+  DictionaryAttr dict = DictionaryAttr::get(module->getContext(), attrs);
+  module.getOperation()->setAttr("triton_gpu.externs", dict);
+  return;
 }
 
 } // namespace triton

@@ -841,7 +841,7 @@ struct LoadOpConversion
     bool otherIsSplatConstInt = false;
     DenseElementsAttr constAttr;
     int64_t splatVal = 0;
-    if (valueElemTy.isa<IntegerType>() &&
+    if (valueElemTy.isa<IntegerType>() && op.other() &&
         matchPattern(op.other(), m_Constant(&constAttr)) &&
         constAttr.isSplat()) {
       otherIsSplatConstInt = true;
@@ -3271,7 +3271,8 @@ private:
 
     mlir::OpBuilder b(op->getParentOfType<LLVMFuncOp>());
     auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
-    ret.setPassthroughAttr(b.getArrayAttr({b.getStringAttr("libpath:" + op.libpath())}));
+    ret.getOperation()->setAttr("libname", StringAttr::get(op->getContext(), op.libname()));
+    ret.getOperation()->setAttr("libpath", StringAttr::get(op->getContext(), op.libpath()));
     return ret;
   }
 };
