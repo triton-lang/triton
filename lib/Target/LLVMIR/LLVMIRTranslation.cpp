@@ -150,14 +150,6 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
   }
 
   std::map<std::string, std::string> extern_libs;
-  if (module.getOperation()->hasAttr("triton_gpu.externs")) {
-    auto dict = module.getOperation()->getAttr("triton_gpu.externs").dyn_cast<DictionaryAttr>();
-    for (auto& attr : dict) {
-      extern_libs[attr.getName().strref().trim().str()] =
-        attr.getValue().dyn_cast<StringAttr>().strref().trim().str();
-    }
-  }
-
   SmallVector<LLVM::LLVMFuncOp> funcs;
   module.walk([&](LLVM::LLVMFuncOp func) {
     if (func.isExternal()) funcs.push_back(func);
@@ -168,8 +160,15 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
     auto path = func.getOperation()->getAttr("libpath").dyn_cast<StringAttr>();
     if (name) {
       std::string lib_name = name.str();
-      //if (extern_libs.count(lib_name) > 0) llvm::errs() << lib_name << " already exist";
       extern_libs[lib_name] = path.str();
+    }
+  }
+
+  if (module.getOperation()->hasAttr("triton_gpu.externs")) {
+    auto dict = module.getOperation()->getAttr("triton_gpu.externs").dyn_cast<DictionaryAttr>();
+    for (auto& attr : dict) {
+      extern_libs[attr.getName().strref().trim().str()] =
+        attr.getValue().dyn_cast<StringAttr>().strref().trim().str();
     }
   }
 
