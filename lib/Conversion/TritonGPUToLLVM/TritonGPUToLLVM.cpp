@@ -3520,7 +3520,7 @@ struct InsertSliceAsyncOpConversion
       auto byteWidth = bitWidth / 8;
       CacheModifier srcCacheModifier =
           byteWidth == 16 ? CacheModifier::CG : CacheModifier::CA;
-      assert(bitWidth == 16 || bitWidth == 8 || bitWidth == 4);
+      assert(byteWidth == 16 || byteWidth == 8 || byteWidth == 4);
 
       for (int wordIdx = 0; wordIdx < numWords; ++wordIdx) {
         PTXBuilder ptxBuilder;
