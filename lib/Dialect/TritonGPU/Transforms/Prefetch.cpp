@@ -61,7 +61,7 @@ class Prefetcher {
   LogicalResult isForOpOperand(Value v);
 
   Value generatePrefetch(Value v, unsigned opIdx, bool isPrefetch,
-                         Attribute mmaEncoding, OpBuilder &builder);
+                         Attribute dotEncoding, OpBuilder &builder);
 
 public:
   Prefetcher() = delete;
@@ -78,7 +78,7 @@ public:
 };
 
 Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrefetch,
-                                   Attribute mmaEncoding, OpBuilder &builder) {
+                                   Attribute dotEncoding, OpBuilder &builder) {
   // opIdx: 0 => a, 1 => b
   auto type = v.getType().cast<RankedTensorType>();
   SmallVector<int64_t> shape{type.getShape().begin(), type.getShape().end()};
@@ -101,7 +101,7 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrefetch,
       SmallVector<OpFoldResult>{intAttr(1), intAttr(1)});
 
   auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
-      builder.getContext(), opIdx, mmaEncoding);
+      builder.getContext(), opIdx, dotEncoding);
   Value prefetchSlice = builder.create<triton::gpu::ConvertLayoutOp>(
       v.getLoc(), RankedTensorType::get(shape, elementType, dotOperandEnc),
       newSmem);
@@ -167,15 +167,14 @@ void Prefetcher::emitPrologue() {
   OpBuilder builder(forOp);
 
   for (Value dot : dots) {
-    auto mmaEncoding = dot.getType()
+    Attribute dotEncoding = dot.getType()
                            .cast<RankedTensorType>()
-                           .getEncoding()
-                           .cast<triton::gpu::MmaEncodingAttr>();
+                           .getEncoding();
     Value aPrefetched =
-        generatePrefetch(dot2aHeaderDef[dot], 0, true, mmaEncoding, builder);
+        generatePrefetch(dot2aHeaderDef[dot], 0, true, dotEncoding, builder);
     operand2headPrefetch[dot.getDefiningOp<triton::DotOp>().a()] = aPrefetched;
     Value bPrefetched =
-        generatePrefetch(dot2bHeaderDef[dot], 1, true, mmaEncoding, builder);
+        generatePrefetch(dot2bHeaderDef[dot], 1, true, dotEncoding, builder);
     operand2headPrefetch[dot.getDefiningOp<triton::DotOp>().b()] = bPrefetched;
   }
 }
@@ -206,10 +205,9 @@ scf::ForOp Prefetcher::createNewForOp() {
     Operation *newOp = nullptr;
     auto dot = dyn_cast<triton::DotOp>(&op);
     if (dots.contains(dot)) {
-      auto mmaEncoding = dot.getType()
-                             .cast<RankedTensorType>()
-                             .getEncoding()
-                             .cast<triton::gpu::MmaEncodingAttr>();
+      auto dotEncoding = dot.getType()
+                            .cast<RankedTensorType>()
+                            .getEncoding();
       // prefetched dot
       Operation *firstDot = builder.clone(*dot, mapping);
       if (Value a = operand2headPrefetch.lookup(dot.a()))
@@ -221,9 +219,9 @@ scf::ForOp Prefetcher::createNewForOp() {
 
       // remaining part
       Value aRem = generatePrefetch(mapping.lookup(dot2aLoopArg[dot]), 0, false,
-                                    mmaEncoding, builder);
+                                    dotEncoding, builder);
       Value bRem = generatePrefetch(mapping.lookup(dot2bLoopArg[dot]), 1, false,
-                                    mmaEncoding, builder);
+                                    dotEncoding, builder);
       newOp = builder.clone(*dot, mapping);
       newOp->setOperand(0, aRem);
       newOp->setOperand(1, bRem);
@@ -241,17 +239,17 @@ scf::ForOp Prefetcher::createNewForOp() {
   for (Value v : forOp.getBody()->getTerminator()->getOperands())
     yieldValues.push_back(mapping.lookup(v));
   for (Value dot : dots) {
-    auto mmaEncoding = dot.getType()
-                           .cast<RankedTensorType>()
-                           .getEncoding()
-                           .cast<triton::gpu::MmaEncodingAttr>();
+    Attribute dotEncoding = dot.getType()
+                               .cast<RankedTensorType>()
+                               .getEncoding();
     yieldValues.push_back(generatePrefetch(mapping.lookup(dot2aYield[dot]), 0,
-                                           true, mmaEncoding, builder));
+                                           true, dotEncoding, builder));
     yieldValues.push_back(generatePrefetch(mapping.lookup(dot2bYield[dot]), 1,
-                                           true, mmaEncoding, builder));
+                                           true, dotEncoding, builder));
   }
   // Update ops of yield
   builder.create<scf::YieldOp>(yieldOp.getLoc(), yieldValues);
+  return newForOp;
 }
 
 struct PrefetchPass : public TritonGPUPrefetchBase<PrefetchPass> {
