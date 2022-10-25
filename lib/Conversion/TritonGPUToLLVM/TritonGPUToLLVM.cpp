@@ -640,13 +640,11 @@ Value convertSplatLikeOp(Type elemType, Type resType, Value constVal,
                          ConversionPatternRewriter &rewriter, Location loc) {
   auto tensorTy = resType.cast<RankedTensorType>();
   if (tensorTy.getEncoding().isa<BlockedEncodingAttr>()) {
-    llvm::outs() << "Convert splat op " << constVal << "\n";
     auto tensorTy = resType.cast<RankedTensorType>();
     auto layout = tensorTy.getEncoding();
     auto srcType = typeConverter->convertType(elemType);
     auto llSrc = bitcast(srcType, constVal);
     size_t elemsPerThread = getElemsPerThread(layout, tensorTy.getShape());
-    llvm::outs() << "splat.size: " << elemsPerThread << "\n";
     llvm::SmallVector<Value, 4> elems(elemsPerThread, llSrc);
     llvm::SmallVector<Type, 4> elemTypes(elems.size(), srcType);
     auto structTy =
@@ -2860,8 +2858,6 @@ struct MMA16816ConversionHelper {
 
   // Loading $c to registers, returns a Value.
   Value loadC(Value tensor, Value llTensor) const {
-    llvm::outs() << "C is " << tensor << "\n";
-    llvm::outs() << "llC is " << llTensor << "\n";
     auto tensorTy = tensor.getType().cast<RankedTensorType>();
     auto [repM, repN] = DotOpConversionHelper::getRepMN(tensorTy);
     size_t fcSize = 4 * repM * repN;
@@ -2908,7 +2904,6 @@ struct MMA16816ConversionHelper {
         loadedB, std::max(numRepN / 2, 1), numRepK);
     auto fc = ConvertTritonGPUOpToLLVMPatternBase::getElementsFromStruct(
         loc, loadedC, rewriter);
-    printf("fc.size: %d\n", fc.size());
 
     auto callMma = [&](unsigned m, unsigned n, unsigned k) {
       unsigned colsPerThread = numRepN * 2;

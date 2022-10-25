@@ -35,6 +35,9 @@ def matmul_no_scf_kernel(
     [256, 128, 16, 4],
     [128, 16, 32, 4],
     [32, 128, 64, 4],
+    [128, 128, 64, 4],
+    [64, 128, 128, 4],
+    [64, 128, 128, 2],
 ])
 def test_gemm_no_scf(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS):
     a = torch.randn((SIZE_M, SIZE_K), device='cuda', dtype=torch.float16)
@@ -78,24 +81,42 @@ def matmul_kernel(
     tl.store(c_ptrs, accumulator)
 
 # TODO: DotConversion in TritonGPUToLLVM cannot support non-splat C for the moment
-# @pytest.mark.parametrize('SIZE_M,SIZE_N,SIZE_K,NUM_WARPS,BLOCK_SIZE_M,BLOCK_SIZE_N,BLOCK_SIZE_K', [
-#    [128, 256, 128, 4, 128, 256, 32],
-#    # [256, 128, 64, 4, 256, 128, 16],
-#    # [128, 16, 128, 4, 128, 16, 32],
-#    # [32, 128, 256, 4, 32, 128, 64],
-# ])
-# def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K):
-#    a = torch.randn((SIZE_M, SIZE_K), device='cuda', dtype=torch.float16)
-#    b = torch.randn((SIZE_K, SIZE_N), device='cuda', dtype=torch.float16)
-#    c = torch.empty((SIZE_M, SIZE_N), device=a.device, dtype=torch.float32)
-#    grid = lambda META: (1, )
-#    matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c,
-#                        stride_am=a.stride(0), stride_ak=a.stride(1),
-#                        stride_bk=b.stride(0), stride_bn=b.stride(1),
-#                        stride_cm=c.stride(0), stride_cn=c.stride(1),
-#                        M=a.shape[0], N=b.shape[1], K=a.shape[1],
-#                        BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,
-#                        num_warps=NUM_WARPS)
-#    golden = torch.matmul(a, b)
-#    torch.set_printoptions(profile="full")
-#    assert_close(c, golden, rtol=1e-3, atol=1e-3, check_dtype=False)
+
+
+@pytest.mark.parametrize('SIZE_M,SIZE_N,SIZE_K,NUM_WARPS,BLOCK_SIZE_M,BLOCK_SIZE_N,BLOCK_SIZE_K', [
+    # No forloop
+    [64, 32, 64, 4, 64, 32, 64],
+    [128, 64, 128, 4, 128, 64, 128],
+    # Simple forloop
+    [64, 32, 128, 4, 64, 32, 64],
+    [128, 16, 128, 4, 128, 16, 32],
+    [32, 16, 128, 4, 32, 16, 32],
+    [32, 64, 128, 4, 32, 64, 32],
+    [32, 128, 256, 4, 32, 128, 64],
+    [64, 128, 64, 4, 64, 128, 32],  # n can't be 128
+    [128, 128, 64, 4, 128, 128, 32],
+
+    # The following cases failed
+    # TODO[Superjomn]: Fix later.
+    #[64, 64, 128, 4, 64, 64, 32],
+    #[128, 128, 128, 4, 128, 128, 32],
+    #[128, 128, 256, 4, 128, 128, 64],
+    #[128, 256, 128, 4, 128, 256, 32],
+    #[256, 128, 64, 4, 256, 128, 16],
+    #[128, 64, 128, 4, 128, 64, 32],
+])
+def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K):
+    a = torch.randn((SIZE_M, SIZE_K), device='cuda', dtype=torch.float16)
+    b = torch.randn((SIZE_K, SIZE_N), device='cuda', dtype=torch.float16)
+    c = torch.empty((SIZE_M, SIZE_N), device=a.device, dtype=torch.float32)
+    grid = lambda META: (1, )
+    matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c,
+                        stride_am=a.stride(0), stride_ak=a.stride(1),
+                        stride_bk=b.stride(0), stride_bn=b.stride(1),
+                        stride_cm=c.stride(0), stride_cn=c.stride(1),
+                        M=a.shape[0], N=b.shape[1], K=a.shape[1],
+                        BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,
+                        num_warps=NUM_WARPS)
+    golden = torch.matmul(a, b)
+    torch.set_printoptions(profile="full")
+    assert_close(c, golden, rtol=1e-3, atol=1e-3, check_dtype=False)
