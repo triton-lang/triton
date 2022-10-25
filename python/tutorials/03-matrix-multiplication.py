@@ -76,8 +76,8 @@ You will specifically learn about:
 #
 #  .. code-block:: python
 #
-#    pa += BLOCK_SIZE_K * stride_ak;
-#    pb += BLOCK_SIZE_K * stride_bk;
+#    a_ptrs += BLOCK_SIZE_K * stride_ak;
+#    b_ptrs += BLOCK_SIZE_K * stride_bk;
 #
 #
 # L2 Cache Optimizations
