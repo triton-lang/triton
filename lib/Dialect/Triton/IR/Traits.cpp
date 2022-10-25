@@ -46,9 +46,10 @@ mlir::LogicalResult mlir::OpTrait::impl::verifyTensorSize(Operation *op) {
         return op->emitError("Maximum allowed number of elements is ")
                << maxTensorNumElements << ", but " << *op
                << " has more than that";
-      if ((numElements & (numElements - 1)) != 0)
-        return op->emitError("Number of elements must be power-of-two, but ")
-               << *op << " doesn't follow the rule";
+      // if ((numElements & (numElements - 1)) != 0)
+      //   return op->emitError("Number of elements must be power-of-two, but ")
+      //          << *op << " doesn't follow the rule (" << numElements << ")"
+      //          << " elements";
     }
   }
   for (auto opType : op->getResultTypes()) {
@@ -60,9 +61,10 @@ mlir::LogicalResult mlir::OpTrait::impl::verifyTensorSize(Operation *op) {
         return op->emitError("Maximum allowed number of elements is ")
                << maxTensorNumElements << ", but " << *op
                << " has more than that";
-      if ((numElements & (numElements - 1)) != 0)
-        return op->emitError("Number of elements must be power-of-two, but ")
-               << *op << " doesn't follow the rule";
+      // if ((numElements & (numElements - 1)) != 0)
+      //   return op->emitError("Number of elements must be power-of-two, but ")
+      //          << *op << " doesn't follow the rule (" << numElements << ")"
+      //          << " elements";
     }
   }
   return success();
