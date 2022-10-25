@@ -2673,6 +2673,12 @@ struct DotOpConversionHelper {
     return mmaInstrShape.at(mmaType);
   }
 
+  static ArrayRef<int> getMmaInstrShape(TensorCoreType tensorCoreType) {
+    assert(tensorCoreType != TensorCoreType::NOT_APPLICABLE &&
+           "Unknown mma type found.");
+    return mmaInstrShape.at(tensorCoreType);
+  }
+
   ArrayRef<int> getMmaMatShape() const {
     assert(mmaType != TensorCoreType::NOT_APPLICABLE &&
            "Unknown mma type found.");
@@ -2680,8 +2686,8 @@ struct DotOpConversionHelper {
   }
 
   // Deduce the TensorCoreType from either $a or $b's type. This method is not
-  // safe, but we cannot get the DotOp in some getmaMatShape usage case.
-  TensorCoreType getTensorCoreTypeFromOperand(Type operandTy) const {
+  // safe, but we cannot get the DotOp in some getjmaMatShape usage case.
+  static TensorCoreType getTensorCoreTypeFromOperand(Type operandTy) {
     auto tensorTy = operandTy.cast<RankedTensorType>();
     auto elemTy = tensorTy.getElementType();
     if (elemTy.isF16())
@@ -2903,9 +2909,6 @@ struct MMA16816ConversionHelper {
 
     // step2. Format the values to LLVM::Struct to passing to mma codegen.
     Value result = composeValuesToDotOperandLayoutStruct(ha, numRepM, numRepK);
-
-    // TODO[Superjomn]: Replace the convert_layout op with the result once the
-    // DotOperandEncodingAttr is ready.
     return result;
   }
 
@@ -3018,6 +3021,11 @@ struct MMA16816ConversionHelper {
       for (unsigned m = 0; m < numRepM; ++m)
         for (unsigned n = 0; n < numRepN; ++n)
           callMma(2 * m, n, 2 * k);
+
+    // NOTE, the barrier here is a temporary trick making the gemm with a
+    // k-forloop pass the precision test, or it will fail.
+    // TODO[Superjomn]: Fix with a more general and performance-friendly way.
+    barrier;
 
     // replace with new packed result
     Type structTy = LLVM::LLVMStructType::getLiteral(
@@ -3168,9 +3176,6 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
   } else if (dotOperandLayout.getOpIdx() == 1) {
     // operand $b
     res = mmaHelper.loadB(src, adaptor.src());
-  } else if (dotOperandLayout.getOpIdx() == 2) {
-    // operand $c
-    res = mmaHelper.loadC(src, adaptor.src());
   }
 
   rewriter.replaceOp(op, res);
@@ -3261,6 +3266,7 @@ public:
   }
 
   llvm::Optional<Type> convertTritonTensorType(RankedTensorType type) {
+    auto ctx = type.getContext();
     Attribute layout = type.getEncoding();
     if (layout &&
         (layout.isa<BlockedEncodingAttr>() || layout.isa<SliceEncodingAttr>() ||
@@ -3269,11 +3275,59 @@ public:
           getElemsPerThread(layout, type.getShape());
       SmallVector<Type, 4> types(numElementsPerThread,
                                  convertType(type.getElementType()));
-      return LLVM::LLVMStructType::getLiteral(&getContext(), types);
+      return LLVM::LLVMStructType::getLiteral(ctx, types);
     } else if (auto shared_layout =
                    layout.dyn_cast_or_null<SharedEncodingAttr>()) {
       return LLVM::LLVMPointerType::get(convertType(type.getElementType()), 3);
+    } else if (auto mmaLayout = layout.dyn_cast_or_null<MmaEncodingAttr>()) {
+      if (mmaLayout.getVersion() == 2) {
+        auto [repM, repN] = DotOpConversionHelper::getRepMN(type);
+        size_t fcSize = 4 * repM * repN;
+        return LLVM::LLVMStructType::getLiteral(
+            ctx, SmallVector<Type>(fcSize, type.getElementType()));
+      }
+
+      llvm::errs() << "Unexpected mma layout detected in TypeConverter";
+      return llvm::None;
+
+    } else if (auto dot_op_layout =
+                   layout.dyn_cast_or_null<DotOperandEncodingAttr>()) {
+      auto mmaLayout = dot_op_layout.getParent().cast<MmaEncodingAttr>();
+      if (mmaLayout.getVersion() == 2) {
+        auto wpt = mmaLayout.getWarpsPerCTA();
+        auto tensorCoreType =
+            DotOpConversionHelper::getTensorCoreTypeFromOperand(type);
+        // {M, N, K}
+        auto mmaInstrShape =
+            DotOpConversionHelper::getMmaInstrShape(tensorCoreType);
+        Type elemTy = type.getElementType();
+
+        if (dot_op_layout.getOpIdx() == 0) { // $a
+          int M = type.getShape()[0];
+          int K = type.getShape()[1];
+          int repM = std::max<int>(M / (wpt[0] * mmaInstrShape[0]), 1);
+          int repK = std::max<int>(K / mmaInstrShape[2], 1);
+          int elems = 4 * repM * repK;
+          Type x2Ty = vec_ty(elemTy, 2);
+          return LLVM::LLVMStructType::getLiteral(
+              ctx, SmallVector<Type>(elems, x2Ty));
+        }
+        if (dot_op_layout.getOpIdx() == 1) { // $b
+          int K = type.getShape()[0];
+          int N = type.getShape()[1];
+          int repN = std::max<int>(N / (wpt[1] * mmaInstrShape[1]), 1);
+          int repK = std::max<int>(K / mmaInstrShape[2], 1);
+          int elems = 4 * std::max(repN / 2, 1) * repK;
+          Type x2Ty = vec_ty(elemTy, 2);
+          return LLVM::LLVMStructType::getLiteral(
+              ctx, SmallVector<Type>(elems, x2Ty));
+        }
+      }
+
+      llvm::errs() << "Unexpected dot operand layout detected in TypeConverter";
+      return llvm::None;
     }
+
     return llvm::None;
   }
 };
@@ -3665,8 +3719,8 @@ TritonLLVMConversionTarget::TritonLLVMConversionTarget(
     : ConversionTarget(ctx), typeConverter(typeConverter) {
   addLegalDialect<LLVM::LLVMDialect>();
   addLegalDialect<NVVM::NVVMDialect>();
-  // addIllegalDialect<triton::TritonDialect>();
-  // addIllegalDialect<triton::gpu::TritonGPUDialect>();
+  addIllegalDialect<triton::TritonDialect>();
+  addIllegalDialect<triton::gpu::TritonGPUDialect>();
   addIllegalDialect<mlir::gpu::GPUDialect>();
   addIllegalDialect<mlir::StandardOpsDialect>();
   addLegalOp<mlir::UnrealizedConversionCastOp>();

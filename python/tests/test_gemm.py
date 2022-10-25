@@ -96,14 +96,12 @@ def matmul_kernel(
     [64, 128, 64, 4, 64, 128, 32],  # n can't be 128
     [128, 128, 64, 4, 128, 128, 32],
 
-    # The following cases failed
-    # TODO[Superjomn]: Fix later.
-    # [64, 64, 128, 4, 64, 64, 32],
-    # [128, 128, 128, 4, 128, 128, 32],
-    # [128, 128, 256, 4, 128, 128, 64],
-    # [128, 256, 128, 4, 128, 256, 32],
-    # [256, 128, 64, 4, 256, 128, 16],
-    # [128, 64, 128, 4, 128, 64, 32],
+    [64, 64, 128, 4, 64, 64, 32],
+    [128, 128, 128, 4, 128, 128, 32],
+    [128, 128, 256, 4, 128, 128, 64],
+    [128, 256, 128, 4, 128, 256, 32],
+    [256, 128, 64, 4, 256, 128, 16],
+    [128, 64, 128, 4, 128, 64, 32],
 ])
 def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K):
     a = torch.randn((SIZE_M, SIZE_K), device='cuda', dtype=torch.float16)
@@ -120,3 +118,6 @@ def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLO
     golden = torch.matmul(a, b)
     torch.set_printoptions(profile="full")
     assert_close(c, golden, rtol=1e-3, atol=1e-3, check_dtype=False)
+
+
+test_gemm_no_scf(*[32, 32, 32, 4])
