@@ -622,6 +622,13 @@ protected:
   Value smem;
 };
 
+Value convertSplatLikeOpWithMmaLayout(const MmaEncodingAttr &layout,
+                                      Type resType, Type elemType,
+                                      Value constVal,
+                                      TypeConverter *typeConverter,
+                                      ConversionPatternRewriter &rewriter,
+                                      Location loc);
+
 // Convert SplatOp or arith::ConstantOp with SplatElementsAttr to a
 // LLVM::StructType value.
 //
@@ -632,16 +639,28 @@ Value convertSplatLikeOp(Type elemType, Type resType, Value constVal,
                          TypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, Location loc) {
   auto tensorTy = resType.cast<RankedTensorType>();
-  auto layout = tensorTy.getEncoding();
-  auto srcType = typeConverter->convertType(elemType);
-  auto llSrc = bitcast(srcType, constVal);
-  size_t elemsPerThread = getElemsPerThread(layout, tensorTy.getShape());
-  llvm::SmallVector<Value, 4> elems(elemsPerThread, llSrc);
-  llvm::SmallVector<Type, 4> elemTypes(elems.size(), srcType);
-  auto structTy =
-      LLVM::LLVMStructType::getLiteral(rewriter.getContext(), elemTypes);
+  if (tensorTy.getEncoding().isa<BlockedEncodingAttr>()) {
+    llvm::outs() << "Convert splat op " << constVal << "\n";
+    auto tensorTy = resType.cast<RankedTensorType>();
+    auto layout = tensorTy.getEncoding();
+    auto srcType = typeConverter->convertType(elemType);
+    auto llSrc = bitcast(srcType, constVal);
+    size_t elemsPerThread = getElemsPerThread(layout, tensorTy.getShape());
+    llvm::outs() << "splat.size: " << elemsPerThread << "\n";
+    llvm::SmallVector<Value, 4> elems(elemsPerThread, llSrc);
+    llvm::SmallVector<Type, 4> elemTypes(elems.size(), srcType);
+    auto structTy =
+        LLVM::LLVMStructType::getLiteral(rewriter.getContext(), elemTypes);
 
-  return getStructFromElements(loc, elems, rewriter, structTy);
+    return getStructFromElements(loc, elems, rewriter, structTy);
+  } else if (auto mmaLayout =
+                 tensorTy.getEncoding().dyn_cast<MmaEncodingAttr>()) {
+    return convertSplatLikeOpWithMmaLayout(
+        mmaLayout, resType, elemType, constVal, typeConverter, rewriter, loc);
+  } else
+    assert(false && "Unsupported layout found in ConvertSplatLikeOp");
+
+  return Value{};
 }
 
 struct SplatOpConversion
@@ -2358,8 +2377,6 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
     MLIRContext *ctx = op->getContext();
     bool allowTF32 = op.allowTF32();
 
-    assert(isSplatLike(C) && "Currently only splat-like C is supported now");
-
     // Here we assume the DotOp's operands always comes from shared memory.
     auto AShape = A.getType().cast<RankedTensorType>().getShape();
     size_t reduceAxis = 1;
@@ -2456,6 +2473,31 @@ struct DotOpConversionHelper {
   void deduceMmaType(DotOp op) const { mmaType = getMmaType(op); }
   void deduceMmaType(Type operandTy) const {
     mmaType = getTensorCoreTypeFromOperand(operandTy);
+  }
+
+  // Deduce the M and N from either $c or $d type.
+  static std::tuple<int, int> getMatShapeMN() {
+    // According to DotOpConversionHelper::mmaMatShape, all the matrix shape's
+    // M,N are {8,8}
+    return {8, 8};
+  }
+
+  // Get the M and N of mma instruction shape.
+  static std::tuple<int, int> getInstrShapeMN() {
+    // According to DotOpConversionHelper::mmaInstrShape, all the M,N are {16,8}
+    return {16, 8};
+  }
+
+  static std::tuple<int, int> getRepMN(const RankedTensorType &tensorTy) {
+    auto mmaLayout = tensorTy.getEncoding().cast<MmaEncodingAttr>();
+    auto wpt = mmaLayout.getWarpsPerCTA();
+
+    int M = tensorTy.getShape()[0];
+    int N = tensorTy.getShape()[1];
+    auto [instrM, instrN] = getInstrShapeMN();
+    int repM = std::max<int>(M / (wpt[0] * instrM), 1);
+    int repN = std::max<int>(N / (wpt[1] * instrN), 1);
+    return {repM, repN};
   }
 
   Type getShemPtrTy() const {
@@ -2816,15 +2858,23 @@ struct MMA16816ConversionHelper {
     return result;
   }
 
-  // Loading $c from smem(?) to registers, returns a Value.
-  // NOTE Only SplatLike tensor is supported now.
-  Value loadC(Value tensor) const {
-    // Currently, we only support a SplatLike C. For the other cases, e.g., C in
-    // shared layout or blocked layout, we will support them by expanding
-    // convert_layout.
-    auto hc = helper.loadSplatLikeC(tensor, loc, rewriter);
-    assert(hc.size() == 4UL && "Only splat-like C is supported now");
-    return hc[0];
+  // Loading $c to registers, returns a Value.
+  Value loadC(Value tensor, Value llTensor) const {
+    llvm::outs() << "C is " << tensor << "\n";
+    llvm::outs() << "llC is " << llTensor << "\n";
+    auto tensorTy = tensor.getType().cast<RankedTensorType>();
+    auto [repM, repN] = DotOpConversionHelper::getRepMN(tensorTy);
+    size_t fcSize = 4 * repM * repN;
+
+    assert(tensorTy.getEncoding().isa<MmaEncodingAttr>() &&
+           "Currently, we only support $c with a mma layout.");
+    // Load a normal C tensor with mma layout, that should be a
+    // LLVM::struct with fcSize elements.
+    auto structTy = llTensor.getType().cast<LLVM::LLVMStructType>();
+    assert(structTy.getBody().size() == fcSize &&
+           "DotOp's $c operand should pass the same number of values as $d in "
+           "mma layout.");
+    return llTensor;
   }
 
   // Conduct the Dot conversion.
@@ -2856,9 +2906,9 @@ struct MMA16816ConversionHelper {
         getValuesFromDotOperandLayoutStruct(loadedA, numRepM, numRepK);
     ValueTable hb = getValuesFromDotOperandLayoutStruct(
         loadedB, std::max(numRepN / 2, 1), numRepK);
-
-    const int fcSize = 4 * numRepM * numRepN;
-    SmallVector<Value> fc(fcSize, loadedC);
+    auto fc = ConvertTritonGPUOpToLLVMPatternBase::getElementsFromStruct(
+        loc, loadedC, rewriter);
+    printf("fc.size: %d\n", fc.size());
 
     auto callMma = [&](unsigned m, unsigned n, unsigned k) {
       unsigned colsPerThread = numRepN * 2;
@@ -3047,7 +3097,7 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
     res = mmaHelper.loadB(src, adaptor.src());
   } else if (dotOperandLayout.getOpIdx() == 2) {
     // operand $c
-    res = mmaHelper.loadC(src);
+    res = mmaHelper.loadC(src, adaptor.src());
   }
 
   rewriter.replaceOp(op, res);
@@ -3085,16 +3135,33 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adaptor,
     loadedB = mmaHelper.loadB(op.b(), adaptor.b());
   }
 
-  // TODO[Superjomn]: Process C as a mma layout.
-  // Currently, C is simply treated as a Splat Op, and the data layout is not
-  // mattered.
-  loadedC = mmaHelper.loadC(op.c());
+  loadedC = mmaHelper.loadC(op.c(), adaptor.c());
 
   return mmaHelper.convertDot(A, B, C, op.d(), loadedA, loadedB, loadedC, op,
                               adaptor);
 }
 
 /// ====================== mma codegen end ============================
+
+Value convertSplatLikeOpWithMmaLayout(const MmaEncodingAttr &layout,
+                                      Type resType, Type elemType,
+                                      Value constVal,
+                                      TypeConverter *typeConverter,
+                                      ConversionPatternRewriter &rewriter,
+                                      Location loc) {
+  if (layout.getVersion() == 2) {
+    auto tensorTy = resType.cast<RankedTensorType>();
+    auto [repM, repN] = DotOpConversionHelper::getRepMN(tensorTy);
+    size_t fcSize = 4 * repM * repN;
+
+    auto structTy = LLVM::LLVMStructType::getLiteral(
+        rewriter.getContext(), SmallVector<Type>(fcSize, elemType));
+    return getStructFromElements(loc, SmallVector<Value>(fcSize, constVal),
+                                 rewriter, structTy);
+  }
+
+  assert(false && "Unsupported mma layout found");
+}
 
 class TritonGPUToLLVMTypeConverter : public LLVMTypeConverter {
 public:
