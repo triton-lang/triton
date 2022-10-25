@@ -167,9 +167,8 @@ void Prefetcher::emitPrologue() {
   OpBuilder builder(forOp);
 
   for (Value dot : dots) {
-    Attribute dotEncoding = dot.getType()
-                           .cast<RankedTensorType>()
-                           .getEncoding();
+    Attribute dotEncoding =
+        dot.getType().cast<RankedTensorType>().getEncoding();
     Value aPrefetched =
         generatePrefetch(dot2aHeaderDef[dot], 0, true, dotEncoding, builder);
     operand2headPrefetch[dot.getDefiningOp<triton::DotOp>().a()] = aPrefetched;
@@ -205,9 +204,8 @@ scf::ForOp Prefetcher::createNewForOp() {
     Operation *newOp = nullptr;
     auto dot = dyn_cast<triton::DotOp>(&op);
     if (dots.contains(dot)) {
-      auto dotEncoding = dot.getType()
-                            .cast<RankedTensorType>()
-                            .getEncoding();
+      Attribute dotEncoding =
+          dot.getType().cast<RankedTensorType>().getEncoding();
       // prefetched dot
       Operation *firstDot = builder.clone(*dot, mapping);
       if (Value a = operand2headPrefetch.lookup(dot.a()))
@@ -239,9 +237,8 @@ scf::ForOp Prefetcher::createNewForOp() {
   for (Value v : forOp.getBody()->getTerminator()->getOperands())
     yieldValues.push_back(mapping.lookup(v));
   for (Value dot : dots) {
-    Attribute dotEncoding = dot.getType()
-                               .cast<RankedTensorType>()
-                               .getEncoding();
+    Attribute dotEncoding =
+        dot.getType().cast<RankedTensorType>().getEncoding();
     yieldValues.push_back(generatePrefetch(mapping.lookup(dot2aYield[dot]), 0,
                                            true, dotEncoding, builder));
     yieldValues.push_back(generatePrefetch(mapping.lookup(dot2bYield[dot]), 1,
