@@ -885,6 +885,8 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(),
              specialization=_triton.code_gen.instance_descriptor(),
              num_warps: int = 4, num_stages: int = 3, extern_libs=None,
              output: str = "ttgir", cc=0) -> Tuple[str, int, str]:
+    print("compiler.py: _compile")
+    print(f"\t{fn, signature, device, constants, specialization, num_warps, num_stages, extern_libs, output, cc}")
     valid_outputs = ("ttir", "ttgir", "ptx", "cubin")
     # assert output in valid_outputs, "output should be one of [%s], but get \"%s\"" % (','.join(valid_outputs), output)
 
@@ -1022,6 +1024,7 @@ static inline hipDeviceptr_t getPointer(PyObject *obj, int idx) {{
 
 
 static PyObject* launch(PyObject* self, PyObject* args) {{
+  printf("launch(PyObject* self, PyObject* args)");
   int gridX, gridY, gridZ;
   uint64_t _stream;
   uint64_t _function;
@@ -1140,7 +1143,7 @@ def libcuda_dirs():
 
 @functools.lru_cache()
 def libhip_dirs():
-    return ["/opt/rocm/lib/libamdhip64.so"]
+    return ["/opt/rocm/lib"]
 
 
 @functools.lru_cache()
@@ -1152,7 +1155,7 @@ def cuda_home_dirs():
 @functools.lru_cache()
 def hip_home_dirs():
     default_dir = "/opt/rocm"
-    return os.getenv("HIP_HOME", default=default_dir)
+    return os.getenv("ROCM_HOME", default=default_dir)
 
 
 @contextlib.contextmanager
@@ -1166,6 +1169,8 @@ def quiet():
 
 
 def _build(name, src, srcdir):
+    print("compiler.py: _build")
+    print(f"\t{name, src, srcdir}")    
     if torch.version.hip is not None:
         hip_lib_dirs = libhip_dirs()
         hip_include_dir = os.path.join(hip_home_dirs(), "include")
@@ -1184,20 +1189,23 @@ def _build(name, src, srcdir):
         cc = gcc if gcc is not None else clang
     py_include_dir = get_paths()["include"]
     if torch.version.hip is not None:
-        cc_cmd = [cc, src, "-O3", f"-I{hip_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-o", so]
+        cc_cmd = [cc, src, f"-I{hip_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lamdhip64", "-o", so]
         cc_cmd += [f"-L{dir}" for dir in hip_lib_dirs]
     else:
         cc_cmd = [cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
         cc_cmd += [f"-L{dir}" for dir in cuda_lib_dirs]
+    print("\t", ''.join(cc_cmd))
     ret = subprocess.check_call(cc_cmd)
     if ret == 0:
+        print("ret:", ret)
+        print(so)
         return so
     # fallback on setuptools
     extra_compile_args = []
     if torch.version.hip is not None:
         library_dirs = hip_lib_dirs
         include_dirs = [srcdir, hip_include_dir]
-        libraries = ['cuda']
+        libraries = ['rocm']
     else:
         library_dirs = cuda_lib_dirs
         include_dirs = [srcdir, cu_include_dir]
@@ -1333,6 +1341,7 @@ class CompiledKernel:
         # initialize launcher
         import importlib.util
         spec = importlib.util.spec_from_file_location("launcher", so_path)
+        print("spec:", spec)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         self.c_wrapper = getattr(mod, "launch")
