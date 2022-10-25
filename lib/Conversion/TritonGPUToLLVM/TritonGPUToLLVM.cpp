@@ -95,7 +95,7 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
 #define i32_ty rewriter.getIntegerType(32)
 #define vec_ty(type, num) VectorType::get(num, type)
-#define void_ty LLVM::LLVMVoidType::get(ctx)
+#define void_ty(ctx) LLVM::LLVMVoidType::get(ctx)
 #define struct_ty(...) LLVM::LLVMStructType::getLiteral(__VA_ARGS__)
 
 // Creator for constant
@@ -1115,7 +1115,7 @@ struct StoreOpConversion
       llvm::SmallVector<Type> argTys({boolTy, ptr.getType()});
       argTys.insert(argTys.end(), nWords, valArgTy);
 
-      auto ASMReturnTy = LLVM::LLVMVoidType::get(ctx);
+      auto ASMReturnTy = void_ty(ctx);
 
       ptxBuilder.launch(rewriter, loc, ASMReturnTy);
     }
@@ -3347,7 +3347,7 @@ struct AsyncWaitOpConversion
 
     auto ctx = op.getContext();
     auto loc = op.getLoc();
-    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+    auto voidTy = void_ty(ctx);
     auto ret = ptxBuilder.launch(rewriter, loc, voidTy);
 
     // Safe to remove the op since it doesn't have any return value.
@@ -3542,15 +3542,14 @@ struct InsertSliceAsyncOpConversion
           srcSize = ptxBuilder.newOperand(selectOp, "r");
         }
         copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
-        ptxBuilder.launch(rewriter, loc, LLVM::LLVMVoidType::get(getContext()));
+        ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
       }
     }
 
     PTXBuilder ptxBuilder;
     ptxBuilder.create<PTXCpAsyncCommitGroupInstr>()->operator()();
-    auto ret =
-        ptxBuilder.launch(rewriter, loc, LLVM::LLVMVoidType::get(getContext()));
-    rewriter.replaceOp(op, ret);
+    ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
+    rewriter.replaceOp(op, llDst);
     return success();
   }
 };
