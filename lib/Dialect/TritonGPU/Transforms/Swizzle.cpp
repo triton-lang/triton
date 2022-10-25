@@ -68,6 +68,27 @@ struct SwizzlePass : public TritonGPUSwizzleBase<SwizzlePass> {
   void runOnOperation() override {
     Operation *op = getOperation();
     MLIRContext *context = &getContext();
+    // replace blocked -> dot_op with
+    // blocked -> shared -> dot_op in order to
+    // expose opportunities for swizzling
+    op->walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
+      OpBuilder builder(cvtOp);
+      auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
+      auto dstType = cvtOp.getType().cast<RankedTensorType>();
+      if (srcType.getEncoding().isa<triton::gpu::BlockedEncodingAttr>() &&
+          dstType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>()) {
+        auto tmpType =
+            RankedTensorType::get(dstType.getShape(), dstType.getElementType(),
+                                  triton::gpu::SharedEncodingAttr::get(
+                                      op->getContext(), 1, 1, 1, {1, 0}));
+        auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
+            cvtOp.getLoc(), tmpType, cvtOp.getOperand());
+        auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
+            cvtOp.getLoc(), dstType, tmp);
+        cvtOp.replaceAllUsesWith(newConvert.getResult());
+      }
+    });
+
     op->walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
       auto arg = cvtOp.getOperand();

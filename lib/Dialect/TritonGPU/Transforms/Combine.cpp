@@ -94,13 +94,13 @@ public:
     if (!arg)
       return mlir::failure();
     // cvt(alloc_tensor(x), type2) -> alloc_tensor(x, type2)
-    // cvt(insert_slice(x), type2) -> extract_slice(cvt(x, type2))
     auto alloc_tensor = dyn_cast<triton::gpu::AllocTensorOp>(arg);
     if (alloc_tensor) {
       rewriter.replaceOpWithNewOp<triton::gpu::AllocTensorOp>(
           op, op->getResult(0).getType());
       return mlir::success();
     }
+    // cvt(insert_slice(x), type2) -> extract_slice(cvt(x, type2))
     auto insert_slice = dyn_cast<triton::gpu::InsertSliceAsyncOp>(arg);
     if (insert_slice) {
       auto newType = op->getResult(0).getType();
@@ -114,24 +114,46 @@ public:
       return mlir::success();
     }
     // cvt(extract_slice(x), type2) ->extract_slice(cvt(x, type2))
-    auto extract_slice = dyn_cast<triton::gpu::ExtractSliceOp>(arg);
-    if (extract_slice) {
-      auto origType = extract_slice.src().getType().cast<RankedTensorType>();
-      auto newType = RankedTensorType::get(
-          origType.getShape(), origType.getElementType(),
+    bool isDstShared =
+        dstType.getEncoding().isa<triton::gpu::SharedEncodingAttr>();
+    auto extract_slice = dyn_cast<tensor::ExtractSliceOp>(arg);
+    if (extract_slice && isDstShared) {
+      // New return type
+      auto origRetType =
+          extract_slice.getResult().getType().cast<RankedTensorType>();
+      auto newRetType = RankedTensorType::get(
+          origRetType.getShape(), origRetType.getElementType(),
           op->getResult(0).getType().cast<RankedTensorType>().getEncoding());
-      auto new_arg = rewriter.create<triton::gpu::ConvertLayoutOp>(
-          op->getLoc(), newType, extract_slice.src());
-      rewriter.replaceOpWithNewOp<triton::gpu::ExtractSliceOp>(
-          op, new_arg.getResult(), extract_slice.index(), extract_slice.axis());
+      // New argument type
+      auto origArgType =
+          extract_slice.source().getType().cast<RankedTensorType>();
+      auto newArgType = RankedTensorType::get(
+          origArgType.getShape(), origArgType.getElementType(),
+          op->getResult(0).getType().cast<RankedTensorType>().getEncoding());
+      auto newArg = rewriter.create<triton::gpu::ConvertLayoutOp>(
+          op->getLoc(), newArgType, extract_slice.source());
+      // Create new extract_slice
+      rewriter.replaceOpWithNewOp<tensor::ExtractSliceOp>(
+          op, newRetType, newArg.getResult(), extract_slice.offsets(),
+          extract_slice.sizes(), extract_slice.strides(),
+          extract_slice.static_offsets(), extract_slice.static_sizes(),
+          extract_slice.static_strides());
       return mlir::success();
     }
+
     // cvt(type2, x)
     if (llvm::isa<triton::gpu::ConvertLayoutOp>(arg)) {
-      auto argType = arg->getResult(0).getType().cast<RankedTensorType>();
-      if (srcType.getEncoding().isa<triton::gpu::SharedEncodingAttr>() &&
-          dstType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>() &&
-          argType.getEncoding().isa<triton::gpu::BlockedEncodingAttr>())
+      auto argType = arg->getOperand(0).getType().cast<RankedTensorType>();
+      if (arg->getOperand(0).getDefiningOp() &&
+          !argType.getEncoding().isa<triton::gpu::SharedEncodingAttr>() &&
+          srcType.getEncoding().isa<triton::gpu::SharedEncodingAttr>() &&
+          !dstType.getEncoding().isa<triton::gpu::SharedEncodingAttr>()) {
+
+        return mlir::failure();
+      }
+      auto srcShared =
+          srcType.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
+      if (srcShared && srcShared.getVec() > 1)
         return mlir::failure();
       rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
           op, op->getResultTypes().front(), arg->getOperand(0));
@@ -308,7 +330,6 @@ public:
     for (Operation *op : tmp)
       sortedValues.push_back(op->getResult(0));
 
-    // llvm::outs() << "----\n";
     BlockAndValueMapping mapping;
     for (Value currOperand : sortedValues) {
       // unpack information
@@ -329,7 +350,6 @@ public:
         newOperand->moveAfter(currOperation);
       mapping.map(currOperand, newOperand);
     }
-    //  llvm::outs() << cvt->getParentOfType<mlir::FuncOp>() << "\n";
     rewriter.replaceOp(cvt, mapping.lookup(cvt->getOperand(0)));
     return mlir::success();
   }
@@ -421,9 +441,17 @@ public:
       auto users = iterArg.value().getUsers();
       // check first condition
       SetVector<Type> cvtTargetTypes;
-      for (auto user : users)
-        if (isa<triton::gpu::ConvertLayoutOp>(user))
-          cvtTargetTypes.insert(user->getResults()[0].getType());
+      for (auto user : users) {
+        if (isa<triton::gpu::ConvertLayoutOp>(user)) {
+          auto newType =
+              user->getResults()[0].getType().cast<RankedTensorType>();
+          if (newType.getEncoding()
+                  .isa<triton::gpu::DotOperandEncodingAttr>()) {
+            continue;
+          }
+          cvtTargetTypes.insert(newType);
+        }
+      }
       if (cvtTargetTypes.size() != 1)
         continue;
       // TODO: check second condition
