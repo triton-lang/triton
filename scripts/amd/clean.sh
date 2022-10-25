@@ -25,4 +25,4 @@ rm -rf /tmp/*.o
 rm -rf /tmp/*.ttir
 rm -rf /tmp/*.s
 rm -rf build
-# rm -rf /root/.triton
+rm -rf /root/.triton/cache
