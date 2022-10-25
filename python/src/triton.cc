@@ -554,7 +554,7 @@ void init_triton_codegen(py::module &&m) {
   // --------------------------------------- 
   // Load provided assembly code into driver
   // --------------------------------------- 
-  m.def("load_binary", [](const std::string& name, const std::string& data, size_t n_shared_bytes, uint64_t device){
+  m.def("load_binary_cubin", [](const std::string& name, const std::string& data, size_t n_shared_bytes, uint64_t device){
 	      py::gil_scoped_release allow_threads;
         // create driver handles
         CUfunction fun;
@@ -576,6 +576,45 @@ void init_triton_codegen(py::module &&m) {
           drv::dispatch::cuDeviceGetAttribute(&shared_total, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR, device);
           drv::dispatch::cuFuncGetAttribute(&shared_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun);
           drv::dispatch::cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin - shared_static);
+        }
+        return std::make_tuple((uint64_t)mod, (uint64_t)fun, (uint64_t)n_regs, (uint64_t)n_spills);
+      }, 
+      py::return_value_policy::take_ownership
+  );
+
+  // --------------------------------------- 
+  // Load provided assembly code into driver
+  // --------------------------------------- 
+  m.def("load_binary_hipmodule", [](const std::string& name, const std::string& data, size_t n_shared_bytes, uint64_t device){
+        std::cout << "triton.cc: load_binary_hipmodule:" << std::endl;
+        std::cout << "\tname:" << name << std::endl;
+        std::cout << "\tdata:" << data << std::endl;
+        std::cout << "\tn_shared_bytes:" << n_shared_bytes << std::endl;
+        std::cout << "\tdevice:" << device << std::endl;
+        py::gil_scoped_release allow_threads;
+        // create driver handles
+        hipFunction_t fun;
+        hipModule_t mod;
+        drv::dispatch::hipModuleLoadData(&mod, data.c_str());
+        drv::dispatch::hipModuleGetFunction(&fun, mod, name.c_str());
+        // get allocated registers and spilled registers from the function
+        int n_regs = 0;
+        int n_spills = 0;
+        hipFuncAttributes attr;
+        drv::dispatch::hipFuncGetAttributes(&attr, fun);
+        drv::dispatch::hipFuncGetAttributes(&attr, fun);
+        n_regs = attr.numRegs;
+        n_spills = attr.localSizeBytes / 4;
+        // set dynamic shared memory if necessary
+        int shared_optin;
+        drv::dispatch::hipDeviceGetAttribute(&shared_optin, hipDeviceAttributeSharedMemPerBlockOptin, device);
+        if(n_shared_bytes > 49152 && shared_optin > 49152){
+          drv::dispatch::hipFuncSetCacheConfig(fun, hipFuncCachePreferShared);
+          int shared_total, shared_static;
+          drv::dispatch::hipDeviceGetAttribute(&shared_total, hipDeviceAttributeMaxSharedMemoryPerMultiprocessor, device);
+          drv::dispatch::hipFuncGetAttributes(&attr, fun);
+          shared_total = attr.sharedSizeBytes;
+          // drv::dispatch::hipFuncSetAttribute(fun, hipFuncAttributeMaxDynamicSharedMemorySize, shared_optin - shared_static);
         }
         return std::make_tuple((uint64_t)mod, (uint64_t)fun, (uint64_t)n_regs, (uint64_t)n_spills);
       }, 
