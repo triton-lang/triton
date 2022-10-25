@@ -286,13 +286,11 @@ struct PTXCpAsyncWaitGroupInstr : public PTXCpAsyncInstrBase {
 
 struct PTXCpAsyncLoadInstr : public PTXCpAsyncInstrBase {
   explicit PTXCpAsyncLoadInstr(PTXBuilder *builder,
-                               triton::CacheModifier modifier,
-                               triton::EvictionPolicy policy)
+                               triton::CacheModifier modifier)
       : PTXCpAsyncInstrBase(builder) {
     o(triton::stringifyCacheModifier(modifier).str());
     o("shared");
     o("global");
-    o("L2::" + triton::stringifyEvictionPolicy(policy).str());
   }
 };
 

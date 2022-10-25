@@ -3523,14 +3523,14 @@ struct InsertSliceAsyncOpConversion
 
       for (int wordIdx = 0; wordIdx < numWords; ++wordIdx) {
         PTXBuilder ptxBuilder;
-        auto &copyAsyncOp = *ptxBuilder.create<PTXCpAsyncLoadInstr>(
-            srcCacheModifier, op.evict());
+        auto &copyAsyncOp =
+            *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
 
         auto tileOffset = tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}];
         auto *dstOperand =
             ptxBuilder.newAddrOperand(tileOffset, "r", baseOffset);
         auto *srcOperand = ptxBuilder.newAddrOperand(srcElems[vecIdx], "l");
-        auto *copySize = ptxBuilder.newConstantOperand(bitWidth);
+        auto *copySize = ptxBuilder.newConstantOperand(bitWidth / 8);
         auto *srcSize = copySize;
         if (op.mask()) {
           // We don't use predicate in this case, setting src-size to 0
