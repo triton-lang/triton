@@ -1024,8 +1024,11 @@ def ty_to_cpp(ty):
         "i64": "int64_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
+        "fp16": "float",
+        "bf16": "float",
         "fp32": "float",
         "f32": "float",
+        "fp64": "double",
     }[ty]
 
 
@@ -1055,6 +1058,8 @@ def generate_launcher(constants, signature):
             'i64': 'int64_t',
             'u32': 'uint32_t',
             'u64': 'uint64_t',
+            'fp16': 'float',
+            'bf16': 'float',
             'fp32': 'float',
             'f32': 'float',
             'fp64': 'double',
