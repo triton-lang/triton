@@ -3522,15 +3522,15 @@ struct InsertSliceAsyncOpConversion
           byteWidth == 16 ? CacheModifier::CG : CacheModifier::CA;
       assert(byteWidth == 16 || byteWidth == 8 || byteWidth == 4);
 
-      for (int wordIdx = 0; wordIdx < numWords; ++wordIdx) {
+      auto tileOffset = tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}];
+      for (unsigned wordIdx = 0; wordIdx < numWords; ++wordIdx) {
         PTXBuilder ptxBuilder;
         auto &copyAsyncOp =
             *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
-
-        auto tileOffset = tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}];
         auto *dstOperand =
             ptxBuilder.newAddrOperand(tileOffset, "r", baseOffset);
-        auto *srcOperand = ptxBuilder.newAddrOperand(srcElems[vecIdx], "l");
+        auto *srcOperand = ptxBuilder.newAddrOperand(
+            srcElems[elemIdx + wordIdx * numWordElems], "l");
         auto *copySize = ptxBuilder.newConstantOperand(byteWidth);
         auto *srcSize = copySize;
         if (op.mask()) {
@@ -3538,7 +3538,7 @@ struct InsertSliceAsyncOpConversion
           // if there's any mask. cp.async will automatically fill the
           // remaining slots with 0 if cp-size > src-size.
           // XXX(Keren): Always assume other = 0 for now.
-          auto selectOp = select(maskElems[vecIdx + wordIdx * numWordElems],
+          auto selectOp = select(maskElems[elemIdx + wordIdx * numWordElems],
                                  i32_val(byteWidth), i32_val(0));
           srcSize = ptxBuilder.newOperand(selectOp, "r");
         }
