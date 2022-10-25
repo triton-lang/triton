@@ -885,6 +885,13 @@ def optimize_tritongpu_ir(mod, num_stages):
     return mod
 
 
+def add_external_libs(mod, libs):
+    for name, path in libs.items():
+        if len(name) == 0 or len(path) == 0:
+            return
+    _triton.add_external_libs(mod, list(libs.keys()), list(libs.values()))
+
+
 def make_llvm_ir(mod):
     return _triton.translate_triton_gpu_to_llvmir(mod)
 
@@ -974,19 +981,31 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
 
     # triton-ir
     module, _ = make_triton_ir(fn, signature, specialization, constants)
+    benzh = open("benzh.txt", "a")
+    benzh.write("\n")
+    benzh.write(module.str())
+    benzh.write("\n")
+    benzh.flush()
+    benzh.close()
+    print(module.str())
     module = optimize_triton_ir(module)
     if output == "ttir":
         return module.str()
 
     # tritongpu-ir
     module = make_tritongpu_ir(module, num_warps)
+    
     module = optimize_tritongpu_ir(module, num_stages)
     if output == "ttgir":
         return module.str()
-
+    if extern_libs:
+        add_external_libs(module, extern_libs)
+    print(module.str())
+    
     # llvm-ir
     llvm_ir = make_llvm_ir(module)
-
+    print(module.str())
+    
     assert device >= 0, "device should be provided."
     ptxas, cuda_version = path_to_ptxas()
     compute_capability = torch.cuda.get_device_capability(device)

@@ -1290,6 +1290,12 @@ void init_triton_translation(py::module &m) {
           py::bytes bytes(cubin);
           return bytes;
         });
+
+  m.def(
+      "add_external_libs",
+      [](mlir::ModuleOp& op, const std::vector<std::string>& names, const std::vector<std::string>& paths) {
+          ::mlir::triton::addExternalLibs(op, names, paths);
+      });
 }
 
 void init_triton(py::module &m) {

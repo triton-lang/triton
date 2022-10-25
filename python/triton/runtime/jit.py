@@ -106,6 +106,52 @@ class KernelInterface:
             return self.run(*args, grid=grid, **kwargs)
         return launcher
 
+def compile_abs(x, grid, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False):
+    sig_key =  _key_of(x),
+    constexpr_key = ()
+    spec_key = (x.data_ptr() % 16 == 0) if hasattr(x, "data_ptr") else (x % 16 == 0, x == 1) if isinstance(x, int) else (False,),
+    key = (version_key, sig_key, constexpr_key, spec_key)
+    if not extern_libs is None:
+      key = (key, tuple(extern_libs.items()))
+    assert num_warps > 0 and (num_warps & (num_warps - 1)) == 0, "num_warps must be a power of 2"
+    if callable(grid):
+        grid = grid({"x": x})
+    grid_size = len(grid)
+    grid_0 = grid[0]
+    grid_1 = grid[1] if grid_size > 1 else 1
+    grid_2 = grid[2] if grid_size > 2 else 1
+    device = torch.cuda.current_device()
+    torch.cuda.set_device(device)
+    if stream is None and not warmup:
+      stream = get_cuda_stream(device)
+    try:
+      bin = cache[key]
+      if not warmup:
+          bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, x)
+      return bin
+    # kernel not cached -- compile
+    except KeyError:
+      # build dict of constant values
+      args = [x]
+      configs = self._get_config(*args),
+      constants = self._make_constants(constexpr_key)
+      constants.update({i: None for i, arg in enumerate(args) if arg is None})
+      constants.update({i: 1 for i in configs[0].equal_to_1})
+      # build kernel signature -- doesn't include specialized arguments
+      all_args = x,
+      signature = { i: self._type_of(_key_of(arg)) for i, arg in enumerate(all_args) if i not in self.constexprs }
+      # build stub signature -- includes arguments that are specialized
+      for i, arg in constants.items():
+        if callable(arg):
+          raise TypeError(f"Callable constexpr at index 0 is not supported")
+      device = 0
+      if not self._call_hook(key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
+        bin = triton.compile(self, signature, device, constants, num_warps, num_stages, extern_libs=extern_libs, configs=configs)
+        if not warmup:
+            bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, *args)
+        self.cache[key] = bin
+        return bin
+      return None
 
 class JITFunction(KernelInterface):
 
@@ -250,8 +296,11 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     torch.cuda.set_device(device)
     if stream is None and not warmup:
       stream = get_cuda_stream(device)
+    benzh = open("benzh.txt", "a")
     try:
       bin = cache[key]
+      benzh.write("benzh@" + str(bin))
+      benzh.flush()
       if not warmup:
           bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, {args})
       return bin
@@ -271,12 +320,17 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         if callable(arg):
           raise TypeError(f"Callable constexpr at index {i} is not supported")
       device = 0
+      benzh.write("benzh@before _call_hook")
+      benzh.flush()
+      
       if not self._call_hook(key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
+        print("benzh@", "compile")
         bin = triton.compile(self, signature, device, constants, num_warps, num_stages, extern_libs=extern_libs, configs=configs)
         if not warmup:
             bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, *args)
         self.cache[key] = bin
         return bin
+        benzh.close()
       return None
 """
         scope = {"version_key": version_key(), "get_cuda_stream": get_cuda_stream,

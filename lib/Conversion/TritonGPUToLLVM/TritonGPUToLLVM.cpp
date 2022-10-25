@@ -842,7 +842,7 @@ struct LoadOpConversion
     bool otherIsSplatConstInt = false;
     DenseElementsAttr constAttr;
     int64_t splatVal = 0;
-    if (valueElemTy.isa<IntegerType>() &&
+    if (valueElemTy.isa<IntegerType>() && op.other() &&
         matchPattern(op.other(), m_Constant(&constAttr)) &&
         constAttr.isSplat()) {
       otherIsSplatConstInt = true;
@@ -1386,12 +1386,12 @@ struct ExtractSliceOpConversion
 
 // A CRTP style of base class.
 template <typename SourceOp, typename DestOp, typename ConcreteT>
-class BinaryOpConversionBase
+class ElementwiseOpConversionBase
     : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
 public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
-  explicit BinaryOpConversionBase(LLVMTypeConverter &typeConverter,
+  explicit ElementwiseOpConversionBase(LLVMTypeConverter &typeConverter,
                                   PatternBenefit benefit = 1)
       : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit) {}
 
@@ -1407,7 +1407,7 @@ public:
     auto resultLayout =
         resultTy.getEncoding().template dyn_cast<BlockedEncodingAttr>();
     auto resultShape = resultTy.getShape();
-    assert(resultLayout && "Unexpected resultLayout in BinaryOpConversion");
+    assert(resultLayout && "Unexpected resultLayout in ElementwiseOpConversionBase");
     unsigned elems = resultLayout.getElemsPerThread(resultShape);
     Type elemTy =
         this->getTypeConverter()->convertType(resultTy.getElementType());
@@ -1415,64 +1415,62 @@ public:
     Type structTy = LLVM::LLVMStructType::getLiteral(this->getContext(), types);
 
     auto *concreteThis = static_cast<const ConcreteT *>(this);
-    auto lhss = this->getElementsFromStruct(loc, concreteThis->getLhs(adaptor),
-                                            rewriter);
-    auto rhss = this->getElementsFromStruct(loc, concreteThis->getRhs(adaptor),
-                                            rewriter);
+    auto operands = getOperands(rewriter, adaptor, elems, loc);
     SmallVector<Value> resultVals(elems);
     for (unsigned i = 0; i < elems; ++i) {
-      resultVals[i] = concreteThis->createDestOp(op, rewriter, elemTy, lhss[i],
-                                                 rhss[i], loc);
+      resultVals[i] = concreteThis->createDestOp(op, adaptor, rewriter, elemTy, operands[i], loc);
     }
     Value view = getStructFromElements(loc, resultVals, rewriter, structTy);
     rewriter.replaceOp(op, view);
     return success();
   }
+protected:
+  SmallVector<SmallVector<Value>> getOperands(ConversionPatternRewriter &rewriter, OpAdaptor adaptor,
+    const unsigned elems, Location loc) const {
+    SmallVector<SmallVector<Value>> operands(elems);
+    for (auto operand : adaptor.getOperands()) {
+      auto sub_operands = this->getElementsFromStruct(loc, operand, rewriter);
+      for (int i=0; i<elems; ++i) {
+        operands[i].push_back(sub_operands[i]);
+      }
+    }
+    return operands;
+  }
 };
 
 template <typename SourceOp, typename DestOp>
-struct BinaryOpConversion
-    : public BinaryOpConversionBase<SourceOp, DestOp,
-                                    BinaryOpConversion<SourceOp, DestOp>> {
+struct ElementwiseOpConversion
+    : public ElementwiseOpConversionBase<SourceOp, DestOp,
+                                    ElementwiseOpConversion<SourceOp, DestOp>> {
+  using Base = ElementwiseOpConversionBase<SourceOp, DestOp, ElementwiseOpConversion<SourceOp, DestOp>>;
+  using Base::Base;
+  using OpAdaptor = typename Base::OpAdaptor;
 
-  explicit BinaryOpConversion(LLVMTypeConverter &typeConverter,
+  explicit ElementwiseOpConversion(LLVMTypeConverter &typeConverter,
                               PatternBenefit benefit = 1)
-      : BinaryOpConversionBase<SourceOp, DestOp,
-                               BinaryOpConversion<SourceOp, DestOp>>(
-            typeConverter, benefit) {}
+      : ElementwiseOpConversionBase<SourceOp, DestOp, ElementwiseOpConversion>(typeConverter, benefit) {}
 
-  using OpAdaptor = typename SourceOp::Adaptor;
   // An interface to support variant DestOp builder.
-  DestOp createDestOp(SourceOp op, ConversionPatternRewriter &rewriter,
-                      Type elemTy, Value lhs, Value rhs, Location loc) const {
-    return rewriter.create<DestOp>(loc, elemTy, lhs, rhs);
+  DestOp createDestOp(SourceOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter,
+                      Type elemTy, ValueRange operands, Location loc) const {
+    return rewriter.create<DestOp>(loc, elemTy, operands, adaptor.getAttributes().getValue());
   }
-
-  // Get the left operand of the op.
-  Value getLhs(OpAdaptor adaptor) const { return adaptor.getLhs(); }
-  // Get the right operand of the op.
-  Value getRhs(OpAdaptor adaptor) const { return adaptor.getRhs(); }
 };
 
 struct CmpIOpConversion
-    : public BinaryOpConversionBase<triton::gpu::CmpIOp, LLVM::ICmpOp,
+    : public ElementwiseOpConversionBase<triton::gpu::CmpIOp, LLVM::ICmpOp,
                                     CmpIOpConversion> {
-  explicit CmpIOpConversion(LLVMTypeConverter &typeConverter,
-                            PatternBenefit benefit = 1)
-      : BinaryOpConversionBase(typeConverter, benefit) {}
+  using Base = ElementwiseOpConversionBase<triton::gpu::CmpIOp, LLVM::ICmpOp, CmpIOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
 
   // An interface to support variant DestOp builder.
-  LLVM::ICmpOp createDestOp(triton::gpu::CmpIOp op,
+  LLVM::ICmpOp createDestOp(triton::gpu::CmpIOp op, OpAdaptor adaptor,
                             ConversionPatternRewriter &rewriter, Type elemTy,
-                            Value lhs, Value rhs, Location loc) const {
+                            ValueRange operands, Location loc) const {
     return rewriter.create<LLVM::ICmpOp>(
-        loc, elemTy, ArithCmpIPredicteToLLVM(op.predicate()), lhs, rhs);
+        loc, elemTy, ArithCmpIPredicteToLLVM(op.predicate()), operands[0], operands[1]);
   }
-
-  // Get the left operand of the op.
-  Value getLhs(OpAdaptor adaptor) const { return adaptor.lhs(); }
-  // Get the right operand of the op.
-  Value getRhs(OpAdaptor adaptor) const { return adaptor.rhs(); }
 
   static LLVM::ICmpPredicate
   ArithCmpIPredicteToLLVM(arith::CmpIPredicate predicate) {
@@ -1499,24 +1497,26 @@ struct CmpIOpConversion
 };
 
 struct CmpFOpConversion
-    : public BinaryOpConversionBase<triton::gpu::CmpFOp, LLVM::FCmpOp,
+    : public ElementwiseOpConversionBase<triton::gpu::CmpFOp, LLVM::FCmpOp,
                                     CmpFOpConversion> {
-  explicit CmpFOpConversion(LLVMTypeConverter &typeConverter,
-                            PatternBenefit benefit = 1)
-      : BinaryOpConversionBase(typeConverter, benefit) {}
+  using Base = ElementwiseOpConversionBase<triton::gpu::CmpFOp, LLVM::FCmpOp, CmpFOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
 
   // An interface to support variant DestOp builder.
-  LLVM::FCmpOp createDestOp(triton::gpu::CmpFOp op,
+  LLVM::FCmpOp createDestOp(triton::gpu::CmpFOp op, OpAdaptor adaptor,
                             ConversionPatternRewriter &rewriter, Type elemTy,
-                            Value lhs, Value rhs, Location loc) const {
-    return rewriter.create<LLVM::FCmpOp>(
-        loc, elemTy, ArithCmpFPredicteToLLVM(op.predicate()), lhs, rhs);
-  }
+                            ValueRange operands, Location loc) const {
 
-  // Get the left operand of the op.
-  Value getLhs(OpAdaptor adaptor) const { return adaptor.lhs(); }
-  // Get the right operand of the op.
-  Value getRhs(OpAdaptor adaptor) const { return adaptor.rhs(); }
+    auto ret = rewriter.create<LLVM::FCmpOp>(
+        loc, elemTy, ArithCmpFPredicteToLLVM(op.predicate()), operands[0], operands[1]);
+    llvm::errs() << "instr: \n";
+    elemTy.print(llvm::errs());
+    llvm::errs() << ", "; operands[0].print(llvm::errs()); llvm::errs() << ", "; operands[1].print(llvm::errs()); llvm::errs() << "\n"; 
+    ret.print(llvm::errs());
+    llvm::errs() << "\nend\n";
+    return ret;
+  }
 
   static LLVM::FCmpPredicate
   ArithCmpFPredicteToLLVM(arith::CmpFPredicate predicate) {
@@ -3357,6 +3357,47 @@ struct InsertSliceAsyncOpConversion
   }
 };
 
+struct ExtElemwiseOpConversion
+    : public ElementwiseOpConversionBase<triton::ExtElemwiseOp, LLVM::LLVMFuncOp, ExtElemwiseOpConversion> {
+  using Base = ElementwiseOpConversionBase<triton::ExtElemwiseOp, LLVM::LLVMFuncOp, ExtElemwiseOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  Value createDestOp(triton::ExtElemwiseOp op, OpAdaptor adaptor,
+                            ConversionPatternRewriter &rewriter, Type elemTy,
+                            ValueRange operands, Location loc) const {
+    StringRef funcName = op.symbol();
+    if (funcName.empty())
+      llvm::errs() << "ExtElemwiseOpConversion";
+
+    Type funcType = getFunctionType(elemTy, operands);
+    LLVM::LLVMFuncOp funcOp = appendOrGetFuncOp(rewriter, op, funcName, funcType);
+    return rewriter.create<LLVM::CallOp>(loc, funcOp, operands).getResult(0);
+  }
+
+private:
+  Type getFunctionType(Type resultType, ValueRange operands) const {
+    SmallVector<Type> operandTypes(operands.getTypes());
+    return LLVM::LLVMFunctionType::get(resultType, operandTypes);
+  }
+
+  LLVM::LLVMFuncOp appendOrGetFuncOp(ConversionPatternRewriter& rewriter, triton::ExtElemwiseOp op, StringRef funcName,
+                                     Type funcType) const {
+    using LLVM::LLVMFuncOp;
+
+    auto funcAttr = StringAttr::get(op->getContext(), funcName);
+    Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(op, funcAttr);
+    if (funcOp)
+      return cast<LLVMFuncOp>(*funcOp);
+
+    mlir::OpBuilder b(op->getParentOfType<LLVMFuncOp>());
+    auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
+    ret.getOperation()->setAttr("libname", StringAttr::get(op->getContext(), op.libname()));
+    ret.getOperation()->setAttr("libpath", StringAttr::get(op->getContext(), op.libpath()));
+    return ret;
+  }
+};
+
 void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns, int numWarps,
                                   AxisInfoAnalysis &axisInfoAnalysis,
@@ -3367,20 +3408,29 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
                                         benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
-  patterns.add<BinaryOpConversion<arith::AddIOp, LLVM::AddOp>>(typeConverter,
+  patterns.add<ElementwiseOpConversion<arith::AddIOp, LLVM::AddOp>>(typeConverter,
                                                                benefit);
-  patterns.add<BinaryOpConversion<arith::AddFOp, LLVM::FAddOp>>(typeConverter,
+  patterns.add<ElementwiseOpConversion<arith::SubIOp, LLVM::SubOp>>(typeConverter,
+                                                               benefit);
+  patterns.add<ElementwiseOpConversion<arith::AddFOp, LLVM::FAddOp>>(typeConverter,
                                                                 benefit);
-  patterns.add<BinaryOpConversion<arith::MulIOp, LLVM::MulOp>>(typeConverter,
+  patterns.add<ElementwiseOpConversion<arith::SubFOp, LLVM::FSubOp>>(typeConverter,
+                                                                benefit);
+  patterns.add<ElementwiseOpConversion<arith::MulIOp, LLVM::MulOp>>(typeConverter,
                                                                benefit);
-  patterns.add<BinaryOpConversion<arith::MulFOp, LLVM::FMulOp>>(typeConverter,
+  patterns.add<ElementwiseOpConversion<arith::MulFOp, LLVM::FMulOp>>(typeConverter,
                                                                 benefit);
 
-  patterns.add<BinaryOpConversion<arith::AndIOp, LLVM::AndOp>>(typeConverter,
+  patterns.add<ElementwiseOpConversion<arith::AndIOp, LLVM::AndOp>>(typeConverter,
                                                                benefit);
-  patterns.add<BinaryOpConversion<arith::OrIOp, LLVM::OrOp>>(typeConverter,
+  patterns.add<ElementwiseOpConversion<arith::OrIOp, LLVM::OrOp>>(typeConverter,
                                                              benefit);
-
+  patterns.add<ElementwiseOpConversion<arith::DivFOp, arith::DivFOp>>(typeConverter,
+                                                             benefit);
+  patterns.add<ElementwiseOpConversion<arith::DivSIOp, arith::DivSIOp>>(typeConverter,
+                                                             benefit);
+  patterns.add<ElementwiseOpConversion<arith::DivUIOp, arith::DivUIOp>>(typeConverter,
+                                                             benefit);
   patterns.add<CmpIOpConversion>(typeConverter, benefit);
   patterns.add<CmpFOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
@@ -3400,6 +3450,21 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<ViewLikeOpConversion<triton::ExpandDimsOp>>(typeConverter,
                                                            benefit);
   patterns.add<DotOpConversion>(typeConverter, allocation, smem, benefit);
+
+  patterns.add<ExtElemwiseOpConversion>(typeConverter, benefit);
+
+  patterns.add<ElementwiseOpConversion<math::LogOp, math::LogOp>>(typeConverter, benefit);
+  patterns.add<ElementwiseOpConversion<math::CosOp, math::CosOp>>(typeConverter, benefit);
+  patterns.add<ElementwiseOpConversion<math::SinOp, math::SinOp>>(typeConverter, benefit);
+  patterns.add<ElementwiseOpConversion<math::SqrtOp, math::SqrtOp>>(typeConverter, benefit);
+  patterns.add<ElementwiseOpConversion<math::ExpOp, math::ExpOp>>(typeConverter, benefit);
+
+  patterns.add<ElementwiseOpConversion<mlir::arith::SIToFPOp, mlir::arith::SIToFPOp>>(typeConverter, benefit);
+  patterns.add<ElementwiseOpConversion<mlir::arith::UIToFPOp, mlir::arith::UIToFPOp>>(typeConverter, benefit);
+  patterns.add<ElementwiseOpConversion<mlir::arith::FPToSIOp, mlir::arith::FPToSIOp>>(typeConverter, benefit);
+  patterns.add<ElementwiseOpConversion<mlir::arith::ExtFOp, mlir::arith::ExtFOp>>(typeConverter, benefit);
+  patterns.add<ElementwiseOpConversion<mlir::arith::TruncFOp, mlir::arith::TruncFOp>>(typeConverter, benefit);
+  patterns.add<ElementwiseOpConversion<triton::gpu::SelectOp, mlir::LLVM::SelectOp>>(typeConverter, benefit);
 }
 
 class ConvertTritonGPUToLLVM

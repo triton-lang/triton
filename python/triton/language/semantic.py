@@ -226,7 +226,6 @@ def fdiv(input: tl.tensor,
         raise ValueError("both operands of fdiv must have floating poscalar type")
     input, other = binary_op_type_checking_impl(input, other, builder, False, False, False, True)
     ret = builder.create_fdiv(input.handle, other.handle)
-    ret.set_fdiv_ieee_rounding(ieee_rounding)
     return tl.tensor(ret, input.type)
 
 
@@ -364,8 +363,11 @@ def greater_than(input: tl.tensor,
                  builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder)
     scalar_ty = input.type.scalar
+    import pdb; pdb.set_trace()
+
     # float > float
     if scalar_ty.is_floating():
+        import pdb; pdb.set_trace()
         return tl.tensor(builder.create_fcmpOGT(input.handle, other.handle), _bool_like(input))
     # > int
     elif scalar_ty.is_int():
@@ -1069,8 +1071,8 @@ def xor_sum(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
 
 def umulhi(x: tl.tensor, y: tl.tensor, builder: ir.builder) -> tl.tensor:
     x, y = binary_op_type_checking_impl(x, y, builder)
-    return tl.tensor(builder.create_umulhi(x.handle, y.handle), x.type)
-
+    from . import libdevice
+    return libdevice.mulhi(x, y, _builder=builder)
 
 def exp(x: tl.tensor, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_exp(x.handle), x.type)
