@@ -3719,8 +3719,8 @@ TritonLLVMConversionTarget::TritonLLVMConversionTarget(
     : ConversionTarget(ctx), typeConverter(typeConverter) {
   addLegalDialect<LLVM::LLVMDialect>();
   addLegalDialect<NVVM::NVVMDialect>();
-  addIllegalDialect<triton::TritonDialect>();
-  addIllegalDialect<triton::gpu::TritonGPUDialect>();
+  // addIllegalDialect<triton::TritonDialect>();
+  // addIllegalDialect<triton::gpu::TritonGPUDialect>();
   addIllegalDialect<mlir::gpu::GPUDialect>();
   addIllegalDialect<mlir::StandardOpsDialect>();
   addLegalOp<mlir::UnrealizedConversionCastOp>();
