@@ -3517,9 +3517,10 @@ struct InsertSliceAsyncOpConversion
       auto numWordElems = bitWidth / resElemTy.getIntOrFloatBitWidth();
 
       // XXX(Keren): Tune CG and CA here.
+      auto byteWidth = bitWidth / 8;
       CacheModifier srcCacheModifier =
-          bitWidth == 128 ? CacheModifier::CG : CacheModifier::CA;
-      assert(bitWidth == 128 || bitWidth == 64 || bitWidth == 32);
+          byteWidth == 16 ? CacheModifier::CG : CacheModifier::CA;
+      assert(bitWidth == 16 || bitWidth == 8 || bitWidth == 4);
 
       for (int wordIdx = 0; wordIdx < numWords; ++wordIdx) {
         PTXBuilder ptxBuilder;
@@ -3530,7 +3531,7 @@ struct InsertSliceAsyncOpConversion
         auto *dstOperand =
             ptxBuilder.newAddrOperand(tileOffset, "r", baseOffset);
         auto *srcOperand = ptxBuilder.newAddrOperand(srcElems[vecIdx], "l");
-        auto *copySize = ptxBuilder.newConstantOperand(bitWidth / 8);
+        auto *copySize = ptxBuilder.newConstantOperand(byteWidth);
         auto *srcSize = copySize;
         if (op.mask()) {
           // We don't use predicate in this case, setting src-size to 0
@@ -3538,7 +3539,7 @@ struct InsertSliceAsyncOpConversion
           // remaining slots with 0 if cp-size > src-size.
           // XXX(Keren): Always assume other = 0 for now.
           auto selectOp = select(maskElems[vecIdx + wordIdx * numWordElems],
-                                 i32_val(bitWidth), i32_val(0));
+                                 i32_val(byteWidth), i32_val(0));
           srcSize = ptxBuilder.newOperand(selectOp, "r");
         }
         copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
