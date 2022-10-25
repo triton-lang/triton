@@ -18,7 +18,7 @@ uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
 float_dtypes = ['float16', 'float32', 'float64']
 dtypes = int_dtypes + uint_dtypes + float_dtypes
 # TODO: handle bfloat16
-dtypes_with_bfloat16 = dtypes # + ['bfloat16']
+dtypes_with_bfloat16 = dtypes  # + ['bfloat16']
 
 
 def _bitwidth(dtype: str) -> int:
@@ -248,7 +248,7 @@ def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
 
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [
     (dtype_x, dtype_y, op)
-    for op in ['+', '-', '*', '/']#, '%'] #TODO: handle remainder
+    for op in ['+', '-', '*', '/']  # , '%'] #TODO: handle remainder
     for dtype_x in dtypes_with_bfloat16
     for dtype_y in dtypes_with_bfloat16
 ])
