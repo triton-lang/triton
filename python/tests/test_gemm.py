@@ -118,6 +118,3 @@ def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLO
     golden = torch.matmul(a, b)
     torch.set_printoptions(profile="full")
     assert_close(c, golden, rtol=1e-3, atol=1e-3, check_dtype=False)
-
-
-test_gemm_no_scf(*[32, 32, 32, 4])
