@@ -61,7 +61,9 @@ class Prefetcher {
   LogicalResult isForOpOperand(Value v);
 
   Value generatePrefetch(Value v, unsigned opIdx, bool isPrefetch,
-                         Attribute dotEncoding, OpBuilder &builder);
+                         Attribute dotEncoding, OpBuilder &builder,
+                         llvm::Optional<int64_t> offsetK = llvm::None,
+                         llvm::Optional<int64_t> shapeK = llvm::None);
 
 public:
   Prefetcher() = delete;
@@ -78,7 +80,9 @@ public:
 };
 
 Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrefetch,
-                                   Attribute dotEncoding, OpBuilder &builder) {
+                                   Attribute dotEncoding, OpBuilder &builder,
+                                   llvm::Optional<int64_t> offsetK,
+                                   llvm::Optional<int64_t> shapeK) {
   // opIdx: 0 => a, 1 => b
   auto type = v.getType().cast<RankedTensorType>();
   SmallVector<int64_t> shape{type.getShape().begin(), type.getShape().end()};
@@ -89,8 +93,14 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrefetch,
 
   // k => (prefetchWidth, k - prefetchWidth)
   int64_t kIdx = opIdx == 0 ? 1 : 0;
+
   offset[kIdx] = isPrefetch ? 0 : prefetchWidth;
   shape[kIdx] = isPrefetch ? prefetchWidth : (shape[kIdx] - prefetchWidth);
+
+  if (shapeK)
+    shape[kIdx] = *shapeK;
+  if (offsetK)
+    offset[kIdx] = *offsetK;
 
   Value newSmem = builder.create<tensor::ExtractSliceOp>(
       v.getLoc(),
@@ -195,6 +205,12 @@ scf::ForOp Prefetcher::createNewForOp() {
       forOp.getLoc(), forOp.getLowerBound(), forOp.getUpperBound(),
       forOp.getStep(), loopArgs);
 
+  auto largestPow2 = [](int64_t n) -> int64_t {
+    while ((n & (n - 1)) != 0)
+      n = n & (n - 1);
+    return n;
+  };
+
   builder.setInsertionPointToStart(newForOp.getBody());
   BlockAndValueMapping mapping;
   for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs()))
@@ -216,14 +232,24 @@ scf::ForOp Prefetcher::createNewForOp() {
             1, newForOp.getRegionIterArgForOpOperand(*b.use_begin()));
 
       // remaining part
-      Value aRem = generatePrefetch(mapping.lookup(dot2aLoopArg[dot]), 0, false,
-                                    dotEncoding, builder);
-      Value bRem = generatePrefetch(mapping.lookup(dot2bLoopArg[dot]), 1, false,
-                                    dotEncoding, builder);
-      newOp = builder.clone(*dot, mapping);
-      newOp->setOperand(0, aRem);
-      newOp->setOperand(1, bRem);
-      newOp->setOperand(2, firstDot->getResult(0));
+      int64_t kOff = prefetchWidth;
+      int64_t kRem = dot.a().getType().cast<RankedTensorType>().getShape()[1] -
+                     prefetchWidth;
+      Operation *prevDot = firstDot;
+      while (kRem != 0) {
+        int64_t kShape = largestPow2(kRem);
+        Value aRem = generatePrefetch(mapping.lookup(dot2aLoopArg[dot]), 0, false,
+                                      dotEncoding, builder, kOff, kShape);
+        Value bRem = generatePrefetch(mapping.lookup(dot2bLoopArg[dot]), 1, false,
+                                      dotEncoding, builder, kOff, kShape);
+        newOp = builder.clone(*dot, mapping);
+        newOp->setOperand(0, aRem);
+        newOp->setOperand(1, bRem);
+        newOp->setOperand(2, prevDot->getResult(0));
+        prevDot = newOp;
+        kOff += kShape;
+        kRem -= kShape;
+      }
     } else {
       newOp = builder.clone(op, mapping);
     }
