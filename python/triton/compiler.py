@@ -1353,16 +1353,25 @@ class CompiledKernel:
         self.num_stages = metadata["num_stages"]
         # initialize asm dict
         self.asm = dict()
-        with open(os.path.join(cache_dir, f"{fn_name}.cubin"), "rb") as f:
-            self.asm["cubin"] = f.read()
-        with open(os.path.join(cache_dir, f"{fn_name}.ptx"), "r") as f:
-            self.asm["ptx"] = f.read()
+        if torch.version.hip is not None:
+            with open(os.path.join(cache_dir, f"{fn_name}.hipmodule"), "rb") as f:
+                self.asm["hipmodule"] = f.read()
+            with open(os.path.join(cache_dir, f"{fn_name}.gcn"), "r") as f:
+                self.asm["amdgpu"] = f.read()
+        else:
+            with open(os.path.join(cache_dir, f"{fn_name}.cubin"), "rb") as f:
+                self.asm["cubin"] = f.read()
+            with open(os.path.join(cache_dir, f"{fn_name}.ptx"), "r") as f:
+                self.asm["ptx"] = f.read()
         with open(os.path.join(cache_dir, f"{fn_name}.llir"), "r") as f:
             self.asm["llir"] = f.read()
         with open(os.path.join(cache_dir, f"{fn_name}.ttir"), "r") as f:
             self.asm["ttir"] = f.read()
 
-        mod, func, n_regs, n_spills = _triton.code_gen.load_binary(metadata["name"], self.asm["cubin"], self.shared, device)
+        if torch.version.hip is not None:
+            mod, func, n_regs, n_spills = _triton.code_gen.load_binary_hipmodule(metadata["name"], self.asm["hipmodule"], self.shared, device)
+        else:
+            mod, func, n_regs, n_spills = _triton.code_gen.load_binary_cubin(metadata["name"], self.asm["cubin"], self.shared, device)
         self.fn_name = fn_name
         self.cu_module = mod
         self.cu_function = func
