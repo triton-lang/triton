@@ -51,9 +51,8 @@ public:
         dstType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>()) {
       auto tmpType =
           RankedTensorType::get(dstType.getShape(), dstType.getElementType(),
-                                dstType.getEncoding()
-                                    .cast<triton::gpu::DotOperandEncodingAttr>()
-                                    .getParent());
+                                triton::gpu::SharedEncodingAttr::get(
+                                    op->getContext(), 1, 1, 1, {1, 0}));
       auto tmp = rewriter.create<triton::gpu::ConvertLayoutOp>(
           convert.getLoc(), tmpType, convert.getOperand());
       auto newConvert = rewriter.create<triton::gpu::ConvertLayoutOp>(
@@ -129,6 +128,9 @@ public:
     }
     // cvt(type2, x)
     if (llvm::isa<triton::gpu::ConvertLayoutOp>(arg)) {
+      if (srcType.getEncoding().isa<triton::gpu::SharedEncodingAttr>() &&
+          !dstType.getEncoding().isa<triton::gpu::SharedEncodingAttr>())
+        return mlir::failure();
       rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
           op, op->getResultTypes().front(), arg->getOperand(0));
       return mlir::success();
@@ -574,7 +576,7 @@ public:
     mlir::RewritePatternSet patterns(context);
 
     patterns.add<SimplifyConversion>(context);
-    // patterns.add<DecomposeDotOperand>(context);
+    patterns.add<DecomposeDotOperand>(context);
     patterns.add<RematerializeBackward>(context);
     patterns.add<RematerializeForward>(context);
     patterns.add<MoveConvertOutOfLoop>(context);

@@ -145,6 +145,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
     llvm::errs() << "Pass execution failed";
     return nullptr;
   }
+  // llvm::outs() << module << "\n";
 
   auto llvmir = translateLLVMToLLVMIR(llvmContext, module);
   if (!llvmir) {

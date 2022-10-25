@@ -68,35 +68,34 @@ struct SwizzlePass : public TritonGPUSwizzleBase<SwizzlePass> {
   void runOnOperation() override {
     Operation *op = getOperation();
     MLIRContext *context = &getContext();
-    op->walk([&](triton::DotOp dotOp) -> void {
-      OpBuilder builder(dotOp);
-      auto _retEncoding =
-          dotOp.getResult().getType().cast<RankedTensorType>().getEncoding();
-      auto retEncoding = _retEncoding.dyn_cast<triton::gpu::MmaEncodingAttr>();
-      if (!retEncoding)
+    op->walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
+      OpBuilder builder(cvtOp);
+      auto arg = cvtOp.getOperand();
+      auto argType = arg.getType().cast<RankedTensorType>();
+      auto retType = cvtOp.getResult().getType().cast<RankedTensorType>();
+      auto argEncoding =
+          argType.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
+      auto retEncoding =
+          retType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+      if (!argEncoding || !retEncoding)
         return;
-      for (int opIdx : {0, 1}) {
-        Value op = dotOp.getOperand(opIdx);
-        // if the dot operand is of dot_op layout which is converted from
-        // shared layout
-        if (auto cvt = op.getDefiningOp<triton::gpu::ConvertLayoutOp>()) {
-          auto ty = cvt.src().getType().template cast<RankedTensorType>();
-          // compute new swizzled encoding
-          SwizzleInfo swizzle = getSwizzleMMA(opIdx, retEncoding, ty);
-          auto newEncoding = triton::gpu::SharedEncodingAttr::get(
-              &getContext(), swizzle.vec, swizzle.perPhase, swizzle.maxPhase,
-              ty.getEncoding()
-                  .cast<triton::gpu::SharedEncodingAttr>()
-                  .getOrder());
-          // create conversion
-          auto newType = RankedTensorType::get(
-              ty.getShape(), ty.getElementType(), newEncoding);
-          Operation *newOp = builder.create<triton::gpu::ConvertLayoutOp>(
-              op.getLoc(), newType, op);
-          // bind new op to cvt operand
-          cvt->replaceUsesOfWith(op, newOp->getResult(0));
-        }
-      }
+      auto opIdx = retEncoding.getOpIdx();
+      // compute new swizzled encoding
+      auto parentEncoding =
+          retEncoding.getParent().dyn_cast<triton::gpu::MmaEncodingAttr>();
+      if (!parentEncoding)
+        return;
+      SwizzleInfo swizzle = getSwizzleMMA(opIdx, parentEncoding, argType);
+      auto newEncoding = triton::gpu::SharedEncodingAttr::get(
+          &getContext(), swizzle.vec, swizzle.perPhase, swizzle.maxPhase,
+          argEncoding.getOrder());
+      // create conversion
+      auto newType = RankedTensorType::get(
+          argType.getShape(), argType.getElementType(), newEncoding);
+      Operation *newArg = builder.create<triton::gpu::ConvertLayoutOp>(
+          cvtOp.getLoc(), newType, arg);
+      // bind new op to cvt operand
+      cvtOp->replaceUsesOfWith(arg, newArg->getResult(0));
     });
   }
 };
