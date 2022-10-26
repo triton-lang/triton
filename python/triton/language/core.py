@@ -132,6 +132,9 @@ class dtype:
     def is_int_signed(self):
         return self.name in dtype.SINT_TYPES
 
+    def is_int_unsigned(self):
+        return self.name in dtype.UINT_TYPES
+
     def is_int(self):
         return self.name in dtype.SINT_TYPES + dtype.UINT_TYPES
 
@@ -459,6 +462,11 @@ class tensor:
     def __floordiv__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.floordiv(self, other, _builder)
+
+    @builtin
+    def __rfloordiv__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.floordiv(other, self, _builder)
 
     @builtin
     def __mod__(self, other, _builder=None):
@@ -1041,21 +1049,35 @@ def debug_barrier(_builder=None):
 
 
 @builtin
-def multiple_of(input, value, _builder=None):
+def multiple_of(input, values, _builder=None):
     """
     Let the compiler knows that the values in :code:`input` are all multiples of :code:`value`.
     """
-    value = _constexpr_to_value(value)
-    return semantic.multiple_of(input, value)
+    if isinstance(values, constexpr):
+        values = [values]
+    for i, d in enumerate(values):
+        if not isinstance(d, constexpr):
+            raise TypeError(f"values element {i} must have type `constexpr`")
+        if not isinstance(d.value, int):
+            raise TypeError(f"values element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
+    values = [x.value for x in values]
+    return semantic.multiple_of(input, values)
 
 
 @builtin
-def max_contiguous(input, value, _builder=None):
+def max_contiguous(input, values, _builder=None):
     """
     Let the compiler knows that the `value` first values in :code:`input` are contiguous.
     """
-    value = _constexpr_to_value(value)
-    return semantic.max_contiguous(input, value)
+    if isinstance(values, constexpr):
+        values = [values]
+    for i, d in enumerate(values):
+        if not isinstance(d, constexpr):
+            raise TypeError(f"values element {i} must have type `constexpr`")
+        if not isinstance(d.value, int):
+            raise TypeError(f"values element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
+    values = [x.value for x in values]
+    return semantic.max_contiguous(input, values)
 
 
 # -----------------------

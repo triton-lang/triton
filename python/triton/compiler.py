@@ -872,7 +872,9 @@ def make_tritongpu_ir(mod, num_warps):
 def optimize_tritongpu_ir(mod, num_stages):
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
-    pm.add_tritongpu_pipeline_pass(num_stages)
+    # Get error in backend due to wrong conversion in expanding async-related instruction.
+    # TODO[Superjomn]: Open it when fixed.
+    # pm.add_tritongpu_pipeline_pass(num_stages)
     pm.add_canonicalizer_pass()
     pm.add_cse_pass()
     pm.add_coalesce_pass()
