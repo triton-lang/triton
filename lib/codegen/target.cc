@@ -15,10 +15,22 @@ namespace codegen{
 
 // base
 
-
-nvidia_cu_target* target::as_nvidia() { 
-  return dynamic_cast<nvidia_cu_target*>(this); 
+#ifdef USE_ROCM
+amd_cl_target *target::as_amd()
+{
+  return dynamic_cast<amd_cl_target *>(this);
 }
+amd_cl_target *target::as_nvidia()
+{
+  return this->as_amd();
+}
+#else
+// causes segfault on ROCM
+nvidia_cu_target *target::as_nvidia()
+{
+  return dynamic_cast<nvidia_cu_target *>(this);
+}
+#endif
 
 bool target::is_gpu() const {
   return is_gpu_;

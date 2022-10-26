@@ -36,6 +36,7 @@ namespace triton{
 namespace codegen{
 
 class nvidia_cu_target;
+class amd_cl_target;
 
 class target {
 public:
@@ -49,7 +50,12 @@ public:
   virtual Value* get_block_id(Module *module, Builder& builder, unsigned ax) = 0;
   virtual Value* get_num_blocks(Module *module, Builder& builder, unsigned ax) = 0;
   virtual unsigned guaranteed_alignment() = 0;
+#ifdef USE_ROCM
+  amd_cl_target* as_nvidia();
+  amd_cl_target* as_amd();
+#else
   nvidia_cu_target* as_nvidia();
+#endif
   bool is_gpu() const;
 
 private:
@@ -67,6 +73,7 @@ public:
   Value* get_block_id(Module *module, Builder& builder, unsigned ax);
   Value* get_num_blocks(Module *module, Builder& builder, unsigned ax);
   unsigned guaranteed_alignment() { return 16; }
+  int sm() { return 0; } // treat as if old CUDA device
 };
 
 class nvidia_cu_target: public target {
