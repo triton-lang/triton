@@ -609,6 +609,10 @@ def test_tuples():
     ]
     for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']]))
 def test_atomic_rmw(op, dtype_x_str, mode, device='cuda'):
+    if torch.version.hip is not None:
+        # if dtype_x_str in ["uint32","int32","float32"]:
+        pytest.skip(f"test_atomic_rmw[{dtype_x_str}] currently has segfaults on ROCM")
+
     n_programs = 5
 
     # triton kernel
