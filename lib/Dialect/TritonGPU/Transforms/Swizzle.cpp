@@ -92,12 +92,12 @@ struct SwizzlePass : public TritonGPUSwizzleBase<SwizzlePass> {
     op->walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
       auto arg = cvtOp.getOperand();
-      auto argType = arg.getType().cast<RankedTensorType>();
       auto retType = cvtOp.getResult().getType().cast<RankedTensorType>();
-      auto argEncoding =
-          argType.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
       auto retEncoding =
           retType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+      auto argType = arg.getType().cast<RankedTensorType>();
+      auto argEncoding =
+          argType.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
       if (!argEncoding || !retEncoding)
         return;
       auto opIdx = retEncoding.getOpIdx();
@@ -106,7 +106,15 @@ struct SwizzlePass : public TritonGPUSwizzleBase<SwizzlePass> {
           retEncoding.getParent().dyn_cast<triton::gpu::MmaEncodingAttr>();
       if (!parentEncoding)
         return;
-      SwizzleInfo swizzle = getSwizzleMMA(opIdx, parentEncoding, argType);
+      auto swizzleType = argType;
+      if (arg.getDefiningOp() &&
+          isa<tensor::ExtractSliceOp>(arg.getDefiningOp())) {
+        swizzleType = arg.getDefiningOp()
+                          ->getOperand(0)
+                          .getType()
+                          .cast<RankedTensorType>();
+      }
+      SwizzleInfo swizzle = getSwizzleMMA(opIdx, parentEncoding, swizzleType);
       auto newEncoding = triton::gpu::SharedEncodingAttr::get(
           &getContext(), swizzle.vec, swizzle.perPhase, swizzle.maxPhase,
           argEncoding.getOrder());

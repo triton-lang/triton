@@ -445,9 +445,17 @@ public:
         if (isa<triton::gpu::ConvertLayoutOp>(user)) {
           auto newType =
               user->getResults()[0].getType().cast<RankedTensorType>();
-          if (newType.getEncoding()
+          auto oldType = user->getOperand(0).getType().cast<RankedTensorType>();
+          if (oldType.getEncoding().isa<triton::gpu::SharedEncodingAttr>() &&
+              newType.getEncoding()
                   .isa<triton::gpu::DotOperandEncodingAttr>()) {
             continue;
+          }
+          if (newType.getEncoding().isa<triton::gpu::SharedEncodingAttr>()) {
+            if (newType.getEncoding()
+                    .cast<triton::gpu::SharedEncodingAttr>()
+                    .getVec() == 1)
+              continue;
           }
           cvtTargetTypes.insert(newType);
         }
@@ -460,6 +468,7 @@ public:
           continue;
       }
       // check
+      // llvm::outs() << "replacing " << iterArg.index() << "\n";
       for (auto op : iterArg.value().getUsers()) {
         auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
         if (!cvt)
