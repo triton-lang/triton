@@ -32,6 +32,13 @@ pytest --verbose python/test/unit/language/test_core.py 2>&1 | tee /dockerx/trit
 # pytest --verbose python/test/unit/language/test_core.py::test_atomic_rmw 2>&1 | tee /dockerx/triton/test_atomic_rmw.log
 # pytest --verbose python/test/unit/language/test_core.py::test_atomic_rmw[add-float16-all_neg] 2>&1 | tee /dockerx/triton/test_atomic_rmw.log
 
+# mismatch
+# pytest --verbose "python/test/unit/language/test_core.py::test_bin_op[int8-float16-%]"" 2>&1 | tee /dockerx/triton/test_bin_op.log
+# pytest --verbose "python/test/unit/language/test_core.py::test_bitwise_op[int32-int32-&1]" 2>&1 | tee /dockerx/triton/test_bitwise_op.log
+# pytest --verbose "python/test/unit/language/test_core.py::test_shift_op[int32-int32->>]" 2>&1 | tee /dockerx/triton/test_shift_op.log
+# pytest --verbose "python/test/unit/language/test_core.py::test_compare_op[float32-float32->-nan-real]" 2>&1 | tee /dockerx/triton/test_compare_op.log
+# pytest --verbose "python/test/unit/language/test_core.py::test_cast[float32-float32-False]" 2>&1 | tee /dockerx/triton/test_compare_op.log
+
 # pytest --capture=tee-sys --verbose  python/test/regression/test_performance.py | tee /dockerx/triton/test_performance.log
 # pytest --capture=tee-sys --verbose  python/test/regression/test_performance.py::test_matmul | tee /dockerx/triton/test_performance_matmul.log
 # pytest --capture=tee-sys --verbose  python/test/regression/test_performance.py::test_elementwise | tee /dockerx/triton/test_performance_elementwise.log
