@@ -2864,7 +2864,7 @@ struct MMA16816ConversionHelper {
 
   // \param operand is either $a or $b's type.
   inline int getNumRepN(Type operand, int N) const {
-    return getNumRepM(operand, N, wpt[1]);
+    return getNumRepN(operand, N, wpt[1]);
   }
 
   // \param operand is either $a or $b's type.
