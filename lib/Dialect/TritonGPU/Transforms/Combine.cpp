@@ -103,16 +103,18 @@ public:
     if (!arg)
       return mlir::failure();
     // cvt(alloc_tensor(x), type2) -> alloc_tensor(x, type2)
-    // cvt(insert_slice(x), type2) -> extract_slice(cvt(x, type2))
     auto alloc_tensor = dyn_cast<triton::gpu::AllocTensorOp>(arg);
     if (alloc_tensor) {
       rewriter.replaceOpWithNewOp<triton::gpu::AllocTensorOp>(
           op, op->getResult(0).getType());
       return mlir::success();
     }
+    // cvt(insert_slice(x), type2) -> insert_slice(cvt(x, type2))
     auto insert_slice = dyn_cast<triton::gpu::InsertSliceAsyncOp>(arg);
     if (insert_slice) {
       auto newType = op->getResult(0).getType();
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(insert_slice);
       auto new_arg = rewriter.create<triton::gpu::ConvertLayoutOp>(
           op->getLoc(), newType, insert_slice.dst());
       rewriter.replaceOpWithNewOp<triton::gpu::InsertSliceAsyncOp>(
@@ -126,6 +128,8 @@ public:
     auto extract_slice = dyn_cast<triton::gpu::ExtractSliceOp>(arg);
     if (extract_slice) {
       auto origType = extract_slice.src().getType().cast<RankedTensorType>();
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(extract_slice);
       auto newType = RankedTensorType::get(
           origType.getShape(), origType.getElementType(),
           op->getResult(0).getType().cast<RankedTensorType>().getEncoding());
