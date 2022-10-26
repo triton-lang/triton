@@ -363,11 +363,8 @@ def greater_than(input: tl.tensor,
                  builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder)
     scalar_ty = input.type.scalar
-    import pdb; pdb.set_trace()
-
     # float > float
     if scalar_ty.is_floating():
-        import pdb; pdb.set_trace()
         return tl.tensor(builder.create_fcmpOGT(input.handle, other.handle), _bool_like(input))
     # > int
     elif scalar_ty.is_int():
@@ -1073,6 +1070,7 @@ def umulhi(x: tl.tensor, y: tl.tensor, builder: ir.builder) -> tl.tensor:
     x, y = binary_op_type_checking_impl(x, y, builder)
     from . import libdevice
     return libdevice.mulhi(x, y, _builder=builder)
+
 
 def exp(x: tl.tensor, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_exp(x.handle), x.type)

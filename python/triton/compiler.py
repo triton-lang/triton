@@ -36,6 +36,7 @@ def str_to_ty(name):
         "bf16": triton.language.bfloat16,
         "fp32": triton.language.float32,
         "fp64": triton.language.float64,
+        "i1": triton.language.int8,
         "i8": triton.language.int8,
         "i16": triton.language.int16,
         "i32": triton.language.int32,
@@ -983,30 +984,20 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
 
     # triton-ir
     module, _ = make_triton_ir(fn, signature, specialization, constants)
-    benzh = open("benzh.txt", "a")
-    benzh.write("\n")
-    benzh.write(module.str())
-    benzh.write("\n")
-    benzh.flush()
-    benzh.close()
-    print(module.str())
     module = optimize_triton_ir(module)
     if output == "ttir":
         return module.str()
 
     # tritongpu-ir
     module = make_tritongpu_ir(module, num_warps)
-
     module = optimize_tritongpu_ir(module, num_stages)
     if output == "ttgir":
         return module.str()
     if extern_libs:
         add_external_libs(module, extern_libs)
-    print(module.str())
 
     # llvm-ir
     llvm_ir = make_llvm_ir(module)
-    print(module.str())
 
     assert device >= 0, "device should be provided."
     ptxas, cuda_version = path_to_ptxas()
