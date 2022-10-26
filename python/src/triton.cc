@@ -607,11 +607,11 @@ void init_triton_codegen(py::module &&m) {
         // set dynamic shared memory if necessary
         std::cout << "\t" << "// set dynamic shared memory if necessary" << std::endl;
         int shared_optin;
-        drv::dispatch::hipDeviceGetAttribute(&shared_optin, hipDeviceAttributeSharedMemPerBlockOptin, device);
+        // drv::dispatch::hipDeviceGetAttribute(&shared_optin, hipDeviceAttributeSharedMemPerBlockOptin, device);
         if(n_shared_bytes > 49152 && shared_optin > 49152){
           // drv::dispatch::hipFuncSetCacheConfig(fun, hipFuncCachePreferShared);
           int shared_total, shared_static;
-          drv::dispatch::hipDeviceGetAttribute(&shared_total, hipDeviceAttributeMaxSharedMemoryPerMultiprocessor, device);
+          // drv::dispatch::hipDeviceGetAttribute(&shared_total, hipDeviceAttributeMaxSharedMemoryPerMultiprocessor, device);
           // drv::dispatch::hipFuncGetAttributes(&attr, fun);
           shared_total = attr.sharedSizeBytes;
           // drv::dispatch::hipFuncSetAttribute(fun, hipFuncAttributeMaxDynamicSharedMemorySize, shared_optin - shared_static);
