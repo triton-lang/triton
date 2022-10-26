@@ -345,7 +345,7 @@ def invert(input: tl.tensor,
     input_sca_ty = input.type.scalar
     if input_sca_ty.is_ptr() or input_sca_ty.is_floating():
         raise ValueError("wrong type argument to unary invert (" + input_sca_ty.__repr__() + ")")
-    _1 = tl.tensor(ir.constant.get_all_ones_value(input_sca_ty.to_ir(builder)), input_sca_ty)
+    _1 = tl.tensor(builder.get_all_ones_value(input_sca_ty.to_ir(builder)), input_sca_ty)
     return xor_(input, _1, builder)
 
 
@@ -481,6 +481,8 @@ def zeros(shape: List[int], dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
 def view(input: tl.tensor,
          dst_shape: List[int],
          builder: ir.builder) -> tl.tensor:
+    # TODO: disable when TritonToTritonGPU handles views properly
+    assert len(input.shape) == len(dst_shape)
     numel = 1
     for s in dst_shape:
         numel *= s
@@ -989,13 +991,15 @@ def where(condition: tl.tensor,
           builder: ir.builder) -> tl.tensor:
     condition = cast(condition, tl.int1, builder)
     if condition.type.is_block():
-        x = broadcast_impl_shape(x, condition.type.get_block_shapes(), builder)
-        y = broadcast_impl_shape(y, condition.type.get_block_shapes(), builder)
+        condition, x = broadcast_impl_value(condition, x, builder)
+        x, y = broadcast_impl_value(x, y, builder)
+        condition, x = broadcast_impl_value(condition, x, builder)
 
     x, y = binary_op_type_checking_impl(x, y, builder, True, True)
+    if not condition.type.is_block():
+        condition, _ = broadcast_impl_value(condition, x, builder)
     ret_ty = x.type
     return tl.tensor(builder.create_select(condition.handle, x.handle, y.handle), ret_ty)
-
 
 # ===----------------------------------------------------------------------===//
 #                               Reductions

@@ -986,7 +986,7 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     module = optimize_tritongpu_ir(module, num_stages)
     if output == "ttgir":
         return module.str()
-    
+
     # llvm-ir
     llvm_ir = make_llvm_ir(module)
 
