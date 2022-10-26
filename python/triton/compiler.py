@@ -1024,7 +1024,7 @@ static inline hipDeviceptr_t getPointer(PyObject *obj, int idx) {{
 
 
 static PyObject* launch(PyObject* self, PyObject* args) {{
-  printf("launch(PyObject* self, PyObject* args)");
+  // printf("launch(PyObject* self, PyObject* args)");
   int gridX, gridY, gridZ;
   uint64_t _stream;
   uint64_t _function;
