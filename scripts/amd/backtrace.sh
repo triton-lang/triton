@@ -7,7 +7,7 @@ sudo apt install gdb -y
 
 gdb -ex "set pagination off" \
     -ex "file python" \
-    -ex 'run -m pytest --capture=tee-sys --verbose "python/test/unit/language/test_core.py::test_empty_kernel[float32]"' \
+    -ex 'run -m pytest --capture=tee-sys --verbose "python/test/unit/language/test_core.py::test_atomic_rmw[add-uint32-all_neg]"' \
     -ex "backtrace" \
     -ex "set confirm off" \
     -ex "q" \
