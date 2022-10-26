@@ -445,7 +445,7 @@ void init_triton_ir(py::module &&m) {
              auto loc = self.getUnknownLoc();
              if (auto floatTy = type.dyn_cast<mlir::FloatType>())
                return self.create<mlir::arith::ConstantFloatOp>(
-                   loc, mlir::APFloat(0.), floatTy);
+                   loc, mlir::APFloat((double)0.), floatTy);
              else if (auto intTy = type.dyn_cast<mlir::IntegerType>())
                return self.create<mlir::arith::ConstantIntOp>(loc, 0, intTy);
              else
