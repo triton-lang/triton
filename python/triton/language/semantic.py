@@ -1005,6 +1005,7 @@ def where(condition: tl.tensor,
 #                               Reductions
 # ===----------------------------------------------------------------------===
 
+
 def reduce_impl(input: tl.tensor, axis: int, builder: ir.builder, name: str,
                 FLOAT_OP: ir.REDUCE_OP, INT_OP: ir.REDUCE_OP) -> tl.tensor:
     scalar_ty = input.type.scalar
