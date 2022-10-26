@@ -485,7 +485,7 @@ def view(input: tl.tensor,
     for s in dst_shape:
         numel *= s
     if input.type.numel != numel:
-        raise ValueError("cannot reshape block of different shape")
+        raise ValueError("cannot view block of different shape")
     ret_ty = tl.block_type(input.type.scalar, dst_shape)
     return tl.tensor(builder.create_view(input.handle, dst_shape), ret_ty)
 
@@ -516,7 +516,7 @@ def broadcast_impl_shape(input: tl.tensor,
     for i in range(len(src_shape)):
         if shape[i] != src_shape[i] and src_shape[i] != 1:
             raise ValueError(f"Cannot broadcast, the expanded size of the tensor ({shape[i]})"
-                             f" must match the existing size ({src_shape[1]}) at non-singleton dimension"
+                             f" must match the existing size ({src_shape[i]}) at non-singleton dimension"
                              f" {i}: {src_shape}, {shape}")
     ret_ty = tl.block_type(input.type.scalar, shape)
     return tl.tensor(builder.create_broadcast(input.handle, shape), ret_ty)
@@ -679,7 +679,7 @@ def cast(input: tl.tensor,
     if src_sca_ty.is_ptr() and dst_sca_ty.is_int():
         bitwidth = dst_sca_ty.int_bitwidth
         if bitwidth == 64:
-            return tl.tensor(builder.create_cast(ir.PtrToInt, input.handle, dst_ty.to_ir(builder)),
+            return tl.tensor(builder.create_ptr_to_int(input.handle, dst_ty.to_ir(builder)),
                              dst_ty)
         if bitwidth == 1:
             return not_equal(cast(input, tl.int64, builder),

@@ -602,7 +602,7 @@ void init_triton_ir(py::module &&m) {
            [](mlir::OpBuilder &self, mlir::Value &src,
               mlir::Type &dstType) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::BitcastOp>(loc, dstType, src);
+             return self.create<mlir::triton::BitcastOp>(loc, dstType, src);
            })
       // .def("create_cast", &ir::builder::create_cast)
       // .def("create_ptr_to_int", &ir::builder::create_ptr_to_int)
@@ -1143,6 +1143,18 @@ void init_triton_ir(py::module &&m) {
              return self.create<mlir::triton::ReduceOp>(loc, resType, redOp,
                                                         operand, axis);
            })
+      .def("create_ptr_to_int",
+           [](mlir::OpBuilder &self, mlir::Value &val,
+              mlir::Type &type) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::triton::PtrToIntOp>(loc, type, val);
+           })
+      .def("create_int_to_ptr",
+           [](mlir::OpBuilder &self, mlir::Value &val,
+              mlir::Type &type) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::triton::IntToPtrOp>(loc, type, val);
+           })
       .def("create_select",
            [](mlir::OpBuilder &self, mlir::Value &condition,
               mlir::Value &trueValue, mlir::Value &falseValue) -> mlir::Value {
@@ -1231,7 +1243,6 @@ void init_triton_ir(py::module &&m) {
 }
 
 void init_triton_translation(py::module &m) {
-
   using ret = py::return_value_policy;
 
   m.def("get_shared_memory_size", [](mlir::ModuleOp module) {
