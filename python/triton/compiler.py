@@ -872,7 +872,9 @@ def make_tritongpu_ir(mod, num_warps):
 def optimize_tritongpu_ir(mod, num_stages):
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
-    pm.add_tritongpu_pipeline_pass(num_stages)
+    # Get error in backend due to wrong conversion in expanding async-related instruction.
+    # TODO[Superjomn]: Open it when fixed.
+    # pm.add_tritongpu_pipeline_pass(num_stages)
     pm.add_canonicalizer_pass()
     pm.add_cse_pass()
     pm.add_coalesce_pass()
@@ -994,18 +996,18 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
 
     # tritongpu-ir
     module = make_tritongpu_ir(module, num_warps)
-    
+
     module = optimize_tritongpu_ir(module, num_stages)
     if output == "ttgir":
         return module.str()
     if extern_libs:
         add_external_libs(module, extern_libs)
     print(module.str())
-    
+
     # llvm-ir
     llvm_ir = make_llvm_ir(module)
     print(module.str())
-    
+
     assert device >= 0, "device should be provided."
     ptxas, cuda_version = path_to_ptxas()
     compute_capability = torch.cuda.get_device_capability(device)
