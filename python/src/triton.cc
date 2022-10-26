@@ -492,16 +492,16 @@ void init_triton_codegen(py::module &&m) {
       },
       py::return_value_policy::take_ownership);
   
-  m.def("compile_ttir_to_amdgpu",
+  m.def("compile_ttir_to_amdgcn",
       [](backend_t backend, ir::module &ir, uint64_t device, int num_warps, int num_stages, py::dict& extern_libs, size_t cc) {
           std::ostringstream ttir;
           int n_shared_bytes;
           std::string tmp;
-          std::string amdgpu;
-          std::string hipmodule;
+          std::string amdgcn;
+          std::string hsaco_path;
           std::string name;
           { 
-            std::cout << "triton.cc: compile_ttir_to_amdgpu:" << std::endl;
+            std::cout << "triton.cc: compile_ttir_to_amdgcn:" << std::endl;
             // Scope where the GIL is released
             py::gil_scoped_release allow_threads;
             name = ir.get_function_list()[0]->get_name();
@@ -534,17 +534,15 @@ void init_triton_codegen(py::module &&m) {
             llir << *llvm;
             llir.flush();
             // LLVM-IR -> AMDGPU
-            std::string amdgpu = drv::llir_to_amdgpu(llvm.get(), "gfx90a");
-            std::cout << "amdgpu = " << amdgpu << std::endl;
-            // AMDGPU -> Binary
-            hipModule_t hipmodule = drv::amdgpu_to_hipmodule(amdgpu);
-            std::cout << "hipmodule = " << hipmodule << std::endl;
+            std::tuple<std::string, std::string>  amdgpu = drv::llir_to_amdgcn(llvm.get(), "gfx90a");
+            amdgcn = std::get<0>(amdgpu);
+            hsaco_path = std::get<1>(amdgpu);
           }
           asm_map_t asm_map;
           asm_map["ttir"] = py::cast(ttir.str());
           asm_map["llir"] = py::cast(tmp);
-          asm_map["amdgpu"] = py::cast(amdgpu);
-          asm_map["hipmodule"] = py::bytes(hipmodule);
+          asm_map["amdgcn"] = py::cast(amdgcn);
+          asm_map["hsaco_path"] = py::cast(hsaco_path);
           
           return std::make_tuple(name, asm_map, n_shared_bytes);
       },
@@ -585,34 +583,36 @@ void init_triton_codegen(py::module &&m) {
   // --------------------------------------- 
   // Load provided assembly code into driver
   // --------------------------------------- 
-  m.def("load_binary_hipmodule", [](const std::string& name, const std::string& data, size_t n_shared_bytes, uint64_t device){
-        std::cout << "triton.cc: load_binary_hipmodule:" << std::endl;
+  m.def("load_binary_hsaco", [](const std::string& name, const std::string& data, size_t n_shared_bytes, uint64_t device){
+        std::cout << "triton.cc: load_binary_hsaco:" << std::endl;
         std::cout << "\tname:" << name << std::endl;
         std::cout << "\tdata:" << data << std::endl;
         std::cout << "\tn_shared_bytes:" << n_shared_bytes << std::endl;
         std::cout << "\tdevice:" << device << std::endl;
         py::gil_scoped_release allow_threads;
         // create driver handles
+        std::cout << "\t" << "// create driver handles" << std::endl;
         hipFunction_t fun;
-        hipModule_t mod;
-        drv::dispatch::hipModuleLoadData(&mod, data.c_str());
+        hipModule_t mod = drv::amdgpu_to_hipmodule(data);
         drv::dispatch::hipModuleGetFunction(&fun, mod, name.c_str());
         // get allocated registers and spilled registers from the function
+        std::cout << "\t" << "// get allocated registers and spilled registers from the function" << std::endl;
         int n_regs = 0;
         int n_spills = 0;
         hipFuncAttributes attr;
-        drv::dispatch::hipFuncGetAttributes(&attr, fun);
-        drv::dispatch::hipFuncGetAttributes(&attr, fun);
+        // drv::dispatch::hipFuncGetAttributes(&attr, fun);
+        // drv::dispatch::hipFuncGetAttributes(&attr, fun);
         n_regs = attr.numRegs;
         n_spills = attr.localSizeBytes / 4;
         // set dynamic shared memory if necessary
+        std::cout << "\t" << "// set dynamic shared memory if necessary" << std::endl;
         int shared_optin;
         drv::dispatch::hipDeviceGetAttribute(&shared_optin, hipDeviceAttributeSharedMemPerBlockOptin, device);
         if(n_shared_bytes > 49152 && shared_optin > 49152){
-          drv::dispatch::hipFuncSetCacheConfig(fun, hipFuncCachePreferShared);
+          // drv::dispatch::hipFuncSetCacheConfig(fun, hipFuncCachePreferShared);
           int shared_total, shared_static;
           drv::dispatch::hipDeviceGetAttribute(&shared_total, hipDeviceAttributeMaxSharedMemoryPerMultiprocessor, device);
-          drv::dispatch::hipFuncGetAttributes(&attr, fun);
+          // drv::dispatch::hipFuncGetAttributes(&attr, fun);
           shared_total = attr.sharedSizeBytes;
           // drv::dispatch::hipFuncSetAttribute(fun, hipFuncAttributeMaxDynamicSharedMemorySize, shared_optin - shared_static);
         }

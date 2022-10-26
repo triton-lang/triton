@@ -269,8 +269,9 @@ namespace triton
     /* ------------------------ */
     //         HIP              //
     /* ------------------------ */
-    std::string llir_to_amdgpu(llvm::Module *module, const std::string &_proc)
+    std::tuple<std::string, std::string> llir_to_amdgcn(llvm::Module *module, const std::string &_proc)
     {
+      std::cout << "llvm.cc: llir_to_amdgcn:" << std::endl;
       init_llvm();
       // proc = std::get<0>(GetFeatureStrFromGCNArchName(rocminfo));
       // features = std::get<1>(GetFeatureStrFromGCNArchName(rocminfo));
@@ -329,21 +330,13 @@ namespace triton
       machine->addPassesToEmitFile(pass, *isabin_fs, nullptr, llvm::CGFT_ObjectFile);
       pass.run(*module);
 
-#ifdef DEBUG_ROCM
-      std::cout << "Generating GCN ISA file" << std::endl;
+      // Save GCN ISA.
       llvm::SmallVector<char, 0> debugBuffer;
       llvm::legacy::PassManager debugPass;
       llvm::raw_svector_ostream debugStream(debugBuffer);
       machine->addPassesToEmitFile(debugPass, debugStream, nullptr, llvm::CodeGenFileType::CGFT_AssemblyFile); // TODO:cause segfault on REM ops also cause @llvm.amdgcn.if bug
       debugPass.run(*module);
-
-      // Save GCN ISA.
-      std::string amdgcn_path = std::string("/tmp/") + kernel_name + std::string(".gcn");
-      std::string result(debugBuffer.begin(), debugBuffer.end());
-      std::ofstream amdgcn(amdgcn_path);
-      amdgcn << result;
-      amdgcn.close();
-#endif
+      std::string amdgcn(debugBuffer.begin(), debugBuffer.end());
 
       // generate HASCO file
       std::string hsaco_path = std::string("/tmp/") + kernel_name + std::string(".hsaco");
@@ -359,13 +352,14 @@ namespace triton
         std::cout << lld_result << std::endl;
       }
 
-      return hsaco_path;
+      return std::make_tuple(amdgcn, hsaco_path);
     }
 
-    hipModule_t amdgpu_to_hipmodule(const std::string &path)
+    hipModule_t amdgpu_to_hipmodule(const std::string &hsaco_path)
     {
+      std::cout << "llvm.cc: amdgpu_to_hipmodule:" << std::endl;
       // Read HSACO.
-      std::ifstream hsaco_file(path, std::ios::binary | std::ios::ate);
+      std::ifstream hsaco_file(hsaco_path, std::ios::binary | std::ios::ate);
       std::ifstream::pos_type hsaco_file_size = hsaco_file.tellg();
 
       std::vector<unsigned char> hsaco(hsaco_file_size);

@@ -895,7 +895,7 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(),
     if output == "ttir":
         return module
 
-    assert (output == "cubin" or output == "hipmodule")
+    assert (output == "cubin" or output == "hsaco")
     if torch.version.hip is not None:
         backend = _triton.runtime.backend.ROCM
     else:
@@ -905,7 +905,7 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(),
 
     # compile ttir
     if torch.version.hip is not None:
-        name, asm, shared_mem = _triton.code_gen.compile_ttir_to_amdgpu(backend, module, device, num_warps, num_stages, extern_libs, cc)
+        name, asm, shared_mem = _triton.code_gen.compile_ttir_to_amdgcn(backend, module, device, num_warps, num_stages, extern_libs, cc)
     else:
         name, asm, shared_mem = _triton.code_gen.compile_ttir_to_ptx(backend, module, device, num_warps, num_stages, extern_libs, cc)
     return asm, shared_mem, name
@@ -1275,7 +1275,7 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
             src_path = os.path.join(tmpdir, "main.c")
             with open(src_path, "w") as f:
                 f.write(src)
-            so = _build(fn.__name__, src_path, tmpdir)
+            so = _build(fn.__name__, src_path, tmpdir) # build step
             with open(so, "rb") as f:
                 so_cache_manager.put(f.read(), so_name, binary=True)
 
@@ -1283,10 +1283,10 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
     fn_cache_key = make_fn_cache_key(fn.cache_key, signature, configs, constants, num_warps, num_stages)
     fn_cache_manager = CacheManager(fn_cache_key)
     if torch.version.hip is not None:
-        amdgpu_name = f"{name}.gcn"
-        hipmodule_name = f"{name}.hipmodule"
-        assembly_name = amdgpu_name
-        binary_name = hipmodule_name
+        amdgcn_name = f"{name}.gcn"
+        hasco_name = f"{name}.hsaco"
+        assembly_name = amdgcn_name
+        binary_name = hasco_name
     else:
         ptx_name = f"{name}.ptx"
         cubin_name = f"{name}.cubin"
@@ -1304,10 +1304,10 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
 
         if torch.version.hip is not None:
             asm, shared, kernel_name = _compile(fn, signature, device, constants, configs[0], num_warps, num_stages,
-                                                extern_libs, "hipmodule", cc)
+                                                extern_libs, "hsaco", cc)
             # cache AMD assembly and binary
-            fn_cache_manager.put(asm["hipmodule"], binary_name)
-            fn_cache_manager.put(asm["amdgpu"], assembly_name, binary=False)
+            fn_cache_manager.put(asm["hsaco_path"], binary_name, binary=False)
+            fn_cache_manager.put(asm["amdgcn"], assembly_name, binary=False)
         else:
             asm, shared, kernel_name = _compile(fn, signature, device, constants, configs[0], num_warps, num_stages,
                                                 extern_libs, "cubin", cc)
@@ -1354,10 +1354,10 @@ class CompiledKernel:
         # initialize asm dict
         self.asm = dict()
         if torch.version.hip is not None:
-            with open(os.path.join(cache_dir, f"{fn_name}.hipmodule"), "rb") as f:
-                self.asm["hipmodule"] = f.read()
+            with open(os.path.join(cache_dir, f"{fn_name}.hsaco"), "rb") as f:
+                self.asm["hsaco_path"] = f.read()
             with open(os.path.join(cache_dir, f"{fn_name}.gcn"), "r") as f:
-                self.asm["amdgpu"] = f.read()
+                self.asm["amdgcn"] = f.read()
         else:
             with open(os.path.join(cache_dir, f"{fn_name}.cubin"), "rb") as f:
                 self.asm["cubin"] = f.read()
@@ -1369,7 +1369,7 @@ class CompiledKernel:
             self.asm["ttir"] = f.read()
 
         if torch.version.hip is not None:
-            mod, func, n_regs, n_spills = _triton.code_gen.load_binary_hipmodule(metadata["name"], self.asm["hipmodule"], self.shared, device)
+            mod, func, n_regs, n_spills = _triton.code_gen.load_binary_hsaco(metadata["name"], self.asm["hsaco_path"], self.shared, device)
         else:
             mod, func, n_regs, n_spills = _triton.code_gen.load_binary_cubin(metadata["name"], self.asm["cubin"], self.shared, device)
         self.fn_name = fn_name
