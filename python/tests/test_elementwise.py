@@ -161,7 +161,7 @@ def kernel(X0, X1, X2, Y, BLOCK: tl.constexpr):
     fp.write(src)
     fp.flush()
 
-    def kernel(X0, X1, Y, BLOCK: tl.constexpr):
+    def kernel(X0, X1, X2, Y, BLOCK: tl.constexpr):
         pass
     kernel.__code__ = _testcapi.code_newempty(fp.name, "kernel", 1)
     parameters = []
