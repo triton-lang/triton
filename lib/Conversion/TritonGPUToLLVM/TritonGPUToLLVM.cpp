@@ -91,7 +91,7 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 #define store(val, ptr) rewriter.create<LLVM::StoreOp>(loc, val, ptr)
 #define select(...) rewriter.create<LLVM::SelectOp>(loc, __VA_ARGS__)
 #define address_of(...) rewriter.create<LLVM::AddressOfOp>(loc, __VA_ARGS__)
-#define barrier rewriter.create<mlir::gpu::BarrierOp>(loc)
+#define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
 #define i32_ty rewriter.getIntegerType(32)
 #define vec_ty(type, num) VectorType::get(num, type)
@@ -1877,7 +1877,7 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
 
   for (unsigned repId = 0; repId < accumNumReplicates; ++repId) {
     auto multiDimRepId = getMultiDimIndex<unsigned>(repId, numReplicates);
-    barrier;
+    barrier();
     if (srcLayout.isa<BlockedEncodingAttr>() ||
         srcLayout.isa<MmaEncodingAttr>()) {
       processReplica(loc, rewriter, /*stNotRd*/ true, srcTy, inNumCTAsEachRep,
@@ -1887,7 +1887,7 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
       assert(0 && "ConvertLayout with input layout not implemented");
       return failure();
     }
-    barrier;
+    barrier();
     if (dstLayout.isa<BlockedEncodingAttr>() ||
         dstLayout.isa<MmaEncodingAttr>()) {
       processReplica(loc, rewriter, /*stNotRd*/ false, dstTy, outNumCTAsEachRep,
@@ -1963,6 +1963,11 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
   smemBase = bitcast(elemPtrTy, smemBase);
   unsigned numWordsEachRep = product<unsigned>(wordsInEachRep);
   SmallVector<Value> wordVecs(numWordsEachRep);
+  // TODO: We should get less barriers if it is handled by membar pass
+  //       instead of the backend, since the later can only handle it in
+  //       the most conservative way. However just keep for now and revisit
+  //       in the future in case necessary.
+  barrier();
   for (unsigned i = 0; i < numElems; ++i) {
     if (i % srcAccumSizeInThreads == 0) {
       // start of a replication
@@ -2016,8 +2021,7 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
       }
     }
   }
-  // TODO: double confirm if the Barrier is necessary here
-  barrier;
+  barrier();
   rewriter.replaceOp(op, smemBase);
   return success();
 }
@@ -3056,11 +3060,6 @@ struct MMA16816ConversionHelper {
       for (unsigned m = 0; m < numRepM; ++m)
         for (unsigned n = 0; n < numRepN; ++n)
           callMma(2 * m, n, 2 * k);
-
-    // NOTE, the barrier here is a temporary trick making the gemm with a
-    // k-forloop pass the precision test, or it will fail.
-    // TODO[Superjomn]: Fix with a more general and performance-friendly way.
-    barrier;
 
     // replace with new packed result
     Type structTy = LLVM::LLVMStructType::getLiteral(
