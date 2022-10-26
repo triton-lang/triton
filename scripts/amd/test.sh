@@ -26,10 +26,11 @@ rm -rf /tmp/triton
 # python python/test/test_empty.py
 # -ex 'ignore 1 472' \
 
-# pytest --verbose python/test/unit/language/test_core.py 2>&1 | tee /dockerx/triton/test_core.log
+pytest --verbose python/test/unit/language/test_core.py 2>&1 | tee /dockerx/triton/test_core.log
 # pytest --verbose python/test/unit/language/test_core.py::test_empty_kernel[float32] 2>&1 | tee /dockerx/triton/test_empty_kernel.log
 # pytest --verbose python/test/unit/language/test_core.py::test_bin_op[int32-uint32-+] 2>&1 | tee /dockerx/triton/test_bin_op.log
-pytest --verbose python/test/unit/language/test_core.py::test_atomic_rmw[add-float16-all_neg] 2>&1 | tee /dockerx/triton/test_bin_op.log
+# pytest --verbose python/test/unit/language/test_core.py::test_atomic_rmw 2>&1 | tee /dockerx/triton/test_atomic_rmw.log
+# pytest --verbose python/test/unit/language/test_core.py::test_atomic_rmw[add-float16-all_neg] 2>&1 | tee /dockerx/triton/test_atomic_rmw.log
 
 # pytest --capture=tee-sys --verbose  python/test/regression/test_performance.py | tee /dockerx/triton/test_performance.log
 # pytest --capture=tee-sys --verbose  python/test/regression/test_performance.py::test_matmul | tee /dockerx/triton/test_performance_matmul.log
