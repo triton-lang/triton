@@ -72,7 +72,7 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 
 } // namespace
 
-// Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
+// Shortcuts for some commonly used LLVM ops to keep code clean and intuitive
 #define udiv(...) rewriter.create<LLVM::UDivOp>(loc, __VA_ARGS__)
 #define urem(...) rewriter.create<LLVM::URemOp>(loc, __VA_ARGS__)
 #define add(...) rewriter.create<LLVM::AddOp>(loc, __VA_ARGS__)
@@ -105,6 +105,48 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 #define idx_val(...)                                                           \
   LLVM::createIndexConstant(rewriter, loc, this->getTypeConverter(),           \
                             __VA_ARGS__)
+
+void llPrintf(StringRef msg, std::initializer_list<Value> args,
+              ConversionPatternRewriter &rewriter) {
+  assert(args ==``1 &&.size() == 1);
+  auto msgStr = rewriter.create<mlir::ConstantOp>(UnknownLoc{},
+                                                  rewriter.getStringAttr(msg));
+
+  PTXBuilder builder;
+  auto &declareExternFn =
+      *builder.create(".extern .func  (.param .b32 retval) vprintf(.param .b64 "
+                      "param0, .param .b64 param1);\n");
+
+  const char *ptxCode =
+      ".param .b64 param0;\n" // prepare param0 (format string)
+      "st.param.b64 [param0], %0;\n"
+      ".local .align 8 .b8 array[8];\n" // prepare array
+      ".reg .b64 rd0;\n"
+      "mov.u64 rd0, array;\n"
+      ".reg .b64 rd1;\n"
+      "cvta.local.u64 rd1, rd0;\n"
+      "st.local.u32 [rd0], %1;\n"
+      ".param .b64 param1;\n" // prepare param1 (value)
+      "st.param.b64 [param1], rd1;\n"
+      ".param .b32 retval;\n" // call vprintf
+      "call.uni (retval), vprintf, (param0, param1);";
+
+  auto &callVPrintfPtrCode = *builder.create(ptxCode);
+
+  // prepare the arguments for vprintf
+  auto msgOpr = builder.newOperand(msgStr, "r");
+  SmallVector<PTXBuilder::Operand *> oprs(msgStr);
+  for (auto arg : args) {
+    auto opr = builder.newOperand(arg, "r");
+    oprs.push_back(opr);
+  }
+
+  declareExternFn();
+  callVPrintfPtrCode(oprs);
+
+  auto *ctx = rewriter.getContext();
+  builder.launch(rewriter, UnknownLoc{}, void_ty);
+}
 
 } // namespace LLVM
 } // namespace mlir
