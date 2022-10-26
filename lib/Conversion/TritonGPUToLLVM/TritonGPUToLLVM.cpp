@@ -3406,7 +3406,7 @@ struct InsertSliceAsyncOpConversion
     assert(axis == 0 && "insert_slice_async: Only axis=0 is supported for now");
     auto dstBase = createIndexAttrConstant(rewriter, loc,
                                            getTypeConverter()->getIndexType(),
-                                           product<int64_t>(resTy.getShape()));
+                                           product<int64_t>(srcTy.getShape()));
     Value offset = mul(llIndex, dstBase);
     auto dstPtrTy = LLVM::LLVMPointerType::get(
         getTypeConverter()->convertType(resTy.getElementType()), 3);
@@ -3525,12 +3525,14 @@ struct InsertSliceAsyncOpConversion
       auto tileOffset = tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}];
       for (unsigned wordIdx = 0; wordIdx < numWords; ++wordIdx) {
         PTXBuilder ptxBuilder;
+        auto wordElemIdx = wordIdx * numWordElems;
         auto &copyAsyncOp =
             *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
+        auto tileOffsetWord = gep(dstPtrTy, tileOffset, i32_val(wordElemIdx));
         auto *dstOperand =
-            ptxBuilder.newAddrOperand(tileOffset, "r", baseOffset);
-        auto *srcOperand = ptxBuilder.newAddrOperand(
-            srcElems[elemIdx + wordIdx * numWordElems], "l");
+            ptxBuilder.newAddrOperand(tileOffsetWord, "r", baseOffset);
+        auto *srcOperand =
+            ptxBuilder.newAddrOperand(srcElems[elemIdx + wordElemIdx], "l");
         auto *copySize = ptxBuilder.newConstantOperand(byteWidth);
         auto *srcSize = copySize;
         if (op.mask()) {
@@ -3538,7 +3540,7 @@ struct InsertSliceAsyncOpConversion
           // if there's any mask. cp.async will automatically fill the
           // remaining slots with 0 if cp-size > src-size.
           // XXX(Keren): Always assume other = 0 for now.
-          auto selectOp = select(maskElems[elemIdx + wordIdx * numWordElems],
+          auto selectOp = select(maskElems[elemIdx + wordElemIdx],
                                  i32_val(byteWidth), i32_val(0));
           srcSize = ptxBuilder.newOperand(selectOp, "r");
         }
