@@ -441,7 +441,7 @@ void init_triton_ir(py::module &&m) {
                  loc, self.getF32FloatAttr(v));
            })
       .def("get_null_value",
-           [](mlir::OpBuilder &self, mlir::Type &type) -> mlir::Value {
+           [](mlir::OpBuilder &self, mlir::Type type) -> mlir::Value {
              auto loc = self.getUnknownLoc();
              if (auto floatTy = type.dyn_cast<mlir::FloatType>())
                return self.create<mlir::arith::ConstantFloatOp>(
@@ -452,7 +452,7 @@ void init_triton_ir(py::module &&m) {
                throw std::runtime_error("Not implemented");
            })
       .def("get_all_ones_value",
-           [](mlir::OpBuilder &self, mlir::Type &type) -> mlir::Value {
+           [](mlir::OpBuilder &self, mlir::Type type) -> mlir::Value {
              auto loc = self.getUnknownLoc();
              uint64_t val = 0xFFFFFFFFFFFFFFFF;
              if (auto floatTy = type.dyn_cast<mlir::FloatType>())
