@@ -645,8 +645,8 @@ Value convertSplatLikeOp(Type elemType, Type resType, Value constVal,
     auto srcType = typeConverter->convertType(elemType);
     auto llSrc = bitcast(srcType, constVal);
     size_t elemsPerThread = getElemsPerThread(layout, tensorTy.getShape());
-    llvm::SmallVector<Value, 4> elems(elemsPerThread, llSrc);
-    llvm::SmallVector<Type, 4> elemTypes(elems.size(), srcType);
+    llvm::SmallVector<Value> elems(elemsPerThread, llSrc);
+    llvm::SmallVector<Type> elemTypes(elems.size(), srcType);
     auto structTy =
         LLVM::LLVMStructType::getLiteral(rewriter.getContext(), elemTypes);
 
@@ -2551,7 +2551,7 @@ struct DotOpConversionHelper {
     mmaType = getTensorCoreTypeFromOperand(operandTy);
   }
 
-  // Deduce the M and N from either $c or $d type.
+  // Get the M and N of mat instruction shape.
   static std::tuple<int, int> getMatShapeMN() {
     // According to DotOpConversionHelper::mmaMatShape, all the matrix shape's
     // M,N are {8,8}
@@ -2685,8 +2685,7 @@ struct DotOpConversionHelper {
     return mmaMatShape.at(mmaType);
   }
 
-  // Deduce the TensorCoreType from either $a or $b's type. This method is not
-  // safe, but we cannot get the DotOp in some getjmaMatShape usage case.
+  // Deduce the TensorCoreType from either $a or $b's type.
   static TensorCoreType getTensorCoreTypeFromOperand(Type operandTy) {
     auto tensorTy = operandTy.cast<RankedTensorType>();
     auto elemTy = tensorTy.getElementType();
@@ -2860,20 +2859,56 @@ struct MMA16816ConversionHelper {
 
   // \param operand is either $a or $b's type.
   inline int getNumRepM(Type operand, int M) const {
-    auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaInstrShape(operand);
-    return std::max<int>(M / (wpt[0] * mmaInstrM), 1);
+    return getNumRepM(operand, M, wpt[0]);
   }
 
   // \param operand is either $a or $b's type.
   inline int getNumRepN(Type operand, int N) const {
-    auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaInstrShape(operand);
-    return std::max<int>(N / (wpt[1] * mmaInstrN), 1);
+    return getNumRepN(operand, N, wpt[1]);
   }
 
   // \param operand is either $a or $b's type.
   inline int getNumRepK(Type operand, int K) const {
-    auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaInstrShape(operand);
+    return getNumRepK_(operand, K);
+  }
+
+  static int getNumRepM(Type operand, int M, int wpt) {
+    auto tensorCoreType =
+        DotOpConversionHelper::getTensorCoreTypeFromOperand(operand);
+    int mmaInstrM = DotOpConversionHelper::getMmaInstrShape(tensorCoreType)[0];
+    return std::max<int>(M / (wpt * mmaInstrM), 1);
+  }
+
+  static int getNumRepN(Type operand, int N, int wpt) {
+    auto tensorCoreType =
+        DotOpConversionHelper::getTensorCoreTypeFromOperand(operand);
+    int mmaInstrN = DotOpConversionHelper::getMmaInstrShape(tensorCoreType)[1];
+    return std::max<int>(N / (wpt * mmaInstrN), 1);
+  }
+
+  static int getNumRepK_(Type operand, int K) {
+    auto tensorCoreType =
+        DotOpConversionHelper::getTensorCoreTypeFromOperand(operand);
+    int mmaInstrK = DotOpConversionHelper::getMmaInstrShape(tensorCoreType)[2];
     return std::max<int>(K / mmaInstrK, 1);
+  }
+
+  // Get number of elements per thread for $a operand.
+  static size_t getANumElemsPerThread(RankedTensorType operand,
+                                      ArrayRef<unsigned> wpt) {
+    auto shape = operand.getShape();
+    int repM = getNumRepM(operand, shape[0], wpt[0]);
+    int repK = getNumRepK_(operand, shape[1]);
+    return 4 * repM * repK;
+  }
+
+  // Get number of elements per thread for $b operand.
+  static size_t getBNumElemsPerThread(RankedTensorType operand,
+                                      ArrayRef<unsigned> wpt) {
+    auto shape = operand.getShape();
+    int repK = getNumRepK_(operand, shape[0]);
+    int repN = getNumRepN(operand, shape[1], wpt[1]);
+    return 4 * std::max(repN / 2, 1) * repK;
   }
 
   // Loading $a from smem to registers, returns a LLVM::Struct.
@@ -3287,7 +3322,8 @@ public:
             ctx, SmallVector<Type>(fcSize, type.getElementType()));
       }
 
-      llvm::errs() << "Unexpected mma layout detected in TypeConverter";
+      llvm::errs()
+          << "Unexpected mma layout detected in TritonToLLVMTypeConverter";
       return llvm::None;
 
     } else if (auto dot_op_layout =
@@ -3295,36 +3331,26 @@ public:
       auto mmaLayout = dot_op_layout.getParent().cast<MmaEncodingAttr>();
       if (mmaLayout.getVersion() == 2) {
         auto wpt = mmaLayout.getWarpsPerCTA();
-        auto tensorCoreType =
-            DotOpConversionHelper::getTensorCoreTypeFromOperand(type);
-        // {M, N, K}
-        auto mmaInstrShape =
-            DotOpConversionHelper::getMmaInstrShape(tensorCoreType);
         Type elemTy = type.getElementType();
 
         if (dot_op_layout.getOpIdx() == 0) { // $a
-          int M = type.getShape()[0];
-          int K = type.getShape()[1];
-          int repM = std::max<int>(M / (wpt[0] * mmaInstrShape[0]), 1);
-          int repK = std::max<int>(K / mmaInstrShape[2], 1);
-          int elems = 4 * repM * repK;
+          int elems =
+              MMA16816ConversionHelper::getANumElemsPerThread(type, wpt);
           Type x2Ty = vec_ty(elemTy, 2);
           return LLVM::LLVMStructType::getLiteral(
               ctx, SmallVector<Type>(elems, x2Ty));
         }
         if (dot_op_layout.getOpIdx() == 1) { // $b
-          int K = type.getShape()[0];
-          int N = type.getShape()[1];
-          int repN = std::max<int>(N / (wpt[1] * mmaInstrShape[1]), 1);
-          int repK = std::max<int>(K / mmaInstrShape[2], 1);
-          int elems = 4 * std::max(repN / 2, 1) * repK;
+          int elems =
+              MMA16816ConversionHelper::getBNumElemsPerThread(type, wpt);
           Type x2Ty = vec_ty(elemTy, 2);
           return LLVM::LLVMStructType::getLiteral(
               ctx, SmallVector<Type>(elems, x2Ty));
         }
       }
 
-      llvm::errs() << "Unexpected dot operand layout detected in TypeConverter";
+      llvm::errs() << "Unexpected dot operand layout detected in "
+                      "TritonToLLVMTypeConverter";
       return llvm::None;
     }
 
