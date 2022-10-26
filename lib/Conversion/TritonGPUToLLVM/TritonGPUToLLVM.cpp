@@ -2776,7 +2776,6 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
                   ConversionPatternRewriter &rewriter) const override {
     // D = A * B + C
     Value A = op.a();
-    Value C = op.c();
     Value D = op.getResult();
 
     // Here we assume the DotOp's operands always comes from shared memory.
@@ -3149,9 +3148,9 @@ struct MMA16816ConversionHelper {
   MMA16816ConversionHelper(MmaEncodingAttr mmaLayout, Value thread,
                            ConversionPatternRewriter &rewriter,
                            TypeConverter *typeConverter, Location loc)
-      : mmaLayout(mmaLayout), helper(mmaLayout), rewriter(rewriter),
-        typeConverter(typeConverter), loc(loc), ctx(mmaLayout.getContext()),
-        thread(thread) {
+      : mmaLayout(mmaLayout), thread(thread), helper(mmaLayout),
+        rewriter(rewriter), typeConverter(typeConverter), loc(loc),
+        ctx(mmaLayout.getContext()) {
     wpt = mmaLayout.getWarpsPerCTA();
 
     Value _32 = i32_val(32);
@@ -3323,17 +3322,12 @@ struct MMA16816ConversionHelper {
     helper.deduceMmaType(op);
 
     auto aTensorTy = a.getType().cast<RankedTensorType>();
-    auto bTensorTy = b.getType().cast<RankedTensorType>();
-    auto cTensorTy = c.getType().cast<RankedTensorType>();
     auto dTensorTy = d.getType().cast<RankedTensorType>();
 
     auto aShape = aTensorTy.getShape();
     auto dShape = dTensorTy.getShape();
 
-    int NK = aShape[1];
     // shape / shape_per_cta
-    auto [matShapeM, matShapeN, matShapeK] = getMmaMatShape(aTensorTy);
-    auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaInstrShape(aTensorTy);
     int numRepM = getNumRepM(aTensorTy, dShape[0]);
     int numRepN = getNumRepN(aTensorTy, dShape[1]);
     int numRepK = getNumRepK(aTensorTy, aShape[1]);
@@ -3393,7 +3387,7 @@ struct MMA16816ConversionHelper {
 private:
   std::function<void(int, int)>
   getLoadMatrixFn(Value tensor, Value llTensor, MmaEncodingAttr mmaLayout,
-                  int wpt, int kOrder, ArrayRef<int> instrShape,
+                  int wpt, uint32_t kOrder, ArrayRef<int> instrShape,
                   ArrayRef<int> matShape, Value warpId,
                   ValueTable &vals) const {
     auto tensorTy = tensor.getType().cast<RankedTensorType>();
@@ -3510,10 +3504,8 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
   auto loc = op.getLoc();
   Value src = op.src();
   Value dst = op.result();
-  auto srcTensorTy = src.getType().cast<RankedTensorType>();
   auto dstTensorTy = dst.getType().cast<RankedTensorType>();
 
-  auto sharedLayout = srcTensorTy.getEncoding().cast<SharedEncodingAttr>();
   auto dotOperandLayout =
       dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
   MmaEncodingAttr mmaLayout =
