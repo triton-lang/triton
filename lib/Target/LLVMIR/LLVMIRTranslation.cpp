@@ -16,9 +16,9 @@
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVM.h"
 #include "triton/tools/sys/getenv.hpp"
 #include "llvm/IR/Constants.h"
-#include "llvm/Support/SourceMgr.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Linker/Linker.h"
+#include "llvm/Support/SourceMgr.h"
 
 namespace mlir {
 namespace triton {
@@ -152,13 +152,16 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
   std::map<std::string, std::string> extern_libs;
   SmallVector<LLVM::LLVMFuncOp> funcs;
   module.walk([&](LLVM::LLVMFuncOp func) {
-    if (func.isExternal()) funcs.push_back(func);
+    if (func.isExternal())
+      funcs.push_back(func);
   });
 
   for (auto &func : funcs) {
     if (func.getOperation()->hasAttr("libname")) {
-      auto name = func.getOperation()->getAttr("libname").dyn_cast<StringAttr>();
-      auto path = func.getOperation()->getAttr("libpath").dyn_cast<StringAttr>();
+      auto name =
+          func.getOperation()->getAttr("libname").dyn_cast<StringAttr>();
+      auto path =
+          func.getOperation()->getAttr("libpath").dyn_cast<StringAttr>();
       if (name) {
         std::string lib_name = name.str();
         extern_libs[lib_name] = path.str();
@@ -167,10 +170,12 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
   }
 
   if (module.getOperation()->hasAttr("triton_gpu.externs")) {
-    auto dict = module.getOperation()->getAttr("triton_gpu.externs").dyn_cast<DictionaryAttr>();
-    for (auto& attr : dict) {
+    auto dict = module.getOperation()
+                    ->getAttr("triton_gpu.externs")
+                    .dyn_cast<DictionaryAttr>();
+    for (auto &attr : dict) {
       extern_libs[attr.getName().strref().trim().str()] =
-        attr.getValue().dyn_cast<StringAttr>().strref().trim().str();
+          attr.getValue().dyn_cast<StringAttr>().strref().trim().str();
     }
   }
 
@@ -181,17 +186,17 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
   }
 
   llvm::SMDiagnostic err;
-  for (auto& lib : extern_libs) {
+  for (auto &lib : extern_libs) {
     auto ext_mod = llvm::parseIRFile(lib.second, err, *llvmContext);
     if (!ext_mod) {
-      llvm::errs() <<"Failed to load extern lib " << lib.first;
+      llvm::errs() << "Failed to load extern lib " << lib.first;
       return nullptr;
     }
     ext_mod->setTargetTriple(llvmir->getTargetTriple());
     ext_mod->setDataLayout(llvmir->getDataLayout());
 
     if (llvm::Linker::linkModules(*llvmir, std::move(ext_mod))) {
-      llvm::errs() <<"Failed to link extern lib " << lib.first;
+      llvm::errs() << "Failed to link extern lib " << lib.first;
       return nullptr;
     }
   }
@@ -199,13 +204,15 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
   return llvmir;
 }
 
-void addExternalLibs(mlir::ModuleOp& module, const std::vector<std::string>& names, const std::vector<std::string>& paths) {
+void addExternalLibs(mlir::ModuleOp &module,
+                     const std::vector<std::string> &names,
+                     const std::vector<std::string> &paths) {
   if (names.empty() || names.size() != paths.size())
     return;
 
   llvm::SmallVector<NamedAttribute, 2> attrs;
 
-  for(size_t i=0; i<names.size(); ++i) {
+  for (size_t i = 0; i < names.size(); ++i) {
     auto name = StringAttr::get(module->getContext(), names[i]);
     auto path = StringAttr::get(module->getContext(), paths[i]);
     NamedAttribute attr(name, path);

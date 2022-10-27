@@ -1400,8 +1400,6 @@ struct ExtractSliceOpConversion
   }
 };
 
-// TODO: rewrite Ternary/Binary/Unary as Elementwise
-
 // A CRTP style of base class.
 template <typename SourceOp, typename DestOp, typename ConcreteT>
 class ElementwiseOpConversionBase
