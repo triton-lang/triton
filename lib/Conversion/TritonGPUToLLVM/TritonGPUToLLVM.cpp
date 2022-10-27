@@ -3705,6 +3705,31 @@ private:
   }
 };
 
+struct FDivOpConversion
+    : ElementwiseOpConversionBase<mlir::arith::DivFOp, LLVM::InlineAsmOp,
+                                  FDivOpConversion> {
+  using Base = ElementwiseOpConversionBase<mlir::arith::DivFOp,
+                                           LLVM::InlineAsmOp, FDivOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  Value createDestOp(mlir::arith::DivFOp op, OpAdaptor adaptor,
+                     ConversionPatternRewriter &rewriter, Type elemTy,
+                     ValueRange operands, Location loc) const {
+
+    PTXBuilder ptxBuilder;
+    auto &fdiv = *ptxBuilder.create<PTXInstr>("div");
+    fdiv.o("full").o("f32");
+    auto res = ptxBuilder.newOperand("=r");
+    auto lhs = ptxBuilder.newOperand(operands[0], "r");
+    auto rhs = ptxBuilder.newOperand(operands[1], "r");
+    fdiv(res, lhs, rhs);
+
+    Value ret = ptxBuilder.launch(rewriter, loc, elemTy, false);
+    return ret;
+  }
+};
+
 void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns, int numWarps,
                                   AxisInfoAnalysis &axisInfoAnalysis,
@@ -3766,6 +3791,8 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   POPULATE_UNARY_OP(math::SqrtOp, math::SqrtOp)
   POPULATE_UNARY_OP(math::ExpOp, math::ExpOp)
 #undef POPULATE_UNARY_OP
+
+  patterns.add<FDivOpConversion>(typeConverter, benefit);
 
   patterns.add<ExtElemwiseOpConversion>(typeConverter, benefit);
 
