@@ -56,6 +56,22 @@ def TT_PtrToIntOp : TT_Op<"ptr_to_int", [SameOperandsAndResultShape,
     let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
 }
 
+// arith.bitcast doesn't support pointers
+def TT_BitcastOp : TT_Op<"bitcast", [SameOperandsAndResultShape, 
+                                     SameOperandsAndResultEncoding,
+                                     NoSideEffect,
+                                     /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
+    let summary = "Cast between types of the same bitwidth";
+
+    let arguments = (ins TT_Type:$from);
+
+    let results = (outs TT_Type:$result);
+
+    let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
+
+    // TODO: Add verifier
+}
+
 def TT_FpToFp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape, 
                                    SameOperandsAndResultEncoding,
                                    NoSideEffect,
@@ -108,8 +124,7 @@ def TT_LoadOp : TT_Op<"load",
                        AttrSizedOperandSegments,
                        MemoryEffects<[MemRead]>,
                        TypesMatchWith<"infer ptr type from result type",
-                                      "result", "ptr",
-                                      "getPointerTypeFromTensor($_self)">,
+                                      "result", "ptr", "getPointerTypeSameShape($_self)">,
                        TypesMatchWith<"infer mask type from result type or none",
                                       "result", "mask", "getI1SameShape($_self)",
                                       "($_op.getOperands().size() <= 1) || std::equal_to<>()">,
@@ -118,7 +133,7 @@ def TT_LoadOp : TT_Op<"load",
                                       "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
     let summary = "load";
 
-    let arguments = (ins TT_PtrTensor:$ptr, Optional<I1Tensor>:$mask, Optional<TT_Type>:$other,
+    let arguments = (ins TT_PtrLike:$ptr, Optional<TT_BoolLike>:$mask, Optional<TT_Type>:$other,
                          TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict,
                          BoolAttr:$isVolatile);
 
@@ -147,13 +162,13 @@ def TT_StoreOp : TT_Op<"store",
                         MemoryEffects<[MemWrite]>,
                         TypesMatchWith<"infer ptr type from value type",
                                        "value", "ptr",
-                                       "getPointerTypeFromTensor($_self)">,
+                                       "getPointerTypeSameShape($_self)">,
                         TypesMatchWith<"infer mask type from value type",
                                        "value", "mask", "getI1SameShape($_self)",
                                        "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
     let summary = "store";
 
-    let arguments = (ins TT_PtrTensor:$ptr, TT_Type:$value, Optional<I1Tensor>:$mask);
+    let arguments = (ins TT_PtrLike:$ptr, TT_Type:$value, Optional<TT_BoolLike>:$mask);
 
     let builders = [
         OpBuilder<(ins "Value":$ptr, "Value":$value)>,
@@ -273,7 +288,7 @@ def TT_CatOp : TT_Op<"cat", [NoSideEffect,
 //
 // SPMD Ops
 //
-def TT_GetProgramIdOp : TT_Op<"get_program_id"> {
+def TT_GetProgramIdOp : TT_Op<"get_program_id", [NoSideEffect]> {
     let arguments = (ins I32Attr:$axis);
 
     let results = (outs I32:$result);
@@ -281,7 +296,7 @@ def TT_GetProgramIdOp : TT_Op<"get_program_id"> {
     let assemblyFormat = "attr-dict `:` type($result)";
 }
 
-def TT_GetNumProgramsOp : TT_Op<"get_num_programs"> {
+def TT_GetNumProgramsOp : TT_Op<"get_num_programs", [NoSideEffect]> {
     let arguments = (ins I32Attr:$axis);
 
     let results = (outs I32:$result);
@@ -302,7 +317,7 @@ def TT_DotOp : TT_Op<"dot", [NoSideEffect,
         $d = matrix_multiply($a, $b) + $c
     }];
 
-    let arguments = (ins TT_FpIntTensor:$a, TT_FpIntTensor:$b, TT_FpIntTensor:$c, BoolAttr:$allowTF32);
+    let arguments = (ins TT_FpIntTensor:$a, TT_FpIntTensor:$b, TT_FpIntTensor:$c, BoolAttr:$allowTF32, BoolAttr:$transA, BoolAttr:$transB);
 
     let results = (outs TT_FpIntTensor:$d);
 
@@ -318,13 +333,14 @@ def TT_ReduceOp : TT_Op<"reduce", [NoSideEffect,
 
     let arguments = (ins TT_RedOpAttr:$redOp, TT_Tensor:$operand, I32Attr:$axis);
 
-    let results = (outs TT_Tensor:$result);
+    let results = (outs TT_Type:$result);
 
     let builders = [
         OpBuilder<(ins "triton::RedOp":$redOp, "Value":$operand, "int":$axis)>,
     ];
 
     let assemblyFormat = "$operand attr-dict `:` type($operand) `->` type($result)";
+
 }
 
 //

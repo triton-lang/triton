@@ -500,6 +500,30 @@ mlir::LogicalResult ExtractSliceOp::inferReturnTypes(
 }
 
 //===----------------------------------------------------------------------===//
+// DotOperand Encoding
+//===----------------------------------------------------------------------===//
+Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
+  if (parser.parseLess().failed())
+    return {};
+  NamedAttrList attrs;
+  if (parser.parseOptionalAttrDict(attrs).failed())
+    return {};
+  if (parser.parseGreater().failed())
+    return {};
+  unsigned opIdx = attrs.get("opIdx").cast<IntegerAttr>().getInt();
+  Attribute parent = attrs.get("parent");
+
+  return parser.getChecked<DotOperandEncodingAttr>(parser.getContext(), opIdx,
+                                                   parent);
+}
+
+void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
+  printer << "<{"
+          << "opIdx = " << getOpIdx() << ", "
+          << "parent = " << getParent() << "}>";
+}
+
+//===----------------------------------------------------------------------===//
 // ASM Interface (i.e.: alias)
 //===----------------------------------------------------------------------===//
 

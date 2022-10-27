@@ -29,6 +29,7 @@
 using namespace mlir;
 using namespace mlir::triton;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
+using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getElemsPerThread;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
@@ -98,7 +99,7 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 #define store(val, ptr) rewriter.create<LLVM::StoreOp>(loc, val, ptr)
 #define select(...) rewriter.create<LLVM::SelectOp>(loc, __VA_ARGS__)
 #define address_of(...) rewriter.create<LLVM::AddressOfOp>(loc, __VA_ARGS__)
-#define barrier rewriter.create<mlir::gpu::BarrierOp>(loc)
+#define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
 #define i32_ty rewriter.getIntegerType(32)
 #define f16_ty rewriter.getF16Type()
@@ -632,6 +633,13 @@ protected:
   Value smem;
 };
 
+Value convertSplatLikeOpWithMmaLayout(const MmaEncodingAttr &layout,
+                                      Type resType, Type elemType,
+                                      Value constVal,
+                                      TypeConverter *typeConverter,
+                                      ConversionPatternRewriter &rewriter,
+                                      Location loc);
+
 // Convert SplatOp or arith::ConstantOp with SplatElementsAttr to a
 // LLVM::StructType value.
 //
@@ -642,16 +650,26 @@ Value convertSplatLikeOp(Type elemType, Type resType, Value constVal,
                          TypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, Location loc) {
   auto tensorTy = resType.cast<RankedTensorType>();
-  auto layout = tensorTy.getEncoding();
-  auto srcType = typeConverter->convertType(elemType);
-  auto llSrc = bitcast(constVal, srcType);
-  size_t elemsPerThread = getElemsPerThread(layout, tensorTy.getShape());
-  llvm::SmallVector<Value, 4> elems(elemsPerThread, llSrc);
-  llvm::SmallVector<Type, 4> elemTypes(elems.size(), srcType);
-  auto structTy =
-      LLVM::LLVMStructType::getLiteral(rewriter.getContext(), elemTypes);
+  if (tensorTy.getEncoding().isa<BlockedEncodingAttr>()) {
+    auto tensorTy = resType.cast<RankedTensorType>();
+    auto layout = tensorTy.getEncoding();
+    auto srcType = typeConverter->convertType(elemType);
+    auto llSrc = bitcast(srcType, constVal);
+    size_t elemsPerThread = getElemsPerThread(layout, tensorTy.getShape());
+    llvm::SmallVector<Value> elems(elemsPerThread, llSrc);
+    llvm::SmallVector<Type> elemTypes(elems.size(), srcType);
+    auto structTy =
+        LLVM::LLVMStructType::getLiteral(rewriter.getContext(), elemTypes);
 
-  return getStructFromElements(loc, elems, rewriter, structTy);
+    return getStructFromElements(loc, elems, rewriter, structTy);
+  } else if (auto mmaLayout =
+                 tensorTy.getEncoding().dyn_cast<MmaEncodingAttr>()) {
+    return convertSplatLikeOpWithMmaLayout(
+        mmaLayout, resType, elemType, constVal, typeConverter, rewriter, loc);
+  } else
+    assert(false && "Unsupported layout found in ConvertSplatLikeOp");
+
+  return Value{};
 }
 
 struct SplatOpConversion
@@ -852,9 +870,8 @@ struct LoadOpConversion
     bool otherIsSplatConstInt = false;
     DenseElementsAttr constAttr;
     int64_t splatVal = 0;
-    if (valueElemTy.isa<IntegerType>() &&
-        matchPattern(op.other(), m_Constant(&constAttr)) &&
-        constAttr.isSplat()) {
+    if (other && valueElemTy.isa<IntegerType>() &&
+        matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat()) {
       otherIsSplatConstInt = true;
       splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
     }
@@ -1393,6 +1410,8 @@ struct ExtractSliceOpConversion
   }
 };
 
+// TODO: rewrite Ternary/Binary/Unary as Elementwise
+
 // A CRTP style of base class.
 template <typename SourceOp, typename DestOp, typename ConcreteT>
 class BinaryOpConversionBase
@@ -1462,6 +1481,156 @@ struct BinaryOpConversion
   // Get the right operand of the op.
   Value getRhs(OpAdaptor adaptor) const { return adaptor.getRhs(); }
 };
+
+//
+// Ternary
+//
+
+template <typename SourceOp, typename DestOp, typename ConcreteT>
+class TernaryOpConversionBase
+    : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
+public:
+  using OpAdaptor = typename SourceOp::Adaptor;
+
+  explicit TernaryOpConversionBase(LLVMTypeConverter &typeConverter,
+                                   PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit) {}
+
+  LogicalResult
+  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto resultTy = op.getType().template dyn_cast<RankedTensorType>();
+    // ArithmeticToLLVM will handle the lowering of scalar ArithOps
+    if (!resultTy)
+      return failure();
+
+    Location loc = op->getLoc();
+    auto resultLayout =
+        resultTy.getEncoding().template dyn_cast<BlockedEncodingAttr>();
+    auto resultShape = resultTy.getShape();
+    assert(resultLayout && "Unexpected resultLayout in TernaryOpConversion");
+    unsigned elems = resultLayout.getElemsPerThread(resultShape);
+    Type elemTy =
+        this->getTypeConverter()->convertType(resultTy.getElementType());
+    SmallVector<Type> types(elems, elemTy);
+    Type structTy = LLVM::LLVMStructType::getLiteral(this->getContext(), types);
+
+    auto *concreteThis = static_cast<const ConcreteT *>(this);
+    auto lhss =
+        this->getElementsFromStruct(loc, adaptor.getOperands()[0], rewriter);
+    auto rhss =
+        this->getElementsFromStruct(loc, adaptor.getOperands()[1], rewriter);
+    auto thss =
+        this->getElementsFromStruct(loc, adaptor.getOperands()[2], rewriter);
+    SmallVector<Value> resultVals(elems);
+    for (unsigned i = 0; i < elems; ++i) {
+      resultVals[i] = concreteThis->createDestOp(op, rewriter, elemTy, lhss[i],
+                                                 rhss[i], thss[i], loc);
+    }
+    Value view = getStructFromElements(loc, resultVals, rewriter, structTy);
+    rewriter.replaceOp(op, view);
+    return success();
+  }
+};
+
+template <typename SourceOp, typename DestOp>
+struct TernaryOpConversion
+    : public TernaryOpConversionBase<SourceOp, DestOp,
+                                     TernaryOpConversion<SourceOp, DestOp>> {
+
+  explicit TernaryOpConversion(LLVMTypeConverter &typeConverter,
+                               PatternBenefit benefit = 1)
+      : TernaryOpConversionBase<SourceOp, DestOp,
+                                TernaryOpConversion<SourceOp, DestOp>>(
+            typeConverter, benefit) {}
+
+  using OpAdaptor = typename SourceOp::Adaptor;
+  // An interface to support variant DestOp builder.
+  DestOp createDestOp(SourceOp op, ConversionPatternRewriter &rewriter,
+                      Type elemTy, Value lhs, Value rhs, Value th,
+                      Location loc) const {
+    return rewriter.create<DestOp>(loc, elemTy, lhs, rhs, th);
+  }
+};
+
+//
+// Unary
+//
+
+template <typename SourceOp, typename DestOp, typename ConcreteT>
+class UnaryOpConversionBase : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
+
+public:
+  using OpAdaptor = typename SourceOp::Adaptor;
+
+  explicit UnaryOpConversionBase(LLVMTypeConverter &typeConverter,
+                                 PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit) {}
+
+  LogicalResult
+  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto resultTy = op.getType().template dyn_cast<RankedTensorType>();
+
+    // ArithmeticToLLVM will handle the lowering of scalar ArithOps
+    if (!resultTy)
+      return failure();
+
+    Location loc = op->getLoc();
+    auto resultLayout =
+        resultTy.getEncoding().template dyn_cast<BlockedEncodingAttr>();
+    auto resultShape = resultTy.getShape();
+    assert(resultLayout && "Unexpected resultLayout in UnaryOpConversion");
+    unsigned elems = resultLayout.getElemsPerThread(resultShape);
+    Type elemTy =
+        this->getTypeConverter()->convertType(resultTy.getElementType());
+    SmallVector<Type> types(elems, elemTy);
+    Type structTy = LLVM::LLVMStructType::getLiteral(this->getContext(), types);
+
+    auto *concreteThis = static_cast<const ConcreteT *>(this);
+    auto srcs = this->getElementsFromStruct(loc, concreteThis->getSrc(adaptor),
+                                            rewriter);
+    SmallVector<Value> resultVals(elems);
+    for (unsigned i = 0; i < elems; ++i) {
+      resultVals[i] =
+          concreteThis->createDestOp(op, rewriter, elemTy, srcs[i], loc);
+    }
+    Value view = getStructFromElements(loc, resultVals, rewriter, structTy);
+    rewriter.replaceOp(op, view);
+    return success();
+  }
+};
+
+template <typename SourceOp, typename DestOp>
+struct UnaryOpConversion
+    : public UnaryOpConversionBase<SourceOp, DestOp,
+                                   UnaryOpConversion<SourceOp, DestOp>> {
+
+  explicit UnaryOpConversion(LLVMTypeConverter &typeConverter,
+                             PatternBenefit benefit = 1)
+      : UnaryOpConversionBase<SourceOp, DestOp,
+                              UnaryOpConversion<SourceOp, DestOp>>(
+            typeConverter, benefit) {}
+
+  using OpAdaptor = typename SourceOp::Adaptor;
+  // An interface to support variant DestOp builder.
+  DestOp createDestOp(SourceOp op, ConversionPatternRewriter &rewriter,
+                      Type elemTy, Value src, Location loc) const {
+    return rewriter.create<DestOp>(loc, elemTy, src);
+  }
+
+  // Get the source operand of the op.
+  Value getSrc(OpAdaptor adaptor) const {
+    auto operands = adaptor.getOperands();
+    if (operands.size() > 1)
+      llvm::report_fatal_error("unary operator has more than one operand");
+    return operands.front();
+  }
+};
+
+//
+// comparisons
+//
 
 struct CmpIOpConversion
     : public BinaryOpConversionBase<triton::gpu::CmpIOp, LLVM::ICmpOp,
@@ -1575,6 +1744,10 @@ public:
         dstLayout.isa<SharedEncodingAttr>()) {
       return lowerBlockedToShared(op, adaptor, rewriter);
     }
+    if (srcLayout.isa<SharedEncodingAttr>() &&
+        dstLayout.isa<DotOperandEncodingAttr>()) {
+      return lowerSharedToDotOperand(op, adaptor, rewriter);
+    }
     if ((!srcLayout.isa<BlockedEncodingAttr>() &&
          !srcLayout.isa<MmaEncodingAttr>()) ||
         (!dstLayout.isa<BlockedEncodingAttr>() &&
@@ -1582,6 +1755,7 @@ public:
       // TODO: to be implemented
       return failure();
     }
+
     return lowerDistributedToDistributed(op, adaptor, rewriter);
   }
 
@@ -1619,6 +1793,11 @@ private:
   LogicalResult lowerBlockedToShared(triton::gpu::ConvertLayoutOp op,
                                      OpAdaptor adaptor,
                                      ConversionPatternRewriter &rewriter) const;
+
+  // shared -> mma_operand
+  LogicalResult
+  lowerSharedToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+                          ConversionPatternRewriter &rewriter) const;
 };
 
 void ConvertLayoutOpConversion::processReplica(
@@ -1781,7 +1960,7 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
 
   for (unsigned repId = 0; repId < accumNumReplicates; ++repId) {
     auto multiDimRepId = getMultiDimIndex<unsigned>(repId, numReplicates);
-    barrier;
+    barrier();
     if (srcLayout.isa<BlockedEncodingAttr>() ||
         srcLayout.isa<MmaEncodingAttr>()) {
       processReplica(loc, rewriter, /*stNotRd*/ true, srcTy, inNumCTAsEachRep,
@@ -1791,7 +1970,7 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
       assert(0 && "ConvertLayout with input layout not implemented");
       return failure();
     }
-    barrier;
+    barrier();
     if (dstLayout.isa<BlockedEncodingAttr>() ||
         dstLayout.isa<MmaEncodingAttr>()) {
       processReplica(loc, rewriter, /*stNotRd*/ false, dstTy, outNumCTAsEachRep,
@@ -1867,6 +2046,11 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
   smemBase = bitcast(smemBase, elemPtrTy);
   unsigned numWordsEachRep = product<unsigned>(wordsInEachRep);
   SmallVector<Value> wordVecs(numWordsEachRep);
+  // TODO: We should get less barriers if it is handled by membar pass
+  //       instead of the backend, since the later can only handle it in
+  //       the most conservative way. However just keep for now and revisit
+  //       in the future in case necessary.
+  barrier();
   for (unsigned i = 0; i < numElems; ++i) {
     if (i % srcAccumSizeInThreads == 0) {
       // start of a replication
@@ -1877,8 +2061,8 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
     unsigned linearIdxInNanoTile = i % srcAccumSizeInThreads;
     auto multiDimIdxInNanoTile = getMultiDimIndex<unsigned>(
         linearIdxInNanoTile, srcBlockedLayout.getSizePerThread());
-    multiDimIdxInNanoTile[inOrd[0]] /= minVec;
     unsigned pos = multiDimIdxInNanoTile[inOrd[0]] % minVec;
+    multiDimIdxInNanoTile[inOrd[0]] /= minVec;
     unsigned wordVecIdx =
         getLinearIndex<unsigned>(multiDimIdxInNanoTile, wordsInEachRep);
     wordVecs[wordVecIdx] =
@@ -1920,11 +2104,11 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
       }
     }
   }
-  // TODO: double confirm if the Barrier is necessary here
-  barrier;
+  barrier();
   rewriter.replaceOp(op, smemBase);
   return success();
 }
+
 /// ====================== dot codegen begin ==========================
 
 // Data loader for mma.16816 instruction.
@@ -2356,8 +2540,6 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
     MLIRContext *ctx = op->getContext();
     bool allowTF32 = op.allowTF32();
 
-    assert(isSplatLike(C) && "Currently only splat-like C is supported now");
-
     // Here we assume the DotOp's operands always comes from shared memory.
     auto AShape = A.getType().cast<RankedTensorType>().getShape();
     size_t reduceAxis = 1;
@@ -2393,13 +2575,16 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
 
 private:
   // Convert to mma.m16n8k16
-  LogicalResult convertMMA16816(triton::DotOp a, OpAdaptor adapter,
+  LogicalResult convertMMA16816(triton::DotOp a, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const;
   /// Convert to mma.m8n8k4
-  LogicalResult convertMMA884(triton::DotOp op, OpAdaptor adapter,
-                              ConversionPatternRewriter &rewriter) const;
+  LogicalResult convertMMA884(triton::DotOp op, OpAdaptor adaptor,
+                              ConversionPatternRewriter &rewriter) const {
+    assert(false && "Not implemented yet.");
+    return failure();
+  }
 
-  LogicalResult convertFMADot(triton::DotOp op, OpAdaptor adapter,
+  LogicalResult convertFMADot(triton::DotOp op, OpAdaptor adaptor,
                               ConversionPatternRewriter &rewriter) const {
     assert(false && "Not implemented yet.");
     return failure();
@@ -2409,28 +2594,18 @@ private:
 struct DotOpConversionHelper {
   using TensorCoreType = DotOpConversion::TensorCoreType;
 
-  Value A, B, C, D;
   MmaEncodingAttr mmaLayout;
-  RankedTensorType ATensorTy, BTensorTy, DTensorTy;
   MLIRContext *ctx{};
 
-  explicit DotOpConversionHelper(DotOp dot)
-      : dot(dot), mmaType(getMmaType(dot)) {
-    A = dot.a();
-    B = dot.b();
-    C = dot.c();
-    D = dot.d();
-    ctx = dot->getContext();
-    mmaLayout = C.getType()
-                    .cast<RankedTensorType>()
-                    .getEncoding()
-                    .cast<MmaEncodingAttr>();
+  explicit DotOpConversionHelper(MmaEncodingAttr mmaLayout)
+      : mmaLayout(mmaLayout) {
+    ctx = mmaLayout.getContext();
   }
 
   // Load SplatLike C which contains a constVal. It simply returns 4 fp32
   // constVal.
   SmallVector<Value> loadSplatLikeC(Value C, Location loc,
-                                    ConversionPatternRewriter &rewriter) {
+                                    ConversionPatternRewriter &rewriter) const {
     assert(isSplatLike(C));
 
     int numRes = getMmaInstrShape()[0] * getMmaInstrShape()[1] / 32;
@@ -2456,6 +2631,36 @@ struct DotOpConversionHelper {
 
     assert(false && "Not supported type.");
     return {};
+  }
+
+  void deduceMmaType(DotOp op) const { mmaType = getMmaType(op); }
+  void deduceMmaType(Type operandTy) const {
+    mmaType = getTensorCoreTypeFromOperand(operandTy);
+  }
+
+  // Get the M and N of mat instruction shape.
+  static std::tuple<int, int> getMatShapeMN() {
+    // According to DotOpConversionHelper::mmaMatShape, all the matrix shape's
+    // M,N are {8,8}
+    return {8, 8};
+  }
+
+  // Get the M and N of mma instruction shape.
+  static std::tuple<int, int> getInstrShapeMN() {
+    // According to DotOpConversionHelper::mmaInstrShape, all the M,N are {16,8}
+    return {16, 8};
+  }
+
+  static std::tuple<int, int> getRepMN(const RankedTensorType &tensorTy) {
+    auto mmaLayout = tensorTy.getEncoding().cast<MmaEncodingAttr>();
+    auto wpt = mmaLayout.getWarpsPerCTA();
+
+    int M = tensorTy.getShape()[0];
+    int N = tensorTy.getShape()[1];
+    auto [instrM, instrN] = getInstrShapeMN();
+    int repM = std::max<int>(M / (wpt[0] * instrM), 1);
+    int repN = std::max<int>(N / (wpt[1] * instrN), 1);
+    return {repM, repN};
   }
 
   Type getShemPtrTy() const {
@@ -2555,10 +2760,31 @@ struct DotOpConversionHelper {
     return mmaInstrShape.at(mmaType);
   }
 
+  static ArrayRef<int> getMmaInstrShape(TensorCoreType tensorCoreType) {
+    assert(tensorCoreType != TensorCoreType::NOT_APPLICABLE &&
+           "Unknown mma type found.");
+    return mmaInstrShape.at(tensorCoreType);
+  }
+
   ArrayRef<int> getMmaMatShape() const {
     assert(mmaType != TensorCoreType::NOT_APPLICABLE &&
            "Unknown mma type found.");
     return mmaMatShape.at(mmaType);
+  }
+
+  // Deduce the TensorCoreType from either $a or $b's type.
+  static TensorCoreType getTensorCoreTypeFromOperand(Type operandTy) {
+    auto tensorTy = operandTy.cast<RankedTensorType>();
+    auto elemTy = tensorTy.getElementType();
+    if (elemTy.isF16())
+      return TensorCoreType::FP32_FP16_FP16_FP32;
+    if (elemTy.isF32())
+      return TensorCoreType::FP32_TF32_TF32_FP32;
+    if (elemTy.isBF16())
+      return TensorCoreType::FP32_BF16_BF16_FP32;
+    if (elemTy.isInteger(8))
+      return TensorCoreType::INT32_INT8_INT8_INT32;
+    return TensorCoreType::NOT_APPLICABLE;
   }
 
   int getVec() const {
@@ -2600,7 +2826,7 @@ struct DotOpConversionHelper {
   }
 
 private:
-  TensorCoreType mmaType;
+  mutable TensorCoreType mmaType{TensorCoreType::NOT_APPLICABLE};
 
   // Used on nvidia GPUs mma layout .version == 2
   // Refer to
@@ -2662,9 +2888,6 @@ private:
       {TensorCoreType::INT32_INT4_INT4_INT32, 32},
       {TensorCoreType::INT32_INT8_INT8_INT32, 16},
   };
-
-private:
-  DotOp dot;
 };
 
 // This class helps to adapt the existing DotOpConversion to the latest
@@ -2673,21 +2896,12 @@ private:
 // 1. loading the specific operand matrix(for $a, $b, $c) from smem
 // 2. passing the loaded value and perform the mma codegen
 struct MMA16816ConversionHelper {
-  Value A, B, C, D;
-  RankedTensorType aTensorTy, bTensorTy, dTensorTy;
-  ArrayRef<int64_t> aShape, bShape, dShape;
   MmaEncodingAttr mmaLayout;
   ArrayRef<unsigned int> wpt;
 
-  int mmaInstrM{-1}, mmaInstrN{-1}, mmaInstrK{-1};
-  int matShapeM{-1}, matShapeN{-1}, matShapeK{-1};
-  int numRepM{-1}, numRepN{-1}, numRepK{-1};
   Value thread, lane, warp, warpMN, warpN, warpM;
-  size_t aElemBytes{}, bElemBytes{};
 
   DotOpConversionHelper helper;
-  triton::DotOp op;
-  DotOpAdaptor adapter;
   ConversionPatternRewriter &rewriter;
   TypeConverter *typeConverter;
   Location loc;
@@ -2695,44 +2909,13 @@ struct MMA16816ConversionHelper {
 
   using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
 
-  MMA16816ConversionHelper(triton::DotOp op, Value thread, DotOpAdaptor adapter,
+  MMA16816ConversionHelper(MmaEncodingAttr mmaLayout, Value thread,
                            ConversionPatternRewriter &rewriter,
                            TypeConverter *typeConverter, Location loc)
-      : helper(op), op(op), adapter(adapter), rewriter(rewriter),
-        typeConverter(typeConverter), loc(loc), ctx(op.getContext()),
+      : mmaLayout(mmaLayout), helper(mmaLayout), rewriter(rewriter),
+        typeConverter(typeConverter), loc(loc), ctx(mmaLayout.getContext()),
         thread(thread) {
-    A = op.a();
-    B = op.b();
-    C = op.c();
-    D = op.getResult();
-
-    aTensorTy = A.getType().cast<RankedTensorType>();
-    bTensorTy = B.getType().cast<RankedTensorType>();
-    dTensorTy = D.getType().cast<RankedTensorType>();
-
-    aShape = aTensorTy.getShape();
-    bShape = bTensorTy.getShape();
-    dShape = dTensorTy.getShape();
-
-    mmaLayout = dTensorTy.getEncoding().cast<MmaEncodingAttr>();
-
     wpt = mmaLayout.getWarpsPerCTA();
-
-    auto mmaInstrShape = helper.getMmaInstrShape();
-    mmaInstrM = mmaInstrShape[0];
-    mmaInstrN = mmaInstrShape[1];
-    mmaInstrK = mmaInstrShape[2];
-
-    auto matShape = helper.getMmaMatShape();
-    matShapeM = matShape[0];
-    matShapeN = matShape[1];
-    matShapeK = matShape[2];
-
-    int NK = aShape[1];
-    // shape / shape_per_cta
-    numRepM = std::max<int>(dShape[0] / (wpt[0] * mmaInstrM), 1);
-    numRepN = std::max<int>(dShape[1] / (wpt[1] * mmaInstrN), 1);
-    numRepK = std::max<int>(NK / mmaInstrK, 1);
 
     Value _32 = i32_val(32);
     lane = urem(thread, _32);
@@ -2740,19 +2923,97 @@ struct MMA16816ConversionHelper {
     warpMN = udiv(warp, i32_val(wpt[0]));
     warpM = urem(warp, i32_val(wpt[0]));
     warpN = urem(warpMN, i32_val(wpt[1]));
+  }
 
-    aElemBytes = aTensorTy.getElementTypeBitWidth() / 8;
-    bElemBytes = bTensorTy.getElementTypeBitWidth() / 8;
+  // Get the mmaInstrShape from either $a or $b.
+  std::tuple<int, int, int> getMmaInstrShape(Type operand) const {
+    helper.deduceMmaType(operand);
+    auto mmaInstrShape = helper.getMmaInstrShape();
+    int mmaInstrM = mmaInstrShape[0];
+    int mmaInstrN = mmaInstrShape[1];
+    int mmaInstrK = mmaInstrShape[2];
+    return std::make_tuple(mmaInstrM, mmaInstrN, mmaInstrK);
+  }
+
+  std::tuple<int, int, int> getMmaMatShape(Type operand) const {
+    helper.deduceMmaType(operand);
+    auto matShape = helper.getMmaMatShape();
+    int matShapeM = matShape[0];
+    int matShapeN = matShape[1];
+    int matShapeK = matShape[2];
+    return std::make_tuple(matShapeM, matShapeN, matShapeK);
+  }
+
+  // \param operand is either $a or $b's type.
+  inline int getNumRepM(Type operand, int M) const {
+    return getNumRepM(operand, M, wpt[0]);
+  }
+
+  // \param operand is either $a or $b's type.
+  inline int getNumRepN(Type operand, int N) const {
+    return getNumRepN(operand, N, wpt[1]);
+  }
+
+  // \param operand is either $a or $b's type.
+  inline int getNumRepK(Type operand, int K) const {
+    return getNumRepK_(operand, K);
+  }
+
+  static int getNumRepM(Type operand, int M, int wpt) {
+    auto tensorCoreType =
+        DotOpConversionHelper::getTensorCoreTypeFromOperand(operand);
+    int mmaInstrM = DotOpConversionHelper::getMmaInstrShape(tensorCoreType)[0];
+    return std::max<int>(M / (wpt * mmaInstrM), 1);
+  }
+
+  static int getNumRepN(Type operand, int N, int wpt) {
+    auto tensorCoreType =
+        DotOpConversionHelper::getTensorCoreTypeFromOperand(operand);
+    int mmaInstrN = DotOpConversionHelper::getMmaInstrShape(tensorCoreType)[1];
+    return std::max<int>(N / (wpt * mmaInstrN), 1);
+  }
+
+  static int getNumRepK_(Type operand, int K) {
+    auto tensorCoreType =
+        DotOpConversionHelper::getTensorCoreTypeFromOperand(operand);
+    int mmaInstrK = DotOpConversionHelper::getMmaInstrShape(tensorCoreType)[2];
+    return std::max<int>(K / mmaInstrK, 1);
+  }
+
+  // Get number of elements per thread for $a operand.
+  static size_t getANumElemsPerThread(RankedTensorType operand,
+                                      ArrayRef<unsigned> wpt) {
+    auto shape = operand.getShape();
+    int repM = getNumRepM(operand, shape[0], wpt[0]);
+    int repK = getNumRepK_(operand, shape[1]);
+    return 4 * repM * repK;
+  }
+
+  // Get number of elements per thread for $b operand.
+  static size_t getBNumElemsPerThread(RankedTensorType operand,
+                                      ArrayRef<unsigned> wpt) {
+    auto shape = operand.getShape();
+    int repK = getNumRepK_(operand, shape[0]);
+    int repN = getNumRepN(operand, shape[1], wpt[1]);
+    return 4 * std::max(repN / 2, 1) * repK;
   }
 
   // Loading $a from smem to registers, returns a LLVM::Struct.
-  Value loadA() {
+  Value loadA(Value tensor, Value llTensor) const {
+    auto aTensorTy = tensor.getType().cast<RankedTensorType>();
+    auto shape = aTensorTy.getShape();
+
     ValueTable ha;
     std::function<void(int, int)> loadFn;
+    auto [matShapeM, matShapeN, matShapeK] = getMmaMatShape(aTensorTy);
+    auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaInstrShape(aTensorTy);
+    int numRepM = getNumRepM(aTensorTy, shape[0]);
+    int numRepK = getNumRepK(aTensorTy, shape[1]);
+
     if (aTensorTy.getEncoding().isa<SharedEncodingAttr>()) {
       // load from smem
       loadFn = getLoadMatrixFn(
-          A, adapter.a() /*llTensor*/, mmaLayout.getWarpsPerCTA()[0] /*wpt*/,
+          tensor, llTensor, mmaLayout, mmaLayout.getWarpsPerCTA()[0] /*wpt*/,
           1 /*kOrder*/, {mmaInstrM, mmaInstrK} /*instrShpae*/,
           {matShapeM, matShapeK} /*matShape*/, warpM /*warpId*/, ha /*vals*/);
     } else if (aTensorTy.getEncoding().isa<BlockedEncodingAttr>()) {
@@ -2770,17 +3031,21 @@ struct MMA16816ConversionHelper {
 
     // step2. Format the values to LLVM::Struct to passing to mma codegen.
     Value result = composeValuesToDotOperandLayoutStruct(ha, numRepM, numRepK);
-
-    // TODO[Superjomn]: Replace the convert_layout op with the result once the
-    // DotOperandEncodingAttr is ready.
     return result;
   }
 
   // Loading $b from smem to registers, returns a LLVM::Struct.
-  Value loadB() {
+  Value loadB(Value tensor, Value llTensor) {
     ValueTable hb;
+    auto tensorTy = tensor.getType().cast<RankedTensorType>();
+    auto shape = tensorTy.getShape();
+    auto [matShapeM, matShapeN, matShapeK] = getMmaMatShape(tensorTy);
+    auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaInstrShape(tensorTy);
+    int numRepK = getNumRepK(tensorTy, shape[0]);
+    int numRepN = getNumRepN(tensorTy, shape[1]);
+
     auto loadFn = getLoadMatrixFn(
-        B, adapter.b() /*llTensor*/, mmaLayout.getWarpsPerCTA()[1] /*wpt*/,
+        tensor, llTensor, mmaLayout, mmaLayout.getWarpsPerCTA()[1] /*wpt*/,
         0 /*kOrder*/, {mmaInstrK, mmaInstrN} /*instrShpae*/,
         {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/, hb /*vals*/);
 
@@ -2794,26 +3059,54 @@ struct MMA16816ConversionHelper {
     return result;
   }
 
-  // Loading $c from smem(?) to registers, returns a Value.
-  // NOTE Only SplatLike tensor is supported now.
-  Value loadC() {
-    // Currently, we only support a SplatLike C. For the other cases, e.g., C in
-    // shared layout or blocked layout, we will support them by expanding
-    // convert_layout.
-    auto hc = helper.loadSplatLikeC(C, loc, rewriter);
-    assert(hc.size() == 4UL && "Only splat-like C is supported now");
-    return hc[0];
+  // Loading $c to registers, returns a Value.
+  Value loadC(Value tensor, Value llTensor) const {
+    auto tensorTy = tensor.getType().cast<RankedTensorType>();
+    auto [repM, repN] = DotOpConversionHelper::getRepMN(tensorTy);
+    size_t fcSize = 4 * repM * repN;
+
+    assert(tensorTy.getEncoding().isa<MmaEncodingAttr>() &&
+           "Currently, we only support $c with a mma layout.");
+    // Load a normal C tensor with mma layout, that should be a
+    // LLVM::struct with fcSize elements.
+    auto structTy = llTensor.getType().cast<LLVM::LLVMStructType>();
+    assert(structTy.getBody().size() == fcSize &&
+           "DotOp's $c operand should pass the same number of values as $d in "
+           "mma layout.");
+    return llTensor;
   }
 
   // Conduct the Dot conversion.
-  // Input the \param a, \param b, \param c, all of them are result of loading.
-  LogicalResult convertDot(Value a, Value b, Value c) {
-    ValueTable ha = getValuesFromDotOperandLayoutStruct(a, numRepM, numRepK);
-    ValueTable hb = getValuesFromDotOperandLayoutStruct(
-        b, std::max(numRepN / 2, 1), numRepK);
+  // \param a, \param b, \param c and \param d are DotOp operands.
+  // \param loadedA, \param loadedB, \param loadedC, all of them are result of
+  // loading.
+  LogicalResult convertDot(Value a, Value b, Value c, Value d, Value loadedA,
+                           Value loadedB, Value loadedC, DotOp op,
+                           DotOpAdaptor adaptor) const {
+    helper.deduceMmaType(op);
 
-    const int fcSize = 4 * numRepM * numRepN;
-    SmallVector<Value> fc(fcSize, c);
+    auto aTensorTy = a.getType().cast<RankedTensorType>();
+    auto bTensorTy = b.getType().cast<RankedTensorType>();
+    auto cTensorTy = c.getType().cast<RankedTensorType>();
+    auto dTensorTy = d.getType().cast<RankedTensorType>();
+
+    auto aShape = aTensorTy.getShape();
+    auto dShape = dTensorTy.getShape();
+
+    int NK = aShape[1];
+    // shape / shape_per_cta
+    auto [matShapeM, matShapeN, matShapeK] = getMmaMatShape(aTensorTy);
+    auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaInstrShape(aTensorTy);
+    int numRepM = getNumRepM(aTensorTy, dShape[0]);
+    int numRepN = getNumRepN(aTensorTy, dShape[1]);
+    int numRepK = getNumRepK(aTensorTy, aShape[1]);
+
+    ValueTable ha =
+        getValuesFromDotOperandLayoutStruct(loadedA, numRepM, numRepK);
+    ValueTable hb = getValuesFromDotOperandLayoutStruct(
+        loadedB, std::max(numRepN / 2, 1), numRepK);
+    auto fc = ConvertTritonGPUOpToLLVMPatternBase::getElementsFromStruct(
+        loc, loadedC, rewriter);
 
     auto callMma = [&](unsigned m, unsigned n, unsigned k) {
       unsigned colsPerThread = numRepN * 2;
@@ -2862,10 +3155,10 @@ struct MMA16816ConversionHelper {
 
 private:
   std::function<void(int, int)>
-  getLoadMatrixFn(Value tensor, Value llTensor, int wpt, int kOrder,
-                  ArrayRef<int> instrShape, ArrayRef<int> matShape,
-                  Value warpId, ValueTable &vals) {
-
+  getLoadMatrixFn(Value tensor, Value llTensor, MmaEncodingAttr mmaLayout,
+                  int wpt, int kOrder, ArrayRef<int> instrShape,
+                  ArrayRef<int> matShape, Value warpId,
+                  ValueTable &vals) const {
     auto tensorTy = tensor.getType().cast<RankedTensorType>();
     // We assumes that the input operand of Dot should be from shared layout.
     // TODO(Superjomn) Consider other layouts if needed later.
@@ -2935,7 +3228,7 @@ private:
   // i \in [0, n0) and j \in [0, n1)
   // There should be \param n0 * \param n1 elements in the output Struct.
   Value composeValuesToDotOperandLayoutStruct(const ValueTable &vals, int n0,
-                                              int n1) {
+                                              int n1) const {
     std::vector<Value> elems;
     for (unsigned m = 0; m < n0; ++m)
       for (unsigned k = 0; k < n1; ++k) {
@@ -2947,7 +3240,7 @@ private:
 
     assert(!elems.empty());
 
-    Type fp16Ty = aTensorTy.getElementType();
+    Type fp16Ty = type::f16Ty(ctx);
     Type fp16x2Ty = vec_ty(fp16Ty, 2);
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(elems.size(), fp16x2Ty));
@@ -2955,7 +3248,8 @@ private:
     return result;
   }
 
-  ValueTable getValuesFromDotOperandLayoutStruct(Value value, int n0, int n1) {
+  ValueTable getValuesFromDotOperandLayoutStruct(Value value, int n0,
+                                                 int n1) const {
     auto elems = ConvertTritonGPUOpToLLVMPatternBase::getElementsFromStruct(
         loc, value, rewriter);
 
@@ -2973,18 +3267,73 @@ private:
   }
 };
 
+LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
+    triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+    ConversionPatternRewriter &rewriter) const {
+  auto loc = op.getLoc();
+  Value src = op.src();
+  Value dst = op.result();
+  auto srcTensorTy = src.getType().cast<RankedTensorType>();
+  auto dstTensorTy = dst.getType().cast<RankedTensorType>();
+
+  auto sharedLayout = srcTensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto dotOperandLayout =
+      dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+  MmaEncodingAttr mmaLayout =
+      dotOperandLayout.getParent().dyn_cast_or_null<MmaEncodingAttr>();
+  assert(mmaLayout);
+
+  MMA16816ConversionHelper mmaHelper(mmaLayout, getThreadId(rewriter, loc),
+                                     rewriter, getTypeConverter(), op.getLoc());
+
+  Value res;
+  if (dotOperandLayout.getOpIdx() == 0) {
+    // operand $a
+    res = mmaHelper.loadA(src, adaptor.src());
+  } else if (dotOperandLayout.getOpIdx() == 1) {
+    // operand $b
+    res = mmaHelper.loadB(src, adaptor.src());
+  }
+
+  rewriter.replaceOp(op, res);
+  return success();
+}
+
 LogicalResult
-DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adapter,
+DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adaptor,
                                  ConversionPatternRewriter &rewriter) const {
   auto loc = op.getLoc();
-  MMA16816ConversionHelper mmaHelper(op, getThreadId(rewriter, loc), adapter,
+  auto mmaLayout = op.getResult()
+                       .getType()
+                       .cast<RankedTensorType>()
+                       .getEncoding()
+                       .cast<MmaEncodingAttr>();
+  MMA16816ConversionHelper mmaHelper(mmaLayout, getThreadId(rewriter, loc),
                                      rewriter, getTypeConverter(), loc);
 
-  auto A = mmaHelper.loadA();
-  auto B = mmaHelper.loadB();
-  auto C = mmaHelper.loadC();
+  Value A = op.a();
+  Value B = op.b();
+  Value C = op.c();
+  auto ATensorTy = A.getType().cast<RankedTensorType>();
+  auto BTensorTy = B.getType().cast<RankedTensorType>();
 
-  return mmaHelper.convertDot(A, B, C);
+  Value loadedA, loadedB, loadedC;
+  // We support two kinds of operand layouts: 1. both $a, $b are dot_operand
+  // layout, 2. both of them are shared layout.
+  if (ATensorTy.getEncoding().isa<DotOperandEncodingAttr>()) {
+    assert(BTensorTy.getEncoding().isa<DotOperandEncodingAttr>() &&
+           "Both $a and %b should be DotOperand layout.");
+    loadedA = adaptor.a();
+    loadedB = adaptor.b();
+  } else {
+    loadedA = mmaHelper.loadA(op.a(), adaptor.a());
+    loadedB = mmaHelper.loadB(op.b(), adaptor.b());
+  }
+
+  loadedC = mmaHelper.loadC(op.c(), adaptor.c());
+
+  return mmaHelper.convertDot(A, B, C, op.d(), loadedA, loadedB, loadedC, op,
+                              adaptor);
 }
 
 LogicalResult
@@ -3303,6 +3652,26 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adapter,
 
 /// ====================== mma codegen end ============================
 
+Value convertSplatLikeOpWithMmaLayout(const MmaEncodingAttr &layout,
+                                      Type resType, Type elemType,
+                                      Value constVal,
+                                      TypeConverter *typeConverter,
+                                      ConversionPatternRewriter &rewriter,
+                                      Location loc) {
+  if (layout.getVersion() == 2) {
+    auto tensorTy = resType.cast<RankedTensorType>();
+    auto [repM, repN] = DotOpConversionHelper::getRepMN(tensorTy);
+    size_t fcSize = 4 * repM * repN;
+
+    auto structTy = LLVM::LLVMStructType::getLiteral(
+        rewriter.getContext(), SmallVector<Type>(fcSize, elemType));
+    return getStructFromElements(loc, SmallVector<Value>(fcSize, constVal),
+                                 rewriter, structTy);
+  }
+
+  assert(false && "Unsupported mma layout found");
+}
+
 class TritonGPUToLLVMTypeConverter : public LLVMTypeConverter {
 public:
   using TypeConverter::convertType;
@@ -3316,6 +3685,10 @@ public:
     addConversion([&](RankedTensorType type) -> llvm::Optional<Type> {
       return convertTritonTensorType(type);
     });
+    // internally store bfloat16 as int16
+    addConversion([&](BFloat16Type type) -> llvm::Optional<Type> {
+      return IntegerType::get(type.getContext(), 16);
+    });
   }
 
   Type convertTritonPointerType(triton::PointerType type) {
@@ -3324,6 +3697,7 @@ public:
   }
 
   llvm::Optional<Type> convertTritonTensorType(RankedTensorType type) {
+    auto ctx = type.getContext();
     Attribute layout = type.getEncoding();
     if (layout &&
         (layout.isa<BlockedEncodingAttr>() || layout.isa<SliceEncodingAttr>() ||
@@ -3332,11 +3706,50 @@ public:
           getElemsPerThread(layout, type.getShape());
       SmallVector<Type, 4> types(numElementsPerThread,
                                  convertType(type.getElementType()));
-      return LLVM::LLVMStructType::getLiteral(&getContext(), types);
+      return LLVM::LLVMStructType::getLiteral(ctx, types);
     } else if (auto shared_layout =
                    layout.dyn_cast_or_null<SharedEncodingAttr>()) {
       return LLVM::LLVMPointerType::get(convertType(type.getElementType()), 3);
+    } else if (auto mmaLayout = layout.dyn_cast_or_null<MmaEncodingAttr>()) {
+      if (mmaLayout.getVersion() == 2) {
+        auto [repM, repN] = DotOpConversionHelper::getRepMN(type);
+        size_t fcSize = 4 * repM * repN;
+        return LLVM::LLVMStructType::getLiteral(
+            ctx, SmallVector<Type>(fcSize, type.getElementType()));
+      }
+
+      llvm::errs()
+          << "Unexpected mma layout detected in TritonToLLVMTypeConverter";
+      return llvm::None;
+
+    } else if (auto dot_op_layout =
+                   layout.dyn_cast_or_null<DotOperandEncodingAttr>()) {
+      auto mmaLayout = dot_op_layout.getParent().cast<MmaEncodingAttr>();
+      if (mmaLayout.getVersion() == 2) {
+        auto wpt = mmaLayout.getWarpsPerCTA();
+        Type elemTy = type.getElementType();
+
+        if (dot_op_layout.getOpIdx() == 0) { // $a
+          int elems =
+              MMA16816ConversionHelper::getANumElemsPerThread(type, wpt);
+          Type x2Ty = vec_ty(elemTy, 2);
+          return LLVM::LLVMStructType::getLiteral(
+              ctx, SmallVector<Type>(elems, x2Ty));
+        }
+        if (dot_op_layout.getOpIdx() == 1) { // $b
+          int elems =
+              MMA16816ConversionHelper::getBNumElemsPerThread(type, wpt);
+          Type x2Ty = vec_ty(elemTy, 2);
+          return LLVM::LLVMStructType::getLiteral(
+              ctx, SmallVector<Type>(elems, x2Ty));
+        }
+      }
+
+      llvm::errs() << "Unexpected dot operand layout detected in "
+                      "TritonToLLVMTypeConverter";
+      return llvm::None;
     }
+
     return llvm::None;
   }
 };
@@ -3574,25 +3987,56 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
                                         benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
-  patterns.add<BinaryOpConversion<arith::AddIOp, LLVM::AddOp>>(typeConverter,
-                                                               benefit);
-  patterns.add<BinaryOpConversion<arith::AddFOp, LLVM::FAddOp>>(typeConverter,
-                                                                benefit);
-  patterns.add<BinaryOpConversion<arith::MulIOp, LLVM::MulOp>>(typeConverter,
-                                                               benefit);
-  patterns.add<BinaryOpConversion<arith::MulFOp, LLVM::FMulOp>>(typeConverter,
-                                                                benefit);
 
-  patterns.add<BinaryOpConversion<arith::AndIOp, LLVM::AndOp>>(typeConverter,
-                                                               benefit);
-  patterns.add<BinaryOpConversion<arith::OrIOp, LLVM::OrOp>>(typeConverter,
-                                                             benefit);
+#define POPULATE_TERNARY_OP(SRC_OP, DST_OP)                                    \
+  patterns.add<TernaryOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
+  POPULATE_TERNARY_OP(triton::gpu::SelectOp, LLVM::SelectOp);
+#undef POPULATE_TERNARY_OP
+
+#define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
+  patterns.add<BinaryOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
+  POPULATE_BINARY_OP(arith::SubIOp, LLVM::SubOp) // -
+  POPULATE_BINARY_OP(arith::SubFOp, LLVM::FSubOp)
+  POPULATE_BINARY_OP(arith::AddIOp, LLVM::AddOp) // +
+  POPULATE_BINARY_OP(arith::AddFOp, LLVM::FAddOp)
+  POPULATE_BINARY_OP(arith::MulIOp, LLVM::MulOp) // *
+  POPULATE_BINARY_OP(arith::MulFOp, LLVM::FMulOp)
+  POPULATE_BINARY_OP(arith::DivFOp, LLVM::FDivOp) // /
+  POPULATE_BINARY_OP(arith::DivSIOp, LLVM::SDivOp)
+  POPULATE_BINARY_OP(arith::DivUIOp, LLVM::UDivOp)
+  POPULATE_BINARY_OP(arith::RemFOp, LLVM::FRemOp) // %
+  POPULATE_BINARY_OP(arith::RemSIOp, LLVM::SRemOp)
+  POPULATE_BINARY_OP(arith::RemUIOp, LLVM::URemOp)
+  POPULATE_BINARY_OP(arith::AndIOp, LLVM::AndOp)   // &
+  POPULATE_BINARY_OP(arith::OrIOp, LLVM::OrOp)     // |
+  POPULATE_BINARY_OP(arith::XOrIOp, LLVM::XOrOp)   // ^
+  POPULATE_BINARY_OP(arith::ShLIOp, LLVM::ShlOp)   // <<
+  POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp) // >>
+  POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp) // >>
+#undef POPULATE_BINARY_OP
 
   patterns.add<CmpIOpConversion>(typeConverter, benefit);
   patterns.add<CmpFOpConversion>(typeConverter, benefit);
+#define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
+  patterns.add<UnaryOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
+  POPULATE_UNARY_OP(arith::TruncIOp, LLVM::TruncOp)
+  POPULATE_UNARY_OP(arith::TruncFOp, LLVM::FPTruncOp)
+  POPULATE_UNARY_OP(arith::ExtSIOp, LLVM::SExtOp)
+  POPULATE_UNARY_OP(arith::ExtUIOp, LLVM::ZExtOp)
+  POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
+  POPULATE_UNARY_OP(arith::FPToSIOp, LLVM::FPToSIOp)
+  POPULATE_UNARY_OP(arith::UIToFPOp, LLVM::UIToFPOp)
+  POPULATE_UNARY_OP(arith::SIToFPOp, LLVM::SIToFPOp)
+  POPULATE_UNARY_OP(arith::ExtFOp, LLVM::FPExtOp)
+  POPULATE_UNARY_OP(triton::BitcastOp, LLVM::BitcastOp)
+  POPULATE_UNARY_OP(triton::IntToPtrOp, LLVM::IntToPtrOp)
+  POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
+#undef POPULATE_UNARY_OP
+
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
   patterns.add<ConvertLayoutOpConversion>(typeConverter, allocation, smem,
                                           benefit);
+
   patterns.add<ExtractSliceOpConversion>(typeConverter, allocation, smem,
                                          benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
