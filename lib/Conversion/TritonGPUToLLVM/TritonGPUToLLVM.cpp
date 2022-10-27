@@ -2368,8 +2368,8 @@ public:
         tileShape(tileShape.begin(), tileShape.end()),
         instrShape(instrShape.begin(), instrShape.end()),
         matShape(matShape.begin(), matShape.end()), perPhase(perPhase),
-        maxPhase(maxPhase), elemBytes(elemBytes), rewriter(rewriter),
-        loc(loc), ctx(rewriter.getContext()) {
+        maxPhase(maxPhase), elemBytes(elemBytes), rewriter(rewriter), loc(loc),
+        ctx(rewriter.getContext()) {
     cMatShape = matShape[order[0]];
     sMatShape = matShape[order[1]];
 
@@ -3261,7 +3261,7 @@ struct MMA16816ConversionHelper {
     }
 
     // step1. Perform loading.
-    for (int  m = 0; m < numRepM; ++m)
+    for (int m = 0; m < numRepM; ++m)
       for (int k = 0; k < numRepK; ++k)
         loadFn(2 * m, 2 * k);
 
@@ -3461,7 +3461,7 @@ private:
   Value composeValuesToDotOperandLayoutStruct(const ValueTable &vals, int n0,
                                               int n1) const {
     std::vector<Value> elems;
-    for (int  m = 0; m < n0; ++m)
+    for (int m = 0; m < n0; ++m)
       for (int k = 0; k < n1; ++k) {
         elems.push_back(vals.at({2 * m, 2 * k}));
         elems.push_back(vals.at({2 * m, 2 * k + 1}));

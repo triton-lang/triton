@@ -578,15 +578,17 @@ struct TritonGPUInferLayoutInterface
     : public triton::DialectInferLayoutInterface {
   using DialectInferLayoutInterface::DialectInferLayoutInterface;
 
-  LogicalResult inferReduceOpEncoding(Attribute operandEncoding, unsigned axis,
-                                      Attribute &resultEncoding) const override {
+  LogicalResult
+  inferReduceOpEncoding(Attribute operandEncoding, unsigned axis,
+                        Attribute &resultEncoding) const override {
     resultEncoding = SliceEncodingAttr::get(getDialect()->getContext(), axis,
                                             operandEncoding);
     return success();
   }
 
-  LogicalResult inferExpandDimsOpEncoding(Attribute operandEncoding, unsigned axis,
-                                          Attribute &resultEncoding) const override  {
+  LogicalResult
+  inferExpandDimsOpEncoding(Attribute operandEncoding, unsigned axis,
+                            Attribute &resultEncoding) const override {
     auto sliceEncoding = operandEncoding.dyn_cast<SliceEncodingAttr>();
     if (!sliceEncoding) {
       llvm::report_fatal_error(
