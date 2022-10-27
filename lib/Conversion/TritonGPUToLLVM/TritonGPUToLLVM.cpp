@@ -2591,13 +2591,14 @@ private:
   }
 };
 
-struct DotOpConversionHelper {
+// Helper for conversion of DotOp with mma<version=2>
+struct DotOpMmaV2ConversionHelper {
   using TensorCoreType = DotOpConversion::TensorCoreType;
 
   MmaEncodingAttr mmaLayout;
   MLIRContext *ctx{};
 
-  explicit DotOpConversionHelper(MmaEncodingAttr mmaLayout)
+  explicit DotOpMmaV2ConversionHelper(MmaEncodingAttr mmaLayout)
       : mmaLayout(mmaLayout) {
     ctx = mmaLayout.getContext();
   }
@@ -2609,14 +2610,15 @@ struct DotOpConversionHelper {
 
   // Get the M and N of mat instruction shape.
   static std::tuple<int, int> getMatShapeMN() {
-    // According to DotOpConversionHelper::mmaMatShape, all the matrix shape's
-    // M,N are {8,8}
+    // According to DotOpMmaV2ConversionHelper::mmaMatShape, all the matrix
+    // shape's M,N are {8,8}
     return {8, 8};
   }
 
   // Get the M and N of mma instruction shape.
   static std::tuple<int, int> getInstrShapeMN() {
-    // According to DotOpConversionHelper::mmaInstrShape, all the M,N are {16,8}
+    // According to DotOpMmaV2ConversionHelper::mmaInstrShape, all the M,N are
+    // {16,8}
     return {16, 8};
   }
 
@@ -2870,7 +2872,7 @@ struct MMA16816ConversionHelper {
 
   Value thread, lane, warp, warpMN, warpN, warpM;
 
-  DotOpConversionHelper helper;
+  DotOpMmaV2ConversionHelper helper;
   ConversionPatternRewriter &rewriter;
   TypeConverter *typeConverter;
   Location loc;
@@ -2930,22 +2932,25 @@ struct MMA16816ConversionHelper {
 
   static int getNumRepM(Type operand, int M, int wpt) {
     auto tensorCoreType =
-        DotOpConversionHelper::getTensorCoreTypeFromOperand(operand);
-    int mmaInstrM = DotOpConversionHelper::getMmaInstrShape(tensorCoreType)[0];
+        DotOpMmaV2ConversionHelper::getTensorCoreTypeFromOperand(operand);
+    int mmaInstrM =
+        DotOpMmaV2ConversionHelper::getMmaInstrShape(tensorCoreType)[0];
     return std::max<int>(M / (wpt * mmaInstrM), 1);
   }
 
   static int getNumRepN(Type operand, int N, int wpt) {
     auto tensorCoreType =
-        DotOpConversionHelper::getTensorCoreTypeFromOperand(operand);
-    int mmaInstrN = DotOpConversionHelper::getMmaInstrShape(tensorCoreType)[1];
+        DotOpMmaV2ConversionHelper::getTensorCoreTypeFromOperand(operand);
+    int mmaInstrN =
+        DotOpMmaV2ConversionHelper::getMmaInstrShape(tensorCoreType)[1];
     return std::max<int>(N / (wpt * mmaInstrN), 1);
   }
 
   static int getNumRepK_(Type operand, int K) {
     auto tensorCoreType =
-        DotOpConversionHelper::getTensorCoreTypeFromOperand(operand);
-    int mmaInstrK = DotOpConversionHelper::getMmaInstrShape(tensorCoreType)[2];
+        DotOpMmaV2ConversionHelper::getTensorCoreTypeFromOperand(operand);
+    int mmaInstrK =
+        DotOpMmaV2ConversionHelper::getMmaInstrShape(tensorCoreType)[2];
     return std::max<int>(K / mmaInstrK, 1);
   }
 
@@ -3031,7 +3036,7 @@ struct MMA16816ConversionHelper {
   // Loading $c to registers, returns a Value.
   Value loadC(Value tensor, Value llTensor) const {
     auto tensorTy = tensor.getType().cast<RankedTensorType>();
-    auto [repM, repN] = DotOpConversionHelper::getRepMN(tensorTy);
+    auto [repM, repN] = DotOpMmaV2ConversionHelper::getRepMN(tensorTy);
     size_t fcSize = 4 * repM * repN;
 
     assert(tensorTy.getEncoding().isa<MmaEncodingAttr>() &&
@@ -3333,7 +3338,7 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adapter,
 
   auto wpt = mmaLayout.getWarpsPerCTA();
 
-  DotOpConversionHelper helper(op);
+  DotOpMmaV2ConversionHelper helper(mmaLayout);
 
   // TODO(Superjomn) Process C->is_trans_a() logic
 
@@ -3629,7 +3634,7 @@ Value convertSplatLikeOpWithMmaLayout(const MmaEncodingAttr &layout,
                                       Location loc) {
   if (layout.getVersion() == 2) {
     auto tensorTy = resType.cast<RankedTensorType>();
-    auto [repM, repN] = DotOpConversionHelper::getRepMN(tensorTy);
+    auto [repM, repN] = DotOpMmaV2ConversionHelper::getRepMN(tensorTy);
     size_t fcSize = 4 * repM * repN;
 
     auto structTy = LLVM::LLVMStructType::getLiteral(
@@ -3681,7 +3686,7 @@ public:
       return LLVM::LLVMPointerType::get(convertType(type.getElementType()), 3);
     } else if (auto mmaLayout = layout.dyn_cast_or_null<MmaEncodingAttr>()) {
       if (mmaLayout.getVersion() == 2) {
-        auto [repM, repN] = DotOpConversionHelper::getRepMN(type);
+        auto [repM, repN] = DotOpMmaV2ConversionHelper::getRepMN(type);
         size_t fcSize = 4 * repM * repN;
         return LLVM::LLVMStructType::getLiteral(
             ctx, SmallVector<Type>(fcSize, type.getElementType()));
