@@ -2602,37 +2602,6 @@ struct DotOpConversionHelper {
     ctx = mmaLayout.getContext();
   }
 
-  // Load SplatLike C which contains a constVal. It simply returns 4 fp32
-  // constVal.
-  SmallVector<Value> loadSplatLikeC(Value C, Location loc,
-                                    ConversionPatternRewriter &rewriter) const {
-    assert(isSplatLike(C));
-
-    int numRes = getMmaInstrShape()[0] * getMmaInstrShape()[1] / 32;
-    if (auto constv = llvm::dyn_cast<arith::ConstantOp>(C.getDefiningOp())) {
-      if (auto attr = constv.getValue().dyn_cast<SplatElementsAttr>()) {
-        Type elemType = attr.getElementType();
-        if (elemType.isInteger(32)) {
-          int v = attr.getSplatValue<int>();
-          return SmallVector<Value>(numRes, i32_val(v));
-        } else if (elemType.isInteger(8)) {
-          int v = attr.getSplatValue<int8_t>();
-          auto newv = rewriter.create<arith::ConstantOp>(
-              loc, elemType, IntegerAttr::get(elemType, v));
-          return SmallVector<Value>(numRes, newv);
-        } else if (elemType.isF32()) {
-          int v = attr.getSplatValue<float>();
-          auto newv = rewriter.create<arith::ConstantOp>(
-              loc, elemType, FloatAttr::get(elemType, v));
-          return SmallVector<Value>(numRes, newv);
-        }
-      }
-    }
-
-    assert(false && "Not supported type.");
-    return {};
-  }
-
   void deduceMmaType(DotOp op) const { mmaType = getMmaType(op); }
   void deduceMmaType(Type operandTy) const {
     mmaType = getTensorCoreTypeFromOperand(operandTy);
