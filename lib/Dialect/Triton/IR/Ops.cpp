@@ -150,9 +150,9 @@ void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
                    ::mlir::Value ptr, ::mlir::Value mask, ::mlir::Value other,
                    ::mlir::triton::CacheModifier cache,
                    ::mlir::triton::EvictionPolicy evict, bool isVolatile) {
-  TensorType ptrType = ptr.getType().dyn_cast<TensorType>();
+  TensorType ptrType = ptr.getType().cast<TensorType>();
   Type elementType =
-      ptrType.getElementType().dyn_cast<PointerType>().getPointeeType();
+      ptrType.getElementType().cast<PointerType>().getPointeeType();
   auto shape = ptrType.getShape();
   Type resultType = RankedTensorType::get(shape, elementType);
   state.addOperands(ptr);
