@@ -6,8 +6,8 @@
 #include "mlir/Conversion/LLVMCommon/LoweringOptions.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
-#include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
 #include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
+#include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
 #include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
 #include "mlir/Dialect/GPU/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -15,8 +15,8 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Analysis/Membar.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PtxAsmFormat.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPU.h"
@@ -3532,8 +3532,7 @@ struct InsertSliceAsyncOpConversion
             *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
         auto tileOffsetWord =
             gep(dstPtrTy, tileOffset, i32_val(wordElemIdx + baseOffset));
-        auto *dstOperand =
-            ptxBuilder.newAddrOperand(tileOffsetWord, "r");
+        auto *dstOperand = ptxBuilder.newAddrOperand(tileOffsetWord, "r");
         auto *srcOperand =
             ptxBuilder.newAddrOperand(srcElems[elemIdx + wordElemIdx], "l");
         auto *copySize = ptxBuilder.newConstantOperand(byteWidth);
@@ -3672,6 +3671,9 @@ public:
 
     auto axisAnalysis = runAxisAnalysis(mod);
     initSharedMemory(allocation.getSharedMemorySize(), typeConverter);
+    mod->setAttr("triton_gpu.shared",
+                 mlir::IntegerAttr::get(mlir::IntegerType::get(context, 32),
+                                        allocation.getSharedMemorySize()));
 
     // We set a higher benefit here to ensure triton's patterns runs before
     // arith patterns for some encoding not supported by the community
@@ -3714,9 +3716,11 @@ void ConvertTritonGPUToLLVM::initSharedMemory(
   OpBuilder b(mod.getBodyRegion());
   auto loc = mod.getLoc();
   auto elemTy = typeConverter.convertType(b.getIntegerType(8));
-  auto arrayTy = LLVM::LLVMArrayType::get(elemTy, size);
+  // Set array size 0 and external linkage indicates that we use dynamic shared
+  // allocation to allow a larger shared memory size for each kernel.
+  auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
   auto global = b.create<LLVM::GlobalOp>(
-      loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::Internal,
+      loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
       "global_smem", /*value=*/Attribute(),
       /*alignment=*/0, mlir::gpu::GPUDialect::getWorkgroupAddressSpace());
   SmallVector<LLVM::LLVMFuncOp> funcs;

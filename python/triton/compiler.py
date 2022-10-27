@@ -985,15 +985,9 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     module = optimize_tritongpu_ir(module, num_stages)
     if output == "ttgir":
         return module.str()
-    with open("triton.ttgir", "w") as f:
-        f.write(module.str())
-
 
     # llvm-ir
     llvm_ir = make_llvm_ir(module)
-
-    with open("triton.ll", "w") as f:
-        f.write(llvm_ir)
 
     assert device >= 0, "device should be provided."
     ptxas, cuda_version = path_to_ptxas()
@@ -1004,8 +998,6 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     shem_size = _triton.get_shared_memory_size(module)
     kernel_name = ptx_get_kernel_name(ptx)
 
-    with open("triton.ptx", "w") as f:
-        f.write(ptx)
     if output == "ptx":
         return ptx, shem_size, kernel_name
 
