@@ -7,6 +7,7 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
+#include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
 #include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
 #include "mlir/Dialect/GPU/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -15,6 +16,7 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Analysis/Membar.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PtxAsmFormat.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPU.h"
@@ -3640,19 +3642,34 @@ public:
 
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
 
-    // step 1: Convert FuncOp to LLVMFuncOp via partial conversion
-    // step 2: Allocate for shared memories
-    // step 3: Convert the rest of ops via partial conversion
-    // The reason for a seperation between 1/3 is that, step 2 is out of
+    // step 1: Allocate shared memories and insert barriers
+    // setp 2: Convert SCF to CFG
+    // step 3: Convert FuncOp to LLVMFuncOp via partial conversion
+    // step 4: Convert the rest of ops via partial conversion
+    // The reason for putting step 1 before step 2 is that the membar analysis
+    // currently only supports SCF but not CFG.
+    // The reason for a seperation between 1/4 is that, step 3 is out of
     // the scope of Dialect Conversion, thus we need to make sure the smem
-    // is not revised during the conversion of step 3.
+    // is not revised during the conversion of step 4.
+    Allocation allocation(mod);
+    MembarAnalysis membar(&allocation);
+
+    RewritePatternSet scf_patterns(context);
+    mlir::populateLoopToStdConversionPatterns(scf_patterns);
+    mlir::ConversionTarget scf_target(*context);
+    scf_target.addIllegalOp<scf::ForOp, scf::IfOp, scf::ParallelOp,
+                            scf::WhileOp, scf::ExecuteRegionOp>();
+    scf_target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
+    if (failed(
+            applyPartialConversion(mod, scf_target, std::move(scf_patterns))))
+      return signalPassFailure();
+
     RewritePatternSet func_patterns(context);
     func_patterns.add<FuncOpConversion>(typeConverter, numWarps, 1 /*benefit*/);
     if (failed(
             applyPartialConversion(mod, funcTarget, std::move(func_patterns))))
       return signalPassFailure();
 
-    Allocation allocation(mod);
     auto axisAnalysis = runAxisAnalysis(mod);
     initSharedMemory(allocation.getSharedMemorySize(), typeConverter);
 
