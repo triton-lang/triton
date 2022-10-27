@@ -299,6 +299,7 @@ Value getStructFromElements(Location loc, ValueRange resultVals,
   if (!structType.isa<LLVM::LLVMStructType>()) {
     return *resultVals.begin();
   }
+
   Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
   for (auto v : llvm::enumerate(resultVals)) {
     llvmStruct = insert_val(structType, llvmStruct, v.value(),
@@ -1198,11 +1199,16 @@ struct BroadcastOpConversion
         auto resultLinearIndex =
             getLinearIndex<int64_t>(resultMultiDim, resultLogicalShape);
         resultVals[resultLinearIndex] = srcVals[i];
+        llvm::outs() << resultVals[resultLinearIndex] << "\n";
       }
     }
     auto llvmStructTy = getTypeConverter()->convertType(resultTy);
+    llvm::outs() << llvmStructTy << " " << srcElems << " " << resultVals.size()
+                 << "\n";
+    llvm::outs() << "00\n";
     Value resultStruct =
         getStructFromElements(loc, resultVals, rewriter, llvmStructTy);
+    llvm::outs() << "11\n";
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
