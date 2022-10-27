@@ -654,7 +654,7 @@ Value convertSplatLikeOp(Type elemType, Type resType, Value constVal,
     auto tensorTy = resType.cast<RankedTensorType>();
     auto layout = tensorTy.getEncoding();
     auto srcType = typeConverter->convertType(elemType);
-    auto llSrc = bitcast(srcType, constVal);
+    auto llSrc = bitcast(constVal, srcType);
     size_t elemsPerThread = getElemsPerThread(layout, tensorTy.getShape());
     llvm::SmallVector<Value> elems(elemsPerThread, llSrc);
     llvm::SmallVector<Type> elemTypes(elems.size(), srcType);
@@ -2579,10 +2579,7 @@ private:
                                 ConversionPatternRewriter &rewriter) const;
   /// Convert to mma.m8n8k4
   LogicalResult convertMMA884(triton::DotOp op, OpAdaptor adaptor,
-                              ConversionPatternRewriter &rewriter) const {
-    assert(false && "Not implemented yet.");
-    return failure();
-  }
+                              ConversionPatternRewriter &rewriter) const;
 
   LogicalResult convertFMADot(triton::DotOp op, OpAdaptor adaptor,
                               ConversionPatternRewriter &rewriter) const {
@@ -2591,7 +2588,36 @@ private:
   }
 };
 
-// Helper for conversion of DotOp with mma<version=2>
+// Helper for conversion of DotOp with mma<version=1>, that is sm<80
+struct DotOpMmaV1ConversionHelper {
+  MmaEncodingAttr mmaLayout;
+  ArrayRef<unsigned> wpt;
+
+  explicit DotOpMmaV1ConversionHelper(MmaEncodingAttr mmaLayout)
+      : mmaLayout(mmaLayout), wpt(mmaLayout.getWarpsPerCTA()) {}
+
+  int getRepM(int M) const {
+    return std::max<int>(M / (wpt[0] * instrShape[0]), 1);
+  }
+  int getRepN(int N) const {
+    return std::max<int>(N / (wpt[1] * instrShape[1]), 1);
+  }
+  int getRepK(int K) const { return std::max<int>(K / instrShape[2], 1); }
+
+  static ArrayRef<unsigned> getMmaInstrShape() { return instrShape; }
+
+  static Type getMmaRetType(TensorType operand) {
+    auto *ctx = operand.getContext();
+    Type fp32Ty = type::f32Ty(ctx);
+    // f16*f16+f32->f32
+    return struct_ty(ctx, SmallVector<Type>{8, fp32Ty});
+  }
+
+private:
+  static constexpr std::array<unsigned, 3> instrShape{16, 16, 4};
+};
+
+// Helper for conversion of DotOp with mma<version=2>, that is sm>=80
 struct DotOpMmaV2ConversionHelper {
   using TensorCoreType = DotOpConversion::TensorCoreType;
 
@@ -3310,6 +3336,8 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adaptor,
                               adaptor);
 }
 
+// Simply port the old code here to avoid large difference and make debugging
+// and profiling easier.
 LogicalResult
 DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adapter,
                                ConversionPatternRewriter &rewriter) const {
@@ -3338,7 +3366,7 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adapter,
 
   auto wpt = mmaLayout.getWarpsPerCTA();
 
-  DotOpMmaV2ConversionHelper helper(mmaLayout);
+  DotOpMmaV1ConversionHelper helper(mmaLayout);
 
   // TODO(Superjomn) Process C->is_trans_a() logic
 
@@ -3532,11 +3560,12 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adapter,
     mma(resOprs, AOprs, BOprs, COprs);
 
     auto inlineAsm = rewriter.create<LLVM::InlineAsmOp>(
-        loc, helper.getMmaRetType(), builder.getAllMLIRArgs(), // operands
-        builder.dump(),                                        // asm_string
-        builder.getConstraints(),                              // constraints
-        true,  // has_side_effects
-        false, // is_align_stack
+        loc, helper.getMmaRetType(aTensorTy),
+        builder.getAllMLIRArgs(), // operands
+        builder.dump(),           // asm_string
+        builder.getConstraints(), // constraints
+        true,                     // has_side_effects
+        false,                    // is_align_stack
         LLVM::AsmDialectAttr::get(ctx,
                                   LLVM::AsmDialect::AD_ATT), // asm_dialect
         ArrayAttr::get(ctx, {})                              // operand_attrs
@@ -3547,7 +3576,6 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adapter,
     auto getIntAttr = [&](int v) {
       return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
     };
-    llvm::outs() << "acc.size: " << acc.size() << "\n";
     for (unsigned i = 0; i < 8; i++)
       acc[idx[i]] = extract_val(f32_ty, res, getIntAttr(i));
   };
@@ -3632,14 +3660,26 @@ Value convertSplatLikeOpWithMmaLayout(const MmaEncodingAttr &layout,
                                       TypeConverter *typeConverter,
                                       ConversionPatternRewriter &rewriter,
                                       Location loc) {
+  auto tensorTy = resType.cast<RankedTensorType>();
+  auto shape = tensorTy.getShape();
   if (layout.getVersion() == 2) {
-    auto tensorTy = resType.cast<RankedTensorType>();
     auto [repM, repN] = DotOpMmaV2ConversionHelper::getRepMN(tensorTy);
     size_t fcSize = 4 * repM * repN;
 
     auto structTy = LLVM::LLVMStructType::getLiteral(
         rewriter.getContext(), SmallVector<Type>(fcSize, elemType));
     return getStructFromElements(loc, SmallVector<Value>(fcSize, constVal),
+                                 rewriter, structTy);
+  }
+  if (layout.getVersion() == 1) {
+    DotOpMmaV1ConversionHelper helper(layout);
+    int repM = helper.getRepM(shape[0]);
+    int repN = helper.getRepN(shape[1]);
+    int elems = 4 * repM * repN;
+
+    auto structTy = LLVM::LLVMStructType::getLiteral(
+        rewriter.getContext(), SmallVector<Type>(elems, elemType));
+    return getStructFromElements(loc, SmallVector<Value>(elems, constVal),
                                  rewriter, structTy);
   }
 
@@ -3673,6 +3713,7 @@ public:
   llvm::Optional<Type> convertTritonTensorType(RankedTensorType type) {
     auto ctx = type.getContext();
     Attribute layout = type.getEncoding();
+    auto shape = type.getShape();
     if (layout &&
         (layout.isa<BlockedEncodingAttr>() || layout.isa<SliceEncodingAttr>() ||
          layout.isa<MmaEncodingAttr>())) {
@@ -3690,6 +3731,15 @@ public:
         size_t fcSize = 4 * repM * repN;
         return LLVM::LLVMStructType::getLiteral(
             ctx, SmallVector<Type>(fcSize, type.getElementType()));
+      }
+
+      if (mmaLayout.getVersion() == 1) {
+        DotOpMmaV1ConversionHelper helper(mmaLayout);
+        int repM = helper.getRepM(shape[0]);
+        int repN = helper.getRepN(shape[1]);
+        int elems = 4 * repM * repN;
+        return LLVM::LLVMStructType::getLiteral(
+            ctx, SmallVector<Type>(elems, type.getElementType()));
       }
 
       llvm::errs()
