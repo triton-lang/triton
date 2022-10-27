@@ -11,6 +11,7 @@
 #include "mlir/Dialect/GPU/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/IR/TypeUtilities.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -295,6 +296,9 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<::mlir::ReturnOp> {
 Value getStructFromElements(Location loc, ValueRange resultVals,
                             ConversionPatternRewriter &rewriter,
                             Type structType) {
+  if (!structType.isa<LLVM::LLVMStructType>()) {
+    return *resultVals.begin();
+  }
   Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
   for (auto v : llvm::enumerate(resultVals)) {
     llvmStruct = insert_val(structType, llvmStruct, v.value(),
@@ -644,7 +648,7 @@ Value convertSplatLikeOp(Type elemType, Type resType, Value constVal,
     auto layout = tensorTy.getEncoding();
     auto srcType = typeConverter->convertType(elemType);
     auto llSrc = bitcast(srcType, constVal);
-    size_t elemsPerThread = getElemsPerThread(layout, tensorTy.getShape());
+    size_t elemsPerThread = getElemsPerThread(tensorTy);
     llvm::SmallVector<Value> elems(elemsPerThread, llSrc);
     llvm::SmallVector<Type> elemTypes(elems.size(), srcType);
     auto structTy =
@@ -726,64 +730,49 @@ struct LoadStoreConversionBase : public ConvertTritonGPUOpToLLVMPatternBase {
 
   // Get corresponding LLVM element values of \param value.
   SmallVector<Value> getLLVMElems(Value value, Value llValue,
-                                  const BlockedEncodingAttr &layout,
                                   ConversionPatternRewriter &rewriter,
                                   Location loc) const {
     if (!value)
       return {};
-
-    auto shape = value.getType().cast<RankedTensorType>().getShape();
+    if (!llValue.getType().isa<LLVM::LLVMStructType>())
+      return {llValue};
     // Here, we assume that all inputs should have a blockedLayout
     auto valueVals = getElementsFromStruct(loc, llValue, rewriter);
     return valueVals;
   }
 
-  // Get the blocked layout.
-  std::tuple<BlockedEncodingAttr, unsigned> getLayout(Value val) const {
-    auto ty = val.getType().cast<RankedTensorType>();
-    // Here, we assume that all inputs should have a blockedLayout
-    auto layout = ty.getEncoding().dyn_cast<BlockedEncodingAttr>();
-    assert(layout && "unexpected layout in getLayout");
-    auto shape = ty.getShape();
-    unsigned valueElems = layout.getElemsPerThread(shape);
-    return {layout, valueElems};
-  }
+  unsigned getVectorSize(Value ptr) const {
+    auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+    if (!tensorTy)
+      return 1;
+    auto layout = tensorTy.getEncoding();
+    auto shape = tensorTy.getShape();
 
-  unsigned getAlignment(Value val, const BlockedEncodingAttr &layout) const {
-    auto axisInfo = getAxisInfo(val);
-    auto order = layout.getOrder();
-    unsigned maxMultiple = axisInfo->getDivisibility(order[0]);
-    unsigned maxContig = axisInfo->getContiguity(order[0]);
-    unsigned alignment = std::min(maxMultiple, maxContig);
-    return alignment;
-  }
-
-  unsigned getVectorizeSize(Value ptr,
-                            const BlockedEncodingAttr &layout) const {
     auto axisInfo = getAxisInfo(ptr);
     // Here order should be ordered by contiguous first, so the first element
     // should have the largest contiguous.
-    auto order = layout.getOrder();
+    auto order = getOrder(layout);
     unsigned align = getAlignment(ptr, layout);
 
-    auto ty = ptr.getType().dyn_cast<RankedTensorType>();
-    assert(ty);
-    auto shape = ty.getShape();
-
-    unsigned contigPerThread = layout.getSizePerThread()[order[0]];
+    unsigned contigPerThread = getSizePerThread(layout)[order[0]];
     unsigned vec = std::min(align, contigPerThread);
     vec = std::min<unsigned>(shape[order[0]], vec);
 
     return vec;
   }
 
-  unsigned getMaskAlignment(Value mask) const {
-    auto maskOrder = mask.getType()
-                         .cast<RankedTensorType>()
-                         .getEncoding()
-                         .cast<BlockedEncodingAttr>()
-                         .getOrder();
+  unsigned getAlignment(Value val, const Attribute &layout) const {
+    auto axisInfo = getAxisInfo(val);
+    auto order = getOrder(layout);
+    unsigned maxMultiple = axisInfo->getDivisibility(order[0]);
+    unsigned maxContig = axisInfo->getContiguity(order[0]);
+    unsigned alignment = std::min(maxMultiple, maxContig);
+    return alignment;
+  }
 
+  unsigned getMaskAlignment(Value mask) const {
+    auto tensorTy = mask.getType().cast<RankedTensorType>();
+    auto maskOrder = getOrder(tensorTy.getEncoding());
     auto maskAxis = getAxisInfo(mask);
     return std::max<int>(maskAxis->getConstancy(maskOrder[0]), 1);
   }
@@ -814,46 +803,39 @@ struct LoadOpConversion
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    MLIRContext *ctx = rewriter.getContext();
+    auto loc = op->getLoc();
+
+    // original values
     Value ptr = op.ptr();
     Value mask = op.mask();
     Value other = op.other();
 
+    // adaptor values
     Value llPtr = adaptor.ptr();
     Value llMask = adaptor.mask();
     Value llOther = adaptor.other();
 
-    auto loc = op->getLoc();
-    MLIRContext *ctx = rewriter.getContext();
-
-    auto valueTy = op.getResult().getType().dyn_cast<RankedTensorType>();
-    if (!valueTy)
-      return failure();
-    Type valueElemTy =
-        getTypeConverter()->convertType(valueTy.getElementType());
-
-    auto [layout, numElems] = getLayout(ptr);
-
-    auto ptrElems = getLLVMElems(ptr, llPtr, layout, rewriter, loc);
-    assert(ptrElems.size() == numElems);
     // Determine the vectorization size
-    size_t vec = getVectorizeSize(ptr, layout);
+    Type valueTy = op.getResult().getType();
+    Type valueElemTy = getElementTypeOrSelf(valueTy);
+    unsigned vec = getVectorSize(ptr);
+    unsigned numElems = getElemsPerThread(ptr.getType());
+    if (llMask)
+      vec = std::min<size_t>(vec, getMaskAlignment(mask));
 
+    // Get the LLVM values for pointers
+    auto ptrElems = getLLVMElems(ptr, llPtr, rewriter, loc);
+    assert(ptrElems.size() == numElems);
+
+    // Get the LLVM values for mask
     SmallVector<Value> maskElems;
     if (llMask) {
-      unsigned maskAlignment = getMaskAlignment(mask);
-      maskElems = getLLVMElems(mask, llMask, layout, rewriter, loc);
-      assert(ptrElems.size() == maskElems.size());
-
-      size_t maskAlign = getMaskAlignment(mask);
-      vec = std::min(vec, maskAlign);
+      maskElems = getLLVMElems(mask, llMask, rewriter, loc);
+      assert(maskElems.size() == numElems);
     }
 
-    const size_t dtsize =
-        std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
-    const size_t valueElemNbits = dtsize * 8;
-
-    const int numVecs = numElems / vec;
-
+    // Get the LLVM values for `other`
     // TODO: (goostavz) handle when other is const but not splat, which
     //       should be rarely seen
     bool otherIsSplatConstInt = false;
@@ -864,8 +846,12 @@ struct LoadOpConversion
       otherIsSplatConstInt = true;
       splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
     }
+    auto otherElems = getLLVMElems(other, llOther, rewriter, loc);
 
-    auto otherElems = getLLVMElems(other, llOther, layout, rewriter, loc);
+    // vectorized iteration through all the pointer/mask/other elements
+    const int valueElemNbits =
+        std::max(8u, valueElemTy.getIntOrFloatBitWidth());
+    const int numVecs = numElems / vec;
 
     SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
@@ -1026,26 +1012,23 @@ struct StoreOpConversion
     auto loc = op->getLoc();
     MLIRContext *ctx = rewriter.getContext();
 
-    auto valueTy = value.getType().dyn_cast<RankedTensorType>();
-    if (!valueTy)
-      return failure();
-    Type valueElemTy =
-        getTypeConverter()->convertType(valueTy.getElementType());
+    auto valueTy = value.getType();
+    Type valueElemTy = getElementTypeOrSelf(valueTy);
 
-    auto [layout, numElems] = getLayout(ptr);
+    unsigned vec = getVectorSize(ptr);
+    unsigned numElems = getElemsPerThread(ptr.getType());
 
-    auto ptrElems = getLLVMElems(ptr, llPtr, layout, rewriter, loc);
-    auto valueElems = getLLVMElems(value, llValue, layout, rewriter, loc);
+    auto ptrElems = getLLVMElems(ptr, llPtr, rewriter, loc);
+    auto valueElems = getLLVMElems(value, llValue, rewriter, loc);
     assert(ptrElems.size() == valueElems.size());
 
     // Determine the vectorization size
-    size_t vec = getVectorizeSize(ptr, layout);
     SmallVector<Value> maskElems;
     if (llMask) {
-      maskElems = getLLVMElems(mask, llMask, layout, rewriter, loc);
+      maskElems = getLLVMElems(mask, llMask, rewriter, loc);
       assert(valueElems.size() == maskElems.size());
 
-      size_t maskAlign = getMaskAlignment(mask);
+      unsigned maskAlign = getMaskAlignment(mask);
       vec = std::min(vec, maskAlign);
     }
 
@@ -1196,10 +1179,10 @@ struct BroadcastOpConversion
       duplicates *= d;
     }
 
-    unsigned srcElems = srcLayout.getElemsPerThread(srcShape);
+    unsigned srcElems = getElemsPerThread(src.getType());
     auto elemTy = resultTy.getElementType();
     auto srcVals = getElementsFromStruct(loc, src, rewriter);
-    unsigned resultElems = resultLayout.getElemsPerThread(resultShape);
+    unsigned resultElems = getElemsPerThread(result.getType());
     SmallVector<Value> resultVals(resultElems);
     for (unsigned i = 0; i < srcElems; ++i) {
       auto srcMultiDim = getMultiDimIndex<int64_t>(i, srcLogicalShape);
@@ -1241,7 +1224,7 @@ struct ViewLikeOpConversion : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
     Location loc = op->getLoc();
     auto resultTy = op.getType().template cast<RankedTensorType>();
     auto resultShape = resultTy.getShape();
-    unsigned elems = getElemsPerThread(resultTy.getEncoding(), resultShape);
+    unsigned elems = getElemsPerThread(resultTy);
     Type elemTy =
         this->getTypeConverter()->convertType(resultTy.getElementType());
     SmallVector<Type> types(elems, elemTy);
@@ -1320,7 +1303,7 @@ struct AddPtrOpConversion
           resultTensorTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
       assert(resultLayout && "Unexpected resultLayout in AddPtrOpConversion");
       auto resultShape = resultTensorTy.getShape();
-      unsigned elems = resultLayout.getElemsPerThread(resultShape);
+      unsigned elems = getElemsPerThread(resultTy);
       Type elemTy =
           getTypeConverter()->convertType(resultTensorTy.getElementType());
       SmallVector<Type> types(elems, elemTy);
@@ -1426,7 +1409,7 @@ public:
         resultTy.getEncoding().template dyn_cast<BlockedEncodingAttr>();
     auto resultShape = resultTy.getShape();
     assert(resultLayout && "Unexpected resultLayout in BinaryOpConversion");
-    unsigned elems = resultLayout.getElemsPerThread(resultShape);
+    unsigned elems = getElemsPerThread(resultTy);
     Type elemTy =
         this->getTypeConverter()->convertType(resultTy.getElementType());
     SmallVector<Type> types(elems, elemTy);
@@ -1499,7 +1482,7 @@ public:
         resultTy.getEncoding().template dyn_cast<BlockedEncodingAttr>();
     auto resultShape = resultTy.getShape();
     assert(resultLayout && "Unexpected resultLayout in TernaryOpConversion");
-    unsigned elems = resultLayout.getElemsPerThread(resultShape);
+    unsigned elems = getElemsPerThread(resultTy);
     Type elemTy =
         this->getTypeConverter()->convertType(resultTy.getElementType());
     SmallVector<Type> types(elems, elemTy);
@@ -1571,7 +1554,7 @@ public:
         resultTy.getEncoding().template dyn_cast<BlockedEncodingAttr>();
     auto resultShape = resultTy.getShape();
     assert(resultLayout && "Unexpected resultLayout in UnaryOpConversion");
-    unsigned elems = resultLayout.getElemsPerThread(resultShape);
+    unsigned elems = getElemsPerThread(resultTy);
     Type elemTy =
         this->getTypeConverter()->convertType(resultTy.getElementType());
     SmallVector<Type> types(elems, elemTy);
@@ -1938,13 +1921,13 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
   }
   // Potentially we need to store for multiple CTAs in this replication
   unsigned accumNumReplicates = product<unsigned>(numReplicates);
-  unsigned elems = getElemsPerThread(srcLayout, srcTy.getShape());
+  unsigned elems = getElemsPerThread(srcTy);
   auto vals = getElementsFromStruct(loc, adaptor.src(), rewriter);
   unsigned inVec = 0;
   unsigned outVec = 0;
   auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
 
-  unsigned outElems = getElemsPerThread(dstLayout, shape);
+  unsigned outElems = getElemsPerThread(dstTy);
   auto outOrd = getOrder(dstLayout);
   SmallVector<Value> outVals(outElems);
 
@@ -2001,7 +1984,7 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
   unsigned minVec = std::min(outVec, inVec);
   unsigned perPhase = dstSharedLayout.getPerPhase();
   unsigned maxPhase = dstSharedLayout.getMaxPhase();
-  unsigned numElems = getElemsPerThread(srcBlockedLayout, srcShape);
+  unsigned numElems = getElemsPerThread(srcTy);
   auto inVals = getElementsFromStruct(loc, adaptor.src(), rewriter);
   unsigned srcAccumSizeInThreads =
       product<unsigned>(srcBlockedLayout.getSizePerThread());
@@ -3378,8 +3361,7 @@ public:
     if (layout &&
         (layout.isa<BlockedEncodingAttr>() || layout.isa<SliceEncodingAttr>() ||
          layout.isa<MmaEncodingAttr>())) {
-      unsigned numElementsPerThread =
-          getElemsPerThread(layout, type.getShape());
+      unsigned numElementsPerThread = getElemsPerThread(type);
       SmallVector<Type, 4> types(numElementsPerThread,
                                  convertType(type.getElementType()));
       return LLVM::LLVMStructType::getLiteral(ctx, types);
@@ -3497,7 +3479,7 @@ struct InsertSliceAsyncOpConversion
     Value llIndex = adaptor.index();
 
     // %src
-    auto srcElems = getLLVMElems(src, llSrc, srcBlockedLayout, rewriter, loc);
+    auto srcElems = getLLVMElems(src, llSrc, rewriter, loc);
 
     // %dst
     auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
@@ -3513,7 +3495,7 @@ struct InsertSliceAsyncOpConversion
     // %mask
     SmallVector<Value> maskElems;
     if (llMask) {
-      maskElems = getLLVMElems(mask, llMask, srcBlockedLayout, rewriter, loc);
+      maskElems = getLLVMElems(mask, llMask, rewriter, loc);
       assert(srcElems.size() == maskElems.size());
     }
 
@@ -3524,15 +3506,14 @@ struct InsertSliceAsyncOpConversion
       // It's not necessary for now because the pipeline pass will skip
       // generating insert_slice_async if the load op has any "other" tensor.
       assert(false && "insert_slice_async: Other value not supported yet");
-      otherElems =
-          getLLVMElems(other, llOther, srcBlockedLayout, rewriter, loc);
+      otherElems = getLLVMElems(other, llOther, rewriter, loc);
       assert(srcElems.size() == otherElems.size());
     }
 
-    unsigned inVec = getVectorizeSize(src, srcBlockedLayout);
+    unsigned inVec = getVectorSize(src);
     unsigned outVec = resSharedLayout.getVec();
     unsigned minVec = std::min(outVec, inVec);
-    unsigned numElems = getElemsPerThread(srcBlockedLayout, srcShape);
+    unsigned numElems = getElemsPerThread(srcTy);
     unsigned perPhase = resSharedLayout.getPerPhase();
     unsigned maxPhase = resSharedLayout.getMaxPhase();
     auto sizePerThread = srcBlockedLayout.getSizePerThread();
