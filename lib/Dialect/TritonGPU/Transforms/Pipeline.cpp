@@ -362,6 +362,10 @@ void LoopPipeliner::emitPrologue() {
         loadStageBuffer[loadOp][numStages - 1], loopIterIdx, /*axis*/ 0);
     loadsExtract[loadOp] = extractSlice;
   }
+  // bump up loopIterIdx, this is used for the *next* iteration
+  loopIterIdx = builder.create<arith::AddIOp>(
+      loopIterIdx.getLoc(), loopIterIdx,
+      builder.create<arith::ConstantIntOp>(loopIterIdx.getLoc(), 1, 32));
 }
 
 scf::ForOp LoopPipeliner::createNewForOp() {
