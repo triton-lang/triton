@@ -42,9 +42,6 @@ void MembarAnalysis::dfsOperation(Operation *operation,
 
 void MembarAnalysis::transfer(Operation *op, RegionInfo *regionInfo,
                               OpBuilder *builder) {
-  if (op->getNumResults() < 1)
-    return;
-
   if (isa<scf::ForOp>(op) || isa<scf::IfOp>(op) || isa<scf::YieldOp>(op) ||
       isa<triton::gpu::ExtractSliceOp>(op) ||
       isa<triton::gpu::InsertSliceAsyncOp>(op) ||
