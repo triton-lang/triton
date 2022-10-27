@@ -445,7 +445,7 @@ void init_triton_ir(py::module &&m) {
              auto loc = self.getUnknownLoc();
              if (auto floatTy = type.dyn_cast<mlir::FloatType>())
                return self.create<mlir::arith::ConstantFloatOp>(
-                   loc, mlir::APFloat((double)0.), floatTy);
+                   loc, mlir::APFloat(floatTy.getFloatSemantics(), 0), floatTy);
              else if (auto intTy = type.dyn_cast<mlir::IntegerType>())
                return self.create<mlir::arith::ConstantIntOp>(loc, 0, intTy);
              else
@@ -455,10 +455,7 @@ void init_triton_ir(py::module &&m) {
            [](mlir::OpBuilder &self, mlir::Type type) -> mlir::Value {
              auto loc = self.getUnknownLoc();
              uint64_t val = 0xFFFFFFFFFFFFFFFF;
-             if (auto floatTy = type.dyn_cast<mlir::FloatType>())
-               return self.create<mlir::arith::ConstantFloatOp>(
-                   loc, mlir::APFloat(*(double *)(&val)), floatTy);
-             else if (auto intTy = type.dyn_cast<mlir::IntegerType>())
+             if (auto intTy = type.dyn_cast<mlir::IntegerType>())
                return self.create<mlir::arith::ConstantIntOp>(loc, val, intTy);
              else
                throw std::runtime_error("Not implemented");
