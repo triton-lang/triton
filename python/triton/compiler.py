@@ -998,7 +998,6 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     ptx = make_ptx(llvm_ir, compute_capability, ptx_version)
     shem_size = _triton.get_shared_memory_size(module)
     kernel_name = ptx_get_kernel_name(ptx)
-
     if output == "ptx":
         return ptx, shem_size, kernel_name
 

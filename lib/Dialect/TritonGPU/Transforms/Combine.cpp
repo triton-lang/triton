@@ -113,6 +113,9 @@ public:
     auto insert_slice = dyn_cast<triton::gpu::InsertSliceAsyncOp>(arg);
     if (insert_slice) {
       auto newType = op->getResult(0).getType();
+      // Ensure that the new insert_slice op is placed in the same place as the
+      // old insert_slice op. Otherwise, the new insert_slice op may be placed
+      // after the async_wait op, which is not allowed.
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPoint(insert_slice);
       auto new_arg = rewriter.create<triton::gpu::ConvertLayoutOp>(
@@ -128,6 +131,9 @@ public:
     auto extract_slice = dyn_cast<triton::gpu::ExtractSliceOp>(arg);
     if (extract_slice) {
       auto origType = extract_slice.src().getType().cast<RankedTensorType>();
+      // Ensure that the new extract_slice op is placed in the same place as the
+      // old extract_slice op. Otherwise, the new extract_slice op may be placed
+      // after the async_wait op, which is not allowed.
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPoint(extract_slice);
       auto newType = RankedTensorType::get(

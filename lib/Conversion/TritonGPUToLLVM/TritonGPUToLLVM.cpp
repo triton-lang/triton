@@ -631,13 +631,6 @@ Value convertSplatLikeOpWithMmaLayout(const MmaEncodingAttr &layout,
                                       ConversionPatternRewriter &rewriter,
                                       Location loc);
 
-Value convertSplatLikeOpWithMmaLayout(const MmaEncodingAttr &layout,
-                                      Type resType, Type elemType,
-                                      Value constVal,
-                                      TypeConverter *typeConverter,
-                                      ConversionPatternRewriter &rewriter,
-                                      Location loc);
-
 // Convert SplatOp or arith::ConstantOp with SplatElementsAttr to a
 // LLVM::StructType value.
 //
@@ -654,8 +647,8 @@ Value convertSplatLikeOp(Type elemType, Type resType, Value constVal,
     auto srcType = typeConverter->convertType(elemType);
     auto llSrc = bitcast(srcType, constVal);
     size_t elemsPerThread = getElemsPerThread(layout, tensorTy.getShape());
-    llvm::SmallVector<Value, 4> elems(elemsPerThread, llSrc);
-    llvm::SmallVector<Type, 4> elemTypes(elems.size(), srcType);
+    llvm::SmallVector<Value> elems(elemsPerThread, llSrc);
+    llvm::SmallVector<Type> elemTypes(elems.size(), srcType);
     auto structTy =
         LLVM::LLVMStructType::getLiteral(rewriter.getContext(), elemTypes);
 
@@ -3492,7 +3485,7 @@ struct InsertSliceAsyncOpConversion
 
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto resTy = dst.getType().cast<RankedTensorType>();
-    auto resElemTy = resTy.getElementType();
+    auto resElemTy = getTypeConverter()->convertType(resTy.getElementType());
     auto srcBlockedLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
     auto resSharedLayout = resTy.getEncoding().cast<SharedEncodingAttr>();
     auto srcShape = srcTy.getShape();
@@ -3628,6 +3621,7 @@ struct InsertSliceAsyncOpConversion
       CacheModifier srcCacheModifier =
           byteWidth == 16 ? CacheModifier::CG : CacheModifier::CA;
       assert(byteWidth == 16 || byteWidth == 8 || byteWidth == 4);
+      auto resByteWidth = resElemTy.getIntOrFloatBitWidth() / 8;
 
       auto tileOffset = tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}];
       for (unsigned wordIdx = 0; wordIdx < numWords; ++wordIdx) {
@@ -3635,9 +3629,8 @@ struct InsertSliceAsyncOpConversion
         auto wordElemIdx = wordIdx * numWordElems;
         auto &copyAsyncOp =
             *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
-        auto tileOffsetWord =
-            gep(dstPtrTy, tileOffset, i32_val(wordElemIdx + baseOffset));
-        auto *dstOperand = ptxBuilder.newAddrOperand(tileOffsetWord, "r");
+        auto *dstOperand = ptxBuilder.newAddrOperand(
+            tileOffset, "r", (wordElemIdx + baseOffset) * resByteWidth);
         auto *srcOperand =
             ptxBuilder.newAddrOperand(srcElems[elemIdx + wordElemIdx], "l");
         auto *copySize = ptxBuilder.newConstantOperand(byteWidth);

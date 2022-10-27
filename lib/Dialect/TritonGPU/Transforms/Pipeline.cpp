@@ -365,19 +365,20 @@ void LoopPipeliner::emitPrologue() {
         loadStageBuffer[loadOp][numStages - 1], loopIterIdx, /*axis*/ 0);
     loadsExtract[loadOp] = extractSlice;
   }
-  // bump up loopIterIdx, this is used for the *next* iteration
+  // bump up loopIterIdx, this is used for getting the correct slice for the
+  // *next* iteration
   loopIterIdx = builder.create<arith::AddIOp>(
       loopIterIdx.getLoc(), loopIterIdx,
       builder.create<arith::ConstantIntOp>(loopIterIdx.getLoc(), 1, 32));
 }
 
 void LoopPipeliner::emitEpilogue() {
-  // If there's any dangling async copies, we need to wait for them.
+  // If there's any outstanding async copies, we need to wait for them.
   OpBuilder builder(forOp);
   OpBuilder::InsertionGuard g(builder);
   builder.setInsertionPointAfter(forOp);
-  Operation *asyncWait = builder.create<triton::gpu::AsyncWaitOp>(
-      forOp.getLoc(), 0);
+  Operation *asyncWait =
+      builder.create<triton::gpu::AsyncWaitOp>(forOp.getLoc(), 0);
 }
 
 scf::ForOp LoopPipeliner::createNewForOp() {
