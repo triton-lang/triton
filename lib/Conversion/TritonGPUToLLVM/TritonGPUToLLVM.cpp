@@ -2662,31 +2662,6 @@ struct DotOpConversionHelper {
     return {repM, repN};
   }
 
-  // Deduce the M and N from either $c or $d type.
-  static std::tuple<int, int> getMatShapeMN() {
-    // According to DotOpConversionHelper::mmaMatShape, all the matrix shape's
-    // M,N are {8,8}
-    return {8, 8};
-  }
-
-  // Get the M and N of mma instruction shape.
-  static std::tuple<int, int> getInstrShapeMN() {
-    // According to DotOpConversionHelper::mmaInstrShape, all the M,N are {16,8}
-    return {16, 8};
-  }
-
-  static std::tuple<int, int> getRepMN(const RankedTensorType &tensorTy) {
-    auto mmaLayout = tensorTy.getEncoding().cast<MmaEncodingAttr>();
-    auto wpt = mmaLayout.getWarpsPerCTA();
-
-    int M = tensorTy.getShape()[0];
-    int N = tensorTy.getShape()[1];
-    auto [instrM, instrN] = getInstrShapeMN();
-    int repM = std::max<int>(M / (wpt[0] * instrM), 1);
-    int repN = std::max<int>(N / (wpt[1] * instrN), 1);
-    return {repM, repN};
-  }
-
   Type getShemPtrTy() const {
     switch (mmaType) {
     case TensorCoreType::FP32_FP16_FP16_FP32:
@@ -3167,11 +3142,6 @@ struct MMA16816ConversionHelper {
       for (unsigned m = 0; m < numRepM; ++m)
         for (unsigned n = 0; n < numRepN; ++n)
           callMma(2 * m, n, 2 * k);
-
-    // NOTE, the barrier here is a temporary trick making the gemm with a
-    // k-forloop pass the precision test, or it will fail.
-    // TODO[Superjomn]: Fix with a more general and performance-friendly way.
-    barrier;
 
     // replace with new packed result
     Type structTy = LLVM::LLVMStructType::getLiteral(
