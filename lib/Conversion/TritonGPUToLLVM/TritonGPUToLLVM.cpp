@@ -3528,9 +3528,10 @@ struct InsertSliceAsyncOpConversion
         auto wordElemIdx = wordIdx * numWordElems;
         auto &copyAsyncOp =
             *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
-        auto tileOffsetWord = gep(dstPtrTy, tileOffset, i32_val(wordElemIdx));
+        auto tileOffsetWord =
+            gep(dstPtrTy, tileOffset, i32_val(wordElemIdx + baseOffset));
         auto *dstOperand =
-            ptxBuilder.newAddrOperand(tileOffsetWord, "r", baseOffset);
+            ptxBuilder.newAddrOperand(tileOffsetWord, "r");
         auto *srcOperand =
             ptxBuilder.newAddrOperand(srcElems[elemIdx + wordElemIdx], "l");
         auto *copySize = ptxBuilder.newConstantOperand(byteWidth);
