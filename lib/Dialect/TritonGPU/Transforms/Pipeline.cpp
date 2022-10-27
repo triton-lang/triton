@@ -374,6 +374,9 @@ void LoopPipeliner::emitPrologue() {
 
 void LoopPipeliner::emitEpilogue() {
   // If there's any outstanding async copies, we need to wait for them.
+  // TODO(Keren): We may want to completely avoid the async copies in the last
+  // few iterations by setting is_masked attribute to true. We don't want to use
+  // the mask operand because it's a tensor but not a scalar.
   OpBuilder builder(forOp);
   OpBuilder::InsertionGuard g(builder);
   builder.setInsertionPointAfter(forOp);
