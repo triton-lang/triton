@@ -56,6 +56,22 @@ def TT_PtrToIntOp : TT_Op<"ptr_to_int", [SameOperandsAndResultShape,
     let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
 }
 
+// arith.bitcast doesn't support pointers
+def TT_BitcastOp : TT_Op<"bitcast", [SameOperandsAndResultShape, 
+                                     SameOperandsAndResultEncoding,
+                                     NoSideEffect,
+                                     /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
+    let summary = "Cast between types of the same bitwidth";
+
+    let arguments = (ins TT_Type:$from);
+
+    let results = (outs TT_Type:$result);
+
+    let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
+
+    // TODO: Add verifier
+}
+
 def TT_FpToFp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape, 
                                    SameOperandsAndResultEncoding,
                                    NoSideEffect,
