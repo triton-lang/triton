@@ -45,6 +45,7 @@ def str_to_ty(name):
         "u32": triton.language.uint32,
         "u64": triton.language.uint64,
         "B": triton.language.int1,
+        "i1": triton.language.int1,
     }
     return tys[name]
 

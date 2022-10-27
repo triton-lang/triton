@@ -729,9 +729,10 @@ def cat(input, other, _builder=None):
 
 
 @builtin
-def reshape(input, shape, _builder=None):
+def view(input, shape, _builder=None):
     """
-    Tries to reshape the given tensor to a new shape.
+    Returns a tensor with the same elements as `input` but a different shape.
+    The order of the elements may not be preserved.
 
     :param input: The input tensor.
     :type input:
@@ -740,7 +741,7 @@ def reshape(input, shape, _builder=None):
 
     """
     shape = [x.value for x in shape]
-    return semantic.reshape(input, shape, _builder)
+    return semantic.view(input, shape, _builder)
 
 
 # -----------------------
@@ -1151,7 +1152,7 @@ def ravel(x):
     :param x: the input tensor
     :type x: Block
     """
-    return triton.language.reshape(x, [x.numel])
+    return triton.language.view(x, [x.numel])
 
 
 @triton.jit
