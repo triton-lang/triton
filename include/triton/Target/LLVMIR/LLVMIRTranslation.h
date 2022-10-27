@@ -16,7 +16,9 @@ namespace mlir {
 namespace triton {
 
 // add external dependent libs
-void addExternalLibs(mlir::ModuleOp& module, const std::vector<std::string>& names, const std::vector<std::string>& paths);
+void addExternalLibs(mlir::ModuleOp &module,
+                     const std::vector<std::string> &names,
+                     const std::vector<std::string> &paths);
 
 // Translate TritonGPU dialect to LLVMIR, return null if failed.
 std::unique_ptr<llvm::Module>
