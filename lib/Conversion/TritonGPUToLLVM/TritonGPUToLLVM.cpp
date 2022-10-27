@@ -91,7 +91,7 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 #define store(val, ptr) rewriter.create<LLVM::StoreOp>(loc, val, ptr)
 #define select(...) rewriter.create<LLVM::SelectOp>(loc, __VA_ARGS__)
 #define address_of(...) rewriter.create<LLVM::AddressOfOp>(loc, __VA_ARGS__)
-#define barrier rewriter.create<mlir::gpu::BarrierOp>(loc)
+#define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
 #define i32_ty rewriter.getIntegerType(32)
 #define vec_ty(type, num) VectorType::get(num, type)
@@ -1400,6 +1400,8 @@ struct ExtractSliceOpConversion
   }
 };
 
+// TODO: rewrite Ternary/Binary/Unary as Elementwise
+
 // A CRTP style of base class.
 template <typename SourceOp, typename DestOp, typename ConcreteT>
 class ElementwiseOpConversionBase
@@ -1479,6 +1481,77 @@ struct ElementwiseOpConversion
                       ValueRange operands, Location loc) const {
     return rewriter.create<DestOp>(loc, elemTy, operands,
                                    adaptor.getAttributes().getValue());
+  }
+};
+
+//
+// Ternary
+//
+
+template <typename SourceOp, typename DestOp, typename ConcreteT>
+class TernaryOpConversionBase
+    : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
+public:
+  using OpAdaptor = typename SourceOp::Adaptor;
+
+  explicit TernaryOpConversionBase(LLVMTypeConverter &typeConverter,
+                                   PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit) {}
+
+  LogicalResult
+  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto resultTy = op.getType().template dyn_cast<RankedTensorType>();
+    // ArithmeticToLLVM will handle the lowering of scalar ArithOps
+    if (!resultTy)
+      return failure();
+
+    Location loc = op->getLoc();
+    auto resultLayout =
+        resultTy.getEncoding().template dyn_cast<BlockedEncodingAttr>();
+    auto resultShape = resultTy.getShape();
+    assert(resultLayout && "Unexpected resultLayout in TernaryOpConversion");
+    unsigned elems = resultLayout.getElemsPerThread(resultShape);
+    Type elemTy =
+        this->getTypeConverter()->convertType(resultTy.getElementType());
+    SmallVector<Type> types(elems, elemTy);
+    Type structTy = LLVM::LLVMStructType::getLiteral(this->getContext(), types);
+
+    auto *concreteThis = static_cast<const ConcreteT *>(this);
+    auto lhss =
+        this->getElementsFromStruct(loc, adaptor.getOperands()[0], rewriter);
+    auto rhss =
+        this->getElementsFromStruct(loc, adaptor.getOperands()[1], rewriter);
+    auto thss =
+        this->getElementsFromStruct(loc, adaptor.getOperands()[2], rewriter);
+    SmallVector<Value> resultVals(elems);
+    for (unsigned i = 0; i < elems; ++i) {
+      resultVals[i] = concreteThis->createDestOp(op, rewriter, elemTy, lhss[i],
+                                                 rhss[i], thss[i], loc);
+    }
+    Value view = getStructFromElements(loc, resultVals, rewriter, structTy);
+    rewriter.replaceOp(op, view);
+    return success();
+  }
+};
+
+template <typename SourceOp, typename DestOp>
+struct TernaryOpConversion
+    : public TernaryOpConversionBase<SourceOp, DestOp,
+                                     TernaryOpConversion<SourceOp, DestOp>> {
+
+  explicit TernaryOpConversion(LLVMTypeConverter &typeConverter,
+                               PatternBenefit benefit = 1)
+      : TernaryOpConversionBase<SourceOp, DestOp,
+                                TernaryOpConversion<SourceOp, DestOp>>(
+            typeConverter, benefit) {}
+
+  using OpAdaptor = typename SourceOp::Adaptor;
+  // An interface to support variant DestOp builder.
+  DestOp createDestOp(SourceOp op, ConversionPatternRewriter &rewriter,
+                      Type elemTy, Value lhs, Value rhs, Value th,
+                      Location loc) const {
+    return rewriter.create<DestOp>(loc, elemTy, lhs, rhs, th);
   }
 };
 
@@ -1883,7 +1956,7 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
 
   for (unsigned repId = 0; repId < accumNumReplicates; ++repId) {
     auto multiDimRepId = getMultiDimIndex<unsigned>(repId, numReplicates);
-    barrier;
+    barrier();
     if (srcLayout.isa<BlockedEncodingAttr>() ||
         srcLayout.isa<MmaEncodingAttr>()) {
       processReplica(loc, rewriter, /*stNotRd*/ true, srcTy, inNumCTAsEachRep,
@@ -1893,7 +1966,7 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
       assert(0 && "ConvertLayout with input layout not implemented");
       return failure();
     }
-    barrier;
+    barrier();
     if (dstLayout.isa<BlockedEncodingAttr>() ||
         dstLayout.isa<MmaEncodingAttr>()) {
       processReplica(loc, rewriter, /*stNotRd*/ false, dstTy, outNumCTAsEachRep,
@@ -1969,6 +2042,11 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
   smemBase = bitcast(elemPtrTy, smemBase);
   unsigned numWordsEachRep = product<unsigned>(wordsInEachRep);
   SmallVector<Value> wordVecs(numWordsEachRep);
+  // TODO: We should get less barriers if it is handled by membar pass
+  //       instead of the backend, since the later can only handle it in
+  //       the most conservative way. However just keep for now and revisit
+  //       in the future in case necessary.
+  barrier();
   for (unsigned i = 0; i < numElems; ++i) {
     if (i % srcAccumSizeInThreads == 0) {
       // start of a replication
@@ -2022,8 +2100,7 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
       }
     }
   }
-  // TODO: double confirm if the Barrier is necessary here
-  barrier;
+  barrier();
   rewriter.replaceOp(op, smemBase);
   return success();
 }
@@ -3063,11 +3140,6 @@ struct MMA16816ConversionHelper {
         for (unsigned n = 0; n < numRepN; ++n)
           callMma(2 * m, n, 2 * k);
 
-    // NOTE, the barrier here is a temporary trick making the gemm with a
-    // k-forloop pass the precision test, or it will fail.
-    // TODO[Superjomn]: Fix with a more general and performance-friendly way.
-    barrier;
-
     // replace with new packed result
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(fc.size(), type::f32Ty(ctx)));
@@ -3645,23 +3717,12 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
                                         benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
-  patterns.add<ElementwiseOpConversion<arith::AddIOp, LLVM::AddOp>>(
-      typeConverter, benefit);
-  patterns.add<ElementwiseOpConversion<arith::SubIOp, LLVM::SubOp>>(
-      typeConverter, benefit);
-  patterns.add<ElementwiseOpConversion<arith::AddFOp, LLVM::FAddOp>>(
-      typeConverter, benefit);
-  patterns.add<ElementwiseOpConversion<arith::SubFOp, LLVM::FSubOp>>(
-      typeConverter, benefit);
-  patterns.add<ElementwiseOpConversion<arith::MulIOp, LLVM::MulOp>>(
-      typeConverter, benefit);
-  patterns.add<ElementwiseOpConversion<arith::MulFOp, LLVM::FMulOp>>(
-      typeConverter, benefit);
 
-  patterns.add<ElementwiseOpConversion<arith::AndIOp, LLVM::AndOp>>(
-      typeConverter, benefit);
-  patterns.add<ElementwiseOpConversion<arith::OrIOp, LLVM::OrOp>>(typeConverter,
-                                                                  benefit);
+#define POPULATE_TERNARY_OP(SRC_OP, DST_OP)                                    \
+  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
+  POPULATE_TERNARY_OP(triton::gpu::SelectOp, LLVM::SelectOp);
+#undef POPULATE_TERNARY_OP
+
 #define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
   patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
 
@@ -3677,24 +3738,38 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   POPULATE_BINARY_OP(arith::RemFOp, LLVM::FRemOp) // %
   POPULATE_BINARY_OP(arith::RemSIOp, LLVM::SRemOp)
   POPULATE_BINARY_OP(arith::RemUIOp, LLVM::URemOp)
-  POPULATE_BINARY_OP(arith::AndIOp, LLVM::AndOp) // &
-  POPULATE_BINARY_OP(arith::OrIOp, LLVM::OrOp)   // |
+  POPULATE_BINARY_OP(arith::AndIOp, LLVM::AndOp)   // &
+  POPULATE_BINARY_OP(arith::OrIOp, LLVM::OrOp)     // |
+  POPULATE_BINARY_OP(arith::XOrIOp, LLVM::XOrOp)   // ^
+  POPULATE_BINARY_OP(arith::ShLIOp, LLVM::ShlOp)   // <<
+  POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp) // >>
+  POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp) // >>
 #undef POPULATE_BINARY_OP
 
   patterns.add<CmpIOpConversion>(typeConverter, benefit);
   patterns.add<CmpFOpConversion>(typeConverter, benefit);
-#define POPULATE_CAST_OP(SRC_OP, DST_OP)                                       \
+#define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
   patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
-  POPULATE_CAST_OP(arith::TruncIOp, LLVM::TruncOp)
-  POPULATE_CAST_OP(arith::TruncFOp, LLVM::FPTruncOp)
-  POPULATE_CAST_OP(arith::ExtSIOp, LLVM::SExtOp)
-  POPULATE_CAST_OP(arith::ExtUIOp, LLVM::ZExtOp)
-  POPULATE_CAST_OP(arith::FPToUIOp, LLVM::FPToUIOp)
-  POPULATE_CAST_OP(arith::FPToSIOp, LLVM::FPToSIOp)
-  POPULATE_CAST_OP(arith::UIToFPOp, LLVM::UIToFPOp)
-  POPULATE_CAST_OP(arith::SIToFPOp, LLVM::SIToFPOp)
-  POPULATE_CAST_OP(arith::ExtFOp, LLVM::FPExtOp)
-#undef POPULATE_CAST_OP
+  POPULATE_UNARY_OP(arith::TruncIOp, LLVM::TruncOp)
+  POPULATE_UNARY_OP(arith::TruncFOp, LLVM::FPTruncOp)
+  POPULATE_UNARY_OP(arith::ExtSIOp, LLVM::SExtOp)
+  POPULATE_UNARY_OP(arith::ExtUIOp, LLVM::ZExtOp)
+  POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
+  POPULATE_UNARY_OP(arith::FPToSIOp, LLVM::FPToSIOp)
+  POPULATE_UNARY_OP(arith::UIToFPOp, LLVM::UIToFPOp)
+  POPULATE_UNARY_OP(arith::SIToFPOp, LLVM::SIToFPOp)
+  POPULATE_UNARY_OP(arith::ExtFOp, LLVM::FPExtOp)
+  POPULATE_UNARY_OP(triton::BitcastOp, LLVM::BitcastOp)
+  POPULATE_UNARY_OP(triton::IntToPtrOp, LLVM::IntToPtrOp)
+  POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
+  POPULATE_UNARY_OP(math::LogOp, math::LogOp)
+  POPULATE_UNARY_OP(math::CosOp, math::CosOp)
+  POPULATE_UNARY_OP(math::SinOp, math::SinOp)
+  POPULATE_UNARY_OP(math::SqrtOp, math::SqrtOp)
+  POPULATE_UNARY_OP(math::ExpOp, math::ExpOp)
+#undef POPULATE_UNARY_OP
+
+  patterns.add<ExtElemwiseOpConversion>(typeConverter, benefit);
 
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
   patterns.add<ConvertLayoutOpConversion>(typeConverter, allocation, smem,
@@ -3714,38 +3789,6 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<ViewLikeOpConversion<triton::ExpandDimsOp>>(typeConverter,
                                                            benefit);
   patterns.add<DotOpConversion>(typeConverter, allocation, smem, benefit);
-
-  patterns.add<ExtElemwiseOpConversion>(typeConverter, benefit);
-
-  patterns.add<ElementwiseOpConversion<math::LogOp, math::LogOp>>(typeConverter,
-                                                                  benefit);
-  patterns.add<ElementwiseOpConversion<math::CosOp, math::CosOp>>(typeConverter,
-                                                                  benefit);
-  patterns.add<ElementwiseOpConversion<math::SinOp, math::SinOp>>(typeConverter,
-                                                                  benefit);
-  patterns.add<ElementwiseOpConversion<math::SqrtOp, math::SqrtOp>>(
-      typeConverter, benefit);
-  patterns.add<ElementwiseOpConversion<math::ExpOp, math::ExpOp>>(typeConverter,
-                                                                  benefit);
-
-  patterns.add<
-      ElementwiseOpConversion<mlir::arith::SIToFPOp, mlir::arith::SIToFPOp>>(
-      typeConverter, benefit);
-  patterns.add<
-      ElementwiseOpConversion<mlir::arith::UIToFPOp, mlir::arith::UIToFPOp>>(
-      typeConverter, benefit);
-  patterns.add<
-      ElementwiseOpConversion<mlir::arith::FPToSIOp, mlir::arith::FPToSIOp>>(
-      typeConverter, benefit);
-  patterns
-      .add<ElementwiseOpConversion<mlir::arith::ExtFOp, mlir::arith::ExtFOp>>(
-          typeConverter, benefit);
-  patterns.add<
-      ElementwiseOpConversion<mlir::arith::TruncFOp, mlir::arith::TruncFOp>>(
-      typeConverter, benefit);
-  patterns.add<
-      ElementwiseOpConversion<triton::gpu::SelectOp, mlir::LLVM::SelectOp>>(
-      typeConverter, benefit);
 }
 
 class ConvertTritonGPUToLLVM

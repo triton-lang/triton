@@ -36,7 +36,7 @@ def str_to_ty(name):
         "bf16": triton.language.bfloat16,
         "fp32": triton.language.float32,
         "fp64": triton.language.float64,
-        "i1": triton.language.int8,
+        "i1": triton.language.int1,
         "i8": triton.language.int8,
         "i16": triton.language.int16,
         "i32": triton.language.int32,
