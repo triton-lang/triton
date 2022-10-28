@@ -6,6 +6,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <atomic>
 #include <limits>
@@ -18,6 +19,8 @@ class AllocationAnalysis;
 SmallVector<unsigned>
 getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
                              unsigned &outVec);
+
+SmallVector<unsigned> getScratchConfigForReduce(triton::ReduceOp op);
 
 } // namespace triton
 
