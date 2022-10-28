@@ -3719,11 +3719,22 @@ struct FDivOpConversion
 
     PTXBuilder ptxBuilder;
     auto &fdiv = *ptxBuilder.create<PTXInstr>("div");
-    fdiv.o("full").o("f32");
-    auto res = ptxBuilder.newOperand("=r");
-    auto lhs = ptxBuilder.newOperand(operands[0], "r");
-    auto rhs = ptxBuilder.newOperand(operands[1], "r");
-    fdiv(res, lhs, rhs);
+    unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
+    if (32 == bitwidth) {
+      fdiv.o("full").o("f32");
+      auto res = ptxBuilder.newOperand("=r");
+      auto lhs = ptxBuilder.newOperand(operands[0], "r");
+      auto rhs = ptxBuilder.newOperand(operands[1], "r");
+      fdiv(res, lhs, rhs);
+    } else if (64 == bitwidth) {
+      fdiv.o("rn").o("f64");
+      auto res = ptxBuilder.newOperand("=l");
+      auto lhs = ptxBuilder.newOperand(operands[0], "l");
+      auto rhs = ptxBuilder.newOperand(operands[1], "l");
+      fdiv(res, lhs, rhs);
+    } else {
+      assert(0 && bitwidth && "not supported");
+    }
 
     Value ret = ptxBuilder.launch(rewriter, loc, elemTy, false);
     return ret;
