@@ -176,26 +176,26 @@ LoopPipeliner::getSwizzleType(ttg::DotOperandEncodingAttr dotOpEnc,
     perPhase = std::max<int>(perPhase, 1);
 
     // index of the inner dimension in `order`
-    int inner = (opIdx == 0) ? 0 : 1;
+    unsigned inner = (opIdx == 0) ? 0 : 1;
     if (version == 1) {
       maxPhase = (order[inner] == 1 ? 8 : 4) / perPhase;
       // TODO: handle rep (see
       // https://github.com/openai/triton/blob/master/lib/codegen/analysis/layout.cc#L209)
     } else if (version == 2) {
       auto eltTy = ty.getElementType();
-      std::vector<size_t> mat_shape = {8, 8,
-                                       2 * 64 / eltTy.getIntOrFloatBitWidth()};
+      std::vector<size_t> matShape = {8, 8,
+                                      2 * 64 / eltTy.getIntOrFloatBitWidth()};
       // for now, disable swizzle when using transposed int8 tensor cores
       if (ty.getElementType().isInteger(8) && order[0] == inner)
         perPhase = 1;
       else {
         if (opIdx == 0) { // compute swizzling for A operand
-          vec = order[0] == 1 ? mat_shape[2] : mat_shape[0]; // k : m
-          int mmaStride = order[0] == 1 ? mat_shape[0] : mat_shape[2];
+          vec = order[0] == 1 ? matShape[2] : matShape[0]; // k : m
+          int mmaStride = order[0] == 1 ? matShape[0] : matShape[2];
           maxPhase = mmaStride / perPhase;
         } else if (opIdx == 1) { // compute swizzling for B operand
-          vec = order[0] == 1 ? mat_shape[1] : mat_shape[2]; // n : k
-          int mmaStride = order[0] == 1 ? mat_shape[2] : mat_shape[1];
+          vec = order[0] == 1 ? matShape[1] : matShape[2]; // n : k
+          int mmaStride = order[0] == 1 ? matShape[2] : matShape[1];
           maxPhase = mmaStride / perPhase;
         } else
           llvm_unreachable("invalid operand index");
@@ -418,8 +418,8 @@ void LoopPipeliner::emitPrologue() {
   } // for (int stage = 0; stage < numStages - 1; ++stage)
 
   // async.wait & extract_slice
-  Operation *asyncWait = builder.create<ttg::AsyncWaitOp>(
-      loads[0].getLoc(), loads.size() * (numStages - 2));
+  builder.create<ttg::AsyncWaitOp>(loads[0].getLoc(),
+                                   loads.size() * (numStages - 2));
   loopIterIdx = builder.create<arith::ConstantIntOp>(iv.getLoc(), 0, 32);
   for (Value loadOp : loads) {
     auto sliceType = loadsMapping[loadOp].getType().cast<RankedTensorType>();

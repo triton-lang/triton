@@ -506,7 +506,6 @@ public:
     auto forOp = dyn_cast<scf::ForOp>(cvt->getParentOp());
     if (!forOp)
       return mlir::failure();
-    auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
     auto isInLoop = [&](Operation *op) { return op->getParentOp() == forOp; };
 
     SetVector<Operation *> cvtSlices;

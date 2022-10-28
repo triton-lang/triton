@@ -131,7 +131,7 @@ LogicalResult Prefetcher::initialize() {
     return failure();
 
   // returns source of cvt
-  auto getPrefetchSrc = [this](Value v) -> Value {
+  auto getPrefetchSrc = [](Value v) -> Value {
     // TODO: Check if the layout of src is SharedEncodingAttr
     if (auto cvt = v.getDefiningOp<triton::gpu::ConvertLayoutOp>())
       return cvt.src();

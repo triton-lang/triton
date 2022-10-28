@@ -67,7 +67,6 @@ struct SwizzlePass : public TritonGPUSwizzleBase<SwizzlePass> {
 
   void runOnOperation() override {
     Operation *op = getOperation();
-    MLIRContext *context = &getContext();
     // replace blocked -> dot_op with
     // blocked -> shared -> dot_op in order to
     // expose opportunities for swizzling

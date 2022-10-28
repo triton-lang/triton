@@ -31,13 +31,13 @@ public:
                         Attribute &resultEncoding) const = 0;
 
   virtual LogicalResult
-  inferExpandDimsOpEncoding(Attribute operandEncoding, int axis,
+  inferExpandDimsOpEncoding(Attribute operandEncoding, unsigned axis,
                             Attribute &resultEncoding,
                             Optional<Location> location) const = 0;
 
   // Note: this function only verify operand encoding but doesn't infer encoding
   virtual LogicalResult
-  inferDotOpEncoding(Attribute operandEncoding, int opIdx,
+  inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
                      Attribute retEncoding,
                      Optional<Location> location) const = 0;
 };
