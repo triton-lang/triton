@@ -78,6 +78,9 @@ public:
   /// emit pipelined loads (before loop body)
   void emitPrologue();
 
+  /// emit pipelined loads (after loop body)
+  void emitEpilogue();
+
   /// create the new ForOp (add new args & insert prefetched ops)
   scf::ForOp createNewForOp();
 
@@ -362,6 +365,23 @@ void LoopPipeliner::emitPrologue() {
         loadStageBuffer[loadOp][numStages - 1], loopIterIdx, /*axis*/ 0);
     loadsExtract[loadOp] = extractSlice;
   }
+  // bump up loopIterIdx, this is used for getting the correct slice for the
+  // *next* iteration
+  loopIterIdx = builder.create<arith::AddIOp>(
+      loopIterIdx.getLoc(), loopIterIdx,
+      builder.create<arith::ConstantIntOp>(loopIterIdx.getLoc(), 1, 32));
+}
+
+void LoopPipeliner::emitEpilogue() {
+  // If there's any outstanding async copies, we need to wait for them.
+  // TODO(Keren): We may want to completely avoid the async copies in the last
+  // few iterations by setting is_masked attribute to true. We don't want to use
+  // the mask operand because it's a tensor but not a scalar.
+  OpBuilder builder(forOp);
+  OpBuilder::InsertionGuard g(builder);
+  builder.setInsertionPointAfter(forOp);
+  Operation *asyncWait =
+      builder.create<triton::gpu::AsyncWaitOp>(forOp.getLoc(), 0);
 }
 
 scf::ForOp LoopPipeliner::createNewForOp() {
@@ -580,6 +600,8 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
       pipeliner.emitPrologue();
 
       scf::ForOp newForOp = pipeliner.createNewForOp();
+
+      pipeliner.emitEpilogue();
 
       // replace the original loop
       for (unsigned i = 0; i < forOp->getNumResults(); ++i)
