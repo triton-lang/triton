@@ -3817,8 +3817,10 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
   Value A = op.a();
   Value B = op.b();
   Value D = op.getResult();
-  auto mmaLayout =
-      D.getType().cast<RankedTensorType>().getEncoding().cast<MmaEncodingAttr>();
+  auto mmaLayout = D.getType()
+                       .cast<RankedTensorType>()
+                       .getEncoding()
+                       .cast<MmaEncodingAttr>();
 
   auto ATensorTy = A.getType().cast<RankedTensorType>();
   auto BTensorTy = B.getType().cast<RankedTensorType>();
