@@ -234,7 +234,6 @@ def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
         ('int64', 'float32'),
         ('int64', 'float64'),
         ('uint16', 'bfloat16'),
-        ('uint16', 'float16'),
         ('uint16', 'float32'),
         ('uint32', 'bfloat16'),
         ('uint32', 'float16'),
@@ -258,7 +257,7 @@ def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
 ])
 def test_bin_op(dtype_x, dtype_y, op, device='cuda'):
     expr = f' x {op} y'
-    if op == '%' and dtype_x in int_dtypes + uint_dtypes and dtype_y in int_dtypes + uint_dtypes:
+    if op == '%' and (dtype_x in dtypes and dtype_y in dtypes):
         # LLVM has 'numpy.fmod', not 'numpy.remainder', semantics on integer remainders.
         numpy_expr = 'np.fmod(x, y)'
     elif op in ('/', '%') and dtype_x in ('int16', 'float16', 'bfloat16') and dtype_y in ('int16', 'float16', 'bfloat16'):
