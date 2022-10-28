@@ -108,9 +108,9 @@ inline std::string get_llvm_value_as_str(llvm::Value *llvm_value)
 inline void print_llvm_value(llvm::Value *llvm_value, std::string name = "")
 {
     if (llvm_value)
-        std::cout << name << ": " << get_llvm_value_as_str(llvm_value) << std::endl;
+        std::cout << "\t" << name << ": " << get_llvm_value_as_str(llvm_value) << std::endl;
     else
-        std::cout << name << ": " << "is nullptr" << std::endl;
+        std::cout << "\t" << name << ": " << "is nullptr" << std::endl;
 }
 
 inline void print_llvm_type(llvm::Type *llvm_type, std::string name = "")
