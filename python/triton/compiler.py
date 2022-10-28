@@ -36,6 +36,7 @@ def str_to_ty(name):
         "bf16": triton.language.bfloat16,
         "fp32": triton.language.float32,
         "fp64": triton.language.float64,
+        "i1": triton.language.int1,
         "i8": triton.language.int8,
         "i16": triton.language.int16,
         "i32": triton.language.int32,
@@ -45,7 +46,6 @@ def str_to_ty(name):
         "u32": triton.language.uint32,
         "u64": triton.language.uint64,
         "B": triton.language.int1,
-        "i1": triton.language.int1,
     }
     return tys[name]
 
@@ -888,6 +888,13 @@ def optimize_tritongpu_ir(mod, num_stages):
     return mod
 
 
+def add_external_libs(mod, libs):
+    for name, path in libs.items():
+        if len(name) == 0 or len(path) == 0:
+            return
+    _triton.add_external_libs(mod, list(libs.keys()), list(libs.values()))
+
+
 def make_llvm_ir(mod):
     return _triton.translate_triton_gpu_to_llvmir(mod)
 
@@ -986,6 +993,8 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     module = optimize_tritongpu_ir(module, num_stages)
     if output == "ttgir":
         return module.str()
+    if extern_libs:
+        add_external_libs(module, extern_libs)
 
     # llvm-ir
     llvm_ir = make_llvm_ir(module)
