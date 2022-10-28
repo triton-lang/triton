@@ -43,7 +43,12 @@ static Type getPointeeType(Type type) {
 namespace gpu {
 
 // TODO: Inheritation of layout attributes
-unsigned getElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
+unsigned getElemsPerThread(Type type) {
+  if (type.isIntOrIndexOrFloat() || type.isa<triton::PointerType>())
+    return 1;
+  auto tensorType = type.cast<RankedTensorType>();
+  auto layout = tensorType.getEncoding();
+  auto shape = tensorType.getShape();
   size_t rank = shape.size();
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return blockedLayout.getElemsPerThread(shape);
