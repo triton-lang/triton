@@ -1,6 +1,7 @@
 #ifndef TRITON_TARGET_LLVMIRTRANSLATION_H
 #define TRITON_TARGET_LLVMIRTRANSLATION_H
 #include <memory>
+#include <vector>
 
 namespace llvm {
 class Module;
@@ -13,6 +14,11 @@ class ModuleOp;
 
 namespace mlir {
 namespace triton {
+
+// add external dependent libs
+void addExternalLibs(mlir::ModuleOp &module,
+                     const std::vector<std::string> &names,
+                     const std::vector<std::string> &paths);
 
 // Translate TritonGPU dialect to LLVMIR, return null if failed.
 std::unique_ptr<llvm::Module>

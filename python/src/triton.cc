@@ -1257,8 +1257,8 @@ void init_triton_translation(py::module &m) {
   using ret = py::return_value_policy;
 
   m.def("get_shared_memory_size", [](mlir::ModuleOp module) {
-    auto pass = std::make_unique<mlir::Allocation>(module);
-    return pass->getSharedMemorySize();
+    return module->getAttrOfType<mlir::IntegerAttr>("triton_gpu.shared")
+        .getInt();
   });
 
   m.def(
@@ -1334,6 +1334,12 @@ void init_triton_translation(py::module &m) {
 
           py::bytes bytes(cubin);
           return bytes;
+        });
+
+  m.def("add_external_libs",
+        [](mlir::ModuleOp &op, const std::vector<std::string> &names,
+           const std::vector<std::string> &paths) {
+          ::mlir::triton::addExternalLibs(op, names, paths);
         });
 }
 
