@@ -57,24 +57,52 @@ inline void print_vector(std::vector<T> &vec, std::string name = "")
 }
 
 // dump llvm ir to tmp file
-inline void write_llvm_ir(llvm::Module &llvm_module, std::string filename = "", bool tracked = false)
+inline std::string print_llvm_module(llvm::Module *llvm_module, bool print_to_cout = true)
+{
+    std::cout << "\t" << "print_llvm_module" << std::endl;
+    // get module as a string
+    std::error_code ec;
+    std::string mod_string;
+    std::unique_ptr<llvm::raw_string_ostream> ir_ss(
+        new llvm::raw_string_ostream(mod_string));
+    llvm_module->print(*ir_ss, nullptr);
+
+    // print module
+    if (print_to_cout)
+    {
+        if (!mod_string.empty())
+            std::cout << "\t" << mod_string << std::endl;
+        else
+            std::cout << "\t" << llvm_module->getModuleIdentifier() << ": "
+                      << "is empty" << std::endl;
+    }
+
+    return mod_string;
+}
+
+// dump llvm ir to tmp file
+inline void write_llvm_ir(llvm::Module *llvm_module, std::string filename = "", bool tracked = false)
 {
 
-    if (filename.empty())
-        filename = llvm_module.getModuleIdentifier();
+    // get module string
+    std::string module_string = print_llvm_module(llvm_module, false);
 
+    // get file name and path
+    if (filename.empty())
+        filename = llvm_module->getModuleIdentifier();
     std::string count_str = "";
     if (tracked)
     {
         count_str = "_" + std::to_string(print_count);
     }
-
     std::string ir_path = std::string("/tmp/") + filename + count_str + std::string(".ll");
-    std::error_code ec;
-    std::unique_ptr<llvm::raw_fd_ostream> ir_fs(
-        new llvm::raw_fd_ostream(ir_path, ec));
-    llvm_module.print(*ir_fs, nullptr);
-    ir_fs->flush();
+
+    // write file
+    std::ofstream output_file(ir_path);
+    output_file << module_string;
+    output_file.close();
+
+    // increament counter
     if (tracked)
     {
         print_count += 1;
@@ -110,7 +138,8 @@ inline void print_llvm_value(llvm::Value *llvm_value, std::string name = "")
     if (llvm_value)
         std::cout << "\t" << name << ": " << get_llvm_value_as_str(llvm_value) << std::endl;
     else
-        std::cout << "\t" << name << ": " << "is nullptr" << std::endl;
+        std::cout << "\t" << name << ": "
+                  << "is nullptr" << std::endl;
 }
 
 inline void print_llvm_type(llvm::Type *llvm_type, std::string name = "")
