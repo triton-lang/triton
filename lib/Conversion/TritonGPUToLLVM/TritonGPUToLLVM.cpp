@@ -345,6 +345,10 @@ struct ConvertTritonGPUOpToLLVMPatternBase {
   static SmallVector<Value>
   getElementsFromStruct(Location loc, Value llvmStruct,
                         ConversionPatternRewriter &rewriter) {
+    if (llvmStruct.getType().isIntOrFloat() ||
+        llvmStruct.getType().isa<triton::PointerType>() ||
+        llvmStruct.getType().isa<LLVM::LLVMPointerType>())
+      return {llvmStruct};
     ArrayRef<Type> types =
         llvmStruct.getType().cast<LLVM::LLVMStructType>().getBody();
     SmallVector<Value> results(types.size());
@@ -1092,7 +1096,7 @@ struct StoreOpConversion
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
 
       auto &ptxStoreInstr =
-          ptxBuilder.create<PTXIOInstr>("st")->global().b(width).v(nWords);
+          ptxBuilder.create<PTXIOInstr>("st")->global().v(nWords).b(width);
       ptxStoreInstr(asmAddr, asmArgList).predicate(maskVal, "b");
 
       Type boolTy = getTypeConverter()->convertType(rewriter.getIntegerType(1));
@@ -1169,8 +1173,9 @@ struct BroadcastOpConversion
     for (auto it : llvm::enumerate(broadcastDims)) {
       // Incase there are multiple indices in the src that is actually
       // calculating the same element, srcLogicalShape may not need to be 1.
-      // Such as the case when src of shape [256, 1], and with a blocked layout:
-      // sizePerThread: [1, 4];  threadsPerWarp: [1, 32]; warpsPerCTA: [1, 2]
+      // Such as the case when src of shape [256, 1], and with a blocked
+      // layout: sizePerThread: [1, 4];  threadsPerWarp: [1, 32]; warpsPerCTA:
+      // [1, 2]
       int64_t d = resultLogicalShape[it.value()] / srcLogicalShape[it.value()];
       broadcastSizes[it.index()] = d;
       duplicates *= d;
@@ -1183,7 +1188,7 @@ struct BroadcastOpConversion
     unsigned srcElems = getElemsPerThread(srcTy);
     auto elemTy = resultTy.getElementType();
     auto srcVals = getElementsFromStruct(loc, src, rewriter);
-    unsigned resultElems = getElemsPerThread(result.getType());
+    unsigned resultElems = getElemsPerThread(resultTy);
     SmallVector<Value> resultVals(resultElems);
     for (unsigned i = 0; i < srcElems; ++i) {
       auto srcMultiDim = getMultiDimIndex<int64_t>(i, srcLogicalShape);
@@ -1363,8 +1368,8 @@ struct ExtractSliceOpConversion
     auto srcLayout = srcTy.getEncoding().dyn_cast<SharedEncodingAttr>();
     assert(srcLayout && "Unexpected resultLayout in ExtractSliceOpConversion");
 
-    // axis > 0 will result in non-contiguous memory access if the result tensor
-    // is an alias of the source tensor.
+    // axis > 0 will result in non-contiguous memory access if the result
+    // tensor is an alias of the source tensor.
     auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
     assert(axis == 0 && "extract_slice: Only axis=0 is supported for now");
 
@@ -1546,22 +1551,13 @@ public:
   LogicalResult
   matchAndRewrite(SourceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto resultTy = op.getType().template dyn_cast<RankedTensorType>();
-
-    // ArithmeticToLLVM will handle the lowering of scalar ArithOps
-    if (!resultTy)
-      return failure();
+    auto resultTy = op.getType();
 
     Location loc = op->getLoc();
-    auto resultLayout =
-        resultTy.getEncoding().template dyn_cast<BlockedEncodingAttr>();
-    auto resultShape = resultTy.getShape();
-    assert(resultLayout && "Unexpected resultLayout in UnaryOpConversion");
     unsigned elems = getElemsPerThread(resultTy);
     Type elemTy =
-        this->getTypeConverter()->convertType(resultTy.getElementType());
+        this->getTypeConverter()->convertType(getElementTypeOrSelf(resultTy));
     SmallVector<Type> types(elems, elemTy);
-    Type structTy = LLVM::LLVMStructType::getLiteral(this->getContext(), types);
 
     auto *concreteThis = static_cast<const ConcreteT *>(this);
     auto srcs = this->getElementsFromStruct(loc, concreteThis->getSrc(adaptor),
@@ -1571,6 +1567,7 @@ public:
       resultVals[i] =
           concreteThis->createDestOp(op, rewriter, elemTy, srcs[i], loc);
     }
+    Type structTy = this->getTypeConverter()->convertType(resultTy);
     Value view = getStructFromElements(loc, resultVals, rewriter, structTy);
     rewriter.replaceOp(op, view);
     return success();
@@ -2165,7 +2162,8 @@ public:
     Value c = urem(lane, i32_val(8));
     Value s = udiv(lane, i32_val(8)); // sub-warp-id
 
-    // Decompose s => s_0, s_1, that is the coordinate in 2x2 matrices in a warp
+    // Decompose s => s_0, s_1, that is the coordinate in 2x2 matrices in a
+    // warp
     Value s0 = urem(s, i32_val(2));
     Value s1 = udiv(s, i32_val(2));
 
@@ -2312,8 +2310,8 @@ public:
       llvm::report_fatal_error("unsupported mma type found");
 
     // The main difference with the original triton code is we removed the
-    // prefetch-related logic here for the upstream optimizer phase should take
-    // care with it, and that is transparent in dot conversion.
+    // prefetch-related logic here for the upstream optimizer phase should
+    // take care with it, and that is transparent in dot conversion.
     auto getPtr = [&](int idx) { return ptrs[idx]; };
 
     Value ptr = getPtr(ptrIdx);
@@ -2324,7 +2322,8 @@ public:
           matIdx[order[1]] * sMatStride * sMatShape * sTileStride * elemBytes;
       PTXBuilder builder;
 
-      // ldmatrix.m8n8.x4 returns 4x2xfp16(that is 4xb32) elements for a thread.
+      // ldmatrix.m8n8.x4 returns 4x2xfp16(that is 4xb32) elements for a
+      // thread.
       auto resArgs = builder.newListOperand(4, "=r");
       auto addrArg = builder.newAddrOperand(ptr, "r", sOffset);
 
@@ -2623,7 +2622,8 @@ struct DotOpConversionHelper {
 
   // Get the M and N of mma instruction shape.
   static std::tuple<int, int> getInstrShapeMN() {
-    // According to DotOpConversionHelper::mmaInstrShape, all the M,N are {16,8}
+    // According to DotOpConversionHelper::mmaInstrShape, all the M,N are
+    // {16,8}
     return {16, 8};
   }
 
