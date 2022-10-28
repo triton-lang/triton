@@ -226,7 +226,6 @@ def fdiv(input: tl.tensor,
         raise ValueError("both operands of fdiv must have floating poscalar type")
     input, other = binary_op_type_checking_impl(input, other, builder, False, False, False, True)
     ret = builder.create_fdiv(input.handle, other.handle)
-    ret.set_fdiv_ieee_rounding(ieee_rounding)
     return tl.tensor(ret, input.type)
 
 
@@ -345,7 +344,7 @@ def invert(input: tl.tensor,
     input_sca_ty = input.type.scalar
     if input_sca_ty.is_ptr() or input_sca_ty.is_floating():
         raise ValueError("wrong type argument to unary invert (" + input_sca_ty.__repr__() + ")")
-    _1 = tl.tensor(ir.constant.get_all_ones_value(input_sca_ty.to_ir(builder)), input_sca_ty)
+    _1 = tl.tensor(builder.get_all_ones_value(input_sca_ty.to_ir(builder)), input_sca_ty)
     return xor_(input, _1, builder)
 
 
@@ -481,11 +480,13 @@ def zeros(shape: List[int], dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
 def view(input: tl.tensor,
          dst_shape: List[int],
          builder: ir.builder) -> tl.tensor:
+    # TODO: disable when TritonToTritonGPU handles views properly
+    assert len(input.shape) == len(dst_shape)
     numel = 1
     for s in dst_shape:
         numel *= s
     if input.type.numel != numel:
-        raise ValueError("cannot reshape block of different shape")
+        raise ValueError("cannot view block of different shape")
     ret_ty = tl.block_type(input.type.scalar, dst_shape)
     return tl.tensor(builder.create_view(input.handle, dst_shape), ret_ty)
 
@@ -516,7 +517,7 @@ def broadcast_impl_shape(input: tl.tensor,
     for i in range(len(src_shape)):
         if shape[i] != src_shape[i] and src_shape[i] != 1:
             raise ValueError(f"Cannot broadcast, the expanded size of the tensor ({shape[i]})"
-                             f" must match the existing size ({src_shape[1]}) at non-singleton dimension"
+                             f" must match the existing size ({src_shape[i]}) at non-singleton dimension"
                              f" {i}: {src_shape}, {shape}")
     ret_ty = tl.block_type(input.type.scalar, shape)
     return tl.tensor(builder.create_broadcast(input.handle, shape), ret_ty)
@@ -679,7 +680,7 @@ def cast(input: tl.tensor,
     if src_sca_ty.is_ptr() and dst_sca_ty.is_int():
         bitwidth = dst_sca_ty.int_bitwidth
         if bitwidth == 64:
-            return tl.tensor(builder.create_cast(ir.PtrToInt, input.handle, dst_ty.to_ir(builder)),
+            return tl.tensor(builder.create_ptr_to_int(input.handle, dst_ty.to_ir(builder)),
                              dst_ty)
         if bitwidth == 1:
             return not_equal(cast(input, tl.int64, builder),
@@ -989,17 +990,20 @@ def where(condition: tl.tensor,
           builder: ir.builder) -> tl.tensor:
     condition = cast(condition, tl.int1, builder)
     if condition.type.is_block():
-        x = broadcast_impl_shape(x, condition.type.get_block_shapes(), builder)
-        y = broadcast_impl_shape(y, condition.type.get_block_shapes(), builder)
+        condition, x = broadcast_impl_value(condition, x, builder)
+        x, y = broadcast_impl_value(x, y, builder)
+        condition, x = broadcast_impl_value(condition, x, builder)
 
     x, y = binary_op_type_checking_impl(x, y, builder, True, True)
+    if not condition.type.is_block():
+        condition, _ = broadcast_impl_value(condition, x, builder)
     ret_ty = x.type
     return tl.tensor(builder.create_select(condition.handle, x.handle, y.handle), ret_ty)
-
 
 # ===----------------------------------------------------------------------===//
 #                               Reductions
 # ===----------------------------------------------------------------------===
+
 
 def reduce_impl(input: tl.tensor, axis: int, builder: ir.builder, name: str,
                 FLOAT_OP: ir.REDUCE_OP, INT_OP: ir.REDUCE_OP) -> tl.tensor:
@@ -1069,7 +1073,8 @@ def xor_sum(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
 
 def umulhi(x: tl.tensor, y: tl.tensor, builder: ir.builder) -> tl.tensor:
     x, y = binary_op_type_checking_impl(x, y, builder)
-    return tl.tensor(builder.create_umulhi(x.handle, y.handle), x.type)
+    from . import libdevice
+    return libdevice.mulhi(x, y, _builder=builder)
 
 
 def exp(x: tl.tensor, builder: ir.builder) -> tl.tensor:

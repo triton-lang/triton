@@ -21,9 +21,7 @@ public:
   matchAndRewrite(Op op, typename Op::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type retType = this->getTypeConverter()->convertType(op.getType());
-    Op res =
-        rewriter.replaceOpWithNewOp<Op>(op, retType, adaptor.getOperands());
-
+    rewriter.replaceOpWithNewOp<Op>(op, retType, adaptor.getOperands());
     return success();
   }
 };
@@ -37,9 +35,8 @@ public:
   matchAndRewrite(SrcOp op, typename SrcOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type retType = this->getTypeConverter()->convertType(op.getType());
-    DstOp res =
-        rewriter.replaceOpWithNewOp<DstOp>(op, retType, adaptor.getPredicate(),
-                                           adaptor.getLhs(), adaptor.getRhs());
+    rewriter.replaceOpWithNewOp<DstOp>(op, retType, adaptor.getPredicate(),
+                                       adaptor.getLhs(), adaptor.getRhs());
     return success();
   }
 };
@@ -129,10 +126,9 @@ public:
   matchAndRewrite(SelectOp op, typename SelectOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type retType = this->getTypeConverter()->convertType(op.getType());
-    triton::gpu::SelectOp res =
-        rewriter.replaceOpWithNewOp<triton::gpu::SelectOp>(
-            op, retType, adaptor.getCondition(), adaptor.getTrueValue(),
-            adaptor.getFalseValue());
+    rewriter.replaceOpWithNewOp<triton::gpu::SelectOp>(
+        op, retType, adaptor.getCondition(), adaptor.getTrueValue(),
+        adaptor.getFalseValue());
     return success();
   }
 };
@@ -204,9 +200,6 @@ struct TritonExpandDimsPattern
         triton::gpu::BlockedEncodingAttr::get(getContext(), retSizePerThread,
                                               retThreadsPerWarp, retWarpsPerCTA,
                                               retOrder);
-    // return type
-    RankedTensorType retType =
-        RankedTensorType::get(retShape, argType.getElementType(), retEncoding);
     // convert operand to slice of return type
     Attribute newArgEncoding = triton::gpu::SliceEncodingAttr::get(
         getContext(), op.axis(), retEncoding);
@@ -253,7 +246,7 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
                                            bType.getElementType(), encoding);
       b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), dstType, b);
     }
-    auto newDot = rewriter.replaceOpWithNewOp<triton::DotOp>(
+    rewriter.replaceOpWithNewOp<triton::DotOp>(
         op, retType, a, b, adaptor.c(), adaptor.allowTF32(), adaptor.transA(),
         adaptor.transB());
     return success();
@@ -280,7 +273,7 @@ struct TritonStorePattern : public OpConversionPattern<triton::StoreOp> {
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto newOp = rewriter.replaceOpWithNewOp<triton::StoreOp>(
+    rewriter.replaceOpWithNewOp<triton::StoreOp>(
         op, adaptor.ptr(), adaptor.value(), adaptor.mask());
     return success();
   }
@@ -341,7 +334,7 @@ struct TritonReducePattern : public OpConversionPattern<triton::ReduceOp> {
   LogicalResult
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto newOp = rewriter.replaceOpWithNewOp<triton::ReduceOp>(
+    rewriter.replaceOpWithNewOp<triton::ReduceOp>(
         op, adaptor.redOp(), adaptor.operand(), adaptor.axis());
     return success();
   }
@@ -352,6 +345,9 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
   MLIRContext *context = patterns.getContext();
   patterns.add< // TODO: view should have custom pattern that views the layout
       TritonGenericPattern<triton::ViewOp>,
+      TritonGenericPattern<triton::BitcastOp>,
+      TritonGenericPattern<triton::IntToPtrOp>,
+      TritonGenericPattern<triton::PtrToIntOp>,
       TritonGenericPattern<triton::SplatOp>, TritonBroadcastPattern,
       TritonGenericPattern<triton::AddPtrOp>, TritonReducePattern,
       TritonExpandDimsPattern, TritonMakeRangePattern, TritonDotPattern,

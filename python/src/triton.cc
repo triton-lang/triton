@@ -26,6 +26,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
+#include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "llvm/Support/SourceMgr.h"
@@ -441,11 +442,22 @@ void init_triton_ir(py::module &&m) {
                  loc, self.getF32FloatAttr(v));
            })
       .def("get_null_value",
-           [](mlir::OpBuilder &self, mlir::Type &type) -> mlir::Value {
+           [](mlir::OpBuilder &self, mlir::Type type) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             if (type.isa<mlir::FloatType>())
-               return self.create<mlir::arith::ConstantOp>(
-                   loc, self.getF32FloatAttr(0.0));
+             if (auto floatTy = type.dyn_cast<mlir::FloatType>())
+               return self.create<mlir::arith::ConstantFloatOp>(
+                   loc, mlir::APFloat(floatTy.getFloatSemantics(), 0), floatTy);
+             else if (auto intTy = type.dyn_cast<mlir::IntegerType>())
+               return self.create<mlir::arith::ConstantIntOp>(loc, 0, intTy);
+             else
+               throw std::runtime_error("Not implemented");
+           })
+      .def("get_all_ones_value",
+           [](mlir::OpBuilder &self, mlir::Type type) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             uint64_t val = 0xFFFFFFFFFFFFFFFF;
+             if (auto intTy = type.dyn_cast<mlir::IntegerType>())
+               return self.create<mlir::arith::ConstantIntOp>(loc, val, intTy);
              else
                throw std::runtime_error("Not implemented");
            })
@@ -602,7 +614,7 @@ void init_triton_ir(py::module &&m) {
            [](mlir::OpBuilder &self, mlir::Value &src,
               mlir::Type &dstType) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::BitcastOp>(loc, dstType, src);
+             return self.create<mlir::triton::BitcastOp>(loc, dstType, src);
            })
       // .def("create_cast", &ir::builder::create_cast)
       // .def("create_ptr_to_int", &ir::builder::create_ptr_to_int)
@@ -1143,6 +1155,18 @@ void init_triton_ir(py::module &&m) {
              return self.create<mlir::triton::ReduceOp>(loc, resType, redOp,
                                                         operand, axis);
            })
+      .def("create_ptr_to_int",
+           [](mlir::OpBuilder &self, mlir::Value &val,
+              mlir::Type &type) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::triton::PtrToIntOp>(loc, type, val);
+           })
+      .def("create_int_to_ptr",
+           [](mlir::OpBuilder &self, mlir::Value &val,
+              mlir::Type &type) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::triton::IntToPtrOp>(loc, type, val);
+           })
       .def("create_select",
            [](mlir::OpBuilder &self, mlir::Value &condition,
               mlir::Value &trueValue, mlir::Value &falseValue) -> mlir::Value {
@@ -1231,12 +1255,11 @@ void init_triton_ir(py::module &&m) {
 }
 
 void init_triton_translation(py::module &m) {
-
   using ret = py::return_value_policy;
 
   m.def("get_shared_memory_size", [](mlir::ModuleOp module) {
-    auto pass = std::make_unique<mlir::Allocation>(module);
-    return pass->getSharedMemorySize();
+    return module->getAttrOfType<mlir::IntegerAttr>("triton_gpu.shared")
+        .getInt();
   });
 
   m.def(
@@ -1279,46 +1302,49 @@ void init_triton_translation(py::module &m) {
           py::gil_scoped_release allow_threads;
 
           // compile ptx with ptxas
-          char _fsrc[L_tmpnam];
-          char _flog[L_tmpnam];
-          std::tmpnam(_fsrc);
-          std::tmpnam(_flog);
-          std::string fsrc = _fsrc;
-          std::string flog = _flog;
-          std::string fbin = fsrc + ".o";
+          llvm::SmallString<64> fsrc;
+          llvm::SmallString<64> flog;
+          llvm::sys::fs::createTemporaryFile("compile-ptx-src", "", fsrc);
+          llvm::sys::fs::createTemporaryFile("compile-ptx-log", "", flog);
+          std::string fbin = std::string(fsrc) + ".o";
+          llvm::FileRemover srcRemover(fsrc);
+          llvm::FileRemover logRemover(flog);
+          llvm::FileRemover binRemover(fbin);
+          const char *_fsrc = fsrc.c_str();
+          const char *_flog = flog.c_str();
           const char *_fbin = fbin.c_str();
-          std::ofstream ofs(fsrc);
+          std::ofstream ofs(_fsrc);
           ofs << ptxCode << std::endl;
           ofs.close();
           std::string cmd;
           int err;
           cmd = ptxasPath + " -v --gpu-name=sm_" + std::to_string(capability) +
-                " " + fsrc + " -o " + fsrc + ".o 2> " + flog;
+                " " + _fsrc + " -o " + _fsrc + ".o 2> " + _flog;
           err = system(cmd.c_str());
           if (err != 0) {
             std::ifstream _log(_flog);
             std::string log(std::istreambuf_iterator<char>(_log), {});
-            unlink(_fsrc);
-            unlink(_flog);
             throw std::runtime_error("Internal Triton PTX codegen error: \n" +
                                      log);
           }
           std::ifstream _cubin(_fbin, std::ios::binary);
           std::string cubin(std::istreambuf_iterator<char>(_cubin), {});
           _cubin.close();
-          unlink(_fsrc);
-          unlink(_flog);
-          unlink(_fbin);
-
           py::bytes bytes(cubin);
-          return bytes;
+          return std::move(bytes);
+        });
+
+  m.def("add_external_libs",
+        [](mlir::ModuleOp &op, const std::vector<std::string> &names,
+           const std::vector<std::string> &paths) {
+          ::mlir::triton::addExternalLibs(op, names, paths);
         });
 }
 
 void init_triton(py::module &m) {
   py::module subm = m.def_submodule("triton");
-  // init_triton_codegen(std::move(subm.def_submodule("code_gen")));
-  init_triton_runtime(std::move(subm.def_submodule("runtime")));
-  init_triton_ir(std::move(subm.def_submodule("ir")));
+  // init_triton_codegen(subm.def_submodule("code_gen"));
+  init_triton_runtime(subm.def_submodule("runtime"));
+  init_triton_ir(subm.def_submodule("ir"));
   init_triton_translation(subm);
 }

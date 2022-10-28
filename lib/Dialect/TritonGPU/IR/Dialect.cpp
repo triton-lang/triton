@@ -43,8 +43,12 @@ static Type getPointeeType(Type type) {
 namespace gpu {
 
 // TODO: Inheritation of layout attributes
-unsigned getElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
-  size_t rank = shape.size();
+unsigned getElemsPerThread(Type type) {
+  if (type.isIntOrIndexOrFloat() || type.isa<triton::PointerType>())
+    return 1;
+  auto tensorType = type.cast<RankedTensorType>();
+  auto layout = tensorType.getEncoding();
+  auto shape = tensorType.getShape();
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return blockedLayout.getElemsPerThread(shape);
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
@@ -63,6 +67,19 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return SmallVector<unsigned>(blockedLayout.getSizePerThread().begin(),
                                  blockedLayout.getSizePerThread().end());
+  } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+    unsigned dim = sliceLayout.getDim();
+    auto parent = sliceLayout.getParent();
+    if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
+      SmallVector<unsigned> sizePerThread(
+          blockedParent.getSizePerThread().begin(),
+          blockedParent.getSizePerThread().end());
+      sizePerThread.erase(sizePerThread.begin() + dim);
+      return sizePerThread;
+    } else {
+      assert(0 && "SliceEncodingAttr with parent other than "
+                  "BlockedEncodingAttr not implemented");
+    }
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     assert(mmaLayout.getVersion() == 2 &&
            "mmaLayout version = 1 is not implemented yet");
@@ -91,10 +108,25 @@ SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout) {
 SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
   SmallVector<unsigned> shape;
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
-    for (int d = 0, n = blockedLayout.getOrder().size(); d < n; ++d)
+    for (unsigned d = 0, n = blockedLayout.getOrder().size(); d < n; ++d)
       shape.push_back(blockedLayout.getSizePerThread()[d] *
                       blockedLayout.getThreadsPerWarp()[d] *
                       blockedLayout.getWarpsPerCTA()[d]);
+  } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+    unsigned dim = sliceLayout.getDim();
+    auto parent = sliceLayout.getParent();
+    if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
+      for (unsigned d = 0, n = blockedParent.getOrder().size(); d < n; ++d) {
+        if (d == dim)
+          continue;
+        shape.push_back(blockedParent.getSizePerThread()[d] *
+                        blockedParent.getThreadsPerWarp()[d] *
+                        blockedParent.getWarpsPerCTA()[d]);
+      }
+    } else {
+      assert(0 && "SliceEncodingAttr with parent other than "
+                  "BlockedEncodingAttr not implemented");
+    }
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     assert(mmaLayout.getVersion() == 2 &&
            "mmaLayout version = 1 is not implemented yet");
@@ -225,23 +257,29 @@ unsigned BlockedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   return product<unsigned>(elemsPerThread);
 }
 
+SmallVector<int64_t>
+SliceEncodingAttr::paddedShape(ArrayRef<int64_t> shape) const {
+  size_t rank = shape.size();
+  unsigned dim = getDim();
+  SmallVector<int64_t> retShape(rank + 1);
+  for (unsigned d = 0; d < rank + 1; ++d) {
+    if (d < dim)
+      retShape[d] = shape[d];
+    else if (d == dim)
+      retShape[d] = 1;
+    else
+      retShape[d] = shape[d - 1];
+  }
+  return retShape;
+}
+
 unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   size_t rank = shape.size();
   auto parent = getParent();
-  unsigned dim = getDim();
   if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
     assert(rank == blockedParent.getSizePerThread().size() - 1 &&
            "unexpected rank in SliceEncodingAttr::getElemsPerThread");
-    SmallVector<int64_t> paddedShape(rank + 1);
-    for (unsigned d = 0; d < rank + 1; ++d) {
-      if (d < dim)
-        paddedShape[d] = shape[d];
-      else if (d == dim)
-        paddedShape[d] = 1;
-      else
-        paddedShape[d] = shape[d - 1];
-    }
-    return blockedParent.getElemsPerThread(paddedShape);
+    return blockedParent.getElemsPerThread(paddedShape(shape));
   } else {
     assert(0 && "getElemsPerThread not implemented");
     return 0;
@@ -515,11 +553,11 @@ mlir::LogicalResult ExtractSliceOp::inferReturnTypes(
   auto encoding = srcType.getEncoding();
   auto srcShape = srcType.getShape();
   auto axis = attributes.get("axis").cast<IntegerAttr>().getInt();
-  if (axis < 0 || axis > srcShape.size())
+  if (axis < 0 || (size_t)axis > srcShape.size())
     return failure();
   SmallVector<int64_t, 4> dstShape;
-  for (int i = 0; i < srcShape.size(); i++)
-    if (i != axis)
+  for (size_t i = 0; i < srcShape.size(); i++)
+    if (i != (size_t)axis)
       dstShape.push_back(srcShape[i]);
   auto returnType =
       RankedTensorType::get(dstShape, srcType.getElementType(), encoding);
@@ -557,8 +595,9 @@ struct TritonGPUInferLayoutInterface
     : public triton::DialectInferLayoutInterface {
   using DialectInferLayoutInterface::DialectInferLayoutInterface;
 
-  LogicalResult inferReduceOpEncoding(Attribute operandEncoding, int axis,
-                                      Attribute &resultEncoding) const {
+  LogicalResult
+  inferReduceOpEncoding(Attribute operandEncoding, unsigned axis,
+                        Attribute &resultEncoding) const override {
     resultEncoding = SliceEncodingAttr::get(getDialect()->getContext(), axis,
                                             operandEncoding);
     return success();
