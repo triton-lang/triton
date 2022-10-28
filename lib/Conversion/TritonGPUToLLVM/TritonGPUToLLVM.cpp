@@ -1356,7 +1356,7 @@ Value ReduceOpConversion::shflSync(ConversionPatternRewriter &rewriter,
 
   if (bits == 64) {
     Type vecTy = vec_ty(f32_ty, 2);
-    Value vec = bitcast(vecTy, val);
+    Value vec = bitcast(val, vecTy);
     Value val0 = extract_element(f32_ty, vec, i32_val(0));
     Value val1 = extract_element(f32_ty, vec, i32_val(1));
     val0 = shflSync(rewriter, loc, val0, i);
@@ -1364,7 +1364,7 @@ Value ReduceOpConversion::shflSync(ConversionPatternRewriter &rewriter,
     vec = undef(vecTy);
     vec = insert_element(vecTy, vec, val0, i32_val(0));
     vec = insert_element(vecTy, vec, val1, i32_val(1));
-    return bitcast(val.getType(), vec);
+    return bitcast(vec, val.getType());
   }
 
   PTXBuilder builder;
@@ -1391,7 +1391,7 @@ LogicalResult ReduceOpConversion::matchAndRewriteBasic(
   auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
   auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
   Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
-  smemBase = bitcast(elemPtrTy, smemBase);
+  smemBase = bitcast(smemBase, elemPtrTy);
 
   auto smemShape = getScratchConfigForReduce(op);
 
@@ -1498,7 +1498,7 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
   auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
   auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
   Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
-  smemBase = bitcast(elemPtrTy, smemBase);
+  smemBase = bitcast(smemBase, elemPtrTy);
 
   auto order = srcLayout.getOrder();
   unsigned sizeIntraWarps = threadsPerWarp[axis];
@@ -3056,12 +3056,13 @@ struct DotOpMmaV1ConversionHelper {
   // result. In this way we want to retain the original code structure in
   // convert_mma884 method for easier debugging.
   std::tuple<Value, Value, Value, Value>
-  computeOffsetsM(Value threadId, bool isARow, bool isBRow, ArrayRef<int> fpw,
-                  ArrayRef<int> spw, ArrayRef<int> rep,
-                  ConversionPatternRewriter &rewriter, Location loc) const;
+  computeOffsets(Value threadId, bool isARow, bool isBRow, ArrayRef<int> fpw,
+                 ArrayRef<int> spw, ArrayRef<int> rep,
+                 ConversionPatternRewriter &rewriter, Location loc) const;
 
-  Value composeValuesToDotOperandLayoutStruct(const ValueTable &vals, int n0,
-                                              int n1) const;
+  // Extract values belong to $a or $b from a LLVMStruct, the shape is n0xn1.
+  ValueTable extractLoadedOperand(Value llStruct, int n0, int n1,
+                                  ConversionPatternRewriter &rewriter) const;
 
 private:
   static constexpr std::array<unsigned, 3> instrShape{16, 16, 4};
@@ -4034,12 +4035,12 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adapter,
 
   Type f16PtrTy = ptr_ty(f16_ty);
 
-  auto loadA = [&](int m, int K) {
-    int offidx = (isARow ? K / 4 : m) % numPtrA;
+  auto loadA = [&](int m, int k) {
+    int offidx = (isARow ? k / 4 : m) % numPtrA;
     Value thePtrA = gep(f16PtrTy, smemA, offA[offidx]);
 
     int stepAM = isARow ? m : m / numPtrA * numPtrA;
-    int stepAK = isARow ? K / (numPtrA * vecA) * (numPtrA * vecA) : K;
+    int stepAK = isARow ? k / (numPtrA * vecA) * (numPtrA * vecA) : k;
     Value pa = gep(f16PtrTy, thePtrA,
                    i32_val(stepAM * strideRepM * strideAM + stepAK * strideAK));
     Type aPtrTy = ptr_ty(vec_ty(i32_ty, vecA / 2), 3);
@@ -4047,15 +4048,15 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adapter,
     // record lds that needs to be moved
     Value ha00 = bitcast(extract_element(ha, i32_val(0)), f16x2Ty);
     Value ha01 = bitcast(extract_element(ha, i32_val(1)), f16x2Ty);
-    ld(has, m, K, ha00, ha01);
+    ld(has, m, k, ha00, ha01);
 
     if (vecA > 4) {
       Value ha10 = bitcast(extract_element(ha, i32_val(2)), f16x2Ty);
       Value ha11 = bitcast(extract_element(ha, i32_val(3)), f16x2Ty);
       if (isARow)
-        ld(has, m, K + 4, ha10, ha11);
+        ld(has, m, k + 4, ha10, ha11);
       else
-        ld(has, m + 1, K, ha10, ha11);
+        ld(has, m + 1, k, ha10, ha11);
     }
   };
 
@@ -4131,7 +4132,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
   int strideRepK = 1;
 
   auto [offsetAM, offsetAK, _0, _1] =
-      computeOffsetsM(thread, isARow, false, fpw, spw, rep, rewriter, loc);
+      computeOffsets(thread, isARow, false, fpw, spw, rep, rewriter, loc);
 
   // swizzling
   int perPhaseA = sharedLayout.getPerPhase();
@@ -4175,12 +4176,12 @@ Value DotOpMmaV1ConversionHelper::loadA(
   auto ld = [&](decltype(has) &vals, int m, int k, Value val0, Value val1) {
     vals[{m, k}] = {val0, val1};
   };
-  auto load = [&](int m, int k) {
+  auto loadA = [&](int m, int k) {
     int offidx = (isARow ? k / 4 : m) % numPtrA;
     Value thePtrA = gep(f16PtrTy, smem, offA[offidx]);
 
     int stepAM = isARow ? m : m / numPtrA * numPtrA;
-    int stepAk = isARow ? k / (numPtrA * vecA) * (numPtrA * vecA) : k;
+    int stepAK = isARow ? k / (numPtrA * vecA) * (numPtrA * vecA) : k;
     Value pa = gep(f16PtrTy, thePtrA,
                    i32_val(stepAM * strideRepM * strideAM + stepAK * strideAK));
     Type aPtrTy = ptr_ty(vec_ty(i32_ty, vecA / 2), 3);
@@ -4203,7 +4204,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
   for (unsigned k = 0; k < NK; k += 4)
     for (unsigned m = 0; m < numM / 2; ++m)
       if (!has.count({m, k}))
-        load(m, k);
+        loadA(m, k);
 
   SmallVector<Value> elems;
   for (auto &item : has) { // has is a map, the key should be ordered.
@@ -4249,7 +4250,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
   int NK = shape[0];
 
   auto [_0, _1, offsetBN, offsetBK] =
-      computeOffsetsM(thread, false, isBRow, fpw, spw, rep, rewriter, loc);
+      computeOffsets(thread, false, isBRow, fpw, spw, rep, rewriter, loc);
 
   Value offB0 = isBRow ? offsetBN : offsetBK;
   Value offB1 = isBRow ? offsetBK : offsetBN;
@@ -4275,7 +4276,8 @@ Value DotOpMmaV1ConversionHelper::loadB(
   auto ld = [&](decltype(hbs) &vals, int m, int k, Value val0, Value val1) {
     vals[{m, k}] = {val0, val1};
   };
-  auto load = [&](int n, int K) {
+
+  auto loadB = [&](int n, int K) {
     int offidx = (isBRow ? n : K / 4) % numPtrB;
     Value thePtrB = ptrB[offidx];
 
@@ -4302,7 +4304,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
   for (unsigned k = 0; k < NK; k += 4)
     for (unsigned n = 0; n < numN / 2; ++n) {
       if (!hbs.count({n, k}))
-        load(n, k);
+        loadB(n, k);
     }
 
   SmallVector<Value> elems;
@@ -4322,12 +4324,11 @@ Value DotOpMmaV1ConversionHelper::loadC(
 }
 
 std::tuple<Value, Value, Value, Value>
-DotOpMmaV1ConversionHelper::computeOffsetsM(Value threadId, bool isARow,
-                                            bool isBRow, ArrayRef<int> fpw,
-                                            ArrayRef<int> spw,
-                                            ArrayRef<int> rep,
-                                            ConversionPatternRewriter &rewriter,
-                                            Location loc) const {
+DotOpMmaV1ConversionHelper::computeOffsets(Value threadId, bool isARow,
+                                           bool isBRow, ArrayRef<int> fpw,
+                                           ArrayRef<int> spw, ArrayRef<int> rep,
+                                           ConversionPatternRewriter &rewriter,
+                                           Location loc) const {
   auto *ctx = rewriter.getContext();
   Value _1 = i32_val(1);
   Value _3 = i32_val(3);
@@ -4381,6 +4382,23 @@ DotOpMmaV1ConversionHelper::computeOffsetsM(Value threadId, bool isARow,
   }
 
   return std::make_tuple(offsetAM, offsetAK, offsetBN, offsetBK);
+}
+
+DotOpMmaV1ConversionHelper::ValueTable
+DotOpMmaV1ConversionHelper::extractLoadedOperand(
+    Value llStruct, int n0, int n1, ConversionPatternRewriter &rewriter) const {
+  ValueTable rcds;
+  SmallVector<Value> elems =
+      ConvertTritonGPUOpToLLVMPatternBase::getElementsFromStruct(
+          llStruct.getLoc(), llStruct, rewriter);
+
+  for (int i = 0; i < n0; ++i)
+    for (int j = 0; j < n1; ++j) {
+      rcds[{i, j}] =
+          std::make_pair(elems[2 * (i * n1 + j)], elems[2 * (i * n1 + j) + 1]);
+    }
+
+  return rcds;
 }
 
 /// ====================== mma codegen end ============================
