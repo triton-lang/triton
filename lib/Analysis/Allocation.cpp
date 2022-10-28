@@ -82,7 +82,6 @@ SmallVector<unsigned> getScratchConfigForReduce(triton::ReduceOp op) {
   auto srcTy = op.operand().getType().cast<RankedTensorType>();
   auto srcLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
   auto srcShape = srcTy.getShape();
-  auto rank = srcShape.size();
   auto axis = op.axis();
 
   bool fast_reduce = axis == 1; // FIXME(Qingyi): The fastest-changing dimension

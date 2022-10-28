@@ -63,7 +63,7 @@ static bool find_and_replace(std::string &str, const std::string &begin,
 static std::string llir_to_ptx(llvm::Module *module, int capability, int ptx) {
   // LLVM version in use may not officially support target hardware
   int max_nvvm_cc = 75;
-  int max_nvvm_ptx = 74;
+  // int max_nvvm_ptx = 74;
   // options
   auto options = llvm::cl::getRegisteredOptions();
   auto *short_ptr =

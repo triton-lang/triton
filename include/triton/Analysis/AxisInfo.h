@@ -28,8 +28,8 @@ public:
            DimVectorT knownConstancy)
       : contiguity(knownContiguity), divisibility(knownDivisibility),
         constancy(knownConstancy), rank(contiguity.size()) {
-    assert(knownDivisibility.size() == rank);
-    assert(knownConstancy.size() == rank);
+    assert(knownDivisibility.size() == (size_t)rank);
+    assert(knownConstancy.size() == (size_t)rank);
   }
 
   // Accessors
