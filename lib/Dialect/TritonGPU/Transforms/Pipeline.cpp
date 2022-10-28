@@ -63,9 +63,6 @@ class LoopPipeliner {
 
   Value lookupOrDefault(Value origin, int stage);
 
-  /// return true if this op uses any of `loads`
-  bool isDirectUserOfAsyncLoad(Operation &op);
-
   /// returns a empty buffer of size <numStages, ...>
   ttg::AllocTensorOp allocateEmptyBuffer(Operation *op, OpBuilder &builder);
 
@@ -129,19 +126,6 @@ void LoopPipeliner::collectDeps(Value v, int stages, DenseSet<Value> &deps) {
     for (Value op : v.getDefiningOp()->getOperands())
       collectDeps(op, stages, deps);
   }
-}
-
-bool LoopPipeliner::isDirectUserOfAsyncLoad(Operation &op) {
-  for (Value loadOp : loads) {
-    assert(loadOp.hasOneUse() &&
-           "load should only have one use (ConvertLayout)");
-    Value loadUseResult = loadOp.getUsers().begin()->getResult(0);
-    for (Value opOperand : op.getOperands()) {
-      if (opOperand == loadUseResult)
-        return true;
-    }
-  }
-  return false;
 }
 
 ttg::AllocTensorOp LoopPipeliner::allocateEmptyBuffer(Operation *op,
