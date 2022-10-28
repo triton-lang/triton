@@ -49,7 +49,6 @@ unsigned getElemsPerThread(Type type) {
   auto tensorType = type.cast<RankedTensorType>();
   auto layout = tensorType.getEncoding();
   auto shape = tensorType.getShape();
-  size_t rank = shape.size();
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return blockedLayout.getElemsPerThread(shape);
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
@@ -109,7 +108,7 @@ SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout) {
 SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
   SmallVector<unsigned> shape;
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
-    for (int d = 0, n = blockedLayout.getOrder().size(); d < n; ++d)
+    for (unsigned d = 0, n = blockedLayout.getOrder().size(); d < n; ++d)
       shape.push_back(blockedLayout.getSizePerThread()[d] *
                       blockedLayout.getThreadsPerWarp()[d] *
                       blockedLayout.getWarpsPerCTA()[d]);
@@ -117,7 +116,7 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
     unsigned dim = sliceLayout.getDim();
     auto parent = sliceLayout.getParent();
     if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
-      for (int d = 0, n = blockedParent.getOrder().size(); d < n; ++d) {
+      for (unsigned d = 0, n = blockedParent.getOrder().size(); d < n; ++d) {
         if (d == dim)
           continue;
         shape.push_back(blockedParent.getSizePerThread()[d] *
@@ -258,7 +257,6 @@ SliceEncodingAttr::paddedShape(ArrayRef<int64_t> shape) const {
 unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   size_t rank = shape.size();
   auto parent = getParent();
-  unsigned dim = getDim();
   if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
     assert(rank == blockedParent.getSizePerThread().size() - 1 &&
            "unexpected rank in SliceEncodingAttr::getElemsPerThread");

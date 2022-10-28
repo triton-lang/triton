@@ -364,8 +364,7 @@ void LoopPipeliner::emitEpilogue() {
   OpBuilder builder(forOp);
   OpBuilder::InsertionGuard g(builder);
   builder.setInsertionPointAfter(forOp);
-  Operation *asyncWait =
-      builder.create<triton::gpu::AsyncWaitOp>(forOp.getLoc(), 0);
+  builder.create<triton::gpu::AsyncWaitOp>(forOp.getLoc(), 0);
 }
 
 scf::ForOp LoopPipeliner::createNewForOp() {

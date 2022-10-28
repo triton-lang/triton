@@ -680,7 +680,6 @@ Value convertSplatLikeOp(Type elemType, Type resType, Value constVal,
   auto tensorTy = resType.cast<RankedTensorType>();
   if (tensorTy.getEncoding().isa<BlockedEncodingAttr>()) {
     auto tensorTy = resType.cast<RankedTensorType>();
-    auto layout = tensorTy.getEncoding();
     auto srcType = typeConverter->convertType(elemType);
     auto llSrc = bitcast(srcType, constVal);
     size_t elemsPerThread = getElemsPerThread(tensorTy);
@@ -838,7 +837,6 @@ struct LoadOpConversion
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    MLIRContext *ctx = rewriter.getContext();
     auto loc = op->getLoc();
 
     // original values
@@ -1274,8 +1272,6 @@ private:
 LogicalResult
 ReduceOpConversion::matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                                     ConversionPatternRewriter &rewriter) const {
-  auto srcTy = op.operand().getType().cast<RankedTensorType>();
-  auto rank = srcTy.getShape().size();
   if (op.axis() == 1) // FIXME(Qingyi): The fastest-changing dimension
     return matchAndRewriteFast(op, adaptor, rewriter);
   return matchAndRewriteBasic(op, adaptor, rewriter);
@@ -1324,7 +1320,6 @@ void ReduceOpConversion::accumulate(ConversionPatternRewriter &rewriter,
 
 Value ReduceOpConversion::shflSync(ConversionPatternRewriter &rewriter,
                                    Location loc, Value val, int i) const {
-  MLIRContext *ctx = rewriter.getContext();
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   if (bits == 64) {
@@ -1431,7 +1426,7 @@ LogicalResult ReduceOpConversion::matchAndRewriteBasic(
 
     barrier();
     SmallVector<Value> resultVals(resultElems);
-    for (int i = 0; i < resultElems; i++) {
+    for (size_t i = 0; i < resultElems; i++) {
       SmallVector<Value> readIdx = resultIndices[i];
       readIdx.insert(readIdx.begin() + axis, ints[0]);
       Value readOffset = linearize(rewriter, loc, readIdx, smemShape);
@@ -1463,7 +1458,6 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
   auto srcTy = op.operand().getType().cast<RankedTensorType>();
   auto srcLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
   auto srcShape = srcTy.getShape();
-  auto srcOrder = srcLayout.getOrder();
 
   auto threadsPerWarp = srcLayout.getThreadsPerWarp();
   auto warpsPerCTA = srcLayout.getWarpsPerCTA();
@@ -1571,7 +1565,7 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
 
     barrier();
     SmallVector<Value> resultVals(resultElems);
-    for (int i = 0; i < resultElems; i++) {
+    for (size_t i = 0; i < resultElems; i++) {
       SmallVector<Value> readIdx = resultIndices[i];
       readIdx.insert(readIdx.begin() + axis, i32_val(0));
       Value readOffset = linearize(rewriter, loc, readIdx, smemShape);
@@ -1611,7 +1605,6 @@ struct ViewLikeOpConversion : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
     // due to MLIR's restrictions
     Location loc = op->getLoc();
     auto resultTy = op.getType().template cast<RankedTensorType>();
-    auto resultShape = resultTy.getShape();
     unsigned elems = getElemsPerThread(resultTy);
     Type elemTy =
         this->getTypeConverter()->convertType(resultTy.getElementType());
@@ -1690,7 +1683,6 @@ struct AddPtrOpConversion
       auto resultLayout =
           resultTensorTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
       assert(resultLayout && "Unexpected resultLayout in AddPtrOpConversion");
-      auto resultShape = resultTensorTy.getShape();
       unsigned elems = getElemsPerThread(resultTy);
       Type elemTy =
           getTypeConverter()->convertType(resultTensorTy.getElementType());
@@ -1813,7 +1805,7 @@ protected:
     SmallVector<SmallVector<Value>> operands(elems);
     for (auto operand : adaptor.getOperands()) {
       auto sub_operands = this->getElementsFromStruct(loc, operand, rewriter);
-      for (int i = 0; i < elems; ++i) {
+      for (size_t i = 0; i < elems; ++i) {
         operands[i].push_back(sub_operands[i]);
       }
     }
@@ -2040,7 +2032,6 @@ void ConvertLayoutOpConversion::processReplica(
     multiDimOffsetFirstElem = emitBaseIndexForBlockedLayout(
         loc, rewriter, blockedLayout, type.getShape());
   } else if (sliceLayout) {
-    unsigned dim = sliceLayout.getDim();
     auto parent = sliceLayout.getParent();
     if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
       SmallVector<int64_t> paddedShape =
