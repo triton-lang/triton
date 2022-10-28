@@ -125,27 +125,39 @@ def test_fmad_rn_no_mask(num_warps, block_size, iter_size):
 
 
 @pytest.mark.parametrize("dtype_str, expr, lib_path",
-                         [('float32', 'libdevice.pow', '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'),
-                          ('int32', 'libdevice.ffs', ''),
-                          ('float64', 'libdevice.norm4d', '')])
+                         [('int32', 'libdevice.ffs', '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'),
+                          ('int32', 'libdevice.ffs', '')])
 def test_libdevice(dtype_str, expr, lib_path):
-    def patch_kernel(template, to_replace):
-        kernel = triton.JITFunction(template.fn)
-        for key, value in to_replace.items():
-            kernel.src = kernel.src.replace(key, value)
-        return kernel
+    src = f"""
+def kernel(X, Y, BLOCK: tl.constexpr):
+    x = tl.load(X + tl.arange(0, BLOCK))
+    y = tl.{expr}(x)
+    tl.store(Y + tl.arange(0, BLOCK), y)
+"""
+    import tempfile
+    from inspect import Parameter, Signature
+
+    import _testcapi
+
+    fp = tempfile.NamedTemporaryFile(mode='w', suffix=".py")
+    fp.write(src)
+    fp.flush()
+
+    def kernel(X, Y, BLOCK: tl.constexpr):
+        pass
+    kernel.__code__ = _testcapi.code_newempty(fp.name, "kernel", 1)
+    parameters = []
+    parameters.append(Parameter("X", 1))
+    parameters.append(Parameter("Y", 1))
+    parameters.append(Parameter("BLOCK", 1))
+    kernel.__signature__ = Signature(parameters=parameters)
+    kernel = triton.jit(kernel)
 
     torch_type = {
         "int32": torch.int32,
         "float32": torch.float32,
         "float64": torch.float64
     }
-
-    @triton.jit
-    def kernel(X, Y, BLOCK: tl.constexpr):
-        x = tl.load(X + tl.arange(0, BLOCK))
-        y = GENERATE_TEST_HERE
-        tl.store(Y + tl.arange(0, BLOCK), y)
 
     shape = (128, )
     # limit the range of integers so that the sum does not overflow
@@ -155,18 +167,9 @@ def test_libdevice(dtype_str, expr, lib_path):
     else:
         x = torch.randn(shape, dtype=torch_type[dtype_str], device="cuda")
     if expr == 'libdevice.ffs':
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.ffs(x)'})
         y_ref = torch.zeros(shape, dtype=x.dtype, device="cuda")
         for i in range(shape[0]):
             y_ref[i] = (int(x[i]) & int(-x[i])).bit_length()
-    elif expr == 'libdevice.pow':
-        # numpy does not allow negative factors in power, so we use abs()
-        x = torch.abs(x)
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.pow(x, x)'})
-        y_ref = torch.pow(x, x)
-    elif expr == 'libdevice.norm4d':
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.norm4d(x, x, x, x)'})
-        y_ref = torch.sqrt(4 * torch.pow(x, 2))
 
     # triton result
     y = torch.zeros(shape, dtype=x.dtype, device="cuda")
