@@ -1,12 +1,10 @@
 import distutils
-import itertools
 import os
 import platform
 import re
 import shutil
 import subprocess
 import sys
-import sysconfig
 import tarfile
 import tempfile
 import urllib.request
