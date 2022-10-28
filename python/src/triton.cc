@@ -525,18 +525,22 @@ void init_triton_codegen(py::module &&m) {
             int version;
             // std::string ptxas_path = drv::path_to_ptxas(version);
             // Triton-IR -> AMDGCN LLVM-IR
+            std::cout << "ttir:" << std::endl;
             std::cout << "\t" << ttir.str() << std::endl;
-            std::cout << "\t" << tmp << std::endl;
             triton::codegen::amd_cl_target target;
             auto llvm = triton::codegen::add_passes_to_emit_bin(
                 ir, ctx, &target, num_warps, num_stages, n_shared_bytes, extern_lib_map);
             llvm::raw_string_ostream llir(tmp);
             llir << *llvm;
+            std::cout << "llir:" << std::endl;
+            std::cout << "\t" << llir.str() << std::endl;
             llir.flush();
             // LLVM-IR -> AMDGPU
-            std::tuple<std::string, std::string>  amdgpu = drv::llir_to_amdgcn(llvm.get(), "gfx90a");
+            std::tuple<std::string, std::string> amdgpu = drv::llir_to_amdgcn(llvm.get(), "gfx90a");
             amdgcn = std::get<0>(amdgpu);
             hsaco_path = std::get<1>(amdgpu);
+            std::cout << "amdgcn:" << std::endl;
+            std::cout << "\t" << amdgcn << std::endl;
           }
           asm_map_t asm_map;
           asm_map["ttir"] = py::cast(ttir.str());
