@@ -374,7 +374,7 @@ struct ConvertTritonGPUOpToLLVMPatternBase {
   static SmallVector<Value>
   getElementsFromStruct(Location loc, Value llvmStruct,
                         ConversionPatternRewriter &rewriter) {
-    if (llvmStruct.getType().isIntOrFloat() ||
+    if (llvmStruct.getType().isIntOrIndexOrFloat() ||
         llvmStruct.getType().isa<triton::PointerType>() ||
         llvmStruct.getType().isa<LLVM::LLVMPointerType>())
       return {llvmStruct};
@@ -1795,6 +1795,7 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     auto resultTy = op.getType();
     Location loc = op->getLoc();
+
     unsigned elems = getElemsPerThread(resultTy);
     auto resultElementTy = getElementTypeOrSelf(resultTy);
     Type elemTy = this->getTypeConverter()->convertType(resultElementTy);
