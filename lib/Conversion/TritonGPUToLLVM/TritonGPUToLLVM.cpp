@@ -3015,6 +3015,8 @@ struct DotOpMmaV1ConversionHelper {
   MmaEncodingAttr mmaLayout;
   ArrayRef<unsigned> wpt;
 
+  using ValueTable = std::map<std::pair<int, int>, std::pair<Value, Value>>;
+
   explicit DotOpMmaV1ConversionHelper(MmaEncodingAttr mmaLayout)
       : mmaLayout(mmaLayout), wpt(mmaLayout.getWarpsPerCTA()) {}
 
@@ -3034,6 +3036,32 @@ struct DotOpMmaV1ConversionHelper {
     // f16*f16+f32->f32
     return struct_ty(ctx, SmallVector<Type>{8, fp32Ty});
   }
+
+  // Loading $a from smem to registers, returns a LLVM::Struct.
+  Value loadA(Value A, Value llA, Value thread, Value smem, Location loc,
+              ConversionPatternRewriter &rewriter) const;
+
+  // Loading $b from smem to registers, returns a LLVM::Struct.
+  Value loadB(Value B, Value llB, Value thread, Value smem, Location loc,
+              ConversionPatternRewriter &rewriter) const;
+
+  // Loading $c to registers, returns a LLVM::Struct.
+  Value loadC(Value C, Value llC, ConversionPatternRewriter &rewriter) const;
+
+  // Compute the offset of the matrix to load.
+  // Returns offsetAM, offsetAK, offsetBN, offsetBK.
+  // NOTE, the information M(from $a) and N(from $b) couldn't be retrieved at
+  // the same time in the usage in convert_layout[shared->dot_op], we leave the
+  // noexist info to be 0 and only use the desired argument from the composed
+  // result. In this way we want to retain the original code structure in
+  // convert_mma884 method for easier debugging.
+  std::tuple<Value, Value, Value, Value>
+  computeOffsetsM(Value threadId, bool isARow, bool isBRow, ArrayRef<int> fpw,
+                  ArrayRef<int> spw, ArrayRef<int> rep,
+                  ConversionPatternRewriter &rewriter, Location loc) const;
+
+  Value composeValuesToDotOperandLayoutStruct(const ValueTable &vals, int n0,
+                                              int n1) const;
 
 private:
   static constexpr std::array<unsigned, 3> instrShape{16, 16, 4};
@@ -3895,7 +3923,7 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adapter,
   SmallVector<Value> offA(numPtrA);
 
   for (int i = 0; i < numPtrA; i++) {
-    Value offA0I = add(offA0, i32_val(i * isARow ? 4 : strideRepM));
+    Value offA0I = add(offA0, i32_val(i * (isARow ? 4 : strideRepM)));
     offA0I = udiv(offA0I, i32_val(vecA));
     offA0I = xor_(offA0I, phaseA);
     offA0I = xor_(offA0I, i32_val(vecA));
@@ -3915,8 +3943,6 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adapter,
     offB[i] =
         add(mul(offB0I, i32_val(strideB0)), mul(offB1, i32_val(strideB1)));
   }
-
-  // MMA intrinsic
 
   Type f16x2Ty = vec_ty(f16_ty, 2);
   // One thread get 8 elements as result
@@ -4072,6 +4098,289 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adapter,
   rewriter.replaceOp(op, res);
 
   return success();
+}
+
+Value DotOpMmaV1ConversionHelper::loadA(
+    Value tensor, Value llTensor, Value thread, Value smem, Location loc,
+    ConversionPatternRewriter &rewriter) const {
+  auto *ctx = rewriter.getContext();
+  auto tensorTy = tensor.getType().cast<RankedTensorType>();
+  auto shape = tensorTy.getShape();
+  auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto order = sharedLayout.getOrder();
+
+  bool isARow = order[0] != 0;
+  bool isAVec4 = !isARow && shape[order[0]] <= 16; // fp16*4 = 16bytes
+  int packSize0 = (isARow || isAVec4) ? 1 : 2;
+
+  SmallVector<int> fpw({2, 2, 1});
+  int repM = 2 * packSize0;
+  int repK = 1;
+  int spwM = fpw[0] * 4 * repM;
+  SmallVector<int> rep({repM, 0, repK}); // pad N with 0
+  SmallVector<int> spw({spwM, 0, 1});    // pad N with 0
+
+  int vecA = sharedLayout.getVec();
+
+  int strideAM = isARow ? shape[1] : 1;
+  int strideAK = isARow ? 1 : shape[0];
+  int strideA0 = isARow ? strideAK : strideAM;
+  int strideA1 = isARow ? strideAM : strideAK;
+
+  int strideRepM = wpt[0] * fpw[0] * 8;
+  int strideRepK = 1;
+
+  auto [offsetAM, offsetAK, _0, _1] =
+      computeOffsetsM(thread, isARow, false, fpw, spw, rep, rewriter, loc);
+
+  // swizzling
+  int perPhaseA = sharedLayout.getPerPhase();
+  int maxPhaseA = sharedLayout.getMaxPhase();
+  int stepA0 = isARow ? strideRepK : strideRepM;
+  int numPtrA = std::max(2 * perPhaseA * maxPhaseA / stepA0, 1);
+  int NK = shape[1];
+
+  // pre-compute pointer lanes
+  Value offA0 = isARow ? offsetAK : offsetAM;
+  Value offA1 = isARow ? offsetAM : offsetAK;
+  Value phaseA = urem(udiv(offA1, i32_val(perPhaseA)), i32_val(maxPhaseA));
+  SmallVector<Value> offA(numPtrA);
+
+  for (int i = 0; i < numPtrA; i++) {
+    Value offA0I = add(offA0, i32_val(i * (isARow ? 4 : strideRepM)));
+    offA0I = udiv(offA0I, i32_val(vecA));
+    offA0I = xor_(offA0I, phaseA);
+    offA0I = xor_(offA0I, i32_val(vecA));
+    offA[i] =
+        add(mul(offA0I, i32_val(strideA0)), mul(offA1, i32_val(strideA1)));
+  }
+
+  Type f16x2Ty = vec_ty(f16_ty, 2);
+  // One thread get 8 elements as result
+  Type retTy =
+      LLVM::LLVMStructType::getLiteral(ctx, SmallVector(8, type::f32Ty(ctx)));
+
+  // prepare arguments
+  SmallVector<Value> ptrA(numPtrA);
+
+  std::map<std::pair<int, int>, std::pair<Value, Value>> has;
+  for (int i = 0; i < numPtrA; i++)
+    ptrA[i] = gep(ptr_ty(f16_ty), smem, offA[i]);
+
+  auto instrShape = getMmaInstrShape();
+  unsigned numM = rep[0] * shape[0] / (spw[0] * wpt[0]);
+
+  Type f16PtrTy = ptr_ty(f16_ty);
+
+  auto ld = [&](decltype(has) &vals, int m, int k, Value val0, Value val1) {
+    vals[{m, k}] = {val0, val1};
+  };
+  auto load = [&](int m, int k) {
+    int offidx = (isARow ? k / 4 : m) % numPtrA;
+    Value thePtrA = gep(f16PtrTy, smem, offA[offidx]);
+
+    int stepAM = isARow ? m : m / numPtrA * numPtrA;
+    int stepAk = isARow ? k / (numPtrA * vecA) * (numPtrA * vecA) : k;
+    Value pa = gep(f16PtrTy, thePtrA,
+                   i32_val(stepAM * strideRepM * strideAM + stepAK * strideAK));
+    Type aPtrTy = ptr_ty(vec_ty(i32_ty, vecA / 2), 3);
+    Value ha = load(bitcast(pa, aPtrTy));
+    // record lds that needs to be moved
+    Value ha00 = bitcast(extract_element(ha, i32_val(0)), f16x2Ty);
+    Value ha01 = bitcast(extract_element(ha, i32_val(1)), f16x2Ty);
+    ld(has, m, k, ha00, ha01);
+
+    if (vecA > 4) {
+      Value ha10 = bitcast(extract_element(ha, i32_val(2)), f16x2Ty);
+      Value ha11 = bitcast(extract_element(ha, i32_val(3)), f16x2Ty);
+      if (isARow)
+        ld(has, m, k + 4, ha10, ha11);
+      else
+        ld(has, m + 1, k, ha10, ha11);
+    }
+  };
+
+  for (unsigned k = 0; k < NK; k += 4)
+    for (unsigned m = 0; m < numM / 2; ++m)
+      if (!has.count({m, k}))
+        load(m, k);
+
+  SmallVector<Value> elems;
+  for (auto &item : has) { // has is a map, the key should be ordered.
+    elems.push_back(item.second.first);
+    elems.push_back(item.second.second);
+  }
+
+  Type fp16x2Ty = vec_ty(type::f16Ty(ctx), 2);
+  Type resTy = struct_ty(ctx, SmallVector<Type>(elems.size() / 2, fp16x2Ty));
+  Value res = getStructFromElements(loc, elems, rewriter, resTy);
+  return res;
+}
+
+Value DotOpMmaV1ConversionHelper::loadB(
+    Value tensor, Value llTensor, Value thread, Value smem, Location loc,
+    ConversionPatternRewriter &rewriter) const {
+  auto *ctx = rewriter.getContext();
+  auto tensorTy = tensor.getType().cast<RankedTensorType>();
+  auto shape = tensorTy.getShape();
+  auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto order = sharedLayout.getOrder();
+  bool isBRow = order[0] != 0;
+  bool isBVec4 = isBRow && shape[order[0]] <= 16;
+  int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
+  SmallVector<int> fpw({2, 2, 1});
+  SmallVector<int> rep({0, 2 * packSize1, 1});       // pad M with 0
+  SmallVector<int> spw({0, fpw[1] * 4 * rep[1], 1}); // pad M with 0
+  int vecB = sharedLayout.getVec();
+  int strideBN = isBRow ? 1 : shape[0];
+  int strideBK = isBRow ? shape[1] : 1;
+  int strideB0 = isBRow ? strideBN : strideBK;
+  int strideB1 = isBRow ? strideBK : strideBN;
+  int strideRepN = wpt[1] * fpw[1] * 8;
+  int strideRepK = 1;
+
+  // swizzling
+  int perPhaseA = sharedLayout.getPerPhase();
+  int maxPhaseA = sharedLayout.getMaxPhase();
+  int perPhaseB = sharedLayout.getPerPhase();
+  int maxPhaseB = sharedLayout.getMaxPhase();
+  int stepB0 = isBRow ? strideRepN : strideRepK;
+  int numPtrB = std::max(2 * perPhaseB * maxPhaseB / stepB0, 1);
+  int NK = shape[0];
+
+  auto [_0, _1, offsetBN, offsetBK] =
+      computeOffsetsM(thread, false, isBRow, fpw, spw, rep, rewriter, loc);
+
+  Value offB0 = isBRow ? offsetBN : offsetBK;
+  Value offB1 = isBRow ? offsetBK : offsetBN;
+  Value phaseB = urem(udiv(offB1, i32_val(perPhaseB)), i32_val(maxPhaseB));
+  SmallVector<Value> offB(numPtrB);
+  for (int i = 0; i < numPtrB; ++i) {
+    Value offB0I = add(offB0, i32_val(i * (isBRow ? strideRepN : 4)));
+    offB0I = udiv(offB0I, i32_val(vecB));
+    offB0I = xor_(offB0I, phaseB);
+    offB0I = mul(offB0I, i32_val(vecB));
+    offB[i] =
+        add(mul(offB0I, i32_val(strideB0)), mul(offB1, i32_val(strideB1)));
+  }
+
+  Type f16PtrTy = ptr_ty(f16_ty);
+  Type f16x2Ty = vec_ty(f16_ty, 2);
+
+  SmallVector<Value> ptrB(numPtrB);
+  ValueTable hbs;
+  for (int i = 0; i < numPtrB; i++)
+    ptrB[i] = gep(ptr_ty(f16_ty), smem, offB[i]);
+
+  auto ld = [&](decltype(hbs) &vals, int m, int k, Value val0, Value val1) {
+    vals[{m, k}] = {val0, val1};
+  };
+  auto load = [&](int n, int K) {
+    int offidx = (isBRow ? n : K / 4) % numPtrB;
+    Value thePtrB = ptrB[offidx];
+
+    int stepBN = isBRow ? n / numPtrB * numPtrB : n;
+    int stepBK = isBRow ? K : K / (numPtrB * vecB) * (numPtrB * vecB);
+    Value pb = gep(f16PtrTy, thePtrB,
+                   i32_val(stepBN * strideRepN * strideBN + stepBK * strideBK));
+    Value hb = load(bitcast(pb, ptr_ty(vec_ty(i32_ty, vecB / 2), 3)));
+    // record lds that needs to be moved
+    Value hb00 = bitcast(extract_element(hb, i32_val(0)), f16x2Ty);
+    Value hb01 = bitcast(extract_element(hb, i32_val(1)), f16x2Ty);
+    ld(hbs, n, K, hb00, hb01);
+    if (vecB > 4) {
+      Value hb10 = bitcast(extract_element(hb, i32_val(2)), f16x2Ty);
+      Value hb11 = bitcast(extract_element(hb, i32_val(3)), f16x2Ty);
+      if (isBRow)
+        ld(hbs, n + 1, K, hb10, hb11);
+      else
+        ld(hbs, n, K + 4, hb10, hb11);
+    }
+  };
+
+  unsigned numN = rep[1] * shape[1] / (spw[1] * wpt[0]);
+  for (unsigned k = 0; k < NK; k += 4)
+    for (unsigned n = 0; n < numN / 2; ++n) {
+      if (!hbs.count({n, k}))
+        load(n, k);
+    }
+
+  SmallVector<Value> elems;
+  for (auto &item : hbs) { // has is a map, the key should be ordered.
+    elems.push_back(item.second.first);
+    elems.push_back(item.second.second);
+  }
+  Type fp16x2Ty = vec_ty(type::f16Ty(ctx), 2);
+  Type resTy = struct_ty(ctx, SmallVector<Type>(elems.size() / 2, fp16x2Ty));
+  Value res = getStructFromElements(loc, elems, rewriter, resTy);
+  return res;
+}
+
+Value DotOpMmaV1ConversionHelper::loadC(
+    Value tensor, Value llTensor, ConversionPatternRewriter &rewriter) const {
+  return llTensor;
+}
+
+std::tuple<Value, Value, Value, Value>
+DotOpMmaV1ConversionHelper::computeOffsetsM(Value threadId, bool isARow,
+                                            bool isBRow, ArrayRef<int> fpw,
+                                            ArrayRef<int> spw,
+                                            ArrayRef<int> rep,
+                                            ConversionPatternRewriter &rewriter,
+                                            Location loc) const {
+  auto *ctx = rewriter.getContext();
+  Value _1 = i32_val(1);
+  Value _3 = i32_val(3);
+  Value _4 = i32_val(4);
+  Value _16 = i32_val(16);
+  Value _32 = i32_val(32);
+
+  Value lane = urem(threadId, _32);
+  Value warp = udiv(threadId, _32);
+
+  // warp offset
+  Value warp0 = urem(warp, i32_val(wpt[0]));
+  Value warp12 = udiv(warp, i32_val(wpt[0]));
+  Value warp1 = urem(warp12, i32_val(wpt[1]));
+  Value warpMOff = mul(warp0, i32_val(spw[0]));
+  Value warpNOff = mul(warp1, i32_val(spw[1]));
+  // Quad offset
+  Value quadMOff = mul(udiv(and_(lane, _16), _4), i32_val(fpw[0]));
+  Value quadNOff = mul(udiv(and_(lane, _16), _4), i32_val(fpw[1]));
+  // Pair offset
+  Value pairMOff = udiv(urem(lane, _16), _4);
+  pairMOff = urem(pairMOff, i32_val(fpw[0]));
+  pairMOff = mul(pairMOff, _4);
+  Value pairNOff = udiv(urem(lane, _16), _4);
+  pairNOff = udiv(pairNOff, i32_val(fpw[0]));
+  pairNOff = urem(pairNOff, i32_val(fpw[1]));
+  pairNOff = mul(pairNOff, _4);
+  // scale
+  pairMOff = mul(pairMOff, i32_val(rep[0] / 2));
+  quadMOff = mul(quadMOff, i32_val(rep[0] / 2));
+  pairNOff = mul(pairNOff, i32_val(rep[1] / 2));
+  quadNOff = mul(quadNOff, i32_val(rep[1] / 2));
+  // Quad pair offset
+  Value laneMOff = add(pairMOff, quadMOff);
+  Value laneNOff = add(pairNOff, quadNOff);
+  // A offset
+  Value offsetAM = add(warpMOff, laneMOff);
+  Value offsetAK = and_(lane, _3);
+  // B offset
+  Value offsetBN = add(warpNOff, laneNOff);
+  Value offsetBK = and_(lane, _3);
+  // i indices
+  Value offsetCM = add(and_(lane, _1), offsetAM);
+  if (isARow) {
+    offsetAM = add(offsetAM, urem(threadId, _4));
+    offsetAK = i32_val(0);
+  }
+  if (!isBRow) {
+    offsetBN = add(offsetBN, urem(threadId, _4));
+    offsetBK = i32_val(0);
+  }
+
+  return std::make_tuple(offsetAM, offsetAK, offsetBN, offsetBK);
 }
 
 /// ====================== mma codegen end ============================
