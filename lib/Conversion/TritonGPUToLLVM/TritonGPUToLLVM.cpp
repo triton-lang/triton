@@ -1180,7 +1180,7 @@ struct BroadcastOpConversion
       duplicates *= d;
     }
 
-    unsigned srcElems = getElemsPerThread(src.getType());
+    unsigned srcElems = getElemsPerThread(srcTy);
     auto elemTy = resultTy.getElementType();
     auto srcVals = getElementsFromStruct(loc, src, rewriter);
     unsigned resultElems = getElemsPerThread(result.getType());
@@ -1199,16 +1199,13 @@ struct BroadcastOpConversion
         auto resultLinearIndex =
             getLinearIndex<int64_t>(resultMultiDim, resultLogicalShape);
         resultVals[resultLinearIndex] = srcVals[i];
-        llvm::outs() << resultVals[resultLinearIndex] << "\n";
       }
     }
     auto llvmStructTy = getTypeConverter()->convertType(resultTy);
-    llvm::outs() << llvmStructTy << " " << srcElems << " " << resultVals.size()
-                 << "\n";
-    llvm::outs() << "00\n";
+
     Value resultStruct =
         getStructFromElements(loc, resultVals, rewriter, llvmStructTy);
-    llvm::outs() << "11\n";
+
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
