@@ -136,8 +136,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
     include_directories("." ${PYTHON_SRC_PATH})
     if (PYTHON_INCLUDE_DIRS)
       include_directories(${PYTHON_INCLUDE_DIRS})
-      link_directories(${PYTHON_LINK_DIRS})
-      link_libraries(${PYTHON_LIBRARIES})
+      # link_directories(${PYTHON_LINK_DIRS})
+      # link_libraries(${PYTHON_LIBRARIES})
     else()
       find_package(Python3 REQUIRED COMPONENTS Development)
       include_directories(${Python3_INCLUDE_DIRS})
@@ -170,10 +170,9 @@ list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
 include(TableGen) # required by AddMLIR
 include(AddLLVM)
 include(AddMLIR)
-include(HandleLLVMOptions) # human-friendly error message
 
 # Disable warnings that show up in external code (gtest;pybind11)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-covered-switch-default")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default")
 
 include_directories(${MLIR_INCLUDE_DIRS})
 include_directories(${LLVM_INCLUDE_DIRS})
