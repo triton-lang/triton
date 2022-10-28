@@ -250,6 +250,12 @@ struct PTXIOInstr : public PTXInstrBase<PTXIOInstr> {
     return *this;
   }
 
+  // Add ".shared" suffix to instruction
+  PTXIOInstr &shared(bool predicate = true) {
+    o("shared", predicate);
+    return *this;
+  }
+
   // Add ".v" suffix to instruction
   PTXIOInstr &v(int vecWidth, bool predicate = true) {
     if (vecWidth > 1) {
