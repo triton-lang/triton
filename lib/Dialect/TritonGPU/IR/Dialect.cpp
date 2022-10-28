@@ -44,9 +44,9 @@ namespace gpu {
 
 // TODO: Inheritation of layout attributes
 unsigned getElemsPerThread(Type type) {
-  auto tensorType = type.dyn_cast<RankedTensorType>();
-  if (!tensorType)
+  if (type.isIntOrFloat() || type.isa<triton::PointerType>())
     return 1;
+  auto tensorType = type.cast<RankedTensorType>();
   auto layout = tensorType.getEncoding();
   auto shape = tensorType.getShape();
   size_t rank = shape.size();
