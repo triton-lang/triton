@@ -362,7 +362,7 @@ Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
   auto *ptrOpr = builder.newAddrOperand(ptr, "r");
   auto *valOpr = builder.newOperand(val, c);
   st(ptrOpr, valOpr).predicate(pred, "b");
-  return builder.launch(rewriter, loc, void_ty);
+  return builder.launch(rewriter, loc, void_ty(ctx));
 }
 
 struct ConvertTritonGPUOpToLLVMPatternBase {
