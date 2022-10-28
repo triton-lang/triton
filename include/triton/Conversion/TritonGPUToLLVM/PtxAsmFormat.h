@@ -201,10 +201,17 @@ struct PTXInstrCommon {
   // clang-format on
 
   // Set operands of this instruction.
-  PTXInstrExecution &operator()(llvm::ArrayRef<Operand *> oprs);
+  // \param justBindLLVMOprs Just bind the LLVM Operands to the PTX code
+  // snippet.
+  PTXInstrExecution &operator()(llvm::ArrayRef<Operand *> oprs,
+                                bool justBindLLVMOprs = false);
+
+  // Bind the operands to the PTX code already having %n.
+  PTXInstrExecution &bindOprs(llvm::ArrayRef<Operand *> oprs);
 
 protected:
-  PTXInstrExecution &call(llvm::ArrayRef<Operand *> oprs);
+  PTXInstrExecution &call(llvm::ArrayRef<Operand *> oprs,
+                          bool justBindLLVMOprs = false);
 
   PTXBuilder *builder{};
   llvm::SmallVector<std::string, 4> instrParts;
@@ -304,8 +311,9 @@ struct PTXInstrExecution {
 
   PTXInstrExecution() = default;
   explicit PTXInstrExecution(PTXInstrCommon *instr,
-                             llvm::ArrayRef<Operand *> oprs)
-      : instr(instr), argsInOrder(oprs.begin(), oprs.end()) {}
+                             llvm::ArrayRef<Operand *> oprs, bool isRawBind)
+      : instr(instr), argsInOrder(oprs.begin(), oprs.end()),
+        justBindLLVMOpr(isRawBind) {}
 
   // Prefix a predicate to the instruction.
   PTXInstrExecution &predicate(mlir::Value value, StringRef constraint = "b") {
@@ -326,6 +334,9 @@ struct PTXInstrExecution {
 
   PTXInstrCommon *instr{};
   Operand *pred{};
+  // Whether to insert the $0,$1..$n in PTX code snippet, or just create a
+  // LLVM::InlineASM Op.
+  bool justBindLLVMOpr{};
 };
 
 } // namespace triton

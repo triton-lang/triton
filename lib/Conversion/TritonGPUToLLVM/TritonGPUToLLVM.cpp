@@ -108,8 +108,9 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 
 void llPrintf(StringRef msg, std::initializer_list<Value> args,
               ConversionPatternRewriter &rewriter) {
-  assert(args ==``1 &&.size() == 1);
-  auto msgStr = rewriter.create<mlir::ConstantOp>(UnknownLoc{},
+  assert(args.size() == 1);
+  auto *ctx = rewriter.getContext();
+  auto msgStr = rewriter.create<mlir::ConstantOp>(UnknownLoc::get(ctx),
                                                   rewriter.getStringAttr(msg));
 
   PTXBuilder builder;
@@ -135,17 +136,18 @@ void llPrintf(StringRef msg, std::initializer_list<Value> args,
 
   // prepare the arguments for vprintf
   auto msgOpr = builder.newOperand(msgStr, "r");
-  SmallVector<PTXBuilder::Operand *> oprs(msgStr);
+  SmallVector<PTXBuilder::Operand *> oprs({msgOpr});
   for (auto arg : args) {
     auto opr = builder.newOperand(arg, "r");
     oprs.push_back(opr);
   }
 
   declareExternFn();
-  callVPrintfPtrCode(oprs);
+  callVPrintfPtrCode(oprs, true /*justBindLLVMOprs*/);
 
-  auto *ctx = rewriter.getContext();
-  builder.launch(rewriter, UnknownLoc{}, void_ty);
+  llvm::outs() << "PTX code snippet: \n" << builder.dump() << "\n";
+
+  builder.launch(rewriter, UnknownLoc::get(ctx), void_ty, true);
 }
 
 } // namespace LLVM
@@ -3110,6 +3112,7 @@ struct MMA16816ConversionHelper {
     Value res = getStructFromElements(loc, fc, rewriter, structTy);
     rewriter.replaceOp(op, res);
 
+    LLVM::llPrintf("hello world %d\n", {i32_val(2008)}, rewriter);
     return success();
   }
 

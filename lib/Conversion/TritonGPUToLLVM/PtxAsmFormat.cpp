@@ -128,14 +128,16 @@ std::string PTXBuilder::dump() const {
   return strJoin(lines, "\r\n");
 }
 
-PTXInstrExecution &PTXInstrCommon::call(ArrayRef<Operand *> oprs) {
+PTXInstrExecution &PTXInstrCommon::call(llvm::ArrayRef<Operand *> oprs,
+                                        bool justBindLLVMOprs) {
   builder->executions.emplace_back(
-      std::make_unique<PTXInstrExecution>(this, oprs));
+      std::make_unique<PTXInstrExecution>(this, oprs, justBindLLVMOprs));
   return *builder->executions.back();
 }
 
-PTXInstrExecution &PTXInstrCommon::operator()(ArrayRef<Operand *> oprs) {
-  return call(oprs);
+PTXInstrExecution &PTXInstrCommon::operator()(ArrayRef<Operand *> oprs,
+                                              bool justBindLLVMOprs) {
+  return call(oprs, justBindLLVMOprs);
 }
 
 std::string PTXInstrExecution::dump() const {
@@ -149,6 +151,8 @@ std::string PTXInstrExecution::dump() const {
   }
 
   std::string instrRepr = strJoin(instr->instrParts, ".");
+  if (justBindLLVMOpr)
+    return instrRepr;
 
   llvm::SmallVector<std::string, 4> argReprs;
   for (auto *arg : argsInOrder) {
