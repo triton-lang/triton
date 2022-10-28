@@ -3730,20 +3730,39 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
   auto sharedLayout = srcTensorTy.getEncoding().cast<SharedEncodingAttr>();
   auto dotOperandLayout =
       dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+
   MmaEncodingAttr mmaLayout =
       dotOperandLayout.getParent().dyn_cast_or_null<MmaEncodingAttr>();
   assert(mmaLayout);
 
-  MMA16816ConversionHelper mmaHelper(mmaLayout, getThreadId(rewriter, loc),
-                                     rewriter, getTypeConverter(), op.getLoc());
-
   Value res;
-  if (dotOperandLayout.getOpIdx() == 0) {
-    // operand $a
-    res = mmaHelper.loadA(src, adaptor.src());
-  } else if (dotOperandLayout.getOpIdx() == 1) {
-    // operand $b
-    res = mmaHelper.loadB(src, adaptor.src());
+  if (mmaLayout.getVersion() == 2) {
+    MMA16816ConversionHelper mmaHelper(mmaLayout, getThreadId(rewriter, loc),
+                                       rewriter, getTypeConverter(),
+                                       op.getLoc());
+
+    if (dotOperandLayout.getOpIdx() == 0) {
+      // operand $a
+      res = mmaHelper.loadA(src, adaptor.src());
+    } else if (dotOperandLayout.getOpIdx() == 1) {
+      // operand $b
+      res = mmaHelper.loadB(src, adaptor.src());
+    }
+  } else if (mmaLayout.getVersion() == 1) {
+    DotOpMmaV1ConversionHelper helper(mmaLayout);
+    if (dotOperandLayout.getOpIdx() == 0) {
+      // operand $a
+      res =
+          helper.loadA(src, adaptor.src(), getThreadId(rewriter, loc),
+                       getSharedMemoryBase(loc, rewriter, src), loc, rewriter);
+    } else if (dotOperandLayout.getOpIdx() == 1) {
+      // operand $b
+      res =
+          helper.loadB(src, adaptor.src(), getThreadId(rewriter, loc),
+                       getSharedMemoryBase(loc, rewriter, src), loc, rewriter);
+    }
+  } else {
+    assert(false && "Unsupported mma layout found");
   }
 
   rewriter.replaceOp(op, res);
@@ -3790,8 +3809,127 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adaptor,
 // Simply port the old code here to avoid large difference and make debugging
 // and profiling easier.
 LogicalResult
-DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adapter,
+DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
                                ConversionPatternRewriter &rewriter) const {
+  auto *ctx = op.getContext();
+  auto loc = op.getLoc();
+
+  Value A = op.a();
+  Value B = op.b();
+  Value D = op.getResult();
+  auto mmaLayout =
+      D.getType().cast<RankedTensorType>().getEncoding().cast<MmaEncodingAttr>();
+
+  auto ATensorTy = A.getType().cast<RankedTensorType>();
+  auto BTensorTy = B.getType().cast<RankedTensorType>();
+  auto DTensorTy = D.getType().cast<RankedTensorType>();
+  auto AShape = ATensorTy.getShape();
+  auto BShape = BTensorTy.getShape();
+  auto DShape = DTensorTy.getShape();
+  auto wpt = mmaLayout.getWarpsPerCTA();
+
+  bool transA = op.transA();
+  bool transB = op.transB();
+
+  bool isARow = !transA;
+  bool isBRow = !transB;
+  bool isAVec4 = !isARow && AShape[isARow] <= 16; // fp16*4 = 16bytes
+  bool isBVec4 = isBRow && BShape[isBRow] <= 16;
+  int packSize0 = (isARow || isAVec4) ? 1 : 2;
+  int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
+  SmallVector<int> fpw({2, 2, 1});
+  SmallVector<int> rep({2 * packSize0, 2 * packSize1, 1});
+  SmallVector<int> spw({fpw[0] * 4 * rep[0], fpw[1] * 4 * rep[1], 1});
+
+  Value loadedA = adaptor.a();
+  Value loadedB = adaptor.b();
+  Value loadedC = adaptor.c();
+  DotOpMmaV1ConversionHelper helper(mmaLayout);
+
+  unsigned numM = rep[0] * DShape[0] / (spw[0] * wpt[0]);
+  unsigned numN = rep[1] * DShape[1] / (spw[1] * wpt[0]);
+  unsigned NK = AShape[1];
+
+  auto has = helper.extractLoadedOperand(loadedA, numM, NK / 4, rewriter);
+  auto hbs = helper.extractLoadedOperand(loadedB, numN, NK / 4, rewriter);
+
+  size_t accSize = numM * numN * 8;
+
+  // initialize accumulators
+  // TODO(Superjomn) Process C in convert_layout
+  // NOTE, we just assume C is zero.
+  SmallVector<Value> acc(accSize, f32_val(0.f));
+
+  auto callMMA = [&](unsigned m, unsigned n, unsigned k) {
+    auto ha = has[{m, k}];
+    auto hb = hbs[{n, k}];
+    std::vector<size_t> idx{{
+        (m * 2 + 0) + (n * 4 + 0) * numM, // row0
+        (m * 2 + 0) + (n * 4 + 1) * numM,
+        (m * 2 + 1) + (n * 4 + 0) * numM, // row1
+        (m * 2 + 1) + (n * 4 + 1) * numM,
+        (m * 2 + 0) + (n * 4 + 2) * numM, // row2
+        (m * 2 + 0) + (n * 4 + 3) * numM,
+        (m * 2 + 1) + (n * 4 + 2) * numM, // row3
+        (m * 2 + 1) + (n * 4 + 3) * numM,
+    }};
+
+    PTXBuilder builder;
+
+    auto *resOprs = builder.newListOperand(8, "=f");
+    auto *AOprs = builder.newListOperand({
+        {ha.first, "f"},
+        {ha.second, "f"},
+    });
+
+    auto *BOprs = builder.newListOperand({
+        {hb.first, "f"},
+        {hb.second, "f"},
+    });
+    auto *COprs = builder.newListOperand();
+    for (int i = 0; i < acc.size(); i++)
+      COprs->listAppend(builder.newOperand(acc[i], std::to_string(i)));
+
+    auto mma = builder.create("mma.sync.aligned.m8n8k4")
+                   ->o(isARow ? "row" : "col")
+                   .o(isBRow ? "row" : "col")
+                   .o(".f32.f16.f16.f32");
+
+    mma(resOprs, AOprs, BOprs, COprs);
+
+    auto inlineAsm = rewriter.create<LLVM::InlineAsmOp>(
+        loc, helper.getMmaRetType(ATensorTy),
+        builder.getAllMLIRArgs(), // operands
+        builder.dump(),           // asm_string
+        builder.getConstraints(), // constraints
+        true,                     // has_side_effects
+        false,                    // is_align_stack
+        LLVM::AsmDialectAttr::get(ctx,
+                                  LLVM::AsmDialect::AD_ATT), // asm_dialect
+        ArrayAttr::get(ctx, {})                              // operand_attrs
+    );
+
+    Value res = inlineAsm.getRes();
+
+    auto getIntAttr = [&](int v) {
+      return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
+    };
+    for (unsigned i = 0; i < 8; i++)
+      acc[idx[i]] = extract_val(f32_ty, res, getIntAttr(i));
+  };
+
+  for (unsigned k = 0; k < NK; k += 4)
+    for (unsigned m = 0; m < numM / 2; ++m)
+      for (unsigned n = 0; n < numN / 2; ++n) {
+        callMMA(m, n, k);
+      }
+
+  // replace with new packed result
+  Type structTy = LLVM::LLVMStructType::getLiteral(
+      ctx, SmallVector<Type>(acc.size(), type::f32Ty(ctx)));
+  Value res = getStructFromElements(loc, acc, rewriter, structTy);
+  rewriter.replaceOp(op, res);
+
   return success();
 }
 
@@ -4087,9 +4225,9 @@ DotOpMmaV1ConversionHelper::extractLoadedOperand(
           llStruct.getLoc(), llStruct, rewriter);
 
   for (int i = 0; i < n0; ++i)
-    for (int j = 0; j < n1; ++j) {
-      rcds[{i, j}] =
-          std::make_pair(elems[2 * (i * n1 + j)], elems[2 * (i * n1 + j) + 1]);
+    for (int k = 0; k < n1; ++k) {
+      rcds[{i, 4 * k}] = std::make_pair(elems[2 * (i * n1 + 4 * k)],
+                                        elems[2 * (i * n1 + 4 * k) + 1]);
     }
 
   return rcds;
