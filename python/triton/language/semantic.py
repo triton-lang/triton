@@ -657,11 +657,13 @@ def cast(input: tl.tensor,
     if src_sca_ty.is_floating() and dst_sca_ty.is_int():
         # TODO: is this correct?
         if dst_sca_ty.is_bool():
-            return tl.tensor(builder.create_fp_to_ui(input.handle,
+            return not_equal(input, tl._to_tensor(0, builder), builder)
+        elif dst_sca_ty.is_int_signed():
+            return tl.tensor(builder.create_fp_to_si(input.handle,
                                                      dst_ty.to_ir(builder)),
                              dst_ty)
         else:
-            return tl.tensor(builder.create_fp_to_si(input.handle,
+            return tl.tensor(builder.create_fp_to_ui(input.handle,
                                                      dst_ty.to_ir(builder)),
                              dst_ty)
 
