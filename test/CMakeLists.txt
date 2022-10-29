@@ -15,3 +15,12 @@ set(TRITON_TEST_DEPENDS
   triton-opt
   FileCheck
 )
+
+add_lit_testsuite(check-triton-lit-tests "Running the triton regression tests"
+  ${CMAKE_CURRENT_BINARY_DIR}
+  DEPENDS ${TRITON_TEST_DEPENDS}
+  )
+
+set_target_properties(check-triton-lit-tests PROPERTIES FOLDER "Tests")
+
+add_lit_testsuites(TRITON-LIT-TESTS ${CMAKE_CURRENT_SOURCE_DIR} DEPENDS ${TRITON_TEST_DEPENDS})
