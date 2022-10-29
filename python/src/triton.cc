@@ -170,9 +170,8 @@ void init_triton_ir(py::module &&m) {
       .def("replace_all_uses_with",
            [](mlir::Value &self, mlir::Value &newValue) {
              self.replaceAllUsesWith(newValue);
-           })
+           });
 
-      ;
   py::class_<mlir::BlockArgument, mlir::Value>(m, "block_arguement");
 
   py::class_<mlir::Region>(m, "region")
