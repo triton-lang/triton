@@ -993,6 +993,7 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     module = optimize_tritongpu_ir(module, num_stages)
     if output == "ttgir":
         return module.str()
+
     if extern_libs:
         add_external_libs(module, extern_libs)
 
