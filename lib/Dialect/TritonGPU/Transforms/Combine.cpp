@@ -87,7 +87,6 @@ public:
     if (!llvm::isa<triton::gpu::ConvertLayoutOp>(op))
       return mlir::failure();
     auto convert = llvm::cast<triton::gpu::ConvertLayoutOp>(op);
-    auto srcType = convert.getOperand().getType().cast<RankedTensorType>();
     auto dstType = convert.getType().cast<RankedTensorType>();
     // we don't handle conversions to DotOperandEncodingAttr
     // this is a heuristics to accomodate fused attention
@@ -219,10 +218,10 @@ Operation *cloneWithInferType(mlir::PatternRewriter &rewriter, Operation *op,
   auto typeInfer = dyn_cast<InferTypeOpInterface>(newOp);
   if (typeInfer) {
     SmallVector<Type, 1> newType;
-    auto sucess = typeInfer.inferReturnTypes(
+    auto success = typeInfer.inferReturnTypes(
         newOp->getContext(), newOp->getLoc(), newOp->getOperands(),
         newOp->getAttrDictionary(), newOp->getRegions(), newType);
-    if (success)
+    if (succeeded(success))
       newOp->getResult(0).setType(newType.front());
   }
   return newOp;
@@ -364,10 +363,6 @@ public:
   rematerializeForLoop(mlir::PatternRewriter &rewriter, scf::ForOp &forOp,
                        size_t i, RankedTensorType newType,
                        triton::gpu::ConvertLayoutOp origConversion) const {
-
-    auto newEncoding = newType.cast<RankedTensorType>().getEncoding();
-    auto ctx = forOp.getContext();
-    auto isInLoop = [&](Operation *op) { return op->getParentOp() == forOp; };
     // Rewrite init argument
     Type origType = forOp.getInitArgs()[i].getType();
     SmallVector<Value, 4> newInitArgs = forOp.getInitArgs();
@@ -418,11 +413,10 @@ public:
     return newResults;
   }
 
-  mlir::LogicalResult matchAndRewrite(mlir::Operation *op,
-                                      mlir::PatternRewriter &rewriter) const {
-
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
     auto forOp = cast<scf::ForOp>(op);
-    auto isInLoop = [&](Operation *op) { return op->getParentOp() == forOp; };
     auto iterArgs = forOp.getRegionIterArgs();
     for (auto iterArg : llvm::enumerate(iterArgs)) {
       // if (iterArg.index() != 1)
@@ -480,7 +474,6 @@ public:
     auto forOp = dyn_cast<scf::ForOp>(cvt->getParentOp());
     if (!forOp)
       return mlir::failure();
-    auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
     auto isInLoop = [&](Operation *op) { return op->getParentOp() == forOp; };
 
     SetVector<Operation *> cvtSlices;

@@ -142,7 +142,7 @@ private:
     BufferT(BufferKind kind) : BufferT(kind, 0, 0) {}
     BufferT(BufferKind kind, size_t size) : BufferT(kind, size, 0) {}
     BufferT(BufferKind kind, size_t size, size_t offset)
-        : kind(kind), size(size), offset(offset), id(nextId++) {}
+        : kind(kind), id(nextId++), size(size), offset(offset) {}
 
     bool intersects(const BufferT &other) const {
       return Interval<size_t>(offset, offset + size)

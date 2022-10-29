@@ -1,5 +1,4 @@
 import distutils
-import distutils.spawn
 import os
 import platform
 import re
@@ -136,14 +135,15 @@ class CMakeBuild(build_ext):
         if not os.path.exists(llvm_build_dir):
             os.makedirs(llvm_build_dir)
         # python directories
-        python_include_dirs = [distutils.sysconfig.get_python_inc()] + ['/usr/local/cuda/include']
+        python_include_dir = distutils.sysconfig.get_python_inc()
         cmake_args = [
+            "-DLLVM_ENABLE_WERROR=ON",
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
             "-DTRITON_BUILD_TUTORIALS=OFF",
             "-DTRITON_BUILD_PYTHON_MODULE=ON",
             # '-DPYTHON_EXECUTABLE=' + sys.executable,
             # '-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
-            "-DPYTHON_INCLUDE_DIRS=" + ";".join(python_include_dirs),
+            "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
             "-DLLVM_EXTERNAL_LIT=" + lit_dir
         ] + thirdparty_cmake_args
 
