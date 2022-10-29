@@ -649,9 +649,12 @@ def cast(input: tl.tensor,
     if src_sca_ty.is_int() and dst_sca_ty.is_int() and \
        (src_sca_ty.int_bitwidth != dst_sca_ty.int_bitwidth or src_sca_ty.int_signedness != dst_sca_ty.int_signedness):
         sign_extend = src_sca_ty.is_int_signed() and not src_sca_ty.is_bool()
-        return tl.tensor(builder.create_int_cast(input.handle,
-                                                 dst_ty.to_ir(builder), sign_extend),
-                         dst_ty)
+        if(dst_sca_ty.is_bool()):
+          return not_equal(input, tl._to_tensor(0, builder), builder)
+        else:
+          return tl.tensor(builder.create_int_cast(input.handle,
+                                                   dst_ty.to_ir(builder), sign_extend),
+                           dst_ty)
 
     # Float to Int
     if src_sca_ty.is_floating() and dst_sca_ty.is_int():
