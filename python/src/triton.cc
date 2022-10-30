@@ -422,7 +422,12 @@ void init_triton_ir(py::module &&m) {
       .def("get_int32_attr", &mlir::OpBuilder::getI32IntegerAttr)
       // Use arith.ConstantOp to create constants
       // // Constants
-      // .def("get_int1", &ir::builder::get_int1, ret::reference)
+      .def("get_int1",
+           [](mlir::OpBuilder &self, bool v) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
+                 loc, v, self.getI1Type()));
+           })
       .def("get_int32",
            [](mlir::OpBuilder &self, int64_t v) -> mlir::Value {
              auto loc = self.getUnknownLoc();
