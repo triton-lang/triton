@@ -1484,36 +1484,36 @@ def test_call():
 # # -------------
 
 
-# def test_if():
+def test_if():
 
-#     @triton.jit
-#     def kernel(Cond, XTrue, XFalse, Ret):
-#         pid = tl.program_id(0)
-#         cond = tl.load(Cond)
-#         if pid % 2:
-#             tl.store(Ret, tl.load(XTrue))
-#         else:
-#             tl.store(Ret, tl.load(XFalse))
+    @triton.jit
+    def kernel(Cond, XTrue, XFalse, Ret):
+        pid = tl.program_id(0)
+        cond = tl.load(Cond)
+        if pid % 2:
+            tl.store(Ret, tl.load(XTrue))
+        else:
+            tl.store(Ret, tl.load(XFalse))
 
-#     cond = torch.ones(1, dtype=torch.int32, device='cuda')
-#     x_true = torch.tensor([3.14], dtype=torch.float32, device='cuda')
-#     x_false = torch.tensor([1.51], dtype=torch.float32, device='cuda')
-#     ret = torch.empty(1, dtype=torch.float32, device='cuda')
-#     kernel[(1,)](cond, x_true, x_false, ret)
+    cond = torch.ones(1, dtype=torch.int32, device='cuda')
+    x_true = torch.tensor([3.14], dtype=torch.float32, device='cuda')
+    x_false = torch.tensor([1.51], dtype=torch.float32, device='cuda')
+    ret = torch.empty(1, dtype=torch.float32, device='cuda')
+    kernel[(1,)](cond, x_true, x_false, ret)
 
 
-# def test_num_warps_pow2():
-#     dst = torch.empty(128, device='cuda')
+def test_num_warps_pow2():
+    dst = torch.empty(128, device='cuda')
 
-#     @triton.jit
-#     def _kernel(dst):
-#         pass
+    @triton.jit
+    def _kernel(dst):
+        pass
 
-#     with pytest.raises(AssertionError, match='must be a power of 2'):
-#         _kernel[(1,)](dst=dst, num_warps=3)
-#     _kernel[(1,)](dst=dst, num_warps=1)
-#     _kernel[(1,)](dst=dst, num_warps=2)
-#     _kernel[(1,)](dst=dst, num_warps=4)
+    with pytest.raises(AssertionError, match='must be a power of 2'):
+        _kernel[(1,)](dst=dst, num_warps=3)
+    _kernel[(1,)](dst=dst, num_warps=1)
+    _kernel[(1,)](dst=dst, num_warps=2)
+    _kernel[(1,)](dst=dst, num_warps=4)
 
 # # -------------
 # # test extern
