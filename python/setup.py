@@ -3,7 +3,6 @@ import os
 import platform
 import re
 import shutil
-from struct import pack
 import subprocess
 import sys
 import tarfile
@@ -68,9 +67,9 @@ def get_thirdparty_packages(triton_cache_path):
     for p in packages:
         package_root_dir = os.path.join(triton_cache_path, p.package)
         package_dir = os.path.join(package_root_dir, p.name)
-        if p.syspath_var_name in os.environ:
-          package_dir = os.environ[p.syspath_var_name]
         test_file_path = os.path.join(package_dir, p.test_file)
+        if p.syspath_var_name in os.environ:
+            package_dir = os.environ[p.syspath_var_name]
         if not os.path.exists(test_file_path):
             try:
                 shutil.rmtree(package_root_dir)
