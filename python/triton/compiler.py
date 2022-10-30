@@ -400,14 +400,14 @@ class CodeGenerator(ast.NodeVisitor):
                     then_block.merge_block_before(if_op.get_then_block())
                     self.builder.set_insertion_point_to_end(if_op.get_then_block())
                     if len(names) > 0:
-                      self.builder.create_yield_op([then_defs[n].handle for n in names])
+                        self.builder.create_yield_op([then_defs[n].handle for n in names])
                     if not node.orelse:
                         else_block = if_op.get_else_block()
                     else:
                         else_block.merge_block_before(if_op.get_else_block())
                     self.builder.set_insertion_point_to_end(if_op.get_else_block())
                     if len(names) > 0:
-                      self.builder.create_yield_op([else_defs[n].handle for n in names])
+                        self.builder.create_yield_op([else_defs[n].handle for n in names])
                 else:  # no else block
                     if_op = self.builder.create_if_op([ty.to_ir(self.builder) for ty in ret_types], cond.handle, False)
                     then_block.merge_block_before(if_op.get_then_block())
@@ -529,7 +529,7 @@ class CodeGenerator(ast.NodeVisitor):
             loop_block.merge_block_before(after_block)
             self.builder.set_insertion_point_to_end(after_block)
             if len(yields) > 0:
-              self.builder.create_yield_op([y.handle for y in yields])
+                self.builder.create_yield_op([y.handle for y in yields])
 
         # update global uses in while_op
         for i, name in enumerate(names):
