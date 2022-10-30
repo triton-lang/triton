@@ -158,6 +158,7 @@ void init_triton_ir(py::module &&m) {
       .def("is_fp16", &mlir::Type::isF16);
 
   py::class_<mlir::Value>(m, "value")
+      .def(py::init<>())
       .def("set_attr",
            [](mlir::Value &self, std::string &name,
               mlir::Attribute &attr) -> void {
@@ -378,7 +379,10 @@ void init_triton_ir(py::module &&m) {
       .def("ret",
            [](mlir::OpBuilder &self, std::vector<mlir::Value> &vals) -> void {
              auto loc = self.getUnknownLoc();
-             self.create<mlir::ReturnOp>(loc, vals);
+             if (vals.empty()) {
+               self.create<mlir::ReturnOp>(loc);
+             } else
+               self.create<mlir::ReturnOp>(loc, vals);
            })
       .def("call",
            [](mlir::OpBuilder &self, mlir::FuncOp &func,

@@ -685,8 +685,7 @@ class CodeGenerator(ast.NodeVisitor):
             fn_name = mangle_fn(fn.__name__, arg_types, constants)
             # generate function def if necessary
             if not self.module.has_function(fn_name):
-                ret_type = triton.language.void
-                prototype = triton.language.function_type([ret_type], arg_types)
+                prototype = triton.language.function_type([], arg_types)
                 gscope = sys.modules[fn.fn.__module__].__dict__
                 generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types)
                 generator.visit(fn.parse())
@@ -696,7 +695,7 @@ class CodeGenerator(ast.NodeVisitor):
                 callee_ret_type = self.function_ret_types[fn_name]
             symbol = self.module.get_function(fn_name)
             call_op = self.builder.call(symbol, arg_vals)
-            if call_op.get_num_results() == 0:
+            if call_op.get_num_results() == 0 or callee_ret_type is None:
                 return None
             elif call_op.get_num_results() == 1:
                 return triton.language.tensor(call_op.get_result(0), callee_ret_type)
