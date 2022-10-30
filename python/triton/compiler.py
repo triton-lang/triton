@@ -196,7 +196,7 @@ class CodeGenerator(ast.NodeVisitor):
             return tuple(ret_types)
         else:
             ret = triton.language.core._to_tensor(ret_value, self.builder)
-            self.builder.ret([ret_value.handle])
+            self.builder.ret([ret.handle])
             return ret.type
 
     def visit_FunctionDef(self, node):
