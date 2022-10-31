@@ -1188,14 +1188,17 @@ struct BroadcastOpConversion
         assert(srcShape[d] == 1);
         broadcastDims.push_back(d);
         srcLogicalShape[d] = 1;
-        srcLogicalShape[d + rank] =
-            std::max(unsigned(1), srcLayout.getSizePerThread()[d]);
+        srcLogicalShape[d + rank] = std::max<unsigned>(
+            1,
+            std::min<unsigned>(srcShape[d], srcLayout.getSizePerThread()[d]));
       } else {
         srcLogicalShape[d] = numCtas;
-        srcLogicalShape[d + rank] = resultLayout.getSizePerThread()[d];
+        srcLogicalShape[d + rank] = std::min<unsigned>(
+            resultShape[d], resultLayout.getSizePerThread()[d]);
       }
       resultLogicalShape[d] = numCtas;
-      resultLogicalShape[d + rank] = resultLayout.getSizePerThread()[d];
+      resultLogicalShape[d + rank] = std::min<unsigned>(
+          resultShape[d], resultLayout.getSizePerThread()[d]);
     }
     int64_t duplicates = 1;
     SmallVector<int64_t, 2> broadcastSizes(broadcastDims.size() * 2);
@@ -1231,10 +1234,13 @@ struct BroadcastOpConversion
         }
         auto resultLinearIndex =
             getLinearIndex<int64_t>(resultMultiDim, resultLogicalShape);
+        // llvm::outs() << i << " " << j << " " << resultLinearIndex << "\n";
         resultVals[resultLinearIndex] = srcVals[i];
       }
     }
     auto llvmStructTy = getTypeConverter()->convertType(resultTy);
+    // for (auto value : resultVals)
+    //   llvm::outs() << value << " " << srcElems << " " << duplicates << "\n";
 
     Value resultStruct =
         getStructFromElements(loc, resultVals, rewriter, llvmStructTy);

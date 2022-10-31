@@ -247,7 +247,8 @@ unsigned BlockedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   SmallVector<unsigned> elemsPerThread(rank);
   for (size_t i = 0; i < rank; ++i) {
     unsigned t = sizePerThread[i] * threadsPerWarp[i] * warpsPerCTA[i];
-    elemsPerThread[i] = ceil<unsigned>(shape[i], t) * sizePerThread[i];
+    elemsPerThread[i] = std::min<unsigned>(
+        shape[i], ceil<unsigned>(shape[i], t) * sizePerThread[i]);
   }
   return product<unsigned>(elemsPerThread);
 }
