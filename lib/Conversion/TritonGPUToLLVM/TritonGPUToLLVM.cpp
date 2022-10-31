@@ -2927,7 +2927,7 @@ struct DotOpMmaV1ConversionHelper {
   // Loading $c to registers, returns a LLVM::Struct.
   Value loadC(Value C, Value llC, ConversionPatternRewriter &rewriter) const;
 
-  static ArrayRef<unsigned> getOrder() { return order; }
+  static ArrayRef<unsigned> getOrder() { return mmaOrder; }
 
   // Compute the offset of the matrix to load.
   // Returns offsetAM, offsetAK, offsetBN, offsetBK.
@@ -2947,7 +2947,7 @@ struct DotOpMmaV1ConversionHelper {
 
 private:
   static constexpr unsigned instrShape[] = {16, 16, 4};
-  static constexpr unsigned order[] = {0, 1};
+  static constexpr unsigned mmaOrder[] = {0, 1};
 };
 
 // Helper for conversion of DotOp with mma<version=2>, that is sm>=80
@@ -3874,7 +3874,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
     int stepAK = isARow ? k / (numPtrA * vecA) * (numPtrA * vecA) : k;
     Value pa = gep(f16PtrTy, thePtrA,
                    i32_val(stepAM * strideRepM * strideAM + stepAK * strideAK));
-    Type aPtrTy = ptr_ty(vec_ty(i32_ty, vecA / 2), 3);
+    Type aPtrTy = ptr_ty(vec_ty(i32_ty, std::max<int>(vecA / 2, 1)), 3);
     Value ha = load(bitcast(pa, aPtrTy));
     // record lds that needs to be moved
     Value ha00 = bitcast(extract_element(ha, i32_val(0)), f16x2Ty);
@@ -3976,7 +3976,8 @@ Value DotOpMmaV1ConversionHelper::loadB(
     int stepBK = isBRow ? K : K / (numPtrB * vecB) * (numPtrB * vecB);
     Value pb = gep(f16PtrTy, thePtrB,
                    i32_val(stepBN * strideRepN * strideBN + stepBK * strideBK));
-    Value hb = load(bitcast(pb, ptr_ty(vec_ty(i32_ty, vecB / 2), 3)));
+    Value hb =
+        load(bitcast(pb, ptr_ty(vec_ty(i32_ty, std::max(vecB / 2, 1)), 3)));
     // record lds that needs to be moved
     Value hb00 = bitcast(extract_element(hb, i32_val(0)), f16x2Ty);
     Value hb01 = bitcast(extract_element(hb, i32_val(1)), f16x2Ty);
@@ -4086,7 +4087,8 @@ DotOpMmaV1ConversionHelper::extractLoadedOperand(
   int offset = 0;
   for (int i = 0; i < n0; ++i)
     for (int k = 0; k < n1; k += 4) {
-      rcds[{i, k}] = std::make_pair(elems[offset++], elems[offset++]);
+      rcds[{i, k}] = std::make_pair(elems[offset], elems[offset + 1]);
+      offset += 2;
     }
 
   return rcds;
