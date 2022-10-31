@@ -842,8 +842,7 @@ struct LoadOpConversion
     DenseElementsAttr constAttr;
     int64_t splatVal = 0;
     if (valueElemTy.isa<IntegerType>() && other &&
-        matchPattern(other, m_Constant(&constAttr)) &&
-        constAttr.isSplat()) {
+        matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat()) {
       otherIsSplatConstInt = true;
       splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
     }
@@ -2171,12 +2170,13 @@ public:
         return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
       };
 
-      Type fp16x2Ty = vec_ty(type::f16Ty(ctx), 2);
+      // The struct should have exactly the same element types.
+      Type elemType = resV4.getType().cast<LLVM::LLVMStructType>().getBody()[0];
 
-      return {extract_val(fp16x2Ty, resV4, getIntAttr(0)),
-              extract_val(fp16x2Ty, resV4, getIntAttr(1)),
-              extract_val(fp16x2Ty, resV4, getIntAttr(2)),
-              extract_val(fp16x2Ty, resV4, getIntAttr(3))};
+      return {extract_val(elemType, resV4, getIntAttr(0)),
+              extract_val(elemType, resV4, getIntAttr(1)),
+              extract_val(elemType, resV4, getIntAttr(2)),
+              extract_val(elemType, resV4, getIntAttr(3))};
     } else if (elemBytes == 4 &&
                needTrans) { // Use lds.32 to load tf32 matrices
       Value ptr2 = getPtr(ptrIdx + 1);
@@ -2187,20 +2187,21 @@ public:
 
       Value elems[4];
       Type elemTy = type::f32Ty(ctx);
+      Type elemPtrTy = ptr_ty(elemTy);
       if (kOrder == 1) {
-        elems[0] = load(gep(elemTy, ptr, i32_val(sOffsetElem)));
-        elems[1] = load(gep(elemTy, ptr2, i32_val(sOffsetElem)));
+        elems[0] = load(gep(elemPtrTy, ptr, i32_val(sOffsetElem)));
+        elems[1] = load(gep(elemPtrTy, ptr2, i32_val(sOffsetElem)));
         elems[2] =
-            load(gep(elemTy, ptr, i32_val(sOffsetElem + sOffsetArrElem)));
+            load(gep(elemPtrTy, ptr, i32_val(sOffsetElem + sOffsetArrElem)));
         elems[3] =
-            load(gep(elemTy, ptr2, i32_val(sOffsetElem + sOffsetArrElem)));
+            load(gep(elemPtrTy, ptr2, i32_val(sOffsetElem + sOffsetArrElem)));
       } else {
-        elems[0] = load(gep(elemTy, ptr, i32_val(sOffsetElem)));
-        elems[2] = load(gep(elemTy, ptr2, i32_val(sOffsetElem)));
+        elems[0] = load(gep(elemPtrTy, ptr, i32_val(sOffsetElem)));
+        elems[2] = load(gep(elemPtrTy, ptr2, i32_val(sOffsetElem)));
         elems[1] =
-            load(gep(elemTy, ptr, i32_val(sOffsetElem + sOffsetArrElem)));
+            load(gep(elemPtrTy, ptr, i32_val(sOffsetElem + sOffsetArrElem)));
         elems[3] =
-            load(gep(elemTy, ptr2, i32_val(sOffsetElem + sOffsetArrElem)));
+            load(gep(elemPtrTy, ptr2, i32_val(sOffsetElem + sOffsetArrElem)));
       }
 
       return {elems[0], elems[1], elems[2], elems[3]};
@@ -2232,17 +2233,18 @@ public:
 
       Value i8Elems[4][4];
       Type elemTy = type::i8Ty(ctx);
+      Type elemPtrTy = ptr_ty(elemTy);
       if (kOrder == 1) {
         Value offset = i32_val(sOffsetElem);
 
         for (int i = 0; i < 2; ++i)
           for (int j = 0; j < 4; ++j)
-            i8Elems[i][j] = load(gep(elemTy, ptrs[i][j], offset));
+            i8Elems[i][j] = load(gep(elemPtrTy, ptrs[i][j], offset));
 
         offset = i32_val(sOffsetElem + sOffsetArrElem);
         for (int i = 2; i < 4; ++i)
           for (int j = 0; j < 4; ++j)
-            i8Elems[i][j] = load(gep(elemTy, ptrs[i - 2][j], offset));
+            i8Elems[i][j] = load(gep(elemPtrTy, ptrs[i - 2][j], offset));
 
         for (int m = 0; m < 4; ++m) {
           for (int e = 0; e < 4; ++e)
@@ -2253,14 +2255,14 @@ public:
       } else { // k first
         Value offset = i32_val(sOffsetElem);
         for (int j = 0; j < 4; ++j)
-          i8Elems[0][j] = load(gep(elemTy, ptrs[0][j], offset));
+          i8Elems[0][j] = load(gep(elemPtrTy, ptrs[0][j], offset));
         for (int j = 0; j < 4; ++j)
-          i8Elems[2][j] = load(gep(elemTy, ptrs[1][j], offset));
+          i8Elems[2][j] = load(gep(elemPtrTy, ptrs[1][j], offset));
         offset = i32_val(sOffsetElem + sOffsetArrElem);
         for (int j = 0; j < 4; ++j)
-          i8Elems[1][j] = load(gep(elemTy, ptrs[0][j], offset));
+          i8Elems[1][j] = load(gep(elemPtrTy, ptrs[0][j], offset));
         for (int j = 0; j < 4; ++j)
-          i8Elems[3][j] = load(gep(elemTy, ptrs[1][j], offset));
+          i8Elems[3][j] = load(gep(elemPtrTy, ptrs[1][j], offset));
 
         for (int m = 0; m < 4; ++m) {
           for (int e = 0; e < 4; ++e)
@@ -2834,9 +2836,11 @@ struct MMA16816ConversionHelper {
         return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
       };
 
+      llvm::outs() << "mmaOut.getType: " << mmaOut.getType() << "\n";
+      Type elemTy = mmaOut.getType().cast<LLVM::LLVMStructType>().getBody()[0];
       for (int i = 0; i < 4; i++)
         fc[m * colsPerThread + 4 * n + i] =
-            extract_val(type::f32Ty(ctx), mmaOut, getIntAttr(i));
+            extract_val(elemTy, mmaOut, getIntAttr(i));
     };
 
     for (unsigned k = 0; k < numRepK; ++k)
@@ -2844,9 +2848,14 @@ struct MMA16816ConversionHelper {
         for (unsigned n = 0; n < numRepN; ++n)
           callMma(2 * m, n, 2 * k);
 
+    // bitcast to fp32 in bulk
+    for (auto &elem : fc) {
+      elem = bitcast(type::i32Ty(ctx), elem);
+    }
+
     // replace with new packed result
     Type structTy = LLVM::LLVMStructType::getLiteral(
-        ctx, SmallVector<Type>(fc.size(), type::f32Ty(ctx)));
+        ctx, SmallVector<Type>(fc.size(), type::i32Ty(ctx)));
     Value res = getStructFromElements(loc, fc, rewriter, structTy);
     rewriter.replaceOp(op, res);
 
@@ -2940,10 +2949,9 @@ private:
 
     assert(!elems.empty());
 
-    Type fp16Ty = aTensorTy.getElementType();
-    Type fp16x2Ty = vec_ty(fp16Ty, 2);
+    Type elemTy = elems[0].getType();
     Type structTy = LLVM::LLVMStructType::getLiteral(
-        ctx, SmallVector<Type>(elems.size(), fp16x2Ty));
+        ctx, SmallVector<Type>(elems.size(), elemTy));
     auto result = getStructFromElements(loc, elems, rewriter, structTy);
     return result;
   }
