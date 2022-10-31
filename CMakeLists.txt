@@ -229,6 +229,7 @@ target_link_libraries(triton
   MLIRExecutionEngine
   MLIRMathToLLVM
   MLIRNVVMToLLVMIRTranslation
+  MLIRROCDLToLLVMIRTranslation
   MLIRIR
 )
 

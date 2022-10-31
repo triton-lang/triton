@@ -925,7 +925,7 @@ def ptx_get_kernel_name(ptx: str) -> str:
             return line.split()[-1]
 
 
-@functools.lru_cache
+@functools.lru_cache()
 def ptx_get_version(cuda_version) -> int:
     '''
     Get the highest PTX version supported by the current CUDA driver.
@@ -990,19 +990,20 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     llvm_ir = make_llvm_ir(module)
 
     assert device >= 0, "device should be provided."
-    ptxas, cuda_version = path_to_ptxas()
-    compute_capability = torch.cuda.get_device_capability(device)
-    compute_capability = compute_capability[0] * 10 + compute_capability[1]
-    ptx_version = ptx_get_version(cuda_version)
-    ptx = make_ptx(llvm_ir, compute_capability, ptx_version)
-    shem_size = _triton.get_shared_memory_size(module)
-    kernel_name = ptx_get_kernel_name(ptx)
-    if output == "ptx":
-        return ptx, shem_size, kernel_name
+    if torch.version.hip is None:
+        ptxas, cuda_version = path_to_ptxas()
+        compute_capability = torch.cuda.get_device_capability(device)
+        compute_capability = compute_capability[0] * 10 + compute_capability[1]
+        ptx_version = ptx_get_version(cuda_version)
+        ptx = make_ptx(llvm_ir, compute_capability, ptx_version)
+        shem_size = _triton.get_shared_memory_size(module)
+        kernel_name = ptx_get_kernel_name(ptx)
+        if output == "ptx":
+            return ptx, shem_size, kernel_name
 
-    cubin = make_cubin(ptx, ptxas, compute_capability)
-    if output == "cubin":
-        return cubin, ptx, shem_size, kernel_name
+        cubin = make_cubin(ptx, ptxas, compute_capability)
+        if output == "cubin":
+            return cubin, ptx, shem_size, kernel_name
 
     assert False
 

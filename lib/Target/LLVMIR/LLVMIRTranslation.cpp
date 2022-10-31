@@ -10,6 +10,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Transforms/Passes.h"
@@ -86,11 +87,19 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
   auto context = module->getContext();
   DialectRegistry registry;
   mlir::registerLLVMDialectTranslation(registry);
+
+#ifdef USE_ROCM
+  mlir::registerROCDLDialectTranslation(registry);
+#else
   mlir::registerNVVMDialectTranslation(registry);
+#endif
+
   context->appendDialectRegistry(registry);
 
+#ifndef USE_ROCM
   llvm::DenseMap<llvm::StringRef, NVVMMetadata> nvvmMetadata;
   extractNVVMMetadata(module, &nvvmMetadata);
+#endif
 
   auto llvmModule = mlir::translateModuleToLLVMIR(module, *llvmContext);
   if (!llvmModule) {
@@ -109,13 +118,13 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
     llvm::errs() << "Failed to optimize LLVM IR " << err << "\n";
     return nullptr;
   }
-
+#ifndef USE_ROCM
   for (auto &func : llvmModule->functions()) {
     auto it = nvvmMetadata.find(func.getName());
     if (it != nvvmMetadata.end())
       amendLLVMFunc(&func, it->second);
   }
-
+#endif
   return llvmModule;
 }
 
