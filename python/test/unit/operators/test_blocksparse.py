@@ -2,6 +2,7 @@ import pytest
 import torch
 
 import triton
+import triton._C.libtriton.triton as _triton
 
 
 @pytest.mark.parametrize("MODE", ["sdd", "dds", "dsd"])
@@ -125,6 +126,10 @@ def test_attention_fwd_bwd(
     batch_size=2,
     n_heads=2,
 ):
+    cc = _triton.runtime.cc(_triton.runtime.backend.CUDA, torch.cuda.current_device())
+    if cc < 70:
+        pytest.skip("Only test tl.dot() on devices with sm >= 70")
+
     # inputs
     qkv_shape = (batch_size, n_heads, n_ctx, 64)
     qkvs = [
