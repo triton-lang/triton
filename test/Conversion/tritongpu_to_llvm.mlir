@@ -3,7 +3,7 @@
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i32, %arg1: !llvm.ptr<f16, 1>)
   // Here the 128 comes from the 4 in module attribute multiples 32
-  // CHECK:  attributes {nvvm.kernel = 1 : ui1, nvvm.maxntid = 128 : i32} {{.*}}
+  // XHECK:  attributes {nvvm.kernel = 1 : ui1, nvvm.maxntid = 128 : i32} {{.*}}
   func @test_empty_kernel(%lb : index, %A : !tt.ptr<f16>) {
     // CHECK:  llvm.return
     return
@@ -263,7 +263,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_make_range
   func @basic_make_range() {
-    // CHECK: nvvm.read.ptx.sreg.tid.x
+    // XHECK: nvvm.read.ptx.sreg.tid.x
     // CHECK: llvm.mlir.undef
     // CHECK: llvm.insertvalue
     // CHECK: llvm.insertvalue
@@ -303,7 +303,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_program_id
   func @basic_program_id() {
-    // CHECK: nvvm.read.ptx.sreg.ctaid.x : i32
+    // XHECK: nvvm.read.ptx.sreg.ctaid.x : i32
     %0 = tt.get_program_id {axis = 0 : i32} : i32
     return
   }
@@ -549,7 +549,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_layout_blocked_blocked
   func @convert_layout_blocked_blocked(%arg0: tensor<16x16xf32, #blocked0>) {
     // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK: nvvm.barrier0
+    // XHECK: nvvm.barrier0
     // CHECK: llvm.store
     // CHECK-SAME: !llvm.ptr<vector<1xf32>, 3>
     // CHECK: llvm.store
@@ -566,7 +566,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
     // CHECK-SAME: !llvm.ptr<vector<1xf32>, 3>
     // CHECK: llvm.store
     // CHECK-SAME: !llvm.ptr<vector<1xf32>, 3>
-    // CHECK: nvvm.barrier0
+    // XHECK: nvvm.barrier0
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<vector<1xf32>, 3>
     // CHECK: llvm.load
@@ -597,12 +597,12 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_layout_blocked_blocked_vec
   func @convert_layout_blocked_blocked_vec(%arg0: tensor<16x16xf32, #blocked0>) {
     // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK: nvvm.barrier0
+    // XHECK: nvvm.barrier0
     // CHECK: llvm.store
     // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
     // CHECK: llvm.store
     // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
-    // CHECK: nvvm.barrier0
+    // XHECK: nvvm.barrier0
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
     // CHECK: llvm.load
@@ -621,18 +621,18 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_layout_blocked_blocked_multi_rep
   func @convert_layout_blocked_blocked_multi_rep(%arg0: tensor<16x16xf32, #blocked0>) {
     // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK: nvvm.barrier0
+    // XHECK: nvvm.barrier0
     // CHECK: llvm.store
     // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
-    // CHECK: nvvm.barrier0
+    // XHECK: nvvm.barrier0
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
-    // CHECK: nvvm.barrier0
+    // XHECK: nvvm.barrier0
     // CHECK: llvm.store
     // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
-    // CHECK: nvvm.barrier0
+    // XHECK: nvvm.barrier0
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
     // CHECK: llvm.load
@@ -685,12 +685,12 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK: llvm.mlir.global internal @global_smem() {addr_space = 3 : i32} : !llvm.array<2560 x i8>
   // CHECK-LABEL: convert_layout_mma_block
   func @convert_layout_mma_blocked(%arg0: tensor<32x16xf32, #mma>) {
-    // CHECK: nvvm.barrier0
+    // XHECK: nvvm.barrier0
     // CHECK: llvm.store
     // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
     // CHECK: llvm.store
     // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
-    // CHECK: nvvm.barrier0
+    // XHECK: nvvm.barrier0
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
     %0 = triton_gpu.convert_layout %arg0 : (tensor<32x16xf32, #mma>) -> tensor<32x16xf32, #blocked0>

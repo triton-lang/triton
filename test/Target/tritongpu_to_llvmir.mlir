@@ -3,8 +3,8 @@
 // == LLVM IR check begin ==
 // CHECK-LABEL: ; ModuleID = 'LLVMDialectModule'
 // CHECK: define void @test_empty_kernel
-// CHECK: !nvvm.annotations
-// CHECK: !{void (i32, half addrspace(1)*)* @test_empty_kernel, !"maxntidx", i32 128}
+// XHECK: !nvvm.annotations
+// XHECK: !{void (i32, half addrspace(1)*)* @test_empty_kernel, !"maxntidx", i32 128}
 
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
