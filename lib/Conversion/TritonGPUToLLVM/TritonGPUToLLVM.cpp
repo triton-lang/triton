@@ -126,6 +126,95 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
   LLVM::createIndexConstant(rewriter, loc, this->getTypeConverter(),           \
                             __VA_ARGS__)
 
+LLVM::LLVMFuncOp getVprintfDeclaration(OpBuilder &builder) {
+  auto module = builder.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  StringRef funcName("vprintf");
+  Operation *funcOp = module.lookupSymbol(funcName);
+  if (funcOp)
+    return cast<LLVMFuncOp>(*funcOp);
+
+  auto *context = builder.getContext();
+  auto retType = builder.getI32Type();
+
+  SmallVector<Type> argsType{
+      LLVM::LLVMPointerType::get(IntegerType::get(context, 8)),
+      LLVM::LLVMPointerType::get(IntegerType::get(context, 8))};
+  auto funcType = LLVM::LLVMFunctionType::get(retType, argsType);
+
+  return builder.create<LLVMFuncOp>(UnknownLoc::get(context), funcName,
+                                    funcType);
+}
+
+void llPrintf(StringRef msg, ValueRange args, OpBuilder &builder) {
+
+  static const char formatStringPrefix[] = "printfFormat_";
+  assert(!msg.empty() && "printf with empty string not support");
+
+  auto *context = builder.getContext();
+  auto moduleOp = builder.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  auto funcOp = getVprintfDeclaration(builder);
+
+  Type int8Ty = builder.getIntegerType(8);
+  Type int8Ptr = LLVM::LLVMPointerType::get(int8Ty);
+  Type int32Ty = builder.getIntegerType(32);
+  Value one = builder.create<LLVM::ConstantOp>(
+      UnknownLoc::get(context), int32Ty, builder.getI32IntegerAttr(1));
+  Value zero = builder.create<LLVM::ConstantOp>(
+      UnknownLoc::get(context), int32Ty, builder.getI32IntegerAttr(0));
+
+  unsigned stringNumber = 0;
+  SmallString<16> stringConstName;
+  do {
+    stringConstName.clear();
+    (formatStringPrefix + Twine(stringNumber++)).toStringRef(stringConstName);
+  } while (moduleOp.lookupSymbol(stringConstName));
+
+  llvm::SmallString<20> formatString(msg);
+  formatString.push_back('\0');
+  size_t formatStringSize = formatString.size_in_bytes();
+  auto globalType = LLVM::LLVMArrayType::get(int8Ty, formatStringSize);
+
+  auto global = builder.create<LLVM::GlobalOp>(
+      UnknownLoc::get(context), globalType,
+      /*isConstant=*/true, LLVM::Linkage::Internal, stringConstName,
+      builder.getStringAttr(formatString));
+  Value globalPtr =
+      builder.create<LLVM::AddressOfOp>(UnknownLoc::get(context), global);
+  Value stringStart =
+      builder.create<LLVM::GEPOp>(UnknownLoc::get(context), int8Ptr, globalPtr,
+                                  mlir::ValueRange({zero, zero}));
+
+  Value bufferPtr =
+      builder.create<LLVM::NullOp>(UnknownLoc::get(context), int8Ptr);
+  if (args.size() >= 1) {
+    SmallVector<Type> argTypes;
+    for (auto arg : args) {
+      argTypes.push_back(arg.getType());
+    }
+    Type structTy = LLVM::LLVMStructType::getLiteral(context, argTypes);
+
+    Value allocated = builder.create<LLVM::AllocaOp>(
+        UnknownLoc::get(context), structTy, one, /*alignment=*/0);
+
+    for (const auto &entry : llvm::enumerate(args)) {
+      auto index = builder.create<LLVM::ConstantOp>(
+          UnknownLoc::get(context), int32Ty,
+          builder.getI32IntegerAttr(entry.index()));
+      auto fieldPtr = builder.create<LLVM::GEPOp>(
+          UnknownLoc::get(context),
+          LLVM::LLVMPointerType::get(argTypes[entry.index()]), allocated,
+          ArrayRef<Value>{zero, index});
+      builder.create<LLVM::StoreOp>(UnknownLoc::get(context), entry.value(),
+                                    fieldPtr);
+    }
+    bufferPtr = builder.create<LLVM::BitcastOp>(UnknownLoc::get(context),
+                                                int8Ptr, allocated);
+  }
+
+  ValueRange operands{stringStart, bufferPtr};
+  builder.create<LLVM::CallOp>(UnknownLoc::get(context), funcOp, operands);
+}
+
 } // namespace LLVM
 } // namespace mlir
 
