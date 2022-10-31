@@ -10,6 +10,8 @@ include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td" // NoSideEffect
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 
+def ResultsAreSharedEncoding: NativeOpTrait<"ResultsAreSharedEncoding">;
+
 class TTG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonGPU_Dialect, mnemonic, traits>;
 
@@ -76,6 +78,7 @@ def TTG_SelectOp : TTG_Op<"select", [NoSideEffect]> {
 
 def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
                                     [SameVariadicOperandSize,
+                                     ResultsAreSharedEncoding,
                                      // MemoryEffects<[MemRead]>, doesn't work with CSE but seems like it should?
                                      NoSideEffect,
                                      TypesMatchWith<"infer mask type from src type",
@@ -149,12 +152,9 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
   let parser = [{ return parseInsertSliceAsyncOp(parser, result); }];
 
   let printer = [{ return printInsertSliceAsyncOp(p, *this); }];
-
-  // result needs to be of shared layout
-  let verifier = [{ return ::verify(*this); }];
 }
 
-def TTG_ExtractSliceOp : TTG_Op<"extract_slice", [NoSideEffect, InferTypeOpInterface]> {
+def TTG_ExtractSliceOp : TTG_Op<"extract_slice", [NoSideEffect, ResultsAreSharedEncoding, InferTypeOpInterface]> {
   let summary = "extract slice";
   let description = [{
     The "extract_slice" operation extracts a `$result` tensor from a `$src` tensor as
@@ -185,12 +185,9 @@ def TTG_ExtractSliceOp : TTG_Op<"extract_slice", [NoSideEffect, InferTypeOpInter
           ::mlir::DictionaryAttr attributes, ::mlir::RegionRange regions,
           ::llvm::SmallVectorImpl<::mlir::Type> &inferredReturnTypes);
   }];
-
-  // result needs to be of shared layout
-  let verifier = [{ return ::verify(*this); }];
 }
 
-def TTG_AllocTensorOp : TTG_Op<"alloc_tensor", [NoSideEffect]> {
+def TTG_AllocTensorOp : TTG_Op<"alloc_tensor", [NoSideEffect, ResultsAreSharedEncoding]> {
   let summary = "allocate tensor";
 
   let description = [{
@@ -203,9 +200,6 @@ def TTG_AllocTensorOp : TTG_Op<"alloc_tensor", [NoSideEffect]> {
   let assemblyFormat = [{attr-dict `:` type($result)}];
 
   let results = (outs TT_Tensor:$result);
-
-  // result needs to be of shared layout
-  let verifier = [{ return ::verify(*this); }];
 }
 
 #endif
