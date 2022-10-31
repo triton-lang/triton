@@ -26,6 +26,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
+#include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "llvm/Support/SourceMgr.h"
@@ -169,9 +170,8 @@ void init_triton_ir(py::module &&m) {
       .def("replace_all_uses_with",
            [](mlir::Value &self, mlir::Value &newValue) {
              self.replaceAllUsesWith(newValue);
-           })
+           });
 
-      ;
   py::class_<mlir::BlockArgument, mlir::Value>(m, "block_arguement");
 
   py::class_<mlir::Region>(m, "region")
@@ -422,7 +422,12 @@ void init_triton_ir(py::module &&m) {
       .def("get_int32_attr", &mlir::OpBuilder::getI32IntegerAttr)
       // Use arith.ConstantOp to create constants
       // // Constants
-      // .def("get_int1", &ir::builder::get_int1, ret::reference)
+      .def("get_int1",
+           [](mlir::OpBuilder &self, bool v) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
+                 loc, v, self.getI1Type()));
+           })
       .def("get_int32",
            [](mlir::OpBuilder &self, int64_t v) -> mlir::Value {
              auto loc = self.getUnknownLoc();
@@ -659,13 +664,13 @@ void init_triton_ir(py::module &&m) {
              auto loc = self.getUnknownLoc();
              // get element type if necessary
              mlir::Type srcType = src.getType();
+             auto srcTensorType = srcType.dyn_cast<mlir::RankedTensorType>();
+             auto dstTensorType = dstType.dyn_cast<mlir::RankedTensorType>();
              mlir::Type srcEltType = srcType;
              mlir::Type dstEltType = dstType;
-             if (dstType.isa<mlir::RankedTensorType>()) {
-               dstEltType =
-                   dstType.cast<mlir::RankedTensorType>().getElementType();
-               srcEltType =
-                   srcType.cast<mlir::RankedTensorType>().getElementType();
+             if (dstTensorType && srcTensorType) {
+               dstEltType = dstTensorType.getElementType();
+               srcEltType = srcTensorType.getElementType();
              }
              unsigned srcWidth = srcEltType.getIntOrFloatBitWidth();
              unsigned dstWidth = dstEltType.getIntOrFloatBitWidth();
@@ -1301,39 +1306,36 @@ void init_triton_translation(py::module &m) {
           py::gil_scoped_release allow_threads;
 
           // compile ptx with ptxas
-          char _fsrc[L_tmpnam];
-          char _flog[L_tmpnam];
-          std::tmpnam(_fsrc);
-          std::tmpnam(_flog);
-          std::string fsrc = _fsrc;
-          std::string flog = _flog;
-          std::string fbin = fsrc + ".o";
+          llvm::SmallString<64> fsrc;
+          llvm::SmallString<64> flog;
+          llvm::sys::fs::createTemporaryFile("compile-ptx-src", "", fsrc);
+          llvm::sys::fs::createTemporaryFile("compile-ptx-log", "", flog);
+          std::string fbin = std::string(fsrc) + ".o";
+          llvm::FileRemover srcRemover(fsrc);
+          llvm::FileRemover logRemover(flog);
+          llvm::FileRemover binRemover(fbin);
+          const char *_fsrc = fsrc.c_str();
+          const char *_flog = flog.c_str();
           const char *_fbin = fbin.c_str();
-          std::ofstream ofs(fsrc);
+          std::ofstream ofs(_fsrc);
           ofs << ptxCode << std::endl;
           ofs.close();
           std::string cmd;
           int err;
           cmd = ptxasPath + " -v --gpu-name=sm_" + std::to_string(capability) +
-                " " + fsrc + " -o " + fsrc + ".o 2> " + flog;
+                " " + _fsrc + " -o " + _fsrc + ".o 2> " + _flog;
           err = system(cmd.c_str());
           if (err != 0) {
             std::ifstream _log(_flog);
             std::string log(std::istreambuf_iterator<char>(_log), {});
-            unlink(_fsrc);
-            unlink(_flog);
             throw std::runtime_error("Internal Triton PTX codegen error: \n" +
                                      log);
           }
           std::ifstream _cubin(_fbin, std::ios::binary);
           std::string cubin(std::istreambuf_iterator<char>(_cubin), {});
           _cubin.close();
-          unlink(_fsrc);
-          unlink(_flog);
-          unlink(_fbin);
-
           py::bytes bytes(cubin);
-          return bytes;
+          return std::move(bytes);
         });
 
   m.def("add_external_libs",
@@ -1345,8 +1347,8 @@ void init_triton_translation(py::module &m) {
 
 void init_triton(py::module &m) {
   py::module subm = m.def_submodule("triton");
-  // init_triton_codegen(std::move(subm.def_submodule("code_gen")));
-  init_triton_runtime(std::move(subm.def_submodule("runtime")));
-  init_triton_ir(std::move(subm.def_submodule("ir")));
+  // init_triton_codegen(subm.def_submodule("code_gen"));
+  init_triton_runtime(subm.def_submodule("runtime"));
+  init_triton_ir(subm.def_submodule("ir"));
   init_triton_translation(subm);
 }

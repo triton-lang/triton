@@ -196,7 +196,7 @@ class CodeGenerator(ast.NodeVisitor):
             return tuple(ret_types)
         else:
             ret = triton.language.core._to_tensor(ret_value, self.builder)
-            self.builder.ret([ret_value.handle])
+            self.builder.ret([ret.handle])
             return ret.type
 
     def visit_FunctionDef(self, node):
@@ -399,13 +399,15 @@ class CodeGenerator(ast.NodeVisitor):
                     if_op = self.builder.create_if_op([ty.to_ir(self.builder) for ty in ret_types], cond.handle, True)
                     then_block.merge_block_before(if_op.get_then_block())
                     self.builder.set_insertion_point_to_end(if_op.get_then_block())
-                    self.builder.create_yield_op([then_defs[n].handle for n in names])
+                    if len(names) > 0:
+                        self.builder.create_yield_op([then_defs[n].handle for n in names])
                     if not node.orelse:
                         else_block = if_op.get_else_block()
                     else:
                         else_block.merge_block_before(if_op.get_else_block())
                     self.builder.set_insertion_point_to_end(if_op.get_else_block())
-                    self.builder.create_yield_op([else_defs[n].handle for n in names])
+                    if len(names) > 0:
+                        self.builder.create_yield_op([else_defs[n].handle for n in names])
                 else:  # no else block
                     if_op = self.builder.create_if_op([ty.to_ir(self.builder) for ty in ret_types], cond.handle, False)
                     then_block.merge_block_before(if_op.get_then_block())
@@ -526,7 +528,8 @@ class CodeGenerator(ast.NodeVisitor):
                                                                 [ty.to_ir(self.builder) for ty in ret_types])
             loop_block.merge_block_before(after_block)
             self.builder.set_insertion_point_to_end(after_block)
-            self.builder.create_yield_op([y.handle for y in yields])
+            if len(yields) > 0:
+                self.builder.create_yield_op([y.handle for y in yields])
 
         # update global uses in while_op
         for i, name in enumerate(names):
@@ -685,8 +688,7 @@ class CodeGenerator(ast.NodeVisitor):
             fn_name = mangle_fn(fn.__name__, arg_types, constants)
             # generate function def if necessary
             if not self.module.has_function(fn_name):
-                ret_type = triton.language.void
-                prototype = triton.language.function_type([ret_type], arg_types)
+                prototype = triton.language.function_type([], arg_types)
                 gscope = sys.modules[fn.fn.__module__].__dict__
                 generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types)
                 generator.visit(fn.parse())
@@ -696,7 +698,7 @@ class CodeGenerator(ast.NodeVisitor):
                 callee_ret_type = self.function_ret_types[fn_name]
             symbol = self.module.get_function(fn_name)
             call_op = self.builder.call(symbol, arg_vals)
-            if call_op.get_num_results() == 0:
+            if call_op.get_num_results() == 0 or callee_ret_type is None:
                 return None
             elif call_op.get_num_results() == 1:
                 return triton.language.tensor(call_op.get_result(0), callee_ret_type)
@@ -993,6 +995,7 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     module = optimize_tritongpu_ir(module, num_stages)
     if output == "ttgir":
         return module.str()
+
     if extern_libs:
         add_external_libs(module, extern_libs)
 

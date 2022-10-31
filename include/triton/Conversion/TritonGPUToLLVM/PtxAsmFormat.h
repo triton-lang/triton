@@ -15,9 +15,9 @@ class Location;
 namespace triton {
 using llvm::StringRef;
 
-class PTXInstr;
-class PTXInstrCommon;
-class PTXInstrExecution;
+struct PTXInstr;
+struct PTXInstrCommon;
+struct PTXInstrExecution;
 
 // PTXBuilder helps to manage a PTX asm program consists of one or multiple
 // instructions.
@@ -83,7 +83,7 @@ struct PTXBuilder {
     Operand() = default;
     Operand(const Operation &) = delete;
     Operand(Value value, StringRef constraint)
-        : value(value), constraint(constraint) {}
+        : constraint(constraint), value(value) {}
 
     bool isList() const { return !value && constraint.empty(); }
 
@@ -120,7 +120,7 @@ struct PTXBuilder {
   Operand *newListOperand(unsigned count, mlir::Value val,
                           const std::string &constraint) {
     auto *list = newOperand();
-    for (int i = 0; i < count; ++i) {
+    for (unsigned i = 0; i < count; ++i) {
       list->listAppend(newOperand(val, constraint));
     }
     return list;
@@ -128,7 +128,7 @@ struct PTXBuilder {
 
   Operand *newListOperand(unsigned count, const std::string &constraint) {
     auto *list = newOperand();
-    for (int i = 0; i < count; ++i) {
+    for (unsigned i = 0; i < count; ++i) {
       list->listAppend(newOperand(constraint));
     }
     return list;
@@ -172,8 +172,8 @@ private:
     return argArchive.back().get();
   }
 
-  friend class PTXInstr;
-  friend class PTXInstrCommon;
+  friend struct PTXInstr;
+  friend struct PTXInstrCommon;
 
 protected:
   llvm::SmallVector<std::unique_ptr<Operand>, 6> argArchive;
@@ -209,7 +209,7 @@ protected:
   PTXBuilder *builder{};
   llvm::SmallVector<std::string, 4> instrParts;
 
-  friend class PTXInstrExecution;
+  friend struct PTXInstrExecution;
 };
 
 template <class ConcreteT> struct PTXInstrBase : public PTXInstrCommon {
@@ -309,7 +309,7 @@ struct PTXInstrExecution {
   PTXInstrExecution() = default;
   explicit PTXInstrExecution(PTXInstrCommon *instr,
                              llvm::ArrayRef<Operand *> oprs)
-      : instr(instr), argsInOrder(oprs.begin(), oprs.end()) {}
+      : argsInOrder(oprs.begin(), oprs.end()), instr(instr) {}
 
   // Prefix a predicate to the instruction.
   PTXInstrExecution &predicate(mlir::Value value, StringRef constraint = "b") {
