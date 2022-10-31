@@ -4083,9 +4083,6 @@ DotOpMmaV1ConversionHelper::extractLoadedOperand(
       ConvertTritonGPUOpToLLVMPatternBase::getElementsFromStruct(
           llStruct.getLoc(), llStruct, rewriter);
 
-  llvm::outs() << "elems: " << elems.size() << "\n";
-  llvm::outs() << "elem.type: " << elems[0].getType() << "\n";
-
   int offset = 0;
   for (int i = 0; i < n0; ++i)
     for (int k = 0; k < n1; k += 4) {
