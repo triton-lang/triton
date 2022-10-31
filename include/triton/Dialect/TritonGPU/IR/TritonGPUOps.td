@@ -77,10 +77,9 @@ def TTG_SelectOp : TTG_Op<"select", [NoSideEffect]> {
 
 
 def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
-                                    [SameVariadicOperandSize,
+                                    [AttrSizedOperandSegments,
                                      ResultsAreSharedEncoding,
-                                     // MemoryEffects<[MemRead]>, doesn't work with CSE but seems like it should?
-                                     NoSideEffect,
+                                     MemoryEffects<[MemRead]>,
                                      TypesMatchWith<"infer mask type from src type",
                                                     "src", "mask", "getI1SameShape($_self)",
                                                     "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
@@ -95,6 +94,10 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
 
       It returns a copy of `$dst` with the proper slice updated asynchronously with the value of `$src`.
       This operation is non-blocking, and `$results` will have the updated value after the corresponding async_wait.
+
+      When converting from `tt.load` to `triton_gpu.insert_slice_async`, the `$evict`, `$cache`, and `$isVolatile` fields
+      might be ignored on certain hardware. For example, on NVIDIA GPUs, the cache policy is determined by the backend,
+      and `$evict` and `$isVolatile` are ignored because they apply to L1 cache only.
 
       The insert_slice_async operation supports the following arguments:
 

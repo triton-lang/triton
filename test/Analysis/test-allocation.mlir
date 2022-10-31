@@ -178,7 +178,7 @@ func @insert_slice_async(%A : !tt.ptr<f16>, %i1 : i1) {
   // CHECK: offset = 0, size = 512
   %tensor = arith.constant dense<0.000000e+00> : tensor<1x16x16xf16, #A>
   %index = arith.constant 0 : i32
-  %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index, %mask, %other {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isOtherUnspecified = false, isVolatile = false} : tensor<16x16x!tt.ptr<f16>, #AL> -> tensor<1x16x16xf16, #A>
+  %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index, %mask, %other {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x16x!tt.ptr<f16>, #AL> -> tensor<1x16x16xf16, #A>
   return
   // CHECK-NEXT: size = 512
 }

@@ -459,7 +459,7 @@ void SharedEncodingAttr::print(AsmPrinter &printer) const {
 
 ParseResult parseInsertSliceAsyncOp(OpAsmParser &parser,
                                     OperationState &result) {
-  SmallVector<OpAsmParser::OperandType, 4> allOperands;
+  SmallVector<OpAsmParser::OperandType, 8> allOperands;
   Type srcType, dstType;
   SMLoc allOperandLoc = parser.getCurrentLocation();
   if (parser.parseOperandList(allOperands) ||
@@ -474,14 +474,27 @@ ParseResult parseInsertSliceAsyncOp(OpAsmParser &parser,
   operandTypes.push_back(dstType); // dst
   operandTypes.push_back(
       IntegerType::get(parser.getBuilder().getContext(), 32)); // index
-  if (allOperands.size() >= 4)
+
+  int hasMask = 0, hasOther = 0;
+  if (allOperands.size() >= 4) {
     operandTypes.push_back(triton::getI1SameShape(srcType)); // mask
-  if (allOperands.size() >= 5)
+    hasMask = 1;
+  }
+  if (allOperands.size() >= 5) {
     operandTypes.push_back(triton::getPointeeType(srcType)); // other
+    hasOther = 1;
+  }
 
   if (parser.resolveOperands(allOperands, operandTypes, allOperandLoc,
                              result.operands))
     return failure();
+
+  // Deduce operand_segment_sizes from the number of the operands.
+  auto operand_segment_sizesAttrName =
+      InsertSliceAsyncOp::operand_segment_sizesAttrName(result.name);
+  result.addAttribute(
+      operand_segment_sizesAttrName,
+      parser.getBuilder().getI32VectorAttr({1, 1, 1, hasMask, hasOther}));
   return success();
 }
 
