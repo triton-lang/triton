@@ -121,7 +121,7 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 #define vec_ty(type, num) VectorType::get(num, type)
 #define f32_val(...) LLVM::createConstantF32(loc, rewriter, __VA_ARGS__)
 #define void_ty(ctx) LLVM::LLVMVoidType::get(ctx)
-#define struct_ty(...) LLVM::LLVMStructType::getLiteral(__VA_ARGS__)
+#define struct_ty(...) LLVM::LLVMStructType::getLiteral(ctx, __VA_ARGS__)
 
 // Creator for constant
 #define i32_val(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
@@ -2244,7 +2244,8 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
   }
 
   SmallVector<Type> types(outElems, llvmElemTy);
-  Type structTy = struct_ty(getContext(), types);
+  auto *ctx = llvmElemTy.getContext();
+  Type structTy = struct_ty(types);
   Value result = getStructFromElements(loc, outVals, rewriter, structTy);
   rewriter.replaceOp(op, result);
 
@@ -2875,7 +2876,55 @@ struct DotOpMmaV1ConversionHelper {
     auto *ctx = operand.getContext();
     Type fp32Ty = type::f32Ty(ctx);
     // f16*f16+f32->f32
-    return struct_ty(ctx, SmallVector<Type>{8, fp32Ty});
+    return struct_ty(SmallVector<Type>{8, fp32Ty});
+  }
+
+  // number of fp16x2 elems for $a.
+  int numElemsPerThreadA(RankedTensorType tensorTy) const {
+    auto shape = tensorTy.getShape();
+    // NOTE Some issue here, in TypeConverter, we can only get a tensor type
+    // with dot_op layout here. It is impossible to get a shared layout, which
+    // we need for visiting the corresponding order of tensor.
+    auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
+    auto order = sharedLayout.getOrder();
+
+    bool isARow = order[0] != 0;
+    bool isAVec4 = !isARow && shape[order[0]] <= 16; // fp16*4 = 16bytes
+    int packSize0 = (isARow || isAVec4) ? 1 : 2;
+
+    SmallVector<int> fpw({2, 2, 1});
+    int repM = 2 * packSize0;
+    int repK = 1;
+    int spwM = fpw[0] * 4 * repM;
+    SmallVector<int> rep({repM, 0, repK}); // pad N with 0
+    SmallVector<int> spw({spwM, 0, 1});    // pad N with 0
+
+    int vecA = sharedLayout.getVec();
+
+    int NK = shape[1];
+    unsigned numM = rep[0] * shape[0] / (spw[0] * wpt[0]);
+
+    int elemsPerLd = vecA > 4 ? 4 : 2;
+    return (numM / 2) * (NK / 4) * elemsPerLd;
+  }
+
+  // number of fp16x2 elems for $b.
+  int numElemsPerThreadB(RankedTensorType tensorTy) const {
+    auto shape = tensorTy.getShape();
+    auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
+    auto order = sharedLayout.getOrder();
+    bool isBRow = order[0] != 0;
+    bool isBVec4 = isBRow && shape[order[0]] <= 16;
+    int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
+    SmallVector<int> fpw({2, 2, 1});
+    SmallVector<int> rep({0, 2 * packSize1, 1});       // pad M with 0
+    SmallVector<int> spw({0, fpw[1] * 4 * rep[1], 1}); // pad M with 0
+    int vecB = sharedLayout.getVec();
+    int NK = shape[0];
+
+    unsigned numN = rep[1] * shape[1] / (spw[1] * wpt[0]);
+    int elemsPerLd = vecB > 4 ? 4 : 2;
+    return (numN / 2) * (NK / 4) * elemsPerLd;
   }
 
   // Loading $a from smem to registers, returns a LLVM::Struct.
@@ -3593,14 +3642,12 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
     DotOpMmaV1ConversionHelper helper(mmaLayout);
     if (dotOperandLayout.getOpIdx() == 0) {
       // operand $a
-      res =
-          helper.loadA(src, adaptor.src(), getThreadId(rewriter, loc),
-                       getSharedMemoryBase(loc, rewriter, src), loc, rewriter);
+      res = helper.loadA(src, adaptor.src(), getThreadId(rewriter, loc),
+                         adaptor.src(), loc, rewriter);
     } else if (dotOperandLayout.getOpIdx() == 1) {
       // operand $b
-      res =
-          helper.loadB(src, adaptor.src(), getThreadId(rewriter, loc),
-                       getSharedMemoryBase(loc, rewriter, src), loc, rewriter);
+      res = helper.loadB(src, adaptor.src(), getThreadId(rewriter, loc),
+                         adaptor.src(), loc, rewriter);
     }
   } else {
     assert(false && "Unsupported mma layout found");
@@ -3882,13 +3929,14 @@ Value DotOpMmaV1ConversionHelper::loadA(
         loadA(m, k);
 
   SmallVector<Value> elems;
-  for (auto &item : has) { // has is a map, the key should be ordered.
+  elems.reserve(has.size() * 2);
+  auto vecTy = vec_ty(f16_ty, 2);
+  for (auto item : has) { // has is a map, the key should be ordered.
     elems.push_back(item.second.first);
     elems.push_back(item.second.second);
   }
 
-  Type fp16x2Ty = vec_ty(type::f16Ty(ctx), 2);
-  Type resTy = struct_ty(ctx, SmallVector<Type>(elems.size() / 2, fp16x2Ty));
+  Type resTy = struct_ty(SmallVector<Type>(elems.size(), f16x2Ty));
   Value res = getStructFromElements(loc, elems, rewriter, resTy);
   return res;
 }
@@ -3988,7 +4036,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
     elems.push_back(item.second.second);
   }
   Type fp16x2Ty = vec_ty(type::f16Ty(ctx), 2);
-  Type resTy = struct_ty(ctx, SmallVector<Type>(elems.size() / 2, fp16x2Ty));
+  Type resTy = struct_ty(SmallVector<Type>(elems.size(), fp16x2Ty));
   Value res = getStructFromElements(loc, elems, rewriter, resTy);
   return res;
 }
@@ -4160,7 +4208,7 @@ public:
         DotOpMmaV1ConversionHelper helper(mmaLayout);
         int repM = helper.getRepM(shape[0]);
         int repN = helper.getRepN(shape[1]);
-        int elems = 4 * repM * repN;
+        int elems = 8 * repM * repN;
         return LLVM::LLVMStructType::getLiteral(
             ctx, SmallVector<Type>(elems, type.getElementType()));
       }
@@ -4172,9 +4220,9 @@ public:
     } else if (auto dot_op_layout =
                    layout.dyn_cast_or_null<DotOperandEncodingAttr>()) {
       auto mmaLayout = dot_op_layout.getParent().cast<MmaEncodingAttr>();
+      auto wpt = mmaLayout.getWarpsPerCTA();
+      Type elemTy = type.getElementType();
       if (mmaLayout.getVersion() == 2) {
-        auto wpt = mmaLayout.getWarpsPerCTA();
-        Type elemTy = type.getElementType();
 
         if (dot_op_layout.getOpIdx() == 0) { // $a
           int elems =
@@ -4187,8 +4235,22 @@ public:
           int elems =
               MMA16816ConversionHelper::getBNumElemsPerThread(type, wpt);
           Type x2Ty = vec_ty(elemTy, 2);
-          return LLVM::LLVMStructType::getLiteral(
-              ctx, SmallVector<Type>(elems, x2Ty));
+          return struct_ty(SmallVector<Type>(elems, x2Ty));
+        }
+      }
+
+      if (mmaLayout.getVersion() == 1) {
+        DotOpMmaV1ConversionHelper helper(mmaLayout);
+
+        if (dot_op_layout.getOpIdx() == 0) { // $a
+          int elems = helper.numElemsPerThreadA(type);
+          Type x2Ty = vec_ty(elemTy, 2);
+          return struct_ty(SmallVector<Type>(elems, x2Ty));
+        }
+        if (dot_op_layout.getOpIdx() == 1) { // $b
+          int elems = helper.numElemsPerThreadB(type);
+          Type x2Ty = vec_ty(elemTy, 2);
+          return struct_ty(SmallVector<Type>(elems, x2Ty));
         }
       }
 
