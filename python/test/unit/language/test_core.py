@@ -1067,15 +1067,18 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                          [(epilogue, allow_tf32, dtype)
                           for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
                           for allow_tf32 in [True, False]
-                          for dtype in ['float16']
+                          for dtype in ['float32', 'float16']
                           if not (allow_tf32 and (dtype in ['float16']))])
 def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
-    cc = _triton.runtime.cc(_triton.runtime.backend.CUDA, torch.cuda.current_device())
-    if cc < 80:
-        if dtype == 'int8':
-            pytest.skip("Only test int8 on devices with sm >= 80")
-        elif dtype == 'float32' and allow_tf32:
-            pytest.skip("Only test tf32 on devices with sm >= 80")
+    if torch.version.hip is not None:
+        pass
+    else:
+        cc = _triton.runtime.cc(_triton.runtime.backend.CUDA, torch.cuda.current_device())
+        if cc < 80:
+            if dtype == 'int8':
+                pytest.skip("Only test int8 on devices with sm >= 80")
+            elif dtype == 'float32' and allow_tf32:
+                pytest.skip("Only test tf32 on devices with sm >= 80")
 
     M, N, K = 128, 128, 64
     num_warps = 8
@@ -1170,15 +1173,18 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
     # print(z_ref[:,0], z_tri[:,0])
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
     # make sure ld/st are vectorized
-    ptx = pgm.asm['ptx']
-    assert 'ld.global.v4' in ptx
-    assert 'st.global.v4' in ptx
-    if allow_tf32:
-        assert 'mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32' in ptx
-    elif dtype == 'float32':
-        assert 'mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32' not in ptx
-    elif dtype == 'int8':
-        assert 'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
+    if torch.version.hip is not None:
+        pass
+    else:
+        ptx = pgm.asm['ptx']
+        assert 'ld.global.v4' in ptx
+        assert 'st.global.v4' in ptx
+        if allow_tf32:
+            assert 'mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32' in ptx
+        elif dtype == 'float32':
+            assert 'mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32' not in ptx
+        elif dtype == 'int8':
+            assert 'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
 
 
 def test_dot_without_load():
