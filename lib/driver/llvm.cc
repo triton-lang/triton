@@ -26,6 +26,7 @@
 #include <memory>
 #include <regex>
 #include <iomanip>
+#include <string>
 #include "triton/driver/llvm.h"
 #include "triton/driver/dispatch.h"
 #include "triton/driver/error.h"
@@ -68,6 +69,24 @@ extern "C"
   int del_curterm(char *nterm) { return 0; }
   int tigetnum(char *capname) { return 0; }
   int setupterm(char *term, int fildes, int *errret) { return 0; }
+}
+
+namespace {
+
+std::string gen_random(const int len) {
+    static const char alphanum[] =
+        "0123456789"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz";
+    std::string tmp_s;
+    tmp_s.reserve(len);
+
+    for (int i = 0; i < len; ++i) {
+        tmp_s += alphanum[rand() % (sizeof(alphanum) - 1)];
+    }
+    return tmp_s;
+}
+
 }
 
 namespace triton
@@ -286,7 +305,7 @@ namespace triton
       auto in_time_t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
       std::stringstream cur_time;
       cur_time << std::put_time(std::localtime(&in_time_t), "%Y-%m-%d--%I-%M-%S");
-      std::string kernel_name = module->getModuleIdentifier() + "_" + cur_time.str();
+      std::string kernel_name = module->getModuleIdentifier() + "_" + cur_time.str() + "_" + gen_random(12);
       // verify and store llvm
       llvm::legacy::PassManager pm;
       pm.add(llvm::createVerifierPass());
