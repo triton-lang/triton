@@ -2879,14 +2879,10 @@ struct DotOpMmaV1ConversionHelper {
     return struct_ty(SmallVector<Type>{8, fp32Ty});
   }
 
-  // number of fp16x2 elems for $a.
+  // number of fp16x2 elements for $a.
   int numElemsPerThreadA(RankedTensorType tensorTy) const {
     auto shape = tensorTy.getShape();
-    // NOTE Some issue here, in TypeConverter, we can only get a tensor type
-    // with dot_op layout here. It is impossible to get a shared layout, which
-    // we need for visiting the corresponding order of tensor.
-    auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
-    auto order = sharedLayout.getOrder();
+    auto order = getOrder();
 
     bool isARow = order[0] != 0;
     bool isAVec4 = !isARow && shape[order[0]] <= 16; // fp16*4 = 16bytes
@@ -2899,31 +2895,35 @@ struct DotOpMmaV1ConversionHelper {
     SmallVector<int> rep({repM, 0, repK}); // pad N with 0
     SmallVector<int> spw({spwM, 0, 1});    // pad N with 0
 
-    int vecA = sharedLayout.getVec();
-
     int NK = shape[1];
     unsigned numM = rep[0] * shape[0] / (spw[0] * wpt[0]);
 
-    int elemsPerLd = vecA > 4 ? 4 : 2;
+    // NOTE We cound't get the vec from the shared layout.
+    // int vecA = sharedLayout.getVec();
+    // TODO[Superjomn]: Consider the case when vecA > 4
+    bool vecGt4 = false;
+    int elemsPerLd = vecGt4 ? 4 : 2;
     return (numM / 2) * (NK / 4) * elemsPerLd;
   }
 
-  // number of fp16x2 elems for $b.
+  // number of fp16x2 elements for $b.
   int numElemsPerThreadB(RankedTensorType tensorTy) const {
     auto shape = tensorTy.getShape();
-    auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
-    auto order = sharedLayout.getOrder();
+    auto order = getOrder();
     bool isBRow = order[0] != 0;
     bool isBVec4 = isBRow && shape[order[0]] <= 16;
     int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
     SmallVector<int> fpw({2, 2, 1});
     SmallVector<int> rep({0, 2 * packSize1, 1});       // pad M with 0
     SmallVector<int> spw({0, fpw[1] * 4 * rep[1], 1}); // pad M with 0
-    int vecB = sharedLayout.getVec();
+    // NOTE We cound't get the vec from the shared layout.
+    // int vecB = sharedLayout.getVec();
+    // TODO[Superjomn]: Consider the case when vecA > 4
+    bool vecGt4 = false;
+    int elemsPerLd = vecGt4 ? 4 : 2;
     int NK = shape[0];
 
     unsigned numN = rep[1] * shape[1] / (spw[1] * wpt[0]);
-    int elemsPerLd = vecB > 4 ? 4 : 2;
     return (numN / 2) * (NK / 4) * elemsPerLd;
   }
 
@@ -2937,6 +2937,8 @@ struct DotOpMmaV1ConversionHelper {
 
   // Loading $c to registers, returns a LLVM::Struct.
   Value loadC(Value C, Value llC, ConversionPatternRewriter &rewriter) const;
+
+  static ArrayRef<unsigned> getOrder() { return order; }
 
   // Compute the offset of the matrix to load.
   // Returns offsetAM, offsetAK, offsetBN, offsetBK.
@@ -2955,7 +2957,8 @@ struct DotOpMmaV1ConversionHelper {
                                   ConversionPatternRewriter &rewriter) const;
 
 private:
-  static constexpr std::array<unsigned, 3> instrShape{16, 16, 4};
+  static constexpr unsigned instrShape[] = {16, 16, 4};
+  static constexpr unsigned order[] = {0, 1};
 };
 
 // Helper for conversion of DotOp with mma<version=2>, that is sm>=80
@@ -3740,15 +3743,13 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
   unsigned numN = rep[1] * DShape[1] / (spw[1] * wpt[0]);
   unsigned NK = AShape[1];
 
-  auto has = helper.extractLoadedOperand(loadedA, numM, NK / 4, rewriter);
-  auto hbs = helper.extractLoadedOperand(loadedB, numN, NK / 4, rewriter);
+  auto has = helper.extractLoadedOperand(loadedA, numM / 2, NK, rewriter);
+  auto hbs = helper.extractLoadedOperand(loadedB, numN / 2, NK, rewriter);
 
-  size_t accSize = numM * numN * 8;
+  size_t accSize = numM * numN;
 
   // initialize accumulators
-  // TODO(Superjomn) Process C in convert_layout
-  // NOTE, we just assume C is zero.
-  SmallVector<Value> acc(accSize, f32_val(0.f));
+  SmallVector<Value> acc = getElementsFromStruct(loc, loadedC, rewriter);
 
   auto callMMA = [&](unsigned m, unsigned n, unsigned k) {
     auto ha = has[{m, k}];
@@ -3777,8 +3778,8 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
         {hb.second, "f"},
     });
     auto *COprs = builder.newListOperand();
-    for (int i = 0; i < acc.size(); i++)
-      COprs->listAppend(builder.newOperand(acc[i], std::to_string(i)));
+    for (int i = 0; i < 8; ++i)
+      COprs->listAppend(builder.newOperand(acc[idx[i]], std::to_string(i)));
 
     auto mma = builder.create("mma.sync.aligned.m8n8k4")
                    ->o(isARow ? "row" : "col")
@@ -3787,19 +3788,7 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
 
     mma(resOprs, AOprs, BOprs, COprs);
 
-    auto inlineAsm = rewriter.create<LLVM::InlineAsmOp>(
-        loc, helper.getMmaRetType(ATensorTy),
-        builder.getAllMLIRArgs(), // operands
-        builder.dump(),           // asm_string
-        builder.getConstraints(), // constraints
-        true,                     // has_side_effects
-        false,                    // is_align_stack
-        LLVM::AsmDialectAttr::get(ctx,
-                                  LLVM::AsmDialect::AD_ATT), // asm_dialect
-        ArrayAttr::get(ctx, {})                              // operand_attrs
-    );
-
-    Value res = inlineAsm.getRes();
+    Value res = builder.launch(rewriter, loc, helper.getMmaRetType(ATensorTy));
 
     auto getIntAttr = [&](int v) {
       return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
@@ -4115,10 +4104,13 @@ DotOpMmaV1ConversionHelper::extractLoadedOperand(
       ConvertTritonGPUOpToLLVMPatternBase::getElementsFromStruct(
           llStruct.getLoc(), llStruct, rewriter);
 
+  llvm::outs() << "elems: " << elems.size() << "\n";
+  llvm::outs() << "elem.type: " << elems[0].getType() << "\n";
+
+  int offset = 0;
   for (int i = 0; i < n0; ++i)
-    for (int k = 0; k < n1; ++k) {
-      rcds[{i, 4 * k}] = std::make_pair(elems[2 * (i * n1 + 4 * k)],
-                                        elems[2 * (i * n1 + 4 * k) + 1]);
+    for (int k = 0; k < n1; k += 4) {
+      rcds[{i, k}] = std::make_pair(elems[offset++], elems[offset++]);
     }
 
   return rcds;
@@ -4147,7 +4139,8 @@ Value convertSplatLikeOpWithMmaLayout(const MmaEncodingAttr &layout,
     DotOpMmaV1ConversionHelper helper(layout);
     int repM = helper.getRepM(shape[0]);
     int repN = helper.getRepN(shape[1]);
-    int elems = 4 * repM * repN;
+    // According to mma layout of v1, each thread process 8 elements.
+    int elems = 8 * repM * repN;
 
     auto structTy = LLVM::LLVMStructType::getLiteral(
         rewriter.getContext(), SmallVector<Type>(elems, elemType));
