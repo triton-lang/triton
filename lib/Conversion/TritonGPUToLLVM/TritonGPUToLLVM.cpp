@@ -127,9 +127,9 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
                             __VA_ARGS__)
 
 LLVM::LLVMFuncOp getVprintfDeclaration(OpBuilder &builder) {
-  auto module = builder.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  auto moduleOp = builder.getBlock()->getParent()->getParentOfType<ModuleOp>();
   StringRef funcName("vprintf");
-  Operation *funcOp = module.lookupSymbol(funcName);
+  Operation *funcOp = moduleOp.lookupSymbol(funcName);
   if (funcOp)
     return cast<LLVMFuncOp>(*funcOp);
 
@@ -140,6 +140,9 @@ LLVM::LLVMFuncOp getVprintfDeclaration(OpBuilder &builder) {
       LLVM::LLVMPointerType::get(IntegerType::get(context, 8)),
       LLVM::LLVMPointerType::get(IntegerType::get(context, 8))};
   auto funcType = LLVM::LLVMFunctionType::get(retType, argsType);
+
+  ConversionPatternRewriter::InsertionGuard guard(builder);
+  builder.setInsertionPointToStart(moduleOp.getBody());
 
   return builder.create<LLVMFuncOp>(UnknownLoc::get(context), funcName,
                                     funcType);
@@ -174,10 +177,16 @@ void llPrintf(StringRef msg, ValueRange args, OpBuilder &builder) {
   size_t formatStringSize = formatString.size_in_bytes();
   auto globalType = LLVM::LLVMArrayType::get(int8Ty, formatStringSize);
 
-  auto global = builder.create<LLVM::GlobalOp>(
-      UnknownLoc::get(context), globalType,
-      /*isConstant=*/true, LLVM::Linkage::Internal, stringConstName,
-      builder.getStringAttr(formatString));
+  LLVM::GlobalOp global;
+  {
+    ConversionPatternRewriter::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(moduleOp.getBody());
+    global = builder.create<LLVM::GlobalOp>(
+        UnknownLoc::get(context), globalType,
+        /*isConstant=*/true, LLVM::Linkage::Internal, stringConstName,
+        builder.getStringAttr(formatString));
+  }
+
   Value globalPtr =
       builder.create<LLVM::AddressOfOp>(UnknownLoc::get(context), global);
   Value stringStart =
@@ -192,9 +201,9 @@ void llPrintf(StringRef msg, ValueRange args, OpBuilder &builder) {
       argTypes.push_back(arg.getType());
     }
     Type structTy = LLVM::LLVMStructType::getLiteral(context, argTypes);
-
-    Value allocated = builder.create<LLVM::AllocaOp>(
-        UnknownLoc::get(context), structTy, one, /*alignment=*/0);
+    auto allocated = builder.create<LLVM::AllocaOp>(
+        UnknownLoc::get(context), LLVM::LLVMPointerType::get(structTy), one,
+        /*alignment=*/0);
 
     for (const auto &entry : llvm::enumerate(args)) {
       auto index = builder.create<LLVM::ConstantOp>(
@@ -1888,6 +1897,13 @@ public:
     }
     Value view = getStructFromElements(loc, resultVals, rewriter, structTy);
     rewriter.replaceOp(op, view);
+    // example for add printf
+#if 0
+    {
+      auto builder = rewriter.atBlockTerminator(rewriter.getInsertionBlock());
+      LLVM::llPrintf("hello world %d, %d\n", {i32_val(2008), i32_val(2023)}, builder);
+    }
+#endif
     return success();
   }
 
