@@ -2223,6 +2223,7 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
     }
     barrier();
     if (dstLayout.isa<BlockedEncodingAttr>() ||
+        dstLayout.isa<SliceEncodingAttr>() ||
         dstLayout.isa<MmaEncodingAttr>()) {
       processReplica(loc, rewriter, /*stNotRd*/ false, dstTy, outNumCTAsEachRep,
                      multiDimRepId, outVec, paddedRepShape, outOrd, outVals,

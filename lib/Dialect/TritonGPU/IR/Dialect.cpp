@@ -144,6 +144,20 @@ SmallVector<unsigned> getOrder(const Attribute &layout) {
                                  blockedLayout.getOrder().end());
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     return SmallVector<unsigned>{1, 0};
+  } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+    // assert(0 && "Unimplemented usage of getOrder");
+    SmallVector<unsigned> parentOrder = getOrder(sliceLayout.getParent());
+    unsigned dim = sliceLayout.getDim();
+    SmallVector<unsigned> order;
+    for (unsigned d : parentOrder) {
+      if (d == dim)
+        continue;
+      else if (d > dim)
+        order.push_back(d - 1);
+      else
+        order.push_back(d);
+    }
+    return order;
   } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
     return SmallVector<unsigned>(sharedLayout.getOrder().begin(),
                                  sharedLayout.getOrder().end());

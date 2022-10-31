@@ -70,6 +70,8 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
         std::max(std::min<unsigned>(srcTy.getShape()[d], srcShapePerCTA[d]),
                  std::min<unsigned>(dstTy.getShape()[d], dstShapePerCTA[d]));
   }
+  if (rank == 1)
+    return paddedRepShape;
   unsigned paddedDim = 1;
   if (auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>()) {
     paddedDim = dstBlockedLayout.getOrder()[0];

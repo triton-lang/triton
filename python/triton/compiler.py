@@ -996,6 +996,7 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     if output == "ttgir":
         return module.str()
 
+    print(module.str())
     if extern_libs:
         add_external_libs(module, extern_libs)
 
