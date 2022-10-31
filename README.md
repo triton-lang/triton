@@ -33,6 +33,15 @@ And the latest nightly release:
 pip install -U --pre triton
 ```
 
+# Install from source
+
+```
+git clone https://github.com/openai/triton.git;
+cd triton/python;
+pip install cmake; # build time dependency
+pip install -e .
+```
+
 # Changelog
 
 Version 1.1 is out! New features include:
