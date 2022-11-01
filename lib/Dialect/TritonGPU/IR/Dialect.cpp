@@ -247,8 +247,7 @@ unsigned BlockedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   SmallVector<unsigned> elemsPerThread(rank);
   for (size_t i = 0; i < rank; ++i) {
     unsigned t = sizePerThread[i] * threadsPerWarp[i] * warpsPerCTA[i];
-    elemsPerThread[i] = std::min<unsigned>(
-        shape[i], ceil<unsigned>(shape[i], t) * sizePerThread[i]);
+    elemsPerThread[i] = ceil<unsigned>(shape[i], t) * sizePerThread[i];
   }
   return product<unsigned>(elemsPerThread);
 }
@@ -275,7 +274,16 @@ unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
     assert(rank == blockedParent.getSizePerThread().size() - 1 &&
            "unexpected rank in SliceEncodingAttr::getElemsPerThread");
-    return blockedParent.getElemsPerThread(paddedShape(shape));
+    auto ret = blockedParent.getElemsPerThread(paddedShape(shape));
+    // // ret = ret / blockedParent.getSizePerThread()[getDim()];
+    // llvm::outs() << *this << " "
+    //              << "\n";
+    // llvm::outs() << "shape: ";
+    // for (auto s : shape)
+    //   llvm::outs() << s << " ";
+    // llvm::outs() << "\n";
+    // llvm::outs() << "ret: " << ret << "\n";
+    return ret;
   } else {
     assert(0 && "getElemsPerThread not implemented");
     return 0;

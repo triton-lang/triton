@@ -1188,17 +1188,14 @@ struct BroadcastOpConversion
         assert(srcShape[d] == 1);
         broadcastDims.push_back(d);
         srcLogicalShape[d] = 1;
-        srcLogicalShape[d + rank] = std::max<unsigned>(
-            1,
-            std::min<unsigned>(srcShape[d], srcLayout.getSizePerThread()[d]));
+        srcLogicalShape[d + rank] =
+            std::max<unsigned>(1, srcLayout.getSizePerThread()[d]);
       } else {
         srcLogicalShape[d] = numCtas;
-        srcLogicalShape[d + rank] = std::min<unsigned>(
-            resultShape[d], resultLayout.getSizePerThread()[d]);
+        srcLogicalShape[d + rank] = resultLayout.getSizePerThread()[d];
       }
       resultLogicalShape[d] = numCtas;
-      resultLogicalShape[d + rank] = std::min<unsigned>(
-          resultShape[d], resultLayout.getSizePerThread()[d]);
+      resultLogicalShape[d + rank] = resultLayout.getSizePerThread()[d];
     }
     int64_t duplicates = 1;
     SmallVector<int64_t, 2> broadcastSizes(broadcastDims.size() * 2);
@@ -1993,7 +1990,7 @@ private:
                       ArrayRef<unsigned> multiDimRepId, unsigned vec,
                       ArrayRef<unsigned> paddedRepShape,
                       ArrayRef<unsigned> outOrd, SmallVector<Value> &vals,
-                      Value smemBase) const;
+                      unsigned valOffset, Value smemBase) const;
 
   // blocked/mma -> blocked/mma.
   // Data padding in shared memory to avoid bank confict.
@@ -2020,7 +2017,7 @@ void ConvertLayoutOpConversion::processReplica(
     RankedTensorType type, ArrayRef<unsigned> numCTAsEachRep,
     ArrayRef<unsigned> multiDimRepId, unsigned vec,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> outOrd,
-    SmallVector<Value> &vals, Value smemBase) const {
+    SmallVector<Value> &vals, unsigned valOffset, Value smemBase) const {
   unsigned accumNumCTAsEachRep = product<unsigned>(numCTAsEachRep);
   auto layout = type.getEncoding();
   auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>();
@@ -2028,6 +2025,8 @@ void ConvertLayoutOpConversion::processReplica(
   auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>();
   auto rank = type.getRank();
   auto sizePerThread = getSizePerThread(layout);
+  if (sliceLayout)
+    sizePerThread = getSizePerThread(sliceLayout.getParent());
   auto accumSizePerThread = product<unsigned>(sizePerThread);
   SmallVector<unsigned> numCTAs(rank);
   auto shapePerCTA = getShapePerCTA(layout);
@@ -2161,7 +2160,8 @@ void ConvertLayoutOpConversion::processReplica(
             currVal =
                 icmp_ne(currVal, rewriter.create<LLVM::ConstantOp>(
                                      loc, i8_ty, rewriter.getI8IntegerAttr(0)));
-          vals[elemId + linearCTAId * accumSizePerThread + v] = currVal;
+          vals[valOffset + elemId + linearCTAId * accumSizePerThread + v] =
+              currVal;
         }
       }
     }
@@ -2209,6 +2209,8 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
   unsigned inVec = 0;
   unsigned outVec = 0;
   auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
+  inVec = 1;
+  outVec = 1;
 
   unsigned outElems = getElemsPerThread(dstTy);
   auto outOrd = getOrder(dstLayout);
@@ -2221,7 +2223,7 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
         srcLayout.isa<SliceEncodingAttr>() ||
         srcLayout.isa<MmaEncodingAttr>()) {
       processReplica(loc, rewriter, /*stNotRd*/ true, srcTy, inNumCTAsEachRep,
-                     multiDimRepId, inVec, paddedRepShape, outOrd, vals,
+                     multiDimRepId, inVec, paddedRepShape, outOrd, vals, 0,
                      smemBase);
     } else {
       assert(0 && "ConvertLayout with input layout not implemented");
@@ -2232,7 +2234,7 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
         dstLayout.isa<SliceEncodingAttr>() ||
         dstLayout.isa<MmaEncodingAttr>()) {
       processReplica(loc, rewriter, /*stNotRd*/ false, dstTy, outNumCTAsEachRep,
-                     multiDimRepId, outVec, paddedRepShape, outOrd, outVals,
+                     multiDimRepId, outVec, paddedRepShape, outOrd, outVals, 0,
                      smemBase);
     } else {
       assert(0 && "ConvertLayout with output layout not implemented");
