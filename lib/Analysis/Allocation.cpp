@@ -34,24 +34,16 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
          "Unexpect layout in getScratchConfigForCvtLayout()");
   unsigned rank = dstTy.getRank();
   SmallVector<unsigned> paddedRepShape(rank);
-  if (auto srcSliceLayout = srcLayout.dyn_cast<SliceEncodingAttr>())
-    srcLayout = srcSliceLayout.getParent();
-  if (auto dstSliceLayout = dstLayout.dyn_cast<SliceEncodingAttr>())
-    dstLayout = dstSliceLayout.getParent();
   auto srcBlockedLayout = srcLayout.dyn_cast<BlockedEncodingAttr>();
   auto srcMmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>();
   auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>();
   auto dstMmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>();
-  assert((srcBlockedLayout || srcMmaLayout) &&
-         "Unexpected srcLayout in getScratchConfigForCvtLayout");
-  assert((dstBlockedLayout || dstMmaLayout) &&
-         "Unexpected dstLayout in getScratchConfigForCvtLayout");
   assert(!(srcMmaLayout && dstMmaLayout) &&
          "Unexpected mma -> mma layout conversion");
-  auto inOrd =
-      srcMmaLayout ? dstBlockedLayout.getOrder() : srcBlockedLayout.getOrder();
-  auto outOrd =
-      dstMmaLayout ? srcBlockedLayout.getOrder() : dstBlockedLayout.getOrder();
+  auto inOrd = srcMmaLayout ? triton::gpu::getOrder(dstLayout)
+                            : triton::gpu::getOrder(srcLayout);
+  auto outOrd = dstMmaLayout ? triton::gpu::getOrder(srcLayout)
+                             : triton::gpu::getOrder(dstLayout);
   unsigned srcContigPerThread =
       srcBlockedLayout ? srcBlockedLayout.getSizePerThread()[inOrd[0]] : 2;
   unsigned dstContigPerThread =

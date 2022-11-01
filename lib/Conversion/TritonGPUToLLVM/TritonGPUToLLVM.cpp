@@ -2209,8 +2209,6 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
   unsigned inVec = 0;
   unsigned outVec = 0;
   auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
-  inVec = 1;
-  outVec = 1;
 
   unsigned outElems = getElemsPerThread(dstTy);
   auto outOrd = getOrder(dstLayout);
