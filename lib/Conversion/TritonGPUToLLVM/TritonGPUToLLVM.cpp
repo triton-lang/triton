@@ -1301,26 +1301,26 @@ void ReduceOpConversion::accumulate(ConversionPatternRewriter &rewriter,
   case RedOp::ADD:
     acc = add(acc, cur);
     break;
-  case RedOp::MAX:
-    if (type.isUnsignedInteger())
-      acc = umax(acc, cur);
-    else
-      acc = smax(acc, cur);
-    break;
-  case RedOp::MIN:
-    if (type.isUnsignedInteger())
-      acc = umin(acc, cur);
-    else
-      acc = smin(acc, cur);
-    break;
   case RedOp::FADD:
     acc = fadd(acc.getType(), acc, cur);
     break;
-  case RedOp::FMAX:
-    acc = fmax(acc, cur);
+  case RedOp::MIN:
+    acc = smin(acc, cur);
+    break;
+  case RedOp::MAX:
+    acc = smax(acc, cur);
+    break;
+  case RedOp::UMIN:
+    acc = umin(acc, cur);
+    break;
+  case RedOp::UMAX:
+    acc = umax(acc, cur);
     break;
   case RedOp::FMIN:
     acc = fmin(acc, cur);
+    break;
+  case RedOp::FMAX:
+    acc = fmax(acc, cur);
     break;
   case RedOp::XOR:
     acc = xor_(acc, cur);
