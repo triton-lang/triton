@@ -11,7 +11,9 @@
 #include <numeric>
 
 using ::mlir::triton::gpu::BlockedEncodingAttr;
+using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
+using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
@@ -40,14 +42,10 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   auto dstMmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>();
   assert(!(srcMmaLayout && dstMmaLayout) &&
          "Unexpected mma -> mma layout conversion");
-  auto inOrd = srcMmaLayout ? triton::gpu::getOrder(dstLayout)
-                            : triton::gpu::getOrder(srcLayout);
-  auto outOrd = dstMmaLayout ? triton::gpu::getOrder(srcLayout)
-                             : triton::gpu::getOrder(dstLayout);
-  unsigned srcContigPerThread =
-      srcBlockedLayout ? srcBlockedLayout.getSizePerThread()[inOrd[0]] : 2;
-  unsigned dstContigPerThread =
-      dstBlockedLayout ? dstBlockedLayout.getSizePerThread()[outOrd[0]] : 2;
+  auto inOrd = srcMmaLayout ? getOrder(dstLayout) : getOrder(srcLayout);
+  auto outOrd = dstMmaLayout ? getOrder(srcLayout) : getOrder(dstLayout);
+  unsigned srcContigPerThread = getSizePerThread(srcLayout)[inOrd[0]];
+  unsigned dstContigPerThread = getSizePerThread(dstLayout)[outOrd[0]];
   // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
   //       that we cannot do vectorization.
   inVec = outOrd[0] == 0 ? 1 : inOrd[0] == 0 ? 1 : srcContigPerThread;

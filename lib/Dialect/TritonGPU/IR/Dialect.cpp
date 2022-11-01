@@ -274,16 +274,7 @@ unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
     assert(rank == blockedParent.getSizePerThread().size() - 1 &&
            "unexpected rank in SliceEncodingAttr::getElemsPerThread");
-    auto ret = blockedParent.getElemsPerThread(paddedShape(shape));
-    // // ret = ret / blockedParent.getSizePerThread()[getDim()];
-    // llvm::outs() << *this << " "
-    //              << "\n";
-    // llvm::outs() << "shape: ";
-    // for (auto s : shape)
-    //   llvm::outs() << s << " ";
-    // llvm::outs() << "\n";
-    // llvm::outs() << "ret: " << ret << "\n";
-    return ret;
+    return blockedParent.getElemsPerThread(paddedShape(shape));
   } else {
     assert(0 && "getElemsPerThread not implemented");
     return 0;
