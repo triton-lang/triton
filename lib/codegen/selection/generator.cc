@@ -2973,11 +2973,11 @@ void generator::visit_dot_inst(ir::dot_inst* dot) {
   size_t red_axis = 1;
   unsigned NK = A_shapes[red_axis];
   bool is_outer = NK == 1;
+
 #ifdef USE_ROCM
-  bool is_mma = layouts_->get(dot)->to_mma();
+  return visit_fmadot(dot, A, B, D, NK, c_ty, f_mul_add);
 #else
-  bool is_mma = false;
-#endif
+  bool is_mma = layouts_->get(dot)->to_mma();
   if(!is_outer && is_mma && tgt_->as_nvidia() && tgt_->as_nvidia()->sm() < 80)
     return visit_mma884(dot, A, B, D, NK);
   if(!is_outer && is_mma && tgt_->as_nvidia() && tgt_->as_nvidia()->sm() >= 80)
@@ -2986,6 +2986,7 @@ void generator::visit_dot_inst(ir::dot_inst* dot) {
       A->get_type()->get_scalar_ty()->is_fp32_ty())
     return visit_fmadot(dot, A, B, D, NK, c_ty, f_mul_add);
   throw std::runtime_error("dot has invalid operand type");
+#endif
 }
 
 void generator::visit_trans_inst(ir::trans_inst* trans) {
