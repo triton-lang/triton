@@ -24,7 +24,8 @@ bool maybeSharedAllocationOp(Operation *op) {
               mlir::TypeID::get<triton::gpu::TritonGPUDialect>() ||
           dialect->getTypeID() == mlir::TypeID::get<triton::TritonDialect>() ||
           dialect->getTypeID() ==
-              mlir::TypeID::get<arith::ArithmeticDialect>());
+              mlir::TypeID::get<arith::ArithmeticDialect>() ||
+          dialect->getTypeID() == mlir::TypeID::get<tensor::TensorDialect>());
 }
 
 std::string getValueOperandName(Value value, AsmState &state) {

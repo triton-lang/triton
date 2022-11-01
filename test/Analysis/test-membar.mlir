@@ -98,8 +98,8 @@ func @alloc() {
 // CHECK-LABEL: extract_slice
 func @extract_slice() {
   %cst0 = arith.constant dense<0.000000e+00> : tensor<1x16x16xf16, #A>
-  %index = arith.constant 0 : i32
-  %cst1 = tensor.extract_slice %cst0[%index, 0, 0][1, 16, 16][1, 1, 1] : tensor<1x16x16xf16, #A> -> tensor<16x16xf16, #A>
+  %index = arith.constant 0 : index
+  %cst1 = tensor.extract_slice %cst0[%index, 0, 0][1, 16, 16][1, 1, 1] : tensor<1x16x16xf16, #A> to tensor<16x16xf16, #A>
   // CHECK: Membar 3
   %cst2 = triton_gpu.convert_layout %cst1 : (tensor<16x16xf16, #A>) -> tensor<16x16xf16, #AL>
   // CHECK-NEXT: Membar 5

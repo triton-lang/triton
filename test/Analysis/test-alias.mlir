@@ -68,9 +68,9 @@ func @insert_slice_async(%A : !tt.ptr<f16>, %i1 : i1) {
 func @extract_slice(%A : !tt.ptr<f16>) {
   // CHECK: %cst -> %cst
   %cst0 = arith.constant dense<0.000000e+00> : tensor<1x16x16xf16, #A>
-  %index = arith.constant 0 : i32
+  %index = arith.constant 0 : index
   // CHECK-NEXT: %0 -> %cst
-  %cst1 = tensor.extract_slice %cst0[%index, 0, 0][1, 16, 16][1, 1, 1] : tensor<1x16x16xf16, #A> -> tensor<16x16xf16, #A>
+  %cst1 = tensor.extract_slice %cst0[%index, 0, 0][1, 16, 16][1, 1, 1] : tensor<1x16x16xf16, #A> to tensor<16x16xf16, #A>
   return
 }
 
@@ -144,9 +144,9 @@ func @for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !t
   // CHECK-NEXT: %0#2 -> %cst,%cst_0
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (tensor<128x32xf16, #A>, tensor<128x32xf16, #A>, tensor<128x32xf16, #A>) {
     scf.if %i1 {
-      %index = arith.constant 8 : i32
+      %index = arith.constant 8 : index
       // CHECK-NEXT: %1 -> %cst,%cst_0
-      %cst0 = tensor.extract_slice %a_shared[%index, 0][1, 32][1, 1] : tensor<128x32xf16, #A> -> tensor<32xf16, #A>
+      %cst0 = tensor.extract_slice %a_shared[%index, 0][1, 32][1, 1] : tensor<128x32xf16, #A> to tensor<32xf16, #A>
       scf.yield
     }
     scf.yield %b_shared, %a_shared, %a_shared : tensor<128x32xf16, #A>, tensor<128x32xf16, #A>, tensor<128x32xf16, #A>
