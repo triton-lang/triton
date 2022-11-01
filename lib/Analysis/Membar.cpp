@@ -1,6 +1,7 @@
 #include "triton/Analysis/Membar.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/GPU/GPUDialect.h"
 
 namespace mlir {
@@ -43,7 +44,7 @@ void MembarAnalysis::dfsOperation(Operation *operation,
 void MembarAnalysis::transfer(Operation *op, RegionInfo *regionInfo,
                               OpBuilder *builder) {
   if (isa<scf::ForOp>(op) || isa<scf::IfOp>(op) || isa<scf::YieldOp>(op) ||
-      isa<triton::gpu::ExtractSliceOp>(op) ||
+      isa<tensor::ExtractSliceOp>(op) ||
       isa<triton::gpu::AllocTensorOp>(op)) {
     // Do not insert barriers before control flow operations and
     // alloc/extract/insert

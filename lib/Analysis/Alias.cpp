@@ -1,6 +1,7 @@
 #include "triton/Analysis/Alias.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 
 namespace mlir {
 
@@ -26,7 +27,7 @@ ChangeResult SharedMemoryAliasAnalysis::visitOperation(
     auto result = op->getResult(0);
     if (isSharedEncoding(result)) {
       // FIXME(Keren): extract and insert are always alias for now
-      if (auto extractSliceOp = dyn_cast<triton::gpu::ExtractSliceOp>(op)) {
+      if (auto extractSliceOp = dyn_cast<tensor::ExtractSliceOp>(op)) {
         // extract_slice %src, %index
         aliasInfo = AliasInfo(operands[0]->getValue());
       } else if (auto insertSliceOp =

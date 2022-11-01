@@ -157,39 +157,6 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
   let printer = [{ return printInsertSliceAsyncOp(p, *this); }];
 }
 
-def TTG_ExtractSliceOp : TTG_Op<"extract_slice", [NoSideEffect, ResultsAreSharedEncoding, InferTypeOpInterface]> {
-  let summary = "extract slice";
-  let description = [{
-    The "extract_slice" operation extracts a `$result` tensor from a `$src` tensor as
-    specified by the operation's `$index` and `$axis` arguments.
-
-    The extract_slice operation supports the following arguments:
-
-    * src: the tensor that is extracted from.
-    * index: the index at the given `$axis` from which the `$src` tensor is extracted
-
-    Example:
-
-    ```
-    // Rank-reducing extract_slice.
-    %1 = tensor.extract_slice %0, %index {axis = 0} : tensor<8x16x4xf32> -> tensor<1x16x4xf32>
-    ```
-  }];
-
-  let arguments = (ins TT_Tensor:$src, I32:$index, I32Attr:$axis);
-
-  let results = (outs TT_Tensor:$result);
-
-  let assemblyFormat = [{$src `,` $index attr-dict `:` type($src) `->` type($result)}];
-
-  let extraClassDeclaration = [{
-    static ::mlir::LogicalResult inferReturnTypes(::mlir::MLIRContext *context,
-          ::llvm::Optional<::mlir::Location> location, ::mlir::ValueRange operands,
-          ::mlir::DictionaryAttr attributes, ::mlir::RegionRange regions,
-          ::llvm::SmallVectorImpl<::mlir::Type> &inferredReturnTypes);
-  }];
-}
-
 def TTG_AllocTensorOp : TTG_Op<"alloc_tensor", [NoSideEffect, ResultsAreSharedEncoding]> {
   let summary = "allocate tensor";
 

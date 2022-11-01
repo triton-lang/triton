@@ -127,9 +127,9 @@ public:
       return mlir::success();
     }
     // cvt(extract_slice(x), type2) ->extract_slice(cvt(x, type2))
-    auto extract_slice = dyn_cast<triton::gpu::ExtractSliceOp>(arg);
+    auto extract_slice = dyn_cast<tensor::ExtractSliceOp>(arg);
     if (extract_slice) {
-      auto origType = extract_slice.src().getType().cast<RankedTensorType>();
+      auto origType = extract_slice.source().getType().cast<RankedTensorType>();
       // Ensure that the new extract_slice op is placed in the same place as the
       // old extract_slice op. Otherwise, the new extract_slice op may be placed
       // after the async_wait op, which is not allowed.
@@ -139,9 +139,12 @@ public:
           origType.getShape(), origType.getElementType(),
           op->getResult(0).getType().cast<RankedTensorType>().getEncoding());
       auto new_arg = rewriter.create<triton::gpu::ConvertLayoutOp>(
-          op->getLoc(), newType, extract_slice.src());
-      rewriter.replaceOpWithNewOp<triton::gpu::ExtractSliceOp>(
-          op, new_arg.getResult(), extract_slice.index(), extract_slice.axis());
+          op->getLoc(), newType, extract_slice.source());
+      rewriter.replaceOpWithNewOp<tensor::ExtractSliceOp>(
+          op, extract_slice.getResult().getType(), new_arg.getResult(),
+          extract_slice.offsets(), extract_slice.sizes(),
+          extract_slice.strides(), extract_slice.static_offsets(),
+          extract_slice.static_sizes(), extract_slice.static_strides());
       return mlir::success();
     }
     // cvt(type2, x)
@@ -198,7 +201,7 @@ static LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
 inline bool expensive_to_remat(Operation *op) {
   if (!op)
     return true;
-  if (isa<triton::gpu::ExtractSliceOp, triton::gpu::AllocTensorOp,
+  if (isa<tensor::ExtractSliceOp, triton::gpu::AllocTensorOp,
           triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp,
           triton::DotOp>(op))
     return true;
