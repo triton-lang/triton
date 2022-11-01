@@ -1231,13 +1231,10 @@ struct BroadcastOpConversion
         }
         auto resultLinearIndex =
             getLinearIndex<int64_t>(resultMultiDim, resultLogicalShape);
-        // llvm::outs() << i << " " << j << " " << resultLinearIndex << "\n";
         resultVals[resultLinearIndex] = srcVals[i];
       }
     }
     auto llvmStructTy = getTypeConverter()->convertType(resultTy);
-    // for (auto value : resultVals)
-    //   llvm::outs() << value << " " << srcElems << " " << duplicates << "\n";
 
     Value resultStruct =
         getStructFromElements(loc, resultVals, rewriter, llvmStructTy);
@@ -1990,7 +1987,7 @@ private:
                       ArrayRef<unsigned> multiDimRepId, unsigned vec,
                       ArrayRef<unsigned> paddedRepShape,
                       ArrayRef<unsigned> outOrd, SmallVector<Value> &vals,
-                      unsigned valOffset, Value smemBase) const;
+                      Value smemBase) const;
 
   // blocked/mma -> blocked/mma.
   // Data padding in shared memory to avoid bank confict.
@@ -2017,7 +2014,7 @@ void ConvertLayoutOpConversion::processReplica(
     RankedTensorType type, ArrayRef<unsigned> numCTAsEachRep,
     ArrayRef<unsigned> multiDimRepId, unsigned vec,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> outOrd,
-    SmallVector<Value> &vals, unsigned valOffset, Value smemBase) const {
+    SmallVector<Value> &vals, Value smemBase) const {
   unsigned accumNumCTAsEachRep = product<unsigned>(numCTAsEachRep);
   auto layout = type.getEncoding();
   auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>();
@@ -2160,8 +2157,7 @@ void ConvertLayoutOpConversion::processReplica(
             currVal =
                 icmp_ne(currVal, rewriter.create<LLVM::ConstantOp>(
                                      loc, i8_ty, rewriter.getI8IntegerAttr(0)));
-          vals[valOffset + elemId + linearCTAId * accumSizePerThread + v] =
-              currVal;
+          vals[elemId + linearCTAId * accumSizePerThread + v] = currVal;
         }
       }
     }
@@ -2221,7 +2217,7 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
         srcLayout.isa<SliceEncodingAttr>() ||
         srcLayout.isa<MmaEncodingAttr>()) {
       processReplica(loc, rewriter, /*stNotRd*/ true, srcTy, inNumCTAsEachRep,
-                     multiDimRepId, inVec, paddedRepShape, outOrd, vals, 0,
+                     multiDimRepId, inVec, paddedRepShape, outOrd, vals,
                      smemBase);
     } else {
       assert(0 && "ConvertLayout with input layout not implemented");
@@ -2232,7 +2228,7 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
         dstLayout.isa<SliceEncodingAttr>() ||
         dstLayout.isa<MmaEncodingAttr>()) {
       processReplica(loc, rewriter, /*stNotRd*/ false, dstTy, outNumCTAsEachRep,
-                     multiDimRepId, outVec, paddedRepShape, outOrd, outVals, 0,
+                     multiDimRepId, outVec, paddedRepShape, outOrd, outVals,
                      smemBase);
     } else {
       assert(0 && "ConvertLayout with output layout not implemented");
