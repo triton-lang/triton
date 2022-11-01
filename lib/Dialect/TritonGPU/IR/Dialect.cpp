@@ -280,9 +280,7 @@ unsigned MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
     // Each warp-level mma884 will perform a m16xn16xk4 mma, thus get a m16xn16
     // matrix as result.
     res = mmasRow * mmasCol * (16 * 16 / 32);
-  }
-
-  if (getVersion() == 2) {
+  } else if (getVersion() == 2) {
     unsigned elemsCol = ceil<unsigned>(shape[0], 16 * getWarpsPerCTA()[0]) * 2;
     unsigned elemsRow = ceil<unsigned>(shape[1], 8 * getWarpsPerCTA()[1]) * 2;
     res = elemsCol * elemsRow;
