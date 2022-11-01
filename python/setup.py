@@ -1,5 +1,4 @@
 import distutils
-import distutils.spawn
 import os
 import platform
 import re
@@ -10,6 +9,7 @@ import tarfile
 import tempfile
 import urllib.request
 from distutils.version import LooseVersion
+from typing import NamedTuple
 
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
@@ -20,7 +20,34 @@ def check_env_flag(name: str, default: str = "") -> bool:
     return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
 
 
-def get_llvm():
+def get_build_type():
+    if check_env_flag("DEBUG"):
+        return "Debug"
+    elif check_env_flag("REL_WITH_DEB_INFO"):
+        return "RelWithDebInfo"
+    else:
+        return "Release"
+
+
+# --- third party packages -----
+
+class Package(NamedTuple):
+    package: str
+    name: str
+    url: str
+    test_file: str
+    include_flag: str
+    lib_flag: str
+    syspath_var_name: str
+
+
+def get_pybind11_package_info():
+    name = "pybind11-2.10.0"
+    url = "https://github.com/pybind/pybind11/archive/refs/tags/v2.10.0.tar.gz"
+    return Package("pybind11", name, url, "include/pybind11/pybind11.h", "PYBIND11_INCLUDE_DIR", "", "PYBIND11_SYSPATH")
+
+
+def get_llvm_package_info():
     # download if nothing is installed
     system = platform.system()
     system_suffix = {"Linux": "linux-gnu-ubuntu-18.04", "Darwin": "apple-darwin"}[system]
@@ -31,19 +58,35 @@ def get_llvm():
     else:
         name = 'clang+llvm-14.0.0-x86_64-{}'.format(system_suffix)
         url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-14.0.0/{}.tar.xz".format(name)
-    dir = '/tmp'
-    llvm_include_dir = '{dir}/{name}/include'.format(dir=dir, name=name)
-    llvm_library_dir = '{dir}/{name}/lib'.format(dir=dir, name=name)
-    if not os.path.exists(llvm_library_dir):
-        try:
-            shutil.rmtree(os.path.join(dir, name))
-        except Exception:
-            pass
-        print('downloading and extracting ' + url + '...')
-        ftpstream = urllib.request.urlopen(url)
-        file = tarfile.open(fileobj=ftpstream, mode="r|xz")
-        file.extractall(path=dir)
-    return llvm_include_dir, llvm_library_dir
+    return Package("llvm", name, url, "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
+
+
+def get_thirdparty_packages(triton_cache_path):
+    packages = [get_pybind11_package_info(), get_llvm_package_info()]
+    thirdparty_cmake_args = []
+    for p in packages:
+        package_root_dir = os.path.join(triton_cache_path, p.package)
+        package_dir = os.path.join(package_root_dir, p.name)
+        test_file_path = os.path.join(package_dir, p.test_file)
+        if p.syspath_var_name in os.environ:
+            package_dir = os.environ[p.syspath_var_name]
+        if not os.path.exists(test_file_path):
+            try:
+                shutil.rmtree(package_root_dir)
+            except Exception:
+                pass
+            os.makedirs(package_root_dir, exist_ok=True)
+            print('downloading and extracting {} ...'.format(p.url))
+            ftpstream = urllib.request.urlopen(p.url)
+            file = tarfile.open(fileobj=ftpstream, mode="r|*")
+            file.extractall(path=package_root_dir)
+        if p.include_flag:
+            thirdparty_cmake_args.append("-D{}={}/include".format(p.include_flag, package_dir))
+        if p.lib_flag:
+            thirdparty_cmake_args.append("-D{}={}/lib".format(p.lib_flag, package_dir))
+    return thirdparty_cmake_args
+
+# ---- cmake extension ----
 
 
 class CMakeExtension(Extension):
@@ -81,10 +124,11 @@ class CMakeBuild(build_ext):
             self.build_extension(ext)
 
     def build_extension(self, ext):
-        llvm_include_dir, llvm_library_dir = get_llvm()
-        # lit is used by the test suite
-        lit_dir = shutil.which('lit')
         self.debug = True
+        lit_dir = shutil.which('lit')
+        triton_cache_path = os.path.join(os.environ["HOME"], ".triton")
+        # lit is used by the test suite
+        thirdparty_cmake_args = get_thirdparty_packages(triton_cache_path)
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
         build_suffix = 'debug' if self.debug else 'release'
@@ -94,19 +138,18 @@ class CMakeBuild(build_ext):
         if not os.path.exists(llvm_build_dir):
             os.makedirs(llvm_build_dir)
         # python directories
-        python_include_dirs = [distutils.sysconfig.get_python_inc()] + ['/usr/local/cuda/include']
+        python_include_dir = distutils.sysconfig.get_python_inc()
         cmake_args = [
+            "-DLLVM_ENABLE_WERROR=ON",
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
             "-DTRITON_BUILD_TUTORIALS=OFF",
             "-DTRITON_BUILD_PYTHON_MODULE=ON",
-            "-DLLVM_INCLUDE_DIRS=" + llvm_include_dir,
-            "-DLLVM_LIBRARY_DIR=" + llvm_library_dir,
             # '-DPYTHON_EXECUTABLE=' + sys.executable,
             # '-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
-            "-DTRITON_LLVM_BUILD_DIR=" + llvm_build_dir,
-            "-DPYTHON_INCLUDE_DIRS=" + ";".join(python_include_dirs),
+            "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
             "-DLLVM_EXTERNAL_LIT=" + lit_dir
-        ]
+        ] + thirdparty_cmake_args
+
         # configuration
         cfg = "Debug" if self.debug else "Release"
         build_args = ["--config", cfg]
@@ -124,11 +167,6 @@ class CMakeBuild(build_ext):
         env = os.environ.copy()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=self.build_temp)
-
-        # run tests. Note: this depends on llvm-lit
-        # -DLLVM_EXTERNAL_LIT=<path-to-lit.py>
-        # Note: get_llvm_lit_path(...) in llvm/cmake/modules/AddLLVM.cmake
-        subprocess.call(["cmake", "--build", ".", "--target", "check-triton"], cwd=self.build_temp, env=env)
 
 
 setup(

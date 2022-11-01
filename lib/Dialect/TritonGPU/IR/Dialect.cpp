@@ -43,8 +43,12 @@ static Type getPointeeType(Type type) {
 namespace gpu {
 
 // TODO: Inheritation of layout attributes
-unsigned getElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
-  size_t rank = shape.size();
+unsigned getElemsPerThread(Type type) {
+  if (type.isIntOrIndexOrFloat() || type.isa<triton::PointerType>())
+    return 1;
+  auto tensorType = type.cast<RankedTensorType>();
+  auto layout = tensorType.getEncoding();
+  auto shape = tensorType.getShape();
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return blockedLayout.getElemsPerThread(shape);
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
@@ -63,6 +67,19 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return SmallVector<unsigned>(blockedLayout.getSizePerThread().begin(),
                                  blockedLayout.getSizePerThread().end());
+  } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+    unsigned dim = sliceLayout.getDim();
+    auto parent = sliceLayout.getParent();
+    if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
+      SmallVector<unsigned> sizePerThread(
+          blockedParent.getSizePerThread().begin(),
+          blockedParent.getSizePerThread().end());
+      sizePerThread.erase(sizePerThread.begin() + dim);
+      return sizePerThread;
+    } else {
+      assert(0 && "SliceEncodingAttr with parent other than "
+                  "BlockedEncodingAttr not implemented");
+    }
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     assert(mmaLayout.getVersion() == 2 &&
            "mmaLayout version = 1 is not implemented yet");
@@ -91,10 +108,25 @@ SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout) {
 SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
   SmallVector<unsigned> shape;
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
-    for (int d = 0, n = blockedLayout.getOrder().size(); d < n; ++d)
+    for (unsigned d = 0, n = blockedLayout.getOrder().size(); d < n; ++d)
       shape.push_back(blockedLayout.getSizePerThread()[d] *
                       blockedLayout.getThreadsPerWarp()[d] *
                       blockedLayout.getWarpsPerCTA()[d]);
+  } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+    unsigned dim = sliceLayout.getDim();
+    auto parent = sliceLayout.getParent();
+    if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
+      for (unsigned d = 0, n = blockedParent.getOrder().size(); d < n; ++d) {
+        if (d == dim)
+          continue;
+        shape.push_back(blockedParent.getSizePerThread()[d] *
+                        blockedParent.getThreadsPerWarp()[d] *
+                        blockedParent.getWarpsPerCTA()[d]);
+      }
+    } else {
+      assert(0 && "SliceEncodingAttr with parent other than "
+                  "BlockedEncodingAttr not implemented");
+    }
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     assert(mmaLayout.getVersion() == 2 &&
            "mmaLayout version = 1 is not implemented yet");
@@ -206,23 +238,29 @@ unsigned BlockedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   return product<unsigned>(elemsPerThread);
 }
 
+SmallVector<int64_t>
+SliceEncodingAttr::paddedShape(ArrayRef<int64_t> shape) const {
+  size_t rank = shape.size();
+  unsigned dim = getDim();
+  SmallVector<int64_t> retShape(rank + 1);
+  for (unsigned d = 0; d < rank + 1; ++d) {
+    if (d < dim)
+      retShape[d] = shape[d];
+    else if (d == dim)
+      retShape[d] = 1;
+    else
+      retShape[d] = shape[d - 1];
+  }
+  return retShape;
+}
+
 unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   size_t rank = shape.size();
   auto parent = getParent();
-  unsigned dim = getDim();
   if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
     assert(rank == blockedParent.getSizePerThread().size() - 1 &&
            "unexpected rank in SliceEncodingAttr::getElemsPerThread");
-    SmallVector<int64_t> paddedShape(rank + 1);
-    for (unsigned d = 0; d < rank + 1; ++d) {
-      if (d < dim)
-        paddedShape[d] = shape[d];
-      else if (d == dim)
-        paddedShape[d] = 1;
-      else
-        paddedShape[d] = shape[d - 1];
-    }
-    return blockedParent.getElemsPerThread(paddedShape);
+    return blockedParent.getElemsPerThread(paddedShape(shape));
   } else {
     assert(0 && "getElemsPerThread not implemented");
     return 0;
@@ -232,10 +270,23 @@ unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
 unsigned MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   size_t rank = shape.size();
   assert(rank == 2 && "Unexpected rank of mma layout");
-  assert(getVersion() == 2 && "mmaLayout version = 1 is not implemented yet");
-  unsigned elemsCol = ceil<unsigned>(shape[0], 16 * getWarpsPerCTA()[0]) * 2;
-  unsigned elemsRow = ceil<unsigned>(shape[1], 8 * getWarpsPerCTA()[1]) * 2;
-  return elemsCol * elemsRow;
+  assert((getVersion() == 1 || getVersion() == 2) &&
+         "Only version 1 and 2 is supported");
+
+  int res = 0;
+  if (getVersion() == 1) {
+    unsigned mmasRow = ceil<unsigned>(shape[0], 16 * getWarpsPerCTA()[0]);
+    unsigned mmasCol = ceil<unsigned>(shape[1], 16 * getWarpsPerCTA()[1]);
+    // Each warp-level mma884 will perform a m16xn16xk4 mma, thus get a m16xn16
+    // matrix as result.
+    res = mmasRow * mmasCol * (16 * 16 / 32);
+  } else if (getVersion() == 2) {
+    unsigned elemsCol = ceil<unsigned>(shape[0], 16 * getWarpsPerCTA()[0]) * 2;
+    unsigned elemsRow = ceil<unsigned>(shape[1], 8 * getWarpsPerCTA()[1]) * 2;
+    res = elemsCol * elemsRow;
+  }
+
+  return res;
 }
 
 unsigned SharedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
@@ -472,16 +523,40 @@ mlir::LogicalResult ExtractSliceOp::inferReturnTypes(
   auto encoding = srcType.getEncoding();
   auto srcShape = srcType.getShape();
   auto axis = attributes.get("axis").cast<IntegerAttr>().getInt();
-  if (axis < 0 || axis > srcShape.size())
+  if (axis < 0 || (size_t)axis > srcShape.size())
     return failure();
   SmallVector<int64_t, 4> dstShape;
-  for (int i = 0; i < srcShape.size(); i++)
-    if (i != axis)
+  for (size_t i = 0; i < srcShape.size(); i++)
+    if (i != (size_t)axis)
       dstShape.push_back(srcShape[i]);
   auto returnType =
       RankedTensorType::get(dstShape, srcType.getElementType(), encoding);
   inferredReturnTypes.assign({returnType});
   return success();
+}
+
+//===----------------------------------------------------------------------===//
+// DotOperand Encoding
+//===----------------------------------------------------------------------===//
+Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
+  if (parser.parseLess().failed())
+    return {};
+  NamedAttrList attrs;
+  if (parser.parseOptionalAttrDict(attrs).failed())
+    return {};
+  if (parser.parseGreater().failed())
+    return {};
+  unsigned opIdx = attrs.get("opIdx").cast<IntegerAttr>().getInt();
+  Attribute parent = attrs.get("parent");
+
+  return parser.getChecked<DotOperandEncodingAttr>(parser.getContext(), opIdx,
+                                                   parent);
+}
+
+void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
+  printer << "<{"
+          << "opIdx = " << getOpIdx() << ", "
+          << "parent = " << getParent() << "}>";
 }
 
 //===----------------------------------------------------------------------===//
@@ -514,15 +589,17 @@ struct TritonGPUInferLayoutInterface
     : public triton::DialectInferLayoutInterface {
   using DialectInferLayoutInterface::DialectInferLayoutInterface;
 
-  LogicalResult inferReduceOpEncoding(Attribute operandEncoding, int axis,
-                                      Attribute &resultEncoding) const {
+  LogicalResult
+  inferReduceOpEncoding(Attribute operandEncoding, unsigned axis,
+                        Attribute &resultEncoding) const override {
     resultEncoding = SliceEncodingAttr::get(getDialect()->getContext(), axis,
                                             operandEncoding);
     return success();
   }
 
-  LogicalResult inferExpandDimsOpEncoding(Attribute operandEncoding, int axis,
-                                          Attribute &resultEncoding) const {
+  LogicalResult
+  inferExpandDimsOpEncoding(Attribute operandEncoding, unsigned axis,
+                            Attribute &resultEncoding) const override {
     auto sliceEncoding = operandEncoding.dyn_cast<SliceEncodingAttr>();
     if (!sliceEncoding) {
       llvm::report_fatal_error(

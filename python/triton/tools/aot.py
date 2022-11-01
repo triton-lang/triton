@@ -6,7 +6,7 @@ import triton._C.libtriton.triton as libtriton
 if __name__ == '__main__':
 
     # valid source and target formats
-    VALID_FORMATS = ['llvm-ir', 'ptx', 'triton-ir', 'triton-gpu-ir']
+    VALID_FORMATS = ['triton-ir', 'triton-gpu-ir', 'llvm-ir', 'ptx']
 
     # set up the argument parser
     # TODO: conditional requirements

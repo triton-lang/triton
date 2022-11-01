@@ -5,11 +5,6 @@ set(CMAKE_CXX_STANDARD 17)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-if(NOT TRITON_LLVM_BUILD_DIR)
-    set(TRITON_LLVM_BUILD_DIR ${CMAKE_BINARY_DIR})
-endif()
-
-
 project(triton)
 include(CTest)
 if(NOT WIN32)
@@ -32,6 +27,9 @@ endif()
 
 # Compiler flags
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# Third-party
+include_directories(${PYBIND11_INCLUDE_DIR})
 
 if(WIN32)
     SET(BUILD_SHARED_LIBS OFF)
@@ -134,14 +132,13 @@ endif()
 # Python module
 if(TRITON_BUILD_PYTHON_MODULE)
     message(STATUS "Adding Python module")
+    set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
+    include_directories("." ${PYTHON_SRC_PATH})
     if (PYTHON_INCLUDE_DIRS)
-      set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
-      include_directories("." ${PYTHON_SRC_PATH} ${PYTHON_INCLUDE_DIRS})
-      link_directories(${PYTHON_LINK_DIRS})
+      include_directories(${PYTHON_INCLUDE_DIRS})
     else()
       find_package(Python3 REQUIRED COMPONENTS Development)
-      set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
-      include_directories("." ${PYTHON_SRC_PATH} ${Python3_INCLUDE_DIRS})
+      include_directories(${Python3_INCLUDE_DIRS})
       link_directories(${Python3_LIBRARY_DIRS})
       link_libraries(${Python3_LIBRARIES})
       add_link_options(${Python3_LINK_OPTIONS})
@@ -171,7 +168,9 @@ list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
 include(TableGen) # required by AddMLIR
 include(AddLLVM)
 include(AddMLIR)
-# include(HandleLLVMOptions) # human-friendly error message
+
+# Disable warnings that show up in external code (gtest;pybind11)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default")
 
 include_directories(${MLIR_INCLUDE_DIRS})
 include_directories(${LLVM_INCLUDE_DIRS})
@@ -194,7 +193,6 @@ get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
 get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 
 target_link_libraries(triton
-  ${PYTHON_LIBRARIES}
   TritonAnalysis
   TritonTransforms
   TritonGPUTransforms

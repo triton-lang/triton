@@ -12,21 +12,21 @@ include "triton/Dialect/Triton/IR/TritonOps.td"
 // AddIOp(d, DotOp(a, b, c)) and c==0 => DotOp(a, b, d)
 // AddFOp(d, DotOp(a, b, c)) and c==0 => DotOp(a, b, d)
 def CombineDotAddIPattern : Pat<
-        (Arith_AddIOp $d, (TT_DotOp:$res $a, $b, $c, $allowTF32)),
-        (TT_DotOp $a, $b, $d, $allowTF32),
+        (Arith_AddIOp $d, (TT_DotOp:$res $a, $b, $c, $allowTF32, $transA, $transB)),
+        (TT_DotOp $a, $b, $d, $allowTF32, $transA, $transB),
         [(Constraint<CPred<"isZero($0)">> $c)]>;
 def CombineDotAddFPattern : Pat<
-        (Arith_AddFOp $d, (TT_DotOp:$res $a, $b, $c, $allowTF32)),
-        (TT_DotOp $a, $b, $d, $allowTF32),
+        (Arith_AddFOp $d, (TT_DotOp:$res $a, $b, $c, $allowTF32, $transA, $transB)),
+        (TT_DotOp $a, $b, $d, $allowTF32, $transA, $transB),
         [(Constraint<CPred<"isZero($0)">> $c)]>;
 
 def CombineDotAddIRevPattern : Pat<
-        (Arith_AddIOp (TT_DotOp:$res $a, $b, $c, $allowTF32), $d),
-        (TT_DotOp $a, $b, $d, $allowTF32),
+        (Arith_AddIOp (TT_DotOp:$res $a, $b, $c, $allowTF32, $transA, $transB), $d),
+        (TT_DotOp $a, $b, $d, $allowTF32, $transA, $transB),
         [(Constraint<CPred<"isZero($0)">> $c)]>;
 def CombineDotAddFRevPattern : Pat<
-        (Arith_AddFOp (TT_DotOp:$res $a, $b, $c, $allowTF32), $d),
-        (TT_DotOp $a, $b, $d, $allowTF32),
+        (Arith_AddFOp (TT_DotOp:$res $a, $b, $c, $allowTF32, $transA, $transB), $d),
+        (TT_DotOp $a, $b, $d, $allowTF32, $transA, $transB),
         [(Constraint<CPred<"isZero($0)">> $c)]>;
 
 

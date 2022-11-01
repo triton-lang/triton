@@ -56,6 +56,22 @@ def TT_PtrToIntOp : TT_Op<"ptr_to_int", [SameOperandsAndResultShape,
     let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
 }
 
+// arith.bitcast doesn't support pointers
+def TT_BitcastOp : TT_Op<"bitcast", [SameOperandsAndResultShape, 
+                                     SameOperandsAndResultEncoding,
+                                     NoSideEffect,
+                                     /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
+    let summary = "Cast between types of the same bitwidth";
+
+    let arguments = (ins TT_Type:$from);
+
+    let results = (outs TT_Type:$result);
+
+    let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
+
+    // TODO: Add verifier
+}
+
 def TT_FpToFp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape, 
                                    SameOperandsAndResultEncoding,
                                    NoSideEffect,
@@ -272,7 +288,7 @@ def TT_CatOp : TT_Op<"cat", [NoSideEffect,
 //
 // SPMD Ops
 //
-def TT_GetProgramIdOp : TT_Op<"get_program_id"> {
+def TT_GetProgramIdOp : TT_Op<"get_program_id", [NoSideEffect]> {
     let arguments = (ins I32Attr:$axis);
 
     let results = (outs I32:$result);
@@ -280,7 +296,7 @@ def TT_GetProgramIdOp : TT_Op<"get_program_id"> {
     let assemblyFormat = "attr-dict `:` type($result)";
 }
 
-def TT_GetNumProgramsOp : TT_Op<"get_num_programs"> {
+def TT_GetNumProgramsOp : TT_Op<"get_num_programs", [NoSideEffect]> {
     let arguments = (ins I32Attr:$axis);
 
     let results = (outs I32:$result);
@@ -301,7 +317,7 @@ def TT_DotOp : TT_Op<"dot", [NoSideEffect,
         $d = matrix_multiply($a, $b) + $c
     }];
 
-    let arguments = (ins TT_FpIntTensor:$a, TT_FpIntTensor:$b, TT_FpIntTensor:$c, BoolAttr:$allowTF32);
+    let arguments = (ins TT_FpIntTensor:$a, TT_FpIntTensor:$b, TT_FpIntTensor:$c, BoolAttr:$allowTF32, BoolAttr:$transA, BoolAttr:$transB);
 
     let results = (outs TT_FpIntTensor:$d);
 
@@ -324,6 +340,7 @@ def TT_ReduceOp : TT_Op<"reduce", [NoSideEffect,
     ];
 
     let assemblyFormat = "$operand attr-dict `:` type($operand) `->` type($result)";
+
 }
 
 //

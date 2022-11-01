@@ -36,6 +36,7 @@ def str_to_ty(name):
         "bf16": triton.language.bfloat16,
         "fp32": triton.language.float32,
         "fp64": triton.language.float64,
+        "i1": triton.language.int1,
         "i8": triton.language.int8,
         "i16": triton.language.int16,
         "i32": triton.language.int32,
@@ -64,12 +65,12 @@ def mangle_ty(ty):
         return 'fp32'
     if ty.is_fp64():
         return 'fp64'
-    if ty.is_void():
-        return 'V'
     if ty.is_block():
         elt = mangle_ty(ty.scalar)
         shape = '_'.join(map(str, ty.shape))
         return f'{elt}S{shape}S'
+    if ty.is_void():
+        return 'V'
     assert False, "Unsupported type"
 
 
@@ -195,7 +196,7 @@ class CodeGenerator(ast.NodeVisitor):
             return tuple(ret_types)
         else:
             ret = triton.language.core._to_tensor(ret_value, self.builder)
-            self.builder.ret([ret_value.handle])
+            self.builder.ret([ret.handle])
             return ret.type
 
     def visit_FunctionDef(self, node):
@@ -212,7 +213,8 @@ class CodeGenerator(ast.NodeVisitor):
                 init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation)
             self.visit(init_node)
         # initialize function
-        fn = self.builder.get_or_insert_function(self.module, self.function_name, self.prototype.to_ir(self.builder))
+        visibility = "public" if self.is_kernel else "private"
+        fn = self.builder.get_or_insert_function(self.module, self.function_name, self.prototype.to_ir(self.builder), visibility)
         self.module.push_back(fn)
         entry = fn.add_entry_block()
         arg_values = []
@@ -397,13 +399,15 @@ class CodeGenerator(ast.NodeVisitor):
                     if_op = self.builder.create_if_op([ty.to_ir(self.builder) for ty in ret_types], cond.handle, True)
                     then_block.merge_block_before(if_op.get_then_block())
                     self.builder.set_insertion_point_to_end(if_op.get_then_block())
-                    self.builder.create_yield_op([then_defs[n].handle for n in names])
+                    if len(names) > 0:
+                        self.builder.create_yield_op([then_defs[n].handle for n in names])
                     if not node.orelse:
                         else_block = if_op.get_else_block()
                     else:
                         else_block.merge_block_before(if_op.get_else_block())
                     self.builder.set_insertion_point_to_end(if_op.get_else_block())
-                    self.builder.create_yield_op([else_defs[n].handle for n in names])
+                    if len(names) > 0:
+                        self.builder.create_yield_op([else_defs[n].handle for n in names])
                 else:  # no else block
                     if_op = self.builder.create_if_op([ty.to_ir(self.builder) for ty in ret_types], cond.handle, False)
                     then_block.merge_block_before(if_op.get_then_block())
@@ -524,7 +528,8 @@ class CodeGenerator(ast.NodeVisitor):
                                                                 [ty.to_ir(self.builder) for ty in ret_types])
             loop_block.merge_block_before(after_block)
             self.builder.set_insertion_point_to_end(after_block)
-            self.builder.create_yield_op([y.handle for y in yields])
+            if len(yields) > 0:
+                self.builder.create_yield_op([y.handle for y in yields])
 
         # update global uses in while_op
         for i, name in enumerate(names):
@@ -585,6 +590,12 @@ class CodeGenerator(ast.NodeVisitor):
         lb = self.builder.create_to_index(lb)
         ub = self.builder.create_to_index(ub)
         step = self.builder.create_to_index(step)
+        # Create placeholder for the loop induction variable
+        # We can use any value because the variable isn't a constexpr
+        # but use a distinctive value (of the right type) to ease debugging
+        st_target = ast.Name(id=node.target.id, ctx=ast.Store())
+        init_node = ast.Assign(targets=[st_target], value=ast.Num(value=0xBADF00D))
+        self.visit(init_node)
 
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
@@ -609,13 +620,22 @@ class CodeGenerator(ast.NodeVisitor):
                         names.append(name)
                         init_args.append(triton.language.core._to_tensor(liveins[name], self.builder))
                         yields.append(triton.language.core._to_tensor(self.local_defs[name], self.builder))
+
             # create ForOp
             self.builder.set_insertion_point_to_end(insert_block)
             for_op = self.builder.create_for_op(lb, ub, step, [arg.handle for arg in init_args])
             block.merge_block_before(for_op.get_body(0))
+
+            # update induction variable with actual value, and replace all uses
+            self.builder.set_insertion_point_to_start(for_op.get_body(0))
+            iv = self.builder.create_index_to_si(for_op.get_induction_var())
+            self.lscope[node.target.id].handle.replace_all_uses_with(iv)
+            self.set_value(name, triton.language.core.tensor(iv, triton.language.core.int32))
+
             # create YieldOp
             self.builder.set_insertion_point_to_end(for_op.get_body(0))
-            self.builder.create_yield_op([y.handle for y in yields])
+            if len(yields) > 0:
+                self.builder.create_yield_op([y.handle for y in yields])
             for_op_region = for_op.get_body(0).get_parent()
             assert for_op_region.size() == 1, "We use SCF, so the loop body should only have one block"
             # replace global uses with block arguments
@@ -625,8 +645,7 @@ class CodeGenerator(ast.NodeVisitor):
 
         # update lscope & local_defs (ForOp defines new values)
         for i, name in enumerate(names):
-            self.lscope[name] = triton.language.core.tensor(for_op.get_result(i), yields[i].type)
-            self.local_defs[name] = triton.language.core.tensor(for_op.get_result(i), yields[i].type)
+            self.set_value(name, triton.language.core.tensor(for_op.get_result(i), yields[i].type))
 
         for stmt in node.orelse:
             assert False, "Don't know what to do with else after for"
@@ -669,10 +688,9 @@ class CodeGenerator(ast.NodeVisitor):
             fn_name = mangle_fn(fn.__name__, arg_types, constants)
             # generate function def if necessary
             if not self.module.has_function(fn_name):
-                ret_type = triton.language.void
-                prototype = triton.language.function_type([ret_type], arg_types)
+                prototype = triton.language.function_type([], arg_types)
                 gscope = sys.modules[fn.fn.__module__].__dict__
-                generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_types=self.function_ret_types)
+                generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types)
                 generator.visit(fn.parse())
                 callee_ret_type = generator.last_ret_type
                 self.function_ret_types[fn_name] = callee_ret_type
@@ -680,7 +698,7 @@ class CodeGenerator(ast.NodeVisitor):
                 callee_ret_type = self.function_ret_types[fn_name]
             symbol = self.module.get_function(fn_name)
             call_op = self.builder.call(symbol, arg_vals)
-            if call_op.get_num_results() == 0:
+            if call_op.get_num_results() == 0 or callee_ret_type is None:
                 return None
             elif call_op.get_num_results() == 1:
                 return triton.language.tensor(call_op.get_result(0), callee_ret_type)
@@ -839,18 +857,16 @@ def optimize_triton_ir(mod):
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_inliner_pass()
+    pm.add_triton_combine_pass()
     pm.add_canonicalizer_pass()
+    pm.add_cse_pass()
+    pm.add_licm_pass()
     pm.run(mod)
     return mod
 
 
 def make_tritongpu_ir(mod, num_warps):
     pm = _triton.ir.pass_manager(mod.context)
-    pm.enable_debug()
-    pm.add_inliner_pass()
-    pm.add_triton_combine_pass()
-    pm.add_canonicalizer_pass()
-    pm.add_cse_pass()
     pm.add_convert_triton_to_tritongpu_pass(num_warps)
     pm.run(mod)
     return mod
@@ -859,16 +875,26 @@ def make_tritongpu_ir(mod, num_warps):
 def optimize_tritongpu_ir(mod, num_stages):
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
+    # Get error in backend due to wrong conversion in expanding async-related instruction.
+    # TODO[Superjomn]: Open it when fixed.
     pm.add_tritongpu_pipeline_pass(num_stages)
     pm.add_canonicalizer_pass()
     pm.add_cse_pass()
     pm.add_coalesce_pass()
     pm.add_triton_gpu_combine_pass()
+    pm.add_licm_pass()
     pm.add_triton_gpu_swizzle_pass()
     pm.add_triton_gpu_combine_pass()
     pm.add_cse_pass()
     pm.run(mod)
     return mod
+
+
+def add_external_libs(mod, libs):
+    for name, path in libs.items():
+        if len(name) == 0 or len(path) == 0:
+            return
+    _triton.add_external_libs(mod, list(libs.keys()), list(libs.values()))
 
 
 def make_llvm_ir(mod):
@@ -969,6 +995,9 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     module = optimize_tritongpu_ir(module, num_stages)
     if output == "ttgir":
         return module.str()
+
+    if extern_libs:
+        add_external_libs(module, extern_libs)
 
     # llvm-ir
     llvm_ir = make_llvm_ir(module)

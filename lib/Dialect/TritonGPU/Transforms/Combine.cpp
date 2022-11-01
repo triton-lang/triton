@@ -34,6 +34,45 @@ namespace {
 //
 // -----------------------------------------------------------------------------
 
+// convert(blocked, dot_operand) ->
+// convert(blocked, mma) + convert(mma,  dot_operand)
+// if this value is itself the result of a dot operation
+// this is a hueiristics to accomodate some pattern seen in fused attention
+// kernels.
+// TODO: replace this by something more generic, i.e. layout-aware CSE
+class DecomposeDotOperand : public mlir::RewritePattern {
+
+public:
+  DecomposeDotOperand(mlir::MLIRContext *context)
+      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
+                             1, context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    if (!llvm::isa<triton::gpu::ConvertLayoutOp>(op))
+      return mlir::failure();
+    auto convert = llvm::cast<triton::gpu::ConvertLayoutOp>(op);
+    auto srcType = convert.getOperand().getType().cast<RankedTensorType>();
+    auto dstType = convert.getType().cast<RankedTensorType>();
+    if (srcType.getEncoding().isa<triton::gpu::BlockedEncodingAttr>() &&
+        dstType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>()) {
+      auto tmpType =
+          RankedTensorType::get(dstType.getShape(), dstType.getElementType(),
+                                dstType.getEncoding()
+                                    .cast<triton::gpu::DotOperandEncodingAttr>()
+                                    .getParent());
+      auto tmp = rewriter.create<triton::gpu::ConvertLayoutOp>(
+          convert.getLoc(), tmpType, convert.getOperand());
+      auto newConvert = rewriter.create<triton::gpu::ConvertLayoutOp>(
+          convert.getLoc(), dstType, tmp);
+      rewriter.replaceOp(op, {newConvert});
+      return mlir::success();
+    }
+    return mlir::failure();
+  }
+};
+
 // Layout conversions can't deduce their return type automatically.
 // IIUC they are therefore not handled by DRR right now
 class SimplifyConversion : public mlir::RewritePattern {
@@ -47,6 +86,12 @@ public:
                   mlir::PatternRewriter &rewriter) const override {
     if (!llvm::isa<triton::gpu::ConvertLayoutOp>(op))
       return mlir::failure();
+    auto convert = llvm::cast<triton::gpu::ConvertLayoutOp>(op);
+    auto dstType = convert.getType().cast<RankedTensorType>();
+    // we don't handle conversions to DotOperandEncodingAttr
+    // this is a heuristics to accomodate fused attention
+    if (dstType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
+      return mlir::failure();
     // convert to the same layout -- we can delete
     if (op->getResultTypes() == op->getOperandTypes()) {
       rewriter.replaceOp(op, op->getOperands());
@@ -57,16 +102,21 @@ public:
     if (!arg)
       return mlir::failure();
     // cvt(alloc_tensor(x), type2) -> alloc_tensor(x, type2)
-    // cvt(insert_slice(x), type2) -> extract_slice(cvt(x, type2))
     auto alloc_tensor = dyn_cast<triton::gpu::AllocTensorOp>(arg);
     if (alloc_tensor) {
       rewriter.replaceOpWithNewOp<triton::gpu::AllocTensorOp>(
           op, op->getResult(0).getType());
       return mlir::success();
     }
+    // cvt(insert_slice(x), type2) -> insert_slice(cvt(x, type2))
     auto insert_slice = dyn_cast<triton::gpu::InsertSliceAsyncOp>(arg);
     if (insert_slice) {
       auto newType = op->getResult(0).getType();
+      // Ensure that the new insert_slice op is placed in the same place as the
+      // old insert_slice op. Otherwise, the new insert_slice op may be placed
+      // after the async_wait op, which is not allowed.
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(insert_slice);
       auto new_arg = rewriter.create<triton::gpu::ConvertLayoutOp>(
           op->getLoc(), newType, insert_slice.dst());
       rewriter.replaceOpWithNewOp<triton::gpu::InsertSliceAsyncOp>(
@@ -80,6 +130,11 @@ public:
     auto extract_slice = dyn_cast<triton::gpu::ExtractSliceOp>(arg);
     if (extract_slice) {
       auto origType = extract_slice.src().getType().cast<RankedTensorType>();
+      // Ensure that the new extract_slice op is placed in the same place as the
+      // old extract_slice op. Otherwise, the new extract_slice op may be placed
+      // after the async_wait op, which is not allowed.
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(extract_slice);
       auto newType = RankedTensorType::get(
           origType.getShape(), origType.getElementType(),
           op->getResult(0).getType().cast<RankedTensorType>().getEncoding());
@@ -163,10 +218,10 @@ Operation *cloneWithInferType(mlir::PatternRewriter &rewriter, Operation *op,
   auto typeInfer = dyn_cast<InferTypeOpInterface>(newOp);
   if (typeInfer) {
     SmallVector<Type, 1> newType;
-    auto sucess = typeInfer.inferReturnTypes(
+    auto success = typeInfer.inferReturnTypes(
         newOp->getContext(), newOp->getLoc(), newOp->getOperands(),
         newOp->getAttrDictionary(), newOp->getRegions(), newType);
-    if (success)
+    if (succeeded(success))
       newOp->getResult(0).setType(newType.front());
   }
   return newOp;
@@ -197,12 +252,16 @@ public:
     if (isSharedLayout(cvt->getResults()[0]) ||
         isSharedLayout(cvt->getOperand(0)))
       return mlir::failure();
+    // we don't handle conversions to DotOperandEncodingAttr
+    // this is a heuristics to accomodate fused attention
     auto targetType = cvt->getResultTypes()[0].cast<RankedTensorType>();
+    if (targetType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
+      return mlir::failure();
     // DFS
     SetVector<Operation *> processed;
     SetVector<Attribute> layout;
+    llvm::MapVector<Value, Attribute> toConvert;
     std::vector<std::pair<Operation *, Attribute>> queue;
-    std::vector<std::pair<Value, Attribute>> toConvert;
     queue.push_back({cvt, targetType.getEncoding()});
     int numCvts = 1;
     while (!queue.empty()) {
@@ -222,17 +281,20 @@ public:
       // add all operands to the queue
       for (Value argI : currOp->getOperands()) {
         Attribute newEncoding;
+        // cannot invert the current encoding for this operand
+        // we stop everything
         if (failed(invertEncoding(currLayout, currOp, newEncoding)))
           return mlir::failure();
-        toConvert.push_back({argI, newEncoding});
+        if (toConvert.count(argI) && toConvert[argI] != newEncoding)
+          return mlir::failure();
+        //
         Operation *opArgI = argI.getDefiningOp();
-        if (!opArgI)
-          continue;
+        toConvert.insert({argI, newEncoding});
         if (!opArgI || processed.contains(opArgI) ||
             (opArgI->getBlock() != cvt->getBlock()))
           continue;
         // if the conversion can be folded into opArgI then
-        // we actually haven't added anny conversion
+        // we don't count this conversion as expensive
         if (isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
                 triton::MakeRangeOp, triton::SplatOp>(*opArgI))
           continue;
@@ -246,31 +308,30 @@ public:
     if (numCvts > 0)
       return mlir::failure();
 
-    FuncOp parentFunc = cvt->getParentOfType<FuncOp>();
-    bool test = cvt->getResult(0)
-                    .getType()
-                    .cast<RankedTensorType>()
-                    .getEncoding()
-                    .isa<triton::gpu::MmaEncodingAttr>();
-    // if (test)
-    //   llvm::outs() << "--------\nConverting " << *cvt << "\n---------\n";
+    SmallVector<Value, 4> sortedValues;
+    SetVector<Operation *> tmp;
+    for (auto it = toConvert.begin(); it != toConvert.end(); ++it) {
+      Value v = it->first;
+      if (v.getDefiningOp())
+        tmp.insert(v.getDefiningOp());
+      else
+        sortedValues.push_back(v);
+    }
+    tmp = mlir::topologicalSort(tmp);
+    for (Operation *op : tmp)
+      sortedValues.push_back(op->getResult(0));
 
+    // llvm::outs() << "----\n";
     BlockAndValueMapping mapping;
-    for (int i = toConvert.size() - 1; i >= 0; i--) {
+    for (Value currOperand : sortedValues) {
       // unpack information
-      Value currOperand;
-      Attribute targetLayout;
-      std::tie(currOperand, targetLayout) = toConvert[i];
-      // if (test)
-      //   llvm::outs() << "current " << currOperand << "\n";
+      Attribute targetLayout = toConvert.lookup(currOperand);
       // rematerialize the operand if necessary
       Operation *currOperation = currOperand.getDefiningOp();
       if (processed.contains(currOperation)) {
         currOperation = cloneWithInferType(rewriter, currOperation, mapping);
         currOperand = currOperation->getResult(0);
       }
-      if (i == 0)
-        break;
       // compute target type for the layout cast
       auto currType = currOperand.getType().cast<RankedTensorType>();
       auto newType = RankedTensorType::get(
@@ -281,6 +342,7 @@ public:
         newOperand->moveAfter(currOperation);
       mapping.map(currOperand, newOperand);
     }
+    //  llvm::outs() << cvt->getParentOfType<mlir::FuncOp>() << "\n";
     rewriter.replaceOp(cvt, mapping.lookup(cvt->getOperand(0)));
     return mlir::success();
   }
@@ -290,115 +352,105 @@ public:
 //
 // -----------------------------------------------------------------------------
 
-// This modifies the loop in-place
-bool tryLegalizeOp(Operation *op, DenseSet<Value> toPreserve,
-                   mlir::PatternRewriter &rewriter) {
-  auto targetType = toPreserve.begin()->getType().cast<RankedTensorType>();
-  auto newType = [&](RankedTensorType origType) {
-    return RankedTensorType::get(origType.getShape(), origType.getElementType(),
-                                 targetType.getEncoding());
-  };
-  bool hasSameTypes = op->getDialect()->getNamespace() == "arith" ||
-                      isa<triton::SplatOp, triton::AddPtrOp>(op);
-  if (hasSameTypes) {
-    // replace argument types
-    for (auto arg : llvm::enumerate(op->getOperands())) {
-      auto argType = arg.value().getType().dyn_cast<RankedTensorType>();
-      if (toPreserve.count(arg.value()) || !argType)
-        continue;
-      auto newArg = rewriter.create<triton::gpu::ConvertLayoutOp>(
-          rewriter.getUnknownLoc(), newType(argType), arg.value());
-      newArg->moveBefore(op);
-      op->setOperand(arg.index(), newArg);
-    }
-    // replace result types
-    if (!isa<triton::SplatOp>(op))
-      op->getResult(0).setType(op->getOperand(0).getType());
-    return true;
-  }
-  return false;
-}
-
-std::pair<SmallVector<Value, 4>, scf::ForOp>
-tryConvertIterArg(scf::ForOp &forOp, mlir::PatternRewriter &rewriter, size_t i,
-                  Type newType) {
-  forOp.getInductionVar();
-  auto newEncoding = newType.cast<RankedTensorType>().getEncoding();
-  auto ctx = forOp.getContext();
-  auto isInLoop = [&](Operation *op) { return op->getParentOp() == forOp; };
-  // Rewrite init argument
-  Type origType = forOp.getInitArgs()[i].getType();
-  SmallVector<Value, 4> newInitArgs = forOp.getInitArgs();
-  newInitArgs[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
-      newInitArgs[i].getLoc(), newType, newInitArgs[i]);
-  // Clone for loop
-  scf::ForOp newForOp = rewriter.create<scf::ForOp>(
-      forOp.getLoc(), forOp.getLowerBound(), forOp.getUpperBound(),
-      forOp.getStep(), newInitArgs);
-  newForOp->moveBefore(forOp);
-  rewriter.setInsertionPointToStart(newForOp.getBody());
-  BlockAndValueMapping mapping;
-  for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs()))
-    mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
-  mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
-  // traverse all ops in the loop
-  for (Operation &op : forOp.getBody()->without_terminator()) {
-    // we clone the op
-    Operation *newOp = rewriter.clone(op, mapping);
-    // if any argument of this op has changed type, then the
-    // new operation is not legal and we should try to
-    // legalize it.
-    DenseSet<Value> modifiedTypes;
-    for (Value arg : op.getOperands()) {
-      if (mapping.contains(arg) &&
-          mapping.lookup(arg).getType() != arg.getType())
-        modifiedTypes.insert(mapping.lookup(arg));
-    }
-
-    bool shouldTryLegalize = !modifiedTypes.empty();
-    if (shouldTryLegalize)
-      tryLegalizeOp(newOp, modifiedTypes, rewriter);
-  }
-  // create yield, inserting conversions if necessary
-  auto yieldOp = forOp.getBody()->getTerminator();
-  SmallVector<Value, 4> newYieldArgs;
-  for (Value arg : yieldOp->getOperands())
-    newYieldArgs.push_back(mapping.lookup(arg));
-  newYieldArgs[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
-      yieldOp->getLoc(), newType, newYieldArgs[i]);
-  rewriter.create<scf::YieldOp>(forOp.getLoc(), newYieldArgs);
-
-  // replace
-  SmallVector<Value, 4> newResults = newForOp->getResults();
-  newResults[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
-      rewriter.getUnknownLoc(), origType, newForOp->getResult(i));
-  newResults[i].getDefiningOp()->moveAfter(newForOp);
-  return {newResults, newForOp};
-}
+// int test = 0;
 
 class MoveConvertOutOfLoop : public mlir::RewritePattern {
 public:
   MoveConvertOutOfLoop(mlir::MLIRContext *context)
       : mlir::RewritePattern(scf::ForOp::getOperationName(), 1, context) {}
 
-  mlir::LogicalResult matchAndRewrite(mlir::Operation *op,
-                                      mlir::PatternRewriter &rewriter) const {
+  SmallVector<Value, 4>
+  rematerializeForLoop(mlir::PatternRewriter &rewriter, scf::ForOp &forOp,
+                       size_t i, RankedTensorType newType,
+                       triton::gpu::ConvertLayoutOp origConversion) const {
+    // Rewrite init argument
+    Type origType = forOp.getInitArgs()[i].getType();
+    SmallVector<Value, 4> newInitArgs = forOp.getInitArgs();
+    newInitArgs[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
+        newInitArgs[i].getLoc(), newType, newInitArgs[i]);
+    // Clone for loop
+    scf::ForOp newForOp = rewriter.create<scf::ForOp>(
+        forOp.getLoc(), forOp.getLowerBound(), forOp.getUpperBound(),
+        forOp.getStep(), newInitArgs);
+    newForOp->moveBefore(forOp);
+    rewriter.setInsertionPointToStart(newForOp.getBody());
+    BlockAndValueMapping mapping;
+    for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs()))
+      mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
+    mapping.map(origConversion.getResult(), newForOp.getRegionIterArgs()[i]);
+    // the iter arg of interest may have other uses than the conversion
+    // we're hoisting out of the loop. If that's the case we will
+    // need to add extra conversions for all uses... which is only useful
+    // if these extra conversions can be removed by another pattern
+    auto oldArg = forOp.getRegionIterArgs()[i];
+    auto newArg = newForOp.getRegionIterArgs()[i];
+    auto newArgFallback = rewriter.create<triton::gpu::ConvertLayoutOp>(
+        newForOp.getLoc(), origType, newArg);
 
+    mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
+    for (Operation &op : forOp.getBody()->without_terminator()) {
+      if (&op == (Operation *)(&origConversion))
+        continue;
+      Operation *newOp = rewriter.clone(op, mapping);
+      if (find(oldArg.getUsers(), &op) != oldArg.getUsers().end())
+        newOp->replaceUsesOfWith(newArg, newArgFallback);
+    }
+
+    // create yield, inserting conversions if necessary
+    auto yieldOp = forOp.getBody()->getTerminator();
+    SmallVector<Value, 4> newYieldArgs;
+    for (Value arg : yieldOp->getOperands())
+      newYieldArgs.push_back(mapping.lookup(arg));
+    newYieldArgs[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
+        yieldOp->getLoc(), newType, newYieldArgs[i]);
+    rewriter.create<scf::YieldOp>(forOp.getLoc(), newYieldArgs);
+
+    // replace
+    SmallVector<Value, 4> newResults = newForOp->getResults();
+    newResults[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
+        rewriter.getUnknownLoc(), origType, newForOp->getResult(i));
+    newResults[i].getDefiningOp()->moveAfter(newForOp);
+    return newResults;
+  }
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
     auto forOp = cast<scf::ForOp>(op);
-    auto isInLoop = [&](Operation *op) { return op->getParentOp() == forOp; };
     auto iterArgs = forOp.getRegionIterArgs();
     for (auto iterArg : llvm::enumerate(iterArgs)) {
+      // if (iterArg.index() != 1)
+      //   continue;
       // skip non-tensor types
       if (!iterArg.value().getType().isa<RankedTensorType>())
         continue;
+      // we only move `iterArg` out of the loop if
+      //   - there is only a single conversion use
+      //   - moving this conversion out of the loop will not generate
+      //     any extra non-removable conversion
+      auto users = iterArg.value().getUsers();
+      // check first condition
+      SetVector<Type> cvtTargetTypes;
+      for (auto user : users)
+        if (isa<triton::gpu::ConvertLayoutOp>(user))
+          cvtTargetTypes.insert(user->getResults()[0].getType());
+      if (cvtTargetTypes.size() != 1)
+        continue;
+      // TODO: check second condition
+      for (auto user : users) {
+        if (isa<triton::gpu::ConvertLayoutOp>(user))
+          continue;
+      }
       // check
       for (auto op : iterArg.value().getUsers()) {
-        if (isa<triton::gpu::ConvertLayoutOp>(op)) {
-          auto newFor = tryConvertIterArg(forOp, rewriter, iterArg.index(),
-                                          op->getResult(0).getType());
-          rewriter.replaceOp(forOp, newFor.first);
-          return success();
-        }
+        auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
+        if (!cvt)
+          continue;
+        auto targetType = op->getResultTypes()[0].cast<RankedTensorType>();
+        auto newFor = rematerializeForLoop(rewriter, forOp, iterArg.index(),
+                                           targetType, cvt);
+        rewriter.replaceOp(forOp, newFor);
+        return success();
       }
     }
     return failure();
@@ -422,7 +474,6 @@ public:
     auto forOp = dyn_cast<scf::ForOp>(cvt->getParentOp());
     if (!forOp)
       return mlir::failure();
-    auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
     auto isInLoop = [&](Operation *op) { return op->getParentOp() == forOp; };
 
     SetVector<Operation *> cvtSlices;
@@ -434,20 +485,27 @@ public:
     mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
     if (cvtSlices.empty())
       return failure();
-    // if other operands are in the loop
-    // then we don't touch anything
-    Operation *op = cvtSlices.front();
-    for (Value _arg : op->getOperands()) {
-      Operation *arg = _arg.getDefiningOp();
-      if (arg && isInLoop(arg) && (arg != cvt))
+
+    for (Operation *op : cvtSlices) {
+      if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
+          !op->hasTrait<mlir::OpTrait::SameOperandsAndResultType>())
         return failure();
+      for (Value arg : op->getOperands()) {
+        Operation *argOp = arg.getDefiningOp();
+        if (argOp && (argOp != cvt) &&
+            !isa<arith::ConstantOp, triton::SplatOp>(argOp)) {
+          return failure();
+        }
+      }
     }
+
     // otherwise, we push the conversion forward
     // since we'll be able to move it out of
     // the loop once it reaches the yield op
     // op(cvt(arg_0), arg_1, ..., arg_n)
     // -> cvt(op(arg_0, cvt(arg_1), ..., cvt(arg_n)))
     BlockAndValueMapping mapping;
+    auto op = cvtSlices.front();
     for (Value arg : op->getOperands()) {
       if (arg.getDefiningOp() == cvt)
         mapping.map(arg, cvt.getOperand());
@@ -492,7 +550,7 @@ public:
         oldAcc.getLoc(), newRetType, oldAcc);
     auto newDot = rewriter.create<triton::DotOp>(
         dotOp.getLoc(), newRetType, dotOp.getOperand(0), dotOp.getOperand(1),
-        newAcc, dotOp.allowTF32());
+        newAcc, dotOp.allowTF32(), dotOp.transA(), dotOp.transB());
 
     rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
         op, oldRetType, newDot.getResult());
@@ -515,6 +573,7 @@ public:
     mlir::RewritePatternSet patterns(context);
 
     patterns.add<SimplifyConversion>(context);
+    patterns.add<DecomposeDotOperand>(context);
     patterns.add<RematerializeBackward>(context);
     patterns.add<RematerializeForward>(context);
     patterns.add<MoveConvertOutOfLoop>(context);

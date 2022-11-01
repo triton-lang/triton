@@ -42,7 +42,7 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
   addArgumentMaterialization([&](OpBuilder &builder,
                                  RankedTensorType tensorType, ValueRange inputs,
                                  Location loc) {
-    llvm_unreachable("Not implemented");
+    llvm_unreachable("Argument rematerialization not implemented");
     return llvm::None;
   });
 
@@ -50,7 +50,7 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
   // convert origValue to newValue
   addSourceMaterialization([&](OpBuilder &builder, RankedTensorType tensorType,
                                ValueRange inputs, Location loc) {
-    llvm_unreachable("Not implemented");
+    llvm_unreachable("Source rematerialization not implemented");
     return llvm::None;
   });
 
@@ -73,7 +73,7 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
 //
 TritonGPUConversionTarget::TritonGPUConversionTarget(
     MLIRContext &context, TritonGPUTypeConverter &typeConverter)
-    : ConversionTarget(context), typeConverter(typeConverter) {
+    : ConversionTarget(context) {
   // TODO: we should also verify ops of TritonGPUDialect
   addLegalDialect<triton::gpu::TritonGPUDialect>();
 
@@ -90,7 +90,7 @@ TritonGPUConversionTarget::TritonGPUConversionTarget(
   });
 
   // We have requirements for the data layouts
-  addDynamicallyLegalOp<triton::DotOp>([this](triton::DotOp dotOp) -> bool {
+  addDynamicallyLegalOp<triton::DotOp>([](triton::DotOp dotOp) -> bool {
     Attribute aEncoding =
         dotOp.a().getType().cast<RankedTensorType>().getEncoding();
     Attribute bEncoding =

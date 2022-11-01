@@ -54,7 +54,7 @@ def test_binop_type_check():
     kernel = triton.compiler._compile(binop_type_check,
                                       signature="*fp32",
                                       device=0,
-                                      output="ttgir")
+                                      output="ttir")
     assert (kernel)
     # TODO: Check types of the results
 
@@ -75,6 +75,6 @@ def test_reduce_type_check():
     kernel = triton.compiler._compile(reduce_type_check,
                                       signature="*fp32",
                                       device=0,
-                                      output="ttgir")
+                                      output="ttir")
     assert (kernel)
     # TODO: Check types of the results

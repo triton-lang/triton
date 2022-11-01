@@ -132,6 +132,9 @@ class dtype:
     def is_int_signed(self):
         return self.name in dtype.SINT_TYPES
 
+    def is_int_unsigned(self):
+        return self.name in dtype.UINT_TYPES
+
     def is_int(self):
         return self.name in dtype.SINT_TYPES + dtype.UINT_TYPES
 
@@ -461,9 +464,19 @@ class tensor:
         return semantic.floordiv(self, other, _builder)
 
     @builtin
+    def __rfloordiv__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.floordiv(other, self, _builder)
+
+    @builtin
     def __mod__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.mod(self, other, _builder)
+
+    @builtin
+    def __rmod__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.mod(other, self, _builder)
 
     # unary operators
     @builtin
@@ -533,6 +546,7 @@ class tensor:
 
     @builtin
     def __rlt__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
         return semantic.less_than(other, self, _builder)
 
     # <=
@@ -721,9 +735,10 @@ def cat(input, other, _builder=None):
 
 
 @builtin
-def reshape(input, shape, _builder=None):
+def view(input, shape, _builder=None):
     """
-    Tries to reshape the given tensor to a new shape.
+    Returns a tensor with the same elements as `input` but a different shape.
+    The order of the elements may not be preserved.
 
     :param input: The input tensor.
     :type input:
@@ -732,7 +747,7 @@ def reshape(input, shape, _builder=None):
 
     """
     shape = [x.value for x in shape]
-    return semantic.reshape(input, shape, _builder)
+    return semantic.view(input, shape, _builder)
 
 
 # -----------------------
@@ -741,7 +756,7 @@ def reshape(input, shape, _builder=None):
 
 
 @builtin
-def dot(input, other, allow_tf32=True, _builder=None):
+def dot(input, other, allow_tf32=True, trans_a=False, trans_b=False, _builder=None):
     """
     Returns the matrix product of two blocks.
 
@@ -753,7 +768,7 @@ def dot(input, other, allow_tf32=True, _builder=None):
     :type other: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
     """
     allow_tf32 = _constexpr_to_value(allow_tf32)
-    return semantic.dot(input, other, allow_tf32, _builder)
+    return semantic.dot(input, other, allow_tf32, trans_a, trans_b, _builder)
 
 
 # -----------------------
@@ -1041,21 +1056,35 @@ def debug_barrier(_builder=None):
 
 
 @builtin
-def multiple_of(input, value, _builder=None):
+def multiple_of(input, values, _builder=None):
     """
     Let the compiler knows that the values in :code:`input` are all multiples of :code:`value`.
     """
-    value = _constexpr_to_value(value)
-    return semantic.multiple_of(input, value)
+    if isinstance(values, constexpr):
+        values = [values]
+    for i, d in enumerate(values):
+        if not isinstance(d, constexpr):
+            raise TypeError(f"values element {i} must have type `constexpr`")
+        if not isinstance(d.value, int):
+            raise TypeError(f"values element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
+    values = [x.value for x in values]
+    return semantic.multiple_of(input, values)
 
 
 @builtin
-def max_contiguous(input, value, _builder=None):
+def max_contiguous(input, values, _builder=None):
     """
     Let the compiler knows that the `value` first values in :code:`input` are contiguous.
     """
-    value = _constexpr_to_value(value)
-    return semantic.max_contiguous(input, value)
+    if isinstance(values, constexpr):
+        values = [values]
+    for i, d in enumerate(values):
+        if not isinstance(d, constexpr):
+            raise TypeError(f"values element {i} must have type `constexpr`")
+        if not isinstance(d.value, int):
+            raise TypeError(f"values element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
+    values = [x.value for x in values]
+    return semantic.max_contiguous(input, values)
 
 
 # -----------------------
@@ -1129,7 +1158,7 @@ def ravel(x):
     :param x: the input tensor
     :type x: Block
     """
-    return triton.language.reshape(x, [x.numel])
+    return triton.language.view(x, [x.numel])
 
 
 @triton.jit

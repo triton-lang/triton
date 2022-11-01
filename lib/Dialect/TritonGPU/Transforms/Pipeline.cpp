@@ -17,11 +17,6 @@ using namespace mlir;
 
 namespace {
 class LoopPipeliner {
-  /// comments on numStages:
-  ///   [0, numStages-1) are in the prologue
-  ///   numStages-1 is appended after the loop body
-  int numStages;
-
   /// cache forOp we are working on
   scf::ForOp forOp;
 
@@ -43,6 +38,11 @@ class LoopPipeliner {
   ///
   Value loopIterIdx;
 
+  /// comments on numStages:
+  ///   [0, numStages-1) are in the prologue
+  ///   numStages-1 is appended after the loop body
+  int numStages;
+
   /// value (in loop) => value at stage N
   DenseMap<Value, SmallVector<Value>> valueMapping;
 
@@ -57,9 +57,6 @@ class LoopPipeliner {
   void setValueMapping(Value origin, Value newValue, int stage);
 
   Value lookupOrDefault(Value origin, int stage);
-
-  /// return true if this op uses any of `loads`
-  bool isDirectUserOfAsyncLoad(Operation &op);
 
   /// returns a empty buffer of size <numStages, ...>
   triton::gpu::AllocTensorOp allocateEmptyBuffer(Operation *op,
@@ -78,10 +75,13 @@ public:
   /// emit pipelined loads (before loop body)
   void emitPrologue();
 
+  /// emit pipelined loads (after loop body)
+  void emitEpilogue();
+
   /// create the new ForOp (add new args & insert prefetched ops)
   scf::ForOp createNewForOp();
 
-  friend class PipelinePass;
+  friend struct PipelinePass;
 };
 
 // helpers
@@ -118,19 +118,6 @@ void LoopPipeliner::collectDeps(Value v, int stages, DenseSet<Value> &deps) {
     for (Value op : v.getDefiningOp()->getOperands())
       collectDeps(op, stages, deps);
   }
-}
-
-bool LoopPipeliner::isDirectUserOfAsyncLoad(Operation &op) {
-  for (Value loadOp : loads) {
-    assert(loadOp.hasOneUse() &&
-           "load should only have one use (ConvertLayout)");
-    Value loadUseResult = loadOp.getUsers().begin()->getResult(0);
-    for (Value opOperand : op.getOperands()) {
-      if (opOperand == loadUseResult)
-        return true;
-    }
-  }
-  return false;
 }
 
 triton::gpu::AllocTensorOp
@@ -353,8 +340,8 @@ void LoopPipeliner::emitPrologue() {
   } // for (int stage = 0; stage < numStages - 1; ++stage)
 
   // async.wait & extract_slice
-  Operation *asyncWait = builder.create<triton::gpu::AsyncWaitOp>(
-      loads[0].getLoc(), loads.size() * (numStages - 2));
+  builder.create<triton::gpu::AsyncWaitOp>(loads[0].getLoc(),
+                                           loads.size() * (numStages - 2));
   loopIterIdx = builder.create<arith::ConstantIntOp>(iv.getLoc(), 0, 32);
   for (Value loadOp : loads) {
     Value extractSlice = builder.create<triton::gpu::ExtractSliceOp>(
@@ -362,6 +349,22 @@ void LoopPipeliner::emitPrologue() {
         loadStageBuffer[loadOp][numStages - 1], loopIterIdx, /*axis*/ 0);
     loadsExtract[loadOp] = extractSlice;
   }
+  // bump up loopIterIdx, this is used for getting the correct slice for the
+  // *next* iteration
+  loopIterIdx = builder.create<arith::AddIOp>(
+      loopIterIdx.getLoc(), loopIterIdx,
+      builder.create<arith::ConstantIntOp>(loopIterIdx.getLoc(), 1, 32));
+}
+
+void LoopPipeliner::emitEpilogue() {
+  // If there's any outstanding async copies, we need to wait for them.
+  // TODO(Keren): We may want to completely avoid the async copies in the last
+  // few iterations by setting is_masked attribute to true. We don't want to use
+  // the mask operand because it's a tensor but not a scalar.
+  OpBuilder builder(forOp);
+  OpBuilder::InsertionGuard g(builder);
+  builder.setInsertionPointAfter(forOp);
+  builder.create<triton::gpu::AsyncWaitOp>(forOp.getLoc(), 0);
 }
 
 scf::ForOp LoopPipeliner::createNewForOp() {
@@ -555,8 +558,8 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   yieldValues.push_back(loopIterIdx);
 
   builder.setInsertionPointToEnd(newForOp.getBody());
-  auto test = builder.create<scf::YieldOp>(
-      forOp.getBody()->getTerminator()->getLoc(), yieldValues);
+  builder.create<scf::YieldOp>(forOp.getBody()->getTerminator()->getLoc(),
+                               yieldValues);
   return newForOp;
 }
 
@@ -580,6 +583,8 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
       pipeliner.emitPrologue();
 
       scf::ForOp newForOp = pipeliner.createNewForOp();
+
+      pipeliner.emitEpilogue();
 
       // replace the original loop
       for (unsigned i = 0; i < forOp->getNumResults(); ++i)

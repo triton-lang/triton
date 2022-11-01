@@ -52,7 +52,7 @@ different cuda threads in the programs, via shared memory. In other words,
 for all indices i \in R^d, \mathcal{L}(i) = {0, 1, ..., 32*num_warps - 1}.
 
 In order to avoid shared memory bank conflicts, elements may be swizzled
-in memory. For example, a swizzled row-major layout could store its data 
+in memory. For example, a swizzled row-major layout could store its data
 as follows:
 
 A_{0, 0}  A_{0, 1}  A_{0, 2}  A_{0, 3} ...   [phase 0] \ per_phase = 2
@@ -215,9 +215,9 @@ def MmaEncodingAttr : DistributedEncoding<"MmaEncoding"> {
 An encoding for tensors that have been produced by tensor cores.
 It is characterized by two parameters:
 - A 'version' which specifies the generation the tensor cores
-whose output is being partitioned: 1 for first-gen tensor cores (Volta), 
+whose output is being partitioned: 1 for first-gen tensor cores (Volta),
 and 2 for second-gen tensor cores (Turing/Ampere).
-- A `blockTileSize` to indicate how data should be 
+- A `blockTileSize` to indicate how data should be
 partitioned between warps.
 
 // -------------------------------- version = 1 --------------------------- //
@@ -229,7 +229,7 @@ https://docs.nvidia.com/cuda/parallel-thread-execution/index.html
 
 For example, the matrix L corresponding to blockTileSize=[32,16] is:
 
-                               warp 0              
+                               warp 0
 --------------------------------/\-------------------------------
 [ 0   0   2   2   0   0   2   2    4   4   6   6   4   4   6   6 ]
 [ 1   1   3   3   1   1   3   3    5   5   7   7   5   5   7   7 ]
@@ -246,7 +246,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
 [ 24  24  26  26  24  24  26  26   28  28  30  30  28  28  30  30]
 [ 25  25  27  27  25  25  27  27   29  29  31  31  29  29  31  31]
 
-                         warp 1 = warp0 + 32             
+                         warp 1 = warp0 + 32
 --------------------------------/\-------------------------------
 [ 32  32  34  34  32  32  34  34   36  36  38  38  36  36  38  38]
 [ 33  33  35  35  33  33  35  35   37  37  39  39  37  37  39  39]
@@ -260,29 +260,29 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
 For second-gen tensor cores, the implicit warpTileSize is [16, 8].
 Information about this layout can be found in the official PTX documentation
 https://docs.nvidia.com/cuda/parallel-thread-execution/index.html
-(mma.16816 section, FP32 accumulator).             
+(mma.16816 section, FP32 accumulator).
 
 For example, the matrix L corresponding to blockTileSize=[32,16] is:
                 warp 0                          warp 1
 -----------------/\-------------  ----------------/\-------------
 [ 0   0   1   1   2   2   3   3   32  32  33  33  34  34  35  35
 [ 4   4   5   5   6   6   7   7   36  36  37  37  38  38  39  39
-[ ..............................  ..............................                      
+[ ..............................  ..............................
 [ 28  28  29  29  30  30  31  31  60  60  61  61  62  62  63  63
 [ 0   0   1   1   2   2   3   3   32  32  33  33  34  34  35  35
 [ 4   4   5   5   6   6   7   7   36  36  37  37  38  38  39  39
-[ ..............................  ..............................                
+[ ..............................  ..............................
 [ 28  28  29  29  30  30  31  31  60  60  61  61  62  62  63  63
-                
+
               warp 3                           warp 4
 ----------------/\-------------   ----------------/\-------------
 [ 64  64  65  65  66  66  67  67  96  96  97  97  98  98  99  99
 [ 68  68  69  69  70  70  71  71  100 100 101 101 102 102 103 103
-[ ..............................  ...............................                   
+[ ..............................  ...............................
 [ 92  92  93  93  94  94  95  95  124 124 125 125 126 126 127 127
 [ 64  64  65  65  66  66  67  67  96  96  97  97  98  98  99  99
 [ 68  68  69  69  70  70  71  71  100 100 101 101 102 102 103 103
-[ ..............................  ...............................                   
+[ ..............................  ...............................
 [ 92  92  93  93  94  94  95  95  124 124 125 125 126 126 127 127
 
 }];
@@ -316,7 +316,7 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
     This is useful for constructing the inverse layout of an expand_dims operation during some optimization passes.
 
   }];
-  
+
   let parameters = (
     ins
     "unsigned":$dim,
@@ -324,8 +324,29 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
     "Attribute":$parent
   );
 
-  let extraClassDeclaration = extraBaseClassDeclaration;
+  let extraClassDeclaration = extraBaseClassDeclaration # [{
+    SmallVector<int64_t> paddedShape(ArrayRef<int64_t> shape) const;
+  }];
 }
 
+
+def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding"> {
+  let mnemonic = "dot_op";
+
+  let description = [{
+In TritonGPU dialect, considering `d = tt.dot a, b, c`
+tt.dot's operands a and b must be of DotOperandEncodingAttr layout.
+a's opIdx is 0, b's opIdx is 1.
+The parend field in DotOperandEncodingAttr is the layout of d.
+  }];
+
+  let parameters = (
+    ins
+    "unsigned":$opIdx,
+    "Attribute":$parent
+  );
+
+  let extraClassDeclaration = extraBaseClassDeclaration;
+}
 
 #endif
