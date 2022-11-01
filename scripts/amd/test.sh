@@ -26,7 +26,7 @@ rm -rf /tmp/triton
 # python python/test/test_empty.py
 # -ex 'ignore 1 472' \
 
-# pytest -rfs --verbose python/test/unit/language/test_core.py 2>&1 | tee /dockerx/triton/test_core.log
+pytest -rfs --verbose python/test/unit/language/test_core.py 2>&1 | tee /dockerx/triton/test_core.log
 # pytest --verbose python/test/unit/language/test_core.py::test_empty_kernel[float32] 2>&1 | tee /dockerx/triton/test_empty_kernel.log
 # pytest --verbose python/test/unit/language/test_core.py::test_bin_op[int32-uint32-+] 2>&1 | tee /dockerx/triton/test_bin_op.log
 # pytest --verbose python/test/unit/language/test_core.py::test_atomic_rmw 2>&1 | tee /dockerx/triton/test_atomic_rmw.log
@@ -55,7 +55,7 @@ rm -rf /tmp/triton
 # pytest --capture=tee-sys --verbose python/test/unit/language/test_core.py::test_num_programs[float32]
 # pytest --verbose python/test/unit/language/test_core.py::test_unary_op
 # pytest --verbose python/test/unit/language/test_core.py::test_bin_op
-pytest --verbose "python/test/unit/language/test_core.py::test_dot"
+# pytest --verbose "python/test/unit/language/test_core.py::test_dot"
 # pytest --verbose python/test/unit/language/test_core.py::test_cast
 # pytest --verbose python/test/unit/language/test_core.py::test_reduce1d
 # pytest --verbose python/test/unit/language/test_core.py::test_reduce2d
