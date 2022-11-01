@@ -357,7 +357,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     // CHECK-NEXT: llvm.getelementptr %[[BASE2]][%[[OFFSET3]]]
     %index = arith.constant 1 : i32
     %0 = triton_gpu.alloc_tensor : tensor<128x16x32xf32, #shared0>
-    %1 = triton_gpu.extract_slice %0, %index {axis = 0: i32} : tensor<128x16x32xf32, #shared0> -> tensor<16x32xf32, #shared0>
+    %1 = tensor.extract_slice %0[%index, 0, 0][1, 16, 32][1, 1, 1] : tensor<128x16x32xf32, #shared0> -> tensor<16x32xf32, #shared0>
     return
   }
 }

@@ -70,7 +70,7 @@ func @extract_slice(%A : !tt.ptr<f16>) {
   %cst0 = arith.constant dense<0.000000e+00> : tensor<1x16x16xf16, #A>
   %index = arith.constant 0 : i32
   // CHECK-NEXT: %0 -> %cst
-  %cst1 = triton_gpu.extract_slice %cst0, %index { axis = 0 : i32 } : tensor<1x16x16xf16, #A> -> tensor<16x16xf16, #A>
+  %cst1 = tensor.extract_slice %cst0[%index, 0, 0][1, 16, 16][1, 1, 1] : tensor<1x16x16xf16, #A> -> tensor<16x16xf16, #A>
   return
 }
 
@@ -146,7 +146,7 @@ func @for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !t
     scf.if %i1 {
       %index = arith.constant 8 : i32
       // CHECK-NEXT: %1 -> %cst,%cst_0
-      %cst0 = triton_gpu.extract_slice %a_shared, %index { axis = 0 : i32 } : tensor<128x32xf16, #A> -> tensor<32xf16, #A>
+      %cst0 = tensor.extract_slice %a_shared[%index, 0][1, 32][1, 1] : tensor<128x32xf16, #A> -> tensor<32xf16, #A>
       scf.yield
     }
     scf.yield %b_shared, %a_shared, %a_shared : tensor<128x32xf16, #A>, tensor<128x32xf16, #A>, tensor<128x32xf16, #A>
