@@ -2022,8 +2022,6 @@ void ConvertLayoutOpConversion::processReplica(
   auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>();
   auto rank = type.getRank();
   auto sizePerThread = getSizePerThread(layout);
-  if (sliceLayout)
-    sizePerThread = getSizePerThread(sliceLayout.getParent());
   auto accumSizePerThread = product<unsigned>(sizePerThread);
   SmallVector<unsigned> numCTAs(rank);
   auto shapePerCTA = getShapePerCTA(layout);
