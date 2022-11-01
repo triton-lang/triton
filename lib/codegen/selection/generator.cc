@@ -16,7 +16,13 @@
 #include "triton/ir/utils.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/IR/Type.h"
+#ifdef USE_ROCM
+#include "llvm/IR/IntrinsicsAMDGPU.h"
+#else
 #include "llvm/IR/IntrinsicsNVPTX.h"
+#endif
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/InlineAsm.h"
@@ -91,6 +97,7 @@ Value* geper::operator()(Value *ptr, Value* off, const std::string& name){
 #define f16_ty               builder_->getHalfTy()
 #define bf16_ty              builder_->getInt16Ty()
 #define f32_ty               builder_->getFloatTy()
+#define f64_ty               builder_->getDoubleTy()
 #define i1_ty                builder_->getInt1Ty()
 #define i8_ty                builder_->getInt8Ty()
 #define i16_ty               builder_->getInt16Ty()
@@ -410,48 +417,44 @@ void generator::visit_binary_operator(ir::binary_operator*x) {
   for(indices_t idx: idxs_.at(x)){
     Value *lhs = vals_[x->get_operand(0)][idx];
     Value *rhs = vals_[x->get_operand(1)][idx];
-    // manually select bf16 bin op
     if (x->get_operand(0)->get_type()->get_scalar_ty()->is_bf16_ty()) {
       assert(x->get_operand(1)->get_type()->get_scalar_ty()->is_bf16_ty());
-      if (x->get_op() == tt::FAdd) {  // a + b = a * 1.0 + b
+      if (x->get_op() == tt::FAdd) {
         InlineAsm *bf16_add_asm =
-            InlineAsm::get(FunctionType::get(bf16_ty, {bf16_ty, bf16_ty}, false),
-                           "{ .reg .b16 c;         \n\t"
-                           "   mov.b16 c, 0x3f80U; \n\t" // 1.0
-                           "   fma.rn.bf16 $0, $1, c, $2; } \n\t",
-                           "=h,h,h", false);
+          InlineAsm::get(FunctionType::get(bf16_ty, {bf16_ty, bf16_ty}, false),
+                          "v_lshlrev_b32 $1, 16, $1 "
+                          "v_lshlrev_b32 $2, 16, $2 "
+                          "v_add_f32 $0, $1, $2 "
+                          "v_lshrrev_b32 $0, 16, $0 ",
+                          "=v,v,v", false);
         vals_[x][idx] = builder_->CreateCall(bf16_add_asm, {lhs, rhs});
       } else if (x->get_op() == tt::FSub) {  // a - b = b * (-1.0) + a
         InlineAsm *bf16_sub_asm =
-            InlineAsm::get(FunctionType::get(bf16_ty, {bf16_ty, bf16_ty}, false),
-                           " { .reg .b16 c;         \n\t"
-                           "    mov.b16 c, 0xbf80U; \n\t" // -1.0
-                           "    fma.rn.bf16 $0, $2, c, $1;} \n\t",
-                           "=h,h,h", false);
+          InlineAsm::get(FunctionType::get(bf16_ty, {bf16_ty, bf16_ty}, false),
+                          "v_lshlrev_b32 $1, 16, $1 "
+                          "v_lshlrev_b32 $2, 16, $2 "
+                          "v_sub_f32 $0, $1, $2 "
+                          "v_lshrrev_b32 $0, 16, $0 ",
+                          "=v,v,v", false);
         vals_[x][idx] = builder_->CreateCall(bf16_sub_asm, {lhs, rhs});
       } else if (x->get_op() == tt::FMul) {  // a * b = a*b + 0
         InlineAsm *bf16_mul_asm =
           InlineAsm::get(FunctionType::get(bf16_ty, {bf16_ty, bf16_ty}, false),
-                           " { .reg .b16 c;        \n\t"
-                           "    mov.b16 c, 0x8000U; \n\t" // 0.0
-                           "    fma.rn.bf16 $0, $1, $2, c;} \n\t",
-                           "=h,h,h", false);
+                          "v_lshlrev_b32 $1, 16, $1 "
+                          "v_lshlrev_b32 $2, 16, $2 "
+                          "v_mul_f32 $0, $1, $2 "
+                          "v_lshrrev_b32 $0, 16, $0 ",
+                          "=v,v,v", false);
         vals_[x][idx] = builder_->CreateCall(bf16_mul_asm, {lhs, rhs});
       } else
         throw std::runtime_error("invalid bin op for bf16");
-    } else {  // not bf16
+    }
+    else {
       auto op = cvt(x->get_op());
       if(op == ll::Add)
         vals_[x][idx] = add(lhs, rhs);
       else if(op == ll::Mul)
         vals_[x][idx] = mul(lhs, rhs);
-      else if(op == ll::FDiv && !x->get_fdiv_ieee_rounding() &&
-              x->get_type()->get_scalar_ty()->is_fp32_ty()){
-        InlineAsm *ptx = InlineAsm::get(FunctionType::get(f32_ty, {f32_ty, f32_ty}, false),
-                                        " div.full.f32 $0, $1, $2;", "=r,r,r", false);
-        vals_[x][idx] = builder_->CreateCall(ptx, {lhs, rhs});
-
-      }
       else
         vals_[x][idx] = bin_op(op, lhs, rhs);
     }
@@ -754,7 +757,7 @@ Value* generator::bf16_to_fp32(Value *in0){
 }
 
 Value* generator::fp32_to_bf16(Value *in0){
-  if(tgt_->as_nvidia()->sm() >= 80){
+  if(tgt_->as_nvidia() && tgt_->as_nvidia()->sm() >= 80){
     InlineAsm *ptx = InlineAsm::get(FunctionType::get(bf16_ty, {f32_ty}, false),
                                     "cvt.rn.bf16.f32 $0, $1;", "=h,r", false);
     return call(ptx, {in0});
@@ -1120,6 +1123,22 @@ void generator::visit_load_inst(ir::load_inst* x){
   ir::value *op = x->get_pointer_operand();
   ir::masked_load_inst *mx = dynamic_cast<ir::masked_load_inst*>(x);
   Type* ty  = cvt(op->get_type()->get_scalar_ty()->get_pointer_element_ty());
+
+#ifdef USE_ROCM
+  // code generation
+  auto idxs = idxs_.at(x);
+  for(size_t i = 0; i <idxs.size(); i += 1){
+    indices_t idx = idxs[i];
+    // pointer value
+    Value *ptr = vals_[op][idx];
+
+    // create load
+    Value *_ret =  builder_->CreateLoad(ty, ptr);
+
+    // upload to global vals map
+    vals_[x][idx] = _ret;
+  }
+#else
   // compute vector width
   size_t vec = 1;
   bool is_mma_first_row = false;
@@ -1298,6 +1317,7 @@ void generator::visit_load_inst(ir::load_inst* x){
     for(size_t ii = 0; ii < vec; ii++)
       vals_[x][idxs[i+ii]] = extract_elt(rets[ii/tmp], ii % tmp);
   }
+#endif
 }
 
 void generator::visit_unmasked_load_inst(ir::unmasked_load_inst* x) {
@@ -1316,6 +1336,23 @@ void generator::visit_store_inst(ir::store_inst * x){
   // operands
   ir::value *ptr_op = x->get_pointer_operand();
   ir::value *val_op = x->get_value_operand();
+#ifdef USE_ROCM
+  auto idxs = idxs_.at(val_op);
+  Type *ty = cvt(val_op->get_type()->get_scalar_ty());
+
+  for (size_t i = 0; i < idxs.size(); i += 1)
+  {
+    auto idx = idxs[i];
+    // pointer
+    Value *ptr = vals_[ptr_op][idx];
+
+    // value
+    Value *val = vals_.at(val_op)[idxs[i]];
+
+    // store value at pointer
+    store(val, ptr);
+  }
+#else
   ir::value *msk_op = nullptr;
   if(auto* msk_st = dynamic_cast<ir::masked_store_inst*>(x))
     msk_op = msk_st->get_mask_operand();
@@ -1431,6 +1468,7 @@ void generator::visit_store_inst(ir::store_inst * x){
       args.push_back(policies_.at(x->get_eviction_policy()));
     call(_asm, args);
   }
+#endif
 }
 void generator::visit_unmasked_store_inst(ir::unmasked_store_inst* x) {
   visit_store_inst(x);
@@ -1549,7 +1587,12 @@ void generator::visit_exp_inst(ir::exp_inst* x){
   Constant *log2e = ConstantFP::get(f32_ty, 1.4426950408889634);
   std::vector<llvm::Type*> tys = {f32_ty};
   FunctionType *fn_ty = FunctionType::get(f32_ty, tys, false);
+#ifdef USE_ROCM
+  llvm::Function *ex2 = llvm::Intrinsic::getDeclaration(mod_, Intrinsic::exp2, tys);
+#else
   InlineAsm *ex2 = InlineAsm::get(fn_ty, "ex2.approx.f32 $0, $0;", "=f,0", false);
+#endif
+
   for(auto idx: idxs_.at(x)){
     Value *ex2arg = fmul(vals_[x->get_operand(0)][idx], log2e);
     // Value *ex2arg = vals_[x->get_operand(0)][idx];
@@ -1563,7 +1606,11 @@ void generator::visit_exp_inst(ir::exp_inst* x){
 void generator::visit_cos_inst(ir::cos_inst* x){
   std::vector<llvm::Type*> tys = {f32_ty};
   FunctionType *fn_ty = FunctionType::get(f32_ty, tys, false);
+#ifdef USE_ROCM
+  llvm::Function *cos = llvm::Intrinsic::getDeclaration(mod_, Intrinsic::cos, tys);
+#else
   InlineAsm *cos = InlineAsm::get(fn_ty, "cos.approx.f32 $0, $0;", "=f,0", false);
+#endif
   for(auto idx: idxs_.at(x)){
     vals_[x][idx] = call(cos, std::vector<llvm::Value*>{vals_[x->get_operand(0)][idx]});
   }
@@ -1589,7 +1636,11 @@ void generator::visit_umulhi_inst(ir::umulhi_inst* x){
 void generator::visit_sin_inst(ir::sin_inst* x){
   std::vector<llvm::Type*> tys = {f32_ty};
   FunctionType *fn_ty = FunctionType::get(f32_ty, tys, false);
+#ifdef USE_ROCM
+  llvm::Function *sin = llvm::Intrinsic::getDeclaration(mod_, Intrinsic::sin, tys);
+#else
   InlineAsm *sin = InlineAsm::get(fn_ty, "sin.approx.f32 $0, $0;", "=f,0", false);
+#endif
   for(auto idx: idxs_.at(x)){
     vals_[x][idx] = call(sin, std::vector<llvm::Value*>{vals_[x->get_operand(0)][idx]});
   }
@@ -1602,7 +1653,11 @@ void generator::visit_log_inst(ir::log_inst* x){
   Constant *rcplog2e = ConstantFP::get(f32_ty, 0.6931471805599453);
   std::vector<llvm::Type*> tys = {f32_ty};
   FunctionType *fn_ty = FunctionType::get(f32_ty, tys, false);
+#ifdef USE_ROCM
+  llvm::Function *lg2 = llvm::Intrinsic::getDeclaration(mod_, Intrinsic::log2, tys);
+#else
   InlineAsm *lg2 = InlineAsm::get(fn_ty, "lg2.approx.f32 $0, $1;", "=f,f", false);
+#endif
   for(auto idx: idxs_.at(x)){
     Value *lg2arg = call(lg2, std::vector<llvm::Value*>{vals_[x->get_operand(0)][idx]});
     vals_[x][idx] = fmul(lg2arg, rcplog2e);
@@ -1612,6 +1667,35 @@ void generator::visit_log_inst(ir::log_inst* x){
 /**
  * \brief Code Generation for `atomic_cas`
  */
+#if defined(USE_ROCM)
+void generator::visit_atomic_cas_inst(ir::atomic_cas_inst* cas) {
+  BasicBlock *current = builder_->GetInsertBlock();
+  Module *module = current->getModule();
+  Value *tid = tgt_->get_local_id(module, *builder_, 0);
+  Value *pred = icmp_eq(tid, i32(0));
+  BasicBlock *tid_0_bb = BasicBlock::Create(*ctx_, "tid_0", current->getParent());
+  BasicBlock *tid_0_done_bb = BasicBlock::Create(*ctx_, "tid_0_done", current->getParent());
+  add_barrier();
+  tgt_->add_memfence(module, *builder_);
+  cond_br(pred, tid_0_bb, tid_0_done_bb);
+  builder_->SetInsertPoint(tid_0_bb);
+  Value *cas_ptr = vals_[cas->get_operand(0)][{}];
+  Value *cas_cmp = vals_[cas->get_operand(1)][{}];
+  Value *cas_val = vals_[cas->get_operand(2)][{}];
+  Value *old = atomic_cmp_xchg(cas_ptr, cas_cmp, cas_val, MaybeAlign(), AtomicOrdering::Monotonic, AtomicOrdering::Monotonic);
+  old = extract_val(old, std::vector<unsigned>{0});
+  Value *atom_ptr;
+  atom_ptr = gep(shmem_, i32(alloc_->offset(layouts_->get(layouts_->tmp(cas)))), "");
+  atom_ptr = bit_cast(atom_ptr, ptr_ty(old->getType(), 3));
+  store(old, atom_ptr);
+  br(tid_0_done_bb);
+  builder_->SetInsertPoint(tid_0_done_bb);
+  tgt_->add_memfence(module, *builder_);
+  add_barrier();
+  vals_[cas][{}] = load(atom_ptr);
+  add_barrier();
+}
+#else
 void generator::visit_atomic_cas_inst(ir::atomic_cas_inst* cas) {
   BasicBlock *current = builder_->GetInsertBlock();
   Module *module = current->getModule();
@@ -1646,12 +1730,66 @@ void generator::visit_atomic_cas_inst(ir::atomic_cas_inst* cas) {
   vals_[cas][{}] = load(atom_ptr);
   add_barrier();
 }
+#endif // defined(USE_ROCM)
 
 /**
  * \brief Code Generation for `atomic_rmw`
  */
+#if defined(USE_ROCM)
 void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
-  ir::value* ptr = atom->get_operand(0);
+  if (atom->get_op() == ir::atomic_rmw_op_t::Add ||
+      atom->get_op() == ir::atomic_rmw_op_t::Max ||
+      atom->get_op() == ir::atomic_rmw_op_t::Min ||
+      atom->get_op() == ir::atomic_rmw_op_t::UMax ||
+      atom->get_op() == ir::atomic_rmw_op_t::UMin ||
+      atom->get_op() == ir::atomic_rmw_op_t::Xchg) {
+    BasicBlock *current = builder_->GetInsertBlock();
+    Module *module = current->getModule();
+    Value *rmw_ptr = vals_[atom->get_operand(0)][{}];
+    Value *rmw_val = vals_[atom->get_operand(1)][{}];
+    Value *tid = tgt_->get_local_id(module, *builder_, 0);
+    Value *pred = icmp_eq(tid, i32(0));
+    BasicBlock *tid_0_bb = BasicBlock::Create(*ctx_, "tid_0", current->getParent());
+    BasicBlock *tid_0_done_bb = BasicBlock::Create(*ctx_, "tid_0_done", current->getParent());
+    tgt_->add_memfence(module, *builder_);
+    add_barrier();
+    cond_br(pred, tid_0_bb, tid_0_done_bb);
+    builder_->SetInsertPoint(tid_0_bb);
+    AtomicRMWInst::BinOp binop;
+    switch (atom->get_op()) {
+    case ir::atomic_rmw_op_t::Add:
+      binop = AtomicRMWInst::Add;
+      break;
+    case ir::atomic_rmw_op_t::Max:
+      binop = AtomicRMWInst::Max;
+      break;
+    case ir::atomic_rmw_op_t::Min:
+      binop = AtomicRMWInst::Min;
+      break;
+    case ir::atomic_rmw_op_t::UMax:
+      binop = AtomicRMWInst::UMax;
+      break;
+    case ir::atomic_rmw_op_t::UMin:
+      binop = AtomicRMWInst::UMin;
+      break;
+    case ir::atomic_rmw_op_t::Xchg:
+      binop = AtomicRMWInst::Xchg;
+      break;
+    default:
+      throw std::runtime_error("Not supported!");
+    }
+    atomic_rmw(binop, rmw_ptr, rmw_val, MaybeAlign(), AtomicOrdering::Monotonic,
+               SyncScope::System);
+    br(tid_0_done_bb);
+    builder_->SetInsertPoint(tid_0_done_bb);
+    tgt_->add_memfence(module, *builder_);
+    return;
+  }
+  throw std::runtime_error("Not supported!");
+}
+#else // defined(USE_ROCM)
+void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
+  ir::value *ptr = atom->get_operand(0);
   ir::value* val = atom->get_operand(1);
   ir::value* msk = atom->get_operand(2);
 
@@ -1756,6 +1894,7 @@ void generator::visit_atomic_rmw_inst(ir::atomic_rmw_inst *atom) {
     }
   }
 }
+#endif // defined(USE_ROCM)
 
 /**
  * \brief Code Generation for `mma.884` (V100)
@@ -2834,15 +2973,20 @@ void generator::visit_dot_inst(ir::dot_inst* dot) {
   size_t red_axis = 1;
   unsigned NK = A_shapes[red_axis];
   bool is_outer = NK == 1;
+
+#ifdef USE_ROCM
+  return visit_fmadot(dot, A, B, D, NK, c_ty, f_mul_add);
+#else
   bool is_mma = layouts_->get(dot)->to_mma();
-  if(!is_outer && is_mma && tgt_->as_nvidia()->sm() < 80)
+  if(!is_outer && is_mma && tgt_->as_nvidia() && tgt_->as_nvidia()->sm() < 80)
     return visit_mma884(dot, A, B, D, NK);
-  if(!is_outer && is_mma && tgt_->as_nvidia()->sm() >= 80)
+  if(!is_outer && is_mma && tgt_->as_nvidia() && tgt_->as_nvidia()->sm() >= 80)
     return visit_mma16816(dot, A, B, D, NK); // rename it as visit_mma_v2()?
   if (dot->get_type()->get_scalar_ty()->is_fp32_ty() &&
       A->get_type()->get_scalar_ty()->is_fp32_ty())
     return visit_fmadot(dot, A, B, D, NK, c_ty, f_mul_add);
   throw std::runtime_error("dot has invalid operand type");
+#endif
 }
 
 void generator::visit_trans_inst(ir::trans_inst* trans) {
@@ -2875,8 +3019,14 @@ Value* generator::shared_off(const std::vector<unsigned>& shapes, const std::vec
 
 inline Value* generator::shfl_sync(Value* acc, int32_t i){
   Type* ty = acc->getType();
+#ifdef USE_ROCM
   std::string asm_str = "shfl.sync.bfly.b32 $0, $1, $2, 0x1f, 0xffffffff;";
   InlineAsm *shfl = InlineAsm::get(FunctionType::get(ty, {ty, i32_ty}, false), asm_str, "=f,f,r", false);
+#else
+  std::string asm_str = "shfl.sync.bfly.b32 $0, $1, $2, 0x1f, 0xffffffff;";
+  InlineAsm *shfl = InlineAsm::get(FunctionType::get(ty, {ty, i32_ty}, false), asm_str, "=f,f,r", false);
+#endif
+
   if(ty->getPrimitiveSizeInBits() <= 32)
     return call(shfl, {acc, i32(i)});
   acc = bit_cast(acc, vec_ty(f32_ty, 2));
@@ -3171,12 +3321,16 @@ void generator::visit_reduce_inst(ir::reduce_inst* x) {
     default: throw std::runtime_error("unreachable");
   }
   ir::value *arg = x->get_operand(0);
+#ifdef USE_ROCM
+  visit_reducend_inst(x, do_acc, neutral);
+#else
   bool is_coalesced_scanline = layouts_->is_coalesced_scanline(x);
   bool is_a100_mma = layouts_->is_a100_mma(x);
   if (is_coalesced_scanline || is_a100_mma)
     visit_reducend_inst_fast(x, do_acc, neutral);
   else
     visit_reducend_inst(x, do_acc, neutral);
+#endif
 }
 
 /**
@@ -3645,6 +3799,7 @@ Value *generator::cast_shared_layout_ptr(analysis::data_layout *layout,
 }
 
 void generator::visit_function(ir::function* fn) {
+  std::cout << "generator.cc: generator::visit_function:" << std::endl;
   idxs_.clear();
   vals_.clear();
   seen_.clear();
@@ -3654,6 +3809,7 @@ void generator::visit_function(ir::function* fn) {
 
 
   // set attributes
+  std::cout << "\t// set attributes" << std::endl;
   for(auto attr_pair: fn->attrs()){
     unsigned id = attr_pair.first;
     for(ir::attribute attr: attr_pair.second)
@@ -3664,19 +3820,24 @@ void generator::visit_function(ir::function* fn) {
     }
   }
   // set metadata
+  std::cout << "\t// set metadata" << std::endl;
   if(tgt_->is_gpu()){
       tgt_->set_kernel(*builder_, ctx, mod_, ret);
+  #ifndef USE_ROCM
       Metadata *md_args[] = {
         ValueAsMetadata::get(ret),
         MDString::get(ctx, "maxntidx"),
         ValueAsMetadata::get(i32(num_warps_*32))
       };
       mod_->getOrInsertNamedMetadata("nvvm.annotations")->addOperand(MDNode::get(ctx, md_args));
+  #endif
   }
   // set arguments
+  std::cout << "\t// set arguments" << std::endl;
   for(unsigned i = 0; i < fn->args().size(); i++)
     vals_[fn->args()[i]][{}] = &*(ret->arg_begin() + i);
   // create blocks
+  std::cout << "\t// create blocks" << std::endl;
   auto blocks = ir::cfg::reverse_post_order(fn);
   for(ir::basic_block *block: blocks) {
     BasicBlock *dst_block = BasicBlock::Create(ctx, block->get_name(), ret);
@@ -3684,6 +3845,8 @@ void generator::visit_function(ir::function* fn) {
   }
   builder_->SetInsertPoint(bbs_[fn->blocks()[0]]);
   // create policies
+#ifndef USE_ROCM
+  std::cout << "\t// create policies" << std::endl;
   if(tgt_->as_nvidia()->sm() >= 80)
   for(ir::load_inst::EVICTION_POLICY evict: {ir::load_inst::EVICT_FIRST, ir::load_inst::EVICT_LAST}){
     std::string policy = (evict == ir::load_inst::EVICT_FIRST) ? "evict_first" : "evict_last";
@@ -3691,15 +3854,23 @@ void generator::visit_function(ir::function* fn) {
     InlineAsm* iasm = InlineAsm::get(FunctionType::get(i64_ty, {}), asm_str, "=l", false);
     policies_[evict] = call(iasm);
   }
+#endif
   // initialize layouts
+  std::cout << "\t// initialize layouts" << std::endl;
   for(auto x: layouts_->get_all()){
     visit_layout(x.second);
   }
   // generate LLVM-IR code
+  std::cout << "\t// generate LLVM-IR code" << std::endl;
   for(ir::basic_block *block: blocks)
     visit_basic_block(block);
   // finalize
+  std::cout << "\t// finalize" << std::endl;
   finalize_function(fn);
+
+  // verifyFunction
+  std::cout << "\t// verifyFunction" << std::endl;
+  llvm::verifyFunction(*ret);
 }
 
 
@@ -3723,7 +3894,11 @@ void generator::visit_layout_mma(analysis::mma_layout* layout) {
   Value *_8 = i32(8);
   Value *_16 = i32(16);
   Value *_32 = i32(32);
+#ifdef USE_ROCM
+  int cc = 1; // generate ir for older CUDA cards
+#else
   int cc = tgt_->as_nvidia()->sm();
+#endif
   std::vector<Value*> idx_m;
   std::vector<Value*> idx_n;
   std::vector<Value*> idx_z;
@@ -4114,6 +4289,7 @@ void generator::packed_type(ir::value* i){
 }
 
 void generator::visit(ir::module &src, llvm::Module &dst) {
+  std::cout << "generator.cc: generator::visit" << std::endl;
   mod_ = &dst;
   ctx_ = &dst.getContext();
   builder_ = new Builder(*ctx_);

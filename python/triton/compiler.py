@@ -885,26 +885,35 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(),
              specialization=_triton.code_gen.instance_descriptor(),
              num_warps: int = 4, num_stages: int = 3, extern_libs=None,
              output: str = "ttgir", cc=0) -> Tuple[str, int, str]:
+    print("compiler.py: _compile")
+    print(f"\t{fn, signature, device, constants, specialization, num_warps, num_stages, extern_libs, output, cc}")
     valid_outputs = ("ttir", "ttgir", "ptx", "cubin")
-    assert output in valid_outputs, "output should be one of [%s], but get \"%s\"" % (','.join(valid_outputs), output)
+    # assert output in valid_outputs, "output should be one of [%s], but get \"%s\"" % (','.join(valid_outputs), output)
 
     # triton-ir
     module, _ = make_triton_ir(fn, signature, specialization, constants)
     if output == "ttir":
         return module
 
-    assert output == "cubin"
-    assert torch.version.hip is None
-    backend = _triton.runtime.backend.CUDA
+    assert (output == "cubin" or output == "hsaco")
+    if torch.version.hip is not None:
+        backend = _triton.runtime.backend.ROCM
+    else:
+        backend = _triton.runtime.backend.CUDA
     if extern_libs is None:
         extern_libs = dict()
-    name, asm, shared_mem = _triton.code_gen.compile_ttir(backend, module, device, num_warps, num_stages, extern_libs, cc)
+
+    # compile ttir
+    if torch.version.hip is not None:
+        name, asm, shared_mem = _triton.code_gen.compile_ttir_to_amdgcn(backend, module, device, num_warps, num_stages, extern_libs, cc)
+    else:
+        name, asm, shared_mem = _triton.code_gen.compile_ttir_to_ptx(backend, module, device, num_warps, num_stages, extern_libs, cc)
     return asm, shared_mem, name
 
 
 def ty_to_cpp(ty):
     if ty[0] == '*':
-        return "CUdeviceptr"
+        return "hipDeviceptr_t"
     return {
         "i1": "int32_t",
         "i8": "int8_t",
@@ -967,17 +976,18 @@ def generate_launcher(identifier, constants, signature):
     format = "iiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
 
     # generate glue code
-    src = f"""
-#include \"cuda.h\"
+    if torch.version.hip is not None:
+        src = f"""
+#define __HIP_PLATFORM_AMD__
+#include <hip/hip_runtime.h>
 #include <Python.h>
 
-static inline void gpuAssert(CUresult code, const char *file, int line)
+static inline void gpuAssert(hipError_t code, const char *file, int line)
 {{
-   if (code != CUDA_SUCCESS)
+   if (code != HIP_SUCCESS)
    {{
       const char* prefix = "Triton Error [CUDA]: ";
-      const char* str;
-      cuGetErrorString(code, &str);
+      const char* str = hipGetErrorString(code);
       char err[1024] = {{0}};
       strcat(err, prefix);
       strcat(err, str);
@@ -987,20 +997,20 @@ static inline void gpuAssert(CUresult code, const char *file, int line)
 #define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
 
-void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, CUstream stream, CUfunction function, {arg_decls}) {{
+void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, hipStream_t stream, hipFunction_t function, {arg_decls}) {{
   void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
   if(gridX*gridY*gridZ > 0){{
-    CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
+    hipModuleLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0);
   }}
 }}
 
 
-static inline CUdeviceptr getPointer(PyObject *obj, int idx) {{
+static inline hipDeviceptr_t getPointer(PyObject *obj, int idx) {{
   if (PyLong_Check(obj)) {{
-    return (CUdeviceptr)PyLong_AsUnsignedLongLong(obj);
+    return (hipDeviceptr_t)PyLong_AsUnsignedLongLong(obj);
   }}
   if (obj == Py_None) {{
-    return (CUdeviceptr)0;
+    return (hipDeviceptr_t)0;
   }}
   PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
   if(ptr){{
@@ -1011,14 +1021,15 @@ static inline CUdeviceptr getPointer(PyObject *obj, int idx) {{
     if (!PyLong_Check(ret)) {{
       PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
     }}
-    return (CUdeviceptr)PyLong_AsUnsignedLongLong(ret);
+    return (hipDeviceptr_t)PyLong_AsUnsignedLongLong(ret);
   }}
   PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
-  return (CUdeviceptr)0;
+  return (hipDeviceptr_t)0;
 }}
 
 
 static PyObject* launch(PyObject* self, PyObject* args) {{
+  // printf("launch(PyObject* self, PyObject* args)");
   int gridX, gridY, gridZ;
   uint64_t _stream;
   uint64_t _function;
@@ -1039,7 +1050,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
     Py_DECREF(new_args);
   }}
 
-  _launch(gridX, gridY, gridZ, num_warps, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"getPointer(_arg{i},{i})" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
+  _launch(gridX, gridY, gridZ, num_warps, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function, {', '.join(f"getPointer(_arg{i},{i})" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
 
   if (launch_exit_hook != Py_None) {{
     PyObject *new_args = NULL;
@@ -1136,9 +1147,20 @@ def libcuda_dirs():
 
 
 @functools.lru_cache()
+def libhip_dirs():
+    return ["/opt/rocm/lib"]
+
+
+@functools.lru_cache()
 def cuda_home_dirs():
     default_dir = "/usr/local/cuda"
     return os.getenv("CUDA_HOME", default=default_dir)
+
+
+@functools.lru_cache()
+def hip_home_dirs():
+    default_dir = "/opt/rocm"
+    return os.getenv("ROCM_HOME", default=default_dir)
 
 
 @contextlib.contextmanager
@@ -1152,8 +1174,15 @@ def quiet():
 
 
 def _build(name, src, srcdir):
-    cuda_lib_dirs = libcuda_dirs()
-    cu_include_dir = os.path.join(cuda_home_dirs(), "include")
+    print("compiler.py: _build")
+    print(f"\t{name, src, srcdir}")    
+    if torch.version.hip is not None:
+        hip_lib_dirs = libhip_dirs()
+        hip_include_dir = os.path.join(hip_home_dirs(), "include")
+    else:
+        cuda_lib_dirs = libcuda_dirs()
+        cu_include_dir = os.path.join(cuda_home_dirs(), "include")
+
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
@@ -1164,16 +1193,29 @@ def _build(name, src, srcdir):
         gcc = shutil.which("gcc")
         cc = gcc if gcc is not None else clang
     py_include_dir = get_paths()["include"]
-    cc_cmd = [cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
-    cc_cmd += [f"-L{dir}" for dir in cuda_lib_dirs]
+    if torch.version.hip is not None:
+        cc_cmd = [cc, src, f"-I{hip_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lamdhip64", "-o", so]
+        cc_cmd += [f"-L{dir}" for dir in hip_lib_dirs]
+    else:
+        cc_cmd = [cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
+        cc_cmd += [f"-L{dir}" for dir in cuda_lib_dirs]
+    print("\t", ''.join(cc_cmd))
     ret = subprocess.check_call(cc_cmd)
     if ret == 0:
+        print("ret:", ret)
+        print(so)
         return so
     # fallback on setuptools
     extra_compile_args = []
-    library_dirs = cuda_lib_dirs
-    include_dirs = [srcdir, cu_include_dir]
-    libraries = ['cuda']
+    if torch.version.hip is not None:
+        library_dirs = hip_lib_dirs
+        include_dirs = [srcdir, hip_include_dir]
+        libraries = ['rocm']
+    else:
+        library_dirs = cuda_lib_dirs
+        include_dirs = [srcdir, cu_include_dir]
+        libraries = ['cuda']
+
     # extra arguments
     extra_link_args = []
     # create extension module
@@ -1221,6 +1263,8 @@ def make_fn_cache_key(fn_hash, signature, configs, constants, num_warps, num_sta
 
 def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4,
             num_stages: int = 3, extern_libs=None, configs=None, cc=0, warm_cache_only=False):
+    print("compiler.py: compile")
+    print(f"\t{fn, signature, device, constants, num_warps, num_stages, extern_libs, configs, cc, warm_cache_only}")
     # we get the kernel, i.e. the first function generated in the module
     assert len(configs) == 1
     # cache manager
@@ -1236,30 +1280,52 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
             src_path = os.path.join(tmpdir, "main.c")
             with open(src_path, "w") as f:
                 f.write(src)
-            so = _build(fn.__name__, src_path, tmpdir)
+            so = _build(fn.__name__, src_path, tmpdir) # build step
             with open(so, "rb") as f:
                 so_cache_manager.put(f.read(), so_name, binary=True)
 
     # retrieve cached shared object if it exists
     fn_cache_key = make_fn_cache_key(fn.cache_key, signature, configs, constants, num_warps, num_stages)
     fn_cache_manager = CacheManager(fn_cache_key)
-    ptx_name = f"{name}.ptx"
-    cubin_name = f"{name}.cubin"
+    if torch.version.hip is not None:
+        amdgcn_name = f"{name}.gcn"
+        hasco_name = f"{name}.hsaco"
+        assembly_name = amdgcn_name
+        binary_name = hasco_name
+    else:
+        ptx_name = f"{name}.ptx"
+        cubin_name = f"{name}.cubin"
+        assembly_name = ptx_name
+        binary_name = cubin_name
+
     data_name = f"{name}.json"
     ttir_name = f"{name}.ttir"
     llir_name = f"{name}.llir"
-    if not fn_cache_manager.has_file(cubin_name) or \
+    if not fn_cache_manager.has_file(binary_name) or \
        not fn_cache_manager.has_file(data_name) or \
-       not fn_cache_manager.has_file(ptx_name) or \
+       not fn_cache_manager.has_file(assembly_name) or \
        not fn_cache_manager.has_file(ttir_name) or \
        not fn_cache_manager.has_file(llir_name):
-        asm, shared, kernel_name = _compile(fn, signature, device, constants, configs[0], num_warps, num_stages,
-                                            extern_libs, "cubin", cc)
-        metadata = {"name": kernel_name, "shared": shared, "num_warps": num_warps, "num_stages": num_stages}
-        fn_cache_manager.put(asm["cubin"], cubin_name)
-        fn_cache_manager.put(asm["ptx"], ptx_name, binary=False)
+
+        if torch.version.hip is not None:
+            asm, shared, kernel_name = _compile(fn, signature, device, constants, configs[0], num_warps, num_stages,
+                                                extern_libs, "hsaco", cc)
+            # cache AMD assembly and binary
+            fn_cache_manager.put(asm["hsaco_path"], binary_name, binary=False)
+            fn_cache_manager.put(asm["amdgcn"], assembly_name, binary=False)
+        else:
+            asm, shared, kernel_name = _compile(fn, signature, device, constants, configs[0], num_warps, num_stages,
+                                                extern_libs, "cubin", cc)
+            # cache Nvidia assembly and binary
+            fn_cache_manager.put(asm["cubin"], binary_name)
+            fn_cache_manager.put(asm["ptx"], assembly_name, binary=False)
+
+        # cache triton and llvm ir
         fn_cache_manager.put(asm["ttir"], ttir_name, binary=False)
         fn_cache_manager.put(asm["llir"], llir_name, binary=False)
+
+        # cache metadata
+        metadata = {"name": kernel_name, "shared": shared, "num_warps": num_warps, "num_stages": num_stages}
         fn_cache_manager.put(json.dumps(metadata), data_name, binary=False)
 
     if warm_cache_only:
@@ -1275,9 +1341,12 @@ class CompiledKernel:
     launch_exit_hook = None
 
     def __init__(self, fn_name, so_path, cache_dir, device):
+        print("compiler.py: CompiledKernel:__init__")
+        print(f"\t{self, fn_name, so_path, cache_dir, device}")
         # initialize launcher
         import importlib.util
         spec = importlib.util.spec_from_file_location("launcher", so_path)
+        print("spec:", spec)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         self.c_wrapper = getattr(mod, "launch")
@@ -1289,16 +1358,25 @@ class CompiledKernel:
         self.num_stages = metadata["num_stages"]
         # initialize asm dict
         self.asm = dict()
-        with open(os.path.join(cache_dir, f"{fn_name}.cubin"), "rb") as f:
-            self.asm["cubin"] = f.read()
-        with open(os.path.join(cache_dir, f"{fn_name}.ptx"), "r") as f:
-            self.asm["ptx"] = f.read()
+        if torch.version.hip is not None:
+            with open(os.path.join(cache_dir, f"{fn_name}.hsaco"), "rb") as f:
+                self.asm["hsaco_path"] = f.read()
+            with open(os.path.join(cache_dir, f"{fn_name}.gcn"), "r") as f:
+                self.asm["amdgcn"] = f.read()
+        else:
+            with open(os.path.join(cache_dir, f"{fn_name}.cubin"), "rb") as f:
+                self.asm["cubin"] = f.read()
+            with open(os.path.join(cache_dir, f"{fn_name}.ptx"), "r") as f:
+                self.asm["ptx"] = f.read()
         with open(os.path.join(cache_dir, f"{fn_name}.llir"), "r") as f:
             self.asm["llir"] = f.read()
         with open(os.path.join(cache_dir, f"{fn_name}.ttir"), "r") as f:
             self.asm["ttir"] = f.read()
 
-        mod, func, n_regs, n_spills = _triton.code_gen.load_binary(metadata["name"], self.asm["cubin"], self.shared, device)
+        if torch.version.hip is not None:
+            mod, func, n_regs, n_spills = _triton.code_gen.load_binary_hsaco(metadata["name"], self.asm["hsaco_path"], self.shared, device)
+        else:
+            mod, func, n_regs, n_spills = _triton.code_gen.load_binary_cubin(metadata["name"], self.asm["cubin"], self.shared, device)
         self.fn_name = fn_name
         self.cu_module = mod
         self.cu_function = func

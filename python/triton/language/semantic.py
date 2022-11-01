@@ -6,6 +6,8 @@ from . import core as tl
 from triton._C.libtriton.triton import ir
 
 
+import torch
+
 # Create custom exception that prints message "hello"
 class IncompatibleTypeErrorimpl(Exception):
     def __init__(self, type_a, type_b):
@@ -969,6 +971,11 @@ def dot(a: tl.tensor,
         trans_b: bool,
         allow_tf32: bool,
         builder: ir.builder) -> tl.tensor:
+
+    if torch.version.hip is not None:
+        a = cast(a, tl.float32, builder)
+        b = cast(b, tl.float32, builder)
+
     in_a = 1 if not trans_a else 0
     in_b = 1 if trans_b else 0
     assert a.type.is_block() and b.type.is_block()

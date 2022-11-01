@@ -15,10 +15,22 @@ namespace codegen{
 
 // base
 
-
-nvidia_cu_target* target::as_nvidia() { 
-  return dynamic_cast<nvidia_cu_target*>(this); 
+#ifdef USE_ROCM
+amd_cl_target *target::as_amd()
+{
+  return dynamic_cast<amd_cl_target *>(this);
 }
+amd_cl_target *target::as_nvidia()
+{
+  return this->as_amd();
+}
+#else
+// causes segfault on ROCM
+nvidia_cu_target *target::as_nvidia()
+{
+  return dynamic_cast<nvidia_cu_target *>(this);
+}
+#endif
 
 bool target::is_gpu() const {
   return is_gpu_;
@@ -41,7 +53,8 @@ Value* amd_cl_target::get_global_offset(Module *module, IRBuilder<>& builder, un
 }
 
 Instruction* amd_cl_target::add_memfence(Module *module, IRBuilder<>& builder) {
-  throw std::runtime_error("not implemented");
+  Function *barrier = Intrinsic::getDeclaration(module, Intrinsic::amdgcn_s_waitcnt);
+  return builder.CreateIntrinsic(Intrinsic::amdgcn_s_waitcnt, {}, {builder.getInt32(0)});
 }
 
 
@@ -56,7 +69,50 @@ Value* amd_cl_target::get_block_id(Module *module, IRBuilder<>& builder, unsigne
 }
 
 Value* amd_cl_target::get_num_blocks(Module *module, IRBuilder<>& builder, unsigned ax) {
-  throw std::runtime_error("not implemented on AMD");
+  Function &F = *builder.GetInsertBlock()->getParent();
+  Module *Mod = F.getParent();
+  // We are indexing into this struct, and want to extract the grid_size_*
+  // fields.
+  //
+  //   typedef struct hsa_kernel_dispatch_packet_s {
+  //     uint16_t header;
+  //     uint16_t setup;
+  //     uint16_t workgroup_size_x ;
+  //     uint16_t workgroup_size_y;
+  //     uint16_t workgroup_size_z;
+  //     uint16_t reserved0;
+  //     uint32_t grid_size_x ;
+  //     uint32_t grid_size_y ;
+  //     uint32_t grid_size_z;
+  //     .....
+  //   } hsa_kernel_dispatch_packet_t
+  //
+  Function *DispatchPtrFn =
+      Intrinsic::getDeclaration(Mod, Intrinsic::amdgcn_dispatch_ptr);
+
+  CallInst *DispatchPtr = builder.CreateCall(DispatchPtrFn, {});
+  DispatchPtr->addAttribute(AttributeList::ReturnIndex, Attribute::NoAlias);
+  DispatchPtr->addAttribute(AttributeList::ReturnIndex, Attribute::NonNull);
+  F.removeFnAttr("amdgpu-no-dispatch-ptr");
+
+  // Size of the dispatch packet struct.
+  DispatchPtr->addDereferenceableAttr(AttributeList::ReturnIndex, 64);
+
+  Type *I32Ty = Type::getInt32Ty(Mod->getContext());
+  // TODO: include AMDGPUAS:: declarations.
+  Value *CastDispatchPtr = builder.CreateBitCast(
+      DispatchPtr, PointerType::get(I32Ty, 4 /*AMDGPUAS::CONSTANT_ADDRESS*/));
+
+  // grid_size_x offset is 3*32bit
+  assert(ax < 3);
+  Value *GEP =
+      builder.CreateConstInBoundsGEP1_64(I32Ty, CastDispatchPtr, ax + 3);
+  LoadInst *Load = builder.CreateAlignedLoad(I32Ty, GEP, Align(4));
+
+  MDNode *MD = MDNode::get(Mod->getContext(), None);
+  Load->setMetadata(LLVMContext::MD_invariant_load, MD);
+
+  return Load; // throw std::runtime_error("not implemented on AMD");
 }
 
 Value* amd_cl_target::get_local_id(Module *module, IRBuilder<>& builder, unsigned ax) {
@@ -156,7 +212,7 @@ Value* cpu_target::get_block_id(Module *module, llvm::IRBuilder<> &builder, unsi
 }
 
 Value* cpu_target::get_num_blocks(Module *module, IRBuilder<>& builder, unsigned ax) {
-  throw std::runtime_error("not implemented");
+  throw std::runtime_error("not implemented on CPU");
 }
 
 

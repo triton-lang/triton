@@ -100,7 +100,9 @@ void hip_enqueue(uint64_t stream, uint64_t kernel,
   drv::dispatch::hipModuleLaunchKernel((hipFunction_t)kernel, grid_0, grid_1, grid_2,
                                 block_0, block_1, block_2,
                                 shared_mem, (hipStream_t)stream, nullptr, config);
-
+#ifdef DEBUG_ROCM
+  drv::dispatch::hipGetLastError();                                
+#endif
 }
 
 long pow2_divisor(long N){
@@ -435,7 +437,7 @@ typedef std::map<std::string, py::object> asm_map_t;
 // ---------------------------------------
 
 void init_triton_codegen(py::module &&m) {
-  m.def("compile_ttir",
+  m.def("compile_ttir_to_ptx",
       [](backend_t backend, ir::module &ir, uint64_t device, int num_warps, int num_stages, py::dict& extern_libs, size_t cc) {
           std::ostringstream ttir;
           int n_shared_bytes;
@@ -490,11 +492,71 @@ void init_triton_codegen(py::module &&m) {
       },
       py::return_value_policy::take_ownership);
   
+  m.def("compile_ttir_to_amdgcn",
+      [](backend_t backend, ir::module &ir, uint64_t device, int num_warps, int num_stages, py::dict& extern_libs, size_t cc) {
+          std::ostringstream ttir;
+          int n_shared_bytes;
+          std::string tmp;
+          std::string amdgcn;
+          std::string hsaco_path;
+          std::string name;
+          { 
+            std::cout << "triton.cc: compile_ttir_to_amdgcn:" << std::endl;
+            // Scope where the GIL is released
+            py::gil_scoped_release allow_threads;
+            name = ir.get_function_list()[0]->get_name();
+            ir.print(ttir);
+            llvm::LLVMContext ctx;
+            // construct extern lib map
+            triton::codegen::ExternLibMap extern_lib_map;
+            for (auto item : extern_libs) {
+              auto name = item.first.cast<std::string>();
+              auto path = item.second.cast<std::string>();
+              extern_lib_map.emplace(
+                  name, triton::codegen::create_extern_lib(name, path));
+            }
+            // device properties
+            if (cc == 0) {
+              hipDevice_t dev = (hipDevice_t)device;
+              size_t major = hipGetInfo<hipDeviceAttributeComputeCapabilityMajor>(dev);
+              size_t minor = hipGetInfo<hipDeviceAttributeComputeCapabilityMinor>(dev);
+              cc = major*10 + minor;
+            }
+            int version;
+            // std::string ptxas_path = drv::path_to_ptxas(version);
+            // Triton-IR -> AMDGCN LLVM-IR
+            std::cout << "ttir:" << std::endl;
+            std::cout << "\t" << ttir.str() << std::endl;
+            triton::codegen::amd_cl_target target;
+            auto llvm = triton::codegen::add_passes_to_emit_bin(
+                ir, ctx, &target, num_warps, num_stages, n_shared_bytes, extern_lib_map);
+            llvm::raw_string_ostream llir(tmp);
+            llir << *llvm;
+            std::cout << "llir:" << std::endl;
+            std::cout << "\t" << llir.str() << std::endl;
+            llir.flush();
+            // LLVM-IR -> AMDGPU
+            std::tuple<std::string, std::string> amdgpu = drv::llir_to_amdgcn(llvm.get(), "gfx90a");
+            amdgcn = std::get<0>(amdgpu);
+            hsaco_path = std::get<1>(amdgpu);
+            std::cout << "amdgcn:" << std::endl;
+            std::cout << "\t" << amdgcn << std::endl;
+          }
+          asm_map_t asm_map;
+          asm_map["ttir"] = py::cast(ttir.str());
+          asm_map["llir"] = py::cast(tmp);
+          asm_map["amdgcn"] = py::cast(amdgcn);
+          asm_map["hsaco_path"] = py::cast(hsaco_path);
+          
+          return std::make_tuple(name, asm_map, n_shared_bytes);
+      },
+      py::return_value_policy::take_ownership);
+  
 
   // --------------------------------------- 
   // Load provided assembly code into driver
   // --------------------------------------- 
-  m.def("load_binary", [](const std::string& name, const std::string& data, size_t n_shared_bytes, uint64_t device){
+  m.def("load_binary_cubin", [](const std::string& name, const std::string& data, size_t n_shared_bytes, uint64_t device){
 	      py::gil_scoped_release allow_threads;
         // create driver handles
         CUfunction fun;
@@ -516,6 +578,47 @@ void init_triton_codegen(py::module &&m) {
           drv::dispatch::cuDeviceGetAttribute(&shared_total, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR, device);
           drv::dispatch::cuFuncGetAttribute(&shared_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun);
           drv::dispatch::cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin - shared_static);
+        }
+        return std::make_tuple((uint64_t)mod, (uint64_t)fun, (uint64_t)n_regs, (uint64_t)n_spills);
+      }, 
+      py::return_value_policy::take_ownership
+  );
+
+  // --------------------------------------- 
+  // Load provided assembly code into driver
+  // --------------------------------------- 
+  m.def("load_binary_hsaco", [](const std::string& name, const std::string& data, size_t n_shared_bytes, uint64_t device){
+        std::cout << "triton.cc: load_binary_hsaco:" << std::endl;
+        std::cout << "\tname:" << name << std::endl;
+        std::cout << "\tdata:" << data << std::endl;
+        std::cout << "\tn_shared_bytes:" << n_shared_bytes << std::endl;
+        std::cout << "\tdevice:" << device << std::endl;
+        py::gil_scoped_release allow_threads;
+        // create driver handles
+        std::cout << "\t" << "// create driver handles" << std::endl;
+        hipFunction_t fun;
+        hipModule_t mod = drv::amdgpu_to_hipmodule(data);
+        drv::dispatch::hipModuleGetFunction(&fun, mod, name.c_str());
+        // get allocated registers and spilled registers from the function
+        std::cout << "\t" << "// get allocated registers and spilled registers from the function" << std::endl;
+        int n_regs = 0;
+        int n_spills = 0;
+        hipFuncAttributes attr;
+        // drv::dispatch::hipFuncGetAttributes(&attr, fun);
+        // drv::dispatch::hipFuncGetAttributes(&attr, fun);
+        n_regs = attr.numRegs;
+        n_spills = attr.localSizeBytes / 4;
+        // set dynamic shared memory if necessary
+        std::cout << "\t" << "// set dynamic shared memory if necessary" << std::endl;
+        int shared_optin;
+        // drv::dispatch::hipDeviceGetAttribute(&shared_optin, hipDeviceAttributeSharedMemPerBlockOptin, device);
+        if(n_shared_bytes > 49152 && shared_optin > 49152){
+          // drv::dispatch::hipFuncSetCacheConfig(fun, hipFuncCachePreferShared);
+          int shared_total, shared_static;
+          // drv::dispatch::hipDeviceGetAttribute(&shared_total, hipDeviceAttributeMaxSharedMemoryPerMultiprocessor, device);
+          // drv::dispatch::hipFuncGetAttributes(&attr, fun);
+          shared_total = attr.sharedSizeBytes;
+          // drv::dispatch::hipFuncSetAttribute(fun, hipFuncAttributeMaxDynamicSharedMemorySize, shared_optin - shared_static);
         }
         return std::make_tuple((uint64_t)mod, (uint64_t)fun, (uint64_t)n_regs, (uint64_t)n_spills);
       }, 
