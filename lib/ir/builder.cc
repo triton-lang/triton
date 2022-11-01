@@ -60,6 +60,9 @@ value *builder::get_float16(float val)
 value *builder::get_float32(float val)
 { return constant_fp::get(type::get_fp32_ty(ctx_), val); }
 
+value *builder::get_float64(float val)
+{ return constant_fp::get(type::get_fp64_ty(ctx_), val); }
+
 value *builder::get_range(int32_t _lo, int32_t _hi) {
   constant_int* lo = static_cast<constant_int*>(get_int32(_lo));
   constant_int* hi = static_cast<constant_int*>(get_int32(_hi));

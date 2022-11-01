@@ -196,7 +196,7 @@ mma_layout::mma_layout(size_t num_warps,
   tensor_core_type_ = get_mma_type(dot);
   /* fragments per warp */
   // try to make things as square as possible to maximize data re-use
-  if(tgt->as_nvidia()->sm() < 80){
+  if(tgt->as_nvidia() && tgt->as_nvidia()->sm() < 80){
     fpw_ = {2, 2, 1};
     auto ord_a = layout_a->get_order();
     auto ord_b = layout_b->get_order();

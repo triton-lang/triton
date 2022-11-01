@@ -222,6 +222,7 @@ bool dispatch::hipinit(){
   return res;
 }
 
+#define HIP_DEFINE0(ret, fname) DEFINE0(hipinit, hip_, ret, fname)
 #define HIP_DEFINE1(ret, fname, t1) DEFINE1(hipinit, hip_, ret, fname, t1)
 #define HIP_DEFINE2(ret, fname, t1, t2) DEFINE2(hipinit, hip_, ret, fname, t1, t2)
 #define HIP_DEFINE3(ret, fname, t1, t2, t3) DEFINE3(hipinit, hip_, ret, fname, t1, t2, t3)
@@ -278,7 +279,8 @@ HIP_DEFINE2(hipError_t, hipEventCreate, hipEvent_t *, unsigned int)
 HIP_DEFINE3(hipError_t, hipEventElapsedTime, float *, hipEvent_t, hipEvent_t)
 HIP_DEFINE2(hipError_t, hipEventRecord, hipEvent_t, hipStream_t)
 HIP_DEFINE1(hipError_t, hipEventDestroy, hipEvent_t)
-
+// error handling
+HIP_DEFINE0(hipError_t, hipGetLastError)
 
 /* ------------------- *
  * COMMON

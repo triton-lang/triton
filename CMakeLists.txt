@@ -3,6 +3,13 @@ include(ExternalProject)
 
 set(CMAKE_CXX_STANDARD 17)
 
+if(NOT TRITON_LLVM_BUILD_DIR)
+    set(TRITON_LLVM_BUILD_DIR ${CMAKE_BINARY_DIR})
+endif()
+
+set(TRITON_USE_ROCM "$ENV{TRITON_USE_ROCM}")
+set(TRITON_ROCM_DEBUG "$ENV{TRITON_ROCM_DEBUG}")
+
 project(triton)
 include(CTest)
 if(NOT WIN32)
@@ -35,7 +42,16 @@ if(WIN32)
     add_subdirectory(deps/dlfcn-win32/src ${CMAKE_BINARY_DIR}/dlfcn-win32)
 endif()
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -std=gnu++17")
+if (TRITON_USE_ROCM)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -std=gnu++17 -Wno-unused-result -Wno-attributes")
+    set(MI_GPU_ARCH $ENV{MI_GPU_ARCH})
+    if (NOT MI_GPU_ARCH)
+        set(MI_GPU_ARCH "gfx90a")
+    endif()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DMI_GPU_ARCH=${MI_GPU_ARCH}")
+else()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -std=gnu++17")
+endif()
 
 
 ##########
@@ -135,6 +151,13 @@ if(BUILD_PYTHON_MODULE)
     endif()
     include_directories("." ${PYTHON_SRC_PATH} ${PYTHON_INCLUDE_DIRS} ${CUTLASS_INCLUDE_DIR})
     link_directories(${PYTHON_LINK_DIRS} ${CUTLASS_LIBRARY_DIR})
+    if (TRITON_USE_ROCM)
+        add_definitions(-DUSE_ROCM)
+    endif()
+    if (TRITON_ROCM_DEBUG)
+        add_definitions(-DDEBUG_ROCM)
+    endif()
+
     set(PYTHON_SRC ${PYTHON_SRC_PATH}/main.cc ${PYTHON_SRC_PATH}/triton.cc  ${PYTHON_SRC_PATH}/superblock.cc ${CUTLASS_SRC})
 endif()
 
