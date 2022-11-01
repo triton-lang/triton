@@ -13,8 +13,8 @@ def math_kernel(x1_ptr, x2_ptr, x3_ptr, x4_ptr, n, BLOCK_SIZE: tl.constexpr):
 
     y1 = tl.sin(x1)
     y2 = tl.libdevice.sin(x2)
-    y3 = tl.libdevice.fdiv_rn(x3, x3)
-    y4 = tl.libdevice.fmaf_rd(x4, x4, x4)
+    y3 = tl.libdevice.div_rn(x3, x3)
+    y4 = tl.libdevice.fma_rd(x4, x4, x4)
 
     tl.store(x1_ptr + offsets, y1, mask=offsets < n)
     tl.store(x2_ptr + offsets, y2, mask=offsets < n)
