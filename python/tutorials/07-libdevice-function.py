@@ -7,7 +7,7 @@ Please refer to https://docs.nvidia.com/cuda/libdevice-users-guide/index.html re
 
 In `trition/language/libdevice.py`, we try to aggregate functions with the same computation but different data types together.
 For example, both `__nv_asin` and `__nvasinf` calculate the principal value of the arc sine of the input, but `__nv_asin` operates on `double` and `__nv_asinf` operates on `float`.
-Using triton, you can simply call `tl.libdevice.asinf`.
+Using triton, you can simply call `tl.libdevice.asin`.
 triton automatically selects the correct underlying device function to invoke based on input and output types.
 """
 
