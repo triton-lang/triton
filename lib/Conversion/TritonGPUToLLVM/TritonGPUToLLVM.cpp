@@ -2602,7 +2602,7 @@ public:
 
     Value ptr = getPtr(ptrIdx);
 
-    if (canUseLdmatrix) {
+    if (canUseLdmatrix) { // work with fp16
       int sOffset =
           matIdx[order[1]] * sMatStride * sMatShape * sTileStride * elemBytes;
       PTXBuilder builder;
@@ -2658,9 +2658,9 @@ public:
         elems[3] =
             load(gep(elemPtrTy, ptr2, i32_val(sOffsetElem + sOffsetArrElem)));
       }
-
       return {elems[0], elems[1], elems[2], elems[3]};
-    } else if (elemBytes == 1 && needTrans) {
+
+    } else if (elemBytes == 1 && needTrans) { // work with int8
       std::array<std::array<Value, 4>, 2> ptrs;
       ptrs[0] = {
           getPtr(ptrIdx),

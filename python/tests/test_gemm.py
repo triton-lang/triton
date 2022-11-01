@@ -72,13 +72,14 @@ def test_gemm_no_scf_int8(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS):
                                stride_cm=c.stride(0), stride_cn=c.stride(1),
                                M=SIZE_M, N=SIZE_N, K=SIZE_K,
                                num_warps=NUM_WARPS)
-    golden = torch.matmul(a, b)
+
+    aa = a.cpu()
+    bb = b.cpu()
+    golden = torch.matmul(aa, bb)
     torch.set_printoptions(profile="full")
-    print("c: \n");
-    print(c);
-    print("golden: \n");
-    print(golden);
-    assert c == golden
+    print("c", c.cpu())
+    print("gloden", golden)
+    assert c.cpu() == golden
 
 
 @triton.jit
@@ -168,6 +169,3 @@ def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLO
 
     torch.set_printoptions(profile="full")
     assert_close(c, golden, rtol=max(1e-4, 1.5 * golden_rel_err), atol=max(1e-4, 1.5 * golden_abs_err), check_dtype=False)
-
-if __name__ == '__main__':
-    test_gemm_no_scf_int8(SIZE_M=128, SIZE_N=256, SIZE_K=32, NUM_WARPS=4)
