@@ -129,22 +129,30 @@ public:
     // cvt(extract_slice(x), type2) ->extract_slice(cvt(x, type2))
     auto extract_slice = dyn_cast<tensor::ExtractSliceOp>(arg);
     if (extract_slice) {
-      auto origType = extract_slice.source().getType().cast<RankedTensorType>();
+      auto origRetType =
+          extract_slice.getResult().getType().cast<RankedTensorType>();
       // Ensure that the new extract_slice op is placed in the same place as the
       // old extract_slice op. Otherwise, the new extract_slice op may be placed
       // after the async_wait op, which is not allowed.
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPoint(extract_slice);
-      auto newType = RankedTensorType::get(
-          origType.getShape(), origType.getElementType(),
+      auto newRetType = RankedTensorType::get(
+          origRetType.getShape(), origRetType.getElementType(),
           op->getResult(0).getType().cast<RankedTensorType>().getEncoding());
-      auto new_arg = rewriter.create<triton::gpu::ConvertLayoutOp>(
-          op->getLoc(), newType, extract_slice.source());
+      // New argument type
+      auto origArgType =
+          extract_slice.source().getType().cast<RankedTensorType>();
+      auto newArgType = RankedTensorType::get(
+          origArgType.getShape(), origArgType.getElementType(),
+          op->getResult(0).getType().cast<RankedTensorType>().getEncoding());
+      auto newArg = rewriter.create<triton::gpu::ConvertLayoutOp>(
+          op->getLoc(), newArgType, extract_slice.source());
+      // Create new extract_slice
       rewriter.replaceOpWithNewOp<tensor::ExtractSliceOp>(
-          op, extract_slice.getResult().getType(), new_arg.getResult(),
-          extract_slice.offsets(), extract_slice.sizes(),
-          extract_slice.strides(), extract_slice.static_offsets(),
-          extract_slice.static_sizes(), extract_slice.static_strides());
+          op, newRetType, newArg.getResult(), extract_slice.offsets(),
+          extract_slice.sizes(), extract_slice.strides(),
+          extract_slice.static_offsets(), extract_slice.static_sizes(),
+          extract_slice.static_strides());
       return mlir::success();
     }
     // cvt(type2, x)

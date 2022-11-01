@@ -353,6 +353,7 @@ void LoopPipeliner::emitPrologue() {
         SmallVector<OpFoldResult>{intAttr(1), intAttr(sliceType.getShape()[0]),
                                   intAttr(sliceType.getShape()[1])},
         SmallVector<OpFoldResult>{intAttr(1), intAttr(1), intAttr(1)});
+    loadsExtract[loadOp] = extractSlice;
   }
   // bump up loopIterIdx, this is used for getting the correct slice for the
   // *next* iteration
@@ -482,6 +483,8 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   Value extractSliceIndex = builder.create<arith::RemSIOp>(
       nextIV.getLoc(), loopIterIdx,
       builder.create<arith::ConstantIntOp>(nextIV.getLoc(), numStages, 32));
+  extractSliceIndex = builder.create<arith::IndexCastOp>(
+      extractSliceIndex.getLoc(), builder.getIndexType(), extractSliceIndex);
 
   auto intAttr = [&](int64_t v) { return builder.getI64IntegerAttr(v); };
 
