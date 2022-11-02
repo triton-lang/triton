@@ -87,8 +87,16 @@ void init_triton_ir(py::module &&m) {
       .value("FADD", mlir::triton::RedOp::FADD)
       .value("MIN", mlir::triton::RedOp::MIN)
       .value("MAX", mlir::triton::RedOp::MAX)
+      .value("UMIN", mlir::triton::RedOp::UMIN)
+      .value("UMAX", mlir::triton::RedOp::UMAX)
+      .value("ARGMIN", mlir::triton::RedOp::ARGMIN)
+      .value("ARGMAX", mlir::triton::RedOp::ARGMAX)
+      .value("ARGUMIN", mlir::triton::RedOp::ARGUMIN)
+      .value("ARGUMAX", mlir::triton::RedOp::ARGUMAX)
       .value("FMIN", mlir::triton::RedOp::FMIN)
       .value("FMAX", mlir::triton::RedOp::FMAX)
+      .value("ARGFMIN", mlir::triton::RedOp::ARGFMIN)
+      .value("ARGFMAX", mlir::triton::RedOp::ARGFMAX)
       .value("XOR", mlir::triton::RedOp::XOR);
 
   py::enum_<mlir::triton::RMWOp>(m, "ATOMIC_OP")
