@@ -27,7 +27,6 @@ def get_tensor(shape, data_type, b_positive=False):
 
     return x
 
-
 # @pytest.mark.parametrize('data_type',
 #                          [("int8"),
 #                           ('int16'),
@@ -36,6 +35,8 @@ def get_tensor(shape, data_type, b_positive=False):
 #                           ('float16'),
 #                           ("float32"),
 #                           ("float64")])
+
+
 def printf(data_type):
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
