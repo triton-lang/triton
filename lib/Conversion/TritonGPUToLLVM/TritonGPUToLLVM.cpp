@@ -67,16 +67,6 @@ static Value createIndexConstant(OpBuilder &builder, Location loc,
                                           builder.getIntegerAttr(ty, value));
 }
 
-// Create a index type constant from an integer Value.
-static Value createIndexConstant(OpBuilder &builder, Location loc,
-
-                                 TypeConverter *converter, Value value) {
-  if (value.getType().isIndex())
-    return value;
-  Type ty = converter->convertType(builder.getIndexType());
-  return builder.create<LLVM::SExtOp>(loc, ty, value);
-}
-
 // Create an integer constant of \param width bits.
 static Value createLLVMIntegerConstant(OpBuilder &builder, Location loc,
                                        short width, int64_t value) {
@@ -515,7 +505,11 @@ public:
       linear = multiDim.front();
       for (auto [dim, shape] :
            llvm::zip(multiDim.drop_front(), shape.drop_front())) {
-        Value dimSize = idx_val(shape);
+        Value dimSize;
+        if constexpr (llvm::is_integral_or_enum<T>::value)
+          dimSize = idx_val(shape);
+        else
+          dimSize = shape;
         linear = add(mul(linear, dimSize), dim);
       }
     }
@@ -1812,7 +1806,6 @@ struct ExtractSliceOpConversion
     auto srcTy = op.source().getType().dyn_cast<RankedTensorType>();
     auto srcLayout = srcTy.getEncoding().dyn_cast<SharedEncodingAttr>();
     assert(srcLayout && "Unexpected resultLayout in ExtractSliceOpConversion");
-    auto strides = op.getMixedStrides();
     assert(op.hasUnitStride() &&
            "Only unit stride supported by ExtractSliceOpConversion");
 
@@ -1825,7 +1818,7 @@ struct ExtractSliceOpConversion
     for (auto i = 0; i < mixedOffsets.size(); ++i) {
       Value value;
       if (op.isDynamicOffset(i)) {
-        value = adaptor.offsets()[i];
+        value = bitcast(i32_ty, adaptor.offsets()[i]);
       } else {
         value = i32_val(op.getStaticOffset(i));
       }
@@ -1835,10 +1828,12 @@ struct ExtractSliceOpConversion
     // object
     auto offset = linearize<Value>(rewriter, loc, offsetVals, smemObj.shape);
     // newBase = base + offset
-    // newShape = shape
+    // newShape = resShape
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
-    smemObj.base = gep(elemPtrTy, smemObj.base, offset);
+    auto elemPtrTy = ptr_ty(llvmElemTy, 3);
+    auto resTy = op.getType().dyn_cast<RankedTensorType>();
+    smemObj = SharedMemoryObject(gep(elemPtrTy, smemObj.base, offset),
+                                 resTy.getShape(), loc, rewriter);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
@@ -2678,7 +2673,7 @@ public:
 
     if (canUseLdmatrix) {
       Value sOffset =
-          mul(i32_val(matIdx[order[1]] * sMatStride * sMatShape * elemBytes),
+          mul(i32_val(matIdx[order[1]] * sMatStride * sMatShape),
               sTileStride);
       Value sOffsetPtr = gep(shemPtrTy, ptr, sOffset);
       PTXBuilder builder;
@@ -4297,7 +4292,6 @@ TritonLLVMConversionTarget::TritonLLVMConversionTarget(
   addLegalDialect<NVVM::NVVMDialect>();
   // addIllegalDialect<triton::TritonDialect>();
   // addIllegalDialect<triton::gpu::TritonGPUDialect>();
-  addIllegalDialect<mlir::tensor::TensorDialect>();
   addIllegalDialect<mlir::gpu::GPUDialect>();
   addIllegalDialect<mlir::StandardOpsDialect>();
   addLegalOp<mlir::UnrealizedConversionCastOp>();

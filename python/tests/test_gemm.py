@@ -51,11 +51,6 @@ def test_gemm_no_scf(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS):
                                M=SIZE_M, N=SIZE_N, K=SIZE_K,
                                num_warps=NUM_WARPS)
     golden = torch.matmul(a, b)
-    with open('golden.txt', 'w') as f:
-        f.write(str(golden))
-
-    with open('c.text', 'w') as f:
-        f.write(str(c))
 
     torch.set_printoptions(profile="full")
     assert_close(c, golden, rtol=1e-3, atol=1e-3, check_dtype=False)
