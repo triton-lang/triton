@@ -1123,3 +1123,10 @@ def max_contiguous(x: tl.tensor, values: List[int]) -> tl.tensor:
 
 def debug_barrier(builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_barrier(''), tl.void)
+
+
+def printf(prefix: str, args: List[tl.tensor], builder: ir.builder) -> tl.tensor:
+    new_args = []
+    for arg in args:
+        new_args.append(arg.handle)
+    return tl.tensor(builder.create_printf(prefix, new_args), tl.void)
