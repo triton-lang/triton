@@ -1812,7 +1812,8 @@ struct ExtractSliceOpConversion
     auto srcTy = op.source().getType().dyn_cast<RankedTensorType>();
     auto srcLayout = srcTy.getEncoding().dyn_cast<SharedEncodingAttr>();
     assert(srcLayout && "Unexpected resultLayout in ExtractSliceOpConversion");
-    assert(!op.hasUnitStride() &&
+    auto strides = op.getMixedStrides();
+    assert(op.hasUnitStride() &&
            "Only unit stride supported by ExtractSliceOpConversion");
 
     // XXX(Keren): the code could be simplified if we can reason that all the
@@ -2675,14 +2676,16 @@ public:
     Value ptr = getPtr(ptrIdx);
 
     if (canUseLdmatrix) {
-      int sOffset = matIdx[order[1]] * sMatStride * sMatShape * elemBytes;
-      ptr = add(ptr, mul(i32_val(sOffset), sTileStride));
+      Value sOffset =
+          mul(i32_val(matIdx[order[1]] * sMatStride * sMatShape * elemBytes),
+              sTileStride);
+      Value sOffsetPtr = gep(shemPtrTy, ptr, sOffset);
       PTXBuilder builder;
 
       // ldmatrix.m8n8.x4 returns 4x2xfp16(that is 4xb32) elements for a
       // thread.
       auto resArgs = builder.newListOperand(4, "=r");
-      auto addrArg = builder.newAddrOperand(ptr, "r");
+      auto addrArg = builder.newAddrOperand(sOffsetPtr, "r");
 
       auto ldmatrix = builder.create("ldmatrix.sync.aligned.m8n8.x4")
                           ->o("trans", needTrans /*predicate*/)
@@ -2708,23 +2711,23 @@ public:
       Value ptr2 = getPtr(ptrIdx + 1);
       assert(sMatStride == 1);
       int sOffsetElem = matIdx[order[1]] * (sMatStride * sMatShape);
-      Value sElemPtr = mul(i32_val(sOffsetElem), sTileStride);
+      Value sOffsetElemVal = mul(i32_val(sOffsetElem), sTileStride);
       int sOffsetArrElem = sMatStride * sMatShape;
-      Value sArrElemPtr =
-          add(sElemPtr, mul(i32_val(sOffsetArrElem), sTileStride));
+      Value sOffsetArrElemVal =
+          add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sTileStride));
 
       Value elems[4];
       Type elemTy = type::f32Ty(ctx);
       if (kOrder == 1) {
-        elems[0] = load(gep(elemTy, ptr, sElemPtr));
-        elems[1] = load(gep(elemTy, ptr2, sElemPtr));
-        elems[2] = load(gep(elemTy, ptr, sArrElemPtr));
-        elems[3] = load(gep(elemTy, ptr2, sArrElemPtr));
+        elems[0] = load(gep(elemTy, ptr, sOffsetElemVal));
+        elems[1] = load(gep(elemTy, ptr2, sOffsetElemVal));
+        elems[2] = load(gep(elemTy, ptr, sOffsetArrElemVal));
+        elems[3] = load(gep(elemTy, ptr2, sOffsetArrElemVal));
       } else {
-        elems[0] = load(gep(elemTy, ptr, sElemPtr));
-        elems[2] = load(gep(elemTy, ptr2, sElemPtr));
-        elems[3] = load(gep(elemTy, ptr2, sArrElemPtr));
-        elems[3] = load(gep(elemTy, ptr2, sArrElemPtr));
+        elems[0] = load(gep(elemTy, ptr, sOffsetElemVal));
+        elems[2] = load(gep(elemTy, ptr2, sOffsetElemVal));
+        elems[3] = load(gep(elemTy, ptr, sOffsetArrElemVal));
+        elems[3] = load(gep(elemTy, ptr2, sOffsetArrElemVal));
       }
 
       return {elems[0], elems[1], elems[2], elems[3]};
@@ -2746,10 +2749,10 @@ public:
 
       assert(sMatStride == 1);
       int sOffsetElem = matIdx[order[1]] * (sMatStride * sMatShape);
-      Value sElemPtr = mul(i32_val(sOffsetElem), sTileStride);
+      Value sOffsetElemVal = mul(i32_val(sOffsetElem), sTileStride);
       int sOffsetArrElem = 1 * (sMatStride * sMatShape);
-      Value sArrElemPtr =
-          add(sElemPtr, mul(i32_val(sOffsetArrElem), sTileStride));
+      Value sOffsetArrElemVal =
+          add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sTileStride));
 
       std::array<Value, 4> i8v4Elems;
       std::array<Value, 4> i32Elems;
@@ -2761,11 +2764,11 @@ public:
       if (kOrder == 1) {
         for (int i = 0; i < 2; ++i)
           for (int j = 0; j < 4; ++j)
-            i8Elems[i][j] = load(gep(elemTy, ptrs[i][j], sArrElemPtr));
+            i8Elems[i][j] = load(gep(elemTy, ptrs[i][j], sOffsetElemVal));
 
         for (int i = 2; i < 4; ++i)
           for (int j = 0; j < 4; ++j)
-            i8Elems[i][j] = load(gep(elemTy, ptrs[i - 2][j], sArrElemPtr));
+            i8Elems[i][j] = load(gep(elemTy, ptrs[i - 2][j], sOffsetElemVal));
 
         for (int m = 0; m < 4; ++m) {
           for (int e = 0; e < 4; ++e)
@@ -2775,13 +2778,13 @@ public:
         }
       } else { // k first
         for (int j = 0; j < 4; ++j)
-          i8Elems[0][j] = load(gep(elemTy, ptrs[0][j], sElemPtr));
+          i8Elems[0][j] = load(gep(elemTy, ptrs[0][j], sOffsetArrElemVal));
         for (int j = 0; j < 4; ++j)
-          i8Elems[2][j] = load(gep(elemTy, ptrs[1][j], sElemPtr));
+          i8Elems[2][j] = load(gep(elemTy, ptrs[1][j], sOffsetArrElemVal));
         for (int j = 0; j < 4; ++j)
-          i8Elems[1][j] = load(gep(elemTy, ptrs[0][j], sArrElemPtr));
+          i8Elems[1][j] = load(gep(elemTy, ptrs[0][j], sOffsetArrElemVal));
         for (int j = 0; j < 4; ++j)
-          i8Elems[3][j] = load(gep(elemTy, ptrs[1][j], sArrElemPtr));
+          i8Elems[3][j] = load(gep(elemTy, ptrs[1][j], sOffsetArrElemVal));
 
         for (int m = 0; m < 4; ++m) {
           for (int e = 0; e < 4; ++e)
@@ -3835,15 +3838,23 @@ struct InsertSliceAsyncOpConversion
     auto srcElems = getLLVMElems(src, llSrc, rewriter, loc);
 
     // %dst
+    auto dstTy = dst.getType().cast<RankedTensorType>();
+    auto smemObj = getSharedMemoryObjectFromStruct(loc, llDst, rewriter);
     auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
-    assert(axis == 0 && "insert_slice_async: Only axis=0 is supported for now");
-    auto dstBase = createIndexAttrConstant(rewriter, loc,
-                                           getTypeConverter()->getIndexType(),
-                                           product<int64_t>(srcTy.getShape()));
-    Value offset = mul(llIndex, dstBase);
-    auto dstPtrTy = LLVM::LLVMPointerType::get(
-        getTypeConverter()->convertType(resTy.getElementType()), 3);
-    Value dstPtrBase = gep(dstPtrTy, llDst, offset);
+    SmallVector<Value, 4> offsetVals;
+    for (auto i = 0; i < srcTy.getShape().size(); ++i) {
+      if (i == axis) {
+        offsetVals.emplace_back(llIndex);
+      } else {
+        offsetVals.emplace_back(idx_val(dstTy.getShape()[i]));
+      }
+    }
+    // Compute the offset based on the original dimensions of the shared memory
+    // object
+    auto dstOffset = linearize<Value>(rewriter, loc, offsetVals, smemObj.shape);
+    auto dstPtrTy =
+        ptr_ty(getTypeConverter()->convertType(resTy.getElementType()), 3);
+    Value dstPtrBase = gep(dstPtrTy, smemObj.base, dstOffset);
 
     // %mask
     SmallVector<Value> maskElems;
@@ -3871,7 +3882,6 @@ struct InsertSliceAsyncOpConversion
     unsigned maxPhase = resSharedLayout.getMaxPhase();
     auto sizePerThread = srcBlockedLayout.getSizePerThread();
     auto threadsPerCTA = getThreadsPerCTA(srcBlockedLayout);
-
     auto inOrder = srcBlockedLayout.getOrder();
 
     // If perPhase * maxPhase > threadsPerCTA, we need to swizzle over
@@ -3903,7 +3913,6 @@ struct InsertSliceAsyncOpConversion
           vecIdxCol / numVecCols * numVecCols * threadsPerCTA[inOrder[0]];
       auto baseOffsetRow = vecIdxRow / numSwizzleRows * numSwizzleRows *
                            threadsPerCTA[inOrder[1]];
-      auto baseOffset = (baseOffsetRow * srcShape[inOrder[0]] + baseOffsetCol);
       auto tileVecIdxCol = vecIdxCol % numVecCols;
       auto tileVecIdxRow = vecIdxRow % numSwizzleRows;
 
@@ -3925,8 +3934,10 @@ struct InsertSliceAsyncOpConversion
         auto srcIdx = srcIndices[tileVecIdxRow * sizePerThread[inOrder[0]]];
         Value phase = urem(udiv(srcIdx[inOrder[1]], i32_val(perPhase)),
                            i32_val(maxPhase));
-        Value rowOffset =
-            mul(srcIdx[inOrder[1]], i32_val(srcShape[inOrder[0]]));
+        // srcShape and smemObj.shape maybe different if smemObj is a
+        // slice of the original shared memory object.
+        // So we need to use the original shape to compute the offset
+        Value rowOffset = mul(srcIdx[inOrder[1]], smemObj.shape[inOrder[0]]);
         Value colOffset =
             add(srcIdx[inOrder[0]], i32_val(tileVecIdxCol * minVec));
         Value swizzleIdx = udiv(colOffset, i32_val(outVec));
@@ -3953,14 +3964,18 @@ struct InsertSliceAsyncOpConversion
       assert(byteWidth == 16 || byteWidth == 8 || byteWidth == 4);
       auto resByteWidth = resElemTy.getIntOrFloatBitWidth() / 8;
 
-      auto tileOffset = tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}];
+      Value tileOffset = tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}];
+      Value baseOffset =
+          add(mul(i32_val(baseOffsetRow), smemObj.shape[inOrder[0]]),
+              i32_val(baseOffsetCol));
+      Value basePtr = gep(dstPtrTy, tileOffset, baseOffset);
       for (size_t wordIdx = 0; wordIdx < numWords; ++wordIdx) {
         PTXBuilder ptxBuilder;
         auto wordElemIdx = wordIdx * numWordElems;
         auto &copyAsyncOp =
             *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
-        auto *dstOperand = ptxBuilder.newAddrOperand(
-            tileOffset, "r", (wordElemIdx + baseOffset) * resByteWidth);
+        auto *dstOperand =
+            ptxBuilder.newAddrOperand(basePtr, "r", wordElemIdx * resByteWidth);
         auto *srcOperand =
             ptxBuilder.newAddrOperand(srcElems[elemIdx + wordElemIdx], "l");
         auto *copySize = ptxBuilder.newConstantOperand(byteWidth);
