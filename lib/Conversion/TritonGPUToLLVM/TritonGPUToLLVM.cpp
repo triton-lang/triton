@@ -1818,7 +1818,7 @@ struct ExtractSliceOpConversion
     for (auto i = 0; i < mixedOffsets.size(); ++i) {
       Value value;
       if (op.isDynamicOffset(i)) {
-        value = bitcast(i32_ty, adaptor.offsets()[i]);
+        value = adaptor.offsets()[i];
       } else {
         value = i32_val(op.getStaticOffset(i));
       }
@@ -3838,11 +3838,11 @@ struct InsertSliceAsyncOpConversion
     auto smemObj = getSharedMemoryObjectFromStruct(loc, llDst, rewriter);
     auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
     SmallVector<Value, 4> offsetVals;
-    for (auto i = 0; i < srcTy.getShape().size(); ++i) {
+    for (auto i = 0; i < srcShape.size(); ++i) {
       if (i == axis) {
         offsetVals.emplace_back(llIndex);
       } else {
-        offsetVals.emplace_back(idx_val(dstTy.getShape()[i]));
+        offsetVals.emplace_back(i32_val(0));
       }
     }
     // Compute the offset based on the original dimensions of the shared memory
@@ -3953,7 +3953,7 @@ struct InsertSliceAsyncOpConversion
       auto numWords = vecBitWidth / bitWidth;
       auto numWordElems = bitWidth / resElemTy.getIntOrFloatBitWidth();
 
-      // XXX(Keren): Tune CG and CA here.
+      // Tune CG and CA here.
       auto byteWidth = bitWidth / 8;
       CacheModifier srcCacheModifier =
           byteWidth == 16 ? CacheModifier::CG : CacheModifier::CA;
