@@ -395,7 +395,7 @@ struct SharedMemoryObject {
                      ConversionPatternRewriter &rewriter)
       : base(base) {
     for (auto s : shape) {
-      this->shape.push_back(i32_val(s));
+      this->shape.emplace_back(i32_val(s));
     }
   }
 
@@ -1789,8 +1789,8 @@ struct AllocTensorOpConversion
     auto resultTy = op.getType().dyn_cast<RankedTensorType>();
     auto llvmElemTy =
         getTypeConverter()->convertType(resultTy.getElementType());
-    auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
-    smemBase = rewriter.create<LLVM::BitcastOp>(loc, elemPtrTy, smemBase);
+    auto elemPtrTy = ptr_ty(llvmElemTy, 3);
+    smemBase = bitcast(elemPtrTy, smemBase);
     auto smemObj =
         SharedMemoryObject(smemBase, resultTy.getShape(), loc, rewriter);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
@@ -2326,8 +2326,9 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
   Value src = op.src();
   Value dst = op.result();
   auto srcTy = src.getType().cast<RankedTensorType>();
-  auto dstTy = dst.getType().cast<RankedTensorType>();
   auto srcShape = srcTy.getShape();
+  auto dstTy = dst.getType().cast<RankedTensorType>();
+  auto dstShape = dstTy.getShape();
   assert(srcShape.size() == 2 &&
          "Unexpected rank of ConvertLayout(blocked->shared)");
   auto srcBlockedLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
@@ -2373,7 +2374,7 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
   Value smemBase = getSharedMemoryBase(loc, rewriter, dst);
   auto elemPtrTy = ptr_ty(getTypeConverter()->convertType(elemTy), 3);
   smemBase = bitcast(elemPtrTy, smemBase);
-  auto smemObj = SharedMemoryObject(smemBase, srcShape, loc, rewriter);
+  auto smemObj = SharedMemoryObject(smemBase, dstShape, loc, rewriter);
   auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
   unsigned numWordsEachRep = product<unsigned>(wordsInEachRep);
   SmallVector<Value> wordVecs(numWordsEachRep);
@@ -2726,7 +2727,7 @@ public:
       } else {
         elems[0] = load(gep(elemTy, ptr, sOffsetElemVal));
         elems[2] = load(gep(elemTy, ptr2, sOffsetElemVal));
-        elems[3] = load(gep(elemTy, ptr, sOffsetArrElemVal));
+        elems[1] = load(gep(elemTy, ptr, sOffsetArrElemVal));
         elems[3] = load(gep(elemTy, ptr2, sOffsetArrElemVal));
       }
 
@@ -2768,7 +2769,7 @@ public:
 
         for (int i = 2; i < 4; ++i)
           for (int j = 0; j < 4; ++j)
-            i8Elems[i][j] = load(gep(elemTy, ptrs[i - 2][j], sOffsetElemVal));
+            i8Elems[i][j] = load(gep(elemTy, ptrs[i - 2][j], sOffsetArrElemVal));
 
         for (int m = 0; m < 4; ++m) {
           for (int e = 0; e < 4; ++e)
@@ -2778,9 +2779,9 @@ public:
         }
       } else { // k first
         for (int j = 0; j < 4; ++j)
-          i8Elems[0][j] = load(gep(elemTy, ptrs[0][j], sOffsetArrElemVal));
+          i8Elems[0][j] = load(gep(elemTy, ptrs[0][j], sOffsetElemVal));
         for (int j = 0; j < 4; ++j)
-          i8Elems[2][j] = load(gep(elemTy, ptrs[1][j], sOffsetArrElemVal));
+          i8Elems[2][j] = load(gep(elemTy, ptrs[1][j], sOffsetElemVal));
         for (int j = 0; j < 4; ++j)
           i8Elems[1][j] = load(gep(elemTy, ptrs[0][j], sOffsetArrElemVal));
         for (int j = 0; j < 4; ++j)
