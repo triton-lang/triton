@@ -533,6 +533,34 @@ public:
   BlockedToMMA(mlir::MLIRContext *context)
       : mlir::RewritePattern(triton::DotOp::getOperationName(), 2, context) {}
 
+  static SmallVector<unsigned, 2>
+  getWarpsPerTile(const ArrayRef<int64_t> &shape, int version, int numWarps) {
+    assert(version == 2);
+    // TODO: Handle one warp per row for fused matmuls
+    // TODO: unsigned -> int64_t to keep things uniform
+    SmallVector<unsigned, 2> ret = {1, 1};
+    SmallVector<int64_t, 2> shapePerWarp = {16, 8};
+    bool changed = false;
+    do {
+      changed = false;
+      if (ret[0] * ret[1] >= numWarps)
+        break;
+      if (shape[0] / shapePerWarp[0] / ret[0] >=
+          shape[1] / (shapePerWarp[1] * 2) / ret[1]) {
+        if (ret[0] < shape[0] / shapePerWarp[0]) {
+          ret[0] *= 2;
+          changed = true;
+        }
+      } else {
+        if (ret[1] < shape[1] / (shapePerWarp[1] * 2)) {
+          ret[1] *= 2;
+          changed = true;
+        }
+      }
+    } while (changed);
+    return ret;
+  }
+
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
@@ -541,13 +569,20 @@ public:
     auto oldRetType = dotOp.getResult().getType().cast<RankedTensorType>();
     if (oldRetType.getEncoding().isa<triton::gpu::MmaEncodingAttr>())
       return failure();
-    // TODO: compute warpsPerCTA
-    auto newRetType = RankedTensorType::get(
-        oldRetType.getShape(), oldRetType.getElementType(),
-        triton::gpu::MmaEncodingAttr::get(oldRetType.getContext(), 2, {2, 2}));
+    // get MMA encoding for the given number of warps
+    auto retShape = oldRetType.getShape();
+    auto mod = op->getParentOfType<mlir::ModuleOp>();
+    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    auto newRetType =
+        RankedTensorType::get(retShape, oldRetType.getElementType(),
+                              triton::gpu::MmaEncodingAttr::get(
+                                  oldRetType.getContext(), 2,
+                                  getWarpsPerTile(retShape, 2, numWarps)));
+    // convert accumulator
     auto oldAcc = dotOp.getOperand(2);
     auto newAcc = rewriter.create<triton::gpu::ConvertLayoutOp>(
         oldAcc.getLoc(), newRetType, oldAcc);
+    // convert output
     auto newDot = rewriter.create<triton::DotOp>(
         dotOp.getLoc(), newRetType, dotOp.getOperand(0), dotOp.getOperand(1),
         newAcc, dotOp.allowTF32(), dotOp.transA(), dotOp.transB());
