@@ -79,7 +79,8 @@ def TTG_SelectOp : TTG_Op<"select", [NoSideEffect]> {
 def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
                                     [AttrSizedOperandSegments,
                                      ResultsAreSharedEncoding,
-                                     MemoryEffects<[MemRead]>,
+                                     // MemoryEffects<[MemRead]>, doesn't work with CSE but seems like it should?
+                                     NoSideEffect,
                                      TypesMatchWith<"infer mask type from src type",
                                                     "src", "mask", "getI1SameShape($_self)",
                                                     "($_op.getOperands().size() <= 3) || std::equal_to<>()">,

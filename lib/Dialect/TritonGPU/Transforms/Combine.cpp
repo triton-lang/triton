@@ -111,45 +111,38 @@ public:
     // cvt(insert_slice(x), type2) -> insert_slice(cvt(x, type2))
     auto insert_slice = dyn_cast<triton::gpu::InsertSliceAsyncOp>(arg);
     if (insert_slice) {
-      auto newType = op->getResult(0).getType();
+      auto newType = op->getResult(0).getType().cast<RankedTensorType>();
       // Ensure that the new insert_slice op is placed in the same place as the
       // old insert_slice op. Otherwise, the new insert_slice op may be placed
       // after the async_wait op, which is not allowed.
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPoint(insert_slice);
-      auto new_arg = rewriter.create<triton::gpu::ConvertLayoutOp>(
+      auto newArg = rewriter.create<triton::gpu::ConvertLayoutOp>(
           op->getLoc(), newType, insert_slice.dst());
       rewriter.replaceOpWithNewOp<triton::gpu::InsertSliceAsyncOp>(
-          op, newType, insert_slice.src(), new_arg.getResult(),
+          op, newType, insert_slice.src(), newArg.getResult(),
           insert_slice.index(), insert_slice.mask(), insert_slice.other(),
-          insert_slice.cache(), insert_slice.evict(), insert_slice.isVolatile(),
-          insert_slice.axis());
+          insert_slice.cache(), insert_slice.evict(),
+          insert_slice.isVolatile(), insert_slice.axis());
       return mlir::success();
     }
-    // cvt(extract_slice(x), type2) ->extract_slice(cvt(x, type2))
+    // cvt(extract_slice(x), type2) -> extract_slice(cvt(x, type2))
     auto extract_slice = dyn_cast<tensor::ExtractSliceOp>(arg);
     if (extract_slice) {
-      auto origRetType =
-          extract_slice.getResult().getType().cast<RankedTensorType>();
+      auto origType = extract_slice.source().getType().cast<RankedTensorType>();
+      auto newType = RankedTensorType::get(
+          origType.getShape(), origType.getElementType(),
+          op->getResult(0).getType().cast<RankedTensorType>().getEncoding());
+      auto resType = op->getResult(0).getType().cast<RankedTensorType>();
       // Ensure that the new extract_slice op is placed in the same place as the
       // old extract_slice op. Otherwise, the new extract_slice op may be placed
       // after the async_wait op, which is not allowed.
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPoint(extract_slice);
-      auto newRetType = RankedTensorType::get(
-          origRetType.getShape(), origRetType.getElementType(),
-          op->getResult(0).getType().cast<RankedTensorType>().getEncoding());
-      // New argument type
-      auto origArgType =
-          extract_slice.source().getType().cast<RankedTensorType>();
-      auto newArgType = RankedTensorType::get(
-          origArgType.getShape(), origArgType.getElementType(),
-          op->getResult(0).getType().cast<RankedTensorType>().getEncoding());
       auto newArg = rewriter.create<triton::gpu::ConvertLayoutOp>(
-          op->getLoc(), newArgType, extract_slice.source());
-      // Create new extract_slice
+          op->getLoc(), newType, extract_slice.source());
       rewriter.replaceOpWithNewOp<tensor::ExtractSliceOp>(
-          op, newRetType, newArg.getResult(), extract_slice.offsets(),
+          op, resType, newArg.getResult(), extract_slice.offsets(),
           extract_slice.sizes(), extract_slice.strides(),
           extract_slice.static_offsets(), extract_slice.static_sizes(),
           extract_slice.static_strides());
