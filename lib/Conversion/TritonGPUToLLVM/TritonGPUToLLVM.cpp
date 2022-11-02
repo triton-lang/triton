@@ -253,6 +253,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
       return failure();
 
     auto ctx = funcOp->getContext();
+
 #ifndef USE_ROCM
     // Set an attribute to indicate this function is a kernel entry.
     newFuncOp->setAttr(NVVMMetadataField::Kernel,
@@ -263,6 +264,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
     newFuncOp->setAttr(NVVMMetadataField::MaxNTid,
                        rewriter.getIntegerAttr(i32_ty, 32 * NumWarps));
 #endif
+
     rewriter.eraseOp(funcOp);
     return success();
   }
@@ -3693,11 +3695,13 @@ public:
                                                             patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateStdToLLVMConversionPatterns(typeConverter, patterns);
+
 #ifdef USE_ROCM
     mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns, mlir::gpu::amd::HIP);
 #else
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
 #endif
+
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
       return signalPassFailure();
   }

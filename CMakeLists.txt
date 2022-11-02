@@ -5,9 +5,6 @@ set(CMAKE_CXX_STANDARD 17)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-set(TRITON_USE_ROCM "$ENV{TRITON_USE_ROCM}")
-set(TRITON_ROCM_DEBUG "$ENV{TRITON_ROCM_DEBUG}")
-
 project(triton)
 include(CTest)
 if(NOT WIN32)
@@ -17,6 +14,12 @@ endif()
 # Options
 option(TRITON_BUILD_TUTORIALS "Build C++ Triton tutorials" ON)
 option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
+
+# Default build for this branch is ROCm support
+option(TRITON_USE_ROCM "Build with ROCm/AMDGPU support" ON)
+if(DEFINED ENV{TRITON_USE_ROCM})
+set(TRITON_USE_ROCM "$ENV{TRITON_USE_ROCM}" CACHE BOOL "" FORCE)
+endif()
 
 # Default build type
 if(NOT CMAKE_BUILD_TYPE)
@@ -40,18 +43,16 @@ if(WIN32)
     add_subdirectory(deps/dlfcn-win32/src ${CMAKE_BINARY_DIR}/dlfcn-win32)
 endif()
 
+set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17 -fvisibility=hidden -fvisibility-inlines-hidden")
+
 if (TRITON_USE_ROCM)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -std=gnu++17 -Wno-unused-result -Wno-attributes")
     set(MI_GPU_ARCH $ENV{MI_GPU_ARCH})
     if (NOT MI_GPU_ARCH)
         set(MI_GPU_ARCH "gfx90a")
     endif()
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DMI_GPU_ARCH=${MI_GPU_ARCH}")
-else()
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -std=gnu++17")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_ROCM -DMI_GPU_ARCH=${MI_GPU_ARCH} -Wno-unused-result -Wno-attributes")
 endif()
 
-set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17 -fvisibility=hidden -fvisibility-inlines-hidden")
 if(APPLE)
   set(CMAKE_OSX_DEPLOYMENT_TARGET 11.6)
 endif()
@@ -157,12 +158,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
       link_directories(${Python3_LIBRARY_DIRS})
       link_libraries(${Python3_LIBRARIES})
       add_link_options(${Python3_LINK_OPTIONS})
-    endif()
-    if (TRITON_USE_ROCM)
-      add_definitions(-DUSE_ROCM)
-    endif()
-    if (TRITON_ROCM_DEBUG)
-      add_definitions(-DDEBUG_ROCM)
     endif()
     set(PYTHON_SRC ${PYTHON_SRC_PATH}/main.cc ${PYTHON_SRC_PATH}/triton.cc)
 endif()

@@ -16,6 +16,7 @@
 #include "mlir/Transforms/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVM.h"
 #include "triton/tools/sys/getenv.hpp"
+#include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Constants.h"
 
 namespace mlir {
@@ -34,6 +35,7 @@ void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata) {
   auto *module = func->getParent();
   auto &ctx = func->getContext();
 
+#ifndef USE_ROCM
   if (metadata.maxntidx > 0) {
     auto i32_ty = llvm::IntegerType::get(ctx, 32);
     auto warps =
@@ -46,14 +48,19 @@ void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata) {
     module->getOrInsertNamedMetadata("nvvm.annotations")
         ->addOperand(llvm::MDNode::get(ctx, md_args));
   }
+#endif
 
   if (metadata.is_kernel) {
+#if defined(USE_ROCM)
+    func->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
+#else // defined(USE_ROCM)
     llvm::Metadata *md_args[] = {
         llvm::ValueAsMetadata::get(func), llvm::MDString::get(ctx, "kernel"),
         llvm::ValueAsMetadata::get(
             llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx), 1))};
     module->getOrInsertNamedMetadata("nvvm.annotations")
         ->addOperand(llvm::MDNode::get(ctx, md_args));
+#endif
   }
 }
 
@@ -96,10 +103,8 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
 
   context->appendDialectRegistry(registry);
 
-#ifndef USE_ROCM
   llvm::DenseMap<llvm::StringRef, NVVMMetadata> nvvmMetadata;
   extractNVVMMetadata(module, &nvvmMetadata);
-#endif
 
   auto llvmModule = mlir::translateModuleToLLVMIR(module, *llvmContext);
   if (!llvmModule) {
@@ -118,13 +123,13 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
     llvm::errs() << "Failed to optimize LLVM IR " << err << "\n";
     return nullptr;
   }
-#ifndef USE_ROCM
+
   for (auto &func : llvmModule->functions()) {
     auto it = nvvmMetadata.find(func.getName());
     if (it != nvvmMetadata.end())
       amendLLVMFunc(&func, it->second);
   }
-#endif
+
   return llvmModule;
 }
 
