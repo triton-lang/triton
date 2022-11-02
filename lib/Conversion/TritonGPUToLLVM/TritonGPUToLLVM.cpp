@@ -112,8 +112,10 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 #define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
 #define i32_ty rewriter.getIntegerType(32)
+#define ui32_ty rewriter.getIntegerType(32, false)
 #define i8_ty rewriter.getIntegerType(8)
 #define f32_ty rewriter.getF32Type()
+#define f64_ty rewriter.getF64Type()
 #define vec_ty(type, num) VectorType::get(num, type)
 #define void_ty(ctx) LLVM::LLVMVoidType::get(ctx)
 #define struct_ty(...) LLVM::LLVMStructType::getLiteral(__VA_ARGS__)
@@ -125,151 +127,6 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 #define idx_val(...)                                                           \
   LLVM::createIndexConstant(rewriter, loc, this->getTypeConverter(),           \
                             __VA_ARGS__)
-
-LLVM::LLVMFuncOp getVprintfDeclaration(OpBuilder &builder) {
-  auto moduleOp = builder.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  StringRef funcName("vprintf");
-  Operation *funcOp = moduleOp.lookupSymbol(funcName);
-  if (funcOp)
-    return cast<LLVMFuncOp>(*funcOp);
-
-  auto *context = builder.getContext();
-  auto retType = builder.getI32Type();
-
-  SmallVector<Type> argsType{
-      LLVM::LLVMPointerType::get(IntegerType::get(context, 8)),
-      LLVM::LLVMPointerType::get(IntegerType::get(context, 8))};
-  auto funcType = LLVM::LLVMFunctionType::get(retType, argsType);
-
-  ConversionPatternRewriter::InsertionGuard guard(builder);
-  builder.setInsertionPointToStart(moduleOp.getBody());
-
-  return builder.create<LLVMFuncOp>(UnknownLoc::get(context), funcName,
-                                    funcType);
-}
-
-std::pair<Type, Value> promoteValue(OpBuilder &builder, Value value) {
-  auto *context = builder.getContext();
-  Type int32Ty = builder.getIntegerType(32);
-  Type uint32Ty = builder.getIntegerType(32, false);
-  Type f32Ty = builder.getF32Type();
-  Type f64Ty = builder.getF64Type();
-
-  auto type = value.getType();
-  unsigned width = type.getIntOrFloatBitWidth();
-  Value newOp;
-  Type newType;
-  if (32 <= width && type.isIntOrIndex()) {
-    newType = type;
-    newOp = value;
-  } else {
-    bool bUnsigned = type.isUnsignedInteger();
-    if (type.isIntOrIndex()) {
-      if (bUnsigned) {
-        newType = uint32Ty;
-        newOp = builder.create<LLVM::ZExtOp>(UnknownLoc::get(context), newType,
-                                             value);
-      } else {
-        newType = int32Ty;
-        newOp = builder.create<LLVM::SExtOp>(UnknownLoc::get(context), newType,
-                                             value);
-      }
-    } else {
-      newType = f64Ty;
-      newOp = builder.create<LLVM::FPExtOp>(UnknownLoc::get(context), newType,
-                                            value);
-    }
-  }
-
-  return {newType, newOp};
-}
-
-void llPrintf(StringRef msg, ValueRange args, OpBuilder &builder) {
-  static const char formatStringPrefix[] = "printfFormat_";
-  assert(!msg.empty() && "printf with empty string not support");
-
-  auto *context = builder.getContext();
-  auto moduleOp = builder.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  auto funcOp = getVprintfDeclaration(builder);
-
-  Type int8Ty = builder.getIntegerType(8);
-  Type int8Ptr = LLVM::LLVMPointerType::get(int8Ty);
-  Type int32Ty = builder.getIntegerType(32);
-  Type uint32Ty = builder.getIntegerType(32, false);
-  Type f32Ty = builder.getF32Type();
-  Type f64Ty = builder.getF64Type();
-
-  Value one = builder.create<LLVM::ConstantOp>(
-      UnknownLoc::get(context), int32Ty, builder.getI32IntegerAttr(1));
-  Value zero = builder.create<LLVM::ConstantOp>(
-      UnknownLoc::get(context), int32Ty, builder.getI32IntegerAttr(0));
-
-  unsigned stringNumber = 0;
-  SmallString<16> stringConstName;
-  do {
-    stringConstName.clear();
-    (formatStringPrefix + Twine(stringNumber++)).toStringRef(stringConstName);
-  } while (moduleOp.lookupSymbol(stringConstName));
-
-  llvm::SmallString<20> formatString(msg);
-  formatString.push_back('\n');
-  formatString.push_back('\0');
-  size_t formatStringSize = formatString.size_in_bytes();
-  auto globalType = LLVM::LLVMArrayType::get(int8Ty, formatStringSize);
-
-  LLVM::GlobalOp global;
-  {
-    ConversionPatternRewriter::InsertionGuard guard(builder);
-    builder.setInsertionPointToStart(moduleOp.getBody());
-    global = builder.create<LLVM::GlobalOp>(
-        UnknownLoc::get(context), globalType,
-        /*isConstant=*/true, LLVM::Linkage::Internal, stringConstName,
-        builder.getStringAttr(formatString));
-  }
-
-  Value globalPtr =
-      builder.create<LLVM::AddressOfOp>(UnknownLoc::get(context), global);
-  Value stringStart =
-      builder.create<LLVM::GEPOp>(UnknownLoc::get(context), int8Ptr, globalPtr,
-                                  mlir::ValueRange({zero, zero}));
-
-  Value bufferPtr =
-      builder.create<LLVM::NullOp>(UnknownLoc::get(context), int8Ptr);
-
-  SmallVector<Value, 16> newArgs;
-  if (args.size() >= 1) {
-    SmallVector<Type> argTypes;
-    for (auto arg : args) {
-      Type newType;
-      Value newArg;
-      std::tie(newType, newArg) = promoteValue(builder, arg);
-      argTypes.push_back(newType);
-      newArgs.push_back(newArg);
-    }
-
-    Type structTy = LLVM::LLVMStructType::getLiteral(context, argTypes);
-    auto allocated = builder.create<LLVM::AllocaOp>(
-        UnknownLoc::get(context), LLVM::LLVMPointerType::get(structTy), one,
-        /*alignment=*/0);
-
-    for (const auto &entry : llvm::enumerate(newArgs)) {
-      auto index = builder.create<LLVM::ConstantOp>(
-          UnknownLoc::get(context), int32Ty,
-          builder.getI32IntegerAttr(entry.index()));
-      auto fieldPtr = builder.create<LLVM::GEPOp>(
-          UnknownLoc::get(context),
-          LLVM::LLVMPointerType::get(argTypes[entry.index()]), allocated,
-          ArrayRef<Value>{zero, index});
-      builder.create<LLVM::StoreOp>(UnknownLoc::get(context), entry.value(),
-                                    fieldPtr);
-    }
-    bufferPtr = builder.create<LLVM::BitcastOp>(UnknownLoc::get(context),
-                                                int8Ptr, allocated);
-  }
-
-  ValueRange operands{stringStart, bufferPtr};
-  builder.create<LLVM::CallOp>(UnknownLoc::get(context), funcOp, operands);
-}
 
 } // namespace LLVM
 } // namespace mlir
@@ -4152,15 +4009,19 @@ struct PrintfOpConversion
     for (size_t i = 1; i < operands.size(); ++i) {
       os << ", " << getFormatSubstr(operands[i]);
     }
-    mlir::LLVM::llPrintf(formatStr, operands, rewriter);
+    llPrintf(formatStr, operands, rewriter);
     rewriter.eraseOp(op);
     return success();
   }
+  // get format specific for each input value
+  // currently support pointer, i8, i16, i32, i64, f16, bf16, f32, f64
   std::string getFormatSubstr(Value value) const {
     Type type = value.getType();
     unsigned width = type.getIntOrFloatBitWidth();
 
-    if (type.isBF16() || type.isF16() || type.isF32() || type.isF64()) {
+    if (type.isa<LLVM::LLVMPointerType>()) {
+      return "%p";
+    } else if (type.isBF16() || type.isF16() || type.isF32() || type.isF64()) {
       return "%f";
     } else if (type.isSignedInteger()) {
       return "%i";
@@ -4168,6 +4029,143 @@ struct PrintfOpConversion
       return "%u";
     }
     assert(false && "not supported type");
+  }
+
+  // declare vprintf(i8*, i8*) as external function
+  LLVM::LLVMFuncOp
+  getVprintfDeclaration(ConversionPatternRewriter &rewriter) const {
+    auto moduleOp =
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    StringRef funcName("vprintf");
+    Operation *funcOp = moduleOp.lookupSymbol(funcName);
+    if (funcOp)
+      return cast<LLVM::LLVMFuncOp>(*funcOp);
+
+    auto *context = rewriter.getContext();
+
+    SmallVector<Type> argsType{
+        LLVM::LLVMPointerType::get(IntegerType::get(context, 8)),
+        LLVM::LLVMPointerType::get(IntegerType::get(context, 8))};
+    auto funcType = LLVM::LLVMFunctionType::get(i32_ty, argsType);
+
+    ConversionPatternRewriter::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(moduleOp.getBody());
+
+    return rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(context), funcName,
+                                             funcType);
+  }
+
+  // extend integer to int32, extend float to float64
+  // this comes from vprintf alignment requirements.
+  std::pair<Type, Value> promoteValue(ConversionPatternRewriter &rewriter,
+                                      Value value) const {
+    auto *context = rewriter.getContext();
+    auto type = value.getType();
+    unsigned width = type.getIntOrFloatBitWidth();
+    Value newOp = value;
+    Type newType = type;
+
+    bool bUnsigned = type.isUnsignedInteger();
+    if (type.isIntOrIndex() && width < 32) {
+      if (bUnsigned) {
+        newType = ui32_ty;
+        newOp = rewriter.create<LLVM::ZExtOp>(UnknownLoc::get(context), newType,
+                                              value);
+      } else {
+        newType = i32_ty;
+        newOp = rewriter.create<LLVM::SExtOp>(UnknownLoc::get(context), newType,
+                                              value);
+      }
+    } else if (type.isBF16() || type.isF16() || type.isF32()) {
+      newType = f64_ty;
+      newOp = rewriter.create<LLVM::FPExtOp>(UnknownLoc::get(context), newType,
+                                             value);
+    }
+
+    return {newType, newOp};
+  }
+
+  void llPrintf(StringRef msg, ValueRange args,
+                ConversionPatternRewriter &rewriter) const {
+    static const char formatStringPrefix[] = "printfFormat_";
+    assert(!msg.empty() && "printf with empty string not support");
+    Type int8Ptr = LLVM::LLVMPointerType::get(i8_ty);
+
+    auto *context = rewriter.getContext();
+    auto moduleOp =
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    auto funcOp = getVprintfDeclaration(rewriter);
+
+    Value one = rewriter.create<LLVM::ConstantOp>(
+        UnknownLoc::get(context), i32_ty, rewriter.getI32IntegerAttr(1));
+    Value zero = rewriter.create<LLVM::ConstantOp>(
+        UnknownLoc::get(context), i32_ty, rewriter.getI32IntegerAttr(0));
+
+    unsigned stringNumber = 0;
+    SmallString<16> stringConstName;
+    do {
+      stringConstName.clear();
+      (formatStringPrefix + Twine(stringNumber++)).toStringRef(stringConstName);
+    } while (moduleOp.lookupSymbol(stringConstName));
+
+    llvm::SmallString<64> formatString(msg);
+    formatString.push_back('\n');
+    formatString.push_back('\0');
+    size_t formatStringSize = formatString.size_in_bytes();
+    auto globalType = LLVM::LLVMArrayType::get(i8_ty, formatStringSize);
+
+    LLVM::GlobalOp global;
+    {
+      ConversionPatternRewriter::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(moduleOp.getBody());
+      global = rewriter.create<LLVM::GlobalOp>(
+          UnknownLoc::get(context), globalType,
+          /*isConstant=*/true, LLVM::Linkage::Internal, stringConstName,
+          rewriter.getStringAttr(formatString));
+    }
+
+    Value globalPtr =
+        rewriter.create<LLVM::AddressOfOp>(UnknownLoc::get(context), global);
+    Value stringStart =
+        rewriter.create<LLVM::GEPOp>(UnknownLoc::get(context), int8Ptr,
+                                     globalPtr, mlir::ValueRange({zero, zero}));
+
+    Value bufferPtr =
+        rewriter.create<LLVM::NullOp>(UnknownLoc::get(context), int8Ptr);
+
+    SmallVector<Value, 16> newArgs;
+    if (args.size() >= 1) {
+      SmallVector<Type> argTypes;
+      for (auto arg : args) {
+        Type newType;
+        Value newArg;
+        std::tie(newType, newArg) = promoteValue(rewriter, arg);
+        argTypes.push_back(newType);
+        newArgs.push_back(newArg);
+      }
+
+      Type structTy = LLVM::LLVMStructType::getLiteral(context, argTypes);
+      auto allocated = rewriter.create<LLVM::AllocaOp>(
+          UnknownLoc::get(context), LLVM::LLVMPointerType::get(structTy), one,
+          /*alignment=*/0);
+
+      for (const auto &entry : llvm::enumerate(newArgs)) {
+        auto index = rewriter.create<LLVM::ConstantOp>(
+            UnknownLoc::get(context), i32_ty,
+            rewriter.getI32IntegerAttr(entry.index()));
+        auto fieldPtr = rewriter.create<LLVM::GEPOp>(
+            UnknownLoc::get(context),
+            LLVM::LLVMPointerType::get(argTypes[entry.index()]), allocated,
+            ArrayRef<Value>{zero, index});
+        rewriter.create<LLVM::StoreOp>(UnknownLoc::get(context), entry.value(),
+                                       fieldPtr);
+      }
+      bufferPtr = rewriter.create<LLVM::BitcastOp>(UnknownLoc::get(context),
+                                                   int8Ptr, allocated);
+    }
+
+    ValueRange operands{stringStart, bufferPtr};
+    rewriter.create<LLVM::CallOp>(UnknownLoc::get(context), funcOp, operands);
   }
 };
 

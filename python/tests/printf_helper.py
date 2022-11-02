@@ -1,4 +1,3 @@
-import pytest
 import torch
 from torch.testing import assert_close
 
@@ -29,15 +28,15 @@ def get_tensor(shape, data_type, b_positive=False):
     return x
 
 
-@pytest.mark.parametrize('data_type',
-                         [("int8"),
-                          ('int16'),
-                          ('int32'),
-                          ("int64"),
-                          ('float16'),
-                          ("float32"),
-                          ("float64")])
-def test_printf(data_type):
+# @pytest.mark.parametrize('data_type',
+#                          [("int8"),
+#                           ('int16'),
+#                           ('int32'),
+#                           ("int64"),
+#                           ('float16'),
+#                           ("float32"),
+#                           ("float64")])
+def printf(data_type):
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
         x = tl.load(X + tl.arange(0, BLOCK))
@@ -52,4 +51,5 @@ def test_printf(data_type):
     assert_close(y, x)
 
 
-test_printf("float16")
+printf("float16")
+printf("int8")
