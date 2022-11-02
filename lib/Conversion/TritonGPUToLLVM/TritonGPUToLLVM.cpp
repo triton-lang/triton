@@ -4604,9 +4604,8 @@ struct PrintfOpConversion
 
     auto *context = rewriter.getContext();
 
-    SmallVector<Type> argsType{
-        LLVM::LLVMPointerType::get(IntegerType::get(context, 8)),
-        LLVM::LLVMPointerType::get(IntegerType::get(context, 8))};
+    SmallVector<Type> argsType{ptr_ty(IntegerType::get(context, 8)),
+                               ptr_ty(IntegerType::get(context, 8))};
     auto funcType = LLVM::LLVMFunctionType::get(i32_ty, argsType);
 
     ConversionPatternRewriter::InsertionGuard guard(rewriter);
@@ -4650,7 +4649,7 @@ struct PrintfOpConversion
                 ConversionPatternRewriter &rewriter) const {
     static const char formatStringPrefix[] = "printfFormat_";
     assert(!msg.empty() && "printf with empty string not support");
-    Type int8Ptr = LLVM::LLVMPointerType::get(i8_ty);
+    Type int8Ptr = ptr_ty(i8_ty);
 
     auto *context = rewriter.getContext();
     auto moduleOp =
@@ -4706,18 +4705,17 @@ struct PrintfOpConversion
       }
 
       Type structTy = LLVM::LLVMStructType::getLiteral(context, argTypes);
-      auto allocated = rewriter.create<LLVM::AllocaOp>(
-          UnknownLoc::get(context), LLVM::LLVMPointerType::get(structTy), one,
-          /*alignment=*/0);
+      auto allocated = rewriter.create<LLVM::AllocaOp>(UnknownLoc::get(context),
+                                                       ptr_ty(structTy), one,
+                                                       /*alignment=*/0);
 
       for (const auto &entry : llvm::enumerate(newArgs)) {
         auto index = rewriter.create<LLVM::ConstantOp>(
             UnknownLoc::get(context), i32_ty,
             rewriter.getI32IntegerAttr(entry.index()));
         auto fieldPtr = rewriter.create<LLVM::GEPOp>(
-            UnknownLoc::get(context),
-            LLVM::LLVMPointerType::get(argTypes[entry.index()]), allocated,
-            ArrayRef<Value>{zero, index});
+            UnknownLoc::get(context), ptr_ty(argTypes[entry.index()]),
+            allocated, ArrayRef<Value>{zero, index});
         rewriter.create<LLVM::StoreOp>(UnknownLoc::get(context), entry.value(),
                                        fieldPtr);
       }

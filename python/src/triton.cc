@@ -1190,7 +1190,6 @@ void init_triton_ir(py::module &&m) {
            [](mlir::OpBuilder &self, const std::string &prefix,
               const std::vector<mlir::Value> &values) -> void {
              auto loc = self.getUnknownLoc();
-             // llvm::StringRef prefixRef(prefix);
              self.create<mlir::triton::PrintfOp>(
                  loc,
                  mlir::StringAttr::get(self.getContext(),
