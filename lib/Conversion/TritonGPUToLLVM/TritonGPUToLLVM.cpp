@@ -1199,7 +1199,7 @@ struct BroadcastOpConversion
         broadcastDims.push_back(d);
         srcLogicalShape[d] = 1;
         srcLogicalShape[d + rank] =
-            std::max(unsigned(1), srcLayout.getSizePerThread()[d]);
+            std::max<unsigned>(1, srcLayout.getSizePerThread()[d]);
       } else {
         srcLogicalShape[d] = numCtas;
         srcLogicalShape[d + rank] = resultLayout.getSizePerThread()[d];
@@ -2234,6 +2234,7 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
     }
     barrier();
     if (dstLayout.isa<BlockedEncodingAttr>() ||
+        dstLayout.isa<SliceEncodingAttr>() ||
         dstLayout.isa<MmaEncodingAttr>()) {
       processReplica(loc, rewriter, /*stNotRd*/ false, dstTy, outNumCTAsEachRep,
                      multiDimRepId, outVec, paddedRepShape, outOrd, outVals,

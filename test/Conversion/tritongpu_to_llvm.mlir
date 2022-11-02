@@ -716,6 +716,32 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 }
 
 // -----
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"triton_gpu.num-warps" = 1 : i32} {
+  // CHECK-LABEL: convert_blocked1d_to_slice0
+  func @convert_blocked1d_to_slice0(%src:tensor<32xi32, #blocked0>) {
+    // CHECK-COUNT-4: llvm.load {{.*}} : !llvm.ptr<vector<1xi32>, 3>
+    %cvt = triton_gpu.convert_layout %src : (tensor<32xi32, #blocked0>) -> tensor<32xi32, #triton_gpu.slice<{dim = 0, parent = #blocked1}>>
+    return
+  }
+}
+
+
+// -----
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"triton_gpu.num-warps" = 1 : i32} {
+  // CHECK-LABEL: convert_blocked1d_to_slice1
+  func @convert_blocked1d_to_slice1(%src:tensor<32xi32, #blocked0>) {
+    // CHECK-COUNT-32: llvm.load {{.*}} : !llvm.ptr<vector<1xi32>, 3>
+    %cvt = triton_gpu.convert_layout %src : (tensor<32xi32, #blocked0>) -> tensor<32xi32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
+    return
+  }
+}
+
+
+// -----
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
 #shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #mma = #triton_gpu.mma<{version = 2, warpsPerCTA = [2, 2]}>
