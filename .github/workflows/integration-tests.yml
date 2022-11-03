@@ -33,7 +33,7 @@ jobs:
 
     env:
       IS_MACOS: ${{contains(matrix.runner, 'macos')}}
-      IS_LINUX: ${contains(matrix.runner, 'ubuntu')}}
+      IS_LINUX: ${{contains(matrix.runner, 'ubuntu')}}
       IS_SELF_HOSTED: ${{matrix.runner[0] == 'self-hosted'}}
 
     steps:
