@@ -8,20 +8,19 @@ on:
       - triton-mlir
 
 jobs:
-
   Runner-Preparation:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-    - name: Prepare runner matrix
-      id: set-matrix
-      run: |
-        if [ x"${{ github.repository }}" == x"openai/triton" ]; then
-          echo '::set-output name=matrix::[["self-hosted", "A10"], "macos-latest"]'
-        else
-          echo '::set-output name=matrix::["ubuntu-latest", "macos-latest"]'
-        fi
+      - name: Prepare runner matrix
+        id: set-matrix
+        run: |
+          if [ x"${{ github.repository }}" == x"openai/triton" ]; then
+            echo '::set-output name=matrix::[["self-hosted", "A10"], "macos-latest"]'
+          else
+            echo '::set-output name=matrix::["ubuntu-latest", "macos-latest"]'
+          fi
 
   Integration-Tests:
     needs: Runner-Preparation
@@ -33,12 +32,11 @@ jobs:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix)}}
 
     env:
-      IS_MACOS: contains(matrix.runner, 'macos') 
+      IS_MACOS: contains(matrix.runner, 'macos')
       IS_LINUX: contains(matrix.runner, 'ubuntu')
-      IS_SELF_HOSTED:  matrix.runner[0] == 'self-hosted'
+      IS_SELF_HOSTED: matrix.runner[0] == 'self-hosted'
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v2
 
@@ -57,7 +55,7 @@ jobs:
           autopep8 -a -r -d --exit-code ./python || ( echo '::error title=Style issues::Please run \"autopep8 -a -r -i ./python\"' ; exit 1 )
 
       - name: Check cpp style
-        if: {{$IS_LINUX}}
+        if: env.IS_LINUX
         run: |
           pip install clang-format
           find . -regex '.*\.\(cpp\|hpp\|h\|cc\)' -not -path "./python/build/*" -not -path "./include/triton/external/*" -print0 | xargs -0 -n1 clang-format -style=file --dry-run -Werror -i ||
@@ -83,7 +81,7 @@ jobs:
           lit -v "$LIT_TEST_DIR"
 
       - name: Run python tests
-        if: {{$IF_SELF_HOSTED}}
+        if: env.IF_SELF_HOSTED
         run: |
           TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
           cd python/tests
