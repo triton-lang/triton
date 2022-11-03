@@ -993,7 +993,6 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     module = optimize_tritongpu_ir(module, num_stages)
     if output == "ttgir":
         return module.str()
-    print(module.str())
 
     if extern_libs:
         add_external_libs(module, extern_libs)
@@ -1011,6 +1010,9 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     kernel_name = ptx_get_kernel_name(ptx)
     if output == "ptx":
         return ptx, shem_size, kernel_name
+
+    with open('triton.ptx', 'w') as f:
+        f.write(ptx)
 
     cubin = make_cubin(ptx, ptxas, compute_capability)
     if output == "cubin":

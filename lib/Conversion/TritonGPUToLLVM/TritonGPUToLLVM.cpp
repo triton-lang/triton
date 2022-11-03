@@ -375,31 +375,35 @@ static Value storeShared(ConversionPatternRewriter &rewriter, Location loc,
 }
 
 struct SharedMemoryObject {
-  Value base;
-  SmallVector<Value> shape;
+  Value base; // i32 ptr. The start address of the shared memory object.
+  SmallVector<Value>
+      strides; // i32 int. The strides of the shared memory object.
 
-  SharedMemoryObject(Value base, ArrayRef<Value> shape)
-      : base(base), shape(shape.begin(), shape.end()) {}
+  SharedMemoryObject(Value base, ArrayRef<Value> strides)
+      : base(base), strides(strides.begin(), strides.end()) {}
 
   SharedMemoryObject(Value base, ArrayRef<int64_t> shape, Location loc,
                      ConversionPatternRewriter &rewriter)
       : base(base) {
-    for (auto s : shape) {
-      this->shape.emplace_back(i32_val(s));
+    auto stride = 1;
+    for (auto dim : llvm::reverse(shape)) {
+      this->strides.emplace_back(i32_val(stride));
+      stride *= dim;
     }
+    this->strides = llvm::to_vector<4>(llvm::reverse(this->strides));
   }
 
   SmallVector<Value> getElems() const {
     SmallVector<Value> elems;
     elems.push_back(base);
-    elems.append(shape.begin(), shape.end());
+    elems.append(strides.begin(), strides.end());
     return elems;
   }
 
   SmallVector<Type> getTypes() const {
     SmallVector<Type> types;
     types.push_back(base.getType());
-    types.append(shape.size(), IntegerType::get(base.getContext(), 32));
+    types.append(strides.size(), IntegerType::get(base.getContext(), 32));
     return types;
   }
 };
@@ -495,25 +499,29 @@ public:
     return multiDim;
   }
 
-  // T is either a Value or an integer.
-  template <typename T>
   Value linearize(ConversionPatternRewriter &rewriter, Location loc,
-                  ArrayRef<Value> multiDim, ArrayRef<T> shape) const {
+                  ArrayRef<Value> multiDim, ArrayRef<unsigned> shape) const {
     int rank = multiDim.size();
     Value linear = idx_val(0);
     if (rank > 0) {
       linear = multiDim.front();
       for (auto [dim, shape] :
            llvm::zip(multiDim.drop_front(), shape.drop_front())) {
-        Value dimSize;
-        if constexpr (llvm::is_integral_or_enum<T>::value)
-          dimSize = idx_val(shape);
-        else
-          dimSize = shape;
+        Value dimSize = idx_val(shape);
         linear = add(mul(linear, dimSize), dim);
       }
     }
     return linear;
+  }
+
+  Value dot(ConversionPatternRewriter &rewriter, Location loc,
+            ArrayRef<Value> offsets, ArrayRef<Value> strides) const {
+    assert(offsets.size() == strides.size());
+    Value ret = idx_val(0);
+    for (auto [offset, stride] : llvm::zip(offsets, strides)) {
+      ret = add(ret, mul(offset, stride));
+    }
+    return ret;
   }
 
   // Get an index-base for each dimension for a \param blocked_layout.
@@ -1458,7 +1466,7 @@ LogicalResult ReduceOpConversion::matchAndRewriteBasic(
     SmallVector<Value> writeIdx = indices[key];
 
     writeIdx[axis] = udiv(writeIdx[axis], sizePerThread);
-    Value writeOffset = linearize<unsigned>(rewriter, loc, writeIdx, smemShape);
+    Value writeOffset = linearize(rewriter, loc, writeIdx, smemShape);
     Value writePtr = gep(elemPtrTy, smemBase, writeOffset);
     store(acc, writePtr);
 
@@ -1467,8 +1475,7 @@ LogicalResult ReduceOpConversion::matchAndRewriteBasic(
       readIdx[axis] = ints[N];
       Value readMask = icmp_slt(writeIdx[axis], ints[N]);
       Value readOffset = select(
-          readMask, linearize<unsigned>(rewriter, loc, readIdx, smemShape),
-          ints[0]);
+          readMask, linearize(rewriter, loc, readIdx, smemShape), ints[0]);
       Value readPtr = gep(elemPtrTy, writePtr, readOffset);
       barrier();
       accumulate(rewriter, loc, op.redOp(), acc, load(readPtr), false);
@@ -1491,7 +1498,7 @@ LogicalResult ReduceOpConversion::matchAndRewriteBasic(
     for (size_t i = 0; i < resultElems; i++) {
       SmallVector<Value> readIdx = resultIndices[i];
       readIdx.insert(readIdx.begin() + axis, ints[0]);
-      Value readOffset = linearize<unsigned>(rewriter, loc, readIdx, smemShape);
+      Value readOffset = linearize(rewriter, loc, readIdx, smemShape);
       Value readPtr = gep(elemPtrTy, smemBase, readOffset);
       resultVals[i] = load(readPtr);
     }
@@ -1584,23 +1591,21 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
     if (sizeInterWarps == 1) {
       SmallVector<Value> writeIdx = indices[key];
       writeIdx[axis] = zero;
-      Value writeOffset =
-          linearize<unsigned>(rewriter, loc, writeIdx, smemShape);
+      Value writeOffset = linearize(rewriter, loc, writeIdx, smemShape);
       Value writePtr = gep(elemPtrTy, smemBase, writeOffset);
       storeShared(rewriter, loc, writePtr, acc, laneZero);
     } else {
       SmallVector<Value> writeIdx = indices[key];
       writeIdx[axis] =
           warpIdAxis; // axis must be the fastest-changing dimension
-      Value writeOffset =
-          linearize<unsigned>(rewriter, loc, writeIdx, smemShape);
+      Value writeOffset = linearize(rewriter, loc, writeIdx, smemShape);
       Value writePtr = gep(elemPtrTy, smemBase, writeOffset);
       storeShared(rewriter, loc, writePtr, acc, laneZero);
       barrier();
 
       SmallVector<Value> readIdx = writeIdx;
       readIdx[axis] = urem(laneId, i32_val(sizeInterWarps));
-      Value readOffset = linearize<unsigned>(rewriter, loc, readIdx, smemShape);
+      Value readOffset = linearize(rewriter, loc, readIdx, smemShape);
       Value readPtr = gep(elemPtrTy, smemBase, readOffset);
       acc = load(readPtr);
 
@@ -1611,7 +1616,7 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
       }
 
       writeIdx[axis] = zero;
-      writeOffset = linearize<unsigned>(rewriter, loc, writeIdx, smemShape);
+      writeOffset = linearize(rewriter, loc, writeIdx, smemShape);
       writePtr = gep(elemPtrTy, smemBase, writeOffset);
       storeShared(rewriter, loc, writePtr, acc, and_(laneZero, warpZero));
     }
@@ -1632,7 +1637,7 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
     for (size_t i = 0; i < resultElems; i++) {
       SmallVector<Value> readIdx = resultIndices[i];
       readIdx.insert(readIdx.begin() + axis, i32_val(0));
-      Value readOffset = linearize<unsigned>(rewriter, loc, readIdx, smemShape);
+      Value readOffset = linearize(rewriter, loc, readIdx, smemShape);
       Value readPtr = gep(elemPtrTy, smemBase, readOffset);
       resultVals[i] = load(readPtr);
     }
@@ -1809,31 +1814,35 @@ struct ExtractSliceOpConversion
     assert(op.hasUnitStride() &&
            "Only unit stride supported by ExtractSliceOpConversion");
 
-    // XXX(Keren): the code could be simplified if we can reason that all the
-    // dims are constant.
+    // newBase = base + offset
+    // Triton support either static and dynamic offsets
     auto smemObj =
         getSharedMemoryObjectFromStruct(loc, adaptor.source(), rewriter);
     SmallVector<Value, 4> offsetVals;
     auto mixedOffsets = op.getMixedOffsets();
     for (auto i = 0; i < mixedOffsets.size(); ++i) {
-      Value value;
-      if (op.isDynamicOffset(i)) {
-        value = adaptor.offsets()[i];
-      } else {
-        value = i32_val(op.getStaticOffset(i));
-      }
-      offsetVals.push_back(value);
+      if (op.isDynamicOffset(i))
+        offsetVals.emplace_back(adaptor.offsets()[i]);
+      else
+        offsetVals.emplace_back(i32_val(op.getStaticOffset(i)));
     }
-    // Compute the offset based on the original dimensions of the shared memory
+    // Compute the offset based on the original strides of the shared memory
     // object
-    auto offset = linearize<Value>(rewriter, loc, offsetVals, smemObj.shape);
-    // newBase = base + offset
-    // newShape = resShape
+    auto offset = dot(rewriter, loc, offsetVals, smemObj.strides);
+    // newShape = rank_reduce(shape)
+    // Triton only supports static tensor sizes
+    SmallVector<Value, 4> strideVals;
+    auto staticSizes = op.static_sizes();
+    for (auto i = 0; i < op.static_sizes().size(); ++i) {
+      if (op.getStaticSize(i) != 1) {
+        strideVals.emplace_back(smemObj.strides[i]);
+      }
+    }
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto elemPtrTy = ptr_ty(llvmElemTy, 3);
     auto resTy = op.getType().dyn_cast<RankedTensorType>();
-    smemObj = SharedMemoryObject(gep(elemPtrTy, smemObj.base, offset),
-                                 resTy.getShape(), loc, rewriter);
+    smemObj =
+        SharedMemoryObject(gep(elemPtrTy, smemObj.base, offset), strideVals);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
@@ -2203,9 +2212,9 @@ void ConvertLayoutOpConversion::processReplica(
       } else {
         assert(0 && "unexpected layout in processReplica");
       }
-      Value offset = linearize<unsigned>(
-          rewriter, loc, reorder<Value>(multiDimOffset, outOrd),
-          reorder<unsigned>(paddedRepShape, outOrd));
+      Value offset =
+          linearize(rewriter, loc, reorder<Value>(multiDimOffset, outOrd),
+                    reorder<unsigned>(paddedRepShape, outOrd));
       auto elemPtrTy = ptr_ty(llvmElemTy, 3);
       Value ptr = gep(elemPtrTy, smemBase, offset);
       auto vecTy = vec_ty(llvmElemTy, vec);
@@ -2444,7 +2453,7 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
 class MMA16816SmemLoader {
 public:
   MMA16816SmemLoader(int wpt, ArrayRef<uint32_t> order, uint32_t kOrder,
-                     ArrayRef<Value> smemShape, ArrayRef<int64_t> tileShape,
+                     ArrayRef<Value> smemStrides, ArrayRef<int64_t> tileShape,
                      ArrayRef<int> instrShape, ArrayRef<int> matShape,
                      int perPhase, int maxPhase, int elemBytes,
                      ConversionPatternRewriter &rewriter,
@@ -2458,8 +2467,8 @@ public:
     cMatShape = matShape[order[0]];
     sMatShape = matShape[order[1]];
 
-    cTileStride = smemShape[order[1]];
-    sTileStride = smemShape[order[0]];
+    cTileStride = smemStrides[order[0]];
+    sTileStride = smemStrides[order[1]];
 
     // rule: k must be the fast-changing axis.
     needTrans = kOrder != order[0];
@@ -2673,8 +2682,7 @@ public:
 
     if (canUseLdmatrix) {
       Value sOffset =
-          mul(i32_val(matIdx[order[1]] * sMatStride * sMatShape),
-              sTileStride);
+          mul(i32_val(matIdx[order[1]] * sMatStride * sMatShape), sTileStride);
       Value sOffsetPtr = gep(shemPtrTy, ptr, sOffset);
       PTXBuilder builder;
 
@@ -2764,7 +2772,8 @@ public:
 
         for (int i = 2; i < 4; ++i)
           for (int j = 0; j < 4; ++j)
-            i8Elems[i][j] = load(gep(elemTy, ptrs[i - 2][j], sOffsetArrElemVal));
+            i8Elems[i][j] =
+                load(gep(elemTy, ptrs[i - 2][j], sOffsetArrElemVal));
 
         for (int m = 0; m < 4; ++m) {
           for (int e = 0; e < 4; ++e)
@@ -3490,7 +3499,7 @@ private:
     // (a, b) is the coordinate.
     auto load = [=, &vals, &ld2](int a, int b) {
       MMA16816SmemLoader loader(
-          wpt, sharedLayout.getOrder(), kOrder, smemObj.shape,
+          wpt, sharedLayout.getOrder(), kOrder, smemObj.strides,
           tensorTy.getShape() /*tileShape*/, instrShape, matShape, perPhase,
           maxPhase, elemBytes, rewriter, typeConverter, loc);
       SmallVector<Value> offs = loader.computeOffsets(warpId, lane);
@@ -3835,10 +3844,11 @@ struct InsertSliceAsyncOpConversion
 
     // %dst
     auto dstTy = dst.getType().cast<RankedTensorType>();
+    auto dstShape = dstTy.getShape();
     auto smemObj = getSharedMemoryObjectFromStruct(loc, llDst, rewriter);
     auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
     SmallVector<Value, 4> offsetVals;
-    for (auto i = 0; i < srcShape.size(); ++i) {
+    for (auto i = 0; i < dstShape.size(); ++i) {
       if (i == axis) {
         offsetVals.emplace_back(llIndex);
       } else {
@@ -3847,7 +3857,7 @@ struct InsertSliceAsyncOpConversion
     }
     // Compute the offset based on the original dimensions of the shared memory
     // object
-    auto dstOffset = linearize<Value>(rewriter, loc, offsetVals, smemObj.shape);
+    auto dstOffset = dot(rewriter, loc, offsetVals, smemObj.strides);
     auto dstPtrTy =
         ptr_ty(getTypeConverter()->convertType(resTy.getElementType()), 3);
     Value dstPtrBase = gep(dstPtrTy, smemObj.base, dstOffset);
@@ -3933,7 +3943,7 @@ struct InsertSliceAsyncOpConversion
         // srcShape and smemObj.shape maybe different if smemObj is a
         // slice of the original shared memory object.
         // So we need to use the original shape to compute the offset
-        Value rowOffset = mul(srcIdx[inOrder[1]], smemObj.shape[inOrder[0]]);
+        Value rowOffset = mul(srcIdx[inOrder[1]], smemObj.strides[inOrder[1]]);
         Value colOffset =
             add(srcIdx[inOrder[0]], i32_val(tileVecIdxCol * minVec));
         Value swizzleIdx = udiv(colOffset, i32_val(outVec));
@@ -3962,7 +3972,7 @@ struct InsertSliceAsyncOpConversion
 
       Value tileOffset = tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}];
       Value baseOffset =
-          add(mul(i32_val(baseOffsetRow), smemObj.shape[inOrder[0]]),
+          add(mul(i32_val(baseOffsetRow), smemObj.strides[inOrder[1]]),
               i32_val(baseOffsetCol));
       Value basePtr = gep(dstPtrTy, tileOffset, baseOffset);
       for (size_t wordIdx = 0; wordIdx < numWords; ++wordIdx) {
