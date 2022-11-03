@@ -45,11 +45,13 @@ jobs:
           rm -rf ~/.triton/cache/
 
       - name: Check imports
+        if: env.IS_LINUX
         run: |
           pip install isort
           isort -c ./python || ( echo '::error title=Imports not sorted::Please run \"isort ./python\"' ; exit 1 )
 
       - name: Check python style
+        if: env.IS_LINUX
         run: |
           pip install autopep8
           autopep8 -a -r -d --exit-code ./python || ( echo '::error title=Style issues::Please run \"autopep8 -a -r -i ./python\"' ; exit 1 )
