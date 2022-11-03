@@ -84,7 +84,7 @@ def elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: 
                 dispatch_args[i], _ = semantic.binary_op_type_checking_impl(
                     dispatch_args[i], broadcast_arg, _builder)
             ret_shape = broadcast_arg.shape
-    func = getattr(_builder, "create_extern_elementwise")
+    func = getattr(_builder, "create_external_elementwise")
     return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_shape, _builder)
 
 
