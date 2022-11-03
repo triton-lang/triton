@@ -358,6 +358,8 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     // CHECK-NEXT: llvm.add
     // CHECK-NEXT: llvm.mul
     // CHECK-NEXT: llvm.add
+    // CHECK-NEXT: llvm.mul
+    // CHECK-NEXT: llvm.add
     // CHECK-NEXT: llvm.getelementptr
     %index = arith.constant 1 : index
     %0 = triton_gpu.alloc_tensor : tensor<128x16x32xf32, #shared0>
