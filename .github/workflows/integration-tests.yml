@@ -69,14 +69,9 @@ jobs:
           flake8 --config ./python/setup.cfg ./python || ( echo '::error::Flake8 failed; see logs for errors.' ; exit 1 )
 
       - name: Install Triton
-        if: $IS_UBUNTU
         run: |
           cd python
           TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.'
-        if: $IS_MACOS
-        run: |
-          cd python
-          TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
 
       - name: Run lit tests
         run: |
@@ -90,6 +85,7 @@ jobs:
       - name: Run python tests
         if: $IF_SELF_HOSTED
         run: |
+          TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
           cd python/tests
           pytest
 
