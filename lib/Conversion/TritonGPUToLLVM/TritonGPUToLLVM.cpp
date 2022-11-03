@@ -3848,11 +3848,13 @@ struct InsertSliceAsyncOpConversion
     auto smemObj = getSharedMemoryObjectFromStruct(loc, llDst, rewriter);
     auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
     SmallVector<Value, 4> offsetVals;
+    SmallVector<Value, 4> srcStrides;
     for (auto i = 0; i < dstShape.size(); ++i) {
       if (i == axis) {
         offsetVals.emplace_back(llIndex);
       } else {
         offsetVals.emplace_back(i32_val(0));
+        srcStrides.emplace_back(smemObj.strides[i]);
       }
     }
     // Compute the offset based on the original dimensions of the shared memory
@@ -3943,7 +3945,7 @@ struct InsertSliceAsyncOpConversion
         // srcShape and smemObj.shape maybe different if smemObj is a
         // slice of the original shared memory object.
         // So we need to use the original shape to compute the offset
-        Value rowOffset = mul(srcIdx[inOrder[1]], smemObj.strides[inOrder[1]]);
+        Value rowOffset = mul(srcIdx[inOrder[1]], srcStrides[inOrder[1]]);
         Value colOffset =
             add(srcIdx[inOrder[0]], i32_val(tileVecIdxCol * minVec));
         Value swizzleIdx = udiv(colOffset, i32_val(outVec));
@@ -3972,7 +3974,7 @@ struct InsertSliceAsyncOpConversion
 
       Value tileOffset = tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}];
       Value baseOffset =
-          add(mul(i32_val(baseOffsetRow), smemObj.strides[inOrder[1]]),
+          add(mul(i32_val(baseOffsetRow), srcStrides[inOrder[1]]),
               i32_val(baseOffsetCol));
       Value basePtr = gep(dstPtrTy, tileOffset, baseOffset);
       for (size_t wordIdx = 0; wordIdx < numWords; ++wordIdx) {
