@@ -693,7 +693,8 @@ Value convertSplatLikeOp(Type elemType, Type resType, Value constVal,
                          TypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, Location loc) {
   auto tensorTy = resType.cast<RankedTensorType>();
-  if (tensorTy.getEncoding().isa<BlockedEncodingAttr>()) {
+  if (tensorTy.getEncoding().isa<BlockedEncodingAttr>() ||
+      tensorTy.getEncoding().isa<SliceEncodingAttr>()) {
     auto tensorTy = resType.cast<RankedTensorType>();
     auto srcType = typeConverter->convertType(elemType);
     auto llSrc = bitcast(constVal, srcType);
