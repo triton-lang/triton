@@ -151,7 +151,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, percentiles=[0.5, 0.2, 0
     # doesn't contain any input data before the run
     start_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
     end_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
-    cache = torch.empty(int(256e6), dtype=torch.int8, device='cuda')
+    cache = torch.empty(int(256e6//4), dtype=torch.int, device='cuda')
     # Warm-up
     for _ in range(n_warmup):
         fn()
