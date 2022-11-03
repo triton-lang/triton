@@ -33,7 +33,7 @@ jobs:
 
     env:
       IS_MACOS: ${{contains(matrix.runner, 'macos')}}
-      IS_LINUX: ${{contains(matrix.runner, 'ubuntu')}}
+      IS_LINUX: ${{startsWith(matrix.runner, 'ubuntu')}}
       IS_SELF_HOSTED: ${{matrix.runner[0] == 'self-hosted'}}
 
     steps:
@@ -45,7 +45,7 @@ jobs:
           rm -rf ~/.triton/cache/
 
       - name: Check imports
-        if: startsWith(matrix.runner, 'ubuntu')
+        if: env.IS_LINUX
         run: |
           pip install isort
           isort -c ./python || ( echo '::error title=Imports not sorted::Please run \"isort ./python\"' ; exit 1 )
@@ -72,7 +72,7 @@ jobs:
       - name: Install Triton
         run: |
           cd python
-          TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.'
+          TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
 
       - name: Run lit tests
         run: |
@@ -86,7 +86,6 @@ jobs:
       - name: Run python tests
         if: ${{matrix.runner[0] == 'self-hosted'}}
         run: |
-          TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
           cd python/tests
           pytest
 
