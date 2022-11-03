@@ -64,6 +64,7 @@ jobs:
           (echo '::error title=Style issues:: Please run `find . -regex ".*\.\(cpp\|hpp\|h\|cc\)" -not -path "./python/build/*" -not -path "./include/triton/external/*" -print0 | xargs -0 -n1 clang-format -style=file -i`' ; exit 1)
 
       - name: Flake8
+        if: startsWith(matrix.runner, 'ubuntu')
         run: |
           pip install flake8
           flake8 --config ./python/setup.cfg ./python || ( echo '::error::Flake8 failed; see logs for errors.' ; exit 1 )
@@ -83,7 +84,7 @@ jobs:
           lit -v "$LIT_TEST_DIR"
 
       - name: Run python tests
-        if: env.IF_SELF_HOSTED
+        if: ${{matrix.runner[0] == 'self-hosted'}}
         run: |
           TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
           cd python/tests
