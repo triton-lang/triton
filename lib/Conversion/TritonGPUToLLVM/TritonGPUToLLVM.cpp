@@ -722,7 +722,7 @@ public:
                                   ConversionPatternRewriter &rewriter) {
     auto elems = getElementsFromStruct(loc, llvmStruct, rewriter);
     return SharedMemoryObject(/*base=*/elems[0],
-                              /*shape=*/{elems.begin() + 1, elems.end()});
+                              /*strides=*/{elems.begin() + 1, elems.end()});
   }
 
   static Value
@@ -3006,12 +3006,12 @@ struct DotOpMmaV1ConversionHelper {
   }
 
   // Loading $a from smem to registers, returns a LLVM::Struct.
-  Value loadA(Value A, const SharedMemoryObject &smemObj, Value thread, Location loc,
-              ConversionPatternRewriter &rewriter) const;
+  Value loadA(Value A, const SharedMemoryObject &smemObj, Value thread,
+              Location loc, ConversionPatternRewriter &rewriter) const;
 
   // Loading $b from smem to registers, returns a LLVM::Struct.
-  Value loadB(Value B, const SharedMemoryObject &smemObj, Value thread, Location loc,
-              ConversionPatternRewriter &rewriter) const;
+  Value loadB(Value B, const SharedMemoryObject &smemObj, Value thread,
+              Location loc, ConversionPatternRewriter &rewriter) const;
 
   // Loading $c to registers, returns a LLVM::Struct.
   Value loadC(Value C, Value llC, ConversionPatternRewriter &rewriter) const;
