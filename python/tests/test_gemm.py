@@ -40,8 +40,8 @@ def matmul_no_scf_kernel(
     [64, 128, 128, 2],
 ])
 def test_gemm_no_scf(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS):
-    a = torch.ones((SIZE_M, SIZE_K), device='cuda', dtype=torch.float16)
-    b = torch.ones((SIZE_K, SIZE_N), device='cuda', dtype=torch.float16)
+    a = torch.randn((SIZE_M, SIZE_K), device='cuda', dtype=torch.float16)
+    b = torch.randn((SIZE_K, SIZE_N), device='cuda', dtype=torch.float16)
     c = torch.empty((SIZE_M, SIZE_N), device=a.device, dtype=torch.float32)
     grid = lambda META: (1, )
     matmul_no_scf_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c,
@@ -51,7 +51,6 @@ def test_gemm_no_scf(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS):
                                M=SIZE_M, N=SIZE_N, K=SIZE_K,
                                num_warps=NUM_WARPS)
     golden = torch.matmul(a, b)
-
     torch.set_printoptions(profile="full")
     assert_close(c, golden, rtol=1e-3, atol=1e-3, check_dtype=False)
 
@@ -121,8 +120,8 @@ def get_variant_golden(a, b):
     [128, 64, 128, 4, 128, 64, 32],
 ])
 def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K):
-    a = torch.ones((SIZE_M, SIZE_K), device='cuda', dtype=torch.float16)
-    b = torch.ones((SIZE_K, SIZE_N), device='cuda', dtype=torch.float16)
+    a = torch.randn((SIZE_M, SIZE_K), device='cuda', dtype=torch.float16)
+    b = torch.randn((SIZE_K, SIZE_N), device='cuda', dtype=torch.float16)
     c = torch.empty((SIZE_M, SIZE_N), device=a.device, dtype=torch.float32)
     grid = lambda META: (1, )
     matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c,
