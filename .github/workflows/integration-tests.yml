@@ -45,7 +45,7 @@ jobs:
           rm -rf ~/.triton/cache/
 
       - name: Check imports
-        if: env.IS_LINUX
+        if: ${{env.IS_LINUX}}
         run: |
           pip install isort
           isort -c ./python || ( echo '::error title=Imports not sorted::Please run \"isort ./python\"' ; exit 1 )
