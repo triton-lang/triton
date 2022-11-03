@@ -58,13 +58,7 @@ def mulhi(arg0, arg1, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
                               {(core.dtype("int32"), core.dtype("int32"),): ("__nv_mulhi", core.dtype("int32")),
                                (core.dtype("uint32"), core.dtype("uint32"),): ("__nv_umulhi", core.dtype("uint32")),
-                               }, _builder)
-
-
-@extern.extern
-def mul64hi(arg0, arg1, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
-                              {(core.dtype("int64"), core.dtype("int64"),): ("__nv_mul64hi", core.dtype("int64")),
+                               (core.dtype("int64"), core.dtype("int64"),): ("__nv_mul64hi", core.dtype("int64")),
                                (core.dtype("uint64"), core.dtype("uint64"),): ("__nv_umul64hi", core.dtype("uint64")),
                                }, _builder)
 
@@ -158,261 +152,137 @@ def saturatef(arg0, _builder=None):
 
 
 @extern.extern
-def fmaf_rn(arg0, arg1, arg2, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, arg2, ],
-                              {(core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fmaf_rn", core.dtype("fp32")),
-                               }, _builder)
-
-
-@extern.extern
-def fmaf_rz(arg0, arg1, arg2, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, arg2, ],
-                              {(core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fmaf_rz", core.dtype("fp32")),
-                               }, _builder)
-
-
-@extern.extern
-def fmaf_rd(arg0, arg1, arg2, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, arg2, ],
-                              {(core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fmaf_rd", core.dtype("fp32")),
-                               }, _builder)
-
-
-@extern.extern
-def fmaf_ru(arg0, arg1, arg2, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, arg2, ],
-                              {(core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fmaf_ru", core.dtype("fp32")),
-                               }, _builder)
-
-
-@extern.extern
-def fmaf_ieee_rn(arg0, arg1, arg2, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, arg2, ],
-                              {(core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fmaf_ieee_rn", core.dtype("fp32")),
-                               }, _builder)
-
-
-@extern.extern
-def fmaf_ieee_rz(arg0, arg1, arg2, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, arg2, ],
-                              {(core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fmaf_ieee_rz", core.dtype("fp32")),
-                               }, _builder)
-
-
-@extern.extern
-def fmaf_ieee_rd(arg0, arg1, arg2, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, arg2, ],
-                              {(core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fmaf_ieee_rd", core.dtype("fp32")),
-                               }, _builder)
-
-
-@extern.extern
-def fmaf_ieee_ru(arg0, arg1, arg2, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, arg2, ],
-                              {(core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fmaf_ieee_ru", core.dtype("fp32")),
-                               }, _builder)
-
-
-@extern.extern
 def fma_rn(arg0, arg1, arg2, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, arg2, ],
-                              {(core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64"),): ("__nv_fma_rn", core.dtype("fp64")),
+                              {(core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fmaf_rn", core.dtype("fp32")),
+                               (core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64"),): ("__nv_fma_rn", core.dtype("fp64")),
                                }, _builder)
 
 
 @extern.extern
 def fma_rz(arg0, arg1, arg2, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, arg2, ],
-                              {(core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64"),): ("__nv_fma_rz", core.dtype("fp64")),
+                              {(core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fmaf_rz", core.dtype("fp32")),
+                               (core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64"),): ("__nv_fma_rz", core.dtype("fp64")),
                                }, _builder)
 
 
 @extern.extern
 def fma_rd(arg0, arg1, arg2, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, arg2, ],
-                              {(core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64"),): ("__nv_fma_rd", core.dtype("fp64")),
+                              {(core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fmaf_rd", core.dtype("fp32")),
+                               (core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64"),): ("__nv_fma_rd", core.dtype("fp64")),
                                }, _builder)
 
 
 @extern.extern
 def fma_ru(arg0, arg1, arg2, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, arg2, ],
-                              {(core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64"),): ("__nv_fma_ru", core.dtype("fp64")),
+                              {(core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fmaf_ru", core.dtype("fp32")),
+                               (core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64"),): ("__nv_fma_ru", core.dtype("fp64")),
                                }, _builder)
 
 
 @extern.extern
-def fast_fdividef(arg0, arg1, _builder=None):
+def fast_dividef(arg0, arg1, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
                               {(core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fast_fdividef", core.dtype("fp32")),
                                }, _builder)
 
 
 @extern.extern
-def fdiv_rn(arg0, arg1, _builder=None):
+def div_rn(arg0, arg1, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
                               {(core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fdiv_rn", core.dtype("fp32")),
+                               (core.dtype("fp64"), core.dtype("fp64"),): ("__nv_ddiv_rn", core.dtype("fp64")),
                                }, _builder)
 
 
 @extern.extern
-def fdiv_rz(arg0, arg1, _builder=None):
+def div_rz(arg0, arg1, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
                               {(core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fdiv_rz", core.dtype("fp32")),
+                               (core.dtype("fp64"), core.dtype("fp64"),): ("__nv_ddiv_rz", core.dtype("fp64")),
                                }, _builder)
 
 
 @extern.extern
-def fdiv_rd(arg0, arg1, _builder=None):
+def div_rd(arg0, arg1, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
                               {(core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fdiv_rd", core.dtype("fp32")),
+                               (core.dtype("fp64"), core.dtype("fp64"),): ("__nv_ddiv_rd", core.dtype("fp64")),
                                }, _builder)
 
 
 @extern.extern
-def fdiv_ru(arg0, arg1, _builder=None):
+def div_ru(arg0, arg1, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
                               {(core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fdiv_ru", core.dtype("fp32")),
+                               (core.dtype("fp64"), core.dtype("fp64"),): ("__nv_ddiv_ru", core.dtype("fp64")),
                                }, _builder)
 
 
 @extern.extern
-def frcp_rn(arg0, _builder=None):
+def rcp_rn(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("fp32"),): ("__nv_frcp_rn", core.dtype("fp32")),
+                               (core.dtype("fp64"),): ("__nv_drcp_rn", core.dtype("fp64")),
                                }, _builder)
 
 
 @extern.extern
-def frcp_rz(arg0, _builder=None):
+def rcp_rz(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("fp32"),): ("__nv_frcp_rz", core.dtype("fp32")),
+                               (core.dtype("fp64"),): ("__nv_drcp_rz", core.dtype("fp64")),
                                }, _builder)
 
 
 @extern.extern
-def frcp_rd(arg0, _builder=None):
+def rcp_rd(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("fp32"),): ("__nv_frcp_rd", core.dtype("fp32")),
+                               (core.dtype("fp64"),): ("__nv_drcp_rd", core.dtype("fp64")),
                                }, _builder)
 
 
 @extern.extern
-def frcp_ru(arg0, _builder=None):
+def rcp_ru(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("fp32"),): ("__nv_frcp_ru", core.dtype("fp32")),
+                               (core.dtype("fp64"),): ("__nv_drcp_ru", core.dtype("fp64")),
                                }, _builder)
 
 
 @extern.extern
-def fsqrt_rn(arg0, _builder=None):
+def sqrt_rn(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("fp32"),): ("__nv_fsqrt_rn", core.dtype("fp32")),
+                               (core.dtype("fp64"),): ("__nv_dsqrt_rn", core.dtype("fp64")),
                                }, _builder)
 
 
 @extern.extern
-def fsqrt_rz(arg0, _builder=None):
+def sqrt_rz(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("fp32"),): ("__nv_fsqrt_rz", core.dtype("fp32")),
+                               (core.dtype("fp64"),): ("__nv_dsqrt_rz", core.dtype("fp64")),
                                }, _builder)
 
 
 @extern.extern
-def fsqrt_rd(arg0, _builder=None):
+def sqrt_rd(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("fp32"),): ("__nv_fsqrt_rd", core.dtype("fp32")),
+                               (core.dtype("fp64"),): ("__nv_dsqrt_rd", core.dtype("fp64")),
                                }, _builder)
 
 
 @extern.extern
-def fsqrt_ru(arg0, _builder=None):
+def sqrt_ru(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("fp32"),): ("__nv_fsqrt_ru", core.dtype("fp32")),
-                               }, _builder)
-
-
-@extern.extern
-def ddiv_rn(arg0, arg1, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
-                              {(core.dtype("fp64"), core.dtype("fp64"),): ("__nv_ddiv_rn", core.dtype("fp64")),
-                               }, _builder)
-
-
-@extern.extern
-def ddiv_rz(arg0, arg1, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
-                              {(core.dtype("fp64"), core.dtype("fp64"),): ("__nv_ddiv_rz", core.dtype("fp64")),
-                               }, _builder)
-
-
-@extern.extern
-def ddiv_rd(arg0, arg1, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
-                              {(core.dtype("fp64"), core.dtype("fp64"),): ("__nv_ddiv_rd", core.dtype("fp64")),
-                               }, _builder)
-
-
-@extern.extern
-def ddiv_ru(arg0, arg1, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
-                              {(core.dtype("fp64"), core.dtype("fp64"),): ("__nv_ddiv_ru", core.dtype("fp64")),
-                               }, _builder)
-
-
-@extern.extern
-def drcp_rn(arg0, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
-                              {(core.dtype("fp64"),): ("__nv_drcp_rn", core.dtype("fp64")),
-                               }, _builder)
-
-
-@extern.extern
-def drcp_rz(arg0, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
-                              {(core.dtype("fp64"),): ("__nv_drcp_rz", core.dtype("fp64")),
-                               }, _builder)
-
-
-@extern.extern
-def drcp_rd(arg0, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
-                              {(core.dtype("fp64"),): ("__nv_drcp_rd", core.dtype("fp64")),
-                               }, _builder)
-
-
-@extern.extern
-def drcp_ru(arg0, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
-                              {(core.dtype("fp64"),): ("__nv_drcp_ru", core.dtype("fp64")),
-                               }, _builder)
-
-
-@extern.extern
-def dsqrt_rn(arg0, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
-                              {(core.dtype("fp64"),): ("__nv_dsqrt_rn", core.dtype("fp64")),
-                               }, _builder)
-
-
-@extern.extern
-def dsqrt_rz(arg0, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
-                              {(core.dtype("fp64"),): ("__nv_dsqrt_rz", core.dtype("fp64")),
-                               }, _builder)
-
-
-@extern.extern
-def dsqrt_rd(arg0, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
-                              {(core.dtype("fp64"),): ("__nv_dsqrt_rd", core.dtype("fp64")),
-                               }, _builder)
-
-
-@extern.extern
-def dsqrt_ru(arg0, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
-                              {(core.dtype("fp64"),): ("__nv_dsqrt_ru", core.dtype("fp64")),
+                               (core.dtype("fp64"),): ("__nv_dsqrt_ru", core.dtype("fp64")),
                                }, _builder)
 
 
@@ -425,114 +295,66 @@ def sqrt(arg0, _builder=None):
 
 
 @extern.extern
-def dadd_rn(arg0, arg1, _builder=None):
+def add_rn(arg0, arg1, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
                               {(core.dtype("fp64"), core.dtype("fp64"),): ("__nv_dadd_rn", core.dtype("fp64")),
+                               (core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fadd_rn", core.dtype("fp32")),
                                }, _builder)
 
 
 @extern.extern
-def dadd_rz(arg0, arg1, _builder=None):
+def add_rz(arg0, arg1, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
                               {(core.dtype("fp64"), core.dtype("fp64"),): ("__nv_dadd_rz", core.dtype("fp64")),
+                               (core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fadd_rz", core.dtype("fp32")),
                                }, _builder)
 
 
 @extern.extern
-def dadd_rd(arg0, arg1, _builder=None):
+def add_rd(arg0, arg1, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
                               {(core.dtype("fp64"), core.dtype("fp64"),): ("__nv_dadd_rd", core.dtype("fp64")),
+                               (core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fadd_rd", core.dtype("fp32")),
                                }, _builder)
 
 
 @extern.extern
-def dadd_ru(arg0, arg1, _builder=None):
+def add_ru(arg0, arg1, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
                               {(core.dtype("fp64"), core.dtype("fp64"),): ("__nv_dadd_ru", core.dtype("fp64")),
+                               (core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fadd_ru", core.dtype("fp32")),
                                }, _builder)
 
 
 @extern.extern
-def dmul_rn(arg0, arg1, _builder=None):
+def mul_rn(arg0, arg1, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
                               {(core.dtype("fp64"), core.dtype("fp64"),): ("__nv_dmul_rn", core.dtype("fp64")),
+                               (core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fmul_rn", core.dtype("fp32")),
                                }, _builder)
 
 
 @extern.extern
-def dmul_rz(arg0, arg1, _builder=None):
+def mul_rz(arg0, arg1, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
                               {(core.dtype("fp64"), core.dtype("fp64"),): ("__nv_dmul_rz", core.dtype("fp64")),
+                               (core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fmul_rz", core.dtype("fp32")),
                                }, _builder)
 
 
 @extern.extern
-def dmul_rd(arg0, arg1, _builder=None):
+def mul_rd(arg0, arg1, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
                               {(core.dtype("fp64"), core.dtype("fp64"),): ("__nv_dmul_rd", core.dtype("fp64")),
+                               (core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fmul_rd", core.dtype("fp32")),
                                }, _builder)
 
 
 @extern.extern
-def dmul_ru(arg0, arg1, _builder=None):
+def mul_ru(arg0, arg1, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
                               {(core.dtype("fp64"), core.dtype("fp64"),): ("__nv_dmul_ru", core.dtype("fp64")),
-                               }, _builder)
-
-
-@extern.extern
-def fadd_rd(arg0, arg1, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
-                              {(core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fadd_rd", core.dtype("fp32")),
-                               }, _builder)
-
-
-@extern.extern
-def fadd_ru(arg0, arg1, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
-                              {(core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fadd_ru", core.dtype("fp32")),
-                               }, _builder)
-
-
-@extern.extern
-def fmul_rd(arg0, arg1, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
-                              {(core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fmul_rd", core.dtype("fp32")),
-                               }, _builder)
-
-
-@extern.extern
-def fmul_ru(arg0, arg1, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
-                              {(core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fmul_ru", core.dtype("fp32")),
-                               }, _builder)
-
-
-@extern.extern
-def fadd_rn(arg0, arg1, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
-                              {(core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fadd_rn", core.dtype("fp32")),
-                               }, _builder)
-
-
-@extern.extern
-def fadd_rz(arg0, arg1, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
-                              {(core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fadd_rz", core.dtype("fp32")),
-                               }, _builder)
-
-
-@extern.extern
-def fmul_rn(arg0, arg1, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
-                              {(core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fmul_rn", core.dtype("fp32")),
-                               }, _builder)
-
-
-@extern.extern
-def fmul_rz(arg0, arg1, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
-                              {(core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fmul_rz", core.dtype("fp32")),
+                               (core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fmul_ru", core.dtype("fp32")),
                                }, _builder)
 
 
@@ -624,7 +446,13 @@ def double2uint_ru(arg0, _builder=None):
 def int2double_rn(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("int32"),): ("__nv_int2double_rn", core.dtype("fp64")),
-                               (core.dtype("uint32"),): ("__nv_uint2double_rn", core.dtype("fp64")),
+                               }, _builder)
+
+
+@extern.extern
+def uint2double_rn(arg0, _builder=None):
+    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
+                              {(core.dtype("uint32"),): ("__nv_uint2double_rn", core.dtype("fp64")),
                                }, _builder)
 
 
@@ -688,7 +516,6 @@ def float2uint_ru(arg0, _builder=None):
 def int2float_rn(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("int32"),): ("__nv_int2float_rn", core.dtype("fp32")),
-                               (core.dtype("uint32"),): ("__nv_uint2float_rn", core.dtype("fp32")),
                                }, _builder)
 
 
@@ -696,7 +523,6 @@ def int2float_rn(arg0, _builder=None):
 def int2float_rz(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("int32"),): ("__nv_int2float_rz", core.dtype("fp32")),
-                               (core.dtype("uint32"),): ("__nv_uint2float_rz", core.dtype("fp32")),
                                }, _builder)
 
 
@@ -704,7 +530,6 @@ def int2float_rz(arg0, _builder=None):
 def int2float_rd(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("int32"),): ("__nv_int2float_rd", core.dtype("fp32")),
-                               (core.dtype("uint32"),): ("__nv_uint2float_rd", core.dtype("fp32")),
                                }, _builder)
 
 
@@ -712,7 +537,34 @@ def int2float_rd(arg0, _builder=None):
 def int2float_ru(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("int32"),): ("__nv_int2float_ru", core.dtype("fp32")),
-                               (core.dtype("uint32"),): ("__nv_uint2float_ru", core.dtype("fp32")),
+                               }, _builder)
+
+
+@extern.extern
+def uint2float_rn(arg0, _builder=None):
+    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
+                              {(core.dtype("uint32"),): ("__nv_uint2float_rn", core.dtype("fp32")),
+                               }, _builder)
+
+
+@extern.extern
+def uint2float_rz(arg0, _builder=None):
+    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
+                              {(core.dtype("uint32"),): ("__nv_uint2float_rz", core.dtype("fp32")),
+                               }, _builder)
+
+
+@extern.extern
+def uint2float_rd(arg0, _builder=None):
+    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
+                              {(core.dtype("uint32"),): ("__nv_uint2float_rd", core.dtype("fp32")),
+                               }, _builder)
+
+
+@extern.extern
+def uint2float_ru(arg0, _builder=None):
+    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
+                              {(core.dtype("uint32"),): ("__nv_uint2float_ru", core.dtype("fp32")),
                                }, _builder)
 
 
@@ -853,7 +705,6 @@ def double2ull_ru(arg0, _builder=None):
 def ll2float_rn(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("int64"),): ("__nv_ll2float_rn", core.dtype("fp32")),
-                               (core.dtype("uint64"),): ("__nv_ull2float_rn", core.dtype("fp32")),
                                }, _builder)
 
 
@@ -861,7 +712,6 @@ def ll2float_rn(arg0, _builder=None):
 def ll2float_rz(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("int64"),): ("__nv_ll2float_rz", core.dtype("fp32")),
-                               (core.dtype("uint64"),): ("__nv_ull2float_rz", core.dtype("fp32")),
                                }, _builder)
 
 
@@ -869,7 +719,6 @@ def ll2float_rz(arg0, _builder=None):
 def ll2float_rd(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("int64"),): ("__nv_ll2float_rd", core.dtype("fp32")),
-                               (core.dtype("uint64"),): ("__nv_ull2float_rd", core.dtype("fp32")),
                                }, _builder)
 
 
@@ -877,7 +726,34 @@ def ll2float_rd(arg0, _builder=None):
 def ll2float_ru(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("int64"),): ("__nv_ll2float_ru", core.dtype("fp32")),
-                               (core.dtype("uint64"),): ("__nv_ull2float_ru", core.dtype("fp32")),
+                               }, _builder)
+
+
+@extern.extern
+def ull2float_rn(arg0, _builder=None):
+    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
+                              {(core.dtype("uint64"),): ("__nv_ull2float_rn", core.dtype("fp32")),
+                               }, _builder)
+
+
+@extern.extern
+def ull2float_rz(arg0, _builder=None):
+    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
+                              {(core.dtype("uint64"),): ("__nv_ull2float_rz", core.dtype("fp32")),
+                               }, _builder)
+
+
+@extern.extern
+def ull2float_rd(arg0, _builder=None):
+    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
+                              {(core.dtype("uint64"),): ("__nv_ull2float_rd", core.dtype("fp32")),
+                               }, _builder)
+
+
+@extern.extern
+def ull2float_ru(arg0, _builder=None):
+    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
+                              {(core.dtype("uint64"),): ("__nv_ull2float_ru", core.dtype("fp32")),
                                }, _builder)
 
 
@@ -885,7 +761,6 @@ def ll2float_ru(arg0, _builder=None):
 def ll2double_rn(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("int64"),): ("__nv_ll2double_rn", core.dtype("fp64")),
-                               (core.dtype("uint64"),): ("__nv_ull2double_rn", core.dtype("fp64")),
                                }, _builder)
 
 
@@ -893,7 +768,6 @@ def ll2double_rn(arg0, _builder=None):
 def ll2double_rz(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("int64"),): ("__nv_ll2double_rz", core.dtype("fp64")),
-                               (core.dtype("uint64"),): ("__nv_ull2double_rz", core.dtype("fp64")),
                                }, _builder)
 
 
@@ -901,7 +775,6 @@ def ll2double_rz(arg0, _builder=None):
 def ll2double_rd(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("int64"),): ("__nv_ll2double_rd", core.dtype("fp64")),
-                               (core.dtype("uint64"),): ("__nv_ull2double_rd", core.dtype("fp64")),
                                }, _builder)
 
 
@@ -909,7 +782,34 @@ def ll2double_rd(arg0, _builder=None):
 def ll2double_ru(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("int64"),): ("__nv_ll2double_ru", core.dtype("fp64")),
-                               (core.dtype("uint64"),): ("__nv_ull2double_ru", core.dtype("fp64")),
+                               }, _builder)
+
+
+@extern.extern
+def ull2double_rn(arg0, _builder=None):
+    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
+                              {(core.dtype("uint64"),): ("__nv_ull2double_rn", core.dtype("fp64")),
+                               }, _builder)
+
+
+@extern.extern
+def ull2double_rz(arg0, _builder=None):
+    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
+                              {(core.dtype("uint64"),): ("__nv_ull2double_rz", core.dtype("fp64")),
+                               }, _builder)
+
+
+@extern.extern
+def ull2double_rd(arg0, _builder=None):
+    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
+                              {(core.dtype("uint64"),): ("__nv_ull2double_rd", core.dtype("fp64")),
+                               }, _builder)
+
+
+@extern.extern
+def ull2double_ru(arg0, _builder=None):
+    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
+                              {(core.dtype("uint64"),): ("__nv_ull2double_ru", core.dtype("fp64")),
                                }, _builder)
 
 
@@ -917,7 +817,6 @@ def ll2double_ru(arg0, _builder=None):
 def int_as_float(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("int32"),): ("__nv_int_as_float", core.dtype("fp32")),
-                               (core.dtype("uint32"),): ("__nv_uint_as_float", core.dtype("fp32")),
                                }, _builder)
 
 
@@ -925,6 +824,13 @@ def int_as_float(arg0, _builder=None):
 def float_as_int(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("fp32"),): ("__nv_float_as_int", core.dtype("int32")),
+                               }, _builder)
+
+
+@extern.extern
+def uint_as_float(arg0, _builder=None):
+    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
+                              {(core.dtype("uint32"),): ("__nv_uint_as_float", core.dtype("fp32")),
                                }, _builder)
 
 
@@ -1006,11 +912,9 @@ def fast_log10f(arg0, _builder=None):
 
 
 @extern.extern
-def pow(arg0, arg1, _builder=None):
+def fast_powf(arg0, arg1, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
                               {(core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fast_powf", core.dtype("fp32")),
-                               (core.dtype("fp32"), core.dtype("fp32"),): ("__nv_powf", core.dtype("fp32")),
-                               (core.dtype("fp64"), core.dtype("fp64"),): ("__nv_pow", core.dtype("fp64")),
                                }, _builder)
 
 
@@ -1031,35 +935,39 @@ def rhadd(arg0, arg1, _builder=None):
 
 
 @extern.extern
-def fsub_rn(arg0, arg1, _builder=None):
+def sub_rn(arg0, arg1, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
                               {(core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fsub_rn", core.dtype("fp32")),
+                               (core.dtype("fp64"), core.dtype("fp64"),): ("__nv_dsub_rn", core.dtype("fp64")),
                                }, _builder)
 
 
 @extern.extern
-def fsub_rz(arg0, arg1, _builder=None):
+def sub_rz(arg0, arg1, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
                               {(core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fsub_rz", core.dtype("fp32")),
+                               (core.dtype("fp64"), core.dtype("fp64"),): ("__nv_dsub_rz", core.dtype("fp64")),
                                }, _builder)
 
 
 @extern.extern
-def fsub_rd(arg0, arg1, _builder=None):
+def sub_rd(arg0, arg1, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
                               {(core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fsub_rd", core.dtype("fp32")),
+                               (core.dtype("fp64"), core.dtype("fp64"),): ("__nv_dsub_rd", core.dtype("fp64")),
                                }, _builder)
 
 
 @extern.extern
-def fsub_ru(arg0, arg1, _builder=None):
+def sub_ru(arg0, arg1, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
                               {(core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fsub_ru", core.dtype("fp32")),
+                               (core.dtype("fp64"), core.dtype("fp64"),): ("__nv_dsub_ru", core.dtype("fp64")),
                                }, _builder)
 
 
 @extern.extern
-def frsqrt_rn(arg0, _builder=None):
+def rsqrt_rn(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("fp32"),): ("__nv_frsqrt_rn", core.dtype("fp32")),
                                }, _builder)
@@ -1098,16 +1006,18 @@ def nearbyint(arg0, _builder=None):
 
 
 @extern.extern
-def isnanf(arg0, _builder=None):
+def isnan(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("fp32"),): ("__nv_isnanf", core.dtype("int32")),
+                               (core.dtype("fp64"),): ("__nv_isnand", core.dtype("int32")),
                                }, _builder)
 
 
 @extern.extern
-def signbitf(arg0, _builder=None):
+def signbit(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("fp32"),): ("__nv_signbitf", core.dtype("int32")),
+                               (core.dtype("fp64"),): ("__nv_signbitd", core.dtype("int32")),
                                }, _builder)
 
 
@@ -1127,9 +1037,10 @@ def finitef(arg0, _builder=None):
 
 
 @extern.extern
-def isinff(arg0, _builder=None):
+def isinf(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("fp32"),): ("__nv_isinff", core.dtype("int32")),
+                               (core.dtype("fp64"),): ("__nv_isinfd", core.dtype("int32")),
                                }, _builder)
 
 
@@ -1550,10 +1461,12 @@ def fma(arg0, arg1, arg2, _builder=None):
 
 
 @extern.extern
-def powi(arg0, arg1, _builder=None):
+def pow(arg0, arg1, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
                               {(core.dtype("fp32"), core.dtype("int32"),): ("__nv_powif", core.dtype("fp32")),
                                (core.dtype("fp64"), core.dtype("int32"),): ("__nv_powi", core.dtype("fp64")),
+                               (core.dtype("fp32"), core.dtype("fp32"),): ("__nv_powf", core.dtype("fp32")),
+                               (core.dtype("fp64"), core.dtype("fp64"),): ("__nv_pow", core.dtype("fp64")),
                                }, _builder)
 
 
@@ -1606,56 +1519,7 @@ def logb(arg0, _builder=None):
 
 
 @extern.extern
-def signbitd(arg0, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
-                              {(core.dtype("fp64"),): ("__nv_signbitd", core.dtype("int32")),
-                               }, _builder)
-
-
-@extern.extern
 def isfinited(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("fp64"),): ("__nv_isfinited", core.dtype("int32")),
-                               }, _builder)
-
-
-@extern.extern
-def isinfd(arg0, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
-                              {(core.dtype("fp64"),): ("__nv_isinfd", core.dtype("int32")),
-                               }, _builder)
-
-
-@extern.extern
-def isnand(arg0, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
-                              {(core.dtype("fp64"),): ("__nv_isnand", core.dtype("int32")),
-                               }, _builder)
-
-
-@extern.extern
-def dsub_rn(arg0, arg1, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
-                              {(core.dtype("fp64"), core.dtype("fp64"),): ("__nv_dsub_rn", core.dtype("fp64")),
-                               }, _builder)
-
-
-@extern.extern
-def dsub_rz(arg0, arg1, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
-                              {(core.dtype("fp64"), core.dtype("fp64"),): ("__nv_dsub_rz", core.dtype("fp64")),
-                               }, _builder)
-
-
-@extern.extern
-def dsub_ru(arg0, arg1, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
-                              {(core.dtype("fp64"), core.dtype("fp64"),): ("__nv_dsub_ru", core.dtype("fp64")),
-                               }, _builder)
-
-
-@extern.extern
-def dsub_rd(arg0, arg1, _builder=None):
-    return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, arg1, ],
-                              {(core.dtype("fp64"), core.dtype("fp64"),): ("__nv_dsub_rd", core.dtype("fp64")),
                                }, _builder)

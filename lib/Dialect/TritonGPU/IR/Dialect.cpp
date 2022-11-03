@@ -68,18 +68,7 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
     return SmallVector<unsigned>(blockedLayout.getSizePerThread().begin(),
                                  blockedLayout.getSizePerThread().end());
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-    unsigned dim = sliceLayout.getDim();
-    auto parent = sliceLayout.getParent();
-    if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
-      SmallVector<unsigned> sizePerThread(
-          blockedParent.getSizePerThread().begin(),
-          blockedParent.getSizePerThread().end());
-      sizePerThread.erase(sizePerThread.begin() + dim);
-      return sizePerThread;
-    } else {
-      assert(0 && "SliceEncodingAttr with parent other than "
-                  "BlockedEncodingAttr not implemented");
-    }
+    return getSizePerThread(sliceLayout.getParent());
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     assert(mmaLayout.getVersion() == 2 &&
            "mmaLayout version = 1 is not implemented yet");
@@ -144,6 +133,19 @@ SmallVector<unsigned> getOrder(const Attribute &layout) {
                                  blockedLayout.getOrder().end());
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     return SmallVector<unsigned>{1, 0};
+  } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+    SmallVector<unsigned> parentOrder = getOrder(sliceLayout.getParent());
+    unsigned dim = sliceLayout.getDim();
+    SmallVector<unsigned> order;
+    for (unsigned d : parentOrder) {
+      if (d == dim)
+        continue;
+      else if (d > dim)
+        order.push_back(d - 1);
+      else
+        order.push_back(d);
+    }
+    return order;
   } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
     return SmallVector<unsigned>(sharedLayout.getOrder().begin(),
                                  sharedLayout.getOrder().end());
@@ -270,10 +272,23 @@ unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
 unsigned MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   size_t rank = shape.size();
   assert(rank == 2 && "Unexpected rank of mma layout");
-  assert(getVersion() == 2 && "mmaLayout version = 1 is not implemented yet");
-  unsigned elemsCol = ceil<unsigned>(shape[0], 16 * getWarpsPerCTA()[0]) * 2;
-  unsigned elemsRow = ceil<unsigned>(shape[1], 8 * getWarpsPerCTA()[1]) * 2;
-  return elemsCol * elemsRow;
+  assert((getVersion() == 1 || getVersion() == 2) &&
+         "Only version 1 and 2 is supported");
+
+  int res = 0;
+  if (getVersion() == 1) {
+    unsigned mmasRow = ceil<unsigned>(shape[0], 16 * getWarpsPerCTA()[0]);
+    unsigned mmasCol = ceil<unsigned>(shape[1], 16 * getWarpsPerCTA()[1]);
+    // Each warp-level mma884 will perform a m16xn16xk4 mma, thus get a m16xn16
+    // matrix as result.
+    res = mmasRow * mmasCol * (16 * 16 / 32);
+  } else if (getVersion() == 2) {
+    unsigned elemsCol = ceil<unsigned>(shape[0], 16 * getWarpsPerCTA()[0]) * 2;
+    unsigned elemsRow = ceil<unsigned>(shape[1], 8 * getWarpsPerCTA()[1]) * 2;
+    res = elemsCol * elemsRow;
+  }
+
+  return res;
 }
 
 unsigned SharedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {

@@ -29,12 +29,20 @@ def TT_RedOpAttr : I32EnumAttr<
     /*case*/
     [
         I32EnumAttrCase</*sym*/"ADD", 1, /*str*/"add">,
-        I32EnumAttrCase<"MAX", 2, "max">,
+        I32EnumAttrCase<"FADD", 2, "fadd">,
         I32EnumAttrCase<"MIN", 3, "min">,
-        I32EnumAttrCase<"FADD", 4, "fadd">,
-        I32EnumAttrCase<"FMAX", 5, "fmax">,
-        I32EnumAttrCase<"FMIN", 6, "fmin">,
-        I32EnumAttrCase<"XOR", 7, "xor">
+        I32EnumAttrCase<"MAX", 4, "max">,
+        I32EnumAttrCase<"UMIN", 5, "umin">,
+        I32EnumAttrCase<"UMAX", 6, "umax">,
+        I32EnumAttrCase<"ARGMIN", 7, "argmin">,
+        I32EnumAttrCase<"ARGMAX", 8, "argmax">,
+        I32EnumAttrCase<"ARGUMIN", 9, "argumin">,
+        I32EnumAttrCase<"ARGUMAX", 10, "argumax">,
+        I32EnumAttrCase<"FMIN", 11, "fmin">,
+        I32EnumAttrCase<"FMAX", 12, "fmax">,
+        I32EnumAttrCase<"ARGFMIN", 13, "argfmin">,
+        I32EnumAttrCase<"ARGFMAX", 14, "argfmax">,
+        I32EnumAttrCase<"XOR", 15, "xor">
     ]> {
     let cppNamespace = "::mlir::triton";
 }
