@@ -1197,3 +1197,22 @@ def swizzle2d(i, j, size_i, size_j, size_g):
 @triton.jit
 def zeros_like(input):
     return zeros(input.shape, input.dtype)
+
+
+@builtin
+def printf(prefix, *args, _builder=None):
+    import string
+    new_prefix = prefix
+    if isinstance(prefix, constexpr):
+        new_prefix = prefix.value
+    assert isinstance(new_prefix, str), f"{new_prefix} is not string"
+    b_ascii = True
+    for ch in new_prefix:
+        if ch not in string.printable:
+            b_ascii = False
+            break
+    assert b_ascii, f"{new_prefix} is not an ascii string"
+    new_args = []
+    for arg in args:
+        new_args.append(_to_tensor(arg, _builder))
+    return semantic.printf(new_prefix, new_args, _builder)

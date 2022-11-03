@@ -119,9 +119,11 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 #define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
 #define i32_ty rewriter.getIntegerType(32)
+#define ui32_ty rewriter.getIntegerType(32, false)
 #define f16_ty rewriter.getF16Type()
 #define i8_ty rewriter.getIntegerType(8)
 #define f32_ty rewriter.getF32Type()
+#define f64_ty rewriter.getF64Type()
 #define vec_ty(type, num) VectorType::get(num, type)
 #define f32_val(...) LLVM::createConstantF32(loc, rewriter, __VA_ARGS__)
 #define void_ty(ctx) LLVM::LLVMVoidType::get(ctx)
@@ -1808,6 +1810,7 @@ public:
     }
     Value view = getStructFromElements(loc, resultVals, rewriter, structTy);
     rewriter.replaceOp(op, view);
+
     return success();
   }
 
@@ -4542,6 +4545,190 @@ struct FDivOpConversion
   }
 };
 
+struct PrintfOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::PrintfOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::PrintfOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::PrintfOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op->getLoc();
+    SmallVector<Value, 16> operands;
+    for (auto operand : adaptor.getOperands()) {
+      auto sub_operands = this->getElementsFromStruct(loc, operand, rewriter);
+      for (auto elem : sub_operands) {
+        operands.push_back(elem);
+      }
+    }
+    std::string formatStr;
+    llvm::raw_string_ostream os(formatStr);
+    os << op.prefix();
+    if (operands.size() > 0) {
+      os << getFormatSubstr(operands[0]);
+    }
+
+    for (size_t i = 1; i < operands.size(); ++i) {
+      os << ", " << getFormatSubstr(operands[i]);
+    }
+    llPrintf(formatStr, operands, rewriter);
+    rewriter.eraseOp(op);
+    return success();
+  }
+  // get format specific for each input value
+  // currently support pointer, i8, i16, i32, i64, f16, bf16, f32, f64
+  std::string getFormatSubstr(Value value) const {
+    Type type = value.getType();
+    unsigned width = type.getIntOrFloatBitWidth();
+
+    if (type.isa<LLVM::LLVMPointerType>()) {
+      return "%p";
+    } else if (type.isBF16() || type.isF16() || type.isF32() || type.isF64()) {
+      return "%f";
+    } else if (type.isSignedInteger()) {
+      return "%i";
+    } else if (type.isUnsignedInteger() || type.isSignlessInteger()) {
+      return "%u";
+    }
+    assert(false && "not supported type");
+  }
+
+  // declare vprintf(i8*, i8*) as external function
+  LLVM::LLVMFuncOp
+  getVprintfDeclaration(ConversionPatternRewriter &rewriter) const {
+    auto moduleOp =
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    StringRef funcName("vprintf");
+    Operation *funcOp = moduleOp.lookupSymbol(funcName);
+    if (funcOp)
+      return cast<LLVM::LLVMFuncOp>(*funcOp);
+
+    auto *context = rewriter.getContext();
+
+    SmallVector<Type> argsType{ptr_ty(IntegerType::get(context, 8)),
+                               ptr_ty(IntegerType::get(context, 8))};
+    auto funcType = LLVM::LLVMFunctionType::get(i32_ty, argsType);
+
+    ConversionPatternRewriter::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(moduleOp.getBody());
+
+    return rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(context), funcName,
+                                             funcType);
+  }
+
+  // extend integer to int32, extend float to float64
+  // this comes from vprintf alignment requirements.
+  std::pair<Type, Value> promoteValue(ConversionPatternRewriter &rewriter,
+                                      Value value) const {
+    auto *context = rewriter.getContext();
+    auto type = value.getType();
+    unsigned width = type.getIntOrFloatBitWidth();
+    Value newOp = value;
+    Type newType = type;
+
+    bool bUnsigned = type.isUnsignedInteger();
+    if (type.isIntOrIndex() && width < 32) {
+      if (bUnsigned) {
+        newType = ui32_ty;
+        newOp = rewriter.create<LLVM::ZExtOp>(UnknownLoc::get(context), newType,
+                                              value);
+      } else {
+        newType = i32_ty;
+        newOp = rewriter.create<LLVM::SExtOp>(UnknownLoc::get(context), newType,
+                                              value);
+      }
+    } else if (type.isBF16() || type.isF16() || type.isF32()) {
+      newType = f64_ty;
+      newOp = rewriter.create<LLVM::FPExtOp>(UnknownLoc::get(context), newType,
+                                             value);
+    }
+
+    return {newType, newOp};
+  }
+
+  void llPrintf(StringRef msg, ValueRange args,
+                ConversionPatternRewriter &rewriter) const {
+    static const char formatStringPrefix[] = "printfFormat_";
+    assert(!msg.empty() && "printf with empty string not support");
+    Type int8Ptr = ptr_ty(i8_ty);
+
+    auto *context = rewriter.getContext();
+    auto moduleOp =
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    auto funcOp = getVprintfDeclaration(rewriter);
+
+    Value one = rewriter.create<LLVM::ConstantOp>(
+        UnknownLoc::get(context), i32_ty, rewriter.getI32IntegerAttr(1));
+    Value zero = rewriter.create<LLVM::ConstantOp>(
+        UnknownLoc::get(context), i32_ty, rewriter.getI32IntegerAttr(0));
+
+    unsigned stringNumber = 0;
+    SmallString<16> stringConstName;
+    do {
+      stringConstName.clear();
+      (formatStringPrefix + Twine(stringNumber++)).toStringRef(stringConstName);
+    } while (moduleOp.lookupSymbol(stringConstName));
+
+    llvm::SmallString<64> formatString(msg);
+    formatString.push_back('\n');
+    formatString.push_back('\0');
+    size_t formatStringSize = formatString.size_in_bytes();
+    auto globalType = LLVM::LLVMArrayType::get(i8_ty, formatStringSize);
+
+    LLVM::GlobalOp global;
+    {
+      ConversionPatternRewriter::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(moduleOp.getBody());
+      global = rewriter.create<LLVM::GlobalOp>(
+          UnknownLoc::get(context), globalType,
+          /*isConstant=*/true, LLVM::Linkage::Internal, stringConstName,
+          rewriter.getStringAttr(formatString));
+    }
+
+    Value globalPtr =
+        rewriter.create<LLVM::AddressOfOp>(UnknownLoc::get(context), global);
+    Value stringStart =
+        rewriter.create<LLVM::GEPOp>(UnknownLoc::get(context), int8Ptr,
+                                     globalPtr, mlir::ValueRange({zero, zero}));
+
+    Value bufferPtr =
+        rewriter.create<LLVM::NullOp>(UnknownLoc::get(context), int8Ptr);
+
+    SmallVector<Value, 16> newArgs;
+    if (args.size() >= 1) {
+      SmallVector<Type> argTypes;
+      for (auto arg : args) {
+        Type newType;
+        Value newArg;
+        std::tie(newType, newArg) = promoteValue(rewriter, arg);
+        argTypes.push_back(newType);
+        newArgs.push_back(newArg);
+      }
+
+      Type structTy = LLVM::LLVMStructType::getLiteral(context, argTypes);
+      auto allocated = rewriter.create<LLVM::AllocaOp>(UnknownLoc::get(context),
+                                                       ptr_ty(structTy), one,
+                                                       /*alignment=*/0);
+
+      for (const auto &entry : llvm::enumerate(newArgs)) {
+        auto index = rewriter.create<LLVM::ConstantOp>(
+            UnknownLoc::get(context), i32_ty,
+            rewriter.getI32IntegerAttr(entry.index()));
+        auto fieldPtr = rewriter.create<LLVM::GEPOp>(
+            UnknownLoc::get(context), ptr_ty(argTypes[entry.index()]),
+            allocated, ArrayRef<Value>{zero, index});
+        rewriter.create<LLVM::StoreOp>(UnknownLoc::get(context), entry.value(),
+                                       fieldPtr);
+      }
+      bufferPtr = rewriter.create<LLVM::BitcastOp>(UnknownLoc::get(context),
+                                                   int8Ptr, allocated);
+    }
+
+    ValueRange operands{stringStart, bufferPtr};
+    rewriter.create<LLVM::CallOp>(UnknownLoc::get(context), funcOp, operands);
+  }
+};
+
 void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns, int numWarps,
                                   AxisInfoAnalysis &axisInfoAnalysis,
@@ -4628,6 +4815,7 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<ViewLikeOpConversion<triton::ExpandDimsOp>>(typeConverter,
                                                            benefit);
   patterns.add<DotOpConversion>(typeConverter, allocation, smem, benefit);
+  patterns.add<PrintfOpConversion>(typeConverter, benefit);
 }
 
 class ConvertTritonGPUToLLVM
