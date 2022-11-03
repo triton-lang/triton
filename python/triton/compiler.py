@@ -24,6 +24,7 @@ from filelock import FileLock
 
 import triton
 import triton._C.libtriton.triton as _triton
+from .tools.disasm import extract
 
 
 def str_to_ty(name):
@@ -1011,9 +1012,6 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     if output == "ptx":
         return ptx, shem_size, kernel_name
 
-    with open('triton.ptx', 'w') as f:
-        f.write(ptx)
-
     cubin = make_cubin(ptx, ptxas, compute_capability)
     if output == "cubin":
         return cubin, ptx, shem_size, kernel_name
@@ -1386,6 +1384,19 @@ class CompiledKernel:
                 stream = torch.cuda.current_stream().cuda_stream
             self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.shared, stream, self.cu_function, *args)
         return
+
+    def get_sass(self, fun=None):
+        if 'sass' in self.asm:
+            return self.asm['sass']
+        fd, path = tempfile.mkstemp()
+        try:
+            with open(fd, 'wb') as cubin:
+                cubin.write(self.asm['cubin'])
+            self.sass = extract(path, fun)
+        finally:
+            os.remove(path)
+        self.asm['sass'] = self.sass
+        return self.sass
 
 
 class CudaUtils(object):
