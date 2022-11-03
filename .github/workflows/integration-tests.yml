@@ -17,9 +17,9 @@ jobs:
         id: set-matrix
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
-            echo '::set-output name=matrix::[["self-hosted", "A10"], "macos-latest"]'
+            echo '::set-output name=matrix::[["self-hosted", "A10"], "macos-10.15"]'
           else
-            echo '::set-output name=matrix::["ubuntu-latest", "macos-latest"]'
+            echo '::set-output name=matrix::["ubuntu-latest", "macos-10.15"]'
           fi
 
   Integration-Tests:
@@ -31,11 +31,6 @@ jobs:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix)}}
 
-    env:
-      IS_MACOS: ${{contains(matrix.runner, 'macos')}}
-      IS_LINUX: ${{startsWith(matrix.runner, 'ubuntu')}}
-      IS_SELF_HOSTED: ${{matrix.runner[0] == 'self-hosted'}}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v2
@@ -45,7 +40,7 @@ jobs:
           rm -rf ~/.triton/cache/
 
       - name: Check imports
-        if: ${{env.IS_LINUX}}
+        if: startsWith(matrix.runner, 'ubuntu')
         run: |
           pip install isort
           isort -c ./python || ( echo '::error title=Imports not sorted::Please run \"isort ./python\"' ; exit 1 )
