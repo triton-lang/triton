@@ -32,6 +32,11 @@ jobs:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix)}}
 
+    env:
+      IS_MACOS: contains(matrix.runner, 'macos') 
+      IS_LINUX: contains(matrix.runner, 'ubuntu')
+      IS_SELF_HOSTED:  matrix.runner[0] == 'self-hosted'
+
     steps:
 
       - name: Checkout
@@ -42,39 +47,34 @@ jobs:
           rm -rf ~/.triton/cache/
 
       - name: Check imports
-        if: ${{ ! contains(matrix.runner, 'macos') }}
         run: |
           pip install isort
           isort -c ./python || ( echo '::error title=Imports not sorted::Please run \"isort ./python\"' ; exit 1 )
 
       - name: Check python style
-        if: ${{! contains(matrix.runner, 'macos') }}
         run: |
           pip install autopep8
           autopep8 -a -r -d --exit-code ./python || ( echo '::error title=Style issues::Please run \"autopep8 -a -r -i ./python\"' ; exit 1 )
 
       - name: Check cpp style
-        if: ${{! contains(matrix.runner, 'macos') }}
+        if: $IS_UBUNTU
         run: |
           pip install clang-format
           find . -regex '.*\.\(cpp\|hpp\|h\|cc\)' -not -path "./python/build/*" -not -path "./include/triton/external/*" -print0 | xargs -0 -n1 clang-format -style=file --dry-run -Werror -i ||
           (echo '::error title=Style issues:: Please run `find . -regex ".*\.\(cpp\|hpp\|h\|cc\)" -not -path "./python/build/*" -not -path "./include/triton/external/*" -print0 | xargs -0 -n1 clang-format -style=file -i`' ; exit 1)
 
       - name: Flake8
-        if: ${{! contains(matrix.runner, 'macos') }}
         run: |
           pip install flake8
           flake8 --config ./python/setup.cfg ./python || ( echo '::error::Flake8 failed; see logs for errors.' ; exit 1 )
 
       - name: Install Triton
-        if: ${{ contains(matrix.runner, 'macos') }}
+        if: $IS_UBUNTU
         run: |
-          alias python='python3'
           cd python
           TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.'
-        else:
+        if: $IS_MACOS
         run: |
-          alias python='python3'
           cd python
           TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
 
@@ -88,7 +88,7 @@ jobs:
           lit -v "$LIT_TEST_DIR"
 
       - name: Run python tests
-        if: ${{ matrix.runner[0] == 'self-hosted' }}
+        if: $IF_SELF_HOSTED
         run: |
           cd python/tests
           pytest
