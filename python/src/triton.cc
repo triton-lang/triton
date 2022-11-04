@@ -1284,15 +1284,6 @@ void init_triton_translation(py::module &m) {
     return shared.getInt();
   });
 
-  m.def("parse_module", [](const std::string &str) {
-    mlir::MLIRContext context;
-    mlir::OwningOpRef<mlir::ModuleOp> module =
-        mlir::parseSourceString(str, &context);
-    if (!module)
-      throw std::runtime_error("parse_module failed");
-    return *module;
-  });
-
   m.def(
       "translate_triton_gpu_to_llvmir",
       [](mlir::ModuleOp op) {
