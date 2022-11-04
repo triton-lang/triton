@@ -4466,7 +4466,7 @@ struct InsertSliceAsyncOpConversion
     auto inOrder = srcBlockedLayout.getOrder();
 
     // If perPhase * maxPhase > threadsPerCTA, we need to swizzle over
-    // elements across phases. If perPhase * maxPhase == threadsPerCTA,
+    // elements across phases. If perPhase * maxPhase <= threadsPerCTA,
     // swizzle is not allowd
     auto numSwizzleRows = std::max<unsigned>(
         (perPhase * maxPhase) / threadsPerCTA[inOrder[1]], 1);
