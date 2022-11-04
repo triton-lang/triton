@@ -284,17 +284,17 @@ def matmul(a, b, activation=None):
 #
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS)
 
-torch.manual_seed(0)
-a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-triton_output = matmul(a, b, activation=None)
-torch_output = torch.matmul(a, b)
-print(f"triton_output={triton_output}")
-print(f"torch_output={torch_output}")
-if triton.testing.allclose(triton_output, torch_output):
-    print("✅ Triton and Torch match")
-else:
-    print("❌ Triton and Torch differ")
+# torch.manual_seed(0)
+# a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+# b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+# triton_output = matmul(a, b, activation=None)
+# torch_output = torch.matmul(a, b)
+# print(f"triton_output={triton_output}")
+# print(f"torch_output={torch_output}")
+# if triton.testing.allclose(triton_output, torch_output):
+#     print("✅ Triton and Torch match")
+# else:
+#     print("❌ Triton and Torch differ")
 
 # %%
 # Benchmark
@@ -334,4 +334,4 @@ def benchmark(M, N, K, provider):
     return perf(ms), perf(max_ms), perf(min_ms)
 
 
-benchmark.run(show_plots=True, print_data=True)
+benchmark.run(show_plots=False, print_data=True)
