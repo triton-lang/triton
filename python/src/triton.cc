@@ -57,7 +57,7 @@ void init_triton_runtime(py::module &&m) {
   py::enum_<backend_t>(m, "backend")
       .value("HOST", HOST)
       .value("CUDA", CUDA)
-      // .value("ROCM", ROCM)
+      .value("ROCM", ROCM)
       .export_values();
 }
 

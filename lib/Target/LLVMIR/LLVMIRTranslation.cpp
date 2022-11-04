@@ -10,11 +10,13 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVM.h"
 #include "triton/tools/sys/getenv.hpp"
+#include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Constants.h"
 
 namespace mlir {
@@ -33,6 +35,7 @@ void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata) {
   auto *module = func->getParent();
   auto &ctx = func->getContext();
 
+#ifndef USE_ROCM
   if (metadata.maxntidx > 0) {
     auto i32_ty = llvm::IntegerType::get(ctx, 32);
     auto warps =
@@ -45,14 +48,19 @@ void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata) {
     module->getOrInsertNamedMetadata("nvvm.annotations")
         ->addOperand(llvm::MDNode::get(ctx, md_args));
   }
+#endif
 
   if (metadata.is_kernel) {
+#if defined(USE_ROCM)
+    func->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
+#else // defined(USE_ROCM)
     llvm::Metadata *md_args[] = {
         llvm::ValueAsMetadata::get(func), llvm::MDString::get(ctx, "kernel"),
         llvm::ValueAsMetadata::get(
             llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx), 1))};
     module->getOrInsertNamedMetadata("nvvm.annotations")
         ->addOperand(llvm::MDNode::get(ctx, md_args));
+#endif
   }
 }
 
@@ -86,7 +94,13 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
   auto context = module->getContext();
   DialectRegistry registry;
   mlir::registerLLVMDialectTranslation(registry);
+
+#ifdef USE_ROCM
+  mlir::registerROCDLDialectTranslation(registry);
+#else
   mlir::registerNVVMDialectTranslation(registry);
+#endif
+
   context->appendDialectRegistry(registry);
 
   llvm::DenseMap<llvm::StringRef, NVVMMetadata> nvvmMetadata;

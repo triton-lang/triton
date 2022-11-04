@@ -32,6 +32,28 @@ And the latest nightly release:
 ```bash
 pip install -U --pre triton
 ```
+# Install from source
+```
+git clone https://github.com/ROCmSoftwarePlatform/triton.git
+cd triton
+git checkout triton-mlir
+```
+# Build
+```
+cd python
+pip3 install cmake; # build time dependency
+pip3 install -e .
+```
+# Run tests:
+```
+# Run the Python tests
+pytest
+# Run the ctest
+cd build/temp.linux-x86_64-3.7
+ctest
+# Run the lit tests
+lit -v test
+```
 
 # Changelog
 
