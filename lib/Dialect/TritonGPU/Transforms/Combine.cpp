@@ -609,10 +609,11 @@ public:
     auto retShape = oldRetType.getShape();
     auto mod = op->getParentOfType<mlir::ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    // TODO: fix version to 1, only for debug the correctness of mma v1
     auto newRetType =
         RankedTensorType::get(retShape, oldRetType.getElementType(),
                               triton::gpu::MmaEncodingAttr::get(
-                                  oldRetType.getContext(), 2,
+                                  oldRetType.getContext(), 1,
                                   getWarpsPerTile(retShape, 2, numWarps)));
     // convert accumulator
     auto oldAcc = dotOp.getOperand(2);

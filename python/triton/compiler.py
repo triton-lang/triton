@@ -879,7 +879,8 @@ def ttir_to_ttgir(mod, num_warps, num_stages):
     # Convert blocked layout to mma layout for dot ops so that pipeline
     # can get shared memory swizzled correctly.
     pm.add_triton_gpu_combine_pass()
-    pm.add_tritongpu_pipeline_pass(num_stages)
+    # TODO: commented only for correctness debug of mma v1
+    #pm.add_tritongpu_pipeline_pass(num_stages)
     pm.add_canonicalizer_pass()
     pm.add_cse_pass()
     pm.add_coalesce_pass()

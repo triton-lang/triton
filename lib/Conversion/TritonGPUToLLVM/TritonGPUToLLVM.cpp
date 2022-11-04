@@ -2829,7 +2829,7 @@ private:
       return multiDimOffset;
     }
     if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-      SmallVector<Value> mmaColIdx(2);
+      SmallVector<Value> mmaColIdx(4);
       SmallVector<Value> mmaRowIdx(2);
       Value threadId = getThreadId(rewriter, loc);
       Value warpSize = idx_val(32);
@@ -2839,29 +2839,75 @@ private:
       SmallVector<Value> multiDimWarpId(2);
       multiDimWarpId[0] = urem(warpId, idx_val(mmaLayout.getWarpsPerCTA()[0]));
       multiDimWarpId[1] = udiv(warpId, idx_val(mmaLayout.getWarpsPerCTA()[0]));
+      Value one = idx_val(1);
+      Value two = idx_val(2);
       Value four = idx_val(4);
-      Value mmaGrpId = udiv(laneId, four);
-      Value mmaGrpIdP8 = add(mmaGrpId, idx_val(8));
-      Value mmaThreadIdInGrp = urem(laneId, four);
-      Value mmaThreadIdInGrpM2 = mul(mmaThreadIdInGrp, idx_val(2));
-      Value mmaThreadIdInGrpM2P1 = add(mmaThreadIdInGrpM2, idx_val(1));
-      Value colWarpOffset = mul(multiDimWarpId[0], idx_val(16));
-      mmaColIdx[0] = add(mmaGrpId, colWarpOffset);
-      mmaColIdx[1] = add(mmaGrpIdP8, colWarpOffset);
-      Value rowWarpOffset = mul(multiDimWarpId[1], idx_val(8));
-      mmaRowIdx[0] = add(mmaThreadIdInGrpM2, rowWarpOffset);
-      mmaRowIdx[1] = add(mmaThreadIdInGrpM2P1, rowWarpOffset);
+      Value eight = idx_val(8);
+      Value sixteen = idx_val(16);
+      if (mmaLayout.getVersion() == 2) {
+        Value mmaGrpId = udiv(laneId, four);
+        Value mmaGrpIdP8 = add(mmaGrpId, idx_val(8));
+        Value mmaThreadIdInGrp = urem(laneId, four);
+        Value mmaThreadIdInGrpM2 = mul(mmaThreadIdInGrp, idx_val(2));
+        Value mmaThreadIdInGrpM2P1 = add(mmaThreadIdInGrpM2, idx_val(1));
+        Value colWarpOffset = mul(multiDimWarpId[0], idx_val(16));
+        mmaColIdx[0] = add(mmaGrpId, colWarpOffset);
+        mmaColIdx[1] = add(mmaGrpIdP8, colWarpOffset);
+        Value rowWarpOffset = mul(multiDimWarpId[1], idx_val(8));
+        mmaRowIdx[0] = add(mmaThreadIdInGrpM2, rowWarpOffset);
+        mmaRowIdx[1] = add(mmaThreadIdInGrpM2P1, rowWarpOffset);
+      } else if (mmaLayout.getVersion() == 1) {
+        Value partId = udiv(laneId, four);
+        Value partIdDiv4 = udiv(partId, four);
+        Value partIdRem4 = urem(partId, four);
+        Value partRowOffset = mul(udiv(partIdRem4, two), eight);
+        partRowOffset = add(mul(partIdDiv4, four), partRowOffset);
+        Value partColOffset = mul(urem(partIdRem4, two), eight);
+        Value colOffset = add(mul(multiDimWarpId[0], sixteen), partColOffset);
+        Value rowOffset = add(mul(multiDimWarpId[1], sixteen), partRowOffset);
+        mmaRowIdx[0] = add(urem(laneId, two), rowOffset);
+        mmaRowIdx[1] = add(mmaRowIdx[0], two);
+        mmaColIdx[0] = add(udiv(urem(laneId, four), two), colOffset);
+        mmaColIdx[1] = add(mmaColIdx[0], one);
+        mmaColIdx[2] = add(mmaColIdx[0], four);
+        mmaColIdx[3] = add(mmaColIdx[0], idx_val(5));
+      } else {
+        llvm_unreachable("Unexpected MMALayout version");
+      }
 
       assert(rank == 2);
-      assert(mmaLayout.getVersion() == 2 &&
-             "mmaLayout ver1 not implemented yet");
       SmallVector<Value> multiDimOffset(rank);
-      multiDimOffset[0] = elemId < 2 ? mmaColIdx[0] : mmaColIdx[1];
-      multiDimOffset[1] = elemId % 2 == 0 ? mmaRowIdx[0] : mmaRowIdx[1];
-      multiDimOffset[0] = add(multiDimOffset[0],
-                              idx_val(multiDimCTAInRepId[0] * shapePerCTA[0]));
-      multiDimOffset[1] = add(multiDimOffset[1],
-                              idx_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
+      if (mmaLayout.getVersion() == 2) {
+        multiDimOffset[0] = elemId < 2 ? mmaColIdx[0] : mmaColIdx[1];
+        multiDimOffset[1] = elemId % 2 == 0 ? mmaRowIdx[0] : mmaRowIdx[1];
+        multiDimOffset[0] = add(
+            multiDimOffset[0], idx_val(multiDimCTAInRepId[0] * shapePerCTA[0]));
+        multiDimOffset[1] = add(
+            multiDimOffset[1], idx_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
+      } else if (mmaLayout.getVersion() == 1) {
+        // the order of elements in a thread:
+        //   c0, c1, c4, c5
+        //   c2, c3, c6, c7
+        if (elemId < 2) {
+          multiDimOffset[0] = mmaColIdx[elemId % 2];
+          multiDimOffset[1] = mmaRowIdx[0];
+        } else if (elemId >= 2 && elemId < 4) {
+          multiDimOffset[0] = mmaColIdx[elemId % 2];
+          multiDimOffset[1] = mmaRowIdx[1];
+        } else if (elemId >= 4 && elemId < 6) {
+          multiDimOffset[0] = mmaColIdx[elemId % 2 + 2];
+          multiDimOffset[1] = mmaRowIdx[0];
+        } else if (elemId >= 6) {
+          multiDimOffset[0] = mmaColIdx[elemId % 2 + 2];
+          multiDimOffset[1] = mmaRowIdx[1];
+        }
+        multiDimOffset[0] = add(
+            multiDimOffset[0], idx_val(multiDimCTAInRepId[0] * shapePerCTA[0]));
+        multiDimOffset[1] = add(
+            multiDimOffset[1], idx_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
+      } else {
+        llvm_unreachable("Unexpected MMALayout version");
+      }
       return multiDimOffset;
     }
     llvm_unreachable("unexpected layout in getMultiDimOffset");
@@ -2940,6 +2986,68 @@ void ConvertLayoutOpConversion::processReplica(
 
   auto llvmElemTy = getTypeConverter()->convertType(elemTy);
 
+  SmallVector<Value> multiDimOffsetFirstElem;
+  SmallVector<Value> mmaColIdx(4);
+  SmallVector<Value> mmaRowIdx(2);
+  if (blockedLayout) {
+    multiDimOffsetFirstElem = emitBaseIndexForBlockedLayout(
+        loc, rewriter, blockedLayout, type.getShape());
+  } else if (sliceLayout) {
+    auto parent = sliceLayout.getParent();
+    if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
+      SmallVector<int64_t> paddedShape =
+          sliceLayout.paddedShape(type.getShape());
+      multiDimOffsetFirstElem = emitBaseIndexForBlockedLayout(
+          loc, rewriter, blockedParent, paddedShape);
+    } else {
+      assert(0 && "SliceEncodingAttr with parent other than "
+                  "BlockedEncodingAttr not implemented");
+    }
+  } else if (mmaLayout) {
+    Value threadId = getThreadId(rewriter, loc);
+    Value warpSize = idx_val(32);
+    Value laneId = urem(threadId, warpSize);
+    Value warpId = udiv(threadId, warpSize);
+    // auto multiDimWarpId =
+    //     delinearize(rewriter, loc, warpId, mmaLayout.getWarpsPerCTA());
+    // TODO: fix the document bug of mma layout definition
+    SmallVector<Value> multiDimWarpId(2);
+    multiDimWarpId[0] = urem(warpId, idx_val(mmaLayout.getWarpsPerCTA()[0]));
+    multiDimWarpId[1] = udiv(warpId, idx_val(mmaLayout.getWarpsPerCTA()[0]));
+    Value one = idx_val(1);
+    Value two = idx_val(2);
+    Value four = idx_val(4);
+    Value eight = idx_val(8);
+    Value sixteen = idx_val(16);
+    if (mmaLayout.getVersion() == 2) {
+      Value mmaGrpId = udiv(laneId, four);
+      Value mmaGrpIdP8 = add(mmaGrpId, eight);
+      Value mmaThreadIdInGrp = urem(laneId, four);
+      Value mmaThreadIdInGrpM2 = mul(mmaThreadIdInGrp, two);
+      Value mmaThreadIdInGrpM2P1 = add(mmaThreadIdInGrpM2, one);
+      Value colWarpOffset = mul(multiDimWarpId[0], sixteen);
+      mmaColIdx[0] = add(mmaGrpId, colWarpOffset);
+      mmaColIdx[1] = add(mmaGrpIdP8, colWarpOffset);
+      Value rowWarpOffset = mul(multiDimWarpId[1], eight);
+      mmaRowIdx[0] = add(mmaThreadIdInGrpM2, rowWarpOffset);
+      mmaRowIdx[1] = add(mmaThreadIdInGrpM2P1, rowWarpOffset);
+    } else {
+      Value partId = udiv(laneId, four);
+      Value partIdDiv4 = udiv(partId, four);
+      Value partIdRem4 = urem(partId, four);
+      Value partRowOffset = mul(udiv(partIdRem4, two), eight);
+      partRowOffset = add(mul(partIdDiv4, four), partRowOffset);
+      Value partColOffset = mul(urem(partIdRem4, two), eight);
+      Value colOffset = add(mul(multiDimWarpId[0], sixteen), partColOffset);
+      Value rowOffset = add(mul(multiDimWarpId[1], sixteen), partRowOffset);
+      mmaRowIdx[0] = add(urem(laneId, two), rowOffset);
+      mmaRowIdx[1] = add(mmaRowIdx[0], two);
+      mmaColIdx[0] = add(udiv(urem(laneId, four), two), colOffset);
+      mmaColIdx[1] = add(mmaColIdx[0], one);
+      mmaColIdx[2] = add(mmaColIdx[0], four);
+      mmaColIdx[3] = add(mmaColIdx[0], idx_val(5));
+    }
+  }
   for (unsigned ctaId = 0; ctaId < accumNumCTAsEachRep; ++ctaId) {
     auto multiDimCTAInRepId =
         getMultiDimIndex<unsigned>(ctaId, numCTAsEachRep, order);
