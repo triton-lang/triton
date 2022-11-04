@@ -1301,23 +1301,21 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
         return cubin, ptx, ttgir, ttir, shem_size, kernel_name
     assert False
 
-def read_or_execute(cache_manager, file_name, metadata,
+def read_or_execute(cache_manager, force_compile, file_name, metadata,
                     run_if_found: Callable[[str], bytes] = None,
                     run_if_not_found: Callable = None):
-    if cache_manager.has_file(file_name):
+    if not force_compile and cache_manager.has_file(file_name):
       module = run_if_found(cache_manager._make_path(file_name))
       data = module if isinstance(module, bytes) else str(module).encode("utf-8")
       md5 = hashlib.md5(data).hexdigest()
       suffix = file_name.split(".")[1]
-      if metadata and md5 == metadata["md5"][suffix]:
-        return module, md5, True
-    # print("Compiling %s" % file_name)
-    # print(metadata)
+      has_changed = metadata and md5 != metadata["md5"][suffix]
+      return module, md5, has_changed, True
     module = run_if_not_found()
     data = module if isinstance(module, bytes) else str(module).encode("utf-8")
     md5 = hashlib.md5(data).hexdigest()
     cache_manager.put(data, file_name, True)
-    return module, md5, False
+    return module, md5, True, False
 
 
 def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
@@ -1353,16 +1351,17 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
       with open(fn_cache_manager._make_path(f"{name}.json")) as f:
             metadata = json.load(f)
     context = _triton.ir.context()
+    force_compile = False
     # ast -> triton-ir (or read from cache)
-    ttir, ttir_md5, _ = read_or_execute(fn_cache_manager, f"{name}.ttir", metadata,
+    ttir, ttir_md5, force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.ttir", metadata,
                            run_if_found = lambda path: _triton.ir.parse_mlir_module(path, context),
                            run_if_not_found = lambda: make_triton_ir(fn, signature, configs[0], constants))
     # triton-ir -> triton-gpu-ir (or read from cache)
-    ttgir, ttgir_md5, _ = read_or_execute(fn_cache_manager, f"{name}.ttgir", metadata,
+    ttgir, ttgir_md5, force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.ttgir", metadata,
                             run_if_found = lambda path: _triton.ir.parse_mlir_module(path, context),
                             run_if_not_found = lambda: make_tritongpu_ir(ttir, num_warps, num_stages))
     # triton-gpu-ir -> llvm-ir (or read from cache)
-    llir, llir_md5, llvm_cached = read_or_execute(fn_cache_manager, f"{name}.llir", metadata,
+    llir, llir_md5, force_compile, llvm_cached = read_or_execute(fn_cache_manager, force_compile, f"{name}.llir", metadata,
                            run_if_found = lambda path: Path(path).read_bytes(),
                            run_if_not_found = lambda: make_llvm_ir(ttgir, extern_libs))
     if llvm_cached:
@@ -1370,11 +1369,11 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
     else:
         shmem_size = _triton.get_shared_memory_size(ttgir)
     # llvm-ir -> ptx (or read from cache)
-    ptx, ptx_md5, _ = read_or_execute(fn_cache_manager, f"{name}.ptx", metadata,
+    ptx, ptx_md5, force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.ptx", metadata,
                           run_if_found = lambda path: Path(path).read_text(),
                           run_if_not_found = lambda: make_ptx(llir, device))
     # ptx -> cubin (or read from cache)
-    cubin, cubin_md5, _ = read_or_execute(fn_cache_manager, f"{name}.cubin", metadata,
+    cubin, cubin_md5, force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.cubin", metadata,
                             run_if_found = lambda path: Path(path).read_bytes(),      
                             run_if_not_found= lambda: make_cubin(ptx, device))
     # dump new metadata
