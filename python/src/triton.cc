@@ -261,7 +261,7 @@ void init_triton_ir(py::module &&m) {
           },
           ret::reference)
       .def("dump", [](mlir::OpState &self) { self->dump(); })
-      .def("str",
+      .def("__str__",
            [](mlir::OpState &self) -> std::string {
              std::string str;
              llvm::raw_string_ostream os(str);
@@ -1280,8 +1280,8 @@ void init_triton_translation(py::module &m) {
   using ret = py::return_value_policy;
 
   m.def("get_shared_memory_size", [](mlir::ModuleOp module) {
-    return module->getAttrOfType<mlir::IntegerAttr>("triton_gpu.shared")
-        .getInt();
+    auto shared = module->getAttrOfType<mlir::IntegerAttr>("triton_gpu.shared");
+    return shared.getInt();
   });
 
   m.def(
