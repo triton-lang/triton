@@ -517,8 +517,10 @@ void printInsertSliceAsyncOp(OpAsmPrinter &printer,
                              InsertSliceAsyncOp insertSliceAsyncOp) {
   printer << " ";
   printer << insertSliceAsyncOp.getOperation()->getOperands();
-  printer.printOptionalAttrDict(insertSliceAsyncOp->getAttrs(),
-                                /*elidedAttrs=*/{});
+  // "operand_segment_sizes" can be deduced, so we don't print it.
+  printer.printOptionalAttrDict(
+      insertSliceAsyncOp->getAttrs(),
+      {insertSliceAsyncOp.operand_segment_sizesAttrName()});
   printer << " : ";
   printer.printStrippedAttrOrType(insertSliceAsyncOp.src().getType());
   printer << " -> ";

@@ -2481,14 +2481,8 @@ public:
     cMatShape = matShape[order[0]];
     sMatShape = matShape[order[1]];
 
-    // TODO(Keren): this is a temporary hack to make sure the strides are
-    // integers so that we can get rid of performance issues caused by the use
-    // of constant Value.
-    // We'll have to fix this later when integrating the prefetch branch.
-    // cTileStride = smemStrides[order[0]];
-    // sTileStride = smemStrides[order[1]];
-    cTileStride = tileShape[order[1]];
-    sTileStride = tileShape[order[0]];
+    cTileStride = smemStrides[order[0]];
+    sTileStride = smemStrides[order[1]];
 
     // rule: k must be the fast-changing axis.
     needTrans = kOrder != order[0];
@@ -2591,8 +2585,7 @@ public:
     for (int i = 0; i < numPtr; ++i) {
       Value cMatOffI = add(cMatOff, i32_val(i * pLoadStrideInMat));
       cMatOffI = xor_(cMatOffI, phase);
-      offs[i] = add(mul(cMatOffI, i32_val(cMatShape)),
-                    mul(sOff, i32_val(sTileStride)));
+      offs[i] = add(mul(cMatOffI, i32_val(cMatShape)), mul(sOff, sTileStride));
     }
 
     return offs;
@@ -2628,7 +2621,7 @@ public:
         Value cOff = add(cOffInMat, mul(cMatOffI, i32_val(cMatShape)));
         cOff = urem(cOff, i32_val(tileShape[order[0]]));
         sOff = urem(sOff, i32_val(tileShape[order[1]]));
-        offs[2 * i + nkMatArrInt] = add(cOff, mul(sOff, i32_val(sTileStride)));
+        offs[2 * i + nkMatArrInt] = add(cOff, mul(sOff, sTileStride));
       }
     }
     return offs;
@@ -2668,7 +2661,7 @@ public:
           // To prevent out-of-bound access when tile is too small.
           cOff = urem(cOff, i32_val(tileShape[order[0]]));
           sOff = urem(sOff, i32_val(tileShape[order[1]]));
-          offs[ptrOff] = add(cOff, mul(sOff, i32_val(sTileStride)));
+          offs[ptrOff] = add(cOff, mul(sOff, sTileStride));
         }
       }
     }
@@ -2702,14 +2695,15 @@ public:
     Value ptr = getPtr(ptrIdx);
 
     if (canUseLdmatrix) {
-      int sOffset =
-          matIdx[order[1]] * sMatStride * sMatShape * sTileStride * elemBytes;
+      Value sOffset =
+          mul(i32_val(matIdx[order[1]] * sMatStride * sMatShape), sTileStride);
+      Value sOffsetPtr = gep(shemPtrTy, ptr, sOffset);
       PTXBuilder builder;
 
       // ldmatrix.m8n8.x4 returns 4x2xfp16(that is 4xb32) elements for a
       // thread.
       auto resArgs = builder.newListOperand(4, "=r");
-      auto addrArg = builder.newAddrOperand(ptr, "r", sOffset);
+      auto addrArg = builder.newAddrOperand(sOffsetPtr, "r");
 
       auto ldmatrix = builder.create("ldmatrix.sync.aligned.m8n8.x4")
                           ->o("trans", needTrans /*predicate*/)
@@ -2734,26 +2728,24 @@ public:
                needTrans) { // Use lds.32 to load tf32 matrices
       Value ptr2 = getPtr(ptrIdx + 1);
       assert(sMatStride == 1);
-      int sOffsetElem =
-          matIdx[order[1]] * (sMatStride * sMatShape) * sTileStride;
-      int sOffsetArrElem = 1 * (sMatStride * sMatShape) * sTileStride;
+      int sOffsetElem = matIdx[order[1]] * (sMatStride * sMatShape);
+      Value sOffsetElemVal = mul(i32_val(sOffsetElem), sTileStride);
+      int sOffsetArrElem = sMatStride * sMatShape;
+      Value sOffsetArrElemVal =
+          add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sTileStride));
 
       Value elems[4];
       Type elemTy = type::f32Ty(ctx);
       if (kOrder == 1) {
-        elems[0] = load(gep(elemTy, ptr, i32_val(sOffsetElem)));
-        elems[1] = load(gep(elemTy, ptr2, i32_val(sOffsetElem)));
-        elems[2] =
-            load(gep(elemTy, ptr, i32_val(sOffsetElem + sOffsetArrElem)));
-        elems[3] =
-            load(gep(elemTy, ptr2, i32_val(sOffsetElem + sOffsetArrElem)));
+        elems[0] = load(gep(elemTy, ptr, sOffsetElemVal));
+        elems[1] = load(gep(elemTy, ptr2, sOffsetElemVal));
+        elems[2] = load(gep(elemTy, ptr, sOffsetArrElemVal));
+        elems[3] = load(gep(elemTy, ptr2, sOffsetArrElemVal));
       } else {
-        elems[0] = load(gep(elemTy, ptr, i32_val(sOffsetElem)));
-        elems[2] = load(gep(elemTy, ptr2, i32_val(sOffsetElem)));
-        elems[1] =
-            load(gep(elemTy, ptr, i32_val(sOffsetElem + sOffsetArrElem)));
-        elems[3] =
-            load(gep(elemTy, ptr2, i32_val(sOffsetElem + sOffsetArrElem)));
+        elems[0] = load(gep(elemTy, ptr, sOffsetElemVal));
+        elems[2] = load(gep(elemTy, ptr2, sOffsetElemVal));
+        elems[1] = load(gep(elemTy, ptr, sOffsetArrElemVal));
+        elems[3] = load(gep(elemTy, ptr2, sOffsetArrElemVal));
       }
 
       return {elems[0], elems[1], elems[2], elems[3]};
@@ -2774,9 +2766,11 @@ public:
       };
 
       assert(sMatStride == 1);
-      int sOffsetElem =
-          matIdx[order[1]] * (sMatStride * sMatShape) * sTileStride;
-      int sOffsetArrElem = 1 * (sMatStride * sMatShape) * sTileStride;
+      int sOffsetElem = matIdx[order[1]] * (sMatStride * sMatShape);
+      Value sOffsetElemVal = mul(i32_val(sOffsetElem), sTileStride);
+      int sOffsetArrElem = 1 * (sMatStride * sMatShape);
+      Value sOffsetArrElemVal =
+          add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sTileStride));
 
       std::array<Value, 4> i8v4Elems;
       std::array<Value, 4> i32Elems;
@@ -2786,15 +2780,14 @@ public:
       Value i8Elems[4][4];
       Type elemTy = type::i8Ty(ctx);
       if (kOrder == 1) {
-        Value offset = i32_val(sOffsetElem);
-
         for (int i = 0; i < 2; ++i)
           for (int j = 0; j < 4; ++j)
-            i8Elems[i][j] = load(gep(elemTy, ptrs[i][j], offset));
+            i8Elems[i][j] = load(gep(elemTy, ptrs[i][j], sOffsetElemVal));
 
         for (int i = 2; i < 4; ++i)
           for (int j = 0; j < 4; ++j)
-            i8Elems[i][j] = load(gep(elemTy, ptrs[i - 2][j], offset));
+            i8Elems[i][j] =
+                load(gep(elemTy, ptrs[i - 2][j], sOffsetArrElemVal));
 
         for (int m = 0; m < 4; ++m) {
           for (int e = 0; e < 4; ++e)
@@ -2803,16 +2796,14 @@ public:
           i32Elems[m] = bitcast(i8v4Elems[m], i32_ty);
         }
       } else { // k first
-        Value offset = i32_val(sOffsetElem);
         for (int j = 0; j < 4; ++j)
-          i8Elems[0][j] = load(gep(elemTy, ptrs[0][j], offset));
+          i8Elems[0][j] = load(gep(elemTy, ptrs[0][j], sOffsetElemVal));
         for (int j = 0; j < 4; ++j)
-          i8Elems[2][j] = load(gep(elemTy, ptrs[1][j], offset));
-        offset = i32_val(sOffsetElem + sOffsetArrElem);
+          i8Elems[2][j] = load(gep(elemTy, ptrs[1][j], sOffsetElemVal));
         for (int j = 0; j < 4; ++j)
-          i8Elems[1][j] = load(gep(elemTy, ptrs[0][j], offset));
+          i8Elems[1][j] = load(gep(elemTy, ptrs[0][j], sOffsetArrElemVal));
         for (int j = 0; j < 4; ++j)
-          i8Elems[3][j] = load(gep(elemTy, ptrs[1][j], offset));
+          i8Elems[3][j] = load(gep(elemTy, ptrs[1][j], sOffsetArrElemVal));
 
         for (int m = 0; m < 4; ++m) {
           for (int e = 0; e < 4; ++e)
@@ -2845,8 +2836,8 @@ private:
   int cMatShape;
   int sMatShape;
 
-  int cTileStride;
-  int sTileStride;
+  Value cTileStride;
+  Value sTileStride;
 
   bool needTrans;
   bool canUseLdmatrix;
@@ -3899,6 +3890,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
     ConversionPatternRewriter &rewriter) const {
   // smem
   Value smem = smemObj.base;
+  auto strides = smemObj.strides;
 
   auto *ctx = rewriter.getContext();
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
@@ -3919,10 +3911,10 @@ Value DotOpMmaV1ConversionHelper::loadA(
 
   int vecA = sharedLayout.getVec();
 
-  int strideAM = isARow ? shape[1] : 1;
-  int strideAK = isARow ? 1 : shape[0];
-  int strideA0 = isARow ? strideAK : strideAM;
-  int strideA1 = isARow ? strideAM : strideAK;
+  Value strideAM = isARow ? strides[0] : i32_val(1);
+  Value strideAK = isARow ? i32_val(1) : strides[1];
+  Value strideA0 = isARow ? strideAK : strideAM;
+  Value strideA1 = isARow ? strideAM : strideAK;
 
   int strideRepM = wpt[0] * fpw[0] * 8;
   int strideRepK = 1;
@@ -3948,8 +3940,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
     offA0I = udiv(offA0I, i32_val(vecA));
     offA0I = xor_(offA0I, phaseA);
     offA0I = xor_(offA0I, i32_val(vecA));
-    offA[i] =
-        add(mul(offA0I, i32_val(strideA0)), mul(offA1, i32_val(strideA1)));
+    offA[i] = add(mul(offA0I, strideA0), mul(offA1, strideA1));
   }
 
   Type f16x2Ty = vec_ty(f16_ty, 2);
@@ -3978,8 +3969,9 @@ Value DotOpMmaV1ConversionHelper::loadA(
 
     int stepAM = isARow ? m : m / numPtrA * numPtrA;
     int stepAK = isARow ? k / (numPtrA * vecA) * (numPtrA * vecA) : k;
-    Value pa = gep(f16PtrTy, thePtrA,
-                   i32_val(stepAM * strideRepM * strideAM + stepAK * strideAK));
+    Value offset = add(mul(i32_val(stepAM * strideRepM), strideAM),
+                       mul(i32_val(stepAK), strideAK));
+    Value pa = gep(f16PtrTy, thePtrA, offset);
     Type aPtrTy = ptr_ty(vec_ty(i32_ty, std::max<int>(vecA / 2, 1)), 3);
     Value ha = load(bitcast(pa, aPtrTy));
     // record lds that needs to be moved
@@ -4020,6 +4012,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
     ConversionPatternRewriter &rewriter) const {
   // smem
   Value smem = smemObj.base;
+  auto strides = smemObj.strides;
 
   auto *ctx = rewriter.getContext();
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
@@ -4033,10 +4026,10 @@ Value DotOpMmaV1ConversionHelper::loadB(
   SmallVector<int> rep({0, 2 * packSize1, 1});       // pad M with 0
   SmallVector<int> spw({0, fpw[1] * 4 * rep[1], 1}); // pad M with 0
   int vecB = sharedLayout.getVec();
-  int strideBN = isBRow ? 1 : shape[0];
-  int strideBK = isBRow ? shape[1] : 1;
-  int strideB0 = isBRow ? strideBN : strideBK;
-  int strideB1 = isBRow ? strideBK : strideBN;
+  Value strideBN = isBRow ? i32_val(1) : strides[1];
+  Value strideBK = isBRow ? strides[0] : i32_val(1);
+  Value strideB0 = isBRow ? strideBN : strideBK;
+  Value strideB1 = isBRow ? strideBK : strideBN;
   int strideRepN = wpt[1] * fpw[1] * 8;
   int strideRepK = 1;
 
@@ -4061,8 +4054,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
     offB0I = udiv(offB0I, i32_val(vecB));
     offB0I = xor_(offB0I, phaseB);
     offB0I = mul(offB0I, i32_val(vecB));
-    offB[i] =
-        add(mul(offB0I, i32_val(strideB0)), mul(offB1, i32_val(strideB1)));
+    offB[i] = add(mul(offB0I, strideB0), mul(offB1, strideB1));
   }
 
   Type f16PtrTy = ptr_ty(f16_ty);
@@ -4083,8 +4075,9 @@ Value DotOpMmaV1ConversionHelper::loadB(
 
     int stepBN = isBRow ? n / numPtrB * numPtrB : n;
     int stepBK = isBRow ? K : K / (numPtrB * vecB) * (numPtrB * vecB);
-    Value pb = gep(f16PtrTy, thePtrB,
-                   i32_val(stepBN * strideRepN * strideBN + stepBK * strideBK));
+    Value offset = add(mul(i32_val(stepBN * strideRepN), strideBN),
+                       mul(i32_val(stepBK), strideBK));
+    Value pb = gep(f16PtrTy, thePtrB, offset);
     Value hb =
         load(bitcast(pb, ptr_ty(vec_ty(i32_ty, std::max(vecB / 2, 1)), 3)));
     // record lds that needs to be moved
