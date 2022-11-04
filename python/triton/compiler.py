@@ -856,8 +856,7 @@ def build_triton_ir(fn, signature, specialization, constants):
     ret.context = context
     return ret, generator
 
-def make_triton_ir(fn, signature, specialization, constants):
-    mod, _ = build_triton_ir(fn, signature, specialization, constants)
+def optimize_triton_ir(mod):
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_inliner_pass()
@@ -868,6 +867,9 @@ def make_triton_ir(fn, signature, specialization, constants):
     pm.run(mod)
     return mod
 
+def make_triton_ir(fn, signature, specialization, constants):
+    mod, _ = build_triton_ir(fn, signature, specialization, constants)
+    return optimize_triton_ir(mod)
 
 def make_tritongpu_ir(mod, num_warps, num_stages):
     pm = _triton.ir.pass_manager(mod.context)
@@ -901,7 +903,7 @@ def make_llvm_ir(mod, extern_libs):
     return _triton.translate_triton_gpu_to_llvmir(mod)
 
 
-def make_ptx(mod: Any, device: int) -> Tuple[str, int]:
+def make_ptx(mod: Any, **kwargs) -> Tuple[str, int]:
     '''
     Translate TritonGPU module to PTX code.
     :param mod: a TritonGPU dialect module
@@ -909,11 +911,18 @@ def make_ptx(mod: Any, device: int) -> Tuple[str, int]:
         - PTX code
         - shared memory alloaction size
     '''
-    assert device >= 0, "device should be provided."
-    _, cuda_version = path_to_ptxas()
-    compute_capability = torch.cuda.get_device_capability(device)
-    compute_capability = compute_capability[0] * 10 + compute_capability[1]
-    ptx_version = ptx_get_version(cuda_version)
+    if "device" in kwargs:
+        assert "compute_capability" not in kwargs
+        assert "ptx_version" not in kwargs
+        device = int(kwargs["device"])
+        assert device >= 0, "device should be provided."
+        _, cuda_version = path_to_ptxas()
+        compute_capability = torch.cuda.get_device_capability(device)
+        compute_capability = compute_capability[0] * 10 + compute_capability[1]
+        ptx_version = ptx_get_version(cuda_version)
+    else:
+        compute_capability = kwargs["compute_capability"]
+        ptx_version = kwargs["ptx_version"]
     return _triton.translate_llvmir_to_ptx(mod, compute_capability, ptx_version)
 
 
@@ -1274,32 +1283,6 @@ def make_fn_cache_key(fn_hash, signature, configs, constants, num_warps, num_sta
     key = hashlib.md5(key.encode("utf-8")).hexdigest()
     return key
 
-
-def _compile(fn, signature: str, device: int = -1, constants=dict(), specialization=instance_descriptor(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, output: str = "ttgir") -> Tuple[str, int, str]:
-    valid_outputs = ("ttir", "ttgir", "ptx", "cubin")
-    assert output in valid_outputs, "output should be one of [%s], but get \"%s\"" % (','.join(valid_outputs), output)
-    # triton-ir
-    module = make_triton_ir(fn, signature, specialization, constants)
-    ttir = module.str()
-    if output == "ttir":
-        return ttir
-    # tritongpu-ir
-    module = make_tritongpu_ir(module, num_warps, num_stages)
-    ttgir = module.str()
-    if output == "ttgir":
-        return ttgir
-    # llvm
-    llvm_ir = make_llvm_ir(module, extern_libs)
-    shem_size = _triton.get_shared_memory_size(module)
-    # ptx
-    ptx, kernel_name = make_ptx(llvm_ir, device)
-    if output == "ptx":
-        return ptx, shem_size, kernel_name
-    # cubin
-    cubin = make_cubin(ptx, device)
-    if output == "cubin":
-        return cubin, ptx, ttgir, ttir, shem_size, kernel_name
-    assert False
 
 def read_or_execute(cache_manager, force_compile, file_name, metadata,
                     run_if_found: Callable[[str], bytes] = None,
