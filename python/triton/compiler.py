@@ -867,11 +867,11 @@ def optimize_triton_ir(mod):
     pm.run(mod)
     return mod
 
-def make_triton_ir(fn, signature, specialization, constants):
+def ast_to_ttir(fn, signature, specialization, constants):
     mod, _ = build_triton_ir(fn, signature, specialization, constants)
     return optimize_triton_ir(mod)
 
-def make_tritongpu_ir(mod, num_warps, num_stages):
+def ttir_to_ttgir(mod, num_warps, num_stages):
     pm = _triton.ir.pass_manager(mod.context)
     pm.add_convert_triton_to_tritongpu_pass(num_warps)
     pm.enable_debug()
@@ -897,13 +897,13 @@ def add_external_libs(mod, libs):
     _triton.add_external_libs(mod, list(libs.keys()), list(libs.values()))
 
 
-def make_llvm_ir(mod, extern_libs):
+def ttgir_to_llir(mod, extern_libs):
     if extern_libs:
         add_external_libs(mod, extern_libs)
     return _triton.translate_triton_gpu_to_llvmir(mod)
 
 
-def make_ptx(mod: Any, **kwargs) -> Tuple[str, int]:
+def llir_to_ptx(mod: Any, **kwargs) -> Tuple[str, int]:
     '''
     Translate TritonGPU module to PTX code.
     :param mod: a TritonGPU dialect module
@@ -927,7 +927,7 @@ def make_ptx(mod: Any, **kwargs) -> Tuple[str, int]:
 
 
 
-def make_cubin(ptx: str, device: int):
+def ptx_to_cubin(ptx: str, device: int):
     '''
     Compile TritonGPU module to cubin.
     :param ptx: ptx code
@@ -1338,15 +1338,15 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
     # ast -> triton-ir (or read from cache)
     ttir, ttir_md5, force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.ttir", metadata,
                            run_if_found = lambda path: _triton.ir.parse_mlir_module(path, context),
-                           run_if_not_found = lambda: make_triton_ir(fn, signature, configs[0], constants))
+                           run_if_not_found = lambda: ast_to_ttir(fn, signature, configs[0], constants))
     # triton-ir -> triton-gpu-ir (or read from cache)
     ttgir, ttgir_md5, force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.ttgir", metadata,
                             run_if_found = lambda path: _triton.ir.parse_mlir_module(path, context),
-                            run_if_not_found = lambda: make_tritongpu_ir(ttir, num_warps, num_stages))
+                            run_if_not_found = lambda: ttir_to_ttgir(ttir, num_warps, num_stages))
     # triton-gpu-ir -> llvm-ir (or read from cache)
     llir, llir_md5, force_compile, llvm_cached = read_or_execute(fn_cache_manager, force_compile, f"{name}.llir", metadata,
                            run_if_found = lambda path: Path(path).read_bytes(),
-                           run_if_not_found = lambda: make_llvm_ir(ttgir, extern_libs))
+                           run_if_not_found = lambda: ttgir_to_llir(ttgir, extern_libs))
     if llvm_cached:
         shmem_size = metadata["shared"]
     else:
@@ -1354,11 +1354,11 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
     # llvm-ir -> ptx (or read from cache)
     ptx, ptx_md5, force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.ptx", metadata,
                           run_if_found = lambda path: Path(path).read_text(),
-                          run_if_not_found = lambda: make_ptx(llir, device))
+                          run_if_not_found = lambda: llir_to_ptx(llir, device=device))
     # ptx -> cubin (or read from cache)
     cubin, cubin_md5, force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.cubin", metadata,
                             run_if_found = lambda path: Path(path).read_bytes(),      
-                            run_if_not_found= lambda: make_cubin(ptx, device))
+                            run_if_not_found= lambda: ptx_to_cubin(ptx, device))
     # dump new metadata
     kernel_name = ptx_get_kernel_name(ptx)
     metadata = {"name": kernel_name, "shared": shmem_size, "num_warps": num_warps, "num_stages": num_stages,
