@@ -1185,6 +1185,16 @@ void init_triton_ir(py::module &&m) {
              auto loc = self.getUnknownLoc();
              return self.create<mlir::SelectOp>(loc, condition, trueValue,
                                                 falseValue);
+           })
+      .def("create_printf",
+           [](mlir::OpBuilder &self, const std::string &prefix,
+              const std::vector<mlir::Value> &values) -> void {
+             auto loc = self.getUnknownLoc();
+             self.create<mlir::triton::PrintfOp>(
+                 loc,
+                 mlir::StringAttr::get(self.getContext(),
+                                       llvm::StringRef(prefix)),
+                 values);
            });
 
   py::class_<mlir::PassManager>(m, "pass_manager")
