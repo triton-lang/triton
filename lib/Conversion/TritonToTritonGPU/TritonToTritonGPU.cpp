@@ -339,6 +339,18 @@ struct TritonReducePattern : public OpConversionPattern<triton::ReduceOp> {
   }
 };
 
+struct TritonPrintfPattern : public OpConversionPattern<triton::PrintfOp> {
+  using OpConversionPattern<PrintfOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(PrintfOp op, typename PrintfOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<triton::PrintfOp>(op, op.prefixAttr(),
+                                                  adaptor.getOperands());
+    return success();
+  }
+};
+
 void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
                             RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
@@ -350,8 +362,8 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       TritonGenericPattern<triton::SplatOp>, TritonBroadcastPattern,
       TritonGenericPattern<triton::AddPtrOp>, TritonReducePattern,
       TritonExpandDimsPattern, TritonMakeRangePattern, TritonDotPattern,
-      TritonLoadPattern, TritonStorePattern, TritonExtElemwisePattern>(
-      typeConverter, context);
+      TritonLoadPattern, TritonStorePattern, TritonExtElemwisePattern,
+      TritonPrintfPattern>(typeConverter, context);
 }
 
 //
