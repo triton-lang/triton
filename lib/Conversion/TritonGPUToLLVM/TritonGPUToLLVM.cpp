@@ -387,12 +387,12 @@ static Value storeShared(ConversionPatternRewriter &rewriter, Location loc,
 
 struct SharedMemoryObject {
   Value base; // i32 ptr. The start address of the shared memory object.
-  // We need to store strides as Values but not integers.
-  // Because the extract_slice can take a slice at artibary offsets.
+  // We need to store strides as Values but not integers because the
+  // extract_slice instruction can take a slice at artibary offsets.
   // Take $a[16:32, 16:32] as an example, though we know the stride of $a[0] is
   // 32, we need to let the instruction that uses $a to be aware of that.
-  // Otherwise, when we use $a, we only knows the shape of $a is 16x16.
-  // If we store strides as an attribute array of integers, the information
+  // Otherwise, when we use $a, we only know that the shape of $a is 16x16. If
+  // we store strides into an attribute array of integers, the information
   // cannot pass through block argument assignment because attributes are
   // associated with operations but not Values.
   SmallVector<Value>
