@@ -823,6 +823,9 @@ def kernel_suffix(signature, specialization):
 
 
 def make_triton_ir(fn, signature, specialization, constants):
+    # canonicalize signature
+    if isinstance(signature, str):
+      signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
     context = _triton.ir.context()
     context.load_triton()
     # create kernel prototype
@@ -901,7 +904,7 @@ def make_llvm_ir(mod):
     return _triton.translate_triton_gpu_to_llvmir(mod)
 
 
-def make_ptx(mod: Any, compute_capability: int, ptx_version: int) -> Tuple[str, int]:
+def make_ptx(mod: Any, device: int) -> Tuple[str, int]:
     '''
     Translate TritonGPU module to PTX code.
     :param mod: a TritonGPU dialect module
@@ -909,16 +912,26 @@ def make_ptx(mod: Any, compute_capability: int, ptx_version: int) -> Tuple[str, 
         - PTX code
         - shared memory alloaction size
     '''
-    return _triton.translate_llvmir_to_ptx(mod, compute_capability, ptx_version)
+    assert device >= 0, "device should be provided."
+    _, cuda_version = path_to_ptxas()
+    compute_capability = torch.cuda.get_device_capability(device)
+    compute_capability = compute_capability[0] * 10 + compute_capability[1]
+    ptx_version = ptx_get_version(cuda_version)
+    ptx = _triton.translate_llvmir_to_ptx(mod, compute_capability, ptx_version)
+    kernel_name = ptx_get_kernel_name(ptx)
+    return ptx, kernel_name
 
 
-def make_cubin(ptx: str, ptxas: str, compute_capability: int):
+def make_cubin(ptx: str, device):
     '''
     Compile TritonGPU module to cubin.
     :param ptx: ptx code
     :param device: CUDA device
     :return: str
     '''
+    ptxas, _ = path_to_ptxas()
+    compute_capability = torch.cuda.get_device_capability(device)
+    compute_capability = compute_capability[0] * 10 + compute_capability[1]
     return _triton.compile_ptx_to_cubin(ptx, ptxas, compute_capability)
 
 
@@ -975,26 +988,29 @@ def path_to_ptxas():
     raise RuntimeError("Cannot find ptxas")
 
 
+
+
 instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1"], defaults=[set(), set()])
 
 
 def _compile(fn, signature: str, device: int = -1, constants=dict(), specialization=instance_descriptor(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, output: str = "ttgir") -> Tuple[str, int, str]:
-    if isinstance(signature, str):
-        signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
     valid_outputs = ("ttir", "ttgir", "ptx", "cubin")
     assert output in valid_outputs, "output should be one of [%s], but get \"%s\"" % (','.join(valid_outputs), output)
 
     # triton-ir
     module, _ = make_triton_ir(fn, signature, specialization, constants)
     module = optimize_triton_ir(module)
+    ttir = module.str()
     if output == "ttir":
-        return module.str()
+        return ttir
 
     # tritongpu-ir
     module = make_tritongpu_ir(module, num_warps)
     module = optimize_tritongpu_ir(module, num_stages)
+    shem_size = _triton.get_shared_memory_size(module)
+    ttgir = module.str()
     if output == "ttgir":
-        return module.str()
+        return ttgir
 
     if extern_libs:
         add_external_libs(module, extern_libs)
@@ -1002,20 +1018,14 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(), specializat
     # llvm-ir
     llvm_ir = make_llvm_ir(module)
 
-    assert device >= 0, "device should be provided."
-    ptxas, cuda_version = path_to_ptxas()
-    compute_capability = torch.cuda.get_device_capability(device)
-    compute_capability = compute_capability[0] * 10 + compute_capability[1]
-    ptx_version = ptx_get_version(cuda_version)
-    ptx = make_ptx(llvm_ir, compute_capability, ptx_version)
-    shem_size = _triton.get_shared_memory_size(module)
-    kernel_name = ptx_get_kernel_name(ptx)
+    # ptx
+    ptx, kernel_name = make_ptx(llvm_ir, device)
     if output == "ptx":
         return ptx, shem_size, kernel_name
 
-    cubin = make_cubin(ptx, ptxas, compute_capability)
+    cubin = make_cubin(ptx, device)
     if output == "cubin":
-        return cubin, ptx, shem_size, kernel_name
+        return cubin, ptx, ttgir, ttir, shem_size, kernel_name
 
     assert False
 
@@ -1329,23 +1339,36 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
             so = _build(fn.__name__, src_path, tmpdir)
             with open(so, "rb") as f:
                 so_cache_manager.put(f.read(), so_name, binary=True)
+    so_path = so_cache_manager._make_path(so_name)
 
     # retrieve cached shared object if it exists
     fn_cache_key = make_fn_cache_key(fn.cache_key, signature, configs, constants, num_warps, num_stages)
     fn_cache_manager = CacheManager(fn_cache_key)
     ptx_name = f"{name}.ptx"
+    ttir_name = f"{name}.ttir"
+    ttgir_name = f"{name}.ttgir"
     cubin_name = f"{name}.cubin"
     data_name = f"{name}.json"
-    if not fn_cache_manager.has_file(cubin_name) or \
-       not fn_cache_manager.has_file(data_name) or \
-       not fn_cache_manager.has_file(ptx_name):
-        cubin, ptx, shared, kernel_name = _compile(fn, signature, device, constants, configs[0], num_warps, num_stages, extern_libs, "cubin")
-        metadata = {"name": kernel_name, "shared": shared, "num_warps": num_warps, "num_stages": num_stages}
-        fn_cache_manager.put(cubin, cubin_name)
-        fn_cache_manager.put(ptx, ptx_name, binary=False)
-        fn_cache_manager.put(json.dumps(metadata), data_name, binary=False)
+    if all(map(fn_cache_manager.has_file, [ptx_name, ttir_name, ttgir_name, cubin_name, data_name])):
+      return CompiledKernel(name, so_path, fn_cache_manager.cache_dir)
 
-    return CompiledKernel(name, so_cache_manager._make_path(so_name), fn_cache_manager.cache_dir)
+
+    cubin, ptx, ttgir, ttir, shared, kernel_name = _compile(fn, signature, device, constants, configs[0], num_warps, num_stages, extern_libs, "cubin")
+    get_md5_hash = lambda s: hashlib.md5(s).hexdigest()
+    metadata = {"name": kernel_name, "shared": shared, "num_warps": num_warps, "num_stages": num_stages,
+                "md5": {
+                  "cubin": get_md5_hash(cubin),
+                  "ptx": get_md5_hash(ptx.encode("utf-8")), 
+                  "ttir": get_md5_hash(ttir.encode("utf-8")), 
+                  "ttgir": get_md5_hash(ttgir.encode("utf-8"))
+                }}
+    fn_cache_manager.put(cubin, cubin_name)
+    fn_cache_manager.put(ptx, ptx_name, binary=False)
+    fn_cache_manager.put(ttgir, ttgir_name, binary=False)
+    fn_cache_manager.put(ttir, ttir_name, binary=False)
+    fn_cache_manager.put(json.dumps(metadata), data_name, binary=False)
+
+    return CompiledKernel(name, so_path, fn_cache_manager.cache_dir)
 
 
 class CompiledKernel:
@@ -1366,10 +1389,10 @@ class CompiledKernel:
         self.num_stages = metadata["num_stages"]
         # initialize asm dict
         self.asm = dict()
-        with open(os.path.join(cache_dir, f"{fn_name}.cubin"), "rb") as f:
-            self.asm["cubin"] = f.read()
-        with open(os.path.join(cache_dir, f"{fn_name}.ptx"), "r") as f:
-            self.asm["ptx"] = f.read()
+        for suffix, mode in [("cubin", "rb"), ("ptx", "r"), ("ttgir", "r"), ("ttir", "r")]:
+            with open(os.path.join(cache_dir, f"{fn_name}.{suffix}"), mode) as f:
+                self.asm[suffix] = f.read()
+
 
         device = torch.cuda.current_device()
         global cuda_utils
