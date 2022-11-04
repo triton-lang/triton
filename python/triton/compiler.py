@@ -903,7 +903,7 @@ def ttgir_to_llir(mod, extern_libs):
     return _triton.translate_triton_gpu_to_llvmir(mod)
 
 
-def llir_to_ptx(mod: Any, **kwargs) -> Tuple[str, int]:
+def llir_to_ptx(mod: Any, compute_capability: int = None, ptx_version: int = None) -> Tuple[str, int]:
     '''
     Translate TritonGPU module to PTX code.
     :param mod: a TritonGPU dialect module
@@ -911,18 +911,13 @@ def llir_to_ptx(mod: Any, **kwargs) -> Tuple[str, int]:
         - PTX code
         - shared memory alloaction size
     '''
-    if "device" in kwargs:
-        assert "compute_capability" not in kwargs
-        assert "ptx_version" not in kwargs
-        device = int(kwargs["device"])
-        assert device >= 0, "device should be provided."
-        _, cuda_version = path_to_ptxas()
+    if compute_capability is None:
+        device = torch.cuda.current_device()
         compute_capability = torch.cuda.get_device_capability(device)
         compute_capability = compute_capability[0] * 10 + compute_capability[1]
+    if ptx_version is None:
+        _, cuda_version = path_to_ptxas()
         ptx_version = ptx_get_version(cuda_version)
-    else:
-        compute_capability = kwargs["compute_capability"]
-        ptx_version = kwargs["ptx_version"]
     return _triton.translate_llvmir_to_ptx(mod, compute_capability, ptx_version)
 
 
@@ -1354,7 +1349,7 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
     # llvm-ir -> ptx (or read from cache)
     ptx, ptx_md5, force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.ptx", metadata,
                           run_if_found = lambda path: Path(path).read_text(),
-                          run_if_not_found = lambda: llir_to_ptx(llir, device=device))
+                          run_if_not_found = lambda: llir_to_ptx(llir))
     # ptx -> cubin (or read from cache)
     cubin, cubin_md5, force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.cubin", metadata,
                             run_if_found = lambda path: Path(path).read_bytes(),      
