@@ -1310,12 +1310,14 @@ def read_or_execute(cache_manager, file_name, metadata,
       md5 = hashlib.md5(data).hexdigest()
       suffix = file_name.split(".")[1]
       if metadata and md5 == metadata["md5"][suffix]:
-        return module, md5
+        return module, md5, True
+    # print("Compiling %s" % file_name)
+    # print(metadata)
     module = run_if_not_found()
     data = module if isinstance(module, bytes) else str(module).encode("utf-8")
     md5 = hashlib.md5(data).hexdigest()
     cache_manager.put(data, file_name, True)
-    return module, md5
+    return module, md5, False
 
 
 def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
@@ -1347,28 +1349,32 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
     fn_cache_manager = CacheManager(fn_cache_key)
     # load metadata if any
     metadata = None
-    if fn_cache_manager.has_file('{name}.json'):
-      with fn_cache_manager._make_path(f"{name}.json") as f:
+    if fn_cache_manager.has_file(f'{name}.json'):
+      with open(fn_cache_manager._make_path(f"{name}.json")) as f:
             metadata = json.load(f)
+    context = _triton.ir.context()
     # ast -> triton-ir (or read from cache)
-    ttir, ttir_md5 = read_or_execute(fn_cache_manager, f"{name}.ttir", metadata,
-                           run_if_found = lambda path: str(_triton.parse_module(path)).encode("utf-8"),
+    ttir, ttir_md5, _ = read_or_execute(fn_cache_manager, f"{name}.ttir", metadata,
+                           run_if_found = lambda path: _triton.ir.parse_mlir_module(path, context),
                            run_if_not_found = lambda: make_triton_ir(fn, signature, configs[0], constants))
     # triton-ir -> triton-gpu-ir (or read from cache)
-    ttgir, ttgir_md5 = read_or_execute(fn_cache_manager, f"{name}.ttgir", metadata,
-                            run_if_found = lambda path: str(_triton.parse_module(path)).encode("utf-8"),
+    ttgir, ttgir_md5, _ = read_or_execute(fn_cache_manager, f"{name}.ttgir", metadata,
+                            run_if_found = lambda path: _triton.ir.parse_mlir_module(path, context),
                             run_if_not_found = lambda: make_tritongpu_ir(ttir, num_warps, num_stages))
     # triton-gpu-ir -> llvm-ir (or read from cache)
-    llir, llir_md5 = read_or_execute(fn_cache_manager, f"{name}.ll", metadata,
+    llir, llir_md5, llvm_cached = read_or_execute(fn_cache_manager, f"{name}.llir", metadata,
                            run_if_found = lambda path: Path(path).read_bytes(),
                            run_if_not_found = lambda: make_llvm_ir(ttgir, extern_libs))
-    shmem_size = _triton.get_shared_memory_size(ttgir) # TODO: can't move this around?
+    if llvm_cached:
+        shmem_size = metadata["shared"]
+    else:
+        shmem_size = _triton.get_shared_memory_size(ttgir)
     # llvm-ir -> ptx (or read from cache)
-    ptx, ptx_md5 = read_or_execute(fn_cache_manager, f"{name}.ptx", metadata,
-                          run_if_found = lambda path: Path(path).read_bytes(),
+    ptx, ptx_md5, _ = read_or_execute(fn_cache_manager, f"{name}.ptx", metadata,
+                          run_if_found = lambda path: Path(path).read_text(),
                           run_if_not_found = lambda: make_ptx(llir, device))
     # ptx -> cubin (or read from cache)
-    cubin, cubin_md5 = read_or_execute(fn_cache_manager, f"{name}.cubin", metadata,
+    cubin, cubin_md5, _ = read_or_execute(fn_cache_manager, f"{name}.cubin", metadata,
                             run_if_found = lambda path: Path(path).read_bytes(),      
                             run_if_not_found= lambda: make_cubin(ptx, device))
     # dump new metadata
