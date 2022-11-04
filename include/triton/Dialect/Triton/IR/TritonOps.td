@@ -357,12 +357,11 @@ def TT_ExtElemwiseOp : TT_Op<"ext_elemwise", [NoSideEffect, Elementwise, SameOpe
         return $libpath/$libname:$symbol($args...)
     }];
 
-    let arguments = (ins Variadic<TT_Tensor>:$args, StrAttr:$libname, StrAttr:$libpath, StrAttr:$symbol);
+    let arguments = (ins Variadic<TT_Type>:$args, StrAttr:$libname, StrAttr:$libpath, StrAttr:$symbol);
 
-    let results = (outs TT_Tensor:$result);
+    let results = (outs TT_Type:$result);
 
     let assemblyFormat = "operands attr-dict `:` type(operands) `->` type($result)";
-
 }
 
 //
