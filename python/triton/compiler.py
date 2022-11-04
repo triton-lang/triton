@@ -822,7 +822,7 @@ def kernel_suffix(signature, specialization):
 # ------------------------------------------------------------------------------
 
 
-def make_triton_ir(fn, signature, specialization, constants):
+def build_triton_ir(fn, signature, specialization, constants):
     # canonicalize signature
     if isinstance(signature, str):
       signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
@@ -855,8 +855,8 @@ def make_triton_ir(fn, signature, specialization, constants):
     ret.context = context
     return ret, generator
 
-
-def optimize_triton_ir(mod):
+def make_triton_ir(fn, signature, specialization, constants):
+    mod, _ = build_triton_ir(fn, signature, specialization, constants)
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_inliner_pass()
@@ -868,15 +868,9 @@ def optimize_triton_ir(mod):
     return mod
 
 
-def make_tritongpu_ir(mod, num_warps):
+def make_tritongpu_ir(mod, num_warps, num_stages):
     pm = _triton.ir.pass_manager(mod.context)
     pm.add_convert_triton_to_tritongpu_pass(num_warps)
-    pm.run(mod)
-    return mod
-
-
-def optimize_tritongpu_ir(mod, num_stages):
-    pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
     # Get error in backend due to wrong conversion in expanding async-related instruction.
     # TODO[Superjomn]: Open it when fixed.
@@ -900,7 +894,9 @@ def add_external_libs(mod, libs):
     _triton.add_external_libs(mod, list(libs.keys()), list(libs.values()))
 
 
-def make_llvm_ir(mod):
+def make_llvm_ir(mod, extern_libs):
+    if extern_libs:
+        add_external_libs(mod, extern_libs)
     return _triton.translate_triton_gpu_to_llvmir(mod)
 
 
@@ -922,7 +918,8 @@ def make_ptx(mod: Any, device: int) -> Tuple[str, int]:
     return ptx, kernel_name
 
 
-def make_cubin(ptx: str, device):
+
+def make_cubin(ptx: str, device: int):
     '''
     Compile TritonGPU module to cubin.
     :param ptx: ptx code
@@ -988,41 +985,30 @@ def path_to_ptxas():
     raise RuntimeError("Cannot find ptxas")
 
 
-
-
 instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1"], defaults=[set(), set()])
 
 
 def _compile(fn, signature: str, device: int = -1, constants=dict(), specialization=instance_descriptor(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, output: str = "ttgir") -> Tuple[str, int, str]:
     valid_outputs = ("ttir", "ttgir", "ptx", "cubin")
     assert output in valid_outputs, "output should be one of [%s], but get \"%s\"" % (','.join(valid_outputs), output)
-
     # triton-ir
-    module, _ = make_triton_ir(fn, signature, specialization, constants)
-    module = optimize_triton_ir(module)
+    module = make_triton_ir(fn, signature, specialization, constants)
     ttir = module.str()
     if output == "ttir":
         return ttir
-
     # tritongpu-ir
-    module = make_tritongpu_ir(module, num_warps)
-    module = optimize_tritongpu_ir(module, num_stages)
-    shem_size = _triton.get_shared_memory_size(module)
+    module = make_tritongpu_ir(module, num_warps, num_stages)
     ttgir = module.str()
     if output == "ttgir":
         return ttgir
-
-    if extern_libs:
-        add_external_libs(module, extern_libs)
-
-    # llvm-ir
-    llvm_ir = make_llvm_ir(module)
-
+    # llvm
+    llvm_ir = make_llvm_ir(module, extern_libs)
+    shem_size = _triton.get_shared_memory_size(module)
     # ptx
     ptx, kernel_name = make_ptx(llvm_ir, device)
     if output == "ptx":
         return ptx, shem_size, kernel_name
-
+    # cubin
     cubin = make_cubin(ptx, device)
     if output == "cubin":
         return cubin, ptx, ttgir, ttir, shem_size, kernel_name
@@ -1351,7 +1337,6 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
     data_name = f"{name}.json"
     if all(map(fn_cache_manager.has_file, [ptx_name, ttir_name, ttgir_name, cubin_name, data_name])):
       return CompiledKernel(name, so_path, fn_cache_manager.cache_dir)
-
 
     cubin, ptx, ttgir, ttir, shared, kernel_name = _compile(fn, signature, device, constants, configs[0], num_warps, num_stages, extern_libs, "cubin")
     get_md5_hash = lambda s: hashlib.md5(s).hexdigest()
