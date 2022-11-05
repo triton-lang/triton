@@ -118,7 +118,9 @@ def nvsmi(attrs):
     return ret
 
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None, percentiles=[0.5, 0.2, 0.8], record_clocks=False):
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
+             percentiles=(0.5, 0.2, 0.8),
+             record_clocks=False, fast_flush=False):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -133,6 +135,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, percentiles=[0.5, 0.2, 0
     :type grad_to_none: torch.tensor, optional
     :param percentiles: Performance percentile to return in addition to the median.
     :type percentiles: list[float]
+    :param fast_flush: Use faster kernel to flush L2 between measurements
+    :type fast_flush: bool
     """
 
     # Estimate the runtime of the function
@@ -154,7 +158,10 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, percentiles=[0.5, 0.2, 0
     # doesn't contain any input data before the run
     start_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
     end_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
-    cache = torch.empty(int(256e6), dtype=torch.int8, device='cuda')
+    if fast_flush:
+        cache = torch.empty(int(256e6 // 4), dtype=torch.int, device='cuda')
+    else:
+        cache = torch.empty(int(256e6), dtype=torch.int8, device='cuda')
     # Warm-up
     for _ in range(n_warmup):
         fn()
