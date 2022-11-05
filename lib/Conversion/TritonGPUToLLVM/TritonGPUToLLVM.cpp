@@ -1695,9 +1695,6 @@ struct AddPtrOpConversion
     auto resultTy = op.getType();
     auto resultTensorTy = resultTy.dyn_cast<RankedTensorType>();
     if (resultTensorTy) {
-      auto resultLayout =
-          resultTensorTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
-      assert(resultLayout && "Unexpected resultLayout in AddPtrOpConversion");
       unsigned elems = getElemsPerThread(resultTy);
       Type elemTy =
           getTypeConverter()->convertType(resultTensorTy.getElementType());
