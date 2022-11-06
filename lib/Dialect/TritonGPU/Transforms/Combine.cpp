@@ -570,6 +570,14 @@ public:
     auto oldRetType = dotOp.getResult().getType().cast<RankedTensorType>();
     if (oldRetType.getEncoding().isa<triton::gpu::MmaEncodingAttr>())
       return failure();
+
+    auto A = dotOp.getOperand(0).getType().cast<RankedTensorType>();
+    auto B = dotOp.getOperand(1).getType().cast<RankedTensorType>();
+    // for FMA, should retain the blocked layout.
+    if (A.getElementType().isF32() && B.getElementType().isF32() &&
+        !dotOp.allowTF32())
+      return failure();
+
     // get MMA encoding for the given number of warps
     auto retShape = oldRetType.getShape();
     auto mod = op->getParentOfType<mlir::ModuleOp>();

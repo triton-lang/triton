@@ -4161,6 +4161,12 @@ DotOpMmaV1ConversionHelper::extractLoadedOperand(
   return rcds;
 }
 
+template <typename T> void print_vec(ArrayRef<T> vec) {
+  for (int v : vec)
+    llvm::outs() << v << " ";
+  llvm::outs() << "\n";
+}
+
 LogicalResult
 DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
                                ConversionPatternRewriter &rewriter) const {
@@ -4213,28 +4219,54 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
   int bMaxPhase = bLayout.getMaxPhase();
   int aNumPtr = 8;
   int bNumPtr = 8;
-  int aVec = 2;
-  int bVec = 4;
-  int NK = aShape[isARow ? 1 : 0];
+  int NK = aShape[1];
 
-  auto cShapePerCTA = getShapePerCTA(cLayout);
+  auto shapePerCTA = getShapePerCTA(dLayout);
+
   auto sizePerThread = getSizePerThread(dLayout);
 
+  llvm::outs() << "strideA: " << strideAM << " " << strideAK << "\n";
+  llvm::outs() << "strideB: " << strideBN << " " << strideBK << "\n";
+  llvm::outs() << "shapePerCTA: ";
+  print_vec<unsigned>(shapePerCTA);
+  llvm::outs() << "\n";
+
+  llvm::outs() << "sizePerThread: ";
+  print_vec<unsigned>(sizePerThread);
+  llvm::outs() << "\n";
+
   Value _0 = i32_val(0);
-  Value _1 = i32_val(1);
 
-  Value mContig = _1;
-  Value nContig = _1;
+  Value mContig = i32_val(sizePerThread[order[1]]);
+  Value nContig = i32_val(sizePerThread[order[0]]);
 
-  Value offA0 = isARow ? _0 : mul(threadId, mContig);
-  Value offA1 = isARow ? mul(threadId, mContig) : _0;
+  // threadId in blocked layout
+  SmallVector<Value> threadIds;
+  {
+    int dim = cShape.size();
+    threadIds.resize(dim);
+    for (unsigned k = 0; k < dim - 1; k++) {
+      Value dimK = i32_val(shapePerCTA[order[k]]);
+      Value rem = urem(threadId, dimK);
+      threadId = udiv(threadId, dimK);
+      threadIds[order[k]] = rem;
+    }
+    Value dimK = i32_val(shapePerCTA[order[dim - 1]]);
+    threadIds[order[dim - 1]] = urem(threadId, dimK);
+  }
+
+  Value threadIdM = threadIds[0];
+  Value threadIdN = threadIds[1];
+
+  Value offA0 = isARow ? _0 : mul(threadIdM, mContig);
+  Value offA1 = isARow ? mul(threadIdM, mContig) : _0;
   SmallVector<Value> aOff(aNumPtr);
   for (int i = 0; i < aNumPtr; ++i) {
     aOff[i] = add(mul(offA0, i32_val(strideA0)), mul(offA1, i32_val(strideA1)));
   }
 
-  Value offB0 = isBRow ? mul(threadId, nContig) : _0;
-  Value offB1 = isBRow ? _0 : mul(threadId, nContig);
+  Value offB0 = isBRow ? mul(threadIdN, nContig) : _0;
+  Value offB1 = isBRow ? _0 : mul(threadIdN, nContig);
   SmallVector<Value> bOff(bNumPtr);
   for (int i = 0; i < bNumPtr; ++i) {
     bOff[i] = add(mul(offB0, i32_val(strideB0)), mul(offB1, i32_val(strideB1)));
@@ -4252,11 +4284,12 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
   ValueTable has, hbs;
   auto cc = getElementsFromStruct(loc, adaptor.c(), rewriter);
   SmallVector<Value> ret = cc;
+  // is this compatible with blocked layout?
 
   for (unsigned k = 0; k < NK; k++) {
     int z = 0;
-    for (unsigned i = 0; i < cShape[order[1]]; i += cShapePerCTA[order[1]])
-      for (unsigned j = 0; j < cShape[order[0]]; j += cShapePerCTA[order[0]])
+    for (unsigned i = 0; i < cShape[order[1]]; i += shapePerCTA[order[1]])
+      for (unsigned j = 0; j < cShape[order[0]]; j += shapePerCTA[order[0]])
         for (unsigned ii = 0; ii < sizePerThread[order[1]]; ++ii)
           for (unsigned jj = 0; jj < sizePerThread[order[0]]; ++jj) {
             unsigned m = order[0] == 1 ? i : j;
@@ -4275,6 +4308,8 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
               Value vb = load(pb);
               hbs[{n + nn, k}] = vb;
             }
+
+            llvm::outs() << z << ": " << m + mm << " " << n + nn << "\n";
             ret[z] = rewriter.create<LLVM::FMulAddOp>(loc, has[{m + mm, k}],
                                                       hbs[{n + nn, k}], ret[z]);
             ++z;

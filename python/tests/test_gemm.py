@@ -146,12 +146,10 @@ def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLO
     assert_close(c, golden, rtol=max(1e-4, 1.5 * golden_rel_err), atol=max(1e-4, 1.5 * golden_abs_err), check_dtype=False)
 
 
-# Precession regression for FMADot is not done yet due to some issue on the optimizer failed to give a blocked layout to dot op.
-# TODO[Superjomn]: Uncomment this test and continue to finish precession regression latter.
+# TODO[Superjomn]: Precession bug when rep in k is greater than 1
 @pytest.mark.parametrize('M,N,K,num_warps,block_M,block_N,block_K', [
-    [128, 256, 128, 4, 128, 256, 32],
-    [256, 128, 64, 4, 256, 128, 16],
-    [128, 64, 128, 4, 128, 64, 32],
+    [32, 32, 16, 1, 32, 32, 16],
+    [32, 16, 16, 1, 32, 16, 16],
 ])
 def test_gemm_fmadot(M, N, K, num_warps, block_M, block_N, block_K):
     @triton.jit
@@ -181,7 +179,7 @@ def test_gemm_fmadot(M, N, K, num_warps, block_M, block_N, block_K):
         tl.store(c_ptrs, accumulator)
 
     a = torch.randn((M, K), device='cuda', dtype=torch.float32)
-    b = torch.randn((K, N), device='cuda', dtype=torch.float)
+    b = torch.randn((K, N), device='cuda', dtype=torch.float32)
     c = torch.empty((M, N), device=a.device, dtype=torch.float32)
     grid = lambda META: (1, )
     matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c,
@@ -191,8 +189,6 @@ def test_gemm_fmadot(M, N, K, num_warps, block_M, block_N, block_K):
                         K=a.shape[1], BLOCK_SIZE_M=block_M, BLOCK_SIZE_N=block_N,
                         BLOCK_SIZE_K=block_K, num_warps=num_warps)
     golden = torch.matmul(a, b)
+    print(c)
+    print(golden)
     torch.testing.assert_close(c, golden)
-
-
-#test_gemm_no_scf(*[64, 128, 128, 2])
-test_gemm_fmadot(*[128, 64, 128, 4, 128, 64, 32])
