@@ -64,8 +64,10 @@ static bool find_and_replace(std::string &str, const std::string &begin,
 static std::string llir_to_ptx(llvm::Module *module, int capability, int ptx) {
   bool hasExternal = false;
   for (auto &func : *module) {
-    if (func.hasExternalLinkage())
+    if (func.hasExternalLinkage()) {
       hasExternal = true;
+      break;
+    }
   }
 
   if (hasExternal) {
