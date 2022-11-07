@@ -91,12 +91,12 @@ static std::string llir_to_ptx(llvm::Module *module, int capability, int ptx) {
   {
     auto &ctx = module->getContext();
     llvm::Type *I32 = llvm::Type::getInt32Ty(ctx);
-    llvm::Metadata *md_four =
+    llvm::Metadata *mdFour =
         llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(I32, 4));
-    llvm::Metadata *md_name = llvm::MDString::get(ctx, "nvvm-reflect-ftz");
-    llvm::Metadata *md_one =
+    llvm::Metadata *mdName = llvm::MDString::get(ctx, "nvvm-reflect-ftz");
+    llvm::Metadata *mdOne =
         llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(I32, 1));
-    llvm::MDNode *reflect = llvm::MDNode::get(ctx, {md_four, md_name, md_one});
+    llvm::MDNode *reflect = llvm::MDNode::get(ctx, {mdFour, mdName, mdOne});
     module->addModuleFlag(reflect);
   }
   // LLVM version in use may not officially support target hardware

@@ -151,7 +151,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
     return nullptr;
   }
 
-  std::map<std::string, std::string> extern_libs;
+  std::map<std::string, std::string> externLibs;
   SmallVector<LLVM::LLVMFuncOp> funcs;
   module.walk([&](LLVM::LLVMFuncOp func) {
     if (func.isExternal())
@@ -166,7 +166,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
           func.getOperation()->getAttr("libpath").dyn_cast<StringAttr>();
       if (name) {
         std::string lib_name = name.str();
-        extern_libs[lib_name] = path.str();
+        externLibs[lib_name] = path.str();
       }
     }
   }
@@ -176,7 +176,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
                     ->getAttr("triton_gpu.externs")
                     .dyn_cast<DictionaryAttr>();
     for (auto &attr : dict) {
-      extern_libs[attr.getName().strref().trim().str()] =
+      externLibs[attr.getName().strref().trim().str()] =
           attr.getValue().dyn_cast<StringAttr>().strref().trim().str();
     }
   }
@@ -188,7 +188,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
   }
 
   llvm::SMDiagnostic err;
-  for (auto &lib : extern_libs) {
+  for (auto &lib : externLibs) {
     if (!linkExternLib(*llvmir, lib.second))
       return nullptr;
   }
@@ -220,16 +220,16 @@ bool linkExternLib(llvm::Module &module, llvm::StringRef path) {
   llvm::SMDiagnostic err;
   auto &ctx = module.getContext();
 
-  auto deviceMod = llvm::parseIRFile(path, err, ctx);
-  if (!deviceMod) {
+  auto extMod = llvm::parseIRFile(path, err, ctx);
+  if (!extMod) {
     llvm::errs() << "Failed to load libdevice";
     return false;
   }
 
-  deviceMod->setTargetTriple(module.getTargetTriple());
-  deviceMod->setDataLayout(module.getDataLayout());
+  extMod->setTargetTriple(module.getTargetTriple());
+  extMod->setDataLayout(module.getDataLayout());
 
-  if (llvm::Linker::linkModules(module, std::move(deviceMod),
+  if (llvm::Linker::linkModules(module, std::move(extMod),
                                 llvm::Linker::Flags::LinkOnlyNeeded)) {
     llvm::errs() << "Failed to link libdevice";
     return false;
