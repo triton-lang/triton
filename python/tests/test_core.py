@@ -144,7 +144,7 @@ def _test_unary(dtype_x, expr, numpy_expr=None, device='cuda'):
     # triton result
     x_tri = to_triton(x, device=device, dst_type=dtype_x)
     z_tri = to_triton(np.empty_like(z_ref), device=device, dst_type=dtype_x)
-    kernel[(1, )](z_tri, x_tri, SIZE=SIZE, num_warps=4)
+    kernel[(1, )](z_tri, x_tri, SIZE=SIZE, num_warps=4, extern_libs={"libdevice": "/usr/local/cuda/nvvm/libdevice/libdevice.10.bc"})
     # compare
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
 
@@ -463,17 +463,12 @@ def test_unary_op(dtype_x, expr, device='cuda'):
 # # test math ops
 # # ----------------
 
-# TODO: Math module
-# # @pytest.mark.parametrize("expr", [
-# #     'exp', 'log', 'cos', 'sin'
-# # ])
 
-
-# @pytest.mark.parametrize("expr", [
-#     'exp', 'log', 'cos', 'sin'
-# ])
-# def test_math_op(expr, device='cuda'):
-#     _test_unary('float32', f'tl.{expr}(x)', f'np.{expr}(x) ', device=device)
+@pytest.mark.parametrize("expr", [
+    'exp', 'log', 'cos', 'sin'
+])
+def test_math_op(expr, device='cuda'):
+    _test_unary('float32', f'tl.{expr}(x)', f'np.{expr}(x) ', device=device)
 
 
 # # ----------------
@@ -493,61 +488,65 @@ def make_ptr_str(name, shape):
 
 
 # TODO: handle `%4 = triton_gpu.convert_layout %3 : (tensor<32xi32, #blocked0>) -> tensor<32xi32, #triton_gpu.slice<{dim = 0, parent = #blocked1}>>``
-# @pytest.mark.parametrize("expr, dtype_str", [
-#     (f'x[{s}]', d)
-#     for s in ['None, :', ':, None', 'None, :, :', ':, :, None']
-#     for d in ['int32', 'uint32', 'uint16']
-# ])
-# def test_index1d(expr, dtype_str, device='cuda'):
-#     rank_x = expr.count(':')
-#     rank_y = expr.count(',') + 1
-#     shape_x = [32 for _ in range(rank_x)]
-#     shape_z = [32 for _ in range(rank_y)]
-#     shape_z_rank_mismatch = [32 for _ in range(rank_y + 1)]
-#     shape_z_dim_mismatch = [64 for _ in range(rank_y)]
+@pytest.mark.parametrize("expr, dtype_str", [
+    (f'x[{s}]', d)
+    for s in ['None, :', ':, None',
+              # TODO: 3D
+              #  'None, :, :',
+              #  ':, :, None'
+              ]
+    for d in ['int32', 'uint32', 'uint16']
+])
+def test_index1d(expr, dtype_str, device='cuda'):
+    rank_x = expr.count(':')
+    rank_y = expr.count(',') + 1
+    shape_x = [32 for _ in range(rank_x)]
+    shape_z = [32 for _ in range(rank_y)]
+    shape_z_rank_mismatch = [32 for _ in range(rank_y + 1)]
+    shape_z_dim_mismatch = [64 for _ in range(rank_y)]
 
-#     # Triton kernel
-#     @triton.jit
-#     def kernel(Z, X, SIZE: tl.constexpr):
-#         m = tl.arange(0, SIZE)
-#         n = tl.arange(0, SIZE)
-#         x = tl.load(X_PTR_EXPR)
-#         z = GENERATE_TEST_HERE
-#         tl.store(Z_PTR_EXPR, z)
+    # Triton kernel
+    @triton.jit
+    def kernel(Z, X, SIZE: tl.constexpr):
+        m = tl.arange(0, SIZE)
+        n = tl.arange(0, SIZE)
+        x = tl.load(X_PTR_EXPR)
+        z = GENERATE_TEST_HERE
+        tl.store(Z_PTR_EXPR, z)
 
-#     def generate_kernel(shape_x, shape_z):
-#         to_replace = {
-#             'X_PTR_EXPR': make_ptr_str('X', shape_x),
-#             'Z_PTR_EXPR': make_ptr_str('Z', shape_z),
-#             'GENERATE_TEST_HERE': expr,
-#         }
-#         return patch_kernel(kernel, to_replace)
+    def generate_kernel(shape_x, shape_z):
+        to_replace = {
+            'X_PTR_EXPR': make_ptr_str('X', shape_x),
+            'Z_PTR_EXPR': make_ptr_str('Z', shape_z),
+            'GENERATE_TEST_HERE': expr,
+        }
+        return patch_kernel(kernel, to_replace)
 
-#     kernel_match = generate_kernel(shape_x, shape_z)
-#     kernel_dim_mismatch = generate_kernel(shape_x, shape_z_dim_mismatch)
-#     kernel_rank_mismatch = generate_kernel(shape_x, shape_z_rank_mismatch)
+    kernel_match = generate_kernel(shape_x, shape_z)
+    kernel_dim_mismatch = generate_kernel(shape_x, shape_z_dim_mismatch)
+    kernel_rank_mismatch = generate_kernel(shape_x, shape_z_rank_mismatch)
 
-#     # torch result
-#     x = numpy_random(shape_x, dtype_str=dtype_str)
-#     y = np.zeros(shape_z, dtype=getattr(np, dtype_str))
-#     z_ref = eval(expr) + y
-#     # triton result
-#     z_tri = to_triton(np.empty_like(z_ref), device=device)
-#     x_tri = to_triton(x)
-#     kernel_match[(1, )](z_tri, x_tri, num_warps=1, SIZE=shape_x[0])
-#     # compare
-#     assert (z_ref == to_numpy(z_tri)).all()
+    # torch result
+    x = numpy_random(shape_x, dtype_str=dtype_str)
+    y = np.zeros(shape_z, dtype=getattr(np, dtype_str))
+    z_ref = eval(expr) + y
+    # triton result
+    z_tri = to_triton(np.empty_like(z_ref), device=device)
+    x_tri = to_triton(x)
+    kernel_match[(1, )](z_tri, x_tri, num_warps=1, SIZE=shape_x[0])
+    # compare
+    assert (z_ref == to_numpy(z_tri)).all()
 
-#     def catch_compilation_error(kernel):
-#         try:
-#             kernel[(1, )](z_tri, x_tri, num_warps=1, SIZE=shape_x[0])
-#         except triton.CompilationError as e:
-#             np.testing.assert_(True)
-#         except BaseException:
-#             np.testing.assert_(False)
+    def catch_compilation_error(kernel):
+        try:
+            kernel[(1, )](z_tri, x_tri, num_warps=1, SIZE=shape_x[0])
+        except triton.CompilationError as e:
+            np.testing.assert_(True)
+        except BaseException:
+            np.testing.assert_(False)
 
-#     catch_compilation_error(kernel_dim_mismatch)
-#     catch_compilation_error(kernel_rank_mismatch)
+    catch_compilation_error(kernel_dim_mismatch)
+    catch_compilation_error(kernel_rank_mismatch)
 
 
 # # ---------------
@@ -870,121 +869,142 @@ def test_store_bool():
 # # ---------------
 
 
-# @pytest.mark.parametrize("op, dtype_str, shape",
-#                          [(op, dtype, shape)
-#                           for op in ['min', 'max', 'argmin', 'argmax', 'sum']
-#                           for dtype in dtypes_with_bfloat16
-#                           for shape in [32, 64, 128, 512]])
-# def test_reduce1d(op, dtype_str, shape, device='cuda'):
-#     check_type_supported(dtype_str)  # bfloat16 on cc < 80 will not be tested
-
-#     # triton kernel
-#     @triton.jit
-#     def kernel(X, Z, BLOCK: tl.constexpr):
-#         x = tl.load(X + tl.arange(0, BLOCK))
-#         tl.store(Z, GENERATE_TEST_HERE)
-
-#     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{op}(x, axis=0)'})
-#     # input
-#     rs = RandomState(17)
-#     # limit the range of integers so that the sum does not overflow
-#     x = numpy_random((shape,), dtype_str=dtype_str, rs=rs)
-#     x_tri = to_triton(x, device=device)
-#     numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min,
-#                 'argmin': np.argmin, 'argmax': np.argmax}[op]
-#     # numpy result
-#     z_dtype_str = 'int32' if op == 'argmin' or op == 'argmax' else dtype_str
-#     z_tri_dtype_str = z_dtype_str
-#     if op not in ['argmin', 'argmax'] and dtype_str == 'bfloat16':
-#         z_dtype_str = 'float32'
-#         z_ref = numpy_op(x).astype(getattr(np, z_dtype_str))
-#         # trunc mantissa for a fair comparison of accuracy
-#         z_ref = (z_ref.view('uint32') & np.uint32(0xffff0000)).view('float32')
-#         z_tri_dtype_str = 'bfloat16'
-#     else:
-#         z_ref = numpy_op(x).astype(getattr(np, z_dtype_str))
-#     # triton result
-#     z_tri = to_triton(numpy_random((1,), dtype_str=z_dtype_str, rs=rs),
-#                       device=device, dst_type=z_tri_dtype_str)
-#     kernel[(1,)](x_tri, z_tri, BLOCK=shape)
-#     z_tri = to_numpy(z_tri)
-#     # compare
-#     if op == 'sum':
-#         np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
-#     else:
-#         if op == 'argmin' or op == 'argmax':
-#             # argmin and argmax can have multiple valid indices.
-#             # so instead we compare the values pointed by indices
-#             np.testing.assert_equal(x[z_ref], x[z_tri])
-#         else:
-#             np.testing.assert_equal(z_ref, z_tri)
+def get_reduced_dtype(dtype_str, op):
+    if op == 'argmin' or op == 'argmax':
+        return 'int32'
+    if dtype_str in ['int8', 'uint8', 'int16', 'uint16']:
+        return 'int32'
+    if dtype_str == 'bfloat16':
+        return 'float32'
+    return dtype_str
 
 
-# reduce_configs1 = [
-#     (op, dtype, (1, 1024), axis) for dtype in dtypes_with_bfloat16
-#     for op in ['min', 'max', 'argmin', 'argmax', 'sum']
-#     for axis in [1]
-# ]
-# reduce_configs2 = [
-#     (op, 'float32', shape, axis)
-#     for op in ['min', 'max', 'argmin', 'argmax', 'sum']
-#     for shape in [(2, 32), (4, 32), (4, 128), (32, 64), (64, 128), (128, 256), (32, 1024)]
-#     for axis in [0, 1]
-# ]
+# TODO: [Qingyi] Fix argmin / argmax
+@pytest.mark.parametrize("op, dtype_str, shape",
+                         [(op, dtype, shape)
+                          for op in ['min', 'max', 'sum']
+                          for dtype in dtypes_with_bfloat16
+                          for shape in [32, 64, 128, 512]])
+def test_reduce1d(op, dtype_str, shape, device='cuda'):
+    check_type_supported(dtype_str)  # bfloat16 on cc < 80 will not be tested
+
+    # triton kernel
+    @triton.jit
+    def kernel(X, Z, BLOCK: tl.constexpr):
+        x = tl.load(X + tl.arange(0, BLOCK))
+        tl.store(Z, GENERATE_TEST_HERE)
+
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{op}(x, axis=0)'})
+    # input
+    rs = RandomState(17)
+    # limit the range of integers so that the sum does not overflow
+    x = numpy_random((shape,), dtype_str=dtype_str, rs=rs)
+    x_tri = to_triton(x, device=device)
+    numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min,
+                'argmin': np.argmin, 'argmax': np.argmax}[op]
+    # numpy result
+    z_dtype_str = get_reduced_dtype(dtype_str, op)
+    z_tri_dtype_str = z_dtype_str
+    if op not in ['argmin', 'argmax'] and dtype_str == 'bfloat16':
+        z_dtype_str = 'float32'
+        z_ref = numpy_op(x).astype(getattr(np, z_dtype_str))
+        # trunc mantissa for a fair comparison of accuracy
+        z_ref = (z_ref.view('uint32') & np.uint32(0xffff0000)).view('float32')
+        z_tri_dtype_str = 'bfloat16'
+    else:
+        z_ref = numpy_op(x).astype(getattr(np, z_dtype_str))
+    # triton result
+    z_tri = to_triton(numpy_random((1,), dtype_str=z_dtype_str, rs=rs),
+                      device=device, dst_type=z_tri_dtype_str)
+    kernel[(1,)](x_tri, z_tri, BLOCK=shape)
+    z_tri = to_numpy(z_tri)
+    # compare
+    if op == 'sum':
+        np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
+    else:
+        if op == 'argmin' or op == 'argmax':
+            # argmin and argmax can have multiple valid indices.
+            # so instead we compare the values pointed by indices
+            np.testing.assert_equal(x[z_ref], x[z_tri])
+        else:
+            np.testing.assert_equal(z_ref, z_tri)
 
 
-# @pytest.mark.parametrize("op, dtype_str, shape, axis", reduce_configs1 + reduce_configs2)
-# def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
-#     # triton kernel
-#     @triton.jit
-#     def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, AXIS: tl.constexpr):
-#         range_m = tl.arange(0, BLOCK_M)
-#         range_n = tl.arange(0, BLOCK_N)
-#         x = tl.load(X + range_m[:, None] * BLOCK_N + range_n[None, :])
-#         z = GENERATE_TEST_HERE
-#         if AXIS == 1:
-#             tl.store(Z + range_m, z)
-#         else:
-#             tl.store(Z + range_n, z)
+# TODO: [Qingyi] Fix argmin / argmax
+reduce_configs1 = [
+    (op, dtype, (1, 1024), axis) for dtype in dtypes_with_bfloat16
+    for op in ['min', 'max', 'sum']
+    for axis in [1]
+]
 
-#     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{op}(x, axis=AXIS)'})
-#     # input
-#     rs = RandomState(17)
-#     # limit the range of integers so that the sum does not overflow
-#     x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
-#     x_tri = to_triton(x)
-#     numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min,
-#                 'argmin': np.argmin, 'argmax': np.argmax}[op]
-#     z_dtype_str = 'int32' if op == 'argmin' or op == 'argmax' else dtype_str
-#     z_tri_dtype_str = z_dtype_str
-#     # numpy result
-#     if op not in ['argmin', 'argmax'] and dtype_str == 'bfloat16':
-#         z_dtype_str = 'float32'
-#         z_tri_dtype_str = 'bfloat16'
-#         z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
-#         # trunc mantissa for a fair comparison of accuracy
-#         z_ref = (z_ref.view('uint32') & np.uint32(0xffff0000)).view('float32')
-#     else:
-#         z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
-#     # triton result
-#     z_tri = to_triton(numpy_random((shape[1 - axis],), dtype_str=z_dtype_str, rs=rs),
-#                       device=device, dst_type=z_tri_dtype_str)
-#     kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)
-#     z_tri = to_numpy(z_tri)
-#     # compare
-#     if op == 'sum':
-#         np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
-#     else:
-#         if op == 'argmin' or op == 'argmax':
-#             # argmin and argmax can have multiple valid indices.
-#             # so instead we compare the values pointed by indices
-#             z_ref_index = np.expand_dims(z_ref, axis=axis)
-#             z_tri_index = np.expand_dims(z_tri, axis=axis)
-#             z_ref_value = np.take_along_axis(x, z_ref_index, axis=axis)
-#             z_tri_value = np.take_along_axis(x, z_tri_index, axis=axis)
-#             np.testing.assert_equal(z_ref_value, z_tri_value)
-#         else:
-#             np.testing.assert_equal(z_ref, z_tri)
+
+# shape (128, 256) and (32, 1024) are not enabled on sm86 because the required shared memory
+# exceeds the limit of 99KB
+reduce2d_shapes = [(2, 32), (4, 32), (4, 128), (32, 64), (64, 128)]
+if 'V100' in torch.cuda.get_device_name(0):
+    reduce2d_shapes += [(128, 256) and (32, 1024)]
+
+
+reduce_configs2 = [
+    (op, 'float32', shape, axis)
+    for op in ['min', 'max', 'sum']
+    for shape in reduce2d_shapes
+    for axis in [0, 1]
+]
+
+
+@pytest.mark.parametrize("op, dtype_str, shape, axis", reduce_configs1 + reduce_configs2)
+def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
+    # triton kernel
+    @triton.jit
+    def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, AXIS: tl.constexpr):
+        range_m = tl.arange(0, BLOCK_M)
+        range_n = tl.arange(0, BLOCK_N)
+        x = tl.load(X + range_m[:, None] * BLOCK_N + range_n[None, :])
+        z = GENERATE_TEST_HERE
+        if AXIS == 1:
+            tl.store(Z + range_m, z)
+        else:
+            tl.store(Z + range_n, z)
+
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{op}(x, axis=AXIS)'})
+    # input
+    rs = RandomState(17)
+    # limit the range of integers so that the sum does not overflow
+    x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
+    x_tri = to_triton(x)
+    numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min,
+                'argmin': np.argmin, 'argmax': np.argmax}[op]
+    z_dtype_str = get_reduced_dtype(dtype_str, op)
+    z_tri_dtype_str = z_dtype_str
+    # numpy result
+    if op not in ['argmin', 'argmax'] and dtype_str == 'bfloat16':
+        z_dtype_str = 'float32'
+        z_tri_dtype_str = 'bfloat16'
+        z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
+        # trunc mantissa for a fair comparison of accuracy
+        z_ref = (z_ref.view('uint32') & np.uint32(0xffff0000)).view('float32')
+    else:
+        z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
+    # triton result
+    z_tri = to_triton(numpy_random((shape[1 - axis],), dtype_str=z_dtype_str, rs=rs),
+                      device=device, dst_type=z_tri_dtype_str)
+    kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)
+    z_tri = to_numpy(z_tri)
+    # compare
+    if op == 'sum':
+        np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
+    else:
+        if op == 'argmin' or op == 'argmax':
+            # argmin and argmax can have multiple valid indices.
+            # so instead we compare the values pointed by indices
+            z_ref_index = np.expand_dims(z_ref, axis=axis)
+            z_tri_index = np.expand_dims(z_tri, axis=axis)
+            z_ref_value = np.take_along_axis(x, z_ref_index, axis=axis)
+            z_tri_value = np.take_along_axis(x, z_tri_index, axis=axis)
+            np.testing.assert_equal(z_ref_value, z_tri_value)
+        else:
+            np.testing.assert_equal(z_ref, z_tri)
 
 # # ---------------
 # # test permute
@@ -1520,43 +1540,72 @@ def test_num_warps_pow2():
 # # -------------
 
 
-# @pytest.mark.parametrize("dtype_str, expr, lib_path",
-#                          [('int32', 'libdevice.ffs', ''),
-#                           ('float32', 'libdevice.pow', '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'),
-#                           ('float64', 'libdevice.norm4d', '')])
-# def test_libdevice(dtype_str, expr, lib_path):
+@pytest.mark.parametrize("dtype_str, expr, lib_path",
+                         [('int32', 'libdevice.ffs', ''),
+                          ('float32', 'libdevice.pow', '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'),
+                          ('float64', 'libdevice.norm4d', '')])
+def test_libdevice_tensor(dtype_str, expr, lib_path):
 
-#     @triton.jit
-#     def kernel(X, Y, BLOCK: tl.constexpr):
-#         x = tl.load(X + tl.arange(0, BLOCK))
-#         y = GENERATE_TEST_HERE
-#         tl.store(Y + tl.arange(0, BLOCK), y)
+    @triton.jit
+    def kernel(X, Y, BLOCK: tl.constexpr):
+        x = tl.load(X + tl.arange(0, BLOCK))
+        y = GENERATE_TEST_HERE
+        tl.store(Y + tl.arange(0, BLOCK), y)
 
-#     shape = (128, )
-#     rs = RandomState(17)
-#     # limit the range of integers so that the sum does not overflow
-#     x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
+    shape = (128, )
+    rs = RandomState(17)
+    # limit the range of integers so that the sum does not overflow
+    x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
 
-#     if expr == 'libdevice.ffs':
-#         kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.ffs(x)'})
-#         y_ref = np.zeros(shape, dtype=x.dtype)
-#         for i in range(shape[0]):
-#             y_ref[i] = (int(x[i]) & int(-x[i])).bit_length()
-#     elif expr == 'libdevice.pow':
-#         # numpy does not allow negative factors in power, so we use abs()
-#         x = np.abs(x)
-#         kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.pow(x, x)'})
-#         y_ref = np.power(x, x)
-#     elif expr == 'libdevice.norm4d':
-#         kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.norm4d(x, x, x, x)'})
-#         y_ref = np.sqrt(4 * np.power(x, 2))
+    if expr == 'libdevice.ffs':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.ffs(x)'})
+        y_ref = np.zeros(shape, dtype=x.dtype)
+        for i in range(shape[0]):
+            y_ref[i] = (int(x[i]) & int(-x[i])).bit_length()
+    elif expr == 'libdevice.pow':
+        # numpy does not allow negative factors in power, so we use abs()
+        x = np.abs(x)
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.pow(x, x)'})
+        y_ref = np.power(x, x)
+    elif expr == 'libdevice.norm4d':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.norm4d(x, x, x, x)'})
+        y_ref = np.sqrt(4 * np.power(x, 2))
 
-#     x_tri = to_triton(x)
-#     # triton result
-#     y_tri = to_triton(numpy_random((shape[0],), dtype_str=dtype_str, rs=rs), device='cuda')
-#     kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], extern_libs={'libdevice': lib_path})
-#     # compare
-#     if expr == 'libdevice.ffs':
-#         np.testing.assert_equal(y_ref, to_numpy(y_tri))
-#     else:
-#         np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
+    x_tri = to_triton(x)
+    # triton result
+    y_tri = to_triton(numpy_random((shape[0],), dtype_str=dtype_str, rs=rs), device='cuda')
+    kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], extern_libs={'libdevice': lib_path})
+    # compare
+    if expr == 'libdevice.ffs':
+        np.testing.assert_equal(y_ref, to_numpy(y_tri))
+    else:
+        np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
+
+
+@pytest.mark.parametrize("dtype_str, expr, lib_path",
+                         [('float32', 'libdevice.pow', '')])
+def test_libdevice_scalar(dtype_str, expr, lib_path):
+
+    @triton.jit
+    def kernel(X, Y, BLOCK: tl.constexpr):
+        x = X
+        y = GENERATE_TEST_HERE
+        tl.store(Y + tl.arange(0, BLOCK), y)
+
+    shape = (128, )
+    rs = RandomState(17)
+    # limit the range of integers so that the sum does not overflow
+    x = numpy_random((1,), dtype_str=dtype_str, rs=rs)
+    y_ref = np.zeros(shape, dtype=x.dtype)
+
+    # numpy does not allow negative factors in power, so we use abs()
+    x = np.abs(x)
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.pow(x, x)'})
+    y_ref[:] = np.power(x, x)
+
+    # triton result
+    x_tri = to_triton(x)[0].item()
+    y_tri = to_triton(numpy_random((shape[0],), dtype_str=dtype_str, rs=rs), device='cuda')
+    kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], extern_libs={'libdevice': lib_path})
+    # compare
+    np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
