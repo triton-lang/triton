@@ -62,9 +62,28 @@ def matmul_no_scf_kernel(
     [64, 128, 128, 2],
 ])
 def test_gemm_no_scf_int8(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS):
-    a = torch.randint(-5, 5, (SIZE_M, SIZE_K), device='cuda', dtype=torch.int8)
-    b = torch.randint(-5, 5, (SIZE_K, SIZE_N), device='cuda', dtype=torch.int8)
+    a = torch.randint(-1, 0, (SIZE_M, SIZE_K), device='cuda', dtype=torch.int8)
+    b = torch.randint(-1, 0, (SIZE_K, SIZE_N), device='cuda', dtype=torch.int8)
     c = torch.empty((SIZE_M, SIZE_N), device=a.device, dtype=torch.int32)
+
+    # for debug
+    offset = -128
+    for i in range(len(a)):
+        for j in range(len(a[0])):
+            a.data[i][j] = offset
+            offset += 1
+            if offset > 127: offset = -offset
+    print('a', a)
+
+    offset = -128
+    for i in range(len(b)):
+        for j in range(len(b[0])):
+            b.data[i][j] = offset
+            offset += 1
+            if offset > 127: offset = -offset
+    print('b', b)
+    # end for debug
+
     grid = lambda META: (1, )
     matmul_no_scf_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c,
                                stride_am=a.stride(0), stride_ak=a.stride(1),
@@ -79,7 +98,7 @@ def test_gemm_no_scf_int8(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS):
     torch.set_printoptions(profile="full")
     print("c", c.cpu())
     print("gloden", golden)
-    assert c.cpu() == golden
+    torch.testing.assert_close(c.cpu(), golden, check_dtype=False)
 
 
 @triton.jit
@@ -169,3 +188,6 @@ def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLO
 
     torch.set_printoptions(profile="full")
     assert_close(c, golden, rtol=max(1e-4, 1.5 * golden_rel_err), atol=max(1e-4, 1.5 * golden_abs_err), check_dtype=False)
+
+
+test_gemm_no_scf_int8(SIZE_M=16, SIZE_N=8, SIZE_K=32, NUM_WARPS=1)

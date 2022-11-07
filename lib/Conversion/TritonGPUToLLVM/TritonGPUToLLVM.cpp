@@ -84,7 +84,6 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 void llPrintf(StringRef msg, ValueRange args,
               ConversionPatternRewriter &rewriter);
 
-
 // Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
 #define zext(...) rewriter.create<LLVM::ZExtOp>(loc, __VA_ARGS__)
 #define udiv(...) rewriter.create<LLVM::UDivOp>(loc, __VA_ARGS__)
@@ -3372,7 +3371,10 @@ struct MMA16816ConversionHelper {
       for (int k = 0; k < numRepK; ++k)
         loadFn(2 * m, 2 * k);
 
-    for (auto& item : ha) {
+#define PRINT_AB 0
+        // DEBUG: print all things in ha
+#if PRINT_AB
+    for (auto &item : ha) {
       llvm::outs() << item.second << "\n";
       llvm::outs() << "type: " << item.second.getType() << "\n";
 
@@ -3380,15 +3382,19 @@ struct MMA16816ConversionHelper {
         return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
       };
 
-        SmallVector<Value> i8x4;
-        for (int i = 0; i < 4; i++) {
-          auto val = extract_element(i8_ty, item.second, i32_val(i));
-          i8x4.push_back(val);
-        }
+      SmallVector<Value> i8x4;
+      for (int i = 0; i < 4; i++) {
+        auto val = extract_element(i8_ty, item.second, i32_val(i));
+        i8x4.push_back(val);
+      }
 
-        mlir::LLVM::llPrintf("thread:%d, m:%d, k:%d: (%d,%d,%d,%d)", {thread, i32_val(item.first.first), i32_val(item.first.second),
-                                                                      i8x4[0], i8x4[1], i8x4[2], i8x4[3]}, rewriter);
+      mlir::LLVM::llPrintf("thread:%d, m:%d, k:%d: (%d,%d,%d,%d)",
+                           {thread, i32_val(item.first.first),
+                            i32_val(item.first.second), i8x4[0], i8x4[1],
+                            i8x4[2], i8x4[3]},
+                           rewriter);
     }
+#endif
 
     // step2. Format the values to LLVM::Struct to passing to mma codegen.
     Value result = composeValuesToDotOperandLayoutStruct(ha, numRepM, numRepK);
@@ -3415,10 +3421,12 @@ struct MMA16816ConversionHelper {
         loadFn(2 * n, 2 * k);
     }
 
-    for (auto& item : hb) {
+#if PRINT_AB
+    // Debug: print all things in hb
+    for (auto &item : hb) {
       llvm::outs() << item.second << "\n";
       llvm::outs() << "type: " << item.second.getType() << "\n";
-      auto i8s = bitcast(item.second, vec_ty( i8_ty, 4));
+      auto i8s = bitcast(item.second, vec_ty(i8_ty, 4));
 
       auto getIntAttr = [&](int v) {
         return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
@@ -3430,9 +3438,13 @@ struct MMA16816ConversionHelper {
         i8x4.push_back(val);
       }
 
-      mlir::LLVM::llPrintf("thread:%d, hb, (%d,%d): (%d,%d,%d,%d)", {thread, i32_val(item.first.first), i32_val(item.first.second),
-                                                                    i8x4[0], i8x4[1], i8x4[2], i8x4[3]}, rewriter);
+      mlir::LLVM::llPrintf("thread:%d, hb, (%d,%d): (%d,%d,%d,%d)",
+                           {thread, i32_val(item.first.first),
+                            i32_val(item.first.second), i8x4[0], i8x4[1],
+                            i8x4[2], i8x4[3]},
+                           rewriter);
     }
+#endif
 
     Value result = composeValuesToDotOperandLayoutStruct(
         hb, std::max(numRepN / 2, 1), numRepK);
@@ -3503,6 +3515,33 @@ struct MMA16816ConversionHelper {
                                              std::to_string(i)));
         // reuse the output registers
       }
+
+      // DEBUG: print $a
+      auto print_a = [&](int m, int k, ValueTable &dic) {
+        auto _val = dic[{m, k}];
+        auto val = bitcast(_val, vec_ty(i8_ty, 4));
+
+        llvm::outs() << "val: " << val << "\n";
+        SmallVector<Value> vals;
+        for (int i = 0; i < 4; i++)
+          vals.push_back(extract_element(i8_ty, val, i32_val(i)));
+        LLVM::llPrintf("t-%d $a: (m%d, n%d) = [%d,%d,%d,%d]",
+                       {thread, i32_val(m), i32_val(n),
+                        // data
+                        vals[0], vals[1], vals[2], vals[3]},
+                       rewriter);
+      };
+
+      print_a(m, k, ha);
+      // print_a(m+1, k, ha);
+      // print_a(m, k+1, ha);
+      // print_a(m+1, k+1, ha);
+
+      print_a(n, k, hb);
+
+      // DEBUG: print $b
+      // DEBUG: print $c
+
       mma(retArgs, aArgs, bArgs, cArgs);
       Value mmaOut = builder.launch(rewriter, loc, helper.getMmaRetType());
 
@@ -4980,7 +5019,6 @@ void ConvertTritonGPUToLLVM::initSharedMemory(
   smem = b.create<LLVM::BitcastOp>(loc, ptrTy, smem);
 }
 
-
 } // namespace
 
 namespace mlir {
@@ -4991,8 +5029,8 @@ void llPrintf(StringRef msg, ValueRange args,
   PrintfOpConversion::llPrintf(msg, args, rewriter);
 }
 
-}
-}
+} // namespace LLVM
+} // namespace mlir
 
 namespace mlir {
 
