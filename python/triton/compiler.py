@@ -25,6 +25,7 @@ from filelock import FileLock
 
 import triton
 import triton._C.libtriton.triton as _triton
+from .tools.disasm import extract
 
 
 def str_to_ty(name):
@@ -875,8 +876,6 @@ def ttir_to_ttgir(mod, num_warps, num_stages):
     pm = _triton.ir.pass_manager(mod.context)
     pm.add_convert_triton_to_tritongpu_pass(num_warps)
     pm.enable_debug()
-    # Get error in backend due to wrong conversion in expanding async-related instruction.
-    # TODO[Superjomn]: Open it when fixed.
     pm.add_tritongpu_pipeline_pass(num_stages)
     pm.add_canonicalizer_pass()
     pm.add_cse_pass()
@@ -1395,6 +1394,19 @@ class CompiledKernel:
                 stream = torch.cuda.current_stream().cuda_stream
             self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.shared, stream, self.cu_function, *args)
         return
+
+    def get_sass(self, fun=None):
+        if 'sass' in self.asm:
+            return self.asm['sass']
+        fd, path = tempfile.mkstemp()
+        try:
+            with open(fd, 'wb') as cubin:
+                cubin.write(self.asm['cubin'])
+            self.sass = extract(path, fun)
+        finally:
+            os.remove(path)
+        self.asm['sass'] = self.sass
+        return self.sass
 
 
 class CudaUtils(object):
