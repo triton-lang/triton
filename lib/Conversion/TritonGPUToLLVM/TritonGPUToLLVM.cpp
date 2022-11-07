@@ -395,6 +395,8 @@ struct SharedMemoryObject {
   // we store strides into an attribute array of integers, the information
   // cannot pass through block argument assignment because attributes are
   // associated with operations but not Values.
+  // TODO(Keren): We may need to figure out a way to store strides as integers
+  // if we want to support more optimizations.
   SmallVector<Value>
       strides; // i32 int. The strides of the shared memory object.
 
