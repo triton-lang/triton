@@ -97,9 +97,7 @@ reduce2d_configs = [
     (op, dtype, shape, axis)
     for op in ['sum', 'min', 'max']
     for dtype in dtypes
-    for shape in [(1, 4), (1, 8), (1, 16), (1, 32), (2, 32), (4, 32)]
-    # TODO: fix and uncomment
-    #, (4, 128), (32, 64)]
+    for shape in [(1, 4), (1, 8), (1, 16), (1, 32), (2, 32), (4, 32), (4, 128), (32, 64)]
     for axis in [0, 1]
 ]
 
@@ -128,7 +126,6 @@ def test_reduce2d(op, dtype, shape, axis):
         golden_z = torch.min(x, dim=axis, keepdim=False)[0].to(reduced_dtype)
     else:
         golden_z = torch.max(x, dim=axis, keepdim=False)[0].to(reduced_dtype)
-
     if dtype.is_floating_point and op == 'sum':
         if shape[axis] >= 256:
             assert_close(z, golden_z, rtol=0.05, atol=0.1)
