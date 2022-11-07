@@ -1,5 +1,6 @@
 #ifndef TRITON_TARGET_LLVMIRTRANSLATION_H
 #define TRITON_TARGET_LLVMIRTRANSLATION_H
+#include "llvm/ADT/StringRef.h"
 #include <memory>
 #include <vector>
 
@@ -29,7 +30,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
 std::unique_ptr<llvm::Module>
 translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module);
 
-bool linkLibdevice(llvm::Module &module, const std::string &path);
+bool linkLibdevice(llvm::Module &module, llvm::StringRef path);
 
 } // namespace triton
 } // namespace mlir

@@ -232,7 +232,7 @@ void addExternalLibs(mlir::ModuleOp &module,
   return;
 }
 
-bool linkLibdevice(llvm::Module &module, const std::string &path) {
+bool linkLibdevice(llvm::Module &module, llvm::StringRef path) {
   llvm::SMDiagnostic err;
   auto &ctx = module.getContext();
 

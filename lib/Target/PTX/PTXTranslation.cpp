@@ -72,6 +72,7 @@ static std::string llir_to_ptx(llvm::Module *module, int capability, int ptx) {
 
   if (hasExternal) {
     namespace fs = std::filesystem;
+    // [triton root dir]/python/triton/language/libdevice.10.bc
     static const fs::path libdevice = fs::path(__FILE__)
                                           .parent_path()
                                           .parent_path()
