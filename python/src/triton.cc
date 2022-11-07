@@ -87,8 +87,16 @@ void init_triton_ir(py::module &&m) {
       .value("FADD", mlir::triton::RedOp::FADD)
       .value("MIN", mlir::triton::RedOp::MIN)
       .value("MAX", mlir::triton::RedOp::MAX)
+      .value("UMIN", mlir::triton::RedOp::UMIN)
+      .value("UMAX", mlir::triton::RedOp::UMAX)
+      .value("ARGMIN", mlir::triton::RedOp::ARGMIN)
+      .value("ARGMAX", mlir::triton::RedOp::ARGMAX)
+      .value("ARGUMIN", mlir::triton::RedOp::ARGUMIN)
+      .value("ARGUMAX", mlir::triton::RedOp::ARGUMAX)
       .value("FMIN", mlir::triton::RedOp::FMIN)
       .value("FMAX", mlir::triton::RedOp::FMAX)
+      .value("ARGFMIN", mlir::triton::RedOp::ARGFMIN)
+      .value("ARGFMAX", mlir::triton::RedOp::ARGFMAX)
       .value("XOR", mlir::triton::RedOp::XOR);
 
   py::enum_<mlir::triton::RMWOp>(m, "ATOMIC_OP")
@@ -170,9 +178,8 @@ void init_triton_ir(py::module &&m) {
       .def("replace_all_uses_with",
            [](mlir::Value &self, mlir::Value &newValue) {
              self.replaceAllUsesWith(newValue);
-           })
+           });
 
-      ;
   py::class_<mlir::BlockArgument, mlir::Value>(m, "block_arguement");
 
   py::class_<mlir::Region>(m, "region")
@@ -254,7 +261,7 @@ void init_triton_ir(py::module &&m) {
           },
           ret::reference)
       .def("dump", [](mlir::OpState &self) { self->dump(); })
-      .def("str",
+      .def("__str__",
            [](mlir::OpState &self) -> std::string {
              std::string str;
              llvm::raw_string_ostream os(str);
@@ -423,7 +430,12 @@ void init_triton_ir(py::module &&m) {
       .def("get_int32_attr", &mlir::OpBuilder::getI32IntegerAttr)
       // Use arith.ConstantOp to create constants
       // // Constants
-      // .def("get_int1", &ir::builder::get_int1, ret::reference)
+      .def("get_int1",
+           [](mlir::OpBuilder &self, bool v) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
+                 loc, v, self.getI1Type()));
+           })
       .def("get_int32",
            [](mlir::OpBuilder &self, int64_t v) -> mlir::Value {
              auto loc = self.getUnknownLoc();
@@ -660,13 +672,13 @@ void init_triton_ir(py::module &&m) {
              auto loc = self.getUnknownLoc();
              // get element type if necessary
              mlir::Type srcType = src.getType();
+             auto srcTensorType = srcType.dyn_cast<mlir::RankedTensorType>();
+             auto dstTensorType = dstType.dyn_cast<mlir::RankedTensorType>();
              mlir::Type srcEltType = srcType;
              mlir::Type dstEltType = dstType;
-             if (dstType.isa<mlir::RankedTensorType>()) {
-               dstEltType =
-                   dstType.cast<mlir::RankedTensorType>().getElementType();
-               srcEltType =
-                   srcType.cast<mlir::RankedTensorType>().getElementType();
+             if (dstTensorType && srcTensorType) {
+               dstEltType = dstTensorType.getElementType();
+               srcEltType = srcTensorType.getElementType();
              }
              unsigned srcWidth = srcEltType.getIntOrFloatBitWidth();
              unsigned dstWidth = dstEltType.getIntOrFloatBitWidth();
@@ -1173,6 +1185,16 @@ void init_triton_ir(py::module &&m) {
              auto loc = self.getUnknownLoc();
              return self.create<mlir::SelectOp>(loc, condition, trueValue,
                                                 falseValue);
+           })
+      .def("create_printf",
+           [](mlir::OpBuilder &self, const std::string &prefix,
+              const std::vector<mlir::Value> &values) -> void {
+             auto loc = self.getUnknownLoc();
+             self.create<mlir::triton::PrintfOp>(
+                 loc,
+                 mlir::StringAttr::get(self.getContext(),
+                                       llvm::StringRef(prefix)),
+                 values);
            });
 
   py::class_<mlir::PassManager>(m, "pass_manager")
@@ -1258,8 +1280,8 @@ void init_triton_translation(py::module &m) {
   using ret = py::return_value_policy;
 
   m.def("get_shared_memory_size", [](mlir::ModuleOp module) {
-    return module->getAttrOfType<mlir::IntegerAttr>("triton_gpu.shared")
-        .getInt();
+    auto shared = module->getAttrOfType<mlir::IntegerAttr>("triton_gpu.shared");
+    return shared.getInt();
   });
 
   m.def(

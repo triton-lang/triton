@@ -586,7 +586,6 @@ scf::ForOp LoopPipeliner::createNewForOp() {
                                     intAttr(sliceType.getShape()[0]),
                                     intAttr(sliceType.getShape()[1])},
           SmallVector<OpFoldResult>{intAttr(1), intAttr(1), intAttr(1)});
-      // nextOp->dump();
       extractSlices.push_back(nextOp->getResult(0));
     } else
       nextOp = builder.clone(*op, nextMapping);

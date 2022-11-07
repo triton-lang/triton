@@ -1,6 +1,7 @@
 #include "triton/Analysis/Allocation.h"
 #include "mlir/Analysis/Liveness.h"
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "triton/Analysis/Alias.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -12,7 +13,9 @@
 
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
+using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
@@ -35,32 +38,23 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
          "Unexpect layout in getScratchConfigForCvtLayout()");
   unsigned rank = dstTy.getRank();
   SmallVector<unsigned> paddedRepShape(rank);
-  if (auto srcSliceLayout = srcLayout.dyn_cast<SliceEncodingAttr>())
-    srcLayout = srcSliceLayout.getParent();
-  if (auto dstSliceLayout = dstLayout.dyn_cast<SliceEncodingAttr>())
-    dstLayout = dstSliceLayout.getParent();
   auto srcBlockedLayout = srcLayout.dyn_cast<BlockedEncodingAttr>();
   auto srcMmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>();
   auto srcDotLayout = srcLayout.dyn_cast<DotOperandEncodingAttr>();
   auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>();
   auto dstMmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>();
   auto dstDotLayout = dstLayout.dyn_cast<DotOperandEncodingAttr>();
-  assert((srcBlockedLayout || srcMmaLayout || srcDotLayout) &&
-         "Unexpected srcLayout in getScratchConfigForCvtLayout");
-  assert((dstBlockedLayout || dstMmaLayout || dstDotLayout) &&
-         "Unexpected dstLayout in getScratchConfigForCvtLayout");
   assert(!(srcMmaLayout && dstMmaLayout) &&
          "Unexpected mma -> mma layout conversion");
-  assert(!(srcDotLayout && dstDotLayout) &&
-         "Unexpected dotOperand -> dotOperand layout conversion");
-  auto inOrd = (srcMmaLayout || srcDotLayout) ? dstBlockedLayout.getOrder()
-                                              : srcBlockedLayout.getOrder();
-  auto outOrd = (dstMmaLayout || dstDotLayout) ? srcBlockedLayout.getOrder()
-                                               : dstBlockedLayout.getOrder();
-  unsigned srcContigPerThread =
-      srcBlockedLayout ? srcBlockedLayout.getSizePerThread()[inOrd[0]] : 2;
-  unsigned dstContigPerThread =
-      dstBlockedLayout ? dstBlockedLayout.getSizePerThread()[outOrd[0]] : 2;
+  // MMA or Dot layout does not have the “order" attribute.
+  // so the layout in smem during the conversion of mma(dot)->blocked (or
+  // blocked->mma(dot)) is up to the blocked layout.
+  auto inOrd = (srcMmaLayout || srcDotLayout) ? getOrder(dstLayout)
+                                              : getOrder(srcLayout);
+  auto outOrd = (dstMmaLayout || dstDotLayout) ? getOrder(srcLayout)
+                                               : getOrder(dstLayout);
+  unsigned srcContigPerThread = getSizePerThread(srcLayout)[inOrd[0]];
+  unsigned dstContigPerThread = getSizePerThread(dstLayout)[outOrd[0]];
   // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
   //       that we cannot do vectorization.
   inVec = outOrd[0] == 0 ? 1 : inOrd[0] == 0 ? 1 : srcContigPerThread;
@@ -75,6 +69,8 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
         std::max(std::min<unsigned>(srcTy.getShape()[d], srcShapePerCTA[d]),
                  std::min<unsigned>(dstTy.getShape()[d], dstShapePerCTA[d]));
   }
+  if (rank == 1)
+    return paddedRepShape;
   unsigned paddedDim = 1;
   if (auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>()) {
     paddedDim = dstBlockedLayout.getOrder()[0];
@@ -89,13 +85,13 @@ SmallVector<unsigned> getScratchConfigForReduce(triton::ReduceOp op) {
   auto srcShape = srcTy.getShape();
   auto axis = op.axis();
 
-  bool fast_reduce = axis == 1; // FIXME(Qingyi): The fastest-changing dimension
+  bool fastReduce = axis == 1; // FIXME(Qingyi): The fastest-changing dimension
 
   SmallVector<unsigned> smemShape;
   for (auto d : srcShape)
     smemShape.push_back(d);
 
-  if (fast_reduce) {
+  if (fastReduce) {
     unsigned sizeInterWarps = srcLayout.getWarpsPerCTA()[axis];
     smemShape[axis] = sizeInterWarps;
   } else {
@@ -136,7 +132,7 @@ private:
     // For example: %a = scf.if -> yield
     // %a must be allocated elsewhere by other operations.
     // FIXME(Keren): extract and insert are always alias for now
-    if (!maybeSharedAllocationOp(op) || isa<triton::gpu::ExtractSliceOp>(op) ||
+    if (!maybeSharedAllocationOp(op) || isa<tensor::ExtractSliceOp>(op) ||
         isa<triton::gpu::InsertSliceAsyncOp>(op)) {
       return;
     }

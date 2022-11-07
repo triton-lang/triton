@@ -1,12 +1,10 @@
 import distutils
-import itertools
 import os
 import platform
 import re
 import shutil
 import subprocess
 import sys
-import sysconfig
 import tarfile
 import tempfile
 import urllib.request
@@ -15,74 +13,6 @@ from typing import NamedTuple
 
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
-
-
-# Logic from https://github.com/Kitware/CMake/blob/master/Modules/FindPythonLibs.cmake
-# Code from https://stackoverflow.com/questions/47423246
-def get_python_library():
-    """Get path to the python library associated with the current python
-    interpreter."""
-    # determine direct path to libpython
-    python_version = sysconfig.get_python_version()
-    python_library = sysconfig.get_config_var('LIBRARY')
-
-    # if static (or nonexistent), try to find a suitable dynamic libpython
-    if (python_library is None or os.path.splitext(python_library)[1][-2:] == '.a'):
-
-        candidate_lib_prefixes = ['', 'lib']
-
-        candidate_extensions = ['.lib', '.so', '.a']
-        if sysconfig.get_config_var('WITH_DYLD'):
-            candidate_extensions.insert(0, '.dylib')
-
-        candidate_versions = [python_version]
-        if python_version:
-            candidate_versions.append('')
-            candidate_versions.insert(
-                0, "".join(python_version.split(".")[:2]))
-
-        abiflags = getattr(sys, 'abiflags', '')
-        candidate_abiflags = [abiflags]
-        if abiflags:
-            candidate_abiflags.append('')
-
-        # Ensure the value injected by virtualenv is
-        # returned on windows.
-        # Because calling `sysconfig.get_config_var('multiarchsubdir')`
-        # returns an empty string on Linux, `du_sysconfig` is only used to
-        # get the value of `LIBDIR`.
-        libdir = distutils.sysconfig.get_config_var('LIBDIR')
-        if sysconfig.get_config_var('MULTIARCH'):
-            masd = sysconfig.get_config_var('multiarchsubdir')
-            if masd:
-                if masd.startswith(os.sep):
-                    masd = masd[len(os.sep):]
-                libdir = os.path.join(libdir, masd)
-
-        if libdir is None:
-            libdir = os.path.abspath(os.path.join(
-                sysconfig.get_config_var('LIBDEST'), "..", "libs"))
-
-        candidates = (
-            os.path.join(
-                libdir,
-                ''.join((pre, 'python', ver, abi, ext))
-            )
-            for (pre, ext, ver, abi) in itertools.product(
-                candidate_lib_prefixes,
-                candidate_extensions,
-                candidate_versions,
-                candidate_abiflags
-            )
-        )
-
-        for candidate in candidates:
-            if os.path.exists(candidate):
-                # we found a (likely alternate) libpython
-                python_library = candidate
-                break
-
-    return python_library
 
 
 # Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
@@ -108,12 +38,13 @@ class Package(NamedTuple):
     test_file: str
     include_flag: str
     lib_flag: str
+    syspath_var_name: str
 
 
 def get_pybind11_package_info():
     name = "pybind11-2.10.0"
     url = "https://github.com/pybind/pybind11/archive/refs/tags/v2.10.0.tar.gz"
-    return Package("pybind11", name, url, "include/pybind11/pybind11.h", "PYBIND11_INCLUDE_DIR", "")
+    return Package("pybind11", name, url, "include/pybind11/pybind11.h", "PYBIND11_INCLUDE_DIR", "", "PYBIND11_SYSPATH")
 
 
 def get_llvm_package_info():
@@ -127,7 +58,7 @@ def get_llvm_package_info():
     else:
         name = 'clang+llvm-14.0.0-x86_64-{}'.format(system_suffix)
         url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-14.0.0/{}.tar.xz".format(name)
-    return Package("llvm", name, url, "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR")
+    return Package("llvm", name, url, "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
 
 def get_thirdparty_packages(triton_cache_path):
@@ -137,6 +68,8 @@ def get_thirdparty_packages(triton_cache_path):
         package_root_dir = os.path.join(triton_cache_path, p.package)
         package_dir = os.path.join(package_root_dir, p.name)
         test_file_path = os.path.join(package_dir, p.test_file)
+        if p.syspath_var_name in os.environ:
+            package_dir = os.environ[p.syspath_var_name]
         if not os.path.exists(test_file_path):
             try:
                 shutil.rmtree(package_root_dir)
@@ -206,8 +139,6 @@ class CMakeBuild(build_ext):
             os.makedirs(llvm_build_dir)
         # python directories
         python_include_dir = distutils.sysconfig.get_python_inc()
-        python_link_dir = distutils.sysconfig.get_python_lib()
-        python_library = get_python_library()
         cmake_args = [
             "-DLLVM_ENABLE_WERROR=ON",
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
@@ -216,8 +147,6 @@ class CMakeBuild(build_ext):
             # '-DPYTHON_EXECUTABLE=' + sys.executable,
             # '-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
             "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
-            "-DPYTHON_LINK_DIRS=" + python_link_dir,
-            "-DPYTHON_LIBRARIES=" + python_library,
             "-DLLVM_EXTERNAL_LIT=" + lit_dir
         ] + thirdparty_cmake_args
 

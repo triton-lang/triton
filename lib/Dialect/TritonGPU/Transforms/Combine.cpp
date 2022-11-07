@@ -103,48 +103,38 @@ public:
     // cvt(insert_slice(x), type2) -> insert_slice(cvt(x, type2))
     auto insert_slice = dyn_cast<triton::gpu::InsertSliceAsyncOp>(arg);
     if (insert_slice) {
-      auto newType = op->getResult(0).getType();
+      auto newType = op->getResult(0).getType().cast<RankedTensorType>();
       // Ensure that the new insert_slice op is placed in the same place as the
       // old insert_slice op. Otherwise, the new insert_slice op may be placed
       // after the async_wait op, which is not allowed.
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPoint(insert_slice);
-      auto new_arg = rewriter.create<triton::gpu::ConvertLayoutOp>(
+      auto newArg = rewriter.create<triton::gpu::ConvertLayoutOp>(
           op->getLoc(), newType, insert_slice.dst());
       rewriter.replaceOpWithNewOp<triton::gpu::InsertSliceAsyncOp>(
-          op, newType, insert_slice.src(), new_arg.getResult(),
+          op, newType, insert_slice.src(), newArg.getResult(),
           insert_slice.index(), insert_slice.mask(), insert_slice.other(),
-          insert_slice.cache(), insert_slice.evict(), insert_slice.isVolatile(),
-          insert_slice.axis());
+          insert_slice.cache(), insert_slice.evict(),
+          insert_slice.isVolatile(), insert_slice.axis());
       return mlir::success();
     }
-    // cvt(extract_slice(x), type2) ->extract_slice(cvt(x, type2))
-    bool isDstShared =
-        dstType.getEncoding().isa<triton::gpu::SharedEncodingAttr>();
+    // cvt(extract_slice(x), type2) -> extract_slice(cvt(x, type2))
     auto extract_slice = dyn_cast<tensor::ExtractSliceOp>(arg);
-    if (extract_slice && isDstShared) {
-      // New return type
-      auto origRetType =
-          extract_slice.getResult().getType().cast<RankedTensorType>();
+    if (extract_slice) {
+      auto origType = extract_slice.source().getType().cast<RankedTensorType>();
+      auto newType = RankedTensorType::get(
+          origType.getShape(), origType.getElementType(),
+          op->getResult(0).getType().cast<RankedTensorType>().getEncoding());
+      auto resType = op->getResult(0).getType().cast<RankedTensorType>();
       // Ensure that the new extract_slice op is placed in the same place as the
       // old extract_slice op. Otherwise, the new extract_slice op may be placed
       // after the async_wait op, which is not allowed.
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPoint(extract_slice);
-      auto newRetType = RankedTensorType::get(
-          origRetType.getShape(), origRetType.getElementType(),
-          op->getResult(0).getType().cast<RankedTensorType>().getEncoding());
-      // New argument type
-      auto origArgType =
-          extract_slice.source().getType().cast<RankedTensorType>();
-      auto newArgType = RankedTensorType::get(
-          origArgType.getShape(), origArgType.getElementType(),
-          op->getResult(0).getType().cast<RankedTensorType>().getEncoding());
       auto newArg = rewriter.create<triton::gpu::ConvertLayoutOp>(
-          op->getLoc(), newArgType, extract_slice.source());
-      // Create new extract_slice
+          op->getLoc(), newType, extract_slice.source());
       rewriter.replaceOpWithNewOp<tensor::ExtractSliceOp>(
-          op, newRetType, newArg.getResult(), extract_slice.offsets(),
+          op, resType, newArg.getResult(), extract_slice.offsets(),
           extract_slice.sizes(), extract_slice.strides(),
           extract_slice.static_offsets(), extract_slice.static_sizes(),
           extract_slice.static_strides());
@@ -217,9 +207,9 @@ static LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
 inline bool expensive_to_remat(Operation *op) {
   if (!op)
     return true;
-  if (isa<tensor::ExtractSliceOp, triton::gpu::ExtractSliceOp,
-          triton::gpu::AllocTensorOp, triton::gpu::InsertSliceAsyncOp,
-          triton::LoadOp, triton::StoreOp, triton::DotOp>(op))
+  if (isa<tensor::ExtractSliceOp, triton::gpu::AllocTensorOp,
+          triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp,
+          triton::AtomicRMWOp, triton::AtomicCASOp, triton::DotOp>(op))
     return true;
   if (isa<scf::YieldOp, scf::ForOp>(op))
     return true;
@@ -510,7 +500,9 @@ public:
 
     SetVector<Operation *> cvtSlices;
     auto filter = [&](Operation *op) {
-      return isInLoop(op) && !isa<triton::LoadOp>(op) &&
+      return isInLoop(op) &&
+             !isa<triton::LoadOp, triton::StoreOp, triton::AtomicRMWOp,
+                  triton::AtomicCASOp>(op) &&
              !isa<triton::DotOp>(op) && !isa<scf::YieldOp>(op) &&
              !isa<triton::gpu::ConvertLayoutOp>(op);
     };
@@ -565,6 +557,35 @@ public:
   BlockedToMMA(mlir::MLIRContext *context)
       : mlir::RewritePattern(triton::DotOp::getOperationName(), 2, context) {}
 
+  static SmallVector<unsigned, 2>
+  getWarpsPerTile(const ArrayRef<int64_t> &shape, int version, int numWarps) {
+    assert(version == 2);
+    // TODO: Handle one warp per row for fused matmuls
+    // TODO: unsigned -> int64_t to keep things uniform
+    SmallVector<unsigned, 2> ret = {1, 1};
+    SmallVector<int64_t, 2> shapePerWarp = {16, 8};
+    bool changed = false;
+    // TODO (@daadaada): double-check.
+    // original logic in
+    // https://github.com/openai/triton/blob/master/lib/codegen/analysis/layout.cc#L252
+    // seems buggy for shape = [32, 16] ?
+    do {
+      changed = false;
+      if (ret[0] * ret[1] >= numWarps)
+        break;
+      if (shape[0] / shapePerWarp[0] / ret[0] >=
+          shape[1] / (shapePerWarp[1] * 2) / ret[1]) {
+        if (ret[0] < shape[0] / shapePerWarp[0]) {
+          ret[0] *= 2;
+        } else
+          ret[1] *= 2;
+      } else {
+        ret[1] *= 2;
+      }
+    } while (true);
+    return ret;
+  }
+
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
@@ -573,10 +594,16 @@ public:
     auto oldRetType = dotOp.getResult().getType().cast<RankedTensorType>();
     if (oldRetType.getEncoding().isa<triton::gpu::MmaEncodingAttr>())
       return failure();
-    // TODO: compute warpsPerCTA
-    auto newRetType = RankedTensorType::get(
-        oldRetType.getShape(), oldRetType.getElementType(),
-        triton::gpu::MmaEncodingAttr::get(oldRetType.getContext(), 2, {2, 2}));
+    // get MMA encoding for the given number of warps
+    auto retShape = oldRetType.getShape();
+    auto mod = op->getParentOfType<mlir::ModuleOp>();
+    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    auto newRetType =
+        RankedTensorType::get(retShape, oldRetType.getElementType(),
+                              triton::gpu::MmaEncodingAttr::get(
+                                  oldRetType.getContext(), 2,
+                                  getWarpsPerTile(retShape, 2, numWarps)));
+    // convert accumulator
     auto oldAcc = dotOp.getOperand(2);
     auto newAcc = rewriter.create<triton::gpu::ConvertLayoutOp>(
         oldAcc.getLoc(), newRetType, oldAcc);

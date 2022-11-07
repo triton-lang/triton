@@ -180,7 +180,7 @@ func @insert_slice_async(%A : !tt.ptr<f16>, %i1 : i1) {
   // CHECK: offset = 0, size = 512
   %tensor = arith.constant dense<0.000000e+00> : tensor<1x16x16xf16, #A_SHARED>
   %index = arith.constant 0 : i32
-  %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index, %mask, %other {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isOtherUnspecified = false, isVolatile = false} : tensor<16x16x!tt.ptr<f16>, #AL> -> tensor<1x16x16xf16, #A_SHARED>
+  %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index, %mask, %other {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x16x!tt.ptr<f16>, #AL> -> tensor<1x16x16xf16, #A_SHARED>
   return
   // CHECK-NEXT: size = 512
 }
@@ -189,8 +189,8 @@ func @insert_slice_async(%A : !tt.ptr<f16>, %i1 : i1) {
 func @extract_slice(%A : !tt.ptr<f16>) {
   // CHECK: offset = 0, size = 512
   %cst0 = arith.constant dense<0.000000e+00> : tensor<1x16x16xf16, #A_SHARED>
-  %index = arith.constant 0 : i32
-  %cst1 = triton_gpu.extract_slice %cst0, %index { axis = 0 : i32 } : tensor<1x16x16xf16, #A_SHARED> -> tensor<16x16xf16, #A_SHARED>
+  %index = arith.constant 0 : index
+  %cst1 = tensor.extract_slice %cst0[%index, 0, 0][1, 16, 16][1,1,1] : tensor<1x16x16xf16, #A_SHARED> to tensor<16x16xf16, #A_SHARED>
   return
   // CHECK-NEXT: size = 512
 }
@@ -273,8 +273,8 @@ func @for_if_slice(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %
   %c_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) {
     scf.if %i1 {
-      %index = arith.constant 8 : i32
-      %cst0 = triton_gpu.extract_slice %a_shared, %index { axis = 0 : i32 } : tensor<128x32xf16, #A_SHARED> -> tensor<32xf16, #A_SHARED>
+      %index = arith.constant 8 : index
+      %cst0 = tensor.extract_slice %a_shared[%index, 0][1, 32][1, 1] : tensor<128x32xf16, #A_SHARED> to tensor<32xf16, #A_SHARED>
       scf.yield
     }
     scf.yield %b_shared, %a_shared, %a_shared : tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>

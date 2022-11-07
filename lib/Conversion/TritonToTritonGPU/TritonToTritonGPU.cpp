@@ -279,6 +279,20 @@ struct TritonStorePattern : public OpConversionPattern<triton::StoreOp> {
   }
 };
 
+struct TritonAtomicRMWPattern
+    : public OpConversionPattern<triton::AtomicRMWOp> {
+  using OpConversionPattern<triton::AtomicRMWOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<triton::AtomicRMWOp>(
+        op, typeConverter->convertType(op.getType()), adaptor.atomic_rmw_op(),
+        adaptor.ptr(), adaptor.val(), adaptor.mask());
+    return success();
+  }
+};
+
 struct TritonExtElemwisePattern
     : public OpConversionPattern<triton::ExtElemwiseOp> {
   using OpConversionPattern<triton::ExtElemwiseOp>::OpConversionPattern;
@@ -340,6 +354,18 @@ struct TritonReducePattern : public OpConversionPattern<triton::ReduceOp> {
   }
 };
 
+struct TritonPrintfPattern : public OpConversionPattern<triton::PrintfOp> {
+  using OpConversionPattern<PrintfOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(PrintfOp op, typename PrintfOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<triton::PrintfOp>(op, op.prefixAttr(),
+                                                  adaptor.getOperands());
+    return success();
+  }
+};
+
 void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
                             RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
@@ -351,8 +377,8 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       TritonGenericPattern<triton::SplatOp>, TritonBroadcastPattern,
       TritonGenericPattern<triton::AddPtrOp>, TritonReducePattern,
       TritonExpandDimsPattern, TritonMakeRangePattern, TritonDotPattern,
-      TritonLoadPattern, TritonStorePattern, TritonExtElemwisePattern>(
-      typeConverter, context);
+      TritonLoadPattern, TritonStorePattern, TritonExtElemwisePattern,
+      TritonPrintfPattern>(typeConverter, context);
 }
 
 //

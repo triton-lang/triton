@@ -198,7 +198,8 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
     ext_mod->setTargetTriple(llvmir->getTargetTriple());
     ext_mod->setDataLayout(llvmir->getDataLayout());
 
-    if (llvm::Linker::linkModules(*llvmir, std::move(ext_mod))) {
+    if (llvm::Linker::linkModules(*llvmir, std::move(ext_mod),
+                                  llvm::Linker::Flags::LinkOnlyNeeded)) {
       llvm::errs() << "Failed to link extern lib " << lib.first;
       return nullptr;
     }

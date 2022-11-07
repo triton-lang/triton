@@ -56,28 +56,34 @@ def elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: 
         :return: the return value of the function
     '''
     dispatch_args = args.copy()
-    if len(args) == 1:
-        dispatch_args[0] = core._to_tensor(dispatch_args[0], _builder)
-        ret_shape = dispatch_args[0].shape
-    elif len(args) == 2:
-        dispatch_args[0] = core._to_tensor(dispatch_args[0], _builder)
-        dispatch_args[1] = core._to_tensor(dispatch_args[1], _builder)
-        dispatch_args[0], dispatch_args[1] = semantic.binary_op_type_checking_impl(
-            dispatch_args[0], dispatch_args[1], _builder)
-        ret_shape = dispatch_args[0].shape
-    else:
-        for i in range(len(dispatch_args)):
-            dispatch_args[i] = core._to_tensor(dispatch_args[i], _builder)
-        broadcast_arg = dispatch_args[0]
-        # Get the broadcast shape over all the arguments
-        for i in range(len(dispatch_args)):
-            _, broadcast_arg = semantic.binary_op_type_checking_impl(
-                dispatch_args[i], broadcast_arg, _builder)
-        # Change the shape of each argument based on the broadcast shape
-        for i in range(len(dispatch_args)):
-            dispatch_args[i], _ = semantic.binary_op_type_checking_impl(
-                dispatch_args[i], broadcast_arg, _builder)
-        ret_shape = broadcast_arg.shape
+    all_scalar = True
+    ret_shape = None
+    for dispatch_arg in dispatch_args:
+        if dispatch_arg.type.is_block():
+            all_scalar = False
+    if not all_scalar:
+        if len(args) == 1:
+            dispatch_args[0] = core._to_tensor(dispatch_args[0], _builder)
+            ret_shape = dispatch_args[0].shape
+        elif len(args) == 2:
+            dispatch_args[0] = core._to_tensor(dispatch_args[0], _builder)
+            dispatch_args[1] = core._to_tensor(dispatch_args[1], _builder)
+            dispatch_args[0], dispatch_args[1] = semantic.binary_op_type_checking_impl(
+                dispatch_args[0], dispatch_args[1], _builder)
+            ret_shape = dispatch_args[0].shape
+        else:
+            for i in range(len(dispatch_args)):
+                dispatch_args[i] = core._to_tensor(dispatch_args[i], _builder)
+            broadcast_arg = dispatch_args[0]
+            # Get the broadcast shape over all the arguments
+            for i in range(len(dispatch_args)):
+                _, broadcast_arg = semantic.binary_op_type_checking_impl(
+                    dispatch_args[i], broadcast_arg, _builder)
+            # Change the shape of each argument based on the broadcast shape
+            for i in range(len(dispatch_args)):
+                dispatch_args[i], _ = semantic.binary_op_type_checking_impl(
+                    dispatch_args[i], broadcast_arg, _builder)
+            ret_shape = broadcast_arg.shape
     func = getattr(_builder, "create_external_elementwise")
     return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_shape, _builder)
 

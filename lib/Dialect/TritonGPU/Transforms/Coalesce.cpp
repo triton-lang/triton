@@ -118,6 +118,10 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
       builder.setInsertionPoint(curr);
       if (auto load = dyn_cast<triton::LoadOp>(curr))
         coalesceOp<triton::LoadOp>(axisInfo, curr, load.ptr(), builder);
+      if (auto op = dyn_cast<triton::AtomicRMWOp>(curr))
+        coalesceOp<triton::AtomicRMWOp>(axisInfo, curr, op.ptr(), builder);
+      if (auto op = dyn_cast<triton::AtomicCASOp>(curr))
+        coalesceOp<triton::AtomicCASOp>(axisInfo, curr, op.ptr(), builder);
       if (auto load = dyn_cast<triton::gpu::InsertSliceAsyncOp>(curr))
         coalesceOp<triton::gpu::InsertSliceAsyncOp>(axisInfo, curr, load.src(),
                                                     builder);

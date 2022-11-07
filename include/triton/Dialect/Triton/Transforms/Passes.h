@@ -8,7 +8,7 @@ namespace triton {
 
 std::unique_ptr<Pass> createCombineOpsPass();
 
-}
+} // namespace triton
 
 #define GEN_PASS_REGISTRATION
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
