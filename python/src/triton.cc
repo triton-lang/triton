@@ -461,6 +461,7 @@ void init_triton_ir(py::module &&m) {
                    loc, mlir::APFloat(floatTy.getFloatSemantics(), 0), floatTy);
              else if (auto intTy = type.dyn_cast<mlir::IntegerType>())
                return self.create<mlir::arith::ConstantIntOp>(loc, 0, intTy);
+             // TODO: support FP8
              else
                throw std::runtime_error("Not implemented");
            })
@@ -498,10 +499,6 @@ void init_triton_ir(py::module &&m) {
       .def("get_fp8_ty",
            [](mlir::OpBuilder &self) -> mlir::Type {
              return self.getType<mlir::triton::Float8Type>();
-           })
-      .def("get_bf8_ty",
-           [](mlir::OpBuilder &self) -> mlir::Type {
-             return self.getType<mlir::triton::BFloat8Type>();
            })
       .def(
           "get_half_ty",
@@ -622,14 +619,20 @@ void init_triton_ir(py::module &&m) {
            })
 
       // Cast instructions
+      // Conversions for custom FP types (FP8)
+      .def("create_fp_to_fp",
+           [](mlir::OpBuilder &self, mlir::Value &src,
+              mlir::Type &dstType) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::triton::FpToFp>(loc, dstType, src);
+           })
+      // Conversions for standard LLVM builtin types
       .def("create_bitcast",
            [](mlir::OpBuilder &self, mlir::Value &src,
               mlir::Type &dstType) -> mlir::Value {
              auto loc = self.getUnknownLoc();
              return self.create<mlir::triton::BitcastOp>(loc, dstType, src);
            })
-      // .def("create_cast", &ir::builder::create_cast)
-      // .def("create_ptr_to_int", &ir::builder::create_ptr_to_int)
       .def("create_si_to_fp",
            [](mlir::OpBuilder &self, mlir::Value &src,
               mlir::Type &dstType) -> mlir::Value {
@@ -703,7 +706,6 @@ void init_triton_ir(py::module &&m) {
              return self.create<mlir::arith::IndexCastOp>(loc, input,
                                                           self.getI32Type());
            })
-
       .def("create_fmul",
            [](mlir::OpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {

@@ -1,12 +1,20 @@
+# Triton builds
 build/
 
-__pycache__
-.pytest_cache
-
+# Triton Python module builds
 python/build/
 python/triton.egg-info/
 python/triton/_C/libtriton.pyd
 python/triton/_C/libtriton.so
 
+# Python caches
+__pycache__
+.pytest_cache
+
+# VS Code project files
 .vscode
 .vs
+
+# JetBrains project files
+.idea
+cmake-build-*
