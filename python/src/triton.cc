@@ -1080,7 +1080,8 @@ void init_triton_ir(py::module &&m) {
            [](mlir::OpBuilder &self, mlir::Value &ptr, mlir::Value &cmp,
               mlir::Value &val) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             auto ptrType = ptr.getType().dyn_cast<mlir::triton::PointerType>();
+             auto ptrType = mlir::getElementTypeOrSelf(ptr)
+                                .cast<mlir::triton::PointerType>();
              mlir::Type dstType = ptrType.getPointeeType();
              return self.create<mlir::triton::AtomicCASOp>(loc, dstType, ptr,
                                                            cmp, val);
@@ -1090,7 +1091,8 @@ void init_triton_ir(py::module &&m) {
               mlir::Value &ptr, mlir::Value &val,
               mlir::Value &mask) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             auto ptrType = ptr.getType().dyn_cast<mlir::triton::PointerType>();
+             auto ptrType = mlir::getElementTypeOrSelf(ptr)
+                                .cast<mlir::triton::PointerType>();
              mlir::Type dstType = ptrType.getPointeeType();
              return self.create<mlir::triton::AtomicRMWOp>(loc, dstType, rmwOp,
                                                            ptr, val, mask);
