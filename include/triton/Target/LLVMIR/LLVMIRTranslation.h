@@ -1,5 +1,6 @@
 #ifndef TRITON_TARGET_LLVMIRTRANSLATION_H
 #define TRITON_TARGET_LLVMIRTRANSLATION_H
+#include "llvm/ADT/StringRef.h"
 #include <memory>
 #include <vector>
 
@@ -28,6 +29,8 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
 // Translate mlir LLVM dialect to LLVMIR, return null if failed.
 std::unique_ptr<llvm::Module>
 translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module);
+
+bool linkExternLib(llvm::Module &module, llvm::StringRef path);
 
 } // namespace triton
 } // namespace mlir

@@ -1,6 +1,7 @@
 #include "triton/Analysis/Allocation.h"
 #include "mlir/Analysis/Liveness.h"
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "triton/Analysis/Alias.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -76,13 +77,13 @@ SmallVector<unsigned> getScratchConfigForReduce(triton::ReduceOp op) {
   auto srcShape = srcTy.getShape();
   auto axis = op.axis();
 
-  bool fast_reduce = axis == 1; // FIXME(Qingyi): The fastest-changing dimension
+  bool fastReduce = axis == 1; // FIXME(Qingyi): The fastest-changing dimension
 
   SmallVector<unsigned> smemShape;
   for (auto d : srcShape)
     smemShape.push_back(d);
 
-  if (fast_reduce) {
+  if (fastReduce) {
     unsigned sizeInterWarps = srcLayout.getWarpsPerCTA()[axis];
     smemShape[axis] = sizeInterWarps;
   } else {
@@ -123,7 +124,7 @@ private:
     // For example: %a = scf.if -> yield
     // %a must be allocated elsewhere by other operations.
     // FIXME(Keren): extract and insert are always alias for now
-    if (!maybeSharedAllocationOp(op) || isa<triton::gpu::ExtractSliceOp>(op) ||
+    if (!maybeSharedAllocationOp(op) || isa<tensor::ExtractSliceOp>(op) ||
         isa<triton::gpu::InsertSliceAsyncOp>(op)) {
       return;
     }

@@ -137,7 +137,7 @@ def kernel(X0, X1, Y, BLOCK: tl.constexpr):
     # reference result
 
     if expr == "cdiv":
-        y_ref = (x0 + x1 - 1) // x1
+        y_ref = torch.div(x0 + x1 - 1, x1, rounding_mode='trunc')
     elif expr == "umulhi":
         y_ref = ((x0.to(torch.int64) * x1) >> 32).to(torch.int32)
     else:
