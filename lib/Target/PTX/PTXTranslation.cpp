@@ -80,7 +80,7 @@ static std::string llir_to_ptx(llvm::Module *module, int capability, int ptx) {
                                           .parent_path() /
                                       "python" / "triton" / "language" /
                                       "libdevice.10.bc";
-    if (!mlir::triton::linkExternLib(*module, libdevice.string()))
+    if (mlir::triton::linkExternLib(*module, libdevice.string()))
       llvm::errs() << "link failed for: " << libdevice.string();
   }
 

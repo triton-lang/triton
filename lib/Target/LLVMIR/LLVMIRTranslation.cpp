@@ -189,7 +189,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
 
   llvm::SMDiagnostic err;
   for (auto &lib : externLibs) {
-    if (!linkExternLib(*llvmir, lib.second))
+    if (linkExternLib(*llvmir, lib.second))
       return nullptr;
   }
 
@@ -223,7 +223,7 @@ bool linkExternLib(llvm::Module &module, llvm::StringRef path) {
   auto extMod = llvm::parseIRFile(path, err, ctx);
   if (!extMod) {
     llvm::errs() << "Failed to load " << path;
-    return false;
+    return true;
   }
 
   extMod->setTargetTriple(module.getTargetTriple());
@@ -232,10 +232,10 @@ bool linkExternLib(llvm::Module &module, llvm::StringRef path) {
   if (llvm::Linker::linkModules(module, std::move(extMod),
                                 llvm::Linker::Flags::LinkOnlyNeeded)) {
     llvm::errs() << "Failed to link " << path;
-    return false;
+    return true;
   }
 
-  return true;
+  return false;
 }
 
 } // namespace triton
