@@ -222,7 +222,7 @@ bool linkExternLib(llvm::Module &module, llvm::StringRef path) {
 
   auto extMod = llvm::parseIRFile(path, err, ctx);
   if (!extMod) {
-    llvm::errs() << "Failed to load libdevice";
+    llvm::errs() << "Failed to load " << path;
     return false;
   }
 
@@ -231,7 +231,7 @@ bool linkExternLib(llvm::Module &module, llvm::StringRef path) {
 
   if (llvm::Linker::linkModules(module, std::move(extMod),
                                 llvm::Linker::Flags::LinkOnlyNeeded)) {
-    llvm::errs() << "Failed to link libdevice";
+    llvm::errs() << "Failed to link " << path;
     return false;
   }
 
