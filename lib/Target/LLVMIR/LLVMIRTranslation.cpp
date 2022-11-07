@@ -189,24 +189,8 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
 
   llvm::SMDiagnostic err;
   for (auto &lib : extern_libs) {
-    if ("libdevice" == lib.first) {
-      linkLibdevice(*llvmir, lib.first);
-      continue;
-    }
-
-    auto ext_mod = llvm::parseIRFile(lib.second, err, *llvmContext);
-    if (!ext_mod) {
-      llvm::errs() << "Failed to load extern lib " << lib.first;
+    if (!linkExternLib(*llvmir, lib.second))
       return nullptr;
-    }
-    ext_mod->setTargetTriple(llvmir->getTargetTriple());
-    ext_mod->setDataLayout(llvmir->getDataLayout());
-
-    if (llvm::Linker::linkModules(*llvmir, std::move(ext_mod),
-                                  llvm::Linker::Flags::LinkOnlyNeeded)) {
-      llvm::errs() << "Failed to link extern lib " << lib.first;
-      return nullptr;
-    }
   }
 
   return llvmir;
@@ -232,7 +216,7 @@ void addExternalLibs(mlir::ModuleOp &module,
   return;
 }
 
-bool linkLibdevice(llvm::Module &module, llvm::StringRef path) {
+bool linkExternLib(llvm::Module &module, llvm::StringRef path) {
   llvm::SMDiagnostic err;
   auto &ctx = module.getContext();
 
@@ -251,14 +235,6 @@ bool linkLibdevice(llvm::Module &module, llvm::StringRef path) {
     return false;
   }
 
-  llvm::Type *I32 = llvm::Type::getInt32Ty(ctx);
-  llvm::Metadata *md_four =
-      llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(I32, 4));
-  llvm::Metadata *md_name = llvm::MDString::get(ctx, "nvvm-reflect-ftz");
-  llvm::Metadata *md_one =
-      llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(I32, 1));
-  llvm::MDNode *reflect = llvm::MDNode::get(ctx, {md_four, md_name, md_one});
-  module.addModuleFlag(reflect);
   return true;
 }
 

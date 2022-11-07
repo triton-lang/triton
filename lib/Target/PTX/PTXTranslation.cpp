@@ -80,10 +80,25 @@ static std::string llir_to_ptx(llvm::Module *module, int capability, int ptx) {
                                           .parent_path() /
                                       "python" / "triton" / "language" /
                                       "libdevice.10.bc";
-    if (mlir::triton::linkLibdevice(*module, libdevice.string()))
+    if (!mlir::triton::linkExternLib(*module, libdevice.string()))
       llvm::errs() << "link failed for: " << libdevice.string();
   }
 
+  // please check https://llvm.org/docs/NVPTXUsage.html#reflection-parameters
+  // this will enable fast math path in libdevice
+  // for example, when enable nvvm-reflect-ftz, sqrt.approx.f32 will change to
+  // sqrt.approx.ftz.f32
+  {
+    auto &ctx = module->getContext();
+    llvm::Type *I32 = llvm::Type::getInt32Ty(ctx);
+    llvm::Metadata *md_four =
+        llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(I32, 4));
+    llvm::Metadata *md_name = llvm::MDString::get(ctx, "nvvm-reflect-ftz");
+    llvm::Metadata *md_one =
+        llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(I32, 1));
+    llvm::MDNode *reflect = llvm::MDNode::get(ctx, {md_four, md_name, md_one});
+    module->addModuleFlag(reflect);
+  }
   // LLVM version in use may not officially support target hardware
   int max_nvvm_cc = 75;
   // int max_nvvm_ptx = 74;
