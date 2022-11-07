@@ -79,6 +79,9 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
                                           builder.getIntegerAttr(ty, value));
 }
 
+void llPrintf(StringRef msg, ValueRange args,
+              ConversionPatternRewriter &rewriter);
+
 } // namespace
 
 // Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
@@ -4586,7 +4589,7 @@ struct PrintfOpConversion
   }
   // get format specific for each input value
   // currently support pointer, i8, i16, i32, i64, f16, bf16, f32, f64
-  std::string getFormatSubstr(Value value) const {
+  static std::string getFormatSubstr(Value value) {
     Type type = value.getType();
     unsigned width = type.getIntOrFloatBitWidth();
 
@@ -4603,8 +4606,8 @@ struct PrintfOpConversion
   }
 
   // declare vprintf(i8*, i8*) as external function
-  LLVM::LLVMFuncOp
-  getVprintfDeclaration(ConversionPatternRewriter &rewriter) const {
+  static LLVM::LLVMFuncOp
+  getVprintfDeclaration(ConversionPatternRewriter &rewriter) {
     auto moduleOp =
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     StringRef funcName("vprintf");
@@ -4627,8 +4630,8 @@ struct PrintfOpConversion
 
   // extend integer to int32, extend float to float64
   // this comes from vprintf alignment requirements.
-  std::pair<Type, Value> promoteValue(ConversionPatternRewriter &rewriter,
-                                      Value value) const {
+  static std::pair<Type, Value>
+  promoteValue(ConversionPatternRewriter &rewriter, Value value) {
     auto *context = rewriter.getContext();
     auto type = value.getType();
     unsigned width = type.getIntOrFloatBitWidth();
@@ -4655,8 +4658,8 @@ struct PrintfOpConversion
     return {newType, newOp};
   }
 
-  void llPrintf(StringRef msg, ValueRange args,
-                ConversionPatternRewriter &rewriter) const {
+  static void llPrintf(StringRef msg, ValueRange args,
+                       ConversionPatternRewriter &rewriter) {
     static const char formatStringPrefix[] = "printfFormat_";
     assert(!msg.empty() && "printf with empty string not support");
     Type int8Ptr = ptr_ty(i8_ty);
@@ -4936,6 +4939,12 @@ void ConvertTritonGPUToLLVM::initSharedMemory(
   auto ptrTy =
       LLVM::LLVMPointerType::get(typeConverter.convertType(b.getI8Type()), 3);
   smem = b.create<LLVM::BitcastOp>(loc, ptrTy, smem);
+}
+
+void llPrintf(StringRef msg, ValueRange args,
+              ConversionPatternRewriter &rewriter) {
+
+  PrintfOpConversion::llPrintf(msg, args, rewriter);
 }
 
 } // namespace
