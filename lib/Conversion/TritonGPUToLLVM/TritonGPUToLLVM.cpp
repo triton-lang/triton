@@ -3517,7 +3517,7 @@ struct MMA16816ConversionHelper {
       }
 
       // DEBUG: print $a
-      auto print_a = [&](int m, int k, ValueTable &dic) {
+      auto print_val = [&](int m, int k, ValueTable &dic, StringRef hint) {
         auto _val = dic[{m, k}];
         auto val = bitcast(_val, vec_ty(i8_ty, 4));
 
@@ -3525,19 +3525,19 @@ struct MMA16816ConversionHelper {
         SmallVector<Value> vals;
         for (int i = 0; i < 4; i++)
           vals.push_back(extract_element(i8_ty, val, i32_val(i)));
-        LLVM::llPrintf("t-%d $a: (m%d, n%d) = [%d,%d,%d,%d]",
+        LLVM::llPrintf("t-%d $" + hint.str() + ": (m%d, n%d) = [%d,%d,%d,%d]",
                        {thread, i32_val(m), i32_val(n),
                         // data
                         vals[0], vals[1], vals[2], vals[3]},
                        rewriter);
       };
 
-      print_a(m, k, ha);
+      print_val(m, k, ha, "a");
       // print_a(m+1, k, ha);
       // print_a(m, k+1, ha);
       // print_a(m+1, k+1, ha);
 
-      print_a(n, k, hb);
+      print_val(n, k, hb, "b");
 
       // DEBUG: print $b
       // DEBUG: print $c
