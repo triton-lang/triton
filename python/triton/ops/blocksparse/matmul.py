@@ -82,14 +82,6 @@ def _sdd_kernel(
 
 
 def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, widths, out=None):
-    if a.stride(2) != 1 and a.stride(3) != 1:
-        a = a.contiguous()
-    if b.stride(2) != 1 and b.stride(3) != 1:
-        b = b.contiguous()
-    # (A * B)^T = B^T * A^T
-    if trans_c:
-        a, b = b, a
-        trans_a, trans_b = not trans_b, not trans_a
     # shape constraints
     a_dim = -2 if trans_a else -1
     b_dim = -1 if trans_b else -2
@@ -102,6 +94,28 @@ def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, widths, out=
     else:
         assert out.shape == (a.shape[0], lut.shape[0], block, block)
         c = out
+
+    # (A * B)^T = B^T * A^T
+    if trans_c:
+        a, b = b, a
+        trans_a, trans_b = not trans_b, not trans_a
+
+    def matrix_to_row_col_major(m, trans):
+        # No-op if already row/col-major
+        if m.is_contiguous() or m.transpose(-2, -1).is_contiguous():
+            return m
+
+        if not trans:
+            # Return row-major if transposition is not required
+            return m.contiguous()
+        else:
+            # Return col-major otherwise
+            return m.transpose(-2, -1).contiguous().transpose_(-2, -1)
+
+    # Handle cases when input matrices are neither row-major nor col-major.
+    a = matrix_to_row_col_major(a, trans_a)
+    b = matrix_to_row_col_major(b, not trans_b)
+
     grid = [1, c.shape[1], c.shape[0]]
     _sdd_kernel[grid](
         a, b, c,

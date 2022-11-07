@@ -10,7 +10,8 @@ import triton._C.libtriton.triton as _triton
 @pytest.mark.parametrize("TRANS_B", [False, True])
 @pytest.mark.parametrize("BLOCK", [16, 32, 64])
 @pytest.mark.parametrize("DTYPE", [torch.float16])
-def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=256):
+@pytest.mark.parametrize("IS_ROWCOL_MAJOR", [True, False])
+def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, IS_ROWCOL_MAJOR, Z=3, H=2, M=512, N=384, K=256):
     seed = 0
     torch.manual_seed(seed)
     is_sdd = MODE == "sdd"
@@ -34,6 +35,17 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     # create data
     a_ref, a_tri = triton.testing.make_pair(a_shape, alpha=.1)
     b_ref, b_tri = triton.testing.make_pair(b_shape, alpha=.1)
+    if not IS_ROWCOL_MAJOR:
+        def break_row_col_major(m):
+            # inputs are at least 4D, so dim flip is sufficient
+            # to knock block dims out of their positions.
+            dims_flipped = list(range(m.dim() - 1, -1, -1))
+            res = m.permute(dims_flipped).contiguous().permute(dims_flipped)
+            assert (not res.is_contiguous()) and (not res.transpose(-2, -1).is_contiguous())
+            return res
+
+        a_tri = break_row_col_major(a_tri)
+        b_tri = break_row_col_major(b_tri)
     dc_ref, dc_tri = triton.testing.make_pair(c_shape)
     # compute [torch]
     dc_ref = do_mask(dc_ref) if is_sdd else dc_ref
