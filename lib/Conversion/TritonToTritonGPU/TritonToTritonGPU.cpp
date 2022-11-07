@@ -357,6 +357,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
   patterns.add< // TODO: view should have custom pattern that views the layout
       TritonGenericPattern<triton::ViewOp>,
       TritonGenericPattern<triton::BitcastOp>,
+      TritonGenericPattern<triton::FpToFpOp>,
       TritonGenericPattern<triton::IntToPtrOp>,
       TritonGenericPattern<triton::PtrToIntOp>,
       TritonGenericPattern<triton::SplatOp>, TritonBroadcastPattern,

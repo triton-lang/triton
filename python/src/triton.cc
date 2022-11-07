@@ -624,7 +624,7 @@ void init_triton_ir(py::module &&m) {
            [](mlir::OpBuilder &self, mlir::Value &src,
               mlir::Type &dstType) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             return self.create<mlir::triton::FpToFp>(loc, dstType, src);
+             return self.create<mlir::triton::FpToFpOp>(loc, dstType, src);
            })
       // Conversions for standard LLVM builtin types
       .def("create_bitcast",
