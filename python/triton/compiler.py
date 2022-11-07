@@ -1281,17 +1281,17 @@ def make_fn_cache_key(fn_hash, signature, configs, constants, num_warps, num_sta
 def read_or_execute(cache_manager, force_compile, file_name, metadata,
                     run_if_found: Callable[[str], bytes] = None,
                     run_if_not_found: Callable = None):
+    suffix = file_name.split(".")[1]
     if not force_compile and cache_manager.has_file(file_name):
       module = run_if_found(cache_manager._make_path(file_name))
       data = module if isinstance(module, bytes) else str(module).encode("utf-8")
       md5 = hashlib.md5(data).hexdigest()
-      suffix = file_name.split(".")[1]
       has_changed = metadata and md5 != metadata["md5"][suffix]
       return module, md5, has_changed, True
     module = run_if_not_found()
     data = module if isinstance(module, bytes) else str(module).encode("utf-8")
     md5 = hashlib.md5(data).hexdigest()
-    cache_manager.put(data, file_name, True)
+    cache_manager.put(data, file_name, True if isinstance(data, bytes) else data)
     return module, md5, True, False
 
 
