@@ -186,7 +186,14 @@ def TT_StoreOp : TT_Op<"store",
 // Atomic Op
 //
 def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
-                                          SameOperandsAndResultEncoding]> {
+                                          SameOperandsAndResultEncoding,
+                                          MemoryEffects<[MemWrite]>,
+                                          TypesMatchWith<"infer ptr type from value type",
+                                                         "val", "ptr",
+                                                         "getPointerTypeSameShape($_self)">,
+                                          TypesMatchWith<"infer mask type from value type",
+                                                         "val", "mask", "getI1SameShape($_self)",
+                                                       "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
     let summary = "atomic rmw";
 
     let description = [{
@@ -195,8 +202,8 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
         return old value at $ptr
     }];
 
-    let arguments = (ins TT_AtomicRMWAttr:$atomic_rmw_op, TT_PtrTensor:$ptr,
-                         TT_Type:$val, I1Tensor:$mask);
+    let arguments = (ins TT_AtomicRMWAttr:$atomic_rmw_op, TT_PtrLike:$ptr,
+                         TT_Type:$val, Optional<TT_BoolLike>:$mask);
 
     let results = (outs TT_Type:$result);
 }

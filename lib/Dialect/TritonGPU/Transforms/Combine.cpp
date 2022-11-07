@@ -204,7 +204,7 @@ inline bool expensive_to_remat(Operation *op) {
     return true;
   if (isa<tensor::ExtractSliceOp, triton::gpu::AllocTensorOp,
           triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp,
-          triton::DotOp>(op))
+          triton::AtomicRMWOp, triton::AtomicCASOp, triton::DotOp>(op))
     return true;
   if (isa<scf::YieldOp, scf::ForOp>(op))
     return true;
@@ -482,7 +482,9 @@ public:
 
     SetVector<Operation *> cvtSlices;
     auto filter = [&](Operation *op) {
-      return isInLoop(op) && !isa<triton::LoadOp>(op) &&
+      return isInLoop(op) &&
+             !isa<triton::LoadOp, triton::StoreOp, triton::AtomicRMWOp,
+                  triton::AtomicCASOp>(op) &&
              !isa<triton::DotOp>(op) && !isa<scf::YieldOp>(op) &&
              !isa<triton::gpu::ConvertLayoutOp>(op);
     };
