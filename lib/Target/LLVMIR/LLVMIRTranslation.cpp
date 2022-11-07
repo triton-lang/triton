@@ -189,6 +189,11 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
 
   llvm::SMDiagnostic err;
   for (auto &lib : extern_libs) {
+    if ("libdevice" == lib.first) {
+      linkLibdevice(*llvmir, lib.first);
+      continue;
+    }
+
     auto ext_mod = llvm::parseIRFile(lib.second, err, *llvmContext);
     if (!ext_mod) {
       llvm::errs() << "Failed to load extern lib " << lib.first;
@@ -225,6 +230,36 @@ void addExternalLibs(mlir::ModuleOp &module,
   DictionaryAttr dict = DictionaryAttr::get(module->getContext(), attrs);
   module.getOperation()->setAttr("triton_gpu.externs", dict);
   return;
+}
+
+bool linkLibdevice(llvm::Module &module, const std::string &path) {
+  llvm::SMDiagnostic err;
+  auto &ctx = module.getContext();
+
+  auto deviceMod = llvm::parseIRFile(path, err, ctx);
+  if (!deviceMod) {
+    llvm::errs() << "Failed to load libdevice";
+    return false;
+  }
+
+  deviceMod->setTargetTriple(module.getTargetTriple());
+  deviceMod->setDataLayout(module.getDataLayout());
+
+  if (llvm::Linker::linkModules(module, std::move(deviceMod),
+                                llvm::Linker::Flags::LinkOnlyNeeded)) {
+    llvm::errs() << "Failed to link libdevice";
+    return false;
+  }
+
+  llvm::Type *I32 = llvm::Type::getInt32Ty(ctx);
+  llvm::Metadata *md_four =
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(I32, 4));
+  llvm::Metadata *md_name = llvm::MDString::get(ctx, "nvvm-reflect-ftz");
+  llvm::Metadata *md_one =
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(I32, 1));
+  llvm::MDNode *reflect = llvm::MDNode::get(ctx, {md_four, md_name, md_one});
+  module.addModuleFlag(reflect);
+  return true;
 }
 
 } // namespace triton

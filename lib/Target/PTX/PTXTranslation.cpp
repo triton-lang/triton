@@ -29,6 +29,7 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include <filesystem>
 #include <regex>
 
 namespace triton {
@@ -61,6 +62,25 @@ static bool find_and_replace(std::string &str, const std::string &begin,
 }
 
 static std::string llir_to_ptx(llvm::Module *module, int capability, int ptx) {
+  bool hasExternal = false;
+  for (auto &func : *module) {
+    if (func.hasExternalLinkage())
+      hasExternal = true;
+  }
+
+  if (hasExternal) {
+    namespace fs = std::filesystem;
+    static const fs::path libdevice = fs::path(__FILE__)
+                                          .parent_path()
+                                          .parent_path()
+                                          .parent_path()
+                                          .parent_path() /
+                                      "python" / "triton" / "language" /
+                                      "libdevice.10.bc";
+    if (mlir::triton::linkLibdevice(*module, libdevice.string()))
+      llvm::errs() << "link failed for: " << libdevice.string();
+  }
+
   // LLVM version in use may not officially support target hardware
   int max_nvvm_cc = 75;
   // int max_nvvm_ptx = 74;
