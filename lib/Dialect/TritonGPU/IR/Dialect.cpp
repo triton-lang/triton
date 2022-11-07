@@ -57,6 +57,8 @@ unsigned getElemsPerThread(Type type) {
     return mmaLayout.getElemsPerThread(shape);
   } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
     return sharedLayout.getElemsPerThread(shape);
+  } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
+    return dotLayout.getElemsPerThread(shape);
   } else {
     assert(0 && "getElemsPerThread not implemented");
     return 0;
@@ -74,6 +76,7 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
            "mmaLayout version = 1 is not implemented yet");
     return SmallVector<unsigned>{2, 2};
   } else {
+    llvm::errs() << "layout: " << layout << "\n";
     assert(0 && "getSizePerThread not implemented");
     return {};
   }
@@ -315,6 +318,12 @@ unsigned MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
 unsigned SharedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   // TODO:
   assert(0 && "SharedEncodingAttr::getElemsPerThread not implemented");
+  return 0;
+}
+
+unsigned
+DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
+  assert(0 && "DotOPerandEncodingAttr::getElemsPerThread not implemented");
   return 0;
 }
 

@@ -27,6 +27,51 @@ namespace mlir {
 //===----------------------------------------------------------------------===//
 namespace triton {
 
+static std::pair<SmallVector<unsigned>, SmallVector<unsigned>>
+getCvtOrder(const Attribute &srcLayout, const Attribute &dstLayout) {
+  auto srcBlockedLayout = srcLayout.dyn_cast<BlockedEncodingAttr>();
+  auto srcMmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>();
+  auto srcDotLayout = srcLayout.dyn_cast<DotOperandEncodingAttr>();
+  auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>();
+  auto dstMmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>();
+  auto dstDotLayout = dstLayout.dyn_cast<DotOperandEncodingAttr>();
+  assert(!(srcMmaLayout && dstMmaLayout) &&
+         "Unexpected mma -> mma layout conversion");
+  auto inOrd = (srcMmaLayout || srcDotLayout) ? getOrder(dstLayout)
+                                              : getOrder(srcLayout);
+  auto outOrd = (dstMmaLayout || dstDotLayout) ? getOrder(srcLayout)
+                                               : getOrder(dstLayout);
+
+  return {inOrd, outOrd};
+}
+
+static std::pair<unsigned, unsigned> getCvtContigPerThread(
+    const Attribute &srcLayout, const ArrayRef<unsigned> inOrd,
+    const Attribute &dstLayout, const ArrayRef<unsigned> outOrd) {
+  auto getContigFn = [](const Attribute &layout, const Attribute &otherLayout,
+                        const ArrayRef<unsigned> ord) {
+    auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>();
+    if (dotLayout) {
+      auto parentLayout = dotLayout.getParent();
+      auto blockedLayout = otherLayout.dyn_cast<BlockedEncodingAttr>();
+      assert(parentLayout && "DotOperandEncodingAttr must have a parent");
+      assert(blockedLayout && "DotOperandEncodingAttr must be converted to a "
+                              "BlockedEncodingAttr");
+      auto idx = dotLayout.getOpIdx();
+      if (idx == 0)
+        return static_cast<unsigned>(
+            std::ceil(16.0 / blockedLayout.getThreadsPerWarp()[1]));
+      else
+        return getSizePerThread(blockedLayout)[1];
+    } else {
+      return getSizePerThread(layout)[ord[0]];
+    }
+  };
+  unsigned srcContigPerThread = getContigFn(srcLayout, dstLayout, inOrd);
+  unsigned dstContigPerThread = getContigFn(dstLayout, srcLayout, outOrd);
+  return {srcContigPerThread, dstContigPerThread};
+}
+
 SmallVector<unsigned>
 getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
                              unsigned &outVec) {
@@ -38,23 +83,9 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
          "Unexpect layout in getScratchConfigForCvtLayout()");
   unsigned rank = dstTy.getRank();
   SmallVector<unsigned> paddedRepShape(rank);
-  auto srcBlockedLayout = srcLayout.dyn_cast<BlockedEncodingAttr>();
-  auto srcMmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>();
-  auto srcDotLayout = srcLayout.dyn_cast<DotOperandEncodingAttr>();
-  auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>();
-  auto dstMmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>();
-  auto dstDotLayout = dstLayout.dyn_cast<DotOperandEncodingAttr>();
-  assert(!(srcMmaLayout && dstMmaLayout) &&
-         "Unexpected mma -> mma layout conversion");
-  // MMA or Dot layout does not have the “order" attribute.
-  // so the layout in smem during the conversion of mma(dot)->blocked (or
-  // blocked->mma(dot)) is up to the blocked layout.
-  auto inOrd = (srcMmaLayout || srcDotLayout) ? getOrder(dstLayout)
-                                              : getOrder(srcLayout);
-  auto outOrd = (dstMmaLayout || dstDotLayout) ? getOrder(srcLayout)
-                                               : getOrder(dstLayout);
-  unsigned srcContigPerThread = getSizePerThread(srcLayout)[inOrd[0]];
-  unsigned dstContigPerThread = getSizePerThread(dstLayout)[outOrd[0]];
+  auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
+  auto [srcContigPerThread, dstContigPerThread] =
+      getCvtContigPerThread(srcLayout, inOrd, dstLayout, outOrd);
   // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
   //       that we cannot do vectorization.
   inVec = outOrd[0] == 0 ? 1 : inOrd[0] == 0 ? 1 : srcContigPerThread;
@@ -151,8 +182,6 @@ private:
 
   /// Initializes temporary shared memory for a given operation.
   void getScratchValueSize(Operation *op) {
-    // TODO(Keren): Add atomic ops
-    // TODO(Keren): Add convert ops
     if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
       // TODO(Keren): Reduce with index is not supported yet.
       auto value = op->getOperand(0);
