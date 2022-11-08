@@ -1699,7 +1699,7 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
       SmallVector<Value> readIdx = resultIndices[i];
       Value readOffset =
           linearize(rewriter, loc, reorder<Value>(readIdx, resultOrd),
-                    reorder<long, unsigned>(resultShape, resultOrd));
+                    reorder<int64_t, unsigned>(resultShape, resultOrd));
       Value readPtr = gep(elemPtrTy, smemBase, readOffset);
       resultVals[i] = load(readPtr);
     }
