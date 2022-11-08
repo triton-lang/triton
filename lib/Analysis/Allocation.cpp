@@ -91,7 +91,7 @@ SmallVector<unsigned> getScratchConfigForReduce(triton::ReduceOp op) {
   auto srcShape = srcTy.getShape();
   auto axis = op.axis();
 
-  bool fastReduce = axis == 1; // FIXME(Qingyi): The fastest-changing dimension
+  bool fastReduce = axis == srcLayout.getOrder()[0];
 
   SmallVector<unsigned> smemShape;
   for (auto d : srcShape)
