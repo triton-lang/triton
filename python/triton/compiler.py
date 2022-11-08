@@ -25,6 +25,7 @@ from filelock import FileLock
 
 import triton
 import triton._C.libtriton.triton as _triton
+from .tools.disasm import extract
 
 
 def str_to_ty(name):
@@ -875,8 +876,6 @@ def ttir_to_ttgir(mod, num_warps, num_stages):
     pm = _triton.ir.pass_manager(mod.context)
     pm.add_convert_triton_to_tritongpu_pass(num_warps)
     pm.enable_debug()
-    # Get error in backend due to wrong conversion in expanding async-related instruction.
-    # TODO[Superjomn]: Open it when fixed.
     pm.add_tritongpu_pipeline_pass(num_stages)
     pm.add_canonicalizer_pass()
     pm.add_cse_pass()
@@ -1282,17 +1281,17 @@ def make_fn_cache_key(fn_hash, signature, configs, constants, num_warps, num_sta
 def read_or_execute(cache_manager, force_compile, file_name, metadata,
                     run_if_found: Callable[[str], bytes] = None,
                     run_if_not_found: Callable = None):
+    suffix = file_name.split(".")[1]
     if not force_compile and cache_manager.has_file(file_name):
       module = run_if_found(cache_manager._make_path(file_name))
       data = module if isinstance(module, bytes) else str(module).encode("utf-8")
       md5 = hashlib.md5(data).hexdigest()
-      suffix = file_name.split(".")[1]
       has_changed = metadata and md5 != metadata["md5"][suffix]
       return module, md5, has_changed, True
     module = run_if_not_found()
     data = module if isinstance(module, bytes) else str(module).encode("utf-8")
     md5 = hashlib.md5(data).hexdigest()
-    cache_manager.put(data, file_name, True)
+    cache_manager.put(data, file_name, True if isinstance(data, bytes) else data)
     return module, md5, True, False
 
 
@@ -1395,6 +1394,19 @@ class CompiledKernel:
                 stream = torch.cuda.current_stream().cuda_stream
             self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.shared, stream, self.cu_function, *args)
         return
+
+    def get_sass(self, fun=None):
+        if 'sass' in self.asm:
+            return self.asm['sass']
+        fd, path = tempfile.mkstemp()
+        try:
+            with open(fd, 'wb') as cubin:
+                cubin.write(self.asm['cubin'])
+            self.sass = extract(path, fun)
+        finally:
+            os.remove(path)
+        self.asm['sass'] = self.sass
+        return self.sass
 
 
 class CudaUtils(object):

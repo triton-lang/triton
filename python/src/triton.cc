@@ -319,28 +319,22 @@ void init_triton_ir(py::module &&m) {
   m.def(
       "parse_mlir_module",
       [](const std::string &inputFilename, mlir::MLIRContext &context) {
-        // open file
-        std::string errorMessage;
-        auto input = mlir::openInputFile(inputFilename, &errorMessage);
-        if (!input)
-          throw std::runtime_error(errorMessage);
-
         // initialize registry
         mlir::DialectRegistry registry;
         registry.insert<mlir::triton::TritonDialect,
                         mlir::triton::gpu::TritonGPUDialect,
                         mlir::math::MathDialect, mlir::arith::ArithmeticDialect,
                         mlir::StandardOpsDialect, mlir::scf::SCFDialect>();
-
         context.appendDialectRegistry(registry);
         context.loadAllAvailableDialects();
-        context.allowUnregisteredDialects();
 
         // parse module
-        llvm::SourceMgr sourceMgr;
-        sourceMgr.AddNewSourceBuffer(std::move(input), llvm::SMLoc());
         mlir::OwningOpRef<mlir::ModuleOp> module(
-            mlir::parseSourceFile(sourceMgr, &context));
+            mlir::parseSourceFile(inputFilename, &context));
+        // locations are incompatible with ptx < 7.5 !
+        module->walk([](mlir::Operation *op) {
+          op->setLoc(mlir::UnknownLoc::get(op->getContext()));
+        });
         if (!module)
           throw std::runtime_error("Parse MLIR file failed.");
 
@@ -1080,7 +1074,8 @@ void init_triton_ir(py::module &&m) {
            [](mlir::OpBuilder &self, mlir::Value &ptr, mlir::Value &cmp,
               mlir::Value &val) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             auto ptrType = ptr.getType().dyn_cast<mlir::triton::PointerType>();
+             auto ptrType = mlir::getElementTypeOrSelf(ptr)
+                                .cast<mlir::triton::PointerType>();
              mlir::Type dstType = ptrType.getPointeeType();
              return self.create<mlir::triton::AtomicCASOp>(loc, dstType, ptr,
                                                            cmp, val);
@@ -1090,7 +1085,8 @@ void init_triton_ir(py::module &&m) {
               mlir::Value &ptr, mlir::Value &val,
               mlir::Value &mask) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             auto ptrType = ptr.getType().dyn_cast<mlir::triton::PointerType>();
+             auto ptrType = mlir::getElementTypeOrSelf(ptr)
+                                .cast<mlir::triton::PointerType>();
              mlir::Type dstType = ptrType.getPointeeType();
              return self.create<mlir::triton::AtomicRMWOp>(loc, dstType, rmwOp,
                                                            ptr, val, mask);
