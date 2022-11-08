@@ -1545,9 +1545,11 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
   Location loc = op->getLoc();
   unsigned axis = adaptor.axis();
 
+  llvm::outs() << "!!\n";
   auto srcTy = op.operand().getType().cast<RankedTensorType>();
   auto srcLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
   auto srcShape = srcTy.getShape();
+  llvm::outs() << "done!\n";
 
   auto threadsPerWarp = srcLayout.getThreadsPerWarp();
   auto warpsPerCTA = srcLayout.getWarpsPerCTA();

@@ -122,8 +122,8 @@ public:
       rewriter.replaceOpWithNewOp<triton::gpu::InsertSliceAsyncOp>(
           op, newType, insert_slice.src(), newArg.getResult(),
           insert_slice.index(), insert_slice.mask(), insert_slice.other(),
-          insert_slice.cache(), insert_slice.evict(),
-          insert_slice.isVolatile(), insert_slice.axis());
+          insert_slice.cache(), insert_slice.evict(), insert_slice.isVolatile(),
+          insert_slice.axis());
       return mlir::success();
     }
     // cvt(extract_slice(x), type2) -> extract_slice(cvt(x, type2))
@@ -580,11 +580,9 @@ public:
     auto retShape = oldRetType.getShape();
     auto mod = op->getParentOfType<mlir::ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    auto newRetType =
-        RankedTensorType::get(retShape, oldRetType.getElementType(),
-                              triton::gpu::MmaEncodingAttr::get(
-                                  oldRetType.getContext(), 2,
-                                  getWarpsPerTile(retShape, 2, numWarps)));
+    auto newRetType = RankedTensorType::get(
+        retShape, oldRetType.getElementType(),
+        triton::gpu::MmaEncodingAttr::get(oldRetType.getContext(), 2, {2, 2}));
     // convert accumulator
     auto oldAcc = dotOp.getOperand(2);
     auto newAcc = rewriter.create<triton::gpu::ConvertLayoutOp>(

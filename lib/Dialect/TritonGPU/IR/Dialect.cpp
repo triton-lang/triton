@@ -42,7 +42,10 @@ static Type getPointeeType(Type type) {
 
 namespace gpu {
 
-// TODO: Inheritation of layout attributes
+// TODO: Inheritance of layout attributes
+// so that all distributed layouts implement
+// these utilities
+
 unsigned getElemsPerThread(Type type) {
   if (type.isIntOrIndexOrFloat() || type.isa<triton::PointerType>())
     return 1;
@@ -61,6 +64,34 @@ unsigned getElemsPerThread(Type type) {
     assert(0 && "getElemsPerThread not implemented");
     return 0;
   }
+}
+
+SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
+  if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
+    return SmallVector<unsigned>(blockedLayout.getThreadsPerWarp().begin(),
+                                 blockedLayout.getThreadsPerWarp().end());
+  }
+  if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+    if (mmaLayout.getVersion() == 1)
+      return SmallVector<unsigned>{4, 8};
+    if (mmaLayout.getVersion() == 2)
+      return SmallVector<unsigned>{8, 4};
+  }
+  assert(0 && "getWarpsPerCTA not implemented");
+  return {};
+}
+
+SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
+  if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
+    return SmallVector<unsigned>(blockedLayout.getWarpsPerCTA().begin(),
+                                 blockedLayout.getWarpsPerCTA().end());
+  }
+  if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+    return SmallVector<unsigned>(mmaLayout.getWarpsPerCTA().begin(),
+                                 mmaLayout.getWarpsPerCTA().end());
+  }
+  assert(0 && "getWarpsPerCTA not implemented");
+  return {};
 }
 
 SmallVector<unsigned> getSizePerThread(Attribute layout) {
