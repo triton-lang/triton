@@ -53,36 +53,16 @@ def matmul_no_scf_kernel(
 
 
 @pytest.mark.parametrize('SIZE_M,SIZE_N,SIZE_K,NUM_WARPS', [
-    [128, 256, 32, 4],
-    [256, 128, 16, 4],
-    [128, 16, 32, 4],
-    [32, 128, 64, 4],
-    [128, 128, 64, 4],
-    [64, 128, 128, 4],
-    [64, 128, 128, 2],
+    [64, 128, 128, 1],
+    [128, 128, 128, 4],
+    [16, 8, 32, 1],
+    [32, 16, 64, 2],
+    [32, 16, 64, 4],
 ])
 def test_gemm_no_scf_int8(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS):
-    a = torch.randint(-1, 0, (SIZE_M, SIZE_K), device='cuda', dtype=torch.int8)
-    b = torch.randint(-1, 0, (SIZE_K, SIZE_N), device='cuda', dtype=torch.int8)
+    a = torch.randint(-5, 5, (SIZE_M, SIZE_K), device='cuda', dtype=torch.int8)
+    b = torch.randint(-5, 5, (SIZE_K, SIZE_N), device='cuda', dtype=torch.int8)
     c = torch.empty((SIZE_M, SIZE_N), device=a.device, dtype=torch.int32)
-
-    # for debug
-    offset = -128
-    for i in range(len(a)):
-        for j in range(len(a[0])):
-            a.data[i][j] = offset
-            offset += 1
-            if offset > 127: offset = -offset
-    print('a', a)
-
-    offset = -128
-    for i in range(len(b)):
-        for j in range(len(b[0])):
-            b.data[i][j] = offset
-            offset += 1
-            if offset > 127: offset = -offset
-    print('b', b)
-    # end for debug
 
     grid = lambda META: (1, )
     matmul_no_scf_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c,
@@ -94,7 +74,7 @@ def test_gemm_no_scf_int8(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS):
 
     aa = a.cpu()
     bb = b.cpu()
-    golden = torch.matmul(aa, bb)
+    golden = torch.matmul(aa.float(), bb.float()).int()
     torch.set_printoptions(profile="full")
     print("c", c.cpu())
     print("gloden", golden)
@@ -190,4 +170,5 @@ def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLO
     assert_close(c, golden, rtol=max(1e-4, 1.5 * golden_rel_err), atol=max(1e-4, 1.5 * golden_abs_err), check_dtype=False)
 
 
-test_gemm_no_scf_int8(SIZE_M=16, SIZE_N=8, SIZE_K=32, NUM_WARPS=1)
+test_gemm_no_scf_int8(SIZE_M=16, SIZE_N=32, SIZE_K=64, NUM_WARPS=2)
+#test_gemm(*[128, 64, 128, 4, 128, 64, 32])
