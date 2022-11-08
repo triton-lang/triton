@@ -75,8 +75,28 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
     assert(mmaLayout.getVersion() == 2 &&
            "mmaLayout version = 1 is not implemented yet");
     return SmallVector<unsigned>{2, 2};
-  } else {
-    llvm::errs() << "layout: " << layout << "\n";
+  } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
+    auto parentLayout = dotLayout.getParent();
+    assert(parentLayout && "DotOperandEncodingAttr must have a parent");
+    if (auto parentMmaLayout = parentLayout.dyn_cast<MmaEncodingAttr>()) {
+      assert(parentMmaLayout.getVersion() == 2 &&
+             "mmaLayout version = 1 is not implemented yet");
+      auto parentShapePerCTA = getShapePerCTA(parentLayout);
+      auto opIdx = dotLayout.getOpIdx();
+      if (opIdx == 0) {
+        return {2, 4};
+      } else if (opIdx == 1) {
+        return {4, 1};
+      } else {
+        assert(0 && "DotOperandEncodingAttr opIdx must be 0 or 1");
+        return {};
+      }
+    } else {
+      assert(0 && "DotOperandEncodingAttr non-MmaEncodingAttr parent not "
+                  "supported yet");
+      return {};
+    }
+   } else {
     assert(0 && "getSizePerThread not implemented");
     return {};
   }
