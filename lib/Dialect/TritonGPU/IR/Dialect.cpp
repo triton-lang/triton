@@ -46,12 +46,7 @@ namespace gpu {
 // so that all distributed layouts implement
 // these utilities
 
-unsigned getElemsPerThread(Type type) {
-  if (type.isIntOrIndexOrFloat() || type.isa<triton::PointerType>())
-    return 1;
-  auto tensorType = type.cast<RankedTensorType>();
-  auto layout = tensorType.getEncoding();
-  auto shape = tensorType.getShape();
+unsigned getElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return blockedLayout.getElemsPerThread(shape);
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
@@ -64,6 +59,13 @@ unsigned getElemsPerThread(Type type) {
     assert(0 && "getElemsPerThread not implemented");
     return 0;
   }
+}
+
+unsigned getElemsPerThread(Type type) {
+  if (type.isIntOrIndexOrFloat() || type.isa<triton::PointerType>())
+    return 1;
+  auto tensorType = type.cast<RankedTensorType>();
+  return getElemsPerThread(tensorType.getEncoding(), tensorType.getShape());
 }
 
 SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
@@ -284,14 +286,7 @@ SliceEncodingAttr::paddedShape(ArrayRef<int64_t> shape) const {
 unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   size_t rank = shape.size();
   auto parent = getParent();
-  if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
-    assert(rank == blockedParent.getSizePerThread().size() - 1 &&
-           "unexpected rank in SliceEncodingAttr::getElemsPerThread");
-    return blockedParent.getElemsPerThread(paddedShape(shape));
-  } else {
-    assert(0 && "getElemsPerThread not implemented");
-    return 0;
-  }
+  return ::getElemsPerThread(parent, paddedShape(shape));
 }
 
 unsigned MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {

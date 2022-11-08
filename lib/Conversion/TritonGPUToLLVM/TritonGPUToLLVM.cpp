@@ -646,23 +646,108 @@ public:
     return reorderedOffset;
   }
 
+  // -----------------------------------------------------------------------
+  // Mma layout indices
+  // -----------------------------------------------------------------------
+
+  SmallVector<Value>
+  emitBaseIndexForMmaLayoutV1(Location loc, ConversionPatternRewriter &rewriter,
+                              const MmaEncodingAttr &mmaLayout,
+                              ArrayRef<int64_t> shape) const {
+    llvm_unreachable("emitIndicesForMmaLayoutV1 not implemented");
+  }
+
+  SmallVector<SmallVector<unsigned>>
+  emitOffsetForMmaLayoutV1(const MmaEncodingAttr &mmaLayout,
+                           ArrayRef<int64_t> shape) const {
+    llvm_unreachable("emitOffsetForMmaLayoutV1 not implemented");
+  }
+
+  SmallVector<Value>
+  emitBaseIndexForMmaLayoutV2(Location loc, ConversionPatternRewriter &rewriter,
+                              const MmaEncodingAttr &mmaLayout,
+                              ArrayRef<int64_t> shape) const {
+    auto _warpsPerCTA = mmaLayout.getWarpsPerCTA();
+    assert(_warpsPerCTA.size() == 2);
+    SmallVector<Value> warpsPerCTA = {idx_val(_warpsPerCTA[0]),
+                                      idx_val(_warpsPerCTA[1])};
+    Value threadId = getThreadId(rewriter, loc);
+    Value warpSize = idx_val(32);
+    Value laneId = urem(threadId, warpSize);
+    Value warpId = udiv(threadId, warpSize);
+    Value warpId0 = urem(warpId, warpsPerCTA[0]);
+    Value warpId1 = urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]);
+    Value offWarp0 = mul(warpId0, idx_val(16));
+    Value offWarp1 = mul(warpId1, idx_val(8));
+
+    SmallVector<Value> multiDimBase(2);
+    multiDimBase[0] = add(udiv(laneId, idx_val(4)), offWarp0);
+    multiDimBase[1] = add(mul(idx_val(2), urem(laneId, idx_val(4))), offWarp1);
+    return multiDimBase;
+  }
+
+  SmallVector<SmallVector<unsigned>>
+  emitOffsetForMmaLayoutV2(const MmaEncodingAttr &mmaLayout,
+                           ArrayRef<int64_t> shape) const {
+    SmallVector<SmallVector<unsigned>> ret;
+    for (unsigned i = 0; i < shape[0]; i += getShapePerCTA(mmaLayout)[0]) {
+      for (unsigned j = 0; j < shape[1]; j += getShapePerCTA(mmaLayout)[1]) {
+        ret.push_back({i, j});
+        ret.push_back({i, j + 1});
+      }
+      for (unsigned j = 0; j < shape[1]; j += getShapePerCTA(mmaLayout)[1]) {
+        ret.push_back({i + 8, j});
+        ret.push_back({i + 8, j + 1});
+      }
+    }
+    return ret;
+  }
+
+  // -----------------------------------------------------------------------
+  // Get offsets / indices for any layout
+  // -----------------------------------------------------------------------
+
+  SmallVector<Value> emitBaseIndexForLayout(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const Attribute &layout,
+                                            ArrayRef<int64_t> shape) const {
+    if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>())
+      return emitBaseIndexForBlockedLayout(loc, rewriter, blockedLayout, shape);
+    if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+      if (mmaLayout.getVersion() == 1)
+        return emitBaseIndexForMmaLayoutV1(loc, rewriter, mmaLayout, shape);
+      if (mmaLayout.getVersion() == 2)
+        return emitBaseIndexForMmaLayoutV2(loc, rewriter, mmaLayout, shape);
+    }
+    llvm_unreachable("unsupported emitBaseIndexForLayout");
+  }
+
+  SmallVector<SmallVector<unsigned>>
+  emitOffsetForLayout(const Attribute &layout, ArrayRef<int64_t> shape) const {
+    if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>())
+      return emitOffsetForBlockedLayout(blockedLayout, shape);
+    if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+      if (mmaLayout.getVersion() == 1)
+        return emitOffsetForMmaLayoutV1(mmaLayout, shape);
+      if (mmaLayout.getVersion() == 2)
+        return emitOffsetForMmaLayoutV2(mmaLayout, shape);
+    }
+    llvm_unreachable("unsupported emitOffsetForLayout");
+  }
+
   // Emit indices calculation within each ConversionPattern, and returns a
   // [elemsPerThread X rank] index matrix.
-  // TODO: [goostavz] Double confirm the redundant indices calculations will
-  //       be eliminated in the consequent MLIR/LLVM optimization. We might
-  //       implement a indiceCache if necessary.
-  SmallVector<SmallVector<Value>>
-  emitIndicesForBlockedLayout(Location loc, ConversionPatternRewriter &rewriter,
-                              const BlockedEncodingAttr &blockedLayout,
-                              ArrayRef<int64_t> shape) const {
+  // TODO: [phil] redundant indices commputation do not appear to hurt
+  // performance much, but they could still significantly slow down
+  // computations.
+  SmallVector<SmallVector<Value>> emitIndicesForDistributedLayout(
+      Location loc, ConversionPatternRewriter &rewriter,
+      const Attribute &layout, ArrayRef<int64_t> shape) const {
+
     // step 1, delinearize threadId to get the base index
-    auto multiDimBase =
-        emitBaseIndexForBlockedLayout(loc, rewriter, blockedLayout, shape);
-
+    auto multiDimBase = emitBaseIndexForLayout(loc, rewriter, layout, shape);
     // step 2, get offset of each element
-    SmallVector<SmallVector<unsigned>> offset =
-        emitOffsetForBlockedLayout(blockedLayout, shape);
-
+    auto offset = emitOffsetForLayout(layout, shape);
     // step 3, add offset to base, and reorder the sequence of indices to
     // guarantee that elems in the same sizePerThread are adjacent in order
     unsigned rank = shape.size();
@@ -676,10 +761,6 @@ public:
     return multiDimIdx;
   }
 
-  // -----------------------------------------------------------------------
-  // Slice layout indices
-  // -----------------------------------------------------------------------
-
   SmallVector<SmallVector<Value>>
   emitIndicesForSliceLayout(Location loc, ConversionPatternRewriter &rewriter,
                             const SliceEncodingAttr &sliceLayout,
@@ -687,28 +768,16 @@ public:
     auto parent = sliceLayout.getParent();
     unsigned dim = sliceLayout.getDim();
     size_t rank = shape.size();
-    if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
-      auto paddedIndices = emitIndicesForBlockedLayout(
-          loc, rewriter, blockedParent, sliceLayout.paddedShape(shape));
-      unsigned numIndices = paddedIndices.size();
-      SmallVector<SmallVector<Value>> resultIndices(numIndices);
-      for (unsigned i = 0; i < numIndices; ++i)
-        for (unsigned d = 0; d < rank + 1; ++d)
-          if (d != dim)
-            resultIndices[i].push_back(paddedIndices[i][d]);
+    auto paddedIndices =
+        emitIndices(loc, rewriter, parent, sliceLayout.paddedShape(shape));
+    unsigned numIndices = paddedIndices.size();
+    SmallVector<SmallVector<Value>> resultIndices(numIndices);
+    for (unsigned i = 0; i < numIndices; ++i)
+      for (unsigned d = 0; d < rank + 1; ++d)
+        if (d != dim)
+          resultIndices[i].push_back(paddedIndices[i][d]);
 
-      return resultIndices;
-
-    } else if (auto sliceParent = parent.dyn_cast<SliceEncodingAttr>()) {
-      assert(0 && "emitIndicesForSliceLayout with parent of sliceLayout"
-                  "is not implemented yet");
-      return {};
-
-    } else {
-      assert(0 && "emitIndicesForSliceLayout with parent other than blocked & "
-                  "slice not implemented yet");
-      return {};
-    }
+    return resultIndices;
   }
 
   // -----------------------------------------------------------------------
@@ -719,7 +788,9 @@ public:
                                               const Attribute &layout,
                                               ArrayRef<int64_t> shape) const {
     if (auto blocked = layout.dyn_cast<BlockedEncodingAttr>()) {
-      return emitIndicesForBlockedLayout(loc, b, blocked, shape);
+      return emitIndicesForDistributedLayout(loc, b, blocked, shape);
+    } else if (auto mma = layout.dyn_cast<MmaEncodingAttr>()) {
+      return emitIndicesForDistributedLayout(loc, b, mma, shape);
     } else if (auto slice = layout.dyn_cast<SliceEncodingAttr>()) {
       return emitIndicesForSliceLayout(loc, b, slice, shape);
     } else {
@@ -1091,7 +1162,8 @@ struct LoadOpConversion
                        : retTys[0];
 
       // TODO: if (has_l2_evict_policy)
-      // auto asmDialectAttr = LLVM::AsmDialectAttr::get(rewriter.getContext(),
+      // auto asmDialectAttr =
+      // LLVM::AsmDialectAttr::get(rewriter.getContext(),
       //                                                 LLVM::AsmDialect::AD_ATT);
       Value ret = ptxBuilder.launch(rewriter, loc, retTy);
 
@@ -1584,8 +1656,8 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
   auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcShape);
   auto srcValues = getElementsFromStruct(loc, adaptor.operand(), rewriter);
 
-  SmallVector<SmallVector<unsigned>> offset = emitOffsetForBlockedLayout(
-      srcLayout.cast<BlockedEncodingAttr>(), srcShape);
+  SmallVector<SmallVector<unsigned>> offset =
+      emitOffsetForLayout(srcLayout, srcShape);
 
   std::map<SmallVector<unsigned>, Value> accs;
   std::map<SmallVector<unsigned>, SmallVector<Value>> indices;
@@ -3047,10 +3119,10 @@ struct DotOpMmaV1ConversionHelper {
   // Compute the offset of the matrix to load.
   // Returns offsetAM, offsetAK, offsetBN, offsetBK.
   // NOTE, the information M(from $a) and N(from $b) couldn't be retrieved at
-  // the same time in the usage in convert_layout[shared->dot_op], we leave the
-  // noexist info to be 0 and only use the desired argument from the composed
-  // result. In this way we want to retain the original code structure in
-  // convert_mma884 method for easier debugging.
+  // the same time in the usage in convert_layout[shared->dot_op], we leave
+  // the noexist info to be 0 and only use the desired argument from the
+  // composed result. In this way we want to retain the original code
+  // structure in convert_mma884 method for easier debugging.
   std::tuple<Value, Value, Value, Value>
   computeOffsets(Value threadId, bool isARow, bool isBRow, ArrayRef<int> fpw,
                  ArrayRef<int> spw, ArrayRef<int> rep,
@@ -4456,8 +4528,8 @@ struct InsertSliceAsyncOpConversion
         srcStrides.emplace_back(smemObj.strides[i]);
       }
     }
-    // Compute the offset based on the original dimensions of the shared memory
-    // object
+    // Compute the offset based on the original dimensions of the shared
+    // memory object
     auto dstOffset = dot(rewriter, loc, offsetVals, smemObj.strides);
     auto dstPtrTy =
         ptr_ty(getTypeConverter()->convertType(resTy.getElementType()), 3);
@@ -5059,8 +5131,8 @@ void ConvertTritonGPUToLLVM::initSharedMemory(
   OpBuilder b(mod.getBodyRegion());
   auto loc = mod.getLoc();
   auto elemTy = typeConverter.convertType(b.getIntegerType(8));
-  // Set array size 0 and external linkage indicates that we use dynamic shared
-  // allocation to allow a larger shared memory size for each kernel.
+  // Set array size 0 and external linkage indicates that we use dynamic
+  // shared allocation to allow a larger shared memory size for each kernel.
   auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
   auto global = b.create<LLVM::GlobalOp>(
       loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
