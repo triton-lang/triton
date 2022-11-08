@@ -3953,6 +3953,7 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
 LogicalResult
 DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adaptor,
                                  ConversionPatternRewriter &rewriter) const {
+  LLVM::llPrintf("dot op start", {}, rewriter);
   auto loc = op.getLoc();
   auto mmaLayout = op.getResult()
                        .getType()
@@ -3977,8 +3978,10 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adaptor,
   loadedB = adaptor.b();
   loadedC = mmaHelper.loadC(op.c(), adaptor.c());
 
-  return mmaHelper.convertDot(A, B, C, op.d(), loadedA, loadedB, loadedC, op,
+  auto ret = mmaHelper.convertDot(A, B, C, op.d(), loadedA, loadedB, loadedC, op,
                               adaptor);
+  LLVM::llPrintf("dot op done", {}, rewriter);
+  return ret;
 }
 
 // Simply port the old code here to avoid large difference and make debugging
@@ -4598,6 +4601,7 @@ struct InsertSliceAsyncOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::InsertSliceAsyncOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    LLVM::llPrintf("insert_slice_async start", {}, rewriter);
     // insert_slice_async %src, %dst, %index, %mask, %other
     auto loc = op.getLoc();
     Value src = op.src();
@@ -4790,6 +4794,7 @@ struct InsertSliceAsyncOpConversion
     ptxBuilder.create<PTXCpAsyncCommitGroupInstr>()->operator()();
     ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
     rewriter.replaceOp(op, llDst);
+    LLVM::llPrintf("insert_slice_async done", {}, rewriter);
     return success();
   }
 };
