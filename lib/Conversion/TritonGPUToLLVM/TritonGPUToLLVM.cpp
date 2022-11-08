@@ -483,6 +483,10 @@ public:
         rewriter.getIntegerAttr(rewriter.getIndexType(), value));
   }
 
+  // -----------------------------------------------------------------------
+  // Utilities
+  // -----------------------------------------------------------------------
+
   // Convert an \param index to a multi-dim coordinate given \param shape and
   // \param order.
   SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
@@ -545,6 +549,10 @@ public:
     return ret;
   }
 
+  // -----------------------------------------------------------------------
+  // Blocked layout indices
+  // -----------------------------------------------------------------------
+
   // Get an index-base for each dimension for a \param blocked_layout.
   SmallVector<Value>
   emitBaseIndexForBlockedLayout(Location loc,
@@ -585,52 +593,6 @@ public:
                                   mul(multiDimWarpId[k], threadsPerWarpK)));
     }
     return multiDimBase;
-  }
-
-  SmallVector<SmallVector<Value>> emitIndices(Location loc,
-                                              ConversionPatternRewriter &b,
-                                              const Attribute &layout,
-                                              ArrayRef<int64_t> shape) const {
-    if (auto blocked = layout.dyn_cast<BlockedEncodingAttr>()) {
-      return emitIndicesForBlockedLayout(loc, b, blocked, shape);
-    } else if (auto slice = layout.dyn_cast<SliceEncodingAttr>()) {
-      return emitIndicesForSliceLayout(loc, b, slice, shape);
-    } else {
-      assert(0 && "emitIndices for layouts other than blocked & slice not "
-                  "implemented yet");
-      return {};
-    }
-  }
-
-  SmallVector<SmallVector<Value>>
-  emitIndicesForSliceLayout(Location loc, ConversionPatternRewriter &rewriter,
-                            const SliceEncodingAttr &sliceLayout,
-                            ArrayRef<int64_t> shape) const {
-    auto parent = sliceLayout.getParent();
-    unsigned dim = sliceLayout.getDim();
-    size_t rank = shape.size();
-    if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
-      auto paddedIndices = emitIndicesForBlockedLayout(
-          loc, rewriter, blockedParent, sliceLayout.paddedShape(shape));
-      unsigned numIndices = paddedIndices.size();
-      SmallVector<SmallVector<Value>> resultIndices(numIndices);
-      for (unsigned i = 0; i < numIndices; ++i)
-        for (unsigned d = 0; d < rank + 1; ++d)
-          if (d != dim)
-            resultIndices[i].push_back(paddedIndices[i][d]);
-
-      return resultIndices;
-
-    } else if (auto sliceParent = parent.dyn_cast<SliceEncodingAttr>()) {
-      assert(0 && "emitIndicesForSliceLayout with parent of sliceLayout"
-                  "is not implemented yet");
-      return {};
-
-    } else {
-      assert(0 && "emitIndicesForSliceLayout with parent other than blocked & "
-                  "slice not implemented yet");
-      return {};
-    }
   }
 
   SmallVector<SmallVector<unsigned>>
@@ -713,6 +675,63 @@ public:
 
     return multiDimIdx;
   }
+
+  // -----------------------------------------------------------------------
+  // Slice layout indices
+  // -----------------------------------------------------------------------
+
+  SmallVector<SmallVector<Value>>
+  emitIndicesForSliceLayout(Location loc, ConversionPatternRewriter &rewriter,
+                            const SliceEncodingAttr &sliceLayout,
+                            ArrayRef<int64_t> shape) const {
+    auto parent = sliceLayout.getParent();
+    unsigned dim = sliceLayout.getDim();
+    size_t rank = shape.size();
+    if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
+      auto paddedIndices = emitIndicesForBlockedLayout(
+          loc, rewriter, blockedParent, sliceLayout.paddedShape(shape));
+      unsigned numIndices = paddedIndices.size();
+      SmallVector<SmallVector<Value>> resultIndices(numIndices);
+      for (unsigned i = 0; i < numIndices; ++i)
+        for (unsigned d = 0; d < rank + 1; ++d)
+          if (d != dim)
+            resultIndices[i].push_back(paddedIndices[i][d]);
+
+      return resultIndices;
+
+    } else if (auto sliceParent = parent.dyn_cast<SliceEncodingAttr>()) {
+      assert(0 && "emitIndicesForSliceLayout with parent of sliceLayout"
+                  "is not implemented yet");
+      return {};
+
+    } else {
+      assert(0 && "emitIndicesForSliceLayout with parent other than blocked & "
+                  "slice not implemented yet");
+      return {};
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Emit indices
+  // -----------------------------------------------------------------------
+  SmallVector<SmallVector<Value>> emitIndices(Location loc,
+                                              ConversionPatternRewriter &b,
+                                              const Attribute &layout,
+                                              ArrayRef<int64_t> shape) const {
+    if (auto blocked = layout.dyn_cast<BlockedEncodingAttr>()) {
+      return emitIndicesForBlockedLayout(loc, b, blocked, shape);
+    } else if (auto slice = layout.dyn_cast<SliceEncodingAttr>()) {
+      return emitIndicesForSliceLayout(loc, b, slice, shape);
+    } else {
+      assert(0 && "emitIndices for layouts other than blocked & slice not "
+                  "implemented yet");
+      return {};
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Shared memory utilities
+  // -----------------------------------------------------------------------
 
   template <typename T>
   Value getSharedMemoryBase(Location loc, ConversionPatternRewriter &rewriter,
@@ -1545,21 +1564,19 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
   Location loc = op->getLoc();
   unsigned axis = adaptor.axis();
 
-  llvm::outs() << "!!\n";
   auto srcTy = op.operand().getType().cast<RankedTensorType>();
-  auto srcLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
+  auto srcLayout = srcTy.getEncoding();
   auto srcShape = srcTy.getShape();
-  llvm::outs() << "done!\n";
 
-  auto threadsPerWarp = srcLayout.getThreadsPerWarp();
-  auto warpsPerCTA = srcLayout.getWarpsPerCTA();
+  auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcLayout);
+  auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcLayout);
 
   auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
   auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
   Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
   smemBase = bitcast(smemBase, elemPtrTy);
 
-  auto order = srcLayout.getOrder();
+  auto order = getOrder(srcLayout);
   unsigned sizeIntraWarps = threadsPerWarp[axis];
   unsigned sizeInterWarps = warpsPerCTA[axis];
 
@@ -1567,8 +1584,8 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
   auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcShape);
   auto srcValues = getElementsFromStruct(loc, adaptor.operand(), rewriter);
 
-  SmallVector<SmallVector<unsigned>> offset =
-      emitOffsetForBlockedLayout(srcLayout, srcShape);
+  SmallVector<SmallVector<unsigned>> offset = emitOffsetForBlockedLayout(
+      srcLayout.cast<BlockedEncodingAttr>(), srcShape);
 
   std::map<SmallVector<unsigned>, Value> accs;
   std::map<SmallVector<unsigned>, SmallVector<Value>> indices;

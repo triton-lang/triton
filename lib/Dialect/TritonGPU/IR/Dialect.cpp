@@ -135,17 +135,11 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     unsigned dim = sliceLayout.getDim();
     auto parent = sliceLayout.getParent();
-    if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
-      for (unsigned d = 0, n = blockedParent.getOrder().size(); d < n; ++d) {
-        if (d == dim)
-          continue;
-        shape.push_back(blockedParent.getSizePerThread()[d] *
-                        blockedParent.getThreadsPerWarp()[d] *
-                        blockedParent.getWarpsPerCTA()[d]);
-      }
-    } else {
-      assert(0 && "SliceEncodingAttr with parent other than "
-                  "BlockedEncodingAttr not implemented");
+    for (unsigned d = 0, n = getOrder(parent).size(); d < n; ++d) {
+      if (d == dim)
+        continue;
+      shape.push_back(getSizePerThread(parent)[d] *
+                      getThreadsPerWarp(parent)[d] * getWarpsPerCTA(parent)[d]);
     }
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     assert(mmaLayout.getVersion() == 2 &&
