@@ -3828,7 +3828,8 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adaptor,
     loadedA = adaptor.a();
     loadedB = adaptor.b();
   } else {
-    SharedMemoryObject smemA = V(loc, adaptor.a(), rewriter);
+    SharedMemoryObject smemA =
+        getSharedMemoryObjectFromStruct(loc, adaptor.a(), rewriter);
     SharedMemoryObject smemB =
         getSharedMemoryObjectFromStruct(loc, adaptor.b(), rewriter);
     loadedA = mmaHelper.loadA(op.a(), smemA);
@@ -4384,11 +4385,11 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
   Type f32PtrTy = ptr_ty(f32_ty);
   SmallVector<Value> aPtrs(aNumPtr);
   for (int i = 0; i < aNumPtr; ++i)
-    aPtrs[i] = gep(f32PtrTy, adaptor.a(), aOff[i]);
+    aPtrs[i] = gep(f32PtrTy, aSmem.base, aOff[i]);
 
   SmallVector<Value> bPtrs(bNumPtr);
   for (int i = 0; i < bNumPtr; ++i)
-    bPtrs[i] = gep(f32PtrTy, adaptor.b(), bOff[i]);
+    bPtrs[i] = gep(f32PtrTy, bSmem.base, bOff[i]);
 
   ValueTable has, hbs;
   auto cc = getElementsFromStruct(loc, adaptor.c(), rewriter);
