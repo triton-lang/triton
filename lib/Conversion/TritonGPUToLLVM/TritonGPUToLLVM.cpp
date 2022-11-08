@@ -83,6 +83,7 @@ static Value createLLVMIntegerConstant(OpBuilder &builder, Location loc,
 
 } // namespace
 
+// A helper function for using printf in LLVM conversion.
 void llPrintf(StringRef msg, ValueRange args,
               ConversionPatternRewriter &rewriter);
 
@@ -2984,7 +2985,10 @@ private:
                               ConversionPatternRewriter &rewriter) const;
 
   LogicalResult convertFMADot(triton::DotOp op, OpAdaptor adaptor,
-                              ConversionPatternRewriter &rewriter) const;
+                              ConversionPatternRewriter &rewriter) const {
+    assert(false && "Not implemented yet.");
+    return failure();
+  }
 };
 
 // Helper for conversion of DotOp with mma<version=1>, that is sm<80
@@ -3506,31 +3510,6 @@ struct MMA16816ConversionHelper {
       for (int k = 0; k < numRepK; ++k)
         loadFn(2 * m, 2 * k);
 
-#define PRINT_AB 0
-        // DEBUG: print all things in ha
-#if PRINT_AB
-    for (auto &item : ha) {
-      llvm::outs() << item.second << "\n";
-      llvm::outs() << "type: " << item.second.getType() << "\n";
-
-      auto getIntAttr = [&](int v) {
-        return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
-      };
-
-      SmallVector<Value> i8x4;
-      for (int i = 0; i < 4; i++) {
-        auto val = extract_element(i8_ty, item.second, i32_val(i));
-        i8x4.push_back(val);
-      }
-
-      mlir::LLVM::llPrintf("thread:%d, m:%d, k:%d: (%d,%d,%d,%d)",
-                           {thread, i32_val(item.first.first),
-                            i32_val(item.first.second), i8x4[0], i8x4[1],
-                            i8x4[2], i8x4[3]},
-                           rewriter);
-    }
-#endif
-
     // step2. Format the values to LLVM::Struct to passing to mma codegen.
     Value result = composeValuesToDotOperandLayoutStruct(ha, numRepM, numRepK);
     return result;
@@ -3555,31 +3534,6 @@ struct MMA16816ConversionHelper {
       for (int k = 0; k < numRepK; ++k)
         loadFn(2 * n, 2 * k);
     }
-
-#if PRINT_AB
-    // Debug: print all things in hb
-    for (auto &item : hb) {
-      llvm::outs() << item.second << "\n";
-      llvm::outs() << "type: " << item.second.getType() << "\n";
-      auto i8s = bitcast(item.second, vec_ty(i8_ty, 4));
-
-      auto getIntAttr = [&](int v) {
-        return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
-      };
-
-      SmallVector<Value> i8x4;
-      for (int i = 0; i < 4; i++) {
-        auto val = extract_element(i8_ty, i8s, i32_val(i));
-        i8x4.push_back(val);
-      }
-
-      mlir::LLVM::llPrintf("thread:%d, hb, (%d,%d): (%d,%d,%d,%d)",
-                           {thread, i32_val(item.first.first),
-                            i32_val(item.first.second), i8x4[0], i8x4[1],
-                            i8x4[2], i8x4[3]},
-                           rewriter);
-    }
-#endif
 
     Value result = composeValuesToDotOperandLayoutStruct(
         hb, std::max(numRepN / 2, 1), numRepK);
@@ -3630,7 +3584,6 @@ struct MMA16816ConversionHelper {
     auto fc = ConvertTritonGPUOpToLLVMPatternBase::getElementsFromStruct(
         loc, loadedC, rewriter);
 
-    llvm::outs() << "mma.instr: " << helper.getMmaInstr() << "\n";
     auto callMma = [&](unsigned m, unsigned n, unsigned k) {
       unsigned colsPerThread = numRepN * 2;
       PTXBuilder builder;
@@ -3650,32 +3603,6 @@ struct MMA16816ConversionHelper {
                                              std::to_string(i)));
         // reuse the output registers
       }
-
-      // DEBUG: print $a
-      auto print_val = [&](int m, int k, ValueTable &dic, StringRef hint) {
-        auto _val = dic[{m, k}];
-        auto val = bitcast(_val, vec_ty(i8_ty, 4));
-
-        llvm::outs() << "val: " << val << "\n";
-        SmallVector<Value> vals;
-        for (int i = 0; i < 4; i++)
-          vals.push_back(extract_element(i8_ty, val, i32_val(i)));
-        LLVM::llPrintf("t-%d $" + hint.str() + ": (m%d, n%d) = [%d,%d,%d,%d]",
-                       {thread, i32_val(m), i32_val(n),
-                        // data
-                        vals[0], vals[1], vals[2], vals[3]},
-                       rewriter);
-      };
-
-      print_val(m, k, ha, "a");
-      // print_a(m+1, k, ha);
-      // print_a(m, k+1, ha);
-      // print_a(m+1, k+1, ha);
-
-      print_val(n, k, hb, "b");
-
-      // DEBUG: print $b
-      // DEBUG: print $c
 
       mma(retArgs, aArgs, bArgs, cArgs);
       Value mmaOut = builder.launch(rewriter, loc, helper.getMmaRetType());
@@ -4352,172 +4279,6 @@ DotOpMmaV1ConversionHelper::extractLoadedOperand(
     }
 
   return rcds;
-}
-
-template <typename T> void print_vec(ArrayRef<T> vec) {
-  for (int v : vec)
-    llvm::outs() << v << " ";
-  llvm::outs() << "\n";
-}
-
-LogicalResult
-DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
-                               ConversionPatternRewriter &rewriter) const {
-  auto *ctx = rewriter.getContext();
-  auto loc = op.getLoc();
-  auto threadId = getThreadId(rewriter, loc);
-
-  using ValueTable = std::map<std::pair<int, int>, Value>;
-
-  auto A = op.a();
-  auto B = op.b();
-  auto C = op.c();
-  auto D = op.getResult();
-
-  auto aTensorTy = A.getType().cast<RankedTensorType>();
-  auto bTensorTy = B.getType().cast<RankedTensorType>();
-  auto cTensorTy = C.getType().cast<RankedTensorType>();
-  auto dTensorTy = D.getType().cast<RankedTensorType>();
-
-  auto aShape = aTensorTy.getShape();
-  auto bShape = bTensorTy.getShape();
-  auto cShape = cTensorTy.getShape();
-
-  auto aLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
-  auto bLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
-  auto cLayout = cTensorTy.getEncoding().cast<BlockedEncodingAttr>();
-  auto dLayout = dTensorTy.getEncoding().cast<BlockedEncodingAttr>();
-
-  auto aOrder = aLayout.getOrder();
-  auto bOrder = bLayout.getOrder();
-
-  auto order = dLayout.getOrder();
-
-  bool isARow = aOrder[0] == 1;
-  bool isBRow = bOrder[0] == 1;
-
-  int strideAM = isARow ? aShape[1] : 1;
-  int strideAK = isARow ? 1 : aShape[0];
-  int strideBN = isBRow ? 1 : bShape[0];
-  int strideBK = isBRow ? bShape[1] : 1;
-  int strideA0 = isARow ? strideAK : strideAM;
-  int strideA1 = isARow ? strideAM : strideAK;
-  int strideB0 = isBRow ? strideBN : strideBK;
-  int strideB1 = isBRow ? strideBK : strideBN;
-  int lda = isARow ? strideAM : strideAK;
-  int ldb = isBRow ? strideBK : strideBN;
-  int aPerPhase = aLayout.getPerPhase();
-  int aMaxPhase = aLayout.getMaxPhase();
-  int bPerPhase = bLayout.getPerPhase();
-  int bMaxPhase = bLayout.getMaxPhase();
-  int aNumPtr = 8;
-  int bNumPtr = 8;
-  int NK = aShape[1];
-
-  auto shapePerCTA = getShapePerCTA(dLayout);
-
-  auto sizePerThread = getSizePerThread(dLayout);
-
-  llvm::outs() << "strideA: " << strideAM << " " << strideAK << "\n";
-  llvm::outs() << "strideB: " << strideBN << " " << strideBK << "\n";
-  llvm::outs() << "shapePerCTA: ";
-  print_vec<unsigned>(shapePerCTA);
-  llvm::outs() << "\n";
-
-  llvm::outs() << "sizePerThread: ";
-  print_vec<unsigned>(sizePerThread);
-  llvm::outs() << "\n";
-
-  Value _0 = i32_val(0);
-
-  Value mContig = i32_val(sizePerThread[order[1]]);
-  Value nContig = i32_val(sizePerThread[order[0]]);
-
-  // threadId in blocked layout
-  SmallVector<Value> threadIds;
-  {
-    int dim = cShape.size();
-    threadIds.resize(dim);
-    for (unsigned k = 0; k < dim - 1; k++) {
-      Value dimK = i32_val(shapePerCTA[order[k]]);
-      Value rem = urem(threadId, dimK);
-      threadId = udiv(threadId, dimK);
-      threadIds[order[k]] = rem;
-    }
-    Value dimK = i32_val(shapePerCTA[order[dim - 1]]);
-    threadIds[order[dim - 1]] = urem(threadId, dimK);
-  }
-
-  Value threadIdM = threadIds[0];
-  Value threadIdN = threadIds[1];
-
-  Value offA0 = isARow ? _0 : mul(threadIdM, mContig);
-  Value offA1 = isARow ? mul(threadIdM, mContig) : _0;
-  SmallVector<Value> aOff(aNumPtr);
-  for (int i = 0; i < aNumPtr; ++i) {
-    aOff[i] = add(mul(offA0, i32_val(strideA0)), mul(offA1, i32_val(strideA1)));
-  }
-
-  Value offB0 = isBRow ? mul(threadIdN, nContig) : _0;
-  Value offB1 = isBRow ? _0 : mul(threadIdN, nContig);
-  SmallVector<Value> bOff(bNumPtr);
-  for (int i = 0; i < bNumPtr; ++i) {
-    bOff[i] = add(mul(offB0, i32_val(strideB0)), mul(offB1, i32_val(strideB1)));
-  }
-
-  auto aSmem = getSharedMemoryObjectFromStruct(loc, adaptor.a(), rewriter);
-  auto bSmem = getSharedMemoryObjectFromStruct(loc, adaptor.b(), rewriter);
-
-  Type f32PtrTy = ptr_ty(f32_ty);
-  SmallVector<Value> aPtrs(aNumPtr);
-  for (int i = 0; i < aNumPtr; ++i)
-    aPtrs[i] = gep(f32PtrTy, aSmem.base, aOff[i]);
-
-  SmallVector<Value> bPtrs(bNumPtr);
-  for (int i = 0; i < bNumPtr; ++i)
-    bPtrs[i] = gep(f32PtrTy, bSmem.base, bOff[i]);
-
-  ValueTable has, hbs;
-  auto cc = getElementsFromStruct(loc, adaptor.c(), rewriter);
-  SmallVector<Value> ret = cc;
-  // is this compatible with blocked layout?
-
-  for (unsigned k = 0; k < NK; k++) {
-    int z = 0;
-    for (unsigned i = 0; i < cShape[order[1]]; i += shapePerCTA[order[1]])
-      for (unsigned j = 0; j < cShape[order[0]]; j += shapePerCTA[order[0]])
-        for (unsigned ii = 0; ii < sizePerThread[order[1]]; ++ii)
-          for (unsigned jj = 0; jj < sizePerThread[order[0]]; ++jj) {
-            unsigned m = order[0] == 1 ? i : j;
-            unsigned n = order[0] == 1 ? j : i;
-            unsigned mm = order[0] == 1 ? ii : jj;
-            unsigned nn = order[0] == 1 ? jj : ii;
-            if (!has.count({m + mm, k})) {
-              Value pa = gep(f32PtrTy, aPtrs[0],
-                             i32_val((m + mm) * strideAM + k * strideAK));
-              Value va = load(pa);
-              has[{m + mm, k}] = va;
-            }
-            if (!hbs.count({n + nn, k})) {
-              Value pb = gep(f32PtrTy, bPtrs[0],
-                             i32_val((n + nn) * strideBN + k * strideBK));
-              Value vb = load(pb);
-              hbs[{n + nn, k}] = vb;
-            }
-
-            llvm::outs() << z << ": " << m + mm << " " << n + nn << "\n";
-            ret[z] = rewriter.create<LLVM::FMulAddOp>(loc, has[{m + mm, k}],
-                                                      hbs[{n + nn, k}], ret[z]);
-            ++z;
-          }
-  }
-
-  auto res = getStructFromElements(
-      loc, ret, rewriter,
-      struct_ty(SmallVector<Type>(ret.size(), ret[0].getType())));
-  rewriter.replaceOp(op, res);
-
-  return success();
 }
 
 /// ====================== mma codegen end ============================
