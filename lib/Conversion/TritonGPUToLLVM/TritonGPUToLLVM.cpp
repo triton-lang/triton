@@ -3968,23 +3968,13 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adaptor,
   auto ATensorTy = A.getType().cast<RankedTensorType>();
   auto BTensorTy = B.getType().cast<RankedTensorType>();
 
-  Value loadedA, loadedB, loadedC;
-  // We support two kinds of operand layouts: 1. both $a, $b are dot_operand
-  // layout, 2. both of them are shared layout.
-  if (ATensorTy.getEncoding().isa<DotOperandEncodingAttr>()) {
-    assert(BTensorTy.getEncoding().isa<DotOperandEncodingAttr>() &&
-           "Both $a and %b should be DotOperand layout.");
-    loadedA = adaptor.a();
-    loadedB = adaptor.b();
-  } else {
-    SharedMemoryObject smemA =
-        getSharedMemoryObjectFromStruct(loc, adaptor.a(), rewriter);
-    SharedMemoryObject smemB =
-        getSharedMemoryObjectFromStruct(loc, adaptor.b(), rewriter);
-    loadedA = mmaHelper.loadA(op.a(), smemA);
-    loadedB = mmaHelper.loadB(op.b(), smemB);
-  }
+  assert(ATensorTy.getEncoding().isa<DotOperandEncodingAttr>() &&
+         BTensorTy.getEncoding().isa<DotOperandEncodingAttr>() &&
+         "Both $a and %b should be DotOperand layout.");
 
+  Value loadedA, loadedB, loadedC;
+  loadedA = adaptor.a();
+  loadedB = adaptor.b();
   loadedC = mmaHelper.loadC(op.c(), adaptor.c());
 
   return mmaHelper.convertDot(A, B, C, op.d(), loadedA, loadedB, loadedC, op,
