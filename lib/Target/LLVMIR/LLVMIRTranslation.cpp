@@ -150,7 +150,6 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
     llvm::errs() << "Pass execution failed";
     return nullptr;
   }
-  // llvm::outs() << module << "\n";
 
   std::map<std::string, std::string> extern_libs;
   SmallVector<LLVM::LLVMFuncOp> funcs;
