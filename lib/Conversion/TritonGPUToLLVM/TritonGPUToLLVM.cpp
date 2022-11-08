@@ -3557,6 +3557,7 @@ struct MMA16816ConversionHelper {
     auto aTensorTy = a.getType().cast<RankedTensorType>();
     auto dTensorTy = d.getType().cast<RankedTensorType>();
 
+
     auto aShape = aTensorTy.getShape();
     auto dShape = dTensorTy.getShape();
 
@@ -3609,14 +3610,17 @@ struct MMA16816ConversionHelper {
         for (int n = 0; n < numRepN; ++n)
           callMma(2 * m, n, 2 * k);
 
+    Type resElemTy = dTensorTy.getElementType();
+
+
     // bitcast to fp32 in bulk
     for (auto &elem : fc) {
-      elem = bitcast(elem, type::i32Ty(ctx));
+      elem = bitcast(elem, resElemTy);
     }
 
     // replace with new packed result
     Type structTy = LLVM::LLVMStructType::getLiteral(
-        ctx, SmallVector<Type>(fc.size(), type::i32Ty(ctx)));
+        ctx, SmallVector<Type>(fc.size(), resElemTy));
     Value res = getStructFromElements(loc, fc, rewriter, structTy);
     rewriter.replaceOp(op, res);
 
