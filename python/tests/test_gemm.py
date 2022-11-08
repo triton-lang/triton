@@ -168,7 +168,3 @@ def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLO
 
     torch.set_printoptions(profile="full")
     assert_close(c, golden, rtol=max(1e-4, 1.5 * golden_rel_err), atol=max(1e-4, 1.5 * golden_abs_err), check_dtype=False)
-
-
-test_gemm_no_scf_int8(SIZE_M=16, SIZE_N=32, SIZE_K=64, NUM_WARPS=2)
-#test_gemm(*[128, 64, 128, 4, 128, 64, 32])

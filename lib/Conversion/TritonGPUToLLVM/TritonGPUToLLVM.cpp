@@ -2708,8 +2708,8 @@ public:
       Value sOffset =
           mul(i32_val(matIdx[order[1]] * sMatStride * sMatShape), sTileStride);
       Value sOffsetPtr = gep(shemPtrTy, ptr, sOffset);
-      PTXBuilder builder;
 
+      PTXBuilder builder;
       // ldmatrix.m8n8.x4 returns 4x2xfp16(that is 4xb32) elements for a
       // thread.
       auto resArgs = builder.newListOperand(4, "=r");
@@ -2799,12 +2799,12 @@ public:
       if (kOrder == 1) {
         for (int i = 0; i < 2; ++i)
           for (int j = 0; j < 4; ++j)
-            i8Elems[i][j] = load(gep(elemTy, ptrs[i][j], sOffsetElemVal));
+            i8Elems[i][j] = load(gep(elemPtrTy, ptrs[i][j], sOffsetElemVal));
 
         for (int i = 2; i < 4; ++i)
           for (int j = 0; j < 4; ++j)
             i8Elems[i][j] =
-                load(gep(elemPtrTy, ptrs[i - 2][j], sOffsetElemVal));
+                load(gep(elemPtrTy, ptrs[i - 2][j], sOffsetArrElemVal));
 
         for (int m = 0; m < 4; ++m) {
           for (int e = 0; e < 4; ++e)
@@ -2904,6 +2904,7 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
     size_t reduceAxis = 1;
     unsigned K = AShape[reduceAxis];
     bool isOuter = K == 1;
+
     bool isMMA = D.getType()
                      .cast<RankedTensorType>()
                      .getEncoding()
@@ -2915,11 +2916,13 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
                       .getEncoding()
                       .cast<MmaEncodingAttr>();
 
-    if (!isOuter && isMMA) {
+    bool isHMMA = isDotHMMA(op);
+    if (!isOuter && isMMA && isHMMA) {
       if (mmaLayout.getVersion() == 1)
         return convertMMA884(op, adaptor, rewriter);
       if (mmaLayout.getVersion() == 2)
         return convertMMA16816(op, adaptor, rewriter);
+
       llvm::report_fatal_error(
           "Unsupported MMA kind found when converting DotOp to LLVM.");
     }
@@ -2932,6 +2935,46 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
         "Unsupported DotOp found when converting TritonGPU to LLVM.");
   }
 
+  // Tell whether a DotOp support HMMA.
+  // This is port from the master branch, the original logic is retained.
+  static bool isDotHMMA(DotOp op) {
+    auto a = op.a();
+    auto b = op.b();
+    auto c = op.c();
+    auto d = op.getResult();
+    auto aTensorTy = a.getType().cast<RankedTensorType>();
+    auto bTensorTy = b.getType().cast<RankedTensorType>();
+    auto cTensorTy = c.getType().cast<RankedTensorType>();
+    auto dTensorTy = d.getType().cast<RankedTensorType>();
+
+    if (!dTensorTy.getEncoding().isa<MmaEncodingAttr>())
+      return false;
+
+    auto mmaLayout = dTensorTy.getEncoding().cast<MmaEncodingAttr>();
+    auto aElemTy = aTensorTy.getElementType();
+    auto bElemTy = bTensorTy.getElementType();
+    // Refer to mma section for the data type supported by Volta and Hopper
+    // Tensor Core in
+    // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-fragment-mma-884-f16
+    return (aElemTy.isF16() && bElemTy.isF16()) ||
+           (aElemTy.isBF16() && bElemTy.isBF16()) ||
+           (aElemTy.isF32() && bElemTy.isF32() && op.allowTF32() &&
+            mmaLayout.getVersion() >= 2) ||
+           (aElemTy.isInteger(8) && bElemTy.isInteger(8) &&
+            mmaLayout.getVersion() >= 2);
+  }
+
+  // Tell whether a DotOp support HMMA by the operand type(either $a or $b).
+  // We cannot get both the operand types(in TypeConverter), here we assume the
+  // types of both the operands are identical here.
+  // TODO[Superjomn]: Find a better way to implement it.
+  static bool isDotHMMA(TensorType operand, bool allowTF32, int mmaVersion) {
+    auto elemTy = operand.getElementType();
+    return elemTy.isF16() || elemTy.isBF16() ||
+           (elemTy.isF32() && allowTF32 && mmaVersion >= 2) ||
+           (elemTy.isInteger(8) && mmaVersion >= 2);
+  }
+
 private:
   // Convert to mma.m16n8k16
   LogicalResult convertMMA16816(triton::DotOp a, OpAdaptor adaptor,
@@ -2941,10 +2984,7 @@ private:
                               ConversionPatternRewriter &rewriter) const;
 
   LogicalResult convertFMADot(triton::DotOp op, OpAdaptor adaptor,
-                              ConversionPatternRewriter &rewriter) const {
-    assert(false && "Not implemented yet.");
-    return failure();
-  }
+                              ConversionPatternRewriter &rewriter) const;
 };
 
 // Helper for conversion of DotOp with mma<version=1>, that is sm<80
@@ -3644,7 +3684,6 @@ struct MMA16816ConversionHelper {
         return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
       };
 
-      llvm::outs() << "mmaOut.getType: " << mmaOut.getType() << "\n";
       Type elemTy = mmaOut.getType().cast<LLVM::LLVMStructType>().getBody()[0];
       for (int i = 0; i < 4; ++i)
         fc[m * colsPerThread + 4 * n + i] =
@@ -3656,14 +3695,15 @@ struct MMA16816ConversionHelper {
         for (int n = 0; n < numRepN; ++n)
           callMma(2 * m, n, 2 * k);
 
-    // bitcast to fp32 in bulk
+    Type resElemTy = dTensorTy.getElementType();
+
     for (auto &elem : fc) {
-      elem = bitcast(elem, type::i32Ty(ctx));
+      elem = bitcast(elem, resElemTy);
     }
 
     // replace with new packed result
     Type structTy = LLVM::LLVMStructType::getLiteral(
-        ctx, SmallVector<Type>(fc.size(), type::i32Ty(ctx)));
+        ctx, SmallVector<Type>(fc.size(), resElemTy));
     Value res = getStructFromElements(loc, fc, rewriter, structTy);
     rewriter.replaceOp(op, res);
 
@@ -3797,9 +3837,25 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
       dotOperandLayout.getParent().dyn_cast_or_null<MmaEncodingAttr>();
   assert(mmaLayout);
 
+  bool isOuter{};
+  {
+    int K{};
+    if (dotOperandLayout.getOpIdx() == 0) // $a
+      K = dstTensorTy.getShape()[1];
+    else // $b
+      K = dstTensorTy.getShape()[0];
+    isOuter = K == 1;
+  }
+
+  // TODO[Superjomn]: the allowTF32 is not available in ConvertLayoutOp for it
+  // is an attribute of DotOp.
+  bool allowTF32 = false;
+  bool isHMMA = DotOpConversion::isDotHMMA(dstTensorTy, allowTF32,
+                                           mmaLayout.getVersion());
+
   auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.src(), rewriter);
   Value res;
-  if (mmaLayout.getVersion() == 2) {
+  if (!isOuter && mmaLayout.getVersion() == 2 && isHMMA) { // tensor core v2
     MMA16816ConversionHelper mmaHelper(mmaLayout, getThreadId(rewriter, loc),
                                        rewriter, getTypeConverter(),
                                        op.getLoc());
@@ -3811,7 +3867,8 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
       // operand $b
       res = mmaHelper.loadB(src, smemObj);
     }
-  } else if (mmaLayout.getVersion() == 1) {
+  } else if (!isOuter && mmaLayout.getVersion() == 1 &&
+             isHMMA) { // tensor core v1
     DotOpMmaV1ConversionHelper helper(mmaLayout);
     if (dotOperandLayout.getOpIdx() == 0) {
       // operand $a
@@ -4295,6 +4352,172 @@ DotOpMmaV1ConversionHelper::extractLoadedOperand(
     }
 
   return rcds;
+}
+
+template <typename T> void print_vec(ArrayRef<T> vec) {
+  for (int v : vec)
+    llvm::outs() << v << " ";
+  llvm::outs() << "\n";
+}
+
+LogicalResult
+DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
+                               ConversionPatternRewriter &rewriter) const {
+  auto *ctx = rewriter.getContext();
+  auto loc = op.getLoc();
+  auto threadId = getThreadId(rewriter, loc);
+
+  using ValueTable = std::map<std::pair<int, int>, Value>;
+
+  auto A = op.a();
+  auto B = op.b();
+  auto C = op.c();
+  auto D = op.getResult();
+
+  auto aTensorTy = A.getType().cast<RankedTensorType>();
+  auto bTensorTy = B.getType().cast<RankedTensorType>();
+  auto cTensorTy = C.getType().cast<RankedTensorType>();
+  auto dTensorTy = D.getType().cast<RankedTensorType>();
+
+  auto aShape = aTensorTy.getShape();
+  auto bShape = bTensorTy.getShape();
+  auto cShape = cTensorTy.getShape();
+
+  auto aLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto bLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto cLayout = cTensorTy.getEncoding().cast<BlockedEncodingAttr>();
+  auto dLayout = dTensorTy.getEncoding().cast<BlockedEncodingAttr>();
+
+  auto aOrder = aLayout.getOrder();
+  auto bOrder = bLayout.getOrder();
+
+  auto order = dLayout.getOrder();
+
+  bool isARow = aOrder[0] == 1;
+  bool isBRow = bOrder[0] == 1;
+
+  int strideAM = isARow ? aShape[1] : 1;
+  int strideAK = isARow ? 1 : aShape[0];
+  int strideBN = isBRow ? 1 : bShape[0];
+  int strideBK = isBRow ? bShape[1] : 1;
+  int strideA0 = isARow ? strideAK : strideAM;
+  int strideA1 = isARow ? strideAM : strideAK;
+  int strideB0 = isBRow ? strideBN : strideBK;
+  int strideB1 = isBRow ? strideBK : strideBN;
+  int lda = isARow ? strideAM : strideAK;
+  int ldb = isBRow ? strideBK : strideBN;
+  int aPerPhase = aLayout.getPerPhase();
+  int aMaxPhase = aLayout.getMaxPhase();
+  int bPerPhase = bLayout.getPerPhase();
+  int bMaxPhase = bLayout.getMaxPhase();
+  int aNumPtr = 8;
+  int bNumPtr = 8;
+  int NK = aShape[1];
+
+  auto shapePerCTA = getShapePerCTA(dLayout);
+
+  auto sizePerThread = getSizePerThread(dLayout);
+
+  llvm::outs() << "strideA: " << strideAM << " " << strideAK << "\n";
+  llvm::outs() << "strideB: " << strideBN << " " << strideBK << "\n";
+  llvm::outs() << "shapePerCTA: ";
+  print_vec<unsigned>(shapePerCTA);
+  llvm::outs() << "\n";
+
+  llvm::outs() << "sizePerThread: ";
+  print_vec<unsigned>(sizePerThread);
+  llvm::outs() << "\n";
+
+  Value _0 = i32_val(0);
+
+  Value mContig = i32_val(sizePerThread[order[1]]);
+  Value nContig = i32_val(sizePerThread[order[0]]);
+
+  // threadId in blocked layout
+  SmallVector<Value> threadIds;
+  {
+    int dim = cShape.size();
+    threadIds.resize(dim);
+    for (unsigned k = 0; k < dim - 1; k++) {
+      Value dimK = i32_val(shapePerCTA[order[k]]);
+      Value rem = urem(threadId, dimK);
+      threadId = udiv(threadId, dimK);
+      threadIds[order[k]] = rem;
+    }
+    Value dimK = i32_val(shapePerCTA[order[dim - 1]]);
+    threadIds[order[dim - 1]] = urem(threadId, dimK);
+  }
+
+  Value threadIdM = threadIds[0];
+  Value threadIdN = threadIds[1];
+
+  Value offA0 = isARow ? _0 : mul(threadIdM, mContig);
+  Value offA1 = isARow ? mul(threadIdM, mContig) : _0;
+  SmallVector<Value> aOff(aNumPtr);
+  for (int i = 0; i < aNumPtr; ++i) {
+    aOff[i] = add(mul(offA0, i32_val(strideA0)), mul(offA1, i32_val(strideA1)));
+  }
+
+  Value offB0 = isBRow ? mul(threadIdN, nContig) : _0;
+  Value offB1 = isBRow ? _0 : mul(threadIdN, nContig);
+  SmallVector<Value> bOff(bNumPtr);
+  for (int i = 0; i < bNumPtr; ++i) {
+    bOff[i] = add(mul(offB0, i32_val(strideB0)), mul(offB1, i32_val(strideB1)));
+  }
+
+  auto aSmem = getSharedMemoryObjectFromStruct(loc, adaptor.a(), rewriter);
+  auto bSmem = getSharedMemoryObjectFromStruct(loc, adaptor.b(), rewriter);
+
+  Type f32PtrTy = ptr_ty(f32_ty);
+  SmallVector<Value> aPtrs(aNumPtr);
+  for (int i = 0; i < aNumPtr; ++i)
+    aPtrs[i] = gep(f32PtrTy, aSmem.base, aOff[i]);
+
+  SmallVector<Value> bPtrs(bNumPtr);
+  for (int i = 0; i < bNumPtr; ++i)
+    bPtrs[i] = gep(f32PtrTy, bSmem.base, bOff[i]);
+
+  ValueTable has, hbs;
+  auto cc = getElementsFromStruct(loc, adaptor.c(), rewriter);
+  SmallVector<Value> ret = cc;
+  // is this compatible with blocked layout?
+
+  for (unsigned k = 0; k < NK; k++) {
+    int z = 0;
+    for (unsigned i = 0; i < cShape[order[1]]; i += shapePerCTA[order[1]])
+      for (unsigned j = 0; j < cShape[order[0]]; j += shapePerCTA[order[0]])
+        for (unsigned ii = 0; ii < sizePerThread[order[1]]; ++ii)
+          for (unsigned jj = 0; jj < sizePerThread[order[0]]; ++jj) {
+            unsigned m = order[0] == 1 ? i : j;
+            unsigned n = order[0] == 1 ? j : i;
+            unsigned mm = order[0] == 1 ? ii : jj;
+            unsigned nn = order[0] == 1 ? jj : ii;
+            if (!has.count({m + mm, k})) {
+              Value pa = gep(f32PtrTy, aPtrs[0],
+                             i32_val((m + mm) * strideAM + k * strideAK));
+              Value va = load(pa);
+              has[{m + mm, k}] = va;
+            }
+            if (!hbs.count({n + nn, k})) {
+              Value pb = gep(f32PtrTy, bPtrs[0],
+                             i32_val((n + nn) * strideBN + k * strideBK));
+              Value vb = load(pb);
+              hbs[{n + nn, k}] = vb;
+            }
+
+            llvm::outs() << z << ": " << m + mm << " " << n + nn << "\n";
+            ret[z] = rewriter.create<LLVM::FMulAddOp>(loc, has[{m + mm, k}],
+                                                      hbs[{n + nn, k}], ret[z]);
+            ++z;
+          }
+  }
+
+  auto res = getStructFromElements(
+      loc, ret, rewriter,
+      struct_ty(SmallVector<Type>(ret.size(), ret[0].getType())));
+  rewriter.replaceOp(op, res);
+
+  return success();
 }
 
 /// ====================== mma codegen end ============================
@@ -5134,8 +5357,8 @@ void ConvertTritonGPUToLLVM::initSharedMemory(
   OpBuilder b(mod.getBodyRegion());
   auto loc = mod.getLoc();
   auto elemTy = typeConverter.convertType(b.getIntegerType(8));
-  // Set array size 0 and external linkage indicates that we use dynamic shared
-  // allocation to allow a larger shared memory size for each kernel.
+  // Set array size 0 and external linkage indicates that we use dynamic
+  // shared allocation to allow a larger shared memory size for each kernel.
   auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
   auto global = b.create<LLVM::GlobalOp>(
       loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
