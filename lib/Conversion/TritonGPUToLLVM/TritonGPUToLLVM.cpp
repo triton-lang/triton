@@ -62,7 +62,7 @@ Value createConstantF32(Location loc, PatternRewriter &rewriter, float v) {
                                            rewriter.getF32FloatAttr(v));
 }
 
-// Create a index type constant.
+// Create an index type constant.
 Value createIndexConstant(OpBuilder &builder, Location loc,
 
                           TypeConverter *converter, int64_t value) {
@@ -632,7 +632,7 @@ public:
   // [elemsPerThread X rank] index matrix.
   // TODO: [goostavz] Double confirm the redundant indices calculations will
   //       be eliminated in the consequent MLIR/LLVM optimization. We might
-  //       implement a indiceCache if necessary.
+  //       implement an indexCache if necessary.
   SmallVector<SmallVector<Value>>
   emitIndicesForBlockedLayout(Location loc, ConversionPatternRewriter &rewriter,
                               const BlockedEncodingAttr &blockedLayout,
@@ -1615,8 +1615,8 @@ struct ViewLikeOpConversion : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
   LogicalResult
   matchAndRewrite(SourceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // We cannot directly
-    //   rewriter.replaceOp(op, adaptor.src());
+    // We cannot directly run
+    //   `rewriter.replaceOp(op, adaptor.src())`
     // due to MLIR's restrictions
     Location loc = op->getLoc();
     auto resultTy = op.getType().template cast<RankedTensorType>();
@@ -2002,7 +2002,7 @@ private:
                       Value smemBase) const;
 
   // blocked/mma -> blocked/mma.
-  // Data padding in shared memory to avoid bank confict.
+  // Data padding in shared memory to avoid bank conflict.
   LogicalResult
   lowerDistributedToDistributed(triton::gpu::ConvertLayoutOp op,
                                 OpAdaptor adaptor,
@@ -2892,7 +2892,7 @@ struct DotOpMmaV1ConversionHelper {
     int NK = shape[1];
     unsigned numM = rep[0] * shape[0] / (spw[0] * wpt[0]);
 
-    // NOTE We cound't get the vec from the shared layout.
+    // NOTE: We couldn't get the vec from the shared layout.
     // int vecA = sharedLayout.getVec();
     // TODO[Superjomn]: Consider the case when vecA > 4
     bool vecGt4 = false;
@@ -2910,7 +2910,7 @@ struct DotOpMmaV1ConversionHelper {
     SmallVector<int> fpw({2, 2, 1});
     SmallVector<int> rep({0, 2 * packSize1, 1});       // pad M with 0
     SmallVector<int> spw({0, fpw[1] * 4 * rep[1], 1}); // pad M with 0
-    // NOTE We cound't get the vec from the shared layout.
+    // NOTE: We couldn't get the vec from the shared layout.
     // int vecB = sharedLayout.getVec();
     // TODO[Superjomn]: Consider the case when vecA > 4
     bool vecGt4 = false;
@@ -3014,7 +3014,7 @@ struct DotOpMmaV2ConversionHelper {
     return Type{};
   }
 
-  // The type of a matrix that loaded by either a ldmatrix or composed lds.
+  // The type of matrix that loaded by either a ldmatrix or composed lds.
   Type getMatType() const {
     Type fp32Ty = type::f32Ty(ctx);
     Type fp16x2Ty = vec_ty(type::f16Ty(ctx), 2);
@@ -3210,7 +3210,7 @@ private:
        "mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32"},
   };
 
-  // vector length per ldmatrix (16*8/elelment_size_in_bits)
+  // vector length per ldmatrix (16*8/element_size_in_bits)
   inline static const std::map<TensorCoreType, uint8_t> mmaInstrVec = {
       {TensorCoreType::FP32_FP16_FP16_FP32, 8},
       {TensorCoreType::FP32_BF16_BF16_FP32, 8},
@@ -3349,7 +3349,7 @@ struct MMA16816ConversionHelper {
       // load from smem
       loadFn = getLoadMatrixFn(
           tensor, llTensor, mmaLayout, mmaLayout.getWarpsPerCTA()[0] /*wpt*/,
-          1 /*kOrder*/, {mmaInstrM, mmaInstrK} /*instrShpae*/,
+          1 /*kOrder*/, {mmaInstrM, mmaInstrK} /*instrShape*/,
           {matShapeM, matShapeK} /*matShape*/, warpM /*warpId*/, ha /*vals*/);
     } else if (aTensorTy.getEncoding().isa<BlockedEncodingAttr>()) {
       // load from registers, used in gemm fuse
@@ -3381,7 +3381,7 @@ struct MMA16816ConversionHelper {
 
     auto loadFn = getLoadMatrixFn(
         tensor, llTensor, mmaLayout, mmaLayout.getWarpsPerCTA()[1] /*wpt*/,
-        0 /*kOrder*/, {mmaInstrK, mmaInstrN} /*instrShpae*/,
+        0 /*kOrder*/, {mmaInstrK, mmaInstrN} /*instrShape*/,
         {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/, hb /*vals*/);
 
     for (int n = 0; n < std::max(numRepN / 2, 1); ++n) {
@@ -4350,7 +4350,7 @@ struct InsertSliceAsyncOpConversion
 
     // If perPhase * maxPhase > threadsPerCTA, we need to swizzle over
     // elements across phases. If perPhase * maxPhase == threadsPerCTA,
-    // swizzle is not allowd
+    // swizzle is not allowed
     auto numSwizzleRows = std::max<unsigned>(
         (perPhase * maxPhase) / threadsPerCTA[inOrder[1]], 1);
     // A sharedLayout encoding has a "vec" parameter.
@@ -4837,12 +4837,12 @@ public:
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
 
     // step 1: Allocate shared memories and insert barriers
-    // setp 2: Convert SCF to CFG
+    // step 2: Convert SCF to CFG
     // step 3: Convert FuncOp to LLVMFuncOp via partial conversion
     // step 4: Convert the rest of ops via partial conversion
     // The reason for putting step 1 before step 2 is that the membar analysis
     // currently only supports SCF but not CFG.
-    // The reason for a seperation between 1/4 is that, step 3 is out of
+    // The reason for a separation between 1/4 is that, step 3 is out of
     // the scope of Dialect Conversion, thus we need to make sure the smem
     // is not revised during the conversion of step 4.
     Allocation allocation(mod);
