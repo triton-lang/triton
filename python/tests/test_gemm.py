@@ -35,6 +35,9 @@ def matmul_no_scf_kernel(
     [256, 128, 16, 4],
     [128, 16, 32, 4],
     [32, 128, 64, 4],
+    [128, 128, 64, 4],
+    [64, 128, 128, 4],
+    [64, 128, 128, 2],
 ])
 def test_gemm_no_scf(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS):
     a = torch.randn((SIZE_M, SIZE_K), device='cuda', dtype=torch.float16)
