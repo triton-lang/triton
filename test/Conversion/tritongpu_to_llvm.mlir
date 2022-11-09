@@ -347,7 +347,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_extract_slice
   func @basic_extract_slice() {
     // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK: llvm.extractvalue 
+    // CHECK: llvm.extractvalue
     // CHECK-NEXT: llvm.extractvalue
     // CHECK-NEXT: llvm.extractvalue
     // CHECK-NEXT: llvm.extractvalue
@@ -808,6 +808,25 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     // %30 = tt.splat %ptr : (!tt.ptr<f32>) -> tensor<128x1x!tt.ptr<f32>, #blocked>
     // %36 = tt.broadcast %30 : (tensor<128x1x!tt.ptr<f32>, #blocked>) -> tensor<128x256x!tt.ptr<f32>, #blocked>
     // tt.store %36, %38 : tensor<128x256xf32, #blocked>
+    return
+  }
+}
+
+// -----
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#mma = #triton_gpu.mma<{version = 2, warpsPerCTA = [2, 2]}>
+#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma}>
+#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma}>
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+  func @matmul_fmadot(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
+  %a:tensor<32x16xf32, #shared>, %b:tensor<16x32xf32, #shared>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
+    // CHECK: llvm.intr.fmuladd
+    %28 = tt.dot %a, %b, %cst {allowTF32 = false, transA = false, transB = false} : tensor<32x16xf32, #shared> * tensor<16x32xf32, #shared> -> tensor<32x32xf32, #blocked>
+    %30 = tt.splat %ptr : (!tt.ptr<f32>) -> tensor<32x1x!tt.ptr<f32>, #blocked>
+    %36 = tt.broadcast %30 : (tensor<32x1x!tt.ptr<f32>, #blocked>) -> tensor<32x32x!tt.ptr<f32>, #blocked>
+    tt.store %36, %28 : tensor<32x32xf32, #blocked>
     return
   }
 }
