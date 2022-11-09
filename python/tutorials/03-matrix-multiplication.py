@@ -156,7 +156,7 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
     ],
     key=['M', 'N', 'K'],
 )
@@ -284,17 +284,17 @@ def matmul(a, b, activation=None):
 #
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS)
 
-torch.manual_seed(0)
-a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-triton_output = matmul(a, b, activation=None)
-torch_output = torch.matmul(a, b)
-print(f"triton_output={triton_output}")
-print(f"torch_output={torch_output}")
-if triton.testing.allclose(triton_output, torch_output):
-    print("✅ Triton and Torch match")
-else:
-    print("❌ Triton and Torch differ")
+#torch.manual_seed(0)
+#a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+#b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+#triton_output = matmul(a, b, activation=None)
+#torch_output = torch.matmul(a, b)
+#print(f"triton_output={triton_output}")
+#print(f"torch_output={torch_output}")
+#if triton.testing.allclose(triton_output, torch_output):
+#    print("✅ Triton and Torch match")
+#else:
+#    print("❌ Triton and Torch differ")
 
 # %%
 # Benchmark
@@ -326,12 +326,13 @@ else:
 def benchmark(M, N, K, provider):
     a = torch.randn((M, K), device='cuda', dtype=torch.float16)
     b = torch.randn((K, N), device='cuda', dtype=torch.float16)
-    if provider == 'cublas':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), rep=100)
-    if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), rep=100)
-    perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
-    return perf(ms), perf(max_ms), perf(min_ms)
+    with triton.testing.set_gpu_clock():
+        if provider == 'cublas':
+            ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), rep=1)
+        if provider == 'triton':
+            ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), rep=1)
+        perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
+        return perf(ms), perf(max_ms), perf(min_ms)
 
 
 benchmark.run(show_plots=True, print_data=True)
