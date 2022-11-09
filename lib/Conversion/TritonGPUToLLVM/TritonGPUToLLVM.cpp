@@ -3775,7 +3775,6 @@ struct MMA16816ConversionHelper {
     auto aTensorTy = a.getType().cast<RankedTensorType>();
     auto dTensorTy = d.getType().cast<RankedTensorType>();
 
-
     auto aShape = aTensorTy.getShape();
     auto dShape = dTensorTy.getShape();
 
@@ -3829,7 +3828,6 @@ struct MMA16816ConversionHelper {
           callMma(2 * m, n, 2 * k);
 
     Type resElemTy = dTensorTy.getElementType();
-
 
     // bitcast to fp32 in bulk
     for (auto &elem : fc) {
@@ -4490,12 +4488,6 @@ DotOpMmaV1ConversionHelper::extractLoadedOperand(
   return rcds;
 }
 
-template <typename T> void print_vec(ArrayRef<T> vec) {
-  for (int v : vec)
-    llvm::outs() << v << " ";
-  llvm::outs() << "\n";
-}
-
 LogicalResult
 DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
                                ConversionPatternRewriter &rewriter) const {
@@ -4553,16 +4545,6 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
   auto shapePerCTA = getShapePerCTA(dLayout);
 
   auto sizePerThread = getSizePerThread(dLayout);
-
-  llvm::outs() << "strideA: " << strideAM << " " << strideAK << "\n";
-  llvm::outs() << "strideB: " << strideBN << " " << strideBK << "\n";
-  llvm::outs() << "shapePerCTA: ";
-  print_vec<unsigned>(shapePerCTA);
-  llvm::outs() << "\n";
-
-  llvm::outs() << "sizePerThread: ";
-  print_vec<unsigned>(sizePerThread);
-  llvm::outs() << "\n";
 
   Value _0 = i32_val(0);
 
@@ -4641,7 +4623,6 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
               hbs[{n + nn, k}] = vb;
             }
 
-            llvm::outs() << z << ": " << m + mm << " " << n + nn << "\n";
             ret[z] = rewriter.create<LLVM::FMulAddOp>(loc, has[{m + mm, k}],
                                                       hbs[{n + nn, k}], ret[z]);
             ++z;
