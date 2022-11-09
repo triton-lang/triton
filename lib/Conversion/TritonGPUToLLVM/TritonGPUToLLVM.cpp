@@ -329,7 +329,8 @@ Value getStructFromElements(Location loc, ValueRange resultVals,
   }
 
   Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
-  for (auto v : llvm::enumerate(resultVals)) {
+  for (const auto& v : llvm::enumerate(resultVals)) {
+    assert(v.value() && "can not insert null values");
     llvmStruct = insert_val(structType, llvmStruct, v.value(),
                             rewriter.getI64ArrayAttr(v.index()));
   }
@@ -867,7 +868,8 @@ struct LoadOpConversion
 
     // Determine the vectorization size
     Type valueTy = op.getResult().getType();
-    Type valueElemTy = getElementTypeOrSelf(valueTy);
+    Type valueElemTy = typeConverter->convertType(
+        getElementTypeOrSelf(valueTy));
     unsigned vec = getVectorSize(ptr);
     unsigned numElems = getElemsPerThread(ptr.getType());
     if (llMask)
@@ -1774,6 +1776,109 @@ struct ExtractSliceOpConversion
     auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
     Value resultVal = gep(elemPtrTy, adaptor.src(), offset);
     rewriter.replaceOp(op, resultVal);
+    return success();
+  }
+};
+
+struct FpToFpOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::FpToFpOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::FpToFpOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  static SmallVector<Value> convertFp8x4ToFp16x4(
+      Location loc, ConversionPatternRewriter &rewriter,
+      const Value& v0, const Value& v1, const Value& v2, const Value& v3) {
+    auto ctx = rewriter.getContext();
+    auto fp8x4VecTy = vec_ty(i8_ty, 4);
+    Value fp8x4Vec = undef(fp8x4VecTy);
+    fp8x4Vec = insert_element(fp8x4VecTy, fp8x4Vec, v0, i32_val(0));
+    fp8x4Vec = insert_element(fp8x4VecTy, fp8x4Vec, v1, i32_val(1));
+    fp8x4Vec = insert_element(fp8x4VecTy, fp8x4Vec, v2, i32_val(2));
+    fp8x4Vec = insert_element(fp8x4VecTy, fp8x4Vec, v3, i32_val(3));
+    fp8x4Vec = bitcast(fp8x4Vec, i32_ty);
+
+    PTXBuilder builder;
+    auto &createReg = *builder.create(".reg .b32 a0, a1, b0, b1");
+    auto &prmt = *builder.create("prmt.b32");
+    auto &lop3 = *builder.create("lop3.b32");
+    auto &shr = *builder.create("shr.b32");
+
+    auto *o0 = builder.newOperand("=r");
+    auto *o1 = builder.newOperand("=r");
+    auto *v = builder.newOperand(fp8x4Vec, "r");
+    auto *a0 = builder.newConstantOperand("a0");
+    auto *a1 = builder.newConstantOperand("a1");
+    auto *b0 = builder.newConstantOperand("b0");
+    auto *b1 = builder.newConstantOperand("b1");
+    auto *c0x0 = builder.newConstantOperand(0);
+    auto *c0x1 = builder.newConstantOperand(1);
+    auto *c0xc0 = builder.newConstantOperand(0xc0);
+    auto *c0xf8 = builder.newConstantOperand(0xf8);
+    auto *c0x5040 = builder.newConstantOperand(0x5040);
+    auto *c0x7060 = builder.newConstantOperand(0x7060);
+    auto *c0x7fff7fff = builder.newConstantOperand(0x7fff7fffll);
+    auto *c0x80008000 = builder.newConstantOperand(0x80008000ll);
+
+    createReg();
+    prmt(a0, c0x0, v, c0x5040);
+    prmt(a1, c0x0, v, c0x7060);
+    lop3(b0, a0, c0x7fff7fff, c0x0, c0xc0);
+    lop3(b1, a1, c0x7fff7fff, c0x0, c0xc0);
+    shr(b0, b0, c0x1);
+    shr(b1, b1, c0x1);
+    lop3(o0, b0, c0x80008000, a0, c0xf8);
+    lop3(o1, b1, c0x80008000, a1, c0xf8);
+
+    auto fp16x2VecTy = vec_ty(f16_ty, 2);
+    auto fp16x2x2StructTy =
+        struct_ty(SmallVector<Type>{fp16x2VecTy, fp16x2VecTy});
+    auto fp16x2x2Struct =
+        builder.launch(rewriter, loc, fp16x2x2StructTy, false);
+    auto fp16x2A = extract_val(fp16x2VecTy, fp16x2x2Struct,
+                               rewriter.getI32ArrayAttr({0}));
+    auto fp16x2B = extract_val(fp16x2VecTy, fp16x2x2Struct,
+                               rewriter.getI32ArrayAttr({1}));
+    return {
+        extract_element(f16_ty, fp16x2A, i32_val(0)),
+        extract_element(f16_ty, fp16x2A, i32_val(1)),
+        extract_element(f16_ty, fp16x2B, i32_val(0)),
+        extract_element(f16_ty, fp16x2B, i32_val(1))
+    };
+  }
+
+  LogicalResult
+  matchAndRewrite(triton::FpToFpOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto srcTensorType = op.from().getType().cast<mlir::RankedTensorType>();
+    auto dstTensorType = op.result().getType().cast<mlir::RankedTensorType>();
+    auto srcEltType = srcTensorType.getElementType();
+    auto dstEltType = dstTensorType.getElementType();
+    assert(srcEltType.isa<triton::Float8Type>() ||
+           dstEltType.isa<triton::Float8Type>());
+    auto convertedDstTensorType =
+        this->getTypeConverter()->convertType(dstTensorType);
+    auto convertedDstEleType =
+        this->getTypeConverter()->convertType(dstEltType);
+
+    // Vectorized casting
+    auto loc = op->getLoc();
+    auto elems = getElemsPerThread(dstTensorType);
+    assert(elems % 4 == 0 &&
+           "FP8 casting only support tensors with 4-aligned sizes");
+    auto elements = getElementsFromStruct(loc, adaptor.from(), rewriter);
+    SmallVector<Value> resultVals;
+    for (size_t i = 0; i < elems; i += 4) {
+      assert(srcEltType.isa<triton::Float8Type>() &&
+             dstEltType.isa<Float16Type>());
+      auto converted =
+          convertFp8x4ToFp16x4(loc, rewriter,
+                               elements[i], elements[i + 1],
+                               elements[i + 2], elements[i + 3]);
+      resultVals.append(converted);
+    }
+    auto result = getStructFromElements(loc, resultVals, rewriter,
+                                        convertedDstTensorType);
+    rewriter.replaceOp(op, result);
     return success();
   }
 };
@@ -4147,14 +4252,15 @@ public:
     addConversion([&](RankedTensorType type) -> llvm::Optional<Type> {
       return convertTritonTensorType(type);
     });
-    // internally store bfloat16 as int16
-    addConversion([&](BFloat16Type type) -> llvm::Optional<Type> {
-      return IntegerType::get(type.getContext(), 16);
+    // Internally store float8 as int8
+    addConversion([&](triton::Float8Type type) -> llvm::Optional<Type> {
+      return IntegerType::get(type.getContext(), 8);
     });
   }
 
   Type convertTritonPointerType(triton::PointerType type) {
-    return LLVM::LLVMPointerType::get(type.getPointeeType(),
+    // Recursively translate pointee type
+    return LLVM::LLVMPointerType::get(convertType(type.getPointeeType()),
                                       type.getAddressSpace());
   }
 
@@ -4177,7 +4283,7 @@ public:
         auto [repM, repN] = DotOpMmaV2ConversionHelper::getRepMN(type);
         size_t fcSize = 4 * repM * repN;
         return LLVM::LLVMStructType::getLiteral(
-            ctx, SmallVector<Type>(fcSize, type.getElementType()));
+            ctx, SmallVector<Type>(fcSize, convertType(type.getElementType())));
       }
 
       if (mmaLayout.getVersion() == 1) {
@@ -4186,7 +4292,7 @@ public:
         int repN = helper.getRepN(shape[1]);
         int elems = 8 * repM * repN;
         return LLVM::LLVMStructType::getLiteral(
-            ctx, SmallVector<Type>(elems, type.getElementType()));
+            ctx, SmallVector<Type>(elems, convertType(type.getElementType())));
       }
 
       llvm::errs()
@@ -4197,9 +4303,8 @@ public:
                    layout.dyn_cast_or_null<DotOperandEncodingAttr>()) {
       auto mmaLayout = dot_op_layout.getParent().cast<MmaEncodingAttr>();
       auto wpt = mmaLayout.getWarpsPerCTA();
-      Type elemTy = type.getElementType();
+      Type elemTy = convertType(type.getElementType());
       if (mmaLayout.getVersion() == 2) {
-
         if (dot_op_layout.getOpIdx() == 0) { // $a
           int elems =
               MMA16816ConversionHelper::getANumElemsPerThread(type, wpt);
@@ -4791,6 +4896,8 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   POPULATE_UNARY_OP(triton::IntToPtrOp, LLVM::IntToPtrOp)
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
+
+  patterns.add<FpToFpOpConversion>(typeConverter, benefit);
 
   patterns.add<FDivOpConversion>(typeConverter, benefit);
 

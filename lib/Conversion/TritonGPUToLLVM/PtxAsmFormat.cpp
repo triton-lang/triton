@@ -45,7 +45,7 @@ PTXBuilder::Operand *PTXBuilder::newConstantOperand(const std::string &v) {
   return argArchive.back().get();
 }
 
-PTXBuilder::Operand *PTXBuilder::newConstantOperand(int v) {
+PTXBuilder::Operand *PTXBuilder::newConstantOperand(int64_t v) {
   std::stringstream ss;
   ss << "0x" << std::hex << v;
   return newConstantOperand(ss.str());
@@ -125,7 +125,7 @@ std::string PTXBuilder::dump() const {
     lines.push_back(exec->dump());
   }
 
-  return strJoin(lines, "\r\n");
+  return "{" + strJoin(lines, "\r\n") + "}";
 }
 
 PTXInstrExecution &PTXInstrCommon::call(ArrayRef<Operand *> oprs) {
