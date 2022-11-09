@@ -3201,10 +3201,7 @@ private:
                               ConversionPatternRewriter &rewriter) const;
 
   LogicalResult convertFMADot(triton::DotOp op, OpAdaptor adaptor,
-                              ConversionPatternRewriter &rewriter) const {
-    assert(false && "Not implemented yet.");
-    return failure();
-  }
+                              ConversionPatternRewriter &rewriter) const;
 };
 
 // Helper for conversion of DotOp with mma<version=1>, that is sm<80
@@ -4495,6 +4492,155 @@ DotOpMmaV1ConversionHelper::extractLoadedOperand(
     }
 
   return rcds;
+}
+
+LogicalResult
+DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
+                               ConversionPatternRewriter &rewriter) const {
+  auto *ctx = rewriter.getContext();
+  auto loc = op.getLoc();
+  auto threadId = getThreadId(rewriter, loc);
+
+  using ValueTable = std::map<std::pair<int, int>, Value>;
+
+  auto A = op.a();
+  auto B = op.b();
+  auto C = op.c();
+  auto D = op.getResult();
+
+  auto aTensorTy = A.getType().cast<RankedTensorType>();
+  auto bTensorTy = B.getType().cast<RankedTensorType>();
+  auto cTensorTy = C.getType().cast<RankedTensorType>();
+  auto dTensorTy = D.getType().cast<RankedTensorType>();
+
+  auto aShape = aTensorTy.getShape();
+  auto bShape = bTensorTy.getShape();
+  auto cShape = cTensorTy.getShape();
+
+  auto aLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto bLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto cLayout = cTensorTy.getEncoding().cast<BlockedEncodingAttr>();
+  auto dLayout = dTensorTy.getEncoding().cast<BlockedEncodingAttr>();
+
+  auto aOrder = aLayout.getOrder();
+  auto bOrder = bLayout.getOrder();
+
+  auto order = dLayout.getOrder();
+
+  bool isARow = aOrder[0] == 1;
+  bool isBRow = bOrder[0] == 1;
+
+  int strideAM = isARow ? aShape[1] : 1;
+  int strideAK = isARow ? 1 : aShape[0];
+  int strideBN = isBRow ? 1 : bShape[0];
+  int strideBK = isBRow ? bShape[1] : 1;
+  int strideA0 = isARow ? strideAK : strideAM;
+  int strideA1 = isARow ? strideAM : strideAK;
+  int strideB0 = isBRow ? strideBN : strideBK;
+  int strideB1 = isBRow ? strideBK : strideBN;
+  int lda = isARow ? strideAM : strideAK;
+  int ldb = isBRow ? strideBK : strideBN;
+  int aPerPhase = aLayout.getPerPhase();
+  int aMaxPhase = aLayout.getMaxPhase();
+  int bPerPhase = bLayout.getPerPhase();
+  int bMaxPhase = bLayout.getMaxPhase();
+  int aNumPtr = 8;
+  int bNumPtr = 8;
+  int NK = aShape[1];
+
+  auto shapePerCTA = getShapePerCTA(dLayout);
+
+  auto sizePerThread = getSizePerThread(dLayout);
+
+  Value _0 = i32_val(0);
+
+  Value mContig = i32_val(sizePerThread[order[1]]);
+  Value nContig = i32_val(sizePerThread[order[0]]);
+
+  // threadId in blocked layout
+  SmallVector<Value> threadIds;
+  {
+    int dim = cShape.size();
+    threadIds.resize(dim);
+    for (unsigned k = 0; k < dim - 1; k++) {
+      Value dimK = i32_val(shapePerCTA[order[k]]);
+      Value rem = urem(threadId, dimK);
+      threadId = udiv(threadId, dimK);
+      threadIds[order[k]] = rem;
+    }
+    Value dimK = i32_val(shapePerCTA[order[dim - 1]]);
+    threadIds[order[dim - 1]] = urem(threadId, dimK);
+  }
+
+  Value threadIdM = threadIds[0];
+  Value threadIdN = threadIds[1];
+
+  Value offA0 = isARow ? _0 : mul(threadIdM, mContig);
+  Value offA1 = isARow ? mul(threadIdM, mContig) : _0;
+  SmallVector<Value> aOff(aNumPtr);
+  for (int i = 0; i < aNumPtr; ++i) {
+    aOff[i] = add(mul(offA0, i32_val(strideA0)), mul(offA1, i32_val(strideA1)));
+  }
+
+  Value offB0 = isBRow ? mul(threadIdN, nContig) : _0;
+  Value offB1 = isBRow ? _0 : mul(threadIdN, nContig);
+  SmallVector<Value> bOff(bNumPtr);
+  for (int i = 0; i < bNumPtr; ++i) {
+    bOff[i] = add(mul(offB0, i32_val(strideB0)), mul(offB1, i32_val(strideB1)));
+  }
+
+  auto aSmem = getSharedMemoryObjectFromStruct(loc, adaptor.a(), rewriter);
+  auto bSmem = getSharedMemoryObjectFromStruct(loc, adaptor.b(), rewriter);
+
+  Type f32PtrTy = ptr_ty(f32_ty);
+  SmallVector<Value> aPtrs(aNumPtr);
+  for (int i = 0; i < aNumPtr; ++i)
+    aPtrs[i] = gep(f32PtrTy, aSmem.base, aOff[i]);
+
+  SmallVector<Value> bPtrs(bNumPtr);
+  for (int i = 0; i < bNumPtr; ++i)
+    bPtrs[i] = gep(f32PtrTy, bSmem.base, bOff[i]);
+
+  ValueTable has, hbs;
+  auto cc = getElementsFromStruct(loc, adaptor.c(), rewriter);
+  SmallVector<Value> ret = cc;
+  // is this compatible with blocked layout?
+
+  for (unsigned k = 0; k < NK; k++) {
+    int z = 0;
+    for (unsigned i = 0; i < cShape[order[1]]; i += shapePerCTA[order[1]])
+      for (unsigned j = 0; j < cShape[order[0]]; j += shapePerCTA[order[0]])
+        for (unsigned ii = 0; ii < sizePerThread[order[1]]; ++ii)
+          for (unsigned jj = 0; jj < sizePerThread[order[0]]; ++jj) {
+            unsigned m = order[0] == 1 ? i : j;
+            unsigned n = order[0] == 1 ? j : i;
+            unsigned mm = order[0] == 1 ? ii : jj;
+            unsigned nn = order[0] == 1 ? jj : ii;
+            if (!has.count({m + mm, k})) {
+              Value pa = gep(f32PtrTy, aPtrs[0],
+                             i32_val((m + mm) * strideAM + k * strideAK));
+              Value va = load(pa);
+              has[{m + mm, k}] = va;
+            }
+            if (!hbs.count({n + nn, k})) {
+              Value pb = gep(f32PtrTy, bPtrs[0],
+                             i32_val((n + nn) * strideBN + k * strideBK));
+              Value vb = load(pb);
+              hbs[{n + nn, k}] = vb;
+            }
+
+            ret[z] = rewriter.create<LLVM::FMulAddOp>(loc, has[{m + mm, k}],
+                                                      hbs[{n + nn, k}], ret[z]);
+            ++z;
+          }
+  }
+
+  auto res = getStructFromElements(
+      loc, ret, rewriter,
+      struct_ty(SmallVector<Type>(ret.size(), ret[0].getType())));
+  rewriter.replaceOp(op, res);
+
+  return success();
 }
 
 /// ====================== mma codegen end ============================
