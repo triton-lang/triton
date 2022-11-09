@@ -461,7 +461,6 @@ void init_triton_ir(py::module &&m) {
                    loc, mlir::APFloat(floatTy.getFloatSemantics(), 0), floatTy);
              else if (auto intTy = type.dyn_cast<mlir::IntegerType>())
                return self.create<mlir::arith::ConstantIntOp>(loc, 0, intTy);
-             // TODO: support FP8
              else
                throw std::runtime_error("Not implemented");
            })
