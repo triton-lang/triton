@@ -231,7 +231,6 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
       return failure();
     Value a = adaptor.a();
     Value b = adaptor.b();
-    SmallVector<unsigned, 2> order{1, 0};
     if (!aEncoding.isa<triton::gpu::DotOperandEncodingAttr>()) {
       Attribute encoding =
           triton::gpu::DotOperandEncodingAttr::get(getContext(), 0, dEncoding);
