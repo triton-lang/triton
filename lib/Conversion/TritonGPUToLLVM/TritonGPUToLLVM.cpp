@@ -1050,7 +1050,7 @@ struct LoadOpConversion
       if (other) {
         for (size_t ii = 0; ii < nWords; ++ii) {
           PTXInstr &mov = *ptxBuilder.create<>("mov");
-          mov.o("u", width);
+          mov.o("u" + std::to_string(width));
 
           size_t size = width / valueElemNbits;
 
