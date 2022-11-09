@@ -3010,6 +3010,7 @@ public:
       Value i8Elems[4][4];
       Type elemTy = type::i8Ty(ctx);
       Type elemPtrTy = ptr_ty(elemTy);
+      Type i8x4Ty = vec_ty(type::i8Ty(ctx), 4);
       if (kOrder == 1) {
         for (int i = 0; i < 2; ++i)
           for (int j = 0; j < 4; ++j)
@@ -3024,7 +3025,7 @@ public:
           for (int e = 0; e < 4; ++e)
             i8v4Elems[m] = insert_element(i8v4Elems[m].getType(), i8v4Elems[m],
                                           i8Elems[m][e], i32_val(e));
-          i32Elems[m] = bitcast(i8v4Elems[m], i32_ty);
+          i32Elems[m] = bitcast(i8v4Elems[m], i8x4Ty);
         }
       } else { // k first
         for (int j = 0; j < 4; ++j)
@@ -3040,7 +3041,7 @@ public:
           for (int e = 0; e < 4; ++e)
             i8v4Elems[m] = insert_element(i8v4Elems[m].getType(), i8v4Elems[m],
                                           i8Elems[m][e], i32_val(e));
-          i32Elems[m] = bitcast(i8v4Elems[m], i32_ty);
+          i32Elems[m] = bitcast(i8v4Elems[m], i8x4Ty);
         }
       }
 
@@ -3724,8 +3725,7 @@ struct MMA16816ConversionHelper {
         loadFn(2 * m, 2 * k);
 
     // step2. Format the values to LLVM::Struct to passing to mma codegen.
-    Value result = composeValuesToDotOperandLayoutStruct(ha, numRepM, numRepK);
-    return result;
+    return composeValuesToDotOperandLayoutStruct(ha, numRepM, numRepK);
   }
 
   // Loading $b from smem to registers, returns a LLVM::Struct.
@@ -3969,9 +3969,10 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
   Value src = op.src();
   Value dst = op.result();
   auto dstTensorTy = dst.getType().cast<RankedTensorType>();
-
+  auto srcTensorTy = src.getType().cast<RankedTensorType>();
   auto dotOperandLayout =
       dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+  auto sharedLayout = srcTensorTy.getEncoding().cast<SharedEncodingAttr>();
 
   MmaEncodingAttr mmaLayout =
       dotOperandLayout.getParent().dyn_cast_or_null<MmaEncodingAttr>();
@@ -3981,9 +3982,9 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
   {
     int K{};
     if (dotOperandLayout.getOpIdx() == 0) // $a
-      K = dstTensorTy.getShape()[1];
+      K = dstTensorTy.getShape()[sharedLayout.getOrder()[0]];
     else // $b
-      K = dstTensorTy.getShape()[0];
+      K = dstTensorTy.getShape()[sharedLayout.getOrder()[1]];
     isOuter = K == 1;
   }
 
@@ -4054,9 +4055,8 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adaptor,
   loadedB = adaptor.b();
   loadedC = mmaHelper.loadC(op.c(), adaptor.c());
 
-  auto ret = mmaHelper.convertDot(A, B, C, op.d(), loadedA, loadedB, loadedC,
-                                  op, adaptor);
-  return ret;
+  return mmaHelper.convertDot(A, B, C, op.d(), loadedA, loadedB, loadedC, op,
+                              adaptor);
 }
 
 // Simply port the old code here to avoid large difference and make debugging
@@ -4743,20 +4743,26 @@ public:
       auto mmaLayout = dot_op_layout.getParent().cast<MmaEncodingAttr>();
       auto wpt = mmaLayout.getWarpsPerCTA();
       Type elemTy = type.getElementType();
+      auto vecSize = 1;
+      if (elemTy.getIntOrFloatBitWidth() == 16) {
+        vecSize = 2;
+      } else if (elemTy.getIntOrFloatBitWidth() == 8) {
+        vecSize = 4;
+      } else {
+        assert(false && "Unsupported element type");
+      }
+      Type vecTy = vec_ty(elemTy, vecSize);
       if (mmaLayout.getVersion() == 2) {
-
         if (dot_op_layout.getOpIdx() == 0) { // $a
           int elems =
               MMA16816ConversionHelper::getANumElemsPerThread(type, wpt);
-          Type x2Ty = vec_ty(elemTy, 2);
           return LLVM::LLVMStructType::getLiteral(
-              ctx, SmallVector<Type>(elems, x2Ty));
+              ctx, SmallVector<Type>(elems, vecTy));
         }
         if (dot_op_layout.getOpIdx() == 1) { // $b
           int elems =
               MMA16816ConversionHelper::getBNumElemsPerThread(type, wpt);
-          Type x2Ty = vec_ty(elemTy, 2);
-          return struct_ty(SmallVector<Type>(elems, x2Ty));
+          return struct_ty(SmallVector<Type>(elems, vecTy));
         }
       }
 
@@ -4765,13 +4771,11 @@ public:
 
         if (dot_op_layout.getOpIdx() == 0) { // $a
           int elems = helper.numElemsPerThreadA(type);
-          Type x2Ty = vec_ty(elemTy, 2);
-          return struct_ty(SmallVector<Type>(elems, x2Ty));
+          return struct_ty(SmallVector<Type>(elems, vecTy));
         }
         if (dot_op_layout.getOpIdx() == 1) { // $b
           int elems = helper.numElemsPerThreadB(type);
-          Type x2Ty = vec_ty(elemTy, 2);
-          return struct_ty(SmallVector<Type>(elems, x2Ty));
+          return struct_ty(SmallVector<Type>(elems, vecTy));
         }
       }
 
