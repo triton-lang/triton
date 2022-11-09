@@ -957,7 +957,6 @@ reduce_configs2 = [
 
 @pytest.mark.parametrize("op, dtype_str, shape, axis", reduce_configs1 + reduce_configs2)
 def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
-    print(shape)
     # triton kernel
     @triton.jit
     def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, AXIS: tl.constexpr):
@@ -993,7 +992,6 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
     z_tri = to_triton(numpy_random((shape[1 - axis],), dtype_str=z_dtype_str, rs=rs),
                       device=device, dst_type=z_tri_dtype_str)
     kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)
-
     z_tri = to_numpy(z_tri)
     # compare
     if op == 'sum':
