@@ -1742,7 +1742,8 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
   // each thread needs to process:
   //   elemsPerThread = sizeInterWarps * s1 * s2 .. Sn / numThreads
   unsigned elems = product<unsigned>(smemShape);
-  unsigned numThreads = product<unsigned>(srcLayout.getWarpsPerCTA()) * 32;
+  unsigned numThreads =
+      product<unsigned>(triton::gpu::getWarpsPerCTA(srcLayout)) * 32;
   unsigned elemsPerThread = std::max<unsigned>(elems / numThreads, 1);
   Value readOffset = threadId;
   for (unsigned round = 0; round < elemsPerThread; ++round) {
@@ -2389,7 +2390,6 @@ public:
   }
 
 private:
-
   template <typename T>
   SmallVector<T> reorder(ArrayRef<T> input, ArrayRef<unsigned> order) const {
     size_t rank = order.size();
@@ -2476,7 +2476,6 @@ private:
     }
     llvm_unreachable("unexpected layout in getMultiDimOffset");
   }
-
 
   // shared memory rd/st for blocked or mma layout with data padding
   void processReplica(Location loc, ConversionPatternRewriter &rewriter,

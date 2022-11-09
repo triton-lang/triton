@@ -77,7 +77,7 @@ SmallVector<unsigned> getScratchConfigForReduce(triton::ReduceOp op) {
   auto srcShape = srcTy.getShape();
   auto axis = op.axis();
 
-  bool fastReduce = axis == srcLayout.getOrder()[0];
+  bool fastReduce = axis == getOrder(srcLayout)[0];
 
   SmallVector<unsigned> smemShape;
   for (auto d : srcShape)

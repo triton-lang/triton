@@ -117,8 +117,7 @@ def test_reduce2d(op, dtype, shape, axis):
     z = torch.empty(reduced_shape, device=x.device, dtype=reduced_dtype)
 
     kernel = patch_kernel(reduce2d_kernel, {'OP': op})
-    grid = (1,)
-    kernel[grid](x_ptr=x, z_ptr=z, axis=axis, block_m=shape[0], block_n=shape[1])
+    kernel[(1,)](x_ptr=x, z_ptr=z, axis=axis, block_m=shape[0], block_n=shape[1])
 
     if op == 'sum':
         golden_z = torch.sum(x, dim=axis, keepdim=False, dtype=reduced_dtype)
