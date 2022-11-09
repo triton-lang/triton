@@ -347,7 +347,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_extract_slice
   func @basic_extract_slice() {
     // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK: llvm.extractvalue 
+    // CHECK: llvm.extractvalue
     // CHECK-NEXT: llvm.extractvalue
     // CHECK-NEXT: llvm.extractvalue
     // CHECK-NEXT: llvm.extractvalue
