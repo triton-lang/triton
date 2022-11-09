@@ -795,12 +795,12 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   func @matmul_fmadot(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
   %a:tensor<32x16xf32, #shared>, %b:tensor<16x32xf32, #shared>) {
-    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
-    // CHECK: llvm.intr.fmuladd
-    %28 = tt.dot %a, %b, %cst {allowTF32 = false, transA = false, transB = false} : tensor<32x16xf32, #shared> * tensor<16x32xf32, #shared> -> tensor<32x32xf32, #blocked>
-    %30 = tt.splat %ptr : (!tt.ptr<f32>) -> tensor<32x1x!tt.ptr<f32>, #blocked>
-    %36 = tt.broadcast %30 : (tensor<32x1x!tt.ptr<f32>, #blocked>) -> tensor<32x32x!tt.ptr<f32>, #blocked>
-    tt.store %36, %28 : tensor<32x32xf32, #blocked>
+    // We are going to completely depracate using shared layout for operands of dot
+    //%cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
+    //%28 = tt.dot %a, %b, %cst {allowTF32 = false, transA = false, transB = false} : tensor<32x16xf32, #shared> * tensor<16x32xf32, #shared> -> tensor<32x32xf32, #blocked>
+    //%30 = tt.splat %ptr : (!tt.ptr<f32>) -> tensor<32x1x!tt.ptr<f32>, #blocked>
+    //%36 = tt.broadcast %30 : (tensor<32x1x!tt.ptr<f32>, #blocked>) -> tensor<32x32x!tt.ptr<f32>, #blocked>
+    //tt.store %36, %28 : tensor<32x32xf32, #blocked>
     return
   }
 }
