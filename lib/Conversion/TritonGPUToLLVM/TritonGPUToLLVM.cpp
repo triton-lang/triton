@@ -3167,6 +3167,9 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
     auto mmaLayout = dTensorTy.getEncoding().cast<MmaEncodingAttr>();
     auto aElemTy = aTensorTy.getElementType();
     auto bElemTy = bTensorTy.getElementType();
+
+    assert((mmaLayout.getVersion() == 1 || mmaLayout.getVersion() == 2) &&
+           "Unexpected MMA layout version found");
     // Refer to mma section for the data type supported by Volta and Hopper
     // Tensor Core in
     // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-fragment-mma-884-f16
