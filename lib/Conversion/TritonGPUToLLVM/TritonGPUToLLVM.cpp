@@ -2003,6 +2003,50 @@ struct FpToFpOpConversion
     };
   }
 
+  static SmallVector<Value> convertFp8x4ToFp32x4(
+      Location loc, ConversionPatternRewriter &rewriter,
+      const Value& v0, const Value& v1, const Value& v2, const Value& v3) {
+    auto fp16Values = convertFp8x4ToFp16x4(loc, rewriter, v0, v1, v2, v3);
+    return {
+        rewriter.create<LLVM::FPExtOp>(loc, f32_ty, fp16Values[0]),
+        rewriter.create<LLVM::FPExtOp>(loc, f32_ty, fp16Values[1]),
+        rewriter.create<LLVM::FPExtOp>(loc, f32_ty, fp16Values[2]),
+        rewriter.create<LLVM::FPExtOp>(loc, f32_ty, fp16Values[3])
+    };
+  }
+
+  static SmallVector<Value> convertFp32x4ToFp8x4(
+      Location loc, ConversionPatternRewriter &rewriter,
+      const Value& v0, const Value& v1, const Value& v2, const Value& v3) {
+      auto c0 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v0);
+      auto c1 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v1);
+      auto c2 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v2);
+      auto c3 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v3);
+      return convertFp16x4ToFp8x4(loc, rewriter, c0, c1, c2, c3);
+  }
+
+  static SmallVector<Value> convertFp8x4ToFp64x4(
+      Location loc, ConversionPatternRewriter &rewriter,
+      const Value& v0, const Value& v1, const Value& v2, const Value& v3) {
+    auto fp16Values = convertFp8x4ToFp16x4(loc, rewriter, v0, v1, v2, v3);
+    return {
+        rewriter.create<LLVM::FPExtOp>(loc, f64_ty, fp16Values[0]),
+        rewriter.create<LLVM::FPExtOp>(loc, f64_ty, fp16Values[1]),
+        rewriter.create<LLVM::FPExtOp>(loc, f64_ty, fp16Values[2]),
+        rewriter.create<LLVM::FPExtOp>(loc, f64_ty, fp16Values[3])
+    };
+  }
+
+  static SmallVector<Value> convertFp64x4ToFp8x4(
+      Location loc, ConversionPatternRewriter &rewriter,
+      const Value& v0, const Value& v1, const Value& v2, const Value& v3) {
+    auto c0 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v0);
+    auto c1 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v1);
+    auto c2 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v2);
+    auto c3 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v3);
+    return convertFp16x4ToFp8x4(loc, rewriter, c0, c1, c2, c3);
+  }
+
   LogicalResult
   matchAndRewrite(triton::FpToFpOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -2029,6 +2073,14 @@ struct FpToFpOpConversion
       convertor = convertFp8x4ToBf16x4;
     } else if (srcEltType.isBF16() && dstEltType.isa<triton::Float8Type>()) {
       convertor = convertBf16x4ToFp8x4;
+    } else if (srcEltType.isa<triton::Float8Type>() && dstEltType.isF32()) {
+      convertor = convertFp8x4ToFp32x4;
+    } else if (srcEltType.isF32() && dstEltType.isa<triton::Float8Type>()) {
+      convertor = convertFp32x4ToFp8x4;
+    } else if (srcEltType.isa<triton::Float8Type>() && dstEltType.isF64()) {
+      convertor = convertFp8x4ToFp64x4;
+    } else if (srcEltType.isF64() && dstEltType.isa<triton::Float8Type>()) {
+      convertor = convertFp64x4ToFp8x4;
     } else {
       assert(false && "unsupported type casting");
     }
