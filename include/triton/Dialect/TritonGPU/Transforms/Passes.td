@@ -7,7 +7,7 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
   let summary = "pipeline";
 
   let description = [{
-    TODO  
+    Unroll loops to hide global memory -> shared memory latency.
   }];
 
   let constructor = "mlir::createTritonGPUPipelinePass()";
@@ -27,7 +27,7 @@ def TritonGPUPrefetch : Pass<"tritongpu-prefetch", "mlir::ModuleOp"> {
   let summary = "prefetch";
 
   let description = [{
-    TODO  
+    Prefetch operands (a and b) of tt.dot into shared memory to hide shared memory -> register latency.
   }];
 
   let constructor = "mlir::createTritonGPUPrefetchPass()";

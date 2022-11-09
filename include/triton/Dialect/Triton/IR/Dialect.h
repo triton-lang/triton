@@ -34,7 +34,8 @@ public:
                             Attribute &resultEncoding,
                             Optional<Location> location) const = 0;
 
-  // Note: this function only verify operand encoding but doesn't infer encoding
+  // Note: this function only verify operand encoding but doesn't infer result
+  // encoding
   virtual LogicalResult
   inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
                      Attribute retEncoding,

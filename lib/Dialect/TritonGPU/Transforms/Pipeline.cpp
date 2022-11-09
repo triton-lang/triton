@@ -150,6 +150,10 @@ ttg::AllocTensorOp LoopPipeliner::allocateEmptyBuffer(Operation *op,
 
 // TODO: I copied the code from Swizzle.cpp. Should find a way to unify the
 //       code path.
+//       Swizzle has to be performed before pipeline for now. If we do swizzle
+//       after pipeline, we need to propagate the swizzled layout to all
+//       operands that is an alias of the swizzled tensor. The alias analysis
+//       component maybe helpful for this purpose.
 RankedTensorType
 LoopPipeliner::getSwizzleType(ttg::DotOperandEncodingAttr dotOpEnc,
                               RankedTensorType ty) {
@@ -160,6 +164,7 @@ LoopPipeliner::getSwizzleType(ttg::DotOperandEncodingAttr dotOpEnc,
   llvm::SmallVector<unsigned> order;
   if (auto mmaEnc = dotOpEnc.getParent().dyn_cast<ttg::MmaEncodingAttr>()) {
     // Only support row major for now
+    // TODO(Keren): check why column major code crashes
     order = {1, 0};
     int version = mmaEnc.getVersion();
     auto tyEncoding = ty.getEncoding().cast<ttg::BlockedEncodingAttr>();
