@@ -87,7 +87,6 @@ static Value createLLVMIntegerConstant(OpBuilder &builder, Location loc,
 void llPrintf(StringRef msg, ValueRange args,
               ConversionPatternRewriter &rewriter);
 
-// Shortcuts for some commonly used LLVM ops to keep code simple and intuitive//
 // Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
 #define zext(...) rewriter.create<LLVM::ZExtOp>(loc, __VA_ARGS__)
 #define udiv(...) rewriter.create<LLVM::UDivOp>(loc, __VA_ARGS__)
@@ -2964,15 +2963,19 @@ public:
       Type elemTy = type::f32Ty(ctx);
       Type elemPtrTy = ptr_ty(elemTy);
       if (kOrder == 1) {
-        elems[0] = load(gep(elemTy, ptr, sOffsetElemVal));
-        elems[1] = load(gep(elemTy, ptr2, sOffsetElemVal));
-        elems[2] = load(gep(elemTy, ptr, sOffsetArrElemVal));
-        elems[3] = load(gep(elemTy, ptr2, sOffsetArrElemVal));
+        elems[0] = load(gep(elemPtrTy, ptr, i32_val(sOffsetElem)));
+        elems[1] = load(gep(elemPtrTy, ptr2, i32_val(sOffsetElem)));
+        elems[2] =
+            load(gep(elemPtrTy, ptr, i32_val(sOffsetElem + sOffsetArrElem)));
+        elems[3] =
+            load(gep(elemPtrTy, ptr2, i32_val(sOffsetElem + sOffsetArrElem)));
       } else {
-        elems[0] = load(gep(elemTy, ptr, sOffsetElemVal));
-        elems[2] = load(gep(elemTy, ptr2, sOffsetElemVal));
-        elems[1] = load(gep(elemTy, ptr, sOffsetArrElemVal));
-        elems[3] = load(gep(elemTy, ptr2, sOffsetArrElemVal));
+        elems[0] = load(gep(elemPtrTy, ptr, i32_val(sOffsetElem)));
+        elems[2] = load(gep(elemPtrTy, ptr2, i32_val(sOffsetElem)));
+        elems[1] =
+            load(gep(elemPtrTy, ptr, i32_val(sOffsetElem + sOffsetArrElem)));
+        elems[3] =
+            load(gep(elemPtrTy, ptr2, i32_val(sOffsetElem + sOffsetArrElem)));
       }
       return {elems[0], elems[1], elems[2], elems[3]};
 
@@ -3164,6 +3167,9 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
     auto mmaLayout = dTensorTy.getEncoding().cast<MmaEncodingAttr>();
     auto aElemTy = aTensorTy.getElementType();
     auto bElemTy = bTensorTy.getElementType();
+
+    assert((mmaLayout.getVersion() == 1 || mmaLayout.getVersion() == 2) &&
+           "Unexpected MMA layout version found");
     // Refer to mma section for the data type supported by Volta and Hopper
     // Tensor Core in
     // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-fragment-mma-884-f16
@@ -3694,6 +3700,7 @@ struct MMA16816ConversionHelper {
     std::function<void(int, int)> loadFn;
     auto [matShapeM, matShapeN, matShapeK] = getMmaMatShape(aTensorTy);
     auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaInstrShape(aTensorTy);
+
     int numRepM = getNumRepM(aTensorTy, shape[0]);
     int numRepK = getNumRepK(aTensorTy, shape[1]);
 
@@ -3809,6 +3816,7 @@ struct MMA16816ConversionHelper {
                                              std::to_string(i)));
         // reuse the output registers
       }
+
       mma(retArgs, aArgs, bArgs, cArgs);
       Value mmaOut = builder.launch(rewriter, loc, helper.getMmaRetType());
 
@@ -3829,7 +3837,6 @@ struct MMA16816ConversionHelper {
 
     Type resElemTy = dTensorTy.getElementType();
 
-    // bitcast to fp32 in bulk
     for (auto &elem : fc) {
       elem = bitcast(elem, resElemTy);
     }
@@ -3872,9 +3879,7 @@ private:
           tensorTy.getShape() /*tileShape*/, instrShape, matShape, perPhase,
           maxPhase, elemBytes, rewriter, typeConverter, loc);
       SmallVector<Value> offs = loader.computeOffsets(warpId, lane);
-
       const int numPtrs = loader.getNumPtr();
-
       SmallVector<Value> ptrs(numPtrs);
 
       Type smemPtrTy = helper.getShemPtrTy();
@@ -3886,6 +3891,7 @@ private:
       auto [ha0, ha1, ha2, ha3] = loader.loadX4(
           (kOrder == 1) ? a : b /*mat0*/, (kOrder == 1) ? b : a /*mat1*/, offs,
           ptrs, helper.getMatType(), helper.getShemPtrTy());
+
       if (!needTrans) {
         ld2(vals, a, b, ha0);
         ld2(vals, a + 1, b, ha1);

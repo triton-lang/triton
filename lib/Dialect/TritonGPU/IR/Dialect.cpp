@@ -123,6 +123,7 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
     if (mmaLayout.getVersion() == 1)
       return {16 * mmaLayout.getWarpsPerCTA()[0],
               16 * mmaLayout.getWarpsPerCTA()[1]};
+    assert(0 && "Unexpected MMA layout version found");
   } else {
     assert(0 && "Unimplemented usage of getShapePerCTA");
   }
