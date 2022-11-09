@@ -112,8 +112,8 @@ TEST_F(PtxAsmFormatTest, MultiLinePTX) {
   mov(valVal1, constVal);
   mov(valVal1, valVal0);
 
-  EXPECT_EQ(builder.dump(), "mov $0, 0x1;\r\n"
-                            "mov $1, 0x1;\r\n"
+  EXPECT_EQ(builder.dump(), "mov $0, 0x1;\n\t"
+                            "mov $1, 0x1;\n\t"
                             "mov $1, $0;");
 
   auto values = builder.getAllMLIRArgs();

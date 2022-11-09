@@ -96,7 +96,7 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
                   "supported yet");
       return {};
     }
-   } else {
+  } else {
     assert(0 && "getSizePerThread not implemented");
     return {};
   }
@@ -140,10 +140,13 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
                   "BlockedEncodingAttr not implemented");
     }
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-    assert(mmaLayout.getVersion() == 2 &&
-           "mmaLayout version = 1 is not implemented yet");
-    return {16 * mmaLayout.getWarpsPerCTA()[0],
-            8 * mmaLayout.getWarpsPerCTA()[1]};
+    if (mmaLayout.getVersion() == 2)
+      return {16 * mmaLayout.getWarpsPerCTA()[0],
+              8 * mmaLayout.getWarpsPerCTA()[1]};
+    if (mmaLayout.getVersion() == 1)
+      return {16 * mmaLayout.getWarpsPerCTA()[0],
+              16 * mmaLayout.getWarpsPerCTA()[1]};
+    assert(0 && "Unexpected MMA layout version found");
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
     auto parentLayout = dotLayout.getParent();
     assert(parentLayout && "DotOperandEncodingAttr must have a parent");

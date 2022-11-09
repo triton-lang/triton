@@ -114,8 +114,8 @@ public:
       rewriter.replaceOpWithNewOp<triton::gpu::InsertSliceAsyncOp>(
           op, newType, insert_slice.src(), newArg.getResult(),
           insert_slice.index(), insert_slice.mask(), insert_slice.other(),
-          insert_slice.cache(), insert_slice.evict(),
-          insert_slice.isVolatile(), insert_slice.axis());
+          insert_slice.cache(), insert_slice.evict(), insert_slice.isVolatile(),
+          insert_slice.axis());
       return mlir::success();
     }
     // cvt(extract_slice(x), type2) -> extract_slice(cvt(x, type2))
@@ -597,6 +597,14 @@ public:
     auto oldRetType = dotOp.getResult().getType().cast<RankedTensorType>();
     if (oldRetType.getEncoding().isa<triton::gpu::MmaEncodingAttr>())
       return failure();
+
+    auto A = dotOp.getOperand(0).getType().cast<RankedTensorType>();
+    auto B = dotOp.getOperand(1).getType().cast<RankedTensorType>();
+    // for FMA, should retain the blocked layout.
+    if (A.getElementType().isF32() && B.getElementType().isF32() &&
+        !dotOp.allowTF32())
+      return failure();
+
     // get MMA encoding for the given number of warps
     auto retShape = oldRetType.getShape();
     auto mod = op->getParentOfType<mlir::ModuleOp>();
