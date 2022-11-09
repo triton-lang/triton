@@ -157,11 +157,12 @@ LoopPipeliner::getSwizzleType(ttg::DotOperandEncodingAttr dotOpEnc,
   int vec = 1;
   int maxPhase = 1;
   int perPhase = 1;
-  llvm::ArrayRef<unsigned> order;
+  llvm::SmallVector<unsigned> order;
   if (auto mmaEnc = dotOpEnc.getParent().dyn_cast<ttg::MmaEncodingAttr>()) {
+    // Only support row major for now
+    order = {1, 0};
     int version = mmaEnc.getVersion();
     auto tyEncoding = ty.getEncoding().cast<ttg::BlockedEncodingAttr>();
-    order = tyEncoding.getOrder();
     // number of rows per phase
     perPhase = 128 / (ty.getShape()[order[0]] *
                       (ty.getElementType().getIntOrFloatBitWidth() / 8));
@@ -196,7 +197,8 @@ LoopPipeliner::getSwizzleType(ttg::DotOperandEncodingAttr dotOpEnc,
       llvm_unreachable("unsupported swizzling for provided MMA version");
   } else { // If the layout of dot is not mma, we don't need to swizzle
     auto blockedEnc = dotOpEnc.getParent().cast<ttg::BlockedEncodingAttr>();
-    order = blockedEnc.getOrder();
+    order = llvm::SmallVector<unsigned>(blockedEnc.getOrder().begin(),
+                                        blockedEnc.getOrder().end());
   }
   auto newEncoding = ttg::SharedEncodingAttr::get(ty.getContext(), vec,
                                                   perPhase, maxPhase, order);

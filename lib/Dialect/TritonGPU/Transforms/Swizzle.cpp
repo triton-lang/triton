@@ -24,7 +24,6 @@ struct SwizzlePass : public TritonGPUSwizzleBase<SwizzlePass> {
     SwizzleInfo noSwizzling = {1, 1, 1};
     int version = retEncoding.getVersion();
     auto tyEncoding = ty.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
-    llvm::errs() << "ty: " << ty << "\n";
     auto order = tyEncoding.getOrder();
     // number of rows per phase
     int perPhase = 128 / (ty.getShape()[order[0]] *
@@ -75,8 +74,6 @@ struct SwizzlePass : public TritonGPUSwizzleBase<SwizzlePass> {
       OpBuilder builder(cvtOp);
       auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
       auto dstType = cvtOp.getType().cast<RankedTensorType>();
-      llvm::errs() << "srcType: " << srcType << "\n";
-      llvm::errs() << "dstType: " << dstType << "\n";
       if (srcType.getEncoding().isa<triton::gpu::BlockedEncodingAttr>() &&
           dstType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>()) {
         auto tmpType =
@@ -117,10 +114,6 @@ struct SwizzlePass : public TritonGPUSwizzleBase<SwizzlePass> {
                           .cast<RankedTensorType>();
       }
       SwizzleInfo swizzle = getSwizzleMMA(opIdx, parentEncoding, swizzleType);
-      llvm::errs() << "parent: " << parentEncoding << "\n";
-      llvm::errs() << "opIdx: " << opIdx << "\n";
-      llvm::errs() << "swizzle: " << swizzle.vec << " " << swizzle.perPhase
-                   << " " << swizzle.maxPhase << "\n";
       auto newEncoding = triton::gpu::SharedEncodingAttr::get(
           &getContext(), swizzle.vec, swizzle.perPhase, swizzle.maxPhase,
           argEncoding.getOrder());

@@ -125,7 +125,10 @@ public:
       auto newType = RankedTensorType::get(
           origType.getShape(), origType.getElementType(),
           op->getResult(0).getType().cast<RankedTensorType>().getEncoding());
-      auto resType = op->getResult(0).getType().cast<RankedTensorType>();
+      auto origResType = op->getResult(0).getType().cast<RankedTensorType>();
+      auto resType = RankedTensorType::get(
+          origResType.getShape(), origResType.getElementType(),
+          extract_slice.getType().cast<RankedTensorType>().getEncoding());
       // Ensure that the new extract_slice op is placed in the same place as the
       // old extract_slice op. Otherwise, the new extract_slice op may be placed
       // after the async_wait op, which is not allowed.
