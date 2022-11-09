@@ -3905,6 +3905,7 @@ private:
 LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
     triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
     ConversionPatternRewriter &rewriter) const {
+  LLVM::llPrintf("Shared to dot start", {}, rewriter);
   auto loc = op.getLoc();
   Value src = op.src();
   Value dst = op.result();
@@ -3947,6 +3948,7 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
   }
 
   rewriter.replaceOp(op, res);
+  LLVM::llPrintf("Shared to dot end", {}, rewriter);
   return success();
 }
 
