@@ -320,7 +320,7 @@ struct PTXInstrExecution {
   // Prefix a !predicate to the instruction.
   PTXInstrExecution &predicateNot(mlir::Value value, StringRef constraint) {
     pred = instr->builder->newOperand(value, constraint);
-    pred->repr = [](int idx) { return "@!%" + std::to_string(idx); };
+    pred->repr = [](int idx) { return "@!$" + std::to_string(idx); };
     return *this;
   }
 
