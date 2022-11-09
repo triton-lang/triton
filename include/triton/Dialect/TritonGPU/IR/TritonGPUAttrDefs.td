@@ -326,7 +326,8 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
   );
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
-    SmallVector<int64_t> paddedShape(ArrayRef<int64_t> shape) const;
+    template<class T>
+    SmallVector<T> paddedShape(ArrayRef<T> shape) const;
   }];
 }
 

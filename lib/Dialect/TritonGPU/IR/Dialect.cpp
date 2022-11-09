@@ -267,11 +267,11 @@ unsigned BlockedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   return product<unsigned>(elemsPerThread);
 }
 
-SmallVector<int64_t>
-SliceEncodingAttr::paddedShape(ArrayRef<int64_t> shape) const {
+template <class T>
+SmallVector<T> SliceEncodingAttr::paddedShape(ArrayRef<T> shape) const {
   size_t rank = shape.size();
   unsigned dim = getDim();
-  SmallVector<int64_t> retShape(rank + 1);
+  SmallVector<T> retShape(rank + 1);
   for (unsigned d = 0; d < rank + 1; ++d) {
     if (d < dim)
       retShape[d] = shape[d];
@@ -282,6 +282,10 @@ SliceEncodingAttr::paddedShape(ArrayRef<int64_t> shape) const {
   }
   return retShape;
 }
+template SmallVector<unsigned>
+SliceEncodingAttr::paddedShape<unsigned>(ArrayRef<unsigned> shape) const;
+template SmallVector<int64_t>
+SliceEncodingAttr::paddedShape<int64_t>(ArrayRef<int64_t> shape) const;
 
 unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   size_t rank = shape.size();

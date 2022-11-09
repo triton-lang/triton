@@ -2172,6 +2172,82 @@ private:
     return result;
   };
 
+  SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
+                                       ConversionPatternRewriter &rewriter,
+                                       unsigned elemId, ArrayRef<int64_t> shape,
+                                       ArrayRef<unsigned> multiDimCTAInRepId,
+                                       ArrayRef<unsigned> shapePerCTA) const {
+    unsigned rank = shape.size();
+    if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
+      auto multiDimOffsetFirstElem =
+          emitBaseIndexForBlockedLayout(loc, rewriter, blockedLayout, shape);
+      SmallVector<Value> multiDimOffset(rank);
+      SmallVector<unsigned> multiDimElemId =
+          getMultiDimIndex<unsigned>(elemId, blockedLayout.getSizePerThread());
+      for (unsigned d = 0; d < rank; ++d) {
+        multiDimOffset[d] = add(multiDimOffsetFirstElem[d],
+                                idx_val(multiDimCTAInRepId[d] * shapePerCTA[d] +
+                                        multiDimElemId[d]));
+      }
+      return multiDimOffset;
+    }
+    if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+      unsigned dim = sliceLayout.getDim();
+      auto multiDimOffsetParent =
+          getMultiDimOffset(sliceLayout.getParent(), loc, rewriter, elemId,
+                            sliceLayout.paddedShape(shape),
+                            sliceLayout.paddedShape(multiDimCTAInRepId),
+                            sliceLayout.paddedShape(shapePerCTA));
+      SmallVector<Value> multiDimOffset(rank);
+      for (unsigned d = 0; d < rank + 1; ++d) {
+        if (d == dim)
+          continue;
+        unsigned slicedD = d < dim ? d : (d - 1);
+        multiDimOffset[slicedD] = multiDimOffsetParent[d];
+      }
+      return multiDimOffset;
+    }
+    if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+      SmallVector<Value> mmaColIdx(2);
+      SmallVector<Value> mmaRowIdx(2);
+      Value threadId = getThreadId(rewriter, loc);
+      Value warpSize = idx_val(32);
+      Value laneId = urem(threadId, warpSize);
+      Value warpId = udiv(threadId, warpSize);
+      // auto multiDimWarpId =
+      //     delinearize(rewriter, loc, warpId, mmaLayout.getWarpsPerCTA());
+      // TODO: double confirm if its document bug or DotConversion's Bug
+      SmallVector<Value> multiDimWarpId(2);
+      multiDimWarpId[0] = urem(warpId, idx_val(mmaLayout.getWarpsPerCTA()[0]));
+      multiDimWarpId[1] = udiv(warpId, idx_val(mmaLayout.getWarpsPerCTA()[0]));
+      Value four = idx_val(4);
+      Value mmaGrpId = udiv(laneId, four);
+      Value mmaGrpIdP8 = add(mmaGrpId, idx_val(8));
+      Value mmaThreadIdInGrp = urem(laneId, four);
+      Value mmaThreadIdInGrpM2 = mul(mmaThreadIdInGrp, idx_val(2));
+      Value mmaThreadIdInGrpM2P1 = add(mmaThreadIdInGrpM2, idx_val(1));
+      Value colWarpOffset = mul(multiDimWarpId[0], idx_val(16));
+      mmaColIdx[0] = add(mmaGrpId, colWarpOffset);
+      mmaColIdx[1] = add(mmaGrpIdP8, colWarpOffset);
+      Value rowWarpOffset = mul(multiDimWarpId[1], idx_val(8));
+      mmaRowIdx[0] = add(mmaThreadIdInGrpM2, rowWarpOffset);
+      mmaRowIdx[1] = add(mmaThreadIdInGrpM2P1, rowWarpOffset);
+
+      assert(rank == 2);
+      assert(mmaLayout.getVersion() == 2 &&
+             "mmaLayout ver1 not implemented yet");
+      SmallVector<Value> multiDimOffset(rank);
+      multiDimOffset[0] = elemId < 2 ? mmaColIdx[0] : mmaColIdx[1];
+      multiDimOffset[1] = elemId % 2 == 0 ? mmaRowIdx[0] : mmaRowIdx[1];
+      multiDimOffset[0] = add(multiDimOffset[0],
+                              idx_val(multiDimCTAInRepId[0] * shapePerCTA[0]));
+      multiDimOffset[1] = add(multiDimOffset[1],
+                              idx_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
+      return multiDimOffset;
+    }
+    llvm_unreachable("unexpected layout in getMultiDimOffset");
+  }
+
   // shared memory rd/st for blocked or mma layout with data padding
   void processReplica(Location loc, ConversionPatternRewriter &rewriter,
                       bool stNotRd, RankedTensorType type,
@@ -2226,47 +2302,6 @@ void ConvertLayoutOpConversion::processReplica(
     elemTy = IntegerType::get(elemTy.getContext(), 8);
   auto llvmElemTy = getTypeConverter()->convertType(elemTy);
 
-  SmallVector<Value> multiDimOffsetFirstElem;
-  SmallVector<Value> mmaColIdx(2);
-  SmallVector<Value> mmaRowIdx(2);
-  if (blockedLayout) {
-    multiDimOffsetFirstElem = emitBaseIndexForBlockedLayout(
-        loc, rewriter, blockedLayout, type.getShape());
-  } else if (sliceLayout) {
-    auto parent = sliceLayout.getParent();
-    if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
-      SmallVector<int64_t> paddedShape =
-          sliceLayout.paddedShape(type.getShape());
-      multiDimOffsetFirstElem = emitBaseIndexForBlockedLayout(
-          loc, rewriter, blockedParent, paddedShape);
-    } else {
-      assert(0 && "SliceEncodingAttr with parent other than "
-                  "BlockedEncodingAttr not implemented");
-    }
-  } else if (mmaLayout) {
-    Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = idx_val(32);
-    Value laneId = urem(threadId, warpSize);
-    Value warpId = udiv(threadId, warpSize);
-    // auto multiDimWarpId =
-    //     delinearize(rewriter, loc, warpId, mmaLayout.getWarpsPerCTA());
-    // TODO: double confirm if its document bug or DotConversion's Bug
-    SmallVector<Value> multiDimWarpId(2);
-    multiDimWarpId[0] = urem(warpId, idx_val(mmaLayout.getWarpsPerCTA()[0]));
-    multiDimWarpId[1] = udiv(warpId, idx_val(mmaLayout.getWarpsPerCTA()[0]));
-    Value four = idx_val(4);
-    Value mmaGrpId = udiv(laneId, four);
-    Value mmaGrpIdP8 = add(mmaGrpId, idx_val(8));
-    Value mmaThreadIdInGrp = urem(laneId, four);
-    Value mmaThreadIdInGrpM2 = mul(mmaThreadIdInGrp, idx_val(2));
-    Value mmaThreadIdInGrpM2P1 = add(mmaThreadIdInGrpM2, idx_val(1));
-    Value colWarpOffset = mul(multiDimWarpId[0], idx_val(16));
-    mmaColIdx[0] = add(mmaGrpId, colWarpOffset);
-    mmaColIdx[1] = add(mmaGrpIdP8, colWarpOffset);
-    Value rowWarpOffset = mul(multiDimWarpId[1], idx_val(8));
-    mmaRowIdx[0] = add(mmaThreadIdInGrpM2, rowWarpOffset);
-    mmaRowIdx[1] = add(mmaThreadIdInGrpM2P1, rowWarpOffset);
-  }
   for (unsigned ctaId = 0; ctaId < accumNumCTAsEachRep; ++ctaId) {
     auto multiDimCTAInRepId = getMultiDimIndex<unsigned>(ctaId, numCTAsEachRep);
     SmallVector<unsigned> multiDimCTAId(rank);
@@ -2280,48 +2315,9 @@ void ConvertLayoutOpConversion::processReplica(
     //       consider of caching the index calculation result in case
     //       of performance issue observed.
     for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
-      SmallVector<Value> multiDimOffset(rank);
-      if (blockedLayout) {
-        SmallVector<unsigned> multiDimElemId = getMultiDimIndex<unsigned>(
-            elemId, blockedLayout.getSizePerThread());
-        for (unsigned d = 0; d < rank; ++d) {
-          multiDimOffset[d] =
-              add(multiDimOffsetFirstElem[d],
-                  idx_val(multiDimCTAInRepId[d] * shapePerCTA[d] +
-                          multiDimElemId[d]));
-        }
-      } else if (sliceLayout) {
-        unsigned dim = sliceLayout.getDim();
-        auto parent = sliceLayout.getParent();
-        if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
-          SmallVector<unsigned> multiDimElemId = getMultiDimIndex<unsigned>(
-              elemId, blockedParent.getSizePerThread());
-          for (unsigned d = 0; d < rank + 1; ++d) {
-            if (d == dim)
-              continue;
-            unsigned slicedD = d < dim ? d : (d - 1);
-            multiDimOffset[slicedD] =
-                add(multiDimOffsetFirstElem[d],
-                    idx_val(multiDimCTAInRepId[slicedD] * shapePerCTA[slicedD] +
-                            multiDimElemId[d]));
-          }
-        } else {
-          assert(0 && "SliceEncodingAttr with parent other than "
-                      "BlockedEncodingAttr not implemented");
-        }
-      } else if (mmaLayout) {
-        assert(rank == 2);
-        assert(mmaLayout.getVersion() == 2 &&
-               "mmaLayout ver1 not implemented yet");
-        multiDimOffset[0] = elemId < 2 ? mmaColIdx[0] : mmaColIdx[1];
-        multiDimOffset[1] = elemId % 2 == 0 ? mmaRowIdx[0] : mmaRowIdx[1];
-        multiDimOffset[0] = add(
-            multiDimOffset[0], idx_val(multiDimCTAInRepId[0] * shapePerCTA[0]));
-        multiDimOffset[1] = add(
-            multiDimOffset[1], idx_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
-      } else {
-        assert(0 && "unexpected layout in processReplica");
-      }
+      SmallVector<Value> multiDimOffset =
+          getMultiDimOffset(layout, loc, rewriter, elemId, type.getShape(),
+                            multiDimCTAInRepId, shapePerCTA);
       Value offset =
           linearize(rewriter, loc, reorder<Value>(multiDimOffset, outOrd),
                     reorder<unsigned>(paddedRepShape, outOrd));
