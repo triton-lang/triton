@@ -125,7 +125,7 @@ std::string PTXBuilder::dump() const {
     lines.push_back(exec->dump());
   }
 
-  return "{" + strJoin(lines, "\r\n") + "}";
+  return strJoin(lines, "\r\n");
 }
 
 PTXInstrExecution &PTXInstrCommon::call(ArrayRef<Operand *> oprs) {
@@ -157,8 +157,15 @@ std::string PTXInstrExecution::dump() const {
 
   std::string argsRepr = strJoin(argReprs, ", ");
 
-  os << instrRepr << " " << argsRepr << ";";
+  os << instrRepr;
   os.flush();
+  // No need for block or complete instruction
+  if (osStr.back() != '}' && osStr.back() != ';') {
+     os << " " << argsRepr << ";";
+     os.flush();
+  } else {
+    assert(argReprs.empty());
+  }
   return osStr;
 }
 

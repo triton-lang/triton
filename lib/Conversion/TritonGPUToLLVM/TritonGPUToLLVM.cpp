@@ -1062,7 +1062,8 @@ struct StoreOpConversion
     MLIRContext *ctx = rewriter.getContext();
 
     auto valueTy = value.getType();
-    Type valueElemTy = getElementTypeOrSelf(valueTy);
+    Type valueElemTy = typeConverter->convertType(
+        getElementTypeOrSelf(valueTy));
 
     unsigned vec = getVectorSize(ptr);
     unsigned numElems = getElemsPerThread(ptr.getType());
@@ -1798,51 +1799,84 @@ struct FpToFpOpConversion
     fp8x4Vec = bitcast(fp8x4Vec, i32_ty);
 
     PTXBuilder builder;
-    auto &createReg = *builder.create(".reg .b32 a0, a1, b0, b1");
-    auto &prmt = *builder.create("prmt.b32");
-    auto &lop3 = *builder.create("lop3.b32");
-    auto &shr = *builder.create("shr.b32");
+    auto *ptxAsm =
+      "{                                      \n"
+      ".reg .b32 a<2>, b<2>;                  \n"
+      "prmt.b32 a0, 0, $2, 0x5040;            \n"
+      "prmt.b32 a1, 0, $2, 0x7060;            \n"
+      "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n"
+      "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n"
+      "shr.b32  b0, b0, 1;                    \n"
+      "shr.b32  b1, b1, 1;                    \n"
+      "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n"
+      "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n"
+      "}";
+    auto &call = *builder.create(ptxAsm);
 
     auto *o0 = builder.newOperand("=r");
     auto *o1 = builder.newOperand("=r");
-    auto *v = builder.newOperand(fp8x4Vec, "r");
-    auto *a0 = builder.newConstantOperand("a0");
-    auto *a1 = builder.newConstantOperand("a1");
-    auto *b0 = builder.newConstantOperand("b0");
-    auto *b1 = builder.newConstantOperand("b1");
-    auto *c0x0 = builder.newConstantOperand(0);
-    auto *c0x1 = builder.newConstantOperand(1);
-    auto *c0xc0 = builder.newConstantOperand(0xc0);
-    auto *c0xf8 = builder.newConstantOperand(0xf8);
-    auto *c0x5040 = builder.newConstantOperand(0x5040);
-    auto *c0x7060 = builder.newConstantOperand(0x7060);
-    auto *c0x7fff7fff = builder.newConstantOperand(0x7fff7fffll);
-    auto *c0x80008000 = builder.newConstantOperand(0x80008000ll);
-
-    createReg();
-    prmt(a0, c0x0, v, c0x5040);
-    prmt(a1, c0x0, v, c0x7060);
-    lop3(b0, a0, c0x7fff7fff, c0x0, c0xc0);
-    lop3(b1, a1, c0x7fff7fff, c0x0, c0xc0);
-    shr(b0, b0, c0x1);
-    shr(b1, b1, c0x1);
-    lop3(o0, b0, c0x80008000, a0, c0xf8);
-    lop3(o1, b1, c0x80008000, a1, c0xf8);
+    auto *i = builder.newOperand(fp8x4Vec, "r");
+    call();
 
     auto fp16x2VecTy = vec_ty(f16_ty, 2);
     auto fp16x2x2StructTy =
         struct_ty(SmallVector<Type>{fp16x2VecTy, fp16x2VecTy});
     auto fp16x2x2Struct =
         builder.launch(rewriter, loc, fp16x2x2StructTy, false);
-    auto fp16x2A = extract_val(fp16x2VecTy, fp16x2x2Struct,
-                               rewriter.getI32ArrayAttr({0}));
-    auto fp16x2B = extract_val(fp16x2VecTy, fp16x2x2Struct,
-                               rewriter.getI32ArrayAttr({1}));
+    auto fp16x2Vec0 = extract_val(fp16x2VecTy, fp16x2x2Struct,
+                                  rewriter.getI32ArrayAttr({0}));
+    auto fp16x2Vec1 = extract_val(fp16x2VecTy, fp16x2x2Struct,
+                                  rewriter.getI32ArrayAttr({1}));
     return {
-        extract_element(f16_ty, fp16x2A, i32_val(0)),
-        extract_element(f16_ty, fp16x2A, i32_val(1)),
-        extract_element(f16_ty, fp16x2B, i32_val(0)),
-        extract_element(f16_ty, fp16x2B, i32_val(1))
+        extract_element(f16_ty, fp16x2Vec0, i32_val(0)),
+        extract_element(f16_ty, fp16x2Vec0, i32_val(1)),
+        extract_element(f16_ty, fp16x2Vec1, i32_val(0)),
+        extract_element(f16_ty, fp16x2Vec1, i32_val(1))
+    };
+  }
+
+  static SmallVector<Value> convertFp16x4ToFp8x4(
+      Location loc, ConversionPatternRewriter &rewriter,
+      const Value& v0, const Value& v1, const Value& v2, const Value& v3) {
+    auto ctx = rewriter.getContext();
+    auto fp16x2VecTy = vec_ty(f16_ty, 2);
+    Value fp16x2Vec0 = undef(fp16x2VecTy);
+    Value fp16x2Vec1 = undef(fp16x2VecTy);
+    fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v0, i32_val(0));
+    fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v1, i32_val(1));
+    fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v2, i32_val(0));
+    fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v3, i32_val(1));
+    fp16x2Vec0 = bitcast(fp16x2Vec0, i32_ty);
+    fp16x2Vec1 = bitcast(fp16x2Vec1, i32_ty);
+
+    PTXBuilder builder;
+    auto *ptxAsm =
+      "{                                      \n"
+      ".reg .b32 a<2>, b<2>;                  \n"
+      "shl.b32 a0, $1, 1;                     \n"
+      "shl.b32 a1, $2, 1;                     \n"
+      "lop3.b32 a0, a0, 0x7fff7fff, 0, 0xc0;  \n"
+      "lop3.b32 a1, a1, 0x7fff7fff, 0, 0xc0;  \n"
+      "add.u32 a0, a0, 0x00800080;            \n"
+      "add.u32 a1, a1, 0x00800080;            \n"
+      "lop3.b32 b0, $1, 0x80008000, a0, 0xea; \n"
+      "lop3.b32 b1, $2, 0x80008000, a1, 0xea; \n"
+      "prmt.b32 $0, b0, b1, 0x7531;           \n"
+      "}";
+    auto &call = *builder.create(ptxAsm);
+
+    auto *o = builder.newOperand("=r");
+    auto *i0 = builder.newOperand(fp16x2Vec0, "r");
+    auto *i1 = builder.newOperand(fp16x2Vec1, "r");
+    call();
+
+    auto fp8x4VecTy = vec_ty(i8_ty, 4);
+    auto fp8x4Vec = builder.launch(rewriter, loc, fp8x4VecTy, false);
+    return {
+        extract_element(i8_ty, fp8x4Vec, i32_val(0)),
+        extract_element(i8_ty, fp8x4Vec, i32_val(1)),
+        extract_element(i8_ty, fp8x4Vec, i32_val(2)),
+        extract_element(i8_ty, fp8x4Vec, i32_val(3))
     };
   }
 
@@ -1860,6 +1894,18 @@ struct FpToFpOpConversion
     auto convertedDstEleType =
         this->getTypeConverter()->convertType(dstEltType);
 
+    // Select convertor
+    std::function<SmallVector<Value>(Location, ConversionPatternRewriter&,
+                                     const Value&, const Value&,
+                                     const Value&, const Value&)> convertor;
+    if (srcEltType.isa<triton::Float8Type>() && dstEltType.isF16()) {
+      convertor = convertFp8x4ToFp16x4;
+    } else if (srcEltType.isF16() && dstEltType.isa<triton::Float8Type>()) {
+      convertor = convertFp16x4ToFp8x4;
+    } else {
+      assert(false && "unsupported type casting");
+    }
+
     // Vectorized casting
     auto loc = op->getLoc();
     auto elems = getElemsPerThread(dstTensorType);
@@ -1868,14 +1914,12 @@ struct FpToFpOpConversion
     auto elements = getElementsFromStruct(loc, adaptor.from(), rewriter);
     SmallVector<Value> resultVals;
     for (size_t i = 0; i < elems; i += 4) {
-      assert(srcEltType.isa<triton::Float8Type>() &&
-             dstEltType.isa<Float16Type>());
-      auto converted =
-          convertFp8x4ToFp16x4(loc, rewriter,
-                               elements[i], elements[i + 1],
-                               elements[i + 2], elements[i + 3]);
+      auto converted = convertor(loc, rewriter,
+                                 elements[i], elements[i + 1],
+                                 elements[i + 2], elements[i + 3]);
       resultVals.append(converted);
     }
+    assert(resultVals.size() == elems);
     auto result = getStructFromElements(loc, resultVals, rewriter,
                                         convertedDstTensorType);
     rewriter.replaceOp(op, result);
