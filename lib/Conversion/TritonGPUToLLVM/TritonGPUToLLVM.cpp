@@ -2390,17 +2390,6 @@ public:
   }
 
 private:
-  template <typename T>
-  SmallVector<T> reorder(ArrayRef<T> input, ArrayRef<unsigned> order) const {
-    size_t rank = order.size();
-    assert(input.size() == rank);
-    SmallVector<T> result(rank);
-    for (auto it : llvm::enumerate(order)) {
-      result[rank - 1 - it.value()] = input[it.index()];
-    }
-    return result;
-  };
-
   SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
                                        ConversionPatternRewriter &rewriter,
                                        unsigned elemId, ArrayRef<int64_t> shape,
