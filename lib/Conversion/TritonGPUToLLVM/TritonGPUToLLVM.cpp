@@ -2325,6 +2325,19 @@ private:
   LogicalResult
   lowerSharedToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                           ConversionPatternRewriter &rewriter) const;
+
+  // shared -> dot_operand if the result layout is mma
+  Value lowerSharedToDotOperandMMA(
+      triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter, const MmaEncodingAttr &mmaLayout,
+      const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) const;
+
+  // shared -> dot_operand if the result layout is blocked
+  Value lowerSharedToDotOperandBlocked(
+      triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter,
+      const BlockedEncodingAttr &blockedLayout,
+      const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) const;
 };
 
 void ConvertLayoutOpConversion::processReplica(
@@ -3962,32 +3975,14 @@ private:
   }
 };
 
-LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
+Value ConvertLayoutOpConversion::lowerSharedToDotOperandMMA(
     triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
-    ConversionPatternRewriter &rewriter) const {
+    ConversionPatternRewriter &rewriter, const MmaEncodingAttr &mmaLayout,
+    const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) const {
   auto loc = op.getLoc();
   Value src = op.src();
   Value dst = op.result();
   auto dstTensorTy = dst.getType().cast<RankedTensorType>();
-  auto srcTensorTy = src.getType().cast<RankedTensorType>();
-  auto dotOperandLayout =
-      dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-  auto sharedLayout = srcTensorTy.getEncoding().cast<SharedEncodingAttr>();
-
-  MmaEncodingAttr mmaLayout =
-      dotOperandLayout.getParent().dyn_cast_or_null<MmaEncodingAttr>();
-  assert(mmaLayout);
-
-  bool isOuter{};
-  {
-    int K{};
-    if (dotOperandLayout.getOpIdx() == 0) // $a
-      K = dstTensorTy.getShape()[sharedLayout.getOrder()[0]];
-    else // $b
-      K = dstTensorTy.getShape()[sharedLayout.getOrder()[1]];
-    isOuter = K == 1;
-  }
-
   // TODO[Superjomn]: the allowTF32 is not available in ConvertLayoutOp for it
   // is an attribute of DotOp.
   bool allowTF32 = false;
@@ -4022,6 +4017,47 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
     }
   } else {
     assert(false && "Unsupported mma layout found");
+  }
+  return res;
+}
+
+Value ConvertLayoutOpConversion::lowerSharedToDotOperandBlocked(
+    triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+    ConversionPatternRewriter &rewriter,
+    const BlockedEncodingAttr &blockedLayout,
+    const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) const {}
+
+LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
+    triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+    ConversionPatternRewriter &rewriter) const {
+  auto loc = op.getLoc();
+  Value src = op.src();
+  Value dst = op.result();
+  auto dstTensorTy = dst.getType().cast<RankedTensorType>();
+  auto srcTensorTy = src.getType().cast<RankedTensorType>();
+  auto dotOperandLayout =
+      dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+  auto sharedLayout = srcTensorTy.getEncoding().cast<SharedEncodingAttr>();
+
+  bool isOuter{};
+  int K{};
+  if (dotOperandLayout.getOpIdx() == 0) // $a
+    K = dstTensorTy.getShape()[sharedLayout.getOrder()[0]];
+  else // $b
+    K = dstTensorTy.getShape()[sharedLayout.getOrder()[1]];
+  isOuter = K == 1;
+
+  Value res;
+  if (auto mmaLayout =
+          dotOperandLayout.getParent().dyn_cast_or_null<MmaEncodingAttr>()) {
+    res = lowerSharedToDotOperandMMA(op, adaptor, rewriter, mmaLayout,
+                                     dotOperandLayout, isOuter);
+  } else if (auto blockedLayout =
+                 dotOperandLayout.getParent()
+                     .dyn_cast_or_null<BlockedEncodingAttr>()) {
+    assert(false && "Blocked layout is not supported yet");
+  } else {
+    assert(false && "Unsupported dot operand layout found");
   }
 
   rewriter.replaceOp(op, res);
