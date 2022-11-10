@@ -171,6 +171,7 @@ def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLO
     assert_close(c, golden, rtol=max(1e-4, 1.5 * golden_rel_err), atol=max(1e-4, 1.5 * golden_abs_err), check_dtype=False)
 
 
+# XXX(Keren): Temporarily disable this test until we have shared -> dot conversion implemented
 #@pytest.mark.parametrize('M,N,K,num_warps,block_M,block_N,block_K', [
 #    [32, 32, 16, 4, 32, 32, 16],
 #    [32, 16, 16, 4, 32, 32, 16],
