@@ -10,6 +10,7 @@ include "mlir/Interfaces/SideEffectInterfaces.td" // NoSideEffect
 include "mlir/Interfaces/ControlFlowInterfaces.td" // BranchOpInterface
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 include "mlir/Interfaces/SideEffectInterfaces.td" // NoSideEffect
+include "mlir/Interfaces/CastInterfaces.td" // CastOpInterface
 
 def TensorSizeTrait : NativeOpTrait<"TensorSizeTrait">;
 def SameOperandsAndResultEncoding : NativeOpTrait<"SameOperandsAndResultEncoding">;
@@ -72,17 +73,16 @@ def TT_BitcastOp : TT_Op<"bitcast", [SameOperandsAndResultShape,
     // TODO: Add verifier
 }
 
-def TT_FpToFp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
-                                   SameOperandsAndResultEncoding,
-                                   NoSideEffect,
-                                   /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
+def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
+                                     SameOperandsAndResultEncoding,
+                                     NoSideEffect,
+                                     DeclareOpInterfaceMethods<CastOpInterface>]> {
     let summary = "Floating point casting for custom types";
 
     let description = [{
-        Floating point casting for custom types (F8, BF8).
+        Floating point casting for custom types (F8).
 
-        F8 <-> BF8, FP16, FP32
-        BF8 <-> F8, FP16, FP32
+        F8 <-> FP16, BF16, FP32, FP64
     }];
 
     let arguments = (ins TT_FloatLike:$from);
