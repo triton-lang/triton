@@ -176,6 +176,9 @@ class JITFunction(KernelInterface):
                 triton.language.uint32: 'u32',
                 triton.language.uint64: 'u64',
                 triton.language.float8: 'fp8',
+                triton.language.float16: 'fp16',
+                triton.language.bfloat16: 'bf16',
+                triton.language.float32: 'fp32',
             }[key]
             return f'*{ty}'
         if key is None:

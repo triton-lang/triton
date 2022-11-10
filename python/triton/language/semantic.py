@@ -613,39 +613,45 @@ def cast(input: tl.tensor,
         dst_ty = tl.block_type(dst_ty, input.type.get_block_shapes())
     if src_ty == dst_ty:
         return input
+
     src_sca_ty = src_ty.scalar
     dst_sca_ty = dst_ty.scalar
-    # fp8 <=> bf16/fp16
-    if (src_sca_ty.is_bf16() or src_sca_ty.is_fp16()) and dst_sca_ty.is_fp8():
-        return tl.tensor(builder.create_fp_trunc(input.handle, dst_ty.to_ir(builder)),
+
+    # Casting with customized floating types involved: fp8 <=> bf16, fp16, fp32, fp64
+    if (src_sca_ty.is_customized_floating() and dst_sca_ty.is_floating()) or \
+       (src_sca_ty.is_floating() and dst_sca_ty.is_customized_floating()):
+        return tl.tensor(builder.create_fp_to_fp(input.handle, dst_ty.to_ir(builder)),
                          dst_ty)
-    if src_sca_ty.is_fp8() and (dst_sca_ty.is_bf16() or dst_sca_ty.is_fp16()):
-        return tl.tensor(builder.create_fp_ext(input.handle, dst_ty.to_ir(builder)),
-                         dst_ty)
-    # bf16 <=> (not fp32)
-    if (src_sca_ty.is_bf16() and not dst_sca_ty.is_fp32()) or \
-       (dst_sca_ty.is_bf16() and not src_sca_ty.is_fp32()):
+
+    # Casting types of the same bit width: fp16 <=> bf16
+    if (src_sca_ty.is_fp16() and dst_sca_ty.is_bf16()) or \
+       (src_sca_ty.is_bf16() and dst_sca_ty.is_fp16()):
         return cast(cast(input, tl.float32, builder), dst_sca_ty, builder)
 
-    # FP Truncation
+    # Standard floating types' casting: truncation
+    #   fp64 => fp32, fp16, bf16
+    #   fp32 => fp16, bf16
     truncate_fp = src_sca_ty.is_floating() and \
         dst_sca_ty.is_floating() and \
-        src_sca_ty.fp_mantissa_width > dst_sca_ty.fp_mantissa_width
+        src_sca_ty.primitive_bitwidth > dst_sca_ty.primitive_bitwidth
     if truncate_fp:
         return tl.tensor(builder.create_fp_trunc(input.handle,
                                                  dst_ty.to_ir(builder)),
                          dst_ty)
 
-    # FP Extension
+    # Standard floating types' casting: extension
+    #   fp32 => fp64
+    #   fp16 => fp32, fp64
+    #   bf16 => fp32, fp64
     ext_fp = src_sca_ty.is_floating() and \
         dst_sca_ty.is_floating() and \
-        src_sca_ty.fp_mantissa_width < dst_sca_ty.fp_mantissa_width
+        src_sca_ty.primitive_bitwidth < dst_sca_ty.primitive_bitwidth
     if ext_fp:
         return tl.tensor(builder.create_fp_ext(input.handle,
                                                dst_ty.to_ir(builder)),
                          dst_ty)
 
-    # Int cast
+    # Casting between integer types
     if src_sca_ty.is_int() and dst_sca_ty.is_int() and \
        (src_sca_ty.int_bitwidth != dst_sca_ty.int_bitwidth or src_sca_ty.int_signedness != dst_sca_ty.int_signedness):
         sign_extend = src_sca_ty.is_int_signed() and not src_sca_ty.is_bool()
@@ -658,8 +664,8 @@ def cast(input: tl.tensor,
                                                      dst_ty.to_ir(builder), sign_extend),
                              dst_ty)
 
-    # Float to Int
-    if src_sca_ty.is_floating() and dst_sca_ty.is_int():
+    # Casting standard floating types to integer types
+    if src_sca_ty.is_standard_floating() and dst_sca_ty.is_int():
         if dst_sca_ty.is_bool():
             ty = input.dtype.to_ir(builder)
             _0 = tl.tensor(builder.get_null_value(ty), input.dtype)
@@ -673,8 +679,8 @@ def cast(input: tl.tensor,
                                                      dst_ty.to_ir(builder)),
                              dst_ty)
 
-    # int => float
-    if src_sca_ty.is_int() and dst_sca_ty.is_floating():
+    # Casting integer types to standard floating types
+    if src_sca_ty.is_int() and dst_sca_ty.is_standard_floating():
         if src_sca_ty.is_bool() or not src_sca_ty.is_int_signed():
             return tl.tensor(builder.create_ui_to_fp(input.handle,
                                                      dst_ty.to_ir(builder)),
@@ -684,7 +690,7 @@ def cast(input: tl.tensor,
                                                      dst_ty.to_ir(builder)),
                              dst_ty)
 
-    # ptr => int
+    # Casting pointer types to integer types
     if src_sca_ty.is_ptr() and dst_sca_ty.is_int():
         bitwidth = dst_sca_ty.int_bitwidth
         if bitwidth == 64:
@@ -695,19 +701,14 @@ def cast(input: tl.tensor,
                              tl.tensor(builder.get_int64(0), tl.int64),
                              builder)
 
-    if not src_sca_ty.is_ptr() and dst_sca_ty.is_ptr():
+    # Casting integer types to pointer types
+    if src_sca_ty.is_int() and dst_sca_ty.is_ptr():
         return tl.tensor(builder.create_int_to_ptr(input.handle, dst_ty.to_ir(builder)), dst_ty)
-    # Ptr . Ptr
+
+    # Casting pointer types to pointer types
     if src_sca_ty.is_ptr() and dst_sca_ty.is_ptr():
         return tl.tensor(builder.create_bitcast(input.handle, dst_ty.to_ir(builder)), dst_ty)
-    # * . Bool
-    if dst_sca_ty.is_bool():
-        if src_sca_ty.is_ptr():
-            input = cast(input, tl.int64, builder)
-        other = builder.get_int64(0)
-        if src_ty.is_bool():
-            other = builder.create_splat(other, src_ty.get_block_shapes())
-        return tl.tensor(builder.create_icmpNE(input.handle, other), dst_ty)
+
     assert False, f'cannot cast {input} to {dst_ty}'
 
 # ===----------------------------------------------------------------------===//
