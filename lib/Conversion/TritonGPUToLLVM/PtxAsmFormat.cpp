@@ -162,15 +162,8 @@ std::string PTXInstrExecution::dump() const {
 
   std::string argsRepr = strJoin(argReprs, ", ");
 
-  os << instrRepr;
+  os << instrRepr << " " << argsRepr << ";";
   os.flush();
-  // No need for block or complete instruction
-  if (osStr.back() != '}' && osStr.back() != ';') {
-     os << " " << argsRepr << ";";
-     os.flush();
-  } else {
-    assert(argReprs.empty());
-  }
   return osStr;
 }
 
