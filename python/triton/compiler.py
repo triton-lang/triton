@@ -885,7 +885,6 @@ def ttir_to_ttgir(mod, num_warps, num_stages):
     pm.add_coalesce_pass()
     pm.add_triton_gpu_combine_pass()
     pm.add_licm_pass()
-    pm.add_triton_gpu_swizzle_pass()
     pm.add_triton_gpu_combine_pass()
     pm.add_cse_pass()
     pm.run(mod)
