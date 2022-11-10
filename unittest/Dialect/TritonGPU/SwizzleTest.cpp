@@ -41,12 +41,12 @@ TEST_P(SwizzleDotOperandTestFixture, DotOperands) {
   ASSERT_EQ(layout.getMaxPhase(), params.refSwizzle.maxPhase);
 }
 
-INSTANTIATE_TEST_CASE_P(TestDotOperands, SwizzleDotOperandTestFixture,
-                        ::testing::Values(ParamT{{128, 64}, 0, 16, {8, 1, 8}},
-                                          ParamT{{64, 256}, 1, 16, {8, 1, 8}},
-                                          ParamT{{128, 32}, 0, 16, {8, 2, 4}},
-                                          ParamT{{32, 128}, 1, 16, {8, 1, 8}},
-                                          ParamT{{32, 32}, 0, 16, {8, 2, 4}},
-                                          ParamT{{32, 32}, 1, 16, {8, 2, 4}},
-                                          ParamT{{16, 16}, 0, 16, {8, 4, 2}},
-                                          ParamT{{16, 16}, 1, 16, {8, 4, 2}}));
+INSTANTIATE_TEST_SUITE_P(TestDotOperands, SwizzleDotOperandTestFixture,
+                         ::testing::Values(ParamT{{128, 64}, 0, 16, {8, 1, 8}},
+                                           ParamT{{64, 256}, 1, 16, {8, 1, 8}},
+                                           ParamT{{128, 32}, 0, 16, {8, 2, 4}},
+                                           ParamT{{32, 128}, 1, 16, {8, 1, 8}},
+                                           ParamT{{32, 32}, 0, 16, {8, 2, 4}},
+                                           ParamT{{32, 32}, 1, 16, {8, 2, 4}},
+                                           ParamT{{16, 16}, 0, 16, {8, 4, 2}},
+                                           ParamT{{16, 16}, 1, 16, {8, 4, 2}}));
