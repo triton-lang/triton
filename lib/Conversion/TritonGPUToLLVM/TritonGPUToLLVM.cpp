@@ -5767,9 +5767,8 @@ class ConvertTritonGPUToLLVM
 
 private:
   void decomposeBlockedToDotOperand(ModuleOp mod) {
-
-    // replace blocked -> dot_op with
-    // blocked -> shared -> dot_op in order to
+    // replace `blocked -> dot_op` with `blocked -> shared -> dot_op`
+    // because the codegen doesn't handle `blocked -> dot_op` directly
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
       auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
