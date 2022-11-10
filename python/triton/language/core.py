@@ -48,6 +48,8 @@ class dtype:
     SINT_TYPES = ['int1', 'int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['uint8', 'uint16', 'uint32', 'uint64']
     FP_TYPES = ['fp8', 'fp16', 'bf16', 'fp32', 'fp64']
+    CUSTOMIZED_FP_TYPES = ['fp8']
+    STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
     OTHER_TYPES = ['void']
 
     class SIGNEDNESS(Enum):
@@ -128,6 +130,12 @@ class dtype:
 
     def is_floating(self):
         return self.name in dtype.FP_TYPES
+
+    def is_customized_floating(self):
+        return self.name in dtype.CUSTOMIZED_FP_TYPES
+
+    def is_standard_floating(self):
+        return self.name in dtype.STANDARD_FP_TYPES
 
     def is_int_signed(self):
         return self.name in dtype.SINT_TYPES

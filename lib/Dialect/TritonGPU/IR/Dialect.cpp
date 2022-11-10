@@ -64,7 +64,9 @@ unsigned getElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
 }
 
 unsigned getElemsPerThread(Type type) {
-  if (type.isIntOrIndexOrFloat() || type.isa<triton::PointerType>())
+  if (type.isIntOrIndexOrFloat() ||
+      type.isa<triton::Float8Type>() ||
+      type.isa<triton::PointerType>())
     return 1;
   auto tensorType = type.cast<RankedTensorType>();
   return getElemsPerThread(tensorType.getEncoding(), tensorType.getShape());

@@ -22,8 +22,8 @@ struct PTXInstrExecution;
 // PTXBuilder helps to manage a PTX asm program consists of one or multiple
 // instructions.
 //
-// A helper for building a ASM program, the objective of PTXBuilder is to give a
-// thin encapsulation and make the ASM code for MLIR LLVM Dialect more clear.
+// A helper for building an ASM program, the objective of PTXBuilder is to give
+// a thin encapsulation and make the ASM code for MLIR LLVM Dialect more clear.
 // Currently, several factors are introduced to reduce the need for mixing
 // string and C++ if-else code.
 //
@@ -147,7 +147,7 @@ struct PTXBuilder {
   Operand *newOperand(StringRef constraint);
 
   // Create a constant integer operand.
-  Operand *newConstantOperand(int v);
+  Operand *newConstantOperand(int64_t v);
   // Create a constant operand with explicit code specified.
   Operand *newConstantOperand(const std::string &v);
 
@@ -170,6 +170,22 @@ private:
   Operand *newOperand() {
     argArchive.emplace_back(std::make_unique<Operand>());
     return argArchive.back().get();
+  }
+
+  // Make the oprands in argArchive follow the provided \param order.
+  void reorderArgArchive(ArrayRef<Operand *> order) {
+    assert(order.size() == argArchive.size());
+    // The order in argArchive is unnecessary when onlyAttachMLIRArgs=false, but
+    // it do necessary when onlyAttachMLIRArgs is true for the $0,$1.. are
+    // determined by PTX code snippet passed from external.
+    sort(argArchive.begin(), argArchive.end(),
+         [&](std::unique_ptr<Operand> &a, std::unique_ptr<Operand> &b) {
+           auto ida = std::find(order.begin(), order.end(), a.get());
+           auto idb = std::find(order.begin(), order.end(), b.get());
+           assert(ida != order.end());
+           assert(idb != order.end());
+           return ida < idb;
+         });
   }
 
   friend struct PTXInstr;
