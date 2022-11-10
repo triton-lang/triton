@@ -81,7 +81,7 @@ SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
     if (mmaLayout.getVersion() == 2)
       return SmallVector<unsigned>{8, 4};
   }
-  assert(0 && "getWarpsPerCTA not implemented");
+  assert(0 && "getThreadsPerWarp not implemented");
   return {};
 }
 

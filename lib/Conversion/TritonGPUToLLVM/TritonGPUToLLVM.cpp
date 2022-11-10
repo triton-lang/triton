@@ -701,12 +701,12 @@ public:
   emitOffsetForMmaLayoutV2(const MmaEncodingAttr &mmaLayout,
                            ArrayRef<int64_t> shape) const {
     SmallVector<SmallVector<unsigned>> ret;
-    for (unsigned i = 0; i < shape[0]; i += getShapePerCTA(mmaLayout)[0]) {
-      for (unsigned j = 0; j < shape[1]; j += getShapePerCTA(mmaLayout)[1]) {
+    for (int64_t i = 0; i < shape[0]; i += getShapePerCTA(mmaLayout)[0]) {
+      for (int64_t j = 0; j < shape[1]; j += getShapePerCTA(mmaLayout)[1]) {
         ret.push_back({i, j});
         ret.push_back({i, j + 1});
       }
-      for (unsigned j = 0; j < shape[1]; j += getShapePerCTA(mmaLayout)[1]) {
+      for (int64_t j = 0; j < shape[1]; j += getShapePerCTA(mmaLayout)[1]) {
         ret.push_back({i + 8, j});
         ret.push_back({i + 8, j + 1});
       }
