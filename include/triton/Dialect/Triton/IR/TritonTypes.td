@@ -14,9 +14,8 @@ class TritonTypeDef<string name, string _mnemonic>
 
 // Floating-point Type
 def F8 : TritonTypeDef<"Float8", "f8">;
-def BF8 : TritonTypeDef<"BFloat8", "bf8">;
 
-def TT_Float : AnyTypeOf<[F16, BF16, F32, F64], "floating-point">;
+def TT_Float : AnyTypeOf<[F8, F16, BF16, F32, F64], "floating-point">;
 def TT_FloatTensor : TensorOf<[TT_Float]>;
 def TT_FloatLike : AnyTypeOf<[TT_Float, TT_FloatTensor]>;
 

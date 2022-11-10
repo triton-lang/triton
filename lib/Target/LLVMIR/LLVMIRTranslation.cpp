@@ -140,7 +140,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
       /*printAfterOnlyOnFailure*/ false, llvm::dbgs(), printingFlags);
 
   pm.addPass(createConvertTritonGPUToLLVMPass());
-  // Conanicalize to eliminate the remaining UnrealizedConversionCastOp
+  // Canonicalize to eliminate the remaining UnrealizedConversionCastOp
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(mlir::createCSEPass()); // Simplify the IR to improve readability.
   pm.addPass(mlir::createSymbolDCEPass());

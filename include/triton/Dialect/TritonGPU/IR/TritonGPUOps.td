@@ -37,7 +37,7 @@ def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
 // Port Arith_CmpIOp & Arith_CmpFOp & Std_SelectOp to TritonGPU.
 // This is needed because these ops don't
 // handle encodings
-// e.g., https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Arithmetic/IR/ArithmeticOps.td#L111
+// e.g., https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Arith/IR/ArithOps.td#L111
 def TTG_CmpIOp : TTG_Op<"cmpi", [NoSideEffect]> {
   let summary = "integer comparison operation";
 
