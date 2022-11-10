@@ -76,7 +76,7 @@ TEST_F(PtxAsmFormatTest, complexInstruction) {
 
   auto &ld =
       builder
-          .create<PTXIOInstr>("ld") //
+          .create<>("ld") //
           ->o("volatile", isVolatile)
           .global()
           .o("ca", cache == CacheModifier::CA)
@@ -119,6 +119,21 @@ TEST_F(PtxAsmFormatTest, MultiLinePTX) {
   auto values = builder.getAllMLIRArgs();
   EXPECT_EQ(values[0], v[1]); // $0 -> v[1]
   EXPECT_EQ(values[1], v[2]); // $1 -> v[2]
+}
+
+TEST_F(PtxAsmFormatTest, onlyAttachMLIRArgs) {
+  PTXBuilder builder;
+  const char *ptxCode =
+      ".param .b64 param0;\n" // prepare param0 (format string)
+      "st.param.b64 [param0], %0;\n";
+
+  auto &ptxSnippet = *builder.create(ptxCode);
+  auto *opr = builder.newOperand(v[0], "r");
+  ptxSnippet({opr}, true);
+
+  EXPECT_EQ(builder.dump(), ptxCode);
+  ASSERT_EQ(builder.getAllMLIRArgs()[0], v[0]);
+  ASSERT_EQ(builder.getAllMLIRArgs().size(), 1);
 }
 
 } // namespace triton
