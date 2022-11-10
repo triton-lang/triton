@@ -172,6 +172,22 @@ private:
     return argArchive.back().get();
   }
 
+  // Make the oprands in argArchive follow the provided \param order.
+  void reorderArgArchive(ArrayRef<Operand *> order) {
+    assert(order.size() == argArchive.size());
+    // The order in argArchive is unnecessary when onlyAttachMLIRArgs=false, but
+    // it do necessary when onlyAttachMLIRArgs is true for the $0,$1.. are
+    // determined by PTX code snippet passed from external.
+    sort(argArchive.begin(), argArchive.end(),
+         [&](std::unique_ptr<Operand> &a, std::unique_ptr<Operand> &b) {
+           auto ida = std::find(order.begin(), order.end(), a.get());
+           auto idb = std::find(order.begin(), order.end(), b.get());
+           assert(ida != order.end());
+           assert(idb != order.end());
+           return ida < idb;
+         });
+  }
+
   friend struct PTXInstr;
   friend struct PTXInstrCommon;
 
