@@ -1024,18 +1024,18 @@ struct LoadOpConversion
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
 
       // Define the instruction opcode
-      auto &ld = *ptxBuilder.create<>("ld")
-                      ->o("volatile", op.isVolatile())
-                      .global()
-                      .o("ca", op.cache() == triton::CacheModifier::CA)
-                      .o("cg", op.cache() == triton::CacheModifier::CG)
-                      .o("L1::evict_first",
-                         op.evict() == triton::EvictionPolicy::EVICT_FIRST)
-                      .o("L1::evict_last",
-                         op.evict() == triton::EvictionPolicy::EVICT_LAST)
-                      .o("L1::cache_hint", hasL2EvictPolicy)
-                      .v(nWords)
-                      .b(width);
+      auto &ld = ptxBuilder.create<>("ld")
+                     ->o("volatile", op.isVolatile())
+                     .global()
+                     .o("ca", op.cache() == triton::CacheModifier::CA)
+                     .o("cg", op.cache() == triton::CacheModifier::CG)
+                     .o("L1::evict_first",
+                        op.evict() == triton::EvictionPolicy::EVICT_FIRST)
+                     .o("L1::evict_last",
+                        op.evict() == triton::EvictionPolicy::EVICT_LAST)
+                     .o("L1::cache_hint", hasL2EvictPolicy)
+                     .v(nWords)
+                     .b(width);
 
       PTXBuilder::Operand *evictOpr{};
 
@@ -1051,7 +1051,7 @@ struct LoadOpConversion
       if (other) {
         for (size_t ii = 0; ii < nWords; ++ii) {
           PTXInstr &mov =
-              *ptxBuilder.create<>("mov")->o("u" + std::to_string(width));
+              ptxBuilder.create<>("mov")->o("u" + std::to_string(width));
 
           size_t size = width / valueElemNbits;
 
