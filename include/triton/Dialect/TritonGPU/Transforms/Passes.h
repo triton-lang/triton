@@ -6,6 +6,9 @@
 namespace mlir {
 std::unique_ptr<Pass> createTritonGPUPipelinePass(int numStages = 2);
 
+// TODO(Keren): prefetch pass not working yet
+std::unique_ptr<Pass> createTritonGPUPrefetchPass();
+
 std::unique_ptr<Pass> createTritonGPUCanonicalizeLoopsPass();
 
 std::unique_ptr<Pass> createTritonGPUSwizzlePass();
