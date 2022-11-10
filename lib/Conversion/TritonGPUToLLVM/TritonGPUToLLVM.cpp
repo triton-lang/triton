@@ -4021,12 +4021,6 @@ Value ConvertLayoutOpConversion::lowerSharedToDotOperandMMA(
   return res;
 }
 
-Value ConvertLayoutOpConversion::lowerSharedToDotOperandBlocked(
-    triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
-    ConversionPatternRewriter &rewriter,
-    const BlockedEncodingAttr &blockedLayout,
-    const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) const {}
-
 LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
     triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
     ConversionPatternRewriter &rewriter) const {
