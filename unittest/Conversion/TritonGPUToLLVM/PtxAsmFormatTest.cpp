@@ -125,15 +125,21 @@ TEST_F(PtxAsmFormatTest, onlyAttachMLIRArgs) {
   PTXBuilder builder;
   const char *ptxCode =
       ".param .b64 param0;\n" // prepare param0 (format string)
-      "st.param.b64 [param0], %0;\n";
+      "st.param.b64 [param0], %0;\n"
+  "st.param.b64 [param0], %1;\n"
+  "st.param.b64 [param0], %2;\n";
 
   auto &ptxSnippet = *builder.create(ptxCode);
-  auto *opr = builder.newOperand(v[0], "r");
-  ptxSnippet({opr}, true);
+  auto *opr0 = builder.newOperand(v[0], "r");
+  auto *opr1= builder.newOperand(v[1], "r");
+  auto *opr2= builder.newOperand(v[2], "r");
+  ptxSnippet({opr1, opr2, opr0}, true);
 
   EXPECT_EQ(builder.dump(), ptxCode);
-  ASSERT_EQ(builder.getAllMLIRArgs()[0], v[0]);
-  ASSERT_EQ(builder.getAllMLIRArgs().size(), 1);
+  ASSERT_EQ(builder.getAllMLIRArgs()[0], v[1]);
+  ASSERT_EQ(builder.getAllMLIRArgs()[1], v[2]);
+  ASSERT_EQ(builder.getAllMLIRArgs()[2], v[0]);
+  ASSERT_EQ(builder.getAllMLIRArgs().size(), 3);
 }
 
 } // namespace triton

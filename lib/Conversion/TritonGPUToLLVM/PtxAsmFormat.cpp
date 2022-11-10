@@ -130,8 +130,15 @@ std::string PTXBuilder::dump() const {
 
 PTXInstrExecution &PTXInstrCommon::call(ArrayRef<Operand *> oprs,
                                         bool onlyAttachMLIRArgs) {
+  if (onlyAttachMLIRArgs) {
+    // Nearly impossible to make the $0,$1 in two PTX code snippets to point to the same MLIR values in onlyAttachMLIRArgs mode.
+    assert(builder->executions.empty() && "builder can only hold a single execution when onlyAttachMIIRArgs is true.");
+    builder->reorderArgArchive(oprs);
+  }
+
   builder->executions.emplace_back(
       std::make_unique<PTXInstrExecution>(this, oprs, onlyAttachMLIRArgs));
+
   return *builder->executions.back();
 }
 
@@ -147,6 +154,7 @@ std::string PTXInstrExecution::dump() const {
   std::string instrRepr = strJoin(instr->instrParts, ".");
   if (onlyAttachMLIRArgs)
     return instrRepr;
+
 
   if (pred) {
     if (!pred->repr)
