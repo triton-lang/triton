@@ -830,3 +830,15 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     return
   }
 }
+
+// -----
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+  // CHECK-LABEL: atomic_add_f32
+  func @atomic_add_f32(%arg0 : tensor<256x!tt.ptr<f32>, #blocked0>, %arg1 : tensor<256xi1, #blocked0>, %arg2 : tensor<256xf32, #blocked0>) {
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: atom.global.gpu.add.f32
+    %0 = "tt.atomic_rmw" (%arg0, %arg2, %arg1) {atomic_rmw_op = 5 : i32} : (tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xf32, #blocked0>, tensor<256xi1, #blocked0>) -> tensor<256xf32, #blocked0>
+    return
+  }
+}
