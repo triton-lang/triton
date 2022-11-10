@@ -331,7 +331,6 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
   }];
 }
 
-
 def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding"> {
   let mnemonic = "dot_op";
 
