@@ -126,13 +126,13 @@ TEST_F(PtxAsmFormatTest, onlyAttachMLIRArgs) {
   const char *ptxCode =
       ".param .b64 param0;\n" // prepare param0 (format string)
       "st.param.b64 [param0], %0;\n"
-  "st.param.b64 [param0], %1;\n"
-  "st.param.b64 [param0], %2;\n";
+      "st.param.b64 [param0], %1;\n"
+      "st.param.b64 [param0], %2;\n";
 
   auto &ptxSnippet = *builder.create(ptxCode);
   auto *opr0 = builder.newOperand(v[0], "r");
-  auto *opr1= builder.newOperand(v[1], "r");
-  auto *opr2= builder.newOperand(v[2], "r");
+  auto *opr1 = builder.newOperand(v[1], "r");
+  auto *opr2 = builder.newOperand(v[2], "r");
   ptxSnippet({opr1, opr2, opr0}, true);
 
   EXPECT_EQ(builder.dump(), ptxCode);
