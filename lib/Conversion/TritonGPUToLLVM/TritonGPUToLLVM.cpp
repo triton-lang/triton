@@ -2134,7 +2134,7 @@ struct FpToFpOpConversion
     auto *o0 = builder.newOperand("=r");
     auto *o1 = builder.newOperand("=r");
     auto *i = builder.newOperand(fp8x4Vec, "r");
-    call({}, /* onlyAttachMLIRArgs */ true);
+    call({o0, o1, i}, /* onlyAttachMLIRArgs */ true);
 
     auto fp16x2VecTy = vec_ty(f16_ty, 2);
     auto fp16x2x2StructTy =
@@ -2186,7 +2186,7 @@ struct FpToFpOpConversion
     auto *o = builder.newOperand("=r");
     auto *i0 = builder.newOperand(fp16x2Vec0, "r");
     auto *i1 = builder.newOperand(fp16x2Vec1, "r");
-    call({}, /* onlyAttachMLIRArgs */ true);
+    call({o, i0, i1}, /* onlyAttachMLIRArgs */ true);
 
     auto fp8x4VecTy = vec_ty(i8_ty, 4);
     auto fp8x4Vec = builder.launch(rewriter, loc, fp8x4VecTy, false);
@@ -2232,7 +2232,7 @@ struct FpToFpOpConversion
     auto *o0 = builder.newOperand("=r");
     auto *o1 = builder.newOperand("=r");
     auto *i = builder.newOperand(fp8x4Vec, "r");
-    call({}, /* onlyAttachMLIRArgs */ true);
+    call({o0, o1, i}, /* onlyAttachMLIRArgs */ true);
 
     auto bf16x2VecTy = vec_ty(bf16_ty, 2);
     auto bf16x2x2StructTy =
@@ -2308,7 +2308,7 @@ struct FpToFpOpConversion
     auto *o = builder.newOperand("=r");
     auto *i0 = builder.newOperand(bf16x2Vec0, "r");
     auto *i1 = builder.newOperand(bf16x2Vec1, "r");
-    call({}, /* onlyAttachMLIRArgs */ true);
+    call({o, i0, i1}, /* onlyAttachMLIRArgs */ true);
 
     auto fp8x4VecTy = vec_ty(i8_ty, 4);
     auto fp8x4Vec = builder.launch(rewriter, loc, fp8x4VecTy, false);
