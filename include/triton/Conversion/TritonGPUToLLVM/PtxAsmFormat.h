@@ -201,10 +201,17 @@ struct PTXInstrCommon {
   // clang-format on
 
   // Set operands of this instruction.
-  PTXInstrExecution &operator()(llvm::ArrayRef<Operand *> oprs);
+  PTXInstrExecution &operator()(llvm::ArrayRef<Operand *> oprs,
+                                bool onlyAttachMLIRArgs = false);
 
 protected:
-  PTXInstrExecution &call(llvm::ArrayRef<Operand *> oprs);
+  // "Call" the instruction with operands.
+  // \param oprs The operands of this instruction.
+  // \param onlyAttachMLIRArgs Indicate that it simply attach the MLIR Arguments
+  // to the inline Asm without generating the operand ids(such as $0, $1) in PTX
+  // code.
+  PTXInstrExecution &call(llvm::ArrayRef<Operand *> oprs,
+                          bool onlyAttachMLIRArgs = false);
 
   PTXBuilder *builder{};
   llvm::SmallVector<std::string, 4> instrParts;
@@ -308,8 +315,10 @@ struct PTXInstrExecution {
 
   PTXInstrExecution() = default;
   explicit PTXInstrExecution(PTXInstrCommon *instr,
-                             llvm::ArrayRef<Operand *> oprs)
-      : argsInOrder(oprs.begin(), oprs.end()), instr(instr) {}
+                             llvm::ArrayRef<Operand *> oprs,
+                             bool onlyAttachMLIRArgs)
+      : argsInOrder(oprs.begin(), oprs.end()), instr(instr),
+        onlyAttachMLIRArgs(onlyAttachMLIRArgs) {}
 
   // Prefix a predicate to the instruction.
   PTXInstrExecution &predicate(mlir::Value value, StringRef constraint = "b") {
@@ -330,6 +339,7 @@ struct PTXInstrExecution {
 
   PTXInstrCommon *instr{};
   Operand *pred{};
+  bool onlyAttachMLIRArgs{};
 };
 
 } // namespace triton

@@ -128,27 +128,32 @@ std::string PTXBuilder::dump() const {
   return strJoin(lines, "\n\t");
 }
 
-PTXInstrExecution &PTXInstrCommon::call(ArrayRef<Operand *> oprs) {
+PTXInstrExecution &PTXInstrCommon::call(ArrayRef<Operand *> oprs,
+                                        bool onlyAttachMLIRArgs) {
   builder->executions.emplace_back(
-      std::make_unique<PTXInstrExecution>(this, oprs));
+      std::make_unique<PTXInstrExecution>(this, oprs, onlyAttachMLIRArgs));
   return *builder->executions.back();
 }
 
-PTXInstrExecution &PTXInstrCommon::operator()(ArrayRef<Operand *> oprs) {
-  return call(oprs);
+PTXInstrExecution &PTXInstrCommon::operator()(ArrayRef<Operand *> oprs,
+                                              bool onlyAttachMLIRArgs) {
+  return call(oprs, onlyAttachMLIRArgs);
 }
 
 std::string PTXInstrExecution::dump() const {
   std::string osStr;
   llvm::raw_string_ostream os(osStr);
+
+  std::string instrRepr = strJoin(instr->instrParts, ".");
+  if (onlyAttachMLIRArgs)
+    return instrRepr;
+
   if (pred) {
     if (!pred->repr)
       os << "@" << pred->dump() << " ";
     else
       os << pred->repr(pred->idx) << " ";
   }
-
-  std::string instrRepr = strJoin(instr->instrParts, ".");
 
   llvm::SmallVector<std::string, 4> argReprs;
   for (auto *arg : argsInOrder) {
