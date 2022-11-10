@@ -191,6 +191,20 @@ mlir::LogicalResult mlir::triton::DotOp::inferReturnTypes(
   // type is the same as the accumulator
   auto accTy = operands[2].getType().cast<RankedTensorType>();
   inferredReturnTypes.push_back(accTy);
+
+  // verify encodings
+  auto aEnc = operands[0].getType().cast<RankedTensorType>().getEncoding();
+  auto bEnc = operands[1].getType().cast<RankedTensorType>().getEncoding();
+  auto retEnc = accTy.getEncoding();
+  if (aEnc) {
+    assert(bEnc);
+    Dialect &dialect = aEnc.getDialect();
+    auto interface = dyn_cast<DialectInferLayoutInterface>(&dialect);
+    if (interface->inferDotOpEncoding(aEnc, 0, retEnc, location).failed())
+      return mlir::failure();
+    if (interface->inferDotOpEncoding(bEnc, 1, retEnc, location).failed())
+      return mlir::failure();
+  }
   return mlir::success();
 }
 
@@ -244,7 +258,7 @@ OpFoldResult SplatOp::fold(ArrayRef<Attribute> operands) {
 
 //-- ExpandDimsOp --
 mlir::LogicalResult mlir::triton::ExpandDimsOp::inferReturnTypes(
-    MLIRContext *context, Optional<Location> location, ValueRange operands,
+    MLIRContext *context, Optional<Location> loc, ValueRange operands,
     DictionaryAttr attributes, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // infer shape
@@ -260,11 +274,9 @@ mlir::LogicalResult mlir::triton::ExpandDimsOp::inferReturnTypes(
     Dialect &dialect = argEncoding.getDialect();
     auto inferLayoutInterface = dyn_cast<DialectInferLayoutInterface>(&dialect);
     if (inferLayoutInterface
-            ->inferExpandDimsOpEncoding(argEncoding, axis, retEncoding)
-            .failed()) {
-      llvm::report_fatal_error("failed to infer layout for ExpandDimsOp");
-      return mlir::failure();
-    }
+            ->inferExpandDimsOpEncoding(argEncoding, axis, retEncoding, loc)
+            .failed())
+      return emitOptionalError(loc, "failed to infer layout for ExpandDimsOp");
   }
   // create type
   auto argEltTy = argTy.getElementType();

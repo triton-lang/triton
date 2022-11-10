@@ -388,9 +388,9 @@ static Value storeShared(ConversionPatternRewriter &rewriter, Location loc,
   const char *c = bits == 64 ? "l" : (bits == 16 ? "h" : "r");
 
   PTXBuilder builder;
-  auto &st = builder.create<PTXIOInstr>("st")->shared().b(bits);
   auto *ptrOpr = builder.newAddrOperand(ptr, "r");
   auto *valOpr = builder.newOperand(val, c);
+  auto &st = builder.create<>("st")->shared().b(bits);
   st(ptrOpr, valOpr).predicate(pred, "b");
   return builder.launch(rewriter, loc, void_ty(ctx));
 }
@@ -1005,7 +1005,6 @@ struct LoadOpConversion
       const bool hasL2EvictPolicy = false;
 
       PTXBuilder ptxBuilder;
-      auto &ld = *ptxBuilder.create<PTXIOInstr>("ld");
 
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
 
@@ -1025,16 +1024,18 @@ struct LoadOpConversion
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
 
       // Define the instruction opcode
-      ld.o("volatile", op.isVolatile())
-          .global()
-          .o("ca", op.cache() == triton::CacheModifier::CA)
-          .o("cg", op.cache() == triton::CacheModifier::CG)
-          .o("L1::evict_first",
-             op.evict() == triton::EvictionPolicy::EVICT_FIRST)
-          .o("L1::evict_last", op.evict() == triton::EvictionPolicy::EVICT_LAST)
-          .o("L1::cache_hint", hasL2EvictPolicy)
-          .v(nWords)
-          .b(width);
+      auto &ld = ptxBuilder.create<>("ld")
+                     ->o("volatile", op.isVolatile())
+                     .global()
+                     .o("ca", op.cache() == triton::CacheModifier::CA)
+                     .o("cg", op.cache() == triton::CacheModifier::CG)
+                     .o("L1::evict_first",
+                        op.evict() == triton::EvictionPolicy::EVICT_FIRST)
+                     .o("L1::evict_last",
+                        op.evict() == triton::EvictionPolicy::EVICT_LAST)
+                     .o("L1::cache_hint", hasL2EvictPolicy)
+                     .v(nWords)
+                     .b(width);
 
       PTXBuilder::Operand *evictOpr{};
 
@@ -1049,8 +1050,8 @@ struct LoadOpConversion
 
       if (other) {
         for (size_t ii = 0; ii < nWords; ++ii) {
-          PTXInstr &mov = *ptxBuilder.create<>("mov");
-          mov.o("u" + std::to_string(width));
+          PTXInstr &mov =
+              ptxBuilder.create<>("mov")->o("u" + std::to_string(width));
 
           size_t size = width / valueElemNbits;
 
@@ -1222,7 +1223,7 @@ struct StoreOpConversion
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
 
       auto &ptxStoreInstr =
-          ptxBuilder.create<PTXIOInstr>("st")->global().v(nWords).b(width);
+          ptxBuilder.create<>("st")->global().v(nWords).b(width);
       ptxStoreInstr(asmAddr, asmArgList).predicate(maskVal, "b");
 
       Type boolTy = getTypeConverter()->convertType(rewriter.getIntegerType(1));
@@ -2325,6 +2326,19 @@ private:
   LogicalResult
   lowerSharedToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                           ConversionPatternRewriter &rewriter) const;
+
+  // shared -> dot_operand if the result layout is mma
+  Value lowerSharedToDotOperandMMA(
+      triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter, const MmaEncodingAttr &mmaLayout,
+      const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) const;
+
+  // shared -> dot_operand if the result layout is blocked
+  Value lowerSharedToDotOperandBlocked(
+      triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter,
+      const BlockedEncodingAttr &blockedLayout,
+      const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) const;
 };
 
 void ConvertLayoutOpConversion::processReplica(
@@ -3010,6 +3024,7 @@ public:
       Value i8Elems[4][4];
       Type elemTy = type::i8Ty(ctx);
       Type elemPtrTy = ptr_ty(elemTy);
+      Type i8x4Ty = vec_ty(type::i8Ty(ctx), 4);
       if (kOrder == 1) {
         for (int i = 0; i < 2; ++i)
           for (int j = 0; j < 4; ++j)
@@ -3024,7 +3039,7 @@ public:
           for (int e = 0; e < 4; ++e)
             i8v4Elems[m] = insert_element(i8v4Elems[m].getType(), i8v4Elems[m],
                                           i8Elems[m][e], i32_val(e));
-          i32Elems[m] = bitcast(i8v4Elems[m], i32_ty);
+          i32Elems[m] = bitcast(i8v4Elems[m], i8x4Ty);
         }
       } else { // k first
         for (int j = 0; j < 4; ++j)
@@ -3040,7 +3055,7 @@ public:
           for (int e = 0; e < 4; ++e)
             i8v4Elems[m] = insert_element(i8v4Elems[m].getType(), i8v4Elems[m],
                                           i8Elems[m][e], i32_val(e));
-          i32Elems[m] = bitcast(i8v4Elems[m], i32_ty);
+          i32Elems[m] = bitcast(i8v4Elems[m], i8x4Ty);
         }
       }
 
@@ -3724,8 +3739,7 @@ struct MMA16816ConversionHelper {
         loadFn(2 * m, 2 * k);
 
     // step2. Format the values to LLVM::Struct to passing to mma codegen.
-    Value result = composeValuesToDotOperandLayoutStruct(ha, numRepM, numRepK);
-    return result;
+    return composeValuesToDotOperandLayoutStruct(ha, numRepM, numRepK);
   }
 
   // Loading $b from smem to registers, returns a LLVM::Struct.
@@ -3962,31 +3976,14 @@ private:
   }
 };
 
-LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
+Value ConvertLayoutOpConversion::lowerSharedToDotOperandMMA(
     triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
-    ConversionPatternRewriter &rewriter) const {
+    ConversionPatternRewriter &rewriter, const MmaEncodingAttr &mmaLayout,
+    const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) const {
   auto loc = op.getLoc();
   Value src = op.src();
   Value dst = op.result();
   auto dstTensorTy = dst.getType().cast<RankedTensorType>();
-
-  auto dotOperandLayout =
-      dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-
-  MmaEncodingAttr mmaLayout =
-      dotOperandLayout.getParent().dyn_cast_or_null<MmaEncodingAttr>();
-  assert(mmaLayout);
-
-  bool isOuter{};
-  {
-    int K{};
-    if (dotOperandLayout.getOpIdx() == 0) // $a
-      K = dstTensorTy.getShape()[1];
-    else // $b
-      K = dstTensorTy.getShape()[0];
-    isOuter = K == 1;
-  }
-
   // TODO[Superjomn]: the allowTF32 is not available in ConvertLayoutOp for it
   // is an attribute of DotOp.
   bool allowTF32 = false;
@@ -4022,6 +4019,41 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
   } else {
     assert(false && "Unsupported mma layout found");
   }
+  return res;
+}
+
+LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
+    triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+    ConversionPatternRewriter &rewriter) const {
+  auto loc = op.getLoc();
+  Value src = op.src();
+  Value dst = op.result();
+  auto dstTensorTy = dst.getType().cast<RankedTensorType>();
+  auto srcTensorTy = src.getType().cast<RankedTensorType>();
+  auto dotOperandLayout =
+      dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+  auto sharedLayout = srcTensorTy.getEncoding().cast<SharedEncodingAttr>();
+
+  bool isOuter{};
+  int K{};
+  if (dotOperandLayout.getOpIdx() == 0) // $a
+    K = dstTensorTy.getShape()[sharedLayout.getOrder()[0]];
+  else // $b
+    K = dstTensorTy.getShape()[sharedLayout.getOrder()[1]];
+  isOuter = K == 1;
+
+  Value res;
+  if (auto mmaLayout =
+          dotOperandLayout.getParent().dyn_cast_or_null<MmaEncodingAttr>()) {
+    res = lowerSharedToDotOperandMMA(op, adaptor, rewriter, mmaLayout,
+                                     dotOperandLayout, isOuter);
+  } else if (auto blockedLayout =
+                 dotOperandLayout.getParent()
+                     .dyn_cast_or_null<BlockedEncodingAttr>()) {
+    assert(false && "Blocked layout is not supported yet");
+  } else {
+    assert(false && "Unsupported dot operand layout found");
+  }
 
   rewriter.replaceOp(op, res);
   return success();
@@ -4045,23 +4077,13 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adaptor,
   auto ATensorTy = A.getType().cast<RankedTensorType>();
   auto BTensorTy = B.getType().cast<RankedTensorType>();
 
-  Value loadedA, loadedB, loadedC;
-  // We support two kinds of operand layouts: 1. both $a, $b are dot_operand
-  // layout, 2. both of them are shared layout.
-  if (ATensorTy.getEncoding().isa<DotOperandEncodingAttr>()) {
-    assert(BTensorTy.getEncoding().isa<DotOperandEncodingAttr>() &&
-           "Both $a and %b should be DotOperand layout.");
-    loadedA = adaptor.a();
-    loadedB = adaptor.b();
-  } else {
-    SharedMemoryObject smemA =
-        getSharedMemoryObjectFromStruct(loc, adaptor.a(), rewriter);
-    SharedMemoryObject smemB =
-        getSharedMemoryObjectFromStruct(loc, adaptor.b(), rewriter);
-    loadedA = mmaHelper.loadA(op.a(), smemA);
-    loadedB = mmaHelper.loadB(op.b(), smemB);
-  }
+  assert(ATensorTy.getEncoding().isa<DotOperandEncodingAttr>() &&
+         BTensorTy.getEncoding().isa<DotOperandEncodingAttr>() &&
+         "Both $a and %b should be DotOperand layout.");
 
+  Value loadedA, loadedB, loadedC;
+  loadedA = adaptor.a();
+  loadedB = adaptor.b();
   loadedC = mmaHelper.loadC(op.c(), adaptor.c());
 
   return mmaHelper.convertDot(A, B, C, op.d(), loadedA, loadedB, loadedC, op,
@@ -4752,20 +4774,26 @@ public:
       auto mmaLayout = dot_op_layout.getParent().cast<MmaEncodingAttr>();
       auto wpt = mmaLayout.getWarpsPerCTA();
       Type elemTy = type.getElementType();
+      auto vecSize = 1;
+      if (elemTy.getIntOrFloatBitWidth() == 16) {
+        vecSize = 2;
+      } else if (elemTy.getIntOrFloatBitWidth() == 8) {
+        vecSize = 4;
+      } else {
+        assert(false && "Unsupported element type");
+      }
+      Type vecTy = vec_ty(elemTy, vecSize);
       if (mmaLayout.getVersion() == 2) {
-
         if (dot_op_layout.getOpIdx() == 0) { // $a
           int elems =
               MMA16816ConversionHelper::getANumElemsPerThread(type, wpt);
-          Type x2Ty = vec_ty(elemTy, 2);
           return LLVM::LLVMStructType::getLiteral(
-              ctx, SmallVector<Type>(elems, x2Ty));
+              ctx, SmallVector<Type>(elems, vecTy));
         }
         if (dot_op_layout.getOpIdx() == 1) { // $b
           int elems =
               MMA16816ConversionHelper::getBNumElemsPerThread(type, wpt);
-          Type x2Ty = vec_ty(elemTy, 2);
-          return struct_ty(SmallVector<Type>(elems, x2Ty));
+          return struct_ty(SmallVector<Type>(elems, vecTy));
         }
       }
 
@@ -4774,13 +4802,11 @@ public:
 
         if (dot_op_layout.getOpIdx() == 0) { // $a
           int elems = helper.numElemsPerThreadA(type);
-          Type x2Ty = vec_ty(elemTy, 2);
-          return struct_ty(SmallVector<Type>(elems, x2Ty));
+          return struct_ty(SmallVector<Type>(elems, vecTy));
         }
         if (dot_op_layout.getOpIdx() == 1) { // $b
           int elems = helper.numElemsPerThreadB(type);
-          Type x2Ty = vec_ty(elemTy, 2);
-          return struct_ty(SmallVector<Type>(elems, x2Ty));
+          return struct_ty(SmallVector<Type>(elems, vecTy));
         }
       }
 
@@ -4802,7 +4828,7 @@ struct AsyncWaitOpConversion
   matchAndRewrite(triton::gpu::AsyncWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     PTXBuilder ptxBuilder;
-    auto &asyncWaitOp = *ptxBuilder.create<PTXCpAsyncWaitGroupInstr>();
+    auto &asyncWaitOp = *ptxBuilder.create<>("cp.async.wait_group");
     auto num = op->getAttrOfType<IntegerAttr>("num").getInt();
     asyncWaitOp(ptxBuilder.newConstantOperand(num));
 
@@ -5025,7 +5051,7 @@ struct InsertSliceAsyncOpConversion
     }
 
     PTXBuilder ptxBuilder;
-    ptxBuilder.create<PTXCpAsyncCommitGroupInstr>()->operator()();
+    ptxBuilder.create<>("cp.async.commit_group")->operator()();
     ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
     rewriter.replaceOp(op, llDst);
     return success();
@@ -5178,9 +5204,7 @@ struct AtomicRMWOpConversion
       auto *ptrOpr = ptxBuilder.newAddrOperand(rmwPtr, "r");
       auto *valOpr = ptxBuilder.newOperand(rmvVal, "r");
 
-      auto &atom = *ptxBuilder.create<>("atom");
-
-      atom.o("global").o("gpu");
+      auto &atom = ptxBuilder.create<>("atom")->global().o("gpu");
       auto rmwOp = stringifyRMWOp(atomicRmwAttr).str();
       auto sBits = std::to_string(valueElemNbits);
       switch (atomicRmwAttr) {

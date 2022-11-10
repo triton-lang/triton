@@ -7,7 +7,7 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
   let summary = "pipeline";
 
   let description = [{
-    TODO  
+    Unroll loops to hide global memory -> shared memory latency.
   }];
 
   let constructor = "mlir::createTritonGPUPipelinePass()";
@@ -21,6 +21,20 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
            "int32_t", /*default*/"2",
            "number of pipeline stages">
   ];
+}
+
+def TritonGPUPrefetch : Pass<"tritongpu-prefetch", "mlir::ModuleOp"> {
+  let summary = "prefetch";
+
+  let description = [{
+    Prefetch operands (a and b) of tt.dot into shared memory to hide shared memory -> register latency.
+  }];
+
+  let constructor = "mlir::createTritonGPUPrefetchPass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::arith::ArithmeticDialect"];
 }
 
 def TritonGPUCoalesce: Pass<"tritongpu-coalesce", "mlir::ModuleOp"> {
