@@ -76,7 +76,7 @@ TEST_F(PtxAsmFormatTest, complexInstruction) {
 
   auto &ld =
       builder
-          .create<PTXIOInstr>("ld") //
+          .create<>("ld") //
           ->o("volatile", isVolatile)
           .global()
           .o("ca", cache == CacheModifier::CA)

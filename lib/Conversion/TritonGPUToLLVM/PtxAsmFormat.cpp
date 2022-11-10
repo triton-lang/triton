@@ -179,5 +179,27 @@ PTXInstrExecution::getArgList() const {
   return args;
 }
 
+PTXInstr &PTXInstr::global() {
+  o("global");
+  return *this;
+}
+
+PTXInstr &PTXInstr::shared() {
+  o("shared");
+  return *this;
+}
+
+PTXInstr &PTXInstr::v(int vecWidth, bool predicate) {
+  if (vecWidth > 1) {
+    o("v" + std::to_string(vecWidth), predicate);
+  }
+  return *this;
+}
+
+PTXInstr &PTXInstr::b(int width) {
+  o("b" + std::to_string(width));
+  return *this;
+}
+
 } // namespace triton
 } // namespace mlir
