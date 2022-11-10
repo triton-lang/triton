@@ -11,8 +11,6 @@ std::unique_ptr<Pass> createTritonGPUPrefetchPass();
 
 std::unique_ptr<Pass> createTritonGPUCanonicalizeLoopsPass();
 
-std::unique_ptr<Pass> createTritonGPUSwizzlePass();
-
 std::unique_ptr<Pass> createTritonGPUCoalescePass();
 
 std::unique_ptr<Pass> createTritonGPUCombineOpsPass();
