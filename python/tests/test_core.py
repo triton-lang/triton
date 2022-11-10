@@ -957,19 +957,34 @@ reduce_configs2 = [
 
 @pytest.mark.parametrize("op, dtype_str, shape, axis", reduce_configs1 + reduce_configs2)
 def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
-    # triton kernel
-    @triton.jit
-    def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, AXIS: tl.constexpr):
-        range_m = tl.arange(0, BLOCK_M)
-        range_n = tl.arange(0, BLOCK_N)
-        x = tl.load(X + range_m[:, None] * BLOCK_N + range_n[None, :])
-        z = GENERATE_TEST_HERE
-        if AXIS == 1:
-            tl.store(Z + range_m, z)
-        else:
-            tl.store(Z + range_n, z)
+    # we use triton-gpu IR directly so we can test different layouts
+    kernel_str = """
+#layout = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#slice = #triton_gpu.slice<{dim = 1, parent = #layout}>
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+  func public @kernel_0d1d(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+    %cst = arith.constant dense<32> : tensor<4x1xi32, #layout>
+    %0 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #slice>
+    %1 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #triton_gpu.slice<{dim = 1, parent = #layout}>>
+    %2 = tt.splat %arg0 : (!tt.ptr<f32>) -> tensor<4x1x!tt.ptr<f32>, #layout>
+    %3 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #triton_gpu.slice<{dim = 0, parent = #layout}>>
+    %4 = tt.expand_dims %1 {axis = 1 : i32} : (tensor<4xi32, #triton_gpu.slice<{dim = 1, parent = #layout}>>) -> tensor<4x1xi32, #layout>
+    %5 = arith.muli %4, %cst : tensor<4x1xi32, #layout>
+    %6 = tt.addptr %2, %5 : tensor<4x1x!tt.ptr<f32>, #layout>
+    %7 = tt.broadcast %6 : (tensor<4x1x!tt.ptr<f32>, #layout>) -> tensor<4x32x!tt.ptr<f32>, #layout>
+    %8 = tt.expand_dims %3 {axis = 0 : i32} : (tensor<32xi32, #triton_gpu.slice<{dim = 0, parent = #layout}>>) -> tensor<1x32xi32, #layout>
+    %9 = tt.broadcast %8 : (tensor<1x32xi32, #layout>) -> tensor<4x32xi32, #layout>
+    %10 = tt.addptr %7, %9 : tensor<4x32x!tt.ptr<f32>, #layout>
+    %11 = tt.load %10 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<4x32xf32, #layout>
+    %13 = tt.reduce %11 {axis = 1 : i32, redOp = 2 : i32} : tensor<4x32xf32, #layout> -> tensor<4xf32, #slice>
+    %15 = tt.splat %arg1 : (!tt.ptr<f32>) -> tensor<4x!tt.ptr<f32>, #slice>
+    %16 = tt.addptr %15, %0 : tensor<4x!tt.ptr<f32>, #slice>
+    tt.store %16, %13 : tensor<4xf32, #slice>
+    return
+  }
+}    
+"""
 
-    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{op}(x, axis=AXIS)'})
     # input
     rs = RandomState(17)
     # limit the range of integers so that the sum does not overflow
@@ -991,8 +1006,18 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
     # triton result
     z_tri = to_triton(numpy_random((shape[1 - axis],), dtype_str=z_dtype_str, rs=rs),
                       device=device, dst_type=z_tri_dtype_str)
-    kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)
+
+    import tempfile
+    import os
+    with tempfile.TemporaryDirectory() as tmpdir:
+        src = os.path.join(tmpdir, 'reduce.ttgir')
+        with open(src, 'w') as f:
+            f.write(kernel_str)
+        kernel = triton.compile(src, signature="*f32,*f32", device=torch.cuda.current_device(), constants={2:shape[0], 3:shape[1], 4:axis})
+        kernel[(1,1,1)](x_tri.data_ptr(), z_tri.data_ptr())
+
     z_tri = to_numpy(z_tri)
+
     # compare
     if op == 'sum':
         np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)

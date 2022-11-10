@@ -1295,15 +1295,7 @@ def read_or_execute(cache_manager, force_compile, file_name, metadata,
     return module, md5, True, False
 
 
-def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
-    if isinstance(signature, str):
-        signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
-    # we get the kernel, i.e. the first function generated in the module
-    if configs is None:
-        configs = [instance_descriptor()]
-    assert len(configs) == 1
-    # cache manager
-    name = fn.__name__
+def make_entry_point(name, signature, constants):
     # name of files that are cached
     so_cache_key = make_so_cache_key(signature, constants)
     so_cache_manager = CacheManager(so_cache_key)
@@ -1315,53 +1307,77 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
             src_path = os.path.join(tmpdir, "main.c")
             with open(src_path, "w") as f:
                 f.write(src)
-            so = _build(fn.__name__, src_path, tmpdir)
+            so = _build(name, src_path, tmpdir)
             with open(so, "rb") as f:
                 so_cache_manager.put(f.read(), so_name, binary=True)
-    so_path = so_cache_manager._make_path(so_name)
+    return so_cache_manager._make_path(so_name)
+
+def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
+    if isinstance(signature, str):
+        signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
+    # we get the kernel, i.e. the first function generated in the module
+    if configs is None:
+        configs = [instance_descriptor()]
+    assert len(configs) == 1
+    # if fn is not a JITFunction, then it 
+    # has to be a path to a file
+    context = _triton.ir.context()
+    asm, md5 = dict(), dict()
+    if isinstance(fn, triton.runtime.JITFunction):
+        name = fn.__name__
+        stage = 0
+        fn_cache_dir = make_fn_cache_key(fn.cache_key, signature, configs, constants, num_warps, num_stages)
+    else:
+        assert isinstance(fn, str)
+        name, ext = os.path.basename(fn).split(".")
+        assert ext == "ttgir"
+        asm[ext] = _triton.ir.parse_mlir_module(fn, context)
+        stage = 2
+        fn_cache_dir = os.path.dirname(os.path.realpath(fn))
+    # cache manager
+    so_path = make_entry_point(name, signature, constants)
     # create cache manager
-    fn_cache_key = make_fn_cache_key(fn.cache_key, signature, configs, constants, num_warps, num_stages)
-    fn_cache_manager = CacheManager(fn_cache_key)
+    fn_cache_manager = CacheManager(fn_cache_dir)
     # load metadata if any
     metadata = None
     if fn_cache_manager.has_file(f'{name}.json'):
       with open(fn_cache_manager._make_path(f"{name}.json")) as f:
             metadata = json.load(f)
-    context = _triton.ir.context()
     force_compile = False
     # ast -> triton-ir (or read from cache)
-    ttir, ttir_md5, force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.ttir", metadata,
-                           run_if_found = lambda path: _triton.ir.parse_mlir_module(path, context),
-                           run_if_not_found = lambda: ast_to_ttir(fn, signature, configs[0], constants))
+    if stage <= 0:
+      asm["ttir"], md5["ttir"], force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.ttir", metadata,
+                             run_if_found = lambda path: _triton.ir.parse_mlir_module(path, context),
+                             run_if_not_found = lambda: ast_to_ttir(fn, signature, configs[0], constants))
     # triton-ir -> triton-gpu-ir (or read from cache)
-    ttgir, ttgir_md5, force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.ttgir", metadata,
-                            run_if_found = lambda path: _triton.ir.parse_mlir_module(path, context),
-                            run_if_not_found = lambda: ttir_to_ttgir(ttir, num_warps, num_stages))
+    if stage <= 1:
+      asm["ttgir"], md5["ttgir"], force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.ttgir", metadata,
+                              run_if_found = lambda path: _triton.ir.parse_mlir_module(path, context),
+                              run_if_not_found = lambda: ttir_to_ttgir(asm["ttir"], num_warps, num_stages))
     # triton-gpu-ir -> llvm-ir (or read from cache)
-    llir, llir_md5, force_compile, llvm_cached = read_or_execute(fn_cache_manager, force_compile, f"{name}.llir", metadata,
-                           run_if_found = lambda path: Path(path).read_bytes(),
-                           run_if_not_found = lambda: ttgir_to_llir(ttgir, extern_libs))
+    if stage <= 2:
+      asm["llir"], md5["llir"], force_compile, llvm_cached = read_or_execute(fn_cache_manager, force_compile, f"{name}.llir", metadata,
+                             run_if_found = lambda path: Path(path).read_bytes(),
+                             run_if_not_found = lambda: ttgir_to_llir(asm["ttgir"], extern_libs))
     if llvm_cached:
         shmem_size = metadata["shared"]
     else:
-        shmem_size = _triton.get_shared_memory_size(ttgir)
+        shmem_size = _triton.get_shared_memory_size(asm["ttgir"])
     # llvm-ir -> ptx (or read from cache)
-    ptx, ptx_md5, force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.ptx", metadata,
-                          run_if_found = lambda path: Path(path).read_text(),
-                          run_if_not_found = lambda: llir_to_ptx(llir))
+    if stage <= 3:
+      asm["ptx"], md5["ptx"], force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.ptx", metadata,
+                            run_if_found = lambda path: Path(path).read_text(),
+                            run_if_not_found = lambda: llir_to_ptx(asm["llir"]))
     # ptx -> cubin (or read from cache)
-    cubin, cubin_md5, force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.cubin", metadata,
-                            run_if_found = lambda path: Path(path).read_bytes(),      
-                            run_if_not_found= lambda: ptx_to_cubin(ptx, device))
+    if stage <= 4:
+      asm["cubin"], md5["cubin"], force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.cubin", metadata,
+                              run_if_found = lambda path: Path(path).read_bytes(),      
+                              run_if_not_found= lambda: ptx_to_cubin(asm["ptx"], device))
     # dump new metadata
-    kernel_name = ptx_get_kernel_name(ptx)
+    kernel_name = ptx_get_kernel_name(asm["ptx"])
     metadata = {"name": kernel_name, "shared": shmem_size, "num_warps": num_warps, "num_stages": num_stages,
-                "md5": {  "cubin": cubin_md5,  "ptx": ptx_md5,  
-                          "llir": llir_md5,
-                          "ttir": ttir_md5, "ttgir": ttgir_md5 }}
+                "md5": md5}
     fn_cache_manager.put(json.dumps(metadata), f"{name}.json", binary=False)
-
-    asm = {"ttir": ttir, "ttgir": ttgir, "llir": llir, "ptx": ptx, "cubin": cubin}
     return CompiledKernel(so_path, metadata, asm)
 
 
@@ -1393,7 +1409,7 @@ class CompiledKernel:
             if stream is None:
                 stream = torch.cuda.current_stream().cuda_stream
             self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.shared, stream, self.cu_function, *args)
-        return
+        return runner
 
     def get_sass(self, fun=None):
         if 'sass' in self.asm:
@@ -1429,7 +1445,9 @@ class CudaUtils(object):
            {
               const char* prefix = "Triton Error [CUDA]: ";
               const char* str;
+              printf("%d\\n", code);
               cuGetErrorString(code, &str);
+              printf("%s\\n", str);
               char err[1024] = {0};
               strcat(err, prefix);
               strcat(err, str);
