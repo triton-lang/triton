@@ -4046,11 +4046,11 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
     DotOpFMAConversionHelper helper(blockedLayout);
     auto thread = getThreadId(rewriter, loc);
     if (dotOpLayout.getOpIdx() == 0) { // $a
-      // res = helper.loadA(src, adaptor.src(), blockedLayout, thread, loc,
-      // rewriter);
+      res = helper.loadA(src, adaptor.src(), blockedLayout, thread, loc,
+                         rewriter);
     } else { // $b
-      // res = helper.loadB(src, adaptor.src(), blockedLayout, thread, loc,
-      // rewriter);
+      res = helper.loadB(src, adaptor.src(), blockedLayout, thread, loc,
+                         rewriter);
     }
   } else if (!isOuter && mmaLayout.getVersion() == 2 &&
              isHMMA) { // tensor core v2
