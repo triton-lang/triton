@@ -3979,20 +3979,17 @@ struct DotOpFMAConversionHelper {
                                   ConversionPatternRewriter &rewriter,
                                   Location loc) const;
 
-  ValueTable loadA(Value A, Value llA, BlockedEncodingAttr dLayout,
-                   Value thread, Location loc,
-                   ConversionPatternRewriter &rewriter) const;
+  Value loadA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
+              Location loc, ConversionPatternRewriter &rewriter) const;
 
-  ValueTable loadB(Value B, Value llB, BlockedEncodingAttr dLayout,
-                   Value thread, Location loc,
-                   ConversionPatternRewriter &rewriter) const;
+  Value loadB(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
+              Location loc, ConversionPatternRewriter &rewriter) const;
 
   ValueTable getValueTableFromStruct(Value val, int K, int n0, int shapePerCTA,
                                      int sizePerThread,
                                      ConversionPatternRewriter &rewriter,
                                      Location loc) const;
 
-private:
   Value getStructFromValueTable(ValueTable vals,
                                 ConversionPatternRewriter &rewriter,
                                 Location loc) const {
@@ -4555,10 +4552,9 @@ DotOpMmaV1ConversionHelper::extractLoadedOperand(
   return rcds;
 }
 
-DotOpFMAConversionHelper::ValueTable
-DotOpFMAConversionHelper::loadA(Value A, Value llA, BlockedEncodingAttr dLayout,
-                                Value thread, Location loc,
-                                ConversionPatternRewriter &rewriter) const {
+Value DotOpFMAConversionHelper::loadA(
+    Value A, Value llA, BlockedEncodingAttr dLayout, Value thread, Location loc,
+    ConversionPatternRewriter &rewriter) const {
   auto aTensorTy = A.getType().cast<RankedTensorType>();
   auto aLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
   auto aShape = aTensorTy.getShape();
@@ -4638,14 +4634,12 @@ DotOpFMAConversionHelper::loadA(Value A, Value llA, BlockedEncodingAttr dLayout,
         }
   }
 
-  return has;
-  // return getStructFromValueTable(has, rewriter, loc);
+  return getStructFromValueTable(has, rewriter, loc);
 }
 
-DotOpFMAConversionHelper::ValueTable
-DotOpFMAConversionHelper::loadB(Value B, Value llB, BlockedEncodingAttr dLayout,
-                                Value thread, Location loc,
-                                ConversionPatternRewriter &rewriter) const {
+Value DotOpFMAConversionHelper::loadB(
+    Value B, Value llB, BlockedEncodingAttr dLayout, Value thread, Location loc,
+    ConversionPatternRewriter &rewriter) const {
 
   auto bTensorTy = B.getType().cast<RankedTensorType>();
   auto bLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
@@ -4719,24 +4713,28 @@ DotOpFMAConversionHelper::loadB(Value B, Value llB, BlockedEncodingAttr dLayout,
         hbs[{n + nn, k}] = vb;
       }
 
-  return hbs;
-  // return getStructFromValueTable(hbs, rewriter, loc);
+  return getStructFromValueTable(hbs, rewriter, loc);
 }
 
 DotOpFMAConversionHelper::ValueTable
 DotOpFMAConversionHelper::getValueTableFromStruct(
     Value val, int K, int n0, int shapePerCTA, int sizePerThread,
     ConversionPatternRewriter &rewriter, Location loc) const {
-
+  ValueTable res;
   auto elems = ConvertTritonGPUOpToLLVMPatternBase::getElementsFromStruct(
       loc, val, rewriter);
+  int id = 0;
+  std::set<std::pair<int, int>> keys; // ordered
+  for (unsigned k = 0; k < K; k++) {
+    for (unsigned m = 0; m < n0; m += shapePerCTA)
+      for (unsigned mm = 0; mm < sizePerThread; ++mm) {
+        keys.insert({m + mm, k});
+      }
+  }
 
-  ValueTable res;
-  int offset{};
-  for (unsigned k = 0; k < K; ++k)
-    for (unsigned i = 0; i < n0; i += shapePerCTA)
-      for (unsigned ii = 0; ii < sizePerThread; ++ii)
-        res[{i + ii, k}] = elems[offset++];
+  for (auto &key : llvm::enumerate(keys)) {
+    res[key.value()] = elems[key.index()];
+  }
 
   return res;
 }
@@ -4780,9 +4778,7 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
   auto bShape = bTensorTy.getShape();
   auto cShape = cTensorTy.getShape();
 
-#if 1
   ValueTable has, hbs;
-  int M{-1}, N{-1}, K{-1};
   int mShapePerCTA{-1}, nShapePerCTA{-1};
   int mSizePerThread{-1}, nSizePerThread{-1};
   ArrayRef<unsigned> aOrder, bOrder;
@@ -4814,8 +4810,8 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
     auto bLayout = bTensorTy.getEncoding().dyn_cast<SharedEncodingAttr>();
     assert(bLayout);
     Value thread = getThreadId(rewriter, loc);
-    has = helper.loadA(A, adaptor.a(), dLayout, thread, loc, rewriter);
-    hbs = helper.loadB(B, adaptor.b(), dLayout, thread, loc, rewriter);
+    llA = helper.loadA(A, adaptor.a(), dLayout, thread, loc, rewriter);
+    llB = helper.loadB(B, adaptor.b(), dLayout, thread, loc, rewriter);
     aOrder = aLayout.getOrder();
     bOrder = bLayout.getOrder();
   }
@@ -4823,20 +4819,21 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
   auto sizePerThread = getSizePerThread(dLayout);
   auto shapePerCTA = getShapePerCTA(dLayout);
 
-  K = aShape[aOrder[0]];
-  M = aShape[aOrder[1]];
-  N = bShape[bOrder[0]];
+  int K = aShape[aOrder[0]];
+  int M = aShape[aOrder[1]];
+  int N = bShape[bOrder[0]];
 
-  // has = helper.getValueTableFromStruct(llA, K, M, mShapePerCTA,
-  // mSizePerThread, rewriter, loc);
-  // hbs = helper.getValueTableFromStruct(llB, K, N, nShapePerCTA,
-  // nSizePerThread, rewriter, loc);
   mShapePerCTA = order[0] == 1 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
   mSizePerThread =
       order[0] == 1 ? sizePerThread[order[1]] : sizePerThread[order[0]];
   nShapePerCTA = order[0] == 0 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
   nSizePerThread =
       order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
+
+  has = helper.getValueTableFromStruct(llA, K, M, mShapePerCTA, mSizePerThread,
+                                       rewriter, loc);
+  hbs = helper.getValueTableFromStruct(llB, K, N, nShapePerCTA, nSizePerThread,
+                                       rewriter, loc);
 
   SmallVector<Value> ret = cc;
   for (unsigned k = 0; k < K; k++) {
@@ -4847,144 +4844,10 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
           for (unsigned nn = 0; nn < nSizePerThread; ++nn) {
             ret[z] = rewriter.create<LLVM::FMulAddOp>(loc, has[{m + mm, k}],
                                                       hbs[{n + nn, k}], ret[z]);
+
             ++z;
           }
   }
-#else
-
-  auto aLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
-  auto bLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
-  auto cLayout = cTensorTy.getEncoding().cast<BlockedEncodingAttr>();
-  auto dLayout = dTensorTy.getEncoding().cast<BlockedEncodingAttr>();
-
-  auto aOrder = aLayout.getOrder();
-  auto bOrder = bLayout.getOrder();
-
-  auto order = dLayout.getOrder();
-
-  bool isARow = aOrder[0] == 1;
-  bool isBRow = bOrder[0] == 1;
-
-  int strideAM = isARow ? aShape[1] : 1;
-  int strideAK = isARow ? 1 : aShape[0];
-  int strideBN = isBRow ? 1 : bShape[0];
-  int strideBK = isBRow ? bShape[1] : 1;
-  int strideA0 = isARow ? strideAK : strideAM;
-  int strideA1 = isARow ? strideAM : strideAK;
-  int strideB0 = isBRow ? strideBN : strideBK;
-  int strideB1 = isBRow ? strideBK : strideBN;
-  int lda = isARow ? strideAM : strideAK;
-  int ldb = isBRow ? strideBK : strideBN;
-  int aPerPhase = aLayout.getPerPhase();
-  int aMaxPhase = aLayout.getMaxPhase();
-  int bPerPhase = bLayout.getPerPhase();
-  int bMaxPhase = bLayout.getMaxPhase();
-  int aNumPtr = 8;
-  int bNumPtr = 8;
-  int NK = aShape[1];
-
-  auto shapePerCTA = getShapePerCTA(dLayout);
-
-  auto sizePerThread = getSizePerThread(dLayout);
-
-  Value _0 = i32_val(0);
-
-  Value mContig = i32_val(sizePerThread[order[1]]);
-  Value nContig = i32_val(sizePerThread[order[0]]);
-
-  // threadId in blocked layout
-  SmallVector<Value> threadIds;
-  {
-    int dim = cShape.size();
-    threadIds.resize(dim);
-    for (unsigned k = 0; k < dim - 1; k++) {
-      Value dimK = i32_val(shapePerCTA[order[k]]);
-      Value rem = urem(threadId, dimK);
-      threadId = udiv(threadId, dimK);
-      threadIds[order[k]] = rem;
-    }
-    Value dimK = i32_val(shapePerCTA[order[dim - 1]]);
-    threadIds[order[dim - 1]] = urem(threadId, dimK);
-  }
-
-  Value threadIdM = threadIds[0];
-  Value threadIdN = threadIds[1];
-
-  Value offA0 = isARow ? _0 : mul(threadIdM, mContig);
-  Value offA1 = isARow ? mul(threadIdM, mContig) : _0;
-  SmallVector<Value> aOff(aNumPtr);
-  for (int i = 0; i < aNumPtr; ++i) {
-    aOff[i] = add(mul(offA0, i32_val(strideA0)), mul(offA1, i32_val(strideA1)));
-  }
-
-  Value offB0 = isBRow ? mul(threadIdN, nContig) : _0;
-  Value offB1 = isBRow ? _0 : mul(threadIdN, nContig);
-  SmallVector<Value> bOff(bNumPtr);
-  for (int i = 0; i < bNumPtr; ++i) {
-    bOff[i] = add(mul(offB0, i32_val(strideB0)), mul(offB1, i32_val(strideB1)));
-  }
-
-  auto aSmem = getSharedMemoryObjectFromStruct(loc, adaptor.a(), rewriter);
-  auto bSmem = getSharedMemoryObjectFromStruct(loc, adaptor.b(), rewriter);
-
-  Type f32PtrTy = ptr_ty(f32_ty);
-  SmallVector<Value> aPtrs(aNumPtr);
-  for (int i = 0; i < aNumPtr; ++i)
-    aPtrs[i] = gep(f32PtrTy, aSmem.base, aOff[i]);
-
-  SmallVector<Value> bPtrs(bNumPtr);
-  for (int i = 0; i < bNumPtr; ++i)
-    bPtrs[i] = gep(f32PtrTy, bSmem.base, bOff[i]);
-
-  ValueTable has, hbs;
-  auto cc = getElementsFromStruct(loc, adaptor.c(), rewriter);
-  SmallVector<Value> ret = cc;
-  // is this compatible with blocked layout?
-
-  int mShapePerCTA =
-      order[0] == 1 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
-  int mSizePerThread =
-      order[0] == 1 ? sizePerThread[order[1]] : sizePerThread[order[0]];
-  int nShapePerCTA =
-      order[0] == 0 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
-  int nSizePerThread =
-      order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
-
-  for (unsigned k = 0; k < NK; k++) {
-    for (unsigned m = 0; m < cShape[order[1]]; m += mShapePerCTA)
-      for (unsigned mm = 0; mm < mSizePerThread; ++mm)
-        if (!has.count({m + mm, k})) {
-          Value pa = gep(f32PtrTy, aPtrs[0],
-                         i32_val((m + mm) * strideAM + k * strideAK));
-          Value va = load(pa);
-          has[{m + mm, k}] = va;
-        }
-  }
-
-  for (unsigned k = 0; k < NK; k++) {
-    for (unsigned n = 0; n < cShape[order[0]]; n += nShapePerCTA)
-      for (unsigned nn = 0; nn < nSizePerThread; ++nn)
-        if (!hbs.count({n + nn, k})) {
-          Value pb = gep(f32PtrTy, bPtrs[0],
-                         i32_val((n + nn) * strideBN + k * strideBK));
-          Value vb = load(pb);
-          hbs[{n + nn, k}] = vb;
-        }
-  }
-
-  for (unsigned k = 0; k < NK; k++) {
-    int z = 0;
-    for (unsigned m = 0; m < cShape[order[1]]; m += mShapePerCTA)
-      for (unsigned n = 0; n < cShape[order[0]]; n += nShapePerCTA)
-        for (unsigned mm = 0; mm < mSizePerThread; ++mm)
-          for (unsigned nn = 0; nn < nSizePerThread; ++nn) {
-            ret[z] = rewriter.create<LLVM::FMulAddOp>(loc, has[{m + mm, k}],
-                                                      hbs[{n + nn, k}], ret[z]);
-            ++z;
-          }
-  }
-
-#endif
 
   auto res = getStructFromElements(
       loc, ret, rewriter,
