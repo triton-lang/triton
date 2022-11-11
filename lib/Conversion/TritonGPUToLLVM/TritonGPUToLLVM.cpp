@@ -3979,11 +3979,13 @@ struct DotOpFMAConversionHelper {
                                   ConversionPatternRewriter &rewriter,
                                   Location loc) const;
 
-  Value loadA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
-              Location loc, ConversionPatternRewriter &rewriter) const;
+  ValueTable loadA(Value A, Value llA, BlockedEncodingAttr dLayout,
+                   Value thread, Location loc,
+                   ConversionPatternRewriter &rewriter) const;
 
-  Value loadB(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
-              Location loc, ConversionPatternRewriter &rewriter) const;
+  ValueTable loadB(Value B, Value llB, BlockedEncodingAttr dLayout,
+                   Value thread, Location loc,
+                   ConversionPatternRewriter &rewriter) const;
 
   ValueTable getValueTableFromStruct(Value val, int K, int n0, int shapePerCTA,
                                      int sizePerThread,
@@ -4047,11 +4049,11 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
     DotOpFMAConversionHelper helper(blockedLayout);
     auto thread = getThreadId(rewriter, loc);
     if (dotOpLayout.getOpIdx() == 0) { // $a
-      res = helper.loadA(src, adaptor.src(), blockedLayout, thread, loc,
-                         rewriter);
+      // res = helper.loadA(src, adaptor.src(), blockedLayout, thread, loc,
+      // rewriter);
     } else { // $b
-      res = helper.loadB(src, adaptor.src(), blockedLayout, thread, loc,
-                         rewriter);
+      // res = helper.loadB(src, adaptor.src(), blockedLayout, thread, loc,
+      // rewriter);
     }
   } else if (!isOuter && mmaLayout.getVersion() == 2 &&
              isHMMA) { // tensor core v2
@@ -4553,14 +4555,19 @@ DotOpMmaV1ConversionHelper::extractLoadedOperand(
   return rcds;
 }
 
-Value DotOpFMAConversionHelper::loadA(
-    Value A, Value llA, BlockedEncodingAttr dLayout, Value thread, Location loc,
-    ConversionPatternRewriter &rewriter) const {
+DotOpFMAConversionHelper::ValueTable
+DotOpFMAConversionHelper::loadA(Value A, Value llA, BlockedEncodingAttr dLayout,
+                                Value thread, Location loc,
+                                ConversionPatternRewriter &rewriter) const {
   auto aTensorTy = A.getType().cast<RankedTensorType>();
-  auto aShape = aTensorTy.getShape();
   auto aLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto aShape = aTensorTy.getShape();
+
   auto aOrder = aLayout.getOrder();
+  auto order = dLayout.getOrder();
+
   bool isARow = aOrder[0] == 1;
+
   int strideAM = isARow ? aShape[1] : 1;
   int strideAK = isARow ? 1 : aShape[0];
   int strideA0 = isARow ? strideAK : strideAM;
@@ -4569,18 +4576,23 @@ Value DotOpFMAConversionHelper::loadA(
   int aPerPhase = aLayout.getPerPhase();
   int aMaxPhase = aLayout.getMaxPhase();
   int aNumPtr = 8;
-  int K = aShape[aOrder[0]];
-  int M = aShape[aOrder[1]];
-  Value _0 = i32_val(0);
+  int bNumPtr = 8;
+  int NK = aShape[1];
 
   auto shapePerCTA = getShapePerCTA(dLayout);
+
   auto sizePerThread = getSizePerThread(dLayout);
 
-  Value mContig = i32_val(sizePerThread[aOrder[1]]);
-  Value kContig = i32_val(sizePerThread[aOrder[0]]);
+  Value _0 = i32_val(0);
 
-  auto threadIds = getThreadIds(thread, shapePerCTA, aOrder, rewriter, loc);
+  Value mContig = i32_val(sizePerThread[order[1]]);
+  Value nContig = i32_val(sizePerThread[order[0]]);
+
+  // threadId in blocked layout
+  auto threadIds = getThreadIds(thread, shapePerCTA, order, rewriter, loc);
+
   Value threadIdM = threadIds[0];
+  Value threadIdN = threadIds[1];
 
   Value offA0 = isARow ? _0 : mul(threadIdM, mContig);
   Value offA1 = isARow ? mul(threadIdM, mContig) : _0;
@@ -4599,28 +4611,51 @@ Value DotOpFMAConversionHelper::loadA(
     aPtrs[i] = gep(f32PtrTy, aSmem.base, aOff[i]);
 
   ValueTable has;
+  int M = aShape[aOrder[1]];
 
-  for (unsigned k = 0; k < K; ++k)
-    for (unsigned m = 0; m < M; m += shapePerCTA[aOrder[1]])
-      for (unsigned mm = 0; mm < sizePerThread[aOrder[1]]; ++mm)
+  int aShapePerCTA =
+      order[0] == 1 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
+  int aSizePerThread =
+      order[0] == 1 ? sizePerThread[order[1]] : sizePerThread[order[0]];
+  int bShapePerCTA =
+      order[0] == 0 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
+  int bSizePerThread =
+      order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
+
+  printf("LoadA, NK:%d\n", NK);
+  printf("LoadA, M:%d\n", M);
+  printf("LoadA, shapePerCTA:%d\n", aShapePerCTA);
+  printf("LoadA, sizePerThread:%d\n", aSizePerThread);
+
+  for (unsigned k = 0; k < NK; k++) {
+    for (unsigned m = 0; m < M; m += aShapePerCTA)
+      for (unsigned mm = 0; mm < aSizePerThread; ++mm)
         if (!has.count({m + mm, k})) {
           Value pa = gep(f32PtrTy, aPtrs[0],
                          i32_val((m + mm) * strideAM + k * strideAK));
           Value va = load(pa);
           has[{m + mm, k}] = va;
         }
-  return getStructFromValueTable(has, rewriter, loc);
+  }
+
+  return has;
+  // return getStructFromValueTable(has, rewriter, loc);
 }
 
-Value DotOpFMAConversionHelper::loadB(
-    Value B, Value llB, BlockedEncodingAttr dLayout, Value thread, Location loc,
-    ConversionPatternRewriter &rewriter) const {
+DotOpFMAConversionHelper::ValueTable
+DotOpFMAConversionHelper::loadB(Value B, Value llB, BlockedEncodingAttr dLayout,
+                                Value thread, Location loc,
+                                ConversionPatternRewriter &rewriter) const {
 
   auto bTensorTy = B.getType().cast<RankedTensorType>();
-  auto bShape = bTensorTy.getShape();
   auto bLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto bShape = bTensorTy.getShape();
+
   auto bOrder = bLayout.getOrder();
+  auto order = dLayout.getOrder();
+
   bool isBRow = bOrder[0] == 1;
+
   int strideBN = isBRow ? 1 : bShape[0];
   int strideBK = isBRow ? bShape[1] : 1;
   int strideB0 = isBRow ? strideBN : strideBK;
@@ -4629,18 +4664,18 @@ Value DotOpFMAConversionHelper::loadB(
   int bPerPhase = bLayout.getPerPhase();
   int bMaxPhase = bLayout.getMaxPhase();
   int bNumPtr = 8;
-
-  int K = bShape[bOrder[1]];
-  int N = bShape[bOrder[0]];
+  int NK = bShape[0];
 
   auto shapePerCTA = getShapePerCTA(dLayout);
   auto sizePerThread = getSizePerThread(dLayout);
+
   Value _0 = i32_val(0);
 
-  Value nContig = i32_val(sizePerThread[bOrder[0]]);
+  Value mContig = i32_val(sizePerThread[order[1]]);
+  Value nContig = i32_val(sizePerThread[order[0]]);
 
-  auto threadIds = getThreadIds(thread, shapePerCTA, bOrder, rewriter, loc);
-
+  // threadId in blocked layout
+  auto threadIds = getThreadIds(thread, shapePerCTA, order, rewriter, loc);
   Value threadIdN = threadIds[1];
 
   Value offB0 = isBRow ? mul(threadIdN, nContig) : _0;
@@ -4659,19 +4694,33 @@ Value DotOpFMAConversionHelper::loadB(
   for (int i = 0; i < bNumPtr; ++i)
     bPtrs[i] = gep(f32PtrTy, bSmem.base, bOff[i]);
 
+  int N = bShape[bOrder[0]];
   ValueTable hbs;
-  for (unsigned k = 0; k < K; ++k)
-    for (unsigned n = 0; n < N; n += shapePerCTA[bOrder[0]])
-      for (unsigned nn = 0; nn < sizePerThread[bOrder[0]]; ++nn) {
-        if (!hbs.count({n + nn, k})) {
-          Value pb = gep(f32PtrTy, bPtrs[0],
-                         i32_val((n + nn) * strideBN + k * strideBK));
-          Value vb = load(pb);
-          hbs[{n + nn, k}] = vb;
-        }
+
+  int aShapePerCTA =
+      order[0] == 1 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
+  int aSizePerThread =
+      order[0] == 1 ? sizePerThread[order[1]] : sizePerThread[order[0]];
+  int bShapePerCTA =
+      order[0] == 0 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
+  int bSizePerThread =
+      order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
+
+  printf("LoadB, NK:%d\n", NK);
+  printf("LoadB, N:%d\n", N);
+  printf("LoadB, shapePerCTA:%d\n", bShapePerCTA);
+
+  for (unsigned k = 0; k < NK; ++k)
+    for (unsigned n = 0; n < N; n += bShapePerCTA)
+      for (unsigned nn = 0; nn < bSizePerThread; ++nn) {
+        Value pb = gep(f32PtrTy, bPtrs[0],
+                       i32_val((n + nn) * strideBN + k * strideBK));
+        Value vb = load(pb);
+        hbs[{n + nn, k}] = vb;
       }
 
-  return getStructFromValueTable(hbs, rewriter, loc);
+  return hbs;
+  // return getStructFromValueTable(hbs, rewriter, loc);
 }
 
 DotOpFMAConversionHelper::ValueTable
@@ -4731,6 +4780,7 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
   auto bShape = bTensorTy.getShape();
   auto cShape = cTensorTy.getShape();
 
+#if 1
   ValueTable has, hbs;
   int M{-1}, N{-1}, K{-1};
   int mShapePerCTA{-1}, nShapePerCTA{-1};
@@ -4764,8 +4814,8 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
     auto bLayout = bTensorTy.getEncoding().dyn_cast<SharedEncodingAttr>();
     assert(bLayout);
     Value thread = getThreadId(rewriter, loc);
-    llA = helper.loadA(A, adaptor.a(), dLayout, thread, loc, rewriter);
-    llB = helper.loadB(B, adaptor.b(), dLayout, thread, loc, rewriter);
+    has = helper.loadA(A, adaptor.a(), dLayout, thread, loc, rewriter);
+    hbs = helper.loadB(B, adaptor.b(), dLayout, thread, loc, rewriter);
     aOrder = aLayout.getOrder();
     bOrder = bLayout.getOrder();
   }
@@ -4776,150 +4826,165 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
   K = aShape[aOrder[0]];
   M = aShape[aOrder[1]];
   N = bShape[bOrder[0]];
-  mShapePerCTA = shapePerCTA[aOrder[1]];
-  mSizePerThread = sizePerThread[aOrder[1]];
-  nShapePerCTA = shapePerCTA[bOrder[0]];
-  nSizePerThread = sizePerThread[bOrder[0]];
 
-  has = helper.getValueTableFromStruct(llA, K, M, mShapePerCTA, mSizePerThread,
-                                       rewriter, loc);
-  hbs = helper.getValueTableFromStruct(llB, K, N, nShapePerCTA, nSizePerThread,
-                                       rewriter, loc);
+  // has = helper.getValueTableFromStruct(llA, K, M, mShapePerCTA,
+  // mSizePerThread, rewriter, loc);
+  // hbs = helper.getValueTableFromStruct(llB, K, N, nShapePerCTA,
+  // nSizePerThread, rewriter, loc);
+  mShapePerCTA = order[0] == 1 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
+  mSizePerThread =
+      order[0] == 1 ? sizePerThread[order[1]] : sizePerThread[order[0]];
+  nShapePerCTA = order[0] == 0 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
+  nSizePerThread =
+      order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
 
   SmallVector<Value> ret = cc;
-  for (unsigned k = 0; k < K; ++k) {
+  for (unsigned k = 0; k < K; k++) {
     int z = 0;
     for (unsigned m = 0; m < M; m += mShapePerCTA)
       for (unsigned n = 0; n < N; n += nShapePerCTA)
         for (unsigned mm = 0; mm < mSizePerThread; ++mm)
           for (unsigned nn = 0; nn < nSizePerThread; ++nn) {
+            ret[z] = rewriter.create<LLVM::FMulAddOp>(loc, has[{m + mm, k}],
+                                                      hbs[{n + nn, k}], ret[z]);
+            ++z;
+          }
+  }
+#else
 
+  auto aLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto bLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto cLayout = cTensorTy.getEncoding().cast<BlockedEncodingAttr>();
+  auto dLayout = dTensorTy.getEncoding().cast<BlockedEncodingAttr>();
+
+  auto aOrder = aLayout.getOrder();
+  auto bOrder = bLayout.getOrder();
+
+  auto order = dLayout.getOrder();
+
+  bool isARow = aOrder[0] == 1;
+  bool isBRow = bOrder[0] == 1;
+
+  int strideAM = isARow ? aShape[1] : 1;
+  int strideAK = isARow ? 1 : aShape[0];
+  int strideBN = isBRow ? 1 : bShape[0];
+  int strideBK = isBRow ? bShape[1] : 1;
+  int strideA0 = isARow ? strideAK : strideAM;
+  int strideA1 = isARow ? strideAM : strideAK;
+  int strideB0 = isBRow ? strideBN : strideBK;
+  int strideB1 = isBRow ? strideBK : strideBN;
+  int lda = isARow ? strideAM : strideAK;
+  int ldb = isBRow ? strideBK : strideBN;
+  int aPerPhase = aLayout.getPerPhase();
+  int aMaxPhase = aLayout.getMaxPhase();
+  int bPerPhase = bLayout.getPerPhase();
+  int bMaxPhase = bLayout.getMaxPhase();
+  int aNumPtr = 8;
+  int bNumPtr = 8;
+  int NK = aShape[1];
+
+  auto shapePerCTA = getShapePerCTA(dLayout);
+
+  auto sizePerThread = getSizePerThread(dLayout);
+
+  Value _0 = i32_val(0);
+
+  Value mContig = i32_val(sizePerThread[order[1]]);
+  Value nContig = i32_val(sizePerThread[order[0]]);
+
+  // threadId in blocked layout
+  SmallVector<Value> threadIds;
+  {
+    int dim = cShape.size();
+    threadIds.resize(dim);
+    for (unsigned k = 0; k < dim - 1; k++) {
+      Value dimK = i32_val(shapePerCTA[order[k]]);
+      Value rem = urem(threadId, dimK);
+      threadId = udiv(threadId, dimK);
+      threadIds[order[k]] = rem;
+    }
+    Value dimK = i32_val(shapePerCTA[order[dim - 1]]);
+    threadIds[order[dim - 1]] = urem(threadId, dimK);
+  }
+
+  Value threadIdM = threadIds[0];
+  Value threadIdN = threadIds[1];
+
+  Value offA0 = isARow ? _0 : mul(threadIdM, mContig);
+  Value offA1 = isARow ? mul(threadIdM, mContig) : _0;
+  SmallVector<Value> aOff(aNumPtr);
+  for (int i = 0; i < aNumPtr; ++i) {
+    aOff[i] = add(mul(offA0, i32_val(strideA0)), mul(offA1, i32_val(strideA1)));
+  }
+
+  Value offB0 = isBRow ? mul(threadIdN, nContig) : _0;
+  Value offB1 = isBRow ? _0 : mul(threadIdN, nContig);
+  SmallVector<Value> bOff(bNumPtr);
+  for (int i = 0; i < bNumPtr; ++i) {
+    bOff[i] = add(mul(offB0, i32_val(strideB0)), mul(offB1, i32_val(strideB1)));
+  }
+
+  auto aSmem = getSharedMemoryObjectFromStruct(loc, adaptor.a(), rewriter);
+  auto bSmem = getSharedMemoryObjectFromStruct(loc, adaptor.b(), rewriter);
+
+  Type f32PtrTy = ptr_ty(f32_ty);
+  SmallVector<Value> aPtrs(aNumPtr);
+  for (int i = 0; i < aNumPtr; ++i)
+    aPtrs[i] = gep(f32PtrTy, aSmem.base, aOff[i]);
+
+  SmallVector<Value> bPtrs(bNumPtr);
+  for (int i = 0; i < bNumPtr; ++i)
+    bPtrs[i] = gep(f32PtrTy, bSmem.base, bOff[i]);
+
+  ValueTable has, hbs;
+  auto cc = getElementsFromStruct(loc, adaptor.c(), rewriter);
+  SmallVector<Value> ret = cc;
+  // is this compatible with blocked layout?
+
+  int mShapePerCTA =
+      order[0] == 1 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
+  int mSizePerThread =
+      order[0] == 1 ? sizePerThread[order[1]] : sizePerThread[order[0]];
+  int nShapePerCTA =
+      order[0] == 0 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
+  int nSizePerThread =
+      order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
+
+  for (unsigned k = 0; k < NK; k++) {
+    for (unsigned m = 0; m < cShape[order[1]]; m += mShapePerCTA)
+      for (unsigned mm = 0; mm < mSizePerThread; ++mm)
+        if (!has.count({m + mm, k})) {
+          Value pa = gep(f32PtrTy, aPtrs[0],
+                         i32_val((m + mm) * strideAM + k * strideAK));
+          Value va = load(pa);
+          has[{m + mm, k}] = va;
+        }
+  }
+
+  for (unsigned k = 0; k < NK; k++) {
+    for (unsigned n = 0; n < cShape[order[0]]; n += nShapePerCTA)
+      for (unsigned nn = 0; nn < nSizePerThread; ++nn)
+        if (!hbs.count({n + nn, k})) {
+          Value pb = gep(f32PtrTy, bPtrs[0],
+                         i32_val((n + nn) * strideBN + k * strideBK));
+          Value vb = load(pb);
+          hbs[{n + nn, k}] = vb;
+        }
+  }
+
+  for (unsigned k = 0; k < NK; k++) {
+    int z = 0;
+    for (unsigned m = 0; m < cShape[order[1]]; m += mShapePerCTA)
+      for (unsigned n = 0; n < cShape[order[0]]; n += nShapePerCTA)
+        for (unsigned mm = 0; mm < mSizePerThread; ++mm)
+          for (unsigned nn = 0; nn < nSizePerThread; ++nn) {
             ret[z] = rewriter.create<LLVM::FMulAddOp>(loc, has[{m + mm, k}],
                                                       hbs[{n + nn, k}], ret[z]);
             ++z;
           }
   }
 
-  // auto aLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
-  // auto bLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
-  // auto cLayout = cTensorTy.getEncoding().cast<BlockedEncodingAttr>();
-  // auto dLayout = dTensorTy.getEncoding().cast<BlockedEncodingAttr>();
-
-  // auto aOrder = aLayout.getOrder();
-  // auto bOrder = bLayout.getOrder();
-
-  // auto order = dLayout.getOrder();
-
-  // bool isARow = aOrder[0] == 1;
-  // bool isBRow = bOrder[0] == 1;
-
-  // int strideAM = isARow ? aShape[1] : 1;
-  // int strideAK = isARow ? 1 : aShape[0];
-  // int strideBN = isBRow ? 1 : bShape[0];
-  // int strideBK = isBRow ? bShape[1] : 1;
-  // int strideA0 = isARow ? strideAK : strideAM;
-  // int strideA1 = isARow ? strideAM : strideAK;
-  // int strideB0 = isBRow ? strideBN : strideBK;
-  // int strideB1 = isBRow ? strideBK : strideBN;
-  // int lda = isARow ? strideAM : strideAK;
-  // int ldb = isBRow ? strideBK : strideBN;
-  // int aPerPhase = aLayout.getPerPhase();
-  // int aMaxPhase = aLayout.getMaxPhase();
-  // int bPerPhase = bLayout.getPerPhase();
-  // int bMaxPhase = bLayout.getMaxPhase();
-  // int aNumPtr = 8;
-  // int bNumPtr = 8;
-  // int NK = aShape[1];
-
-  // auto shapePerCTA = getShapePerCTA(dLayout);
-
-  // auto sizePerThread = getSizePerThread(dLayout);
-
-  // Value _0 = i32_val(0);
-
-  // Value mContig = i32_val(sizePerThread[order[1]]);
-  // Value nContig = i32_val(sizePerThread[order[0]]);
-
-  // // threadId in blocked layout
-  // SmallVector<Value> threadIds;
-  // {
-  //   int dim = cShape.size();
-  //   threadIds.resize(dim);
-  //   for (unsigned k = 0; k < dim - 1; k++) {
-  //     Value dimK = i32_val(shapePerCTA[order[k]]);
-  //     Value rem = urem(threadId, dimK);
-  //     threadId = udiv(threadId, dimK);
-  //     threadIds[order[k]] = rem;
-  //   }
-  //   Value dimK = i32_val(shapePerCTA[order[dim - 1]]);
-  //   threadIds[order[dim - 1]] = urem(threadId, dimK);
-  // }
-
-  // Value threadIdM = threadIds[0];
-  // Value threadIdN = threadIds[1];
-
-  // Value offA0 = isARow ? _0 : mul(threadIdM, mContig);
-  // Value offA1 = isARow ? mul(threadIdM, mContig) : _0;
-  // SmallVector<Value> aOff(aNumPtr);
-  // for (int i = 0; i < aNumPtr; ++i) {
-  //   aOff[i] = add(mul(offA0, i32_val(strideA0)), mul(offA1,
-  //   i32_val(strideA1)));
-  // }
-
-  // Value offB0 = isBRow ? mul(threadIdN, nContig) : _0;
-  // Value offB1 = isBRow ? _0 : mul(threadIdN, nContig);
-  // SmallVector<Value> bOff(bNumPtr);
-  // for (int i = 0; i < bNumPtr; ++i) {
-  //   bOff[i] = add(mul(offB0, i32_val(strideB0)), mul(offB1,
-  //   i32_val(strideB1)));
-  // }
-
-  // auto aSmem = getSharedMemoryObjectFromStruct(loc, adaptor.a(), rewriter);
-  // auto bSmem = getSharedMemoryObjectFromStruct(loc, adaptor.b(), rewriter);
-
-  // Type f32PtrTy = ptr_ty(f32_ty);
-  // SmallVector<Value> aPtrs(aNumPtr);
-  // for (int i = 0; i < aNumPtr; ++i)
-  //   aPtrs[i] = gep(f32PtrTy, aSmem.base, aOff[i]);
-
-  // SmallVector<Value> bPtrs(bNumPtr);
-  // for (int i = 0; i < bNumPtr; ++i)
-  //   bPtrs[i] = gep(f32PtrTy, bSmem.base, bOff[i]);
-
-  // ValueTable has, hbs;
-  // auto cc = getElementsFromStruct(loc, adaptor.c(), rewriter);
-  // SmallVector<Value> ret = cc;
-  // // is this compatible with blocked layout?
-
-  // for (unsigned k = 0; k < NK; k++) {
-  //   int z = 0;
-  //   for (unsigned i = 0; i < cShape[order[1]]; i += shapePerCTA[order[1]])
-  //     for (unsigned j = 0; j < cShape[order[0]]; j += shapePerCTA[order[0]])
-  //       for (unsigned ii = 0; ii < sizePerThread[order[1]]; ++ii)
-  //         for (unsigned jj = 0; jj < sizePerThread[order[0]]; ++jj) {
-  //           unsigned m = order[0] == 1 ? i : j;
-  //           unsigned n = order[0] == 1 ? j : i;
-  //           unsigned mm = order[0] == 1 ? ii : jj;
-  //           unsigned nn = order[0] == 1 ? jj : ii;
-  //           if (!has.count({m + mm, k})) {
-  //             Value pa = gep(f32PtrTy, aPtrs[0],
-  //                            i32_val((m + mm) * strideAM + k * strideAK));
-  //             Value va = load(pa);
-  //             has[{m + mm, k}] = va;
-  //           }
-  //           if (!hbs.count({n + nn, k})) {
-  //             Value pb = gep(f32PtrTy, bPtrs[0],
-  //                            i32_val((n + nn) * strideBN + k * strideBK));
-  //             Value vb = load(pb);
-  //             hbs[{n + nn, k}] = vb;
-  //           }
-
-  //           ret[z] = rewriter.create<LLVM::FMulAddOp>(loc, has[{m + mm, k}],
-  //                                                     hbs[{n + nn, k}],
-  //                                                     ret[z]);
-  //           ++z;
-  //         }
-  // }
+#endif
 
   auto res = getStructFromElements(
       loc, ret, rewriter,
