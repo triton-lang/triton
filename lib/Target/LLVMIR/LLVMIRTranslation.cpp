@@ -19,6 +19,8 @@
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Constants.h"
 
+#include <iostream>
+
 namespace mlir {
 namespace triton {
 
@@ -35,7 +37,6 @@ void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata) {
   auto *module = func->getParent();
   auto &ctx = func->getContext();
 
-#ifndef USE_ROCM
   if (metadata.maxntidx > 0) {
     auto i32_ty = llvm::IntegerType::get(ctx, 32);
     auto warps =
@@ -48,18 +49,18 @@ void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata) {
     module->getOrInsertNamedMetadata("nvvm.annotations")
         ->addOperand(llvm::MDNode::get(ctx, md_args));
   }
-#endif
 
   if (metadata.is_kernel) {
-#if defined(USE_ROCM)
-    func->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
-#else // defined(USE_ROCM)
+#ifndef USE_ROCM
     llvm::Metadata *md_args[] = {
         llvm::ValueAsMetadata::get(func), llvm::MDString::get(ctx, "kernel"),
         llvm::ValueAsMetadata::get(
             llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx), 1))};
     module->getOrInsertNamedMetadata("nvvm.annotations")
         ->addOperand(llvm::MDNode::get(ctx, md_args));
+#else // AMDGCN
+    func->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
+    func->addFnAttr("amdgpu-flat-work-group-size", "1, 1024");
 #endif
   }
 }
@@ -95,11 +96,8 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
   DialectRegistry registry;
   mlir::registerLLVMDialectTranslation(registry);
 
-#ifdef USE_ROCM
   mlir::registerROCDLDialectTranslation(registry);
-#else
   mlir::registerNVVMDialectTranslation(registry);
-#endif
 
   context->appendDialectRegistry(registry);
 

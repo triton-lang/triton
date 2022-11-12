@@ -213,6 +213,7 @@ target_link_libraries(triton
   TritonGPUTransforms
   TritonLLVMIR
   TritonPTX
+  TritonHSACO
   ${dialect_libs}
   ${conversion_libs}
   # optimizations

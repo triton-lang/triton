@@ -20,6 +20,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 #include "triton/Target/PTX/PTXTranslation.h"
+#include "triton/Target/HSACO/HSACOTranslation.h"
 #include "triton/tools/sys/getenv.hpp"
 
 #include "llvm/IR/LegacyPassManager.h"
@@ -1313,6 +1314,23 @@ void init_triton_translation(py::module &m) {
           py::bytes bytes(cubin);
           return bytes;
         });
+
+ m.def(
+      "translate_llvmir_to_hsaco",
+      [](const std::string llvmIR, std::string cc) -> std::tuple<std::string, std::string> {
+        // create LLVM module from C++
+        llvm::LLVMContext context;
+        std::unique_ptr<llvm::MemoryBuffer> buffer =
+            llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
+        llvm::SMDiagnostic error;
+        std::unique_ptr<llvm::Module> module =
+            llvm::parseIR(buffer->getMemBufferRef(), error, context);
+        // translate module to HSACO
+        auto hsacoCode =
+            triton::translateLLVMIRToHSACO(*module, cc);
+        return hsacoCode;
+      },
+      ret::take_ownership);
 }
 
 void init_triton(py::module &m) {
