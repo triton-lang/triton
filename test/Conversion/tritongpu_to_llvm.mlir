@@ -351,8 +351,14 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     // CHECK-NEXT: llvm.extractvalue
     // CHECK-NEXT: llvm.extractvalue
     // CHECK-NEXT: llvm.extractvalue
+    // CHECK-NEXT: llvm.extractvalue
+    // CHECK-NEXT: llvm.extractvalue
+    // CHECK-NEXT: llvm.extractvalue
+    // CHECK-NEXT: llvm.add
     // CHECK-NEXT: llvm.mlir.constant(0 : i32) : i32
+    // CHECK-NEXT: llvm.add
     // CHECK-NEXT: llvm.mlir.constant(0 : i32) : i32
+    // CHECK-NEXT: llvm.add
     // CHECK-NEXT: llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: llvm.mul
     // CHECK-NEXT: llvm.add
