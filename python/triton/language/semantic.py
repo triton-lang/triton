@@ -7,12 +7,12 @@ from triton._C.libtriton.triton import ir
 
 
 # Create custom exception that prints message "hello"
-class IncompatibleTypeErrorimpl(Exception):
+class IncompatibleTypeErrorImpl(Exception):
     def __init__(self, type_a, type_b):
         self.type_a = type_a
         self.type_b = type_b
         self.message = "invalid operands of type " + self.type_a.__repr__() + " and " + self.type_b.__repr__()
-        super(IncompatibleTypeErrorimpl, self).__init__(self.message)
+        super(IncompatibleTypeErrorImpl, self).__init__(self.message)
 
 
 # ===----------------------------------------------------------------------===##
@@ -88,13 +88,13 @@ def computation_type_impl(a_ty: tl.dtype, b_ty: tl.dtype, div_or_mod: bool) -> t
 def check_ptr_type_impl(type_a: tl.dtype, type_b: tl.dtype, allow_ptr_a: bool) -> None:
     if type_a.is_ptr():
         if not allow_ptr_a:
-            raise IncompatibleTypeErrorimpl(type_a, type_b)
+            raise IncompatibleTypeErrorImpl(type_a, type_b)
         # T* + U* with T != U
         if type_b.is_ptr() and (type_a != type_b):
-            raise IncompatibleTypeErrorimpl(type_a, type_b)
+            raise IncompatibleTypeErrorImpl(type_a, type_b)
         # T* + float
         if type_b.is_floating():
-            raise IncompatibleTypeErrorimpl(type_a, type_b)
+            raise IncompatibleTypeErrorImpl(type_a, type_b)
 
 
 def binary_op_type_checking_impl(lhs: tl.tensor,
@@ -223,7 +223,7 @@ def fdiv(input: tl.tensor,
     input_scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
     if not input_scalar_ty.is_floating() or not other_scalar_ty.is_floating():
-        raise ValueError("both operands of fdiv must have floating poscalar type")
+        raise ValueError("both operands of fdiv must have floating scalar type")
     input, other = binary_op_type_checking_impl(input, other, builder, False, False, False, True)
     ret = builder.create_fdiv(input.handle, other.handle)
     return tl.tensor(ret, input.type)
@@ -262,7 +262,7 @@ def bitwise_op_type_checking_impl(input: tl.tensor,
     input_sca_ty = input.type.scalar
     other_sca_ty = other.type.scalar
     if not input_sca_ty.is_int() or not other_sca_ty.is_int():
-        raise IncompatibleTypeErrorimpl(input_sca_ty, other_sca_ty)
+        raise IncompatibleTypeErrorImpl(input_sca_ty, other_sca_ty)
     ret_sca_ty = integer_promote_impl(input_sca_ty, other_sca_ty)
     if ret_sca_ty != input_sca_ty:
         input = cast(input, ret_sca_ty, builder)
