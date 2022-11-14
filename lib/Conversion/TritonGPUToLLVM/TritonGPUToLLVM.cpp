@@ -4439,23 +4439,34 @@ struct DotOpFMAConversionHelper {
     int K = dotOpLayout.getOpIdx() == 0 ? shape[1] : shape[0];
     int otherDim = dotOpLayout.getOpIdx() == 1 ? shape[1] : shape[0];
 
+    bool isM = dotOpLayout.getOpIdx() == 0;
+    int shapePerCTAMN = getShapePerCTAForMN(blockedLayout, isM);
+    int sizePerThreadMN = getsizePerThreadForMN(blockedLayout, isM);
+    return K * std::max<int>(otherDim / shapePerCTAMN, 1) * sizePerThreadMN;
+  }
+
+  // Get shapePerCTA for M or N axis.
+  static int getShapePerCTAForMN(BlockedEncodingAttr layout, bool isM) {
+    auto order = layout.getOrder();
+    auto shapePerCTA = getShapePerCTA(layout);
+
     int mShapePerCTA =
         order[0] == 1 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
-    int mSizePerThread =
-        order[0] == 1 ? sizePerThread[order[1]] : sizePerThread[order[0]];
     int nShapePerCTA =
         order[0] == 0 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
+    return isM ? mShapePerCTA : nShapePerCTA;
+  }
+
+  // Get sizePerThread for M or N axis.
+  static int getsizePerThreadForMN(BlockedEncodingAttr layout, bool isM) {
+    auto order = layout.getOrder();
+    auto sizePerThread = getSizePerThread(layout);
+
+    int mSizePerThread =
+        order[0] == 1 ? sizePerThread[order[1]] : sizePerThread[order[0]];
     int nSizePerThread =
         order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
-
-    int aElemsPerThread =
-        K * std::max<int>(otherDim / mShapePerCTA, 1) * mSizePerThread;
-    int bElemsPerThread =
-        K * std::max<int>(otherDim / nShapePerCTA, 1) * nSizePerThread;
-
-    int numElemsPerThread =
-        dotOpLayout.getOpIdx() == 0 ? aElemsPerThread : bElemsPerThread;
-    return numElemsPerThread;
+    return isM ? mSizePerThread : nSizePerThread;
   }
 };
 
@@ -5035,14 +5046,11 @@ Value DotOpFMAConversionHelper::loadA(
   int strideA0 = isARow ? strideAK : strideAM;
   int strideA1 = isARow ? strideAM : strideAK;
   int lda = isARow ? strideAM : strideAK;
-  int aPerPhase = aLayout.getPerPhase();
-  int aMaxPhase = aLayout.getMaxPhase();
   int aNumPtr = 8;
   int bNumPtr = 8;
   int NK = aShape[1];
 
   auto shapePerCTA = getShapePerCTA(dLayout);
-
   auto sizePerThread = getSizePerThread(dLayout);
 
   Value _0 = i32_val(0);
@@ -5075,18 +5083,12 @@ Value DotOpFMAConversionHelper::loadA(
   ValueTable has;
   int M = aShape[aOrder[1]];
 
-  int aShapePerCTA =
-      order[0] == 1 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
-  int aSizePerThread =
-      order[0] == 1 ? sizePerThread[order[1]] : sizePerThread[order[0]];
-  int bShapePerCTA =
-      order[0] == 0 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
-  int bSizePerThread =
-      order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
+  int mShapePerCTA = getShapePerCTAForMN(dLayout, true /*isM*/);
+  int mSizePerThread = getsizePerThreadForMN(dLayout, true /*isM*/);
 
   for (unsigned k = 0; k < NK; ++k) {
-    for (unsigned m = 0; m < M; m += aShapePerCTA)
-      for (unsigned mm = 0; mm < aSizePerThread; ++mm)
+    for (unsigned m = 0; m < M; m += mShapePerCTA)
+      for (unsigned mm = 0; mm < mSizePerThread; ++mm)
         if (!has.count({m + mm, k})) {
           Value pa = gep(f32PtrTy, aPtrs[0],
                          i32_val((m + mm) * strideAM + k * strideAK));
@@ -5116,8 +5118,6 @@ Value DotOpFMAConversionHelper::loadB(
   int strideB0 = isBRow ? strideBN : strideBK;
   int strideB1 = isBRow ? strideBK : strideBN;
   int ldb = isBRow ? strideBK : strideBN;
-  int bPerPhase = bLayout.getPerPhase();
-  int bMaxPhase = bLayout.getMaxPhase();
   int bNumPtr = 8;
   int NK = bShape[0];
 
@@ -5152,18 +5152,12 @@ Value DotOpFMAConversionHelper::loadB(
   int N = bShape[bOrder[0]];
   ValueTable hbs;
 
-  int aShapePerCTA =
-      order[0] == 1 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
-  int aSizePerThread =
-      order[0] == 1 ? sizePerThread[order[1]] : sizePerThread[order[0]];
-  int bShapePerCTA =
-      order[0] == 0 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
-  int bSizePerThread =
-      order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
+  int nShapePerCTA = getShapePerCTAForMN(dLayout, false /*isM*/);
+  int nSizePerThread = getsizePerThreadForMN(dLayout, false /*isM*/);
 
   for (unsigned k = 0; k < NK; ++k)
-    for (unsigned n = 0; n < N; n += bShapePerCTA)
-      for (unsigned nn = 0; nn < bSizePerThread; ++nn) {
+    for (unsigned n = 0; n < N; n += nShapePerCTA)
+      for (unsigned nn = 0; nn < nSizePerThread; ++nn) {
         Value pb = gep(f32PtrTy, bPtrs[0],
                        i32_val((n + nn) * strideBN + k * strideBK));
         Value vb = load(pb);
@@ -5258,9 +5252,6 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
     assert(bLayout);
     llA = adaptor.a();
     llB = adaptor.b();
-
-    aOrder = aLayout.getOrder();
-    bOrder = bLayout.getOrder();
   } else if (auto aLayout =
                  aTensorTy.getEncoding()
                      .dyn_cast<SharedEncodingAttr>()) { // load input from smem
@@ -5269,16 +5260,14 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
     Value thread = getThreadId(rewriter, loc);
     llA = helper.loadA(A, adaptor.a(), dLayout, thread, loc, rewriter);
     llB = helper.loadB(B, adaptor.b(), dLayout, thread, loc, rewriter);
-    aOrder = aLayout.getOrder();
-    bOrder = bLayout.getOrder();
   }
 
   auto sizePerThread = getSizePerThread(dLayout);
   auto shapePerCTA = getShapePerCTA(dLayout);
 
-  int K = aShape[aOrder[0]];
-  int M = aShape[aOrder[1]];
-  int N = bShape[bOrder[0]];
+  int K = aShape[1];
+  int M = aShape[0];
+  int N = bShape[1];
 
   mShapePerCTA = order[0] == 1 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
   mSizePerThread =
