@@ -5084,11 +5084,6 @@ Value DotOpFMAConversionHelper::loadA(
   int bSizePerThread =
       order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
 
-  printf("LoadA, NK:%d\n", NK);
-  printf("LoadA, M:%d\n", M);
-  printf("LoadA, shapePerCTA:%d\n", aShapePerCTA);
-  printf("LoadA, sizePerThread:%d\n", aSizePerThread);
-
   for (unsigned k = 0; k < NK; ++k) {
     for (unsigned m = 0; m < M; m += aShapePerCTA)
       for (unsigned mm = 0; mm < aSizePerThread; ++mm)
@@ -5165,10 +5160,6 @@ Value DotOpFMAConversionHelper::loadB(
       order[0] == 0 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
   int bSizePerThread =
       order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
-
-  printf("LoadB, NK:%d\n", NK);
-  printf("LoadB, N:%d\n", N);
-  printf("LoadB, shapePerCTA:%d\n", bShapePerCTA);
 
   for (unsigned k = 0; k < NK; ++k)
     for (unsigned n = 0; n < N; n += bShapePerCTA)
