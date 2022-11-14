@@ -48,7 +48,8 @@ mlir::LogicalResult mlir::OpTrait::impl::verifyTensorSize(Operation *op) {
                << " has more than that";
       if ((numElements & (numElements - 1)) != 0)
         return op->emitError("Number of elements must be power-of-two, but ")
-               << *op << " doesn't follow the rule";
+               << *op << " doesn't follow the rule (" << numElements << ")"
+               << " elements";
     }
   }
   for (auto opType : op->getResultTypes()) {
@@ -62,7 +63,8 @@ mlir::LogicalResult mlir::OpTrait::impl::verifyTensorSize(Operation *op) {
                << " has more than that";
       if ((numElements & (numElements - 1)) != 0)
         return op->emitError("Number of elements must be power-of-two, but ")
-               << *op << " doesn't follow the rule";
+               << *op << " doesn't follow the rule (" << numElements << ")"
+               << " elements";
     }
   }
   return success();

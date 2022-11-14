@@ -25,6 +25,10 @@ namespace gpu {
 
 unsigned getElemsPerThread(Type type);
 
+SmallVector<unsigned> getThreadsPerWarp(Attribute layout);
+
+SmallVector<unsigned> getWarpsPerCTA(Attribute layout);
+
 SmallVector<unsigned> getSizePerThread(Attribute layout);
 
 SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout);

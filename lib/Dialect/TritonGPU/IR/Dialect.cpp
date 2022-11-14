@@ -42,13 +42,11 @@ static Type getPointeeType(Type type) {
 
 namespace gpu {
 
-// TODO: Inheritation of layout attributes
-unsigned getElemsPerThread(Type type) {
-  if (type.isIntOrIndexOrFloat() || type.isa<triton::PointerType>())
-    return 1;
-  auto tensorType = type.cast<RankedTensorType>();
-  auto layout = tensorType.getEncoding();
-  auto shape = tensorType.getShape();
+// TODO: Inheritance of layout attributes
+// so that all distributed layouts implement
+// these utilities
+
+unsigned getElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return blockedLayout.getElemsPerThread(shape);
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
@@ -57,10 +55,49 @@ unsigned getElemsPerThread(Type type) {
     return mmaLayout.getElemsPerThread(shape);
   } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
     return sharedLayout.getElemsPerThread(shape);
+  } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
+    return dotLayout.getElemsPerThread(shape);
   } else {
     assert(0 && "getElemsPerThread not implemented");
     return 0;
   }
+}
+
+unsigned getElemsPerThread(Type type) {
+  if (type.isIntOrIndexOrFloat() ||
+      type.isa<triton::Float8Type>() ||
+      type.isa<triton::PointerType>())
+    return 1;
+  auto tensorType = type.cast<RankedTensorType>();
+  return getElemsPerThread(tensorType.getEncoding(), tensorType.getShape());
+}
+
+SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
+  if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
+    return SmallVector<unsigned>(blockedLayout.getThreadsPerWarp().begin(),
+                                 blockedLayout.getThreadsPerWarp().end());
+  }
+  if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+    if (mmaLayout.getVersion() == 1)
+      return SmallVector<unsigned>{4, 8};
+    if (mmaLayout.getVersion() == 2)
+      return SmallVector<unsigned>{8, 4};
+  }
+  assert(0 && "getThreadsPerWarp not implemented");
+  return {};
+}
+
+SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
+  if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
+    return SmallVector<unsigned>(blockedLayout.getWarpsPerCTA().begin(),
+                                 blockedLayout.getWarpsPerCTA().end());
+  }
+  if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+    return SmallVector<unsigned>(mmaLayout.getWarpsPerCTA().begin(),
+                                 mmaLayout.getWarpsPerCTA().end());
+  }
+  assert(0 && "getWarpsPerCTA not implemented");
+  return {};
 }
 
 SmallVector<unsigned> getSizePerThread(Attribute layout) {
@@ -73,6 +110,27 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
     assert(mmaLayout.getVersion() == 2 &&
            "mmaLayout version = 1 is not implemented yet");
     return SmallVector<unsigned>{2, 2};
+  } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
+    auto parentLayout = dotLayout.getParent();
+    assert(parentLayout && "DotOperandEncodingAttr must have a parent");
+    if (auto parentMmaLayout = parentLayout.dyn_cast<MmaEncodingAttr>()) {
+      assert(parentMmaLayout.getVersion() == 2 &&
+             "mmaLayout version = 1 is not implemented yet");
+      auto parentShapePerCTA = getShapePerCTA(parentLayout);
+      auto opIdx = dotLayout.getOpIdx();
+      if (opIdx == 0) {
+        return {2, 4};
+      } else if (opIdx == 1) {
+        return {4, 1};
+      } else {
+        assert(0 && "DotOperandEncodingAttr opIdx must be 0 or 1");
+        return {};
+      }
+    } else {
+      assert(0 && "DotOperandEncodingAttr non-MmaEncodingAttr parent not "
+                  "supported yet");
+      return {};
+    }
   } else {
     assert(0 && "getSizePerThread not implemented");
     return {};
@@ -104,17 +162,11 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     unsigned dim = sliceLayout.getDim();
     auto parent = sliceLayout.getParent();
-    if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
-      for (unsigned d = 0, n = blockedParent.getOrder().size(); d < n; ++d) {
-        if (d == dim)
-          continue;
-        shape.push_back(blockedParent.getSizePerThread()[d] *
-                        blockedParent.getThreadsPerWarp()[d] *
-                        blockedParent.getWarpsPerCTA()[d]);
-      }
-    } else {
-      assert(0 && "SliceEncodingAttr with parent other than "
-                  "BlockedEncodingAttr not implemented");
+    for (unsigned d = 0, n = getOrder(parent).size(); d < n; ++d) {
+      if (d == dim)
+        continue;
+      shape.push_back(getSizePerThread(parent)[d] *
+                      getThreadsPerWarp(parent)[d] * getWarpsPerCTA(parent)[d]);
     }
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     if (mmaLayout.getVersion() == 2)
@@ -124,6 +176,25 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
       return {16 * mmaLayout.getWarpsPerCTA()[0],
               16 * mmaLayout.getWarpsPerCTA()[1]};
     assert(0 && "Unexpected MMA layout version found");
+  } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
+    auto parentLayout = dotLayout.getParent();
+    assert(parentLayout && "DotOperandEncodingAttr must have a parent");
+    if (auto parentMmaLayout = parentLayout.dyn_cast<MmaEncodingAttr>()) {
+      assert(parentMmaLayout.getVersion() == 2 &&
+             "mmaLayout version = 1 is not implemented yet");
+      auto parentShapePerCTA = getShapePerCTA(parentLayout);
+      auto opIdx = dotLayout.getOpIdx();
+      if (opIdx == 0) {
+        return {parentShapePerCTA[0], 16};
+      } else if (opIdx == 1) {
+        return {16, parentShapePerCTA[1]};
+      } else {
+        assert(0 && "DotOperandEncodingAttr opIdx must be 0 or 1");
+      }
+    } else {
+      assert(0 && "DotOperandEncodingAttr non-MmaEncodingAttr parent not "
+                  "supported yet");
+    }
   } else {
     assert(0 && "Unimplemented usage of getShapePerCTA");
   }
@@ -135,6 +206,8 @@ SmallVector<unsigned> getOrder(const Attribute &layout) {
     return SmallVector<unsigned>(blockedLayout.getOrder().begin(),
                                  blockedLayout.getOrder().end());
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+    return SmallVector<unsigned>{1, 0};
+  } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
     return SmallVector<unsigned>{1, 0};
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     SmallVector<unsigned> parentOrder = getOrder(sliceLayout.getParent());
@@ -243,11 +316,11 @@ unsigned BlockedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   return product<unsigned>(elemsPerThread);
 }
 
-SmallVector<int64_t>
-SliceEncodingAttr::paddedShape(ArrayRef<int64_t> shape) const {
+template <class T>
+SmallVector<T> SliceEncodingAttr::paddedShape(ArrayRef<T> shape) const {
   size_t rank = shape.size();
   unsigned dim = getDim();
-  SmallVector<int64_t> retShape(rank + 1);
+  SmallVector<T> retShape(rank + 1);
   for (unsigned d = 0; d < rank + 1; ++d) {
     if (d < dim)
       retShape[d] = shape[d];
@@ -258,18 +331,15 @@ SliceEncodingAttr::paddedShape(ArrayRef<int64_t> shape) const {
   }
   return retShape;
 }
+template SmallVector<unsigned>
+SliceEncodingAttr::paddedShape<unsigned>(ArrayRef<unsigned> shape) const;
+template SmallVector<int64_t>
+SliceEncodingAttr::paddedShape<int64_t>(ArrayRef<int64_t> shape) const;
 
 unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   size_t rank = shape.size();
   auto parent = getParent();
-  if (auto blockedParent = parent.dyn_cast<BlockedEncodingAttr>()) {
-    assert(rank == blockedParent.getSizePerThread().size() - 1 &&
-           "unexpected rank in SliceEncodingAttr::getElemsPerThread");
-    return blockedParent.getElemsPerThread(paddedShape(shape));
-  } else {
-    assert(0 && "getElemsPerThread not implemented");
-    return 0;
-  }
+  return ::getElemsPerThread(parent, paddedShape(shape));
 }
 
 unsigned MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
@@ -297,6 +367,12 @@ unsigned MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
 unsigned SharedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   // TODO:
   assert(0 && "SharedEncodingAttr::getElemsPerThread not implemented");
+  return 0;
+}
+
+unsigned
+DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
+  assert(0 && "DotOPerandEncodingAttr::getElemsPerThread not implemented");
   return 0;
 }
 
@@ -472,6 +548,30 @@ void SharedEncodingAttr::print(AsmPrinter &printer) const {
 }
 
 //===----------------------------------------------------------------------===//
+// DotOperand Encoding
+//===----------------------------------------------------------------------===//
+Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
+  if (parser.parseLess().failed())
+    return {};
+  NamedAttrList attrs;
+  if (parser.parseOptionalAttrDict(attrs).failed())
+    return {};
+  if (parser.parseGreater().failed())
+    return {};
+  unsigned opIdx = attrs.get("opIdx").cast<IntegerAttr>().getInt();
+  Attribute parent = attrs.get("parent");
+
+  return parser.getChecked<DotOperandEncodingAttr>(parser.getContext(), opIdx,
+                                                   parent);
+}
+
+void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
+  printer << "<{"
+          << "opIdx = " << getOpIdx() << ", "
+          << "parent = " << getParent() << "}>";
+}
+
+//===----------------------------------------------------------------------===//
 // InsertSliceAsyncOp
 //===----------------------------------------------------------------------===//
 
@@ -531,30 +631,6 @@ void printInsertSliceAsyncOp(OpAsmPrinter &printer,
 }
 
 //===----------------------------------------------------------------------===//
-// DotOperand Encoding
-//===----------------------------------------------------------------------===//
-Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
-  if (parser.parseLess().failed())
-    return {};
-  NamedAttrList attrs;
-  if (parser.parseOptionalAttrDict(attrs).failed())
-    return {};
-  if (parser.parseGreater().failed())
-    return {};
-  unsigned opIdx = attrs.get("opIdx").cast<IntegerAttr>().getInt();
-  Attribute parent = attrs.get("parent");
-
-  return parser.getChecked<DotOperandEncodingAttr>(parser.getContext(), opIdx,
-                                                   parent);
-}
-
-void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
-  printer << "<{"
-          << "opIdx = " << getOpIdx() << ", "
-          << "parent = " << getParent() << "}>";
-}
-
-//===----------------------------------------------------------------------===//
 // ASM Interface (i.e.: alias)
 //===----------------------------------------------------------------------===//
 
@@ -594,19 +670,30 @@ struct TritonGPUInferLayoutInterface
 
   LogicalResult
   inferExpandDimsOpEncoding(Attribute operandEncoding, unsigned axis,
-                            Attribute &resultEncoding) const override {
+                            Attribute &resultEncoding,
+                            Optional<Location> location) const override {
     auto sliceEncoding = operandEncoding.dyn_cast<SliceEncodingAttr>();
-    if (!sliceEncoding) {
-      llvm::report_fatal_error(
-          "ExpandDimsOp operand encoding must be SliceEncodingAttr");
-      return failure();
-    }
-    if (sliceEncoding.getDim() != axis) {
-      llvm::report_fatal_error(
-          "Incompatible slice dimension for ExpandDimsOp operand");
-      return failure();
-    }
+    if (!sliceEncoding)
+      return emitOptionalError(
+          location, "ExpandDimsOp operand encoding must be SliceEncodingAttr");
+    if (sliceEncoding.getDim() != axis)
+      return emitOptionalError(
+          location, "Incompatible slice dimension for ExpandDimsOp operand");
     resultEncoding = sliceEncoding.getParent();
+    return success();
+  }
+
+  LogicalResult inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
+                                   Attribute retEncoding,
+                                   Optional<Location> location) const override {
+    if (auto dotOpEnc = operandEncoding.dyn_cast<DotOperandEncodingAttr>()) {
+      if (opIdx != dotOpEnc.getOpIdx())
+        return emitOptionalError(location, "Wrong opIdx");
+      if (retEncoding != dotOpEnc.getParent())
+        return emitOptionalError(location, "Incompatible parent encoding");
+    } else
+      return emitOptionalError(
+          location, "Dot's a/b's encoding should be of DotOperandEncodingAttr");
     return success();
   }
 };
