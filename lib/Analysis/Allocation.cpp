@@ -235,7 +235,7 @@ private:
     }
   }
 
-  /// Extends the liveness range by unioning the liveness range of the aliased
+  /// Extends the liveness range by unionizing the liveness range of the aliased
   /// values because each allocated buffer could be an alias of others, if block
   /// arguments are involved.
   void resolveAliasBufferLiveness(

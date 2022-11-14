@@ -372,7 +372,7 @@ unsigned SharedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
 
 unsigned
 DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
-  assert(0 && "DotOPerandEncodingAttr::getElemsPerThread not implemented");
+  assert(0 && "DotOperandEncodingAttr::getElemsPerThread not implemented");
   return 0;
 }
 

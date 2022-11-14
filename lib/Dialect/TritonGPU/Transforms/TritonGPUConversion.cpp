@@ -35,7 +35,7 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
   });
 
   //
-  // materailizations
+  // Materializations
   //
   // This will be called when (newArgType != origArgType)
   // This will create newArg, and map(origArg, newArg)

@@ -768,7 +768,7 @@ def dot(input, other, allow_tf32=True, trans_a=False, trans_b=False, _builder=No
     """
     Returns the matrix product of two blocks.
 
-    The two blocks must be two dimensionals and have compatible inner dimensions.
+    The two blocks must be two-dimensional and have compatible inner dimensions.
 
     :param input: The first tensor to be multiplied.
     :type input: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
@@ -1172,7 +1172,7 @@ def ravel(x):
 @triton.jit
 def swizzle2d(i, j, size_i, size_j, size_g):
     """
-    transformes indices of a row-major size_i*size_j matrix into those
+    Transforms indices of a row-major size_i*size_j matrix into those
     of one where indices are row major for each group of size_j rows.
     For example, for size_i = size_j = 4 and size_g = 2, it will transform
     [[0 , 1 , 2 , 3 ],

@@ -24,7 +24,7 @@ struct CanonicalizePass
     // The following piece of code is a workaround to
     // very crudely remove dead code, by making an iteration
     // argument yield itself if it is not used to create
-    // side-effects anywhere.
+    // side effects anywhere.
     getOperation()->walk([&](scf::ForOp forOp) -> void {
       for (size_t i = 0; i < forOp.getNumResults(); ++i) {
         // condition 1: no other iter arguments depend on it
