@@ -45,7 +45,7 @@ PTXBuilder::Operand *PTXBuilder::newConstantOperand(const std::string &v) {
   return argArchive.back().get();
 }
 
-PTXBuilder::Operand *PTXBuilder::newConstantOperand(int v) {
+PTXBuilder::Operand *PTXBuilder::newConstantOperand(int64_t v) {
   std::stringstream ss;
   ss << "0x" << std::hex << v;
   return newConstantOperand(ss.str());
@@ -130,8 +130,18 @@ std::string PTXBuilder::dump() const {
 
 PTXInstrExecution &PTXInstrCommon::call(ArrayRef<Operand *> oprs,
                                         bool onlyAttachMLIRArgs) {
+  if (onlyAttachMLIRArgs) {
+    // Nearly impossible to make the $0,$1 in two PTX code snippets to point to
+    // the same MLIR values in onlyAttachMLIRArgs mode.
+    assert(builder->executions.empty() &&
+           "builder can only hold a single execution when onlyAttachMIIRArgs "
+           "is true.");
+    builder->reorderArgArchive(oprs);
+  }
+
   builder->executions.emplace_back(
       std::make_unique<PTXInstrExecution>(this, oprs, onlyAttachMLIRArgs));
+
   return *builder->executions.back();
 }
 

@@ -172,7 +172,7 @@ void init_triton_ir(py::module &&m) {
              if (mlir::Operation *definingOp = self.getDefiningOp())
                definingOp->setAttr(name, attr);
              else {
-               /* issue an warning */
+               /* issue a warning */
              }
            })
       .def("replace_all_uses_with",
@@ -180,7 +180,7 @@ void init_triton_ir(py::module &&m) {
              self.replaceAllUsesWith(newValue);
            });
 
-  py::class_<mlir::BlockArgument, mlir::Value>(m, "block_arguement");
+  py::class_<mlir::BlockArgument, mlir::Value>(m, "block_argument");
 
   py::class_<mlir::Region>(m, "region")
       .def("get_parent_region", &mlir::Region::getParentRegion, ret::reference)
@@ -288,7 +288,7 @@ void init_triton_ir(py::module &&m) {
   py::class_<mlir::scf::WhileOp, mlir::OpState>(m, "WhileOp")
       .def("get_before", &mlir::scf::WhileOp::getBefore, ret::reference)
       .def("get_after", &mlir::scf::WhileOp::getAfter, ret::reference);
-  py::class_<mlir::scf::ConditionOp, mlir::OpState>(m, "CondtionOp");
+  py::class_<mlir::scf::ConditionOp, mlir::OpState>(m, "ConditionOp");
 
   // dynamic_attr is used to transfer ownership of the MLIR context to the
   // module
@@ -423,7 +423,7 @@ void init_triton_ir(py::module &&m) {
       .def("get_bool_attr", &mlir::OpBuilder::getBoolAttr)
       .def("get_int32_attr", &mlir::OpBuilder::getI32IntegerAttr)
       // Use arith.ConstantOp to create constants
-      // // Constants
+      // Constants
       .def("get_int1",
            [](mlir::OpBuilder &self, bool v) -> mlir::Value {
              auto loc = self.getUnknownLoc();
@@ -492,10 +492,6 @@ void init_triton_ir(py::module &&m) {
       .def("get_fp8_ty",
            [](mlir::OpBuilder &self) -> mlir::Type {
              return self.getType<mlir::triton::Float8Type>();
-           })
-      .def("get_bf8_ty",
-           [](mlir::OpBuilder &self) -> mlir::Type {
-             return self.getType<mlir::triton::BFloat8Type>();
            })
       .def(
           "get_half_ty",
@@ -592,14 +588,14 @@ void init_triton_ir(py::module &&m) {
              auto loc = self.getUnknownLoc();
              return self.create<mlir::scf::WhileOp>(loc, retTypes, initArgs);
            })
-      .def("create_condtion_op",
+      .def("create_condition_op",
            [](mlir::OpBuilder &self, mlir::Value &cond,
               std::vector<mlir::Value> &args) -> mlir::scf::ConditionOp {
              auto loc = self.getUnknownLoc();
              return self.create<mlir::scf::ConditionOp>(loc, cond, args);
            })
 
-      // miscellious
+      // miscellaneous
       .def("create_make_range",
            [](mlir::OpBuilder &self, int start, int end) -> mlir::Value {
              auto loc = self.getUnknownLoc();
@@ -616,14 +612,20 @@ void init_triton_ir(py::module &&m) {
            })
 
       // Cast instructions
+      // Conversions for custom FP types (FP8)
+      .def("create_fp_to_fp",
+           [](mlir::OpBuilder &self, mlir::Value &src,
+              mlir::Type &dstType) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::triton::FpToFpOp>(loc, dstType, src);
+           })
+      // Conversions for standard LLVM builtin types
       .def("create_bitcast",
            [](mlir::OpBuilder &self, mlir::Value &src,
               mlir::Type &dstType) -> mlir::Value {
              auto loc = self.getUnknownLoc();
              return self.create<mlir::triton::BitcastOp>(loc, dstType, src);
            })
-      // .def("create_cast", &ir::builder::create_cast)
-      // .def("create_ptr_to_int", &ir::builder::create_ptr_to_int)
       .def("create_si_to_fp",
            [](mlir::OpBuilder &self, mlir::Value &src,
               mlir::Type &dstType) -> mlir::Value {
@@ -697,7 +699,6 @@ void init_triton_ir(py::module &&m) {
              return self.create<mlir::arith::IndexCastOp>(loc, input,
                                                           self.getI32Type());
            })
-
       .def("create_fmul",
            [](mlir::OpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
@@ -975,15 +976,15 @@ void init_triton_ir(py::module &&m) {
              auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::OrIOp>(loc, lhs, rhs);
            })
-      // // Input/Output
+      // Input/Output
       .def("create_load",
            [](mlir::OpBuilder &self, mlir::Value &ptrs,
-              mlir::triton::CacheModifier cacheModifer,
+              mlir::triton::CacheModifier cacheModifier,
               mlir::triton::EvictionPolicy evictionPolicy,
               bool isVolatile) -> mlir::Value {
              auto loc = self.getUnknownLoc();
              return self.create<mlir::triton::LoadOp>(
-                 loc, ptrs, cacheModifer, evictionPolicy, isVolatile);
+                 loc, ptrs, cacheModifier, evictionPolicy, isVolatile);
            })
       .def("create_store",
            [](mlir::OpBuilder &self, mlir::Value &ptrs,
@@ -1262,10 +1263,6 @@ void init_triton_ir(py::module &&m) {
       .def("add_triton_gpu_combine_pass",
            [](mlir::PassManager &self) {
              self.addPass(mlir::createTritonGPUCombineOpsPass());
-           })
-      .def("add_triton_gpu_swizzle_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::createTritonGPUSwizzlePass());
            })
       .def("add_triton_gpu_to_llvm",
            [](mlir::PassManager &self) {
