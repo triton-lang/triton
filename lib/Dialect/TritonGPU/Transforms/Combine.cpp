@@ -78,8 +78,6 @@ public:
     if (!llvm::isa<triton::gpu::ConvertLayoutOp>(op))
       return mlir::failure();
     auto convert = llvm::cast<triton::gpu::ConvertLayoutOp>(op);
-    auto srcType = convert.getOperand().getType().cast<RankedTensorType>();
-    auto dstType = convert.getType().cast<RankedTensorType>();
     // we don't handle conversions to DotOperandEncodingAttr
     // this is a heuristics to accomodate fused attention
     // if (dstType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
@@ -96,6 +94,9 @@ public:
     // cvt(alloc_tensor(x), type2) -> alloc_tensor(x, type2)
     auto alloc_tensor = dyn_cast<triton::gpu::AllocTensorOp>(arg);
     if (alloc_tensor) {
+      if (!isSharedEncoding(op->getResult(0))) {
+        return mlir::failure();
+      }
       rewriter.replaceOpWithNewOp<triton::gpu::AllocTensorOp>(
           op, op->getResult(0).getType());
       return mlir::success();
@@ -103,6 +104,9 @@ public:
     // cvt(insert_slice(x), type2) -> insert_slice(cvt(x, type2))
     auto insert_slice = dyn_cast<triton::gpu::InsertSliceAsyncOp>(arg);
     if (insert_slice) {
+      if (!isSharedEncoding(op->getResult(0))) {
+        return mlir::failure();
+      }
       auto newType = op->getResult(0).getType().cast<RankedTensorType>();
       // Ensure that the new insert_slice op is placed in the same place as the
       // old insert_slice op. Otherwise, the new insert_slice op may be placed
@@ -121,6 +125,9 @@ public:
     // cvt(extract_slice(x), type2) -> extract_slice(cvt(x, type2))
     auto extract_slice = dyn_cast<tensor::ExtractSliceOp>(arg);
     if (extract_slice) {
+      if (!isSharedEncoding(op->getResult(0))) {
+        return mlir::failure();
+      }
       auto origType = extract_slice.source().getType().cast<RankedTensorType>();
       auto newType = RankedTensorType::get(
           origType.getShape(), origType.getElementType(),
@@ -144,16 +151,15 @@ public:
       return mlir::success();
     }
 
-    // cvt(type2, x)
+    // cvt(cvt(x, type1), type2) -> cvt(x, type2)
     if (llvm::isa<triton::gpu::ConvertLayoutOp>(arg)) {
-      auto argType = arg->getOperand(0).getType().cast<RankedTensorType>();
       if (arg->getOperand(0).getDefiningOp() &&
-          !argType.getEncoding().isa<triton::gpu::SharedEncodingAttr>() &&
-          srcType.getEncoding().isa<triton::gpu::SharedEncodingAttr>() &&
-          !dstType.getEncoding().isa<triton::gpu::SharedEncodingAttr>()) {
-
+          !isSharedEncoding(arg->getOperand(0)) &&
+          isSharedEncoding(convert.getOperand()) &&
+          !isSharedEncoding(convert.getResult())) {
         return mlir::failure();
       }
+      auto srcType = convert.getOperand().getType().cast<RankedTensorType>();
       auto srcShared =
           srcType.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
       if (srcShared && srcShared.getVec() > 1)
