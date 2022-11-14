@@ -4426,6 +4426,37 @@ struct DotOpFMAConversionHelper {
     Type structTy = struct_ty(elemTypes);
     return getStructFromElements(loc, elems, rewriter, structTy);
   }
+  // get number of elements per thread for $a or $b.
+  static int getNumElemsPerThread(ArrayRef<int64_t> shape,
+                                  DotOperandEncodingAttr dotOpLayout) {
+    auto blockedLayout = dotOpLayout.getParent().cast<BlockedEncodingAttr>();
+    auto shapePerCTA = getShapePerCTA(blockedLayout);
+    auto sizePerThread = getSizePerThread(blockedLayout);
+    auto order = blockedLayout.getOrder();
+
+    // TODO[Superjomn]: we assume the k aixs is fixed for $a and $b here, fix it
+    // if not.
+    int K = dotOpLayout.getOpIdx() == 0 ? shape[1] : shape[0];
+    int otherDim = dotOpLayout.getOpIdx() == 1 ? shape[1] : shape[0];
+
+    int mShapePerCTA =
+        order[0] == 1 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
+    int mSizePerThread =
+        order[0] == 1 ? sizePerThread[order[1]] : sizePerThread[order[0]];
+    int nShapePerCTA =
+        order[0] == 0 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
+    int nSizePerThread =
+        order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
+
+    int aElemsPerThread =
+        K * std::max<int>(otherDim / mShapePerCTA, 1) * mSizePerThread;
+    int bElemsPerThread =
+        K * std::max<int>(otherDim / nShapePerCTA, 1) * nSizePerThread;
+
+    int numElemsPerThread =
+        dotOpLayout.getOpIdx() == 0 ? aElemsPerThread : bElemsPerThread;
+    return numElemsPerThread;
+  }
 };
 
 Value ConvertLayoutOpConversion::lowerSharedToDotOperandMMA(
@@ -4436,30 +4467,16 @@ Value ConvertLayoutOpConversion::lowerSharedToDotOperandMMA(
   Value src = op.src();
   Value dst = op.result();
   auto dstTensorTy = dst.getType().cast<RankedTensorType>();
-  // TODO[Superjomn]: the allowTF32 is not available in ConvertLayoutOp for it
-  // is an attribute of DotOp.
+  // TODO[Superjomn]: allowTF32 is not accessible here for it is an attribute of
+  // an Op instance.
   bool allowTF32 = false;
-  bool isFMADot = dstTensorTy.getElementType().isF32() && !allowTF32;
   bool isHMMA = DotOpConversion::isDotHMMA(dstTensorTy, allowTF32,
                                            mmaLayout.getVersion());
 
   auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.src(), rewriter);
   Value res;
 
-  if (isFMADot) {
-    auto dotOpLayout = dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-    auto blockedLayout = dotOpLayout.getParent().cast<BlockedEncodingAttr>();
-    DotOpFMAConversionHelper helper(blockedLayout);
-    auto thread = getThreadId(rewriter, loc);
-    if (dotOpLayout.getOpIdx() == 0) { // $a
-      res = helper.loadA(src, adaptor.src(), blockedLayout, thread, loc,
-                         rewriter);
-    } else { // $b
-      res = helper.loadB(src, adaptor.src(), blockedLayout, thread, loc,
-                         rewriter);
-    }
-  } else if (!isOuter && mmaLayout.getVersion() == 2 &&
-             isHMMA) { // tensor core v2
+  if (!isOuter && mmaLayout.getVersion() == 2 && isHMMA) { // tensor core v2
     MMA16816ConversionHelper mmaHelper(mmaLayout, getThreadId(rewriter, loc),
                                        rewriter, getTypeConverter(),
                                        op.getLoc());
@@ -4517,7 +4534,25 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
   } else if (auto blockedLayout =
                  dotOperandLayout.getParent()
                      .dyn_cast_or_null<BlockedEncodingAttr>()) {
-    assert(false && "Blocked layout is not supported yet");
+    // TODO[Superjomn]: the allowTF32 is not available in ConvertLayoutOp for it
+    // is an attribute of DotOp.
+    bool allowTF32 = false;
+    bool isFMADot = dstTensorTy.getElementType().isF32() && !allowTF32;
+    if (isFMADot) {
+      auto dotOpLayout =
+          dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+      auto blockedLayout = dotOpLayout.getParent().cast<BlockedEncodingAttr>();
+      DotOpFMAConversionHelper helper(blockedLayout);
+      auto thread = getThreadId(rewriter, loc);
+      if (dotOpLayout.getOpIdx() == 0) { // $a
+        res = helper.loadA(src, adaptor.src(), blockedLayout, thread, loc,
+                           rewriter);
+      } else { // $b
+        res = helper.loadB(src, adaptor.src(), blockedLayout, thread, loc,
+                           rewriter);
+      }
+    } else
+      assert(false && "Unsupported dot operand layout found");
   } else {
     assert(false && "Unsupported dot operand layout found");
   }
@@ -5054,7 +5089,7 @@ Value DotOpFMAConversionHelper::loadA(
   printf("LoadA, shapePerCTA:%d\n", aShapePerCTA);
   printf("LoadA, sizePerThread:%d\n", aSizePerThread);
 
-  for (unsigned k = 0; k < NK; k++) {
+  for (unsigned k = 0; k < NK; ++k) {
     for (unsigned m = 0; m < M; m += aShapePerCTA)
       for (unsigned mm = 0; mm < aSizePerThread; ++mm)
         if (!has.count({m + mm, k})) {
@@ -5156,7 +5191,7 @@ DotOpFMAConversionHelper::getValueTableFromStruct(
       loc, val, rewriter);
   int id = 0;
   std::set<std::pair<int, int>> keys; // ordered
-  for (unsigned k = 0; k < K; k++) {
+  for (unsigned k = 0; k < K; ++k) {
     for (unsigned m = 0; m < n0; m += shapePerCTA)
       for (unsigned mm = 0; mm < sizePerThread; ++mm) {
         keys.insert({m + mm, k});
@@ -5359,10 +5394,9 @@ public:
     bool isFMADot = type.getElementType().isF32() && !allowTF32 &&
                     layout.dyn_cast_or_null<DotOperandEncodingAttr>();
 
-    if (layout && (layout.isa<BlockedEncodingAttr>() ||
-                   layout.isa<SliceEncodingAttr>() ||
-                   layout.isa<MmaEncodingAttr>()) ||
-        isFMADot) {
+    if (layout &&
+        (layout.isa<BlockedEncodingAttr>() || layout.isa<SliceEncodingAttr>() ||
+         layout.isa<MmaEncodingAttr>())) {
       unsigned numElementsPerThread = getElemsPerThread(type);
       SmallVector<Type, 4> types(numElementsPerThread,
                                  convertType(type.getElementType()));
@@ -5382,24 +5416,37 @@ public:
       return LLVM::LLVMStructType::getLiteral(ctx, types);
     } else if (auto dotOpLayout =
                    layout.dyn_cast_or_null<DotOperandEncodingAttr>()) {
-      if (!isFMADot) {
+      if (isFMADot) { // for parent is blocked layout
+        int numElemsPerThread =
+            DotOpFMAConversionHelper::getNumElemsPerThread(shape, dotOpLayout);
+
+        return LLVM::LLVMStructType::getLiteral(
+            ctx, SmallVector<Type>(numElemsPerThread, type::f32Ty(ctx)));
+
+      } else { // for parent is MMA layout
         auto mmaLayout = dotOpLayout.getParent().cast<MmaEncodingAttr>();
         auto wpt = mmaLayout.getWarpsPerCTA();
-        Type elemTy = type.getElementType();
+        Type elemTy = convertType(type.getElementType());
+        auto vecSize = 1;
+        if (elemTy.getIntOrFloatBitWidth() == 16) {
+          vecSize = 2;
+        } else if (elemTy.getIntOrFloatBitWidth() == 8) {
+          vecSize = 4;
+        } else {
+          assert(false && "Unsupported element type");
+        }
+        Type vecTy = vec_ty(elemTy, vecSize);
         if (mmaLayout.getVersion() == 2) {
-
           if (dotOpLayout.getOpIdx() == 0) { // $a
             int elems =
                 MMA16816ConversionHelper::getANumElemsPerThread(type, wpt);
-            Type x2Ty = vec_ty(elemTy, 2);
             return LLVM::LLVMStructType::getLiteral(
-                ctx, SmallVector<Type>(elems, x2Ty));
+                ctx, SmallVector<Type>(elems, vecTy));
           }
           if (dotOpLayout.getOpIdx() == 1) { // $b
             int elems =
                 MMA16816ConversionHelper::getBNumElemsPerThread(type, wpt);
-            Type x2Ty = vec_ty(elemTy, 2);
-            return struct_ty(SmallVector<Type>(elems, x2Ty));
+            return struct_ty(SmallVector<Type>(elems, vecTy));
           }
         }
 
