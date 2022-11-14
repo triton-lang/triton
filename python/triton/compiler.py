@@ -523,8 +523,8 @@ class CodeGenerator(ast.NodeVisitor):
                                                                  [ty.to_ir(self.builder) for ty in ret_types])
             cond_block.merge_block_before(before_block)
             self.builder.set_insertion_point_to_end(before_block)
-            # create CondtionOp: e.g., scf.condition(%cond) %arg0, %arg1, ...
-            self.builder.create_condtion_op(cond.handle, [before_block.arg(i) for i in range(len(init_args))])
+            # create ConditionOp: e.g., scf.condition(%cond) %arg0, %arg1, ...
+            self.builder.create_condition_op(cond.handle, [before_block.arg(i) for i in range(len(init_args))])
             # merge the loop body
             after_block = self.builder.create_block_with_parent(while_op.get_after(),
                                                                 [ty.to_ir(self.builder) for ty in ret_types])
@@ -910,7 +910,7 @@ def llir_to_ptx(mod: Any, compute_capability: int = None, ptx_version: int = Non
     :param mod: a TritonGPU dialect module
     :return:
         - PTX code
-        - shared memory alloaction size
+        - shared memory allocation size
     '''
     if compute_capability is None:
         device = torch.cuda.current_device()
@@ -1194,7 +1194,7 @@ class CacheManager:
             os.rename(filepath + ".tmp", filepath)
 
 
-# utilties for generating and compiling C wrappers
+# Utilities for generating and compiling C wrappers
 
 
 @functools.lru_cache()

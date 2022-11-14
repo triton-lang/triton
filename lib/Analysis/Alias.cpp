@@ -44,7 +44,7 @@ ChangeResult SharedMemoryAliasAnalysis::visitOperation(
   if (pessimistic) {
     return markAllPessimisticFixpoint(op->getResults());
   }
-  // Join all latice elements
+  // Join all lattice elements
   ChangeResult result = ChangeResult::NoChange;
   for (Value value : op->getResults()) {
     result |= getLatticeElement(value).join(aliasInfo);

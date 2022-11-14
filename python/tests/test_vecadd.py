@@ -131,7 +131,7 @@ def vecadd_no_scf_tester(num_warps, block_size, shape):
 
 def vecadd_fcmp_no_scf_tester(num_warps, block_size, shape):
     '''
-    vecadd tester with float comparation as load/store mask.
+    vecadd tester with float comparison as load/store mask.
     '''
     @triton.jit
     def kernel(x_ptr,

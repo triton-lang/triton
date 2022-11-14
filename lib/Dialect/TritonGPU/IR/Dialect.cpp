@@ -374,7 +374,7 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   if (auto blockedLayout = getParent().dyn_cast<BlockedEncodingAttr>()) {
     return blockedLayout.getElemsPerThread(shape);
   }
-  assert(0 && "DotOPerandEncodingAttr::getElemsPerThread not implemented");
+  assert(0 && "DotOperandEncodingAttr::getElemsPerThread not implemented");
   return 0;
 }
 
