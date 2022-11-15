@@ -742,6 +742,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 }
 
 // -----
+
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 module attributes {"triton_gpu.num-warps" = 1 : i32} {
@@ -753,8 +754,8 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   }
 }
 
-
 // -----
+
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 module attributes {"triton_gpu.num-warps" = 1 : i32} {
@@ -766,8 +767,25 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   }
 }
 
+// -----
+
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"triton_gpu.num-warps" = 1 : i32} {
+  // CHECK-LABEL: convert_blocked_to_blocked_ptr
+  func @convert_blocked_to_blocked_ptr(%src:tensor<32x!tt.ptr<f32>, #blocked0>) {
+    // CHECK: llvm.ptrtoint
+    // CHECK: llvm.store
+    // CHECK: nvvm.barrier0
+    // CHECK: llvm.inttoptr
+    // CHECK-COUNT-4: llvm.insertvalue
+    %cvt = triton_gpu.convert_layout %src : (tensor<32x!tt.ptr<f32>, #blocked0>) -> tensor<32x!tt.ptr<f32>, #blocked1>
+    return
+  }
+}
 
 // -----
+
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
 #shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #mma = #triton_gpu.mma<{version = 2, warpsPerCTA = [2, 2]}>
@@ -839,6 +857,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 }
 
 // -----
+
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: atomic_add_f32

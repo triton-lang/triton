@@ -27,6 +27,9 @@ namespace mlir {
 //===----------------------------------------------------------------------===//
 namespace triton {
 
+// Bitwidth of pointers
+constexpr int kPtrBitWidth = 64; 
+
 static std::pair<SmallVector<unsigned>, SmallVector<unsigned>>
 getCvtOrder(const Attribute &srcLayout, const Attribute &dstLayout) {
   auto srcBlockedLayout = srcLayout.dyn_cast<BlockedEncodingAttr>();
@@ -193,7 +196,9 @@ private:
       auto smemShape = getScratchConfigForCvtLayout(cvtLayout, inVec, outVec);
       unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
                                        std::multiplies{});
-      auto bytes = elems * srcTy.getElementTypeBitWidth() / 8;
+      auto bytes = srcTy.getElementType().isa<triton::PointerType>()? 
+                   elems * kPtrBitWidth / 8 :
+                   elems * srcTy.getElementTypeBitWidth() / 8;
       allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
     }
   }
