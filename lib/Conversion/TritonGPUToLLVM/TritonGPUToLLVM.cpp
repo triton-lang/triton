@@ -890,28 +890,6 @@ public:
     return base;
   }
 
-  static SharedMemoryObject
-  getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
-                                  ConversionPatternRewriter &rewriter) {
-    auto elems = getElementsFromStruct(loc, llvmStruct, rewriter);
-    auto rank = (elems.size() - 1) / 2;
-    return SharedMemoryObject(
-        /*base=*/elems[0],
-        /*strides=*/{elems.begin() + 1, elems.begin() + 1 + rank},
-        /*offsets=*/{elems.begin() + 1 + rank, elems.end()});
-  }
-
-  static Value
-  getStructFromSharedMemoryObject(Location loc,
-                                  const SharedMemoryObject &smemObj,
-                                  ConversionPatternRewriter &rewriter) {
-    auto elems = smemObj.getElems();
-    auto types = smemObj.getTypes();
-    auto structTy =
-        LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
-    return getStructFromElements(loc, elems, rewriter, structTy);
-  }
-
 protected:
   const Allocation *allocation;
   Value smem;
@@ -3289,6 +3267,8 @@ public:
     // Physical offset (before swizzling)
     Value cMatOff = matOff[order[0]];
     Value sMatOff = matOff[order[1]];
+    Value cSwizzleMatOff = udiv(cSwizzleOffset, i32_val(cMatShape));
+    cMatOff = add(cMatOff, cSwizzleMatOff);
 
     // row offset inside a matrix, each matrix has 8 rows.
     Value sOffInMat = c;
@@ -3296,10 +3276,8 @@ public:
     SmallVector<Value> offs(numPtrs);
     Value phase = urem(udiv(sOffInMat, i32_val(perPhase)), i32_val(maxPhase));
     Value sOff = add(sOffInMat, mul(sMatOff, i32_val(sMatShape)));
-    Value cSwizzleMatOff = udiv(cSwizzleOffset, i32_val(cMatShape));
     for (int i = 0; i < numPtrs; ++i) {
       Value cMatOffI = add(cMatOff, i32_val(i * pLoadStrideInMat));
-      cMatOffI = add(cMatOffI, cSwizzleMatOff);
       cMatOffI = xor_(cMatOffI, phase);
       offs[i] = add(mul(cMatOffI, i32_val(cMatShape)), mul(sOff, sTileStride));
     }
@@ -3328,6 +3306,9 @@ public:
 
       Value cMatOff = add(mul(warpOff, i32_val(warpOffStride)),
                           mul(nkMatArr, i32_val(matArrStride)));
+      Value cSwizzleMatOff = udiv(cSwizzleOffset, i32_val(cMatShape));
+      cMatOff = add(cMatOff, cSwizzleMatOff);
+
       Value sMatOff = kMatArr;
       Value sOff = add(sOffInMat, mul(sMatOff, i32_val(sMatShape)));
       // FIXME: (kOrder == 1?) is really dirty hack
@@ -4839,13 +4820,12 @@ Value DotOpMmaV1ConversionHelper::loadA(
   Value offA0 = isARow ? offsetAK : offsetAM;
   Value offA1 = isARow ? offsetAM : offsetAK;
   Value phaseA = urem(udiv(offA1, i32_val(perPhaseA)), i32_val(maxPhaseA));
+  offA0 = add(offA0, cSwizzleOffset);
   SmallVector<Value> offA(numPtrA);
-
-  Value cSwizzleVecOffset = udiv(cSwizzleOffset, i32_val(vecA));
   for (int i = 0; i < numPtrA; i++) {
     Value offA0I = add(offA0, i32_val(i * (isARow ? 4 : strideRepM)));
     offA0I = udiv(offA0I, i32_val(vecA));
-    offA0I = xor_(add(cSwizzleVecOffset, offA0I), phaseA);
+    offA0I = xor_(offA0I, phaseA);
     offA0I = xor_(offA0I, i32_val(vecA));
     offA[i] = add(mul(offA0I, strideA0), mul(offA1, strideA1));
   }
@@ -4956,6 +4936,8 @@ Value DotOpMmaV1ConversionHelper::loadB(
   Value offB0 = isBRow ? offsetBN : offsetBK;
   Value offB1 = isBRow ? offsetBK : offsetBN;
   Value phaseB = urem(udiv(offB1, i32_val(perPhaseB)), i32_val(maxPhaseB));
+  Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
+  offB0 = add(offB0, cSwizzleOffset);
   SmallVector<Value> offB(numPtrB);
   for (int i = 0; i < numPtrB; ++i) {
     Value offB0I = add(offB0, i32_val(i * (isBRow ? strideRepN : 4)));

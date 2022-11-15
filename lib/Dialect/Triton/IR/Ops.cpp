@@ -126,7 +126,7 @@ namespace triton {
 
 //-- FpToFpOp --
 bool FpToFpOp::areCastCompatible(::mlir::TypeRange inputs,
-                               ::mlir::TypeRange outputs) {
+                                 ::mlir::TypeRange outputs) {
   if (inputs.size() != 1 || outputs.size() != 1)
     return false;
   auto srcEltType = inputs.front();
@@ -143,8 +143,8 @@ bool FpToFpOp::areCastCompatible(::mlir::TypeRange inputs,
     std::swap(srcEltType, dstEltType);
   if (!srcEltType.dyn_cast<mlir::triton::Float8Type>())
     return false;
-  return dstEltType.isF16() || dstEltType.isBF16() ||
-         dstEltType.isF32() || dstEltType.isF64();
+  return dstEltType.isF16() || dstEltType.isBF16() || dstEltType.isF32() ||
+         dstEltType.isF64();
 }
 
 //-- StoreOp --

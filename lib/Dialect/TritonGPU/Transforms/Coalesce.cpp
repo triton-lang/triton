@@ -33,9 +33,9 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     SmallVector<unsigned, 4> sizePerThread(rank, 1);
     PointerType ptrType = origType.getElementType().cast<PointerType>();
     auto pointeeType = ptrType.getPointeeType();
-    unsigned numBits =
-        pointeeType.isa<triton::Float8Type>() ?
-        8 : pointeeType.getIntOrFloatBitWidth();
+    unsigned numBits = pointeeType.isa<triton::Float8Type>()
+                           ? 8
+                           : pointeeType.getIntOrFloatBitWidth();
     unsigned maxMultiple = info.getDivisibility(order[0]);
     unsigned maxContig = info.getContiguity(order[0]);
     unsigned alignment = std::min(maxMultiple, maxContig);
