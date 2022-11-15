@@ -93,6 +93,8 @@ void llPrintf(StringRef msg, ValueRange args,
               ConversionPatternRewriter &rewriter);
 
 // Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
+#define inttoptr(...) rewriter.create<LLVM::IntToPtrOp>(loc, __VA_ARGS__)
+#define ptrtoint(...) rewriter.create<LLVM::PtrToIntOp>(loc, __VA_ARGS__)
 #define zext(...) rewriter.create<LLVM::ZExtOp>(loc, __VA_ARGS__)
 #define udiv(...) rewriter.create<LLVM::UDivOp>(loc, __VA_ARGS__)
 #define urem(...) rewriter.create<LLVM::URemOp>(loc, __VA_ARGS__)
@@ -2929,8 +2931,13 @@ void ConvertLayoutOpConversion::processReplica(
   }
   auto elemTy = type.getElementType();
   bool isInt1 = elemTy.isInteger(1);
+  bool isPtr = elemTy.isa<triton::PointerType>();
+  auto llvmElemTyOrig = getTypeConverter()->convertType(elemTy);
   if (isInt1)
     elemTy = IntegerType::get(elemTy.getContext(), 8);
+  else if (isPtr)
+    elemTy = IntegerType::get(elemTy.getContext(), 64);
+
   auto llvmElemTy = getTypeConverter()->convertType(elemTy);
 
   for (unsigned ctaId = 0; ctaId < accumNumCTAsEachRep; ++ctaId) {
@@ -2963,6 +2970,8 @@ void ConvertLayoutOpConversion::processReplica(
           auto currVal = vals[elemId + linearCTAId * accumSizePerThread + v];
           if (isInt1)
             currVal = zext(llvmElemTy, currVal);
+          else if (isPtr)
+            currVal = ptrtoint(llvmElemTy, currVal);
 
           valVec = insert_element(vecTy, valVec, currVal, idx_val(v));
         }
@@ -2975,6 +2984,8 @@ void ConvertLayoutOpConversion::processReplica(
             currVal =
                 icmp_ne(currVal, rewriter.create<LLVM::ConstantOp>(
                                      loc, i8_ty, rewriter.getI8IntegerAttr(0)));
+          else if (isPtr)
+            currVal = inttoptr(llvmElemTyOrig, currVal);
           vals[elemId + linearCTAId * accumSizePerThread + v] = currVal;
         }
       }
