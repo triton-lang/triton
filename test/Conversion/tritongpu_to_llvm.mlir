@@ -847,3 +847,16 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     return
   }
 }
+
+
+// -----
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+
+func @test_get_program_id(%a: tensor<32x!tt.ptr<i32>) {
+  %tid = tt.get_program_id() : i32
+  %0 = tt.splat %tid : (i32) => tensor<32xi32>
+  tt.store %a, %0 : tensor<32xi32>
+}
+
+}
