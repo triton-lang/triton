@@ -61,6 +61,7 @@ def get_tensor(shape, data_type, b_positive=False):
                              ('sqrt', 'float64', 'float64'),
                              ('abs', 'float32', 'float32'),
                              ('exp', 'float32', 'float32'),
+                             ('exp', 'float64', 'float64'),
                              ('sigmoid', 'float32', 'float32'),
                           ])
 def test_single_input(expr, output_type, input0_type):

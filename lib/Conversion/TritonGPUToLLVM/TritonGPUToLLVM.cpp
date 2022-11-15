@@ -64,6 +64,12 @@ Value createConstantF32(Location loc, PatternRewriter &rewriter, float v) {
                                            rewriter.getF32FloatAttr(v));
 }
 
+Value createConstantF64(Location loc, PatternRewriter &rewriter, float v) {
+  auto type = type::f64Ty(rewriter.getContext());
+  return rewriter.create<LLVM::ConstantOp>(loc, type,
+                                           rewriter.getF64FloatAttr(v));
+}
+
 // Create an index type constant.
 static Value createIndexConstant(OpBuilder &builder, Location loc,
                                  TypeConverter *converter, int64_t value) {
@@ -133,6 +139,7 @@ void llPrintf(StringRef msg, ValueRange args,
 #define f64_ty rewriter.getF64Type()
 #define vec_ty(type, num) VectorType::get(num, type)
 #define f32_val(...) LLVM::createConstantF32(loc, rewriter, __VA_ARGS__)
+#define f64_val(...) LLVM::createConstantF64(loc, rewriter, __VA_ARGS__)
 #define void_ty(ctx) LLVM::LLVMVoidType::get(ctx)
 #define struct_ty(...) LLVM::LLVMStructType::getLiteral(ctx, __VA_ARGS__)
 
@@ -348,7 +355,8 @@ Value getStructFromElements(Location loc, ValueRange resultVals,
   return llvmStruct;
 }
 
-// Delinearize on compile-time consts, assuming the order is [n, .. 2, 1, 0]
+// TODO[goostavz]: to be deprecated
+// delinearize supposing order is [n, .. , 2, 1, 0]
 template <typename T>
 static SmallVector<T> getMultiDimIndex(T linearIndex, ArrayRef<T> shape) {
   // shape: {a, b, c, d}  ->  accMul: {b*c*d, c*d, d, 1}
@@ -366,7 +374,40 @@ static SmallVector<T> getMultiDimIndex(T linearIndex, ArrayRef<T> shape) {
   return multiDimIndex;
 }
 
-// Linearize on compile-time consts, assuming the order is [n, .. 2, 1, 0]
+// delinearize supposing order is [0, 1, .. , n]
+template <typename T>
+static SmallVector<T> getMultiDimIndexImpl(T linearIndex, ArrayRef<T> shape) {
+  // shape: {a, b, c, d}  ->  accMul: {1, a, a*b, a*b*c}
+  size_t rank = shape.size();
+  T accMul = product(shape.drop_back());
+  T linearRemain = linearIndex;
+  SmallVector<T> multiDimIndex(rank);
+  for (int i = rank - 1; i >= 0; --i) {
+    multiDimIndex[i] = linearRemain / accMul;
+    linearRemain = linearRemain % accMul;
+    if (i != 0) {
+      accMul = accMul / shape[i - 1];
+    }
+  }
+  return multiDimIndex;
+}
+
+template <typename T>
+static SmallVector<T> getMultiDimIndex(T linearIndex, ArrayRef<T> shape,
+                                       ArrayRef<unsigned> order) {
+  size_t rank = shape.size();
+  assert(rank == order.size());
+  auto reordered = reorder(shape, order);
+  auto reorderedMultiDim = getMultiDimIndexImpl<T>(linearIndex, reordered);
+  SmallVector<T> multiDim(rank);
+  for (unsigned i = 0; i < rank; ++i) {
+    multiDim[order[i]] = reorderedMultiDim[i];
+  }
+  return multiDim;
+}
+
+// TODO[goostavz]: to be deprecated
+// linearize supposing order is [n, .. , 2, 1, 0]
 template <typename T>
 static T getLinearIndex(ArrayRef<T> multiDimIndex, ArrayRef<T> shape) {
   assert(multiDimIndex.size() == shape.size());
@@ -381,6 +422,30 @@ static T getLinearIndex(ArrayRef<T> multiDimIndex, ArrayRef<T> shape) {
     }
   }
   return linearIndex;
+}
+
+template <typename T>
+static T getLinearIndexImpl(ArrayRef<T> multiDimIndex, ArrayRef<T> shape) {
+  assert(multiDimIndex.size() == shape.size());
+  // shape: {a, b, c, d}  ->  accMul: {1, a, a*b, a*b*c}
+  size_t rank = shape.size();
+  T accMul = product(shape.drop_back());
+  T linearIndex = 0;
+  for (int i = rank - 1; i >= 0; --i) {
+    linearIndex += multiDimIndex[i] * accMul;
+    if (i != 0) {
+      accMul = accMul / shape[i - 1];
+    }
+  }
+  return linearIndex;
+}
+
+template <typename T>
+static T getLinearIndex(ArrayRef<T> multiDimIndex, ArrayRef<T> shape,
+                        ArrayRef<unsigned> order) {
+  assert(shape.size() == order.size());
+  return getLinearIndexImpl<T>(reorder(multiDimIndex, order),
+                               reorder(shape, order));
 }
 
 static Value storeShared(ConversionPatternRewriter &rewriter, Location loc,
@@ -673,6 +738,7 @@ public:
     auto sizePerThread = blockedLayout.getSizePerThread();
     auto threadsPerWarp = blockedLayout.getThreadsPerWarp();
     auto warpsPerCTA = blockedLayout.getWarpsPerCTA();
+    auto order = blockedLayout.getOrder();
 
     unsigned rank = shape.size();
     SmallVector<unsigned> shapePerCTA = getShapePerCTA(blockedLayout);
@@ -704,9 +770,9 @@ public:
       unsigned linearNanoTileId = n / totalSizePerThread;
       unsigned linearNanoTileElemId = n % totalSizePerThread;
       SmallVector<unsigned> multiDimNanoTileId =
-          getMultiDimIndex<unsigned>(linearNanoTileId, tilesPerDim);
-      SmallVector<unsigned> multiDimNanoTileElemId =
-          getMultiDimIndex<unsigned>(linearNanoTileElemId, sizePerThread);
+          getMultiDimIndex<unsigned>(linearNanoTileId, tilesPerDim, order);
+      SmallVector<unsigned> multiDimNanoTileElemId = getMultiDimIndex<unsigned>(
+          linearNanoTileElemId, sizePerThread, order);
       for (unsigned k = 0; k < rank; ++k) {
         unsigned reorderedMultiDimId =
             multiDimNanoTileId[k] *
@@ -1922,8 +1988,6 @@ struct PrintfOpConversion
   // currently support pointer, i8, i16, i32, i64, f16, bf16, f32, f64
   std::string getFormatSubstr(Value value) const {
     Type type = value.getType();
-    unsigned width = type.getIntOrFloatBitWidth();
-
     if (type.isa<LLVM::LLVMPointerType>()) {
       return "%p";
     } else if (type.isBF16() || type.isF16() || type.isF32() || type.isF64()) {
@@ -1965,13 +2029,11 @@ struct PrintfOpConversion
   promoteValue(ConversionPatternRewriter &rewriter, Value value) {
     auto *context = rewriter.getContext();
     auto type = value.getType();
-    type.dump();
-    unsigned width = type.getIntOrFloatBitWidth();
     Value newOp = value;
     Type newType = type;
 
     bool bUnsigned = type.isUnsignedInteger();
-    if (type.isIntOrIndex() && width < 32) {
+    if (type.isIntOrIndex() && type.getIntOrFloatBitWidth() < 32) {
       if (bUnsigned) {
         newType = ui32_ty;
         newOp = rewriter.create<LLVM::ZExtOp>(UnknownLoc::get(context), newType,
@@ -2581,6 +2643,8 @@ public:
     for (unsigned i = 0; i < elems; ++i) {
       resultVals[i] = concreteThis->createDestOp(op, adaptor, rewriter, elemTy,
                                                  operands[i], loc);
+      if (!bool(resultVals[i]))
+        return failure();
     }
     Value view = getStructFromElements(loc, resultVals, rewriter, structTy);
     rewriter.replaceOp(op, view);
@@ -3101,23 +3165,24 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
     }
     unsigned linearIdxInNanoTile = i % srcAccumSizeInThreads;
     auto multiDimIdxInNanoTile = getMultiDimIndex<unsigned>(
-        linearIdxInNanoTile, srcBlockedLayout.getSizePerThread());
+        linearIdxInNanoTile, srcBlockedLayout.getSizePerThread(), inOrd);
     unsigned pos = multiDimIdxInNanoTile[inOrd[0]] % minVec;
     multiDimIdxInNanoTile[inOrd[0]] /= minVec;
     unsigned wordVecIdx =
-        getLinearIndex<unsigned>(multiDimIdxInNanoTile, wordsInEachRep);
+        getLinearIndex<unsigned>(multiDimIdxInNanoTile, wordsInEachRep, inOrd);
     wordVecs[wordVecIdx] =
         insert_element(wordTy, wordVecs[wordVecIdx], inVals[i], idx_val(pos));
 
     if (i % srcAccumSizeInThreads == srcAccumSizeInThreads - 1) {
       // end of replication, store the vectors into shared memory
       unsigned linearRepIdx = i / srcAccumSizeInThreads;
-      auto multiDimRepIdx = getMultiDimIndex<unsigned>(linearRepIdx, reps);
+      auto multiDimRepIdx =
+          getMultiDimIndex<unsigned>(linearRepIdx, reps, inOrd);
       for (unsigned linearWordIdx = 0; linearWordIdx < numWordsEachRep;
            ++linearWordIdx) {
         // step 1: recover the multidim_index from the index of input_elements
         auto multiDimWordIdx =
-            getMultiDimIndex<unsigned>(linearWordIdx, wordsInEachRep);
+            getMultiDimIndex<unsigned>(linearWordIdx, wordsInEachRep, inOrd);
         SmallVector<Value> multiDimIdx(2);
         auto wordOffset0 = multiDimRepIdx[0] * srcShapePerCTA[0] +
                            multiDimWordIdx[0] * (inOrd[0] == 0 ? minVec : 1);
@@ -3127,12 +3192,12 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
         multiDimIdx[1] = add(multiDimOffsetFirstElem[1], idx_val(wordOffset1));
 
         // step 2: do swizzling
-        Value remained = urem(multiDimIdx[inOrd[0]], outVecVal);
-        multiDimIdx[inOrd[0]] = udiv(multiDimIdx[inOrd[0]], outVecVal);
-        Value off_1 = mul(multiDimIdx[inOrd[1]], idx_val(srcShape[inOrd[0]]));
-        Value phaseId = udiv(multiDimIdx[inOrd[1]], idx_val(perPhase));
+        Value remained = urem(multiDimIdx[outOrd[0]], outVecVal);
+        multiDimIdx[outOrd[0]] = udiv(multiDimIdx[outOrd[0]], outVecVal);
+        Value off_1 = mul(multiDimIdx[outOrd[1]], idx_val(srcShape[outOrd[0]]));
+        Value phaseId = udiv(multiDimIdx[outOrd[1]], idx_val(perPhase));
         phaseId = urem(phaseId, idx_val(maxPhase));
-        Value off_0 = xor_(multiDimIdx[inOrd[0]], phaseId);
+        Value off_0 = xor_(multiDimIdx[outOrd[0]], phaseId);
         off_0 = mul(off_0, outVecVal);
         remained = udiv(remained, minVecVal);
         off_0 = add(off_0, mul(remained, minVecVal));
@@ -5836,6 +5901,32 @@ struct FDivOpConversion
   }
 };
 
+struct ExpOpConversionApprox
+    : ElementwiseOpConversionBase<mlir::math::ExpOp, LLVM::InlineAsmOp,
+                                  ExpOpConversionApprox> {
+  using Base = ElementwiseOpConversionBase<mlir::math::ExpOp, LLVM::InlineAsmOp,
+                                           ExpOpConversionApprox>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  Value createDestOp(mlir::math::ExpOp op, OpAdaptor adaptor,
+                     ConversionPatternRewriter &rewriter, Type elemTy,
+                     ValueRange operands, Location loc) const {
+    // For FP64 input, call __nv_expf for higher-precision calculation
+    if (elemTy.getIntOrFloatBitWidth() == 64)
+      return {};
+    const double log2e = 1.4426950408889634;
+    Value prod =
+        rewriter.create<LLVM::FMulOp>(loc, f32_ty, operands[0], f32_val(log2e));
+    PTXBuilder ptxBuilder;
+    auto &exp2 = ptxBuilder.create<PTXInstr>("ex2")->o("approx").o("f32");
+    auto output = ptxBuilder.newOperand("=f");
+    auto input = ptxBuilder.newOperand(prod, "f");
+    exp2(output, input);
+    return ptxBuilder.launch(rewriter, loc, f32_ty, false);
+  }
+};
+
 /// ====================== atomic_rmw codegen begin ==========================
 struct AtomicRMWOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::AtomicRMWOp>,
@@ -5996,6 +6087,13 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
 
   patterns.add<CmpIOpConversion>(typeConverter, benefit);
   patterns.add<CmpFOpConversion>(typeConverter, benefit);
+
+  // ExpOpConversionApprox will try using ex2.approx if the input type is FP32.
+  // For FP64 input type, ExpOpConversionApprox will return failure and
+  // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
+  // __nv_expf for higher-precision calculation
+  patterns.add<ExpOpConversionApprox>(typeConverter, benefit);
+
 #define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
   patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
 
