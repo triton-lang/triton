@@ -2136,13 +2136,43 @@ struct GetProgramIdOpConversion
   matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
+    assert(op.axis() < 3);
+
     Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(
-        loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x);
+        loc, rewriter.getIndexType(), dims[op.axis()]);
     auto llvmIndexTy = getTypeConverter()->getIndexType();
     rewriter.replaceOpWithNewOp<UnrealizedConversionCastOp>(
         op, TypeRange{llvmIndexTy}, ValueRange{blockId});
     return success();
   }
+
+  static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
+                                                  mlir::gpu::Dimension::y,
+                                                  mlir::gpu::Dimension::z};
+};
+
+struct GetNumProgramsOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::GetNumProgramsOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::GetNumProgramsOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::GetNumProgramsOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    assert(op.axis() < 3);
+
+    Value blockId = rewriter.create<::mlir::gpu::BlockDimOp>(
+        loc, rewriter.getIndexType(), dims[op.axis()]);
+    auto llvmIndexTy = getTypeConverter()->getIndexType();
+    rewriter.replaceOpWithNewOp<UnrealizedConversionCastOp>(
+        op, TypeRange{llvmIndexTy}, ValueRange{blockId});
+    return success();
+  }
+
+  static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
+                                                  mlir::gpu::Dimension::y,
+                                                  mlir::gpu::Dimension::z};
 };
 
 struct AddPtrOpConversion
@@ -6072,6 +6102,7 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<ExtractSliceOpConversion>(typeConverter, allocation, smem,
                                          benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
+  patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);
   patterns.add<InsertSliceAsyncOpConversion>(typeConverter, allocation, smem,
                                              axisInfoAnalysis, benefit);
   patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, benefit);
