@@ -9,6 +9,8 @@
 #A_DOT = #triton_gpu.dot_op<{opIdx = 0, parent = #C}>
 #B_DOT = #triton_gpu.dot_op<{opIdx = 1, parent = #C}>
 
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+
 // CHECK-LABEL: matmul_loop
 // There shouldn't be any membar with the dot op encoding.
 func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
@@ -249,4 +251,6 @@ func @for_alias(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B :
   // CHECK-NEXT: Membar 9
   %cst3 = tt.cat %cst0, %cst0 {axis = 0} : (tensor<256x32xf16, #A_SHARED>, tensor<256x32xf16, #A_SHARED>) -> tensor<512x32xf16, #A_SHARED>
   return
+}
+
 }

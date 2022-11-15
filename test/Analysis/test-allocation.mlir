@@ -9,6 +9,8 @@
 #A_DOT = #triton_gpu.dot_op<{opIdx = 0, parent = #C}>
 #B_DOT = #triton_gpu.dot_op<{opIdx = 1, parent = #C}>
 
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+
 // CHECK-LABEL: matmul_loop
 func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
   %a_ptr_init = tt.broadcast %A : (!tt.ptr<f16>) -> tensor<128x32x!tt.ptr<f16>, #AL>
@@ -312,4 +314,6 @@ func @for_if_for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B 
   %cst2 = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   return
   // CHECK-NEXT: size = 40960
+}
+
 }
