@@ -890,6 +890,8 @@ def optimize_tritongpu_ir(mod, num_stages):
 def make_llvm_ir(mod):
     return _triton.translate_triton_gpu_to_llvmir(mod)
 
+def make_amdgcn(mod: Any, gfx_number: int):
+    return _triton.translate_llvmir_to_amdgcn(mod, gfx_number)
 
 def make_ptx(mod: Any, compute_capability: int, ptx_version: int) -> Tuple[str, int]:
     '''

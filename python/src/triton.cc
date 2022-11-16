@@ -18,6 +18,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "triton/Target/AMDGCN/AMDGCNTranslation.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 #include "triton/Target/PTX/PTXTranslation.h"
 #include "triton/tools/sys/getenv.hpp"
@@ -1270,6 +1271,23 @@ void init_triton_translation(py::module &m) {
         auto ptxCode =
             triton::translateLLVMIRToPTX(*module, capability, version);
         return ptxCode;
+      },
+      ret::take_ownership);
+
+  m.def(
+      "translate_llvmir_to_amdgcn",
+      [](const std::string llvmIR, int gfx_number) -> std::string {
+        // create LLVM module from C++
+        llvm::LLVMContext context;
+        std::unique_ptr<llvm::MemoryBuffer> buffer =
+            llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
+        llvm::SMDiagnostic error;
+        std::unique_ptr<llvm::Module> module =
+            llvm::parseIR(buffer->getMemBufferRef(), error, context);
+        // translate module to AMDGCN
+        std::string target = "gfx" + std::to_string(gfx_number);
+        auto gcnCode = triton::translateLLVMIRToAMDGCN(*module, target);
+        return gcnCode;
       },
       ret::take_ownership);
 
