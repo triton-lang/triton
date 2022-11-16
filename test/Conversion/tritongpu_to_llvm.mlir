@@ -245,12 +245,12 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     %0 = tt.view %arg : (tensor<256xf32, #blocked0>) -> tensor<256x1xf32,#blocked2>
     // CHECK: llvm.mlir.undef
     // CHECK: llvm.insertvalue %[[T0]]
-    // CHECK: llvm.insertvalue %[[T0]]
-    // CHECK: llvm.insertvalue %[[T0]]
+    // CHECK: llvm.insertvalue %[[T1]]
     // CHECK: llvm.insertvalue %[[T0]]
     // CHECK: llvm.insertvalue %[[T1]]
+    // CHECK: llvm.insertvalue %[[T0]]
     // CHECK: llvm.insertvalue %[[T1]]
-    // CHECK: llvm.insertvalue %[[T1]]
+    // CHECK: llvm.insertvalue %[[T0]]
     // CHECK: llvm.insertvalue %[[T1]]
     %1 = tt.broadcast %0 : (tensor<256x1xf32,#blocked2>) -> tensor<256x4xf32, #blocked2>
     return
