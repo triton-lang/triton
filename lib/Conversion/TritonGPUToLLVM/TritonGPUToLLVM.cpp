@@ -6148,6 +6148,7 @@ private:
             dstType.getShape(), dstType.getElementType(),
             triton::gpu::SharedEncodingAttr::get(mod.getContext(), dstDotOp,
                                                  srcType.getShape(),
+                                                 getOrder(srcBlocked),
                                                  srcType.getElementType()));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), tmpType, cvtOp.getOperand());
