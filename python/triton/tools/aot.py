@@ -39,14 +39,13 @@ if __name__ == '__main__':
         exit(0)
 
     # triton-ir -> triton-gpu-ir
-    module = triton.compiler.make_tritongpu_ir(module, num_warps=4)
-    module = triton.compiler.optimize_tritongpu_ir(module, num_stages=3)
+    module = triton.compiler.ttir_to_ttgir(module, num_warps=4, num_stages=3)
     if args.target == 'triton-gpu-ir':
         print(module.str())
         exit(0)
 
     # triton-gpu-ir -> llvm-ir
-    module = triton.compiler.make_llvm_ir(module)
+    module = triton.compiler.ttgir_to_llir(module, extern_libs=None)
     if args.target == 'llvm-ir':
         print(module)
         exit(0)
@@ -58,7 +57,7 @@ if __name__ == '__main__':
             raise argparse.ArgumentError(None, "Must specify --ptx-version for PTX compilation")
 
         # llvm-ir -> ptx
-        module = triton.compiler.make_ptx(module, compute_capability=args.sm, ptx_version=args.ptx_version)
+        module = triton.compiler.llir_to_ptx(module, compute_capability=args.sm, ptx_version=args.ptx_version)
         assert args.target == 'ptx'
         print(module)
         exit(0)
@@ -67,6 +66,6 @@ if __name__ == '__main__':
     if args.target == 'amdgcn':
         if not args.gfx:
             raise argparse.ArgumentError(None, "Must specify --gfx for AMDGCN compilation")
-        module, hsaco_path = triton.compiler.make_hsaco(module, args.gfx)
+        module, hsaco_path = triton.compiler.llir_to_hsaco(module, args.gfx)
         print(module)
         exit(0)

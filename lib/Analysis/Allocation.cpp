@@ -1,6 +1,7 @@
 #include "triton/Analysis/Allocation.h"
 #include "mlir/Analysis/Liveness.h"
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "triton/Analysis/Alias.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -11,9 +12,12 @@
 #include <numeric>
 
 using ::mlir::triton::gpu::BlockedEncodingAttr;
+using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
+using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
+using ::mlir::triton::gpu::SliceEncodingAttr;
 
 namespace mlir {
 
@@ -37,20 +41,12 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   auto srcMmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>();
   auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>();
   auto dstMmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>();
-  assert((srcBlockedLayout || srcMmaLayout) &&
-         "Unexpected srcLayout in getScratchConfigForCvtLayout");
-  assert((dstBlockedLayout || dstMmaLayout) &&
-         "Unexpected dstLayout in getScratchConfigForCvtLayout");
   assert(!(srcMmaLayout && dstMmaLayout) &&
          "Unexpected mma -> mma layout conversion");
-  auto inOrd =
-      srcMmaLayout ? dstBlockedLayout.getOrder() : srcBlockedLayout.getOrder();
-  auto outOrd =
-      dstMmaLayout ? srcBlockedLayout.getOrder() : dstBlockedLayout.getOrder();
-  unsigned srcContigPerThread =
-      srcBlockedLayout ? srcBlockedLayout.getSizePerThread()[inOrd[0]] : 2;
-  unsigned dstContigPerThread =
-      dstBlockedLayout ? dstBlockedLayout.getSizePerThread()[outOrd[0]] : 2;
+  auto inOrd = srcMmaLayout ? getOrder(dstLayout) : getOrder(srcLayout);
+  auto outOrd = dstMmaLayout ? getOrder(srcLayout) : getOrder(dstLayout);
+  unsigned srcContigPerThread = getSizePerThread(srcLayout)[inOrd[0]];
+  unsigned dstContigPerThread = getSizePerThread(dstLayout)[outOrd[0]];
   // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
   //       that we cannot do vectorization.
   inVec = outOrd[0] == 0 ? 1 : inOrd[0] == 0 ? 1 : srcContigPerThread;
@@ -65,12 +61,38 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
         std::max(std::min<unsigned>(srcTy.getShape()[d], srcShapePerCTA[d]),
                  std::min<unsigned>(dstTy.getShape()[d], dstShapePerCTA[d]));
   }
+  if (rank == 1)
+    return paddedRepShape;
   unsigned paddedDim = 1;
   if (auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>()) {
     paddedDim = dstBlockedLayout.getOrder()[0];
   }
   paddedRepShape[paddedDim] += pad;
   return paddedRepShape;
+}
+
+SmallVector<unsigned> getScratchConfigForReduce(triton::ReduceOp op) {
+  auto srcTy = op.operand().getType().cast<RankedTensorType>();
+  auto srcLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
+  auto srcShape = srcTy.getShape();
+  auto axis = op.axis();
+
+  bool fastReduce = axis == srcLayout.getOrder()[0];
+
+  SmallVector<unsigned> smemShape;
+  for (auto d : srcShape)
+    smemShape.push_back(d);
+
+  if (fastReduce) {
+    unsigned sizeInterWarps = srcLayout.getWarpsPerCTA()[axis];
+    smemShape[axis] = sizeInterWarps;
+  } else {
+    unsigned threadsPerCTAAxis =
+        srcLayout.getThreadsPerWarp()[axis] * srcLayout.getWarpsPerCTA()[axis];
+    smemShape[axis] = threadsPerCTAAxis;
+  }
+
+  return smemShape;
 }
 
 class AllocationAnalysis {
@@ -102,7 +124,7 @@ private:
     // For example: %a = scf.if -> yield
     // %a must be allocated elsewhere by other operations.
     // FIXME(Keren): extract and insert are always alias for now
-    if (!maybeSharedAllocationOp(op) || isa<triton::gpu::ExtractSliceOp>(op) ||
+    if (!maybeSharedAllocationOp(op) || isa<tensor::ExtractSliceOp>(op) ||
         isa<triton::gpu::InsertSliceAsyncOp>(op)) {
       return;
     }
@@ -127,9 +149,16 @@ private:
       // TODO(Keren): Reduce with index is not supported yet.
       auto value = op->getOperand(0);
       if (auto tensorType = value.getType().dyn_cast<RankedTensorType>()) {
-        auto bytes = tensorType.getNumElements() *
-                     tensorType.getElementTypeBitWidth() / 8;
-        allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
+        if (tensorType.getEncoding().isa<BlockedEncodingAttr>()) {
+          auto smemShape = getScratchConfigForReduce(reduceOp);
+          unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(),
+                                           1, std::multiplies{});
+          auto bytes = elems * tensorType.getElementTypeBitWidth() / 8;
+          allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
+        } else {
+          assert(0 && "ReduceOp with input layout other than blocked layout is "
+                      "not implemented yet");
+        }
       }
     } else if (auto cvtLayout = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
       auto srcTy = cvtLayout.src().getType().cast<RankedTensorType>();

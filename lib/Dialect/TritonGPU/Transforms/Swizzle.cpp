@@ -30,7 +30,7 @@ struct SwizzlePass : public TritonGPUSwizzleBase<SwizzlePass> {
                           (ty.getElementType().getIntOrFloatBitWidth() / 8));
     perPhase = std::max<int>(perPhase, 1);
     // index of the inner dimension in `order`
-    int inner = (opIdx == 0) ? 0 : 1;
+    size_t inner = (opIdx == 0) ? 0 : 1;
     if (version == 1) {
       int maxPhase = (order[inner] == 1 ? 8 : 4) / perPhase;
       // TODO: handle rep (see
@@ -67,7 +67,6 @@ struct SwizzlePass : public TritonGPUSwizzleBase<SwizzlePass> {
 
   void runOnOperation() override {
     Operation *op = getOperation();
-    MLIRContext *context = &getContext();
     op->walk([&](triton::DotOp dotOp) -> void {
       OpBuilder builder(dotOp);
       auto _retEncoding =

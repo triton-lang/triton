@@ -21,6 +21,10 @@ if(DEFINED ENV{TRITON_USE_ROCM})
 set(TRITON_USE_ROCM "$ENV{TRITON_USE_ROCM}" CACHE BOOL "" FORCE)
 endif()
 
+# Ensure Python3 vars are set correctly
+#  used conditionally in this file and by lit tests
+find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
+
 # Default build type
 if(NOT CMAKE_BUILD_TYPE)
   message(STATUS "Default build type: Release")
@@ -147,26 +151,23 @@ endif()
 # Python module
 if(TRITON_BUILD_PYTHON_MODULE)
     message(STATUS "Adding Python module")
+    set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
+    set(PYTHON_SRC ${PYTHON_SRC_PATH}/main.cc ${PYTHON_SRC_PATH}/triton.cc)
+    include_directories("." ${PYTHON_SRC_PATH})
     if (PYTHON_INCLUDE_DIRS)
-      set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
-      include_directories("." ${PYTHON_SRC_PATH} ${PYTHON_INCLUDE_DIRS})
-      link_directories(${PYTHON_LINK_DIRS})
+      include_directories(${PYTHON_INCLUDE_DIRS})
     else()
-      find_package(Python3 REQUIRED COMPONENTS Development)
-      set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
-      include_directories("." ${PYTHON_SRC_PATH} ${Python3_INCLUDE_DIRS})
+      include_directories(${Python3_INCLUDE_DIRS})
       link_directories(${Python3_LIBRARY_DIRS})
       link_libraries(${Python3_LIBRARIES})
       add_link_options(${Python3_LINK_OPTIONS})
     endif()
-    set(PYTHON_SRC ${PYTHON_SRC_PATH}/main.cc ${PYTHON_SRC_PATH}/triton.cc)
 endif()
 
 
 # # Triton
 # file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
 # if (WIN32 AND TRITON_BUILD_PYTHON_MODULE)
-#     find_package(Python3 REQUIRED COMPONENTS Development)
 #     Python3_add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
 #     set_target_properties(triton PROPERTIES SUFFIX ".pyd")
 #     set_target_properties(triton PROPERTIES PREFIX "lib")
@@ -184,7 +185,9 @@ list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
 include(TableGen) # required by AddMLIR
 include(AddLLVM)
 include(AddMLIR)
-# include(HandleLLVMOptions) # human-friendly error message
+
+# Disable warnings that show up in external code (gtest;pybind11)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default")
 
 include_directories(${MLIR_INCLUDE_DIRS})
 include_directories(${LLVM_INCLUDE_DIRS})
@@ -207,7 +210,6 @@ get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
 get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 
 target_link_libraries(triton
-  ${PYTHON_LIBRARIES}
   TritonAnalysis
   TritonTransforms
   TritonGPUTransforms
