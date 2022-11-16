@@ -1,10 +1,24 @@
 import argparse
 import subprocess
 from abc import ABC, abstractmethod
+from typing import Dict, List
 
 
 class Symbol:
-    def __init__(self, name: str, op_name: str, ret_type: str, arg_names: list, arg_types: list) -> None:
+    _name: str
+    _op_name: str
+    _ret_type: str
+    _arg_names: List[str]
+    _arg_types: List[str]
+
+    def __init__(
+            self,
+            name: str,
+            op_name: str,
+            ret_type: str,
+            arg_names: List[str],
+            arg_types: List[str],
+    ) -> None:
         '''
         A symbol is a function declaration.
 
@@ -17,8 +31,8 @@ class Symbol:
         self._name = name
         self._op_name = op_name
         self._ret_type = ret_type
-        self._arg_names = arg_names
-        self._arg_types = arg_types
+        self._arg_names = list(arg_names)
+        self._arg_types = list(arg_types)
 
     @property
     def name(self):
@@ -69,6 +83,12 @@ def to_unsigned(type_str):
 
 
 class ExternLibrary(ABC):
+    _name: str
+    _path: str
+    _symbols: Dict[str, Symbol]
+    _format: bool
+    _grouping: bool
+
     def __init__(self, name: str, path: str, format: bool = True, grouping: bool = True) -> None:
         '''
         Abstract class for extern library.
@@ -80,7 +100,7 @@ class ExternLibrary(ABC):
         self._name = name
         self._path = path
         self._symbols = {}
-        self._format = True
+        self._format = format
         self._grouping = grouping
 
     @property
@@ -123,6 +143,8 @@ class ExternLibrary(ABC):
 
 
 class Libdevice(ExternLibrary):
+    _symbol_groups: Dict[str, List[Symbol]]
+
     def __init__(self, path) -> None:
         '''
         Constructor for Libdevice.
@@ -297,6 +319,9 @@ class Libdevice(ExternLibrary):
 
 
 class LLVMDisassembler:
+    _path: str
+    _ll_file: str
+
     def __init__(self, path):
         '''
         Invoke llvm-dis to disassemble the given file.
