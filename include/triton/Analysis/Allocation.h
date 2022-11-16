@@ -6,6 +6,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <atomic>
 #include <limits>
@@ -18,6 +19,8 @@ class AllocationAnalysis;
 SmallVector<unsigned>
 getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
                              unsigned &outVec);
+
+SmallVector<unsigned> getScratchConfigForReduce(triton::ReduceOp op);
 
 } // namespace triton
 
@@ -139,7 +142,7 @@ private:
     BufferT(BufferKind kind) : BufferT(kind, 0, 0) {}
     BufferT(BufferKind kind, size_t size) : BufferT(kind, size, 0) {}
     BufferT(BufferKind kind, size_t size, size_t offset)
-        : kind(kind), size(size), offset(offset), id(nextId++) {}
+        : kind(kind), id(nextId++), size(size), offset(offset) {}
 
     bool intersects(const BufferT &other) const {
       return Interval<size_t>(offset, offset + size)

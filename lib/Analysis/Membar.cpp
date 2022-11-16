@@ -2,6 +2,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include "mlir/Dialect/GPU/GPUDialect.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 
 namespace mlir {
 
@@ -42,18 +43,13 @@ void MembarAnalysis::dfsOperation(Operation *operation,
 
 void MembarAnalysis::transfer(Operation *op, RegionInfo *regionInfo,
                               OpBuilder *builder) {
-  if (op->getNumResults() < 1)
-    return;
-
   if (isa<scf::ForOp>(op) || isa<scf::IfOp>(op) || isa<scf::YieldOp>(op) ||
-      isa<triton::gpu::ExtractSliceOp>(op) ||
-      isa<triton::gpu::InsertSliceAsyncOp>(op) ||
-      isa<triton::gpu::AllocTensorOp>(op)) {
+      isa<tensor::ExtractSliceOp>(op) || isa<triton::gpu::AllocTensorOp>(op)) {
     // Do not insert barriers before control flow operations and
     // alloc/extract/insert
     // alloc is an allocation op without memory write.
     // In contrast, arith.constant is an allocation op with memory write.
-    // FIXME(Keren): extract and insert are always alias for now
+    // FIXME(Keren): extract is always alias for now
     return;
   }
 

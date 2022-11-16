@@ -30,8 +30,8 @@ class TT_Op<string mnemonic, list<Trait> traits = []> :
 //   fptoui, fptosi, uitofp, sitofp,
 //   extf, tructf,
 //   extui, extsi, tructi
-def TT_IntToPtrOp : TT_Op<"int_to_ptr", [SameOperandsAndResultShape, 
-                                         SameOperandsAndResultEncoding, 
+def TT_IntToPtrOp : TT_Op<"int_to_ptr", [SameOperandsAndResultShape,
+                                         SameOperandsAndResultEncoding,
                                          NoSideEffect,
                                          /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
     let summary = "Cast int64 to pointer";
@@ -43,7 +43,7 @@ def TT_IntToPtrOp : TT_Op<"int_to_ptr", [SameOperandsAndResultShape,
     let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
 }
 
-def TT_PtrToIntOp : TT_Op<"ptr_to_int", [SameOperandsAndResultShape, 
+def TT_PtrToIntOp : TT_Op<"ptr_to_int", [SameOperandsAndResultShape,
                                          SameOperandsAndResultEncoding,
                                          NoSideEffect,
                                          /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
@@ -56,7 +56,23 @@ def TT_PtrToIntOp : TT_Op<"ptr_to_int", [SameOperandsAndResultShape,
     let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
 }
 
-def TT_FpToFp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape, 
+// arith.bitcast doesn't support pointers
+def TT_BitcastOp : TT_Op<"bitcast", [SameOperandsAndResultShape,
+                                     SameOperandsAndResultEncoding,
+                                     NoSideEffect,
+                                     /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
+    let summary = "Cast between types of the same bitwidth";
+
+    let arguments = (ins TT_Type:$from);
+
+    let results = (outs TT_Type:$result);
+
+    let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
+
+    // TODO: Add verifier
+}
+
+def TT_FpToFp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
                                    SameOperandsAndResultEncoding,
                                    NoSideEffect,
                                    /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
@@ -83,7 +99,7 @@ def TT_FpToFp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
 //
 
 def TT_AddPtrOp : TT_Op<"addptr",
-                     [NoSideEffect, 
+                     [NoSideEffect,
                      SameOperandsAndResultShape,
                      SameOperandsAndResultEncoding,
                       TypesMatchWith<"result type matches ptr type",
@@ -170,7 +186,14 @@ def TT_StoreOp : TT_Op<"store",
 // Atomic Op
 //
 def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
-                                          SameOperandsAndResultEncoding]> {
+                                          SameOperandsAndResultEncoding,
+                                          MemoryEffects<[MemWrite]>,
+                                          TypesMatchWith<"infer ptr type from value type",
+                                                         "val", "ptr",
+                                                         "getPointerTypeSameShape($_self)">,
+                                          TypesMatchWith<"infer mask type from value type",
+                                                         "val", "mask", "getI1SameShape($_self)",
+                                                       "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
     let summary = "atomic rmw";
 
     let description = [{
@@ -179,8 +202,8 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
         return old value at $ptr
     }];
 
-    let arguments = (ins TT_AtomicRMWAttr:$atomic_rmw_op, TT_PtrTensor:$ptr,
-                         TT_Type:$val, I1Tensor:$mask);
+    let arguments = (ins TT_AtomicRMWAttr:$atomic_rmw_op, TT_PtrLike:$ptr,
+                         TT_Type:$val, Optional<TT_BoolLike>:$mask);
 
     let results = (outs TT_Type:$result);
 }
@@ -208,7 +231,7 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas", [SameOperandsAndResultShape,
 //
 // Shape Manipulation Ops
 //
-def TT_SplatOp : TT_Op<"splat", [NoSideEffect, 
+def TT_SplatOp : TT_Op<"splat", [NoSideEffect,
                                  SameOperandsAndResultElementType]> {
     let summary = "splat";
 
@@ -221,8 +244,8 @@ def TT_SplatOp : TT_Op<"splat", [NoSideEffect,
     let hasFolder = 1;
 }
 
-def TT_ExpandDimsOp : TT_Op<"expand_dims", [NoSideEffect, 
-                                            DeclareOpInterfaceMethods<InferTypeOpInterface>, 
+def TT_ExpandDimsOp : TT_Op<"expand_dims", [NoSideEffect,
+                                            DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                             SameOperandsAndResultElementType]> {
     let summary = "expand_dims";
 
@@ -233,7 +256,7 @@ def TT_ExpandDimsOp : TT_Op<"expand_dims", [NoSideEffect,
     let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
 }
 
-def TT_ViewOp : TT_Op<"view", [NoSideEffect, 
+def TT_ViewOp : TT_Op<"view", [NoSideEffect,
                                SameOperandsAndResultElementType]> {
     let summary = "view";
 
@@ -245,7 +268,7 @@ def TT_ViewOp : TT_Op<"view", [NoSideEffect,
 
 }
 
-def TT_BroadcastOp : TT_Op<"broadcast", [NoSideEffect, 
+def TT_BroadcastOp : TT_Op<"broadcast", [NoSideEffect,
                                          SameOperandsAndResultElementType]> {
     let summary = "broadcast. No left-padding as of now.";
 
@@ -258,7 +281,7 @@ def TT_BroadcastOp : TT_Op<"broadcast", [NoSideEffect,
     let hasFolder = 1;
 }
 
-def TT_CatOp : TT_Op<"cat", [NoSideEffect, 
+def TT_CatOp : TT_Op<"cat", [NoSideEffect,
                              SameOperandsAndResultElementType]> {
     let summary = "concatenate 2 tensors";
 
@@ -291,7 +314,7 @@ def TT_GetNumProgramsOp : TT_Op<"get_num_programs", [NoSideEffect]> {
 //
 // Dot Op
 //
-def TT_DotOp : TT_Op<"dot", [NoSideEffect, 
+def TT_DotOp : TT_Op<"dot", [NoSideEffect,
                              DeclareOpInterfaceMethods<InferTypeOpInterface>,
                              TypesMatchWith<"result's type matches accumulator's type",
                                             "d", "c", "$_self">]> {
@@ -341,12 +364,11 @@ def TT_ExtElemwiseOp : TT_Op<"ext_elemwise", [NoSideEffect, Elementwise, SameOpe
         return $libpath/$libname:$symbol($args...)
     }];
 
-    let arguments = (ins Variadic<TT_Tensor>:$args, StrAttr:$libname, StrAttr:$libpath, StrAttr:$symbol);
+    let arguments = (ins Variadic<TT_Type>:$args, StrAttr:$libname, StrAttr:$libpath, StrAttr:$symbol);
 
-    let results = (outs TT_Tensor:$result);
+    let results = (outs TT_Type:$result);
 
     let assemblyFormat = "operands attr-dict `:` type(operands) `->` type($result)";
-
 }
 
 //
@@ -367,6 +389,22 @@ def TT_MakeRangeOp : TT_Op<"make_range", [NoSideEffect]> {
     let results = (outs TT_IntTensor:$result);
 
     let assemblyFormat = "attr-dict `:` type($result)";
+}
+
+//
+// Make PrintfOp
+//
+def TT_PrintfOp : TT_Op<"printf", [MemoryEffects<[MemWrite]>]>,
+  Arguments<(ins StrAttr:$prefix,
+                Variadic<AnyTypeOf<[TT_Type]>>:$args)> {
+  let summary = "Device-side printf, as in CUDA for debugging";
+  let description = [{
+    `tt.printf` takes a literal string prefix and an arbitrary number of scalar or tensor arguments that should be printed.
+    format are generated automatically from the arguments.
+  }];
+  let assemblyFormat = [{
+    $prefix attr-dict ($args^ `:` type($args))?
+  }];
 }
 
 #endif // Triton_OPS

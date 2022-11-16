@@ -1,5 +1,4 @@
 import distutils
-import distutils.spawn
 import os
 import platform
 import re
@@ -39,12 +38,13 @@ class Package(NamedTuple):
     test_file: str
     include_flag: str
     lib_flag: str
+    syspath_var_name: str
 
 
 def get_pybind11_package_info():
     name = "pybind11-2.10.0"
     url = "https://github.com/pybind/pybind11/archive/refs/tags/v2.10.0.tar.gz"
-    return Package("pybind11", name, url, "include/pybind11/pybind11.h", "PYBIND11_INCLUDE_DIR", "")
+    return Package("pybind11", name, url, "include/pybind11/pybind11.h", "PYBIND11_INCLUDE_DIR", "", "PYBIND11_SYSPATH")
 
 
 def get_llvm_package_info():
@@ -58,7 +58,7 @@ def get_llvm_package_info():
     else:
         name = 'clang+llvm-14.0.0-x86_64-{}'.format(system_suffix)
         url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-14.0.0/{}.tar.xz".format(name)
-    return Package("llvm", name, url, "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR")
+    return Package("llvm", name, url, "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
 
 def get_thirdparty_packages(triton_cache_path):
@@ -68,6 +68,8 @@ def get_thirdparty_packages(triton_cache_path):
         package_root_dir = os.path.join(triton_cache_path, p.package)
         package_dir = os.path.join(package_root_dir, p.name)
         test_file_path = os.path.join(package_dir, p.test_file)
+        if p.syspath_var_name in os.environ:
+            package_dir = os.environ[p.syspath_var_name]
         if not os.path.exists(test_file_path):
             try:
                 shutil.rmtree(package_root_dir)
@@ -136,14 +138,15 @@ class CMakeBuild(build_ext):
         if not os.path.exists(llvm_build_dir):
             os.makedirs(llvm_build_dir)
         # python directories
-        python_include_dirs = [distutils.sysconfig.get_python_inc()] + ['/usr/local/cuda/include']
+        python_include_dir = distutils.sysconfig.get_python_inc()
         cmake_args = [
+            "-DLLVM_ENABLE_WERROR=ON",
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
             "-DTRITON_BUILD_TUTORIALS=OFF",
             "-DTRITON_BUILD_PYTHON_MODULE=ON",
             # '-DPYTHON_EXECUTABLE=' + sys.executable,
             # '-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
-            "-DPYTHON_INCLUDE_DIRS=" + ";".join(python_include_dirs),
+            "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
             "-DLLVM_EXTERNAL_LIT=" + lit_dir
         ] + thirdparty_cmake_args
 

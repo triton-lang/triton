@@ -87,7 +87,6 @@ public:
     if (!llvm::isa<triton::gpu::ConvertLayoutOp>(op))
       return mlir::failure();
     auto convert = llvm::cast<triton::gpu::ConvertLayoutOp>(op);
-    auto srcType = convert.getOperand().getType().cast<RankedTensorType>();
     auto dstType = convert.getType().cast<RankedTensorType>();
     // we don't handle conversions to DotOperandEncodingAttr
     // this is a heuristics to accomodate fused attention
@@ -103,36 +102,50 @@ public:
     if (!arg)
       return mlir::failure();
     // cvt(alloc_tensor(x), type2) -> alloc_tensor(x, type2)
-    // cvt(insert_slice(x), type2) -> extract_slice(cvt(x, type2))
     auto alloc_tensor = dyn_cast<triton::gpu::AllocTensorOp>(arg);
     if (alloc_tensor) {
       rewriter.replaceOpWithNewOp<triton::gpu::AllocTensorOp>(
           op, op->getResult(0).getType());
       return mlir::success();
     }
+    // cvt(insert_slice(x), type2) -> insert_slice(cvt(x, type2))
     auto insert_slice = dyn_cast<triton::gpu::InsertSliceAsyncOp>(arg);
     if (insert_slice) {
-      auto newType = op->getResult(0).getType();
-      auto new_arg = rewriter.create<triton::gpu::ConvertLayoutOp>(
+      auto newType = op->getResult(0).getType().cast<RankedTensorType>();
+      // Ensure that the new insert_slice op is placed in the same place as the
+      // old insert_slice op. Otherwise, the new insert_slice op may be placed
+      // after the async_wait op, which is not allowed.
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(insert_slice);
+      auto newArg = rewriter.create<triton::gpu::ConvertLayoutOp>(
           op->getLoc(), newType, insert_slice.dst());
       rewriter.replaceOpWithNewOp<triton::gpu::InsertSliceAsyncOp>(
-          op, newType, insert_slice.src(), new_arg.getResult(),
+          op, newType, insert_slice.src(), newArg.getResult(),
           insert_slice.index(), insert_slice.mask(), insert_slice.other(),
-          insert_slice.cache(), insert_slice.evict(), insert_slice.isVolatile(),
-          insert_slice.axis());
+          insert_slice.cache(), insert_slice.evict(),
+          insert_slice.isVolatile(), insert_slice.axis());
       return mlir::success();
     }
-    // cvt(extract_slice(x), type2) ->extract_slice(cvt(x, type2))
-    auto extract_slice = dyn_cast<triton::gpu::ExtractSliceOp>(arg);
+    // cvt(extract_slice(x), type2) -> extract_slice(cvt(x, type2))
+    auto extract_slice = dyn_cast<tensor::ExtractSliceOp>(arg);
     if (extract_slice) {
-      auto origType = extract_slice.src().getType().cast<RankedTensorType>();
+      auto origType = extract_slice.source().getType().cast<RankedTensorType>();
       auto newType = RankedTensorType::get(
           origType.getShape(), origType.getElementType(),
           op->getResult(0).getType().cast<RankedTensorType>().getEncoding());
-      auto new_arg = rewriter.create<triton::gpu::ConvertLayoutOp>(
-          op->getLoc(), newType, extract_slice.src());
-      rewriter.replaceOpWithNewOp<triton::gpu::ExtractSliceOp>(
-          op, new_arg.getResult(), extract_slice.index(), extract_slice.axis());
+      auto resType = op->getResult(0).getType().cast<RankedTensorType>();
+      // Ensure that the new extract_slice op is placed in the same place as the
+      // old extract_slice op. Otherwise, the new extract_slice op may be placed
+      // after the async_wait op, which is not allowed.
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(extract_slice);
+      auto newArg = rewriter.create<triton::gpu::ConvertLayoutOp>(
+          op->getLoc(), newType, extract_slice.source());
+      rewriter.replaceOpWithNewOp<tensor::ExtractSliceOp>(
+          op, resType, newArg.getResult(), extract_slice.offsets(),
+          extract_slice.sizes(), extract_slice.strides(),
+          extract_slice.static_offsets(), extract_slice.static_sizes(),
+          extract_slice.static_strides());
       return mlir::success();
     }
     // cvt(type2, x)
@@ -189,9 +202,9 @@ static LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
 inline bool expensive_to_remat(Operation *op) {
   if (!op)
     return true;
-  if (isa<triton::gpu::ExtractSliceOp, triton::gpu::AllocTensorOp,
+  if (isa<tensor::ExtractSliceOp, triton::gpu::AllocTensorOp,
           triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp,
-          triton::DotOp>(op))
+          triton::AtomicRMWOp, triton::AtomicCASOp, triton::DotOp>(op))
     return true;
   if (isa<scf::YieldOp, scf::ForOp>(op))
     return true;
@@ -209,10 +222,10 @@ Operation *cloneWithInferType(mlir::PatternRewriter &rewriter, Operation *op,
   auto typeInfer = dyn_cast<InferTypeOpInterface>(newOp);
   if (typeInfer) {
     SmallVector<Type, 1> newType;
-    auto sucess = typeInfer.inferReturnTypes(
+    auto success = typeInfer.inferReturnTypes(
         newOp->getContext(), newOp->getLoc(), newOp->getOperands(),
         newOp->getAttrDictionary(), newOp->getRegions(), newType);
-    if (success)
+    if (succeeded(success))
       newOp->getResult(0).setType(newType.front());
   }
   return newOp;
@@ -354,10 +367,6 @@ public:
   rematerializeForLoop(mlir::PatternRewriter &rewriter, scf::ForOp &forOp,
                        size_t i, RankedTensorType newType,
                        triton::gpu::ConvertLayoutOp origConversion) const {
-
-    auto newEncoding = newType.cast<RankedTensorType>().getEncoding();
-    auto ctx = forOp.getContext();
-    auto isInLoop = [&](Operation *op) { return op->getParentOp() == forOp; };
     // Rewrite init argument
     Type origType = forOp.getInitArgs()[i].getType();
     SmallVector<Value, 4> newInitArgs = forOp.getInitArgs();
@@ -408,11 +417,10 @@ public:
     return newResults;
   }
 
-  mlir::LogicalResult matchAndRewrite(mlir::Operation *op,
-                                      mlir::PatternRewriter &rewriter) const {
-
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
     auto forOp = cast<scf::ForOp>(op);
-    auto isInLoop = [&](Operation *op) { return op->getParentOp() == forOp; };
     auto iterArgs = forOp.getRegionIterArgs();
     for (auto iterArg : llvm::enumerate(iterArgs)) {
       // if (iterArg.index() != 1)
@@ -470,12 +478,13 @@ public:
     auto forOp = dyn_cast<scf::ForOp>(cvt->getParentOp());
     if (!forOp)
       return mlir::failure();
-    auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
     auto isInLoop = [&](Operation *op) { return op->getParentOp() == forOp; };
 
     SetVector<Operation *> cvtSlices;
     auto filter = [&](Operation *op) {
-      return isInLoop(op) && !isa<triton::LoadOp>(op) &&
+      return isInLoop(op) &&
+             !isa<triton::LoadOp, triton::StoreOp, triton::AtomicRMWOp,
+                  triton::AtomicCASOp>(op) &&
              !isa<triton::DotOp>(op) && !isa<scf::YieldOp>(op) &&
              !isa<triton::gpu::ConvertLayoutOp>(op);
     };
@@ -530,6 +539,35 @@ public:
   BlockedToMMA(mlir::MLIRContext *context)
       : mlir::RewritePattern(triton::DotOp::getOperationName(), 2, context) {}
 
+  static SmallVector<unsigned, 2>
+  getWarpsPerTile(const ArrayRef<int64_t> &shape, int version, int numWarps) {
+    assert(version == 2);
+    // TODO: Handle one warp per row for fused matmuls
+    // TODO: unsigned -> int64_t to keep things uniform
+    SmallVector<unsigned, 2> ret = {1, 1};
+    SmallVector<int64_t, 2> shapePerWarp = {16, 8};
+    bool changed = false;
+    // TODO (@daadaada): double-check.
+    // original logic in
+    // https://github.com/openai/triton/blob/master/lib/codegen/analysis/layout.cc#L252
+    // seems buggy for shape = [32, 16] ?
+    do {
+      changed = false;
+      if (ret[0] * ret[1] >= numWarps)
+        break;
+      if (shape[0] / shapePerWarp[0] / ret[0] >=
+          shape[1] / (shapePerWarp[1] * 2) / ret[1]) {
+        if (ret[0] < shape[0] / shapePerWarp[0]) {
+          ret[0] *= 2;
+        } else
+          ret[1] *= 2;
+      } else {
+        ret[1] *= 2;
+      }
+    } while (true);
+    return ret;
+  }
+
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
@@ -538,13 +576,20 @@ public:
     auto oldRetType = dotOp.getResult().getType().cast<RankedTensorType>();
     if (oldRetType.getEncoding().isa<triton::gpu::MmaEncodingAttr>())
       return failure();
-    // TODO: compute warpsPerCTA
-    auto newRetType = RankedTensorType::get(
-        oldRetType.getShape(), oldRetType.getElementType(),
-        triton::gpu::MmaEncodingAttr::get(oldRetType.getContext(), 2, {2, 2}));
+    // get MMA encoding for the given number of warps
+    auto retShape = oldRetType.getShape();
+    auto mod = op->getParentOfType<mlir::ModuleOp>();
+    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    auto newRetType =
+        RankedTensorType::get(retShape, oldRetType.getElementType(),
+                              triton::gpu::MmaEncodingAttr::get(
+                                  oldRetType.getContext(), 2,
+                                  getWarpsPerTile(retShape, 2, numWarps)));
+    // convert accumulator
     auto oldAcc = dotOp.getOperand(2);
     auto newAcc = rewriter.create<triton::gpu::ConvertLayoutOp>(
         oldAcc.getLoc(), newRetType, oldAcc);
+    // convert output
     auto newDot = rewriter.create<triton::DotOp>(
         dotOp.getLoc(), newRetType, dotOp.getOperand(0), dotOp.getOperand(1),
         newAcc, dotOp.allowTF32(), dotOp.transA(), dotOp.transB());

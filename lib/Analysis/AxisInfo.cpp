@@ -66,7 +66,7 @@ AxisInfo AxisInfo::join(const AxisInfo &lhs, const AxisInfo &rhs) {
   DimVectorT retContiguity;
   DimVectorT retDivisibility;
   DimVectorT retConstancy;
-  for (size_t d = 0; d < lhs.getRank(); ++d) {
+  for (int d = 0; d < lhs.getRank(); ++d) {
     retContiguity.push_back(gcd(lhs.getContiguity(d), rhs.getContiguity(d)));
     retDivisibility.push_back(
         gcd(lhs.getDivisibility(d), rhs.getDivisibility(d)));
@@ -88,7 +88,7 @@ AxisInfo AxisInfoAnalysis::visitBinaryOp(
   AxisInfo::DimVectorT newContiguity;
   AxisInfo::DimVectorT newDivisibility;
   AxisInfo::DimVectorT newConstancy;
-  for (size_t d = 0; d < rank; ++d) {
+  for (int d = 0; d < rank; ++d) {
     newContiguity.push_back(getContiguity(lhsInfo, rhsInfo, d));
     newDivisibility.push_back(getDivisibility(lhsInfo, rhsInfo, d));
     newConstancy.push_back(getConstancy(lhsInfo, rhsInfo, d));
@@ -159,6 +159,16 @@ ChangeResult AxisInfoAnalysis::visitOperation(
     curr = visitBinaryOp(op, operands[0]->getValue(), operands[1]->getValue(),
                          newContiguity, newDivisibility, newConstancy);
   }
+  // TODO: All other binary ops
+  if (llvm::isa<arith::AndIOp, arith::OrIOp>(op)) {
+    auto newContiguity = [](AxisInfo lhs, AxisInfo rhs, int d) { return 1; };
+    auto newDivisibility = [](AxisInfo lhs, AxisInfo rhs, int d) { return 1; };
+    auto newConstancy = [](AxisInfo lhs, AxisInfo rhs, int d) {
+      return gcd(lhs.getConstancy(d), rhs.getConstancy(d));
+    };
+    curr = visitBinaryOp(op, operands[0]->getValue(), operands[1]->getValue(),
+                         newContiguity, newDivisibility, newConstancy);
+  }
   // Splat
   if (llvm::isa<triton::SplatOp>(op)) {
     Type _retTy = *op->result_type_begin();
@@ -167,7 +177,7 @@ ChangeResult AxisInfoAnalysis::visitOperation(
     AxisInfo::DimVectorT contiguity;
     AxisInfo::DimVectorT divisibility;
     AxisInfo::DimVectorT constancy;
-    for (size_t d = 0; d < retTy.getRank(); ++d) {
+    for (int d = 0; d < retTy.getRank(); ++d) {
       contiguity.push_back(1);
       divisibility.push_back(opInfo.getDivisibility(0));
       constancy.push_back(retTy.getShape()[d]);
@@ -176,12 +186,6 @@ ChangeResult AxisInfoAnalysis::visitOperation(
   }
   // expandDims
   if (auto expandDims = llvm::dyn_cast<triton::ExpandDimsOp>(op)) {
-    Type _retTy = *op->result_type_begin();
-    Type _opTy = *op->operand_type_begin();
-    TensorType retTy = _retTy.cast<TensorType>();
-    TensorType opTy = _opTy.cast<TensorType>();
-    ArrayRef<int64_t> retShape = retTy.getShape();
-    ArrayRef<int64_t> opShape = opTy.getShape();
     AxisInfo opInfo = operands[0]->getValue();
     AxisInfo::DimVectorT contiguity = opInfo.getContiguity();
     AxisInfo::DimVectorT divisibility = opInfo.getDivisibility();
@@ -203,10 +207,11 @@ ChangeResult AxisInfoAnalysis::visitOperation(
     AxisInfo::DimVectorT contiguity;
     AxisInfo::DimVectorT divisibility;
     AxisInfo::DimVectorT constancy;
-    for (size_t d = 0; d < retTy.getRank(); ++d) {
+    for (int d = 0; d < retTy.getRank(); ++d) {
       contiguity.push_back(opShape[d] == 1 ? 1 : opInfo.getContiguity(d));
       divisibility.push_back(opInfo.getDivisibility(d));
-      constancy.push_back(opShape[d] == 1 ? retShape[d] : 1);
+      constancy.push_back(opShape[d] == 1 ? retShape[d]
+                                          : opInfo.getConstancy(d));
     }
     curr = AxisInfo(contiguity, divisibility, constancy);
   }

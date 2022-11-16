@@ -473,6 +473,11 @@ class tensor:
         other = _to_tensor(other, _builder)
         return semantic.mod(self, other, _builder)
 
+    @builtin
+    def __rmod__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.mod(other, self, _builder)
+
     # unary operators
     @builtin
     def __neg__(self, _builder=None):
@@ -541,6 +546,7 @@ class tensor:
 
     @builtin
     def __rlt__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
         return semantic.less_than(other, self, _builder)
 
     # <=
@@ -729,9 +735,10 @@ def cat(input, other, _builder=None):
 
 
 @builtin
-def reshape(input, shape, _builder=None):
+def view(input, shape, _builder=None):
     """
-    Tries to reshape the given tensor to a new shape.
+    Returns a tensor with the same elements as `input` but a different shape.
+    The order of the elements may not be preserved.
 
     :param input: The input tensor.
     :type input:
@@ -740,7 +747,7 @@ def reshape(input, shape, _builder=None):
 
     """
     shape = [x.value for x in shape]
-    return semantic.reshape(input, shape, _builder)
+    return semantic.view(input, shape, _builder)
 
 
 # -----------------------
@@ -1151,7 +1158,7 @@ def ravel(x):
     :param x: the input tensor
     :type x: Block
     """
-    return triton.language.reshape(x, [x.numel])
+    return triton.language.view(x, [x.numel])
 
 
 @triton.jit
@@ -1190,3 +1197,22 @@ def swizzle2d(i, j, size_i, size_j, size_g):
 @triton.jit
 def zeros_like(input):
     return zeros(input.shape, input.dtype)
+
+
+@builtin
+def printf(prefix, *args, _builder=None):
+    import string
+    new_prefix = prefix
+    if isinstance(prefix, constexpr):
+        new_prefix = prefix.value
+    assert isinstance(new_prefix, str), f"{new_prefix} is not string"
+    b_ascii = True
+    for ch in new_prefix:
+        if ch not in string.printable:
+            b_ascii = False
+            break
+    assert b_ascii, f"{new_prefix} is not an ascii string"
+    new_args = []
+    for arg in args:
+        new_args.append(_to_tensor(arg, _builder))
+    return semantic.printf(new_prefix, new_args, _builder)
