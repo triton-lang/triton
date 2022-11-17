@@ -27,6 +27,9 @@ namespace mlir {
 //===----------------------------------------------------------------------===//
 namespace triton {
 
+// Bitwidth of pointers
+constexpr int kPtrBitWidth = 64; 
+
 static std::pair<SmallVector<unsigned>, SmallVector<unsigned>>
 getCvtOrder(const Attribute &srcLayout, const Attribute &dstLayout) {
   auto srcBlockedLayout = srcLayout.dyn_cast<BlockedEncodingAttr>();
@@ -161,9 +164,16 @@ private:
       // TODO(Keren): Reduce with index is not supported yet.
       auto value = op->getOperand(0);
       if (auto tensorType = value.getType().dyn_cast<RankedTensorType>()) {
+        auto srcLayout = tensorType.getEncoding();
+        bool fastReduce = reduceOp.axis() == getOrder(srcLayout)[0];
         auto smemShape = getScratchConfigForReduce(reduceOp);
         unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
                                          std::multiplies{});
+        if (fastReduce) {
+          auto mod = op->getParentOfType<ModuleOp>();
+          unsigned numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+          elems = std::max<unsigned>(elems, numWarps * 32);
+        }
         auto bytes = elems * tensorType.getElementTypeBitWidth() / 8;
         allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
       }
@@ -186,7 +196,9 @@ private:
       auto smemShape = getScratchConfigForCvtLayout(cvtLayout, inVec, outVec);
       unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
                                        std::multiplies{});
-      auto bytes = elems * srcTy.getElementTypeBitWidth() / 8;
+      auto bytes = srcTy.getElementType().isa<triton::PointerType>()? 
+                   elems * kPtrBitWidth / 8 :
+                   elems * srcTy.getElementTypeBitWidth() / 8;
       allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
     }
   }
@@ -235,7 +247,7 @@ private:
     }
   }
 
-  /// Extends the liveness range by unioning the liveness range of the aliased
+  /// Extends the liveness range by unionizing the liveness range of the aliased
   /// values because each allocated buffer could be an alias of others, if block
   /// arguments are involved.
   void resolveAliasBufferLiveness(

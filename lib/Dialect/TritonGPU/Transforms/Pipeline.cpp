@@ -110,7 +110,7 @@ Value LoopPipeliner::lookupOrDefault(Value origin, int stage) {
 }
 
 void LoopPipeliner::collectDeps(Value v, int stages, DenseSet<Value> &deps) {
-  // Loop-invarant value. skip
+  // Loop-invariant value, skip
   if (v.getParentRegion() != &forOp.getLoopBody())
     return;
 
@@ -125,7 +125,7 @@ void LoopPipeliner::collectDeps(Value v, int stages, DenseSet<Value> &deps) {
     collectDeps(yieldOp->getOperand(arg.getArgNumber() - 1), stages - 1, deps);
   } else { // value
     // v might be in deps, but we still need to visit v.
-    // This is because v might depends on value in previous iterations
+    // This is because v might depend on value in previous iterations
     deps.insert(v);
     for (Value op : v.getDefiningOp()->getOperands())
       collectDeps(op, stages, deps);
@@ -175,18 +175,18 @@ LogicalResult LoopPipeliner::initialize() {
   //  other load in the prologue, which is against the point of the pipeline
   //  pass)
   for (triton::LoadOp loadOp : allLoads) {
-    bool isCandiate = true;
+    bool isCandidate = true;
     for (triton::LoadOp other : allLoads) {
       if (loadDeps[loadOp].contains(other)) {
-        isCandiate = false;
+        isCandidate = false;
         break;
       }
     }
 
     // We only pipeline loads that have one covert_layout (to dot_op) use
     // TODO: lift this constraint in the future
-    if (isCandiate && loadOp.getResult().hasOneUse()) {
-      isCandiate = false;
+    if (isCandidate && loadOp.getResult().hasOneUse()) {
+      isCandidate = false;
       Operation *use = *loadOp.getResult().getUsers().begin();
       if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
         if (auto tensorType = convertLayout.getResult()
@@ -194,7 +194,7 @@ LogicalResult LoopPipeliner::initialize() {
                                   .dyn_cast<RankedTensorType>()) {
           if (auto dotOpEnc = tensorType.getEncoding()
                                   .dyn_cast<ttg::DotOperandEncodingAttr>()) {
-            isCandiate = true;
+            isCandidate = true;
             loadsMapping[loadOp] = convertLayout;
             auto ty = loadOp.getType().cast<RankedTensorType>();
             SmallVector<int64_t> bufferShape(ty.getShape().begin(),
@@ -208,9 +208,9 @@ LogicalResult LoopPipeliner::initialize() {
         }
       }
     } else
-      isCandiate = false;
+      isCandidate = false;
 
-    if (isCandiate)
+    if (isCandidate)
       loads.insert(loadOp);
   }
 
@@ -317,7 +317,7 @@ void LoopPipeliner::emitPrologue() {
       for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
         Value originalResult = op->getResult(dstIdx);
         // copy_async will update the value of its only use
-        // TODO: load should no be used in the preheader?
+        // TODO: load should not be used in the preheader?
         if (loads.contains(originalResult)) {
           break;
           // originalResult = loadsMapping[originalResult];
