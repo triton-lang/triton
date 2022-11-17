@@ -4,12 +4,49 @@ import torch
 import pytest
 from .test_core import  numpy_random, to_triton
 
+class MmaLayout:
+    def __init__(self, version, warps_per_cta):
+        self.version = version
+        self.warps_per_cta = str(warps_per_cta)
+
+    def __str__(self):
+        return f"#triton_gpu.mma<{{version={self.version}, warpsPerCTA={self.warps_per_cta}}}>"
+
+class BlockedLayout:
+    def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order):
+        self.sz_per_thread = str(size_per_thread)
+        self.threads_per_warp = str(threads_per_warp)
+        self.warps_per_cta = str(warps_per_cta)
+        self.order = str(order)
+
+    def __str__(self):
+        return f"#triton_gpu.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}}}>"
+
+layouts = [
+  # MmaLayout(version=1, warps_per_cta=[1, 4]),
+  MmaLayout(version=2, warps_per_cta=[1, 4]),
+  # MmaLayout(version=1, warps_per_cta=[4, 1]),
+  MmaLayout(version=2, warps_per_cta=[4, 1]),
+  BlockedLayout([1, 8], [2, 16], [4, 1], [1, 0]),
+  BlockedLayout([1, 4], [4, 8], [2, 2], [1, 0]),
+  BlockedLayout([1, 1], [1, 32], [2, 2], [1, 0]),
+  BlockedLayout([8, 1], [16, 2], [1, 4], [0, 1]),
+  BlockedLayout([4, 1], [8, 4], [2, 2], [0, 1]),
+  BlockedLayout([1, 1], [32, 1], [2, 2], [0, 1])
+]
+
+
 @pytest.mark.parametrize("shape", [(128, 128)])
 @pytest.mark.parametrize("dtype", ['float16'])
-def test_convert2d(dtype, shape, device='cuda'):
+@pytest.mark.parametrize("src_layout", layouts)
+@pytest.mark.parametrize("dst_layout", layouts)
+def test_convert2d(dtype, shape, src_layout, dst_layout, device='cuda'):
+    if str(src_layout) == str(dst_layout):
+        pytest.skip()
+    if 'mma' in str(src_layout) and 'mma' in str(dst_layout):
+        pytest.skip()
     
-    src_layout = "#triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>"
-    dst_layout = "#triton_gpu.mma<{version = 2, warpsPerCTA = [1, 4]}>"
+    
 
     ir = f"""
 #src = {src_layout}
