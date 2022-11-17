@@ -33,7 +33,7 @@ def asin_kernel(
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     x = tl.load(x_ptr + offsets, mask=mask)
-    x = tl.libdevice.asin(x)
+    x = triton.libdevice.asin(x)
     tl.store(y_ptr + offsets, x, mask=mask)
 
 # %%
