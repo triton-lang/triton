@@ -270,7 +270,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
       # build stub signature -- includes arguments that are specialized
       for i, arg in constants.items():
         if callable(arg):
-          raise TypeError(f"Callable constexpr at index {i} is not supported")
+          raise TypeError(f"Callable constexpr at index {{i}} is not supported")
       if not self._call_hook(key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
         bin = triton.compile(self, signature, device, constants, num_warps, num_stages, extern_libs=extern_libs, configs=configs)
         if not warmup:
