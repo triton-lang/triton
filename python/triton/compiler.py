@@ -1421,7 +1421,7 @@ def compile(fn, **kwargs):
       if os.path.exists(path):
         metadata["ctime"][ir] = os.path.getctime(path)
       asm[ir] = next_module if ir == "cubin" else str(next_module)
-      if ir == "llir":
+      if ir == "llir" and "shared" not in metadata:
         metadata["shared"] = _triton.get_shared_memory_size(module)
       if ir == "ptx":
         metadata["name"] = ptx_get_kernel_name(next_module)
