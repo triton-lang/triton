@@ -1495,9 +1495,7 @@ class CudaUtils(object):
            {
               const char* prefix = "Triton Error [CUDA]: ";
               const char* str;
-              printf("%d\\n", code);
               cuGetErrorString(code, &str);
-              printf("%s\\n", str);
               char err[1024] = {0};
               strcat(err, prefix);
               strcat(err, str);
