@@ -1360,8 +1360,8 @@ struct BroadcastOpConversion
     Value result = op.result();
     auto srcTy = op.src().getType().cast<RankedTensorType>();
     auto resultTy = result.getType().cast<RankedTensorType>();
-    auto srcLayout = srcTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
-    auto resultLayout = resultTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
+    auto srcLayout = srcTy.getEncoding();
+    auto resultLayout = resultTy.getEncoding();
     assert(srcLayout && (srcLayout == resultLayout) &&
            "Unexpected layout of BroadcastOp");
     auto srcShape = srcTy.getShape();
@@ -1373,22 +1373,22 @@ struct BroadcastOpConversion
     SmallVector<int64_t, 4> resultLogicalShape(2 * rank);
     SmallVector<unsigned, 2> broadcastDims;
     for (unsigned d = 0; d < rank; ++d) {
-      unsigned resultShapePerCTA = resultLayout.getSizePerThread()[d] *
-                                   resultLayout.getThreadsPerWarp()[d] *
-                                   resultLayout.getWarpsPerCTA()[d];
+      unsigned resultShapePerCTA = triton::gpu::getSizePerThread(resultLayout)[d] *
+                                   triton::gpu::getThreadsPerWarp(resultLayout)[d] *
+                                   triton::gpu::getWarpsPerCTA(resultLayout)[d];
       int64_t numCtas = ceil<unsigned>(resultShape[d], resultShapePerCTA);
       if (srcShape[d] != resultShape[d]) {
         assert(srcShape[d] == 1);
         broadcastDims.push_back(d);
         srcLogicalShape[d] = 1;
         srcLogicalShape[d + rank] =
-            std::max<unsigned>(1, srcLayout.getSizePerThread()[d]);
+            std::max<unsigned>(1, triton::gpu::getSizePerThread(srcLayout)[d]);
       } else {
         srcLogicalShape[d] = numCtas;
-        srcLogicalShape[d + rank] = resultLayout.getSizePerThread()[d];
+        srcLogicalShape[d + rank] = triton::gpu::getSizePerThread(resultLayout)[d];
       }
       resultLogicalShape[d] = numCtas;
-      resultLogicalShape[d + rank] = resultLayout.getSizePerThread()[d];
+      resultLogicalShape[d + rank] = triton::gpu::getSizePerThread(resultLayout)[d];
     }
     int64_t duplicates = 1;
     SmallVector<int64_t, 2> broadcastSizes(broadcastDims.size() * 2);
