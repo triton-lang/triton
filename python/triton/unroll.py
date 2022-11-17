@@ -29,11 +29,8 @@ from filelock import FileLock
 
 import triton
 
-tl = triton
-
 import triton._C.libtriton.triton as _triton
-
-ir = _triton.ir
+from triton._C.libtriton.triton import ir
 
 
 try:
@@ -489,7 +486,13 @@ def jit(*args, **kwargs):
 
 class Autotuner(KernelInterface):
     def __init__(
-        self, fn, arg_names, configs, key, reset_to_zero, prune_configs_by: Dict = None
+        self,
+        fn,
+        arg_names,
+        configs,
+        key,
+        reset_to_zero,
+        prune_configs_by: Optional[Dict] = None,
     ):
         """
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
@@ -4936,11 +4939,11 @@ def zeros_like(input):
 #         num_warps = _to_ir(4, builder=_builder)
 #     return LaunchProxy(fn, args, constants, grid, num_warps)
 
-PHILOX_KEY_A: constexpr = -1640531527  # 0x9E3779B9
-PHILOX_KEY_B: constexpr = -1150833019  # 0xBB67AE85
-PHILOX_ROUND_A: constexpr = -766435501  # 0xD2511F53
-PHILOX_ROUND_B: constexpr = -845247145  # 0xCD9E8D57
-N_ROUNDS_DEFAULT = 10  # Default number of rounds for philox
+PHILOX_KEY_A: constexpr = constexpr(-1640531527)  # 0x9E3779B9
+PHILOX_KEY_B: constexpr = constexpr(-1150833019)  # 0xBB67AE85
+PHILOX_ROUND_A: constexpr = constexpr(-766435501)  # 0xD2511F53
+PHILOX_ROUND_B: constexpr = constexpr(-845247145)  # 0xCD9E8D57
+N_ROUNDS_DEFAULT: constexpr = constexpr(10)  # Default number of rounds for philox
 
 # -------------------
 # randint
