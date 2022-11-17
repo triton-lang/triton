@@ -21,7 +21,6 @@ from sysconfig import get_paths
 from enum import Enum
 from types import ModuleType
 from typing import Any, Dict, Set, Tuple, Union, List, Optional, Callable, Sequence
-from typing import cast as typecast
 from collections import defaultdict, namedtuple
 
 
@@ -840,6 +839,7 @@ class ValueConstructor:
         #
         self.builtins = {
             "range": range,
+            # this is the triton `minimum`
             "min": minimum,
             "float": float,
             "int": int,
@@ -1499,13 +1499,15 @@ class CodeGenerator(ast.NodeVisitor):
             fn, ExternalFunction
         ):
             ret = fn(*args, _builder=self.builder, **kws)
-        if fn in self.value_constructor.builtins.values():
+        elif fn in self.value_constructor.builtins.values():
             args = [arg.value if isinstance(arg, constexpr) else arg for arg in args]
             ret = fn(*args, **kws)
             if isinstance(ret, (bool, int, float)):
                 ret = constexpr(ret)
             else:
                 ret = _to_tensor(ret, self.builder)
+        else:
+            raise AssertionError(f"Couldn't resolve function: {repr(fn)}")
         # special case: dynamic parallelism
         # in this case the core primitive returns a proxy
         # if isinstance(ret, triton.LaunchProxy):
@@ -2292,7 +2294,7 @@ class dtype:
     int_signedness: SIGNEDNESS
     int_bitwidth: int
     primitive_bitwidth: int
-    fp_mantissa_width: Optional[int] = None
+    fp_mantissa_width: int = 0
 
     def __init__(self, name):
         self.name = name
@@ -2405,7 +2407,7 @@ class dtype:
         return hash((self.name,))
 
     @property
-    def scalar(self):
+    def scalar(self) -> dtype:
         return self
 
     def to_ir(self, builder: ir.builder) -> ir.type:
@@ -2481,7 +2483,7 @@ class pointer_type(dtype):
         return not self.__eq__(other)
 
     @property
-    def scalar(self):
+    def scalar(self) -> pointer_type:
         return self
 
 
@@ -2531,7 +2533,7 @@ class block_type(dtype):
         return not self.__eq__(other)
 
     @property
-    def scalar(self):
+    def scalar(self) -> dtype:
         return self.element_ty
 
 
@@ -5088,7 +5090,7 @@ def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: constexpr = N_ROUNDS_DEFAULT):
     """
     Run `n_rounds` rounds of Philox for state (c0, c1, c2, c3) and key (k0, k1).
     """
-    for _ in range(typecast(int, n_rounds)):
+    for _ in range(n_rounds):  # type: ignore
         # update random state
         A = PHILOX_ROUND_A
         B = PHILOX_ROUND_B
