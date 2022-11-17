@@ -21,6 +21,7 @@ from sysconfig import get_paths
 from enum import Enum
 from types import ModuleType
 from typing import Any, Dict, Set, Tuple, Union, List, Optional, Callable, Sequence
+from typing import cast as typecast
 from collections import defaultdict, namedtuple
 
 
@@ -2445,6 +2446,9 @@ class dtype:
 
 
 class pointer_type(dtype):
+    element_ty: dtype
+    address_space: int
+
     def __init__(self, element_ty: dtype, address_space: int = 1):
         if not isinstance(element_ty, dtype):
             raise TypeError("element_ty is a {type(element_ty).__name__}.")
@@ -2482,6 +2486,7 @@ class pointer_type(dtype):
 
 
 class block_type(dtype):
+    element_ty: dtype
     shape: Tuple[int, ...]
     numel: int
 
@@ -3455,10 +3460,12 @@ def _cat(lhs: tensor, rhs: tensor, builder: ir.builder) -> tensor:
 def _broadcast_impl_shape(
     input: tensor, shape: List[int], builder: ir.builder
 ) -> tensor:
-    if not input.type.is_block():
+    type = input.type
+    if not isinstance(type, block_type):
         ret_ty = block_type(input.type, shape)
         return tensor(builder.create_splat(input.handle, shape), ret_ty)
-    src_shape = input.type.get_block_shapes()
+
+    src_shape = type.get_block_shapes()
     if len(src_shape) != len(shape):
         raise ValueError(f"Cannot broadcast, rank mismatch: {src_shape}, {shape}")
     if shape == src_shape:
@@ -3480,20 +3487,12 @@ def _broadcast_impl_value(
     lhs_ty = lhs.type
     rhs_ty = rhs.type
 
-    # make_shape_compatible(block, scalar)
-    if lhs_ty.is_block() and not rhs_ty.is_block():
-        rhs_ty = block_type(rhs_ty.scalar, lhs_ty.shape)
-        rhs = tensor(
-            builder.create_splat(rhs.handle, lhs_ty.get_block_shapes()), rhs_ty
-        )
-    # make_shape_compatible(scalar, block)
-    elif not lhs_ty.is_block() and rhs_ty.is_block():
-        lhs_ty = block_type(lhs_ty.scalar, rhs_ty.shape)
-        lhs = tensor(
-            builder.create_splat(lhs.handle, rhs_ty.get_block_shapes()), lhs_ty
-        )
+    # scalar, scalar
+    if not isinstance(lhs_ty, block_type) and not isinstance(rhs_ty, block_type):
+        return lhs, rhs
+
     # make_shape_compatible(block, block)
-    elif lhs_ty.is_block() and rhs_ty.is_block():
+    if isinstance(lhs_ty, block_type) and isinstance(rhs_ty, block_type):
         lhs_shape = lhs_ty.get_block_shapes()
         rhs_shape = rhs_ty.get_block_shapes()
         if len(lhs_shape) != len(rhs_shape):
@@ -3521,7 +3520,25 @@ def _broadcast_impl_value(
         if rhs_shape != ret_shape:
             ret_ty = block_type(rhs_ty.scalar, ret_shape)
             rhs = tensor(builder.create_broadcast(rhs.handle, ret_shape), ret_ty)
-    # (scalar, scalar) => returns original blocks
+
+        return lhs, rhs
+
+    # make_shape_compatible(block, scalar)
+    if isinstance(lhs_ty, block_type) and not isinstance(rhs_ty, block_type):
+        rhs_ty = block_type(rhs_ty.scalar, lhs_ty.shape)
+        rhs = tensor(
+            builder.create_splat(rhs.handle, lhs_ty.get_block_shapes()), rhs_ty
+        )
+
+        return lhs, rhs
+
+    # make_shape_compatible(scalar, block)
+    if not isinstance(lhs_ty, block_type) and isinstance(rhs_ty, block_type):
+        lhs_ty = block_type(lhs_ty.scalar, rhs_ty.shape)
+        lhs = tensor(
+            builder.create_splat(lhs.handle, rhs_ty.get_block_shapes()), lhs_ty
+        )
+
     return lhs, rhs
 
 
@@ -3539,7 +3556,7 @@ def _dequantize(
     builder: ir.builder,
 ) -> tensor:
     input_ty = input.type
-    assert input_ty.is_block()
+    assert isinstance(input_ty, block_type)
     assert input_ty.element_ty.is_int32() or input_ty.element_ty.is_int16()
     assert nbit in [2, 4, 8]
     assert dst_ty == float16
@@ -3564,8 +3581,8 @@ def _dequantize(
 
 def _bitcast(input: tensor, dst_ty: dtype, builder: ir.builder) -> tensor:
     src_ty = input.type
-    if src_ty.is_block():
-        dst_ty = block_type(dst_ty, input.type.get_block_shapes())
+    if isinstance(src_ty, block_type):
+        dst_ty = block_type(dst_ty, src_ty.get_block_shapes())
     if src_ty == dst_ty:
         return input
     src_sca_ty = src_ty.scalar
@@ -3585,8 +3602,8 @@ def _bitcast(input: tensor, dst_ty: dtype, builder: ir.builder) -> tensor:
 
 def _cast(input: tensor, dst_ty: dtype, builder: ir.builder) -> tensor:
     src_ty = input.type
-    if src_ty.is_block() and not dst_ty.is_block():
-        dst_ty = block_type(dst_ty, input.type.get_block_shapes())
+    if isinstance(src_ty, block_type) and not isinstance(dst_ty, block_type):
+        dst_ty = block_type(dst_ty, src_ty.get_block_shapes())
     if src_ty == dst_ty:
         return input
     src_sca_ty = src_ty.scalar
@@ -3693,6 +3710,7 @@ def _cast(input: tensor, dst_ty: dtype, builder: ir.builder) -> tensor:
             input = _cast(input, int64, builder)
         other = builder.get_int64(0)
         if src_ty.is_bool():
+            assert isinstance(src_ty, block_type)
             other = builder.create_splat(other, src_ty.get_block_shapes())
         return tensor(builder.create_icmpNE(input.handle, other), dst_ty)
     assert False, f"cannot cast {input} to {dst_ty}"
@@ -5054,11 +5072,11 @@ def zeros_like(input):
     return zeros(input.shape, input.dtype)
 
 
-PHILOX_KEY_A: constexpr = -1640531527  # 0x9E3779B9
-PHILOX_KEY_B: constexpr = -1150833019  # 0xBB67AE85
-PHILOX_ROUND_A: constexpr = -766435501  # 0xD2511F53
-PHILOX_ROUND_B: constexpr = -845247145  # 0xCD9E8D57
-N_ROUNDS_DEFAULT = 10  # Default number of rounds for philox
+PHILOX_KEY_A: constexpr = constexpr(-1640531527)  # 0x9E3779B9
+PHILOX_KEY_B: constexpr = constexpr(-1150833019)  # 0xBB67AE85
+PHILOX_ROUND_A: constexpr = constexpr(-766435501)  # 0xD2511F53
+PHILOX_ROUND_B: constexpr = constexpr(-845247145)  # 0xCD9E8D57
+N_ROUNDS_DEFAULT: constexpr = constexpr(10)  # Default number of rounds for philox
 
 # -------------------
 # randint
@@ -5070,7 +5088,7 @@ def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: constexpr = N_ROUNDS_DEFAULT):
     """
     Run `n_rounds` rounds of Philox for state (c0, c1, c2, c3) and key (k0, k1).
     """
-    for _ in range(n_rounds):
+    for _ in range(typecast(int, n_rounds)):
         # update random state
         A = PHILOX_ROUND_A
         B = PHILOX_ROUND_B
