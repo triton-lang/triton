@@ -19,6 +19,9 @@ dtypes = int_dtypes + uint_dtypes + float_dtypes
 dtypes_with_bfloat16 = dtypes + ['bfloat16']
 torch_dtypes = ['bool'] + int_dtypes + ['uint8'] + float_dtypes + ['bfloat16']
 
+def cdiv(x, div):
+    return (x + div - 1) // div
+
 
 def _bitwidth(dtype: str) -> int:
     # ex.: "int64" -> 64
@@ -405,7 +408,7 @@ def test_where(dtype):
     y_tri = to_triton(y, device='cuda', dst_type=dtype)
     z_tri = to_triton(np.empty(SIZE, dtype=z.dtype), device='cuda', dst_type=dtype)
 
-    grid = lambda meta: (triton.cdiv(SIZE, meta['BLOCK_SIZE']),)
+    grid = lambda meta: (cdiv(SIZE, meta['BLOCK_SIZE']),)
     where_kernel[grid](cond_tri, x_tri, y_tri, z_tri, SIZE, BLOCK_SIZE=1024, TEST_POINTERS=select_ptrs)
     assert (z == to_numpy(z_tri)).all()
 
@@ -773,7 +776,7 @@ def test_store_bool():
     src = torch.tensor([True, False], dtype=torch.bool, device='cuda')
     n_elements = src.numel()
     dst = torch.empty_like(src)
-    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
+    grid = lambda meta: (cdiv(n_elements, meta['BLOCK_SIZE']),)
     copy_kernel[grid](src, dst, n_elements, BLOCK_SIZE=1024)
 
     assert (to_numpy(src).view('uint8') == to_numpy(dst).view('uint8')).all()
@@ -796,7 +799,7 @@ def test_f8_xf16_roundtrip(dtype):
     f8 = triton.reinterpret(f8_tensor, triton.float8)
     n_elements = f8_tensor.numel()
     xf16 = torch.empty_like(f8_tensor, dtype=dtype)
-    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
+    grid = lambda meta: (cdiv(n_elements, meta['BLOCK_SIZE']),)
     copy_kernel[grid](f8, xf16, n_elements, BLOCK_SIZE=1024)
 
     f8_output_tensor = torch.empty_like(xf16, dtype=torch.int8)
@@ -830,7 +833,7 @@ def test_f16_to_f8_rounding():
     n_elements = f16_input.numel()
     f8_output_tensor = torch.empty_like(f16_input, dtype=torch.int8)
     f8_output = triton.reinterpret(f8_output_tensor, triton.float8)
-    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
+    grid = lambda meta: (cdiv(n_elements, meta['BLOCK_SIZE']),)
     copy_kernel[grid](f16_input, f8_output, n_elements, BLOCK_SIZE=1024)
 
     f16_output = torch.empty_like(f16_input, dtype=torch.float16)
