@@ -1294,9 +1294,9 @@ void init_triton_ir(py::module &&m) {
 void init_triton_translation(py::module &m) {
   using ret = py::return_value_policy;
 
-  m.def("get_shared_memory_size", [](mlir::ModuleOp module) {
-    mlir::Allocation allocation(module);
-    return allocation.getSharedMemorySize();
+  m.def("get_shared_memory_size", [](mlir::ModuleOp mod) {
+    auto shared = mod->getAttrOfType<mlir::IntegerAttr>("triton_gpu.shared");
+    return shared.getInt();
   });
 
   m.def(

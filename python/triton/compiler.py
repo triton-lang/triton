@@ -1411,20 +1411,21 @@ def compile(fn, **kwargs):
     for ir, (parse, compile) in list(stages.items())[first_stage:]:
       path = fn_cache_manager._make_path(f"{name}.{ir}")
       if ir == ext:
-        module = parse(fn)
+        next_module = parse(fn)
       elif os.path.exists(path) and\
            os.path.getctime(path) == metadata["ctime"][ir]:
-        module = parse(path)
+        next_module = parse(path)
       else:
-        module = compile(module)
-        fn_cache_manager.put(module, f"{name}.{ir}")
+        next_module = compile(module)
+        fn_cache_manager.put(next_module, f"{name}.{ir}")
       if os.path.exists(path):
         metadata["ctime"][ir] = os.path.getctime(path)
-      asm[ir] = module if ir == "cubin" else str(module)
-      if ir == "ttgir":
+      asm[ir] = next_module if ir == "cubin" else str(next_module)
+      if ir == "llir":
         metadata["shared"] = _triton.get_shared_memory_size(module)
       if ir == "ptx":
-        metadata["name"] = ptx_get_kernel_name(module)
+        metadata["name"] = ptx_get_kernel_name(next_module)
+      module = next_module
     # write-back metadata
     fn_cache_manager.put(json.dumps(metadata), f"{name}.json", binary=False)
     # return handle to compiled kernel
