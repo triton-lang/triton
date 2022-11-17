@@ -39,13 +39,13 @@ def _forward(LOGITS, PROBS, IDX, LOSS, N, BLOCK: tl.constexpr):
     logits = logits.to(tl.float32)
     logits = logits - tl.max(logits, 0)
     probs = tl.log(tl.sum(tl.exp(logits), 0)) - logits
-    tl.store(WRIT_PROBS, probs, mask=cols < N)
+    tl.store(WRIT_PROBS, value=probs, mask=cols < N)
     # There is a bug in the compiler, which fails to insert a barrier here.
     # We add it explicitly for now. Will be fixed soon.
     tl.debug_barrier()
     # write-back loss
     probs = tl.load(READ_PROBS)
-    tl.store(LOSS + row, probs)
+    tl.store(LOSS + row, value=probs)
 
 
 @triton.heuristics({'num_warps': lambda nargs: num_warps(nargs['N'])})
@@ -65,7 +65,7 @@ def _backward(PROBS, IDX, DPROBS, N, BLOCK: tl.constexpr):
     # write result in-place in PROBS
     dout = tl.load(DPROBS + row)
     din = (probs - delta) * dout
-    tl.store(PROBS, din.to(PROBS.dtype.element_ty), mask=cols < N)
+    tl.store(PROBS, value=din.to(PROBS.dtype.element_ty), mask=cols < N)
 
 
 class _cross_entropy(torch.autograd.Function):

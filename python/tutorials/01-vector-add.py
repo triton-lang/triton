@@ -44,7 +44,7 @@ def add_kernel(
     y = tl.load(y_ptr + offsets, mask=mask)
     output = x + y
     # Write x + y back to DRAM.
-    tl.store(output_ptr + offsets, output, mask=mask)
+    tl.store(output_ptr + offsets, value=output, mask=mask)
 
 
 # %%

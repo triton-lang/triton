@@ -120,7 +120,7 @@ def _add(x_ptr, y_ptr, output_ptr, n_elements,
     x = tl.load(x_ptr + offsets, mask=mask)
     y = tl.load(y_ptr + offsets, mask=mask)
     output = x + y
-    tl.store(output_ptr + offsets, output, mask=mask)
+    tl.store(output_ptr + offsets, value=output, mask=mask)
 
 
 elementwise_data = {

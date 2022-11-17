@@ -19,7 +19,8 @@ import textwrap
 import warnings
 from sysconfig import get_paths
 from enum import Enum
-from typing import Any, Dict, Set, Tuple, Union, List, Optional
+from types import ModuleType
+from typing import Any, Dict, Set, Tuple, Union, List, Optional, Callable, Sequence
 from collections import defaultdict, namedtuple
 
 
@@ -94,8 +95,6 @@ class DependenciesFinder(ast.NodeVisitor):
 
 @functools.lru_cache()
 def version_key():
-    import pkgutil
-
     contents = []
 
     # frontend
@@ -485,6 +484,16 @@ def jit(*args, **kwargs):
 
 
 class Autotuner(KernelInterface):
+    configs: List[Config]
+    key_idx: List[int]
+    cache: Dict[Tuple[Any, ...], tensor]
+    reset_idx: List[int]
+    hook: Callable[[List[tensor]], None]
+    perf_model: Optional[Callable]
+    configs_top_k: Optional[List[Config]]
+    early_config_prune: Optional[Callable[[List[Config], int], List[Config]]]
+    fn: Callable
+
     def __init__(
         self,
         fn,
@@ -507,7 +516,7 @@ class Autotuner(KernelInterface):
         self.key_idx = [arg_names.index(k) for k in key]
         self.cache = dict()
         # hook to reset all required tensor to zeros before relaunching a kernel
-        self.hook = lambda args: 0
+        self.hook = lambda args: None
         if reset_to_zero is not None:
             self.reset_idx = [arg_names.index(k) for k in reset_to_zero]
 
@@ -527,7 +536,8 @@ class Autotuner(KernelInterface):
                 early_config_prune = prune_configs_by["early_config_prune"]
         else:
             perf_model, top_k, early_config_prune = None, None, None
-        self.perf_model, self.configs_top_k = perf_model, top_k
+        self.perf_model = perf_model
+        self.configs_top_k = top_k
         self.early_config_prune = early_config_prune
         self.fn = fn
 
@@ -805,16 +815,27 @@ def is_triton_tensor(value):
 
 
 class ValueConstructor:
-    def __init__(self, module, builder, gscope) -> None:
+    gscope: Dict[str, Any]
+    lscope: Dict[str, Any]
+    module: ModuleType
+    builder: ir.builder
+    lvalues: Dict[Tuple[str, _triton.ir.basic_block], tensor]
+    sealed_blocks: Set[_triton.ir.basic_block]
+    incomplete_phis: Dict[str, Dict[str, tensor]]
+    builtins: Dict[str, Any]
+
+    def __init__(
+        self, module: ModuleType, builder: ir.builder, gscope: Dict[str, Any]
+    ) -> None:
         self.gscope = gscope
-        self.lscope = dict()
+        self.lscope = {}
         self.builder = builder
         self.module = module
         # [name, bb] => tensor
-        self.lvalues: Dict[Tuple[str, _triton.ir.basic_block], tensor] = {}
+        self.lvalues = {}
         # bb => {name => phi}
         self.incomplete_phis = {}
-        self.sealed_blocks: Set[_triton.ir.basic_block] = set()
+        self.sealed_blocks = set()
         #
         self.builtins = {
             "range": range,
@@ -826,7 +847,7 @@ class ValueConstructor:
             "getattr": getattr,
         }
 
-    def get_value(self, name):
+    def get_value(self, name) -> Any:
         """This function:
         1. make sure `name` is defined
         2. if `name` is triton.tensor, get stored tensor by calling
@@ -946,7 +967,7 @@ class CodeGenerator(ast.NodeVisitor):
         self,
         context,
         prototype,
-        gscope,
+        gscope: Dict[str, Any],
         attributes,
         constants,
         function_name,
@@ -1391,7 +1412,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.visit(init_node)
         # promote it to right type
         init_val = self.value_constructor.get_value(node.target.id)
-        promote = lambda a, b: _computation_type_impl(a, b, False)
+        promote = lambda a, b: _computation_type_impl(a, b, div_or_mod=False)
         start_ty = _to_tensor(iter_args[0], self.builder).type
         stop_ty = (
             _to_tensor(iter_args[1], self.builder).type if len(iter_args) > 1 else None
@@ -1662,6 +1683,7 @@ def ptx_get_kernel_name(ptx: str) -> str:
         line = line.strip()
         if line.startswith("// .globl"):
             return line.split()[-1]
+    raise AssertionError(f"No kernel name found in:\n{ptx}")
 
 
 def _compile(
@@ -1675,7 +1697,7 @@ def _compile(
     extern_libs=None,
     output: str = "ttgir",
     cc=0,
-) -> Tuple[str, int, str]:
+) -> Tuple[Dict[str, object], int, str]:
     valid_outputs = ("ttir", "ttgir", "ptx", "cubin")
     assert output in valid_outputs, 'output should be one of [%s], but get "%s"' % (
         ",".join(valid_outputs),
@@ -2263,6 +2285,14 @@ class dtype:
         SIGNED = 0
         UNSIGNED = 1
 
+    name: str
+    numel: int = 1
+    shape: Tuple[int, ...] = tuple()
+    int_signedness: SIGNEDNESS
+    int_bitwidth: int
+    primitive_bitwidth: int
+    fp_mantissa_width: Optional[int] = None
+
     def __init__(self, name):
         self.name = name
         assert (
@@ -2296,78 +2326,78 @@ class dtype:
         elif name == "void":
             self.primitive_bitwidth = 0
 
-    def is_fp8(self):
+    def is_fp8(self) -> bool:
         return self.name == "fp8"
 
-    def is_fp16(self):
+    def is_fp16(self) -> bool:
         return self.name == "fp16"
 
-    def is_bf16(self):
+    def is_bf16(self) -> bool:
         return self.name == "bf16"
 
-    def is_fp32(self):
+    def is_fp32(self) -> bool:
         return self.name == "fp32"
 
-    def is_fp64(self):
+    def is_fp64(self) -> bool:
         return self.name == "fp64"
 
-    def is_int1(self):
+    def is_int1(self) -> bool:
         return self.name == "int1"
 
-    def is_int8(self):
+    def is_int8(self) -> bool:
         return self.name == "int8"
 
-    def is_int16(self):
+    def is_int16(self) -> bool:
         return self.name == "int16"
 
-    def is_int32(self):
+    def is_int32(self) -> bool:
         return self.name == "int32"
 
-    def is_int64(self):
+    def is_int64(self) -> bool:
         return self.name == "int64"
 
-    def is_uint8(self):
+    def is_uint8(self) -> bool:
         return self.name == "uint8"
 
-    def is_uint16(self):
+    def is_uint16(self) -> bool:
         return self.name == "uint16"
 
-    def is_uint32(self):
+    def is_uint32(self) -> bool:
         return self.name == "uint32"
 
-    def is_uint64(self):
+    def is_uint64(self) -> bool:
         return self.name == "uint64"
 
-    def is_floating(self):
+    def is_floating(self) -> bool:
         return self.name in dtype.FP_TYPES
 
-    def is_int_signed(self):
+    def is_int_signed(self) -> bool:
         return self.name in dtype.SINT_TYPES
 
-    def is_int_unsigned(self):
+    def is_int_unsigned(self) -> bool:
         return self.name in dtype.UINT_TYPES
 
-    def is_int(self):
+    def is_int(self) -> bool:
         return self.name in dtype.SINT_TYPES + dtype.UINT_TYPES
 
-    def is_bool(self):
+    def is_bool(self) -> bool:
         return self.is_int1()
 
-    def is_void(self):
+    def is_void(self) -> bool:
         return self.name == "void"
 
-    def is_block(self):
+    def is_block(self) -> bool:
         return False
 
-    def is_ptr(self):
+    def is_ptr(self) -> bool:
         return False
 
-    def __eq__(self, other: dtype):
+    def __eq__(self, other: Any):
         if not isinstance(other, dtype):
             return False
         return self.name == other.name
 
-    def __ne__(self, other: dtype):
+    def __ne__(self, other: Any):
         return not self.__eq__(other)
 
     def __hash__(self):
@@ -2435,7 +2465,7 @@ class pointer_type(dtype):
     def is_ptr(self):
         return True
 
-    def __eq__(self, other: pointer_type) -> bool:
+    def __eq__(self, other: Any) -> bool:
         if not isinstance(other, pointer_type):
             return False
         return (
@@ -2443,7 +2473,7 @@ class pointer_type(dtype):
             and self.address_space == other.address_space
         )
 
-    def __ne__(self, other: pointer_type) -> bool:
+    def __ne__(self, other: Any) -> bool:
         return not self.__eq__(other)
 
     @property
@@ -2452,41 +2482,47 @@ class pointer_type(dtype):
 
 
 class block_type(dtype):
-    def __init__(self, element_ty: dtype, shape: List[int]):
+    shape: Tuple[int, ...]
+    numel: int
+
+    def __init__(self, element_ty: dtype, shape: Sequence[int]):
         self.element_ty = element_ty
         # FIXME:
-        # block_type's shape is a list of int
+        # block_type's shape is a tuple of int
         # while tensor's shape is a list of constexpr
-        self.shape = shape
         self.numel = 1
-        for i, s in enumerate(self.shape):
+
+        shape = list(shape)
+        for i, s in enumerate(shape):
             if isinstance(s, constexpr):
-                self.shape[i] = s.value
-            self.numel *= self.shape[i]
+                shape[i] = s.value
+            self.numel *= shape[i]
+
+        self.shape = tuple(shape)
 
         self.name = self.__str__()
 
     def to_ir(self, builder: ir.builder) -> ir.block_type:
         return ir.type.make_block(self.element_ty.to_ir(builder), self.shape)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"<{self.shape}, {self.element_ty}>"
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.__str__()
 
-    def is_block(self):
+    def is_block(self) -> bool:
         return True
 
-    def get_block_shapes(self) -> List[int]:
+    def get_block_shapes(self) -> Tuple[int, ...]:
         return self.shape
 
-    def __eq__(self, other: block_type) -> bool:
+    def __eq__(self, other: Any) -> bool:
         if not isinstance(other, block_type):
             return False
         return self.element_ty == other.element_ty and self.shape == other.shape
 
-    def __ne__(self, other: block_type) -> bool:
+    def __ne__(self, other: Any) -> bool:
         return not self.__eq__(other)
 
     @property
@@ -2580,12 +2616,16 @@ class constexpr:
         other = other.value if isinstance(other, constexpr) else other
         return self.value == other
 
+    def __ne__(self, other: Any) -> bool:
+        return not self.__eq__(other)
+
     def __call__(self, *args, **kwds):
         return self.value(*args, **kwds)
 
-    def to(self, dtype, bitcast=False, _builder=None):
+    def to(self, dtype, bitcast=False, _builder: ir.builder = None) -> constexpr:
         if dtype in [float8, float16, bfloat16]:
             raise ValueError("floating point constexpr must be float64")
+        ret_ty: type
         if dtype.is_int():
             ret_ty = int
         elif dtype.is_bool():
@@ -2595,7 +2635,16 @@ class constexpr:
         return constexpr(ret_ty(self.value))
 
 
+dtype_t = dtype
+
+
 class tensor:
+    handle: ir.pointer_type
+    type: dtype_t
+    dtype: dtype_t
+    shape: List[constexpr]
+    numel: constexpr
+
     # infer dtype from ir type
     @staticmethod
     def _to_dtype(ir_type):
@@ -2632,118 +2681,119 @@ class tensor:
             return float64
         raise ValueError(f"Unsupported type {ir_type.repr()}")
 
-    def __init__(self, handle, type: dtype):
+    def __init__(self, handle, type: dtype_t):
         # IR handle
         self.handle = handle
         # Block shape
-        self.shape = (1,)
+        shape = (1,)
         if self.handle.type.is_block():
-            self.shape = self.handle.type.shape
-        self.numel = 1
-        for s in self.shape:
-            self.numel *= s
-        is_pow2 = self.numel and (not (self.numel & (self.numel - 1)))
+            shape = self.handle.type.shape
+        numel = 1
+        for s in shape:
+            numel *= s
+        is_pow2 = numel and (not (numel & (numel - 1)))
         if not is_pow2:
             raise ValueError(
                 "Triton tensors must have a power-of-two number of elements"
             )
-        self.numel = constexpr(self.numel)
+        self.numel = constexpr(numel)
+        self.shape = [constexpr(s) for s in shape]
+
         self.type = type  # Tensor type (can be block_type)
         # Following the practice in pytorch, dtype is scalar type
         self.dtype = type.scalar
-        self.shape = [constexpr(s) for s in self.shape]
 
     def __str__(self) -> str:
         # ex. "float32[3,4]"
         return str(self.dtype) + "[" + ",".join(str(s) for s in self.shape) + "]"
 
     @builtin
-    def __add__(self, other, _builder=None):
+    def __add__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _add(self, other, _builder)
 
-    def __radd__(self, other, _builder=None):
+    def __radd__(self, other, _builder: ir.builder = None):
         return self.__add__(other, _builder=_builder)
 
     @builtin
-    def __sub__(self, other, _builder=None):
+    def __sub__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _sub(self, other, _builder)
 
-    def __rsub__(self, other, _builder=None):
+    def __rsub__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _sub(other, self, _builder)
 
     @builtin
-    def __mul__(self, other, _builder=None):
+    def __mul__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _mul(self, other, _builder)
 
-    def __rmul__(self, other, _builder=None):
+    def __rmul__(self, other, _builder: ir.builder = None) -> tensor:
         return self.__mul__(other, _builder=_builder)
 
     @builtin
-    def __truediv__(self, other, _builder=None):
+    def __truediv__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _truediv(self, other, _builder)
 
-    def __rtruediv__(self, other, _builder=None):
+    def __rtruediv__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _truediv(other, self, _builder)
 
     @builtin
-    def __floordiv__(self, other, _builder=None):
+    def __floordiv__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _floordiv(self, other, _builder)
 
     @builtin
-    def __rfloordiv__(self, other, _builder=None):
+    def __rfloordiv__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _floordiv(other, self, _builder)
 
     @builtin
-    def __mod__(self, other, _builder=None):
+    def __mod__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _mod(self, other, _builder)
 
     @builtin
-    def __rmod__(self, other, _builder=None):
+    def __rmod__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _mod(other, self, _builder)
 
     # unary operators
     @builtin
-    def __neg__(self, _builder=None):
+    def __neg__(self, _builder: ir.builder = None) -> tensor:
         return _minus(self, _builder)
 
     @builtin
-    def __invert__(self, _builder=None):
+    def __invert__(self, _builder: ir.builder = None) -> tensor:
         return _invert(self, _builder)
 
     # bitwise operators
 
     @builtin
-    def __and__(self, other, _builder=None):
+    def __and__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _and_(self, other, _builder)
 
     @builtin
-    def __or__(self, other, _builder=None):
+    def __or__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _or_(self, other, _builder)
 
     @builtin
-    def __xor__(self, other, _builder=None):
+    def __xor__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _xor_(self, other, _builder)
 
     @builtin
-    def __lshift__(self, other, _builder=None):
+    def __lshift__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _shl(self, other, _builder)
 
     @builtin
-    def __rshift__(self, other, _builder=None):
+    def __rshift__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _lshr(self, other, _builder)
 
@@ -2751,61 +2801,61 @@ class tensor:
 
     # >
     @builtin
-    def __gt__(self, other, _builder=None):
+    def __gt__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _greater_than(self, other, _builder)
 
     @builtin
-    def __rgt__(self, other, _builder=None):
+    def __rgt__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _greater_than(other, self, _builder)
 
     # >=
     @builtin
-    def __ge__(self, other, _builder=None):
+    def __ge__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _greater_equal(self, other, _builder)
 
     @builtin
-    def __rge__(self, other, _builder=None):
+    def __rge__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _greater_equal(other, self, _builder)
 
     # <
     @builtin
-    def __lt__(self, other, _builder=None):
+    def __lt__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _less_than(self, other, _builder)
 
     @builtin
-    def __rlt__(self, other, _builder=None):
+    def __rlt__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _less_than(other, self, _builder)
 
     # <=
     @builtin
-    def __le__(self, other, _builder=None):
+    def __le__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _less_equal(self, other, _builder)
 
     @builtin
-    def __rle__(self, other, _builder=None):
+    def __rle__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _less_equal(other, self, _builder)
 
     # ==
     @builtin
-    def __eq__(self, other, _builder=None):
+    def __eq__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _equal(self, other, _builder)
 
     @builtin
-    def __ne__(self, other, _builder=None):
+    def __ne__(self, other, _builder: ir.builder = None) -> tensor:
         other = _to_tensor(other, _builder)
         return _not_equal(self, other, _builder)
 
     @builtin
-    def __getitem__(self, slices, _builder=None):
+    def __getitem__(self, slices, _builder: ir.builder = None) -> tensor:
         if isinstance(slices, slice):
             slices = [slices]
         src_shape = self.shape
@@ -2821,7 +2871,7 @@ class tensor:
         return ret
 
     @builtin
-    def to(self, dtype, bitcast=False, _builder=None):
+    def to(self, dtype, bitcast=False, _builder: ir.builder = None) -> tensor:
         if isinstance(bitcast, constexpr):
             bitcast = bitcast.value
         if bitcast:
@@ -2878,7 +2928,12 @@ def _integer_promote_impl(a_ty: dtype, b_ty: dtype) -> dtype:
     assert False
 
 
-def _computation_type_impl(a_ty: dtype, b_ty: dtype, div_or_mod: bool) -> dtype:
+def _computation_type_impl(
+    a_ty: dtype,
+    b_ty: dtype,
+    *,
+    div_or_mod: bool,
+) -> dtype:
     # 1) if one operand is double, the other is implicitly
     #    converted to double
     if a_ty.is_fp64() or b_ty.is_fp64():
@@ -2923,7 +2978,12 @@ def _computation_type_impl(a_ty: dtype, b_ty: dtype, div_or_mod: bool) -> dtype:
 # ===----------------------------------------------------------------------===//
 
 
-def _check_ptr_type_impl(type_a: dtype, type_b: dtype, allow_ptr_a: bool) -> None:
+def _check_ptr_type_impl(
+    type_a: dtype,
+    type_b: dtype,
+    *,
+    allow_ptr_a: bool,
+) -> None:
     if type_a.is_ptr():
         if not allow_ptr_a:
             raise IncompatibleTypeErrorimpl(type_a, type_b)
@@ -2938,28 +2998,37 @@ def _check_ptr_type_impl(type_a: dtype, type_b: dtype, allow_ptr_a: bool) -> Non
 def _binary_op_type_checking_impl(
     lhs: tensor,
     rhs: tensor,
+    *,
     builder: ir.builder,
-    allow_lhs_ptr=False,
-    allow_rhs_ptr=False,
-    arithmetic_check=True,
-    div_or_mod=False,
+    allow_lhs_ptr: bool = False,
+    allow_rhs_ptr: bool = False,
+    arithmetic_check: bool = True,
+    div_or_mod: bool = False,
 ) -> Tuple[tensor, tensor]:
     # implicit broadcasting
     lhs, rhs = _broadcast_impl_value(lhs, rhs, builder)
     # implicit typecasting
     lhs_sca_ty = lhs.type.scalar
     rhs_sca_ty = rhs.type.scalar
-    _check_ptr_type_impl(lhs_sca_ty, rhs_sca_ty, allow_lhs_ptr)
-    _check_ptr_type_impl(rhs_sca_ty, lhs_sca_ty, allow_rhs_ptr)
+    _check_ptr_type_impl(lhs_sca_ty, rhs_sca_ty, allow_ptr_a=allow_lhs_ptr)
+    _check_ptr_type_impl(rhs_sca_ty, lhs_sca_ty, allow_ptr_a=allow_rhs_ptr)
     if arithmetic_check and not lhs_sca_ty.is_ptr() and not rhs_sca_ty.is_ptr():
-        ret_sca_ty = _computation_type_impl(lhs_sca_ty, rhs_sca_ty, div_or_mod)
+        ret_sca_ty = _computation_type_impl(
+            lhs_sca_ty, rhs_sca_ty, div_or_mod=div_or_mod
+        )
         lhs = _cast(lhs, ret_sca_ty, builder)
         rhs = _cast(rhs, ret_sca_ty, builder)
     return lhs, rhs
 
 
 def _add(input: tensor, other: tensor, builder: ir.builder) -> tensor:
-    input, other = _binary_op_type_checking_impl(input, other, builder, True, True)
+    input, other = _binary_op_type_checking_impl(
+        input,
+        other,
+        builder=builder,
+        allow_lhs_ptr=True,
+        allow_rhs_ptr=True,
+    )
     input_scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
 
@@ -2979,7 +3048,13 @@ def _add(input: tensor, other: tensor, builder: ir.builder) -> tensor:
 
 
 def _sub(input: tensor, other: tensor, builder: ir.builder) -> tensor:
-    input, other = _binary_op_type_checking_impl(input, other, builder, True, False)
+    input, other = _binary_op_type_checking_impl(
+        input,
+        other,
+        builder=builder,
+        allow_lhs_ptr=True,
+        allow_rhs_ptr=False,
+    )
     scalar_ty = input.type.scalar
     # ptr - offset
     if scalar_ty.is_ptr():
@@ -2997,7 +3072,7 @@ def _sub(input: tensor, other: tensor, builder: ir.builder) -> tensor:
 
 
 def _mul(input: tensor, other: tensor, builder: ir.builder) -> tensor:
-    input, other = _binary_op_type_checking_impl(input, other, builder)
+    input, other = _binary_op_type_checking_impl(input, other, builder=builder)
     scalar_ty = input.type.scalar
     # float * float
     if scalar_ty.is_floating():
@@ -3010,7 +3085,13 @@ def _mul(input: tensor, other: tensor, builder: ir.builder) -> tensor:
 
 def _truediv(input: tensor, other: tensor, builder: ir.builder) -> tensor:
     input, other = _binary_op_type_checking_impl(
-        input, other, builder, False, False, True, True
+        input,
+        other,
+        builder=builder,
+        allow_lhs_ptr=False,
+        allow_rhs_ptr=False,
+        arithmetic_check=True,
+        div_or_mod=True,
     )
     input_scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
@@ -3038,7 +3119,13 @@ def _truediv(input: tensor, other: tensor, builder: ir.builder) -> tensor:
 
 def _floordiv(input: tensor, other: tensor, builder: ir.builder) -> tensor:
     input, other = _binary_op_type_checking_impl(
-        input, other, builder, False, False, True, True
+        input,
+        other,
+        builder=builder,
+        allow_lhs_ptr=False,
+        allow_rhs_ptr=False,
+        arithmetic_check=True,
+        div_or_mod=True,
     )
     input_scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
@@ -3061,7 +3148,13 @@ def _fdiv(
     if not input_scalar_ty.is_floating() or not other_scalar_ty.is_floating():
         raise ValueError("both operands of fdiv must have floating poscalar type")
     input, other = _binary_op_type_checking_impl(
-        input, other, builder, False, False, False, True
+        input,
+        other,
+        builder=builder,
+        allow_lhs_ptr=False,
+        allow_rhs_ptr=False,
+        arithmetic_check=False,
+        div_or_mod=True,
     )
     ret = builder.create_fdiv(input.handle, other.handle)
     ret.set_fdiv_ieee_rounding(ieee_rounding)
@@ -3070,7 +3163,13 @@ def _fdiv(
 
 def _mod(input: tensor, other: tensor, builder: ir.builder) -> tensor:
     input, other = _binary_op_type_checking_impl(
-        input, other, builder, False, False, True, True
+        input,
+        other,
+        builder=builder,
+        allow_lhs_ptr=False,
+        allow_rhs_ptr=False,
+        arithmetic_check=True,
+        div_or_mod=True,
     )
     scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
@@ -3102,10 +3201,17 @@ def _mod(input: tensor, other: tensor, builder: ir.builder) -> tensor:
 
 
 def _bitwise_op_type_checking_impl(
-    input: tensor, other: tensor, builder: ir.builder
+    input: tensor,
+    other: tensor,
+    builder: ir.builder,
 ) -> Tuple[tensor, tensor]:
     input, other = _binary_op_type_checking_impl(
-        input, other, builder, False, False, False
+        input,
+        other,
+        builder=builder,
+        allow_lhs_ptr=False,
+        allow_rhs_ptr=False,
+        arithmetic_check=False,
     )
     input_sca_ty = input.type.scalar
     other_sca_ty = other.type.scalar
@@ -3178,15 +3284,17 @@ def _invert(input: tensor, builder: tensor) -> tensor:
 # ===----------------------------------------------------------------------===//
 #                               Comparison Operators
 # ===----------------------------------------------------------------------===//
-def _bool_like(v: tensor) -> block_type:
-    if not v.type.is_block():
-        return int1
-    shape = v.type.shape
-    return block_type(int1, shape)
+def _bool_like(v: tensor) -> dtype:
+    type = v.type
+    if isinstance(type, block_type):
+        shape = type.shape
+        return block_type(int1, shape)
+
+    return int1
 
 
 def _greater_than(input: tensor, other: tensor, builder: ir.builder) -> tensor:
-    input, other = _binary_op_type_checking_impl(input, other, builder)
+    input, other = _binary_op_type_checking_impl(input, other, builder=builder)
     scalar_ty = input.type.scalar
     # float > float
     if scalar_ty.is_floating():
@@ -3207,7 +3315,7 @@ def _greater_than(input: tensor, other: tensor, builder: ir.builder) -> tensor:
 
 
 def _greater_equal(input: tensor, other: tensor, builder: ir.builder) -> tensor:
-    input, other = _binary_op_type_checking_impl(input, other, builder)
+    input, other = _binary_op_type_checking_impl(input, other, builder=builder)
     scalar_ty = input.type.scalar
     # float >= float
     if scalar_ty.is_floating():
@@ -3228,7 +3336,7 @@ def _greater_equal(input: tensor, other: tensor, builder: ir.builder) -> tensor:
 
 
 def _less_than(input: tensor, other: tensor, builder: ir.builder) -> tensor:
-    input, other = _binary_op_type_checking_impl(input, other, builder)
+    input, other = _binary_op_type_checking_impl(input, other, builder=builder)
     scalar_ty = input.type.scalar
     # float < float
     if scalar_ty.is_floating():
@@ -3249,7 +3357,7 @@ def _less_than(input: tensor, other: tensor, builder: ir.builder) -> tensor:
 
 
 def _less_equal(input: tensor, other: tensor, builder: ir.builder) -> tensor:
-    input, other = _binary_op_type_checking_impl(input, other, builder)
+    input, other = _binary_op_type_checking_impl(input, other, builder=builder)
     scalar_ty = input.type.scalar
     # float < float
     if scalar_ty.is_floating():
@@ -3270,7 +3378,7 @@ def _less_equal(input: tensor, other: tensor, builder: ir.builder) -> tensor:
 
 
 def _equal(input: tensor, other: tensor, builder: ir.builder) -> tensor:
-    input, other = _binary_op_type_checking_impl(input, other, builder)
+    input, other = _binary_op_type_checking_impl(input, other, builder=builder)
     scalar_ty = input.type.scalar
     # float == float
     if scalar_ty.is_floating():
@@ -3286,7 +3394,7 @@ def _equal(input: tensor, other: tensor, builder: ir.builder) -> tensor:
 
 
 def _not_equal(input: tensor, other: tensor, builder: ir.builder) -> tensor:
-    input, other = _binary_op_type_checking_impl(input, other, builder)
+    input, other = _binary_op_type_checking_impl(input, other, builder=builder)
     scalar_ty = input.type.scalar
     # float == float
     if scalar_ty.is_floating():
@@ -3366,7 +3474,9 @@ def _broadcast_impl_shape(
     return tensor(builder.create_broadcast(input.handle, shape), ret_ty)
 
 
-def _broadcast_impl_value(lhs: tensor, rhs: tensor, builder: ir.builder) -> tensor:
+def _broadcast_impl_value(
+    lhs: tensor, rhs: tensor, builder: ir.builder
+) -> Tuple[tensor, tensor]:
     lhs_ty = lhs.type
     rhs_ty = rhs.type
 
@@ -3436,7 +3546,7 @@ def _dequantize(
 
     shape = input_ty.get_block_shapes()
     factor = input_ty.element_ty.primitive_bitwidth // nbit
-    dst_shape = shape[:-1] + [factor * shape[-1]]
+    dst_shape = shape[:-1] + (factor * shape[-1],)
 
     dst_ty = block_type(dst_ty, dst_shape)
     return tensor(
@@ -3950,7 +4060,13 @@ def _where(condition: tensor, x: tensor, y: tensor, builder: ir.builder) -> tens
         x, y = _broadcast_impl_value(x, y, builder)
         condition, x = _broadcast_impl_value(condition, x, builder)
 
-    x, y = _binary_op_type_checking_impl(x, y, builder, True, True)
+    x, y = _binary_op_type_checking_impl(
+        x,
+        y,
+        builder=builder,
+        allow_lhs_ptr=True,
+        allow_rhs_ptr=True,
+    )
     if not condition.type.is_block():
         condition, _ = _broadcast_impl_value(condition, x, builder)
     ret_ty = x.type
@@ -4066,7 +4182,7 @@ def _globaltimer(builder: ir.builder) -> tensor:
 
 
 def _umulhi(x: tensor, y: tensor, builder: ir.builder) -> tensor:
-    x, y = _binary_op_type_checking_impl(x, y, builder)
+    x, y = _binary_op_type_checking_impl(x, y, builder=builder)
     return tensor(builder.create_umulhi(x.handle, y.handle), x.type)
 
 
@@ -4125,7 +4241,7 @@ def _constexpr_to_value(v):
 
 
 @builtin
-def program_id(axis, _builder=None):
+def program_id(axis, _builder: ir.builder = None):
     """
     Returns the id of the current program instance along the given :code:`axis`.
 
@@ -4144,7 +4260,7 @@ def program_id(axis, _builder=None):
 
 
 @builtin
-def num_programs(axis, _builder=None):
+def num_programs(axis, _builder: ir.builder = None):
     """
     Returns the number of program instances launched along the given :code:`axis`.
 
@@ -4161,7 +4277,7 @@ def num_programs(axis, _builder=None):
 
 
 @builtin
-def arange(start, end, _builder=None):
+def arange(start, end, _builder: ir.builder = None):
     """
     Returns contiguous values within the open interval [:code:`start`, :code:`end`).
 
@@ -4176,7 +4292,7 @@ def arange(start, end, _builder=None):
 
 
 @builtin
-def zeros(shape, dtype, _builder=None):
+def zeros(shape, dtype, _builder: ir.builder = None):
     """
     Returns a tensor filled with the scalar value 0 for the given :code:`shape` and :code:`dtype`.
 
@@ -4203,7 +4319,7 @@ def zeros(shape, dtype, _builder=None):
 
 
 @builtin
-def dequantize(input, scale, shift, nbit, dst_ty=float16, _builder=None):
+def dequantize(input, scale, shift, nbit, dst_ty=float16, _builder: ir.builder = None):
     """
     Tries to dequantize the input to given dtype
     """
@@ -4217,7 +4333,7 @@ def dequantize(input, scale, shift, nbit, dst_ty=float16, _builder=None):
 
 
 @builtin
-def broadcast(input, other, _builder=None):
+def broadcast(input, other, _builder: ir.builder = None):
     """
     Tries to broadcast the two given blocks to a common compatible shape.
 
@@ -4230,7 +4346,7 @@ def broadcast(input, other, _builder=None):
 
 
 @builtin
-def broadcast_to(input, shape, _builder=None):
+def broadcast_to(input, shape, _builder: ir.builder = None):
     """
     Tries to broadcast the given tensor to a new :code:`shape`.
 
@@ -4243,7 +4359,7 @@ def broadcast_to(input, shape, _builder=None):
 
 
 @builtin
-def cat(input, other, _builder=None):
+def cat(input, other, _builder: ir.builder = None):
     """
     Concatenate the given blocks
 
@@ -4256,7 +4372,7 @@ def cat(input, other, _builder=None):
 
 
 @builtin
-def reshape(input, shape, _builder=None):
+def reshape(input, shape, _builder: ir.builder = None):
     """
     Tries to reshape the given tensor to a new shape.
 
@@ -4276,7 +4392,14 @@ def reshape(input, shape, _builder=None):
 
 
 @builtin
-def dot(input, other, trans_a=False, trans_b=False, allow_tf32=True, _builder=None):
+def dot(
+    input,
+    other,
+    trans_a=False,
+    trans_b=False,
+    allow_tf32=True,
+    _builder: ir.builder = None,
+):
     """
     Returns the matrix product of two blocks.
 
@@ -4304,11 +4427,12 @@ def load(
     cache_modifier="",
     eviction_policy="",
     volatile=False,
-    _builder=None,
-):
+    _builder: ir.builder = None,
+) -> tensor:
     """
     Return a tensor of data whose values are, elementwise, loaded from memory at location defined by :code:`pointer`.
 
+    :param *:
     :code:`mask` and :code:`other` are implicitly broadcast to :code:`pointer.shape`.
 
     :code:`other` is implicitly typecast to :code:`pointer.dtype.element_ty`.
@@ -4336,10 +4460,17 @@ def load(
 
 
 @builtin
-def store(pointer, value, mask=None, eviction_policy="", _builder=None):
+def store(
+    pointer,
+    value,
+    mask=None,
+    eviction_policy="",
+    _builder: ir.builder = None,
+) -> tensor:
     """
     Stores :code:`value` tensor of elements in memory, element-wise, at the memory locations specified by :code:`pointer`.
 
+    :param *:
     :code:`value` is implicitly broadcast to :code:`pointer.shape` and typecast to :code:`pointer.dtype.element_ty`.
 
     :param pointer: The memory locations where the elements of :code:`value` are stored.
@@ -4362,7 +4493,7 @@ def store(pointer, value, mask=None, eviction_policy="", _builder=None):
 
 
 @builtin
-def atomic_cas(pointer, cmp, val, _builder=None):
+def atomic_cas(pointer, cmp, val, _builder: ir.builder = None):
     """
     Performs an atomic compare-and-swap at the memory location specified by :code:`pointer`.
 
@@ -4402,16 +4533,18 @@ def _add_atomic_docstr(name):
 
 def dispatch(
     func,
+    *,
     lib_name: str,
     lib_path: str,
     args: list,
     arg_type_symbol_dict: dict,
-    ret_shape: tuple,
-    _builder=None,
-):
+    ret_shape: Optional[Sequence[int]] = None,
+    _builder: ir.builder = None,
+) -> tensor:
     """
     Dispatch a function to a library
 
+    :param *:
     :param func: the function to dispatch
     :param lib_name: the name of the library
     :param lib_path: the path of the library
@@ -4432,8 +4565,8 @@ def dispatch(
             f"Expect {len(args)}, got {num_args}"
         )
 
-    arg_types = []
-    arg_list = []
+    arg_types: List[Union[type, dtype]] = []
+    arg_list: List[Any] = []
     for arg in args:
         if isinstance(arg, tensor):
             arg_types.append(arg.dtype)
@@ -4441,16 +4574,16 @@ def dispatch(
         else:
             arg_types.append(type(arg))
             arg_list.append(arg)
-    arg_types = tuple(arg_types)
+    arg_types_t = tuple(arg_types)
 
     if arg_types not in arg_type_symbol_dict:
         raise ValueError(
             f"input arg type does not match."
-            f"Expect one of {arg_type_symbol_dict.keys()}, got {arg_types}"
+            f"Expect one of {arg_type_symbol_dict.keys()}, got {arg_types_t}"
         )
     else:
-        symbol = arg_type_symbol_dict[arg_types][0]
-        ret_type = arg_type_symbol_dict[arg_types][1]
+        symbol = arg_type_symbol_dict[arg_types_t][0]
+        ret_type = arg_type_symbol_dict[arg_types_t][1]
         ret_type = (
             block_type(ret_type, ret_shape) if ret_shape is not None else ret_type
         )
@@ -4461,11 +4594,17 @@ def dispatch(
 
 
 def elementwise(
-    lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, _builder=None
-):
+    *,
+    lib_name: str,
+    lib_path: str,
+    args: list,
+    arg_type_symbol_dict: dict,
+    _builder: ir.builder = None,
+) -> tensor:
     """
     Dispatch an elementwise function to a library
 
+    :param *:
     :param lib_name: the name of the library
     :param lib_path: the path of the library
     :param args: the arguments of the function
@@ -4488,7 +4627,7 @@ def elementwise(
             dispatch_args[0] = _to_tensor(dispatch_args[0], _builder)
             dispatch_args[1] = _to_tensor(dispatch_args[1], _builder)
             dispatch_args[0], dispatch_args[1] = _binary_op_type_checking_impl(
-                dispatch_args[0], dispatch_args[1], _builder
+                dispatch_args[0], dispatch_args[1], builder=_builder
             )
             ret_shape = dispatch_args[0].shape
         else:
@@ -4498,23 +4637,23 @@ def elementwise(
             # Get the broadcast shape over all the arguments
             for i in range(len(dispatch_args)):
                 _, broadcast_arg = _binary_op_type_checking_impl(
-                    dispatch_args[i], broadcast_arg, _builder
+                    dispatch_args[i], broadcast_arg, builder=_builder
                 )
             # Change the shape of each argument based on the broadcast shape
             for i in range(len(dispatch_args)):
                 dispatch_args[i], _ = _binary_op_type_checking_impl(
-                    dispatch_args[i], broadcast_arg, _builder
+                    dispatch_args[i], broadcast_arg, builder=_builder
                 )
             ret_shape = broadcast_arg.shape
     func = getattr(_builder, "create_extern_elementwise")
     return dispatch(
         func,
-        lib_name,
-        lib_path,
-        dispatch_args,
-        arg_type_symbol_dict,
-        ret_shape,
-        _builder,
+        lib_name=lib_name,
+        lib_path=lib_path,
+        args=dispatch_args,
+        arg_type_symbol_dict=arg_type_symbol_dict,
+        ret_shape=ret_shape,
+        _builder=_builder,
     )
 
 
@@ -4543,49 +4682,49 @@ def extern(fn):
 
 @builtin
 @_add_atomic_docstr("exchange")
-def atomic_xchg(pointer, val, mask=None, _builder=None):
+def atomic_xchg(pointer, val, mask=None, _builder: ir.builder = None):
     val = _to_tensor(val, _builder)
     return _atomic_xchg(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("add")
-def atomic_add(pointer, val, mask=None, _builder=None):
+def atomic_add(pointer, val, mask=None, _builder: ir.builder = None):
     val = _to_tensor(val, _builder)
     return _atomic_add(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("max")
-def atomic_max(pointer, val, mask=None, _builder=None):
+def atomic_max(pointer, val, mask=None, _builder: ir.builder = None):
     val = _to_tensor(val, _builder)
     return _atomic_max(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("min")
-def atomic_min(pointer, val, mask=None, _builder=None):
+def atomic_min(pointer, val, mask=None, _builder: ir.builder = None):
     val = _to_tensor(val, _builder)
     return _atomic_min(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical and")
-def atomic_and(pointer, val, mask=None, _builder=None):
+def atomic_and(pointer, val, mask=None, _builder: ir.builder = None):
     val = _to_tensor(val, _builder)
     return _atomic_and(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical or")
-def atomic_or(pointer, val, mask=None, _builder=None):
+def atomic_or(pointer, val, mask=None, _builder: ir.builder = None):
     val = _to_tensor(val, _builder)
     return _atomic_or(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical xor")
-def atomic_xor(pointer, val, mask=None, _builder=None):
+def atomic_xor(pointer, val, mask=None, _builder: ir.builder = None):
     val = _to_tensor(val, _builder)
     return _atomic_xor(pointer, val, mask, _builder)
 
@@ -4596,7 +4735,7 @@ def atomic_xor(pointer, val, mask=None, _builder=None):
 
 
 @builtin
-def where(condition, x, y, _builder=None):
+def where(condition, x, y, _builder: ir.builder = None):
     """
     Returns a tensor of elements from either :code:`x` or :code:`y`, depending on :code:`condition`.
 
@@ -4624,14 +4763,14 @@ def where(condition, x, y, _builder=None):
 
 
 @builtin
-def umulhi(x, y, _builder=None):
+def umulhi(x, y, _builder: ir.builder = None):
     x = _to_tensor(x, _builder)
     y = _to_tensor(y, _builder)
     return _umulhi(x, y, _builder)
 
 
 @builtin
-def fdiv(x, y, ieee_rounding=False, _builder=None):
+def fdiv(x, y, ieee_rounding=False, _builder: ir.builder = None):
     ieee_rounding = _constexpr_to_value(ieee_rounding)
     return _fdiv(x, y, ieee_rounding, _builder)
 
@@ -4652,31 +4791,31 @@ def _add_math_1arg_docstr(name):
 
 @builtin
 @_add_math_1arg_docstr("exponential")
-def exp(x, _builder=None):
+def exp(x, _builder: ir.builder = None):
     return _exp(x, _builder)
 
 
 @builtin
 @_add_math_1arg_docstr("natural logarithm")
-def log(x, _builder=None):
+def log(x, _builder: ir.builder = None):
     return _log(x, _builder)
 
 
 @builtin
 @_add_math_1arg_docstr("cosine")
-def cos(x, _builder=None):
+def cos(x, _builder: ir.builder = None):
     return _cos(x, _builder)
 
 
 @builtin
 @_add_math_1arg_docstr("sine")
-def sin(x, _builder=None):
+def sin(x, _builder: ir.builder = None):
     return _sin(x, _builder)
 
 
 @builtin
 @_add_math_1arg_docstr("square root")
-def sqrt(x, _builder=None):
+def sqrt(x, _builder: ir.builder = None):
     return _sqrt(x, _builder)
 
 
@@ -4701,42 +4840,42 @@ def _add_reduction_docstr(name):
 
 @builtin
 @_add_reduction_docstr("maximum")
-def max(input, axis, _builder=None):
+def max(input, axis, _builder: ir.builder = None):
     axis = _constexpr_to_value(axis)
     return _max(input, axis, _builder)
 
 
 @builtin
 @_add_reduction_docstr("maximum index")
-def argmax(input, axis, _builder=None):
+def argmax(input, axis, _builder: ir.builder = None):
     axis = _constexpr_to_value(axis)
     return _argmax(input, axis, _builder)
 
 
 @builtin
 @_add_reduction_docstr("minimum")
-def min(input, axis, _builder=None):
+def min(input, axis, _builder: ir.builder = None):
     axis = _constexpr_to_value(axis)
     return _min(input, axis, _builder)
 
 
 @builtin
 @_add_reduction_docstr("minimum index")
-def argmin(input, axis, _builder=None):
+def argmin(input, axis, _builder: ir.builder = None):
     axis = _constexpr_to_value(axis)
     return _argmin(input, axis, _builder)
 
 
 @builtin
 @_add_reduction_docstr("sum")
-def sum(input, axis, _builder=None):
+def sum(input, axis, _builder: ir.builder = None):
     axis = _constexpr_to_value(axis)
     return _sum(input, axis, _builder)
 
 
 @builtin
 @_add_reduction_docstr("xor sum")
-def xor_sum(input, axis, _builder=None):
+def xor_sum(input, axis, _builder: ir.builder = None):
     axis = _constexpr_to_value(axis)
     return _xor_sum(input, axis, _builder)
 
@@ -4747,12 +4886,12 @@ def xor_sum(input, axis, _builder=None):
 
 
 @builtin
-def globaltimer(_builder=None):
+def globaltimer(_builder: ir.builder = None):
     return _globaltimer(_builder)
 
 
 @builtin
-def clock(_builder=None):
+def clock(_builder: ir.builder = None):
     return _clock(_builder)
 
 
@@ -4762,12 +4901,12 @@ def clock(_builder=None):
 
 
 @builtin
-def debug_barrier(_builder=None):
+def debug_barrier(_builder: ir.builder = None):
     return _debug_barrier(_builder)
 
 
 @builtin
-def multiple_of(input, values, _builder=None):
+def multiple_of(input, values, _builder: ir.builder = None):
     """
     Let the compiler knows that the values in :code:`input` are all multiples of :code:`value`.
     """
@@ -4785,7 +4924,7 @@ def multiple_of(input, values, _builder=None):
 
 
 @builtin
-def max_contiguous(input, values, _builder=None):
+def max_contiguous(input, values, _builder: ir.builder = None):
     """
     Let the compiler knows that the `value` first values in :code:`input` are contiguous.
     """
@@ -4859,7 +4998,7 @@ def sigmoid(x):
 
 @jit
 @_add_math_1arg_docstr("softmax")
-def softmax(x, ieee_rounding: constexpr = False):
+def softmax(x, ieee_rounding: constexpr = constexpr(False)):
     z = x - max(x, 0)
     num = exp(z)
     den = sum(num, 0)
@@ -4915,35 +5054,11 @@ def zeros_like(input):
     return zeros(input.shape, input.dtype)
 
 
-# -----------------------
-# Dynamic Parallelism
-# -----------------------
-
-
-# class LaunchProxy:
-
-#     def __init__(self, fn, args, constants, grid, num_warps) -> None:
-#         self.args = args
-#         self.grid = grid
-#         self.constants = constants
-#         self.num_warps = num_warps
-#         self.fn = fn
-
-
-# @builtin
-# def launch(fn, args, grid, num_warps=None, _builder=None):
-#     constants = {i: x for i, x in enumerate(args) if isinstance(x, constexpr)}
-#     args = [_to_ir(x, builder=_builder) for x in args if not isinstance(x, constexpr)]
-#     grid = [_to_ir(x, builder=_builder) for x in grid]
-#     if num_warps is None:
-#         num_warps = _to_ir(4, builder=_builder)
-#     return LaunchProxy(fn, args, constants, grid, num_warps)
-
-PHILOX_KEY_A: constexpr = constexpr(-1640531527)  # 0x9E3779B9
-PHILOX_KEY_B: constexpr = constexpr(-1150833019)  # 0xBB67AE85
-PHILOX_ROUND_A: constexpr = constexpr(-766435501)  # 0xD2511F53
-PHILOX_ROUND_B: constexpr = constexpr(-845247145)  # 0xCD9E8D57
-N_ROUNDS_DEFAULT: constexpr = constexpr(10)  # Default number of rounds for philox
+PHILOX_KEY_A: constexpr = -1640531527  # 0x9E3779B9
+PHILOX_KEY_B: constexpr = -1150833019  # 0xBB67AE85
+PHILOX_ROUND_A: constexpr = -766435501  # 0xD2511F53
+PHILOX_ROUND_B: constexpr = -845247145  # 0xCD9E8D57
+N_ROUNDS_DEFAULT = 10  # Default number of rounds for philox
 
 # -------------------
 # randint
@@ -5015,12 +5130,12 @@ def randint4x(seed, offset, n_rounds: constexpr = N_ROUNDS_DEFAULT):
 # rand
 # -------------------
 
-# @triton.jit
+# @jit
 # def uint32_to_uniform_float(x):
 #     """
 #     Numerically stable function to convert a random uint32 into a random float uniformly sampled in [0, 1).
 #     """
-#     two_to_the_minus_32: constexpr = 2.328306e-10
+#     two_to_the_minus_32: tl.constexpr = 2.328306e-10
 #     return x * two_to_the_minus_32
 
 

@@ -31,14 +31,14 @@ def function_2(i):
 def kernel(X, i, BLOCK: tl.constexpr):
     i = i + 1
     i = function_1(i)
-    tl.store(X, i)
+    tl.store(X, value=i)
 
 
 @triton.jit(do_not_specialize=["i"])
 def kernel_nospec(X, i, BLOCK: tl.constexpr):
     i = i + 1
     i = function_1(i)
-    tl.store(X, i)
+    tl.store(X, value=i)
 
 
 def apply_src_change(target, old, new):
@@ -137,7 +137,7 @@ def test_value_specialization(value: int, value_type: str, device='cuda') -> Non
 def test_constexpr_not_callable() -> None:
     @triton.jit
     def kernel(X, c: tl.constexpr):
-        tl.store(X, 2)
+        tl.store(X, value=2)
 
     x = torch.empty(1, dtype=torch.int32, device='cuda')
     error = False
@@ -158,8 +158,7 @@ def test_jit_warmup_cache() -> None:
     @triton.jit
     def kernel_add(a, b, o, N: tl.constexpr):
         idx = tl.arange(0, N)
-        tl.store(o + idx,
-                 tl.load(a + idx) + tl.load(b + idx))
+        tl.store(o + idx, value=tl.load(a + idx) + tl.load(b + idx))
 
     args = [
         torch.randn(32, dtype=torch.float32, device="cuda"),
@@ -180,8 +179,7 @@ def test_compile_in_subproc() -> None:
     @triton.jit
     def kernel_sub(a, b, o, N: tl.constexpr):
         idx = tl.arange(0, N)
-        tl.store(o + idx,
-                 tl.load(a + idx) - tl.load(b + idx) * 777)
+        tl.store(o + idx, value=tl.load(a + idx) - tl.load(b + idx) * 777)
 
     major, minor = torch.cuda.get_device_capability(0)
     cc = major * 10 + minor

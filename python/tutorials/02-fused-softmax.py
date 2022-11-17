@@ -87,7 +87,7 @@ def softmax_kernel(
     # Write back output to DRAM
     output_row_start_ptr = output_ptr + row_idx * output_row_stride
     output_ptrs = output_row_start_ptr + col_offsets
-    tl.store(output_ptrs, softmax_output, mask=col_offsets < n_cols)
+    tl.store(output_ptrs, value=softmax_output, mask=col_offsets < n_cols)
 
 
 # %%

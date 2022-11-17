@@ -32,7 +32,9 @@ import tabulate
 import torch
 
 import triton
-import triton.language as tl
+tl = triton
+
+import triton.unroll
 
 
 @triton.jit
@@ -54,7 +56,7 @@ def _dropout(
     # The line below is the crucial part, described in the paragraph above!
     output = tl.where(x_keep, x / (1 - p), 0.0)
     # Write-back output
-    tl.store(output_ptr + offsets, output, mask=mask)
+    tl.store(output_ptr + offsets, value=output, mask=mask)
 
 
 def dropout(x, x_keep, p):
@@ -117,11 +119,11 @@ def _seeded_dropout(
     mask = offsets < n_elements
     x = tl.load(x_ptr + offsets, mask=mask)
     # randomly prune it
-    random = tl.rand(seed, offsets)
+    random = triton.unroll.rand(seed, offsets)
     x_keep = random > p
     # write-back
     output = tl.where(x_keep, x / (1 - p), 0.0)
-    tl.store(output_ptr + offsets, output, mask=mask)
+    tl.store(output_ptr + offsets, value=output, mask=mask)
 
 
 def seeded_dropout(x, p, seed):

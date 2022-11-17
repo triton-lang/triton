@@ -79,7 +79,7 @@ def _sdd_kernel(
         + block_id * stride_hc \
         + offs_cm[:, None] * stride_mc \
         + offs_cn[None, :] * stride_nc
-    tl.store(pc, c, mask=True)
+    tl.store(pc, value=c, mask=True)
 
 
 def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, widths, out=None):
@@ -201,7 +201,7 @@ def _dsd_kernel(
         + pidz * stride_zc \
         + offs_cm[:, None] * stride_cm \
         + offs_cn[None, :] * stride_cn
-    tl.store(pc, c, mask=offs_cn[None, :] < DS0)
+    tl.store(pc, value=c, mask=offs_cn[None, :] < DS0)
 
 
 def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=None):

@@ -108,7 +108,7 @@ def _kernel(A, B, C, M, N, K,
     mask = (rm < M)[:, None] & (rn < N)[None, :]
     # handles write-back with reduction-splitting
     if SPLIT_K == 1:
-        tl.store(C, acc, mask=mask)
+        tl.store(C, value=acc, mask=mask)
     else:
         tl.atomic_add(C, acc, mask=mask)
 

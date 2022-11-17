@@ -69,7 +69,7 @@ def _fwd_kernel(
         p = p * p_scale[:, None]
         # scale acc
         acc_scale = l_i / l_i_new * alpha
-        tl.store(t_ptrs, acc_scale)
+        tl.store(t_ptrs, value=acc_scale)
         acc_scale = tl.load(t_ptrs)  # BUG: have to store and immediately load
         acc = acc * acc_scale[:, None]
         # update acc
@@ -85,13 +85,13 @@ def _fwd_kernel(
     # write back l and m
     l_ptrs = L + off_hz * N_CTX + offs_m
     m_ptrs = M + off_hz * N_CTX + offs_m
-    tl.store(l_ptrs, l_i)
-    tl.store(m_ptrs, m_i)
+    tl.store(l_ptrs, value=l_i)
+    tl.store(m_ptrs, value=m_i)
     # initialize pointers to output
     offs_n = tl.arange(0, BLOCK_DMODEL)
     off_o = off_hz * stride_oh + offs_m[:, None] * stride_om + offs_n[None, :] * stride_on
     out_ptrs = Out + off_o
-    tl.store(out_ptrs, acc)
+    tl.store(out_ptrs, value=acc)
 
 
 @triton.jit
@@ -110,8 +110,8 @@ def _bwd_preprocess(
     do = do / denom[:, None]
     delta = tl.sum(o * do, axis=1)
     # write-back
-    tl.store(NewDO + off_m[:, None] * D_HEAD + off_n[None, :], do)
-    tl.store(Delta + off_m, delta)
+    tl.store(NewDO + off_m[:, None] * D_HEAD + off_n[None, :], value=do)
+    tl.store(Delta + off_m, value=delta)
 
 
 @triton.jit
@@ -186,7 +186,7 @@ def _bwd_kernel(
             # # compute dq
             dq = tl.load(dq_ptrs, eviction_policy="evict_last")
             dq += tl.dot(ds.to(tl.float16), k)
-            tl.store(dq_ptrs, dq, eviction_policy="evict_last")
+            tl.store(dq_ptrs, value=dq, eviction_policy="evict_last")
             # # increment pointers
             dq_ptrs += BLOCK_M * stride_qm
             q_ptrs += BLOCK_M * stride_qm
@@ -194,8 +194,8 @@ def _bwd_kernel(
         # write-back
         dv_ptrs = DV + (offs_n[:, None] * stride_qm + offs_k[None, :] * stride_qk)
         dk_ptrs = DK + (offs_n[:, None] * stride_kn + offs_k[None, :] * stride_kk)
-        tl.store(dv_ptrs, dv)
-        tl.store(dk_ptrs, dk)
+        tl.store(dv_ptrs, value=dv)
+        tl.store(dk_ptrs, value=dk)
 
 
 class _attention(torch.autograd.Function):
