@@ -1373,26 +1373,26 @@ def compile(fn, **kwargs):
     so_path = make_stub(name, signature, constants)
     # create cache manager
     fn_cache_manager = CacheManager(make_hash(fn, **kwargs))
-    # load metadata if any
+    # determine name and extension type of provided function
     if isinstance(fn, triton.runtime.JITFunction):
       name, ext = fn.__name__, "ast"
     else:
       name, ext = os.path.basename(fn).split(".")
-
-    metadata = None
-    if fn_cache_manager.has_file(f'{name}.json'):
-      with open(fn_cache_manager._make_path(f"{name}.json")) as f:
-            metadata = json.load(f)
-    
+    # initialize compilation params
     num_warps = kwargs.get("num_warps", 4)
     num_stages = kwargs.get("num_stages", 3)
     extern_libs = kwargs.get("extern_libs", dict())
     device = kwargs.get("device", torch.cuda.current_device())
-
-
+    # load metadata if any
+    metadata = None
+    if fn_cache_manager.has_file(f'{name}.json'):
+      with open(fn_cache_manager._make_path(f"{name}.json")) as f:
+            metadata = json.load(f)
+    else:
+      metadata = {"num_warps": num_warps, "num_stages": num_stages, "ctime": dict()}
     # build compilation stages
     stages = {
-      "ast" : (None, lambda src: src),
+      "ast" : (lambda path: fn, None),
       "ttir": (lambda path: _triton.ir.parse_mlir_module(path, context), 
                lambda src: ast_to_ttir(src, signature, configs[0], constants)),
       "ttgir": (lambda path: _triton.ir.parse_mlir_module(path, context), 
@@ -1404,27 +1404,22 @@ def compile(fn, **kwargs):
       "cubin": (lambda path: Path(path).read_bytes(), 
                lambda src: ptx_to_cubin(src, device))
     }
-
-    try:
-      first_stage = list(stages.keys()).index(ir)
-    except ValueError:
-      first_stage = 0
-    
-
+    first_stage = list(stages.keys()).index(ext)
     asm = dict()
     module = fn
-    # initialize metadata
-    metadata = {"num_warps": num_warps, "num_stages": num_stages}
     # run compilation pipeline  and populate metadata
     for ir, (parse, compile) in list(stages.items())[first_stage:]:
       path = fn_cache_manager._make_path(f"{name}.{ir}")
       if ir == ext:
         module = parse(fn)
-      elif os.path.exists(path):
+      elif os.path.exists(path) and\
+           os.path.getctime(path) == metadata["ctime"][ir]:
         module = parse(path)
       else:
         module = compile(module)
         fn_cache_manager.put(module, f"{name}.{ir}")
+      if os.path.exists(path):
+        metadata["ctime"][ir] = os.path.getctime(path)
       asm[ir] = module if ir == "cubin" else str(module)
       if ir == "ttgir":
         metadata["shared"] = _triton.get_shared_memory_size(module)
