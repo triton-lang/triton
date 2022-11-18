@@ -1405,7 +1405,7 @@ struct BroadcastOpConversion
     auto resultShape = resultTy.getShape();
     unsigned rank = srcTy.getRank();
     assert(rank == resultTy.getRank());
-    auto order = srcLayout.getOrder();
+    auto order = triton::gpu::getOrder(srcLayout);
 
     SmallVector<int64_t> srcLogicalShape(2 * rank);
     SmallVector<unsigned> srcLogicalOrder(2 * rank);
@@ -1427,7 +1427,7 @@ struct BroadcastOpConversion
         srcLogicalShape[d + rank] = triton::gpu::getSizePerThread(resultLayout)[d];
       }
       resultLogicalShape[d] = numCtas;
-      resultLogicalShape[d + rank] = resultLayout.getSizePerThread()[d];
+      resultLogicalShape[d + rank] = triton::gpu::getSizePerThread(resultLayout)[d];
 
       srcLogicalOrder[d] = order[d] + rank;
       srcLogicalOrder[d + rank] = order[d];
