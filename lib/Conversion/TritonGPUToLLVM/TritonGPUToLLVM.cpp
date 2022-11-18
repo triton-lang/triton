@@ -93,6 +93,8 @@ void llPrintf(StringRef msg, ValueRange args,
               ConversionPatternRewriter &rewriter);
 
 // Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
+#define inttoptr(...) rewriter.create<LLVM::IntToPtrOp>(loc, __VA_ARGS__)
+#define ptrtoint(...) rewriter.create<LLVM::PtrToIntOp>(loc, __VA_ARGS__)
 #define zext(...) rewriter.create<LLVM::ZExtOp>(loc, __VA_ARGS__)
 #define udiv(...) rewriter.create<LLVM::UDivOp>(loc, __VA_ARGS__)
 #define urem(...) rewriter.create<LLVM::URemOp>(loc, __VA_ARGS__)
@@ -2929,8 +2931,13 @@ void ConvertLayoutOpConversion::processReplica(
   }
   auto elemTy = type.getElementType();
   bool isInt1 = elemTy.isInteger(1);
+  bool isPtr = elemTy.isa<triton::PointerType>();
+  auto llvmElemTyOrig = getTypeConverter()->convertType(elemTy);
   if (isInt1)
     elemTy = IntegerType::get(elemTy.getContext(), 8);
+  else if (isPtr)
+    elemTy = IntegerType::get(elemTy.getContext(), 64);
+
   auto llvmElemTy = getTypeConverter()->convertType(elemTy);
 
   for (unsigned ctaId = 0; ctaId < accumNumCTAsEachRep; ++ctaId) {
@@ -2963,6 +2970,8 @@ void ConvertLayoutOpConversion::processReplica(
           auto currVal = vals[elemId + linearCTAId * accumSizePerThread + v];
           if (isInt1)
             currVal = zext(llvmElemTy, currVal);
+          else if (isPtr)
+            currVal = ptrtoint(llvmElemTy, currVal);
 
           valVec = insert_element(vecTy, valVec, currVal, idx_val(v));
         }
@@ -2975,6 +2984,8 @@ void ConvertLayoutOpConversion::processReplica(
             currVal =
                 icmp_ne(currVal, rewriter.create<LLVM::ConstantOp>(
                                      loc, i8_ty, rewriter.getI8IntegerAttr(0)));
+          else if (isPtr)
+            currVal = inttoptr(llvmElemTyOrig, currVal);
           vals[elemId + linearCTAId * accumSizePerThread + v] = currVal;
         }
       }
@@ -5933,19 +5944,19 @@ struct AtomicRMWOpConversion
     auto elemsPerThread = getElemsPerThread(val.getType());
     SmallVector<Value> resultVals(elemsPerThread);
     for (size_t i = 0; i < elemsPerThread; i += vec) {
-      Value rmvVal = undef(vecTy);
+      Value rmwVal = undef(vecTy);
       for (int ii = 0; ii < vec; ++ii) {
         Value iiVal = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
-        rmvVal = insert_element(vecTy, rmvVal, valElements[i], iiVal);
+        rmwVal = insert_element(vecTy, rmwVal, valElements[i + ii], iiVal);
       }
-      Value rmwPtr = bitcast(ptrElements[i], ptr_ty(valTy.getElementType()));
+      Value rmwPtr = ptrElements[i];
       std::string sTy;
       PTXBuilder ptxBuilder;
 
       auto *dstOpr = ptxBuilder.newOperand("=r");
-      auto *ptrOpr = ptxBuilder.newAddrOperand(rmwPtr, "r");
-      auto *valOpr = ptxBuilder.newOperand(rmvVal, "r");
+      auto *ptrOpr = ptxBuilder.newAddrOperand(rmwPtr, "l");
+      auto *valOpr = ptxBuilder.newOperand(rmwVal, "r");
 
       auto &atom = ptxBuilder.create<>("atom")->global().o("gpu");
       auto rmwOp = stringifyRMWOp(atomicRmwAttr).str();
@@ -5987,12 +5998,13 @@ struct AtomicRMWOpConversion
         return failure();
       }
       atom.o(rmwOp).o(sTy);
-
-      atom(dstOpr, ptrOpr, valOpr);
-      auto ret = ptxBuilder.launch(rewriter, loc, valueElemTy, false);
+      //TODO:[dongdongl] actual mask support
+      Value pred = int_val(1, 1);
+      atom(dstOpr, ptrOpr, valOpr).predicate(pred);
+      auto ret = ptxBuilder.launch(rewriter, loc, valueElemTy);
       for (int ii = 0; ii < vec; ++ii) {
         resultVals[i * vec + ii] =
-            vec == 1 ? ret : extract_element(vecTy, ret, idx_val(ii));
+            vec == 1 ? ret : extract_element(valueElemTy, ret, idx_val(ii));
       }
     }
     Type structTy = getTypeConverter()->convertType(valueTy);

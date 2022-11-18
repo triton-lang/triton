@@ -1086,9 +1086,7 @@ void init_triton_ir(py::module &&m) {
               mlir::Value &ptr, mlir::Value &val,
               mlir::Value &mask) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             auto ptrType = mlir::getElementTypeOrSelf(ptr)
-                                .cast<mlir::triton::PointerType>();
-             mlir::Type dstType = ptrType.getPointeeType();
+             mlir::Type dstType = val.getType();
              return self.create<mlir::triton::AtomicRMWOp>(loc, dstType, rmwOp,
                                                            ptr, val, mask);
            })

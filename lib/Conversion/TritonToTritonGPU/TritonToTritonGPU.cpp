@@ -378,7 +378,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       TritonGenericPattern<triton::AddPtrOp>, TritonReducePattern,
       TritonExpandDimsPattern, TritonMakeRangePattern, TritonDotPattern,
       TritonLoadPattern, TritonStorePattern, TritonExtElemwisePattern,
-      TritonPrintfPattern>(typeConverter, context);
+      TritonPrintfPattern, TritonAtomicRMWPattern>(typeConverter, context);
 }
 
 //
