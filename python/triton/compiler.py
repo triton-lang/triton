@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -24,6 +25,12 @@ import triton
 import triton._C.libtriton.triton as _triton
 from .tools.disasm import extract
 
+def static_vars(**kwargs):
+    def decorate(func):
+        for k in kwargs:
+            setattr(func, k, kwargs[k])
+        return func
+    return decorate
 
 def str_to_ty(name):
     if name[0] == "*":
@@ -880,7 +887,19 @@ def ptx_get_kernel_name(ptx: str) -> str:
         if line.startswith('// .globl'):
             return line.split()[-1]
 
+@functools.lru_cache()
+def rocm_path_dir():
+    return os.getenv("ROCM_PATH", default="/opt/rocm")
 
+def _get_amdgpu_arch():
+    try:
+        rocminfo = subprocess.check_output(rocm_path_dir() + '/bin/rocminfo').decode()
+        gfx_arch = re.search('Name:\\s+.*(gfx\\d+)', rocminfo)
+        return gfx_arch.group(1).strip()
+    except:
+        return None
+
+@static_vars(discovered_gfx_arch = _get_amdgpu_arch())
 def _compile(fn, signature: str, device: int = -1, constants=dict(),
              specialization=_triton.code_gen.instance_descriptor(),
              num_warps: int = 4, num_stages: int = 3, extern_libs=None,
@@ -905,7 +924,10 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(),
 
     # compile ttir
     if torch.version.hip is not None:
-        name, asm, shared_mem = _triton.code_gen.compile_ttir_to_amdgcn(backend, module, device, num_warps, num_stages, extern_libs, cc)
+        gfx_arch = os.environ.get('MI_GPU_ARCH', _compile.discovered_gfx_arch)
+        if gfx_arch is None:
+            raise RuntimeError('AMDGCN gfx arch is not defined.')
+        name, asm, shared_mem = _triton.code_gen.compile_ttir_to_amdgcn(backend, module, device, num_warps, num_stages, extern_libs, gfx_arch)
     else:
         name, asm, shared_mem = _triton.code_gen.compile_ttir_to_ptx(backend, module, device, num_warps, num_stages, extern_libs, cc)
     return asm, shared_mem, name
@@ -1145,7 +1167,6 @@ def libcuda_dirs():
     locs = subprocess.check_output(["whereis", "libcuda.so"]).decode().strip().split()[1:]
     return [os.path.dirname(loc) for loc in locs]
 
-
 @functools.lru_cache()
 def libhip_dirs():
     return ["/opt/rocm/lib"]
@@ -1162,6 +1183,9 @@ def hip_home_dirs():
     default_dir = "/opt/rocm"
     return os.getenv("ROCM_HOME", default=default_dir)
 
+@functools.lru_cache()
+def rocm_path_dir():
+    return os.getenv("ROCM_PATH", default="/opt/rocm")
 
 @contextlib.contextmanager
 def quiet():
