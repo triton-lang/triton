@@ -1350,7 +1350,7 @@ def compile(fn, **kwargs):
     asm, md5 = dict(), dict()
     constants = kwargs.get("constants", dict())
     if isinstance(fn, triton.runtime.JITFunction):
-        configs = kwargs["configs"]
+        configs = kwargs.get("configs", None)
         signature = kwargs["signature"]
         if configs is None:
             configs = [instance_descriptor()]
