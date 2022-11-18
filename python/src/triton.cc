@@ -493,7 +493,7 @@ void init_triton_codegen(py::module &&m) {
       py::return_value_policy::take_ownership);
   
   m.def("compile_ttir_to_amdgcn",
-      [](backend_t backend, ir::module &ir, uint64_t device, int num_warps, int num_stages, py::dict& extern_libs, size_t cc) {
+      [](backend_t backend, ir::module &ir, uint64_t device, int num_warps, int num_stages, py::dict& extern_libs, const std::string& gfx_arch) {
           std::ostringstream ttir;
           int n_shared_bytes;
           std::string tmp;
@@ -515,13 +515,6 @@ void init_triton_codegen(py::module &&m) {
               extern_lib_map.emplace(
                   name, triton::codegen::create_extern_lib(name, path));
             }
-            // device properties
-            if (cc == 0) {
-              hipDevice_t dev = (hipDevice_t)device;
-              size_t major = hipGetInfo<hipDeviceAttributeComputeCapabilityMajor>(dev);
-              size_t minor = hipGetInfo<hipDeviceAttributeComputeCapabilityMinor>(dev);
-              cc = major*10 + minor;
-            }
             int version;
             // std::string ptxas_path = drv::path_to_ptxas(version);
             // Triton-IR -> AMDGCN LLVM-IR
@@ -536,7 +529,7 @@ void init_triton_codegen(py::module &&m) {
             std::cout << "\t" << llir.str() << std::endl;
             llir.flush();
             // LLVM-IR -> AMDGPU
-            std::tuple<std::string, std::string> amdgpu = drv::llir_to_amdgcn(llvm.get(), "gfx90a");
+            std::tuple<std::string, std::string> amdgpu = drv::llir_to_amdgcn(llvm.get(), gfx_arch);
             amdgcn = std::get<0>(amdgpu);
             hsaco_path = std::get<1>(amdgpu);
             std::cout << "amdgcn:" << std::endl;
