@@ -300,7 +300,7 @@ namespace triton
       std::string triple = "amdgcn-amd-amdhsa";
       std::string layout = "";
       std::string features = "+sramecc,-xnack";
-      std::string proc = STRINGIFY(MI_GPU_ARCH);
+      std::string proc = _proc;
       // name kernel
       auto in_time_t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
       std::stringstream cur_time;
