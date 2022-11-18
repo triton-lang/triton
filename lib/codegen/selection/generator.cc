@@ -316,10 +316,13 @@ void generator::visit_launch_inst(ir::launch_inst *launch) {
                                            ArrayType::get(builder_->getInt32Ty(), 3),
                                            ArrayType::get(builder_->getInt32Ty(), 3),
                                            builder_->getInt32Ty()};
-  FunctionType* get_param_ty = FunctionType::get(PointerType::get(builder_->getInt8Ty(), 0), get_param_arg_tys, false);
+  Type* get_param_return_ty = PointerType::get(builder_->getInt8Ty(), 0);
+  FunctionType* get_param_ty = FunctionType::get(get_param_return_ty, get_param_arg_tys, false);
   Function* get_param_buffer = Function::Create(get_param_ty, Function::ExternalLinkage, "cudaGetParameterBufferV2", mod_);
-  AllocaInst* grid = builder_->CreateAlloca(get_param_arg_tys[1]);
-  AllocaInst* block = builder_->CreateAlloca(get_param_arg_tys[2]);
+  Type* grid_ty = get_param_arg_tys[1];
+  Type* block_ty = get_param_arg_tys[2];
+  AllocaInst* grid = builder_->CreateAlloca(grid_ty);
+  AllocaInst* block = builder_->CreateAlloca(block_ty);
   ConstantInt* _0 = builder_->getInt32(0);
   ConstantInt* _1 = builder_->getInt32(1);
   ConstantInt* _2 = builder_->getInt32(2);
@@ -332,16 +335,16 @@ void generator::visit_launch_inst(ir::launch_inst *launch) {
   builder_->SetInsertPoint(launch_bb);
 
   //
-  builder_->CreateStore(vals_[launch->get_grid()[0]][{}], builder_->CreateGEP(grid, {_0, _0}));
-  builder_->CreateStore(vals_[launch->get_grid()[1]][{}], builder_->CreateGEP(grid, {_0, _1}));
-  builder_->CreateStore(vals_[launch->get_grid()[2]][{}], builder_->CreateGEP(grid, {_0, _2}));
+  builder_->CreateStore(vals_[launch->get_grid()[0]][{}], builder_->CreateGEP(grid_ty, grid, {_0, _0}));
+  builder_->CreateStore(vals_[launch->get_grid()[1]][{}], builder_->CreateGEP(grid_ty, grid, {_0, _1}));
+  builder_->CreateStore(vals_[launch->get_grid()[2]][{}], builder_->CreateGEP(grid_ty, grid, {_0, _2}));
   Value* num_warps = mul(builder_->getInt32(32), vals_[launch->get_num_warps()][{}]);
-  builder_->CreateStore(num_warps, builder_->CreateGEP(block, {_0, _0}));
-  builder_->CreateStore(builder_->getInt32(1), builder_->CreateGEP(block, {_0, _1}));
-  builder_->CreateStore(builder_->getInt32(1), builder_->CreateGEP(block, {_0, _2}));
+  builder_->CreateStore(num_warps, builder_->CreateGEP(block_ty, block, {_0, _0}));
+  builder_->CreateStore(builder_->getInt32(1), builder_->CreateGEP(block_ty, block, {_0, _1}));
+  builder_->CreateStore(builder_->getInt32(1), builder_->CreateGEP(block_ty, block, {_0, _2}));
   Function* called_fn = fns_[fn];
   Value* callee = ConstantExpr::getCast(Instruction::BitCast, called_fn, get_param_arg_tys[0]);
-  Value* arg_ptr = builder_->CreateCall(get_param_buffer, {callee, builder_->CreateLoad(grid), builder_->CreateLoad(block), builder_->getInt32(0)});
+  Value* arg_ptr = builder_->CreateCall(get_param_buffer, {callee, builder_->CreateLoad(grid_ty, grid), builder_->CreateLoad(block_ty, block), builder_->getInt32(0)});
   // forwrd-declare cudaLaunchDeviceV2
   std::vector<Type*> launch_device_arg_tys = {get_param_ty->getReturnType(), builder_->getInt64Ty()};
   FunctionType* launch_device_ty = FunctionType::get(builder_->getInt32Ty(), launch_device_arg_tys, false);
@@ -364,7 +367,7 @@ void generator::visit_launch_inst(ir::launch_inst *launch) {
     unsigned size = curr_arg_ty->isPointerTy() ? 8 : curr_arg_ty->getPrimitiveSizeInBits() / 8;
     off = (off + size - 1) / size * size;
     // get pointer to current arg
-    Value* curr_arg_ptr = builder_->CreateGEP(arg_ptr, builder_->getInt32(off));
+    Value* curr_arg_ptr = builder_->CreateGEP(get_param_return_ty, arg_ptr, builder_->getInt32(off));
     curr_arg_ptr = builder_->CreateBitCast(curr_arg_ptr, curr_arg_ty->getPointerTo(addr_space));
     // store arg
     builder_->CreateStore(curr_arg, curr_arg_ptr);
@@ -3644,6 +3647,14 @@ Value *generator::cast_shared_layout_ptr(analysis::data_layout *layout,
   return base;
 }
 
+void addAttribute(Function* fn, unsigned id, Attribute attr) {
+#if LLVM_VERSION_MAJOR >= 15
+  fn->addAttributeAtIndex(id, attr);
+#else
+  fn->addAttribute(id, attr);
+#endif
+}
+
 void generator::visit_function(ir::function* fn) {
   idxs_.clear();
   vals_.clear();
@@ -3660,7 +3671,7 @@ void generator::visit_function(ir::function* fn) {
     if(attr.is_llvm_attr()){
       llvm::Attribute llattr = cvt(attr);
       if(llattr.getKindAsEnum() != llvm::Attribute::None)
-        ret->addAttribute(id, cvt(attr));
+        addAttribute(ret, id, llattr);
     }
   }
   // set metadata

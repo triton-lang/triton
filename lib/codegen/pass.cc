@@ -1,5 +1,6 @@
 #include "triton/codegen/pass.h"
 
+#include "llvm/Pass.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
