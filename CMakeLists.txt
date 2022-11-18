@@ -50,11 +50,7 @@ endif()
 set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17 -fvisibility=hidden -fvisibility-inlines-hidden")
 
 if (TRITON_USE_ROCM)
-    set(MI_GPU_ARCH $ENV{MI_GPU_ARCH})
-    if (NOT MI_GPU_ARCH)
-        set(MI_GPU_ARCH "gfx90a")
-    endif()
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_ROCM -DMI_GPU_ARCH=${MI_GPU_ARCH} -Wno-unused-result -Wno-attributes")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_ROCM -Wno-unused-result -Wno-attributes")
 endif()
 
 if(APPLE)

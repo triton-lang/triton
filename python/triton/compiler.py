@@ -27,6 +27,12 @@ import triton
 import triton._C.libtriton.triton as _triton
 from .tools.disasm import extract
 
+def static_vars(**kwargs):
+    def decorate(func):
+        for k in kwargs:
+            setattr(func, k, kwargs[k])
+        return func
+    return decorate
 
 def str_to_ty(name):
     if name[0] == "*":
@@ -959,7 +965,7 @@ def amdgcn_get_kernel_name(amdgcn: str) -> str:
             return line.split()[-1].strip()
 
 
-def llir_to_hsaco(mod: Any, gcn_arch: str) -> Tuple[str, str]:
+def llir_to_hsaco(mod: Any, gfx_arch: str) -> Tuple[str, str]:
     '''
     Translate TritonGPU module to HSACO code.
     :param mod: a TritonGPU dialect module
@@ -967,7 +973,7 @@ def llir_to_hsaco(mod: Any, gcn_arch: str) -> Tuple[str, str]:
         - AMDGCN code
         - Path to HSACO object
     '''
-    return _triton.translate_llvmir_to_hsaco(mod, gcn_arch)
+    return _triton.translate_llvmir_to_hsaco(mod, gfx_arch)
 
 
 @functools.lru_cache()
@@ -1327,6 +1333,10 @@ def hip_home_dirs():
     default_dir = "/opt/rocm"
     return os.getenv("ROCM_HOME", default=default_dir)
 
+@functools.lru_cache()
+def rocm_path_dir():
+    return os.getenv("ROCM_PATH", default="/opt/rocm")
+
 def _build(name, src, srcdir):
     if torch.version.hip is not None:
         hip_lib_dir = libhip_dir()
@@ -1442,7 +1452,15 @@ def read_or_execute_2(cache_manager, force_compile, file_name_1, file_name_2,
     cache_manager.put(data_2, file_name_2, True if isinstance(data_2, bytes) else data_2)
     return module_1, md5_1, module_2, md5_2, True, False
 
+def _get_amdgpu_arch():
+    try:
+        rocminfo = subprocess.check_output(rocm_path_dir() + '/bin/rocminfo').decode()
+        gfx_arch = re.search('Name:\\s+.*(gfx\\d+)', rocminfo)
+        return gfx_arch.group(1).strip()
+    except:
+        return None
 
+@static_vars(discovered_gfx_arch = _get_amdgpu_arch())
 def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
     if isinstance(signature, str):
         signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
@@ -1496,12 +1514,14 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
 
     if torch.version.hip is not None:
       #llvm-ir -> amdgcn/hsaco (or read from cache)
-      gcn_arch = os.environ.get('MI_GPU_ARCH', "gfx90a")
+      gfx_arch = os.environ.get('MI_GPU_ARCH', compile.discovered_gfx_arch)
+      if gfx_arch is None:
+          raise RuntimeError('gfx_arch is None (not specified)')
       amdgcn, amdgcn_md5, hsaco_path, hsaco_path_md5, force_compile, _ = read_or_execute_2(fn_cache_manager, force_compile,
                                                                          f"{name}.amdgcn", f"{name}.hsaco_path", metadata,
                             run_if_found_1 = lambda path: Path(path).read_text(),
                             run_if_found_2 = lambda path: Path(path).read_text(),
-                            run_if_not_found = lambda: llir_to_hsaco(llir, gcn_arch))
+                            run_if_not_found = lambda: llir_to_hsaco(llir, gfx_arch))
       kernel_name = amdgcn_get_kernel_name(amdgcn)
       metadata = {"name": kernel_name, "shared": shmem_size, "num_warps": num_warps, "num_stages": num_stages,
                   "md5": {  "hsaco_path": hsaco_path_md5,  "amdgcn": amdgcn_md5,
