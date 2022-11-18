@@ -1355,10 +1355,12 @@ def compile(fn, **kwargs):
         if configs is None:
             configs = [instance_descriptor()]
         assert len(configs) == 1
+        kwargs["configs"] = configs
         name = fn.__name__
         first_stage = 0
         if isinstance(signature, str):
             signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
+        kwargs["signature"] = signature
     else:
         assert isinstance(fn, str)
         name, ir = os.path.basename(fn).split(".")
