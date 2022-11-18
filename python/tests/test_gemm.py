@@ -154,6 +154,19 @@ def get_variant_golden(a, b):
     c_padded = torch.matmul(a_padded, b_padded)
     return c_padded[:SIZE_M, :SIZE_N]
 
+# It's not easy to get a proper error threshold in different size
+# Here the gemm calculation is padded to a different size in order to get
+# a variant version of the golden result. And the error between golden and
+# golden_variant provide reference on selecting the proper rtol / atol.
+
+
+def get_proper_err(a, b, golden):
+    golden_variant = get_variant_golden(a, b)
+    golden_diff = golden - golden_variant
+    golden_abs_err = torch.max(torch.abs(golden_diff)).item()
+    golden_rel_err = torch.max(torch.abs(golden_diff / golden)).item()
+    return (golden_abs_err, golden_rel_err)
+
 
 @pytest.mark.parametrize('SIZE_M,SIZE_N,SIZE_K,NUM_WARPS,BLOCK_SIZE_M,BLOCK_SIZE_N,BLOCK_SIZE_K,TRANS_A,TRANS_B', [
     # Non-forloop
@@ -198,16 +211,7 @@ def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLO
                         BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,
                         num_warps=NUM_WARPS)
     golden = torch.matmul(a, b)
-
-    # It's not easy to get a proper error threshold in different size
-    # Here the gemm calculation is padded to a different size in order to get
-    # a variant version of the golden result. And the error between golden and
-    # golden_variant provide reference on selecting the proper rtol / atol.
-    golden_variant = get_variant_golden(a, b)
-    golden_diff = golden - golden_variant
-    golden_abs_err = torch.max(torch.abs(golden_diff)).item()
-    golden_rel_err = torch.max(torch.abs(golden_diff / golden)).item()
-
+    golden_abs_err, golden_rel_err = get_proper_err(a, b, golden)
     torch.set_printoptions(profile="full")
     assert_close(c, golden, rtol=max(1e-4, 1.5 * golden_rel_err), atol=max(1e-4, 1.5 * golden_abs_err), check_dtype=False)
 
@@ -272,4 +276,5 @@ def test_gemm_fmadot(M, N, K, num_warps, block_M, block_N, block_K):
                         BLOCK_SIZE_M=block_M, BLOCK_SIZE_N=block_N, BLOCK_SIZE_K=block_K)
 
     golden = torch.matmul(a, b)
-    torch.testing.assert_close(c, golden)
+    golden_abs_err, golden_rel_err = get_proper_err(a, b, golden)
+    torch.testing.assert_close(c, golden, rtol=max(1e-4, 1.5 * golden_rel_err), atol=max(1e-4, 1.5 * golden_abs_err))
