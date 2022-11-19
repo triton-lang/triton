@@ -45,6 +45,146 @@ def str_to_ty(name):
     return tys[name]
 
 
+def mangle_ty(ty):
+    if ty.is_ptr():
+        return "P" + mangle_ty(ty.element_ty)
+    if ty.is_int():
+        return "i" + str(ty.int_bitwidth)
+    if ty.is_fp8():
+        return "fp8"
+    if ty.is_fp16():
+        return "fp16"
+    if ty.is_bf16():
+        return "bf16"
+    if ty.is_fp32():
+        return "fp32"
+    if ty.is_fp64():
+        return "fp64"
+    if ty.is_void():
+        return "V"
+    if ty.is_block():
+        elt = mangle_ty(ty.scalar)
+        shape = "_".join(map(str, ty.shape))
+        return f"{elt}S{shape}S"
+    assert False, "Unsupported type"
+
+
+class CompilationError(Exception):
+    def __init__(self, src, node):
+        self.message = f"at {node.lineno}:{node.col_offset}:\n"
+        self.message += "\n".join(src.split("\n")[: node.lineno])
+        self.message += "\n" + " " * node.col_offset + "^"
+        self.src = src
+        self.node = node
+        super().__init__(self.message)
+
+    def __reduce__(self):
+        # this is necessary to make CompilationError picklable
+        return (type(self), (self.src, self.node))
+
+
+class OutOfResources(Exception):
+    def __init__(self, required, limit, name):
+        self.message = (
+            f"out of resource: {name}, "
+            f"Required: {required}, "
+            f"Hardware limit: {limit}"
+        )
+        self.required = required
+        self.limit = limit
+        self.name = name
+        super().__init__(self.message)
+
+    def __reduce__(self):
+        # this is necessary to make CompilationError picklable
+        return (type(self), (self.required, self.limit, self.name))
+
+
+def make_ptx(mod: Any, device: int) -> Tuple[str, int]:
+    """
+    Translate TritonGPU module to PTX code.
+    :param mod: a TritonGPU dialect module
+    :return:
+        - PTX code
+        - shared memory alloaction size
+    """
+    return _triton.translate_triton_gpu_to_ptx(mod, device)
+
+
+def make_cubin(ptx, device):
+    """
+    Compile TritonGPU module to cubin.
+    :param ptx: ptx code
+    :param device: CUDA device
+    :return: str
+    """
+    return _triton.compile_ptx_to_cubin(ptx, device)
+
+
+def ptx_get_kernel_name(ptx: str) -> str:
+    """
+    Get kernel name from PTX code.
+    This Kernel name is required when launching the kernel.
+    """
+    # There is a name mangling in PTX codegen, so the original kernel names in Triton IR are not available in PTX/cubin.
+    assert ptx
+    for line in ptx.split("\n"):
+        line = line.strip()
+        if line.startswith("// .globl"):
+            return line.split()[-1]
+    raise AssertionError(f"No kernel name found in:\n{ptx}")
+
+
+def generate_name_initializer(signature):
+    src = "int i = 0;\n"
+    tys = signature.split(",")
+    for i, ty in enumerate(tys):
+        src
+
+
+def binary_name_to_header_name(name):
+    if len(name) > 128:
+        # avoid filename too long errors (filename limit is 255)
+        name = "kernel_" + hashlib.sha256(name.encode("utf-8")).hexdigest()
+    return f"{name}.h"
+
+
+def default_cache_dir():
+    return os.path.join(os.environ["HOME"], ".triton", "cache")
+
+
+class CacheManager:
+    def __init__(self, key):
+        self.key = key
+        self.lock_path = None
+        # create cache directory if it doesn't exist
+        self.cache_dir = os.environ.get("TRITON_CACHE_DIR", default_cache_dir())
+        if self.cache_dir:
+            self.cache_dir = os.path.join(self.cache_dir, self.key)
+            self.lock_path = os.path.join(self.cache_dir, "lock")
+            os.makedirs(self.cache_dir, exist_ok=True)
+
+    def _make_path(self, filename):
+        return os.path.join(self.cache_dir, filename)
+
+    def has_file(self, filename):
+        if not self.cache_dir:
+            return False
+        return os.path.exists(self._make_path(filename))
+
+    def put(self, data, filename, binary=True):
+        if not self.cache_dir:
+            return
+        assert self.lock_path is not None
+        filepath = self._make_path(filename)
+        with FileLock(self.lock_path):
+            # use tempfile to be robust against program interruptions
+            mode = "wb" if binary else "w"
+            with open(filepath + ".tmp", mode) as f:
+                f.write(data)
+            os.rename(filepath + ".tmp", filepath)
+
+
 def mangle_fn(name, arg_tys, constants):
     # doesn't mangle ret type, which must be a function of arg tys
     mangled_arg_names = "_".join([mangle_ty(ty) for ty in arg_tys])
