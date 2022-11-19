@@ -20,7 +20,21 @@ import warnings
 from sysconfig import get_paths
 from enum import Enum
 from types import ModuleType
-from typing import Any, Dict, Set, Tuple, Union, List, Optional, Callable, Sequence
+from typing import (
+    Any,
+    Dict,
+    Set,
+    Tuple,
+    Union,
+    List,
+    Optional,
+    Callable,
+    Sequence,
+    overload,
+    TypeVar,
+    Iterable,
+)
+from typing import cast as typecast
 from collections import defaultdict, namedtuple
 
 
@@ -33,7 +47,6 @@ import triton
 import triton._C.libtriton.triton as _triton
 from triton._C.libtriton.triton import ir
 
-
 try:
     from torch._C import _cuda_getCurrentRawStream as get_cuda_stream
 except ImportError:
@@ -42,50 +55,7 @@ except ImportError:
 
 from .tools.disasm import extract
 
-# -----------------------------------------------------------------------------
-# Dependencies Finder
-# -----------------------------------------------------------------------------
-
-
-class DependenciesFinder(ast.NodeVisitor):
-    """
-    This AST visitor is used to find dependencies of a JITFunction. This can
-    be used to invalidate a JITFunction's hash when its source code -- or
-    that of its dependencies -- changes.
-    """
-
-    def __init__(self, globals, src) -> None:
-        super().__init__()
-        self.ret = hashlib.md5(src.encode("utf-8")).hexdigest()
-        self.globals = globals
-
-    def visit_Name(self, node):
-        return self.globals.get(node.id, None)
-
-    def visit_Attribute(self, node):
-        lhs = self.visit(node.value)
-        while isinstance(lhs, ast.Attribute):
-            lhs = self.visit(lhs.value)
-        if lhs is None or lhs is triton:
-            return None
-        return getattr(lhs, node.attr)
-
-    def visit_Call(self, node):
-        func = self.visit(node.func)
-        if func is None:
-            return
-        if inspect.isbuiltin(func):
-            return
-        if func.__module__ and func.__module__.startswith("triton."):
-            return
-        assert isinstance(func, JITFunction)
-        if func.hash is None:
-            tree = ast.parse(func.src)
-            finder = DependenciesFinder(func.__globals__, func.src)
-            finder.visit(tree)
-            func.hash = finder.ret
-        self.ret = (self.ret + func.hash).encode("utf-8")
-        self.ret = hashlib.md5(self.ret).hexdigest()
+C = TypeVar("C", bound=Callable)
 
 
 # -----------------------------------------------------------------------------
@@ -135,11 +105,55 @@ class KernelInterface:
         return launcher
 
 
+class DependenciesFinder(ast.NodeVisitor):
+    """
+    This AST visitor is used to find dependencies of a JITFunction. This can
+    be used to invalidate a JITFunction's hash when its source code -- or
+    that of its dependencies -- changes.
+    """
+
+    def __init__(self, globals, src) -> None:
+        super().__init__()
+        self.ret = hashlib.md5(src.encode("utf-8")).hexdigest()
+        self.globals = globals
+
+    def visit_Name(self, node):
+        return self.globals.get(node.id, None)
+
+    def visit_Attribute(self, node):
+        lhs = self.visit(node.value)
+        while isinstance(lhs, ast.Attribute):
+            lhs = self.visit(lhs.value)
+        if lhs is None or lhs is triton:
+            return None
+        return getattr(lhs, node.attr)
+
+    def visit_Call(self, node):
+        func = self.visit(node.func)
+        if func is None:
+            return
+        if inspect.isbuiltin(func):
+            return
+        if func.__module__ and func.__module__.startswith("triton."):
+            return
+        assert isinstance(func, JITFunction)
+        if func.hash is None:
+            tree = ast.parse(func.src)
+            finder = DependenciesFinder(func.__globals__, func.src)
+            finder.visit(tree)
+            func.hash = finder.ret
+        self.ret = (self.ret + func.hash).encode("utf-8")
+        self.ret = hashlib.md5(self.ret).hexdigest()
+
+
 class JITFunction(KernelInterface):
 
     # Hook for inspecting compiled functions and modules
     cache_hook = None
     divisibility = 16
+    do_not_specialize: Set[Any]
+    cache: Dict[torch.device, object]
+    kernel_decorators: List[Any]
 
     @staticmethod
     def _key_of(arg):
@@ -361,7 +375,12 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         exec(src, scope)
         return scope[self.fn.__name__]
 
-    def __init__(self, fn, version=None, do_not_specialize=None):
+    def __init__(
+        self,
+        fn,
+        version=None,
+        do_not_specialize: Optional[Iterable[Any]] = None,
+    ):
         self.fn = fn
         self.module = fn.__module__
         self.version = version
@@ -372,11 +391,11 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
             [v.default != inspect._empty for v in signature.parameters.values()]
         )
         # specialization hints
-        self.do_not_specialize = [] if do_not_specialize is None else do_not_specialize
+        do_not_specialize = [] if do_not_specialize is None else do_not_specialize
         self.do_not_specialize = set(
             [
                 self.arg_names.index(arg) if isinstance(arg, str) else arg
-                for arg in self.do_not_specialize
+                for arg in do_not_specialize
             ]
         )
         # function source code (without decorators)
@@ -455,7 +474,26 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
 # -----------------------------------------------------------------------------
 
 
-def jit(*args, **kwargs):
+@overload
+def jit(fn: Callable) -> JITFunction:
+    ...
+
+
+@overload
+def jit(
+    *,
+    version=None,
+    do_not_specialize: Optional[Iterable[Any]] = None,
+) -> Callable[[Callable], JITFunction]:
+    ...
+
+
+def jit(
+    fn: Optional[Callable] = None,
+    *,
+    version=None,
+    do_not_specialize: Optional[Iterable[Any]] = None,
+) -> Union[JITFunction, Callable[[Callable], JITFunction]]:
     """
     Decorator for JIT-compiling a function using the Triton compiler.
 
@@ -471,15 +509,19 @@ def jit(*args, **kwargs):
     :param fn: the function to be jit-compiled
     :type fn: Callable
     """
-    if args:
-        assert len(args) == 1
-        assert callable(args[0])
-        return JITFunction(args[0], **kwargs)
+
+    def decorator(fn: Callable) -> JITFunction:
+        assert callable(fn)
+        return JITFunction(
+            fn,
+            version=version,
+            do_not_specialize=do_not_specialize,
+        )
+
+    if fn is not None:
+        return decorator(fn)
+
     else:
-
-        def decorator(fn):
-            return JITFunction(fn, **kwargs)
-
         return decorator
 
 
@@ -1495,9 +1537,7 @@ class CodeGenerator(ast.NodeVisitor):
                 ret = tensor(ret, self.prototypes[fn_name].ret_type)
             return ret
         # built-in function
-        if sys.modules[fn.__module__] is triton.unroll or isinstance(
-            fn, ExternalFunction
-        ):
+        if getattr(fn, "__triton_builtin__", False) or isinstance(fn, ExternalFunction):
             ret = fn(*args, _builder=self.builder, **kws)
         elif fn in self.value_constructor.builtins.values():
             args = [arg.value if isinstance(arg, constexpr) else arg for arg in args]
@@ -2266,7 +2306,7 @@ def _to_tensor(x, builder):
     assert False, f"cannot convert {x} to tensor"
 
 
-def builtin(fn):
+def builtin(fn: C) -> C:
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         if "_builder" not in kwargs or kwargs["_builder"] is None:
@@ -2275,7 +2315,9 @@ def builtin(fn):
             )
         return fn(*args, **kwargs)
 
-    return wrapper
+    wrapper.__triton_builtin__ = True
+
+    return typecast(C, wrapper)
 
 
 class dtype:
@@ -5234,6 +5276,7 @@ def randn(seed, offset, n_rounds: constexpr = N_ROUNDS_DEFAULT):
 
 
 @jit
+@_triton_builtin
 def randn4x(seed, offset, n_rounds: constexpr = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offset` block,
