@@ -42,3 +42,24 @@ from . import testing
 from . import ops
 
 # unconstrained
+
+__all__ = [
+    "ir",
+    "utils",
+    "extern",
+    "ExternalFunction",
+    "jit",
+    "JITFunction",
+    "KernelInterface",
+    "CompilationError",
+    "compile",
+    "CompiledKernel",
+    "OutOfResources",
+    "autotune",
+    "Config",
+    "heuristics",
+    "Heuristics",
+    "language",
+    "testing",
+    "ops",
+]
