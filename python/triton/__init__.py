@@ -11,17 +11,23 @@ import torch
 from triton._C.libtriton.triton import ir
 
 from . import utils
-from .jitlib import (
-    KernelInterface,
-    JITFunction,
-    jit,
-    ExternalFunction,
-    extern,
-)
-from .compiler import compile, CompiledKernel, CompilationError, OutOfResources
 
 # No @tr.jit() interface can be called until after .compiler is loaded;
 # and .compiler depends upon the core stack.
+from .jitlib import (
+    extern,
+    ExternalFunction,
+    jit,
+    JITFunction,
+    KernelInterface,
+)
+# .compiler depends upon base.minimum and base.where
+from .compiler import (
+    CompilationError,
+    compile,
+    CompiledKernel,
+    OutOfResources,
+)
 
 from .tuning import (
     autotune,
