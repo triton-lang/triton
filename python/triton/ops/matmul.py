@@ -1,6 +1,9 @@
 import torch
 
 import triton
+import triton.core
+import triton.tuning
+
 tl = triton
 
 from .matmul_perf_model import early_config_prune, estimate_matmul_time
@@ -18,37 +21,37 @@ def get_configs_io_bound():
                 for block_n in [32, 64, 128, 256]:
                     num_warps = 2 if block_n <= 64 else 4
                     configs.append(
-                        triton.Config({'BLOCK_M': block_m, 'BLOCK_N': block_n, 'BLOCK_K': block_k, 'SPLIT_K': 1},
-                                      num_stages=num_stages, num_warps=num_warps))
+                        triton.tuning.Config({'BLOCK_M': block_m, 'BLOCK_N': block_n, 'BLOCK_K': block_k, 'SPLIT_K': 1},
+                                             num_stages=num_stages, num_warps=num_warps))
                     # split_k
                     for split_k in [2, 4, 8, 16]:
-                        configs.append(triton.Config({'BLOCK_M': block_m, 'BLOCK_N': block_n, 'BLOCK_K': block_k, 'SPLIT_K': split_k},
-                                                     num_stages=num_stages, num_warps=num_warps, pre_hook=init_to_zero('C')))
+                        configs.append(triton.tuning.Config({'BLOCK_M': block_m, 'BLOCK_N': block_n, 'BLOCK_K': block_k, 'SPLIT_K': split_k},
+                                                            num_stages=num_stages, num_warps=num_warps, pre_hook=init_to_zero('C')))
     return configs
 
 
-@triton.autotune(
+@triton.tuning.autotune(
     configs=[
         # basic configs for compute-bound matmuls
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=3, num_warps=8),
-        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=3, num_warps=8),
-        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 64, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 256, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=5, num_warps=2),
+        triton.tuning.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=3, num_warps=8),
+        triton.tuning.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=3, num_warps=8),
+        triton.tuning.Config({'BLOCK_M': 256, 'BLOCK_N': 64, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
+        triton.tuning.Config({'BLOCK_M': 64, 'BLOCK_N': 256, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
+        triton.tuning.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
+        triton.tuning.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
+        triton.tuning.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
+        triton.tuning.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
+        triton.tuning.Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=5, num_warps=2),
         # good for int8
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 128, 'SPLIT_K': 1}, num_stages=3, num_warps=8),
-        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 128, 'SPLIT_K': 1}, num_stages=3, num_warps=8),
-        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 64, 'BLOCK_K': 128, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 256, 'BLOCK_K': 128, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 128, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=5, num_warps=2),
+        triton.tuning.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 128, 'SPLIT_K': 1}, num_stages=3, num_warps=8),
+        triton.tuning.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 128, 'SPLIT_K': 1}, num_stages=3, num_warps=8),
+        triton.tuning.Config({'BLOCK_M': 256, 'BLOCK_N': 64, 'BLOCK_K': 128, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
+        triton.tuning.Config({'BLOCK_M': 64, 'BLOCK_N': 256, 'BLOCK_K': 128, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
+        triton.tuning.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 128, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
+        triton.tuning.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
+        triton.tuning.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
+        triton.tuning.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
+        triton.tuning.Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=5, num_warps=2),
     ] + get_configs_io_bound(),
     key=['M', 'N', 'K'],
     prune_configs_by={
@@ -57,7 +60,7 @@ def get_configs_io_bound():
         'top_k': 10
     },
 )
-@triton.heuristics({
+@triton.tuning.heuristics({
     'EVEN_K': lambda args: args['K'] % (args['BLOCK_K'] * args['SPLIT_K']) == 0,
 })
 @triton.jit
@@ -70,8 +73,8 @@ def _kernel(A, B, C, M, N, K,
             ACC_TYPE: tl.constexpr
             ):
     # matrix multiplication
-    pid = tl.program_id(0)
-    pid_z = tl.program_id(1)
+    pid = triton.core.program_id(0)
+    pid_z = triton.core.program_id(1)
     grid_m = (M + BLOCK_M - 1) // BLOCK_M
     grid_n = (N + BLOCK_N - 1) // BLOCK_N
     # re-order program ID for better L2 performance
@@ -81,34 +84,34 @@ def _kernel(A, B, C, M, N, K,
     pid_m = group_id * GROUP_M + (pid % group_size)
     pid_n = (pid % width) // (group_size)
     # do matrix multiplication
-    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    rm = pid_m * BLOCK_M + triton.core.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + triton.core.arange(0, BLOCK_N)
     ram = tl.max_contiguous(tl.multiple_of(rm % M, BLOCK_M), BLOCK_M)
     rbn = tl.max_contiguous(tl.multiple_of(rn % N, BLOCK_N), BLOCK_N)
-    rk = pid_z * BLOCK_K + tl.arange(0, BLOCK_K)
+    rk = pid_z * BLOCK_K + triton.core.arange(0, BLOCK_K)
     # pointers
     A = A + (ram[:, None] * stride_am + rk[None, :] * stride_ak)
     B = B + (rk[:, None] * stride_bk + rbn[None, :] * stride_bn)
-    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=ACC_TYPE)
+    acc = triton.core.zeros((BLOCK_M, BLOCK_N), dtype=ACC_TYPE)
     for k in range(K, 0, -BLOCK_K * SPLIT_K):
         if EVEN_K:
-            a = tl.load(A)
-            b = tl.load(B)
+            a = triton.core.load(A)
+            b = triton.core.load(B)
         else:
-            a = tl.load(A, mask=rk[None, :] < k, other=0.)
-            b = tl.load(B, mask=rk[:, None] < k, other=0.)
-        acc += tl.dot(a, b)
+            a = triton.core.load(A, mask=rk[None, :] < k, other=0.)
+            b = triton.core.load(B, mask=rk[:, None] < k, other=0.)
+        acc += triton.core.dot(a, b)
         A += BLOCK_K * SPLIT_K * stride_ak
         B += BLOCK_K * SPLIT_K * stride_bk
     acc = acc.to(C.dtype.element_ty)
     # rematerialize rm and rn to save registers
-    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    rm = pid_m * BLOCK_M + triton.core.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + triton.core.arange(0, BLOCK_N)
     C = C + (rm[:, None] * stride_cm + rn[None, :] * stride_cn)
     mask = (rm < M)[:, None] & (rn < N)[None, :]
     # handles write-back with reduction-splitting
     if SPLIT_K == 1:
-        tl.store(C, value=acc, mask=mask)
+        triton.core.store(C, value=acc, mask=mask)
     else:
         tl.atomic_add(C, acc, mask=mask)
 

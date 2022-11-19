@@ -1,6 +1,8 @@
 import torch
 
 import triton
+import triton.core
+import triton.tuning
 
 tl = triton
 
@@ -14,7 +16,7 @@ tl = triton
 # ********************************************************
 
 
-@triton.heuristics({
+@triton.tuning.heuristics({
     'EVEN_K': lambda nargs: nargs['K'] % nargs['TILE_K'] == 0,
 })
 @triton.jit
@@ -30,25 +32,25 @@ def _sdd_kernel(
     # ------------ #
     # - Prologue - #
     # ------------ #
-    block_id = tl.program_id(1) + grid_offset
+    block_id = triton.core.program_id(1) + grid_offset
     lut += block_id * 3
     # offsets
-    off_z = tl.program_id(2)  # batch
-    off_h = tl.load(lut + 0)  # head
+    off_z = triton.core.program_id(2)  # batch
+    off_h = triton.core.load(lut + 0)  # head
 
     # initialize pointers to A
-    start_am = tl.load(lut + 1)
-    offs_am = start_am * BLOCK + (tl.arange(0, TILE_M) % BLOCK)
-    offs_ak = tl.arange(0, TILE_K)
+    start_am = triton.core.load(lut + 1)
+    offs_am = start_am * BLOCK + (triton.core.arange(0, TILE_M) % BLOCK)
+    offs_ak = triton.core.arange(0, TILE_K)
     a_ptrs = A \
         + off_z * stride_za \
         + off_h * stride_ha \
         + offs_am[:, None] * stride_ma \
         + offs_ak[None, :] * stride_ak
     # initialize pointers to B
-    start_bn = tl.load(lut + 2)
-    offs_bn = start_bn * BLOCK + (tl.arange(0, TILE_N) % BLOCK)
-    offs_bk = tl.arange(0, TILE_K)
+    start_bn = triton.core.load(lut + 2)
+    offs_bn = start_bn * BLOCK + (triton.core.arange(0, TILE_N) % BLOCK)
+    offs_bk = triton.core.arange(0, TILE_K)
     b_ptrs = B \
         + off_z * stride_zb \
         + off_h * stride_hb \
@@ -57,29 +59,29 @@ def _sdd_kernel(
     # ---------------- #
     #    Inner Loop    #
     # ---------------- #
-    acc = tl.zeros((TILE_M, TILE_N), dtype=tl.float32)
+    acc = triton.core.zeros((TILE_M, TILE_N), dtype=tl.float32)
     for k in range(K, 0, -TILE_K):
         if EVEN_K:
-            a = tl.load(a_ptrs)
-            b = tl.load(b_ptrs)
+            a = triton.core.load(a_ptrs)
+            b = triton.core.load(b_ptrs)
         else:
-            a = tl.load(a_ptrs, mask=offs_ak[None, :] < k, other=0.)
-            b = tl.load(b_ptrs, mask=offs_bk[:, None] < k, other=0.)
-        acc += tl.dot(a, b)
+            a = triton.core.load(a_ptrs, mask=offs_ak[None, :] < k, other=0.)
+            b = triton.core.load(b_ptrs, mask=offs_bk[:, None] < k, other=0.)
+        acc += triton.core.dot(a, b)
         a_ptrs += TILE_K * stride_ak
         b_ptrs += TILE_K * stride_bk
     c = acc.to(C.dtype.element_ty)
     # ---------------- #
     #    Epilogue      #
     # ---------------- #
-    offs_cm = tl.arange(0, TILE_M) % BLOCK
-    offs_cn = tl.arange(0, TILE_N) % BLOCK
+    offs_cm = triton.core.arange(0, TILE_M) % BLOCK
+    offs_cn = triton.core.arange(0, TILE_N) % BLOCK
     pc = C \
         + off_z * stride_zc \
         + block_id * stride_hc \
         + offs_cm[:, None] * stride_mc \
         + offs_cn[None, :] * stride_nc
-    tl.store(pc, value=c, mask=True)
+    triton.core.store(pc, value=c, mask=True)
 
 
 def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, widths, out=None):
@@ -141,33 +143,33 @@ def _dsd_kernel(
     # ------------ #
     # - Prologue - #
     # ------------ #
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
-    num_pid_m = tl.num_programs(0)
-    num_pid_n = tl.num_programs(1)
+    pid_m = triton.core.program_id(0)
+    pid_n = triton.core.program_id(1)
+    num_pid_m = triton.core.num_programs(0)
+    num_pid_n = triton.core.num_programs(1)
     pid_n, pid_m = tl.swizzle2d(pid_n, pid_m, num_pid_n, num_pid_m, GROUP_SIZE_M)
-    pidz = tl.program_id(2)
+    pidz = triton.core.program_id(2)
     header = lut + pid_n * 4
-    offset = tl.load(header + 0)
-    K = tl.load(header + 1)
-    column = tl.load(header + 2)
-    off_h = tl.load(header + 3)
+    offset = triton.core.load(header + 0)
+    K = triton.core.load(header + 1)
+    column = triton.core.load(header + 2)
+    off_h = triton.core.load(header + 3)
     pinc = lut + offset
     # initialize pointers to A (sparse)
-    block_id = tl.load(pinc + 1)
+    block_id = triton.core.load(pinc + 1)
     block_id = tl.multiple_of(block_id, 8)  # compiler hint
-    offs_am = tl.arange(0, TILE_M)
-    offs_ak = tl.arange(0, TILE_K)
+    offs_am = triton.core.arange(0, TILE_M)
+    offs_ak = triton.core.arange(0, TILE_K)
     pa = A + pidz * stride_az \
         + block_id * stride_ha \
         + offs_am[:, None] * stride_am \
         + offs_ak[None, :] * stride_ak
     # initialize pointers to B (dense)
-    offs_bn = pid_m * TILE_N + tl.arange(0, TILE_N)
+    offs_bn = pid_m * TILE_N + triton.core.arange(0, TILE_N)
     offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn % DS0, TILE_N), TILE_N)
-    start_bk = tl.load(pinc)
+    start_bk = triton.core.load(pinc)
     start_bk = tl.multiple_of(start_bk, 8)  # compiler hint
-    offs_bk = start_bk + tl.arange(0, TILE_K)
+    offs_bk = start_bk + triton.core.arange(0, TILE_K)
     pb = B + pidz * stride_zb \
         + off_h * stride_hb \
         + offs_bn[None, :] * stride_bn \
@@ -175,33 +177,33 @@ def _dsd_kernel(
     # ---------------- #
     #    Inner Loop    #
     # ---------------- #
-    acc = tl.zeros((TILE_M, TILE_N), dtype=tl.float32)
+    acc = triton.core.zeros((TILE_M, TILE_N), dtype=tl.float32)
     pinc += 2
-    inc_a = tl.load(pinc + 1)
+    inc_a = triton.core.load(pinc + 1)
     inc_a = tl.multiple_of(inc_a, 8)
-    inc_b = tl.load(pinc)
+    inc_b = triton.core.load(pinc)
     inc_b = tl.multiple_of(inc_b, 8)
     for k in range(K, 0, -TILE_K):
-        a = tl.load(pa, mask=True)
-        b = tl.load(pb, mask=offs_bn[None, :] < DS0)
-        acc += tl.dot(a, b)
+        a = triton.core.load(pa, mask=True)
+        b = triton.core.load(pb, mask=offs_bn[None, :] < DS0)
+        acc += triton.core.dot(a, b)
         pa += inc_a
         pb += inc_b * stride_bk
         pinc += 2
-        inc_a = tl.load(pinc + 1)
+        inc_a = triton.core.load(pinc + 1)
         inc_a = tl.multiple_of(inc_a, 8)
-        inc_b = tl.load(pinc)
+        inc_b = triton.core.load(pinc)
         inc_b = tl.multiple_of(inc_b, 8)
     c = acc.to(C.dtype.element_ty)
     # initialize pointers to C
-    offs_cm = column * TILE_M + tl.arange(0, TILE_M)
-    offs_cn = pid_m * TILE_N + tl.arange(0, TILE_N)
+    offs_cm = column * TILE_M + triton.core.arange(0, TILE_M)
+    offs_cn = pid_m * TILE_N + triton.core.arange(0, TILE_N)
     pc = C \
         + off_h * stride_hc \
         + pidz * stride_zc \
         + offs_cm[:, None] * stride_cm \
         + offs_cn[None, :] * stride_cn
-    tl.store(pc, value=c, mask=offs_cn[None, :] < DS0)
+    triton.core.store(pc, value=c, mask=offs_cn[None, :] < DS0)
 
 
 def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=None):

@@ -6,6 +6,7 @@ Layer Normalization
 import torch
 
 import triton
+import triton.core
 import triton.language as tl
 
 try:
@@ -153,7 +154,7 @@ class LayerNorm(torch.autograd.Function):
         # allocate output
         out = torch.empty_like(a)
         # reshape input data into 2D tensor
-        a_arg = a.reshape(-1, a.shape[-1])
+        a_arg = triton.core.reshape(-1, a.shape[-1])
         M, N = a_arg.shape
         mean = torch.empty((M,), dtype=torch.float32, device="cuda")
         rstd = torch.empty((M,), dtype=torch.float32, device="cuda")
@@ -198,7 +199,7 @@ class LayerNorm(torch.autograd.Function):
         da = torch.empty_like(dout)
         # enqueue kernel using forward pass heuristics
         # also compute partial sums for DW and DB
-        x_arg = a.reshape(-1, a.shape[-1])
+        x_arg = triton.core.reshape(-1, a.shape[-1])
         M, N = x_arg.shape
         dweight = torch.empty((weight.shape[0],), dtype=weight.dtype, device=weight.device)
         dbias = torch.empty((weight.shape[0],), dtype=weight.dtype, device=weight.device)

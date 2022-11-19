@@ -5,98 +5,99 @@ import random
 import torch
 
 import triton
+import triton.core
 
 
 @triton.jit
 def dequantize_kernel_int8(output_ptr, input_ptr, size, BLOCK_SIZE: triton.constexpr):
-    w_offsets = triton.arange(0, BLOCK_SIZE // 4)
+    w_offsets = triton.core.arange(0, BLOCK_SIZE // 4)
     mask = w_offsets < (size // 4)
     input_ptrs = input_ptr + 1 + w_offsets
-    input = triton.load(input_ptrs, mask=mask, other=0)
-    scale_shift = triton.load(input_ptr)
+    input = triton.core.load(input_ptrs, mask=mask, other=0)
+    scale_shift = triton.core.load(input_ptr)
     scale = (scale_shift & 65535).to(triton.int16).to(triton.float16, bitcast=True)
     shift = (scale_shift >> 16).to(triton.int16).to(triton.float16, bitcast=True)
-    output = triton.dequantize(input, scale, shift, 8)
-    offsets = triton.arange(0, BLOCK_SIZE)
+    output = triton.core.dequantize(input, scale, shift, 8)
+    offsets = triton.core.arange(0, BLOCK_SIZE)
     output_ptrs = triton.multiple_of(output_ptr + offsets, 4)
-    triton.store(output_ptrs, value=output, mask=offsets < size)
+    triton.core.store(output_ptrs, value=output, mask=offsets < size)
 
 
 @triton.jit
 def dequantize_kernel_scale_shift_int8(
     output_ptr, input_ptr, scale_ptr, shift_ptr, size, BLOCK_SIZE: triton.constexpr
 ):
-    w_offsets = triton.arange(0, BLOCK_SIZE // 4)
+    w_offsets = triton.core.arange(0, BLOCK_SIZE // 4)
     mask = w_offsets < (size // 4)
     input_ptrs = triton.multiple_of(input_ptr + w_offsets, 1)
-    input = triton.load(input_ptrs, mask=mask, other=0)
-    scale = triton.load(scale_ptr)
-    shift = triton.load(shift_ptr)
-    output = triton.dequantize(input, scale, shift, 8)
-    offsets = triton.arange(0, BLOCK_SIZE)
+    input = triton.core.load(input_ptrs, mask=mask, other=0)
+    scale = triton.core.load(scale_ptr)
+    shift = triton.core.load(shift_ptr)
+    output = triton.core.dequantize(input, scale, shift, 8)
+    offsets = triton.core.arange(0, BLOCK_SIZE)
     output_ptrs = triton.multiple_of(output_ptr + offsets, 4)
-    triton.store(output_ptrs, value=output, mask=offsets < size)
+    triton.core.store(output_ptrs, value=output, mask=offsets < size)
 
 
 @triton.jit
 def dequantize_kernel_int4(output_ptr, input_ptr, size, BLOCK_SIZE: triton.constexpr):
-    w_offsets = triton.arange(0, BLOCK_SIZE // 8)
+    w_offsets = triton.core.arange(0, BLOCK_SIZE // 8)
     mask = w_offsets < (size // 8)
     input_ptrs = input_ptr + 1 + w_offsets
-    input = triton.load(input_ptrs, mask=mask, other=0)
-    scale_shift = triton.load(input_ptr)
+    input = triton.core.load(input_ptrs, mask=mask, other=0)
+    scale_shift = triton.core.load(input_ptr)
     scale = (scale_shift & 65535).to(triton.int16).to(triton.float16, bitcast=True)
     shift = (scale_shift >> 16).to(triton.int16).to(triton.float16, bitcast=True)
-    output = triton.dequantize(input, scale, shift, 4)
-    offsets = triton.arange(0, BLOCK_SIZE)
+    output = triton.core.dequantize(input, scale, shift, 4)
+    offsets = triton.core.arange(0, BLOCK_SIZE)
     output_ptrs = triton.multiple_of(output_ptr + offsets, 8)
-    triton.store(output_ptrs, value=output, mask=offsets < size)
+    triton.core.store(output_ptrs, value=output, mask=offsets < size)
 
 
 @triton.jit
 def dequantize_kernel_scale_shift_int4(
     output_ptr, input_ptr, scale_ptr, shift_ptr, size, BLOCK_SIZE: triton.constexpr
 ):
-    w_offsets = triton.arange(0, BLOCK_SIZE // 8)
+    w_offsets = triton.core.arange(0, BLOCK_SIZE // 8)
     mask = w_offsets < (size // 8)
     input_ptrs = triton.multiple_of(input_ptr + w_offsets, 1)
-    input = triton.load(input_ptrs, mask=mask, other=0)
-    scale = triton.load(scale_ptr)
-    shift = triton.load(shift_ptr)
-    output = triton.dequantize(input, scale, shift, 4)
-    offsets = triton.arange(0, BLOCK_SIZE)
+    input = triton.core.load(input_ptrs, mask=mask, other=0)
+    scale = triton.core.load(scale_ptr)
+    shift = triton.core.load(shift_ptr)
+    output = triton.core.dequantize(input, scale, shift, 4)
+    offsets = triton.core.arange(0, BLOCK_SIZE)
     output_ptrs = triton.multiple_of(output_ptr + offsets, 8)
-    triton.store(output_ptrs, value=output, mask=offsets < size)
+    triton.core.store(output_ptrs, value=output, mask=offsets < size)
 
 
 @triton.jit
 def dequantize_kernel_int2(output_ptr, input_ptr, size, BLOCK_SIZE: triton.constexpr):
-    w_offsets = triton.arange(0, BLOCK_SIZE // 8)
+    w_offsets = triton.core.arange(0, BLOCK_SIZE // 8)
     mask = w_offsets < (size // 8)
     input_ptrs = triton.multiple_of(input_ptr + 2 + w_offsets, 1)
-    input = triton.load(input_ptrs, mask=mask, other=0)
-    scale = triton.load(input_ptr).to(triton.float16, bitcast=True)
-    shift = triton.load(input_ptr + 1).to(triton.float16, bitcast=True)
-    output = triton.dequantize(input, scale, shift, 2)
-    offsets = triton.arange(0, BLOCK_SIZE)
+    input = triton.core.load(input_ptrs, mask=mask, other=0)
+    scale = triton.core.load(input_ptr).to(triton.float16, bitcast=True)
+    shift = triton.core.load(input_ptr + 1).to(triton.float16, bitcast=True)
+    output = triton.core.dequantize(input, scale, shift, 2)
+    offsets = triton.core.arange(0, BLOCK_SIZE)
     output_ptrs = triton.multiple_of(output_ptr + offsets, 8)
-    triton.store(output_ptrs, value=output, mask=offsets < size)
+    triton.core.store(output_ptrs, value=output, mask=offsets < size)
 
 
 @triton.jit
 def dequantize_kernel_scale_shift_int2(
     output_ptr, input_ptr, scale_ptr, shift_ptr, size, BLOCK_SIZE: triton.constexpr
 ):
-    w_offsets = triton.arange(0, BLOCK_SIZE // 8)
+    w_offsets = triton.core.arange(0, BLOCK_SIZE // 8)
     mask = w_offsets < (size // 8)
     input_ptrs = triton.multiple_of(input_ptr + w_offsets, 1)
-    input = triton.load(input_ptrs, mask=mask, other=0)
-    scale = triton.load(scale_ptr)
-    shift = triton.load(shift_ptr)
-    output = triton.dequantize(input, scale, shift, 2)
-    offsets = triton.arange(0, BLOCK_SIZE)
+    input = triton.core.load(input_ptrs, mask=mask, other=0)
+    scale = triton.core.load(scale_ptr)
+    shift = triton.core.load(shift_ptr)
+    output = triton.core.dequantize(input, scale, shift, 2)
+    offsets = triton.core.arange(0, BLOCK_SIZE)
     output_ptrs = triton.multiple_of(output_ptr + offsets, 8)
-    triton.store(output_ptrs, value=output, mask=offsets < size)
+    triton.core.store(output_ptrs, value=output, mask=offsets < size)
 
 
 def test_dequantize_int8() -> None:

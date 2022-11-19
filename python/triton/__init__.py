@@ -10,6 +10,7 @@ import torch
 
 from .utils import *
 from .base import *
+from .tuning import *
 from . import libdevice
 from .core import *
 from .random import *

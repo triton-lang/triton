@@ -4,6 +4,7 @@ import scipy.stats
 import torch
 
 import triton
+import triton.core
 
 
 def cdiv(x, div):
@@ -130,9 +131,9 @@ def test_randint(size, seed, device="cuda"):
 
     @triton.jit
     def kernel(X, N, seed):
-        offset = triton.program_id(0) * BLOCK + triton.arange(0, BLOCK)
+        offset = triton.core.program_id(0) * BLOCK + triton.core.arange(0, BLOCK)
         rand = triton.randint(seed, offset)
-        triton.store(X + offset, rand, mask=offset < N)
+        triton.core.store(X + offset, rand, mask=offset < N)
 
     # triton result
     x = torch.empty(size, dtype=torch.int32, device=device)
@@ -155,9 +156,9 @@ def test_randint(size, seed, device="cuda"):
 def test_rand(size, seed, device="cuda"):
     @triton.jit
     def kernel(X, N, seed):
-        offset = triton.program_id(0) * BLOCK + triton.arange(0, BLOCK)
+        offset = triton.core.program_id(0) * BLOCK + triton.core.arange(0, BLOCK)
         rand = triton.rand(seed, offset)
-        triton.store(X + offset, rand, mask=offset < N)
+        triton.core.store(X + offset, rand, mask=offset < N)
 
     # triton result
     x = torch.empty(size, dtype=torch.float32, device=device)
@@ -177,9 +178,9 @@ def test_rand(size, seed, device="cuda"):
 def test_randn(size, seed, device="cuda"):
     @triton.jit
     def kernel(X, N, seed):
-        offset = triton.program_id(0) * BLOCK + triton.arange(0, BLOCK)
+        offset = triton.core.program_id(0) * BLOCK + triton.core.arange(0, BLOCK)
         rand = triton.randn(seed, offset)
-        triton.store(X + offset, rand, mask=offset < N)
+        triton.core.store(X + offset, rand, mask=offset < N)
 
     # triton result
     x = torch.empty(size, dtype=torch.float32, device=device)
@@ -196,10 +197,10 @@ def test_randn(size, seed, device="cuda"):
 def test_rand_limits():
     @triton.jit
     def kernel(input, output, n: triton.constexpr):
-        idx = triton.arange(0, n)
-        x = triton.load(input + idx)
+        idx = triton.core.arange(0, n)
+        x = triton.core.load(input + idx)
         y = triton.uint32_to_uniform_float(x)
-        triton.store(output + idx, y)
+        triton.core.store(output + idx, y)
 
     min_max_int32 = torch.tensor(
         [

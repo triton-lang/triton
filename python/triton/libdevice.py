@@ -1,5 +1,6 @@
 import os
 
+import triton.dispatch
 from . import base
 
 LIBDEVICE_PATH = os.path.dirname(os.path.abspath(__file__)) + "/libdevice.10.bc"
@@ -7,7 +8,7 @@ LIBDEVICE_PATH = os.path.dirname(os.path.abspath(__file__)) + "/libdevice.10.bc"
 
 @base.extern
 def clz(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -23,7 +24,7 @@ def clz(arg0, _builder=None):
 
 @base.extern
 def popc(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -39,7 +40,7 @@ def popc(arg0, _builder=None):
 
 @base.extern
 def byte_perm(arg0, arg1, arg2, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -60,7 +61,7 @@ def byte_perm(arg0, arg1, arg2, _builder=None):
 
 @base.extern
 def min(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -99,7 +100,7 @@ def min(arg0, arg1, _builder=None):
 
 @base.extern
 def max(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -138,7 +139,7 @@ def max(arg0, arg1, _builder=None):
 
 @base.extern
 def mulhi(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -169,7 +170,7 @@ def mulhi(arg0, arg1, _builder=None):
 
 @base.extern
 def mul24(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -192,7 +193,7 @@ def mul24(arg0, arg1, _builder=None):
 
 @base.extern
 def brev(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -208,7 +209,7 @@ def brev(arg0, _builder=None):
 
 @base.extern
 def sad(arg0, arg1, arg2, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -234,7 +235,7 @@ def sad(arg0, arg1, arg2, _builder=None):
 
 @base.extern
 def abs(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -252,7 +253,7 @@ def abs(arg0, _builder=None):
 
 @base.extern
 def floor(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -268,7 +269,7 @@ def floor(arg0, _builder=None):
 
 @base.extern
 def rcp64h(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -283,7 +284,7 @@ def rcp64h(arg0, _builder=None):
 
 @base.extern
 def rsqrt(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -299,7 +300,7 @@ def rsqrt(arg0, _builder=None):
 
 @base.extern
 def ceil(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -315,7 +316,7 @@ def ceil(arg0, _builder=None):
 
 @base.extern
 def trunc(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -331,7 +332,7 @@ def trunc(arg0, _builder=None):
 
 @base.extern
 def exp2(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -347,7 +348,7 @@ def exp2(arg0, _builder=None):
 
 @base.extern
 def saturatef(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -362,7 +363,7 @@ def saturatef(arg0, _builder=None):
 
 @base.extern
 def fma_rn(arg0, arg1, arg2, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -388,7 +389,7 @@ def fma_rn(arg0, arg1, arg2, _builder=None):
 
 @base.extern
 def fma_rz(arg0, arg1, arg2, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -414,7 +415,7 @@ def fma_rz(arg0, arg1, arg2, _builder=None):
 
 @base.extern
 def fma_rd(arg0, arg1, arg2, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -440,7 +441,7 @@ def fma_rd(arg0, arg1, arg2, _builder=None):
 
 @base.extern
 def fma_ru(arg0, arg1, arg2, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -466,7 +467,7 @@ def fma_ru(arg0, arg1, arg2, _builder=None):
 
 @base.extern
 def fast_dividef(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -485,7 +486,7 @@ def fast_dividef(arg0, arg1, _builder=None):
 
 @base.extern
 def div_rn(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -508,7 +509,7 @@ def div_rn(arg0, arg1, _builder=None):
 
 @base.extern
 def div_rz(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -531,7 +532,7 @@ def div_rz(arg0, arg1, _builder=None):
 
 @base.extern
 def div_rd(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -554,7 +555,7 @@ def div_rd(arg0, arg1, _builder=None):
 
 @base.extern
 def div_ru(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -577,7 +578,7 @@ def div_ru(arg0, arg1, _builder=None):
 
 @base.extern
 def rcp_rn(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -593,7 +594,7 @@ def rcp_rn(arg0, _builder=None):
 
 @base.extern
 def rcp_rz(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -609,7 +610,7 @@ def rcp_rz(arg0, _builder=None):
 
 @base.extern
 def rcp_rd(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -625,7 +626,7 @@ def rcp_rd(arg0, _builder=None):
 
 @base.extern
 def rcp_ru(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -641,7 +642,7 @@ def rcp_ru(arg0, _builder=None):
 
 @base.extern
 def sqrt_rn(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -657,7 +658,7 @@ def sqrt_rn(arg0, _builder=None):
 
 @base.extern
 def sqrt_rz(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -673,7 +674,7 @@ def sqrt_rz(arg0, _builder=None):
 
 @base.extern
 def sqrt_rd(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -689,7 +690,7 @@ def sqrt_rd(arg0, _builder=None):
 
 @base.extern
 def sqrt_ru(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -705,7 +706,7 @@ def sqrt_ru(arg0, _builder=None):
 
 @base.extern
 def sqrt(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -721,7 +722,7 @@ def sqrt(arg0, _builder=None):
 
 @base.extern
 def add_rn(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -744,7 +745,7 @@ def add_rn(arg0, arg1, _builder=None):
 
 @base.extern
 def add_rz(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -767,7 +768,7 @@ def add_rz(arg0, arg1, _builder=None):
 
 @base.extern
 def add_rd(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -790,7 +791,7 @@ def add_rd(arg0, arg1, _builder=None):
 
 @base.extern
 def add_ru(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -813,7 +814,7 @@ def add_ru(arg0, arg1, _builder=None):
 
 @base.extern
 def mul_rn(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -836,7 +837,7 @@ def mul_rn(arg0, arg1, _builder=None):
 
 @base.extern
 def mul_rz(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -859,7 +860,7 @@ def mul_rz(arg0, arg1, _builder=None):
 
 @base.extern
 def mul_rd(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -882,7 +883,7 @@ def mul_rd(arg0, arg1, _builder=None):
 
 @base.extern
 def mul_ru(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -905,7 +906,7 @@ def mul_ru(arg0, arg1, _builder=None):
 
 @base.extern
 def double2float_rn(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -920,7 +921,7 @@ def double2float_rn(arg0, _builder=None):
 
 @base.extern
 def double2float_rz(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -935,7 +936,7 @@ def double2float_rz(arg0, _builder=None):
 
 @base.extern
 def double2float_rd(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -950,7 +951,7 @@ def double2float_rd(arg0, _builder=None):
 
 @base.extern
 def double2float_ru(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -965,7 +966,7 @@ def double2float_ru(arg0, _builder=None):
 
 @base.extern
 def double2int_rn(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -980,7 +981,7 @@ def double2int_rn(arg0, _builder=None):
 
 @base.extern
 def double2int_rz(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -995,7 +996,7 @@ def double2int_rz(arg0, _builder=None):
 
 @base.extern
 def double2int_rd(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1010,7 +1011,7 @@ def double2int_rd(arg0, _builder=None):
 
 @base.extern
 def double2int_ru(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1025,7 +1026,7 @@ def double2int_ru(arg0, _builder=None):
 
 @base.extern
 def double2uint_rn(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1040,7 +1041,7 @@ def double2uint_rn(arg0, _builder=None):
 
 @base.extern
 def double2uint_rz(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1055,7 +1056,7 @@ def double2uint_rz(arg0, _builder=None):
 
 @base.extern
 def double2uint_rd(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1070,7 +1071,7 @@ def double2uint_rd(arg0, _builder=None):
 
 @base.extern
 def double2uint_ru(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1085,7 +1086,7 @@ def double2uint_ru(arg0, _builder=None):
 
 @base.extern
 def int2double_rn(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1100,7 +1101,7 @@ def int2double_rn(arg0, _builder=None):
 
 @base.extern
 def uint2double_rn(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1115,7 +1116,7 @@ def uint2double_rn(arg0, _builder=None):
 
 @base.extern
 def float2int_rn(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1130,7 +1131,7 @@ def float2int_rn(arg0, _builder=None):
 
 @base.extern
 def float2int_rz(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1145,7 +1146,7 @@ def float2int_rz(arg0, _builder=None):
 
 @base.extern
 def float2int_rd(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1160,7 +1161,7 @@ def float2int_rd(arg0, _builder=None):
 
 @base.extern
 def float2int_ru(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1175,7 +1176,7 @@ def float2int_ru(arg0, _builder=None):
 
 @base.extern
 def float2uint_rn(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1190,7 +1191,7 @@ def float2uint_rn(arg0, _builder=None):
 
 @base.extern
 def float2uint_rz(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1205,7 +1206,7 @@ def float2uint_rz(arg0, _builder=None):
 
 @base.extern
 def float2uint_rd(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1220,7 +1221,7 @@ def float2uint_rd(arg0, _builder=None):
 
 @base.extern
 def float2uint_ru(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1235,7 +1236,7 @@ def float2uint_ru(arg0, _builder=None):
 
 @base.extern
 def int2float_rn(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1250,7 +1251,7 @@ def int2float_rn(arg0, _builder=None):
 
 @base.extern
 def int2float_rz(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1265,7 +1266,7 @@ def int2float_rz(arg0, _builder=None):
 
 @base.extern
 def int2float_rd(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1280,7 +1281,7 @@ def int2float_rd(arg0, _builder=None):
 
 @base.extern
 def int2float_ru(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1295,7 +1296,7 @@ def int2float_ru(arg0, _builder=None):
 
 @base.extern
 def uint2float_rn(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1310,7 +1311,7 @@ def uint2float_rn(arg0, _builder=None):
 
 @base.extern
 def uint2float_rz(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1325,7 +1326,7 @@ def uint2float_rz(arg0, _builder=None):
 
 @base.extern
 def uint2float_rd(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1340,7 +1341,7 @@ def uint2float_rd(arg0, _builder=None):
 
 @base.extern
 def uint2float_ru(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1355,7 +1356,7 @@ def uint2float_ru(arg0, _builder=None):
 
 @base.extern
 def hiloint2double(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1374,7 +1375,7 @@ def hiloint2double(arg0, arg1, _builder=None):
 
 @base.extern
 def double2loint(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1389,7 +1390,7 @@ def double2loint(arg0, _builder=None):
 
 @base.extern
 def double2hiint(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1404,7 +1405,7 @@ def double2hiint(arg0, _builder=None):
 
 @base.extern
 def float2ll_rn(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1419,7 +1420,7 @@ def float2ll_rn(arg0, _builder=None):
 
 @base.extern
 def float2ll_rz(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1434,7 +1435,7 @@ def float2ll_rz(arg0, _builder=None):
 
 @base.extern
 def float2ll_rd(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1449,7 +1450,7 @@ def float2ll_rd(arg0, _builder=None):
 
 @base.extern
 def float2ll_ru(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1464,7 +1465,7 @@ def float2ll_ru(arg0, _builder=None):
 
 @base.extern
 def float2ull_rn(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1479,7 +1480,7 @@ def float2ull_rn(arg0, _builder=None):
 
 @base.extern
 def float2ull_rz(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1494,7 +1495,7 @@ def float2ull_rz(arg0, _builder=None):
 
 @base.extern
 def float2ull_rd(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1509,7 +1510,7 @@ def float2ull_rd(arg0, _builder=None):
 
 @base.extern
 def float2ull_ru(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1524,7 +1525,7 @@ def float2ull_ru(arg0, _builder=None):
 
 @base.extern
 def double2ll_rn(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1539,7 +1540,7 @@ def double2ll_rn(arg0, _builder=None):
 
 @base.extern
 def double2ll_rz(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1554,7 +1555,7 @@ def double2ll_rz(arg0, _builder=None):
 
 @base.extern
 def double2ll_rd(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1569,7 +1570,7 @@ def double2ll_rd(arg0, _builder=None):
 
 @base.extern
 def double2ll_ru(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1584,7 +1585,7 @@ def double2ll_ru(arg0, _builder=None):
 
 @base.extern
 def double2ull_rn(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1599,7 +1600,7 @@ def double2ull_rn(arg0, _builder=None):
 
 @base.extern
 def double2ull_rz(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1614,7 +1615,7 @@ def double2ull_rz(arg0, _builder=None):
 
 @base.extern
 def double2ull_rd(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1629,7 +1630,7 @@ def double2ull_rd(arg0, _builder=None):
 
 @base.extern
 def double2ull_ru(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1644,7 +1645,7 @@ def double2ull_ru(arg0, _builder=None):
 
 @base.extern
 def ll2float_rn(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1659,7 +1660,7 @@ def ll2float_rn(arg0, _builder=None):
 
 @base.extern
 def ll2float_rz(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1674,7 +1675,7 @@ def ll2float_rz(arg0, _builder=None):
 
 @base.extern
 def ll2float_rd(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1689,7 +1690,7 @@ def ll2float_rd(arg0, _builder=None):
 
 @base.extern
 def ll2float_ru(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1704,7 +1705,7 @@ def ll2float_ru(arg0, _builder=None):
 
 @base.extern
 def ull2float_rn(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1719,7 +1720,7 @@ def ull2float_rn(arg0, _builder=None):
 
 @base.extern
 def ull2float_rz(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1734,7 +1735,7 @@ def ull2float_rz(arg0, _builder=None):
 
 @base.extern
 def ull2float_rd(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1749,7 +1750,7 @@ def ull2float_rd(arg0, _builder=None):
 
 @base.extern
 def ull2float_ru(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1764,7 +1765,7 @@ def ull2float_ru(arg0, _builder=None):
 
 @base.extern
 def ll2double_rn(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1779,7 +1780,7 @@ def ll2double_rn(arg0, _builder=None):
 
 @base.extern
 def ll2double_rz(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1794,7 +1795,7 @@ def ll2double_rz(arg0, _builder=None):
 
 @base.extern
 def ll2double_rd(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1809,7 +1810,7 @@ def ll2double_rd(arg0, _builder=None):
 
 @base.extern
 def ll2double_ru(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1824,7 +1825,7 @@ def ll2double_ru(arg0, _builder=None):
 
 @base.extern
 def ull2double_rn(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1839,7 +1840,7 @@ def ull2double_rn(arg0, _builder=None):
 
 @base.extern
 def ull2double_rz(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1854,7 +1855,7 @@ def ull2double_rz(arg0, _builder=None):
 
 @base.extern
 def ull2double_rd(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1869,7 +1870,7 @@ def ull2double_rd(arg0, _builder=None):
 
 @base.extern
 def ull2double_ru(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1884,7 +1885,7 @@ def ull2double_ru(arg0, _builder=None):
 
 @base.extern
 def int_as_float(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1899,7 +1900,7 @@ def int_as_float(arg0, _builder=None):
 
 @base.extern
 def float_as_int(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1914,7 +1915,7 @@ def float_as_int(arg0, _builder=None):
 
 @base.extern
 def uint_as_float(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1929,7 +1930,7 @@ def uint_as_float(arg0, _builder=None):
 
 @base.extern
 def float_as_uint(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1944,7 +1945,7 @@ def float_as_uint(arg0, _builder=None):
 
 @base.extern
 def longlong_as_double(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1959,7 +1960,7 @@ def longlong_as_double(arg0, _builder=None):
 
 @base.extern
 def double_as_longlong(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1974,7 +1975,7 @@ def double_as_longlong(arg0, _builder=None):
 
 @base.extern
 def fast_sinf(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -1989,7 +1990,7 @@ def fast_sinf(arg0, _builder=None):
 
 @base.extern
 def fast_cosf(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2004,7 +2005,7 @@ def fast_cosf(arg0, _builder=None):
 
 @base.extern
 def fast_log2f(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2019,7 +2020,7 @@ def fast_log2f(arg0, _builder=None):
 
 @base.extern
 def fast_logf(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2034,7 +2035,7 @@ def fast_logf(arg0, _builder=None):
 
 @base.extern
 def fast_expf(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2049,7 +2050,7 @@ def fast_expf(arg0, _builder=None):
 
 @base.extern
 def fast_tanf(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2064,7 +2065,7 @@ def fast_tanf(arg0, _builder=None):
 
 @base.extern
 def fast_exp10f(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2079,7 +2080,7 @@ def fast_exp10f(arg0, _builder=None):
 
 @base.extern
 def fast_log10f(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2094,7 +2095,7 @@ def fast_log10f(arg0, _builder=None):
 
 @base.extern
 def fast_powf(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2113,7 +2114,7 @@ def fast_powf(arg0, arg1, _builder=None):
 
 @base.extern
 def hadd(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2136,7 +2137,7 @@ def hadd(arg0, arg1, _builder=None):
 
 @base.extern
 def rhadd(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2159,7 +2160,7 @@ def rhadd(arg0, arg1, _builder=None):
 
 @base.extern
 def sub_rn(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2182,7 +2183,7 @@ def sub_rn(arg0, arg1, _builder=None):
 
 @base.extern
 def sub_rz(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2205,7 +2206,7 @@ def sub_rz(arg0, arg1, _builder=None):
 
 @base.extern
 def sub_rd(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2228,7 +2229,7 @@ def sub_rd(arg0, arg1, _builder=None):
 
 @base.extern
 def sub_ru(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2251,7 +2252,7 @@ def sub_ru(arg0, arg1, _builder=None):
 
 @base.extern
 def rsqrt_rn(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2266,7 +2267,7 @@ def rsqrt_rn(arg0, _builder=None):
 
 @base.extern
 def ffs(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2282,7 +2283,7 @@ def ffs(arg0, _builder=None):
 
 @base.extern
 def rint(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2298,7 +2299,7 @@ def rint(arg0, _builder=None):
 
 @base.extern
 def llrint(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2314,7 +2315,7 @@ def llrint(arg0, _builder=None):
 
 @base.extern
 def nearbyint(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2330,7 +2331,7 @@ def nearbyint(arg0, _builder=None):
 
 @base.extern
 def isnan(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2346,7 +2347,7 @@ def isnan(arg0, _builder=None):
 
 @base.extern
 def signbit(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2362,7 +2363,7 @@ def signbit(arg0, _builder=None):
 
 @base.extern
 def copysign(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2385,7 +2386,7 @@ def copysign(arg0, arg1, _builder=None):
 
 @base.extern
 def finitef(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2400,7 +2401,7 @@ def finitef(arg0, _builder=None):
 
 @base.extern
 def isinf(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2416,7 +2417,7 @@ def isinf(arg0, _builder=None):
 
 @base.extern
 def nextafter(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2439,7 +2440,7 @@ def nextafter(arg0, arg1, _builder=None):
 
 @base.extern
 def sin(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2455,7 +2456,7 @@ def sin(arg0, _builder=None):
 
 @base.extern
 def cos(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2471,7 +2472,7 @@ def cos(arg0, _builder=None):
 
 @base.extern
 def sinpi(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2487,7 +2488,7 @@ def sinpi(arg0, _builder=None):
 
 @base.extern
 def cospi(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2503,7 +2504,7 @@ def cospi(arg0, _builder=None):
 
 @base.extern
 def tan(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2519,7 +2520,7 @@ def tan(arg0, _builder=None):
 
 @base.extern
 def log2(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2535,7 +2536,7 @@ def log2(arg0, _builder=None):
 
 @base.extern
 def exp(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2551,7 +2552,7 @@ def exp(arg0, _builder=None):
 
 @base.extern
 def exp10(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2567,7 +2568,7 @@ def exp10(arg0, _builder=None):
 
 @base.extern
 def cosh(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2583,7 +2584,7 @@ def cosh(arg0, _builder=None):
 
 @base.extern
 def sinh(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2599,7 +2600,7 @@ def sinh(arg0, _builder=None):
 
 @base.extern
 def tanh(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2615,7 +2616,7 @@ def tanh(arg0, _builder=None):
 
 @base.extern
 def atan2(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2638,7 +2639,7 @@ def atan2(arg0, arg1, _builder=None):
 
 @base.extern
 def atan(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2654,7 +2655,7 @@ def atan(arg0, _builder=None):
 
 @base.extern
 def asin(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2670,7 +2671,7 @@ def asin(arg0, _builder=None):
 
 @base.extern
 def acos(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2686,7 +2687,7 @@ def acos(arg0, _builder=None):
 
 @base.extern
 def log(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2702,7 +2703,7 @@ def log(arg0, _builder=None):
 
 @base.extern
 def log10(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2718,7 +2719,7 @@ def log10(arg0, _builder=None):
 
 @base.extern
 def log1p(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2734,7 +2735,7 @@ def log1p(arg0, _builder=None):
 
 @base.extern
 def acosh(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2750,7 +2751,7 @@ def acosh(arg0, _builder=None):
 
 @base.extern
 def asinh(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2766,7 +2767,7 @@ def asinh(arg0, _builder=None):
 
 @base.extern
 def atanh(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2782,7 +2783,7 @@ def atanh(arg0, _builder=None):
 
 @base.extern
 def expm1(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2798,7 +2799,7 @@ def expm1(arg0, _builder=None):
 
 @base.extern
 def hypot(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2821,7 +2822,7 @@ def hypot(arg0, arg1, _builder=None):
 
 @base.extern
 def rhypot(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2844,7 +2845,7 @@ def rhypot(arg0, arg1, _builder=None):
 
 @base.extern
 def norm3d(arg0, arg1, arg2, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2870,7 +2871,7 @@ def norm3d(arg0, arg1, arg2, _builder=None):
 
 @base.extern
 def rnorm3d(arg0, arg1, arg2, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2896,7 +2897,7 @@ def rnorm3d(arg0, arg1, arg2, _builder=None):
 
 @base.extern
 def norm4d(arg0, arg1, arg2, arg3, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2925,7 +2926,7 @@ def norm4d(arg0, arg1, arg2, arg3, _builder=None):
 
 @base.extern
 def rnorm4d(arg0, arg1, arg2, arg3, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2954,7 +2955,7 @@ def rnorm4d(arg0, arg1, arg2, arg3, _builder=None):
 
 @base.extern
 def cbrt(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2970,7 +2971,7 @@ def cbrt(arg0, _builder=None):
 
 @base.extern
 def rcbrt(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -2986,7 +2987,7 @@ def rcbrt(arg0, _builder=None):
 
 @base.extern
 def j0(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3002,7 +3003,7 @@ def j0(arg0, _builder=None):
 
 @base.extern
 def j1(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3018,7 +3019,7 @@ def j1(arg0, _builder=None):
 
 @base.extern
 def y0(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3034,7 +3035,7 @@ def y0(arg0, _builder=None):
 
 @base.extern
 def y1(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3050,7 +3051,7 @@ def y1(arg0, _builder=None):
 
 @base.extern
 def yn(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3073,7 +3074,7 @@ def yn(arg0, arg1, _builder=None):
 
 @base.extern
 def jn(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3096,7 +3097,7 @@ def jn(arg0, arg1, _builder=None):
 
 @base.extern
 def cyl_bessel_i0(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3112,7 +3113,7 @@ def cyl_bessel_i0(arg0, _builder=None):
 
 @base.extern
 def cyl_bessel_i1(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3128,7 +3129,7 @@ def cyl_bessel_i1(arg0, _builder=None):
 
 @base.extern
 def erf(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3144,7 +3145,7 @@ def erf(arg0, _builder=None):
 
 @base.extern
 def erfinv(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3160,7 +3161,7 @@ def erfinv(arg0, _builder=None):
 
 @base.extern
 def erfc(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3176,7 +3177,7 @@ def erfc(arg0, _builder=None):
 
 @base.extern
 def erfcx(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3192,7 +3193,7 @@ def erfcx(arg0, _builder=None):
 
 @base.extern
 def erfcinv(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3208,7 +3209,7 @@ def erfcinv(arg0, _builder=None):
 
 @base.extern
 def normcdfinv(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3224,7 +3225,7 @@ def normcdfinv(arg0, _builder=None):
 
 @base.extern
 def normcdf(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3240,7 +3241,7 @@ def normcdf(arg0, _builder=None):
 
 @base.extern
 def lgamma(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3256,7 +3257,7 @@ def lgamma(arg0, _builder=None):
 
 @base.extern
 def ldexp(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3279,7 +3280,7 @@ def ldexp(arg0, arg1, _builder=None):
 
 @base.extern
 def scalbn(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3302,7 +3303,7 @@ def scalbn(arg0, arg1, _builder=None):
 
 @base.extern
 def fmod(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3325,7 +3326,7 @@ def fmod(arg0, arg1, _builder=None):
 
 @base.extern
 def remainder(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3348,7 +3349,7 @@ def remainder(arg0, arg1, _builder=None):
 
 @base.extern
 def fma(arg0, arg1, arg2, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3374,7 +3375,7 @@ def fma(arg0, arg1, arg2, _builder=None):
 
 @base.extern
 def pow(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3405,7 +3406,7 @@ def pow(arg0, arg1, _builder=None):
 
 @base.extern
 def tgamma(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3421,7 +3422,7 @@ def tgamma(arg0, _builder=None):
 
 @base.extern
 def round(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3437,7 +3438,7 @@ def round(arg0, _builder=None):
 
 @base.extern
 def llround(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3453,7 +3454,7 @@ def llround(arg0, _builder=None):
 
 @base.extern
 def fdim(arg0, arg1, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3476,7 +3477,7 @@ def fdim(arg0, arg1, _builder=None):
 
 @base.extern
 def ilogb(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3492,7 +3493,7 @@ def ilogb(arg0, _builder=None):
 
 @base.extern
 def logb(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[
@@ -3508,7 +3509,7 @@ def logb(arg0, _builder=None):
 
 @base.extern
 def isfinited(arg0, _builder=None):
-    return base.elementwise(
+    return triton.dispatch.elementwise(
         lib_name="libdevice",
         lib_path=LIBDEVICE_PATH,
         args=[

@@ -32,6 +32,8 @@ import tabulate
 import torch
 
 import triton
+import triton.core
+
 tl = triton
 
 import triton.base
@@ -46,17 +48,17 @@ def _dropout(
         p,  # probability that an element of `x` is changed to zero
         BLOCK_SIZE: tl.constexpr,
 ):
-    pid = tl.program_id(axis=0)
+    pid = triton.core.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    offsets = block_start + triton.core.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     # Load data
-    x = tl.load(x_ptr + offsets, mask=mask)
-    x_keep = tl.load(x_keep_ptr + offsets, mask=mask)
+    x = triton.core.load(x_ptr + offsets, mask=mask)
+    x_keep = triton.core.load(x_keep_ptr + offsets, mask=mask)
     # The line below is the crucial part, described in the paragraph above!
     output = tl.where(x_keep, x / (1 - p), 0.0)
     # Write-back output
-    tl.store(output_ptr + offsets, value=output, mask=mask)
+    triton.core.store(output_ptr + offsets, value=output, mask=mask)
 
 
 def dropout(x, x_keep, p):
@@ -112,18 +114,18 @@ def _seeded_dropout(
         BLOCK_SIZE: tl.constexpr,
 ):
     # compute memory offsets of elements handled by this instance
-    pid = tl.program_id(axis=0)
+    pid = triton.core.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    offsets = block_start + triton.core.arange(0, BLOCK_SIZE)
     # load data from x
     mask = offsets < n_elements
-    x = tl.load(x_ptr + offsets, mask=mask)
+    x = triton.core.load(x_ptr + offsets, mask=mask)
     # randomly prune it
     random = triton.unroll.rand(seed, offsets)
     x_keep = random > p
     # write-back
     output = tl.where(x_keep, x / (1 - p), 0.0)
-    tl.store(output_ptr + offsets, value=output, mask=mask)
+    triton.core.store(output_ptr + offsets, value=output, mask=mask)
 
 
 def seeded_dropout(x, p, seed):

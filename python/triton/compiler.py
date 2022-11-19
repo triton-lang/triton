@@ -13,6 +13,7 @@ from sysconfig import get_paths
 from types import ModuleType
 
 import setuptools
+from filelock import FileLock
 from triton._C.libtriton import triton as _triton
 
 from .base import *

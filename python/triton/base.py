@@ -1,7 +1,5 @@
 from __future__ import annotations, division
 
-import builtins
-import time
 import ast
 import functools
 import hashlib
@@ -28,7 +26,6 @@ from typing import cast as typecast
 from collections import defaultdict, namedtuple
 
 import torch
-from filelock import FileLock
 
 import triton
 
@@ -459,6 +456,20 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
 # -----------------------------------------------------------------------------
 
 
+def builtin(fn: C) -> C:
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if "_builder" not in kwargs or kwargs["_builder"] is None:
+            raise ValueError(
+                "Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)"
+            )
+        return fn(*args, **kwargs)
+
+    wrapper.__triton_builtin__ = True
+
+    return typecast(C, wrapper)
+
+
 @overload
 def jit(fn: Callable) -> JITFunction:
     ...
@@ -510,347 +521,30 @@ def jit(
         return decorator
 
 
-class Autotuner(KernelInterface):
-    configs: List[Config]
-    key_idx: List[int]
-    cache: Dict[Tuple[Any, ...], tensor]
-    reset_idx: List[int]
-    hook: Callable[[List[tensor]], None]
-    perf_model: Optional[Callable]
-    configs_top_k: Optional[List[Config]]
-    early_config_prune: Optional[Callable[[List[Config], int], List[Config]]]
-    fn: Callable
+class ExternalFunction:
+    """
+    A wrapper for external functions
+    """
 
-    def __init__(
-        self,
-        fn,
-        arg_names,
-        configs,
-        key,
-        reset_to_zero,
-        prune_configs_by: Optional[Dict] = None,
-    ):
-        """
-        :param prune_configs_by: a dict of functions that are used to prune configs, fields:
-            'perf_model': performance model used to predicate running time with different configs, returns running time
-            'top_k': number of configs to bench
-            'prune_num_stages_by'(optional): a function used to prune num_stages. It take configs:List[Config] as its input, and returns pruned configs.
-        """
-        if not configs:
-            self.configs = [Config(dict(), num_warps=4, num_stages=2)]
-        else:
-            self.configs = configs
-        self.key_idx = [arg_names.index(k) for k in key]
-        self.cache = dict()
-        # hook to reset all required tensor to zeros before relaunching a kernel
-        self.hook = lambda args: None
-        if reset_to_zero is not None:
-            self.reset_idx = [arg_names.index(k) for k in reset_to_zero]
-
-            def _hook(args):
-                for i in self.reset_idx:
-                    args[i].zero_()
-
-            self.hook = _hook
-        self.arg_names = arg_names
-        # prune configs
-        if prune_configs_by:
-            perf_model, top_k = (
-                prune_configs_by["perf_model"],
-                prune_configs_by["top_k"],
-            )
-            if "early_config_prune" in prune_configs_by:
-                early_config_prune = prune_configs_by["early_config_prune"]
-        else:
-            perf_model, top_k, early_config_prune = None, None, None
-        self.perf_model = perf_model
-        self.configs_top_k = top_k
-        self.early_config_prune = early_config_prune
+    def __init__(self, fn):
         self.fn = fn
 
-    def _bench(self, *args, config, **meta):
-        # check for conflicts, i.e. meta-parameters both provided
-        # as kwargs and by the autotuner
-        conflicts = meta.keys() & config.kwargs.keys()
-        if conflicts:
-            raise ValueError(
-                f"Conflicting meta-parameters: {', '.join(conflicts)}."
-                " Make sure that you don't re-define auto-tuned symbols."
-            )
-        # augment meta-parameters with tunable ones
-        current = dict(meta, **config.kwargs)
-
-        def kernel_call():
-            if config.pre_hook:
-                config.pre_hook(self.nargs)
-            self.hook(args)
-            self.fn.run(
-                *args,
-                num_warps=config.num_warps,
-                num_stages=config.num_stages,
-                **current,
-            )
-
-        from triton.testing import do_bench
-
-        return do_bench(kernel_call)
-
-    def run(self, *args, **kwargs):
-        self.nargs = dict(zip(self.arg_names, args))
-        if len(self.configs) > 1:
-            key = tuple([args[i] for i in self.key_idx])
-            if key not in self.cache:
-                # prune configs
-                pruned_configs = self.prune_configs(kwargs)
-                bench_start = time.time()
-                timings = {
-                    config: self._bench(*args, config=config, **kwargs)
-                    for config in pruned_configs
-                }
-                bench_end = time.time()
-                self.bench_time = bench_end - bench_start
-                self.cache[key] = builtins.min(timings, key=timings.get)
-                self.hook(args)
-                self.configs_timings = timings
-            config = self.cache[key]
-        else:
-            config = self.configs[0]
-        self.best_config = config
-        if config.pre_hook is not None:
-            config.pre_hook(self.nargs)
-        return self.fn.run(
-            *args,
-            num_warps=config.num_warps,
-            num_stages=config.num_stages,
-            **kwargs,
-            **config.kwargs,
-        )
-
-    def prune_configs(self, kwargs):
-        pruned_configs = self.configs
-        if self.early_config_prune:
-            pruned_configs = self.early_config_prune(self.configs, self.nargs)
-        if self.perf_model:
-            top_k = self.configs_top_k
-            if isinstance(top_k, float) and top_k <= 1.0:
-                top_k = int(len(self.configs) * top_k)
-            if len(pruned_configs) > top_k:
-                est_timing = {
-                    config: self.perf_model(
-                        **self.nargs,
-                        **kwargs,
-                        **config.kwargs,
-                        num_stages=config.num_stages,
-                        num_warps=config.num_warps,
-                    )
-                    for config in pruned_configs
-                }
-                pruned_configs = sorted(est_timing.keys(), key=lambda x: est_timing[x])[
-                    :top_k
-                ]
-        return pruned_configs
-
-    def warmup(self, *args, **kwargs):
-        self.nargs = dict(zip(self.arg_names, args))
-        for config in self.prune_configs(kwargs):
-            self.fn.warmup(
-                *args,
-                num_warps=config.num_warps,
-                num_stages=config.num_stages,
-                **kwargs,
-                **config.kwargs,
-            )
-        self.nargs = None
-
-
-class Config:
-    """
-    An object that represents a possible kernel configuration for the auto-tuner to try.
-
-    :ivar meta: a dictionary of meta-parameters to pass to the kernel as keyword arguments.
-    :type meta: dict[Str, Any]
-    :ivar num_warps: the number of warps to use for the kernel when compiled for GPUs. For example, if
-                      `num_warps=8`, then each kernel instance will be automatically parallelized to
-                      cooperatively execute using `8 * 32 = 256` threads.
-    :type num_warps: int
-    :ivar num_stages: the number of stages that the compiler should use when software-pipelining loops.
-                       Mostly useful for matrix multiplication workloads on SM80+ GPUs.
-    :type num_stages: int
-    :ivar pre_hook: a function that will be called before the kernel is called. Parameters of this
-                    function are args.
-    """
-
-    def __init__(self, kwargs, num_warps=4, num_stages=2, pre_hook=None):
-        self.kwargs = kwargs
-        self.num_warps = num_warps
-        self.num_stages = num_stages
-        self.pre_hook = pre_hook
-
-    def __str__(self):
-        res = []
-        for k, v in self.kwargs.items():
-            res.append(f"{k}: {v}")
-        res.append(f"num_warps: {self.num_warps}")
-        res.append(f"num_stages: {self.num_stages}")
-        return ", ".join(res)
-
-
-def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
-    """
-    Decorator for auto-tuning a :code:`triton.jit`'d function.
-
-    .. highlight:: python
-    .. code-block:: python
-
-        @triton.autotune(configs=[
-            triton.Config(meta={'BLOCK_SIZE': 128}, num_warps=4),
-            triton.Config(meta={'BLOCK_SIZE': 1024}, num_warps=8),
-          ],
-          key=['x_size'] # the two above configs will be evaluated anytime
-                         # the value of x_size changes
-        )
-        @triton.jit
-        def kernel(x_ptr, x_size, **META):
-            BLOCK_SIZE = META['BLOCK_SIZE']
-
-    :note: When all the configurations are evaluated, the kernel will run multiple time.
-           This means that whatever value the kernel updates will be updated multiple times.
-           To avoid this undesired behavior, you can use the `reset_to_zero` argument, which
-           reset the value of the provided tensor to `zero` before running any configuration.
-
-    :param configs: a list of :code:`triton.Config` objects
-    :type configs: list[triton.Config]
-    :param key: a list of argument names whose change in value will trigger the evaluation of all provided configs.
-    :type key: list[str]
-    :param prune_configs_by: a dict of functions that are used to prune configs, fields:
-        'perf_model': performance model used to predicate running time with different configs, returns running time
-        'top_k': number of configs to bench
-        'early_config_prune'(optional): a function used to do early prune (eg, num_stages). It take configs:List[Config] as its input, and returns pruned configs.
-    :param reset_to_zero: a list of argument names whose value will be reset to zero before evaluating any configs.
-    :type reset_to_zero: list[str]
-    """
-
-    def decorator(fn):
-        return Autotuner(
-            fn, fn.arg_names, configs, key, reset_to_zero, prune_configs_by
-        )
-
-    return decorator
-
-
-class Heuristics(KernelInterface):
-    def __init__(self, fn, arg_names, values) -> None:
-        self.fn = fn
-        self.values = values
-        self.arg_names = arg_names
-
-    def run(self, *args, **kwargs):
-        for v, heur in self.values.items():
-            kwargs[v] = heur({**dict(zip(self.arg_names, args)), **kwargs})
-        return self.fn.run(*args, **kwargs)
-
-
-def heuristics(values):
-    """
-    Decorator for specifying how the values of certain meta-parameters may be computed.
-    This is useful for cases where auto-tuning is prohibitevely expensive, or just not applicable.
-
-    .. highlight:: python
-    .. code-block:: python
-
-        @triton.heuristics(values={'BLOCK_SIZE': lambda args: 2 ** int(math.ceil(math.log2(args[1])))})
-        @triton.jit
-        def kernel(x_ptr, x_size, **META):
-            BLOCK_SIZE = META['BLOCK_SIZE'] # smallest power-of-two >= x_size
-
-
-    .param values: a dictionary of meta-parameter names and functions that compute the value of the meta-parameter.
-                   each such function takes a list of positional arguments as input.
-    .type values: dict[str, Callable[[list[Any]], Any]]
-    """
-
-    def decorator(fn):
-        return Heuristics(fn, fn.arg_names, values)
-
-    return decorator
-
-
-def is_triton_tensor(value):
-    return isinstance(value, tensor)
-
-
-# utilties for generating and compiling C wrappers
-
-
-class TensorWrapper:
-    def __init__(self, base, dtype):
-        self.dtype = dtype
-        self.base = base
-        self.is_cuda = base.is_cuda
-        self.device = base.device
-
-    def data_ptr(self):
-        return self.base.data_ptr()
-
-    def __str__(self) -> str:
-        return f"TensorWrapper[{self.dtype}]({self.base})"
-
-
-def reinterpret(tensor, dtype):
-    if isinstance(tensor, TensorWrapper):
-        if dtype == tensor.base.dtype:
-            # Reinterpreting to the original interpretation; return the base.
-            return tensor.base
-        else:
-            # Reinterpreting a wrapped tensor to a different type.
-            return TensorWrapper(tensor.base, dtype)
-    elif isinstance(tensor, torch.Tensor):
-        # A new wrapper is needed around an unwrapped tensor.
-        return TensorWrapper(tensor, dtype)
-    else:
-        raise TypeError(f"Cannot reinterpret a {type(tensor)}.")
-
-
-def _to_tensor(x, builder):
-    if isinstance(x, bool):
-        return tensor(builder.get_int1(x), int1)
-    # Note: compile-time const integers are represented by unsigned values
-    elif isinstance(x, int):
-        if -(2**31) <= x < 2**31:
-            return tensor(builder.get_int32(x), int32)
-        elif 2**31 <= x < 2**32:
-            return tensor(builder.get_uint32(x), uint32)
-        elif -(2**63) <= x < 2**63:
-            return tensor(builder.get_int64(x), int64)
-        elif 2**63 <= x < 2**64:
-            return tensor(builder.get_uint64(x), uint64)
-        else:
-            raise RuntimeError(f"Nonrepresentable integer {x}.")
-    elif isinstance(x, float):
-        return tensor(builder.get_float32(x), float32)
-    elif isinstance(x, constexpr):
-        if x.value is None:
-            return None
-        return _to_tensor(x.value, builder)
-    elif isinstance(x, tensor):
-        return x
-    elif x is None:
-        return None
-    assert False, f"cannot convert {x} to tensor"
-
-
-def builtin(fn: C) -> C:
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
+    def __call__(self, *args, **kwargs):
         if "_builder" not in kwargs or kwargs["_builder"] is None:
             raise ValueError(
                 "Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)"
             )
-        return fn(*args, **kwargs)
+        return self.fn(*args, **kwargs)
 
-    wrapper.__triton_builtin__ = True
 
-    return typecast(C, wrapper)
+def extern(fn):
+    """
+    A decorator for external functions
+    """
+    return ExternalFunction(fn)
+
+
+# utilties for generating and compiling C wrappers
 
 
 class dtype:
@@ -1460,6 +1154,71 @@ class tensor:
             return _bitcast(self, dtype, _builder)
         return _cast(self, dtype, _builder)
 
+
+def is_triton_tensor(value):
+    return isinstance(value, tensor)
+
+
+class TensorWrapper:
+    def __init__(self, base, dtype):
+        self.dtype = dtype
+        self.base = base
+        self.is_cuda = base.is_cuda
+        self.device = base.device
+
+    def data_ptr(self):
+        return self.base.data_ptr()
+
+    def __str__(self) -> str:
+        return f"TensorWrapper[{self.dtype}]({self.base})"
+
+
+def reinterpret(tensor, dtype):
+    if isinstance(tensor, TensorWrapper):
+        if dtype == tensor.base.dtype:
+            # Reinterpreting to the original interpretation; return the base.
+            return tensor.base
+        else:
+            # Reinterpreting a wrapped tensor to a different type.
+            return TensorWrapper(tensor.base, dtype)
+    elif isinstance(tensor, torch.Tensor):
+        # A new wrapper is needed around an unwrapped tensor.
+        return TensorWrapper(tensor, dtype)
+    else:
+        raise TypeError(f"Cannot reinterpret a {type(tensor)}.")
+
+
+def _to_tensor(x, builder):
+    if isinstance(x, bool):
+        return tensor(builder.get_int1(x), int1)
+    # Note: compile-time const integers are represented by unsigned values
+    elif isinstance(x, int):
+        if -(2**31) <= x < 2**31:
+            return tensor(builder.get_int32(x), int32)
+        elif 2**31 <= x < 2**32:
+            return tensor(builder.get_uint32(x), uint32)
+        elif -(2**63) <= x < 2**63:
+            return tensor(builder.get_int64(x), int64)
+        elif 2**63 <= x < 2**64:
+            return tensor(builder.get_uint64(x), uint64)
+        else:
+            raise RuntimeError(f"Nonrepresentable integer {x}.")
+    elif isinstance(x, float):
+        return tensor(builder.get_float32(x), float32)
+    elif isinstance(x, constexpr):
+        if x.value is None:
+            return None
+        return _to_tensor(x.value, builder)
+    elif isinstance(x, tensor):
+        return x
+    elif x is None:
+        return None
+    assert False, f"cannot convert {x} to tensor"
+
+
+# ===----------------------------------------------------------------------===##
+## Semantic Ops
+# ===----------------------------------------------------------------------===##
 
 # Create custom exception that prints message "hello"
 class IncompatibleTypeErrorimpl(Exception):
@@ -2826,411 +2585,7 @@ def _debug_barrier(builder: ir.builder) -> tensor:
     return tensor(builder.create_barrier(""), void)
 
 
-# -----------------------
-# SPMD Programming Model
-# -----------------------
 def _constexpr_to_value(v):
     if isinstance(v, constexpr):
         return v.value
     return v
-
-
-@builtin
-def program_id(axis, _builder: ir.builder = None):
-    """
-    Returns the id of the current program instance along the given :code:`axis`.
-
-    :param axis: The axis of the 3D launch grid. Has to be either 0, 1 or 2.
-    :type axis: int
-    """
-    # if axis == -1:
-    #     pid0 = program_id(0, _builder)
-    #     pid1 = program_id(1, _builder)
-    #     pid2 = program_id(2, _builder)
-    #     npg0 = num_programs(0, _builder)
-    #     npg1 = num_programs(0, _builder)
-    #     return pid0 + pid1*npg0 + pid2*npg0*npg1
-    axis = _constexpr_to_value(axis)
-    return _program_id(axis, _builder)
-
-
-@builtin
-def num_programs(axis, _builder: ir.builder = None):
-    """
-    Returns the number of program instances launched along the given :code:`axis`.
-
-    :param axis: The axis of the 3D launch grid. Has to be either 0, 1 or 2.
-    :type axis: int
-    """
-    axis = _constexpr_to_value(axis)
-    return _num_programs(axis, _builder)
-
-
-# -----------------------
-# Block Initialization
-# -----------------------
-
-
-@builtin
-def arange(start, end, _builder: ir.builder = None):
-    """
-    Returns contiguous values within the open interval [:code:`start`, :code:`end`).
-
-    :param start: Start of the interval. Must be a power of two.
-    :type start: int
-    :param stop: End of the interval. Must be a power of two >= start.
-    :type stop: int
-    """
-    start = _constexpr_to_value(start)
-    end = _constexpr_to_value(end)
-    return _arange(start, end, _builder)
-
-
-@builtin
-def zeros(shape, dtype, _builder: ir.builder = None):
-    """
-    Returns a tensor filled with the scalar value 0 for the given :code:`shape` and :code:`dtype`.
-
-    :param shape: Shape of the new array, e.g., (8, 16) or (8, )
-    :type shape: tuple of ints
-    :param dtype: Data-type of the new array, e.g., :code:`float16`
-    :type dtype: DType
-    """
-    for i, d in enumerate(shape):
-        if not isinstance(d, constexpr):
-            raise TypeError(f"Shape element {i} must have type `constexpr`")
-        if not isinstance(d.value, int):
-            raise TypeError(
-                f"Shape element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]"
-            )
-    shape = [x.value for x in shape]
-    dtype = _constexpr_to_value(dtype)
-    return _zeros(shape, dtype, _builder)
-
-
-# -----------------------
-# dequantize
-# -----------------------
-
-
-@builtin
-def dequantize(input, scale, shift, nbit, dst_ty=float16, _builder: ir.builder = None):
-    """
-    Tries to dequantize the input to given dtype
-    """
-    nbit = _constexpr_to_value(nbit)
-    return _dequantize(input, scale, shift, nbit, dst_ty, _builder)
-
-
-# -----------------------
-# Shape Manipulation
-# -----------------------
-
-
-@builtin
-def broadcast(input, other, _builder: ir.builder = None):
-    """
-    Tries to broadcast the two given blocks to a common compatible shape.
-
-    :param input: The first input tensor.
-    :type input: Block
-    :param other: The second input tensor.
-    :type other: Block
-    """
-    return _broadcast_impl_value(input, other, _builder)
-
-
-@builtin
-def broadcast_to(input, shape, _builder: ir.builder = None):
-    """
-    Tries to broadcast the given tensor to a new :code:`shape`.
-
-    :param input: The input tensor.
-    :type input: Block
-    :param shape: The desired shape.
-    :type shape: Tuple[int]
-    """
-    return _broadcast_impl_shape(input, shape, _builder)
-
-
-@builtin
-def cat(input, other, _builder: ir.builder = None):
-    """
-    Concatenate the given blocks
-
-    :param input: The first input tensor.
-    :type input:
-    :param other: The second input tensor.
-    :type other:
-    """
-    return _cat(input, other, _builder)
-
-
-@builtin
-def reshape(input, shape, _builder: ir.builder = None):
-    """
-    Tries to reshape the given tensor to a new shape.
-
-    :param input: The input tensor.
-    :type input:
-    :param shape: The desired shape.
-    :type shape: Tuple[int]
-
-    """
-    shape = [x.value for x in shape]
-    return _reshape(input, shape, _builder)
-
-
-# -----------------------
-# Linear Algebra
-# -----------------------
-
-
-@builtin
-def dot(
-    input,
-    other,
-    trans_a=False,
-    trans_b=False,
-    allow_tf32=True,
-    _builder: ir.builder = None,
-):
-    """
-    Returns the matrix product of two blocks.
-
-    The two blocks must be two dimensionals and have compatible inner dimensions.
-
-    :param input: The first tensor to be multiplied.
-    :type input: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
-    :param other: The second tensor to be multiplied.
-    :type other: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
-    """
-    allow_tf32 = _constexpr_to_value(allow_tf32)
-    return _dot(input, other, trans_a, trans_b, allow_tf32, _builder)
-
-
-# -----------------------
-# Non-Atomic Memory Operations
-# -----------------------
-
-
-@builtin
-def load(
-    pointer,
-    mask=None,
-    other=None,
-    cache_modifier="",
-    eviction_policy="",
-    volatile=False,
-    _builder: ir.builder = None,
-) -> tensor:
-    """
-    Return a tensor of data whose values are, elementwise, loaded from memory at location defined by :code:`pointer`.
-
-    :param *:
-    :code:`mask` and :code:`other` are implicitly broadcast to :code:`pointer.shape`.
-
-    :code:`other` is implicitly typecast to :code:`pointer.dtype.element_ty`.
-
-    :param pointer: Pointers to the data to be loaded.
-    :type pointer: Block of dtype=triton.PointerDType
-    :param mask: if mask[idx] is false, do not load the data at address :code:`pointer[idx]`.
-    :type mask: Block of triton.int1, optional
-    :param other: if mask[idx] is false, return other[idx]
-    :type other: Block, optional
-    :param cache_modifier: changes cache option in nvidia ptx
-    'type cache_modifier: str, optional
-    """
-    # mask, other can be constexpr
-    if mask is not None:
-        mask = _to_tensor(mask, _builder)
-    if other is not None:
-        other = _to_tensor(other, _builder)
-    cache_modifier = _constexpr_to_value(cache_modifier)
-    eviction_policy = _constexpr_to_value(eviction_policy)
-    volatile = _constexpr_to_value(volatile)
-    return _load(
-        pointer, mask, other, cache_modifier, eviction_policy, volatile, _builder
-    )
-
-
-@builtin
-def store(
-    pointer,
-    value,
-    mask=None,
-    eviction_policy="",
-    _builder: ir.builder = None,
-) -> tensor:
-    """
-    Stores :code:`value` tensor of elements in memory, element-wise, at the memory locations specified by :code:`pointer`.
-
-    :param *:
-    :code:`value` is implicitly broadcast to :code:`pointer.shape` and typecast to :code:`pointer.dtype.element_ty`.
-
-    :param pointer: The memory locations where the elements of :code:`value` are stored.
-    :type pointer: Block of dtype=triton.PointerDType
-    :param value: The tensor of elements to be stored.
-    :type value: Block
-    :param mask: If mask[idx] is false, do not store :code:`value[idx]` at :code:`pointer[idx]`.
-    :type mask: Block of triton.int1, optional
-    """
-    # value can be constexpr
-    value = _to_tensor(value, _builder)
-    if mask is not None:
-        mask = _to_tensor(mask, _builder)
-    return _store(pointer, value, mask, eviction_policy, _builder)
-
-
-# -----------------------
-# Atomic Memory Operations
-# -----------------------
-
-
-def dispatch(
-    func,
-    *,
-    lib_name: str,
-    lib_path: str,
-    args: list,
-    arg_type_symbol_dict: dict,
-    ret_shape: Optional[Sequence[int]] = None,
-    _builder: ir.builder = None,
-) -> tensor:
-    """
-    Dispatch a function to a library
-
-    :param *:
-    :param func: the function to dispatch
-    :param lib_name: the name of the library
-    :param lib_path: the path of the library
-    :param args: the arguments of the function
-    :param arg_type_symbol_dict: the type of the arguments
-    :param ret_shape: the shape of the return value
-    :param _builder: the builder
-
-    :return: the return value of the function
-    """
-    if len(arg_type_symbol_dict) == 0:
-        raise ValueError("arg_type_symbol_dict is empty")
-
-    num_args = len(list(arg_type_symbol_dict.keys())[0])
-    if len(args) != num_args:
-        raise ValueError(
-            f"length of input args does not match."
-            f"Expect {len(args)}, got {num_args}"
-        )
-
-    arg_types: List[Union[type, dtype]] = []
-    arg_list: List[Any] = []
-    for arg in args:
-        if isinstance(arg, tensor):
-            arg_types.append(arg.dtype)
-            arg_list.append(arg.handle)
-        else:
-            arg_types.append(type(arg))
-            arg_list.append(arg)
-    arg_types_t = tuple(arg_types)
-
-    if arg_types not in arg_type_symbol_dict:
-        raise ValueError(
-            f"input arg type does not match."
-            f"Expect one of {arg_type_symbol_dict.keys()}, got {arg_types_t}"
-        )
-    else:
-        symbol = arg_type_symbol_dict[arg_types_t][0]
-        ret_type = arg_type_symbol_dict[arg_types_t][1]
-        ret_type = (
-            block_type(ret_type, ret_shape) if ret_shape is not None else ret_type
-        )
-        return tensor(
-            func(lib_name, lib_path, symbol, arg_list, ret_type.to_ir(_builder)),
-            ret_type,
-        )
-
-
-def elementwise(
-    *,
-    lib_name: str,
-    lib_path: str,
-    args: list,
-    arg_type_symbol_dict: dict,
-    _builder: ir.builder = None,
-) -> tensor:
-    """
-    Dispatch an elementwise function to a library
-
-    :param *:
-    :param lib_name: the name of the library
-    :param lib_path: the path of the library
-    :param args: the arguments of the function
-    :param arg_type_symbol_dict: the type of the arguments
-    :param _builder: the builder
-
-    :return: the return value of the function
-    """
-    dispatch_args = args.copy()
-    all_scalar = True
-    ret_shape = None
-    for dispatch_arg in dispatch_args:
-        if dispatch_arg.type.is_block():
-            all_scalar = False
-    if not all_scalar:
-        if len(args) == 1:
-            dispatch_args[0] = _to_tensor(dispatch_args[0], _builder)
-            ret_shape = dispatch_args[0].shape
-        elif len(args) == 2:
-            dispatch_args[0] = _to_tensor(dispatch_args[0], _builder)
-            dispatch_args[1] = _to_tensor(dispatch_args[1], _builder)
-            dispatch_args[0], dispatch_args[1] = _binary_op_type_checking_impl(
-                dispatch_args[0], dispatch_args[1], builder=_builder
-            )
-            ret_shape = dispatch_args[0].shape
-        else:
-            for i in range(len(dispatch_args)):
-                dispatch_args[i] = _to_tensor(dispatch_args[i], _builder)
-            broadcast_arg = dispatch_args[0]
-            # Get the broadcast shape over all the arguments
-            for i in range(len(dispatch_args)):
-                _, broadcast_arg = _binary_op_type_checking_impl(
-                    dispatch_args[i], broadcast_arg, builder=_builder
-                )
-            # Change the shape of each argument based on the broadcast shape
-            for i in range(len(dispatch_args)):
-                dispatch_args[i], _ = _binary_op_type_checking_impl(
-                    dispatch_args[i], broadcast_arg, builder=_builder
-                )
-            ret_shape = broadcast_arg.shape
-    func = getattr(_builder, "create_extern_elementwise")
-    return dispatch(
-        func,
-        lib_name=lib_name,
-        lib_path=lib_path,
-        args=dispatch_args,
-        arg_type_symbol_dict=arg_type_symbol_dict,
-        ret_shape=ret_shape,
-        _builder=_builder,
-    )
-
-
-class ExternalFunction:
-    """
-    A wrapper for external functions
-    """
-
-    def __init__(self, fn):
-        self.fn = fn
-
-    def __call__(self, *args, **kwargs):
-        if "_builder" not in kwargs or kwargs["_builder"] is None:
-            raise ValueError(
-                "Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)"
-            )
-        return self.fn(*args, **kwargs)
-
-
-def extern(fn):
-    """
-    A decorator for external functions
-    """
-    return ExternalFunction(fn)
