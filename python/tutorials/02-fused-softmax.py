@@ -101,7 +101,7 @@ def softmax_kernel(
 def softmax(x):
     n_rows, n_cols = x.shape
     # The block size is the smallest power of two greater than the number of columns in `x`
-    BLOCK_SIZE = triton.utils.next_power_of_2(n_cols)
+    BLOCK_SIZE = triton.next_power_of_2(n_cols)
     # Another trick we can use is to ask the compiler to use more threads per row by
     # increasing the number of warps (`num_warps`) over which each row is distributed.
     # You will see in the next tutorial how to auto-tune this value in a more natural

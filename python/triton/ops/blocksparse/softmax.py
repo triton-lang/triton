@@ -198,7 +198,7 @@ class _softmax(torch.autograd.Function):
             scale,
             is_causal,
             BLOCK_SIZE=block,
-            ROW_SIZE=triton.utils.next_power_of_2(maxlut),
+            ROW_SIZE=triton.next_power_of_2(maxlut),
             IS_DENSE=is_dense,
             num_warps=num_warps(maxlut),
         )
@@ -244,7 +244,7 @@ class _softmax(torch.autograd.Function):
             ctx.rel_strides[2],
             ctx.is_causal,
             BLOCK_SIZE=ctx.block,
-            ROW_SIZE=triton.utils.next_power_of_2(ctx.maxlut),
+            ROW_SIZE=triton.next_power_of_2(ctx.maxlut),
             IS_DENSE=ctx.is_dense,
             num_warps=num_warps(ctx.maxlut),
         )

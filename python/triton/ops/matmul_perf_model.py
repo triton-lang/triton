@@ -62,8 +62,8 @@ def estimate_matmul_time(
     dtype = A.dtype
     dtsize = A.element_size()
 
-    num_cta_m = triton.utils.cdiv(M, BLOCK_M)
-    num_cta_n = triton.utils.cdiv(N, BLOCK_N)
+    num_cta_m = triton.cdiv(M, BLOCK_M)
+    num_cta_n = triton.cdiv(N, BLOCK_N)
     num_cta_k = SPLIT_K
     num_ctas = num_cta_m * num_cta_n * num_cta_k
 

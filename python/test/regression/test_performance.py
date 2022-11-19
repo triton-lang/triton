@@ -171,7 +171,7 @@ def test_elementwise(N):
     z = torch.empty((N,), dtype=torch.float16, device="cuda")
     x = torch.randn_like(z)
     y = torch.randn_like(z)
-    grid = lambda args: (triton.utils.cdiv(N, args["BLOCK_SIZE"]),)
+    grid = lambda args: (triton.cdiv(N, args["BLOCK_SIZE"]),)
     fn = lambda: _add[grid](x, y, z, N, BLOCK_SIZE=1024)
     ms = triton.testing.do_bench(fn, percentiles=None, warmup=25, rep=250)
     cur_gpu_perf = 3.0 * N * z.element_size() / ms * 1e-6

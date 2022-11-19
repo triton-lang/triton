@@ -260,7 +260,7 @@ class _attention(torch.autograd.Function):
         assert Lq == Lk and Lk == Lv
         assert Lk in {16, 32, 64, 128}
         o = torch.empty_like(q)
-        grid = (triton.utils.cdiv(q.shape[2], BLOCK), q.shape[0] * q.shape[1])
+        grid = (triton.cdiv(q.shape[2], BLOCK), q.shape[0] * q.shape[1])
         tmp = torch.empty(
             (q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32
         )

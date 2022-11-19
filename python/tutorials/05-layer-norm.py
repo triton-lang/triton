@@ -178,7 +178,7 @@ class LayerNorm(torch.autograd.Function):
         rstd = torch.empty((M,), dtype=torch.float32, device="cuda")
         # Less than 64KB per feature: enqueue fused kernel
         MAX_FUSED_SIZE = 65536 // a.element_size()
-        BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.utils.next_power_of_2(N))
+        BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(N))
         BLOCK_SIZE = max(BLOCK_SIZE, 128)
         BLOCK_SIZE = min(BLOCK_SIZE, 4096)
         # heuristics for number of warps
@@ -255,7 +255,7 @@ class LayerNorm(torch.autograd.Function):
             BLOCK_SIZE_N = 16
             BLOCK_SIZE_M = 16
             num_warps = 8
-        grid = lambda meta: [triton.utils.cdiv(N, meta["BLOCK_SIZE_N"])]
+        grid = lambda meta: [triton.cdiv(N, meta["BLOCK_SIZE_N"])]
         _layer_norm_bwd_dwdb[grid](
             a,
             dout,

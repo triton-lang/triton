@@ -150,7 +150,7 @@ def test_dequantize_int8() -> None:
         expected = (input_int8 * scale + shift).to(torch.float16)
 
         output = torch.empty([size], dtype=torch.float16, device=device)
-        block_size = max(triton.utils.next_power_of_2(size), 128)
+        block_size = max(triton.next_power_of_2(size), 128)
         grid = (1,)
         dequantize_kernel_int8[grid](
             output, input, size, BLOCK_SIZE=block_size, num_warps=1
@@ -203,7 +203,7 @@ def test_dequantize_int4() -> None:
         expected = (input_int4_val * scale + shift).to(torch.float16)
 
         output = torch.empty([size], dtype=torch.float16, device=device)
-        block_size = max(triton.utils.next_power_of_2(size), 256)
+        block_size = max(triton.next_power_of_2(size), 256)
         grid = (1,)
         dequantize_kernel_int4[grid](
             output, input, size, BLOCK_SIZE=block_size, num_warps=1
@@ -260,7 +260,7 @@ def test_dequantize_int2() -> None:
         expected = (input_int2_val * scale + shift).to(torch.float16)
 
         output = torch.empty([size], dtype=torch.float16, device=device)
-        block_size = max(triton.utils.next_power_of_2(size), 256)
+        block_size = max(triton.next_power_of_2(size), 256)
         grid = (1,)
 
         dequantize_kernel_int2[grid](

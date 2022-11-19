@@ -10,7 +10,14 @@ import torch
 
 from triton._C.libtriton.triton import ir
 
-from . import utils
+from .utils import (
+    cdiv,
+    next_power_of_2,
+    MockTensor,
+)
+from .base import (
+    TensorWrapper,
+)
 
 # No @tr.jit() interface can be called until after .compiler is loaded;
 # and .compiler depends upon the core stack.
@@ -45,6 +52,7 @@ from . import ops
 
 __all__ = [
     "autotune",
+    "cdiv",
     "CompilationError",
     "compile",
     "CompiledKernel",
@@ -58,8 +66,11 @@ __all__ = [
     "JITFunction",
     "KernelInterface",
     "language",
+    "MockTensor",
+    "next_power_of_2",
     "ops",
     "OutOfResources",
+    "TensorWrapper",
     "testing",
     "utils",
 ]

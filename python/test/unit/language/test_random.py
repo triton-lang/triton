@@ -139,7 +139,7 @@ def test_randint(size, seed, device="cuda"):
     # triton result
     x = torch.empty(size, dtype=torch.int32, device=device)
     N = x.numel()
-    grid = (triton.utils.cdiv(N, BLOCK),)
+    grid = (triton.cdiv(N, BLOCK),)
     kernel[grid](x, N, seed)
     out_tri = x.cpu().numpy().astype(np.uint32).flatten().tolist()
     # reference result
@@ -164,7 +164,7 @@ def test_rand(size, seed, device="cuda"):
     # triton result
     x = torch.empty(size, dtype=torch.float32, device=device)
     N = x.numel()
-    grid = (triton.utils.cdiv(N, BLOCK),)
+    grid = (triton.cdiv(N, BLOCK),)
     kernel[grid](x, N, seed)
     assert all((x >= 0) & (x <= 1))
     assert scipy.stats.kstest(x.tolist(), "uniform", args=(0, 1)).statistic < 0.01
@@ -186,7 +186,7 @@ def test_randn(size, seed, device="cuda"):
     # triton result
     x = torch.empty(size, dtype=torch.float32, device=device)
     N = x.numel()
-    grid = (triton.utils.cdiv(N, BLOCK),)
+    grid = (triton.cdiv(N, BLOCK),)
     kernel[grid](x, N, seed)
     assert abs(x.mean()) < 1e-2
     assert abs(x.std() - 1) < 1e-2

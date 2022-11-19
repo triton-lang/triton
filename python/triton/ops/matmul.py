@@ -248,8 +248,7 @@ class _matmul(torch.autograd.Function):
         )
         # launch kernel
         grid = lambda META: (
-            triton.utils.cdiv(M, META["BLOCK_M"])
-            * triton.utils.cdiv(N, META["BLOCK_N"]),
+            triton.cdiv(M, META["BLOCK_M"]) * triton.cdiv(N, META["BLOCK_N"]),
             META["SPLIT_K"],
         )
         _kernel[grid](

@@ -377,7 +377,11 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         return self.hash
 
     def warmup(self, *args, **kwargs):
-        return self.run(*map(utils.MockTensor.wrap_dtype, args), **kwargs, warmup=True)
+        return self.run(
+            *map(triton.MockTensor.wrap_dtype, args),
+            **kwargs,
+            warmup=True,
+        )
 
     # we do not parse `src` in the constructor because
     # the user might want to monkey-patch self.src dynamically.
