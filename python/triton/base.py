@@ -917,6 +917,14 @@ def _constexpr_to_value(v):
 
 
 dtype_t = dtype
+"""
+dtype type alias.
+
+This type alias exists because some types (such as tensor)
+both have a class member annotation named `dtype`, and declare
+method parameters with the `dtype` type; so we need to prevent
+the class annotation from shadowing the parameter type.
+"""
 
 
 class tensor:
