@@ -1,16 +1,15 @@
-#include "triton/Conversion/TritonGPUToLLVM/PtxAsmFormat.h"
-#include "triton/Conversion/TritonGPUToLLVM/AsmFormat.h"
+#include "triton/Conversion/TritonGPUToLLVM/GcnAsmFormat.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "triton/Conversion/TritonGPUToLLVM/AsmFormat.h"
 #include "llvm/Support/raw_ostream.h"
 #include <sstream> // unify to llvm::raw_string_ostream ?
 
 namespace mlir {
 namespace triton {
 
-
-PTXInstr::Operand *
-PTXBuilder::newOperand(mlir::Value value, StringRef constraint,
+GCNInstr::Operand *
+GCNBuilder::newOperand(mlir::Value value, StringRef constraint,
                        std::function<std::string(int)> formatter) {
   argArchive.emplace_back(std::make_unique<Operand>(value, constraint));
   auto *opr = argArchive.back().get();
@@ -19,7 +18,7 @@ PTXBuilder::newOperand(mlir::Value value, StringRef constraint,
   return opr;
 }
 
-PTXBuilder::Operand *PTXBuilder::newOperand(StringRef constraint) {
+GCNBuilder::Operand *GCNBuilder::newOperand(StringRef constraint) {
   // Constraint should be something like "=r"
   assert(!constraint.empty() && constraint[0] == '=');
   auto *opr = newOperand();
@@ -28,19 +27,27 @@ PTXBuilder::Operand *PTXBuilder::newOperand(StringRef constraint) {
   return opr;
 }
 
-PTXBuilder::Operand *PTXBuilder::newConstantOperand(const std::string &v) {
+GCNBuilder::Modifier *GCNBuilder::newModifier(StringRef modifier, StringRef arg) {
+  assert(!modifier.empty());
+  auto *mod = newModifier();
+  mod->modifier = modifier;
+  mod->arg = arg;
+  return mod;
+}
+
+GCNBuilder::Operand *GCNBuilder::newConstantOperand(const std::string &v) {
   argArchive.emplace_back(std::make_unique<Operand>());
   argArchive.back()->repr = [v](int idx) { return v; };
   return argArchive.back().get();
 }
 
-PTXBuilder::Operand *PTXBuilder::newConstantOperand(int v) {
+GCNBuilder::Operand *GCNBuilder::newConstantOperand(int v) {
   std::stringstream ss;
   ss << "0x" << std::hex << v;
   return newConstantOperand(ss.str());
 }
 
-std::string PTXBuilder::getConstraints() const {
+std::string GCNBuilder::getConstraints() const {
   auto args = getAllArgs();
   llvm::SmallVector<std::string, 4> argReprs;
   for (auto arg : args)
@@ -48,7 +55,7 @@ std::string PTXBuilder::getConstraints() const {
   return strJoin(argReprs, ",");
 }
 
-llvm::SmallVector<Value, 4> PTXBuilder::getAllMLIRArgs() const {
+llvm::SmallVector<Value, 4> GCNBuilder::getAllMLIRArgs() const {
   llvm::SmallVector<Value, 4> res;
   for (auto &arg : argArchive) {
     if (!arg->isList() && arg->value)
@@ -57,7 +64,7 @@ llvm::SmallVector<Value, 4> PTXBuilder::getAllMLIRArgs() const {
   return res;
 }
 
-SmallVector<PTXBuilder::Operand *, 4> PTXBuilder::getAllArgs() const {
+SmallVector<GCNBuilder::Operand *, 4> GCNBuilder::getAllArgs() const {
   llvm::SmallVector<Operand *, 4> res;
   for (auto &x : argArchive)
     if (!x->isList())
@@ -65,7 +72,7 @@ SmallVector<PTXBuilder::Operand *, 4> PTXBuilder::getAllArgs() const {
   return res;
 }
 
-mlir::Value PTXBuilder::launch(ConversionPatternRewriter &rewriter,
+mlir::Value GCNBuilder::launch(ConversionPatternRewriter &rewriter,
                                Location loc, Type resTy, bool hasSideEffect,
                                bool isAlignStack,
                                ArrayRef<Attribute> attrs) const {
@@ -84,7 +91,7 @@ mlir::Value PTXBuilder::launch(ConversionPatternRewriter &rewriter,
   return inlineAsm.getRes();
 }
 
-std::string PTXInstr::Operand::dump() const {
+std::string GCNInstr::Operand::dump() const {
   if (repr)
     return repr(idx);
   if (!isList())
@@ -93,51 +100,55 @@ std::string PTXInstr::Operand::dump() const {
   llvm::SmallVector<std::string> oprs;
   for (auto *opr : list)
     oprs.push_back(opr->dump());
-  return "{ " + strJoin(oprs, ", ") + " }";
+  return strJoin(oprs, ", ");
 }
 
-PTXInstr::Operand *PTXBuilder::newAddrOperand(mlir::Value addr,
-                                              StringRef constraint, int off) {
+std::string GCNInstr::Modifier::dump() const {
+  if (!isList())
+    return to_str();
+
+  llvm::SmallVector<std::string> mods;
+  for (auto *mod : list)
+    mods.push_back(mod->dump());
+   return strJoin(mods, " ");
+}
+
+GCNInstr::Operand *GCNBuilder::newAddrOperand(mlir::Value addr,
+                                              StringRef constraint) {
   auto *opr = newOperand(addr, constraint);
-  opr->repr = [off](int idx) -> std::string {
+  opr->repr = [](int idx) -> std::string {
     std::stringstream ss;
-    ss << "[ $" << idx << " + " << off << " ]";
+    ss << "$" << idx;
     return ss.str();
   };
 
   return opr;
 }
 
-std::string PTXBuilder::dump() const {
+std::string GCNBuilder::dump() const {
   llvm::SmallVector<std::string> lines;
   for (auto &exec : executions) {
     lines.push_back(exec->dump());
   }
 
-  return strJoin(lines, "\n\t");
+  return strJoin(lines, "\r\n");
 }
 
-PTXInstrExecution &PTXInstrCommon::call(ArrayRef<Operand *> oprs) {
+GCNInstrExecution &GCNInstrCommon::call(ArrayRef<Operand *> oprs, ArrayRef<Modifier *> mods) {
   builder->executions.emplace_back(
-      std::make_unique<PTXInstrExecution>(this, oprs));
+      std::make_unique<GCNInstrExecution>(this, oprs, mods));
   return *builder->executions.back();
 }
 
-PTXInstrExecution &PTXInstrCommon::operator()(ArrayRef<Operand *> oprs) {
-  return call(oprs);
+GCNInstrExecution &GCNInstrCommon::operator()(ArrayRef<Operand *> oprs, ArrayRef<Modifier *> mods) {
+  return call(oprs, mods);
 }
 
-std::string PTXInstrExecution::dump() const {
+std::string GCNInstrExecution::dump() const {
   std::string osStr;
   llvm::raw_string_ostream os(osStr);
-  if (pred) {
-    if (!pred->repr)
-      os << "@" << pred->dump() << " ";
-    else
-      os << pred->repr(pred->idx) << " ";
-  }
 
-  std::string instrRepr = strJoin(instr->instrParts, ".");
+  std::string instrRepr = strJoin(instr->instrParts, "_");
 
   llvm::SmallVector<std::string, 4> argReprs;
   for (auto *arg : argsInOrder) {
@@ -146,13 +157,19 @@ std::string PTXInstrExecution::dump() const {
 
   std::string argsRepr = strJoin(argReprs, ", ");
 
-  os << instrRepr << " " << argsRepr << ";";
+  llvm::SmallVector<std::string, 4> modReprs;
+  for(auto *mod : mods) {
+    modReprs.push_back(mod->dump());
+  }
+
+  std::string modsRepr = strJoin(modReprs, " ");
+  os << instrRepr << " " << argsRepr << " " << modsRepr << ";";
   os.flush();
   return osStr;
 }
 
-SmallVector<PTXInstrExecution::Operand *>
-PTXInstrExecution::getArgList() const {
+SmallVector<GCNInstrExecution::Operand *>
+GCNInstrExecution::getArgList() const {
   SmallVector<Operand *> args;
   for (auto *arg : argsInOrder) {
     if (arg->isList())
