@@ -1,45 +1,16 @@
 #include "triton/Target/PTX/PTXTranslation.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/ExecutionEngine/ExecutionEngine.h"
-#include "mlir/ExecutionEngine/OptUtils.h"
-#include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/Dialect.h"
-#include "mlir/Pass/Pass.h"
-#include "mlir/Pass/PassManager.h"
-#include "mlir/Support/LogicalResult.h"
-#include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
-#include "mlir/Target/LLVMIR/Export.h"
-#include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 
-#include "llvm/ExecutionEngine/ExecutionEngine.h"
-#include "llvm/ExecutionEngine/SectionMemoryManager.h"
 #include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/TargetOptions.h"
-#include "llvm/Transforms/Scalar.h"
-#include "llvm/Transforms/Utils/Cloning.h"
 #include <filesystem>
-#include <regex>
 
 namespace triton {
-
-extern "C" {
-int set_curterm(char *nterm) { return 0; }
-int del_curterm(char *nterm) { return 0; }
-int tigetnum(char *capname) { return 0; }
-int setupterm(char *term, int fildes, int *errret) { return 0; }
-}
 
 static void init_llvm() {
   LLVMInitializeNVPTXTargetInfo();

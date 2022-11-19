@@ -1,7 +1,6 @@
 #ifndef TRITON_TARGET_PTXTRANSLATION_H
 #define TRITON_TARGET_PTXTRANSLATION_H
 
-#include <memory>
 #include <string>
 
 namespace llvm {
