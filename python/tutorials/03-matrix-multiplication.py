@@ -143,6 +143,7 @@ You will specifically learn about:
 import torch
 
 import triton
+import triton.core
 import triton.language as tl
 
 

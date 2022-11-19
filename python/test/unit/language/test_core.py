@@ -9,6 +9,7 @@ import torch
 from numpy.random import RandomState
 
 import triton
+import triton.core
 import triton.language as tl
 import triton._C.libtriton.triton as _triton
 

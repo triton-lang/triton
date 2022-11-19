@@ -22,7 +22,7 @@ from .jitlib import (
     KernelInterface,
 )
 
-# .compiler depends upon base.minimum and base.where
+# .compiler depends upon core.minimum and core.where
 from .compiler import (
     CompilationError,
     compile,
@@ -44,22 +44,22 @@ from . import ops
 # unconstrained
 
 __all__ = [
-    "ir",
-    "utils",
-    "extern",
-    "ExternalFunction",
-    "jit",
-    "JITFunction",
-    "KernelInterface",
+    "autotune",
     "CompilationError",
     "compile",
     "CompiledKernel",
-    "OutOfResources",
-    "autotune",
     "Config",
+    "extern",
+    "ExternalFunction",
     "heuristics",
     "Heuristics",
+    "ir",
+    "jit",
+    "JITFunction",
+    "KernelInterface",
     "language",
-    "testing",
     "ops",
+    "OutOfResources",
+    "testing",
+    "utils",
 ]
