@@ -3218,12 +3218,8 @@ public:
     cMatShape = matShape[order[0]];
     sMatShape = matShape[order[1]];
 
-    // TODO[Superjomn]: Seems the smemStrides not works here(the master branch
-    // will fail too).
-    // cStride = smemStrides[order[0]];
-    // sStride = smemStrides[order[1]];
-    cStride = i32_val(tileShape[order[0]]);
-    sStride = i32_val(tileShape[order[1]]);
+    cStride = smemStrides[1];
+    sStride = smemStrides[0];
 
     // rule: k must be the fast-changing axis.
     needTrans = kOrder != order[0];
