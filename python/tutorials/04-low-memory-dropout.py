@@ -32,11 +32,7 @@ import tabulate
 import torch
 
 import triton
-import triton.core
-
-tl = triton
-
-import triton.base
+import triton.language as tl
 
 
 @triton.jit
@@ -48,24 +44,24 @@ def _dropout(
         p,  # probability that an element of `x` is changed to zero
         BLOCK_SIZE: tl.constexpr,
 ):
-    pid = triton.core.program_id(axis=0)
+    pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
-    offsets = block_start + triton.core.arange(0, BLOCK_SIZE)
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     # Load data
-    x = triton.core.load(x_ptr + offsets, mask=mask)
-    x_keep = triton.core.load(x_keep_ptr + offsets, mask=mask)
+    x = tl.load(x_ptr + offsets, mask=mask)
+    x_keep = tl.load(x_keep_ptr + offsets, mask=mask)
     # The line below is the crucial part, described in the paragraph above!
     output = tl.where(x_keep, x / (1 - p), 0.0)
     # Write-back output
-    triton.core.store(output_ptr + offsets, value=output, mask=mask)
+    tl.store(output_ptr + offsets, value=output, mask=mask)
 
 
 def dropout(x, x_keep, p):
     output = torch.empty_like(x)
     assert x.is_contiguous()
     n_elements = x.numel()
-    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
+    grid = lambda meta: (triton.utils.cdiv(n_elements, meta['BLOCK_SIZE']),)
     _dropout[grid](x, x_keep, output, n_elements, p, BLOCK_SIZE=1024)
     return output
 
@@ -94,7 +90,7 @@ print(tabulate.tabulate([
 # of persisting randomness across multiple invocations of the kernel.
 #
 # Pseudorandom number generation in Triton is simple! In this tutorial we will use the
-# :code:`triton.language.rand` function which generates a block of uniformly distributed :code:`float32`
+# :code:`tr.language.rand` function which generates a block of uniformly distributed :code:`float32`
 # values in [0, 1), given a seed and a block of :code:`int32` offsets. But if you need it, Triton also provides
 # other :ref:`random number generation strategies <Random Number Generation>`.
 #
@@ -114,25 +110,25 @@ def _seeded_dropout(
         BLOCK_SIZE: tl.constexpr,
 ):
     # compute memory offsets of elements handled by this instance
-    pid = triton.core.program_id(axis=0)
+    pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
-    offsets = block_start + triton.core.arange(0, BLOCK_SIZE)
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
     # load data from x
     mask = offsets < n_elements
-    x = triton.core.load(x_ptr + offsets, mask=mask)
+    x = tl.load(x_ptr + offsets, mask=mask)
     # randomly prune it
-    random = triton.unroll.rand(seed, offsets)
+    random = tl.rand(seed, offsets)
     x_keep = random > p
     # write-back
     output = tl.where(x_keep, x / (1 - p), 0.0)
-    triton.core.store(output_ptr + offsets, value=output, mask=mask)
+    tl.store(output_ptr + offsets, value=output, mask=mask)
 
 
 def seeded_dropout(x, p, seed):
     output = torch.empty_like(x)
     assert x.is_contiguous()
     n_elements = x.numel()
-    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
+    grid = lambda meta: (triton.utils.cdiv(n_elements, meta['BLOCK_SIZE']),)
     _seeded_dropout[grid](x, output, n_elements, p, seed, BLOCK_SIZE=1024)
     return output
 

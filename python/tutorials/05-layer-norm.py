@@ -6,7 +6,6 @@ Layer Normalization
 import torch
 
 import triton
-import triton.core
 import triton.language as tl
 
 try:
@@ -154,13 +153,13 @@ class LayerNorm(torch.autograd.Function):
         # allocate output
         out = torch.empty_like(a)
         # reshape input data into 2D tensor
-        a_arg = triton.core.reshape(-1, a.shape[-1])
+        a_arg = tl.reshape(-1, a.shape[-1])
         M, N = a_arg.shape
         mean = torch.empty((M,), dtype=torch.float32, device="cuda")
         rstd = torch.empty((M,), dtype=torch.float32, device="cuda")
         # Less than 64KB per feature: enqueue fused kernel
         MAX_FUSED_SIZE = 65536 // a.element_size()
-        BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(N))
+        BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.utils.next_power_of_2(N))
         BLOCK_SIZE = max(BLOCK_SIZE, 128)
         BLOCK_SIZE = min(BLOCK_SIZE, 4096)
         # heuristics for number of warps
@@ -199,7 +198,7 @@ class LayerNorm(torch.autograd.Function):
         da = torch.empty_like(dout)
         # enqueue kernel using forward pass heuristics
         # also compute partial sums for DW and DB
-        x_arg = triton.core.reshape(-1, a.shape[-1])
+        x_arg = tl.reshape(-1, a.shape[-1])
         M, N = x_arg.shape
         dweight = torch.empty((weight.shape[0],), dtype=weight.dtype, device=weight.device)
         dbias = torch.empty((weight.shape[0],), dtype=weight.dtype, device=weight.device)
@@ -223,7 +222,7 @@ class LayerNorm(torch.autograd.Function):
             BLOCK_SIZE_N = 16
             BLOCK_SIZE_M = 16
             num_warps = 8
-        grid = lambda meta: [triton.cdiv(N, meta["BLOCK_SIZE_N"])]
+        grid = lambda meta: [triton.utils.cdiv(N, meta["BLOCK_SIZE_N"])]
         _layer_norm_bwd_dwdb[grid](
             a, dout,
             mean, var,

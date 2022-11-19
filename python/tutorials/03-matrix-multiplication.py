@@ -171,7 +171,7 @@ import triton.tuning
     ],
     key=['M', 'N', 'K'],
 )
-@triton.jit
+@triton.jitlib
 def matmul_kernel(
     # Pointers to matrices
     a_ptr, b_ptr, c_ptr,
@@ -252,7 +252,7 @@ def matmul_kernel(
 
 
 # we can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`
-@triton.jit
+@triton.jitlib
 def leaky_relu(x):
     x = x + 1
     return tl.where(x >= 0, x, 0.01 * x)
@@ -277,7 +277,7 @@ def matmul(a, b, activation=""):
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (
-        triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
+        triton.utils.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
     )
     matmul_kernel[grid](
         a, b, c,

@@ -1,9 +1,8 @@
 import torch
 
 import triton
-import triton.core
+import triton.language as tl
 
-tl = triton
 
 def num_warps(n):
     if n <= 128:
@@ -19,38 +18,45 @@ def num_warps(n):
 
 @triton.jit
 def _blocksparse_softmax_fwd(
-    Out, A, LUT, R, stride_xz,
-    extent, stride_zr, stride_hr,  # relative attention
-    scale, is_causal,
+    Out,
+    A,
+    LUT,
+    R,
+    stride_xz,
+    extent,
+    stride_zr,
+    stride_hr,  # relative attention
+    scale,
+    is_causal,
     ROW_SIZE: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
     IS_DENSE: tl.constexpr,
 ):
-    h = triton.core.program_id(0)
-    m = triton.core.program_id(1)
-    z = triton.core.program_id(2)
+    h = tl.program_id(0)
+    m = tl.program_id(1)
+    z = tl.program_id(2)
     # create index ranges
-    hm = h * triton.core.num_programs(1) + m
-    lane_n = triton.core.arange(0, ROW_SIZE) % BLOCK_SIZE
-    block_n = triton.core.arange(0, ROW_SIZE) // BLOCK_SIZE
+    hm = h * tl.num_programs(1) + m
+    lane_n = tl.arange(0, ROW_SIZE) % BLOCK_SIZE
+    block_n = tl.arange(0, ROW_SIZE) // BLOCK_SIZE
     # extract information from LUT
     header = LUT + (hm // BLOCK_SIZE) * 2
-    size = triton.core.load(header + 0)
-    offset = triton.core.load(header + 1)
+    size = tl.load(header + 0)
+    offset = tl.load(header + 1)
     # pointer offset
     off_a = z * stride_xz
     off_a += (offset + block_n) * BLOCK_SIZE * BLOCK_SIZE  # block indx
     off_a += (m % BLOCK_SIZE) * BLOCK_SIZE  # row indx
     # do not need to read column indices in the dense case
     if IS_DENSE:
-        ns = triton.core.arange(0, ROW_SIZE)
+        ns = tl.arange(0, ROW_SIZE)
     else:
-        off_lut = offset + 2 * triton.core.num_programs(0) * triton.core.num_programs(1) // BLOCK_SIZE
-        start_n = triton.core.load(LUT + off_lut + block_n, mask=block_n < size, other=0)
+        off_lut = offset + 2 * tl.num_programs(0) * tl.num_programs(1) // BLOCK_SIZE
+        start_n = tl.load(LUT + off_lut + block_n, mask=block_n < size, other=0)
         ns = start_n * BLOCK_SIZE + lane_n
     # load X
     mask = block_n < size
-    a = triton.core.load(A + off_a + lane_n, mask=mask, other=-float("inf"))
+    a = tl.load(A + off_a + lane_n, mask=mask, other=-float("inf"))
     a = a.to(tl.float32)
     # compute
     out = a
@@ -61,7 +67,7 @@ def _blocksparse_softmax_fwd(
         R += h * stride_hr
         off_lo = (extent - m - 1) + ns
         mask_lo = (off_lo >= 0) & (off_lo < extent)
-        rel_logits = triton.core.load(R + m * extent + off_lo, mask=mask_lo, other=0.0)
+        rel_logits = tl.load(R + m * extent + off_lo, mask=mask_lo, other=0.0)
         out += rel_logits
     out = out.to(tl.float32)
     # apply causal mask
@@ -69,33 +75,40 @@ def _blocksparse_softmax_fwd(
     # computation
     out = tl.softmax(out)
     # write-back
-    triton.core.store(Out + off_a + lane_n, value=out, mask=mask)
+    tl.store(Out + off_a + lane_n, value=out, mask=mask)
 
 
 @triton.jit
 def _blocksparse_softmax_bwd(
-    DA, stride_zdx,
-    DOut, stride_zdout,
-    Out, stride_zout,
+    DA,
+    stride_zdx,
+    DOut,
+    stride_zdout,
+    Out,
+    stride_zout,
     scale,
     LUT,
-    DR, extent, stride_zr, stride_hr, stride_er,
+    DR,
+    extent,
+    stride_zr,
+    stride_hr,
+    stride_er,
     is_causal,
     ROW_SIZE: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
     IS_DENSE: tl.constexpr,
 ):
-    h = triton.core.program_id(0)
-    m = triton.core.program_id(1)
-    z = triton.core.program_id(2)
+    h = tl.program_id(0)
+    m = tl.program_id(1)
+    z = tl.program_id(2)
     # create index ranges
-    hm = h * triton.core.num_programs(1) + m
-    lane_n = triton.core.arange(0, ROW_SIZE) % BLOCK_SIZE
-    block_n = triton.core.arange(0, ROW_SIZE) // BLOCK_SIZE
+    hm = h * tl.num_programs(1) + m
+    lane_n = tl.arange(0, ROW_SIZE) % BLOCK_SIZE
+    block_n = tl.arange(0, ROW_SIZE) // BLOCK_SIZE
     # extract information from LUT
     header = LUT + (hm // BLOCK_SIZE) * 2
-    size = triton.core.load(header + 0)
-    offset = triton.core.load(header + 1)
+    size = tl.load(header + 0)
+    offset = tl.load(header + 1)
     # row-col offset
     off_mn = (offset + block_n) * BLOCK_SIZE * BLOCK_SIZE
     off_mn += (m % BLOCK_SIZE) * BLOCK_SIZE
@@ -105,31 +118,31 @@ def _blocksparse_softmax_bwd(
     DOuts = DOut + z * stride_zdout + off_mn
     # do not need to read column indices in the dense case
     if IS_DENSE:
-        ns = triton.core.arange(0, ROW_SIZE)
+        ns = tl.arange(0, ROW_SIZE)
     else:
-        off_lut = offset + 2 * triton.core.num_programs(0) * triton.core.num_programs(1) // BLOCK_SIZE
-        start_n = triton.core.load(LUT + off_lut + block_n, mask=mask, other=0)
+        off_lut = offset + 2 * tl.num_programs(0) * tl.num_programs(1) // BLOCK_SIZE
+        start_n = tl.load(LUT + off_lut + block_n, mask=mask, other=0)
         ns = start_n * BLOCK_SIZE + lane_n
     # load data
-    a = triton.core.load(As + lane_n, mask=mask, other=0.0)
+    a = tl.load(As + lane_n, mask=mask, other=0.0)
     a = a.to(tl.float32)
-    dout = triton.core.load(DOuts + lane_n, mask=mask, other=0.0)
+    dout = tl.load(DOuts + lane_n, mask=mask, other=0.0)
     dout = dout.to(tl.float32)
     # compute
     da = a * (dout - tl.sum(a * dout, 0))
-    da = tl.where((ns > m) & is_causal, 0., da)
+    da = tl.where((ns > m) & is_causal, 0.0, da)
     # apply relative attention
     if DR is not None:
         DR += z * stride_zr
         DR += h * stride_hr
         off_lo = (extent - m - 1) + ns
         mask_lo = (off_lo >= 0) & (off_lo < extent) & mask
-        triton.core.store(DR + m * extent + off_lo, value=da, mask=mask_lo)
+        tl.store(DR + m * extent + off_lo, value=da, mask=mask_lo)
     da = da * scale
     # convert da
     # write-back
     DAs = DA + z * stride_zdx + off_mn
-    triton.core.store(DAs + lane_n, value=da, mask=mask)
+    tl.store(DAs + lane_n, value=da, mask=mask)
 
 
 class _softmax(torch.autograd.Function):
@@ -152,8 +165,16 @@ class _softmax(torch.autograd.Function):
 
     @staticmethod
     def forward(
-        ctx, a, scale, rel_logits, is_causal,
-        spdims, block, lut, maxlut, is_dense
+        ctx,
+        a,
+        scale,
+        rel_logits,
+        is_causal,
+        spdims,
+        block,
+        lut,
+        maxlut,
+        is_dense,
     ):
         if scale is not None and isinstance(scale, torch.Tensor):
             assert scale.device.type == "cpu"
@@ -165,14 +186,20 @@ class _softmax(torch.autograd.Function):
         # enqueue kernel
         out = torch.empty_like(a)
         _blocksparse_softmax_fwd[grid](
-            out, a, lut, rel_logits, a.stride(0),
-            rel_shape[-1], rel_strides[0], rel_strides[1],  # relative attn
+            out,
+            a,
+            lut,
+            rel_logits,
+            a.stride(0),
+            rel_shape[-1],
+            rel_strides[0],
+            rel_strides[1],  # relative attn
             scale,
             is_causal,
             BLOCK_SIZE=block,
-            ROW_SIZE=triton.next_power_of_2(maxlut),
+            ROW_SIZE=triton.utils.next_power_of_2(maxlut),
             IS_DENSE=is_dense,
-            num_warps=num_warps(maxlut)
+            num_warps=num_warps(maxlut),
         )
         # save to context
         # ctx.mark_dirty(x)
@@ -201,25 +228,45 @@ class _softmax(torch.autograd.Function):
         grid = (ctx.spdims[0], ctx.spdims[1] * ctx.block, M)
         da = torch.empty_like(dout)
         _blocksparse_softmax_bwd[grid](
-            da, da.stride(0),
-            dout, dout.stride(0),
-            out, out.stride(0),
+            da,
+            da.stride(0),
+            dout,
+            dout.stride(0),
+            out,
+            out.stride(0),
             ctx.scale,
             lut,
-            dr, ctx.rel_shape[-1], ctx.rel_strides[0], ctx.rel_strides[1], ctx.rel_strides[2],
+            dr,
+            ctx.rel_shape[-1],
+            ctx.rel_strides[0],
+            ctx.rel_strides[1],
+            ctx.rel_strides[2],
             ctx.is_causal,
             BLOCK_SIZE=ctx.block,
-            ROW_SIZE=triton.next_power_of_2(ctx.maxlut),
+            ROW_SIZE=triton.utils.next_power_of_2(ctx.maxlut),
             IS_DENSE=ctx.is_dense,
-            num_warps=num_warps(ctx.maxlut)
+            num_warps=num_warps(ctx.maxlut),
         )
-        return (da, None, None, dr, None,
-                None, None, None, None, None,
-                None,
-                None, None, None,
-                None,
-                None, None, None
-                )
+        return (
+            da,
+            None,
+            None,
+            dr,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
 
 
 class softmax:
@@ -234,7 +281,14 @@ class softmax:
         if rel_logits is not None and rel_logits.dtype != a.dtype:
             raise ValueError("relative position embedding must be %s" % a.dtype)
         a = _softmax.apply(
-            a, scale, rel_logits, is_causal,
-            self.spdims, self.block, self.lut, self.maxlut, self.is_dense,
+            a,
+            scale,
+            rel_logits,
+            is_causal,
+            self.spdims,
+            self.block,
+            self.lut,
+            self.maxlut,
+            self.is_dense,
         )
         return a

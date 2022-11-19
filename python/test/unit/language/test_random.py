@@ -4,11 +4,7 @@ import scipy.stats
 import torch
 
 import triton
-import triton.core
-
-
-def cdiv(x, div):
-    return (x + div - 1) // div
+import triton.language as tl
 
 
 #####################################
@@ -131,14 +127,14 @@ def test_randint(size, seed, device="cuda"):
 
     @triton.jit
     def kernel(X, N, seed):
-        offset = triton.core.program_id(0) * BLOCK + triton.core.arange(0, BLOCK)
-        rand = triton.randint(seed, offset)
-        triton.core.store(X + offset, rand, mask=offset < N)
+        offset = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        rand = tl.randint(seed, offset)
+        tl.store(X + offset, rand, mask=offset < N)
 
     # triton result
     x = torch.empty(size, dtype=torch.int32, device=device)
     N = x.numel()
-    grid = (cdiv(N, BLOCK),)
+    grid = (triton.utils.cdiv(N, BLOCK),)
     kernel[grid](x, N, seed)
     out_tri = x.cpu().numpy().astype(np.uint32).flatten().tolist()
     # reference result
@@ -156,14 +152,14 @@ def test_randint(size, seed, device="cuda"):
 def test_rand(size, seed, device="cuda"):
     @triton.jit
     def kernel(X, N, seed):
-        offset = triton.core.program_id(0) * BLOCK + triton.core.arange(0, BLOCK)
-        rand = triton.rand(seed, offset)
-        triton.core.store(X + offset, rand, mask=offset < N)
+        offset = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        rand = tl.rand(seed, offset)
+        tl.store(X + offset, rand, mask=offset < N)
 
     # triton result
     x = torch.empty(size, dtype=torch.float32, device=device)
     N = x.numel()
-    grid = (cdiv(N, BLOCK),)
+    grid = (triton.utils.cdiv(N, BLOCK),)
     kernel[grid](x, N, seed)
     assert all((x >= 0) & (x <= 1))
     assert scipy.stats.kstest(x.tolist(), "uniform", args=(0, 1)).statistic < 0.01
@@ -178,29 +174,29 @@ def test_rand(size, seed, device="cuda"):
 def test_randn(size, seed, device="cuda"):
     @triton.jit
     def kernel(X, N, seed):
-        offset = triton.core.program_id(0) * BLOCK + triton.core.arange(0, BLOCK)
-        rand = triton.randn(seed, offset)
-        triton.core.store(X + offset, rand, mask=offset < N)
+        offset = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        rand = tl.randn(seed, offset)
+        tl.store(X + offset, rand, mask=offset < N)
 
     # triton result
     x = torch.empty(size, dtype=torch.float32, device=device)
     N = x.numel()
-    grid = (cdiv(N, BLOCK),)
+    grid = (triton.utils.cdiv(N, BLOCK),)
     kernel[grid](x, N, seed)
     assert abs(x.mean()) < 1e-2
     assert abs(x.std() - 1) < 1e-2
 
 
-# triton.rand() should never produce >=1.0
+# tl.rand() should never produce >=1.0
 
 
 def test_rand_limits():
     @triton.jit
-    def kernel(input, output, n: triton.constexpr):
-        idx = triton.core.arange(0, n)
-        x = triton.core.load(input + idx)
-        y = triton.uint32_to_uniform_float(x)
-        triton.core.store(output + idx, y)
+    def kernel(input, output, n: tl.constexpr):
+        idx = tl.arange(0, n)
+        x = tl.load(input + idx)
+        y = tl.uint32_to_uniform_float(x)
+        tl.store(output + idx, y)
 
     min_max_int32 = torch.tensor(
         [

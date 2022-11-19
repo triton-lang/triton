@@ -1,14 +1,15 @@
-from .base import *
+import triton
+import triton.language as tl
 
-PHILOX_KEY_A: constexpr = constexpr(-1640531527)  # 0x9E3779B9
-PHILOX_KEY_B: constexpr = constexpr(-1150833019)  # 0xBB67AE85
-PHILOX_ROUND_A: constexpr = constexpr(-766435501)  # 0xD2511F53
-PHILOX_ROUND_B: constexpr = constexpr(-845247145)  # 0xCD9E8D57
-N_ROUNDS_DEFAULT: constexpr = constexpr(10)  # Default number of rounds for philox
+PHILOX_KEY_A: tl.constexpr = tl.constexpr(-1640531527)  # 0x9E3779B9
+PHILOX_KEY_B: tl.constexpr = tl.constexpr(-1150833019)  # 0xBB67AE85
+PHILOX_ROUND_A: tl.constexpr = tl.constexpr(-766435501)  # 0xD2511F53
+PHILOX_ROUND_B: tl.constexpr = tl.constexpr(-845247145)  # 0xCD9E8D57
+N_ROUNDS_DEFAULT: tl.constexpr = tl.constexpr(10)  # Default number of rounds for philox
 
 
-@jit
-def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: constexpr = N_ROUNDS_DEFAULT):
+@triton.jit
+def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """
     Run `n_rounds` rounds of Philox for state (c0, c1, c2, c3) and key (k0, k1).
     """
@@ -17,8 +18,8 @@ def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: constexpr = N_ROUNDS_DEFAULT):
         A = PHILOX_ROUND_A
         B = PHILOX_ROUND_B
         _c0, _c2 = c0, c2
-        c0 = umulhi(B, _c2) ^ c1 ^ k0
-        c2 = umulhi(A, _c0) ^ c3 ^ k1
+        c0 = tl.umulhi(B, _c2) ^ c1 ^ k0
+        c2 = tl.umulhi(A, _c0) ^ c3 ^ k1
         c1 = B * _c2
         c3 = A * _c0
         # raise key
@@ -27,16 +28,16 @@ def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: constexpr = N_ROUNDS_DEFAULT):
     return c0, c1, c2, c3
 
 
-@jit
-def philox(seed, c0, c1, c2, c3, n_rounds: constexpr = N_ROUNDS_DEFAULT):
-    seed = seed.to(uint64)
-    seed_hi = ((seed >> 32) & 0xFFFFFFFF).to(uint32)
-    seed_lo = (seed & 0xFFFFFFFF).to(uint32)
+@triton.jit
+def philox(seed, c0, c1, c2, c3, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
+    seed = seed.to(tl.uint64)
+    seed_hi = ((seed >> 32) & 0xFFFFFFFF).to(tl.uint32)
+    seed_lo = (seed & 0xFFFFFFFF).to(tl.uint32)
     return philox_impl(c0, c1, c2, c3, seed_lo, seed_hi, n_rounds)
 
 
-@jit
-def randint(seed, offset, n_rounds: constexpr = N_ROUNDS_DEFAULT):
+@triton.jit
+def randint(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offset` block, returns a single
     block of random :code:`int32`.
@@ -51,8 +52,8 @@ def randint(seed, offset, n_rounds: constexpr = N_ROUNDS_DEFAULT):
     return ret
 
 
-@jit
-def randint4x(seed, offset, n_rounds: constexpr = N_ROUNDS_DEFAULT):
+@triton.jit
+def randint4x(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offset` block, returns four
     blocks of random :code:`int32`.
@@ -68,20 +69,20 @@ def randint4x(seed, offset, n_rounds: constexpr = N_ROUNDS_DEFAULT):
     return philox(seed, offset, _0, _0, _0, n_rounds)
 
 
-@jit
+@triton.jit
 def uint32_to_uniform_float(x):
     """
     Numerically stable function to convert a random uint32 into a random float uniformly sampled in [0, 1).
     """
-    x = x.to(int32, bitcast=True)
+    x = x.to(tl.int32, bitcast=True)
     # maximum value such that `MAX_INT * scale < 1.0` (with float rounding)
     scale = 4.6566127342e-10
-    x = where(x < 0, -x - 1, x)
+    x = tl.where(x < 0, -x - 1, x)
     return x * scale
 
 
-@jit
-def rand(seed, offset, n_rounds: constexpr = N_ROUNDS_DEFAULT):
+@triton.jit
+def rand(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offset` block,
     returns a block of random :code:`float32` in :math:`U(0, 1)`
@@ -89,13 +90,13 @@ def rand(seed, offset, n_rounds: constexpr = N_ROUNDS_DEFAULT):
     :param seed: The seed for generating random numbers.
     :param offsets: The offsets to generate random numbers for.
     """
-    offset = offset.to(uint32, bitcast=True)
+    offset = offset.to(tl.uint32, bitcast=True)
     source = randint(seed, offset, n_rounds)
     return uint32_to_uniform_float(source)
 
 
-@jit
-def rand4x(seed, offsets, n_rounds: constexpr = N_ROUNDS_DEFAULT):
+@triton.jit
+def rand4x(seed, offsets, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offsets` block,
     returns a 4 blocks of random :code:`float32` in :math:`U(0, 1)`
@@ -103,7 +104,7 @@ def rand4x(seed, offsets, n_rounds: constexpr = N_ROUNDS_DEFAULT):
     :param seed: The seed for generating random numbers.
     :param offsets: The offsets to generate random numbers for.
     """
-    offsets = offsets.to(uint32, bitcast=True)
+    offsets = offsets.to(tl.uint32, bitcast=True)
     i1, i2, i3, i4 = randint4x(seed, offsets, n_rounds)
     u1 = uint32_to_uniform_float(i1)
     u2 = uint32_to_uniform_float(i2)
@@ -112,17 +113,17 @@ def rand4x(seed, offsets, n_rounds: constexpr = N_ROUNDS_DEFAULT):
     return u1, u2, u3, u4
 
 
-@jit
+@triton.jit
 def pair_uniform_to_normal(u1, u2):
     """Box-Muller transform"""
-    u1 = maximum(1.0e-7, u1)
+    u1 = tl.maximum(1.0e-7, u1)
     th = 6.283185307179586 * u2
-    r = sqrt(-2.0 * log(u1))
-    return r * cos(th), r * sin(th)
+    r = tl.sqrt(-2.0 * tl.log(u1))
+    return r * tl.cos(th), r * tl.sin(th)
 
 
-@jit
-def randn(seed, offset, n_rounds: constexpr = N_ROUNDS_DEFAULT):
+@triton.jit
+def randn(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offset` block,
     returns a block of random :code:`float32` in :math:`\\mathcal{N}(0, 1)`
@@ -137,8 +138,8 @@ def randn(seed, offset, n_rounds: constexpr = N_ROUNDS_DEFAULT):
     return n1
 
 
-@jit
-def randn4x(seed, offset, n_rounds: constexpr = N_ROUNDS_DEFAULT):
+@triton.jit
+def randn4x(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offset` block,
     returns a 4 blocks of random :code:`float32` in :math:`\\mathcal{N}(0, 1)`

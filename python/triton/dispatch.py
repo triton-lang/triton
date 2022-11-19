@@ -4,8 +4,13 @@ from typing import Optional, Sequence, List, Union, Any
 
 from triton._C.libtriton.triton import ir
 
-from triton import tensor, dtype, block_type
-from triton.base import _to_tensor, _binary_op_type_checking_impl
+from triton.base import (
+    _to_tensor,
+    _binary_op_type_checking_impl,
+    tensor,
+    dtype,
+    block_type,
+)
 
 
 def dispatch(
@@ -42,25 +47,25 @@ def dispatch(
             f"Expect {len(args)}, got {num_args}"
         )
 
-    arg_types: List[Union[type, dtype]] = []
+    arg_types_l: List[Union[type, dtype]] = []
     arg_list: List[Any] = []
     for arg in args:
         if isinstance(arg, tensor):
-            arg_types.append(arg.dtype)
+            arg_types_l.append(arg.dtype)
             arg_list.append(arg.handle)
         else:
-            arg_types.append(type(arg))
+            arg_types_l.append(type(arg))
             arg_list.append(arg)
-    arg_types_t = tuple(arg_types)
+    arg_types = tuple(arg_types_l)
 
     if arg_types not in arg_type_symbol_dict:
         raise ValueError(
             f"input arg type does not match."
-            f"Expect one of {arg_type_symbol_dict.keys()}, got {arg_types_t}"
+            f"Expect one of {arg_type_symbol_dict.keys()}, got {arg_types}"
         )
     else:
-        symbol = arg_type_symbol_dict[arg_types_t][0]
-        ret_type = arg_type_symbol_dict[arg_types_t][1]
+        symbol = arg_type_symbol_dict[arg_types][0]
+        ret_type = arg_type_symbol_dict[arg_types][1]
         ret_type = (
             block_type(ret_type, ret_shape) if ret_shape is not None else ret_type
         )

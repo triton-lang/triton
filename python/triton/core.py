@@ -2,14 +2,17 @@ from __future__ import division, annotations
 
 from typing import TypeVar, Callable
 
+from triton import ir
 from . import base
-from .base import tensor
+from . import jitlib
 
-C = TypeVar("C", bound=Callable)
+from .base import constexpr
+
+CallableT = TypeVar("CallableT", bound=Callable)
 
 
 @base.builtin
-def program_id(axis, _builder: base.ir.builder = None):
+def program_id(axis, _builder: ir.builder = None):
     """
     Returns the id of the current program instance along the given :code:`axis`.
 
@@ -28,7 +31,7 @@ def program_id(axis, _builder: base.ir.builder = None):
 
 
 @base.builtin
-def num_programs(axis, _builder: base.ir.builder = None):
+def num_programs(axis, _builder: ir.builder = None):
     """
     Returns the number of program instances launched along the given :code:`axis`.
 
@@ -40,7 +43,7 @@ def num_programs(axis, _builder: base.ir.builder = None):
 
 
 @base.builtin
-def arange(start, end, _builder: base.ir.builder = None):
+def arange(start, end, _builder: ir.builder = None):
     """
     Returns contiguous values within the open interval [:code:`start`, :code:`end`).
 
@@ -55,7 +58,7 @@ def arange(start, end, _builder: base.ir.builder = None):
 
 
 @base.builtin
-def zeros(shape, dtype, _builder: base.ir.builder = None):
+def zeros(shape, dtype, _builder: ir.builder = None):
     """
     Returns a tensor filled with the scalar value 0 for the given :code:`shape` and :code:`dtype`.
 
@@ -65,7 +68,7 @@ def zeros(shape, dtype, _builder: base.ir.builder = None):
     :type dtype: DType
     """
     for i, d in enumerate(shape):
-        if not isinstance(d, base.constexpr):
+        if not isinstance(d, constexpr):
             raise TypeError(f"Shape element {i} must have type `constexpr`")
         if not isinstance(d.value, int):
             raise TypeError(
@@ -82,8 +85,8 @@ def dequantize(
     scale,
     shift,
     nbit,
-    dst_ty=base.float16,
-    _builder: base.ir.builder = None,
+    dst_ty: base.dtype = base.float16,
+    _builder: ir.builder = None,
 ):
     """
     Tries to dequantize the input to given dtype
@@ -93,7 +96,7 @@ def dequantize(
 
 
 @base.builtin
-def broadcast(input, other, _builder: base.ir.builder = None):
+def broadcast(input, other, _builder: ir.builder = None):
     """
     Tries to broadcast the two given blocks to a common compatible shape.
 
@@ -106,7 +109,7 @@ def broadcast(input, other, _builder: base.ir.builder = None):
 
 
 @base.builtin
-def broadcast_to(input, shape, _builder: base.ir.builder = None):
+def broadcast_to(input, shape, _builder: ir.builder = None):
     """
     Tries to broadcast the given tensor to a new :code:`shape`.
 
@@ -119,7 +122,7 @@ def broadcast_to(input, shape, _builder: base.ir.builder = None):
 
 
 @base.builtin
-def cat(input, other, _builder: base.ir.builder = None):
+def cat(input, other, _builder: ir.builder = None):
     """
     Concatenate the given blocks
 
@@ -132,7 +135,7 @@ def cat(input, other, _builder: base.ir.builder = None):
 
 
 @base.builtin
-def reshape(input, shape, _builder: base.ir.builder = None):
+def reshape(input, shape, _builder: ir.builder = None):
     """
     Tries to reshape the given tensor to a new shape.
 
@@ -143,7 +146,7 @@ def reshape(input, shape, _builder: base.ir.builder = None):
 
     """
     shape = [x.value for x in shape]
-    return _reshape(input, shape, _builder)
+    return base._reshape(input, shape, _builder)
 
 
 @base.builtin
@@ -153,7 +156,7 @@ def dot(
     trans_a=False,
     trans_b=False,
     allow_tf32=True,
-    _builder: base.ir.builder = None,
+    _builder: ir.builder = None,
 ):
     """
     Returns the matrix product of two blocks.
@@ -177,8 +180,8 @@ def load(
     cache_modifier="",
     eviction_policy="",
     volatile=False,
-    _builder: base.ir.builder = None,
-) -> tensor:
+    _builder: ir.builder = None,
+) -> base.tensor:
     """
     Return a tensor of data whose values are, elementwise, loaded from memory at location defined by :code:`pointer`.
 
@@ -188,9 +191,9 @@ def load(
     :code:`other` is implicitly typecast to :code:`pointer.dtype.element_ty`.
 
     :param pointer: Pointers to the data to be loaded.
-    :type pointer: Block of dtype=triton.PointerDType
+    :type pointer: Block of dtype=tr.PointerDType
     :param mask: if mask[idx] is false, do not load the data at address :code:`pointer[idx]`.
-    :type mask: Block of triton.int1, optional
+    :type mask: Block of tr.int1, optional
     :param other: if mask[idx] is false, return other[idx]
     :type other: Block, optional
     :param cache_modifier: changes cache option in nvidia ptx
@@ -221,8 +224,8 @@ def store(
     value,
     mask=None,
     eviction_policy="",
-    _builder: base.ir.builder = None,
-) -> tensor:
+    _builder: ir.builder = None,
+) -> base.tensor:
     """
     Stores :code:`value` tensor of elements in memory, element-wise, at the memory locations specified by :code:`pointer`.
 
@@ -230,11 +233,11 @@ def store(
     :code:`value` is implicitly broadcast to :code:`pointer.shape` and typecast to :code:`pointer.dtype.element_ty`.
 
     :param pointer: The memory locations where the elements of :code:`value` are stored.
-    :type pointer: Block of dtype=triton.PointerDType
+    :type pointer: Block of dtype=tr.PointerDType
     :param value: The tensor of elements to be stored.
     :type value: Block
     :param mask: If mask[idx] is false, do not store :code:`value[idx]` at :code:`pointer[idx]`.
-    :type mask: Block of triton.int1, optional
+    :type mask: Block of tr.int1, optional
     """
     # value can be constexpr
     value = base._to_tensor(value, _builder)
@@ -244,14 +247,14 @@ def store(
 
 
 @base.builtin
-def atomic_cas(pointer, cmp, val, _builder: base.ir.builder = None):
+def atomic_cas(pointer, cmp, val, _builder: ir.builder = None):
     """
     Performs an atomic compare-and-swap at the memory location specified by :code:`pointer`.
 
     Return the data stored at :code:`pointer` before the atomic operation.
 
     :param pointer: The memory locations to compare-and-swap.
-    :type pointer: Block of dtype=triton.PointerDType
+    :type pointer: Block of dtype=tr.PointerDType
     :param cmp: The values expected to be found in the atomic object
     :type cmp: Block of dtype=`pointer.dtype.element_ty`
     :param val: The values to copy in case the expected value matches the contained value.
@@ -262,19 +265,19 @@ def atomic_cas(pointer, cmp, val, _builder: base.ir.builder = None):
     return base._atomic_cas(pointer, cmp, val, _builder)
 
 
-def _add_atomic_docstr(name: str) -> Callable[[C], C]:
-    def _decorator(func: C) -> C:
+def _add_atomic_docstr(name: str) -> Callable[[CallableT], CallableT]:
+    def _decorator(func: CallableT) -> CallableT:
         docstr = """
     Performs an atomic {name} at the memory location specified by :code:`pointer`.
 
     Return the data stored at :code:`pointer` before the atomic operation.
 
     :param pointer: The memory locations to apply {name}.
-    :type pointer: Block of dtype=triton.PointerDType
+    :type pointer: Block of dtype=tr.PointerDType
     :param val: The values to {name} in the atomic object.
     :type val: Block of dtype=`pointer.dtype.element_ty`
     :param mask: If mask[idx] is false, do not apply {name}.
-    :type mask: Block of triton.int1, optional
+    :type mask: Block of tr.int1, optional
     """
         func.__doc__ = docstr.format(name=name)
         return func
@@ -284,49 +287,49 @@ def _add_atomic_docstr(name: str) -> Callable[[C], C]:
 
 @base.builtin
 @_add_atomic_docstr("exchange")
-def atomic_xchg(pointer, val, mask=None, _builder: base.ir.builder = None):
+def atomic_xchg(pointer, val, mask=None, _builder: ir.builder = None):
     val = base._to_tensor(val, _builder)
     return base._atomic_xchg(pointer, val, mask, _builder)
 
 
 @base.builtin
 @_add_atomic_docstr("add")
-def atomic_add(pointer, val, mask=None, _builder: base.ir.builder = None):
+def atomic_add(pointer, val, mask=None, _builder: ir.builder = None):
     val = base._to_tensor(val, _builder)
     return base._atomic_add(pointer, val, mask, _builder)
 
 
 @base.builtin
 @_add_atomic_docstr("max")
-def atomic_max(pointer, val, mask=None, _builder: base.ir.builder = None):
+def atomic_max(pointer, val, mask=None, _builder: ir.builder = None):
     val = base._to_tensor(val, _builder)
     return base._atomic_max(pointer, val, mask, _builder)
 
 
 @base.builtin
 @_add_atomic_docstr("min")
-def atomic_min(pointer, val, mask=None, _builder: base.ir.builder = None):
+def atomic_min(pointer, val, mask=None, _builder: ir.builder = None):
     val = base._to_tensor(val, _builder)
     return base._atomic_min(pointer, val, mask, _builder)
 
 
 @base.builtin
 @_add_atomic_docstr("logical and")
-def atomic_and(pointer, val, mask=None, _builder: base.ir.builder = None):
+def atomic_and(pointer, val, mask=None, _builder: ir.builder = None):
     val = base._to_tensor(val, _builder)
     return base._atomic_and(pointer, val, mask, _builder)
 
 
 @base.builtin
 @_add_atomic_docstr("logical or")
-def atomic_or(pointer, val, mask=None, _builder: base.ir.builder = None):
+def atomic_or(pointer, val, mask=None, _builder: ir.builder = None):
     val = base._to_tensor(val, _builder)
     return base._atomic_or(pointer, val, mask, _builder)
 
 
 @base.builtin
 @_add_atomic_docstr("logical xor")
-def atomic_xor(pointer, val, mask=None, _builder: base.ir.builder = None):
+def atomic_xor(pointer, val, mask=None, _builder: ir.builder = None):
     val = base._to_tensor(val, _builder)
     return base._atomic_xor(pointer, val, mask, _builder)
 
@@ -337,19 +340,19 @@ def atomic_xor(pointer, val, mask=None, _builder: base.ir.builder = None):
 
 
 @base.builtin
-def where(condition, x, y, _builder: base.ir.builder = None):
+def where(condition, x, y, _builder: ir.builder = None) -> base.tensor:
     """
     Returns a tensor of elements from either :code:`x` or :code:`y`, depending on :code:`condition`.
 
     Note that :code:`x` and :code:`y` are always evaluated regardless of the value of :code:`condition`.
 
-    If you want to avoid unintended memory operations, use the :code:`mask` arguments in `triton.load` and `triton.store` instead.
+    If you want to avoid unintended memory operations, use the :code:`mask` arguments in `tr.load` and `tr.store` instead.
 
     The shape of :code:`x` and :code:`y` are both broadcast to the shape of :code:`condition`.
     :code:`x` and :code:`y` must have the data type.
 
     :param condition: When True (nonzero), yield x, otherwise yield y.
-    :type condition: Block of triton.bool
+    :type condition: Block of tr.bool
     :param x: values selected at indices where condition is True.
     :param y: values selected at indices where condition is False.
     """
@@ -365,20 +368,20 @@ def where(condition, x, y, _builder: base.ir.builder = None):
 
 
 @base.builtin
-def umulhi(x, y, _builder: base.ir.builder = None):
+def umulhi(x, y, _builder: ir.builder = None):
     x = base._to_tensor(x, _builder)
     y = base._to_tensor(y, _builder)
     return base._umulhi(x, y, _builder)
 
 
 @base.builtin
-def fdiv(x, y, ieee_rounding=False, _builder: base.ir.builder = None):
+def fdiv(x, y, ieee_rounding=False, _builder: ir.builder = None):
     ieee_rounding = base._constexpr_to_value(ieee_rounding)
     return base._fdiv(x, y, ieee_rounding, _builder)
 
 
-def _add_math_1arg_docstr(name: str) -> Callable[[C], C]:
-    def _decorator(func: C) -> C:
+def _add_math_1arg_docstr(name: str) -> Callable[[CallableT], CallableT]:
+    def _decorator(func: CallableT) -> CallableT:
         docstr = """
     Computes the element-wise {name} of :code:`x`
 
@@ -393,31 +396,31 @@ def _add_math_1arg_docstr(name: str) -> Callable[[C], C]:
 
 @base.builtin
 @_add_math_1arg_docstr("exponential")
-def exp(x, _builder: base.ir.builder = None):
+def exp(x, _builder: ir.builder = None):
     return base._exp(x, _builder)
 
 
 @base.builtin
 @_add_math_1arg_docstr("natural logarithm")
-def log(x, _builder: base.ir.builder = None):
+def log(x, _builder: ir.builder = None):
     return base._log(x, _builder)
 
 
 @base.builtin
 @_add_math_1arg_docstr("cosine")
-def cos(x, _builder: base.ir.builder = None):
+def cos(x, _builder: ir.builder = None):
     return base._cos(x, _builder)
 
 
 @base.builtin
 @_add_math_1arg_docstr("sine")
-def sin(x, _builder: base.ir.builder = None):
+def sin(x, _builder: ir.builder = None):
     return base._sin(x, _builder)
 
 
 @base.builtin
 @_add_math_1arg_docstr("square root")
-def sqrt(x, _builder: base.ir.builder = None):
+def sqrt(x, _builder: ir.builder = None):
     return base._sqrt(x, _builder)
 
 
@@ -426,8 +429,8 @@ def sqrt(x, _builder: base.ir.builder = None):
 # -----------------------
 
 
-def _add_reduction_docstr(name: str) -> Callable[[C], C]:
-    def _decorator(func: C) -> C:
+def _add_reduction_docstr(name: str) -> Callable[[CallableT], CallableT]:
+    def _decorator(func: CallableT) -> CallableT:
         docstr = """
     Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
 
@@ -442,42 +445,42 @@ def _add_reduction_docstr(name: str) -> Callable[[C], C]:
 
 @base.builtin
 @_add_reduction_docstr("maximum")
-def max(input, axis, _builder: base.ir.builder = None):
+def max(input, axis, _builder: ir.builder = None):
     axis = base._constexpr_to_value(axis)
     return base._max(input, axis, _builder)
 
 
 @base.builtin
 @_add_reduction_docstr("maximum index")
-def argmax(input, axis, _builder: base.ir.builder = None):
+def argmax(input, axis, _builder: ir.builder = None):
     axis = base._constexpr_to_value(axis)
     return base._argmax(input, axis, _builder)
 
 
 @base.builtin
 @_add_reduction_docstr("minimum")
-def min(input, axis, _builder: base.ir.builder = None):
+def min(input, axis, _builder: ir.builder = None):
     axis = base._constexpr_to_value(axis)
     return base._min(input, axis, _builder)
 
 
 @base.builtin
 @_add_reduction_docstr("minimum index")
-def argmin(input, axis, _builder: base.ir.builder = None):
+def argmin(input, axis, _builder: ir.builder = None):
     axis = base._constexpr_to_value(axis)
     return base._argmin(input, axis, _builder)
 
 
 @base.builtin
 @_add_reduction_docstr("sum")
-def sum(input, axis, _builder: base.ir.builder = None):
+def sum(input, axis, _builder: ir.builder = None):
     axis = base._constexpr_to_value(axis)
     return base._sum(input, axis, _builder)
 
 
 @base.builtin
 @_add_reduction_docstr("xor sum")
-def xor_sum(input, axis, _builder: base.ir.builder = None):
+def xor_sum(input, axis, _builder: ir.builder = None):
     axis = base._constexpr_to_value(axis)
     return base._xor_sum(input, axis, _builder)
 
@@ -488,12 +491,12 @@ def xor_sum(input, axis, _builder: base.ir.builder = None):
 
 
 @base.builtin
-def globaltimer(_builder: base.ir.builder = None):
+def globaltimer(_builder: ir.builder = None):
     return base._globaltimer(_builder)
 
 
 @base.builtin
-def clock(_builder: base.ir.builder = None):
+def clock(_builder: ir.builder = None):
     return base._clock(_builder)
 
 
@@ -503,19 +506,19 @@ def clock(_builder: base.ir.builder = None):
 
 
 @base.builtin
-def debug_barrier(_builder: base.ir.builder = None):
+def debug_barrier(_builder: ir.builder = None):
     return base._debug_barrier(_builder)
 
 
 @base.builtin
-def multiple_of(input, values, _builder: base.ir.builder = None):
+def multiple_of(input, values, _builder: ir.builder = None):
     """
     Let the compiler knows that the values in :code:`input` are all multiples of :code:`value`.
     """
-    if isinstance(values, base.constexpr):
+    if isinstance(values, constexpr):
         values = [values]
     for i, d in enumerate(values):
-        if not isinstance(d, base.constexpr):
+        if not isinstance(d, constexpr):
             raise TypeError(f"values element {i} must have type `constexpr`")
         if not isinstance(d.value, int):
             raise TypeError(
@@ -526,14 +529,14 @@ def multiple_of(input, values, _builder: base.ir.builder = None):
 
 
 @base.builtin
-def max_contiguous(input, values, _builder: base.ir.builder = None):
+def max_contiguous(input, values, _builder: ir.builder = None):
     """
     Let the compiler knows that the `value` first values in :code:`input` are contiguous.
     """
-    if isinstance(values, base.constexpr):
+    if isinstance(values, constexpr):
         values = [values]
     for i, d in enumerate(values):
-        if not isinstance(d, base.constexpr):
+        if not isinstance(d, constexpr):
             raise TypeError(f"values element {i} must have type `constexpr`")
         if not isinstance(d.value, int):
             raise TypeError(
@@ -548,12 +551,12 @@ def max_contiguous(input, values, _builder: base.ir.builder = None):
 # -----------------------
 
 
-@base.jit
+@jitlib.jit
 def abs(x):
     return where(x >= 0, x, -x)
 
 
-@base.jit
+@jitlib.jit
 def cdiv(x, div):
     """
     Computes the ceiling division of :code:`x` by :code:`div`
@@ -566,7 +569,7 @@ def cdiv(x, div):
     return (x + div - 1) // div
 
 
-@base.jit
+@jitlib.jit
 def minimum(x, y):
     """
     Computes the element-wise minimum of :code:`x` and :code:`y`.
@@ -579,7 +582,7 @@ def minimum(x, y):
     return where(x < y, x, y)
 
 
-@base.jit
+@jitlib.jit
 def maximum(x, y):
     """
     Computes the element-wise maximum of :code:`x` and :code:`y`.
@@ -592,22 +595,22 @@ def maximum(x, y):
     return where(x > y, x, y)
 
 
-@base.jit
+@jitlib.jit
 @_add_math_1arg_docstr("sigmoid")
 def sigmoid(x):
     return 1 / (1 + exp(-x))
 
 
-@base.jit
+@jitlib.jit
 @_add_math_1arg_docstr("softmax")
-def softmax(x, ieee_rounding: base.constexpr = base.constexpr(False)):
+def softmax(x, ieee_rounding: constexpr = False):
     z = x - max(x, 0)
     num = exp(z)
     den = sum(num, 0)
     return fdiv(num, den, ieee_rounding)
 
 
-@base.jit
+@jitlib.jit
 def ravel(x):
     """
     Returns a contiguous flattened view of :code:`x`
@@ -618,7 +621,7 @@ def ravel(x):
     return reshape(x, [x.numel])
 
 
-@base.jit
+@jitlib.jit
 def swizzle2d(i, j, size_i, size_j, size_g):
     """
     transformes indices of a row-major size_i*size_j matrix into those
@@ -651,6 +654,6 @@ def swizzle2d(i, j, size_i, size_j, size_g):
     return new_i, new_j
 
 
-@base.jit
+@jitlib.jit
 def zeros_like(input):
     return zeros(input.shape, input.dtype)

@@ -181,6 +181,11 @@ setup(
         "Programming Language :: Python :: 3.6",
     ],
     extras_require={
+        "testing": [
+            "matplotlib",
+            "pandas",
+            "psutil",
+        ],
         "tests": [
             "autopep8",
             "flake8",
@@ -188,6 +193,7 @@ setup(
             "numpy",
             "pytest",
             "scipy>=1.7.1",
+            "types-psutil",
         ],
         "tutorials": [
             "matplotlib",

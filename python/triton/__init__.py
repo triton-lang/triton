@@ -8,14 +8,29 @@ import torch
 
 # submodules
 
-from .utils import *
-from .base import *
-from .tuning import *
-from . import libdevice
-from .core import *
-from .random import *
-from .compiler import *
+from triton._C.libtriton.triton import ir
 
+from . import utils
+from .jitlib import (
+    KernelInterface,
+    JITFunction,
+    jit,
+    ExternalFunction,
+    extern,
+)
+from .compiler import compile, CompiledKernel, CompilationError, OutOfResources
+
+# No @tr.jit() interface can be called until after .compiler is loaded;
+# and .compiler depends upon the core stack.
+
+from .tuning import (
+    autotune,
+    Config,
+    heuristics,
+    Heuristics,
+)
+
+from . import language
 from . import testing
 from . import ops
 

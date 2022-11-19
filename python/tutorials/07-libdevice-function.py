@@ -33,7 +33,7 @@ def asin_kernel(
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     x = tl.load(x_ptr + offsets, mask=mask)
-    x = triton.libdevice.asin(x)
+    x = tl.libdevice.asin(x)
     tl.store(y_ptr + offsets, value=x, mask=mask)
 
 # %%
@@ -49,7 +49,7 @@ output_triton = torch.zeros(size, device='cuda')
 output_torch = torch.asin(x)
 assert x.is_cuda and output_triton.is_cuda
 n_elements = output_torch.numel()
-grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
+grid = lambda meta: (triton.utils.cdiv(n_elements, meta['BLOCK_SIZE']),)
 asin_kernel[grid](x, output_triton, n_elements, BLOCK_SIZE=1024)
 print(output_torch)
 print(output_triton)
