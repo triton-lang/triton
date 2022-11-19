@@ -5276,7 +5276,6 @@ def randn(seed, offset, n_rounds: constexpr = N_ROUNDS_DEFAULT):
 
 
 @jit
-@_triton_builtin
 def randn4x(seed, offset, n_rounds: constexpr = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offset` block,
