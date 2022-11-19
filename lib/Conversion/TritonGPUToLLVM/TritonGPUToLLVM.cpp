@@ -1527,8 +1527,8 @@ LogicalResult
 ReduceOpConversion::matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                                     ConversionPatternRewriter &rewriter) const {
   auto srcTy = op.operand().getType().cast<RankedTensorType>();
-  auto srcLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
-  if (op.axis() == srcLayout.getOrder()[0])
+  auto srcLayout = srcTy.getEncoding();
+  if (op.axis() == triton::gpu::getOrder(srcLayout)[0])
     return matchAndRewriteFast(op, adaptor, rewriter);
   return matchAndRewriteBasic(op, adaptor, rewriter);
 }
@@ -2784,6 +2784,25 @@ public:
          dstLayout.isa<MmaEncodingAttr>() ||
          dstLayout.isa<SliceEncodingAttr>())) {
       return lowerDistributedToDistributed(op, adaptor, rewriter);
+    }
+    if(srcLayout.isa<MmaEncodingAttr>() &&
+        dstLayout.isa<DotOperandEncodingAttr>()) {
+      auto srcMmaLayout = srcLayout.cast<MmaEncodingAttr>();
+      auto dstDotLayout = dstLayout.cast<DotOperandEncodingAttr>();
+      if(srcMmaLayout.getWarpsPerCTA()[1] == 1 &&
+         dstDotLayout.getOpIdx() == 0 &&
+         dstDotLayout.getParent() == srcMmaLayout) {
+        Location loc = op->getLoc();
+        unsigned elems = getElemsPerThread(srcTy);
+        Type elemTy =
+            this->getTypeConverter()->convertType(srcTy.getElementType());
+        SmallVector<Type> types(elems, elemTy);
+        Type structTy = LLVM::LLVMStructType::getLiteral(this->getContext(), types);
+        auto vals = this->getElementsFromStruct(loc, adaptor.src(), rewriter);
+        Value view = getStructFromElements(loc, vals, rewriter, structTy);
+        rewriter.replaceOp(op, view);
+        return success();
+      }
     }
     // TODO: to be implemented
     llvm_unreachable("unsupported layout conversion");
