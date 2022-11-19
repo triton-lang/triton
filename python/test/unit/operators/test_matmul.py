@@ -6,7 +6,7 @@ import torch
 import triton
 import triton._C.libtriton.triton as _triton
 
-import triton.tuning
+import triton.autotuner
 
 
 @pytest.mark.parametrize(

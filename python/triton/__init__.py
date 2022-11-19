@@ -37,12 +37,14 @@ from .compiler import (
     OutOfResources,
 )
 
-from .tuning import (
+from .autotuner import (
     autotune,
     Config,
     heuristics,
     Heuristics,
 )
+
+from . import runtime
 
 from . import language
 from . import testing
@@ -70,6 +72,7 @@ __all__ = [
     "next_power_of_2",
     "ops",
     "OutOfResources",
+    "runtime",
     "TensorWrapper",
     "testing",
     "utils",
