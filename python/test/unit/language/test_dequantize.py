@@ -9,12 +9,7 @@ import triton.language as tl
 
 
 @triton.jit
-def dequantize_kernel_int8(
-    output_ptr,
-    input_ptr,
-    size,
-    BLOCK_SIZE: tl.constexpr,
-):
+def dequantize_kernel_int8(output_ptr, input_ptr, size, BLOCK_SIZE: tl.constexpr):
     w_offsets = tl.arange(0, BLOCK_SIZE // 4)
     mask = w_offsets < (size // 4)
     input_ptrs = input_ptr + 1 + w_offsets
@@ -30,12 +25,7 @@ def dequantize_kernel_int8(
 
 @triton.jit
 def dequantize_kernel_scale_shift_int8(
-    output_ptr,
-    input_ptr,
-    scale_ptr,
-    shift_ptr,
-    size,
-    BLOCK_SIZE: tl.constexpr,
+    output_ptr, input_ptr, scale_ptr, shift_ptr, size, BLOCK_SIZE: tl.constexpr
 ):
     w_offsets = tl.arange(0, BLOCK_SIZE // 4)
     mask = w_offsets < (size // 4)
@@ -50,12 +40,7 @@ def dequantize_kernel_scale_shift_int8(
 
 
 @triton.jit
-def dequantize_kernel_int4(
-    output_ptr,
-    input_ptr,
-    size,
-    BLOCK_SIZE: tl.constexpr,
-):
+def dequantize_kernel_int4(output_ptr, input_ptr, size, BLOCK_SIZE: tl.constexpr):
     w_offsets = tl.arange(0, BLOCK_SIZE // 8)
     mask = w_offsets < (size // 8)
     input_ptrs = input_ptr + 1 + w_offsets
@@ -71,12 +56,7 @@ def dequantize_kernel_int4(
 
 @triton.jit
 def dequantize_kernel_scale_shift_int4(
-    output_ptr,
-    input_ptr,
-    scale_ptr,
-    shift_ptr,
-    size,
-    BLOCK_SIZE: tl.constexpr,
+    output_ptr, input_ptr, scale_ptr, shift_ptr, size, BLOCK_SIZE: tl.constexpr
 ):
     w_offsets = tl.arange(0, BLOCK_SIZE // 8)
     mask = w_offsets < (size // 8)
@@ -106,12 +86,7 @@ def dequantize_kernel_int2(output_ptr, input_ptr, size, BLOCK_SIZE: tl.constexpr
 
 @triton.jit
 def dequantize_kernel_scale_shift_int2(
-    output_ptr,
-    input_ptr,
-    scale_ptr,
-    shift_ptr,
-    size,
-    BLOCK_SIZE: tl.constexpr,
+    output_ptr, input_ptr, scale_ptr, shift_ptr, size, BLOCK_SIZE: tl.constexpr
 ):
     w_offsets = tl.arange(0, BLOCK_SIZE // 8)
     mask = w_offsets < (size // 8)
@@ -143,7 +118,9 @@ def test_dequantize_int8() -> None:
             device=device,
         ).view(torch.int32)
 
-        input_int8 = torch.randint(0, 256, (size,), dtype=torch.uint8, device=device)
+        input_int8 = torch.randint(
+            0, 256, (size,), dtype=torch.uint8, device=device
+        )
         input_int32 = input_int8.view(torch.int32)
 
         input = torch.cat((scale_shift, input_int32))
@@ -197,7 +174,9 @@ def test_dequantize_int4() -> None:
         input_int8_h1 = input_int8 >> 4
         input_int8_h0 = input_int8 & 15
 
-        input_int4_val = torch.stack((input_int8_h0, input_int8_h1), dim=1).flatten()
+        input_int4_val = torch.stack(
+            (input_int8_h0, input_int8_h1), dim=1
+        ).flatten()
 
         input = torch.cat((scale_shift, input_int32))
         expected = (input_int4_val * scale + shift).to(torch.float16)
