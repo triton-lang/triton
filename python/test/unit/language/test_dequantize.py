@@ -118,7 +118,9 @@ def test_dequantize_int8() -> None:
             device=device,
         ).view(torch.int32)
 
-        input_int8 = torch.randint(0, 256, (size,), dtype=torch.uint8, device=device)
+        input_int8 = torch.randint(
+            0, 256, (size,), dtype=torch.uint8, device=device
+        )
         input_int32 = input_int8.view(torch.int32)
 
         input = torch.cat((scale_shift, input_int32))
@@ -172,7 +174,9 @@ def test_dequantize_int4() -> None:
         input_int8_h1 = input_int8 >> 4
         input_int8_h0 = input_int8 & 15
 
-        input_int4_val = torch.stack((input_int8_h0, input_int8_h1), dim=1).flatten()
+        input_int4_val = torch.stack(
+            (input_int8_h0, input_int8_h1), dim=1
+        ).flatten()
 
         input = torch.cat((scale_shift, input_int32))
         expected = (input_int4_val * scale + shift).to(torch.float16)
