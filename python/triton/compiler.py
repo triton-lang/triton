@@ -1,14 +1,9 @@
 from __future__ import division, annotations
 
-import ast
 import contextlib
-import functools
-import hashlib
 import io
 import json
-import os
 import shutil
-import subprocess
 import sys
 import sysconfig
 import tempfile
@@ -16,12 +11,9 @@ import warnings
 from sysconfig import get_paths
 
 from types import ModuleType
-from typing import Dict, Any, Tuple, Set, Union
 
 import setuptools
-import torch
 from triton._C.libtriton import triton as _triton
-from triton._C.libtriton.triton import ir
 
 from .base import *
 from .base import _to_tensor, _computation_type_impl, _cast
@@ -1178,13 +1170,95 @@ def make_so_cache_key(version_hash, signature, constants):
     return key
 
 
-def make_fn_cache_key(fn_hash, signature, configs, constants, num_warps, num_stages):
+def make_fn_cache_key(
+    *,
+    fn_hash,
+    signature,
+    configs,
+    constants,
+    num_warps: int,
+    num_stages: int,
+) -> str:
     # Get unique key for the compiled code
     get_conf_key = lambda conf: (sorted(conf.divisible_by_16), sorted(conf.equal_to_1))
     configs_key = [get_conf_key(conf) for conf in configs]
     key = f"{fn_hash}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}"
     key = hashlib.md5(key.encode("utf-8")).hexdigest()
     return key
+
+
+class CompiledKernel:
+
+    # Hooks for external tools to monitor the execution of triton kernels
+    launch_enter_hook = None
+    launch_exit_hook = None
+
+    def __init__(self, *, fn_name, so_path, cache_dir, device):
+        # initialize launcher
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("launcher", so_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self.c_wrapper = getattr(mod, "launch")
+        # initialize metadata
+        with open(os.path.join(cache_dir, f"{fn_name}.json")) as f:
+            metadata = json.load(f)
+        self.shared = metadata["shared"]
+        self.num_warps = metadata["num_warps"]
+        self.num_stages = metadata["num_stages"]
+        # initialize asm dict
+        self.asm = dict()
+        with open(os.path.join(cache_dir, f"{fn_name}.cubin"), "rb") as f:
+            self.asm["cubin"] = f.read()
+        with open(os.path.join(cache_dir, f"{fn_name}.ptx"), "r") as f:
+            self.asm["ptx"] = f.read()
+        with open(os.path.join(cache_dir, f"{fn_name}.llir"), "r") as f:
+            self.asm["llir"] = f.read()
+        with open(os.path.join(cache_dir, f"{fn_name}.ttir"), "r") as f:
+            self.asm["ttir"] = f.read()
+
+        mod, func, n_regs, n_spills = _triton.code_gen.load_binary(
+            metadata["name"], self.asm["cubin"], self.shared, device
+        )
+        self.fn_name = fn_name
+        self.cu_module = mod
+        self.cu_function = func
+        self.n_regs = n_regs
+        self.n_spills = n_spills
+
+    def __getitem__(self, grid):
+        def runner(*args, stream=None):
+            if stream is None:
+                stream = torch.cuda.current_stream().cuda_stream
+            self.c_wrapper(
+                grid[0],
+                grid[1],
+                grid[2],
+                self.num_warps,
+                self.shared,
+                stream,
+                self.cu_function,
+                CompiledKernel.launch_enter_hook,
+                CompiledKernel.launch_exit_hook,
+                self,
+                *args,
+            )
+
+        return runner
+
+    def get_sass(self, fun=None):
+        if "sass" in self.asm:
+            return self.asm["sass"]
+        fd, path = tempfile.mkstemp()
+        try:
+            with open(fd, "wb") as cubin:
+                cubin.write(self.asm["cubin"])
+            self.sass = extract(path, fun)
+        finally:
+            os.remove(path)
+        self.asm["sass"] = self.sass
+        return self.sass
 
 
 def compile(
@@ -1220,7 +1294,12 @@ def compile(
 
     # retrieve cached shared object if it exists
     fn_cache_key = make_fn_cache_key(
-        fn.cache_key, signature, configs, constants, num_warps, num_stages
+        fn_hash=fn.cache_key,
+        signature=signature,
+        configs=configs,
+        constants=constants,
+        num_warps=num_warps,
+        num_stages=num_stages,
     )
     fn_cache_manager = CacheManager(fn_cache_key)
     ptx_name = f"{name}.ptx"
@@ -1263,5 +1342,8 @@ def compile(
         return  # load_binary() requires a valid cuda context
 
     return CompiledKernel(
-        name, so_cache_manager._make_path(so_name), fn_cache_manager.cache_dir, device
+        fn_name=name,
+        so_path=so_cache_manager._make_path(so_name),
+        cache_dir=fn_cache_manager.cache_dir,
+        device=device,
     )

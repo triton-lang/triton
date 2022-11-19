@@ -3,7 +3,8 @@ from typing import Callable, TypeVar
 from .base import *
 from . import base
 
-C = TypeVar('C', bound=Callable)
+C = TypeVar("C", bound=Callable)
+
 
 @base.builtin
 def atomic_cas(pointer, cmp, val, _builder: base.ir.builder = None):
@@ -42,7 +43,6 @@ def _add_atomic_docstr(name: str) -> Callable[[C], C]:
         return func
 
     return _decorator
-
 
 
 @base.builtin

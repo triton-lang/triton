@@ -6,10 +6,8 @@ import ast
 import functools
 import hashlib
 import inspect
-import json
 import os
 import subprocess
-import tempfile
 import textwrap
 from enum import Enum
 from typing import (
@@ -41,9 +39,6 @@ try:
     from torch._C import _cuda_getCurrentRawStream as get_cuda_stream
 except ImportError:
     get_cuda_stream = lambda dev_idx: torch.cuda.current_stream(dev_idx).cuda_stream
-
-
-from .tools.disasm import extract
 
 C = TypeVar("C", bound=Callable)
 
@@ -925,80 +920,6 @@ class CacheManager:
 
 
 # utilties for generating and compiling C wrappers
-
-
-class CompiledKernel:
-
-    # Hooks for external tools to monitor the execution of triton kernels
-    launch_enter_hook = None
-    launch_exit_hook = None
-
-    def __init__(self, fn_name, so_path, cache_dir, device):
-        # initialize launcher
-        import importlib.util
-
-        spec = importlib.util.spec_from_file_location("launcher", so_path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        self.c_wrapper = getattr(mod, "launch")
-        # initialize metadata
-        with open(os.path.join(cache_dir, f"{fn_name}.json")) as f:
-            metadata = json.load(f)
-        self.shared = metadata["shared"]
-        self.num_warps = metadata["num_warps"]
-        self.num_stages = metadata["num_stages"]
-        # initialize asm dict
-        self.asm = dict()
-        with open(os.path.join(cache_dir, f"{fn_name}.cubin"), "rb") as f:
-            self.asm["cubin"] = f.read()
-        with open(os.path.join(cache_dir, f"{fn_name}.ptx"), "r") as f:
-            self.asm["ptx"] = f.read()
-        with open(os.path.join(cache_dir, f"{fn_name}.llir"), "r") as f:
-            self.asm["llir"] = f.read()
-        with open(os.path.join(cache_dir, f"{fn_name}.ttir"), "r") as f:
-            self.asm["ttir"] = f.read()
-
-        mod, func, n_regs, n_spills = _triton.code_gen.load_binary(
-            metadata["name"], self.asm["cubin"], self.shared, device
-        )
-        self.fn_name = fn_name
-        self.cu_module = mod
-        self.cu_function = func
-        self.n_regs = n_regs
-        self.n_spills = n_spills
-
-    def __getitem__(self, grid):
-        def runner(*args, stream=None):
-            if stream is None:
-                stream = torch.cuda.current_stream().cuda_stream
-            self.c_wrapper(
-                grid[0],
-                grid[1],
-                grid[2],
-                self.num_warps,
-                self.shared,
-                stream,
-                self.cu_function,
-                CompiledKernel.launch_enter_hook,
-                CompiledKernel.launch_exit_hook,
-                self,
-                *args,
-            )
-
-        return runner
-
-    def get_sass(self, fun=None):
-        if "sass" in self.asm:
-            return self.asm["sass"]
-        fd, path = tempfile.mkstemp()
-        try:
-            with open(fd, "wb") as cubin:
-                cubin.write(self.asm["cubin"])
-            self.sass = extract(path, fun)
-        finally:
-            os.remove(path)
-        self.asm["sass"] = self.sass
-        return self.sass
 
 
 class TensorWrapper:
@@ -3306,7 +3227,6 @@ def store(
 # -----------------------
 
 
-
 def dispatch(
     func,
     *,
@@ -3454,4 +3374,3 @@ def extern(fn):
     A decorator for external functions
     """
     return ExternalFunction(fn)
-
