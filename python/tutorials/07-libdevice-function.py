@@ -34,7 +34,7 @@ def asin_kernel(
     mask = offsets < n_elements
     x = tl.load(x_ptr + offsets, mask=mask)
     x = tl.libdevice.asin(x)
-    tl.store(y_ptr + offsets, value=x, mask=mask)
+    tl.store(y_ptr + offsets, x, mask=mask)
 
 # %%
 #  Using the default libdevice library path

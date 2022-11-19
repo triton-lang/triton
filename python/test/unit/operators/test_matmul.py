@@ -93,7 +93,7 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     }
     pre_hook = None if SPLIT_K == 1 else lambda nargs: nargs["C"].zero_()
     configs = [
-        triton.tuning.Config(
+        triton.Config(
             kwargs=kwargs, num_warps=NWARP, num_stages=NSTAGE, pre_hook=pre_hook
         )
     ]

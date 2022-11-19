@@ -124,7 +124,7 @@ def test_matmul(M, N, K, dtype_str):
 #######################
 
 
-@triton.jitlib
+@triton.jit
 def _add(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
@@ -133,7 +133,7 @@ def _add(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     x = tl.load(x_ptr + offsets, mask=mask)
     y = tl.load(y_ptr + offsets, mask=mask)
     output = x + y
-    tl.store(output_ptr + offsets, value=output, mask=mask)
+    tl.store(output_ptr + offsets, output, mask=mask)
 
 
 elementwise_data = {

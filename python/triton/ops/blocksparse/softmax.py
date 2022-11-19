@@ -75,7 +75,7 @@ def _blocksparse_softmax_fwd(
     # computation
     out = tl.softmax(out)
     # write-back
-    tl.store(Out + off_a + lane_n, value=out, mask=mask)
+    tl.store(Out + off_a + lane_n, out, mask=mask)
 
 
 @triton.jit
@@ -137,12 +137,12 @@ def _blocksparse_softmax_bwd(
         DR += h * stride_hr
         off_lo = (extent - m - 1) + ns
         mask_lo = (off_lo >= 0) & (off_lo < extent) & mask
-        tl.store(DR + m * extent + off_lo, value=da, mask=mask_lo)
+        tl.store(DR + m * extent + off_lo, da, mask=mask_lo)
     da = da * scale
     # convert da
     # write-back
     DAs = DA + z * stride_zdx + off_mn
-    tl.store(DAs + lane_n, value=da, mask=mask)
+    tl.store(DAs + lane_n, da, mask=mask)
 
 
 class _softmax(torch.autograd.Function):

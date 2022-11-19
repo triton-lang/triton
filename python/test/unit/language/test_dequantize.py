@@ -25,7 +25,7 @@ def dequantize_kernel_int8(
     output = tl.dequantize(input, scale, shift, 8)
     offsets = tl.arange(0, BLOCK_SIZE)
     output_ptrs = tl.multiple_of(output_ptr + offsets, 4)
-    tl.store(output_ptrs, value=output, mask=offsets < size)
+    tl.store(output_ptrs, output, mask=offsets < size)
 
 
 @triton.jit
@@ -46,7 +46,7 @@ def dequantize_kernel_scale_shift_int8(
     output = tl.dequantize(input, scale, shift, 8)
     offsets = tl.arange(0, BLOCK_SIZE)
     output_ptrs = tl.multiple_of(output_ptr + offsets, 4)
-    tl.store(output_ptrs, value=output, mask=offsets < size)
+    tl.store(output_ptrs, output, mask=offsets < size)
 
 
 @triton.jit
@@ -66,7 +66,7 @@ def dequantize_kernel_int4(
     output = tl.dequantize(input, scale, shift, 4)
     offsets = tl.arange(0, BLOCK_SIZE)
     output_ptrs = tl.multiple_of(output_ptr + offsets, 8)
-    tl.store(output_ptrs, value=output, mask=offsets < size)
+    tl.store(output_ptrs, output, mask=offsets < size)
 
 
 @triton.jit
@@ -87,7 +87,7 @@ def dequantize_kernel_scale_shift_int4(
     output = tl.dequantize(input, scale, shift, 4)
     offsets = tl.arange(0, BLOCK_SIZE)
     output_ptrs = tl.multiple_of(output_ptr + offsets, 8)
-    tl.store(output_ptrs, value=output, mask=offsets < size)
+    tl.store(output_ptrs, output, mask=offsets < size)
 
 
 @triton.jit
@@ -101,7 +101,7 @@ def dequantize_kernel_int2(output_ptr, input_ptr, size, BLOCK_SIZE: tl.constexpr
     output = tl.dequantize(input, scale, shift, 2)
     offsets = tl.arange(0, BLOCK_SIZE)
     output_ptrs = tl.multiple_of(output_ptr + offsets, 8)
-    tl.store(output_ptrs, value=output, mask=offsets < size)
+    tl.store(output_ptrs, output, mask=offsets < size)
 
 
 @triton.jit
@@ -122,7 +122,7 @@ def dequantize_kernel_scale_shift_int2(
     output = tl.dequantize(input, scale, shift, 2)
     offsets = tl.arange(0, BLOCK_SIZE)
     output_ptrs = tl.multiple_of(output_ptr + offsets, 8)
-    tl.store(output_ptrs, value=output, mask=offsets < size)
+    tl.store(output_ptrs, output, mask=offsets < size)
 
 
 def test_dequantize_int8() -> None:

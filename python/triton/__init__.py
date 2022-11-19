@@ -21,6 +21,7 @@ from .jitlib import (
     JITFunction,
     KernelInterface,
 )
+
 # .compiler depends upon base.minimum and base.where
 from .compiler import (
     CompilationError,

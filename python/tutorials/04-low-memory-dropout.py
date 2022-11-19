@@ -54,7 +54,7 @@ def _dropout(
     # The line below is the crucial part, described in the paragraph above!
     output = tl.where(x_keep, x / (1 - p), 0.0)
     # Write-back output
-    tl.store(output_ptr + offsets, value=output, mask=mask)
+    tl.store(output_ptr + offsets, output, mask=mask)
 
 
 def dropout(x, x_keep, p):
@@ -121,7 +121,7 @@ def _seeded_dropout(
     x_keep = random > p
     # write-back
     output = tl.where(x_keep, x / (1 - p), 0.0)
-    tl.store(output_ptr + offsets, value=output, mask=mask)
+    tl.store(output_ptr + offsets, output, mask=mask)
 
 
 def seeded_dropout(x, p, seed):

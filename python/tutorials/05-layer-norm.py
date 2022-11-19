@@ -49,8 +49,8 @@ def _layer_norm_fwd_fused(
     var = tl.sum(_var, axis=0) / N
     rstd = 1 / tl.sqrt(var + eps)
     # write-back mean/rstd
-    tl.store(Mean + row, value=mean)
-    tl.store(Rstd + row, value=rstd)
+    tl.store(Mean + row, mean)
+    tl.store(Rstd + row, rstd)
     # multiply by weight and add bias
     for off in range(0, N, BLOCK_SIZE):
         cols = off + tl.arange(0, BLOCK_SIZE)
@@ -61,7 +61,7 @@ def _layer_norm_fwd_fused(
         a_hat = (a - mean) * rstd
         out = a_hat * weight + bias
         # # write-back
-        tl.store(Out + cols, value=out, mask=mask)
+        tl.store(Out + cols, out, mask=mask)
 
 # Backward pass (DA + partial DW + partial DB)
 
@@ -110,7 +110,7 @@ def _layer_norm_bwd_dx_fused(
         wdout = weight * dout
         da = (wdout - (a_hat * mean1 + mean2)) * rstd
         # write-back dx
-        tl.store(DA + cols, value=da, mask=mask)
+        tl.store(DA + cols, da, mask=mask)
 
 
 # Backward pass (total DW + total DB)
@@ -143,8 +143,8 @@ def _layer_norm_bwd_dwdb(
             db += dout
     sum_dw = tl.sum(dw, axis=0)
     sum_db = tl.sum(db, axis=0)
-    tl.store(DW + cols, value=sum_dw, mask=cols < N)
-    tl.store(DB + cols, value=sum_db, mask=cols < N)
+    tl.store(DW + cols, sum_dw, mask=cols < N)
+    tl.store(DB + cols, sum_db, mask=cols < N)
 
 
 class LayerNorm(torch.autograd.Function):
@@ -153,7 +153,7 @@ class LayerNorm(torch.autograd.Function):
         # allocate output
         out = torch.empty_like(a)
         # reshape input data into 2D tensor
-        a_arg = tl.reshape(-1, a.shape[-1])
+        a_arg = a.reshape(-1, a.shape[-1])
         M, N = a_arg.shape
         mean = torch.empty((M,), dtype=torch.float32, device="cuda")
         rstd = torch.empty((M,), dtype=torch.float32, device="cuda")
@@ -198,7 +198,7 @@ class LayerNorm(torch.autograd.Function):
         da = torch.empty_like(dout)
         # enqueue kernel using forward pass heuristics
         # also compute partial sums for DW and DB
-        x_arg = tl.reshape(-1, a.shape[-1])
+        x_arg = a.reshape(-1, a.shape[-1])
         M, N = x_arg.shape
         dweight = torch.empty((weight.shape[0],), dtype=weight.dtype, device=weight.device)
         dbias = torch.empty((weight.shape[0],), dtype=weight.dtype, device=weight.device)
