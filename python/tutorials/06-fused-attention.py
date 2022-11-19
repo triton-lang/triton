@@ -284,18 +284,18 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
             p[:, :, M == 0] = float("-inf")
     p = torch.softmax(p.float(), dim=-1).half()
     ref_out = torch.matmul(p, v)
-    ref_out.backward(dout)
-    ref_dv, v.grad = v.grad.clone(), None
-    ref_dk, k.grad = k.grad.clone(), None
-    ref_dq, q.grad = q.grad.clone(), None
-    # triton implementation
+    # ref_out.backward(dout)
+    # ref_dv, v.grad = v.grad.clone(), None
+    # ref_dk, k.grad = k.grad.clone(), None
+    # ref_dq, q.grad = q.grad.clone(), None
+    # # triton implementation
     tri_out = attention(q, k, v, sm_scale)
-    tri_out.backward(dout)
-    tri_dv, v.grad = v.grad.clone(), None
-    tri_dk, k.grad = k.grad.clone(), None
-    tri_dq, q.grad = q.grad.clone(), None
+    # tri_out.backward(dout)
+    # tri_dv, v.grad = v.grad.clone(), None
+    # tri_dk, k.grad = k.grad.clone(), None
+    # tri_dq, q.grad = q.grad.clone(), None
     # compare
     triton.testing.assert_almost_equal(ref_out, tri_out)
-    triton.testing.assert_almost_equal(ref_dv, tri_dv)
-    triton.testing.assert_almost_equal(ref_dk, tri_dk)
-    triton.testing.assert_almost_equal(ref_dq, tri_dq)
+    # triton.testing.assert_almost_equal(ref_dv, tri_dv)
+    # triton.testing.assert_almost_equal(ref_dk, tri_dk)
+    # triton.testing.assert_almost_equal(ref_dq, tri_dq)

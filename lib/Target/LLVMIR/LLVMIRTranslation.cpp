@@ -151,6 +151,8 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
     return nullptr;
   }
 
+  // llvm::outs() << module << "\n";
+
   std::map<std::string, std::string> externLibs;
   SmallVector<LLVM::LLVMFuncOp> funcs;
   module.walk([&](LLVM::LLVMFuncOp func) {

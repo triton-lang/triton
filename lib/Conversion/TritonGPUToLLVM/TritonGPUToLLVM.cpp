@@ -2785,6 +2785,8 @@ public:
          dstLayout.isa<SliceEncodingAttr>())) {
       return lowerDistributedToDistributed(op, adaptor, rewriter);
     }
+    // dot_op<opIdx=0, parent=#mma> = #mma
+    // when #mma = MmaEncoding<version=2, warpsPerCTA=[..., 1]>
     if(srcLayout.isa<MmaEncodingAttr>() &&
         dstLayout.isa<DotOperandEncodingAttr>()) {
       auto srcMmaLayout = srcLayout.cast<MmaEncodingAttr>();
@@ -2792,14 +2794,27 @@ public:
       if(srcMmaLayout.getWarpsPerCTA()[1] == 1 &&
          dstDotLayout.getOpIdx() == 0 &&
          dstDotLayout.getParent() == srcMmaLayout) {
+        // get source values
         Location loc = op->getLoc();
+        auto vals = this->getElementsFromStruct(loc, adaptor.src(), rewriter);
         unsigned elems = getElemsPerThread(srcTy);
         Type elemTy =
             this->getTypeConverter()->convertType(srcTy.getElementType());
-        SmallVector<Type> types(elems, elemTy);
+        // for the destination type, we need to pack values together
+        // so they can be consumed by tensor core operations
+        unsigned vecSize = std::max<unsigned>(32 / elemTy.getIntOrFloatBitWidth(), 1);
+        Type vecTy = vec_ty(elemTy, vecSize);
+        SmallVector<Type> types(elems/vecSize, vecTy);
+        SmallVector<Value> vecVals;
+        for(unsigned i = 0; i < elems; i += vecSize) {
+          Value packed = rewriter.create<LLVM::UndefOp>(loc, vecTy);
+          for(unsigned j = 0; j < vecSize; j++)
+            packed = insert_element(vecTy, packed, vals[i+j], i32_val(j));
+          vecVals.push_back(packed);
+        }
+
         Type structTy = LLVM::LLVMStructType::getLiteral(this->getContext(), types);
-        auto vals = this->getElementsFromStruct(loc, adaptor.src(), rewriter);
-        Value view = getStructFromElements(loc, vals, rewriter, structTy);
+        Value view = getStructFromElements(loc, vecVals, rewriter, structTy);
         rewriter.replaceOp(op, view);
         return success();
       }
