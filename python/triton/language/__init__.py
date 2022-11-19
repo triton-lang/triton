@@ -81,6 +81,7 @@ from .stdlib import (
     zeros_like,
 )
 
+from . import random
 from .random import (
     pair_uniform_to_normal,
     philox,
@@ -162,6 +163,7 @@ __all__ = [
     "randint4x",
     "randn",
     "randn4x",
+    "random",
     "ravel",
     "reinterpret",
     "reshape",
