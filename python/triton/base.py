@@ -910,6 +910,11 @@ class constexpr:
             ret_ty = float
         return constexpr(ret_ty(self.value))
 
+def _constexpr_to_value(v):
+    if isinstance(v, constexpr):
+        return v.value
+    return v
+
 
 dtype_t = dtype
 
@@ -2585,7 +2590,3 @@ def _debug_barrier(builder: ir.builder) -> tensor:
     return tensor(builder.create_barrier(""), void)
 
 
-def _constexpr_to_value(v):
-    if isinstance(v, constexpr):
-        return v.value
-    return v
