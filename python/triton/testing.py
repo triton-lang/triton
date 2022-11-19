@@ -11,6 +11,7 @@ from triton import OutOfResources
 
 try:
     import triton._C.libtriton.cutlass as _cutlass
+
     has_cutlass = True
 except ImportError:
     _cutlass = None
@@ -28,13 +29,17 @@ def catch_oor(kernel, pytest_handle=None):
 
 
 def sparsify_tensor(x, mask, block):
-    ret = torch.empty((x.size(0), mask.sum(), block, block), dtype=x.dtype, device=x.device)
+    ret = torch.empty(
+        (x.size(0), mask.sum(), block, block), dtype=x.dtype, device=x.device
+    )
     for idx, (h, i, j) in enumerate(zip(*mask.nonzero(as_tuple=True))):
-        ret[:, idx, :, :] = x[:, h, i * block:(i + 1) * block, j * block:(j + 1) * block]
+        ret[:, idx, :, :] = x[
+            :, h, i * block : (i + 1) * block, j * block : (j + 1) * block
+        ]
     return ret
 
 
-def make_pair(shape, device="cuda", alpha=1e-2, beta=0., trans=False, data=None):
+def make_pair(shape, device="cuda", alpha=1e-2, beta=0.0, trans=False, data=None):
     if data is None:
         data = torch.randn(shape, dtype=torch.float32, device=device)
     ref_ret = data
@@ -58,14 +63,26 @@ def cutlass_matmul(a, b):
     # allocate output
     c = torch.empty_strided((M, N), (1, M), dtype=a.dtype, device=a.device)
     # run function
-    dtype = str(a.dtype).split('.')[-1]
-    _cutlass.matmul(a.data_ptr(), b.data_ptr(), c.data_ptr(),
-                    M, N, Ka,
-                    a.stride(0), a.stride(1),
-                    b.stride(0), b.stride(1),
-                    c.stride(0), c.stride(1),
-                    dtype, dtype, dtype,
-                    a.device.index, torch.cuda.current_stream(a.device).cuda_stream)
+    dtype = str(a.dtype).split(".")[-1]
+    _cutlass.matmul(
+        a.data_ptr(),
+        b.data_ptr(),
+        c.data_ptr(),
+        M,
+        N,
+        Ka,
+        a.stride(0),
+        a.stride(1),
+        b.stride(0),
+        b.stride(1),
+        c.stride(0),
+        c.stride(1),
+        dtype,
+        dtype,
+        dtype,
+        a.device.index,
+        torch.cuda.current_stream(a.device).cuda_stream,
+    )
 
     return c
 
@@ -73,12 +90,13 @@ def cutlass_matmul(a, b):
 def mask_tensor(x, mask, block, value=0):
     ret = x.clone()
     for h, i, j in zip(*(mask == 0).nonzero(as_tuple=True)):
-        ret[:, h, i * block:(i + 1) * block, j * block:(j + 1) * block] = value
+        ret[:, h, i * block : (i + 1) * block, j * block : (j + 1) * block] = value
     return ret
 
 
-def assert_almost_equal(x, y, decimal=2, err_msg=''):
+def assert_almost_equal(x, y, decimal=2, err_msg=""):
     import numpy.testing as npt
+
     if isinstance(x, torch.Tensor):
         if x.dtype == torch.bfloat16:
             x = x.float()
@@ -92,9 +110,9 @@ def assert_almost_equal(x, y, decimal=2, err_msg=''):
 
 def allclose(x, y, tol=1e-2):
     if x.dtype != y.dtype:
-        raise RuntimeError(f'{x.dtype} did not match with {x.dtype}')
+        raise RuntimeError(f"{x.dtype} did not match with {x.dtype}")
     if x.shape != y.shape:
-        raise RuntimeError(f'{x.shape} did not match with {y.shape}')
+        raise RuntimeError(f"{x.shape} did not match with {y.shape}")
     if x.dtype == torch.bool:
         return torch.sum(x ^ y) == 0
     if x.dtype in [torch.int8, torch.int16, torch.int32, torch.int64]:
@@ -107,17 +125,29 @@ def allclose(x, y, tol=1e-2):
 
 
 def nvsmi(attrs):
-    attrs = ','.join(attrs)
-    cmd = ['nvidia-smi', '-i', '0', '--query-gpu=' + attrs, '--format=csv,noheader,nounits']
+    attrs = ",".join(attrs)
+    cmd = [
+        "nvidia-smi",
+        "-i",
+        "0",
+        "--query-gpu=" + attrs,
+        "--format=csv,noheader,nounits",
+    ]
     out = subprocess.check_output(cmd)
-    ret = out.decode(sys.stdout.encoding).split(',')
+    ret = out.decode(sys.stdout.encoding).split(",")
     ret = [int(x) for x in ret]
     return ret
 
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
-             percentiles=(0.5, 0.2, 0.8),
-             record_clocks=False, fast_flush=False):
+def do_bench(
+    fn,
+    warmup=25,
+    rep=100,
+    grad_to_none=None,
+    percentiles=(0.5, 0.2, 0.8),
+    record_clocks=False,
+    fast_flush=False,
+):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -156,9 +186,9 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
     start_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
     end_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
     if fast_flush:
-        cache = torch.empty(int(256e6 // 4), dtype=torch.int, device='cuda')
+        cache = torch.empty(int(256e6 // 4), dtype=torch.int, device="cuda")
     else:
-        cache = torch.empty(int(256e6), dtype=torch.int8, device='cuda')
+        cache = torch.empty(int(256e6), dtype=torch.int8, device="cuda")
     # Warm-up
     for _ in range(n_warmup):
         fn()
@@ -200,8 +230,8 @@ class Benchmark:
         line_names,
         plot_name,
         args,
-        xlabel='',
-        ylabel='',
+        xlabel="",
+        ylabel="",
         x_log=False,
         y_log=False,
         color=None,
@@ -258,9 +288,10 @@ class Mark:
 
         import matplotlib.pyplot as plt
         import pandas as pd
+
         y_mean = bench.line_names
-        y_min = [f'{x}-min' for x in bench.line_names]
-        y_max = [f'{x}-max' for x in bench.line_names]
+        y_min = [f"{x}-min" for x in bench.line_names]
+        y_max = [f"{x}-max" for x in bench.line_names]
         df = pd.DataFrame(columns=[bench.x_names[0]] + y_mean + y_min + y_max)
         for x in bench.x_vals:
             x_args = {x_name: x for x_name in bench.x_names}
@@ -280,7 +311,7 @@ class Mark:
             ax = plt.subplot()
             x = bench.x_names[0]
             for i, y in enumerate(bench.line_names):
-                y_min, y_max = df[y + '-min'], df[y + '-max']
+                y_min, y_max = df[y + "-min"], df[y + "-max"]
                 col = bench.styles[i][0] if bench.styles else None
                 sty = bench.styles[i][1] if bench.styles else None
                 ax.plot(df[x], df[y], label=y, color=col, ls=sty)
@@ -299,12 +330,16 @@ class Mark:
                 plt.savefig(os.path.join(save_path, f"{bench.plot_name}.png"))
         df = df[[bench.x_names[0]] + bench.line_names]
         if print_data:
-            print(bench.plot_name + ':')
+            print(bench.plot_name + ":")
             print(df)
         if save_path:
-            df.to_csv(os.path.join(save_path, f"{bench.plot_name}.csv"), float_format='%.1f', index=False)
+            df.to_csv(
+                os.path.join(save_path, f"{bench.plot_name}.csv"),
+                float_format="%.1f",
+                index=False,
+            )
 
-    def run(self, show_plots=False, print_data=False, save_path=''):
+    def run(self, show_plots=False, print_data=False, save_path=""):
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
         if save_path:
@@ -313,7 +348,7 @@ class Mark:
         for bench in benchmarks:
             self._run(bench, save_path, show_plots, print_data)
             if save_path:
-                html.write(f"<image src=\"{bench.plot_name}.png\"/>\n")
+                html.write(f'<image src="{bench.plot_name}.png"/>\n')
         if save_path:
             html.write("</body></html>\n")
 
@@ -330,7 +365,7 @@ def perf_report(benchmarks):
 
 
 def get_dram_gbps(backend=None, device=None):
-    ''' return DRAM bandwidth in GB/s '''
+    """return DRAM bandwidth in GB/s"""
     # assert backend == CUDA
     if not backend:
         backend = _triton.runtime.backend.CUDA
@@ -342,7 +377,9 @@ def get_dram_gbps(backend=None, device=None):
     return bw_gbps
 
 
-def get_max_tensorcore_tflops(dtype: torch.dtype, backend=None, device=None, clock_rate=None):
+def get_max_tensorcore_tflops(
+    dtype: torch.dtype, backend=None, device=None, clock_rate=None
+):
     if not backend:
         backend = _triton.runtime.backend.CUDA
     if not device:
@@ -366,6 +403,7 @@ def get_max_tensorcore_tflops(dtype: torch.dtype, backend=None, device=None, clo
     tflops = num_subcores * clock_rate * ops_per_sub_core * 1e-9
     return tflops
 
+
 # create decorator that wraps test function into
 # a cuda-memcheck system call
 
@@ -375,21 +413,35 @@ def cuda_memcheck(**target_kwargs):
         @functools.wraps(test_fn)
         def wrapper(*args, **kwargs):
             import psutil
+
             ppid_name = psutil.Process(os.getppid()).name()
             run_cuda_memcheck = target_kwargs.items() <= kwargs.items()
             if run_cuda_memcheck and ppid_name != "cuda-memcheck":
                 path = os.path.realpath(test_fn.__globals__["__file__"])
                 # get path of current file
-                env = {"PATH": os.environ["PATH"], "PYTORCH_NO_CUDA_MEMORY_CACHING": "1"}
-                assert 'request' in kwargs, "memcheck'ed test must have a (possibly unused) `request` fixture"
-                test_id = kwargs['request'].node.callspec.id
+                env = {
+                    "PATH": os.environ["PATH"],
+                    "PYTORCH_NO_CUDA_MEMORY_CACHING": "1",
+                }
+                assert (
+                    "request" in kwargs
+                ), "memcheck'ed test must have a (possibly unused) `request` fixture"
+                test_id = kwargs["request"].node.callspec.id
                 cmd = f"{path}::{test_fn.__name__}[{test_id}]"
-                out = subprocess.run(["cuda-memcheck", "pytest", "-vs", cmd], capture_output=True, env=env)
-                assert out.returncode == 0, "cuda-memcheck returned an error: bounds checking failed"
+                out = subprocess.run(
+                    ["cuda-memcheck", "pytest", "-vs", cmd],
+                    capture_output=True,
+                    env=env,
+                )
+                assert (
+                    out.returncode == 0
+                ), "cuda-memcheck returned an error: bounds checking failed"
                 assert "ERROR SUMMARY: 0 errors" in str(out.stdout)
             else:
                 test_fn(*args, **kwargs)
+
         return wrapper
+
     return decorator
 
 
@@ -430,8 +482,12 @@ def set_gpu_clock(ref_sm_clock=1350, ref_mem_clock=1215):
         )
         cur_sm_clock = nvsmi_attr(["clocks.current.sm"])[0]
         cur_mem_clock = nvsmi_attr(["clocks.current.memory"])[0]
-        assert abs(cur_sm_clock - ref_sm_clock) < 10, f"GPU SMs must run at {ref_sm_clock} MHz"
-        assert abs(cur_mem_clock - ref_mem_clock) < 10, f"GPU SMs must run at {ref_mem_clock} MHz"
+        assert (
+            abs(cur_sm_clock - ref_sm_clock) < 10
+        ), f"GPU SMs must run at {ref_sm_clock} MHz"
+        assert (
+            abs(cur_mem_clock - ref_mem_clock) < 10
+        ), f"GPU SMs must run at {ref_mem_clock} MHz"
         tflops = 1e-6 * 2 * 108 * 4 * 256 * ref_sm_clock
         gbps = 640 * 2 * ref_mem_clock * 1e-3
         yield tflops, gbps

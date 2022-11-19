@@ -34,7 +34,7 @@ import torch
 import triton
 tl = triton
 
-import triton.unroll
+import triton.base
 
 
 @triton.jit

@@ -8,6 +8,7 @@ import pytest
 import torch
 
 import triton
+import triton.compiler
 import triton.language as tl
 from triton.runtime.jit import JITFunction
 
@@ -189,7 +190,7 @@ def test_compile_in_subproc() -> None:
         ())
 
     proc = multiprocessing.Process(
-        target=triton.compile,
+        target=triton.compiler.compile,
         kwargs=dict(
             fn=kernel_sub,
             signature={0: "*fp32", 1: "*fp32", 2: "*fp32"},
