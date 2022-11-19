@@ -14,7 +14,12 @@ import triton.language as tl
 
 class PhiloxConfig:
     def __init__(
-        self, PHILOX_ROUND_A, PHILOX_ROUND_B, PHILOX_KEY_A, PHILOX_KEY_B, DTYPE
+        self,
+        PHILOX_ROUND_A,
+        PHILOX_ROUND_B,
+        PHILOX_KEY_A,
+        PHILOX_KEY_B,
+        DTYPE,
     ):
         self.PHILOX_ROUND_A = np.array(PHILOX_ROUND_A, dtype=DTYPE)
         self.PHILOX_ROUND_B = np.array(PHILOX_ROUND_B, dtype=DTYPE)
