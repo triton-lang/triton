@@ -345,67 +345,76 @@ class constexpr:
         return f"constexpr[{self.value}]"
 
     def __add__(self, other):
-        return self.value + other.value
+        return constexpr(self.value + other.value)
 
     def __radd__(self, other):
-        return other.value + self.value
+        return constexpr(other.value + self.value)
 
     def __sub__(self, other):
-        return self.value - other.value
+        return constexpr(self.value - other.value)
 
     def __rsub__(self, other):
-        return other.value - self.value
+        return constexpr(other.value - self.value)
 
     def __mul__(self, other):
-        return self.value * other.value
+        return constexpr(self.value * other.value)
 
     def __rmul__(self, other):
-        return other.value * self.value
+        return constexpr(other.value * self.value)
 
     def __truediv__(self, other):
-        return self.value / other.value
+        return constexpr(self.value / other.value)
 
     def __rtruediv__(self, other):
-        return other.value / self.value
+        return constexpr(other.value / self.value)
 
     def __floordiv__(self, other):
-        return self.value // other.value
+        return constexpr(self.value // other.value)
 
     def __rfloordiv__(self, other):
-        return other.value // self.value
+        return constexpr(other.value // self.value)
 
     def __gt__(self, other):
-        return self.value > other.value
+        return constexpr(self.value > other.value)
 
     def __rgt__(self, other):
-        return other.value > self.value
+        return constexpr(other.value > self.value)
 
     def __ge__(self, other):
-        return self.value >= other.value
+        return constexpr(self.value >= other.value)
 
     def __rge__(self, other):
-        return other.value >= self.value
+        return constexpr(other.value >= self.value)
 
     def __lt__(self, other):
-        return self.value < other.value
+        return constexpr(self.value < other.value)
 
     def __rlt__(self, other):
-        return other.value < self.value
+        return constexpr(other.value < self.value)
 
     def __le__(self, other):
-        return self.value <= other.value
+        return constexpr(self.value <= other.value)
 
     def __rle__(self, other):
-        return other.value <= self.value
+        return constexpr(other.value <= self.value)
 
     def __eq__(self, other):
-        return self.value == other.value
+        return constexpr(self.value == other.value)
 
     def __ne__(self, other):
-        return self.value != other.value
+        return constexpr(self.value != other.value)
 
     def __bool__(self):
-        return bool(self.value)
+        return constexpr(bool(self.value))
+
+    def __neg__(self):
+        return constexpr(-self.value)
+    
+    def __pos__(self):
+        return constexpr(+self.value)
+    
+    def __invert__(self):
+        return constexpr(~self.value)
 
     def __call__(self, *args, **kwds):
         return self.value(*args, **kwds)
