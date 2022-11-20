@@ -1453,9 +1453,10 @@ struct BroadcastOpConversion
     SmallVector<int64_t> resultLogicalShape(2 * rank);
     SmallVector<unsigned> broadcastDims;
     for (unsigned d = 0; d < rank; ++d) {
-      unsigned resultShapePerCTA = triton::gpu::getSizePerThread(resultLayout)[d] *
-                                   triton::gpu::getThreadsPerWarp(resultLayout)[d] *
-                                   triton::gpu::getWarpsPerCTA(resultLayout)[d];
+      unsigned resultShapePerCTA =
+          triton::gpu::getSizePerThread(resultLayout)[d] *
+          triton::gpu::getThreadsPerWarp(resultLayout)[d] *
+          triton::gpu::getWarpsPerCTA(resultLayout)[d];
       int64_t numCtas = ceil<unsigned>(resultShape[d], resultShapePerCTA);
       if (srcShape[d] != resultShape[d]) {
         assert(srcShape[d] == 1);
@@ -1465,10 +1466,12 @@ struct BroadcastOpConversion
             std::max<unsigned>(1, triton::gpu::getSizePerThread(srcLayout)[d]);
       } else {
         srcLogicalShape[d] = numCtas;
-        srcLogicalShape[d + rank] = triton::gpu::getSizePerThread(resultLayout)[d];
+        srcLogicalShape[d + rank] =
+            triton::gpu::getSizePerThread(resultLayout)[d];
       }
       resultLogicalShape[d] = numCtas;
-      resultLogicalShape[d + rank] = triton::gpu::getSizePerThread(resultLayout)[d];
+      resultLogicalShape[d + rank] =
+          triton::gpu::getSizePerThread(resultLayout)[d];
 
       srcLogicalOrder[d] = order[d] + rank;
       srcLogicalOrder[d + rank] = order[d];
@@ -1983,6 +1986,7 @@ struct PrintfOpConversion
       return "%u";
     }
     assert(false && "not supported type");
+    return "";
   }
 
   // declare vprintf(i8*, i8*) as external function
@@ -5483,6 +5487,7 @@ Value convertSplatLikeOpWithMmaLayout(const MmaEncodingAttr &layout,
   }
 
   assert(false && "Unsupported mma layout found");
+  return {};
 }
 
 class TritonGPUToLLVMTypeConverter : public LLVMTypeConverter {
