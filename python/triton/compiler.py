@@ -857,6 +857,7 @@ def build_triton_ir(fn, signature, specialization, constants):
     ret.context = context
     return ret, generator
 
+
 def optimize_triton_ir(mod):
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
@@ -868,9 +869,11 @@ def optimize_triton_ir(mod):
     pm.run(mod)
     return mod
 
+
 def ast_to_ttir(fn, signature, specialization, constants):
     mod, _ = build_triton_ir(fn, signature, specialization, constants)
     return optimize_triton_ir(mod)
+
 
 def ttir_to_ttgir(mod, num_warps, num_stages):
     pm = _triton.ir.pass_manager(mod.context)
@@ -880,6 +883,9 @@ def ttir_to_ttgir(mod, num_warps, num_stages):
     # can get shared memory swizzled correctly.
     pm.add_triton_gpu_combine_pass()
     pm.add_tritongpu_pipeline_pass(num_stages)
+    # Prefetch must be done after pipeline pass because pipeline pass
+    # extracts slices from the original tensor.
+    pm.add_tritongpu_prefetch_pass()
     pm.add_canonicalizer_pass()
     pm.add_cse_pass()
     pm.add_coalesce_pass()
@@ -920,7 +926,6 @@ def llir_to_ptx(mod: Any, compute_capability: int = None, ptx_version: int = Non
         _, cuda_version = path_to_ptxas()
         ptx_version = ptx_get_version(cuda_version)
     return _triton.translate_llvmir_to_ptx(mod, compute_capability, ptx_version)
-
 
 
 def ptx_to_cubin(ptx: str, device: int):
@@ -990,8 +995,6 @@ def path_to_ptxas():
 
 
 instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1"], defaults=[set(), set()])
-
-
 
 
 # ------------------------------------------------------------------------------
