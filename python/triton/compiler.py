@@ -1319,7 +1319,7 @@ def make_stub(name, signature, constants):
 
 
 def convert_type_repr(x):
-    match = re.search('!tt\.ptr<(.*)>', x)
+    match = re.search(r'!tt\.ptr<(.*)>', x)
     if match is not None:
       return '*' + convert_type_repr(match.group(1))
     return x
@@ -1490,6 +1490,7 @@ class CudaUtils(object):
         #include <cuda.h>
 
         #include \"cuda.h\"
+        #define PY_SSIZE_T_CLEAN 
         #include <Python.h>
 
         static inline void gpuAssert(CUresult code, const char *file, int line)

@@ -2,6 +2,7 @@
 #define TRITON_TARGET_LLVMIRTRANSLATION_H
 #include "llvm/ADT/StringRef.h"
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace llvm {

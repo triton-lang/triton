@@ -672,7 +672,7 @@ def test_tuples():
 #     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=1e-4)
 
 def test_tensor_atomic_rmw_add_elementwise(device="cuda"):
-    shape0, shape1 = 16, 16
+    shape0, shape1 = 2, 8
     @triton.jit
     def kernel(Z, X, SHAPE0: tl.constexpr, SHAPE1: tl.constexpr):
         off0 = tl.arange(0, SHAPE0)
