@@ -27,6 +27,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/IR/BlockAndValueMapping.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 
@@ -60,7 +61,7 @@ class Prefetcher {
 
   LogicalResult isForOpOperand(Value v);
 
-  Value generatePrefetch(Value v, unsigned opIdx, bool isPrefetch,
+  Value generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
                          Attribute dotEncoding, OpBuilder &builder,
                          llvm::Optional<int64_t> offsetK = llvm::None,
                          llvm::Optional<int64_t> shapeK = llvm::None);
@@ -79,7 +80,7 @@ public:
   scf::ForOp createNewForOp();
 };
 
-Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrefetch,
+Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
                                    Attribute dotEncoding, OpBuilder &builder,
                                    llvm::Optional<int64_t> offsetK,
                                    llvm::Optional<int64_t> shapeK) {
@@ -94,8 +95,8 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrefetch,
   // k => (prefetchWidth, k - prefetchWidth)
   int64_t kIdx = opIdx == 0 ? 1 : 0;
 
-  offset[kIdx] = isPrefetch ? 0 : prefetchWidth;
-  shape[kIdx] = isPrefetch ? prefetchWidth : (shape[kIdx] - prefetchWidth);
+  offset[kIdx] = isPrologue ? 0 : prefetchWidth;
+  shape[kIdx] = isPrologue ? prefetchWidth : (shape[kIdx] - prefetchWidth);
 
   if (shapeK)
     shape[kIdx] = *shapeK;
@@ -132,9 +133,9 @@ LogicalResult Prefetcher::initialize() {
 
   // returns source of cvt
   auto getPrefetchSrc = [](Value v) -> Value {
-    // TODO: Check if the layout of src is SharedEncodingAttr
     if (auto cvt = v.getDefiningOp<triton::gpu::ConvertLayoutOp>())
-      return cvt.src();
+      if (isSharedEncoding(cvt.getOperand()))
+        return cvt.src();
     return Value();
   };
 
@@ -152,6 +153,10 @@ LogicalResult Prefetcher::initialize() {
   };
 
   for (triton::DotOp dot : dotsInFor) {
+    auto kSize = dot.a().getType().cast<RankedTensorType>().getShape()[1];
+    // Skip prefetching if kSize is less than prefetchWidth
+    if (kSize < prefetchWidth)
+      continue;
     Value aSmem = getPrefetchSrc(dot.a());
     Value bSmem = getPrefetchSrc(dot.b());
     if (aSmem && bSmem) {
@@ -217,7 +222,7 @@ scf::ForOp Prefetcher::createNewForOp() {
     mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
 
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    Operation *newOp = nullptr;
+    Operation *newOp = builder.clone(op, mapping);
     auto dot = dyn_cast<triton::DotOp>(&op);
     if (dots.contains(dot)) {
       Attribute dotEncoding =
@@ -252,8 +257,6 @@ scf::ForOp Prefetcher::createNewForOp() {
         kOff += kShape;
         kRem -= kShape;
       }
-    } else {
-      newOp = builder.clone(op, mapping);
     }
     // update mapping of results
     for (unsigned dstIdx : llvm::seq(unsigned(0), op.getNumResults()))
