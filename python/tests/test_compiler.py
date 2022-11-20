@@ -16,7 +16,7 @@ def test_empty_kernel_cubin_compile():
 
     device = torch.cuda.current_device()
     kernel = triton.compile(empty_kernel,
-                            "*fp32,i32,i32",
+                            signature="*fp32,i32,i32",
                             device=device,
                             constants={"BLOCK": 256})
 
