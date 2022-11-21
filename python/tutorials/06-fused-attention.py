@@ -32,7 +32,7 @@ def _fwd_kernel(
     offs_n = tl.arange(0, BLOCK_N)
     offs_d = tl.arange(0, BLOCK_DMODEL)
     off_q = off_hz * stride_qh + offs_m[:, None] * stride_qm + offs_d[None, :] * stride_qk
-    off_k = off_hz * stride_qh + offs_n[:, None] * stride_kn + offs_d[None, :] * stride_kk
+    off_k = off_hz * stride_qh + offs_n[None, :] * stride_kn + offs_d[:, None] * stride_kk
     off_v = off_hz * stride_qh + offs_n[:, None] * stride_qm + offs_d[None, :] * stride_qk
     # Initialize pointers to Q, K, V
     q_ptrs = Q + off_q
@@ -50,7 +50,7 @@ def _fwd_kernel(
         # -- compute qk ----
         k = tl.load(k_ptrs + start_n * stride_kn)
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
-        qk += tl.dot(q, k, trans_b=True)
+        qk += tl.dot(q, k)
         qk *= sm_scale
         qk += tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), 0, float("-inf"))
         # -- compute m_ij, p, l_ij
@@ -205,7 +205,7 @@ class _attention(torch.autograd.Function):
         assert Lq == Lk and Lk == Lv
         assert Lk in {16, 32, 64, 128}
         o = torch.empty_like(q)
-        grid = (triton.cdiv(q.shape[2], BLOCK), q.shape[0] * q.shape[1])
+        grid = (triton.cdiv(q.shape[2], BLOCK), q.shape[0] * q.shape[1], 1)
         tmp = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         L = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         m = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
@@ -224,6 +224,17 @@ class _attention(torch.autograd.Function):
             BLOCK_DMODEL=Lk, num_warps=num_warps,
             num_stages=1,
         )
+        # _fwd_kernel = triton.compile("./flash-attention.ttgir")
+        # _fwd_kernel[grid](
+        #     q.data_ptr(), k.data_ptr(), v.data_ptr(), sm_scale,
+        #     tmp.data_ptr(), L.data_ptr(), m.data_ptr(),
+        #     o.data_ptr(),
+        #     q.stride(0), q.stride(1), q.stride(2),
+        #     k.stride(0), k.stride(1), k.stride(2),
+        #     v.stride(0), v.stride(1), v.stride(2),
+        #     o.stride(0), o.stride(1), o.stride(2),
+        #     q.shape[0], q.shape[1], q.shape[2])
+
         ctx.save_for_backward(q, k, v, o, L, m)
         ctx.BLOCK = BLOCK
         ctx.grid = grid

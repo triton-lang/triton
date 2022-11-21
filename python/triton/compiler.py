@@ -594,11 +594,8 @@ class CodeGenerator(ast.NodeVisitor):
         ub = self.builder.create_to_index(ub)
         step = self.builder.create_to_index(step)
         # Create placeholder for the loop induction variable
-        # We can use any value because the variable isn't a constexpr
-        # but use a distinctive value (of the right type) to ease debugging
-        st_target = ast.Name(id=node.target.id, ctx=ast.Store())
-        init_node = ast.Assign(targets=[st_target], value=ast.Num(value=0xBADF00D))
-        self.visit(init_node)
+        iv = self.builder.create_undef(self.builder.get_int32_ty())
+        self.set_value(node.target.id, triton.language.core.tensor(iv, triton.language.core.int32))
 
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
@@ -1015,6 +1012,7 @@ def ty_to_cpp(ty):
         "u32": "uint32_t",
         "u64": "uint64_t",
         "fp32": "float",
+        "f32": "float",
     }[ty]
 
 
@@ -1045,6 +1043,7 @@ def generate_launcher(constants, signature):
             'u32': 'uint32_t',
             'u64': 'uint64_t',
             'fp32': 'float',
+            'f32': 'float',
             'fp64': 'double',
         }[ty]
 
