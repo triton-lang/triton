@@ -1,8 +1,7 @@
 import os
 
 import triton
-from triton import base
-from triton import dispatch
+from triton.impl import base, dispatch
 
 LIBDEVICE_PATH = os.path.dirname(os.path.abspath(__file__)) + "/libdevice.10.bc"
 

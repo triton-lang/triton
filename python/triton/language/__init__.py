@@ -1,18 +1,34 @@
-from ..core import minimum, where
-from . import libdevice, random
-from .random import (
-    pair_uniform_to_normal,
-    philox,
-    philox_impl,
-    rand,
-    rand4x,
-    randint,
-    randint4x,
-    randn,
-    randn4x,
-    triton,
-    uint32_to_uniform_float,
+"""isort:skip_file"""
+# Import order is significant here.
+
+from ..impl.base import (
+    TensorWrapper,
+    bfloat16,
+    block_type,
+    constexpr,
+    dtype,
+    float8,
+    float16,
+    float32,
+    float64,
+    int1,
+    int8,
+    int16,
+    int32,
+    int64,
+    is_triton_tensor,
+    pi32_t,
+    pointer_type,
+    reinterpret,
+    tensor,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+    void,
 )
+from ..impl.core import minimum, where
+
 from .stdlib import (
     abs,
     annotations,
@@ -33,7 +49,6 @@ from .stdlib import (
     cat,
     cdiv,
     clock,
-    constexpr,
     cos,
     debug_barrier,
     dequantize,
@@ -65,32 +80,23 @@ from .stdlib import (
     zeros,
     zeros_like,
 )
-from triton.base import (
-    TensorWrapper,
-    bfloat16,
-    block_type,
-    constexpr,
-    dtype,
-    float8,
-    float16,
-    float32,
-    float64,
-    int1,
-    int8,
-    int16,
-    int32,
-    int64,
-    is_triton_tensor,
-    pi32_t,
-    pointer_type,
-    reinterpret,
-    tensor,
-    uint8,
-    uint16,
-    uint32,
-    uint64,
-    void,
+
+from . import random
+from .random import (
+    pair_uniform_to_normal,
+    philox,
+    philox_impl,
+    rand,
+    rand4x,
+    randint,
+    randint4x,
+    randn,
+    randn4x,
+    triton,
+    uint32_to_uniform_float,
 )
+
+from . import libdevice
 
 __all__ = [
     "abs",

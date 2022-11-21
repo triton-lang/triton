@@ -2,18 +2,17 @@ from __future__ import division, annotations
 
 from typing import TypeVar, Callable
 
-from triton import ir
-from triton import base
-from triton import jitlib
+import triton
+from ..impl.core import where, minimum
+from ..impl import base, ir
+from ..impl.base import constexpr
 
-from triton.base import constexpr
-from triton.core import where, minimum
 
 CallableT = TypeVar("CallableT", bound=Callable)
 
 
 @base.builtin
-def program_id(axis, _builder: ir.builder = None):
+def program_id(axis, _builder: triton.ir.builder = None):
     """
     Returns the id of the current program instance along the given :code:`axis`.
 
@@ -524,12 +523,12 @@ def max_contiguous(input, values, _builder: ir.builder = None):
 # -----------------------
 
 
-@jitlib.jit
+@triton.jit
 def abs(x):
     return where(x >= 0, x, -x)
 
 
-@jitlib.jit
+@triton.jit
 def cdiv(x, div):
     """
     Computes the ceiling division of :code:`x` by :code:`div`
@@ -542,7 +541,7 @@ def cdiv(x, div):
     return (x + div - 1) // div
 
 
-@jitlib.jit
+@triton.jit
 def maximum(x, y):
     """
     Computes the element-wise maximum of :code:`x` and :code:`y`.
@@ -558,13 +557,13 @@ def maximum(x, y):
 # minimum is in trition.core
 
 
-@jitlib.jit
+@triton.jit
 @_add_math_1arg_docstr("sigmoid")
 def sigmoid(x):
     return 1 / (1 + exp(-x))
 
 
-@jitlib.jit
+@triton.jit
 @_add_math_1arg_docstr("softmax")
 def softmax(x, ieee_rounding: constexpr = False):
     z = x - max(x, 0)
@@ -573,7 +572,7 @@ def softmax(x, ieee_rounding: constexpr = False):
     return fdiv(num, den, ieee_rounding)
 
 
-@jitlib.jit
+@triton.jit
 def ravel(x):
     """
     Returns a contiguous flattened view of :code:`x`
@@ -584,7 +583,7 @@ def ravel(x):
     return reshape(x, [x.numel])
 
 
-@jitlib.jit
+@triton.jit
 def swizzle2d(i, j, size_i, size_j, size_g):
     """
     transformes indices of a row-major size_i*size_j matrix into those
@@ -617,6 +616,6 @@ def swizzle2d(i, j, size_i, size_j, size_g):
     return new_i, new_j
 
 
-@jitlib.jit
+@triton.jit
 def zeros_like(input):
     return zeros(input.shape, input.dtype)

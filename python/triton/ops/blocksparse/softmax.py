@@ -1,7 +1,6 @@
 import torch
 
 import triton
-import triton.core
 import triton.language as tl
 
 

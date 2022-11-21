@@ -22,7 +22,8 @@ import setuptools
 import torch
 from filelock import FileLock
 
-from . import base, core, ir, jitlib, utils
+from .. import utils
+from . import base, core, ir, jitlib
 from triton._C.libtriton import triton as _triton
 
 

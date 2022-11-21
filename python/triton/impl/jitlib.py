@@ -6,7 +6,6 @@ import inspect
 import textwrap
 from collections import defaultdict, namedtuple
 from typing import (
-    TypeVar,
     Callable,
     Set,
     Any,
@@ -21,9 +20,8 @@ from typing import (
 import torch
 
 import triton
-from . import utils
+from ..utils import version_key
 from . import base
-from .utils import version_key
 
 try:
     from torch._C import _cuda_getCurrentRawStream as get_cuda_stream

@@ -2,9 +2,9 @@ from __future__ import division, annotations
 
 from typing import Optional, Sequence, List, Union, Any
 
-from triton._C.libtriton.triton import ir
+from . import ir
 
-from triton.base import (
+from .base import (
     _to_tensor,
     _binary_op_type_checking_impl,
     tensor,

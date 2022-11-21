@@ -1,7 +1,6 @@
 from __future__ import annotations, division
 
 import functools
-from dataclasses import dataclass
 from enum import Enum
 from typing import (
     Any,
@@ -16,7 +15,7 @@ from typing import cast as typecast
 
 import torch
 
-from triton import ir
+from . import ir
 
 
 C = TypeVar("C", bound=Callable)

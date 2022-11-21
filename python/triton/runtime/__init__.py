@@ -1,13 +1,14 @@
-from ..autotuner import Config, Heuristics, autotune, heuristics
-from ..jitlib import JITFunction, KernelInterface, jit
-from ..utils import version_key
+from triton.impl.autotuner import Config, Heuristics, autotune, heuristics
+from triton.impl.jitlib import JITFunction, KernelInterface
+from triton.utils import version_key
+
+from . import jit
 
 __all__ = [
     "autotune",
     "Config",
     "heuristics",
     "Heuristics",
-    "jit",
     "JITFunction",
     "KernelInterface",
     "version_key",

@@ -3,8 +3,8 @@ from __future__ import division, annotations
 import time
 from typing import List, Dict, Tuple, Any, Callable, Optional
 
-from triton import KernelInterface
-from triton.base import tensor
+from .jitlib import KernelInterface
+from .base import tensor
 
 
 class Autotuner(KernelInterface):

@@ -7,7 +7,7 @@ import subprocess
 
 import torch
 
-import triton
+from . import __version__
 
 
 @functools.lru_cache()
@@ -18,7 +18,7 @@ def version_key() -> str:
     :return: a version key string, cached.
     """
     # find the triton install location.
-    package_dir = os.path.dirname(triton.__file__)
+    package_dir = os.path.dirname(__file__)
 
     # find all python code.
     code_paths = []
@@ -48,7 +48,7 @@ def version_key() -> str:
     except Exception:
         ptxas_version = "noptxas"
 
-    return f'{"-".join(triton.__version__.split("."))}-{ptxas_version}-{code_hash}'
+    return f'{"-".join(__version__.split("."))}-{ptxas_version}-{code_hash}'
 
 
 def cdiv(x: int, y: int) -> int:

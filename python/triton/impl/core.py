@@ -1,8 +1,8 @@
 from __future__ import division, annotations
 
-from triton._C.libtriton.triton import ir
+from . import ir
 
-from triton import base, jitlib
+from . import base, jitlib
 
 
 @base.builtin
