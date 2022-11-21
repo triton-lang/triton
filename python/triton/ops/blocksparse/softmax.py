@@ -4,7 +4,7 @@ import triton
 import triton.language as tl
 
 
-def num_warps(n):
+def num_warps(n: int) -> int:
     if n <= 128:
         return 1
     if n <= 256:
@@ -186,16 +186,16 @@ class _softmax(torch.autograd.Function):
         # enqueue kernel
         out = torch.empty_like(a)
         _blocksparse_softmax_fwd[grid](
-            out,
-            a,
-            lut,
-            rel_logits,
-            a.stride(0),
-            rel_shape[-1],
-            rel_strides[0],
-            rel_strides[1],  # relative attn
-            scale,
-            is_causal,
+            Out=out,
+            A=a,
+            LUT=lut,
+            R=rel_logits,
+            stride_xz=a.stride(0),
+            extent=rel_shape[-1],
+            stride_zr=rel_strides[0],
+            stride_hr=rel_strides[1],  # relative attn
+            scale=scale,
+            is_causal=is_causal,
             BLOCK_SIZE=block,
             ROW_SIZE=triton.next_power_of_2(maxlut),
             IS_DENSE=is_dense,
@@ -228,20 +228,20 @@ class _softmax(torch.autograd.Function):
         grid = (ctx.spdims[0], ctx.spdims[1] * ctx.block, M)
         da = torch.empty_like(dout)
         _blocksparse_softmax_bwd[grid](
-            da,
-            da.stride(0),
-            dout,
-            dout.stride(0),
-            out,
-            out.stride(0),
-            ctx.scale,
-            lut,
-            dr,
-            ctx.rel_shape[-1],
-            ctx.rel_strides[0],
-            ctx.rel_strides[1],
-            ctx.rel_strides[2],
-            ctx.is_causal,
+            DA=da,
+            stride_zdx=da.stride(0),
+            DOut=dout,
+            stride_zdout=dout.stride(0),
+            Out=out,
+            stride_zout=out.stride(0),
+            scale=ctx.scale,
+            LUT=lut,
+            DR=dr,
+            extent=ctx.rel_shape[-1],
+            stride_zr=ctx.rel_strides[0],
+            stride_hr=ctx.rel_strides[1],
+            stride_er=ctx.rel_strides[2],
+            is_causal=ctx.is_causal,
             BLOCK_SIZE=ctx.block,
             ROW_SIZE=triton.next_power_of_2(ctx.maxlut),
             IS_DENSE=ctx.is_dense,
