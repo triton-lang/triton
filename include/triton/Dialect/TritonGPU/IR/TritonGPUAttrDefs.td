@@ -74,11 +74,9 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
   let builders = [
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
                      "ArrayRef<int64_t>":$shape,
+                     "ArrayRef<unsigned>":$order,
                      "Type":$eltTy), [{
         auto mmaEnc = dotOpEnc.getParent().dyn_cast<MmaEncodingAttr>();
-        // Only support row major for now
-        // TODO(Keren): check why column major code crashes
-        SmallVector<unsigned> order = {1, 0};
 
         if(!mmaEnc)
           return $_get(context, 1, 1, 1, order);

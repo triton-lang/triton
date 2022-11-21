@@ -6,7 +6,6 @@ import shutil
 import subprocess
 import sys
 import tarfile
-import tempfile
 import urllib.request
 from distutils.version import LooseVersion
 from typing import NamedTuple
@@ -26,7 +25,9 @@ def get_build_type():
     elif check_env_flag("REL_WITH_DEB_INFO"):
         return "RelWithDebInfo"
     else:
-        return "Release"
+        return "Debug"
+        # TODO(Keren): Restore this before we merge into master
+        #return "Release"
 
 
 # --- third party packages -----
@@ -124,19 +125,14 @@ class CMakeBuild(build_ext):
             self.build_extension(ext)
 
     def build_extension(self, ext):
-        self.debug = True
         lit_dir = shutil.which('lit')
         triton_cache_path = os.path.join(os.environ["HOME"], ".triton")
         # lit is used by the test suite
         thirdparty_cmake_args = get_thirdparty_packages(triton_cache_path)
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
-        build_suffix = 'debug' if self.debug else 'release'
-        llvm_build_dir = os.path.join(tempfile.gettempdir(), "llvm-" + build_suffix)
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
-        if not os.path.exists(llvm_build_dir):
-            os.makedirs(llvm_build_dir)
         # python directories
         python_include_dir = distutils.sysconfig.get_python_inc()
         cmake_args = [
@@ -145,13 +141,13 @@ class CMakeBuild(build_ext):
             "-DTRITON_BUILD_TUTORIALS=OFF",
             "-DTRITON_BUILD_PYTHON_MODULE=ON",
             # '-DPYTHON_EXECUTABLE=' + sys.executable,
-            # '-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
+            '-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
             "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
             "-DLLVM_EXTERNAL_LIT=" + lit_dir
         ] + thirdparty_cmake_args
 
         # configuration
-        cfg = "Debug" if self.debug else "Release"
+        cfg = get_build_type()
         build_args = ["--config", cfg]
 
         if platform.system() == "Windows":
@@ -183,7 +179,11 @@ setup(
         "torch",
         "lit",
     ],
-    package_data={"triton/ops": ["*.c"], "triton/ops/blocksparse": ["*.c"]},
+    package_data={
+        "triton/ops": ["*.c"],
+        "triton/ops/blocksparse": ["*.c"],
+        "triton/language": ["*.bc"]
+    },
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={"build_ext": CMakeBuild},

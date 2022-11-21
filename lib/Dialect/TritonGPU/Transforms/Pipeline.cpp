@@ -201,7 +201,9 @@ LogicalResult LoopPipeliner::initialize() {
                                              ty.getShape().end());
             bufferShape.insert(bufferShape.begin(), numStages);
             auto sharedEnc = ttg::SharedEncodingAttr::get(
-                ty.getContext(), dotOpEnc, ty.getShape(), ty.getElementType());
+                ty.getContext(), dotOpEnc, ty.getShape(),
+                triton::gpu::getOrder(ty.getEncoding()),
+                ty.getElementType());
             loadsBufferType[loadOp] = RankedTensorType::get(
                 bufferShape, ty.getElementType(), sharedEnc);
           }
