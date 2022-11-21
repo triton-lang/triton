@@ -49,10 +49,7 @@ import triton._C.libtriton.triton as _triton
                 (128, 128, 32, 1, 4, 2, 384, 128, 640, AT, BT, DTYPE),
                 (128, 128, 32, 1, 4, 2, 107, 233, 256, AT, BT, DTYPE),
                 (128, 128, 32, 1, 4, 2, 107, 233, 311, AT, BT, DTYPE),
-            ]
-            for DTYPE in ["float16", "bfloat16", "float32"]
-            for AT in [False, True]
-            for BT in [False, True]
+            ] for DTYPE in ["float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True]
         ],
         # n-stage
         *[
@@ -65,11 +62,7 @@ import triton._C.libtriton.triton as _triton
                 # split-k
                 (64, 64, 16, 8, 4, STAGES, 1024, 1024, 1024, AT, BT, DTYPE),
                 (64, 64, 16, 8, 4, STAGES, 1024, 1024, 32, AT, BT, DTYPE),
-            ]
-            for DTYPE in ["float16", "bfloat16", "float32"]
-            for AT in [False, True]
-            for BT in [False, True]
-            for STAGES in [2, 3, 4]
+            ] for DTYPE in ["float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True] for STAGES in [2, 3, 4]
         ]
     ),
 )
@@ -83,18 +76,9 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
         pytest.skip("bfloat16 matmuls don't allow split_k for now")
     torch.manual_seed(0)
     # nuke kernel decorators -- will set meta-parameters manually
-    kwargs = {
-        "BLOCK_M": BLOCK_M,
-        "BLOCK_N": BLOCK_N,
-        "BLOCK_K": BLOCK_K,
-        "SPLIT_K": SPLIT_K,
-    }
-    pre_hook = None if SPLIT_K == 1 else lambda nargs: nargs["C"].zero_()
-    configs = [
-        triton.Config(
-            kwargs=kwargs, num_warps=NWARP, num_stages=NSTAGE, pre_hook=pre_hook
-        )
-    ]
+    kwargs = {'BLOCK_M': BLOCK_M, 'BLOCK_N': BLOCK_N, 'BLOCK_K': BLOCK_K, 'SPLIT_K': SPLIT_K}
+    pre_hook = None if SPLIT_K == 1 else lambda nargs: nargs['C'].zero_()
+    configs = [triton.Config(kwargs=kwargs, num_warps=NWARP, num_stages=NSTAGE, pre_hook=pre_hook)]
     kernel = triton.ops._matmul.kernel
     kernel.configs = configs
     # kernel.run = kernel.run.run.run
@@ -104,13 +88,9 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     N = BLOCK_N if N is None else N
     K = BLOCK_K * SPLIT_K if K is None else K
     # allocate/transpose inputs
-    DTYPE = {
-        "float16": torch.float16,
-        "bfloat16": torch.bfloat16,
-        "float32": torch.float32,
-    }[DTYPE]
-    a = 0.1 * torch.randn((K, M) if AT else (M, K), device="cuda", dtype=DTYPE)
-    b = 0.1 * torch.randn((N, K) if BT else (K, N), device="cuda", dtype=DTYPE)
+    DTYPE = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}[DTYPE]
+    a = .1 * torch.randn((K, M) if AT else (M, K), device="cuda", dtype=DTYPE)
+    b = .1 * torch.randn((N, K) if BT else (K, N), device="cuda", dtype=DTYPE)
     a = a.t() if AT else a
     b = b.t() if BT else b
     # run test
