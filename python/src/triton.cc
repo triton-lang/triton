@@ -1106,7 +1106,18 @@ void init_triton_ir(py::module &&m) {
               mlir::Value &ptr, mlir::Value &val,
               mlir::Value &mask) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             mlir::Type dstType = val.getType();
+             mlir::Type dstType;
+             if (auto srcTensorType = ptr.getType().dyn_cast<mlir::RankedTensorType>()) {
+               mlir::Type dstElemType = srcTensorType.getElementType()
+                                            .cast<mlir::triton::PointerType>()
+                                            .getPointeeType();
+               dstType = mlir::RankedTensorType::get(srcTensorType.getShape(),
+                                                     dstElemType);
+             } else {
+               auto ptrType = mlir::getElementTypeOrSelf(ptr)
+                                  .cast<mlir::triton::PointerType>();
+               dstType = ptrType.getPointeeType();
+             }
              return self.create<mlir::triton::AtomicRMWOp>(loc, dstType, rmwOp,
                                                            ptr, val, mask);
            })
