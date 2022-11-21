@@ -22,10 +22,8 @@ import setuptools
 import torch
 from filelock import FileLock
 
-from . import base, ir, jitlib, versioning
+from . import base, core, ir, jitlib, utils
 from triton._C.libtriton import triton as _triton
-
-from .core import minimum, where
 
 
 def str_to_ty(name):
@@ -235,9 +233,10 @@ class ValueConstructor:
         self.builtins = {
             "range": range,
             # this is the triton `minimum`
-            "min": minimum,
+            "min": core.minimum,
             "float": float,
             "int": int,
+            "str": str,
             "print": print,
             "isinstance": isinstance,
             "getattr": getattr,
@@ -797,7 +796,7 @@ class CodeGenerator(ast.NodeVisitor):
         pos_cond_node = ast.Compare(ld_target, [ast.Lt()], [arg_1])
         neg_cond_node = ast.Compare(ld_target, [ast.Gt()], [arg_1])
         pos_step_node = ast.Compare(arg_2, [ast.Gt()], [ast.Num(0)])
-        build_cond = lambda: where(
+        build_cond = lambda: core.where(
             self.visit(pos_step_node),
             self.visit(pos_cond_node),
             self.visit(neg_cond_node),
@@ -1456,7 +1455,7 @@ def compile(
     # cache manager
     name = fn.__name__
     # name of files that are cached
-    so_cache_key = make_so_cache_key(versioning.version_key(), signature, constants)
+    so_cache_key = make_so_cache_key(utils.version_key(), signature, constants)
     so_cache_manager = CacheManager(so_cache_key)
     so_name = f"{name}.so"
     # retrieve stub from cache if it exists

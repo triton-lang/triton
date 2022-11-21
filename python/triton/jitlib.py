@@ -23,7 +23,7 @@ import torch
 import triton
 from . import utils
 from . import base
-from .versioning import version_key
+from .utils import version_key
 
 try:
     from torch._C import _cuda_getCurrentRawStream as get_cuda_stream
