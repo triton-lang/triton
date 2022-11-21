@@ -1,5 +1,5 @@
 from ..autotuner import Config, Heuristics, autotune, heuristics
-from ..jitlib import jit, JITFunction, KernelInterface
+from ..jitlib import JITFunction, KernelInterface, jit
 from ..utils import version_key
 
 __all__ = [
@@ -10,4 +10,5 @@ __all__ = [
     "jit",
     "JITFunction",
     "KernelInterface",
+    "version_key",
 ]
