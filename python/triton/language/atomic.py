@@ -2,7 +2,7 @@ from __future__ import division, annotations
 
 from typing import Tuple, Callable
 
-from triton import language as tl
+import triton.language as tl
 from triton.language.reductions import CallableT
 
 

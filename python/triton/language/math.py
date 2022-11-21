@@ -3,7 +3,7 @@ from __future__ import division, annotations
 from typing import Callable, TypeVar
 
 import triton
-from triton import language as tl
+import triton.language as tl
 
 
 CallableT = TypeVar("CallableT", bound=Callable)

@@ -2,7 +2,7 @@ from __future__ import division, annotations
 
 from typing import List
 
-from triton import language as tl
+import triton.language as tl
 
 
 def _globaltimer(builder: tl.ir.builder) -> tl.tensor:

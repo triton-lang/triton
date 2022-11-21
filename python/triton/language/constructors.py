@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import List
 
 import triton
-from triton import language as tl
+import triton.language as tl
 
 
 def _arange(start: int, end: int, builder: tl.ir.builder) -> tl.tensor:

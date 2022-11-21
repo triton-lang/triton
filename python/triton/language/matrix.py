@@ -1,6 +1,6 @@
 from __future__ import division, annotations
 
-from triton import language as tl
+import triton.language as tl
 
 
 def _dot(

@@ -4,7 +4,7 @@ from typing import TypeVar, Callable
 
 import triton
 import triton.language as tl
-from triton.language.math import _add_math_1arg_docstr
+from .math import _add_math_1arg_docstr
 
 
 CallableT = TypeVar("CallableT", bound=Callable)

@@ -1,8 +1,8 @@
-from __future__ import division, annotations
+from __future__ import annotations
 
 from typing import Tuple
 
-from triton import language as tl
+import triton.language as tl
 
 
 @tl.builtin
