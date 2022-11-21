@@ -551,7 +551,7 @@ void init_triton_ir(py::module &&m) {
                return llvm::dyn_cast<mlir::FuncOp>(funcOperation);
              auto loc = self.getUnknownLoc();
              if (auto funcTy = funcType.dyn_cast<mlir::FunctionType>()) {
-               mlir::ArrayRef<mlir::NamedAttribute> attrs = {
+               llvm::SmallVector<mlir::NamedAttribute> attrs = {
                    mlir::NamedAttribute(self.getStringAttr("sym_visibility"),
                                         self.getStringAttr(visibility))};
                return self.create<mlir::FuncOp>(loc, funcName, funcTy, attrs);

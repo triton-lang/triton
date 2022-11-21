@@ -464,21 +464,6 @@ struct SharedMemoryObject {
     }
   }
 
-  // XXX(Keren): a special allocator for 3d tensors. It's a workaround for
-  // now since we don't have a correct way to encoding 3d tensors in the
-  // pipeline pass.
-  SharedMemoryObject(Value base, ArrayRef<int64_t> shape, Location loc,
-                     ConversionPatternRewriter &rewriter)
-      : base(base) {
-    auto stride = 1;
-    for (auto dim : llvm::reverse(shape)) {
-      strides.emplace_back(i32_val(stride));
-      offsets.emplace_back(i32_val(0));
-      stride *= dim;
-    }
-    strides = llvm::to_vector<4>(llvm::reverse(strides));
-  }
-
   SmallVector<Value> getElems() const {
     SmallVector<Value> elems;
     elems.push_back(base);
@@ -1453,9 +1438,10 @@ struct BroadcastOpConversion
     SmallVector<int64_t> resultLogicalShape(2 * rank);
     SmallVector<unsigned> broadcastDims;
     for (unsigned d = 0; d < rank; ++d) {
-      unsigned resultShapePerCTA = triton::gpu::getSizePerThread(resultLayout)[d] *
-                                   triton::gpu::getThreadsPerWarp(resultLayout)[d] *
-                                   triton::gpu::getWarpsPerCTA(resultLayout)[d];
+      unsigned resultShapePerCTA =
+          triton::gpu::getSizePerThread(resultLayout)[d] *
+          triton::gpu::getThreadsPerWarp(resultLayout)[d] *
+          triton::gpu::getWarpsPerCTA(resultLayout)[d];
       int64_t numCtas = ceil<unsigned>(resultShape[d], resultShapePerCTA);
       if (srcShape[d] != resultShape[d]) {
         assert(srcShape[d] == 1);
@@ -1465,10 +1451,12 @@ struct BroadcastOpConversion
             std::max<unsigned>(1, triton::gpu::getSizePerThread(srcLayout)[d]);
       } else {
         srcLogicalShape[d] = numCtas;
-        srcLogicalShape[d + rank] = triton::gpu::getSizePerThread(resultLayout)[d];
+        srcLogicalShape[d + rank] =
+            triton::gpu::getSizePerThread(resultLayout)[d];
       }
       resultLogicalShape[d] = numCtas;
-      resultLogicalShape[d + rank] = triton::gpu::getSizePerThread(resultLayout)[d];
+      resultLogicalShape[d + rank] =
+          triton::gpu::getSizePerThread(resultLayout)[d];
 
       srcLogicalOrder[d] = order[d] + rank;
       srcLogicalOrder[d + rank] = order[d];
@@ -1983,6 +1971,7 @@ struct PrintfOpConversion
       return "%u";
     }
     assert(false && "not supported type");
+    return "";
   }
 
   // declare vprintf(i8*, i8*) as external function
@@ -2251,8 +2240,18 @@ struct AllocTensorOpConversion
         getTypeConverter()->convertType(resultTy.getElementType());
     auto elemPtrTy = ptr_ty(llvmElemTy, 3);
     smemBase = bitcast(smemBase, elemPtrTy);
+    auto order = resultTy.getEncoding().cast<SharedEncodingAttr>().getOrder();
+    // workaround for 3D tensors
+    // TODO: We need to modify the pipeline pass to give a proper shared encoding to 3D tensors
+    SmallVector<unsigned> newOrder;
+    if (resultTy.getShape().size() == 3) 
+      newOrder = {1 + order[0], 1 + order[1], 0};
+    else
+      newOrder = SmallVector<unsigned>(order.begin(), order.end());
+
+    
     auto smemObj =
-        SharedMemoryObject(smemBase, resultTy.getShape(), loc, rewriter);
+        SharedMemoryObject(smemBase, resultTy.getShape(), newOrder, loc, rewriter);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
@@ -2302,6 +2301,10 @@ struct ExtractSliceOpConversion
         strideVals.emplace_back(smemObj.strides[i]);
       }
     }
+
+    // llvm::outs() << "extract slice\n";
+    // llvm::outs() << strideVals[0] << " " << smemObj.strides[1] << "\n";
+    // llvm::outs() << strideVals[1] << " " << smemObj.strides[2] << "\n";
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto elemPtrTy = ptr_ty(llvmElemTy, 3);
     auto resTy = op.getType().dyn_cast<RankedTensorType>();
@@ -3262,8 +3265,8 @@ public:
     cMatShape = matShape[order[0]];
     sMatShape = matShape[order[1]];
 
-    cStride = smemStrides[1];
-    sStride = smemStrides[0];
+    cStride = smemStrides[order[0]];
+    sStride = smemStrides[order[1]];
 
     // rule: k must be the fast-changing axis.
     needTrans = kOrder != order[0];
@@ -5483,6 +5486,7 @@ Value convertSplatLikeOpWithMmaLayout(const MmaEncodingAttr &layout,
   }
 
   assert(false && "Unsupported mma layout found");
+  return {};
 }
 
 class TritonGPUToLLVMTypeConverter : public LLVMTypeConverter {
@@ -6202,6 +6206,7 @@ private:
             dstType.getShape(), dstType.getElementType(),
             triton::gpu::SharedEncodingAttr::get(mod.getContext(), dstDotOp,
                                                  srcType.getShape(),
+                                                 getOrder(srcBlocked),
                                                  srcType.getElementType()));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), tmpType, cvtOp.getOperand());
