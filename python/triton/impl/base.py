@@ -7,7 +7,6 @@ from typing import (
     cast,
     Tuple,
     List,
-    Callable,
     Sequence,
     TypeVar,
     Optional,

@@ -5,7 +5,6 @@ import functools
 import hashlib
 import inspect
 import textwrap
-from abc import abstractmethod
 from collections import defaultdict, namedtuple
 from typing import (
     Callable,
