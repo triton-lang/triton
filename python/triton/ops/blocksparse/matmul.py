@@ -246,7 +246,7 @@ def _dsd_kernel(
     inc_a = tl.multiple_of(inc_a, 8)
     inc_b = tl.load(pinc)
     inc_b = tl.multiple_of(inc_b, 8)
-    for k in range(K, 0, -TILE_K):
+    for k in range(K, 0, -tl.cvalue(TILE_K)):
         a = tl.load(pa, mask=True)
         b = tl.load(pb, mask=offs_bn[None, :] < DS0)
         acc += tl.dot(a, b)

@@ -20,6 +20,7 @@ from ..impl.base import (
     _computation_type_impl,
     constexpr,
     _constexpr_to_value,
+    cvalue,
     dtype,
     _equal,
     _fdiv,
@@ -186,6 +187,7 @@ from .random import (
 )
 from . import libdevice
 
+
 __all__ = [
     "_add",
     "_and_",
@@ -211,6 +213,7 @@ __all__ = [
     "_computation_type_impl",
     "constexpr",
     "_constexpr_to_value",
+    "cvalue",
     "dtype",
     "_equal",
     "_fdiv",

@@ -1,6 +1,7 @@
 from __future__ import division, annotations
 
-from triton import language as tl
+import triton.language as tl
+from . import float16
 
 
 def _dequantize(
@@ -39,7 +40,7 @@ def dequantize(
     scale: tl.tensor,
     shift: tl.tensor,
     nbit: int,
-    dst_ty: tl.dtype = tl.float16,
+    dst_ty: tl.dtype = float16,
     _builder: tl.ir.builder = None,
 ):
     """

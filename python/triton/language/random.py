@@ -15,18 +15,18 @@ def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: tl.constexpr[int] = N_ROUNDS_D
     """
     Run `n_rounds` rounds of Philox for state (c0, c1, c2, c3) and key (k0, k1).
     """
-    for _ in range(n_rounds):  # type: ignore
+    for _ in range(tl.cvalue(n_rounds)):  # type: ignore
         # update random state
-        A = PHILOX_ROUND_A
-        B = PHILOX_ROUND_B
+        A: int = tl.cvalue(PHILOX_ROUND_A)
+        B: int = tl.cvalue(PHILOX_ROUND_B)
         _c0, _c2 = c0, c2
         c0 = tl.umulhi(B, _c2) ^ c1 ^ k0
         c2 = tl.umulhi(A, _c0) ^ c3 ^ k1
         c1 = B * _c2
         c3 = A * _c0
         # raise key
-        k0 = k0 + PHILOX_KEY_A
-        k1 = k1 + PHILOX_KEY_B
+        k0 = k0 + tl.cvalue(PHILOX_KEY_A)
+        k1 = k1 + tl.cvalue(PHILOX_KEY_B)
     return c0, c1, c2, c3
 
 

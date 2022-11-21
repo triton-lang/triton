@@ -1,5 +1,6 @@
 from __future__ import annotations, division
 
+import enum
 import functools
 from enum import Enum
 from typing import (
@@ -12,6 +13,7 @@ from typing import (
     Optional,
     Union,
     Generic,
+    overload,
 )
 
 import torch
@@ -359,6 +361,7 @@ float64 = dtype("fp64")
 # pointer types
 pi32_t = pointer_type(int32)
 
+
 # -----------------------
 # constexpr
 # -----------------------
@@ -371,11 +374,8 @@ class constexpr(Generic[T]):
 
     value: T
 
-    def __init__(self, value: Union[T, constexpr[T]]):
-        if isinstance(value, constexpr):
-            self.value = value.value
-        else:
-            self.value = value
+    def __init__(self, value: T):
+        self.value = cvalue(value)
 
     def __repr__(self) -> str:
         return f"constexpr[{self.value}]"
@@ -422,10 +422,39 @@ class constexpr(Generic[T]):
         return constexpr(ret_ty(self.value))
 
 
-def _constexpr_to_value(v: Union[T, constexpr[T]]) -> T:
+@overload
+def cvalue(v: constexpr[T]) -> T:
+    ...
+
+
+@overload
+def cvalue(v: T) -> T:
+    ...
+
+
+def cvalue(v: Union[constexpr[T], T]) -> T:
+    """Unpack a constexpr.
+
+    This unrolls to a no-op in JITed code.
+    """
     if isinstance(v, constexpr):
         return v.value
     return v
+
+
+@overload
+def _constexpr_to_value(v: constexpr[T]) -> T:
+    ...
+
+
+@overload
+def _constexpr_to_value(v: T) -> T:
+    ...
+
+
+def _constexpr_to_value(v: Union[constexpr[T], T]) -> T:
+    """Legacy wrapper for cvalue()."""
+    return cvalue(v)
 
 
 dtype_t = dtype

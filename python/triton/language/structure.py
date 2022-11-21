@@ -38,11 +38,11 @@ def ravel(x: tl.tensor) -> tl.tensor:
 
 @triton.jit
 def swizzle2d(
-    i: int,
-    j: int,
-    size_i: int,
-    size_j: int,
-    size_g: int,
+    i,
+    j,
+    size_i,
+    size_j,
+    size_g,
 ) -> Tuple[int, int]:
     """
     transformes indices of a row-major size_i*size_j matrix into those

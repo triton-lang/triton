@@ -197,7 +197,7 @@ def _kernel(
     # pointers
     A = A + (ram[:, None] * stride_am + rk[None, :] * stride_ak)
     B = B + (rk[:, None] * stride_bk + rbn[None, :] * stride_bn)
-    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=ACC_TYPE)
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.cvalue(ACC_TYPE))
     for k in range(K, 0, -BLOCK_K * SPLIT_K):
         if EVEN_K:
             a = tl.load(A)
