@@ -255,7 +255,7 @@ class JITFunction(KernelInterface):
 
         src = f"""
 def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False):
-    sig_key =  {sig_keys},
+    sig_key =  tuple([{sig_keys}])
     constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else tuple()}
     spec_key = {f'{spec_keys},' if len(spec_keys) > 0 else tuple()}
     key = (version_key, sig_key, constexpr_key, spec_key)
@@ -291,7 +291,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
       # build stub signature -- includes arguments that are specialized
       for i, arg in constants.items():
         if callable(arg):
-          raise TypeError(f"Callable constexpr at index {i} is not supported")
+          raise TypeError(f"Callable constexpr at index {{i}} is not supported")
       if not self._call_hook(key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
         bin = tr.compile(self, signature, device, constants, num_warps, num_stages, extern_libs=extern_libs, configs=configs)
         if not warmup:
@@ -348,12 +348,16 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         self.kernel = None
         # annotations
         self.annotations = {
-            self.arg_names.index(name): ty for name, ty in fn.__annotations__.items()
+            self.arg_names.index(name): ty
+            for name, ty in fn.__annotations__.items()
+            if name != "return"
         }
         self.__annotations__ = fn.__annotations__
         # index of constexprs
         self.constexprs = [
-            self.arg_names.index(ann) for ann in self.__annotations__.keys()
+            self.arg_names.index(name)
+            for name in self.__annotations__.keys()
+            if name != "return"
         ]
         # launcher
         self.run = self._make_launcher()
