@@ -872,12 +872,13 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Call(self, node):
         fn = self.visit(node.func)
+
+        if fn in (base.cvalue, base._constexpr_to_value):
+            assert len(node.args) == 1
+            return self.visit(node.args[0])
+
         if isinstance(fn, base.constexpr):
             fn = fn.value
-
-        if fn is base.cvalue or fn is base._constexpr_to_value:
-            assert len(node.args) == 1
-            fn = self.visit(node.args[0]).value
 
         kws = dict()
         for keyword in node.keywords:
