@@ -2,6 +2,7 @@
 import itertools
 import re
 from typing import Optional, Union
+import os
 
 import numpy as np
 import pytest
@@ -19,6 +20,21 @@ float_dtypes = ['float16', 'float32', 'float64']
 dtypes = int_dtypes + uint_dtypes + float_dtypes
 dtypes_with_bfloat16 = dtypes + ['bfloat16']
 torch_dtypes = ['bool'] + int_dtypes + ['uint8'] + float_dtypes + ['bfloat16']
+
+GENERATE_TEST_HERE = object()
+
+SYSTEM_LIBDEVICE_SEARCH_LOCATIONS = [
+    '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc',
+    '/lib/cuda/nvvm/libdevice/libdevice.10.bc',
+    '/lib/nvidia-cuda-toolkit/libdevice/libdevice.10.bc',
+]
+
+for path in SYSTEM_LIBDEVICE_SEARCH_LOCATIONS:
+    if os.path.exists(path):
+        SYSTEM_LIBDEVICE_PATH = path
+        break
+else:
+    SYSTEM_LIBDEVICE_PATH = '/unable_to_find/libdevice.10.bc'
 
 
 def _bitwidth(dtype: str) -> int:
@@ -1554,7 +1570,7 @@ def test_num_warps_pow2():
 
 @pytest.mark.parametrize("dtype_str, expr, lib_path",
                          [('int32', 'libdevice.ffs', ''),
-                          ('float32', 'libdevice.pow', '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'),
+                          ('float32', 'libdevice.pow', SYSTEM_LIBDEVICE_PATH),
                           ('float64', 'libdevice.norm4d', '')])
 def test_libdevice_tensor(dtype_str, expr, lib_path):
 

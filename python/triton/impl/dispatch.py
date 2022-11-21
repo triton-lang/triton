@@ -26,7 +26,6 @@ def dispatch(
     """
     Dispatch a function to a library
 
-    :param *:
     :param func: the function to dispatch
     :param lib_name: the name of the library
     :param lib_path: the path of the library
@@ -86,7 +85,6 @@ def elementwise(
     """
     Dispatch an elementwise function to a library
 
-    :param *:
     :param lib_name: the name of the library
     :param lib_path: the path of the library
     :param args: the arguments of the function
