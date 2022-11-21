@@ -5,6 +5,7 @@ from typing import TypeVar, Callable, List, Tuple, Optional
 import triton
 import triton.language as tl
 
+
 CallableT = TypeVar("CallableT", bound=Callable)
 
 

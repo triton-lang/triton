@@ -1,13 +1,10 @@
 """isort:skip_file"""
 # Import order is significant here.
 
-from triton._C.libtriton.triton import ir
+from .. import ir
 
-from ..utils import (
-    cdiv,
-    next_power_of_2,
-    MockTensor,
-)
+from ..utils import MockTensor
+
 from .base import TensorWrapper, reinterpret
 
 # No @tr.jit() interface can be called until after .compiler is loaded;
@@ -37,7 +34,6 @@ from .autotuner import (
 
 __all__ = [
     "autotune",
-    "cdiv",
     "CompilationError",
     "compile",
     "CompiledKernel",
@@ -51,7 +47,6 @@ __all__ = [
     "JITFunction",
     "KernelInterface",
     "MockTensor",
-    "next_power_of_2",
     "OutOfResources",
     "reinterpret",
     "TensorWrapper",

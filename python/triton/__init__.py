@@ -6,11 +6,14 @@ __version__ = "2.0.0"
 # or pybind11 shows `munmap_chunk(): invalid pointer`
 import torch
 
-# submodules
+# Import order is significant here.
+
+from .utils import cdiv, next_power_of_2
+
+from triton._C.libtriton.triton import ir
 
 from .impl import (
     autotune,
-    cdiv,
     CompilationError,
     compile,
     CompiledKernel,
@@ -19,12 +22,10 @@ from .impl import (
     ExternalFunction,
     heuristics,
     Heuristics,
-    ir,
     jit,
     JITFunction,
     KernelInterface,
     MockTensor,
-    next_power_of_2,
     OutOfResources,
     reinterpret,
     TensorWrapper,

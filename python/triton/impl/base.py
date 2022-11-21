@@ -4,6 +4,7 @@ import functools
 from enum import Enum
 from typing import (
     Any,
+    cast,
     Tuple,
     List,
     Callable,
@@ -12,7 +13,6 @@ from typing import (
     Optional,
     Union,
 )
-from typing import cast as typecast
 
 import torch
 
@@ -33,7 +33,7 @@ def builtin(fn: CallableT) -> CallableT:
 
     setattr(wrapper, "__triton_builtin__", True)
 
-    return typecast(CallableT, wrapper)
+    return cast(CallableT, wrapper)
 
 
 class dtype:
