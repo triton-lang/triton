@@ -99,9 +99,6 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
     return nullptr;
   }
 
-  // Initialize LLVM targets.
-  mlir::ExecutionEngine::setupTargetTriple(llvmModule.get());
-
   auto optPipeline = mlir::makeOptimizingTransformer(
       /*optLevel=*/3, /*sizeLevel=*/0,
       /*targetMachine=*/nullptr);
