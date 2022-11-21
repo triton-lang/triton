@@ -99,6 +99,7 @@ void llPrintf(StringRef msg, ValueRange args,
 #define udiv(...) rewriter.create<LLVM::UDivOp>(loc, __VA_ARGS__)
 #define urem(...) rewriter.create<LLVM::URemOp>(loc, __VA_ARGS__)
 #define add(...) rewriter.create<LLVM::AddOp>(loc, __VA_ARGS__)
+#define sub(...) rewriter.create<LLVM::SubOp>(loc, __VA_ARGS__)
 #define fadd(...) rewriter.create<LLVM::FAddOp>(loc, __VA_ARGS__)
 #define mul(...) rewriter.create<LLVM::MulOp>(loc, __VA_ARGS__)
 #define smax(...) rewriter.create<LLVM::SMaxOp>(loc, __VA_ARGS__)
@@ -441,25 +442,33 @@ struct SharedMemoryObject {
   // if we want to support more optimizations.
   SmallVector<Value>
       strides; // i32 int. The strides of the shared memory object.
+  SmallVector<Value> offsets; // i32 int. The offsets of the shared memory
+                              // objects from the originally allocated object.
 
-  SharedMemoryObject(Value base, ArrayRef<Value> strides)
-      : base(base), strides(strides.begin(), strides.end()) {}
+  SharedMemoryObject(Value base, ArrayRef<Value> strides,
+                     ArrayRef<Value> offsets)
+      : base(base), strides(strides.begin(), strides.end()),
+        offsets(offsets.begin(), offsets.end()) {}
 
-  SharedMemoryObject(Value base, ArrayRef<int64_t> shape, Location loc,
+  SharedMemoryObject(Value base, ArrayRef<int64_t> shape,
+                     ArrayRef<unsigned> order, Location loc,
                      ConversionPatternRewriter &rewriter)
       : base(base) {
+    auto rank = shape.size();
     auto stride = 1;
-    for (auto dim : llvm::reverse(shape)) {
-      this->strides.emplace_back(i32_val(stride));
-      stride *= dim;
+    strides.resize(rank);
+    for (auto idx : order) {
+      strides[idx] = i32_val(stride);
+      offsets.emplace_back(i32_val(0));
+      stride *= shape[idx];
     }
-    this->strides = llvm::to_vector<4>(llvm::reverse(this->strides));
   }
 
   SmallVector<Value> getElems() const {
     SmallVector<Value> elems;
     elems.push_back(base);
     elems.append(strides.begin(), strides.end());
+    elems.append(offsets.begin(), offsets.end());
     return elems;
   }
 
@@ -467,7 +476,21 @@ struct SharedMemoryObject {
     SmallVector<Type> types;
     types.push_back(base.getType());
     types.append(strides.size(), IntegerType::get(base.getContext(), 32));
+    types.append(offsets.size(), IntegerType::get(base.getContext(), 32));
     return types;
+  }
+
+  Value getCSwizzleOffset(int order) const {
+    assert(order >= 0 && order < strides.size());
+    return offsets[order];
+  }
+
+  Value getBaseBeforeSwizzle(int order, Location loc,
+                             ConversionPatternRewriter &rewriter) const {
+    Value cSwizzleOffset = getCSwizzleOffset(order);
+    Value offset = sub(i32_val(0), cSwizzleOffset);
+    Type type = base.getType();
+    return gep(type, base, offset);
   }
 };
 
@@ -493,8 +516,11 @@ struct ConvertTritonGPUOpToLLVMPatternBase {
   getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
                                   ConversionPatternRewriter &rewriter) {
     auto elems = getElementsFromStruct(loc, llvmStruct, rewriter);
-    return SharedMemoryObject(/*base=*/elems[0],
-                              /*strides=*/{elems.begin() + 1, elems.end()});
+    auto rank = (elems.size() - 1) / 2;
+    return SharedMemoryObject(
+        /*base=*/elems[0],
+        /*strides=*/{elems.begin() + 1, elems.begin() + 1 + rank},
+        /*offsets=*/{elems.begin() + 1 + rank, elems.end()});
   }
 
   static Value
@@ -1412,9 +1438,10 @@ struct BroadcastOpConversion
     SmallVector<int64_t> resultLogicalShape(2 * rank);
     SmallVector<unsigned> broadcastDims;
     for (unsigned d = 0; d < rank; ++d) {
-      unsigned resultShapePerCTA = triton::gpu::getSizePerThread(resultLayout)[d] *
-                                   triton::gpu::getThreadsPerWarp(resultLayout)[d] *
-                                   triton::gpu::getWarpsPerCTA(resultLayout)[d];
+      unsigned resultShapePerCTA =
+          triton::gpu::getSizePerThread(resultLayout)[d] *
+          triton::gpu::getThreadsPerWarp(resultLayout)[d] *
+          triton::gpu::getWarpsPerCTA(resultLayout)[d];
       int64_t numCtas = ceil<unsigned>(resultShape[d], resultShapePerCTA);
       if (srcShape[d] != resultShape[d]) {
         assert(srcShape[d] == 1);
@@ -1424,10 +1451,12 @@ struct BroadcastOpConversion
             std::max<unsigned>(1, triton::gpu::getSizePerThread(srcLayout)[d]);
       } else {
         srcLogicalShape[d] = numCtas;
-        srcLogicalShape[d + rank] = triton::gpu::getSizePerThread(resultLayout)[d];
+        srcLogicalShape[d + rank] =
+            triton::gpu::getSizePerThread(resultLayout)[d];
       }
       resultLogicalShape[d] = numCtas;
-      resultLogicalShape[d + rank] = triton::gpu::getSizePerThread(resultLayout)[d];
+      resultLogicalShape[d + rank] =
+          triton::gpu::getSizePerThread(resultLayout)[d];
 
       srcLogicalOrder[d] = order[d] + rank;
       srcLogicalOrder[d + rank] = order[d];
@@ -1942,6 +1971,7 @@ struct PrintfOpConversion
       return "%u";
     }
     assert(false && "not supported type");
+    return "";
   }
 
   // declare vprintf(i8*, i8*) as external function
@@ -2210,8 +2240,18 @@ struct AllocTensorOpConversion
         getTypeConverter()->convertType(resultTy.getElementType());
     auto elemPtrTy = ptr_ty(llvmElemTy, 3);
     smemBase = bitcast(smemBase, elemPtrTy);
+    auto order = resultTy.getEncoding().cast<SharedEncodingAttr>().getOrder();
+    // workaround for 3D tensors
+    // TODO: We need to modify the pipeline pass to give a proper shared encoding to 3D tensors
+    SmallVector<unsigned> newOrder;
+    if (resultTy.getShape().size() == 3) 
+      newOrder = {1 + order[0], 1 + order[1], 0};
+    else
+      newOrder = SmallVector<unsigned>(order.begin(), order.end());
+
+    
     auto smemObj =
-        SharedMemoryObject(smemBase, resultTy.getShape(), loc, rewriter);
+        SharedMemoryObject(smemBase, resultTy.getShape(), newOrder, loc, rewriter);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
@@ -2238,31 +2278,38 @@ struct ExtractSliceOpConversion
     // Triton support either static and dynamic offsets
     auto smemObj =
         getSharedMemoryObjectFromStruct(loc, adaptor.source(), rewriter);
+    SmallVector<Value, 4> opOffsetVals;
     SmallVector<Value, 4> offsetVals;
     auto mixedOffsets = op.getMixedOffsets();
     for (auto i = 0; i < mixedOffsets.size(); ++i) {
       if (op.isDynamicOffset(i))
-        offsetVals.emplace_back(adaptor.offsets()[i]);
+        opOffsetVals.emplace_back(adaptor.offsets()[i]);
       else
-        offsetVals.emplace_back(i32_val(op.getStaticOffset(i)));
+        opOffsetVals.emplace_back(i32_val(op.getStaticOffset(i)));
+      offsetVals.emplace_back(add(smemObj.offsets[i], opOffsetVals[i]));
     }
     // Compute the offset based on the original strides of the shared memory
     // object
-    auto offset = dot(rewriter, loc, offsetVals, smemObj.strides);
+    auto offset = dot(rewriter, loc, opOffsetVals, smemObj.strides);
     // newShape = rank_reduce(shape)
     // Triton only supports static tensor sizes
     SmallVector<Value, 4> strideVals;
-    auto staticSizes = op.static_sizes();
     for (auto i = 0; i < op.static_sizes().size(); ++i) {
-      if (op.getStaticSize(i) != 1) {
+      if (op.getStaticSize(i) == 1) {
+        offsetVals.erase(offsetVals.begin() + i);
+      } else {
         strideVals.emplace_back(smemObj.strides[i]);
       }
     }
+
+    // llvm::outs() << "extract slice\n";
+    // llvm::outs() << strideVals[0] << " " << smemObj.strides[1] << "\n";
+    // llvm::outs() << strideVals[1] << " " << smemObj.strides[2] << "\n";
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto elemPtrTy = ptr_ty(llvmElemTy, 3);
     auto resTy = op.getType().dyn_cast<RankedTensorType>();
-    smemObj =
-        SharedMemoryObject(gep(elemPtrTy, smemObj.base, offset), strideVals);
+    smemObj = SharedMemoryObject(gep(elemPtrTy, smemObj.base, offset),
+                                 strideVals, offsetVals);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
@@ -3162,7 +3209,7 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
   Value smemBase = getSharedMemoryBase(loc, rewriter, dst);
   auto elemPtrTy = ptr_ty(getTypeConverter()->convertType(elemTy), 3);
   smemBase = bitcast(smemBase, elemPtrTy);
-  auto smemObj = SharedMemoryObject(smemBase, dstShape, loc, rewriter);
+  auto smemObj = SharedMemoryObject(smemBase, dstShape, outOrd, loc, rewriter);
   auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
   unsigned numWordsEachRep = product<unsigned>(wordsInEachRep);
   SmallVector<Value> wordVecs(numWordsEachRep);
@@ -3252,8 +3299,8 @@ public:
     cMatShape = matShape[order[0]];
     sMatShape = matShape[order[1]];
 
-    cTileStride = smemStrides[order[0]];
-    sTileStride = smemStrides[order[1]];
+    cStride = smemStrides[order[0]];
+    sStride = smemStrides[order[1]];
 
     // rule: k must be the fast-changing axis.
     needTrans = kOrder != order[0];
@@ -3262,17 +3309,16 @@ public:
     if (canUseLdmatrix) {
       // Each CTA, the warps is arranged as [1xwpt] if not transposed,
       // otherwise [wptx1], and each warp will perform a mma.
-      numPtr =
+      numPtrs =
           tileShape[order[0]] / (needTrans ? wpt : 1) / instrShape[order[0]];
     } else {
-      numPtr = tileShape[order[0]] / wpt / matShape[order[0]];
+      numPtrs = tileShape[order[0]] / wpt / matShape[order[0]];
     }
-
-    numPtr = std::max<int>(numPtr, 2);
+    numPtrs = std::max<int>(numPtrs, 2);
 
     // Special rule for i8/u8, 4 ptrs for each matrix
     if (!canUseLdmatrix && elemBytes == 1)
-      numPtr *= 4;
+      numPtrs *= 4;
 
     int loadStrideInMat[2];
     loadStrideInMat[kOrder] =
@@ -3291,24 +3337,26 @@ public:
 
   // lane = thread % 32
   // warpOff = (thread/32) % wpt(0)
-  llvm::SmallVector<Value> computeOffsets(Value warpOff, Value lane) {
+  llvm::SmallVector<Value> computeOffsets(Value warpOff, Value lane,
+                                          Value cSwizzleOffset) {
     if (canUseLdmatrix)
-      return computeLdmatrixMatOffs(warpOff, lane);
+      return computeLdmatrixMatOffs(warpOff, lane, cSwizzleOffset);
     else if (elemBytes == 4 && needTrans)
-      return computeB32MatOffs(warpOff, lane);
+      return computeB32MatOffs(warpOff, lane, cSwizzleOffset);
     else if (elemBytes == 1 && needTrans)
-      return computeB8MatOffs(warpOff, lane);
+      return computeB8MatOffs(warpOff, lane, cSwizzleOffset);
     else
       llvm::report_fatal_error("Invalid smem load config");
 
     return {};
   }
 
-  int getNumPtr() const { return numPtr; }
+  int getNumPtrs() const { return numPtrs; }
 
   // Compute the offset to the matrix this thread(indexed by warpOff and lane)
   // mapped to.
-  SmallVector<Value> computeLdmatrixMatOffs(Value warpId, Value lane) {
+  SmallVector<Value> computeLdmatrixMatOffs(Value warpId, Value lane,
+                                            Value cSwizzleOffset) {
     // 4x4 matrices
     Value c = urem(lane, i32_val(8));
     Value s = udiv(lane, i32_val(8)); // sub-warp-id
@@ -3346,31 +3394,34 @@ public:
     // Physical offset (before swizzling)
     Value cMatOff = matOff[order[0]];
     Value sMatOff = matOff[order[1]];
+    Value cSwizzleMatOff = udiv(cSwizzleOffset, i32_val(cMatShape));
+    cMatOff = add(cMatOff, cSwizzleMatOff);
 
     // row offset inside a matrix, each matrix has 8 rows.
     Value sOffInMat = c;
 
-    SmallVector<Value> offs(numPtr);
+    SmallVector<Value> offs(numPtrs);
     Value phase = urem(udiv(sOffInMat, i32_val(perPhase)), i32_val(maxPhase));
     Value sOff = add(sOffInMat, mul(sMatOff, i32_val(sMatShape)));
-    for (int i = 0; i < numPtr; ++i) {
+    for (int i = 0; i < numPtrs; ++i) {
       Value cMatOffI = add(cMatOff, i32_val(i * pLoadStrideInMat));
       cMatOffI = xor_(cMatOffI, phase);
-      offs[i] = add(mul(cMatOffI, i32_val(cMatShape)), mul(sOff, sTileStride));
+      offs[i] = add(mul(cMatOffI, i32_val(cMatShape)), mul(sOff, sStride));
     }
 
     return offs;
   }
 
   // Compute 32-bit matrix offsets.
-  SmallVector<Value> computeB32MatOffs(Value warpOff, Value lane) {
+  SmallVector<Value> computeB32MatOffs(Value warpOff, Value lane,
+                                       Value cSwizzleOffset) {
     assert(needTrans && "Only used in transpose mode.");
     // Load tf32 matrices with lds32
     Value cOffInMat = udiv(lane, i32_val(4));
     Value sOffInMat = urem(lane, i32_val(4));
 
     Value phase = urem(udiv(sOffInMat, i32_val(perPhase)), i32_val(maxPhase));
-    SmallVector<Value> offs(numPtr);
+    SmallVector<Value> offs(numPtrs);
 
     for (int mat = 0; mat < 4; ++mat) { // Load 4 mats each time
       int kMatArrInt = kOrder == 1 ? mat / 2 : mat % 2;
@@ -3382,30 +3433,34 @@ public:
 
       Value cMatOff = add(mul(warpOff, i32_val(warpOffStride)),
                           mul(nkMatArr, i32_val(matArrStride)));
+      Value cSwizzleMatOff = udiv(cSwizzleOffset, i32_val(cMatShape));
+      cMatOff = add(cMatOff, cSwizzleMatOff);
+
       Value sMatOff = kMatArr;
       Value sOff = add(sOffInMat, mul(sMatOff, i32_val(sMatShape)));
       // FIXME: (kOrder == 1?) is really dirty hack
-      for (int i = 0; i < numPtr / 2; ++i) {
+      for (int i = 0; i < numPtrs / 2; ++i) {
         Value cMatOffI =
             add(cMatOff, i32_val(i * pLoadStrideInMat * (kOrder == 1 ? 1 : 2)));
         cMatOffI = xor_(cMatOffI, phase);
         Value cOff = add(cOffInMat, mul(cMatOffI, i32_val(cMatShape)));
         cOff = urem(cOff, i32_val(tileShape[order[0]]));
         sOff = urem(sOff, i32_val(tileShape[order[1]]));
-        offs[2 * i + nkMatArrInt] = add(cOff, mul(sOff, sTileStride));
+        offs[2 * i + nkMatArrInt] = add(cOff, mul(sOff, sStride));
       }
     }
     return offs;
   }
 
   // compute 8-bit matrix offset.
-  SmallVector<Value> computeB8MatOffs(Value warpOff, Value lane) {
+  SmallVector<Value> computeB8MatOffs(Value warpOff, Value lane,
+                                      Value cSwizzleOffset) {
     assert(needTrans && "Only used in transpose mode.");
     Value cOffInMat = udiv(lane, i32_val(4));
     Value sOffInMat =
         mul(urem(lane, i32_val(4)), i32_val(4)); // each thread load 4 cols
 
-    SmallVector<Value> offs(numPtr);
+    SmallVector<Value> offs(numPtrs);
     for (int mat = 0; mat < 4; ++mat) {
       int kMatArrInt = kOrder == 1 ? mat / 2 : mat % 2;
       int nkMatArrInt = kOrder == 1 ? mat % 2 : mat / 2;
@@ -3418,7 +3473,7 @@ public:
                           mul(nkMatArr, i32_val(matArrStride)));
       Value sMatOff = kMatArr;
 
-      for (int loadx4Off = 0; loadx4Off < numPtr / 8; ++loadx4Off) {
+      for (int loadx4Off = 0; loadx4Off < numPtrs / 8; ++loadx4Off) {
         for (int elemOff = 0; elemOff < 4; ++elemOff) {
           int ptrOff = loadx4Off * 8 + nkMatArrInt * 4 + elemOff;
           Value cMatOffI = add(cMatOff, i32_val(loadx4Off * pLoadStrideInMat *
@@ -3432,7 +3487,7 @@ public:
           // To prevent out-of-bound access when tile is too small.
           cOff = urem(cOff, i32_val(tileShape[order[0]]));
           sOff = urem(sOff, i32_val(tileShape[order[1]]));
-          offs[ptrOff] = add(cOff, mul(sOff, sTileStride));
+          offs[ptrOff] = add(cOff, mul(sOff, sStride));
         }
       }
     }
@@ -3467,7 +3522,7 @@ public:
 
     if (canUseLdmatrix) {
       Value sOffset =
-          mul(i32_val(matIdx[order[1]] * sMatStride * sMatShape), sTileStride);
+          mul(i32_val(matIdx[order[1]] * sMatStride * sMatShape), sStride);
       Value sOffsetPtr = gep(shemPtrTy, ptr, sOffset);
 
       PTXBuilder builder;
@@ -3501,10 +3556,10 @@ public:
       Value ptr2 = getPtr(ptrIdx + 1);
       assert(sMatStride == 1);
       int sOffsetElem = matIdx[order[1]] * (sMatStride * sMatShape);
-      Value sOffsetElemVal = mul(i32_val(sOffsetElem), sTileStride);
+      Value sOffsetElemVal = mul(i32_val(sOffsetElem), sStride);
       int sOffsetArrElem = sMatStride * sMatShape;
       Value sOffsetArrElemVal =
-          add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sTileStride));
+          add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sStride));
 
       Value elems[4];
       Type elemTy = type::f32Ty(ctx);
@@ -3544,10 +3599,10 @@ public:
 
       assert(sMatStride == 1);
       int sOffsetElem = matIdx[order[1]] * (sMatStride * sMatShape);
-      Value sOffsetElemVal = mul(i32_val(sOffsetElem), sTileStride);
+      Value sOffsetElemVal = mul(i32_val(sOffsetElem), sStride);
       int sOffsetArrElem = 1 * (sMatStride * sMatShape);
       Value sOffsetArrElemVal =
-          add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sTileStride));
+          add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sStride));
 
       std::array<Value, 4> i8v4Elems;
       std::array<Value, 4> i32Elems;
@@ -3615,13 +3670,13 @@ private:
   int cMatShape;
   int sMatShape;
 
-  Value cTileStride;
-  Value sTileStride;
+  Value cStride;
+  Value sStride;
 
   bool needTrans;
   bool canUseLdmatrix;
 
-  int numPtr;
+  int numPtrs;
 
   int pLoadStrideInMat;
   int sMatStride;
@@ -4258,7 +4313,8 @@ struct MMA16816ConversionHelper {
       loadFn = getLoadMatrixFn(
           tensor, smemObj, mmaLayout, mmaLayout.getWarpsPerCTA()[0] /*wpt*/,
           1 /*kOrder*/, {mmaInstrM, mmaInstrK} /*instrShape*/,
-          {matShapeM, matShapeK} /*matShape*/, warpM /*warpId*/, ha /*vals*/);
+          {matShapeM, matShapeK} /*matShape*/, warpM /*warpId*/, ha /*vals*/,
+          true /*isA*/);
     } else if (aTensorTy.getEncoding().isa<BlockedEncodingAttr>()) {
       // load from registers, used in gemm fuse
       // TODO(Superjomn) Port the logic.
@@ -4289,7 +4345,8 @@ struct MMA16816ConversionHelper {
     auto loadFn = getLoadMatrixFn(
         tensor, smemObj, mmaLayout, mmaLayout.getWarpsPerCTA()[1] /*wpt*/,
         0 /*kOrder*/, {mmaInstrK, mmaInstrN} /*instrShape*/,
-        {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/, hb /*vals*/);
+        {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/, hb /*vals*/,
+        false /*isA*/);
 
     for (int n = 0; n < std::max(numRepN / 2, 1); ++n) {
       for (int k = 0; k < numRepK; ++k)
@@ -4403,7 +4460,7 @@ private:
   getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
                   MmaEncodingAttr mmaLayout, int wpt, uint32_t kOrder,
                   ArrayRef<int> instrShape, ArrayRef<int> matShape,
-                  Value warpId, ValueTable &vals) const {
+                  Value warpId, ValueTable &vals, bool isA) const {
     auto tensorTy = tensor.getType().cast<RankedTensorType>();
     // We assumes that the input operand of Dot should be from shared layout.
     // TODO(Superjomn) Consider other layouts if needed later.
@@ -4412,8 +4469,6 @@ private:
     const int maxPhase = sharedLayout.getMaxPhase();
     const int elemBytes = tensorTy.getElementTypeBitWidth() / 8;
     auto order = sharedLayout.getOrder();
-
-    bool needTrans = kOrder != order[0];
 
     // the original register_lds2, but discard the prefetch logic.
     auto ld2 = [](ValueTable &vals, int mn, int k, Value val) {
@@ -4426,21 +4481,24 @@ private:
           wpt, sharedLayout.getOrder(), kOrder, smemObj.strides,
           tensorTy.getShape() /*tileShape*/, instrShape, matShape, perPhase,
           maxPhase, elemBytes, rewriter, typeConverter, loc);
-      SmallVector<Value> offs = loader.computeOffsets(warpId, lane);
-      const int numPtrs = loader.getNumPtr();
+      Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
+      SmallVector<Value> offs =
+          loader.computeOffsets(warpId, lane, cSwizzleOffset);
+      const int numPtrs = loader.getNumPtrs();
       SmallVector<Value> ptrs(numPtrs);
 
+      Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
       Type smemPtrTy = helper.getShemPtrTy();
       for (int i = 0; i < numPtrs; ++i) {
-        ptrs[i] = bitcast(gep(smemPtrTy, smemObj.base, ValueRange({offs[i]})),
-                          smemPtrTy);
+        ptrs[i] =
+            bitcast(gep(smemPtrTy, smemBase, ValueRange({offs[i]})), smemPtrTy);
       }
 
       auto [ha0, ha1, ha2, ha3] = loader.loadX4(
           (kOrder == 1) ? a : b /*mat0*/, (kOrder == 1) ? b : a /*mat1*/, offs,
           ptrs, helper.getMatType(), helper.getShemPtrTy());
 
-      if (!needTrans) {
+      if (isA) {
         ld2(vals, a, b, ha0);
         ld2(vals, a + 1, b, ha1);
         ld2(vals, a, b + 1, ha2);
@@ -4466,7 +4524,7 @@ private:
   //  ...
   //  (2,0), (2,1), (3,0), (3,1), # i=1, j=0
   //  (2,2), (2,3), (3,2), (3,3), # i=1, j=1
-  //  (2,4), (2,5), (2,4), (2,5), # i=1, j=2
+  //  (2,4), (2,5), (3,4), (3,5), # i=1, j=2
   //  ...
   // ]
   // i \in [0, n0) and j \in [0, n1)
@@ -4845,15 +4903,13 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
 Value DotOpMmaV1ConversionHelper::loadA(
     Value tensor, const SharedMemoryObject &smemObj, Value thread, Location loc,
     ConversionPatternRewriter &rewriter) const {
-  // smem
-  Value smem = smemObj.base;
-  auto strides = smemObj.strides;
 
   auto *ctx = rewriter.getContext();
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   auto shape = tensorTy.getShape();
   auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
   auto order = sharedLayout.getOrder();
+  Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
 
   bool isARow = order[0] != 0;
   bool isAVec4 = !isARow && shape[order[0]] <= 16; // fp16*4 = 16bytes
@@ -4868,6 +4924,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
 
   int vecA = sharedLayout.getVec();
 
+  auto strides = smemObj.strides;
   Value strideAM = isARow ? strides[0] : i32_val(1);
   Value strideAK = isARow ? i32_val(1) : strides[1];
   Value strideA0 = isARow ? strideAK : strideAM;
@@ -4890,8 +4947,8 @@ Value DotOpMmaV1ConversionHelper::loadA(
   Value offA0 = isARow ? offsetAK : offsetAM;
   Value offA1 = isARow ? offsetAM : offsetAK;
   Value phaseA = urem(udiv(offA1, i32_val(perPhaseA)), i32_val(maxPhaseA));
+  offA0 = add(offA0, cSwizzleOffset);
   SmallVector<Value> offA(numPtrA);
-
   for (int i = 0; i < numPtrA; i++) {
     Value offA0I = add(offA0, i32_val(i * (isARow ? 4 : strideRepM)));
     offA0I = udiv(offA0I, i32_val(vecA));
@@ -4909,6 +4966,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
   SmallVector<Value> ptrA(numPtrA);
 
   std::map<std::pair<int, int>, std::pair<Value, Value>> has;
+  auto smem = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
   for (int i = 0; i < numPtrA; i++)
     ptrA[i] = gep(ptr_ty(f16_ty), smem, offA[i]);
 
@@ -5005,6 +5063,8 @@ Value DotOpMmaV1ConversionHelper::loadB(
   Value offB0 = isBRow ? offsetBN : offsetBK;
   Value offB1 = isBRow ? offsetBK : offsetBN;
   Value phaseB = urem(udiv(offB1, i32_val(perPhaseB)), i32_val(maxPhaseB));
+  Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
+  offB0 = add(offB0, cSwizzleOffset);
   SmallVector<Value> offB(numPtrB);
   for (int i = 0; i < numPtrB; ++i) {
     Value offB0I = add(offB0, i32_val(i * (isBRow ? strideRepN : 4)));
@@ -5460,6 +5520,7 @@ Value convertSplatLikeOpWithMmaLayout(const MmaEncodingAttr &layout,
   }
 
   assert(false && "Unsupported mma layout found");
+  return {};
 }
 
 class TritonGPUToLLVMTypeConverter : public LLVMTypeConverter {
@@ -5514,7 +5575,8 @@ public:
       types.push_back(ptrType);
       // shape dims
       auto rank = type.getRank();
-      for (auto i = 0; i < rank; i++) {
+      // offsets + strides
+      for (auto i = 0; i < rank * 2; i++) {
         types.push_back(IntegerType::get(ctx, 32));
       }
       return LLVM::LLVMStructType::getLiteral(ctx, types);
@@ -5955,11 +6017,13 @@ struct AtomicRMWOpConversion
 
     Value llPtr = adaptor.ptr();
     Value llVal = adaptor.val();
+    Value llMask = adaptor.mask();
 
     auto valElements = getElementsFromStruct(loc, llVal, rewriter);
     auto ptrElements = getElementsFromStruct(loc, llPtr, rewriter);
+    auto maskElements = getElementsFromStruct(loc, llMask, rewriter);
 
-    // TODO[dongdongl]: Support mask and scalar
+    // TODO[dongdongl]: Support scalar
 
     auto valueTy = op.getResult().getType().dyn_cast<RankedTensorType>();
     if (!valueTy)
@@ -5974,6 +6038,14 @@ struct AtomicRMWOpConversion
 
     auto vecTy = vec_ty(valueElemTy, vec);
     auto elemsPerThread = getElemsPerThread(val.getType());
+    // mask
+    Value mask = int_val(1, 1);
+    auto shape = valueTy.getShape();
+    auto numElements = product(shape);
+    auto tid = tid_val();
+    mask = and_(mask, icmp_slt(mul(tid, i32_val(elemsPerThread)),
+                               i32_val(numElements)));
+
     SmallVector<Value> resultVals(elemsPerThread);
     for (size_t i = 0; i < elemsPerThread; i += vec) {
       Value rmwVal = undef(vecTy);
@@ -5983,6 +6055,8 @@ struct AtomicRMWOpConversion
         rmwVal = insert_element(vecTy, rmwVal, valElements[i + ii], iiVal);
       }
       Value rmwPtr = ptrElements[i];
+      Value rmwMask = maskElements[i];
+      rmwMask = and_(rmwMask, mask);
       std::string sTy;
       PTXBuilder ptxBuilder;
 
@@ -6030,9 +6104,8 @@ struct AtomicRMWOpConversion
         return failure();
       }
       atom.o(rmwOp).o(sTy);
-      //TODO:[dongdongl] actual mask support
-      Value pred = int_val(1, 1);
-      atom(dstOpr, ptrOpr, valOpr).predicate(pred);
+      atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
+
       auto ret = ptxBuilder.launch(rewriter, loc, valueElemTy);
       for (int ii = 0; ii < vec; ++ii) {
         resultVals[i * vec + ii] =
@@ -6167,6 +6240,7 @@ private:
             dstType.getShape(), dstType.getElementType(),
             triton::gpu::SharedEncodingAttr::get(mod.getContext(), dstDotOp,
                                                  srcType.getShape(),
+                                                 getOrder(srcBlocked),
                                                  srcType.getElementType()));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), tmpType, cvtOp.getOperand());
