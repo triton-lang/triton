@@ -211,7 +211,6 @@ def maximum(x, y) -> tl.tensor:
 
 
 # minimum is in trition.core
-minimum = tl.minimum
 
 
 @triton.jit
@@ -222,7 +221,7 @@ def sigmoid(x) -> tl.tensor:
 
 @triton.jit
 @_add_math_1arg_docstr("softmax")
-def softmax(x, ieee_rounding: tl.constexpr = False) -> tl.tensor:
+def softmax(x, ieee_rounding: tl.constexpr[bool] = tl.constexpr(False)) -> tl.tensor:
     z = x - max(x, 0)
     num = tl.exp(z)
     den = sum(num, 0)

@@ -235,6 +235,8 @@ class ValueConstructor:
             "range": range,
             # this is the triton `minimum`
             "min": core.minimum,
+            "constexpr": base.constexpr,
+            "bool": bool,
             "float": float,
             "int": int,
             "str": str,
@@ -514,8 +516,10 @@ class CodeGenerator(ast.NodeVisitor):
                 value = base.constexpr(value)
             self.value_constructor.lscope[target] = value
             return self.value_constructor.lscope[target]
+
         # default: call visit_Assign
-        return self.visit_Assign(node)
+        assign = ast.Assign(targets=[node.target], value=node.value)
+        return self.visit(assign)[0]
 
     def visit_Assign(self, node):
         _names = []
@@ -536,6 +540,8 @@ class CodeGenerator(ast.NodeVisitor):
             values = [self.builder.extract_value(struct, i) for i in range(len(tys))]
             values = [base.tensor(v, ty) for v, ty in zip(values, tys)]
         assert len(values) == len(names)
+
+        resolved_values = []
         for name, value in zip(names, values):
             # TODO: can we store constexpr here to support constant folding?
             # by default, constexpr are assigned into python variable
@@ -547,7 +553,10 @@ class CodeGenerator(ast.NodeVisitor):
                 )
             if not isinstance(value, base.tensor):
                 value = base._to_tensor(value, self.builder)
+            resolved_values.append(value)
             self.value_constructor.set_value(name, value)
+
+        return tuple(resolved_values)
 
     def visit_AugAssign(self, node):
         name = node.target.id

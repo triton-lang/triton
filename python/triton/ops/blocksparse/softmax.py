@@ -28,9 +28,9 @@ def _blocksparse_softmax_fwd(
     stride_hr,  # relative attention
     scale,
     is_causal,
-    ROW_SIZE: tl.constexpr,
-    BLOCK_SIZE: tl.constexpr,
-    IS_DENSE: tl.constexpr,
+    ROW_SIZE: tl.constexpr[int],
+    BLOCK_SIZE: tl.constexpr[int],
+    IS_DENSE: tl.constexpr[bool],
 ):
     h = tl.program_id(0)
     m = tl.program_id(1)
@@ -94,9 +94,9 @@ def _blocksparse_softmax_bwd(
     stride_hr,
     stride_er,
     is_causal,
-    ROW_SIZE: tl.constexpr,
-    BLOCK_SIZE: tl.constexpr,
-    IS_DENSE: tl.constexpr,
+    ROW_SIZE: tl.constexpr[int],
+    BLOCK_SIZE: tl.constexpr[int],
+    IS_DENSE: tl.constexpr[bool],
 ):
     h = tl.program_id(0)
     m = tl.program_id(1)

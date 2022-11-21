@@ -1,15 +1,17 @@
 import triton
 import triton.language as tl
 
-PHILOX_KEY_A: tl.constexpr = tl.constexpr(-1640531527)  # 0x9E3779B9
-PHILOX_KEY_B: tl.constexpr = tl.constexpr(-1150833019)  # 0xBB67AE85
-PHILOX_ROUND_A: tl.constexpr = tl.constexpr(-766435501)  # 0xD2511F53
-PHILOX_ROUND_B: tl.constexpr = tl.constexpr(-845247145)  # 0xCD9E8D57
-N_ROUNDS_DEFAULT: tl.constexpr = tl.constexpr(10)  # Default number of rounds for philox
+PHILOX_KEY_A: tl.constexpr[int] = tl.constexpr(-1640531527)  # 0x9E3779B9
+PHILOX_KEY_B: tl.constexpr[int] = tl.constexpr(-1150833019)  # 0xBB67AE85
+PHILOX_ROUND_A: tl.constexpr[int] = tl.constexpr(-766435501)  # 0xD2511F53
+PHILOX_ROUND_B: tl.constexpr[int] = tl.constexpr(-845247145)  # 0xCD9E8D57
+N_ROUNDS_DEFAULT: tl.constexpr[int] = tl.constexpr(
+    10
+)  # Default number of rounds for philox
 
 
 @triton.jit
-def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
+def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: tl.constexpr[int] = N_ROUNDS_DEFAULT):
     """
     Run `n_rounds` rounds of Philox for state (c0, c1, c2, c3) and key (k0, k1).
     """
@@ -29,7 +31,7 @@ def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: tl.constexpr = N_ROUNDS_DEFAUL
 
 
 @triton.jit
-def philox(seed, c0, c1, c2, c3, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
+def philox(seed, c0, c1, c2, c3, n_rounds: tl.constexpr[int] = N_ROUNDS_DEFAULT):
     seed = seed.to(tl.uint64)
     seed_hi = ((seed >> 32) & 0xFFFFFFFF).to(tl.uint32)
     seed_lo = (seed & 0xFFFFFFFF).to(tl.uint32)
@@ -37,7 +39,7 @@ def philox(seed, c0, c1, c2, c3, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
 
 
 @triton.jit
-def randint(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
+def randint(seed, offset, n_rounds: tl.constexpr[int] = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offset` block, returns a single
     block of random :code:`int32`.
@@ -53,7 +55,7 @@ def randint(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
 
 
 @triton.jit
-def randint4x(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
+def randint4x(seed, offset, n_rounds: tl.constexpr[int] = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offset` block, returns four
     blocks of random :code:`int32`.
@@ -82,7 +84,7 @@ def uint32_to_uniform_float(x):
 
 
 @triton.jit
-def rand(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
+def rand(seed, offset, n_rounds: tl.constexpr[int] = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offset` block,
     returns a block of random :code:`float32` in :math:`U(0, 1)`
@@ -96,7 +98,7 @@ def rand(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
 
 
 @triton.jit
-def rand4x(seed, offsets, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
+def rand4x(seed, offsets, n_rounds: tl.constexpr[int] = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offsets` block,
     returns a 4 blocks of random :code:`float32` in :math:`U(0, 1)`
@@ -123,7 +125,7 @@ def pair_uniform_to_normal(u1, u2):
 
 
 @triton.jit
-def randn(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
+def randn(seed, offset, n_rounds: tl.constexpr[int] = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offset` block,
     returns a block of random :code:`float32` in :math:`\\mathcal{N}(0, 1)`
@@ -139,7 +141,7 @@ def randn(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
 
 
 @triton.jit
-def randn4x(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
+def randn4x(seed, offset, n_rounds: tl.constexpr[int] = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offset` block,
     returns a 4 blocks of random :code:`float32` in :math:`\\mathcal{N}(0, 1)`

@@ -175,7 +175,7 @@ def _kernel(
     GROUP_M: tl.constexpr,
     SPLIT_K: tl.constexpr,
     EVEN_K: tl.constexpr,
-    ACC_TYPE: tl.constexpr,
+    ACC_TYPE: tl.constexpr[tl.dtype],
 ):
     # matrix multiplication
     pid = tl.program_id(0)

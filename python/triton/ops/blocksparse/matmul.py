@@ -38,11 +38,11 @@ def _sdd_kernel(
     K,
     grid_offset,
     lut,
-    TILE_M: tl.constexpr,
-    TILE_N: tl.constexpr,
-    TILE_K: tl.constexpr,
-    BLOCK: tl.constexpr,
-    EVEN_K: tl.constexpr,
+    TILE_M: tl.constexpr[int],
+    TILE_N: tl.constexpr[int],
+    TILE_K: tl.constexpr[int],
+    BLOCK: tl.constexpr[int],
+    EVEN_K: tl.constexpr[bool],
 ):
     # ------------ #
     # - Prologue - #
@@ -191,11 +191,11 @@ def _dsd_kernel(
     DS0,
     DS1,
     lut,
-    TILE_M: tl.constexpr,
-    TILE_N: tl.constexpr,
-    TILE_K: tl.constexpr,
-    GROUP_SIZE_M: tl.constexpr,
-    BLOCK: tl.constexpr,
+    TILE_M: tl.constexpr[int],
+    TILE_N: tl.constexpr[int],
+    TILE_K: tl.constexpr[int],
+    GROUP_SIZE_M: tl.constexpr[int],
+    BLOCK: tl.constexpr[int],
 ):
     # ------------ #
     # - Prologue - #

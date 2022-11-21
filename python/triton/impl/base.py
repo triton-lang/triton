@@ -11,6 +11,7 @@ from typing import (
     TypeVar,
     Optional,
     Union,
+    Generic,
 )
 
 import torch
@@ -363,12 +364,14 @@ pi32_t = pointer_type(int32)
 # -----------------------
 
 
-class constexpr:
+class constexpr(Generic[T]):
     """
     This class is used to store a value that is known at compile-time.
     """
 
-    def __init__(self, value):
+    value: T
+
+    def __init__(self, value: Union[T, constexpr[T]]):
         if isinstance(value, constexpr):
             self.value = value.value
         else:
@@ -377,26 +380,26 @@ class constexpr:
     def __repr__(self) -> str:
         return f"constexpr[{self.value}]"
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return bool(self.value)
 
-    def __ge__(self, other):
+    def __ge__(self, other) -> bool:
         other = other.value if isinstance(other, constexpr) else other
         return self.value >= other
 
-    def __gt__(self, other):
+    def __gt__(self, other) -> bool:
         other = other.value if isinstance(other, constexpr) else other
         return self.value > other
 
-    def __le__(self, other):
+    def __le__(self, other) -> bool:
         other = other.value if isinstance(other, constexpr) else other
         return self.value <= other
 
-    def __lt__(self, other):
+    def __lt__(self, other) -> bool:
         other = other.value if isinstance(other, constexpr) else other
         return self.value < other
 
-    def __eq__(self, other):
+    def __eq__(self, other) -> bool:
         other = other.value if isinstance(other, constexpr) else other
         return self.value == other
 
@@ -419,7 +422,7 @@ class constexpr:
         return constexpr(ret_ty(self.value))
 
 
-def _constexpr_to_value(v):
+def _constexpr_to_value(v: Union[T, constexpr[T]]) -> T:
     if isinstance(v, constexpr):
         return v.value
     return v
@@ -440,8 +443,8 @@ class tensor:
     handle: ir.pointer_type
     type: dtype_t
     dtype: dtype_t
-    shape: List[constexpr]
-    numel: constexpr
+    shape: List[constexpr[int]]
+    numel: constexpr[int]
 
     # infer dtype from ir type
     @staticmethod
@@ -1363,9 +1366,12 @@ def _equal(
 
 def _not_equal(
     input: tensor,
-    other: tensor,
+    other: Optional[tensor],
     builder: ir.builder,
 ) -> tensor:
+    if other is None:
+        return True
+
     input, other = _binary_op_type_checking_impl(input, other, builder=builder)
     scalar_ty = input.type.scalar
     # float == float
