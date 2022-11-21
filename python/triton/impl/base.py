@@ -19,21 +19,21 @@ import torch
 from . import ir
 
 
-CallableT = TypeVar("CallableT", bound=Callable)
+T = TypeVar("T")
 
 
-def builtin(fn: CallableT) -> CallableT:
-    @functools.wraps(fn)
+def builtin(fn: T) -> T:
+    @functools.wraps(cast(Callable, fn))
     def wrapper(*args, **kwargs):
         if "_builder" not in kwargs or kwargs["_builder"] is None:
             raise ValueError(
                 "Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)"
             )
-        return fn(*args, **kwargs)
+        return cast(Callable, fn)(*args, **kwargs)
 
     setattr(wrapper, "__triton_builtin__", True)
 
-    return cast(CallableT, wrapper)
+    return cast(T, wrapper)
 
 
 class dtype:

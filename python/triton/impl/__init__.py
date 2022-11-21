@@ -11,7 +11,6 @@ from .base import TensorWrapper, reinterpret
 # and .compiler depends upon the core stack.
 from .jitlib import (
     extern,
-    ExternalFunction,
     jit,
     JITFunction,
     KernelInterface,
@@ -39,7 +38,6 @@ __all__ = [
     "CompiledKernel",
     "Config",
     "extern",
-    "ExternalFunction",
     "heuristics",
     "Heuristics",
     "ir",

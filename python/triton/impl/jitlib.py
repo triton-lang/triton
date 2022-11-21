@@ -1,9 +1,11 @@
 from __future__ import annotations, division
 
 import ast
+import functools
 import hashlib
 import inspect
 import textwrap
+from abc import abstractmethod
 from collections import defaultdict, namedtuple
 from typing import (
     Callable,
@@ -15,6 +17,9 @@ from typing import (
     Iterable,
     Union,
     overload,
+    Generic,
+    TypeVar,
+    cast,
 )
 
 import torch
@@ -29,18 +34,19 @@ except ImportError:
     get_cuda_stream = lambda dev_idx: torch.cuda.current_stream(dev_idx).cuda_stream
 
 
-class KernelInterface:
-    def __getitem__(self, grid) -> Callable:
+T = TypeVar("T")
+
+
+class KernelInterface(Generic[T]):
+    run: T
+
+    def __getitem__(self, grid) -> T:
         """
         A JIT function is launched with: fn[grid](*args, **kwargs).
         Hence JITFunction.__getitem__ returns a callable proxy that
         memorizes the grid.
         """
-
-        def launcher(*args, **kwargs):
-            return self.run(*args, grid=grid, **kwargs)
-
-        return launcher
+        return cast(T, functools.partial(cast(Callable, self.run), grid=grid))
 
 
 class DependenciesFinder(ast.NodeVisitor):
@@ -84,11 +90,11 @@ class DependenciesFinder(ast.NodeVisitor):
         self.ret = hashlib.md5(self.ret).hexdigest()
 
 
-class JITFunction(KernelInterface):
+class JITFunction(KernelInterface[T]):
+    cache_hook: Optional[Callable[..., bool]] = None
+    """Hook for inspecting compiled functions and modules."""
 
-    # Hook for inspecting compiled functions and modules
-    cache_hook = None
-    divisibility = 16
+    divisibility: int = 16
     do_not_specialize: Set[Any]
     cache: Dict[torch.device, object]
     kernel_decorators: List[Any]
@@ -419,7 +425,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
 
 
 @overload
-def jit(fn: Callable) -> JITFunction:
+def jit(fn: T) -> JITFunction[T]:
     ...
 
 
@@ -428,20 +434,21 @@ def jit(
     *,
     version=None,
     do_not_specialize: Optional[Iterable[Any]] = None,
-) -> Callable[[Callable], JITFunction]:
+) -> Callable[[T], JITFunction[T]]:
     ...
 
 
 def jit(
-    fn: Optional[Callable] = None,
+    fn: Optional[T] = None,
     *,
     version=None,
     do_not_specialize: Optional[Iterable[Any]] = None,
-) -> Union[JITFunction, Callable[[Callable], JITFunction]]:
+) -> Union[JITFunction[T], Callable[[T], JITFunction[T]]]:
     """
     Decorator for JIT-compiling a function using the Triton compiler.
 
-    :note: When a jit'd function is called, :code:`torch.tensor` arguments are implicitly converted to pointers using the :code:`.data_ptr()` method.
+    :note: When a jit'd function is called, :code:`torch.tensor` arguments are
+        implicitly converted to pointers using the :code:`.data_ptr()` method.
 
     :note: This function will be compiled and run on the GPU. It will only have access to:
 
@@ -454,7 +461,7 @@ def jit(
     :type fn: Callable
     """
 
-    def decorator(fn: Callable) -> JITFunction:
+    def decorator(fn: T) -> JITFunction[T]:
         assert callable(fn)
         return JITFunction(
             fn,
@@ -469,24 +476,10 @@ def jit(
         return decorator
 
 
-class ExternalFunction:
+def extern(fn: T) -> T:
     """
-    A wrapper for external functions
+    A decorator for external functions.
+
+    Deprecated, use `triton.language.builtin(fn)` instead.
     """
-
-    def __init__(self, fn):
-        self.fn = fn
-
-    def __call__(self, *args, **kwargs):
-        if "_builder" not in kwargs or kwargs["_builder"] is None:
-            raise ValueError(
-                "Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)"
-            )
-        return self.fn(*args, **kwargs)
-
-
-def extern(fn):
-    """
-    A decorator for external functions
-    """
-    return ExternalFunction(fn)
+    return base.builtin(fn)
