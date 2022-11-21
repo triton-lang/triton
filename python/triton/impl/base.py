@@ -23,13 +23,19 @@ T = TypeVar("T")
 
 
 def builtin(fn: T) -> T:
-    @functools.wraps(cast(Callable, fn))
+    """Mark a function as builtin.
+
+    decorates with `_builder` guard.
+    """
+    assert callable(fn)
+
+    @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         if "_builder" not in kwargs or kwargs["_builder"] is None:
             raise ValueError(
                 "Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)"
             )
-        return cast(Callable, fn)(*args, **kwargs)
+        return fn(*args, **kwargs)
 
     setattr(wrapper, "__triton_builtin__", True)
 
