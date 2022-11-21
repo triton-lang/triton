@@ -81,8 +81,8 @@ public:
     // we don't handle conversions to DotOperandEncodingAttr
     // this is a heuristics to accommodate fused attention
     auto dstType = convert.getType().cast<RankedTensorType>();
-    if (dstType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
-      return mlir::failure();
+    // if (dstType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
+    //   return mlir::failure();
     // convert to the same layout -- we can delete
     if (op->getResultTypes() == op->getOperandTypes()) {
       rewriter.replaceOp(op, op->getOperands());
