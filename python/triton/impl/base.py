@@ -20,6 +20,8 @@ from . import ir
 
 T = TypeVar("T")
 
+TRITON_BUILTIN = "__triton_builtin__"
+
 
 def builtin(fn: T) -> T:
     """Mark a function as builtin.
@@ -37,9 +39,14 @@ def builtin(fn: T) -> T:
             )
         return fn(*args, **kwargs)
 
-    setattr(wrapper, "__triton_builtin__", True)
+    setattr(wrapper, TRITON_BUILTIN, True)
 
     return cast(T, wrapper)
+
+
+def is_builtin(fn) -> bool:
+    """Is this a registered triton builtin function?"""
+    return getattr(fn, TRITON_BUILTIN, False)
 
 
 class dtype:
