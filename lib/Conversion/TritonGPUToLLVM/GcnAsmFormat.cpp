@@ -110,7 +110,7 @@ std::string GCNInstr::Modifier::dump() const {
   llvm::SmallVector<std::string> mods;
   for (auto *mod : list)
     mods.push_back(mod->dump());
-   return strJoin(mods, " ");
+  return strJoin(mods, " ");
 }
 
 GCNInstr::Operand *GCNBuilder::newAddrOperand(mlir::Value addr,
@@ -131,7 +131,7 @@ std::string GCNBuilder::dump() const {
     lines.push_back(exec->dump());
   }
 
-  return strJoin(lines, "\r\n");
+  return strJoin(lines, "\n\t");
 }
 
 GCNInstrExecution &GCNInstrCommon::call(ArrayRef<Operand *> oprs, ArrayRef<Modifier *> mods) {
@@ -163,7 +163,11 @@ std::string GCNInstrExecution::dump() const {
   }
 
   std::string modsRepr = strJoin(modReprs, " ");
-  os << instrRepr << " " << argsRepr << " " << modsRepr << ";";
+  if (!modsRepr.empty()) {
+    os << instrRepr << " " << argsRepr << ", " << modsRepr;
+  } else {
+    os << instrRepr << " " << argsRepr;
+  }
   os.flush();
   return osStr;
 }

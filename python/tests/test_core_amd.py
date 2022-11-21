@@ -13,9 +13,9 @@ import triton._C.libtriton.triton as _triton
 import triton.language as tl
 from triton.runtime.jit import JITFunction, TensorWrapper, reinterpret
 
-int_dtypes = ['int8']
-uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
-float_dtypes = ['float16', 'float32', 'float64']
+int_dtypes = ['int32', 'int64']
+uint_dtypes = ['uint32', 'uint64']
+float_dtypes = ['float32', 'float64']
 dtypes = int_dtypes + uint_dtypes + float_dtypes
 # TODO: handle bfloat16
 dtypes_with_bfloat16 = dtypes  # + ['bfloat16']
@@ -241,3 +241,37 @@ def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
         ('uint64', 'float32'),
         ('uint64', 'float64'),
     ]
+
+@pytest.mark.parametrize("dtype_x, dtype_y, op", [
+    (dtype_x, dtype_y, op)
+    for op in ['+', '-', '*']  # , '%'] #TODO: handle remainder
+    for dtype_x in dtypes
+    for dtype_y in dtypes
+])
+def test_bin_op(dtype_x, dtype_y, op, device='cuda'):
+    expr = f' x {op} y'
+    if op == '%' and dtype_x in int_dtypes + uint_dtypes and dtype_y in int_dtypes + uint_dtypes:
+        # LLVM has 'numpy.fmod', not 'numpy.remainder', semantics on integer remainders.
+        numpy_expr = 'np.fmod(x, y)'
+    elif op in ('/', '%') and dtype_x in ('int16', 'float16', 'bfloat16') and dtype_y in ('int16', 'float16', 'bfloat16'):
+        # Triton promotes 16-bit floating-point / and % to 32-bit because there
+        # are no native div or FRem operations on float16. Since we have to
+        # convert anyway, we may as well take the accuracy bump.
+        numpy_expr = f'x.astype(np.float32) {op} y.astype(np.float32)'
+    elif (dtype_x in uint_dtypes and dtype_y in int_dtypes and _bitwidth(dtype_x) >= _bitwidth(dtype_y)):
+        numpy_expr = f'x.astype(np.{dtype_x}) {op} y.astype(np.{dtype_x})'
+    elif (dtype_y in uint_dtypes and dtype_x in int_dtypes and _bitwidth(dtype_y) >= _bitwidth(dtype_x)):
+        numpy_expr = f'x.astype(np.{dtype_y}) {op} y.astype(np.{dtype_y})'
+    else:
+        numpy_expr = None
+    if op == '%' and _mod_operation_ill_conditioned(dtype_x, dtype_y):
+        with pytest.raises(AssertionError, match='Not equal to tolerance'):
+            _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device)
+    elif (op in ('%', '/') and
+          ((dtype_x in int_dtypes and dtype_y in uint_dtypes) or
+           (dtype_x in uint_dtypes and dtype_y in int_dtypes))):
+        with pytest.raises(triton.CompilationError) as exc_info:
+            _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device)
+        assert re.match('Cannot use .* because they have different signedness', str(exc_info.value.__cause__))
+    else:
+        _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device)

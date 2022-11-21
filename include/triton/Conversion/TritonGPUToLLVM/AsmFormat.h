@@ -15,7 +15,7 @@ class Location;
 namespace triton {
 using llvm::StringRef;
 
-std::string strJoin(llvm::ArrayRef<std::string> strs,
+inline std::string strJoin(llvm::ArrayRef<std::string> strs,
                     llvm::StringRef delimiter) {
   std::string osStr;
   llvm::raw_string_ostream os(osStr);
