@@ -1415,10 +1415,12 @@ def compile(fn, **kwargs):
     module = fn
     # run compilation pipeline  and populate metadata
     for ir, (parse, compile) in list(stages.items())[first_stage:]:
+      print(ir)
       path = fn_cache_manager._make_path(f"{name}.{ir}")
       if ir == ext:
         next_module = parse(fn)
       elif os.path.exists(path) and\
+           ir in metadata["ctime"] and\
            os.path.getctime(path) == metadata["ctime"][ir]:
         next_module = parse(path)
       else:
