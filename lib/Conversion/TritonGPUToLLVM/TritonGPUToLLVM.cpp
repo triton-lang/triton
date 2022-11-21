@@ -1036,7 +1036,7 @@ struct LoadStoreConversionBase : public ConvertTritonGPUOpToLLVMPatternBase {
   // Get corresponding LLVM element values of \param value.
   static SmallVector<Value> getLLVMElems(Value value, Value llValue,
                                          ConversionPatternRewriter &rewriter,
-                                         Location loc) const {
+                                         Location loc) {
     if (!value)
       return {};
     if (!llValue.getType().isa<LLVM::LLVMStructType>())
@@ -2694,7 +2694,7 @@ struct ElementwiseOpConversion
 
   explicit ElementwiseOpConversion(LLVMTypeConverter &typeConverter,
                                    PatternBenefit benefit = 1)
-      : ElementwiseOpConversionBase<SourceOp, DestOp, ElementwiseOpConversion>(
+      : ElementwiseOpConversionBase<SourceOp, ElementwiseOpConversion>(
             typeConverter, benefit) {}
 
   // An interface to support variant DestOp builder.
@@ -2763,7 +2763,7 @@ struct CmpFOpConversion
   static LLVM::FCmpOp createDestOp(triton::gpu::CmpFOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, ValueRange operands,
-                                   Location loc) const {
+                                   Location loc) {
     return rewriter.create<LLVM::FCmpOp>(
         loc, elemTy, ArithCmpFPredicteToLLVM(op.predicate()), operands[0],
         operands[1]);
@@ -3255,7 +3255,6 @@ public:
     cMatShape = matShape[order[0]];
     sMatShape = matShape[order[1]];
 
-    Stride = smemStrides[1];
     sStride = smemStrides[0];
 
     // rule: k must be the fast-changing axis.
@@ -5880,9 +5879,9 @@ struct FDivOpConversion
       assert(0 && bitwidth && "not supported");
     }
 
-    auto res = ptxBuilder.newOperand(bidwith == 32 ? "=r" : "=l");
-    auto lhs = ptxBuilder.newOperand(operands[0], bidwidth == 32 ? "r" : "l");
-    auto rhs = ptxBuilder.newOperand(operands[1], bidwidth == 32 ? "r" : "l");
+    auto res = ptxBuilder.newOperand(bitwidth == 32 ? "=r" : "=l");
+    auto lhs = ptxBuilder.newOperand(operands[0], bitwidth == 32 ? "r" : "l");
+    auto rhs = ptxBuilder.newOperand(operands[1], bitwidth == 32 ? "r" : "l");
     fdiv(res, lhs, rhs);
 
     Value ret = ptxBuilder.launch(rewriter, loc, elemTy, false);
