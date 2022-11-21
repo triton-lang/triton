@@ -143,9 +143,7 @@ You will specifically learn about:
 import torch
 
 import triton
-import triton.core
 import triton.language as tl
-
 
 # %
 # :code:`triton.jit`'ed functions can be auto-tuned by using the `triton.autotune`
@@ -158,132 +156,33 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 128,
-                "BLOCK_SIZE_N": 256,
-                "BLOCK_SIZE_K": 32,
-                "GROUP_SIZE_M": 8,
-            },
-            num_stages=3,
-            num_warps=8,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 256,
-                "BLOCK_SIZE_N": 128,
-                "BLOCK_SIZE_K": 32,
-                "GROUP_SIZE_M": 8,
-            },
-            num_stages=3,
-            num_warps=8,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 256,
-                "BLOCK_SIZE_N": 64,
-                "BLOCK_SIZE_K": 32,
-                "GROUP_SIZE_M": 8,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 64,
-                "BLOCK_SIZE_N": 256,
-                "BLOCK_SIZE_K": 32,
-                "GROUP_SIZE_M": 8,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 128,
-                "BLOCK_SIZE_N": 128,
-                "BLOCK_SIZE_K": 32,
-                "GROUP_SIZE_M": 8,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 128,
-                "BLOCK_SIZE_N": 64,
-                "BLOCK_SIZE_K": 32,
-                "GROUP_SIZE_M": 8,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 64,
-                "BLOCK_SIZE_N": 128,
-                "BLOCK_SIZE_K": 32,
-                "GROUP_SIZE_M": 8,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 128,
-                "BLOCK_SIZE_N": 32,
-                "BLOCK_SIZE_K": 32,
-                "GROUP_SIZE_M": 8,
-            },
-            num_stages=4,
-            num_warps=4,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 64,
-                "BLOCK_SIZE_N": 32,
-                "BLOCK_SIZE_K": 32,
-                "GROUP_SIZE_M": 8,
-            },
-            num_stages=5,
-            num_warps=2,
-        ),
-        triton.Config(
-            {
-                "BLOCK_SIZE_M": 32,
-                "BLOCK_SIZE_N": 64,
-                "BLOCK_SIZE_K": 32,
-                "GROUP_SIZE_M": 8,
-            },
-            num_stages=5,
-            num_warps=2,
-        ),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
+        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
     ],
-    key=["M", "N", "K"],
+    key=['M', 'N', 'K'],
 )
 @triton.jit
 def matmul_kernel(
     # Pointers to matrices
-    a_ptr,
-    b_ptr,
-    c_ptr,
+    a_ptr, b_ptr, c_ptr,
     # Matrix dimensions
-    M,
-    N,
-    K,
+    M, N, K,
     # The stride variables represent how much to increase the ptr by when moving by 1
     # element in a particular dimension. E.g. stride_am is how much to increase a_ptr
     # by to get the element one row down (A has M rows)
-    stride_am,
-    stride_ak,
-    stride_bk,
-    stride_bn,
-    stride_cm,
-    stride_cn,
+    stride_am, stride_ak,
+    stride_bk, stride_bn,
+    stride_cm, stride_cn,
     # Meta-parameters
-    BLOCK_SIZE_M: tl.constexpr,
-    BLOCK_SIZE_N: tl.constexpr,
-    BLOCK_SIZE_K: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
     ACTIVATION: tl.constexpr,
 ):
@@ -376,21 +275,14 @@ def matmul(a, b, activation=""):
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (
-        triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
+        triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
     )
     matmul_kernel[grid](
-        a,
-        b,
-        c,
-        M,
-        N,
-        K,
-        a.stride(0),
-        a.stride(1),
-        b.stride(0),
-        b.stride(1),
-        c.stride(0),
-        c.stride(1),
+        a, b, c,
+        M, N, K,
+        a.stride(0), a.stride(1),
+        b.stride(0), b.stride(1),
+        c.stride(0), c.stride(1),
         ACTIVATION=activation,
     )
     return c
@@ -403,8 +295,8 @@ def matmul(a, b, activation=""):
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS)
 
 torch.manual_seed(0)
-a = torch.randn((512, 512), device="cuda", dtype=torch.float16)
-b = torch.randn((512, 512), device="cuda", dtype=torch.float16)
+a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
 triton_output = matmul(a, b)
 torch_output = torch.matmul(a, b)
 print(f"triton_output={triton_output}")
@@ -425,40 +317,35 @@ else:
 
 @triton.testing.perf_report(
     triton.testing.Benchmark(
-        x_names=["M", "N", "K"],  # argument names to use as an x-axis for the plot
+        x_names=['M', 'N', 'K'],  # argument names to use as an x-axis for the plot
         x_vals=[
             128 * i for i in range(2, 33)
         ],  # different possible values for `x_name`
-        line_arg="provider",  # argument name whose value corresponds to a different line in the plot
+        line_arg='provider',  # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=["cublas", "cublas + relu", "triton", "triton + relu"],
+        line_vals=['cublas', 'cublas + relu', 'triton', 'triton + relu'],
         # label name for the lines
-        line_names=[
-            "cuBLAS",
-            "cuBLAS (+ torch.nn.LeakyReLU)",
-            "Triton",
-            "Triton (+ LeakyReLU)",
-        ],
+        line_names=["cuBLAS", "cuBLAS (+ torch.nn.LeakyReLU)", "Triton", "Triton (+ LeakyReLU)"],
         # line styles
-        styles=[("green", "-"), ("green", "--"), ("blue", "-"), ("blue", "--")],
+        styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel="TFLOPS",  # label name for the y-axis
         plot_name="matmul-performance",  # name for the plot. Used also as a file name for saving the plot.
         args={},
     )
 )
 def benchmark(M, N, K, provider):
-    a = torch.randn((M, K), device="cuda", dtype=torch.float16)
-    b = torch.randn((K, N), device="cuda", dtype=torch.float16)
-    if provider == "cublas":
+    a = torch.randn((M, K), device='cuda', dtype=torch.float16)
+    b = torch.randn((K, N), device='cuda', dtype=torch.float16)
+    if provider == 'cublas':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b))
-    if provider == "triton":
+    if provider == 'triton':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b))
-    if provider == "cublas + relu":
+    if provider == 'cublas + relu':
         torch_relu = torch.nn.ReLU(inplace=True)
         ms, min_ms, max_ms = triton.testing.do_bench(
             lambda: torch_relu(torch.matmul(a, b))
         )
-    if provider == "triton + relu":
+    if provider == 'triton + relu':
         ms, min_ms, max_ms = triton.testing.do_bench(
             lambda: matmul(a, b, activation="leaky_relu")
         )
