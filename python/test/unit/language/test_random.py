@@ -12,7 +12,9 @@ import triton.language as tl
 
 
 class PhiloxConfig:
-    def __init__(self, PHILOX_ROUND_A, PHILOX_ROUND_B, PHILOX_KEY_A, PHILOX_KEY_B, DTYPE):
+    def __init__(
+        self, PHILOX_ROUND_A, PHILOX_ROUND_B, PHILOX_KEY_A, PHILOX_KEY_B, DTYPE
+    ):
         self.PHILOX_ROUND_A = np.array(PHILOX_ROUND_A, dtype=DTYPE)
         self.PHILOX_ROUND_B = np.array(PHILOX_ROUND_B, dtype=DTYPE)
         self.PHILOX_KEY_A = np.array(PHILOX_KEY_A, dtype=DTYPE)
@@ -54,7 +56,7 @@ class CustomPhilox4x:
         res = []
         while len(res) < pad:
             res.append(np.array(n, dtype=self._dtype))
-            n >>= (np.dtype(self._dtype).itemsize * 8)
+            n >>= np.dtype(self._dtype).itemsize * 8
         assert n == 0
         return tuple(res)
 
@@ -111,18 +113,23 @@ BLOCK = 1024
 # test generation of random uint32
 
 
-@pytest.mark.parametrize('size, seed',
-                         [(size, seed) for size in ['10', '4,53', '10000']
-                          for seed in [0, 42, 124, 54, 0xffffffff, 0xdeadbeefcafeb0ba]]
-                         )
-def test_randint(size, seed, device='cuda'):
-    size = list(map(int, size.split(',')))
+@pytest.mark.parametrize(
+    "size, seed",
+    [
+        (size, seed)
+        for size in ["10", "4,53", "10000"]
+        for seed in [0, 42, 124, 54, 0xFFFFFFFF, 0xDEADBEEFCAFEB0BA]
+    ],
+)
+def test_randint(size, seed, device="cuda"):
+    size = list(map(int, size.split(",")))
 
     @triton.jit
     def kernel(X, N, seed):
         offset = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
         rand = tl.randint(seed, offset)
         tl.store(X + offset, rand, mask=offset < N)
+
     # triton result
     x = torch.empty(size, dtype=torch.int32, device=device)
     N = x.numel()
@@ -134,40 +141,42 @@ def test_randint(size, seed, device='cuda'):
     out_ref = [gen.random_raw()[0] for _ in out_tri]
     assert out_tri == out_ref
 
+
 # test uniform PRNG
 
 
-@pytest.mark.parametrize('size, seed',
-                         [(size, seed) for size in [1000000]
-                          for seed in [0, 42, 124, 54]]
-                         )
-def test_rand(size, seed, device='cuda'):
+@pytest.mark.parametrize(
+    "size, seed", [(size, seed) for size in [1000000] for seed in [0, 42, 124, 54]]
+)
+def test_rand(size, seed, device="cuda"):
     @triton.jit
     def kernel(X, N, seed):
         offset = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
         rand = tl.rand(seed, offset)
         tl.store(X + offset, rand, mask=offset < N)
+
     # triton result
     x = torch.empty(size, dtype=torch.float32, device=device)
     N = x.numel()
     grid = (triton.cdiv(N, BLOCK),)
     kernel[grid](x, N, seed)
     assert all((x >= 0) & (x <= 1))
-    assert scipy.stats.kstest(x.tolist(), 'uniform', args=(0, 1)).statistic < 0.01
+    assert scipy.stats.kstest(x.tolist(), "uniform", args=(0, 1)).statistic < 0.01
+
 
 # test normal PRNG
 
 
-@pytest.mark.parametrize('size, seed',
-                         [(size, seed) for size in [1000000]
-                          for seed in [0, 42, 124, 54]]
-                         )
-def test_randn(size, seed, device='cuda'):
+@pytest.mark.parametrize(
+    "size, seed", [(size, seed) for size in [1000000] for seed in [0, 42, 124, 54]]
+)
+def test_randn(size, seed, device="cuda"):
     @triton.jit
     def kernel(X, N, seed):
         offset = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
         rand = tl.randn(seed, offset)
         tl.store(X + offset, rand, mask=offset < N)
+
     # triton result
     x = torch.empty(size, dtype=torch.float32, device=device)
     N = x.numel()
@@ -179,6 +188,7 @@ def test_randn(size, seed, device='cuda'):
 
 # tl.rand() should never produce >=1.0
 
+
 def test_rand_limits():
     @triton.jit
     def kernel(input, output, n: tl.constexpr):
@@ -187,11 +197,15 @@ def test_rand_limits():
         y = tl.random.uint32_to_uniform_float(x)
         tl.store(output + idx, y)
 
-    min_max_int32 = torch.tensor([
-        torch.iinfo(torch.int32).min,
-        torch.iinfo(torch.int32).max,
-    ], dtype=torch.int32, device='cuda')
-    output = torch.empty(2, dtype=torch.float32, device='cuda')
+    min_max_int32 = torch.tensor(
+        [
+            torch.iinfo(torch.int32).min,
+            torch.iinfo(torch.int32).max,
+        ],
+        dtype=torch.int32,
+        device="cuda",
+    )
+    output = torch.empty(2, dtype=torch.float32, device="cuda")
     kernel[(1,)](min_max_int32, output, 2)
 
     assert output[0] == output[1]
