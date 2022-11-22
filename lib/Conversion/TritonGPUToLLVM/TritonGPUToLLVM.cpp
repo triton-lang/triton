@@ -2239,16 +2239,16 @@ struct AllocTensorOpConversion
     smemBase = bitcast(smemBase, elemPtrTy);
     auto order = resultTy.getEncoding().cast<SharedEncodingAttr>().getOrder();
     // workaround for 3D tensors
-    // TODO: We need to modify the pipeline pass to give a proper shared encoding to 3D tensors
+    // TODO: We need to modify the pipeline pass to give a proper shared
+    // encoding to 3D tensors
     SmallVector<unsigned> newOrder;
-    if (resultTy.getShape().size() == 3) 
+    if (resultTy.getShape().size() == 3)
       newOrder = {1 + order[0], 1 + order[1], 0};
     else
       newOrder = SmallVector<unsigned>(order.begin(), order.end());
 
-    
-    auto smemObj =
-        SharedMemoryObject(smemBase, resultTy.getShape(), newOrder, loc, rewriter);
+    auto smemObj = SharedMemoryObject(smemBase, resultTy.getShape(), newOrder,
+                                      loc, rewriter);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
@@ -2882,6 +2882,8 @@ private:
       SmallVector<Value> multiDimWarpId(2);
       multiDimWarpId[0] = urem(warpId, idx_val(mmaLayout.getWarpsPerCTA()[0]));
       multiDimWarpId[1] = udiv(warpId, idx_val(mmaLayout.getWarpsPerCTA()[0]));
+      multiDimWarpId[0] = urem(multiDimWarpId[0], idx_val(shape[0] / 16));
+      multiDimWarpId[1] = urem(multiDimWarpId[1], idx_val(shape[1] / 8));
       Value four = idx_val(4);
       Value mmaGrpId = udiv(laneId, four);
       Value mmaGrpIdP8 = add(mmaGrpId, idx_val(8));
@@ -4128,8 +4130,9 @@ private:
 struct MMA16816ConversionHelper {
   MmaEncodingAttr mmaLayout;
   ArrayRef<unsigned int> wpt;
+  SmallVector<unsigned int> properWpt;
 
-  Value thread, lane, warp, warpMN, warpN, warpM;
+  Value thread, lane, warp;
 
   DotOpMmaV2ConversionHelper helper;
   ConversionPatternRewriter &rewriter;
@@ -4139,20 +4142,35 @@ struct MMA16816ConversionHelper {
 
   using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
 
-  MMA16816ConversionHelper(MmaEncodingAttr mmaLayout, Value thread,
-                           ConversionPatternRewriter &rewriter,
+  // dotOperand: type of either one operand of dotOp.
+  MMA16816ConversionHelper(Type dotOperand, MmaEncodingAttr mmaLayout,
+                           Value thread, ConversionPatternRewriter &rewriter,
                            TypeConverter *typeConverter, Location loc)
       : mmaLayout(mmaLayout), thread(thread), helper(mmaLayout),
         rewriter(rewriter), typeConverter(typeConverter), loc(loc),
         ctx(mmaLayout.getContext()) {
     wpt = mmaLayout.getWarpsPerCTA();
+    helper.deduceMmaType(dotOperand);
 
     Value _32 = i32_val(32);
     lane = urem(thread, _32);
     warp = udiv(thread, _32);
-    warpMN = udiv(warp, i32_val(wpt[0]));
-    warpM = urem(warp, i32_val(wpt[0]));
-    warpN = urem(warpMN, i32_val(wpt[1]));
+    // warpMN = udiv(warp, i32_val(wpt[0]));
+    // warpM = urem(warp, i32_val(wpt[0]));
+    // warpN = urem(warpMN, i32_val(wpt[1]));
+  }
+
+  // Get a warpId for M axis.
+  Value getWarpM(int M) const {
+    auto matShape = helper.getMmaMatShape();
+    return urem(urem(warp, i32_val(wpt[0])), i32_val(M / matShape[0]));
+  }
+
+  // Get a warpId for N axis.
+  Value getWarpN(int N) const {
+    auto matShape = helper.getMmaMatShape();
+    Value warpMN = udiv(warp, i32_val(wpt[0]));
+    return urem(urem(warpMN, i32_val(wpt[1])), i32_val(N / matShape[1]));
   }
 
   // Get the mmaInstrShape from either $a or $b.
@@ -4214,20 +4232,18 @@ struct MMA16816ConversionHelper {
   }
 
   // Get number of elements per thread for $a operand.
-  static size_t getANumElemsPerThread(RankedTensorType operand,
-                                      ArrayRef<unsigned> wpt) {
+  static size_t getANumElemsPerThread(RankedTensorType operand, int wpt) {
     auto shape = operand.getShape();
-    int repM = getNumRepM(operand, shape[0], wpt[0]);
+    int repM = getNumRepM(operand, shape[0], wpt);
     int repK = getNumRepK_(operand, shape[1]);
     return 4 * repM * repK;
   }
 
   // Get number of elements per thread for $b operand.
-  static size_t getBNumElemsPerThread(RankedTensorType operand,
-                                      ArrayRef<unsigned> wpt) {
+  static size_t getBNumElemsPerThread(RankedTensorType operand, int wpt) {
     auto shape = operand.getShape();
     int repK = getNumRepK_(operand, shape[0]);
-    int repN = getNumRepN(operand, shape[1], wpt[1]);
+    int repN = getNumRepN(operand, shape[1], wpt);
     return 4 * std::max(repN / 2, 1) * repK;
   }
 
@@ -4245,6 +4261,7 @@ struct MMA16816ConversionHelper {
     int numRepK = getNumRepK(aTensorTy, shape[1]);
 
     if (aTensorTy.getEncoding().isa<SharedEncodingAttr>()) {
+      Value warpM = getWarpM(shape[0]);
       // load from smem
       loadFn = getLoadMatrixFn(
           tensor, smemObj, mmaLayout, mmaLayout.getWarpsPerCTA()[0] /*wpt*/,
@@ -4278,6 +4295,7 @@ struct MMA16816ConversionHelper {
     int numRepK = getNumRepK(tensorTy, shape[0]);
     int numRepN = getNumRepN(tensorTy, shape[1]);
 
+    Value warpN = getWarpN(shape[1]);
     auto loadFn = getLoadMatrixFn(
         tensor, smemObj, mmaLayout, mmaLayout.getWarpsPerCTA()[1] /*wpt*/,
         0 /*kOrder*/, {mmaInstrK, mmaInstrN} /*instrShape*/,
@@ -4606,9 +4624,9 @@ Value ConvertLayoutOpConversion::lowerSharedToDotOperandMMA(
   Value res;
 
   if (!isOuter && mmaLayout.getVersion() == 2 && isHMMA) { // tensor core v2
-    MMA16816ConversionHelper mmaHelper(mmaLayout, getThreadId(rewriter, loc),
-                                       rewriter, getTypeConverter(),
-                                       op.getLoc());
+    MMA16816ConversionHelper mmaHelper(src.getType(), mmaLayout,
+                                       getThreadId(rewriter, loc), rewriter,
+                                       getTypeConverter(), op.getLoc());
 
     if (dotOperandLayout.getOpIdx() == 0) {
       // operand $a
@@ -4699,12 +4717,15 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adaptor,
                        .cast<RankedTensorType>()
                        .getEncoding()
                        .cast<MmaEncodingAttr>();
-  MMA16816ConversionHelper mmaHelper(mmaLayout, getThreadId(rewriter, loc),
-                                     rewriter, getTypeConverter(), loc);
 
   Value A = op.a();
   Value B = op.b();
   Value C = op.c();
+
+  MMA16816ConversionHelper mmaHelper(A.getType(), mmaLayout,
+                                     getThreadId(rewriter, loc), rewriter,
+                                     getTypeConverter(), loc);
+
   auto ATensorTy = A.getType().cast<RankedTensorType>();
   auto BTensorTy = B.getType().cast<RankedTensorType>();
 
@@ -5536,13 +5557,13 @@ public:
         if (mmaLayout.getVersion() == 2) {
           if (dotOpLayout.getOpIdx() == 0) { // $a
             int elems =
-                MMA16816ConversionHelper::getANumElemsPerThread(type, wpt);
+                MMA16816ConversionHelper::getANumElemsPerThread(type, wpt[0]);
             return LLVM::LLVMStructType::getLiteral(
                 ctx, SmallVector<Type>(elems, vecTy));
           }
           if (dotOpLayout.getOpIdx() == 1) { // $b
             int elems =
-                MMA16816ConversionHelper::getBNumElemsPerThread(type, wpt);
+                MMA16816ConversionHelper::getBNumElemsPerThread(type, wpt[1]);
             return struct_ty(SmallVector<Type>(elems, vecTy));
           }
         }
@@ -6163,10 +6184,9 @@ private:
       if (srcBlocked && dstDotOp) {
         auto tmpType = RankedTensorType::get(
             dstType.getShape(), dstType.getElementType(),
-            triton::gpu::SharedEncodingAttr::get(mod.getContext(), dstDotOp,
-                                                 srcType.getShape(),
-                                                 getOrder(srcBlocked),
-                                                 srcType.getElementType()));
+            triton::gpu::SharedEncodingAttr::get(
+                mod.getContext(), dstDotOp, srcType.getShape(),
+                getOrder(srcBlocked), srcType.getElementType()));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), tmpType, cvtOp.getOperand());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
