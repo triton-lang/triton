@@ -13,7 +13,7 @@ std::unique_ptr<Pass> createTritonGPUCanonicalizeLoopsPass();
 
 std::unique_ptr<Pass> createTritonGPUCoalescePass();
 
-std::unique_ptr<Pass> createTritonGPUCombineOpsPass();
+std::unique_ptr<Pass> createTritonGPUCombineOpsPass(int computeCapability = 80);
 
 std::unique_ptr<Pass> createTritonGPUVerifier();
 
