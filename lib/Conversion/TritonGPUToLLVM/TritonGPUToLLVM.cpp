@@ -4148,8 +4148,7 @@ struct MMA16816ConversionHelper {
                            TypeConverter *typeConverter, Location loc)
       : mmaLayout(mmaLayout), thread(thread), helper(mmaLayout),
         rewriter(rewriter), typeConverter(typeConverter), loc(loc),
-        ctx(mmaLayout.getContext()) {
-    wpt = mmaLayout.getWarpsPerCTA();
+        ctx(mmaLayout.getContext()), wpt(mmaLayout.getWarpsPerCTA()) {
     helper.deduceMmaType(dotOperand);
 
     Value _32 = i32_val(32);
@@ -4170,7 +4169,7 @@ struct MMA16816ConversionHelper {
     return urem(urem(warpMN, i32_val(wpt[1])), i32_val(N / matShape[1]));
   }
 
-  // Get the mmaInstrShape from either $a or $b.
+  // Get the mmaInstrShape deducing either from $a or $b.
   std::tuple<int, int, int> getMmaInstrShape(Type operand) const {
     helper.deduceMmaType(operand);
     auto mmaInstrShape = helper.getMmaInstrShape();
@@ -4180,6 +4179,7 @@ struct MMA16816ConversionHelper {
     return std::make_tuple(mmaInstrM, mmaInstrN, mmaInstrK);
   }
 
+  // Get the mmaMatShape deducing either from $a or $b.
   std::tuple<int, int, int> getMmaMatShape(Type operand) const {
     helper.deduceMmaType(operand);
     auto matShape = helper.getMmaMatShape();
