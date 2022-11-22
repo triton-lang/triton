@@ -86,10 +86,10 @@ void MembarAnalysis::transfer(Operation *op, RegionInfo *regionInfo,
       curRegionInfo.syncWriteBuffers.insert(bufferId);
     }
   }
-  // Scratch buffer is considered as a shared memory read
+  // Scratch buffer is considered as a shared memory write
   auto bufferId = allocation->getBufferId(op);
   if (bufferId != Allocation::InvalidBufferId) {
-    curRegionInfo.syncReadBuffers.insert(bufferId);
+    curRegionInfo.syncWriteBuffers.insert(bufferId);
   }
 
   if (regionInfo->isIntersected(curRegionInfo, allocation)) {
