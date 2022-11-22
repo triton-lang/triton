@@ -577,7 +577,6 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_layout_blocked_blocked
   func @convert_layout_blocked_blocked(%arg0: tensor<16x16xf32, #blocked0>) {
     // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK: nvvm.barrier0
     // CHECK: llvm.store
     // CHECK-SAME: !llvm.ptr<vector<1xf32>, 3>
     // CHECK: llvm.store
@@ -625,7 +624,6 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_layout_blocked_blocked_vec
   func @convert_layout_blocked_blocked_vec(%arg0: tensor<16x16xf32, #blocked0>) {
     // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK: nvvm.barrier0
     // CHECK: llvm.store
     // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
     // CHECK: llvm.store
@@ -649,7 +647,6 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_layout_blocked_blocked_multi_rep
   func @convert_layout_blocked_blocked_multi_rep(%arg0: tensor<16x16xf32, #blocked0>) {
     // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK: nvvm.barrier0
     // CHECK: llvm.store
     // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
     // CHECK: nvvm.barrier0
@@ -717,7 +714,6 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK: llvm.mlir.global external @global_smem() {addr_space = 3 : i32} : !llvm.array<0 x i8>
   // CHECK-LABEL: convert_layout_mma_block
   func @convert_layout_mma_blocked(%arg0: tensor<32x16xf32, #mma>) {
-    // CHECK: nvvm.barrier0
     // CHECK: llvm.store
     // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
     // CHECK: llvm.store
