@@ -2323,44 +2323,53 @@ struct InsertSliceOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     // %dst = insert_slice %src into %dst[%offsets]
     Location loc = op->getLoc();
-    auto srcTy = op.source().getType().dyn_cast<RankedTensorType>();
-    auto srcLayout = srcTy.getEncoding().dyn_cast<SharedEncodingAttr>();
-    assert(srcLayout && "Unexpected resultLayout in InsertSliceOpConversion");
+    Value dst = op.dest();
+    Value src = op.source();
+    Value res = op.result();
+
+    auto dstTy = dst.getType().dyn_cast<RankedTensorType>();
+    auto dstLayout = dstTy.getEncoding().dyn_cast<SharedEncodingAttr>();
+    auto dstShape = dstTy.getShape();
+    auto llDst = adaptor.dest();
+    assert(dstLayout && "Unexpected resultLayout in InsertSliceOpConversion");
     assert(op.hasUnitStride() &&
            "Only unit stride supported by InsertSliceOpConversion");
 
     // newBase = base + offset
     // Triton support either static and dynamic offsets
     auto smemObj =
-        getSharedMemoryObjectFromStruct(loc, adaptor.source(), rewriter);
-    SmallVector<Value, 4> opOffsetVals;
-    SmallVector<Value, 4> offsetVals;
+        getSharedMemoryObjectFromStruct(loc, llDst, rewriter);
+    SmallVector<Value, 4> offsets;
+    SmallVector<Value, 4> srcStrides;
     auto mixedOffsets = op.getMixedOffsets();
     for (auto i = 0; i < mixedOffsets.size(); ++i) {
-      if (op.isDynamicOffset(i))
-        opOffsetVals.emplace_back(adaptor.offsets()[i]);
-      else
-        opOffsetVals.emplace_back(i32_val(op.getStaticOffset(i)));
-      offsetVals.emplace_back(add(smemObj.offsets[i], opOffsetVals[i]));
+      if (op.isDynamicOffset(i)) {
+        offsets.emplace_back(adaptor.offsets()[i]);
+      } else {
+        offsets.emplace_back(i32_val(op.getStaticOffset(i)));
+      }
+      // Like insert_slice_async, we only support slice from one dimension,
+      // which has a slice size of 1
+      if (op.getStaticSize(i) != 1) {
+        srcStrides.emplace_back(smemObj.strides[i]);
+      }
     }
+
     // Compute the offset based on the original strides of the shared memory
     // object
-    auto offset = dot(rewriter, loc, opOffsetVals, smemObj.strides);
-    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+    auto offset = dot(rewriter, loc, offsets, smemObj.strides);
+    auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     auto elemPtrTy = ptr_ty(llvmElemTy, 3);
     auto smemBase = gep(elemPtrTy, smemObj.base, offset);
 
-    Value src = op.source();
-    Value dst = op.result();
+    auto srcTy = src.getType().dyn_cast<RankedTensorType>();
     auto srcShape = srcTy.getShape();
-    auto dstTy = dst.getType().cast<RankedTensorType>();
-    auto dstShape = dstTy.getShape();
-    assert(srcShape.size() == 2 &&
-           "Unexpected rank of ConvertLayout(blocked->shared)");
+    assert(srcShape.size() == 2 && "Unexpected rank of insertSlice");
+
     auto srcBlockedLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
     auto dstSharedLayout = dstTy.getEncoding().cast<SharedEncodingAttr>();
     auto inOrd = srcBlockedLayout.getOrder();
-    auto outOrd = dstSharedLayout.getOrder();
+    auto outOrd = dstLayout.getOrder();
     unsigned inVec =
         inOrd == outOrd ? srcBlockedLayout.getSizePerThread()[inOrd[0]] : 1;
     unsigned outVec = dstSharedLayout.getVec();
@@ -2397,14 +2406,8 @@ struct InsertSliceOpConversion
                             : srcBlockedLayout.getSizePerThread()[1] / minVec;
     Value outVecVal = idx_val(outVec);
     Value minVecVal = idx_val(minVec);
-    auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     auto numWordsEachRep = product<unsigned>(wordsInEachRep);
     SmallVector<Value> wordVecs(numWordsEachRep);
-    // TODO: We should get less barriers if it is handled by membar pass
-    //       instead of the backend, since the later can only handle it in
-    //       the most conservative way. However just keep for now and revisit
-    //       in the future in case necessary.
-    barrier();
     for (unsigned i = 0; i < numElems; ++i) {
       if (i % srcAccumSizeInThreads == 0) {
         // start of a replication
@@ -2446,7 +2449,7 @@ struct InsertSliceOpConversion
           Value remained = urem(multiDimIdx[outOrd[0]], outVecVal);
           multiDimIdx[outOrd[0]] = udiv(multiDimIdx[outOrd[0]], outVecVal);
           Value off_1 =
-              mul(multiDimIdx[outOrd[1]], idx_val(srcShape[outOrd[0]]));
+              mul(multiDimIdx[outOrd[1]], srcStrides[outOrd[1]]);
           Value phaseId = udiv(multiDimIdx[outOrd[1]], idx_val(perPhase));
           phaseId = urem(phaseId, idx_val(maxPhase));
           Value off_0 = xor_(multiDimIdx[outOrd[0]], phaseId);
@@ -2465,7 +2468,7 @@ struct InsertSliceOpConversion
     // Barrier is not necessary.
     // The membar pass knows that it writes to shared memory and will handle it
     // properly.
-    rewriter.replaceOp(op, retVal);
+    rewriter.replaceOp(op, llDst);
     return success();
   }
 };
@@ -6288,6 +6291,8 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
                                          benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
   patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);
+  patterns.add<InsertSliceOpConversion>(typeConverter, allocation, smem,
+                                        benefit);
   patterns.add<InsertSliceAsyncOpConversion>(typeConverter, allocation, smem,
                                              axisInfoAnalysis, benefit);
   patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, benefit);
@@ -6333,39 +6338,47 @@ private:
     });
   }
 
-  void decomposeInsertSliceAsyncOp(ModuleOp mod) {
+  void decomposeInsertSliceAsyncOp(ModuleOp mod,
+                                   TritonGPUToLLVMTypeConverter &converter) {
     // insert_slice_async %src, %dst, %idx, %mask, %other
     // =>
     // %tmp = load %src, %mask, %other
     // %res = insert_slice %tmp into %dst[%idx]
     mod.walk([&](triton::gpu::InsertSliceAsyncOp insertSliceAsyncOp) -> void {
       OpBuilder builder(insertSliceAsyncOp);
-      auto srcType =
-          insertSliceAsyncOp.src().getType().cast<RankedTensorType>();
-      auto dstType = insertSliceAsyncOp.getType().cast<RankedTensorType>();
+      // load
+      auto srcTy = insertSliceAsyncOp.src().getType().cast<RankedTensorType>();
+      auto dstTy = insertSliceAsyncOp.getType().cast<RankedTensorType>();
       auto srcBlocked =
-          srcType.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
-      auto tmpType = RankedTensorType::get(
-          srcType.getShape(), dstType.getElementType(), srcBlocked);
+          srcTy.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
+      auto elemTy = converter.convertType(dstTy.getElementType());
+      auto tmpTy = RankedTensorType::get(srcTy.getShape(), elemTy, srcBlocked);
       auto loadOp = builder.create<triton::LoadOp>(
-          insertSliceAsyncOp.getLoc(), tmpType, insertSliceAsyncOp.src(),
+          insertSliceAsyncOp.getLoc(), tmpTy, insertSliceAsyncOp.src(),
           insertSliceAsyncOp.mask(), insertSliceAsyncOp.other(),
-          triton::CacheModifier::NONE, triton::EvictionPolicy::NORMAL, false);
+          insertSliceAsyncOp.cache(), insertSliceAsyncOp.evict(),
+          insertSliceAsyncOp.isVolatile());
+      // insert_slice
       auto axis = insertSliceAsyncOp.axis();
       auto intAttr = [&](int64_t v) { return builder.getI64IntegerAttr(v); };
-      auto offsets = SmallVector<OpFoldResult>(srcType.getRank(), intAttr(0));
-      auto sizes = SmallVector<OpFoldResult>(srcType.getRank(), intAttr(1));
-      auto strides = SmallVector<OpFoldResult>(srcType.getRank(), intAttr(1));
+      auto offsets = SmallVector<OpFoldResult>(dstTy.getRank(), intAttr(0));
+      auto sizes = SmallVector<OpFoldResult>(dstTy.getRank(), intAttr(1));
+      auto strides = SmallVector<OpFoldResult>(dstTy.getRank(), intAttr(1));
       offsets[axis] = insertSliceAsyncOp.index();
-      for (size_t i = 0; i < srcType.getRank(); i++) {
+      for (size_t i = 0; i < dstTy.getRank(); i++) {
         if (i != axis)
-          sizes[i] = intAttr(srcType.getShape()[i]);
+          sizes[i] = intAttr(dstTy.getShape()[i]);
       }
       auto insertSliceOp = builder.create<tensor::InsertSliceOp>(
           insertSliceAsyncOp.getLoc(), loadOp, insertSliceAsyncOp.dst(),
           offsets, sizes, strides);
+      // Replace
       insertSliceAsyncOp.replaceAllUsesWith(insertSliceOp.getResult());
       insertSliceAsyncOp.erase();
+    });
+
+    mod.walk([&](triton::gpu::AsyncWaitOp asyncWaitOp) -> void {
+      asyncWaitOp.erase();
     });
   }
 
@@ -6398,7 +6411,11 @@ public:
 
     decomposeBlockedToDotOperand(mod);
 
-    // decomposeInsertSliceAsyncOp(mod);
+    mod.print(llvm::errs());
+
+    decomposeInsertSliceAsyncOp(mod, typeConverter);
+
+    mod.print(llvm::errs());
 
     Allocation allocation(mod);
     MembarAnalysis membar(&allocation);
