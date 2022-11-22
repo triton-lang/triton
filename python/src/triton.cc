@@ -1279,8 +1279,9 @@ void init_triton_ir(py::module &&m) {
              self.addPass(mlir::createTritonGPUPrefetchPass());
            })
       .def("add_triton_gpu_combine_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::createTritonGPUCombineOpsPass());
+           [](mlir::PassManager &self, int computeCapability) {
+             self.addPass(
+                 mlir::createTritonGPUCombineOpsPass(computeCapability));
            })
       .def("add_triton_gpu_to_llvm",
            [](mlir::PassManager &self) {
