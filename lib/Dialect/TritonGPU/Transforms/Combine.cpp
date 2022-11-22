@@ -567,7 +567,7 @@ static int computeCapabilityToMMAVersion(int computeCapability) {
   } else if (computeCapability < 90) {
     return 2;
   } else {
-    assert(computeCapability < 90 && "computeCapability > 90 not supported");
+    assert(false && "computeCapability > 90 not supported");
     return 0;
   }
 }
@@ -580,7 +580,7 @@ mmaVersionToShapePerWarp(int version, const ArrayRef<int64_t> &shape,
   } else if (version == 2) {
     return {16, 8};
   } else {
-    assert(version && 0 && "version not supported");
+    assert(false && "version not supported");
     return {0, 0};
   }
 }
