@@ -89,3 +89,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
     assert torch.equal(z, x)
 
+
+
+def test_reduce2d(dtype, shape, src_layout, dst_layout, device='cuda'):
+    pass
