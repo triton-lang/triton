@@ -254,7 +254,27 @@ struct GCNMemInstr : public GCNInstrBase<GCNMemInstr> {
     Qword = 64
   };
 
-  GCNMemInstr &type(int width) {
+  GCNMemInstr &load_type(int width) {
+    switch (width) {
+    case Byte:
+      o("byte");
+      break;
+    case Short:
+      o("ushort");
+      break;
+    case Dword:
+      o("dword");
+      break;
+    case Qword:
+      o("dwordx2");
+      break;
+    default:
+      break;
+    }
+    return *this;
+  }
+
+  GCNMemInstr &store_type(int width) {
     switch (width) {
     case Byte:
       o("byte");

@@ -96,7 +96,7 @@ std::tuple<std::string, std::string> llir_to_hsaco(llvm::Module *module, std::st
 
   std::string amdgcn(buffer.begin(), buffer.end());
   if (::triton::tools::getBoolEnv("AMDGCN_ENABLE_DUMP")) {
-    std::cout << amdgcn << std::endl;
+    std::cout << "// -----// AMDGCN Dump //----- //\n" << amdgcn << std::endl;
   }
 
   // create dump files

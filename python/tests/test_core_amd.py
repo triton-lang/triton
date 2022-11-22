@@ -13,9 +13,9 @@ import triton._C.libtriton.triton as _triton
 import triton.language as tl
 from triton.runtime.jit import JITFunction, TensorWrapper, reinterpret
 
-int_dtypes = ['int32', 'int64']
-uint_dtypes = ['uint32', 'uint64']
-float_dtypes = ['float32', 'float64']
+int_dtypes = ['int16', 'int32', 'int64']
+uint_dtypes = ['uint16', 'uint32', 'uint64']
+float_dtypes = ['float16', 'float32', 'float64']
 dtypes = int_dtypes + uint_dtypes + float_dtypes
 # TODO: handle bfloat16
 dtypes_with_bfloat16 = dtypes  # + ['bfloat16']

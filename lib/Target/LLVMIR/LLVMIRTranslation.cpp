@@ -205,6 +205,14 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
       return nullptr;
   }
 
+  if (::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
+    std::string mod_string;
+    std::unique_ptr<llvm::raw_string_ostream> ir_ss(
+           new llvm::raw_string_ostream(mod_string));
+    llvmir->print(*ir_ss, nullptr);
+    std::cout << "// -----// LLVM IR Dump //----- //\n" << mod_string << std::endl;
+  }
+
   return llvmir;
 }
 
