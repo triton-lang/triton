@@ -4155,9 +4155,6 @@ struct MMA16816ConversionHelper {
     Value _32 = i32_val(32);
     lane = urem(thread, _32);
     warp = udiv(thread, _32);
-    // warpMN = udiv(warp, i32_val(wpt[0]));
-    // warpM = urem(warp, i32_val(wpt[0]));
-    // warpN = urem(warpMN, i32_val(wpt[1]));
   }
 
   // Get a warpId for M axis.
