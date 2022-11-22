@@ -97,6 +97,7 @@ class JITFunction(KernelInterface[T]):
     do_not_specialize: Set[Any]
     cache: Dict[torch.device, object]
     kernel_decorators: List[Any]
+    arg_names: List[str]
 
     @staticmethod
     def _key_of(arg):

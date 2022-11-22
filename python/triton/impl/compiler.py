@@ -870,7 +870,7 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_keyword(self, node):
         return {node.arg: self.visit(node.value)}
 
-    def visit_Call(self, node):
+    def visit_Call(self, node: ast.Call):
         fn = self.visit(node.func)
 
         if fn in (base.cvalue, base._constexpr_to_value):
@@ -888,8 +888,8 @@ class CodeGenerator(ast.NodeVisitor):
         if isinstance(fn, jitlib.JITFunction):
             from inspect import getcallargs
 
-            args = getcallargs(fn.fn, *args, **kws)
-            args = [args[name] for name in fn.arg_names]
+            kwargs = getcallargs(fn.fn, *args, **kws)
+            args = [kwargs[name] for name in fn.arg_names]
             args = [
                 arg if isinstance(arg, base.tensor) else base.constexpr(arg)
                 for arg in args
