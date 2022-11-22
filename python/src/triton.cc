@@ -1302,7 +1302,7 @@ void init_triton_translation(py::module &m) {
 
   m.def(
       "translate_triton_gpu_to_llvmir",
-      [](mlir::ModuleOp op) {
+      [](mlir::ModuleOp op, int computeCapability) {
         llvm::LLVMContext llvmContext;
         auto llvmModule =
             ::mlir::triton::translateTritonGPUToLLVMIR(&llvmContext, op);

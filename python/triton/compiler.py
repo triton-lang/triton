@@ -908,7 +908,7 @@ def add_external_libs(mod, libs):
 def ttgir_to_llir(mod, extern_libs, compute_capability):
     if extern_libs:
         add_external_libs(mod, extern_libs)
-    return _triton.translate_triton_gpu_to_llvmir(mod)
+    return _triton.translate_triton_gpu_to_llvmir(mod, compute_capability)
 
 
 def llir_to_ptx(mod: Any, compute_capability: int, ptx_version: int = None) -> Tuple[str, int]:
