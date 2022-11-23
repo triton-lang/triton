@@ -37,20 +37,21 @@ if __name__ == '__main__':
         print(module.str())
         exit(0)
 
+    if not args.sm:
+        raise argparse.ArgumentError(None, "Must specify --sm for PTX compilation")
+
     # triton-ir -> triton-gpu-ir
-    module = triton.compiler.ttir_to_ttgir(module, num_warps=4, num_stages=3)
+    module = triton.compiler.ttir_to_ttgir(module, num_warps=4, num_stages=3, compute_capability=args.sm)
     if args.target == 'triton-gpu-ir':
         print(module.str())
         exit(0)
 
     # triton-gpu-ir -> llvm-ir
-    module = triton.compiler.ttgir_to_llir(module, extern_libs=None)
+    module = triton.compiler.ttgir_to_llir(module, extern_libs=None, compute_capability=args.sm)
     if args.target == 'llvm-ir':
         print(module)
         exit(0)
 
-    if not args.sm:
-        raise argparse.ArgumentError(None, "Must specify --sm for PTX compilation")
     if not args.ptx_version:
         raise argparse.ArgumentError(None, "Must specify --ptx-version for PTX compilation")
 
