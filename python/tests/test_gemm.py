@@ -173,6 +173,7 @@ def get_proper_err(a, b, golden):
     [64, 32, 64, 4, 64, 32, 64, False, False],
     [128, 64, 128, 4, 128, 64, 128, False, False],
     # K-Forloop
+    [64, 64, 128, 4, 64, 64, 64, False, False], # Single shared encoding
     [64, 32, 128, 4, 64, 32, 64, False, False],
     [128, 16, 128, 4, 128, 16, 32, False, False],
     [32, 16, 128, 4, 32, 16, 32, False, False],
