@@ -6402,8 +6402,6 @@ public:
     Allocation allocation(mod);
     MembarAnalysis membar(&allocation);
 
-    mod.print(llvm::errs());
-
     RewritePatternSet scf_patterns(context);
     mlir::populateLoopToStdConversionPatterns(scf_patterns);
     mlir::ConversionTarget scf_target(*context);
