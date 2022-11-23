@@ -2337,8 +2337,7 @@ struct InsertSliceOpConversion
 
     // newBase = base + offset
     // Triton support either static and dynamic offsets
-    auto smemObj =
-        getSharedMemoryObjectFromStruct(loc, llDst, rewriter);
+    auto smemObj = getSharedMemoryObjectFromStruct(loc, llDst, rewriter);
     SmallVector<Value, 4> offsets;
     SmallVector<Value, 4> srcStrides;
     auto mixedOffsets = op.getMixedOffsets();
@@ -2448,8 +2447,7 @@ struct InsertSliceOpConversion
           // step 2: do swizzling
           Value remained = urem(multiDimIdx[outOrd[0]], outVecVal);
           multiDimIdx[outOrd[0]] = udiv(multiDimIdx[outOrd[0]], outVecVal);
-          Value off_1 =
-              mul(multiDimIdx[outOrd[1]], srcStrides[outOrd[1]]);
+          Value off_1 = mul(multiDimIdx[outOrd[1]], srcStrides[outOrd[1]]);
           Value phaseId = udiv(multiDimIdx[outOrd[1]], idx_val(perPhase));
           phaseId = urem(phaseId, idx_val(maxPhase));
           Value off_0 = xor_(multiDimIdx[outOrd[0]], phaseId);
@@ -6132,7 +6130,7 @@ struct AtomicRMWOpConversion
     auto valElements = getElementsFromStruct(loc, llVal, rewriter);
     auto ptrElements = getElementsFromStruct(loc, llPtr, rewriter);
     auto maskElements = getElementsFromStruct(loc, llMask, rewriter);
-   
+
     auto valueTy = op.getResult().getType().dyn_cast<RankedTensorType>();
     Type valueElemTy =
         valueTy ? getTypeConverter()->convertType(valueTy.getElementType())
@@ -6326,7 +6324,8 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<ReduceOpConversion>(typeConverter, allocation, smem, benefit);
   patterns.add<ConvertLayoutOpConversion>(typeConverter, allocation, smem,
                                           benefit);
-  patterns.add<AtomicRMWOpConversion>(typeConverter, allocation, smem, axisInfoAnalysis, benefit);
+  patterns.add<AtomicRMWOpConversion>(typeConverter, allocation, smem,
+                                      axisInfoAnalysis, benefit);
   patterns.add<ExtractSliceOpConversion>(typeConverter, allocation, smem,
                                          benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
@@ -6380,6 +6379,10 @@ private:
 
   void decomposeInsertSliceAsyncOp(ModuleOp mod,
                                    TritonGPUToLLVMTypeConverter &converter) {
+    // cp.async is supported in Ampere and later
+    if (computeCapability >= 80)
+      return;
+
     // insert_slice_async %src, %dst, %idx, %mask, %other
     // =>
     // %tmp = load %src, %mask, %other
@@ -6423,7 +6426,8 @@ private:
   }
 
 public:
-  ConvertTritonGPUToLLVM() = default;
+  explicit ConvertTritonGPUToLLVM(int computeCapability)
+      : computeCapability(computeCapability) {}
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -6439,15 +6443,17 @@ public:
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
 
     // step 1: Decompose unoptimized layout conversions to use shared memory
-    // step 2: Allocate shared memories and insert barriers
-    // step 3: Convert SCF to CFG
-    // step 4: Convert FuncOp to LLVMFuncOp via partial conversion
-    // step 5: Convert the rest of ops via partial conversion
-    // The reason for putting step 1 before step 2 is that the membar analysis
-    // currently only supports SCF but not CFG.
-    // The reason for a separation between 1/4 is that, step 3 is out of
-    // the scope of Dialect Conversion, thus we need to make sure the smem
-    // is not revised during the conversion of step 4.
+    // step 2: Decompose insert_slice_async to use load + insert_slice for
+    // pre-Ampere architectures
+    // step 3: Allocate shared memories and insert barriers
+    // step 4: Convert SCF to CFG
+    // step 5: Convert FuncOp to LLVMFuncOp via partial conversion
+    // step 6: Convert the rest of ops via partial
+    // conversion The reason for putting step 1 before step 2 is that the membar
+    // analysis currently only supports SCF but not CFG. The reason for a
+    // separation between 1/4 is that, step 3 is out of the scope of Dialect
+    // Conversion, thus we need to make sure the smem is not revised during the
+    // conversion of step 4.
 
     decomposeBlockedToDotOperand(mod);
 
@@ -6511,6 +6517,8 @@ protected:
                         TritonGPUToLLVMTypeConverter &typeConverter);
 
   Value smem;
+
+  int computeCapability{};
 };
 
 void ConvertTritonGPUToLLVM::initSharedMemory(
@@ -6573,8 +6581,9 @@ TritonLLVMFunctionConversionTarget::TritonLLVMFunctionConversionTarget(
 
 namespace triton {
 
-std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass() {
-  return std::make_unique<::ConvertTritonGPUToLLVM>();
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertTritonGPUToLLVMPass(int computeCapability) {
+  return std::make_unique<::ConvertTritonGPUToLLVM>(computeCapability);
 }
 
 } // namespace triton

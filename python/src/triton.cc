@@ -1316,7 +1316,7 @@ void init_triton_translation(py::module &m) {
       [](mlir::ModuleOp op, int computeCapability) {
         llvm::LLVMContext llvmContext;
         auto llvmModule =
-            ::mlir::triton::translateTritonGPUToLLVMIR(&llvmContext, op);
+            ::mlir::triton::translateTritonGPUToLLVMIR(&llvmContext, op, computeCapability);
         if (!llvmModule)
           llvm::report_fatal_error("Failed to translate TritonGPU to LLVM IR.");
 
