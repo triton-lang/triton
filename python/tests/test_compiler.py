@@ -19,8 +19,10 @@ def test_empty_kernel_cubin_compile():
                             "*fp32,i32,i32",
                             device=device,
                             constants={"BLOCK": 256})
-
-    assert len(kernel.asm["cubin"]) > 0
+    if torch.version.hip is not None:
+        assert len(kernel.asm["hsaco_path"]) > 0
+    else:
+        assert len(kernel.asm["cubin"]) > 0
 
 
 def test_empty_kernel_launch():
