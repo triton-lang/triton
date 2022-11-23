@@ -786,6 +786,7 @@ public:
   emitOffsetForMmaLayoutV2(const MmaEncodingAttr &mmaLayout,
                            ArrayRef<int64_t> shape) const {
     SmallVector<SmallVector<unsigned>> ret;
+
     for (unsigned i = 0; i < shape[0]; i += getShapePerCTA(mmaLayout)[0]) {
       for (unsigned j = 0; j < shape[1]; j += getShapePerCTA(mmaLayout)[1]) {
         ret.push_back({i, j});
@@ -870,9 +871,10 @@ public:
     unsigned numIndices = paddedIndices.size();
     SmallVector<SmallVector<Value>> resultIndices(numIndices);
     for (unsigned i = 0; i < numIndices; ++i)
-      for (unsigned d = 0; d < rank + 1; ++d)
+      for (unsigned d = 0; d < rank + 1; ++d){
         if (d != dim)
           resultIndices[i].push_back(paddedIndices[i][d]);
+      }
 
     return resultIndices;
   }
@@ -1937,6 +1939,7 @@ struct PrintfOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
     SmallVector<Value, 16> operands;
+    operands.push_back(getThreadId(rewriter, loc));
     for (auto operand : adaptor.getOperands()) {
       auto sub_operands = this->getElementsFromStruct(loc, operand, rewriter);
       for (auto elem : sub_operands) {
@@ -1946,6 +1949,7 @@ struct PrintfOpConversion
     std::string formatStr;
     llvm::raw_string_ostream os(formatStr);
     os << op.prefix();
+    os << "%i: ";
     if (operands.size() > 0) {
       os << getFormatSubstr(operands[0]);
     }

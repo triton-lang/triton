@@ -1340,7 +1340,7 @@ def make_hash(fn, **kwargs):
         key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}"
         return hashlib.md5(key.encode("utf-8")).hexdigest()
     assert isinstance(fn, str)
-    return hashlib.md5(Path(fn).read_text().encode("utf-8")).hexdigest()
+    return hashlib.md5((Path(fn).read_text() + triton.runtime.jit.version_key()).encode("utf-8")).hexdigest()
 
 
 

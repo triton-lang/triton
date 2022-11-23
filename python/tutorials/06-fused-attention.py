@@ -306,7 +306,7 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     # tri_dk, k.grad = k.grad.clone(), None
     # tri_dq, q.grad = q.grad.clone(), None
     # compare
-    print(((ref_out - tri_out) > 1e-2).nonzero()[:,-1])
+    print(tri_out[0,0,:,0])
     triton.testing.assert_almost_equal(ref_out, tri_out)
     # triton.testing.assert_almost_equal(ref_dv, tri_dv)
     # triton.testing.assert_almost_equal(ref_dk, tri_dk)
