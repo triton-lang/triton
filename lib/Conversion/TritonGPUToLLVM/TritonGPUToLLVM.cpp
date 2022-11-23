@@ -6415,8 +6415,6 @@ public:
 
     decomposeInsertSliceAsyncOp(mod, typeConverter);
 
-    mod.print(llvm::errs());
-
     Allocation allocation(mod);
     MembarAnalysis membar(&allocation);
 
