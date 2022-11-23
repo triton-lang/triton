@@ -859,6 +859,23 @@ public:
     return multiDimIdx;
   }
 
+
+  struct SmallVectorKeyInfo {
+    static unsigned getHashValue(const SmallVector<unsigned> &key) {
+      return llvm::hash_combine_range(key.begin(), key.end());
+    }
+    static bool isEqual(const SmallVector<unsigned> &lhs,
+                        const SmallVector<unsigned> &rhs) {
+      return lhs == rhs;
+    }
+    static SmallVector<unsigned> getEmptyKey() {
+      return SmallVector<unsigned>();
+    }
+    static SmallVector<unsigned> getTombstoneKey() {
+      return {std::numeric_limits<unsigned>::max()};
+    }
+  };
+
   SmallVector<SmallVector<Value>>
   emitIndicesForSliceLayout(Location loc, ConversionPatternRewriter &rewriter,
                             const SliceEncodingAttr &sliceLayout,
@@ -866,16 +883,28 @@ public:
     auto parent = sliceLayout.getParent();
     unsigned dim = sliceLayout.getDim();
     size_t rank = shape.size();
-    auto paddedIndices =
+    auto parentIndices =
         emitIndices(loc, rewriter, parent, sliceLayout.paddedShape(shape));
-    unsigned numIndices = paddedIndices.size();
-    SmallVector<SmallVector<Value>> resultIndices(numIndices);
-    for (unsigned i = 0; i < numIndices; ++i)
-      for (unsigned d = 0; d < rank + 1; ++d){
-        if (d != dim)
-          resultIndices[i].push_back(paddedIndices[i][d]);
-      }
+    auto parentOffsets = emitOffsetForLayout(parent, sliceLayout.paddedShape(shape));
 
+    unsigned numIndices = parentIndices.size();
+
+    // we re-order the values
+    // this is necessary because MakeRangeOp conversion
+    // assumes contiguous values are grouped together
+    DenseMap<SmallVector<unsigned>, SmallVector<SmallVector<Value>>, 
+             SmallVectorKeyInfo> groupedValues;
+    for (unsigned i = 0; i < numIndices; ++i){
+      SmallVector<unsigned> key = parentOffsets[i];
+      SmallVector<Value> indices = parentIndices[i];
+      key.erase(key.begin() + dim);
+      indices.erase(indices.begin() + dim);
+      groupedValues[key].push_back(indices);
+    }
+    SmallVector<SmallVector<Value>> resultIndices;
+    for(auto kv: groupedValues)
+      for(SmallVector<Value> indices: kv.second)
+        resultIndices.push_back(indices);
     return resultIndices;
   }
 

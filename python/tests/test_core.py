@@ -1131,7 +1131,7 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
             z += tl.where(off_m[:, None] >= (off_n[None, :]), 0, float("-inf"))
             # max = tl.max(z, 1)
             # z = z - max[:, None]
-            #z = tl.exp(z)
+            z = tl.exp(z)
         if CHAIN_DOT:
             # tl.store(Zs, z)
             # tl.debug_barrier()
@@ -1179,12 +1179,11 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
         z_ref += z[0, :][None, :]
     if epilogue == 'softmax':
         z_ref += np.triu(np.full_like(z_ref, float("-inf")), k=1)
-        #z_ref = np.exp(z_ref)
+        z_ref = np.exp(z_ref)
     if epilogue == 'chain-dot':
         z_ref = np.matmul(z_ref.T if trans_a else z_ref, w)
     # compare
     # print(z_ref[:,0], z_tri[:,0])
-    print((z_ref - to_numpy(z_tri) >= 1e-2).nonzero())
     print(z_ref[8,:])
     print(z_tri[8,:])
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
