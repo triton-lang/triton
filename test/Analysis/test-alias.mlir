@@ -65,6 +65,20 @@ func @insert_slice_async(%A : !tt.ptr<f16>, %i1 : i1) {
   return
 }
 
+// CHECK-LABEL: insert_slice
+func @insert_slice(%A : !tt.ptr<f16>, %i1 : i1) {
+  %a_ptr = tt.broadcast %A : (!tt.ptr<f16>) -> tensor<16x16x!tt.ptr<f16>, #AL>
+  %mask = tt.splat %i1 : (i1) -> tensor<16x16xi1, #AL>
+  %other = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
+  // CHECK: %cst_0 -> %cst_0
+  %tensor = arith.constant dense<0.000000e+00> : tensor<1x16x16xf16, #A_SHARED>
+  %index = arith.constant 0 : index
+  %a = tt.load %a_ptr, %mask, %other {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x16xf16, #AL>
+  // CHECK: %3 -> %cst_0
+  %b = tensor.insert_slice %a into %tensor[%index, 0, 0][1, 16, 16][1, 1, 1]: tensor<16x16xf16, #AL> into tensor<1x16x16xf16, #A_SHARED>
+  return
+}
+
 // CHECK-LABEL: extract_slice
 func @extract_slice(%A : !tt.ptr<f16>) {
   // CHECK: %cst -> %cst

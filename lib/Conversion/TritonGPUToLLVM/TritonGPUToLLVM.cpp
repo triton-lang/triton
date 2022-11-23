@@ -6319,9 +6319,9 @@ private:
 
   void decomposeInsertSliceAsyncOp(ModuleOp mod,
                                    TritonGPUToLLVMTypeConverter &converter) {
-    //// cp.async is supported in Ampere and later
-    // if (computeCapability >= 80)
-    //   return;
+    // cp.async is supported in Ampere and later
+    if (computeCapability >= 80)
+      return;
 
     // insert_slice_async %src, %dst, %idx, %mask, %other
     // =>
