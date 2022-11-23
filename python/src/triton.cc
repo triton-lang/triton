@@ -1279,8 +1279,9 @@ void init_triton_ir(py::module &&m) {
              self.addPass(mlir::createTritonGPUPrefetchPass());
            })
       .def("add_triton_gpu_combine_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::createTritonGPUCombineOpsPass());
+           [](mlir::PassManager &self, int computeCapability) {
+             self.addPass(
+                 mlir::createTritonGPUCombineOpsPass(computeCapability));
            })
       .def("add_triton_gpu_to_llvm",
            [](mlir::PassManager &self) {
@@ -1301,7 +1302,7 @@ void init_triton_translation(py::module &m) {
 
   m.def(
       "translate_triton_gpu_to_llvmir",
-      [](mlir::ModuleOp op) {
+      [](mlir::ModuleOp op, int computeCapability) {
         llvm::LLVMContext llvmContext;
         auto llvmModule =
             ::mlir::triton::translateTritonGPUToLLVMIR(&llvmContext, op);

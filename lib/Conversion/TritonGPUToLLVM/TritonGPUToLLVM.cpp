@@ -3237,7 +3237,8 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
   for (unsigned repId = 0; repId < accumNumReplicates; ++repId) {
     auto multiDimRepId =
         getMultiDimIndex<unsigned>(repId, numReplicates, outOrd);
-    barrier();
+    if (repId != 0)
+      barrier();
     if (srcLayout.isa<BlockedEncodingAttr>() ||
         srcLayout.isa<SliceEncodingAttr>() ||
         srcLayout.isa<MmaEncodingAttr>()) {
@@ -3329,11 +3330,6 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
   auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
   auto numWordsEachRep = product<unsigned>(wordsInEachRep);
   SmallVector<Value> wordVecs(numWordsEachRep);
-  // TODO: We should get less barriers if it is handled by membar pass
-  //       instead of the backend, since the later can only handle it in
-  //       the most conservative way. However just keep for now and revisit
-  //       in the future in case necessary.
-  barrier();
   for (unsigned i = 0; i < numElems; ++i) {
     if (i % srcAccumSizeInThreads == 0) {
       // start of a replication
