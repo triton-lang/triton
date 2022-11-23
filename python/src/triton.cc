@@ -1107,7 +1107,8 @@ void init_triton_ir(py::module &&m) {
               mlir::Value &mask) -> mlir::Value {
              auto loc = self.getUnknownLoc();
              mlir::Type dstType;
-             if (auto srcTensorType = ptr.getType().dyn_cast<mlir::RankedTensorType>()) {
+             if (auto srcTensorType =
+                     ptr.getType().dyn_cast<mlir::RankedTensorType>()) {
                mlir::Type dstElemType = srcTensorType.getElementType()
                                             .cast<mlir::triton::PointerType>()
                                             .getPointeeType();
@@ -1315,8 +1316,8 @@ void init_triton_translation(py::module &m) {
       "translate_triton_gpu_to_llvmir",
       [](mlir::ModuleOp op, int computeCapability) {
         llvm::LLVMContext llvmContext;
-        auto llvmModule =
-            ::mlir::triton::translateTritonGPUToLLVMIR(&llvmContext, op, computeCapability);
+        auto llvmModule = ::mlir::triton::translateTritonGPUToLLVMIR(
+            &llvmContext, op, computeCapability);
         if (!llvmModule)
           llvm::report_fatal_error("Failed to translate TritonGPU to LLVM IR.");
 

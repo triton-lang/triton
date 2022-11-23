@@ -119,8 +119,7 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
 
 std::unique_ptr<llvm::Module>
 translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
-                           mlir::ModuleOp module,
-                           int computeCapability) {
+                           mlir::ModuleOp module, int computeCapability) {
   mlir::PassManager pm(module->getContext());
   applyPassManagerCLOptions(pm);
   auto printingFlags = mlir::OpPrintingFlags();
