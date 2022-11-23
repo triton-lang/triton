@@ -3042,6 +3042,8 @@ private:
       SmallVector<Value> multiDimWarpId(2);
       multiDimWarpId[0] = urem(warpId, idx_val(mmaLayout.getWarpsPerCTA()[0]));
       multiDimWarpId[1] = udiv(warpId, idx_val(mmaLayout.getWarpsPerCTA()[0]));
+      multiDimWarpId[0] = urem(multiDimWarpId[0], idx_val(shape[0] / 16));
+      multiDimWarpId[1] = urem(multiDimWarpId[1], idx_val(shape[1] / 8));
       Value four = idx_val(4);
       Value mmaGrpId = udiv(laneId, four);
       Value mmaGrpIdP8 = add(mmaGrpId, idx_val(8));
@@ -3821,7 +3823,7 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
 
     // Here we assume the DotOp's operands always comes from shared memory.
     auto AShape = A.getType().cast<RankedTensorType>().getShape();
-    size_t reduceAxis = 1;
+    size_t reduceAxis = op.transA() ? 0 : 1;
     unsigned K = AShape[reduceAxis];
     bool isOuter = K == 1;
 
@@ -4284,8 +4286,9 @@ private:
 struct MMA16816ConversionHelper {
   MmaEncodingAttr mmaLayout;
   ArrayRef<unsigned int> wpt;
+  SmallVector<unsigned int> properWpt;
 
-  Value thread, lane, warp, warpMN, warpN, warpM;
+  Value thread, lane, warp;
 
   DotOpMmaV2ConversionHelper helper;
   ConversionPatternRewriter &rewriter;
@@ -4295,23 +4298,34 @@ struct MMA16816ConversionHelper {
 
   using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
 
-  MMA16816ConversionHelper(MmaEncodingAttr mmaLayout, Value thread,
-                           ConversionPatternRewriter &rewriter,
+  // dotOperand: type of either one operand of dotOp.
+  MMA16816ConversionHelper(Type dotOperand, MmaEncodingAttr mmaLayout,
+                           Value thread, ConversionPatternRewriter &rewriter,
                            TypeConverter *typeConverter, Location loc)
       : mmaLayout(mmaLayout), thread(thread), helper(mmaLayout),
         rewriter(rewriter), typeConverter(typeConverter), loc(loc),
-        ctx(mmaLayout.getContext()) {
-    wpt = mmaLayout.getWarpsPerCTA();
+        ctx(mmaLayout.getContext()), wpt(mmaLayout.getWarpsPerCTA()) {
+    helper.deduceMmaType(dotOperand);
 
     Value _32 = i32_val(32);
     lane = urem(thread, _32);
     warp = udiv(thread, _32);
-    warpMN = udiv(warp, i32_val(wpt[0]));
-    warpM = urem(warp, i32_val(wpt[0]));
-    warpN = urem(warpMN, i32_val(wpt[1]));
   }
 
-  // Get the mmaInstrShape from either $a or $b.
+  // Get a warpId for M axis.
+  Value getWarpM(int M) const {
+    auto matShape = helper.getMmaMatShape();
+    return urem(urem(warp, i32_val(wpt[0])), i32_val(M / matShape[0]));
+  }
+
+  // Get a warpId for N axis.
+  Value getWarpN(int N) const {
+    auto matShape = helper.getMmaMatShape();
+    Value warpMN = udiv(warp, i32_val(wpt[0]));
+    return urem(urem(warpMN, i32_val(wpt[1])), i32_val(N / matShape[1]));
+  }
+
+  // Get the mmaInstrShape deducing either from $a or $b.
   std::tuple<int, int, int> getMmaInstrShape(Type operand) const {
     helper.deduceMmaType(operand);
     auto mmaInstrShape = helper.getMmaInstrShape();
@@ -4321,6 +4335,7 @@ struct MMA16816ConversionHelper {
     return std::make_tuple(mmaInstrM, mmaInstrN, mmaInstrK);
   }
 
+  // Get the mmaMatShape deducing either from $a or $b.
   std::tuple<int, int, int> getMmaMatShape(Type operand) const {
     helper.deduceMmaType(operand);
     auto matShape = helper.getMmaMatShape();
@@ -4370,28 +4385,28 @@ struct MMA16816ConversionHelper {
   }
 
   // Get number of elements per thread for $a operand.
-  static size_t getANumElemsPerThread(RankedTensorType operand,
-                                      ArrayRef<unsigned> wpt) {
+  static size_t getANumElemsPerThread(RankedTensorType operand, int wpt) {
     auto shape = operand.getShape();
-    int repM = getNumRepM(operand, shape[0], wpt[0]);
+    int repM = getNumRepM(operand, shape[0], wpt);
     int repK = getNumRepK_(operand, shape[1]);
     return 4 * repM * repK;
   }
 
   // Get number of elements per thread for $b operand.
-  static size_t getBNumElemsPerThread(RankedTensorType operand,
-                                      ArrayRef<unsigned> wpt) {
+  static size_t getBNumElemsPerThread(RankedTensorType operand, int wpt) {
     auto shape = operand.getShape();
     int repK = getNumRepK_(operand, shape[0]);
-    int repN = getNumRepN(operand, shape[1], wpt[1]);
+    int repN = getNumRepN(operand, shape[1], wpt);
     return 4 * std::max(repN / 2, 1) * repK;
   }
 
   // Loading $a from smem to registers, returns a LLVM::Struct.
   Value loadA(Value tensor, const SharedMemoryObject &smemObj) const {
     auto aTensorTy = tensor.getType().cast<RankedTensorType>();
-    auto shape = aTensorTy.getShape();
+    auto layout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
 
+    SmallVector<int64_t> shape(aTensorTy.getShape().begin(),
+                               aTensorTy.getShape().end());
     ValueTable ha;
     std::function<void(int, int)> loadFn;
     auto [matShapeM, matShapeN, matShapeK] = getMmaMatShape(aTensorTy);
@@ -4401,6 +4416,7 @@ struct MMA16816ConversionHelper {
     int numRepK = getNumRepK(aTensorTy, shape[1]);
 
     if (aTensorTy.getEncoding().isa<SharedEncodingAttr>()) {
+      Value warpM = getWarpM(shape[0]);
       // load from smem
       loadFn = getLoadMatrixFn(
           tensor, smemObj, mmaLayout, mmaLayout.getWarpsPerCTA()[0] /*wpt*/,
@@ -4428,12 +4444,17 @@ struct MMA16816ConversionHelper {
   Value loadB(Value tensor, const SharedMemoryObject &smemObj) {
     ValueTable hb;
     auto tensorTy = tensor.getType().cast<RankedTensorType>();
-    auto shape = tensorTy.getShape();
+    auto layout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
+
+    SmallVector<int64_t> shape(tensorTy.getShape().begin(),
+                               tensorTy.getShape().end());
+
     auto [matShapeM, matShapeN, matShapeK] = getMmaMatShape(tensorTy);
     auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaInstrShape(tensorTy);
     int numRepK = getNumRepK(tensorTy, shape[0]);
     int numRepN = getNumRepN(tensorTy, shape[1]);
 
+    Value warpN = getWarpN(shape[1]);
     auto loadFn = getLoadMatrixFn(
         tensor, smemObj, mmaLayout, mmaLayout.getWarpsPerCTA()[1] /*wpt*/,
         0 /*kOrder*/, {mmaInstrK, mmaInstrN} /*instrShape*/,
@@ -4479,7 +4500,11 @@ struct MMA16816ConversionHelper {
     auto aTensorTy = a.getType().cast<RankedTensorType>();
     auto dTensorTy = d.getType().cast<RankedTensorType>();
 
-    auto aShape = aTensorTy.getShape();
+    SmallVector<int64_t> aShape(aTensorTy.getShape().begin(),
+                                aTensorTy.getShape().end());
+    if (op.transA())
+      std::swap(aShape[0], aShape[1]);
+
     auto dShape = dTensorTy.getShape();
 
     // shape / shape_per_cta
@@ -4762,9 +4787,9 @@ Value ConvertLayoutOpConversion::lowerSharedToDotOperandMMA(
   Value res;
 
   if (!isOuter && mmaLayout.getVersion() == 2 && isHMMA) { // tensor core v2
-    MMA16816ConversionHelper mmaHelper(mmaLayout, getThreadId(rewriter, loc),
-                                       rewriter, getTypeConverter(),
-                                       op.getLoc());
+    MMA16816ConversionHelper mmaHelper(src.getType(), mmaLayout,
+                                       getThreadId(rewriter, loc), rewriter,
+                                       getTypeConverter(), op.getLoc());
 
     if (dotOperandLayout.getOpIdx() == 0) {
       // operand $a
@@ -4855,12 +4880,15 @@ DotOpConversion::convertMMA16816(triton::DotOp op, OpAdaptor adaptor,
                        .cast<RankedTensorType>()
                        .getEncoding()
                        .cast<MmaEncodingAttr>();
-  MMA16816ConversionHelper mmaHelper(mmaLayout, getThreadId(rewriter, loc),
-                                     rewriter, getTypeConverter(), loc);
 
   Value A = op.a();
   Value B = op.b();
   Value C = op.c();
+
+  MMA16816ConversionHelper mmaHelper(A.getType(), mmaLayout,
+                                     getThreadId(rewriter, loc), rewriter,
+                                     getTypeConverter(), loc);
+
   auto ATensorTy = A.getType().cast<RankedTensorType>();
   auto BTensorTy = B.getType().cast<RankedTensorType>();
 
@@ -5692,13 +5720,13 @@ public:
         if (mmaLayout.getVersion() == 2) {
           if (dotOpLayout.getOpIdx() == 0) { // $a
             int elems =
-                MMA16816ConversionHelper::getANumElemsPerThread(type, wpt);
+                MMA16816ConversionHelper::getANumElemsPerThread(type, wpt[0]);
             return LLVM::LLVMStructType::getLiteral(
                 ctx, SmallVector<Type>(elems, vecTy));
           }
           if (dotOpLayout.getOpIdx() == 1) { // $b
             int elems =
-                MMA16816ConversionHelper::getBNumElemsPerThread(type, wpt);
+                MMA16816ConversionHelper::getBNumElemsPerThread(type, wpt[1]);
             return struct_ty(SmallVector<Type>(elems, vecTy));
           }
         }
@@ -6079,10 +6107,11 @@ struct AtomicRMWOpConversion
       triton::AtomicRMWOp>::ConvertTritonGPUOpToLLVMPattern;
 
   AtomicRMWOpConversion(LLVMTypeConverter &converter,
+                        const Allocation *allocation, Value smem,
                         AxisInfoAnalysis &axisAnalysisPass,
                         PatternBenefit benefit)
-      : ConvertTritonGPUOpToLLVMPattern<triton::AtomicRMWOp>(converter,
-                                                             benefit),
+      : ConvertTritonGPUOpToLLVMPattern<triton::AtomicRMWOp>(
+            converter, allocation, smem, benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
   LogicalResult
@@ -6103,30 +6132,29 @@ struct AtomicRMWOpConversion
     auto valElements = getElementsFromStruct(loc, llVal, rewriter);
     auto ptrElements = getElementsFromStruct(loc, llPtr, rewriter);
     auto maskElements = getElementsFromStruct(loc, llMask, rewriter);
-
-    // TODO[dongdongl]: Support scalar
-
+   
     auto valueTy = op.getResult().getType().dyn_cast<RankedTensorType>();
-    if (!valueTy)
-      return failure();
     Type valueElemTy =
-        getTypeConverter()->convertType(valueTy.getElementType());
-
-    auto valTy = val.getType().cast<RankedTensorType>();
+        valueTy ? getTypeConverter()->convertType(valueTy.getElementType())
+                : op.getResult().getType();
     const size_t valueElemNbits = valueElemTy.getIntOrFloatBitWidth();
+    auto elemsPerThread = getElemsPerThread(val.getType());
+    // vec = 1 for scalar
     auto vec = getVectorSize(ptr);
-    vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
+    Value mask = int_val(1, 1);
+    auto tid = tid_val();
+    // tensor
+    if (valueTy) {
+      auto valTy = val.getType().cast<RankedTensorType>();
+      vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
+      // mask
+      auto shape = valueTy.getShape();
+      auto numElements = product(shape);
+      mask = and_(mask, icmp_slt(mul(tid, i32_val(elemsPerThread)),
+                                 i32_val(numElements)));
+    }
 
     auto vecTy = vec_ty(valueElemTy, vec);
-    auto elemsPerThread = getElemsPerThread(val.getType());
-    // mask
-    Value mask = int_val(1, 1);
-    auto shape = valueTy.getShape();
-    auto numElements = product(shape);
-    auto tid = tid_val();
-    mask = and_(mask, icmp_slt(mul(tid, i32_val(elemsPerThread)),
-                               i32_val(numElements)));
-
     SmallVector<Value> resultVals(elemsPerThread);
     for (size_t i = 0; i < elemsPerThread; i += vec) {
       Value rmwVal = undef(vecTy);
@@ -6140,10 +6168,12 @@ struct AtomicRMWOpConversion
       rmwMask = and_(rmwMask, mask);
       std::string sTy;
       PTXBuilder ptxBuilder;
-
-      auto *dstOpr = ptxBuilder.newOperand("=r");
+      std::string tyId = valueElemNbits * vec == 64
+                             ? "l"
+                             : (valueElemNbits * vec == 32 ? "r" : "h");
+      auto *dstOpr = ptxBuilder.newOperand("=" + tyId);
       auto *ptrOpr = ptxBuilder.newAddrOperand(rmwPtr, "l");
-      auto *valOpr = ptxBuilder.newOperand(rmwVal, "r");
+      auto *valOpr = ptxBuilder.newOperand(rmwVal, tyId);
 
       auto &atom = ptxBuilder.create<>("atom")->global().o("gpu");
       auto rmwOp = stringifyRMWOp(atomicRmwAttr).str();
@@ -6185,18 +6215,32 @@ struct AtomicRMWOpConversion
         return failure();
       }
       atom.o(rmwOp).o(sTy);
-      atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
-
-      auto ret = ptxBuilder.launch(rewriter, loc, valueElemTy);
-      for (int ii = 0; ii < vec; ++ii) {
-        resultVals[i * vec + ii] =
-            vec == 1 ? ret : extract_element(valueElemTy, ret, idx_val(ii));
+      if (valueTy) {
+        atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
+        auto ret = ptxBuilder.launch(rewriter, loc, valueElemTy);
+        for (int ii = 0; ii < vec; ++ii) {
+          resultVals[i * vec + ii] =
+              vec == 1 ? ret : extract_element(valueElemTy, ret, idx_val(ii));
+        }
+      } else {
+        rmwMask = and_(rmwMask, icmp_eq(tid, i32_val(0)));
+        atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
+        auto old = ptxBuilder.launch(rewriter, loc, valueElemTy);
+        Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+        atomPtr = bitcast(atomPtr, ptr_ty(valueElemTy, 3));
+        store(old, atomPtr);
+        barrier();
+        Value ret = load(atomPtr);
+        barrier();
+        rewriter.replaceOp(op, {ret});
       }
     }
-    Type structTy = getTypeConverter()->convertType(valueTy);
-    Value resultStruct =
-        getStructFromElements(loc, resultVals, rewriter, structTy);
-    rewriter.replaceOp(op, {resultStruct});
+    if (valueTy) {
+      Type structTy = getTypeConverter()->convertType(valueTy);
+      Value resultStruct =
+          getStructFromElements(loc, resultVals, rewriter, structTy);
+      rewriter.replaceOp(op, {resultStruct});
+    }
     return success();
   }
 };
@@ -6282,7 +6326,7 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<ReduceOpConversion>(typeConverter, allocation, smem, benefit);
   patterns.add<ConvertLayoutOpConversion>(typeConverter, allocation, smem,
                                           benefit);
-  patterns.add<AtomicRMWOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<AtomicRMWOpConversion>(typeConverter, allocation, smem, axisInfoAnalysis, benefit);
   patterns.add<ExtractSliceOpConversion>(typeConverter, allocation, smem,
                                          benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);

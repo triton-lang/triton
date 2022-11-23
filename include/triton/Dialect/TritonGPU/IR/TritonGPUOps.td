@@ -80,8 +80,7 @@ def TTG_SelectOp : TTG_Op<"select", [NoSideEffect]> {
 def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
                                     [AttrSizedOperandSegments,
                                      ResultsAreSharedEncoding,
-                                     MemoryEffects<[MemRead]>, // Read global memory
-                                     MemoryEffects<[MemWrite]>, // write shared memory
+                                     MemoryEffects<[MemRead]>,
                                      TypesMatchWith<"infer mask type from src type",
                                                     "src", "mask", "getI1SameShape($_self)",
                                                     "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
@@ -159,9 +158,8 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
   let printer = [{ return printInsertSliceAsyncOp(p, *this); }];
 }
 
-def TTG_AllocTensorOp : TTG_Op<"alloc_tensor",
-                               [MemoryEffects<[MemAlloc]>,  // Allocate shared memory
-                                ResultsAreSharedEncoding]> {
+def TTG_AllocTensorOp : TTG_Op<"alloc_tensor", [MemoryEffects<[MemAlloc]>,  // Allocate shared memory
+                                                ResultsAreSharedEncoding]> {
   let summary = "allocate tensor";
 
   let description = [{

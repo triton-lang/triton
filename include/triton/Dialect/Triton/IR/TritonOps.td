@@ -187,7 +187,7 @@ def TT_StoreOp : TT_Op<"store",
 //
 def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
                                           SameOperandsAndResultEncoding,
-                                          MemoryEffects<[MemRead]>, // Read and write global memory
+                                          MemoryEffects<[MemRead]>,
                                           MemoryEffects<[MemWrite]>,
                                           TypesMatchWith<"infer ptr type from value type",
                                                          "val", "ptr",
@@ -209,7 +209,7 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
     let results = (outs TT_Type:$result);
 }
 
-def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead]>, // Read and write global memory
+def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead]>,
                                           MemoryEffects<[MemWrite]>,
                                           SameOperandsAndResultShape,
                                           SameOperandsAndResultEncoding]> {

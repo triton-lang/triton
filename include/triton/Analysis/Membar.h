@@ -56,10 +56,12 @@ private:
     bool isIntersected(const RegionInfo &other, Allocation *allocation) const {
       return /*RAW*/ isIntersected(syncWriteBuffers, other.syncReadBuffers,
                                    allocation) ||
-             /*WAR*/ isIntersected(syncReadBuffers, other.syncWriteBuffers,
-                                   allocation) ||
-             /*WAW*/ isIntersected(syncWriteBuffers, other.syncWriteBuffers,
-                                   allocation);
+             /*WAR*/
+             isIntersected(syncReadBuffers, other.syncWriteBuffers,
+                           allocation) ||
+             /*WAW*/
+             isIntersected(syncWriteBuffers, other.syncWriteBuffers,
+                           allocation);
     }
 
     /// Clears the buffers because a barrier is inserted.
