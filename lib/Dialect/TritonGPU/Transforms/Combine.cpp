@@ -567,8 +567,6 @@ static int computeCapabilityToMMAVersion(int computeCapability) {
     return 1;
   } else if (computeCapability < 90) {
     return 2;
-  } else if (computeCapability < 100) {
-    return 3;
   } else {
     assert(false && "computeCapability > 90 not supported");
     return 0;
@@ -588,18 +586,12 @@ mmaVersionToShapePerWarp(int version, const ArrayRef<int64_t> &shape,
   }
 }
 
-inline unsigned clamp(unsigned x, unsigned a, unsigned b) {
-  unsigned lo = std::min(a, b);
-  unsigned hi = std::max(a, b);
-  return std::min(std::max(x, lo), hi);
-}
-
 template <int version>
-SmallVector<unsigned, 2> warpsPerTile(const ArrayRef<int64_t> &shape,
+SmallVector<unsigned, 2> warpsPerTile(const ArrayRef<int64_t> shape,
                                       int numWarps);
 
 template <>
-SmallVector<unsigned, 2> warpsPerTile<1>(const ArrayRef<int64_t> &shape,
+SmallVector<unsigned, 2> warpsPerTile<1>(const ArrayRef<int64_t> shape,
                                          int numWarps) {
   SmallVector<unsigned, 2> ret = {1, 1};
   SmallVector<int64_t, 2> shapePerWarp =
@@ -608,11 +600,11 @@ SmallVector<unsigned, 2> warpsPerTile<1>(const ArrayRef<int64_t> &shape,
   do {
     changed = false;
     if (ret[0] * ret[1] < numWarps) {
-      ret[0] = clamp(ret[0] * 2, 1, shape[0] / shapePerWarp[0]);
+      ret[0] = std::clamp<unsigned>(ret[0] * 2, 1, shape[0] / shapePerWarp[0]);
       changed = true;
     }
     if (ret[0] * ret[1] < numWarps) {
-      ret[1] = clamp(ret[1] * 2, 1, shape[1] / shapePerWarp[1]);
+      ret[1] = std::clamp<unsigned>(ret[1] * 2, 1, shape[1] / shapePerWarp[1]);
       changed = true;
     }
   } while (changed);
@@ -620,29 +612,28 @@ SmallVector<unsigned, 2> warpsPerTile<1>(const ArrayRef<int64_t> &shape,
 }
 
 template <>
-SmallVector<unsigned, 2> warpsPerTile<2>(const ArrayRef<int64_t> &shape,
+SmallVector<unsigned, 2> warpsPerTile<2>(const ArrayRef<int64_t> shape,
                                          int numWarps) {
   SmallVector<unsigned, 2> ret = {1, 1};
   SmallVector<int64_t, 2> shapePerWarp =
       mmaVersionToShapePerWarp(2, shape, numWarps);
-  bool changed = false;
+  // TODO (@daadaada): double-check.
+  // original logic in
+  // https://github.com/openai/triton/blob/master/lib/codegen/analysis/layout.cc#L252
+  // seems buggy for shape = [32, 16] ?
   do {
-    changed = false;
     if (ret[0] * ret[1] >= numWarps)
       break;
     if (shape[0] / shapePerWarp[0] / ret[0] >=
         shape[1] / (shapePerWarp[1] * 2) / ret[1]) {
       if (ret[0] < shape[0] / shapePerWarp[0]) {
         ret[0] *= 2;
-        changed = true;
-      }
-    } else {
-      if (ret[1] < shape[1] / shapePerWarp[1]) {
+      } else
         ret[1] *= 2;
-        changed = true;
-      }
+    } else {
+      ret[1] *= 2;
     }
-  } while (changed);
+  } while (true);
   return ret;
 }
 
@@ -655,8 +646,8 @@ public:
       : mlir::RewritePattern(triton::DotOp::getOperationName(), 2, context),
         computeCapability(computeCapability) {}
 
-  static SmallVector<unsigned, 2>
-  getWarpsPerTile(const ArrayRef<int64_t> &shape, int version, int numWarps) {
+  static SmallVector<unsigned, 2> getWarpsPerTile(const ArrayRef<int64_t> shape,
+                                                  int version, int numWarps) {
     switch (version) {
     case 1:
       return warpsPerTile<1>(shape, numWarps);
