@@ -16,8 +16,7 @@ class TTG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonGPU_Dialect, mnemonic, traits>;
 
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
-                                 [SameOperandsAndResultShape, 
-                                  MemoryEffects<[MemRead]>]> { // Potentially read shared memory 
+                                 [SameOperandsAndResultShape, NoSideEffect]> {
   let summary = "convert layout";
 
   let arguments = (ins TT_Tensor:$src);
@@ -80,8 +79,7 @@ def TTG_SelectOp : TTG_Op<"select", [NoSideEffect]> {
 def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
                                     [AttrSizedOperandSegments,
                                      ResultsAreSharedEncoding,
-                                     MemoryEffects<[MemRead]>, // Read global memory
-                                     MemoryEffects<[MemWrite]>, // write shared memory
+                                     MemoryEffects<[MemRead]>,
                                      TypesMatchWith<"infer mask type from src type",
                                                     "src", "mask", "getI1SameShape($_self)",
                                                     "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
