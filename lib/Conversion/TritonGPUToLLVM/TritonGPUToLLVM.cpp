@@ -1949,7 +1949,6 @@ struct PrintfOpConversion
     std::string formatStr;
     llvm::raw_string_ostream os(formatStr);
     os << op.prefix();
-    os << "%i: ";
     if (operands.size() > 0) {
       os << getFormatSubstr(operands[0]);
     }
@@ -2059,6 +2058,7 @@ struct PrintfOpConversion
     size_t formatStringSize = formatString.size_in_bytes();
     auto globalType = LLVM::LLVMArrayType::get(i8_ty, formatStringSize);
 
+    llvm::outs() << formatString << "\n";
     LLVM::GlobalOp global;
     {
       ConversionPatternRewriter::InsertionGuard guard(rewriter);
