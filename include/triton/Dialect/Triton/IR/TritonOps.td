@@ -194,7 +194,7 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
                                                          "getPointerTypeSameShape($_self)">,
                                           TypesMatchWith<"infer mask type from value type",
                                                          "val", "mask", "getI1SameShape($_self)",
-                                                         "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
+                                                       "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
     let summary = "atomic rmw";
 
     let description = [{
@@ -317,7 +317,7 @@ def TT_GetNumProgramsOp : TT_Op<"get_num_programs", [NoSideEffect]> {
 //
 // Dot Op
 //
-def TT_DotOp : TT_Op<"dot", [NoSideEffect, // All inputs are registers
+def TT_DotOp : TT_Op<"dot", [NoSideEffect,
                              DeclareOpInterfaceMethods<InferTypeOpInterface>,
                              TypesMatchWith<"result's type matches accumulator's type",
                                             "d", "c", "$_self">]> {
