@@ -13,7 +13,7 @@ import triton._C.libtriton.triton as _triton
 import triton.language as tl
 from triton.runtime.jit import JITFunction, TensorWrapper, reinterpret
 
-int_dtypes = ['int8']
+int_dtypes = ['int8', 'int16', 'int32', 'int64']
 uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
 float_dtypes = ['float16', 'float32', 'float64']
 dtypes = int_dtypes + uint_dtypes + float_dtypes
@@ -116,7 +116,6 @@ def test_empty_kernel(dtype_x, device='cuda'):
     @triton.jit
     def kernel(X, SIZE: tl.constexpr):
         pass
-
     check_type_supported(dtype_x)
     x = to_triton(numpy_random(SIZE, dtype_str=dtype_x), device=device, dst_type=dtype_x)
     kernel[(1, )](x, SIZE=SIZE, num_warps=4)
@@ -249,9 +248,9 @@ def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
 
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [
     (dtype_x, dtype_y, op)
-    for op in ['+']  # , '%'] #TODO: handle remainder
-    for dtype_x in int_dtypes
-    for dtype_y in int_dtypes
+    for op in ['+', '-', '*', '/']  # , '%'] #TODO: handle remainder
+    for dtype_x in dtypes_with_bfloat16
+    for dtype_y in dtypes_with_bfloat16
 ])
 def test_bin_op(dtype_x, dtype_y, op, device='cuda'):
     expr = f' x {op} y'
