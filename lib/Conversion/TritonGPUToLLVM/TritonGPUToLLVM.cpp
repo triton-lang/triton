@@ -3667,7 +3667,7 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
 
     // Here we assume the DotOp's operands always comes from shared memory.
     auto AShape = A.getType().cast<RankedTensorType>().getShape();
-    size_t reduceAxis = 1;
+    size_t reduceAxis = op.transA() ? 0 : 1;
     unsigned K = AShape[reduceAxis];
     bool isOuter = K == 1;
 
@@ -4247,8 +4247,10 @@ struct MMA16816ConversionHelper {
   // Loading $a from smem to registers, returns a LLVM::Struct.
   Value loadA(Value tensor, const SharedMemoryObject &smemObj) const {
     auto aTensorTy = tensor.getType().cast<RankedTensorType>();
-    auto shape = aTensorTy.getShape();
+    auto layout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
 
+    SmallVector<int64_t> shape(aTensorTy.getShape().begin(),
+                               aTensorTy.getShape().end());
     ValueTable ha;
     std::function<void(int, int)> loadFn;
     auto [matShapeM, matShapeN, matShapeK] = getMmaMatShape(aTensorTy);
@@ -4286,7 +4288,11 @@ struct MMA16816ConversionHelper {
   Value loadB(Value tensor, const SharedMemoryObject &smemObj) {
     ValueTable hb;
     auto tensorTy = tensor.getType().cast<RankedTensorType>();
-    auto shape = tensorTy.getShape();
+    auto layout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
+
+    SmallVector<int64_t> shape(tensorTy.getShape().begin(),
+                               tensorTy.getShape().end());
+
     auto [matShapeM, matShapeN, matShapeK] = getMmaMatShape(tensorTy);
     auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaInstrShape(tensorTy);
     int numRepK = getNumRepK(tensorTy, shape[0]);
@@ -4338,7 +4344,11 @@ struct MMA16816ConversionHelper {
     auto aTensorTy = a.getType().cast<RankedTensorType>();
     auto dTensorTy = d.getType().cast<RankedTensorType>();
 
-    auto aShape = aTensorTy.getShape();
+    SmallVector<int64_t> aShape(aTensorTy.getShape().begin(),
+                                aTensorTy.getShape().end());
+    if (op.transA())
+      std::swap(aShape[0], aShape[1]);
+
     auto dShape = dTensorTy.getShape();
 
     // shape / shape_per_cta
