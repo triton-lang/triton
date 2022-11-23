@@ -337,7 +337,8 @@ def TT_DotOp : TT_Op<"dot", [NoSideEffect,
 //
 // Reduce Op
 //
-def TT_ReduceOp : TT_Op<"reduce", [DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
+def TT_ReduceOp : TT_Op<"reduce", [NoSideEffect,
+                                   DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
     let summary = "reduce";
 
     let arguments = (ins TT_RedOpAttr:$redOp, TT_Tensor:$operand, I32Attr:$axis);
