@@ -155,9 +155,7 @@ private:
     // For example: %a = scf.if -> yield
     // %a must be allocated elsewhere by other operations.
     // FIXME(Keren): extract and insert are always alias for now
-    if (!maybeSharedAllocationOp(op) || isa<tensor::ExtractSliceOp>(op) ||
-        isa<triton::gpu::InsertSliceAsyncOp>(op) ||
-        isa<tensor::InsertSliceOp>(op)) {
+    if (!maybeSharedAllocationOp(op) || maybeAliasOp(op)) {
       return;
     }
 
