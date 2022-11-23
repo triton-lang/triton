@@ -142,7 +142,8 @@ private:
     // %a must be allocated elsewhere by other operations.
     // FIXME(Keren): extract and insert are always alias for now
     if (!maybeSharedAllocationOp(op) || isa<tensor::ExtractSliceOp>(op) ||
-        isa<triton::gpu::InsertSliceAsyncOp>(op)) {
+        isa<triton::gpu::InsertSliceAsyncOp>(op) ||
+        isa<tensor::InsertSliceOp>(op)) {
       return;
     }
 

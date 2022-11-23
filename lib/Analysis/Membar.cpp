@@ -70,12 +70,17 @@ void MembarAnalysis::transfer(Operation *op, RegionInfo *regionInfo,
   }
 
   RegionInfo curRegionInfo;
-  for (Value value : op->getOperands()) {
-    // ConvertLayoutOp: shared memory -> registers
-    // Need to consider all alias buffers
-    for (auto bufferId : allocation->getBufferIds(value)) {
-      if (bufferId != Allocation::InvalidBufferId) {
-        curRegionInfo.syncReadBuffers.insert(bufferId);
+
+  if (!isa<tensor::InsertSliceOp>(op) &&
+      !isa<triton::gpu::InsertSliceAsyncOp>(op)) {
+    // insert_slice and insert_slice_async are the only two write only ops
+    for (Value value : op->getOperands()) {
+      // ConvertLayoutOp: shared memory -> registers
+      // Need to consider all alias buffers
+      for (auto bufferId : allocation->getBufferIds(value)) {
+        if (bufferId != Allocation::InvalidBufferId) {
+          curRegionInfo.syncReadBuffers.insert(bufferId);
+        }
       }
     }
   }

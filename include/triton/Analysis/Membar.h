@@ -57,6 +57,8 @@ private:
       return /*RAW*/ isIntersected(syncWriteBuffers, other.syncReadBuffers,
                                    allocation) ||
              /*WAR*/ isIntersected(syncReadBuffers, other.syncWriteBuffers,
+                                   allocation) ||
+             /*WAW*/ isIntersected(syncWriteBuffers, other.syncWriteBuffers,
                                    allocation);
     }
 

@@ -187,13 +187,14 @@ def TT_StoreOp : TT_Op<"store",
 //
 def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
                                           SameOperandsAndResultEncoding,
+                                          MemoryEffects<[MemRead]>, // Read and write global memory
                                           MemoryEffects<[MemWrite]>,
                                           TypesMatchWith<"infer ptr type from value type",
                                                          "val", "ptr",
                                                          "getPointerTypeSameShape($_self)">,
                                           TypesMatchWith<"infer mask type from value type",
                                                          "val", "mask", "getI1SameShape($_self)",
-                                                       "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
+                                                         "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
     let summary = "atomic rmw";
 
     let description = [{
@@ -208,7 +209,9 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
     let results = (outs TT_Type:$result);
 }
 
-def TT_AtomicCASOp : TT_Op<"atomic_cas", [SameOperandsAndResultShape,
+def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead]>, // Read and write global memory
+                                          MemoryEffects<[MemWrite]>,
+                                          SameOperandsAndResultShape,
                                           SameOperandsAndResultEncoding]> {
     let summary = "atomic cas";
 
@@ -314,7 +317,7 @@ def TT_GetNumProgramsOp : TT_Op<"get_num_programs", [NoSideEffect]> {
 //
 // Dot Op
 //
-def TT_DotOp : TT_Op<"dot", [NoSideEffect,
+def TT_DotOp : TT_Op<"dot", [NoSideEffect, // All inputs are registers
                              DeclareOpInterfaceMethods<InferTypeOpInterface>,
                              TypesMatchWith<"result's type matches accumulator's type",
                                             "d", "c", "$_self">]> {
@@ -334,8 +337,7 @@ def TT_DotOp : TT_Op<"dot", [NoSideEffect,
 //
 // Reduce Op
 //
-def TT_ReduceOp : TT_Op<"reduce", [NoSideEffect,
-                                   DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
+def TT_ReduceOp : TT_Op<"reduce", [DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
     let summary = "reduce";
 
     let arguments = (ins TT_RedOpAttr:$redOp, TT_Tensor:$operand, I32Attr:$axis);

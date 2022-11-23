@@ -6407,8 +6407,6 @@ public:
 
     decomposeBlockedToDotOperand(mod);
 
-    mod.print(llvm::errs());
-
     decomposeInsertSliceAsyncOp(mod, typeConverter);
 
     Allocation allocation(mod);

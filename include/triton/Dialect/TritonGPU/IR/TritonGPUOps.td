@@ -16,7 +16,8 @@ class TTG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonGPU_Dialect, mnemonic, traits>;
 
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
-                                 [SameOperandsAndResultShape, NoSideEffect]> {
+                                 [SameOperandsAndResultShape,
+                                  MemoryEffects<[MemRead]>]> { // Potentially read shared memory
   let summary = "convert layout";
 
   let arguments = (ins TT_Tensor:$src);
@@ -79,8 +80,8 @@ def TTG_SelectOp : TTG_Op<"select", [NoSideEffect]> {
 def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
                                     [AttrSizedOperandSegments,
                                      ResultsAreSharedEncoding,
-                                     // MemoryEffects<[MemRead]>, doesn't work with CSE but seems like it should?
-                                     NoSideEffect,
+                                     MemoryEffects<[MemRead]>, // Read global memory
+                                     MemoryEffects<[MemWrite]>, // write shared memory
                                      TypesMatchWith<"infer mask type from src type",
                                                     "src", "mask", "getI1SameShape($_self)",
                                                     "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
@@ -158,7 +159,9 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
   let printer = [{ return printInsertSliceAsyncOp(p, *this); }];
 }
 
-def TTG_AllocTensorOp : TTG_Op<"alloc_tensor", [NoSideEffect, ResultsAreSharedEncoding]> {
+def TTG_AllocTensorOp : TTG_Op<"alloc_tensor",
+                               [MemoryEffects<[MemAlloc]>,  // Allocate shared memory
+                                ResultsAreSharedEncoding]> {
   let summary = "allocate tensor";
 
   let description = [{
