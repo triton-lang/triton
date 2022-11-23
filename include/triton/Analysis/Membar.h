@@ -60,9 +60,8 @@ private:
              isIntersected(syncReadBuffers, other.syncWriteBuffers,
                            allocation) ||
              /*WAW*/
-             isIntersected(
-                 syncWriteBuffers, other.syncWriteBuffers,
-                 allocation); // Two ops write the same scratch mememory
+             isIntersected(syncWriteBuffers, other.syncWriteBuffers,
+                           allocation);
     }
 
     /// Clears the buffers because a barrier is inserted.
