@@ -1188,7 +1188,10 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
         z_ref += z[0, :][None, :]
     if epilogue == 'softmax':
         z_ref += np.triu(np.full_like(z_ref, float("-inf")), k=1)
-        # z_ref = np.exp(z_ref)
+        num = np.exp(z_ref - np.max(z_ref, 1)[:, None])
+        denom = np.sum(num, 1)
+        z_ref = num / denom[:, None]
+
     if epilogue == 'chain-dot':
         z_ref = np.matmul(z_ref.T if trans_a else z_ref, w)
     # compare

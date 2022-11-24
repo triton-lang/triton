@@ -285,7 +285,7 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=1, std=.0).requires_grad_()
     k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=1, std=.0).requires_grad_()
     v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=1, std=.0).requires_grad_()
-    sm_scale = 0.3
+    sm_scale = 1.0
     dout = torch.randn_like(q)
     # reference implementation
     M = torch.tril(torch.ones((N_CTX, N_CTX), device="cuda"))

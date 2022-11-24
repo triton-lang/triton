@@ -2809,9 +2809,20 @@ public:
             packed = insert_element(vecTy, packed, vals[i+j], i32_val(j));
           vecVals.push_back(packed);
         }
+    
+        SmallVector<Value> reorderedVals;
+        for(unsigned i = 0; i < vecVals.size(); i += 4) {
+          reorderedVals.push_back(vecVals[i]);
+          reorderedVals.push_back(vecVals[i+2]);
+          reorderedVals.push_back(vecVals[i+1]);
+          reorderedVals.push_back(vecVals[i+3]);
+        }
+
+        // return composeValuesToDotOperandLayoutStruct(ha, numRepM, numRepK);
+
 
         Type structTy = LLVM::LLVMStructType::getLiteral(this->getContext(), types);
-        Value view = getStructFromElements(loc, vecVals, rewriter, structTy);
+        Value view = getStructFromElements(loc, reorderedVals, rewriter, structTy);
         rewriter.replaceOp(op, view);
         return success();
       }
@@ -2833,7 +2844,7 @@ private:
           emitBaseIndexForBlockedLayout(loc, rewriter, blockedLayout, shape);
       SmallVector<Value> multiDimOffset(rank);
       SmallVector<unsigned> multiDimElemId = getMultiDimIndex<unsigned>(
-          elemId, blockedLayout.getSizePerThread(), blockedLayout.getOrder());
+          elemId, getSizePerThread(layout), getOrder(layout));
       for (unsigned d = 0; d < rank; ++d) {
         multiDimOffset[d] = add(multiDimOffsetFirstElem[d],
                                 idx_val(multiDimCTAInRepId[d] * shapePerCTA[d] +
