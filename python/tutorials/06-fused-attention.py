@@ -279,12 +279,12 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 
-@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(1, 1, 1024, 64)])
+@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(1, 1, 128, 64)])
 def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     torch.manual_seed(20)
     q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.1, std=0.1).requires_grad_()
     k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.4, std=0.2).requires_grad_()
-    v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.3, std=0.).requires_grad_()
+    v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.3, std=0.2).requires_grad_()
     sm_scale = 0.2
     dout = torch.randn_like(q)
     # reference implementation
@@ -294,6 +294,7 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
         for h in range(H):
             p[:, :, M == 0] = float("-inf")
     p = torch.softmax(p.float(), dim=-1).half()
+    # p = torch.exp(p)
     ref_out = torch.matmul(p, v)
     # ref_out.backward(dout)
     # ref_dv, v.grad = v.grad.clone(), None
@@ -301,12 +302,13 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     # ref_dq, q.grad = q.grad.clone(), None
     # # triton implementation
     tri_out = attention(q, k, v, sm_scale)
+    print(ref_out)
+    print(tri_out)
     # tri_out.backward(dout)
     # tri_dv, v.grad = v.grad.clone(), None
     # tri_dk, k.grad = k.grad.clone(), None
     # tri_dq, q.grad = q.grad.clone(), None
     # compare
-    print(tri_out[0,0,:,0])
     triton.testing.assert_almost_equal(ref_out, tri_out)
     # triton.testing.assert_almost_equal(ref_dv, tri_dv)
     # triton.testing.assert_almost_equal(ref_dk, tri_dk)
