@@ -977,7 +977,12 @@ def ptx_get_version(cuda_version) -> int:
 
 
 def path_to_ptxas():
-    prefixes = [os.environ.get("TRITON_PTXAS_PATH", ""), "", os.environ.get('CUDA_PATH', default_cuda_dir())]
+    prefixes = [
+        os.environ.get("TRITON_PTXAS_PATH", ""),
+        "",
+        "/usr",
+        os.environ.get('CUDA_PATH', default_cuda_dir())
+    ]
     for prefix in prefixes:
         ptxas = os.path.join(prefix, "bin", "ptxas")
         if os.path.exists(ptxas):
