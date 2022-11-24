@@ -195,6 +195,8 @@ def _bwd_kernel(
         tl.store(dk_ptrs, dk)
 
 
+empty = torch.empty(128, device="cuda")
+_fwd_kernel = triton.compile("./flash-attention.ttgir")
 class _attention(torch.autograd.Function):
 
     @staticmethod
@@ -224,7 +226,6 @@ class _attention(torch.autograd.Function):
         #     BLOCK_DMODEL=Lk, num_warps=num_warps,
         #     num_stages=1,
         # )
-        _fwd_kernel = triton.compile("./flash-attention.ttgir")
         _fwd_kernel[grid](
             q.data_ptr(), k.data_ptr(), v.data_ptr(), sm_scale,
             tmp.data_ptr(), L.data_ptr(), m.data_ptr(),
@@ -279,7 +280,7 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 
-@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(1, 1, 128, 64)])
+@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(4, 48, 1024, 64)])
 def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     torch.manual_seed(20)
     q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.1, std=0.1).requires_grad_()
@@ -302,8 +303,8 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     # ref_dq, q.grad = q.grad.clone(), None
     # # triton implementation
     tri_out = attention(q, k, v, sm_scale)
-    print(ref_out)
-    print(tri_out)
+    # print(ref_out)
+    # print(tri_out)
     # tri_out.backward(dout)
     # tri_dv, v.grad = v.grad.clone(), None
     # tri_dk, k.grad = k.grad.clone(), None
@@ -359,4 +360,4 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.f
         ms = triton.testing.do_bench(fn, percentiles=None, warmup=warmup, rep=rep)
         return ms
 
-# bench_flash_attention.run(save_path='.', print_data=True)
+bench_flash_attention.run(save_path='.', print_data=True)

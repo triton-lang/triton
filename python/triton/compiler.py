@@ -1458,6 +1458,8 @@ class CompiledKernel:
         if cuda_utils is None:
             cuda_utils = CudaUtils()
         mod, func, n_regs, n_spills = cuda_utils.load_binary(metadata["name"], self.asm["cubin"], self.shared, device)
+        print(n_regs)
+        print(n_spills)
         self.cu_module = mod
         self.cu_function = func
 
