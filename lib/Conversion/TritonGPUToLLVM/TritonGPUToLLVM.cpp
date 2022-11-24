@@ -791,8 +791,6 @@ public:
       for (unsigned j = 0; j < shape[1]; j += getShapePerCTA(mmaLayout)[1]) {
         ret.push_back({i, j});
         ret.push_back({i, j + 1});
-      }
-      for (unsigned j = 0; j < shape[1]; j += getShapePerCTA(mmaLayout)[1]) {
         ret.push_back({i + 8, j});
         ret.push_back({i + 8, j + 1});
       }
@@ -885,27 +883,13 @@ public:
     size_t rank = shape.size();
     auto parentIndices =
         emitIndices(loc, rewriter, parent, sliceLayout.paddedShape(shape));
-    auto parentOffsets = emitOffsetForLayout(parent, sliceLayout.paddedShape(shape));
-
     unsigned numIndices = parentIndices.size();
-
-    // llvm::outs() << "DIM: " << dim << " ; INDICES " << numIndices << "\n";
-    // we re-order the values
-    // this is necessary because MakeRangeOp conversion
-    // assumes contiguous values are grouped together
     SmallVector<SmallVector<Value>> resultIndices;
-    // DenseMap<SmallVector<unsigned>, SmallVector<SmallVector<Value>>, 
-    //          SmallVectorKeyInfo> groupedValues;
     for (unsigned i = 0; i < numIndices; ++i){
-      SmallVector<unsigned> key = {parentOffsets[i][dim]};
       SmallVector<Value> indices = parentIndices[i];
       indices.erase(indices.begin() + dim);
-      // groupedValues[key].push_back(indices);
       resultIndices.push_back(indices);
     }
-    // for(auto kv: groupedValues)
-    //   for(SmallVector<Value> indices: kv.second)
-    //     resultIndices.push_back(indices);
     return resultIndices;
   }
 
@@ -1464,19 +1448,13 @@ struct BroadcastOpConversion
     unsigned rank = srcTy.getRank();
     assert(rank == resultTy.getRank());
     auto order = triton::gpu::getOrder(srcLayout);
-
-
-
     auto srcOffsets = emitOffsetForLayout(srcLayout, srcShape);
     auto resultOffsets = emitOffsetForLayout(resultLayout, resultShape);
-
     SmallVector<Value> srcVals = getElementsFromStruct(loc, src, rewriter);
     DenseMap<SmallVector<unsigned>, Value, SmallVectorKeyInfo> srcValues;
     for(size_t i = 0; i < srcOffsets.size(); i++){
       srcValues[srcOffsets[i]] = srcVals[i];
     }
-
-
     SmallVector<Value> resultVals;
     for(size_t i = 0; i < resultOffsets.size(); i++) {
       auto offset = resultOffsets[i];
@@ -1485,17 +1463,9 @@ struct BroadcastOpConversion
           offset[j] = 0;
       resultVals.push_back(srcValues.lookup(offset));
     }
-
-
-
-
-
-
     auto llvmStructTy = getTypeConverter()->convertType(resultTy);
-
     Value resultStruct =
         getStructFromElements(loc, resultVals, rewriter, llvmStructTy);
-
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -2107,6 +2077,9 @@ struct MakeRangeOpConversion
     auto idxs = emitIndices(loc, rewriter, layout, shape);
     unsigned elems = idxs.size();
     SmallVector<Value> retVals(elems);
+    // TODO: slice layout has more elements than expected.
+    // Unexpected behavior for make range, but genereally ok when followed by expand dims + broadcast.
+    // very weird behavior otherwise potentially.
     for (auto multiDim : llvm::enumerate(idxs)) {
       assert(multiDim.value().size() == 1);
       retVals[multiDim.index()] = add(multiDim.value()[0], start);
