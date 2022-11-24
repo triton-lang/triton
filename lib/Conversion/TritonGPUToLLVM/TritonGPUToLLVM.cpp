@@ -21,6 +21,7 @@
 #include "triton/Analysis/Membar.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
+#include "triton/Conversion/TritonGPUToLLVM/GcnAsmFormat.h"
 #include "triton/Conversion/TritonGPUToLLVM/PtxAsmFormat.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPU.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -1002,7 +1003,66 @@ struct LoadOpConversion
       const size_t nWords = std::max<size_t>(1, totalWidth / width);
       const size_t wordNElems = width / valueElemNbits;
       assert(wordNElems * nWords * numVecs == numElems);
+#ifdef USE_ROCM
+      GCNBuilder gcnBuilder;
 
+      const std::string readConstraint = "v";
+      const std::string writeConstraint = "=&v";
+
+      auto *dstsOpr = gcnBuilder.newListOperand();
+      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
+        auto *opr = gcnBuilder.newOperand(writeConstraint); // =v operations
+        dstsOpr->listAppend(opr);
+      }
+
+      auto *addrOpr = gcnBuilder.newAddrOperand(ptrElems[vecStart], "v");
+      auto *offOpr = gcnBuilder.newEmptyOperand("off");
+
+      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
+        auto &gload = gcnBuilder.create<GCNMemInstr>("global_load")
+                          ->load_type(valueElemNbits);
+        unsigned offset = wordIdx * (valueElemNbits / 8);
+        auto *offsetMod =
+            gcnBuilder.newModifier("offset", std::to_string(offset));
+        gload({dstsOpr->listGet(wordIdx), addrOpr, offOpr}, {offsetMod});
+      }
+
+      auto &wait_cnt = *gcnBuilder.create<>("s_waitcnt vmcnt(0)");
+      wait_cnt();
+
+      if (other) {
+        for (size_t ii = 0; ii < nWords; ++ii) {
+          GCNInstr &mov = *gcnBuilder.create<>("v_mov_b32");
+
+          size_t size = width / valueElemNbits;
+
+          auto vecTy = LLVM::getFixedVectorType(valueElemTy, size);
+          Value v = rewriter.create<LLVM::UndefOp>(loc, vecTy);
+          for (size_t s = 0; s < size; ++s) {
+            Value falseVal = otherElems[vecStart + ii * size + s];
+            Value sVal = createIndexAttrConstant(
+                rewriter, loc, this->getTypeConverter()->getIndexType(), s);
+            v = insert_element(vecTy, v, falseVal, sVal);
+          }
+          v = bitcast(v, IntegerType::get(getContext(), width));
+
+          GCNInstr::Operand *opr{};
+          if (otherIsSplatConstInt)
+            opr = gcnBuilder.newConstantOperand(splatVal);
+          else
+            opr = gcnBuilder.newOperand(v, readConstraint);
+
+          mov(dstsOpr->listGet(ii), opr);
+        }
+      }
+
+      SmallVector<Type> retTys(nWords, IntegerType::get(getContext(), width));
+      Type retTy = retTys.size() > 1
+                       ? LLVM::LLVMStructType::getLiteral(getContext(), retTys)
+                       : retTys[0];
+
+      Value ret = gcnBuilder.launch(rewriter, loc, retTy);
+#else
       // TODO(Superjomn) Add cache policy fields to StoreOp.
       // TODO(Superjomn) Deal with cache policy here.
       const bool hasL2EvictPolicy = false;
@@ -1089,7 +1149,7 @@ struct LoadOpConversion
       // auto asmDialectAttr = LLVM::AsmDialectAttr::get(rewriter.getContext(),
       //                                                 LLVM::AsmDialect::AD_ATT);
       Value ret = ptxBuilder.launch(rewriter, loc, retTy);
-
+#endif
       // ---
       // extract and store return values
       // ---
