@@ -1441,7 +1441,7 @@ def read_or_execute_2(cache_manager, force_compile, file_name_1, file_name_2,
         data_2 = module_2 if isinstance(module_2, bytes) else str(module_2).encode("utf-8")
         md5_1 = hashlib.md5(data_1).hexdigest()
         md5_2 = hashlib.md5(data_2).hexdigest()
-        has_changed = (metadata and md5_1 != metadata["md5"][suffix_1]) or (metadata and md5_2 != metadata["md5"][suffix_2])
+        has_changed = metadata and ((md5_1 != metadata["md5"][suffix_1]) or (md5_2 != metadata["md5"][suffix_2]))
         return module_1, md5_1, module_2, md5_2, has_changed, True
     module_1, module_2 = run_if_not_found()
     data_1 = module_1 if isinstance(module_1, bytes) else str(module_1).encode("utf-8")

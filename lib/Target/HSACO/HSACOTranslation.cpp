@@ -33,6 +33,7 @@
 #include <regex>
 #include <cstdio>
 #include <iostream>
+#include <memory>
 
 namespace {
 
@@ -44,29 +45,17 @@ void init_llvm() {
   LLVMInitializeAMDGPUAsmPrinter();
 }
 
-std::tuple<std::string, std::string> llir_to_hsaco(llvm::Module *module, std::string cc) {
-  // create
-  llvm::SmallVector<char, 0> buffer;
-  std::string triple = "amdgcn-amd-amdhsa";
-  std::string proc = cc;
-  std::string layout = "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:"
-                       "64:64-p5:32:32-p6:32:32-i64:64-"
-                       "v16:16-v24:32-v32:32-v48:64-v96:128-v192:"
-                       "256-v256:256-v512:512-v1024:"
-                       "1024-v2048:2048-n32:64-S32-A5-ni:7";
-  std::string features = "+sramecc,-xnack";
-
-  std::string kernel_name = std::string(std::tmpnam(nullptr)) + "_" + module->getModuleIdentifier();
-
-  init_llvm();
-
+std::unique_ptr<llvm::TargetMachine> initialize_module(llvm::Module* module,
+                                                       const std::string& triple,
+                                                       const std::string& proc,
+                                                       const std::string& features) {
   // verify and store llvm
   llvm::legacy::PassManager pm;
   pm.add(llvm::createVerifierPass());
   pm.run(*module);
 
-  // create machine
   module->setTargetTriple(triple);
+
   std::string error;
   auto target =
       llvm::TargetRegistry::lookupTarget(module->getTargetTriple(), error);
@@ -78,17 +67,25 @@ std::tuple<std::string, std::string> llir_to_hsaco(llvm::Module *module, std::st
   llvm::TargetMachine *machine = target->createTargetMachine(
       module->getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
       llvm::None, llvm::CodeGenOpt::Aggressive);
-  // set data layout
-  if (layout.empty())
-    module->setDataLayout(machine->createDataLayout());
-  else
-    module->setDataLayout(layout);
-  // emit machine code
+
+  module->setDataLayout(machine->createDataLayout());
+
   for (llvm::Function &f : module->functions())
     f.addFnAttr(llvm::Attribute::AlwaysInline);
 
+  return std::unique_ptr<llvm::TargetMachine>(machine);
+}
+
+std::string generate_amdgcn_assembly(llvm::Module* module,
+                                     const std::string& triple,
+                                     const std::string& proc,
+                                     const std::string& features) {
+  auto machine = initialize_module(module, triple, proc, features);
+
+  llvm::SmallVector<char, 0> buffer;
   llvm::legacy::PassManager pass;
   llvm::raw_svector_ostream stream(buffer);
+
   // emit
   machine->addPassesToEmitFile(pass, stream, nullptr,
                                llvm::CodeGenFileType::CGFT_AssemblyFile);
@@ -98,6 +95,17 @@ std::tuple<std::string, std::string> llir_to_hsaco(llvm::Module *module, std::st
   if (::triton::tools::getBoolEnv("AMDGCN_ENABLE_DUMP")) {
     std::cout << "// -----// AMDGCN Dump //----- //\n" << amdgcn << std::endl;
   }
+
+  return amdgcn;
+}
+
+std::string generate_hsaco(llvm::Module* module,
+                           const std::string& triple,
+                           const std::string& proc,
+                           const std::string& features) {
+  auto machine = initialize_module(module, triple, proc, features);
+
+  std::string kernel_name = std::string(std::tmpnam(nullptr)) + "_" + module->getModuleIdentifier();
 
   // create dump files
   std::error_code ec;
@@ -110,6 +118,7 @@ std::tuple<std::string, std::string> llir_to_hsaco(llvm::Module *module, std::st
     std::cout << isabin_path << " was not created. error code: " << ec << std::endl;
   }
   // emit
+  llvm::legacy::PassManager pass;
   machine->addPassesToEmitFile(pass, *isabin_fs, nullptr, llvm::CGFT_ObjectFile);
   pass.run(*module);
 
@@ -128,6 +137,23 @@ std::tuple<std::string, std::string> llir_to_hsaco(llvm::Module *module, std::st
     std::cout << lld_result << std::endl;
   }
 
+  return hsaco_path;
+}
+
+std::tuple<std::string, std::string> llir_to_hsaco(llvm::Module* module,
+                                                   std::string cc) {
+  // create
+  std::string triple = "amdgcn-amd-amdhsa";
+  std::string proc = cc;
+  std::string features = "+sramecc,-xnack";
+
+  init_llvm();
+
+  // verify and store llvm
+  auto module_obj = llvm::CloneModule(*module);
+  auto amdgcn = generate_amdgcn_assembly(module, triple, proc, features);
+  auto hsaco_path = generate_hsaco(module_obj.get(), triple, proc, features);
+
   return std::make_tuple(amdgcn, hsaco_path);
 }
 
@@ -135,7 +161,8 @@ std::tuple<std::string, std::string> llir_to_hsaco(llvm::Module *module, std::st
 
 namespace triton {
 
-std::tuple<std::string, std::string> translateLLVMIRToHSACO(llvm::Module &module, std::string cc) {
+std::tuple<std::string, std::string> translateLLVMIRToHSACO(llvm::Module& module,
+                                                            std::string cc) {
   auto hsacoCode = llir_to_hsaco(&module, cc);
   return hsacoCode;
 }

@@ -12,7 +12,8 @@ class Module;
 namespace triton {
 
 // Translate TritonGPU IR to HSACO code.
-std::tuple<std::string, std::string> translateLLVMIRToHSACO(llvm::Module &module, std::string cc);
+std::tuple<std::string, std::string> translateLLVMIRToHSACO(llvm::Module& module,
+                                                            std::string cc);
 
 } // namespace triton
 
