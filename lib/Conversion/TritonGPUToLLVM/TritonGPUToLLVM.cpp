@@ -1270,11 +1270,40 @@ struct StoreOpConversion
                                  loc, u32Ty, IntegerAttr::get(u32Ty, elemIdx)));
         }
         llWord = bitcast(llWord, valArgTy);
+#ifdef USE_ROCM
+        std::string constraint = "v";
+#else
         std::string constraint =
             (width == 64) ? "l" : ((width == 32) ? "r" : "c");
+#endif
         asmArgs.emplace_back(llWord, constraint);
       }
+#ifdef USE_ROCM
+ // Prepare the AMDGCN inline asm.
+      GCNBuilder gcnBuilder;
+      auto *asmArgList = gcnBuilder.newListOperand(asmArgs);
+      auto *asmAddr = gcnBuilder.newAddrOperand(ptrElems[vecStart], "v");
+      auto *offOpr = gcnBuilder.newEmptyOperand("off");
+      for (size_t ii = 0; ii < nWords; ++ii) {
+        auto &gstore = gcnBuilder.create<GCNMemInstr>("global_store")
+                           ->store_type(valueElemNbits);
+        unsigned offset = ii * (valueElemNbits / 8);
+        auto *offsetMod =
+            gcnBuilder.newModifier("offset", std::to_string(offset));
+        gstore({asmAddr, asmArgList->listGet(ii), offOpr}, {offsetMod});
+      }
 
+      auto &wait_cnt = *gcnBuilder.create<>("s_waitcnt vmcnt(0)");
+      wait_cnt();
+
+      Type boolTy = getTypeConverter()->convertType(rewriter.getIntegerType(1));
+      llvm::SmallVector<Type> argTys({boolTy, ptr.getType()});
+      argTys.insert(argTys.end(), nWords, valArgTy);
+
+      auto ASMReturnTy = LLVM::LLVMVoidType::get(ctx);
+
+      gcnBuilder.launch(rewriter, loc, ASMReturnTy);
+#else
       // Prepare the PTX inline asm.
       PTXBuilder ptxBuilder;
       auto *asmArgList = ptxBuilder.newListOperand(asmArgs);
@@ -1295,6 +1324,7 @@ struct StoreOpConversion
       auto ASMReturnTy = void_ty(ctx);
 
       ptxBuilder.launch(rewriter, loc, ASMReturnTy);
+#endif
     }
     rewriter.eraseOp(op);
     return success();
