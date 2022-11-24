@@ -28,7 +28,7 @@ namespace mlir {
 namespace triton {
 
 // Bitwidth of pointers
-constexpr int kPtrBitWidth = 64; 
+constexpr int kPtrBitWidth = 64;
 
 static std::pair<SmallVector<unsigned>, SmallVector<unsigned>>
 getCvtOrder(const Attribute &srcLayout, const Attribute &dstLayout) {
@@ -155,8 +155,7 @@ private:
     // For example: %a = scf.if -> yield
     // %a must be allocated elsewhere by other operations.
     // FIXME(Keren): extract and insert are always alias for now
-    if (!maybeSharedAllocationOp(op) || isa<tensor::ExtractSliceOp>(op) ||
-        isa<triton::gpu::InsertSliceAsyncOp>(op)) {
+    if (!maybeSharedAllocationOp(op) || maybeAliasOp(op)) {
       return;
     }
 
@@ -210,9 +209,9 @@ private:
       auto smemShape = getScratchConfigForCvtLayout(cvtLayout, inVec, outVec);
       unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
                                        std::multiplies{});
-      auto bytes = srcTy.getElementType().isa<triton::PointerType>()? 
-                   elems * kPtrBitWidth / 8 :
-                   elems * srcTy.getElementTypeBitWidth() / 8;
+      auto bytes = srcTy.getElementType().isa<triton::PointerType>()
+                       ? elems * kPtrBitWidth / 8
+                       : elems * srcTy.getElementTypeBitWidth() / 8;
       allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
     } else if (auto atomicRMWOp = dyn_cast<triton::AtomicRMWOp>(op)) {
       auto value = op->getOperand(0);

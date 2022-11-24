@@ -119,8 +119,26 @@ func @insert_slice_async(%A : !tt.ptr<f16>, %i1 : i1) {
   %tensor = triton_gpu.alloc_tensor : tensor<1x16x16xf16, #A_SHARED>
   %index = arith.constant 0 : i32
   %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index, %mask, %other {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x16x!tt.ptr<f16>, #AL> -> tensor<1x16x16xf16, #A_SHARED>
+  // CHECK: Membar 6
   %b = tt.cat %a, %a {axis = 0} : (tensor<1x16x16xf16, #A_SHARED>, tensor<1x16x16xf16, #A_SHARED>) -> tensor<2x16x16xf16, #A_SHARED>
-  // CHECK: Membar 7
+  // CHECK: Membar 8
+  %c = tt.cat %b, %b {axis = 0} : (tensor<2x16x16xf16, #A_SHARED>, tensor<2x16x16xf16, #A_SHARED>) -> tensor<4x16x16xf16, #A_SHARED>
+  return
+}
+
+// CHECK-LABEL: insert_slice
+func @insert_slice(%A : !tt.ptr<f16>, %i1 : i1) {
+  %a_ptr = tt.broadcast %A : (!tt.ptr<f16>) -> tensor<16x16x!tt.ptr<f16>, #AL>
+  %mask = tt.splat %i1 : (i1) -> tensor<16x16xi1, #AL>
+  %other = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
+  %tensor = arith.constant dense<0.000000e+00> : tensor<1x16x16xf16, #A_SHARED>
+  %index = arith.constant 0 : index
+  %al = tt.load %a_ptr, %mask, %other {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x16xf16, #AL>
+  // CHECK: Membar 6
+  %a = tensor.insert_slice %al into %tensor[%index, 0, 0][1, 16, 16][1, 1, 1]: tensor<16x16xf16, #AL> into tensor<1x16x16xf16, #A_SHARED>
+  // CHECK: Membar 8
+  %b = tt.cat %a, %a {axis = 0} : (tensor<1x16x16xf16, #A_SHARED>, tensor<1x16x16xf16, #A_SHARED>) -> tensor<2x16x16xf16, #A_SHARED>
+  // CHECK: Membar 10
   %c = tt.cat %b, %b {axis = 0} : (tensor<2x16x16xf16, #A_SHARED>, tensor<2x16x16xf16, #A_SHARED>) -> tensor<4x16x16xf16, #A_SHARED>
   return
 }
