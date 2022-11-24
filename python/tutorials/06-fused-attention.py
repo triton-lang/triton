@@ -313,3 +313,50 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     # triton.testing.assert_almost_equal(ref_dv, tri_dv)
     # triton.testing.assert_almost_equal(ref_dk, tri_dk)
     # triton.testing.assert_almost_equal(ref_dq, tri_dq)
+
+BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
+# vary seq length for fixed head and batch=4
+configs = [triton.testing.Benchmark(
+    x_names=['N_CTX'],
+    x_vals=[2**i for i in range(10, 16)],
+    line_arg='provider',
+    line_vals=['triton'],
+    line_names=['Triton'],
+    styles=[('red', '-'), ('blue', '-')],
+    ylabel='ms',
+    plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}',
+    args={'H': N_HEADS, 'BATCH': BATCH, 'D_HEAD': D_HEAD, 'dtype': torch.float16, 'mode': mode}
+) for mode in ['fwd']]
+
+
+@triton.testing.perf_report(configs)
+def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.float16, device="cuda"):
+    assert mode in ['fwd', 'bwd']
+    warmup = 25
+    rep = 100
+    if provider == "triton":
+        q = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
+        k = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
+        v = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
+        sm_scale = 1.3
+        fn = lambda: attention(q, k, v, sm_scale)
+        if mode == 'bwd':
+            o = fn()
+            do = torch.randn_like(o)
+            fn = lambda: o.backward(do, retain_graph=True)
+        ms = triton.testing.do_bench(fn, percentiles=None, warmup=warmup, rep=rep)
+        return ms
+    if provider == "flash":
+        lengths = torch.full((BATCH,), fill_value=N_CTX, device=device)
+        cu_seqlens = torch.zeros((BATCH + 1,), device=device, dtype=torch.int32)
+        cu_seqlens[1:] = lengths.cumsum(0)
+        qkv = torch.randn((BATCH * N_CTX, 3, H, D_HEAD), dtype=dtype, device=device, requires_grad=True)
+        fn = lambda: flash_attn_func(qkv, cu_seqlens, 0., N_CTX, causal=True)
+        if mode == 'bwd':
+            o = fn()
+            do = torch.randn_like(o)
+            fn = lambda: o.backward(do, retain_graph=True)
+        ms = triton.testing.do_bench(fn, percentiles=None, warmup=warmup, rep=rep)
+        return ms
+
+# bench_flash_attention.run(save_path='.', print_data=True)
