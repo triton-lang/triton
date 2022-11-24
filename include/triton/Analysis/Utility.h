@@ -12,6 +12,8 @@ bool isSharedEncoding(Value value);
 
 bool maybeSharedAllocationOp(Operation *op);
 
+bool maybeAliasOp(Operation *op);
+
 std::string getValueOperandName(Value value, AsmState &state);
 
 template <typename Int> Int product(llvm::ArrayRef<Int> arr) {
