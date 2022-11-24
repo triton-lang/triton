@@ -1128,10 +1128,15 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
             ZCs = Z + off_n * stride_zn
             z += tl.load(ZCs)[None, :]
         if DO_SOFTMAX:
-            z += tl.where(off_m[:, None] >= (off_n[None, :]), 0, float("-inf"))
+            mask = off_m[:, None] >= off_n[None, :]
+            # tl.printf("mask", mask)
+            z += tl.where(mask, 0, float("-inf"))
+            # tl.printf("off_m", off_m)
+            # tl.printf("off_n", off_n)
+            # tl.printf("mask", mask)
             # max = tl.max(z, 1)
             # z = z - max[:, None]
-            z = tl.exp(z)
+            # z = tl.exp(z)
         if CHAIN_DOT:
             # tl.store(Zs, z)
             # tl.debug_barrier()
@@ -1154,20 +1159,27 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
     z_tri = to_triton(z, device=device)
     if epilogue == 'trans':
         z_tri = torch.as_strided(z_tri, (M, N), z_tri.stride()[::-1])
-    pgm = kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1),
-                         y_tri, y_tri.stride(0), y_tri.stride(1),
-                         w_tri, w_tri.stride(0), w_tri.stride(1),
-                         z_tri, z_tri.stride(0), z_tri.stride(1),
-                         TRANS_A=trans_a, TRANS_B=trans_b,
-                         BLOCK_M=M, BLOCK_K=K, BLOCK_N=N,
-                         ADD_MATRIX=epilogue == 'add-matrix',
-                         ADD_ROWS=epilogue == 'add-rows',
-                         ADD_COLS=epilogue == 'add-cols',
-                         DO_SOFTMAX=epilogue == 'softmax',
-                         CHAIN_DOT=epilogue == 'chain-dot',
-                         ALLOW_TF32=allow_tf32,
-                         num_warps=num_warps)
+    # pgm = kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1),
+    #                      y_tri, y_tri.stride(0), y_tri.stride(1),
+    #                      w_tri, w_tri.stride(0), w_tri.stride(1),
+    #                      z_tri, z_tri.stride(0), z_tri.stride(1),
+    #                      TRANS_A=trans_a, TRANS_B=trans_b,
+    #                      BLOCK_M=M, BLOCK_K=K, BLOCK_N=N,
+    #                      ADD_MATRIX=epilogue == 'add-matrix',
+    #                      ADD_ROWS=epilogue == 'add-rows',
+    #                      ADD_COLS=epilogue == 'add-cols',
+    #                      DO_SOFTMAX=epilogue == 'softmax',
+    #                      CHAIN_DOT=epilogue == 'chain-dot',
+    #                      ALLOW_TF32=allow_tf32,
+    #                      num_warps=num_warps)
     # torch result
+    kernel = triton.compile("./matmul-debug.ttgir")
+    kernel[(1,1,1)](x_tri.data_ptr(), x_tri.stride(0),
+                    y_tri.data_ptr(), y_tri.stride(0),
+                    w_tri.data_ptr(), w_tri.stride(0),
+                    z_tri.data_ptr(), z_tri.stride(0))
+    print(z_tri)
+    exit(1)
     x_ref = x.T if trans_a else x
     y_ref = y.T if trans_b else y
     z_ref = np.matmul(x_ref, y_ref)
@@ -1179,13 +1191,12 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
         z_ref += z[0, :][None, :]
     if epilogue == 'softmax':
         z_ref += np.triu(np.full_like(z_ref, float("-inf")), k=1)
-        z_ref = np.exp(z_ref)
+        # z_ref = np.exp(z_ref)
     if epilogue == 'chain-dot':
         z_ref = np.matmul(z_ref.T if trans_a else z_ref, w)
     # compare
     # print(z_ref[:,0], z_tri[:,0])
-    print(z_ref[8,:])
-    print(z_tri[8,:])
+    # print(z_tri[0,:])
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
     # make sure ld/st are vectorized
     ptx = pgm.asm['ptx']

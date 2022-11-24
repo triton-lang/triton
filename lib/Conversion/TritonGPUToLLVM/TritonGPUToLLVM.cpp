@@ -889,22 +889,23 @@ public:
 
     unsigned numIndices = parentIndices.size();
 
+    // llvm::outs() << "DIM: " << dim << " ; INDICES " << numIndices << "\n";
     // we re-order the values
     // this is necessary because MakeRangeOp conversion
     // assumes contiguous values are grouped together
-    DenseMap<SmallVector<unsigned>, SmallVector<SmallVector<Value>>, 
-             SmallVectorKeyInfo> groupedValues;
-    for (unsigned i = 0; i < numIndices; ++i){
-      SmallVector<unsigned> key = parentOffsets[i];
-      SmallVector<Value> indices = parentIndices[i];
-      key.erase(key.begin() + dim);
-      indices.erase(indices.begin() + dim);
-      groupedValues[key].push_back(indices);
-    }
     SmallVector<SmallVector<Value>> resultIndices;
-    for(auto kv: groupedValues)
-      for(SmallVector<Value> indices: kv.second)
-        resultIndices.push_back(indices);
+    // DenseMap<SmallVector<unsigned>, SmallVector<SmallVector<Value>>, 
+    //          SmallVectorKeyInfo> groupedValues;
+    for (unsigned i = 0; i < numIndices; ++i){
+      SmallVector<unsigned> key = {parentOffsets[i][dim]};
+      SmallVector<Value> indices = parentIndices[i];
+      indices.erase(indices.begin() + dim);
+      // groupedValues[key].push_back(indices);
+      resultIndices.push_back(indices);
+    }
+    // for(auto kv: groupedValues)
+    //   for(SmallVector<Value> indices: kv.second)
+    //     resultIndices.push_back(indices);
     return resultIndices;
   }
 
@@ -1464,86 +1465,32 @@ struct BroadcastOpConversion
     assert(rank == resultTy.getRank());
     auto order = triton::gpu::getOrder(srcLayout);
 
-    SmallVector<int64_t> srcLogicalShape(2 * rank);
-    SmallVector<unsigned> srcLogicalOrder(2 * rank);
-    SmallVector<int64_t> resultLogicalShape(2 * rank);
-    SmallVector<unsigned> broadcastDims;
-    for (unsigned d = 0; d < rank; ++d) {
-      unsigned resultShapePerCTA =
-          triton::gpu::getSizePerThread(resultLayout)[d] *
-          triton::gpu::getThreadsPerWarp(resultLayout)[d] *
-          triton::gpu::getWarpsPerCTA(resultLayout)[d];
-      int64_t numCtas = ceil<unsigned>(resultShape[d], resultShapePerCTA);
-      if (srcShape[d] != resultShape[d]) {
-        assert(srcShape[d] == 1);
-        broadcastDims.push_back(d);
-        srcLogicalShape[d] = 1;
-        srcLogicalShape[d + rank] =
-            std::max<unsigned>(1, triton::gpu::getSizePerThread(srcLayout)[d]);
-      } else {
-        srcLogicalShape[d] = numCtas;
-        srcLogicalShape[d + rank] =
-            triton::gpu::getSizePerThread(resultLayout)[d];
-      }
-      resultLogicalShape[d] = numCtas;
-      resultLogicalShape[d + rank] =
-          triton::gpu::getSizePerThread(resultLayout)[d];
 
-      srcLogicalOrder[d] = order[d] + rank;
-      srcLogicalOrder[d + rank] = order[d];
-    }
-    int64_t duplicates = 1;
-    SmallVector<int64_t> broadcastSizes(broadcastDims.size() * 2);
-    SmallVector<unsigned> broadcastOrder(broadcastDims.size() * 2);
-    for (auto it : llvm::enumerate(broadcastDims)) {
-      // Incase there are multiple indices in the src that is actually
-      // calculating the same element, srcLogicalShape may not need to be 1.
-      // Such as the case when src of shape [256, 1], and with a blocked
-      // layout: sizePerThread: [1, 4];  threadsPerWarp: [1, 32]; warpsPerCTA:
-      // [1, 2]
-      int64_t d = resultLogicalShape[it.value()] / srcLogicalShape[it.value()];
-      broadcastSizes[it.index()] = d;
-      broadcastOrder[it.index()] = srcLogicalOrder[it.value()];
-      duplicates *= d;
-      d = resultLogicalShape[it.value() + rank] /
-          srcLogicalShape[it.value() + rank];
-      broadcastSizes[it.index() + broadcastDims.size()] = d;
-      broadcastOrder[it.index() + broadcastDims.size()] =
-          srcLogicalOrder[it.value() + rank];
-      duplicates *= d;
-    }
-    auto argsort = [](SmallVector<unsigned> input) {
-      SmallVector<unsigned> idx(input.size());
-      std::iota(idx.begin(), idx.end(), 0);
-      std::sort(idx.begin(), idx.end(), [&input](unsigned a, unsigned b) {
-        return input[a] < input[b];
-      });
-      return idx;
-    };
-    broadcastOrder = argsort(broadcastOrder);
 
-    unsigned srcElems = getElemsPerThread(srcTy);
-    auto srcVals = getElementsFromStruct(loc, src, rewriter);
-    unsigned resultElems = getElemsPerThread(resultTy);
-    SmallVector<Value> resultVals(resultElems);
-    for (unsigned i = 0; i < srcElems; ++i) {
-      auto srcMultiDim =
-          getMultiDimIndex<int64_t>(i, srcLogicalShape, srcLogicalOrder);
-      for (int64_t j = 0; j < duplicates; ++j) {
-        auto resultMultiDim = srcMultiDim;
-        auto bcastMultiDim =
-            getMultiDimIndex<int64_t>(j, broadcastSizes, broadcastOrder);
-        for (auto bcastDim : llvm::enumerate(broadcastDims)) {
-          resultMultiDim[bcastDim.value()] += bcastMultiDim[bcastDim.index()];
-          resultMultiDim[bcastDim.value() + rank] +=
-              bcastMultiDim[bcastDim.index() + broadcastDims.size()] *
-              srcLogicalShape[bcastDim.index() + broadcastDims.size()];
-        }
-        auto resultLinearIndex = getLinearIndex<int64_t>(
-            resultMultiDim, resultLogicalShape, srcLogicalOrder);
-        resultVals[resultLinearIndex] = srcVals[i];
-      }
+    auto srcOffsets = emitOffsetForLayout(srcLayout, srcShape);
+    auto resultOffsets = emitOffsetForLayout(resultLayout, resultShape);
+
+    SmallVector<Value> srcVals = getElementsFromStruct(loc, src, rewriter);
+    DenseMap<SmallVector<unsigned>, Value, SmallVectorKeyInfo> srcValues;
+    for(size_t i = 0; i < srcOffsets.size(); i++){
+      srcValues[srcOffsets[i]] = srcVals[i];
     }
+
+
+    SmallVector<Value> resultVals;
+    for(size_t i = 0; i < resultOffsets.size(); i++) {
+      auto offset = resultOffsets[i];
+      for(size_t j = 0; j < srcShape.size(); j++)
+        if(srcShape[j]==1)
+          offset[j] = 0;
+      resultVals.push_back(srcValues.lookup(offset));
+    }
+
+
+
+
+
+
     auto llvmStructTy = getTypeConverter()->convertType(resultTy);
 
     Value resultStruct =
@@ -1978,12 +1925,10 @@ struct PrintfOpConversion
     std::string formatStr;
     llvm::raw_string_ostream os(formatStr);
     os << op.prefix();
-    if (operands.size() > 0) {
-      os << getFormatSubstr(operands[0]);
-    }
+    os << " (thread " << getFormatSubstr(operands[0]) << ") : ";
 
     for (size_t i = 1; i < operands.size(); ++i) {
-      os << ", " << getFormatSubstr(operands[i]);
+      os << getFormatSubstr(operands[i]) << ", ";
     }
     llPrintf(formatStr, operands, rewriter);
     rewriter.eraseOp(op);
@@ -2087,7 +2032,6 @@ struct PrintfOpConversion
     size_t formatStringSize = formatString.size_in_bytes();
     auto globalType = LLVM::LLVMArrayType::get(i8_ty, formatStringSize);
 
-    llvm::outs() << formatString << "\n";
     LLVM::GlobalOp global;
     {
       ConversionPatternRewriter::InsertionGuard guard(rewriter);
