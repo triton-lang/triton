@@ -1,8 +1,10 @@
 """isort:skip_file"""
 # Import order is significant here.
 
-from triton._C.libtriton.triton import ir
-
+from ..impl import (
+    ir,
+    builtin,
+)
 from . import core, extern, libdevice, random
 from .core import (
     abs,
@@ -17,7 +19,6 @@ from .core import (
     atomic_xor,
     bfloat16,
     block_type,
-    builtin,
     cat,
     cdiv,
     constexpr,

@@ -9,6 +9,7 @@ __version__ = '2.0.0'
 import torch  # noqa: F401
 
 # submodules
+from . import impl
 from .utils import (
     cdiv,
     MockTensor,
@@ -36,6 +37,7 @@ __all__ = [
     "compile",
     "Config",
     "heuristics",
+    "impl",
     "jit",
     "JITFunction",
     "KernelInterface",
