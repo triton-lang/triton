@@ -927,7 +927,8 @@ class CodeGenerator(ast.NodeVisitor):
                 ret = base.tensor(ret, self.prototypes[fn_name].ret_type)
             return ret
         # built-in function
-        if base.is_builtin(fn):
+        if (hasattr(fn, '__self__') and base.is_triton_tensor(fn.__self__)) \
+                or base.is_builtin(fn):
             ret = fn(*args, _builder=self.builder, **kws)
         elif fn in self.value_constructor.builtins.values():
             args = [
