@@ -110,15 +110,19 @@ SmallVector<unsigned> getScratchConfigForReduce(triton::ReduceOp op) {
 // TODO: extend beyond scalars
 SmallVector<unsigned> getScratchConfigForAtomicRMW(triton::AtomicRMWOp op) {
   SmallVector<unsigned> smemShape;
-  auto ptrTy = op.ptr().getType();
-  if (auto tensorType = ptrTy.dyn_cast<RankedTensorType>()) {
-    // do nothing or just assert because shared memory is not used in tensor
+  if (op.ptr().getType().isa<RankedTensorType>()) {
+    // do nothing or just assert because shared memory is not used in tensor up
+    // to now
   } else {
     // need only bytes for scalar
     // always vec = 1 and elemsPerThread = 1 for scalar?
     smemShape.push_back(1);
   }
   return smemShape;
+}
+
+SmallVector<unsigned> getScratchConfigForAtomicCAS(triton::AtomicCASOp op) {
+  return SmallVector<unsigned>{1};
 }
 
 class AllocationAnalysis {
@@ -224,6 +228,17 @@ private:
                          : elems * elemTy.getIntOrFloatBitWidth() / 8;
         allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
       }
+    } else if (auto atomicCASOp = dyn_cast<triton::AtomicCASOp>(op)) {
+      auto value = op->getOperand(0);
+      auto smemShape = getScratchConfigForAtomicCAS(atomicCASOp);
+      unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
+                                       std::multiplies{});
+      auto elemTy =
+          value.getType().cast<triton::PointerType>().getPointeeType();
+      auto bytes = elemTy.isa<triton::PointerType>()
+                       ? elems * kPtrBitWidth / 8
+                       : elems * elemTy.getIntOrFloatBitWidth() / 8;
+      allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
     }
   }
 

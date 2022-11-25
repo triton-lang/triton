@@ -706,6 +706,16 @@ def test_tensor_atomic_rmw(shape, axis, device="cuda"):
 #     serialized_add[(64,)](data, Lock)
 #     triton.testing.assert_almost_equal(data, ref)
 
+def test_simple_atomic_cas():
+    # 1. make sure that atomic_cas changes the original value (Lock)
+    @triton.jit
+    def change_value(Lock):
+        tl.atomic_cas(Lock, 0, 1)
+
+    Lock = torch.zeros((1,), device='cuda', dtype=torch.int32)
+    change_value[(1,)](Lock)
+
+    assert (Lock[0] == 1)
 
 # # ---------------
 # # test cast

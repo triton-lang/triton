@@ -6035,6 +6035,82 @@ struct ExpOpConversionApprox
     return ptxBuilder.launch(rewriter, loc, f32_ty, false);
   }
 };
+/// ====================== atomic_cas codegen begin ==========================
+struct AtomicCASOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::AtomicCASOp>,
+      public LoadStoreConversionBase {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::AtomicCASOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  AtomicCASOpConversion(LLVMTypeConverter &converter,
+                        const Allocation *allocation, Value smem,
+                        AxisInfoAnalysis &axisAnalysisPass,
+                        PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::AtomicCASOp>(
+            converter, allocation, smem, benefit),
+        LoadStoreConversionBase(axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    MLIRContext *ctx = rewriter.getContext();
+    Value ptr = op.ptr();
+
+    Value llPtr = adaptor.ptr();
+    Value llCmp = adaptor.cmp();
+    Value llVal = adaptor.val();
+
+    auto ptrElements = getElementsFromStruct(loc, llPtr, rewriter);
+    auto cmpElements = getElementsFromStruct(loc, llCmp, rewriter);
+    auto valElements = getElementsFromStruct(loc, llVal, rewriter);
+
+    auto valueTy = op.getResult().getType().dyn_cast<RankedTensorType>();
+    Type valueElemTy =
+        valueTy ? getTypeConverter()->convertType(valueTy.getElementType())
+                : op.getResult().getType();
+    auto tid = tid_val();
+    Value pred = icmp_eq(tid, i32_val(0));
+    PTXBuilder ptxBuilderMemfence;
+    auto memfenc = ptxBuilderMemfence.create<PTXInstr>("membar")->o("gl");
+    memfenc();
+    auto ASMReturnTy = void_ty(ctx);
+    ptxBuilderMemfence.launch(rewriter, loc, ASMReturnTy);
+
+    Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+    atomPtr = bitcast(atomPtr, ptr_ty(valueElemTy, 3));
+
+    Value casPtr = ptrElements[0];
+    Value casCmp = cmpElements[0];
+    Value casVal = valElements[0];
+
+    PTXBuilder ptxBuilderAtomicCAS;
+    auto *dstOpr = ptxBuilderAtomicCAS.newOperand("=r");
+    auto *ptrOpr = ptxBuilderAtomicCAS.newAddrOperand(casPtr, "l");
+    auto *cmpOpr = ptxBuilderAtomicCAS.newOperand(casCmp, "r");
+    auto *valOpr = ptxBuilderAtomicCAS.newOperand(casVal, "r");
+    auto &atom = *ptxBuilderAtomicCAS.create<PTXInstr>("atom");
+    atom.global().o("cas").o("b32");
+    atom(dstOpr, ptrOpr, cmpOpr, valOpr).predicate(pred);
+    auto old = ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
+    barrier();
+
+    PTXBuilder ptxBuilderStore;
+    auto *dstOprStore = ptxBuilderStore.newAddrOperand(atomPtr, "l");
+    auto *valOprStore = ptxBuilderStore.newOperand(old, "r");
+    auto &st = *ptxBuilderStore.create<PTXInstr>("st");
+    st.shared().o("b32");
+    st(dstOprStore, valOprStore).predicate(pred);
+    ptxBuilderStore.launch(rewriter, loc, ASMReturnTy);
+    ptxBuilderMemfence.launch(rewriter, loc, ASMReturnTy);
+    barrier();
+    Value ret = load(atomPtr);
+    barrier();
+    rewriter.replaceOp(op, {ret});
+    return success();
+  }
+};
+/// ====================== atomic_cas codegen end ==========================
 
 /// ====================== atomic_rmw codegen begin ==========================
 struct AtomicRMWOpConversion
@@ -6104,15 +6180,15 @@ struct AtomicRMWOpConversion
       Value rmwMask = maskElements[i];
       rmwMask = and_(rmwMask, mask);
       std::string sTy;
-      PTXBuilder ptxBuilder;
+      PTXBuilder ptxBuilderAtomicRMW;
       std::string tyId = valueElemNbits * vec == 64
                              ? "l"
                              : (valueElemNbits * vec == 32 ? "r" : "h");
-      auto *dstOpr = ptxBuilder.newOperand("=" + tyId);
-      auto *ptrOpr = ptxBuilder.newAddrOperand(rmwPtr, "l");
-      auto *valOpr = ptxBuilder.newOperand(rmwVal, tyId);
+      auto *dstOpr = ptxBuilderAtomicRMW.newOperand("=" + tyId);
+      auto *ptrOpr = ptxBuilderAtomicRMW.newAddrOperand(rmwPtr, "l");
+      auto *valOpr = ptxBuilderAtomicRMW.newOperand(rmwVal, tyId);
 
-      auto &atom = ptxBuilder.create<>("atom")->global().o("gpu");
+      auto &atom = ptxBuilderAtomicRMW.create<>("atom")->global().o("gpu");
       auto rmwOp = stringifyRMWOp(atomicRmwAttr).str();
       auto sBits = std::to_string(valueElemNbits);
       switch (atomicRmwAttr) {
@@ -6148,21 +6224,29 @@ struct AtomicRMWOpConversion
         rmwOp = "min";
         sTy = "u" + sBits;
         break;
+      case RMWOp::XCHG:
+        sTy = "b" + sBits;
+        break;
       default:
         return failure();
       }
       atom.o(rmwOp).o(sTy);
       if (valueTy) {
         atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
-        auto ret = ptxBuilder.launch(rewriter, loc, valueElemTy);
+        auto ret = ptxBuilderAtomicRMW.launch(rewriter, loc, valueElemTy);
         for (int ii = 0; ii < vec; ++ii) {
           resultVals[i * vec + ii] =
               vec == 1 ? ret : extract_element(valueElemTy, ret, idx_val(ii));
         }
       } else {
+        PTXBuilder ptxBuilderMemfence;
+        auto memfenc = ptxBuilderMemfence.create<PTXInstr>("membar")->o("gl");
+        memfenc();
+        auto ASMReturnTy = void_ty(ctx);
+        ptxBuilderMemfence.launch(rewriter, loc, ASMReturnTy);
         rmwMask = and_(rmwMask, icmp_eq(tid, i32_val(0)));
         atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
-        auto old = ptxBuilder.launch(rewriter, loc, valueElemTy);
+        auto old = ptxBuilderAtomicRMW.launch(rewriter, loc, valueElemTy);
         Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
         atomPtr = bitcast(atomPtr, ptr_ty(valueElemTy, 3));
         store(old, atomPtr);
@@ -6263,6 +6347,8 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<ReduceOpConversion>(typeConverter, allocation, smem, benefit);
   patterns.add<ConvertLayoutOpConversion>(typeConverter, allocation, smem,
                                           benefit);
+  patterns.add<AtomicCASOpConversion>(typeConverter, allocation, smem,
+                                      axisInfoAnalysis, benefit);
   patterns.add<AtomicRMWOpConversion>(typeConverter, allocation, smem,
                                       axisInfoAnalysis, benefit);
   patterns.add<ExtractSliceOpConversion>(typeConverter, allocation, smem,
