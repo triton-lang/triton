@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import List
+from typing import List, Callable, TypeVar
 
 import triton
 from . import builtin, semantic
 from triton._C.libtriton.triton import ir
 
+T = TypeVar('T')
 
 def _to_tensor(x, builder):
     if isinstance(x, bool):
@@ -835,9 +836,9 @@ def store(pointer, value, mask=None, _builder=None):
 # Atomic Memory Operations
 # -----------------------
 
-def _add_atomic_docstr(name):
+def _add_atomic_docstr(name: str) -> Callable[[T], T]:
 
-    def _decorator(func):
+    def _decorator(func: T) -> T:
         docstr = """
     Performs an atomic {name} at the memory location specified by :code:`pointer`.
 
@@ -958,9 +959,9 @@ def fdiv(x, y, ieee_rounding=False, _builder=None):
     return semantic.fdiv(x, y, ieee_rounding, _builder)
 
 
-def _add_math_1arg_docstr(name):
+def _add_math_1arg_docstr(name: str) -> Callable[[T], T]:
 
-    def _decorator(func):
+    def _decorator(func: T) -> T:
         docstr = """
     Computes the element-wise {name} of :code:`x`
 
@@ -1007,9 +1008,9 @@ def sqrt(x, _builder=None):
 # Reductions
 # -----------------------
 
-def _add_reduction_docstr(name):
+def _add_reduction_docstr(name: str) -> Callable[[T], T]:
 
-    def _decorator(func):
+    def _decorator(func: T) -> T:
         docstr = """
     Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
 
