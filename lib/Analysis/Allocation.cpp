@@ -94,14 +94,11 @@ SmallVector<unsigned> getScratchConfigForReduce(triton::ReduceOp op) {
   auto srcShape = srcTy.getShape();
   auto axis = op.axis();
 
-  //llvm::errs() << "srcLayout: " << srcLayout << "\n";
-
   bool fastReduce = axis == getOrder(srcLayout)[0];
 
   SmallVector<unsigned> smemShape;
   for (auto d : srcShape)
     smemShape.push_back(d);
-
 
   if (fastReduce) {
     unsigned sizeInterWarps = gpu::getWarpsPerCTA(srcLayout)[axis];
