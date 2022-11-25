@@ -1661,6 +1661,9 @@ LogicalResult ReduceOpConversion::matchAndRewriteBasic(
   auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcShape);
   auto srcValues = getElementsFromStruct(loc, adaptor.operand(), rewriter);
 
+  //llprintf("threadIdx %d, index <%d, %d>", getThreadId(rewriter, loc),
+  //         srcIndices[0][0], srcIndices[0][1]);
+
   SmallVector<SmallVector<unsigned>> offset =
       emitOffsetForBlockedLayout(srcLayout, srcShape);
 
@@ -1684,6 +1687,8 @@ LogicalResult ReduceOpConversion::matchAndRewriteBasic(
     ints[N] = i32_val(N);
   Value sizePerThread = i32_val(srcLayout.getSizePerThread()[axis]);
 
+  //llvm::errs() << "accs: " << accs.size() << "\n";
+  //llvm::errs() << "smemShape: " << smemShape[axis] << "\n";
   // reduce across threads
   for (auto it : accs) {
     const SmallVector<unsigned> &key = it.first;
@@ -1764,7 +1769,8 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
   smemBase = bitcast(smemBase, elemPtrTy);
 
   auto order = getOrder(srcLayout);
-  unsigned sizeIntraWarps = threadsPerWarp[axis];
+  unsigned sizeIntraWarps =
+      std::min(static_cast<unsigned>(srcShape[axis]), threadsPerWarp[axis]);
   unsigned sizeInterWarps = warpsPerCTA[axis];
 
   unsigned srcElems = getElemsPerThread(srcTy);
