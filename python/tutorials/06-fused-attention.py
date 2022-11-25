@@ -196,7 +196,7 @@ def _bwd_kernel(
 
 
 empty = torch.empty(128, device="cuda")
-_fwd_kernel = triton.compile("./flash-attention.ttgir")
+_fwd_kernel = triton.compile("./flash-attention.ptx", shared=18432)
 class _attention(torch.autograd.Function):
 
     @staticmethod

@@ -1343,68 +1343,40 @@ def make_hash(fn, **kwargs):
     return hashlib.md5((Path(fn).read_text() + triton.runtime.jit.version_key()).encode("utf-8")).hexdigest()
 
 
+# - ^\s*func\s+ : match the start of the string, any leading whitespace, the keyword func, 
+#    and any following whitespace
+# - (public\s+)? : optionally match the keyword public and any following whitespace
+# - (@\w+) : match an @ symbol followed by one or more word characters 
+#   (letters, digits, or underscores), and capture it as group 1 (the function name)
+# - (\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\)) : match a pair of parentheses enclosing 
+#   zero or more arguments separated by commas, and capture it as group 2 (the argument list)
+mlir_prototype_pattern = r'^\s*func\s+(?:public\s+)?(@\w+)(\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*\{\s*$'
+ptx_prototype_pattern = r"\.(?:visible|extern)\s+\.(?:entry|func)\s+(\w+)\s*\(([^)]*)\)"
+prototype_pattern = {
+    "ttir": mlir_prototype_pattern,
+    "ttgir": mlir_prototype_pattern,
+    "ptx": ptx_prototype_pattern,
+}
 
-# def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
+mlir_arg_type_pattern = r'%\w+: ([^,\s]+)(?: \{\S+ = \S+ : \S+\})?,?'
+ptx_arg_type_pattern = r"\.param\s+\.(\w+)"
+arg_type_pattern = {
+    "ttir": mlir_arg_type_pattern,
+    "ttgir": mlir_arg_type_pattern,
+    "ptx": ptx_arg_type_pattern,
+}
+
 def compile(fn, **kwargs):
     # we get the kernel, i.e. the first function generated in the module
     # if fn is not a JITFunction, then it 
     # has to be a path to a file
     context = _triton.ir.context()
-    asm, md5 = dict(), dict()
-    constants = kwargs.get("constants", dict())
-    if isinstance(fn, triton.runtime.JITFunction):
-        configs = kwargs.get("configs", None)
-        signature = kwargs["signature"]
-        if configs is None:
-            configs = [instance_descriptor()]
-        assert len(configs) == 1
-        kwargs["configs"] = configs
-        name = fn.__name__
-        first_stage = 0
-        if isinstance(signature, str):
-            signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
-        kwargs["signature"] = signature
-    else:
-        assert isinstance(fn, str)
-        name, ir = os.path.basename(fn).split(".")
-        src = Path(fn).read_text()
-        import re
-        # - ^\s*func\s+ : match the start of the string, any leading whitespace, the keyword func, 
-        #    and any following whitespace
-        # - (public\s+)? : optionally match the keyword public and any following whitespace
-        # - (@\w+) : match an @ symbol followed by one or more word characters 
-        #   (letters, digits, or underscores), and capture it as group 1 (the function name)
-        # - (\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\)) : match a pair of parentheses enclosing 
-        #   zero or more arguments separated by commas, and capture it as group 2 (the argument list)
-        pattern = r'^\s*func\s+(public\s+)?(@\w+)(\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*\{\s*$'
-        match = re.search(pattern, src, re.MULTILINE)
-        signature = match.group(3)
-        types = re.findall(r'%\w+: ([^,\s]+)(?: \{\S+ = \S+ : \S+\})?,?', signature)
-        param_tys = [convert_type_repr(ty) for ty in types]
-        signature = {k: v for k, v in enumerate(param_tys)}
-        first_stage = 2
-        
-    # cache manager
-    so_path = make_stub(name, signature, constants)
-    # create cache manager
-    fn_cache_manager = CacheManager(make_hash(fn, **kwargs))
-    # determine name and extension type of provided function
-    if isinstance(fn, triton.runtime.JITFunction):
-      name, ext = fn.__name__, "ast"
-    else:
-      name, ext = os.path.basename(fn).split(".")
     # initialize compilation params
+    constants = kwargs.get("constants", dict())
     num_warps = kwargs.get("num_warps", 4)
     num_stages = kwargs.get("num_stages", 3)
     extern_libs = kwargs.get("extern_libs", dict())
     device = kwargs.get("device", torch.cuda.current_device())
-    # load metadata if any
-    metadata = None
-    if fn_cache_manager.has_file(f'{name}.json'):
-      with open(fn_cache_manager._make_path(f"{name}.json")) as f:
-            metadata = json.load(f)
-    else:
-      metadata = {"num_warps": num_warps, "num_stages": num_stages, "ctime": dict()}
     # build compilation stages
     stages = {
       "ast" : (lambda path: fn, None),
@@ -1419,6 +1391,53 @@ def compile(fn, **kwargs):
       "cubin": (lambda path: Path(path).read_bytes(), 
                lambda src: ptx_to_cubin(src, device))
     }
+    # find out the signature of the function
+    if isinstance(fn, triton.runtime.JITFunction):
+        configs = kwargs.get("configs", None)
+        signature = kwargs["signature"]
+        if configs is None:
+            configs = [instance_descriptor()]
+        assert len(configs) == 1
+        kwargs["configs"] = configs
+        name = fn.__name__
+        first_stage = 0
+        if isinstance(signature, str):
+            signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
+        kwargs["signature"] = signature
+    else:
+        assert isinstance(fn, str)
+        _, ir = os.path.basename(fn).split(".")
+        src = Path(fn).read_text()
+        import re
+        match = re.search(prototype_pattern[ir], src, re.MULTILINE)
+        name, signature = match.group(1), match.group(2)
+        types = re.findall(arg_type_pattern[ir], signature)
+        print(types)
+        param_tys = [convert_type_repr(ty) for ty in types]
+        signature = {k: v for k, v in enumerate(param_tys)}
+        first_stage = list(stages.keys()).index(ir)
+
+    # cache manager
+    so_path = make_stub(name, signature, constants)
+    # create cache manager
+    fn_cache_manager = CacheManager(make_hash(fn, **kwargs))
+    # determine name and extension type of provided function
+    if isinstance(fn, triton.runtime.JITFunction):
+      name, ext = fn.__name__, "ast"
+    else:
+      name, ext = os.path.basename(fn).split(".")
+
+    # load metadata if any
+    metadata = None
+    if fn_cache_manager.has_file(f'{name}.json'):
+      with open(fn_cache_manager._make_path(f"{name}.json")) as f:
+            metadata = json.load(f)
+    else:
+      metadata = {"num_warps": num_warps, "num_stages": num_stages, "ctime": dict()}
+      if ir == "ptx":
+        assert "shared" in kwargs, "ptx compilation must provide shared memory size"
+        metadata["shared"] = kwargs["shared"]
+
     first_stage = list(stages.keys()).index(ext)
     asm = dict()
     module = fn
