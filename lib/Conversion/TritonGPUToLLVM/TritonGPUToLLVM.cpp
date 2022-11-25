@@ -1684,7 +1684,7 @@ LogicalResult ReduceOpConversion::matchAndRewriteBasic(
     ints[N] = i32_val(N);
   Value sizePerThread = i32_val(srcLayout.getSizePerThread()[axis]);
 
-  //  reduce across threads
+  // reduce across threads
   for (auto it : accs) {
     const SmallVector<unsigned> &key = it.first;
     Value acc = it.second;
