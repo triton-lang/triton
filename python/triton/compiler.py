@@ -1379,7 +1379,7 @@ def compile(fn, **kwargs):
         pattern = r'^\s*func\s+(public\s+)?(@\w+)(\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*\{\s*$'
         match = re.search(pattern, src, re.MULTILINE)
         signature = match.group(3)
-        types = re.findall(r'%\w+: (\S+)(?: \{\S+ = \S+ : \S+\})?(?:,)', signature)
+        types = re.findall(r'%\w+: ([^,\s]+)(?: \{\S+ = \S+ : \S+\})?,?', signature)
         param_tys = [convert_type_repr(ty) for ty in types]
         signature = {k: v for k, v in enumerate(param_tys)}
         first_stage = 2
