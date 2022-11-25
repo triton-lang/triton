@@ -1,10 +1,24 @@
 import argparse
 import subprocess
 from abc import ABC, abstractmethod
+from typing import Dict, List, Optional
 
 
 class Symbol:
-    def __init__(self, name: str, op_name: str, ret_type: str, arg_names: list, arg_types: list) -> None:
+    _name: str
+    _op_name: str
+    _ret_type: str
+    _arg_names: List[str]
+    _arg_types: List[str]
+
+    def __init__(
+        self,
+        name: str,
+        op_name: str,
+        ret_type: str,
+        arg_names: List[str],
+        arg_types: List[str],
+    ) -> None:
         '''
         A symbol is a function declaration.
 
@@ -17,31 +31,31 @@ class Symbol:
         self._name = name
         self._op_name = op_name
         self._ret_type = ret_type
-        self._arg_names = arg_names
-        self._arg_types = arg_types
+        self._arg_names = list(arg_names)
+        self._arg_types = list(arg_types)
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
 
     @property
-    def op_name(self):
+    def op_name(self) -> str:
         return self._op_name
 
     @property
-    def ret_type(self):
+    def ret_type(self) -> str:
         return self._ret_type
 
     @property
-    def arg_names(self):
+    def arg_names(self) -> List[str]:
         return self._arg_names
 
     @property
-    def arg_types(self):
+    def arg_types(self) -> List[str]:
         return self._arg_types
 
 
-def convert_type(type_str):
+def convert_type(type_str) -> Optional[str]:
     if type_str == "i32":
         return "int32"
     elif type_str == "u32":
@@ -59,7 +73,7 @@ def convert_type(type_str):
         return None
 
 
-def to_unsigned(type_str):
+def to_unsigned(type_str) -> str:
     if type_str == "int32":
         return "uint32"
     elif type_str == "int64":
@@ -69,7 +83,19 @@ def to_unsigned(type_str):
 
 
 class ExternLibrary(ABC):
-    def __init__(self, name: str, path: str, format: bool = True, grouping: bool = True) -> None:
+    _name: str
+    _path: str
+    _symbols: Dict[str, Symbol]
+    _format: bool
+    _grouping: bool
+
+    def __init__(
+        self,
+        name: str,
+        path: str,
+        format: bool = True,
+        grouping: bool = True,
+    ) -> None:
         '''
         Abstract class for extern library.
 
@@ -80,34 +106,34 @@ class ExternLibrary(ABC):
         self._name = name
         self._path = path
         self._symbols = {}
-        self._format = True
+        self._format = format
         self._grouping = grouping
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
 
     @property
-    def path(self):
+    def path(self) -> str:
         return self._path
 
     @property
-    def symbols(self):
+    def symbols(self) -> Dict[str, Symbol]:
         return self._symbols
 
     @property
-    def grouping(self):
+    def grouping(self) -> bool:
         return self._grouping
 
     @abstractmethod
-    def parse_symbols(self, input_file):
+    def parse_symbols(self, input_file) -> None:
         pass
 
     @abstractmethod
     def _output_stubs(self) -> str:
         pass
 
-    def generate_stub_file(self, output_dir):
+    def generate_stub_file(self, output_dir) -> None:
         file_str = self._output_stubs()
         if file_str is None or len(file_str) == 0:
             raise Exception("file_str is empty")
@@ -123,6 +149,8 @@ class ExternLibrary(ABC):
 
 
 class Libdevice(ExternLibrary):
+    _symbol_groups: Dict[str, List[Symbol]]
+
     def __init__(self, path) -> None:
         '''
         Constructor for Libdevice.
@@ -132,7 +160,7 @@ class Libdevice(ExternLibrary):
         super().__init__("libdevice", path)
         self._symbol_groups = {}
 
-    def _extract_symbol(self, line):
+    def _extract_symbol(self, line) -> Optional[Symbol]:
         # Extract symbols from line in the following format:
         # "define [internal] <ret_type> @<name>(<arg_types>,)"
         entries = line.split("@")
@@ -149,6 +177,9 @@ class Libdevice(ExternLibrary):
         func_strs = func_str.split("(")
         func_name = func_strs[0].replace("@", "")
         op_name = func_name.replace("__nv_", "")
+        # To filter some interfaces unlisted in NVIDIA's official documents.
+        if 'ieee' in op_name:
+            return None
         # Get arg_types
         arg_strs = func_strs[1].split(",")
         arg_types = []
@@ -171,66 +202,77 @@ class Libdevice(ExternLibrary):
                 arg_types[i] = to_unsigned(arg_type)
         return Symbol(func_name, op_name, ret_type, arg_names, arg_types)
 
-    def _group_symbols(self):
+    def _group_symbols(self) -> None:
         symbol_set = {}
         for symbol in self._symbols.values():
             op_name = symbol.op_name
             symbol_set[op_name] = symbol
-        # The following cases are grouped together:
-        # op_name, <u/ull/ll>op_name<ll/f/i>
+
+        # Group functions together by renaming.
+        renaming = {
+            'llabs': 'abs', 'acosf': 'acos', 'acoshf': 'acosh',
+            'dadd_rd': 'add_rd', 'fadd_rd': 'add_rd', 'dadd_rn': 'add_rn',
+            'fadd_rn': 'add_rn', 'dadd_ru': 'add_ru', 'fadd_ru': 'add_ru',
+            'dadd_rz': 'add_rz', 'fadd_rz': 'add_rz', 'asinf': 'asin',
+            'asinhf': 'asinh', 'atanf': 'atan', 'atan2f': 'atan2',
+            'atanhf': 'atanh', 'brevll': 'brev', 'cbrtf': 'cbrt',
+            'ceilf': 'ceil', 'clzll': 'clz', 'copysignf': 'copysign',
+            'cosf': 'cos', 'coshf': 'cosh', 'cospif': 'cospi',
+            'cyl_bessel_i0f': 'cyl_bessel_i0', 'cyl_bessel_i1f': 'cyl_bessel_i1',
+            'fdiv_rd': 'div_rd', 'ddiv_rd': 'div_rd', 'fdiv_rn': 'div_rn',
+            'ddiv_rn': 'div_rn', 'fdiv_ru': 'div_ru', 'ddiv_ru': 'div_ru',
+            'fdiv_rz': 'div_rz', 'ddiv_rz': 'div_rz', 'erff': 'erf',
+            'erfcf': 'erfc', 'erfcinvf': 'erfcinv', 'erfcxf': 'erfcx',
+            'erfinvf': 'erfinv', 'expf': 'exp', 'exp10f': 'exp10',
+            'exp2f': 'exp2', 'expm1f': 'expm1', 'fabsf': 'abs',
+            'fabs': 'abs', 'fast_fdividef': 'fast_dividef',
+            'fdimf': 'fdim', 'ffsll': 'ffs', 'floorf': 'floor',
+            'fmaf': 'fma', 'fmaf_rd': 'fma_rd', 'fmaf_rn': 'fma_rn',
+            'fmaf_ru': 'fma_ru', 'fmaf_rz': 'fma_rz', 'fmodf': 'fmod',
+            'uhadd': 'hadd', 'hypotf': 'hypot', 'ilogbf': 'ilogb',
+            'isinff': 'isinf', 'isinfd': 'isinf', 'isnanf': 'isnan',
+            'isnand': 'isnan', 'j0f': 'j0', 'j1f': 'j1', 'jnf': 'jn',
+            'ldexpf': 'ldexp', 'lgammaf': 'lgamma', 'llrintf': 'llrint',
+            'llroundf': 'llround', 'logf': 'log', 'log10f': 'log10',
+            'log1pf': 'log1p', 'log2f': 'log2', 'logbf': 'logb',
+            'umax': 'max', 'llmax': 'max', 'ullmax': 'max', 'fmaxf': 'max',
+            'fmax': 'max', 'umin': 'min', 'llmin': 'min', 'ullmin': 'min',
+            'fminf': 'min', 'fmin': 'min', 'dmul_rd': 'mul_rd', 'fmul_rd': 'mul_rd',
+            'dmul_rn': 'mul_rn', 'fmul_rn': 'mul_rn', 'dmul_ru': 'mul_ru',
+            'fmul_ru': 'mul_ru', 'dmul_rz': 'mul_rz', 'fmul_rz': 'mul_rz',
+            'umul24': 'mul24', 'umulhi': 'mulhi', 'mul64hi': 'mulhi',
+            'umul64hi': 'mulhi', 'nearbyintf': 'nearbyint', 'nextafterf': 'nextafter',
+            'norm3df': 'norm3d', 'norm4df': 'norm4d', 'normcdff': 'normcdf',
+            'normcdfinvf': 'normcdfinv', 'popcll': 'popc', 'powif': 'pow', 'powi': 'pow',
+            'powf': 'pow', 'rcbrtf': 'rcbrt', 'frcp_rd': 'rcp_rd', 'drcp_rd': 'rcp_rd',
+            'frcp_rn': 'rcp_rn', 'drcp_rn': 'rcp_rn', 'frcp_ru': 'rcp_ru',
+            'drcp_ru': 'rcp_ru', 'frcp_rz': 'rcp_rz', 'drcp_rz': 'rcp_rz',
+            'remainderf': 'remainder', 'urhadd': 'rhadd', 'rhypotf': 'rhypot',
+            'rintf': 'rint', 'rnorm3df': 'rnorm3d', 'rnorm4df': 'rnorm4d',
+            'roundf': 'round', 'rsqrtf': 'rsqrt', 'frsqrt_rn': 'rsqrt_rn',
+            'usad': 'sad', 'scalbnf': 'scalbn', 'signbitf': 'signbit',
+            'signbitd': 'signbit', 'sinf': 'sin', 'sinhf': 'sinh',
+            'sinpif': 'sinpi', 'sqrtf': 'sqrt', 'fsqrt_rd': 'sqrt_rd',
+            'dsqrt_rd': 'sqrt_rd', 'fsqrt_rn': 'sqrt_rn', 'dsqrt_rn': 'sqrt_rn',
+            'fsqrt_ru': 'sqrt_ru', 'dsqrt_ru': 'sqrt_ru', 'fsqrt_rz': 'sqrt_rz',
+            'dsqrt_rz': 'sqrt_rz', 'fsub_rd': 'sub_rd', 'dsub_rd': 'sub_rd',
+            'fsub_rn': 'sub_rn', 'dsub_rn': 'sub_rn', 'fsub_ru': 'sub_ru',
+            'dsub_ru': 'sub_ru', 'fsub_rz': 'sub_rz', 'dsub_rz': 'sub_rz',
+            'tanf': 'tan', 'tanhf': 'tanh', 'tgammaf': 'tgamma', 'truncf': 'trunc',
+            'y0f': 'y0', 'y1f': 'y1', 'ynf': 'yn'
+        }
+
         for symbol in self._symbols.values():
             op_name = symbol.op_name
-            if "max" in op_name:
-                op_name = "max"
-            elif "min" in op_name:
-                op_name = "min"
-            elif "abs" in op_name:
-                op_name = "abs"
-            elif "pow" in op_name and "fast" in op_name:
-                op_name = "pow"
-            elif "round" in op_name:
-                if "llround" in op_name:
-                    op_name = "llround"
-                else:
-                    op_name = "round"
-            elif "rint" in op_name:
-                if "llrint" in op_name:
-                    op_name = "llrint"
-                else:
-                    op_name = "rint"
-            elif op_name.startswith("ull"):
-                if "2" not in op_name:
-                    # e.g., ullmax->max
-                    op_name = op_name[3:]
-                else:
-                    # e.g., ull2double->ll2double
-                    op_name = op_name[1:]
-            elif op_name.startswith("u"):
-                if "2" not in op_name:
-                    # e.g., uhadd->hadd
-                    op_name = op_name[1:]
-                else:
-                    # e.g., uint2double_rn->int2double_rn
-                    op_name = op_name[1:]
-            elif op_name.startswith("ll"):
-                if "2" not in op_name:
-                    # e.g., llmax->max
-                    op_name = op_name[2:]
-            elif op_name.endswith("ll"):
-                op_name = op_name[:-2]
-            elif op_name.endswith("f"):
-                op_name = op_name[:-1]
-            if op_name in symbol_set:
-                # Update op_name only if there's an existing symbol
+            if op_name in renaming:
+                op_name = renaming[op_name]
                 symbol._op_name = op_name
-            else:
-                op_name = symbol._op_name
             if op_name in self._symbol_groups:
                 self._symbol_groups[op_name].append(symbol)
             else:
                 self._symbol_groups[op_name] = [symbol]
 
-    def parse_symbols(self, input_file):
+    def parse_symbols(self, input_file) -> None:
         if len(self.symbols) > 0:
             return
         output = subprocess.check_output(["grep", "define", input_file]).decode().splitlines()
@@ -242,7 +284,7 @@ class Libdevice(ExternLibrary):
 
         self._group_symbols()
 
-    def _output_stubs(self):
+    def _output_stubs(self) -> str:
         # Generate python functions in the following format:
         # @extern.extern
         # def <op_name>(<args>, _builder=None):
@@ -250,7 +292,7 @@ class Libdevice(ExternLibrary):
         #   return extern.dispatch("libdevice", <path>, <args>, <arg_type_symbol_dict>, _builder)
         import_str = "from . import core, extern\n"
         import_str += "import os\n"
-        header_str = "LIBDEVICE_PATH = os.path.dirname(os.path.abspath(__file__)) + \"/libdevice.10.bc\"\n"
+        header_str = "LIBDEVICE_PATH = os.path.dirname(\n\tos.path.abspath(__file__)) + \"/libdevice.10.bc\"\n"
         func_str = ""
         for symbols in self._symbol_groups.values():
             func_str += "@extern.extern\n"
@@ -283,7 +325,10 @@ class Libdevice(ExternLibrary):
 
 
 class LLVMDisassembler:
-    def __init__(self, path):
+    _path: str
+    _ll_file: str
+
+    def __init__(self, path) -> None:
         '''
         Invoke llvm-dis to disassemble the given file.
 
@@ -292,23 +337,28 @@ class LLVMDisassembler:
         self._path = path
         self._ll_file = "/tmp/extern_lib.ll"
 
-    def disasm(self, lib_path):
+    def disasm(self, lib_path: str) -> None:
         subprocess.Popen([self._path, lib_path, "-o", self.ll_file],
                          stdout=subprocess.PIPE).communicate()
 
     @property
-    def ll_file(self):
+    def ll_file(self) -> str:
         return self._ll_file
 
     @property
-    def path(self):
+    def path(self) -> str:
         return self._path
 
 
 extern_libs = ["libdevice"]
 
 
-def build(llvm_dis_path, lib_path, lib_name, output_dir):
+def build(
+    llvm_dis_path: str,
+    lib_path: str,
+    lib_name: str,
+    output_dir: str,
+) -> None:
     '''
       Interface function to build the library file.
 
@@ -331,10 +381,10 @@ def build(llvm_dis_path, lib_path, lib_name, output_dir):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-llvm", dest="llvm_dis_path", help="path to llvm-dis", default="llvm-dis")
-    parser.add_argument("--lib-path", dest="lib_path", help="path to the extern library")
-    parser.add_argument("--lib-name", dest="lib_name", help="name of the extern library")
-    parser.add_argument("-o", dest="output_dir", help="output file path", default="/tmp/")
+    parser.add_argument("--llvm-dis", dest="llvm_dis_path", help="Path to llvm-dis", default="llvm-dis")
+    parser.add_argument("--lib-path", dest="lib_path", help="Path to the extern library")
+    parser.add_argument("--lib-name", dest="lib_name", help="Name of the extern library")
+    parser.add_argument("--output", dest="output_dir", help="Output file path", default="/tmp/")
     args = parser.parse_args()
 
     build(args.llvm_dis_path, args.lib_path, args.lib_name, args.output_dir)

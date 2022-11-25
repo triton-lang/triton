@@ -605,6 +605,10 @@ def test_tuples():
     ]
     for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']]))
 def test_atomic_rmw(op, dtype_x_str, mode, device='cuda'):
+    cc = _triton.runtime.cc(_triton.runtime.backend.CUDA, torch.cuda.current_device())
+    if cc < 70:
+        if dtype_x_str == 'float16':
+            pytest.skip("Only test atomic float16 ops on devices with sm >= 70")
     n_programs = 5
 
     # triton kernel
@@ -1042,6 +1046,8 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                           if not (allow_tf32 and (dtype in ['float16']))])
 def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
     cc = _triton.runtime.cc(_triton.runtime.backend.CUDA, torch.cuda.current_device())
+    if cc < 70:
+        pytest.skip("Only test tl.dot() on devices with sm >= 70")
     if cc < 80:
         if dtype == 'int8':
             pytest.skip("Only test int8 on devices with sm >= 80")
@@ -1227,6 +1233,10 @@ def test_masked_load(dtype_str, size, size_diff, device='cuda'):
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
 def test_masked_load_shared_memory(dtype, device='cuda'):
+    cc = _triton.runtime.cc(_triton.runtime.backend.CUDA, torch.cuda.current_device())
+    if cc < 70:
+        pytest.skip("Only test tl.dot() on devices with sm >= 70")
+
     check_type_supported(dtype)  # bfloat16 on cc < 80 will not be tested
 
     M = 32
@@ -1546,7 +1556,7 @@ def test_num_warps_pow2():
                          [('int32', 'libdevice.ffs', ''),
                           ('float32', 'libdevice.pow', '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'),
                           ('float64', 'libdevice.norm4d', '')])
-def test_libdevice(dtype_str, expr, lib_path):
+def test_libdevice_tensor(dtype_str, expr, lib_path):
 
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
@@ -1582,3 +1592,32 @@ def test_libdevice(dtype_str, expr, lib_path):
         np.testing.assert_equal(y_ref, to_numpy(y_tri))
     else:
         np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
+
+
+@pytest.mark.parametrize("dtype_str, expr, lib_path",
+                         [('float32', 'libdevice.pow', '')])
+def test_libdevice_scalar(dtype_str, expr, lib_path):
+
+    @triton.jit
+    def kernel(X, Y, BLOCK: tl.constexpr):
+        x = X
+        y = GENERATE_TEST_HERE
+        tl.store(Y + tl.arange(0, BLOCK), y)
+
+    shape = (128, )
+    rs = RandomState(17)
+    # limit the range of integers so that the sum does not overflow
+    x = numpy_random((1,), dtype_str=dtype_str, rs=rs)
+    y_ref = np.zeros(shape, dtype=x.dtype)
+
+    # numpy does not allow negative factors in power, so we use abs()
+    x = np.abs(x)
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.pow(x, x)'})
+    y_ref[:] = np.power(x, x)
+
+    # triton result
+    x_tri = to_triton(x)[0].item()
+    y_tri = to_triton(numpy_random((shape[0],), dtype_str=dtype_str, rs=rs), device='cuda')
+    kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], extern_libs={'libdevice': lib_path})
+    # compare
+    np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)

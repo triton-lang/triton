@@ -149,6 +149,13 @@ std::unique_ptr<llvm::Module> add_passes_to_emit_bin(
   // ir.print(std::cout);
   isel.visit(ir, *llvm);
   shared_static = allocation.allocated_size();
+  if (target->as_nvidia() && target->as_nvidia()->sm() < 70) {
+    // sm < 70 (Pascal) has little shared memory resource.
+    // Instead of having "Error: Invalid argument" on launching a kernel, let's throw an error here.
+    if (shared_static >= 65536) {
+      throw std::runtime_error("Device does not support shared memory of " + std::to_string(shared_static) + "bytes");
+    }
+  }
 
   if (isel.get_extern_lib_map().size() > 0) {
     // If there's any extern lib calls,
