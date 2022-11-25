@@ -713,7 +713,8 @@ class CodeGenerator(ast.NodeVisitor):
                 for i in range(call_op.get_num_results()):
                     results.append(triton.language.tensor(call_op.get_result(i), callee_ret_type[i]))
                 return tuple(results)
-        if impl.is_builtin(fn):
+        if (hasattr(fn, '__self__') and self.is_triton_tensor(fn.__self__)) \
+                or impl.is_builtin(fn):
             return fn(*args, _builder=self.builder, **kws)
         if fn in self.builtins.values():
             args = [arg.value if isinstance(arg, triton.language.constexpr) else arg
