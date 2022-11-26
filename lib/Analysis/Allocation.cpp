@@ -89,24 +89,19 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
 }
 
 SmallVector<unsigned> getScratchConfigForReduce(triton::ReduceOp op) {
-  auto srcTy = op.operand().getType().cast<RankedTensorType>();
-  auto srcLayout = srcTy.getEncoding();
-  auto srcShape = srcTy.getShape();
-  auto axis = op.axis();
-
-  bool fastReduce = axis == getOrder(srcLayout)[0];
+  ReduceOpHelper helper(op);
 
   SmallVector<unsigned> smemShape;
+  auto srcShape = helper.getSrcShape();
   for (auto d : srcShape)
     smemShape.push_back(d);
 
-  if (fastReduce) {
-    unsigned sizeInterWarps = gpu::getWarpsPerCTA(srcLayout)[axis];
-    smemShape[axis] = sizeInterWarps;
+  auto axis = op.axis();
+  if (helper.isFastReduction()) {
+    smemShape[axis] = helper.getInterWarpSize();
   } else {
-    unsigned threadsPerCTAAxis = gpu::getThreadsPerWarp(srcLayout)[axis] *
-                                 gpu::getWarpsPerCTA(srcLayout)[axis];
-    smemShape[axis] = threadsPerCTAAxis;
+    smemShape[axis] =
+        std::min(smemShape[axis], helper.getThreadsReductionAxis());
   }
 
   return smemShape;
@@ -181,8 +176,7 @@ private:
       // TODO(Keren): Reduce with index is not supported yet.
       auto value = op->getOperand(0);
       if (auto tensorType = value.getType().dyn_cast<RankedTensorType>()) {
-        auto srcLayout = tensorType.getEncoding();
-        bool fastReduce = reduceOp.axis() == getOrder(srcLayout)[0];
+        bool fastReduce = ReduceOpHelper(reduceOp).isFastReduction();
         auto smemShape = getScratchConfigForReduce(reduceOp);
         unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
                                          std::multiplies{});
