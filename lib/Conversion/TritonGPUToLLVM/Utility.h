@@ -60,12 +60,32 @@
   rewriter.create<LLVM::ExtractElementOp>(loc, __VA_ARGS__)
 #define load(...) rewriter.create<LLVM::LoadOp>(loc, __VA_ARGS__)
 #define store(val, ptr) rewriter.create<LLVM::StoreOp>(loc, val, ptr)
+#define fcmp_ogt(lhs, rhs)                                                     \
+  rewriter.create<LLVM::FCmpOp>(loc, rewriter.getI1Type(),                     \
+                                LLVM::FCmpPredicate::ogt, lhs, rhs)
+#define fcmp_olt(lhs, rhs)                                                     \
+  rewriter.create<LLVM::FCmpOp>(loc, rewriter.getI1Type(),                     \
+                                LLVM::FCmpPredicate::olt, lhs, rhs)
 #define icmp_eq(...)                                                           \
   rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::eq, __VA_ARGS__)
 #define icmp_ne(...)                                                           \
   rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ne, __VA_ARGS__)
 #define icmp_slt(...)                                                          \
   rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::slt, __VA_ARGS__)
+#define icmp_sle(...)                                                          \
+  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::sle, __VA_ARGS__)
+#define icmp_sgt(...)                                                          \
+  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::sgt, __VA_ARGS__)
+#define icmp_sge(...)                                                          \
+  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::sge, __VA_ARGS__)
+#define icmp_ult(...)                                                          \
+  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ult, __VA_ARGS__)
+#define icmp_ule(...)                                                          \
+  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ule, __VA_ARGS__)
+#define icmp_ugt(...)                                                          \
+  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ugt, __VA_ARGS__)
+#define icmp_uge(...)                                                          \
+  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::uge, __VA_ARGS__)
 #define select(...) rewriter.create<LLVM::SelectOp>(loc, __VA_ARGS__)
 #define address_of(...) rewriter.create<LLVM::AddressOfOp>(loc, __VA_ARGS__)
 #define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)

@@ -240,12 +240,16 @@ mlir::LogicalResult mlir::triton::ReduceOp::inferReturnTypes(
   Value arg = operands[0];
   auto argTy = arg.getType().cast<RankedTensorType>();
   auto argEltTy = argTy.getElementType();
+  auto i32Ty = IntegerType::get(argEltTy.getContext(), 32);
+  auto redOp = attributes.get("redOp").cast<mlir::triton::RedOpAttr>().getValue();
+  bool withIndex = mlir::triton::ReduceOp::withIndex(redOp);
+  auto retEltTy = withIndex ? i32Ty : argEltTy;
   auto retShape = argTy.getShape().vec();
   int axis = attributes.get("axis").cast<IntegerAttr>().getInt();
   retShape.erase(retShape.begin() + axis);
   if (retShape.empty()) {
     // 0d-tensor -> scalar
-    inferredReturnTypes.push_back(argEltTy);
+    inferredReturnTypes.push_back(retEltTy);
   } else {
     // nd-tensor where n >= 1
     // infer encoding
@@ -264,9 +268,18 @@ mlir::LogicalResult mlir::triton::ReduceOp::inferReturnTypes(
     }
     // create type
     inferredReturnTypes.push_back(
-        RankedTensorType::get(retShape, argEltTy, retEncoding));
+        RankedTensorType::get(retShape, retEltTy, retEncoding));
   }
   return mlir::success();
+}
+
+bool mlir::triton::ReduceOp::withIndex(mlir::triton::RedOp redOp) {
+  return redOp == mlir::triton::RedOp::ARGMIN ||
+         redOp == mlir::triton::RedOp::ARGMAX ||
+         redOp == mlir::triton::RedOp::ARGUMIN ||
+         redOp == mlir::triton::RedOp::ARGUMAX ||
+         redOp == mlir::triton::RedOp::ARGFMIN ||
+         redOp == mlir::triton::RedOp::ARGFMAX;
 }
 
 //-- SplatOp --
