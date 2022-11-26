@@ -1412,7 +1412,6 @@ def compile(fn, **kwargs):
         match = re.search(prototype_pattern[ir], src, re.MULTILINE)
         name, signature = match.group(1), match.group(2)
         types = re.findall(arg_type_pattern[ir], signature)
-        print(types)
         param_tys = [convert_type_repr(ty) for ty in types]
         signature = {k: v for k, v in enumerate(param_tys)}
         first_stage = list(stages.keys()).index(ir)
@@ -1434,7 +1433,7 @@ def compile(fn, **kwargs):
             metadata = json.load(f)
     else:
       metadata = {"num_warps": num_warps, "num_stages": num_stages, "ctime": dict()}
-      if ir == "ptx":
+      if ext == "ptx":
         assert "shared" in kwargs, "ptx compilation must provide shared memory size"
         metadata["shared"] = kwargs["shared"]
 

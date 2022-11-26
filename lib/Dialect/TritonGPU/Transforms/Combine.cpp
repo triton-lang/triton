@@ -49,10 +49,17 @@ public:
     auto dstType = convert.getType().cast<RankedTensorType>();
     if (srcType.getEncoding().isa<triton::gpu::BlockedEncodingAttr>() &&
         dstType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>()) {
+      auto dstDotOperand = dstType.getEncoding().cast<triton::gpu::DotOperandEncodingAttr>();
+      auto dstParent = dstDotOperand.getParent();
+      if(dstDotOperand.getOpIdx()==1 || 
+         !dstParent.isa<triton::gpu::MmaEncodingAttr>())
+        return mlir::failure();
+      auto dstParentMma = dstParent.cast<triton::gpu::MmaEncodingAttr>();
+      if(dstParentMma.getVersion() == 1 ||
+         dstParentMma.getWarpsPerCTA()[1] > 1)
+        return mlir::failure();
       auto tmpType =
-          RankedTensorType::get(dstType.getShape(), dstType.getElementType(),
-                                triton::gpu::SharedEncodingAttr::get(
-                                    op->getContext(), 1, 1, 1, {1, 0}));
+          RankedTensorType::get(dstType.getShape(), dstType.getElementType(), dstParentMma);
       auto tmp = rewriter.create<triton::gpu::ConvertLayoutOp>(
           convert.getLoc(), tmpType, convert.getOperand());
       auto newConvert = rewriter.create<triton::gpu::ConvertLayoutOp>(
@@ -80,9 +87,11 @@ public:
     auto convert = llvm::cast<triton::gpu::ConvertLayoutOp>(op);
     // we don't handle conversions to DotOperandEncodingAttr
     // this is a heuristics to accommodate fused attention
+    auto srcType = convert.getOperand().getType().cast<RankedTensorType>();
     auto dstType = convert.getType().cast<RankedTensorType>();
-    // if (dstType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
-    //   return mlir::failure();
+    if (dstType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>() &&
+        srcType.getEncoding().isa<triton::gpu::MmaEncodingAttr>())
+      return mlir::failure();
     // convert to the same layout -- we can delete
     if (op->getResultTypes() == op->getOperandTypes()) {
       rewriter.replaceOp(op, op->getOperands());
@@ -568,10 +577,15 @@ public:
       : mlir::RewritePattern(triton::DotOp::getOperationName(), 2, context) {}
 
   static SmallVector<unsigned, 2>
-  getWarpsPerTile(const ArrayRef<int64_t> &shape, int version, int numWarps) {
+  getWarpsPerTile(triton::DotOp& dotOp, const ArrayRef<int64_t> &shape, int version, int numWarps) {
     assert(version == 2);
     // TODO: Handle one warp per row for fused matmuls
     // TODO: unsigned -> int64_t to keep things uniform
+    SetVector<Operation*> slices;
+    mlir::getForwardSlice(dotOp.getResult(), &slices);
+    if(llvm::find_if(slices, [](Operation *op) { return isa<triton::DotOp>(op); }) != slices.end())
+      return {(unsigned)numWarps, 1};
+    
     SmallVector<unsigned, 2> ret = {1, 1};
     SmallVector<int64_t, 2> shapePerWarp = {16, 8};
     bool changed = false;
@@ -620,7 +634,7 @@ public:
         RankedTensorType::get(retShape, oldRetType.getElementType(),
                               triton::gpu::MmaEncodingAttr::get(
                                   oldRetType.getContext(), 2,
-                                  getWarpsPerTile(retShape, 2, numWarps)));
+                                  getWarpsPerTile(dotOp, retShape, 2, numWarps)));
     // convert accumulator
     auto oldAcc = dotOp.getOperand(2);
     auto newAcc = rewriter.create<triton::gpu::ConvertLayoutOp>(
@@ -664,7 +678,7 @@ public:
     mlir::RewritePatternSet patterns(context);
 
     patterns.add<SimplifyConversion>(context);
-    // patterns.add<DecomposeDotOperand>(context);
+    patterns.add<DecomposeDotOperand>(context);
     patterns.add<RematerializeBackward>(context);
     patterns.add<RematerializeForward>(context);
     patterns.add<MoveConvertOutOfLoop>(context);
