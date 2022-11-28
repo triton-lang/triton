@@ -8,9 +8,34 @@
 
 namespace mlir {
 
+class ReduceOpHelper {
+public:
+  explicit ReduceOpHelper(triton::ReduceOp op) : op(op) {
+    srcTy = op.operand().getType().cast<RankedTensorType>();
+  }
+
+  ArrayRef<int64_t> getSrcShape() { return srcTy.getShape(); }
+
+  Attribute getSrcLayout() { return srcTy.getEncoding(); }
+
+  bool isFastReduction();
+
+  unsigned getInterWarpSize();
+
+  unsigned getIntraWarpSize();
+
+  unsigned getThreadsReductionAxis();
+
+private:
+  triton::ReduceOp op;
+  RankedTensorType srcTy{};
+};
+
 bool isSharedEncoding(Value value);
 
 bool maybeSharedAllocationOp(Operation *op);
+
+bool maybeAliasOp(Operation *op);
 
 std::string getValueOperandName(Value value, AsmState &state);
 

@@ -167,6 +167,20 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 
 } // namespace
 
+/// Helper function to get strides from a given shape and its order
+static SmallVector<Value>
+getStridesFromShapeAndOrder(ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
+                            Location loc, ConversionPatternRewriter &rewriter) {
+  auto rank = shape.size();
+  SmallVector<Value> strides(rank);
+  auto stride = 1;
+  for (auto idx : order) {
+    strides[idx] = i32_val(stride);
+    stride *= shape[idx];
+  }
+  return strides;
+}
+
 struct SharedMemoryObject {
   Value base; // i32 ptr. The start address of the shared memory object.
   // We need to store strides as Values but not integers because the
@@ -193,13 +207,10 @@ struct SharedMemoryObject {
                      ArrayRef<unsigned> order, Location loc,
                      ConversionPatternRewriter &rewriter)
       : base(base) {
-    auto rank = shape.size();
-    auto stride = 1;
-    strides.resize(rank);
+    strides = getStridesFromShapeAndOrder(shape, order, loc, rewriter);
+
     for (auto idx : order) {
-      strides[idx] = i32_val(stride);
       offsets.emplace_back(i32_val(0));
-      stride *= shape[idx];
     }
   }
 
@@ -233,7 +244,7 @@ struct SharedMemoryObject {
   }
 };
 
-static mlir::LLVM::SharedMemoryObject
+static SharedMemoryObject
 getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
                                 ConversionPatternRewriter &rewriter) {
   auto elems = getElementsFromStruct(loc, llvmStruct, rewriter);

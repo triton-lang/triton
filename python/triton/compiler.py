@@ -977,7 +977,12 @@ def ptx_get_version(cuda_version) -> int:
 
 
 def path_to_ptxas():
-    prefixes = [os.environ.get("TRITON_PTXAS_PATH", ""), "", os.environ.get('CUDA_PATH', default_cuda_dir())]
+    prefixes = [
+        os.environ.get("TRITON_PTXAS_PATH", ""),
+        "",
+        "/usr",
+        os.environ.get('CUDA_PATH', default_cuda_dir())
+    ]
     for prefix in prefixes:
         ptxas = os.path.join(prefix, "bin", "ptxas")
         if os.path.exists(ptxas):
@@ -1416,7 +1421,8 @@ def compile(fn, **kwargs):
         path = fn_cache_manager._make_path(f"{name}.{ir}")
         if ir == ext:
             next_module = parse(fn)
-        elif os.path.exists(path) and\
+        elif os.path.exists(path) and \
+                ir in metadata["ctime"] and \
                 os.path.getctime(path) == metadata["ctime"][ir]:
             next_module = parse(path)
         else:

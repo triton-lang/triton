@@ -107,7 +107,8 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
   }
 
   llvm::LLVMContext llvmContext;
-  auto llvmir = translateTritonGPUToLLVMIR(&llvmContext, *module);
+  auto llvmir =
+      translateTritonGPUToLLVMIR(&llvmContext, *module, SMArch.getValue());
   if (!llvmir) {
     llvm::errs() << "Translate to LLVM IR failed";
   }

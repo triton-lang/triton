@@ -5,6 +5,38 @@
 
 namespace mlir {
 
+bool ReduceOpHelper::isFastReduction() {
+  auto srcLayout = srcTy.getEncoding();
+  auto axis = op.axis();
+  return axis == triton::gpu::getOrder(srcLayout)[0];
+}
+
+unsigned ReduceOpHelper::getInterWarpSize() {
+  auto srcLayout = srcTy.getEncoding();
+  auto srcShape = srcTy.getShape();
+  auto axis = op.axis();
+  auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
+  unsigned sizeIntraWarps = getIntraWarpSize();
+  return std::min(srcReduceDimSize / sizeIntraWarps,
+                  triton::gpu::getWarpsPerCTA(srcLayout)[axis]);
+}
+
+unsigned ReduceOpHelper::getIntraWarpSize() {
+  auto srcLayout = srcTy.getEncoding();
+  auto srcShape = srcTy.getShape();
+  auto axis = op.axis();
+  auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
+  return std::min(srcReduceDimSize,
+                  triton::gpu::getThreadsPerWarp(srcLayout)[axis]);
+}
+
+unsigned ReduceOpHelper::getThreadsReductionAxis() {
+  auto srcLayout = srcTy.getEncoding();
+  auto axis = op.axis();
+  return triton::gpu::getThreadsPerWarp(srcLayout)[axis] *
+         triton::gpu::getWarpsPerCTA(srcLayout)[axis];
+}
+
 bool isSharedEncoding(Value value) {
   auto type = value.getType();
   if (auto tensorType = type.dyn_cast<RankedTensorType>()) {
@@ -26,6 +58,12 @@ bool maybeSharedAllocationOp(Operation *op) {
           dialect->getTypeID() ==
               mlir::TypeID::get<arith::ArithmeticDialect>() ||
           dialect->getTypeID() == mlir::TypeID::get<tensor::TensorDialect>());
+}
+
+bool maybeAliasOp(Operation *op) {
+  return isa<tensor::ExtractSliceOp>(op) ||
+         isa<triton::gpu::InsertSliceAsyncOp>(op) ||
+         isa<tensor::InsertSliceOp>(op);
 }
 
 std::string getValueOperandName(Value value, AsmState &state) {
