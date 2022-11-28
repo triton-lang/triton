@@ -9,14 +9,14 @@ import triton
 @pytest.mark.parametrize("TRANS_A", [False, True])
 @pytest.mark.parametrize("BLOCK", [16, 32, 64])
 @pytest.mark.parametrize("DTYPE", [torch.float16])
-def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=1, H=1, M=512, N=384, K=256):
+def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=1, H=1, M=32, N=32, K=32):
     seed = 0
     torch.manual_seed(seed)
     is_sdd = MODE == "sdd"
     is_dsd = MODE == "dsd"
     is_dds = MODE == "dds"
-    do_sparsify = lambda x: triton.testing.sparsify_tensor(x, layout, BLOCK)
-    do_mask = lambda x: triton.testing.mask_tensor(x, layout, BLOCK)
+    do_sparsify = lambda x: triton.testing.sparsify_tensor(x, layout, BLOCK).requires_grad_()
+    do_mask = lambda x: triton.testing.mask_tensor(x, layout, BLOCK).requires_grad_()
     # create inputs
     # create op
     a_shape = (Z, H, K, M) if TRANS_A else (Z, H, M, K)
