@@ -351,6 +351,11 @@ def TT_ReduceOp : TT_Op<"reduce", [NoSideEffect,
 
     let assemblyFormat = "$operand attr-dict `:` type($operand) `->` type($result)";
 
+    let extraClassDeclaration = [{
+        // This member function is marked static because we need to call it before the ReduceOp
+        // is constructed, see the implementation of create_reduce in triton.cc.
+        static bool withIndex(mlir::triton::RedOp redOp);
+    }];
 }
 
 //
