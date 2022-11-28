@@ -1334,9 +1334,19 @@ Value DotOpMmaV1ConversionHelper::loadA(
 
   auto *ctx = rewriter.getContext();
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
-  auto shape = tensorTy.getShape();
   auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
-  auto order = sharedLayout.getOrder();
+  SmallVector<int64_t> shape(tensorTy.getShape().begin(),
+                             tensorTy.getShape().end());
+  SmallVector<unsigned> order(sharedLayout.getOrder().begin(),
+                              sharedLayout.getOrder().end());
+
+  // TODO [Superjomn]: transA cannot be accessed in ConvertLayoutOp.
+  bool transA = false;
+  if (transA) {
+    std::swap(shape[0], shape[1]);
+    std::swap(order[0], order[1]);
+  }
+
   Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
 
   bool isARow = order[0] != 0;
@@ -1381,7 +1391,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
     Value offA0I = add(offA0, i32_val(i * (isARow ? 4 : strideRepM)));
     offA0I = udiv(offA0I, i32_val(vecA));
     offA0I = xor_(offA0I, phaseA);
-    offA0I = xor_(offA0I, i32_val(vecA));
+    offA0I = mul(offA0I, i32_val(vecA));
     offA[i] = add(mul(offA0I, strideA0), mul(offA1, strideA1));
   }
 
@@ -1399,7 +1409,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
     ptrA[i] = gep(ptr_ty(f16_ty), smem, offA[i]);
 
   auto instrShape = getMmaInstrShape();
-  unsigned numM = rep[0] * shape[0] / (spw[0] * wpt[0]);
+  unsigned numM = std::max<int>(rep[0] * shape[0] / (spw[0] * wpt[0]), 1);
 
   Type f16PtrTy = ptr_ty(f16_ty);
 
@@ -1461,13 +1471,14 @@ Value DotOpMmaV1ConversionHelper::loadB(
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
 
-  // TODO [Superjomn]: transB cannot be accessed here.
-  bool transB = false;
-
   SmallVector<int64_t> shape(tensorTy.getShape().begin(),
                              tensorTy.getShape().end());
   SmallVector<unsigned> order(sharedLayout.getOrder().begin(),
                               sharedLayout.getOrder().end());
+
+  // TODO [Superjomn]: transB cannot be accessed in ConvertLayoutOp.
+  bool transB = false;
+
   if (transB) {
     std::swap(order[0], order[1]);
     std::swap(shape[0], shape[1]);
