@@ -37,7 +37,7 @@ def _sdd_kernel(
 
     # initialize pointers to A
     start_am = tl.load(lut + 1)
-    offs_am = start_am * BLOCK + (tl.arange(0, TILE_M) % BLOCK)
+    offs_am = start_am * BLOCK + tl.arange(0, TILE_M)
     offs_ak = tl.arange(0, TILE_K)
     a_ptrs = A \
         + off_z * stride_za \
@@ -46,7 +46,7 @@ def _sdd_kernel(
         + offs_ak[None, :] * stride_ak
     # initialize pointers to B
     start_bn = tl.load(lut + 2)
-    offs_bn = start_bn * BLOCK + (tl.arange(0, TILE_N) % BLOCK)
+    offs_bn = start_bn * BLOCK + tl.arange(0, TILE_N)
     offs_bk = tl.arange(0, TILE_K)
     b_ptrs = B \
         + off_z * stride_zb \
@@ -157,12 +157,16 @@ def _dsd_kernel(
     block_id = tl.multiple_of(block_id, 8)  # compiler hint
     offs_am = tl.arange(0, TILE_M)
     offs_ak = tl.arange(0, TILE_K)
+    # TODO: issue with transposes?
     pa = A + pidz * stride_az \
         + block_id * stride_ha \
         + offs_am[:, None] * stride_am \
         + offs_ak[None, :] * stride_ak
     # initialize pointers to B (dense)
     offs_bn = pid_m * TILE_N + tl.arange(0, TILE_N)
+    # TODO!!!
+    # results are incorrect if AxisInfoPass doesn't handle remainder 
+    # and B accesses aren't vectorized!
     offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn % DS0, TILE_N), TILE_N)
     start_bk = tl.load(pinc)
     start_bk = tl.multiple_of(start_bk, 8)  # compiler hint

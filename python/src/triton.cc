@@ -187,6 +187,7 @@ void init_triton_ir(py::module &&m) {
                /* issue a warning */
              }
            })
+      .def("get_context", &mlir::Value::getContext)
       .def("replace_all_uses_with",
            [](mlir::Value &self, mlir::Value &newValue) {
              self.replaceAllUsesWith(newValue);
@@ -334,6 +335,16 @@ void init_triton_ir(py::module &&m) {
           throw std::runtime_error("Expected a single function");
         return funcs[0];
       });
+
+   m.def("make_attr",
+        [](const std::vector<int> &values, mlir::MLIRContext &context) {
+          return mlir::DenseIntElementsAttr::get(
+                     mlir::RankedTensorType::get(
+                         {static_cast<int64_t>(values.size())},
+                         mlir::IntegerType::get(&context, 32)),
+                     values)
+              .cast<mlir::Attribute>();
+        });
 
   m.def(
       "parse_mlir_module",
