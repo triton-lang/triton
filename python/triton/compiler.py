@@ -948,6 +948,29 @@ def ptx_get_kernel_name(ptx: str) -> str:
         if line.startswith('// .globl'):
             return line.split()[-1]
 
+def amdgcn_get_kernel_name(amdgcn: str) -> str:
+    '''
+    Get kernel name from AMDGCN code.
+    This Kernel name is required when launching the kernel.
+    '''
+    # There is a name mangling in PTX codegen, so the original kernel names in Triton IR are not available in PTX/cubin.
+    assert amdgcn
+    for line in amdgcn.split('\n'):
+        line = line.strip()
+        if line.startswith('.globl'):
+            return line.split()[-1].strip()
+
+
+def llir_to_hsaco(mod: Any, gcn_arch: str) -> Tuple[str, str]:
+    '''
+    Translate TritonGPU module to HSACO code.
+    :param mod: a TritonGPU dialect module
+    :return:
+        - AMDGCN code
+        - Path to HSACO object
+    '''
+    return _triton.translate_llvmir_to_hsaco(mod, gcn_arch)
+
 
 @functools.lru_cache()
 def ptx_get_version(cuda_version) -> int:

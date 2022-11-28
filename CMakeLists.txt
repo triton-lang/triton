@@ -216,6 +216,7 @@ target_link_libraries(triton
   TritonLLVMIR
   TritonPTX
   TritonAMDGCN
+  TritonHSACO
   ${dialect_libs}
   ${conversion_libs}
   # optimizations
