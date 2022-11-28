@@ -1337,6 +1337,10 @@ private:
   void accumulate(ConversionPatternRewriter &rewriter, Location loc,
                   RedOp redOp, Value &acc, Value cur, bool isFirst) const;
 
+  void accumulateWithIndex(ConversionPatternRewriter &rewriter, Location loc,
+                           RedOp redOp, Value &acc, Value &accIndex, Value cur,
+                           Value curIndex, bool isFirst) const;
+
   Value shflSync(ConversionPatternRewriter &rewriter, Location loc, Value val,
                  int i) const;
 
@@ -1365,7 +1369,6 @@ void ReduceOpConversion::accumulate(ConversionPatternRewriter &rewriter,
     acc = cur;
     return;
   }
-  auto type = cur.getType();
   switch (redOp) {
   case RedOp::ADD:
     acc = add(acc, cur);
@@ -1394,6 +1397,75 @@ void ReduceOpConversion::accumulate(ConversionPatternRewriter &rewriter,
   case RedOp::XOR:
     acc = xor_(acc, cur);
     break;
+  case RedOp::ARGMIN:
+  case RedOp::ARGMAX:
+  case RedOp::ARGUMIN:
+  case RedOp::ARGUMAX:
+  case RedOp::ARGFMIN:
+  case RedOp::ARGFMAX:
+    llvm::report_fatal_error(
+        "This accumulate implementation is not for argmin / argmax");
+  default:
+    llvm::report_fatal_error("Unsupported reduce op");
+  }
+}
+
+void ReduceOpConversion::accumulateWithIndex(
+    ConversionPatternRewriter &rewriter, Location loc, RedOp redOp, Value &acc,
+    Value &accIndex, Value cur, Value curIndex, bool isFirst) const {
+  if (isFirst) {
+    acc = cur;
+    accIndex = curIndex;
+    return;
+  }
+  switch (redOp) {
+  case RedOp::ARGMIN:
+    accIndex =
+        select(icmp_slt(acc, cur), accIndex,
+               select(icmp_sgt(acc, cur), curIndex, smin(accIndex, curIndex)));
+    acc = smin(acc, cur);
+    break;
+  case RedOp::ARGMAX:
+    accIndex =
+        select(icmp_sgt(acc, cur), accIndex,
+               select(icmp_slt(acc, cur), curIndex, smin(accIndex, curIndex)));
+    acc = smax(acc, cur);
+    break;
+  case RedOp::ARGUMIN:
+    accIndex =
+        select(icmp_ult(acc, cur), accIndex,
+               select(icmp_ugt(acc, cur), curIndex, smin(accIndex, curIndex)));
+    acc = umin(acc, cur);
+    break;
+  case RedOp::ARGUMAX:
+    accIndex =
+        select(icmp_ugt(acc, cur), accIndex,
+               select(icmp_ult(acc, cur), curIndex, smin(accIndex, curIndex)));
+    acc = umax(acc, cur);
+    break;
+  case RedOp::ARGFMIN:
+    accIndex =
+        select(fcmp_olt(acc, cur), accIndex,
+               select(fcmp_ogt(acc, cur), curIndex, smin(accIndex, curIndex)));
+    acc = fmin(acc, cur);
+    break;
+  case RedOp::ARGFMAX:
+    accIndex =
+        select(fcmp_ogt(acc, cur), accIndex,
+               select(fcmp_olt(acc, cur), curIndex, smin(accIndex, curIndex)));
+    acc = fmax(acc, cur);
+    break;
+  case RedOp::ADD:
+  case RedOp::FADD:
+  case RedOp::MIN:
+  case RedOp::MAX:
+  case RedOp::UMIN:
+  case RedOp::UMAX:
+  case RedOp::FMIN:
+  case RedOp::FMAX:
+  case RedOp::XOR:
+    llvm::report_fatal_error(
+        "This accumulate implementation is only for argmin / argmax");
   default:
     llvm::report_fatal_error("Unsupported reduce op");
   }
@@ -1432,6 +1504,7 @@ LogicalResult ReduceOpConversion::matchAndRewriteBasic(
     ConversionPatternRewriter &rewriter) const {
   Location loc = op->getLoc();
   unsigned axis = op.axis();
+  bool withIndex = triton::ReduceOp::withIndex(op.redOp());
 
   auto srcTy = op.operand().getType().cast<RankedTensorType>();
   auto srcLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
@@ -1439,11 +1512,17 @@ LogicalResult ReduceOpConversion::matchAndRewriteBasic(
   auto srcShape = srcTy.getShape();
 
   auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+  auto llvmIndexTy = getTypeConverter()->getIndexType();
   auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
+  auto indexPtrTy = LLVM::LLVMPointerType::get(llvmIndexTy, 3);
   Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
   smemBase = bitcast(smemBase, elemPtrTy);
 
-  auto smemShape = getScratchConfigForReduce(op);
+  ReduceOpHelper helper(op);
+  auto smemShape = helper.getScratchConfigBasic();
+  unsigned elems = product<unsigned>(smemShape);
+  Value indexSmemBase = gep(elemPtrTy, smemBase, i32_val(elems));
+  indexSmemBase = bitcast(indexSmemBase, indexPtrTy);
 
   unsigned srcElems = getElemsPerThread(srcTy);
   auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcShape);
@@ -1453,6 +1532,7 @@ LogicalResult ReduceOpConversion::matchAndRewriteBasic(
       emitOffsetForBlockedLayout(srcLayout, srcShape);
 
   std::map<SmallVector<unsigned>, Value> accs;
+  std::map<SmallVector<unsigned>, Value> accIndices;
   std::map<SmallVector<unsigned>, SmallVector<Value>> indices;
 
   // reduce within threads
@@ -1460,7 +1540,13 @@ LogicalResult ReduceOpConversion::matchAndRewriteBasic(
     SmallVector<unsigned> key = offset[i];
     key[axis] = 0;
     bool isFirst = accs.find(key) == accs.end();
-    accumulate(rewriter, loc, op.redOp(), accs[key], srcValues[i], isFirst);
+    if (!withIndex) {
+      accumulate(rewriter, loc, op.redOp(), accs[key], srcValues[i], isFirst);
+    } else {
+      Value curIndex = srcIndices[i][axis];
+      accumulateWithIndex(rewriter, loc, op.redOp(), accs[key], accIndices[key],
+                          srcValues[i], curIndex, isFirst);
+    }
     if (isFirst)
       indices[key] = srcIndices[i];
   }
@@ -1476,12 +1562,18 @@ LogicalResult ReduceOpConversion::matchAndRewriteBasic(
   for (auto it : accs) {
     const SmallVector<unsigned> &key = it.first;
     Value acc = it.second;
+    Value accIndex;
+    if (withIndex)
+      accIndex = accIndices[key];
     SmallVector<Value> writeIdx = indices[key];
 
     writeIdx[axis] = udiv(writeIdx[axis], sizePerThread);
     Value writeOffset = linearize(rewriter, loc, writeIdx, smemShape, srcOrd);
     Value writePtr = gep(elemPtrTy, smemBase, writeOffset);
+    Value indexWritePtr = gep(indexPtrTy, indexSmemBase, writeOffset);
     store(acc, writePtr);
+    if (withIndex)
+      store(accIndex, indexWritePtr);
 
     SmallVector<Value> readIdx(writeIdx.size(), ints[0]);
     for (int N = smemShape[axis] / 2; N > 0; N >>= 1) {
@@ -1492,10 +1584,23 @@ LogicalResult ReduceOpConversion::matchAndRewriteBasic(
                  ints[0]);
       Value readPtr = gep(elemPtrTy, writePtr, readOffset);
       barrier();
-      accumulate(rewriter, loc, op.redOp(), acc, load(readPtr), false);
-      store(acc, writePtr);
+      if (!withIndex) {
+        Value cur = load(readPtr);
+        accumulate(rewriter, loc, op.redOp(), acc, cur, false);
+        store(acc, writePtr);
+      } else {
+        Value cur = load(readPtr);
+        Value indexReadPtr = gep(indexPtrTy, indexWritePtr, readOffset);
+        Value curIndex = load(indexReadPtr);
+        accumulateWithIndex(rewriter, loc, op.redOp(), acc, accIndex, cur,
+                            curIndex, false);
+        store(acc, writePtr);
+        store(accIndex, indexWritePtr);
+      }
     }
   }
+
+  barrier();
 
   // set output values
   if (auto resultTy = op.getType().dyn_cast<RankedTensorType>()) {
@@ -1507,25 +1612,25 @@ LogicalResult ReduceOpConversion::matchAndRewriteBasic(
     auto resultIndices = emitIndices(loc, rewriter, resultLayout, resultShape);
     assert(resultIndices.size() == resultElems);
 
-    barrier();
     SmallVector<Value> resultVals(resultElems);
     for (unsigned i = 0; i < resultElems; ++i) {
       SmallVector<Value> readIdx = resultIndices[i];
       readIdx.insert(readIdx.begin() + axis, ints[0]);
       Value readOffset = linearize(rewriter, loc, readIdx, smemShape, srcOrd);
       Value readPtr = gep(elemPtrTy, smemBase, readOffset);
-      resultVals[i] = load(readPtr);
+      Value indexReadPtr = gep(indexPtrTy, indexSmemBase, readOffset);
+      resultVals[i] = withIndex ? load(indexReadPtr) : load(readPtr);
     }
 
-    SmallVector<Type> resultTypes(resultElems, llvmElemTy);
+    SmallVector<Type> resultTypes(resultElems,
+                                  withIndex ? llvmIndexTy : llvmElemTy);
     Type structTy =
         LLVM::LLVMStructType::getLiteral(this->getContext(), resultTypes);
     Value ret = getStructFromElements(loc, resultVals, rewriter, structTy);
     rewriter.replaceOp(op, ret);
   } else {
     // 0d-tensor -> scalar
-    barrier();
-    Value resultVal = load(smemBase);
+    Value resultVal = withIndex ? load(indexSmemBase) : load(smemBase);
     rewriter.replaceOp(op, resultVal);
   }
 
@@ -1537,25 +1642,35 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
     ConversionPatternRewriter &rewriter) const {
   Location loc = op->getLoc();
   unsigned axis = adaptor.axis();
+  bool withIndex = triton::ReduceOp::withIndex(op.redOp());
 
   auto srcTy = op.operand().getType().cast<RankedTensorType>();
   auto srcLayout = srcTy.getEncoding();
   auto srcShape = srcTy.getShape();
   auto srcRank = srcTy.getRank();
+  auto order = getOrder(srcLayout);
 
   auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcLayout);
   auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcLayout);
 
   auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+  auto llvmIndexTy = getTypeConverter()->getIndexType();
   auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
+  auto indexPtrTy = LLVM::LLVMPointerType::get(llvmIndexTy, 3);
   Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
   smemBase = bitcast(smemBase, elemPtrTy);
 
   ReduceOpHelper helper(op);
+  auto smemShapes = helper.getScratchConfigsFast();
+  unsigned elems = product<unsigned>(smemShapes[0]);
+  unsigned maxElems = std::max(elems, product<unsigned>(smemShapes[1]));
+  maxElems = std::max(maxElems, product<unsigned>(smemShapes[2]));
+  Value indexSmemBase = gep(elemPtrTy, smemBase, i32_val(maxElems));
+  indexSmemBase = bitcast(indexSmemBase, indexPtrTy);
+
   unsigned sizeIntraWarps = helper.getIntraWarpSize();
   unsigned sizeInterWarps = helper.getInterWarpSize();
 
-  auto order = getOrder(srcLayout);
   unsigned srcElems = getElemsPerThread(srcTy);
   auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcShape);
   auto srcValues = getElementsFromStruct(loc, adaptor.operand(), rewriter);
@@ -1564,16 +1679,21 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
       emitOffsetForLayout(srcLayout, srcShape);
 
   std::map<SmallVector<unsigned>, Value> accs;
+  std::map<SmallVector<unsigned>, Value> accIndices;
   std::map<SmallVector<unsigned>, SmallVector<Value>> indices;
-
-  auto smemShape = getScratchConfigForReduce(op);
 
   // reduce within threads
   for (unsigned i = 0; i < srcElems; ++i) {
     SmallVector<unsigned> key = offset[i];
     key[axis] = 0;
     bool isFirst = accs.find(key) == accs.end();
-    accumulate(rewriter, loc, op.redOp(), accs[key], srcValues[i], isFirst);
+    if (!withIndex) {
+      accumulate(rewriter, loc, op.redOp(), accs[key], srcValues[i], isFirst);
+    } else {
+      Value curIndex = srcIndices[i][axis];
+      accumulateWithIndex(rewriter, loc, op.redOp(), accs[key], accIndices[key],
+                          srcValues[i], curIndex, isFirst);
+    }
     if (isFirst)
       indices[key] = srcIndices[i];
   }
@@ -1598,18 +1718,32 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
   for (auto it : accs) {
     const SmallVector<unsigned> &key = it.first;
     Value acc = it.second;
+    Value accIndex;
+    if (withIndex)
+      accIndex = accIndices[key];
 
     // reduce within warps
     for (unsigned N = sizeIntraWarps / 2; N > 0; N >>= 1) {
       Value shfl = shflSync(rewriter, loc, acc, N);
-      accumulate(rewriter, loc, op.redOp(), acc, shfl, false);
+      if (!withIndex) {
+        accumulate(rewriter, loc, op.redOp(), acc, shfl, false);
+      } else {
+        Value shflIndex = shflSync(rewriter, loc, accIndex, N);
+        accumulateWithIndex(rewriter, loc, op.redOp(), acc, accIndex, shfl,
+                            shflIndex, false);
+      }
     }
 
     SmallVector<Value> writeIdx = indices[key];
     writeIdx[axis] = (sizeInterWarps == 1) ? zero : warpIdAxis;
-    Value writeOffset = linearize(rewriter, loc, writeIdx, smemShape, order);
+    Value writeOffset =
+        linearize(rewriter, loc, writeIdx, smemShapes[0], order);
     Value writePtr = gep(elemPtrTy, smemBase, writeOffset);
     storeShared(rewriter, loc, writePtr, acc, laneZero);
+    if (withIndex) {
+      Value indexWritePtr = gep(indexPtrTy, indexSmemBase, writeOffset);
+      storeShared(rewriter, loc, indexWritePtr, accIndex, laneZero);
+    }
   }
 
   barrier();
@@ -1621,7 +1755,6 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
   //
   // each thread needs to process:
   //   elemsPerThread = sizeInterWarps * s1 * s2 .. Sn / numThreads
-  unsigned elems = product<unsigned>(smemShape);
   unsigned numThreads =
       product<unsigned>(triton::gpu::getWarpsPerCTA(srcLayout)) * 32;
   unsigned elemsPerThread = std::max<unsigned>(elems / numThreads, 1);
@@ -1629,10 +1762,21 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
   for (unsigned round = 0; round < elemsPerThread; ++round) {
     Value readPtr = gep(elemPtrTy, smemBase, readOffset);
     Value acc = load(readPtr);
+    Value accIndex;
+    if (withIndex) {
+      Value readIndexPtr = gep(indexPtrTy, indexSmemBase, readOffset);
+      accIndex = load(readIndexPtr);
+    }
 
     for (unsigned N = sizeInterWarps / 2; N > 0; N >>= 1) {
       Value shfl = shflSync(rewriter, loc, acc, N);
-      accumulate(rewriter, loc, op.redOp(), acc, shfl, false);
+      if (!withIndex) {
+        accumulate(rewriter, loc, op.redOp(), acc, shfl, false);
+      } else {
+        Value shflIndex = shflSync(rewriter, loc, accIndex, N);
+        accumulateWithIndex(rewriter, loc, op.redOp(), acc, accIndex, shfl,
+                            shflIndex, false);
+      }
     }
 
     Value writeOffset = udiv(readOffset, i32_val(sizeInterWarps));
@@ -1641,8 +1785,12 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
     Value laneIdModSizeInterWarps = urem(laneId, i32_val(sizeInterWarps));
     Value laneIdModSizeInterWarpsIsZero =
         icmp_eq(laneIdModSizeInterWarps, zero);
-    storeShared(rewriter, loc, writePtr, acc,
-                and_(threadIsNeeded, laneIdModSizeInterWarpsIsZero));
+    Value pred = and_(threadIsNeeded, laneIdModSizeInterWarpsIsZero);
+    storeShared(rewriter, loc, writePtr, acc, pred);
+    if (withIndex) {
+      Value writeIndexPtr = gep(indexPtrTy, indexSmemBase, writeOffset);
+      storeShared(rewriter, loc, writeIndexPtr, accIndex, pred);
+    }
 
     if (round != elemsPerThread - 1) {
       readOffset = add(readOffset, i32_val(numThreads));
@@ -1670,25 +1818,24 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
     assert(resultIndices.size() == resultElems);
 
     SmallVector<Value> resultVals(resultElems);
-    SmallVector<unsigned> resultShape;
-    std::copy(resultTy.getShape().begin(), resultTy.getShape().end(),
-              std::back_inserter(resultShape));
     for (size_t i = 0; i < resultElems; ++i) {
       SmallVector<Value> readIdx = resultIndices[i];
       Value readOffset =
-          linearize(rewriter, loc, readIdx, resultShape, resultOrd);
+          linearize(rewriter, loc, readIdx, smemShapes[2], resultOrd);
       Value readPtr = gep(elemPtrTy, smemBase, readOffset);
-      resultVals[i] = load(readPtr);
+      Value indexReadPtr = gep(indexPtrTy, indexSmemBase, readOffset);
+      resultVals[i] = withIndex ? load(indexReadPtr) : load(readPtr);
     }
 
-    SmallVector<Type> resultTypes(resultElems, llvmElemTy);
+    SmallVector<Type> resultTypes(resultElems,
+                                  withIndex ? llvmIndexTy : llvmElemTy);
     Type structTy =
         LLVM::LLVMStructType::getLiteral(this->getContext(), resultTypes);
     Value ret = getStructFromElements(loc, resultVals, rewriter, structTy);
     rewriter.replaceOp(op, ret);
   } else {
     // 0d-tensor -> scalar
-    Value resultVal = load(smemBase);
+    Value resultVal = withIndex ? load(indexSmemBase) : load(smemBase);
     rewriter.replaceOp(op, resultVal);
   }
 
@@ -2778,7 +2925,7 @@ private:
       return multiDimOffset;
     }
     if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-      SmallVector<Value> mmaColIdx(2);
+      SmallVector<Value> mmaColIdx(4);
       SmallVector<Value> mmaRowIdx(2);
       Value threadId = getThreadId(rewriter, loc);
       Value warpSize = idx_val(32);
@@ -2788,31 +2935,79 @@ private:
       SmallVector<Value> multiDimWarpId(2);
       multiDimWarpId[0] = urem(warpId, idx_val(mmaLayout.getWarpsPerCTA()[0]));
       multiDimWarpId[1] = udiv(warpId, idx_val(mmaLayout.getWarpsPerCTA()[0]));
-      multiDimWarpId[0] = urem(multiDimWarpId[0], idx_val(shape[0] / 16));
-      multiDimWarpId[1] = urem(multiDimWarpId[1], idx_val(shape[1] / 8));
-      Value four = idx_val(4);
-      Value mmaGrpId = udiv(laneId, four);
-      Value mmaGrpIdP8 = add(mmaGrpId, idx_val(8));
-      Value mmaThreadIdInGrp = urem(laneId, four);
-      Value mmaThreadIdInGrpM2 = mul(mmaThreadIdInGrp, idx_val(2));
-      Value mmaThreadIdInGrpM2P1 = add(mmaThreadIdInGrpM2, idx_val(1));
-      Value colWarpOffset = mul(multiDimWarpId[0], idx_val(16));
-      mmaColIdx[0] = add(mmaGrpId, colWarpOffset);
-      mmaColIdx[1] = add(mmaGrpIdP8, colWarpOffset);
-      Value rowWarpOffset = mul(multiDimWarpId[1], idx_val(8));
-      mmaRowIdx[0] = add(mmaThreadIdInGrpM2, rowWarpOffset);
-      mmaRowIdx[1] = add(mmaThreadIdInGrpM2P1, rowWarpOffset);
+      Value _1 = idx_val(1);
+      Value _2 = idx_val(2);
+      Value _4 = idx_val(4);
+      Value _8 = idx_val(8);
+      Value _16 = idx_val(16);
+      if (mmaLayout.getVersion() == 2) {
+        multiDimWarpId[0] = urem(multiDimWarpId[0], idx_val(shape[0] / 16));
+        multiDimWarpId[1] = urem(multiDimWarpId[1], idx_val(shape[1] / 8));
+        Value mmaGrpId = udiv(laneId, _4);
+        Value mmaGrpIdP8 = add(mmaGrpId, _8);
+        Value mmaThreadIdInGrp = urem(laneId, _4);
+        Value mmaThreadIdInGrpM2 = mul(mmaThreadIdInGrp, _2);
+        Value mmaThreadIdInGrpM2P1 = add(mmaThreadIdInGrpM2, _1);
+        Value colWarpOffset = mul(multiDimWarpId[0], _16);
+        mmaColIdx[0] = add(mmaGrpId, colWarpOffset);
+        mmaColIdx[1] = add(mmaGrpIdP8, colWarpOffset);
+        Value rowWarpOffset = mul(multiDimWarpId[1], _8);
+        mmaRowIdx[0] = add(mmaThreadIdInGrpM2, rowWarpOffset);
+        mmaRowIdx[1] = add(mmaThreadIdInGrpM2P1, rowWarpOffset);
+      } else if (mmaLayout.getVersion() == 1) {
+        multiDimWarpId[0] = urem(multiDimWarpId[0], idx_val(shape[0] / 16));
+        multiDimWarpId[1] = urem(multiDimWarpId[1], idx_val(shape[1] / 16));
+        Value partId = udiv(laneId, _4);
+        Value partIdDiv4 = udiv(partId, _4);
+        Value partIdRem4 = urem(partId, _4);
+        Value partRowOffset = mul(udiv(partIdRem4, _2), _8);
+        partRowOffset = add(mul(partIdDiv4, _4), partRowOffset);
+        Value partColOffset = mul(urem(partIdRem4, _2), _8);
+        Value colOffset = add(mul(multiDimWarpId[0], _16), partColOffset);
+        Value rowOffset = add(mul(multiDimWarpId[1], _16), partRowOffset);
+        mmaRowIdx[0] = add(urem(laneId, _2), rowOffset);
+        mmaRowIdx[1] = add(mmaRowIdx[0], _2);
+        mmaColIdx[0] = add(udiv(urem(laneId, _4), _2), colOffset);
+        mmaColIdx[1] = add(mmaColIdx[0], _1);
+        mmaColIdx[2] = add(mmaColIdx[0], _4);
+        mmaColIdx[3] = add(mmaColIdx[0], idx_val(5));
+      } else {
+        llvm_unreachable("Unexpected MMALayout version");
+      }
 
       assert(rank == 2);
-      assert(mmaLayout.getVersion() == 2 &&
-             "mmaLayout ver1 not implemented yet");
       SmallVector<Value> multiDimOffset(rank);
-      multiDimOffset[0] = elemId < 2 ? mmaColIdx[0] : mmaColIdx[1];
-      multiDimOffset[1] = elemId % 2 == 0 ? mmaRowIdx[0] : mmaRowIdx[1];
-      multiDimOffset[0] = add(multiDimOffset[0],
-                              idx_val(multiDimCTAInRepId[0] * shapePerCTA[0]));
-      multiDimOffset[1] = add(multiDimOffset[1],
-                              idx_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
+      if (mmaLayout.getVersion() == 2) {
+        multiDimOffset[0] = elemId < 2 ? mmaColIdx[0] : mmaColIdx[1];
+        multiDimOffset[1] = elemId % 2 == 0 ? mmaRowIdx[0] : mmaRowIdx[1];
+        multiDimOffset[0] = add(
+            multiDimOffset[0], idx_val(multiDimCTAInRepId[0] * shapePerCTA[0]));
+        multiDimOffset[1] = add(
+            multiDimOffset[1], idx_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
+      } else if (mmaLayout.getVersion() == 1) {
+        // the order of elements in a thread:
+        //   c0, c1, c4, c5
+        //   c2, c3, c6, c7
+        if (elemId < 2) {
+          multiDimOffset[0] = mmaColIdx[elemId % 2];
+          multiDimOffset[1] = mmaRowIdx[0];
+        } else if (elemId >= 2 && elemId < 4) {
+          multiDimOffset[0] = mmaColIdx[elemId % 2];
+          multiDimOffset[1] = mmaRowIdx[1];
+        } else if (elemId >= 4 && elemId < 6) {
+          multiDimOffset[0] = mmaColIdx[elemId % 2 + 2];
+          multiDimOffset[1] = mmaRowIdx[0];
+        } else if (elemId >= 6) {
+          multiDimOffset[0] = mmaColIdx[elemId % 2 + 2];
+          multiDimOffset[1] = mmaRowIdx[1];
+        }
+        multiDimOffset[0] = add(
+            multiDimOffset[0], idx_val(multiDimCTAInRepId[0] * shapePerCTA[0]));
+        multiDimOffset[1] = add(
+            multiDimOffset[1], idx_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
+      } else {
+        llvm_unreachable("Unexpected MMALayout version");
+      }
       return multiDimOffset;
     }
     llvm_unreachable("unexpected layout in getMultiDimOffset");
