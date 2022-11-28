@@ -1,4 +1,5 @@
 #include "triton/Conversion/TritonGPUToLLVM/PtxAsmFormat.h"
+#include "triton/Conversion/TritonGPUToLLVM/AsmFormat.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/Support/raw_ostream.h"
@@ -6,19 +7,6 @@
 
 namespace mlir {
 namespace triton {
-
-// TODO(Superjomn) Move to a global utility file?
-std::string strJoin(llvm::ArrayRef<std::string> strs,
-                    llvm::StringRef delimiter) {
-  std::string osStr;
-  llvm::raw_string_ostream os(osStr);
-  for (size_t i = 0; !strs.empty() && i < strs.size() - 1; ++i)
-    os << strs[i] << delimiter;
-  if (!strs.empty())
-    os << strs.back();
-  os.flush();
-  return osStr;
-}
 
 PTXInstr::Operand *
 PTXBuilder::newOperand(mlir::Value value, StringRef constraint,
