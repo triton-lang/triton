@@ -26,6 +26,12 @@ public:
 
   unsigned getThreadsReductionAxis();
 
+  SmallVector<unsigned> getScratchConfigBasic();
+
+  SmallVector<SmallVector<unsigned>> getScratchConfigsFast();
+
+  unsigned getScratchSizeInBytes();
+
 private:
   triton::ReduceOp op;
   RankedTensorType srcTy{};
@@ -38,6 +44,14 @@ bool maybeSharedAllocationOp(Operation *op);
 bool maybeAliasOp(Operation *op);
 
 std::string getValueOperandName(Value value, AsmState &state);
+
+template <typename T_OUT, typename T_IN>
+inline SmallVector<T_OUT> convertType(ArrayRef<T_IN> in) {
+  SmallVector<T_OUT> out;
+  for (const T_IN &i : in)
+    out.push_back(T_OUT(i));
+  return out;
+}
 
 template <typename Int> Int product(llvm::ArrayRef<Int> arr) {
   return std::accumulate(arr.begin(), arr.end(), 1, std::multiplies{});
