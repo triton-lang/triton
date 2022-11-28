@@ -1031,7 +1031,7 @@ struct LoadOpConversion
       wait_cnt();
 
       if (other) {
-        for (size_t ii = 0; ii < nWords; ++ii) {
+        for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
           GCNInstr &mov = *gcnBuilder.create<>("v_mov_b32");
 
           size_t size = width / valueElemNbits;
@@ -1039,7 +1039,7 @@ struct LoadOpConversion
           auto vecTy = LLVM::getFixedVectorType(valueElemTy, size);
           Value v = rewriter.create<LLVM::UndefOp>(loc, vecTy);
           for (size_t s = 0; s < size; ++s) {
-            Value falseVal = otherElems[vecStart + ii * size + s];
+            Value falseVal = otherElems[vecStart + wordIdx * size + s];
             Value sVal = createIndexAttrConstant(
                 rewriter, loc, this->getTypeConverter()->getIndexType(), s);
             v = insert_element(vecTy, v, falseVal, sVal);
@@ -1052,7 +1052,7 @@ struct LoadOpConversion
           else
             opr = gcnBuilder.newOperand(v, readConstraint);
 
-          mov(dstsOpr->listGet(ii), opr);
+          mov(dstsOpr->listGet(wordIdx), opr);
         }
       }
 
@@ -1284,13 +1284,13 @@ struct StoreOpConversion
       auto *asmArgList = gcnBuilder.newListOperand(asmArgs);
       auto *asmAddr = gcnBuilder.newAddrOperand(ptrElems[vecStart], "v");
       auto *offOpr = gcnBuilder.newEmptyOperand("off");
-      for (size_t ii = 0; ii < nWords; ++ii) {
+      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         auto &gstore = gcnBuilder.create<GCNMemInstr>("global_store")
                            ->store_type(valueElemNbits);
-        unsigned offset = ii * (valueElemNbits / 8);
+        unsigned offset = wordIdx * (valueElemNbits / 8);
         auto *offsetMod =
             gcnBuilder.newModifier("offset", std::to_string(offset));
-        gstore({asmAddr, asmArgList->listGet(ii), offOpr}, {offsetMod});
+        gstore({asmAddr, asmArgList->listGet(wordIdx), offOpr}, {offsetMod});
       }
 
       auto &wait_cnt = *gcnBuilder.create<>("s_waitcnt vmcnt(0)");
