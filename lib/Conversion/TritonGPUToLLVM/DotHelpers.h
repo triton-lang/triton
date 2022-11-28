@@ -145,8 +145,9 @@ struct DotOpMmaV1ConversionHelper {
                  ConversionPatternRewriter &rewriter, Location loc) const;
 
   // Extract values belong to $a or $b from a LLVMStruct, the shape is n0xn1.
-  ValueTable extractLoadedOperand(Value llStruct, int n0, int n1,
-                                  ConversionPatternRewriter &rewriter) const;
+  DotOpMmaV1ConversionHelper::ValueTable extractLoadedOperand(Value llStruct,
+                                                              int NK,
+                                                              ConversionPatternRewriter &rewriter) const;
 
 private:
   static constexpr unsigned instrShape[] = {16, 16, 4};
@@ -955,6 +956,12 @@ struct MMA16816ConversionHelper {
 
     SmallVector<int64_t> shape(aTensorTy.getShape().begin(),
                                aTensorTy.getShape().end());
+    // TODO[Superjomn]: transA cannot be accessed in ConvertLayoutOp.
+    bool transA = false;
+    if (transA) {
+      std::swap(shape[0], shape[1]);
+    }
+
     ValueTable ha;
     std::function<void(int, int)> loadFn;
     auto [matShapeM, matShapeN, matShapeK] = getMmaMatShape(aTensorTy);
@@ -996,6 +1003,12 @@ struct MMA16816ConversionHelper {
 
     SmallVector<int64_t> shape(tensorTy.getShape().begin(),
                                tensorTy.getShape().end());
+
+    // TODO[Superjomn]: transB cannot be accessed in ConvertLayoutOp.
+    bool transB = false;
+    if (transB) {
+      std::swap(shape[0], shape[1]);
+    }
 
     auto [matShapeM, matShapeN, matShapeK] = getMmaMatShape(tensorTy);
     auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaInstrShape(tensorTy);
@@ -1446,9 +1459,18 @@ Value DotOpMmaV1ConversionHelper::loadB(
 
   auto *ctx = rewriter.getContext();
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
-  auto shape = tensorTy.getShape();
   auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
-  auto order = sharedLayout.getOrder();
+
+  // TODO [Superjomn]: transB cannot be accessed here.
+  bool transB = false;
+
+  SmallVector<int64_t> shape (tensorTy.getShape().begin(), tensorTy.getShape().end());
+  SmallVector<unsigned> order (sharedLayout.getOrder().begin(), sharedLayout.getOrder().end());
+  if(transB) {
+    std::swap(order[0], order[1]);
+    std::swap(shape[0], shape[1]);
+  }
+
   bool isBRow = order[0] != 0;
   bool isBVec4 = isBRow && shape[order[0]] <= 16;
   int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
@@ -1474,6 +1496,8 @@ Value DotOpMmaV1ConversionHelper::loadB(
 
   auto [_0, _1, offsetBN, offsetBK] =
       computeOffsets(thread, false, isBRow, fpw, spw, rep, rewriter, loc);
+  if (transB) std::swap(offsetBK, offsetBN);
+
 
   Value offB0 = isBRow ? offsetBN : offsetBK;
   Value offB1 = isBRow ? offsetBK : offsetBN;
@@ -1606,17 +1630,15 @@ DotOpMmaV1ConversionHelper::computeOffsets(Value threadId, bool isARow,
 }
 
 DotOpMmaV1ConversionHelper::ValueTable
-DotOpMmaV1ConversionHelper::extractLoadedOperand(
-    Value llStruct, int n0, int n1, ConversionPatternRewriter &rewriter) const {
+DotOpMmaV1ConversionHelper::extractLoadedOperand(Value llStruct,
+                                                 int NK,
+                                                 ConversionPatternRewriter &rewriter) const {
   ValueTable rcds;
   SmallVector<Value> elems =
       getElementsFromStruct(llStruct.getLoc(), llStruct, rewriter);
 
-  int offset = 0;
-  for (int i = 0; i < n0; ++i)
-    for (int k = 0; k < n1; k += 4) {
+    for (int k = 0, offset=0, i=0; k < NK && offset < elems.size(); k += 4, i++, offset+=2) {
       rcds[{i, k}] = std::make_pair(elems[offset], elems[offset + 1]);
-      offset += 2;
     }
 
   return rcds;

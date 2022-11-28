@@ -3381,16 +3381,30 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
   auto ATensorTy = A.getType().cast<RankedTensorType>();
   auto BTensorTy = B.getType().cast<RankedTensorType>();
   auto DTensorTy = D.getType().cast<RankedTensorType>();
-  auto AShape = ATensorTy.getShape();
-  auto BShape = BTensorTy.getShape();
+  SmallVector<int> AShape (ATensorTy.getShape().begin(), ATensorTy.getShape().end());
+  SmallVector<int> BShape  (BTensorTy.getShape().begin(), BTensorTy.getShape().end());
   auto DShape = DTensorTy.getShape();
   auto wpt = mmaLayout.getWarpsPerCTA();
 
   bool transA = op.transA();
   bool transB = op.transB();
 
-  bool isARow = !transA;
-  bool isBRow = !transB;
+  // TODO[Superjomn]: order cannot accessed here.
+  SmallVector<unsigned > AOrder({1, 0});
+  SmallVector<unsigned > BOrder({1, 0});
+
+  if (transA) {
+    std::swap(AShape[0], AShape[1]);
+    std::swap(AOrder[0], AOrder[1]);
+
+  }
+  if (transB) {
+    std::swap(BShape[0], BShape[1]);
+    std::swap(BOrder[0], BOrder[0]);
+  }
+
+  bool isARow = AOrder[0] != 0;
+  bool isBRow = BOrder[0] != 0;
   bool isAVec4 = !isARow && AShape[isARow] <= 16; // fp16*4 = 16bytes
   bool isBVec4 = isBRow && BShape[isBRow] <= 16;
   int packSize0 = (isARow || isAVec4) ? 1 : 2;
@@ -3408,10 +3422,8 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
   unsigned numN = rep[1] * DShape[1] / (spw[1] * wpt[0]);
   unsigned NK = AShape[1];
 
-  auto has = helper.extractLoadedOperand(loadedA, numM / 2, NK, rewriter);
-  auto hbs = helper.extractLoadedOperand(loadedB, numN / 2, NK, rewriter);
-
-  size_t accSize = numM * numN;
+  auto has = helper.extractLoadedOperand(loadedA, NK, rewriter);
+  auto hbs = helper.extractLoadedOperand(loadedB, NK, rewriter);
 
   // initialize accumulators
   SmallVector<Value> acc = getElementsFromStruct(loc, loadedC, rewriter);
