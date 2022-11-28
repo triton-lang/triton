@@ -20,8 +20,6 @@ SmallVector<unsigned>
 getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
                              unsigned &outVec);
 
-SmallVector<unsigned> getScratchConfigForReduce(triton::ReduceOp op);
-
 } // namespace triton
 
 /// Modified from llvm-15.0: llvm/ADT/AddressRanges.h

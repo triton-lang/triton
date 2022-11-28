@@ -278,6 +278,20 @@ struct TritonStorePattern : public OpConversionPattern<triton::StoreOp> {
   }
 };
 
+struct TritonAtomicCASPattern
+    : public OpConversionPattern<triton::AtomicCASOp> {
+  using OpConversionPattern<triton::AtomicCASOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<triton::AtomicCASOp>(
+        op, typeConverter->convertType(op.getType()), 
+        adaptor.ptr(), adaptor.cmp(), adaptor.val());
+    return success();
+  }
+};
+
 struct TritonAtomicRMWPattern
     : public OpConversionPattern<triton::AtomicRMWOp> {
   using OpConversionPattern<triton::AtomicRMWOp>::OpConversionPattern;
