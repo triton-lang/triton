@@ -88,42 +88,22 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   return paddedRepShape;
 }
 
-SmallVector<unsigned> getScratchConfigForReduce(triton::ReduceOp op) {
-  auto srcTy = op.operand().getType().cast<RankedTensorType>();
-  auto srcLayout = srcTy.getEncoding();
-  auto srcShape = srcTy.getShape();
-  auto axis = op.axis();
-
-  bool fastReduce = axis == getOrder(srcLayout)[0];
-
-  SmallVector<unsigned> smemShape;
-  for (auto d : srcShape)
-    smemShape.push_back(d);
-
-  if (fastReduce) {
-    unsigned sizeInterWarps = gpu::getWarpsPerCTA(srcLayout)[axis];
-    smemShape[axis] = sizeInterWarps;
-  } else {
-    unsigned threadsPerCTAAxis = gpu::getThreadsPerWarp(srcLayout)[axis] *
-                                 gpu::getWarpsPerCTA(srcLayout)[axis];
-    smemShape[axis] = threadsPerCTAAxis;
-  }
-
-  return smemShape;
-}
-
 // TODO: extend beyond scalars
 SmallVector<unsigned> getScratchConfigForAtomicRMW(triton::AtomicRMWOp op) {
   SmallVector<unsigned> smemShape;
-  auto ptrTy = op.ptr().getType();
-  if (auto tensorType = ptrTy.dyn_cast<RankedTensorType>()) {
-    // do nothing or just assert because shared memory is not used in tensor
+  if (op.ptr().getType().isa<RankedTensorType>()) {
+    // do nothing or just assert because shared memory is not used in tensor up
+    // to now
   } else {
     // need only bytes for scalar
     // always vec = 1 and elemsPerThread = 1 for scalar?
     smemShape.push_back(1);
   }
   return smemShape;
+}
+
+SmallVector<unsigned> getScratchConfigForAtomicCAS(triton::AtomicCASOp op) {
+  return SmallVector<unsigned>{1};
 }
 
 class AllocationAnalysis {
@@ -174,22 +154,9 @@ private:
   /// Initializes temporary shared memory for a given operation.
   void getScratchValueSize(Operation *op) {
     if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
-      // TODO(Keren): Reduce with index is not supported yet.
-      auto value = op->getOperand(0);
-      if (auto tensorType = value.getType().dyn_cast<RankedTensorType>()) {
-        auto srcLayout = tensorType.getEncoding();
-        bool fastReduce = reduceOp.axis() == getOrder(srcLayout)[0];
-        auto smemShape = getScratchConfigForReduce(reduceOp);
-        unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
-                                         std::multiplies{});
-        if (fastReduce) {
-          auto mod = op->getParentOfType<ModuleOp>();
-          unsigned numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-          elems = std::max<unsigned>(elems, numWarps * 32);
-        }
-        auto bytes = elems * tensorType.getElementTypeBitWidth() / 8;
-        allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
-      }
+      ReduceOpHelper helper(reduceOp);
+      unsigned bytes = helper.getScratchSizeInBytes();
+      allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
     } else if (auto cvtLayout = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
       auto srcTy = cvtLayout.src().getType().cast<RankedTensorType>();
       auto dstTy = cvtLayout.result().getType().cast<RankedTensorType>();
@@ -230,6 +197,17 @@ private:
                          : elems * elemTy.getIntOrFloatBitWidth() / 8;
         allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
       }
+    } else if (auto atomicCASOp = dyn_cast<triton::AtomicCASOp>(op)) {
+      auto value = op->getOperand(0);
+      auto smemShape = getScratchConfigForAtomicCAS(atomicCASOp);
+      unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
+                                       std::multiplies{});
+      auto elemTy =
+          value.getType().cast<triton::PointerType>().getPointeeType();
+      auto bytes = elemTy.isa<triton::PointerType>()
+                       ? elems * kPtrBitWidth / 8
+                       : elems * elemTy.getIntOrFloatBitWidth() / 8;
+      allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
     }
   }
 
