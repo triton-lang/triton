@@ -7,7 +7,7 @@ import triton
 @pytest.mark.parametrize("MODE", ["sdd", "dds", "dsd"])
 @pytest.mark.parametrize("TRANS_B", [False, True])
 @pytest.mark.parametrize("TRANS_A", [False, True])
-@pytest.mark.parametrize("BLOCK", [16, 32, 64])
+@pytest.mark.parametrize("BLOCK", [16, 32])
 @pytest.mark.parametrize("DTYPE", [torch.float16])
 def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=1, H=1, M=32, N=32, K=32):
     seed = 0
@@ -15,8 +15,8 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=1, H=1, M=32, N=32, K=32
     is_sdd = MODE == "sdd"
     is_dsd = MODE == "dsd"
     is_dds = MODE == "dds"
-    do_sparsify = lambda x: triton.testing.sparsify_tensor(x, layout, BLOCK).requires_grad_()
-    do_mask = lambda x: triton.testing.mask_tensor(x, layout, BLOCK).requires_grad_()
+    do_sparsify = lambda x: triton.testing.sparsify_tensor(x, layout, BLOCK)
+    do_mask = lambda x: triton.testing.mask_tensor(x, layout, BLOCK)
     # create inputs
     # create op
     a_shape = (Z, H, K, M) if TRANS_A else (Z, H, M, K)
@@ -38,8 +38,8 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=1, H=1, M=32, N=32, K=32
     dc_ref = do_mask(dc_ref) if is_sdd else dc_ref
     a_ref = do_mask(a_ref) if is_dsd else a_ref
     b_ref = do_mask(b_ref) if is_dds else b_ref
-    a_ref.retain_grad()
-    b_ref.retain_grad()
+    a_ref.requires_grad_().retain_grad()
+    b_ref.requires_grad_().retain_grad()
     c_ref = torch.matmul(a_ref.transpose(2, 3) if TRANS_A else a_ref,
                          b_ref.transpose(2, 3) if TRANS_B else b_ref)
     c_ref.backward(dc_ref)
@@ -50,8 +50,8 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=1, H=1, M=32, N=32, K=32
     dc_tri = do_sparsify(dc_tri) if is_sdd else dc_tri
     a_tri = do_sparsify(a_tri) if is_dsd else a_tri
     b_tri = do_sparsify(b_tri) if is_dds else b_tri
-    a_tri.retain_grad()
-    b_tri.retain_grad()
+    a_tri.requires_grad_().retain_grad()
+    b_tri.requires_grad_().retain_grad()
     op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B, device="cuda")
     c_tri = triton.testing.catch_oor(lambda: op(a_tri, b_tri), pytest)
     triton.testing.catch_oor(lambda: c_tri.backward(dc_tri), pytest)
