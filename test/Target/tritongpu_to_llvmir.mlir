@@ -2,7 +2,7 @@
 
 // == LLVM IR check begin ==
 // CHECK-LABEL: ; ModuleID = 'LLVMDialectModule'
-// CHECK: define void @test_empty_kernel
+// CHECK: define amdgpu_kernel void @test_empty_kernel
 // XHECK: !nvvm.annotations
 // XHECK: !{void (i32, half addrspace(1)*)* @test_empty_kernel, !"maxntidx", i32 128}
 
