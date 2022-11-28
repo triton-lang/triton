@@ -4937,6 +4937,32 @@ struct FDivOpConversion
                      ConversionPatternRewriter &rewriter, Type elemTy,
                      ValueRange operands, Location loc) const {
 
+#ifdef USE_ROCM
+    const std::string readConstraint = "v";
+    const std::string writeConstraint = "=v";
+
+    GCNBuilder gcnBuilder;
+    unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
+
+    auto res = gcnBuilder.newOperand(writeConstraint);
+    auto lhs = gcnBuilder.newOperand(operands[0], readConstraint);
+    auto rhs = gcnBuilder.newOperand(operands[1], readConstraint);
+
+    // create inst
+    auto &rcp = gcnBuilder.create<GCNInstr>("v_rcp")->float_op_type(bitwidth);
+    auto &mul_inst = gcnBuilder.create<GCNInstr>("v_mul")->float_op_type(bitwidth);
+    // auto &div_inst = gcnBuilder.create<GCNInstr>("v_div_fixup")->float_op_type(bitwidth); // TODO: fix mismatches
+    
+
+    // launch insts
+    rcp(res, rhs);
+    mul_inst(res, lhs, res);
+    // div_inst(res, lhs, rhs, res); // TODO: fix mismatches
+
+    // return result
+    Value ret = gcnBuilder.launch(rewriter, loc, elemTy, false);
+    return ret;
+#else
     PTXBuilder ptxBuilder;
     auto &fdiv = *ptxBuilder.create<PTXInstr>("div");
     unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
@@ -4958,6 +4984,7 @@ struct FDivOpConversion
 
     Value ret = ptxBuilder.launch(rewriter, loc, elemTy, false);
     return ret;
+#endif
   }
 };
 

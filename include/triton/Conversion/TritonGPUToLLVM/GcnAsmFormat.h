@@ -218,8 +218,35 @@ template <class ConcreteT> struct GCNInstrBase : public GCNInstrCommon {
   }
 };
 
+enum VectorWidth {
+  Byte = 8,
+  Short = 16,
+  Dword = 32,
+  Qword = 64
+};
+
 struct GCNInstr : public GCNInstrBase<GCNInstr> {
   using GCNInstrBase<GCNInstr>::GCNInstrBase;
+
+   GCNInstr &float_op_type(int width) {
+    switch (width) {
+    case Byte:
+      assert(Byte != width);
+      break;
+    case Short:
+      o("f16");
+      break;
+    case Dword:
+      o("f32");
+      break;
+    case Qword:
+      o("f64");
+      break;
+    default:
+      break;
+    }
+    return *this;
+  }
 };
 
 struct GCNInstrExecution {
@@ -246,13 +273,6 @@ struct GCNInstrExecution {
 struct GCNMemInstr : public GCNInstrBase<GCNMemInstr> {
   using GCNInstrBase<GCNMemInstr>::GCNInstrBase;
   // Add specific type suffix to instruction
-
-  enum VectorWidth {
-    Byte = 8,
-    Short = 16,
-    Dword = 32,
-    Qword = 64
-  };
 
   GCNMemInstr &load_type(int width) {
     switch (width) {
