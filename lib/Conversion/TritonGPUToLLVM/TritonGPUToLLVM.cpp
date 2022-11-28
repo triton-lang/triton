@@ -3391,7 +3391,7 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
   bool transA = op.transA();
   bool transB = op.transB();
 
-  // TODO[Superjomn]: order cannot accessed here.
+  // TODO[Superjomn]: order cannot accessed in DotOp.
   SmallVector<unsigned> AOrder({1, 0});
   SmallVector<unsigned> BOrder({1, 0});
 
