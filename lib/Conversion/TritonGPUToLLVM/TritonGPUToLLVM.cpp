@@ -3381,8 +3381,10 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
   auto ATensorTy = A.getType().cast<RankedTensorType>();
   auto BTensorTy = B.getType().cast<RankedTensorType>();
   auto DTensorTy = D.getType().cast<RankedTensorType>();
-  SmallVector<int> AShape (ATensorTy.getShape().begin(), ATensorTy.getShape().end());
-  SmallVector<int> BShape  (BTensorTy.getShape().begin(), BTensorTy.getShape().end());
+  SmallVector<int> AShape(ATensorTy.getShape().begin(),
+                          ATensorTy.getShape().end());
+  SmallVector<int> BShape(BTensorTy.getShape().begin(),
+                          BTensorTy.getShape().end());
   auto DShape = DTensorTy.getShape();
   auto wpt = mmaLayout.getWarpsPerCTA();
 
@@ -3390,13 +3392,12 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
   bool transB = op.transB();
 
   // TODO[Superjomn]: order cannot accessed here.
-  SmallVector<unsigned > AOrder({1, 0});
-  SmallVector<unsigned > BOrder({1, 0});
+  SmallVector<unsigned> AOrder({1, 0});
+  SmallVector<unsigned> BOrder({1, 0});
 
   if (transA) {
     std::swap(AShape[0], AShape[1]);
     std::swap(AOrder[0], AOrder[1]);
-
   }
   if (transB) {
     std::swap(BShape[0], BShape[1]);
