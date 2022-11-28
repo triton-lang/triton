@@ -64,7 +64,6 @@ void llPrintf(StringRef msg, ValueRange args,
               ConversionPatternRewriter &rewriter);
 
 // Helper function
-#define tid_val() getThreadId(rewriter, loc)
 #define llprintf(fmt, ...) LLVM::llPrintf(fmt, {__VA_ARGS__}, rewriter)
 
 } // namespace LLVM

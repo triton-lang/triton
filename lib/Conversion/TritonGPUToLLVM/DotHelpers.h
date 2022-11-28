@@ -39,14 +39,9 @@ using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
-// Forward declaration necessary functions locates in TritonGPUToLLVM.cpp .
-llvm::SmallVector<mlir::Value>
-getElementsFromStruct(mlir::Location loc, mlir::Value llvmStruct,
-                      mlir::ConversionPatternRewriter &rewriter);
-
-mlir::LLVM::SharedMemoryObject
-getSharedMemoryObjectFromStruct(mlir::Location loc, mlir::Value llvmStruct,
-                                mlir::ConversionPatternRewriter &rewriter);
+// Forward declaration for functions from TritonGPUToLLVM.cpp
+void llPrintf(StringRef msg, ValueRange args,
+              ConversionPatternRewriter &rewriter);
 
 // Helper for conversion of DotOp with mma<version=1>, that is sm<80
 struct DotOpMmaV1ConversionHelper {
@@ -1165,6 +1160,7 @@ private:
       SmallVector<Value> ptrs(numPtrs);
 
       Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
+
       Type smemPtrTy = helper.getShemPtrTy();
       for (int i = 0; i < numPtrs; ++i) {
         ptrs[i] =
