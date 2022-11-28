@@ -884,10 +884,10 @@ def ttir_to_ttgir(mod, num_warps, num_stages, compute_capability):
     # can get shared memory swizzled correctly.
     pm.add_coalesce_pass()
     pm.add_triton_gpu_combine_pass(compute_capability)
-    pm.add_tritongpu_pipeline_pass(num_stages)
+    # pm.add_tritongpu_pipeline_pass(num_stages)
     # Prefetch must be done after pipeline pass because pipeline pass
     # extracts slices from the original tensor.
-    pm.add_tritongpu_prefetch_pass()
+    # pm.add_tritongpu_prefetch_pass()
     pm.add_canonicalizer_pass()
     pm.add_cse_pass()
     pm.add_triton_gpu_combine_pass(compute_capability)

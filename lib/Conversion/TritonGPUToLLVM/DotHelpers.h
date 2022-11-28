@@ -38,10 +38,14 @@ using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
+Value gThreadId;
 
 // Forward declaration for functions from TritonGPUToLLVM.cpp
 void llPrintf(StringRef msg, ValueRange args,
               ConversionPatternRewriter &rewriter);
+
+void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
+                   std::string elem_repr, ConversionPatternRewriter &builder);
 
 // Helper for conversion of DotOp with mma<version=1>, that is sm<80
 struct DotOpMmaV1ConversionHelper {
@@ -1428,6 +1432,18 @@ Value DotOpMmaV1ConversionHelper::loadA(
     Value ha01 = bitcast(extract_element(ha, i32_val(1)), f16x2Ty);
     ld(has, m, k, ha00, ha01);
 
+    {
+      auto get_f16 = [&](Value value, int idx) {
+        return extract_element(value, i32_val(idx));
+      };
+      std::vector<Value> args;
+      args.push_back(get_f16(ha00, 0));
+      args.push_back(get_f16(ha00, 1));
+      args.push_back(get_f16(ha01, 0));
+      args.push_back(get_f16(ha01, 1));
+      vprintf_array(gThreadId, args, "ha0x", "%f", rewriter);
+    }
+
     if (vecA > 4) {
       Value ha10 = bitcast(extract_element(ha, i32_val(2)), f16x2Ty);
       Value ha11 = bitcast(extract_element(ha, i32_val(3)), f16x2Ty);
@@ -1645,9 +1661,12 @@ DotOpMmaV1ConversionHelper::extractLoadedOperand(
   SmallVector<Value> elems =
       getElementsFromStruct(llStruct.getLoc(), llStruct, rewriter);
 
-  for (int k = 0, offset = 0, i = 0; k < NK && offset < elems.size();
-       k += 4, i++, offset += 2) {
-    rcds[{i, k}] = std::make_pair(elems[offset], elems[offset + 1]);
+  int offset = 0;
+  for (int i = 0; offset < elems.size(); ++i) {
+    for (int k = 0; k < NK; k += 4) {
+      rcds[{i, k}] = std::make_pair(elems[offset], elems[offset + 1]);
+      offset += 2;
+    }
   }
 
   return rcds;

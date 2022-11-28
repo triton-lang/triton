@@ -172,8 +172,8 @@ def get_proper_err(a, b, golden):
     [128, 64, 128, 4, 128, 64, 128, False, False],
     [16, 16, 16, 16, 16, 16, 16, False, False],  # wpt overflow issue
     # K-Forloop
-    [32, 32, 64, 4, 32, 32, 32, False, False], # Single shared encoding
-    [16, 16, 128, 4, 16, 16, 16, False, False], # Single shared encoding and small k
+    [32, 32, 64, 4, 32, 32, 32, False, False],  # Single shared encoding
+    [16, 16, 128, 4, 16, 16, 16, False, False],  # Single shared encoding and small k
     [64, 32, 128, 4, 64, 32, 64, False, False],
     [128, 16, 128, 4, 128, 16, 32, False, False],
     [32, 16, 128, 4, 32, 16, 32, False, False],
@@ -281,3 +281,6 @@ def test_gemm_fmadot(M, N, K, num_warps, block_M, block_N, block_K):
     golden = torch.matmul(a, b)
     golden_abs_err, golden_rel_err = get_proper_err(a, b, golden)
     torch.testing.assert_close(c, golden, rtol=max(1e-4, 1.5 * golden_rel_err), atol=max(1e-4, 1.5 * golden_abs_err))
+
+
+test_gemm(*[128, 256, 128, 4, 128, 256, 32, False, False])

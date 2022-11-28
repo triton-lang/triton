@@ -62,6 +62,19 @@ static StringRef getStructAttrsAttrName() { return "llvm.struct_attrs"; }
 // A helper function for using printf in LLVM conversion.
 void llPrintf(StringRef msg, ValueRange args,
               ConversionPatternRewriter &rewriter);
+#define vprintf llPrintf
+void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
+                   std::string elem_repr, ConversionPatternRewriter &builder) {
+  std::string fmt = info + " t-%d ";
+  std::vector<Value> new_arr({thread});
+  for (auto v : arr) {
+    fmt += elem_repr + ", ";
+    new_arr.push_back(v);
+  }
+  fmt += "";
+
+  vprintf(fmt, new_arr, builder);
+}
 
 // Helper function
 #define llprintf(fmt, ...) LLVM::llPrintf(fmt, {__VA_ARGS__}, rewriter)
@@ -358,6 +371,7 @@ public:
         ValueRange{rewriter.create<::mlir::gpu::ThreadIdOp>(
             loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x)});
     Value threadId = cast.getResult(0);
+    LLVM::gThreadId = threadId;
     return threadId;
   }
 
@@ -3624,8 +3638,8 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
   SmallVector<Value> acc = getElementsFromStruct(loc, loadedC, rewriter);
 
   auto callMMA = [&](unsigned m, unsigned n, unsigned k) {
-    auto ha = has[{m, k}];
-    auto hb = hbs[{n, k}];
+    auto ha = has.at({m, k});
+    auto hb = hbs.at({n, k});
     std::vector<size_t> idx{{
         (m * 2 + 0) + (n * 4 + 0) * numM, // row0
         (m * 2 + 0) + (n * 4 + 1) * numM,
@@ -3641,13 +3655,13 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
 
     auto *resOprs = builder.newListOperand(8, "=f");
     auto *AOprs = builder.newListOperand({
-        {ha.first, "f"},
-        {ha.second, "f"},
+        {ha.first, "r"},
+        {ha.second, "r"},
     });
 
     auto *BOprs = builder.newListOperand({
-        {hb.first, "f"},
-        {hb.second, "f"},
+        {hb.first, "r"},
+        {hb.second, "r"},
     });
     auto *COprs = builder.newListOperand();
     for (int i = 0; i < 8; ++i)
