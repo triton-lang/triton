@@ -113,10 +113,11 @@
 
 namespace mlir {
 namespace LLVM {
+using namespace mlir::triton;
 
-static Value getStructFromElements(Location loc, ValueRange resultVals,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type structType) {
+Value getStructFromElements(Location loc, ValueRange resultVals,
+                            ConversionPatternRewriter &rewriter,
+                            Type structType) {
   if (!structType.isa<LLVM::LLVMStructType>()) {
     return *resultVals.begin();
   }
@@ -130,9 +131,8 @@ static Value getStructFromElements(Location loc, ValueRange resultVals,
   return llvmStruct;
 }
 
-static SmallVector<Value>
-getElementsFromStruct(Location loc, Value llvmStruct,
-                      ConversionPatternRewriter &rewriter) {
+SmallVector<Value> getElementsFromStruct(Location loc, Value llvmStruct,
+                                         ConversionPatternRewriter &rewriter) {
   if (llvmStruct.getType().isIntOrIndexOrFloat() ||
       llvmStruct.getType().isa<triton::PointerType>() ||
       llvmStruct.getType().isa<LLVM::LLVMPointerType>())
@@ -146,9 +146,6 @@ getElementsFromStruct(Location loc, Value llvmStruct,
   }
   return results;
 }
-
-namespace {
-using namespace mlir::triton;
 
 // Create a 32-bit integer constant.
 Value createConstantI32(Location loc, PatternRewriter &rewriter, int32_t v) {
@@ -185,10 +182,8 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
                                           builder.getIntegerAttr(ty, value));
 }
 
-} // namespace
-
 /// Helper function to get strides from a given shape and its order
-static SmallVector<Value>
+SmallVector<Value>
 getStridesFromShapeAndOrder(ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
                             Location loc, ConversionPatternRewriter &rewriter) {
   auto rank = shape.size();
@@ -264,7 +259,7 @@ struct SharedMemoryObject {
   }
 };
 
-static SharedMemoryObject
+SharedMemoryObject
 getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
                                 ConversionPatternRewriter &rewriter) {
   auto elems = getElementsFromStruct(loc, llvmStruct, rewriter);
