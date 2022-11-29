@@ -1515,7 +1515,7 @@ class CudaUtils(object):
            }
         }
 
-        #define CUDA_CHECK(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+        #define CUDA_CHECK(ans) { gpuAssert((ans), __FILE__, __LINE__); if(PyErr_Occurred()) return NULL; }
 
         static PyObject* loadBinary(PyObject* self, PyObject* args) {
             const char* name;
@@ -1530,7 +1530,6 @@ class CudaUtils(object):
             CUmodule mod;
             int32_t n_regs = 0;
             int32_t n_spills = 0;
-            Py_BEGIN_ALLOW_THREADS;
             // create driver handles
             CUDA_CHECK(cuModuleLoadData(&mod, data));
             CUDA_CHECK(cuModuleGetFunction(&fun, mod, name));
@@ -1548,7 +1547,6 @@ class CudaUtils(object):
               CUDA_CHECK(cuFuncGetAttribute(&shared_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun));
               CUDA_CHECK(cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin - shared_static));
             }
-            Py_END_ALLOW_THREADS;
 
             if(PyErr_Occurred()) {
               return NULL;

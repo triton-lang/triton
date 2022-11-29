@@ -2074,7 +2074,7 @@ struct GetNumProgramsOpConversion
     Location loc = op->getLoc();
     assert(op.axis() < 3);
 
-    Value blockId = rewriter.create<::mlir::gpu::BlockDimOp>(
+    Value blockId = rewriter.create<::mlir::gpu::GridDimOp>(
         loc, rewriter.getIndexType(), dims[op.axis()]);
     auto llvmIndexTy = getTypeConverter()->getIndexType();
     rewriter.replaceOpWithNewOp<UnrealizedConversionCastOp>(
