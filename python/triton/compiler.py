@@ -528,8 +528,7 @@ class CodeGenerator(ast.NodeVisitor):
                                                                 [ty.to_ir(self.builder) for ty in ret_types])
             loop_block.merge_block_before(after_block)
             self.builder.set_insertion_point_to_end(after_block)
-            if len(yields) > 0:
-                self.builder.create_yield_op([y.handle for y in yields])
+            self.builder.create_yield_op([y.handle for y in yields])
 
         # update global uses in while_op
         for i, name in enumerate(names):

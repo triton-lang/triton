@@ -677,36 +677,7 @@ def test_tensor_atomic_rmw(shape, axis, device="cuda"):
     kernel[(1,)](z_tri, x_tri, axis, shape0, shape1)
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=1e-4)
 
-# def test_atomic_cas():
-#     # 1. make sure that atomic_cas changes the original value (Lock)
-#     @triton.jit
-#     def change_value(Lock):
-#         tl.atomic_cas(Lock, 0, 1)
-
-#     Lock = torch.zeros((1,), device='cuda', dtype=torch.int32)
-#     change_value[(1,)](Lock)
-
-#     assert (Lock[0] == 1)
-
-#     # 2. only one block enters the critical section
-#     @triton.jit
-#     def serialized_add(data, Lock):
-#         ptrs = data + tl.arange(0, 128)
-#         while tl.atomic_cas(Lock, 0, 1) == 1:
-#             pass
-
-#         tl.store(ptrs, tl.load(ptrs) + 1.0)
-
-#         # release lock
-#         tl.atomic_xchg(Lock, 0)
-
-#     Lock = torch.zeros((1,), device='cuda', dtype=torch.int32)
-#     data = torch.zeros((128,), device='cuda', dtype=torch.float32)
-#     ref = torch.full((128,), 64.0)
-#     serialized_add[(64,)](data, Lock)
-#     triton.testing.assert_almost_equal(data, ref)
-
-def test_simple_atomic_cas():
+def test_atomic_cas():
     # 1. make sure that atomic_cas changes the original value (Lock)
     @triton.jit
     def change_value(Lock):
@@ -716,6 +687,25 @@ def test_simple_atomic_cas():
     change_value[(1,)](Lock)
 
     assert (Lock[0] == 1)
+
+    # 2. only one block enters the critical section
+    @triton.jit
+    def serialized_add(data, Lock):
+        ptrs = data + tl.arange(0, 128)
+        while tl.atomic_cas(Lock, 0, 1) == 1:
+            pass
+
+        tl.store(ptrs, tl.load(ptrs) + 1.0)
+
+        # release lock
+        tl.atomic_xchg(Lock, 0)
+
+    Lock = torch.zeros((1,), device='cuda', dtype=torch.int32)
+    data = torch.zeros((128,), device='cuda', dtype=torch.float32)
+    ref = torch.full((128,), 64.0)
+    serialized_add[(64,)](data, Lock)
+    triton.testing.assert_almost_equal(data, ref)
+
 
 # # ---------------
 # # test cast
