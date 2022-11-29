@@ -277,7 +277,7 @@ struct GCNMemInstr : public GCNInstrBase<GCNMemInstr> {
   GCNMemInstr &load_type(int width) {
     switch (width) {
     case Byte:
-      o("byte");
+      o("ubyte");
       break;
     case Short:
       o("ushort");

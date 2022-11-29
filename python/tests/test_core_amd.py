@@ -13,8 +13,8 @@ import triton._C.libtriton.triton as _triton
 import triton.language as tl
 from triton.runtime.jit import JITFunction, TensorWrapper, reinterpret
 
-int_dtypes = ['int16', 'int32', 'int64']
-uint_dtypes = ['uint16', 'uint32', 'uint64']
+int_dtypes = ['int8', 'int16', 'int32', 'int64']
+uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
 float_dtypes = ['float16', 'float32', 'float64']
 dtypes = int_dtypes + uint_dtypes + float_dtypes
 # TODO: handle bfloat16
@@ -273,5 +273,43 @@ def test_bin_op(dtype_x, dtype_y, op, device='cuda'):
         with pytest.raises(triton.CompilationError) as exc_info:
             _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device)
         assert re.match('Cannot use .* because they have different signedness', str(exc_info.value.__cause__))
+    else:
+        _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device)
+
+@pytest.mark.parametrize("dtype_x, dtype_y",
+                         [(dtype_x, dtype_y) for dtype_x in int_dtypes for dtype_y in int_dtypes] +
+                         [(dtype_x, dtype_y) for dtype_x in uint_dtypes for dtype_y in uint_dtypes]
+                         )
+def test_floordiv(dtype_x, dtype_y, device='cuda'):
+    # Triton has IEEE, not numpy/torch, semantics for %, and those carry
+    # through to //, so we have to use a nonstandard expression to get a
+    # reference result for //.
+    expr = 'x // y'
+    numpy_expr = '((x - np.fmod(x, y)) / y)'
+    _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device)
+
+
+# ---------------
+# test bitwise ops
+# ---------------
+@pytest.mark.parametrize("dtype_x, dtype_y, op", [
+    (dtype_x, dtype_y, op)
+    for op in ['&', '|', '^']
+    for dtype_x in dtypes + dtypes_with_bfloat16
+    for dtype_y in dtypes + dtypes_with_bfloat16
+])
+def test_bitwise_op(dtype_x, dtype_y, op, device='cuda'):
+    expr = f'x {op} y'
+    if (dtype_x in uint_dtypes and dtype_y in int_dtypes and _bitwidth(dtype_x) >= _bitwidth(dtype_y)):
+        numpy_expr = f'x.astype(np.{dtype_x}) {op} y.astype(np.{dtype_x})'
+    elif (dtype_y in uint_dtypes and dtype_x in int_dtypes and _bitwidth(dtype_y) >= _bitwidth(dtype_x)):
+        numpy_expr = f'x.astype(np.{dtype_y}) {op} y.astype(np.{dtype_y})'
+    else:
+        numpy_expr = None
+    if 'float' in dtype_x + dtype_y:
+        with pytest.raises(triton.CompilationError) as exc_info:
+            _test_binary(dtype_x, dtype_y, expr, numpy_expr='np.array([])', device=device)
+        # The CompilationError must have been caused by a C++ exception with this text.
+        assert re.match('invalid operands of type', str(exc_info.value.__cause__))
     else:
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device)
