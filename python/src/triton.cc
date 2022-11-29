@@ -1096,7 +1096,8 @@ void init_triton_ir(py::module &&m) {
               mlir::Value &val) -> mlir::Value {
              auto loc = self.getUnknownLoc();
              mlir::Type dstType;
-             if (auto srcTensorType = ptr.getType().dyn_cast<mlir::RankedTensorType>()) {
+             if (auto srcTensorType =
+                     ptr.getType().dyn_cast<mlir::RankedTensorType>()) {
                mlir::Type dstElemType = srcTensorType.getElementType()
                                             .cast<mlir::triton::PointerType>()
                                             .getPointeeType();

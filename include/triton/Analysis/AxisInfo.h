@@ -131,6 +131,10 @@ public:
   ChangeResult
   visitOperation(Operation *op,
                  ArrayRef<LatticeElement<AxisInfo> *> operands) override;
+
+  unsigned getValueVectorSize(Value ptr);
+
+  unsigned getValueAlignment(Value val);
 };
 
 } // namespace mlir

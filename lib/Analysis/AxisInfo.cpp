@@ -261,4 +261,36 @@ ChangeResult AxisInfoAnalysis::visitOperation(
   return result;
 }
 
+unsigned AxisInfoAnalysis::getValueVectorSize(Value ptr) {
+  auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+  if (!tensorTy)
+    return 1;
+  auto layout = tensorTy.getEncoding();
+  auto shape = tensorTy.getShape();
+
+  // Here order should be ordered by contiguous first, so the first element
+  // should have the largest contiguous.
+  auto order = triton::gpu::getOrder(layout);
+  unsigned align = getValueAlignment(ptr);
+
+  unsigned contigPerThread = triton::gpu::getSizePerThread(layout)[order[0]];
+  unsigned vec = std::min(align, contigPerThread);
+  vec = std::min<unsigned>(shape[order[0]], vec);
+
+  return vec;
+}
+
+unsigned AxisInfoAnalysis::getValueAlignment(Value val) {
+  auto tensorTy = val.getType().dyn_cast<RankedTensorType>();
+  if (!tensorTy)
+    return 1;
+  auto axisInfo = lookupLatticeElement(val)->getValue();
+  auto layout = tensorTy.getEncoding();
+  auto order = triton::gpu::getOrder(layout);
+  unsigned maxMultiple = axisInfo.getDivisibility(order[0]);
+  unsigned maxContig = axisInfo.getContiguity(order[0]);
+  unsigned alignment = std::min(maxMultiple, maxContig);
+  return alignment;
+}
+
 } // namespace mlir
