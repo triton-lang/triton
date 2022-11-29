@@ -4951,13 +4951,10 @@ struct FDivOpConversion
     // create inst
     auto &rcp = gcnBuilder.create<GCNInstr>("v_rcp")->float_op_type(bitwidth);
     auto &mul_inst = gcnBuilder.create<GCNInstr>("v_mul")->float_op_type(bitwidth);
-    // auto &div_inst = gcnBuilder.create<GCNInstr>("v_div_fixup")->float_op_type(bitwidth); // TODO: fix mismatches
-    
 
     // launch insts
     rcp(res, rhs);
     mul_inst(res, lhs, res);
-    // div_inst(res, lhs, rhs, res); // TODO: fix mismatches
 
     // return result
     Value ret = gcnBuilder.launch(rewriter, loc, elemTy, false);
