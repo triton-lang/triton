@@ -15,6 +15,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 
 #include <memory>
 
@@ -570,17 +571,56 @@ public:
 // -----------------------------------------------------------------------------
 //
 // -----------------------------------------------------------------------------
+namespace {
+static int computeCapabilityToMMAVersion(int computeCapability) {
+  if (computeCapability < 80) {
+    return 1;
+  } else if (computeCapability < 90) {
+    return 2;
+  } else {
+    assert(false && "computeCapability > 90 not supported");
+    return 0;
+  }
+}
 
-class BlockedToMMA : public mlir::RewritePattern {
-public:
-  BlockedToMMA(mlir::MLIRContext *context)
-      : mlir::RewritePattern(triton::DotOp::getOperationName(), 2, context) {}
+static SmallVector<int64_t, 2>
+mmaVersionToShapePerWarp(int version, const ArrayRef<int64_t> &shape,
+                         int numWarps) {
+  if (version == 1)
+    return {16, 16};
+  else if (version == 2)
+    return {16, 8};
+  else {
+    assert(false && "version not supported");
+    return {0, 0};
+  }
+}
 
-  static SmallVector<unsigned, 2>
-  getWarpsPerTile(triton::DotOp& dotOp, const ArrayRef<int64_t> &shape, int version, int numWarps) {
-    assert(version == 2);
-    // TODO: Handle one warp per row for fused matmuls
-    // TODO: unsigned -> int64_t to keep things uniform
+
+SmallVector<unsigned, 2> warpsPerTileV1(triton::DotOp dotOp,
+                                         const ArrayRef<int64_t> shape,
+                                         int numWarps) {
+  SmallVector<unsigned, 2> ret = {1, 1};
+  SmallVector<int64_t, 2> shapePerWarp =
+      mmaVersionToShapePerWarp(1, shape, numWarps);
+  bool changed = false;
+  do {
+    changed = false;
+    if (ret[0] * ret[1] < numWarps) {
+      ret[0] = std::clamp<unsigned>(ret[0] * 2, 1, shape[0] / shapePerWarp[0]);
+      changed = true;
+    }
+    if (ret[0] * ret[1] < numWarps) {
+      ret[1] = std::clamp<unsigned>(ret[1] * 2, 1, shape[1] / shapePerWarp[1]);
+      changed = true;
+    }
+  } while (changed);
+  return ret;
+}
+
+SmallVector<unsigned, 2> warpsPerTileV2(triton::DotOp dotOp,
+                                         const ArrayRef<int64_t> shape,
+                                         int numWarps) {
     SetVector<Operation*> slices;
     mlir::getForwardSlice(dotOp.getResult(), &slices);
     if(llvm::find_if(slices, [](Operation *op) { return isa<triton::DotOp>(op); }) != slices.end())
@@ -608,6 +648,30 @@ public:
       }
     } while (true);
     return ret;
+}
+
+} // namespace
+
+class BlockedToMMA : public mlir::RewritePattern {
+  int computeCapability;
+
+public:
+  BlockedToMMA(mlir::MLIRContext *context, int computeCapability)
+      : mlir::RewritePattern(triton::DotOp::getOperationName(), 2, context),
+        computeCapability(computeCapability) {}
+
+  static SmallVector<unsigned, 2> getWarpsPerTile(triton::DotOp dotOp,
+                                                  const ArrayRef<int64_t> shape,
+                                                  int version, int numWarps) {
+    switch (version) {
+    case 1:
+      return warpsPerTileV1(dotOp, shape, numWarps);
+    case 2:
+      return warpsPerTileV2(dotOp, shape, numWarps);
+    default:
+      assert(false && "not supported version");
+      return {0, 0};
+    }
   }
 
   mlir::LogicalResult
@@ -630,11 +694,12 @@ public:
     auto retShape = oldRetType.getShape();
     auto mod = op->getParentOfType<mlir::ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    auto newRetType =
-        RankedTensorType::get(retShape, oldRetType.getElementType(),
-                              triton::gpu::MmaEncodingAttr::get(
-                                  oldRetType.getContext(), 2,
-                                  getWarpsPerTile(dotOp, retShape, 2, numWarps)));
+    int version = computeCapabilityToMMAVersion(computeCapability);
+    auto newRetType = RankedTensorType::get(
+        retShape, oldRetType.getElementType(),
+        triton::gpu::MmaEncodingAttr::get(
+            oldRetType.getContext(), version,
+            getWarpsPerTile(dotOp, retShape, version, numWarps)));
     // convert accumulator
     auto oldAcc = dotOp.getOperand(2);
     auto newAcc = rewriter.create<triton::gpu::ConvertLayoutOp>(
@@ -671,6 +736,10 @@ public:
 class TritonGPUCombineOpsPass
     : public TritonGPUCombineOpsBase<TritonGPUCombineOpsPass> {
 public:
+  TritonGPUCombineOpsPass() = default;
+  TritonGPUCombineOpsPass(int computeCapability) {
+    this->computeCapability = computeCapability;
+  }
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
@@ -682,7 +751,7 @@ public:
     patterns.add<RematerializeBackward>(context);
     patterns.add<RematerializeForward>(context);
     patterns.add<MoveConvertOutOfLoop>(context);
-    patterns.add<BlockedToMMA>(context);
+    patterns.add<BlockedToMMA>(context, computeCapability);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
@@ -690,6 +759,7 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonGPUCombineOpsPass() {
-  return std::make_unique<TritonGPUCombineOpsPass>();
+std::unique_ptr<Pass>
+mlir::createTritonGPUCombineOpsPass(int computeCapability) {
+  return std::make_unique<TritonGPUCombineOpsPass>(computeCapability);
 }

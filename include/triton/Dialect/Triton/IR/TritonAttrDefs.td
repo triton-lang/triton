@@ -59,7 +59,8 @@ def TT_AtomicRMWAttr : I32EnumAttr<
         I32EnumAttrCase<"MAX", 6, "max">,
         I32EnumAttrCase<"MIN", 7, "min">,
         I32EnumAttrCase<"UMAX", 8, "umax">,
-        I32EnumAttrCase<"UMIN", 9, "umin">
+        I32EnumAttrCase<"UMIN", 9, "umin">,
+        I32EnumAttrCase<"XCHG", 10, "exch">
     ]> {
     let cppNamespace = "::mlir::triton";
 }

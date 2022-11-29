@@ -1,4 +1,5 @@
 #include "triton/Analysis/Membar.h"
+#include "triton/Analysis/Alias.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include "mlir/Dialect/GPU/GPUDialect.h"
@@ -71,11 +72,17 @@ void MembarAnalysis::transfer(Operation *op, RegionInfo *regionInfo,
 
   RegionInfo curRegionInfo;
   for (Value value : op->getOperands()) {
-    // ConvertLayoutOp: shared memory -> registers
-    // Need to consider all alias buffers
     for (auto bufferId : allocation->getBufferIds(value)) {
       if (bufferId != Allocation::InvalidBufferId) {
-        curRegionInfo.syncReadBuffers.insert(bufferId);
+        if (isa<triton::gpu::InsertSliceAsyncOp>(op) ||
+            isa<tensor::InsertSliceOp>(op)) {
+          // FIXME(Keren): insert_slice and insert_slice_async are always alias
+          // for now
+          curRegionInfo.syncWriteBuffers.insert(bufferId);
+        } else {
+          // ConvertLayoutOp: shared memory -> registers
+          curRegionInfo.syncReadBuffers.insert(bufferId);
+        }
       }
     }
   }
@@ -86,9 +93,10 @@ void MembarAnalysis::transfer(Operation *op, RegionInfo *regionInfo,
       curRegionInfo.syncWriteBuffers.insert(bufferId);
     }
   }
-  // Scratch buffer is considered as a shared memory read
+  // Scratch buffer is considered as both shared memory write & read
   auto bufferId = allocation->getBufferId(op);
   if (bufferId != Allocation::InvalidBufferId) {
+    curRegionInfo.syncWriteBuffers.insert(bufferId);
     curRegionInfo.syncReadBuffers.insert(bufferId);
   }
 

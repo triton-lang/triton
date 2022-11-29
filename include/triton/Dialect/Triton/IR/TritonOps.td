@@ -187,6 +187,7 @@ def TT_StoreOp : TT_Op<"store",
 //
 def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
                                           SameOperandsAndResultEncoding,
+                                          MemoryEffects<[MemRead]>,
                                           MemoryEffects<[MemWrite]>,
                                           TypesMatchWith<"infer ptr type from value type",
                                                          "val", "ptr",
@@ -208,7 +209,9 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
     let results = (outs TT_Type:$result);
 }
 
-def TT_AtomicCASOp : TT_Op<"atomic_cas", [SameOperandsAndResultShape,
+def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead]>,
+                                          MemoryEffects<[MemWrite]>,
+                                          SameOperandsAndResultShape,
                                           SameOperandsAndResultEncoding]> {
     let summary = "atomic cas";
 
@@ -348,6 +351,11 @@ def TT_ReduceOp : TT_Op<"reduce", [NoSideEffect,
 
     let assemblyFormat = "$operand attr-dict `:` type($operand) `->` type($result)";
 
+    let extraClassDeclaration = [{
+        // This member function is marked static because we need to call it before the ReduceOp
+        // is constructed, see the implementation of create_reduce in triton.cc.
+        static bool withIndex(mlir::triton::RedOp redOp);
+    }];
 }
 
 //

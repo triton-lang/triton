@@ -34,7 +34,8 @@ TEST_P(SwizzleDotOperandTestFixture, DotOperands) {
 
   // create element type
   Type eltType = IntegerType::get(&ctx, params.typeWidth);
-  auto layout = SharedEncodingAttr::get(&ctx, encoding, params.shape, {1, 0}, eltType);
+  auto layout =
+      SharedEncodingAttr::get(&ctx, encoding, params.shape, {1, 0}, eltType);
 
   ASSERT_EQ(layout.getVec(), params.refSwizzle.vec);
   ASSERT_EQ(layout.getPerPhase(), params.refSwizzle.perPhase);

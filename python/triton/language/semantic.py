@@ -875,8 +875,8 @@ def atomic_max(ptr: tl.tensor,
     # return atomic_umin(i_ptr, i_val) if val < 0
     i_val = bitcast(val, tl.int32, builder)
     i_ptr = bitcast(ptr, tl.pointer_type(tl.int32, 1), builder)
-    pos = greater_equal(val, tl.tensor(ir.constant_float.get(sca_ty.to_ir(builder), 0), sca_ty), builder)
-    neg = less_than(val, tl.tensor(ir.constant_float.get(sca_ty.to_ir(builder), 0), sca_ty), builder)
+    pos = greater_equal(val, tl.tensor(builder.get_float32(0), sca_ty), builder)
+    neg = less_than(val, tl.tensor(builder.get_float32(0), sca_ty), builder)
     pos_ret = tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.MAX, i_ptr.handle, i_val.handle, and_(mask, pos, builder).handle), i_val.type)
     neg_ret = tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.UMIN, i_ptr.handle, i_val.handle, and_(mask, neg, builder).handle), i_val.type)
     return where(pos, pos_ret, neg_ret, builder)
@@ -907,8 +907,8 @@ def atomic_min(ptr: tl.tensor,
     # return atomic_umax(i_ptr, i_val) if val < 0
     i_val = bitcast(val, tl.int32, builder)
     i_ptr = bitcast(ptr, tl.pointer_type(tl.int32, 1), builder)
-    pos = greater_equal(val, tl.tensor(ir.constant_float.get(sca_ty.to_ir(builder), 0), sca_ty), builder)
-    neg = less_than(val, tl.tensor(ir.constant_float.get(sca_ty.to_ir(builder), 0), sca_ty), builder)
+    pos = greater_equal(val, tl.tensor(builder.get_float32(0), sca_ty), builder)
+    neg = less_than(val, tl.tensor(builder.get_float32(0), sca_ty), builder)
     pos_ret = tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.MIN,
                                                   i_ptr.handle,
                                                   i_val.handle,
@@ -1061,8 +1061,16 @@ def min(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
     return reduce_impl(input, axis, builder, "min", ir.REDUCE_OP.FMIN, ir.REDUCE_OP.MIN)
 
 
+def argmin(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
+    return reduce_impl(input, axis, builder, "argmin", ir.REDUCE_OP.ARGFMIN, ir.REDUCE_OP.ARGMIN)
+
+
 def max(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
     return reduce_impl(input, axis, builder, "max", ir.REDUCE_OP.FMAX, ir.REDUCE_OP.MAX)
+
+
+def argmax(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
+    return reduce_impl(input, axis, builder, "argmax", ir.REDUCE_OP.ARGFMAX, ir.REDUCE_OP.ARGMAX)
 
 
 def sum(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
@@ -1109,16 +1117,16 @@ def sqrt(x: tl.tensor, builder: ir.builder) -> tl.tensor:
 ##
 
 def multiple_of(x: tl.tensor, values: List[int]) -> tl.tensor:
-    if len(x.shape) != len(values):
-        raise ValueError("Shape of input to multiple_of does not match the length of values")
-    x.handle.multiple_of(values)
-    return x
-
-
+     if len(x.shape) != len(values):
+         raise ValueError("Shape of input to multiple_of does not match the length of values")
+     x.handle.set_attr("tt.divisibility", ir.make_attr(values, x.handle.get_context()))
+     return x
+ 
+ 
 def max_contiguous(x: tl.tensor, values: List[int]) -> tl.tensor:
     if len(x.shape) != len(values):
         raise ValueError("Shape of input to max_contiguous does not match the length of values")
-    x.handle.max_contiguous(values)
+    x.handle.set_attr("tt.contiguity", ir.make_attr(values, x.handle.get_context()))
     return x
 
 

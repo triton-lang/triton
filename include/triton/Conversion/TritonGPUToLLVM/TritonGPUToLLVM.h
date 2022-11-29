@@ -33,7 +33,8 @@ struct NVVMMetadataField {
   static constexpr char Kernel[] = "nvvm.kernel";
 };
 
-std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass();
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertTritonGPUToLLVMPass(int computeCapability = 80);
 
 } // namespace triton
 

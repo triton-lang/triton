@@ -106,7 +106,7 @@ void init_triton_ir(py::module &&m) {
       .value("AND", mlir::triton::RMWOp::AND)
       .value("OR", mlir::triton::RMWOp::OR)
       .value("XOR", mlir::triton::RMWOp::XOR)
-      // .value("XCHG", mlir::triton::RMWOp::Xchg)
+      .value("XCHG", mlir::triton::RMWOp::XCHG)
       .value("MAX", mlir::triton::RMWOp::MAX)
       .value("MIN", mlir::triton::RMWOp::MIN)
       .value("UMIN", mlir::triton::RMWOp::UMIN)
@@ -192,6 +192,7 @@ void init_triton_ir(py::module &&m) {
                /* issue a warning */
              }
            })
+      .def("get_context", &mlir::Value::getContext)
       .def("replace_all_uses_with",
            [](mlir::Value &self, mlir::Value &newValue) {
              self.replaceAllUsesWith(newValue);
@@ -339,6 +340,16 @@ void init_triton_ir(py::module &&m) {
           throw std::runtime_error("Expected a single function");
         return funcs[0];
       });
+
+   m.def("make_attr",
+        [](const std::vector<int> &values, mlir::MLIRContext &context) {
+          return mlir::DenseIntElementsAttr::get(
+                     mlir::RankedTensorType::get(
+                         {static_cast<int64_t>(values.size())},
+                         mlir::IntegerType::get(&context, 32)),
+                     values)
+              .cast<mlir::Attribute>();
+        });
 
   m.def(
       "parse_mlir_module",
@@ -1101,9 +1112,18 @@ void init_triton_ir(py::module &&m) {
            [](mlir::OpBuilder &self, mlir::Value &ptr, mlir::Value &cmp,
               mlir::Value &val) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             auto ptrType = mlir::getElementTypeOrSelf(ptr)
-                                .cast<mlir::triton::PointerType>();
-             mlir::Type dstType = ptrType.getPointeeType();
+             mlir::Type dstType;
+             if (auto srcTensorType = ptr.getType().dyn_cast<mlir::RankedTensorType>()) {
+               mlir::Type dstElemType = srcTensorType.getElementType()
+                                            .cast<mlir::triton::PointerType>()
+                                            .getPointeeType();
+               dstType = mlir::RankedTensorType::get(srcTensorType.getShape(),
+                                                     dstElemType);
+             } else {
+               auto ptrType = mlir::getElementTypeOrSelf(ptr)
+                                  .cast<mlir::triton::PointerType>();
+               dstType = ptrType.getPointeeType();
+             }
              return self.create<mlir::triton::AtomicCASOp>(loc, dstType, ptr,
                                                            cmp, val);
            })
@@ -1112,7 +1132,19 @@ void init_triton_ir(py::module &&m) {
               mlir::Value &ptr, mlir::Value &val,
               mlir::Value &mask) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             mlir::Type dstType = val.getType();
+             mlir::Type dstType;
+             if (auto srcTensorType =
+                     ptr.getType().dyn_cast<mlir::RankedTensorType>()) {
+               mlir::Type dstElemType = srcTensorType.getElementType()
+                                            .cast<mlir::triton::PointerType>()
+                                            .getPointeeType();
+               dstType = mlir::RankedTensorType::get(srcTensorType.getShape(),
+                                                     dstElemType);
+             } else {
+               auto ptrType = mlir::getElementTypeOrSelf(ptr)
+                                  .cast<mlir::triton::PointerType>();
+               dstType = ptrType.getPointeeType();
+             }
              return self.create<mlir::triton::AtomicRMWOp>(loc, dstType, rmwOp,
                                                            ptr, val, mask);
            })
@@ -1180,10 +1212,11 @@ void init_triton_ir(py::module &&m) {
                  operand.getType().dyn_cast<mlir::RankedTensorType>();
              std::vector<int64_t> shape = inputTensorType.getShape();
              shape.erase(shape.begin() + axis);
-             mlir::Type resType = inputTensorType.getElementType();
+             bool withIndex = mlir::triton::ReduceOp::withIndex(redOp);
+             mlir::Type resType = withIndex ? self.getI32Type()
+                                            : inputTensorType.getElementType();
              if (!shape.empty()) {
-               resType = mlir::RankedTensorType::get(
-                   shape, inputTensorType.getElementType());
+               resType = mlir::RankedTensorType::get(shape, resType);
              }
              return self.create<mlir::triton::ReduceOp>(loc, resType, redOp,
                                                         operand, axis);
@@ -1292,8 +1325,9 @@ void init_triton_ir(py::module &&m) {
              self.addPass(mlir::createTritonGPUPrefetchPass());
            })
       .def("add_triton_gpu_combine_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::createTritonGPUCombineOpsPass());
+           [](mlir::PassManager &self, int computeCapability) {
+             self.addPass(
+                 mlir::createTritonGPUCombineOpsPass(computeCapability));
            })
       .def("add_triton_gpu_to_llvm",
            [](mlir::PassManager &self) {
@@ -1314,10 +1348,10 @@ void init_triton_translation(py::module &m) {
 
   m.def(
       "translate_triton_gpu_to_llvmir",
-      [](mlir::ModuleOp op) {
+      [](mlir::ModuleOp op, int computeCapability) {
         llvm::LLVMContext llvmContext;
-        auto llvmModule =
-            ::mlir::triton::translateTritonGPUToLLVMIR(&llvmContext, op);
+        auto llvmModule = ::mlir::triton::translateTritonGPUToLLVMIR(
+            &llvmContext, op, computeCapability);
         if (!llvmModule)
           llvm::report_fatal_error("Failed to translate TritonGPU to LLVM IR.");
 
