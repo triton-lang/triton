@@ -1,39 +1,14 @@
 #include "triton/Target/HSACO/HSACOTranslation.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/ExecutionEngine/ExecutionEngine.h"
-#include "mlir/ExecutionEngine/OptUtils.h"
-#include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/Dialect.h"
-#include "mlir/Pass/Pass.h"
-#include "mlir/Pass/PassManager.h"
-#include "mlir/Support/LogicalResult.h"
-#include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
-#include "mlir/Target/LLVMIR/Export.h"
-#include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
-#include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 #include "triton/tools/sys/getenv.hpp"
 
-#include "llvm/ExecutionEngine/ExecutionEngine.h"
-#include "llvm/ExecutionEngine/SectionMemoryManager.h"
-#include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/CodeGen.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/SourceMgr.h"
-#include "llvm/Support/TargetSelect.h"
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/TargetOptions.h"
-#include "llvm/Transforms/Scalar.h"
-#include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Support/FileSystem.h"
-#include <regex>
-#include <cstdio>
-#include <iostream>
+#include "llvm/Support/Program.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/Target/TargetMachine.h"
 
 namespace {
 
@@ -42,6 +17,7 @@ void init_llvm() {
   LLVMInitializeAMDGPUTargetInfo();
   LLVMInitializeAMDGPUTargetMC();
   LLVMInitializeAMDGPUAsmPrinter();
+  LLVMInitializeAMDGPUAsmParser();
 }
 
 }
@@ -95,8 +71,8 @@ std::tuple<std::string, std::string> translateLLVMIRToHSACO(llvm::Module &module
   pass.run(module);
 
   std::string amdgcn(buffer.begin(), buffer.end());
-  if (::triton::tools::getBoolEnv("AMDGCN_ENABLE_DUMP")) {
-    std::cout << amdgcn << std::endl;
+  if (tools::getBoolEnv("AMDGCN_ENABLE_DUMP")) {
+    llvm::outs() << amdgcn << "\n";
   }
 
   // create dump files
@@ -105,9 +81,10 @@ std::tuple<std::string, std::string> translateLLVMIRToHSACO(llvm::Module &module
   std::string isabin_path = kernel_name + std::string(".o");
   std::unique_ptr<llvm::raw_fd_ostream> isabin_fs(
       new llvm::raw_fd_ostream(isabin_path, ec, llvm::sys::fs::OF_Text));
-  if (ec)
-  {
-    std::cout << isabin_path << " was not created. error code: " << ec << std::endl;
+  if (ec) {
+    llvm::errs() << "Error: '" << isabin_path << "' was not created. \n";
+    llvm::errs() << "\tError reported: " << ec.message() << "\n";
+    return std::make_tuple("", "");
   }
   // emit
   machine->addPassesToEmitFile(pass, *isabin_fs, nullptr, llvm::CGFT_ObjectFile);
@@ -119,24 +96,23 @@ std::tuple<std::string, std::string> translateLLVMIRToHSACO(llvm::Module &module
   std::string error_message;
   int lld_result =
       llvm::sys::ExecuteAndWait("/opt/rocm/llvm/bin/ld.lld",
-                                {"/opt/rocm/llvm/bin/ld.lld", "-flavor", "gnu", "-shared", "-o", hsaco_path, isabin_path},
+                                {"/opt/rocm/llvm/bin/ld.lld", "-flavor", "gnu",
+                                 "-shared", "-o", hsaco_path, isabin_path},
                                 llvm::None, {}, 0, 0, &error_message);
-  if (lld_result)
-  {
-    std::cout << "ld.lld execute fail: " << std::endl;
-    std::cout << error_message << std::endl;
-    std::cout << lld_result << std::endl;
+  if (lld_result) {
+    llvm::errs() << "Error: ld.lld execute fail. Error code: " << lld_result << "\n";
+    llvm::errs() << "\tError reported: " << error_message << "\n";
+    return std::make_tuple("", "");
   }
 
-  const std::string hsaco_dump_path =
-      ::triton::tools::getenv("AMDGCN_HSACO_DUMP_PATH");
-  std::cout << "=== hsaco dump path: " << hsaco_dump_path << std::endl;
+  const std::string hsaco_dump_path = tools::getenv("AMDGCN_HSACO_DUMP_PATH");
   if (!hsaco_dump_path.empty()) {
-    if (const auto copy_result =
+    if (std::error_code copy_result =
             llvm::sys::fs::copy_file(hsaco_path, hsaco_dump_path)) {
-      std::cout << "Error: cannot copy to hsaco dump file from \'" << hsaco_path
-                << "\' to \'" << hsaco_dump_path << "\'" << std::endl;
-      std::cout << "\t error code: " << copy_result << std::endl;
+      llvm::errs() << "Error: cannot copy to hsaco dump file from '"
+                   << hsaco_path << "' to '" << hsaco_dump_path << "'\n";
+      llvm::errs() << "\tError reported: " << copy_result.message() << "\n";
+      return std::make_tuple("", "");
     }
   }
 
