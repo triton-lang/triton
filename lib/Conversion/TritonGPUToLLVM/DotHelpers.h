@@ -38,7 +38,6 @@ using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
-Value gThreadId;
 
 // Forward declaration for functions from TritonGPUToLLVM.cpp
 void llPrintf(StringRef msg, ValueRange args,
@@ -169,11 +168,9 @@ struct DotOpMmaV2ConversionHelper {
     NOT_APPLICABLE,
   };
 
-  MmaEncodingAttr mmaLayout;
   MLIRContext *ctx{};
 
-  explicit DotOpMmaV2ConversionHelper(MmaEncodingAttr mmaLayout)
-      : mmaLayout(mmaLayout) {
+  explicit DotOpMmaV2ConversionHelper(MmaEncodingAttr mmaLayout) {
     ctx = mmaLayout.getContext();
   }
 
