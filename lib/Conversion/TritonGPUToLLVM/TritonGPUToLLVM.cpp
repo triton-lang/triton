@@ -1229,7 +1229,7 @@ struct StoreOpConversion
         asmArgs.emplace_back(llWord, constraint);
       }
 #ifdef USE_ROCM
-      store(asmArgs[vecStart].first, ptrElems[vecStart]);
+      store(asmArgs[0].first, ptrElems[vecStart]);
 #else
       // Prepare the PTX inline asm.
       PTXBuilder ptxBuilder;
