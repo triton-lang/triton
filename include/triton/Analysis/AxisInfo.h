@@ -132,9 +132,11 @@ public:
   visitOperation(Operation *op,
                  ArrayRef<LatticeElement<AxisInfo> *> operands) override;
 
-  unsigned getValueVectorSize(Value ptr);
+  unsigned getPtrVectorSize(Value ptr);
 
-  unsigned getValueAlignment(Value val);
+  unsigned getPtrAlignment(Value ptr);
+
+  unsigned getMaskAlignment(Value mask);
 };
 
 } // namespace mlir

@@ -336,7 +336,7 @@ void init_triton_ir(py::module &&m) {
         return funcs[0];
       });
 
-   m.def("make_attr",
+  m.def("make_attr",
         [](const std::vector<int> &values, mlir::MLIRContext &context) {
           return mlir::DenseIntElementsAttr::get(
                      mlir::RankedTensorType::get(

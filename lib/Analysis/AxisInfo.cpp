@@ -276,7 +276,7 @@ ChangeResult AxisInfoAnalysis::visitOperation(
   return result;
 }
 
-unsigned AxisInfoAnalysis::getValueVectorSize(Value ptr) {
+unsigned AxisInfoAnalysis::getPtrVectorSize(Value ptr) {
   auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
   if (!tensorTy)
     return 1;
@@ -286,7 +286,7 @@ unsigned AxisInfoAnalysis::getValueVectorSize(Value ptr) {
   // Here order should be ordered by contiguous first, so the first element
   // should have the largest contiguous.
   auto order = triton::gpu::getOrder(layout);
-  unsigned align = getValueAlignment(ptr);
+  unsigned align = getPtrAlignment(ptr);
 
   unsigned contigPerThread = triton::gpu::getSizePerThread(layout)[order[0]];
   unsigned vec = std::min(align, contigPerThread);
@@ -295,16 +295,26 @@ unsigned AxisInfoAnalysis::getValueVectorSize(Value ptr) {
   return vec;
 }
 
-unsigned AxisInfoAnalysis::getValueAlignment(Value val) {
-  auto tensorTy = val.getType().dyn_cast<RankedTensorType>();
+unsigned AxisInfoAnalysis::getPtrAlignment(Value ptr) {
+  auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
   if (!tensorTy)
     return 1;
-  auto axisInfo = lookupLatticeElement(val)->getValue();
+  auto axisInfo = lookupLatticeElement(ptr)->getValue();
   auto layout = tensorTy.getEncoding();
   auto order = triton::gpu::getOrder(layout);
   unsigned maxMultiple = axisInfo.getDivisibility(order[0]);
   unsigned maxContig = axisInfo.getContiguity(order[0]);
   unsigned alignment = std::min(maxMultiple, maxContig);
+  return alignment;
+}
+
+unsigned AxisInfoAnalysis::getMaskAlignment(Value mask) {
+  auto tensorTy = mask.getType().dyn_cast<RankedTensorType>();
+  if (!tensorTy)
+    return 1;
+  auto maskOrder = triton::gpu::getOrder(tensorTy.getEncoding());
+  auto maskAxis = lookupLatticeElement(mask)->getValue();
+  auto alignment = std::max<unsigned>(maskAxis.getConstancy(maskOrder[0]), 1);
   return alignment;
 }
 

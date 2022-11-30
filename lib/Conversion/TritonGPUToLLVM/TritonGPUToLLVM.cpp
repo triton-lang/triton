@@ -822,15 +822,11 @@ struct LoadStoreConversionBase : public ConvertTritonGPUOpToLLVMPatternBase {
   }
 
   unsigned getVectorSize(Value ptr) const {
-    return axisAnalysisPass.getValueVectorSize(ptr);
+    return axisAnalysisPass.getPtrVectorSize(ptr);
   }
 
   unsigned getMaskAlignment(Value mask) const {
-    // XXX: What if mask is a scalar?
-    auto tensorTy = mask.getType().cast<RankedTensorType>();
-    auto maskOrder = getOrder(tensorTy.getEncoding());
-    auto maskAxis = axisAnalysisPass.lookupLatticeElement(mask)->getValue();
-    return std::max<int>(maskAxis.getConstancy(maskOrder[0]), 1);
+    return axisAnalysisPass.getMaskAlignment(mask);
   }
 
 protected:
@@ -4601,7 +4597,7 @@ private:
       auto resSharedLayout =
           dstTy.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
       auto resElemTy = dstTy.getElementType();
-      unsigned inVec = axisInfoAnalysis.getValueVectorSize(src);
+      unsigned inVec = axisInfoAnalysis.getPtrVectorSize(src);
       unsigned outVec = resSharedLayout.getVec();
       unsigned minVec = std::min(outVec, inVec);
       auto maxBitWidth =
