@@ -970,8 +970,9 @@ struct MMA16816ConversionHelper {
     if (aTensorTy.getEncoding().isa<SharedEncodingAttr>()) {
       Value warpM = getWarpM(shape[0]);
       // load from smem
+      int wpt = std::min<int>(mmaLayout.getWarpsPerCTA()[0], shape[0] / matShapeM);
       loadFn = getLoadMatrixFn(
-          tensor, smemObj, mmaLayout, mmaLayout.getWarpsPerCTA()[0] /*wpt*/,
+          tensor, smemObj, mmaLayout, wpt /*wpt*/,
           1 /*kOrder*/, {mmaInstrM, mmaInstrK} /*instrShape*/,
           {matShapeM, matShapeK} /*matShape*/, warpM /*warpId*/, ha /*vals*/,
           true /*isA*/);
@@ -1013,8 +1014,9 @@ struct MMA16816ConversionHelper {
     int numRepN = getNumRepN(tensorTy, shape[1]);
 
     Value warpN = getWarpN(shape[1]);
+    int wpt = std::min<int>(mmaLayout.getWarpsPerCTA()[1], shape[1] / matShapeN);
     auto loadFn = getLoadMatrixFn(
-        tensor, smemObj, mmaLayout, mmaLayout.getWarpsPerCTA()[1] /*wpt*/,
+        tensor, smemObj, mmaLayout,  wpt /*wpt*/,
         0 /*kOrder*/, {mmaInstrK, mmaInstrN} /*instrShape*/,
         {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/, hb /*vals*/,
         false /*isA*/);

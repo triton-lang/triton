@@ -735,9 +735,13 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_layout_mmav1_block
   func @convert_layout_mmav1_blocked(%arg0: tensor<32x16xf32, #mma>) {
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
+    // CHECK: llvm.store
+    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
+    // CHECK: llvm.store
+    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
     // CHECK: nvvm.barrier0
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
@@ -917,9 +921,9 @@ func @test_get_program_id(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
 func @test_get_num_program(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
-  // CHECK: nvvm.read.ptx.sreg.ntid.x
-  // CHECK: nvvm.read.ptx.sreg.ntid.y
-  // CHECK: nvvm.read.ptx.sreg.ntid.z
+  // CHECK: nvvm.read.ptx.sreg.nctaid.x
+  // CHECK: nvvm.read.ptx.sreg.nctaid.y
+  // CHECK: nvvm.read.ptx.sreg.nctaid.z
   %blockdimx = tt.get_num_programs {axis=0:i32} : i32
   %blockdimy = tt.get_num_programs {axis=1:i32} : i32
   %blockdimz = tt.get_num_programs {axis=2:i32} : i32

@@ -58,11 +58,6 @@ SmallVector<SmallVector<unsigned>> ReduceOpHelper::getScratchConfigsFast() {
   unsigned numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
   smemShapes[1].push_back(numWarps * 32);
 
-  /// FIXME(Qingyi): This requirement is actually not necessary, because it is
-  /// always smaller than smemShapes[0] shared memory block2
-  smemShapes[2] = convertType<unsigned>(getSrcShape());
-  smemShapes[2].erase(smemShapes[2].begin() + axis);
-
   return smemShapes;
 }
 

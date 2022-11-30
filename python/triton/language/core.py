@@ -405,7 +405,7 @@ class constexpr:
         return constexpr(self.value != other.value)
 
     def __bool__(self):
-        return constexpr(bool(self.value))
+        return bool(self.value)
 
     def __neg__(self):
         return constexpr(-self.value)

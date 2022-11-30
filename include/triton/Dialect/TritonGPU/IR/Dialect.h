@@ -31,6 +31,8 @@ SmallVector<unsigned> getWarpsPerCTA(Attribute layout);
 
 SmallVector<unsigned> getSizePerThread(Attribute layout);
 
+SmallVector<unsigned> getContigPerThread(Attribute layout);
+
 SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout);
 
 SmallVector<unsigned> getShapePerCTA(const Attribute &layout);
