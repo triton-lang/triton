@@ -1782,7 +1782,6 @@ struct PrintfOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
     SmallVector<Value, 16> operands;
-    operands.push_back(getThreadId(rewriter, loc));
     for (auto operand : adaptor.getOperands()) {
       auto sub_operands = getElementsFromStruct(loc, operand, rewriter);
       for (auto elem : sub_operands) {
@@ -1797,7 +1796,7 @@ struct PrintfOpConversion
     }
 
     for (size_t i = 1; i < operands.size(); ++i) {
-      os << getFormatSubstr(operands[i]) << ", ";
+      os << ", " << getFormatSubstr(operands[i]);
     }
     llPrintf(formatStr, operands, rewriter);
     rewriter.eraseOp(op);

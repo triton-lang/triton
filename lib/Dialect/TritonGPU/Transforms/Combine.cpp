@@ -59,6 +59,11 @@ public:
       if(dstParentMma.getVersion() == 1 ||
          dstParentMma.getWarpsPerCTA()[1] > 1)
         return mlir::failure();
+      SetVector<Operation*> bwdSlices;
+      mlir::getBackwardSlice(convert.getResult(), &bwdSlices);
+      if(llvm::find_if(bwdSlices, [](Operation *op) { return isa<triton::DotOp>(op); }) == bwdSlices.end())
+        return mlir::failure();
+      
       auto tmpType =
           RankedTensorType::get(dstType.getShape(), dstType.getElementType(), dstParentMma);
       auto tmp = rewriter.create<triton::gpu::ConvertLayoutOp>(
