@@ -22,8 +22,6 @@
 #include "llvm/Linker/Linker.h"
 #include "llvm/Support/SourceMgr.h"
 
-#include <iostream>
-
 namespace mlir {
 namespace triton {
 
