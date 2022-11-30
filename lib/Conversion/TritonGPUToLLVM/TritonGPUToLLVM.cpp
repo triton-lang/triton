@@ -346,7 +346,6 @@ public:
         ValueRange{rewriter.create<::mlir::gpu::ThreadIdOp>(
             loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x)});
     Value threadId = cast.getResult(0);
-    LLVM::gThreadId = threadId;
     return threadId;
   }
 
