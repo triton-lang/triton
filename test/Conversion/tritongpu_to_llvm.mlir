@@ -735,9 +735,13 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_layout_mmav1_block
   func @convert_layout_mmav1_blocked(%arg0: tensor<32x16xf32, #mma>) {
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
     // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
+    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
+    // CHECK: llvm.store
+    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
+    // CHECK: llvm.store
+    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
     // CHECK: nvvm.barrier0
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
