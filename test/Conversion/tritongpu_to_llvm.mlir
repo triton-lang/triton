@@ -956,9 +956,9 @@ func @test_get_program_id(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
 func @test_get_num_program(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
-  // CHECK: nvvm.read.ptx.sreg.ntid.x
-  // CHECK: nvvm.read.ptx.sreg.ntid.y
-  // CHECK: nvvm.read.ptx.sreg.ntid.z
+  // CHECK: nvvm.read.ptx.sreg.nctaid.x
+  // CHECK: nvvm.read.ptx.sreg.nctaid.y
+  // CHECK: nvvm.read.ptx.sreg.nctaid.z
   %blockdimx = tt.get_num_programs {axis=0:i32} : i32
   %blockdimy = tt.get_num_programs {axis=1:i32} : i32
   %blockdimz = tt.get_num_programs {axis=2:i32} : i32
