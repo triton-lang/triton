@@ -1365,7 +1365,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
   SmallVector<int> spw({spwM, 0, 1});    // pad N with 0
 
   int vecA = sharedLayout.getVec();
-  vecA = 4; // DEBUG
 
   auto strides = smemObj.strides;
   Value strideAM = isARow ? strides[0] : i32_val(1);
@@ -1395,7 +1394,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
   // offA0 = add(offA0, cSwizzleOffset);
   SmallVector<Value> offA(numPtrA);
   for (int i = 0; i < numPtrA; i++) {
-    std::vector<Value> args; // DEBUG
     Value offA0I = add(offA0, i32_val(i * (isARow ? 4 : strideRepM)));
     offA0I = udiv(offA0I, i32_val(vecA));
     offA0I = xor_(offA0I, phaseA);
