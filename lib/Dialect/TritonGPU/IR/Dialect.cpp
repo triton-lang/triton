@@ -109,6 +109,8 @@ SmallVector<unsigned> getSizePerThread(const Attribute &layout) {
     if (mmaLayout.getVersion() == 2) {
       return {2, 2};
     } else if (mmaLayout.getVersion() == 1) {
+      // Note: here the definition of sizePerThread is obscure, which doesn't
+      // mean vecSize=4 can be supported in the last dimension.
       return {2, 4};
     } else {
       llvm_unreachable("Unexpected mma version");
@@ -137,6 +139,15 @@ SmallVector<unsigned> getSizePerThread(const Attribute &layout) {
   } else {
     assert(0 && "getSizePerThread not implemented");
     return {};
+  }
+}
+
+SmallVector<unsigned> getContigPerThread(Attribute layout) {
+  if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+    assert(mmaLayout.getVersion() == 1 || mmaLayout.getVersion() == 2);
+    return {1, 2};
+  } else {
+    return getSizePerThread(layout);
   }
 }
 
