@@ -84,6 +84,15 @@ jobs:
           cd python/tests
           pytest
 
+      - name: Run python tests on Volta
+        if: ${{matrix.runner[0] == 'V100'}}
+        run: |
+          cd python/tests
+          # currently, only the following tests available
+          # TODO[Superjomn] Enable fmadot and other tests
+          pytest test_gemm.py::test_gemm
+          pytest test_gemm.py::test_gemm_no_scf
+
       - name: Run CXX unittests
         run: |
           cd python/
