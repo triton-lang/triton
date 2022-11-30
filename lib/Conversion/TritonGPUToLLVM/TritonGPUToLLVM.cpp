@@ -4619,7 +4619,7 @@ private:
     // TODO(Keren): This is a hacky knob that may cause performance regression
     // when decomposition has been performed. We should remove this knob once we
     // have thorough analysis on async wait. Currently, we decompose
-    // `insert_slice_async` into `load` and `insert_slice` without know which
+    // `insert_slice_async` into `load` and `insert_slice` without knowing which
     // `async_wait` is responsible for the `insert_slice_async`. To guarantee
     // correctness, we blindly set the `async_wait` to wait for all async ops.
     //
