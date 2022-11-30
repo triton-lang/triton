@@ -43,6 +43,7 @@ Value gThreadId;
 // Forward declaration for functions from TritonGPUToLLVM.cpp
 void llPrintf(StringRef msg, ValueRange args,
               ConversionPatternRewriter &rewriter);
+#define vprintf llPrintf
 
 void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
                    std::string elem_repr, ConversionPatternRewriter &builder);
@@ -1348,6 +1349,9 @@ Value DotOpMmaV1ConversionHelper::loadA(
   }
 
   Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
+  Value smemBaseBeforeSwizzle = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
+  Value smemBase = smemBaseBeforeSwizzle;
+  //Value smemBase = gep(ptr_ty(f16_ty), smemBaseBeforeSwizzle, cSwizzleOffset);
 
   bool isARow = order[0] != 0;
   bool isAVec4 = !isARow && shape[order[0]] <= 16; // fp16*4 = 16bytes
@@ -1361,6 +1365,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
   SmallVector<int> spw({spwM, 0, 1});    // pad N with 0
 
   int vecA = sharedLayout.getVec();
+  vecA = 4; // DEBUG
 
   auto strides = smemObj.strides;
   Value strideAM = isARow ? strides[0] : i32_val(1);
@@ -1385,15 +1390,23 @@ Value DotOpMmaV1ConversionHelper::loadA(
   Value offA0 = isARow ? offsetAK : offsetAM;
   Value offA1 = isARow ? offsetAM : offsetAK;
   Value phaseA = urem(udiv(offA1, i32_val(perPhaseA)), i32_val(maxPhaseA));
-  offA0 = add(offA0, cSwizzleOffset);
+  //offA0 = add(offA0, cSwizzleOffset);
   SmallVector<Value> offA(numPtrA);
   for (int i = 0; i < numPtrA; i++) {
+    std::vector<Value> args; // DEBUG
     Value offA0I = add(offA0, i32_val(i * (isARow ? 4 : strideRepM)));
+    args.push_back(offA0I);
     offA0I = udiv(offA0I, i32_val(vecA));
+    args.push_back(offA0I);
     offA0I = xor_(offA0I, phaseA);
+    args.push_back(offA0I);
     offA0I = mul(offA0I, i32_val(vecA));
+    args.push_back(offA0I);
     offA[i] = add(mul(offA0I, strideA0), mul(offA1, strideA1));
+    args.push_back(offA[i]);
+    vprintf_array(gThreadId, args, "offA_0i", "%d", rewriter);
   }
+  vprintf_array(gThreadId, offA, "offA_i", "%d", rewriter);
 
   Type f16x2Ty = vec_ty(f16_ty, 2);
   // One thread get 8 elements as result
@@ -1404,21 +1417,22 @@ Value DotOpMmaV1ConversionHelper::loadA(
   SmallVector<Value> ptrA(numPtrA);
 
   std::map<std::pair<int, int>, std::pair<Value, Value>> has;
-  auto smem = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
   for (int i = 0; i < numPtrA; i++)
-    ptrA[i] = gep(ptr_ty(f16_ty), smem, offA[i]);
+    ptrA[i] = gep(ptr_ty(f16_ty), smemBase, offA[i]);
 
   auto instrShape = getMmaInstrShape();
   unsigned numM = std::max<int>(rep[0] * shape[0] / (spw[0] * wpt[0]), 1);
 
+  vprintf("A_smem t-%d %p", {gThreadId, smemBase}, rewriter);
   Type f16PtrTy = ptr_ty(f16_ty);
 
   auto ld = [&](decltype(has) &vals, int m, int k, Value val0, Value val1) {
     vals[{m, k}] = {val0, val1};
   };
   auto loadA = [&](int m, int k) {
+    printf("loadA_param t-0 %d %d\n", m, k);
     int offidx = (isARow ? k / 4 : m) % numPtrA;
-    Value thePtrA = gep(f16PtrTy, smem, offA[offidx]);
+    Value thePtrA = gep(f16PtrTy, smemBase, offA[offidx]);
 
     int stepAM = isARow ? m : m / numPtrA * numPtrA;
     int stepAK = isARow ? k / (numPtrA * vecA) * (numPtrA * vecA) : k;
@@ -1431,7 +1445,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
     Value ha00 = bitcast(extract_element(ha, i32_val(0)), f16x2Ty);
     Value ha01 = bitcast(extract_element(ha, i32_val(1)), f16x2Ty);
     ld(has, m, k, ha00, ha01);
-
     {
       auto get_f16 = [&](Value value, int idx) {
         return extract_element(value, i32_val(idx));
@@ -1456,7 +1469,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
 
   for (unsigned k = 0; k < NK; k += 4)
     for (unsigned m = 0; m < numM / 2; ++m)
-      if (!has.count({m, k}))
         loadA(m, k);
 
   SmallVector<Value> elems;
@@ -1476,7 +1488,6 @@ Value DotOpMmaV1ConversionHelper::loadB(
     Value tensor, const SharedMemoryObject &smemObj, Value thread, Location loc,
     ConversionPatternRewriter &rewriter) const {
   // smem
-  Value smem = smemObj.base;
   auto strides = smemObj.strides;
 
   auto *ctx = rewriter.getContext();
@@ -1495,6 +1506,8 @@ Value DotOpMmaV1ConversionHelper::loadB(
     std::swap(order[0], order[1]);
     std::swap(shape[0], shape[1]);
   }
+
+  Value smem = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
 
   bool isBRow = order[0] != 0;
   bool isBVec4 = isBRow && shape[order[0]] <= 16;
@@ -1523,6 +1536,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
       computeOffsets(thread, false, isBRow, fpw, spw, rep, rewriter, loc);
   if (transB)
     std::swap(offsetBK, offsetBN);
+  vprintf("offBNK t-%d %d %d", {gThreadId, offsetBN, offsetBK}, rewriter);
 
   Value offB0 = isBRow ? offsetBN : offsetBK;
   Value offB1 = isBRow ? offsetBK : offsetBN;
@@ -1537,6 +1551,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
     offB0I = mul(offB0I, i32_val(vecB));
     offB[i] = add(mul(offB0I, strideB0), mul(offB1, strideB1));
   }
+  vprintf_array(gThreadId, offB, "offBs", "%d", rewriter);
 
   Type f16PtrTy = ptr_ty(f16_ty);
   Type f16x2Ty = vec_ty(f16_ty, 2);
@@ -1545,6 +1560,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
   ValueTable hbs;
   for (int i = 0; i < numPtrB; ++i)
     ptrB[i] = gep(ptr_ty(f16_ty), smem, offB[i]);
+  vprintf_array(gThreadId, offB, "ptrB", "%d", rewriter);
 
   auto ld = [&](decltype(hbs) &vals, int m, int k, Value val0, Value val1) {
     vals[{m, k}] = {val0, val1};
@@ -1572,6 +1588,18 @@ Value DotOpMmaV1ConversionHelper::loadB(
         ld(hbs, n + 1, K, hb10, hb11);
       else
         ld(hbs, n, K + 4, hb10, hb11);
+    }
+
+    {
+      auto get_f16 = [&](Value value, int idx) {
+        return extract_element(value, i32_val(idx));
+      };
+      std::vector<Value> args;
+      args.push_back(get_f16(hb00, 0));
+      args.push_back(get_f16(hb00, 1));
+      args.push_back(get_f16(hb01, 0));
+      args.push_back(get_f16(hb01, 1));
+      vprintf_array(gThreadId, args, "hb0x", "%f", rewriter);
     }
   };
 
