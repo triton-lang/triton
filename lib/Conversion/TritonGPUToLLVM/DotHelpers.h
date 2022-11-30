@@ -1432,16 +1432,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
     Value ha00 = bitcast(extract_element(ha, i32_val(0)), f16x2Ty);
     Value ha01 = bitcast(extract_element(ha, i32_val(1)), f16x2Ty);
     ld(has, m, k, ha00, ha01);
-    {
-      auto get_f16 = [&](Value value, int idx) {
-        return extract_element(value, i32_val(idx));
-      };
-      std::vector<Value> args;
-      args.push_back(get_f16(ha00, 0));
-      args.push_back(get_f16(ha00, 1));
-      args.push_back(get_f16(ha01, 0));
-      args.push_back(get_f16(ha01, 1));
-    }
 
     if (vecA > 4) {
       Value ha10 = bitcast(extract_element(ha, i32_val(2)), f16x2Ty);
@@ -1529,8 +1519,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
   Value offB0 = isBRow ? offsetBN : offsetBK;
   Value offB1 = isBRow ? offsetBK : offsetBN;
   Value phaseB = urem(udiv(offB1, i32_val(perPhaseB)), i32_val(maxPhaseB));
-  // Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
-  // offB0 = add(offB0, cSwizzleOffset);
+
   SmallVector<Value> offB(numPtrB);
   for (int i = 0; i < numPtrB; ++i) {
     Value offB0I = add(offB0, i32_val(i * (isBRow ? strideRepN : 4)));

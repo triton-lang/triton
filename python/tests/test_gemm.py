@@ -1,5 +1,3 @@
-import pickle
-
 import pytest
 import torch
 from torch.testing import assert_close
@@ -174,8 +172,8 @@ def get_proper_err(a, b, golden):
     [128, 64, 128, 4, 128, 64, 128, False, False],
     [16, 16, 16, 16, 16, 16, 16, False, False],  # wpt overflow issue
     # K-Forloop
-    [32, 32, 64, 4, 32, 32, 32, False, False],  # Single shared encoding
-    [16, 16, 128, 4, 16, 16, 16, False, False],  # Single shared encoding and small k
+    [32, 32, 64, 4, 32, 32, 32, False, False], # Single shared encoding
+    [16, 16, 128, 4, 16, 16, 16, False, False], # Single shared encoding and small k
     [64, 32, 128, 4, 64, 32, 64, False, False],
     [128, 16, 128, 4, 128, 16, 32, False, False],
     [32, 16, 128, 4, 32, 16, 32, False, False],
@@ -205,13 +203,6 @@ def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLO
         b = torch.randn((SIZE_N, SIZE_K), device='cuda', dtype=torch.float16).T
     else:
         b = torch.randn((SIZE_K, SIZE_N), device='cuda', dtype=torch.float16)
-
-    with open('a.pkl', 'rb') as f:
-        a = pickle.load(f)
-    with open('b.pkl', 'rb') as f:
-        b = pickle.load(f)
-    print('a', a)
-    print('b', b)
 
     c = torch.empty((SIZE_M, SIZE_N), device=a.device, dtype=torch.float32)
     grid = lambda META: (1, )

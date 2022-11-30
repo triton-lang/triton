@@ -1345,12 +1345,12 @@ def make_hash(fn, **kwargs):
     return hashlib.md5((Path(fn).read_text() + triton.runtime.jit.version_key()).encode("utf-8")).hexdigest()
 
 
-# - ^\s*func\s+ : match the start of the string, any leading whitespace, the keyword func,
+# - ^\s*func\s+ : match the start of the string, any leading whitespace, the keyword func, 
 #    and any following whitespace
 # - (public\s+)? : optionally match the keyword public and any following whitespace
-# - (@\w+) : match an @ symbol followed by one or more word characters
+# - (@\w+) : match an @ symbol followed by one or more word characters 
 #   (letters, digits, or underscores), and capture it as group 1 (the function name)
-# - (\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\)) : match a pair of parentheses enclosing
+# - (\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\)) : match a pair of parentheses enclosing 
 #   zero or more arguments separated by commas, and capture it as group 2 (the argument list)
 mlir_prototype_pattern = r'^\s*func\s+(?:public\s+)?(@\w+)(\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*\{\s*$'
 ptx_prototype_pattern = r"\.(?:visible|extern)\s+\.(?:entry|func)\s+(\w+)\s*\(([^)]*)\)"
@@ -1382,20 +1382,20 @@ def compile(fn, **kwargs):
     extern_libs = kwargs.get("extern_libs", dict())
     device = kwargs.get("device", torch.cuda.current_device())
     capability = torch.cuda.get_device_capability()
-    capability = capability[0] * 10 + capability[1]
+    capability = capability[0]*10 + capability[1]
     # build compilation stages
     stages = {
-        "ast": (lambda path: fn, None),
-        "ttir": (lambda path: _triton.ir.parse_mlir_module(path, context),
-                 lambda src: ast_to_ttir(src, signature, configs[0], constants)),
-        "ttgir": (lambda path: _triton.ir.parse_mlir_module(path, context),
-                  lambda src: ttir_to_ttgir(src, num_warps, num_stages, capability)),
-        "llir": (lambda path: Path(path).read_bytes(),
-                 lambda src: ttgir_to_llir(src, extern_libs, capability)),
-        "ptx": (lambda path: Path(path).read_text(),
-                lambda src: llir_to_ptx(src, capability)),
-        "cubin": (lambda path: Path(path).read_bytes(),
-                  lambda src: ptx_to_cubin(src, capability))
+      "ast" : (lambda path: fn, None),
+      "ttir": (lambda path: _triton.ir.parse_mlir_module(path, context), 
+               lambda src: ast_to_ttir(src, signature, configs[0], constants)),
+      "ttgir": (lambda path: _triton.ir.parse_mlir_module(path, context), 
+                lambda src: ttir_to_ttgir(src, num_warps, num_stages, capability)),
+      "llir": (lambda path: Path(path).read_bytes(), 
+              lambda src: ttgir_to_llir(src, extern_libs, capability)),
+      "ptx":  (lambda path: Path(path).read_text(), 
+              lambda src: llir_to_ptx(src, capability)),
+      "cubin": (lambda path: Path(path).read_bytes(), 
+               lambda src: ptx_to_cubin(src, capability))
     }
     # find out the signature of the function
     if isinstance(fn, triton.runtime.JITFunction):
@@ -1430,7 +1430,7 @@ def compile(fn, **kwargs):
     if isinstance(fn, triton.runtime.JITFunction):
         name, ext = fn.__name__, "ast"
     else:
-        name, ext = os.path.basename(fn).split(".")
+      name, ext = os.path.basename(fn).split(".")
 
     # load metadata if any
     metadata = None
@@ -1438,34 +1438,34 @@ def compile(fn, **kwargs):
         with open(fn_cache_manager._make_path(f"{name}.json")) as f:
             metadata = json.load(f)
     else:
-        metadata = {"num_warps": num_warps, "num_stages": num_stages, "ctime": dict()}
-        if ext == "ptx":
-            assert "shared" in kwargs, "ptx compilation must provide shared memory size"
-            metadata["shared"] = kwargs["shared"]
+      metadata = {"num_warps": num_warps, "num_stages": num_stages, "ctime": dict()}
+      if ext == "ptx":
+        assert "shared" in kwargs, "ptx compilation must provide shared memory size"
+        metadata["shared"] = kwargs["shared"]
 
     first_stage = list(stages.keys()).index(ext)
     asm = dict()
     module = fn
     # run compilation pipeline  and populate metadata
     for ir, (parse, compile) in list(stages.items())[first_stage:]:
-        path = fn_cache_manager._make_path(f"{name}.{ir}")
-        if ir == ext:
-            next_module = parse(fn)
-        elif os.path.exists(path) and\
-                ir in metadata["ctime"] and\
-                os.path.getctime(path) == metadata["ctime"][ir]:
-            next_module = parse(path)
-        else:
-            next_module = compile(module)
-            fn_cache_manager.put(next_module, f"{name}.{ir}")
-        if os.path.exists(path):
-            metadata["ctime"][ir] = os.path.getctime(path)
-        asm[ir] = next_module if ir == "cubin" else str(next_module)
-        if ir == "llir" and "shared" not in metadata:
-            metadata["shared"] = _triton.get_shared_memory_size(module)
-        if ir == "ptx":
-            metadata["name"] = ptx_get_kernel_name(next_module)
-        module = next_module
+      path = fn_cache_manager._make_path(f"{name}.{ir}")
+      if ir == ext:
+        next_module = parse(fn)
+      elif os.path.exists(path) and\
+           ir in metadata["ctime"] and\
+           os.path.getctime(path) == metadata["ctime"][ir]:
+        next_module = parse(path)
+      else:
+        next_module = compile(module)
+        fn_cache_manager.put(next_module, f"{name}.{ir}")
+      if os.path.exists(path):
+        metadata["ctime"][ir] = os.path.getctime(path)
+      asm[ir] = next_module if ir == "cubin" else str(next_module)
+      if ir == "llir" and "shared" not in metadata:
+        metadata["shared"] = _triton.get_shared_memory_size(module)
+      if ir == "ptx":
+        metadata["name"] = ptx_get_kernel_name(next_module)
+      module = next_module
     # write-back metadata
     fn_cache_manager.put(json.dumps(metadata), f"{name}.json", binary=False)
     # return handle to compiled kernel
