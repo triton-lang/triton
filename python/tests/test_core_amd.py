@@ -313,3 +313,35 @@ def test_bitwise_op(dtype_x, dtype_y, op, device='cuda'):
         assert re.match('invalid operands of type', str(exc_info.value.__cause__))
     else:
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device)
+
+# ---------------
+# test compare ops
+# ---------------
+ops = ['==', '!=', '>', '<', '>=', '<=']
+
+
+@pytest.mark.parametrize("dtype_x, dtype_y, op, mode_x, mode_y",
+                         # real
+                         [
+                             (dtype_x, dtype_y, op, 'real', 'real')
+                             for op in ops
+                             for dtype_x in dtypes
+                             for dtype_y in dtypes
+                         ] +
+                         # NaNs
+                         [('float32', 'float32', op, mode_x, mode_y)
+                             for op in ops
+                             for mode_x, mode_y in [('nan', 'real'),
+                                                    ('real', 'nan'),
+                                                    ('nan', 'nan')]
+
+                          ])
+def test_compare_op(dtype_x, dtype_y, op, mode_x, mode_y, device='cuda'):
+    expr = f'x {op} y'
+    if (dtype_x in uint_dtypes and dtype_y in int_dtypes and _bitwidth(dtype_x) >= _bitwidth(dtype_y)):
+        numpy_expr = f'x.astype(np.{dtype_x}) {op} y.astype(np.{dtype_x})'
+    elif (dtype_y in uint_dtypes and dtype_x in int_dtypes and _bitwidth(dtype_y) >= _bitwidth(dtype_x)):
+        numpy_expr = f'x.astype(np.{dtype_y}) {op} y.astype(np.{dtype_y})'
+    else:
+        numpy_expr = None
+    _test_binary(dtype_x, dtype_y, expr, numpy_expr, mode_x=mode_x, mode_y=mode_y, device=device)
