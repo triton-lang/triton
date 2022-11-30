@@ -16,7 +16,8 @@ if __name__ == '__main__':
                         help="Target format, one of: " + ', '.join(VALID_FORMATS))
     parser.add_argument('--sm', type=int, help="Compute capability to compile for")
     parser.add_argument('--ptx-version', type=int, help="PTX version to compile for")
-    parser.add_argument('--gfx', type=int, help="AMDGPU target to compile for")
+    parser.add_argument('--gfx', type=str, help="AMDGPU target to compile for")
+
     # parse the args
     args = parser.parse_args()
 
@@ -54,13 +55,17 @@ if __name__ == '__main__':
             raise argparse.ArgumentError(None, "Must specify --sm for PTX compilation")
         if not args.ptx_version:
             raise argparse.ArgumentError(None, "Must specify --ptx-version for PTX compilation")
+
         # llvm-ir -> ptx
         module = triton.compiler.llir_to_ptx(module, compute_capability=args.sm, ptx_version=args.ptx_version)
+        assert args.target == 'ptx'
+        print(module)
+        exit(0)
 
+    # llvm-ir -> amdgcn
     if args.target == 'amdgcn':
         if not args.gfx:
             raise argparse.ArgumentError(None, "Must specify --gfx for AMDGCN compilation")
-        # llvm-ir -> amdgcn
-        module = triton.compiler.llir_to_amdgcn(module, args.gfx)
-
-    print(module)
+        module, hsaco_path = triton.compiler.llir_to_amdgcn(module, args.gfx)
+        print(module)
+        exit(0)

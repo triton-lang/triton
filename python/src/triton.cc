@@ -1315,23 +1315,6 @@ void init_triton_translation(py::module &m) {
       },
       ret::take_ownership);
 
-  m.def(
-      "translate_llvmir_to_amdgcn",
-      [](const std::string llvmIR, int gfx_number) -> std::string {
-        // create LLVM module from C++
-        llvm::LLVMContext context;
-        std::unique_ptr<llvm::MemoryBuffer> buffer =
-            llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
-        llvm::SMDiagnostic error;
-        std::unique_ptr<llvm::Module> module =
-            llvm::parseIR(buffer->getMemBufferRef(), error, context);
-        // translate module to AMDGCN
-        std::string target = "gfx" + std::to_string(gfx_number);
-        auto gcnCode = triton::translateLLVMIRToAMDGCN(*module, target);
-        return gcnCode;
-      },
-      ret::take_ownership);
-
   m.def("compile_ptx_to_cubin",
         [](const std::string &ptxCode, const std::string &ptxasPath,
            int capability) -> py::object {
@@ -1375,6 +1358,23 @@ void init_triton_translation(py::module &m) {
            const std::vector<std::string> &paths) {
           ::mlir::triton::addExternalLibs(op, names, paths);
         });
+
+ m.def(
+      "translate_llvmir_to_amdgcn",
+      [](const std::string llvmIR, std::string cc) -> std::tuple<std::string, std::string> {
+        // create LLVM module from C++
+        llvm::LLVMContext context;
+        std::unique_ptr<llvm::MemoryBuffer> buffer =
+            llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
+        llvm::SMDiagnostic error;
+        std::unique_ptr<llvm::Module> module =
+            llvm::parseIR(buffer->getMemBufferRef(), error, context);
+        // translate module to HSACO
+        auto hsacoCode =
+            triton::translateLLVMIRToAMDGCN(*module, cc);
+        return hsacoCode;
+      },
+      ret::take_ownership);
 }
 
 void init_triton(py::module &m) {

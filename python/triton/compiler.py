@@ -901,9 +901,6 @@ def ttgir_to_llir(mod, extern_libs):
         add_external_libs(mod, extern_libs)
     return _triton.translate_triton_gpu_to_llvmir(mod)
 
-def llir_to_amdgcn(mod: Any, gfx_number: int):
-    return _triton.translate_llvmir_to_amdgcn(mod, gfx_number)
-
 def llir_to_ptx(mod: Any, compute_capability: int = None, ptx_version: int = None) -> Tuple[str, int]:
     '''
     Translate TritonGPU module to PTX code.
@@ -947,6 +944,29 @@ def ptx_get_kernel_name(ptx: str) -> str:
         line = line.strip()
         if line.startswith('// .globl'):
             return line.split()[-1]
+
+def amdgcn_get_kernel_name(amdgcn: str) -> str:
+    '''
+    Get kernel name from AMDGCN code.
+    This Kernel name is required when launching the kernel.
+    '''
+    # There is a name mangling in PTX codegen, so the original kernel names in Triton IR are not available in PTX/cubin.
+    assert amdgcn
+    for line in amdgcn.split('\n'):
+        line = line.strip()
+        if line.startswith('.globl'):
+            return line.split()[-1].strip()
+
+
+def llir_to_amdgcn(mod: Any, gcn_arch: str) -> Tuple[str, str]:
+    '''
+    Translate TritonGPU module to HSACO code.
+    :param mod: a TritonGPU dialect module
+    :return:
+        - AMDGCN code
+        - Path to HSACO object
+    '''
+    return _triton.translate_llvmir_to_amdgcn(mod, gcn_arch)
 
 
 @functools.lru_cache()

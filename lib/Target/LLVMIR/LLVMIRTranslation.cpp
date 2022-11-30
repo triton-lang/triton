@@ -54,15 +54,16 @@ void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata) {
 #endif
 
   if (metadata.is_kernel) {
-#if defined(USE_ROCM)
-    func->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
-#else // defined(USE_ROCM)
+#ifndef USE_ROCM
     llvm::Metadata *md_args[] = {
         llvm::ValueAsMetadata::get(func), llvm::MDString::get(ctx, "kernel"),
         llvm::ValueAsMetadata::get(
             llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx), 1))};
     module->getOrInsertNamedMetadata("nvvm.annotations")
         ->addOperand(llvm::MDNode::get(ctx, md_args));
+#else // AMDGCN
+    func->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
+    func->addFnAttr("amdgpu-flat-work-group-size", "1, 1024");
 #endif
   }
 }
