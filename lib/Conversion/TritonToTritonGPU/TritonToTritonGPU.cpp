@@ -286,8 +286,8 @@ struct TritonAtomicCASPattern
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOpWithNewOp<triton::AtomicCASOp>(
-        op, typeConverter->convertType(op.getType()), 
-        adaptor.ptr(), adaptor.cmp(), adaptor.val());
+        op, typeConverter->convertType(op.getType()), adaptor.ptr(),
+        adaptor.cmp(), adaptor.val());
     return success();
   }
 };
