@@ -1353,7 +1353,7 @@ void init_triton_translation(py::module &m) {
         if (!module)
           llvm::report_fatal_error(
               "failed to parse IR: " + error.getMessage() +
-              "lineno: " + std::to_string(error.getLineNo()));
+              " lineno: " + std::to_string(error.getLineNo()));
 
         // translate module to PTX
         auto ptxCode =
