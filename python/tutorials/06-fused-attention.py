@@ -196,7 +196,6 @@ def _bwd_kernel(
 
 
 empty = torch.empty(128, device="cuda")
-# _fwd_kernel = triton.compile("./flash-attention.ptx", shared=32768)
 class _attention(torch.autograd.Function):
 
     @staticmethod
@@ -226,15 +225,6 @@ class _attention(torch.autograd.Function):
             BLOCK_DMODEL=Lk, num_warps=num_warps,
             num_stages=1,
         )
-        # _fwd_kernel[grid](
-        #     q.data_ptr(), k.data_ptr(), v.data_ptr(), sm_scale,
-        #     tmp.data_ptr(), L.data_ptr(), m.data_ptr(),
-        #     o.data_ptr(),
-        #     q.stride(0), q.stride(1), q.stride(2),
-        #     k.stride(0), k.stride(1), k.stride(2),
-        #     v.stride(0), v.stride(1), v.stride(2),
-        #     o.stride(0), o.stride(1), o.stride(2),
-        #     q.shape[0], q.shape[1], q.shape[2])
 
         ctx.save_for_backward(q, k, v, o, L, m)
         ctx.BLOCK = BLOCK
