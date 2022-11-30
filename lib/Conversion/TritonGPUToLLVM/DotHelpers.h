@@ -42,10 +42,6 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 // Forward declaration for functions from TritonGPUToLLVM.cpp
 void llPrintf(StringRef msg, ValueRange args,
               ConversionPatternRewriter &rewriter);
-#define vprintf llPrintf
-
-void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
-                   std::string elem_repr, ConversionPatternRewriter &builder);
 
 // Helper for conversion of DotOp with mma<version=1>, that is sm<80
 struct DotOpMmaV1ConversionHelper {
@@ -970,12 +966,13 @@ struct MMA16816ConversionHelper {
     if (aTensorTy.getEncoding().isa<SharedEncodingAttr>()) {
       Value warpM = getWarpM(shape[0]);
       // load from smem
-      int wpt = std::min<int>(mmaLayout.getWarpsPerCTA()[0], shape[0] / matShapeM);
-      loadFn = getLoadMatrixFn(
-          tensor, smemObj, mmaLayout, wpt /*wpt*/,
-          1 /*kOrder*/, {mmaInstrM, mmaInstrK} /*instrShape*/,
-          {matShapeM, matShapeK} /*matShape*/, warpM /*warpId*/, ha /*vals*/,
-          true /*isA*/);
+      int wpt =
+          std::min<int>(mmaLayout.getWarpsPerCTA()[0], shape[0] / matShapeM);
+      loadFn =
+          getLoadMatrixFn(tensor, smemObj, mmaLayout, wpt /*wpt*/, 1 /*kOrder*/,
+                          {mmaInstrM, mmaInstrK} /*instrShape*/,
+                          {matShapeM, matShapeK} /*matShape*/, warpM /*warpId*/,
+                          ha /*vals*/, true /*isA*/);
     } else if (aTensorTy.getEncoding().isa<BlockedEncodingAttr>()) {
       // load from registers, used in gemm fuse
       // TODO(Superjomn) Port the logic.
@@ -1014,12 +1011,13 @@ struct MMA16816ConversionHelper {
     int numRepN = getNumRepN(tensorTy, shape[1]);
 
     Value warpN = getWarpN(shape[1]);
-    int wpt = std::min<int>(mmaLayout.getWarpsPerCTA()[1], shape[1] / matShapeN);
-    auto loadFn = getLoadMatrixFn(
-        tensor, smemObj, mmaLayout,  wpt /*wpt*/,
-        0 /*kOrder*/, {mmaInstrK, mmaInstrN} /*instrShape*/,
-        {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/, hb /*vals*/,
-        false /*isA*/);
+    int wpt =
+        std::min<int>(mmaLayout.getWarpsPerCTA()[1], shape[1] / matShapeN);
+    auto loadFn =
+        getLoadMatrixFn(tensor, smemObj, mmaLayout, wpt /*wpt*/, 0 /*kOrder*/,
+                        {mmaInstrK, mmaInstrN} /*instrShape*/,
+                        {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/,
+                        hb /*vals*/, false /*isA*/);
 
     for (int n = 0; n < std::max(numRepN / 2, 1); ++n) {
       for (int k = 0; k < numRepK; ++k)

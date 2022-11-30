@@ -290,6 +290,3 @@ def test_gemm_fmadot(M, N, K, num_warps, block_M, block_N, block_K):
     golden = torch.matmul(a, b)
     golden_abs_err, golden_rel_err = get_proper_err(a, b, golden)
     torch.testing.assert_close(c, golden, rtol=max(1e-4, 1.5 * golden_rel_err), atol=max(1e-4, 1.5 * golden_abs_err))
-
-
-test_gemm(*[16, 16, 16, 1, 16, 16, 16, False, False])
