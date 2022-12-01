@@ -1368,7 +1368,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
     }
   }*/
 
-
   /*
   { // DEBUG
     for (int i = 0; i < 16*16; i++) {
@@ -1380,7 +1379,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
     }
   }
    */
-
 
   bool isARow = order[0] != 0;
   bool isAVec4 = !isARow && shape[order[0]] <= 16; // fp16*4 = 16bytes
@@ -1543,16 +1541,13 @@ Value DotOpMmaV1ConversionHelper::loadB(
   Value smem = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
 
   {
-    for (int i = 0; i < 16*16; i++) {
+    for (int i = 0; i < 16 * 16; i++) {
       Value addr = gep(ptr_ty(f16_ty), smem, i32_val(i));
       addr = bitcast(addr, ptr_ty(f16_ty));
       Value elem = load(addr);
       vprintf("B.smem t-%d %f", {gThreadId, elem}, rewriter);
     }
   }
-
-
-
 
   bool isBRow = order[0] != 0;
   bool isBVec4 = isBRow && shape[order[0]] <= 16;
@@ -1585,14 +1580,10 @@ Value DotOpMmaV1ConversionHelper::loadB(
     std::swap(offsetBK, offsetBN);
   vprintf("offBNK t-%d %d %d", {gThreadId, offsetBN, offsetBK}, rewriter);
 
-
-
-
   Value offB0 = isBRow ? offsetBN : offsetBK;
   Value offB1 = isBRow ? offsetBK : offsetBN;
   Value phaseB = urem(udiv(offB1, i32_val(perPhaseB)), i32_val(maxPhaseB));
   Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
-
 
   offB0 = add(offB0, cSwizzleOffset);
   SmallVector<Value> offB(numPtrB);
