@@ -151,6 +151,10 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
   //  attr-dict `:` type($src) `->` type($dst)
   //}];
 
+  let extraClassDeclaration = [{
+      static DenseSet<unsigned> getEligibleLoadByteWidth(int computeCapability);
+  }];
+
   // The custom parser could be replaced with oilist in LLVM-16
   let parser = [{ return parseInsertSliceAsyncOp(parser, result); }];
 

@@ -241,7 +241,8 @@ mlir::LogicalResult mlir::triton::ReduceOp::inferReturnTypes(
   auto argTy = arg.getType().cast<RankedTensorType>();
   auto argEltTy = argTy.getElementType();
   auto i32Ty = IntegerType::get(argEltTy.getContext(), 32);
-  auto redOp = attributes.get("redOp").cast<mlir::triton::RedOpAttr>().getValue();
+  auto redOp =
+      attributes.get("redOp").cast<mlir::triton::RedOpAttr>().getValue();
   bool withIndex = mlir::triton::ReduceOp::withIndex(redOp);
   auto retEltTy = withIndex ? i32Ty : argEltTy;
   auto retShape = argTy.getShape().vec();
