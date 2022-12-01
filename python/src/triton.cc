@@ -1251,13 +1251,12 @@ void init_triton_ir(py::module &&m) {
                                        llvm::StringRef(prefix)),
                  values);
            })
-       // Undef
-          .def("create_undef",
-               [](mlir::OpBuilder &self, mlir::Type &type) -> mlir::Value {
-               auto loc = self.getUnknownLoc();
-               return self.create<::mlir::LLVM::UndefOp>(loc, type);
-          })    
-       ;
+      // Undef
+      .def("create_undef",
+           [](mlir::OpBuilder &self, mlir::Type &type) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<::mlir::LLVM::UndefOp>(loc, type);
+           });
 
   py::class_<mlir::PassManager>(m, "pass_manager")
       .def(py::init<mlir::MLIRContext *>())
