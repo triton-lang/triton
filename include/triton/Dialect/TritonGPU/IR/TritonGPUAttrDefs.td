@@ -96,7 +96,7 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
         // https://github.com/openai/triton/blob/master/lib/codegen/analysis/layout.cc#L209)
         if (version == 1) {
           int maxPhase = (order[inner] == 1 ? 8 : 4) / perPhase;
-          return $_get(context, 1, perPhase, maxPhase, order);
+          return $_get(context, 4, perPhase, maxPhase, order);
         } 
 
         // ---- begin version 2 ----
