@@ -276,4 +276,46 @@ ChangeResult AxisInfoAnalysis::visitOperation(
   return result;
 }
 
+unsigned AxisInfoAnalysis::getPtrVectorSize(Value ptr) {
+  auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+  if (!tensorTy)
+    return 1;
+  auto layout = tensorTy.getEncoding();
+  auto shape = tensorTy.getShape();
+
+  // Here order should be ordered by contiguous first, so the first element
+  // should have the largest contiguous.
+  auto order = triton::gpu::getOrder(layout);
+  unsigned align = getPtrAlignment(ptr);
+
+  unsigned contigPerThread = triton::gpu::getSizePerThread(layout)[order[0]];
+  unsigned vec = std::min(align, contigPerThread);
+  vec = std::min<unsigned>(shape[order[0]], vec);
+
+  return vec;
+}
+
+unsigned AxisInfoAnalysis::getPtrAlignment(Value ptr) {
+  auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+  if (!tensorTy)
+    return 1;
+  auto axisInfo = lookupLatticeElement(ptr)->getValue();
+  auto layout = tensorTy.getEncoding();
+  auto order = triton::gpu::getOrder(layout);
+  unsigned maxMultiple = axisInfo.getDivisibility(order[0]);
+  unsigned maxContig = axisInfo.getContiguity(order[0]);
+  unsigned alignment = std::min(maxMultiple, maxContig);
+  return alignment;
+}
+
+unsigned AxisInfoAnalysis::getMaskAlignment(Value mask) {
+  auto tensorTy = mask.getType().dyn_cast<RankedTensorType>();
+  if (!tensorTy)
+    return 1;
+  auto maskOrder = triton::gpu::getOrder(tensorTy.getEncoding());
+  auto maskAxis = lookupLatticeElement(mask)->getValue();
+  auto alignment = std::max<unsigned>(maskAxis.getConstancy(maskOrder[0]), 1);
+  return alignment;
+}
+
 } // namespace mlir
