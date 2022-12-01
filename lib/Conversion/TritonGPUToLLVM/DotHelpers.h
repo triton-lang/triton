@@ -973,12 +973,13 @@ struct MMA16816ConversionHelper {
     if (aTensorTy.getEncoding().isa<SharedEncodingAttr>()) {
       Value warpM = getWarpM(shape[0]);
       // load from smem
-      int wpt = std::min<int>(mmaLayout.getWarpsPerCTA()[0], shape[0] / matShapeM);
-      loadFn = getLoadMatrixFn(
-          tensor, smemObj, mmaLayout, wpt /*wpt*/,
-          1 /*kOrder*/, {mmaInstrM, mmaInstrK} /*instrShape*/,
-          {matShapeM, matShapeK} /*matShape*/, warpM /*warpId*/, ha /*vals*/,
-          true /*isA*/);
+      int wpt =
+          std::min<int>(mmaLayout.getWarpsPerCTA()[0], shape[0] / matShapeM);
+      loadFn =
+          getLoadMatrixFn(tensor, smemObj, mmaLayout, wpt /*wpt*/, 1 /*kOrder*/,
+                          {mmaInstrM, mmaInstrK} /*instrShape*/,
+                          {matShapeM, matShapeK} /*matShape*/, warpM /*warpId*/,
+                          ha /*vals*/, true /*isA*/);
     } else if (aTensorTy.getEncoding().isa<BlockedEncodingAttr>()) {
       // load from registers, used in gemm fuse
       // TODO(Superjomn) Port the logic.
@@ -1017,12 +1018,13 @@ struct MMA16816ConversionHelper {
     int numRepN = getNumRepN(tensorTy, shape[1]);
 
     Value warpN = getWarpN(shape[1]);
-    int wpt = std::min<int>(mmaLayout.getWarpsPerCTA()[1], shape[1] / matShapeN);
-    auto loadFn = getLoadMatrixFn(
-        tensor, smemObj, mmaLayout,  wpt /*wpt*/,
-        0 /*kOrder*/, {mmaInstrK, mmaInstrN} /*instrShape*/,
-        {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/, hb /*vals*/,
-        false /*isA*/);
+    int wpt =
+        std::min<int>(mmaLayout.getWarpsPerCTA()[1], shape[1] / matShapeN);
+    auto loadFn =
+        getLoadMatrixFn(tensor, smemObj, mmaLayout, wpt /*wpt*/, 0 /*kOrder*/,
+                        {mmaInstrK, mmaInstrN} /*instrShape*/,
+                        {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/,
+                        hb /*vals*/, false /*isA*/);
 
     for (int n = 0; n < std::max(numRepN / 2, 1); ++n) {
       for (int k = 0; k < numRepK; ++k)
@@ -1351,9 +1353,11 @@ Value DotOpMmaV1ConversionHelper::loadA(
   }
 
   Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
-  Value smemBaseBeforeSwizzle = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
-  //Value smemBase = smemBaseBeforeSwizzle;
-  Value smemBase = gep(ptr_ty(f16_ty), smemBaseBeforeSwizzle, cSwizzleOffset);
+  Value smemBaseBeforeSwizzle =
+      smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
+  Value smemBase = smemBaseBeforeSwizzle;
+  // Value smemBase = gep(ptr_ty(f16_ty), smemBaseBeforeSwizzle,
+  // cSwizzleOffset);
 
   bool isARow = order[0] != 0;
   bool isAVec4 = !isARow && shape[order[0]] <= 16; // fp16*4 = 16bytes
@@ -1367,7 +1371,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
   SmallVector<int> spw({spwM, 0, 1});    // pad N with 0
 
   int vecA = sharedLayout.getVec();
-  vecA = 4; // DEBUG
+  vecA = 4;
 
   auto strides = smemObj.strides;
   Value strideAM = isARow ? strides[0] : i32_val(1);
@@ -1394,7 +1398,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
   Value offA0 = isARow ? offsetAK : offsetAM;
   Value offA1 = isARow ? offsetAM : offsetAK;
   Value phaseA = urem(udiv(offA1, i32_val(perPhaseA)), i32_val(maxPhaseA));
-  //offA0 = add(offA0, cSwizzleOffset);
+  // offA0 = add(offA0, cSwizzleOffset);
   SmallVector<Value> offA(numPtrA);
   for (int i = 0; i < numPtrA; i++) {
     std::vector<Value> args; // DEBUG
@@ -1443,6 +1447,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
     Value offset = add(mul(i32_val(stepAM * strideRepM), strideAM),
                        mul(i32_val(stepAK), strideAK));
     Value pa = gep(f16PtrTy, thePtrA, offset);
+    vprintf("pa t-%d %d", {gThreadId, pa}, rewriter);
     Type aPtrTy = ptr_ty(vec_ty(i32_ty, std::max<int>(vecA / 2, 1)), 3);
     Value ha = load(bitcast(pa, aPtrTy));
     // record lds that needs to be moved
@@ -1473,7 +1478,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
 
   for (unsigned k = 0; k < NK; k += 4)
     for (unsigned m = 0; m < numM / 2; ++m)
-        loadA(m, k);
+      loadA(m, k);
 
   SmallVector<Value> elems;
   elems.reserve(has.size() * 2);
@@ -1520,6 +1525,8 @@ Value DotOpMmaV1ConversionHelper::loadB(
   SmallVector<int> rep({0, 2 * packSize1, 1});       // pad M with 0
   SmallVector<int> spw({0, fpw[1] * 4 * rep[1], 1}); // pad M with 0
   int vecB = sharedLayout.getVec();
+  vecB = 4; // DEBUG
+
   Value strideBN = isBRow ? i32_val(1) : strides[1];
   Value strideBK = isBRow ? strides[0] : i32_val(1);
   Value strideB0 = isBRow ? strideBN : strideBK;
@@ -1564,6 +1571,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
   ValueTable hbs;
   for (int i = 0; i < numPtrB; ++i)
     ptrB[i] = gep(ptr_ty(f16_ty), smem, offB[i]);
+
   vprintf_array(gThreadId, offB, "ptrB", "%d", rewriter);
 
   auto ld = [&](decltype(hbs) &vals, int m, int k, Value val0, Value val1) {
@@ -1579,6 +1587,8 @@ Value DotOpMmaV1ConversionHelper::loadB(
     Value offset = add(mul(i32_val(stepBN * strideRepN), strideBN),
                        mul(i32_val(stepBK), strideBK));
     Value pb = gep(f16PtrTy, thePtrB, offset);
+    vprintf("pb t-%d %d", {gThreadId, pb}, rewriter);
+
     Value hb =
         load(bitcast(pb, ptr_ty(vec_ty(i32_ty, std::max(vecB / 2, 1)), 3)));
     // record lds that needs to be moved
