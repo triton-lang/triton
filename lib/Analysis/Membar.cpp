@@ -44,7 +44,7 @@ void MembarAnalysis::dfsOperation(Operation *operation,
 
     traverseRegions();
     if (isa<scf::ForOp>(operation)) {
-      // scf.for's can have two possible inputs: the init value and the
+      // scf.for can have two possible inputs: the init value and the
       // previous iteration's result. Although we've applied alias analysis,
       // there could be unsynced memory accesses on reused memories.
       // For example, consider the following code:
