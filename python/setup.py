@@ -146,6 +146,8 @@ class CMakeBuild(build_ext):
             "-DLLVM_EXTERNAL_LIT=" + lit_dir
         ] + thirdparty_cmake_args
 
+        print('\n'.join(cmake_args))
+
         # configuration
         cfg = get_build_type()
         build_args = ["--config", cfg]

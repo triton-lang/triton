@@ -43,7 +43,7 @@ Value gThreadId;
 // Forward declaration for functions from TritonGPUToLLVM.cpp
 void llPrintf(StringRef msg, ValueRange args,
               ConversionPatternRewriter &rewriter);
-#define vprintf llPrintf
+#define vprintf LLVM::llPrintf
 
 void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
                    std::string elem_repr, ConversionPatternRewriter &builder);
@@ -1352,8 +1352,8 @@ Value DotOpMmaV1ConversionHelper::loadA(
 
   Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
   Value smemBaseBeforeSwizzle = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
-  Value smemBase = smemBaseBeforeSwizzle;
-  //Value smemBase = gep(ptr_ty(f16_ty), smemBaseBeforeSwizzle, cSwizzleOffset);
+  //Value smemBase = smemBaseBeforeSwizzle;
+  Value smemBase = gep(ptr_ty(f16_ty), smemBaseBeforeSwizzle, cSwizzleOffset);
 
   bool isARow = order[0] != 0;
   bool isAVec4 = !isARow && shape[order[0]] <= 16; // fp16*4 = 16bytes
@@ -1380,6 +1380,8 @@ Value DotOpMmaV1ConversionHelper::loadA(
 
   auto [offsetAM, offsetAK, _0, _1] =
       computeOffsets(thread, isARow, false, fpw, spw, rep, rewriter, loc);
+  if (transA)
+    std::swap(offsetAM, offsetAK);
 
   // swizzling
   int perPhaseA = sharedLayout.getPerPhase();

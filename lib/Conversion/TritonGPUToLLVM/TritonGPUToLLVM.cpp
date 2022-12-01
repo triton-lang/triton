@@ -64,7 +64,6 @@ static StringRef getStructAttrsAttrName() { return "llvm.struct_attrs"; }
 // A helper function for using printf in LLVM conversion.
 void llPrintf(StringRef msg, ValueRange args,
               ConversionPatternRewriter &rewriter);
-#define vprintf llPrintf
 void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
                    std::string elem_repr, ConversionPatternRewriter &builder) {
   std::string fmt = info + " t-%d ";
@@ -3597,11 +3596,42 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
 
     mma(resOprs, AOprs, BOprs, COprs);
 
+
+
     Value res = builder.launch(rewriter, loc, helper.getMmaRetType(ATensorTy));
 
     auto getIntAttr = [&](int v) {
       return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
     };
+
+#define SHOW_MMA_V1 1
+#if SHOW_MMA_V1
+    auto get_f16 = [&](Value value, int idx) {
+      return extract_element(value, i32_val(idx));
+    };
+
+    std::vector<Value> pargs({LLVM::gThreadId});
+
+    pargs.push_back(get_f16(ha.first, 0));
+    pargs.push_back(get_f16(ha.first, 1));
+    pargs.push_back(get_f16(ha.second, 0));
+    pargs.push_back(get_f16(ha.second, 1));
+
+    pargs.push_back(get_f16(hb.first, 0));
+    pargs.push_back(get_f16(hb.first, 1));
+    pargs.push_back(get_f16(hb.second, 0));
+    pargs.push_back(get_f16(hb.second, 1));
+
+    for (int i = 0; i < 8; i++) {
+      pargs.push_back(extract_val(f32_ty, res, getIntAttr(i)));
+    }
+
+    vprintf("mma t-%d A:(%f,%f) (%f,%f) B:(%f,%f) (%f,%f) D:(%f,%f,%f,%f,%f,%f,%f,%f)", pargs, rewriter);
+
+
+#endif
+
+
     for (unsigned i = 0; i < 8; i++)
       acc[idx[i]] = extract_val(f32_ty, res, getIntAttr(i));
   };
