@@ -3781,7 +3781,8 @@ public:
       return LLVM::LLVMStructType::getLiteral(ctx, types);
     } else if (auto dotOpLayout =
                    layout.dyn_cast_or_null<DotOperandEncodingAttr>()) {
-      if (dotOpLayout.getParent().isa<BlockedEncodingAttr>()) { // for parent is blocked layout
+      if (dotOpLayout.getParent()
+              .isa<BlockedEncodingAttr>()) { // for parent is blocked layout
         int numElemsPerThread =
             DotOpFMAConversionHelper::getNumElemsPerThread(shape, dotOpLayout);
 
@@ -3792,7 +3793,9 @@ public:
         auto wpt = mmaLayout.getWarpsPerCTA();
         Type elemTy = convertType(type.getElementType());
         const static llvm::DenseMap<int, int> supportedVecSize = {
-            {32, 1}, {16, 2}, {8, 4},
+            {32, 1},
+            {16, 2},
+            {8, 4},
         };
         auto vecSize = 1;
         if (supportedVecSize.count(elemTy.getIntOrFloatBitWidth())) {
