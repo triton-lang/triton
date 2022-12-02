@@ -2716,10 +2716,9 @@ public:
     auto dstSharedLayout = dstTy.getEncoding().cast<SharedEncodingAttr>();
     auto inOrd = srcBlockedLayout.getOrder();
     auto outOrd = dstSharedLayout.getOrder();
-    // if (inOrd != outOrd)
-    //   llvm_unreachable(
-    //       "TODO: validate that blocked -> shared with different order
-    //       works");
+    if (inOrd != outOrd)
+      llvm_unreachable(
+          "blocked -> shared with different order not yet implemented");
     unsigned inVec =
         inOrd == outOrd ? srcBlockedLayout.getSizePerThread()[inOrd[0]] : 1;
     unsigned outVec = dstSharedLayout.getVec();
@@ -2779,7 +2778,8 @@ public:
             getMultiDimIndex<unsigned>(linearRepIdx, reps, inOrd);
         for (unsigned linearWordIdx = 0; linearWordIdx < numWordsEachRep;
              ++linearWordIdx) {
-          // step 1: recover the multidim_index from the index of input_elements
+          // step 1: recover the multidim_index from the index of
+          // input_elements
           auto multiDimWordIdx =
               getMultiDimIndex<unsigned>(linearWordIdx, wordsInEachRep, inOrd);
           SmallVector<Value> multiDimIdx(2);
