@@ -9,7 +9,7 @@ import torch
 from .utils import *
 from .runtime import Config, autotune, heuristics, JITFunction, KernelInterface
 from .runtime.jit import jit
-from .compiler import compile, CompilationError
+from .compiler import compile, CompilationError, get_amdgcn_bitcode_paths
 from . import language
 from . import testing
 from . import ops

@@ -173,6 +173,9 @@ def kernel(X, Y, BLOCK: tl.constexpr):
 
     # triton result
     y = torch.zeros(shape, dtype=x.dtype, device="cuda")
-    kernel[(1,)](x, y, BLOCK=shape[0], extern_libs={"libdevice": lib_path})
+    if torch.version.hip is not None:
+      kernel[(1,)](x, y, BLOCK=shape[0], extern_libs=triton.get_amdgcn_bitcode_paths())
+    else:
+      kernel[(1,)](x, y, BLOCK=shape[0], extern_libs={"libdevice": lib_path})
     # compare
     assert_close(y, y_ref)
