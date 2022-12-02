@@ -32,8 +32,10 @@ torch_ops = {
     "where": "where",
 }
 
-libdevice = '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'
-
+if torch.version.hip is not None:
+  e_libs = triton.get_amdgcn_bitcode_paths()
+else:
+  e_libs = {"libdevice": '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'}
 
 def get_tensor(shape, data_type, b_positive=False):
     x = None
@@ -89,7 +91,7 @@ def kernel(X, Y, BLOCK: tl.constexpr):
     x = get_tensor(shape, input0_type, expr == 'log' or expr == 'sqrt')
     # triton result
     y = torch.zeros(shape, dtype=torch_type[output_type], device="cuda")
-    kernel[(1,)](x, y, BLOCK=shape[0], extern_libs={"libdevice": libdevice})
+    kernel[(1,)](x, y, BLOCK=shape[0], extern_libs=e_libs)
     # reference result
     y_ref = getattr(torch, torch_ops[expr])(x)
     # compare
@@ -133,7 +135,7 @@ def kernel(X0, X1, Y, BLOCK: tl.constexpr):
 
     # triton result
     y = torch.zeros(shape, dtype=torch_type[output_type], device="cuda")
-    kernel[(1,)](x0, x1, y, BLOCK=shape[0], extern_libs={"libdevice": libdevice})
+    kernel[(1,)](x0, x1, y, BLOCK=shape[0], extern_libs=e_libs)
     # reference result
 
     if expr == "cdiv":
@@ -181,7 +183,7 @@ def kernel(X0, X1, X2, Y, BLOCK: tl.constexpr):
 
     # triton result
     y = torch.zeros(shape, dtype=torch_type[output_type], device="cuda")
-    kernel[(1,)](x0, x1, x2, y, BLOCK=shape[0], extern_libs={"libdevice": libdevice})
+    kernel[(1,)](x0, x1, x2, y, BLOCK=shape[0], extern_libs=e_libs)
     # reference result
 
     y_ref = getattr(torch, torch_ops[expr])(x0, x1, x2)
