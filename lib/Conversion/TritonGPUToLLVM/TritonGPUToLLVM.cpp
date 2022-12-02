@@ -3789,7 +3789,7 @@ public:
         auto wpt = mmaLayout.getWarpsPerCTA();
         Type elemTy = convertType(type.getElementType());
         if (mmaLayout.getVersion() == 2) {
-          const static llvm::DenseMap<int, Type> targetTyMap = {
+          const llvm::DenseMap<int, Type> targetTyMap = {
               {32, elemTy},
               {16, vec_ty(elemTy, 2)},
               {8, vec_ty(elemTy, 4)},
