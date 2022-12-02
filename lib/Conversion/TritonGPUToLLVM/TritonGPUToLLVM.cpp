@@ -3704,6 +3704,33 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
 
 /// ====================== mma codegen end ============================
 
+/// ====================== trans codegen begin ============================
+
+struct TransOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::TransOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::TransOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::TransOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto srcSmemObj =
+        getSharedMemoryObjectFromStruct(loc, adaptor.src(), rewriter);
+    SmallVector<Value> dstStrides = {srcSmemObj.strides[1],
+                                     srcSmemObj.strides[0]};
+    SmallVector<Value> dstOffsets = {srcSmemObj.offsets[1],
+                                     srcSmemObj.offsets[0]};
+    auto dstSmemObj =
+        SharedMemoryObject(srcSmemObj.base, dstStrides, dstOffsets);
+    auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
+    rewriter.replaceOp(op, retVal);
+    return success();
+  }
+};
+
+/// ====================== trans codegen end ============================
+
 Value convertSplatLikeOpWithMmaLayout(const MmaEncodingAttr &layout,
                                       Type resType, Type elemType,
                                       Value constVal,
@@ -4531,6 +4558,7 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<ViewLikeOpConversion<triton::ExpandDimsOp>>(typeConverter,
                                                            benefit);
   patterns.add<DotOpConversion>(typeConverter, allocation, smem, benefit);
+  patterns.add<TransOpConversion>(typeConverter, benefit);
   patterns.add<PrintfOpConversion>(typeConverter, benefit);
 }
 

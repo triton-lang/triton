@@ -1085,6 +1085,16 @@ void init_triton_ir(py::module &&m) {
                  mlir::RankedTensorType::get(shape, lhsType.getElementType()),
                  lhs, rhs);
            })
+      .def("create_trans",
+           [](mlir::OpBuilder &self, mlir::Value &arg) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             auto argType = arg.getType().dyn_cast<mlir::RankedTensorType>();
+             auto argEltType = argType.getElementType();
+             std::vector<int64_t> retShape = argType.getShape();
+             std::reverse(retShape.begin(), retShape.end());
+             return self.create<mlir::triton::TransOp>(
+                 loc, mlir::RankedTensorType::get(retShape, argEltType), arg);
+           })
       .def("create_broadcast",
            [](mlir::OpBuilder &self, mlir::Value &arg,
               std::vector<int64_t> &shape) -> mlir::Value {
