@@ -1345,13 +1345,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
   SmallVector<unsigned> order(sharedLayout.getOrder().begin(),
                               sharedLayout.getOrder().end());
 
-  // TODO [Superjomn]: transA cannot be accessed in ConvertLayoutOp.
-  bool transA = false;
-  if (transA) {
-    std::swap(shape[0], shape[1]);
-    std::swap(order[0], order[1]);
-  }
-
   Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
   Value smemBaseBeforeSwizzle =
       smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
@@ -1391,6 +1384,16 @@ Value DotOpMmaV1ConversionHelper::loadA(
   SmallVector<int> rep({repM, 0, repK}); // pad N with 0
   SmallVector<int> spw({spwM, 0, 1});    // pad N with 0
 
+  auto [offsetAM, offsetAK, _0, _1] =
+      computeOffsets(thread, isARow, false, fpw, spw, rep, rewriter, loc);
+  // TODO [Superjomn]: transA cannot be accessed in ConvertLayoutOp.
+  bool transA = false;
+  if (transA) {
+    std::swap(shape[0], shape[1]);
+    std::swap(offsetAM, offsetAK);
+    std::swap(order[0], order[1]);
+  }
+
   int vecA = sharedLayout.getVec();
 
   auto strides = smemObj.strides;
@@ -1402,11 +1405,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
   int strideRepM = wpt[0] * fpw[0] * 8;
   int strideRepK = 1;
 
-  auto [offsetAM, offsetAK, _0, _1] =
-      computeOffsets(thread, isARow, false, fpw, spw, rep, rewriter, loc);
-  if (transA)
-    std::swap(offsetAM, offsetAK);
-
   // swizzling
   int perPhaseA = sharedLayout.getPerPhase();
   int maxPhaseA = sharedLayout.getMaxPhase();
@@ -1414,10 +1412,14 @@ Value DotOpMmaV1ConversionHelper::loadA(
   int numPtrA = std::max(2 * perPhaseA * maxPhaseA / stepA0, 1);
   int NK = shape[1];
 
+  printf("A.meta t-0 perPhase:%d maxPhase:%d step:%d NK:%d vec:%d\n", perPhaseA,
+         maxPhaseA, stepA0, NK, vecA);
   // pre-compute pointer lanes
   Value offA0 = isARow ? offsetAK : offsetAM;
   Value offA1 = isARow ? offsetAM : offsetAK;
   Value phaseA = urem(udiv(offA1, i32_val(perPhaseA)), i32_val(maxPhaseA));
+  vprintf("show0 t-%d phase_a:%d vec_a:%d", {gThreadId, phaseA, i32_val(vecA)},
+          rewriter);
   // offA0 = add(offA0, cSwizzleOffset);
   SmallVector<Value> offA(numPtrA);
   for (int i = 0; i < numPtrA; i++) {
@@ -1434,7 +1436,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
     args.push_back(offA[i]);
     vprintf_array(gThreadId, args, "offA_0i", "%d", rewriter);
   }
-  vprintf_array(gThreadId, offA, "offA_i", "%d", rewriter);
+  vprintf_array(gThreadId, offA, "offAs", "%d", rewriter);
 
   Type f16x2Ty = vec_ty(f16_ty, 2);
   // One thread get 8 elements as result
@@ -1529,14 +1531,6 @@ Value DotOpMmaV1ConversionHelper::loadB(
   SmallVector<unsigned> order(sharedLayout.getOrder().begin(),
                               sharedLayout.getOrder().end());
 
-  // TODO [Superjomn]: transB cannot be accessed in ConvertLayoutOp.
-  bool transB = false;
-
-  if (transB) {
-    std::swap(order[0], order[1]);
-    std::swap(shape[0], shape[1]);
-  }
-
   Value smem = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
 
   {
@@ -1563,6 +1557,17 @@ Value DotOpMmaV1ConversionHelper::loadB(
   int strideRepN = wpt[1] * fpw[1] * 8;
   int strideRepK = 1;
 
+  // TODO [Superjomn]: transB cannot be accessed in ConvertLayoutOp.
+  bool transB = false;
+
+  auto [_0, _1, offsetBN, offsetBK] =
+      computeOffsets(thread, false, isBRow, fpw, spw, rep, rewriter, loc);
+  if (transB) {
+    std::swap(order[0], order[1]);
+    std::swap(shape[0], shape[1]);
+    std::swap(offsetBK, offsetBN);
+  }
+
   // swizzling
   int perPhaseA = sharedLayout.getPerPhase();
   int maxPhaseA = sharedLayout.getMaxPhase();
@@ -1572,11 +1577,8 @@ Value DotOpMmaV1ConversionHelper::loadB(
   int numPtrB = std::max(2 * perPhaseB * maxPhaseB / stepB0, 1);
   int NK = shape[0];
 
-  auto [_0, _1, offsetBN, offsetBK] =
-      computeOffsets(thread, false, isBRow, fpw, spw, rep, rewriter, loc);
-  if (transB)
-    std::swap(offsetBK, offsetBN);
-  vprintf("offBNK t-%d %d %d", {gThreadId, offsetBN, offsetBK}, rewriter);
+  vprintf("offBNK t-%d %d %d %d",
+          {gThreadId, offsetBN, offsetBK, i32_val(vecB)}, rewriter);
 
   Value offB0 = isBRow ? offsetBN : offsetBK;
   Value offB1 = isBRow ? offsetBK : offsetBN;
@@ -1585,14 +1587,21 @@ Value DotOpMmaV1ConversionHelper::loadB(
 
   offB0 = add(offB0, cSwizzleOffset);
   SmallVector<Value> offB(numPtrB);
+  SmallVector<Value> offB_i; // DEBUG
   for (int i = 0; i < numPtrB; ++i) {
     Value offB0I = add(offB0, i32_val(i * (isBRow ? strideRepN : 4)));
+    offB_i.push_back(offB0I);
     offB0I = udiv(offB0I, i32_val(vecB));
+    offB_i.push_back(offB0I);
     offB0I = xor_(offB0I, phaseB);
+    offB_i.push_back(offB0I);
     offB0I = mul(offB0I, i32_val(vecB));
+    offB_i.push_back(offB0I);
     offB[i] = add(mul(offB0I, strideB0), mul(offB1, strideB1));
+    offB_i.push_back(offB[i]);
   }
   vprintf_array(gThreadId, offB, "offBs", "%d", rewriter);
+  vprintf_array(gThreadId, offB_i, "offB_0i", "%d", rewriter);
 
   Type f16PtrTy = ptr_ty(f16_ty);
   Type f16x2Ty = vec_ty(f16_ty, 2);
