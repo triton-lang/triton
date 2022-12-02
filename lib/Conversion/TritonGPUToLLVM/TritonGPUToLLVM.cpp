@@ -3161,6 +3161,7 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToShared(
   // e.g.
   // srcOrd = [0, 1] ; dstOrd = [1, 0]
   // perm = [1, 0]
+  // TODO: write unit tests
   for (size_t i = 0; i < perm.size(); i++) {
     perm[i] = std::distance(dstOrd.begin(),
                             std::find(dstOrd.begin(), dstOrd.end(), srcOrd[i]));

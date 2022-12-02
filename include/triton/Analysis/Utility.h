@@ -59,6 +59,7 @@ template <typename Int> Int product(llvm::ArrayRef<Int> arr) {
 
 template <typename Int> Int ceil(Int m, Int n) { return (m + n - 1) / n; }
 
+bool isCvtSharedToShared(Operation *op);
 // output[i] = input[order[i]]
 template <typename T, typename RES_T = T>
 SmallVector<RES_T> reorder(ArrayRef<T> input, ArrayRef<unsigned> order) {

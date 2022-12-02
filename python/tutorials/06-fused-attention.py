@@ -32,7 +32,7 @@ def _fwd_kernel(
     offs_n = tl.arange(0, BLOCK_N)
     offs_d = tl.arange(0, BLOCK_DMODEL)
     off_q = off_hz * stride_qh + offs_m[:, None] * stride_qm + offs_d[None, :] * stride_qk
-    off_k = off_hz * stride_qh + offs_n[:, None] * stride_kn + offs_d[None, :] * stride_kk
+    off_k = off_hz * stride_qh + offs_n[None, :] * stride_kn + offs_d[:, None] * stride_kk
     off_v = off_hz * stride_qh + offs_n[:, None] * stride_qm + offs_d[None, :] * stride_qk
     # Initialize pointers to Q, K, V
     q_ptrs = Q + off_q
@@ -50,7 +50,7 @@ def _fwd_kernel(
         # -- compute qk ----
         k = tl.load(k_ptrs + start_n * stride_kn)
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
-        qk += tl.dot(q, tl.trans(k))
+        qk += tl.dot(q, k)
         qk *= sm_scale
         qk += tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), 0, float("-inf"))
         # -- compute m_ij, p, l_ij
@@ -165,25 +165,25 @@ def _bwd_kernel(
             q = tl.load(q_ptrs)
             # recompute p = softmax(qk, dim=-1).T
             # NOTE: `do` is pre-divided by `l`; no normalization here
-            qk = tl.dot(q, tl.trans(k))
+            qk = tl.dot(q, k, trans_b=True)
             qk = tl.where(offs_m_curr[:, None] >= (offs_n[None, :]), qk, float("-inf"))
             m = tl.load(m_ptrs + offs_m_curr)
             p = tl.exp(qk * sm_scale - m[:, None])
             # compute dv
             do = tl.load(do_ptrs)
-            dv += tl.dot(tl.trans(p.to(tl.float16)), do)
+            dv += tl.dot(p.to(tl.float16), do, trans_a=True)
             # compute dp = dot(v, do)
-            # Di = tl.load(D_ptrs + offs_m_curr)
-            # dp = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32) - Di[:, None]
-            # dp += tl.dot(do, tl.trans(v))
-            # # compute ds = p * (dp - delta[:, None])
-            # ds = p * dp * sm_scale
-            # # compute dk = dot(ds.T, q)
-            # dk += tl.dot(tl.trans(ds.to(tl.float16)), q)
-            # # # compute dq
-            # dq = tl.load(dq_ptrs)
-            # dq += tl.dot(ds.to(tl.float16), k)
-            # tl.store(dq_ptrs, dq)
+            Di = tl.load(D_ptrs + offs_m_curr)
+            dp = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32) - Di[:, None]
+            dp += tl.dot(do, v, trans_b=True)
+            # compute ds = p * (dp - delta[:, None])
+            ds = p * dp * sm_scale
+            # compute dk = dot(ds.T, q)
+            dk += tl.dot(ds.to(tl.float16), q, trans_a=True)
+            # # compute dq
+            dq = tl.load(dq_ptrs)
+            dq += tl.dot(ds.to(tl.float16), k)
+            tl.store(dq_ptrs, dq)
             # # increment pointers
             dq_ptrs += BLOCK_M * stride_qm
             q_ptrs += BLOCK_M * stride_qm
@@ -270,12 +270,12 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 
-@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(1, 1, 1024, 64)])
+@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(4, 48, 1024, 64)])
 def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     torch.manual_seed(20)
     q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.1, std=0.1).requires_grad_()
-    k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.4, std=0.1).requires_grad_()
-    v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.3, std=0.1).requires_grad_()
+    k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.4, std=0.2).requires_grad_()
+    v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.3, std=0.2).requires_grad_()
     sm_scale = 0.2
     dout = torch.randn_like(q)
     # reference implementation
@@ -300,7 +300,7 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     tri_dk, k.grad = k.grad.clone(), None
     tri_dq, q.grad = q.grad.clone(), None
     # compare
-    # triton.testing.assert_almost_equal(ref_out, tri_out)
+    triton.testing.assert_almost_equal(ref_out, tri_out)
     triton.testing.assert_almost_equal(ref_dv, tri_dv)
     # triton.testing.assert_almost_equal(ref_dk, tri_dk)
     # triton.testing.assert_almost_equal(ref_dq, tri_dq)
