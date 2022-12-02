@@ -685,6 +685,13 @@ public:
       return failure();
     if (srcBlockedLayout.getOrder() == dstSharedLayout.getOrder())
       return failure();
+    // For now only works if single use is transpose
+    // TODO: rematerialize #shared uses
+    auto users = op->getUsers();
+    if (std::distance(users.begin(), users.end()) != 1 ||
+        !isa<triton::TransOp>(*users.begin()))
+      return failure();
+
     auto tmpShared = triton::gpu::SharedEncodingAttr::get(
         op->getContext(), dstSharedLayout.getVec(),
         dstSharedLayout.getPerPhase(), dstSharedLayout.getMaxPhase(),
@@ -693,9 +700,15 @@ public:
                                          srcType.getElementType(), tmpShared);
     auto tmpCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
         op->getLoc(), tmpType, cvt.getOperand());
-    auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
-        op->getLoc(), dstType, tmpCvt.getResult());
-    rewriter.replaceOp(op, newCvt.getResult());
+
+    auto newDstType = RankedTensorType::get(
+        users.begin()->getResultTypes()[0].cast<RankedTensorType>().getShape(),
+        srcType.getElementType(), dstSharedLayout);
+
+    auto newTrans = rewriter.create<triton::TransOp>(op->getLoc(), newDstType,
+                                                     tmpCvt.getResult());
+
+    rewriter.replaceOp(*users.begin(), newTrans.getResult());
     return success();
   }
 };
@@ -791,8 +804,6 @@ public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
-
-    // llvm::outs() << m << "\n";
 
     mlir::RewritePatternSet patterns(context);
 
