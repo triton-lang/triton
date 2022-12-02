@@ -265,8 +265,15 @@ struct TritonTransPattern : public OpConversionPattern<triton::TransOp> {
     if (!srcEncoding)
       return failure();
     if (!srcEncoding.isa<triton::gpu::SharedEncodingAttr>()) {
+      // TODO: end-to-end correctness is broken if
+      // the input is blocked and the output is shared
+      // with different order. Maybe a backend issue in BlockedToShared?
+      SmallVector<unsigned> order = {1, 0};
+      if (auto srcBlockedEncoding =
+              srcEncoding.dyn_cast<triton::gpu::BlockedEncodingAttr>())
+        llvm::copy(srcBlockedEncoding.getOrder(), order.begin());
       srcEncoding =
-          triton::gpu::SharedEncodingAttr::get(getContext(), 1, 1, 1, {1, 0});
+          triton::gpu::SharedEncodingAttr::get(getContext(), 1, 1, 1, order);
       srcType = RankedTensorType::get(srcType.getShape(),
                                       srcType.getElementType(), srcEncoding);
       src = rewriter.create<triton::gpu::ConvertLayoutOp>(src.getLoc(), srcType,

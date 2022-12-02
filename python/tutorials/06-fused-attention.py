@@ -166,10 +166,11 @@ def _bwd_kernel(
             # recompute p = softmax(qk, dim=-1).T
             # NOTE: `do` is pre-divided by `l`; no normalization here
             qk = tl.dot(q, tl.trans(k))
-            qk = tl.where(offs_m_curr[:, None] >= (offs_n[None, :]), qk, float("-inf"))
-            m = tl.load(m_ptrs + offs_m_curr)
-            p = tl.exp(qk * sm_scale - m[:, None])
+            # qk = tl.where(offs_m_curr[:, None] >= (offs_n[None, :]), qk, float("-inf"))
+            # m = tl.load(m_ptrs + offs_m_curr)
+            # p = tl.exp(qk * sm_scale - m[:, None])
             # compute dv
+            p = qk
             do = tl.load(do_ptrs)
             dv += tl.dot(tl.trans(p.to(tl.float16)), do)
             # compute dp = dot(v, do)
@@ -193,6 +194,9 @@ def _bwd_kernel(
         dk_ptrs = DK + (offs_n[:, None] * stride_kn + offs_k[None, :] * stride_kk)
         tl.store(dv_ptrs, dv)
         tl.store(dk_ptrs, dk)
+
+x = torch.randn(10, device="cuda")
+# _bwd_kernel = triton.compile("./flash-attention-bwd.ttgir")
 
 
 empty = torch.empty(128, device="cuda")
@@ -249,6 +253,18 @@ class _attention(torch.autograd.Function):
         )
 
         num_warps = 4 if ctx.BLOCK_DMODEL <= 64 else 8
+        # _bwd_kernel[(ctx.grid[1],1,1)](
+        #     q.data_ptr(), k.data_ptr(), v.data_ptr(), ctx.sm_scale,
+        #     o.data_ptr(), do_scaled.data_ptr(),
+        #     dq.data_ptr(), dk.data_ptr(), dv.data_ptr(),
+        #     l.data_ptr(), m.data_ptr(),
+        #     delta.data_ptr(),
+        #     q.stride(0), q.stride(1), q.stride(2), 
+        #     k.stride(0), k.stride(1), k.stride(2), 
+        #     v.stride(0), v.stride(1), v.stride(2),
+        #     q.shape[2],
+        #     ctx.grid[0]
+        # )
         _bwd_kernel[(ctx.grid[1],)](
             q, k, v, ctx.sm_scale,
             o, do_scaled,
@@ -277,7 +293,7 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.4, std=0.2).requires_grad_()
     v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.3, std=0.2).requires_grad_()
     sm_scale = 0.2
-    dout = torch.randn_like(q)
+    dout = torch.randn_like(q)*0 + 1
     # reference implementation
     M = torch.tril(torch.ones((N_CTX, N_CTX), device="cuda"))
     p = torch.matmul(q, k.transpose(2, 3)) * sm_scale

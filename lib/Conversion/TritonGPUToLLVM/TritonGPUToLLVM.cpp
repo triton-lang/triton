@@ -2716,6 +2716,10 @@ public:
     auto dstSharedLayout = dstTy.getEncoding().cast<SharedEncodingAttr>();
     auto inOrd = srcBlockedLayout.getOrder();
     auto outOrd = dstSharedLayout.getOrder();
+    // if (inOrd != outOrd)
+    //   llvm_unreachable(
+    //       "TODO: validate that blocked -> shared with different order
+    //       works");
     unsigned inVec =
         inOrd == outOrd ? srcBlockedLayout.getSizePerThread()[inOrd[0]] : 1;
     unsigned outVec = dstSharedLayout.getVec();
