@@ -81,9 +81,11 @@ void MembarAnalysis::transfer(Operation *op, RegionInfo *regionInfo,
     return;
   }
 
-  if (isa<triton::gpu::AsyncWaitOp>(op)) {
+  if (isa<triton::gpu::AsyncWaitOp>(op) &&
+      !isa<gpu::BarrierOp>(op->getNextNode())) {
     // If the current op is an async wait, we insert a barrier op and sync
-    // previous reads and writes.
+    // if the next op is not a barrier
+    regionInfo->sync();
     OpBuilder::InsertionGuard g(*builder);
     builder->setInsertionPointAfter(op);
     builder->create<gpu::BarrierOp>(op->getLoc());
