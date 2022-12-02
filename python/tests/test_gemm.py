@@ -173,6 +173,7 @@ def get_proper_err(a, b, golden):
     [16, 16, 16, 16, 16, 16, 16, False, False],  # wpt overflow issue
     # K-Forloop
     #[16, 16, 64, 4, 8, 8, 8, False, False],  # Wrap threads
+    #[128, 8, 8, 4, 32, 32, 16, False, False], # Small matrix and large block size
     [32, 32, 64, 4, 32, 32, 32, False, False],  # Single shared encoding
     [16, 16, 128, 4, 16, 16, 16, False, False],  # Single shared encoding and small k
     [64, 32, 128, 4, 64, 32, 64, False, False],
@@ -221,14 +222,14 @@ def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLO
 
 
 @pytest.mark.parametrize('M,N,K,num_warps,block_M,block_N,block_K,allow_tf32', [
-    config + allow_tf32
-    for config in [
-        [32, 32, 16, 4, 32, 32, 16],
-        [32, 16, 16, 4, 32, 32, 16],
-        [128, 8, 8, 4, 32, 32, 16]]
-    for allow_tf32 in [[True], [False]]
-    # TODO[Superjomn]: fix it later
-    # [127, 41, 43, 4, 32, 32, 16],
+    [32, 32, 16, 4, 32, 32, 16, False],
+    [32, 32, 16, 4, 32, 32, 16, True],
+    [32, 16, 16, 4, 32, 32, 16, False],
+    [32, 16, 16, 4, 32, 32, 16, True],
+    [127, 41, 43, 4, 32, 32, 16, False],
+    [127, 41, 43, 4, 32, 32, 16, True],
+    [128, 8, 8, 4, 32, 32, 16, False],
+    # [128, 8, 8, 4, 32, 32, 16, True] This case is not supported yet, same issue as fp16
 ])
 def test_gemm_fp32(M, N, K, num_warps, block_M, block_N, block_K, allow_tf32):
     @triton.jit
@@ -257,9 +258,8 @@ def test_gemm_fp32(M, N, K, num_warps, block_M, block_N, block_K, allow_tf32):
         for k in range(0, K, BLOCK_SIZE_K):
             a_mask = (offs_am[:, None] < M) & (offs_k[None, :] < K)
             b_mask = (offs_k[:, None] < K) & (offs_bn[None, :] < N)
-            a = tl.load(a_ptrs, a_mask)
-            b = tl.load(b_ptrs, b_mask)
-            # NOTE the allow_tf32 should be false to force the dot op to do fmadot lowering
+            a = tl.load(a_ptrs, a_mask, other=0.0)
+            b = tl.load(b_ptrs, b_mask, other=0.0)
             accumulator += tl.dot(a, b, allow_tf32=ALLOW_TF32)
             a_ptrs += BLOCK_SIZE_K * stride_ak
             b_ptrs += BLOCK_SIZE_K * stride_bk

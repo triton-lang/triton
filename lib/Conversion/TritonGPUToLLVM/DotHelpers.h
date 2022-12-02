@@ -708,19 +708,19 @@ public:
       Type elemTy = type::f32Ty(ctx);
       Type elemPtrTy = ptr_ty(elemTy);
       if (kOrder == 1) {
-        elems[0] = load(gep(elemPtrTy, ptr, i32_val(sOffsetElem)));
-        elems[1] = load(gep(elemPtrTy, ptr2, i32_val(sOffsetElem)));
+        elems[0] = load(gep(elemPtrTy, ptr, sOffsetElemVal));
+        elems[1] = load(gep(elemPtrTy, ptr2, sOffsetElemVal));
         elems[2] =
-            load(gep(elemPtrTy, ptr, i32_val(sOffsetElem + sOffsetArrElem)));
+            load(gep(elemPtrTy, ptr, sOffsetArrElemVal));
         elems[3] =
-            load(gep(elemPtrTy, ptr2, i32_val(sOffsetElem + sOffsetArrElem)));
+            load(gep(elemPtrTy, ptr2, sOffsetArrElemVal));
       } else {
-        elems[0] = load(gep(elemPtrTy, ptr, i32_val(sOffsetElem)));
-        elems[2] = load(gep(elemPtrTy, ptr2, i32_val(sOffsetElem)));
+        elems[0] = load(gep(elemPtrTy, ptr, sOffsetElemVal));
+        elems[2] = load(gep(elemPtrTy, ptr2, sOffsetElemVal));
         elems[1] =
-            load(gep(elemPtrTy, ptr, i32_val(sOffsetElem + sOffsetArrElem)));
+            load(gep(elemPtrTy, ptr, sOffsetArrElemVal));
         elems[3] =
-            load(gep(elemPtrTy, ptr2, i32_val(sOffsetElem + sOffsetArrElem)));
+            load(gep(elemPtrTy, ptr2, sOffsetArrElemVal));
       }
       return {elems[0], elems[1], elems[2], elems[3]};
 
