@@ -178,6 +178,10 @@ public:
           !isSharedEncoding(convert.getResult())) {
         return mlir::failure();
       }
+      if (isSharedEncoding(convert.getOperand()) &&
+          isSharedEncoding(convert.getResult())) {
+        return mlir::failure();
+      }
       auto srcType = convert.getOperand().getType().cast<RankedTensorType>();
       auto srcShared =
           srcType.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
@@ -661,6 +665,41 @@ SmallVector<unsigned, 2> warpsPerTileV2(triton::DotOp dotOp,
 
 } // namespace
 
+class OptimizeBlockedToShared : public mlir::RewritePattern {
+public:
+  OptimizeBlockedToShared(mlir::MLIRContext *context)
+      : RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(), 1,
+                       context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto cvt = cast<triton::gpu::ConvertLayoutOp>(op);
+    auto srcType = cvt.getOperand().getType().cast<RankedTensorType>();
+    auto dstType = cvt.getResult().getType().cast<RankedTensorType>();
+    auto srcBlockedLayout =
+        srcType.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
+    auto dstSharedLayout =
+        dstType.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
+    if (!srcBlockedLayout || !dstSharedLayout)
+      return failure();
+    if (srcBlockedLayout.getOrder() == dstSharedLayout.getOrder())
+      return failure();
+    auto tmpShared = triton::gpu::SharedEncodingAttr::get(
+        op->getContext(), dstSharedLayout.getVec(),
+        dstSharedLayout.getPerPhase(), dstSharedLayout.getMaxPhase(),
+        srcBlockedLayout.getOrder());
+    auto tmpType = RankedTensorType::get(srcType.getShape(),
+                                         srcType.getElementType(), tmpShared);
+    auto tmpCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
+        op->getLoc(), tmpType, cvt.getOperand());
+    auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
+        op->getLoc(), dstType, tmpCvt.getResult());
+    rewriter.replaceOp(op, newCvt.getResult());
+    return success();
+  }
+};
+
 class BlockedToMMA : public mlir::RewritePattern {
   int computeCapability;
 
@@ -753,8 +792,11 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
 
+    // llvm::outs() << m << "\n";
+
     mlir::RewritePatternSet patterns(context);
 
+    patterns.add<OptimizeBlockedToShared>(context);
     patterns.add<SimplifyConversion>(context);
     patterns.add<DecomposeDotOperand>(context);
     patterns.add<RematerializeBackward>(context);
