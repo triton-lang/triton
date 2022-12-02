@@ -1392,7 +1392,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
   SmallVector<int> spw({spwM, 0, 1});    // pad N with 0
 
   int vecA = sharedLayout.getVec();
-  vecA = 4;
 
   auto strides = smemObj.strides;
   Value strideAM = isARow ? strides[0] : i32_val(1);
@@ -1556,7 +1555,6 @@ Value DotOpMmaV1ConversionHelper::loadB(
   SmallVector<int> rep({0, 2 * packSize1, 1});       // pad M with 0
   SmallVector<int> spw({0, fpw[1] * 4 * rep[1], 1}); // pad M with 0
   int vecB = sharedLayout.getVec();
-  vecB = 4; // DEBUG
 
   Value strideBN = isBRow ? i32_val(1) : strides[1];
   Value strideBK = isBRow ? strides[0] : i32_val(1);
