@@ -3792,29 +3792,28 @@ public:
         auto mmaLayout = dotOpLayout.getParent().cast<MmaEncodingAttr>();
         auto wpt = mmaLayout.getWarpsPerCTA();
         Type elemTy = convertType(type.getElementType());
-        const static llvm::DenseMap<int, int> supportedVecSize = {
-            {32, 1},
-            {16, 2},
-            {8, 4},
-        };
-        auto vecSize = 1;
-        if (supportedVecSize.count(elemTy.getIntOrFloatBitWidth())) {
-          vecSize = supportedVecSize.lookup(elemTy.getIntOrFloatBitWidth());
-        } else {
-          assert(false && "Unsupported element type");
-        }
-        Type vecTy = vec_ty(elemTy, vecSize);
         if (mmaLayout.getVersion() == 2) {
+          const static llvm::DenseMap<int, Type> targetTyMap = {
+              {32, elemTy},
+              {16, vec_ty(elemTy, 2)},
+              {8, vec_ty(elemTy, 4)},
+          };
+          Type targetTy;
+          if (targetTyMap.count(elemTy.getIntOrFloatBitWidth())) {
+            targetTy = targetTyMap.lookup(elemTy.getIntOrFloatBitWidth());
+          } else {
+            assert(false && "Unsupported element type");
+          }
           if (dotOpLayout.getOpIdx() == 0) { // $a
             int elems =
                 MMA16816ConversionHelper::getANumElemsPerThread(type, wpt[0]);
             return LLVM::LLVMStructType::getLiteral(
-                ctx, SmallVector<Type>(elems, vecTy));
+                ctx, SmallVector<Type>(elems, targetTy));
           }
           if (dotOpLayout.getOpIdx() == 1) { // $b
             int elems =
                 MMA16816ConversionHelper::getBNumElemsPerThread(type, wpt[1]);
-            return struct_ty(SmallVector<Type>(elems, vecTy));
+            return struct_ty(SmallVector<Type>(elems, targetTy));
           }
         }
 
