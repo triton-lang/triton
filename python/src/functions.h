@@ -232,7 +232,7 @@ ir::value *store(ir::value *ptr, ir::value *val, std::optional<ir::value *> _mas
  ----------------------------------------------*/
 std::string dot_docstr = R"pbdoc(
     Returns the matrix product of two blocks.
-    The two blocks must be two dimensionals and have compatible inner dimensions.
+    The two blocks must be two dimensions and have compatible inner dimensions.
 
     :param input: The first block to be multiplied.
     :type input: 2D block of scalar-type in {`float16`, `float32`}

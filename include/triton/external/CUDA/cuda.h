@@ -818,7 +818,7 @@ typedef enum CUcomputemode_enum {
  * Memory advise values
  */
 typedef enum CUmem_advise_enum {
-    CU_MEM_ADVISE_SET_READ_MOSTLY          = 1, /**< Data will mostly be read and only occassionally be written to */
+    CU_MEM_ADVISE_SET_READ_MOSTLY          = 1, /**< Data will mostly be read and only occasionally be written to */
     CU_MEM_ADVISE_UNSET_READ_MOSTLY        = 2, /**< Undo the effect of ::CU_MEM_ADVISE_SET_READ_MOSTLY */
     CU_MEM_ADVISE_SET_PREFERRED_LOCATION   = 3, /**< Set the preferred location for the data as the specified device */
     CU_MEM_ADVISE_UNSET_PREFERRED_LOCATION = 4, /**< Clear the preferred location for the data */
@@ -827,7 +827,7 @@ typedef enum CUmem_advise_enum {
 } CUmem_advise;
 
 typedef enum CUmem_range_attribute_enum {
-    CU_MEM_RANGE_ATTRIBUTE_READ_MOSTLY            = 1, /**< Whether the range will mostly be read and only occassionally be written to */
+    CU_MEM_RANGE_ATTRIBUTE_READ_MOSTLY            = 1, /**< Whether the range will mostly be read and only occasionally be written to */
     CU_MEM_RANGE_ATTRIBUTE_PREFERRED_LOCATION     = 2, /**< The preferred location of the range */
     CU_MEM_RANGE_ATTRIBUTE_ACCESSED_BY            = 3, /**< Memory range has ::CU_MEM_ADVISE_SET_ACCESSED_BY set for specified device */
     CU_MEM_RANGE_ATTRIBUTE_LAST_PREFETCH_LOCATION = 4  /**< The last location to which the range was prefetched */
@@ -849,7 +849,7 @@ typedef enum CUjit_option_enum
      * IN: Specifies minimum number of threads per block to target compilation
      * for\n
      * OUT: Returns the number of threads the compiler actually targeted.
-     * This restricts the resource utilization fo the compiler (e.g. max
+     * This restricts the resource utilization of the compiler (e.g. max
      * registers) such that a block with the given number of threads should be
      * able to launch based on register limitations. Note, this option does not
      * currently take into account any other resource limitations, such as
@@ -974,10 +974,10 @@ typedef enum CUjit_option_enum
     CU_JIT_FAST_COMPILE,
 
     /**
-     * Array of device symbol names that will be relocated to the corresponing
+     * Array of device symbol names that will be relocated to the corresponding
      * host addresses stored in ::CU_JIT_GLOBAL_SYMBOL_ADDRESSES.\n
      * Must contain ::CU_JIT_GLOBAL_SYMBOL_COUNT entries.\n
-     * When loding a device module, driver will relocate all encountered
+     * When loading a device module, driver will relocate all encountered
      * unresolved symbols to the host addresses.\n
      * It is only allowed to register symbols that correspond to unresolved
      * global variables.\n
@@ -1194,7 +1194,7 @@ typedef enum CUlimit_enum {
  * Resource types
  */
 typedef enum CUresourcetype_enum {
-    CU_RESOURCE_TYPE_ARRAY           = 0x00, /**< Array resoure */
+    CU_RESOURCE_TYPE_ARRAY           = 0x00, /**< Array resource */
     CU_RESOURCE_TYPE_MIPMAPPED_ARRAY = 0x01, /**< Mipmapped array resource */
     CU_RESOURCE_TYPE_LINEAR          = 0x02, /**< Linear resource */
     CU_RESOURCE_TYPE_PITCH2D         = 0x03  /**< Pitch 2D resource */
@@ -2914,9 +2914,9 @@ typedef struct CUmemAllocationProp_st {
     CUmemLocation location;
     /**
      * Windows-specific POBJECT_ATTRIBUTES required when
-     * ::CU_MEM_HANDLE_TYPE_WIN32 is specified.  This object atributes structure
+     * ::CU_MEM_HANDLE_TYPE_WIN32 is specified.  This object attributes structure
      * includes security attributes that define
-     * the scope of which exported allocations may be tranferred to other
+     * the scope of which exported allocations may be transferred to other
      * processes.  In all other cases, this field is required to be zero.
      */
     void *win32HandleMetaData;
@@ -3036,7 +3036,7 @@ typedef struct CUmemPoolProps_st {
     /**
      * Windows-specific LPSECURITYATTRIBUTES required when
      * ::CU_MEM_HANDLE_TYPE_WIN32 is specified.  This security attribute defines
-     * the scope of which exported allocations may be tranferred to other
+     * the scope of which exported allocations may be transferred to other
      * processes.  In all other cases, this field is required to be zero.
      */
     void *win32SecurityAttributes;
@@ -3519,7 +3519,7 @@ CUresult CUDAAPI cuDeviceGet(CUdevice *device, int ordinal);
 CUresult CUDAAPI cuDeviceGetCount(int *count);
 
 /**
- * \brief Returns an identifer string for the device
+ * \brief Returns an identifier string for the device
  *
  * Returns an ASCII string identifying the device \p dev in the NULL-terminated
  * string pointed to by \p name. \p len specifies the maximum length of the
@@ -3556,7 +3556,7 @@ CUresult CUDAAPI cuDeviceGetName(char *name, int len, CUdevice dev);
  * Note there is a later version of this API, ::cuDeviceGetUuid_v2. It will
  * supplant this version in 12.0, which is retained for minor version compatibility.
  *
- * Returns 16-octets identifing the device \p dev in the structure
+ * Returns 16-octets identifying the device \p dev in the structure
  * pointed by the \p uuid.
  *
  * \param uuid - Returned UUID
@@ -3586,7 +3586,7 @@ CUresult CUDAAPI cuDeviceGetUuid(CUuuid *uuid, CUdevice dev);
 /**
  * \brief Return an UUID for the device (11.4+)
  *
- * Returns 16-octets identifing the device \p dev in the structure
+ * Returns 16-octets identifying the device \p dev in the structure
  * pointed by the \p uuid. If the device is in MIG mode, returns its
  * MIG UUID which uniquely identifies the subscribed MIG compute instance.
  *
@@ -3867,7 +3867,7 @@ CUresult CUDAAPI cuDeviceGetTexture1DLinearMaxWidth(size_t *maxWidthInElements, 
  *   supports native atomic operations.
  * - ::CU_DEVICE_ATTRIBUTE_SINGLE_TO_DOUBLE_PRECISION_PERF_RATIO: Ratio of single precision performance
  *   (in floating-point operations per second) to double precision performance.
- * - ::CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS: Device suppports coherently accessing
+ * - ::CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS: Device supports coherently accessing
  *   pageable memory without calling cudaHostRegister on it.
  * - ::CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS: Device can coherently access managed memory
  *   concurrently with the CPU.
@@ -3875,7 +3875,7 @@ CUresult CUDAAPI cuDeviceGetTexture1DLinearMaxWidth(size_t *maxWidthInElements, 
  * - ::CU_DEVICE_ATTRIBUTE_CAN_USE_HOST_POINTER_FOR_REGISTERED_MEM: Device can access host registered
  *   memory at the same virtual address as the CPU.
  * -  ::CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN: The maximum per block shared memory size
- *    suported on this device. This is the maximum value that can be opted into when using the cuFuncSetAttribute() call.
+ *    supported on this device. This is the maximum value that can be opted into when using the cuFuncSetAttribute() call.
  *    For more details see ::CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES
  * - ::CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS_USES_HOST_PAGE_TABLES: Device accesses pageable memory via the host's
  *   page tables.
@@ -4132,7 +4132,7 @@ __CUDA_DEPRECATED CUresult CUDAAPI cuDeviceGetProperties(CUdevprop *prop, CUdevi
  *
  * \deprecated
  *
- * This function was deprecated as of CUDA 5.0 and its functionality superceded
+ * This function was deprecated as of CUDA 5.0 and its functionality superseded
  * by ::cuDeviceGetAttribute().
  *
  * Returns in \p *major and \p *minor the major and minor revision numbers that
@@ -4962,10 +4962,10 @@ CUresult CUDAAPI cuCtxSynchronize(void);
  *   returned.
  *
  * - ::CU_LIMIT_MAX_L2_FETCH_GRANULARITY controls the L2 cache fetch granularity.
- *   Values can range from 0B to 128B. This is purely a performence hint and
+ *   Values can range from 0B to 128B. This is purely a performance hint and
  *   it can be ignored or clamped depending on the platform.
  *
- * - ::CU_LIMIT_PERSISTING_L2_CACHE_SIZE controls size in bytes availabe for
+ * - ::CU_LIMIT_PERSISTING_L2_CACHE_SIZE controls size in bytes available for
  *   persisting L2 cache. This is purely a performance hint and it can be
  *   ignored or clamped depending on the platform.
  *
@@ -6398,7 +6398,7 @@ CUresult CUDAAPI cuMemHostGetFlags(unsigned int *pFlags, void *p);
  * ::cuStreamAttachMemAsync will be required to enable access on such devices.
  *
  * If the association is later changed via ::cuStreamAttachMemAsync to
- * a single stream, the default association as specifed during ::cuMemAllocManaged
+ * a single stream, the default association as specified during ::cuMemAllocManaged
  * is restored when that stream is destroyed. For __managed__ variables, the
  * default association is always ::CU_MEM_ATTACH_GLOBAL. Note that destroying a
  * stream is an asynchronous operation, and as a result, the change to default
@@ -9616,13 +9616,13 @@ CUresult CUDAAPI cuMemAddressFree(CUdeviceptr ptr, size_t size);
 * \brief Create a CUDA memory handle representing a memory allocation of a given size described by the given properties
 *
 * This creates a memory allocation on the target device specified through the
-* \p prop strcuture. The created allocation will not have any device or host
+* \p prop structure. The created allocation will not have any device or host
 * mappings. The generic memory \p handle for the allocation can be
 * mapped to the address space of calling process via ::cuMemMap. This handle
 * cannot be transmitted directly to other processes (see
 * ::cuMemExportToShareableHandle).  On Windows, the caller must also pass
 * an LPSECURITYATTRIBUTE in \p prop to be associated with this handle which
-* limits or allows access to this handle for a recepient process (see
+* limits or allows access to this handle for a recipient process (see
 * ::CUmemAllocationProp::win32HandleMetaData for more).  The \p size of this
 * allocation must be a multiple of the the value given via
 * ::cuMemGetAllocationGranularity with the ::CU_MEM_ALLOC_GRANULARITY_MINIMUM
@@ -9660,7 +9660,7 @@ CUresult CUDAAPI cuMemCreate(CUmemGenericAllocationHandle *handle, size_t size, 
 * are unmapped and when all outstanding references to the handle (including it's
 * shareable counterparts) are also released. The generic memory handle can be
 * freed when there are still outstanding mappings made with this handle. Each
-* time a recepient process imports a shareable handle, it needs to pair it with
+* time a recipient process imports a shareable handle, it needs to pair it with
 * ::cuMemRelease for the handle to be freed.  If \p handle is not a valid handle
 * the behavior is undefined. 
 *
@@ -10975,7 +10975,7 @@ CUresult CUDAAPI cuMemAdvise(CUdeviceptr devPtr, size_t count, CUmem_advise advi
  * a GPU id or CU_DEVICE_CPU depending on whether the last location for prefetch was a GPU or the CPU
  * respectively. If any page in the memory range was never explicitly prefetched or if all pages were not
  * prefetched to the same location, CU_DEVICE_INVALID will be returned. Note that this simply returns the
- * last location that the applicaton requested to prefetch the memory range to. It gives no indication as to
+ * last location that the application requested to prefetch the memory range to. It gives no indication as to
  * whether the prefetch operation to that location has completed or even begun.
  *
  * \param data      - A pointers to a memory location where the result
@@ -13561,7 +13561,7 @@ CUresult CUDAAPI cuLaunchCooperativeKernel(CUfunction f,
  * All kernels launched must be identical with respect to the compiled code. Note that
  * any __device__, __constant__ or __managed__ variables present in the module that owns
  * the kernel launched on each device, are independently instantiated on every device.
- * It is the application's responsiblity to ensure these variables are initialized and
+ * It is the application's responsibility to ensure these variables are initialized and
  * used appropriately.
  *
  * The size of the grids as specified in blocks, the size of the blocks themselves

@@ -91,7 +91,7 @@ void inliner::do_inline(ir::function* fn, ir::call_inst* callsite, ir::builder& 
         if(inst_map.find(inst_op) != inst_map.end())
           new_inst->set_operand(k, inst_map.at(inst_op));
     }
-    // handles a ret instruciton.
+    // handles a ret instruction.
     // instead of returning we need to branch to after the function call
     if(ir::return_inst* ret = dynamic_cast<ir::return_inst*>(new_inst)) {
       if(ir::value* ret_val = ret->get_return_value())
