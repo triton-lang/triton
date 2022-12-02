@@ -768,7 +768,7 @@ def dot(input, other, trans_a=False, trans_b=False, allow_tf32=True, _builder=No
     """
     Returns the matrix product of two blocks.
 
-    The two blocks must be two dimensionals and have compatible inner dimensions.
+    The two blocks must be two dimensions and have compatible inner dimensions.
 
     :param input: The first tensor to be multiplied.
     :type input: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}

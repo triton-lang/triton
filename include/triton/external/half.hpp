@@ -950,7 +950,7 @@ namespace half_float
 		/// Convert half-precision floating point to integer.
 		/// \tparam R rounding mode to use, `std::round_indeterminate` for fastest rounding
 		/// \tparam E `true` for round to even, `false` for round away from zero
-		/// \tparam T type to convert to (buitlin integer type with at least 16 bits precision, excluding any implicit sign bits)
+		/// \tparam T type to convert to (builtin integer type with at least 16 bits precision, excluding any implicit sign bits)
 		/// \param value binary representation of half-precision value
 		/// \return integral value
 		template<std::float_round_style R,bool E,typename T> T half2int_impl(uint16 value)
@@ -988,13 +988,13 @@ namespace half_float
 
 		/// Convert half-precision floating point to integer.
 		/// \tparam R rounding mode to use, `std::round_indeterminate` for fastest rounding
-		/// \tparam T type to convert to (buitlin integer type with at least 16 bits precision, excluding any implicit sign bits)
+		/// \tparam T type to convert to (builtin integer type with at least 16 bits precision, excluding any implicit sign bits)
 		/// \param value binary representation of half-precision value
 		/// \return integral value
 		template<std::float_round_style R,typename T> T half2int(uint16 value) { return half2int_impl<R,HALF_ROUND_TIES_TO_EVEN,T>(value); }
 
 		/// Convert half-precision floating point to integer using round-to-nearest-away-from-zero.
-		/// \tparam T type to convert to (buitlin integer type with at least 16 bits precision, excluding any implicit sign bits)
+		/// \tparam T type to convert to (builtin integer type with at least 16 bits precision, excluding any implicit sign bits)
 		/// \param value binary representation of half-precision value
 		/// \return integral value
 		template<typename T> T half2int_up(uint16 value) { return half2int_impl<std::round_to_nearest,0,T>(value); }
@@ -1053,7 +1053,7 @@ namespace half_float
 
 	/// Half-precision floating point type.
 	/// This class implements an IEEE-conformant half-precision floating point type with the usual arithmetic operators and 
-	/// conversions. It is implicitly convertible to single-precision floating point, which makes artihmetic expressions and 
+	/// conversions. It is implicitly convertible to single-precision floating point, which makes arithmetic expressions and 
 	/// functions with mixed-type operands to be of the most precise operand type. Additionally all arithmetic operations 
 	/// (and many mathematical functions) are carried out in single-precision internally. All conversions from single- to 
 	/// half-precision are done using the library's default rounding mode, but temporary results inside chained arithmetic 
@@ -1062,7 +1062,7 @@ namespace half_float
 	/// According to the C++98/03 definition, the half type is not a POD type. But according to C++11's less strict and 
 	/// extended definitions it is both a standard layout type and a trivially copyable type (even if not a POD type), which 
 	/// means it can be standard-conformantly copied using raw binary copies. But in this context some more words about the 
-	/// actual size of the type. Although the half is representing an IEEE 16-bit type, it does not neccessarily have to be of 
+	/// actual size of the type. Although the half is representing an IEEE 16-bit type, it does not necessarily have to be of 
 	/// exactly 16-bits size. But on any reasonable implementation the actual binary representation of this type will most 
 	/// probably not ivolve any additional "magic" or padding beyond the simple binary representation of the underlying 16-bit 
 	/// IEEE number, even if not strictly guaranteed by the standard. But even then it only has an actual size of 16 bits if 
@@ -2181,7 +2181,7 @@ namespace half_float
 
 		/// Identity.
 		/// \param arg operand
-		/// \return uncahnged operand
+		/// \return unchanged operand
 		template<typename T> HALF_CONSTEXPR typename enable<T,T>::type operator+(T arg) { return arg; }
 
 		/// Negation.
@@ -2620,7 +2620,7 @@ namespace half_float
 		/// Multiply by power of two.
 		/// \param arg number to modify
 		/// \param exp power of two to multiply with
-		/// \return \a arg multplied by 2 raised to \a exp
+		/// \return \a arg multiplied by 2 raised to \a exp
 //		template<typename T> typename enable<half,T>::type ldexp(T arg, int exp) { return functions::scalbln(arg, exp); }
 		inline half ldexp(half arg, int exp) { return functions::scalbln(arg, exp); }
 		inline half ldexp(expr arg, int exp) { return functions::scalbln(arg, exp); }
@@ -2636,7 +2636,7 @@ namespace half_float
 		/// Multiply by power of two.
 		/// \param arg number to modify
 		/// \param exp power of two to multiply with
-		/// \return \a arg multplied by 2 raised to \a exp
+		/// \return \a arg multiplied by 2 raised to \a exp
 //		template<typename T> typename enable<half,T>::type scalbn(T arg, int exp) { return functions::scalbln(arg, exp); }
 		inline half scalbn(half arg, int exp) { return functions::scalbln(arg, exp); }
 		inline half scalbn(expr arg, int exp) { return functions::scalbln(arg, exp); }
@@ -2644,7 +2644,7 @@ namespace half_float
 		/// Multiply by power of two.
 		/// \param arg number to modify
 		/// \param exp power of two to multiply with
-		/// \return \a arg multplied by 2 raised to \a exp	
+		/// \return \a arg multiplied by 2 raised to \a exp	
 //		template<typename T> typename enable<half,T>::type scalbln(T arg, long exp) { return functions::scalbln(arg, exp); }
 		inline half scalbln(half arg, long exp) { return functions::scalbln(arg, exp); }
 		inline half scalbln(expr arg, long exp) { return functions::scalbln(arg, exp); }

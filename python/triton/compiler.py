@@ -1126,7 +1126,7 @@ class CacheManager:
             os.rename(filepath + ".tmp", filepath)
 
 
-# utilties for generating and compiling C wrappers
+# utilities for generating and compiling C wrappers
 
 
 @functools.lru_cache()
