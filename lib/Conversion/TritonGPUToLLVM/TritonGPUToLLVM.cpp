@@ -3139,10 +3139,6 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
     ConversionPatternRewriter &rewriter) const {
   auto loc = op.getLoc();
 
-  // TODO[Keren]: A temporary workaround for an issue from membar pass.
-  // https://triton-lang.slack.com/archives/C042VBSQWNS/p1669796615860699?thread_ts=1669779203.526739&cid=C042VBSQWNS
-  barrier();
-
   Value src = op.src();
   Value dst = op.result();
   auto srcTy = src.getType().cast<RankedTensorType>();
@@ -4681,7 +4677,8 @@ public:
     decomposeInsertSliceAsyncOp(mod);
 
     Allocation allocation(mod);
-    MembarAnalysis membar(&allocation);
+    MembarAnalysis membarPass(&allocation);
+    membarPass.run();
 
     RewritePatternSet scf_patterns(context);
     mlir::populateLoopToStdConversionPatterns(scf_patterns);

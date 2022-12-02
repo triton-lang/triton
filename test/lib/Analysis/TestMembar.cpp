@@ -26,7 +26,9 @@ struct TestMembarPass
     auto op_name = SymbolTable::getSymbolName(operation).getValue().str();
     os << op_name << "\n";
     Allocation allocation(operation);
-    MembarAnalysis analysis(&allocation);
+    MembarAnalysis membarPass(&allocation);
+    membarPass.run();
+
     size_t operationId = 0;
     operation->walk<WalkOrder::PreOrder>([&](Operation *op) {
       if (isa<gpu::BarrierOp>(op)) {

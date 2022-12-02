@@ -29,7 +29,11 @@ public:
   /// The following circumstances are not considered yet:
   /// - Double buffers
   /// - N buffers
-  MembarAnalysis(Allocation *allocation) : allocation(allocation) { run(); }
+  MembarAnalysis(Allocation *allocation) : allocation(allocation) {}
+
+  /// Runs the membar analysis to the given operation, inserts a barrier if
+  /// necessary.
+  void run();
 
 private:
   struct RegionInfo {
@@ -81,10 +85,6 @@ private:
       });
     }
   };
-
-  /// Runs the membar analysis to the given operation, inserts a barrier if
-  /// necessary.
-  void run();
 
   /// Applies the barrier analysis based on the SCF dialect, in which each
   /// region has a single basic block only.
