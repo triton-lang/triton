@@ -51,7 +51,7 @@ def get_thirdparty_packages(triton_cache_path):
         Package("pybind11", "pybind11-2.10.0", "https://github.com/pybind/pybind11/archive/refs/tags/v2.10.0.tar.gz", "include/pybind11/pybind11.h", "PYBIND11_INCLUDE_DIR", "")
     ]
     if not use_system_llvm():
-        # donwload LLVM if no suitable system LLVM is installed
+        # download LLVM if no suitable system LLVM is installed
         packages.append(
             Package("llvm", "clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04", "https://github.com/llvm/llvm-project/releases/download/llvmorg-11.0.1/clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04.tar.xz", "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR")
         )
