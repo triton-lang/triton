@@ -229,7 +229,7 @@ def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLO
     [127, 41, 43, 4, 32, 32, 16, False],
     [127, 41, 43, 4, 32, 32, 16, True],
     [128, 8, 8, 4, 32, 32, 16, False],
-    # [128, 8, 8, 4, 32, 32, 16, True] This case is not supported yet, same issue as fp16
+    [128, 8, 8, 4, 32, 32, 16, True]
 ])
 def test_gemm_fp32(M, N, K, num_warps, block_M, block_N, block_K, allow_tf32):
     @triton.jit
