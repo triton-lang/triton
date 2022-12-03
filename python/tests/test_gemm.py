@@ -282,3 +282,20 @@ def test_gemm_fmadot(M, N, K, num_warps, block_M, block_N, block_K):
     golden = torch.matmul(a, b)
     golden_abs_err, golden_rel_err = get_proper_err(a, b, golden)
     torch.testing.assert_close(c, golden, rtol=max(1e-4, 1.5 * golden_rel_err), atol=max(1e-4, 1.5 * golden_abs_err))
+
+
+@pytest.mark.parametrize('SHAPE,NUM_WARPS,TRANS_A,TRANS_B', [
+    (shape, num_warps, trans_a, trans_b)
+    for shape in [
+        [16, 16, 16],
+        [16, 16, 32],
+        [32, 16, 16],
+        # diabled due to the wrong vec in shared layout, the backend works if right vec passed.
+        # [32, 32, 32],
+    ]
+    for num_warps in [1]
+    for trans_a in [False]
+    for trans_b in [False]
+])
+def test_gemmno_scf_for_mmav1(SHAPE, NUM_WARPS, TRANS_A, TRANS_B):
+    test_gemm_no_scf(SHAPE, NUM_WARPS, TRANS_A, TRANS_B)
