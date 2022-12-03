@@ -1138,7 +1138,7 @@ private:
   std::function<void(int, int)>
   getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
                   MmaEncodingAttr mmaLayout, int wpt, uint32_t kOrder,
-                  ArrayRef<int> instrShape, ArrayRef<int> matShape,
+                  SmallVector<int> instrShape, SmallVector<int> matShape,
                   Value warpId, ValueTable &vals, bool isA) const {
     auto tensorTy = tensor.getType().cast<RankedTensorType>();
     // We assumes that the input operand of Dot should be from shared layout.
