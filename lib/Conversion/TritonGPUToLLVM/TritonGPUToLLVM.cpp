@@ -2628,10 +2628,6 @@ public:
     auto dstTy = dst.getType().cast<RankedTensorType>();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    if (srcLayout.isa<SharedEncodingAttr>() &&
-        dstLayout.isa<SharedEncodingAttr>()) {
-      return lowerSharedToShared(op, adaptor, rewriter);
-    }
     if (srcLayout.isa<BlockedEncodingAttr>() &&
         dstLayout.isa<SharedEncodingAttr>()) {
       return lowerBlockedToShared(op, adaptor, rewriter);
@@ -2963,11 +2959,6 @@ private:
                                      OpAdaptor adaptor,
                                      ConversionPatternRewriter &rewriter) const;
 
-  // shared -> shared
-  LogicalResult lowerSharedToShared(triton::gpu::ConvertLayoutOp op,
-                                    OpAdaptor adaptor,
-                                    ConversionPatternRewriter &rewriter) const;
-
   // shared -> mma_operand
   LogicalResult
   lowerSharedToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
@@ -3144,40 +3135,6 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
   Value result = getStructFromElements(loc, outVals, rewriter, structTy);
   rewriter.replaceOp(op, result);
 
-  return success();
-}
-
-LogicalResult ConvertLayoutOpConversion::lowerSharedToShared(
-    triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
-    ConversionPatternRewriter &rewriter) const {
-  auto loc = op.getLoc();
-  auto srcType = op.getOperand().getType().cast<RankedTensorType>();
-  auto dstType = op.getType().cast<RankedTensorType>();
-
-  auto srcOrd = srcType.getEncoding().cast<SharedEncodingAttr>().getOrder();
-  auto dstOrd = dstType.getEncoding().cast<SharedEncodingAttr>().getOrder();
-
-  SmallVector<unsigned> perm(srcOrd.size());
-  // e.g.
-  // srcOrd = [0, 1] ; dstOrd = [1, 0]
-  // perm = [1, 0]
-  // TODO: write unit tests
-  for (size_t i = 0; i < perm.size(); i++) {
-    perm[i] = std::distance(dstOrd.begin(),
-                            std::find(dstOrd.begin(), dstOrd.end(), srcOrd[i]));
-  }
-
-  auto srcSmemObj =
-      getSharedMemoryObjectFromStruct(loc, adaptor.src(), rewriter);
-  SmallVector<Value> dstStrides, dstOffsets;
-  for (unsigned i : perm) {
-    dstStrides.push_back(srcSmemObj.strides[i]);
-    dstOffsets.push_back(srcSmemObj.offsets[i]);
-  }
-
-  auto dstSmemObj = SharedMemoryObject(srcSmemObj.base, dstStrides, dstOffsets);
-  auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
-  rewriter.replaceOp(op, retVal);
   return success();
 }
 
