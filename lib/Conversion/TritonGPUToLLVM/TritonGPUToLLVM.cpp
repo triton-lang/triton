@@ -1827,7 +1827,7 @@ struct PrintfOpConversion
     Type newType = type;
 
     bool bUnsigned = type.isUnsignedInteger();
-    if (type.isIntOrIndex() && type.getIntOrFloatBitWidth()) {
+    if (type.isIntOrIndex() && type.getIntOrFloatBitWidth() < 32) {
       if (bUnsigned) {
         newType = ui32_ty;
         newOp = rewriter.create<LLVM::ZExtOp>(UnknownLoc::get(context), newType,
@@ -1837,14 +1837,10 @@ struct PrintfOpConversion
         newOp = rewriter.create<LLVM::SExtOp>(UnknownLoc::get(context), newType,
                                               value);
       }
-    } else if (type.isBF16() || type.isF16() || type.isF32() || type.isF64()) {
+    } else if (type.isBF16() || type.isF16() || type.isF32()) {
       newType = f64_ty;
       newOp = rewriter.create<LLVM::FPExtOp>(UnknownLoc::get(context), newType,
                                              value);
-    } else {
-      newType = i32_ty;
-      newOp = rewriter.create<LLVM::PtrToIntOp>(UnknownLoc::get(context),
-                                                newType, value);
     }
 
     return {newType, newOp};
@@ -3610,34 +3606,6 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
     auto getIntAttr = [&](int v) {
       return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
     };
-
-#define SHOW_MMA_V1 1
-#if SHOW_MMA_V1
-    auto get_f16 = [&](Value value, int idx) {
-      return extract_element(value, i32_val(idx));
-    };
-
-    std::vector<Value> pargs({LLVM::gThreadId});
-
-    pargs.push_back(get_f16(ha.first, 0));
-    pargs.push_back(get_f16(ha.first, 1));
-    pargs.push_back(get_f16(ha.second, 0));
-    pargs.push_back(get_f16(ha.second, 1));
-
-    pargs.push_back(get_f16(hb.first, 0));
-    pargs.push_back(get_f16(hb.first, 1));
-    pargs.push_back(get_f16(hb.second, 0));
-    pargs.push_back(get_f16(hb.second, 1));
-
-    for (int i = 0; i < 8; i++) {
-      pargs.push_back(extract_val(f32_ty, res, getIntAttr(i)));
-    }
-
-    vprintf("mma t-%d A:(%f,%f) (%f,%f) B:(%f,%f) (%f,%f) "
-            "D:(%f,%f,%f,%f,%f,%f,%f,%f)",
-            pargs, rewriter);
-
-#endif
 
     for (unsigned i = 0; i < 8; i++)
       acc[idx[i]] = extract_val(f32_ty, res, getIntAttr(i));
