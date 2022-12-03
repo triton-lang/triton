@@ -1346,9 +1346,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
                               sharedLayout.getOrder().end());
 
   Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
-  Value smemBaseBeforeSwizzle =
-      smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
-  Value smemBase = smemBaseBeforeSwizzle;
+  Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
   // Value smemBase = gep(ptr_ty(f16_ty), smemBaseBeforeSwizzle,
   // cSwizzleOffset);
 
@@ -1391,8 +1389,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
   int numPtrA = std::max(2 * perPhaseA * maxPhaseA / stepA0, 1);
   int NK = shape[1];
 
-  printf("A.meta t-0 perPhase:%d maxPhase:%d step:%d NK:%d vec:%d\n", perPhaseA,
-         maxPhaseA, stepA0, NK, vecA);
   // pre-compute pointer lanes
   Value offA0 = isARow ? offsetAK : offsetAM;
   Value offA1 = isARow ? offsetAM : offsetAK;
@@ -1428,7 +1424,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
     vals[{m, k}] = {val0, val1};
   };
   auto loadA = [&](int m, int k) {
-    printf("loadA_param t-0 %d %d\n", m, k);
     int offidx = (isARow ? k / 4 : m) % numPtrA;
     Value thePtrA = gep(f16PtrTy, smemBase, offA[offidx]);
 
