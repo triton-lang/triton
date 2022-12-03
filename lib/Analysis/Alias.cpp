@@ -26,8 +26,7 @@ ChangeResult SharedMemoryAliasAnalysis::visitOperation(
     // These ops may allocate a new shared memory buffer.
     auto result = op->getResult(0);
     // FIXME(Keren): extract and insert are always alias for now
-    if (isa<tensor::ExtractSliceOp, triton::TransOp>(op) ||
-        isCvtSharedToShared(op)) {
+    if (isa<tensor::ExtractSliceOp, triton::TransOp>(op)) {
       // extract_slice %src
       aliasInfo = AliasInfo(operands[0]->getValue());
       pessimistic = false;

@@ -104,19 +104,10 @@ bool maybeSharedAllocationOp(Operation *op) {
           dialect->getTypeID() == mlir::TypeID::get<tensor::TensorDialect>());
 }
 
-bool isCvtSharedToShared(Operation *op) {
-  if (!isa<triton::gpu::ConvertLayoutOp>(op))
-    return false;
-  auto srcTy = op->getOperand(0).getType().cast<RankedTensorType>();
-  auto dstTy = op->getResult(0).getType().cast<RankedTensorType>();
-  return srcTy.getEncoding().isa<triton::gpu::SharedEncodingAttr>() &&
-         dstTy.getEncoding().isa<triton::gpu::SharedEncodingAttr>();
-}
-
 bool maybeAliasOp(Operation *op) {
   return isa<tensor::ExtractSliceOp>(op) || isa<triton::TransOp>(op) ||
          isa<triton::gpu::InsertSliceAsyncOp>(op) ||
-         isa<tensor::InsertSliceOp>(op) || isCvtSharedToShared(op);
+         isa<tensor::InsertSliceOp>(op);
 }
 
 std::string getValueOperandName(Value value, AsmState &state) {
