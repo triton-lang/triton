@@ -3649,7 +3649,6 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
         callMMA(m, n, k);
       }
 
-  LLVM::vprintf_array(LLVM::gThreadId, acc, "acc", "%f", rewriter);
   // replace with new packed result
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(acc.size(), type::f32Ty(ctx)));

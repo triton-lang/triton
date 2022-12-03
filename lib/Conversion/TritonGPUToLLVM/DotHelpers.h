@@ -1352,27 +1352,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
   // Value smemBase = gep(ptr_ty(f16_ty), smemBaseBeforeSwizzle,
   // cSwizzleOffset);
 
-  /*{
-    for (int i = 0; i < 16*16; i++) {
-      Value addr = gep(ptr_ty(f16_ty), smemBase, i32_val(i));
-      addr = bitcast(addr, ptr_ty(f16_ty));
-      Value elem = load(addr);
-      vprintf("A.smem t-%d %f", {gThreadId, elem}, rewriter);
-    }
-  }*/
-
-  /*
-  { // DEBUG
-    for (int i = 0; i < 16*16; i++) {
-      Value addr = gep(ptr_ty(f16_ty), smemBase, i32_val(i));
-      addr = bitcast(addr, ptr_ty(f16_ty));
-      Value val = LLVM::createConstantF32(loc, rewriter, float(i));
-      val = rewriter.create<FPTruncOp>(loc, f16_ty, val);
-      store(val, addr);
-    }
-  }
-   */
-
   bool isARow = order[0] != 0;
   bool isAVec4 = !isARow && shape[order[0]] <= 16; // fp16*4 = 16bytes
   int packSize0 = (isARow || isAVec4) ? 1 : 2;
@@ -1418,25 +1397,15 @@ Value DotOpMmaV1ConversionHelper::loadA(
   Value offA0 = isARow ? offsetAK : offsetAM;
   Value offA1 = isARow ? offsetAM : offsetAK;
   Value phaseA = urem(udiv(offA1, i32_val(perPhaseA)), i32_val(maxPhaseA));
-  vprintf("show0 t-%d phase_a:%d vec_a:%d", {gThreadId, phaseA, i32_val(vecA)},
-          rewriter);
   // offA0 = add(offA0, cSwizzleOffset);
   SmallVector<Value> offA(numPtrA);
   for (int i = 0; i < numPtrA; i++) {
-    std::vector<Value> args; // DEBUG
     Value offA0I = add(offA0, i32_val(i * (isARow ? 4 : strideRepM)));
-    args.push_back(offA0I);
     offA0I = udiv(offA0I, i32_val(vecA));
-    args.push_back(offA0I);
     offA0I = xor_(offA0I, phaseA);
-    args.push_back(offA0I);
     offA0I = mul(offA0I, i32_val(vecA));
-    args.push_back(offA0I);
     offA[i] = add(mul(offA0I, strideA0), mul(offA1, strideA1));
-    args.push_back(offA[i]);
-    vprintf_array(gThreadId, args, "offA_0i", "%d", rewriter);
   }
-  vprintf_array(gThreadId, offA, "offAs", "%d", rewriter);
 
   Type f16x2Ty = vec_ty(f16_ty, 2);
   // One thread get 8 elements as result
@@ -1453,7 +1422,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
   auto instrShape = getMmaInstrShape();
   unsigned numM = std::max<int>(rep[0] * shape[0] / (spw[0] * wpt[0]), 1);
 
-  vprintf("A_smem t-%d %p", {gThreadId, smemBase}, rewriter);
   Type f16PtrTy = ptr_ty(f16_ty);
 
   auto ld = [&](decltype(has) &vals, int m, int k, Value val0, Value val1) {
@@ -1463,31 +1431,18 @@ Value DotOpMmaV1ConversionHelper::loadA(
     printf("loadA_param t-0 %d %d\n", m, k);
     int offidx = (isARow ? k / 4 : m) % numPtrA;
     Value thePtrA = gep(f16PtrTy, smemBase, offA[offidx]);
-    vprintf("offA t-%d %d", {gThreadId, offA[offidx]}, rewriter);
 
     int stepAM = isARow ? m : m / numPtrA * numPtrA;
     int stepAK = isARow ? k / (numPtrA * vecA) * (numPtrA * vecA) : k;
     Value offset = add(mul(i32_val(stepAM * strideRepM), strideAM),
                        mul(i32_val(stepAK), strideAK));
     Value pa = gep(f16PtrTy, thePtrA, offset);
-    vprintf("pa t-%d %d %d", {gThreadId, thePtrA, offset}, rewriter);
     Type aPtrTy = ptr_ty(vec_ty(i32_ty, std::max<int>(vecA / 2, 1)), 3);
     Value ha = load(bitcast(pa, aPtrTy));
     // record lds that needs to be moved
     Value ha00 = bitcast(extract_element(ha, i32_val(0)), f16x2Ty);
     Value ha01 = bitcast(extract_element(ha, i32_val(1)), f16x2Ty);
     ld(has, m, k, ha00, ha01);
-    {
-      auto get_f16 = [&](Value value, int idx) {
-        return extract_element(value, i32_val(idx));
-      };
-      std::vector<Value> args;
-      args.push_back(get_f16(ha00, 0));
-      args.push_back(get_f16(ha00, 1));
-      args.push_back(get_f16(ha01, 0));
-      args.push_back(get_f16(ha01, 1));
-      vprintf_array(gThreadId, args, "ha0x", "%f", rewriter);
-    }
 
     if (vecA > 4) {
       Value ha10 = bitcast(extract_element(ha, i32_val(2)), f16x2Ty);
@@ -1533,15 +1488,6 @@ Value DotOpMmaV1ConversionHelper::loadB(
 
   Value smem = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
 
-  {
-    for (int i = 0; i < 16 * 16; i++) {
-      Value addr = gep(ptr_ty(f16_ty), smem, i32_val(i));
-      addr = bitcast(addr, ptr_ty(f16_ty));
-      Value elem = load(addr);
-      vprintf("B.smem t-%d %f", {gThreadId, elem}, rewriter);
-    }
-  }
-
   bool isBRow = order[0] != 0;
   bool isBVec4 = isBRow && shape[order[0]] <= 16;
   int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
@@ -1577,9 +1523,6 @@ Value DotOpMmaV1ConversionHelper::loadB(
   int numPtrB = std::max(2 * perPhaseB * maxPhaseB / stepB0, 1);
   int NK = shape[0];
 
-  vprintf("offBNK t-%d %d %d %d",
-          {gThreadId, offsetBN, offsetBK, i32_val(vecB)}, rewriter);
-
   Value offB0 = isBRow ? offsetBN : offsetBK;
   Value offB1 = isBRow ? offsetBK : offsetBN;
   Value phaseB = urem(udiv(offB1, i32_val(perPhaseB)), i32_val(maxPhaseB));
@@ -1587,21 +1530,13 @@ Value DotOpMmaV1ConversionHelper::loadB(
 
   offB0 = add(offB0, cSwizzleOffset);
   SmallVector<Value> offB(numPtrB);
-  SmallVector<Value> offB_i; // DEBUG
   for (int i = 0; i < numPtrB; ++i) {
     Value offB0I = add(offB0, i32_val(i * (isBRow ? strideRepN : 4)));
-    offB_i.push_back(offB0I);
     offB0I = udiv(offB0I, i32_val(vecB));
-    offB_i.push_back(offB0I);
     offB0I = xor_(offB0I, phaseB);
-    offB_i.push_back(offB0I);
     offB0I = mul(offB0I, i32_val(vecB));
-    offB_i.push_back(offB0I);
     offB[i] = add(mul(offB0I, strideB0), mul(offB1, strideB1));
-    offB_i.push_back(offB[i]);
   }
-  vprintf_array(gThreadId, offB, "offBs", "%d", rewriter);
-  vprintf_array(gThreadId, offB_i, "offB_0i", "%d", rewriter);
 
   Type f16PtrTy = ptr_ty(f16_ty);
   Type f16x2Ty = vec_ty(f16_ty, 2);
@@ -1610,8 +1545,6 @@ Value DotOpMmaV1ConversionHelper::loadB(
   ValueTable hbs;
   for (int i = 0; i < numPtrB; ++i)
     ptrB[i] = gep(ptr_ty(f16_ty), smem, offB[i]);
-
-  vprintf_array(gThreadId, offB, "ptrB", "%d", rewriter);
 
   auto ld = [&](decltype(hbs) &vals, int m, int k, Value val0, Value val1) {
     vals[{m, k}] = {val0, val1};
@@ -1626,7 +1559,6 @@ Value DotOpMmaV1ConversionHelper::loadB(
     Value offset = add(mul(i32_val(stepBN * strideRepN), strideBN),
                        mul(i32_val(stepBK), strideBK));
     Value pb = gep(f16PtrTy, thePtrB, offset);
-    vprintf("pb t-%d %d", {gThreadId, pb}, rewriter);
 
     Value hb =
         load(bitcast(pb, ptr_ty(vec_ty(i32_ty, std::max(vecB / 2, 1)), 3)));
@@ -1641,18 +1573,6 @@ Value DotOpMmaV1ConversionHelper::loadB(
         ld(hbs, n + 1, K, hb10, hb11);
       else
         ld(hbs, n, K + 4, hb10, hb11);
-    }
-
-    {
-      auto get_f16 = [&](Value value, int idx) {
-        return extract_element(value, i32_val(idx));
-      };
-      std::vector<Value> args;
-      args.push_back(get_f16(hb00, 0));
-      args.push_back(get_f16(hb00, 1));
-      args.push_back(get_f16(hb01, 0));
-      args.push_back(get_f16(hb01, 1));
-      vprintf_array(gThreadId, args, "hb0x", "%f", rewriter);
     }
   };
 
