@@ -494,8 +494,6 @@ public:
         if (isa<triton::gpu::ConvertLayoutOp>(user))
           continue;
       }
-      // check
-      // llvm::outs() << "replacing " << iterArg.index() << "\n";
       for (auto op : iterArg.value().getUsers()) {
         auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
         if (!cvt)
@@ -804,18 +802,20 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
 
-    mlir::RewritePatternSet patterns(context);
-
-    patterns.add<OptimizeBlockedToShared>(context);
-    patterns.add<SimplifyConversion>(context);
-    patterns.add<DecomposeDotOperand>(context);
-    patterns.add<RematerializeBackward>(context);
-    patterns.add<RematerializeForward>(context);
-    patterns.add<MoveConvertOutOfLoop>(context);
-    patterns.add<BlockedToMMA>(context, computeCapability);
-
-    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
-      signalPassFailure();
+    for (size_t i = 0; i < 2; i++) {
+      mlir::RewritePatternSet nonLoopPatterns(context);
+      nonLoopPatterns.add<OptimizeBlockedToShared>(context);
+      nonLoopPatterns.add<SimplifyConversion>(context);
+      nonLoopPatterns.add<DecomposeDotOperand>(context);
+      nonLoopPatterns.add<RematerializeBackward>(context);
+      nonLoopPatterns.add<RematerializeForward>(context);
+      nonLoopPatterns.add<BlockedToMMA>(context, computeCapability);
+      if (applyPatternsAndFoldGreedily(m, std::move(nonLoopPatterns)).failed())
+        signalPassFailure();
+      mlir::RewritePatternSet loopPatterns(context);
+      loopPatterns.add<MoveConvertOutOfLoop>(context);
+      if (applyPatternsAndFoldGreedily(m, std::move(loopPatterns)).failed())
+        signalPassFailure();
     }
   }
 };
