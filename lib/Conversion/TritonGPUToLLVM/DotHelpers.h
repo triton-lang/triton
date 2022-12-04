@@ -710,17 +710,13 @@ public:
       if (kOrder == 1) {
         elems[0] = load(gep(elemPtrTy, ptr, sOffsetElemVal));
         elems[1] = load(gep(elemPtrTy, ptr2, sOffsetElemVal));
-        elems[2] =
-            load(gep(elemPtrTy, ptr, sOffsetArrElemVal));
-        elems[3] =
-            load(gep(elemPtrTy, ptr2, sOffsetArrElemVal));
+        elems[2] = load(gep(elemPtrTy, ptr, sOffsetArrElemVal));
+        elems[3] = load(gep(elemPtrTy, ptr2, sOffsetArrElemVal));
       } else {
         elems[0] = load(gep(elemPtrTy, ptr, sOffsetElemVal));
         elems[2] = load(gep(elemPtrTy, ptr2, sOffsetElemVal));
-        elems[1] =
-            load(gep(elemPtrTy, ptr, sOffsetArrElemVal));
-        elems[3] =
-            load(gep(elemPtrTy, ptr2, sOffsetArrElemVal));
+        elems[1] = load(gep(elemPtrTy, ptr, sOffsetArrElemVal));
+        elems[3] = load(gep(elemPtrTy, ptr2, sOffsetArrElemVal));
       }
       return {elems[0], elems[1], elems[2], elems[3]};
 
@@ -956,11 +952,6 @@ struct MMA16816ConversionHelper {
 
     SmallVector<int64_t> shape(aTensorTy.getShape().begin(),
                                aTensorTy.getShape().end());
-    // TODO[Superjomn]: transA cannot be accessed in ConvertLayoutOp.
-    bool transA = false;
-    if (transA) {
-      std::swap(shape[0], shape[1]);
-    }
 
     ValueTable ha;
     std::function<void(int, int)> loadFn;
@@ -973,12 +964,13 @@ struct MMA16816ConversionHelper {
     if (aTensorTy.getEncoding().isa<SharedEncodingAttr>()) {
       Value warpM = getWarpM(shape[0]);
       // load from smem
-      int wpt = std::min<int>(mmaLayout.getWarpsPerCTA()[0], shape[0] / matShapeM);
-      loadFn = getLoadMatrixFn(
-          tensor, smemObj, mmaLayout, wpt /*wpt*/,
-          1 /*kOrder*/, {mmaInstrM, mmaInstrK} /*instrShape*/,
-          {matShapeM, matShapeK} /*matShape*/, warpM /*warpId*/, ha /*vals*/,
-          true /*isA*/);
+      int wpt =
+          std::min<int>(mmaLayout.getWarpsPerCTA()[0], shape[0] / matShapeM);
+      loadFn =
+          getLoadMatrixFn(tensor, smemObj, mmaLayout, wpt /*wpt*/, 1 /*kOrder*/,
+                          {mmaInstrM, mmaInstrK} /*instrShape*/,
+                          {matShapeM, matShapeK} /*matShape*/, warpM /*warpId*/,
+                          ha /*vals*/, true /*isA*/);
     } else if (aTensorTy.getEncoding().isa<BlockedEncodingAttr>()) {
       // load from registers, used in gemm fuse
       // TODO(Superjomn) Port the logic.
@@ -1017,12 +1009,13 @@ struct MMA16816ConversionHelper {
     int numRepN = getNumRepN(tensorTy, shape[1]);
 
     Value warpN = getWarpN(shape[1]);
-    int wpt = std::min<int>(mmaLayout.getWarpsPerCTA()[1], shape[1] / matShapeN);
-    auto loadFn = getLoadMatrixFn(
-        tensor, smemObj, mmaLayout,  wpt /*wpt*/,
-        0 /*kOrder*/, {mmaInstrK, mmaInstrN} /*instrShape*/,
-        {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/, hb /*vals*/,
-        false /*isA*/);
+    int wpt =
+        std::min<int>(mmaLayout.getWarpsPerCTA()[1], shape[1] / matShapeN);
+    auto loadFn =
+        getLoadMatrixFn(tensor, smemObj, mmaLayout, wpt /*wpt*/, 0 /*kOrder*/,
+                        {mmaInstrK, mmaInstrN} /*instrShape*/,
+                        {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/,
+                        hb /*vals*/, false /*isA*/);
 
     for (int n = 0; n < std::max(numRepN / 2, 1); ++n) {
       for (int k = 0; k < numRepK; ++k)
@@ -1065,8 +1058,6 @@ struct MMA16816ConversionHelper {
 
     SmallVector<int64_t> aShape(aTensorTy.getShape().begin(),
                                 aTensorTy.getShape().end());
-    if (op.transA())
-      std::swap(aShape[0], aShape[1]);
 
     auto dShape = dTensorTy.getShape();
 
@@ -1342,13 +1333,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
   SmallVector<unsigned> order(sharedLayout.getOrder().begin(),
                               sharedLayout.getOrder().end());
 
-  // TODO [Superjomn]: transA cannot be accessed in ConvertLayoutOp.
-  bool transA = false;
-  if (transA) {
-    std::swap(shape[0], shape[1]);
-    std::swap(order[0], order[1]);
-  }
-
   Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
 
   bool isARow = order[0] != 0;
@@ -1478,14 +1462,6 @@ Value DotOpMmaV1ConversionHelper::loadB(
   SmallVector<unsigned> order(sharedLayout.getOrder().begin(),
                               sharedLayout.getOrder().end());
 
-  // TODO [Superjomn]: transB cannot be accessed in ConvertLayoutOp.
-  bool transB = false;
-
-  if (transB) {
-    std::swap(order[0], order[1]);
-    std::swap(shape[0], shape[1]);
-  }
-
   bool isBRow = order[0] != 0;
   bool isBVec4 = isBRow && shape[order[0]] <= 16;
   int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
@@ -1511,8 +1487,6 @@ Value DotOpMmaV1ConversionHelper::loadB(
 
   auto [_0, _1, offsetBN, offsetBK] =
       computeOffsets(thread, false, isBRow, fpw, spw, rep, rewriter, loc);
-  if (transB)
-    std::swap(offsetBK, offsetBN);
 
   Value offB0 = isBRow ? offsetBN : offsetBK;
   Value offB1 = isBRow ? offsetBK : offsetBN;

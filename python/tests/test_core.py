@@ -1082,7 +1082,7 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
 
     M, N, K = 64, 64, 64
     num_warps = 4
-    trans_a, trans_b = False, False
+    trans_a, trans_b = False, True
 
     # triton kernel
     @triton.jit
@@ -1105,8 +1105,8 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
         Zs = Z + off_m[:, None] * stride_zm + off_n[None, :] * stride_zn
         x = tl.load(Xs)
         y = tl.load(Ys)
-        x = tl.trans(x) if TRANS_A else x
-        y = tl.trans(y) if TRANS_B else y
+        x = x.T if TRANS_A else x
+        y = y.T if TRANS_B else y
         z = tl.dot(x, y, allow_tf32=ALLOW_TF32)
         if ADD_MATRIX:
             z += tl.load(Zs)
@@ -1123,9 +1123,7 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
             den = tl.sum(num, 1)
             z = num / den[:, None]
         if CHAIN_DOT:
-            # tl.store(Zs, z)
-            # tl.debug_barrier()
-            z = tl.dot(tl.trans(z.to(tl.float16)), tl.load(Ws))
+            z = tl.dot(z.to(tl.float16).T, tl.load(Ws))
         tl.store(Zs, z)
     # input
     rs = RandomState(17)
