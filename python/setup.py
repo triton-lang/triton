@@ -25,8 +25,8 @@ def get_build_type():
     elif check_env_flag("REL_WITH_DEB_INFO"):
         return "RelWithDebInfo"
     else:
-        return "Debug"
-        # TODO(Keren): Restore this before we merge into master
+        return "RelWithDebInfo"
+        # TODO: change to release when stable enough
         #return "Release"
 
 

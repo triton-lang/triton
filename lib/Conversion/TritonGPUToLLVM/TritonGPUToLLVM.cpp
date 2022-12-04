@@ -1875,9 +1875,9 @@ struct PrintfOpConversion
 
     Value globalPtr =
         rewriter.create<LLVM::AddressOfOp>(UnknownLoc::get(context), global);
-    Value stringStart =
-        rewriter.create<LLVM::GEPOp>(UnknownLoc::get(context), int8Ptr,
-                                     globalPtr, mlir::ValueRange({zero, zero}));
+    Value stringStart = rewriter.create<LLVM::GEPOp>(
+        UnknownLoc::get(context), int8Ptr, globalPtr,
+        SmallVector<Value>({zero, zero}));
 
     Value bufferPtr =
         rewriter.create<LLVM::NullOp>(UnknownLoc::get(context), int8Ptr);
@@ -1912,7 +1912,7 @@ struct PrintfOpConversion
                                                    int8Ptr, allocated);
     }
 
-    ValueRange operands{stringStart, bufferPtr};
+    SmallVector<Value> operands{stringStart, bufferPtr};
     rewriter.create<LLVM::CallOp>(UnknownLoc::get(context), funcOp, operands);
   }
 };
