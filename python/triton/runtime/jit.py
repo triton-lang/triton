@@ -8,7 +8,6 @@ import os
 import subprocess
 import textwrap
 from collections import defaultdict, namedtuple
-
 import torch
 
 import triton
@@ -80,6 +79,9 @@ def version_key():
         contents += [hashlib.md5(f.read()).hexdigest()]
     # backend
     with open(triton._C.libtriton.__file__, "rb") as f:
+        contents += [hashlib.md5(f.read()).hexdigest()]
+    # launcher
+    with open(triton._C.liblauncher.__file__, "rb") as f:
         contents += [hashlib.md5(f.read()).hexdigest()]
     # language
     language_path = os.path.join(*triton.__path__, 'language')
@@ -254,7 +256,15 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     try:
       bin = cache[device][key]
       if not warmup:
-          bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, triton.compiler.CompiledKernel.launch_enter_hook, triton.compiler.CompiledKernel.launch_exit_hook, bin, {args})
+          args = [{args}]
+          all_args = {', '.join([f'{arg}' for arg in self.arg_names])},
+          configs = self._get_config(*all_args),
+          constants = self._make_constants(constexpr_key)
+          constants.update({{i: None for i, arg in enumerate(all_args) if arg is None}})
+          constants.update({{i: 1 for i in configs[0].equal_to_1}})
+          signature = {{ i: self._type_of(_key_of(arg)) for i, arg in enumerate(all_args) if i not in self.constexprs }}
+          format_str, is_const_str = triton.compiler.generate_format_str(signature, constants)
+          bin.c_wrapper(format_str, is_const_str, grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, triton.compiler.CompiledKernel.launch_enter_hook, triton.compiler.CompiledKernel.launch_exit_hook, bin, {args})
       return bin
     # kernel not cached -- compile
     except KeyError:
@@ -271,10 +281,11 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
       for i, arg in constants.items():
         if callable(arg):
           raise TypeError(f"Callable constexpr at index {{i}} is not supported")
+      format_str, is_const_str = triton.compiler.generate_format_str(signature, constants)
       if not self._call_hook(key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
         bin = triton.compile(self, signature, device, constants, num_warps, num_stages, extern_libs=extern_libs, configs=configs)
         if not warmup:
-            bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, triton.compiler.CompiledKernel.launch_enter_hook, triton.compiler.CompiledKernel.launch_exit_hook, bin, *args)
+            bin.c_wrapper(format_str, is_const_str, grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, triton.compiler.CompiledKernel.launch_enter_hook, triton.compiler.CompiledKernel.launch_exit_hook, bin, *args)
         self.cache[device][key] = bin
         return bin
       return None

@@ -158,6 +158,10 @@ else()
     target_link_libraries(triton ${LLVM_LIBRARIES} z)
 endif()
 
+# Launcher
+file(GLOB_RECURSE LIBLAUNCHER_SRC lib/launcher/*.c)
+add_library(launcher SHARED ${LIBLAUNCHER_SRC})
+target_link_libraries(launcher cuda)
 
 if(BUILD_PYTHON_MODULE AND NOT WIN32)
     set(CMAKE_SHARED_LIBRARY_SUFFIX ".so")

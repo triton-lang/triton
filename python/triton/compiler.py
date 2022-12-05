@@ -22,6 +22,7 @@ from filelock import FileLock
 
 import triton
 import triton._C.libtriton.triton as _triton
+import triton._C.liblauncher as _launcher
 from .tools.disasm import extract
 
 
@@ -887,7 +888,6 @@ def _compile(fn, signature: str, device: int = -1, constants=dict(),
              output: str = "ttgir", cc=0) -> Tuple[str, int, str]:
     valid_outputs = ("ttir", "ttgir", "ptx", "cubin")
     assert output in valid_outputs, "output should be one of [%s], but get \"%s\"" % (','.join(valid_outputs), output)
-
     # triton-ir
     module, _ = make_triton_ir(fn, signature, specialization, constants)
     if output == "ttir":
@@ -934,7 +934,7 @@ def binary_name_to_header_name(name):
     return f"{name}.h"
 
 
-def generate_launcher(identifier, constants, signature):
+def generate_format_str(signature, constants):
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     def _extracted_type(ty):
@@ -964,134 +964,13 @@ def generate_launcher(identifier, constants, signature):
             "int64_t": "L",
         }[ty]
 
-    format = "iiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
-
-    # generate glue code
-    src = f"""
-#include \"cuda.h\"
-#include <Python.h>
-
-static inline void gpuAssert(CUresult code, const char *file, int line)
-{{
-   if (code != CUDA_SUCCESS)
-   {{
-      const char* prefix = "Triton Error [CUDA]: ";
-      const char* str;
-      cuGetErrorString(code, &str);
-      char err[1024] = {{0}};
-      strcat(err, prefix);
-      strcat(err, str);
-      PyErr_SetString(PyExc_RuntimeError, err);
-   }}
-}}
-#define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
-
-
-void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, CUstream stream, CUfunction function, {arg_decls}) {{
-  void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
-  if(gridX*gridY*gridZ > 0){{
-    CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
-  }}
-}}
-
-
-static inline CUdeviceptr getPointer(PyObject *obj, int idx) {{
-  if (PyLong_Check(obj)) {{
-    return (CUdeviceptr)PyLong_AsUnsignedLongLong(obj);
-  }}
-  if (obj == Py_None) {{
-    return (CUdeviceptr)0;
-  }}
-  PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
-  if(ptr){{
-    PyObject *empty_tuple = PyTuple_New(0);
-    PyObject *ret = PyObject_Call(ptr, empty_tuple, NULL);
-    Py_DECREF(empty_tuple);
-    Py_DECREF(ptr);
-    if (!PyLong_Check(ret)) {{
-      PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
-    }}
-    return (CUdeviceptr)PyLong_AsUnsignedLongLong(ret);
-  }}
-  PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
-  return (CUdeviceptr)0;
-}}
-
-
-static PyObject* launch(PyObject* self, PyObject* args) {{
-  int gridX, gridY, gridZ;
-  uint64_t _stream;
-  uint64_t _function;
-  int num_warps;
-  int shared_memory;
-  PyObject *launch_enter_hook = NULL;
-  PyObject *launch_exit_hook = NULL;
-  PyObject *compiled_kernel = NULL;
-  PyObject *hook_ret = NULL;
-  {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
-    return NULL;
-  }}
-
-  if (launch_enter_hook != Py_None) {{
-    PyObject *new_args = PyTuple_Pack(1, compiled_kernel);
-    hook_ret = PyObject_CallObject(launch_enter_hook, new_args);
-    Py_DECREF(new_args);
-  }}
-
-  _launch(gridX, gridY, gridZ, num_warps, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"getPointer(_arg{i},{i})" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
-
-  if (launch_exit_hook != Py_None) {{
-    PyObject *new_args = NULL;
-    if (hook_ret) {{
-        new_args = PyTuple_Pack(2, compiled_kernel, hook_ret);
-    }} else {{
-        new_args = PyTuple_Pack(1, compiled_kernel);
-    }}
-    hook_ret = PyObject_CallObject(launch_exit_hook, new_args);
-    Py_DECREF(new_args);
-  }}
-
-  if (hook_ret) {{
-      Py_DECREF(hook_ret);
-  }}
-  if(PyErr_Occurred()) {{
-    return NULL;
-  }}
-  // return None
-  Py_INCREF(Py_None);
-  return Py_None;
-}}
-
-static PyMethodDef ModuleMethods[] = {{
-  {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
-  {{NULL, NULL, 0, NULL}} // sentinel
-}};
-
-static struct PyModuleDef ModuleDef = {{
-  PyModuleDef_HEAD_INIT,
-  \"launcher\",
-  NULL, //documentation
-  -1, //size
-  ModuleMethods
-}};
-
-PyMODINIT_FUNC PyInit_launcher(void) {{
-  PyObject *m = PyModule_Create(&ModuleDef);
-  if(m == NULL) {{
-    return NULL;
-  }}
-  PyModule_AddFunctions(m, ModuleMethods);
-  return m;
-}}
-"""
-
-    return src
-
+    PREFIX = 'ssiiiiiKKOOO'
+    format_str = PREFIX + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
+    is_const_str = 'N' * len(PREFIX) + ''.join(['C' if i in constants else 'N' for i in signature.keys()])
+    return format_str, is_const_str
 
 def default_cache_dir():
     return os.path.join(os.environ["HOME"], ".triton", "cache")
-
 
 class CacheManager:
 
@@ -1125,91 +1004,6 @@ class CacheManager:
                 f.write(data)
             os.rename(filepath + ".tmp", filepath)
 
-
-# utilities for generating and compiling C wrappers
-
-
-@functools.lru_cache()
-def libcuda_dirs():
-    locs = subprocess.check_output(["whereis", "libcuda.so"]).decode().strip().split()[1:]
-    return [os.path.dirname(loc) for loc in locs]
-
-
-@functools.lru_cache()
-def cuda_home_dirs():
-    default_dir = "/usr/local/cuda"
-    return os.getenv("CUDA_HOME", default=default_dir)
-
-
-@contextlib.contextmanager
-def quiet():
-    old_stdout, old_stderr = sys.stdout, sys.stderr
-    sys.stdout, sys.stderr = io.StringIO(), io.StringIO()
-    try:
-        yield
-    finally:
-        sys.stdout, sys.stderr = old_stdout, old_stderr
-
-
-def _build(name, src, srcdir):
-    cuda_lib_dirs = libcuda_dirs()
-    cu_include_dir = os.path.join(cuda_home_dirs(), "include")
-    suffix = sysconfig.get_config_var('EXT_SUFFIX')
-    so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
-    # try to avoid setuptools if possible
-    cc = os.environ.get("CC")
-    if cc is None:
-        # TODO: support more things here.
-        clang = shutil.which("clang")
-        gcc = shutil.which("gcc")
-        cc = gcc if gcc is not None else clang
-    py_include_dir = get_paths()["include"]
-    cc_cmd = [cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
-    cc_cmd += [f"-L{dir}" for dir in cuda_lib_dirs]
-    ret = subprocess.check_call(cc_cmd)
-    if ret == 0:
-        return so
-    # fallback on setuptools
-    extra_compile_args = []
-    library_dirs = cuda_lib_dirs
-    include_dirs = [srcdir, cu_include_dir]
-    libraries = ['cuda']
-    # extra arguments
-    extra_link_args = []
-    # create extension module
-    ext = setuptools.Extension(
-        name=name,
-        language='c',
-        sources=[src],
-        include_dirs=include_dirs,
-        extra_compile_args=extra_compile_args + ['-O3'],
-        extra_link_args=extra_link_args,
-        library_dirs=library_dirs,
-        libraries=libraries,
-    )
-    # build extension module
-    args = ['build_ext']
-    args.append('--build-temp=' + srcdir)
-    args.append('--build-lib=' + srcdir)
-    args.append('-q')
-    args = dict(
-        name=name,
-        ext_modules=[ext],
-        script_args=args,
-    )
-    with quiet():
-        setuptools.setup(**args)
-    return so
-
-
-def make_so_cache_key(version_hash, signature, constants):
-    # Get unique key for the compiled code
-    signature = {k: 'ptr' if v[0] == '*' else v for k, v in signature.items()}
-    key = f"{version_hash}-{''.join(signature.values())}{constants}"
-    key = hashlib.md5(key.encode("utf-8")).hexdigest()
-    return key
-
-
 def make_fn_cache_key(fn_hash, signature, configs, constants, num_warps, num_stages):
     # Get unique key for the compiled code
     get_conf_key = lambda conf: (sorted(conf.divisible_by_16), sorted(conf.equal_to_1))
@@ -1218,28 +1012,13 @@ def make_fn_cache_key(fn_hash, signature, configs, constants, num_warps, num_sta
     key = hashlib.md5(key.encode("utf-8")).hexdigest()
     return key
 
-
 def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4,
             num_stages: int = 3, extern_libs=None, configs=None, cc=0, warm_cache_only=False):
     # we get the kernel, i.e. the first function generated in the module
     assert len(configs) == 1
+    format_str, is_const_str = generate_format_str(signature, constants)
     # cache manager
     name = fn.__name__
-    # name of files that are cached
-    so_cache_key = make_so_cache_key(triton.runtime.jit.version_key(), signature, constants)
-    so_cache_manager = CacheManager(so_cache_key)
-    so_name = f"{name}.so"
-    # retrieve stub from cache if it exists
-    if not so_cache_manager.has_file(so_name):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            src = generate_launcher(name, constants, signature)
-            src_path = os.path.join(tmpdir, "main.c")
-            with open(src_path, "w") as f:
-                f.write(src)
-            so = _build(fn.__name__, src_path, tmpdir)
-            with open(so, "rb") as f:
-                so_cache_manager.put(f.read(), so_name, binary=True)
-
     # retrieve cached shared object if it exists
     fn_cache_key = make_fn_cache_key(fn.cache_key, signature, configs, constants, num_warps, num_stages)
     fn_cache_manager = CacheManager(fn_cache_key)
@@ -1264,8 +1043,8 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
 
     if warm_cache_only:
         return  # load_binary() requires a valid cuda context
-
-    return CompiledKernel(name, so_cache_manager._make_path(so_name), fn_cache_manager.cache_dir, device)
+    
+    return CompiledKernel(name, format_str, is_const_str, fn_cache_manager.cache_dir, device)
 
 
 class CompiledKernel:
@@ -1274,13 +1053,10 @@ class CompiledKernel:
     launch_enter_hook = None
     launch_exit_hook = None
 
-    def __init__(self, fn_name, so_path, cache_dir, device):
-        # initialize launcher
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("launcher", so_path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        self.c_wrapper = getattr(mod, "launch")
+    def __init__(self, fn_name, format_str, is_const_str, cache_dir, device):
+        self.format_str = format_str
+        self.is_const_str = is_const_str
+        self.c_wrapper = getattr(_launcher, "launch")
         # initialize metadata
         with open(os.path.join(cache_dir, f"{fn_name}.json")) as f:
             metadata = json.load(f)
@@ -1309,8 +1085,8 @@ class CompiledKernel:
         def runner(*args, stream=None):
             if stream is None:
                 stream = torch.cuda.current_stream().cuda_stream
-            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.shared, stream, self.cu_function,
-                           CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args)
+            self.c_wrapper(self.format_str, self.is_const_str, grid[0], grid[1], grid[2], self.num_warps, self.shared, stream,
+                           self.cu_function, CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args)
         return runner
 
     def get_sass(self, fun=None):
