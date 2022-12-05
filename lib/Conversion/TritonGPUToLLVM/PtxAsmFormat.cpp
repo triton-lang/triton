@@ -155,7 +155,6 @@ std::string PTXInstrExecution::dump() const {
   llvm::raw_string_ostream os(osStr);
 
   std::string instrRepr = strJoin(instr->instrParts, ".");
-
   if (onlyAttachMLIRArgs)
     return instrRepr;
 
@@ -173,8 +172,6 @@ std::string PTXInstrExecution::dump() const {
 
   std::string argsRepr = strJoin(argReprs, ", ");
 
-  if (!instr->instr.empty()) os << instr->instr << ";";
-  else
   os << instrRepr << " " << argsRepr << ";";
   os.flush();
   return osStr;

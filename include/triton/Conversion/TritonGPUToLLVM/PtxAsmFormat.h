@@ -220,10 +220,6 @@ struct PTXInstrCommon {
   PTXInstrExecution &operator()(llvm::ArrayRef<Operand *> oprs,
                                 bool onlyAttachMLIRArgs = false);
 
-  void setInstr(StringRef instr) {
-    this->instr = instr;
-  }
-
 protected:
   // "Call" the instruction with operands.
   // \param oprs The operands of this instruction.
@@ -235,7 +231,6 @@ protected:
 
   PTXBuilder *builder{};
   llvm::SmallVector<std::string, 4> instrParts;
-  std::string instr;
 
   friend struct PTXInstrExecution;
 };
