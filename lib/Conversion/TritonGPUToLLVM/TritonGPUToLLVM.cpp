@@ -32,6 +32,8 @@
 #include <numeric>
 #include <string>
 
+#define USE_ROCM_GCN_LOAD_AND_STORE 0
+
 using namespace mlir;
 using namespace mlir::triton;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
@@ -995,6 +997,9 @@ struct LoadOpConversion
 
     SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
+      std::cout << "=================================================" << std::endl;
+      std::cout << "vecStart: " << vecStart << std::endl;
+      std::cout << "vec: " << vec << std::endl;
       // TODO: optimization when ptr is GEP with constant offset
       size_t in_off = 0;
 
@@ -1005,11 +1010,56 @@ struct LoadOpConversion
       const size_t wordNElems = width / valueElemNbits;
       assert(wordNElems * nWords * numVecs == numElems);
 
+      std::cout << "maxWordWidth: " << maxWordWidth << std::endl;
+      std::cout << "totalWidth: " << totalWidth << std::endl;
+      std::cout << "width: " << width << std::endl;
+
+      std::cout << "numVecs: " << numVecs << std::endl;
+      std::cout << "numElems: " << numElems << std::endl;
+      std::cout << "nWords: " << nWords << std::endl;
+      std::cout << "wordNElems: " << wordNElems << std::endl;
+
 #ifdef USE_ROCM
-      // TODO: need to revisit this when implementing vectorized loads
-      Value ret = load(ptrElems[vecStart]);
-      ret = bitcast(ret, valueElemTy);
-      loadedVals.push_back(ret);
+#if USE_ROCM_GCN_LOAD_AND_STORE
+      GCNBuilder gcnBuilder;
+
+      const std::string readConstraint = "v";
+      const std::string writeConstraint = "=v";
+
+      auto *dstsOpr = gcnBuilder.newListOperand();
+      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
+        auto *opr = gcnBuilder.newOperand(writeConstraint); // =v operations
+        dstsOpr->listAppend(opr);
+      }
+
+      auto *addrOpr = gcnBuilder.newAddrOperand(ptrElems[vecStart], "v");
+
+      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
+        auto &gload =
+            gcnBuilder.create<GCNMemInstr>("global_load")->load_type(width);
+        unsigned offset = wordIdx * (width / 8);
+        auto *offsetMod =
+            gcnBuilder.newModifier("off offset", std::to_string(offset));
+        gload({dstsOpr->listGet(wordIdx), addrOpr}, {offsetMod});
+      }
+
+      auto &wait_cnt = *gcnBuilder.create<>("s_waitcnt vmcnt(0)");
+      wait_cnt();
+
+      SmallVector<Type> retTys(nWords, IntegerType::get(getContext(), width));
+      Type retTy = retTys.size() > 1
+                       ? LLVM::LLVMStructType::getLiteral(getContext(), retTys)
+                       : retTys[0];
+
+      Value ret = gcnBuilder.launch(rewriter, loc, retTy);
+#else
+      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
+        std::cout << "wordIdx: " << wordIdx << std::endl;
+        Value ret = load(ptrElems[vecStart + wordIdx]);
+        loadedVals.push_back(ret);
+      }
+#endif
+     
 #else
       // TODO(Superjomn) Add cache policy fields to StoreOp.
       // TODO(Superjomn) Deal with cache policy here.
@@ -1217,24 +1267,47 @@ struct StoreOpConversion
                              rewriter.create<LLVM::ConstantOp>(
                                  loc, u32Ty, IntegerAttr::get(u32Ty, elemIdx)));
         }
+#ifdef USE_ROCM
+        llWord = bitcast(llWord, valueElemTy);
+#else
         llWord = bitcast(llWord, valArgTy);
+#endif
         std::string constraint =
             (width == 64) ? "l" : ((width == 32) ? "r" : "c");
         asmArgs.emplace_back(llWord, constraint);
       }
+      
 #ifdef USE_ROCM
-      // TODO: need to revisit this when implementing vectorized stores
-      Value llWord = rewriter.create<LLVM::UndefOp>(loc, wordTy);
-      Value elem = valueElems[vecStart];
-      if (elem.getType().getIntOrFloatBitWidth() <= 8)
-        elem = rewriter.create<LLVM::SExtOp>(loc, type::i8Ty(ctx), elem);
-      Type u32Ty = typeConverter->convertType(type::u32Ty(ctx));
-      llWord =
-          insert_element(wordTy, llWord, elem,
-                         rewriter.create<LLVM::ConstantOp>(
-                             loc, u32Ty, IntegerAttr::get(u32Ty, 0)));
-      llWord = bitcast(llWord, valueElemTy);
-      store(llWord, ptrElems[vecStart]);
+#if USE_ROCM_GCN_LOAD_AND_STORE
+      // Prepare the AMDGCN inline asm.
+      GCNBuilder gcnBuilder;
+      auto *asmArgList = gcnBuilder.newListOperand(asmArgs);
+      auto *asmAddr = gcnBuilder.newAddrOperand(ptrElems[vecStart], "v");
+      for (size_t ii = 0; ii < vec; ++ii) {
+        auto &gstore =
+            gcnBuilder.create<GCNMemInstr>("global_store")->store_type(width);
+        unsigned offset = ii * (width / 8);
+        auto *offsetMod =
+            gcnBuilder.newModifier("off offset", std::to_string(offset));
+        gstore({asmAddr, asmArgList->listGet(ii)}, {offsetMod});
+      }
+
+      auto &wait_cnt = *gcnBuilder.create<>("s_waitcnt vmcnt(0)");
+      wait_cnt();
+
+      Type boolTy = getTypeConverter()->convertType(rewriter.getIntegerType(1));
+      llvm::SmallVector<Type> argTys({boolTy, ptr.getType()});
+      argTys.insert(argTys.end(), nWords, valArgTy);
+
+      auto ASMReturnTy = LLVM::LLVMVoidType::get(ctx);
+
+      gcnBuilder.launch(rewriter, loc, ASMReturnTy);
+#else
+      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
+        store(asmArgs[wordIdx].first, ptrElems[vecStart + wordIdx]);
+      }
+#endif
+
 #else
       // Prepare the PTX inline asm.
       PTXBuilder ptxBuilder;
