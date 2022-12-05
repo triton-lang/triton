@@ -40,14 +40,6 @@ using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 Value gThreadId;
 
-// Forward declaration for functions from TritonGPUToLLVM.cpp
-void llPrintf(StringRef msg, ValueRange args,
-              ConversionPatternRewriter &rewriter);
-#define vprintf LLVM::llPrintf
-
-void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
-                   std::string elem_repr, ConversionPatternRewriter &builder);
-
 // Helper for conversion of DotOp with mma<version=1>, that is sm<80
 struct DotOpMmaV1ConversionHelper {
   MmaEncodingAttr mmaLayout;
@@ -1343,8 +1335,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
 
   Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
   Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
-  // Value smemBase = gep(ptr_ty(f16_ty), smemBaseBeforeSwizzle,
-  // cSwizzleOffset);
 
   bool isARow = order[0] != 0;
   bool isAVec4 = !isARow && shape[order[0]] <= 16; // fp16*4 = 16bytes
@@ -1389,7 +1379,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
   Value offA0 = isARow ? offsetAK : offsetAM;
   Value offA1 = isARow ? offsetAM : offsetAK;
   Value phaseA = urem(udiv(offA1, i32_val(perPhaseA)), i32_val(maxPhaseA));
-  // offA0 = add(offA0, cSwizzleOffset);
+  offA0 = add(offA0, cSwizzleOffset);
   SmallVector<Value> offA(numPtrA);
   for (int i = 0; i < numPtrA; i++) {
     Value offA0I = add(offA0, i32_val(i * (isARow ? 4 : strideRepM)));

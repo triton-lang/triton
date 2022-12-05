@@ -62,23 +62,11 @@ namespace LLVM {
 static StringRef getStructAttrsAttrName() { return "llvm.struct_attrs"; }
 
 // A helper function for using printf in LLVM conversion.
-void llPrintf(StringRef msg, ValueRange args,
-              ConversionPatternRewriter &rewriter);
+void vprintf(StringRef msg, ValueRange args,
+             ConversionPatternRewriter &rewriter);
+
 void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
-                   std::string elem_repr, ConversionPatternRewriter &builder) {
-  std::string fmt = info + " t-%d ";
-  std::vector<Value> new_arr({thread});
-  for (auto v : arr) {
-    fmt += elem_repr + ", ";
-    new_arr.push_back(v);
-  }
-  fmt += "";
-
-  vprintf(fmt, new_arr, builder);
-}
-
-// Helper function
-#define llprintf(fmt, ...) LLVM::llPrintf(fmt, {__VA_ARGS__}, rewriter)
+                   std::string elem_repr, ConversionPatternRewriter &builder);
 
 } // namespace LLVM
 } // namespace mlir
@@ -4824,9 +4812,21 @@ namespace mlir {
 
 namespace LLVM {
 
-void llPrintf(StringRef msg, ValueRange args,
-              ConversionPatternRewriter &rewriter) {
+void vprintf(StringRef msg, ValueRange args,
+             ConversionPatternRewriter &rewriter) {
   PrintfOpConversion::llPrintf(msg, args, rewriter);
+}
+
+void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
+                   std::string elem_repr, ConversionPatternRewriter &builder) {
+  std::string fmt = info + " t-%d ";
+  std::vector<Value> new_arr({thread});
+  for (int i = 0; i < arr.size(); ++i) {
+    fmt += elem_repr + ((i == arr.size() - 1) ? "" : ", ");
+    new_arr.push_back(arr[i]);
+  }
+
+  vprintf(fmt, new_arr, builder);
 }
 
 } // namespace LLVM
