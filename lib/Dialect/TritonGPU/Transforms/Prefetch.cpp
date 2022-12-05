@@ -131,6 +131,11 @@ LogicalResult Prefetcher::initialize() {
   if (dotsInFor.empty())
     return failure();
 
+  // TODO: segfault (original for still has uses)
+  // when used in flash attention that has 2 dots in the loop
+  if (dotsInFor.size() > 1)
+    return failure();
+
   // returns source of cvt
   auto getPrefetchSrc = [](Value v) -> Value {
     if (auto cvt = v.getDefiningOp<triton::gpu::ConvertLayoutOp>())

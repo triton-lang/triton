@@ -708,19 +708,19 @@ public:
       Type elemTy = type::f32Ty(ctx);
       Type elemPtrTy = ptr_ty(elemTy);
       if (kOrder == 1) {
-        elems[0] = load(gep(elemPtrTy, ptr, i32_val(sOffsetElem)));
-        elems[1] = load(gep(elemPtrTy, ptr2, i32_val(sOffsetElem)));
+        elems[0] = load(gep(elemPtrTy, ptr, sOffsetElemVal));
+        elems[1] = load(gep(elemPtrTy, ptr2, sOffsetElemVal));
         elems[2] =
-            load(gep(elemPtrTy, ptr, i32_val(sOffsetElem + sOffsetArrElem)));
+            load(gep(elemPtrTy, ptr, sOffsetArrElemVal));
         elems[3] =
-            load(gep(elemPtrTy, ptr2, i32_val(sOffsetElem + sOffsetArrElem)));
+            load(gep(elemPtrTy, ptr2, sOffsetArrElemVal));
       } else {
-        elems[0] = load(gep(elemPtrTy, ptr, i32_val(sOffsetElem)));
-        elems[2] = load(gep(elemPtrTy, ptr2, i32_val(sOffsetElem)));
+        elems[0] = load(gep(elemPtrTy, ptr, sOffsetElemVal));
+        elems[2] = load(gep(elemPtrTy, ptr2, sOffsetElemVal));
         elems[1] =
-            load(gep(elemPtrTy, ptr, i32_val(sOffsetElem + sOffsetArrElem)));
+            load(gep(elemPtrTy, ptr, sOffsetArrElemVal));
         elems[3] =
-            load(gep(elemPtrTy, ptr2, i32_val(sOffsetElem + sOffsetArrElem)));
+            load(gep(elemPtrTy, ptr2, sOffsetArrElemVal));
       }
       return {elems[0], elems[1], elems[2], elems[3]};
 
@@ -973,8 +973,9 @@ struct MMA16816ConversionHelper {
     if (aTensorTy.getEncoding().isa<SharedEncodingAttr>()) {
       Value warpM = getWarpM(shape[0]);
       // load from smem
+      int wpt = std::min<int>(mmaLayout.getWarpsPerCTA()[0], shape[0] / matShapeM);
       loadFn = getLoadMatrixFn(
-          tensor, smemObj, mmaLayout, mmaLayout.getWarpsPerCTA()[0] /*wpt*/,
+          tensor, smemObj, mmaLayout, wpt /*wpt*/,
           1 /*kOrder*/, {mmaInstrM, mmaInstrK} /*instrShape*/,
           {matShapeM, matShapeK} /*matShape*/, warpM /*warpId*/, ha /*vals*/,
           true /*isA*/);
@@ -1016,8 +1017,9 @@ struct MMA16816ConversionHelper {
     int numRepN = getNumRepN(tensorTy, shape[1]);
 
     Value warpN = getWarpN(shape[1]);
+    int wpt = std::min<int>(mmaLayout.getWarpsPerCTA()[1], shape[1] / matShapeN);
     auto loadFn = getLoadMatrixFn(
-        tensor, smemObj, mmaLayout, mmaLayout.getWarpsPerCTA()[1] /*wpt*/,
+        tensor, smemObj, mmaLayout,  wpt /*wpt*/,
         0 /*kOrder*/, {mmaInstrK, mmaInstrN} /*instrShape*/,
         {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/, hb /*vals*/,
         false /*isA*/);
@@ -1136,7 +1138,7 @@ private:
   std::function<void(int, int)>
   getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
                   MmaEncodingAttr mmaLayout, int wpt, uint32_t kOrder,
-                  ArrayRef<int> instrShape, ArrayRef<int> matShape,
+                  SmallVector<int> instrShape, SmallVector<int> matShape,
                   Value warpId, ValueTable &vals, bool isA) const {
     auto tensorTy = tensor.getType().cast<RankedTensorType>();
     // We assumes that the input operand of Dot should be from shared layout.

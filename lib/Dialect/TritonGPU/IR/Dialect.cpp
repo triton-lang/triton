@@ -71,7 +71,7 @@ unsigned getElemsPerThread(Type type) {
   return getElemsPerThread(tensorType.getEncoding(), tensorType.getShape());
 }
 
-SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
+SmallVector<unsigned> getThreadsPerWarp(const Attribute &layout) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return SmallVector<unsigned>(blockedLayout.getThreadsPerWarp().begin(),
                                  blockedLayout.getThreadsPerWarp().end());
@@ -86,7 +86,7 @@ SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
   return {};
 }
 
-SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
+SmallVector<unsigned> getWarpsPerCTA(const Attribute &layout) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return SmallVector<unsigned>(blockedLayout.getWarpsPerCTA().begin(),
                                  blockedLayout.getWarpsPerCTA().end());
@@ -99,7 +99,7 @@ SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
   return {};
 }
 
-SmallVector<unsigned> getSizePerThread(Attribute layout) {
+SmallVector<unsigned> getSizePerThread(const Attribute &layout) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return SmallVector<unsigned>(blockedLayout.getSizePerThread().begin(),
                                  blockedLayout.getSizePerThread().end());
@@ -109,6 +109,8 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
     if (mmaLayout.getVersion() == 2) {
       return {2, 2};
     } else if (mmaLayout.getVersion() == 1) {
+      // Note: here the definition of sizePerThread is obscure, which doesn't
+      // mean vecSize=4 can be supported in the last dimension.
       return {2, 4};
     } else {
       llvm_unreachable("Unexpected mma version");
@@ -137,6 +139,15 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
   } else {
     assert(0 && "getSizePerThread not implemented");
     return {};
+  }
+}
+
+SmallVector<unsigned> getContigPerThread(Attribute layout) {
+  if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+    assert(mmaLayout.getVersion() == 1 || mmaLayout.getVersion() == 2);
+    return {1, 2};
+  } else {
+    return getSizePerThread(layout);
   }
 }
 
@@ -646,6 +657,15 @@ void printInsertSliceAsyncOp(OpAsmPrinter &printer,
   printer.printStrippedAttrOrType(insertSliceAsyncOp.src().getType());
   printer << " -> ";
   printer.printStrippedAttrOrType(insertSliceAsyncOp.result().getType());
+}
+
+DenseSet<unsigned>
+InsertSliceAsyncOp::getEligibleLoadByteWidth(int computeCapability) {
+  DenseSet<unsigned> validLoadBytes;
+  if (computeCapability >= 80) {
+    validLoadBytes = {4, 8, 16};
+  }
+  return validLoadBytes;
 }
 
 //===----------------------------------------------------------------------===//
