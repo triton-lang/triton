@@ -409,10 +409,10 @@ class constexpr:
 
     def __neg__(self):
         return constexpr(-self.value)
-    
+
     def __pos__(self):
         return constexpr(+self.value)
-    
+
     def __invert__(self):
         return constexpr(~self.value)
 
