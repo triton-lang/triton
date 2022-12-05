@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from enum import Enum
-from functools import wraps
 from typing import List, Callable, TypeVar
 
 import triton
-from . import semantic
+from . import builtin, semantic
 from triton._C.libtriton.triton import ir
 
 T = TypeVar('T')
@@ -32,17 +31,6 @@ def _to_tensor(x, builder):
     elif isinstance(x, tensor):
         return x
     assert False, f'cannot convert {x} to tensor'
-
-
-def builtin(fn: T) -> T:
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        if '_builder' not in kwargs or \
-           kwargs['_builder'] is None:
-            raise ValueError("Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)")
-        return fn(*args, **kwargs)
-
-    return wrapper
 
 
 class dtype:
