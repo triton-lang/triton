@@ -359,7 +359,7 @@ class CodeGenerator(ast.NodeVisitor):
             cond = cond.to(triton.language.int1, _builder=self.builder)
             with enter_sub_region(self) as sr:
                 liveins, ip_block = sr
-
+                liveins_copy = liveins.copy()
                 then_block = self.builder.create_block()
                 self.builder.set_insertion_point_to_start(then_block)
                 self.visit_compound_statement(node.body)
@@ -394,7 +394,15 @@ class CodeGenerator(ast.NodeVisitor):
                             if then_defs[then_name].type == else_defs[else_name].type:
                                 names.append(then_name)
                                 ret_types.append(then_defs[then_name].type)
-
+                
+                # defined in else block but not in then block
+                # to find in parent scope and yield them
+                for else_name in else_defs:
+                    if else_name in liveins and else_name not in then_defs:
+                        if else_defs[else_name].type == liveins[else_name].type:
+                            names.append(else_name)
+                            ret_types.append(else_defs[else_name].type)
+                            then_defs[else_name] = liveins_copy[else_name]
                 self.builder.set_insertion_point_to_end(ip_block)
 
                 if then_defs or node.orelse:  # with else block
@@ -528,8 +536,7 @@ class CodeGenerator(ast.NodeVisitor):
                                                                 [ty.to_ir(self.builder) for ty in ret_types])
             loop_block.merge_block_before(after_block)
             self.builder.set_insertion_point_to_end(after_block)
-            if len(yields) > 0:
-                self.builder.create_yield_op([y.handle for y in yields])
+            self.builder.create_yield_op([y.handle for y in yields])
 
         # update global uses in while_op
         for i, name in enumerate(names):
@@ -1360,7 +1367,7 @@ prototype_pattern = {
     "ptx": ptx_prototype_pattern,
 }
 
-mlir_arg_type_pattern = r'%\w+: ([^,\s]+)(?: \{\S+ = \S+ : \S+\})?,?'
+mlir_arg_type_pattern = r'%\w+: ([^,^\)\s]+)(?: \{\S+ = \S+ : \S+\})?,?'
 ptx_arg_type_pattern = r"\.param\s+\.(\w+)"
 arg_type_pattern = {
     "ttir": mlir_arg_type_pattern,
@@ -1417,7 +1424,9 @@ def compile(fn, **kwargs):
         import re
         match = re.search(prototype_pattern[ir], src, re.MULTILINE)
         name, signature = match.group(1), match.group(2)
+        print(name, signature)
         types = re.findall(arg_type_pattern[ir], signature)
+        print(types)
         param_tys = [convert_type_repr(ty) for ty in types]
         signature = {k: v for k, v in enumerate(param_tys)}
         first_stage = list(stages.keys()).index(ir)

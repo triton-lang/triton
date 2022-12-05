@@ -1887,9 +1887,9 @@ struct PrintfOpConversion
 
     Value globalPtr =
         rewriter.create<LLVM::AddressOfOp>(UnknownLoc::get(context), global);
-    Value stringStart =
-        rewriter.create<LLVM::GEPOp>(UnknownLoc::get(context), int8Ptr,
-                                     globalPtr, mlir::ValueRange({zero, zero}));
+    Value stringStart = rewriter.create<LLVM::GEPOp>(
+        UnknownLoc::get(context), int8Ptr, globalPtr,
+        SmallVector<Value>({zero, zero}));
 
     Value bufferPtr =
         rewriter.create<LLVM::NullOp>(UnknownLoc::get(context), int8Ptr);
@@ -1924,7 +1924,7 @@ struct PrintfOpConversion
                                                    int8Ptr, allocated);
     }
 
-    ValueRange operands{stringStart, bufferPtr};
+    SmallVector<Value> operands{stringStart, bufferPtr};
     rewriter.create<LLVM::CallOp>(UnknownLoc::get(context), funcOp, operands);
   }
 };
@@ -2728,6 +2728,9 @@ public:
     auto dstSharedLayout = dstTy.getEncoding().cast<SharedEncodingAttr>();
     auto inOrd = srcBlockedLayout.getOrder();
     auto outOrd = dstSharedLayout.getOrder();
+    if (inOrd != outOrd)
+      llvm_unreachable(
+          "blocked -> shared with different order not yet implemented");
     unsigned inVec =
         inOrd == outOrd ? srcBlockedLayout.getSizePerThread()[inOrd[0]] : 1;
     unsigned outVec = dstSharedLayout.getVec();
@@ -2787,7 +2790,8 @@ public:
             getMultiDimIndex<unsigned>(linearRepIdx, reps, inOrd);
         for (unsigned linearWordIdx = 0; linearWordIdx < numWordsEachRep;
              ++linearWordIdx) {
-          // step 1: recover the multidim_index from the index of input_elements
+          // step 1: recover the multidim_index from the index of
+          // input_elements
           auto multiDimWordIdx =
               getMultiDimIndex<unsigned>(linearWordIdx, wordsInEachRep, inOrd);
           SmallVector<Value> multiDimIdx(2);
@@ -2888,20 +2892,21 @@ private:
       } else if (mmaLayout.getVersion() == 1) {
         multiDimWarpId[0] = urem(multiDimWarpId[0], idx_val(shape[0] / 16));
         multiDimWarpId[1] = urem(multiDimWarpId[1], idx_val(shape[1] / 16));
-        Value partId = udiv(laneId, _4);
-        Value partIdDiv4 = udiv(partId, _4);
-        Value partIdRem4 = urem(partId, _4);
-        Value partRowOffset = mul(udiv(partIdRem4, _2), _8);
-        partRowOffset = add(mul(partIdDiv4, _4), partRowOffset);
-        Value partColOffset = mul(urem(partIdRem4, _2), _8);
-        Value colOffset = add(mul(multiDimWarpId[0], _16), partColOffset);
-        Value rowOffset = add(mul(multiDimWarpId[1], _16), partRowOffset);
-        mmaRowIdx[0] = add(urem(laneId, _2), rowOffset);
+        Value laneIdDiv16 = udiv(laneId, _16);
+        Value laneIdRem16 = urem(laneId, _16);
+        Value laneIdRem2 = urem(laneId, _2);
+        Value laneIdRem16Div8 = udiv(laneIdRem16, _8);
+        Value laneIdRem16Div4 = udiv(laneIdRem16, _4);
+        Value laneIdRem16Div4Rem2 = urem(laneIdRem16Div4, _2);
+        Value laneIdRem4Div2 = udiv(urem(laneId, _4), _2);
+        mmaRowIdx[0] =
+            add(add(mul(laneIdDiv16, _8), mul(laneIdRem16Div4Rem2, _4)),
+                laneIdRem2);
         mmaRowIdx[1] = add(mmaRowIdx[0], _2);
-        mmaColIdx[0] = add(mul(udiv(urem(laneId, _4), _2), _2), colOffset);
+        mmaColIdx[0] = add(mul(laneIdRem16Div8, _4), mul(laneIdRem4Div2, _2));
         mmaColIdx[1] = add(mmaColIdx[0], _1);
-        mmaColIdx[2] = add(mmaColIdx[0], _4);
-        mmaColIdx[3] = add(mmaColIdx[0], idx_val(5));
+        mmaColIdx[2] = add(mmaColIdx[0], _8);
+        mmaColIdx[3] = add(mmaColIdx[0], idx_val(9));
       } else {
         llvm_unreachable("Unexpected MMALayout version");
       }
@@ -3151,10 +3156,6 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
     ConversionPatternRewriter &rewriter) const {
   auto loc = op.getLoc();
 
-  // TODO[Keren]: A temporary workaround for an issue from membar pass.
-  // https://triton-lang.slack.com/archives/C042VBSQWNS/p1669796615860699?thread_ts=1669779203.526739&cid=C042VBSQWNS
-  barrier();
-
   Value src = op.src();
   Value dst = op.result();
   auto srcTy = src.getType().cast<RankedTensorType>();
@@ -3340,10 +3341,10 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
   // We cannot get both the operand types(in TypeConverter), here we assume the
   // types of both the operands are identical here.
   // TODO[Superjomn]: Find a better way to implement it.
-  static bool isDotHMMA(TensorType operand, bool allowTF32, int mmaVersion) {
+  static bool isDotHMMA(TensorType operand, int mmaVersion) {
     auto elemTy = operand.getElementType();
     return elemTy.isF16() || elemTy.isBF16() ||
-           (elemTy.isF32() && allowTF32 && mmaVersion >= 2) ||
+           (elemTy.isF32() && mmaVersion >= 2) ||
            (elemTy.isInteger(8) && mmaVersion >= 2);
   }
 
@@ -3367,11 +3368,7 @@ Value ConvertLayoutOpConversion::lowerSharedToDotOperandMMA(
   Value src = op.src();
   Value dst = op.result();
   auto dstTensorTy = dst.getType().cast<RankedTensorType>();
-  // TODO[Superjomn]: allowTF32 is not accessible here for it is an attribute of
-  // an Op instance.
-  bool allowTF32 = false;
-  bool isHMMA = DotOpConversion::isDotHMMA(dstTensorTy, allowTF32,
-                                           mmaLayout.getVersion());
+  bool isHMMA = DotOpConversion::isDotHMMA(dstTensorTy, mmaLayout.getVersion());
 
   auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.src(), rewriter);
   Value res;
@@ -3434,25 +3431,16 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
   } else if (auto blockedLayout =
                  dotOperandLayout.getParent()
                      .dyn_cast_or_null<BlockedEncodingAttr>()) {
-    // TODO[Superjomn]: the allowTF32 is not available in ConvertLayoutOp for it
-    // is an attribute of DotOp.
-    bool allowTF32 = false;
-    bool isFMADot = dstTensorTy.getElementType().isF32() && !allowTF32;
-    if (isFMADot) {
-      auto dotOpLayout =
-          dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-      auto blockedLayout = dotOpLayout.getParent().cast<BlockedEncodingAttr>();
-      DotOpFMAConversionHelper helper(blockedLayout);
-      auto thread = getThreadId(rewriter, loc);
-      if (dotOpLayout.getOpIdx() == 0) { // $a
-        res = helper.loadA(src, adaptor.src(), blockedLayout, thread, loc,
-                           rewriter);
-      } else { // $b
-        res = helper.loadB(src, adaptor.src(), blockedLayout, thread, loc,
-                           rewriter);
-      }
-    } else
-      assert(false && "Unsupported dot operand layout found");
+    auto dotOpLayout = dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+    DotOpFMAConversionHelper helper(blockedLayout);
+    auto thread = getThreadId(rewriter, loc);
+    if (dotOpLayout.getOpIdx() == 0) { // $a
+      res = helper.loadA(src, adaptor.src(), blockedLayout, thread, loc,
+                         rewriter);
+    } else { // $b
+      res = helper.loadB(src, adaptor.src(), blockedLayout, thread, loc,
+                         rewriter);
+    }
   } else {
     assert(false && "Unsupported dot operand layout found");
   }
@@ -3563,6 +3551,8 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
 
   // initialize accumulators
   SmallVector<Value> acc = getElementsFromStruct(loc, loadedC, rewriter);
+  size_t resSize = acc.size();
+  SmallVector<Value> resVals(resSize);
 
   auto callMMA = [&](unsigned m, unsigned n, unsigned k) {
     auto ha = has.at({m, k});
@@ -3607,8 +3597,13 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
       return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
     };
 
-    for (unsigned i = 0; i < 8; i++)
-      acc[idx[i]] = extract_val(f32_ty, res, getIntAttr(i));
+    for (unsigned i = 0; i < 8; i++) {
+      Value elem = extract_val(f32_ty, res, getIntAttr(i));
+      acc[idx[i]] = elem;
+      // TODO[goostavz]: double confirm this when m/n/k = [32, 32, x] has been
+      // verified before MMA
+      resVals[(m * numN / 2 + n) * 8 + i] = elem;
+    }
   };
 
   for (unsigned k = 0; k < NK; k += 4)
@@ -3617,12 +3612,10 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
         callMMA(m, n, k);
       }
 
-  // replace with new packed result
   Type structTy = LLVM::LLVMStructType::getLiteral(
-      ctx, SmallVector<Type>(acc.size(), type::f32Ty(ctx)));
-  Value res = getStructFromElements(loc, acc, rewriter, structTy);
+      ctx, SmallVector<Type>(resSize, type::f32Ty(ctx)));
+  Value res = getStructFromElements(loc, resVals, rewriter, structTy);
   rewriter.replaceOp(op, res);
-
   return success();
 }
 
@@ -3725,6 +3718,33 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
 
 /// ====================== mma codegen end ============================
 
+/// ====================== trans codegen begin ============================
+
+struct TransOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::TransOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::TransOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::TransOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto srcSmemObj =
+        getSharedMemoryObjectFromStruct(loc, adaptor.src(), rewriter);
+    SmallVector<Value> dstStrides = {srcSmemObj.strides[1],
+                                     srcSmemObj.strides[0]};
+    SmallVector<Value> dstOffsets = {srcSmemObj.offsets[1],
+                                     srcSmemObj.offsets[0]};
+    auto dstSmemObj =
+        SharedMemoryObject(srcSmemObj.base, dstStrides, dstOffsets);
+    auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
+    rewriter.replaceOp(op, retVal);
+    return success();
+  }
+};
+
+/// ====================== trans codegen end ============================
+
 Value convertSplatLikeOpWithMmaLayout(const MmaEncodingAttr &layout,
                                       Type resType, Type elemType,
                                       Value constVal,
@@ -3788,13 +3808,6 @@ public:
     auto ctx = type.getContext();
     Attribute layout = type.getEncoding();
     auto shape = type.getShape();
-
-    // TODO[Keren, Superjomn]: fix it, allowTF32 is not accessible here for it
-    // is bound to an Op instance.
-    bool allowTF32 = false;
-    bool isFMADot = type.getElementType().isF32() && !allowTF32 &&
-                    layout.dyn_cast_or_null<DotOperandEncodingAttr>();
-
     if (layout &&
         (layout.isa<BlockedEncodingAttr>() || layout.isa<SliceEncodingAttr>() ||
          layout.isa<MmaEncodingAttr>())) {
@@ -3818,37 +3831,39 @@ public:
       return LLVM::LLVMStructType::getLiteral(ctx, types);
     } else if (auto dotOpLayout =
                    layout.dyn_cast_or_null<DotOperandEncodingAttr>()) {
-      if (isFMADot) { // for parent is blocked layout
+      if (dotOpLayout.getParent()
+              .isa<BlockedEncodingAttr>()) { // for parent is blocked layout
         int numElemsPerThread =
             DotOpFMAConversionHelper::getNumElemsPerThread(shape, dotOpLayout);
 
         return LLVM::LLVMStructType::getLiteral(
             ctx, SmallVector<Type>(numElemsPerThread, type::f32Ty(ctx)));
-
       } else { // for parent is MMA layout
         auto mmaLayout = dotOpLayout.getParent().cast<MmaEncodingAttr>();
         auto wpt = mmaLayout.getWarpsPerCTA();
         Type elemTy = convertType(type.getElementType());
-        auto vecSize = 1;
-        if (elemTy.getIntOrFloatBitWidth() == 16) {
-          vecSize = 2;
-        } else if (elemTy.getIntOrFloatBitWidth() == 8) {
-          vecSize = 4;
-        } else {
-          assert(false && "Unsupported element type");
-        }
-        Type vecTy = vec_ty(elemTy, vecSize);
         if (mmaLayout.getVersion() == 2) {
+          const llvm::DenseMap<int, Type> targetTyMap = {
+              {32, elemTy},
+              {16, vec_ty(elemTy, 2)},
+              {8, vec_ty(elemTy, 4)},
+          };
+          Type targetTy;
+          if (targetTyMap.count(elemTy.getIntOrFloatBitWidth())) {
+            targetTy = targetTyMap.lookup(elemTy.getIntOrFloatBitWidth());
+          } else {
+            assert(false && "Unsupported element type");
+          }
           if (dotOpLayout.getOpIdx() == 0) { // $a
             int elems =
                 MMA16816ConversionHelper::getANumElemsPerThread(type, wpt[0]);
             return LLVM::LLVMStructType::getLiteral(
-                ctx, SmallVector<Type>(elems, vecTy));
+                ctx, SmallVector<Type>(elems, targetTy));
           }
           if (dotOpLayout.getOpIdx() == 1) { // $b
             int elems =
                 MMA16816ConversionHelper::getBNumElemsPerThread(type, wpt[1]);
-            return struct_ty(SmallVector<Type>(elems, vecTy));
+            return struct_ty(SmallVector<Type>(elems, targetTy));
           }
         }
 
@@ -3978,10 +3993,10 @@ struct InsertSliceAsyncOpConversion
     // %other
     SmallVector<Value> otherElems;
     if (llOther) {
-      // TODO(Keren): support "other" tensor.
+      // FIXME(Keren): always assume other is 0 for now
       // It's not necessary for now because the pipeline pass will skip
       // generating insert_slice_async if the load op has any "other" tensor.
-      assert(false && "insert_slice_async: Other value not supported yet");
+      // assert(false && "insert_slice_async: Other value not supported yet");
       otherElems = getLLVMElems(other, llOther, rewriter, loc);
       assert(srcElems.size() == otherElems.size());
     }
@@ -4552,6 +4567,7 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<ViewLikeOpConversion<triton::ExpandDimsOp>>(typeConverter,
                                                            benefit);
   patterns.add<DotOpConversion>(typeConverter, allocation, smem, benefit);
+  patterns.add<TransOpConversion>(typeConverter, benefit);
   patterns.add<PrintfOpConversion>(typeConverter, benefit);
 }
 
@@ -4716,7 +4732,8 @@ public:
     decomposeInsertSliceAsyncOp(mod);
 
     Allocation allocation(mod);
-    MembarAnalysis membar(&allocation);
+    MembarAnalysis membarPass(&allocation);
+    membarPass.run();
 
     RewritePatternSet scf_patterns(context);
     mlir::populateLoopToStdConversionPatterns(scf_patterns);

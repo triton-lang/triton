@@ -502,6 +502,11 @@ def cat(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder) -> tl.tensor:
     # TODO: check types
     return tl.tensor(builder.create_cat(lhs.handle, rhs.handle), lhs.type)
 
+def trans(input: tl.tensor, builder: ir.builder) -> tl.tensor:
+    if len(input.shape) != 2:
+        raise ValueError("Only 2D tensors can be transposed")
+    ret_type = tl.block_type(input.type.scalar, [input.shape[1], input.shape[0]])
+    return tl.tensor(builder.create_trans(input.handle), ret_type)
 
 def broadcast_impl_shape(input: tl.tensor,
                          shape: List[int],

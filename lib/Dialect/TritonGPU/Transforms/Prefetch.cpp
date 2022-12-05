@@ -130,10 +130,10 @@ LogicalResult Prefetcher::initialize() {
 
   if (dotsInFor.empty())
     return failure();
-  
+
   // TODO: segfault (original for still has uses)
   // when used in flash attention that has 2 dots in the loop
-  if(dotsInFor.size() > 1)
+  if (dotsInFor.size() > 1)
     return failure();
 
   // returns source of cvt

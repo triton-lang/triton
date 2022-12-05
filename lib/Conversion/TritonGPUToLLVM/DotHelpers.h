@@ -708,19 +708,15 @@ public:
       Type elemTy = type::f32Ty(ctx);
       Type elemPtrTy = ptr_ty(elemTy);
       if (kOrder == 1) {
-        elems[0] = load(gep(elemPtrTy, ptr, i32_val(sOffsetElem)));
-        elems[1] = load(gep(elemPtrTy, ptr2, i32_val(sOffsetElem)));
-        elems[2] =
-            load(gep(elemPtrTy, ptr, i32_val(sOffsetElem + sOffsetArrElem)));
-        elems[3] =
-            load(gep(elemPtrTy, ptr2, i32_val(sOffsetElem + sOffsetArrElem)));
+        elems[0] = load(gep(elemPtrTy, ptr, sOffsetElemVal));
+        elems[1] = load(gep(elemPtrTy, ptr2, sOffsetElemVal));
+        elems[2] = load(gep(elemPtrTy, ptr, sOffsetArrElemVal));
+        elems[3] = load(gep(elemPtrTy, ptr2, sOffsetArrElemVal));
       } else {
-        elems[0] = load(gep(elemPtrTy, ptr, i32_val(sOffsetElem)));
-        elems[2] = load(gep(elemPtrTy, ptr2, i32_val(sOffsetElem)));
-        elems[1] =
-            load(gep(elemPtrTy, ptr, i32_val(sOffsetElem + sOffsetArrElem)));
-        elems[3] =
-            load(gep(elemPtrTy, ptr2, i32_val(sOffsetElem + sOffsetArrElem)));
+        elems[0] = load(gep(elemPtrTy, ptr, sOffsetElemVal));
+        elems[2] = load(gep(elemPtrTy, ptr2, sOffsetElemVal));
+        elems[1] = load(gep(elemPtrTy, ptr, sOffsetArrElemVal));
+        elems[3] = load(gep(elemPtrTy, ptr2, sOffsetArrElemVal));
       }
       return {elems[0], elems[1], elems[2], elems[3]};
 
@@ -1140,7 +1136,7 @@ private:
   std::function<void(int, int)>
   getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
                   MmaEncodingAttr mmaLayout, int wpt, uint32_t kOrder,
-                  ArrayRef<int> instrShape, ArrayRef<int> matShape,
+                  SmallVector<int> instrShape, SmallVector<int> matShape,
                   Value warpId, ValueTable &vals, bool isA) const {
     auto tensorTy = tensor.getType().cast<RankedTensorType>();
     // We assumes that the input operand of Dot should be from shared layout.

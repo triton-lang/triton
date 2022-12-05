@@ -105,7 +105,7 @@ bool maybeSharedAllocationOp(Operation *op) {
 }
 
 bool maybeAliasOp(Operation *op) {
-  return isa<tensor::ExtractSliceOp>(op) ||
+  return isa<tensor::ExtractSliceOp>(op) || isa<triton::TransOp>(op) ||
          isa<triton::gpu::InsertSliceAsyncOp>(op) ||
          isa<tensor::InsertSliceOp>(op);
 }

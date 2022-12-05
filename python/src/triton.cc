@@ -1085,6 +1085,16 @@ void init_triton_ir(py::module &&m) {
                  mlir::RankedTensorType::get(shape, lhsType.getElementType()),
                  lhs, rhs);
            })
+      .def("create_trans",
+           [](mlir::OpBuilder &self, mlir::Value &arg) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             auto argType = arg.getType().dyn_cast<mlir::RankedTensorType>();
+             auto argEltType = argType.getElementType();
+             std::vector<int64_t> retShape = argType.getShape();
+             std::reverse(retShape.begin(), retShape.end());
+             return self.create<mlir::triton::TransOp>(
+                 loc, mlir::RankedTensorType::get(retShape, argEltType), arg);
+           })
       .def("create_broadcast",
            [](mlir::OpBuilder &self, mlir::Value &arg,
               std::vector<int64_t> &shape) -> mlir::Value {
@@ -1251,13 +1261,12 @@ void init_triton_ir(py::module &&m) {
                                        llvm::StringRef(prefix)),
                  values);
            })
-       // Undef
-          .def("create_undef",
-               [](mlir::OpBuilder &self, mlir::Type &type) -> mlir::Value {
-               auto loc = self.getUnknownLoc();
-               return self.create<::mlir::LLVM::UndefOp>(loc, type);
-          })    
-       ;
+      // Undef
+      .def("create_undef",
+           [](mlir::OpBuilder &self, mlir::Type &type) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<::mlir::LLVM::UndefOp>(loc, type);
+           });
 
   py::class_<mlir::PassManager>(m, "pass_manager")
       .def(py::init<mlir::MLIRContext *>())
