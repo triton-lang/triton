@@ -359,7 +359,7 @@ class CodeGenerator(ast.NodeVisitor):
             cond = cond.to(triton.language.int1, _builder=self.builder)
             with enter_sub_region(self) as sr:
                 liveins, ip_block = sr
-
+                liveins_copy = liveins.copy()
                 then_block = self.builder.create_block()
                 self.builder.set_insertion_point_to_start(then_block)
                 self.visit_compound_statement(node.body)
@@ -394,7 +394,15 @@ class CodeGenerator(ast.NodeVisitor):
                             if then_defs[then_name].type == else_defs[else_name].type:
                                 names.append(then_name)
                                 ret_types.append(then_defs[then_name].type)
-
+                
+                # defined in else block but not in then block
+                # to find in parent scope and yield them
+                for else_name in else_defs:
+                    if else_name in liveins and else_name not in then_defs:
+                        if else_defs[else_name].type == liveins[else_name].type:
+                            names.append(else_name)
+                            ret_types.append(else_defs[else_name].type)
+                            then_defs[else_name] = liveins_copy[else_name]
                 self.builder.set_insertion_point_to_end(ip_block)
 
                 if then_defs or node.orelse:  # with else block
@@ -528,8 +536,7 @@ class CodeGenerator(ast.NodeVisitor):
                                                                 [ty.to_ir(self.builder) for ty in ret_types])
             loop_block.merge_block_before(after_block)
             self.builder.set_insertion_point_to_end(after_block)
-            if len(yields) > 0:
-                self.builder.create_yield_op([y.handle for y in yields])
+            self.builder.create_yield_op([y.handle for y in yields])
 
         # update global uses in while_op
         for i, name in enumerate(names):
@@ -594,11 +601,8 @@ class CodeGenerator(ast.NodeVisitor):
         ub = self.builder.create_to_index(ub)
         step = self.builder.create_to_index(step)
         # Create placeholder for the loop induction variable
-        # We can use any value because the variable isn't a constexpr
-        # but use a distinctive value (of the right type) to ease debugging
-        st_target = ast.Name(id=node.target.id, ctx=ast.Store())
-        init_node = ast.Assign(targets=[st_target], value=ast.Num(value=0xBADF00D))
-        self.visit(init_node)
+        iv = self.builder.create_undef(self.builder.get_int32_ty())
+        self.set_value(node.target.id, triton.language.core.tensor(iv, triton.language.core.int32))
 
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
@@ -1014,6 +1018,7 @@ def ty_to_cpp(ty):
         "u32": "uint32_t",
         "u64": "uint64_t",
         "fp32": "float",
+        "f32": "float",
     }[ty]
 
 
@@ -1044,6 +1049,7 @@ def generate_launcher(constants, signature):
             'u32': 'uint32_t',
             'u64': 'uint64_t',
             'fp32': 'float',
+            'f32': 'float',
             'fp64': 'double',
         }[ty]
 
@@ -1343,7 +1349,31 @@ def make_hash(fn, **kwargs):
         key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}"
         return hashlib.md5(key.encode("utf-8")).hexdigest()
     assert isinstance(fn, str)
-    return hashlib.md5(Path(fn).read_text().encode("utf-8")).hexdigest()
+    return hashlib.md5((Path(fn).read_text() + triton.runtime.jit.version_key()).encode("utf-8")).hexdigest()
+
+
+# - ^\s*func\s+ : match the start of the string, any leading whitespace, the keyword func, 
+#    and any following whitespace
+# - (public\s+)? : optionally match the keyword public and any following whitespace
+# - (@\w+) : match an @ symbol followed by one or more word characters 
+#   (letters, digits, or underscores), and capture it as group 1 (the function name)
+# - (\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\)) : match a pair of parentheses enclosing 
+#   zero or more arguments separated by commas, and capture it as group 2 (the argument list)
+mlir_prototype_pattern = r'^\s*func\s+(?:public\s+)?(@\w+)(\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*\{\s*$'
+ptx_prototype_pattern = r"\.(?:visible|extern)\s+\.(?:entry|func)\s+(\w+)\s*\(([^)]*)\)"
+prototype_pattern = {
+    "ttir": mlir_prototype_pattern,
+    "ttgir": mlir_prototype_pattern,
+    "ptx": ptx_prototype_pattern,
+}
+
+mlir_arg_type_pattern = r'%\w+: ([^,^\)\s]+)(?: \{\S+ = \S+ : \S+\})?,?'
+ptx_arg_type_pattern = r"\.param\s+\.(\w+)"
+arg_type_pattern = {
+    "ttir": mlir_arg_type_pattern,
+    "ttgir": mlir_arg_type_pattern,
+    "ptx": ptx_arg_type_pattern,
+}
 
 
 # def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
@@ -1354,6 +1384,27 @@ def compile(fn, **kwargs):
     context = _triton.ir.context()
     asm = dict()
     constants = kwargs.get("constants", dict())
+    num_warps = kwargs.get("num_warps", 4)
+    num_stages = kwargs.get("num_stages", 3)
+    extern_libs = kwargs.get("extern_libs", dict())
+    device = kwargs.get("device", torch.cuda.current_device())
+    capability = torch.cuda.get_device_capability()
+    capability = capability[0]*10 + capability[1]
+    # build compilation stages
+    stages = {
+      "ast" : (lambda path: fn, None),
+      "ttir": (lambda path: _triton.ir.parse_mlir_module(path, context), 
+               lambda src: ast_to_ttir(src, signature, configs[0], constants)),
+      "ttgir": (lambda path: _triton.ir.parse_mlir_module(path, context), 
+                lambda src: ttir_to_ttgir(src, num_warps, num_stages, capability)),
+      "llir": (lambda path: Path(path).read_bytes(), 
+              lambda src: ttgir_to_llir(src, extern_libs, capability)),
+      "ptx":  (lambda path: Path(path).read_text(), 
+              lambda src: llir_to_ptx(src, capability)),
+      "cubin": (lambda path: Path(path).read_bytes(), 
+               lambda src: ptx_to_cubin(src, capability))
+    }
+    # find out the signature of the function
     if isinstance(fn, triton.runtime.JITFunction):
         configs = kwargs.get("configs", None)
         signature = kwargs["signature"]
@@ -1368,13 +1419,17 @@ def compile(fn, **kwargs):
         kwargs["signature"] = signature
     else:
         assert isinstance(fn, str)
-        name, ir = os.path.basename(fn).split(".")
-        assert ir == "ttgir"
-        asm[ir] = _triton.ir.parse_mlir_module(fn, context)
-        function = asm[ir].get_single_function()
-        param_tys = [convert_type_repr(str(ty)) for ty in function.type.param_types()]
+        _, ir = os.path.basename(fn).split(".")
+        src = Path(fn).read_text()
+        import re
+        match = re.search(prototype_pattern[ir], src, re.MULTILINE)
+        name, signature = match.group(1), match.group(2)
+        print(name, signature)
+        types = re.findall(arg_type_pattern[ir], signature)
+        print(types)
+        param_tys = [convert_type_repr(ty) for ty in types]
         signature = {k: v for k, v in enumerate(param_tys)}
-        first_stage = 2
+        first_stage = list(stages.keys()).index(ir)
 
     # cache manager
     so_path = make_stub(name, signature, constants)
@@ -1384,58 +1439,42 @@ def compile(fn, **kwargs):
     if isinstance(fn, triton.runtime.JITFunction):
         name, ext = fn.__name__, "ast"
     else:
-        name, ext = os.path.basename(fn).split(".")
-    # initialize compilation params
-    num_warps = kwargs.get("num_warps", 4)
-    num_stages = kwargs.get("num_stages", 3)
-    extern_libs = kwargs.get("extern_libs", dict())
-    device = kwargs.get("device", torch.cuda.current_device())
-    compute_capability = torch.cuda.get_device_capability(device)
-    compute_capability = compute_capability[0] * 10 + compute_capability[1]
+      name, ext = os.path.basename(fn).split(".")
+
     # load metadata if any
     metadata = None
     if fn_cache_manager.has_file(f'{name}.json'):
         with open(fn_cache_manager._make_path(f"{name}.json")) as f:
             metadata = json.load(f)
     else:
-        metadata = {"num_warps": num_warps, "num_stages": num_stages, "ctime": dict()}
-    # build compilation stages
-    stages = {
-        "ast": (lambda path: fn, None),
-        "ttir": (lambda path: _triton.ir.parse_mlir_module(path, context),
-                 lambda src: ast_to_ttir(src, signature, configs[0], constants)),
-        "ttgir": (lambda path: _triton.ir.parse_mlir_module(path, context),
-                  lambda src: ttir_to_ttgir(src, num_warps, num_stages, compute_capability)),
-        "llir": (lambda path: Path(path).read_bytes(),
-                 lambda src: ttgir_to_llir(src, extern_libs, compute_capability)),
-        "ptx": (lambda path: Path(path).read_text(),
-                lambda src: llir_to_ptx(src, compute_capability)),
-        "cubin": (lambda path: Path(path).read_bytes(),
-                  lambda src: ptx_to_cubin(src, compute_capability))
-    }
+      metadata = {"num_warps": num_warps, "num_stages": num_stages, "ctime": dict()}
+      if ext == "ptx":
+        assert "shared" in kwargs, "ptx compilation must provide shared memory size"
+        metadata["shared"] = kwargs["shared"]
+
     first_stage = list(stages.keys()).index(ext)
     asm = dict()
     module = fn
     # run compilation pipeline  and populate metadata
     for ir, (parse, compile) in list(stages.items())[first_stage:]:
-        path = fn_cache_manager._make_path(f"{name}.{ir}")
-        if ir == ext:
-            next_module = parse(fn)
-        elif os.path.exists(path) and \
-                ir in metadata["ctime"] and \
-                os.path.getctime(path) == metadata["ctime"][ir]:
-            next_module = parse(path)
-        else:
-            next_module = compile(module)
-            fn_cache_manager.put(next_module, f"{name}.{ir}")
-        if os.path.exists(path):
-            metadata["ctime"][ir] = os.path.getctime(path)
-        asm[ir] = next_module if ir == "cubin" else str(next_module)
-        if ir == "llir" and "shared" not in metadata:
-            metadata["shared"] = _triton.get_shared_memory_size(module)
-        if ir == "ptx":
-            metadata["name"] = ptx_get_kernel_name(next_module)
-        module = next_module
+      path = fn_cache_manager._make_path(f"{name}.{ir}")
+      if ir == ext:
+        next_module = parse(fn)
+      elif os.path.exists(path) and\
+           ir in metadata["ctime"] and\
+           os.path.getctime(path) == metadata["ctime"][ir]:
+        next_module = parse(path)
+      else:
+        next_module = compile(module)
+        fn_cache_manager.put(next_module, f"{name}.{ir}")
+      if os.path.exists(path):
+        metadata["ctime"][ir] = os.path.getctime(path)
+      asm[ir] = next_module if ir == "cubin" else str(next_module)
+      if ir == "llir" and "shared" not in metadata:
+        metadata["shared"] = _triton.get_shared_memory_size(module)
+      if ir == "ptx":
+        metadata["name"] = ptx_get_kernel_name(next_module)
+      module = next_module
     # write-back metadata
     fn_cache_manager.put(json.dumps(metadata), f"{name}.json", binary=False)
     # return handle to compiled kernel
@@ -1515,7 +1554,7 @@ class CudaUtils(object):
            }
         }
 
-        #define CUDA_CHECK(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+        #define CUDA_CHECK(ans) { gpuAssert((ans), __FILE__, __LINE__); if(PyErr_Occurred()) return NULL; }
 
         static PyObject* loadBinary(PyObject* self, PyObject* args) {
             const char* name;
@@ -1530,7 +1569,6 @@ class CudaUtils(object):
             CUmodule mod;
             int32_t n_regs = 0;
             int32_t n_spills = 0;
-            Py_BEGIN_ALLOW_THREADS;
             // create driver handles
             CUDA_CHECK(cuModuleLoadData(&mod, data));
             CUDA_CHECK(cuModuleGetFunction(&fun, mod, name));
@@ -1548,7 +1586,6 @@ class CudaUtils(object):
               CUDA_CHECK(cuFuncGetAttribute(&shared_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun));
               CUDA_CHECK(cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin - shared_static));
             }
-            Py_END_ALLOW_THREADS;
 
             if(PyErr_Occurred()) {
               return NULL;

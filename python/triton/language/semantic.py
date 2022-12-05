@@ -502,6 +502,11 @@ def cat(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder) -> tl.tensor:
     # TODO: check types
     return tl.tensor(builder.create_cat(lhs.handle, rhs.handle), lhs.type)
 
+def trans(input: tl.tensor, builder: ir.builder) -> tl.tensor:
+    if len(input.shape) != 2:
+        raise ValueError("Only 2D tensors can be transposed")
+    ret_type = tl.block_type(input.type.scalar, [input.shape[1], input.shape[0]])
+    return tl.tensor(builder.create_trans(input.handle), ret_type)
 
 def broadcast_impl_shape(input: tl.tensor,
                          shape: List[int],
@@ -1117,16 +1122,16 @@ def sqrt(x: tl.tensor, builder: ir.builder) -> tl.tensor:
 ##
 
 def multiple_of(x: tl.tensor, values: List[int]) -> tl.tensor:
-    if len(x.shape) != len(values):
-        raise ValueError("Shape of input to multiple_of does not match the length of values")
-    x.handle.multiple_of(values)
-    return x
-
-
+     if len(x.shape) != len(values):
+         raise ValueError("Shape of input to multiple_of does not match the length of values")
+     x.handle.set_attr("tt.divisibility", ir.make_attr(values, x.handle.get_context()))
+     return x
+ 
+ 
 def max_contiguous(x: tl.tensor, values: List[int]) -> tl.tensor:
     if len(x.shape) != len(values):
         raise ValueError("Shape of input to max_contiguous does not match the length of values")
-    x.handle.max_contiguous(values)
+    x.handle.set_attr("tt.contiguity", ir.make_attr(values, x.handle.get_context()))
     return x
 
 

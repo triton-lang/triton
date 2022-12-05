@@ -406,7 +406,7 @@ class constexpr:
         return constexpr(self.value != other.value)
 
     def __bool__(self):
-        return constexpr(bool(self.value))
+        return bool(self.value)
 
     def __neg__(self):
         return constexpr(-self.value)
@@ -615,6 +615,7 @@ class tensor:
                 assert False, "unsupported"
         return ret
 
+
     # x[:, None, :, None]
     # x = expand_dims(x, axis=1)
     # x = expand_dims(x, axis=2)
@@ -738,6 +739,9 @@ def broadcast_to(input, shape, _builder=None):
     """
     return semantic.broadcast_impl_shape(input, shape, _builder)
 
+@builtin
+def trans(input, _builder=None):
+    return semantic.trans(input, _builder)
 
 @builtin
 def cat(input, other, _builder=None):

@@ -295,6 +295,18 @@ def TT_CatOp : TT_Op<"cat", [NoSideEffect,
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
 }
 
+def TT_TransOp : TT_Op<"trans", [NoSideEffect,
+                               SameOperandsAndResultElementType]> {
+
+    let summary = "transpose a tensor";
+
+    let arguments = (ins TT_Tensor:$src);
+
+    let results = (outs TT_Tensor:$result);
+
+    let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
+}
+
 //
 // SPMD Ops
 //

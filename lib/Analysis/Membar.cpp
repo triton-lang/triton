@@ -24,21 +24,43 @@ void MembarAnalysis::dfsOperation(Operation *operation,
     // scf.if only: two regions
     // scf.for: one region
     RegionInfo curRegionInfo;
-    for (auto &region : operation->getRegions()) {
-      // Copy the parent info as the current info.
-      RegionInfo regionInfo = *parentRegionInfo;
-      for (auto &block : region.getBlocks()) {
-        assert(region.getBlocks().size() == 1 &&
-               "Multiple blocks in a region is not supported");
-        for (auto &op : block.getOperations()) {
-          // Traverse the nested operation.
-          dfsOperation(&op, &regionInfo, builder);
+    auto traverseRegions = [&]() -> auto{
+      for (auto &region : operation->getRegions()) {
+        // Copy the parent info as the current info.
+        RegionInfo regionInfo = *parentRegionInfo;
+        for (auto &block : region.getBlocks()) {
+          assert(region.getBlocks().size() == 1 &&
+                 "Multiple blocks in a region is not supported");
+          for (auto &op : block.getOperations()) {
+            // Traverse the nested operation.
+            dfsOperation(&op, &regionInfo, builder);
+          }
         }
+        curRegionInfo.join(regionInfo);
       }
-      curRegionInfo.join(regionInfo);
+      // Set the parent region info as the union of the nested region info.
+      *parentRegionInfo = curRegionInfo;
+    };
+
+    traverseRegions();
+    if (isa<scf::ForOp>(operation)) {
+      // scf.for can have two possible inputs: the init value and the
+      // previous iteration's result. Although we've applied alias analysis,
+      // there could be unsynced memory accesses on reused memories.
+      // For example, consider the following code:
+      // %1 = convert_layout %0: blocked -> shared
+      // ...
+      // gpu.barrier
+      // ...
+      // %5 = convert_layout %4 : shared -> dot
+      // %6 = tt.dot %2, %5
+      // scf.yield
+      //
+      // Though %5 could be released before scf.yield, it may shared the same
+      // memory with %1. So we actually have to insert a barrier before %1 to
+      // make sure the memory is synced.
+      traverseRegions();
     }
-    // Set the parent region info as the union of the nested region info.
-    *parentRegionInfo = curRegionInfo;
   }
 }
 
@@ -49,8 +71,7 @@ void MembarAnalysis::transfer(Operation *op, RegionInfo *regionInfo,
     // Do not insert barriers before control flow operations and
     // alloc/extract/insert
     // alloc is an allocation op without memory write.
-    // In contrast, arith.constant is an allocation op with memory write.
-    // FIXME(Keren): extract is always alias for now
+    // FIXME(Keren): extract_slice is always alias for now
     return;
   }
 
@@ -60,9 +81,11 @@ void MembarAnalysis::transfer(Operation *op, RegionInfo *regionInfo,
     return;
   }
 
-  if (isa<triton::gpu::AsyncWaitOp>(op)) {
-    // If the current op is an async wait, we insert a barrier op and sync
-    // previous reads and writes.
+  if (isa<triton::gpu::AsyncWaitOp>(op) &&
+      !isa<gpu::BarrierOp>(op->getNextNode())) {
+    // If the current op is an async wait and the next op is not a barrier we
+    // insert a barrier op and sync
+    regionInfo->sync();
     OpBuilder::InsertionGuard g(*builder);
     builder->setInsertionPointAfter(op);
     builder->create<gpu::BarrierOp>(op->getLoc());
