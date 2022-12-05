@@ -21,6 +21,7 @@ from .core import (
     atomic_xor,
     bfloat16,
     block_type,
+    builtin,
     cat,
     cdiv,
     constexpr,
