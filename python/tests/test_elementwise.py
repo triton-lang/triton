@@ -92,7 +92,7 @@ def kernel(X, Y, BLOCK: tl.constexpr):
     kernel[(1,)](
         x, y,
         BLOCK=shape[0],
-        extern_libs={"libdevice": sytem_libdevice_path()},
+        extern_libs={"libdevice": system_libdevice_path()},
     )
     # reference result
     y_ref = getattr(torch, torch_ops[expr])(x)
@@ -137,7 +137,11 @@ def kernel(X0, X1, Y, BLOCK: tl.constexpr):
 
     # triton result
     y = torch.zeros(shape, dtype=torch_type[output_type], device="cuda")
-    kernel[(1,)](x0, x1, y, BLOCK=shape[0], extern_libs={"libdevice": libdevice})
+    kernel[(1,)](
+        x0, x1, y,
+        BLOCK=shape[0],
+        extern_libs={"libdevice": system_libdevice_path()},
+    )
     # reference result
 
     if expr == "cdiv":
@@ -185,7 +189,11 @@ def kernel(X0, X1, X2, Y, BLOCK: tl.constexpr):
 
     # triton result
     y = torch.zeros(shape, dtype=torch_type[output_type], device="cuda")
-    kernel[(1,)](x0, x1, x2, y, BLOCK=shape[0], extern_libs={"libdevice": libdevice})
+    kernel[(1,)](
+        x0, x1, x2, y,
+        BLOCK=shape[0],
+        extern_libs={"libdevice": system_libdevice_path()},
+    )
     # reference result
 
     y_ref = getattr(torch, torch_ops[expr])(x0, x1, x2)
