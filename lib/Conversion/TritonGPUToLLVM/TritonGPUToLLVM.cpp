@@ -1006,10 +1006,10 @@ struct LoadOpConversion
       assert(wordNElems * nWords * numVecs == numElems);
 
 #ifdef USE_ROCM
-      // TODO: need to revisit this when implementing vectorized loads
-      Value ret = load(ptrElems[vecStart]);
-      ret = bitcast(ret, valueElemTy);
-      loadedVals.push_back(ret);
+      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
+        Value ret = bitcast(load(ptrElems[vecStart + wordIdx]), valueElemTy);
+        loadedVals.push_back(ret);
+      } 
 #else
       // TODO(Superjomn) Add cache policy fields to StoreOp.
       // TODO(Superjomn) Deal with cache policy here.
@@ -1217,25 +1217,18 @@ struct StoreOpConversion
                              rewriter.create<LLVM::ConstantOp>(
                                  loc, u32Ty, IntegerAttr::get(u32Ty, elemIdx)));
         }
+#ifdef USE_ROCM
+        llWord = bitcast(llWord, valueElemTy);
+        store(llWord, ptrElems[vecStart + wordIdx]);
+#else
         llWord = bitcast(llWord, valArgTy);
         std::string constraint =
             (width == 64) ? "l" : ((width == 32) ? "r" : "c");
         asmArgs.emplace_back(llWord, constraint);
+#endif
       }
-#ifdef USE_ROCM
-      // TODO: need to revisit this when implementing vectorized stores
-      Value llWord = rewriter.create<LLVM::UndefOp>(loc, wordTy);
-      Value elem = valueElems[vecStart];
-      if (elem.getType().getIntOrFloatBitWidth() <= 8)
-        elem = rewriter.create<LLVM::SExtOp>(loc, type::i8Ty(ctx), elem);
-      Type u32Ty = typeConverter->convertType(type::u32Ty(ctx));
-      llWord =
-          insert_element(wordTy, llWord, elem,
-                         rewriter.create<LLVM::ConstantOp>(
-                             loc, u32Ty, IntegerAttr::get(u32Ty, 0)));
-      llWord = bitcast(llWord, valueElemTy);
-      store(llWord, ptrElems[vecStart]);
-#else
+
+#ifndef USE_ROCM
       // Prepare the PTX inline asm.
       PTXBuilder ptxBuilder;
       auto *asmArgList = ptxBuilder.newListOperand(asmArgs);
