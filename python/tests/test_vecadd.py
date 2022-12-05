@@ -126,8 +126,6 @@ def vecadd_no_scf_tester(num_warps, block_size, shape):
     kernel[grid](x_ptr=x, y_ptr=y, z_ptr=z, n_elements=x.shape.numel(), block_size_N=block_size, num_warps=num_warps)
 
     golden_z = x + y
-    # print(f"z: {z}")
-    # print(f"golden_z: {golden_z}")
     assert_close(z, golden_z, rtol=1e-7, atol=1e-7)
 
 

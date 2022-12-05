@@ -790,7 +790,6 @@ class CompilationError(Exception):
         self.message = f'at {node.lineno}:{node.col_offset}:\n'
         self.message += '\n'.join(src.split('\n')[:node.lineno])
         self.message += '\n' + ' ' * node.col_offset + '^'
-        # self.message =""
         self.src = src
         self.node = node
         super().__init__(self.message)
@@ -853,14 +852,9 @@ def build_triton_ir(fn, signature, specialization, constants):
     prototype = triton.language.function_type([], arg_types)
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name, attributes=new_attrs, is_kernel=True)
     try:
-        print(f"fn: {fn}")
-        parse = fn.parse()
-        print(f"parse: {parse}")
-        generator.visit(parse)
+        generator.visit(fn.parse())
     except Exception as e:
-        print(f"e:{e}")
         node = generator.last_node
-        print(f"node: {node}")
         if node is None or isinstance(e, (NotImplementedError, CompilationError)):
             raise e
         raise CompilationError(fn.src, node) from e
@@ -1500,7 +1494,7 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
       with open(fn_cache_manager._make_path(f"{name}.json")) as f:
             metadata = json.load(f)
     context = _triton.ir.context()
-    force_compile = True
+    force_compile = False
     # ast -> triton-ir (or read from cache)
     ttir, ttir_md5, force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.ttir", metadata,
                            run_if_found = lambda path: _triton.ir.parse_mlir_module(path, context),
