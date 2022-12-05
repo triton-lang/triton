@@ -400,7 +400,7 @@ def jit(
     :note: This function will be compiled and run on the GPU. It will only have access to:
 
            * python primitives,
-           * objects within the package,
+           * builtins within the triton package,
            * arguments to this function,
            * other jit'd functions
 
