@@ -38,7 +38,6 @@ using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
-Value gThreadId;
 
 // Helper for conversion of DotOp with mma<version=1>, that is sm<80
 struct DotOpMmaV1ConversionHelper {
