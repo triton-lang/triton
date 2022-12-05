@@ -9,6 +9,8 @@ from . import core, extern, libdevice, random
 from .core import (
     abs,
     arange,
+    argmin,
+    argmax,
     atomic_add,
     atomic_and,
     atomic_cas,
@@ -89,6 +91,8 @@ from .random import (
 __all__ = [
     "abs",
     "arange",
+    "argmin",
+    "argmax",
     "atomic_add",
     "atomic_and",
     "atomic_cas",
