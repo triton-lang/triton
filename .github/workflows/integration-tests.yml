@@ -79,13 +79,14 @@ jobs:
           lit -v "$LIT_TEST_DIR"
 
       - name: Run python tests
-        if: ${{matrix.runner[0] == 'self-hosted'}}
+        if: ${{matrix.runner[0] == 'self-hosted' && matrix.runner[1] == 'A10'}}
         run: |
           cd python/tests
           pytest
 
+      # TODO[Superjomn] Enable all the tests on V100 if available
       - name: Run python tests on V100
-        if: ${{matrix.runner[1] == 'V100'}}
+        if: ${{matrix.runner[0] == 'self-hosted' && matrix.runner[1] == 'V100'}}
         run: |
           cd python/tests
           pytest test_gemm.py::test_gemm_no_scf_for_mmav1
