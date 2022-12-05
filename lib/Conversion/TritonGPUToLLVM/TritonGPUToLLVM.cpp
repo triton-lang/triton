@@ -3168,9 +3168,7 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
 
   auto smemObj = SharedMemoryObject(smemBase, dstShape, outOrd, loc, rewriter);
   auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
-  barrier(); // DEBUG
   rewriter.replaceOp(op, retVal);
-  barrier(); // DEBUG
   return success();
 }
 
@@ -3432,9 +3430,7 @@ LogicalResult ConvertLayoutOpConversion::lowerSharedToDotOperand(
     assert(false && "Unsupported dot operand layout found");
   }
 
-  barrier();
   rewriter.replaceOp(op, res);
-  barrier();
   return success();
 }
 

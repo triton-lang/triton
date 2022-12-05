@@ -294,6 +294,7 @@ def test_gemm_fp32(M, N, K, num_warps, block_M, block_N, block_K, allow_tf32):
         torch.testing.assert_close(c, golden, rtol=max(1e-4, 1.5 * golden_rel_err), atol=max(1e-4, 1.5 * golden_abs_err))
 
 
+# NOTE this is useful only on Volta GPU.
 @pytest.mark.parametrize('SHAPE,NUM_WARPS,TRANS_A,TRANS_B', [
     (shape, num_warps, trans_a, trans_b)
     for shape in [
@@ -308,5 +309,5 @@ def test_gemm_fp32(M, N, K, num_warps, block_M, block_N, block_K, allow_tf32):
     for trans_a in [False]
     for trans_b in [False]
 ])
-def test_gemmno_scf_for_mmav1(SHAPE, NUM_WARPS, TRANS_A, TRANS_B):
+def test_gemm_no_scf_for_mmav1(SHAPE, NUM_WARPS, TRANS_A, TRANS_B):
     test_gemm_no_scf(SHAPE, NUM_WARPS, TRANS_A, TRANS_B)
