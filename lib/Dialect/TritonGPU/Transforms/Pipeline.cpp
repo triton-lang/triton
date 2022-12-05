@@ -405,8 +405,6 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   for (BlockArgument depArg : depArgs) {
     depArgsIdx[depArg] = newLoopArgs.size();
     newLoopArgs.push_back(valueMapping[depArg][numStages - 1]);
-    llvm::errs() << "depArg: " << depArg << " idx: " << newLoopArgs.size() - 1
-                 << "\n";
   }
 
   size_t nextIVIdx = newLoopArgs.size();
