@@ -124,8 +124,11 @@ void LoopPipeliner::collectDeps(Value v, int stages, DenseSet<Value> &deps) {
 
   if (auto arg = v.dyn_cast<BlockArgument>()) {
     deps.insert(v);
-    // Note: we have iv as the first arg, so the op idx is arg.getArgNumber()-1
-    collectDeps(yieldOp->getOperand(arg.getArgNumber() - 1), stages - 1, deps);
+    if (arg.getArgNumber() > 0)
+      // Skip the first arg (loop induction variable)
+      // Otherwise the op idx is arg.getArgNumber()-1
+      collectDeps(yieldOp->getOperand(arg.getArgNumber() - 1), stages - 1,
+                  deps);
   } else { // value
     // v might be in deps, but we still need to visit v.
     // This is because v might depend on value in previous iterations
