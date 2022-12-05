@@ -1007,7 +1007,7 @@ struct LoadOpConversion
 
 #ifdef USE_ROCM
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
-        Value ret = load(ptrElems[vecStart + wordIdx]);
+        Value ret = bitcast(load(ptrElems[vecStart + wordIdx]), valueElemTy);
         loadedVals.push_back(ret);
       } 
 #else
@@ -1219,19 +1219,16 @@ struct StoreOpConversion
         }
 #ifdef USE_ROCM
         llWord = bitcast(llWord, valueElemTy);
+        store(llWord, ptrElems[vecStart + wordIdx]);
 #else
         llWord = bitcast(llWord, valArgTy);
-#endif
         std::string constraint =
             (width == 64) ? "l" : ((width == 32) ? "r" : "c");
         asmArgs.emplace_back(llWord, constraint);
+#endif
       }
-      
-#ifdef USE_ROCM
-      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
-        store(asmArgs[wordIdx].first, ptrElems[vecStart + wordIdx]);
-      }
-#else
+
+#ifndef USE_ROCM
       // Prepare the PTX inline asm.
       PTXBuilder ptxBuilder;
       auto *asmArgList = ptxBuilder.newListOperand(asmArgs);
