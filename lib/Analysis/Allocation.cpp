@@ -13,6 +13,7 @@
 
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::getContigPerThread;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getSizePerThread;
@@ -60,8 +61,8 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   assert(srcLayout && dstLayout &&
          "Unexpect layout in getScratchConfigForCvtLayout()");
   auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
-  unsigned srcContigPerThread = getSizePerThread(srcLayout)[inOrd[0]];
-  unsigned dstContigPerThread = getSizePerThread(dstLayout)[outOrd[0]];
+  unsigned srcContigPerThread = getContigPerThread(srcLayout)[inOrd[0]];
+  unsigned dstContigPerThread = getContigPerThread(dstLayout)[outOrd[0]];
   // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
   //       that we cannot do vectorization.
   inVec = outOrd[0] == 0 ? 1 : inOrd[0] == 0 ? 1 : srcContigPerThread;
