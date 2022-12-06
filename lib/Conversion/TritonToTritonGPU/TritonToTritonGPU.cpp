@@ -245,9 +245,8 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
                                            bType.getElementType(), encoding);
       b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), dstType, b);
     }
-    rewriter.replaceOpWithNewOp<triton::DotOp>(
-        op, retType, a, b, adaptor.c(), adaptor.allowTF32(), adaptor.transA(),
-        adaptor.transB());
+    rewriter.replaceOpWithNewOp<triton::DotOp>(op, retType, a, b, adaptor.c(),
+                                               adaptor.allowTF32());
     return success();
   }
 };
