@@ -82,6 +82,7 @@ from .jitlib import (
 )
 from . import core
 from .core import (
+    _i_where,
     minimum,
     where,
 )
@@ -136,6 +137,7 @@ __all__ = [
     "_i_mod",
     "_i_mul",
     "_i_not_equal",
+    "_i_where",
     "int1",
     "int16",
     "int32",
