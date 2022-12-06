@@ -758,6 +758,10 @@ def view(input, shape, _builder=None):
     shape = [x.value for x in shape]
     return semantic.view(input, shape, _builder)
 
+@builtin
+def reshape(input, shape, _builder=None):
+    # TODO: should be more than just a view
+    return view(input, shape, _builder)
 
 # -----------------------
 # Linear Algebra
