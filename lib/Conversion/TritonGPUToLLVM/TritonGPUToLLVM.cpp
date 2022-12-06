@@ -3034,7 +3034,6 @@ void ConvertLayoutOpConversion::processReplica(
             currVal = zext(llvmElemTy, currVal);
           else if (isPtr)
             currVal = ptrtoint(llvmElemTy, currVal);
-
           valVec = insert_element(vecTy, valVec, currVal, idx_val(v));
         }
         store(valVec, ptr);
@@ -3142,7 +3141,6 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
     triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
     ConversionPatternRewriter &rewriter) const {
   auto loc = op.getLoc();
-
   Value src = op.src();
   Value dst = op.result();
   auto srcTy = src.getType().cast<RankedTensorType>();

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from enum import Enum
-from functools import wraps
-from typing import List
+from typing import List, Callable, TypeVar
 
 import triton
-from . import semantic
+from . import builtin, semantic
 from triton._C.libtriton.triton import ir
 
+T = TypeVar('T')
 
 def _to_tensor(x, builder):
     if isinstance(x, bool):
@@ -31,17 +31,6 @@ def _to_tensor(x, builder):
     elif isinstance(x, tensor):
         return x
     assert False, f'cannot convert {x} to tensor'
-
-
-def builtin(fn):
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        if '_builder' not in kwargs or \
-           kwargs['_builder'] is None:
-            raise ValueError("Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)")
-        return fn(*args, **kwargs)
-
-    return wrapper
 
 
 class dtype:
@@ -409,10 +398,10 @@ class constexpr:
 
     def __neg__(self):
         return constexpr(-self.value)
-    
+
     def __pos__(self):
         return constexpr(+self.value)
-    
+
     def __invert__(self):
         return constexpr(~self.value)
 
@@ -851,9 +840,9 @@ def store(pointer, value, mask=None, _builder=None):
 # Atomic Memory Operations
 # -----------------------
 
-def _add_atomic_docstr(name):
+def _add_atomic_docstr(name: str) -> Callable[[T], T]:
 
-    def _decorator(func):
+    def _decorator(func: T) -> T:
         docstr = """
     Performs an atomic {name} at the memory location specified by :code:`pointer`.
 
@@ -974,9 +963,9 @@ def fdiv(x, y, ieee_rounding=False, _builder=None):
     return semantic.fdiv(x, y, ieee_rounding, _builder)
 
 
-def _add_math_1arg_docstr(name):
+def _add_math_1arg_docstr(name: str) -> Callable[[T], T]:
 
-    def _decorator(func):
+    def _decorator(func: T) -> T:
         docstr = """
     Computes the element-wise {name} of :code:`x`
 
@@ -1023,9 +1012,9 @@ def sqrt(x, _builder=None):
 # Reductions
 # -----------------------
 
-def _add_reduction_docstr(name):
+def _add_reduction_docstr(name: str) -> Callable[[T], T]:
 
-    def _decorator(func):
+    def _decorator(func: T) -> T:
         docstr = """
     Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
 
