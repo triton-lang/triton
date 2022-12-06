@@ -499,10 +499,10 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
     // CHECK: llvm.select
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
-    // CHECK-SAME: cp.async.cg.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x10, 0x10
+    // CHECK-SAME: cp.async.cg.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x10, ${{.*}}
     // CHECK: llvm.select
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
-    // CHECK-SAME: cp.async.cg.shared.global [ ${{.*}} + 16 ], [ ${{.*}} + 0 ], 0x10, 0x10
+    // CHECK-SAME: cp.async.cg.shared.global [ ${{.*}} + 16 ], [ ${{.*}} + 0 ], 0x10, ${{.*}}
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
     // CHECK-SAME: cp.async.commit_group
     %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index, %true_tensor {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x64x!tt.ptr<f32>, #AL> -> tensor<2x16x64xf32, #A>

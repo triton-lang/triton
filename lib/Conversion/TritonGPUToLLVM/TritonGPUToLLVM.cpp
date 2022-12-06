@@ -4074,7 +4074,7 @@ struct InsertSliceAsyncOpConversion
             ptxBuilder.newAddrOperand(srcElems[elemIdx + wordElemIdx], "l");
         auto *copySize = ptxBuilder.newConstantOperand(byteWidth);
         auto *srcSize = copySize;
-        if (op.mask()) {
+        if (llMask) {
           // We don't use predicate in this case, setting src-size to 0
           // if there's any mask. cp.async will automatically fill the
           // remaining slots with 0 if cp-size > src-size.
