@@ -4105,10 +4105,12 @@ struct InsertSliceAsyncOpConversion
             }
             v = bitcast(v, IntegerType::get(getContext(), byteWidth));
             // Write shared memory if predicate is true
-            auto *valOperand = ptxBuilder.newOperand(v, "r");
-            auto &st = *ptxBuilder.create<PTXInstr>("st");
+            PTXBuilder ptxStoreBuilder;
+            auto *valOperand = ptxStoreBuilder.newOperand(v, "r");
+            auto &st = *ptxStoreBuilder.create<PTXInstr>("st");
             st.shared().o("b" + std::to_string(bitWidth));
             st(dstOperand, valOperand).predicate(pred);
+            ptxStoreBuilder.launch(rewriter, loc, void_ty(getContext()));
           }
         }
         copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
