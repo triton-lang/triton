@@ -798,24 +798,37 @@ public:
   TritonGPUCombineOpsPass(int computeCapability) {
     this->computeCapability = computeCapability;
   }
-  void runOnOperation() override {
+
+  void simplifyConversionsInRegions() {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
+    mlir::RewritePatternSet nonLoopPatterns(context);
+    nonLoopPatterns.add<OptimizeBlockedToShared>(context);
+    nonLoopPatterns.add<SimplifyConversion>(context);
+    nonLoopPatterns.add<DecomposeDotOperand>(context);
+    nonLoopPatterns.add<RematerializeBackward>(context);
+    nonLoopPatterns.add<RematerializeForward>(context);
+    nonLoopPatterns.add<BlockedToMMA>(context, computeCapability);
+    if (applyPatternsAndFoldGreedily(m, std::move(nonLoopPatterns)).failed())
+      signalPassFailure();
+  }
 
-    for (size_t i = 0; i < 2; i++) {
-      mlir::RewritePatternSet nonLoopPatterns(context);
-      nonLoopPatterns.add<OptimizeBlockedToShared>(context);
-      nonLoopPatterns.add<SimplifyConversion>(context);
-      nonLoopPatterns.add<DecomposeDotOperand>(context);
-      nonLoopPatterns.add<RematerializeBackward>(context);
-      nonLoopPatterns.add<RematerializeForward>(context);
-      nonLoopPatterns.add<BlockedToMMA>(context, computeCapability);
-      if (applyPatternsAndFoldGreedily(m, std::move(nonLoopPatterns)).failed())
-        signalPassFailure();
-      mlir::RewritePatternSet loopPatterns(context);
-      loopPatterns.add<MoveConvertOutOfLoop>(context);
-      if (applyPatternsAndFoldGreedily(m, std::move(loopPatterns)).failed())
-        signalPassFailure();
+  void moveConversionsOutOfLoops() {
+    MLIRContext *context = &getContext();
+    ModuleOp m = getOperation();
+    mlir::RewritePatternSet patterns(context);
+    patterns.add<MoveConvertOutOfLoop>(context);
+    if(applyOpPatternsAndFold(m, std::move(patterns)).failed())
+      signalPassFailure();
+  }
+
+  void runOnOperation() override {
+    // MoveConvertOutOfLoop is not perfect
+    // And may get stuck in an infinite loop
+    // if applied greedily
+    for(size_t i = 0; i < 2; i++){
+      simplifyConversionsInRegions();
+      moveConversionsOutOfLoops();
     }
   }
 };

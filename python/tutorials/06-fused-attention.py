@@ -212,7 +212,6 @@ class _attention(torch.autograd.Function):
         m = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         num_warps = 4 if Lk <= 64 else 8
 
-        print("fwd")
         _fwd_kernel[grid](
             q, k, v, sm_scale,
             tmp, L, m,
@@ -226,7 +225,6 @@ class _attention(torch.autograd.Function):
             BLOCK_DMODEL=Lk, num_warps=num_warps,
             num_stages=1,
         )
-        print("done")
 
         ctx.save_for_backward(q, k, v, o, L, m)
         ctx.BLOCK = BLOCK
@@ -244,7 +242,6 @@ class _attention(torch.autograd.Function):
         dv = torch.empty_like(v)
         do_scaled = torch.empty_like(do)
         delta = torch.empty_like(l)
-        print('bwd')
         _bwd_preprocess[(ctx.grid[0] * ctx.grid[1], )](
             o, do, l,
             do_scaled, delta,
@@ -267,7 +264,6 @@ class _attention(torch.autograd.Function):
             BLOCK_DMODEL=ctx.BLOCK_DMODEL, num_warps=num_warps,
             num_stages=1,
         )
-        print('done')
         return dq, dk, dv, None
 
 
