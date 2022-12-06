@@ -498,8 +498,9 @@ def expand_dims(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_expand_dims(input.handle, axis), ret_ty)
 
 
-def cat(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder) -> tl.tensor:
-    # TODO: check types
+def cat(lhs: tl.tensor, rhs: tl.tensor, can_reorder: bool, builder: ir.builder) -> tl.tensor:
+    assert can_reorder, "current implementation of `cat` always may reorder elements"
+    assert len(lhs.shape) == 1
     ret_type = tl.block_type(lhs.type.scalar, [lhs.shape[0] + rhs.shape[0]])
     return tl.tensor(builder.create_cat(lhs.handle, rhs.handle), ret_type)
 

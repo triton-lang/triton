@@ -731,7 +731,7 @@ def trans(input, _builder=None):
     return semantic.trans(input, _builder)
 
 @builtin
-def cat(input, other, _builder=None):
+def cat(input, other, can_reorder=False, _builder=None):
     """
     Concatenate the given blocks
 
@@ -739,8 +739,12 @@ def cat(input, other, _builder=None):
     :type input:
     :param other: The second input tensor.
     :type other:
+    :param reorder: Compiler hint. If true, the compiler is
+    allowed to reorder elements while concatenating inputs.
+    Only use if the order does not matter (e.g., result is
+    only used in reduction ops)
     """
-    return semantic.cat(input, other, _builder)
+    return semantic.cat(input, other, can_reorder, _builder)
 
 
 @builtin
