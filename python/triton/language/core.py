@@ -17,11 +17,11 @@ def _to_tensor(x, builder):
         if -2**31 <= x < 2**31:
             return tensor(builder.get_int32(x), int32)
         elif 2**31 <= x < 2**32:
-            return tensor(builder.get_uint32(x), uint32)
+            return tensor(builder.get_int32(x), uint32)
         elif -2**63 <= x < 2**63:
             return tensor(builder.get_int64(x), int64)
         elif 2**63 <= x < 2**64:
-            return tensor(builder.get_uint64(x), uint64)
+            return tensor(builder.get_int64(x), uint64)
         else:
             raise RuntimeError(f'Nonrepresentable integer {x}.')
     elif isinstance(x, float):
@@ -761,7 +761,8 @@ def view(input, shape, _builder=None):
 @builtin
 def reshape(input, shape, _builder=None):
     # TODO: should be more than just a view
-    return view(input, shape, _builder)
+    shape = [x.value for x in shape]
+    return semantic.view(input, shape, _builder)
 
 # -----------------------
 # Linear Algebra

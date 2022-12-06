@@ -500,7 +500,8 @@ def expand_dims(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
 
 def cat(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder) -> tl.tensor:
     # TODO: check types
-    return tl.tensor(builder.create_cat(lhs.handle, rhs.handle), lhs.type)
+    ret_type = tl.block_type(lhs.type.scalar, [lhs.shape[0] + rhs.shape[0]])
+    return tl.tensor(builder.create_cat(lhs.handle, rhs.handle), ret_type)
 
 def trans(input: tl.tensor, builder: ir.builder) -> tl.tensor:
     if len(input.shape) != 2:
