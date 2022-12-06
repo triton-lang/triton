@@ -1,5 +1,5 @@
 from typing import Optional
-from ..impl import base
+from .. import impl
 from triton import language as tl
 
 
@@ -31,23 +31,23 @@ def _i_load(
         )
     if ptr.type.is_block():
         if mask:
-            mask = base._broadcast_impl_shape(
+            mask = impl._broadcast_impl_shape(
                 mask, ptr.type.get_block_shapes(), builder
             )
         if other:
-            other = base._broadcast_impl_shape(
+            other = impl._broadcast_impl_shape(
                 other, ptr.type.get_block_shapes(), builder
             )
 
     if other:
-        other = base._i_cast(other, ptr.type.scalar.element_ty, builder)
+        other = impl._i_cast(other, ptr.type.scalar.element_ty, builder)
     ptr_ty = ptr.type.scalar
     elt_ty = ptr_ty.element_ty
     # treat bool* as tl.int8*
     if elt_ty == tl.int1:
         elt_ty = tl.int8
         ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
-        ptr = base._i_cast(ptr, ptr_ty, builder)
+        ptr = impl._i_cast(ptr, ptr_ty, builder)
 
     # cache modifier
     cache = tl.ir.CACHE_MODIFIER.NONE  # default
@@ -151,13 +151,13 @@ def _i_store(
             "Pointer argument of store instruction is " + ptr.type.__repr__()
         )
     if ptr.type.is_block():
-        val = base._broadcast_impl_shape(
+        val = impl._broadcast_impl_shape(
             val,
             ptr.type.get_block_shapes(),
             builder,
         )
     if mask:
-        mask = base._broadcast_impl_shape(
+        mask = impl._broadcast_impl_shape(
             mask,
             ptr.type.get_block_shapes(),
             builder,
@@ -168,10 +168,10 @@ def _i_store(
     if elt_ty == tl.int1:
         elt_ty = tl.int8
         ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
-        ptr = base._i_cast(ptr, ptr_ty, builder)
+        ptr = impl._i_cast(ptr, ptr_ty, builder)
 
     # cast to target data-type
-    val = base._i_cast(val, elt_ty, builder)
+    val = impl._i_cast(val, elt_ty, builder)
     if not mask:
         return tl.tensor(
             builder.create_store(ptr.handle, val.handle),

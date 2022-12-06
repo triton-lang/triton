@@ -1,7 +1,7 @@
 from typing import Callable, TypeVar
 
 import triton
-from ..impl import base
+from triton import impl
 from . import libdevice
 import triton.language as tl
 
@@ -27,21 +27,21 @@ def _i_umulhi(
     y: tl.tensor,
     builder: tl.ir.builder,
 ) -> tl.tensor:
-    x, y = base._binary_op_type_checking_impl(lhs=x, rhs=y, builder=builder)
+    x, y = impl._binary_op_type_checking_impl(lhs=x, rhs=y, builder=builder)
     return libdevice.mulhi(x, y, _builder=builder)
 
 
-@tl.builtin
+@triton.builtin
 def umulhi(x, y, _builder=None):
     x = tl._to_tensor(x, _builder)
     y = tl._to_tensor(y, _builder)
     return _i_umulhi(x, y, _builder)
 
 
-@tl.builtin
+@triton.builtin
 def fdiv(x, y, ieee_rounding=False, _builder=None):
     ieee_rounding = tl._constexpr_to_value(ieee_rounding)
-    return base._i_fdiv(x, y, ieee_rounding, _builder)
+    return impl._i_fdiv(x, y, ieee_rounding, _builder)
 
 
 def _i_exp(
@@ -51,7 +51,7 @@ def _i_exp(
     return tl.tensor(builder.create_exp(x.handle), x.type)
 
 
-@tl.builtin
+@triton.builtin
 @_add_math_1arg_docstr("exponential")
 def exp(x, _builder=None):
     return _i_exp(x, _builder)
@@ -64,7 +64,7 @@ def _i_log(
     return tl.tensor(builder.create_log(x.handle), x.type)
 
 
-@tl.builtin
+@triton.builtin
 @_add_math_1arg_docstr("natural logarithm")
 def log(x, _builder=None):
     return _i_log(x, _builder)
@@ -77,7 +77,7 @@ def _i_cos(
     return tl.tensor(builder.create_cos(x.handle), x.type)
 
 
-@tl.builtin
+@triton.builtin
 @_add_math_1arg_docstr("cosine")
 def cos(x, _builder=None):
     return _i_cos(x, _builder)
@@ -90,7 +90,7 @@ def _i_sin(
     return tl.tensor(builder.create_sin(x.handle), x.type)
 
 
-@tl.builtin
+@triton.builtin
 @_add_math_1arg_docstr("sine")
 def sin(x, _builder=None):
     return _i_sin(x, _builder)
@@ -103,7 +103,7 @@ def _i_sqrt(
     return tl.tensor(builder.create_sqrt(x.handle), x.type)
 
 
-@tl.builtin
+@triton.builtin
 @_add_math_1arg_docstr("square root")
 def sqrt(x, _builder=None):
     return _i_sqrt(x, _builder)

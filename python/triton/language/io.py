@@ -1,5 +1,6 @@
 from typing import List
 
+import triton
 import triton.language as tl
 
 
@@ -14,7 +15,7 @@ def _i_printf(
     return tl.tensor(builder.create_printf(prefix, new_args), tl.void)
 
 
-@tl.builtin
+@triton.builtin
 def printf(prefix, *args, _builder=None):
     import string
 

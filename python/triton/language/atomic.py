@@ -1,8 +1,8 @@
 from typing import Callable, TypeVar, Tuple
 
+import triton
 import triton.language as tl
-import triton.language.structure
-from ..impl import base, core
+from .. import impl
 
 T = TypeVar("T")
 
@@ -46,18 +46,18 @@ def _atom_red_typechecking_impl(
         raise ValueError("atomic_" + op + " does not support " + element_ty)
     if ptr.type.is_block():
         if mask:
-            mask = base._broadcast_impl_shape(
+            mask = impl._broadcast_impl_shape(
                 mask,
                 ptr.type.get_block_shapes(),
                 builder,
             )
         if val:
-            val = base._broadcast_impl_shape(
+            val = impl._broadcast_impl_shape(
                 val,
                 ptr.type.get_block_shapes(),
                 builder,
             )
-    val = base._i_cast(val, ptr.type.scalar.element_ty, builder)
+    val = impl._i_cast(val, ptr.type.scalar.element_ty, builder)
     if not mask:
         mask_ir = builder.get_int1(True)
         mask_ty = tl.int1
@@ -87,7 +87,7 @@ def _i_atomic_cas(
     )
 
 
-@tl.builtin
+@triton.builtin
 @_add_atomic_docstr("compare-and-swap")
 def atomic_cas(pointer, cmp, val, _builder=None):
     cmp = tl._to_tensor(cmp, _builder)
@@ -119,7 +119,7 @@ def _i_atomic_xchg(
     )
 
 
-@tl.builtin
+@triton.builtin
 @_add_atomic_docstr("exchange")
 def atomic_xchg(pointer, val, mask=None, _builder=None):
     val = tl._to_tensor(val, _builder)
@@ -143,7 +143,7 @@ def _i_atomic_add(
     )
 
 
-@tl.builtin
+@triton.builtin
 @_add_atomic_docstr("add")
 def atomic_add(pointer, val, mask=None, _builder=None):
     val = tl._to_tensor(val, _builder)
@@ -183,22 +183,22 @@ def _i_atomic_max(
     # for float
     # return atomic_smax(i_ptr, i_val) if val >= 0
     # return atomic_umin(i_ptr, i_val) if val < 0
-    i_val = base._i_bitcast(
+    i_val = impl._i_bitcast(
         val,
         tl.int32,
         builder,
     )
-    i_ptr = base._i_bitcast(
+    i_ptr = impl._i_bitcast(
         ptr,
         tl.pointer_type(tl.int32, 1),
         builder,
     )
-    pos = base._i_greater_equal(
+    pos = impl._i_greater_equal(
         val,
         tl.tensor(builder.get_float32(0), sca_ty),
         builder,
     )
-    neg = base._i_less_than(
+    neg = impl._i_less_than(
         val,
         tl.tensor(
             builder.get_float32(0),
@@ -211,7 +211,7 @@ def _i_atomic_max(
             tl.ir.ATOMIC_OP.MAX,
             i_ptr.handle,
             i_val.handle,
-            base._i_and_(mask, pos, builder).handle,
+            impl._i_and_(mask, pos, builder).handle,
         ),
         i_val.type,
     )
@@ -220,14 +220,14 @@ def _i_atomic_max(
             tl.ir.ATOMIC_OP.UMIN,
             i_ptr.handle,
             i_val.handle,
-            base._i_and_(mask, neg, builder).handle,
+            impl._i_and_(mask, neg, builder).handle,
         ),
         i_val.type,
     )
-    return core._i_where(pos, pos_ret, neg_ret, builder)
+    return impl._i_where(pos, pos_ret, neg_ret, builder)
 
 
-@tl.builtin
+@triton.builtin
 @_add_atomic_docstr("max")
 def atomic_max(pointer, val, mask=None, _builder=None):
     val = tl._to_tensor(val, _builder)
@@ -267,22 +267,22 @@ def _i_atomic_min(
     # for float
     # return atomic_smin(i_ptr, i_val) if val >= 0
     # return atomic_umax(i_ptr, i_val) if val < 0
-    i_val = base._i_bitcast(
+    i_val = impl._i_bitcast(
         val,
         tl.int32,
         builder,
     )
-    i_ptr = base._i_bitcast(
+    i_ptr = impl._i_bitcast(
         ptr,
         tl.pointer_type(tl.int32, 1),
         builder,
     )
-    pos = base._i_greater_equal(
+    pos = impl._i_greater_equal(
         val,
         tl.tensor(builder.get_float32(0), sca_ty),
         builder,
     )
-    neg = base._i_less_than(
+    neg = impl._i_less_than(
         val,
         tl.tensor(builder.get_float32(0), sca_ty),
         builder,
@@ -292,7 +292,7 @@ def _i_atomic_min(
             tl.ir.ATOMIC_OP.MIN,
             i_ptr.handle,
             i_val.handle,
-            base._i_and_(mask, pos, builder).handle,
+            impl._i_and_(mask, pos, builder).handle,
         ),
         i_val.type,
     )
@@ -301,14 +301,14 @@ def _i_atomic_min(
             tl.ir.ATOMIC_OP.UMAX,
             i_ptr.handle,
             i_val.handle,
-            base._i_and_(mask, neg, builder).handle,
+            impl._i_and_(mask, neg, builder).handle,
         ),
         i_val.type,
     )
-    return core._i_where(pos, pos_ret, neg_ret, builder)
+    return impl._i_where(pos, pos_ret, neg_ret, builder)
 
 
-@tl.builtin
+@triton.builtin
 @_add_atomic_docstr("min")
 def atomic_min(pointer, val, mask=None, _builder=None):
     val = tl._to_tensor(val, _builder)
@@ -333,7 +333,7 @@ def _i_atomic_and(
     )
 
 
-@tl.builtin
+@triton.builtin
 @_add_atomic_docstr("logical and")
 def atomic_and(pointer, val, mask=None, _builder=None):
     val = tl._to_tensor(val, _builder)
@@ -358,7 +358,7 @@ def _i_atomic_or(
     )
 
 
-@tl.builtin
+@triton.builtin
 @_add_atomic_docstr("logical or")
 def atomic_or(pointer, val, mask=None, _builder=None):
     val = tl._to_tensor(val, _builder)
@@ -383,7 +383,7 @@ def _i_atomic_xor(
     )
 
 
-@tl.builtin
+@triton.builtin
 @_add_atomic_docstr("logical xor")
 def atomic_xor(pointer, val, mask=None, _builder=None):
     val = tl._to_tensor(val, _builder)

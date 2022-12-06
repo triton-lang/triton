@@ -1,5 +1,6 @@
 from typing import List
 
+import triton
 import triton.language as tl
 
 
@@ -7,7 +8,7 @@ def _i_globaltimer(builder: tl.ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_globaltimer, tl.int64)
 
 
-@tl.builtin
+@triton.builtin
 def globaltimer(_builder: tl.ir.builder = None) -> tl.tensor:
     return _i_globaltimer(_builder)
 
@@ -16,7 +17,7 @@ def _i_clock(builder: tl.ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_clock(), tl.int64)
 
 
-@tl.builtin
+@triton.builtin
 def clock(_builder: tl.ir.builder = None) -> tl.tensor:
     return _i_clock(_builder)
 
@@ -25,7 +26,7 @@ def _i_debug_barrier(builder: tl.ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_barrier(""), tl.void)
 
 
-@tl.builtin
+@triton.builtin
 def debug_barrier(_builder: tl.ir.builder = None) -> tl.tensor:
     return _i_debug_barrier(_builder)
 
@@ -35,7 +36,7 @@ def _i_program_id(axis: int, builder: tl.ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_get_program_id(axis), tl.int32)
 
 
-@tl.builtin
+@triton.builtin
 def program_id(axis, _builder: tl.ir.builder = None):
     """
     Returns the id of the current program instance along the given :code:`axis`.
@@ -58,7 +59,7 @@ def _i_num_programs(axis: int, builder: tl.ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_get_num_programs(axis), tl.int32)
 
 
-@tl.builtin
+@triton.builtin
 def num_programs(axis, _builder: tl.ir.builder = None):
     """
     Returns the number of program instances launched along the given :code:`axis`.
@@ -81,7 +82,7 @@ def _i_multiple_of(x: tl.tensor, values: List[int]) -> tl.tensor:
     return x
 
 
-@tl.builtin
+@triton.builtin
 def multiple_of(input, values, _builder: tl.ir.builder = None):
     """
     Let the compiler knows that the values in :code:`input` are all multiples of :code:`value`.
@@ -108,7 +109,7 @@ def _i_max_contiguous(x: tl.tensor, values: List[int]) -> tl.tensor:
     return x
 
 
-@tl.builtin
+@triton.builtin
 def max_contiguous(input, values, _builder: tl.ir.builder = None):
     """
     Let the compiler knows that the `value` first values in :code:`input` are contiguous.

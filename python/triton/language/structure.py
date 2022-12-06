@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import List
 
 import triton
-from ..impl import base
+from triton import impl
 import triton.language as tl
 
 
@@ -28,7 +28,7 @@ def _i_trans(
     )
 
 
-@tl.builtin
+@triton.builtin
 def trans(input, _builder=None):
     return _i_trans(input, _builder)
 
@@ -49,7 +49,7 @@ def _i_view(
     return tl.tensor(builder.create_view(input.handle, dst_shape), ret_ty)
 
 
-@tl.builtin
+@triton.builtin
 def view(input, shape, _builder=None):
     """
     Returns a tensor with the same elements as `input` but a different shape.
@@ -62,7 +62,7 @@ def view(input, shape, _builder=None):
 
     """
     shape = [x.value for x in shape]
-    return base._i_view(input, shape, _builder)
+    return impl._i_view(input, shape, _builder)
 
 
 # -----------------------

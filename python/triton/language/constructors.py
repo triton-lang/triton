@@ -2,7 +2,6 @@ from typing import List
 
 import triton
 import triton.language as tl
-from triton.impl import builtin
 
 
 def _i_arange(
@@ -18,7 +17,7 @@ def _i_arange(
     return tl.tensor(builder.create_make_range(start, end), ret_ty)
 
 
-@tl.builtin
+@triton.builtin
 def arange(
     start,
     end,
@@ -47,7 +46,7 @@ def _i_zeros(
     return tl.tensor(builder.create_splat(_0, shape), ret_ty)
 
 
-@tl.builtin
+@triton.builtin
 def zeros(
     shape,
     dtype,
@@ -93,7 +92,7 @@ def _i_cat(
     )
 
 
-@builtin
+@triton.builtin
 def cat(input, other, _builder=None):
     """
     Concatenate the given blocks

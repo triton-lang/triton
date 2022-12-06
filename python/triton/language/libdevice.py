@@ -1,14 +1,13 @@
 import os
 
-from .. import impl
-from . import extern
-
+import triton
 import triton.language as tl
+from . import extern
 
 LIBDEVICE_PATH = os.path.dirname(os.path.abspath(__file__)) + "/libdevice.10.bc"
 
 
-@impl.extern
+@triton.extern
 def clz(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -24,7 +23,7 @@ def clz(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def popc(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -40,7 +39,7 @@ def popc(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def byte_perm(arg0, arg1, arg2, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -61,7 +60,7 @@ def byte_perm(arg0, arg1, arg2, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def min(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -100,7 +99,7 @@ def min(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def max(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -139,7 +138,7 @@ def max(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def mulhi(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -170,7 +169,7 @@ def mulhi(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def mul24(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -193,7 +192,7 @@ def mul24(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def brev(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -209,7 +208,7 @@ def brev(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def sad(arg0, arg1, arg2, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -235,7 +234,7 @@ def sad(arg0, arg1, arg2, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def abs(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -253,7 +252,7 @@ def abs(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def floor(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -269,7 +268,7 @@ def floor(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def rcp64h(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -284,7 +283,7 @@ def rcp64h(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def rsqrt(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -300,7 +299,7 @@ def rsqrt(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def ceil(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -316,7 +315,7 @@ def ceil(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def trunc(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -332,7 +331,7 @@ def trunc(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def exp2(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -348,7 +347,7 @@ def exp2(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def saturatef(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -363,7 +362,7 @@ def saturatef(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def fma_rn(arg0, arg1, arg2, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -389,7 +388,7 @@ def fma_rn(arg0, arg1, arg2, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def fma_rz(arg0, arg1, arg2, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -415,7 +414,7 @@ def fma_rz(arg0, arg1, arg2, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def fma_rd(arg0, arg1, arg2, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -441,7 +440,7 @@ def fma_rd(arg0, arg1, arg2, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def fma_ru(arg0, arg1, arg2, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -467,7 +466,7 @@ def fma_ru(arg0, arg1, arg2, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def fast_dividef(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -486,7 +485,7 @@ def fast_dividef(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def div_rn(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -509,7 +508,7 @@ def div_rn(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def div_rz(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -532,7 +531,7 @@ def div_rz(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def div_rd(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -555,7 +554,7 @@ def div_rd(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def div_ru(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -578,7 +577,7 @@ def div_ru(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def rcp_rn(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -594,7 +593,7 @@ def rcp_rn(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def rcp_rz(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -610,7 +609,7 @@ def rcp_rz(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def rcp_rd(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -626,7 +625,7 @@ def rcp_rd(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def rcp_ru(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -642,7 +641,7 @@ def rcp_ru(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def sqrt_rn(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -658,7 +657,7 @@ def sqrt_rn(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def sqrt_rz(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -674,7 +673,7 @@ def sqrt_rz(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def sqrt_rd(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -690,7 +689,7 @@ def sqrt_rd(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def sqrt_ru(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -706,7 +705,7 @@ def sqrt_ru(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def sqrt(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -722,7 +721,7 @@ def sqrt(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def add_rn(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -745,7 +744,7 @@ def add_rn(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def add_rz(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -768,7 +767,7 @@ def add_rz(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def add_rd(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -791,7 +790,7 @@ def add_rd(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def add_ru(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -814,7 +813,7 @@ def add_ru(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def mul_rn(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -837,7 +836,7 @@ def mul_rn(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def mul_rz(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -860,7 +859,7 @@ def mul_rz(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def mul_rd(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -883,7 +882,7 @@ def mul_rd(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def mul_ru(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -906,7 +905,7 @@ def mul_ru(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2float_rn(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -921,7 +920,7 @@ def double2float_rn(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2float_rz(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -936,7 +935,7 @@ def double2float_rz(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2float_rd(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -951,7 +950,7 @@ def double2float_rd(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2float_ru(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -966,7 +965,7 @@ def double2float_ru(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2int_rn(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -981,7 +980,7 @@ def double2int_rn(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2int_rz(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -996,7 +995,7 @@ def double2int_rz(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2int_rd(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1011,7 +1010,7 @@ def double2int_rd(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2int_ru(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1026,7 +1025,7 @@ def double2int_ru(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2uint_rn(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1041,7 +1040,7 @@ def double2uint_rn(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2uint_rz(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1056,7 +1055,7 @@ def double2uint_rz(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2uint_rd(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1071,7 +1070,7 @@ def double2uint_rd(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2uint_ru(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1086,7 +1085,7 @@ def double2uint_ru(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def int2double_rn(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1101,7 +1100,7 @@ def int2double_rn(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def uint2double_rn(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1116,7 +1115,7 @@ def uint2double_rn(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def float2int_rn(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1131,7 +1130,7 @@ def float2int_rn(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def float2int_rz(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1146,7 +1145,7 @@ def float2int_rz(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def float2int_rd(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1161,7 +1160,7 @@ def float2int_rd(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def float2int_ru(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1176,7 +1175,7 @@ def float2int_ru(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def float2uint_rn(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1191,7 +1190,7 @@ def float2uint_rn(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def float2uint_rz(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1206,7 +1205,7 @@ def float2uint_rz(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def float2uint_rd(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1221,7 +1220,7 @@ def float2uint_rd(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def float2uint_ru(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1236,7 +1235,7 @@ def float2uint_ru(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def int2float_rn(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1251,7 +1250,7 @@ def int2float_rn(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def int2float_rz(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1266,7 +1265,7 @@ def int2float_rz(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def int2float_rd(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1281,7 +1280,7 @@ def int2float_rd(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def int2float_ru(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1296,7 +1295,7 @@ def int2float_ru(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def uint2float_rn(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1311,7 +1310,7 @@ def uint2float_rn(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def uint2float_rz(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1326,7 +1325,7 @@ def uint2float_rz(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def uint2float_rd(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1341,7 +1340,7 @@ def uint2float_rd(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def uint2float_ru(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1356,7 +1355,7 @@ def uint2float_ru(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def hiloint2double(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1375,7 +1374,7 @@ def hiloint2double(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2loint(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1390,7 +1389,7 @@ def double2loint(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2hiint(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1405,7 +1404,7 @@ def double2hiint(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def float2ll_rn(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1420,7 +1419,7 @@ def float2ll_rn(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def float2ll_rz(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1435,7 +1434,7 @@ def float2ll_rz(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def float2ll_rd(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1450,7 +1449,7 @@ def float2ll_rd(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def float2ll_ru(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1465,7 +1464,7 @@ def float2ll_ru(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def float2ull_rn(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1480,7 +1479,7 @@ def float2ull_rn(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def float2ull_rz(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1495,7 +1494,7 @@ def float2ull_rz(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def float2ull_rd(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1510,7 +1509,7 @@ def float2ull_rd(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def float2ull_ru(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1525,7 +1524,7 @@ def float2ull_ru(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2ll_rn(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1540,7 +1539,7 @@ def double2ll_rn(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2ll_rz(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1555,7 +1554,7 @@ def double2ll_rz(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2ll_rd(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1570,7 +1569,7 @@ def double2ll_rd(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2ll_ru(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1585,7 +1584,7 @@ def double2ll_ru(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2ull_rn(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1600,7 +1599,7 @@ def double2ull_rn(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2ull_rz(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1615,7 +1614,7 @@ def double2ull_rz(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2ull_rd(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1630,7 +1629,7 @@ def double2ull_rd(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double2ull_ru(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1645,7 +1644,7 @@ def double2ull_ru(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def ll2float_rn(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1660,7 +1659,7 @@ def ll2float_rn(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def ll2float_rz(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1675,7 +1674,7 @@ def ll2float_rz(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def ll2float_rd(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1690,7 +1689,7 @@ def ll2float_rd(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def ll2float_ru(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1705,7 +1704,7 @@ def ll2float_ru(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def ull2float_rn(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1720,7 +1719,7 @@ def ull2float_rn(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def ull2float_rz(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1735,7 +1734,7 @@ def ull2float_rz(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def ull2float_rd(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1750,7 +1749,7 @@ def ull2float_rd(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def ull2float_ru(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1765,7 +1764,7 @@ def ull2float_ru(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def ll2double_rn(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1780,7 +1779,7 @@ def ll2double_rn(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def ll2double_rz(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1795,7 +1794,7 @@ def ll2double_rz(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def ll2double_rd(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1810,7 +1809,7 @@ def ll2double_rd(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def ll2double_ru(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1825,7 +1824,7 @@ def ll2double_ru(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def ull2double_rn(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1840,7 +1839,7 @@ def ull2double_rn(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def ull2double_rz(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1855,7 +1854,7 @@ def ull2double_rz(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def ull2double_rd(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1870,7 +1869,7 @@ def ull2double_rd(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def ull2double_ru(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1885,7 +1884,7 @@ def ull2double_ru(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def int_as_float(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1900,7 +1899,7 @@ def int_as_float(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def float_as_int(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1915,7 +1914,7 @@ def float_as_int(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def uint_as_float(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1930,7 +1929,7 @@ def uint_as_float(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def float_as_uint(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1945,7 +1944,7 @@ def float_as_uint(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def longlong_as_double(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1960,7 +1959,7 @@ def longlong_as_double(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def double_as_longlong(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1975,7 +1974,7 @@ def double_as_longlong(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def fast_sinf(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -1990,7 +1989,7 @@ def fast_sinf(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def fast_cosf(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2005,7 +2004,7 @@ def fast_cosf(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def fast_log2f(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2020,7 +2019,7 @@ def fast_log2f(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def fast_logf(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2035,7 +2034,7 @@ def fast_logf(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def fast_expf(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2050,7 +2049,7 @@ def fast_expf(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def fast_tanf(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2065,7 +2064,7 @@ def fast_tanf(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def fast_exp10f(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2080,7 +2079,7 @@ def fast_exp10f(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def fast_log10f(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2095,7 +2094,7 @@ def fast_log10f(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def fast_powf(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2114,7 +2113,7 @@ def fast_powf(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def hadd(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2137,7 +2136,7 @@ def hadd(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def rhadd(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2160,7 +2159,7 @@ def rhadd(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def sub_rn(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2183,7 +2182,7 @@ def sub_rn(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def sub_rz(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2206,7 +2205,7 @@ def sub_rz(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def sub_rd(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2229,7 +2228,7 @@ def sub_rd(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def sub_ru(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2252,7 +2251,7 @@ def sub_ru(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def rsqrt_rn(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2267,7 +2266,7 @@ def rsqrt_rn(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def ffs(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2283,7 +2282,7 @@ def ffs(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def rint(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2299,7 +2298,7 @@ def rint(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def llrint(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2315,7 +2314,7 @@ def llrint(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def nearbyint(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2331,7 +2330,7 @@ def nearbyint(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def isnan(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2347,7 +2346,7 @@ def isnan(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def signbit(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2363,7 +2362,7 @@ def signbit(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def copysign(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2386,7 +2385,7 @@ def copysign(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def finitef(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2401,7 +2400,7 @@ def finitef(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def isinf(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2417,7 +2416,7 @@ def isinf(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def nextafter(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2440,7 +2439,7 @@ def nextafter(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def sin(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2456,7 +2455,7 @@ def sin(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def cos(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2472,7 +2471,7 @@ def cos(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def sinpi(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2488,7 +2487,7 @@ def sinpi(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def cospi(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2504,7 +2503,7 @@ def cospi(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def tan(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2520,7 +2519,7 @@ def tan(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def log2(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2536,7 +2535,7 @@ def log2(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def exp(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2552,7 +2551,7 @@ def exp(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def exp10(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2568,7 +2567,7 @@ def exp10(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def cosh(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2584,7 +2583,7 @@ def cosh(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def sinh(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2600,7 +2599,7 @@ def sinh(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def tanh(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2616,7 +2615,7 @@ def tanh(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def atan2(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2639,7 +2638,7 @@ def atan2(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def atan(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2655,7 +2654,7 @@ def atan(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def asin(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2671,7 +2670,7 @@ def asin(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def acos(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2687,7 +2686,7 @@ def acos(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def log(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2703,7 +2702,7 @@ def log(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def log10(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2719,7 +2718,7 @@ def log10(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def log1p(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2735,7 +2734,7 @@ def log1p(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def acosh(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2751,7 +2750,7 @@ def acosh(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def asinh(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2767,7 +2766,7 @@ def asinh(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def atanh(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2783,7 +2782,7 @@ def atanh(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def expm1(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2799,7 +2798,7 @@ def expm1(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def hypot(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2822,7 +2821,7 @@ def hypot(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def rhypot(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2845,7 +2844,7 @@ def rhypot(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def norm3d(arg0, arg1, arg2, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2871,7 +2870,7 @@ def norm3d(arg0, arg1, arg2, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def rnorm3d(arg0, arg1, arg2, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2897,7 +2896,7 @@ def rnorm3d(arg0, arg1, arg2, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def norm4d(arg0, arg1, arg2, arg3, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2926,7 +2925,7 @@ def norm4d(arg0, arg1, arg2, arg3, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def rnorm4d(arg0, arg1, arg2, arg3, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2955,7 +2954,7 @@ def rnorm4d(arg0, arg1, arg2, arg3, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def cbrt(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2971,7 +2970,7 @@ def cbrt(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def rcbrt(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -2987,7 +2986,7 @@ def rcbrt(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def j0(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3003,7 +3002,7 @@ def j0(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def j1(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3019,7 +3018,7 @@ def j1(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def y0(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3035,7 +3034,7 @@ def y0(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def y1(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3051,7 +3050,7 @@ def y1(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def yn(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3074,7 +3073,7 @@ def yn(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def jn(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3097,7 +3096,7 @@ def jn(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def cyl_bessel_i0(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3113,7 +3112,7 @@ def cyl_bessel_i0(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def cyl_bessel_i1(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3129,7 +3128,7 @@ def cyl_bessel_i1(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def erf(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3145,7 +3144,7 @@ def erf(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def erfinv(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3161,7 +3160,7 @@ def erfinv(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def erfc(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3177,7 +3176,7 @@ def erfc(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def erfcx(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3193,7 +3192,7 @@ def erfcx(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def erfcinv(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3209,7 +3208,7 @@ def erfcinv(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def normcdfinv(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3225,7 +3224,7 @@ def normcdfinv(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def normcdf(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3241,7 +3240,7 @@ def normcdf(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def lgamma(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3257,7 +3256,7 @@ def lgamma(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def ldexp(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3280,7 +3279,7 @@ def ldexp(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def scalbn(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3303,7 +3302,7 @@ def scalbn(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def fmod(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3326,7 +3325,7 @@ def fmod(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def remainder(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3349,7 +3348,7 @@ def remainder(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def fma(arg0, arg1, arg2, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3375,7 +3374,7 @@ def fma(arg0, arg1, arg2, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def pow(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3406,7 +3405,7 @@ def pow(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def tgamma(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3422,7 +3421,7 @@ def tgamma(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def round(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3438,7 +3437,7 @@ def round(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def llround(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3454,7 +3453,7 @@ def llround(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def fdim(arg0, arg1, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3477,7 +3476,7 @@ def fdim(arg0, arg1, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def ilogb(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3493,7 +3492,7 @@ def ilogb(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def logb(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",
@@ -3509,7 +3508,7 @@ def logb(arg0, _builder=None):
     )
 
 
-@impl.extern
+@triton.extern
 def isfinited(arg0, _builder=None):
     return extern.elementwise(
         "libdevice",

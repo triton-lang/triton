@@ -19,6 +19,8 @@ from .impl import (
     reinterpret,
     TensorWrapper,
     jit,
+    builtin,
+    extern,
     compile,
     CompilationError,
 )
@@ -36,10 +38,12 @@ from . import ops
 
 __all__ = [
     "autotune",
+    "builtin",
     "cdiv",
     "CompilationError",
     "compile",
     "Config",
+    "extern",
     "heuristics",
     "impl",
     "jit",

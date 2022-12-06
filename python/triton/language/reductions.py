@@ -1,10 +1,9 @@
 from typing import Callable, TypeVar
 
 import triton
-
-from ..impl import base
-from .math import _add_math_1arg_docstr
+from triton import impl
 import triton.language as tl
+from .math import _add_math_1arg_docstr
 
 T = TypeVar("T")
 
@@ -23,11 +22,11 @@ def _reduce_impl(
     # this increases numerical accuracy and can be done pretty much for free
     # on GPUs
     if scalar_ty.is_int() and scalar_ty.int_bitwidth <= 32:
-        input = base._i_cast(input, tl.int32, builder)
+        input = impl._i_cast(input, tl.int32, builder)
 
     # hardware doesn't support FMAX, FMIN, CMP for bfloat16
     if scalar_ty is tl.bfloat16:
-        input = base._i_cast(input, tl.float32, builder)
+        input = impl._i_cast(input, tl.float32, builder)
 
     # choose the right unsigned operation
     if scalar_ty.is_int_unsigned():
@@ -102,7 +101,7 @@ def _i_max(
     )
 
 
-@tl.builtin
+@triton.builtin
 @_add_reduction_docstr("maximum")
 def max(input, axis, _builder=None):
     axis = tl._constexpr_to_value(axis)
@@ -124,7 +123,7 @@ def _i_argmax(
     )
 
 
-@tl.builtin
+@triton.builtin
 @_add_reduction_docstr("maximum index")
 def argmax(input, axis, _builder=None):
     axis = tl._constexpr_to_value(axis)
@@ -146,7 +145,7 @@ def _i_min(
     )
 
 
-@tl.builtin
+@triton.builtin
 @_add_reduction_docstr("minimum")
 def min(input, axis, _builder=None):
     axis = tl._constexpr_to_value(axis)
@@ -168,7 +167,7 @@ def _i_argmin(
     )
 
 
-@tl.builtin
+@triton.builtin
 @_add_reduction_docstr("minimum index")
 def argmin(input, axis, _builder=None):
     axis = tl._constexpr_to_value(axis)
@@ -190,7 +189,7 @@ def _i_sum(
     )
 
 
-@tl.builtin
+@triton.builtin
 @_add_reduction_docstr("sum")
 def sum(input, axis, _builder=None):
     axis = tl._constexpr_to_value(axis)
@@ -215,7 +214,7 @@ def _i_xor_sum(
     )
 
 
-@tl.builtin
+@triton.builtin
 @_add_reduction_docstr("xor sum")
 def xor_sum(input, axis, _builder=None):
     axis = tl._constexpr_to_value(axis)

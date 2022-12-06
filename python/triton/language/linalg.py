@@ -1,3 +1,4 @@
+import triton
 import triton.language as tl
 
 
@@ -26,7 +27,7 @@ def _i_dot(
     )
 
 
-@tl.builtin
+@triton.builtin
 def dot(input, other, allow_tf32=True, trans_a=False, trans_b=False, _builder=None):
     """
     Returns the matrix product of two blocks.

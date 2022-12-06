@@ -1,8 +1,8 @@
-from ..impl import base
-import triton.language as tl
+import triton
+from .. import impl
 
 
-@tl.builtin
+@triton.builtin
 def broadcast(input, other, _builder=None):
     """
     Tries to broadcast the two given blocks to a common compatible shape.
@@ -12,10 +12,10 @@ def broadcast(input, other, _builder=None):
     :param other: The second input tensor.
     :type other: Block
     """
-    return base._broadcast_impl_value(input, other, _builder)
+    return impl._broadcast_impl_value(input, other, _builder)
 
 
-@tl.builtin
+@triton.builtin
 def broadcast_to(input, shape, _builder=None):
     """
     Tries to broadcast the given tensor to a new :code:`shape`.
@@ -25,4 +25,4 @@ def broadcast_to(input, shape, _builder=None):
     :param shape: The desired shape.
     :type shape: Tuple[int]
     """
-    return base._broadcast_impl_shape(input, shape, _builder)
+    return impl._broadcast_impl_shape(input, shape, _builder)
