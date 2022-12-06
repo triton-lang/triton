@@ -1210,25 +1210,23 @@ struct StoreOpConversion
           if (elem.getType().isInteger(1))
             elem = rewriter.create<LLVM::SExtOp>(loc, type::i8Ty(ctx), elem);
           elem = bitcast(elem, valueElemTy);
-
+#ifdef USE_ROCM
+          store(elem, ptrElems[elemOffset]);
+        }
+      }
+#else
           Type u32Ty = typeConverter->convertType(type::u32Ty(ctx));
           llWord =
               insert_element(wordTy, llWord, elem,
                              rewriter.create<LLVM::ConstantOp>(
                                  loc, u32Ty, IntegerAttr::get(u32Ty, elemIdx)));
         }
-#ifdef USE_ROCM
-        llWord = bitcast(llWord, valueElemTy);
-        store(llWord, ptrElems[vecStart + wordIdx]);
-#else
         llWord = bitcast(llWord, valArgTy);
         std::string constraint =
             (width == 64) ? "l" : ((width == 32) ? "r" : "c");
         asmArgs.emplace_back(llWord, constraint);
-#endif
       }
 
-#ifndef USE_ROCM
       // Prepare the PTX inline asm.
       PTXBuilder ptxBuilder;
       auto *asmArgList = ptxBuilder.newListOperand(asmArgs);
