@@ -4107,7 +4107,7 @@ struct InsertSliceAsyncOpConversion
             // Write shared memory if predicate is true
             auto *valOperand = ptxBuilder.newOperand(v, "r");
             auto &st = *ptxBuilder.create<PTXInstr>("st");
-            st.shared().o("b" + std::to_string(byteWidth));
+            st.shared().o("b" + std::to_string(bitWidth));
             st(dstOperand, valOperand).predicate(pred);
           }
         }
