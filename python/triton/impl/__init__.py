@@ -7,6 +7,7 @@ APIs defined in the `triton.impl` module which are public will be re-exported
 in other relevant `triton` module namespaces.
 """
 
+"""isort:skip_file"""
 from triton._C.libtriton.triton import ir
 from . import base
 from .base import (
