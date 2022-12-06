@@ -303,8 +303,6 @@ def test_gemm_fp32(M, N, K, num_warps, block_M, block_N, block_K, allow_tf32):
         [32, 16, 16],
         [32, 32, 32],
         [128, 16, 16],
-        # diabled due to the wrong vec in shared layout, the backend works if right vec passed.
-        # [32, 32, 32],
     ]
     for num_warps in [1]
     for trans_a in [False]
