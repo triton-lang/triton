@@ -4091,7 +4091,7 @@ struct InsertSliceAsyncOpConversion
                   rewriter, loc, this->getTypeConverter()->getIndexType(), i);
               v = insert_element(vecTy, v, falseVal, indexVal);
             }
-            v = bitcast(v, IntegerType::get(getContext(), byteWidth));
+            v = bitcast(v, IntegerType::get(getContext(), bitWidth));
             // Write shared memory if predicate is true
             PTXBuilder ptxStoreBuilder;
             auto *valOperand = ptxStoreBuilder.newOperand(v, "r");
