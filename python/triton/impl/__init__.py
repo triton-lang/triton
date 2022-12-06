@@ -58,7 +58,6 @@ from .compiler import (
     CompiledKernel,
     OutOfResources,
 )
-from . import core
 
 __all__ = [
     "base",
