@@ -494,6 +494,8 @@ public:
         if (isa<triton::gpu::ConvertLayoutOp>(user))
           continue;
       }
+      // check
+      // llvm::outs() << "replacing " << iterArg.index() << "\n";
       for (auto op : iterArg.value().getUsers()) {
         auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
         if (!cvt)
@@ -777,8 +779,8 @@ public:
                                                  newRetType.getEncoding()));
     a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), newAType, a);
     b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), newBType, b);
-    auto newDot = rewriter.create<triton::DotOp>(dotOp.getLoc(), newRetType, a,
-                                                 b, newAcc, dotOp.allowTF32());
+    auto newDot = rewriter.create<triton::DotOp>(
+        dotOp.getLoc(), newRetType, a, b, newAcc, dotOp.allowTF32());
 
     rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
         op, oldRetType, newDot.getResult());
@@ -798,37 +800,22 @@ public:
   TritonGPUCombineOpsPass(int computeCapability) {
     this->computeCapability = computeCapability;
   }
-
-  void simplifyConversionsInRegions() {
-    MLIRContext *context = &getContext();
-    ModuleOp m = getOperation();
-    mlir::RewritePatternSet nonLoopPatterns(context);
-    nonLoopPatterns.add<OptimizeBlockedToShared>(context);
-    nonLoopPatterns.add<SimplifyConversion>(context);
-    nonLoopPatterns.add<DecomposeDotOperand>(context);
-    nonLoopPatterns.add<RematerializeBackward>(context);
-    nonLoopPatterns.add<RematerializeForward>(context);
-    nonLoopPatterns.add<BlockedToMMA>(context, computeCapability);
-    if (applyPatternsAndFoldGreedily(m, std::move(nonLoopPatterns)).failed())
-      signalPassFailure();
-  }
-
-  void moveConversionsOutOfLoops() {
-    MLIRContext *context = &getContext();
-    ModuleOp m = getOperation();
-    mlir::RewritePatternSet patterns(context);
-    patterns.add<MoveConvertOutOfLoop>(context);
-    if(applyOpPatternsAndFold(m, std::move(patterns)).failed())
-      signalPassFailure();
-  }
-
   void runOnOperation() override {
-    // MoveConvertOutOfLoop is not perfect
-    // And may get stuck in an infinite loop
-    // if applied greedily
-    for(size_t i = 0; i < 2; i++){
-      simplifyConversionsInRegions();
-      moveConversionsOutOfLoops();
+    MLIRContext *context = &getContext();
+    ModuleOp m = getOperation();
+
+    mlir::RewritePatternSet patterns(context);
+
+    patterns.add<OptimizeBlockedToShared>(context);
+    patterns.add<SimplifyConversion>(context);
+    patterns.add<DecomposeDotOperand>(context);
+    patterns.add<RematerializeBackward>(context);
+    patterns.add<RematerializeForward>(context);
+    patterns.add<MoveConvertOutOfLoop>(context);
+    patterns.add<BlockedToMMA>(context, computeCapability);
+
+    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
+      signalPassFailure();
     }
   }
 };
