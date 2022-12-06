@@ -1494,8 +1494,6 @@ Value DotOpMmaV1ConversionHelper::loadB(
   int numPtrB = std::max(2 * perPhaseB * maxPhaseB / stepB0, 1);
   int NK = shape[0];
 
-  auto [_0, _1, offsetBN, offsetBK] =
-      computeOffsets(thread, false, isBRow, fpw, spw, rep, rewriter, loc);
   Value offB0 = isBRow ? offsetBN : offsetBK;
   Value offB1 = isBRow ? offsetBK : offsetBN;
   Value phaseB = urem(udiv(offB1, i32_val(perPhaseB)), i32_val(maxPhaseB));
