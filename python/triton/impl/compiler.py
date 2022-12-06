@@ -787,7 +787,7 @@ class CodeGenerator(ast.NodeVisitor):
                 return tuple(results)
         if (
             hasattr(fn, "__self__") and ti.is_triton_tensor(fn.__self__)
-        ) or impl.is_builtin(fn):
+        ) or ti.is_builtin(fn):
             return fn(*args, _builder=self.builder, **kws)
         if fn in self.builtins.values():
             args = [arg.value if isinstance(arg, ti.constexpr) else arg for arg in args]
@@ -1456,7 +1456,7 @@ def convert_type_repr(x):
 
 
 def make_hash(fn, **kwargs):
-    if isinstance(fn, triton.runtime.JITFunction):
+    if isinstance(fn, ti.JITFunction):
         configs = kwargs["configs"]
         signature = kwargs["signature"]
         constants = kwargs.get("constants", dict())
@@ -1539,7 +1539,7 @@ def compile(fn, **kwargs):
         ),
     }
     # find out the signature of the function
-    if isinstance(fn, triton.runtime.JITFunction):
+    if isinstance(fn, ti.JITFunction):
         configs = kwargs.get("configs", None)
         signature = kwargs["signature"]
         if configs is None:
@@ -1571,7 +1571,7 @@ def compile(fn, **kwargs):
     # create cache manager
     fn_cache_manager = CacheManager(make_hash(fn, **kwargs))
     # determine name and extension type of provided function
-    if isinstance(fn, triton.runtime.JITFunction):
+    if isinstance(fn, ti.JITFunction):
         name, ext = fn.__name__, "ast"
     else:
         name, ext = os.path.basename(fn).split(".")

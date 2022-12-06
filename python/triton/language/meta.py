@@ -75,7 +75,9 @@ def _i_multiple_of(x: tl.tensor, values: List[int]) -> tl.tensor:
         raise ValueError(
             "Shape of input to multiple_of does not match the length of values"
         )
-    x.handle.set_attr("tt.divisibility", tl.ir.make_attr(values, x.handle.get_context()))
+    x.handle.set_attr(
+        "tt.divisibility", tl.ir.make_attr(values, x.handle.get_context())
+    )
     return x
 
 

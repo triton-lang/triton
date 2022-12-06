@@ -1,7 +1,7 @@
 """isort:skip_file"""
 # Import order is significant here.
 
-from ..impl.base import (
+from ..impl import (
     bfloat16,
     block_type,
     builtin,
@@ -42,8 +42,6 @@ from ..impl.base import (
     umulhi,
     view,
     void,
-)
-from ..impl.core import (
     minimum,
     where,
 )
@@ -167,9 +165,10 @@ __all__ = [
     "int64",
     "int8",
     "ir",
+    "is_triton_tensor",
+    "libdevice",
     "load",
     "log",
-    "libdevice",
     "max",
     "max_contiguous",
     "maximum",
@@ -214,5 +213,4 @@ __all__ = [
     "xor_sum",
     "zeros",
     "zeros_like",
-    "is_triton_tensor",
 ]
