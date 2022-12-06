@@ -756,6 +756,7 @@ public:
     auto mod = op->getParentOfType<mlir::ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int version = computeCapabilityToMMAVersion(computeCapability);
+
     auto newRetType = RankedTensorType::get(
         retShape, oldRetType.getElementType(),
         triton::gpu::MmaEncodingAttr::get(
