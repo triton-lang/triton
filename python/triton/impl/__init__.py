@@ -9,6 +9,7 @@ in other relevant `triton` module namespaces.
 
 """isort:skip_file"""
 from triton._C.libtriton.triton import ir
+
 from . import base
 from .base import (
     bfloat16,
@@ -28,7 +29,6 @@ from .base import (
     int32,
     int64,
     int8,
-    ir,
     is_builtin,
     is_triton_tensor,
     pi32_t,
