@@ -6,7 +6,7 @@ from . import base
 from .jitlib import jit
 
 
-def __where(
+def _i_where(
     condition: base.tensor,
     x: base.tensor,
     y: base.tensor,
@@ -58,7 +58,7 @@ def where(condition, x, y, _builder=None):
     condition = base._to_tensor(condition, _builder)
     x = base._to_tensor(x, _builder)
     y = base._to_tensor(y, _builder)
-    return __where(condition, x, y, _builder)
+    return _i_where(condition, x, y, _builder)
 
 
 @jit

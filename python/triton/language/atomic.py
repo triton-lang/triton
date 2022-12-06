@@ -68,7 +68,7 @@ def _atom_red_typechecking_impl(
     return ptr, val, mask
 
 
-def __atomic_cas(
+def _i_atomic_cas(
     ptr: tl.tensor,
     cmp: tl.tensor,
     val: tl.tensor,
@@ -92,10 +92,10 @@ def __atomic_cas(
 def atomic_cas(pointer, cmp, val, _builder=None):
     cmp = tl._to_tensor(cmp, _builder)
     val = tl._to_tensor(val, _builder)
-    return __atomic_cas(pointer, cmp, val, _builder)
+    return _i_atomic_cas(pointer, cmp, val, _builder)
 
 
-def __atomic_xchg(
+def _i_atomic_xchg(
     ptr: tl.tensor,
     val: tl.tensor,
     mask: tl.tensor,
@@ -123,10 +123,10 @@ def __atomic_xchg(
 @_add_atomic_docstr("exchange")
 def atomic_xchg(pointer, val, mask=None, _builder=None):
     val = tl._to_tensor(val, _builder)
-    return __atomic_xchg(pointer, val, mask, _builder)
+    return _i_atomic_xchg(pointer, val, mask, _builder)
 
 
-def __atomic_add(
+def _i_atomic_add(
     ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, builder: tl.ir.builder
 ) -> tl.tensor:
     ptr, val, mask = _atom_red_typechecking_impl(ptr, val, mask, "add", builder)
@@ -147,10 +147,10 @@ def __atomic_add(
 @_add_atomic_docstr("add")
 def atomic_add(pointer, val, mask=None, _builder=None):
     val = tl._to_tensor(val, _builder)
-    return __atomic_add(pointer, val, mask, _builder)
+    return _i_atomic_add(pointer, val, mask, _builder)
 
 
-def __atomic_max(
+def _i_atomic_max(
     ptr: tl.tensor,
     val: tl.tensor,
     mask: tl.tensor,
@@ -224,17 +224,17 @@ def __atomic_max(
         ),
         i_val.type,
     )
-    return core.__where(pos, pos_ret, neg_ret, builder)
+    return core._i_where(pos, pos_ret, neg_ret, builder)
 
 
 @tl.builtin
 @_add_atomic_docstr("max")
 def atomic_max(pointer, val, mask=None, _builder=None):
     val = tl._to_tensor(val, _builder)
-    return __atomic_max(pointer, val, mask, _builder)
+    return _i_atomic_max(pointer, val, mask, _builder)
 
 
-def __atomic_min(
+def _i_atomic_min(
     ptr: tl.tensor,
     val: tl.tensor,
     mask: tl.tensor,
@@ -305,17 +305,17 @@ def __atomic_min(
         ),
         i_val.type,
     )
-    return core.__where(pos, pos_ret, neg_ret, builder)
+    return core._i_where(pos, pos_ret, neg_ret, builder)
 
 
 @tl.builtin
 @_add_atomic_docstr("min")
 def atomic_min(pointer, val, mask=None, _builder=None):
     val = tl._to_tensor(val, _builder)
-    return __atomic_min(pointer, val, mask, _builder)
+    return _i_atomic_min(pointer, val, mask, _builder)
 
 
-def __atomic_and(
+def _i_atomic_and(
     ptr: tl.tensor,
     val: tl.tensor,
     mask: tl.tensor,
@@ -337,11 +337,14 @@ def __atomic_and(
 @_add_atomic_docstr("logical and")
 def atomic_and(pointer, val, mask=None, _builder=None):
     val = tl._to_tensor(val, _builder)
-    return __atomic_and(pointer, val, mask, _builder)
+    return _i_atomic_and(pointer, val, mask, _builder)
 
 
-def __atomic_or(
-    ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, builder: tl.ir.builder
+def _i_atomic_or(
+    ptr: tl.tensor,
+    val: tl.tensor,
+    mask: tl.tensor,
+    builder: tl.ir.builder,
 ) -> tl.tensor:
     ptr, val, mask = _atom_red_typechecking_impl(ptr, val, mask, "or", builder)
     return tl.tensor(
@@ -359,10 +362,10 @@ def __atomic_or(
 @_add_atomic_docstr("logical or")
 def atomic_or(pointer, val, mask=None, _builder=None):
     val = tl._to_tensor(val, _builder)
-    return __atomic_or(pointer, val, mask, _builder)
+    return _i_atomic_or(pointer, val, mask, _builder)
 
 
-def __atomic_xor(
+def _i_atomic_xor(
     ptr: tl.tensor,
     val: tl.tensor,
     mask: tl.tensor,
@@ -384,4 +387,4 @@ def __atomic_xor(
 @_add_atomic_docstr("logical xor")
 def atomic_xor(pointer, val, mask=None, _builder=None):
     val = tl._to_tensor(val, _builder)
-    return __atomic_xor(pointer, val, mask, _builder)
+    return _i_atomic_xor(pointer, val, mask, _builder)
