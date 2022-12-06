@@ -1083,7 +1083,7 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
 
     M, N, K = 64, 64, 64
     num_warps = 4
-    trans_a, trans_b = False, True
+    trans_a, trans_b = False, False
 
     # triton kernel
     @triton.jit
@@ -1106,8 +1106,8 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
         Zs = Z + off_m[:, None] * stride_zm + off_n[None, :] * stride_zn
         x = tl.load(Xs)
         y = tl.load(Ys)
-        x = x.T if TRANS_A else x
-        y = y.T if TRANS_B else y
+        x = tl.trans(x) if TRANS_A else x
+        y = tl.trans(y) if TRANS_B else y
         z = tl.dot(x, y, allow_tf32=ALLOW_TF32)
         if ADD_MATRIX:
             z += tl.load(Zs)
@@ -1124,7 +1124,9 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
             den = tl.sum(num, 1)
             z = num / den[:, None]
         if CHAIN_DOT:
-            z = tl.dot(z.to(tl.float16).T, tl.load(Ws))
+            # tl.store(Zs, z)
+            # tl.debug_barrier()
+            z = tl.dot(z.to(tl.float16), tl.load(Ws))
         tl.store(Zs, z)
     # input
     rs = RandomState(17)
@@ -1171,7 +1173,7 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
         denom = np.sum(num, axis=-1, keepdims=True)
         z_ref = num / denom
     if epilogue == 'chain-dot':
-        z_ref = np.matmul(z_ref.T, w)
+        z_ref = np.matmul(z_ref, w)
     # compare
     # print(z_ref[:,0], z_tri[:,0])
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
