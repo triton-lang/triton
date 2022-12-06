@@ -1019,7 +1019,7 @@ instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equ
 
 def ty_to_cpp(ty):
     if ty[0] == '*':
-        return "CUdeviceptr"
+        return "hipDeviceptr_t" if torch.version.hip is not None else "CUdeviceptr"
     return {
         "i1": "int32_t",
         "i8": "int8_t",
@@ -1076,8 +1076,95 @@ def generate_launcher(identifier, constants, signature):
 
     format = "iiiiiKK" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
 
+    if torch.version.hip is not None:
+
+        src = f"""
+#define __HIP_PLATFORM_AMD__
+#include <hip/hip_runtime.h>
+#include <Python.h>
+static inline void gpuAssert(hipError_t code, const char *file, int line)
+{{
+   if (code != HIP_SUCCESS)
+   {{
+      const char* prefix = "Triton Error [HIP]: ";
+      const char* str = hipGetErrorString(code);
+      char err[1024] = {{0}};
+      strcat(err, prefix);
+      strcat(err, str);
+      PyErr_SetString(PyExc_RuntimeError, err);
+   }}
+}}
+void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, hipStream_t stream, hipFunction_t function, {arg_decls}) {{
+  void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
+  if(gridX*gridY*gridZ > 0){{
+    hipModuleLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0);
+  }}
+}}
+static inline hipDeviceptr_t getPointer(PyObject *obj, int idx) {{
+  if (PyLong_Check(obj)) {{
+    return (hipDeviceptr_t)PyLong_AsUnsignedLongLong(obj);
+  }}
+  if (obj == Py_None) {{
+    return (hipDeviceptr_t)0;
+  }}
+  PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
+  if(ptr){{
+    PyObject *empty_tuple = PyTuple_New(0);
+    PyObject *ret = PyObject_Call(ptr, empty_tuple, NULL);
+    Py_DECREF(empty_tuple);
+    Py_DECREF(ptr);
+    if (!PyLong_Check(ret)) {{
+      PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
+    }}
+    return (hipDeviceptr_t)PyLong_AsUnsignedLongLong(ret);
+  }}
+  PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
+  return (hipDeviceptr_t)0;
+}}
+static PyObject* launch(PyObject* self, PyObject* args) {{
+  // printf("launch(PyObject* self, PyObject* args)");
+  int gridX, gridY, gridZ;
+  uint64_t _stream;
+  uint64_t _function;
+  int num_warps;
+  int shared_memory;
+  {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
+  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
+    return NULL;
+  }}
+  _launch(gridX, gridY, gridZ, num_warps, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function, {', '.join(f"getPointer(_arg{i},{i})" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
+  if(PyErr_Occurred()) {{
+    return NULL;
+  }}
+  // return None
+  Py_INCREF(Py_None);
+  return Py_None;
+}}
+static PyMethodDef ModuleMethods[] = {{
+  {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
+  {{NULL, NULL, 0, NULL}} // sentinel
+}};
+static struct PyModuleDef ModuleDef = {{
+  PyModuleDef_HEAD_INIT,
+  \"launcher\",
+  NULL, //documentation
+  -1, //size
+  ModuleMethods
+}};
+PyMODINIT_FUNC PyInit_launcher(void) {{
+  PyObject *m = PyModule_Create(&ModuleDef);
+  if(m == NULL) {{
+    return NULL;
+  }}
+  PyModule_AddFunctions(m, ModuleMethods);
+  return m;
+}}
+"""
+
+    else:
+
     # generate glue code
-    src = f"""
+        src = f"""
 #include \"cuda.h\"
 #include <Python.h>
 
@@ -1230,11 +1317,24 @@ def quiet():
     finally:
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
+@functools.lru_cache()
+def libhip_dir():
+    return "/opt/rocm/lib"
+
+@functools.lru_cache()
+def hip_home_dirs():
+    default_dir = "/opt/rocm"
+    return os.getenv("ROCM_HOME", default=default_dir)
 
 def _build(name, src, srcdir):
-    cuda_lib_dir = libcuda_dir()
-    cuda_path = os.environ.get('CUDA_PATH', default_cuda_dir())
-    cu_include_dir = os.path.join(cuda_path, "include")
+    if torch.version.hip is not None:
+        hip_lib_dir = libhip_dir()
+        hip_include_dir = os.path.join(hip_home_dirs(), "include")
+    else:
+        cuda_lib_dir = libcuda_dir()
+        cuda_path = os.environ.get('CUDA_PATH', default_cuda_dir())
+        cu_include_dir = os.path.join(cuda_path, "include")
+
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
@@ -1245,7 +1345,11 @@ def _build(name, src, srcdir):
         gcc = shutil.which("gcc")
         cc = gcc if gcc is not None else clang
     py_include_dir = get_paths()["include"]
-    ret = subprocess.check_call([cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", f"-L{cuda_lib_dir}", "-lcuda", "-o", so])
+    if torch.version.hip is not None:
+        ret = subprocess.check_call([cc, src, f"-I{hip_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", f"-L{hip_lib_dir}", "-lamdhip64", "-o", so])
+    else:
+        ret = subprocess.check_call([cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", f"-L{cuda_lib_dir}", "-lcuda", "-o", so])
+
     if ret == 0:
         return so
     # fallback on setuptools
@@ -1314,6 +1418,30 @@ def read_or_execute(cache_manager, force_compile, file_name, metadata,
     cache_manager.put(data, file_name, True if isinstance(data, bytes) else data)
     return module, md5, True, False
 
+def read_or_execute_hip(cache_manager, force_compile, file_name_1, file_name_2,
+                      metadata, run_if_found_1: Callable[[str], bytes] = None,
+                      run_if_found_2: Callable[[str], bytes] = None,
+                      run_if_not_found: Callable = None):
+    suffix_1 = file_name_1.split(".")[1]
+    suffix_2 = file_name_2.split(".")[1]
+    if not force_compile and cache_manager.has_file(file_name_1) and cache_manager.has_file(file_name_2):
+        module_1 = run_if_found_1(cache_manager._make_path(file_name_1))
+        module_2 = run_if_found_2(cache_manager._make_path(file_name_2))
+        data_1 = module_1 if isinstance(module_1, bytes) else str(module_1).encode("utf-8")
+        data_2 = module_2 if isinstance(module_2, bytes) else str(module_2).encode("utf-8")
+        md5_1 = hashlib.md5(data_1).hexdigest()
+        md5_2 = hashlib.md5(data_2).hexdigest()
+        has_changed = (metadata and md5_1 != metadata["md5"][suffix_1]) or (metadata and md5_2 != metadata["md5"][suffix_2])
+        return module_1, md5_1, module_2, md5_2, has_changed, True
+    module_1, module_2 = run_if_not_found()
+    data_1 = module_1 if isinstance(module_1, bytes) else str(module_1).encode("utf-8")
+    data_2 = module_2 if isinstance(module_2, bytes) else str(module_2).encode("utf-8")
+    md5_1 = hashlib.md5(data_1).hexdigest()
+    md5_2 = hashlib.md5(data_2).hexdigest()
+    cache_manager.put(data_1, file_name_1, True if isinstance(data_1, bytes) else data_1)
+    cache_manager.put(data_2, file_name_2, True if isinstance(data_2, bytes) else data_2)
+    return module_1, md5_1, module_2, md5_2, True, False
+
 
 def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
     if isinstance(signature, str):
@@ -1365,23 +1493,41 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: i
         shmem_size = metadata["shared"]
     else:
         shmem_size = _triton.get_shared_memory_size(ttgir)
-    # llvm-ir -> ptx (or read from cache)
-    ptx, ptx_md5, force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.ptx", metadata,
-                          run_if_found = lambda path: Path(path).read_text(),
-                          run_if_not_found = lambda: llir_to_ptx(llir))
-    # ptx -> cubin (or read from cache)
-    cubin, cubin_md5, force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.cubin", metadata,
-                            run_if_found = lambda path: Path(path).read_bytes(),      
-                            run_if_not_found= lambda: ptx_to_cubin(ptx, device))
-    # dump new metadata
-    kernel_name = ptx_get_kernel_name(ptx)
-    metadata = {"name": kernel_name, "shared": shmem_size, "num_warps": num_warps, "num_stages": num_stages,
-                "md5": {  "cubin": cubin_md5,  "ptx": ptx_md5,  
-                          "llir": llir_md5,
-                          "ttir": ttir_md5, "ttgir": ttgir_md5 }}
-    fn_cache_manager.put(json.dumps(metadata), f"{name}.json", binary=False)
 
-    asm = {"ttir": ttir, "ttgir": ttgir, "llir": llir, "ptx": ptx, "cubin": cubin}
+    if torch.version.hip is not None:
+      #llvm-ir -> amdgcn/hsaco (or read from cache)
+      gcn_arch = os.environ.get('MI_GPU_ARCH', "gfx90a")
+      amdgcn, amdgcn_md5, hsaco_path, hsaco_path_md5, force_compile, _ = read_or_execute_hip(fn_cache_manager, force_compile,
+                                                                         f"{name}.amdgcn", f"{name}.hsaco_path", metadata,
+                            run_if_found_1 = lambda path: Path(path).read_text(),
+                            run_if_found_2 = lambda path: Path(path).read_text(),
+                            run_if_not_found = lambda: llir_to_amdgcn(llir, gcn_arch))
+      kernel_name = amdgcn_get_kernel_name(amdgcn)
+      metadata = {"name": kernel_name, "shared": shmem_size, "num_warps": num_warps, "num_stages": num_stages,
+                  "md5": {  "hsaco_path": hsaco_path_md5,  "amdgcn": amdgcn_md5,
+                            "llir": llir_md5,
+                            "ttir": ttir_md5, "ttgir": ttgir_md5 }}
+
+      fn_cache_manager.put(json.dumps(metadata), f"{name}.json", binary=False)
+      asm = {"ttir": ttir, "ttgir": ttgir, "llir": llir, "amdgcn": amdgcn, "hsaco_path": hsaco_path}
+    else:
+      # llvm-ir -> ptx (or read from cache)
+      ptx, ptx_md5, force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.ptx", metadata,
+                            run_if_found = lambda path: Path(path).read_text(),
+                            run_if_not_found = lambda: llir_to_ptx(llir))
+      # ptx -> cubin (or read from cache)
+      cubin, cubin_md5, force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.cubin", metadata,
+                              run_if_found = lambda path: Path(path).read_bytes(),
+                              run_if_not_found= lambda: ptx_to_cubin(ptx, device))
+      # dump new metadata
+      kernel_name = ptx_get_kernel_name(ptx)
+      metadata = {"name": kernel_name, "shared": shmem_size, "num_warps": num_warps, "num_stages": num_stages,
+                  "md5": {  "cubin": cubin_md5,  "ptx": ptx_md5,
+                            "llir": llir_md5,
+                            "ttir": ttir_md5, "ttgir": ttgir_md5 }}
+      fn_cache_manager.put(json.dumps(metadata), f"{name}.json", binary=False)
+
+      asm = {"ttir": ttir, "ttgir": ttgir, "llir": llir, "ptx": ptx, "cubin": cubin}
     return CompiledKernel(so_path, metadata, asm)
 
 
@@ -1402,11 +1548,19 @@ class CompiledKernel:
         self.asm = asm
         device = torch.cuda.current_device()
         global cuda_utils
-        if cuda_utils is None:
-            cuda_utils = CudaUtils()
-        mod, func, n_regs, n_spills = cuda_utils.load_binary(metadata["name"], self.asm["cubin"], self.shared, device)
-        self.cu_module = mod
-        self.cu_function = func
+        global hip_utils
+        if torch.version.hip is not None:
+            if hip_utils is None:
+               hip_utils = HIPUtils()
+            mod, func, n_regs, n_spills = hip_utils.load_binary(metadata["name"], self.asm["hsaco_path"], self.shared, device)
+            self.cu_module = mod
+            self.cu_function = func
+        else:
+            if cuda_utils is None:
+                cuda_utils = CudaUtils()
+            mod, func, n_regs, n_spills = cuda_utils.load_binary(metadata["name"], self.asm["cubin"], self.shared, device)
+            self.cu_module = mod
+            self.cu_function = func
 
     def __getitem__(self, grid):
         def runner(*args, stream=None):
@@ -1540,5 +1694,121 @@ class CudaUtils(object):
         spec.loader.exec_module(mod)
         self.load_binary = mod.load_binary
 
-
 cuda_utils = None
+
+class HIPUtils(object):
+
+    def __new__(cls):
+        if not hasattr(cls, 'instance'):
+            cls.instance = super(HIPUtils, cls).__new__(cls)
+        return cls.instance
+
+    def _generate_src(self):
+        return """
+        #define __HIP_PLATFORM_AMD__
+        #include <hip/hip_runtime.h>
+        #include <Python.h>
+        #include <stdio.h>
+        #include <stdlib.h>
+
+        static inline void gpuAssert(hipError_t code, const char *file, int line)
+        {{
+          if (code != HIP_SUCCESS)
+          {{
+             const char* prefix = "Triton Error [HIP]: ";
+             const char* str = hipGetErrorString(code);
+             char err[1024] = {0};
+             strcat(err, prefix);
+             strcat(err, str);
+             PyErr_SetString(PyExc_RuntimeError, err);
+          }}
+        }}
+
+        static PyObject* loadBinary(PyObject* self, PyObject* args) {
+            const char* name;
+            const char* data;
+            Py_ssize_t data_size;
+            int shared;
+            int device;
+            if(!PyArg_ParseTuple(args, "ssii", &name, &data, &shared, &device)) {
+                return NULL;
+            }
+            hipFunction_t fun;
+            // Read HSACO.
+            FILE* hsaco_file;
+            if ((hsaco_file = fopen(data, "rb")) == NULL) {
+                return NULL;
+            }
+            fseek(hsaco_file, 0L, SEEK_END);
+            size_t hsaco_file_size = ftell(hsaco_file);
+            unsigned char* hsaco = (unsigned char*) malloc(hsaco_file_size * sizeof(unsigned char));
+            rewind(hsaco_file);
+            fread(hsaco, sizeof(unsigned char), hsaco_file_size, hsaco_file);
+            fclose(hsaco_file);
+            hipJitOption opt[] = {hipJitOptionErrorLogBufferSizeBytes, hipJitOptionErrorLogBuffer,
+                                  hipJitOptionInfoLogBufferSizeBytes, hipJitOptionInfoLogBuffer,
+                                  hipJitOptionLogVerbose};
+            const unsigned int errbufsize = 8192;
+            const unsigned int logbufsize = 8192;
+            char _err[errbufsize];
+            char _log[logbufsize];
+            void *optval[] = {(void *)(uintptr_t)errbufsize,
+                              (void *)_err, (void *)(uintptr_t)logbufsize,
+                              (void *)_log, (void *)1};
+            hipModule_t mod;
+            hipModuleLoadDataEx(&mod, hsaco, 5, opt, optval);
+            hipModuleGetFunction(&fun, mod, name);
+            free(hsaco);
+            // get allocated registers and spilled registers from the function
+            int n_regs = 0;
+            int n_spills = 0;
+
+            if(PyErr_Occurred()) {
+              return NULL;
+            }
+            return Py_BuildValue("(KKii)", (uint64_t)mod, (uint64_t)fun, n_regs, n_spills);
+        }
+
+        static PyMethodDef ModuleMethods[] = {
+          {"load_binary", loadBinary, METH_VARARGS, "Load provided hsaco into HIP driver"},
+          {NULL, NULL, 0, NULL} // sentinel
+        };
+
+        static struct PyModuleDef ModuleDef = {
+          PyModuleDef_HEAD_INIT,
+          \"hip_utils\",
+          NULL, //documentation
+          -1, //size
+          ModuleMethods
+        };
+
+        PyMODINIT_FUNC PyInit_hip_utils(void) {
+          PyObject *m = PyModule_Create(&ModuleDef);
+          if(m == NULL) {
+            return NULL;
+          }
+          PyModule_AddFunctions(m, ModuleMethods);
+          return m;
+        }
+        """
+
+    def __init__(self):
+        src = self._generate_src()
+        key = hashlib.md5(src.encode("utf-8")).hexdigest()
+        cache = CacheManager(key)
+        fname = "hip_utils.so"
+        if not cache.has_file(fname):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                src_path = os.path.join(tmpdir, "main.c")
+                with open(src_path, "w") as f:
+                    f.write(src)
+                so = _build("hip_utils", src_path, tmpdir)
+                with open(so, "rb") as f:
+                    cache.put(f.read(), fname, binary=True)
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("hip_utils", cache._make_path(fname))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self.load_binary = mod.load_binary
+
+hip_utils = None
