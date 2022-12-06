@@ -111,6 +111,8 @@
   LLVM::createIndexConstant(rewriter, loc, this->getTypeConverter(),           \
                             __VA_ARGS__)
 
+#define tid_val() getThreadId(rewriter, loc)
+
 namespace mlir {
 namespace LLVM {
 using namespace mlir::triton;
