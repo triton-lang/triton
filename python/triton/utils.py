@@ -1,7 +1,53 @@
 from __future__ import annotations
 
+import functools
+import hashlib
+import os
+import subprocess
+
 import torch
 
+from . import __version__
+
+@functools.lru_cache()
+def version_key() -> str:
+    """
+    Compute a code+ptxas content version key for compiled artifacts.
+
+    :return: a version key string, cached.
+    """
+    # find the triton install location.
+    package_dir = os.path.dirname(__file__)
+
+    # find all python code.
+    code_paths = []
+    for root, dirs, files in os.walk(package_dir):
+        for f in files:
+            if f.endswith(".py") or f.endswith(".so") or f.endswith(".bc"):
+                code_paths.append(f"{root}/{f}")
+
+        if "__pycache__" in dirs:
+            dirs.remove("__pycache__")
+
+    # coerce a stable sort of the paths
+    code_paths = sorted(code_paths)
+
+    # compute a common hash of all code.
+    hasher = hashlib.md5()
+    # sorted, for stable order
+    for path in code_paths:
+        hasher.update(open(path, "rb").read())
+    code_hash = hasher.hexdigest()
+
+    # ptxas version
+    try:
+        ptxas_version = hashlib.md5(
+            subprocess.check_output(["ptxas", "--version"])
+        ).hexdigest()
+    except Exception:
+        ptxas_version = "noptxas"
+
+    return f'{"-".join(__version__.split("."))}-{ptxas_version}-{code_hash}'
 
 def cdiv(x, y):
     return (x + y - 1) // y
@@ -36,31 +82,3 @@ class MockTensor:
     def data_ptr(self):
         return 0  # optimistically assumes multiple of 16
 
-
-class TensorWrapper:
-    def __init__(self, base, dtype):
-        self.dtype = dtype
-        self.base = base
-        self.is_cuda = base.is_cuda
-        self.device = base.device
-
-    def data_ptr(self):
-        return self.base.data_ptr()
-
-    def __str__(self) -> str:
-        return f'TensorWrapper[{self.dtype}]({self.base})'
-
-
-def reinterpret(tensor, dtype):
-    if isinstance(tensor, TensorWrapper):
-        if dtype == tensor.base.dtype:
-            # Reinterpreting to the original interpretation; return the base.
-            return tensor.base
-        else:
-            # Reinterpreting a wrapped tensor to a different type.
-            return TensorWrapper(tensor.base, dtype)
-    elif isinstance(tensor, torch.Tensor):
-        # A new wrapper is needed around an unwrapped tensor.
-        return TensorWrapper(tensor, dtype)
-    else:
-        raise TypeError(f'Cannot reinterpret a {type(tensor)}.')

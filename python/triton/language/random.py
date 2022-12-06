@@ -1,5 +1,5 @@
 import triton
-from . import core as tl
+import triton.language as tl
 
 PHILOX_KEY_A: tl.constexpr = 0x9E3779B9
 PHILOX_KEY_B: tl.constexpr = 0xBB67AE85
@@ -35,8 +35,8 @@ def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: tl.constexpr = N_ROUNDS_DEFAUL
 @triton.jit
 def philox(seed, c0, c1, c2, c3, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     seed = seed.to(tl.uint64)
-    seed_hi = ((seed >> 32) & 0xffffffff).to(tl.uint32)
-    seed_lo = (seed & 0xffffffff).to(tl.uint32)
+    seed_hi = ((seed >> 32) & 0xFFFFFFFF).to(tl.uint32)
+    seed_lo = (seed & 0xFFFFFFFF).to(tl.uint32)
     return philox_impl(c0, c1, c2, c3, seed_lo, seed_hi, n_rounds)
 
 
@@ -85,6 +85,7 @@ def randint4x(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
 #     two_to_the_minus_32: tl.constexpr = 2.328306e-10
 #     return x * two_to_the_minus_32
 
+
 @triton.jit
 def uint32_to_uniform_float(x):
     """
@@ -127,6 +128,7 @@ def rand4x(seed, offsets, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     u3 = uint32_to_uniform_float(i3)
     u4 = uint32_to_uniform_float(i4)
     return u1, u2, u3, u4
+
 
 # -------------------
 # randn

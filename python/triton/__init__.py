@@ -9,13 +9,18 @@ __version__ = '2.0.0'
 import torch  # noqa: F401
 
 # submodules
-from . import impl
 from .utils import (
     cdiv,
     MockTensor,
     next_power_of_2,
+)
+from . import impl
+from .impl import (
     reinterpret,
     TensorWrapper,
+    jit,
+    compile,
+    CompilationError,
 )
 from .runtime import (
     autotune,
@@ -24,7 +29,6 @@ from .runtime import (
     JITFunction,
     KernelInterface,
 )
-from .runtime.jit import jit
 from .compiler import compile, CompilationError
 from . import language
 from . import testing
