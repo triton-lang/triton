@@ -939,7 +939,6 @@ struct MMA16816ConversionHelper {
   // Loading $a from smem to registers, returns a LLVM::Struct.
   Value loadA(Value tensor, const SharedMemoryObject &smemObj) const {
     auto aTensorTy = tensor.getType().cast<RankedTensorType>();
-    auto layout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
 
     SmallVector<int64_t> shape(aTensorTy.getShape().begin(),
                                aTensorTy.getShape().end());
@@ -988,7 +987,6 @@ struct MMA16816ConversionHelper {
   Value loadB(Value tensor, const SharedMemoryObject &smemObj) {
     ValueTable hb;
     auto tensorTy = tensor.getType().cast<RankedTensorType>();
-    auto layout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
 
     SmallVector<int64_t> shape(tensorTy.getShape().begin(),
                                tensorTy.getShape().end());
@@ -1282,7 +1280,6 @@ struct DotOpFMAConversionHelper {
     auto blockedLayout = dotOpLayout.getParent().cast<BlockedEncodingAttr>();
     auto shapePerCTA = getShapePerCTA(blockedLayout);
     auto sizePerThread = getSizePerThread(blockedLayout);
-    auto order = blockedLayout.getOrder();
 
     // TODO[Superjomn]: we assume the k aixs is fixed for $a and $b here, fix it
     // if not.
@@ -1389,9 +1386,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
   }
 
   Type f16x2Ty = vec_ty(f16_ty, 2);
-  // One thread get 8 elements as result
-  Type retTy =
-      LLVM::LLVMStructType::getLiteral(ctx, SmallVector(8, type::f32Ty(ctx)));
 
   // prepare arguments
   SmallVector<Value> ptrA(numPtrA);
@@ -1400,7 +1394,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
   for (int i = 0; i < numPtrA; i++)
     ptrA[i] = gep(ptr_ty(f16_ty), smemBase, offA[i]);
 
-  auto instrShape = getMmaInstrShape();
   unsigned numM = std::max<int>(rep[0] * shape[0] / (spw[0] * wpt[0]), 1);
 
   Type f16PtrTy = ptr_ty(f16_ty);
@@ -1440,7 +1433,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
 
   SmallVector<Value> elems;
   elems.reserve(has.size() * 2);
-  auto vecTy = vec_ty(f16_ty, 2);
   for (auto item : has) { // has is a map, the key should be ordered.
     elems.push_back(item.second.first);
     elems.push_back(item.second.second);
@@ -1495,8 +1487,6 @@ Value DotOpMmaV1ConversionHelper::loadB(
   }
 
   // swizzling
-  int perPhaseA = sharedLayout.getPerPhase();
-  int maxPhaseA = sharedLayout.getMaxPhase();
   int perPhaseB = sharedLayout.getPerPhase();
   int maxPhaseB = sharedLayout.getMaxPhase();
   int stepB0 = isBRow ? strideRepN : strideRepK;
@@ -1669,9 +1659,7 @@ Value DotOpFMAConversionHelper::loadA(
   int strideAK = isARow ? 1 : aShape[0];
   int strideA0 = isARow ? strideAK : strideAM;
   int strideA1 = isARow ? strideAM : strideAK;
-  int lda = isARow ? strideAM : strideAK;
   int aNumPtr = 8;
-  int bNumPtr = 8;
   int NK = aShape[1];
 
   auto shapePerCTA = getShapePerCTA(dLayout);
@@ -1680,13 +1668,11 @@ Value DotOpFMAConversionHelper::loadA(
   Value _0 = i32_val(0);
 
   Value mContig = i32_val(sizePerThread[order[1]]);
-  Value nContig = i32_val(sizePerThread[order[0]]);
 
   // threadId in blocked layout
   auto threadIds = getThreadIds(thread, shapePerCTA, order, rewriter, loc);
 
   Value threadIdM = threadIds[0];
-  Value threadIdN = threadIds[1];
 
   Value offA0 = isARow ? _0 : mul(threadIdM, mContig);
   Value offA1 = isARow ? mul(threadIdM, mContig) : _0;
@@ -1739,7 +1725,6 @@ Value DotOpFMAConversionHelper::loadB(
   int strideBK = isBRow ? bShape[1] : 1;
   int strideB0 = isBRow ? strideBN : strideBK;
   int strideB1 = isBRow ? strideBK : strideBN;
-  int ldb = isBRow ? strideBK : strideBN;
   int bNumPtr = 8;
   int NK = bShape[0];
 
@@ -1748,7 +1733,6 @@ Value DotOpFMAConversionHelper::loadB(
 
   Value _0 = i32_val(0);
 
-  Value mContig = i32_val(sizePerThread[order[1]]);
   Value nContig = i32_val(sizePerThread[order[0]]);
 
   // threadId in blocked layout
