@@ -3557,13 +3557,13 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
 
   // Initialize accumulators with external values, the acc holds the accumulator
   // value that is shared between the MMA instructions inside a DotOp, we can
-  // call its layout the accumulator-internal layout.
+  // call the order of the values the accumulator-internal order.
   SmallVector<Value> acc = getElementsFromStruct(loc, loadedC, rewriter);
   size_t resSize = acc.size();
 
   // The resVals holds the final result of the DotOp.
-  // NOTE The current layout of resVals is different from acc, we call it the
-  // accumulator-external layout. and
+  // NOTE The current order of resVals is different from acc, we call it the
+  // accumulator-external order. and
   SmallVector<Value> resVals(resSize);
 
   auto getIdx = [&](int m, int n) {
@@ -3580,18 +3580,18 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
     return idx;
   };
 
-  { // convert the acc's value from accumuator-external layout to
-    // accumulator-internal layout.
-    SmallVector<Value> acc2(acc);
+  { // convert the acc's value from accumuator-external order to
+    // accumulator-internal order.
+    SmallVector<Value> accInit(acc.size());
 
     for (unsigned m = 0; m < numM / 2; ++m)
       for (unsigned n = 0; n < numN / 2; ++n) {
         auto idx = getIdx(m, n);
         for (unsigned i = 0; i < 8; ++i)
-          acc2[idx[i]] = acc[(m * numN / 2 + n) * 8 + i];
+          accInit[idx[i]] = acc[(m * numN / 2 + n) * 8 + i];
       }
 
-    acc = acc2;
+    acc = accInit;
   }
 
   auto callMMA = [&](unsigned m, unsigned n, unsigned k) {
