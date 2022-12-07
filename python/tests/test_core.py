@@ -1069,18 +1069,20 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
 
 @pytest.mark.parametrize("M, N, K, epilogue, allow_tf32, dtype",
                          [(*shape, epilogue, allow_tf32, dtype)
-                          for shape in [(64, 64, 64), (128, 128, 128)]
+                          for shape in [(64, 64, 64)]
                           for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
                           for allow_tf32 in [True, False]
-                          for dtype in ['float16']
+                          for dtype in ['float16', 'float32']
                           if not (allow_tf32 and (dtype in ['float16']))])
 def test_dot(M, N, K, epilogue, allow_tf32, dtype, device='cuda'):
     capability = torch.cuda.get_device_capability()
-    if capability[0] < 80:
+    if capability[0] < 8:
         if dtype == 'int8':
             pytest.skip("Only test int8 on devices with sm >= 80")
         elif dtype == 'float32' and allow_tf32:
             pytest.skip("Only test tf32 on devices with sm >= 80")
+
+    torch.backends.cuda.matmul.allow_tf32 = allow_tf32
 
     num_warps = 4
     trans_a, trans_b = False, False
@@ -1126,7 +1128,8 @@ def test_dot(M, N, K, epilogue, allow_tf32, dtype, device='cuda'):
         if CHAIN_DOT:
             # tl.store(Zs, z)
             # tl.debug_barrier()
-            z = tl.dot(z.to(tl.float16), tl.load(Ws))
+            w = tl.load(Ws)
+            z = tl.dot(z.to(w.dtype), w)
         tl.store(Zs, z)
     # input
     rs = RandomState(17)
@@ -1176,14 +1179,17 @@ def test_dot(M, N, K, epilogue, allow_tf32, dtype, device='cuda'):
         z_ref = np.matmul(z_ref, w)
     # compare
     # print(z_ref[:,0], z_tri[:,0])
-    np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
+    if dtype == 'float32':
+        np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
+    else:
+        np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
     # make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
     assert 'ld.global.v4' in ptx
     assert 'st.global.v4' in ptx
     if allow_tf32:
         assert 'mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32' in ptx
-    elif dtype == 'float32':
+    elif dtype == 'float32' and allow_tf32:
         assert 'mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32' not in ptx
     elif dtype == 'int8':
         assert 'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
