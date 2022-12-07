@@ -371,6 +371,7 @@ class CodeGenerator(ast.NodeVisitor):
                 # 1. we have an orelse node
                 #   or
                 # 2. the then block defines new variable
+                else_defs = {}
                 if then_defs or node.orelse:
                     if node.orelse:
                         self.lscope = liveins
@@ -381,7 +382,6 @@ class CodeGenerator(ast.NodeVisitor):
                         else_defs = self.local_defs.copy()
                     else:
                         # collect else_defs
-                        else_defs = {}
                         for name in then_defs:
                             if name in liveins:
                                 assert self.is_triton_tensor(then_defs[name])
