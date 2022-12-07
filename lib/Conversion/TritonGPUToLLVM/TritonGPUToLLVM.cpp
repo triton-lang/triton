@@ -3527,7 +3527,7 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
   // The resVals holds the final result of the DotOp.
   // NOTE The current layout of resVals is different from acc, we call it the
   // accumulator-external layout. and
-  SmallVector<Value> resVals(acc.size());
+  SmallVector<Value> resVals(resSize);
 
   auto getIdx = [&](int m, int n) {
     std::vector<size_t> idx{{
@@ -3545,10 +3545,15 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
 
   { // convert the acc's value from accumuator-external layout to
     // accumulator-internal layout.
-    SmallVector<Value> acc2(acc.size());
-    auto idx = getIdx(0 /*m*/, 0 /*n*/);
-    for (unsigned i = 0; i < 8; ++i)
-      acc2[idx[i]] = acc[(0 * numN / 2 + 0) * 8 + i];
+    SmallVector<Value> acc2(acc);
+
+    for (unsigned m = 0; m < numM / 2; ++m)
+      for (unsigned n = 0; n < numN / 2; ++n) {
+        auto idx = getIdx(m, n);
+        for (unsigned i = 0; i < 8; ++i)
+          acc2[idx[i]] = acc[(m * numN / 2 + n) * 8 + i];
+      }
+
     acc = acc2;
   }
 
@@ -3589,8 +3594,6 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
     for (unsigned i = 0; i < 8; i++) {
       Value elem = extract_val(f32_ty, res, getIntAttr(i));
       acc[idx[i]] = elem;
-      // TODO[goostavz]: double confirm this when m/n/k = [32, 32, x] has been
-      // verified before MMA
       resVals[(m * numN / 2 + n) * 8 + i] = elem;
     }
   };

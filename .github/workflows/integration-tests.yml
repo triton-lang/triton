@@ -89,7 +89,7 @@ jobs:
         if: ${{matrix.runner[0] == 'self-hosted' && matrix.runner[1] == 'V100'}}
         run: |
           cd python/tests
-          pytest test_gemm.py::test_gemm_no_scf_for_mmav1
+          pytest test_gemm.py::test_gemm_for_mmav1
 
       - name: Run CXX unittests
         run: |
