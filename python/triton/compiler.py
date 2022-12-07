@@ -371,6 +371,7 @@ class CodeGenerator(ast.NodeVisitor):
                 # 1. we have an orelse node
                 #   or
                 # 2. the then block defines new variable
+                else_defs = {}
                 if then_defs or node.orelse:
                     if node.orelse:
                         self.lscope = liveins
@@ -381,7 +382,6 @@ class CodeGenerator(ast.NodeVisitor):
                         else_defs = self.local_defs.copy()
                     else:
                         # collect else_defs
-                        else_defs = {}
                         for name in then_defs:
                             if name in liveins:
                                 assert self.is_triton_tensor(then_defs[name])
@@ -583,7 +583,7 @@ class CodeGenerator(ast.NodeVisitor):
            isinstance(step, triton.language.constexpr):
             sta_range = iterator(lb.value, ub.value, step.value)
             static_unrolling = os.environ.get('TRITON_STATIC_LOOP_UNROLLING', False)
-            if static_unrolling and len(range) <= 10:
+            if static_unrolling and len(sta_range) <= 10:
                 for i in sta_range:
                     self.lscope[node.target.id] = triton.language.constexpr(i)
                     self.visit_compound_statement(node.body)
@@ -625,10 +625,12 @@ class CodeGenerator(ast.NodeVisitor):
                 if name in liveins:
                     assert self.is_triton_tensor(self.local_defs[name]), f'{name} is not tensor'
                     assert self.is_triton_tensor(liveins[name])
-                    if self.local_defs[name].type == liveins[name].type:
-                        names.append(name)
-                        init_args.append(triton.language.core._to_tensor(liveins[name], self.builder))
-                        yields.append(triton.language.core._to_tensor(self.local_defs[name], self.builder))
+                    if self.local_defs[name].type != liveins[name].type:
+                        local_value = self.local_defs[name]
+                        self.local_defs[name] = local_value.to(liveins[name].dtype, _builder=self.builder)
+                    names.append(name)
+                    init_args.append(triton.language.core._to_tensor(liveins[name], self.builder))
+                    yields.append(triton.language.core._to_tensor(self.local_defs[name], self.builder))
 
             # create ForOp
             self.builder.set_insertion_point_to_end(insert_block)

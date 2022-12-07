@@ -103,15 +103,12 @@ def TT_AddPtrOp : TT_Op<"addptr",
                      SameOperandsAndResultShape,
                      SameOperandsAndResultEncoding,
                       TypesMatchWith<"result type matches ptr type",
-                                     "result", "ptr", "$_self">,
-                      TypesMatchWith<"result shape matches offset shape",
-                                     "result", "offset",
-                                     "getI32SameShape($_self)">]> {
-    let arguments = (ins TT_PtrLike:$ptr, TT_I32Like:$offset);
+                                     "result", "ptr", "$_self">]> {
+    let arguments = (ins TT_PtrLike:$ptr, TT_IntLike:$offset);
 
     let results = (outs TT_PtrLike:$result);
 
-    let assemblyFormat = "$ptr `,` $offset attr-dict `:` type($result)";
+    let assemblyFormat = "$ptr `,` $offset attr-dict `:` type($result) `,` type($offset)";
 }
 
 

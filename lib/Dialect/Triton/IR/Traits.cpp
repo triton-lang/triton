@@ -19,7 +19,7 @@ mlir::OpTrait::impl::verifySameOperandsAndResultEncoding(Operation *op) {
   for (auto resultType : op->getResultTypes())
     if (failed(verifySameEncoding(resultType, type)))
       return op->emitOpError()
-             << "requires the same shape for all operands and results";
+             << "requires the same encoding for all operands and results";
   return verifySameOperandsEncoding(op);
 }
 
