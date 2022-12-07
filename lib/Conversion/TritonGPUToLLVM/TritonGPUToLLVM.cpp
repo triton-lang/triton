@@ -3518,14 +3518,18 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
   auto has = helper.extractLoadedOperand(loadedA, NK, rewriter);
   auto hbs = helper.extractLoadedOperand(loadedB, NK, rewriter);
 
-  // initialize accumulators
+  // Initialize accumulators with external values, the acc holds the accumulator
+  // value that is shared between the MMA instructions inside a DotOp, we can
+  // call its layout the accumulator-internal layout.
   SmallVector<Value> acc = getElementsFromStruct(loc, loadedC, rewriter);
   size_t resSize = acc.size();
-  SmallVector<Value> resVals(resSize);
 
-  auto callMMA = [&](unsigned m, unsigned n, unsigned k) {
-    auto ha = has.at({m, k});
-    auto hb = hbs.at({n, k});
+  // The resVals holds the final result of the DotOp.
+  // NOTE The current layout of resVals is different from acc, we call it the
+  // accumulator-external layout. and
+  SmallVector<Value> resVals(acc.size());
+
+  auto getIdx = [&](int m, int n) {
     std::vector<size_t> idx{{
         (m * 2 + 0) + (n * 4 + 0) * numM, // row0
         (m * 2 + 0) + (n * 4 + 1) * numM,
@@ -3536,8 +3540,24 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
         (m * 2 + 1) + (n * 4 + 2) * numM, // row3
         (m * 2 + 1) + (n * 4 + 3) * numM,
     }};
+    return idx;
+  };
+
+  { // convert the acc's value from accumuator-external layout to
+    // accumulator-internal layout.
+    SmallVector<Value> acc2(acc.size());
+    auto idx = getIdx(0 /*m*/, 0 /*n*/);
+    for (unsigned i = 0; i < 8; ++i)
+      acc2[idx[i]] = acc[(0 * numN / 2 + 0) * 8 + i];
+    acc = acc2;
+  }
+
+  auto callMMA = [&](unsigned m, unsigned n, unsigned k) {
+    auto ha = has.at({m, k});
+    auto hb = hbs.at({n, k});
 
     PTXBuilder builder;
+    auto idx = getIdx(m, n);
 
     auto *resOprs = builder.newListOperand(8, "=f");
     auto *AOprs = builder.newListOperand({

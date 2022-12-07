@@ -583,7 +583,7 @@ class CodeGenerator(ast.NodeVisitor):
            isinstance(step, triton.language.constexpr):
             sta_range = iterator(lb.value, ub.value, step.value)
             static_unrolling = os.environ.get('TRITON_STATIC_LOOP_UNROLLING', False)
-            if static_unrolling and len(range) <= 10:
+            if static_unrolling and len(sta_range) <= 10:
                 for i in sta_range:
                     self.lscope[node.target.id] = triton.language.constexpr(i)
                     self.visit_compound_statement(node.body)

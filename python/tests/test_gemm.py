@@ -310,3 +310,17 @@ def test_gemm_fp32(M, N, K, num_warps, block_M, block_N, block_K, allow_tf32):
 ])
 def test_gemm_no_scf_for_mmav1(SHAPE, NUM_WARPS, TRANS_A, TRANS_B):
     test_gemm_no_scf(SHAPE, NUM_WARPS, TRANS_A, TRANS_B)
+
+
+@pytest.mark.parametrize('SIZE_M,SIZE_N,SIZE_K,NUM_WARPS,BLOCK_SIZE_M,BLOCK_SIZE_N,BLOCK_SIZE_K,TRANS_A,TRANS_B', [
+    # Non-forloop
+    [16, 16, 16, 1, 16, 16, 16, False, False],
+    [16, 16, 32, 1, 16, 16, 32, False, False],
+    [32, 16, 32, 1, 32, 16, 32, False, False],
+    [32, 32, 32, 1, 32, 32, 32, False, False],
+    [128, 32, 32, 1, 128, 32, 32, False, False],
+
+    [16, 16, 32, 1, 16, 16, 16, False, False],
+])
+def test_gemm_for_mmav1(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, TRANS_A, TRANS_B):
+    test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, TRANS_A, TRANS_B)
