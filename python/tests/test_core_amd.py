@@ -116,7 +116,6 @@ def test_empty_kernel(dtype_x, device='cuda'):
     @triton.jit
     def kernel(X, SIZE: tl.constexpr):
         pass
-
     check_type_supported(dtype_x)
     x = to_triton(numpy_random(SIZE, dtype_str=dtype_x), device=device, dst_type=dtype_x)
     kernel[(1, )](x, SIZE=SIZE, num_warps=4)
@@ -242,11 +241,16 @@ def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
         ('uint64', 'float64'),
     ]
 
+# ---------------
+# test binary ops
+# ---------------
+
+
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [
     (dtype_x, dtype_y, op)
     for op in ['+', '-', '*', '/']  # , '%'] #TODO: handle remainder
-    for dtype_x in dtypes
-    for dtype_y in dtypes
+    for dtype_x in dtypes_with_bfloat16
+    for dtype_y in dtypes_with_bfloat16
 ])
 def test_bin_op(dtype_x, dtype_y, op, device='cuda'):
     expr = f' x {op} y'
@@ -275,6 +279,7 @@ def test_bin_op(dtype_x, dtype_y, op, device='cuda'):
         assert re.match('Cannot use .* because they have different signedness', str(exc_info.value.__cause__))
     else:
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device)
+
 
 @pytest.mark.parametrize("dtype_x, dtype_y",
                          [(dtype_x, dtype_y) for dtype_x in int_dtypes for dtype_y in int_dtypes] +
@@ -314,6 +319,21 @@ def test_bitwise_op(dtype_x, dtype_y, op, device='cuda'):
     else:
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device)
 
+
+@pytest.mark.parametrize("dtype_x, dtype_y, op", [
+    (dtype_x, dtype_y, op)
+    for op in ['<<', '>>']
+    for dtype_x in int_dtypes + uint_dtypes
+    for dtype_y in int_dtypes + uint_dtypes
+])
+def test_shift_op(dtype_x, dtype_y, op, device='cuda'):
+    expr = f'x {op} y'
+    bw = max(_bitwidth(dtype_x), _bitwidth(dtype_y))
+    dtype_z = f'uint{bw}'
+    numpy_expr = f'x.astype(np.{dtype_z}) {op} y.astype(np.{dtype_z})'
+    _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, y_low=0, y_high=65)
+
+
 # ---------------
 # test compare ops
 # ---------------
@@ -345,6 +365,7 @@ def test_compare_op(dtype_x, dtype_y, op, mode_x, mode_y, device='cuda'):
     else:
         numpy_expr = None
     _test_binary(dtype_x, dtype_y, expr, numpy_expr, mode_x=mode_x, mode_y=mode_y, device=device)
+
 
 # ---------------
 # test where
