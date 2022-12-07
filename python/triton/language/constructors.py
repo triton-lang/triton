@@ -80,20 +80,20 @@ def zeros_like(input):
 def _i_cat(
     lhs: tl.tensor,
     rhs: tl.tensor,
+    can_reorder: bool,
     builder: tl.ir.builder,
 ) -> tl.tensor:
-    # TODO: check types
+    assert can_reorder, "current implementation of 'cat' always may reorder elements"
+    assert len(lhs.shape) == 1
+    ret_type = tl.block_type(lhs.type.scalar, [lhs.shape[0] + rhs.shape[0]])
     return tl.tensor(
-        builder.create_cat(
-            lhs.handle,
-            rhs.handle,
-        ),
-        lhs.type,
+        builder.create_cat(lhs.handle, rhs.handle),
+        ret_type,
     )
 
 
 @triton.builtin
-def cat(input, other, _builder=None):
+def cat(input, other, can_reorder=False, _builder=None):
     """
     Concatenate the given blocks
 
@@ -101,5 +101,9 @@ def cat(input, other, _builder=None):
     :type input:
     :param other: The second input tensor.
     :type other:
+    :param can_reorder: compiler hint. If true, the compiler is
+    allowed to reorder elements while concatenating inputs,
+    Only use if teh order does not matter (e.g., result is
+    only used in reduction ops)
     """
-    return _i_cat(input, other, _builder)
+    return _i_cat(input, other, can_reorder, _builder)

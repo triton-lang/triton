@@ -12,25 +12,9 @@ import triton.language as tl
 # -----------------------
 
 
-def _i_trans(
-    input: tl.tensor,
-    builder: tl.ir.builder,
-) -> tl.tensor:
-    if len(input.shape) != 2:
-        raise ValueError("Only 2D tensors can be transposed")
-    ret_type = tl.block_type(
-        input.type.scalar,
-        [input.shape[1], input.shape[0]],
-    )
-    return tl.tensor(
-        builder.create_trans(input.handle),
-        ret_type,
-    )
-
-
 @triton.builtin
 def trans(input, _builder=None):
-    return _i_trans(input, _builder)
+    return impl._i_trans(input, _builder)
 
 
 def _i_view(
@@ -65,9 +49,11 @@ def view(input, shape, _builder=None):
     return impl._i_view(input, shape, _builder)
 
 
-# -----------------------
-# Conditioning
-# -----------------------
+@triton.builtin
+def reshape(input, shape, _builder=None):
+    # TODO: should be more than just a view
+    shape = [x.value for x in shape]
+    return _i_view(input, shape, _builder)
 
 
 @triton.jit

@@ -636,9 +636,9 @@ class tensor:
                 assert False, "unsupported"
         return ret
 
-    # x[:, None, :, None]
-    # x = expand_dims(x, axis=1)
-    # x = expand_dims(x, axis=2)
+    @property
+    def T(self):
+        assert False, "Transposition must be created by the AST Visitor"
 
     @builtin
     def to(self, dtype, bitcast=False, _builder=None):
@@ -690,11 +690,11 @@ def _to_tensor(x, builder):
         if -(2**31) <= x < 2**31:
             return tensor(builder.get_int32(x), int32)
         elif 2**31 <= x < 2**32:
-            return tensor(builder.get_uint32(x), uint32)
+            return tensor(builder.get_int32(x), uint32)
         elif -(2**63) <= x < 2**63:
             return tensor(builder.get_int64(x), int64)
         elif 2**63 <= x < 2**64:
-            return tensor(builder.get_uint64(x), uint64)
+            return tensor(builder.get_int64(x), uint64)
         else:
             raise RuntimeError(f"Nonrepresentable integer {x}.")
     elif isinstance(x, float):
@@ -720,6 +720,22 @@ def _check_ptr_type_impl(
         # T* + float
         if type_b.is_floating():
             raise IncompatibleTypeErrorImpl(type_a, type_b)
+
+
+def _i_trans(
+    input: tensor,
+    builder: ir.builder,
+) -> tensor:
+    if len(input.shape) != 2:
+        raise ValueError("Only 2D tensors can be transposed")
+    ret_type = block_type(
+        input.type.scalar,
+        [input.shape[1], input.shape[0]],
+    )
+    return tensor(
+        builder.create_trans(input.handle),
+        ret_type,
+    )
 
 
 def _integer_promote_impl(a_ty: dtype, b_ty: dtype) -> dtype:

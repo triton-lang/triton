@@ -224,7 +224,9 @@ class CodeGenerator(ast.NodeVisitor):
                 init_node = ast.Assign(targets=[st_target], value=default_value)
             else:
                 init_node = ast.AnnAssign(
-                    target=st_target, value=default_value, annotation=annotation
+                    target=st_target,
+                    value=default_value,
+                    annotation=annotation,
                 )
             self.visit(init_node)
         # initialize function
@@ -390,6 +392,7 @@ class CodeGenerator(ast.NodeVisitor):
                 # 1. we have an orelse node
                 #   or
                 # 2. the then block defines new variable
+                else_defs = {}
                 if then_defs or node.orelse:
                     if node.orelse:
                         self.lscope = liveins
@@ -400,7 +403,6 @@ class CodeGenerator(ast.NodeVisitor):
                         else_defs = self.local_defs.copy()
                     else:
                         # collect else_defs
-                        else_defs = {}
                         for name in then_defs:
                             if name in liveins:
                                 value = then_defs[name]
@@ -628,7 +630,7 @@ class CodeGenerator(ast.NodeVisitor):
         ):
             sta_range = iterator(lb.value, ub.value, step.value)
             static_unrolling = os.environ.get("TRITON_STATIC_LOOP_UNROLLING", False)
-            if static_unrolling and len(range) <= 10:
+            if static_unrolling and len(sta_range) <= 10:
                 for i in sta_range:
                     self.lscope[node.target.id] = ti.constexpr(i)
                     self.visit_compound_statement(node.body)
@@ -673,11 +675,14 @@ class CodeGenerator(ast.NodeVisitor):
                     value1 = liveins[name]
                     assert ti.is_triton_tensor(value1)
                     if self.local_defs[name].type == liveins[name].type:
-                        names.append(name)
-                        init_args.append(ti._to_tensor(liveins[name], self.builder))
-                        yields.append(
-                            ti._to_tensor(self.local_defs[name], self.builder)
+                        local_value = self.local_defs[name]
+                        self.local_defs[name] = local_value.to(
+                            liveins[name].dtype,
+                            _builder=self.builder,
                         )
+                    names.append(name)
+                    init_args.append(ti._to_tensor(liveins[name], self.builder))
+                    yields.append(ti._to_tensor(self.local_defs[name], self.builder))
 
             # create ForOp
             self.builder.set_insertion_point_to_end(insert_block)
@@ -831,6 +836,9 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Attribute(self, node):
         lhs = self.visit(node.value)
+        if ti.is_triton_tensor(lhs):
+            if node.attr == "T":
+                return ti._i_trans(lhs, builder=self.builder)
         return getattr(lhs, node.attr)
 
     def visit_Expr(self, node):
