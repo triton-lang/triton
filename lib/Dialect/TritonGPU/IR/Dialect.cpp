@@ -659,15 +659,6 @@ void printInsertSliceAsyncOp(OpAsmPrinter &printer,
   printer.printStrippedAttrOrType(insertSliceAsyncOp.result().getType());
 }
 
-DenseSet<unsigned>
-InsertSliceAsyncOp::getEligibleLoadByteWidth(int computeCapability) {
-  DenseSet<unsigned> validLoadBytes;
-  if (computeCapability >= 80) {
-    validLoadBytes = {4, 8, 16};
-  }
-  return validLoadBytes;
-}
-
 //===----------------------------------------------------------------------===//
 // ASM Interface (i.e.: alias)
 //===----------------------------------------------------------------------===//
