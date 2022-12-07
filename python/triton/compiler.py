@@ -625,10 +625,12 @@ class CodeGenerator(ast.NodeVisitor):
                 if name in liveins:
                     assert self.is_triton_tensor(self.local_defs[name]), f'{name} is not tensor'
                     assert self.is_triton_tensor(liveins[name])
-                    if self.local_defs[name].type == liveins[name].type:
-                        names.append(name)
-                        init_args.append(triton.language.core._to_tensor(liveins[name], self.builder))
-                        yields.append(triton.language.core._to_tensor(self.local_defs[name], self.builder))
+                    if self.local_defs[name].type != liveins[name].type:
+                        local_value = self.local_defs[name]
+                        self.local_defs[name] = local_value.to(liveins[name].dtype, _builder=self.builder)
+                    names.append(name)
+                    init_args.append(triton.language.core._to_tensor(liveins[name], self.builder))
+                    yields.append(triton.language.core._to_tensor(self.local_defs[name], self.builder))
 
             # create ForOp
             self.builder.set_insertion_point_to_end(insert_block)
