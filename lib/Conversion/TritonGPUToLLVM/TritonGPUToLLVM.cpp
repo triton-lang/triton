@@ -4996,7 +4996,9 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
 
+#ifndef USE_ROCM
   patterns.add<FDivOpConversion>(typeConverter, benefit);
+#endif
 
   patterns.add<ExtElemwiseOpConversion>(typeConverter, benefit);
 
