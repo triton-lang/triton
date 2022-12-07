@@ -29,13 +29,14 @@ def CombineDotAddFRevPattern : Pat<
         (TT_DotOp $a, $b, $d, $allowTF32),
         [(Constraint<CPred<"isZero($0)">> $c)]>;
 
-
+// TODO: this fails for addptr(addptr(ptr, i32), i64)
+// Commented out until fixed
 // addptr(addptr(%ptr, %idx0), %idx1) => addptr(%ptr, AddI(%idx0, %idx1))
 //   Note: leave (sub %c0, %c0) canceling to ArithmeticDialect
 //         (ref: ArithmeticCanonicalization.td)
-def CombineAddPtrPattern : Pat<
-        (TT_AddPtrOp (TT_AddPtrOp $ptr, $idx0), $idx1),
-        (TT_AddPtrOp $ptr, (Arith_AddIOp $idx0, $idx1))>;
+// def CombineAddPtrPattern : Pat<
+//         (TT_AddPtrOp (TT_AddPtrOp $ptr, $idx0), $idx1),
+//         (TT_AddPtrOp $ptr, (Arith_AddIOp $idx0, $idx1))>;
 
 // broadcast(cst) => cst
 def getConstantValue : NativeCodeCall<"getConstantValue($_builder, $0, $1)">;
