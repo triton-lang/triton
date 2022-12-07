@@ -12,6 +12,7 @@ import triton
 import triton._C.libtriton.triton as _triton
 import triton.language as tl
 from triton.runtime.jit import JITFunction, TensorWrapper, reinterpret
+from tests.libdevice_testutil import system_libdevice_path
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
 uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
@@ -1125,7 +1126,7 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
         if CHAIN_DOT:
             # tl.store(Zs, z)
             # tl.debug_barrier()
-            z = tl.dot(tl.trans(z.to(tl.float16)), tl.load(Ws))
+            z = tl.dot(z.to(tl.float16), tl.load(Ws))
         tl.store(Zs, z)
     # input
     rs = RandomState(17)
@@ -1172,7 +1173,7 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
         denom = np.sum(num, axis=-1, keepdims=True)
         z_ref = num / denom
     if epilogue == 'chain-dot':
-        z_ref = np.matmul(z_ref.T, w)
+        z_ref = np.matmul(z_ref, w)
     # compare
     # print(z_ref[:,0], z_tri[:,0])
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
@@ -1552,7 +1553,7 @@ def test_num_warps_pow2():
 
 @pytest.mark.parametrize("dtype_str, expr, lib_path",
                          [('int32', 'libdevice.ffs', ''),
-                          ('float32', 'libdevice.pow', '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'),
+                          ('float32', 'libdevice.pow', system_libdevice_path()),
                           ('float64', 'libdevice.norm4d', '')])
 def test_libdevice_tensor(dtype_str, expr, lib_path):
 

@@ -25,6 +25,8 @@ from filelock import FileLock
 
 import triton
 import triton._C.libtriton.triton as _triton
+
+from . import impl
 from .tools.disasm import extract
 
 
@@ -715,9 +717,8 @@ class CodeGenerator(ast.NodeVisitor):
                 for i in range(call_op.get_num_results()):
                     results.append(triton.language.tensor(call_op.get_result(i), callee_ret_type[i]))
                 return tuple(results)
-        if hasattr(fn, '__self__') and self.is_triton_tensor(fn.__self__) or \
-                sys.modules[fn.__module__] is triton.language.core or \
-                isinstance(fn, triton.language.extern.ExternalFunction):
+        if (hasattr(fn, '__self__') and self.is_triton_tensor(fn.__self__)) \
+                or impl.is_builtin(fn):
             return fn(*args, _builder=self.builder, **kws)
         if fn in self.builtins.values():
             args = [arg.value if isinstance(arg, triton.language.constexpr) else arg
@@ -761,6 +762,9 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Attribute(self, node):
         lhs = self.visit(node.value)
+        if isinstance(lhs, triton.language.tensor):
+          if node.attr == "T":
+            return triton.language.semantic.trans(lhs, builder=self.builder)
         return getattr(lhs, node.attr)
 
     def visit_Expr(self, node):

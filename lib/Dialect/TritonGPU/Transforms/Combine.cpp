@@ -756,6 +756,7 @@ public:
     auto mod = op->getParentOfType<mlir::ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int version = computeCapabilityToMMAVersion(computeCapability);
+
     auto newRetType = RankedTensorType::get(
         retShape, oldRetType.getElementType(),
         triton::gpu::MmaEncodingAttr::get(
@@ -780,8 +781,7 @@ public:
     a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), newAType, a);
     b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), newBType, b);
     auto newDot = rewriter.create<triton::DotOp>(
-        dotOp.getLoc(), newRetType, a, b, newAcc, dotOp.allowTF32(),
-        dotOp.transA(), dotOp.transB());
+        dotOp.getLoc(), newRetType, a, b, newAcc, dotOp.allowTF32());
 
     rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
         op, oldRetType, newDot.getResult());

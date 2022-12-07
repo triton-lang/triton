@@ -1184,11 +1184,10 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_dot",
            [](mlir::OpBuilder &self, mlir::Value &a, mlir::Value &b,
-              mlir::Value &c, bool allowTF32, bool transA,
-              bool transB) -> mlir::Value {
+              mlir::Value &c, bool allowTF32) -> mlir::Value {
              auto loc = self.getUnknownLoc();
              return self.create<mlir::triton::DotOp>(loc, c.getType(), a, b, c,
-                                                     allowTF32, transA, transB);
+                                                     allowTF32);
            })
       .def("create_exp",
            [](mlir::OpBuilder &self, mlir::Value &val) -> mlir::Value {
@@ -1383,6 +1382,11 @@ void init_triton_translation(py::module &m) {
         llvm::SMDiagnostic error;
         std::unique_ptr<llvm::Module> module =
             llvm::parseIR(buffer->getMemBufferRef(), error, context);
+        if (!module)
+          llvm::report_fatal_error(
+              "failed to parse IR: " + error.getMessage() +
+              "lineno: " + std::to_string(error.getLineNo()));
+
         // translate module to PTX
         auto ptxCode =
             triton::translateLLVMIRToPTX(*module, capability, version);

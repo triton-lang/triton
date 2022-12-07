@@ -62,12 +62,11 @@ namespace LLVM {
 static StringRef getStructAttrsAttrName() { return "llvm.struct_attrs"; }
 
 // A helper function for using printf in LLVM conversion.
-void llPrintf(StringRef msg, ValueRange args,
-              ConversionPatternRewriter &rewriter);
+void vprintf(StringRef msg, ValueRange args,
+             ConversionPatternRewriter &rewriter);
 
-// Helper function
-#define tid_val() getThreadId(rewriter, loc)
-#define llprintf(fmt, ...) LLVM::llPrintf(fmt, {__VA_ARGS__}, rewriter)
+void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
+                   std::string elem_repr, ConversionPatternRewriter &builder);
 
 } // namespace LLVM
 } // namespace mlir
@@ -3001,7 +3000,6 @@ void ConvertLayoutOpConversion::processReplica(
             currVal = zext(llvmElemTy, currVal);
           else if (isPtr)
             currVal = ptrtoint(llvmElemTy, currVal);
-
           valVec = insert_element(vecTy, valVec, currVal, idx_val(v));
         }
         store(valVec, ptr);
@@ -3109,7 +3107,6 @@ LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
     triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
     ConversionPatternRewriter &rewriter) const {
   auto loc = op.getLoc();
-
   Value src = op.src();
   Value dst = op.result();
   auto srcTy = src.getType().cast<RankedTensorType>();
@@ -3274,7 +3271,7 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
 
     // Here we assume the DotOp's operands always comes from shared memory.
     auto AShape = A.getType().cast<RankedTensorType>().getShape();
-    size_t reduceAxis = op.transA() ? 0 : 1;
+    size_t reduceAxis = 1;
     unsigned K = AShape[reduceAxis];
     bool isOuter = K == 1;
 
@@ -3513,21 +3510,9 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
   auto DShape = DTensorTy.getShape();
   auto wpt = mmaLayout.getWarpsPerCTA();
 
-  bool transA = op.transA();
-  bool transB = op.transB();
-
   // TODO[Superjomn]: order cannot accessed in DotOp.
   SmallVector<unsigned> AOrder({1, 0});
   SmallVector<unsigned> BOrder({1, 0});
-
-  if (transA) {
-    std::swap(AShape[0], AShape[1]);
-    std::swap(AOrder[0], AOrder[1]);
-  }
-  if (transB) {
-    std::swap(BShape[0], BShape[1]);
-    std::swap(BOrder[0], BOrder[0]);
-  }
 
   bool isARow = AOrder[0] != 0;
   bool isBRow = BOrder[0] != 0;
@@ -3557,8 +3542,8 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
   SmallVector<Value> resVals(resSize);
 
   auto callMMA = [&](unsigned m, unsigned n, unsigned k) {
-    auto ha = has[{m, k}];
-    auto hb = hbs[{n, k}];
+    auto ha = has.at({m, k});
+    auto hb = hbs.at({n, k});
     std::vector<size_t> idx{{
         (m * 2 + 0) + (n * 4 + 0) * numM, // row0
         (m * 2 + 0) + (n * 4 + 1) * numM,
@@ -3574,13 +3559,13 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
 
     auto *resOprs = builder.newListOperand(8, "=f");
     auto *AOprs = builder.newListOperand({
-        {ha.first, "f"},
-        {ha.second, "f"},
+        {ha.first, "r"},
+        {ha.second, "r"},
     });
 
     auto *BOprs = builder.newListOperand({
-        {hb.first, "f"},
-        {hb.second, "f"},
+        {hb.first, "r"},
+        {hb.second, "r"},
     });
     auto *COprs = builder.newListOperand();
     for (int i = 0; i < 8; ++i)
@@ -4856,9 +4841,21 @@ namespace mlir {
 
 namespace LLVM {
 
-void llPrintf(StringRef msg, ValueRange args,
-              ConversionPatternRewriter &rewriter) {
+void vprintf(StringRef msg, ValueRange args,
+             ConversionPatternRewriter &rewriter) {
   PrintfOpConversion::llPrintf(msg, args, rewriter);
+}
+
+void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
+                   std::string elem_repr, ConversionPatternRewriter &builder) {
+  std::string fmt = info + " t-%d ";
+  std::vector<Value> new_arr({thread});
+  for (int i = 0; i < arr.size(); ++i) {
+    fmt += elem_repr + ((i == arr.size() - 1) ? "" : ", ");
+    new_arr.push_back(arr[i]);
+  }
+
+  vprintf(fmt, new_arr, builder);
 }
 
 } // namespace LLVM

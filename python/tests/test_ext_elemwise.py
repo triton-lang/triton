@@ -5,6 +5,7 @@ from torch.testing import assert_close
 
 import triton
 import triton.language as tl
+from tests.libdevice_testutil import system_libdevice_path
 
 
 @pytest.mark.parametrize('num_warps, block_size, iter_size', [
@@ -125,7 +126,7 @@ def test_fmad_rn_no_mask(num_warps, block_size, iter_size):
 
 
 @pytest.mark.parametrize("dtype_str, expr, lib_path",
-                         [('int32', 'libdevice.ffs', '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'),
+                         [('int32', 'libdevice.ffs', system_libdevice_path()),
                           ('int32', 'libdevice.ffs', '')])
 def test_libdevice(dtype_str, expr, lib_path):
     src = f"""
