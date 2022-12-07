@@ -545,11 +545,11 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     %other_tensor = tt.splat %other : (f32) -> tensor<16x64xf32, #AL>
 
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
-    // CHECK-SAME: @${{.*}} st.shared.b128 [ ${{.*}} + 0 ], ${{.*}}
+    // CHECK-SAME: @${{.*}} st.shared.v4.b32 [ ${{.*}} + 0 ]
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
     // CHECK-SAME: cp.async.cg.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x10, ${{.*}}
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
-    // CHECK-SAME: @${{.*}} st.shared.b128 [ ${{.*}} + 16 ], ${{.*}}
+    // CHECK-SAME: @${{.*}} st.shared.v4.b32 [ ${{.*}} + 16 ]
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
     // CHECK-SAME: cp.async.cg.shared.global [ ${{.*}} + 16 ], [ ${{.*}} + 0 ], 0x10, ${{.*}}
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
