@@ -1180,6 +1180,7 @@ def test_dot(M, N, K, epilogue, allow_tf32, dtype, device='cuda'):
     # compare
     # print(z_ref[:,0], z_tri[:,0])
     if dtype == 'float32':
+        # XXX: Somehow there's a larger difference when we use float32
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
     else:
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
