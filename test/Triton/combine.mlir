@@ -37,9 +37,9 @@ func @test_combine_addptr_pattern(%base: !tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>>
     %idx0 = tt.broadcast %off0 : (i32) -> tensor<8xi32>
     %idx1 = tt.broadcast %off1 : (i32) -> tensor<8xi32>
 
-    // CHECK-NEXT: %1 = tt.addptr %[[tmp0]], %[[cst]] : tensor<8x!tt.ptr<f32>>
-    %ptr0 = tt.addptr %base_, %idx0 : tensor<8x!tt.ptr<f32>>
-    %ptr1 = tt.addptr %ptr0, %idx1 : tensor<8x!tt.ptr<f32>>
+    // CHECK-NEXT: %1 = tt.addptr %[[tmp0]], %[[cst]] : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
+    %ptr0 = tt.addptr %base_, %idx0 : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
+    %ptr1 = tt.addptr %ptr0, %idx1 : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
 
     return %ptr1 : tensor<8x!tt.ptr<f32>>
 }
