@@ -4620,8 +4620,7 @@ private:
       // capability does not support async copy, then we do decompose
       if (triton::gpu::InsertSliceAsyncOp::getEligibleLoadByteWidth(
               computeCapability)
-              .contains(byteWidth) &&
-          computeCapability >= 80)
+              .contains(byteWidth))
         return;
 
       // load
@@ -4655,13 +4654,8 @@ private:
 
     // async wait is supported in Ampere and later
     mod.walk([&](triton::gpu::AsyncWaitOp asyncWaitOp) -> void {
-      if (computeCapability < 80) {
-        asyncWaitOp.erase();
-      } else if (decomposed) {
-        OpBuilder builder(asyncWaitOp);
-        // Wait for all previous async ops
-        auto newAsyncWaitOp = builder.create<triton::gpu::AsyncWaitOp>(
-            asyncWaitOp.getLoc(), builder.getI64IntegerAttr(0));
+      if (!triton::gpu::AsyncWaitOp::isSupported(computeCapability) ||
+          decomposed) {
         asyncWaitOp.erase();
       }
     });
