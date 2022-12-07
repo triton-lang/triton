@@ -1067,13 +1067,14 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
 # # ---------------
 
 
-@pytest.mark.parametrize("epilogue, allow_tf32, dtype",
-                         [(epilogue, allow_tf32, dtype)
+@pytest.mark.parametrize("M, N, K, epilogue, allow_tf32, dtype",
+                         [(*shape, epilogue, allow_tf32, dtype)
+                          for shape in [(64, 64, 64), (128, 128, 128)]
                           for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
                           for allow_tf32 in [True, False]
                           for dtype in ['float16']
                           if not (allow_tf32 and (dtype in ['float16']))])
-def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
+def test_dot(M, N, K, epilogue, allow_tf32, dtype, device='cuda'):
     capability = torch.cuda.get_device_capability()
     if capability[0] < 80:
         if dtype == 'int8':
@@ -1081,7 +1082,6 @@ def test_dot(epilogue, allow_tf32, dtype, device='cuda'):
         elif dtype == 'float32' and allow_tf32:
             pytest.skip("Only test tf32 on devices with sm >= 80")
 
-    M, N, K = 64, 64, 64
     num_warps = 4
     trans_a, trans_b = False, False
 
