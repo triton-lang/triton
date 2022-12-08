@@ -690,6 +690,26 @@ def zeros(shape, dtype, _builder=None):
     return semantic.zeros(shape, dtype, _builder)
 
 
+@builtin
+def ones(shape, dtype, _builder=None):
+    """
+    Returns a tensor filled with the scalar value 1 for the given :code:`shape` and :code:`dtype`.
+
+    :param shape: Shape of the new array, e.g., (8, 16) or (8, )
+    :type shape: tuple of ints
+    :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
+    :type dtype: DType
+    """
+    for i, d in enumerate(shape):
+        if not isinstance(d, constexpr):
+            raise TypeError(f"Shape element {i} must have type `constexpr`")
+        if not isinstance(d.value, int):
+            raise TypeError(f"Shape element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
+    shape = [x.value for x in shape]
+    dtype = _constexpr_to_value(dtype)
+    return semantic.ones(shape, dtype, _builder)
+
+
 # -----------------------
 # Shape Manipulation
 # -----------------------
