@@ -973,8 +973,10 @@ struct LoadOpConversion
 
       if (other) {
         for (size_t ii = 0; ii < nWords; ++ii) {
+          // PTX doesn't support mov.u8, so we need to use mov.u16
+          auto movWidth = width < 16 ? 16 : width;
           PTXInstr &mov =
-              ptxBuilder.create<>("mov")->o("u" + std::to_string(width));
+              ptxBuilder.create<>("mov")->o("u" + std::to_string(movWidth));
 
           size_t size = width / valueElemNbits;
 
