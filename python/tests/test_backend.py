@@ -64,12 +64,12 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     %7 = tt.broadcast %6 : (tensor<1x128xi32, #src>) -> tensor<128x128xi32, #src>
     %8 = tt.broadcast %5 : (tensor<128x1xi32, #src>) -> tensor<128x128xi32, #src>
     %9 = arith.addi %8, %7 : tensor<128x128xi32, #src>
-    %10 = tt.addptr %2, %9 : tensor<128x128x!tt.ptr<f16>, #src>
+    %10 = tt.addptr %2, %9 : tensor<128x128x!tt.ptr<f16>, #src>, tensor<128x128xi32, #src>
     %11 = tt.load %10 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x128xf16, #src>
     %3 = tt.splat %arg1 : (!tt.ptr<f16>) -> tensor<128x128x!tt.ptr<f16>, #dst>
     %12 = triton_gpu.convert_layout %9 : (tensor<128x128xi32, #src>) -> tensor<128x128xi32, #dst>
     %13 = triton_gpu.convert_layout %11 : (tensor<128x128xf16, #src>) -> tensor<128x128xf16, #dst>
-    %14 = tt.addptr %3, %12 : tensor<128x128x!tt.ptr<f16>, #dst>
+    %14 = tt.addptr %3, %12 : tensor<128x128x!tt.ptr<f16>, #dst>, tensor<128x128xi32, #dst>
     tt.store %14, %13 : tensor<128x128xf16, #dst>
     return
   }
