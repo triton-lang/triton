@@ -743,9 +743,11 @@ def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
     # triton kernel
     @triton.jit
     def kernel(X, Z, BITCAST: tl.constexpr):
-        x = tl.load(X)
+        x_ptr = X + tl.arange(0, 1)
+        z_ptr = Z + tl.arange(0, 1)
+        x = tl.load(x_ptr)
         z = x.to(Z.dtype.element_ty, bitcast=BITCAST)
-        tl.store(Z, z)
+        tl.store(z_ptr, z)
 
     dtype_z_np = dtype_z if dtype_z != 'int1' else 'bool_'
     # triton result
