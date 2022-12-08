@@ -43,11 +43,51 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 struct DotOpMmaV1ConversionHelper {
   MmaEncodingAttr mmaLayout;
   ArrayRef<unsigned> wpt;
+  static constexpr std::array<int, 3> fpw{{2, 2, 1}};
 
   using ValueTable = std::map<std::pair<int, int>, std::pair<Value, Value>>;
 
   explicit DotOpMmaV1ConversionHelper(MmaEncodingAttr mmaLayout)
       : mmaLayout(mmaLayout), wpt(mmaLayout.getWarpsPerCTA()) {}
+
+  // Help to share some variables across multiple functions for A.
+  struct AParam {
+    SmallVector<int> rep;
+    SmallVector<int> spw;
+
+    // TODO[Superjomn]: Support the case when isAVec4=false later
+    // Currently, we only support ld.v2, for the mma layout varies with
+    // different ld vector width.
+    // bool isAVec4 = !isARow && shapeTransed[orderTransed[0]] <= 16;
+    const bool isAVec4{true};
+
+    explicit AParam(bool isARow) {
+      int packSize0 = (isARow || isAVec4) ? 1 : 2;
+
+      int repM = 2 * packSize0;
+      int repK = 1;
+      int spwM = fpw[0] * 4 * repM;
+      rep.assign({repM, 0, repK});
+      spw.assign({spwM, 0, 1});
+    }
+  };
+
+  // Help to share some variables across multiple functions for A.
+  struct BParam {
+    SmallVector<int> rep;
+    SmallVector<int> spw;
+    // TODO[Superjomn]: Support the case when isBVec4=false later
+    // Currently, we only support ld.v2, for the mma layout varies with
+    // different ld vector width.
+    // bool isBVec4 = isBRow && shapeTransed[orderTransed[0]] <= 16;
+    const bool isBVec4{true};
+
+    explicit BParam(bool isBRow) {
+      int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
+      rep.assign({0, 2 * packSize1, 1});
+      spw.assign({0, fpw[1] * 4 * rep[1], 1});
+    }
+  };
 
   int getRepM(int M) const {
     return std::max<int>(M / (wpt[0] * instrShape[0]), 1);
@@ -71,23 +111,9 @@ struct DotOpMmaV1ConversionHelper {
   unsigned getNumM(ArrayRef<int64_t> shapeTransed,
                    ArrayRef<unsigned> orderTransed) const {
     bool isARow = orderTransed[0] != 0;
-    bool isAVec4 =
-        !isARow && shapeTransed[orderTransed[0]] <= 16; // fp16*4 = 16bytes
-    // TODO[Superjomn]: Support the case when isAVec4=false later
-    // Currently, we only support ld.v2, for the mma layout varies with
-    // different ld vector width.
-    isAVec4 = true;
+    AParam param(isARow);
 
-    int packSize0 = (isARow || isAVec4) ? 1 : 2;
-
-    SmallVector<int> fpw({2, 2, 1});
-    int repM = 2 * packSize0;
-    int repK = 1;
-    int spwM = fpw[0] * 4 * repM;
-    SmallVector<int> rep({repM, 0, repK}); // pad N with 0
-    SmallVector<int> spw({spwM, 0, 1});    // pad N with 0
-
-    unsigned numM = rep[0] * shapeTransed[0] / (spw[0] * wpt[0]);
+    unsigned numM = param.rep[0] * shapeTransed[0] / (param.spw[0] * wpt[0]);
     return numM;
   }
 
@@ -97,18 +123,9 @@ struct DotOpMmaV1ConversionHelper {
   unsigned getNumN(ArrayRef<int64_t> shapeTransed,
                    ArrayRef<unsigned> orderTransed) const {
     bool isBRow = orderTransed[0] != 0;
-    bool isBVec4 = isBRow && shapeTransed[orderTransed[0]] <= 16;
-    // TODO[Superjomn]: Support the case when isBVec4=false later
-    // Currently, we only support ld.v2, for the mma layout varies with
-    // different ld vector width.
-    isBVec4 = true;
+    BParam param(isBRow);
 
-    int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
-    SmallVector<int> fpw({2, 2, 1});
-    SmallVector<int> rep({0, 2 * packSize1, 1});       // pad M with 0
-    SmallVector<int> spw({0, fpw[1] * 4 * rep[1], 1}); // pad M with 0
-
-    unsigned numN = rep[1] * shapeTransed[1] / (spw[1] * wpt[1]);
+    unsigned numN = param.rep[1] * shapeTransed[1] / (param.spw[1] * wpt[1]);
     return numN;
   }
 
@@ -1350,22 +1367,11 @@ Value DotOpMmaV1ConversionHelper::loadA(
   Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
 
   bool isARow = order[0] != 0;
-  bool isAVec4 = !isARow && shape[order[0]] <= 16; // fp16*4 = 16bytes
-  // TODO[Superjomn]: Support the case when isAVec4=false later
-  // Currently, we only support ld.v2, for the mma layout varies with different
-  // ld vector width.
-  isAVec4 = true;
-  int packSize0 = (isARow || isAVec4) ? 1 : 2;
+  AParam param(isARow);
 
-  SmallVector<int> fpw({2, 2, 1});
-  int repM = 2 * packSize0;
-  int repK = 1;
-  int spwM = fpw[0] * 4 * repM;
-  SmallVector<int> rep({repM, 0, repK}); // pad N with 0
-  SmallVector<int> spw({spwM, 0, 1});    // pad N with 0
+  auto [offsetAM, offsetAK, _0, _1] = computeOffsets(
+      thread, isARow, false, fpw, param.spw, param.rep, rewriter, loc);
 
-  auto [offsetAM, offsetAK, _0, _1] =
-      computeOffsets(thread, isARow, false, fpw, spw, rep, rewriter, loc);
   // TODO [Superjomn]: transA cannot be accessed in ConvertLayoutOp.
   bool transA = false;
   if (transA) {
@@ -1480,17 +1486,9 @@ Value DotOpMmaV1ConversionHelper::loadB(
 
   Value smem = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
   bool isBRow = order[0] != 0;
-  bool isBVec4 = isBRow && shape[order[0]] <= 16;
-  // TODO[Superjomn]: Support the case when isBVec4=false later
-  // Currently, we only support ld.v2, for the mma layout varies with different
-  // ld vector width.
-  isBVec4 = true;
-  int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
-  SmallVector<int> fpw({2, 2, 1});
-  SmallVector<int> rep({0, 2 * packSize1, 1});       // pad M with 0
-  SmallVector<int> spw({0, fpw[1] * 4 * rep[1], 1}); // pad M with 0
-  int vecB = sharedLayout.getVec();
+  BParam param(isBRow);
 
+  int vecB = sharedLayout.getVec();
   Value strideBN = isBRow ? i32_val(1) : strides[1];
   Value strideBK = isBRow ? strides[0] : i32_val(1);
   Value strideB0 = isBRow ? strideBN : strideBK;
@@ -1501,8 +1499,8 @@ Value DotOpMmaV1ConversionHelper::loadB(
   // TODO [Superjomn]: transB cannot be accessed in ConvertLayoutOp.
   bool transB = false;
 
-  auto [_0, _1, offsetBN, offsetBK] =
-      computeOffsets(thread, false, isBRow, fpw, spw, rep, rewriter, loc);
+  auto [_0, _1, offsetBN, offsetBK] = computeOffsets(
+      thread, false, isBRow, fpw, param.spw, param.rep, rewriter, loc);
   if (transB) {
     std::swap(order[0], order[1]);
     std::swap(shape[0], shape[1]);
