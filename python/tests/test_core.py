@@ -20,6 +20,7 @@ float_dtypes = ['float16', 'float32', 'float64']
 dtypes = int_dtypes + uint_dtypes + float_dtypes
 # TODO: handle bfloat16
 dtypes_with_bfloat16 = dtypes  # + ['bfloat16']
+torch_dtypes = ['bool'] + int_dtypes + ['uint8'] + float_dtypes  # + ['bfloat16']
 
 
 def _bitwidth(dtype: str) -> int:
@@ -1233,9 +1234,41 @@ def test_arange(start, device='cuda'):
     z_ref = torch.arange(start, BLOCK + start, dtype=torch.int32, device=device)
     triton.testing.assert_almost_equal(z_tri, z_ref)
 
-# # ---------------
-# # test load
-# # ---------------
+# ---------------
+# test load
+# ---------------
+
+
+@pytest.mark.parametrize("dtype_str, size, size_diff", [(dtype_str, size, size_diff) for dtype_str in torch_dtypes for size in [128, 512] for size_diff in [1, 2, 3, 4]])
+def test_masked_load(dtype_str, size, size_diff, device='cuda'):
+    dtype = getattr(torch, dtype_str)
+    check_type_supported(dtype)  # bfloat16 on cc < 80 will not be tested
+
+    input_size = size - size_diff
+    output_size = size
+    if dtype_str == 'bool':
+        input = torch.randint(0, 2, (input_size,), dtype=dtype, device=device)
+    elif dtype_str in int_dtypes or dtype_str in uint_dtypes:
+        input = torch.randint(0, 127, (input_size,), dtype=dtype, device=device)
+    else:
+        input = torch.rand(input_size, dtype=dtype, device=device)
+    output = torch.zeros((output_size,), dtype=dtype, device=device)
+
+    @triton.jit
+    def _kernel(in_ptr, out_ptr, in_size: tl.constexpr, out_size: tl.constexpr):
+        in_offsets = tl.arange(0, out_size)
+        # Load inputs.
+        x = tl.load(in_ptr + in_offsets, mask=in_offsets < in_size, other=1)
+        # Store output
+        output_offsets = tl.arange(0, out_size)
+        tl.store(out_ptr + output_offsets, x)
+
+    _kernel[(1,)](input, output, input_size, output_size)
+
+    reference_out = input
+    reference_out = torch.cat((reference_out, torch.ones((size_diff,), dtype=dtype, device=device)))
+    triton.testing.allclose(output, reference_out)
+
 # # 'bfloat16': torch.bfloat16,
 # # Testing masked loads with an intermate copy to shared memory run.
 
