@@ -1003,15 +1003,14 @@ struct LoadOpConversion
       const size_t width = std::min(totalWidth, maxWordWidth);
       const size_t nWords = std::max<size_t>(1, totalWidth / width);
       const size_t wordNElems = width / valueElemNbits;
-      size_t size = width / valueElemNbits;
       assert(wordNElems * nWords * numVecs == numElems);
 
 #ifdef USE_ROCM
 
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
-      for (size_t ii = 0; ii < nWords; ++ii) {
-        for (size_t s = 0; s < size; ++s) {
-          size_t elemOffset = vecStart + ii * size + s;
+      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
+        for (size_t wordElem = 0; wordElem < wordNElems; ++wordElem) {
+          size_t elemOffset = vecStart + wordIdx * wordNElems + wordElem;
 
           // get values
           Value trueVal = load(ptrElems[elemOffset]);
