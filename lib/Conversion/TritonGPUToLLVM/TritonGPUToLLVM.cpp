@@ -3553,7 +3553,7 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
   DotOpMmaV1ConversionHelper helper(mmaLayout);
 
   unsigned numM = rep[0] * DShape[0] / (spw[0] * wpt[0]);
-  unsigned numN = rep[1] * DShape[1] / (spw[1] * wpt[0]);
+  unsigned numN = rep[1] * DShape[1] / (spw[1] * wpt[1]);
   unsigned NK = AShape[1];
 
   auto has = helper.extractLoadedOperand(loadedA, NK, rewriter);
