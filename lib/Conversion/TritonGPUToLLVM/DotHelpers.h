@@ -65,20 +65,14 @@ struct DotOpMmaV1ConversionHelper {
     return struct_ty(SmallVector<Type>{8, fp32Ty});
   }
 
-  // number of fp16x2 elements for $a.
-  int numElemsPerThreadA(RankedTensorType tensorTy) const {
-    SmallVector<int64_t> shape(tensorTy.getShape().begin(),
-                               tensorTy.getShape().end());
-    SmallVector<unsigned> order(getOrder().begin(), getOrder().end());
-    // TODO[Superjomn]: transA is not available here.
-    bool transA = false;
-    if (transA) {
-      std::swap(shape[0], shape[1]);
-      std::swap(order[0], order[1]);
-    }
-
-    bool isARow = order[0] != 0;
-    bool isAVec4 = !isARow && shape[order[0]] <= 16; // fp16*4 = 16bytes
+  // Get the number of fp16x2 elements for $a.
+  // \param shapeTransed: the shape or reordered shape if transpose needed.
+  // \param orderTransed: the order or reordered order if transpose needed.
+  unsigned getNumM(ArrayRef<int64_t> shapeTransed,
+                   ArrayRef<unsigned> orderTransed) const {
+    bool isARow = orderTransed[0] != 0;
+    bool isAVec4 =
+        !isARow && shapeTransed[orderTransed[0]] <= 16; // fp16*4 = 16bytes
     // TODO[Superjomn]: Support the case when isAVec4=false later
     // Currently, we only support ld.v2, for the mma layout varies with
     // different ld vector width.
@@ -93,31 +87,17 @@ struct DotOpMmaV1ConversionHelper {
     SmallVector<int> rep({repM, 0, repK}); // pad N with 0
     SmallVector<int> spw({spwM, 0, 1});    // pad N with 0
 
-    int NK = shape[1];
-    unsigned numM = rep[0] * shape[0] / (spw[0] * wpt[0]);
-
-    // NOTE: We couldn't get the vec from the shared layout.
-    // int vecA = sharedLayout.getVec();
-    // TODO[Superjomn]: Consider the case when vecA > 4
-    bool vecGt4 = false;
-    int elemsPerLd = vecGt4 ? 4 : 2;
-    return (numM / 2) * (NK / 4) * elemsPerLd;
+    unsigned numM = rep[0] * shapeTransed[0] / (spw[0] * wpt[0]);
+    return numM;
   }
 
-  // number of fp16x2 elements for $b.
-  int numElemsPerThreadB(RankedTensorType tensorTy) const {
-    SmallVector<int64_t> shape(tensorTy.getShape().begin(),
-                               tensorTy.getShape().end());
-    SmallVector<unsigned> order(getOrder().begin(), getOrder().end());
-    // TODO[Superjomn]: transB is not available here.
-    bool transB = false;
-    if (transB) {
-      std::swap(shape[0], shape[1]);
-      std::swap(order[0], order[1]);
-    }
-
-    bool isBRow = order[0] != 0;
-    bool isBVec4 = isBRow && shape[order[0]] <= 16;
+  // Get the number of fp16x2 elements for $b.
+  // \param shapeTransed: the shape or reordered shape if transpose needed.
+  // \param orderTransed: the order or reordered order if transpose needed.
+  unsigned getNumN(ArrayRef<int64_t> shapeTransed,
+                   ArrayRef<unsigned> orderTransed) const {
+    bool isBRow = orderTransed[0] != 0;
+    bool isBVec4 = isBRow && shapeTransed[orderTransed[0]] <= 16;
     // TODO[Superjomn]: Support the case when isBVec4=false later
     // Currently, we only support ld.v2, for the mma layout varies with
     // different ld vector width.
@@ -127,14 +107,33 @@ struct DotOpMmaV1ConversionHelper {
     SmallVector<int> fpw({2, 2, 1});
     SmallVector<int> rep({0, 2 * packSize1, 1});       // pad M with 0
     SmallVector<int> spw({0, fpw[1] * 4 * rep[1], 1}); // pad M with 0
+
+    unsigned numN = rep[1] * shapeTransed[1] / (spw[1] * wpt[1]);
+    return numN;
+  }
+
+  int numElemsPerThreadA(ArrayRef<int64_t> shapeTransed,
+                         ArrayRef<unsigned> orderTransed) const {
+    int numM = getNumM(shapeTransed, orderTransed);
+    int NK = shapeTransed[1];
+
+    // NOTE: We couldn't get the vec from the shared layout.
+    // int vecA = sharedLayout.getVec();
+    // TODO[Superjomn]: Consider the case when vecA > 4
+    bool vecGt4 = false;
+    int elemsPerLd = vecGt4 ? 4 : 2;
+    return (numM / 2) * (NK / 4) * elemsPerLd;
+  }
+
+  int numElemsPerThreadB(ArrayRef<int64_t> shapeTransed,
+                         ArrayRef<unsigned> orderTransed) const {
+    unsigned numN = getNumN(shapeTransed, orderTransed);
+    int NK = shapeTransed[0];
     // NOTE: We couldn't get the vec from the shared layout.
     // int vecB = sharedLayout.getVec();
     // TODO[Superjomn]: Consider the case when vecA > 4
     bool vecGt4 = false;
     int elemsPerLd = vecGt4 ? 4 : 2;
-    int NK = shape[0];
-
-    unsigned numN = rep[1] * shape[1] / (spw[1] * wpt[1]);
     return (numN / 2) * (NK / 4) * elemsPerLd;
   }
 
@@ -1416,8 +1415,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
   for (int i = 0; i < numPtrA; i++)
     ptrA[i] = gep(ptr_ty(f16_ty), smemBase, offA[i]);
 
-  unsigned numM = std::max<int>(rep[0] * shape[0] / (spw[0] * wpt[0]), 1);
-
   Type f16PtrTy = ptr_ty(f16_ty);
 
   auto ld = [&](decltype(has) &vals, int m, int k, Value val0, Value val1) {
@@ -1449,6 +1446,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
     }
   };
 
+  unsigned numM = getNumM(shape, order);
   for (unsigned k = 0; k < NK; k += 4)
     for (unsigned m = 0; m < numM / 2; ++m)
       loadA(m, k);
@@ -1571,7 +1569,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
     }
   };
 
-  unsigned numN = rep[1] * shape[1] / (spw[1] * wpt[1]);
+  unsigned numN = getNumN(shape, order);
   for (unsigned k = 0; k < NK; k += 4)
     for (unsigned n = 0; n < numN / 2; ++n) {
       if (!hbs.count({n, k}))

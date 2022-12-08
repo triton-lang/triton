@@ -3840,7 +3840,8 @@ public:
   llvm::Optional<Type> convertTritonTensorType(RankedTensorType type) {
     auto ctx = type.getContext();
     Attribute layout = type.getEncoding();
-    auto shape = type.getShape();
+    SmallVector<int64_t> shape(type.getShape().begin(), type.getShape().end());
+
     if (layout &&
         (layout.isa<BlockedEncodingAttr>() || layout.isa<SliceEncodingAttr>() ||
          layout.isa<MmaEncodingAttr>())) {
@@ -3903,13 +3904,22 @@ public:
         if (mmaLayout.getVersion() == 1) {
           DotOpMmaV1ConversionHelper helper(mmaLayout);
 
+          // TODO[Superjomn]: Both transA and transB are not available here.
+          bool trans = false;
+          // TODO[Superjomn]: The order of A and B are not available here.
+          SmallVector<unsigned> order({1, 0});
+          if (trans) {
+            std::swap(shape[0], shape[1]);
+            std::swap(order[0], order[1]);
+          }
+
           if (dotOpLayout.getOpIdx() == 0) { // $a
-            int elems = helper.numElemsPerThreadA(type);
+            int elems = helper.numElemsPerThreadA(shape, order);
             Type x2Ty = vec_ty(elemTy, 2);
             return struct_ty(SmallVector<Type>(elems, x2Ty));
           }
           if (dotOpLayout.getOpIdx() == 1) { // $b
-            int elems = helper.numElemsPerThreadB(type);
+            int elems = helper.numElemsPerThreadB(shape, order);
             Type x2Ty = vec_ty(elemTy, 2);
             return struct_ty(SmallVector<Type>(elems, x2Ty));
           }
