@@ -32,6 +32,12 @@ def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
   let arguments = (ins I32Attr:$num);
 
   let assemblyFormat = "attr-dict";
+
+  let extraClassDeclaration = [{
+    static bool isSupported(int computeCapability) {
+      return computeCapability >= 80;
+    }
+  }];
 }
 
 // Port Arith_CmpIOp & Arith_CmpFOp & Std_SelectOp to TritonGPU.
@@ -152,7 +158,13 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
   //}];
 
   let extraClassDeclaration = [{
-      static DenseSet<unsigned> getEligibleLoadByteWidth(int computeCapability);
+    static DenseSet<unsigned> getEligibleLoadByteWidth(int computeCapability) {
+      DenseSet<unsigned> validLoadBytes;
+      if (computeCapability >= 80) {
+        validLoadBytes = {4, 8, 16};
+      }
+      return validLoadBytes;
+    }
   }];
 
   // The custom parser could be replaced with oilist in LLVM-16
