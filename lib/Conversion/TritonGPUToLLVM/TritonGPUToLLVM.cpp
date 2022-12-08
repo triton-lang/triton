@@ -1730,9 +1730,9 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
     auto rhsVals = getElementsFromStruct(loc, adaptor.rhs(), rewriter);
     // concatenate (and potentially reorder) values
     SmallVector<Value> retVals;
-    for(Value v: lhsVals)
+    for (Value v : lhsVals)
       retVals.push_back(v);
-    for(Value v: rhsVals)
+    for (Value v : rhsVals)
       retVals.push_back(v);
     // pack and replace
     Type structTy = LLVM::LLVMStructType::getLiteral(this->getContext(), types);
@@ -3537,6 +3537,10 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
   bool isBRow = BOrder[0] != 0;
   bool isAVec4 = !isARow && AShape[isARow] <= 16; // fp16*4 = 16bytes
   bool isBVec4 = isBRow && BShape[isBRow] <= 16;
+  // TODO[Superjomn]: ld.v4 is not supported.
+  isAVec4 = true;
+  isBVec4 = true;
+
   int packSize0 = (isARow || isAVec4) ? 1 : 2;
   int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
   SmallVector<int> fpw({2, 2, 1});

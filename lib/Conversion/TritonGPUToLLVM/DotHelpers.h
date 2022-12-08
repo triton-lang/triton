@@ -67,8 +67,15 @@ struct DotOpMmaV1ConversionHelper {
 
   // number of fp16x2 elements for $a.
   int numElemsPerThreadA(RankedTensorType tensorTy) const {
-    auto shape = tensorTy.getShape();
-    auto order = getOrder();
+    SmallVector<int64_t> shape(tensorTy.getShape().begin(),
+                               tensorTy.getShape().end());
+    SmallVector<unsigned> order(getOrder().begin(), getOrder().end());
+    // TODO[Superjomn]: transA is not available here.
+    bool transA = false;
+    if (transA) {
+      std::swap(shape[0], shape[1]);
+      std::swap(order[0], order[1]);
+    }
 
     bool isARow = order[0] != 0;
     bool isAVec4 = !isARow && shape[order[0]] <= 16; // fp16*4 = 16bytes
@@ -99,8 +106,16 @@ struct DotOpMmaV1ConversionHelper {
 
   // number of fp16x2 elements for $b.
   int numElemsPerThreadB(RankedTensorType tensorTy) const {
-    auto shape = tensorTy.getShape();
-    auto order = getOrder();
+    SmallVector<int64_t> shape(tensorTy.getShape().begin(),
+                               tensorTy.getShape().end());
+    SmallVector<unsigned> order(getOrder().begin(), getOrder().end());
+    // TODO[Superjomn]: transB is not available here.
+    bool transB = false;
+    if (transB) {
+      std::swap(shape[0], shape[1]);
+      std::swap(order[0], order[1]);
+    }
+
     bool isBRow = order[0] != 0;
     bool isBVec4 = isBRow && shape[order[0]] <= 16;
     // TODO[Superjomn]: Support the case when isBVec4=false later
@@ -119,7 +134,7 @@ struct DotOpMmaV1ConversionHelper {
     int elemsPerLd = vecGt4 ? 4 : 2;
     int NK = shape[0];
 
-    unsigned numN = rep[1] * shape[1] / (spw[1] * wpt[0]);
+    unsigned numN = rep[1] * shape[1] / (spw[1] * wpt[1]);
     return (numN / 2) * (NK / 4) * elemsPerLd;
   }
 
@@ -1556,7 +1571,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
     }
   };
 
-  unsigned numN = rep[1] * shape[1] / (spw[1] * wpt[0]);
+  unsigned numN = rep[1] * shape[1] / (spw[1] * wpt[1]);
   for (unsigned k = 0; k < NK; k += 4)
     for (unsigned n = 0; n < numN / 2; ++n) {
       if (!hbs.count({n, k}))
