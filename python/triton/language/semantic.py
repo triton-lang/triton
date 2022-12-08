@@ -472,6 +472,12 @@ def zeros(shape: List[int], dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
     ret_ty = tl.block_type(dtype, shape)
     return tl.tensor(builder.create_splat(_0, shape), ret_ty)
 
+
+def ones(shape: List[int], dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
+    _1 = builder.get_one_value(dtype.to_ir(builder))
+    ret_ty = tl.block_type(dtype, shape)
+    return tl.tensor(builder.create_splat(_1, shape), ret_ty)
+
 # ===----------------------------------------------------------------------===//
 #                               Shape Manipulation
 # ===----------------------------------------------------------------------===//

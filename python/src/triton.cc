@@ -468,6 +468,15 @@ void init_triton_ir(py::module &&m) {
              else
                throw std::runtime_error("Not implemented");
            })
+      .def("get_one_value",
+           [](mlir::OpBuilder &self, mlir::Type type) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             uint64_t val = 0x1;
+             if (auto intTy = type.dyn_cast<mlir::IntegerType>())
+               return self.create<mlir::arith::ConstantIntOp>(loc, val, intTy);
+             else
+               throw std::runtime_error("Not implemented");
+           })
 
       // Types
       .def("get_void_ty",
