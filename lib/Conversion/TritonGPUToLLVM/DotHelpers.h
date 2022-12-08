@@ -63,7 +63,6 @@ struct DotOpMmaV1ConversionHelper {
 
     explicit AParam(bool isARow) {
       int packSize0 = (isARow || isAVec4) ? 1 : 2;
-
       int repM = 2 * packSize0;
       int repK = 1;
       int spwM = fpw[0] * 4 * repM;
@@ -155,12 +154,14 @@ struct DotOpMmaV1ConversionHelper {
   }
 
   // Loading $a from smem to registers, returns a LLVM::Struct.
-  Value loadA(Value A, const SharedMemoryObject &smemObj, Value thread,
-              Location loc, ConversionPatternRewriter &rewriter) const;
+  Value loadA(Value A, bool transA, const SharedMemoryObject &smemObj,
+              Value thread, Location loc,
+              ConversionPatternRewriter &rewriter) const;
 
   // Loading $b from smem to registers, returns a LLVM::Struct.
-  Value loadB(Value B, const SharedMemoryObject &smemObj, Value thread,
-              Location loc, ConversionPatternRewriter &rewriter) const;
+  Value loadB(Value B, bool transB, const SharedMemoryObject &smemObj,
+              Value thread, Location loc,
+              ConversionPatternRewriter &rewriter) const;
 
   static ArrayRef<unsigned> getOrder() { return mmaOrder; }
 
@@ -1352,8 +1353,8 @@ struct DotOpFMAConversionHelper {
 };
 
 Value DotOpMmaV1ConversionHelper::loadA(
-    Value tensor, const SharedMemoryObject &smemObj, Value thread, Location loc,
-    ConversionPatternRewriter &rewriter) const {
+    Value tensor, bool transA, const SharedMemoryObject &smemObj, Value thread,
+    Location loc, ConversionPatternRewriter &rewriter) const {
 
   auto *ctx = rewriter.getContext();
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
@@ -1372,8 +1373,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
   auto [offsetAM, offsetAK, _0, _1] = computeOffsets(
       thread, isARow, false, fpw, param.spw, param.rep, rewriter, loc);
 
-  // TODO [Superjomn]: transA cannot be accessed in ConvertLayoutOp.
-  bool transA = false;
   if (transA) {
     std::swap(shape[0], shape[1]);
     std::swap(offsetAM, offsetAK);
@@ -1470,8 +1469,8 @@ Value DotOpMmaV1ConversionHelper::loadA(
 }
 
 Value DotOpMmaV1ConversionHelper::loadB(
-    Value tensor, const SharedMemoryObject &smemObj, Value thread, Location loc,
-    ConversionPatternRewriter &rewriter) const {
+    Value tensor, bool transB, const SharedMemoryObject &smemObj, Value thread,
+    Location loc, ConversionPatternRewriter &rewriter) const {
   // smem
   auto strides = smemObj.strides;
 
@@ -1495,9 +1494,6 @@ Value DotOpMmaV1ConversionHelper::loadB(
   Value strideB1 = isBRow ? strideBK : strideBN;
   int strideRepN = wpt[1] * fpw[1] * 8;
   int strideRepK = 1;
-
-  // TODO [Superjomn]: transB cannot be accessed in ConvertLayoutOp.
-  bool transB = false;
 
   auto [_0, _1, offsetBN, offsetBK] = computeOffsets(
       thread, false, isBRow, fpw, param.spw, param.rep, rewriter, loc);

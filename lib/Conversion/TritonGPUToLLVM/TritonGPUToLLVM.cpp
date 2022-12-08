@@ -3408,14 +3408,16 @@ Value ConvertLayoutOpConversion::lowerSharedToDotOperandMMA(
   } else if (!isOuter && mmaLayout.getVersion() == 1 &&
              isHMMA) { // tensor core v1
     DotOpMmaV1ConversionHelper helper(mmaLayout);
-    if (dotOperandLayout.getOpIdx() == 0) {
-      // operand $a
-      res =
-          helper.loadA(src, smemObj, getThreadId(rewriter, loc), loc, rewriter);
-    } else if (dotOperandLayout.getOpIdx() == 1) {
-      // operand $b
-      res =
-          helper.loadB(src, smemObj, getThreadId(rewriter, loc), loc, rewriter);
+    if (dotOperandLayout.getOpIdx() == 0) { // operand $a
+      // TODO[Superjomn]: transA is not available here.
+      bool transA = false;
+      res = helper.loadA(src, transA, smemObj, getThreadId(rewriter, loc), loc,
+                         rewriter);
+    } else if (dotOperandLayout.getOpIdx() == 1) { // operand $b
+      // TODO[Superjomn]: transB is not available here.
+      bool transB = false;
+      res = helper.loadB(src, transB, smemObj, getThreadId(rewriter, loc), loc,
+                         rewriter);
     }
   } else {
     assert(false && "Unsupported mma layout found");
