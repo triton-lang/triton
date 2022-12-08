@@ -677,6 +677,7 @@ def test_tensor_atomic_rmw(shape, axis, device="cuda"):
     kernel[(1,)](z_tri, x_tri, axis, shape0, shape1)
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=1e-4)
 
+
 def test_atomic_cas():
     # 1. make sure that atomic_cas changes the original value (Lock)
     @triton.jit
@@ -742,9 +743,11 @@ def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
     # triton kernel
     @triton.jit
     def kernel(X, Z, BITCAST: tl.constexpr):
-        x = tl.load(X)
+        x_ptr = X + tl.arange(0, 1)
+        z_ptr = Z + tl.arange(0, 1)
+        x = tl.load(x_ptr)
         z = x.to(Z.dtype.element_ty, bitcast=BITCAST)
-        tl.store(Z, z)
+        tl.store(z_ptr, z)
 
     dtype_z_np = dtype_z if dtype_z != 'int1' else 'bool_'
     # triton result
