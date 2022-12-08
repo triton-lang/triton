@@ -1707,6 +1707,43 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
 
 /// ====================== reduce codegen end ==========================
 
+/// ====================== cat codegen begin  ==========================
+
+struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
+  using OpAdaptor = typename CatOp::Adaptor;
+
+  explicit CatOpConversion(LLVMTypeConverter &typeConverter,
+                           PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern<CatOp>(typeConverter, benefit) {}
+
+  LogicalResult
+  matchAndRewrite(CatOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto resultTy = op.getType().template cast<RankedTensorType>();
+    unsigned elems = getElemsPerThread(resultTy);
+    Type elemTy =
+        this->getTypeConverter()->convertType(resultTy.getElementType());
+    SmallVector<Type> types(elems, elemTy);
+    // unpack input values
+    auto lhsVals = getElementsFromStruct(loc, adaptor.lhs(), rewriter);
+    auto rhsVals = getElementsFromStruct(loc, adaptor.rhs(), rewriter);
+    // concatenate (and potentially reorder) values
+    SmallVector<Value> retVals;
+    for(Value v: lhsVals)
+      retVals.push_back(v);
+    for(Value v: rhsVals)
+      retVals.push_back(v);
+    // pack and replace
+    Type structTy = LLVM::LLVMStructType::getLiteral(this->getContext(), types);
+    Value ret = getStructFromElements(loc, retVals, rewriter, structTy);
+    rewriter.replaceOp(op, ret);
+    return success();
+  }
+};
+
+/// ====================== cat codegen end    ==========================
+
 template <typename SourceOp>
 struct ViewLikeOpConversion : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
   using OpAdaptor = typename SourceOp::Adaptor;
@@ -3518,14 +3555,18 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
   auto has = helper.extractLoadedOperand(loadedA, NK, rewriter);
   auto hbs = helper.extractLoadedOperand(loadedB, NK, rewriter);
 
-  // initialize accumulators
+  // Initialize accumulators with external values, the acc holds the accumulator
+  // value that is shared between the MMA instructions inside a DotOp, we can
+  // call the order of the values the accumulator-internal order.
   SmallVector<Value> acc = getElementsFromStruct(loc, loadedC, rewriter);
   size_t resSize = acc.size();
+
+  // The resVals holds the final result of the DotOp.
+  // NOTE The current order of resVals is different from acc, we call it the
+  // accumulator-external order. and
   SmallVector<Value> resVals(resSize);
 
-  auto callMMA = [&](unsigned m, unsigned n, unsigned k) {
-    auto ha = has.at({m, k});
-    auto hb = hbs.at({n, k});
+  auto getIdx = [&](int m, int n) {
     std::vector<size_t> idx{{
         (m * 2 + 0) + (n * 4 + 0) * numM, // row0
         (m * 2 + 0) + (n * 4 + 1) * numM,
@@ -3536,8 +3577,29 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
         (m * 2 + 1) + (n * 4 + 2) * numM, // row3
         (m * 2 + 1) + (n * 4 + 3) * numM,
     }};
+    return idx;
+  };
+
+  { // convert the acc's value from accumuator-external order to
+    // accumulator-internal order.
+    SmallVector<Value> accInit(acc.size());
+
+    for (unsigned m = 0; m < numM / 2; ++m)
+      for (unsigned n = 0; n < numN / 2; ++n) {
+        auto idx = getIdx(m, n);
+        for (unsigned i = 0; i < 8; ++i)
+          accInit[idx[i]] = acc[(m * numN / 2 + n) * 8 + i];
+      }
+
+    acc = accInit;
+  }
+
+  auto callMMA = [&](unsigned m, unsigned n, unsigned k) {
+    auto ha = has.at({m, k});
+    auto hb = hbs.at({n, k});
 
     PTXBuilder builder;
+    auto idx = getIdx(m, n);
 
     auto *resOprs = builder.newListOperand(8, "=f");
     auto *AOprs = builder.newListOperand({
@@ -3569,8 +3631,6 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
     for (unsigned i = 0; i < 8; i++) {
       Value elem = extract_val(f32_ty, res, getIntAttr(i));
       acc[idx[i]] = elem;
-      // TODO[goostavz]: double confirm this when m/n/k = [32, 32, x] has been
-      // verified before MMA
       resVals[(m * numN / 2 + n) * 8 + i] = elem;
     }
   };
@@ -4537,6 +4597,7 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
                                                            benefit);
   patterns.add<DotOpConversion>(typeConverter, allocation, smem, benefit);
   patterns.add<TransOpConversion>(typeConverter, benefit);
+  patterns.add<CatOpConversion>(typeConverter, benefit);
   patterns.add<PrintfOpConversion>(typeConverter, benefit);
 }
 
@@ -4620,8 +4681,7 @@ private:
       // capability does not support async copy, then we do decompose
       if (triton::gpu::InsertSliceAsyncOp::getEligibleLoadByteWidth(
               computeCapability)
-              .contains(byteWidth) &&
-          computeCapability >= 80)
+              .contains(byteWidth))
         return;
 
       // load
@@ -4655,13 +4715,8 @@ private:
 
     // async wait is supported in Ampere and later
     mod.walk([&](triton::gpu::AsyncWaitOp asyncWaitOp) -> void {
-      if (computeCapability < 80) {
-        asyncWaitOp.erase();
-      } else if (decomposed) {
-        OpBuilder builder(asyncWaitOp);
-        // Wait for all previous async ops
-        auto newAsyncWaitOp = builder.create<triton::gpu::AsyncWaitOp>(
-            asyncWaitOp.getLoc(), builder.getI64IntegerAttr(0));
+      if (!triton::gpu::AsyncWaitOp::isSupported(computeCapability) ||
+          decomposed) {
         asyncWaitOp.erase();
       }
     });
