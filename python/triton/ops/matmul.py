@@ -27,7 +27,9 @@ def get_configs_io_bound():
 
 
 @triton.heuristics({
-    'EVEN_K': lambda args: args['K'] % (args['BLOCK_K'] * args['SPLIT_K']) == 0,
+    # 'EVEN_K': lambda args: args['K'] % (args['BLOCK_K'] * args['SPLIT_K']) == 0,
+    'EVEN_K': lambda args: True
+
 })
 @triton.autotune(
     configs=[

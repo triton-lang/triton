@@ -329,10 +329,6 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_BinOp(self, node):
         lhs = self.visit(node.left)
         rhs = self.visit(node.right)
-        if isinstance(lhs, triton.language.constexpr):
-            lhs = lhs.value
-        if isinstance(rhs, triton.language.constexpr):
-            rhs = rhs.value
         fn = {
             ast.Add: '__add__',
             ast.Sub: '__sub__',
@@ -1504,8 +1500,7 @@ class CompiledKernel:
         self.asm = asm
         device = torch.cuda.current_device()
         global cuda_utils
-        if cuda_utils is None:
-            cuda_utils = CudaUtils()
+        init_cuda_utils()
         mod, func, n_regs, n_spills = cuda_utils.load_binary(metadata["name"], self.asm["cubin"], self.shared, device)
         self.cu_module = mod
         self.cu_function = func
@@ -1562,6 +1557,34 @@ class CudaUtils(object):
 
         #define CUDA_CHECK(ans) { gpuAssert((ans), __FILE__, __LINE__); if(PyErr_Occurred()) return NULL; }
 
+        static PyObject* getDeviceProperties(PyObject* self, PyObject* args){
+            int device_id;
+            if(!PyArg_ParseTuple(args, "i", &device_id))
+                return NULL;
+            // Get device handle
+            CUdevice device;
+            cuDeviceGet(&device, device_id);
+
+            // create a struct to hold device properties
+            int max_shared_mem;
+            int multiprocessor_count;
+            int sm_clock_rate;
+            int mem_clock_rate;
+            int mem_bus_width;
+            CUDA_CHECK(cuDeviceGetAttribute(&max_shared_mem, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK, device));
+            CUDA_CHECK(cuDeviceGetAttribute(&multiprocessor_count, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device));
+            CUDA_CHECK(cuDeviceGetAttribute(&sm_clock_rate, CU_DEVICE_ATTRIBUTE_CLOCK_RATE, device));
+            CUDA_CHECK(cuDeviceGetAttribute(&mem_clock_rate, CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE, device));
+            CUDA_CHECK(cuDeviceGetAttribute(&mem_bus_width, CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH, device));
+
+
+            return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i}", "max_shared_mem", max_shared_mem,
+                                       "multiprocessor_count", multiprocessor_count,
+                                       "sm_clock_rate", sm_clock_rate,
+                                       "mem_clock_rate", mem_clock_rate,
+                                       "mem_bus_width", mem_bus_width);
+        }
+
         static PyObject* loadBinary(PyObject* self, PyObject* args) {
             const char* name;
             const char* data;
@@ -1601,6 +1624,7 @@ class CudaUtils(object):
 
         static PyMethodDef ModuleMethods[] = {
           {"load_binary", loadBinary, METH_VARARGS, "Load provided cubin into CUDA driver"},
+          {"get_device_properties", getDeviceProperties, METH_VARARGS, "Get the properties for a given device"},
           {NULL, NULL, 0, NULL} // sentinel
         };
 
@@ -1640,6 +1664,12 @@ class CudaUtils(object):
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         self.load_binary = mod.load_binary
+        self.get_device_properties = mod.get_device_properties
 
+
+def init_cuda_utils():
+    global cuda_utils
+    if cuda_utils is None:
+        cuda_utils = CudaUtils()
 
 cuda_utils = None
