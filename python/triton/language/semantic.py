@@ -738,15 +738,17 @@ def load(ptr: tl.tensor,
         if other:
             other = broadcast_impl_shape(other, ptr.type.get_block_shapes(), builder)
 
-    if other:
-        other = cast(other, ptr.type.scalar.element_ty, builder)
     ptr_ty = ptr.type.scalar
     elt_ty = ptr_ty.element_ty
+
     # treat bool* as tl.int8*
     if elt_ty == tl.int1:
         elt_ty = tl.int8
         ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
         ptr = cast(ptr, ptr_ty, builder)
+
+    if other:
+        other = cast(other, elt_ty, builder)
 
     # cache modifier
     cache = ir.CACHE_MODIFIER.NONE  # default
