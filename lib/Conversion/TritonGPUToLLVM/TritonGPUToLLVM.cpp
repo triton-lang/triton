@@ -1003,13 +1003,26 @@ struct LoadOpConversion
       const size_t width = std::min(totalWidth, maxWordWidth);
       const size_t nWords = std::max<size_t>(1, totalWidth / width);
       const size_t wordNElems = width / valueElemNbits;
+      size_t size = width / valueElemNbits;
       assert(wordNElems * nWords * numVecs == numElems);
 
 #ifdef USE_ROCM
-      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
-        Value ret = bitcast(load(ptrElems[vecStart + wordIdx]), valueElemTy);
-        loadedVals.push_back(ret);
-      } 
+
+      Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
+      for (size_t ii = 0; ii < nWords; ++ii) {
+        for (size_t s = 0; s < size; ++s) {
+          size_t elemOffset = vecStart + ii * size + s;
+
+          // get values
+          Value trueVal = load(ptrElems[elemOffset]);
+          Value zeroVal = bitcast(i32_val(0), valueElemTy);
+          Value falseVal = other ? load(otherElems[elemOffset]) : zeroVal;
+
+          // select value based on mask
+          Value ret = select(pred, trueVal, falseVal);
+          loadedVals.push_back(ret);
+        }
+      }
 #else
       // TODO(Superjomn) Add cache policy fields to StoreOp.
       // TODO(Superjomn) Deal with cache policy here.
@@ -1211,7 +1224,9 @@ struct StoreOpConversion
             elem = rewriter.create<LLVM::SExtOp>(loc, type::i8Ty(ctx), elem);
           elem = bitcast(elem, valueElemTy);
 #ifdef USE_ROCM
-          store(elem, ptrElems[elemOffset]);
+          Value maskVal = llMask ? maskElems[vecStart] : int_val(1, 1);
+          Value ret = select(maskVal, elem , bitcast(i32_val(0), valueElemTy));
+          store(ret, ptrElems[elemOffset]);
         }
       }
 #else
