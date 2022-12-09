@@ -879,8 +879,8 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
 #shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #mma = #triton_gpu.mma<{version = 1, warpsPerCTA = [2, 2]}>
-#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma}>
-#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma}>
+#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma, isMMAv1Row=true}>
+#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma, isMMAv1Row=true}>
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   func @matmul884_kernel_dot_operand_layout(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
   %a:tensor<128x32xf16, #shared>, %b:tensor<32x256xf16, #shared>) {

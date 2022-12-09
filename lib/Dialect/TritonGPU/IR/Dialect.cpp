@@ -593,6 +593,8 @@ Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
   if(parent.isa<MmaEncodingAttr>() &&
      parent.cast<MmaEncodingAttr>().getVersion() == 1){
     isMMAv1Row = attrs.get("isMMAv1Row");
+    if(!isMMAv1Row)
+      llvm::report_fatal_error("isMMAv1Row attribute is missing");
   }
   return parser.getChecked<DotOperandEncodingAttr>(parser.getContext(), opIdx,
                                                    parent, isMMAv1Row);
