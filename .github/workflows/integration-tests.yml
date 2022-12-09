@@ -92,6 +92,11 @@ jobs:
           pytest -k "not test_where_broadcast and not test_dot" test_core.py
           pytest test_gemm.py
           pytest test_backend.py
+          pytest test_reduce.py
+          pytest test_vecadd.py
+          pytest test_elementwise.py
+          pytest test_ext_elemwise.py
+          pytest test_transpose.py
 
       - name: Run CXX unittests
         run: |
