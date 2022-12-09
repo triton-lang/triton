@@ -1560,7 +1560,7 @@ def _get_amdgcn_bitcode_paths():
                                          "oclc_correctly_rounded_sqrt_on.bc",
                                          "oclc_unsafe_math_off.bc",
                                          "oclc_wavefrontsize64_on.bc"]
-  gfx_arch_id = re.search('gfx(\\d+)', _get_amdgcn_bitcode_paths.discovered_gfx_arch).group(1).strip()
+  gfx_arch_id = re.search('gfx(\\w+)', _get_amdgcn_bitcode_paths.discovered_gfx_arch).group(1).strip()
   gpu_arch_specific_bitcode_library = 'oclc_isa_version_' + gfx_arch_id + ".bc"
   bitcode_path_dir = rocm_path_dir() + '/amdgcn/bitcode/'
   amdgcn_bitcode_paths = {}

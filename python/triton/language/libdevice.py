@@ -1004,7 +1004,8 @@ def ffs(arg0, _builder=None):
         return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                                   {(core.dtype("int32"),): ("__ockl_ctz_u32", core.dtype("int32")),
                                    (core.dtype("int64"),): ("__ockl_ctz_u64", core.dtype("int32")),
-                                   }, _builder).__add__(core.ones(shape=arg0.shape, dtype=arg0.dtype, _builder=_builder), _builder=_builder)
+                                   }, _builder).__add__(core.ones(shape=arg0.shape, dtype=arg0.dtype,
+                                   _builder=_builder), _builder=_builder)
     else:
         return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                                   {(core.dtype("int32"),): ("__nv_ffs", core.dtype("int32")),
