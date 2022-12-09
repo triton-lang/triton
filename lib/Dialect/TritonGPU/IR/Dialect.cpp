@@ -589,15 +589,22 @@ Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
   unsigned opIdx = attrs.get("opIdx").cast<IntegerAttr>().getInt();
   Attribute parent = attrs.get("parent");
-
+  Attribute isMMAv1Row;
+  if(parent.isa<MmaEncodingAttr>() &&
+     parent.cast<MmaEncodingAttr>().getVersion() == 1){
+    isMMAv1Row = attrs.get("isMMAv1Row");
+  }
   return parser.getChecked<DotOperandEncodingAttr>(parser.getContext(), opIdx,
-                                                   parent);
+                                                   parent, isMMAv1Row);
 }
 
 void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
   printer << "<{"
           << "opIdx = " << getOpIdx() << ", "
-          << "parent = " << getParent() << "}>";
+          << "parent = " << getParent();
+  if(getIsMMAv1Row())
+    printer << ", isMMAv1Row = " << getIsMMAv1Row();      
+  printer << "}>";
 }
 
 //===----------------------------------------------------------------------===//

@@ -3428,6 +3428,16 @@ Value ConvertLayoutOpConversion::lowerSharedToDotOperandMMA(
   } else if (!isOuter && mmaLayout.getVersion() == 1 &&
              isHMMA) { // tensor core v1
     DotOpMmaV1ConversionHelper helper(mmaLayout);
+    bool isMMAv1Row = dotOperandLayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
+    auto srcSharedLayout = src.getType().cast<RankedTensorType>().getEncoding().cast<SharedEncodingAttr>();
+
+    // Can only convert [1, 0] to row or [0, 1] to col for now
+    if((srcSharedLayout.getOrder()[0] == 1 && !isMMAv1Row) ||
+       (srcSharedLayout.getOrder()[0] == 0 && isMMAv1Row)){
+      llvm::errs() << "Unsupported Shared -> DotOperand[MMAv1] conversion\n";
+      return Value();
+    }
+
     if (dotOperandLayout.getOpIdx() == 0) { // operand $a
       // TODO[Superjomn]: transA is not available here.
       bool transA = false;
