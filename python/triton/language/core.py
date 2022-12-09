@@ -9,6 +9,7 @@ from triton._C.libtriton.triton import ir
 
 T = TypeVar('T')
 
+
 def _to_tensor(x, builder):
     if isinstance(x, bool):
         return tensor(builder.get_int1(x), int1)
@@ -347,6 +348,9 @@ class constexpr:
 
     def __mul__(self, other):
         return constexpr(self.value * other.value)
+
+    def __mod__(self, other):
+        return constexpr(self.value % other.value)
 
     def __rmul__(self, other):
         return constexpr(other.value * self.value)
@@ -726,9 +730,11 @@ def broadcast_to(input, shape, _builder=None):
     """
     return semantic.broadcast_impl_shape(input, shape, _builder)
 
+
 @builtin
 def trans(input, _builder=None):
     return semantic.trans(input, _builder)
+
 
 @builtin
 def cat(input, other, can_reorder=False, _builder=None):
@@ -761,6 +767,7 @@ def view(input, shape, _builder=None):
     """
     shape = [x.value for x in shape]
     return semantic.view(input, shape, _builder)
+
 
 @builtin
 def reshape(input, shape, _builder=None):
