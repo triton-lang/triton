@@ -434,11 +434,11 @@ section 9.7.13.4.1 for more details.
                      "Attribute":$parent), [{
       if(parent.isa<MmaEncodingAttr>() &&
          parent.cast<MmaEncodingAttr>().getVersion() == 1){
-        llvm::errs() << "DotOperand for MMAv1 must have isMMAv1Row field\n";
+        llvm::report_fatal_error("DotOperand for MMAv1 must have isMMAv1Row field");
         return {};
       }
       Attribute none;
-      return $_get(context, opIdx, parent, none); 
+      return $_get(context, opIdx, parent, none);
     }]>
 
   ];
