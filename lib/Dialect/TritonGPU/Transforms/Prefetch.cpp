@@ -225,6 +225,7 @@ scf::ForOp Prefetcher::createNewForOp() {
   BlockAndValueMapping mapping;
   for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs()))
     mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
+  mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
 
   for (Operation &op : forOp.getBody()->without_terminator()) {
     Operation *newOp = builder.clone(op, mapping);
