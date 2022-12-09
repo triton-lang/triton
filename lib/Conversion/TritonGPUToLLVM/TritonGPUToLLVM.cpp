@@ -4733,10 +4733,15 @@ private:
       decomposed = true;
     });
 
-    // async wait is supported in Ampere and later
     mod.walk([&](triton::gpu::AsyncWaitOp asyncWaitOp) -> void {
-      if (!triton::gpu::AsyncWaitOp::isSupported(computeCapability) ||
-          decomposed) {
+      if (!triton::gpu::AsyncWaitOp::isSupported(computeCapability)) {
+        // async wait is supported in Ampere and later
+        asyncWaitOp.erase();
+      } else if (decomposed) {
+        // Wait for all previous async ops
+        OpBuilder builder(asyncWaitOp);
+        auto newAsyncWaitOp =
+            builder.create<triton::gpu::AsyncWaitOp>(asyncWaitOp.getLoc(), 0);
         asyncWaitOp.erase();
       }
     });
