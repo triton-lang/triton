@@ -89,8 +89,8 @@ jobs:
         if: ${{matrix.runner[0] == 'self-hosted' && matrix.runner[1] == 'V100'}}
         run: |
           cd python/tests
-          pytest -v -k "not test_where_broadcast and not test_dot" test_core.py
-          pytest test_gemm.py::test_gemm_for_mmav1
+          pytest -k "not test_where_broadcast and not test_dot" test_core.py
+          pytest test_gemm.py
           pytest test_backend.py
 
       - name: Run CXX unittests
