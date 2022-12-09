@@ -316,7 +316,9 @@ def valid_on_Volta(num_warps, trans_a, trans_b, is_int8=False, is_tf32=False):
 
     capability = torch.cuda.get_device_capability()
     is_on_Volta = capability[0] < 8
-    return is_on_Volta and num_warps == 1 and not (trans_a or trans_b)
+    # TODO[Superjomn]: Remove the constraints below when features are ready
+    is_feature_ready = num_warps == 1 and not (trans_a or trans_b)
+    return is_on_Volta and is_feature_ready
 
 
 # NOTE this is useful only on Volta GPU.
