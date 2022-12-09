@@ -329,10 +329,36 @@ def valid_on_Volta(num_warps, trans_a, trans_b, is_int8=False, is_tf32=False):
     [32, 16, 32, 1, 32, 16, 32, False, False],
     [32, 32, 32, 1, 32, 32, 32, False, False],
     [128, 32, 32, 1, 128, 32, 32, False, False],
-
-    # split-K
+    # # split-K
     [16, 16, 32, 1, 16, 16, 16, False, False],
     [64, 64, 128, 1, 64, 64, 32, False, False],
+    # numWarps > 1
+    [32, 32, 64, 2, 32, 32, 32, False, False],
+    [64, 32, 64, 4, 64, 32, 64, False, False],
+    [128, 64, 128, 4, 128, 64, 128, False, False],
+    # [16, 16, 16, 16, 16, 16, 16, False, False],  # wpt overflow issue, hang on Volta
+    # K-Forloop
+    # [16, 16, 64, 4, 8, 8, 8, False, False],  # Wrap threads
+    [32, 32, 64, 4, 32, 32, 32, False, False],  # Single shared encoding
+    # [16, 16, 128, 4, 16, 16, 16, False, False],  # Single shared encoding and small k, hang on Volta
+    [64, 32, 128, 4, 64, 32, 64, False, False],
+    [128, 16, 128, 4, 128, 16, 32, False, False],
+    # [32, 16, 128, 4, 32, 16, 32, False, False], # hang on Volta
+    [32, 64, 128, 4, 32, 64, 32, False, False],
+    [32, 128, 256, 4, 32, 128, 64, False, False],
+    [64, 128, 64, 4, 64, 128, 32, False, False],
+    [64, 64, 128, 4, 64, 64, 32, False, False],
+    [128, 128, 64, 4, 128, 128, 32, False, False],
+    [128, 128, 128, 4, 128, 128, 32, False, False],
+    [128, 128, 256, 4, 128, 128, 64, False, False],
+    [128, 256, 128, 4, 128, 256, 32, False, False],
+    [256, 128, 64, 4, 256, 128, 16, False, False],
+    [128, 64, 128, 4, 128, 64, 32, False, False],
+    # [16, 16, 64, 4, 16, 16, 16, False, False], # hang on Volta
+    [32, 32, 64, 4, 32, 32, 32, False, False],
+    # trans
+    # [128, 64, 128, 4, 128, 64, 32, True, False],
+    # [128, 64, 128, 4, 128, 64, 32, False, True],
 ])
 def test_gemm_for_mmav1(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, TRANS_A, TRANS_B):
     capability = torch.cuda.get_device_capability()
