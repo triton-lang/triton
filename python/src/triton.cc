@@ -785,22 +785,88 @@ void init_triton_ir(py::module &&m) {
            [](mlir::OpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
              auto loc = self.getUnknownLoc();
+#ifdef USE_ROCM
+             mlir::Type elementType = getElementTypeOrSelf(lhs.getType());
+             unsigned typeWidth = elementType.getIntOrFloatBitWidth();
+             // Should be replaced to tensor::SplatOp in LLVM 16
+             auto constValue = self.create<mlir::arith::ConstantIntOp>(
+                 loc, typeWidth, elementType);
+             auto splatValue = self.create<mlir::triton::SplatOp>(
+                 loc, lhs.getType(), constValue);
+
+             auto zeroConst =
+                 self.create<mlir::arith::ConstantIntOp>(loc, 0, elementType);
+             auto zeroValue = self.create<mlir::triton::SplatOp>(
+                 loc, lhs.getType(), zeroConst);
+
+             auto cmpValue = self.create<mlir::arith::CmpIOp>(
+                 loc, mlir::arith::CmpIPredicate::slt, rhs, splatValue);
+
+             auto shiftValue = self.create<mlir::arith::ShLIOp>(loc, lhs, rhs);
+             return mlir::Value(self.create<mlir::SelectOp>(
+                 loc, cmpValue, shiftValue, zeroValue));
+#else
              return mlir::Value(
                  self.create<mlir::arith::ShLIOp>(loc, lhs, rhs));
+#endif
            })
       .def("create_lshr",
            [](mlir::OpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             return mlir::Value(
+#ifdef USE_ROCM
+             mlir::Type elementType = getElementTypeOrSelf(lhs.getType());
+             unsigned typeWidth = elementType.getIntOrFloatBitWidth();
+             // Should be replaced to tensor::SplatOp in LLVM 16
+             auto constValue = self.create<mlir::arith::ConstantIntOp>(
+                 loc, typeWidth, elementType);
+             auto splatValue = self.create<mlir::triton::SplatOp>(
+                 loc, lhs.getType(), constValue);
+
+             auto zeroConst =
+                 self.create<mlir::arith::ConstantIntOp>(loc, 0, elementType);
+             auto zeroValue = self.create<mlir::triton::SplatOp>(
+                 loc, lhs.getType(), zeroConst);
+
+             auto cmpValue = self.create<mlir::arith::CmpIOp>(
+                 loc, mlir::arith::CmpIPredicate::slt, rhs, splatValue);
+
+             auto shiftValue = self.create<mlir::arith::ShRUIOp>(loc, lhs, rhs);
+             return mlir::Value(self.create<mlir::SelectOp>(
+                 loc, cmpValue, shiftValue, zeroValue));
+#else
+ return mlir::Value(
                  self.create<mlir::arith::ShRUIOp>(loc, lhs, rhs));
+#endif
            })
       .def("create_ashr",
            [](mlir::OpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             return mlir::Value(
+#ifdef USE_ROCM
+             mlir::Type elementType = getElementTypeOrSelf(lhs.getType());
+             unsigned typeWidth = elementType.getIntOrFloatBitWidth();
+             // Should be replaced to tensor::SplatOp in LLVM 16
+             auto constValue = self.create<mlir::arith::ConstantIntOp>(
+                 loc, typeWidth, elementType);
+             auto splatValue = self.create<mlir::triton::SplatOp>(
+                 loc, lhs.getType(), constValue);
+
+             auto zeroConst =
+                 self.create<mlir::arith::ConstantIntOp>(loc, 0, elementType);
+             auto zeroValue = self.create<mlir::triton::SplatOp>(
+                 loc, lhs.getType(), zeroConst);
+
+             auto cmpValue = self.create<mlir::arith::CmpIOp>(
+                 loc, mlir::arith::CmpIPredicate::slt, rhs, splatValue);
+
+             auto shiftValue = self.create<mlir::arith::ShRSIOp>(loc, lhs, rhs);
+             return mlir::Value(self.create<mlir::SelectOp>(
+                 loc, cmpValue, shiftValue, zeroValue));
+#else
+                  return mlir::Value(
                  self.create<mlir::arith::ShRSIOp>(loc, lhs, rhs));
+#endif
            })
       // AddPtr (similar to GEP)
       .def("create_addptr",
