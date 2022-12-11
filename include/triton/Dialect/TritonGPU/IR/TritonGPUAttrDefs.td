@@ -432,13 +432,12 @@ section 9.7.13.4.1 for more details.
   let builders = [
     AttrBuilder<(ins "unsigned":$opIdx,
                      "Attribute":$parent), [{
+      Attribute isMMAv1Row;
       if(parent.isa<MmaEncodingAttr>() &&
          parent.cast<MmaEncodingAttr>().getVersion() == 1){
-        llvm::report_fatal_error("DotOperand for MMAv1 must have isMMAv1Row field");
-        return {};
+        isMMAv1Row = BoolAttr::get(context, true);
       }
-      Attribute none;
-      return $_get(context, opIdx, parent, none);
+      return $_get(context, opIdx, parent, isMMAv1Row);
     }]>
 
   ];

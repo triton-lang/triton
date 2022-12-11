@@ -206,6 +206,8 @@ def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLO
         b = torch.randn((SIZE_K, SIZE_N), device='cuda', dtype=torch.float16)
 
     c = torch.empty((SIZE_M, SIZE_N), device=a.device, dtype=torch.float32)
+    # matmul_kernel = triton.compile("./test.ttgir", num_warps=1)
+    # matmul_kernel[(1,1,1)](a.data_ptr(), b.data_ptr(), c.data_ptr(), 32, 32, 32)
     grid = lambda META: (1, )
     matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c,
                         stride_am=a.stride(0), stride_ak=a.stride(1),
@@ -297,22 +299,22 @@ def test_gemm_fp32(M, N, K, num_warps, block_M, block_N, block_K, allow_tf32):
 # NOTE this is useful only on Volta GPU.
 @pytest.mark.parametrize('SIZE_M,SIZE_N,SIZE_K,NUM_WARPS,BLOCK_SIZE_M,BLOCK_SIZE_N,BLOCK_SIZE_K,TRANS_A,TRANS_B', [
     # Non-forloop
-    [16, 16, 16, 1, 16, 16, 16, False, False],
-    [16, 16, 32, 1, 16, 16, 32, False, False],
-    [32, 16, 32, 1, 32, 16, 32, False, False],
-    [32, 32, 32, 1, 32, 32, 32, False, False],
-    [128, 32, 32, 1, 128, 32, 32, False, False],
+    # [16, 16, 16, 1, 16, 16, 16, False, False],
+    # [16, 16, 32, 1, 16, 16, 32, False, False],
+    # [32, 16, 32, 1, 32, 16, 32, False, False],
+    # [32, 32, 32, 1, 32, 32, 32, False, False],
+    # [128, 32, 32, 1, 128, 32, 32, False, False],
 
-    [128, 32, 32, 1, 128, 32, 32, True, False],
-    [128, 32, 32, 1, 128, 32, 32, True, True],
+    # [128, 32, 32, 1, 128, 32, 32, True, False],
+    # [128, 32, 32, 1, 128, 32, 32, True, True],
 
-    # split-K
-    [16, 16, 32, 1, 16, 16, 16, False, False],
-    [64, 64, 128, 1, 64, 64, 32, False, False],
+    # # split-K
+    # [16, 16, 32, 1, 16, 16, 16, False, False],
+    # [64, 64, 128, 1, 64, 64, 32, False, False],
 
-    [16, 16, 32, 1, 16, 16, 16, True, False],
-    [16, 16, 32, 1, 16, 16, 16, True, True],
-    [64, 64, 128, 1, 64, 64, 32, True, True],
+    # [16, 16, 32, 1, 16, 16, 16, True, False],
+    # [16, 16, 32, 1, 16, 16, 16, True, True],
+    [32, 32, 64, 1, 32, 32, 32, True, False],
 ])
 def test_gemm_for_mmav1(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, TRANS_A, TRANS_B):
     test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, TRANS_A, TRANS_B)

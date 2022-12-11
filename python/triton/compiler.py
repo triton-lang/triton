@@ -1402,11 +1402,11 @@ def compile(fn, **kwargs):
       "ttir": (lambda path: _triton.ir.parse_mlir_module(path, context), 
                lambda src: ast_to_ttir(src, signature, configs[0], constants)),
       "ttgir": (lambda path: _triton.ir.parse_mlir_module(path, context), 
-                lambda src: ttir_to_ttgir(src, num_warps, num_stages, capability)),
+                lambda src: ttir_to_ttgir(src, num_warps, num_stages, 70)),
       "llir": (lambda path: Path(path).read_bytes(), 
-              lambda src: ttgir_to_llir(src, extern_libs, capability)),
+              lambda src: ttgir_to_llir(src, extern_libs, 70)),
       "ptx":  (lambda path: Path(path).read_text(), 
-              lambda src: llir_to_ptx(src, capability)),
+              lambda src: llir_to_ptx(src, 70)),
       "cubin": (lambda path: Path(path).read_bytes(), 
                lambda src: ptx_to_cubin(src, capability))
     }
