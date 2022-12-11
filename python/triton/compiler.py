@@ -329,10 +329,6 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_BinOp(self, node):
         lhs = self.visit(node.left)
         rhs = self.visit(node.right)
-        if isinstance(lhs, triton.language.constexpr):
-            lhs = lhs.value
-        if isinstance(rhs, triton.language.constexpr):
-            rhs = rhs.value
         fn = {
             ast.Add: '__add__',
             ast.Sub: '__sub__',
@@ -591,8 +587,10 @@ class CodeGenerator(ast.NodeVisitor):
                         ast.NodeVisitor.generic_visit(self, stmt)
                 return
         # handle negative constant step (not supported by scf.for in MLIR)
+        negative_step = False
         if isinstance(step, triton.language.constexpr) and step.value < 0:
             step = triton.language.constexpr(-step.value)
+            negative_step = True
             lb, ub = ub, lb
         # lb/ub/step might be constexpr, we need to cast them to tensor
         lb = triton.language.core._to_tensor(lb, self.builder).handle
@@ -640,6 +638,9 @@ class CodeGenerator(ast.NodeVisitor):
             # update induction variable with actual value, and replace all uses
             self.builder.set_insertion_point_to_start(for_op.get_body(0))
             iv = self.builder.create_index_to_si(for_op.get_induction_var())
+            if negative_step:
+                ub_si = self.builder.create_index_to_si(ub)
+                iv = self.builder.create_sub(ub_si, iv)
             self.lscope[node.target.id].handle.replace_all_uses_with(iv)
             self.set_value(name, triton.language.core.tensor(iv, triton.language.core.int32))
 
@@ -890,9 +891,9 @@ def ttir_to_ttgir(mod, num_warps, num_stages, compute_capability):
     pm = _triton.ir.pass_manager(mod.context)
     pm.add_convert_triton_to_tritongpu_pass(num_warps)
     pm.enable_debug()
-    # Convert blocked layout to mma layout for dot ops so that pipeline
-    # can get shared memory swizzled correctly.
     pm.add_coalesce_pass()
+    # The combine pass converts blocked layout to mma layout
+    # for dot ops so that pipeline can get shared memory swizzled correctly.
     pm.add_triton_gpu_combine_pass(compute_capability)
     pm.add_tritongpu_pipeline_pass(num_stages)
     # Prefetch must be done after pipeline pass because pipeline pass
@@ -1358,12 +1359,12 @@ def make_hash(fn, **kwargs):
     return hashlib.md5((Path(fn).read_text() + triton.runtime.jit.version_key()).encode("utf-8")).hexdigest()
 
 
-# - ^\s*func\s+ : match the start of the string, any leading whitespace, the keyword func, 
+# - ^\s*func\s+ : match the start of the string, any leading whitespace, the keyword func,
 #    and any following whitespace
 # - (public\s+)? : optionally match the keyword public and any following whitespace
-# - (@\w+) : match an @ symbol followed by one or more word characters 
+# - (@\w+) : match an @ symbol followed by one or more word characters
 #   (letters, digits, or underscores), and capture it as group 1 (the function name)
-# - (\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\)) : match a pair of parentheses enclosing 
+# - (\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\)) : match a pair of parentheses enclosing
 #   zero or more arguments separated by commas, and capture it as group 2 (the argument list)
 mlir_prototype_pattern = r'^\s*func\s+(?:public\s+)?(@\w+)(\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*\{\s*$'
 ptx_prototype_pattern = r"\.(?:visible|extern)\s+\.(?:entry|func)\s+(\w+)\s*\(([^)]*)\)"
@@ -1395,20 +1396,20 @@ def compile(fn, **kwargs):
     extern_libs = kwargs.get("extern_libs", dict())
     device = kwargs.get("device", torch.cuda.current_device())
     capability = torch.cuda.get_device_capability()
-    capability = capability[0]*10 + capability[1]
+    capability = capability[0] * 10 + capability[1]
     # build compilation stages
     stages = {
-      "ast" : (lambda path: fn, None),
-      "ttir": (lambda path: _triton.ir.parse_mlir_module(path, context), 
-               lambda src: ast_to_ttir(src, signature, configs[0], constants)),
-      "ttgir": (lambda path: _triton.ir.parse_mlir_module(path, context), 
-                lambda src: ttir_to_ttgir(src, num_warps, num_stages, 70)),
-      "llir": (lambda path: Path(path).read_bytes(), 
-              lambda src: ttgir_to_llir(src, extern_libs, 70)),
-      "ptx":  (lambda path: Path(path).read_text(), 
-              lambda src: llir_to_ptx(src, 70)),
-      "cubin": (lambda path: Path(path).read_bytes(), 
-               lambda src: ptx_to_cubin(src, capability))
+        "ast": (lambda path: fn, None),
+        "ttir": (lambda path: _triton.ir.parse_mlir_module(path, context),
+                 lambda src: ast_to_ttir(src, signature, configs[0], constants)),
+        "ttgir": (lambda path: _triton.ir.parse_mlir_module(path, context),
+                  lambda src: ttir_to_ttgir(src, num_warps, num_stages, capability)),
+        "llir": (lambda path: Path(path).read_bytes(),
+                 lambda src: ttgir_to_llir(src, extern_libs, capability)),
+        "ptx": (lambda path: Path(path).read_text(),
+                lambda src: llir_to_ptx(src, capability)),
+        "cubin": (lambda path: Path(path).read_bytes(),
+                  lambda src: ptx_to_cubin(src, capability))
     }
     # find out the signature of the function
     if isinstance(fn, triton.runtime.JITFunction):
@@ -1467,8 +1468,8 @@ def compile(fn, **kwargs):
       if ir == ext:
         next_module = parse(fn)
       elif os.path.exists(path) and\
-           ir in metadata["ctime"] and\
-           os.path.getctime(path) == metadata["ctime"][ir]:
+              ir in metadata["ctime"] and\
+              os.path.getctime(path) == metadata["ctime"][ir]:
         next_module = parse(path)
       else:
         next_module = compile(module)
@@ -1504,8 +1505,7 @@ class CompiledKernel:
         self.asm = asm
         device = torch.cuda.current_device()
         global cuda_utils
-        if cuda_utils is None:
-            cuda_utils = CudaUtils()
+        init_cuda_utils()
         mod, func, n_regs, n_spills = cuda_utils.load_binary(metadata["name"], self.asm["cubin"], self.shared, device)
         self.cu_module = mod
         self.cu_function = func
@@ -1562,6 +1562,34 @@ class CudaUtils(object):
 
         #define CUDA_CHECK(ans) { gpuAssert((ans), __FILE__, __LINE__); if(PyErr_Occurred()) return NULL; }
 
+        static PyObject* getDeviceProperties(PyObject* self, PyObject* args){
+            int device_id;
+            if(!PyArg_ParseTuple(args, "i", &device_id))
+                return NULL;
+            // Get device handle
+            CUdevice device;
+            cuDeviceGet(&device, device_id);
+
+            // create a struct to hold device properties
+            int max_shared_mem;
+            int multiprocessor_count;
+            int sm_clock_rate;
+            int mem_clock_rate;
+            int mem_bus_width;
+            CUDA_CHECK(cuDeviceGetAttribute(&max_shared_mem, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK, device));
+            CUDA_CHECK(cuDeviceGetAttribute(&multiprocessor_count, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device));
+            CUDA_CHECK(cuDeviceGetAttribute(&sm_clock_rate, CU_DEVICE_ATTRIBUTE_CLOCK_RATE, device));
+            CUDA_CHECK(cuDeviceGetAttribute(&mem_clock_rate, CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE, device));
+            CUDA_CHECK(cuDeviceGetAttribute(&mem_bus_width, CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH, device));
+
+
+            return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i}", "max_shared_mem", max_shared_mem,
+                                       "multiprocessor_count", multiprocessor_count,
+                                       "sm_clock_rate", sm_clock_rate,
+                                       "mem_clock_rate", mem_clock_rate,
+                                       "mem_bus_width", mem_bus_width);
+        }
+
         static PyObject* loadBinary(PyObject* self, PyObject* args) {
             const char* name;
             const char* data;
@@ -1601,6 +1629,7 @@ class CudaUtils(object):
 
         static PyMethodDef ModuleMethods[] = {
           {"load_binary", loadBinary, METH_VARARGS, "Load provided cubin into CUDA driver"},
+          {"get_device_properties", getDeviceProperties, METH_VARARGS, "Get the properties for a given device"},
           {NULL, NULL, 0, NULL} // sentinel
         };
 
@@ -1640,6 +1669,13 @@ class CudaUtils(object):
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         self.load_binary = mod.load_binary
+        self.get_device_properties = mod.get_device_properties
+
+
+def init_cuda_utils():
+    global cuda_utils
+    if cuda_utils is None:
+        cuda_utils = CudaUtils()
 
 
 cuda_utils = None

@@ -481,7 +481,8 @@ def view(input: tl.tensor,
          dst_shape: List[int],
          builder: ir.builder) -> tl.tensor:
     # TODO: disable when TritonToTritonGPU handles views properly
-    assert len(input.shape) == len(dst_shape)
+    
+    # assert len(input.shape) == len(dst_shape)
     numel = 1
     for s in dst_shape:
         numel *= s

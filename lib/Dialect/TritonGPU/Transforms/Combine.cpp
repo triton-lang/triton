@@ -617,13 +617,15 @@ SmallVector<unsigned, 2> warpsPerTileV1(triton::DotOp dotOp,
   bool changed = false;
   do {
     changed = false;
+    int pre = ret[0];
     if (ret[0] * ret[1] < numWarps) {
       ret[0] = std::clamp<unsigned>(ret[0] * 2, 1, shape[0] / shapePerWarp[0]);
-      changed = true;
+      changed = pre != ret[0];
     }
     if (ret[0] * ret[1] < numWarps) {
+      pre = ret[1];
       ret[1] = std::clamp<unsigned>(ret[1] * 2, 1, shape[1] / shapePerWarp[1]);
-      changed = true;
+      changed = pre != ret[1];
     }
   } while (changed);
   return ret;
@@ -843,8 +845,8 @@ public:
 
     a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), newAType, a);
     b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), newBType, b);
-    auto newDot = rewriter.create<triton::DotOp>(
-        dotOp.getLoc(), newRetType, a, b, newAcc, dotOp.allowTF32());
+    auto newDot = rewriter.create<triton::DotOp>(dotOp.getLoc(), newRetType, a,
+                                                 b, newAcc, dotOp.allowTF32());
 
     rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
         op, oldRetType, newDot.getResult());

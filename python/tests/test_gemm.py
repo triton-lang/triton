@@ -43,6 +43,8 @@ def matmul_no_scf_kernel(
     for trans_b in [False, True]
 ])
 def test_gemm_no_scf(SHAPE, NUM_WARPS, TRANS_A, TRANS_B):
+    guard_for_volta(NUM_WARPS, TRANS_A, TRANS_B)
+
     SIZE_M, SIZE_N, SIZE_K = SHAPE
     if (TRANS_A):
         a = torch.randn((SIZE_K, SIZE_M), device='cuda', dtype=torch.float16).T
@@ -81,6 +83,8 @@ def test_gemm_no_scf(SHAPE, NUM_WARPS, TRANS_A, TRANS_B):
     for trans_b in [False, True]
 ])
 def test_gemm_no_scf_int8(SHAPE, NUM_WARPS, TRANS_A, TRANS_B):
+    guard_for_volta(NUM_WARPS, TRANS_A, TRANS_B, is_int8=True)
+
     SIZE_M, SIZE_N, SIZE_K = SHAPE
 
     if (TRANS_A):
@@ -195,6 +199,8 @@ def get_proper_err(a, b, golden):
     [128, 64, 128, 4, 128, 64, 32, False, True],
 ])
 def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, TRANS_A, TRANS_B):
+    guard_for_volta(NUM_WARPS, TRANS_A, TRANS_B)
+
     if (TRANS_A):
         a = torch.randn((SIZE_K, SIZE_M), device='cuda', dtype=torch.float16).T
     else:
@@ -272,6 +278,8 @@ def test_gemm_fp32(M, N, K, num_warps, block_M, block_N, block_K, allow_tf32):
         c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
         tl.store(c_ptrs, accumulator, c_mask)
 
+    guard_for_volta(num_warps, trans_a=False, trans_b=False, is_tf32=allow_tf32)
+
     # Configure the pytorch counterpart
     torch.backends.cuda.matmul.allow_tf32 = allow_tf32
 
@@ -296,26 +304,17 @@ def test_gemm_fp32(M, N, K, num_warps, block_M, block_N, block_K, allow_tf32):
         torch.testing.assert_close(c, golden, rtol=max(1e-4, 1.5 * golden_rel_err), atol=max(1e-4, 1.5 * golden_abs_err))
 
 
-# NOTE this is useful only on Volta GPU.
-@pytest.mark.parametrize('SIZE_M,SIZE_N,SIZE_K,NUM_WARPS,BLOCK_SIZE_M,BLOCK_SIZE_N,BLOCK_SIZE_K,TRANS_A,TRANS_B', [
-    # Non-forloop
-    [16, 16, 16, 1, 16, 16, 16, False, False],
-    [16, 16, 32, 1, 16, 16, 32, False, False],
-    [32, 16, 32, 1, 32, 16, 32, False, False],
-    [32, 32, 32, 1, 32, 32, 32, False, False],
-    [128, 32, 32, 1, 128, 32, 32, False, False],
+def guard_for_volta(num_warps, trans_a, trans_b, is_int8=False, is_tf32=False):
+    '''
+    Tell whether the test case is valid on Volta GPU.
+    Some features are WIP, so the corresponding support are missing.
+    '''
+    capability = torch.cuda.get_device_capability()
+    is_on_Volta = capability[0] < 8
+    # TODO[Superjomn]: Remove the constraints below when features are ready
+    is_feature_supported = not (is_int8 or is_tf32)
+    is_feature_ready = not (trans_a or trans_b)
 
-    [128, 32, 32, 1, 128, 32, 32, True, False],
-    [128, 32, 32, 1, 128, 32, 32, True, True],
-
-    # split-K
-    [16, 16, 32, 1, 16, 16, 16, False, False],
-    [64, 64, 128, 1, 64, 64, 32, False, False],
-
-    [16, 16, 32, 1, 16, 16, 16, True, False],
-    [16, 16, 32, 1, 16, 16, 16, True, True],
-    [32, 32, 64, 1, 32, 32, 32, True, True],
-])
-def test_gemm_for_mmav1(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, TRANS_A, TRANS_B):
-    test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, TRANS_A, TRANS_B)
-
+    if is_on_Volta:
+        if (not is_feature_supported) or (not is_feature_ready):
+            pytest.skip("Not valid on Volta")
