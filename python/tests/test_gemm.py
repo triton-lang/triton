@@ -199,7 +199,7 @@ def get_proper_err(a, b, golden):
     [128, 64, 128, 4, 128, 64, 32, False, True],
 ])
 def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, TRANS_A, TRANS_B):
-    guard_for_volta(NUM_WARPS, TRANS_A, TRANS_B):
+    guard_for_volta(NUM_WARPS, TRANS_A, TRANS_B)
 
     if (TRANS_A):
         a = torch.randn((SIZE_K, SIZE_M), device='cuda', dtype=torch.float16).T
@@ -307,13 +307,10 @@ def guard_for_volta(num_warps, trans_a, trans_b, is_int8=False, is_tf32=False):
     Tell whether the test case is valid on Volta GPU.
     Some features are WIP, so the corresponding support are missing.
     '''
-    if is_int8 or is_tf32:
-        return False
-
     capability = torch.cuda.get_device_capability()
     is_on_Volta = capability[0] < 8
     # TODO[Superjomn]: Remove the constraints below when features are ready
-    is_feature_ready = not (trans_a or trans_b)
+    is_feature_ready = not (is_int8 or is_tf32 or trans_a or trans_b)
 
     if is_on_Volta:
         if not is_feature_ready:
