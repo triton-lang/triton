@@ -852,6 +852,51 @@ public:
   }
 };
 
+class FixupLoop : public mlir::RewritePattern {
+
+public:
+  FixupLoop(mlir::MLIRContext *context)
+      : mlir::RewritePattern(scf::ForOp::getOperationName(), 2,
+                             context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto forOp = cast<scf::ForOp>(op);
+
+    // Rewrite init argument
+    SmallVector<Value, 4> newInitArgs = forOp.getInitArgs();
+    bool shouldRematerialize = false;
+    for(size_t i = 0; i < newInitArgs.size(); i++){
+      auto initArg = newInitArgs[i];
+      auto regionArg = forOp.getRegionIterArgs()[i];
+      if(newInitArgs[i].getType() != forOp.getRegionIterArgs()[i].getType()){
+        shouldRematerialize = true;
+        break;
+      }
+    }
+    if(!shouldRematerialize)
+      return failure();
+    
+    scf::ForOp newForOp = rewriter.create<scf::ForOp>(
+        forOp.getLoc(), forOp.getLowerBound(), forOp.getUpperBound(),
+        forOp.getStep(), newInitArgs);
+    newForOp->moveBefore(forOp);
+    rewriter.setInsertionPointToStart(newForOp.getBody());
+    BlockAndValueMapping mapping;
+    for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs()))
+      mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
+
+    for (Operation &op : forOp.getBody()->getOperations()) {
+      Operation *newOp = rewriter.clone(op, mapping);
+    }
+    rewriter.replaceOp(forOp, newForOp.getResults());
+    return success();
+
+
+  }
+};
+
 } // namespace
 
 #define GEN_PASS_CLASSES
@@ -871,7 +916,7 @@ public:
     mlir::RewritePatternSet patterns(context);
 
     patterns.add<OptimizeBlockedToShared>(context);
-    // patterns.add<OptimizeConvertToDotOperand>(context);
+    patterns.add<OptimizeConvertToDotOperand>(context);
     patterns.add<SimplifyConversion>(context);
     patterns.add<DecomposeDotOperand>(context);
     patterns.add<RematerializeBackward>(context);
@@ -883,6 +928,12 @@ public:
       signalPassFailure();
     }
 
+    // llvm::outs() << m << "\n";
+    mlir::RewritePatternSet loopFixup(context);
+    loopFixup.add<FixupLoop>(context);
+    if (applyPatternsAndFoldGreedily(m, std::move(loopFixup)).failed()) {
+      signalPassFailure();
+    }
   }
 };
 
