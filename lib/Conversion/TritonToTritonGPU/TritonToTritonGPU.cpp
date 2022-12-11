@@ -262,10 +262,10 @@ struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
     // For now, this behaves like generic, but this will evolve when
     // we add support for `can_reorder=False`
     Type retType = this->getTypeConverter()->convertType(op.getType());
-    rewriter.replaceOpWithNewOp<triton::CatOp>(op, retType, adaptor.getOperands());
+    rewriter.replaceOpWithNewOp<triton::CatOp>(op, retType,
+                                               adaptor.getOperands());
     return success();
   }
-
 };
 
 struct TritonTransPattern : public OpConversionPattern<triton::TransOp> {
@@ -450,13 +450,11 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       TritonGenericPattern<triton::IntToPtrOp>,
       TritonGenericPattern<triton::PtrToIntOp>,
       TritonGenericPattern<triton::SplatOp>, TritonBroadcastPattern,
-      TritonGenericPattern<triton::AddPtrOp>, 
-      TritonCatPattern,
-      TritonReducePattern,
-      TritonTransPattern, TritonExpandDimsPattern, TritonMakeRangePattern,
-      TritonDotPattern, TritonLoadPattern, TritonStorePattern,
-      TritonExtElemwisePattern, TritonPrintfPattern, TritonAtomicRMWPattern>(
-      typeConverter, context);
+      TritonGenericPattern<triton::AddPtrOp>, TritonCatPattern,
+      TritonReducePattern, TritonTransPattern, TritonExpandDimsPattern,
+      TritonMakeRangePattern, TritonDotPattern, TritonLoadPattern,
+      TritonStorePattern, TritonExtElemwisePattern, TritonPrintfPattern,
+      TritonAtomicRMWPattern>(typeConverter, context);
 }
 
 //
