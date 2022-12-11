@@ -310,8 +310,9 @@ def guard_for_volta(num_warps, trans_a, trans_b, is_int8=False, is_tf32=False):
     capability = torch.cuda.get_device_capability()
     is_on_Volta = capability[0] < 8
     # TODO[Superjomn]: Remove the constraints below when features are ready
-    is_feature_ready = not (is_int8 or is_tf32 or trans_a or trans_b)
+    is_feature_supported = not (is_int8 or is_tf32)
+    is_feature_ready = not (trans_a or trans_b)
 
     if is_on_Volta:
-        if not is_feature_ready:
+        if (not is_feature_supported) or (not is_feature_ready):
             pytest.skip("Not valid on Volta")
