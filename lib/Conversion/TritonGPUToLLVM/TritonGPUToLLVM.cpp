@@ -3702,38 +3702,19 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
   auto bShape = bTensorTy.getShape();
   auto cShape = cTensorTy.getShape();
 
-  ValueTable has, hbs;
-  int mShapePerCTA{-1}, nShapePerCTA{-1};
-  int mSizePerThread{-1}, nSizePerThread{-1};
-  ArrayRef<unsigned> aOrder, bOrder;
-  Value llA, llB;
   BlockedEncodingAttr dLayout =
       dTensorTy.getEncoding().cast<BlockedEncodingAttr>();
   auto order = dLayout.getOrder();
   auto cc = getElementsFromStruct(loc, adaptor.c(), rewriter);
 
   DotOpFMAConversionHelper helper(dLayout);
-  if (auto aDotOpLayout =
-          aTensorTy.getEncoding()
-              .dyn_cast<DotOperandEncodingAttr>()) { // get input from
-                                                     // convert_layout
-    auto bDotOpLayout =
-        bTensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
-    auto aLayout = aDotOpLayout.getParent().cast<BlockedEncodingAttr>();
-    auto bLayout = bDotOpLayout.getParent().cast<BlockedEncodingAttr>();
+  auto aDotOpLayout = aTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+  auto bDotOpLayout = bTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+  auto aLayout = aDotOpLayout.getParent().cast<BlockedEncodingAttr>();
+  auto bLayout = bDotOpLayout.getParent().cast<BlockedEncodingAttr>();
 
-    assert(bLayout);
-    llA = adaptor.a();
-    llB = adaptor.b();
-  } else if (auto aLayout =
-                 aTensorTy.getEncoding()
-                     .dyn_cast<SharedEncodingAttr>()) { // load input from smem
-    auto bLayout = bTensorTy.getEncoding().dyn_cast<SharedEncodingAttr>();
-    assert(bLayout);
-    Value thread = getThreadId(rewriter, loc);
-    llA = helper.loadA(A, adaptor.a(), dLayout, thread, loc, rewriter);
-    llB = helper.loadB(B, adaptor.b(), dLayout, thread, loc, rewriter);
-  }
+  Value llA = adaptor.a();
+  Value llB = adaptor.b();
 
   auto sizePerThread = getSizePerThread(dLayout);
   auto shapePerCTA = getShapePerCTA(dLayout);
@@ -3742,17 +3723,19 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
   int M = aShape[0];
   int N = bShape[1];
 
-  mShapePerCTA = order[0] == 1 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
-  mSizePerThread =
+  int mShapePerCTA =
+      order[0] == 1 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
+  int mSizePerThread =
       order[0] == 1 ? sizePerThread[order[1]] : sizePerThread[order[0]];
-  nShapePerCTA = order[0] == 0 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
-  nSizePerThread =
+  int nShapePerCTA =
+      order[0] == 0 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
+  int nSizePerThread =
       order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
 
-  has = helper.getValueTableFromStruct(llA, K, M, mShapePerCTA, mSizePerThread,
-                                       rewriter, loc);
-  hbs = helper.getValueTableFromStruct(llB, K, N, nShapePerCTA, nSizePerThread,
-                                       rewriter, loc);
+  auto has = helper.getValueTableFromStruct(llA, K, M, mShapePerCTA,
+                                            mSizePerThread, rewriter, loc);
+  auto hbs = helper.getValueTableFromStruct(llB, K, N, nShapePerCTA,
+                                            nSizePerThread, rewriter, loc);
 
   SmallVector<Value> ret = cc;
   for (unsigned k = 0; k < K; k++) {
@@ -3763,7 +3746,6 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
           for (unsigned nn = 0; nn < nSizePerThread; ++nn) {
             ret[z] = rewriter.create<LLVM::FMulAddOp>(loc, has[{m + mm, k}],
                                                       hbs[{n + nn, k}], ret[z]);
-
             ++z;
           }
   }
