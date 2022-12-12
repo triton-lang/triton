@@ -120,6 +120,7 @@ void init_triton_ir(py::module &&m) {
         // some placeholders
         self.getOrLoadDialect<mlir::triton::TritonDialect>();
         self.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
+        self.getOrLoadDialect<mlir::gpu::GPUDialect>();
       });
   // .def(py::init([](){
   //   mlir::MLIRContext context;
@@ -1265,7 +1266,13 @@ void init_triton_ir(py::module &&m) {
            [](mlir::OpBuilder &self, mlir::Type &type) -> mlir::Value {
              auto loc = self.getUnknownLoc();
              return self.create<::mlir::LLVM::UndefOp>(loc, type);
-           });
+           })
+     // Force GPU barrier
+     .def("create_barrier",
+          [](mlir::OpBuilder &self) {
+            auto loc = self.getUnknownLoc();
+            self.create<mlir::gpu::BarrierOp>(loc);
+          });
 
   py::class_<mlir::PassManager>(m, "pass_manager")
       .def(py::init<mlir::MLIRContext *>())
