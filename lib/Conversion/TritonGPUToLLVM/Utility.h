@@ -31,6 +31,7 @@
 #include <numeric>
 
 // Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
+// Operators
 #define inttoptr(...) rewriter.create<LLVM::IntToPtrOp>(loc, __VA_ARGS__)
 #define ptrtoint(...) rewriter.create<LLVM::PtrToIntOp>(loc, __VA_ARGS__)
 #define zext(...) rewriter.create<LLVM::ZExtOp>(loc, __VA_ARGS__)
@@ -40,6 +41,7 @@
 #define sub(...) rewriter.create<LLVM::SubOp>(loc, __VA_ARGS__)
 #define fadd(...) rewriter.create<LLVM::FAddOp>(loc, __VA_ARGS__)
 #define mul(...) rewriter.create<LLVM::MulOp>(loc, __VA_ARGS__)
+#define fmul(...) rewriter.create<LLVM::FMulOp>(loc, __VA_ARGS__)
 #define smax(...) rewriter.create<LLVM::SMaxOp>(loc, __VA_ARGS__)
 #define umax(...) rewriter.create<LLVM::UMaxOp>(loc, __VA_ARGS__)
 #define fmax(...) rewriter.create<LLVM::MaxNumOp>(loc, __VA_ARGS__)
@@ -90,6 +92,8 @@
 #define address_of(...) rewriter.create<LLVM::AddressOfOp>(loc, __VA_ARGS__)
 #define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
+
+// Types
 #define i32_ty rewriter.getIntegerType(32)
 #define ui32_ty rewriter.getIntegerType(32, false)
 #define f16_ty rewriter.getF16Type()
@@ -102,8 +106,9 @@
 #define f64_val(...) LLVM::createConstantF64(loc, rewriter, __VA_ARGS__)
 #define void_ty(ctx) LLVM::LLVMVoidType::get(ctx)
 #define struct_ty(...) LLVM::LLVMStructType::getLiteral(ctx, __VA_ARGS__)
+#define array_ty(elemTy, count) LLVM::LLVMArrayType::get(elemTy, count)
 
-// Creator for constant
+// Constants
 #define i32_val(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
 #define int_val(width, val)                                                    \
   LLVM::createLLVMIntegerConstant(rewriter, loc, width, val)
