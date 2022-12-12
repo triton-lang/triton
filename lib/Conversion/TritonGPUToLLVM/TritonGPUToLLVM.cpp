@@ -3569,43 +3569,27 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
   auto ATensorTy = A.getType().cast<RankedTensorType>();
   auto BTensorTy = B.getType().cast<RankedTensorType>();
   auto DTensorTy = D.getType().cast<RankedTensorType>();
-  SmallVector<int> AShape(ATensorTy.getShape().begin(),
-                          ATensorTy.getShape().end());
-  SmallVector<int> BShape(BTensorTy.getShape().begin(),
-                          BTensorTy.getShape().end());
+  auto AShape = ATensorTy.getShape();
+  auto BShape = BTensorTy.getShape();
   auto DShape = DTensorTy.getShape();
   auto wpt = mmaLayout.getWarpsPerCTA();
 
   bool isARow = ALayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
   bool isBRow = BLayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
-  bool isAVec4 = !isARow && AShape[isARow] <= 16; // fp16*4 = 16bytes
-  bool isBVec4 = isBRow && BShape[isBRow] <= 16;
-  // TODO[Superjomn]: ld.v4 is not supported.
-  isAVec4 = true;
-  isBVec4 = true;
 
-  int packSize0 = (isARow || isAVec4) ? 1 : 2;
-  int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
-  SmallVector<int> fpw({2, 2, 1});
-  SmallVector<int> rep({2 * packSize0, 2 * packSize1, 1});
-  SmallVector<int> spw({fpw[0] * 4 * rep[0], fpw[1] * 4 * rep[1], 1});
-
-  Value loadedA = adaptor.a();
-  Value loadedB = adaptor.b();
-  Value loadedC = adaptor.c();
   DotOpMmaV1ConversionHelper helper(mmaLayout);
 
-  unsigned numM = rep[0] * DShape[0] / (spw[0] * wpt[0]);
-  unsigned numN = rep[1] * DShape[1] / (spw[1] * wpt[1]);
+  unsigned numM = helper.getNumM(AShape, isARow);
+  unsigned numN = helper.getNumN(BShape, isBRow);
   unsigned NK = AShape[1];
 
-  auto has = helper.extractLoadedOperand(loadedA, NK, rewriter);
-  auto hbs = helper.extractLoadedOperand(loadedB, NK, rewriter);
+  auto has = helper.extractLoadedOperand(adaptor.a(), NK, rewriter);
+  auto hbs = helper.extractLoadedOperand(adaptor.b(), NK, rewriter);
 
   // Initialize accumulators with external values, the acc holds the accumulator
   // value that is shared between the MMA instructions inside a DotOp, we can
   // call the order of the values the accumulator-internal order.
-  SmallVector<Value> acc = getElementsFromStruct(loc, loadedC, rewriter);
+  SmallVector<Value> acc = getElementsFromStruct(loc, adaptor.c(), rewriter);
   size_t resSize = acc.size();
 
   // The resVals holds the final result of the DotOp.

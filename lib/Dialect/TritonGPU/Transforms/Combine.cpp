@@ -772,7 +772,7 @@ public:
                                                   int version, int numWarps) {
     switch (version) {
     case 1:
-      return warpsPerTileV1(dotOp, shape, numWarps);
+      return warpsPerTileV1(shape, numWarps);
     case 2:
       return warpsPerTileV2(dotOp, shape, numWarps);
     default:
