@@ -72,7 +72,7 @@ def test_gemm_no_scf(SHAPE, NUM_WARPS, TRANS_A, TRANS_B):
     for shape in [
         [64, 128, 128],
         [128, 128, 128],
-        [16, 8, 32],
+        [16, 16, 32],
         [32, 16, 64],
         [32, 16, 64],
     ]
