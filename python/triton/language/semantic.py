@@ -983,6 +983,11 @@ def dot(lhs: tl.tensor,
         allow_tf32: bool,
         builder: ir.builder) -> tl.tensor:
     assert lhs.type.is_block() and rhs.type.is_block()
+    assert len(lhs.shape) == 2 and len(rhs.shape) == 2
+    assert lhs.shape[1].value == rhs.shape[0].value
+    assert lhs.shape[0].value >= 16 and lhs.shape[1].value >= 16 \
+           and rhs.shape[1].value >= 16,\
+        "small blocks not supported!"
     if lhs.type.scalar.is_int():
         _0 = builder.get_int32(0)
         ret_scalar_ty = tl.int32
@@ -1139,7 +1144,7 @@ def max_contiguous(x: tl.tensor, values: List[int]) -> tl.tensor:
 
 
 def debug_barrier(builder: ir.builder) -> tl.tensor:
-    return tl.tensor(builder.create_barrier(''), tl.void)
+    return tl.tensor(builder.create_barrier(), tl.void)
 
 
 def printf(prefix: str, args: List[tl.tensor], builder: ir.builder) -> tl.tensor:
