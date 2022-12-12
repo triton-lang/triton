@@ -32,7 +32,7 @@ def matmul_no_scf_kernel(
     (shape, num_warps, trans_a, trans_b)
     for shape in [
         [128, 256, 32],
-        [256, 128, 16],
+        # [256, 128, 16],
         [128, 16, 32],
         [32, 128, 64],
         [128, 128, 64],
