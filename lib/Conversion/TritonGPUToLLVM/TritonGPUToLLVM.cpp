@@ -4879,13 +4879,13 @@ protected:
 void ConvertTritonGPUToLLVM::initSharedMemory(
     size_t size, TritonGPUToLLVMTypeConverter &typeConverter) {
   ModuleOp mod = getOperation();
-  OpBuilder rewriter(mod.getBodyRegion());
+  OpBuilder b(mod.getBodyRegion());
   auto loc = mod.getLoc();
-  auto elemTy = typeConverter.convertType(i8_ty);
+  auto elemTy = typeConverter.convertType(b.getIntegerType(8));
   // Set array size 0 and external linkage indicates that we use dynamic
   // shared allocation to allow a larger shared memory size for each kernel.
-  auto arrayTy = array_ty(elemTy, 0);
-  auto global = rewriter.create<LLVM::GlobalOp>(
+  auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
+  auto global = b.create<LLVM::GlobalOp>(
       loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
       "global_smem", /*value=*/Attribute(),
       /*alignment=*/0, mlir::gpu::GPUDialect::getWorkgroupAddressSpace());
@@ -4893,11 +4893,11 @@ void ConvertTritonGPUToLLVM::initSharedMemory(
   mod.walk([&](LLVM::LLVMFuncOp func) { funcs.push_back(func); });
   assert(funcs.size() == 1 &&
          "Inliner pass is expected before TritonGPUToLLVM");
-  rewriter.setInsertionPointToStart(&funcs[0].getBody().front());
-  smem = address_of(global);
-  auto ptrTy = LLVM::LLVMPointerType::get(
-      typeConverter.convertType(rewriter.getI8Type()), 3);
-  smem = bitcast(smem, ptrTy);
+  b.setInsertionPointToStart(&funcs[0].getBody().front());
+  smem = b.create<LLVM::AddressOfOp>(loc, global);
+  auto ptrTy =
+      LLVM::LLVMPointerType::get(typeConverter.convertType(b.getI8Type()), 3);
+  smem = b.create<LLVM::BitcastOp>(loc, ptrTy, smem);
 }
 
 } // namespace
