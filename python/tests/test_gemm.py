@@ -209,8 +209,6 @@ def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLO
         b = torch.randn((SIZE_K, SIZE_N), device='cuda', dtype=torch.float16)
 
     c = torch.empty((SIZE_M, SIZE_N), device=a.device, dtype=torch.float32)
-    # matmul_kernel = triton.compile("./test.ttgir", num_warps=1)
-    # matmul_kernel[(1,1,1)](a.data_ptr(), b.data_ptr(), c.data_ptr(), 32, 32, 32)
     grid = lambda META: (1, )
     matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c,
                         stride_am=a.stride(0), stride_ak=a.stride(1),
