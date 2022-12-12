@@ -739,7 +739,6 @@ Value convertSplatLikeOp(Type elemType, Type resType, Value constVal,
   auto tensorTy = resType.cast<RankedTensorType>();
   if (tensorTy.getEncoding().isa<BlockedEncodingAttr>() ||
       tensorTy.getEncoding().isa<SliceEncodingAttr>()) {
-    auto tensorTy = resType.cast<RankedTensorType>();
     auto srcType = typeConverter->convertType(elemType);
     auto llSrc = bitcast(constVal, srcType);
     size_t elemsPerThread = getElemsPerThread(tensorTy);
@@ -981,7 +980,7 @@ struct LoadOpConversion
           size_t size = width / valueElemNbits;
 
           auto vecTy = LLVM::getFixedVectorType(valueElemTy, size);
-          Value v = rewriter.create<LLVM::UndefOp>(loc, vecTy);
+          Value v = undef(vecTy);
           for (size_t s = 0; s < size; ++s) {
             Value falseVal = otherElems[vecStart + ii * size + s];
             Value sVal = createIndexAttrConstant(
@@ -1118,7 +1117,7 @@ struct StoreOpConversion
       SmallVector<std::pair<Value, std::string>> asmArgs;
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         // llWord is a width-len composition
-        Value llWord = rewriter.create<LLVM::UndefOp>(loc, wordTy);
+        Value llWord = undef(wordTy);
         // Insert each value element to the composition
         for (size_t elemIdx = 0; elemIdx < wordNElems; ++elemIdx) {
           const size_t elemOffset = vecStart + wordIdx * wordNElems + elemIdx;
@@ -4916,13 +4915,13 @@ protected:
 void ConvertTritonGPUToLLVM::initSharedMemory(
     size_t size, TritonGPUToLLVMTypeConverter &typeConverter) {
   ModuleOp mod = getOperation();
-  OpBuilder b(mod.getBodyRegion());
+  OpBuilder rewriter(mod.getBodyRegion());
   auto loc = mod.getLoc();
-  auto elemTy = typeConverter.convertType(b.getIntegerType(8));
+  auto elemTy = typeConverter.convertType(i8_ty);
   // Set array size 0 and external linkage indicates that we use dynamic
   // shared allocation to allow a larger shared memory size for each kernel.
-  auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
-  auto global = b.create<LLVM::GlobalOp>(
+  auto arrayTy = array_ty(elemTy, 0);
+  auto global = rewriter.create<LLVM::GlobalOp>(
       loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
       "global_smem", /*value=*/Attribute(),
       /*alignment=*/0, mlir::gpu::GPUDialect::getWorkgroupAddressSpace());
@@ -4930,11 +4929,11 @@ void ConvertTritonGPUToLLVM::initSharedMemory(
   mod.walk([&](LLVM::LLVMFuncOp func) { funcs.push_back(func); });
   assert(funcs.size() == 1 &&
          "Inliner pass is expected before TritonGPUToLLVM");
-  b.setInsertionPointToStart(&funcs[0].getBody().front());
-  smem = b.create<LLVM::AddressOfOp>(loc, global);
-  auto ptrTy =
-      LLVM::LLVMPointerType::get(typeConverter.convertType(b.getI8Type()), 3);
-  smem = b.create<LLVM::BitcastOp>(loc, ptrTy, smem);
+  rewriter.setInsertionPointToStart(&funcs[0].getBody().front());
+  smem = address_of(global);
+  auto ptrTy = LLVM::LLVMPointerType::get(
+      typeConverter.convertType(rewriter.getI8Type()), 3);
+  smem = bitcast(smem, ptrTy);
 }
 
 } // namespace
