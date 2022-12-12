@@ -1385,6 +1385,8 @@ arg_type_pattern = {
 
 # def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
 def compile(fn, **kwargs):
+    capability = torch.cuda.get_device_capability()
+    capability = capability[0] * 10 + capability[1]
     # we get the kernel, i.e. the first function generated in the module
     # if fn is not a JITFunction, then it
     # has to be a path to a file
@@ -1392,11 +1394,9 @@ def compile(fn, **kwargs):
     asm = dict()
     constants = kwargs.get("constants", dict())
     num_warps = kwargs.get("num_warps", 4)
-    num_stages = kwargs.get("num_stages", 3)
+    num_stages = kwargs.get("num_stages", 3 if capability >= 75 else 2)
     extern_libs = kwargs.get("extern_libs", dict())
     device = kwargs.get("device", torch.cuda.current_device())
-    capability = torch.cuda.get_device_capability()
-    capability = capability[0] * 10 + capability[1]
     # build compilation stages
     stages = {
         "ast": (lambda path: fn, None),

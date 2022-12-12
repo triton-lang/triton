@@ -416,15 +416,35 @@ In TritonGPU dialect, considering `d = tt.dot a, b, c`
 tt.dot's operands a and b must be of DotOperandEncodingAttr layout.
 a's opIdx is 0, b's opIdx is 1.
 The parend field in DotOperandEncodingAttr is the layout of d.
+
+For MMA v1, an additional attribute `isMMAv1Row` determines whether e.g. the a operand is used
+in the context of an mma.884.row.col or an mma.884.col.col operation. See the PTX ISA documentation
+section 9.7.13.4.1 for more details.
   }];
 
   let parameters = (
     ins
     "unsigned":$opIdx,
-    "Attribute":$parent
+    "Attribute":$parent,
+    "Attribute":$isMMAv1Row
   );
+
+  let builders = [
+    AttrBuilder<(ins "unsigned":$opIdx,
+                     "Attribute":$parent), [{
+      Attribute isMMAv1Row;
+      if(parent.isa<MmaEncodingAttr>() &&
+         parent.cast<MmaEncodingAttr>().getVersion() == 1){
+        isMMAv1Row = BoolAttr::get(context, true);
+      }
+      return $_get(context, opIdx, parent, isMMAv1Row);
+    }]>
+
+  ];
 
   let extraClassDeclaration = extraBaseClassDeclaration;
 }
+
+
 
 #endif
