@@ -1128,10 +1128,7 @@ struct StoreOpConversion
           elem = bitcast(elem, valueElemTy);
 
           Type u32Ty = typeConverter->convertType(type::u32Ty(ctx));
-          llWord =
-              insert_element(wordTy, llWord, elem,
-                             rewriter.create<LLVM::ConstantOp>(
-                                 loc, u32Ty, IntegerAttr::get(u32Ty, elemIdx)));
+          llWord = insert_element(wordTy, llWord, elem, i32_val(elemIdx));
         }
         llWord = bitcast(llWord, valArgTy);
         std::string constraint =
@@ -4275,9 +4272,10 @@ struct ExpOpConversionApprox
     // For FP64 input, call __nv_expf for higher-precision calculation
     if (elemTy.getIntOrFloatBitWidth() == 64)
       return {};
+
     const double log2e = 1.4426950408889634;
-    Value prod =
-        rewriter.create<LLVM::FMulOp>(loc, f32_ty, operands[0], f32_val(log2e));
+    Value prod = fmul(f32_ty, operands[0], f32_val(log2e));
+
     PTXBuilder ptxBuilder;
     auto &exp2 = ptxBuilder.create<PTXInstr>("ex2")->o("approx").o("f32");
     auto output = ptxBuilder.newOperand("=f");
