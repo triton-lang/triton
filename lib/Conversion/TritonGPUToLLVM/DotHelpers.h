@@ -54,14 +54,11 @@ struct DotOpMmaV1ConversionHelper {
   struct AParam {
     SmallVector<int> rep;
     SmallVector<int> spw;
+    bool isAVec4;
 
-    // TODO[Superjomn]: Support the case when isAVec4=false later
-    // Currently, we only support ld.v2, for the mma layout varies with
-    // different ld vector width.
-    // bool isAVec4 = !isARow && shapeTransed[orderTransed[0]] <= 16;
-    const bool isAVec4{true};
-
-    explicit AParam(bool isARow) {
+    explicit AParam(bool isARow, ArrayRef<int64_t> shape) {
+      isAVec4 = !isARow && shape[isARow] <= 16;
+      printf("isAVec4: %d\n", isAVec4);
       int packSize0 = (isARow || isAVec4) ? 1 : 2;
       int repM = 2 * packSize0;
       int repK = 1;
@@ -75,13 +72,11 @@ struct DotOpMmaV1ConversionHelper {
   struct BParam {
     SmallVector<int> rep;
     SmallVector<int> spw;
-    // TODO[Superjomn]: Support the case when isBVec4=false later
-    // Currently, we only support ld.v2, for the mma layout varies with
-    // different ld vector width.
-    // bool isBVec4 = isBRow && shapeTransed[orderTransed[0]] <= 16;
-    const bool isBVec4{true};
+    bool isBVec4;
 
-    explicit BParam(bool isBRow) {
+    explicit BParam(bool isBRow, ArrayRef<int64_t> shape) {
+      isBVec4 = isBRow && shape[isBRow] <= 16;
+      printf("isBVec4: %d\n", isBVec4);
       int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
       rep.assign({0, 2 * packSize1, 1});
       spw.assign({0, fpw[1] * 4 * rep[1], 1});
@@ -108,7 +103,7 @@ struct DotOpMmaV1ConversionHelper {
   // \param shapeTransed: A's shape or reordered shape if transpose needed.
   // \param orderTransed: the order or reordered order if transpose needed.
   unsigned getNumM(ArrayRef<int64_t> shapeTransed, bool isARow) const {
-    AParam param(isARow);
+    AParam param(isARow, shapeTransed);
 
     unsigned numM = param.rep[0] * shapeTransed[0] / (param.spw[0] * wpt[0]);
     return numM;
@@ -118,34 +113,25 @@ struct DotOpMmaV1ConversionHelper {
   // \param shapeTransed: B' shape or reordered shape if transpose needed.
   // \param orderTransed: the order or reordered order if transpose needed.
   unsigned getNumN(ArrayRef<int64_t> shapeTransed, bool isBRow) const {
-    BParam param(isBRow);
+    BParam param(isBRow, shapeTransed);
 
     unsigned numN = param.rep[1] * shapeTransed[1] / (param.spw[1] * wpt[1]);
     return numN;
   }
 
-  int numElemsPerThreadA(ArrayRef<int64_t> shapeTransed,
-                         ArrayRef<unsigned> orderTransed) const {
-    int numM = getNumM(shapeTransed, orderTransed[0] == 1);
+  int numElemsPerThreadA(ArrayRef<int64_t> shapeTransed, bool isRow,
+                         int vec) const {
+    int numM = getNumM(shapeTransed, isRow);
     int NK = shapeTransed[1];
-
-    // NOTE: We couldn't get the vec from the shared layout.
-    // int vecA = sharedLayout.getVec();
-    // TODO[Superjomn]: Consider the case when vecA > 4
-    bool vecGt4 = false;
-    int elemsPerLd = vecGt4 ? 4 : 2;
+    int elemsPerLd = vec > 4 ? 4 : 2;
     return (numM / 2) * (NK / 4) * elemsPerLd;
   }
 
-  int numElemsPerThreadB(ArrayRef<int64_t> shapeTransed,
-                         ArrayRef<unsigned> orderTransed) const {
-    unsigned numN = getNumN(shapeTransed, orderTransed[0] == 1);
+  int numElemsPerThreadB(ArrayRef<int64_t> shapeTransed, bool isRow,
+                         int vec) const {
+    unsigned numN = getNumN(shapeTransed, isRow);
     int NK = shapeTransed[0];
-    // NOTE: We couldn't get the vec from the shared layout.
-    // int vecB = sharedLayout.getVec();
-    // TODO[Superjomn]: Consider the case when vecA > 4
-    bool vecGt4 = false;
-    int elemsPerLd = vecGt4 ? 4 : 2;
+    int elemsPerLd = vec > 4 ? 4 : 2;
     return (numN / 2) * (NK / 4) * elemsPerLd;
   }
 
@@ -1364,7 +1350,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
   Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
 
   bool isARow = order[0] != 0;
-  AParam param(isARow);
+  AParam param(isARow, shape);
 
   auto [offsetAM, offsetAK, _0, _1] = computeOffsets(
       thread, isARow, false, fpw, param.spw, param.rep, rewriter, loc);
@@ -1374,7 +1360,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
     std::swap(offsetAM, offsetAK);
     std::swap(order[0], order[1]);
   }
-
   int vecA = sharedLayout.getVec();
 
   auto strides = smemObj.strides;
@@ -1481,7 +1466,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
 
   Value smem = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
   bool isBRow = order[0] != 0;
-  BParam param(isBRow);
+  BParam param(isBRow, shape);
 
   int vecB = sharedLayout.getVec();
   Value strideBN = isBRow ? i32_val(1) : strides[1];

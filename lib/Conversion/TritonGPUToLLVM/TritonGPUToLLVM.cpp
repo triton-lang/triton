@@ -3919,13 +3919,15 @@ public:
             std::swap(order[0], order[1]);
           }
 
+          // TODO[Superjomn] vec is not available here.
+          bool vec = 4;
           if (dotOpLayout.getOpIdx() == 0) { // $a
-            int elems = helper.numElemsPerThreadA(shape, order);
+            int elems = helper.numElemsPerThreadA(shape, order[0] == 1, vec);
             Type x2Ty = vec_ty(elemTy, 2);
             return struct_ty(SmallVector<Type>(elems, x2Ty));
           }
           if (dotOpLayout.getOpIdx() == 1) { // $b
-            int elems = helper.numElemsPerThreadB(shape, order);
+            int elems = helper.numElemsPerThreadB(shape, order[0] == 1, vec);
             Type x2Ty = vec_ty(elemTy, 2);
             return struct_ty(SmallVector<Type>(elems, x2Ty));
           }
