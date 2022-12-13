@@ -1410,7 +1410,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
     ld(has, m, k, ha00, ha01);
 
     if (vecA > 4) {
-      assert(false) << "vecA > 4 is not supported yet";
+      assert(false && "vecA > 4 is not supported yet");
       Value ha10 = bitcast(extract_element(ha, i32_val(2)), f16x2Ty);
       Value ha11 = bitcast(extract_element(ha, i32_val(3)), f16x2Ty);
       if (isARow)
@@ -1518,7 +1518,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
     Value hb01 = bitcast(extract_element(hb, i32_val(1)), f16x2Ty);
     ld(hbs, n, K, hb00, hb01);
     if (vecB > 4) {
-      assert(false) << "vecA > 4 is not supported yet";
+      assert(false && "vecB > 4 is not supported yet");
       Value hb10 = bitcast(extract_element(hb, i32_val(2)), f16x2Ty);
       Value hb11 = bitcast(extract_element(hb, i32_val(3)), f16x2Ty);
       if (isBRow)

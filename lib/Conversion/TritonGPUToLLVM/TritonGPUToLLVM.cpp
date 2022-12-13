@@ -3935,15 +3935,8 @@ public:
         if (mmaLayout.getVersion() == 1) {
           DotOpMmaV1ConversionHelper helper(mmaLayout);
 
-          // TODO[Superjomn]: Both transA and transB are not available here.
-          bool trans = false;
           // TODO[Superjomn]: The order of A and B are not available here.
           SmallVector<unsigned> order({1, 0});
-          if (trans) {
-            std::swap(shape[0], shape[1]);
-            std::swap(order[0], order[1]);
-          }
-
           // TODO[Superjomn] vec is not available here, but currently the vec
           // seems always no greater than 4, so we simply assign 4 here.
           bool vec = 4;
