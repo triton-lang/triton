@@ -3124,7 +3124,6 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
     if (dstLayout.isa<BlockedEncodingAttr>() ||
         dstLayout.isa<SliceEncodingAttr>() ||
         dstLayout.isa<MmaEncodingAttr>()) {
-      llvm::outs() << op << "\n";
       processReplica(loc, rewriter, /*stNotRd*/ false, dstTy, outNumCTAsEachRep,
                      multiDimRepId, outVec, paddedRepShape, outOrd, outVals,
                      smemBase);
