@@ -1319,7 +1319,7 @@ struct DotOpFMAConversionHelper {
 
     bool isM = dotOpLayout.getOpIdx() == 0;
     int shapePerCTAMN = getShapePerCTAForMN(blockedLayout, isM);
-    int sizePerThreadMN = getsizePerThreadForMN(blockedLayout, isM);
+    int sizePerThreadMN = getSizePerThreadForMN(blockedLayout, isM);
     return K * std::max<int>(otherDim / shapePerCTAMN, 1) * sizePerThreadMN;
   }
 
@@ -1336,7 +1336,7 @@ struct DotOpFMAConversionHelper {
   }
 
   // Get sizePerThread for M or N axis.
-  static int getsizePerThreadForMN(BlockedEncodingAttr layout, bool isM) {
+  static int getSizePerThreadForMN(BlockedEncodingAttr layout, bool isM) {
     auto order = layout.getOrder();
     auto sizePerThread = getSizePerThread(layout);
 
@@ -1695,23 +1695,24 @@ Value DotOpFMAConversionHelper::loadA(
   }
 
   auto aSmem = getSharedMemoryObjectFromStruct(loc, llA, rewriter);
+  auto elemTy = A.getType().cast<RankedTensorType>().getElementType();
 
-  Type f32PtrTy = ptr_ty(f32_ty);
+  Type ptrTy = ptr_ty(elemTy);
   SmallVector<Value> aPtrs(aNumPtr);
   for (int i = 0; i < aNumPtr; ++i)
-    aPtrs[i] = gep(f32PtrTy, aSmem.base, aOff[i]);
+    aPtrs[i] = gep(ptrTy, aSmem.base, aOff[i]);
 
   ValueTable has;
   int M = aShape[aOrder[1]];
 
   int mShapePerCTA = getShapePerCTAForMN(dLayout, true /*isM*/);
-  int mSizePerThread = getsizePerThreadForMN(dLayout, true /*isM*/);
+  int mSizePerThread = getSizePerThreadForMN(dLayout, true /*isM*/);
 
   for (unsigned k = 0; k < NK; ++k) {
     for (unsigned m = 0; m < M; m += mShapePerCTA)
       for (unsigned mm = 0; mm < mSizePerThread; ++mm)
         if (!has.count({m + mm, k})) {
-          Value pa = gep(f32PtrTy, aPtrs[0],
+          Value pa = gep(ptrTy, aPtrs[0],
                          i32_val((m + mm) * strideAM + k * strideAK));
           Value va = load(pa);
           has[{m + mm, k}] = va;
@@ -1760,22 +1761,23 @@ Value DotOpFMAConversionHelper::loadB(
   }
 
   auto bSmem = getSharedMemoryObjectFromStruct(loc, llB, rewriter);
+  auto elemTy = B.getType().cast<RankedTensorType>().getElementType();
 
-  Type f32PtrTy = ptr_ty(f32_ty);
+  Type ptrTy = ptr_ty(elemTy);
   SmallVector<Value> bPtrs(bNumPtr);
   for (int i = 0; i < bNumPtr; ++i)
-    bPtrs[i] = gep(f32PtrTy, bSmem.base, bOff[i]);
+    bPtrs[i] = gep(ptrTy, bSmem.base, bOff[i]);
 
   int N = bShape[bOrder[0]];
   ValueTable hbs;
 
   int nShapePerCTA = getShapePerCTAForMN(dLayout, false /*isM*/);
-  int nSizePerThread = getsizePerThreadForMN(dLayout, false /*isM*/);
+  int nSizePerThread = getSizePerThreadForMN(dLayout, false /*isM*/);
 
   for (unsigned k = 0; k < NK; ++k)
     for (unsigned n = 0; n < N; n += nShapePerCTA)
       for (unsigned nn = 0; nn < nSizePerThread; ++nn) {
-        Value pb = gep(f32PtrTy, bPtrs[0],
+        Value pb = gep(ptrTy, bPtrs[0],
                        i32_val((n + nn) * strideBN + k * strideBK));
         Value vb = load(pb);
         hbs[{n + nn, k}] = vb;
