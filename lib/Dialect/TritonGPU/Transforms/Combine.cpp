@@ -794,7 +794,7 @@ public:
     auto B = dotOp.getOperand(1).getType().cast<RankedTensorType>();
     // for FMA, should retain the blocked layout.
     if (A.getElementType().isF32() && B.getElementType().isF32() &&
-        !dotOp.allowTF32())
+        (computeCapability < 75 || !dotOp.allowTF32()))
       return failure();
 
     // get MMA encoding for the given number of warps

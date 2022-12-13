@@ -3336,9 +3336,7 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
           "Unsupported MMA kind found when converting DotOp to LLVM.");
     }
 
-    if (op.getType().cast<RankedTensorType>().getElementType().isF32() &&
-        A.getType().cast<RankedTensorType>().getElementType().isF32() &&
-        !op.allowTF32())
+    if (D.getType().cast<RankedTensorType>().getEncoding().isa<BlockedEncodingAttr>())
       return convertFMADot(op, adaptor, rewriter);
 
     llvm::report_fatal_error(

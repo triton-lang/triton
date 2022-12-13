@@ -10,7 +10,7 @@ import triton._C.libtriton.triton as _triton
 @pytest.mark.parametrize("TRANS_B", [False, True])
 @pytest.mark.parametrize("BLOCK", [16, 32, 64])
 # TODO: float32 fails
-@pytest.mark.parametrize("DTYPE", [torch.float16])
+@pytest.mark.parametrize("DTYPE", [torch.float32])
 def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=256):
     seed = 0
     torch.manual_seed(seed)
