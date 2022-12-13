@@ -1088,16 +1088,16 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                                                 [64, 128, 128, 4],
                                                 [32, 128, 64, 2],
                                                 [128, 128, 64, 2],
-                                                [64, 128, 128, 2]]\
-                            # TODO: fma bug for some shapes and transposition modes?
-                            for allow_tf32 in [False]\
+                                                [64, 128, 128, 4]]\
+                            for allow_tf32 in [True]\
                             for col_a in [True, False]\
                             for col_b in [True, False]\
-                            for dtype in ['int8']])
+                            for dtype in ['int8', 'float16', 'float32']])
                             
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype, device='cuda'):
-    if allow_tf32 and dtype != 'float32':
-        pytest.skip("Only test tf32 on fp32")
+    # TODO: fma bug for some shapes and transposition modes?
+    # if dtype == 'float32' and not allow_tf32:
+    #     pytest.skip("Seems to have bugs")
     capability = torch.cuda.get_device_capability()
     if capability[0] < 8:
         if dtype == 'int8':
@@ -1157,10 +1157,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype, devi
     else:
         y = numpy_random((K, N), dtype_str=dtype, rs=rs)
     w = numpy_random((N, N), dtype_str=dtype, rs=rs)
-    # if epilogue != 'none' and 'int' not in dtype:
-    #     x *= .1
-    #     y *= .1
-    if allow_tf32:
+    if 'int' not in dtype:
+        x *= .1
+        y *= .1
+    if dtype=='float32' and allow_tf32:
         x = (x.view('uint32') & np.uint32(0xffffe000)).view('float32')
         y = (y.view('uint32') & np.uint32(0xffffe000)).view('float32')
         w = (w.view('uint32') & np.uint32(0xffffe000)).view('float32')
@@ -1193,6 +1193,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype, devi
     if dtype == 'int8':
         z_ref = np.matmul(x.astype(np.float32), 
                           y.astype(np.float32())).astype(np.int32)
+    else:
+        z_ref = np.matmul(x, y)
 
     if epilogue == 'add-matrix':
         z_ref += z
@@ -1217,7 +1219,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype, devi
     ptx = pgm.asm['ptx']
     assert 'ld.global.v4' in ptx
     assert 'st.global.v4' in ptx
-    if allow_tf32:
+    if dtype=='float32' and allow_tf32:
         assert 'mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32' in ptx
     elif dtype == 'float32' and allow_tf32:
         assert 'mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32' not in ptx

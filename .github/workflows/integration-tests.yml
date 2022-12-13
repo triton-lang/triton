@@ -79,24 +79,11 @@ jobs:
           lit -v "$LIT_TEST_DIR"
 
       - name: Run python tests
-        if: ${{matrix.runner[0] == 'self-hosted' && matrix.runner[1] == 'A10'}}
+        if: ${{matrix.runner[0] == 'self-hosted'}}
         run: |
-          cd python/tests
+          cd python/test/unit/
           pytest
 
-      # TODO[Superjomn] Enable all the tests on V100 if available
-      - name: Run python tests on V100
-        if: ${{matrix.runner[0] == 'self-hosted' && matrix.runner[1] == 'V100'}}
-        run: |
-          cd python/tests
-          pytest -k "not test_where_broadcast and not test_dot" test_core.py
-          pytest test_gemm.py
-          pytest test_backend.py
-          pytest test_reduce.py
-          pytest test_vecadd.py
-          pytest test_elementwise.py
-          pytest test_ext_elemwise.py
-          pytest test_transpose.py
 
       - name: Run CXX unittests
         run: |
