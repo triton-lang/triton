@@ -795,7 +795,6 @@ public:
     auto A = dotOp.getOperand(0).getType().cast<RankedTensorType>();
     auto B = dotOp.getOperand(1).getType().cast<RankedTensorType>();
 
-
     // for FMA, should retain the blocked layout.
     int version = computeCapabilityToMMAVersion(computeCapability);
     if (!supportMMA(dotOp, version))
