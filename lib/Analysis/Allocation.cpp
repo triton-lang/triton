@@ -176,10 +176,12 @@ private:
       unsigned outVec = 0;
       auto smemShape = getScratchConfigForCvtLayout(cvtLayout, inVec, outVec);
       unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
-                                       std::multiplies{});
+                                      std::multiplies{});
+      unsigned elemBitWidth = std::max<unsigned>(srcTy.getElementTypeBitWidth(),
+                                                 8);
       auto bytes = srcTy.getElementType().isa<triton::PointerType>()
                        ? elems * kPtrBitWidth / 8
-                       : elems * srcTy.getElementTypeBitWidth() / 8;
+                       : elems * elemBitWidth / 8;
       allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
     } else if (auto atomicRMWOp = dyn_cast<triton::AtomicRMWOp>(op)) {
       auto value = op->getOperand(0);
