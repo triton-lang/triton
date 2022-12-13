@@ -1385,8 +1385,11 @@ arg_type_pattern = {
 
 # def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
 def compile(fn, **kwargs):
-    capability = torch.cuda.get_device_capability()
-    capability = capability[0] * 10 + capability[1]
+    capability = kwargs.get("cc", None)
+    if capability is None:
+        device = torch.cuda.current_device()
+        capability = torch.cuda.get_device_capability(device)
+        capability = capability[0] * 10 + capability[1]
     # we get the kernel, i.e. the first function generated in the module
     # if fn is not a JITFunction, then it
     # has to be a path to a file
@@ -1396,7 +1399,6 @@ def compile(fn, **kwargs):
     num_warps = kwargs.get("num_warps", 4)
     num_stages = kwargs.get("num_stages", 3 if capability >= 75 else 2)
     extern_libs = kwargs.get("extern_libs", dict())
-    device = kwargs.get("device", torch.cuda.current_device())
     # build compilation stages
     stages = {
         "ast": (lambda path: fn, None),
@@ -1503,14 +1505,30 @@ class CompiledKernel:
         self.num_stages = metadata["num_stages"]
         # initialize asm dict
         self.asm = asm
+        # binaries are lazily initialized
+        # because it involves doing runtime things
+        # (e.g., checking amount of shared memory on current device)
+        self.metadata = metadata
+        self.cu_module = None
+        self.cu_function = None
+    
+    def _init_handles(self):
+        if self.cu_module is not None:
+            return
         device = torch.cuda.current_device()
         global cuda_utils
         init_cuda_utils()
-        mod, func, n_regs, n_spills = cuda_utils.load_binary(metadata["name"], self.asm["cubin"], self.shared, device)
+        mod, func, n_regs, n_spills = cuda_utils.load_binary(self.metadata["name"], self.asm["cubin"], self.shared, device)
         self.cu_module = mod
         self.cu_function = func
+    
+    def __getattribute__(self, name):
+        if name == 'c_wrapper':
+            self._init_handles()
+        return super().__getattribute__(name)
 
     def __getitem__(self, grid):
+        self._init_handles()
         def runner(*args, stream=None):
             if stream is None:
                 stream = torch.cuda.current_stream().cuda_stream
