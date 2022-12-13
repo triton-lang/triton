@@ -1423,6 +1423,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
     ld(has, m, k, ha00, ha01);
 
     if (vecA > 4) {
+      assert(false); // DEBUG
       Value ha10 = bitcast(extract_element(ha, i32_val(2)), f16x2Ty);
       Value ha11 = bitcast(extract_element(ha, i32_val(3)), f16x2Ty);
       if (isARow)

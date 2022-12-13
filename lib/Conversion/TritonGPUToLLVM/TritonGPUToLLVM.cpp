@@ -59,6 +59,8 @@ using ::mlir::triton::gpu::SliceEncodingAttr;
 namespace mlir {
 namespace LLVM {
 
+Value gThreadId; // DEBUG
+
 static StringRef getStructAttrsAttrName() { return "llvm.struct_attrs"; }
 
 // A helper function for using printf in LLVM conversion.
@@ -346,6 +348,7 @@ public:
         ValueRange{rewriter.create<::mlir::gpu::ThreadIdOp>(
             loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x)});
     Value threadId = cast.getResult(0);
+    LLVM::gThreadId = threadId; // DEBUG
     return threadId;
   }
 
@@ -3639,6 +3642,9 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
         {hb.first, "r"},
         {hb.second, "r"},
     });
+
+    std::vector<Value> args = {ha.first, ha.second, hb.first, hb.second};
+
     auto *COprs = builder.newListOperand();
     for (int i = 0; i < 8; ++i)
       COprs->listAppend(builder.newOperand(acc[idx[i]], std::to_string(i)));
@@ -3661,6 +3667,27 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
       acc[idx[i]] = elem;
       resVals[(m * numN / 2 + n) * 8 + i] = elem;
     }
+
+#define SHOW_MMA_V1 1
+#if SHOW_MMA_V1
+    auto get_f16 = [&](Value value, int idx) {
+      return extract_element(f16_ty, value, idx_val(idx));
+    };
+
+    std::vector<Value> pargs({LLVM::gThreadId});
+    for (int i = 0; i < 4; i++) {
+      pargs.push_back(get_f16(args[i], 0));
+      pargs.push_back(get_f16(args[i], 1));
+    }
+    for (int i = 0; i < 8; i++) {
+      pargs.push_back(extract_val(f32_ty, res, getIntAttr(i)));
+    }
+
+    LLVM::vprintf("mma t-%d A:(%f,%f) (%f,%f) B:(%f,%f) (%f,%f) "
+                  "D:(%f,%f,%f,%f,%f,%f,%f,%f)",
+                  pargs, rewriter);
+
+#endif
   };
 
   for (unsigned k = 0; k < NK; k += 4)
@@ -3668,6 +3695,8 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
       for (unsigned n = 0; n < numN / 2; ++n) {
         callMMA(m, n, k);
       }
+
+  LLVM::vprintf_array(LLVM::gThreadId, acc, "acc", "%f", rewriter);
 
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(resSize, type::f32Ty(ctx)));

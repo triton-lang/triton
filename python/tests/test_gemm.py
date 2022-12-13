@@ -312,3 +312,8 @@ def guard_for_volta(is_int8=False, is_tf32=False):
     if is_on_Volta:
         if (not is_feature_supported):
             pytest.skip("Not valid on Volta")
+
+
+#test_gemm(*[32, 128, 64, 1, 32, 128, 64, False, False])
+#test_gemm(*[32, 32, 32, 1, 32, 32, 32, False, False])
+test_gemm(*[32, 16, 16, 1, 32, 16, 16, False, False])
