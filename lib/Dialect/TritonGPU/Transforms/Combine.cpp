@@ -798,15 +798,7 @@ public:
 
     // for FMA, should retain the blocked layout.
     int version = computeCapabilityToMMAVersion(computeCapability);
-    auto aElemTy = A.getElementType();
-    auto bElemTy = B.getElementType();
-    bool useTensorCores = (aElemTy.isF16() && bElemTy.isF16()) ||
-           (aElemTy.isBF16() && bElemTy.isBF16()) ||
-           (aElemTy.isF32() && bElemTy.isF32() && dotOp.allowTF32() &&
-            version >= 2) ||
-           (aElemTy.isInteger(8) && bElemTy.isInteger(8) &&
-            version >= 2);
-    if (!useTensorCores)
+    if (!supportMMA(dotOp, version))
       return failure();
 
     // get MMA encoding for the given number of warps

@@ -3314,19 +3314,11 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
     unsigned K = AShape[reduceAxis];
     bool isOuter = K == 1;
 
-    bool isMMA = D.getType()
-                     .cast<RankedTensorType>()
-                     .getEncoding()
-                     .isa<MmaEncodingAttr>();
-    MmaEncodingAttr mmaLayout;
-    if (isMMA)
-      mmaLayout = D.getType()
-                      .cast<RankedTensorType>()
-                      .getEncoding()
-                      .cast<MmaEncodingAttr>();
-
-    bool isHMMA = isDotHMMA(op);
-    if (!isOuter && isMMA && isHMMA) {
+    MmaEncodingAttr mmaLayout = D.getType()
+                                    .cast<RankedTensorType>()
+                                    .getEncoding()
+                                    .dyn_cast<MmaEncodingAttr>();
+    if (!isOuter && mmaLayout && supportMMA(op, mmaLayout.getVersion())) {
       if (mmaLayout.getVersion() == 1)
         return convertMMA884(op, adaptor, rewriter);
       if (mmaLayout.getVersion() == 2)
@@ -3336,54 +3328,14 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
           "Unsupported MMA kind found when converting DotOp to LLVM.");
     }
 
-    if (D.getType().cast<RankedTensorType>().getEncoding().isa<BlockedEncodingAttr>())
+    if (D.getType()
+            .cast<RankedTensorType>()
+            .getEncoding()
+            .isa<BlockedEncodingAttr>())
       return convertFMADot(op, adaptor, rewriter);
 
     llvm::report_fatal_error(
         "Unsupported DotOp found when converting TritonGPU to LLVM.");
-  }
-
-  // Tell whether a DotOp support HMMA.
-  // This is port from the master branch, the original logic is retained.
-  static bool isDotHMMA(DotOp op) {
-    auto a = op.a();
-    auto b = op.b();
-    auto c = op.c();
-    auto d = op.getResult();
-    auto aTensorTy = a.getType().cast<RankedTensorType>();
-    auto bTensorTy = b.getType().cast<RankedTensorType>();
-    auto cTensorTy = c.getType().cast<RankedTensorType>();
-    auto dTensorTy = d.getType().cast<RankedTensorType>();
-
-    if (!dTensorTy.getEncoding().isa<MmaEncodingAttr>())
-      return false;
-
-    auto mmaLayout = dTensorTy.getEncoding().cast<MmaEncodingAttr>();
-    auto aElemTy = aTensorTy.getElementType();
-    auto bElemTy = bTensorTy.getElementType();
-
-    assert((mmaLayout.getVersion() == 1 || mmaLayout.getVersion() == 2) &&
-           "Unexpected MMA layout version found");
-    // Refer to mma section for the data type supported by Volta and Hopper
-    // Tensor Core in
-    // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-fragment-mma-884-f16
-    return (aElemTy.isF16() && bElemTy.isF16()) ||
-           (aElemTy.isBF16() && bElemTy.isBF16()) ||
-           (aElemTy.isF32() && bElemTy.isF32() && op.allowTF32() &&
-            mmaLayout.getVersion() >= 2) ||
-           (aElemTy.isInteger(8) && bElemTy.isInteger(8) &&
-            mmaLayout.getVersion() >= 2);
-  }
-
-  // Tell whether a DotOp support HMMA by the operand type(either $a or $b).
-  // We cannot get both the operand types(in TypeConverter), here we assume the
-  // types of both the operands are identical here.
-  // TODO[Superjomn]: Find a better way to implement it.
-  static bool isDotHMMA(TensorType operand, int mmaVersion) {
-    auto elemTy = operand.getElementType();
-    return elemTy.isF16() || elemTy.isBF16() ||
-           (elemTy.isF32() && mmaVersion >= 2) ||
-           (elemTy.isInteger(8) && mmaVersion >= 2);
   }
 
 private:
@@ -3405,8 +3357,7 @@ Value ConvertLayoutOpConversion::lowerSharedToDotOperandMMA(
   auto loc = op.getLoc();
   Value src = op.src();
   Value dst = op.result();
-  auto dstTensorTy = dst.getType().cast<RankedTensorType>();
-  bool isHMMA = DotOpConversion::isDotHMMA(dstTensorTy, mmaLayout.getVersion());
+  bool isHMMA = supportMMA(dst, mmaLayout.getVersion());
 
   auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.src(), rewriter);
   Value res;
