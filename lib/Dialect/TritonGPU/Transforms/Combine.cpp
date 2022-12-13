@@ -585,13 +585,15 @@ public:
 // -----------------------------------------------------------------------------
 namespace {
 int computeCapabilityToMMAVersion(int computeCapability) {
-  if (computeCapability < 80) {
+  if (computeCapability < 70) {
+    return 0;
+  } else if (computeCapability < 80) {
     return 1;
   } else if (computeCapability < 90) {
     return 2;
   } else {
     assert(false && "computeCapability > 90 not supported");
-    return 0;
+    return 3;
   }
 }
 
@@ -792,16 +794,25 @@ public:
 
     auto A = dotOp.getOperand(0).getType().cast<RankedTensorType>();
     auto B = dotOp.getOperand(1).getType().cast<RankedTensorType>();
+
+
     // for FMA, should retain the blocked layout.
-    if (A.getElementType().isF32() && B.getElementType().isF32() &&
-        (computeCapability < 75 || !dotOp.allowTF32()))
+    int version = computeCapabilityToMMAVersion(computeCapability);
+    auto aElemTy = A.getElementType();
+    auto bElemTy = B.getElementType();
+    bool useTensorCores = (aElemTy.isF16() && bElemTy.isF16()) ||
+           (aElemTy.isBF16() && bElemTy.isBF16()) ||
+           (aElemTy.isF32() && bElemTy.isF32() && dotOp.allowTF32() &&
+            version >= 2) ||
+           (aElemTy.isInteger(8) && bElemTy.isInteger(8) &&
+            version >= 2);
+    if (!useTensorCores)
       return failure();
 
     // get MMA encoding for the given number of warps
     auto retShape = oldRetType.getShape();
     auto mod = op->getParentOfType<mlir::ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    int version = computeCapabilityToMMAVersion(computeCapability);
 
     auto newRetType = RankedTensorType::get(
         retShape, oldRetType.getElementType(),
