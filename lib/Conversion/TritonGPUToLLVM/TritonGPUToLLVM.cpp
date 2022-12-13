@@ -3446,15 +3446,11 @@ Value ConvertLayoutOpConversion::lowerSharedToDotOperandMMA(
     }
 
     if (dotOperandLayout.getOpIdx() == 0) { // operand $a
-      // TODO[Superjomn]: transA is not available here.
-      bool transA = false;
-      res = helper.loadA(src, transA, smemObj, getThreadId(rewriter, loc), loc,
-                         rewriter);
+      res =
+          helper.loadA(src, smemObj, getThreadId(rewriter, loc), loc, rewriter);
     } else if (dotOperandLayout.getOpIdx() == 1) { // operand $b
-      // TODO[Superjomn]: transB is not available here.
-      bool transB = false;
-      res = helper.loadB(src, transB, smemObj, getThreadId(rewriter, loc), loc,
-                         rewriter);
+      res =
+          helper.loadB(src, smemObj, getThreadId(rewriter, loc), loc, rewriter);
     }
   } else {
     assert(false && "Unsupported mma layout found");
@@ -3948,7 +3944,8 @@ public:
             std::swap(order[0], order[1]);
           }
 
-          // TODO[Superjomn] vec is not available here.
+          // TODO[Superjomn] vec is not available here, but currently the vec
+          // seems always no greater than 4, so we simply assign 4 here.
           bool vec = 4;
           if (dotOpLayout.getOpIdx() == 0) { // $a
             int elems = helper.numElemsPerThreadA(shape, order[0] == 1, vec);

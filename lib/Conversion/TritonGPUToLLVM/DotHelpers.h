@@ -100,50 +100,42 @@ struct DotOpMmaV1ConversionHelper {
   }
 
   // Get the number of fp16x2 elements for $a.
-  // \param shapeTransed: A's shape or reordered shape if transpose needed.
-  // \param orderTransed: the order or reordered order if transpose needed.
-  unsigned getNumM(ArrayRef<int64_t> shapeTransed, bool isARow) const {
-    AParam param(isARow, shapeTransed);
+  unsigned getNumM(ArrayRef<int64_t> shape, bool isARow) const {
+    AParam param(isARow, shape);
 
-    unsigned numM = param.rep[0] * shapeTransed[0] / (param.spw[0] * wpt[0]);
+    unsigned numM = param.rep[0] * shape[0] / (param.spw[0] * wpt[0]);
     return numM;
   }
 
   // Get the number of fp16x2 elements for $b.
-  // \param shapeTransed: B' shape or reordered shape if transpose needed.
-  // \param orderTransed: the order or reordered order if transpose needed.
-  unsigned getNumN(ArrayRef<int64_t> shapeTransed, bool isBRow) const {
-    BParam param(isBRow, shapeTransed);
+  unsigned getNumN(ArrayRef<int64_t> shape, bool isBRow) const {
+    BParam param(isBRow, shape);
 
-    unsigned numN = param.rep[1] * shapeTransed[1] / (param.spw[1] * wpt[1]);
+    unsigned numN = param.rep[1] * shape[1] / (param.spw[1] * wpt[1]);
     return numN;
   }
 
-  int numElemsPerThreadA(ArrayRef<int64_t> shapeTransed, bool isRow,
-                         int vec) const {
-    int numM = getNumM(shapeTransed, isRow);
-    int NK = shapeTransed[1];
+  int numElemsPerThreadA(ArrayRef<int64_t> shape, bool isRow, int vec) const {
+    int numM = getNumM(shape, isRow);
+    int NK = shape[1];
     int elemsPerLd = vec > 4 ? 4 : 2;
     return (numM / 2) * (NK / 4) * elemsPerLd;
   }
 
-  int numElemsPerThreadB(ArrayRef<int64_t> shapeTransed, bool isRow,
-                         int vec) const {
-    unsigned numN = getNumN(shapeTransed, isRow);
-    int NK = shapeTransed[0];
+  int numElemsPerThreadB(ArrayRef<int64_t> shape, bool isRow, int vec) const {
+    unsigned numN = getNumN(shape, isRow);
+    int NK = shape[0];
     int elemsPerLd = vec > 4 ? 4 : 2;
     return (numN / 2) * (NK / 4) * elemsPerLd;
   }
 
   // Loading $a from smem to registers, returns a LLVM::Struct.
-  Value loadA(Value A, bool transA, const SharedMemoryObject &smemObj,
-              Value thread, Location loc,
-              ConversionPatternRewriter &rewriter) const;
+  Value loadA(Value A, const SharedMemoryObject &smemObj, Value thread,
+              Location loc, ConversionPatternRewriter &rewriter) const;
 
   // Loading $b from smem to registers, returns a LLVM::Struct.
-  Value loadB(Value B, bool transB, const SharedMemoryObject &smemObj,
-              Value thread, Location loc,
-              ConversionPatternRewriter &rewriter) const;
+  Value loadB(Value B, const SharedMemoryObject &smemObj, Value thread,
+              Location loc, ConversionPatternRewriter &rewriter) const;
 
   static ArrayRef<unsigned> getOrder() { return mmaOrder; }
 
@@ -1335,8 +1327,8 @@ struct DotOpFMAConversionHelper {
 };
 
 Value DotOpMmaV1ConversionHelper::loadA(
-    Value tensor, bool transA, const SharedMemoryObject &smemObj, Value thread,
-    Location loc, ConversionPatternRewriter &rewriter) const {
+    Value tensor, const SharedMemoryObject &smemObj, Value thread, Location loc,
+    ConversionPatternRewriter &rewriter) const {
 
   auto *ctx = rewriter.getContext();
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
@@ -1355,11 +1347,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
   auto [offsetAM, offsetAK, _0, _1] = computeOffsets(
       thread, isARow, false, fpw, param.spw, param.rep, rewriter, loc);
 
-  if (transA) {
-    std::swap(shape[0], shape[1]);
-    std::swap(offsetAM, offsetAK);
-    std::swap(order[0], order[1]);
-  }
   int vecA = sharedLayout.getVec();
 
   auto strides = smemObj.strides;
@@ -1423,7 +1410,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
     ld(has, m, k, ha00, ha01);
 
     if (vecA > 4) {
-      assert(false); // DEBUG
+      assert(false) << "vecA > 4 is not supported yet";
       Value ha10 = bitcast(extract_element(ha, i32_val(2)), f16x2Ty);
       Value ha11 = bitcast(extract_element(ha, i32_val(3)), f16x2Ty);
       if (isARow)
@@ -1451,8 +1438,8 @@ Value DotOpMmaV1ConversionHelper::loadA(
 }
 
 Value DotOpMmaV1ConversionHelper::loadB(
-    Value tensor, bool transB, const SharedMemoryObject &smemObj, Value thread,
-    Location loc, ConversionPatternRewriter &rewriter) const {
+    Value tensor, const SharedMemoryObject &smemObj, Value thread, Location loc,
+    ConversionPatternRewriter &rewriter) const {
   // smem
   auto strides = smemObj.strides;
 
@@ -1479,11 +1466,6 @@ Value DotOpMmaV1ConversionHelper::loadB(
 
   auto [_0, _1, offsetBN, offsetBK] = computeOffsets(
       thread, false, isBRow, fpw, param.spw, param.rep, rewriter, loc);
-  if (transB) {
-    std::swap(order[0], order[1]);
-    std::swap(shape[0], shape[1]);
-    std::swap(offsetBK, offsetBN);
-  }
 
   // swizzling
   int perPhaseB = sharedLayout.getPerPhase();
@@ -1536,6 +1518,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
     Value hb01 = bitcast(extract_element(hb, i32_val(1)), f16x2Ty);
     ld(hbs, n, K, hb00, hb01);
     if (vecB > 4) {
+      assert(false) << "vecA > 4 is not supported yet";
       Value hb10 = bitcast(extract_element(hb, i32_val(2)), f16x2Ty);
       Value hb11 = bitcast(extract_element(hb, i32_val(3)), f16x2Ty);
       if (isBRow)
