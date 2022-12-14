@@ -542,7 +542,21 @@ public:
   SmallVector<SmallVector<unsigned>>
   emitOffsetForMmaLayoutV1(const MmaEncodingAttr &mmaLayout,
                            ArrayRef<int64_t> shape) const {
-    llvm_unreachable("emitOffsetForMmaLayoutV1 not implemented");
+    SmallVector<SmallVector<unsigned>> ret;
+
+    for (unsigned i = 0; i < shape[0]; i += getShapePerCTA(mmaLayout)[0]) {
+      for (unsigned j = 0; j < shape[1]; j += getShapePerCTA(mmaLayout)[1]) {
+        ret.push_back({i, j});
+        ret.push_back({i, j + 1});
+        ret.push_back({i + 2, j});
+        ret.push_back({i + 2, j + 1});
+        ret.push_back({i, j + 8});
+        ret.push_back({i, j + 9});
+        ret.push_back({i + 2, j + 8});
+        ret.push_back({i + 2, j + 9});
+      }
+    }
+    return ret;
   }
 
   SmallVector<Value>
