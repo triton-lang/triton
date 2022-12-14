@@ -179,8 +179,7 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
     for (unsigned d = 0, n = getOrder(parent).size(); d < n; ++d) {
       if (d == dim)
         continue;
-      shape.push_back(getSizePerThread(parent)[d] *
-                      getThreadsPerWarp(parent)[d] * getWarpsPerCTA(parent)[d]);
+      shape.push_back(getShapePerCTA(parent)[d]);
     }
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     if (mmaLayout.getVersion() == 2)
