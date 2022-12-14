@@ -20,7 +20,7 @@ GCNBuilder::newOperand(mlir::Value value, StringRef constraint,
 
 GCNBuilder::Operand *GCNBuilder::newOperand(StringRef constraint) {
   // Constraint should be something like "=r"
-  assert(!constraint.empty());
+  assert(!constraint.empty() && constraint[0] == '=');
   auto *opr = newOperand();
   opr->idx = oprCounter++;
   opr->constraint = constraint;
