@@ -1668,10 +1668,11 @@ Value DotOpFMAConversionHelper::loadA(
 
   bool isARow = aOrder[0] == 1;
 
-  int strideAM = isARow ? aShape[1] : 1;
-  int strideAK = isARow ? 1 : aShape[0];
-  int strideA0 = isARow ? strideAK : strideAM;
-  int strideA1 = isARow ? strideAM : strideAK;
+  auto aSmem = getSharedMemoryObjectFromStruct(loc, llA, rewriter);
+  Value strideAM = aSmem.strides[aOrder[1]];
+  Value strideAK = aSmem.strides[aOrder[0]];
+  Value strideA0 = isARow ? strideAK : strideAM;
+  Value strideA1 = isARow ? strideAM : strideAK;
   int aNumPtr = 8;
   int NK = aShape[1];
 
@@ -1691,10 +1692,8 @@ Value DotOpFMAConversionHelper::loadA(
   Value offA1 = isARow ? mul(threadIdM, mContig) : _0;
   SmallVector<Value> aOff(aNumPtr);
   for (int i = 0; i < aNumPtr; ++i) {
-    aOff[i] = add(mul(offA0, i32_val(strideA0)), mul(offA1, i32_val(strideA1)));
+    aOff[i] = add(mul(offA0, strideA0), mul(offA1, strideA1));
   }
-
-  auto aSmem = getSharedMemoryObjectFromStruct(loc, llA, rewriter);
   auto elemTy = A.getType().cast<RankedTensorType>().getElementType();
 
   Type ptrTy = ptr_ty(elemTy);
@@ -1712,8 +1711,9 @@ Value DotOpFMAConversionHelper::loadA(
     for (unsigned m = 0; m < M; m += mShapePerCTA)
       for (unsigned mm = 0; mm < mSizePerThread; ++mm)
         if (!has.count({m + mm, k})) {
-          Value pa = gep(ptrTy, aPtrs[0],
-                         i32_val((m + mm) * strideAM + k * strideAK));
+          Value offset =
+              add(mul(i32_val(m + mm), strideAM), mul(i32_val(k), strideAK));
+          Value pa = gep(ptrTy, aPtrs[0], offset);
           Value va = load(pa);
           has[{m + mm, k}] = va;
         }
@@ -1735,10 +1735,11 @@ Value DotOpFMAConversionHelper::loadB(
 
   bool isBRow = bOrder[0] == 1;
 
-  int strideBN = isBRow ? 1 : bShape[0];
-  int strideBK = isBRow ? bShape[1] : 1;
-  int strideB0 = isBRow ? strideBN : strideBK;
-  int strideB1 = isBRow ? strideBK : strideBN;
+  auto bSmem = getSharedMemoryObjectFromStruct(loc, llB, rewriter);
+  Value strideBN = bSmem.strides[bOrder[0]];
+  Value strideBK = bSmem.strides[bOrder[1]];
+  Value strideB0 = isBRow ? strideBN : strideBK;
+  Value strideB1 = isBRow ? strideBK : strideBN;
   int bNumPtr = 8;
   int NK = bShape[0];
 
@@ -1757,10 +1758,8 @@ Value DotOpFMAConversionHelper::loadB(
   Value offB1 = isBRow ? _0 : mul(threadIdN, nContig);
   SmallVector<Value> bOff(bNumPtr);
   for (int i = 0; i < bNumPtr; ++i) {
-    bOff[i] = add(mul(offB0, i32_val(strideB0)), mul(offB1, i32_val(strideB1)));
+    bOff[i] = add(mul(offB0, strideB0), mul(offB1, strideB1));
   }
-
-  auto bSmem = getSharedMemoryObjectFromStruct(loc, llB, rewriter);
   auto elemTy = B.getType().cast<RankedTensorType>().getElementType();
 
   Type ptrTy = ptr_ty(elemTy);
@@ -1777,8 +1776,9 @@ Value DotOpFMAConversionHelper::loadB(
   for (unsigned k = 0; k < NK; ++k)
     for (unsigned n = 0; n < N; n += nShapePerCTA)
       for (unsigned nn = 0; nn < nSizePerThread; ++nn) {
-        Value pb = gep(ptrTy, bPtrs[0],
-                       i32_val((n + nn) * strideBN + k * strideBK));
+        Value offset =
+            add(mul(i32_val(n + nn), strideBN), mul(i32_val(k), strideBK));
+        Value pb = gep(ptrTy, bPtrs[0], offset);
         Value vb = load(pb);
         hbs[{n + nn, k}] = vb;
       }
