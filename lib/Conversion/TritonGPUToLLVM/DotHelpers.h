@@ -1319,6 +1319,7 @@ struct DotOpFMAConversionHelper {
     int K = dotOpLayout.getOpIdx() == 0 ? shape[1] : shape[0];
     int otherDim = dotOpLayout.getOpIdx() == 1 ? shape[1] : shape[0];
 
+
     bool isM = dotOpLayout.getOpIdx() == 0;
     int shapePerCTAMN = getShapePerCTAForMN(blockedLayout, isM);
     int sizePerThreadMN = getSizePerThreadForMN(blockedLayout, isM);
@@ -1704,7 +1705,7 @@ Value DotOpFMAConversionHelper::loadA(
     aPtrs[i] = gep(ptrTy, aSmem.base, aOff[i]);
 
   ValueTable has;
-  int M = aShape[aOrder[1]];
+  int M = aShape[0];
 
   int mShapePerCTA = getShapePerCTAForMN(dLayout, true /*isM*/);
   int mSizePerThread = getSizePerThreadForMN(dLayout, true /*isM*/);
@@ -1769,7 +1770,7 @@ Value DotOpFMAConversionHelper::loadB(
   for (int i = 0; i < bNumPtr; ++i)
     bPtrs[i] = gep(ptrTy, bSmem.base, bOff[i]);
 
-  int N = bShape[bOrder[0]];
+  int N = bShape[1];
   ValueTable hbs;
 
   int nShapePerCTA = getShapePerCTAForMN(dLayout, false /*isM*/);

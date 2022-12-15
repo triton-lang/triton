@@ -3692,6 +3692,7 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
   int nSizePerThread =
       order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
 
+
   auto has = helper.getValueTableFromStruct(llA, K, M, mShapePerCTA,
                                             mSizePerThread, rewriter, loc);
   auto hbs = helper.getValueTableFromStruct(llB, K, N, nShapePerCTA,
