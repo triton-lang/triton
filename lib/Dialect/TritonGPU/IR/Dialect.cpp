@@ -475,17 +475,17 @@ Attribute MmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseGreater().failed())
     return {};
 
-  unsigned majorVersion = 0;
-  unsigned minorVersion = 0;
+  unsigned versionMajor = 0;
+  unsigned versionMinor = 0;
   SmallVector<unsigned, 2> warpsPerCTA;
 
   for (const NamedAttribute &attr : dict) {
-    if (attr.getName() == "majorVersion") {
-      if (parseUInt(parser, attr, majorVersion, "majorVersion").failed())
+    if (attr.getName() == "versionMajor") {
+      if (parseUInt(parser, attr, versionMajor, "versionMajor").failed())
         return {};
     }
-    if (attr.getName() == "minorVersion") {
-      if (parseUInt(parser, attr, minorVersion, "minorVersion").failed())
+    if (attr.getName() == "versionMinor") {
+      if (parseUInt(parser, attr, versionMinor, "versionMinor").failed())
         return {};
     }
     if (attr.getName() == "warpsPerCTA") {
@@ -494,8 +494,8 @@ Attribute MmaEncodingAttr::parse(AsmParser &parser, Type type) {
     }
   }
 
-  return parser.getChecked<MmaEncodingAttr>(parser.getContext(), majorVersion,
-                                            minorVersion, warpsPerCTA);
+  return parser.getChecked<MmaEncodingAttr>(parser.getContext(), versionMajor,
+                                            versionMinor, warpsPerCTA);
 }
 
 void MmaEncodingAttr::print(AsmPrinter &printer) const {
