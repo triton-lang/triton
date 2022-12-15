@@ -1,16 +1,20 @@
+import pytest
+import torch
+
 import triton
 import triton.language as tl
-import torch
-import pytest
-from .test_core import  numpy_random, to_triton
+from .test_core import numpy_random, to_triton
+
 
 class MmaLayout:
-    def __init__(self, version, warps_per_cta):
-        self.version = version
+    def __init__(self, version_major, warps_per_cta, version_minor=0):
+        self.version_major = version_major
+        self.version_minor = version_minor
         self.warps_per_cta = str(warps_per_cta)
 
     def __str__(self):
-        return f"#triton_gpu.mma<{{version={self.version}, warpsPerCTA={self.warps_per_cta}}}>"
+        return f"#triton_gpu.mma<{{versionMajor={self.version_major}, versionMinor={self.version_minor}, warpsPerCTA={self.warps_per_cta}}}>"
+
 
 class BlockedLayout:
     def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order):
@@ -22,17 +26,18 @@ class BlockedLayout:
     def __str__(self):
         return f"#triton_gpu.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}}}>"
 
+
 layouts = [
-  # MmaLayout(version=1, warps_per_cta=[1, 4]),
-  MmaLayout(version=2, warps_per_cta=[1, 4]),
-  # MmaLayout(version=1, warps_per_cta=[4, 1]),
-  MmaLayout(version=2, warps_per_cta=[4, 1]),
-  BlockedLayout([1, 8], [2, 16], [4, 1], [1, 0]),
-  BlockedLayout([1, 4], [4, 8], [2, 2], [1, 0]),
-  BlockedLayout([1, 1], [1, 32], [2, 2], [1, 0]),
-  BlockedLayout([8, 1], [16, 2], [1, 4], [0, 1]),
-  BlockedLayout([4, 1], [8, 4], [2, 2], [0, 1]),
-  BlockedLayout([1, 1], [32, 1], [2, 2], [0, 1])
+    # MmaLayout(version=1, warps_per_cta=[1, 4]),
+    MmaLayout(version_major=2, warps_per_cta=[1, 4]),
+    # MmaLayout(version=1, warps_per_cta=[4, 1]),
+    MmaLayout(version_major=2, warps_per_cta=[4, 1]),
+    BlockedLayout([1, 8], [2, 16], [4, 1], [1, 0]),
+    BlockedLayout([1, 4], [4, 8], [2, 2], [1, 0]),
+    BlockedLayout([1, 1], [1, 32], [2, 2], [1, 0]),
+    BlockedLayout([8, 1], [16, 2], [1, 4], [0, 1]),
+    BlockedLayout([4, 1], [8, 4], [2, 2], [0, 1]),
+    BlockedLayout([1, 1], [32, 1], [2, 2], [0, 1])
 ]
 
 
@@ -45,13 +50,11 @@ def test_convert2d(dtype, shape, src_layout, dst_layout, device='cuda'):
         pytest.skip()
     if 'mma' in str(src_layout) and 'mma' in str(dst_layout):
         pytest.skip()
-    
-    
 
     ir = f"""
 #src = {src_layout}
 #dst = {dst_layout}
-"""  + """
+""" + """
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   func public @kernel_0d1d(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     %cst = arith.constant dense<128> : tensor<128x1xi32, #src>
@@ -73,7 +76,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     tt.store %14, %13 : tensor<128x128xf16, #dst>
     return
   }
-}    
+}
 """
 
     x = to_triton(numpy_random(shape, dtype_str=dtype))
@@ -85,7 +88,6 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
         f.write(ir)
         f.flush()
         kernel = triton.compile(f.name)
-    kernel[(1,1,1)](x.data_ptr(), z.data_ptr())
+    kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
 
     assert torch.equal(z, x)
-
