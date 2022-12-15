@@ -392,7 +392,7 @@ class CodeGenerator(ast.NodeVisitor):
                             if then_defs[then_name].type == else_defs[else_name].type:
                                 names.append(then_name)
                                 ret_types.append(then_defs[then_name].type)
-                
+
                 # defined in else block but not in then block
                 # to find in parent scope and yield them
                 for else_name in else_defs:
@@ -1511,7 +1511,7 @@ class CompiledKernel:
         self.metadata = metadata
         self.cu_module = None
         self.cu_function = None
-    
+
     def _init_handles(self):
         if self.cu_module is not None:
             return
@@ -1521,7 +1521,7 @@ class CompiledKernel:
         mod, func, n_regs, n_spills = cuda_utils.load_binary(self.metadata["name"], self.asm["cubin"], self.shared, device)
         self.cu_module = mod
         self.cu_function = func
-    
+
     def __getattribute__(self, name):
         if name == 'c_wrapper':
             self._init_handles()
@@ -1529,6 +1529,7 @@ class CompiledKernel:
 
     def __getitem__(self, grid):
         self._init_handles()
+
         def runner(*args, stream=None):
             if stream is None:
                 stream = torch.cuda.current_stream().cuda_stream

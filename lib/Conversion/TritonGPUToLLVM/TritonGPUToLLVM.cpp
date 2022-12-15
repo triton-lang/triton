@@ -3685,22 +3685,24 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
   int nSizePerThread =
       order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
 
-
   auto has = helper.getValueTableFromStruct(llA, K, M, mShapePerCTA,
                                             mSizePerThread, rewriter, loc);
   auto hbs = helper.getValueTableFromStruct(llB, K, N, nShapePerCTA,
                                             nSizePerThread, rewriter, loc);
 
   SmallVector<Value> ret = cc;
+  bool isCRow = order[0] == 1;
   for (unsigned k = 0; k < K; k++) {
-    int z = 0;
     for (unsigned m = 0; m < M; m += mShapePerCTA)
       for (unsigned n = 0; n < N; n += nShapePerCTA)
         for (unsigned mm = 0; mm < mSizePerThread; ++mm)
           for (unsigned nn = 0; nn < nSizePerThread; ++nn) {
+            int mIdx = m / mShapePerCTA + mm;
+            int nIdx = n / nShapePerCTA + nn;
+            int z = isCRow ? mIdx * N / nShapePerCTA + nIdx
+                           : nIdx * M / mShapePerCTA + mIdx;
             ret[z] = rewriter.create<LLVM::FMulAddOp>(loc, has[{m + mm, k}],
                                                       hbs[{n + nn, k}], ret[z]);
-            ++z;
           }
   }
 
