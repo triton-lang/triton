@@ -1410,8 +1410,8 @@ ReduceOpConversion::matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                                     ConversionPatternRewriter &rewriter) const {
   auto srcTy = op.operand().getType().cast<RankedTensorType>();
   auto srcLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
-   if (op.axis() == srcLayout.getOrder()[0])
-     return matchAndRewriteFast(op, adaptor, rewriter);
+  if (op.axis() == srcLayout.getOrder()[0])
+    return matchAndRewriteFast(op, adaptor, rewriter);
   return matchAndRewriteBasic(op, adaptor, rewriter);
 }
 
