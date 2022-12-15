@@ -3632,8 +3632,6 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
   auto loc = op.getLoc();
   auto threadId = getThreadId(rewriter, loc);
 
-  using ValueTable = std::map<std::pair<int, int>, Value>;
-
   auto A = op.a();
   auto B = op.b();
   auto C = op.c();
@@ -3654,11 +3652,6 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
   auto cc = getElementsFromStruct(loc, adaptor.c(), rewriter);
 
   DotOpFMAConversionHelper helper(dLayout);
-  auto aDotOpLayout = aTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-  auto bDotOpLayout = bTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-  auto aLayout = aDotOpLayout.getParent().cast<BlockedEncodingAttr>();
-  auto bLayout = bDotOpLayout.getParent().cast<BlockedEncodingAttr>();
-
   Value llA = adaptor.a();
   Value llB = adaptor.b();
 
