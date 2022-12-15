@@ -28,9 +28,9 @@ class BlockedLayout:
 
 
 layouts = [
-    # MmaLayout(version=1, warps_per_cta=[1, 4]),
+    # MmaLayout(version_major=1, warps_per_cta=[1, 4]),
     MmaLayout(version_major=2, warps_per_cta=[1, 4]),
-    # MmaLayout(version=1, warps_per_cta=[4, 1]),
+    # MmaLayout(version_major=1, warps_per_cta=[4, 1]),
     MmaLayout(version_major=2, warps_per_cta=[4, 1]),
     BlockedLayout([1, 8], [2, 16], [4, 1], [1, 0]),
     BlockedLayout([1, 4], [4, 8], [2, 2], [1, 0]),

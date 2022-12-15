@@ -789,12 +789,25 @@ public:
     if (oldRetType.getEncoding().isa<triton::gpu::MmaEncodingAttr>())
       return failure();
 
-    auto A = dotOp.getOperand(0).getType().cast<RankedTensorType>();
-    auto B = dotOp.getOperand(1).getType().cast<RankedTensorType>();
+    Value oldA = dotOp.a();
+    Value oldB = dotOp.b();
+    auto oldAType = oldA.getType().cast<RankedTensorType>();
+    auto oldBType = oldB.getType().cast<RankedTensorType>();
     // for FMA, should retain the blocked layout.
-    if (A.getElementType().isF32() && B.getElementType().isF32() &&
-        !dotOp.allowTF32())
+    if (oldAType.getElementType().isF32() &&
+        oldBType.getElementType().isF32() && !dotOp.allowTF32())
       return failure();
+
+    auto oldAOrder = oldAType.getEncoding()
+                         .cast<triton::gpu::DotOperandEncodingAttr>()
+                         .getParent()
+                         .cast<triton::gpu::BlockedEncodingAttr>()
+                         .getOrder();
+    auto oldBOrder = oldBType.getEncoding()
+                         .cast<triton::gpu::DotOperandEncodingAttr>()
+                         .getParent()
+                         .cast<triton::gpu::BlockedEncodingAttr>()
+                         .getOrder();
 
     // get MMA encoding for the given number of warps
     auto retShape = oldRetType.getShape();
@@ -805,12 +818,10 @@ public:
         getWarpsPerTile(dotOp, retShape, versionMajor, numWarps);
     triton::gpu::MmaEncodingAttr mmaEnc;
     if (versionMajor == 1) {
-      auto shapeA = A.getShape();
-      auto shapeB = B.getShape();
-      auto ADotOp = A.getEncoding().cast<triton::gpu::DotOperandEncodingAttr>();
-      auto BDotOp = B.getEncoding().cast<triton::gpu::DotOperandEncodingAttr>();
-      bool isARow = ADotOp.getIsMMAv1Row().cast<BoolAttr>().getValue();
-      bool isBRow = BDotOp.getIsMMAv1Row().cast<BoolAttr>().getValue();
+      auto shapeA = oldAType.getShape();
+      auto shapeB = oldBType.getShape();
+      bool isARow = oldAOrder[0] != 0;
+      bool isBRow = oldBOrder[0] != 0;
       mmaEnc = triton::gpu::MmaEncodingAttr::get(
           oldRetType.getContext(), versionMajor, warpsPerTile, shapeA, shapeB,
           isARow, isBRow);
@@ -828,20 +839,6 @@ public:
     auto oldAcc = dotOp.getOperand(2);
     auto newAcc = rewriter.create<triton::gpu::ConvertLayoutOp>(
         oldAcc.getLoc(), newRetType, oldAcc);
-    Value a = dotOp.a();
-    Value b = dotOp.b();
-    auto oldAType = a.getType().cast<RankedTensorType>();
-    auto oldBType = b.getType().cast<RankedTensorType>();
-    auto oldAOrder = oldAType.getEncoding()
-                         .cast<triton::gpu::DotOperandEncodingAttr>()
-                         .getParent()
-                         .cast<triton::gpu::BlockedEncodingAttr>()
-                         .getOrder();
-    auto oldBOrder = oldBType.getEncoding()
-                         .cast<triton::gpu::DotOperandEncodingAttr>()
-                         .getParent()
-                         .cast<triton::gpu::BlockedEncodingAttr>()
-                         .getOrder();
     Attribute isMMAv1RowA;
     Attribute isMMAv1RowB;
     if (versionMajor == 1) {
@@ -858,10 +855,12 @@ public:
         triton::gpu::DotOperandEncodingAttr::get(
             oldBType.getContext(), 1, newRetType.getEncoding(), isMMAv1RowB));
 
-    a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), newAType, a);
-    b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), newBType, b);
-    auto newDot = rewriter.create<triton::DotOp>(dotOp.getLoc(), newRetType, a,
-                                                 b, newAcc, dotOp.allowTF32());
+    Value newA = rewriter.create<triton::gpu::ConvertLayoutOp>(oldA.getLoc(),
+                                                               newAType, oldA);
+    Value newB = rewriter.create<triton::gpu::ConvertLayoutOp>(oldB.getLoc(),
+                                                               newBType, oldB);
+    auto newDot = rewriter.create<triton::DotOp>(
+        dotOp.getLoc(), newRetType, newA, newB, newAcc, dotOp.allowTF32());
 
     rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
         op, oldRetType, newDot.getResult());
