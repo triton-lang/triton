@@ -710,7 +710,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared0 = #triton_gpu.shared<{vec = 1, perPhase=2, maxPhase=8 ,order = [1, 0]}>
-#mma0 = #triton_gpu.mma<{version=2, warpsPerCTA=[1,1]}>
+#mma0 = #triton_gpu.mma<{versionMajor=2, warpsPerCTA=[1,1]}>
 #dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma0}>
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma0}>
 module attributes {"triton_gpu.num-warps" = 1 : i32} {
@@ -923,7 +923,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
 // -----
 
-#mma = #triton_gpu.mma<{version=2, warpsPerCTA=[2, 2]}>
+#mma = #triton_gpu.mma<{versionMajor=2, warpsPerCTA=[2, 2]}>
 #shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
 #dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma}>
