@@ -57,8 +57,7 @@ public:
           !dstParent.isa<triton::gpu::MmaEncodingAttr>())
         return mlir::failure();
       auto dstParentMma = dstParent.cast<triton::gpu::MmaEncodingAttr>();
-      if (dstParentMma.getVersion() == 1 ||
-          dstParentMma.getWarpsPerCTA()[1] > 1)
+      if (dstParentMma.isVolta() || dstParentMma.getWarpsPerCTA()[1] > 1)
         return mlir::failure();
       SetVector<Operation *> bwdSlices;
       mlir::getBackwardSlice(convert.getResult(), &bwdSlices);
@@ -801,13 +800,30 @@ public:
     auto retShape = oldRetType.getShape();
     auto mod = op->getParentOfType<mlir::ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    int version = computeCapabilityToMMAVersion(computeCapability);
+    int versionMajor = computeCapabilityToMMAVersion(computeCapability);
+    auto warpsPerTile =
+        getWarpsPerTile(dotOp, retShape, versionMajor, numWarps);
+    triton::gpu::MmaEncodingAttr mmaEnc;
+    if (versionMajor == 1) {
+      auto shapeA = A.getShape();
+      auto shapeB = B.getShape();
+      auto ADotOp = A.getEncoding().cast<triton::gpu::DotOperandEncodingAttr>();
+      auto BDotOp = B.getEncoding().cast<triton::gpu::DotOperandEncodingAttr>();
+      bool isARow = ADotOp.getIsMMAv1Row().cast<BoolAttr>().getValue();
+      bool isBRow = BDotOp.getIsMMAv1Row().cast<BoolAttr>().getValue();
+      mmaEnc = triton::gpu::MmaEncodingAttr::get(
+          oldRetType.getContext(), versionMajor, warpsPerTile, shapeA, shapeB,
+          isARow, isBRow);
+    } else if (versionMajor == 2) {
+      mmaEnc = triton::gpu::MmaEncodingAttr::get(
+          oldRetType.getContext(), versionMajor, 0 /*versionMinor*/,
+          warpsPerTile);
+    } else {
+      assert(false && "Mma layout only support versionMajor of 1 or 2");
+    }
 
-    auto newRetType = RankedTensorType::get(
-        retShape, oldRetType.getElementType(),
-        triton::gpu::MmaEncodingAttr::get(
-            oldRetType.getContext(), version,
-            getWarpsPerTile(dotOp, retShape, version, numWarps)));
+    auto newRetType =
+        RankedTensorType::get(retShape, oldRetType.getElementType(), mmaEnc);
     // convert accumulator
     auto oldAcc = dotOp.getOperand(2);
     auto newAcc = rewriter.create<triton::gpu::ConvertLayoutOp>(

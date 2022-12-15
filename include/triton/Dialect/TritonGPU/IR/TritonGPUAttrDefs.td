@@ -81,7 +81,6 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
         if(!mmaEnc)
           return $_get(context, 1, 1, 1, order);
 
-        int version = mmaEnc.getVersion();
         int opIdx = dotOpEnc.getOpIdx();
 
         // number of rows per phase
@@ -91,8 +90,8 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
         // index of the inner dimension in `order`
         unsigned inner = (opIdx == 0) ? 0 : 1;
 
-        // ---- begin version 1 ----
-        if (version == 1) {
+        // ---- begin Volta ----
+        if (mmaEnc.isVolta()) {
           bool is_row = order[0] != 0;
           bool is_vec4 = opIdx == 0 ? !is_row && (shape[order[0]] <= 16) :
               is_row && (shape[order[0]] <= 16);
@@ -107,8 +106,8 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
           return $_get(context, vec, perPhase, maxPhase, order);
         }
 
-        // ---- begin version 2 ----
-        if (version == 2) {
+        // ---- begin Ampere ----
+        if (mmaEnc.isAmpere()) {
           std::vector<size_t> matShape = {8, 8,
                                           2 * 64 / eltTy.getIntOrFloatBitWidth()};
           // for now, disable swizzle when using transposed int8 tensor cores
@@ -292,9 +291,12 @@ def MmaEncodingAttr : DistributedEncoding<"MmaEncoding"> {
   let description = [{
 An encoding for tensors that have been produced by tensor cores.
 It is characterized by two parameters:
-- A 'version' which specifies the generation the tensor cores
+- A 'versionMajor' which specifies the generation the tensor cores
 whose output is being partitioned: 1 for first-gen tensor cores (Volta),
 and 2 for second-gen tensor cores (Turing/Ampere).
+- A 'versionMinor' which indicates the specific layout of a tensor core
+generation, e.g. for Volta, there might be multiple kinds of layouts annotated
+by 0,1,2 and so on.
 - A `blockTileSize` to indicate how data should be
 partitioned between warps.
 
@@ -305,7 +307,8 @@ Note: the layout is different from the recommended in PTX ISA
 https://docs.nvidia.com/cuda/parallel-thread-execution/index.html
 (mma.884 section, FP32 accumulator).
 
-For example, the matrix L corresponding to blockTileSize=[32,16] is:
+For example, when versionMinor=1, the matrix L corresponding to
+blockTileSize=[32,16] is:
 
                                warp 0
 --------------------------------/\-------------------------------
@@ -367,11 +370,39 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
 
   let parameters = (
     ins
-    "unsigned":$version,
+    "unsigned":$versionMajor,
+    "unsigned":$versionMinor,
     ArrayRefParameter<"unsigned">:$warpsPerCTA
   );
 
-  let extraClassDeclaration = extraBaseClassDeclaration;
+  let builders = [
+    // specific for MMAV1(Volta)
+    AttrBuilder<(ins "int":$versionMajor,
+                     "ArrayRef<unsigned>":$warpsPerCTA,
+                     "ArrayRef<int64_t>":$shapeA,
+                     "ArrayRef<int64_t>":$shapeB,
+                     "bool":$isARow,
+                     "bool":$isBRow), [{
+      assert(versionMajor == 1 && "Only MMAv1 has multiple versionMinor.");
+      bool isAVec4 = !isARow && (shapeA[isARow] <= 16);
+      bool isBVec4 = isBRow && (shapeB[isBRow] <= 16);
+      // 4-bits to encode 4 booleans: [isARow, isBRow, isAVec4, isBVec4]
+      int versionMinor = (1 << (isARow * 1)) |\
+                         (1 << (isBRow*(1<<1))) |\
+                         (1 << (isAVec4 * (1<<2))) |\
+                         (1 << (isBVec4 * (1<<3)));
+      return $_get(context, versionMajor, versionMinor, warpsPerCTA);
+    }]>
+
+  ];
+
+  let extraClassDeclaration = extraBaseClassDeclaration # [{
+    bool isVolta() const;
+    bool isAmpere() const;
+    // Get [isARow, isBRow, isAVec4, isBVec4] from versionMinor
+    std::tuple<bool, bool, bool, bool> decodeVoltaLayoutStates() const;
+  }];
+
 }
 
 def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
@@ -434,7 +465,7 @@ section 9.7.13.4.1 for more details.
                      "Attribute":$parent), [{
       Attribute isMMAv1Row;
       if(parent.isa<MmaEncodingAttr>() &&
-         parent.cast<MmaEncodingAttr>().getVersion() == 1){
+         parent.cast<MmaEncodingAttr>().isVolta()){
         isMMAv1Row = BoolAttr::get(context, true);
       }
       return $_get(context, opIdx, parent, isMMAv1Row);
