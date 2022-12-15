@@ -928,12 +928,12 @@ public:
       signalPassFailure();
     }
 
-    // llvm::outs() << m << "\n";
     mlir::RewritePatternSet loopFixup(context);
     loopFixup.add<FixupLoop>(context);
     if (applyPatternsAndFoldGreedily(m, std::move(loopFixup)).failed()) {
       signalPassFailure();
     }
+
   }
 };
 

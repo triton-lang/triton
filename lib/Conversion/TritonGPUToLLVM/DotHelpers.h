@@ -1279,6 +1279,7 @@ struct DotOpFMAConversionHelper {
 
   SmallVector<Value> getThreadIds(Value threadId,
                                   ArrayRef<unsigned> shapePerCTA,
+                                  ArrayRef<unsigned> sizePerThread,
                                   ArrayRef<unsigned> order,
                                   ConversionPatternRewriter &rewriter,
                                   Location loc) const;
@@ -1689,8 +1690,7 @@ Value DotOpFMAConversionHelper::loadA(
   Value mContig = i32_val(sizePerThread[order[1]]);
 
   // threadId in blocked layout
-  auto threadIds = getThreadIds(thread, shapePerCTA, order, rewriter, loc);
-
+  auto threadIds = getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
   Value threadIdM = threadIds[0];
 
   Value offA0 = isARow ? _0 : mul(threadIdM, mContig);
@@ -1754,7 +1754,7 @@ Value DotOpFMAConversionHelper::loadB(
   Value nContig = i32_val(sizePerThread[order[0]]);
 
   // threadId in blocked layout
-  auto threadIds = getThreadIds(thread, shapePerCTA, order, rewriter, loc);
+  auto threadIds = getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
   Value threadIdN = threadIds[1];
 
   Value offB0 = isBRow ? mul(threadIdN, nContig) : _0;
@@ -1806,12 +1806,13 @@ DotOpFMAConversionHelper::getValueTableFromStruct(
 
 SmallVector<Value> DotOpFMAConversionHelper::getThreadIds(
     Value threadId, ArrayRef<unsigned int> shapePerCTA,
+    ArrayRef<unsigned int> sizePerThread,
     ArrayRef<unsigned int> order, ConversionPatternRewriter &rewriter,
     Location loc) const {
   int dim = order.size();
   SmallVector<Value> threadIds(dim);
   for (unsigned k = 0; k < dim - 1; k++) {
-    Value dimK = i32_val(shapePerCTA[order[k]]);
+    Value dimK = i32_val(shapePerCTA[order[k]] / sizePerThread[order[k]]);
     Value rem = urem(threadId, dimK);
     threadId = udiv(threadId, dimK);
     threadIds[order[k]] = rem;
