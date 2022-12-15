@@ -77,9 +77,9 @@ SmallVector<unsigned> getThreadsPerWarp(const Attribute &layout) {
                                  blockedLayout.getThreadsPerWarp().end());
   }
   if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-    if (mmaLayout.getVersion() == 1)
+    if (mmaLayout.isVolta())
       return {4, 8};
-    if (mmaLayout.getVersion() == 2)
+    if (mmaLayout.isAmpere())
       return {8, 4};
   }
   assert(0 && "getThreadsPerWarp not implemented");
@@ -106,9 +106,9 @@ SmallVector<unsigned> getSizePerThread(const Attribute &layout) {
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     return getSizePerThread(sliceLayout.getParent());
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-    if (mmaLayout.getVersion() == 2) {
+    if (mmaLayout.isAmpere()) {
       return {2, 2};
-    } else if (mmaLayout.getVersion() == 1) {
+    } else if (mmaLayout.isVolta()) {
       // Note: here the definition of sizePerThread is obscure, which doesn't
       // mean vecSize=4 can be supported in the last dimension.
       return {2, 4};
@@ -119,7 +119,7 @@ SmallVector<unsigned> getSizePerThread(const Attribute &layout) {
     auto parentLayout = dotLayout.getParent();
     assert(parentLayout && "DotOperandEncodingAttr must have a parent");
     if (auto parentMmaLayout = parentLayout.dyn_cast<MmaEncodingAttr>()) {
-      assert(parentMmaLayout.getVersion() == 2 &&
+      assert(parentMmaLayout.isAmpere() &&
              "mmaLayout version = 1 is not implemented yet");
       auto parentShapePerCTA = getShapePerCTA(parentLayout);
       auto opIdx = dotLayout.getOpIdx();
@@ -144,7 +144,7 @@ SmallVector<unsigned> getSizePerThread(const Attribute &layout) {
 
 SmallVector<unsigned> getContigPerThread(Attribute layout) {
   if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-    assert(mmaLayout.getVersion() == 1 || mmaLayout.getVersion() == 2);
+    assert(mmaLayout.isVolta() || mmaLayout.isAmpere());
     return {1, 2};
   } else {
     return getSizePerThread(layout);
@@ -182,10 +182,10 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
       shape.push_back(getShapePerCTA(parent)[d]);
     }
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-    if (mmaLayout.getVersion() == 2)
+    if (mmaLayout.isAmpere())
       return {16 * mmaLayout.getWarpsPerCTA()[0],
               8 * mmaLayout.getWarpsPerCTA()[1]};
-    if (mmaLayout.getVersion() == 1)
+    if (mmaLayout.isVolta())
       return {16 * mmaLayout.getWarpsPerCTA()[0],
               16 * mmaLayout.getWarpsPerCTA()[1]};
     assert(0 && "Unexpected MMA layout version found");
@@ -193,7 +193,7 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
     auto parentLayout = dotLayout.getParent();
     assert(parentLayout && "DotOperandEncodingAttr must have a parent");
     if (auto parentMmaLayout = parentLayout.dyn_cast<MmaEncodingAttr>()) {
-      assert(parentMmaLayout.getVersion() == 2 &&
+      assert(parentMmaLayout.isAmpere() &&
              "mmaLayout version = 1 is not implemented yet");
       auto parentShapePerCTA = getShapePerCTA(parentLayout);
       auto opIdx = dotLayout.getOpIdx();
@@ -209,10 +209,10 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
                   "supported yet");
     }
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-    if (mmaLayout.getVersion() == 2) {
+    if (mmaLayout.isAmpere()) {
       return {16 * mmaLayout.getWarpsPerCTA()[0],
               8 * mmaLayout.getWarpsPerCTA()[1]};
-    } else if (mmaLayout.getVersion() == 1) {
+    } else if (mmaLayout.isVolta()) {
       return {16 * mmaLayout.getWarpsPerCTA()[0],
               16 * mmaLayout.getWarpsPerCTA()[1]};
     } else {
@@ -368,17 +368,16 @@ unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
 unsigned MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   size_t rank = shape.size();
   assert(rank == 2 && "Unexpected rank of mma layout");
-  assert((getVersion() == 1 || getVersion() == 2) &&
-         "Only version 1 and 2 is supported");
+  assert((isVolta() || isAmpere()) && "Only version 1 and 2 is supported");
 
   int res = 0;
-  if (getVersion() == 1) {
+  if (isVolta()) {
     unsigned mmasRow = ceil<unsigned>(shape[0], 16 * getWarpsPerCTA()[0]);
     unsigned mmasCol = ceil<unsigned>(shape[1], 16 * getWarpsPerCTA()[1]);
     // Each warp-level mma884 will perform a m16xn16xk4 mma, thus get a m16xn16
     // matrix as result.
     res = mmasRow * mmasCol * (16 * 16 / 32);
-  } else if (getVersion() == 2) {
+  } else if (isAmpere()) {
     unsigned elemsCol = ceil<unsigned>(shape[0], 16 * getWarpsPerCTA()[0]) * 2;
     unsigned elemsRow = ceil<unsigned>(shape[1], 8 * getWarpsPerCTA()[1]) * 2;
     res = elemsCol * elemsRow;
@@ -476,12 +475,17 @@ Attribute MmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseGreater().failed())
     return {};
 
-  unsigned version = 0;
+  unsigned versionMajor = 0;
+  unsigned versionMinor = 0;
   SmallVector<unsigned, 2> warpsPerCTA;
 
   for (const NamedAttribute &attr : dict) {
-    if (attr.getName() == "version") {
-      if (parseUInt(parser, attr, version, "version").failed())
+    if (attr.getName() == "versionMajor") {
+      if (parseUInt(parser, attr, versionMajor, "versionMajor").failed())
+        return {};
+    }
+    if (attr.getName() == "versionMinor") {
+      if (parseUInt(parser, attr, versionMinor, "versionMinor").failed())
         return {};
     }
     if (attr.getName() == "warpsPerCTA") {
@@ -490,13 +494,14 @@ Attribute MmaEncodingAttr::parse(AsmParser &parser, Type type) {
     }
   }
 
-  return parser.getChecked<MmaEncodingAttr>(parser.getContext(), version,
-                                            warpsPerCTA);
+  return parser.getChecked<MmaEncodingAttr>(parser.getContext(), versionMajor,
+                                            versionMinor, warpsPerCTA);
 }
 
 void MmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
-          << "version = " << getVersion() << ", "
+          << "versionMajor = " << getVersionMajor() << ", "
+          << "versionMinor = " << getVersionMinor() << ", "
           << "warpsPerCTA = [" << getWarpsPerCTA() << "]"
           << "}>";
 }
@@ -576,6 +581,25 @@ void SharedEncodingAttr::print(AsmPrinter &printer) const {
 }
 
 //===----------------------------------------------------------------------===//
+// Mma encoding
+//===----------------------------------------------------------------------===//
+
+bool MmaEncodingAttr::isVolta() const { return getVersionMajor() == 1; }
+
+bool MmaEncodingAttr::isAmpere() const { return getVersionMajor() == 2; }
+
+// Get [isARow, isBRow, isAVec4, isBVec4] from versionMinor
+std::tuple<bool, bool, bool, bool>
+MmaEncodingAttr::decodeVoltaLayoutStates() const {
+  unsigned versionMinor = getVersionMinor();
+  bool isARow = versionMinor & (1 << 0);
+  bool isBRow = versionMinor & (1 << 1);
+  bool isAVec4 = versionMinor & (1 << 2);
+  bool isBVec4 = versionMinor & (1 << 3);
+  return std::make_tuple(isARow, isBRow, isAVec4, isBVec4);
+}
+
+//===----------------------------------------------------------------------===//
 // DotOperand Encoding
 //===----------------------------------------------------------------------===//
 Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
@@ -589,10 +613,10 @@ Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
   unsigned opIdx = attrs.get("opIdx").cast<IntegerAttr>().getInt();
   Attribute parent = attrs.get("parent");
   Attribute isMMAv1Row;
-  if(parent.isa<MmaEncodingAttr>() &&
-     parent.cast<MmaEncodingAttr>().getVersion() == 1){
+  if (parent.isa<MmaEncodingAttr>() &&
+      parent.cast<MmaEncodingAttr>().isVolta()) {
     isMMAv1Row = attrs.get("isMMAv1Row");
-    if(!isMMAv1Row)
+    if (!isMMAv1Row)
       llvm::report_fatal_error("isMMAv1Row attribute is missing");
   }
   return parser.getChecked<DotOperandEncodingAttr>(parser.getContext(), opIdx,
@@ -603,8 +627,8 @@ void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
   printer << "<{"
           << "opIdx = " << getOpIdx() << ", "
           << "parent = " << getParent();
-  if(getIsMMAv1Row())
-    printer << ", isMMAv1Row = " << getIsMMAv1Row();      
+  if (getIsMMAv1Row())
+    printer << ", isMMAv1Row = " << getIsMMAv1Row();
   printer << "}>";
 }
 
