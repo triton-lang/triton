@@ -28,7 +28,7 @@ TEST_P(SwizzleDotOperandTestFixture, DotOperands) {
   MLIRContext ctx;
   ctx.loadDialect<triton::gpu::TritonGPUDialect>();
   // create encoding
-  auto parent = triton::gpu::MmaEncodingAttr::get(&ctx, 2, {1, 1});
+  auto parent = triton::gpu::MmaEncodingAttr::get(&ctx, 2, 0, {1, 1});
   auto encoding =
       triton::gpu::DotOperandEncodingAttr::get(&ctx, params.opIdx, parent);
 

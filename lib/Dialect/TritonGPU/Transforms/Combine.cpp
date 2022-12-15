@@ -844,7 +844,7 @@ public:
                          .getOrder();
     Attribute isMMAv1RowA;
     Attribute isMMAv1RowB;
-    if (version == 1) {
+    if (versionMajor == 1) {
       isMMAv1RowA = BoolAttr::get(getContext(), oldAOrder[0] == 1);
       isMMAv1RowB = BoolAttr::get(getContext(), oldBOrder[0] == 1);
     }

@@ -475,12 +475,17 @@ Attribute MmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseGreater().failed())
     return {};
 
-  unsigned version = 0;
+  unsigned majorVersion = 0;
+  unsigned minorVersion = 0;
   SmallVector<unsigned, 2> warpsPerCTA;
 
   for (const NamedAttribute &attr : dict) {
-    if (attr.getName() == "version") {
-      if (parseUInt(parser, attr, version, "version").failed())
+    if (attr.getName() == "majorVersion") {
+      if (parseUInt(parser, attr, majorVersion, "majorVersion").failed())
+        return {};
+    }
+    if (attr.getName() == "minorVersion") {
+      if (parseUInt(parser, attr, minorVersion, "minorVersion").failed())
         return {};
     }
     if (attr.getName() == "warpsPerCTA") {
@@ -489,8 +494,8 @@ Attribute MmaEncodingAttr::parse(AsmParser &parser, Type type) {
     }
   }
 
-  return parser.getChecked<MmaEncodingAttr>(parser.getContext(), version,
-                                            warpsPerCTA);
+  return parser.getChecked<MmaEncodingAttr>(parser.getContext(), majorVersion,
+                                            minorVersion, warpsPerCTA);
 }
 
 void MmaEncodingAttr::print(AsmPrinter &printer) const {
@@ -609,7 +614,7 @@ Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
   Attribute parent = attrs.get("parent");
   Attribute isMMAv1Row;
   if (parent.isa<MmaEncodingAttr>() &&
-      parent.cast<MmaEncodingAttr>().getVersion() == 1) {
+      parent.cast<MmaEncodingAttr>().isVolta()) {
     isMMAv1Row = attrs.get("isMMAv1Row");
     if (!isMMAv1Row)
       llvm::report_fatal_error("isMMAv1Row attribute is missing");
