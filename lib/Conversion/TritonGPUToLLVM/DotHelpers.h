@@ -992,8 +992,9 @@ struct MMA16816ConversionHelper {
     if (aTensorTy.getEncoding().isa<SharedEncodingAttr>()) {
       Value warpM = getWarpM(shape[0]);
       // load from smem
+    // we use ldmatrix.x4 so each warp processes 16x16 elements.
       int wpt =
-          std::min<int>(mmaLayout.getWarpsPerCTA()[0], shape[0] / matShapeM);
+          std::min<int>(mmaLayout.getWarpsPerCTA()[0], shape[0] / 16);
       loadFn =
           getLoadMatrixFn(tensor, smemObj, mmaLayout, wpt /*wpt*/, 1 /*kOrder*/,
                           {mmaInstrM, mmaInstrK} /*instrShape*/,
@@ -1036,8 +1037,9 @@ struct MMA16816ConversionHelper {
     int numRepN = getNumRepN(tensorTy, shape[1]);
 
     Value warpN = getWarpN(shape[1]);
+    // we use ldmatrix.x4 so each warp processes 16x16 elements.
     int wpt =
-        std::min<int>(mmaLayout.getWarpsPerCTA()[1], shape[1] / matShapeN);
+        std::min<int>(mmaLayout.getWarpsPerCTA()[1], shape[1] / 16);
     auto loadFn =
         getLoadMatrixFn(tensor, smemObj, mmaLayout, wpt /*wpt*/, 0 /*kOrder*/,
                         {mmaInstrK, mmaInstrN} /*instrShape*/,
@@ -1317,6 +1319,7 @@ struct DotOpFMAConversionHelper {
     // if not.
     int K = dotOpLayout.getOpIdx() == 0 ? shape[1] : shape[0];
     int otherDim = dotOpLayout.getOpIdx() == 1 ? shape[1] : shape[0];
+
 
     bool isM = dotOpLayout.getOpIdx() == 0;
     int shapePerCTAMN = getShapePerCTAForMN(blockedLayout, isM);
