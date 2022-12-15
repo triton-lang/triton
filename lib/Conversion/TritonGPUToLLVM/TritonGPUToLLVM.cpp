@@ -27,7 +27,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/Support/Format.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/FormatVariadic.h"
 #include <memory>
 #include <numeric>
@@ -1618,7 +1617,6 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
   auto srcRank = srcTy.getRank();
 
   auto threadsPerWarp = srcLayout.getThreadsPerWarp();
-
   auto warpsPerCTA = srcLayout.getWarpsPerCTA();
 
   auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
