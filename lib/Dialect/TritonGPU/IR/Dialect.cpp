@@ -595,7 +595,7 @@ MmaEncodingAttr::decodeVoltaLayoutStates() const {
   bool isARow = versionMinor & (1 << 0);
   bool isBRow = versionMinor & (1 << 1);
   bool isAVec4 = versionMinor & (1 << 2);
-  bool isBVec4 = versionMinor & (1 << 2);
+  bool isBVec4 = versionMinor & (1 << 3);
   return std::make_tuple(isARow, isBRow, isAVec4, isBVec4);
 }
 

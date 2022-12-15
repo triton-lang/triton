@@ -387,10 +387,10 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
       bool isAVec4 = !isARow && (shapeA[isARow] <= 16);
       bool isBVec4 = isBRow && (shapeB[isBRow] <= 16);
       // 4-bits to encode 4 booleans: [isARow, isBRow, isAVec4, isBVec4]
-      int versionMinor = (1 << (isARow * (1<<0))) |\
-                         (1 << (isBRow * (1<<1))) |\
-                         (1 << (isAVec4 * (1<<2))) |\
-                         (1 << (isBVec4 * (1<<3)));
+      int versionMinor = (isARow * (1<<0)) |\
+                         (isBRow * (1<<1)) |\
+                         (isAVec4 * (1<<2)) |\
+                         (isBVec4 * (1<<3));
       return $_get(context, versionMajor, versionMinor, warpsPerCTA);
     }]>
 
