@@ -67,7 +67,7 @@ jobs:
       - name: Install Triton
         run: |
           cd python
-          TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
+          DEBUG=TRUE TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
 
       - name: Run lit tests
         run: |
