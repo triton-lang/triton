@@ -24,11 +24,11 @@ def get_build_type():
         return "Debug"
     elif check_env_flag("REL_WITH_DEB_INFO"):
         return "RelWithDebInfo"
-    elif check_env_flag("REL_WITH_DEB_INFO_AND_ASSERTIONS"):
-        return "RelWithDebInfoAndAssertions"
+    elif check_env_flag("TRITON_REL_BUILD_WITH_ASSERTS"):
+        return "TritonRelBuildWithAsserts"
     else:
         # TODO: change to release when stable enough
-        return "RelWithDebInfoAndAssertions"
+        return "TritonRelBuildWithAsserts"
 
 
 # --- third party packages -----
