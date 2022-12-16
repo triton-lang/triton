@@ -227,18 +227,15 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
     int numWarps = typeConverter->getNumWarps();
 
     SmallVector<unsigned> retSizePerThread = {1, 1};
-    if(origShape[0]*origShape[1] / (numWarps*32) >= 4)
+    if (origShape[0] * origShape[1] / (numWarps * 32) >= 4)
       retSizePerThread = {2, 2};
-    if(origShape[0]*origShape[1] / (numWarps*32) >= 16)
+    if (origShape[0] * origShape[1] / (numWarps * 32) >= 16)
       retSizePerThread = {4, 4};
     SmallVector<unsigned> retOrder = {1, 0};
     Attribute dEncoding = triton::gpu::BlockedEncodingAttr::get(
-                                                     getContext(), origShape,
-                                                     retSizePerThread, 
-                                                     retOrder, numWarps);
-    RankedTensorType retType = RankedTensorType::get(origShape,
-                                                    origType.getElementType(),
-                                                    dEncoding);
+        getContext(), origShape, retSizePerThread, retOrder, numWarps);
+    RankedTensorType retType =
+        RankedTensorType::get(origShape, origType.getElementType(), dEncoding);
     // a & b must be of smem layout
     auto aType = adaptor.a().getType().cast<RankedTensorType>();
     auto bType = adaptor.b().getType().cast<RankedTensorType>();

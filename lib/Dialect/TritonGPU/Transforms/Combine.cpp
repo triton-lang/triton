@@ -57,8 +57,7 @@ public:
           !dstParent.isa<triton::gpu::MmaEncodingAttr>())
         return mlir::failure();
       auto dstParentMma = dstParent.cast<triton::gpu::MmaEncodingAttr>();
-      if (dstParentMma.isVolta() ||
-          dstParentMma.getWarpsPerCTA()[1] > 1)
+      if (dstParentMma.isVolta() || dstParentMma.getWarpsPerCTA()[1] > 1)
         return mlir::failure();
       SetVector<Operation *> bwdSlices;
       mlir::getBackwardSlice(convert.getResult(), &bwdSlices);
@@ -801,16 +800,15 @@ public:
       return failure();
 
     auto AOrder = AType.getEncoding()
-                         .cast<triton::gpu::DotOperandEncodingAttr>()
-                         .getParent()
-                         .cast<triton::gpu::BlockedEncodingAttr>()
-                         .getOrder();
+                      .cast<triton::gpu::DotOperandEncodingAttr>()
+                      .getParent()
+                      .cast<triton::gpu::BlockedEncodingAttr>()
+                      .getOrder();
     auto BOrder = BType.getEncoding()
-                         .cast<triton::gpu::DotOperandEncodingAttr>()
-                         .getParent()
-                         .cast<triton::gpu::BlockedEncodingAttr>()
-                         .getOrder();
-
+                      .cast<triton::gpu::DotOperandEncodingAttr>()
+                      .getParent()
+                      .cast<triton::gpu::BlockedEncodingAttr>()
+                      .getOrder();
 
     // get MMA encoding for the given number of warps
     auto retShape = oldRetType.getShape();
@@ -961,7 +959,6 @@ public:
     if (applyPatternsAndFoldGreedily(m, std::move(loopFixup)).failed()) {
       signalPassFailure();
     }
-
   }
 };
 

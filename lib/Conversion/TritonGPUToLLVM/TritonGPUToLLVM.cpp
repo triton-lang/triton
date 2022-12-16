@@ -3388,8 +3388,7 @@ Value ConvertLayoutOpConversion::lowerSharedToDotOperandMMA(
       // operand $b
       res = mmaHelper.loadB(src, smemObj);
     }
-  } else if (!isOuter && mmaLayout.isVolta() &&
-             isHMMA) { // tensor core v1
+  } else if (!isOuter && mmaLayout.isVolta() && isHMMA) { // tensor core v1
     DotOpMmaV1ConversionHelper helper(mmaLayout);
     bool isMMAv1Row =
         dotOperandLayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
@@ -3700,8 +3699,7 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
           for (unsigned nn = 0; nn < nSizePerThread; ++nn) {
             int mIdx = m / mShapePerCTA * mSizePerThread + mm;
             int nIdx = n / nShapePerCTA * nSizePerThread + nn;
-      
-            
+
             int z = isCRow ? mIdx * N / nShapePerCTA * mSizePerThread + nIdx
                            : nIdx * M / mShapePerCTA * nSizePerThread + mIdx;
             ret[z] = rewriter.create<LLVM::FMulAddOp>(loc, has[{m + mm, k}],
