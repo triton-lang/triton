@@ -110,7 +110,7 @@ def softmax(x):
     y = torch.empty_like(x)
     # Enqueue kernel. The 1D launch grid is simple: we have one kernel instance per row o
     # f the input matrix
-    softmax_kernel[(n_rows,)](
+    pgm = softmax_kernel[(n_rows,)](
         y,
         x,
         x.stride(0),
@@ -119,6 +119,7 @@ def softmax(x):
         num_warps=num_warps,
         BLOCK_SIZE=BLOCK_SIZE,
     )
+    print(pgm.asm["ttgir"])
     return y
 
 
@@ -131,10 +132,12 @@ def softmax(x):
 # This will allow us to verify that our padding mechanism works.
 
 torch.manual_seed(0)
-x = torch.randn(1823, 781, device='cuda')
+x = torch.randn(1024, 1024, device='cuda')
 y_triton = softmax(x)
 y_torch = torch.softmax(x, axis=1)
 assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
+print("done")
+exit()
 
 # %%
 # As expected, the results are identical.
@@ -181,7 +184,7 @@ def benchmark(M, N, provider):
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
 
-benchmark.run(show_plots=True, print_data=True)
+benchmark.run(show_plots=False, print_data=True)
 
 # %%
 # In the above plot, we can see that:

@@ -267,6 +267,122 @@ Operation *cloneWithInferType(mlir::PatternRewriter &rewriter, Operation *op,
   return newOp;
 }
 
+//
+class FoldConvertAndReduce : public mlir::RewritePattern {
+public:
+  explicit FoldConvertAndReduce(mlir::MLIRContext *context)
+      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
+                             2, context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *cvt,
+                  mlir::PatternRewriter &rewriter) const override {
+    if (!llvm::isa<triton::gpu::ConvertLayoutOp>(cvt))
+      return mlir::failure();
+     // we don't handle conversions to DotOperandEncodingAttr
+    // this is a heuristics to accommodate fused attention
+    auto targetType = cvt->getResultTypes()[0].cast<RankedTensorType>();
+    if (targetType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
+      return mlir::failure();
+    // DFS
+    SetVector<Operation *> processed;
+    llvm::MapVector<Value, Attribute> toConvert;
+    std::vector<std::pair<Operation *, Attribute>> queue;
+    queue.emplace_back(cvt, targetType.getEncoding());
+    int numCvts = 1;
+    while (!queue.empty()) {
+      Operation *currOp;
+      Attribute currLayout;
+      std::tie(currOp, currLayout) = queue.back();
+      queue.pop_back();
+      numCvts -= 1;
+      // done processing
+      processed.insert(currOp);
+      // add all operands to the queue
+      for (Operation* opUseI: currOp->getUsers()) {
+        auto results = opUseI->getResults();
+        assert(results.size() == 1);
+        Value valUseI = results[0];
+        if(valUseI && 
+           valUseI.getType().isa<RankedTensorType>() && 
+           !opUseI->hasTrait<OpTrait::Elementwise>())
+          return mlir::failure();
+        Attribute newEncoding = currLayout;
+        if (toConvert.count(valUseI) && toConvert[valUseI] != newEncoding)
+          return mlir::failure();
+        // If the current operation is expensive to rematerialize,
+        // we stop everything
+        if (expensive_to_remat(opUseI))
+          return mlir::failure();
+        //
+        toConvert.insert({currOp->getResults()[0], newEncoding});
+        if (!opUseI || processed.contains(opUseI) ||
+            (opUseI->getBlock() != cvt->getBlock()))
+          continue;
+        // if the conversion can be folded into opArgI then
+        // we don't count this conversion as expensive
+        if ()
+          continue;
+        // we add one expensive conversion for the current operand
+        numCvts += 1;
+        queue.emplace_back(opUseI, newEncoding);
+      }
+    }
+
+    SetVector<Operation*> fwdSlices;
+    auto canFold = [](Operation* op) {
+      return !isa<triton::gpu::ConvertLayoutOp, triton::ReduceOp>(op);
+    };
+    mlir::getForwardSlice(cvt.getResult(), &fwdSlices, canFold);
+
+    if(llvm::find_if(fwdSlices, [](Operation* op) {
+      return expensive_to_remat(op);
+    }) != fwdSlices.end())
+      return mlir::failure();
+
+    llvm::outs() << *cvt << "\n";
+
+    SmallVector<Value, 4> sortedValues;
+    SetVector<Operation *> tmp;
+    for (auto &item : toConvert) {
+      Value v = item.first;
+      if (v.getDefiningOp())
+        tmp.insert(v.getDefiningOp());
+      else
+        sortedValues.push_back(v);
+    }
+    tmp = mlir::topologicalSort(tmp);
+    for (Operation *op : tmp)
+      sortedValues.push_back(op->getResult(0));
+
+    for(auto s: sortedValues)
+      llvm::outs() << s << "\n";
+
+    BlockAndValueMapping mapping;
+    for (Value currOperand : sortedValues) {
+      // unpack information
+      Attribute targetLayout = toConvert.lookup(currOperand);
+      // rematerialize the operand if necessary
+      Operation *currOperation = currOperand.getDefiningOp();
+      if (processed.contains(currOperation)) {
+        currOperation = cloneWithInferType(rewriter, currOperation, mapping);
+        currOperand = currOperation->getResult(0);
+      }
+      // compute target type for the layout cast
+      auto currType = currOperand.getType().cast<RankedTensorType>();
+      auto newType = RankedTensorType::get(
+          currType.getShape(), currType.getElementType(), targetLayout);
+      auto newOperand = rewriter.create<triton::gpu::ConvertLayoutOp>(
+          currOperand.getLoc(), newType, currOperand);
+      if (currOperation)
+        newOperand->moveAfter(currOperation);
+      mapping.map(currOperand, newOperand);
+    }
+    rewriter.replaceOp(cvt, mapping.lookup(cvt->getOperand(0)));
+    return mlir::success();
+
+  }
+};
 // Layout conversions are expensive. They require going through
 // shared memory, which is orders of magnitude slower than
 // other non-i/o operations in the dialect.
@@ -944,6 +1060,7 @@ public:
     patterns.add<OptimizeBlockedToShared>(context);
     patterns.add<OptimizeConvertToDotOperand>(context);
     patterns.add<SimplifyConversion>(context);
+    patterns.add<FoldConvertAndReduce>(context);
     patterns.add<DecomposeDotOperand>(context);
     patterns.add<RematerializeBackward>(context);
     patterns.add<RematerializeForward>(context);
