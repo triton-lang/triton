@@ -226,9 +226,10 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
     auto typeConverter = cast<TritonGPUTypeConverter>(getTypeConverter());
     int numWarps = typeConverter->getNumWarps();
 
-    // probably not as efficient as it could be
-    SmallVector<unsigned> retSizePerThread = {2, 2};
-    if(origShape[0] >= 32 || origShape[1] >= 32)
+    SmallVector<unsigned> retSizePerThread = {1, 1};
+    if(origShape[0]*origShape[1] / (numWarps*32) >= 4)
+      retSizePerThread = {2, 2};
+    if(origShape[0]*origShape[1] / (numWarps*32) >= 16)
       retSizePerThread = {4, 4};
     SmallVector<unsigned> retOrder = {1, 0};
     Attribute dEncoding = triton::gpu::BlockedEncodingAttr::get(
