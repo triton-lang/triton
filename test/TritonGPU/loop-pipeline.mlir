@@ -4,7 +4,7 @@
 // matmul: 128x32 @ 32x128 -> 128x128
 #AL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #BL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-#C = #triton_gpu.mma<{version = 2, warpsPerCTA = [4, 1]}>
+#C = #triton_gpu.mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
 #A = #triton_gpu.dot_op<{opIdx = 0, parent = #C}>
 #B = #triton_gpu.dot_op<{opIdx = 1, parent = #C}>
 
