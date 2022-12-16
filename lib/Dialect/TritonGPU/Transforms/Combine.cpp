@@ -57,7 +57,7 @@ public:
           !dstParent.isa<triton::gpu::MmaEncodingAttr>())
         return mlir::failure();
       auto dstParentMma = dstParent.cast<triton::gpu::MmaEncodingAttr>();
-      if (dstParentMma.getVersion() == 1 ||
+      if (dstParentMma.isVolta() ||
           dstParentMma.getWarpsPerCTA()[1] > 1)
         return mlir::failure();
       SetVector<Operation *> bwdSlices;
