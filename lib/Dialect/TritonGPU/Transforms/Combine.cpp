@@ -792,24 +792,52 @@ public:
     if (oldRetType.getEncoding().isa<triton::gpu::MmaEncodingAttr>())
       return failure();
 
-    auto A = dotOp.getOperand(0).getType().cast<RankedTensorType>();
-    auto B = dotOp.getOperand(1).getType().cast<RankedTensorType>();
+    auto AType = dotOp.getOperand(0).getType().cast<RankedTensorType>();
+    auto BType = dotOp.getOperand(1).getType().cast<RankedTensorType>();
 
     // for FMA, should retain the blocked layout.
-    int version = computeCapabilityToMMAVersion(computeCapability);
-    if (!supportMMA(dotOp, version))
+    int versionMajor = computeCapabilityToMMAVersion(computeCapability);
+    if (!supportMMA(dotOp, versionMajor))
       return failure();
+
+    auto AOrder = AType.getEncoding()
+                         .cast<triton::gpu::DotOperandEncodingAttr>()
+                         .getParent()
+                         .cast<triton::gpu::BlockedEncodingAttr>()
+                         .getOrder();
+    auto BOrder = BType.getEncoding()
+                         .cast<triton::gpu::DotOperandEncodingAttr>()
+                         .getParent()
+                         .cast<triton::gpu::BlockedEncodingAttr>()
+                         .getOrder();
+
 
     // get MMA encoding for the given number of warps
     auto retShape = oldRetType.getShape();
     auto mod = op->getParentOfType<mlir::ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
 
-    auto newRetType = RankedTensorType::get(
-        retShape, oldRetType.getElementType(),
-        triton::gpu::MmaEncodingAttr::get(
-            oldRetType.getContext(), version,
-            getWarpsPerTile(dotOp, retShape, version, numWarps)));
+    auto warpsPerTile =
+        getWarpsPerTile(dotOp, retShape, versionMajor, numWarps);
+    triton::gpu::MmaEncodingAttr mmaEnc;
+    if (versionMajor == 1) {
+      auto shapeA = AType.getShape();
+      auto shapeB = BType.getShape();
+      bool isARow = AOrder[0] != 0;
+      bool isBRow = BOrder[0] != 0;
+      mmaEnc = triton::gpu::MmaEncodingAttr::get(
+          oldRetType.getContext(), versionMajor, warpsPerTile, shapeA, shapeB,
+          isARow, isBRow);
+    } else if (versionMajor == 2) {
+      mmaEnc = triton::gpu::MmaEncodingAttr::get(
+          oldRetType.getContext(), versionMajor, 0 /*versionMinor*/,
+          warpsPerTile);
+    } else {
+      assert(false && "Mma layout only support versionMajor of 1 or 2");
+    }
+    auto newRetType =
+        RankedTensorType::get(retShape, oldRetType.getElementType(), mmaEnc);
+
     // convert accumulator
     auto oldAcc = dotOp.getOperand(2);
     auto newAcc = rewriter.create<triton::gpu::ConvertLayoutOp>(
@@ -830,7 +858,7 @@ public:
                          .getOrder();
     Attribute isMMAv1RowA;
     Attribute isMMAv1RowB;
-    if (version == 1) {
+    if (versionMajor == 1) {
       isMMAv1RowA = BoolAttr::get(getContext(), oldAOrder[0] == 1);
       isMMAv1RowB = BoolAttr::get(getContext(), oldBOrder[0] == 1);
     }

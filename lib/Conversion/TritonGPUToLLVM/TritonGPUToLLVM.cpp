@@ -3332,7 +3332,7 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
                                     .cast<RankedTensorType>()
                                     .getEncoding()
                                     .dyn_cast<MmaEncodingAttr>();
-    if (!isOuter && mmaLayout && supportMMA(op, mmaLayout.getVersion())) {
+    if (!isOuter && mmaLayout && supportMMA(op, mmaLayout.getVersionMajor())) {
       if (mmaLayout.isVolta())
         return convertMMA884(op, adaptor, rewriter);
       if (mmaLayout.isAmpere())
@@ -3371,7 +3371,7 @@ Value ConvertLayoutOpConversion::lowerSharedToDotOperandMMA(
   auto loc = op.getLoc();
   Value src = op.src();
   Value dst = op.result();
-  bool isHMMA = supportMMA(dst, mmaLayout.getVersion());
+  bool isHMMA = supportMMA(dst, mmaLayout.getVersionMajor());
 
   auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.src(), rewriter);
   Value res;
