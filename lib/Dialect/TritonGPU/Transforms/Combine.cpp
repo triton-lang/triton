@@ -584,13 +584,15 @@ public:
 // -----------------------------------------------------------------------------
 namespace {
 int computeCapabilityToMMAVersion(int computeCapability) {
-  if (computeCapability < 80) {
+  if (computeCapability < 70) {
+    return 0;
+  } else if (computeCapability < 80) {
     return 1;
   } else if (computeCapability < 90) {
     return 2;
   } else {
     assert(false && "computeCapability > 90 not supported");
-    return 0;
+    return 3;
   }
 }
 
@@ -789,39 +791,38 @@ public:
     if (oldRetType.getEncoding().isa<triton::gpu::MmaEncodingAttr>())
       return failure();
 
-    Value oldA = dotOp.a();
-    Value oldB = dotOp.b();
-    auto oldAType = oldA.getType().cast<RankedTensorType>();
-    auto oldBType = oldB.getType().cast<RankedTensorType>();
+    auto AType = dotOp.getOperand(0).getType().cast<RankedTensorType>();
+    auto BType = dotOp.getOperand(1).getType().cast<RankedTensorType>();
+
     // for FMA, should retain the blocked layout.
-    if (oldAType.getElementType().isF32() &&
-        oldBType.getElementType().isF32() && !dotOp.allowTF32())
+    int versionMajor = computeCapabilityToMMAVersion(computeCapability);
+    if (!supportMMA(dotOp, versionMajor))
       return failure();
 
-    auto oldAOrder = oldAType.getEncoding()
-                         .cast<triton::gpu::DotOperandEncodingAttr>()
-                         .getParent()
-                         .cast<triton::gpu::BlockedEncodingAttr>()
-                         .getOrder();
-    auto oldBOrder = oldBType.getEncoding()
-                         .cast<triton::gpu::DotOperandEncodingAttr>()
-                         .getParent()
-                         .cast<triton::gpu::BlockedEncodingAttr>()
-                         .getOrder();
+    auto AOrder = AType.getEncoding()
+                      .cast<triton::gpu::DotOperandEncodingAttr>()
+                      .getParent()
+                      .cast<triton::gpu::BlockedEncodingAttr>()
+                      .getOrder();
+    auto BOrder = BType.getEncoding()
+                      .cast<triton::gpu::DotOperandEncodingAttr>()
+                      .getParent()
+                      .cast<triton::gpu::BlockedEncodingAttr>()
+                      .getOrder();
 
     // get MMA encoding for the given number of warps
     auto retShape = oldRetType.getShape();
     auto mod = op->getParentOfType<mlir::ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    int versionMajor = computeCapabilityToMMAVersion(computeCapability);
+
     auto warpsPerTile =
         getWarpsPerTile(dotOp, retShape, versionMajor, numWarps);
     triton::gpu::MmaEncodingAttr mmaEnc;
     if (versionMajor == 1) {
-      auto shapeA = oldAType.getShape();
-      auto shapeB = oldBType.getShape();
-      bool isARow = oldAOrder[0] != 0;
-      bool isBRow = oldBOrder[0] != 0;
+      auto shapeA = AType.getShape();
+      auto shapeB = BType.getShape();
+      bool isARow = AOrder[0] != 0;
+      bool isBRow = BOrder[0] != 0;
       mmaEnc = triton::gpu::MmaEncodingAttr::get(
           oldRetType.getContext(), versionMajor, warpsPerTile, shapeA, shapeB,
           isARow, isBRow);
@@ -832,13 +833,27 @@ public:
     } else {
       assert(false && "Mma layout only support versionMajor of 1 or 2");
     }
-
     auto newRetType =
         RankedTensorType::get(retShape, oldRetType.getElementType(), mmaEnc);
+
     // convert accumulator
     auto oldAcc = dotOp.getOperand(2);
     auto newAcc = rewriter.create<triton::gpu::ConvertLayoutOp>(
         oldAcc.getLoc(), newRetType, oldAcc);
+    Value a = dotOp.a();
+    Value b = dotOp.b();
+    auto oldAType = a.getType().cast<RankedTensorType>();
+    auto oldBType = b.getType().cast<RankedTensorType>();
+    auto oldAOrder = oldAType.getEncoding()
+                         .cast<triton::gpu::DotOperandEncodingAttr>()
+                         .getParent()
+                         .cast<triton::gpu::BlockedEncodingAttr>()
+                         .getOrder();
+    auto oldBOrder = oldBType.getEncoding()
+                         .cast<triton::gpu::DotOperandEncodingAttr>()
+                         .getParent()
+                         .cast<triton::gpu::BlockedEncodingAttr>()
+                         .getOrder();
     Attribute isMMAv1RowA;
     Attribute isMMAv1RowB;
     if (versionMajor == 1) {
@@ -855,12 +870,10 @@ public:
         triton::gpu::DotOperandEncodingAttr::get(
             oldBType.getContext(), 1, newRetType.getEncoding(), isMMAv1RowB));
 
-    Value newA = rewriter.create<triton::gpu::ConvertLayoutOp>(oldA.getLoc(),
-                                                               newAType, oldA);
-    Value newB = rewriter.create<triton::gpu::ConvertLayoutOp>(oldB.getLoc(),
-                                                               newBType, oldB);
-    auto newDot = rewriter.create<triton::DotOp>(
-        dotOp.getLoc(), newRetType, newA, newB, newAcc, dotOp.allowTF32());
+    a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), newAType, a);
+    b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), newBType, b);
+    auto newDot = rewriter.create<triton::DotOp>(dotOp.getLoc(), newRetType, a,
+                                                 b, newAcc, dotOp.allowTF32());
 
     rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
         op, oldRetType, newDot.getResult());
@@ -941,7 +954,6 @@ public:
       signalPassFailure();
     }
 
-    // llvm::outs() << m << "\n";
     mlir::RewritePatternSet loopFixup(context);
     loopFixup.add<FixupLoop>(context);
     if (applyPatternsAndFoldGreedily(m, std::move(loopFixup)).failed()) {

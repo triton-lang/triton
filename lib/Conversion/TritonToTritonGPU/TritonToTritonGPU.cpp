@@ -221,8 +221,21 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
   LogicalResult
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Type retType = getTypeConverter()->convertType(op.getType());
-    Attribute dEncoding = retType.cast<RankedTensorType>().getEncoding();
+    RankedTensorType origType = op.getType().cast<RankedTensorType>();
+    auto origShape = origType.getShape();
+    auto typeConverter = cast<TritonGPUTypeConverter>(getTypeConverter());
+    int numWarps = typeConverter->getNumWarps();
+
+    SmallVector<unsigned> retSizePerThread = {1, 1};
+    if (origShape[0] * origShape[1] / (numWarps * 32) >= 4)
+      retSizePerThread = {2, 2};
+    if (origShape[0] * origShape[1] / (numWarps * 32) >= 16)
+      retSizePerThread = {4, 4};
+    SmallVector<unsigned> retOrder = {1, 0};
+    Attribute dEncoding = triton::gpu::BlockedEncodingAttr::get(
+        getContext(), origShape, retSizePerThread, retOrder, numWarps);
+    RankedTensorType retType =
+        RankedTensorType::get(origShape, origType.getElementType(), dEncoding);
     // a & b must be of smem layout
     auto aType = adaptor.a().getType().cast<RankedTensorType>();
     auto bType = adaptor.b().getType().cast<RankedTensorType>();
@@ -232,6 +245,7 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
       return failure();
     Value a = adaptor.a();
     Value b = adaptor.b();
+    Value c = adaptor.c();
     if (!aEncoding.isa<triton::gpu::DotOperandEncodingAttr>()) {
       Attribute encoding =
           triton::gpu::DotOperandEncodingAttr::get(getContext(), 0, dEncoding);
@@ -246,7 +260,9 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
                                            bType.getElementType(), encoding);
       b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), dstType, b);
     }
-    rewriter.replaceOpWithNewOp<triton::DotOp>(op, retType, a, b, adaptor.c(),
+    c = rewriter.create<triton::gpu::ConvertLayoutOp>(c.getLoc(), retType, c);
+
+    rewriter.replaceOpWithNewOp<triton::DotOp>(op, retType, a, b, c,
                                                adaptor.allowTF32());
     return success();
   }

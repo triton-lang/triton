@@ -1267,12 +1267,11 @@ void init_triton_ir(py::module &&m) {
              auto loc = self.getUnknownLoc();
              return self.create<::mlir::LLVM::UndefOp>(loc, type);
            })
-     // Force GPU barrier
-     .def("create_barrier",
-          [](mlir::OpBuilder &self) {
-            auto loc = self.getUnknownLoc();
-            self.create<mlir::gpu::BarrierOp>(loc);
-          });
+      // Force GPU barrier
+      .def("create_barrier", [](mlir::OpBuilder &self) {
+        auto loc = self.getUnknownLoc();
+        self.create<mlir::gpu::BarrierOp>(loc);
+      });
 
   py::class_<mlir::PassManager>(m, "pass_manager")
       .def(py::init<mlir::MLIRContext *>())

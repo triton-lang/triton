@@ -2,15 +2,16 @@ import pytest
 import torch
 
 import triton
+import triton._C.libtriton.triton as _triton
 
-# TODO: float32 fails
 
 @pytest.mark.parametrize("MODE", ["sdd", "dds", "dsd"])
-@pytest.mark.parametrize("TRANS_B", [False, True])
 @pytest.mark.parametrize("TRANS_A", [False, True])
+@pytest.mark.parametrize("TRANS_B", [False, True])
 @pytest.mark.parametrize("BLOCK", [16, 32, 64])
+# TODO: float32 fails
 @pytest.mark.parametrize("DTYPE", [torch.float16])
-def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=256, K=384):
+def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=256):
     seed = 0
     torch.manual_seed(seed)
     is_sdd = MODE == "sdd"
@@ -39,8 +40,8 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=256, K=
     dc_ref = do_mask(dc_ref) if is_sdd else dc_ref
     a_ref = do_mask(a_ref) if is_dsd else a_ref
     b_ref = do_mask(b_ref) if is_dds else b_ref
-    a_ref.requires_grad_().retain_grad()
-    b_ref.requires_grad_().retain_grad()
+    a_ref.retain_grad()
+    b_ref.retain_grad()
     c_ref = torch.matmul(a_ref.transpose(2, 3) if TRANS_A else a_ref,
                          b_ref.transpose(2, 3) if TRANS_B else b_ref)
     c_ref.backward(dc_ref)
@@ -51,8 +52,8 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=256, K=
     dc_tri = do_sparsify(dc_tri) if is_sdd else dc_tri
     a_tri = do_sparsify(a_tri) if is_dsd else a_tri
     b_tri = do_sparsify(b_tri) if is_dds else b_tri
-    a_tri.requires_grad_().retain_grad()
-    b_tri.requires_grad_().retain_grad()
+    a_tri.retain_grad()
+    b_tri.retain_grad()
     op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B, device="cuda")
     c_tri = triton.testing.catch_oor(lambda: op(a_tri, b_tri), pytest)
     triton.testing.catch_oor(lambda: c_tri.backward(dc_tri), pytest)
@@ -116,7 +117,7 @@ def test_softmax(BLOCK, WIDTH, is_dense, Z=2, H=2, is_causal=True, scale=0.4):
 
 
 @pytest.mark.parametrize("block", [16, 32, 64])
-@pytest.mark.parametrize("dtype", [torch.float16])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
 def test_attention_fwd_bwd(
     block,
     dtype,
@@ -126,6 +127,10 @@ def test_attention_fwd_bwd(
     batch_size=2,
     n_heads=2,
 ):
+    capability = torch.cuda.get_device_capability()
+    if capability[0] < 7:
+        pytest.skip("Only test tl.dot() on devices with sm >= 70")
+
     # inputs
     qkv_shape = (batch_size, n_heads, n_ctx, 64)
     qkvs = [

@@ -196,6 +196,8 @@ def _bwd_kernel(
 
 
 empty = torch.empty(128, device="cuda")
+
+
 class _attention(torch.autograd.Function):
 
     @staticmethod
@@ -304,6 +306,7 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     triton.testing.assert_almost_equal(ref_dv, tri_dv)
     triton.testing.assert_almost_equal(ref_dk, tri_dk)
     triton.testing.assert_almost_equal(ref_dq, tri_dq)
+
 
 BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
 # vary seq length for fixed head and batch=4

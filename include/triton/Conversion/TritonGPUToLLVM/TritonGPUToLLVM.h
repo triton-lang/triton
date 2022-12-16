@@ -22,6 +22,11 @@ public:
       MLIRContext &ctx, mlir::LLVMTypeConverter &typeConverter);
 };
 
+namespace LLVM {
+void vprintf(StringRef msg, ValueRange args,
+             ConversionPatternRewriter &rewriter);
+}
+
 namespace triton {
 
 // Names for identifying different NVVM annotations. It is used as attribute

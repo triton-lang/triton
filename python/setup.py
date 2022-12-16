@@ -25,9 +25,8 @@ def get_build_type():
     elif check_env_flag("REL_WITH_DEB_INFO"):
         return "RelWithDebInfo"
     else:
-        return "RelWithDebInfo"
         # TODO: change to release when stable enough
-        #return "Release"
+        return "RelWithDebInfo"
 
 
 # --- third party packages -----

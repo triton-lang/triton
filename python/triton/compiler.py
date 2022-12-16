@@ -392,7 +392,7 @@ class CodeGenerator(ast.NodeVisitor):
                             if then_defs[then_name].type == else_defs[else_name].type:
                                 names.append(then_name)
                                 ret_types.append(then_defs[then_name].type)
-                
+
                 # defined in else block but not in then block
                 # to find in parent scope and yield them
                 for else_name in else_defs:
@@ -766,8 +766,8 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Attribute(self, node):
         lhs = self.visit(node.value)
         if isinstance(lhs, triton.language.tensor):
-          if node.attr == "T":
-            return triton.language.semantic.trans(lhs, builder=self.builder)
+            if node.attr == "T":
+                return triton.language.semantic.trans(lhs, builder=self.builder)
         return getattr(lhs, node.attr)
 
     def visit_Expr(self, node):
@@ -1385,8 +1385,11 @@ arg_type_pattern = {
 
 # def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
 def compile(fn, **kwargs):
-    capability = torch.cuda.get_device_capability()
-    capability = capability[0] * 10 + capability[1]
+    capability = kwargs.get("cc", None)
+    if capability is None:
+        device = torch.cuda.current_device()
+        capability = torch.cuda.get_device_capability(device)
+        capability = capability[0] * 10 + capability[1]
     # we get the kernel, i.e. the first function generated in the module
     # if fn is not a JITFunction, then it
     # has to be a path to a file
@@ -1396,7 +1399,6 @@ def compile(fn, **kwargs):
     num_warps = kwargs.get("num_warps", 4)
     num_stages = kwargs.get("num_stages", 3 if capability >= 75 else 2)
     extern_libs = kwargs.get("extern_libs", dict())
-    device = kwargs.get("device", torch.cuda.current_device())
     # build compilation stages
     stages = {
         "ast": (lambda path: fn, None),
@@ -1446,7 +1448,7 @@ def compile(fn, **kwargs):
     if isinstance(fn, triton.runtime.JITFunction):
         name, ext = fn.__name__, "ast"
     else:
-      name, ext = os.path.basename(fn).split(".")
+        name, ext = os.path.basename(fn).split(".")
 
     # load metadata if any
     metadata = None
@@ -1454,34 +1456,34 @@ def compile(fn, **kwargs):
         with open(fn_cache_manager._make_path(f"{name}.json")) as f:
             metadata = json.load(f)
     else:
-      metadata = {"num_warps": num_warps, "num_stages": num_stages, "ctime": dict()}
-      if ext == "ptx":
-        assert "shared" in kwargs, "ptx compilation must provide shared memory size"
-        metadata["shared"] = kwargs["shared"]
+        metadata = {"num_warps": num_warps, "num_stages": num_stages, "ctime": dict()}
+        if ext == "ptx":
+            assert "shared" in kwargs, "ptx compilation must provide shared memory size"
+            metadata["shared"] = kwargs["shared"]
 
     first_stage = list(stages.keys()).index(ext)
     asm = dict()
     module = fn
     # run compilation pipeline  and populate metadata
     for ir, (parse, compile) in list(stages.items())[first_stage:]:
-      path = fn_cache_manager._make_path(f"{name}.{ir}")
-      if ir == ext:
-        next_module = parse(fn)
-      elif os.path.exists(path) and\
-              ir in metadata["ctime"] and\
-              os.path.getctime(path) == metadata["ctime"][ir]:
-        next_module = parse(path)
-      else:
-        next_module = compile(module)
-        fn_cache_manager.put(next_module, f"{name}.{ir}")
-      if os.path.exists(path):
-        metadata["ctime"][ir] = os.path.getctime(path)
-      asm[ir] = next_module if ir == "cubin" else str(next_module)
-      if ir == "llir" and "shared" not in metadata:
-        metadata["shared"] = _triton.get_shared_memory_size(module)
-      if ir == "ptx":
-        metadata["name"] = ptx_get_kernel_name(next_module)
-      module = next_module
+        path = fn_cache_manager._make_path(f"{name}.{ir}")
+        if ir == ext:
+            next_module = parse(fn)
+        elif os.path.exists(path) and\
+                ir in metadata["ctime"] and\
+                os.path.getctime(path) == metadata["ctime"][ir]:
+            next_module = parse(path)
+        else:
+            next_module = compile(module)
+            fn_cache_manager.put(next_module, f"{name}.{ir}")
+        if os.path.exists(path):
+            metadata["ctime"][ir] = os.path.getctime(path)
+        asm[ir] = next_module if ir == "cubin" else str(next_module)
+        if ir == "llir" and "shared" not in metadata:
+            metadata["shared"] = _triton.get_shared_memory_size(module)
+        if ir == "ptx":
+            metadata["name"] = ptx_get_kernel_name(next_module)
+        module = next_module
     # write-back metadata
     fn_cache_manager.put(json.dumps(metadata), f"{name}.json", binary=False)
     # return handle to compiled kernel
@@ -1503,14 +1505,31 @@ class CompiledKernel:
         self.num_stages = metadata["num_stages"]
         # initialize asm dict
         self.asm = asm
+        # binaries are lazily initialized
+        # because it involves doing runtime things
+        # (e.g., checking amount of shared memory on current device)
+        self.metadata = metadata
+        self.cu_module = None
+        self.cu_function = None
+
+    def _init_handles(self):
+        if self.cu_module is not None:
+            return
         device = torch.cuda.current_device()
         global cuda_utils
         init_cuda_utils()
-        mod, func, n_regs, n_spills = cuda_utils.load_binary(metadata["name"], self.asm["cubin"], self.shared, device)
+        mod, func, n_regs, n_spills = cuda_utils.load_binary(self.metadata["name"], self.asm["cubin"], self.shared, device)
         self.cu_module = mod
         self.cu_function = func
 
+    def __getattribute__(self, name):
+        if name == 'c_wrapper':
+            self._init_handles()
+        return super().__getattribute__(name)
+
     def __getitem__(self, grid):
+        self._init_handles()
+
         def runner(*args, stream=None):
             if stream is None:
                 stream = torch.cuda.current_stream().cuda_stream

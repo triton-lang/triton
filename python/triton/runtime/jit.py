@@ -110,7 +110,6 @@ class KernelInterface(Generic[T]):
         return cast(T, functools.partial(cast(Callable, self.run), grid=grid))
 
 
-
 class JITFunction(KernelInterface[T]):
 
     cache_hook = None

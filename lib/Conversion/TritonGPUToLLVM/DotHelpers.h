@@ -992,8 +992,9 @@ struct MMA16816ConversionHelper {
     if (aTensorTy.getEncoding().isa<SharedEncodingAttr>()) {
       Value warpM = getWarpM(shape[0]);
       // load from smem
+    // we use ldmatrix.x4 so each warp processes 16x16 elements.
       int wpt =
-          std::min<int>(mmaLayout.getWarpsPerCTA()[0], shape[0] / matShapeM);
+          std::min<int>(mmaLayout.getWarpsPerCTA()[0], shape[0] / 16);
       loadFn =
           getLoadMatrixFn(tensor, smemObj, mmaLayout, wpt /*wpt*/, 1 /*kOrder*/,
                           {mmaInstrM, mmaInstrK} /*instrShape*/,
@@ -1036,8 +1037,9 @@ struct MMA16816ConversionHelper {
     int numRepN = getNumRepN(tensorTy, shape[1]);
 
     Value warpN = getWarpN(shape[1]);
+    // we use ldmatrix.x4 so each warp processes 16x16 elements.
     int wpt =
-        std::min<int>(mmaLayout.getWarpsPerCTA()[1], shape[1] / matShapeN);
+        std::min<int>(mmaLayout.getWarpsPerCTA()[1], shape[1] / 16);
     auto loadFn =
         getLoadMatrixFn(tensor, smemObj, mmaLayout, wpt /*wpt*/, 0 /*kOrder*/,
                         {mmaInstrK, mmaInstrN} /*instrShape*/,
@@ -1277,6 +1279,7 @@ struct DotOpFMAConversionHelper {
 
   SmallVector<Value> getThreadIds(Value threadId,
                                   ArrayRef<unsigned> shapePerCTA,
+                                  ArrayRef<unsigned> sizePerThread,
                                   ArrayRef<unsigned> order,
                                   ConversionPatternRewriter &rewriter,
                                   Location loc) const;
@@ -1292,19 +1295,20 @@ struct DotOpFMAConversionHelper {
                                      ConversionPatternRewriter &rewriter,
                                      Location loc) const;
 
-  Value getStructFromValueTable(const ValueTable &vals,
+  Value getStructFromValueTable(ArrayRef<Value> vals,
                                 ConversionPatternRewriter &rewriter,
-                                Location loc) const {
-    SmallVector<Type> elemTypes(vals.size(), f32_ty);
+                                Location loc, Type elemTy) const {
+    SmallVector<Type> elemTypes(vals.size(), elemTy);
     SmallVector<Value> elems;
     elems.reserve(vals.size());
-    for (auto &item : vals) {
-      elems.push_back(item.second);
+    for (auto &val : vals) {
+      elems.push_back(val);
     }
 
     Type structTy = struct_ty(elemTypes);
     return getStructFromElements(loc, elems, rewriter, structTy);
   }
+
   // get number of elements per thread for $a or $b.
   static int getNumElemsPerThread(ArrayRef<int64_t> shape,
                                   DotOperandEncodingAttr dotOpLayout) {
@@ -1317,9 +1321,10 @@ struct DotOpFMAConversionHelper {
     int K = dotOpLayout.getOpIdx() == 0 ? shape[1] : shape[0];
     int otherDim = dotOpLayout.getOpIdx() == 1 ? shape[1] : shape[0];
 
+
     bool isM = dotOpLayout.getOpIdx() == 0;
     int shapePerCTAMN = getShapePerCTAForMN(blockedLayout, isM);
-    int sizePerThreadMN = getsizePerThreadForMN(blockedLayout, isM);
+    int sizePerThreadMN = getSizePerThreadForMN(blockedLayout, isM);
     return K * std::max<int>(otherDim / shapePerCTAMN, 1) * sizePerThreadMN;
   }
 
@@ -1336,7 +1341,7 @@ struct DotOpFMAConversionHelper {
   }
 
   // Get sizePerThread for M or N axis.
-  static int getsizePerThreadForMN(BlockedEncodingAttr layout, bool isM) {
+  static int getSizePerThreadForMN(BlockedEncodingAttr layout, bool isM) {
     auto order = layout.getOrder();
     auto sizePerThread = getSizePerThread(layout);
 
@@ -1668,12 +1673,14 @@ Value DotOpFMAConversionHelper::loadA(
 
   bool isARow = aOrder[0] == 1;
 
-  int strideAM = isARow ? aShape[1] : 1;
-  int strideAK = isARow ? 1 : aShape[0];
-  int strideA0 = isARow ? strideAK : strideAM;
-  int strideA1 = isARow ? strideAM : strideAK;
+  auto aSmem = getSharedMemoryObjectFromStruct(loc, llA, rewriter);
+  Value strideAM = aSmem.strides[0];
+  Value strideAK = aSmem.strides[1];
+  Value strideA0 = isARow ? strideAK : strideAM;
+  Value strideA1 = isARow ? strideAM : strideAK;
   int aNumPtr = 8;
-  int NK = aShape[1];
+  int K = aShape[1];
+  int M = aShape[0];
 
   auto shapePerCTA = getShapePerCTA(dLayout);
   auto sizePerThread = getSizePerThread(dLayout);
@@ -1683,42 +1690,38 @@ Value DotOpFMAConversionHelper::loadA(
   Value mContig = i32_val(sizePerThread[order[1]]);
 
   // threadId in blocked layout
-  auto threadIds = getThreadIds(thread, shapePerCTA, order, rewriter, loc);
-
+  auto threadIds = getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
   Value threadIdM = threadIds[0];
 
   Value offA0 = isARow ? _0 : mul(threadIdM, mContig);
   Value offA1 = isARow ? mul(threadIdM, mContig) : _0;
   SmallVector<Value> aOff(aNumPtr);
   for (int i = 0; i < aNumPtr; ++i) {
-    aOff[i] = add(mul(offA0, i32_val(strideA0)), mul(offA1, i32_val(strideA1)));
+    aOff[i] = add(mul(offA0, strideA0), mul(offA1, strideA1));
   }
+  auto elemTy = A.getType().cast<RankedTensorType>().getElementType();
 
-  auto aSmem = getSharedMemoryObjectFromStruct(loc, llA, rewriter);
-
-  Type f32PtrTy = ptr_ty(f32_ty);
+  Type ptrTy = ptr_ty(elemTy);
   SmallVector<Value> aPtrs(aNumPtr);
   for (int i = 0; i < aNumPtr; ++i)
-    aPtrs[i] = gep(f32PtrTy, aSmem.base, aOff[i]);
+    aPtrs[i] = gep(ptrTy, aSmem.base, aOff[i]);
 
-  ValueTable has;
-  int M = aShape[aOrder[1]];
+  SmallVector<Value> vas;
 
   int mShapePerCTA = getShapePerCTAForMN(dLayout, true /*isM*/);
-  int mSizePerThread = getsizePerThreadForMN(dLayout, true /*isM*/);
+  int mSizePerThread = getSizePerThreadForMN(dLayout, true /*isM*/);
 
-  for (unsigned k = 0; k < NK; ++k) {
+  for (unsigned k = 0; k < K; ++k)
     for (unsigned m = 0; m < M; m += mShapePerCTA)
-      for (unsigned mm = 0; mm < mSizePerThread; ++mm)
-        if (!has.count({m + mm, k})) {
-          Value pa = gep(f32PtrTy, aPtrs[0],
-                         i32_val((m + mm) * strideAM + k * strideAK));
-          Value va = load(pa);
-          has[{m + mm, k}] = va;
-        }
-  }
+      for (unsigned mm = 0; mm < mSizePerThread; ++mm) {
+        Value offset =
+            add(mul(i32_val(m + mm), strideAM), mul(i32_val(k), strideAK));
+        Value pa = gep(ptrTy, aPtrs[0], offset);
+        Value va = load(pa);
+        vas.emplace_back(va);
+      }
 
-  return getStructFromValueTable(has, rewriter, loc);
+  return getStructFromValueTable(vas, rewriter, loc, elemTy);
 }
 
 Value DotOpFMAConversionHelper::loadB(
@@ -1734,12 +1737,14 @@ Value DotOpFMAConversionHelper::loadB(
 
   bool isBRow = bOrder[0] == 1;
 
-  int strideBN = isBRow ? 1 : bShape[0];
-  int strideBK = isBRow ? bShape[1] : 1;
-  int strideB0 = isBRow ? strideBN : strideBK;
-  int strideB1 = isBRow ? strideBK : strideBN;
+  auto bSmem = getSharedMemoryObjectFromStruct(loc, llB, rewriter);
+  Value strideBN = bSmem.strides[1];
+  Value strideBK = bSmem.strides[0];
+  Value strideB0 = isBRow ? strideBN : strideBK;
+  Value strideB1 = isBRow ? strideBK : strideBN;
   int bNumPtr = 8;
-  int NK = bShape[0];
+  int K = bShape[0];
+  int N = bShape[1];
 
   auto shapePerCTA = getShapePerCTA(dLayout);
   auto sizePerThread = getSizePerThread(dLayout);
@@ -1749,39 +1754,38 @@ Value DotOpFMAConversionHelper::loadB(
   Value nContig = i32_val(sizePerThread[order[0]]);
 
   // threadId in blocked layout
-  auto threadIds = getThreadIds(thread, shapePerCTA, order, rewriter, loc);
+  auto threadIds = getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
   Value threadIdN = threadIds[1];
 
   Value offB0 = isBRow ? mul(threadIdN, nContig) : _0;
   Value offB1 = isBRow ? _0 : mul(threadIdN, nContig);
   SmallVector<Value> bOff(bNumPtr);
   for (int i = 0; i < bNumPtr; ++i) {
-    bOff[i] = add(mul(offB0, i32_val(strideB0)), mul(offB1, i32_val(strideB1)));
+    bOff[i] = add(mul(offB0, strideB0), mul(offB1, strideB1));
   }
+  auto elemTy = B.getType().cast<RankedTensorType>().getElementType();
 
-  auto bSmem = getSharedMemoryObjectFromStruct(loc, llB, rewriter);
-
-  Type f32PtrTy = ptr_ty(f32_ty);
+  Type ptrTy = ptr_ty(elemTy);
   SmallVector<Value> bPtrs(bNumPtr);
   for (int i = 0; i < bNumPtr; ++i)
-    bPtrs[i] = gep(f32PtrTy, bSmem.base, bOff[i]);
+    bPtrs[i] = gep(ptrTy, bSmem.base, bOff[i]);
 
-  int N = bShape[bOrder[0]];
-  ValueTable hbs;
+  SmallVector<Value> vbs;
 
   int nShapePerCTA = getShapePerCTAForMN(dLayout, false /*isM*/);
-  int nSizePerThread = getsizePerThreadForMN(dLayout, false /*isM*/);
+  int nSizePerThread = getSizePerThreadForMN(dLayout, false /*isM*/);
 
-  for (unsigned k = 0; k < NK; ++k)
+  for (unsigned k = 0; k < K; ++k)
     for (unsigned n = 0; n < N; n += nShapePerCTA)
       for (unsigned nn = 0; nn < nSizePerThread; ++nn) {
-        Value pb = gep(f32PtrTy, bPtrs[0],
-                       i32_val((n + nn) * strideBN + k * strideBK));
+        Value offset =
+            add(mul(i32_val(n + nn), strideBN), mul(i32_val(k), strideBK));
+        Value pb = gep(ptrTy, bPtrs[0], offset);
         Value vb = load(pb);
-        hbs[{n + nn, k}] = vb;
+        vbs.emplace_back(vb);
       }
 
-  return getStructFromValueTable(hbs, rewriter, loc);
+  return getStructFromValueTable(vbs, rewriter, loc, elemTy);
 }
 
 DotOpFMAConversionHelper::ValueTable
@@ -1790,29 +1794,25 @@ DotOpFMAConversionHelper::getValueTableFromStruct(
     ConversionPatternRewriter &rewriter, Location loc) const {
   ValueTable res;
   auto elems = getElementsFromStruct(loc, val, rewriter);
-  int id = 0;
-  std::set<std::pair<int, int>> keys; // ordered
+  int index = 0;
   for (unsigned k = 0; k < K; ++k) {
     for (unsigned m = 0; m < n0; m += shapePerCTA)
       for (unsigned mm = 0; mm < sizePerThread; ++mm) {
-        keys.insert({m + mm, k});
+        res[{m + mm, k}] = elems[index++];
       }
   }
-
-  for (auto &key : llvm::enumerate(keys)) {
-    res[key.value()] = elems[key.index()];
-  }
-
   return res;
 }
+
 SmallVector<Value> DotOpFMAConversionHelper::getThreadIds(
     Value threadId, ArrayRef<unsigned int> shapePerCTA,
+    ArrayRef<unsigned int> sizePerThread,
     ArrayRef<unsigned int> order, ConversionPatternRewriter &rewriter,
     Location loc) const {
   int dim = order.size();
   SmallVector<Value> threadIds(dim);
   for (unsigned k = 0; k < dim - 1; k++) {
-    Value dimK = i32_val(shapePerCTA[order[k]]);
+    Value dimK = i32_val(shapePerCTA[order[k]] / sizePerThread[order[k]]);
     Value rem = urem(threadId, dimK);
     threadId = udiv(threadId, dimK);
     threadIds[order[k]] = rem;
