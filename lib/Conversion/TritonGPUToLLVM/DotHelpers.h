@@ -55,6 +55,7 @@ struct DotOpMmaV1ConversionHelper {
     SmallVector<int> rep;
     SmallVector<int> spw;
     bool isAVec4;
+    int vec{};
 
     explicit AParam(bool isARow, ArrayRef<int64_t> shape) {
       isAVec4 = !isARow && shape[isARow] <= 16;
@@ -65,6 +66,7 @@ struct DotOpMmaV1ConversionHelper {
       int spwM = fpw[0] * 4 * repM;
       rep.assign({repM, 0, repK});
       spw.assign({spwM, 0, 1});
+      vec = 2 * rep[0];
     }
   };
 
@@ -73,6 +75,7 @@ struct DotOpMmaV1ConversionHelper {
     SmallVector<int> rep;
     SmallVector<int> spw;
     bool isBVec4;
+    int vec{};
 
     explicit BParam(bool isBRow, ArrayRef<int64_t> shape) {
       isBVec4 = isBRow && shape[isBRow] <= 16;
@@ -80,6 +83,7 @@ struct DotOpMmaV1ConversionHelper {
       int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
       rep.assign({0, 2 * packSize1, 1});
       spw.assign({0, fpw[1] * 4 * rep[1], 1});
+      vec = 2 * rep[1];
     }
   };
 
@@ -1333,10 +1337,8 @@ Value DotOpMmaV1ConversionHelper::loadA(
   auto *ctx = rewriter.getContext();
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
-  SmallVector<int64_t> shape(tensorTy.getShape().begin(),
-                             tensorTy.getShape().end());
-  SmallVector<unsigned> order(sharedLayout.getOrder().begin(),
-                              sharedLayout.getOrder().end());
+  auto shape = tensorTy.getShape();
+  auto order = sharedLayout.getOrder();
 
   Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
   Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
@@ -1348,6 +1350,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
       thread, isARow, false, fpw, param.spw, param.rep, rewriter, loc);
 
   int vecA = sharedLayout.getVec();
+  printf("vecA: %d\n", vecA);
 
   auto strides = smemObj.strides;
   Value strideAM = isARow ? strides[0] : i32_val(1);
@@ -1410,7 +1413,6 @@ Value DotOpMmaV1ConversionHelper::loadA(
     ld(has, m, k, ha00, ha01);
 
     if (vecA > 4) {
-      assert(false && "vecA > 4 is not supported yet");
       Value ha10 = bitcast(extract_element(ha, i32_val(2)), f16x2Ty);
       Value ha11 = bitcast(extract_element(ha, i32_val(3)), f16x2Ty);
       if (isARow)
@@ -1421,9 +1423,13 @@ Value DotOpMmaV1ConversionHelper::loadA(
   };
 
   unsigned numM = getNumM(shape, order[0] == 1);
+  printf("numM,K: %d %d\n", numM, NK);
   for (unsigned k = 0; k < NK; k += 4)
     for (unsigned m = 0; m < numM / 2; ++m)
-      loadA(m, k);
+      if (!has.count({m, k}))
+        loadA(m, k);
+
+  printf("has.size: %lu\n", has.size());
 
   SmallVector<Value> elems;
   elems.reserve(has.size() * 2);
@@ -1431,6 +1437,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
     elems.push_back(item.second.first);
     elems.push_back(item.second.second);
   }
+  printf("A.elems.size:%lu\n", elems.size());
 
   Type resTy = struct_ty(SmallVector<Type>(elems.size(), f16x2Ty));
   Value res = getStructFromElements(loc, elems, rewriter, resTy);
@@ -1457,6 +1464,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
   BParam param(isBRow, shape);
 
   int vecB = sharedLayout.getVec();
+  printf("vecB: %d\n", vecB);
   Value strideBN = isBRow ? i32_val(1) : strides[1];
   Value strideBK = isBRow ? strides[0] : i32_val(1);
   Value strideB0 = isBRow ? strideBN : strideBK;

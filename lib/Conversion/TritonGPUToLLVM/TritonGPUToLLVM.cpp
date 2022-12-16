@@ -3459,6 +3459,9 @@ Value ConvertLayoutOpConversion::lowerSharedToDotOperandMMA(
       return Value();
     }
 
+    auto [isARow, isBRow, isAVec4, isBVec4] =
+        mmaLayout.decodeVoltaLayoutStates();
+
     if (dotOperandLayout.getOpIdx() == 0) { // operand $a
       res =
           helper.loadA(src, smemObj, getThreadId(rewriter, loc), loc, rewriter);
@@ -3951,17 +3954,25 @@ public:
 
           auto [isARow, isBRow, isAVec4, isBVec4] =
               mmaLayout.decodeVoltaLayoutStates();
+          printf("isARow, isBRow: %d,%d\n", isARow, isBRow);
 
           // TODO[Superjomn] vec is not available here, but currently the vec
           // seems always no greater than 4, so we simply assign 4 here.
-          bool vec = 4;
           if (dotOpLayout.getOpIdx() == 0) { // $a
-            int elems = helper.numElemsPerThreadA(shape, isARow, vec);
+            DotOpMmaV1ConversionHelper::AParam aParam(true, shape);
+            isARow = true; // DEBUG
+            int elems = helper.numElemsPerThreadA(shape, isARow, aParam.vec);
+            printf("mma.elems.vecA: %d\n", 4);
+            printf("mma.elems.threadA: %d\n", elems);
             Type x2Ty = vec_ty(elemTy, 2);
             return struct_ty(SmallVector<Type>(elems, x2Ty));
           }
           if (dotOpLayout.getOpIdx() == 1) { // $b
-            int elems = helper.numElemsPerThreadB(shape, isBRow, vec);
+            isBRow = true;                   // DEBUG
+            DotOpMmaV1ConversionHelper::AParam bParam(isBRow, shape);
+            int elems = helper.numElemsPerThreadB(shape, isBRow, bParam.vec);
+            printf("mma.elems.threadB: %d\n", elems);
+            printf("mma.elems.vecB: %d\n", bParam.vec);
             Type x2Ty = vec_ty(elemTy, 2);
             return struct_ty(SmallVector<Type>(elems, x2Ty));
           }
@@ -4704,11 +4715,16 @@ private:
       auto dstDotOp =
           dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
       if (srcBlocked && dstDotOp) {
+        printf("** blocked.order: %d,%d\n", srcBlocked.getOrder()[0],
+               srcBlocked.getOrder()[1]);
+        auto dstShared = triton::gpu::SharedEncodingAttr::get(
+            mod.getContext(), dstDotOp, srcType.getShape(),
+            getOrder(srcBlocked), srcType.getElementType());
+        printf("** shared.order: %d,%d\n", dstShared.getOrder()[0],
+               dstShared.getOrder()[1]);
+
         auto tmpType = RankedTensorType::get(
-            dstType.getShape(), dstType.getElementType(),
-            triton::gpu::SharedEncodingAttr::get(
-                mod.getContext(), dstDotOp, srcType.getShape(),
-                getOrder(srcBlocked), srcType.getElementType()));
+            dstType.getShape(), dstType.getElementType(), dstShared);
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), tmpType, cvtOp.getOperand());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
@@ -4718,6 +4734,100 @@ private:
       }
     });
   }
+
+  // void rematerializeMMAV1DotLayout(ModuleOp mod) {
+  //   // Replace the dotOperand with a new Mma Layout
+  //   mod.walk([&](DotOp dotOp) -> void {
+  //     auto DType = dotOp.d().getType().cast<RankedTensorType>();
+  //     auto AType = dotOp.a().getType().cast<RankedTensorType>();
+  //     auto BType = dotOp.b().getType().cast<RankedTensorType>();
+  //     if (auto mmaLayout = DType.getEncoding().dyn_cast<MmaEncodingAttr>()) {
+  //       if (!mmaLayout.isVolta())
+  //         return;
+  //       bool isARow = AType.getEncoding()
+  //                         .cast<DotOperandEncodingAttr>()
+  //                         .getIsMMAv1Row()
+  //                         .cast<BoolAttr>()
+  //                         .getValue();
+  //       bool isBRow = BType.getEncoding()
+  //                         .cast<DotOperandEncodingAttr>()
+  //                         .getIsMMAv1Row()
+  //                         .cast<BoolAttr>()
+  //                         .getValue();
+
+  //       auto [isARow_, isBRow_, isAVec4_, isBVec4_] =
+  //           mmaLayout.decodeVoltaLayoutStates();
+  //       if (isARow == isARow_ && isBRow == isBRow_)
+  //         return; // no need to update
+
+  //       auto newMmaLayout = MmaEncodingAttr::get(
+  //           dotOp->getContext(), mmaLayout.getVersionMajor(),
+  //           mmaLayout.getWarpsPerCTA(), AType.getShape(), BType.getShape(),
+  //           isARow, isBRow);
+
+  //       auto replaceMmaLayout = [&](Value arg) {
+  //         auto op = arg.getDefiningOp<mlir::triton::gpu::ConvertLayoutOp>();
+  //         llvm::outs() << "a.parent: " << *op << "\n";
+  //         assert(op);
+  //         OpBuilder builder(op);
+
+  //         auto resTy = op.result().getType().cast<RankedTensorType>();
+  //         auto dotOperand =
+  //         resTy.getEncoding().cast<DotOperandEncodingAttr>();
+
+  //         auto newDotOperand = DotOperandEncodingAttr::get(
+  //             op->getContext(), dotOperand.getOpIdx(), newMmaLayout);
+  //         auto tmpType = RankedTensorType::get(
+  //             resTy.getShape(), resTy.getElementType(), newDotOperand);
+
+  //         auto newOp = builder.create<triton::gpu::ConvertLayoutOp>(
+  //             op.getLoc(), tmpType, op.src());
+  //         op.replaceAllUsesWith(newOp.getResult());
+  //         op.erase();
+  //       };
+
+  //       replaceMmaLayout(dotOp.a());
+  //       replaceMmaLayout(dotOp.b());
+  //     }
+  //   });
+
+  //   mod.walk([&](DotOp dotOp) -> void {
+  //     auto DType = dotOp.d().getType().cast<RankedTensorType>();
+  //     auto AType = dotOp.a().getType().cast<RankedTensorType>();
+  //     auto BType = dotOp.b().getType().cast<RankedTensorType>();
+  //     if (auto mmaLayout = DType.getEncoding().dyn_cast<MmaEncodingAttr>()) {
+  //       if (!mmaLayout.isVolta())
+  //         return;
+
+  //       bool isARow = AType.getEncoding()
+  //                         .cast<DotOperandEncodingAttr>()
+  //                         .getIsMMAv1Row()
+  //                         .cast<BoolAttr>()
+  //                         .getValue();
+  //       bool isBRow = BType.getEncoding()
+  //                         .cast<DotOperandEncodingAttr>()
+  //                         .getIsMMAv1Row()
+  //                         .cast<BoolAttr>()
+  //                         .getValue();
+
+  //       auto [isARow_, isBRow_, isAVec4_, isBVec4_] =
+  //           mmaLayout.decodeVoltaLayoutStates();
+  //       if (isARow == isARow_ && isBRow == isBRow_)
+  //         return; // no need to update
+
+  //       auto newMmaLayout = MmaEncodingAttr::get(
+  //           dotOp->getContext(), mmaLayout.getVersionMajor(),
+  //           mmaLayout.getWarpsPerCTA(), AType.getShape(), BType.getShape(),
+  //           isARow, isBRow);
+  //       OpBuilder builder(dotOp);
+  //       auto newDotOp = builder.create<DotOp>(
+  //           dotOp.getLoc(), dotOp.a(), dotOp.b(), dotOp.c(),
+  //           dotOp.allowTF32());
+  //       dotOp.replaceAllUsesWith(newDotOp.getResult());
+  //       dotOp.erase();
+  //     }
+  //   });
+  // }
 
   void decomposeInsertSliceAsyncOp(ModuleOp mod) {
     AxisInfoAnalysis axisInfoAnalysis(mod.getContext());
@@ -4848,6 +4958,8 @@ public:
     decomposeBlockedToDotOperand(mod);
 
     decomposeInsertSliceAsyncOp(mod);
+
+    // rematerializeMMAV1DotLayout(mod);
 
     Allocation allocation(mod);
     MembarAnalysis membarPass(&allocation);
