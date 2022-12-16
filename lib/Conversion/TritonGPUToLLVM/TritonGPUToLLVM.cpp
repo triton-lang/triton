@@ -3949,18 +3949,19 @@ public:
         if (mmaLayout.isVolta()) {
           DotOpMmaV1ConversionHelper helper(mmaLayout);
 
-          // TODO[Superjomn]: The order of A and B are not available here.
-          SmallVector<unsigned> order({1, 0});
+          auto [isARow, isBRow, isAVec4, isBVec4] =
+              mmaLayout.decodeVoltaLayoutStates();
+
           // TODO[Superjomn] vec is not available here, but currently the vec
           // seems always no greater than 4, so we simply assign 4 here.
           bool vec = 4;
           if (dotOpLayout.getOpIdx() == 0) { // $a
-            int elems = helper.numElemsPerThreadA(shape, order[0] == 1, vec);
+            int elems = helper.numElemsPerThreadA(shape, isARow, vec);
             Type x2Ty = vec_ty(elemTy, 2);
             return struct_ty(SmallVector<Type>(elems, x2Ty));
           }
           if (dotOpLayout.getOpIdx() == 1) { // $b
-            int elems = helper.numElemsPerThreadB(shape, order[0] == 1, vec);
+            int elems = helper.numElemsPerThreadB(shape, isBRow, vec);
             Type x2Ty = vec_ty(elemTy, 2);
             return struct_ty(SmallVector<Type>(elems, x2Ty));
           }

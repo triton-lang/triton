@@ -1518,7 +1518,6 @@ Value DotOpMmaV1ConversionHelper::loadB(
     Value hb01 = bitcast(extract_element(hb, i32_val(1)), f16x2Ty);
     ld(hbs, n, K, hb00, hb01);
     if (vecB > 4) {
-      assert(false && "vecB > 4 is not supported yet");
       Value hb10 = bitcast(extract_element(hb, i32_val(2)), f16x2Ty);
       Value hb11 = bitcast(extract_element(hb, i32_val(3)), f16x2Ty);
       if (isBRow)
