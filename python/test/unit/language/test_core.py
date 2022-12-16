@@ -1715,7 +1715,7 @@ class MmaLayout:
         self.warps_per_cta = str(warps_per_cta)
 
     def __str__(self):
-        return f"#triton_gpu.mma<{{version={self.version}, warpsPerCTA={self.warps_per_cta}}}>"
+        return f"#triton_gpu.mma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA={self.warps_per_cta}}}>"
 
 class BlockedLayout:
     def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order):
@@ -1729,9 +1729,9 @@ class BlockedLayout:
 
 layouts = [
   # MmaLayout(version=1, warps_per_cta=[1, 4]),
-  MmaLayout(version=2, warps_per_cta=[1, 4]),
+  MmaLayout(version=(2,0), warps_per_cta=[1, 4]),
   # MmaLayout(version=1, warps_per_cta=[4, 1]),
-  MmaLayout(version=2, warps_per_cta=[4, 1]),
+  MmaLayout(version=(2,0), warps_per_cta=[4, 1]),
   BlockedLayout([1, 8], [2, 16], [4, 1], [1, 0]),
   BlockedLayout([1, 4], [4, 8], [2, 2], [1, 0]),
   BlockedLayout([1, 1], [1, 32], [2, 2], [1, 0]),

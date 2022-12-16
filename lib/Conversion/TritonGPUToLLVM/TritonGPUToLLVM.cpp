@@ -609,9 +609,9 @@ public:
     if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>())
       return emitBaseIndexForBlockedLayout(loc, rewriter, blockedLayout, shape);
     if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-      if (mmaLayout.getVersion() == 1)
+      if (mmaLayout.isVolta())
         return emitBaseIndexForMmaLayoutV1(loc, rewriter, mmaLayout, shape);
-      if (mmaLayout.getVersion() == 2)
+      if (mmaLayout.isAmpere())
         return emitBaseIndexForMmaLayoutV2(loc, rewriter, mmaLayout, shape);
     }
     llvm_unreachable("unsupported emitBaseIndexForLayout");
@@ -622,9 +622,9 @@ public:
     if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>())
       return emitOffsetForBlockedLayout(blockedLayout, shape);
     if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-      if (mmaLayout.getVersion() == 1)
+      if (mmaLayout.isVolta())
         return emitOffsetForMmaLayoutV1(mmaLayout, shape);
-      if (mmaLayout.getVersion() == 2)
+      if (mmaLayout.isAmpere())
         return emitOffsetForMmaLayoutV2(mmaLayout, shape);
     }
     llvm_unreachable("unsupported emitOffsetForLayout");
@@ -2872,7 +2872,7 @@ private:
       Value _4 = idx_val(4);
       Value _8 = idx_val(8);
       Value _16 = idx_val(16);
-      if (mmaLayout.getVersion() == 2) {
+      if (mmaLayout.isAmpere()) {
         multiDimWarpId[0] = urem(multiDimWarpId[0], idx_val(shape[0] / 16));
         multiDimWarpId[1] = urem(multiDimWarpId[1], idx_val(shape[1] / 8));
         Value mmaGrpId = udiv(laneId, _4);
@@ -2886,7 +2886,7 @@ private:
         Value colWarpOffset = mul(multiDimWarpId[1], _8);
         mmaColIdx[0] = add(mmaThreadIdInGrpM2, colWarpOffset);
         mmaColIdx[1] = add(mmaThreadIdInGrpM2P1, colWarpOffset);
-      } else if (mmaLayout.getVersion() == 1) {
+      } else if (mmaLayout.isVolta()) {
         multiDimWarpId[0] = urem(multiDimWarpId[0], idx_val(shape[0] / 16));
         multiDimWarpId[1] = urem(multiDimWarpId[1], idx_val(shape[1] / 16));
         Value laneIdDiv16 = udiv(laneId, _16);
@@ -2914,14 +2914,14 @@ private:
 
       assert(rank == 2);
       SmallVector<Value> multiDimOffset(rank);
-      if (mmaLayout.getVersion() == 2) {
+      if (mmaLayout.isAmpere()) {
         multiDimOffset[0] = elemId < 2 ? mmaRowIdx[0] : mmaRowIdx[1];
         multiDimOffset[1] = elemId % 2 == 0 ? mmaColIdx[0] : mmaColIdx[1];
         multiDimOffset[0] = add(
             multiDimOffset[0], idx_val(multiDimCTAInRepId[0] * shapePerCTA[0]));
         multiDimOffset[1] = add(
             multiDimOffset[1], idx_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
-      } else if (mmaLayout.getVersion() == 1) {
+      } else if (mmaLayout.isVolta()) {
         // the order of elements in a thread:
         //   c0, c1, ...  c4, c5
         //   c2, c3, ...  c6, c7
@@ -3333,9 +3333,9 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
                                     .getEncoding()
                                     .dyn_cast<MmaEncodingAttr>();
     if (!isOuter && mmaLayout && supportMMA(op, mmaLayout.getVersion())) {
-      if (mmaLayout.getVersion() == 1)
+      if (mmaLayout.isVolta())
         return convertMMA884(op, adaptor, rewriter);
-      if (mmaLayout.getVersion() == 2)
+      if (mmaLayout.isAmpere())
         return convertMMA16816(op, adaptor, rewriter);
 
       llvm::report_fatal_error(
@@ -3376,7 +3376,7 @@ Value ConvertLayoutOpConversion::lowerSharedToDotOperandMMA(
   auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.src(), rewriter);
   Value res;
 
-  if (!isOuter && mmaLayout.getVersion() == 2 && isHMMA) { // tensor core v2
+  if (!isOuter && mmaLayout.isAmpere() && isHMMA) { // tensor core v2
     MMA16816ConversionHelper mmaHelper(src.getType(), mmaLayout,
                                        getThreadId(rewriter, loc), rewriter,
                                        getTypeConverter(), op.getLoc());
@@ -3388,7 +3388,7 @@ Value ConvertLayoutOpConversion::lowerSharedToDotOperandMMA(
       // operand $b
       res = mmaHelper.loadB(src, smemObj);
     }
-  } else if (!isOuter && mmaLayout.getVersion() == 1 &&
+  } else if (!isOuter && mmaLayout.isVolta() &&
              isHMMA) { // tensor core v1
     DotOpMmaV1ConversionHelper helper(mmaLayout);
     bool isMMAv1Row =
@@ -3754,7 +3754,7 @@ Value convertSplatLikeOpWithMmaLayout(const MmaEncodingAttr &layout,
                                       Location loc) {
   auto tensorTy = resType.cast<RankedTensorType>();
   auto shape = tensorTy.getShape();
-  if (layout.getVersion() == 2) {
+  if (layout.isAmpere()) {
     auto [repM, repN] = DotOpMmaV2ConversionHelper::getRepMN(tensorTy);
     size_t fcSize = 4 * repM * repN;
 
@@ -3763,7 +3763,7 @@ Value convertSplatLikeOpWithMmaLayout(const MmaEncodingAttr &layout,
     return getStructFromElements(loc, SmallVector<Value>(fcSize, constVal),
                                  rewriter, structTy);
   }
-  if (layout.getVersion() == 1) {
+  if (layout.isVolta()) {
     DotOpMmaV1ConversionHelper helper(layout);
     int repM = helper.getRepM(shape[0]);
     int repN = helper.getRepN(shape[1]);
@@ -3844,7 +3844,7 @@ public:
         auto mmaLayout = dotOpLayout.getParent().cast<MmaEncodingAttr>();
         auto wpt = mmaLayout.getWarpsPerCTA();
         Type elemTy = convertType(type.getElementType());
-        if (mmaLayout.getVersion() == 2) {
+        if (mmaLayout.isAmpere()) {
           const llvm::DenseMap<int, Type> targetTyMap = {
               {32, elemTy},
               {16, vec_ty(elemTy, 2)},
@@ -3869,7 +3869,7 @@ public:
           }
         }
 
-        if (mmaLayout.getVersion() == 1) {
+        if (mmaLayout.isVolta()) {
           DotOpMmaV1ConversionHelper helper(mmaLayout);
 
           // TODO[Superjomn]: Both transA and transB are not available here.
