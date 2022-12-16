@@ -1,9 +1,9 @@
 #ifndef TRITON_CONVERSION_TRITONGPUTOLLVM_TRITONGPUTOLLVMPASS_H_
 #define TRITON_CONVERSION_TRITONGPUTOLLVM_TRITONGPUTOLLVMPASS_H_
 
+#include <memory>
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include <memory>
 
 namespace mlir {
 

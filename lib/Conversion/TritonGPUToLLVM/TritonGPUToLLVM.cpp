@@ -1,7 +1,8 @@
-#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVM.h"
-#include "../PassDetail.h"
-#include "./DotHelpers.h"
-#include "./Utility.h"
+#include <numeric>
+#include <memory>
+#include <string>
+#include "llvm/Support/Format.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Conversion/ArithmeticToLLVM/ArithmeticToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
@@ -13,9 +14,11 @@
 #include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
 #include "mlir/Dialect/GPU/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -23,17 +26,16 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PtxAsmFormat.h"
+#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/DotHelpers.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPU.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "llvm/Support/Format.h"
-#include "llvm/Support/FormatVariadic.h"
-#include <memory>
-#include <numeric>
-#include <string>
 
 using namespace mlir;
 using namespace mlir::triton;
+
 using ::mlir::LLVM::DotOpFMAConversionHelper;
 using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
 using ::mlir::LLVM::DotOpMmaV2ConversionHelper;
@@ -55,6 +57,9 @@ using ::mlir::triton::gpu::getThreadsPerCTA;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
+
+#define GEN_PASS_CLASSES
+#include "triton/Conversion/Passes.h.inc"
 
 namespace mlir {
 namespace LLVM {

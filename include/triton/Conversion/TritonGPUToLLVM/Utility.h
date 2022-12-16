@@ -1,6 +1,10 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_UTILITY_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_UTILITY_H
 
+#include <memory>
+#include <numeric>
+#include "llvm/Support/Format.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Conversion/ArithmeticToLLVM/ArithmeticToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
@@ -25,10 +29,6 @@
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPU.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "llvm/Support/Format.h"
-#include "llvm/Support/FormatVariadic.h"
-#include <memory>
-#include <numeric>
 
 // Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
 // Operators
