@@ -481,7 +481,7 @@ def view(input: tl.tensor,
          dst_shape: List[int],
          builder: ir.builder) -> tl.tensor:
     # TODO: disable when TritonToTritonGPU handles views properly
-    
+
     # assert len(input.shape) == len(dst_shape)
     numel = 1
     for s in dst_shape:
@@ -505,11 +505,13 @@ def cat(lhs: tl.tensor, rhs: tl.tensor, can_reorder: bool, builder: ir.builder) 
     ret_type = tl.block_type(lhs.type.scalar, [lhs.shape[0] + rhs.shape[0]])
     return tl.tensor(builder.create_cat(lhs.handle, rhs.handle), ret_type)
 
+
 def trans(input: tl.tensor, builder: ir.builder) -> tl.tensor:
     if len(input.shape) != 2:
         raise ValueError("Only 2D tensors can be transposed")
     ret_type = tl.block_type(input.type.scalar, [input.shape[1], input.shape[0]])
     return tl.tensor(builder.create_trans(input.handle), ret_type)
+
 
 def broadcast_impl_shape(input: tl.tensor,
                          shape: List[int],
@@ -986,7 +988,7 @@ def dot(lhs: tl.tensor,
     assert len(lhs.shape) == 2 and len(rhs.shape) == 2
     assert lhs.shape[1].value == rhs.shape[0].value
     assert lhs.shape[0].value >= 16 and lhs.shape[1].value >= 16 \
-           and rhs.shape[1].value >= 16,\
+        and rhs.shape[1].value >= 16,\
         "small blocks not supported!"
     if lhs.type.scalar.is_int():
         _0 = builder.get_int32(0)
@@ -1130,12 +1132,12 @@ def sqrt(x: tl.tensor, builder: ir.builder) -> tl.tensor:
 ##
 
 def multiple_of(x: tl.tensor, values: List[int]) -> tl.tensor:
-     if len(x.shape) != len(values):
-         raise ValueError("Shape of input to multiple_of does not match the length of values")
-     x.handle.set_attr("tt.divisibility", ir.make_attr(values, x.handle.get_context()))
-     return x
- 
- 
+    if len(x.shape) != len(values):
+        raise ValueError("Shape of input to multiple_of does not match the length of values")
+    x.handle.set_attr("tt.divisibility", ir.make_attr(values, x.handle.get_context()))
+    return x
+
+
 def max_contiguous(x: tl.tensor, values: List[int]) -> tl.tensor:
     if len(x.shape) != len(values):
         raise ValueError("Shape of input to max_contiguous does not match the length of values")

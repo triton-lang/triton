@@ -952,7 +952,7 @@ reduce_configs1 = [
 # exceeds the limit of 99KB
 reduce2d_shapes = [(2, 32), (4, 32), (4, 128)]
 # TODO: fix and uncomment
-#, (32, 64), (64, 128)]
+# , (32, 64), (64, 128)]
 if 'V100' in torch.cuda.get_device_name(0):
     reduce2d_shapes += [(128, 256) and (32, 1024)]
 
@@ -1780,7 +1780,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     tt.store %14, %13 : tensor<128x128xf16, #dst>
     return
   }
-}    
+}
 """
 
     x = to_triton(numpy_random(shape, dtype_str=dtype))

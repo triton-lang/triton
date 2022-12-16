@@ -766,8 +766,8 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Attribute(self, node):
         lhs = self.visit(node.value)
         if isinstance(lhs, triton.language.tensor):
-          if node.attr == "T":
-            return triton.language.semantic.trans(lhs, builder=self.builder)
+            if node.attr == "T":
+                return triton.language.semantic.trans(lhs, builder=self.builder)
         return getattr(lhs, node.attr)
 
     def visit_Expr(self, node):
@@ -1448,7 +1448,7 @@ def compile(fn, **kwargs):
     if isinstance(fn, triton.runtime.JITFunction):
         name, ext = fn.__name__, "ast"
     else:
-      name, ext = os.path.basename(fn).split(".")
+        name, ext = os.path.basename(fn).split(".")
 
     # load metadata if any
     metadata = None
@@ -1456,34 +1456,34 @@ def compile(fn, **kwargs):
         with open(fn_cache_manager._make_path(f"{name}.json")) as f:
             metadata = json.load(f)
     else:
-      metadata = {"num_warps": num_warps, "num_stages": num_stages, "ctime": dict()}
-      if ext == "ptx":
-        assert "shared" in kwargs, "ptx compilation must provide shared memory size"
-        metadata["shared"] = kwargs["shared"]
+        metadata = {"num_warps": num_warps, "num_stages": num_stages, "ctime": dict()}
+        if ext == "ptx":
+            assert "shared" in kwargs, "ptx compilation must provide shared memory size"
+            metadata["shared"] = kwargs["shared"]
 
     first_stage = list(stages.keys()).index(ext)
     asm = dict()
     module = fn
     # run compilation pipeline  and populate metadata
     for ir, (parse, compile) in list(stages.items())[first_stage:]:
-      path = fn_cache_manager._make_path(f"{name}.{ir}")
-      if ir == ext:
-        next_module = parse(fn)
-      elif os.path.exists(path) and\
-              ir in metadata["ctime"] and\
-              os.path.getctime(path) == metadata["ctime"][ir]:
-        next_module = parse(path)
-      else:
-        next_module = compile(module)
-        fn_cache_manager.put(next_module, f"{name}.{ir}")
-      if os.path.exists(path):
-        metadata["ctime"][ir] = os.path.getctime(path)
-      asm[ir] = next_module if ir == "cubin" else str(next_module)
-      if ir == "llir" and "shared" not in metadata:
-        metadata["shared"] = _triton.get_shared_memory_size(module)
-      if ir == "ptx":
-        metadata["name"] = ptx_get_kernel_name(next_module)
-      module = next_module
+        path = fn_cache_manager._make_path(f"{name}.{ir}")
+        if ir == ext:
+            next_module = parse(fn)
+        elif os.path.exists(path) and\
+                ir in metadata["ctime"] and\
+                os.path.getctime(path) == metadata["ctime"][ir]:
+            next_module = parse(path)
+        else:
+            next_module = compile(module)
+            fn_cache_manager.put(next_module, f"{name}.{ir}")
+        if os.path.exists(path):
+            metadata["ctime"][ir] = os.path.getctime(path)
+        asm[ir] = next_module if ir == "cubin" else str(next_module)
+        if ir == "llir" and "shared" not in metadata:
+            metadata["shared"] = _triton.get_shared_memory_size(module)
+        if ir == "ptx":
+            metadata["name"] = ptx_get_kernel_name(next_module)
+        module = next_module
     # write-back metadata
     fn_cache_manager.put(json.dumps(metadata), f"{name}.json", binary=False)
     # return handle to compiled kernel
