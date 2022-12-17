@@ -223,7 +223,7 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
                   ConversionPatternRewriter &rewriter) const override {
     RankedTensorType origType = op.getType().cast<RankedTensorType>();
     auto origShape = origType.getShape();
-    auto typeConverter = static_cast<TritonGPUTypeConverter*>(getTypeConverter());
+    auto typeConverter = getTypeConverter<TritonGPUTypeConverter>();
     int numWarps = typeConverter->getNumWarps();
 
     SmallVector<unsigned> retSizePerThread = {1, 1};
