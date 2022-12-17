@@ -144,9 +144,10 @@ class LayerNorm(torch.autograd.Function):
         # heuristics for number of warps
         num_warps = min(max(BLOCK_SIZE // 256, 1), 8)
         # enqueue kernel
-        _layer_norm_fwd_fused[(M,)](x_arg, y, weight, bias, mean, rstd,
+        pgm = _layer_norm_fwd_fused[(M,)](x_arg, y, weight, bias, mean, rstd,
                                     x_arg.stride(0), N, eps,
                                     BLOCK_SIZE=BLOCK_SIZE, num_warps=num_warps)
+        print(pgm.asm["ttgir"])
         ctx.save_for_backward(x, weight, bias, mean, rstd)
         ctx.BLOCK_SIZE = BLOCK_SIZE
         ctx.num_warps = num_warps
@@ -173,16 +174,18 @@ class LayerNorm(torch.autograd.Function):
         # also compute partial sums for DW and DB
         x_arg = x.reshape(-1, x.shape[-1])
         M, N = x_arg.shape
-        _layer_norm_bwd_dx_fused[(M,)](dx, dy, _dw, _db, x, w, b, m, v, locks,
+        pgm = _layer_norm_bwd_dx_fused[(M,)](dx, dy, _dw, _db, x, w, b, m, v, locks,
                                        x_arg.stride(0), N, ctx.eps,
                                        BLOCK_SIZE_N=ctx.BLOCK_SIZE,
                                        GROUP_SIZE_M=GROUP_SIZE_M,
                                        num_warps=ctx.num_warps)
+        print(pgm.asm["ttgir"])
         grid = lambda meta: [triton.cdiv(N, meta['BLOCK_SIZE_N'])]
         # accumulate partial sums in separate kernel
-        _layer_norm_bwd_dwdb[grid](_dw, _db, dw, db, GROUP_SIZE_M, N,
+        pgm = _layer_norm_bwd_dwdb[grid](_dw, _db, dw, db, GROUP_SIZE_M, N,
                                    BLOCK_SIZE_M=32,
                                    BLOCK_SIZE_N=128)
+        print(pgm.asm["ttgir"])
         return dx, None, dw, db, None
 
 
@@ -258,5 +261,5 @@ def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device='c
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
 
-# test_layer_norm(1151, 8192, torch.float16)
-bench_layer_norm.run(save_path='.', print_data=True)
+test_layer_norm(1151, 8192, torch.float16)
+# bench_layer_norm.run(save_path='.', print_data=True)

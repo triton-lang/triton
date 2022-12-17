@@ -136,8 +136,6 @@ x = torch.randn(1024, 1024, device='cuda')
 y_triton = softmax(x)
 y_torch = torch.softmax(x, axis=1)
 assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
-print("done")
-exit()
 
 # %%
 # As expected, the results are identical.

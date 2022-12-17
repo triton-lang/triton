@@ -318,12 +318,11 @@ public:
     SetVector<Operation *> cvtSlices;
     auto filter = [&](Operation *op) {
       return op->getBlock() == cvt->getBlock() &&
-             !isa<triton::ReduceOp, triton::gpu::ConvertLayoutOp>(op);
+             !(isa<triton::ReduceOp>(op) && !op->getResult(0).getType().isa<RankedTensorType>());
     };
     mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
     if (cvtSlices.empty())
       return failure();
-    
 
     llvm::MapVector<Value, Attribute> toConvert;
     for (Operation *op : cvtSlices) {
@@ -345,6 +344,9 @@ public:
         }
       }
     }
+
+    llvm::outs() << *cvtOp << "\n";
+    llvm::outs() << cvtOp->getParentOfType<ModuleOp>() << "\n";
 
     // otherwise, we push the conversion forward
     // since we'll be able to move it out of
