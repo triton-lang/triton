@@ -65,14 +65,14 @@ void extractNVVMMetadata(mlir::ModuleOp module,
     bool hasMetadata{};
 
     // maxntid
-    if (op->hasAttr(NVVMMetadataField::MaxNTid)) {
-      auto attr = op->getAttr(NVVMMetadataField::MaxNTid);
+    if (op->hasAttr("nvvm.maxntid")) {
+      auto attr = op->getAttr("nvvm.maxntid");
       meta.maxntidx = attr.dyn_cast<IntegerAttr>().getInt();
       hasMetadata = true;
     }
 
     // kernel
-    if (op->hasAttr(NVVMMetadataField::Kernel)) {
+    if (op->hasAttr("nvvm.kernel")) {
       meta.is_kernel = true;
       hasMetadata = true;
     }
@@ -208,7 +208,6 @@ void addExternalLibs(mlir::ModuleOp &module,
 
   DictionaryAttr dict = DictionaryAttr::get(module->getContext(), attrs);
   module.getOperation()->setAttr("triton_gpu.externs", dict);
-  return;
 }
 
 bool linkExternLib(llvm::Module &module, llvm::StringRef path) {

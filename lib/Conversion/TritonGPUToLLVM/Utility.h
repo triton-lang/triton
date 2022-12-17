@@ -1,34 +1,11 @@
-#ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_UTILITY_H
-#define TRITON_CONVERSION_TRITONGPU_TO_LLVM_UTILITY_H
+#ifndef TRITON_CONVERSION_TRITON_GPU_TO_LLVM_UTILITY_H_
+#define TRITON_CONVERSION_TRITON_GPU_TO_LLVM_UTILITY_H_
 
-#include <memory>
-#include <numeric>
-#include "llvm/Support/Format.h"
-#include "llvm/Support/FormatVariadic.h"
-#include "mlir/Analysis/SliceAnalysis.h"
-#include "mlir/Conversion/ArithmeticToLLVM/ArithmeticToLLVM.h"
-#include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
-#include "mlir/Conversion/LLVMCommon/LoweringOptions.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
-#include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
-#include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
-#include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
-#include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
-#include "mlir/Dialect/GPU/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/IR/Matchers.h"
-#include "mlir/IR/TypeUtilities.h"
-#include "mlir/Transforms/DialectConversion.h"
-#include "triton/Analysis/Allocation.h"
-#include "triton/Analysis/AxisInfo.h"
-#include "triton/Analysis/Membar.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
-#include "triton/Conversion/TritonGPUToLLVM/PtxAsmFormat.h"
-#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPU.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
 
 // Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
 // Operators
@@ -115,10 +92,72 @@
 #define idx_val(...)                                                           \
   LLVM::createIndexConstant(rewriter, loc, this->getTypeConverter(),           \
                             __VA_ARGS__)
-
 #define tid_val() getThreadId(rewriter, loc)
 
 namespace mlir {
+namespace triton {
+
+// Delinearize supposing order is [0, 1, .. , n]
+template <typename T>
+llvm::SmallVector<T> getMultiDimIndexImpl(T linearIndex,
+                                          llvm::ArrayRef<T> shape) {
+  // shape: {a, b, c, d}  ->  accMul: {1, a, a*b, a*b*c}
+  size_t rank = shape.size();
+  T accMul = product(shape.drop_back());
+  T linearRemain = linearIndex;
+  llvm::SmallVector<T> multiDimIndex(rank);
+  for (int i = rank - 1; i >= 0; --i) {
+    multiDimIndex[i] = linearRemain / accMul;
+    linearRemain = linearRemain % accMul;
+    if (i != 0) {
+      accMul = accMul / shape[i - 1];
+    }
+  }
+  return multiDimIndex;
+}
+
+template <typename T>
+llvm::SmallVector<T> getMultiDimIndex(T linearIndex, llvm::ArrayRef<T> shape,
+                                      llvm::ArrayRef<unsigned> order) {
+  size_t rank = shape.size();
+  assert(rank == order.size());
+  auto reordered = reorder(shape, order);
+  auto reorderedMultiDim = getMultiDimIndexImpl<T>(linearIndex, reordered);
+  llvm::SmallVector<T> multiDim(rank);
+  for (unsigned i = 0; i < rank; ++i) {
+    multiDim[order[i]] = reorderedMultiDim[i];
+  }
+  return multiDim;
+}
+
+// Linearize supposing order is [0, 1, .. , n]
+template <typename T>
+static T getLinearIndexImpl(llvm::ArrayRef<T> multiDimIndex, llvm::ArrayRef<T> shape) {
+  assert(multiDimIndex.size() == shape.size());
+  // shape: {a, b, c, d}  ->  accMul: {1, a, a*b, a*b*c}
+  size_t rank = shape.size();
+  T accMul = product(shape.drop_back());
+  T linearIndex = 0;
+  for (int i = rank - 1; i >= 0; --i) {
+    linearIndex += multiDimIndex[i] * accMul;
+    if (i != 0) {
+      accMul = accMul / shape[i - 1];
+    }
+  }
+  return linearIndex;
+}
+
+template <typename T>
+static T getLinearIndex(llvm::ArrayRef<T> multiDimIndex,
+                        llvm::ArrayRef<T> shape,
+                        llvm::ArrayRef<unsigned> order) {
+  assert(shape.size() == order.size());
+  return getLinearIndexImpl<T>(reorder(multiDimIndex, order),
+                               reorder(shape, order));
+}
+
+} // namespace triton
+
 namespace LLVM {
 using namespace mlir::triton;
 
@@ -195,7 +234,7 @@ getStridesFromShapeAndOrder(ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
                             Location loc, ConversionPatternRewriter &rewriter) {
   auto rank = shape.size();
   SmallVector<Value> strides(rank);
-  auto stride = 1;
+  int64_t stride = 1;
   for (auto idx : order) {
     strides[idx] = i32_val(stride);
     stride *= shape[idx];
@@ -206,7 +245,7 @@ getStridesFromShapeAndOrder(ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
 struct SharedMemoryObject {
   Value base; // i32 ptr. The start address of the shared memory object.
   // We need to store strides as Values but not integers because the
-  // extract_slice instruction can take a slice at artibary offsets.
+  // extract_slice instruction can take a slice at arbitrary offsets.
   // Take $a[16:32, 16:32] as an example, though we know the stride of $a[0] is
   // 32, we need to let the instruction that uses $a to be aware of that.
   // Otherwise, when we use $a, we only know that the shape of $a is 16x16. If

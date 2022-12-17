@@ -1,12 +1,13 @@
-#ifndef TRITON_CONVERSION_TRITON_GPU_TO_LLVM_ASM_FORMAT_H_
-#define TRITON_CONVERSION_TRITON_GPU_TO_LLVM_ASM_FORMAT_H_
+#ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_ASM_FORMAT_H_
+#define TRITON_CONVERSION_TRITONGPU_TO_LLVM_ASM_FORMAT_H_
 
-#include <memory>
-#include <string>
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "mlir/IR/Value.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+
+#include <memory>
+#include <string>
 
 namespace mlir {
 class ConversionPatternRewriter;
@@ -172,11 +173,11 @@ private:
     return argArchive.back().get();
   }
 
-  // Make the oprands in argArchive follow the provided \param order.
+  // Make the operands in argArchive follow the provided \param order.
   void reorderArgArchive(ArrayRef<Operand *> order) {
     assert(order.size() == argArchive.size());
     // The order in argArchive is unnecessary when onlyAttachMLIRArgs=false, but
-    // it do necessary when onlyAttachMLIRArgs is true for the $0,$1.. are
+    // it does necessary when onlyAttachMLIRArgs is true for the $0, $1... are
     // determined by PTX code snippet passed from external.
     sort(argArchive.begin(), argArchive.end(),
          [&](std::unique_ptr<Operand> &a, std::unique_ptr<Operand> &b) {
@@ -306,8 +307,7 @@ struct PTXInstrExecution {
   bool onlyAttachMLIRArgs{};
 };
 
-//// =============================== Some instruction wrappers
-///===============================
+/// ====== Some instruction wrappers ======
 // We add the wrappers to make the usage more intuitive by avoiding mixing the
 // PTX code with some trivial C++ code.
 
@@ -324,4 +324,4 @@ struct PTXCpAsyncLoadInstr : PTXInstrBase<PTXCpAsyncLoadInstr> {
 } // namespace triton
 } // namespace mlir
 
-#endif // TRITON_CONVERSION_TRITON_GPU_TO_LLVM_ASM_FORMAT_H_
+#endif

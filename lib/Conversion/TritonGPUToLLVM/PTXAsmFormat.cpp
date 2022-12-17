@@ -1,9 +1,9 @@
-#include <sstream>
-
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "triton/Conversion/TritonGPUToLLVM/PtxAsmFormat.h"
+#include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
+
+#include <sstream>
 
 namespace mlir {
 namespace triton {
