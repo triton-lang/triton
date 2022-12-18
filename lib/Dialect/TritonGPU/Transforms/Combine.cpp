@@ -881,6 +881,81 @@ public:
   }
 };
 
+class UpdateMMAVersionMinorForVolta : public mlir::RewritePattern {
+public:
+  explicit UpdateMMAVersionMinorForVolta(mlir::MLIRContext *context)
+      : RewritePattern(triton::DotOp::getOperationName(), 1, context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    using triton::gpu::ConvertLayoutOp;
+    using triton::gpu::DotOperandEncodingAttr;
+    using triton::gpu::MmaEncodingAttr;
+
+    // Prerequirement: DotOp can't have $c operand, or this pattern cannot works
+    // Find the DotOp, get the MMA layout and check if it needs to update
+    // Update steps:
+    //   1. Create a new MMA layout with the updated versionMinor,
+    //   2. Add a ConvertLayoutOp to $a, $b and $c with the new MMA layout,
+    //   3. Replace the DotOp with a new one holding the new MMA layout.
+    auto dotOp = cast<triton::DotOp>(op);
+    auto *ctx = dotOp->getContext();
+    auto AT = dotOp.a().getType().cast<RankedTensorType>();
+    auto BT = dotOp.b().getType().cast<RankedTensorType>();
+    auto DT = dotOp.d().getType().cast<RankedTensorType>();
+    auto mmaLayout = DT.getEncoding().cast<MmaEncodingAttr>();
+    if (!mmaLayout.isVolta())
+      return failure();
+    // NOTE Should run after the BlockedToMMA pattern.
+    auto dotOperandA = AT.getEncoding().cast<DotOperandEncodingAttr>();
+    auto dotOperandB = BT.getEncoding().cast<DotOperandEncodingAttr>();
+    // NOTE Should run after OptimizeConvertToDotOperand pattern.
+    bool isARow = dotOperandA.getIsMMAv1Row().cast<BoolAttr>().getValue();
+    bool isBRow = dotOperandB.getIsMMAv1Row().cast<BoolAttr>().getValue();
+    auto [isARow_, isBRow_, isAVec4, isBVec4] =
+        mmaLayout.decodeVoltaLayoutStates();
+    if (isARow_ == isARow && isBRow_ == isBRow) {
+      return failure(); // No need to update
+    }
+
+    auto newMmaLayout = MmaEncodingAttr::get(
+        ctx, mmaLayout.getVersionMajor(), mmaLayout.getWarpsPerCTA(),
+        AT.getShape(), BT.getShape(), isARow, isBRow);
+
+    auto newDotOperandA = DotOperandEncodingAttr::get(
+        ctx, dotOperandA.getOpIdx(), newMmaLayout, dotOperandA.getIsMMAv1Row());
+    auto newDotOperandB = DotOperandEncodingAttr::get(
+        ctx, dotOperandB.getOpIdx(), newMmaLayout, dotOperandB.getIsMMAv1Row());
+    auto newATy = RankedTensorType::get(AT.getShape(), AT.getElementType(),
+                                        newDotOperandA);
+    auto newBTy = RankedTensorType::get(BT.getShape(), BT.getElementType(),
+                                        newDotOperandB);
+
+    auto newA =
+        rewriter.create<ConvertLayoutOp>(dotOp->getLoc(), newATy, dotOp.a())
+            .getResult();
+    auto newB =
+        rewriter.create<ConvertLayoutOp>(dotOp->getLoc(), newBTy, dotOp.b())
+            .getResult();
+    Value newC;
+    if (dotOp.c()) {
+      auto CT = dotOp.c().getType().cast<RankedTensorType>();
+      auto newCTy = RankedTensorType::get(CT.getShape(), CT.getElementType(),
+                                          newMmaLayout);
+      newC =
+          rewriter.create<ConvertLayoutOp>(dotOp->getLoc(), newCTy, dotOp.c())
+              .getResult();
+    }
+
+    auto newDotRetTy =
+        RankedTensorType::get(DT.getShape(), DT.getElementType(), newMmaLayout);
+    rewriter.replaceOpWithNewOp<triton::DotOp>(dotOp, newDotRetTy, newA, newB,
+                                               newC, dotOp.allowTF32());
+    return success();
+  }
+};
+
 class FixupLoop : public mlir::RewritePattern {
 
 public:
@@ -951,6 +1026,16 @@ public:
     patterns.add<BlockedToMMA>(context, computeCapability);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
+      signalPassFailure();
+    }
+
+    mlir::RewritePatternSet updateMMAVersionMinorForVolta(context);
+    updateMMAVersionMinorForVolta
+        .add<UpdateMMAVersionMinorForVolta, SimplifyConversion>(context);
+
+    if (applyPatternsAndFoldGreedily(m,
+                                     std::move(updateMMAVersionMinorForVolta))
+            .failed()) {
       signalPassFailure();
     }
 
