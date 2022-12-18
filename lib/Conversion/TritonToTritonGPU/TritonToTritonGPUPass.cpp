@@ -1,16 +1,17 @@
-#include <numeric>
-#include "llvm/ADT/APSInt.h"
+#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
+
+#include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
 #include "mlir/Dialect/GPU/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
-#include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Pass/Pass.h"
-#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPU.h"
+#include "mlir/Transforms/DialectConversion.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
+#include "llvm/ADT/APSInt.h"
+#include <numeric>
 
 using namespace mlir;
 using namespace mlir::triton;

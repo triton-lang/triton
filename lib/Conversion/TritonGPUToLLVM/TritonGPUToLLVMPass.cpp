@@ -1,4 +1,5 @@
-#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
+
 #include "mlir/Conversion/ArithmeticToLLVM/ArithmeticToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
@@ -13,11 +14,8 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
-#include "Patterns.h"
+#include "TritonGPUToLLVM.h"
 #include "TypeConverter.h"
-
-#include <numeric>
-#include <string>
 
 using namespace mlir;
 using namespace mlir::triton;

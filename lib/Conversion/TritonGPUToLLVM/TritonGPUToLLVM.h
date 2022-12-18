@@ -2,7 +2,7 @@
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_CONVERSIONS_H_
 
 #include "DotHelpers.h"
-#include "PatternBase.h"
+#include "TritonGPUToLLVMBase.h"
 #include "Utility.h"
 
 using namespace mlir;

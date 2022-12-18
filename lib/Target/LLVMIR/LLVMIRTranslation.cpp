@@ -1,4 +1,5 @@
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
+
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
@@ -11,8 +12,8 @@
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Transforms/Passes.h"
-#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVM.h"
-#include "triton/tools/sys/getenv.hpp"
+#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/IR/Constants.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Linker/Linker.h"

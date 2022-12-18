@@ -5,7 +5,6 @@
 #include "llvm/ADT/StringRef.h"
 #include "mlir/IR/Value.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-
 #include <memory>
 #include <string>
 
