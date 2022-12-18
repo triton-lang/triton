@@ -1,5 +1,5 @@
 add_mlir_conversion_library(TritonToTritonGPU
-    TritonToTritonGPU.cpp    
+    TritonToTritonGPUPass.cpp
 
     ADDITIONAL_HEADER_DIRS
     ${PROJECT_SOURCE_DIR}/include/triton/Conversion/TritonToTritonGPU

@@ -1,7 +1,8 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_DOT_HELPERS_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_DOT_HELPERS_H
 
-#include "./Utility.h"
+#include "llvm/Support/Format.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Conversion/ArithmeticToLLVM/ArithmeticToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
@@ -22,14 +23,11 @@
 #include "triton/Analysis/Membar.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
-#include "triton/Conversion/TritonGPUToLLVM/PtxAsmFormat.h"
+#include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "llvm/Support/Format.h"
-#include "llvm/Support/FormatVariadic.h"
-#include <memory>
-#include <numeric>
-#include <string>
+
+#include "Utility.h"
 
 namespace mlir {
 namespace LLVM {

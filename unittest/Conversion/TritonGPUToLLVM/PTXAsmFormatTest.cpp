@@ -1,16 +1,17 @@
-#include "triton/Conversion/TritonGPUToLLVM/PtxAsmFormat.h"
 #include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
 #include "mlir/IR/Builders.h"
+#include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+
 #include <gtest/gtest.h>
 
 namespace mlir {
 namespace triton {
-class PtxAsmFormatTest : public ::testing::Test {
+class PTXAsmFormatTest : public ::testing::Test {
 protected:
   static constexpr int numValues = 4;
 
-  PtxAsmFormatTest() {
+  PTXAsmFormatTest() {
     ctx.loadDialect<arith::ArithmeticDialect>();
 
     createValues();
@@ -34,7 +35,7 @@ protected:
   Value v[numValues + 1];
 };
 
-TEST_F(PtxAsmFormatTest, basic) {
+TEST_F(PTXAsmFormatTest, basic) {
   PTXBuilder builder;
 
   // Create the operands needed by the instructions in the PTX code.
@@ -55,7 +56,7 @@ TEST_F(PtxAsmFormatTest, basic) {
   ASSERT_EQ(constraints, "=r,b"); // $0 -> =r, $1 -> b
 }
 
-TEST_F(PtxAsmFormatTest, complexInstruction) {
+TEST_F(PTXAsmFormatTest, complexInstruction) {
   using triton::CacheModifier;
   using triton::EvictionPolicy;
 
@@ -99,7 +100,7 @@ TEST_F(PtxAsmFormatTest, complexInstruction) {
   EXPECT_EQ(builder.getConstraints(), "l,b");
 }
 
-TEST_F(PtxAsmFormatTest, MultiLinePTX) {
+TEST_F(PTXAsmFormatTest, MultiLinePTX) {
   PTXBuilder builder;
 
   auto *constVal = builder.newConstantOperand(1);
@@ -121,7 +122,7 @@ TEST_F(PtxAsmFormatTest, MultiLinePTX) {
   EXPECT_EQ(values[1], v[2]); // $1 -> v[2]
 }
 
-TEST_F(PtxAsmFormatTest, onlyAttachMLIRArgs) {
+TEST_F(PTXAsmFormatTest, onlyAttachMLIRArgs) {
   PTXBuilder builder;
   const char *ptxCode =
       ".param .b64 param0;\n" // prepare param0 (format string)
