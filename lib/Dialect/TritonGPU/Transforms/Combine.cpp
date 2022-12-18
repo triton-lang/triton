@@ -749,11 +749,55 @@ public:
     auto newDstEncoding = triton::gpu::DotOperandEncodingAttr::get(
         op->getContext(), dstDotOperandLayout.getOpIdx(),
         dstDotOperandLayout.getParent(), newIsRow);
+
+    triton::gpu::DotOperandEncodingAttr newDotOperand = newDstEncoding;
+    triton::gpu::MmaEncodingAttr newMmaEnc;
+    if (auto mmaLayout = dstDotOperandLayout.getParent()
+                             .dyn_cast<triton::gpu::MmaEncodingAttr>()) {
+      bool needToUpdateMmaLayout{};
+      bool isARow, isBRow, isAVec4, isBVec4;
+      if (mmaLayout.isVolta()) {
+        std::tie(isARow, isBRow, isAVec4, isBVec4) =
+            mmaLayout.decodeVoltaLayoutStates();
+        needToUpdateMmaLayout = newDstEncoding.getOpIdx() == 0
+                                    ? (isMMAv1Row == isARow)
+                                    : isMMAv1Row == isBRow;
+      }
+      // update the MmaLayout in DotOperand
+      if (needToUpdateMmaLayout) {
+        if (newDotOperand.getOpIdx() == 0)
+          isARow = isMMAv1Row;
+        else
+          isBRow = isMMAv1Row;
+        unsigned newVersionMinor =
+            (mmaLayout.getVersionMinor() | (isARow * 1 << 0)) |
+            (isBRow * 1 << 1);
+        newMmaEnc = triton::gpu::MmaEncodingAttr::get(
+            mmaLayout.getContext(), mmaLayout.getVersionMajor(),
+            newVersionMinor, mmaLayout.getWarpsPerCTA());
+        newDotOperand = triton::gpu::DotOperandEncodingAttr::get(
+            mmaLayout.getContext(), newDstEncoding.getOpIdx(), newMmaEnc,
+            newDotOperand.getIsMMAv1Row());
+      }
+    }
+
     auto newDstType = RankedTensorType::get(
-        dstType.getShape(), dstType.getElementType(), newDstEncoding);
+        dstType.getShape(), dstType.getElementType(), newDotOperand);
+
     auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
         op->getLoc(), newDstType, cvt.getOperand());
     rewriter.replaceOp(op, newCvt.getResult());
+
+    llvm::outs() << "newCvt: " << newCvt << "\n";
+
+    // TODO
+    if (newMmaEnc) {
+      for (auto user : newCvt.getResult().getUsers()) {
+        if (auto dotOp = llvm::dyn_cast<mlir::triton::DotOp>(user)) {
+        }
+      }
+    }
+
     return success();
   }
 };
@@ -793,6 +837,7 @@ public:
     Value oldB = dotOp.b();
     auto oldAType = oldA.getType().cast<RankedTensorType>();
     auto oldBType = oldB.getType().cast<RankedTensorType>();
+
     // for FMA, should retain the blocked layout.
     if (oldAType.getElementType().isF32() &&
         oldBType.getElementType().isF32() && !dotOp.allowTF32())
@@ -809,6 +854,8 @@ public:
                          .cast<triton::gpu::BlockedEncodingAttr>()
                          .getOrder();
 
+    llvm::outs() << "combine MMA: " << oldAType << " " << oldBType << "\n";
+
     // get MMA encoding for the given number of warps
     auto retShape = oldRetType.getShape();
     auto mod = op->getParentOfType<mlir::ModuleOp>();
@@ -817,11 +864,13 @@ public:
     auto warpsPerTile =
         getWarpsPerTile(dotOp, retShape, versionMajor, numWarps);
     triton::gpu::MmaEncodingAttr mmaEnc;
+    versionMajor = 1; // DEBUG
     if (versionMajor == 1) {
       auto shapeA = oldAType.getShape();
       auto shapeB = oldBType.getShape();
-      bool isARow = oldAOrder[0] != 0;
-      bool isBRow = oldBOrder[0] != 0;
+      bool isARow = oldAOrder[0] == 1;
+      bool isBRow = oldBOrder[0] == 1;
+      printf("*** Combine isARow, isBRow: %d,%d\n", isARow, isBRow);
       mmaEnc = triton::gpu::MmaEncodingAttr::get(
           oldRetType.getContext(), versionMajor, warpsPerTile, shapeA, shapeB,
           isARow, isBRow);
@@ -854,6 +903,8 @@ public:
         oldBType.getShape(), oldBType.getElementType(),
         triton::gpu::DotOperandEncodingAttr::get(
             oldBType.getContext(), 1, newRetType.getEncoding(), isMMAv1RowB));
+    llvm::outs() << "newAType: " << newAType << "\n";
+    llvm::outs() << "newBType: " << newBType << "\n";
 
     Value newA = rewriter.create<triton::gpu::ConvertLayoutOp>(oldA.getLoc(),
                                                                newAType, oldA);
