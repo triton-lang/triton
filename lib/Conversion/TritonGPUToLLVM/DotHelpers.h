@@ -59,7 +59,6 @@ struct DotOpMmaV1ConversionHelper {
 
     explicit AParam(bool isARow, ArrayRef<int64_t> shape) {
       isAVec4 = !isARow && shape[isARow] <= 16;
-      printf("isAVec4: %d\n", isAVec4);
       int packSize0 = (isARow || isAVec4) ? 1 : 2;
       int repM = 2 * packSize0;
       int repK = 1;
@@ -79,7 +78,6 @@ struct DotOpMmaV1ConversionHelper {
 
     explicit BParam(bool isBRow, ArrayRef<int64_t> shape) {
       isBVec4 = isBRow && shape[isBRow] <= 16;
-      printf("isBVec4: %d\n", isBVec4);
       int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
       rep.assign({0, 2 * packSize1, 1});
       spw.assign({0, fpw[1] * 4 * rep[1], 1});
@@ -159,6 +157,105 @@ struct DotOpMmaV1ConversionHelper {
   DotOpMmaV1ConversionHelper::ValueTable
   extractLoadedOperand(Value llStruct, int NK,
                        ConversionPatternRewriter &rewriter) const;
+
+  using CoordTy = SmallVector<Value, 2>;
+  // Get the coordinates(m,n) of the elements emit by a thread in accumulator.
+  static SmallVector<CoordTy>
+  getMNCoords(Value thread, PatternRewriter &rewriter, ArrayRef<unsigned> wpt,
+              ArrayRef<int64_t> shape, bool isARow, bool isBRow, bool isAVec4,
+              bool isBVec4) {
+    auto *ctx = thread.getContext();
+    auto loc = UnknownLoc::get(ctx);
+    Value _1 = i32_val(1);
+    Value _2 = i32_val(2);
+    Value _4 = i32_val(4);
+    Value _16 = i32_val(16);
+    Value _32 = i32_val(32);
+    Value _fpw0 = i32_val(fpw[0]);
+    Value _fpw1 = i32_val(fpw[1]);
+
+    int packSize0 = (isARow || isAVec4) ? 1 : 2;
+    int packSize1 = (isBRow && (!isBVec4)) ? 2 : 1;
+    SmallVector<int, 2> rep({2 * packSize0, 2 * packSize1});
+    SmallVector<int, 2> spw({fpw[0] * 4 * rep[0], rep[1] * 4 * rep[1]});
+    SmallVector<unsigned, 2> shapePerCTA({spw[0] * wpt[0], spw[1] * wpt[1]});
+
+    Value lane = urem(thread, _32);
+    Value warp = udiv(thread, _32);
+
+    Value warp0 = urem(warp, i32_val(wpt[0]));
+    Value warp12 = udiv(warp, i32_val(wpt[0]));
+    Value warp1 = urem(warp12, i32_val(wpt[1]));
+
+    // warp offset
+    Value offWarpM = mul(warp0, i32_val(spw[0]));
+    Value offWarpN = mul(warp1, i32_val(spw[1]));
+    // quad offset
+    Value offQuadM = mul(udiv(and_(lane, _16), _4), _fpw0);
+    Value offQuadN = mul(udiv(and_(lane, _16), _4), _fpw1);
+    // pair offset
+    Value offPairM = udiv(urem(lane, _16), _4);
+    offPairM = urem(offPairM, _fpw0);
+    offPairM = mul(offPairM, _4);
+    Value offPairN = udiv(urem(lane, _16), _4);
+    offPairN = udiv(offPairN, _fpw0);
+    offPairN = urem(offPairN, _fpw1);
+    offPairN = mul(offPairN, _4);
+
+    // sclare
+    offPairM = mul(offPairM, i32_val(rep[0] / 2));
+    offQuadM = mul(offQuadM, i32_val(rep[0] / 2));
+    offPairN = mul(offPairN, i32_val(rep[1] / 2));
+    offQuadN = mul(offQuadN, i32_val(rep[1] / 2));
+
+    // quad pair offset
+    Value offLaneM = add(offPairM, offQuadM);
+    Value offLaneN = add(offPairN, offQuadN);
+    // a, b offset
+    Value offsetAM = add(offWarpM, offLaneM);
+    Value offsetBN = add(offWarpN, offLaneN);
+    // m indices
+    Value offsetCM = add(and_(lane, _1), offsetAM);
+    SmallVector<Value> idxM;
+    for (unsigned m = 0; m < shape[0]; m += shapePerCTA[0])
+      for (unsigned mm = 0; mm < rep[0]; ++mm)
+        idxM.push_back(add(offsetCM, i32_val(m + mm * 2)));
+    // n indices
+    Value offsetCN = add(and_(lane, _2), add(offWarpN, offPairN));
+    SmallVector<Value> idxN;
+    for (int n = 0; n < shape[1]; n += shapePerCTA[1]) {
+      for (int nn = 0; nn < rep[1]; ++nn) {
+        idxN.push_back(add(offsetCN, i32_val(n + nn / 2 * 4 +
+                                             (nn % 2) * 2 * fpw[1] * rep[1])));
+        idxN.push_back(
+            add(offsetCN,
+                i32_val(n + nn / 2 * 4 + (nn % 2) * 2 * fpw[1] * rep[1] + 1)));
+      }
+    }
+
+    SmallVector<SmallVector<Value>> axes({idxM, idxN});
+
+    // product the axis M and axis N to get coords, ported from
+    // generator::init_idx method from triton2.0
+
+    // TODO[Superjomn]: check the order.
+    SmallVector<short> order({1, 0});
+    SmallVector<CoordTy> coords;
+    for (Value x1 : axes[order[1]]) {   // M
+      for (Value x0 : axes[order[0]]) { // N
+        SmallVector<Value, 2> idx(2);
+        idx[order[0]] = x0; // N
+        idx[order[1]] = x1; // M
+        coords.push_back(idx);
+      }
+    }
+    return coords; // {M,N} in row-major
+  }
+
+  // \param elemId the offset of the element in a thread
+  static CoordTy getCoord(int elemId, ArrayRef<CoordTy> coords) {
+    return coords[elemId];
+  }
 
 private:
   static constexpr unsigned instrShape[] = {16, 16, 4};
@@ -1345,6 +1442,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
 
   bool isARow = order[0] != 0;
   AParam param(isARow, shape);
+  printf("isAVec4: %d\n", param.isAVec4);
 
   auto [offsetAM, offsetAK, _0, _1] = computeOffsets(
       thread, isARow, false, fpw, param.spw, param.rep, rewriter, loc);
@@ -1462,6 +1560,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
   Value smem = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
   bool isBRow = order[0] != 0;
   BParam param(isBRow, shape);
+  printf("isBVec4: %d\n", param.isBVec4);
 
   int vecB = sharedLayout.getVec();
   printf("vecB: %d\n", vecB);

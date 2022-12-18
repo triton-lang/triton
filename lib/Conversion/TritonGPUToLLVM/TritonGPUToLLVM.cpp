@@ -2693,6 +2693,10 @@ public:
         (dstLayout.isa<BlockedEncodingAttr>() ||
          dstLayout.isa<MmaEncodingAttr>() ||
          dstLayout.isa<SliceEncodingAttr>())) {
+      if (auto srcMmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>()) {
+        if (srcMmaLayout.isVolta())
+          return lowerDistributedToDistributedForMMAV1(op, adaptor, rewriter);
+      }
       return lowerDistributedToDistributed(op, adaptor, rewriter);
     }
     if (srcLayout.isa<MmaEncodingAttr>() &&
@@ -2890,27 +2894,26 @@ private:
         mmaColIdx[0] = add(mmaThreadIdInGrpM2, colWarpOffset);
         mmaColIdx[1] = add(mmaThreadIdInGrpM2P1, colWarpOffset);
       } else if (mmaLayout.isVolta()) {
-        multiDimWarpId[0] = urem(multiDimWarpId[0], idx_val(shape[0] / 16));
-        multiDimWarpId[1] = urem(multiDimWarpId[1], idx_val(shape[1] / 16));
-        Value laneIdDiv16 = udiv(laneId, _16);
-        Value laneIdRem16 = urem(laneId, _16);
-        Value laneIdRem2 = urem(laneId, _2);
-        Value laneIdRem16Div8 = udiv(laneIdRem16, _8);
-        Value laneIdRem16Div4 = udiv(laneIdRem16, _4);
-        Value laneIdRem16Div4Rem2 = urem(laneIdRem16Div4, _2);
-        Value laneIdRem4Div2 = udiv(urem(laneId, _4), _2);
-        Value rowWarpOffset = mul(multiDimWarpId[0], _16);
-        Value colWarpOffset = mul(multiDimWarpId[1], _16);
-        mmaRowIdx[0] =
-            add(add(mul(laneIdDiv16, _8), mul(laneIdRem16Div4Rem2, _4)),
-                laneIdRem2);
-        mmaRowIdx[0] = add(mmaRowIdx[0], rowWarpOffset);
-        mmaRowIdx[1] = add(mmaRowIdx[0], _2);
-        mmaColIdx[0] = add(mul(laneIdRem16Div8, _4), mul(laneIdRem4Div2, _2));
-        mmaColIdx[0] = add(mmaColIdx[0], colWarpOffset);
-        mmaColIdx[1] = add(mmaColIdx[0], _1);
-        mmaColIdx[2] = add(mmaColIdx[0], _8);
-        mmaColIdx[3] = add(mmaColIdx[0], idx_val(9));
+        // multiDimWarpId[0] = urem(multiDimWarpId[0], idx_val(shape[0] / 16));
+        // multiDimWarpId[1] = urem(multiDimWarpId[1], idx_val(shape[1] / 16));
+        // Value laneIdDiv16 = udiv(laneId, _16);
+        // Value laneIdRem16 = urem(laneId, _16);
+        // Value laneIdRem2 = urem(laneId, _2);
+        // Value laneIdRem16Div8 = udiv(laneIdRem16, _8);
+        // Value laneIdRem16Div4 = udiv(laneIdRem16, _4);
+        // Value laneIdRem16Div4Rem2 = urem(laneIdRem16Div4, _2);
+        // Value laneIdRem4Div2 = udiv(urem(laneId, _4), _2);
+        // Value rowWarpOffset = mul(multiDimWarpId[0], _16);
+        // Value colWarpOffset = mul(multiDimWarpId[1], _16);
+        // mmaRowIdx[0] =
+        //     add(add(mul(laneIdDiv16, _8), mul(laneIdRem16Div4Rem2, _4)),
+        //         laneIdRem2);
+        // mmaRowIdx[0] = add(mmaRowIdx[0], rowWarpOffset);
+        // mmaRowIdx[1] = add(mmaRowIdx[0], _2);
+        // mmaColIdx[0] = add(mul(laneIdRem16Div8, _4), mul(laneIdRem4Div2,
+        // _2)); mmaColIdx[0] = add(mmaColIdx[0], colWarpOffset); mmaColIdx[1] =
+        // add(mmaColIdx[0], _1); mmaColIdx[2] = add(mmaColIdx[0], _8);
+        // mmaColIdx[3] = add(mmaColIdx[0], idx_val(9));
       } else {
         llvm_unreachable("Unexpected MMALayout version");
       }
@@ -2928,23 +2931,34 @@ private:
         // the order of elements in a thread:
         //   c0, c1, ...  c4, c5
         //   c2, c3, ...  c6, c7
-        if (elemId < 2) {
-          multiDimOffset[0] = mmaRowIdx[0];
-          multiDimOffset[1] = mmaColIdx[elemId % 2];
-        } else if (elemId >= 2 && elemId < 4) {
-          multiDimOffset[0] = mmaRowIdx[1];
-          multiDimOffset[1] = mmaColIdx[elemId % 2];
-        } else if (elemId >= 4 && elemId < 6) {
-          multiDimOffset[0] = mmaRowIdx[0];
-          multiDimOffset[1] = mmaColIdx[elemId % 2 + 2];
-        } else if (elemId >= 6) {
-          multiDimOffset[0] = mmaRowIdx[1];
-          multiDimOffset[1] = mmaColIdx[elemId % 2 + 2];
-        }
-        multiDimOffset[0] = add(
-            multiDimOffset[0], idx_val(multiDimCTAInRepId[0] * shapePerCTA[0]));
-        multiDimOffset[1] = add(
-            multiDimOffset[1], idx_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
+        // if (elemId < 2) {
+        //   multiDimOffset[0] = mmaRowIdx[0];
+        //   multiDimOffset[1] = mmaColIdx[elemId % 2];
+        // } else if (elemId >= 2 && elemId < 4) {
+        //   multiDimOffset[0] = mmaRowIdx[1];
+        //   multiDimOffset[1] = mmaColIdx[elemId % 2];
+        // } else if (elemId >= 4 && elemId < 6) {
+        //   multiDimOffset[0] = mmaRowIdx[0];
+        //   multiDimOffset[1] = mmaColIdx[elemId % 2 + 2];
+        // } else if (elemId >= 6) {
+        //   multiDimOffset[0] = mmaRowIdx[1];
+        //   multiDimOffset[1] = mmaColIdx[elemId % 2 + 2];
+        // }
+        // multiDimOffset[0] = add(
+        //     multiDimOffset[0], idx_val(multiDimCTAInRepId[0] *
+        //     shapePerCTA[0]));
+        // multiDimOffset[1] = add(
+        //     multiDimOffset[1], idx_val(multiDimCTAInRepId[1] *
+        //     shapePerCTA[1]));
+
+        auto [isARow, isBRow, isAVec4, isBVec4] =
+            mmaLayout.decodeVoltaLayoutStates();
+        auto coords = DotOpMmaV1ConversionHelper::getMNCoords(
+            threadId, rewriter, mmaLayout.getWarpsPerCTA(), shape, isARow,
+            isBRow, isAVec4, isBVec4);
+        printf("coords.size:%lu\n", coords.size());
+        return DotOpMmaV1ConversionHelper::getCoord(elemId, coords);
+
       } else {
         llvm_unreachable("Unexpected MMALayout version");
       }
@@ -2962,12 +2976,29 @@ private:
                       ArrayRef<unsigned> outOrd, SmallVector<Value> &vals,
                       Value smemBase) const;
 
+  // TODO[Superjomn]: Refactor the processReplica to make them more clear.
+  // The MMAV1's result is quite different from the exising "Replica" structure,
+  // add a new simple but clear implementation for it to avoid modificating the
+  // logic of the exising one.
+  void processReplicaForMMAV1(Location loc, ConversionPatternRewriter &rewriter,
+                              bool stNotRd, RankedTensorType type,
+                              ArrayRef<unsigned> multiDimRepId, unsigned vec,
+                              ArrayRef<unsigned> outOrd,
+                              SmallVector<Value> &vals, Value smemBase,
+                              ArrayRef<int64_t> shape) const;
+
   // blocked/mma -> blocked/mma.
   // Data padding in shared memory to avoid bank conflict.
   LogicalResult
   lowerDistributedToDistributed(triton::gpu::ConvertLayoutOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const;
+
+  // An separate method for MMAV1.
+  // TODO[Superjomn]: Refactor and remove this later.
+  LogicalResult lowerDistributedToDistributedForMMAV1(
+      triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const;
 
   // blocked -> shared.
   // Swizzling in shared memory to avoid bank conflict. Normally used for
@@ -3076,6 +3107,76 @@ void ConvertLayoutOpConversion::processReplica(
   }
 }
 
+void ConvertLayoutOpConversion::processReplicaForMMAV1(
+    Location loc, ConversionPatternRewriter &rewriter, bool stNotRd,
+    RankedTensorType type, ArrayRef<unsigned> multiDimRepId, unsigned vec,
+    ArrayRef<unsigned> outOrd, SmallVector<Value> &vals, Value smemBase,
+    ArrayRef<int64_t> shape) const {
+
+  vec = 2;
+  unsigned accumNumCTAsEachRep = 1;
+  auto layout = type.getEncoding();
+  auto order = getOrder(layout);
+  auto rank = type.getRank();
+  int accumSizePerThread = vals.size();
+
+  SmallVector<unsigned> numCTAs(rank, 1);
+  SmallVector<unsigned> numCTAsEachRep(rank, 1);
+  SmallVector<unsigned> shapePerCTA{
+      {static_cast<unsigned>(shape[0]), static_cast<unsigned>(shape[1])}};
+
+  auto elemTy = type.getElementType();
+
+  assert(accumNumCTAsEachRep == 1); // DEBUG
+  printf("accumSizePerThread: %d\n", accumSizePerThread);
+
+  int ctaId = 0;
+
+  auto multiDimCTAInRepId =
+      getMultiDimIndex<unsigned>(ctaId, numCTAsEachRep, order);
+  SmallVector<unsigned> multiDimCTAId(rank);
+  for (const auto &it : llvm::enumerate(multiDimCTAInRepId)) {
+    auto d = it.index();
+    multiDimCTAId[d] = multiDimRepId[d] * numCTAsEachRep[d] + it.value();
+  }
+
+  auto linearCTAId = getLinearIndex<unsigned>(multiDimCTAId, numCTAs, order);
+  // TODO: This is actually redundant index calculation, we should
+  //       consider of caching the index calculation result in case
+  //       of performance issue observed.
+  printf("accuSize: %d, vec: %d\n", accumSizePerThread, vec);
+  for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
+    printf("- elemID: %d\n", elemId);
+    SmallVector<Value> multiDimOffset =
+        getMultiDimOffset(layout, loc, rewriter, elemId, type.getShape(),
+                          multiDimCTAInRepId, shapePerCTA);
+    printf("- getMultiDimOffset done\n");
+    Value offset =
+        linearize(rewriter, loc, multiDimOffset, shapePerCTA, outOrd);
+
+    auto elemPtrTy = ptr_ty(elemTy, 3);
+    Value ptr = gep(elemPtrTy, smemBase, offset);
+    auto vecTy = vec_ty(elemTy, vec);
+    ptr = bitcast(ptr, ptr_ty(vecTy, 3));
+    if (stNotRd) {
+      Value valVec = undef(vecTy);
+      for (unsigned v = 0; v < vec; ++v) {
+        auto currVal = vals[elemId + linearCTAId * accumSizePerThread + v];
+        valVec = insert_element(vecTy, valVec, currVal, idx_val(v));
+      }
+      store(valVec, ptr);
+    } else {
+      Value valVec = load(ptr);
+      for (unsigned v = 0; v < vec; ++v) {
+        Value currVal = extract_element(elemTy, valVec, idx_val(v));
+        vals[elemId + linearCTAId * accumSizePerThread + v] = currVal;
+        printf("- write vals offset: %d\n",
+               elemId + linearCTAId * accumSizePerThread + v);
+      }
+    }
+  }
+}
+
 LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
     triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
     ConversionPatternRewriter &rewriter) const {
@@ -3099,6 +3200,20 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
   SmallVector<unsigned> outNumCTAs(rank);
   auto srcShapePerCTA = getShapePerCTA(srcLayout);
   auto dstShapePerCTA = getShapePerCTA(dstLayout);
+
+  // For Volta, all the coords for a CTA are calculated.
+  bool isMmaV1{};
+  if (auto mmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>()) {
+    if (mmaLayout.isVolta()) {
+      isMmaV1 = true;
+      printf("mma.volta\n");
+      srcShapePerCTA.assign(
+          {static_cast<unsigned>(shape[0]), static_cast<unsigned>(shape[1])});
+      dstShapePerCTA.assign(
+          {static_cast<unsigned>(shape[0]), static_cast<unsigned>(shape[1])});
+    }
+  }
+
   for (unsigned d = 0; d < rank; ++d) {
     unsigned inPerCTA = std::min<unsigned>(shape[d], srcShapePerCTA[d]);
     unsigned outPerCTA = std::min<unsigned>(shape[d], dstShapePerCTA[d]);
@@ -3114,6 +3229,7 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
   auto accumNumReplicates = product<unsigned>(numReplicates);
   // unsigned elems = getElemsPerThread(srcTy);
   auto vals = getElementsFromStruct(loc, adaptor.src(), rewriter);
+
   unsigned inVec = 0;
   unsigned outVec = 0;
   auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
@@ -3153,6 +3269,75 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
   SmallVector<Type> types(outElems, llvmElemTy);
   auto *ctx = llvmElemTy.getContext();
   Type structTy = struct_ty(types);
+
+  if (isMmaV1) {
+    printf("outVals.size(): %lu\n", outVals.size());
+    for (auto val : outVals) {
+      llvm::outs() << "val: " << val << "\n";
+    }
+  }
+
+  Value result = getStructFromElements(loc, outVals, rewriter, structTy);
+  rewriter.replaceOp(op, result);
+
+  return success();
+}
+
+LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributedForMMAV1(
+    triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+    ConversionPatternRewriter &rewriter) const {
+  auto loc = op.getLoc();
+  Value src = op.src();
+  Value dst = op.result();
+  auto srcTy = src.getType().cast<RankedTensorType>();
+  auto dstTy = dst.getType().cast<RankedTensorType>();
+  Attribute dstLayout = dstTy.getEncoding();
+  auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
+  Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
+  auto elemPtrTy = ptr_ty(llvmElemTy, 3);
+  smemBase = bitcast(smemBase, elemPtrTy);
+  auto shape = dstTy.getShape();
+  unsigned rank = dstTy.getRank();
+  SmallVector<unsigned> numReplicates(rank, 1);
+  SmallVector<unsigned> inNumCTAsEachRep(rank, 1);
+  SmallVector<unsigned> outNumCTAsEachRep(rank, 1);
+  SmallVector<unsigned> inNumCTAs(rank, 1);
+  SmallVector<unsigned> outNumCTAs(rank, 1);
+  SmallVector<unsigned> srcShapePerCTA{static_cast<unsigned>(shape[0]),
+                                       static_cast<unsigned>(shape[1])};
+  auto dstShapePerCTA = srcShapePerCTA;
+
+  auto vals = getElementsFromStruct(loc, adaptor.src(), rewriter);
+
+  printf("vals.size(): %lu\n", vals.size());
+  unsigned inVec = 0;
+  unsigned outVec = 0;
+  auto paddedRepShape = srcShapePerCTA;
+
+  unsigned outElems = getElemsPerThread(dstTy);
+  printf("outElems: %d\n", outElems);
+  auto outOrd = getOrder(dstLayout);
+  SmallVector<Value> outVals(outElems);
+
+  unsigned repId = 0;
+  auto multiDimRepId = getMultiDimIndex<unsigned>(repId, numReplicates, outOrd);
+  // Store to smem
+  processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ true, srcTy, multiDimRepId,
+                         inVec, outOrd, vals, smemBase, shape);
+  barrier();
+  // Read from smem
+  processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ false, dstTy, multiDimRepId,
+                         outVec, outOrd, outVals, smemBase, shape);
+
+  SmallVector<Type> types(outElems, llvmElemTy);
+  auto *ctx = llvmElemTy.getContext();
+  Type structTy = struct_ty(types);
+
+  printf("outVals.size(): %lu\n", outVals.size());
+  for (auto val : outVals) {
+    llvm::outs() << "val: " << val << "\n";
+  }
+
   Value result = getStructFromElements(loc, outVals, rewriter, structTy);
   rewriter.replaceOp(op, result);
 
@@ -3678,7 +3863,6 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
     for (unsigned i = 0; i < 8; i++) {
       Value elem = extract_val(f32_ty, res, getIntAttr(i));
       acc[idx[i]] = elem;
-      resVals[(m * numN / 2 + n) * 8 + i] = elem;
     }
 
 #define SHOW_MMA_V1 1
@@ -3708,6 +3892,11 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
       for (unsigned n = 0; n < numN / 2; ++n) {
         callMMA(m, n, k);
       }
+
+  // res holds the same layout of acc
+  for (size_t i = 0; i < acc.size(); ++i) {
+    resVals[i] = acc[i];
+  }
 
   LLVM::vprintf_array(LLVM::gThreadId, acc, "acc", "%f", rewriter);
 
