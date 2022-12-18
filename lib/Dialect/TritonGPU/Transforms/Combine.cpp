@@ -93,8 +93,18 @@ public:
 
     if(!reduceArg)
       return mlir::failure();
-    rewriter.replaceOpWithNewOp<triton::ReduceOp>(
-        op, op->getResult(0).getType(), reduce.redOp(), reduceArg.getOperand(), reduce.axis());
+    auto newReduce = rewriter.create<triton::ReduceOp>(
+        op->getLoc(), reduce.redOp(), reduceArg.getOperand(), reduce.axis());
+    Value newRet = newReduce.getResult();
+    // it's still beneficial to move the conversion
+    // to after the reduce if necessary since it will be
+    // done on a rank-reduced tensor hence cheaper
+    if(newRet.getType() != reduce.getResult().getType())
+      newRet = rewriter.create<triton::gpu::ConvertLayoutOp>(
+          op->getLoc(), reduce.getResult().getType(), newRet);
+
+    rewriter.replaceOp(op, newRet);
+      
     return success();
   }
 
@@ -379,51 +389,53 @@ public:
     int numOps = thenYield.getNumOperands();
     SmallVector<Value> newThenYieldOps = thenYield.getOperands();
     SmallVector<Value> newElseYieldOps = elseYield.getOperands();
+    SetVector<Operation*> thenCvts;
+    SetVector<Operation*> elseCvts;
     SmallVector<Type> newRetTypes;
-    bool replace = false;
+
+    BlockAndValueMapping mapping;
     for(size_t i = 0; i < numOps ; i++){
       auto thenCvt = dyn_cast<triton::gpu::ConvertLayoutOp>(thenYield.getOperand(i).getDefiningOp());
       auto elseCvt = dyn_cast<triton::gpu::ConvertLayoutOp>(elseYield.getOperand(i).getDefiningOp());
       if(thenCvt && elseCvt && 
+         std::distance(thenCvt->user_begin(), thenCvt->user_end()) == 1 &&
+         std::distance(elseCvt->user_begin(), elseCvt->user_end()) == 1 &&
          thenCvt.getOperand().getType() == elseCvt.getOperand().getType()){
-        newThenYieldOps[i] = thenCvt.getOperand();
-        newElseYieldOps[i] = elseCvt.getOperand();
+        mapping.map(thenCvt.getResult(), thenCvt.getOperand());
+        mapping.map(elseCvt.getResult(), elseCvt.getOperand());
         newRetTypes.push_back(thenCvt.getOperand().getType());
-        replace = true;
+        thenCvts.insert((Operation*)thenCvt);
+        elseCvts.insert((Operation*)elseCvt);
       }
       else
         newRetTypes.push_back(thenYield.getOperand(i).getType());
     }
-    if(!replace)
+    if(mapping.getValueMap().empty())
       return mlir::failure();
 
     
-    BlockAndValueMapping mapping;
 
     
     rewriter.setInsertionPoint(op);
     auto newIfOp = rewriter.create<scf::IfOp>(ifOp.getLoc(), newRetTypes, ifOp.getCondition(), true);
-    
+    // rematerialize `then` block
     rewriter.setInsertionPointToEnd(newIfOp.thenBlock());
-    for(Operation& op: ifOp.thenBlock()->getOperations())
-      rewriter.clone(op, mapping);
-    for(size_t i = 0; i < numOps; i++)
-      if(newThenYieldOps[i])
-        newIfOp.thenYield().setOperand(i, newThenYieldOps[i]);
-      
-     
-    rewriter.setInsertionPointToEnd(newIfOp.elseBlock());
-    for(Operation& op: ifOp.elseBlock()->getOperations())
-      rewriter.clone(op, mapping);
-    for(size_t i = 0; i < numOps; i++)
-      if(newElseYieldOps[i] && mapping.contains(newElseYieldOps[i])){
-        newIfOp.elseYield().setOperand(i, mapping.lookup(newElseYieldOps[i]));
+    for(Operation& op: ifOp.thenBlock()->getOperations()){
+      if(thenCvts.contains(&op)){
+        mapping.map(op.getResult(0), mapping.lookup(op.getOperand(0)));
+        continue;
       }
-
-    // llvm::outs() << newIfOp << "\n";
-    
-    // for(auto i: newElseYieldOps)
-    //   llvm::outs() << i << "\n";
+      rewriter.clone(op, mapping);
+    }
+    // rematerialize `else` block 
+    rewriter.setInsertionPointToEnd(newIfOp.elseBlock());
+    for(Operation& op: ifOp.elseBlock()->getOperations()){
+      if(elseCvts.contains(&op)){
+        mapping.map(op.getResult(0), mapping.lookup(op.getOperand(0)));
+        continue;
+      }
+      rewriter.clone(op, mapping);
+    }
     
     rewriter.setInsertionPointAfter(newIfOp);
     SmallVector<Value> newRetValues = newIfOp.getResults();
@@ -433,11 +445,7 @@ public:
       }
     }
 
-    // llvm::outs() << newIfOp << "\n";
-    // rewriter.replaceOp(op, newRetValues);
     rewriter.replaceOp(op, newRetValues);
-    // rewriter.eraseOp(ifOp);
-    
     return mlir::success();
   }
 };
