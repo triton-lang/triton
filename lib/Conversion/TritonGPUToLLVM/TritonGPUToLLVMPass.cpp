@@ -31,8 +31,8 @@ public:
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
     addLegalDialect<NVVM::NVVMDialect>();
-    // addIllegalDialect<triton::TritonDialect>();
-    // addIllegalDialect<triton::gpu::TritonGPUDialect>();
+    addIllegalDialect<triton::TritonDialect>();
+    addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addIllegalDialect<mlir::StandardOpsDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
@@ -44,7 +44,7 @@ public:
   explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
-    // addLegalDialect<NVVM::NVVMDialect>();
+    addLegalDialect<NVVM::NVVMDialect>();
     addIllegalOp<mlir::FuncOp>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }

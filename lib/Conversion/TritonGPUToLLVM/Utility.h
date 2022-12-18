@@ -161,6 +161,7 @@ static T getLinearIndex(llvm::ArrayRef<T> multiDimIndex,
 namespace LLVM {
 using namespace mlir::triton;
 
+static
 Value getStructFromElements(Location loc, ValueRange resultVals,
                             ConversionPatternRewriter &rewriter,
                             Type structType) {
@@ -177,6 +178,7 @@ Value getStructFromElements(Location loc, ValueRange resultVals,
   return llvmStruct;
 }
 
+static
 SmallVector<Value> getElementsFromStruct(Location loc, Value llvmStruct,
                                          ConversionPatternRewriter &rewriter) {
   if (llvmStruct.getType().isIntOrIndexOrFloat() ||
@@ -194,42 +196,45 @@ SmallVector<Value> getElementsFromStruct(Location loc, Value llvmStruct,
 }
 
 // Create a 32-bit integer constant.
-Value createConstantI32(Location loc, PatternRewriter &rewriter, int32_t v) {
+static Value createConstantI32(Location loc,
+                               PatternRewriter &rewriter, int32_t v) {
   auto i32ty = rewriter.getIntegerType(32);
   return rewriter.create<LLVM::ConstantOp>(loc, i32ty,
                                            IntegerAttr::get(i32ty, v));
 }
 
-Value createConstantF32(Location loc, PatternRewriter &rewriter, float v) {
+static Value createConstantF32(Location loc,
+                               PatternRewriter &rewriter, float v) {
   auto type = type::f32Ty(rewriter.getContext());
   return rewriter.create<LLVM::ConstantOp>(loc, type,
                                            rewriter.getF32FloatAttr(v));
 }
 
-Value createConstantF64(Location loc, PatternRewriter &rewriter, float v) {
+static Value createConstantF64(Location loc,
+                               PatternRewriter &rewriter, float v) {
   auto type = type::f64Ty(rewriter.getContext());
   return rewriter.create<LLVM::ConstantOp>(loc, type,
                                            rewriter.getF64FloatAttr(v));
 }
 
 // Create an index type constant.
-Value createIndexConstant(OpBuilder &builder, Location loc,
-                          TypeConverter *converter, int64_t value) {
+static Value createIndexConstant(OpBuilder &builder, Location loc,
+                                 TypeConverter *converter, int64_t value) {
   Type ty = converter->convertType(builder.getIndexType());
   return builder.create<LLVM::ConstantOp>(loc, ty,
                                           builder.getIntegerAttr(ty, value));
 }
 
 // Create an integer constant of \param width bits.
-Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
-                                int64_t value) {
+static Value createLLVMIntegerConstant(OpBuilder &builder, Location loc,
+                                       short width, int64_t value) {
   Type ty = builder.getIntegerType(width);
   return builder.create<LLVM::ConstantOp>(loc, ty,
                                           builder.getIntegerAttr(ty, value));
 }
 
 /// Helper function to get strides from a given shape and its order
-SmallVector<Value>
+static SmallVector<Value>
 getStridesFromShapeAndOrder(ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
                             Location loc, ConversionPatternRewriter &rewriter) {
   auto rank = shape.size();
@@ -305,7 +310,7 @@ struct SharedMemoryObject {
   }
 };
 
-SharedMemoryObject
+static SharedMemoryObject
 getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
                                 ConversionPatternRewriter &rewriter) {
   auto elems = getElementsFromStruct(loc, llvmStruct, rewriter);
@@ -315,8 +320,8 @@ getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
           /*offsets=*/{elems.begin() + 1 + rank, elems.end()}};
 }
 
-Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                  Value val, Value pred) {
+static Value storeShared(ConversionPatternRewriter &rewriter, Location loc,
+                         Value ptr, Value val, Value pred) {
   MLIRContext *ctx = rewriter.getContext();
   unsigned bits = val.getType().getIntOrFloatBitWidth();
   const char *c = bits == 64 ? "l" : (bits == 16 ? "h" : "r");
@@ -329,8 +334,8 @@ Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
   return builder.launch(rewriter, loc, void_ty(ctx));
 }
 
-Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-               int i) {
+static Value shflSync(Location loc, ConversionPatternRewriter &rewriter,
+                      Value val, int i) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   if (bits == 64) {
