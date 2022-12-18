@@ -932,6 +932,7 @@ public:
     auto newBTy = RankedTensorType::get(BT.getShape(), BT.getElementType(),
                                         newDotOperandB);
 
+    // Here, we assume that A,B,C has only one consumer
     auto newA =
         rewriter.create<ConvertLayoutOp>(dotOp->getLoc(), newATy, dotOp.a())
             .getResult();
