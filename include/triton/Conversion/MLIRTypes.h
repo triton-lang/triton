@@ -10,6 +10,7 @@ namespace triton {
 namespace type {
 
 // Integer types
+// TODO(Superjomn): may change `static` into better implementations
 static Type i32Ty(MLIRContext *ctx) { return IntegerType::get(ctx, 32); }
 static Type i8Ty(MLIRContext *ctx) { return IntegerType::get(ctx, 8); }
 static Type u32Ty(MLIRContext *ctx) {
