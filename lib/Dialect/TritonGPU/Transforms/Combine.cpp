@@ -904,8 +904,8 @@ public:
     auto AT = dotOp.a().getType().cast<RankedTensorType>();
     auto BT = dotOp.b().getType().cast<RankedTensorType>();
     auto DT = dotOp.d().getType().cast<RankedTensorType>();
-    auto mmaLayout = DT.getEncoding().cast<MmaEncodingAttr>();
-    if (!mmaLayout.isVolta())
+    auto mmaLayout = DT.getEncoding().dyn_cast<MmaEncodingAttr>();
+    if (!(mmaLayout && mmaLayout.isVolta()))
       return failure();
     // NOTE Should run after the BlockedToMMA pattern.
     auto dotOperandA = AT.getEncoding().cast<DotOperandEncodingAttr>();
