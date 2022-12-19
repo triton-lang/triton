@@ -148,14 +148,234 @@ struct DotOpMmaV1ConversionHelper {
   }
 
   // Loading $a from smem to registers, returns a LLVM::Struct.
-  Value loadA(Value A, bool transA, const SharedMemoryObject &smemObj,
+  Value loadA(Value tensor, bool transA, const SharedMemoryObject &smemObj,
               Value thread, Location loc,
-              ConversionPatternRewriter &rewriter) const;
+              ConversionPatternRewriter &rewriter) const {
+    auto *ctx = rewriter.getContext();
+    auto tensorTy = tensor.getType().cast<RankedTensorType>();
+    auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
+    SmallVector<int64_t> shape(tensorTy.getShape().begin(),
+                               tensorTy.getShape().end());
+    SmallVector<unsigned> order(sharedLayout.getOrder().begin(),
+                                sharedLayout.getOrder().end());
+
+    Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
+    Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
+
+    bool isARow = order[0] != 0;
+    AParam param(isARow);
+
+    auto [offsetAM, offsetAK, _0, _1] = computeOffsets(
+        thread, isARow, false, fpw, param.spw, param.rep, rewriter, loc);
+
+    if (transA) {
+      std::swap(shape[0], shape[1]);
+      std::swap(offsetAM, offsetAK);
+      std::swap(order[0], order[1]);
+    }
+
+    int vecA = sharedLayout.getVec();
+
+    auto strides = smemObj.strides;
+    Value strideAM = isARow ? strides[0] : i32_val(1);
+    Value strideAK = isARow ? i32_val(1) : strides[1];
+    Value strideA0 = isARow ? strideAK : strideAM;
+    Value strideA1 = isARow ? strideAM : strideAK;
+
+    int strideRepM = wpt[0] * fpw[0] * 8;
+    int strideRepK = 1;
+
+    // swizzling
+    int perPhaseA = sharedLayout.getPerPhase();
+    int maxPhaseA = sharedLayout.getMaxPhase();
+    int stepA0 = isARow ? strideRepK : strideRepM;
+    int numPtrA = std::max(2 * perPhaseA * maxPhaseA / stepA0, 1);
+    int NK = shape[1];
+
+    // pre-compute pointer lanes
+    Value offA0 = isARow ? offsetAK : offsetAM;
+    Value offA1 = isARow ? offsetAM : offsetAK;
+    Value phaseA = urem(udiv(offA1, i32_val(perPhaseA)), i32_val(maxPhaseA));
+    offA0 = add(offA0, cSwizzleOffset);
+    SmallVector<Value> offA(numPtrA);
+    for (int i = 0; i < numPtrA; i++) {
+      Value offA0I = add(offA0, i32_val(i * (isARow ? 4 : strideRepM)));
+      offA0I = udiv(offA0I, i32_val(vecA));
+      offA0I = xor_(offA0I, phaseA);
+      offA0I = mul(offA0I, i32_val(vecA));
+      offA[i] = add(mul(offA0I, strideA0), mul(offA1, strideA1));
+    }
+
+    Type f16x2Ty = vec_ty(f16_ty, 2);
+
+    // prepare arguments
+    SmallVector<Value> ptrA(numPtrA);
+
+    std::map<std::pair<int, int>, std::pair<Value, Value>> has;
+    for (int i = 0; i < numPtrA; i++)
+      ptrA[i] = gep(ptr_ty(f16_ty), smemBase, offA[i]);
+
+    Type f16PtrTy = ptr_ty(f16_ty);
+
+    auto ld = [&](decltype(has) &vals, int m, int k, Value val0, Value val1) {
+      vals[{m, k}] = {val0, val1};
+    };
+    auto loadA = [&](int m, int k) {
+      int offidx = (isARow ? k / 4 : m) % numPtrA;
+      Value thePtrA = gep(f16PtrTy, smemBase, offA[offidx]);
+
+      int stepAM = isARow ? m : m / numPtrA * numPtrA;
+      int stepAK = isARow ? k / (numPtrA * vecA) * (numPtrA * vecA) : k;
+      Value offset = add(mul(i32_val(stepAM * strideRepM), strideAM),
+                         mul(i32_val(stepAK), strideAK));
+      Value pa = gep(f16PtrTy, thePtrA, offset);
+      Type aPtrTy = ptr_ty(vec_ty(i32_ty, std::max<int>(vecA / 2, 1)), 3);
+      Value ha = load(bitcast(pa, aPtrTy));
+      // record lds that needs to be moved
+      Value ha00 = bitcast(extract_element(ha, i32_val(0)), f16x2Ty);
+      Value ha01 = bitcast(extract_element(ha, i32_val(1)), f16x2Ty);
+      ld(has, m, k, ha00, ha01);
+
+      if (vecA > 4) {
+        Value ha10 = bitcast(extract_element(ha, i32_val(2)), f16x2Ty);
+        Value ha11 = bitcast(extract_element(ha, i32_val(3)), f16x2Ty);
+        if (isARow)
+          ld(has, m, k + 4, ha10, ha11);
+        else
+          ld(has, m + 1, k, ha10, ha11);
+      }
+    };
+
+    unsigned numM = getNumM(shape, order[0] == 1);
+    for (unsigned k = 0; k < NK; k += 4)
+      for (unsigned m = 0; m < numM / 2; ++m)
+        loadA(m, k);
+
+    SmallVector<Value> elems;
+    elems.reserve(has.size() * 2);
+    for (auto item : has) { // has is a map, the key should be ordered.
+      elems.push_back(item.second.first);
+      elems.push_back(item.second.second);
+    }
+
+    Type resTy = struct_ty(SmallVector<Type>(elems.size(), f16x2Ty));
+    Value res = getStructFromElements(loc, elems, rewriter, resTy);
+    return res;
+  }
 
   // Loading $b from smem to registers, returns a LLVM::Struct.
-  Value loadB(Value B, bool transB, const SharedMemoryObject &smemObj,
+  Value loadB(Value tensor, bool transB, const SharedMemoryObject &smemObj,
               Value thread, Location loc,
-              ConversionPatternRewriter &rewriter) const;
+              ConversionPatternRewriter &rewriter) const {
+    // smem
+    auto strides = smemObj.strides;
+
+    auto *ctx = rewriter.getContext();
+    auto tensorTy = tensor.getType().cast<RankedTensorType>();
+    auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
+
+    SmallVector<int64_t> shape(tensorTy.getShape().begin(),
+                               tensorTy.getShape().end());
+    SmallVector<unsigned> order(sharedLayout.getOrder().begin(),
+                                sharedLayout.getOrder().end());
+
+    Value smem = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
+    bool isBRow = order[0] != 0;
+    BParam param(isBRow);
+
+    int vecB = sharedLayout.getVec();
+    Value strideBN = isBRow ? i32_val(1) : strides[1];
+    Value strideBK = isBRow ? strides[0] : i32_val(1);
+    Value strideB0 = isBRow ? strideBN : strideBK;
+    Value strideB1 = isBRow ? strideBK : strideBN;
+    int strideRepN = wpt[1] * fpw[1] * 8;
+    int strideRepK = 1;
+
+    auto [_0, _1, offsetBN, offsetBK] = computeOffsets(
+        thread, false, isBRow, fpw, param.spw, param.rep, rewriter, loc);
+    if (transB) {
+      std::swap(order[0], order[1]);
+      std::swap(shape[0], shape[1]);
+      std::swap(offsetBK, offsetBN);
+    }
+
+    // swizzling
+    int perPhaseB = sharedLayout.getPerPhase();
+    int maxPhaseB = sharedLayout.getMaxPhase();
+    int stepB0 = isBRow ? strideRepN : strideRepK;
+    int numPtrB = std::max(2 * perPhaseB * maxPhaseB / stepB0, 1);
+    int NK = shape[0];
+
+    Value offB0 = isBRow ? offsetBN : offsetBK;
+    Value offB1 = isBRow ? offsetBK : offsetBN;
+    Value phaseB = urem(udiv(offB1, i32_val(perPhaseB)), i32_val(maxPhaseB));
+    Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
+
+    offB0 = add(offB0, cSwizzleOffset);
+    SmallVector<Value> offB(numPtrB);
+    for (int i = 0; i < numPtrB; ++i) {
+      Value offB0I = add(offB0, i32_val(i * (isBRow ? strideRepN : 4)));
+      offB0I = udiv(offB0I, i32_val(vecB));
+      offB0I = xor_(offB0I, phaseB);
+      offB0I = mul(offB0I, i32_val(vecB));
+      offB[i] = add(mul(offB0I, strideB0), mul(offB1, strideB1));
+    }
+
+    Type f16PtrTy = ptr_ty(f16_ty);
+    Type f16x2Ty = vec_ty(f16_ty, 2);
+
+    SmallVector<Value> ptrB(numPtrB);
+    ValueTable hbs;
+    for (int i = 0; i < numPtrB; ++i)
+      ptrB[i] = gep(ptr_ty(f16_ty), smem, offB[i]);
+
+    auto ld = [&](decltype(hbs) &vals, int m, int k, Value val0, Value val1) {
+      vals[{m, k}] = {val0, val1};
+    };
+
+    auto loadB = [&](int n, int K) {
+      int offidx = (isBRow ? n : K / 4) % numPtrB;
+      Value thePtrB = ptrB[offidx];
+
+      int stepBN = isBRow ? n / numPtrB * numPtrB : n;
+      int stepBK = isBRow ? K : K / (numPtrB * vecB) * (numPtrB * vecB);
+      Value offset = add(mul(i32_val(stepBN * strideRepN), strideBN),
+                         mul(i32_val(stepBK), strideBK));
+      Value pb = gep(f16PtrTy, thePtrB, offset);
+
+      Value hb =
+          load(bitcast(pb, ptr_ty(vec_ty(i32_ty, std::max(vecB / 2, 1)), 3)));
+      // record lds that needs to be moved
+      Value hb00 = bitcast(extract_element(hb, i32_val(0)), f16x2Ty);
+      Value hb01 = bitcast(extract_element(hb, i32_val(1)), f16x2Ty);
+      ld(hbs, n, K, hb00, hb01);
+      if (vecB > 4) {
+        Value hb10 = bitcast(extract_element(hb, i32_val(2)), f16x2Ty);
+        Value hb11 = bitcast(extract_element(hb, i32_val(3)), f16x2Ty);
+        if (isBRow)
+          ld(hbs, n + 1, K, hb10, hb11);
+        else
+          ld(hbs, n, K + 4, hb10, hb11);
+      }
+    };
+
+    unsigned numN = getNumN(shape, order[0] == 1);
+    for (unsigned k = 0; k < NK; k += 4)
+      for (unsigned n = 0; n < numN / 2; ++n) {
+        if (!hbs.count({n, k}))
+          loadB(n, k);
+      }
+
+    SmallVector<Value> elems;
+    for (auto &item : hbs) { // has is a map, the key should be ordered.
+      elems.push_back(item.second.first);
+      elems.push_back(item.second.second);
+    }
+    Type fp16x2Ty = vec_ty(type::f16Ty(ctx), 2);
+    Type resTy = struct_ty(SmallVector<Type>(elems.size(), fp16x2Ty));
+    Value res = getStructFromElements(loc, elems, rewriter, resTy);
+    return res;
+  }
 
   static ArrayRef<unsigned> getOrder() { return mmaOrder; }
 
@@ -169,12 +389,80 @@ struct DotOpMmaV1ConversionHelper {
   std::tuple<Value, Value, Value, Value>
   computeOffsets(Value threadId, bool isARow, bool isBRow, ArrayRef<int> fpw,
                  ArrayRef<int> spw, ArrayRef<int> rep,
-                 ConversionPatternRewriter &rewriter, Location loc) const;
+                 ConversionPatternRewriter &rewriter, Location loc) const {
+    auto *ctx = rewriter.getContext();
+    Value _1 = i32_val(1);
+    Value _3 = i32_val(3);
+    Value _4 = i32_val(4);
+    Value _16 = i32_val(16);
+    Value _32 = i32_val(32);
+
+    Value lane = urem(threadId, _32);
+    Value warp = udiv(threadId, _32);
+
+    // warp offset
+    Value warp0 = urem(warp, i32_val(wpt[0]));
+    Value warp12 = udiv(warp, i32_val(wpt[0]));
+    Value warp1 = urem(warp12, i32_val(wpt[1]));
+    Value warpMOff = mul(warp0, i32_val(spw[0]));
+    Value warpNOff = mul(warp1, i32_val(spw[1]));
+    // Quad offset
+    Value quadMOff = mul(udiv(and_(lane, _16), _4), i32_val(fpw[0]));
+    Value quadNOff = mul(udiv(and_(lane, _16), _4), i32_val(fpw[1]));
+    // Pair offset
+    Value pairMOff = udiv(urem(lane, _16), _4);
+    pairMOff = urem(pairMOff, i32_val(fpw[0]));
+    pairMOff = mul(pairMOff, _4);
+    Value pairNOff = udiv(urem(lane, _16), _4);
+    pairNOff = udiv(pairNOff, i32_val(fpw[0]));
+    pairNOff = urem(pairNOff, i32_val(fpw[1]));
+    pairNOff = mul(pairNOff, _4);
+    // scale
+    pairMOff = mul(pairMOff, i32_val(rep[0] / 2));
+    quadMOff = mul(quadMOff, i32_val(rep[0] / 2));
+    pairNOff = mul(pairNOff, i32_val(rep[1] / 2));
+    quadNOff = mul(quadNOff, i32_val(rep[1] / 2));
+    // Quad pair offset
+    Value laneMOff = add(pairMOff, quadMOff);
+    Value laneNOff = add(pairNOff, quadNOff);
+    // A offset
+    Value offsetAM = add(warpMOff, laneMOff);
+    Value offsetAK = and_(lane, _3);
+    // B offset
+    Value offsetBN = add(warpNOff, laneNOff);
+    Value offsetBK = and_(lane, _3);
+    // i indices
+    Value offsetCM = add(and_(lane, _1), offsetAM);
+    if (isARow) {
+      offsetAM = add(offsetAM, urem(threadId, _4));
+      offsetAK = i32_val(0);
+    }
+    if (!isBRow) {
+      offsetBN = add(offsetBN, urem(threadId, _4));
+      offsetBK = i32_val(0);
+    }
+
+    return std::make_tuple(offsetAM, offsetAK, offsetBN, offsetBK);
+  }
 
   // Extract values belong to $a or $b from a LLVMStruct, the shape is n0xn1.
   DotOpMmaV1ConversionHelper::ValueTable
   extractLoadedOperand(Value llStruct, int NK,
-                       ConversionPatternRewriter &rewriter) const;
+                       ConversionPatternRewriter &rewriter) const {
+    ValueTable rcds;
+    SmallVector<Value> elems =
+        getElementsFromStruct(llStruct.getLoc(), llStruct, rewriter);
+
+    int offset = 0;
+    for (int i = 0; offset < elems.size(); ++i) {
+      for (int k = 0; k < NK; k += 4) {
+        rcds[{i, k}] = std::make_pair(elems[offset], elems[offset + 1]);
+        offset += 2;
+      }
+    }
+
+    return rcds;
+  }
 
 private:
   static constexpr unsigned instrShape[] = {16, 16, 4};
@@ -1280,18 +1568,159 @@ struct DotOpFMAConversionHelper {
                                   ArrayRef<unsigned> sizePerThread,
                                   ArrayRef<unsigned> order,
                                   ConversionPatternRewriter &rewriter,
-                                  Location loc) const;
+                                  Location loc) const {
+    int dim = order.size();
+    SmallVector<Value> threadIds(dim);
+    for (unsigned k = 0; k < dim - 1; k++) {
+      Value dimK = i32_val(shapePerCTA[order[k]] / sizePerThread[order[k]]);
+      Value rem = urem(threadId, dimK);
+      threadId = udiv(threadId, dimK);
+      threadIds[order[k]] = rem;
+    }
+    Value dimK = i32_val(shapePerCTA[order[dim - 1]]);
+    threadIds[order[dim - 1]] = urem(threadId, dimK);
+    return threadIds;
+  }
 
   Value loadA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
-              Location loc, ConversionPatternRewriter &rewriter) const;
+              Location loc, ConversionPatternRewriter &rewriter) const {
+    auto aTensorTy = A.getType().cast<RankedTensorType>();
+    auto aLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
+    auto aShape = aTensorTy.getShape();
+
+    auto aOrder = aLayout.getOrder();
+    auto order = dLayout.getOrder();
+
+    bool isARow = aOrder[0] == 1;
+
+    auto aSmem = getSharedMemoryObjectFromStruct(loc, llA, rewriter);
+    Value strideAM = aSmem.strides[0];
+    Value strideAK = aSmem.strides[1];
+    Value strideA0 = isARow ? strideAK : strideAM;
+    Value strideA1 = isARow ? strideAM : strideAK;
+    int aNumPtr = 8;
+    int K = aShape[1];
+    int M = aShape[0];
+
+    auto shapePerCTA = getShapePerCTA(dLayout);
+    auto sizePerThread = getSizePerThread(dLayout);
+
+    Value _0 = i32_val(0);
+
+    Value mContig = i32_val(sizePerThread[order[1]]);
+
+    // threadId in blocked layout
+    auto threadIds = getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
+    Value threadIdM = threadIds[0];
+
+    Value offA0 = isARow ? _0 : mul(threadIdM, mContig);
+    Value offA1 = isARow ? mul(threadIdM, mContig) : _0;
+    SmallVector<Value> aOff(aNumPtr);
+    for (int i = 0; i < aNumPtr; ++i) {
+      aOff[i] = add(mul(offA0, strideA0), mul(offA1, strideA1));
+    }
+    auto elemTy = A.getType().cast<RankedTensorType>().getElementType();
+
+    Type ptrTy = ptr_ty(elemTy);
+    SmallVector<Value> aPtrs(aNumPtr);
+    for (int i = 0; i < aNumPtr; ++i)
+      aPtrs[i] = gep(ptrTy, aSmem.base, aOff[i]);
+
+    SmallVector<Value> vas;
+
+    int mShapePerCTA = getShapePerCTAForMN(dLayout, true /*isM*/);
+    int mSizePerThread = getSizePerThreadForMN(dLayout, true /*isM*/);
+
+    for (unsigned k = 0; k < K; ++k)
+      for (unsigned m = 0; m < M; m += mShapePerCTA)
+        for (unsigned mm = 0; mm < mSizePerThread; ++mm) {
+          Value offset =
+              add(mul(i32_val(m + mm), strideAM), mul(i32_val(k), strideAK));
+          Value pa = gep(ptrTy, aPtrs[0], offset);
+          Value va = load(pa);
+          vas.emplace_back(va);
+        }
+
+    return getStructFromValueTable(vas, rewriter, loc, elemTy);
+  }
 
   Value loadB(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
-              Location loc, ConversionPatternRewriter &rewriter) const;
+              Location loc, ConversionPatternRewriter &rewriter) const {
+    auto bTensorTy = B.getType().cast<RankedTensorType>();
+    auto bLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
+    auto bShape = bTensorTy.getShape();
+
+    auto bOrder = bLayout.getOrder();
+    auto order = dLayout.getOrder();
+
+    bool isBRow = bOrder[0] == 1;
+
+    auto bSmem = getSharedMemoryObjectFromStruct(loc, llB, rewriter);
+    Value strideBN = bSmem.strides[1];
+    Value strideBK = bSmem.strides[0];
+    Value strideB0 = isBRow ? strideBN : strideBK;
+    Value strideB1 = isBRow ? strideBK : strideBN;
+    int bNumPtr = 8;
+    int K = bShape[0];
+    int N = bShape[1];
+
+    auto shapePerCTA = getShapePerCTA(dLayout);
+    auto sizePerThread = getSizePerThread(dLayout);
+
+    Value _0 = i32_val(0);
+
+    Value nContig = i32_val(sizePerThread[order[0]]);
+
+    // threadId in blocked layout
+    auto threadIds = getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
+    Value threadIdN = threadIds[1];
+
+    Value offB0 = isBRow ? mul(threadIdN, nContig) : _0;
+    Value offB1 = isBRow ? _0 : mul(threadIdN, nContig);
+    SmallVector<Value> bOff(bNumPtr);
+    for (int i = 0; i < bNumPtr; ++i) {
+      bOff[i] = add(mul(offB0, strideB0), mul(offB1, strideB1));
+    }
+    auto elemTy = B.getType().cast<RankedTensorType>().getElementType();
+
+    Type ptrTy = ptr_ty(elemTy);
+    SmallVector<Value> bPtrs(bNumPtr);
+    for (int i = 0; i < bNumPtr; ++i)
+      bPtrs[i] = gep(ptrTy, bSmem.base, bOff[i]);
+
+    SmallVector<Value> vbs;
+
+    int nShapePerCTA = getShapePerCTAForMN(dLayout, false /*isM*/);
+    int nSizePerThread = getSizePerThreadForMN(dLayout, false /*isM*/);
+
+    for (unsigned k = 0; k < K; ++k)
+      for (unsigned n = 0; n < N; n += nShapePerCTA)
+        for (unsigned nn = 0; nn < nSizePerThread; ++nn) {
+          Value offset =
+              add(mul(i32_val(n + nn), strideBN), mul(i32_val(k), strideBK));
+          Value pb = gep(ptrTy, bPtrs[0], offset);
+          Value vb = load(pb);
+          vbs.emplace_back(vb);
+        }
+
+    return getStructFromValueTable(vbs, rewriter, loc, elemTy);
+  }
 
   ValueTable getValueTableFromStruct(Value val, int K, int n0, int shapePerCTA,
                                      int sizePerThread,
                                      ConversionPatternRewriter &rewriter,
-                                     Location loc) const;
+                                     Location loc) const {
+    ValueTable res;
+    auto elems = getElementsFromStruct(loc, val, rewriter);
+    int index = 0;
+    for (unsigned k = 0; k < K; ++k) {
+      for (unsigned m = 0; m < n0; m += shapePerCTA)
+        for (unsigned mm = 0; mm < sizePerThread; ++mm) {
+          res[{m + mm, k}] = elems[index++];
+        }
+    }
+    return res;
+  }
 
   Value getStructFromValueTable(ArrayRef<Value> vals,
                                 ConversionPatternRewriter &rewriter,
@@ -1350,475 +1779,6 @@ struct DotOpFMAConversionHelper {
     return isM ? mSizePerThread : nSizePerThread;
   }
 };
-
-Value DotOpMmaV1ConversionHelper::loadA(
-    Value tensor, bool transA, const SharedMemoryObject &smemObj, Value thread,
-    Location loc, ConversionPatternRewriter &rewriter) const {
-
-  auto *ctx = rewriter.getContext();
-  auto tensorTy = tensor.getType().cast<RankedTensorType>();
-  auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
-  SmallVector<int64_t> shape(tensorTy.getShape().begin(),
-                             tensorTy.getShape().end());
-  SmallVector<unsigned> order(sharedLayout.getOrder().begin(),
-                              sharedLayout.getOrder().end());
-
-  Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
-  Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
-
-  bool isARow = order[0] != 0;
-  AParam param(isARow);
-
-  auto [offsetAM, offsetAK, _0, _1] = computeOffsets(
-      thread, isARow, false, fpw, param.spw, param.rep, rewriter, loc);
-
-  if (transA) {
-    std::swap(shape[0], shape[1]);
-    std::swap(offsetAM, offsetAK);
-    std::swap(order[0], order[1]);
-  }
-
-  int vecA = sharedLayout.getVec();
-
-  auto strides = smemObj.strides;
-  Value strideAM = isARow ? strides[0] : i32_val(1);
-  Value strideAK = isARow ? i32_val(1) : strides[1];
-  Value strideA0 = isARow ? strideAK : strideAM;
-  Value strideA1 = isARow ? strideAM : strideAK;
-
-  int strideRepM = wpt[0] * fpw[0] * 8;
-  int strideRepK = 1;
-
-  // swizzling
-  int perPhaseA = sharedLayout.getPerPhase();
-  int maxPhaseA = sharedLayout.getMaxPhase();
-  int stepA0 = isARow ? strideRepK : strideRepM;
-  int numPtrA = std::max(2 * perPhaseA * maxPhaseA / stepA0, 1);
-  int NK = shape[1];
-
-  // pre-compute pointer lanes
-  Value offA0 = isARow ? offsetAK : offsetAM;
-  Value offA1 = isARow ? offsetAM : offsetAK;
-  Value phaseA = urem(udiv(offA1, i32_val(perPhaseA)), i32_val(maxPhaseA));
-  offA0 = add(offA0, cSwizzleOffset);
-  SmallVector<Value> offA(numPtrA);
-  for (int i = 0; i < numPtrA; i++) {
-    Value offA0I = add(offA0, i32_val(i * (isARow ? 4 : strideRepM)));
-    offA0I = udiv(offA0I, i32_val(vecA));
-    offA0I = xor_(offA0I, phaseA);
-    offA0I = mul(offA0I, i32_val(vecA));
-    offA[i] = add(mul(offA0I, strideA0), mul(offA1, strideA1));
-  }
-
-  Type f16x2Ty = vec_ty(f16_ty, 2);
-
-  // prepare arguments
-  SmallVector<Value> ptrA(numPtrA);
-
-  std::map<std::pair<int, int>, std::pair<Value, Value>> has;
-  for (int i = 0; i < numPtrA; i++)
-    ptrA[i] = gep(ptr_ty(f16_ty), smemBase, offA[i]);
-
-  Type f16PtrTy = ptr_ty(f16_ty);
-
-  auto ld = [&](decltype(has) &vals, int m, int k, Value val0, Value val1) {
-    vals[{m, k}] = {val0, val1};
-  };
-  auto loadA = [&](int m, int k) {
-    int offidx = (isARow ? k / 4 : m) % numPtrA;
-    Value thePtrA = gep(f16PtrTy, smemBase, offA[offidx]);
-
-    int stepAM = isARow ? m : m / numPtrA * numPtrA;
-    int stepAK = isARow ? k / (numPtrA * vecA) * (numPtrA * vecA) : k;
-    Value offset = add(mul(i32_val(stepAM * strideRepM), strideAM),
-                       mul(i32_val(stepAK), strideAK));
-    Value pa = gep(f16PtrTy, thePtrA, offset);
-    Type aPtrTy = ptr_ty(vec_ty(i32_ty, std::max<int>(vecA / 2, 1)), 3);
-    Value ha = load(bitcast(pa, aPtrTy));
-    // record lds that needs to be moved
-    Value ha00 = bitcast(extract_element(ha, i32_val(0)), f16x2Ty);
-    Value ha01 = bitcast(extract_element(ha, i32_val(1)), f16x2Ty);
-    ld(has, m, k, ha00, ha01);
-
-    if (vecA > 4) {
-      Value ha10 = bitcast(extract_element(ha, i32_val(2)), f16x2Ty);
-      Value ha11 = bitcast(extract_element(ha, i32_val(3)), f16x2Ty);
-      if (isARow)
-        ld(has, m, k + 4, ha10, ha11);
-      else
-        ld(has, m + 1, k, ha10, ha11);
-    }
-  };
-
-  unsigned numM = getNumM(shape, order[0] == 1);
-  for (unsigned k = 0; k < NK; k += 4)
-    for (unsigned m = 0; m < numM / 2; ++m)
-      loadA(m, k);
-
-  SmallVector<Value> elems;
-  elems.reserve(has.size() * 2);
-  for (auto item : has) { // has is a map, the key should be ordered.
-    elems.push_back(item.second.first);
-    elems.push_back(item.second.second);
-  }
-
-  Type resTy = struct_ty(SmallVector<Type>(elems.size(), f16x2Ty));
-  Value res = getStructFromElements(loc, elems, rewriter, resTy);
-  return res;
-}
-
-Value DotOpMmaV1ConversionHelper::loadB(
-    Value tensor, bool transB, const SharedMemoryObject &smemObj, Value thread,
-    Location loc, ConversionPatternRewriter &rewriter) const {
-  // smem
-  auto strides = smemObj.strides;
-
-  auto *ctx = rewriter.getContext();
-  auto tensorTy = tensor.getType().cast<RankedTensorType>();
-  auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
-
-  SmallVector<int64_t> shape(tensorTy.getShape().begin(),
-                             tensorTy.getShape().end());
-  SmallVector<unsigned> order(sharedLayout.getOrder().begin(),
-                              sharedLayout.getOrder().end());
-
-  Value smem = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
-  bool isBRow = order[0] != 0;
-  BParam param(isBRow);
-
-  int vecB = sharedLayout.getVec();
-  Value strideBN = isBRow ? i32_val(1) : strides[1];
-  Value strideBK = isBRow ? strides[0] : i32_val(1);
-  Value strideB0 = isBRow ? strideBN : strideBK;
-  Value strideB1 = isBRow ? strideBK : strideBN;
-  int strideRepN = wpt[1] * fpw[1] * 8;
-  int strideRepK = 1;
-
-  auto [_0, _1, offsetBN, offsetBK] = computeOffsets(
-      thread, false, isBRow, fpw, param.spw, param.rep, rewriter, loc);
-  if (transB) {
-    std::swap(order[0], order[1]);
-    std::swap(shape[0], shape[1]);
-    std::swap(offsetBK, offsetBN);
-  }
-
-  // swizzling
-  int perPhaseB = sharedLayout.getPerPhase();
-  int maxPhaseB = sharedLayout.getMaxPhase();
-  int stepB0 = isBRow ? strideRepN : strideRepK;
-  int numPtrB = std::max(2 * perPhaseB * maxPhaseB / stepB0, 1);
-  int NK = shape[0];
-
-  Value offB0 = isBRow ? offsetBN : offsetBK;
-  Value offB1 = isBRow ? offsetBK : offsetBN;
-  Value phaseB = urem(udiv(offB1, i32_val(perPhaseB)), i32_val(maxPhaseB));
-  Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
-
-  offB0 = add(offB0, cSwizzleOffset);
-  SmallVector<Value> offB(numPtrB);
-  for (int i = 0; i < numPtrB; ++i) {
-    Value offB0I = add(offB0, i32_val(i * (isBRow ? strideRepN : 4)));
-    offB0I = udiv(offB0I, i32_val(vecB));
-    offB0I = xor_(offB0I, phaseB);
-    offB0I = mul(offB0I, i32_val(vecB));
-    offB[i] = add(mul(offB0I, strideB0), mul(offB1, strideB1));
-  }
-
-  Type f16PtrTy = ptr_ty(f16_ty);
-  Type f16x2Ty = vec_ty(f16_ty, 2);
-
-  SmallVector<Value> ptrB(numPtrB);
-  ValueTable hbs;
-  for (int i = 0; i < numPtrB; ++i)
-    ptrB[i] = gep(ptr_ty(f16_ty), smem, offB[i]);
-
-  auto ld = [&](decltype(hbs) &vals, int m, int k, Value val0, Value val1) {
-    vals[{m, k}] = {val0, val1};
-  };
-
-  auto loadB = [&](int n, int K) {
-    int offidx = (isBRow ? n : K / 4) % numPtrB;
-    Value thePtrB = ptrB[offidx];
-
-    int stepBN = isBRow ? n / numPtrB * numPtrB : n;
-    int stepBK = isBRow ? K : K / (numPtrB * vecB) * (numPtrB * vecB);
-    Value offset = add(mul(i32_val(stepBN * strideRepN), strideBN),
-                       mul(i32_val(stepBK), strideBK));
-    Value pb = gep(f16PtrTy, thePtrB, offset);
-
-    Value hb =
-        load(bitcast(pb, ptr_ty(vec_ty(i32_ty, std::max(vecB / 2, 1)), 3)));
-    // record lds that needs to be moved
-    Value hb00 = bitcast(extract_element(hb, i32_val(0)), f16x2Ty);
-    Value hb01 = bitcast(extract_element(hb, i32_val(1)), f16x2Ty);
-    ld(hbs, n, K, hb00, hb01);
-    if (vecB > 4) {
-      Value hb10 = bitcast(extract_element(hb, i32_val(2)), f16x2Ty);
-      Value hb11 = bitcast(extract_element(hb, i32_val(3)), f16x2Ty);
-      if (isBRow)
-        ld(hbs, n + 1, K, hb10, hb11);
-      else
-        ld(hbs, n, K + 4, hb10, hb11);
-    }
-  };
-
-  unsigned numN = getNumN(shape, order[0] == 1);
-  for (unsigned k = 0; k < NK; k += 4)
-    for (unsigned n = 0; n < numN / 2; ++n) {
-      if (!hbs.count({n, k}))
-        loadB(n, k);
-    }
-
-  SmallVector<Value> elems;
-  for (auto &item : hbs) { // has is a map, the key should be ordered.
-    elems.push_back(item.second.first);
-    elems.push_back(item.second.second);
-  }
-  Type fp16x2Ty = vec_ty(type::f16Ty(ctx), 2);
-  Type resTy = struct_ty(SmallVector<Type>(elems.size(), fp16x2Ty));
-  Value res = getStructFromElements(loc, elems, rewriter, resTy);
-  return res;
-}
-
-std::tuple<Value, Value, Value, Value>
-DotOpMmaV1ConversionHelper::computeOffsets(Value threadId, bool isARow,
-                                           bool isBRow, ArrayRef<int> fpw,
-                                           ArrayRef<int> spw, ArrayRef<int> rep,
-                                           ConversionPatternRewriter &rewriter,
-                                           Location loc) const {
-  auto *ctx = rewriter.getContext();
-  Value _1 = i32_val(1);
-  Value _3 = i32_val(3);
-  Value _4 = i32_val(4);
-  Value _16 = i32_val(16);
-  Value _32 = i32_val(32);
-
-  Value lane = urem(threadId, _32);
-  Value warp = udiv(threadId, _32);
-
-  // warp offset
-  Value warp0 = urem(warp, i32_val(wpt[0]));
-  Value warp12 = udiv(warp, i32_val(wpt[0]));
-  Value warp1 = urem(warp12, i32_val(wpt[1]));
-  Value warpMOff = mul(warp0, i32_val(spw[0]));
-  Value warpNOff = mul(warp1, i32_val(spw[1]));
-  // Quad offset
-  Value quadMOff = mul(udiv(and_(lane, _16), _4), i32_val(fpw[0]));
-  Value quadNOff = mul(udiv(and_(lane, _16), _4), i32_val(fpw[1]));
-  // Pair offset
-  Value pairMOff = udiv(urem(lane, _16), _4);
-  pairMOff = urem(pairMOff, i32_val(fpw[0]));
-  pairMOff = mul(pairMOff, _4);
-  Value pairNOff = udiv(urem(lane, _16), _4);
-  pairNOff = udiv(pairNOff, i32_val(fpw[0]));
-  pairNOff = urem(pairNOff, i32_val(fpw[1]));
-  pairNOff = mul(pairNOff, _4);
-  // scale
-  pairMOff = mul(pairMOff, i32_val(rep[0] / 2));
-  quadMOff = mul(quadMOff, i32_val(rep[0] / 2));
-  pairNOff = mul(pairNOff, i32_val(rep[1] / 2));
-  quadNOff = mul(quadNOff, i32_val(rep[1] / 2));
-  // Quad pair offset
-  Value laneMOff = add(pairMOff, quadMOff);
-  Value laneNOff = add(pairNOff, quadNOff);
-  // A offset
-  Value offsetAM = add(warpMOff, laneMOff);
-  Value offsetAK = and_(lane, _3);
-  // B offset
-  Value offsetBN = add(warpNOff, laneNOff);
-  Value offsetBK = and_(lane, _3);
-  // i indices
-  Value offsetCM = add(and_(lane, _1), offsetAM);
-  if (isARow) {
-    offsetAM = add(offsetAM, urem(threadId, _4));
-    offsetAK = i32_val(0);
-  }
-  if (!isBRow) {
-    offsetBN = add(offsetBN, urem(threadId, _4));
-    offsetBK = i32_val(0);
-  }
-
-  return std::make_tuple(offsetAM, offsetAK, offsetBN, offsetBK);
-}
-
-DotOpMmaV1ConversionHelper::ValueTable
-DotOpMmaV1ConversionHelper::extractLoadedOperand(
-    Value llStruct, int NK, ConversionPatternRewriter &rewriter) const {
-  ValueTable rcds;
-  SmallVector<Value> elems =
-      getElementsFromStruct(llStruct.getLoc(), llStruct, rewriter);
-
-  int offset = 0;
-  for (int i = 0; offset < elems.size(); ++i) {
-    for (int k = 0; k < NK; k += 4) {
-      rcds[{i, k}] = std::make_pair(elems[offset], elems[offset + 1]);
-      offset += 2;
-    }
-  }
-
-  return rcds;
-}
-
-Value DotOpFMAConversionHelper::loadA(
-    Value A, Value llA, BlockedEncodingAttr dLayout, Value thread, Location loc,
-    ConversionPatternRewriter &rewriter) const {
-  auto aTensorTy = A.getType().cast<RankedTensorType>();
-  auto aLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
-  auto aShape = aTensorTy.getShape();
-
-  auto aOrder = aLayout.getOrder();
-  auto order = dLayout.getOrder();
-
-  bool isARow = aOrder[0] == 1;
-
-  auto aSmem = getSharedMemoryObjectFromStruct(loc, llA, rewriter);
-  Value strideAM = aSmem.strides[0];
-  Value strideAK = aSmem.strides[1];
-  Value strideA0 = isARow ? strideAK : strideAM;
-  Value strideA1 = isARow ? strideAM : strideAK;
-  int aNumPtr = 8;
-  int K = aShape[1];
-  int M = aShape[0];
-
-  auto shapePerCTA = getShapePerCTA(dLayout);
-  auto sizePerThread = getSizePerThread(dLayout);
-
-  Value _0 = i32_val(0);
-
-  Value mContig = i32_val(sizePerThread[order[1]]);
-
-  // threadId in blocked layout
-  auto threadIds = getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
-  Value threadIdM = threadIds[0];
-
-  Value offA0 = isARow ? _0 : mul(threadIdM, mContig);
-  Value offA1 = isARow ? mul(threadIdM, mContig) : _0;
-  SmallVector<Value> aOff(aNumPtr);
-  for (int i = 0; i < aNumPtr; ++i) {
-    aOff[i] = add(mul(offA0, strideA0), mul(offA1, strideA1));
-  }
-  auto elemTy = A.getType().cast<RankedTensorType>().getElementType();
-
-  Type ptrTy = ptr_ty(elemTy);
-  SmallVector<Value> aPtrs(aNumPtr);
-  for (int i = 0; i < aNumPtr; ++i)
-    aPtrs[i] = gep(ptrTy, aSmem.base, aOff[i]);
-
-  SmallVector<Value> vas;
-
-  int mShapePerCTA = getShapePerCTAForMN(dLayout, true /*isM*/);
-  int mSizePerThread = getSizePerThreadForMN(dLayout, true /*isM*/);
-
-  for (unsigned k = 0; k < K; ++k)
-    for (unsigned m = 0; m < M; m += mShapePerCTA)
-      for (unsigned mm = 0; mm < mSizePerThread; ++mm) {
-        Value offset =
-            add(mul(i32_val(m + mm), strideAM), mul(i32_val(k), strideAK));
-        Value pa = gep(ptrTy, aPtrs[0], offset);
-        Value va = load(pa);
-        vas.emplace_back(va);
-      }
-
-  return getStructFromValueTable(vas, rewriter, loc, elemTy);
-}
-
-Value DotOpFMAConversionHelper::loadB(
-    Value B, Value llB, BlockedEncodingAttr dLayout, Value thread, Location loc,
-    ConversionPatternRewriter &rewriter) const {
-
-  auto bTensorTy = B.getType().cast<RankedTensorType>();
-  auto bLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
-  auto bShape = bTensorTy.getShape();
-
-  auto bOrder = bLayout.getOrder();
-  auto order = dLayout.getOrder();
-
-  bool isBRow = bOrder[0] == 1;
-
-  auto bSmem = getSharedMemoryObjectFromStruct(loc, llB, rewriter);
-  Value strideBN = bSmem.strides[1];
-  Value strideBK = bSmem.strides[0];
-  Value strideB0 = isBRow ? strideBN : strideBK;
-  Value strideB1 = isBRow ? strideBK : strideBN;
-  int bNumPtr = 8;
-  int K = bShape[0];
-  int N = bShape[1];
-
-  auto shapePerCTA = getShapePerCTA(dLayout);
-  auto sizePerThread = getSizePerThread(dLayout);
-
-  Value _0 = i32_val(0);
-
-  Value nContig = i32_val(sizePerThread[order[0]]);
-
-  // threadId in blocked layout
-  auto threadIds = getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
-  Value threadIdN = threadIds[1];
-
-  Value offB0 = isBRow ? mul(threadIdN, nContig) : _0;
-  Value offB1 = isBRow ? _0 : mul(threadIdN, nContig);
-  SmallVector<Value> bOff(bNumPtr);
-  for (int i = 0; i < bNumPtr; ++i) {
-    bOff[i] = add(mul(offB0, strideB0), mul(offB1, strideB1));
-  }
-  auto elemTy = B.getType().cast<RankedTensorType>().getElementType();
-
-  Type ptrTy = ptr_ty(elemTy);
-  SmallVector<Value> bPtrs(bNumPtr);
-  for (int i = 0; i < bNumPtr; ++i)
-    bPtrs[i] = gep(ptrTy, bSmem.base, bOff[i]);
-
-  SmallVector<Value> vbs;
-
-  int nShapePerCTA = getShapePerCTAForMN(dLayout, false /*isM*/);
-  int nSizePerThread = getSizePerThreadForMN(dLayout, false /*isM*/);
-
-  for (unsigned k = 0; k < K; ++k)
-    for (unsigned n = 0; n < N; n += nShapePerCTA)
-      for (unsigned nn = 0; nn < nSizePerThread; ++nn) {
-        Value offset =
-            add(mul(i32_val(n + nn), strideBN), mul(i32_val(k), strideBK));
-        Value pb = gep(ptrTy, bPtrs[0], offset);
-        Value vb = load(pb);
-        vbs.emplace_back(vb);
-      }
-
-  return getStructFromValueTable(vbs, rewriter, loc, elemTy);
-}
-
-DotOpFMAConversionHelper::ValueTable
-DotOpFMAConversionHelper::getValueTableFromStruct(
-    Value val, int K, int n0, int shapePerCTA, int sizePerThread,
-    ConversionPatternRewriter &rewriter, Location loc) const {
-  ValueTable res;
-  auto elems = getElementsFromStruct(loc, val, rewriter);
-  int index = 0;
-  for (unsigned k = 0; k < K; ++k) {
-    for (unsigned m = 0; m < n0; m += shapePerCTA)
-      for (unsigned mm = 0; mm < sizePerThread; ++mm) {
-        res[{m + mm, k}] = elems[index++];
-      }
-  }
-  return res;
-}
-
-SmallVector<Value> DotOpFMAConversionHelper::getThreadIds(
-    Value threadId, ArrayRef<unsigned int> shapePerCTA,
-    ArrayRef<unsigned int> sizePerThread,
-    ArrayRef<unsigned int> order, ConversionPatternRewriter &rewriter,
-    Location loc) const {
-  int dim = order.size();
-  SmallVector<Value> threadIds(dim);
-  for (unsigned k = 0; k < dim - 1; k++) {
-    Value dimK = i32_val(shapePerCTA[order[k]] / sizePerThread[order[k]]);
-    Value rem = urem(threadId, dimK);
-    threadId = udiv(threadId, dimK);
-    threadIds[order[k]] = rem;
-  }
-  Value dimK = i32_val(shapePerCTA[order[dim - 1]]);
-  threadIds[order[dim - 1]] = urem(threadId, dimK);
-  return threadIds;
-}
 
 } // namespace LLVM
 } // namespace mlir
