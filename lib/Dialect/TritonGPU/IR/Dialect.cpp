@@ -166,7 +166,8 @@ SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout) {
   return threads;
 }
 
-SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
+SmallVector<unsigned> getShapePerCTA(const Attribute &layout,
+                                     ArrayRef<int64_t> blockShape) {
   SmallVector<unsigned> shape;
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     for (unsigned d = 0, n = blockedLayout.getOrder().size(); d < n; ++d)
@@ -179,15 +180,17 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
     for (unsigned d = 0, n = getOrder(parent).size(); d < n; ++d) {
       if (d == dim)
         continue;
-      shape.push_back(getShapePerCTA(parent)[d]);
+      shape.push_back(getShapePerCTA(parent, ArrayRef<int64_t>())[d]);
     }
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     if (mmaLayout.isAmpere())
       return {16 * mmaLayout.getWarpsPerCTA()[0],
               8 * mmaLayout.getWarpsPerCTA()[1]};
-    if (mmaLayout.isVolta())
-      return {16 * mmaLayout.getWarpsPerCTA()[0],
-              16 * mmaLayout.getWarpsPerCTA()[1]};
+    if (mmaLayout.isVolta()) {
+      assert(!blockShape.empty() && "Volta needs the block's shape");
+      return {static_cast<unsigned>(blockShape[0]),
+              static_cast<unsigned>(blockShape[1])};
+    }
     assert(0 && "Unexpected MMA layout version found");
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
     auto parentLayout = dotLayout.getParent();
@@ -195,7 +198,8 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
     if (auto parentMmaLayout = parentLayout.dyn_cast<MmaEncodingAttr>()) {
       assert(parentMmaLayout.isAmpere() &&
              "mmaLayout version = 1 is not implemented yet");
-      auto parentShapePerCTA = getShapePerCTA(parentLayout);
+      auto parentShapePerCTA =
+          getShapePerCTA(parentLayout, ArrayRef<int64_t>());
       auto opIdx = dotLayout.getOpIdx();
       if (opIdx == 0) {
         return {parentShapePerCTA[0], 16};

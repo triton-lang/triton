@@ -38,6 +38,13 @@ using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
+Value gThreadId; // DEBUG
+
+// DEBUG
+void vprintf(StringRef msg, ValueRange args,
+             ConversionPatternRewriter &rewriter);
+void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
+                   std::string elem_repr, ConversionPatternRewriter &builder);
 
 // Helper for conversion of DotOp with mma<version=1>, that is sm<80
 struct DotOpMmaV1ConversionHelper {
@@ -161,9 +168,15 @@ struct DotOpMmaV1ConversionHelper {
   using CoordTy = SmallVector<Value, 2>;
   // Get the coordinates(m,n) of the elements emit by a thread in accumulator.
   static SmallVector<CoordTy>
-  getMNCoords(Value thread, PatternRewriter &rewriter, ArrayRef<unsigned> wpt,
-              ArrayRef<int64_t> shape, bool isARow, bool isBRow, bool isAVec4,
-              bool isBVec4) {
+  getMNCoords(Value thread, ConversionPatternRewriter &rewriter,
+              ArrayRef<unsigned> wpt, ArrayRef<int64_t> shape, bool isARow,
+              bool isBRow, bool isAVec4, bool isBVec4) {
+    // DEBUG
+    isARow = true;
+    isBRow = true;
+    isAVec4 = false;
+    isBVec4 = true;
+
     auto *ctx = thread.getContext();
     auto loc = UnknownLoc::get(ctx);
     Value _1 = i32_val(1);
@@ -220,8 +233,14 @@ struct DotOpMmaV1ConversionHelper {
     for (unsigned m = 0; m < shape[0]; m += shapePerCTA[0])
       for (unsigned mm = 0; mm < rep[0]; ++mm)
         idxM.push_back(add(offsetCM, i32_val(m + mm * 2)));
+
+    vprintf_array(gThreadId, idxM, "idx_m", "%d", rewriter);
+
     // n indices
-    Value offsetCN = add(and_(lane, _2), add(offWarpN, offPairN));
+    Value offsetCN = add((and_(lane, _2)), (add(offWarpN, offPairN)));
+    // LLVM::vprintf("offset_c_n0 t-%d %d", {gThreadId, and_(lane, _2)},
+    // rewriter);; LLVM::vprintf("offset_c_n1 t-%d %d", {gThreadId,
+    // add(offWarpN, offPairN)}, rewriter);;
     SmallVector<Value> idxN;
     for (int n = 0; n < shape[1]; n += shapePerCTA[1]) {
       for (int nn = 0; nn < rep[1]; ++nn) {
@@ -232,6 +251,12 @@ struct DotOpMmaV1ConversionHelper {
                 i32_val(n + nn / 2 * 4 + (nn % 2) * 2 * fpw[1] * rep[1] + 1)));
       }
     }
+    vprintf_array(gThreadId, idxN, "idx_n", "%d", rewriter);
+
+    LLVM::vprintf("offset_c_m t-%d %d", {gThreadId, offsetCM}, rewriter);
+    ;
+    LLVM::vprintf("offset_c_n t-%d %d", {gThreadId, offsetCN}, rewriter);
+    ;
 
     SmallVector<SmallVector<Value>> axes({idxM, idxN});
 
@@ -239,14 +264,13 @@ struct DotOpMmaV1ConversionHelper {
     // generator::init_idx method from triton2.0
 
     // TODO[Superjomn]: check the order.
-    SmallVector<short> order({1, 0});
     SmallVector<CoordTy> coords;
-    for (Value x1 : axes[order[1]]) {   // M
-      for (Value x0 : axes[order[0]]) { // N
+    for (Value x1 : axes[0]) {   // M
+      for (Value x0 : axes[1]) { // N
         SmallVector<Value, 2> idx(2);
-        idx[order[0]] = x0; // N
-        idx[order[1]] = x1; // M
-        coords.push_back(idx);
+        idx[0] = x1; // M
+        idx[1] = x0; // N
+        coords.push_back(std::move(idx));
       }
     }
     return coords; // {M,N} in row-major
@@ -1388,7 +1412,7 @@ struct DotOpFMAConversionHelper {
   static int getNumElemsPerThread(ArrayRef<int64_t> shape,
                                   DotOperandEncodingAttr dotOpLayout) {
     auto blockedLayout = dotOpLayout.getParent().cast<BlockedEncodingAttr>();
-    auto shapePerCTA = getShapePerCTA(blockedLayout);
+    auto shapePerCTA = getShapePerCTA(blockedLayout, ArrayRef<int64_t>());
     auto sizePerThread = getSizePerThread(blockedLayout);
 
     // TODO[Superjomn]: we assume the k aixs is fixed for $a and $b here, fix it
@@ -1405,7 +1429,7 @@ struct DotOpFMAConversionHelper {
   // Get shapePerCTA for M or N axis.
   static int getShapePerCTAForMN(BlockedEncodingAttr layout, bool isM) {
     auto order = layout.getOrder();
-    auto shapePerCTA = getShapePerCTA(layout);
+    auto shapePerCTA = getShapePerCTA(layout, ArrayRef<int64_t>());
 
     int mShapePerCTA =
         order[0] == 1 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
@@ -1750,7 +1774,7 @@ Value DotOpFMAConversionHelper::loadA(
   int aNumPtr = 8;
   int NK = aShape[1];
 
-  auto shapePerCTA = getShapePerCTA(dLayout);
+  auto shapePerCTA = getShapePerCTA(dLayout, ArrayRef<int64_t>());
   auto sizePerThread = getSizePerThread(dLayout);
 
   Value _0 = i32_val(0);
@@ -1816,7 +1840,7 @@ Value DotOpFMAConversionHelper::loadB(
   int bNumPtr = 8;
   int NK = bShape[0];
 
-  auto shapePerCTA = getShapePerCTA(dLayout);
+  auto shapePerCTA = getShapePerCTA(dLayout, ArrayRef<int64_t>());
   auto sizePerThread = getSizePerThread(dLayout);
 
   Value _0 = i32_val(0);

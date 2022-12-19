@@ -59,8 +59,6 @@ using ::mlir::triton::gpu::SliceEncodingAttr;
 namespace mlir {
 namespace LLVM {
 
-Value gThreadId; // DEBUG
-
 static StringRef getStructAttrsAttrName() { return "llvm.struct_attrs"; }
 
 // A helper function for using printf in LLVM conversion.
@@ -542,6 +540,7 @@ public:
     llvm_unreachable("emitIndicesForMmaLayoutV1 not implemented");
   }
 
+  // TODO[Superjomn]: Here need to update with acc order.
   SmallVector<SmallVector<unsigned>>
   emitOffsetForMmaLayoutV1(const MmaEncodingAttr &mmaLayout,
                            ArrayRef<int64_t> shape) const {
@@ -2750,7 +2749,8 @@ public:
     // TODO: [goostavz] We should make a cache for the calculation of
     // emitBaseIndexForBlockedLayout in case backend compiler not being able to
     // optimize that
-    SmallVector<unsigned> srcShapePerCTA = getShapePerCTA(srcBlockedLayout);
+    SmallVector<unsigned> srcShapePerCTA =
+        getShapePerCTA(srcBlockedLayout, srcShape);
     SmallVector<unsigned> reps{ceil<unsigned>(srcShape[0], srcShapePerCTA[0]),
                                ceil<unsigned>(srcShape[1], srcShapePerCTA[1])};
 
@@ -2956,7 +2956,10 @@ private:
         auto coords = DotOpMmaV1ConversionHelper::getMNCoords(
             threadId, rewriter, mmaLayout.getWarpsPerCTA(), shape, isARow,
             isBRow, isAVec4, isBVec4);
-        printf("coords.size:%lu\n", coords.size());
+        // for (auto coord: coords) {
+        // LLVM::vprintf("coord00 t-%d (%d, %d)", {LLVM::gThreadId, coord[0],
+        // coord[1]}, rewriter);
+        //}
         return DotOpMmaV1ConversionHelper::getCoord(elemId, coords);
 
       } else {
@@ -3039,7 +3042,7 @@ void ConvertLayoutOpConversion::processReplica(
   auto sizePerThread = getSizePerThread(layout);
   auto accumSizePerThread = product<unsigned>(sizePerThread);
   SmallVector<unsigned> numCTAs(rank);
-  auto shapePerCTA = getShapePerCTA(layout);
+  auto shapePerCTA = getShapePerCTA(layout, ArrayRef<int64_t>());
   auto order = getOrder(layout);
   for (unsigned d = 0; d < rank; ++d) {
     numCTAs[d] = ceil<unsigned>(type.getShape()[d], shapePerCTA[d]);
@@ -3145,12 +3148,30 @@ void ConvertLayoutOpConversion::processReplicaForMMAV1(
   //       consider of caching the index calculation result in case
   //       of performance issue observed.
   printf("accuSize: %d, vec: %d\n", accumSizePerThread, vec);
+
+  /*
+  if (stNotRd) {
+    // We need to transpose the coordinates and values here.
+    std::vector<std::pair<SmallVector<Value>, Value>> coord2val;
+
+    for (unsigned elemId = 0; elemId < accumSizePerThread; elemId++) {
+      auto currVal = vals[elemId];
+      SmallVector<Value> multiDimOffset =
+          getMultiDimOffset(layout, loc, rewriter, elemId, type.getShape(),
+                            multiDimCTAInRepId, shapePerCTA);
+      LLVM::vprintf("acci t-%d (%d,%d) %f", {LLVM::gThreadId, multiDimOffset[0],
+  multiDimOffset[1], currVal}, rewriter);
+    }
+  }
+   */
+
   for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
-    printf("- elemID: %d\n", elemId);
     SmallVector<Value> multiDimOffset =
         getMultiDimOffset(layout, loc, rewriter, elemId, type.getShape(),
                           multiDimCTAInRepId, shapePerCTA);
-    printf("- getMultiDimOffset done\n");
+    // LLVM::vprintf("multiDimOffset t-%d %d %d", {LLVM::gThreadId,
+    // multiDimOffset[0], multiDimOffset[1]}, rewriter);
+
     Value offset =
         linearize(rewriter, loc, multiDimOffset, shapePerCTA, outOrd);
 
@@ -3161,7 +3182,7 @@ void ConvertLayoutOpConversion::processReplicaForMMAV1(
     if (stNotRd) {
       Value valVec = undef(vecTy);
       for (unsigned v = 0; v < vec; ++v) {
-        auto currVal = vals[elemId + linearCTAId * accumSizePerThread + v];
+        auto currVal = vals[elemId + v];
         valVec = insert_element(vecTy, valVec, currVal, idx_val(v));
       }
       store(valVec, ptr);
@@ -3169,7 +3190,7 @@ void ConvertLayoutOpConversion::processReplicaForMMAV1(
       Value valVec = load(ptr);
       for (unsigned v = 0; v < vec; ++v) {
         Value currVal = extract_element(elemTy, valVec, idx_val(v));
-        vals[elemId + linearCTAId * accumSizePerThread + v] = currVal;
+        vals[elemId + v] = currVal;
         printf("- write vals offset: %d\n",
                elemId + linearCTAId * accumSizePerThread + v);
       }
@@ -3198,8 +3219,8 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
   SmallVector<unsigned> outNumCTAsEachRep(rank);
   SmallVector<unsigned> inNumCTAs(rank);
   SmallVector<unsigned> outNumCTAs(rank);
-  auto srcShapePerCTA = getShapePerCTA(srcLayout);
-  auto dstShapePerCTA = getShapePerCTA(dstLayout);
+  auto srcShapePerCTA = getShapePerCTA(srcLayout, ArrayRef<int64_t>());
+  auto dstShapePerCTA = getShapePerCTA(dstLayout, ArrayRef<int64_t>());
 
   // For Volta, all the coords for a CTA are calculated.
   bool isMmaV1{};
@@ -3334,9 +3355,6 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributedForMMAV1(
   Type structTy = struct_ty(types);
 
   printf("outVals.size(): %lu\n", outVals.size());
-  for (auto val : outVals) {
-    llvm::outs() << "val: " << val << "\n";
-  }
 
   Value result = getStructFromElements(loc, outVals, rewriter, structTy);
   rewriter.replaceOp(op, result);
@@ -3774,6 +3792,7 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
 
   bool isARow = ALayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
   bool isBRow = BLayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
+  printf("t-0 arbr %d %d\n", isARow, isBRow);
 
   DotOpMmaV1ConversionHelper helper(mmaLayout);
 
@@ -3809,6 +3828,7 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
     return idx;
   };
 
+  /*
   { // convert the acc's value from accumuator-external order to
     // accumulator-internal order.
     SmallVector<Value> accInit(acc.size());
@@ -3822,6 +3842,7 @@ DotOpConversion::convertMMA884(triton::DotOp op, DotOpAdaptor adaptor,
 
     acc = accInit;
   }
+   */
 
   auto callMMA = [&](unsigned m, unsigned n, unsigned k) {
     auto ha = has.at({m, k});
@@ -3945,7 +3966,7 @@ DotOpConversion::convertFMADot(triton::DotOp op, OpAdaptor adaptor,
   Value llB = adaptor.b();
 
   auto sizePerThread = getSizePerThread(dLayout);
-  auto shapePerCTA = getShapePerCTA(dLayout);
+  auto shapePerCTA = getShapePerCTA(dLayout, ArrayRef<int64_t>());
 
   int K = aShape[1];
   int M = aShape[0];
