@@ -932,6 +932,7 @@ public:
     auto newBTy = RankedTensorType::get(BT.getShape(), BT.getElementType(),
                                         newDotOperandB);
 
+    /*
     // Here, we assume that A,B,C has only one consumer
     auto newA =
         rewriter.create<ConvertLayoutOp>(dotOp->getLoc(), newATy, dotOp.a())
@@ -939,20 +940,49 @@ public:
     auto newB =
         rewriter.create<ConvertLayoutOp>(dotOp->getLoc(), newBTy, dotOp.b())
             .getResult();
+     */
     Value newC;
+    RankedTensorType newCTy;
     if (dotOp.c()) {
       auto CT = dotOp.c().getType().cast<RankedTensorType>();
-      auto newCTy = RankedTensorType::get(CT.getShape(), CT.getElementType(),
-                                          newMmaLayout);
+      newCTy = RankedTensorType::get(CT.getShape(), CT.getElementType(),
+                                     newMmaLayout);
       newC =
           rewriter.create<ConvertLayoutOp>(dotOp->getLoc(), newCTy, dotOp.c())
               .getResult();
     }
+    if (!(dotOp.a().getDefiningOp() && dotOp.b().getDefiningOp()))
+      return failure();
+
+    auto AOp = llvm::dyn_cast<ConvertLayoutOp>(dotOp.a().getDefiningOp());
+    auto BOp = llvm::dyn_cast<ConvertLayoutOp>(dotOp.b().getDefiningOp());
+    ConvertLayoutOp COp;
+    if (dotOp.c())
+      COp = llvm::dyn_cast<ConvertLayoutOp>(dotOp.c().getDefiningOp());
+    if (!(AOp && BOp))
+      return failure();
+    if (dotOp.c() && !COp)
+      return failure();
+
+    auto newAOp = rewriter.replaceOpWithNewOp<ConvertLayoutOp>(
+        AOp, newATy, AOp.getOperand());
+    auto newBOp = rewriter.replaceOpWithNewOp<ConvertLayoutOp>(
+        BOp, newBTy, BOp.getOperand());
+    ConvertLayoutOp newCOp;
+    if (dotOp.c())
+      newCOp = rewriter.replaceOpWithNewOp<ConvertLayoutOp>(COp, newCTy,
+                                                            COp.getOperand());
+
+    auto newA = AOp.getResult();
+    auto newB = BOp.getResult();
+    if (dotOp.c())
+      newC = COp.getResult();
 
     auto newDotRetTy =
         RankedTensorType::get(DT.getShape(), DT.getElementType(), newMmaLayout);
-    rewriter.replaceOpWithNewOp<triton::DotOp>(dotOp, newDotRetTy, newA, newB,
-                                               newC, dotOp.allowTF32());
+    rewriter.replaceOpWithNewOp<triton::DotOp>(
+        dotOp, newDotRetTy, newAOp.getResult(), newBOp.getResult(),
+        newCOp.getResult(), dotOp.allowTF32());
     return success();
   }
 };
@@ -1023,22 +1053,37 @@ public:
     patterns.add<DecomposeDotOperand>(context);
     patterns.add<RematerializeBackward>(context);
     patterns.add<RematerializeForward>(context);
-    patterns.add<MoveConvertOutOfLoop>(context);
     patterns.add<BlockedToMMA>(context, computeCapability);
+    patterns.add<UpdateMMAVersionMinorForVolta>(context);
+    patterns.add<MoveConvertOutOfLoop>(context);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }
 
-    mlir::RewritePatternSet updateMMAVersionMinorForVolta(context);
-    updateMMAVersionMinorForVolta
-        .add<UpdateMMAVersionMinorForVolta, SimplifyConversion>(context);
+    /*
+    {
+      mlir::RewritePatternSet patternSet(context);
+      //patternSet
+          //.add<UpdateMMAVersionMinorForVolta, SimplifyConversion>(context);
 
-    if (applyPatternsAndFoldGreedily(m,
-                                     std::move(updateMMAVersionMinorForVolta))
-            .failed()) {
-      signalPassFailure();
+      if (applyPatternsAndFoldGreedily(m,
+                                       std::move(patternSet))
+          .failed()) {
+        signalPassFailure();
+      }
     }
+
+    {
+      mlir::RewritePatternSet patternSet(context);
+      patternSet.add<MoveConvertOutOfLoop>(context);
+      if (applyPatternsAndFoldGreedily(m,
+                                       std::move(patternSet))
+          .failed()) {
+        signalPassFailure();
+      }
+    }
+     */
 
     mlir::RewritePatternSet loopFixup(context);
     loopFixup.add<FixupLoop>(context);
