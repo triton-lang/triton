@@ -90,8 +90,11 @@ public:
                   mlir::PatternRewriter &rewriter) const override {
     auto reduce = cast<triton::ReduceOp>(*op);
     auto reduceArg = dyn_cast<triton::gpu::ConvertLayoutOp>(reduce.getOperand().getDefiningOp());
-
     if(!reduceArg)
+      return mlir::failure();
+    // this may generate unsupported conversions in the LLVM codegen
+    if(reduceArg.getOperand().getType().cast<RankedTensorType>()
+                .getEncoding().isa<triton::gpu::MmaEncodingAttr>())
       return mlir::failure();
     auto newReduce = rewriter.create<triton::ReduceOp>(
         op->getLoc(), reduce.redOp(), reduceArg.getOperand(), reduce.axis());
@@ -1208,7 +1211,7 @@ public:
     patterns.add<OptimizeConvertToDotOperand>(context);
     patterns.add<SimplifyConversion>(context);
     patterns.add<SimplifyReduceCvt>(context);
-    // patterns.add<FoldConvertAndReduce>(context);
+    patterns.add<FoldConvertAndReduce>(context);
     patterns.add<DecomposeDotOperand>(context);
     patterns.add<RematerializeBackward>(context);
     patterns.add<RematerializeForward>(context);
@@ -1225,6 +1228,7 @@ public:
     if (applyPatternsAndFoldGreedily(m, std::move(loopFixup)).failed()) {
       signalPassFailure();
     }
+
   }
 };
 
