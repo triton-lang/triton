@@ -79,6 +79,41 @@ public:
   }
 };
 
+class SimplifyReduceCvt : public mlir::RewritePattern {
+public:
+  explicit SimplifyReduceCvt(mlir::MLIRContext *context)
+      : mlir::RewritePattern(triton::ReduceOp::getOperationName(),
+                             2, context) {}
+  
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto reduce = cast<triton::ReduceOp>(*op);
+    auto reduceArg = dyn_cast<triton::gpu::ConvertLayoutOp>(reduce.getOperand().getDefiningOp());
+    if(!reduceArg)
+      return mlir::failure();
+    // this may generate unsupported conversions in the LLVM codegen
+    if(reduceArg.getOperand().getType().cast<RankedTensorType>()
+                .getEncoding().isa<triton::gpu::MmaEncodingAttr>())
+      return mlir::failure();
+    auto newReduce = rewriter.create<triton::ReduceOp>(
+        op->getLoc(), reduce.redOp(), reduceArg.getOperand(), reduce.axis());
+    if(isa<triton::gpu::ConvertLayoutOp>(*reduceArg.getOperand().getDefiningOp()))
+      return mlir::failure();
+    Value newRet = newReduce.getResult();
+    // it's still beneficial to move the conversion
+    // to after the reduce if necessary since it will be
+    // done on a rank-reduced tensor hence cheaper
+    if(newRet.getType() != reduce.getResult().getType())
+      newRet = rewriter.create<triton::gpu::ConvertLayoutOp>(
+          op->getLoc(), reduce.getResult().getType(), newRet);
+    rewriter.replaceOp(op, newRet);
+      
+    return success();
+  }
+
+};
+
 // Layout conversions can't deduce their return type automatically.
 // IIUC they are therefore not handled by DRR right now
 class SimplifyConversion : public mlir::RewritePattern {
@@ -218,6 +253,7 @@ public:
 //
 // -----------------------------------------------------------------------------
 
+// TODO: Interface
 LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
                              Attribute &ret) {
   ret = targetEncoding;
@@ -235,6 +271,20 @@ LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
   return success();
 }
 
+// TODO: Interface
+LogicalResult getForwardEncoding(Attribute sourceEncoding, Operation *op,
+                                 Attribute &ret) {
+  if(op->hasTrait<mlir::OpTrait::Elementwise>()){
+    ret = sourceEncoding;
+    return success();
+  }
+  if(isa<triton::ReduceOp>(op)){
+    ret = Attribute();
+    return success();
+  }
+  return failure();
+}
+
 inline bool expensive_to_remat(Operation *op) {
   if (!op)
     return true;
@@ -246,6 +296,65 @@ inline bool expensive_to_remat(Operation *op) {
     return true;
   return false;
 }
+
+LogicalResult simulateBackwardRematerialization(Operation* initOp,
+                                                SetVector<Operation*>& processed, 
+                                                SetVector<Attribute>& layout,
+                                                llvm::MapVector<Value, Attribute>& toConvert,
+                                                Attribute targetEncoding){
+    // DFS
+    std::vector<std::pair<Operation *, Attribute>> queue;
+    queue.emplace_back(initOp, targetEncoding);
+    // We want to see the effect of converting `initOp` to a new layout
+    // so we initialize `numCvts = 1`.
+    int numCvts = 1;
+    while (!queue.empty()) {
+      Operation *currOp;
+      Attribute currLayout;
+      std::tie(currOp, currLayout) = queue.back();
+      queue.pop_back();
+      // If the current operation is expensive to rematerialize,
+      // we stop everything
+      if (expensive_to_remat(currOp))
+        return mlir::failure();
+      // we would propagate the conversion here
+      numCvts -= 1;
+      // check if the conversion could be folded at this operation
+      if (isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
+              triton::MakeRangeOp, triton::SplatOp>(*currOp))
+          continue;
+      // done processing
+      processed.insert(currOp);
+      layout.insert(currLayout);
+      // add all operands to the queue
+      for (Value argI : currOp->getOperands()) {
+        Attribute newEncoding;
+        // cannot invert the current encoding for this operand
+        // we stop everything
+        if (failed(invertEncoding(currLayout, currOp, newEncoding))){
+          return mlir::failure();
+        }
+        if (toConvert.count(argI) && toConvert[argI] != newEncoding)
+          return mlir::failure();
+        //
+        Operation *opArgI = argI.getDefiningOp();
+        toConvert.insert({argI, newEncoding});
+        if (!opArgI || processed.contains(opArgI) ||
+            (opArgI->getBlock() != initOp->getBlock()))
+          continue;
+        // we add one expensive conversion for the current operand
+        numCvts += 1;
+        queue.emplace_back(opArgI, newEncoding);
+      }
+    }
+    // if rematerialization would add more conversions than it removes
+    // then we don't do it
+    if (numCvts > 0)
+      return mlir::failure();
+    return mlir::success();
+}
+
+//
 
 Operation *cloneWithInferType(mlir::PatternRewriter &rewriter, Operation *op,
                               BlockAndValueMapping &mapping) {
@@ -266,6 +375,164 @@ Operation *cloneWithInferType(mlir::PatternRewriter &rewriter, Operation *op,
   }
   return newOp;
 }
+
+//
+class MoveConvertOutOfIf : public mlir::RewritePattern {
+public:
+  explicit MoveConvertOutOfIf(mlir::MLIRContext *context)
+      : mlir::RewritePattern(scf::IfOp::getOperationName(),
+                             2, context) {}
+
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto ifOp = cast<scf::IfOp>(*op);
+    auto thenYield = ifOp.thenYield();
+    auto elseYield = ifOp.elseYield();
+    int numOps = thenYield.getNumOperands();
+    SmallVector<Value> newThenYieldOps = thenYield.getOperands();
+    SmallVector<Value> newElseYieldOps = elseYield.getOperands();
+    SetVector<Operation*> thenCvts;
+    SetVector<Operation*> elseCvts;
+    SmallVector<Type> newRetTypes;
+
+    BlockAndValueMapping mapping;
+    for(size_t i = 0; i < numOps ; i++){
+      auto thenCvt = dyn_cast<triton::gpu::ConvertLayoutOp>(thenYield.getOperand(i).getDefiningOp());
+      auto elseCvt = dyn_cast<triton::gpu::ConvertLayoutOp>(elseYield.getOperand(i).getDefiningOp());
+      if(thenCvt && elseCvt && 
+         std::distance(thenCvt->user_begin(), thenCvt->user_end()) == 1 &&
+         std::distance(elseCvt->user_begin(), elseCvt->user_end()) == 1 &&
+         thenCvt.getOperand().getType() == elseCvt.getOperand().getType()){
+        mapping.map(thenCvt.getResult(), thenCvt.getOperand());
+        mapping.map(elseCvt.getResult(), elseCvt.getOperand());
+        newRetTypes.push_back(thenCvt.getOperand().getType());
+        thenCvts.insert((Operation*)thenCvt);
+        elseCvts.insert((Operation*)elseCvt);
+      }
+      else
+        newRetTypes.push_back(thenYield.getOperand(i).getType());
+    }
+    if(mapping.getValueMap().empty())
+      return mlir::failure();
+
+    
+
+    
+    rewriter.setInsertionPoint(op);
+    auto newIfOp = rewriter.create<scf::IfOp>(ifOp.getLoc(), newRetTypes, ifOp.getCondition(), true);
+    // rematerialize `then` block
+    rewriter.setInsertionPointToEnd(newIfOp.thenBlock());
+    for(Operation& op: ifOp.thenBlock()->getOperations()){
+      if(thenCvts.contains(&op)){
+        mapping.map(op.getResult(0), mapping.lookup(op.getOperand(0)));
+        continue;
+      }
+      rewriter.clone(op, mapping);
+    }
+    // rematerialize `else` block 
+    rewriter.setInsertionPointToEnd(newIfOp.elseBlock());
+    for(Operation& op: ifOp.elseBlock()->getOperations()){
+      if(elseCvts.contains(&op)){
+        mapping.map(op.getResult(0), mapping.lookup(op.getOperand(0)));
+        continue;
+      }
+      rewriter.clone(op, mapping);
+    }
+    
+    rewriter.setInsertionPointAfter(newIfOp);
+    SmallVector<Value> newRetValues = newIfOp.getResults();
+    for(size_t i = 0; i < numOps ; i++){
+      if(newIfOp.getResult(i).getType() != ifOp.getResult(i).getType()){
+        newRetValues[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(newIfOp.getLoc(), ifOp.getResult(i).getType(), newIfOp.getResult(i));
+      }
+    }
+
+    rewriter.replaceOp(op, newRetValues);
+    return mlir::success();
+  }
+};
+
+
+//
+class FoldConvertAndReduce : public mlir::RewritePattern {
+public:
+  explicit FoldConvertAndReduce(mlir::MLIRContext *context)
+      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
+                             2, context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *cvtOp,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(*cvtOp);
+    auto srcEncoding = cvt.getResult().getType().cast<RankedTensorType>().getEncoding();
+    SetVector<Operation *> cvtSlices;
+    auto filter = [&](Operation *op) {
+      return op->getBlock() == cvt->getBlock() &&
+             !(isa<triton::ReduceOp>(op) && !op->getResult(0).getType().isa<RankedTensorType>()) &&
+             !isa<scf::YieldOp>(op);
+    };
+    mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
+    if (cvtSlices.empty())
+      return failure();
+
+    llvm::MapVector<Value, Attribute> toConvert;
+    for (Operation *op : cvtSlices) {
+      // don't rematerialize anything expensive
+      if(expensive_to_remat(op))
+        return failure();
+      // don't rematerialize non-element-wise
+      if(!op->hasTrait<mlir::OpTrait::Elementwise>())
+        return failure();
+      Attribute dstEncoding = cvt.getOperand().getType().cast<RankedTensorType>().getEncoding();
+      // don't rematerialize if it adds an extra conversion that can't
+      // be removed
+      for (Value arg : op->getOperands()) {
+        Operation *argOp = arg.getDefiningOp();
+        SetVector<Operation *> processed;
+        SetVector<Attribute> layout;
+        llvm::MapVector<Value, Attribute> toConvert;
+        if (argOp && (argOp != cvt) &&
+            cvtSlices.count(argOp) == 0 &&
+            failed(simulateBackwardRematerialization(
+              argOp, processed, layout, toConvert, srcEncoding))){
+          return failure();
+        }
+        
+      }
+    }
+
+    BlockAndValueMapping mapping;
+    auto op = cvtSlices.front();
+    for (Value arg : op->getOperands()) {
+      if (arg.getDefiningOp() == cvt)
+        mapping.map(arg, cvt.getOperand());
+      else {
+        auto cvtI = rewriter.create<triton::gpu::ConvertLayoutOp>(
+            arg.getLoc(), cvt.getOperand().getType(), arg);
+        if(Operation* argOp = arg.getDefiningOp())
+          cvtI->moveAfter(argOp);
+        mapping.map(arg, cvtI);
+      }
+    }
+    rewriter.setInsertionPoint(op);
+    Operation *newOp = rewriter.clone(*op, mapping);
+    auto oldType = op->getResult(0).getType().cast<RankedTensorType>();
+    auto newType = RankedTensorType::get(
+        oldType.getShape(), oldType.getElementType(),
+        cvt.getOperand().getType().cast<RankedTensorType>().getEncoding());
+
+    newOp->getResult(0).setType(newType);
+    auto newCvtType = RankedTensorType::get(
+        oldType.getShape(), oldType.getElementType(),
+        cvt.getResult().getType().cast<RankedTensorType>().getEncoding());
+    auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
+        newOp->getLoc(), newCvtType, newOp->getResult(0));
+    rewriter.replaceOp(op, newCvt->getResults());
+    return success();
+  }
+};
 
 // Layout conversions are expensive. They require going through
 // shared memory, which is orders of magnitude slower than
@@ -494,7 +761,6 @@ public:
           continue;
       }
       // check
-      // llvm::outs() << "replacing " << iterArg.index() << "\n";
       for (auto op : iterArg.value().getUsers()) {
         auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
         if (!cvt)
@@ -944,10 +1210,13 @@ public:
     patterns.add<OptimizeBlockedToShared>(context);
     patterns.add<OptimizeConvertToDotOperand>(context);
     patterns.add<SimplifyConversion>(context);
+    patterns.add<SimplifyReduceCvt>(context);
+    patterns.add<FoldConvertAndReduce>(context);
     patterns.add<DecomposeDotOperand>(context);
     patterns.add<RematerializeBackward>(context);
     patterns.add<RematerializeForward>(context);
     patterns.add<MoveConvertOutOfLoop>(context);
+    patterns.add<MoveConvertOutOfIf>(context);
     patterns.add<BlockedToMMA>(context, computeCapability);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
@@ -959,6 +1228,7 @@ public:
     if (applyPatternsAndFoldGreedily(m, std::move(loopFixup)).failed()) {
       signalPassFailure();
     }
+
   }
 };
 

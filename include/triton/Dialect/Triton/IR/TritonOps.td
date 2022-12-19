@@ -12,10 +12,6 @@ include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 include "mlir/Interfaces/SideEffectInterfaces.td" // NoSideEffect
 include "mlir/Interfaces/CastInterfaces.td" // CastOpInterface
 
-def TensorSizeTrait : NativeOpTrait<"TensorSizeTrait">;
-def SameOperandsAndResultEncoding : NativeOpTrait<"SameOperandsAndResultEncoding">;
-def SameOperandsEncoding : NativeOpTrait<"SameOperandsEncoding">;
-
 //
 // Op Base
 //
