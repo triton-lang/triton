@@ -95,6 +95,8 @@ public:
       return mlir::failure();
     auto newReduce = rewriter.create<triton::ReduceOp>(
         op->getLoc(), reduce.redOp(), reduceArg.getOperand(), reduce.axis());
+    if(isa<triton::gpu::ConvertLayoutOp>(*reduceArg.getOperand().getDefiningOp()))
+      return mlir::failure();
     Value newRet = newReduce.getResult();
     // it's still beneficial to move the conversion
     // to after the reduce if necessary since it will be
@@ -102,7 +104,6 @@ public:
     if(newRet.getType() != reduce.getResult().getType())
       newRet = rewriter.create<triton::gpu::ConvertLayoutOp>(
           op->getLoc(), reduce.getResult().getType(), newRet);
-
     rewriter.replaceOp(op, newRet);
       
     return success();
@@ -1207,7 +1208,7 @@ public:
     patterns.add<OptimizeConvertToDotOperand>(context);
     patterns.add<SimplifyConversion>(context);
     patterns.add<SimplifyReduceCvt>(context);
-    patterns.add<FoldConvertAndReduce>(context);
+    // patterns.add<FoldConvertAndReduce>(context);
     patterns.add<DecomposeDotOperand>(context);
     patterns.add<RematerializeBackward>(context);
     patterns.add<RematerializeForward>(context);
