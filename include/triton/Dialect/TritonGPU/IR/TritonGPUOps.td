@@ -44,7 +44,9 @@ def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
 // This is needed because these ops don't
 // handle encodings
 // e.g., https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Arith/IR/ArithOps.td#L111
-def TTG_CmpIOp : TTG_Op<"cmpi", [NoSideEffect]> {
+def TTG_CmpIOp : TTG_Op<"cmpi", [NoSideEffect, Elementwise, 
+                                 SameOperandsAndResultShape, 
+                                 SameOperandsAndResultEncoding]> {
   let summary = "integer comparison operation";
 
   let description = [{}];
@@ -56,7 +58,9 @@ def TTG_CmpIOp : TTG_Op<"cmpi", [NoSideEffect]> {
   let results = (outs TT_BoolLike:$result);
 }
 
-def TTG_CmpFOp : TTG_Op<"cmpf", [NoSideEffect]> {
+def TTG_CmpFOp : TTG_Op<"cmpf", [NoSideEffect, Elementwise, 
+                                 SameOperandsAndResultShape, 
+                                 SameOperandsAndResultEncoding]> {
   let summary = "floating-point comparison operation";
 
   let description = [{}];
@@ -69,7 +73,9 @@ def TTG_CmpFOp : TTG_Op<"cmpf", [NoSideEffect]> {
 }
 
 // TODO: migrate to arith::SelectOp on LLVM16
-def TTG_SelectOp : TTG_Op<"select", [NoSideEffect]> {
+def TTG_SelectOp : TTG_Op<"select", [NoSideEffect, Elementwise, 
+                                 SameOperandsAndResultShape, 
+                                 SameOperandsAndResultEncoding]> {
   let summary = "select operation";
 
   let description = [{}];
