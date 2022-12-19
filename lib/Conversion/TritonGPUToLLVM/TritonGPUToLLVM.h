@@ -825,6 +825,7 @@ private:
           Value curIndex = load(indexReadPtr);
           accumulateWithIndex(rewriter, loc, op.redOp(), acc, accIndex, cur,
                               curIndex, false);
+          barrier();
           store(acc, writePtr);
           store(accIndex, indexWritePtr);
         }
