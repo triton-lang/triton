@@ -849,7 +849,7 @@ def build_triton_ir(fn, signature, specialization, constants):
     gscope = fn.__globals__.copy()
     function_name = '_'.join([fn.__name__, kernel_suffix(signature.values(), specialization)])
     tys = list(signature.values())
-    new_constants = {k: True if tys[k] == "i1" else 1 for k in specialization.equal_to_1}
+    new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in specialization.equal_to_1}
     new_attrs = {k: ("multiple_of", 16) for k in specialization.divisible_by_16}
     all_constants = constants.copy()
     all_constants.update(new_constants)
@@ -1024,8 +1024,11 @@ def ty_to_cpp(ty):
         "i64": "int64_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
+        "fp16": "float",
+        "bf16": "float",
         "fp32": "float",
         "f32": "float",
+        "fp64": "double",
     }[ty]
 
 
@@ -1055,6 +1058,8 @@ def generate_launcher(constants, signature):
             'i64': 'int64_t',
             'u32': 'uint32_t',
             'u64': 'uint64_t',
+            'fp16': 'float',
+            'bf16': 'float',
             'fp32': 'float',
             'f32': 'float',
             'fp64': 'double',
@@ -1072,7 +1077,7 @@ def generate_launcher(constants, signature):
             "int64_t": "L",
         }[ty]
 
-    format = "iiiiiKK" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
+    format = "iiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
 
     # generate glue code
     src = f"""
@@ -1130,11 +1135,37 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   uint64_t _function;
   int num_warps;
   int shared_memory;
+  PyObject *launch_enter_hook = NULL;
+  PyObject *launch_exit_hook = NULL;
+  PyObject *compiled_kernel = NULL;
+  PyObject *hook_ret = NULL;
   {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
+  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
     return NULL;
   }}
+
+  if (launch_enter_hook != Py_None) {{
+    PyObject *new_args = PyTuple_Pack(1, compiled_kernel);
+    hook_ret = PyObject_CallObject(launch_enter_hook, new_args);
+    Py_DECREF(new_args);
+  }}
+
   _launch(gridX, gridY, gridZ, num_warps, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"getPointer(_arg{i},{i})" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
+
+  if (launch_exit_hook != Py_None) {{
+    PyObject *new_args = NULL;
+    if (hook_ret) {{
+        new_args = PyTuple_Pack(2, compiled_kernel, hook_ret);
+    }} else {{
+        new_args = PyTuple_Pack(1, compiled_kernel);
+    }}
+    hook_ret = PyObject_CallObject(launch_exit_hook, new_args);
+    Py_DECREF(new_args);
+  }}
+
+  if (hook_ret) {{
+      Py_DECREF(hook_ret);
+  }}
   if(PyErr_Occurred()) {{
     return NULL;
   }}
@@ -1174,7 +1205,8 @@ def default_cache_dir():
 
 
 def default_cuda_dir():
-    return os.path.join("/usr", "local", "cuda")
+    default_dir = "/usr/local/cuda"
+    return os.getenv("CUDA_HOME", default=default_dir)
 
 
 class CacheManager:
@@ -1217,9 +1249,9 @@ class CacheManager:
 
 
 @functools.lru_cache()
-def libcuda_dir():
-    loc = subprocess.check_output(["whereis", "libcuda.so"]).decode().strip().split()[-1]
-    return os.path.dirname(loc)
+def libcuda_dirs():
+    locs = subprocess.check_output(["whereis", "libcuda.so"]).decode().strip().split()[1:]
+    return [os.path.dirname(loc) for loc in locs]
 
 
 @contextlib.contextmanager
@@ -1233,7 +1265,7 @@ def quiet():
 
 
 def _build(name, src, srcdir):
-    cuda_lib_dir = libcuda_dir()
+    cuda_lib_dirs = libcuda_dirs()
     cuda_path = os.environ.get('CUDA_PATH', default_cuda_dir())
     cu_include_dir = os.path.join(cuda_path, "include")
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
@@ -1246,12 +1278,16 @@ def _build(name, src, srcdir):
         gcc = shutil.which("gcc")
         cc = gcc if gcc is not None else clang
     py_include_dir = get_paths()["include"]
-    ret = subprocess.check_call([cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", f"-L{cuda_lib_dir}", "-lcuda", "-o", so])
+
+    cc_cmd = [cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
+    cc_cmd += [f"-L{dir}" for dir in cuda_lib_dirs]
+    ret = subprocess.check_call(cc_cmd)
+
     if ret == 0:
         return so
     # fallback on setuptools
     extra_compile_args = []
-    library_dirs = [cuda_lib_dir]
+    library_dirs = cuda_lib_dirs
     include_dirs = [srcdir, cu_include_dir]
     libraries = ['cuda']
     # extra arguments
@@ -1282,10 +1318,10 @@ def _build(name, src, srcdir):
     return so
 
 
-def make_so_cache_key(signature, constants):
+def make_so_cache_key(version_hash, signature, constants):
     # Get unique key for the compiled code
     signature = {k: 'ptr' if v[0] == '*' else v for k, v in signature.items()}
-    key = f"{''.join(signature.values())}{constants}"
+    key = f"{version_hash}-{''.join(signature.values())}{constants}"
     key = hashlib.md5(key.encode("utf-8")).hexdigest()
     return key
 
@@ -1320,7 +1356,7 @@ def read_or_execute(cache_manager, force_compile, file_name, metadata,
 
 def make_stub(name, signature, constants):
     # name of files that are cached
-    so_cache_key = make_so_cache_key(signature, constants)
+    so_cache_key = make_so_cache_key(triton.runtime.jit.version_key(), signature, constants)
     so_cache_manager = CacheManager(so_cache_key)
     so_name = f"{name}.so"
     # retrieve stub from cache if it exists
@@ -1492,6 +1528,10 @@ def compile(fn, **kwargs):
 
 class CompiledKernel:
 
+    # Hooks for external tools to monitor the execution of triton kernels
+    launch_enter_hook = None
+    launch_exit_hook = None
+
     def __init__(self, so_path, metadata, asm):
         # initialize launcher
         import importlib.util
@@ -1533,7 +1573,8 @@ class CompiledKernel:
         def runner(*args, stream=None):
             if stream is None:
                 stream = torch.cuda.current_stream().cuda_stream
-            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.shared, stream, self.cu_function, *args)
+            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.shared, stream, self.cu_function,
+                           CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args)
         return runner
 
     def get_sass(self, fun=None):
