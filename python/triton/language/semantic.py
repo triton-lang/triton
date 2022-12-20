@@ -1123,9 +1123,6 @@ def exp(x: tl.tensor, builder: ir.builder) -> tl.tensor:
 def log(x: tl.tensor, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_log(x.handle), x.type)
 
-def fdiv(x: tl.tensor, y: tl.tensor, builder: ir.builder) -> tl.tensor:
-    return tl.tensor(builder.create_frem(x.handle, y.handle), x.type)
-
 def cos(x: tl.tensor, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_cos(x.handle), x.type)
 
