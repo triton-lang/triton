@@ -14,8 +14,14 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
+#include "ConvertLayoutOpToLLVM.h"
+#include "DotOpToLLVM.h"
+#include "ElementwiseOpToLLVM.h"
+#include "LoadStoreOpToLLVM.h"
+#include "ReduceOpToLLVM.h"
 #include "TritonGPUToLLVM.h"
 #include "TypeConverter.h"
+#include "ViewOpToLLVM.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -130,9 +136,36 @@ public:
     // arith patterns for some encoding not supported by the community
     // patterns.
     RewritePatternSet patterns(context);
-    populateTritonToLLVMPatterns(typeConverter, patterns, numWarps,
+
+    // Normal conversions
+    populateTritonGPUToLLVMPatterns(typeConverter, patterns, numWarps,
+                                    axisInfoAnalysis, &allocation, smem,
+                                    /*benefit=*/10);
+    // ConvertLayoutOp
+    populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, numWarps,
+                                          axisInfoAnalysis, &allocation, smem,
+                                          /*benefit=*/10);
+    // DotOp
+    populateDotOpToLLVMPatterns(typeConverter, patterns, numWarps,
+                                axisInfoAnalysis, &allocation, smem,
+                                /*benefit=*/10);
+    // ElementwiseOp
+    populateElementwiseOpToLLVMPatterns(typeConverter, patterns, numWarps,
+                                        axisInfoAnalysis, &allocation, smem,
+                                        /*benefit=*/10);
+    // LoadStoreOp
+    populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, numWarps,
+                                      axisInfoAnalysis, &allocation, smem,
+                                      /*benefit=*/10);
+    // ReduceOp
+    populateReduceOpToLLVMPatterns(typeConverter, patterns, numWarps,
+                                      axisInfoAnalysis, &allocation, smem,
+                                      /*benefit=*/10);
+    // ViewOp
+    populateViewOpToLLVMPatterns(typeConverter, patterns, numWarps,
                                  axisInfoAnalysis, &allocation, smem,
                                  /*benefit=*/10);
+
     // Add arith/math's patterns to help convert scalar expression to LLVM.
     mlir::arith::populateArithmeticToLLVMConversionPatterns(typeConverter,
                                                             patterns);

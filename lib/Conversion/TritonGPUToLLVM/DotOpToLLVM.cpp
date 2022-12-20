@@ -295,3 +295,12 @@ DotOpConversion::convertFMADot(triton::DotOp op, DotOpAdaptor adaptor,
 
   return success();
 }
+
+void populateDotOpToLLVMPatterns(
+    mlir::LLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, int numWarps,
+    AxisInfoAnalysis &axisInfoAnalysis,
+    const Allocation *allocation, Value smem,
+    PatternBenefit benefit) {
+  patterns.add<DotOpConversion>(typeConverter, allocation, smem, benefit);
+}

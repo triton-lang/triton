@@ -469,3 +469,12 @@ LogicalResult ReduceOpConversion::matchAndRewriteFast(
 
   return success();
 }
+
+void populateReduceOpToLLVMPatterns(
+    mlir::LLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, int numWarps,
+    AxisInfoAnalysis &axisInfoAnalysis,
+    const Allocation *allocation, Value smem,
+    PatternBenefit benefit) {
+  patterns.add<ReduceOpConversion>(typeConverter, allocation, smem, benefit);
+}

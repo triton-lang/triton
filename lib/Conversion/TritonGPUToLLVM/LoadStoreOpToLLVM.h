@@ -1,5 +1,5 @@
-#ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_LOAD_STORE_OP_CONVERSIONS_H
-#define TRITON_CONVERSION_TRITONGPU_TO_LLVM_LOAD_STORE_OP_CONVERSIONS_H
+#ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_LOAD_STORE_OP_H
+#define TRITON_CONVERSION_TRITONGPU_TO_LLVM_LOAD_STORE_OP_H
 
 #include "triton/Analysis/AxisInfo.h"
 
@@ -99,5 +99,12 @@ struct AtomicRMWOpConversion
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override;
 };
+
+void populateLoadStoreOpToLLVMPatterns(
+    mlir::LLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, int numWarps,
+    AxisInfoAnalysis &axisInfoAnalysis,
+    const Allocation *allocation, Value smem,
+    PatternBenefit benefit);
 
 #endif

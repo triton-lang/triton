@@ -1,5 +1,5 @@
-#ifndef TRITON_CONVERSION_TRITONGPU_TO_ELEMENTWISE_OP_CONVERSIONS_H
-#define TRITON_CONVERSION_TRITONGPU_TO_ELEMENTWISE_OP_CONVERSIONS_H
+#ifndef TRITON_CONVERSION_TRITONGPU_TO_ELEMENTWISE_OP_H
+#define TRITON_CONVERSION_TRITONGPU_TO_ELEMENTWISE_OP_H
 
 #include "TritonGPUToLLVMBase.h"
 
@@ -175,5 +175,12 @@ struct ExpOpConversionApprox
                      ConversionPatternRewriter &rewriter, Type elemTy,
                      ValueRange operands, Location loc) const;
 };
+
+void populateElementwiseOpToLLVMPatterns(
+    mlir::LLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, int numWarps,
+    AxisInfoAnalysis &axisInfoAnalysis,
+    const Allocation *allocation, Value smem,
+    PatternBenefit benefit);
 
 #endif

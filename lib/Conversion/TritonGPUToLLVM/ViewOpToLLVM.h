@@ -1,5 +1,5 @@
-#ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_VIEW_OP_CONVERSIONS_H
-#define TRITON_CONVERSION_TRITONGPU_TO_LLVM_VIEW_OP_CONVERSIONS_H
+#ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_VIEW_OP_H
+#define TRITON_CONVERSION_TRITONGPU_TO_LLVM_VIEW_OP_H
 
 #include "TritonGPUToLLVMBase.h"
 
@@ -7,6 +7,7 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::LLVM::getElementsFromStruct;
+using ::mlir::LLVM::getStructFromElements;
 using ::mlir::triton::gpu::getElemsPerThread;
 
 struct SplatOpConversion
@@ -97,5 +98,12 @@ struct TransOpConversion
   matchAndRewrite(triton::TransOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override;
 };
+
+void populateViewOpToLLVMPatterns(
+    mlir::LLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, int numWarps,
+    AxisInfoAnalysis &axisInfoAnalysis,
+    const Allocation *allocation, Value smem,
+    PatternBenefit benefit);
 
 #endif

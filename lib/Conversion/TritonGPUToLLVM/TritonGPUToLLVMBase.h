@@ -1,7 +1,9 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_BASE_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_BASE_H
 
+#include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/Allocation.h"
+#include "triton/Analysis/AxisInfo.h"
 #include "Utility.h"
 
 using namespace mlir;

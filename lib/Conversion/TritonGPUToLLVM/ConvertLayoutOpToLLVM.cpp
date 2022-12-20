@@ -1,4 +1,4 @@
-#include "ConvertLayoutToLLVM.h"
+#include "ConvertLayoutOpToLLVM.h"
 #include "DotOpHelpers.h"
 
 using ::mlir::LLVM::DotOpFMAConversionHelper;
@@ -642,4 +642,14 @@ Value ConvertLayoutOpConversion::lowerSharedToDotOperandMMA(
     assert(false && "Unsupported mma layout found");
   }
   return res;
+}
+
+void populateConvertLayoutOpToLLVMPatterns(
+    mlir::LLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, int numWarps,
+    AxisInfoAnalysis &axisInfoAnalysis,
+    const Allocation *allocation, Value smem,
+    PatternBenefit benefit) {
+  patterns.add<ConvertLayoutOpConversion>(typeConverter, allocation, smem,
+                                          benefit);
 }

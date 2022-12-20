@@ -153,3 +153,19 @@ LogicalResult TransOpConversion::matchAndRewrite(
   rewriter.replaceOp(op, retVal);
   return success();
 }
+
+void populateViewOpToLLVMPatterns(
+    mlir::LLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, int numWarps,
+    AxisInfoAnalysis &axisInfoAnalysis,
+    const Allocation *allocation, Value smem,
+    PatternBenefit benefit) {
+  patterns.add<ViewLikeOpConversion<triton::ViewOp>>(typeConverter, benefit);
+  patterns.add<ViewLikeOpConversion<triton::ExpandDimsOp>>(typeConverter,
+                                                           benefit);
+  patterns.add<SplatOpConversion>(typeConverter, benefit);
+  patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
+  patterns.add<CatOpConversion>(typeConverter, benefit);
+  patterns.add<TransOpConversion>(typeConverter, benefit);
+}
+

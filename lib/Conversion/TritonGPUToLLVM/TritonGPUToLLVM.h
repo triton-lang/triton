@@ -9,7 +9,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
-#include "ConvertLayoutToLLVM.h"
+#include "ConvertLayoutOpToLLVM.h"
 #include "DotOpToLLVM.h"
 #include "ElementwiseOpToLLVM.h"
 #include "LoadStoreOpToLLVM.h"
@@ -262,10 +262,10 @@ struct InsertSliceAsyncOpConversion
                   ConversionPatternRewriter &rewriter) const override;
 };
 
-void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
-                                  RewritePatternSet &patterns, int numWarps,
-                                  AxisInfoAnalysis &axisInfoAnalysis,
-                                  const Allocation *allocation, Value smem,
-                                  PatternBenefit benefit);
+void populateTritonGPUToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
+                                     RewritePatternSet &patterns, int numWarps,
+                                     AxisInfoAnalysis &axisInfoAnalysis,
+                                     const Allocation *allocation, Value smem,
+                                     PatternBenefit benefit);
 
 #endif

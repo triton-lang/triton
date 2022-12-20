@@ -131,3 +131,20 @@ Value ExpOpConversionApprox::createDestOp(
   exp2(output, input);
   return ptxBuilder.launch(rewriter, loc, f32_ty, false);
 }
+
+void populateElementwiseOpToLLVMPatterns(
+    mlir::LLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, int numWarps,
+    AxisInfoAnalysis &axisInfoAnalysis,
+    const Allocation *allocation, Value smem,
+    PatternBenefit benefit) {
+  patterns.add<CmpIOpConversion>(typeConverter, benefit);
+  patterns.add<CmpFOpConversion>(typeConverter, benefit);
+  patterns.add<FDivOpConversion>(typeConverter, benefit);
+  patterns.add<ExtElemwiseOpConversion>(typeConverter, benefit);
+  // ExpOpConversionApprox will try using ex2.approx if the input type is FP32.
+  // For FP64 input type, ExpOpConversionApprox will return failure and
+  // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
+  // __nv_expf for higher-precision calculation
+  patterns.add<ExpOpConversionApprox>(typeConverter, benefit);
+}

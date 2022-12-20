@@ -509,3 +509,17 @@ LogicalResult AtomicRMWOpConversion::matchAndRewrite(
   }
   return success();
 }
+
+void populateLoadStoreOpToLLVMPatterns(
+    mlir::LLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, int numWarps,
+    AxisInfoAnalysis &axisInfoAnalysis,
+    const Allocation *allocation, Value smem,
+    PatternBenefit benefit) {
+  patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<StoreOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<AtomicCASOpConversion>(typeConverter, allocation, smem,
+                                      axisInfoAnalysis, benefit);
+  patterns.add<AtomicRMWOpConversion>(typeConverter, allocation, smem,
+                                      axisInfoAnalysis, benefit);
+}

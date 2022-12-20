@@ -1024,17 +1024,11 @@ LogicalResult InsertSliceAsyncOpConversion::matchAndRewrite(
   return success();
 }
 
-void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
-                                  RewritePatternSet &patterns, int numWarps,
-                                  AxisInfoAnalysis &axisInfoAnalysis,
-                                  const Allocation *allocation, Value smem,
-                                  PatternBenefit benefit) {
-  patterns.add<AddPtrOpConversion>(typeConverter, benefit);
-  patterns.add<AllocTensorOpConversion>(typeConverter, allocation, smem,
-                                        benefit);
-  patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
-  patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
-
+void populateTritonGPUToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
+                                     RewritePatternSet &patterns, int numWarps,
+                                     AxisInfoAnalysis &axisInfoAnalysis,
+                                     const Allocation *allocation, Value smem,
+                                     PatternBenefit benefit) {
 #define POPULATE_TERNARY_OP(SRC_OP, DST_OP)                                    \
   patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
   POPULATE_TERNARY_OP(triton::gpu::SelectOp, LLVM::SelectOp)
@@ -1042,7 +1036,6 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
 
 #define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
   patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
-
   POPULATE_BINARY_OP(arith::SubIOp, LLVM::SubOp) // -
   POPULATE_BINARY_OP(arith::SubFOp, LLVM::FSubOp)
   POPULATE_BINARY_OP(arith::AddIOp, LLVM::AddOp) // +
@@ -1063,18 +1056,8 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp) // >>
 #undef POPULATE_BINARY_OP
 
-  patterns.add<CmpIOpConversion>(typeConverter, benefit);
-  patterns.add<CmpFOpConversion>(typeConverter, benefit);
-
-  // ExpOpConversionApprox will try using ex2.approx if the input type is FP32.
-  // For FP64 input type, ExpOpConversionApprox will return failure and
-  // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
-  // __nv_expf for higher-precision calculation
-  patterns.add<ExpOpConversionApprox>(typeConverter, benefit);
-
 #define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
   patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
-
   POPULATE_UNARY_OP(arith::TruncIOp, LLVM::TruncOp)
   POPULATE_UNARY_OP(arith::TruncFOp, LLVM::FPTruncOp)
   POPULATE_UNARY_OP(arith::ExtSIOp, LLVM::SExtOp)
@@ -1094,17 +1077,13 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
 
+  patterns.add<AddPtrOpConversion>(typeConverter, benefit);
+  patterns.add<AllocTensorOpConversion>(typeConverter, allocation, smem,
+                                        benefit);
+  patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, benefit);
-  patterns.add<FDivOpConversion>(typeConverter, benefit);
-  patterns.add<ExtElemwiseOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
-  patterns.add<ReduceOpConversion>(typeConverter, allocation, smem, benefit);
-  patterns.add<ConvertLayoutOpConversion>(typeConverter, allocation, smem,
-                                          benefit);
-  patterns.add<AtomicCASOpConversion>(typeConverter, allocation, smem,
-                                      axisInfoAnalysis, benefit);
-  patterns.add<AtomicRMWOpConversion>(typeConverter, allocation, smem,
-                                      axisInfoAnalysis, benefit);
+
   patterns.add<ExtractSliceOpConversion>(typeConverter, allocation, smem,
                                          benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
@@ -1113,16 +1092,8 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
                                         benefit);
   patterns.add<InsertSliceAsyncOpConversion>(typeConverter, allocation, smem,
                                              axisInfoAnalysis, benefit);
-  patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+
   patterns.add<MakeRangeOpConversion>(typeConverter, benefit);
   patterns.add<ReturnOpConversion>(typeConverter, benefit);
-  patterns.add<SplatOpConversion>(typeConverter, benefit);
-  patterns.add<StoreOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<ViewLikeOpConversion<triton::ViewOp>>(typeConverter, benefit);
-  patterns.add<ViewLikeOpConversion<triton::ExpandDimsOp>>(typeConverter,
-                                                           benefit);
-  patterns.add<DotOpConversion>(typeConverter, allocation, smem, benefit);
-  patterns.add<TransOpConversion>(typeConverter, benefit);
-  patterns.add<CatOpConversion>(typeConverter, benefit);
   patterns.add<PrintfOpConversion>(typeConverter, benefit);
 }

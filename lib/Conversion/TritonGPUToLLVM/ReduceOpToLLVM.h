@@ -1,5 +1,5 @@
-#ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_REDUCE_OP_CONVERSIONS_H
-#define TRITON_CONVERSION_TRITONGPU_TO_LLVM_REDUCE_OP_CONVERSIONS_H
+#ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_REDUCE_OP_H
+#define TRITON_CONVERSION_TRITONGPU_TO_LLVM_REDUCE_OP_H
 
 #include "TritonGPUToLLVMBase.h"
 
@@ -33,5 +33,12 @@ private:
   LogicalResult matchAndRewriteFast(triton::ReduceOp op, OpAdaptor adaptor,
                                     ConversionPatternRewriter &rewriter) const;
 };
+
+void populateReduceOpToLLVMPatterns(
+    mlir::LLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, int numWarps,
+    AxisInfoAnalysis &axisInfoAnalysis,
+    const Allocation *allocation, Value smem,
+    PatternBenefit benefit);
 
 #endif
