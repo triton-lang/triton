@@ -1558,6 +1558,9 @@ class CompiledKernel:
         device = torch.cuda.current_device()
         global cuda_utils
         init_cuda_utils()
+        max_shared = cuda_utils.get_device_properties(device)["max_shared_mem"]
+        if self.shared > max_shared:
+            raise OutOfResources(self.shared, max_shared, "shared memory")
         mod, func, n_regs, n_spills = cuda_utils.load_binary(self.metadata["name"], self.asm["cubin"], self.shared, device)
         self.cu_module = mod
         self.cu_function = func
