@@ -265,11 +265,11 @@ struct DotOpMmaV1ConversionHelper {
 
     // TODO[Superjomn]: check the order.
     SmallVector<CoordTy> coords;
-    for (Value x1 : axes[0]) {   // M
-      for (Value x0 : axes[1]) { // N
+    for (Value x1 : axes[1]) {   // N
+      for (Value x0 : axes[0]) { // M
         SmallVector<Value, 2> idx(2);
-        idx[0] = x1; // M
-        idx[1] = x0; // N
+        idx[0] = x0; // M
+        idx[1] = x1; // N
         coords.push_back(std::move(idx));
       }
     }

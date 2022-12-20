@@ -3149,7 +3149,38 @@ void ConvertLayoutOpConversion::processReplicaForMMAV1(
   //       of performance issue observed.
   printf("accuSize: %d, vec: %d\n", accumSizePerThread, vec);
 
-  /*
+#if 1
+  std::vector<std::pair<SmallVector<Value>, Value>> coord2val2(
+      accumSizePerThread);
+  {
+    // We need to transpose the coordinates and values here.
+    std::vector<std::pair<SmallVector<Value>, Value>> coord2val(
+        accumSizePerThread);
+    for (unsigned elemId = 0; elemId < accumSizePerThread; ++elemId) {
+      SmallVector<Value> multiDimOffset =
+          getMultiDimOffset(layout, loc, rewriter, elemId, type.getShape(),
+                            multiDimCTAInRepId, shapePerCTA);
+      coord2val[elemId] = std::make_pair(multiDimOffset, vals[elemId]);
+    }
+
+    // do transpose
+    int numM = 4; // DEBUG
+    int numN = 4;
+    for (int r = 0; r < numM; r++) {
+      for (int c = 0; c < numN; c++) {
+        coord2val2[r * numN + c] = std::move(coord2val[c * numM + r]);
+      }
+    }
+
+    if (stNotRd) {
+      for (unsigned elemId = 0; elemId < accumSizePerThread; elemId++) {
+        auto [coord, currVal] = coord2val2[elemId];
+        LLVM::vprintf("acci t-%d (%d,%d) %f",
+                      {LLVM::gThreadId, coord[0], coord[1], currVal}, rewriter);
+      }
+    }
+  }
+#else
   if (stNotRd) {
     // We need to transpose the coordinates and values here.
     std::vector<std::pair<SmallVector<Value>, Value>> coord2val;
@@ -3159,21 +3190,30 @@ void ConvertLayoutOpConversion::processReplicaForMMAV1(
       SmallVector<Value> multiDimOffset =
           getMultiDimOffset(layout, loc, rewriter, elemId, type.getShape(),
                             multiDimCTAInRepId, shapePerCTA);
-      LLVM::vprintf("acci t-%d (%d,%d) %f", {LLVM::gThreadId, multiDimOffset[0],
-  multiDimOffset[1], currVal}, rewriter);
+      LLVM::vprintf(
+          "acci t-%d (%d,%d) %f",
+          {LLVM::gThreadId, multiDimOffset[0], multiDimOffset[1], currVal},
+          rewriter);
     }
   }
-   */
+#endif
 
+  // Now the coord2val2 has the transposed and contiguous elements(with vec=2),
+  // the original vals is not needed.
   for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
-    SmallVector<Value> multiDimOffset =
-        getMultiDimOffset(layout, loc, rewriter, elemId, type.getShape(),
-                          multiDimCTAInRepId, shapePerCTA);
+    auto coord = coord2val2[elemId].first;
     // LLVM::vprintf("multiDimOffset t-%d %d %d", {LLVM::gThreadId,
     // multiDimOffset[0], multiDimOffset[1]}, rewriter);
-
-    Value offset =
-        linearize(rewriter, loc, multiDimOffset, shapePerCTA, outOrd);
+    Value offset = linearize(rewriter, loc, coord, shapePerCTA, outOrd);
+    if (stNotRd) {
+      LLVM::vprintf("elemcoord t-%d %d (%d %d)",
+                    {LLVM::gThreadId, i32_val(elemId), coord[0], coord[1]},
+                    rewriter);
+      LLVM::vprintf("offsetcoord t-%d (%d,%d) offset:%d shape:(%d %d)",
+                    {LLVM::gThreadId, coord[0], coord[1], offset,
+                     i32_val(shapePerCTA[0]), i32_val(shapePerCTA[1])},
+                    rewriter);
+    }
 
     auto elemPtrTy = ptr_ty(elemTy, 3);
     Value ptr = gep(elemPtrTy, smemBase, offset);
@@ -3182,20 +3222,22 @@ void ConvertLayoutOpConversion::processReplicaForMMAV1(
     if (stNotRd) {
       Value valVec = undef(vecTy);
       for (unsigned v = 0; v < vec; ++v) {
-        auto currVal = vals[elemId + v];
+        auto currVal = coord2val2[elemId + v].second;
         valVec = insert_element(vecTy, valVec, currVal, idx_val(v));
       }
       store(valVec, ptr);
     } else {
       Value valVec = load(ptr);
+      LLVM::vprintf("toextract t-%d", {LLVM::gThreadId}, rewriter);
       for (unsigned v = 0; v < vec; ++v) {
         Value currVal = extract_element(elemTy, valVec, idx_val(v));
         vals[elemId + v] = currVal;
-        printf("- write vals offset: %d\n",
-               elemId + linearCTAId * accumSizePerThread + v);
       }
+      LLVM::vprintf("doneextract t-%d\n", {LLVM::gThreadId}, rewriter);
     }
   }
+  LLVM::vprintf("donelower t-%d st:%d", {LLVM::gThreadId, i32_val(stNotRd)},
+                rewriter);
 }
 
 LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
