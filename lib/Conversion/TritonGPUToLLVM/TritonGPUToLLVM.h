@@ -188,10 +188,10 @@ struct ArithConstantSplatOpConversion
     auto elemType = values.getElementType();
 
     Attribute val;
-    if (type::isInt(elemType)) {
-      val = values.getValues<IntegerAttr>()[0];
-    } else if (type::isFloat(elemType)) {
+    if (elemType.isBF16() || type::isFloat(elemType)) {
       val = values.getValues<FloatAttr>()[0];
+    } else if (type::isInt(elemType)) {
+      val = values.getValues<IntegerAttr>()[0];
     } else {
       llvm::errs() << "ArithConstantSplatOpConversion get unsupported type: "
                    << value.getType() << "\n";
@@ -1796,7 +1796,9 @@ struct FpToFpOpConversion
     auto res = builder.newOperand("=h");
     auto operand = builder.newOperand(v, "r");
     cvt(res, operand);
-    return builder.launch(rewriter, loc, bf16_ty, false);
+    // TODO: This is a hack to get the right type. We should be able to invoke
+    // the type converter
+    return builder.launch(rewriter, loc, i16_ty, false);
   }
 
   LogicalResult
@@ -2591,7 +2593,8 @@ private:
       // get source values
       auto vals = getElementsFromStruct(loc, adaptor.src(), rewriter);
       unsigned elems = getElemsPerThread(srcTy);
-      Type elemTy = this->getTypeConverter()->convertType(srcTy.getElementType());
+      Type elemTy =
+          this->getTypeConverter()->convertType(srcTy.getElementType());
       // for the destination type, we need to pack values together
       // so they can be consumed by tensor core operations
       unsigned vecSize =
@@ -3493,9 +3496,32 @@ struct ExtFOpConversion
                      ValueRange operands, Location loc) const {
     auto inElemTy = getElementType(op.getIn());
     if (inElemTy.isBF16()) {
+      auto outElemTy = getElementType(op.getOut());
+      assert(outElemTy.isF32() && "unsupported conversion");
       return FpToFpOpConversion::convertBf16ToFp32(loc, rewriter, operands[0]);
     } else {
       return rewriter.create<LLVM::FPExtOp>(loc, elemTy, operands[0]);
+    }
+  }
+};
+
+struct TruncFOpConversion
+    : ElementwiseOpConversionBase<mlir::arith::TruncFOp, TruncFOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<mlir::arith::TruncFOp, TruncFOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  Value createDestOp(mlir::arith::TruncFOp op, OpAdaptor adaptor,
+                     ConversionPatternRewriter &rewriter, Type elemTy,
+                     ValueRange operands, Location loc) const {
+    auto outElemTy = getElementType(op.getOut());
+    if (outElemTy.isBF16()) {
+      auto inElemTy = getElementType(op.getIn());
+      assert(inElemTy.isF32() && "unsupported conversion");
+      return FpToFpOpConversion::convertFp32ToBf16(loc, rewriter, operands[0]);
+    } else {
+      return rewriter.create<LLVM::FPTruncOp>(loc, elemTy, operands[0]);
     }
   }
 };
@@ -3804,7 +3830,6 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
 
   POPULATE_UNARY_OP(arith::TruncIOp, LLVM::TruncOp)
-  POPULATE_UNARY_OP(arith::TruncFOp, LLVM::FPTruncOp)
   POPULATE_UNARY_OP(arith::ExtSIOp, LLVM::SExtOp)
   POPULATE_UNARY_OP(arith::ExtUIOp, LLVM::ZExtOp)
   POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
@@ -3827,7 +3852,9 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<FSubOpConversion>(typeConverter, benefit);
   patterns.add<FAddOpConversion>(typeConverter, benefit);
   patterns.add<FMulOpConversion>(typeConverter, benefit);
+
   patterns.add<ExtFOpConversion>(typeConverter, benefit);
+  patterns.add<TruncFOpConversion>(typeConverter, benefit);
 
   patterns.add<ExtElemwiseOpConversion>(typeConverter, benefit);
 
