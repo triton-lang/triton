@@ -1,6 +1,6 @@
+#include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
 #include "mlir/IR/Builders.h"
-#include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 #include <gtest/gtest.h>

@@ -514,7 +514,6 @@ struct StoreOpConversion
             elem = rewriter.create<LLVM::SExtOp>(loc, type::i8Ty(ctx), elem);
           elem = bitcast(elem, valueElemTy);
 
-          Type u32Ty = typeConverter->convertType(type::u32Ty(ctx));
           llWord = insert_element(wordTy, llWord, elem, i32_val(elemIdx));
         }
         llWord = bitcast(llWord, valArgTy);
@@ -1651,7 +1650,9 @@ struct FpToFpOpConversion
     auto *i = builder.newOperand(fp8x4Vec, "r");
     call({o0, o1, i}, /* onlyAttachMLIRArgs */ true);
 
-    auto bf16x2VecTy = vec_ty(bf16_ty, 2);
+    // XXX: Hack to get the correct type for the output.
+    auto convertedType = i16_ty;
+    auto bf16x2VecTy = vec_ty(convertedType, 2);
     auto bf16x2x2StructTy =
         struct_ty(SmallVector<Type>{bf16x2VecTy, bf16x2VecTy});
     auto bf16x2x2Struct =
@@ -1660,10 +1661,10 @@ struct FpToFpOpConversion
         extract_val(bf16x2VecTy, bf16x2x2Struct, rewriter.getI32ArrayAttr({0}));
     auto bf16x2Vec1 =
         extract_val(bf16x2VecTy, bf16x2x2Struct, rewriter.getI32ArrayAttr({1}));
-    return {extract_element(bf16_ty, bf16x2Vec0, i32_val(0)),
-            extract_element(bf16_ty, bf16x2Vec0, i32_val(1)),
-            extract_element(bf16_ty, bf16x2Vec1, i32_val(0)),
-            extract_element(bf16_ty, bf16x2Vec1, i32_val(1))};
+    return {extract_element(convertedType, bf16x2Vec0, i32_val(0)),
+            extract_element(convertedType, bf16x2Vec0, i32_val(1)),
+            extract_element(convertedType, bf16x2Vec1, i32_val(0)),
+            extract_element(convertedType, bf16x2Vec1, i32_val(1))};
   }
 
   static SmallVector<Value>
@@ -1671,7 +1672,9 @@ struct FpToFpOpConversion
                        const Value &v0, const Value &v1, const Value &v2,
                        const Value &v3) {
     auto ctx = rewriter.getContext();
-    auto bf16x2VecTy = vec_ty(bf16_ty, 2);
+    // XXX: Hack to get the correct type for the output.
+    auto convertedType = i16_ty;
+    auto bf16x2VecTy = vec_ty(convertedType, 2);
     Value bf16x2Vec0 = undef(bf16x2VecTy);
     Value bf16x2Vec1 = undef(bf16x2VecTy);
     bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v0, i32_val(0));
@@ -2084,12 +2087,13 @@ public:
                                    ArrayRef<Value> srcStrides,
                                    ArrayRef<Value> srcIndices, Value dst,
                                    Value smemBase, Type elemPtrTy, Location loc,
-                                   ConversionPatternRewriter &rewriter) {
+                                   ConversionPatternRewriter &rewriter,
+                                   TypeConverter *converter) {
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto srcShape = srcTy.getShape();
     assert(srcShape.size() == 2 && "Unexpected rank of insertSlice");
 
-    auto elemTy = srcTy.getElementType();
+    auto elemTy = converter->convertType(srcTy.getElementType());
     auto dstTy = dst.getType().cast<RankedTensorType>();
     auto srcBlockedLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
     auto dstSharedLayout = dstTy.getEncoding().cast<SharedEncodingAttr>();
@@ -2521,7 +2525,8 @@ private:
     auto srcIndices = emitBaseIndexForBlockedLayout(loc, rewriter,
                                                     srcBlockedLayout, srcShape);
     storeBlockedToShared(src, adaptor.src(), srcStrides, srcIndices, dst,
-                         smemBase, elemPtrTy, loc, rewriter);
+                         smemBase, elemPtrTy, loc, rewriter,
+                         getTypeConverter());
 
     auto smemObj =
         SharedMemoryObject(smemBase, dstShape, outOrd, loc, rewriter);
@@ -2751,9 +2756,9 @@ struct InsertSliceOpConversion
     auto llSrc = adaptor.source();
     auto srcIndices =
         emitBaseIndexForBlockedLayout(loc, rewriter, srcLayout, srcShape);
-    ConvertLayoutOpConversion::storeBlockedToShared(src, llSrc, srcStrides,
-                                                    srcIndices, dst, smemBase,
-                                                    elemPtrTy, loc, rewriter);
+    ConvertLayoutOpConversion::storeBlockedToShared(
+        src, llSrc, srcStrides, srcIndices, dst, smemBase, elemPtrTy, loc,
+        rewriter, getTypeConverter());
     // Barrier is not necessary.
     // The membar pass knows that it writes to shared memory and will handle it
     // properly.
@@ -3484,6 +3489,47 @@ struct FSubOpConversion
   }
 };
 
+struct SIToFPOpConversion
+    : ElementwiseOpConversionBase<mlir::arith::SIToFPOp, SIToFPOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<mlir::arith::SIToFPOp, SIToFPOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  Value createDestOp(mlir::arith::SIToFPOp op, OpAdaptor adaptor,
+                     ConversionPatternRewriter &rewriter, Type elemTy,
+                     ValueRange operands, Location loc) const {
+    auto outElemTy = getElementType(op.getOut());
+    if (outElemTy.isBF16()) {
+      auto value = rewriter.create<LLVM::SIToFPOp>(loc, f32_ty, operands[0]);
+      return FpToFpOpConversion::convertFp32ToBf16(loc, rewriter, value);
+    } else {
+      return rewriter.create<LLVM::SIToFPOp>(loc, elemTy, operands[0]);
+    }
+  }
+};
+
+struct FPToSIOpConversion
+    : ElementwiseOpConversionBase<mlir::arith::FPToSIOp, FPToSIOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<mlir::arith::FPToSIOp, FPToSIOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  Value createDestOp(mlir::arith::FPToSIOp op, OpAdaptor adaptor,
+                     ConversionPatternRewriter &rewriter, Type elemTy,
+                     ValueRange operands, Location loc) const {
+    auto inElemTy = getElementType(op.getIn());
+    if (inElemTy.isBF16()) {
+      auto value =
+          FpToFpOpConversion::convertBf16ToFp32(loc, rewriter, operands[0]);
+      return rewriter.create<LLVM::FPToSIOp>(loc, elemTy, value);
+    } else {
+      return rewriter.create<LLVM::FPToSIOp>(loc, elemTy, operands[0]);
+    }
+  }
+};
+
 struct ExtFOpConversion
     : ElementwiseOpConversionBase<mlir::arith::ExtFOp, ExtFOpConversion> {
   using Base =
@@ -3833,9 +3879,7 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   POPULATE_UNARY_OP(arith::ExtSIOp, LLVM::SExtOp)
   POPULATE_UNARY_OP(arith::ExtUIOp, LLVM::ZExtOp)
   POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
-  POPULATE_UNARY_OP(arith::FPToSIOp, LLVM::FPToSIOp)
   POPULATE_UNARY_OP(arith::UIToFPOp, LLVM::UIToFPOp)
-  POPULATE_UNARY_OP(arith::SIToFPOp, LLVM::SIToFPOp)
   POPULATE_UNARY_OP(math::LogOp, math::LogOp)
   POPULATE_UNARY_OP(math::CosOp, math::CosOp)
   POPULATE_UNARY_OP(math::SinOp, math::SinOp)
@@ -3855,6 +3899,8 @@ void populateTritonToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
 
   patterns.add<ExtFOpConversion>(typeConverter, benefit);
   patterns.add<TruncFOpConversion>(typeConverter, benefit);
+  patterns.add<FPToSIOpConversion>(typeConverter, benefit);
+  patterns.add<SIToFPOpConversion>(typeConverter, benefit);
 
   patterns.add<ExtElemwiseOpConversion>(typeConverter, benefit);
 

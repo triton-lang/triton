@@ -1,8 +1,6 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_DOT_HELPERS_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_DOT_HELPERS_H
 
-#include "llvm/Support/Format.h"
-#include "llvm/Support/FormatVariadic.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Conversion/ArithmeticToLLVM/ArithmeticToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
@@ -26,6 +24,8 @@
 #include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/Support/Format.h"
+#include "llvm/Support/FormatVariadic.h"
 
 #include "Utility.h"
 
@@ -233,7 +233,7 @@ struct DotOpMmaV2ConversionHelper {
     case TensorCoreType::FP32_FP16_FP16_FP32:
       return ptr_ty(type::f16Ty(ctx), 3);
     case TensorCoreType::FP32_BF16_BF16_FP32:
-      return ptr_ty(type::bf16Ty(ctx), 3);
+      return ptr_ty(type::i16Ty(ctx), 3);
     case TensorCoreType::FP32_TF32_TF32_FP32:
       return ptr_ty(type::f32Ty(ctx), 3);
     case TensorCoreType::INT32_INT8_INT8_INT32:
@@ -248,12 +248,12 @@ struct DotOpMmaV2ConversionHelper {
   Type getMatType() const {
     Type fp32Ty = type::f32Ty(ctx);
     Type fp16x2Ty = vec_ty(type::f16Ty(ctx), 2);
-    Type bf16x2Ty = vec_ty(type::bf16Ty(ctx), 2);
+    Type i16x2Ty = vec_ty(type::i16Ty(ctx), 2);
     // floating point types
     Type fp16x2Pack4Ty =
         LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp16x2Ty));
     Type bf16x2Pack4Ty =
-        LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, bf16x2Ty));
+        LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i16x2Ty));
     Type fp32Pack4Ty =
         LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp32Ty));
     // integer types
@@ -990,9 +990,8 @@ struct MMA16816ConversionHelper {
     if (aTensorTy.getEncoding().isa<SharedEncodingAttr>()) {
       Value warpM = getWarpM(shape[0]);
       // load from smem
-    // we use ldmatrix.x4 so each warp processes 16x16 elements.
-      int wpt =
-          std::min<int>(mmaLayout.getWarpsPerCTA()[0], shape[0] / 16);
+      // we use ldmatrix.x4 so each warp processes 16x16 elements.
+      int wpt = std::min<int>(mmaLayout.getWarpsPerCTA()[0], shape[0] / 16);
       loadFn =
           getLoadMatrixFn(tensor, smemObj, mmaLayout, wpt /*wpt*/, 1 /*kOrder*/,
                           {mmaInstrM, mmaInstrK} /*instrShape*/,
@@ -1036,8 +1035,7 @@ struct MMA16816ConversionHelper {
 
     Value warpN = getWarpN(shape[1]);
     // we use ldmatrix.x4 so each warp processes 16x16 elements.
-    int wpt =
-        std::min<int>(mmaLayout.getWarpsPerCTA()[1], shape[1] / 16);
+    int wpt = std::min<int>(mmaLayout.getWarpsPerCTA()[1], shape[1] / 16);
     auto loadFn =
         getLoadMatrixFn(tensor, smemObj, mmaLayout, wpt /*wpt*/, 0 /*kOrder*/,
                         {mmaInstrK, mmaInstrN} /*instrShape*/,
@@ -1241,6 +1239,10 @@ private:
     assert(!elems.empty());
 
     Type elemTy = elems[0].getType();
+
+    if (elemTy.isBF16()) {
+      elemTy = i16_ty;
+    }
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(elems.size(), elemTy));
     auto result = getStructFromElements(loc, elems, rewriter, structTy);
@@ -1275,12 +1277,10 @@ struct DotOpFMAConversionHelper {
   explicit DotOpFMAConversionHelper(Attribute layout)
       : layout(layout), ctx(layout.getContext()) {}
 
-  SmallVector<Value> getThreadIds(Value threadId,
-                                  ArrayRef<unsigned> shapePerCTA,
-                                  ArrayRef<unsigned> sizePerThread,
-                                  ArrayRef<unsigned> order,
-                                  ConversionPatternRewriter &rewriter,
-                                  Location loc) const;
+  SmallVector<Value>
+  getThreadIds(Value threadId, ArrayRef<unsigned> shapePerCTA,
+               ArrayRef<unsigned> sizePerThread, ArrayRef<unsigned> order,
+               ConversionPatternRewriter &rewriter, Location loc) const;
 
   Value loadA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
               Location loc, ConversionPatternRewriter &rewriter) const;
@@ -1318,7 +1318,6 @@ struct DotOpFMAConversionHelper {
     // if not.
     int K = dotOpLayout.getOpIdx() == 0 ? shape[1] : shape[0];
     int otherDim = dotOpLayout.getOpIdx() == 1 ? shape[1] : shape[0];
-
 
     bool isM = dotOpLayout.getOpIdx() == 0;
     int shapePerCTAMN = getShapePerCTAForMN(blockedLayout, isM);
@@ -1688,7 +1687,8 @@ Value DotOpFMAConversionHelper::loadA(
   Value mContig = i32_val(sizePerThread[order[1]]);
 
   // threadId in blocked layout
-  auto threadIds = getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
+  auto threadIds =
+      getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
   Value threadIdM = threadIds[0];
 
   Value offA0 = isARow ? _0 : mul(threadIdM, mContig);
@@ -1752,7 +1752,8 @@ Value DotOpFMAConversionHelper::loadB(
   Value nContig = i32_val(sizePerThread[order[0]]);
 
   // threadId in blocked layout
-  auto threadIds = getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
+  auto threadIds =
+      getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
   Value threadIdN = threadIds[1];
 
   Value offB0 = isBRow ? mul(threadIdN, nContig) : _0;
@@ -1804,9 +1805,8 @@ DotOpFMAConversionHelper::getValueTableFromStruct(
 
 SmallVector<Value> DotOpFMAConversionHelper::getThreadIds(
     Value threadId, ArrayRef<unsigned int> shapePerCTA,
-    ArrayRef<unsigned int> sizePerThread,
-    ArrayRef<unsigned int> order, ConversionPatternRewriter &rewriter,
-    Location loc) const {
+    ArrayRef<unsigned int> sizePerThread, ArrayRef<unsigned int> order,
+    ConversionPatternRewriter &rewriter, Location loc) const {
   int dim = order.size();
   SmallVector<Value> threadIds(dim);
   for (unsigned k = 0; k < dim - 1; k++) {

@@ -73,7 +73,7 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     if capability[0] < 8 and DTYPE == "bfloat16":
         pytest.skip("Only test bfloat16 on devices with sm >= 80")
     if DTYPE == "bfloat16" and SPLIT_K != 1:
-       pytest.skip("bfloat16 matmuls don't allow split_k for now")
+        pytest.skip("bfloat16 matmuls don't allow split_k for now")
     torch.manual_seed(0)
     # nuke kernel decorators -- will set meta-parameters manually
     kwargs = {'BLOCK_M': BLOCK_M, 'BLOCK_N': BLOCK_N, 'BLOCK_K': BLOCK_K, 'SPLIT_K': SPLIT_K}
