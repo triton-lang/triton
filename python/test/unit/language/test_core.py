@@ -251,7 +251,7 @@ def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
 
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [
     (dtype_x, dtype_y, op)
-    for op in ['+', '-', '*', '/']  # , '%'] #TODO: handle remainder
+    for op in ['+', '-', '*', '/', '%']  
     for dtype_x in dtypes_with_bfloat16
     for dtype_y in dtypes_with_bfloat16
 ])
