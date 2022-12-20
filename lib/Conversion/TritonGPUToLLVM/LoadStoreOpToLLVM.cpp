@@ -641,9 +641,9 @@ struct InsertSliceOpConversion
     auto llSrc = adaptor.source();
     auto srcIndices =
         emitBaseIndexForBlockedLayout(loc, rewriter, srcLayout, srcShape);
-    ConvertLayoutOpConversion::storeBlockedToShared(src, llSrc, srcStrides,
-                                                    srcIndices, dst, smemBase,
-                                                    elemPtrTy, loc, rewriter);
+    storeBlockedToShared(src, llSrc, srcStrides,
+                         srcIndices, dst, smemBase,
+                         elemPtrTy, loc, rewriter);
     // Barrier is not necessary.
     // The membar pass knows that it writes to shared memory and will handle it
     // properly.

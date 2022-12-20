@@ -251,8 +251,7 @@ private:
           srcType.getEncoding().dyn_cast<triton::gpu::MmaEncodingAttr>();
       auto dstDotOp =
           dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
-      if (srcMma && dstDotOp &&
-          !ConvertLayoutOpConversion::isMmaToDotShortcut(srcMma, dstDotOp)) {
+      if (srcMma && dstDotOp && !isMmaToDotShortcut(srcMma, dstDotOp)) {
         auto tmpType = RankedTensorType::get(
             dstType.getShape(), dstType.getElementType(),
             triton::gpu::BlockedEncodingAttr::get(
