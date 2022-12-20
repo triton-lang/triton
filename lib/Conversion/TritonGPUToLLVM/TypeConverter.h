@@ -37,6 +37,10 @@ public:
     addConversion([&](triton::Float8Type type) -> llvm::Optional<Type> {
       return IntegerType::get(type.getContext(), 8);
     });
+    // Internally store bfloat16 as int16
+    addConversion([&](BFloat16Type type) -> llvm::Optional<Type> {
+      return IntegerType::get(type.getContext(), 16);
+    });
   }
 
   Type convertTritonPointerType(triton::PointerType type) {

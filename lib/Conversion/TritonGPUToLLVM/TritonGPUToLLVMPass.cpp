@@ -79,13 +79,14 @@ public:
     // Step 3: Allocate shared memories and insert barriers
     // Step 4: Convert SCF to CFG
     // Step 5: Convert FuncOp to LLVMFuncOp via partial conversion
-    // Step 6: Convert the rest of ops via partial conversion
+    // Step 6: Get axis and shared memory info
+    // Step 7: Convert the rest of ops via partial conversion
     //
-    // The reason for putting step 1 before step 2 is that the membar
+    // The reason for putting step 3 before step 4 is that the membar
     // analysis currently only supports SCF but not CFG. The reason for a
-    // separation between 1/4 is that, step 3 is out of the scope of Dialect
+    // separation between 5/7 is that, step 6 is out of the scope of Dialect
     // Conversion, thus we need to make sure the smem is not revised during the
-    // conversion of step 4.
+    // conversion of step 7.
 
     // Step 1
     decomposeMmaToDotOperand(mod, numWarps);
@@ -125,7 +126,7 @@ public:
                  mlir::IntegerAttr::get(mlir::IntegerType::get(context, 32),
                                         allocation.getSharedMemorySize()));
 
-    // Step 6 - rewrite rest of ops
+    // Step 7 - rewrite rest of ops
     // We set a higher benefit here to ensure triton's patterns runs before
     // arith patterns for some encoding not supported by the community
     // patterns.
