@@ -60,6 +60,40 @@ public:
 
 namespace {
 
+/// FuncOp legalization pattern that converts MemRef arguments to pointers to
+/// MemRef descriptors (LLVM struct data types) containing all the MemRef type
+/// information.
+struct FuncOpConversion : public FuncOpConversionBase {
+  FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
+                   PatternBenefit benefit)
+      : FuncOpConversionBase(converter, benefit), numWarps(numWarps) {}
+
+  LogicalResult
+  matchAndRewrite(FuncOp funcOp, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto newFuncOp = convertFuncOpToLLVMFuncOp(funcOp, rewriter);
+    if (!newFuncOp)
+      return failure();
+
+    auto ctx = funcOp->getContext();
+
+    // Set an attribute to indicate this function is a kernel entry.
+    newFuncOp->setAttr("nvvm.kernel",
+                       rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
+
+    // Set an attribute for maxntidx, it could be used in latter LLVM codegen
+    // for `nvvm.annotation` metadata.
+    newFuncOp->setAttr("nvvm.maxntid",
+                       rewriter.getIntegerAttr(i32_ty, 32 * numWarps));
+
+    rewriter.eraseOp(funcOp);
+    return success();
+  }
+
+private:
+  int numWarps{0};
+};
+
 class ConvertTritonGPUToLLVM
     : public ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
 

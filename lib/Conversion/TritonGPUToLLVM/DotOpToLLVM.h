@@ -6,26 +6,6 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::DotOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override;
-
-private:
-  // Convert to mma.m16n8k16
-  LogicalResult convertMMA16816(triton::DotOp op, OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const;
-  /// Convert to mma.m8n8k4
-  LogicalResult convertMMA884(triton::DotOp op, OpAdaptor adaptor,
-                              ConversionPatternRewriter &rewriter) const;
-
-  LogicalResult convertFMADot(triton::DotOp op, OpAdaptor adaptor,
-                              ConversionPatternRewriter &rewriter) const;
-};
-
 void populateDotOpToLLVMPatterns(
     mlir::LLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, int numWarps,
