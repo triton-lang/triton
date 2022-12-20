@@ -5,6 +5,7 @@ import time
 from typing import Dict
 
 from ..testing import do_bench
+from ..compiler import OutOfResources
 from .jit import KernelInterface
 
 
@@ -60,7 +61,10 @@ class Autotuner(KernelInterface):
                 config.pre_hook(self.nargs)
             self.hook(args)
             self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **current)
-        return do_bench(kernel_call)
+        try:
+          return do_bench(kernel_call)
+        except OutOfResources:
+          return float('inf')
 
     def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
@@ -83,7 +87,13 @@ class Autotuner(KernelInterface):
         self.best_config = config
         if config.pre_hook is not None:
             config.pre_hook(self.nargs)
-        return self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
+        try:
+          return self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
+        except OutOfResources as E:
+          raise RuntimeError("Autotuner couldn't find an appropriate configuration. "\
+                             "All proposed configurations use too much shared memory. "\
+                             "Triton does support spilling to DRAM. "
+                             "Try reducing block sizes.")
 
     def prune_configs(self, kwargs):
         pruned_configs = self.configs
