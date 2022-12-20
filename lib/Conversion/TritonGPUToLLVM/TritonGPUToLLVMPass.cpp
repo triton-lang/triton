@@ -14,8 +14,14 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
+#include "ConvertLayoutOpToLLVM.h"
+#include "DotOpToLLVM.h"
+#include "ElementwiseOpToLLVM.h"
+#include "LoadStoreOpToLLVM.h"
+#include "ReduceOpToLLVM.h"
 #include "TritonGPUToLLVM.h"
 #include "TypeConverter.h"
+#include "ViewOpToLLVM.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -53,6 +59,40 @@ public:
 } // namespace mlir
 
 namespace {
+
+/// FuncOp legalization pattern that converts MemRef arguments to pointers to
+/// MemRef descriptors (LLVM struct data types) containing all the MemRef type
+/// information.
+struct FuncOpConversion : public FuncOpConversionBase {
+  FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
+                   PatternBenefit benefit)
+      : FuncOpConversionBase(converter, benefit), numWarps(numWarps) {}
+
+  LogicalResult
+  matchAndRewrite(FuncOp funcOp, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto newFuncOp = convertFuncOpToLLVMFuncOp(funcOp, rewriter);
+    if (!newFuncOp)
+      return failure();
+
+    auto ctx = funcOp->getContext();
+
+    // Set an attribute to indicate this function is a kernel entry.
+    newFuncOp->setAttr("nvvm.kernel",
+                       rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
+
+    // Set an attribute for maxntidx, it could be used in latter LLVM codegen
+    // for `nvvm.annotation` metadata.
+    newFuncOp->setAttr("nvvm.maxntid",
+                       rewriter.getIntegerAttr(i32_ty, 32 * numWarps));
+
+    rewriter.eraseOp(funcOp);
+    return success();
+  }
+
+private:
+  int numWarps{0};
+};
 
 class ConvertTritonGPUToLLVM
     : public ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
@@ -130,9 +170,36 @@ public:
     // arith patterns for some encoding not supported by the community
     // patterns.
     RewritePatternSet patterns(context);
-    populateTritonToLLVMPatterns(typeConverter, patterns, numWarps,
+
+    // Normal conversions
+    populateTritonGPUToLLVMPatterns(typeConverter, patterns, numWarps,
+                                    axisInfoAnalysis, &allocation, smem,
+                                    /*benefit=*/10);
+    // ConvertLayoutOp
+    populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, numWarps,
+                                          axisInfoAnalysis, &allocation, smem,
+                                          /*benefit=*/10);
+    // DotOp
+    populateDotOpToLLVMPatterns(typeConverter, patterns, numWarps,
+                                axisInfoAnalysis, &allocation, smem,
+                                /*benefit=*/10);
+    // ElementwiseOp
+    populateElementwiseOpToLLVMPatterns(typeConverter, patterns, numWarps,
+                                        axisInfoAnalysis, &allocation, smem,
+                                        /*benefit=*/10);
+    // LoadStoreOp
+    populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, numWarps,
+                                      axisInfoAnalysis, &allocation, smem,
+                                      /*benefit=*/10);
+    // ReduceOp
+    populateReduceOpToLLVMPatterns(typeConverter, patterns, numWarps,
+                                      axisInfoAnalysis, &allocation, smem,
+                                      /*benefit=*/10);
+    // ViewOp
+    populateViewOpToLLVMPatterns(typeConverter, patterns, numWarps,
                                  axisInfoAnalysis, &allocation, smem,
                                  /*benefit=*/10);
+
     // Add arith/math's patterns to help convert scalar expression to LLVM.
     mlir::arith::populateArithmeticToLLVMConversionPatterns(typeConverter,
                                                             patterns);
@@ -184,8 +251,7 @@ private:
           srcType.getEncoding().dyn_cast<triton::gpu::MmaEncodingAttr>();
       auto dstDotOp =
           dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
-      if (srcMma && dstDotOp &&
-          !ConvertLayoutOpConversion::isMmaToDotShortcut(srcMma, dstDotOp)) {
+      if (srcMma && dstDotOp && !isMmaToDotShortcut(srcMma, dstDotOp)) {
         auto tmpType = RankedTensorType::get(
             dstType.getShape(), dstType.getElementType(),
             triton::gpu::BlockedEncodingAttr::get(

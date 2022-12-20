@@ -4,7 +4,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Conversion/MLIRTypes.h"
 
-#include "DotHelpers.h"
+#include "DotOpHelpers.h"
 #include "Utility.h"
 
 using namespace mlir;
