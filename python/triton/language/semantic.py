@@ -238,13 +238,8 @@ def mod(input: tl.tensor,
     # float % float
     if scalar_ty.is_floating():
         # input - input.div(other, rounding_mode="floor") * other
-<<<<<<< HEAD
         ret = sub(input, mul(floor(fdiv(input, other, False, builder), builder),
                              other, builder),
-=======
-        ret = sub(input , mul(floor(fdiv(input, other, False, builder), builder), 
-                              other, builder), 
->>>>>>> origin/triton-mlir
                   builder)
         return ret
     # % int
@@ -1117,9 +1112,6 @@ def umulhi(x: tl.tensor, y: tl.tensor, builder: ir.builder) -> tl.tensor:
     from . import libdevice
     return libdevice.mulhi(x, y, _builder=builder)
 
-def floor(x: tl.tensor, builder: ir.builder) -> tl.tensor:
-    from . import libdevice
-    return libdevice.floor(x, _builder=builder)
 
 def floor(x: tl.tensor, builder: ir.builder) -> tl.tensor:
     from . import libdevice
@@ -1132,6 +1124,7 @@ def exp(x: tl.tensor, builder: ir.builder) -> tl.tensor:
 
 def log(x: tl.tensor, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_log(x.handle), x.type)
+
 
 def cos(x: tl.tensor, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_cos(x.handle), x.type)

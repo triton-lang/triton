@@ -3,9 +3,7 @@
 
 from ..impl import (
     ir,
-    builtin,
 )
-from . import core, extern, libdevice, random
 from .core import (
     abs,
     arange,

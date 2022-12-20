@@ -309,14 +309,20 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     triton.testing.assert_almost_equal(ref_dq, tri_dq)
 
 
+try:
+    from flash_attn.flash_attn_interface import flash_attn_func
+    HAS_FLASH = True
+except BaseException:
+    HAS_FLASH = False
+
 BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
 # vary seq length for fixed head and batch=4
 configs = [triton.testing.Benchmark(
     x_names=['N_CTX'],
     x_vals=[2**i for i in range(10, 16)],
     line_arg='provider',
-    line_vals=['triton'],
-    line_names=['Triton'],
+    line_vals=['triton'] + (['flash'] if HAS_FLASH else []),
+    line_names=['Triton'] + (['Flash'] if HAS_FLASH else []),
     styles=[('red', '-'), ('blue', '-')],
     ylabel='ms',
     plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}',

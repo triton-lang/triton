@@ -2,7 +2,6 @@ import pytest
 import torch
 
 import triton
-import triton._C.libtriton.triton as _triton
 
 
 @pytest.mark.parametrize("MODE", ["sdd", "dds", "dsd"])
