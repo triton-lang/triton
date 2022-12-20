@@ -9,41 +9,10 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
-#include "ConvertLayoutOpToLLVM.h"
-#include "DotOpToLLVM.h"
-#include "ElementwiseOpToLLVM.h"
-#include "LoadStoreOpToLLVM.h"
-#include "ReduceOpToLLVM.h"
-#include "ViewOpToLLVM.h"
-
-#include "DotOpHelpers.h"
 #include "TritonGPUToLLVMBase.h"
-#include "Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
-
-using ::mlir::LLVM::DotOpFMAConversionHelper;
-using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
-using ::mlir::LLVM::DotOpMmaV2ConversionHelper;
-using ::mlir::LLVM::MMA16816ConversionHelper;
-using ::mlir::LLVM::SharedMemoryObject;
-using ::mlir::LLVM::getElementsFromStruct;
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::getStridesFromShapeAndOrder;
-using ::mlir::LLVM::getStructFromElements;
-using ::mlir::LLVM::shflSync;
-using ::mlir::LLVM::storeShared;
-using ::mlir::triton::gpu::BlockedEncodingAttr;
-using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::MmaEncodingAttr;
-using ::mlir::triton::gpu::SharedEncodingAttr;
-using ::mlir::triton::gpu::SliceEncodingAttr;
-using ::mlir::triton::gpu::getElemsPerThread;
-using ::mlir::triton::gpu::getOrder;
-using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::getSizePerThread;
-using ::mlir::triton::gpu::getThreadsPerCTA;
 
 /// FuncOp legalization pattern that converts MemRef arguments to pointers to
 /// MemRef descriptors (LLVM struct data types) containing all the MemRef type
@@ -223,16 +192,6 @@ struct FpToFpOpConversion
                   ConversionPatternRewriter &rewriter) const override;
 };
 
-struct InsertSliceOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<tensor::InsertSliceOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      tensor::InsertSliceOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(tensor::InsertSliceOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override;
-};
-
 struct AsyncWaitOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::AsyncWaitOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -240,25 +199,6 @@ struct AsyncWaitOpConversion
 
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncWaitOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override;
-};
-
-struct InsertSliceAsyncOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::InsertSliceAsyncOp>,
-      public LoadStoreConversionBase {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::InsertSliceAsyncOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  InsertSliceAsyncOpConversion(LLVMTypeConverter &converter,
-                               const Allocation *allocation, Value smem,
-                               AxisInfoAnalysis &axisAnalysisPass,
-                               PatternBenefit benefit)
-      : ConvertTritonGPUOpToLLVMPattern<triton::gpu::InsertSliceAsyncOp>(
-            converter, allocation, smem, benefit),
-        LoadStoreConversionBase(axisAnalysisPass) {}
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::InsertSliceAsyncOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override;
 };
 

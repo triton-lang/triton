@@ -138,6 +138,54 @@ void populateElementwiseOpToLLVMPatterns(
     AxisInfoAnalysis &axisInfoAnalysis,
     const Allocation *allocation, Value smem,
     PatternBenefit benefit) {
+#define POPULATE_TERNARY_OP(SRC_OP, DST_OP)                                    \
+  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
+  POPULATE_TERNARY_OP(triton::gpu::SelectOp, LLVM::SelectOp)
+#undef POPULATE_TERNARY_OP
+
+#define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
+  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
+  POPULATE_BINARY_OP(arith::SubIOp, LLVM::SubOp) // -
+  POPULATE_BINARY_OP(arith::SubFOp, LLVM::FSubOp)
+  POPULATE_BINARY_OP(arith::AddIOp, LLVM::AddOp) // +
+  POPULATE_BINARY_OP(arith::AddFOp, LLVM::FAddOp)
+  POPULATE_BINARY_OP(arith::MulIOp, LLVM::MulOp) // *
+  POPULATE_BINARY_OP(arith::MulFOp, LLVM::FMulOp)
+  POPULATE_BINARY_OP(arith::DivFOp, LLVM::FDivOp) // /
+  POPULATE_BINARY_OP(arith::DivSIOp, LLVM::SDivOp)
+  POPULATE_BINARY_OP(arith::DivUIOp, LLVM::UDivOp)
+  POPULATE_BINARY_OP(arith::RemFOp, LLVM::FRemOp) // %
+  POPULATE_BINARY_OP(arith::RemSIOp, LLVM::SRemOp)
+  POPULATE_BINARY_OP(arith::RemUIOp, LLVM::URemOp)
+  POPULATE_BINARY_OP(arith::AndIOp, LLVM::AndOp)   // &
+  POPULATE_BINARY_OP(arith::OrIOp, LLVM::OrOp)     // |
+  POPULATE_BINARY_OP(arith::XOrIOp, LLVM::XOrOp)   // ^
+  POPULATE_BINARY_OP(arith::ShLIOp, LLVM::ShlOp)   // <<
+  POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp) // >>
+  POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp) // >>
+#undef POPULATE_BINARY_OP
+
+#define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
+  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
+  POPULATE_UNARY_OP(arith::TruncIOp, LLVM::TruncOp)
+  POPULATE_UNARY_OP(arith::TruncFOp, LLVM::FPTruncOp)
+  POPULATE_UNARY_OP(arith::ExtSIOp, LLVM::SExtOp)
+  POPULATE_UNARY_OP(arith::ExtUIOp, LLVM::ZExtOp)
+  POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
+  POPULATE_UNARY_OP(arith::FPToSIOp, LLVM::FPToSIOp)
+  POPULATE_UNARY_OP(arith::UIToFPOp, LLVM::UIToFPOp)
+  POPULATE_UNARY_OP(arith::SIToFPOp, LLVM::SIToFPOp)
+  POPULATE_UNARY_OP(arith::ExtFOp, LLVM::FPExtOp)
+  POPULATE_UNARY_OP(math::LogOp, math::LogOp)
+  POPULATE_UNARY_OP(math::CosOp, math::CosOp)
+  POPULATE_UNARY_OP(math::SinOp, math::SinOp)
+  POPULATE_UNARY_OP(math::SqrtOp, math::SqrtOp)
+  POPULATE_UNARY_OP(math::ExpOp, math::ExpOp)
+  POPULATE_UNARY_OP(triton::BitcastOp, LLVM::BitcastOp)
+  POPULATE_UNARY_OP(triton::IntToPtrOp, LLVM::IntToPtrOp)
+  POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
+#undef POPULATE_UNARY_OP
+
   patterns.add<CmpIOpConversion>(typeConverter, benefit);
   patterns.add<CmpFOpConversion>(typeConverter, benefit);
   patterns.add<FDivOpConversion>(typeConverter, benefit);

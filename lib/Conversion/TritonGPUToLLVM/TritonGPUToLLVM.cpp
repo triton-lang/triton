@@ -1,7 +1,15 @@
 #include "TritonGPUToLLVM.h"
+#include "DotOpHelpers.h"
+#include "Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
+
+using ::mlir::LLVM::getElementsFromStruct;
+using ::mlir::LLVM::getStructFromElements;
+using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
+using ::mlir::triton::gpu::SharedEncodingAttr;
+using ::mlir::triton::gpu::getElemsPerThread;
 
 LogicalResult
 FuncOpConversion::matchAndRewrite(FuncOp funcOp, OpAdaptor adaptor,
@@ -744,68 +752,6 @@ FpToFpOpConversion::matchAndRewrite(
   return success();
 }
 
-LogicalResult InsertSliceOpConversion::matchAndRewrite(
-    tensor::InsertSliceOp op, OpAdaptor adaptor,
-    ConversionPatternRewriter &rewriter) const {
-  // %dst = insert_slice %src into %dst[%offsets]
-  Location loc = op->getLoc();
-  Value dst = op.dest();
-  Value src = op.source();
-  Value res = op.result();
-  assert(allocation->getBufferId(res) == Allocation::InvalidBufferId &&
-         "Only support in-place insert_slice for now");
-
-  auto srcTy = src.getType().dyn_cast<RankedTensorType>();
-  auto srcLayout = srcTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
-  auto srcShape = srcTy.getShape();
-  assert(srcLayout && "Unexpected srcLayout in InsertSliceOpConversion");
-
-  auto dstTy = dst.getType().dyn_cast<RankedTensorType>();
-  auto dstLayout = dstTy.getEncoding().dyn_cast<SharedEncodingAttr>();
-  auto llDst = adaptor.dest();
-  assert(dstLayout && "Unexpected dstLayout in InsertSliceOpConversion");
-  assert(op.hasUnitStride() &&
-         "Only unit stride supported by InsertSliceOpConversion");
-
-  // newBase = base + offset
-  // Triton support either static and dynamic offsets
-  auto smemObj = getSharedMemoryObjectFromStruct(loc, llDst, rewriter);
-  SmallVector<Value, 4> offsets;
-  SmallVector<Value, 4> srcStrides;
-  auto mixedOffsets = op.getMixedOffsets();
-  for (auto i = 0; i < mixedOffsets.size(); ++i) {
-    if (op.isDynamicOffset(i)) {
-      offsets.emplace_back(adaptor.offsets()[i]);
-    } else {
-      offsets.emplace_back(i32_val(op.getStaticOffset(i)));
-    }
-    // Like insert_slice_async, we only support slice from one dimension,
-    // which has a slice size of 1
-    if (op.getStaticSize(i) != 1) {
-      srcStrides.emplace_back(smemObj.strides[i]);
-    }
-  }
-
-  // Compute the offset based on the original strides of the shared memory
-  // object
-  auto offset = dot(rewriter, loc, offsets, smemObj.strides);
-  auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
-  auto elemPtrTy = ptr_ty(llvmElemTy, 3);
-  auto smemBase = gep(elemPtrTy, smemObj.base, offset);
-
-  auto llSrc = adaptor.source();
-  auto srcIndices =
-      emitBaseIndexForBlockedLayout(loc, rewriter, srcLayout, srcShape);
-  ConvertLayoutOpConversion::storeBlockedToShared(src, llSrc, srcStrides,
-                                                  srcIndices, dst, smemBase,
-                                                  elemPtrTy, loc, rewriter);
-  // Barrier is not necessary.
-  // The membar pass knows that it writes to shared memory and will handle it
-  // properly.
-  rewriter.replaceOp(op, llDst);
-  return success();
-}
-
 LogicalResult AsyncWaitOpConversion::matchAndRewrite(
     triton::gpu::AsyncWaitOp op, OpAdaptor adaptor,
     ConversionPatternRewriter &rewriter) const {
@@ -824,259 +770,11 @@ LogicalResult AsyncWaitOpConversion::matchAndRewrite(
   return success();
 }
 
-LogicalResult InsertSliceAsyncOpConversion::matchAndRewrite(
-    triton::gpu::InsertSliceAsyncOp op, OpAdaptor adaptor,
-    ConversionPatternRewriter &rewriter) const {
-  // insert_slice_async %src, %dst, %index, %mask, %other
-  auto loc = op.getLoc();
-  Value src = op.src();
-  Value dst = op.dst();
-  Value res = op.result();
-  Value mask = op.mask();
-  Value other = op.other();
-  assert(allocation->getBufferId(res) == Allocation::InvalidBufferId &&
-         "Only support in-place insert_slice_async for now");
-
-  auto srcTy = src.getType().cast<RankedTensorType>();
-  auto resTy = dst.getType().cast<RankedTensorType>();
-  auto resElemTy = getTypeConverter()->convertType(resTy.getElementType());
-  auto srcBlockedLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
-  auto resSharedLayout = resTy.getEncoding().cast<SharedEncodingAttr>();
-  auto srcShape = srcTy.getShape();
-  assert(srcShape.size() == 2 &&
-         "insert_slice_async: Unexpected rank of %src");
-
-  Value llDst = adaptor.dst();
-  Value llSrc = adaptor.src();
-  Value llMask = adaptor.mask();
-  Value llOther = adaptor.other();
-  Value llIndex = adaptor.index();
-
-  // %src
-  auto srcElems = getLLVMElems(src, llSrc, rewriter, loc);
-
-  // %dst
-  auto dstTy = dst.getType().cast<RankedTensorType>();
-  auto dstShape = dstTy.getShape();
-  auto smemObj = getSharedMemoryObjectFromStruct(loc, llDst, rewriter);
-  auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
-  SmallVector<Value, 4> offsetVals;
-  SmallVector<Value, 4> srcStrides;
-  for (auto i = 0; i < dstShape.size(); ++i) {
-    if (i == axis) {
-      offsetVals.emplace_back(llIndex);
-    } else {
-      offsetVals.emplace_back(i32_val(0));
-      srcStrides.emplace_back(smemObj.strides[i]);
-    }
-  }
-  // Compute the offset based on the original dimensions of the shared
-  // memory object
-  auto dstOffset = dot(rewriter, loc, offsetVals, smemObj.strides);
-  auto dstPtrTy =
-      ptr_ty(getTypeConverter()->convertType(resTy.getElementType()), 3);
-  Value dstPtrBase = gep(dstPtrTy, smemObj.base, dstOffset);
-
-  // %mask
-  SmallVector<Value> maskElems;
-  if (llMask) {
-    maskElems = getLLVMElems(mask, llMask, rewriter, loc);
-    assert(srcElems.size() == maskElems.size());
-  }
-
-  // %other
-  SmallVector<Value> otherElems;
-  if (llOther) {
-    // FIXME(Keren): always assume other is 0 for now
-    // It's not necessary for now because the pipeline pass will skip
-    // generating insert_slice_async if the load op has any "other" tensor.
-    // assert(false && "insert_slice_async: Other value not supported yet");
-    otherElems = getLLVMElems(other, llOther, rewriter, loc);
-    assert(srcElems.size() == otherElems.size());
-  }
-
-  unsigned inVec = getVectorSize(src);
-  unsigned outVec = resSharedLayout.getVec();
-  unsigned minVec = std::min(outVec, inVec);
-  unsigned numElems = getElemsPerThread(srcTy);
-  unsigned perPhase = resSharedLayout.getPerPhase();
-  unsigned maxPhase = resSharedLayout.getMaxPhase();
-  auto sizePerThread = srcBlockedLayout.getSizePerThread();
-  auto threadsPerCTA = getThreadsPerCTA(srcBlockedLayout);
-  auto inOrder = srcBlockedLayout.getOrder();
-
-  // If perPhase * maxPhase > threadsPerCTA, we will have elements
-  // that share the same tile indices. The index calculation will
-  // be cached.
-  auto numSwizzleRows = std::max<unsigned>(
-      (perPhase * maxPhase) / threadsPerCTA[inOrder[1]], 1);
-  // A sharedLayout encoding has a "vec" parameter.
-  // On the column dimension, if inVec > outVec, it means we have to divide
-  // single vector read into multiple ones
-  auto numVecCols = std::max<unsigned>(inVec / outVec, 1);
-
-  auto srcIndices = emitIndices(loc, rewriter, srcBlockedLayout, srcShape);
-  //  <<tileVecIdxRow, tileVecIdxCol>, TileOffset>
-  DenseMap<std::pair<unsigned, unsigned>, Value> tileOffsetMap;
-  for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
-    // minVec = 2, inVec = 4, outVec = 2
-    //   baseOffsetCol = 0   baseOffsetCol = 0
-    //   tileVecIdxCol = 0   tileVecIdxCol = 1
-    //                -/\-   -/\-
-    //               [|x x| |x x| x x x x x]
-    //               [|x x| |x x| x x x x x]
-    // baseOffsetRow [|x x| |x x| x x x x x]
-    //               [|x x| |x x| x x x x x]
-    auto vecIdx = elemIdx / minVec;
-    auto vecIdxCol = vecIdx % (sizePerThread[inOrder[0]] / minVec);
-    auto vecIdxRow = vecIdx / (sizePerThread[inOrder[0]] / minVec);
-    auto baseOffsetCol =
-        vecIdxCol / numVecCols * numVecCols * threadsPerCTA[inOrder[0]];
-    auto baseOffsetRow = vecIdxRow / numSwizzleRows * numSwizzleRows *
-                         threadsPerCTA[inOrder[1]];
-    auto tileVecIdxCol = vecIdxCol % numVecCols;
-    auto tileVecIdxRow = vecIdxRow % numSwizzleRows;
-
-    if (!tileOffsetMap.count({tileVecIdxRow, tileVecIdxCol})) {
-      // Swizzling
-      // Since the swizzling index is related to outVec, and we know minVec
-      // already, inVec doesn't matter
-      //
-      // (Numbers represent row indices)
-      // Example1:
-      // outVec = 2, inVec = 2, minVec = 2
-      // outVec = 2, inVec = 4, minVec = 2
-      //     | [1 2] [3 4] [5 6] ... |
-      //     | [3 4] [1 2] [7 8] ... |
-      //     | [5 6] [7 8] [1 2] ... |
-      // Example2:
-      // outVec = 4, inVec = 2, minVec = 2
-      //     | [1 2 3 4] [5 6 7 8] [9 10 11 12] ... |
-      //     | [5 6 7 8] [1 2 3 4] [13 14 15 16] ... |
-      //     | [9 10 11 12] [13 14 15 16] [1 2 3 4] ... |
-      auto srcIdx = srcIndices[tileVecIdxRow * sizePerThread[inOrder[0]]];
-      Value phase = urem(udiv(srcIdx[inOrder[1]], i32_val(perPhase)),
-                         i32_val(maxPhase));
-      // srcShape and smemObj.shape maybe different if smemObj is a
-      // slice of the original shared memory object.
-      // So we need to use the original shape to compute the offset
-      Value rowOffset = mul(srcIdx[inOrder[1]], srcStrides[inOrder[1]]);
-      Value colOffset =
-          add(srcIdx[inOrder[0]], i32_val(tileVecIdxCol * minVec));
-      Value swizzleIdx = udiv(colOffset, i32_val(outVec));
-      Value swizzleColOffset =
-          add(mul(xor_(swizzleIdx, phase), i32_val(outVec)),
-              urem(colOffset, i32_val(outVec)));
-      Value tileOffset = add(rowOffset, swizzleColOffset);
-      tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}] =
-          gep(dstPtrTy, dstPtrBase, tileOffset);
-    }
-
-    // 16 * 8 = 128bits
-    auto maxBitWidth =
-        std::max<unsigned>(128, resElemTy.getIntOrFloatBitWidth());
-    auto vecBitWidth = resElemTy.getIntOrFloatBitWidth() * minVec;
-    auto bitWidth = std::min<unsigned>(maxBitWidth, vecBitWidth);
-    auto numWords = vecBitWidth / bitWidth;
-    auto numWordElems = bitWidth / resElemTy.getIntOrFloatBitWidth();
-
-    // Tune CG and CA here.
-    auto byteWidth = bitWidth / 8;
-    CacheModifier srcCacheModifier =
-        byteWidth == 16 ? CacheModifier::CG : CacheModifier::CA;
-    assert(byteWidth == 16 || byteWidth == 8 || byteWidth == 4);
-    auto resByteWidth = resElemTy.getIntOrFloatBitWidth() / 8;
-
-    Value tileOffset = tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}];
-    Value baseOffset =
-        add(mul(i32_val(baseOffsetRow), srcStrides[inOrder[1]]),
-            i32_val(baseOffsetCol));
-    Value basePtr = gep(dstPtrTy, tileOffset, baseOffset);
-    for (size_t wordIdx = 0; wordIdx < numWords; ++wordIdx) {
-      PTXBuilder ptxBuilder;
-      auto wordElemIdx = wordIdx * numWordElems;
-      auto &copyAsyncOp =
-          *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
-      auto *dstOperand =
-          ptxBuilder.newAddrOperand(basePtr, "r", wordElemIdx * resByteWidth);
-      auto *srcOperand =
-          ptxBuilder.newAddrOperand(srcElems[elemIdx + wordElemIdx], "l");
-      auto *copySize = ptxBuilder.newConstantOperand(byteWidth);
-      auto *srcSize = copySize;
-      if (op.mask()) {
-        // We don't use predicate in this case, setting src-size to 0
-        // if there's any mask. cp.async will automatically fill the
-        // remaining slots with 0 if cp-size > src-size.
-        // XXX(Keren): Always assume other = 0 for now.
-        auto selectOp = select(maskElems[elemIdx + wordElemIdx],
-                               i32_val(byteWidth), i32_val(0));
-        srcSize = ptxBuilder.newOperand(selectOp, "r");
-      }
-      copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
-      ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
-    }
-  }
-
-  PTXBuilder ptxBuilder;
-  ptxBuilder.create<>("cp.async.commit_group")->operator()();
-  ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
-  rewriter.replaceOp(op, llDst);
-  return success();
-}
-
 void populateTritonGPUToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
                                      RewritePatternSet &patterns, int numWarps,
                                      AxisInfoAnalysis &axisInfoAnalysis,
                                      const Allocation *allocation, Value smem,
                                      PatternBenefit benefit) {
-#define POPULATE_TERNARY_OP(SRC_OP, DST_OP)                                    \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
-  POPULATE_TERNARY_OP(triton::gpu::SelectOp, LLVM::SelectOp)
-#undef POPULATE_TERNARY_OP
-
-#define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
-  POPULATE_BINARY_OP(arith::SubIOp, LLVM::SubOp) // -
-  POPULATE_BINARY_OP(arith::SubFOp, LLVM::FSubOp)
-  POPULATE_BINARY_OP(arith::AddIOp, LLVM::AddOp) // +
-  POPULATE_BINARY_OP(arith::AddFOp, LLVM::FAddOp)
-  POPULATE_BINARY_OP(arith::MulIOp, LLVM::MulOp) // *
-  POPULATE_BINARY_OP(arith::MulFOp, LLVM::FMulOp)
-  POPULATE_BINARY_OP(arith::DivFOp, LLVM::FDivOp) // /
-  POPULATE_BINARY_OP(arith::DivSIOp, LLVM::SDivOp)
-  POPULATE_BINARY_OP(arith::DivUIOp, LLVM::UDivOp)
-  POPULATE_BINARY_OP(arith::RemFOp, LLVM::FRemOp) // %
-  POPULATE_BINARY_OP(arith::RemSIOp, LLVM::SRemOp)
-  POPULATE_BINARY_OP(arith::RemUIOp, LLVM::URemOp)
-  POPULATE_BINARY_OP(arith::AndIOp, LLVM::AndOp)   // &
-  POPULATE_BINARY_OP(arith::OrIOp, LLVM::OrOp)     // |
-  POPULATE_BINARY_OP(arith::XOrIOp, LLVM::XOrOp)   // ^
-  POPULATE_BINARY_OP(arith::ShLIOp, LLVM::ShlOp)   // <<
-  POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp) // >>
-  POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp) // >>
-#undef POPULATE_BINARY_OP
-
-#define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
-  POPULATE_UNARY_OP(arith::TruncIOp, LLVM::TruncOp)
-  POPULATE_UNARY_OP(arith::TruncFOp, LLVM::FPTruncOp)
-  POPULATE_UNARY_OP(arith::ExtSIOp, LLVM::SExtOp)
-  POPULATE_UNARY_OP(arith::ExtUIOp, LLVM::ZExtOp)
-  POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
-  POPULATE_UNARY_OP(arith::FPToSIOp, LLVM::FPToSIOp)
-  POPULATE_UNARY_OP(arith::UIToFPOp, LLVM::UIToFPOp)
-  POPULATE_UNARY_OP(arith::SIToFPOp, LLVM::SIToFPOp)
-  POPULATE_UNARY_OP(arith::ExtFOp, LLVM::FPExtOp)
-  POPULATE_UNARY_OP(math::LogOp, math::LogOp)
-  POPULATE_UNARY_OP(math::CosOp, math::CosOp)
-  POPULATE_UNARY_OP(math::SinOp, math::SinOp)
-  POPULATE_UNARY_OP(math::SqrtOp, math::SqrtOp)
-  POPULATE_UNARY_OP(math::ExpOp, math::ExpOp)
-  POPULATE_UNARY_OP(triton::BitcastOp, LLVM::BitcastOp)
-  POPULATE_UNARY_OP(triton::IntToPtrOp, LLVM::IntToPtrOp)
-  POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
-#undef POPULATE_UNARY_OP
-
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
   patterns.add<AllocTensorOpConversion>(typeConverter, allocation, smem,
                                         benefit);
@@ -1088,11 +786,6 @@ void populateTritonGPUToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
                                          benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
   patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);
-  patterns.add<InsertSliceOpConversion>(typeConverter, allocation, smem,
-                                        benefit);
-  patterns.add<InsertSliceAsyncOpConversion>(typeConverter, allocation, smem,
-                                             axisInfoAnalysis, benefit);
-
   patterns.add<MakeRangeOpConversion>(typeConverter, benefit);
   patterns.add<ReturnOpConversion>(typeConverter, benefit);
   patterns.add<PrintfOpConversion>(typeConverter, benefit);

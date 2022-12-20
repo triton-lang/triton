@@ -100,6 +100,35 @@ struct AtomicRMWOpConversion
                   ConversionPatternRewriter &rewriter) const override;
 };
 
+struct InsertSliceOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<tensor::InsertSliceOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      tensor::InsertSliceOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(tensor::InsertSliceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override;
+};
+
+struct InsertSliceAsyncOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::InsertSliceAsyncOp>,
+      public LoadStoreConversionBase {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::InsertSliceAsyncOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  InsertSliceAsyncOpConversion(LLVMTypeConverter &converter,
+                               const Allocation *allocation, Value smem,
+                               AxisInfoAnalysis &axisAnalysisPass,
+                               PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::gpu::InsertSliceAsyncOp>(
+            converter, allocation, smem, benefit),
+        LoadStoreConversionBase(axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::InsertSliceAsyncOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override;
+};
+
 void populateLoadStoreOpToLLVMPatterns(
     mlir::LLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, int numWarps,
