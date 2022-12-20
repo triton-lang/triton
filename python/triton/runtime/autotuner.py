@@ -93,7 +93,7 @@ class Autotuner(KernelInterface):
           raise RuntimeError("Autotuner couldn't find an appropriate configuration. "\
                              "All proposed configurations use too much shared memory. "\
                              "Triton does support spilling to DRAM. "
-                             "Try reducing block sizes.")
+                             "Try reducing block sizes or `num_stages`.")
 
     def prune_configs(self, kwargs):
         pruned_configs = self.configs
