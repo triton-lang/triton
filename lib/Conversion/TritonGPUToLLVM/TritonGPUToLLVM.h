@@ -9,12 +9,12 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
-#include "ConvertLayoutOpConversions.h"
-#include "DotOpConversions.h"
-#include "ElementwiseOpConversions.h"
-#include "LoadStoreOpConversions.h"
-#include "ReduceOpConversions.h"
-#include "ViewOpConversions.h"
+#include "ConvertLayoutToLLVM.h"
+#include "DotOpToLLVM.h"
+#include "ElementwiseOpToLLVM.h"
+#include "LoadStoreOpToLLVM.h"
+#include "ReduceOpToLLVM.h"
+#include "ViewOpToLLVM.h"
 
 #include "DotOpHelpers.h"
 #include "TritonGPUToLLVMBase.h"

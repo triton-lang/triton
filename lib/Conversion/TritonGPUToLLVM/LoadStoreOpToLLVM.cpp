@@ -1,7 +1,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 
-#include "LoadStoreOpConversions.h"
+#include "LoadStoreOpToLLVM.h"
 
 using namespace mlir;
 using namespace mlir::triton;

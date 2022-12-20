@@ -1,4 +1,4 @@
-#include "ReduceOpConversions.h"
+#include "ReduceOpToLLVM.h"
 
 using namespace mlir;
 using namespace mlir::triton;
