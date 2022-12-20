@@ -1174,7 +1174,8 @@ def default_cache_dir():
 
 
 def default_cuda_dir():
-    return os.path.join("/usr", "local", "cuda")
+    default_dir = "/usr/local/cuda"
+    return os.getenv("CUDA_HOME", default=default_dir)
 
 
 class CacheManager:
@@ -1217,9 +1218,9 @@ class CacheManager:
 
 
 @functools.lru_cache()
-def libcuda_dir():
-    loc = subprocess.check_output(["whereis", "libcuda.so"]).decode().strip().split()[-1]
-    return os.path.dirname(loc)
+def libcuda_dirs():
+    locs = subprocess.check_output(["whereis", "libcuda.so"]).decode().strip().split()[1:]
+    return [os.path.dirname(loc) for loc in locs]
 
 
 @contextlib.contextmanager
@@ -1233,7 +1234,7 @@ def quiet():
 
 
 def _build(name, src, srcdir):
-    cuda_lib_dir = libcuda_dir()
+    cuda_lib_dirs = libcuda_dirs()
     cuda_path = os.environ.get('CUDA_PATH', default_cuda_dir())
     cu_include_dir = os.path.join(cuda_path, "include")
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
@@ -1246,12 +1247,16 @@ def _build(name, src, srcdir):
         gcc = shutil.which("gcc")
         cc = gcc if gcc is not None else clang
     py_include_dir = get_paths()["include"]
-    ret = subprocess.check_call([cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", f"-L{cuda_lib_dir}", "-lcuda", "-o", so])
+
+    cc_cmd = [cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
+    cc_cmd += [f"-L{dir}" for dir in cuda_lib_dirs]
+    ret = subprocess.check_call(cc_cmd)
+
     if ret == 0:
         return so
     # fallback on setuptools
     extra_compile_args = []
-    library_dirs = [cuda_lib_dir]
+    library_dirs = cuda_lib_dirs
     include_dirs = [srcdir, cu_include_dir]
     libraries = ['cuda']
     # extra arguments
