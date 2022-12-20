@@ -810,6 +810,7 @@ class OutOfResources(Exception):
         self.message = f'out of resource: {name}, '\
                        f'Required: {required}, '\
                        f'Hardware limit: {limit}'
+        self.message += '. Reducing block sizes or `num_stages` may help.'
         self.required = required
         self.limit = limit
         self.name = name
@@ -1558,6 +1559,9 @@ class CompiledKernel:
         device = torch.cuda.current_device()
         global cuda_utils
         init_cuda_utils()
+        max_shared = cuda_utils.get_device_properties(device)["max_shared_mem"]
+        if self.shared > max_shared:
+            raise OutOfResources(self.shared, max_shared, "shared memory")
         mod, func, n_regs, n_spills = cuda_utils.load_binary(self.metadata["name"], self.asm["cubin"], self.shared, device)
         self.cu_module = mod
         self.cu_function = func
@@ -1636,7 +1640,7 @@ class CudaUtils(object):
             int sm_clock_rate;
             int mem_clock_rate;
             int mem_bus_width;
-            CUDA_CHECK(cuDeviceGetAttribute(&max_shared_mem, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK, device));
+            CUDA_CHECK(cuDeviceGetAttribute(&max_shared_mem, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, device));
             CUDA_CHECK(cuDeviceGetAttribute(&multiprocessor_count, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device));
             CUDA_CHECK(cuDeviceGetAttribute(&sm_clock_rate, CU_DEVICE_ATTRIBUTE_CLOCK_RATE, device));
             CUDA_CHECK(cuDeviceGetAttribute(&mem_clock_rate, CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE, device));
