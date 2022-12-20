@@ -1,7 +1,7 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_H
 
-#include "DotHelpers.h"
+#include "DotOpHelpers.h"
 #include "TritonGPUToLLVMBase.h"
 #include "Utility.h"
 
