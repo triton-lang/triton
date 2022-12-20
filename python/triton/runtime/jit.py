@@ -7,7 +7,7 @@ import inspect
 import os
 import subprocess
 import textwrap
-from collections import namedtuple
+from collections import defaultdict, namedtuple
 from typing import TypeVar, Generic, cast, Callable, overload, Optional, Iterable, Union
 
 import torch
@@ -112,6 +112,7 @@ class KernelInterface(Generic[T]):
 
 class JITFunction(KernelInterface[T]):
 
+    # Hook for inspecting compiled functions and modules
     cache_hook = None
     divisibility = 16
 
@@ -257,31 +258,30 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     if stream is None and not warmup:
       stream = get_cuda_stream(device)
     try:
-      bin = cache[key]
+      bin = cache[device][key]
       if not warmup:
-          bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, {args})
+          bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, triton.compiler.CompiledKernel.launch_enter_hook, triton.compiler.CompiledKernel.launch_exit_hook, bin, {args})
       return bin
     # kernel not cached -- compile
     except KeyError:
       # build dict of constant values
       args = [{args}]
-      configs = self._get_config(*args),
+      all_args = {', '.join([f'{arg}' for arg in self.arg_names])},
+      configs = self._get_config(*all_args),
       constants = self._make_constants(constexpr_key)
-      constants.update({{i: None for i, arg in enumerate(args) if arg is None}})
+      constants.update({{i: None for i, arg in enumerate(all_args) if arg is None}})
       constants.update({{i: 1 for i in configs[0].equal_to_1}})
       # build kernel signature -- doesn't include specialized arguments
-      all_args = {', '.join([f'{arg}' for arg in self.arg_names])},
       signature = {{ i: self._type_of(_key_of(arg)) for i, arg in enumerate(all_args) if i not in self.constexprs }}
       # build stub signature -- includes arguments that are specialized
       for i, arg in constants.items():
         if callable(arg):
-          raise TypeError(f"Callable constexpr at index {i} is not supported")
-      device = 0
+          raise TypeError(f"Callable constexpr at index {{i}} is not supported")
       if not self._call_hook(key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
         bin = triton.compile(self, signature=signature, device=device, constants=constants, num_warps=num_warps, num_stages=num_stages, extern_libs=extern_libs, configs=configs)
         if not warmup:
-            bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, *args)
-        self.cache[key] = bin
+            bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, triton.compiler.CompiledKernel.launch_enter_hook, triton.compiler.CompiledKernel.launch_exit_hook, bin, *args)
+        self.cache[device][key] = bin
         return bin
       return None
 """
@@ -306,7 +306,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         self.src = textwrap.dedent(inspect.getsource(fn))
         self.src = self.src[self.src.find("def"):]
         # cache of just-in-time compiled kernels
-        self.cache = dict()
+        self.cache = defaultdict(dict)
         self.hash = None
         # JITFunction can be instantiated as kernel
         # when called with a grid using __getitem__

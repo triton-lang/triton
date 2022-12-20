@@ -610,6 +610,10 @@ def test_tuples():
     ]
     for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']]))
 def test_atomic_rmw(op, dtype_x_str, mode, device='cuda'):
+    capability = torch.cuda.get_device_capability()
+    if capability[0] < 7:
+        if dtype_x_str == 'float16':
+            pytest.skip("Only test atomic float16 ops on devices with sm >= 70")
     n_programs = 5
 
     # triton kernel
@@ -1098,6 +1102,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype, devi
     # if dtype == 'float32' and not allow_tf32:
     #     pytest.skip("Seems to have bugs")
     capability = torch.cuda.get_device_capability()
+    if capability[0] < 7:
+        pytest.skip("Only test tl.dot() on devices with sm >= 70")
     if capability[0] < 8:
         if dtype == 'int8':
             pytest.skip("Only test int8 on devices with sm >= 80")
