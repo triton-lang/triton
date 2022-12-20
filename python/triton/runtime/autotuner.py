@@ -87,13 +87,7 @@ class Autotuner(KernelInterface):
         self.best_config = config
         if config.pre_hook is not None:
             config.pre_hook(self.nargs)
-        try:
-          return self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
-        except OutOfResources as E:
-          raise RuntimeError("Autotuner couldn't find an appropriate configuration. "\
-                             "All proposed configurations use too much shared memory. "\
-                             "Triton does support spilling to DRAM. "
-                             "Try reducing block sizes or `num_stages`.")
+        return self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
 
     def prune_configs(self, kwargs):
         pruned_configs = self.configs

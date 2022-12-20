@@ -810,6 +810,7 @@ class OutOfResources(Exception):
         self.message = f'out of resource: {name}, '\
                        f'Required: {required}, '\
                        f'Hardware limit: {limit}'
+        self.message += '. Reducing block sizes or `num_stages` may help.'
         self.required = required
         self.limit = limit
         self.name = name
