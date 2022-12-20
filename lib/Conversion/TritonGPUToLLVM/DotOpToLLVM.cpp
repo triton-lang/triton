@@ -5,13 +5,13 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::getElementsFromStruct;
-using ::mlir::LLVM::getStructFromElements;
 using ::mlir::LLVM::DotOpFMAConversionHelper;
 using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
+using ::mlir::LLVM::getElementsFromStruct;
+using ::mlir::LLVM::getStructFromElements;
 using ::mlir::LLVM::MMA16816ConversionHelper;
-using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::MmaEncodingAttr;
 
 struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -130,9 +130,10 @@ private:
     auto has = helper.extractLoadedOperand(adaptor.a(), NK, rewriter);
     auto hbs = helper.extractLoadedOperand(adaptor.b(), NK, rewriter);
 
-    // Initialize accumulators with external values, the acc holds the accumulator
-    // value that is shared between the MMA instructions inside a DotOp, we can
-    // call the order of the values the accumulator-internal order.
+    // Initialize accumulators with external values, the acc holds the
+    // accumulator value that is shared between the MMA instructions inside a
+    // DotOp, we can call the order of the values the accumulator-internal
+    // order.
     SmallVector<Value> acc = getElementsFromStruct(loc, adaptor.c(), rewriter);
     size_t resSize = acc.size();
 
@@ -197,7 +198,8 @@ private:
 
       mma(resOprs, AOprs, BOprs, COprs);
 
-      Value res = builder.launch(rewriter, loc, helper.getMmaRetType(ATensorTy));
+      Value res =
+          builder.launch(rewriter, loc, helper.getMmaRetType(ATensorTy));
 
       auto getIntAttr = [&](int v) {
         return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
@@ -286,8 +288,8 @@ private:
 
               int z = isCRow ? mIdx * N / nShapePerCTA * mSizePerThread + nIdx
                              : nIdx * M / mShapePerCTA * nSizePerThread + mIdx;
-              ret[z] = rewriter.create<LLVM::FMulAddOp>(loc, has[{m + mm, k}],
-                                                        hbs[{n + nn, k}], ret[z]);
+              ret[z] = rewriter.create<LLVM::FMulAddOp>(
+                  loc, has[{m + mm, k}], hbs[{n + nn, k}], ret[z]);
             }
     }
 
@@ -300,11 +302,10 @@ private:
   }
 };
 
-void populateDotOpToLLVMPatterns(
-    mlir::LLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, int numWarps,
-    AxisInfoAnalysis &axisInfoAnalysis,
-    const Allocation *allocation, Value smem,
-    PatternBenefit benefit) {
+void populateDotOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
+                                 RewritePatternSet &patterns, int numWarps,
+                                 AxisInfoAnalysis &axisInfoAnalysis,
+                                 const Allocation *allocation, Value smem,
+                                 PatternBenefit benefit) {
   patterns.add<DotOpConversion>(typeConverter, allocation, smem, benefit);
 }

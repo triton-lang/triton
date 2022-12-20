@@ -15,10 +15,10 @@ using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
 using ::mlir::LLVM::MMA16816ConversionHelper;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::getElemsPerThread;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
-using ::mlir::triton::gpu::getElemsPerThread;
 
 class TritonGPUToLLVMTypeConverter : public LLVMTypeConverter {
 public:

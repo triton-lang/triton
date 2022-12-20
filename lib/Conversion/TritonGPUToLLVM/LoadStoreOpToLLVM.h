@@ -6,11 +6,11 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-void populateLoadStoreOpToLLVMPatterns(
-    mlir::LLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, int numWarps,
-    AxisInfoAnalysis &axisInfoAnalysis,
-    const Allocation *allocation, Value smem,
-    PatternBenefit benefit);
+void populateLoadStoreOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
+                                       RewritePatternSet &patterns,
+                                       int numWarps,
+                                       AxisInfoAnalysis &axisInfoAnalysis,
+                                       const Allocation *allocation, Value smem,
+                                       PatternBenefit benefit);
 
 #endif

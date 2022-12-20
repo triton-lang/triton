@@ -7,11 +7,11 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getElementsFromStruct;
+using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStructFromElements;
-using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::getElemsPerThread;
+using ::mlir::triton::gpu::SharedEncodingAttr;
 
 // Contains some helper functions for both Load and Store conversions.
 struct LoadStoreConversionBase : public ConvertTritonGPUOpToLLVMPatternBase {
@@ -641,8 +641,7 @@ struct InsertSliceOpConversion
     auto llSrc = adaptor.source();
     auto srcIndices =
         emitBaseIndexForBlockedLayout(loc, rewriter, srcLayout, srcShape);
-    storeBlockedToShared(src, llSrc, srcStrides,
-                         srcIndices, dst, smemBase,
+    storeBlockedToShared(src, llSrc, srcStrides, srcIndices, dst, smemBase,
                          elemPtrTy, loc, rewriter);
     // Barrier is not necessary.
     // The membar pass knows that it writes to shared memory and will handle it
@@ -867,12 +866,12 @@ struct InsertSliceAsyncOpConversion
   }
 };
 
-void populateLoadStoreOpToLLVMPatterns(
-    mlir::LLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, int numWarps,
-    AxisInfoAnalysis &axisInfoAnalysis,
-    const Allocation *allocation, Value smem,
-    PatternBenefit benefit) {
+void populateLoadStoreOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
+                                       RewritePatternSet &patterns,
+                                       int numWarps,
+                                       AxisInfoAnalysis &axisInfoAnalysis,
+                                       const Allocation *allocation, Value smem,
+                                       PatternBenefit benefit) {
   patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<StoreOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AtomicCASOpConversion>(typeConverter, allocation, smem,

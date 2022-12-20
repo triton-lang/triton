@@ -1,10 +1,10 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_BASE_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_BASE_H
 
+#include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -41,8 +41,8 @@ private:
 
   /// Helper function for wrapping all attributes into a single DictionaryAttr
   static auto wrapAsStructAttrs(OpBuilder &b, ArrayAttr attrs) {
-    return DictionaryAttr::get(
-        b.getContext(), b.getNamedAttr("llvm.struct_attrs", attrs));
+    return DictionaryAttr::get(b.getContext(),
+                               b.getNamedAttr("llvm.struct_attrs", attrs));
   }
 
 protected:

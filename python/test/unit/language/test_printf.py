@@ -2,7 +2,6 @@ import os
 import subprocess
 import sys
 
-
 dir_path = os.path.dirname(os.path.realpath(__file__))
 printf_path = os.path.join(dir_path, "printf_helper.py")
 

@@ -82,39 +82,39 @@ private:
     }
     switch (redOp) {
     case RedOp::ARGMIN:
-      accIndex =
-          select(icmp_slt(acc, cur), accIndex,
-                 select(icmp_sgt(acc, cur), curIndex, smin(accIndex, curIndex)));
+      accIndex = select(
+          icmp_slt(acc, cur), accIndex,
+          select(icmp_sgt(acc, cur), curIndex, smin(accIndex, curIndex)));
       acc = smin(acc, cur);
       break;
     case RedOp::ARGMAX:
-      accIndex =
-          select(icmp_sgt(acc, cur), accIndex,
-                 select(icmp_slt(acc, cur), curIndex, smin(accIndex, curIndex)));
+      accIndex = select(
+          icmp_sgt(acc, cur), accIndex,
+          select(icmp_slt(acc, cur), curIndex, smin(accIndex, curIndex)));
       acc = smax(acc, cur);
       break;
     case RedOp::ARGUMIN:
-      accIndex =
-          select(icmp_ult(acc, cur), accIndex,
-                 select(icmp_ugt(acc, cur), curIndex, smin(accIndex, curIndex)));
+      accIndex = select(
+          icmp_ult(acc, cur), accIndex,
+          select(icmp_ugt(acc, cur), curIndex, smin(accIndex, curIndex)));
       acc = umin(acc, cur);
       break;
     case RedOp::ARGUMAX:
-      accIndex =
-          select(icmp_ugt(acc, cur), accIndex,
-                 select(icmp_ult(acc, cur), curIndex, smin(accIndex, curIndex)));
+      accIndex = select(
+          icmp_ugt(acc, cur), accIndex,
+          select(icmp_ult(acc, cur), curIndex, smin(accIndex, curIndex)));
       acc = umax(acc, cur);
       break;
     case RedOp::ARGFMIN:
-      accIndex =
-          select(fcmp_olt(acc, cur), accIndex,
-                 select(fcmp_ogt(acc, cur), curIndex, smin(accIndex, curIndex)));
+      accIndex = select(
+          fcmp_olt(acc, cur), accIndex,
+          select(fcmp_ogt(acc, cur), curIndex, smin(accIndex, curIndex)));
       acc = fmin(acc, cur);
       break;
     case RedOp::ARGFMAX:
-      accIndex =
-          select(fcmp_ogt(acc, cur), accIndex,
-                 select(fcmp_olt(acc, cur), curIndex, smin(accIndex, curIndex)));
+      accIndex = select(
+          fcmp_ogt(acc, cur), accIndex,
+          select(fcmp_olt(acc, cur), curIndex, smin(accIndex, curIndex)));
       acc = fmax(acc, cur);
       break;
     case RedOp::ADD:
@@ -134,8 +134,9 @@ private:
   }
 
   // Use shared memory for reduction within warps and across warps
-  LogicalResult matchAndRewriteBasic(triton::ReduceOp op, OpAdaptor adaptor,
-                                     ConversionPatternRewriter &rewriter) const {
+  LogicalResult
+  matchAndRewriteBasic(triton::ReduceOp op, OpAdaptor adaptor,
+                       ConversionPatternRewriter &rewriter) const {
     Location loc = op->getLoc();
     unsigned axis = op.axis();
     bool withIndex = triton::ReduceOp::withIndex(op.redOp());
@@ -178,8 +179,8 @@ private:
         accumulate(rewriter, loc, op.redOp(), accs[key], srcValues[i], isFirst);
       } else {
         Value curIndex = srcIndices[i][axis];
-        accumulateWithIndex(rewriter, loc, op.redOp(), accs[key], accIndices[key],
-                            srcValues[i], curIndex, isFirst);
+        accumulateWithIndex(rewriter, loc, op.redOp(), accs[key],
+                            accIndices[key], srcValues[i], curIndex, isFirst);
       }
       if (isFirst)
         indices[key] = srcIndices[i];
@@ -213,9 +214,9 @@ private:
       for (int N = smemShape[axis] / 2; N > 0; N >>= 1) {
         readIdx[axis] = ints[N];
         Value readMask = icmp_slt(writeIdx[axis], ints[N]);
-        Value readOffset =
-            select(readMask, linearize(rewriter, loc, readIdx, smemShape, srcOrd),
-                   ints[0]);
+        Value readOffset = select(
+            readMask, linearize(rewriter, loc, readIdx, smemShape, srcOrd),
+            ints[0]);
         Value readPtr = gep(elemPtrTy, writePtr, readOffset);
         barrier();
         if (!withIndex) {
@@ -245,7 +246,8 @@ private:
       auto resultShape = resultTy.getShape();
 
       unsigned resultElems = getElemsPerThread(resultTy);
-      auto resultIndices = emitIndices(loc, rewriter, resultLayout, resultShape);
+      auto resultIndices =
+          emitIndices(loc, rewriter, resultLayout, resultShape);
       assert(resultIndices.size() == resultElems);
 
       SmallVector<Value> resultVals(resultElems);
@@ -327,8 +329,8 @@ private:
         accumulate(rewriter, loc, op.redOp(), accs[key], srcValues[i], isFirst);
       } else {
         Value curIndex = srcIndices[i][axis];
-        accumulateWithIndex(rewriter, loc, op.redOp(), accs[key], accIndices[key],
-                            srcValues[i], curIndex, isFirst);
+        accumulateWithIndex(rewriter, loc, op.redOp(), accs[key],
+                            accIndices[key], srcValues[i], curIndex, isFirst);
       }
       if (isFirst)
         indices[key] = srcIndices[i];
@@ -396,7 +398,8 @@ private:
     Value readOffset = threadId;
     for (unsigned round = 0; round < elemsPerThread; ++round) {
       Value readPtr = gep(elemPtrTy, smemBase, readOffset);
-      // FIXME(Qingyi): need predicate icmp_slt(threadId, i32_val(sizeInerWarps))
+      // FIXME(Qingyi): need predicate icmp_slt(threadId,
+      // i32_val(sizeInerWarps))
       Value acc = load(readPtr);
       Value accIndex;
       if (withIndex) {
@@ -445,7 +448,8 @@ private:
       auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
       auto resultShape = resultTy.getShape();
       unsigned resultElems = getElemsPerThread(resultTy);
-      auto resultIndices = emitIndices(loc, rewriter, resultLayout, resultShape);
+      auto resultIndices =
+          emitIndices(loc, rewriter, resultLayout, resultShape);
       assert(resultIndices.size() == resultElems);
 
       SmallVector<Value> resultVals(resultElems);
@@ -475,11 +479,10 @@ private:
   }
 };
 
-void populateReduceOpToLLVMPatterns(
-    mlir::LLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, int numWarps,
-    AxisInfoAnalysis &axisInfoAnalysis,
-    const Allocation *allocation, Value smem,
-    PatternBenefit benefit) {
+void populateReduceOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
+                                    RewritePatternSet &patterns, int numWarps,
+                                    AxisInfoAnalysis &axisInfoAnalysis,
+                                    const Allocation *allocation, Value smem,
+                                    PatternBenefit benefit) {
   patterns.add<ReduceOpConversion>(typeConverter, allocation, smem, benefit);
 }

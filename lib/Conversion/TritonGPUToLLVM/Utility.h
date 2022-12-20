@@ -132,7 +132,8 @@ llvm::SmallVector<T> getMultiDimIndex(T linearIndex, llvm::ArrayRef<T> shape,
 
 // Linearize supposing order is [0, 1, .. , n]
 template <typename T>
-static T getLinearIndexImpl(llvm::ArrayRef<T> multiDimIndex, llvm::ArrayRef<T> shape) {
+static T getLinearIndexImpl(llvm::ArrayRef<T> multiDimIndex,
+                            llvm::ArrayRef<T> shape) {
   assert(multiDimIndex.size() == shape.size());
   // shape: {a, b, c, d}  ->  accMul: {1, a, a*b, a*b*c}
   size_t rank = shape.size();
@@ -161,10 +162,9 @@ static T getLinearIndex(llvm::ArrayRef<T> multiDimIndex,
 namespace LLVM {
 using namespace mlir::triton;
 
-static
-Value getStructFromElements(Location loc, ValueRange resultVals,
-                            ConversionPatternRewriter &rewriter,
-                            Type structType) {
+static Value getStructFromElements(Location loc, ValueRange resultVals,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type structType) {
   if (!structType.isa<LLVM::LLVMStructType>()) {
     return *resultVals.begin();
   }
@@ -178,9 +178,9 @@ Value getStructFromElements(Location loc, ValueRange resultVals,
   return llvmStruct;
 }
 
-static
-SmallVector<Value> getElementsFromStruct(Location loc, Value llvmStruct,
-                                         ConversionPatternRewriter &rewriter) {
+static SmallVector<Value>
+getElementsFromStruct(Location loc, Value llvmStruct,
+                      ConversionPatternRewriter &rewriter) {
   if (llvmStruct.getType().isIntOrIndexOrFloat() ||
       llvmStruct.getType().isa<triton::PointerType>() ||
       llvmStruct.getType().isa<LLVM::LLVMPointerType>())
@@ -196,22 +196,22 @@ SmallVector<Value> getElementsFromStruct(Location loc, Value llvmStruct,
 }
 
 // Create a 32-bit integer constant.
-static Value createConstantI32(Location loc,
-                               PatternRewriter &rewriter, int32_t v) {
+static Value createConstantI32(Location loc, PatternRewriter &rewriter,
+                               int32_t v) {
   auto i32ty = rewriter.getIntegerType(32);
   return rewriter.create<LLVM::ConstantOp>(loc, i32ty,
                                            IntegerAttr::get(i32ty, v));
 }
 
-static Value createConstantF32(Location loc,
-                               PatternRewriter &rewriter, float v) {
+static Value createConstantF32(Location loc, PatternRewriter &rewriter,
+                               float v) {
   auto type = type::f32Ty(rewriter.getContext());
   return rewriter.create<LLVM::ConstantOp>(loc, type,
                                            rewriter.getF32FloatAttr(v));
 }
 
-static Value createConstantF64(Location loc,
-                               PatternRewriter &rewriter, float v) {
+static Value createConstantF64(Location loc, PatternRewriter &rewriter,
+                               float v) {
   auto type = type::f64Ty(rewriter.getContext());
   return rewriter.create<LLVM::ConstantOp>(loc, type,
                                            rewriter.getF64FloatAttr(v));
