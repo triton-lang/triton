@@ -575,6 +575,29 @@ struct FDivOpConversion
   Value createDestOp(mlir::arith::DivFOp op, OpAdaptor adaptor,
                      ConversionPatternRewriter &rewriter, Type elemTy,
                      ValueRange operands, Location loc) const {
+#ifdef USE_ROCM
+    const std::string readConstraint = "v";
+    const std::string writeConstraint = "=v";
+
+    GCNBuilder gcnBuilder;
+    unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
+
+    auto res = gcnBuilder.newOperand(writeConstraint);
+    auto lhs = gcnBuilder.newOperand(operands[0], readConstraint);
+    auto rhs = gcnBuilder.newOperand(operands[1], readConstraint);
+
+    // create inst
+    auto &rcp = gcnBuilder.create<GCNInstr>("v_rcp")->float_op_type(bitwidth);
+    auto &mul_inst = gcnBuilder.create<GCNInstr>("v_mul")->float_op_type(bitwidth);
+
+    // launch insts
+    rcp(res, rhs);
+    mul_inst(res, lhs, res);
+
+    // return result
+    Value ret = gcnBuilder.launch(rewriter, loc, elemTy, false);
+    return ret;
+#else
     PTXBuilder ptxBuilder;
     auto &fdiv = *ptxBuilder.create<PTXInstr>("div");
     unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
@@ -593,6 +616,7 @@ struct FDivOpConversion
 
     Value ret = ptxBuilder.launch(rewriter, loc, elemTy, false);
     return ret;
+#endif
   }
 };
 
@@ -843,8 +867,9 @@ void populateElementwiseOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
 
   patterns.add<CmpIOpConversion>(typeConverter, benefit);
   patterns.add<CmpFOpConversion>(typeConverter, benefit);
-
+#ifndef USE_ROCM
   patterns.add<FDivOpConversion>(typeConverter, benefit);
+#endif
   patterns.add<FSubOpConversion>(typeConverter, benefit);
   patterns.add<FAddOpConversion>(typeConverter, benefit);
   patterns.add<FMulOpConversion>(typeConverter, benefit);

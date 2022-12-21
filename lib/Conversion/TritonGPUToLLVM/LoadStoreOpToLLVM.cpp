@@ -119,6 +119,25 @@ struct LoadOpConversion
       const size_t wordNElems = width / valueElemNbits;
       assert(wordNElems * nWords * numVecs == numElems);
 
+      
+#ifdef USE_ROCM
+
+      Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
+      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
+        for (size_t wordElem = 0; wordElem < wordNElems; ++wordElem) {
+          size_t elemOffset = vecStart + wordIdx * wordNElems + wordElem;
+
+          // get values
+          Value trueVal = load(ptrElems[elemOffset]);
+          Value zeroVal = bitcast(i32_val(0), valueElemTy);
+          Value falseVal = other ? load(otherElems[elemOffset]) : zeroVal;
+
+          // select value based on mask
+          Value ret = select(pred, trueVal, falseVal);
+          loadedVals.push_back(ret);
+        }
+      }
+#else
       // TODO(Superjomn) Add cache policy fields to StoreOp.
       // TODO(Superjomn) Deal with cache policy here.
       const bool hasL2EvictPolicy = false;
@@ -229,6 +248,7 @@ struct LoadOpConversion
         Value loaded = extract_element(valueElemTy, rets[ii / tmp], vecIdx);
         loadedVals.push_back(loaded);
       }
+#endif
     } // end vec
 
     Type llvmResultStructTy = getTypeConverter()->convertType(valueTy);
@@ -319,7 +339,13 @@ struct StoreOpConversion
           if (elem.getType().isInteger(1))
             elem = rewriter.create<LLVM::SExtOp>(loc, type::i8Ty(ctx), elem);
           elem = bitcast(elem, valueElemTy);
-
+#ifdef USE_ROCM
+          Value maskVal = llMask ? maskElems[vecStart] : int_val(1, 1);
+          Value ret = select(maskVal, elem , bitcast(i32_val(0), valueElemTy));
+          store(ret, ptrElems[elemOffset]);
+        }
+      }
+#else
           Type u32Ty = typeConverter->convertType(type::u32Ty(ctx));
           llWord = insert_element(wordTy, llWord, elem, i32_val(elemIdx));
         }
@@ -349,6 +375,7 @@ struct StoreOpConversion
       auto asmReturnTy = void_ty(ctx);
 
       ptxBuilder.launch(rewriter, loc, asmReturnTy);
+#endif
     }
     rewriter.eraseOp(op);
     return success();

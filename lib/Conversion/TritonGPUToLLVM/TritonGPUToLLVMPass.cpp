@@ -36,7 +36,11 @@ public:
   explicit TritonLLVMConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
+#ifdef USE_ROCM
+    addLegalDialect<ROCDL::ROCDLDialect>();
+#else
     addLegalDialect<NVVM::NVVMDialect>();
+#endif
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
@@ -77,6 +81,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
 
     auto ctx = funcOp->getContext();
 
+#ifndef USE_ROCM
     // Set an attribute to indicate this function is a kernel entry.
     newFuncOp->setAttr("nvvm.kernel",
                        rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
@@ -85,6 +90,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
     // for `nvvm.annotation` metadata.
     newFuncOp->setAttr("nvvm.maxntid",
                        rewriter.getIntegerAttr(i32_ty, 32 * numWarps));
+#endif
 
     rewriter.eraseOp(funcOp);
     return success();
@@ -206,7 +212,11 @@ public:
                                                             patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateStdToLLVMConversionPatterns(typeConverter, patterns);
+ #ifdef USE_ROCM
+    mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns, mlir::gpu::amd::HIP);
+#else
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
+#endif
 
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
       return signalPassFailure();

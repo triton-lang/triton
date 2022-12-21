@@ -323,6 +323,10 @@ getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
 
 static Value storeShared(ConversionPatternRewriter &rewriter, Location loc,
                          Value ptr, Value val, Value pred) {
+#if USE_ROCM
+  store(val, ptr);
+  return val;
+#else
   MLIRContext *ctx = rewriter.getContext();
   unsigned bits = val.getType().getIntOrFloatBitWidth();
   const char *c = bits == 64 ? "l" : (bits == 16 ? "h" : "r");
@@ -333,6 +337,7 @@ static Value storeShared(ConversionPatternRewriter &rewriter, Location loc,
   auto &st = builder.create<>("st")->shared().b(bits);
   st(ptrOpr, valOpr).predicate(pred, "b");
   return builder.launch(rewriter, loc, void_ty(ctx));
+#endif
 }
 
 static Value shflSync(Location loc, ConversionPatternRewriter &rewriter,
@@ -352,6 +357,18 @@ static Value shflSync(Location loc, ConversionPatternRewriter &rewriter,
     return bitcast(vec, val.getType());
   }
 
+#ifdef USE_ROCM
+  // This map facilates the butterfly shuffle pattern for a stride less than 16. The pattern stride is the key of the map.
+  DenseMap<short, unsigned int> masks{{16, 0x401F}, {8, 0x201F}, {4, 0x101F}, {2, 0x081F}, {1, 0x041F}};
+  GCNBuilder builder; 
+  auto shfl = builder.create("ds_swizzle_b32");
+  auto dOpr = builder.newOperand("=v");
+  auto aOpr = builder.newOperand(val, "v");
+  auto maskOpr = builder.newConstantOperand("offset:" + std::to_string(masks[i]));
+  (*shfl)(dOpr, aOpr, maskOpr);
+  auto swait = builder.create("s_waitcnt lgkmcnt(0)");
+  (*swait)();
+#else
   PTXBuilder builder;
   auto &shfl = builder.create("shfl.sync")->o("bfly").o("b32");
   auto *dOpr = builder.newOperand("=r");
@@ -360,6 +377,7 @@ static Value shflSync(Location loc, ConversionPatternRewriter &rewriter,
   auto *cOpr = builder.newConstantOperand("0x1f");
   auto *maskOpr = builder.newConstantOperand("0xffffffff");
   shfl(dOpr, aOpr, bOpr, cOpr, maskOpr);
+#endif
   return builder.launch(rewriter, loc, val.getType(), false);
 }
 
