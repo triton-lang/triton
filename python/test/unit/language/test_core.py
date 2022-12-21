@@ -732,7 +732,7 @@ def test_atomic_cas():
 ])
 def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
     # bfloat16 on cc < 80 will not be tested
-    check_type_supported(dtype_x) 
+    check_type_supported(dtype_x)
     check_type_supported(dtype_z)
 
     # This is tricky because numpy doesn't have bfloat, and torch doesn't have uints.
