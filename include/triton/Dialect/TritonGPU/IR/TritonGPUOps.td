@@ -32,13 +32,21 @@ def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
   let arguments = (ins I32Attr:$num);
 
   let assemblyFormat = "attr-dict";
+
+  let extraClassDeclaration = [{
+    static bool isSupported(int computeCapability) {
+      return computeCapability >= 80;
+    }
+  }];
 }
 
 // Port Arith_CmpIOp & Arith_CmpFOp & Std_SelectOp to TritonGPU.
 // This is needed because these ops don't
 // handle encodings
-// e.g., https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Arithmetic/IR/ArithmeticOps.td#L111
-def TTG_CmpIOp : TTG_Op<"cmpi", [NoSideEffect]> {
+// e.g., https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Arith/IR/ArithOps.td#L111
+def TTG_CmpIOp : TTG_Op<"cmpi", [NoSideEffect, Elementwise, 
+                                 SameOperandsAndResultShape, 
+                                 SameOperandsAndResultEncoding]> {
   let summary = "integer comparison operation";
 
   let description = [{}];
@@ -50,7 +58,9 @@ def TTG_CmpIOp : TTG_Op<"cmpi", [NoSideEffect]> {
   let results = (outs TT_BoolLike:$result);
 }
 
-def TTG_CmpFOp : TTG_Op<"cmpf", [NoSideEffect]> {
+def TTG_CmpFOp : TTG_Op<"cmpf", [NoSideEffect, Elementwise, 
+                                 SameOperandsAndResultShape, 
+                                 SameOperandsAndResultEncoding]> {
   let summary = "floating-point comparison operation";
 
   let description = [{}];
@@ -63,7 +73,9 @@ def TTG_CmpFOp : TTG_Op<"cmpf", [NoSideEffect]> {
 }
 
 // TODO: migrate to arith::SelectOp on LLVM16
-def TTG_SelectOp : TTG_Op<"select", [NoSideEffect]> {
+def TTG_SelectOp : TTG_Op<"select", [NoSideEffect, Elementwise, 
+                                 SameOperandsAndResultShape, 
+                                 SameOperandsAndResultEncoding]> {
   let summary = "select operation";
 
   let description = [{}];
@@ -79,8 +91,7 @@ def TTG_SelectOp : TTG_Op<"select", [NoSideEffect]> {
 def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
                                     [AttrSizedOperandSegments,
                                      ResultsAreSharedEncoding,
-                                     // MemoryEffects<[MemRead]>, doesn't work with CSE but seems like it should?
-                                     NoSideEffect,
+                                     MemoryEffects<[MemRead]>,
                                      TypesMatchWith<"infer mask type from src type",
                                                     "src", "mask", "getI1SameShape($_self)",
                                                     "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
@@ -152,13 +163,24 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
   //  attr-dict `:` type($src) `->` type($dst)
   //}];
 
+  let extraClassDeclaration = [{
+    static DenseSet<unsigned> getEligibleLoadByteWidth(int computeCapability) {
+      DenseSet<unsigned> validLoadBytes;
+      if (computeCapability >= 80) {
+        validLoadBytes = {4, 8, 16};
+      }
+      return validLoadBytes;
+    }
+  }];
+
   // The custom parser could be replaced with oilist in LLVM-16
   let parser = [{ return parseInsertSliceAsyncOp(parser, result); }];
 
   let printer = [{ return printInsertSliceAsyncOp(p, *this); }];
 }
 
-def TTG_AllocTensorOp : TTG_Op<"alloc_tensor", [NoSideEffect, ResultsAreSharedEncoding]> {
+def TTG_AllocTensorOp : TTG_Op<"alloc_tensor", [MemoryEffects<[MemAlloc]>,  // Allocate shared memory
+                                                ResultsAreSharedEncoding]> {
   let summary = "allocate tensor";
 
   let description = [{

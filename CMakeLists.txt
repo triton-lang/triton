@@ -25,6 +25,10 @@ endif()
 #  used conditionally in this file and by lit tests
 find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
 
+# Customized release build type with assertions: TritonRelBuildWithAsserts
+set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
+set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
+
 # Default build type
 if(NOT CMAKE_BUILD_TYPE)
   message(STATUS "Default build type: Release")

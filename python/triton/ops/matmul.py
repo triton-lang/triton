@@ -26,9 +26,6 @@ def get_configs_io_bound():
     return configs
 
 
-@triton.heuristics({
-    'EVEN_K': lambda args: args['K'] % (args['BLOCK_K'] * args['SPLIT_K']) == 0,
-})
 @triton.autotune(
     configs=[
         # basic configs for compute-bound matmuls
@@ -59,6 +56,9 @@ def get_configs_io_bound():
         'top_k': 10
     },
 )
+@triton.heuristics({
+    'EVEN_K': lambda args: args['K'] % (args['BLOCK_K'] * args['SPLIT_K']) == 0,
+})
 @triton.jit
 def _kernel(A, B, C, M, N, K,
             stride_am, stride_ak,

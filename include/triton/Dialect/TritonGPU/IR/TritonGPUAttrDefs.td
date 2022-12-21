@@ -71,6 +71,75 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
     ArrayRefParameter<"unsigned", "order of axes by the rate of changing">:$order
   );
 
+  let builders = [
+    AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
+                     "ArrayRef<int64_t>":$shape,
+                     "ArrayRef<unsigned>":$order,
+                     "Type":$eltTy), [{
+        auto mmaEnc = dotOpEnc.getParent().dyn_cast<MmaEncodingAttr>();
+
+        if(!mmaEnc)
+          return $_get(context, 1, 1, 1, order);
+
+        int opIdx = dotOpEnc.getOpIdx();
+
+        // number of rows per phase
+        int perPhase = 128 / (shape[order[0]] * (eltTy.getIntOrFloatBitWidth() / 8));
+        perPhase = std::max<int>(perPhase, 1);
+
+        // index of the inner dimension in `order`
+        unsigned inner = (opIdx == 0) ? 0 : 1;
+
+        // ---- begin Volta ----
+        if (mmaEnc.isVolta()) {
+          bool is_row = order[0] != 0;
+          bool is_vec4 = opIdx == 0 ? !is_row && (shape[order[0]] <= 16) :
+              is_row && (shape[order[0]] <= 16);
+          // TODO[Superjomn]: Support the case when is_vec4=false later
+          // Currently, we only support ld.v2, for the mma layout varies with different ld vector width.
+          is_vec4 = true;
+          int pack_size = opIdx == 0 ? ((is_row || is_vec4) ? 1 : 2) :
+                                       ((is_row && !is_vec4) ? 2 : 1);
+          int rep = 2 * pack_size;
+          int maxPhase = (order[inner] == 1 ? 8 : 4) / perPhase;
+          int vec = 2 * rep;
+          return $_get(context, vec, perPhase, maxPhase, order);
+        }
+
+        // ---- begin Ampere ----
+        if (mmaEnc.isAmpere()) {
+          std::vector<size_t> matShape = {8, 8,
+                                          2 * 64 / eltTy.getIntOrFloatBitWidth()};
+          // for now, disable swizzle when using transposed int8 tensor cores
+          if (eltTy.isInteger(8) && order[0] == inner)
+            return $_get(context, 1, 1, 1, order);
+
+          // --- handle A operand ---
+          if (opIdx == 0) { // compute swizzling for A operand
+              int vec = (order[0] == 1) ? matShape[2] : matShape[0]; // k : m
+              int mmaStride = (order[0] == 1) ? matShape[0] : matShape[2];
+              int maxPhase = mmaStride / perPhase;
+              return $_get(context, vec, perPhase, maxPhase, order);
+          }
+
+          // --- handle B operand ---
+          if (opIdx == 1) {
+              int vec = (order[0] == 1) ? matShape[1] : matShape[2]; // n : k
+              int mmaStride = (order[0] == 1) ? matShape[2] : matShape[1];
+              int maxPhase = mmaStride / perPhase;
+              return $_get(context, vec, perPhase, maxPhase, order);
+          }
+
+          llvm_unreachable("invalid operand index");
+        }
+
+        // ---- not implemented ----
+        llvm_unreachable("unsupported swizzling for provided MMA version");
+
+
+    }]>
+  ];
+
   let extraClassDeclaration = extraBaseClassDeclaration;
 }
 
@@ -166,9 +235,11 @@ for
       unsigned remainingLanes = 32;
       unsigned remainingThreads = numWarps*32;
       unsigned remainingWarps = numWarps;
+      unsigned prevLanes = 1;
+      unsigned prevWarps = 1;
       SmallVector<unsigned, 4> threadsPerWarp(rank);
       SmallVector<unsigned, 4> warpsPerCTA(rank);
-      for (int _dim = 0; _dim < rank; ++_dim) {
+      for (int _dim = 0; _dim < rank - 1; ++_dim) {
         int i = order[_dim];
         unsigned threadsPerCTA = std::clamp<unsigned>(remainingThreads, 1, shape[i] / sizePerThread[i]);
         threadsPerWarp[i] = std::clamp<unsigned>(threadsPerCTA, 1, remainingLanes);
@@ -176,7 +247,12 @@ for
         remainingWarps /= warpsPerCTA[i];
         remainingLanes /= threadsPerWarp[i];
         remainingThreads /= threadsPerCTA;
+        prevLanes *= threadsPerWarp[i];
+        prevWarps *= warpsPerCTA[i];
       }
+      // Expand the last dimension to fill the remaining lanes and warps
+      threadsPerWarp[order[rank-1]] = 32 / prevLanes;
+      warpsPerCTA[order[rank-1]] = numWarps / prevWarps;
 
       return $_get(context, sizePerThread, threadsPerWarp, warpsPerCTA, order);
 
@@ -215,46 +291,50 @@ def MmaEncodingAttr : DistributedEncoding<"MmaEncoding"> {
   let description = [{
 An encoding for tensors that have been produced by tensor cores.
 It is characterized by two parameters:
-- A 'version' which specifies the generation the tensor cores
+- A 'versionMajor' which specifies the generation the tensor cores
 whose output is being partitioned: 1 for first-gen tensor cores (Volta),
 and 2 for second-gen tensor cores (Turing/Ampere).
+- A 'versionMinor' which indicates the specific layout of a tensor core
+generation, e.g. for Volta, there might be multiple kinds of layouts annotated
+by 0,1,2 and so on.
 - A `blockTileSize` to indicate how data should be
 partitioned between warps.
 
 // -------------------------------- version = 1 --------------------------- //
 
 For first-gen tensor cores, the implicit warpTileSize is [16, 16].
-Information about this layout can be found in the official PTX documentation
+Note: the layout is different from the recommended in PTX ISA
 https://docs.nvidia.com/cuda/parallel-thread-execution/index.html
 (mma.884 section, FP32 accumulator).
 
-For example, the matrix L corresponding to blockTileSize=[32,16] is:
+For example, when versionMinor=1, the matrix L corresponding to
+blockTileSize=[32,16] is:
 
                                warp 0
 --------------------------------/\-------------------------------
-[ 0   0   2   2   0   0   2   2    4   4   6   6   4   4   6   6 ]
-[ 1   1   3   3   1   1   3   3    5   5   7   7   5   5   7   7 ]
-[ 0   0   2   2   0   0   2   2    4   4   6   6   4   4   6   6 ]
-[ 1   1   3   3   1   1   3   3    5   5   7   7   5   5   7   7 ]
-[ 16  16  18  18  16  16  18  18   20  20  22  22  20  20  22  22]
-[ 17  17  19  19  17  17  19  19   21  21  23  23  21  21  23  23]
-[ 16  16  18  18  16  16  18  18   20  20  22  22  20  20  22  22]
-[ 17  17  19  19  17  17  19  19   21  21  23  23  21  21  23  23]
-[ 8   8   10  10  8   8   10  10   12  12  14  14  12  12  14  14]
-[ 9   9   11  11  9   9   11  11   13  13  15  15  13  13  15  15]
-[ ..............................................................
-[ ..............................................................
-[ 24  24  26  26  24  24  26  26   28  28  30  30  28  28  30  30]
-[ 25  25  27  27  25  25  27  27   29  29  31  31  29  29  31  31]
+[ 0   0   2   2   8   8   10  10   0   0   2   2   8   8   10  10 ]
+[ 1   1   3   3   9   9   11  11   1   1   3   3   9   9   11  11 ]
+[ 0   0   2   2   8   8   10  10   0   0   2   2   8   8   10  10 ]
+[ 1   1   3   3   9   9   11  11   1   1   3   3   9   9   11  11 ]
+[ 4   4   6   6   12  12  14  14   4   4   6   6   12  12  14  14 ]
+[ 5   5   7   7   13  13  15  15   5   5   7   7   13  13  15  15 ]
+[ 4   4   6   6   12  12  14  14   4   4   6   6   12  12  14  14 ]
+[ 5   5   7   7   13  13  15  15   5   5   7   7   13  13  15  15 ]
+[ 16  16  18  18  20  20  22  22   16  16  18  18  20  20  22  22 ]
+[ 17  17  19  19  21  21  23  23   17  17  19  19  21  21  23  23 ]
+[ 16  16  18  18  20  20  22  22   16  16  18  18  20  20  22  22 ]
+[ 17  17  19  19  21  21  23  23   17  17  19  19  21  21  23  23 ]
+[ 24  24  26  26  28  28  30  30   24  24  26  26  28  28  30  30 ]
+[ 25  25  27  27  29  29  31  31   25  25  27  27  29  29  31  31 ]
+[ 24  24  26  26  28  28  30  30   24  24  26  26  28  28  30  30 ]
+[ 25  25  27  27  29  29  31  31   25  25  27  27  29  29  31  31 ]
 
-                         warp 1 = warp0 + 32
+                          warp 1 = warp0 + 32
 --------------------------------/\-------------------------------
-[ 32  32  34  34  32  32  34  34   36  36  38  38  36  36  38  38]
-[ 33  33  35  35  33  33  35  35   37  37  39  39  37  37  39  39]
-[ ..............................................................
-[ ..............................................................
-[ 56  56  58  58  56  56  58  58   60  60  62  62  60  60  62  62]
-[ 57  57  59  59  57  57  59  59   61  61  63  63  61  61  63  63]
+[ 32  32  34  34  40  40  42  42   32  32  34  34  40  40  42  42 ]
+[ 33  33  35  35  41  41  43  43   33  33  35  35  41  41  43  43 ]
+[ ............................................................... ]
+
 
 // -------------------------------- version = 2 --------------------------- //
 
@@ -290,11 +370,39 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
 
   let parameters = (
     ins
-    "unsigned":$version,
+    "unsigned":$versionMajor,
+    "unsigned":$versionMinor,
     ArrayRefParameter<"unsigned">:$warpsPerCTA
   );
 
-  let extraClassDeclaration = extraBaseClassDeclaration;
+  let builders = [
+    // specific for MMAV1(Volta)
+    AttrBuilder<(ins "int":$versionMajor,
+                     "ArrayRef<unsigned>":$warpsPerCTA,
+                     "ArrayRef<int64_t>":$shapeA,
+                     "ArrayRef<int64_t>":$shapeB,
+                     "bool":$isARow,
+                     "bool":$isBRow), [{
+      assert(versionMajor == 1 && "Only MMAv1 has multiple versionMinor.");
+      bool isAVec4 = !isARow && (shapeA[isARow] <= 16);
+      bool isBVec4 = isBRow && (shapeB[isBRow] <= 16);
+      // 4-bits to encode 4 booleans: [isARow, isBRow, isAVec4, isBVec4]
+      int versionMinor = (isARow * (1<<0)) |\
+                         (isBRow * (1<<1)) |\
+                         (isAVec4 * (1<<2)) |\
+                         (isBVec4 * (1<<3));
+      return $_get(context, versionMajor, versionMinor, warpsPerCTA);
+    }]>
+
+  ];
+
+  let extraClassDeclaration = extraBaseClassDeclaration # [{
+    bool isVolta() const;
+    bool isAmpere() const;
+    // Get [isARow, isBRow, isAVec4, isBVec4] from versionMinor
+    std::tuple<bool, bool, bool, bool> decodeVoltaLayoutStates() const;
+  }];
+
 }
 
 def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
@@ -326,10 +434,10 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
   );
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
-    SmallVector<int64_t> paddedShape(ArrayRef<int64_t> shape) const;
+    template<class T>
+    SmallVector<T> paddedShape(ArrayRef<T> shape) const;
   }];
 }
-
 
 def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding"> {
   let mnemonic = "dot_op";
@@ -339,15 +447,35 @@ In TritonGPU dialect, considering `d = tt.dot a, b, c`
 tt.dot's operands a and b must be of DotOperandEncodingAttr layout.
 a's opIdx is 0, b's opIdx is 1.
 The parend field in DotOperandEncodingAttr is the layout of d.
+
+For MMA v1, an additional attribute `isMMAv1Row` determines whether e.g. the a operand is used
+in the context of an mma.884.row.col or an mma.884.col.col operation. See the PTX ISA documentation
+section 9.7.13.4.1 for more details.
   }];
 
   let parameters = (
     ins
     "unsigned":$opIdx,
-    "Attribute":$parent
+    "Attribute":$parent,
+    "Attribute":$isMMAv1Row
   );
+
+  let builders = [
+    AttrBuilder<(ins "unsigned":$opIdx,
+                     "Attribute":$parent), [{
+      Attribute isMMAv1Row;
+      if(parent.isa<MmaEncodingAttr>() &&
+         parent.cast<MmaEncodingAttr>().isVolta()){
+        isMMAv1Row = BoolAttr::get(context, true);
+      }
+      return $_get(context, opIdx, parent, isMMAv1Row);
+    }]>
+
+  ];
 
   let extraClassDeclaration = extraBaseClassDeclaration;
 }
+
+
 
 #endif

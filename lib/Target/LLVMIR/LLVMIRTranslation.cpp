@@ -1,21 +1,20 @@
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
+
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
 #include "mlir/ExecutionEngine/OptUtils.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
-#include "mlir/Support/LogicalResult.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Transforms/Passes.h"
-#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVM.h"
-#include "triton/tools/sys/getenv.hpp"
+#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IRReader/IRReader.h"
@@ -76,14 +75,14 @@ void extractNVVMMetadata(mlir::ModuleOp module,
     bool hasMetadata{};
 
     // maxntid
-    if (op->hasAttr(NVVMMetadataField::MaxNTid)) {
-      auto attr = op->getAttr(NVVMMetadataField::MaxNTid);
+    if (op->hasAttr("nvvm.maxntid")) {
+      auto attr = op->getAttr("nvvm.maxntid");
       meta.maxntidx = attr.dyn_cast<IntegerAttr>().getInt();
       hasMetadata = true;
     }
 
     // kernel
-    if (op->hasAttr(NVVMMetadataField::Kernel)) {
+    if (op->hasAttr("nvvm.kernel")) {
       meta.is_kernel = true;
       hasMetadata = true;
     }
@@ -113,9 +112,6 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
     return nullptr;
   }
 
-  // Initialize LLVM targets.
-  mlir::ExecutionEngine::setupTargetTriple(llvmModule.get());
-
   auto optPipeline = mlir::makeOptimizingTransformer(
       /*optLevel=*/3, /*sizeLevel=*/0,
       /*targetMachine=*/nullptr);
@@ -136,7 +132,7 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
 
 std::unique_ptr<llvm::Module>
 translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
-                           mlir::ModuleOp module) {
+                           mlir::ModuleOp module, int computeCapability) {
   mlir::PassManager pm(module->getContext());
   applyPassManagerCLOptions(pm);
   auto printingFlags = mlir::OpPrintingFlags();
@@ -151,8 +147,8 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
       /*printAfterOnlyOnChange=*/true,
       /*printAfterOnlyOnFailure*/ false, llvm::dbgs(), printingFlags);
 
-  pm.addPass(createConvertTritonGPUToLLVMPass());
-  // Conanicalize to eliminate the remaining UnrealizedConversionCastOp
+  pm.addPass(createConvertTritonGPUToLLVMPass(computeCapability));
+  // Canonicalize to eliminate the remaining UnrealizedConversionCastOp
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(mlir::createCSEPass()); // Simplify the IR to improve readability.
   pm.addPass(mlir::createSymbolDCEPass());
@@ -233,7 +229,6 @@ void addExternalLibs(mlir::ModuleOp &module,
 
   DictionaryAttr dict = DictionaryAttr::get(module->getContext(), attrs);
   module.getOperation()->setAttr("triton_gpu.externs", dict);
-  return;
 }
 
 bool linkExternLib(llvm::Module &module, llvm::StringRef path) {

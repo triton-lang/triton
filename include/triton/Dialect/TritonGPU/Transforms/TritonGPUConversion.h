@@ -14,6 +14,7 @@ namespace mlir {
 class TritonGPUTypeConverter : public TypeConverter {
 public:
   TritonGPUTypeConverter(MLIRContext *context, int numWarps);
+  int getNumWarps() const { return numWarps; }
 
 private:
   MLIRContext *context;

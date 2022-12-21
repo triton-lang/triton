@@ -1,16 +1,17 @@
-#include "triton/Conversion/TritonGPUToLLVM/PtxAsmFormat.h"
+#include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
 #include "mlir/IR/Builders.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+
 #include <gtest/gtest.h>
 
 namespace mlir {
 namespace triton {
-class PtxAsmFormatTest : public ::testing::Test {
+class PTXAsmFormatTest : public ::testing::Test {
 protected:
   static constexpr int numValues = 4;
 
-  PtxAsmFormatTest() {
+  PTXAsmFormatTest() {
     ctx.loadDialect<arith::ArithmeticDialect>();
 
     createValues();
@@ -34,7 +35,7 @@ protected:
   Value v[numValues + 1];
 };
 
-TEST_F(PtxAsmFormatTest, basic) {
+TEST_F(PTXAsmFormatTest, basic) {
   PTXBuilder builder;
 
   // Create the operands needed by the instructions in the PTX code.
@@ -55,7 +56,7 @@ TEST_F(PtxAsmFormatTest, basic) {
   ASSERT_EQ(constraints, "=r,b"); // $0 -> =r, $1 -> b
 }
 
-TEST_F(PtxAsmFormatTest, complexInstruction) {
+TEST_F(PTXAsmFormatTest, complexInstruction) {
   using triton::CacheModifier;
   using triton::EvictionPolicy;
 
@@ -76,7 +77,7 @@ TEST_F(PtxAsmFormatTest, complexInstruction) {
 
   auto &ld =
       builder
-          .create<PTXIOInstr>("ld") //
+          .create<>("ld") //
           ->o("volatile", isVolatile)
           .global()
           .o("ca", cache == CacheModifier::CA)
@@ -99,7 +100,7 @@ TEST_F(PtxAsmFormatTest, complexInstruction) {
   EXPECT_EQ(builder.getConstraints(), "l,b");
 }
 
-TEST_F(PtxAsmFormatTest, MultiLinePTX) {
+TEST_F(PTXAsmFormatTest, MultiLinePTX) {
   PTXBuilder builder;
 
   auto *constVal = builder.newConstantOperand(1);
@@ -119,6 +120,27 @@ TEST_F(PtxAsmFormatTest, MultiLinePTX) {
   auto values = builder.getAllMLIRArgs();
   EXPECT_EQ(values[0], v[1]); // $0 -> v[1]
   EXPECT_EQ(values[1], v[2]); // $1 -> v[2]
+}
+
+TEST_F(PTXAsmFormatTest, onlyAttachMLIRArgs) {
+  PTXBuilder builder;
+  const char *ptxCode =
+      ".param .b64 param0;\n" // prepare param0 (format string)
+      "st.param.b64 [param0], %0;\n"
+      "st.param.b64 [param0], %1;\n"
+      "st.param.b64 [param0], %2;\n";
+
+  auto &ptxSnippet = *builder.create(ptxCode);
+  auto *opr0 = builder.newOperand(v[0], "r");
+  auto *opr1 = builder.newOperand(v[1], "r");
+  auto *opr2 = builder.newOperand(v[2], "r");
+  ptxSnippet({opr1, opr2, opr0}, true);
+
+  EXPECT_EQ(builder.dump(), ptxCode);
+  ASSERT_EQ(builder.getAllMLIRArgs()[0], v[1]);
+  ASSERT_EQ(builder.getAllMLIRArgs()[1], v[2]);
+  ASSERT_EQ(builder.getAllMLIRArgs()[2], v[0]);
+  ASSERT_EQ(builder.getAllMLIRArgs().size(), 3);
 }
 
 } // namespace triton

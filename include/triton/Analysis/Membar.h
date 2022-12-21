@@ -29,7 +29,11 @@ public:
   /// The following circumstances are not considered yet:
   /// - Double buffers
   /// - N buffers
-  MembarAnalysis(Allocation *allocation) : allocation(allocation) { run(); }
+  MembarAnalysis(Allocation *allocation) : allocation(allocation) {}
+
+  /// Runs the membar analysis to the given operation, inserts a barrier if
+  /// necessary.
+  void run();
 
 private:
   struct RegionInfo {
@@ -56,8 +60,12 @@ private:
     bool isIntersected(const RegionInfo &other, Allocation *allocation) const {
       return /*RAW*/ isIntersected(syncWriteBuffers, other.syncReadBuffers,
                                    allocation) ||
-             /*WAR*/ isIntersected(syncReadBuffers, other.syncWriteBuffers,
-                                   allocation);
+             /*WAR*/
+             isIntersected(syncReadBuffers, other.syncWriteBuffers,
+                           allocation) ||
+             /*WAW*/
+             isIntersected(syncWriteBuffers, other.syncWriteBuffers,
+                           allocation);
     }
 
     /// Clears the buffers because a barrier is inserted.
@@ -77,10 +85,6 @@ private:
       });
     }
   };
-
-  /// Runs the membar analysis to the given operation, inserts a barrier if
-  /// necessary.
-  void run();
 
   /// Applies the barrier analysis based on the SCF dialect, in which each
   /// region has a single basic block only.

@@ -3,7 +3,8 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/Support/raw_ostream.h"
-#include <sstream> // unify to llvm::raw_string_ostream ?
+// TODO(Superjomn): unify to llvm::raw_string_ostream
+#include <sstream>
 
 namespace mlir {
 namespace triton {
@@ -34,7 +35,7 @@ PTXBuilder::Operand *PTXBuilder::newConstantOperand(const std::string &v) {
   return argArchive.back().get();
 }
 
-PTXBuilder::Operand *PTXBuilder::newConstantOperand(int v) {
+PTXBuilder::Operand *PTXBuilder::newConstantOperand(int64_t v) {
   std::stringstream ss;
   ss << "0x" << std::hex << v;
   return newConstantOperand(ss.str());
@@ -117,27 +118,42 @@ std::string PTXBuilder::dump() const {
   return strJoin(lines, "\n\t");
 }
 
-PTXInstrExecution &PTXInstrCommon::call(ArrayRef<Operand *> oprs) {
+PTXInstrExecution &PTXInstrCommon::call(ArrayRef<Operand *> oprs,
+                                        bool onlyAttachMLIRArgs) {
+  if (onlyAttachMLIRArgs) {
+    // Nearly impossible to make the $0,$1 in two PTX code snippets to point to
+    // the same MLIR values in onlyAttachMLIRArgs mode.
+    assert(builder->executions.empty() &&
+           "builder can only hold a single execution when onlyAttachMIIRArgs "
+           "is true.");
+    builder->reorderArgArchive(oprs);
+  }
+
   builder->executions.emplace_back(
-      std::make_unique<PTXInstrExecution>(this, oprs));
+      std::make_unique<PTXInstrExecution>(this, oprs, onlyAttachMLIRArgs));
+
   return *builder->executions.back();
 }
 
-PTXInstrExecution &PTXInstrCommon::operator()(ArrayRef<Operand *> oprs) {
-  return call(oprs);
+PTXInstrExecution &PTXInstrCommon::operator()(ArrayRef<Operand *> oprs,
+                                              bool onlyAttachMLIRArgs) {
+  return call(oprs, onlyAttachMLIRArgs);
 }
 
 std::string PTXInstrExecution::dump() const {
   std::string osStr;
   llvm::raw_string_ostream os(osStr);
+
+  std::string instrRepr = strJoin(instr->instrParts, ".");
+  if (onlyAttachMLIRArgs)
+    return instrRepr;
+
   if (pred) {
     if (!pred->repr)
       os << "@" << pred->dump() << " ";
     else
       os << pred->repr(pred->idx) << " ";
   }
-
-  std::string instrRepr = strJoin(instr->instrParts, ".");
 
   llvm::SmallVector<std::string, 4> argReprs;
   for (auto *arg : argsInOrder) {
@@ -161,6 +177,28 @@ PTXInstrExecution::getArgList() const {
       args.push_back(arg);
   }
   return args;
+}
+
+PTXInstr &PTXInstr::global() {
+  o("global");
+  return *this;
+}
+
+PTXInstr &PTXInstr::shared() {
+  o("shared");
+  return *this;
+}
+
+PTXInstr &PTXInstr::v(int vecWidth, bool predicate) {
+  if (vecWidth > 1) {
+    o("v" + std::to_string(vecWidth), predicate);
+  }
+  return *this;
+}
+
+PTXInstr &PTXInstr::b(int width) {
+  o("b" + std::to_string(width));
+  return *this;
 }
 
 } // namespace triton

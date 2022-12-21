@@ -2,6 +2,7 @@
 #define TRITON_TARGET_LLVMIRTRANSLATION_H
 #include "llvm/ADT/StringRef.h"
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace llvm {
@@ -24,7 +25,7 @@ void addExternalLibs(mlir::ModuleOp &module,
 // Translate TritonGPU dialect to LLVMIR, return null if failed.
 std::unique_ptr<llvm::Module>
 translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
-                           mlir::ModuleOp module);
+                           mlir::ModuleOp module, int computeCapability);
 
 // Translate mlir LLVM dialect to LLVMIR, return null if failed.
 std::unique_ptr<llvm::Module>

@@ -16,6 +16,9 @@ except ImportError:
     _cutlass = None
     has_cutlass = False
 
+# TODO: move to separate module
+import triton
+
 
 def catch_oor(kernel, pytest_handle=None):
     try:
@@ -34,12 +37,12 @@ def sparsify_tensor(x, mask, block):
     return ret
 
 
-def make_pair(shape, device="cuda", alpha=1e-2, beta=0., trans=False, data=None):
+def make_pair(shape, device="cuda", alpha=1e-2, beta=0., trans=False, data=None, dtype=torch.float32):
     if data is None:
-        data = torch.randn(shape, dtype=torch.float32, device=device)
+        data = torch.randn(shape, dtype=torch.float32, requires_grad=True, device=device)
     ref_ret = data
     ref_ret = ref_ret * alpha + beta
-    ref_ret = ref_ret.half().float()
+    ref_ret = ref_ret.half().to(dtype)
     if trans:
         ref_ret = ref_ret.t().requires_grad_()
     ref_ret = ref_ret.detach().requires_grad_()
@@ -102,7 +105,6 @@ def allclose(x, y, tol=1e-2):
     diff = abs(x - y)
     x_max = torch.max(x)
     y_max = torch.max(y)
-    tol = 1e-2
     err = torch.max(diff) / torch.max(x_max, y_max)
     return err <= tol
 
@@ -116,7 +118,9 @@ def nvsmi(attrs):
     return ret
 
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None, percentiles=[0.5, 0.2, 0.8], record_clocks=False):
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
+             percentiles=(0.5, 0.2, 0.8),
+             record_clocks=False, fast_flush=False):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -131,6 +135,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, percentiles=[0.5, 0.2, 0
     :type grad_to_none: torch.tensor, optional
     :param percentiles: Performance percentile to return in addition to the median.
     :type percentiles: list[float]
+    :param fast_flush: Use faster kernel to flush L2 between measurements
+    :type fast_flush: bool
     """
 
     # Estimate the runtime of the function
@@ -152,7 +158,10 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, percentiles=[0.5, 0.2, 0
     # doesn't contain any input data before the run
     start_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
     end_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
-    cache = torch.empty(int(256e6), dtype=torch.int8, device='cuda')
+    if fast_flush:
+        cache = torch.empty(int(256e6 // 4), dtype=torch.int, device='cuda')
+    else:
+        cache = torch.empty(int(256e6), dtype=torch.int8, device='cuda')
     # Warm-up
     for _ in range(n_warmup):
         fn()
@@ -330,8 +339,8 @@ def get_dram_gbps(backend=None, device=None):
         backend = _triton.runtime.backend.CUDA
     if not device:
         device = torch.cuda.current_device()
-    mem_clock_khz = _triton.runtime.memory_clock_rate(backend, device)
-    bus_width = _triton.runtime.global_memory_bus_width(backend, device)
+    mem_clock_khz = triton.compiler.cuda_utils.get_device_properties(device)["mem_clock_rate"]  # in kHz
+    bus_width = triton.compiler.cuda_utils.get_device_properties(device)["mem_bus_width"]
     bw_gbps = mem_clock_khz * bus_width * 2 / 1e6 / 8  # In GB/s
     return bw_gbps
 
@@ -341,11 +350,13 @@ def get_max_tensorcore_tflops(dtype: torch.dtype, backend=None, device=None, clo
         backend = _triton.runtime.backend.CUDA
     if not device:
         device = torch.cuda.current_device()
-    num_subcores = _triton.runtime.num_sm(backend, device) * 4  # on recent GPUs
+
+    triton.compiler.init_cuda_utils()
+    num_subcores = triton.compiler.cuda_utils.get_device_properties(device)["multiprocessor_count"] * 4
     if not clock_rate:
-        clock_rate = _triton.runtime.clock_rate(backend, device)  # in kHz
-    cc = _triton.runtime.cc(backend, device)
-    if cc < 80:
+        clock_rate = triton.compiler.cuda_utils.get_device_properties(device)["sm_clock_rate"]  # in kHz
+    capability = torch.cuda.get_device_capability(device)
+    if capability[0] < 8:
         assert dtype == torch.float16
         ops_per_sub_core = 256  # 2 4x4x4 Tensor Cores
     else:
