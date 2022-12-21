@@ -3,17 +3,17 @@
 
 using ::mlir::LLVM::DotOpFMAConversionHelper;
 using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
-using ::mlir::LLVM::MMA16816ConversionHelper;
 using ::mlir::LLVM::getElementsFromStruct;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
 using ::mlir::LLVM::getStructFromElements;
+using ::mlir::LLVM::MMA16816ConversionHelper;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::getElemsPerThread;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getSizePerThread;
+using ::mlir::triton::gpu::SharedEncodingAttr;
 
 bool isMmaToDotShortcut(MmaEncodingAttr &mmaLayout,
                         DotOperandEncodingAttr &dotOperandLayout) {
@@ -24,10 +24,9 @@ bool isMmaToDotShortcut(MmaEncodingAttr &mmaLayout,
          dotOperandLayout.getParent() == mmaLayout;
 }
 
-void storeBlockedToShared(Value src, Value llSrc,
-                          ArrayRef<Value> srcStrides,
-                          ArrayRef<Value> srcIndices, Value dst,
-                          Value smemBase, Type elemTy, Location loc,
+void storeBlockedToShared(Value src, Value llSrc, ArrayRef<Value> srcStrides,
+                          ArrayRef<Value> srcIndices, Value dst, Value smemBase,
+                          Type elemTy, Location loc,
                           ConversionPatternRewriter &rewriter) {
   auto srcTy = src.getType().cast<RankedTensorType>();
   auto srcShape = srcTy.getShape();
@@ -346,7 +345,8 @@ private:
         multiDimCTAId[d] = multiDimRepId[d] * numCTAsEachRep[d] + it.value();
       }
 
-      auto linearCTAId = getLinearIndex<unsigned>(multiDimCTAId, numCTAs, order);
+      auto linearCTAId =
+          getLinearIndex<unsigned>(multiDimCTAId, numCTAs, order);
       // TODO: This is actually redundant index calculation, we should
       //       consider of caching the index calculation result in case
       //       of performance issue observed.
@@ -377,9 +377,9 @@ private:
           for (unsigned v = 0; v < vec; ++v) {
             Value currVal = extract_element(llvmElemTy, valVec, idx_val(v));
             if (isInt1)
-              currVal =
-                  icmp_ne(currVal, rewriter.create<LLVM::ConstantOp>(
-                                       loc, i8_ty, rewriter.getI8IntegerAttr(0)));
+              currVal = icmp_ne(currVal,
+                                rewriter.create<LLVM::ConstantOp>(
+                                    loc, i8_ty, rewriter.getI8IntegerAttr(0)));
             else if (isPtr)
               currVal = inttoptr(llvmElemTyOrig, currVal);
             vals[elemId + linearCTAId * accumSizePerThread + v] = currVal;
@@ -457,9 +457,9 @@ private:
       if (dstLayout.isa<BlockedEncodingAttr>() ||
           dstLayout.isa<SliceEncodingAttr>() ||
           dstLayout.isa<MmaEncodingAttr>()) {
-        processReplica(loc, rewriter, /*stNotRd*/ false, dstTy, outNumCTAsEachRep,
-                       multiDimRepId, outVec, paddedRepShape, outOrd, outVals,
-                       smemBase);
+        processReplica(loc, rewriter, /*stNotRd*/ false, dstTy,
+                       outNumCTAsEachRep, multiDimRepId, outVec, paddedRepShape,
+                       outOrd, outVals, smemBase);
       } else {
         assert(0 && "ConvertLayout with output layout not implemented");
         return failure();
@@ -478,9 +478,9 @@ private:
   // blocked -> shared.
   // Swizzling in shared memory to avoid bank conflict. Normally used for
   // A/B operands of dots.
-  LogicalResult lowerBlockedToShared(triton::gpu::ConvertLayoutOp op,
-                                     OpAdaptor adaptor,
-                                     ConversionPatternRewriter &rewriter) const {
+  LogicalResult
+  lowerBlockedToShared(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+                       ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     Value src = op.src();
     Value dst = op.result();
@@ -499,13 +499,15 @@ private:
     auto elemPtrTy = ptr_ty(getTypeConverter()->convertType(elemTy), 3);
     smemBase = bitcast(smemBase, elemPtrTy);
 
-    auto srcStrides = getStridesFromShapeAndOrder(srcShape, inOrd, loc, rewriter);
-    auto srcIndices =
-        emitBaseIndexForBlockedLayout(loc, rewriter, srcBlockedLayout, srcShape);
+    auto srcStrides =
+        getStridesFromShapeAndOrder(srcShape, inOrd, loc, rewriter);
+    auto srcIndices = emitBaseIndexForBlockedLayout(loc, rewriter,
+                                                    srcBlockedLayout, srcShape);
     storeBlockedToShared(src, adaptor.src(), srcStrides, srcIndices, dst,
                          smemBase, elemTy, loc, rewriter);
 
-    auto smemObj = SharedMemoryObject(smemBase, dstShape, outOrd, loc, rewriter);
+    auto smemObj =
+        SharedMemoryObject(smemBase, dstShape, outOrd, loc, rewriter);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
@@ -540,7 +542,8 @@ private:
     } else if (auto blockedLayout =
                    dotOperandLayout.getParent()
                        .dyn_cast_or_null<BlockedEncodingAttr>()) {
-      auto dotOpLayout = dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+      auto dotOpLayout =
+          dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
       DotOpFMAConversionHelper helper(blockedLayout);
       auto thread = getThreadId(rewriter, loc);
       if (dotOpLayout.getOpIdx() == 0) { // $a
@@ -559,9 +562,9 @@ private:
   }
 
   // mma -> dot_operand
-  LogicalResult lowerMmaToDotOperand(triton::gpu::ConvertLayoutOp op,
-                                     OpAdaptor adaptor,
-                                     ConversionPatternRewriter &rewriter) const {
+  LogicalResult
+  lowerMmaToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+                       ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto srcTy = op.src().getType().cast<RankedTensorType>();
     auto dstTy = op.result().getType().cast<RankedTensorType>();
@@ -573,7 +576,8 @@ private:
       // get source values
       auto vals = getElementsFromStruct(loc, adaptor.src(), rewriter);
       unsigned elems = getElemsPerThread(srcTy);
-      Type elemTy = this->getTypeConverter()->convertType(srcTy.getElementType());
+      Type elemTy =
+          this->getTypeConverter()->convertType(srcTy.getElementType());
       // for the destination type, we need to pack values together
       // so they can be consumed by tensor core operations
       unsigned vecSize =
@@ -603,8 +607,10 @@ private:
 
       // return composeValuesToDotOperandLayoutStruct(ha, numRepM, numRepK);
 
-      Type structTy = LLVM::LLVMStructType::getLiteral(this->getContext(), types);
-      Value view = getStructFromElements(loc, reorderedVals, rewriter, structTy);
+      Type structTy =
+          LLVM::LLVMStructType::getLiteral(this->getContext(), types);
+      Value view =
+          getStructFromElements(loc, reorderedVals, rewriter, structTy);
       rewriter.replaceOp(op, view);
       return success();
     }
@@ -621,7 +627,8 @@ private:
     Value dst = op.result();
     bool isHMMA = supportMMA(dst, mmaLayout.getVersionMajor());
 
-    auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.src(), rewriter);
+    auto smemObj =
+        getSharedMemoryObjectFromStruct(loc, adaptor.src(), rewriter);
     Value res;
 
     if (!isOuter && mmaLayout.isAmpere() && isHMMA) { // tensor core v2
@@ -655,13 +662,13 @@ private:
       if (dotOperandLayout.getOpIdx() == 0) { // operand $a
         // TODO[Superjomn]: transA is not available here.
         bool transA = false;
-        res = helper.loadA(src, transA, smemObj, getThreadId(rewriter, loc), loc,
-                           rewriter);
+        res = helper.loadA(src, transA, smemObj, getThreadId(rewriter, loc),
+                           loc, rewriter);
       } else if (dotOperandLayout.getOpIdx() == 1) { // operand $b
         // TODO[Superjomn]: transB is not available here.
         bool transB = false;
-        res = helper.loadB(src, transB, smemObj, getThreadId(rewriter, loc), loc,
-                           rewriter);
+        res = helper.loadB(src, transB, smemObj, getThreadId(rewriter, loc),
+                           loc, rewriter);
       }
     } else {
       assert(false && "Unsupported mma layout found");
@@ -671,11 +678,9 @@ private:
 };
 
 void populateConvertLayoutOpToLLVMPatterns(
-    mlir::LLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, int numWarps,
-    AxisInfoAnalysis &axisInfoAnalysis,
-    const Allocation *allocation, Value smem,
-    PatternBenefit benefit) {
+    mlir::LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
+    const Allocation *allocation, Value smem, PatternBenefit benefit) {
   patterns.add<ConvertLayoutOpConversion>(typeConverter, allocation, smem,
                                           benefit);
 }

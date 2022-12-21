@@ -194,8 +194,8 @@ public:
                                       /*benefit=*/10);
     // ReduceOp
     populateReduceOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                      axisInfoAnalysis, &allocation, smem,
-                                      /*benefit=*/10);
+                                   axisInfoAnalysis, &allocation, smem,
+                                   /*benefit=*/10);
     // ViewOp
     populateViewOpToLLVMPatterns(typeConverter, patterns, numWarps,
                                  axisInfoAnalysis, &allocation, smem,
