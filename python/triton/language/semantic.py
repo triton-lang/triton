@@ -637,9 +637,9 @@ def cast(input: tl.tensor,
         return tl.tensor(builder.create_fp_to_fp(input.handle, dst_ty.to_ir(builder)),
                          dst_ty)
 
-    # Casting types of the same bit width: fp16 <=> bf16
-    if (src_sca_ty.is_fp16() and dst_sca_ty.is_bf16()) or \
-       (src_sca_ty.is_bf16() and dst_sca_ty.is_fp16()):
+    # bf16 <=> (not fp32)
+    if (src_sca_ty.is_fp16() and not dst_sca_ty.is_fp32()) or \
+       (src_sca_ty.is_bf16() and not dst_sca_ty.is_fp32()):
         return cast(cast(input, tl.float32, builder), dst_sca_ty, builder)
 
     # Standard floating types' casting: truncation

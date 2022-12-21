@@ -26,13 +26,12 @@ bool isMmaToDotShortcut(MmaEncodingAttr &mmaLayout,
 
 void storeBlockedToShared(Value src, Value llSrc, ArrayRef<Value> srcStrides,
                           ArrayRef<Value> srcIndices, Value dst, Value smemBase,
-                          Type elemPtrTy, Location loc,
+                          Type elemTy, Location loc,
                           ConversionPatternRewriter &rewriter) {
   auto srcTy = src.getType().cast<RankedTensorType>();
   auto srcShape = srcTy.getShape();
   assert(srcShape.size() == 2 && "Unexpected rank of insertSlice");
 
-  auto elemTy = srcTy.getElementType();
   auto dstTy = dst.getType().cast<RankedTensorType>();
   auto srcBlockedLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
   auto dstSharedLayout = dstTy.getEncoding().cast<SharedEncodingAttr>();
@@ -52,6 +51,7 @@ void storeBlockedToShared(Value src, Value llSrc, ArrayRef<Value> srcStrides,
   auto srcAccumSizeInThreads =
       product<unsigned>(srcBlockedLayout.getSizePerThread());
   auto wordTy = vec_ty(elemTy, minVec);
+  auto elemPtrTy = ptr_ty(elemTy);
 
   // TODO: [goostavz] We should make a cache for the calculation of
   // emitBaseIndexForBlockedLayout in case backend compiler not being able to
@@ -504,7 +504,7 @@ private:
     auto srcIndices = emitBaseIndexForBlockedLayout(loc, rewriter,
                                                     srcBlockedLayout, srcShape);
     storeBlockedToShared(src, adaptor.src(), srcStrides, srcIndices, dst,
-                         smemBase, elemPtrTy, loc, rewriter);
+                         smemBase, elemTy, loc, rewriter);
 
     auto smemObj =
         SharedMemoryObject(smemBase, dstShape, outOrd, loc, rewriter);
