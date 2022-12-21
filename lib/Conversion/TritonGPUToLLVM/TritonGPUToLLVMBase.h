@@ -536,7 +536,7 @@ public:
     auto ptrTy = LLVM::LLVMPointerType::get(
         this->getTypeConverter()->convertType(rewriter.getI8Type()), 3);
     auto bufferId = allocation->getBufferId(value);
-    // assert(bufferId != Allocation::InvalidBufferId && "BufferId not found");
+    assert(bufferId != Allocation::InvalidBufferId && "BufferId not found");
     size_t offset = allocation->getOffset(bufferId);
     Value offVal = idx_val(offset);
     Value base = gep(ptrTy, smem, offVal);
