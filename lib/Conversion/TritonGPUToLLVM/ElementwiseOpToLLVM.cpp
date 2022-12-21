@@ -854,6 +854,8 @@ void populateElementwiseOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<FPToSIOpConversion>(typeConverter, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, benefit);
 
+  patterns.add<FpToFpOpConversion>(typeConverter, benefit);
+
   patterns.add<ExtElemwiseOpConversion>(typeConverter, benefit);
   // ExpOpConversionApprox will try using ex2.approx if the input type is FP32.
   // For FP64 input type, ExpOpConversionApprox will return failure and
