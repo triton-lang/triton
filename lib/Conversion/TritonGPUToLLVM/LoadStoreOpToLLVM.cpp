@@ -634,15 +634,15 @@ struct InsertSliceOpConversion
     // Compute the offset based on the original strides of the shared memory
     // object
     auto offset = dot(rewriter, loc, offsets, smemObj.strides);
-    auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
-    auto elemPtrTy = ptr_ty(llvmElemTy, 3);
+    auto elemTy = getTypeConverter()->convertType(dstTy.getElementType());
+    auto elemPtrTy = ptr_ty(elemTy, 3);
     auto smemBase = gep(elemPtrTy, smemObj.base, offset);
 
     auto llSrc = adaptor.source();
     auto srcIndices =
         emitBaseIndexForBlockedLayout(loc, rewriter, srcLayout, srcShape);
     storeBlockedToShared(src, llSrc, srcStrides, srcIndices, dst, smemBase,
-                         elemPtrTy, loc, rewriter);
+                         elemTy, loc, rewriter);
     // Barrier is not necessary.
     // The membar pass knows that it writes to shared memory and will handle it
     // properly.
@@ -714,8 +714,7 @@ struct InsertSliceAsyncOpConversion
     // Compute the offset based on the original dimensions of the shared
     // memory object
     auto dstOffset = dot(rewriter, loc, offsetVals, smemObj.strides);
-    auto dstPtrTy =
-        ptr_ty(getTypeConverter()->convertType(resTy.getElementType()), 3);
+    auto dstPtrTy = ptr_ty(resElemTy, 3);
     Value dstPtrBase = gep(dstPtrTy, smemObj.base, dstOffset);
 
     // %mask

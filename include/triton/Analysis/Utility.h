@@ -47,6 +47,8 @@ bool supportMMA(triton::DotOp op, int version);
 
 bool supportMMA(Value value, int version);
 
+Type getElementType(Value value);
+
 std::string getValueOperandName(Value value, AsmState &state);
 
 template <typename T_OUT, typename T_IN>

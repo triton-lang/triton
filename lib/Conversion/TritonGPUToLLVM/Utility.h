@@ -72,6 +72,7 @@
 
 // Types
 #define i32_ty rewriter.getIntegerType(32)
+#define i16_ty rewriter.getIntegerType(16)
 #define ui32_ty rewriter.getIntegerType(32, false)
 #define f16_ty rewriter.getF16Type()
 #define bf16_ty rewriter.getBF16Type()
