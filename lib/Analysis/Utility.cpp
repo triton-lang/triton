@@ -134,6 +134,13 @@ bool supportMMA(Value value, int version) {
          (elemTy.isInteger(8) && version >= 2);
 }
 
+Type getElementType(Value value) {
+  auto type = value.getType();
+  if (auto tensorType = type.dyn_cast<RankedTensorType>())
+    return tensorType.getElementType();
+  return type;
+}
+
 std::string getValueOperandName(Value value, AsmState &state) {
   std::string opName;
   llvm::raw_string_ostream ss(opName);

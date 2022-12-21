@@ -519,7 +519,7 @@ struct DotOpMmaV2ConversionHelper {
     case TensorCoreType::FP32_FP16_FP16_FP32:
       return ptr_ty(type::f16Ty(ctx), 3);
     case TensorCoreType::FP32_BF16_BF16_FP32:
-      return ptr_ty(type::bf16Ty(ctx), 3);
+      return ptr_ty(type::i16Ty(ctx), 3);
     case TensorCoreType::FP32_TF32_TF32_FP32:
       return ptr_ty(type::f32Ty(ctx), 3);
     case TensorCoreType::INT32_INT8_INT8_INT32:
@@ -534,12 +534,13 @@ struct DotOpMmaV2ConversionHelper {
   Type getMatType() const {
     Type fp32Ty = type::f32Ty(ctx);
     Type fp16x2Ty = vec_ty(type::f16Ty(ctx), 2);
-    Type bf16x2Ty = vec_ty(type::bf16Ty(ctx), 2);
+    Type i16x2Ty = vec_ty(type::i16Ty(ctx), 2);
     // floating point types
     Type fp16x2Pack4Ty =
         LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp16x2Ty));
+    // LLVM 14.0 does not support bf16 type, so we use i16 instead.
     Type bf16x2Pack4Ty =
-        LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, bf16x2Ty));
+        LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i16x2Ty));
     Type fp32Pack4Ty =
         LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp32Ty));
     // integer types
