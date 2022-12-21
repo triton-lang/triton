@@ -731,6 +731,10 @@ def test_atomic_cas():
     (f'int{x}', f'uint{x}', True) for x in [8, 16, 32, 64]
 ])
 def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
+    # bfloat16 on cc < 80 will not be tested
+    check_type_supported(dtype_x) 
+    check_type_supported(dtype_z)
+
     # This is tricky because numpy doesn't have bfloat, and torch doesn't have uints.
     x0 = 43 if dtype_x in int_dtypes else 43.5
     if dtype_x in float_dtypes and dtype_z == 'int1':
@@ -965,6 +969,8 @@ reduce_configs2 = [
 
 @pytest.mark.parametrize("op, dtype_str, shape, axis", reduce_configs1 + reduce_configs2)
 def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
+    check_type_supported(dtype_str)  # bfloat16 on cc < 80 will not be tested
+
     # triton kernel
     @triton.jit
     def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, AXIS: tl.constexpr):
