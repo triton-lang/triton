@@ -3,6 +3,7 @@
 
 from ..impl import (
     ir,
+    builtin,
 )
 from .core import (
     abs,
@@ -19,7 +20,6 @@ from .core import (
     atomic_xor,
     bfloat16,
     block_type,
-    builtin,
     cat,
     cdiv,
     constexpr,
