@@ -8,6 +8,7 @@ import os
 import subprocess
 import textwrap
 from collections import defaultdict, namedtuple
+from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, cast, overload
 
 import torch
 
@@ -18,6 +19,9 @@ try:
     from torch._C import _cuda_getCurrentRawStream as get_cuda_stream
 except ImportError:
     get_cuda_stream = lambda dev_idx: torch.cuda.current_stream(dev_idx).cuda_stream
+
+
+T = TypeVar('T')
 
 # -----------------------------------------------------------------------------
 # Dependencies Finder
@@ -94,20 +98,19 @@ def version_key():
     return '-'.join(triton.__version__) + '-' + ptxas_version + '-' + '-'.join(contents)
 
 
-class KernelInterface:
+class KernelInterface(Generic[T]):
+    run: T
 
-    def __getitem__(self, grid):
+    def __getitem__(self, grid) -> T:
         """
         A JIT function is launched with: fn[grid](*args, **kwargs).
         Hence JITFunction.__getitem__ returns a callable proxy that
         memorizes the grid.
         """
-        def launcher(*args, **kwargs):
-            return self.run(*args, grid=grid, **kwargs)
-        return launcher
+        return cast(T, functools.partial(cast(Callable, self.run), grid=grid))
 
 
-class JITFunction(KernelInterface):
+class JITFunction(KernelInterface[T]):
 
     # Hook for inspecting compiled functions and modules
     cache_hook = None
@@ -152,8 +155,8 @@ class JITFunction(KernelInterface):
             if x is None:
                 return True
             return False
-        divisible_by_16 = [i for i, arg in enumerate(args) if is_divisible_by_16(arg) and i not in self.do_not_specialize]
-        equal_to_1 = [i for i, arg in enumerate(args) if isinstance(arg, int) and arg == 1 and i not in self.do_not_specialize]
+        divisible_by_16 = {i for i, arg in enumerate(args) if is_divisible_by_16(arg) and i not in self.do_not_specialize}
+        equal_to_1 = {i for i, arg in enumerate(args) if isinstance(arg, int) and arg == 1 and i not in self.do_not_specialize}
         return namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1"])(tuple(divisible_by_16), tuple(equal_to_1))
         # return _triton.code_gen.instance_descriptor(divisible_by_16, equal_to_1)
 
@@ -177,6 +180,9 @@ class JITFunction(KernelInterface):
                 triton.language.uint32: 'u32',
                 triton.language.uint64: 'u64',
                 triton.language.float8: 'fp8',
+                triton.language.float16: 'fp16',
+                triton.language.bfloat16: 'bf16',
+                triton.language.float32: 'fp32',
             }[key]
             return f'*{ty}'
         if key is None:
@@ -272,7 +278,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         if callable(arg):
           raise TypeError(f"Callable constexpr at index {{i}} is not supported")
       if not self._call_hook(key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
-        bin = triton.compile(self, signature, device, constants, num_warps, num_stages, extern_libs=extern_libs, configs=configs)
+        bin = triton.compile(self, signature=signature, device=device, constants=constants, num_warps=num_warps, num_stages=num_stages, extern_libs=extern_libs, configs=configs)
         if not warmup:
             bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, triton.compiler.CompiledKernel.launch_enter_hook, triton.compiler.CompiledKernel.launch_exit_hook, bin, *args)
         self.cache[device][key] = bin
@@ -364,29 +370,55 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
 # -----------------------------------------------------------------------------
 
 
-def jit(*args, **kwargs):
+@overload
+def jit(fn: T) -> JITFunction[T]:
+    ...
+
+
+@overload
+def jit(
+    *,
+    version=None,
+    do_not_specialize: Optional[Iterable[int]] = None,
+) -> Callable[[T], JITFunction[T]]:
+    ...
+
+
+def jit(
+    fn: Optional[T] = None,
+    *,
+    version=None,
+    do_not_specialize: Optional[Iterable[int]] = None,
+) -> Union[JITFunction[T], Callable[[T], JITFunction[T]]]:
     """
     Decorator for JIT-compiling a function using the Triton compiler.
 
-    :note: When a jit'd function is called, :code:`torch.tensor` arguments are implicitly converted to pointers using the :code:`.data_ptr()` method.
+    :note: When a jit'd function is called, :code:`torch.tensor` arguments are
+        implicitly converted to pointers using the :code:`.data_ptr()` method.
 
     :note: This function will be compiled and run on the GPU. It will only have access to:
 
            * python primitives,
-           * objects within the triton.language package,
+           * builtins within the triton package,
            * arguments to this function,
            * other jit'd functions
 
     :param fn: the function to be jit-compiled
     :type fn: Callable
     """
-    if args:
-        assert len(args) == 1
-        assert callable(args[0])
-        return JITFunction(args[0], **kwargs)
+
+    def decorator(fn: T) -> JITFunction[T]:
+        assert callable(fn)
+        return JITFunction(
+            fn,
+            version=version,
+            do_not_specialize=do_not_specialize,
+        )
+
+    if fn is not None:
+        return decorator(fn)
+
     else:
-        def decorator(fn):
-            return JITFunction(fn, **kwargs)
         return decorator
 
 

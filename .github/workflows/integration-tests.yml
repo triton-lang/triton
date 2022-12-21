@@ -5,50 +5,88 @@ on:
   pull_request:
     branches:
       - master
-
+      - triton-mlir
 
 jobs:
+  Runner-Preparation:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Prepare runner matrix
+        id: set-matrix
+        run: |
+          if [ x"${{ github.repository }}" == x"openai/triton" ]; then
+            echo '::set-output name=matrix::[["self-hosted", "A10"], ["self-hosted", "V100"], "macos-10.15"]'
+          else
+            echo '::set-output name=matrix::["ubuntu-latest", "macos-10.15"]'
+          fi
 
   Integration-Tests:
-    
-    runs-on: [self-hosted, V100]
+    needs: Runner-Preparation
+
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      matrix:
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix)}}
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v2
 
       - name: Clear cache
         run: |
-          rm -r ~/.triton/
-        continue-on-error: true
+          rm -rf ~/.triton/cache/
+
+      - name: Check imports
+        if: ${{ matrix.runner != 'macos-10.15' }}
+        run: |
+          pip install isort
+          isort -c ./python || ( echo '::error title=Imports not sorted::Please run \"isort ./python\"' ; exit 1 )
+
+      - name: Check python style
+        if: ${{ matrix.runner != 'macos-10.15' }}
+        run: |
+          pip install autopep8
+          autopep8 -a -r -d --exit-code ./python || ( echo '::error title=Style issues::Please run \"autopep8 -a -r -i ./python\"' ; exit 1 )
+
+      - name: Check cpp style
+        if: ${{ matrix.runner != 'macos-10.15' }}
+        run: |
+          pip install clang-format
+          find . -regex '.*\.\(cpp\|hpp\|h\|cc\)' -not -path "./python/build/*" -not -path "./include/triton/external/*" -print0 | xargs -0 -n1 clang-format -style=file --dry-run -Werror -i ||
+          (echo '::error title=Style issues:: Please run `find . -regex ".*\.\(cpp\|hpp\|h\|cc\)" -not -path "./python/build/*" -not -path "./include/triton/external/*" -print0 | xargs -0 -n1 clang-format -style=file -i`' ; exit 1)
+
+      - name: Flake8
+        if: ${{ matrix.runner != 'macos-10.15' }}
+        run: |
+          pip install flake8
+          flake8 --config ./python/setup.cfg ./python || ( echo '::error::Flake8 failed; see logs for errors.' ; exit 1 )
 
       - name: Install Triton
         run: |
-          alias python='python3'
           cd python
-          pip3 install -e '.[tests]'
+          TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
 
-      - name: Check imports
-        run: "isort -c ./python || ( echo '::error title=Imports not sorted::Please run \"isort ./python\"' ; exit 1 )"
-
-      - name: Check style
-        run: "autopep8 -a -r -d --exit-code ./python || ( echo '::error title=Style issues::Please run \"autopep8 -a -r -i ./python\"' ; exit 1 )"
-
-      - name: Flake8
-        run: "flake8 --config ./python/setup.cfg ./python || ( echo '::error::Flake8 failed; see logs for errors.' ; exit 1 )"
-
-      - name: Unit tests
+      - name: Run lit tests
         run: |
-          cd python/test/unit
-          pytest -vs .
+          cd python
+          LIT_TEST_DIR="build/$(ls build)/test"
+          if [ ! -d "$LIT_TEST_DIR" ]; then
+            echo "Not found `$LIT_TEST_DIR`.  Did you change an installation method?" ; exit -1
+          fi
+          lit -v "$LIT_TEST_DIR"
 
-      - name: Regression tests
+      - name: Run python tests
+        if: ${{matrix.runner[0] == 'self-hosted'}}
         run: |
-          cd python/test/regression
-          sudo nvidia-smi -i 0 -pm 1
-          sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
-          sudo nvidia-smi -i 0 --lock-memory-clocks=877,877
-          pytest -vs .
-          sudo nvidia-smi -i 0 -rgc
-          sudo nvidia-smi -i 0 -rmc
+          cd python/test/unit/
+          pytest
+
+
+      - name: Run CXX unittests
+        run: |
+          cd python/
+          cd "build/$(ls build)"
+          ctest

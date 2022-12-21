@@ -106,13 +106,9 @@ Atomic Ops
     :nosignatures:
 
     atomic_cas
-    atomic_xchg
     atomic_add
     atomic_max
     atomic_min
-    atomic_and
-    atomic_or
-    atomic_xor
 
 
 Comparison ops

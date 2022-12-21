@@ -18,8 +18,8 @@ def num_warps(n):
 
 @triton.jit
 def _blocksparse_softmax_fwd(
-    Out, A, LUT, R, stride_xz,
-    extent, stride_zr, stride_hr,  # relative attention
+    Out, A, stride_xz, LUT,
+    R, extent, stride_zr, stride_hr,  # relative attention
     scale, is_causal,
     ROW_SIZE: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
@@ -164,8 +164,8 @@ class _softmax(torch.autograd.Function):
         # enqueue kernel
         out = torch.empty_like(a)
         _blocksparse_softmax_fwd[grid](
-            out, a, lut, rel_logits, a.stride(0),
-            rel_shape[-1], rel_strides[0], rel_strides[1],  # relative attn
+            out, a, a.stride(0), lut,
+            rel_logits, rel_shape[-1], rel_strides[0], rel_strides[1],  # relative attn
             scale,
             is_causal,
             BLOCK_SIZE=block,

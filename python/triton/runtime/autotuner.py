@@ -4,6 +4,7 @@ import builtins
 import time
 from typing import Dict
 
+from ..compiler import OutOfResources
 from ..testing import do_bench
 from .jit import KernelInterface
 
@@ -60,7 +61,10 @@ class Autotuner(KernelInterface):
                 config.pre_hook(self.nargs)
             self.hook(args)
             self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **current)
-        return do_bench(kernel_call)
+        try:
+            return do_bench(kernel_call)
+        except OutOfResources:
+            return float('inf')
 
     def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
@@ -118,7 +122,6 @@ class Autotuner(KernelInterface):
 class Config:
     """
     An object that represents a possible kernel configuration for the auto-tuner to try.
-
     :ivar meta: a dictionary of meta-parameters to pass to the kernel as keyword arguments.
     :type meta: dict[Str, Any]
     :ivar num_warps: the number of warps to use for the kernel when compiled for GPUs. For example, if
@@ -150,10 +153,8 @@ class Config:
 def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
     """
     Decorator for auto-tuning a :code:`triton.jit`'d function.
-
     .. highlight:: python
     .. code-block:: python
-
         @triton.autotune(configs=[
             triton.Config(meta={'BLOCK_SIZE': 128}, num_warps=4),
             triton.Config(meta={'BLOCK_SIZE': 1024}, num_warps=8),
@@ -164,12 +165,10 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
         @triton.jit
         def kernel(x_ptr, x_size, **META):
             BLOCK_SIZE = META['BLOCK_SIZE']
-
     :note: When all the configurations are evaluated, the kernel will run multiple time.
            This means that whatever value the kernel updates will be updated multiple times.
            To avoid this undesired behavior, you can use the `reset_to_zero` argument, which
            reset the value of the provided tensor to `zero` before running any configuration.
-
     :param configs: a list of :code:`triton.Config` objects
     :type configs: list[triton.Config]
     :param key: a list of argument names whose change in value will trigger the evaluation of all provided configs.
@@ -204,16 +203,12 @@ def heuristics(values):
     """
     Decorator for specifying how the values of certain meta-parameters may be computed.
     This is useful for cases where auto-tuning is prohibitevely expensive, or just not applicable.
-
     .. highlight:: python
     .. code-block:: python
-
         @triton.heuristics(values={'BLOCK_SIZE': lambda args: 2 ** int(math.ceil(math.log2(args[1])))})
         @triton.jit
         def kernel(x_ptr, x_size, **META):
             BLOCK_SIZE = META['BLOCK_SIZE'] # smallest power-of-two >= x_size
-
-
     .param values: a dictionary of meta-parameter names and functions that compute the value of the meta-parameter.
                    each such function takes a list of positional arguments as input.
     .type values: dict[str, Callable[[list[Any]], Any]]

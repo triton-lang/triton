@@ -21,7 +21,6 @@ class Symbol:
     ) -> None:
         '''
         A symbol is a function declaration.
-
         :param name: name of the symbol
         :param op_name: name of the operation
         :param ret_type: return type of the operation
@@ -65,9 +64,9 @@ def convert_type(type_str) -> Optional[str]:
     elif type_str == "u64":
         return "uint64"
     elif type_str == "float":
-        return "float32"
+        return "fp32"
     elif type_str == "double":
-        return "float64"
+        return "fp64"
     else:
         # ignore other types, such as pointer types
         return None
@@ -98,7 +97,6 @@ class ExternLibrary(ABC):
     ) -> None:
         '''
         Abstract class for extern library.
-
         :param name: name of the library
         :param path: path of the library
         :param format: whether to format the generated stub file
@@ -154,7 +152,6 @@ class Libdevice(ExternLibrary):
     def __init__(self, path) -> None:
         '''
         Constructor for Libdevice.
-
         :param path: path of the libdevice library
         '''
         super().__init__("libdevice", path)
@@ -177,7 +174,6 @@ class Libdevice(ExternLibrary):
         func_strs = func_str.split("(")
         func_name = func_strs[0].replace("@", "")
         op_name = func_name.replace("__nv_", "")
-        # To filter some interfaces unlisted in NVIDIA's official documents.
         if 'ieee' in op_name:
             return None
         # Get arg_types
@@ -310,8 +306,8 @@ class Libdevice(ExternLibrary):
             for symbol in symbols:
                 arg_type_symbol_dict_str += "("
                 for arg_type in symbol.arg_types:
-                    arg_type_symbol_dict_str += f"core.{arg_type},"
-                ret_type = f"core.{symbol.ret_type}"
+                    arg_type_symbol_dict_str += f'core.dtype("{arg_type}"),'
+                ret_type = f'core.dtype("{symbol.ret_type}")'
                 arg_type_symbol_dict_str += "): (\"" + symbol.name + "\", " + ret_type + "),\n"
             arg_type_symbol_dict_str += "}"
 
@@ -331,7 +327,6 @@ class LLVMDisassembler:
     def __init__(self, path) -> None:
         '''
         Invoke llvm-dis to disassemble the given file.
-
         :param path: path to llvm-dis
         '''
         self._path = path
@@ -361,7 +356,6 @@ def build(
 ) -> None:
     '''
       Interface function to build the library file.
-
       :param llvm_dis_path: path to the llvm-dis binary
       :param lib_path: path to the external library file
       :param lib_name: name of the library
