@@ -8,7 +8,7 @@ import os
 import subprocess
 import textwrap
 from collections import defaultdict, namedtuple
-from typing import TypeVar, Generic, cast, Callable, overload, Optional, Iterable, Union
+from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, cast, overload
 
 import torch
 

@@ -4,8 +4,8 @@ import builtins
 import time
 from typing import Dict
 
-from ..testing import do_bench
 from ..compiler import OutOfResources
+from ..testing import do_bench
 from .jit import KernelInterface
 
 
@@ -62,9 +62,9 @@ class Autotuner(KernelInterface):
             self.hook(args)
             self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **current)
         try:
-          return do_bench(kernel_call)
+            return do_bench(kernel_call)
         except OutOfResources:
-          return float('inf')
+            return float('inf')
 
     def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))

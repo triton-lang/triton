@@ -7,12 +7,8 @@ APIs defined in the `triton.impl` module which are public will be re-exported
 in other relevant `triton` module namespaces.
 """
 
+from .base import builtin, extern, is_builtin
 from triton._C.libtriton.triton import ir
-from .base import (
-    builtin,
-    extern,
-    is_builtin,
-)
 
 __all__ = [
     "builtin",

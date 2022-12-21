@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import List, Callable, TypeVar
+from typing import Callable, List, TypeVar
 
 import triton
 from . import builtin, semantic

@@ -1,5 +1,6 @@
 # flake8: noqa: F821,F841
 import itertools
+import os
 import re
 from typing import Optional, Union
 
@@ -12,8 +13,6 @@ import triton
 import triton._C.libtriton.triton as _triton
 import triton.language as tl
 from triton.runtime.jit import JITFunction, TensorWrapper, reinterpret
-import os
-
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
 uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
