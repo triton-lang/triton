@@ -1,9 +1,15 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_BASE_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_BASE_H
 
+
+// TODO: refactor so that it doesn't fail if Allocation.h
+// is included after utility.h (due to conflict in `store` macro 
+// and <atomic>
+#include "triton/Analysis/Allocation.h"
+
+//
 #include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
-#include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 
 using namespace mlir;
@@ -526,10 +532,11 @@ public:
   template <typename T>
   Value getSharedMemoryBase(Location loc, ConversionPatternRewriter &rewriter,
                             T value) const {
+
     auto ptrTy = LLVM::LLVMPointerType::get(
         this->getTypeConverter()->convertType(rewriter.getI8Type()), 3);
     auto bufferId = allocation->getBufferId(value);
-    assert(bufferId != Allocation::InvalidBufferId && "BufferId not found");
+    // assert(bufferId != Allocation::InvalidBufferId && "BufferId not found");
     size_t offset = allocation->getOffset(bufferId);
     Value offVal = idx_val(offset);
     Value base = gep(ptrTy, smem, offVal);
