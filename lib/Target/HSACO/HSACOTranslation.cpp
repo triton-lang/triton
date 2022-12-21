@@ -11,7 +11,7 @@
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
-#include "triton/tools/sys/getenv.hpp"
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/ExecutionEngine/SectionMemoryManager.h"

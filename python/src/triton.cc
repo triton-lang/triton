@@ -22,7 +22,7 @@
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 #include "triton/Target/PTX/PTXTranslation.h"
 #include "triton/Target/HSACO/HSACOTranslation.h"
-#include "triton/tools/sys/getenv.hpp"
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
