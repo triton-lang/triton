@@ -596,11 +596,9 @@ class tensor:
         if isinstance(slices, slice):
             slices = [slices]
         ret = self
-        n_inserted = 0
         for dim, sl in enumerate(slices):
             if isinstance(sl, constexpr) and sl.value is None:
-                ret = semantic.expand_dims(ret, dim + n_inserted, _builder)
-                n_inserted += 1
+                ret = semantic.expand_dims(ret, dim, _builder)
             elif sl == slice(None, None, None):
                 pass
             else:
