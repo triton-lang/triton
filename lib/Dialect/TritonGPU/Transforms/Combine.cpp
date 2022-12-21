@@ -461,14 +461,18 @@ class FoldConvertAndReduce : public mlir::RewritePattern {
 public:
   explicit FoldConvertAndReduce(mlir::MLIRContext *context)
       : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
-                             2, context) {}
+                             1, context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *cvtOp,
                   mlir::PatternRewriter &rewriter) const override {
     auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(*cvtOp);
     auto srcEncoding =
+        cvt.getOperand().getType().cast<RankedTensorType>().getEncoding();
+    auto dstEncoding =
         cvt.getResult().getType().cast<RankedTensorType>().getEncoding();
+    if (srcEncoding.isa<triton::gpu::SliceEncodingAttr>())
+      return failure();
     SetVector<Operation *> cvtSlices;
     auto filter = [&](Operation *op) {
       return op->getBlock() == cvt->getBlock() &&
@@ -499,7 +503,7 @@ public:
         llvm::MapVector<Value, Attribute> toConvert;
         if (argOp && (argOp != cvt) && cvtSlices.count(argOp) == 0 &&
             failed(simulateBackwardRematerialization(argOp, processed, layout,
-                                                     toConvert, srcEncoding))) {
+                                                     toConvert, dstEncoding))) {
           return failure();
         }
       }
