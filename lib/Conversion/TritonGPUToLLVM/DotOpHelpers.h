@@ -540,6 +540,7 @@ struct DotOpMmaV2ConversionHelper {
     // floating point types
     Type fp16x2Pack4Ty =
         LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp16x2Ty));
+    // LLVM 14.0 does not support bf16 type, so we use i16 instead.
     Type bf16x2Pack4Ty =
         LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i16x2Ty));
     Type fp32Pack4Ty =
@@ -1527,10 +1528,6 @@ private:
     assert(!elems.empty());
 
     Type elemTy = elems[0].getType();
-
-    if (elemTy.isBF16()) {
-      elemTy = i16_ty;
-    }
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(elems.size(), elemTy));
     auto result = getStructFromElements(loc, elems, rewriter, structTy);
@@ -1565,12 +1562,10 @@ struct DotOpFMAConversionHelper {
   explicit DotOpFMAConversionHelper(Attribute layout)
       : layout(layout), ctx(layout.getContext()) {}
 
-  SmallVector<Value> getThreadIds(Value threadId,
-                                  ArrayRef<unsigned> shapePerCTA,
-                                  ArrayRef<unsigned> sizePerThread,
-                                  ArrayRef<unsigned> order,
-                                  ConversionPatternRewriter &rewriter,
-                                  Location loc) const {
+  SmallVector<Value>
+  getThreadIds(Value threadId, ArrayRef<unsigned> shapePerCTA,
+               ArrayRef<unsigned> sizePerThread, ArrayRef<unsigned> order,
+               ConversionPatternRewriter &rewriter, Location loc) const {
     int dim = order.size();
     SmallVector<Value> threadIds(dim);
     for (unsigned k = 0; k < dim - 1; k++) {
@@ -1612,7 +1607,8 @@ struct DotOpFMAConversionHelper {
     Value mContig = i32_val(sizePerThread[order[1]]);
 
     // threadId in blocked layout
-    auto threadIds = getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
+    auto threadIds =
+        getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
     Value threadIdM = threadIds[0];
 
     Value offA0 = isARow ? _0 : mul(threadIdM, mContig);
@@ -1674,7 +1670,8 @@ struct DotOpFMAConversionHelper {
     Value nContig = i32_val(sizePerThread[order[0]]);
 
     // threadId in blocked layout
-    auto threadIds = getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
+    auto threadIds =
+        getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
     Value threadIdN = threadIds[1];
 
     Value offB0 = isBRow ? mul(threadIdN, nContig) : _0;

@@ -116,10 +116,10 @@ struct ArithConstantSplatOpConversion
     auto elemType = values.getElementType();
 
     Attribute val;
-    if (type::isInt(elemType)) {
-      val = values.getValues<IntegerAttr>()[0];
-    } else if (type::isFloat(elemType)) {
+    if (elemType.isBF16() || type::isFloat(elemType)) {
       val = values.getValues<FloatAttr>()[0];
+    } else if (type::isInt(elemType)) {
+      val = values.getValues<IntegerAttr>()[0];
     } else {
       llvm::errs() << "ArithConstantSplatOpConversion get unsupported type: "
                    << value.getType() << "\n";
