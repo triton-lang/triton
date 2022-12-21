@@ -1,9 +1,8 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_BASE_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_BASE_H
 
-
 // TODO: refactor so that it doesn't fail if Allocation.h
-// is included after utility.h (due to conflict in `store` macro 
+// is included after utility.h (due to conflict in `store` macro
 // and <atomic>
 #include "triton/Analysis/Allocation.h"
 
