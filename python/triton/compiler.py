@@ -641,7 +641,7 @@ class CodeGenerator(ast.NodeVisitor):
                 ub_si = self.builder.create_index_to_si(ub)
                 iv = self.builder.create_sub(ub_si, iv)
             self.lscope[node.target.id].handle.replace_all_uses_with(iv)
-            self.set_value(name, triton.language.core.tensor(iv, triton.language.core.int32))
+            self.set_value(node.target.id, triton.language.core.tensor(iv, triton.language.core.int32))
 
             # create YieldOp
             self.builder.set_insertion_point_to_end(for_op.get_body(0))
