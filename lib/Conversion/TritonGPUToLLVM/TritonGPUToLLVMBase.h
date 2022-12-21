@@ -1,10 +1,15 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_BASE_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_BASE_H
 
-#include "mlir/IR/TypeUtilities.h"
+// TODO: refactor so that it doesn't fail if Allocation.h
+// is included after utility.h (due to conflict in `store` macro
+// and <atomic>
 #include "triton/Analysis/Allocation.h"
-#include "triton/Analysis/AxisInfo.h"
+
+//
 #include "Utility.h"
+#include "mlir/IR/TypeUtilities.h"
+#include "triton/Analysis/AxisInfo.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -41,8 +46,8 @@ private:
 
   /// Helper function for wrapping all attributes into a single DictionaryAttr
   static auto wrapAsStructAttrs(OpBuilder &b, ArrayAttr attrs) {
-    return DictionaryAttr::get(
-        b.getContext(), b.getNamedAttr("llvm.struct_attrs", attrs));
+    return DictionaryAttr::get(b.getContext(),
+                               b.getNamedAttr("llvm.struct_attrs", attrs));
   }
 
 protected:
@@ -526,6 +531,7 @@ public:
   template <typename T>
   Value getSharedMemoryBase(Location loc, ConversionPatternRewriter &rewriter,
                             T value) const {
+
     auto ptrTy = LLVM::LLVMPointerType::get(
         this->getTypeConverter()->convertType(rewriter.getI8Type()), 3);
     auto bufferId = allocation->getBufferId(value);

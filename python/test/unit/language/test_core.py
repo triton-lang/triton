@@ -1,6 +1,7 @@
 # flake8: noqa: F821,F841
 import itertools
 import os
+import os
 import re
 from typing import Optional, Union
 
@@ -249,7 +250,7 @@ def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
 
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [
     (dtype_x, dtype_y, op)
-    for op in ['+', '-', '*', '/']  # , '%'
+    for op in ['+', '-', '*', '/', '%']
     for dtype_x in dtypes_with_bfloat16
     for dtype_y in dtypes_with_bfloat16
 ])

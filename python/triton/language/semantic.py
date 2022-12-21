@@ -237,7 +237,11 @@ def mod(input: tl.tensor,
     other_scalar_ty = other.type.scalar
     # float % float
     if scalar_ty.is_floating():
-        return tl.tensor(builder.create_frem(input.handle, other.handle), input.type)
+        # input - input.div(other, rounding_mode="floor") * other
+        ret = sub(input, mul(floor(fdiv(input, other, False, builder), builder),
+                             other, builder),
+                  builder)
+        return ret
     # % int
     elif scalar_ty.is_int():
         if scalar_ty.int_signedness != other_scalar_ty.int_signedness:
@@ -1107,6 +1111,11 @@ def umulhi(x: tl.tensor, y: tl.tensor, builder: ir.builder) -> tl.tensor:
     x, y = binary_op_type_checking_impl(x, y, builder)
     from . import libdevice
     return libdevice.mulhi(x, y, _builder=builder)
+
+
+def floor(x: tl.tensor, builder: ir.builder) -> tl.tensor:
+    from . import libdevice
+    return libdevice.floor(x, _builder=builder)
 
 
 def exp(x: tl.tensor, builder: ir.builder) -> tl.tensor:
