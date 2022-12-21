@@ -467,11 +467,11 @@ public:
   matchAndRewrite(mlir::Operation *cvtOp,
                   mlir::PatternRewriter &rewriter) const override {
     auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(*cvtOp);
-    auto srcEncoding = 
+    auto srcEncoding =
         cvt.getOperand().getType().cast<RankedTensorType>().getEncoding();
     auto dstEncoding =
         cvt.getResult().getType().cast<RankedTensorType>().getEncoding();
-    if(srcEncoding.isa<triton::gpu::SliceEncodingAttr>())
+    if (srcEncoding.isa<triton::gpu::SliceEncodingAttr>())
       return failure();
     SetVector<Operation *> cvtSlices;
     auto filter = [&](Operation *op) {
