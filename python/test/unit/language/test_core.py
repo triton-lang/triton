@@ -1,7 +1,6 @@
 # flake8: noqa: F821,F841
 import itertools
 import os
-import os
 import re
 from typing import Optional, Union
 
@@ -493,9 +492,9 @@ def make_ptr_str(name, shape):
 @pytest.mark.parametrize("expr, dtype_str", [
     (f'x[{s}]', d)
     for s in ['None, :', ':, None']
-              # FIXME: 3d indexing doesn't work
-              #'None, :, :',
-              #':, :, None']
+    # FIXME: 3d indexing doesn't work
+    #'None, :, :',
+    # ':, :, None']
     for d in ['int32', 'uint32', 'uint16']
 ])
 def test_index1d(expr, dtype_str, device='cuda'):
