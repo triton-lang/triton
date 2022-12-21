@@ -6,9 +6,9 @@ using namespace mlir::triton;
 
 using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
 using ::mlir::LLVM::DotOpMmaV2ConversionHelper;
+using ::mlir::LLVM::getElementsFromStruct;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStructFromElements;
-using ::mlir::LLVM::getElementsFromStruct;
 using ::mlir::triton::gpu::getElemsPerThread;
 
 struct SplatOpConversion
@@ -48,12 +48,10 @@ struct SplatOpConversion
     return {};
   }
 
-  static Value convertSplatLikeOpWithMmaLayout(const MmaEncodingAttr &layout,
-                                               Type resType, Type elemType,
-                                               Value constVal,
-                                               TypeConverter *typeConverter,
-                                               ConversionPatternRewriter &rewriter,
-                                               Location loc) {
+  static Value convertSplatLikeOpWithMmaLayout(
+      const MmaEncodingAttr &layout, Type resType, Type elemType,
+      Value constVal, TypeConverter *typeConverter,
+      ConversionPatternRewriter &rewriter, Location loc) {
     auto tensorTy = resType.cast<RankedTensorType>();
     auto shape = tensorTy.getShape();
     if (layout.isAmpere()) {
@@ -82,9 +80,8 @@ struct SplatOpConversion
     return {};
   }
 
-  LogicalResult
-  matchAndRewrite(triton::SplatOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const {
+  LogicalResult matchAndRewrite(triton::SplatOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const {
     auto loc = op->getLoc();
     auto src = adaptor.src();
     auto llStruct = convertSplatLikeOp(src.getType(), op.getType(), src,
@@ -217,12 +214,11 @@ struct TransOpConversion
   }
 };
 
-void populateViewOpToLLVMPatterns(
-    mlir::LLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, int numWarps,
-    AxisInfoAnalysis &axisInfoAnalysis,
-    const Allocation *allocation, Value smem,
-    PatternBenefit benefit) {
+void populateViewOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
+                                  RewritePatternSet &patterns, int numWarps,
+                                  AxisInfoAnalysis &axisInfoAnalysis,
+                                  const Allocation *allocation, Value smem,
+                                  PatternBenefit benefit) {
   patterns.add<ViewLikeOpConversion<triton::ViewOp>>(typeConverter, benefit);
   patterns.add<ViewLikeOpConversion<triton::ExpandDimsOp>>(typeConverter,
                                                            benefit);
@@ -231,4 +227,3 @@ void populateViewOpToLLVMPatterns(
   patterns.add<CatOpConversion>(typeConverter, benefit);
   patterns.add<TransOpConversion>(typeConverter, benefit);
 }
-

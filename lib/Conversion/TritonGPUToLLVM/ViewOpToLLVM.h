@@ -6,11 +6,10 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-void populateViewOpToLLVMPatterns(
-    mlir::LLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, int numWarps,
-    AxisInfoAnalysis &axisInfoAnalysis,
-    const Allocation *allocation, Value smem,
-    PatternBenefit benefit);
+void populateViewOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
+                                  RewritePatternSet &patterns, int numWarps,
+                                  AxisInfoAnalysis &axisInfoAnalysis,
+                                  const Allocation *allocation, Value smem,
+                                  PatternBenefit benefit);
 
 #endif

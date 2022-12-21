@@ -99,7 +99,6 @@ def estimate_matmul_time(
 
 
 def early_config_prune(configs, named_args):
-    backend = _triton.runtime.backend.CUDA
     device = torch.cuda.current_device()
     capability = torch.cuda.get_device_capability()
     # BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, num_warps, num_stages

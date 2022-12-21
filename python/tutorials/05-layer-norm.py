@@ -64,7 +64,6 @@ def _layer_norm_fwd_fused(
         tl.store(Out + cols, out, mask=mask)
 
 
-
 # Backward pass (DX + partial DW + partial DB)
 @triton.jit
 def _layer_norm_bwd_dx_fused(DX, DY, DW, DB, X, W, B, M, V, Lock, stride, N, eps,

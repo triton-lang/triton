@@ -1,8 +1,8 @@
 #include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
 
-#include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "llvm/Support/raw_ostream.h"
 // TODO(Superjomn): unify to llvm::raw_string_ostream
 #include <sstream>
 

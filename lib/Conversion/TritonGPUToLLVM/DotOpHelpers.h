@@ -1,8 +1,6 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_DOT_OP_HELPERS_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_DOT_OP_HELPERS_H
 
-#include "llvm/Support/Format.h"
-#include "llvm/Support/FormatVariadic.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Conversion/ArithmeticToLLVM/ArithmeticToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
@@ -18,14 +16,14 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Analysis/Membar.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/Support/Format.h"
+#include "llvm/Support/FormatVariadic.h"
 
 #include "Utility.h"
 
@@ -1278,9 +1276,8 @@ struct MMA16816ConversionHelper {
     if (aTensorTy.getEncoding().isa<SharedEncodingAttr>()) {
       Value warpM = getWarpM(shape[0]);
       // load from smem
-    // we use ldmatrix.x4 so each warp processes 16x16 elements.
-      int wpt =
-          std::min<int>(mmaLayout.getWarpsPerCTA()[0], shape[0] / 16);
+      // we use ldmatrix.x4 so each warp processes 16x16 elements.
+      int wpt = std::min<int>(mmaLayout.getWarpsPerCTA()[0], shape[0] / 16);
       loadFn =
           getLoadMatrixFn(tensor, smemObj, mmaLayout, wpt /*wpt*/, 1 /*kOrder*/,
                           {mmaInstrM, mmaInstrK} /*instrShape*/,
@@ -1324,8 +1321,7 @@ struct MMA16816ConversionHelper {
 
     Value warpN = getWarpN(shape[1]);
     // we use ldmatrix.x4 so each warp processes 16x16 elements.
-    int wpt =
-        std::min<int>(mmaLayout.getWarpsPerCTA()[1], shape[1] / 16);
+    int wpt = std::min<int>(mmaLayout.getWarpsPerCTA()[1], shape[1] / 16);
     auto loadFn =
         getLoadMatrixFn(tensor, smemObj, mmaLayout, wpt /*wpt*/, 0 /*kOrder*/,
                         {mmaInstrK, mmaInstrN} /*instrShape*/,
@@ -1563,12 +1559,10 @@ struct DotOpFMAConversionHelper {
   explicit DotOpFMAConversionHelper(Attribute layout)
       : layout(layout), ctx(layout.getContext()) {}
 
-  SmallVector<Value> getThreadIds(Value threadId,
-                                  ArrayRef<unsigned> shapePerCTA,
-                                  ArrayRef<unsigned> sizePerThread,
-                                  ArrayRef<unsigned> order,
-                                  ConversionPatternRewriter &rewriter,
-                                  Location loc) const {
+  SmallVector<Value>
+  getThreadIds(Value threadId, ArrayRef<unsigned> shapePerCTA,
+               ArrayRef<unsigned> sizePerThread, ArrayRef<unsigned> order,
+               ConversionPatternRewriter &rewriter, Location loc) const {
     int dim = order.size();
     SmallVector<Value> threadIds(dim);
     for (unsigned k = 0; k < dim - 1; k++) {
@@ -1610,7 +1604,8 @@ struct DotOpFMAConversionHelper {
     Value mContig = i32_val(sizePerThread[order[1]]);
 
     // threadId in blocked layout
-    auto threadIds = getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
+    auto threadIds =
+        getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
     Value threadIdM = threadIds[0];
 
     Value offA0 = isARow ? _0 : mul(threadIdM, mContig);
@@ -1672,7 +1667,8 @@ struct DotOpFMAConversionHelper {
     Value nContig = i32_val(sizePerThread[order[0]]);
 
     // threadId in blocked layout
-    auto threadIds = getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
+    auto threadIds =
+        getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
     Value threadIdN = threadIds[1];
 
     Value offB0 = isBRow ? mul(threadIdN, nContig) : _0;
@@ -1747,7 +1743,6 @@ struct DotOpFMAConversionHelper {
     // if not.
     int K = dotOpLayout.getOpIdx() == 0 ? shape[1] : shape[0];
     int otherDim = dotOpLayout.getOpIdx() == 1 ? shape[1] : shape[0];
-
 
     bool isM = dotOpLayout.getOpIdx() == 0;
     int shapePerCTAMN = getShapePerCTAForMN(blockedLayout, isM);
