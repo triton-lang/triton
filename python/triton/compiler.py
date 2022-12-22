@@ -1132,7 +1132,7 @@ def generate_launcher(constants, signature):
     void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, hipStream_t stream, hipFunction_t function, {arg_decls}) {{
     void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
     if(gridX*gridY*gridZ > 0){{
-        HIP_CHECK(hipModuleLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
+        // HIP_CHECK(hipModuleLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0)); // Segfault 2
         // hipModuleLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0);
     }}
     }}
@@ -2104,10 +2104,10 @@ class HIPUtils(object):
             hipFunction_t fun;
             // hipModuleLoadData(&mod, hsaco);
             hipModuleLoadDataEx(&mod, hsaco, 5, opt, optval);
-            hipModuleGetFunction(&fun, mod, name);
+            hipModuleGetFunction(&fun, mod, name); // SEGFAULT 1
             free(hsaco);
-            printf("fun: %d\\n", fun);
-            printf("mod: %d\\n", mod);
+            // printf("fun: %d\\n", fun);
+            // printf("mod: %d\\n", mod);
 
             // get allocated registers and spilled registers from the function
             int n_regs = 0;
@@ -2159,3 +2159,4 @@ class HIPUtils(object):
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         self.load_binary = mod.load_binary
+        # self.get_device_properties = mod.get_device_properties
