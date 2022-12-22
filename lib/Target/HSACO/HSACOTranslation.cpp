@@ -140,7 +140,7 @@ std::string generate_hsaco(llvm::Module* module,
   return hsaco_path;
 }
 
-std::tuple<std::string, std::string> llir_to_hsaco(llvm::Module* module,
+std::tuple<std::string, std::string> llir_to_amdgcn_and_hsaco(llvm::Module* module,
                                                    std::string cc) {
   // create
   std::string triple = "amdgcn-amd-amdhsa";
@@ -163,7 +163,7 @@ namespace triton {
 
 std::tuple<std::string, std::string> translateLLVMIRToHSACO(llvm::Module& module,
                                                             std::string cc) {
-  auto hsacoCode = llir_to_hsaco(&module, cc);
+  auto hsacoCode = llir_to_amdgcn_and_hsaco(&module, cc);
   return hsacoCode;
 }
 

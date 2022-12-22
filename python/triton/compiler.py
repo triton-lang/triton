@@ -978,7 +978,7 @@ def amdgcn_get_kernel_name(amdgcn: str) -> str:
             return line.split()[-1].strip()
 
 
-def llir_to_hsaco(mod: Any, gfx_arch: str) -> Tuple[str, str]:
+def llir_to_amdgcn_and_hsaco(mod: Any, gfx_arch: str) -> Tuple[str, str]:
     '''
     Translate TritonGPU module to HSACO code.
     :param mod: a TritonGPU dialect module
@@ -1109,7 +1109,6 @@ def generate_launcher(constants, signature):
     format = "iiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
 
     if torch.version.hip is not None:
-
         src = f"""
 #define __HIP_PLATFORM_AMD__
 #include <hip/hip_runtime.h>
@@ -1193,126 +1192,124 @@ PyMODINIT_FUNC PyInit_launcher(void) {{
   return m;
 }}
 """
-
     else:
-
-    # generate glue code
+        # generate glue code
         src = f"""
-#include \"cuda.h\"
-#include <Python.h>
+    #include \"cuda.h\"
+    #include <Python.h>
 
-static inline void gpuAssert(CUresult code, const char *file, int line)
-{{
-   if (code != CUDA_SUCCESS)
-   {{
-      const char* prefix = "Triton Error [CUDA]: ";
-      const char* str;
-      cuGetErrorString(code, &str);
-      char err[1024] = {{0}};
-      strcat(err, prefix);
-      strcat(err, str);
-      PyErr_SetString(PyExc_RuntimeError, err);
-   }}
-}}
+    static inline void gpuAssert(CUresult code, const char *file, int line)
+    {{
+    if (code != CUDA_SUCCESS)
+    {{
+        const char* prefix = "Triton Error [CUDA]: ";
+        const char* str;
+        cuGetErrorString(code, &str);
+        char err[1024] = {{0}};
+        strcat(err, prefix);
+        strcat(err, str);
+        PyErr_SetString(PyExc_RuntimeError, err);
+    }}
+    }}
 
-#define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
+    #define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
-void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, CUstream stream, CUfunction function, {arg_decls}) {{
-  void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
-  if(gridX*gridY*gridZ > 0){{
-    CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
-  }}
-}}
+    void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, CUstream stream, CUfunction function, {arg_decls}) {{
+    void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
+    if(gridX*gridY*gridZ > 0){{
+        CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
+    }}
+    }}
 
-static inline CUdeviceptr getPointer(PyObject *obj, int idx) {{
-  if (PyLong_Check(obj)) {{
-    return (CUdeviceptr)PyLong_AsUnsignedLongLong(obj);
-  }}
-  if (obj == Py_None) {{
+    static inline CUdeviceptr getPointer(PyObject *obj, int idx) {{
+    if (PyLong_Check(obj)) {{
+        return (CUdeviceptr)PyLong_AsUnsignedLongLong(obj);
+    }}
+    if (obj == Py_None) {{
+        return (CUdeviceptr)0;
+    }}
+    PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
+    if(ptr){{
+        PyObject *empty_tuple = PyTuple_New(0);
+        PyObject *ret = PyObject_Call(ptr, empty_tuple, NULL);
+        Py_DECREF(empty_tuple);
+        Py_DECREF(ptr);
+        if (!PyLong_Check(ret)) {{
+        PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
+        }}
+        return (CUdeviceptr)PyLong_AsUnsignedLongLong(ret);
+    }}
+    PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
     return (CUdeviceptr)0;
-  }}
-  PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
-  if(ptr){{
-    PyObject *empty_tuple = PyTuple_New(0);
-    PyObject *ret = PyObject_Call(ptr, empty_tuple, NULL);
-    Py_DECREF(empty_tuple);
-    Py_DECREF(ptr);
-    if (!PyLong_Check(ret)) {{
-      PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
     }}
-    return (CUdeviceptr)PyLong_AsUnsignedLongLong(ret);
-  }}
-  PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
-  return (CUdeviceptr)0;
-}}
 
-static PyObject* launch(PyObject* self, PyObject* args) {{
-  int gridX, gridY, gridZ;
-  uint64_t _stream;
-  uint64_t _function;
-  int num_warps;
-  int shared_memory;
-  PyObject *launch_enter_hook = NULL;
-  PyObject *launch_exit_hook = NULL;
-  PyObject *compiled_kernel = NULL;
-  PyObject *hook_ret = NULL;
-  {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
-    return NULL;
-  }}
+    static PyObject* launch(PyObject* self, PyObject* args) {{
+    int gridX, gridY, gridZ;
+    uint64_t _stream;
+    uint64_t _function;
+    int num_warps;
+    int shared_memory;
+    PyObject *launch_enter_hook = NULL;
+    PyObject *launch_exit_hook = NULL;
+    PyObject *compiled_kernel = NULL;
+    PyObject *hook_ret = NULL;
+    {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
+    if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
+        return NULL;
+    }}
 
-  if (launch_enter_hook != Py_None) {{
-    PyObject *new_args = PyTuple_Pack(1, compiled_kernel);
-    hook_ret = PyObject_CallObject(launch_enter_hook, new_args);
-    Py_DECREF(new_args);
-  }}
+    if (launch_enter_hook != Py_None) {{
+        PyObject *new_args = PyTuple_Pack(1, compiled_kernel);
+        hook_ret = PyObject_CallObject(launch_enter_hook, new_args);
+        Py_DECREF(new_args);
+    }}
 
-  _launch(gridX, gridY, gridZ, num_warps, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"getPointer(_arg{i},{i})" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
+    _launch(gridX, gridY, gridZ, num_warps, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"getPointer(_arg{i},{i})" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
 
-  if (launch_exit_hook != Py_None) {{
-    PyObject *new_args = NULL;
+    if (launch_exit_hook != Py_None) {{
+        PyObject *new_args = NULL;
+        if (hook_ret) {{
+            new_args = PyTuple_Pack(2, compiled_kernel, hook_ret);
+        }} else {{
+            new_args = PyTuple_Pack(1, compiled_kernel);
+        }}
+        hook_ret = PyObject_CallObject(launch_exit_hook, new_args);
+        Py_DECREF(new_args);
+    }}
+
     if (hook_ret) {{
-        new_args = PyTuple_Pack(2, compiled_kernel, hook_ret);
-    }} else {{
-        new_args = PyTuple_Pack(1, compiled_kernel);
+        Py_DECREF(hook_ret);
     }}
-    hook_ret = PyObject_CallObject(launch_exit_hook, new_args);
-    Py_DECREF(new_args);
-  }}
+    if(PyErr_Occurred()) {{
+        return NULL;
+    }}
+    // return None
+    Py_INCREF(Py_None);
+    return Py_None;
+    }}
 
-  if (hook_ret) {{
-      Py_DECREF(hook_ret);
-  }}
-  if(PyErr_Occurred()) {{
-    return NULL;
-  }}
-  // return None
-  Py_INCREF(Py_None);
-  return Py_None;
-}}
+    static PyMethodDef ModuleMethods[] = {{
+    {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
+    {{NULL, NULL, 0, NULL}} // sentinel
+    }};
 
-static PyMethodDef ModuleMethods[] = {{
-  {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
-  {{NULL, NULL, 0, NULL}} // sentinel
-}};
+    static struct PyModuleDef ModuleDef = {{
+    PyModuleDef_HEAD_INIT,
+    \"launcher\",
+    NULL, //documentation
+    -1, //size
+    ModuleMethods
+    }};
 
-static struct PyModuleDef ModuleDef = {{
-  PyModuleDef_HEAD_INIT,
-  \"launcher\",
-  NULL, //documentation
-  -1, //size
-  ModuleMethods
-}};
-
-PyMODINIT_FUNC PyInit_launcher(void) {{
-  PyObject *m = PyModule_Create(&ModuleDef);
-  if(m == NULL) {{
-    return NULL;
-  }}
-  PyModule_AddFunctions(m, ModuleMethods);
-  return m;
-}}
-"""
+    PyMODINIT_FUNC PyInit_launcher(void) {{
+    PyObject *m = PyModule_Create(&ModuleDef);
+    if(m == NULL) {{
+        return NULL;
+    }}
+    PyModule_AddFunctions(m, ModuleMethods);
+    return m;
+    }}
+    """
     return src
 
 
@@ -1397,7 +1394,7 @@ def _build(name, src, srcdir):
         hip_lib_dir = libhip_dir()
         hip_include_dir = os.path.join(hip_home_dirs(), "include")
     else:
-        cuda_lib_dir = libcuda_dir()
+        cuda_lib_dirs = libcuda_dirs()
         cuda_path = os.environ.get('CUDA_PATH', default_cuda_dir())
         cu_include_dir = os.path.join(cuda_path, "include")
 
@@ -1515,16 +1512,18 @@ def _get_amdgpu_arch():
     except:
         return None
 
-@static_vars(discovered_gfx_arch = _get_amdgpu_arch())
-def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
-    if isinstance(signature, str):
-        signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
-    # we get the kernel, i.e. the first function generated in the module
-    if configs is None:
-        configs = [instance_descriptor()]
-    assert len(configs) == 1
-    # cache manager
-    name = fn.__name__
+# @static_vars(discovered_gfx_arch = _get_amdgpu_arch())
+# def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
+#     if isinstance(signature, str):
+#         signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
+#     # we get the kernel, i.e. the first function generated in the module
+#     if configs is None:
+#         configs = [instance_descriptor()]
+#     assert len(configs) == 1
+#     # cache manager
+#     name = fn.__name__
+    
+def make_stub(name, signature, constants):
     # name of files that are cached
     so_cache_key = make_so_cache_key(triton.runtime.jit.version_key(), signature, constants)
     so_cache_manager = CacheManager(so_cache_key)
@@ -1606,19 +1605,37 @@ def compile(fn, **kwargs):
     num_stages = kwargs.get("num_stages", 3 if capability >= 75 else 2)
     extern_libs = kwargs.get("extern_libs", dict())
     # build compilation stages
-    stages = {
-        "ast": (lambda path: fn, None),
-        "ttir": (lambda path: _triton.ir.parse_mlir_module(path, context),
-                 lambda src: ast_to_ttir(src, signature, configs[0], constants)),
-        "ttgir": (lambda path: _triton.ir.parse_mlir_module(path, context),
-                  lambda src: ttir_to_ttgir(src, num_warps, num_stages, capability)),
-        "llir": (lambda path: Path(path).read_bytes(),
-                 lambda src: ttgir_to_llir(src, extern_libs, capability)),
-        "ptx": (lambda path: Path(path).read_text(),
-                lambda src: llir_to_ptx(src, capability)),
-        "cubin": (lambda path: Path(path).read_bytes(),
-                  lambda src: ptx_to_cubin(src, capability))
-    }
+    if torch.version.hip is not None:
+        gfx_arch = os.environ.get('MI_GPU_ARCH', _get_amdgpu_arch())
+        print(f"gfx_arch = {gfx_arch}")
+        if gfx_arch is None:
+            raise RuntimeError('gfx_arch is None (not specified)')
+        stages = {
+            "ast": (lambda path: fn, None),
+            "ttir": (lambda path: _triton.ir.parse_mlir_module(path, context),
+                    lambda src: ast_to_ttir(src, signature, configs[0], constants)),
+            "ttgir": (lambda path: _triton.ir.parse_mlir_module(path, context),
+                    lambda src: ttir_to_ttgir(src, num_warps, num_stages, capability)),
+            "llir": (lambda path: Path(path).read_bytes(),
+                    lambda src: ttgir_to_llir(src, extern_libs, capability)),
+            "amdgcn": (lambda path: Path(path).read_text(),
+                    lambda src: llir_to_amdgcn_and_hsaco(src, gfx_arch)),
+        }
+    else:
+        stages = {
+            "ast": (lambda path: fn, None),
+            "ttir": (lambda path: _triton.ir.parse_mlir_module(path, context),
+                    lambda src: ast_to_ttir(src, signature, configs[0], constants)),
+            "ttgir": (lambda path: _triton.ir.parse_mlir_module(path, context),
+                    lambda src: ttir_to_ttgir(src, num_warps, num_stages, capability)),
+            "llir": (lambda path: Path(path).read_bytes(),
+                    lambda src: ttgir_to_llir(src, extern_libs, capability)),
+            "ptx": (lambda path: Path(path).read_text(),
+                    lambda src: llir_to_ptx(src, capability)),
+            "cubin": (lambda path: Path(path).read_bytes(),
+                    lambda src: ptx_to_cubin(src, capability))
+        }
+
     # find out the signature of the function
     if isinstance(fn, triton.runtime.JITFunction):
         configs = kwargs.get("configs", None)
@@ -1646,6 +1663,7 @@ def compile(fn, **kwargs):
         signature = {k: v for k, v in enumerate(param_tys)}
         first_stage = list(stages.keys()).index(ir)
 
+    print(f"name, signature, constants={name, signature, constants}")
     # cache manager
     so_path = make_stub(name, signature, constants)
     # create cache manager
@@ -1655,6 +1673,7 @@ def compile(fn, **kwargs):
         name, ext = fn.__name__, "ast"
     else:
         name, ext = os.path.basename(fn).split(".")
+    print(f"name, ext = {name, ext}")
 
     # load metadata if any
     metadata = None
@@ -1662,44 +1681,45 @@ def compile(fn, **kwargs):
         with open(fn_cache_manager._make_path(f"{name}.json")) as f:
             metadata = json.load(f)
     else:
-        shmem_size = _triton.get_shared_memory_size(ttgir)
+        metadata = {"num_warps": num_warps, "num_stages": num_stages, "ctime": dict()}
+        if ext == "ptx":
+            assert "shared" in kwargs, "ptx compilation must provide shared memory size"
+            metadata["shared"] = kwargs["shared"]
 
-    if torch.version.hip is not None:
-      #llvm-ir -> amdgcn/hsaco (or read from cache)
-      gfx_arch = os.environ.get('MI_GPU_ARCH', compile.discovered_gfx_arch)
-      if gfx_arch is None:
-          raise RuntimeError('gfx_arch is None (not specified)')
-      amdgcn, amdgcn_md5, hsaco_path, hsaco_path_md5, force_compile, _ = read_or_execute_2(fn_cache_manager, force_compile,
-                                                                         f"{name}.amdgcn", f"{name}.hsaco_path", metadata,
-                            run_if_found_1 = lambda path: Path(path).read_text(),
-                            run_if_found_2 = lambda path: Path(path).read_text(),
-                            run_if_not_found = lambda: llir_to_hsaco(llir, gfx_arch))
-      kernel_name = amdgcn_get_kernel_name(amdgcn)
-      metadata = {"name": kernel_name, "shared": shmem_size, "num_warps": num_warps, "num_stages": num_stages,
-                  "md5": {  "hsaco_path": hsaco_path_md5,  "amdgcn": amdgcn_md5,
-                            "llir": llir_md5,
-                            "ttir": ttir_md5, "ttgir": ttgir_md5 }}
-
-      fn_cache_manager.put(json.dumps(metadata), f"{name}.json", binary=False)
-      asm = {"ttir": ttir, "ttgir": ttgir, "llir": llir, "amdgcn": amdgcn, "hsaco_path": hsaco_path}
-    else:
-      # llvm-ir -> ptx (or read from cache)
-      ptx, ptx_md5, force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.ptx", metadata,
-                            run_if_found = lambda path: Path(path).read_text(),
-                            run_if_not_found = lambda: llir_to_ptx(llir))
-      # ptx -> cubin (or read from cache)
-      cubin, cubin_md5, force_compile, _ = read_or_execute(fn_cache_manager, force_compile, f"{name}.cubin", metadata,
-                              run_if_found = lambda path: Path(path).read_bytes(),
-                              run_if_not_found= lambda: ptx_to_cubin(ptx, device))
-      # dump new metadata
-      kernel_name = ptx_get_kernel_name(ptx)
-      metadata = {"name": kernel_name, "shared": shmem_size, "num_warps": num_warps, "num_stages": num_stages,
-                  "md5": {  "cubin": cubin_md5,  "ptx": ptx_md5,
-                            "llir": llir_md5,
-                            "ttir": ttir_md5, "ttgir": ttgir_md5 }}
-
-      fn_cache_manager.put(json.dumps(metadata), f"{name}.json", binary=False)
-      asm = {"ttir": ttir, "ttgir": ttgir, "llir": llir, "ptx": ptx, "cubin": cubin}
+    first_stage = list(stages.keys()).index(ext)
+    asm = dict()
+    module = fn
+    # run compilation pipeline  and populate metadata
+    for ir, (parse, compile) in list(stages.items())[first_stage:]:
+        path = fn_cache_manager._make_path(f"{name}.{ir}")
+        if ir == ext:
+            next_module = parse(fn)
+        elif os.path.exists(path) and\
+                ir in metadata["ctime"] and\
+                os.path.getctime(path) == metadata["ctime"][ir]:
+            next_module = parse(path)
+        else:
+            next_module = compile(module)
+            fn_cache_manager.put(next_module, f"{name}.{ir}")
+        if os.path.exists(path):
+            metadata["ctime"][ir] = os.path.getctime(path)
+        asm[ir] = next_module if ir == "cubin" else str(next_module)
+        if ir == "llir" and "shared" not in metadata:
+            metadata["shared"] = _triton.get_shared_memory_size(module)
+        if ir == "ptx":
+            metadata["name"] = ptx_get_kernel_name(next_module)
+        if ir == "amdgcn":
+            print(f"next_module: {next_module}")
+            print(f"asm:{asm}")
+            metadata["name"] = amdgcn_get_kernel_name(next_module[0])
+            asm["amdgcn"] = next_module[0]
+            asm["hsaco_path"] = next_module[1]
+            print(f"asm:{asm}")
+            
+        module = next_module
+    # write-back metadata
+    fn_cache_manager.put(json.dumps(metadata), f"{name}.json", binary=False)
+    # return handle to compiled kernel
     return CompiledKernel(so_path, metadata, asm)
 
 @static_vars(discovered_gfx_arch = _get_amdgpu_arch())
@@ -1760,15 +1780,21 @@ class CompiledKernel:
         global cuda_utils
         global hip_utils
         if torch.version.hip is not None:
-            if hip_utils is None:
-               hip_utils = HIPUtils()
-            mod, func, n_regs, n_spills = hip_utils.load_binary(metadata["name"], self.asm["hsaco_path"], self.shared, device)
+            init_hip_utils()
+            # max_shared = hip_utils.get_device_properties(device)["max_shared_mem"]
+            # if self.shared > max_shared:
+            #     raise OutOfResources(self.shared, max_shared, "shared memory")
+            print(f"self.metadata['name']: {self.metadata['name']}")
+            print(f"self.asm['hsaco_path']: {self.asm['hsaco_path']}")
+            mod, func, n_regs, n_spills = hip_utils.load_binary(self.metadata["name"], self.asm["hsaco_path"], self.shared, device)
             self.cu_module = mod
             self.cu_function = func
         else:
-            if cuda_utils is None:
-                cuda_utils = CudaUtils()
-            mod, func, n_regs, n_spills = cuda_utils.load_binary(metadata["name"], self.asm["cubin"], self.shared, device)
+            init_cuda_utils()
+            max_shared = cuda_utils.get_device_properties(device)["max_shared_mem"]
+            if self.shared > max_shared:
+                raise OutOfResources(self.shared, max_shared, "shared memory")
+            mod, func, n_regs, n_spills = cuda_utils.load_binary(self.metadata["name"], self.asm["cubin"], self.shared, device)
             self.cu_module = mod
             self.cu_function = func
 
@@ -1947,10 +1973,17 @@ def init_cuda_utils():
     if cuda_utils is None:
         cuda_utils = CudaUtils()
 
+
 cuda_utils = None
 
-class HIPUtils(object):
+def init_hip_utils():
+    global hip_utils
+    if hip_utils is None:
+        hip_utils = HIPUtils()
 
+hip_utils = None
+
+class HIPUtils(object):
     def __new__(cls):
         if not hasattr(cls, 'instance'):
             cls.instance = super(HIPUtils, cls).__new__(cls)
@@ -1963,7 +1996,6 @@ class HIPUtils(object):
         #include <Python.h>
         #include <stdio.h>
         #include <stdlib.h>
-
         static inline void gpuAssert(hipError_t code, const char *file, int line)
         {{
           if (code != HIP_SUCCESS)
@@ -2015,7 +2047,6 @@ class HIPUtils(object):
             // get allocated registers and spilled registers from the function
             int n_regs = 0;
             int n_spills = 0;
-
             if(PyErr_Occurred()) {
               return NULL;
             }
@@ -2063,5 +2094,3 @@ class HIPUtils(object):
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         self.load_binary = mod.load_binary
-
-hip_utils = None

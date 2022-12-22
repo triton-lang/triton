@@ -14,8 +14,8 @@ chmod -R 777 $LOG_DIR
 if [ "$1" == "backtrace" ]; then
 	sudo apt install gdb -y
 
-	# COMMAND="-m pytest --capture=tee-sys --verbose python/tests/test_elementwise.py::test_single_input[log-float64-float64]"
-	COMMAND="python/tutorials/05-layer-norm.py"
+	COMMAND="-m pytest --capture=tee-sys --verbose python/tests/test_core_amd.py::test_empty_kernel[float32]"
+	# COMMAND="python/tutorials/05-layer-norm.py"
 	gdb python \
 		-ex "set pagination off" \
 		-ex "run $COMMAND" \
@@ -26,12 +26,13 @@ if [ "$1" == "backtrace" ]; then
 
 else
 
-	sh scripts/amd/clean.sh
+	# sh scripts/amd/clean.sh
 
 	# pytest -rfs --verbose python/tests 2>&1 | tee $LOG_DIR/test_all.log
 	# pytest -rfs --verbose "python/tests/test_compiler.py" 2>&1 | tee $LOG_DIR/test_compiler.log
-	pytest -rfs --verbose "python/tests/test_core_amd.py" 2>&1 | tee $LOG_DIR/test_core_amd.log
-	pytest -rfs --verbose "python/test/unit/language/test_core.py" 2>&1 | tee $LOG_DIR/test_core_amd.log
+	# pytest -rfs --verbose "python/tests/test_core_amd.py" 2>&1 | tee $LOG_DIR/test_core_amd.log
+	pytest -rfs --verbose "python/tests/test_core_amd.py::test_empty_kernel[float32]" 2>&1 | tee $LOG_DIR/test_core_amd.log
+	# pytest -rfs --verbose "python/test/unit/language/test_core.py" 2>&1 | tee $LOG_DIR/test_core_amd.log
 	# pytest -rfs --verbose "python/tests/test_core.py" 2>&1 | tee $LOG_DIR/test_core.log
 	# pytest -rfs --verbose "python/tests/test_core.py::test_math_op" | tee $LOG_DIR/test_math_op.log
 	# pytest -rfs --verbose "python/tests/test_core.py::test_reduce1d[min-float16-128]" | tee $LOG_DIR/test_reduce1d.log

@@ -65,6 +65,6 @@ if __name__ == '__main__':
     if args.target == 'amdgcn':
         if not args.gfx:
             raise argparse.ArgumentError(None, "Must specify --gfx for AMDGCN compilation")
-        module, hsaco_path = triton.compiler.llir_to_hsaco(module, args.gfx)
+        module, hsaco_path = triton.compiler.llir_to_amdgcn_and_hsaco(module, args.gfx)
 
     print(module)
