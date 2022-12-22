@@ -1107,92 +1107,126 @@ def generate_launcher(constants, signature):
 
     format = "iiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
 
+    # generate glue code
     if torch.version.hip is not None:
         src = f"""
-#define __HIP_PLATFORM_AMD__
-#include <hip/hip_runtime.h>
-#include <Python.h>
-static inline void gpuAssert(hipError_t code, const char *file, int line)
-{{
-   if (code != HIP_SUCCESS)
-   {{
-      const char* prefix = "Triton Error [CUDA]: ";
-      const char* str = hipGetErrorString(code);
-      char err[1024] = {{0}};
-      strcat(err, prefix);
-      strcat(err, str);
-      PyErr_SetString(PyExc_RuntimeError, err);
-   }}
-}}
-#define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
-void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, hipStream_t stream, hipFunction_t function, {arg_decls}) {{
-  void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
-  if(gridX*gridY*gridZ > 0){{
-    hipModuleLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0);
-  }}
-}}
-static inline hipDeviceptr_t getPointer(PyObject *obj, int idx) {{
-  if (PyLong_Check(obj)) {{
-    return (hipDeviceptr_t)PyLong_AsUnsignedLongLong(obj);
-  }}
-  if (obj == Py_None) {{
-    return (hipDeviceptr_t)0;
-  }}
-  PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
-  if(ptr){{
-    PyObject *empty_tuple = PyTuple_New(0);
-    PyObject *ret = PyObject_Call(ptr, empty_tuple, NULL);
-    Py_DECREF(empty_tuple);
-    Py_DECREF(ptr);
-    if (!PyLong_Check(ret)) {{
-      PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
+    #define __HIP_PLATFORM_AMD__
+    #include <hip/hip_runtime.h>
+    #include <Python.h>
+
+    static inline void gpuAssert(hipError_t code, const char *file, int line)
+    {{
+    if (code != HIP_SUCCESS)
+    {{
+        const char* prefix = "Triton Error [HIP]: ";
+        const char* str = hipGetErrorString(code);
+        char err[1024] = {{0}};
+        strcat(err, prefix);
+        strcat(err, str);
+        PyErr_SetString(PyExc_RuntimeError, err);
     }}
-    return (hipDeviceptr_t)PyLong_AsUnsignedLongLong(ret);
-  }}
-  PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
-  return (hipDeviceptr_t)0;
-}}
-static PyObject* launch(PyObject* self, PyObject* args) {{
-  // printf("launch(PyObject* self, PyObject* args)");
-  int gridX, gridY, gridZ;
-  uint64_t _stream;
-  uint64_t _function;
-  int num_warps;
-  int shared_memory;
-  {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
-    return NULL;
-  }}
-  _launch(gridX, gridY, gridZ, num_warps, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function, {', '.join(f"getPointer(_arg{i},{i})" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
-  if(PyErr_Occurred()) {{
-    return NULL;
-  }}
-  // return None
-  Py_INCREF(Py_None);
-  return Py_None;
-}}
-static PyMethodDef ModuleMethods[] = {{
-  {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
-  {{NULL, NULL, 0, NULL}} // sentinel
-}};
-static struct PyModuleDef ModuleDef = {{
-  PyModuleDef_HEAD_INIT,
-  \"launcher\",
-  NULL, //documentation
-  -1, //size
-  ModuleMethods
-}};
-PyMODINIT_FUNC PyInit_launcher(void) {{
-  PyObject *m = PyModule_Create(&ModuleDef);
-  if(m == NULL) {{
-    return NULL;
-  }}
-  PyModule_AddFunctions(m, ModuleMethods);
-  return m;
-}}
-"""
+    }}
+
+    #define HIP_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
+
+    void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, hipStream_t stream, hipFunction_t function, {arg_decls}) {{
+    void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
+    if(gridX*gridY*gridZ > 0){{
+        HIP_CHECK(hipModuleLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
+        // hipModuleLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0);
+    }}
+    }}
+
+    static inline hipDeviceptr_t getPointer(PyObject *obj, int idx) {{
+    if (PyLong_Check(obj)) {{
+        return (hipDeviceptr_t)PyLong_AsUnsignedLongLong(obj);
+    }}
+    if (obj == Py_None) {{
+        return (hipDeviceptr_t)0;
+    }}
+    PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
+    if(ptr){{
+        PyObject *empty_tuple = PyTuple_New(0);
+        PyObject *ret = PyObject_Call(ptr, empty_tuple, NULL);
+        Py_DECREF(empty_tuple);
+        Py_DECREF(ptr);
+        if (!PyLong_Check(ret)) {{
+        PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
+        }}
+        return (hipDeviceptr_t)PyLong_AsUnsignedLongLong(ret);
+    }}
+    PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
+    return (hipDeviceptr_t)0;
+    }}
+
+    static PyObject* launch(PyObject* self, PyObject* args) {{
+    int gridX, gridY, gridZ;
+    uint64_t _stream;
+    uint64_t _function;
+    int num_warps;
+    int shared_memory;
+    PyObject *launch_enter_hook = NULL;
+    PyObject *launch_exit_hook = NULL;
+    PyObject *compiled_kernel = NULL;
+    PyObject *hook_ret = NULL;
+    {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
+    if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
+        return NULL;
+    }}
+
+    if (launch_enter_hook != Py_None) {{
+        PyObject *new_args = PyTuple_Pack(1, compiled_kernel);
+        hook_ret = PyObject_CallObject(launch_enter_hook, new_args);
+        Py_DECREF(new_args);
+    }}
+
+    _launch(gridX, gridY, gridZ, num_warps, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function, {', '.join(f"getPointer(_arg{i},{i})" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
+
+    if (launch_exit_hook != Py_None) {{
+        PyObject *new_args = NULL;
+        if (hook_ret) {{
+            new_args = PyTuple_Pack(2, compiled_kernel, hook_ret);
+        }} else {{
+            new_args = PyTuple_Pack(1, compiled_kernel);
+        }}
+        hook_ret = PyObject_CallObject(launch_exit_hook, new_args);
+        Py_DECREF(new_args);
+    }}
+
+    if (hook_ret) {{
+        Py_DECREF(hook_ret);
+    }}
+    if(PyErr_Occurred()) {{
+        return NULL;
+    }}
+    // return None
+    Py_INCREF(Py_None);
+    return Py_None;
+    }}
+
+    static PyMethodDef ModuleMethods[] = {{
+    {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
+    {{NULL, NULL, 0, NULL}} // sentinel
+    }};
+
+    static struct PyModuleDef ModuleDef = {{
+    PyModuleDef_HEAD_INIT,
+    \"launcher\",
+    NULL, //documentation
+    -1, //size
+    ModuleMethods
+    }};
+
+    PyMODINIT_FUNC PyInit_launcher(void) {{
+    PyObject *m = PyModule_Create(&ModuleDef);
+    if(m == NULL) {{
+        return NULL;
+    }}
+    PyModule_AddFunctions(m, ModuleMethods);
+    return m;
+    }}
+    """
     else:
-        # generate glue code
         src = f"""
     #include \"cuda.h\"
     #include <Python.h>
@@ -1606,7 +1640,6 @@ def compile(fn, **kwargs):
     # build compilation stages
     if torch.version.hip is not None:
         gfx_arch = os.environ.get('MI_GPU_ARCH', _get_amdgpu_arch())
-        print(f"gfx_arch = {gfx_arch}")
         if gfx_arch is None:
             raise RuntimeError('gfx_arch is None (not specified)')
         stages = {
@@ -1655,14 +1688,14 @@ def compile(fn, **kwargs):
         import re
         match = re.search(prototype_pattern[ir], src, re.MULTILINE)
         name, signature = match.group(1), match.group(2)
-        print(name, signature)
+        # print(name, signature)
         types = re.findall(arg_type_pattern[ir], signature)
-        print(types)
+        # print(types)
         param_tys = [convert_type_repr(ty) for ty in types]
         signature = {k: v for k, v in enumerate(param_tys)}
         first_stage = list(stages.keys()).index(ir)
 
-    print(f"name, signature, constants={name, signature, constants}")
+    # print(f"name, signature, constants={name, signature, constants}")
     # cache manager
     so_path = make_stub(name, signature, constants)
     # create cache manager
@@ -1672,7 +1705,7 @@ def compile(fn, **kwargs):
         name, ext = fn.__name__, "ast"
     else:
         name, ext = os.path.basename(fn).split(".")
-    print(f"name, ext = {name, ext}")
+    # print(f"name, ext = {name, ext}")
 
     # load metadata if any
     metadata = None
@@ -1711,12 +1744,12 @@ def compile(fn, **kwargs):
         if ir == "ptx":
             metadata["name"] = ptx_get_kernel_name(next_module)
         if ir == "amdgcn":
-            print(f"next_module: {next_module}")
-            print(f"asm:{asm}")
+            # print(f"next_module: {next_module}")
+            # print(f"asm:{asm}")
             metadata["name"] = amdgcn_get_kernel_name(next_module[0])
             asm["amdgcn"] = next_module[0]
             asm["hsaco_path"] = next_module[1]
-            print(f"asm:{asm}")
+            # print(f"asm:{asm}")
             
         module = next_module
     # write-back metadata
@@ -1772,10 +1805,18 @@ class CompiledKernel:
         # because it involves doing runtime things
         # (e.g., checking amount of shared memory on current device)
         self.metadata = metadata
+        # if torch.version.hip is not None:
+        #     self.hip_module = None
+        #     self.hip_function = None
+        # else:
         self.cu_module = None
         self.cu_function = None
 
     def _init_handles(self):
+        # if torch.version.hip is not None:
+        #     if self.hip_module is not None:
+        #         return
+        # else:
         if self.cu_module is not None:
             return
         device = torch.cuda.current_device()
@@ -1788,6 +1829,8 @@ class CompiledKernel:
             #     raise OutOfResources(self.shared, max_shared, "shared memory")
             print(f"self.metadata['name']: {self.metadata['name']}")
             print(f"self.asm['hsaco_path']: {self.asm['hsaco_path']}")
+            print(f"self.shared: {self.shared}")
+            print(f"device: {device}")
             mod, func, n_regs, n_spills = hip_utils.load_binary(self.metadata["name"], self.asm["hsaco_path"], self.shared, device)
             self.cu_module = mod
             self.cu_function = func
@@ -1995,6 +2038,7 @@ class HIPUtils(object):
         return """
         #define __HIP_PLATFORM_AMD__
         #include <hip/hip_runtime.h>
+        #define PY_SSIZE_T_CLEAN
         #include <Python.h>
         #include <stdio.h>
         #include <stdlib.h>
@@ -2017,21 +2061,33 @@ class HIPUtils(object):
             Py_ssize_t data_size;
             int shared;
             int device;
-            if(!PyArg_ParseTuple(args, "ssii", &name, &data, &shared, &device)) {
+            if(!PyArg_ParseTuple(args, "ss#ii", &name, &data, &data_size, &shared, &device)) {
                 return NULL;
             }
-            hipFunction_t fun;
-            // Read HSACO.
+            printf("name: %s\\n", name);
+            printf("data: %s\\n", data);
+            printf("data_size: %ld\\n", data_size);
+            printf("shared: %d\\n", shared);
+            printf("device: %d\\n", device);
+            
+            
+            // Open HSACO file
             FILE* hsaco_file;
             if ((hsaco_file = fopen(data, "rb")) == NULL) {
                 return NULL;
             }
+        
+            // Read HSCAO file into Buffer
             fseek(hsaco_file, 0L, SEEK_END);
             size_t hsaco_file_size = ftell(hsaco_file);
             unsigned char* hsaco = (unsigned char*) malloc(hsaco_file_size * sizeof(unsigned char));
             rewind(hsaco_file);
             fread(hsaco, sizeof(unsigned char), hsaco_file_size, hsaco_file);
             fclose(hsaco_file);
+            printf("hsaco_file_size: %ld\\n", hsaco_file_size);
+            printf("hsaco: %s\\n", hsaco);
+
+            // set HIP options
             hipJitOption opt[] = {hipJitOptionErrorLogBufferSizeBytes, hipJitOptionErrorLogBuffer,
                                   hipJitOptionInfoLogBufferSizeBytes, hipJitOptionInfoLogBuffer,
                                   hipJitOptionLogVerbose};
@@ -2042,10 +2098,17 @@ class HIPUtils(object):
             void *optval[] = {(void *)(uintptr_t)errbufsize,
                               (void *)_err, (void *)(uintptr_t)logbufsize,
                               (void *)_log, (void *)1};
+            
+            // launch HIP Binary
             hipModule_t mod;
+            hipFunction_t fun;
+            // hipModuleLoadData(&mod, hsaco);
             hipModuleLoadDataEx(&mod, hsaco, 5, opt, optval);
             hipModuleGetFunction(&fun, mod, name);
             free(hsaco);
+            printf("fun: %d\\n", fun);
+            printf("mod: %d\\n", mod);
+
             // get allocated registers and spilled registers from the function
             int n_regs = 0;
             int n_spills = 0;
