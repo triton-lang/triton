@@ -4,11 +4,13 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+using ::mlir::LLVM::DotOpFMAConversionHelper;
 using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
 using ::mlir::LLVM::DotOpMmaV2ConversionHelper;
 using ::mlir::LLVM::getElementsFromStruct;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStructFromElements;
+using ::mlir::LLVM::MMA16816ConversionHelper;
 using ::mlir::triton::gpu::getElemsPerThread;
 
 struct SplatOpConversion
@@ -38,6 +40,11 @@ struct SplatOpConversion
           LLVM::LLVMStructType::getLiteral(rewriter.getContext(), elemTypes);
 
       return getStructFromElements(loc, elems, rewriter, structTy);
+    } else if (auto dotLayout =
+                   tensorTy.getEncoding()
+                       .dyn_cast<triton::gpu::DotOperandEncodingAttr>()) {
+      return convertSplatLikeOpWithDotOperandLayout(
+          dotLayout, resType, elemType, constVal, typeConverter, rewriter, loc);
     } else if (auto mmaLayout =
                    tensorTy.getEncoding().dyn_cast<MmaEncodingAttr>()) {
       return convertSplatLikeOpWithMmaLayout(
@@ -46,6 +53,38 @@ struct SplatOpConversion
       assert(false && "Unsupported layout found in ConvertSplatLikeOp");
 
     return {};
+  }
+
+  static Value convertSplatLikeOpWithDotOperandLayout(
+      const triton::gpu::DotOperandEncodingAttr &layout, Type resType,
+      Type elemType, Value constVal, TypeConverter *typeConverter,
+      ConversionPatternRewriter &rewriter, Location loc) {
+    auto tensorTy = resType.cast<RankedTensorType>();
+    auto shape = tensorTy.getShape();
+    auto parent = layout.getParent();
+    int fcSize{};
+    if (auto mmaLayout = parent.dyn_cast<MmaEncodingAttr>()) {
+      if (mmaLayout.isAmpere()) {
+        fcSize = layout.getOpIdx() == 0
+                     ? MMA16816ConversionHelper::getANumElemsPerThread(
+                           tensorTy, mmaLayout.getWarpsPerCTA()[0])
+                     : MMA16816ConversionHelper::getBNumElemsPerThread(
+                           tensorTy, mmaLayout.getWarpsPerCTA()[1]);
+      } else if (mmaLayout.isVolta()) {
+        DotOpMmaV1ConversionHelper helper(mmaLayout);
+        fcSize = layout.getOpIdx() == 0
+                     ? helper.numElemsPerThreadA(shape, {0, 1})
+                     : helper.numElemsPerThreadB(shape, {0, 1});
+      }
+    } else if (auto blockedLayout = parent.dyn_cast<BlockedEncodingAttr>()) {
+      fcSize = DotOpFMAConversionHelper::getNumElemsPerThread(shape, layout);
+    } else {
+      assert(false && "Unsupported layout found");
+    }
+    auto structTy = LLVM::LLVMStructType::getLiteral(
+        rewriter.getContext(), SmallVector<Type>(fcSize, elemType));
+    return getStructFromElements(loc, SmallVector<Value>(fcSize, constVal),
+                                 rewriter, structTy);
   }
 
   static Value convertSplatLikeOpWithMmaLayout(
