@@ -45,7 +45,7 @@ pip install -e .
 # Changelog
 
 Version 1.1 is out! New features include:
-- Many, many bugfixes
+- Many, many bug fixes
 - More documentation
 - Automatic on-disk caching of compiled binary objects
 - Random Number Generation
