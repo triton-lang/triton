@@ -970,7 +970,6 @@ def amdgcn_get_kernel_name(amdgcn: str) -> str:
     Get kernel name from AMDGCN code.
     This Kernel name is required when launching the kernel.
     '''
-    # There is a name mangling in PTX codegen, so the original kernel names in Triton IR are not available in PTX/cubin.
     assert amdgcn
     for line in amdgcn.split('\n'):
         line = line.strip()
@@ -1700,7 +1699,10 @@ def compile(fn, **kwargs):
             next_module = parse(path)
         else:
             next_module = compile(module)
-            fn_cache_manager.put(next_module, f"{name}.{ir}")
+            if ir == "amdgcn":
+                fn_cache_manager.put(next_module[0], f"{name}.{ir}")
+            else:
+                fn_cache_manager.put(next_module, f"{name}.{ir}")
         if os.path.exists(path):
             metadata["ctime"][ir] = os.path.getctime(path)
         asm[ir] = next_module if ir == "cubin" else str(next_module)
