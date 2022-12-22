@@ -62,28 +62,28 @@ struct SplatOpConversion
     auto tensorTy = resType.cast<RankedTensorType>();
     auto shape = tensorTy.getShape();
     auto parent = layout.getParent();
-    int fcSize{};
+    int numElems{};
     if (auto mmaLayout = parent.dyn_cast<MmaEncodingAttr>()) {
       if (mmaLayout.isAmpere()) {
-        fcSize = layout.getOpIdx() == 0
-                     ? MMA16816ConversionHelper::getANumElemsPerThread(
-                           tensorTy, mmaLayout.getWarpsPerCTA()[0])
-                     : MMA16816ConversionHelper::getBNumElemsPerThread(
-                           tensorTy, mmaLayout.getWarpsPerCTA()[1]);
+        numElems = layout.getOpIdx() == 0
+                       ? MMA16816ConversionHelper::getANumElemsPerThread(
+                             tensorTy, mmaLayout.getWarpsPerCTA()[0])
+                       : MMA16816ConversionHelper::getBNumElemsPerThread(
+                             tensorTy, mmaLayout.getWarpsPerCTA()[1]);
       } else if (mmaLayout.isVolta()) {
         DotOpMmaV1ConversionHelper helper(mmaLayout);
-        fcSize = layout.getOpIdx() == 0
-                     ? helper.numElemsPerThreadA(shape, {0, 1})
-                     : helper.numElemsPerThreadB(shape, {0, 1});
+        numElems = layout.getOpIdx() == 0
+                       ? helper.numElemsPerThreadA(shape, {0, 1})
+                       : helper.numElemsPerThreadB(shape, {0, 1});
       }
     } else if (auto blockedLayout = parent.dyn_cast<BlockedEncodingAttr>()) {
-      fcSize = DotOpFMAConversionHelper::getNumElemsPerThread(shape, layout);
+      numElems = DotOpFMAConversionHelper::getNumElemsPerThread(shape, layout);
     } else {
       assert(false && "Unsupported layout found");
     }
     auto structTy = LLVM::LLVMStructType::getLiteral(
-        rewriter.getContext(), SmallVector<Type>(fcSize, elemType));
-    return getStructFromElements(loc, SmallVector<Value>(fcSize, constVal),
+        rewriter.getContext(), SmallVector<Type>(numElems, elemType));
+    return getStructFromElements(loc, SmallVector<Value>(numElems, constVal),
                                  rewriter, structTy);
   }
 
