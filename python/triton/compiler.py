@@ -1497,6 +1497,7 @@ def make_fn_cache_key(fn_hash, signature, configs, constants, num_warps, num_sta
     key = hashlib.md5(key.encode("utf-8")).hexdigest()
     return key
 
+
 def read_or_execute(cache_manager, force_compile, file_name, metadata,
                     run_if_found: Callable[[str], bytes] = None,
                     run_if_not_found: Callable = None):
@@ -1545,24 +1546,13 @@ def _get_amdgpu_arch():
     except:
         return None
 
-# @static_vars(discovered_gfx_arch = _get_amdgpu_arch())
-# def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
-#     if isinstance(signature, str):
-#         signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
-#     # we get the kernel, i.e. the first function generated in the module
-#     if configs is None:
-#         configs = [instance_descriptor()]
-#     assert len(configs) == 1
-#     # cache manager
-#     name = fn.__name__
-    
 def make_stub(name, signature, constants):
     # name of files that are cached
     so_cache_key = make_so_cache_key(triton.runtime.jit.version_key(), signature, constants)
     so_cache_manager = CacheManager(so_cache_key)
     so_name = f"{name}.so"
     # retrieve stub from cache if it exists
-    if not so_cache_manager.has_file(so_name):
+    if True: # not so_cache_manager.has_file(so_name):
         with tempfile.TemporaryDirectory() as tmpdir:
             src = generate_launcher(constants, signature)
             src_path = os.path.join(tmpdir, "main.c")
