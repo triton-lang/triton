@@ -21,3 +21,4 @@ cmake-build-*
 
 # cache dumps
 triton_cache*
+log_*
