@@ -1132,8 +1132,7 @@ def generate_launcher(constants, signature):
     void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, hipStream_t stream, hipFunction_t function, {arg_decls}) {{
     void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
     if(gridX*gridY*gridZ > 0){{
-        // HIP_CHECK(hipModuleLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0)); // Segfault 2
-        // hipModuleLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0);
+        HIP_CHECK(hipModuleLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
     }}
     }}
 
@@ -2054,11 +2053,6 @@ class HIPUtils(object):
             if(!PyArg_ParseTuple(args, "ss#ii", &name, &data, &data_size, &shared, &device)) {
                 return NULL;
             }
-            printf("name: %s\\n", name);
-            printf("data: %s\\n", data);
-            printf("data_size: %ld\\n", data_size);
-            printf("shared: %d\\n", shared);
-            printf("device: %d\\n", device);
             
             
             // Open HSACO file
@@ -2074,8 +2068,6 @@ class HIPUtils(object):
             rewind(hsaco_file);
             fread(hsaco, sizeof(unsigned char), hsaco_file_size, hsaco_file);
             fclose(hsaco_file);
-            printf("hsaco_file_size: %ld\\n", hsaco_file_size);
-            printf("hsaco: %s\\n", hsaco);
 
             // set HIP options
             hipJitOption opt[] = {hipJitOptionErrorLogBufferSizeBytes, hipJitOptionErrorLogBuffer,
@@ -2092,12 +2084,9 @@ class HIPUtils(object):
             // launch HIP Binary
             hipModule_t mod;
             hipFunction_t fun;
-            // hipModuleLoadData(&mod, hsaco);
             hipModuleLoadDataEx(&mod, hsaco, 5, opt, optval);
-            hipModuleGetFunction(&fun, mod, name); // SEGFAULT 1
+            hipModuleGetFunction(&fun, mod, name);
             free(hsaco);
-            // printf("fun: %d\\n", fun);
-            // printf("mod: %d\\n", mod);
 
             // get allocated registers and spilled registers from the function
             int n_regs = 0;
