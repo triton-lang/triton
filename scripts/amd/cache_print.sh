@@ -18,4 +18,5 @@ for file in ${CACHED_FILES[@]}; do
 	fi
 done
 
+cp /tmp/* triton_cache
 chmod -R 777 triton_cache
