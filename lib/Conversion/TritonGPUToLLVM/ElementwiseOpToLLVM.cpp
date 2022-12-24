@@ -848,6 +848,7 @@ void populateElementwiseOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
 
   patterns.add<CmpIOpConversion>(typeConverter, benefit);
   patterns.add<CmpFOpConversion>(typeConverter, benefit);
+
   patterns.add<FDivOpConversion>(typeConverter, benefit);
   patterns.add<FSubOpConversion>(typeConverter, benefit);
   patterns.add<FAddOpConversion>(typeConverter, benefit);
