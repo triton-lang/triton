@@ -13,4 +13,5 @@ chmod -R 777 $LOG_DIR
 bash scripts/amd/clean.sh
 bash scripts/amd/build.sh
 bash scripts/amd/test.sh 2>&1 |tee $LOG_DIR/test.log
-bash scripts/amd/cache_print.sh  2>&1 |tee $LOG_DIR/cache.log
+# bash scripts/amd/test.sh backtrace 2>&1 |tee $LOG_DIR/backtrace.log
+# bash scripts/amd/cache_print.sh  2>&1 |tee $LOG_DIR/cache.log

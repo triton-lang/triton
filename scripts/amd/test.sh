@@ -31,7 +31,9 @@ else
 	# pytest -rfs --verbose python/tests 2>&1 | tee $LOG_DIR/test_all.log
 	# pytest -rfs --verbose "python/tests/test_compiler.py" 2>&1 | tee $LOG_DIR/test_compiler.log
 	# pytest -rfs --verbose "python/tests/test_core_amd.py" 2>&1 | tee $LOG_DIR/test_core_amd.log
-	pytest -rfs --verbose "python/tests/test_core_amd.py::test_bin_op[int8-int8-/]"
+	pytest -rfs --verbose "python/tests/test_core_amd.py::test_bitwise_op"
+	# pytest -rfs --verbose "python/tests/test_core_amd.py::test_bitwise_op[int8-int8-&1]"
+	# pytest -rfs --verbose "python/tests/test_core_amd.py::test_bin_op[int8-int8-/]"
 	# pytest -rfs --verbose "python/tests/test_core_amd.py::test_empty_kernel" 2>&1 | tee $LOG_DIR/test_empty_kernel.log
 	# pytest -rfs --verbose "python/tests/test_core_amd.py::test_empty_kernel[float32]" 2>&1 | tee $LOG_DIR/test_empty_kernel_float32.log
 	# pytest -rfs --verbose "python/tests/test_core_amd.py::test_bin_op[float32-float32-+]" 2>&1 | tee $LOG_DIR/test_bin_op_float32.log
