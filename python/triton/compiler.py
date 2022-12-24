@@ -1443,7 +1443,9 @@ def _build(name, src, srcdir):
     if torch.version.hip is not None:
         ret = subprocess.check_call([cc, src, f"-I{hip_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", f"-L{hip_lib_dir}", "-lamdhip64", "-o", so])
     else:
-        ret = subprocess.check_call([cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", f"-L{cuda_lib_dir}", "-lcuda", "-o", so])
+        cc_cmd = [cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
+        cc_cmd += [f"-L{dir}" for dir in cuda_lib_dirs]
+        ret = subprocess.check_call(cc_cmd)
 
     if ret == 0:
         return so
@@ -1513,29 +1515,7 @@ def read_or_execute(cache_manager, force_compile, file_name, metadata,
     cache_manager.put(data, file_name, True if isinstance(data, bytes) else data)
     return module, md5, True, False
 
-def read_or_execute_2(cache_manager, force_compile, file_name_1, file_name_2,
-                      metadata, run_if_found_1: Callable[[str], bytes] = None,
-                      run_if_found_2: Callable[[str], bytes] = None,
-                      run_if_not_found: Callable = None):
-    suffix_1 = file_name_1.split(".")[1]
-    suffix_2 = file_name_2.split(".")[1]
-    if not force_compile and cache_manager.has_file(file_name_1) and cache_manager.has_file(file_name_2):
-        module_1 = run_if_found_1(cache_manager._make_path(file_name_1))
-        module_2 = run_if_found_2(cache_manager._make_path(file_name_2))
-        data_1 = module_1 if isinstance(module_1, bytes) else str(module_1).encode("utf-8")
-        data_2 = module_2 if isinstance(module_2, bytes) else str(module_2).encode("utf-8")
-        md5_1 = hashlib.md5(data_1).hexdigest()
-        md5_2 = hashlib.md5(data_2).hexdigest()
-        has_changed = metadata and ((md5_1 != metadata["md5"][suffix_1]) or (md5_2 != metadata["md5"][suffix_2]))
-        return module_1, md5_1, module_2, md5_2, has_changed, True
-    module_1, module_2 = run_if_not_found()
-    data_1 = module_1 if isinstance(module_1, bytes) else str(module_1).encode("utf-8")
-    data_2 = module_2 if isinstance(module_2, bytes) else str(module_2).encode("utf-8")
-    md5_1 = hashlib.md5(data_1).hexdigest()
-    md5_2 = hashlib.md5(data_2).hexdigest()
-    cache_manager.put(data_1, file_name_1, True if isinstance(data_1, bytes) else data_1)
-    cache_manager.put(data_2, file_name_2, True if isinstance(data_2, bytes) else data_2)
-    return module_1, md5_1, module_2, md5_2, True, False
+#
 
 def _get_amdgpu_arch():
     try:
@@ -1551,7 +1531,7 @@ def make_stub(name, signature, constants):
     so_cache_manager = CacheManager(so_cache_key)
     so_name = f"{name}.so"
     # retrieve stub from cache if it exists
-    if True: # not so_cache_manager.has_file(so_name):
+    if not so_cache_manager.has_file(so_name):
         with tempfile.TemporaryDirectory() as tmpdir:
             src = generate_launcher(constants, signature)
             src_path = os.path.join(tmpdir, "main.c")
@@ -1678,14 +1658,11 @@ def compile(fn, **kwargs):
         import re
         match = re.search(prototype_pattern[ir], src, re.MULTILINE)
         name, signature = match.group(1), match.group(2)
-        # print(name, signature)
         types = re.findall(arg_type_pattern[ir], signature)
-        # print(types)
         param_tys = [convert_type_repr(ty) for ty in types]
         signature = {k: v for k, v in enumerate(param_tys)}
         first_stage = list(stages.keys()).index(ir)
 
-    # print(f"name, signature, constants={name, signature, constants}")
     # cache manager
     so_path = make_stub(name, signature, constants)
     # create cache manager
@@ -1695,7 +1672,6 @@ def compile(fn, **kwargs):
         name, ext = fn.__name__, "ast"
     else:
         name, ext = os.path.basename(fn).split(".")
-    # print(f"name, ext = {name, ext}")
 
     # load metadata if any
     metadata = None
@@ -1794,18 +1770,10 @@ class CompiledKernel:
         # because it involves doing runtime things
         # (e.g., checking amount of shared memory on current device)
         self.metadata = metadata
-        # if torch.version.hip is not None:
-        #     self.hip_module = None
-        #     self.hip_function = None
-        # else:
         self.cu_module = None
         self.cu_function = None
 
     def _init_handles(self):
-        # if torch.version.hip is not None:
-        #     if self.hip_module is not None:
-        #         return
-        # else:
         if self.cu_module is not None:
             return
         device = torch.cuda.current_device()
@@ -1813,13 +1781,6 @@ class CompiledKernel:
         global hip_utils
         if torch.version.hip is not None:
             init_hip_utils()
-            # max_shared = hip_utils.get_device_properties(device)["max_shared_mem"]
-            # if self.shared > max_shared:
-            #     raise OutOfResources(self.shared, max_shared, "shared memory")
-            print(f"self.metadata['name']: {self.metadata['name']}")
-            print(f"self.asm['hsaco_path']: {self.asm['hsaco_path']}")
-            print(f"self.shared: {self.shared}")
-            print(f"device: {device}")
             mod, func, n_regs, n_spills = hip_utils.load_binary(self.metadata["name"], self.asm["hsaco_path"], self.shared, device)
             self.cu_module = mod
             self.cu_function = func

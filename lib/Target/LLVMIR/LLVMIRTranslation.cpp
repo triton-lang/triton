@@ -97,10 +97,8 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
   auto context = module->getContext();
   DialectRegistry registry;
   mlir::registerLLVMDialectTranslation(registry);
-
   mlir::registerROCDLDialectTranslation(registry);
   mlir::registerNVVMDialectTranslation(registry);
-
   context->appendDialectRegistry(registry);
 
   llvm::DenseMap<llvm::StringRef, NVVMMetadata> nvvmMetadata;
@@ -111,9 +109,6 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
     llvm::errs() << "Failed to emit LLVM IR\n";
     return nullptr;
   }
-
-  // Initialize LLVM targets.
-  // mlir::ExecutionEngine::setupTargetTriple(llvmModule.get());
 
   auto optPipeline = mlir::makeOptimizingTransformer(
       /*optLevel=*/3, /*sizeLevel=*/0,
