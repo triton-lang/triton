@@ -2986,6 +2986,7 @@ private:
   void processReplicaForMMAV1(Location loc, ConversionPatternRewriter &rewriter,
                               bool stNotRd, RankedTensorType type,
                               ArrayRef<unsigned> multiDimRepId, unsigned vec,
+                              ArrayRef<unsigned> paddedRepShape,
                               ArrayRef<unsigned> outOrd,
                               SmallVector<Value> &vals, Value smemBase,
                               ArrayRef<int64_t> shape) const;
@@ -3113,8 +3114,8 @@ void ConvertLayoutOpConversion::processReplica(
 void ConvertLayoutOpConversion::processReplicaForMMAV1(
     Location loc, ConversionPatternRewriter &rewriter, bool stNotRd,
     RankedTensorType type, ArrayRef<unsigned> multiDimRepId, unsigned vec,
-    ArrayRef<unsigned> outOrd, SmallVector<Value> &vals, Value smemBase,
-    ArrayRef<int64_t> shape) const {
+    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> outOrd,
+    SmallVector<Value> &vals, Value smemBase, ArrayRef<int64_t> shape) const {
 
   vec = 2;
   unsigned accumNumCTAsEachRep = 1;
@@ -3143,13 +3144,6 @@ void ConvertLayoutOpConversion::processReplicaForMMAV1(
     multiDimCTAId[d] = multiDimRepId[d] * numCTAsEachRep[d] + it.value();
   }
 
-  auto linearCTAId = getLinearIndex<unsigned>(multiDimCTAId, numCTAs, order);
-  // TODO: This is actually redundant index calculation, we should
-  //       consider of caching the index calculation result in case
-  //       of performance issue observed.
-  printf("accuSize: %d, vec: %d\n", accumSizePerThread, vec);
-
-#if 1
   std::vector<std::pair<SmallVector<Value>, Value>> coord2val2(
       accumSizePerThread);
   {
@@ -3163,57 +3157,33 @@ void ConvertLayoutOpConversion::processReplicaForMMAV1(
       coord2val[elemId] = std::make_pair(multiDimOffset, vals[elemId]);
     }
 
+    if (stNotRd) {
+      for (unsigned elemId = 0; elemId < accumSizePerThread; elemId++) {
+        auto [coord, currVal] = coord2val[elemId];
+        LLVM::vprintf("acci t-%d (%d,%d) %f",
+                      {LLVM::gThreadId, coord[0], coord[1], currVal}, rewriter);
+      }
+    }
+
     // do transpose
     int numM = 4; // DEBUG
-    int numN = 4;
+    int numN = 4; // DEBUG
     for (int r = 0; r < numM; r++) {
       for (int c = 0; c < numN; c++) {
         coord2val2[r * numN + c] = std::move(coord2val[c * numM + r]);
       }
     }
-
-    if (stNotRd) {
-      for (unsigned elemId = 0; elemId < accumSizePerThread; elemId++) {
-        auto [coord, currVal] = coord2val2[elemId];
-        LLVM::vprintf("acci t-%d (%d,%d) %f",
-                      {LLVM::gThreadId, coord[0], coord[1], currVal}, rewriter);
-      }
-    }
   }
-#else
-  if (stNotRd) {
-    // We need to transpose the coordinates and values here.
-    std::vector<std::pair<SmallVector<Value>, Value>> coord2val;
-
-    for (unsigned elemId = 0; elemId < accumSizePerThread; elemId++) {
-      auto currVal = vals[elemId];
-      SmallVector<Value> multiDimOffset =
-          getMultiDimOffset(layout, loc, rewriter, elemId, type.getShape(),
-                            multiDimCTAInRepId, shapePerCTA);
-      LLVM::vprintf(
-          "acci t-%d (%d,%d) %f",
-          {LLVM::gThreadId, multiDimOffset[0], multiDimOffset[1], currVal},
-          rewriter);
-    }
-  }
-#endif
 
   // Now the coord2val2 has the transposed and contiguous elements(with vec=2),
   // the original vals is not needed.
   for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
     auto coord = coord2val2[elemId].first;
-    // LLVM::vprintf("multiDimOffset t-%d %d %d", {LLVM::gThreadId,
-    // multiDimOffset[0], multiDimOffset[1]}, rewriter);
-    Value offset = linearize(rewriter, loc, coord, shapePerCTA, outOrd);
-    if (stNotRd) {
-      LLVM::vprintf("elemcoord t-%d %d (%d %d)",
-                    {LLVM::gThreadId, i32_val(elemId), coord[0], coord[1]},
-                    rewriter);
-      LLVM::vprintf("offsetcoord t-%d (%d,%d) offset:%d shape:(%d %d)",
-                    {LLVM::gThreadId, coord[0], coord[1], offset,
-                     i32_val(shapePerCTA[0]), i32_val(shapePerCTA[1])},
-                    rewriter);
-    }
+    printArray(outOrd, "outOrd");
+    printArray<unsigned>(shapePerCTA, "shapePerCTA");
+    Value offset = linearize(rewriter, loc, coord, paddedRepShape, outOrd);
+    LLVM::vprintf("offset t-%d (%d %d) -> %d",
+                  {LLVM::gThreadId, coord[0], coord[1], offset}, rewriter);
 
     auto elemPtrTy = ptr_ty(elemTy, 3);
     Value ptr = gep(elemPtrTy, smemBase, offset);
@@ -3228,16 +3198,14 @@ void ConvertLayoutOpConversion::processReplicaForMMAV1(
       store(valVec, ptr);
     } else {
       Value valVec = load(ptr);
-      LLVM::vprintf("toextract t-%d", {LLVM::gThreadId}, rewriter);
       for (unsigned v = 0; v < vec; ++v) {
         Value currVal = extract_element(elemTy, valVec, idx_val(v));
         vals[elemId + v] = currVal;
       }
-      LLVM::vprintf("doneextract t-%d\n", {LLVM::gThreadId}, rewriter);
     }
   }
-  LLVM::vprintf("donelower t-%d st:%d", {LLVM::gThreadId, i32_val(stNotRd)},
-                rewriter);
+  // LLVM::vprintf("donelower t-%d st:%d", {LLVM::gThreadId, i32_val(stNotRd)},
+  // rewriter);
 }
 
 LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributed(
@@ -3354,6 +3322,132 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributedForMMAV1(
   Value dst = op.result();
   auto srcTy = src.getType().cast<RankedTensorType>();
   auto dstTy = dst.getType().cast<RankedTensorType>();
+  Attribute srcLayout = srcTy.getEncoding();
+  Attribute dstLayout = dstTy.getEncoding();
+  auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
+  Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
+  auto elemPtrTy = ptr_ty(llvmElemTy, 3);
+  smemBase = bitcast(smemBase, elemPtrTy);
+  auto shape = dstTy.getShape();
+  unsigned rank = dstTy.getRank();
+  SmallVector<unsigned> numReplicates(rank);
+  SmallVector<unsigned> inNumCTAsEachRep(rank);
+  SmallVector<unsigned> outNumCTAsEachRep(rank);
+  SmallVector<unsigned> inNumCTAs(rank);
+  SmallVector<unsigned> outNumCTAs(rank);
+  auto srcShapePerCTA = getShapePerCTA(srcLayout, shape);
+  auto dstShapePerCTA = getShapePerCTA(dstLayout, shape);
+
+  bool isSrcMmaV1{}, isDstMmaV1{};
+  if (auto mmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>()) {
+    if (mmaLayout.isVolta())
+      isSrcMmaV1 = true;
+  }
+  if (auto mmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>()) {
+    if (mmaLayout.isVolta())
+      isDstMmaV1 = true;
+  }
+
+  for (unsigned d = 0; d < rank; ++d) {
+    unsigned inPerCTA = std::min<unsigned>(shape[d], srcShapePerCTA[d]);
+    unsigned outPerCTA = std::min<unsigned>(shape[d], dstShapePerCTA[d]);
+    unsigned maxPerCTA = std::max(inPerCTA, outPerCTA);
+    numReplicates[d] = ceil<unsigned>(shape[d], maxPerCTA);
+    inNumCTAsEachRep[d] = maxPerCTA / inPerCTA;
+    outNumCTAsEachRep[d] = maxPerCTA / outPerCTA;
+    assert(maxPerCTA % inPerCTA == 0 && maxPerCTA % outPerCTA == 0);
+    inNumCTAs[d] = ceil<unsigned>(shape[d], inPerCTA);
+    outNumCTAs[d] = ceil<unsigned>(shape[d], outPerCTA);
+  }
+  // Potentially we need to store for multiple CTAs in this replication
+  auto accumNumReplicates = product<unsigned>(numReplicates);
+  // unsigned elems = getElemsPerThread(srcTy);
+  auto vals = getElementsFromStruct(loc, adaptor.src(), rewriter);
+
+  unsigned inVec = 0;
+  unsigned outVec = 0;
+  auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
+  printArray<unsigned>(paddedRepShape, "paddedRepShape");
+
+  unsigned outElems = getElemsPerThread(dstTy);
+  auto outOrd = getOrder(dstLayout);
+  SmallVector<Value> outVals(outElems);
+
+  for (unsigned repId = 0; repId < accumNumReplicates; ++repId) {
+    auto multiDimRepId =
+        getMultiDimIndex<unsigned>(repId, numReplicates, outOrd);
+    if (repId != 0)
+      barrier();
+    if (srcLayout.isa<BlockedEncodingAttr>() ||
+        srcLayout.isa<SliceEncodingAttr>() ||
+        srcLayout.isa<MmaEncodingAttr>()) {
+      if (isSrcMmaV1)
+        processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ true, srcTy,
+                               multiDimRepId, inVec, paddedRepShape, outOrd,
+                               vals, smemBase, shape);
+      else
+        processReplica(loc, rewriter, /*stNotRd*/ true, srcTy, inNumCTAsEachRep,
+                       multiDimRepId, inVec, paddedRepShape, outOrd, vals,
+                       smemBase);
+    } else {
+      assert(0 && "ConvertLayout with input layout not implemented");
+      return failure();
+    }
+    barrier();
+
+    if (isSrcMmaV1) {
+      for (int i = 0; i < 32; i++) {
+        auto elemPtrTy = ptr_ty(f32_ty, 3);
+        std::vector<Value> elems;
+        for (int c = 0; c < 16; c++) {
+          Value ptr = gep(elemPtrTy, smemBase, i32_val(16 * i + c));
+          auto val = load(ptr);
+          elems.push_back(val);
+        }
+        LLVM::vprintf_array(LLVM::gThreadId, elems, "smem", "%f", rewriter);
+      }
+    }
+
+    if (dstLayout.isa<BlockedEncodingAttr>() ||
+        dstLayout.isa<SliceEncodingAttr>() ||
+        dstLayout.isa<MmaEncodingAttr>()) {
+      if (isDstMmaV1)
+        processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ false, dstTy,
+                               multiDimRepId, outVec, paddedRepShape, outOrd,
+                               outVals, smemBase, shape);
+      else {
+        printArray<unsigned>(outNumCTAsEachRep, "-- outNumCTAsEachRep");
+        printArray<unsigned>(multiDimRepId, "-- multiDimRepId");
+        printArray<unsigned>(paddedRepShape, "-- paddedRepShape");
+        processReplica(loc, rewriter, /*stNotRd*/ false, dstTy,
+                       outNumCTAsEachRep, multiDimRepId, outVec, paddedRepShape,
+                       outOrd, outVals, smemBase);
+      }
+    } else {
+      assert(0 && "ConvertLayout with output layout not implemented");
+      return failure();
+    }
+  }
+
+  SmallVector<Type> types(outElems, llvmElemTy);
+  auto *ctx = llvmElemTy.getContext();
+  Type structTy = struct_ty(types);
+
+  Value result = getStructFromElements(loc, outVals, rewriter, structTy);
+  rewriter.replaceOp(op, result);
+
+  return success();
+}
+
+#if 0 // DEBUG
+LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributedForMMAV1(
+    triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+    ConversionPatternRewriter &rewriter) const {
+  auto loc = op.getLoc();
+  Value src = op.src();
+  Value dst = op.result();
+  auto srcTy = src.getType().cast<RankedTensorType>();
+  auto dstTy = dst.getType().cast<RankedTensorType>();
   Attribute dstLayout = dstTy.getEncoding();
   auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
   Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
@@ -3403,6 +3497,7 @@ LogicalResult ConvertLayoutOpConversion::lowerDistributedToDistributedForMMAV1(
 
   return success();
 }
+#endif
 
 LogicalResult ConvertLayoutOpConversion::lowerBlockedToShared(
     triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
