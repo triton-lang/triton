@@ -1611,6 +1611,7 @@ arg_type_pattern = {
 
 
 # def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
+@static_vars(discovered_gfx_arch = _get_amdgpu_arch())
 def compile(fn, **kwargs):
     capability = kwargs.get("cc", None)
     if capability is None:
@@ -1628,7 +1629,7 @@ def compile(fn, **kwargs):
     extern_libs = kwargs.get("extern_libs", dict())
     # build compilation stages
     if torch.version.hip is not None:
-        gfx_arch = os.environ.get('MI_GPU_ARCH', _get_amdgpu_arch())
+        gfx_arch = os.environ.get('MI_GPU_ARCH', compile.discovered_gfx_arch)
         if gfx_arch is None:
             raise RuntimeError('gfx_arch is None (not specified)')
         stages = {
@@ -1711,18 +1712,22 @@ def compile(fn, **kwargs):
     asm = dict()
     module = fn
     # run compilation pipeline  and populate metadata
-    for ir, (parse, compile) in list(stages.items())[first_stage:]:
+    for ir, (parse, compile_kernel) in list(stages.items())[first_stage:]:
         path = fn_cache_manager._make_path(f"{name}.{ir}")
         if ir == ext:
             next_module = parse(fn)
         elif os.path.exists(path) and\
                 ir in metadata["ctime"] and\
                 os.path.getctime(path) == metadata["ctime"][ir]:
-            next_module = parse(path)
+            if ir == "amdgcn":
+                next_module = (parse(path), parse(fn_cache_manager._make_path(f"{name}.hsaco_path")))
+            else:
+                next_module = parse(path)
         else:
-            next_module = compile(module)
+            next_module = compile_kernel(module)
             if ir == "amdgcn":
                 fn_cache_manager.put(next_module[0], f"{name}.{ir}")
+                fn_cache_manager.put(next_module[1], f"{name}.hsaco_path")
             else:
                 fn_cache_manager.put(next_module, f"{name}.{ir}")
         if os.path.exists(path):
@@ -1733,13 +1738,8 @@ def compile(fn, **kwargs):
         if ir == "ptx":
             metadata["name"] = ptx_get_kernel_name(next_module)
         if ir == "amdgcn":
-            # print(f"next_module: {next_module}")
-            # print(f"asm:{asm}")
             metadata["name"] = amdgcn_get_kernel_name(next_module[0])
-            asm["amdgcn"] = next_module[0]
             asm["hsaco_path"] = next_module[1]
-            # print(f"asm:{asm}")
-            
         module = next_module
     # write-back metadata
     fn_cache_manager.put(json.dumps(metadata), f"{name}.json", binary=False)
