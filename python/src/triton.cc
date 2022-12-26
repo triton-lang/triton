@@ -642,12 +642,6 @@ void init_triton_ir(py::module &&m) {
              return self.create<mlir::triton::MakeRangeOp>(loc, retType, start,
                                                            end);
            })
-      .def("create_get_program_id",
-           [](mlir::OpBuilder &self, int axis) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::triton::GetProgramIdOp>(
-                 loc, self.getI32Type(), axis);
-           })
 
       // Cast instructions
       // Conversions for custom FP types (FP8)
