@@ -1222,6 +1222,8 @@ public:
     auto AT = dotOp.a().getType().cast<RankedTensorType>();
     auto BT = dotOp.b().getType().cast<RankedTensorType>();
     auto DT = dotOp.d().getType().cast<RankedTensorType>();
+    if (!DT.getEncoding())
+      return failure();
     auto mmaLayout = DT.getEncoding().dyn_cast<MmaEncodingAttr>();
     if (!(mmaLayout && mmaLayout.isVolta()))
       return failure();
@@ -1412,7 +1414,9 @@ public:
     auto resTypes = forOp->getResultTypes();
     bool needRematerialize{};
     for (auto type : resTypes)
-      if (auto tensorTy = type.dyn_cast<RankedTensorType>())
+      if (auto tensorTy = type.dyn_cast<RankedTensorType>()) {
+        if (!tensorTy.getEncoding())
+          continue;
         if (auto mma = tensorTy.getEncoding().dyn_cast<MmaEncodingAttr>()) {
           auto it = mmaToUpdate.find(mma);
           if (it == mmaToUpdate.end())
@@ -1420,6 +1424,7 @@ public:
           needRematerialize = true;
           break;
         }
+      }
 
     if (needRematerialize) {
       auto res = rematerializeForLoop(rewriter, forOp);
