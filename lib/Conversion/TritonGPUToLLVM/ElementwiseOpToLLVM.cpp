@@ -267,17 +267,30 @@ struct FpToFpOpConversion
   static Value convertBf16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
+#ifdef USE_ROCM
+    auto as_int16 = bitcast(v, i16_ty);
+    auto as_int32 = zext(i32_ty, as_int16);
+    auto shifted = shl(i32_ty, as_int32, i32_val(16));
+    return(bitcast(shifted, f32_ty));
+#else
     PTXBuilder builder;
     auto &cvt = *builder.create("cvt.rn.f32.bf16");
     auto res = builder.newOperand("=r");
     auto operand = builder.newOperand(v, "h");
     cvt(res, operand);
     return builder.launch(rewriter, loc, f32_ty, false);
+#endif
   }
 
   static Value convertFp32ToBf16(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
+#ifdef USE_ROCM
+    auto as_int32 = bitcast(v, i32_ty);
+    auto shifted = lshr(i32_ty, as_int32, i32_val(16));
+    auto truncated = trunc(i16_ty, shifted);
+    return(bitcast(truncated, i16_ty));
+#else
     PTXBuilder builder;
     auto &cvt = *builder.create("cvt.rn.bf16.f32");
     auto res = builder.newOperand("=h");
@@ -286,6 +299,7 @@ struct FpToFpOpConversion
     // TODO: This is a hack to get the right type. We should be able to invoke
     // the type converter
     return builder.launch(rewriter, loc, i16_ty, false);
+#endif
   }
 
   LogicalResult
@@ -352,6 +366,16 @@ struct FpToFpOpConversion
     return success();
   }
 };
+
+template <typename OP>
+Value EmitDualBF16ElementwiseOp(Location loc,
+                                ConversionPatternRewriter &rewriter,
+                                ValueRange operands) {
+  auto v0 = FpToFpOpConversion::convertBf16ToFp32(loc, rewriter, operands[0]);
+  auto v1 = FpToFpOpConversion::convertBf16ToFp32(loc, rewriter, operands[1]);
+  auto result = rewriter.create<OP>(loc, f32_ty, v0, v1);
+  return FpToFpOpConversion::convertFp32ToBf16(loc, rewriter, result);
+}
 
 template <typename SourceOp, typename ConcreteT>
 class ElementwiseOpConversionBase
@@ -614,6 +638,9 @@ struct FMulOpConversion
     auto lhsElemTy = getElementType(op.getLhs());
     auto rhsElemTy = getElementType(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
+#ifdef USE_ROCM
+      return EmitDualBF16ElementwiseOp<LLVM::FMulOp>(loc, rewriter, operands);
+#else
       PTXBuilder builder;
       auto ptxAsm = " { .reg .b16 c;        \n"
                     "    mov.b16 c, 0x8000U; \n" // 0.0
@@ -624,6 +651,7 @@ struct FMulOpConversion
       auto rhs = builder.newOperand(operands[1], "h");
       fMul({res, lhs, rhs}, /*onlyAttachMLIRArgs=*/true);
       return builder.launch(rewriter, loc, i16_ty, false);
+#endif
     } else {
       return rewriter.create<LLVM::FMulOp>(loc, elemTy, operands[0],
                                            operands[1]);
@@ -644,6 +672,9 @@ struct FAddOpConversion
     auto lhsElemTy = getElementType(op.getLhs());
     auto rhsElemTy = getElementType(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
+#ifdef USE_ROCM
+      return EmitDualBF16ElementwiseOp<LLVM::FAddOp>(loc, rewriter, operands);
+#else
       PTXBuilder builder;
       auto ptxAsm = "{ .reg .b16 c;         \n"
                     "   mov.b16 c, 0x3f80U; \n" // 1.0
@@ -654,6 +685,7 @@ struct FAddOpConversion
       auto rhs = builder.newOperand(operands[1], "h");
       fAdd({res, lhs, rhs}, /*onlyAttachMLIRArgs=*/true);
       return builder.launch(rewriter, loc, i16_ty, false);
+#endif
     } else {
       return rewriter.create<LLVM::FAddOp>(loc, elemTy, operands[0],
                                            operands[1]);
@@ -674,6 +706,9 @@ struct FSubOpConversion
     auto lhsElemTy = getElementType(op.getLhs());
     auto rhsElemTy = getElementType(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
+#ifdef USE_ROCM
+      return EmitDualBF16ElementwiseOp<LLVM::FSubOp>(loc, rewriter, operands);
+#else
       PTXBuilder builder;
       auto ptxAsm = " { .reg .b16 c;         \n"
                     "    mov.b16 c, 0xbf80U; \n" // -1.0
@@ -684,6 +719,7 @@ struct FSubOpConversion
       auto rhs = builder.newOperand(operands[1], "h");
       fSub({res, lhs, rhs}, /*onlyAttachMLIRArgs=*/true);
       return builder.launch(rewriter, loc, i16_ty, false);
+#endif
     } else {
       return rewriter.create<LLVM::FSubOp>(loc, elemTy, operands[0],
                                            operands[1]);
