@@ -205,6 +205,11 @@ struct DotOpMmaV1ConversionHelper {
     }
 
     Type f16x2Ty = vec_ty(f16_ty, 2);
+    Type f16PtrTy = ptr_ty(f16_ty);
+    if (tensorTy.getElementType().isBF16()) {
+      f16x2Ty = vec_ty(i16_ty, 2);
+      f16PtrTy = ptr_ty(i16_ty);
+    }
 
     // prepare arguments
     SmallVector<Value> ptrA(numPtrA);
@@ -212,8 +217,6 @@ struct DotOpMmaV1ConversionHelper {
     std::map<std::pair<int, int>, std::pair<Value, Value>> has;
     for (int i = 0; i < numPtrA; i++)
       ptrA[i] = gep(ptr_ty(f16_ty), smemBase, offA[i]);
-
-    Type f16PtrTy = ptr_ty(f16_ty);
 
     auto ld = [&](decltype(has) &vals, int m, int k, Value val0, Value val1) {
       vals[{m, k}] = {val0, val1};
@@ -321,6 +324,10 @@ struct DotOpMmaV1ConversionHelper {
 
     Type f16PtrTy = ptr_ty(f16_ty);
     Type f16x2Ty = vec_ty(f16_ty, 2);
+    if (tensorTy.getElementType().isBF16()) {
+      f16PtrTy = ptr_ty(i16_ty);
+      f16x2Ty = vec_ty(i16_ty, 2);
+    }
 
     SmallVector<Value> ptrB(numPtrB);
     ValueTable hbs;
@@ -369,8 +376,7 @@ struct DotOpMmaV1ConversionHelper {
       elems.push_back(item.second.first);
       elems.push_back(item.second.second);
     }
-    Type fp16x2Ty = vec_ty(type::f16Ty(ctx), 2);
-    Type resTy = struct_ty(SmallVector<Type>(elems.size(), fp16x2Ty));
+    Type resTy = struct_ty(SmallVector<Type>(elems.size(), f16x2Ty));
     Value res = getStructFromElements(loc, elems, rewriter, resTy);
     return res;
   }
