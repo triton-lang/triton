@@ -1609,6 +1609,10 @@ def compile(fn, **kwargs):
     extern_libs = kwargs.get("extern_libs", dict())
     # build compilation stages
     if torch.version.hip is not None:
+        if extern_libs is None:
+            extern_libs = get_amdgcn_bitcode_paths()
+        else:
+            extern_libs.update(get_amdgcn_bitcode_paths())
         gfx_arch = os.environ.get('MI_GPU_ARCH', compile.discovered_gfx_arch)
         if gfx_arch is None:
             raise RuntimeError('gfx_arch is None (not specified)')
@@ -1738,9 +1742,9 @@ def _get_amdgcn_bitcode_paths():
   amdgcn_bitcode_paths = {}
   i = 1
   for bc_lib in gpu_arch_agnostic_bitcode_libraries:
-    amdgcn_bitcode_paths['library' + str(i)] = bitcode_path_dir + bc_lib
+    amdgcn_bitcode_paths['library_' + str(i)] = bitcode_path_dir + bc_lib
     i += 1
-  amdgcn_bitcode_paths['library' + str(i)] = bitcode_path_dir + gpu_arch_specific_bitcode_library
+  amdgcn_bitcode_paths['library_' + str(i)] = bitcode_path_dir + gpu_arch_specific_bitcode_library
   return amdgcn_bitcode_paths
 
 @static_vars(amdgcn_bitcode_paths = _get_amdgcn_bitcode_paths())
