@@ -1201,8 +1201,8 @@ public:
   }
 };
 
-// This pattern collects the Mma those need to update and create the new
-// layouts.
+// This pattern collects the wrong Mma those need to update and create the right
+// ones for each.
 class CollectMmaToUpdateForVolta : public mlir::RewritePattern {
   DenseMap<MmaEncodingAttr, MmaEncodingAttr> &mmaToUpdate;
 
@@ -1232,10 +1232,8 @@ public:
     if (mmaToUpdate.count(mmaLayout))
       return failure();
 
-    // NOTE Should run after the BlockedToMMA pattern.
     auto dotOperandA = AT.getEncoding().cast<DotOperandEncodingAttr>();
     auto dotOperandB = BT.getEncoding().cast<DotOperandEncodingAttr>();
-    // NOTE Should run after OptimizeConvertToDotOperand pattern.
     bool isARow = dotOperandA.getIsMMAv1Row().cast<BoolAttr>().getValue();
     bool isBRow = dotOperandB.getIsMMAv1Row().cast<BoolAttr>().getValue();
     auto [isARow_, isBRow_, isAVec4, isBVec4] =
@@ -1255,6 +1253,7 @@ public:
   }
 };
 
+// Correct the versionMinor field in MmaEncodingAttr for Volta.
 class UpdateMMAVersionMinorForVolta : public mlir::RewritePattern {
   const DenseMap<MmaEncodingAttr, MmaEncodingAttr> &mmaToUpdate;
   enum class Kind {
@@ -1393,12 +1392,12 @@ private:
   }
 };
 
-class RematerializeForloop : public RewritePattern {
+class RematerializeForloopForVolta : public RewritePattern {
 
   const DenseMap<MmaEncodingAttr, MmaEncodingAttr> &mmaToUpdate;
 
 public:
-  RematerializeForloop(
+  RematerializeForloopForVolta(
       mlir::MLIRContext *ctx,
       const DenseMap<MmaEncodingAttr, MmaEncodingAttr> &mmaToUpdate)
       : RewritePattern(scf::ForOp::getOperationName(), 1 /*benefit*/, ctx),
@@ -1415,9 +1414,8 @@ public:
         if (!tensorTy.getEncoding())
           continue;
         if (auto mma = tensorTy.getEncoding().dyn_cast<MmaEncodingAttr>()) {
-          auto it = mmaToUpdate.find(mma);
-          if (it == mmaToUpdate.end())
-            return failure();
+          if (!mmaToUpdate.count(mma))
+            continue;
           needRematerialize = true;
           break;
         }
@@ -1516,7 +1514,7 @@ public:
     }
     {
       mlir::RewritePatternSet ps(context);
-      ps.add<RematerializeForloop>(context, mmaToUpdate);
+      ps.add<RematerializeForloopForVolta>(context, mmaToUpdate);
       if (applyPatternsAndFoldGreedily(m, std::move(ps)).failed())
         signalPassFailure();
     }
