@@ -1268,10 +1268,9 @@ class UpdateMMAVersionMinorForVolta : public mlir::RewritePattern {
 
 public:
   UpdateMMAVersionMinorForVolta(
-      mlir::MLIRContext *ctx,
+      mlir::MLIRContext *ctx, llvm::StringRef opName,
       const DenseMap<MmaEncodingAttr, MmaEncodingAttr> &mmaToUpdate)
-      : RewritePattern(MatchAnyOpTypeTag{}, 1 /*benefit*/, ctx),
-        mmaToUpdate(mmaToUpdate) {}
+      : RewritePattern(opName, 1 /*benefit*/, ctx), mmaToUpdate(mmaToUpdate) {}
 
   LogicalResult match(Operation *op) const override {
     MmaEncodingAttr mma;
@@ -1285,8 +1284,6 @@ public:
 
     // ConvertLayoutOp
     if (auto cvt = llvm::dyn_cast<ConvertLayoutOp>(op)) {
-      auto srcTensorTy =
-          cvt.getOperand().getType().dyn_cast<RankedTensorType>();
       // cvt X -> dot_operand
       if (auto dotOperand =
               tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>()) {
@@ -1504,18 +1501,23 @@ public:
         signalPassFailure();
     }
     {
-      mlir::RewritePatternSet patterns(context);
-      patterns.add<UpdateMMAVersionMinorForVolta>(context, mmaToUpdate);
+      mlir::RewritePatternSet ps(context);
+      ps.add<UpdateMMAVersionMinorForVolta>(context, DotOp::getOperationName(),
+                                            mmaToUpdate);
+      ps.add<UpdateMMAVersionMinorForVolta>(
+          context, ConvertLayoutOp::getOperationName(), mmaToUpdate);
+      ps.add<UpdateMMAVersionMinorForVolta>(
+          context, arith::ConstantOp::getOperationName(), mmaToUpdate);
       mlir::GreedyRewriteConfig config;
       config.useTopDownTraversal = true;
 
-      if (applyPatternsAndFoldGreedily(m, std::move(patterns), config).failed())
+      if (applyPatternsAndFoldGreedily(m, std::move(ps), config).failed())
         signalPassFailure();
     }
     {
-      mlir::RewritePatternSet patterns(context);
-      patterns.add<RematerializeForloop>(context, mmaToUpdate);
-      if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
+      mlir::RewritePatternSet ps(context);
+      ps.add<RematerializeForloop>(context, mmaToUpdate);
+      if (applyPatternsAndFoldGreedily(m, std::move(ps)).failed())
         signalPassFailure();
     }
 
