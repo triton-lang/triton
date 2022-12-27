@@ -1245,7 +1245,7 @@ public:
         ctx, mmaLayout.getVersionMajor(), mmaLayout.getWarpsPerCTA(),
         AT.getShape(), BT.getShape(), isARow, isBRow);
 
-    // need to update
+    // Collect the wrong MMA Layouts, and mark need to update.
     mmaToUpdate.try_emplace(mmaLayout, newMmaLayout);
 
     return failure();
@@ -1254,6 +1254,15 @@ public:
 
 class UpdateMMAVersionMinorForVolta : public mlir::RewritePattern {
   const DenseMap<MmaEncodingAttr, MmaEncodingAttr> &mmaToUpdate;
+  enum class Kind {
+    kUnk,
+    kCvtMma,
+    kCvtToMma,
+    kCvtToDotOp,
+    kDot,
+    kConstant,
+  };
+  mutable Kind rewriteKind{Kind::kUnk};
 
 public:
   UpdateMMAVersionMinorForVolta(
@@ -1263,46 +1272,83 @@ public:
         mmaToUpdate(mmaToUpdate) {}
 
   LogicalResult match(Operation *op) const override {
+    MmaEncodingAttr mma;
+    if (mmaToUpdate.empty())
+      return failure();
     if (op->getNumResults() != 1)
       return failure();
     auto tensorTy = op->getResult(0).getType().dyn_cast<RankedTensorType>();
     if (!tensorTy)
       return failure();
     bool hit{};
+    // ConvertLayoutOp
     if (auto cvt = llvm::dyn_cast<ConvertLayoutOp>(op)) {
+      auto srcTensorTy =
+          cvt.getOperand().getType().dyn_cast<RankedTensorType>();
+      // cvt X -> dot_operand
       if (auto dotOperand =
               tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>()) {
-        if (auto mma = dotOperand.getParent().dyn_cast<MmaEncodingAttr>())
-          hit = mmaToUpdate.count(mma);
-      } else if (auto mma = tensorTy.getEncoding().dyn_cast<MmaEncodingAttr>())
-        hit = mmaToUpdate.count(mma);
+        mma = dotOperand.getParent().dyn_cast<MmaEncodingAttr>();
+        rewriteKind = Kind::kCvtToDotOp;
+        if (mma && mmaToUpdate.count(mma))
+          return success();
+      }
+      if ((mma = tensorTy.getEncoding().dyn_cast<MmaEncodingAttr>())) {
+        // cvt X -> mma
+        rewriteKind = Kind::kCvtToMma;
+        if (mma && mmaToUpdate.count(mma))
+          return success();
+      }
+      if (srcTensorTy &&
+          (mma = srcTensorTy.getEncoding().dyn_cast<MmaEncodingAttr>())) {
+        // cvt mma -> X
+        rewriteKind = Kind::kCvtMma;
+        llvm::outs() << "cvt op: " << *op << "\n";
+        auto retTypes = op->getOperand(0).getDefiningOp()->getResultTypes();
+        for (auto t : retTypes) {
+          llvm::outs() << "- " << t << "\n";
+        }
+        return failure();
+        if (mma && mmaToUpdate.count(mma))
+          return success();
+      }
     } else if (auto dot = llvm::dyn_cast<DotOp>(op)) {
-      auto mma = dot.d()
-                     .getType()
-                     .cast<RankedTensorType>()
-                     .getEncoding()
-                     .dyn_cast<MmaEncodingAttr>();
-      if (mma)
-        hit = mmaToUpdate.count(mma);
+      // DotOp
+      mma = dot.d()
+                .getType()
+                .cast<RankedTensorType>()
+                .getEncoding()
+                .dyn_cast<MmaEncodingAttr>();
+      rewriteKind = Kind::kDot;
     } else if (auto constant = llvm::dyn_cast<arith::ConstantOp>(op)) {
-      if (auto mma = tensorTy.getEncoding().dyn_cast<MmaEncodingAttr>())
-        hit = mmaToUpdate.count(mma);
+      // ConstantOp
+      mma = tensorTy.getEncoding().dyn_cast<MmaEncodingAttr>();
+      rewriteKind = Kind::kConstant;
     }
 
-    return failure(!hit);
+    return success(mma && mmaToUpdate.count(mma));
   }
 
   void rewrite(Operation *op, PatternRewriter &rewriter) const override {
-    if (auto cvt = llvm::dyn_cast<ConvertLayoutOp>(op)) {
-      auto tensorTy = cvt.result().getType().cast<RankedTensorType>();
-      if (tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>())
-        rewriteCvtDotOp(op, rewriter);
-      else
-        rewriteCvtMma(op, rewriter);
-    } else if (auto dot = llvm::dyn_cast<DotOp>(op))
+    switch (rewriteKind) {
+    case Kind::kDot:
       rewriteDot(op, rewriter);
-    else if (llvm::dyn_cast<arith::ConstantOp>(op))
+      break;
+    case Kind::kConstant:
       rewriteConstant(op, rewriter);
+      break;
+    case Kind::kCvtMma:
+      rewriteCvtMma(op, rewriter);
+      break;
+    case Kind::kCvtToDotOp:
+      rewriteCvtDotOp(op, rewriter);
+      break;
+    case Kind::kCvtToMma:
+      rewriteCvtToMma(op, rewriter);
+      break;
+    default:
+      assert(false && "Not supported");
+    }
   }
 
 private:
@@ -1333,7 +1379,7 @@ private:
                                        dot.c(), dot.allowTF32());
   }
 
-  void rewriteCvtMma(Operation *op, PatternRewriter &rewriter) const {
+  void rewriteCvtToMma(Operation *op, PatternRewriter &rewriter) const {
     auto *ctx = op->getContext();
     auto cvt = llvm::cast<ConvertLayoutOp>(op);
     auto tensorTy = cvt.result().getType().cast<RankedTensorType>();
@@ -1341,6 +1387,28 @@ private:
     auto newMma = mmaToUpdate.lookup(mma);
     auto newTensorTy = RankedTensorType::get(tensorTy.getShape(),
                                              tensorTy.getElementType(), newMma);
+    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, newTensorTy,
+                                                 cvt.getOperand());
+  }
+
+  void rewriteCvtMma(Operation *op, PatternRewriter &rewriter) const {
+    auto *ctx = op->getContext();
+    auto cvt = llvm::cast<ConvertLayoutOp>(op);
+    auto tensorTy = cvt.getOperand().getType().cast<RankedTensorType>();
+    auto mma = tensorTy.getEncoding().cast<MmaEncodingAttr>();
+    auto newMma = mmaToUpdate.lookup(mma);
+    auto newTensorTy = RankedTensorType::get(tensorTy.getShape(),
+                                             tensorTy.getElementType(), newMma);
+    llvm::outs() << "for.types: ";
+    for (auto t : cvt.getOperand().getDefiningOp()->getResultTypes())
+      llvm::outs() << "- " << t << "\n";
+    llvm::outs() << "cvt.operand: " << cvt.getOperand().getType() << "\n";
+    auto forOp = cast<scf::ForOp>(cvt.getOperand().getDefiningOp());
+    llvm::outs() << "cvt.operand forop.types : "
+                 << "\n";
+    for (auto t : forOp.getBody()->getTerminator()->getResultTypes())
+      llvm::outs() << "- " << t << "\n";
+    // TODO
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, newTensorTy,
                                                  cvt.getOperand());
   }
@@ -1361,6 +1429,70 @@ private:
     }
 
     assert(false && "Not supported ConstantOp value type");
+  }
+};
+
+class RematerializeForloop : public RewritePattern {
+
+  const DenseMap<MmaEncodingAttr, MmaEncodingAttr> &mmaToUpdate;
+
+public:
+  RematerializeForloop(
+      mlir::MLIRContext *ctx,
+      const DenseMap<MmaEncodingAttr, MmaEncodingAttr> &mmaToUpdate)
+      : RewritePattern(scf::ForOp::getOperationName(), 1 /*benefit*/, ctx),
+        mmaToUpdate(mmaToUpdate) {}
+
+  LogicalResult matchAndRewrite(Operation *op,
+                                PatternRewriter &rewriter) const override {
+    auto forOp = cast<scf::ForOp>(op);
+    auto iterOps = forOp.getIterOperands();
+    auto resTypes = forOp->getResultTypes();
+    bool needRematerialize{};
+    for (auto type : resTypes)
+      if (auto tensorTy = type.dyn_cast<RankedTensorType>())
+        if (auto mma = tensorTy.getEncoding().dyn_cast<MmaEncodingAttr>()) {
+          auto it = mmaToUpdate.find(mma);
+          if (it == mmaToUpdate.end())
+            return failure();
+          needRematerialize = true;
+          break;
+        }
+
+    if (needRematerialize) {
+      auto res = rematerializeForLoop(rewriter, forOp);
+      rewriter.replaceOp(op, res);
+      return success();
+    }
+    return failure();
+  }
+
+  SmallVector<Value, 4> rematerializeForLoop(mlir::PatternRewriter &rewriter,
+                                             scf::ForOp &forOp) const {
+    llvm::outs() << "initArgs:" << forOp.getInitArgs()[0].getType() << "\n";
+    auto newForOp = rewriter.create<scf::ForOp>(
+        forOp.getLoc(), forOp.getLowerBound(), forOp.getUpperBound(),
+        forOp.getStep(), forOp.getInitArgs());
+
+    newForOp->moveBefore(forOp);
+    rewriter.setInsertionPointToStart(newForOp.getBody());
+    BlockAndValueMapping mapping;
+    for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs()))
+      mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
+    mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
+
+    for (auto &op : forOp.getBody()->without_terminator()) {
+      rewriter.clone(op, mapping);
+    }
+
+    SmallVector<Value, 4> newYieldArgs;
+    auto yieldOp = forOp.getBody()->getTerminator();
+    for (Value arg : yieldOp->getOperands())
+      newYieldArgs.push_back(mapping.lookup(arg));
+    rewriter.create<scf::YieldOp>(forOp.getLoc(), newYieldArgs);
+
+    auto newResults = newForOp->getResults();
+    return newResults;
   }
 };
 
@@ -1398,6 +1530,7 @@ public:
       signalPassFailure();
     }
 
+    llvm::outs() << "before:\n" << m << "\n";
     llvm::DenseMap<MmaEncodingAttr, MmaEncodingAttr> mmaToUpdate;
     {
       mlir::RewritePatternSet patterns(context);
@@ -1408,12 +1541,22 @@ public:
     {
       mlir::RewritePatternSet patterns(context);
       patterns.add<UpdateMMAVersionMinorForVolta>(context, mmaToUpdate);
+      patterns.add<SimplifyConversion>(context);
       mlir::GreedyRewriteConfig config;
       config.useTopDownTraversal = true;
 
       if (applyPatternsAndFoldGreedily(m, std::move(patterns), config).failed())
         signalPassFailure();
     }
+    llvm::outs() << "after:\n" << m << "\n";
+
+    {
+      mlir::RewritePatternSet patterns(context);
+      patterns.add<RematerializeForloop>(context, mmaToUpdate);
+      if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
+        signalPassFailure();
+    }
+    llvm::outs() << "final:\n" << m << "\n";
 
     mlir::RewritePatternSet loopFixup(context);
     loopFixup.add<FixupLoop>(context);
