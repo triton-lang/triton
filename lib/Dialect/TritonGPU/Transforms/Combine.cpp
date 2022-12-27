@@ -1065,7 +1065,8 @@ public:
     auto dotOp = cast<triton::DotOp>(op);
     // TODO: Check data-types and SM compatibility
     auto oldRetType = dotOp.getResult().getType().cast<RankedTensorType>();
-    if (oldRetType.getEncoding().isa<triton::gpu::MmaEncodingAttr>())
+    if (!oldRetType.getEncoding() ||
+        oldRetType.getEncoding().isa<triton::gpu::MmaEncodingAttr>())
       return failure();
 
     auto AType = dotOp.getOperand(0).getType().cast<RankedTensorType>();
@@ -1500,7 +1501,6 @@ public:
     {
       mlir::RewritePatternSet patterns(context);
       patterns.add<UpdateMMAVersionMinorForVolta>(context, mmaToUpdate);
-      patterns.add<SimplifyConversion>(context);
       mlir::GreedyRewriteConfig config;
       config.useTopDownTraversal = true;
 
