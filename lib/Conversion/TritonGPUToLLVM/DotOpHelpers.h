@@ -204,11 +204,11 @@ struct DotOpMmaV1ConversionHelper {
       offA[i] = add(mul(offA0I, strideA0), mul(offA1, strideA1));
     }
 
-    Type f16x2Ty = vec_ty(f16_ty, 2);
-    Type f16PtrTy = ptr_ty(f16_ty);
+    Type elemX2Ty = vec_ty(f16_ty, 2);
+    Type elemPtrTy = ptr_ty(f16_ty);
     if (tensorTy.getElementType().isBF16()) {
-      f16x2Ty = vec_ty(i16_ty, 2);
-      f16PtrTy = ptr_ty(i16_ty);
+      elemX2Ty = vec_ty(i16_ty, 2);
+      elemPtrTy = ptr_ty(i16_ty);
     }
 
     // prepare arguments
@@ -223,23 +223,23 @@ struct DotOpMmaV1ConversionHelper {
     };
     auto loadA = [&](int m, int k) {
       int offidx = (isARow ? k / 4 : m) % numPtrA;
-      Value thePtrA = gep(f16PtrTy, smemBase, offA[offidx]);
+      Value thePtrA = gep(elemPtrTy, smemBase, offA[offidx]);
 
       int stepAM = isARow ? m : m / numPtrA * numPtrA;
       int stepAK = isARow ? k / (numPtrA * vecA) * (numPtrA * vecA) : k;
       Value offset = add(mul(i32_val(stepAM * strideRepM), strideAM),
                          mul(i32_val(stepAK), strideAK));
-      Value pa = gep(f16PtrTy, thePtrA, offset);
+      Value pa = gep(elemPtrTy, thePtrA, offset);
       Type aPtrTy = ptr_ty(vec_ty(i32_ty, std::max<int>(vecA / 2, 1)), 3);
       Value ha = load(bitcast(pa, aPtrTy));
       // record lds that needs to be moved
-      Value ha00 = bitcast(extract_element(ha, i32_val(0)), f16x2Ty);
-      Value ha01 = bitcast(extract_element(ha, i32_val(1)), f16x2Ty);
+      Value ha00 = bitcast(extract_element(ha, i32_val(0)), elemX2Ty);
+      Value ha01 = bitcast(extract_element(ha, i32_val(1)), elemX2Ty);
       ld(has, m, k, ha00, ha01);
 
       if (vecA > 4) {
-        Value ha10 = bitcast(extract_element(ha, i32_val(2)), f16x2Ty);
-        Value ha11 = bitcast(extract_element(ha, i32_val(3)), f16x2Ty);
+        Value ha10 = bitcast(extract_element(ha, i32_val(2)), elemX2Ty);
+        Value ha11 = bitcast(extract_element(ha, i32_val(3)), elemX2Ty);
         if (isARow)
           ld(has, m, k + 4, ha10, ha11);
         else
@@ -259,7 +259,7 @@ struct DotOpMmaV1ConversionHelper {
       elems.push_back(item.second.second);
     }
 
-    Type resTy = struct_ty(SmallVector<Type>(elems.size(), f16x2Ty));
+    Type resTy = struct_ty(SmallVector<Type>(elems.size(), elemX2Ty));
     Value res = getStructFromElements(loc, elems, rewriter, resTy);
     return res;
   }
@@ -322,11 +322,11 @@ struct DotOpMmaV1ConversionHelper {
       offB[i] = add(mul(offB0I, strideB0), mul(offB1, strideB1));
     }
 
-    Type f16PtrTy = ptr_ty(f16_ty);
-    Type f16x2Ty = vec_ty(f16_ty, 2);
+    Type elemPtrTy = ptr_ty(f16_ty);
+    Type elemX2Ty = vec_ty(f16_ty, 2);
     if (tensorTy.getElementType().isBF16()) {
-      f16PtrTy = ptr_ty(i16_ty);
-      f16x2Ty = vec_ty(i16_ty, 2);
+      elemPtrTy = ptr_ty(i16_ty);
+      elemX2Ty = vec_ty(i16_ty, 2);
     }
 
     SmallVector<Value> ptrB(numPtrB);
@@ -346,17 +346,17 @@ struct DotOpMmaV1ConversionHelper {
       int stepBK = isBRow ? K : K / (numPtrB * vecB) * (numPtrB * vecB);
       Value offset = add(mul(i32_val(stepBN * strideRepN), strideBN),
                          mul(i32_val(stepBK), strideBK));
-      Value pb = gep(f16PtrTy, thePtrB, offset);
+      Value pb = gep(elemPtrTy, thePtrB, offset);
 
       Value hb =
           load(bitcast(pb, ptr_ty(vec_ty(i32_ty, std::max(vecB / 2, 1)), 3)));
       // record lds that needs to be moved
-      Value hb00 = bitcast(extract_element(hb, i32_val(0)), f16x2Ty);
-      Value hb01 = bitcast(extract_element(hb, i32_val(1)), f16x2Ty);
+      Value hb00 = bitcast(extract_element(hb, i32_val(0)), elemX2Ty);
+      Value hb01 = bitcast(extract_element(hb, i32_val(1)), elemX2Ty);
       ld(hbs, n, K, hb00, hb01);
       if (vecB > 4) {
-        Value hb10 = bitcast(extract_element(hb, i32_val(2)), f16x2Ty);
-        Value hb11 = bitcast(extract_element(hb, i32_val(3)), f16x2Ty);
+        Value hb10 = bitcast(extract_element(hb, i32_val(2)), elemX2Ty);
+        Value hb11 = bitcast(extract_element(hb, i32_val(3)), elemX2Ty);
         if (isBRow)
           ld(hbs, n + 1, K, hb10, hb11);
         else
@@ -376,7 +376,7 @@ struct DotOpMmaV1ConversionHelper {
       elems.push_back(item.second.first);
       elems.push_back(item.second.second);
     }
-    Type resTy = struct_ty(SmallVector<Type>(elems.size(), f16x2Ty));
+    Type resTy = struct_ty(SmallVector<Type>(elems.size(), elemX2Ty));
     Value res = getStructFromElements(loc, elems, rewriter, resTy);
     return res;
   }
