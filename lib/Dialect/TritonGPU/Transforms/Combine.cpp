@@ -1499,23 +1499,23 @@ public:
         signalPassFailure();
     }
     {
-      mlir::RewritePatternSet ps(context);
-      ps.add<UpdateMMAVersionMinorForVolta>(context, DotOp::getOperationName(),
-                                            mmaToUpdate);
-      ps.add<UpdateMMAVersionMinorForVolta>(
+      mlir::RewritePatternSet patterns(context);
+      patterns.add<UpdateMMAVersionMinorForVolta>(
+          context, DotOp::getOperationName(), mmaToUpdate);
+      patterns.add<UpdateMMAVersionMinorForVolta>(
           context, ConvertLayoutOp::getOperationName(), mmaToUpdate);
-      ps.add<UpdateMMAVersionMinorForVolta>(
+      patterns.add<UpdateMMAVersionMinorForVolta>(
           context, arith::ConstantOp::getOperationName(), mmaToUpdate);
       mlir::GreedyRewriteConfig config;
       config.useTopDownTraversal = true;
 
-      if (applyPatternsAndFoldGreedily(m, std::move(ps), config).failed())
+      if (applyPatternsAndFoldGreedily(m, std::move(patterns), config).failed())
         signalPassFailure();
     }
     {
-      mlir::RewritePatternSet ps(context);
-      ps.add<RematerializeForloopForVolta>(context, mmaToUpdate);
-      if (applyPatternsAndFoldGreedily(m, std::move(ps)).failed())
+      mlir::RewritePatternSet patterns(context);
+      patterns.add<RematerializeForloopForVolta>(context, mmaToUpdate);
+      if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
         signalPassFailure();
     }
 
