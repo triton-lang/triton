@@ -1256,7 +1256,6 @@ class UpdateMMAVersionMinorForVolta : public mlir::RewritePattern {
   const DenseMap<MmaEncodingAttr, MmaEncodingAttr> &mmaToUpdate;
   enum class Kind {
     kUnk,
-    kCvtMma,
     kCvtToMma,
     kCvtToDotOp,
     kDot,
@@ -1280,7 +1279,7 @@ public:
     auto tensorTy = op->getResult(0).getType().dyn_cast<RankedTensorType>();
     if (!tensorTy)
       return failure();
-    bool hit{};
+
     // ConvertLayoutOp
     if (auto cvt = llvm::dyn_cast<ConvertLayoutOp>(op)) {
       auto srcTensorTy =
@@ -1296,19 +1295,6 @@ public:
       if ((mma = tensorTy.getEncoding().dyn_cast<MmaEncodingAttr>())) {
         // cvt X -> mma
         rewriteKind = Kind::kCvtToMma;
-        if (mma && mmaToUpdate.count(mma))
-          return success();
-      }
-      if (srcTensorTy &&
-          (mma = srcTensorTy.getEncoding().dyn_cast<MmaEncodingAttr>())) {
-        // cvt mma -> X
-        rewriteKind = Kind::kCvtMma;
-        llvm::outs() << "cvt op: " << *op << "\n";
-        auto retTypes = op->getOperand(0).getDefiningOp()->getResultTypes();
-        for (auto t : retTypes) {
-          llvm::outs() << "- " << t << "\n";
-        }
-        return failure();
         if (mma && mmaToUpdate.count(mma))
           return success();
       }
@@ -1336,9 +1322,6 @@ public:
       break;
     case Kind::kConstant:
       rewriteConstant(op, rewriter);
-      break;
-    case Kind::kCvtMma:
-      rewriteCvtMma(op, rewriter);
       break;
     case Kind::kCvtToDotOp:
       rewriteCvtDotOp(op, rewriter);
@@ -1387,28 +1370,6 @@ private:
     auto newMma = mmaToUpdate.lookup(mma);
     auto newTensorTy = RankedTensorType::get(tensorTy.getShape(),
                                              tensorTy.getElementType(), newMma);
-    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, newTensorTy,
-                                                 cvt.getOperand());
-  }
-
-  void rewriteCvtMma(Operation *op, PatternRewriter &rewriter) const {
-    auto *ctx = op->getContext();
-    auto cvt = llvm::cast<ConvertLayoutOp>(op);
-    auto tensorTy = cvt.getOperand().getType().cast<RankedTensorType>();
-    auto mma = tensorTy.getEncoding().cast<MmaEncodingAttr>();
-    auto newMma = mmaToUpdate.lookup(mma);
-    auto newTensorTy = RankedTensorType::get(tensorTy.getShape(),
-                                             tensorTy.getElementType(), newMma);
-    llvm::outs() << "for.types: ";
-    for (auto t : cvt.getOperand().getDefiningOp()->getResultTypes())
-      llvm::outs() << "- " << t << "\n";
-    llvm::outs() << "cvt.operand: " << cvt.getOperand().getType() << "\n";
-    auto forOp = cast<scf::ForOp>(cvt.getOperand().getDefiningOp());
-    llvm::outs() << "cvt.operand forop.types : "
-                 << "\n";
-    for (auto t : forOp.getBody()->getTerminator()->getResultTypes())
-      llvm::outs() << "- " << t << "\n";
-    // TODO
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, newTensorTy,
                                                  cvt.getOperand());
   }
@@ -1469,7 +1430,6 @@ public:
 
   SmallVector<Value, 4> rematerializeForLoop(mlir::PatternRewriter &rewriter,
                                              scf::ForOp &forOp) const {
-    llvm::outs() << "initArgs:" << forOp.getInitArgs()[0].getType() << "\n";
     auto newForOp = rewriter.create<scf::ForOp>(
         forOp.getLoc(), forOp.getLowerBound(), forOp.getUpperBound(),
         forOp.getStep(), forOp.getInitArgs());
@@ -1530,7 +1490,6 @@ public:
       signalPassFailure();
     }
 
-    llvm::outs() << "before:\n" << m << "\n";
     llvm::DenseMap<MmaEncodingAttr, MmaEncodingAttr> mmaToUpdate;
     {
       mlir::RewritePatternSet patterns(context);
@@ -1548,15 +1507,12 @@ public:
       if (applyPatternsAndFoldGreedily(m, std::move(patterns), config).failed())
         signalPassFailure();
     }
-    llvm::outs() << "after:\n" << m << "\n";
-
     {
       mlir::RewritePatternSet patterns(context);
       patterns.add<RematerializeForloop>(context, mmaToUpdate);
       if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
         signalPassFailure();
     }
-    llvm::outs() << "final:\n" << m << "\n";
 
     mlir::RewritePatternSet loopFixup(context);
     loopFixup.add<FixupLoop>(context);
