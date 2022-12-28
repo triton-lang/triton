@@ -1176,7 +1176,8 @@ public:
     for (size_t i = 0; i < newInitArgs.size(); i++) {
       auto initArg = newInitArgs[i];
       auto regionArg = forOp.getRegionIterArgs()[i];
-      if (newInitArgs[i].getType() != forOp.getRegionIterArgs()[i].getType()) {
+      if (newInitArgs[i].getType() != forOp.getRegionIterArgs()[i].getType() ||
+          newInitArgs[i].getType() != forOp.getResultTypes()[i]) {
         shouldRematerialize = true;
         break;
       }
@@ -1192,9 +1193,10 @@ public:
     BlockAndValueMapping mapping;
     for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs()))
       mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
+    mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
 
     for (Operation &op : forOp.getBody()->getOperations()) {
-      Operation *newOp = rewriter.clone(op, mapping);
+      rewriter.clone(op, mapping);
     }
     rewriter.replaceOp(forOp, newForOp.getResults());
     return success();
@@ -1329,7 +1331,7 @@ public:
       rewriteCvtToMma(op, rewriter);
       break;
     default:
-      assert(false && "Not supported");
+      llvm::report_fatal_error("Not supported rewrite kind");
     }
   }
 
@@ -1392,71 +1394,6 @@ private:
   }
 };
 
-class RematerializeForloopForVolta : public RewritePattern {
-
-  const DenseMap<MmaEncodingAttr, MmaEncodingAttr> &mmaToUpdate;
-
-public:
-  RematerializeForloopForVolta(
-      mlir::MLIRContext *ctx,
-      const DenseMap<MmaEncodingAttr, MmaEncodingAttr> &mmaToUpdate)
-      : RewritePattern(scf::ForOp::getOperationName(), 1 /*benefit*/, ctx),
-        mmaToUpdate(mmaToUpdate) {}
-
-  LogicalResult matchAndRewrite(Operation *op,
-                                PatternRewriter &rewriter) const override {
-    auto forOp = cast<scf::ForOp>(op);
-    auto iterOps = forOp.getIterOperands();
-    auto resTypes = forOp->getResultTypes();
-    bool needRematerialize{};
-    for (auto type : resTypes)
-      if (auto tensorTy = type.dyn_cast<RankedTensorType>()) {
-        if (!tensorTy.getEncoding())
-          continue;
-        if (auto mma = tensorTy.getEncoding().dyn_cast<MmaEncodingAttr>()) {
-          if (!mmaToUpdate.count(mma))
-            continue;
-          needRematerialize = true;
-          break;
-        }
-      }
-
-    if (needRematerialize) {
-      auto res = rematerializeForLoop(rewriter, forOp);
-      rewriter.replaceOp(op, res);
-      return success();
-    }
-    return failure();
-  }
-
-  SmallVector<Value, 4> rematerializeForLoop(mlir::PatternRewriter &rewriter,
-                                             scf::ForOp &forOp) const {
-    auto newForOp = rewriter.create<scf::ForOp>(
-        forOp.getLoc(), forOp.getLowerBound(), forOp.getUpperBound(),
-        forOp.getStep(), forOp.getInitArgs());
-
-    newForOp->moveBefore(forOp);
-    rewriter.setInsertionPointToStart(newForOp.getBody());
-    BlockAndValueMapping mapping;
-    for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs()))
-      mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
-    mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
-
-    for (auto &op : forOp.getBody()->without_terminator()) {
-      rewriter.clone(op, mapping);
-    }
-
-    SmallVector<Value, 4> newYieldArgs;
-    auto yieldOp = forOp.getBody()->getTerminator();
-    for (Value arg : yieldOp->getOperands())
-      newYieldArgs.push_back(mapping.lookup(arg));
-    rewriter.create<scf::YieldOp>(forOp.getLoc(), newYieldArgs);
-
-    auto newResults = newForOp->getResults();
-    return newResults;
-  }
-};
-
 } // namespace
 
 #define GEN_PASS_CLASSES
@@ -1510,12 +1447,6 @@ public:
       config.useTopDownTraversal = true;
 
       if (applyPatternsAndFoldGreedily(m, std::move(patterns), config).failed())
-        signalPassFailure();
-    }
-    {
-      mlir::RewritePatternSet patterns(context);
-      patterns.add<RematerializeForloopForVolta>(context, mmaToUpdate);
-      if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
         signalPassFailure();
     }
 
