@@ -166,7 +166,8 @@ SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout) {
   return threads;
 }
 
-SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
+SmallVector<unsigned> getShapePerCTA(const Attribute &layout,
+                                     ArrayRef<int64_t> blockShape) {
   SmallVector<unsigned> shape;
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     for (unsigned d = 0, n = blockedLayout.getOrder().size(); d < n; ++d)
@@ -185,9 +186,11 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
     if (mmaLayout.isAmpere())
       return {16 * mmaLayout.getWarpsPerCTA()[0],
               8 * mmaLayout.getWarpsPerCTA()[1]};
-    if (mmaLayout.isVolta())
-      return {16 * mmaLayout.getWarpsPerCTA()[0],
-              16 * mmaLayout.getWarpsPerCTA()[1]};
+    if (mmaLayout.isVolta()) {
+      assert(!blockShape.empty() && "Volta needs the blockShape");
+      return {static_cast<unsigned>(blockShape[0]),
+              static_cast<unsigned>(blockShape[1])};
+    }
     assert(0 && "Unexpected MMA layout version found");
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
     auto parentLayout = dotLayout.getParent();

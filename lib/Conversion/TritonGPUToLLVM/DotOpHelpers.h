@@ -50,20 +50,18 @@ struct DotOpMmaV1ConversionHelper {
   struct AParam {
     SmallVector<int> rep;
     SmallVector<int> spw;
+    bool isAVec4{};
+    int vec{};
 
-    // TODO[Superjomn]: Support the case when isAVec4=false later
-    // Currently, we only support ld.v2, for the mma layout varies with
-    // different ld vector width.
-    // bool isAVec4 = !isARow && shapeTransed[orderTransed[0]] <= 16;
-    const bool isAVec4{true};
-
-    explicit AParam(bool isARow) {
+    AParam(bool isARow, ArrayRef<int64_t> shape) {
+      isAVec4 = !isARow && shape[isARow] <= 16;
       int packSize0 = (isARow || isAVec4) ? 1 : 2;
       int repM = 2 * packSize0;
       int repK = 1;
       int spwM = fpw[0] * 4 * repM;
       rep.assign({repM, 0, repK});
       spw.assign({spwM, 0, 1});
+      vec = 2 * rep[0];
     }
   };
 
@@ -71,16 +69,15 @@ struct DotOpMmaV1ConversionHelper {
   struct BParam {
     SmallVector<int> rep;
     SmallVector<int> spw;
-    // TODO[Superjomn]: Support the case when isBVec4=false later
-    // Currently, we only support ld.v2, for the mma layout varies with
-    // different ld vector width.
-    // bool isBVec4 = isBRow && shapeTransed[orderTransed[0]] <= 16;
-    const bool isBVec4{true};
+    bool isBVec4{};
+    int vec{};
 
-    explicit BParam(bool isBRow) {
+    BParam(bool isBRow, ArrayRef<int64_t> shape) {
+      isBVec4 = isBRow && shape[isBRow] <= 16;
       int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
       rep.assign({0, 2 * packSize1, 1});
       spw.assign({0, fpw[1] * 4 * rep[1], 1});
+      vec = 2 * rep[1];
     }
   };
 
@@ -101,76 +98,52 @@ struct DotOpMmaV1ConversionHelper {
   }
 
   // Get the number of fp16x2 elements for $a.
-  // \param shapeTransed: A's shape or reordered shape if transpose needed.
-  // \param orderTransed: the order or reordered order if transpose needed.
-  unsigned getNumM(ArrayRef<int64_t> shapeTransed, bool isARow) const {
-    AParam param(isARow);
+  unsigned getNumM(ArrayRef<int64_t> shapeA, bool isARow) const {
+    AParam param(isARow, shapeA);
 
-    unsigned numM = param.rep[0] * shapeTransed[0] / (param.spw[0] * wpt[0]);
+    unsigned numM = param.rep[0] * shapeA[0] / (param.spw[0] * wpt[0]);
     return numM;
   }
 
   // Get the number of fp16x2 elements for $b.
-  // \param shapeTransed: B' shape or reordered shape if transpose needed.
-  // \param orderTransed: the order or reordered order if transpose needed.
-  unsigned getNumN(ArrayRef<int64_t> shapeTransed, bool isBRow) const {
-    BParam param(isBRow);
+  unsigned getNumN(ArrayRef<int64_t> shapeB, bool isBRow) const {
+    BParam param(isBRow, shapeB);
 
-    unsigned numN = param.rep[1] * shapeTransed[1] / (param.spw[1] * wpt[1]);
+    unsigned numN = param.rep[1] * shapeB[1] / (param.spw[1] * wpt[1]);
     return numN;
   }
 
-  int numElemsPerThreadA(ArrayRef<int64_t> shapeTransed,
-                         ArrayRef<unsigned> orderTransed) const {
-    int numM = getNumM(shapeTransed, orderTransed[0] == 1);
-    int NK = shapeTransed[1];
-
-    // NOTE: We couldn't get the vec from the shared layout.
-    // int vecA = sharedLayout.getVec();
-    // TODO[Superjomn]: Consider the case when vecA > 4
-    bool vecGt4 = false;
-    int elemsPerLd = vecGt4 ? 4 : 2;
+  int numElemsPerThreadA(ArrayRef<int64_t> shape, bool isRow, int vec) const {
+    int numM = getNumM(shape, isRow);
+    int NK = shape[1];
+    int elemsPerLd = vec > 4 ? 4 : 2;
     return (numM / 2) * (NK / 4) * elemsPerLd;
   }
 
-  int numElemsPerThreadB(ArrayRef<int64_t> shapeTransed,
-                         ArrayRef<unsigned> orderTransed) const {
-    unsigned numN = getNumN(shapeTransed, orderTransed[0] == 1);
-    int NK = shapeTransed[0];
-    // NOTE: We couldn't get the vec from the shared layout.
-    // int vecB = sharedLayout.getVec();
-    // TODO[Superjomn]: Consider the case when vecA > 4
-    bool vecGt4 = false;
-    int elemsPerLd = vecGt4 ? 4 : 2;
+  int numElemsPerThreadB(ArrayRef<int64_t> shape, bool isRow, int vec) const {
+    unsigned numN = getNumN(shape, isRow);
+    int NK = shape[0];
+    int elemsPerLd = vec > 4 ? 4 : 2;
     return (numN / 2) * (NK / 4) * elemsPerLd;
   }
 
   // Loading $a from smem to registers, returns a LLVM::Struct.
-  Value loadA(Value tensor, bool transA, const SharedMemoryObject &smemObj,
-              Value thread, Location loc,
-              ConversionPatternRewriter &rewriter) const {
+  Value loadA(Value tensor, const SharedMemoryObject &smemObj, Value thread,
+              Location loc, ConversionPatternRewriter &rewriter) const {
     auto *ctx = rewriter.getContext();
     auto tensorTy = tensor.getType().cast<RankedTensorType>();
     auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
-    SmallVector<int64_t> shape(tensorTy.getShape().begin(),
-                               tensorTy.getShape().end());
-    SmallVector<unsigned> order(sharedLayout.getOrder().begin(),
-                                sharedLayout.getOrder().end());
+    auto shape = tensorTy.getShape();
+    auto order = sharedLayout.getOrder();
 
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
     Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
 
     bool isARow = order[0] != 0;
-    AParam param(isARow);
+    AParam param(isARow, shape);
 
     auto [offsetAM, offsetAK, _0, _1] = computeOffsets(
         thread, isARow, false, fpw, param.spw, param.rep, rewriter, loc);
-
-    if (transA) {
-      std::swap(shape[0], shape[1]);
-      std::swap(offsetAM, offsetAK);
-      std::swap(order[0], order[1]);
-    }
 
     int vecA = sharedLayout.getVec();
 
@@ -250,7 +223,8 @@ struct DotOpMmaV1ConversionHelper {
     unsigned numM = getNumM(shape, order[0] == 1);
     for (unsigned k = 0; k < NK; k += 4)
       for (unsigned m = 0; m < numM / 2; ++m)
-        loadA(m, k);
+        if (!has.count({m, k}))
+          loadA(m, k);
 
     SmallVector<Value> elems;
     elems.reserve(has.size() * 2);
@@ -265,9 +239,8 @@ struct DotOpMmaV1ConversionHelper {
   }
 
   // Loading $b from smem to registers, returns a LLVM::Struct.
-  Value loadB(Value tensor, bool transB, const SharedMemoryObject &smemObj,
-              Value thread, Location loc,
-              ConversionPatternRewriter &rewriter) const {
+  Value loadB(Value tensor, const SharedMemoryObject &smemObj, Value thread,
+              Location loc, ConversionPatternRewriter &rewriter) const {
     // smem
     auto strides = smemObj.strides;
 
@@ -275,14 +248,12 @@ struct DotOpMmaV1ConversionHelper {
     auto tensorTy = tensor.getType().cast<RankedTensorType>();
     auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
 
-    SmallVector<int64_t> shape(tensorTy.getShape().begin(),
-                               tensorTy.getShape().end());
-    SmallVector<unsigned> order(sharedLayout.getOrder().begin(),
-                                sharedLayout.getOrder().end());
+    auto shape = tensorTy.getShape();
+    auto order = sharedLayout.getOrder();
 
     Value smem = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
     bool isBRow = order[0] != 0;
-    BParam param(isBRow);
+    BParam param(isBRow, shape);
 
     int vecB = sharedLayout.getVec();
     Value strideBN = isBRow ? i32_val(1) : strides[1];
@@ -294,11 +265,6 @@ struct DotOpMmaV1ConversionHelper {
 
     auto [_0, _1, offsetBN, offsetBK] = computeOffsets(
         thread, false, isBRow, fpw, param.spw, param.rep, rewriter, loc);
-    if (transB) {
-      std::swap(order[0], order[1]);
-      std::swap(shape[0], shape[1]);
-      std::swap(offsetBK, offsetBN);
-    }
 
     // swizzling
     int perPhaseB = sharedLayout.getPerPhase();
@@ -466,6 +432,111 @@ struct DotOpMmaV1ConversionHelper {
     }
 
     return rcds;
+  }
+
+  using CoordTy = SmallVector<Value, 2>;
+  // Get the coordinates(m,n) of the elements emit by a thread in accumulator.
+  static SmallVector<CoordTy>
+  getMNCoords(Value thread, ConversionPatternRewriter &rewriter,
+              ArrayRef<unsigned> wpt, ArrayRef<int64_t> shape, bool isARow,
+              bool isBRow, bool isAVec4, bool isBVec4) {
+    // DEBUG
+    isARow = true;
+    isBRow = true;
+    isAVec4 = false;
+    isBVec4 = true;
+
+    auto *ctx = thread.getContext();
+    auto loc = UnknownLoc::get(ctx);
+    Value _1 = i32_val(1);
+    Value _2 = i32_val(2);
+    Value _4 = i32_val(4);
+    Value _16 = i32_val(16);
+    Value _32 = i32_val(32);
+    Value _fpw0 = i32_val(fpw[0]);
+    Value _fpw1 = i32_val(fpw[1]);
+
+    int packSize0 = (isARow || isAVec4) ? 1 : 2;
+    int packSize1 = (isBRow && (!isBVec4)) ? 2 : 1;
+    SmallVector<int, 2> rep({2 * packSize0, 2 * packSize1});
+    SmallVector<int, 2> spw({fpw[0] * 4 * rep[0], rep[1] * 4 * rep[1]});
+    SmallVector<unsigned, 2> shapePerCTA({spw[0] * wpt[0], spw[1] * wpt[1]});
+
+    Value lane = urem(thread, _32);
+    Value warp = udiv(thread, _32);
+
+    Value warp0 = urem(warp, i32_val(wpt[0]));
+    Value warp12 = udiv(warp, i32_val(wpt[0]));
+    Value warp1 = urem(warp12, i32_val(wpt[1]));
+
+    // warp offset
+    Value offWarpM = mul(warp0, i32_val(spw[0]));
+    Value offWarpN = mul(warp1, i32_val(spw[1]));
+    // quad offset
+    Value offQuadM = mul(udiv(and_(lane, _16), _4), _fpw0);
+    Value offQuadN = mul(udiv(and_(lane, _16), _4), _fpw1);
+    // pair offset
+    Value offPairM = udiv(urem(lane, _16), _4);
+    offPairM = urem(offPairM, _fpw0);
+    offPairM = mul(offPairM, _4);
+    Value offPairN = udiv(urem(lane, _16), _4);
+    offPairN = udiv(offPairN, _fpw0);
+    offPairN = urem(offPairN, _fpw1);
+    offPairN = mul(offPairN, _4);
+
+    // sclare
+    offPairM = mul(offPairM, i32_val(rep[0] / 2));
+    offQuadM = mul(offQuadM, i32_val(rep[0] / 2));
+    offPairN = mul(offPairN, i32_val(rep[1] / 2));
+    offQuadN = mul(offQuadN, i32_val(rep[1] / 2));
+
+    // quad pair offset
+    Value offLaneM = add(offPairM, offQuadM);
+    Value offLaneN = add(offPairN, offQuadN);
+    // a, b offset
+    Value offsetAM = add(offWarpM, offLaneM);
+    Value offsetBN = add(offWarpN, offLaneN);
+    // m indices
+    Value offsetCM = add(and_(lane, _1), offsetAM);
+    SmallVector<Value> idxM;
+    for (unsigned m = 0; m < shape[0]; m += shapePerCTA[0])
+      for (unsigned mm = 0; mm < rep[0]; ++mm)
+        idxM.push_back(add(offsetCM, i32_val(m + mm * 2)));
+
+    // n indices
+    Value offsetCN = add((and_(lane, _2)), (add(offWarpN, offPairN)));
+    SmallVector<Value> idxN;
+    for (int n = 0; n < shape[1]; n += shapePerCTA[1]) {
+      for (int nn = 0; nn < rep[1]; ++nn) {
+        idxN.push_back(add(offsetCN, i32_val(n + nn / 2 * 4 +
+                                             (nn % 2) * 2 * fpw[1] * rep[1])));
+        idxN.push_back(
+            add(offsetCN,
+                i32_val(n + nn / 2 * 4 + (nn % 2) * 2 * fpw[1] * rep[1] + 1)));
+      }
+    }
+
+    SmallVector<SmallVector<Value>> axes({idxM, idxN});
+
+    // product the axis M and axis N to get coords, ported from
+    // generator::init_idx method from triton2.0
+
+    // TODO[Superjomn]: check the order.
+    SmallVector<CoordTy> coords;
+    for (Value x1 : axes[1]) {   // N
+      for (Value x0 : axes[0]) { // M
+        SmallVector<Value, 2> idx(2);
+        idx[0] = x0; // M
+        idx[1] = x1; // N
+        coords.push_back(std::move(idx));
+      }
+    }
+    return coords; // {M,N} in row-major
+  }
+
+  // \param elemId the offset of the element in a thread
+  static CoordTy getCoord(int elemId, ArrayRef<CoordTy> coords) {
+    return coords[elemId];
   }
 
 private:

@@ -56,7 +56,8 @@ void storeBlockedToShared(Value src, Value llSrc, ArrayRef<Value> srcStrides,
   // TODO: [goostavz] We should make a cache for the calculation of
   // emitBaseIndexForBlockedLayout in case backend compiler not being able to
   // optimize that
-  SmallVector<unsigned> srcShapePerCTA = getShapePerCTA(srcBlockedLayout);
+  SmallVector<unsigned> srcShapePerCTA =
+      getShapePerCTA(srcBlockedLayout, srcShape);
   SmallVector<unsigned> reps{ceil<unsigned>(srcShape[0], srcShapePerCTA[0]),
                              ceil<unsigned>(srcShape[1], srcShapePerCTA[1])};
 
@@ -240,27 +241,7 @@ private:
         mmaColIdx[0] = add(mmaThreadIdInGrpM2, colWarpOffset);
         mmaColIdx[1] = add(mmaThreadIdInGrpM2P1, colWarpOffset);
       } else if (mmaLayout.isVolta()) {
-        multiDimWarpId[0] = urem(multiDimWarpId[0], idx_val(shape[0] / 16));
-        multiDimWarpId[1] = urem(multiDimWarpId[1], idx_val(shape[1] / 16));
-        Value laneIdDiv16 = udiv(laneId, _16);
-        Value laneIdRem16 = urem(laneId, _16);
-        Value laneIdRem2 = urem(laneId, _2);
-        Value laneIdRem16Div8 = udiv(laneIdRem16, _8);
-        Value laneIdRem16Div4 = udiv(laneIdRem16, _4);
-        Value laneIdRem16Div4Rem2 = urem(laneIdRem16Div4, _2);
-        Value laneIdRem4Div2 = udiv(urem(laneId, _4), _2);
-        Value rowWarpOffset = mul(multiDimWarpId[0], _16);
-        Value colWarpOffset = mul(multiDimWarpId[1], _16);
-        mmaRowIdx[0] =
-            add(add(mul(laneIdDiv16, _8), mul(laneIdRem16Div4Rem2, _4)),
-                laneIdRem2);
-        mmaRowIdx[0] = add(mmaRowIdx[0], rowWarpOffset);
-        mmaRowIdx[1] = add(mmaRowIdx[0], _2);
-        mmaColIdx[0] = add(mul(laneIdRem16Div8, _4), mul(laneIdRem4Div2, _2));
-        mmaColIdx[0] = add(mmaColIdx[0], colWarpOffset);
-        mmaColIdx[1] = add(mmaColIdx[0], _1);
-        mmaColIdx[2] = add(mmaColIdx[0], _8);
-        mmaColIdx[3] = add(mmaColIdx[0], idx_val(9));
+        // Volta doesn't follow the pattern here.
       } else {
         llvm_unreachable("Unexpected MMALayout version");
       }
@@ -275,26 +256,12 @@ private:
         multiDimOffset[1] = add(
             multiDimOffset[1], idx_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
       } else if (mmaLayout.isVolta()) {
-        // the order of elements in a thread:
-        //   c0, c1, ...  c4, c5
-        //   c2, c3, ...  c6, c7
-        if (elemId < 2) {
-          multiDimOffset[0] = mmaRowIdx[0];
-          multiDimOffset[1] = mmaColIdx[elemId % 2];
-        } else if (elemId >= 2 && elemId < 4) {
-          multiDimOffset[0] = mmaRowIdx[1];
-          multiDimOffset[1] = mmaColIdx[elemId % 2];
-        } else if (elemId >= 4 && elemId < 6) {
-          multiDimOffset[0] = mmaRowIdx[0];
-          multiDimOffset[1] = mmaColIdx[elemId % 2 + 2];
-        } else if (elemId >= 6) {
-          multiDimOffset[0] = mmaRowIdx[1];
-          multiDimOffset[1] = mmaColIdx[elemId % 2 + 2];
-        }
-        multiDimOffset[0] = add(
-            multiDimOffset[0], idx_val(multiDimCTAInRepId[0] * shapePerCTA[0]));
-        multiDimOffset[1] = add(
-            multiDimOffset[1], idx_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
+        auto [isARow, isBRow, isAVec4, isBVec4] =
+            mmaLayout.decodeVoltaLayoutStates();
+        auto coords = DotOpMmaV1ConversionHelper::getMNCoords(
+            threadId, rewriter, mmaLayout.getWarpsPerCTA(), shape, isARow,
+            isBRow, isAVec4, isBVec4);
+        return DotOpMmaV1ConversionHelper::getCoord(elemId, coords);
       } else {
         llvm_unreachable("Unexpected MMALayout version");
       }
@@ -389,6 +356,91 @@ private:
     }
   }
 
+  // The MMAV1's result is quite different from the exising "Replica" structure,
+  // add a new simple but clear implementation for it to avoid modificating the
+  // logic of the exising one.
+  void processReplicaForMMAV1(Location loc, ConversionPatternRewriter &rewriter,
+                              bool stNotRd, RankedTensorType type,
+                              ArrayRef<unsigned> multiDimRepId, unsigned vec,
+                              ArrayRef<unsigned> paddedRepShape,
+                              ArrayRef<unsigned> outOrd,
+                              SmallVector<Value> &vals, Value smemBase,
+                              ArrayRef<int64_t> shape) const {
+    vec = 2;
+    unsigned accumNumCTAsEachRep = 1;
+    auto layout = type.getEncoding();
+    auto mma = layout.cast<MmaEncodingAttr>();
+    auto order = getOrder(layout);
+    auto rank = type.getRank();
+    int accumSizePerThread = vals.size();
+
+    SmallVector<unsigned> numCTAs(rank, 1);
+    SmallVector<unsigned> numCTAsEachRep(rank, 1);
+    SmallVector<unsigned> shapePerCTA{
+        {static_cast<unsigned>(shape[0]), static_cast<unsigned>(shape[1])}};
+
+    auto elemTy = type.getElementType();
+
+    int ctaId = 0;
+
+    auto multiDimCTAInRepId =
+        getMultiDimIndex<unsigned>(ctaId, numCTAsEachRep, order);
+    SmallVector<unsigned> multiDimCTAId(rank);
+    for (const auto &it : llvm::enumerate(multiDimCTAInRepId)) {
+      auto d = it.index();
+      multiDimCTAId[d] = multiDimRepId[d] * numCTAsEachRep[d] + it.value();
+    }
+
+    std::vector<std::pair<SmallVector<Value>, Value>> coord2valT(
+        accumSizePerThread);
+    {
+      // We need to transpose the coordinates and values here.
+      std::vector<std::pair<SmallVector<Value>, Value>> coord2val(
+          accumSizePerThread);
+      for (unsigned elemId = 0; elemId < accumSizePerThread; ++elemId) {
+        SmallVector<Value> multiDimOffset =
+            getMultiDimOffset(layout, loc, rewriter, elemId, type.getShape(),
+                              multiDimCTAInRepId, shapePerCTA);
+        coord2val[elemId] = std::make_pair(multiDimOffset, vals[elemId]);
+      }
+
+      DotOpMmaV1ConversionHelper helper(mma);
+      // do transpose
+      int numM = helper.getRepM(shape[0]);
+      int numN = helper.getRepN(shape[1]);
+      for (int r = 0; r < numM; r++) {
+        for (int c = 0; c < numN; c++) {
+          coord2valT[r * numN + c] = std::move(coord2val[c * numM + r]);
+        }
+      }
+    }
+
+    // Now the coord2valT has the transposed and contiguous elements(with
+    // vec=2), the original vals is not needed.
+    for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
+      auto coord = coord2valT[elemId].first;
+      Value offset = linearize(rewriter, loc, coord, paddedRepShape, outOrd);
+      auto elemPtrTy = ptr_ty(elemTy, 3);
+      Value ptr = gep(elemPtrTy, smemBase, offset);
+      auto vecTy = vec_ty(elemTy, vec);
+      ptr = bitcast(ptr, ptr_ty(vecTy, 3));
+      if (stNotRd) {
+        Value valVec = undef(vecTy);
+        for (unsigned v = 0; v < vec; ++v) {
+          auto currVal = coord2valT[elemId + v].second;
+          valVec = insert_element(vecTy, valVec, currVal, idx_val(v));
+        }
+        store(valVec, ptr);
+      } else {
+        Value valVec = load(ptr);
+        for (unsigned v = 0; v < vec; ++v) {
+          Value currVal = extract_element(elemTy, valVec, idx_val(v));
+          vals[elemId + v] = currVal;
+        }
+      }
+    }
+  }
+
   // blocked/mma -> blocked/mma.
   // Data padding in shared memory to avoid bank conflict.
   LogicalResult
@@ -413,8 +465,20 @@ private:
     SmallVector<unsigned> outNumCTAsEachRep(rank);
     SmallVector<unsigned> inNumCTAs(rank);
     SmallVector<unsigned> outNumCTAs(rank);
-    auto srcShapePerCTA = getShapePerCTA(srcLayout);
-    auto dstShapePerCTA = getShapePerCTA(dstLayout);
+    auto srcShapePerCTA = getShapePerCTA(srcLayout, srcTy.getShape());
+    auto dstShapePerCTA = getShapePerCTA(dstLayout, shape);
+
+    // For Volta, all the coords for a CTA are calculated.
+    bool isSrcMmaV1{}, isDstMmaV1{};
+    if (auto mmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>()) {
+      if (mmaLayout.isVolta())
+        isSrcMmaV1 = true;
+    }
+    if (auto mmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>()) {
+      if (mmaLayout.isVolta())
+        isDstMmaV1 = true;
+    }
+
     for (unsigned d = 0; d < rank; ++d) {
       unsigned inPerCTA = std::min<unsigned>(shape[d], srcShapePerCTA[d]);
       unsigned outPerCTA = std::min<unsigned>(shape[d], dstShapePerCTA[d]);
@@ -446,20 +510,31 @@ private:
       if (srcLayout.isa<BlockedEncodingAttr>() ||
           srcLayout.isa<SliceEncodingAttr>() ||
           srcLayout.isa<MmaEncodingAttr>()) {
-        processReplica(loc, rewriter, /*stNotRd*/ true, srcTy, inNumCTAsEachRep,
-                       multiDimRepId, inVec, paddedRepShape, outOrd, vals,
-                       smemBase);
+        if (isSrcMmaV1)
+          processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ true, srcTy,
+                                 multiDimRepId, inVec, paddedRepShape, outOrd,
+                                 vals, smemBase, shape);
+        else
+          processReplica(loc, rewriter, /*stNotRd*/ true, srcTy,
+                         inNumCTAsEachRep, multiDimRepId, inVec, paddedRepShape,
+                         outOrd, vals, smemBase);
       } else {
         assert(0 && "ConvertLayout with input layout not implemented");
         return failure();
       }
+
       barrier();
       if (dstLayout.isa<BlockedEncodingAttr>() ||
           dstLayout.isa<SliceEncodingAttr>() ||
           dstLayout.isa<MmaEncodingAttr>()) {
-        processReplica(loc, rewriter, /*stNotRd*/ false, dstTy,
-                       outNumCTAsEachRep, multiDimRepId, outVec, paddedRepShape,
-                       outOrd, outVals, smemBase);
+        if (isDstMmaV1)
+          processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ false, dstTy,
+                                 multiDimRepId, outVec, paddedRepShape, outOrd,
+                                 outVals, smemBase, shape);
+        else
+          processReplica(loc, rewriter, /*stNotRd*/ false, dstTy,
+                         outNumCTAsEachRep, multiDimRepId, outVec,
+                         paddedRepShape, outOrd, outVals, smemBase);
       } else {
         assert(0 && "ConvertLayout with output layout not implemented");
         return failure();
@@ -662,13 +737,13 @@ private:
       if (dotOperandLayout.getOpIdx() == 0) { // operand $a
         // TODO[Superjomn]: transA is not available here.
         bool transA = false;
-        res = helper.loadA(src, transA, smemObj, getThreadId(rewriter, loc),
-                           loc, rewriter);
+        res = helper.loadA(src, smemObj, getThreadId(rewriter, loc), loc,
+                           rewriter);
       } else if (dotOperandLayout.getOpIdx() == 1) { // operand $b
         // TODO[Superjomn]: transB is not available here.
         bool transB = false;
-        res = helper.loadB(src, transB, smemObj, getThreadId(rewriter, loc),
-                           loc, rewriter);
+        res = helper.loadB(src, smemObj, getThreadId(rewriter, loc), loc,
+                           rewriter);
       }
     } else {
       assert(false && "Unsupported mma layout found");

@@ -95,9 +95,6 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
           bool is_row = order[0] != 0;
           bool is_vec4 = opIdx == 0 ? !is_row && (shape[order[0]] <= 16) :
               is_row && (shape[order[0]] <= 16);
-          // TODO[Superjomn]: Support the case when is_vec4=false later
-          // Currently, we only support ld.v2, for the mma layout varies with different ld vector width.
-          is_vec4 = true;
           int pack_size = opIdx == 0 ? ((is_row || is_vec4) ? 1 : 2) :
                                        ((is_row && !is_vec4) ? 2 : 1);
           int rep = 2 * pack_size;

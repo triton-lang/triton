@@ -61,6 +61,8 @@ struct SplatOpConversion
       ConversionPatternRewriter &rewriter, Location loc) {
     auto tensorTy = resType.cast<RankedTensorType>();
     auto shape = tensorTy.getShape();
+    auto dotOperand =
+        tensorTy.getEncoding().cast<triton::gpu::DotOperandEncodingAttr>();
     auto parent = layout.getParent();
     int numElems{};
     if (auto mmaLayout = parent.dyn_cast<MmaEncodingAttr>()) {
@@ -72,9 +74,14 @@ struct SplatOpConversion
                              tensorTy, mmaLayout.getWarpsPerCTA()[1]);
       } else if (mmaLayout.isVolta()) {
         DotOpMmaV1ConversionHelper helper(mmaLayout);
-        numElems = layout.getOpIdx() == 0
-                       ? helper.numElemsPerThreadA(shape, {0, 1})
-                       : helper.numElemsPerThreadB(shape, {0, 1});
+        bool isRow = layout.getIsMMAv1Row().cast<BoolAttr>().getValue();
+        if (layout.getOpIdx() == 0) {
+          DotOpMmaV1ConversionHelper::AParam aParam(isRow, shape);
+          numElems = helper.numElemsPerThreadA(shape, isRow, aParam.vec);
+        } else {
+          DotOpMmaV1ConversionHelper::BParam bParam(isRow, shape);
+          numElems = helper.numElemsPerThreadA(shape, isRow, bParam.vec);
+        }
       }
     } else if (auto blockedLayout = parent.dyn_cast<BlockedEncodingAttr>()) {
       numElems = DotOpFMAConversionHelper::getNumElemsPerThread(shape, layout);
