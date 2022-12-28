@@ -144,8 +144,10 @@ class CMakeBuild(build_ext):
             # '-DPYTHON_EXECUTABLE=' + sys.executable,
             '-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
             "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
-            "-DLLVM_EXTERNAL_LIT=" + lit_dir
-        ] + thirdparty_cmake_args
+        ]
+        if lit_dir:
+            cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
+        cmake_args += thirdparty_cmake_args
 
         # configuration
         cfg = get_build_type()
