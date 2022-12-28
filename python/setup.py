@@ -141,8 +141,8 @@ class CMakeBuild(build_ext):
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
             "-DTRITON_BUILD_TUTORIALS=OFF",
             "-DTRITON_BUILD_PYTHON_MODULE=ON",
-            # '-DPYTHON_EXECUTABLE=' + sys.executable,
-            '-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
+            "-DPython3_EXECUTABLE:FILEPATH=" + sys.executable,
+            "-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON",
             "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
         ]
         if lit_dir:
