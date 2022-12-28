@@ -71,6 +71,19 @@ def TritonGPUCombineOps : Pass<"tritongpu-combine", "mlir::ModuleOp"> {
   ];
 }
 
+def TritonGPUOptimizeLoadConvert: Pass<"tritongpu-optimize-load-convert", "mlir::ModuleOp"> {
+  let summary = "Optimize load + convert into insert_slice_async + wait + extract_slice + convert";
+
+  let description = "Transform load + convert into insert_slice_async + wait + extract_slice + convert."
+                    "This decreases registers pressure on architecture with direct pathways between DRAM "
+                    "and shared memory";
+
+  let constructor = "mlir::createTritonGPUOptimizeLoadConvertPass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
 def TritonGPUCanonicalizeLoops: Pass<"tritongpu-canonicalize-loops", "mlir::ModuleOp"> {
   let summary = "canonicalize scf.ForOp ops";
 
