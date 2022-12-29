@@ -14,7 +14,7 @@ using ::mlir::triton::gpu::getElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 // Contains some helper functions for both Load and Store conversions.
-struct LoadStoreConversionBase : public ConvertTritonGPUOpToLLVMPatternBase {
+struct LoadStoreConversionBase {
   explicit LoadStoreConversionBase(AxisInfoAnalysis &axisAnalysisPass)
       : axisAnalysisPass(axisAnalysisPass) {}
 
@@ -667,7 +667,7 @@ struct InsertSliceOpConversion
 
     auto llSrc = adaptor.source();
     auto srcIndices =
-        emitBaseIndexForBlockedLayout(loc, rewriter, srcLayout, srcShape);
+        emitBaseIndexForLayout(loc, rewriter, srcLayout, srcShape);
     storeBlockedToShared(src, llSrc, srcStrides, srcIndices, dst, smemBase,
                          elemTy, loc, rewriter);
     // Barrier is not necessary.
@@ -684,12 +684,12 @@ struct InsertSliceAsyncOpConversion
   using ConvertTritonGPUOpToLLVMPattern<
       triton::gpu::InsertSliceAsyncOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  InsertSliceAsyncOpConversion(LLVMTypeConverter &converter,
-                               const Allocation *allocation, Value smem,
-                               AxisInfoAnalysis &axisAnalysisPass,
-                               PatternBenefit benefit)
+  InsertSliceAsyncOpConversion(
+      LLVMTypeConverter &converter, const Allocation *allocation, Value smem,
+      ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
+      AxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::gpu::InsertSliceAsyncOp>(
-            converter, allocation, smem, benefit),
+            converter, allocation, smem, indexCacheInfo, benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
   LogicalResult
@@ -892,12 +892,12 @@ struct InsertSliceAsyncOpConversion
   }
 };
 
-void populateLoadStoreOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
-                                       RewritePatternSet &patterns,
-                                       int numWarps,
-                                       AxisInfoAnalysis &axisInfoAnalysis,
-                                       const Allocation *allocation, Value smem,
-                                       PatternBenefit benefit) {
+void populateLoadStoreOpToLLVMPatterns(
+    mlir::LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
+    const Allocation *allocation, Value smem,
+    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
+    PatternBenefit benefit) {
   patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<StoreOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AtomicCASOpConversion>(typeConverter, allocation, smem,
@@ -905,7 +905,8 @@ void populateLoadStoreOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<AtomicRMWOpConversion>(typeConverter, allocation, smem,
                                       axisInfoAnalysis, benefit);
   patterns.add<InsertSliceOpConversion>(typeConverter, allocation, smem,
-                                        benefit);
+                                        indexCacheInfo, benefit);
   patterns.add<InsertSliceAsyncOpConversion>(typeConverter, allocation, smem,
-                                             axisInfoAnalysis, benefit);
+                                             indexCacheInfo, axisInfoAnalysis,
+                                             benefit);
 }
