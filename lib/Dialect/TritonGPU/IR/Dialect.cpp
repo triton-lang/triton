@@ -104,8 +104,10 @@ SmallVector<unsigned> getSizePerThread(const Attribute &layout) {
     return SmallVector<unsigned>(blockedLayout.getSizePerThread().begin(),
                                  blockedLayout.getSizePerThread().end());
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-    return {1};
-    return getSizePerThread(sliceLayout.getParent());
+    auto ret = getSizePerThread(sliceLayout.getParent());
+    return ret;
+    // ret.erase(ret.begin() + sliceLayout.getDim());
+    return ret;
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     if (mmaLayout.isAmpere()) {
       return {2, 2};
