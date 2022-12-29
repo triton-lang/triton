@@ -19,6 +19,8 @@ void storeBlockedToShared(Value src, Value llSrc, ArrayRef<Value> srcStrides,
 void populateConvertLayoutOpToLLVMPatterns(
     mlir::LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
-    const Allocation *allocation, Value smem, PatternBenefit benefit);
+    const Allocation *allocation, Value smem,
+    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
+    PatternBenefit benefit);
 
 #endif
