@@ -997,20 +997,61 @@ func @test_get_program_id(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
 // -----
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
-
-func @test_get_num_program(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
-  // CHECK: nvvm.read.ptx.sreg.nctaid.x
-  // CHECK: nvvm.read.ptx.sreg.nctaid.y
-  // CHECK: nvvm.read.ptx.sreg.nctaid.z
-  %blockdimx = tt.get_num_programs {axis=0:i32} : i32
-  %blockdimy = tt.get_num_programs {axis=1:i32} : i32
-  %blockdimz = tt.get_num_programs {axis=2:i32} : i32
-  %v0 = arith.addi %blockdimx, %blockdimy : i32
-  %v1 = arith.addi %v0, %blockdimz : i32
-  %0 = tt.splat %v1 : (i32) -> tensor<32xi32, #blocked0>
-  tt.store %a, %0 : tensor<32xi32, #blocked0>
-
-  return
+  func @test_get_num_program(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
+    // CHECK: nvvm.read.ptx.sreg.nctaid.x
+    // CHECK: nvvm.read.ptx.sreg.nctaid.y
+    // CHECK: nvvm.read.ptx.sreg.nctaid.z
+    %blockdimx = tt.get_num_programs {axis=0:i32} : i32
+    %blockdimy = tt.get_num_programs {axis=1:i32} : i32
+    %blockdimz = tt.get_num_programs {axis=2:i32} : i32
+    %v0 = arith.addi %blockdimx, %blockdimy : i32
+    %v1 = arith.addi %v0, %blockdimz : i32
+    %0 = tt.splat %v1 : (i32) -> tensor<32xi32, #blocked0>
+    tt.store %a, %0 : tensor<32xi32, #blocked0>
+  
+    return
+  }
 }
 
+// -----
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+  // CHECK-LABEL: test_index_cache 
+  func @test_index_cache() {
+    // CHECK: nvvm.read.ptx.sreg.tid.x
+    %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked0>
+    // CHECK-NOT: nvvm.read.ptx.sreg.tid.x
+    %1 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked0>
+    return
+  }
+}
+
+// -----
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
+#shared0 = #triton_gpu.shared<{vec = 8, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+module attributes {"triton_gpu.num-warps" = 1 : i32} {
+  // CHECK-LABEL: test_base_index_cache 
+  func @test_base_index_cache(%arg0: tensor<128x32xf32, #blocked0>) {
+    // CHECK: nvvm.read.ptx.sreg.tid.x
+    %0 = triton_gpu.convert_layout %arg0 : (tensor<128x32xf32, #blocked0>) -> tensor<128x32xf32, #shared0>
+    // CHECK-NOT: nvvm.read.ptx.sreg.tid.x
+    %1 = triton_gpu.convert_layout %arg0 : (tensor<128x32xf32, #blocked0>) -> tensor<128x32xf32, #shared0>
+    return
+  }
+}
+
+// -----
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
+#shared0 = #triton_gpu.shared<{vec = 8, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+module attributes {"triton_gpu.num-warps" = 1 : i32} {
+  // CHECK-LABEL: test_index_cache_different_block
+  func @test_index_cache_different_block(%arg0: tensor<128x32xf32, #blocked0>, %arg1: i1) {
+    // CHECK: nvvm.read.ptx.sreg.tid.x
+    %0 = triton_gpu.convert_layout %arg0 : (tensor<128x32xf32, #blocked0>) -> tensor<128x32xf32, #shared0>
+    scf.if %arg1 {
+      // CHECK-NOT: nvvm.read.ptx.sreg.tid.x
+      %1 = triton_gpu.convert_layout %arg0 : (tensor<128x32xf32, #blocked0>) -> tensor<128x32xf32, #shared0>
+    }
+    return
+  }
 }
