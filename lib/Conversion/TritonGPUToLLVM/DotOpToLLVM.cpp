@@ -125,6 +125,8 @@ private:
 
     unsigned numM = helper.getNumM(AShape, isARow);
     unsigned numN = helper.getNumN(BShape, isBRow);
+    printf("mma884 numM: %d\n", numM);
+    printf("mma884 numN: %d\n", numN);
     unsigned NK = AShape[1];
 
     auto has = helper.extractLoadedOperand(adaptor.a(), NK, rewriter);
@@ -155,20 +157,6 @@ private:
       }};
       return idx;
     };
-
-    { // convert the acc's value from accumuator-external order to
-      // accumulator-internal order.
-      SmallVector<Value> accInit(acc.size());
-
-      for (unsigned m = 0; m < numM / 2; ++m)
-        for (unsigned n = 0; n < numN / 2; ++n) {
-          auto idx = getIdx(m, n);
-          for (unsigned i = 0; i < 8; ++i)
-            accInit[idx[i]] = acc[(m * numN / 2 + n) * 8 + i];
-        }
-
-      acc = accInit;
-    }
 
     auto callMMA = [&](unsigned m, unsigned n, unsigned k) {
       auto ha = has.at({m, k});
@@ -208,7 +196,6 @@ private:
       for (unsigned i = 0; i < 8; i++) {
         Value elem = extract_val(f32_ty, res, getIntAttr(i));
         acc[idx[i]] = elem;
-        resVals[(m * numN / 2 + n) * 8 + i] = elem;
       }
     };
 
@@ -217,6 +204,11 @@ private:
         for (unsigned n = 0; n < numN / 2; ++n) {
           callMMA(m, n, k);
         }
+
+    // res holds the same layout of acc
+    for (size_t i = 0; i < acc.size(); ++i) {
+      resVals[i] = acc[i];
+    }
 
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(resSize, type::f32Ty(ctx)));

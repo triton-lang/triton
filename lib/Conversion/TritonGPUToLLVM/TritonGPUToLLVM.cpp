@@ -500,6 +500,31 @@ struct AsyncWaitOpConversion
   }
 };
 
+namespace mlir {
+namespace LLVM {
+
+void vprintf(StringRef msg, ValueRange args,
+             ConversionPatternRewriter &rewriter) {
+  PrintfOpConversion::llPrintf(msg, args, rewriter);
+}
+
+void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
+                   std::string elem_repr, ConversionPatternRewriter &builder) {
+  std::string fmt = info + " t-%d ";
+  std::vector<Value> new_arr({thread});
+  for (int i = 0; i < arr.size(); ++i) {
+    fmt += elem_repr + ((i == arr.size() - 1) ? "" : ", ");
+    new_arr.push_back(arr[i]);
+  }
+
+  vprintf(fmt, new_arr, builder);
+}
+
+Value gThreadId;
+
+} // namespace LLVM
+} // namespace mlir
+
 void populateTritonGPUToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
                                      RewritePatternSet &patterns, int numWarps,
                                      AxisInfoAnalysis &axisInfoAnalysis,

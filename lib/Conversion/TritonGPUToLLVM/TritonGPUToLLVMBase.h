@@ -19,6 +19,20 @@ using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 
+namespace mlir {
+namespace LLVM {
+extern Value gThreadId;
+
+// Helper function for using printf in LLVM conversion.
+void vprintf(StringRef msg, ValueRange args,
+             ConversionPatternRewriter &rewriter);
+
+void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
+                   std::string elem_repr, ConversionPatternRewriter &builder);
+
+} // namespace LLVM
+} // namespace mlir
+
 // FuncOpConversion/FuncOpConversionBase is borrowed from
 // https://github.com/llvm/llvm-project/blob/fae656b2dd80246c3c6f01e9c77c49560368752c/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp#L276
 // since it is not exposed on header files in mlir v14
@@ -166,6 +180,8 @@ public:
         ValueRange{rewriter.create<::mlir::gpu::ThreadIdOp>(
             loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x)});
     Value threadId = cast.getResult(0);
+    LLVM::gThreadId = threadId; // DEBUG
+
     return threadId;
   }
 

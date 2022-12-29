@@ -55,6 +55,13 @@ struct DotOpMmaV1ConversionHelper {
 
     AParam(bool isARow, ArrayRef<int64_t> shape) {
       isAVec4 = !isARow && shape[isARow] <= 16;
+      build(isARow);
+    }
+
+    AParam(bool isARow, bool isAVec4) : isAVec4(isAVec4) { build(isARow); }
+
+  private:
+    void build(bool isARow) {
       int packSize0 = (isARow || isAVec4) ? 1 : 2;
       int repM = 2 * packSize0;
       int repK = 1;
@@ -74,6 +81,14 @@ struct DotOpMmaV1ConversionHelper {
 
     BParam(bool isBRow, ArrayRef<int64_t> shape) {
       isBVec4 = isBRow && shape[isBRow] <= 16;
+      build(isBRow);
+    }
+
+    BParam(bool isBRow, bool isBVec4) : isBVec4(isBVec4) { build(isBRow); }
+
+  private:
+    void build(bool isBRow) {
+
       int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
       rep.assign({0, 2 * packSize1, 1});
       spw.assign({0, fpw[1] * 4 * rep[1], 1});
@@ -105,11 +120,25 @@ struct DotOpMmaV1ConversionHelper {
     return numM;
   }
 
+  unsigned getNumM(int M, bool isARow, bool isAVec4) const {
+    AParam param(isARow, isAVec4);
+
+    unsigned numM = param.rep[0] * M / (param.spw[0] * wpt[0]);
+    return numM;
+  }
+
   // Get the number of fp16x2 elements for $b.
   unsigned getNumN(ArrayRef<int64_t> shapeB, bool isBRow) const {
     BParam param(isBRow, shapeB);
 
     unsigned numN = param.rep[1] * shapeB[1] / (param.spw[1] * wpt[1]);
+    return numN;
+  }
+
+  unsigned getNumN(int N, bool isBRow, bool isBVec4) const {
+    BParam param(isBRow, isBVec4);
+
+    unsigned numN = param.rep[1] * N / (param.spw[1] * wpt[1]);
     return numN;
   }
 

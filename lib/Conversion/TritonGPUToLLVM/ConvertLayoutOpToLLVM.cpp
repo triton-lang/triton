@@ -404,10 +404,24 @@ private:
         coord2val[elemId] = std::make_pair(multiDimOffset, vals[elemId]);
       }
 
+      auto [isARow, isBRow, isAVec4, isBVec4] = mma.decodeVoltaLayoutStates();
+
       DotOpMmaV1ConversionHelper helper(mma);
       // do transpose
-      int numM = helper.getRepM(shape[0]);
-      int numN = helper.getRepN(shape[1]);
+      int numM = helper.getNumM(shape[0], isARow, isAVec4);
+      int numN = helper.getNumN(shape[1], isBRow, isBVec4);
+      numM = 4; // DEBUG
+      numN = 4;
+      printf("numM: %d\n", numM);
+      printf("numN: %d\n", numN);
+      printf("coord: %lu\n", coord2valT.size());
+
+      for (auto &coord : coord2val) { // DEBUG
+        LLVM::vprintf(
+            "coord t-%d (%d %d) %f",
+            {LLVM::gThreadId, coord.first[0], coord.first[1], coord.second},
+            rewriter);
+      }
       for (int r = 0; r < numM; r++) {
         for (int c = 0; c < numN; c++) {
           coord2valT[r * numN + c] = std::move(coord2val[c * numM + r]);
