@@ -39,6 +39,8 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout);
 
 SmallVector<unsigned> getOrder(const Attribute &layout);
 
+bool isaDistributedLayout(const Attribute &layout);
+
 } // namespace gpu
 } // namespace triton
 } // namespace mlir
