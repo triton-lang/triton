@@ -11,14 +11,18 @@ using ::mlir::triton::gpu::DotOperandEncodingAttr;
 bool isMmaToDotShortcut(MmaEncodingAttr &mmaLayout,
                         DotOperandEncodingAttr &dotOperandLayout);
 
-void storeBlockedToShared(Value src, Value llSrc, ArrayRef<Value> srcStrides,
-                          ArrayRef<Value> srcIndices, Value dst, Value smemBase,
-                          Type elemPtrTy, Location loc,
-                          ConversionPatternRewriter &rewriter);
+void storeDistributedToShared(Value src, Value llSrc,
+                              ArrayRef<Value> srcStrides,
+                              ArrayRef<SmallVector<Value>> srcIndices,
+                              Value dst, Value smemBase, Type elemPtrTy,
+                              Location loc,
+                              ConversionPatternRewriter &rewriter);
 
 void populateConvertLayoutOpToLLVMPatterns(
     mlir::LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
-    const Allocation *allocation, Value smem, PatternBenefit benefit);
+    const Allocation *allocation, Value smem,
+    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
+    PatternBenefit benefit);
 
 #endif

@@ -257,6 +257,11 @@ SmallVector<unsigned> getOrder(const Attribute &layout) {
   }
 };
 
+bool isaDistributedLayout(const Attribute &layout) {
+  return layout.isa<BlockedEncodingAttr>() || layout.isa<MmaEncodingAttr>() ||
+         layout.isa<SliceEncodingAttr>();
+}
+
 } // namespace gpu
 } // namespace triton
 } // namespace mlir

@@ -170,16 +170,20 @@ public:
     // We set a higher benefit here to ensure triton's patterns runs before
     // arith patterns for some encoding not supported by the community
     // patterns.
+    OpBuilder::InsertPoint indexInsertPoint;
+    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo indexCacheInfo{
+        &baseIndexCache, &indexCache, &indexInsertPoint};
+
     RewritePatternSet patterns(context);
 
     // Normal conversions
     populateTritonGPUToLLVMPatterns(typeConverter, patterns, numWarps,
                                     axisInfoAnalysis, &allocation, smem,
-                                    /*benefit=*/10);
+                                    indexCacheInfo, /*benefit=*/10);
     // ConvertLayoutOp
     populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, numWarps,
                                           axisInfoAnalysis, &allocation, smem,
-                                          /*benefit=*/10);
+                                          indexCacheInfo, /*benefit=*/10);
     // DotOp
     populateDotOpToLLVMPatterns(typeConverter, patterns, numWarps,
                                 axisInfoAnalysis, &allocation, smem,
@@ -191,11 +195,11 @@ public:
     // LoadStoreOp
     populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, numWarps,
                                       axisInfoAnalysis, &allocation, smem,
-                                      /*benefit=*/10);
+                                      indexCacheInfo, /*benefit=*/10);
     // ReduceOp
     populateReduceOpToLLVMPatterns(typeConverter, patterns, numWarps,
                                    axisInfoAnalysis, &allocation, smem,
-                                   /*benefit=*/10);
+                                   indexCacheInfo, /*benefit=*/10);
     // ViewOp
     populateViewOpToLLVMPatterns(typeConverter, patterns, numWarps,
                                  axisInfoAnalysis, &allocation, smem,
@@ -214,6 +218,13 @@ public:
 
 private:
   Value smem;
+
+  using IndexCacheKeyT = std::pair<Attribute, SmallVector<int64_t>>;
+  DenseMap<IndexCacheKeyT, SmallVector<Value>, CacheKeyDenseMapInfo>
+      baseIndexCache;
+  DenseMap<IndexCacheKeyT, SmallVector<SmallVector<Value>>,
+           CacheKeyDenseMapInfo>
+      indexCache;
 
   int computeCapability{};
 
