@@ -120,12 +120,14 @@ public:
           if (dotOpLayout.getOpIdx() == 0) { // $a
             DotOpMmaV1ConversionHelper::AParam param(isARow, shape);
             int elems = helper.numElemsPerThreadA(shape, isARow, param.vec);
+            printf("A.typeconverter.elems: %d\n", elems);
             Type x2Ty = vec_ty(elemTy, 2);
             return struct_ty(SmallVector<Type>(elems, x2Ty));
           }
           if (dotOpLayout.getOpIdx() == 1) { // $b
             DotOpMmaV1ConversionHelper::BParam param(isBRow, shape);
             int elems = helper.numElemsPerThreadB(shape, isBRow, param.vec);
+            printf("B.typeconverter.elems: %d\n", elems);
             Type x2Ty = vec_ty(elemTy, 2);
             return struct_ty(SmallVector<Type>(elems, x2Ty));
           }

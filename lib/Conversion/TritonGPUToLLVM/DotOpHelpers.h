@@ -145,15 +145,55 @@ struct DotOpMmaV1ConversionHelper {
   int numElemsPerThreadA(ArrayRef<int64_t> shape, bool isRow, int vec) const {
     int numM = getNumM(shape, isRow);
     int NK = shape[1];
-    int elemsPerLd = vec > 4 ? 4 : 2;
-    return (numM / 2) * (NK / 4) * elemsPerLd;
+    // Here we mimic the logic in loadA, the result cannot be calculated
+    // directly.
+    llvm::DenseSet<std::pair<int, int>> visited;
+    auto ld = [&](int m, int k) {
+      visited.insert({m, k});
+      if (vec > 4) {
+        if (isRow)
+          visited.insert({m, k + 4});
+        else
+          visited.insert({m + 1, k});
+      }
+    };
+
+    for (unsigned k = 0; k < NK; k += 4)
+      for (unsigned m = 0; m < numM / 2; ++m)
+        if (!visited.count({m, k}))
+          ld(m, k);
+
+    printf("numElemsPerThreadA: %d\n", visited.size() * 2);
+
+    return visited.size() * 2;
   }
 
   int numElemsPerThreadB(ArrayRef<int64_t> shape, bool isRow, int vec) const {
     unsigned numN = getNumN(shape, isRow);
     int NK = shape[0];
+    // Here we mimic the logic in loadA, the result cannot be calculated
+    // directly.
+    llvm::DenseSet<std::pair<int, int>> visited;
     int elemsPerLd = vec > 4 ? 4 : 2;
-    return (numN / 2) * (NK / 4) * elemsPerLd;
+    auto ld = [&](int n, int k) {
+      visited.insert({n, k});
+      if (vec > 4) {
+        if (isRow)
+          visited.insert({n + 1, k});
+        else
+          visited.insert({n, k + 4});
+      }
+    };
+
+    for (unsigned k = 0; k < NK; k += 4)
+      for (unsigned n = 0; n < numN / 2; ++n) {
+        if (!visited.count({n, k}))
+          ld(n, k);
+      }
+
+    printf("numElemsPerThreadB: %d\n", visited.size() * 2);
+
+    return visited.size() * 2;
   }
 
   // Loading $a from smem to registers, returns a LLVM::Struct.
@@ -262,6 +302,7 @@ struct DotOpMmaV1ConversionHelper {
       elems.push_back(item.second.second);
     }
 
+    printf("loadA.elems: %lu\n", elems.size());
     Type resTy = struct_ty(SmallVector<Type>(elems.size(), elemX2Ty));
     Value res = getStructFromElements(loc, elems, rewriter, resTy);
     return res;
@@ -371,6 +412,8 @@ struct DotOpMmaV1ConversionHelper {
       elems.push_back(item.second.first);
       elems.push_back(item.second.second);
     }
+
+    printf("loadB.elems: %lu\n", elems.size());
     Type resTy = struct_ty(SmallVector<Type>(elems.size(), elemX2Ty));
     Value res = getStructFromElements(loc, elems, rewriter, resTy);
     return res;
@@ -463,17 +506,21 @@ struct DotOpMmaV1ConversionHelper {
     return rcds;
   }
 
+  // Get the number of elements of this thread in M axis. The N axis could be
+  // further deduced with the accSize / elemsM. \param wpt: the wpt in M axis
+  // \param M: the shape in M axis
+  int getElemsM(int wpt, int M, bool isARow, bool isAVec4) {
+    DotOpMmaV1ConversionHelper::AParam param(isARow, isAVec4);
+    int shapePerCTAM = param.spw[0] * wpt;
+    return M / shapePerCTAM * param.rep[0];
+  }
+
   using CoordTy = SmallVector<Value, 2>;
   // Get the coordinates(m,n) of the elements emit by a thread in accumulator.
   static SmallVector<CoordTy>
   getMNCoords(Value thread, ConversionPatternRewriter &rewriter,
               ArrayRef<unsigned> wpt, ArrayRef<int64_t> shape, bool isARow,
               bool isBRow, bool isAVec4, bool isBVec4) {
-    // DEBUG
-    isARow = true;
-    isBRow = true;
-    isAVec4 = false;
-    isBVec4 = true;
 
     auto *ctx = thread.getContext();
     auto loc = UnknownLoc::get(ctx);
@@ -485,11 +532,16 @@ struct DotOpMmaV1ConversionHelper {
     Value _fpw0 = i32_val(fpw[0]);
     Value _fpw1 = i32_val(fpw[1]);
 
-    int packSize0 = (isARow || isAVec4) ? 1 : 2;
-    int packSize1 = (isBRow && (!isBVec4)) ? 2 : 1;
-    SmallVector<int, 2> rep({2 * packSize0, 2 * packSize1});
-    SmallVector<int, 2> spw({fpw[0] * 4 * rep[0], rep[1] * 4 * rep[1]});
+    DotOpMmaV1ConversionHelper::AParam aParam(isARow, isAVec4);
+    DotOpMmaV1ConversionHelper::BParam bParam(isBRow, isBVec4);
+
+    SmallVector<int, 2> rep({aParam.rep[0], bParam.rep[1]});
+    SmallVector<int, 2> spw({aParam.spw[0], bParam.spw[1]});
     SmallVector<unsigned, 2> shapePerCTA({spw[0] * wpt[0], spw[1] * wpt[1]});
+    printf("MN t-0 M shape:%lu spc:%d rep:%d\n", shape[0], shapePerCTA[0],
+           rep[0]);
+    printf("MN t-0 N shape:%lu spc:%d rep:%d\n", shape[1], shapePerCTA[1],
+           rep[1]);
 
     Value lane = urem(thread, _32);
     Value warp = udiv(thread, _32);

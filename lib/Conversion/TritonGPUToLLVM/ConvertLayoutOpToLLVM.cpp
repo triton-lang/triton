@@ -261,6 +261,7 @@ private:
         auto coords = DotOpMmaV1ConversionHelper::getMNCoords(
             threadId, rewriter, mmaLayout.getWarpsPerCTA(), shape, isARow,
             isBRow, isAVec4, isBVec4);
+        printf("coords.size: %lu\n", coords.size());
         return DotOpMmaV1ConversionHelper::getCoord(elemId, coords);
       } else {
         llvm_unreachable("Unexpected MMALayout version");
@@ -373,6 +374,7 @@ private:
     auto order = getOrder(layout);
     auto rank = type.getRank();
     int accumSizePerThread = vals.size();
+    printf("accumSizePerThread(acc.size): %d\n", accumSizePerThread);
 
     SmallVector<unsigned> numCTAs(rank, 1);
     SmallVector<unsigned> numCTAsEachRep(rank, 1);
@@ -408,20 +410,13 @@ private:
 
       DotOpMmaV1ConversionHelper helper(mma);
       // do transpose
-      int numM = helper.getNumM(shape[0], isARow, isAVec4);
-      int numN = helper.getNumN(shape[1], isBRow, isBVec4);
-      numM = 4; // DEBUG
-      numN = 4;
+      int numM =
+          helper.getElemsM(mma.getWarpsPerCTA()[0], shape[0], isARow, isAVec4);
+      int numN = accumSizePerThread / numM;
       printf("numM: %d\n", numM);
       printf("numN: %d\n", numN);
       printf("coord: %lu\n", coord2valT.size());
 
-      for (auto &coord : coord2val) { // DEBUG
-        LLVM::vprintf(
-            "coord t-%d (%d %d) %f",
-            {LLVM::gThreadId, coord.first[0], coord.first[1], coord.second},
-            rewriter);
-      }
       for (int r = 0; r < numM; r++) {
         for (int c = 0; c < numN; c++) {
           coord2valT[r * numN + c] = std::move(coord2val[c * numM + r]);
@@ -433,6 +428,9 @@ private:
     // vec=2), the original vals is not needed.
     for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
       auto coord = coord2valT[elemId].first;
+      printf("coord.size: %lu\n", coord.size());
+      printf("paddeRepShape.size: %lu\n", paddedRepShape.size());
+      printf("outOrd.size: %lu\n", outOrd.size());
       Value offset = linearize(rewriter, loc, coord, paddedRepShape, outOrd);
       auto elemPtrTy = ptr_ty(elemTy, 3);
       Value ptr = gep(elemPtrTy, smemBase, offset);

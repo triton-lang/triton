@@ -210,6 +210,8 @@ private:
       resVals[i] = acc[i];
     }
 
+    // LLVM::vprintf_array(LLVM::gThreadId, acc, "acc", "%f", rewriter);
+
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(resSize, type::f32Ty(ctx)));
     Value res = getStructFromElements(loc, resVals, rewriter, structTy);
