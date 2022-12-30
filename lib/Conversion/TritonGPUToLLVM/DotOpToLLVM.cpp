@@ -120,13 +120,23 @@ private:
 
     bool isARow = ALayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
     bool isBRow = BLayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
+    auto [isARow_, isBRow_, isAVec4_, isBVec4_] =
+        mmaLayout.decodeVoltaLayoutStates();
+    assert(isARow == isARow_);
+    assert(isBRow == isBRow_);
 
     DotOpMmaV1ConversionHelper helper(mmaLayout);
 
     unsigned numM = helper.getNumM(AShape, isARow);
     unsigned numN = helper.getNumN(BShape, isBRow);
+    printf("MN0 t-0 isArow:%d isBRow:%d, isAVec4:%d, isBVec4:%d, M:%ld, N:%ld "
+           "numM:%d numN:%d wpt:%d-%d\n",
+           isARow, isBRow, isAVec4_, isBVec4_, AShape[0], BShape[1], numM, numN,
+           wpt[0], wpt[1]);
     printf("mma884 numM: %d\n", numM);
     printf("mma884 numN: %d\n", numN);
+    numM = 2;
+    numN = 4;
     unsigned NK = AShape[1];
 
     auto has = helper.extractLoadedOperand(adaptor.a(), NK, rewriter);
@@ -197,8 +207,34 @@ private:
         Value elem = extract_val(f32_ty, res, getIntAttr(i));
         acc[idx[i]] = elem;
       }
+#define SHOW_MMA_V1 1
+#if SHOW_MMA_V1
+      std::vector<Value> args = {ha.first, ha.second, hb.first, hb.second};
+
+      auto get_f16 = [&](Value value, int idx) {
+        return extract_element(f16_ty, value, idx_val(idx));
+      };
+
+      std::vector<Value> pargs({LLVM::gThreadId});
+      pargs.push_back(i32_val(m));
+      pargs.push_back(i32_val(n));
+      pargs.push_back(i32_val(k));
+      for (int i = 0; i < 4; i++) {
+        pargs.push_back(get_f16(args[i], 0));
+        pargs.push_back(get_f16(args[i], 1));
+      }
+      for (int i = 0; i < 8; i++) {
+        pargs.push_back(extract_val(f32_ty, res, getIntAttr(i)));
+      }
+
+      LLVM::vprintf("mma t-%d [%d %d %d] A:(%f,%f) (%f,%f) B:(%f,%f) (%f,%f) "
+                    "D:(%f,%f,%f,%f,%f,%f,%f,%f)",
+                    pargs, rewriter);
+
+#endif
     };
 
+    printf("numMN t-0 %d %d\n", numM, numN);
     for (unsigned k = 0; k < NK; k += 4)
       for (unsigned m = 0; m < numM / 2; ++m)
         for (unsigned n = 0; n < numN / 2; ++n) {
@@ -210,7 +246,7 @@ private:
       resVals[i] = acc[i];
     }
 
-    // LLVM::vprintf_array(LLVM::gThreadId, acc, "acc", "%f", rewriter);
+    LLVM::vprintf_array(LLVM::gThreadId, acc, "acc", "%f", rewriter);
 
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(resSize, type::f32Ty(ctx)));

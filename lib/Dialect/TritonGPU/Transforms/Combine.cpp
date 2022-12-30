@@ -885,6 +885,7 @@ SmallVector<int64_t, 2> mmaVersionToShapePerWarp(int version) {
 
 SmallVector<unsigned, 2> warpsPerTileV1(const ArrayRef<int64_t> shape,
                                         int numWarps) {
+
   SmallVector<unsigned, 2> ret = {1, 1};
   SmallVector<int64_t, 2> shapePerWarp =
       mmaVersionToShapePerWarp(1 /*version*/);
@@ -1241,17 +1242,68 @@ public:
     auto [isARow_, isBRow_, isAVec4, isBVec4] =
         mmaLayout.decodeVoltaLayoutStates();
     if (isARow_ == isARow && isBRow_ == isBRow) {
-      return failure(); // No need to update
+      auto tgtWpt =
+          getWarpsPerCTA(DT.getShape(), isARow, isBRow, isAVec4, isBVec4,
+                         product(mmaLayout.getWarpsPerCTA()));
+      // Check if the wpt should be updated.
+      if (tgtWpt == mmaLayout.getWarpsPerCTA())
+        return failure();
     }
 
-    auto newMmaLayout = MmaEncodingAttr::get(
-        ctx, mmaLayout.getVersionMajor(), mmaLayout.getWarpsPerCTA(),
-        AT.getShape(), BT.getShape(), isARow, isBRow);
+    MmaEncodingAttr newMmaLayout;
+    {
+      // Create a temporary MMA layout to obtain the isAVec4 and isBVec4
+      auto tmpMmaLayout = MmaEncodingAttr::get(
+          ctx, mmaLayout.getVersionMajor(), mmaLayout.getWarpsPerCTA(),
+          AT.getShape(), BT.getShape(), isARow, isBRow);
+      auto [isARow, isBRow, isAVec4, isBVec4] =
+          tmpMmaLayout.decodeVoltaLayoutStates();
+
+      // Recalculate the wpt, for here we could get the latest information, the
+      // wpt should be updated.
+      auto newWpt =
+          getWarpsPerCTA(DT.getShape(), isARow, isBRow, isAVec4, isBVec4,
+                         product(mmaLayout.getWarpsPerCTA()));
+      printf("newWpt t-0 %d %d\n", newWpt[0], newWpt[1]);
+      newMmaLayout =
+          MmaEncodingAttr::get(ctx, mmaLayout.getVersionMajor(), newWpt,
+                               AT.getShape(), BT.getShape(), isARow, isBRow);
+    }
 
     // Collect the wrong MMA Layouts, and mark need to update.
     mmaToUpdate.try_emplace(mmaLayout, newMmaLayout);
 
     return failure();
+  }
+
+  // Update the wpt using more information.
+  SmallVector<unsigned, 2> getWarpsPerCTA(ArrayRef<int64_t> shape, bool isARow,
+                                          bool isBRow, bool isAVec4,
+                                          bool isBVec4, int numWarps) const {
+    SmallVector<unsigned, 2> wpt({1, 1});
+    SmallVector<unsigned, 2> wpt_nm1;
+
+    SmallVector<int, 2> rep(2), spw(2);
+    std::array<int, 3> fpw{{2, 2, 1}};
+    int packSize0 = (isARow || isAVec4) ? 1 : 2;
+    rep[0] = 2 * packSize0;
+    spw[0] = fpw[0] * 4 * rep[0];
+
+    int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
+    rep[1] = 2 * packSize1;
+    spw[1] = fpw[1] * 4 * rep[1];
+
+    do {
+      wpt_nm1 = wpt;
+      if (wpt[0] * wpt[1] < numWarps)
+        wpt[0] = std::clamp<int>(wpt[0] * 2, 1, wpt[0] / spw[0]);
+      if (wpt[0] * wpt[1] < numWarps)
+        wpt[1] = std::clamp<int>(wpt[1] * 2, 1, shape[1] / spw[1]);
+    } while (wpt_nm1 != wpt);
+
+    printf("finalwpt: %d %d\n", wpt[0], wpt[1]);
+    return wpt;
+    // return {4, 1};
   }
 };
 

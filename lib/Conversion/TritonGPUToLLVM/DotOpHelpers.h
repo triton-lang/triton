@@ -88,7 +88,6 @@ struct DotOpMmaV1ConversionHelper {
 
   private:
     void build(bool isBRow) {
-
       int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
       rep.assign({0, 2 * packSize1, 1});
       spw.assign({0, fpw[1] * 4 * rep[1], 1});
@@ -116,6 +115,8 @@ struct DotOpMmaV1ConversionHelper {
   unsigned getNumM(ArrayRef<int64_t> shapeA, bool isARow) const {
     AParam param(isARow, shapeA);
 
+    printf("MN0 t-0 M rep:%d M:%ld spw:%d wpt:%d\n", param.rep[0], shapeA[0],
+           param.spw[0], wpt[0]);
     unsigned numM = param.rep[0] * shapeA[0] / (param.spw[0] * wpt[0]);
     return numM;
   }
@@ -130,6 +131,8 @@ struct DotOpMmaV1ConversionHelper {
   // Get the number of fp16x2 elements for $b.
   unsigned getNumN(ArrayRef<int64_t> shapeB, bool isBRow) const {
     BParam param(isBRow, shapeB);
+    printf("MN0 t-0 N rep:%d N:%ld spw:%d wpt:%d\n", param.rep[1], shapeB[1],
+           param.spw[1], wpt[1]);
 
     unsigned numN = param.rep[1] * shapeB[1] / (param.spw[1] * wpt[1]);
     return numN;
