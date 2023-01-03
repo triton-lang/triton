@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from enum import Enum
-from functools import wraps
-from typing import List
+from typing import Callable, List, TypeVar
 
 import triton
-from . import semantic
+from . import builtin, semantic
 from triton._C.libtriton.triton import ir
+
+T = TypeVar('T')
 
 
 def _to_tensor(x, builder):
@@ -17,11 +18,11 @@ def _to_tensor(x, builder):
         if -2**31 <= x < 2**31:
             return tensor(builder.get_int32(x), int32)
         elif 2**31 <= x < 2**32:
-            return tensor(builder.get_uint32(x), uint32)
+            return tensor(builder.get_int32(x), uint32)
         elif -2**63 <= x < 2**63:
             return tensor(builder.get_int64(x), int64)
         elif 2**63 <= x < 2**64:
-            return tensor(builder.get_uint64(x), uint64)
+            return tensor(builder.get_int64(x), uint64)
         else:
             raise RuntimeError(f'Nonrepresentable integer {x}.')
     elif isinstance(x, float):
@@ -33,21 +34,12 @@ def _to_tensor(x, builder):
     assert False, f'cannot convert {x} to tensor'
 
 
-def builtin(fn):
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        if '_builder' not in kwargs or \
-           kwargs['_builder'] is None:
-            raise ValueError("Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)")
-        return fn(*args, **kwargs)
-
-    return wrapper
-
-
 class dtype:
     SINT_TYPES = ['int1', 'int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['uint8', 'uint16', 'uint32', 'uint64']
     FP_TYPES = ['fp8', 'fp16', 'bf16', 'fp32', 'fp64']
+    CUSTOMIZED_FP_TYPES = ['fp8']
+    STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
     OTHER_TYPES = ['void']
 
     class SIGNEDNESS(Enum):
@@ -128,6 +120,12 @@ class dtype:
 
     def is_floating(self):
         return self.name in dtype.FP_TYPES
+
+    def is_customized_floating(self):
+        return self.name in dtype.CUSTOMIZED_FP_TYPES
+
+    def is_standard_floating(self):
+        return self.name in dtype.STANDARD_FP_TYPES
 
     def is_int_signed(self):
         return self.name in dtype.SINT_TYPES
@@ -337,67 +335,79 @@ class constexpr:
         return f"constexpr[{self.value}]"
 
     def __add__(self, other):
-        return self.value + other.value
+        return constexpr(self.value + other.value)
 
     def __radd__(self, other):
-        return other.value + self.value
+        return constexpr(other.value + self.value)
 
     def __sub__(self, other):
-        return self.value - other.value
+        return constexpr(self.value - other.value)
 
     def __rsub__(self, other):
-        return other.value - self.value
+        return constexpr(other.value - self.value)
 
     def __mul__(self, other):
-        return self.value * other.value
+        return constexpr(self.value * other.value)
+
+    def __mod__(self, other):
+        return constexpr(self.value % other.value)
 
     def __rmul__(self, other):
-        return other.value * self.value
+        return constexpr(other.value * self.value)
 
     def __truediv__(self, other):
-        return self.value / other.value
+        return constexpr(self.value / other.value)
 
     def __rtruediv__(self, other):
-        return other.value / self.value
+        return constexpr(other.value / self.value)
 
     def __floordiv__(self, other):
-        return self.value // other.value
+        return constexpr(self.value // other.value)
 
     def __rfloordiv__(self, other):
-        return other.value // self.value
+        return constexpr(other.value // self.value)
 
     def __gt__(self, other):
-        return self.value > other.value
+        return constexpr(self.value > other.value)
 
     def __rgt__(self, other):
-        return other.value > self.value
+        return constexpr(other.value > self.value)
 
     def __ge__(self, other):
-        return self.value >= other.value
+        return constexpr(self.value >= other.value)
 
     def __rge__(self, other):
-        return other.value >= self.value
+        return constexpr(other.value >= self.value)
 
     def __lt__(self, other):
-        return self.value < other.value
+        return constexpr(self.value < other.value)
 
     def __rlt__(self, other):
-        return other.value < self.value
+        return constexpr(other.value < self.value)
 
     def __le__(self, other):
-        return self.value <= other.value
+        return constexpr(self.value <= other.value)
 
     def __rle__(self, other):
-        return other.value <= self.value
+        return constexpr(other.value <= self.value)
 
     def __eq__(self, other):
-        return self.value == other.value
+        return constexpr(self.value == other.value)
 
     def __ne__(self, other):
-        return self.value != other.value
+        return constexpr(self.value != other.value)
 
     def __bool__(self):
         return bool(self.value)
+
+    def __neg__(self):
+        return constexpr(-self.value)
+
+    def __pos__(self):
+        return constexpr(+self.value)
+
+    def __invert__(self):
+        return constexpr(~self.value)
 
     def __call__(self, *args, **kwds):
         return self.value(*args, **kwds)
@@ -597,9 +607,9 @@ class tensor:
                 assert False, "unsupported"
         return ret
 
-    # x[:, None, :, None]
-    # x = expand_dims(x, axis=1)
-    # x = expand_dims(x, axis=2)
+    @property
+    def T(self):
+        assert False, "Transposition must be created by the AST Visitor"
 
     @builtin
     def to(self, dtype, bitcast=False, _builder=None):
@@ -690,6 +700,26 @@ def zeros(shape, dtype, _builder=None):
     return semantic.zeros(shape, dtype, _builder)
 
 
+@builtin
+def ones(shape, dtype, _builder=None):
+    """
+    Returns a tensor filled with the scalar value 1 for the given :code:`shape` and :code:`dtype`.
+
+    :param shape: Shape of the new array, e.g., (8, 16) or (8, )
+    :type shape: tuple of ints
+    :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
+    :type dtype: DType
+    """
+    for i, d in enumerate(shape):
+        if not isinstance(d, constexpr):
+            raise TypeError(f"Shape element {i} must have type `constexpr`")
+        if not isinstance(d.value, int):
+            raise TypeError(f"Shape element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
+    shape = [x.value for x in shape]
+    dtype = _constexpr_to_value(dtype)
+    return semantic.ones(shape, dtype, _builder)
+
+
 # -----------------------
 # Shape Manipulation
 # -----------------------
@@ -722,7 +752,12 @@ def broadcast_to(input, shape, _builder=None):
 
 
 @builtin
-def cat(input, other, _builder=None):
+def trans(input, _builder=None):
+    return semantic.trans(input, _builder)
+
+
+@builtin
+def cat(input, other, can_reorder=False, _builder=None):
     """
     Concatenate the given blocks
 
@@ -730,8 +765,12 @@ def cat(input, other, _builder=None):
     :type input:
     :param other: The second input tensor.
     :type other:
+    :param reorder: Compiler hint. If true, the compiler is
+    allowed to reorder elements while concatenating inputs.
+    Only use if the order does not matter (e.g., result is
+    only used in reduction ops)
     """
-    return semantic.cat(input, other, _builder)
+    return semantic.cat(input, other, can_reorder, _builder)
 
 
 @builtin
@@ -750,17 +789,23 @@ def view(input, shape, _builder=None):
     return semantic.view(input, shape, _builder)
 
 
+@builtin
+def reshape(input, shape, _builder=None):
+    # TODO: should be more than just a view
+    shape = [x.value for x in shape]
+    return semantic.view(input, shape, _builder)
+
 # -----------------------
 # Linear Algebra
 # -----------------------
 
 
 @builtin
-def dot(input, other, allow_tf32=True, trans_a=False, trans_b=False, _builder=None):
+def dot(input, other, allow_tf32=True, _builder=None):
     """
     Returns the matrix product of two blocks.
 
-    The two blocks must be two dimensionals and have compatible inner dimensions.
+    The two blocks must be two-dimensional and have compatible inner dimensions.
 
     :param input: The first tensor to be multiplied.
     :type input: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
@@ -768,7 +813,7 @@ def dot(input, other, allow_tf32=True, trans_a=False, trans_b=False, _builder=No
     :type other: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
     """
     allow_tf32 = _constexpr_to_value(allow_tf32)
-    return semantic.dot(input, other, allow_tf32, trans_a, trans_b, _builder)
+    return semantic.dot(input, other, allow_tf32, _builder)
 
 
 # -----------------------
@@ -830,9 +875,9 @@ def store(pointer, value, mask=None, _builder=None):
 # Atomic Memory Operations
 # -----------------------
 
-def _add_atomic_docstr(name):
+def _add_atomic_docstr(name: str) -> Callable[[T], T]:
 
-    def _decorator(func):
+    def _decorator(func: T) -> T:
         docstr = """
     Performs an atomic {name} at the memory location specified by :code:`pointer`.
 
@@ -953,9 +998,9 @@ def fdiv(x, y, ieee_rounding=False, _builder=None):
     return semantic.fdiv(x, y, ieee_rounding, _builder)
 
 
-def _add_math_1arg_docstr(name):
+def _add_math_1arg_docstr(name: str) -> Callable[[T], T]:
 
-    def _decorator(func):
+    def _decorator(func: T) -> T:
         docstr = """
     Computes the element-wise {name} of :code:`x`
 
@@ -1002,9 +1047,9 @@ def sqrt(x, _builder=None):
 # Reductions
 # -----------------------
 
-def _add_reduction_docstr(name):
+def _add_reduction_docstr(name: str) -> Callable[[T], T]:
 
-    def _decorator(func):
+    def _decorator(func: T) -> T:
         docstr = """
     Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
 
@@ -1025,10 +1070,24 @@ def max(input, axis, _builder=None):
 
 
 @builtin
+@_add_reduction_docstr("maximum index")
+def argmax(input, axis, _builder=None):
+    axis = _constexpr_to_value(axis)
+    return semantic.argmax(input, axis, _builder)
+
+
+@builtin
 @_add_reduction_docstr("minimum")
 def min(input, axis, _builder=None):
     axis = _constexpr_to_value(axis)
     return semantic.min(input, axis, _builder)
+
+
+@builtin
+@_add_reduction_docstr("minimum index")
+def argmin(input, axis, _builder=None):
+    axis = _constexpr_to_value(axis)
+    return semantic.argmin(input, axis, _builder)
 
 
 @builtin
@@ -1164,7 +1223,7 @@ def ravel(x):
 @triton.jit
 def swizzle2d(i, j, size_i, size_j, size_g):
     """
-    transformes indices of a row-major size_i*size_j matrix into those
+    Transforms indices of a row-major size_i*size_j matrix into those
     of one where indices are row major for each group of size_j rows.
     For example, for size_i = size_j = 4 and size_g = 2, it will transform
     [[0 , 1 , 2 , 3 ],

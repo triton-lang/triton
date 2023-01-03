@@ -10,8 +10,8 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
-#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVM.h"
-#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPU.h"
+#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
+#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
@@ -107,7 +107,8 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
   }
 
   llvm::LLVMContext llvmContext;
-  auto llvmir = translateTritonGPUToLLVMIR(&llvmContext, *module);
+  auto llvmir =
+      translateTritonGPUToLLVMIR(&llvmContext, *module, SMArch.getValue());
   if (!llvmir) {
     llvm::errs() << "Translate to LLVM IR failed";
   }

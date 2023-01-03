@@ -124,6 +124,29 @@ void printStoreOp(OpAsmPrinter &printer, StoreOp storeOp) {
 namespace mlir {
 namespace triton {
 
+//-- FpToFpOp --
+bool FpToFpOp::areCastCompatible(::mlir::TypeRange inputs,
+                                 ::mlir::TypeRange outputs) {
+  if (inputs.size() != 1 || outputs.size() != 1)
+    return false;
+  auto srcEltType = inputs.front();
+  auto dstEltType = outputs.front();
+  auto srcTensorType = srcEltType.dyn_cast<mlir::RankedTensorType>();
+  auto dstTensorType = dstEltType.dyn_cast<mlir::RankedTensorType>();
+  if (srcTensorType && dstTensorType) {
+    srcEltType = srcTensorType.getElementType();
+    dstEltType = dstTensorType.getElementType();
+  }
+  // Check whether fp8 <=> fp16, bf16, f32, f64
+  // Make `srcEltType` always the fp8 side
+  if (dstEltType.dyn_cast<mlir::triton::Float8Type>())
+    std::swap(srcEltType, dstEltType);
+  if (!srcEltType.dyn_cast<mlir::triton::Float8Type>())
+    return false;
+  return dstEltType.isF16() || dstEltType.isBF16() || dstEltType.isF32() ||
+         dstEltType.isF64();
+}
+
 //-- StoreOp --
 void StoreOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
                     ::mlir::Value ptr, ::mlir::Value value) {
@@ -191,6 +214,20 @@ mlir::LogicalResult mlir::triton::DotOp::inferReturnTypes(
   // type is the same as the accumulator
   auto accTy = operands[2].getType().cast<RankedTensorType>();
   inferredReturnTypes.push_back(accTy);
+
+  // verify encodings
+  auto aEnc = operands[0].getType().cast<RankedTensorType>().getEncoding();
+  auto bEnc = operands[1].getType().cast<RankedTensorType>().getEncoding();
+  auto retEnc = accTy.getEncoding();
+  if (aEnc) {
+    assert(bEnc);
+    Dialect &dialect = aEnc.getDialect();
+    auto interface = dyn_cast<DialectInferLayoutInterface>(&dialect);
+    if (interface->inferDotOpEncoding(aEnc, 0, retEnc, location).failed())
+      return mlir::failure();
+    if (interface->inferDotOpEncoding(bEnc, 1, retEnc, location).failed())
+      return mlir::failure();
+  }
   return mlir::success();
 }
 
@@ -203,12 +240,17 @@ mlir::LogicalResult mlir::triton::ReduceOp::inferReturnTypes(
   Value arg = operands[0];
   auto argTy = arg.getType().cast<RankedTensorType>();
   auto argEltTy = argTy.getElementType();
+  auto i32Ty = IntegerType::get(argEltTy.getContext(), 32);
+  auto redOp =
+      attributes.get("redOp").cast<mlir::triton::RedOpAttr>().getValue();
+  bool withIndex = mlir::triton::ReduceOp::withIndex(redOp);
+  auto retEltTy = withIndex ? i32Ty : argEltTy;
   auto retShape = argTy.getShape().vec();
   int axis = attributes.get("axis").cast<IntegerAttr>().getInt();
   retShape.erase(retShape.begin() + axis);
   if (retShape.empty()) {
     // 0d-tensor -> scalar
-    inferredReturnTypes.push_back(argEltTy);
+    inferredReturnTypes.push_back(retEltTy);
   } else {
     // nd-tensor where n >= 1
     // infer encoding
@@ -227,9 +269,18 @@ mlir::LogicalResult mlir::triton::ReduceOp::inferReturnTypes(
     }
     // create type
     inferredReturnTypes.push_back(
-        RankedTensorType::get(retShape, argEltTy, retEncoding));
+        RankedTensorType::get(retShape, retEltTy, retEncoding));
   }
   return mlir::success();
+}
+
+bool mlir::triton::ReduceOp::withIndex(mlir::triton::RedOp redOp) {
+  return redOp == mlir::triton::RedOp::ARGMIN ||
+         redOp == mlir::triton::RedOp::ARGMAX ||
+         redOp == mlir::triton::RedOp::ARGUMIN ||
+         redOp == mlir::triton::RedOp::ARGUMAX ||
+         redOp == mlir::triton::RedOp::ARGFMIN ||
+         redOp == mlir::triton::RedOp::ARGFMAX;
 }
 
 //-- SplatOp --
@@ -244,7 +295,7 @@ OpFoldResult SplatOp::fold(ArrayRef<Attribute> operands) {
 
 //-- ExpandDimsOp --
 mlir::LogicalResult mlir::triton::ExpandDimsOp::inferReturnTypes(
-    MLIRContext *context, Optional<Location> location, ValueRange operands,
+    MLIRContext *context, Optional<Location> loc, ValueRange operands,
     DictionaryAttr attributes, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // infer shape
@@ -260,11 +311,9 @@ mlir::LogicalResult mlir::triton::ExpandDimsOp::inferReturnTypes(
     Dialect &dialect = argEncoding.getDialect();
     auto inferLayoutInterface = dyn_cast<DialectInferLayoutInterface>(&dialect);
     if (inferLayoutInterface
-            ->inferExpandDimsOpEncoding(argEncoding, axis, retEncoding)
-            .failed()) {
-      llvm::report_fatal_error("failed to infer layout for ExpandDimsOp");
-      return mlir::failure();
-    }
+            ->inferExpandDimsOpEncoding(argEncoding, axis, retEncoding, loc)
+            .failed())
+      return emitOptionalError(loc, "failed to infer layout for ExpandDimsOp");
   }
   // create type
   auto argEltTy = argTy.getElementType();

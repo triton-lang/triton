@@ -1,26 +1,27 @@
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
+
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
 #include "mlir/ExecutionEngine/OptUtils.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
-#include "mlir/Support/LogicalResult.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Transforms/Passes.h"
-#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVM.h"
-#include "triton/tools/sys/getenv.hpp"
+#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/Support/SourceMgr.h"
+
+#include <iostream>
 
 namespace mlir {
 namespace triton {
@@ -38,7 +39,6 @@ void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata) {
   auto *module = func->getParent();
   auto &ctx = func->getContext();
 
-#ifndef USE_ROCM
   if (metadata.maxntidx > 0) {
     auto i32_ty = llvm::IntegerType::get(ctx, 32);
     auto warps =
@@ -51,7 +51,6 @@ void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata) {
     module->getOrInsertNamedMetadata("nvvm.annotations")
         ->addOperand(llvm::MDNode::get(ctx, md_args));
   }
-#endif
 
   if (metadata.is_kernel) {
 #ifndef USE_ROCM
@@ -76,14 +75,14 @@ void extractNVVMMetadata(mlir::ModuleOp module,
     bool hasMetadata{};
 
     // maxntid
-    if (op->hasAttr(NVVMMetadataField::MaxNTid)) {
-      auto attr = op->getAttr(NVVMMetadataField::MaxNTid);
+    if (op->hasAttr("nvvm.maxntid")) {
+      auto attr = op->getAttr("nvvm.maxntid");
       meta.maxntidx = attr.dyn_cast<IntegerAttr>().getInt();
       hasMetadata = true;
     }
 
     // kernel
-    if (op->hasAttr(NVVMMetadataField::Kernel)) {
+    if (op->hasAttr("nvvm.kernel")) {
       meta.is_kernel = true;
       hasMetadata = true;
     }
@@ -98,13 +97,8 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
   auto context = module->getContext();
   DialectRegistry registry;
   mlir::registerLLVMDialectTranslation(registry);
-
-#ifdef USE_ROCM
   mlir::registerROCDLDialectTranslation(registry);
-#else
   mlir::registerNVVMDialectTranslation(registry);
-#endif
-
   context->appendDialectRegistry(registry);
 
   llvm::DenseMap<llvm::StringRef, NVVMMetadata> nvvmMetadata;
@@ -115,9 +109,6 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
     llvm::errs() << "Failed to emit LLVM IR\n";
     return nullptr;
   }
-
-  // Initialize LLVM targets.
-  mlir::ExecutionEngine::setupTargetTriple(llvmModule.get());
 
   auto optPipeline = mlir::makeOptimizingTransformer(
       /*optLevel=*/3, /*sizeLevel=*/0,
@@ -139,7 +130,7 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
 
 std::unique_ptr<llvm::Module>
 translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
-                           mlir::ModuleOp module) {
+                           mlir::ModuleOp module, int computeCapability) {
   mlir::PassManager pm(module->getContext());
   applyPassManagerCLOptions(pm);
   auto printingFlags = mlir::OpPrintingFlags();
@@ -154,8 +145,8 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
       /*printAfterOnlyOnChange=*/true,
       /*printAfterOnlyOnFailure*/ false, llvm::dbgs(), printingFlags);
 
-  pm.addPass(createConvertTritonGPUToLLVMPass());
-  // Conanicalize to eliminate the remaining UnrealizedConversionCastOp
+  pm.addPass(createConvertTritonGPUToLLVMPass(computeCapability));
+  // Canonicalize to eliminate the remaining UnrealizedConversionCastOp
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(mlir::createCSEPass()); // Simplify the IR to improve readability.
   pm.addPass(mlir::createSymbolDCEPass());
@@ -208,6 +199,14 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
       return nullptr;
   }
 
+  if (::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
+    std::string mod_string;
+    std::unique_ptr<llvm::raw_string_ostream> ir_ss(
+           new llvm::raw_string_ostream(mod_string));
+    llvmir->print(*ir_ss, nullptr);
+    std::cout << "// -----// LLVM IR Dump //----- //\n" << mod_string << std::endl;
+  }
+
   return llvmir;
 }
 
@@ -228,7 +227,6 @@ void addExternalLibs(mlir::ModuleOp &module,
 
   DictionaryAttr dict = DictionaryAttr::get(module->getContext(), attrs);
   module.getOperation()->setAttr("triton_gpu.externs", dict);
-  return;
 }
 
 bool linkExternLib(llvm::Module &module, llvm::StringRef path) {
