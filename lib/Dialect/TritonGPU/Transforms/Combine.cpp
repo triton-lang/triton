@@ -885,25 +885,27 @@ SmallVector<int64_t, 2> mmaVersionToShapePerWarp(int version) {
 
 SmallVector<unsigned, 2> warpsPerTileV1(const ArrayRef<int64_t> shape,
                                         int numWarps) {
+  // Force the product(wpt) equals numWarps
+  return {static_cast<unsigned>(numWarps), 1};
 
-  SmallVector<unsigned, 2> ret = {1, 1};
-  SmallVector<int64_t, 2> shapePerWarp =
-      mmaVersionToShapePerWarp(1 /*version*/);
-  bool changed = false;
-  do {
-    changed = false;
-    int pre = ret[0];
-    if (ret[0] * ret[1] < numWarps) {
-      ret[0] = std::clamp<unsigned>(ret[0] * 2, 1, shape[0] / shapePerWarp[0]);
-      changed = pre != ret[0];
-    }
-    if (ret[0] * ret[1] < numWarps) {
-      pre = ret[1];
-      ret[1] = std::clamp<unsigned>(ret[1] * 2, 1, shape[1] / shapePerWarp[1]);
-      changed = pre != ret[1];
-    }
-  } while (changed);
-  return ret;
+  // SmallVector<unsigned, 2> ret = {1, 1};
+  // SmallVector<int64_t, 2> shapePerWarp =
+  //     mmaVersionToShapePerWarp(1 /*version*/);
+  // bool changed = false;
+  // do {
+  //   changed = false;
+  //   int pre = ret[0];
+  //   if (ret[0] * ret[1] < numWarps) {
+  //     ret[0] = std::clamp<unsigned>(ret[0] * 2, 1, shape[0] /
+  //     shapePerWarp[0]); changed = pre != ret[0];
+  //   }
+  //   if (ret[0] * ret[1] < numWarps) {
+  //     pre = ret[1];
+  //     ret[1] = std::clamp<unsigned>(ret[1] * 2, 1, shape[1] /
+  //     shapePerWarp[1]); changed = pre != ret[1];
+  //   }
+  // } while (changed);
+  // return ret;
 }
 
 SmallVector<unsigned, 2> warpsPerTileV2(triton::DotOp dotOp,
@@ -1261,6 +1263,8 @@ public:
 
       // Recalculate the wpt, for here we could get the latest information, the
       // wpt should be updated.
+      printf("oriWpt t-0 %d %d\n", mmaLayout.getWarpsPerCTA()[0],
+             mmaLayout.getWarpsPerCTA()[1]);
       auto newWpt =
           getWarpsPerCTA(DT.getShape(), isARow, isBRow, isAVec4, isBVec4,
                          product(mmaLayout.getWarpsPerCTA()));
@@ -1293,17 +1297,17 @@ public:
     rep[1] = 2 * packSize1;
     spw[1] = fpw[1] * 4 * rep[1];
 
+    printf("spw: %d %d\n", spw[0], spw[1]);
     do {
       wpt_nm1 = wpt;
       if (wpt[0] * wpt[1] < numWarps)
-        wpt[0] = std::clamp<int>(wpt[0] * 2, 1, wpt[0] / spw[0]);
+        wpt[0] = std::clamp<int>(wpt[0] * 2, 1, shape[0] / spw[0]);
       if (wpt[0] * wpt[1] < numWarps)
         wpt[1] = std::clamp<int>(wpt[1] * 2, 1, shape[1] / spw[1]);
     } while (wpt_nm1 != wpt);
 
     printf("finalwpt: %d %d\n", wpt[0], wpt[1]);
     return wpt;
-    // return {4, 1};
   }
 };
 

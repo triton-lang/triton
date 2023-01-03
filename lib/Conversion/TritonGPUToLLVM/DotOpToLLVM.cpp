@@ -91,6 +91,7 @@ private:
   /// Convert to mma.m8n8k4
   LogicalResult convertMMA884(triton::DotOp op, OpAdaptor adaptor,
                               ConversionPatternRewriter &rewriter) const {
+    printf(">> begin dotop\n");
     auto *ctx = op.getContext();
     auto loc = op.getLoc();
 
@@ -135,8 +136,6 @@ private:
            wpt[0], wpt[1]);
     printf("mma884 numM: %d\n", numM);
     printf("mma884 numN: %d\n", numN);
-    numM = 2;
-    numN = 4;
     unsigned NK = AShape[1];
 
     auto has = helper.extractLoadedOperand(adaptor.a(), NK, rewriter);
@@ -207,7 +206,7 @@ private:
         Value elem = extract_val(f32_ty, res, getIntAttr(i));
         acc[idx[i]] = elem;
       }
-#define SHOW_MMA_V1 1
+#define SHOW_MMA_V1 0
 #if SHOW_MMA_V1
       std::vector<Value> args = {ha.first, ha.second, hb.first, hb.second};
 
@@ -215,7 +214,7 @@ private:
         return extract_element(f16_ty, value, idx_val(idx));
       };
 
-      std::vector<Value> pargs({LLVM::gThreadId});
+      std::vector<Value> pargs({getThreadId(rewriter, loc)});
       pargs.push_back(i32_val(m));
       pargs.push_back(i32_val(n));
       pargs.push_back(i32_val(k));
@@ -234,24 +233,26 @@ private:
 #endif
     };
 
-    printf("numMN t-0 %d %d\n", numM, numN);
+    printf("numMNK t-0 %d %d %d\n", numM, numN, NK);
     for (unsigned k = 0; k < NK; k += 4)
       for (unsigned m = 0; m < numM / 2; ++m)
         for (unsigned n = 0; n < numN / 2; ++n) {
+          printf("callMMA (%d %d %d)\n", m, n, k);
           callMMA(m, n, k);
+          printf("done callMMA (%d %d %d)\n", m, n, k);
         }
 
     // res holds the same layout of acc
     for (size_t i = 0; i < acc.size(); ++i) {
       resVals[i] = acc[i];
     }
-
-    LLVM::vprintf_array(LLVM::gThreadId, acc, "acc", "%f", rewriter);
+    // LLVM::vprintf_array(LLVM::gThreadId, acc, "acc", "%f", rewriter);
 
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(resSize, type::f32Ty(ctx)));
     Value res = getStructFromElements(loc, resVals, rewriter, structTy);
     rewriter.replaceOp(op, res);
+    printf("<< end dotop\n");
     return success();
   }
 
