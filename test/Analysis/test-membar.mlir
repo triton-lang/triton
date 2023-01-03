@@ -111,6 +111,13 @@ func @extract_slice() {
   return
 }
 
+// CHECK-LABEL: trans
+func @trans() {
+  %cst0 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #A_SHARED>
+  %b = tt.trans %cst0 : (tensor<16x32xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+  return
+}
+
 // CHECK-LABEL: insert_slice_async
 func @insert_slice_async(%A : !tt.ptr<f16>, %i1 : i1) {
   %a_ptr = tt.broadcast %A : (!tt.ptr<f16>) -> tensor<16x16x!tt.ptr<f16>, #AL>

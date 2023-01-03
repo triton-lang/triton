@@ -25,13 +25,14 @@ ChangeResult SharedMemoryAliasAnalysis::visitOperation(
   if (maybeSharedAllocationOp(op)) {
     // These ops may allocate a new shared memory buffer.
     auto result = op->getResult(0);
-    // FIXME(Keren): extract and insert are always alias for now
+    // XXX(Keren): the following ops are always aliasing for now
     if (isa<tensor::ExtractSliceOp, triton::TransOp>(op)) {
       // extract_slice %src
+      // trans %src
       aliasInfo = AliasInfo(operands[0]->getValue());
       pessimistic = false;
-    } else if (isa<tensor::InsertSliceOp>(op) ||
-               isa<triton::gpu::InsertSliceAsyncOp>(op)) {
+    } else if (isa<tensor::InsertSliceOp, triton::gpu::InsertSliceAsyncOp>(
+                   op)) {
       // insert_slice_async %src, %dst, %index
       // insert_slice %src into %dst[%offsets]
       aliasInfo = AliasInfo(operands[1]->getValue());
