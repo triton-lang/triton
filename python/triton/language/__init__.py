@@ -5,6 +5,7 @@ from ..impl import (
     ir,
     builtin,
 )
+from . import libdevice
 from .core import (
     abs,
     arange,
