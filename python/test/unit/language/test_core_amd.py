@@ -18,7 +18,7 @@ uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
 float_dtypes = ['float16', 'float32', 'float64']
 dtypes = int_dtypes + uint_dtypes + float_dtypes
 # TODO: handle bfloat16
-dtypes_with_bfloat16 = dtypes  # + ['bfloat16']
+dtypes_with_bfloat16 = dtypes + ['bfloat16']
 
 
 def _bitwidth(dtype: str) -> int:
