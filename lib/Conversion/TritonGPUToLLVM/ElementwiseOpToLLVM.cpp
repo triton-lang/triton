@@ -902,5 +902,7 @@ void populateElementwiseOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   // For FP64 input type, ExpOpConversionApprox will return failure and
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
   // __nv_expf for higher-precision calculation
+#ifndef USE_ROCM
   patterns.add<ExpOpConversionApprox>(typeConverter, benefit);
+#endif
 }
