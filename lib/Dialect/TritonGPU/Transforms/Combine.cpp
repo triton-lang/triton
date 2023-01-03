@@ -483,6 +483,7 @@ public:
       return op->getBlock() == cvt->getBlock() &&
              !(isa<triton::ReduceOp>(op) &&
                !op->getResult(0).getType().isa<RankedTensorType>()) &&
+             !isa<triton::gpu::ConvertLayoutOp>(op) &&
              !isa<scf::YieldOp>(op);
     };
     mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);

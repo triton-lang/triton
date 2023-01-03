@@ -28,7 +28,7 @@ struct TestAllocationPass
       if (scratchBufferId != Allocation::InvalidBufferId) {
         size_t offset = allocation.getOffset(scratchBufferId);
         size_t size = allocation.getAllocatedSize(scratchBufferId);
-        os << "scratch offset = " << offset << ", size = " << size << "\n";
+        os << " scratch offset = " << offset << ", size = " << size << "\n";
       }
       if (op->getNumResults() < 1)
         return;
@@ -37,6 +37,7 @@ struct TestAllocationPass
         if (bufferId != Allocation::InvalidBufferId) {
           size_t offset = allocation.getOffset(bufferId);
           size_t size = allocation.getAllocatedSize(bufferId);
+          os << result << "\n";
           os << "offset = " << offset << ", size = " << size << "\n";
         }
       }
