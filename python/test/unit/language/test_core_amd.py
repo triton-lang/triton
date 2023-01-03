@@ -559,7 +559,7 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
 # # test extern
 # # -------------
 if torch.version.hip is not None:
-  e_libs = triton.get_amdgcn_bitcode_paths()
+  e_libs = None
 else:
   e_libs = {"libdevice": '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'}
 
