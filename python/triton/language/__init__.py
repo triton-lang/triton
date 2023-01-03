@@ -131,6 +131,7 @@ __all__ = [
     "int64",
     "int8",
     "ir",
+    "libdevice",
     "load",
     "log",
     "max",
