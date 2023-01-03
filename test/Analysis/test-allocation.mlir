@@ -174,6 +174,14 @@ func @scratch() {
   // CHECK-NEXT: size = 512
 }
 
+// CHECK-LABEL: trans
+func @trans(%A : !tt.ptr<f16>) {
+  // CHECK: offset = 0, size = 1024
+  %tensor = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #A_SHARED>
+  %b = tt.trans %tensor : (tensor<16x32xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+  return
+}
+
 // CHECK-LABEL: insert_slice_async
 func @insert_slice_async(%A : !tt.ptr<f16>, %i1 : i1) {
   %a_ptr = tt.broadcast %A : (!tt.ptr<f16>) -> tensor<16x16x!tt.ptr<f16>, #AL>
@@ -283,6 +291,25 @@ func @for_if_slice(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %
   }
   return
   // CHECK-NEXT: size = 24576
+}
+
+// c0 cannot be released in the loop
+// CHECK-LABEL: for_use_ancestor
+func @for_use_ancestor(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
+  // CHECK: offset = 0, size = 8192
+  %a_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
+  // CHECK-NEXT: offset = 8192, size = 8192
+  %b_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
+  // CHECK-NEXT: offset = 16384, size = 8192
+  %c_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
+  %a_shared, %b_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init) -> (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) {
+    %c0 = tt.trans %c_shared_init : (tensor<128x32xf16, #A_SHARED>) -> tensor<32x128xf16, #A_SHARED>
+    // CHECK-NEXT: offset = 24576, size = 8192
+    %c1 = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
+    scf.yield %b_shared, %a_shared: tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>
+  }
+  return
+  // CHECK-NEXT: size = 32768
 }
 
 // a_shared_init, b_shared_init, and c_shared_init's liveness ranges are span over the entire function before cst2.
