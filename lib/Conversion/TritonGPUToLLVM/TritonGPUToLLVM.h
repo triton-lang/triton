@@ -6,10 +6,11 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-void populateTritonGPUToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
-                                     RewritePatternSet &patterns, int numWarps,
-                                     AxisInfoAnalysis &axisInfoAnalysis,
-                                     const Allocation *allocation, Value smem,
-                                     PatternBenefit benefit);
+void populateTritonGPUToLLVMPatterns(
+    mlir::LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
+    const Allocation *allocation, Value smem,
+    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
+    PatternBenefit benefit);
 
 #endif

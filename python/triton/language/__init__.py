@@ -5,6 +5,7 @@ from ..impl import (
     ir,
     builtin,
 )
+from . import libdevice
 from .core import (
     abs,
     arange,
@@ -20,6 +21,8 @@ from .core import (
     atomic_xor,
     bfloat16,
     block_type,
+    broadcast,
+    broadcast_to,
     cat,
     cdiv,
     constexpr,
@@ -105,6 +108,8 @@ __all__ = [
     "atomic_xor",
     "bfloat16",
     "block_type",
+    "broadcast",
+    "broadcast_to",
     "builtin",
     "cat",
     "cdiv",
@@ -126,6 +131,7 @@ __all__ = [
     "int64",
     "int8",
     "ir",
+    "libdevice",
     "load",
     "log",
     "max",

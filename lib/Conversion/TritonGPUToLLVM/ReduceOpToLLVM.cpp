@@ -164,7 +164,7 @@ private:
     auto srcValues = getElementsFromStruct(loc, adaptor.operand(), rewriter);
 
     SmallVector<SmallVector<unsigned>> offset =
-        emitOffsetForBlockedLayout(srcLayout, srcShape);
+        emitOffsetForLayout(srcLayout, srcShape);
 
     std::map<SmallVector<unsigned>, Value> accs;
     std::map<SmallVector<unsigned>, Value> accIndices;
@@ -479,10 +479,12 @@ private:
   }
 };
 
-void populateReduceOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
-                                    RewritePatternSet &patterns, int numWarps,
-                                    AxisInfoAnalysis &axisInfoAnalysis,
-                                    const Allocation *allocation, Value smem,
-                                    PatternBenefit benefit) {
-  patterns.add<ReduceOpConversion>(typeConverter, allocation, smem, benefit);
+void populateReduceOpToLLVMPatterns(
+    mlir::LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
+    const Allocation *allocation, Value smem,
+    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
+    PatternBenefit benefit) {
+  patterns.add<ReduceOpConversion>(typeConverter, allocation, smem,
+                                   indexCacheInfo, benefit);
 }
