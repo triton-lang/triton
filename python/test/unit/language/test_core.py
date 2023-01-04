@@ -1267,7 +1267,7 @@ def test_arange(start, device='cuda'):
 # ---------------
 
 
-@pytest.mark.parametrize("dtype_str, size, size_diff", [(dtype_str, size, size_diff) for dtype_str in torch_dtypes for size in [128, 512] for size_diff in [1, 2, 3, 4]])
+@pytest.mark.parametrize("dtype_str, size, size_diff", [(dtype_str, size, size_diff) for dtype_str in torch_dtypes for size in [128, 512] for size_diff in [0, 1, 2, 3, 4]])
 def test_masked_load(dtype_str, size, size_diff, device='cuda'):
     dtype = getattr(torch, dtype_str)
     check_type_supported(dtype)  # bfloat16 on cc < 80 will not be tested
@@ -1286,18 +1286,18 @@ def test_masked_load(dtype_str, size, size_diff, device='cuda'):
     def _kernel(in_ptr, out_ptr, in_size: tl.constexpr, out_size: tl.constexpr):
         in_offsets = tl.arange(0, out_size)
         # Load inputs.
-        x = tl.load(in_ptr + in_offsets, mask=in_offsets < in_size, other=1)
+        x = GENERATE_TEST_HERE
         # Store output
         output_offsets = tl.arange(0, out_size)
         tl.store(out_ptr + output_offsets, x)
 
-    _kernel[(1,)](input, output, input_size, output_size)
+    mask_str = "mask=in_offsets < in_size, other=1" if size_diff > 0 else "None"
+    kernel = patch_kernel(_kernel, {'GENERATE_TEST_HERE': f"tl.load(in_ptr + in_offsets, {mask_str})"})
+    kernel[(1,)](input, output, input_size, output_size)
 
-    reference_out = input
-    reference_out = torch.cat((reference_out, torch.ones((size_diff,), dtype=dtype, device=device)))
+    reference_out = torch.cat((input, torch.ones((size_diff,), dtype=dtype, device=device)))
     triton.testing.allclose(output, reference_out)
 
-# 'bfloat16': torch.bfloat16,
 # Testing masked loads with an intermate copy to shared memory run.
 
 
