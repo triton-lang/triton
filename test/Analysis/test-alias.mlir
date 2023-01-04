@@ -52,6 +52,15 @@ func @convert(%A : !tt.ptr<f16>) {
   return
 }
 
+// CHECK-LABEL: trans
+func @trans(%A : !tt.ptr<f16>) {
+  // CHECK: %cst -> %cst
+  %tensor = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #A_SHARED>
+  // CHECK: %0 -> %cst
+  %b = tt.trans %tensor : (tensor<16x32xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+  return
+}
+
 // CHECK-LABEL: insert_slice_async
 func @insert_slice_async(%A : !tt.ptr<f16>, %i1 : i1) {
   %a_ptr = tt.broadcast %A : (!tt.ptr<f16>) -> tensor<16x16x!tt.ptr<f16>, #AL>
