@@ -83,32 +83,60 @@ def test_fmin_no_mask(num_warps, block_size, iter_size):
     [4, 1024, 256],
 ])
 def test_fmad_rn_no_mask(num_warps, block_size, iter_size):
-    @triton.jit
-    def kernel(x_ptr,
-               y_ptr,
-               z_ptr,
-               w_ptr,
-               block_size,
-               iter_size: tl.constexpr):
-        pid = tl.program_id(axis=0)
-        for i in range(0, block_size, iter_size):
-            offset = pid * block_size + tl.arange(0, iter_size)
-            x_ptrs = x_ptr + offset
-            y_ptrs = y_ptr + offset
-            z_ptrs = z_ptr + offset
+    if torch.version.hip is not None:
+        @triton.jit
+        def kernel(x_ptr,
+                   y_ptr,
+                   z_ptr,
+                   w_ptr,
+                   block_size,
+                   iter_size: tl.constexpr):
+            pid = tl.program_id(axis=0)
+            for i in range(0, block_size, iter_size):
+                offset = pid * block_size + tl.arange(0, iter_size)
+                x_ptrs = x_ptr + offset
+                y_ptrs = y_ptr + offset
+                z_ptrs = z_ptr + offset
 
-            x = tl.load(x_ptrs)
-            y = tl.load(y_ptrs)
-            z = tl.load(z_ptrs)
+                x = tl.load(x_ptrs)
+                y = tl.load(y_ptrs)
+                z = tl.load(z_ptrs)
 
-            w = tl.libdevice.fma_rn(x, y, z)
-            w_ptrs = w_ptr + offset
-            tl.store(w_ptrs, w)
+                w = tl.libdevice.fma(x, y, z)
+                w_ptrs = w_ptr + offset
+                tl.store(w_ptrs, w)
 
-            x_ptr += iter_size
-            y_ptr += iter_size
-            z_ptr += iter_size
-            w_ptr += iter_size
+                x_ptr += iter_size
+                y_ptr += iter_size
+                z_ptr += iter_size
+                w_ptr += iter_size
+    else:
+        @triton.jit
+        def kernel(x_ptr,
+                   y_ptr,
+                   z_ptr,
+                   w_ptr,
+                   block_size,
+                   iter_size: tl.constexpr):
+            pid = tl.program_id(axis=0)
+            for i in range(0, block_size, iter_size):
+                offset = pid * block_size + tl.arange(0, iter_size)
+                x_ptrs = x_ptr + offset
+                y_ptrs = y_ptr + offset
+                z_ptrs = z_ptr + offset
+
+                x = tl.load(x_ptrs)
+                y = tl.load(y_ptrs)
+                z = tl.load(z_ptrs)
+
+                w = tl.libdevice.fma_rn(x, y, z)
+                w_ptrs = w_ptr + offset
+                tl.store(w_ptrs, w)
+
+                x_ptr += iter_size
+                y_ptr += iter_size
+                z_ptr += iter_size
+                w_ptr += iter_size
 
     x = torch.randn((block_size,), device='cuda', dtype=torch.float64)
     y = torch.randn((block_size,), device='cuda', dtype=torch.float64)

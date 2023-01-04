@@ -1614,6 +1614,9 @@ def compile(fn, **kwargs):
             extern_libs = get_amdgcn_bitcode_paths()
         else:
             extern_libs.update(get_amdgcn_bitcode_paths())
+        for key in list(extern_libs):
+            if extern_libs[key] == '' or extern_libs[key] is None:
+               extern_libs.pop(key)
         gfx_arch = os.environ.get('MI_GPU_ARCH', compile.discovered_gfx_arch)
         if gfx_arch is None:
             raise RuntimeError('gfx_arch is None (not specified)')

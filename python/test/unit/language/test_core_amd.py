@@ -1067,3 +1067,186 @@ def test_num_warps_pow2():
     _kernel[(1,)](dst=dst, num_warps=1)
     _kernel[(1,)](dst=dst, num_warps=2)
     _kernel[(1,)](dst=dst, num_warps=4)
+
+# -------------
+# test extern
+# -------------
+
+def system_libdevice_path() -> str:
+    if torch.version.hip is not None:
+        return ''
+    else:
+        _SYSTEM_LIBDEVICE_SEARCH_PATHS = [
+            '/usr/lib/cuda/nvvm/libdevice/libdevice.10.bc',
+            '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc',
+        ]
+        SYSTEM_LIBDEVICE_PATH: Optional[str] = None
+        for _p in _SYSTEM_LIBDEVICE_SEARCH_PATHS:
+            if os.path.exists(_p):
+                SYSTEM_LIBDEVICE_PATH = _p
+        assert SYSTEM_LIBDEVICE_PATH is not None, \
+            "Could not find libdevice.10.bc path"
+        return SYSTEM_LIBDEVICE_PATH
+
+
+@pytest.mark.parametrize("dtype_str, expr, lib_path",
+                         [('int32', 'libdevice.ffs', ''),
+                          ('float32', 'libdevice.pow', system_libdevice_path()),
+                          ('float64', 'libdevice.norm4d', '')])
+def test_libdevice_tensor(dtype_str, expr, lib_path):
+
+    @triton.jit
+    def kernel(X, Y, BLOCK: tl.constexpr):
+        x = tl.load(X + tl.arange(0, BLOCK))
+        y = GENERATE_TEST_HERE
+        tl.store(Y + tl.arange(0, BLOCK), y)
+
+    shape = (128, )
+    rs = RandomState(17)
+    # limit the range of integers so that the sum does not overflow
+    x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
+
+    if expr == 'libdevice.ffs':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.ffs(x)'})
+        y_ref = np.zeros(shape, dtype=x.dtype)
+        for i in range(shape[0]):
+            y_ref[i] = (int(x[i]) & int(-x[i])).bit_length()
+    elif expr == 'libdevice.pow':
+        # numpy does not allow negative factors in power, so we use abs()
+        x = np.abs(x)
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.pow(x, x)'})
+        y_ref = np.power(x, x)
+    elif expr == 'libdevice.norm4d':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.norm4d(x, x, x, x)'})
+        y_ref = np.sqrt(4 * np.power(x, 2))
+
+    x_tri = to_triton(x)
+    # triton result
+    y_tri = to_triton(numpy_random((shape[0],), dtype_str=dtype_str, rs=rs), device='cuda')
+    kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], extern_libs={'libdevice': lib_path})
+    # compare
+    if expr == 'libdevice.ffs':
+        np.testing.assert_equal(y_ref, to_numpy(y_tri))
+    else:
+        np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
+
+
+@pytest.mark.parametrize("dtype_str, expr, lib_path",
+                         [('float32', 'libdevice.pow', '')])
+def test_libdevice_scalar(dtype_str, expr, lib_path):
+
+    @triton.jit
+    def kernel(X, Y, BLOCK: tl.constexpr):
+        x = X
+        y = GENERATE_TEST_HERE
+        tl.store(Y + tl.arange(0, BLOCK), y)
+
+    shape = (128, )
+    rs = RandomState(17)
+    # limit the range of integers so that the sum does not overflow
+    x = numpy_random((1,), dtype_str=dtype_str, rs=rs)
+    y_ref = np.zeros(shape, dtype=x.dtype)
+
+    # numpy does not allow negative factors in power, so we use abs()
+    x = np.abs(x)
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.pow(x, x)'})
+    y_ref[:] = np.power(x, x)
+
+    # triton result
+    x_tri = to_triton(x)[0].item()
+    y_tri = to_triton(numpy_random((shape[0],), dtype_str=dtype_str, rs=rs), device='cuda')
+    kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], extern_libs={'libdevice': lib_path})
+    # compare
+    np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
+
+# -----------------------
+# test layout conversions
+# -----------------------
+# TODO: backend hsould be tested separately
+
+
+class MmaLayout:
+    def __init__(self, version, warps_per_cta):
+        self.version = version
+        self.warps_per_cta = str(warps_per_cta)
+
+    def __str__(self):
+        return f"#triton_gpu.mma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA={self.warps_per_cta}}}>"
+
+
+class BlockedLayout:
+    def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order):
+        self.sz_per_thread = str(size_per_thread)
+        self.threads_per_warp = str(threads_per_warp)
+        self.warps_per_cta = str(warps_per_cta)
+        self.order = str(order)
+
+    def __str__(self):
+        return f"#triton_gpu.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}}}>"
+
+
+layouts = [
+    # MmaLayout(version=1, warps_per_cta=[1, 4]),
+    MmaLayout(version=(2, 0), warps_per_cta=[1, 4]),
+    # MmaLayout(version=1, warps_per_cta=[4, 1]),
+    MmaLayout(version=(2, 0), warps_per_cta=[4, 1]),
+    BlockedLayout([1, 8], [2, 16], [4, 1], [1, 0]),
+    BlockedLayout([1, 4], [4, 8], [2, 2], [1, 0]),
+    BlockedLayout([1, 1], [1, 32], [2, 2], [1, 0]),
+#    BlockedLayout([8, 1], [16, 2], [1, 4], [0, 1]),
+    BlockedLayout([4, 1], [8, 4], [2, 2], [0, 1]),
+    BlockedLayout([1, 1], [32, 1], [2, 2], [0, 1]),
+    BlockedLayout([4, 4], [1, 32], [4, 1], [1, 0])
+]
+
+
+@pytest.mark.parametrize("shape", [(128, 128)])
+@pytest.mark.parametrize("dtype", ['float16'])
+@pytest.mark.parametrize("src_layout", layouts)
+@pytest.mark.parametrize("dst_layout", layouts)
+def test_convert2d(dtype, shape, src_layout, dst_layout, device='cuda'):
+    if str(src_layout) == str(dst_layout):
+        pytest.skip()
+    if 'mma' in str(src_layout) and 'mma' in str(dst_layout):
+        pytest.skip()
+
+    ir = f"""
+#src = {src_layout}
+#dst = {dst_layout}
+""" + """
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+  func public @kernel_0d1d(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %cst = arith.constant dense<128> : tensor<128x1xi32, #src>
+    %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #src}>>
+    %1 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #src}>>
+    %2 = tt.splat %arg0 : (!tt.ptr<f16>) -> tensor<128x128x!tt.ptr<f16>, #src>
+    %4 = tt.expand_dims %0 {axis = 1 : i32} : (tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #src}>>) -> tensor<128x1xi32, #src>
+    %5 = arith.muli %4, %cst : tensor<128x1xi32, #src>
+    %6 = tt.expand_dims %1 {axis = 0 : i32} : (tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #src}>>) -> tensor<1x128xi32, #src>
+    %7 = tt.broadcast %6 : (tensor<1x128xi32, #src>) -> tensor<128x128xi32, #src>
+    %8 = tt.broadcast %5 : (tensor<128x1xi32, #src>) -> tensor<128x128xi32, #src>
+    %9 = arith.addi %8, %7 : tensor<128x128xi32, #src>
+    %10 = tt.addptr %2, %9 : tensor<128x128x!tt.ptr<f16>, #src>, tensor<128x128xi32, #src>
+    %11 = tt.load %10 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x128xf16, #src>
+    %3 = tt.splat %arg1 : (!tt.ptr<f16>) -> tensor<128x128x!tt.ptr<f16>, #dst>
+    %12 = triton_gpu.convert_layout %9 : (tensor<128x128xi32, #src>) -> tensor<128x128xi32, #dst>
+    %13 = triton_gpu.convert_layout %11 : (tensor<128x128xf16, #src>) -> tensor<128x128xf16, #dst>
+    %14 = tt.addptr %3, %12 : tensor<128x128x!tt.ptr<f16>, #dst>, tensor<128x128xi32, #dst>
+    tt.store %14, %13 : tensor<128x128xf16, #dst>
+    return
+  }
+}
+"""
+
+    x = to_triton(numpy_random(shape, dtype_str=dtype))
+    z = torch.empty_like(x)
+
+    # write the IR to a temporary file using mkstemp
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
+        f.write(ir)
+        f.flush()
+        kernel = triton.compile(f.name)
+    kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
+
+    assert torch.equal(z, x)
