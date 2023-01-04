@@ -2,20 +2,19 @@ import pytest
 import torch
 
 import triton
-import triton._C.libtriton.triton as _triton
 
 
 @pytest.mark.parametrize("M, N, dtype, mode",
                          [
                              (M, N, dtype, mode) for M in [1024, 821]
                              for N in [512, 857, 1871, 2089, 8573, 31000]
-                             for dtype in ['bfloat16', 'float16', 'float32']
+                             for dtype in ['float16', 'float32']
                              for mode in ['forward', 'backward']
                          ]
                          )
 def test_op(M, N, dtype, mode):
-    cc = _triton.runtime.cc(_triton.runtime.backend.CUDA, torch.cuda.current_device())
-    if cc < 80 and dtype == "bfloat16":
+    capability = torch.cuda.get_device_capability()
+    if capability[0] < 8 and dtype == "bfloat16":
         pytest.skip("Only test bfloat16 on devices with sm >= 80")
     dtype = {'bfloat16': torch.bfloat16, 'float16': torch.float16, 'float32': torch.float32}[dtype]
     # create inputs

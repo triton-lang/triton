@@ -7,14 +7,17 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import sysconfig
 import tempfile
 import warnings
+from collections import namedtuple
+from pathlib import Path
 from sysconfig import get_paths
-from typing import Any, Dict, Set, Tuple, Union
+from typing import Any, Callable, Dict, Tuple, Union
 
 import setuptools
 import torch
@@ -22,6 +25,7 @@ from filelock import FileLock
 
 import triton
 import triton._C.libtriton.triton as _triton
+from . import impl
 from .tools.disasm import extract
 
 
@@ -30,12 +34,12 @@ def str_to_ty(name):
         ty = str_to_ty(name[1:])
         return triton.language.pointer_type(ty)
     tys = {
-        "i1": triton.language.int1,
         "fp8": triton.language.float8,
         "fp16": triton.language.float16,
         "bf16": triton.language.bfloat16,
         "fp32": triton.language.float32,
         "fp64": triton.language.float64,
+        "i1": triton.language.int1,
         "i8": triton.language.int8,
         "i16": triton.language.int16,
         "i32": triton.language.int32,
@@ -64,43 +68,56 @@ def mangle_ty(ty):
         return 'fp32'
     if ty.is_fp64():
         return 'fp64'
-    if ty.is_void():
-        return 'V'
     if ty.is_block():
         elt = mangle_ty(ty.scalar)
         shape = '_'.join(map(str, ty.shape))
         return f'{elt}S{shape}S'
+    if ty.is_void():
+        return 'V'
     assert False, "Unsupported type"
 
 
 def mangle_fn(name, arg_tys, constants):
     # doesn't mangle ret type, which must be a function of arg tys
     mangled_arg_names = '_'.join([mangle_ty(ty) for ty in arg_tys])
-    key = lambda x: x.__name__ if isinstance(x, triton.runtime.JITFunction) else repr(x)
-    mangled_constants = '_'.join([f'{i}c{key(constants[i])}' for i in sorted(constants)])
+    mangled_constants = '_'.join([f'{i}c{repr(constants[i])}' for i in sorted(constants)])
     mangled_constants = mangled_constants.replace('.', '_d_')
     mangled_constants = mangled_constants.replace("'", '_sq_')
-    mangled_constants = mangled_constants.replace("e-", '_em_')
     ret = f'{name}__{mangled_arg_names}__{mangled_constants}'
     return ret
 
 
-def is_triton_tensor(value):
-    return isinstance(value, triton.language.tensor)
+class enter_sub_region:
+    def __init__(self, generator: CodeGenerator):
+        self.generator = generator
+
+    def __enter__(self):
+        # record lscope & local_defs in the parent scope
+        self.liveins = self.generator.lscope.copy()
+        self.prev_defs = self.generator.local_defs.copy()
+        self.generator.local_defs = {}
+        self.insert_block = self.generator.builder.get_insertion_block()
+        return self.liveins, self.insert_block
+
+    def __exit__(self, *args, **kwargs):
+        self.generator.builder.set_insertion_point_to_end(self.insert_block)
+        self.generator.lscope = self.liveins
+        self.generator.local_defs = self.prev_defs
 
 
-class ValueConstructor:
-    def __init__(self, module, builder, gscope) -> None:
+class CodeGenerator(ast.NodeVisitor):
+    def __init__(self, context, prototype, gscope, attributes, constants, function_name, module=None, is_kernel=False, function_types=dict()):
+        self.builder = _triton.ir.builder(context)
+        self.module = self.builder.create_module() if module is None else module
+        self.function_ret_types = function_types
+        self.prototype = prototype
         self.gscope = gscope
         self.lscope = dict()
-        self.builder = builder
-        self.module = module
-        # [name, bb] => triton.language.tensor
-        self.lvalues: Dict[Tuple[str, _triton.ir.basic_block], triton.language.tensor] = {}
-        # bb => {name => phi}
-        self.incomplete_phis = {}
-        self.sealed_blocks: Set[_triton.ir.basic_block] = set()
-        #
+        self.attributes = attributes
+        self.constants = constants
+        self.function_name = function_name
+        self.is_kernel = is_kernel
+        self.last_node = None
         self.builtins = {
             'range': range,
             'min': triton.language.minimum,
@@ -110,6 +127,10 @@ class ValueConstructor:
             'isinstance': isinstance,
             'getattr': getattr,
         }
+        # SSA-construction
+        # name => triton.language.tensor
+        self.local_defs: Dict[str, triton.language.tensor] = {}
+        self.global_uses: Dict[str, triton.language.tensor] = {}
 
     def get_value(self, name):
         ''' This function:
@@ -121,6 +142,8 @@ class ValueConstructor:
         ret = None
         if name in self.lscope:
             ret = self.lscope[name]
+            if name not in self.local_defs:
+                self.global_uses[name] = ret
         # search node.id in global scope
         elif name in self.gscope:
             ret = self.gscope[name]
@@ -129,8 +152,6 @@ class ValueConstructor:
             ret = self.builtins[name]
         else:
             raise ValueError(f'{name} is not defined')
-        if is_triton_tensor(ret):
-            return self._get_tensor(name, self.builder.get_insert_block())
         return ret
 
     def set_value(self, name: str,
@@ -141,117 +162,17 @@ class ValueConstructor:
         2. store tensor in self.lvalue
         '''
         self.lscope[name] = value
-        if isinstance(value, triton.language.tensor):
-            self._set_value(name, self.builder.get_insert_block(), value)
+        self.local_defs[name] = value
 
-    #
-    # SSA-construction
-    #
-    def _get_tensor(self, name: str, bb: _triton.ir.basic_block) -> triton.language.tensor:
-        # local value numbering
-        if (name, bb) in self.lvalues:
-            return self.lvalues[(name, bb)]
-        # global value numbering
-        saved_insert_point = self.builder.get_insert_point()
-        result = self._get_tensor_recursive(name, bb)
-        self.builder.set_insert_point(saved_insert_point)
-        return result
-
-    def _get_tensor_recursive(self, name: str, bb: _triton.ir.basic_block) -> triton.language.tensor:
-        preds = bb.get_predecessors()
-        type = self.lscope[name].type
-        # some preds haven't been filled, create a phi as a proxy of the value
-        if bb not in self.sealed_blocks:
-            result = self._make_phi(type, len(preds), bb)
-            if bb in self.incomplete_phis:
-                self.incomplete_phis[bb][name] = result
-            else:
-                self.incomplete_phis[bb] = {name: result}
-        elif len(preds) == 1:
-            # one predecessor: no phi needed, try get value from pred
-            result = self._get_tensor(name, preds[0])
-        elif len(preds) == 0:
-            result = self._get_tensor(name, None)
-        else:  # multiple preds
-            phi = self._make_phi(type, len(preds), bb)
-            self._set_value(name, bb, phi)
-            result = self._add_phi_operands(name, phi)
-        self._set_value(name, bb, result)
-        return result
-
-    # returns a new phi tensor, which encausulate an ir.phi_node
-    def _make_phi(self,
-                  type: triton.language.dtype,
-                  num_values: int,
-                  bb: _triton.ir.basic_block) -> triton.language.tensor:
-        instr = bb.get_first_non_phi()
-        self.builder.set_insert_point((bb, instr))
-        ir_phi = self.builder.create_phi(type.to_ir(self.builder), num_values)
-        if instr:
-            self.builder.set_insert_block(bb)
-        return triton.language.tensor(ir_phi, type)
-
-    # complete a phi node. (TODO: rename this as _complete_phis?)
-    # Note: since we try to remove tryival phi, the return tensor might not be a phi
-    def _add_phi_operands(self, name: str,
-                          phi: triton.language.tensor) -> triton.language.tensor:
-        bb = phi.handle.get_parent()
-        for pred in bb.get_predecessors():
-            v = self._get_tensor(name, pred)
-            phi.handle.add_incoming(v.handle, pred)
-        phi = self._try_remove_trivial_phi(phi)
-        return phi
-
-    def _set_value(self, name: str, bb: _triton.ir.basic_block, value: triton.language.tensor) -> None:
-        self.lvalues[(name, bb)] = value
-        # TODO: why we need this?
-        self.module.set_instr_metadata(name, value.handle)
-
-    def _seal_block(self, bb: _triton.ir.basic_block):
-        # complete all incomplete phis
-        if bb in self.incomplete_phis:
-            for name, phi in self.incomplete_phis[bb].items():
-                result = self._add_phi_operands(name, phi)
-                # it's possible that this phi is trivial
-                if self._get_tensor(name, bb).handle == phi.handle:
-                    self._set_value(name, bb, result)
-            del self.incomplete_phis[bb]
-        self.sealed_blocks.add(bb)
-
-    def _try_remove_trivial_phi(self, phi: triton.language.tensor) -> triton.language.tensor:
-        unique_handles = {op for op in phi.handle.ops() if op != phi.handle}
-        if len(unique_handles) != 1:  # non-trivial phi
-            return phi
-        v = unique_handles.pop()
-        phi.handle.replace_all_uses_with(v)
-        # phi.handle.erase_from_parent()
-        # TODO: remove trivial phis recursively
-        return triton.language.tensor(v, phi.type)
-
-
-class CodeGenerator(ast.NodeVisitor):
-
-    def __init__(self, context, prototype, gscope, attributes, constants, function_name, spec_to_1=None, prototypes=None, module=None, is_kernel=False):
-        self.spec_to_1 = set() if spec_to_1 is None else spec_to_1
-        self.prototypes = dict() if prototypes is None else prototypes
-        self.builder = _triton.ir.builder(context)
-        self.module = _triton.ir.module('', self.builder) if module is None else module
-        self.prototype = prototype
-        self.attributes = attributes
-        self.constants = constants
-        self.last_node = None
-        self.function_name = function_name
-        self.is_kernel = is_kernel
-
-        self.value_constructor = ValueConstructor(self.module, self.builder, gscope)
+    def is_triton_tensor(self, value):
+        return isinstance(value, triton.language.tensor)
 
     #
     # AST visitor
     #
-
     def visit_compound_statement(self, stmts):
         for stmt in stmts:
-            self.last_ret = self.visit(stmt)
+            self.last_ret_type = self.visit(stmt)
             if isinstance(stmt, ast.Return):
                 break
         return stmts and isinstance(stmt, ast.Return)
@@ -267,15 +188,22 @@ class CodeGenerator(ast.NodeVisitor):
 
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
-        ret = self.visit(node.value)
-        if ret is None:
-            return triton.language.tensor(self.builder.ret_void(), triton.language.void)
-        ret = triton.language.core._to_tensor(ret, self.builder)
-        ret = triton.language.tensor(self.builder.ret(ret.handle), ret.type)
-        return ret
+        ret_value = self.visit(node.value)
+        if ret_value is None:
+            self.builder.ret([])
+            return None
+        if isinstance(ret_value, tuple):
+            ret_values = [triton.language.core._to_tensor(v, self.builder) for v in ret_value]
+            ret_types = [v.type for v in ret_values]
+            self.builder.ret([v.handle for v in ret_values])
+            return tuple(ret_types)
+        else:
+            ret = triton.language.core._to_tensor(ret_value, self.builder)
+            self.builder.ret([ret.handle])
+            return ret.type
 
     def visit_FunctionDef(self, node):
-        arg_names, arg_annotations, kwarg_names = self.visit(node.args)
+        arg_names, kwarg_names = self.visit(node.args)
         # initialize defaults
         for i, default_value in enumerate(node.args.defaults):
             arg_node = node.args.args[-i - 1]
@@ -288,58 +216,55 @@ class CodeGenerator(ast.NodeVisitor):
                 init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation)
             self.visit(init_node)
         # initialize function
-        self.prototypes[self.function_name] = self.prototype
-        fn = self.module.get_or_insert_function(self.function_name, self.prototype.to_ir(self.builder))
-        fn.set_is_kernel(self.is_kernel)
+        visibility = "public" if self.is_kernel else "private"
+        fn = self.builder.get_or_insert_function(self.module, self.function_name, self.prototype.to_ir(self.builder), visibility)
+        self.module.push_back(fn)
+        entry = fn.add_entry_block()
         arg_values = []
         idx = 0
-        for i, (arg_name, annotation) in enumerate(zip(arg_names, arg_annotations)):
+        for i, arg_name in enumerate(arg_names):
             if i in self.constants:
                 cst = self.constants[i]
                 if not isinstance(cst, triton.language.constexpr):
                     cst = triton.language.constexpr(self.constants[i])
                 arg_values.append(cst)
                 continue
-            if i in self.attributes:
-                is_ptr = fn.args[idx].type.is_ptr()
-                attr = 'aligned' if is_ptr else 'multiple_of'
-                attr = getattr(_triton.ir.attribute_kind, attr)
-                attr = _triton.ir.attribute(attr, self.attributes[i][1])
-                fn.add_attr(idx + 1, attr)
-            fn.args[idx].name = arg_name
-            arg_values.append(triton.language.tensor(fn.args[idx], self.prototype.param_types[idx]))
-            idx += 1
+            else:
+                if i in self.attributes:
+                    fn.set_arg_attr(idx, "tt.divisibility", self.attributes[i][1])
+                arg_values.append(triton.language.tensor(fn.args(idx), self.prototype.param_types[idx]))
+                idx += 1
 
-        insert_pt = self.builder.get_insert_block()
-        entry = _triton.ir.basic_block.create(self.builder.context, "entry", fn)
-        self.builder.set_insert_block(entry)
-        self.value_constructor._seal_block(entry)
+        insert_pt = self.builder.get_insertion_block()
         for arg_name, arg_value in zip(arg_names, arg_values):
-            self.value_constructor.set_value(arg_name, arg_value)
+            self.set_value(arg_name, arg_value)
+        self.builder.set_insertion_point_to_start(entry)
         # visit function body
         has_ret = self.visit_compound_statement(node.body)
-        # finalize
+        # finalize function
         if not has_ret:
-            self.builder.ret_void()
+            self.builder.ret([])
         else:
-            # a bit hacky: we only know the return type at the last moment so we update type info here
-            self.module.reset_ret_ty(self.function_name, self.last_ret.type.to_ir(self.builder))
-            self.prototype.ret_type = self.last_ret.type
-        self.builder.set_insert_block(insert_pt)
+            # update return type
+            if isinstance(self.last_ret_type, tuple):
+                self.prototype.ret_types = list(self.last_ret_type)
+                fn.reset_type(self.prototype.to_ir(self.builder))
+            else:
+                self.prototype.ret_types = [self.last_ret_type]
+                fn.reset_type(self.prototype.to_ir(self.builder))
+        if insert_pt:
+            self.builder.set_insertion_point_to_end(insert_pt)
 
     def visit_arguments(self, node):
         arg_names = []
-        arg_annotations = []
         for arg in node.args:
-            curr = self.visit(arg)
-            arg_names += [curr[0]]
-            arg_annotations += [curr[1]]
+            arg_names += [self.visit(arg)]
         kwarg_names = self.visit(node.kwarg)
-        return arg_names, arg_annotations, kwarg_names
+        return arg_names, kwarg_names
 
     def visit_arg(self, node):
         ast.NodeVisitor.generic_visit(self, node)
-        return node.arg, node.annotation
+        return node.arg
 
     def visit_AnnAssign(self, node):
         # extract attributes
@@ -348,13 +273,13 @@ class CodeGenerator(ast.NodeVisitor):
         value = self.visit(node.value)
         # constexpr
         if annotation == triton.language.constexpr:
-            if target in self.value_constructor.lscope:
+            if target in self.lscope:
                 raise ValueError(f'{target} is already defined.'
                                  f' constexpr cannot be reassigned.')
             if not isinstance(value, triton.language.constexpr):
                 value = triton.language.constexpr(value)
-            self.value_constructor.lscope[target] = value
-            return self.value_constructor.lscope[target]
+            self.lscope[target] = value
+            return self.lscope[target]
         # default: call visit_Assign
         return self.visit_Assign(node)
 
@@ -369,23 +294,13 @@ class CodeGenerator(ast.NodeVisitor):
             names = [names]
         if not isinstance(values, tuple):
             values = [values]
-        if isinstance(values[0], triton.language.tensor) \
-                and isinstance(values[0].type, triton.language.tuple_type):
-            struct = values[0].handle
-            tys = values[0].type.element_types
-            values = [self.builder.extract_value(struct, i) for i in range(len(tys))]
-            values = [triton.language.tensor(v, ty) for v, ty in zip(values, tys)]
-        assert len(values) == len(names)
         for name, value in zip(names, values):
-            # TODO: can we store constexpr here to support constant folding?
             # by default, constexpr are assigned into python variable
             if isinstance(value, triton.language.constexpr):
                 value = value.value
-            if value is None:
-                raise ValueError(f'Cannot assign None to non-constexpr `{name}`. Please annotate as `: tl.constexpr`')
             if not isinstance(value, triton.language.tensor):
                 value = triton.language.core._to_tensor(value, self.builder)
-            self.value_constructor.set_value(name, value)
+            self.set_value(name, value)
 
     def visit_AugAssign(self, node):
         name = node.target.id
@@ -393,12 +308,12 @@ class CodeGenerator(ast.NodeVisitor):
         rhs = ast.BinOp(lhs, node.op, node.value)
         assign = ast.Assign(targets=[node.target], value=rhs)
         self.visit(assign)
-        return self.value_constructor.get_value(name)
+        return self.get_value(name)
 
     def visit_Name(self, node):
         if type(node.ctx) == ast.Store:
             return node.id
-        return self.value_constructor.get_value(node.id)
+        return self.get_value(node.id)
 
     def visit_Store(self, node):
         ast.NodeVisitor.generic_visit(self, node)
@@ -408,27 +323,11 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Tuple(self, node):
         args = [self.visit(x) for x in node.elts]
-        mode = type(args[0])
-        # tuple of values -- create a struct
-        if len(args) > 1 and mode == triton.language.tensor\
-                and all([type(arg) == mode for arg in args]):
-            tuple_ty = triton.language.tuple_type([arg.type for arg in args])
-            ret = _triton.ir.undef.get(tuple_ty.to_ir(self.builder))
-            for i, arg in enumerate(args):
-                ret = self.builder.insert_value(ret, arg.handle, i)
-            ret = triton.language.tensor(ret, tuple_ty)
-            return ret
         return tuple(args)
 
     def visit_BinOp(self, node):
-        # visit operand
         lhs = self.visit(node.left)
         rhs = self.visit(node.right)
-        is_lhs_constexpr = isinstance(lhs, triton.language.constexpr)
-        is_rhs_constexpr = isinstance(rhs, triton.language.constexpr)
-        lhs = lhs.value if is_lhs_constexpr else lhs
-        rhs = rhs.value if is_rhs_constexpr else rhs
-        # get function name
         fn = {
             ast.Add: '__add__',
             ast.Sub: '__sub__',
@@ -443,13 +342,9 @@ class CodeGenerator(ast.NodeVisitor):
             ast.BitOr: '__or__',
             ast.BitXor: '__xor__',
         }[type(node.op)]
-        # return a new constexpr if both arg are constexprs
-        if is_lhs_constexpr and is_rhs_constexpr:
-            return triton.language.constexpr(getattr(lhs, fn)(rhs))
-        # call operator
-        if is_triton_tensor(lhs):
+        if self.is_triton_tensor(lhs):
             return getattr(lhs, fn)(rhs, _builder=self.builder)
-        elif is_triton_tensor(rhs):
+        elif self.is_triton_tensor(rhs):
             fn = fn[:2] + 'r' + fn[2:]
             return getattr(rhs, fn)(lhs, _builder=self.builder)
         else:
@@ -459,29 +354,77 @@ class CodeGenerator(ast.NodeVisitor):
         cond = self.visit(node.test)
         if isinstance(cond, triton.language.tensor):
             cond = cond.to(triton.language.int1, _builder=self.builder)
-            current_bb = self.builder.get_insert_block()
-            then_bb = _triton.ir.basic_block.create(self.builder.context, "then", current_bb.parent)
-            else_bb = _triton.ir.basic_block.create(self.builder.context, "else", current_bb.parent) if node.orelse else None
-            endif_bb = _triton.ir.basic_block.create(self.builder.context, "endif", current_bb.parent)
-            self.value_constructor._seal_block(then_bb)
-            if else_bb:
-                self.value_constructor._seal_block(else_bb)
-                self.builder.cond_br(cond.handle, then_bb, else_bb)
-            else:
-                self.builder.cond_br(cond.handle, then_bb, endif_bb)
-            self.builder.set_insert_block(then_bb)
-            is_terminator = self.visit_compound_statement(node.body)
-            # TODO: last statement is a terminator?
-            if not is_terminator:
-                self.builder.br(endif_bb)
-            if else_bb:
-                self.builder.set_insert_block(else_bb)
-                is_terminator = self.visit_compound_statement(node.orelse)
-                # TODO: last statement is a terminator?
-                if not is_terminator:
-                    self.builder.br(endif_bb)
-            self.value_constructor._seal_block(endif_bb)
-            self.builder.set_insert_block(endif_bb)
+            with enter_sub_region(self) as sr:
+                liveins, ip_block = sr
+                liveins_copy = liveins.copy()
+                then_block = self.builder.create_block()
+                self.builder.set_insertion_point_to_start(then_block)
+                self.visit_compound_statement(node.body)
+                then_defs = self.local_defs.copy()
+
+                # when need an else block when:
+                # 1. we have an orelse node
+                #   or
+                # 2. the then block defines new variable
+                else_defs = {}
+                if then_defs or node.orelse:
+                    if node.orelse:
+                        self.lscope = liveins
+                        self.local_defs = {}
+                        else_block = self.builder.create_block()
+                        self.builder.set_insertion_point_to_end(else_block)
+                        self.visit_compound_statement(node.orelse)
+                        else_defs = self.local_defs.copy()
+                    else:
+                        # collect else_defs
+                        for name in then_defs:
+                            if name in liveins:
+                                assert self.is_triton_tensor(then_defs[name])
+                                assert self.is_triton_tensor(liveins[name])
+                                else_defs[name] = liveins[name]
+                # collect yields
+                names = []
+                ret_types = []
+                for then_name in then_defs:
+                    for else_name in else_defs:
+                        if then_name == else_name:
+                            if then_defs[then_name].type == else_defs[else_name].type:
+                                names.append(then_name)
+                                ret_types.append(then_defs[then_name].type)
+
+                # defined in else block but not in then block
+                # to find in parent scope and yield them
+                for else_name in else_defs:
+                    if else_name in liveins and else_name not in then_defs:
+                        if else_defs[else_name].type == liveins[else_name].type:
+                            names.append(else_name)
+                            ret_types.append(else_defs[else_name].type)
+                            then_defs[else_name] = liveins_copy[else_name]
+                self.builder.set_insertion_point_to_end(ip_block)
+
+                if then_defs or node.orelse:  # with else block
+                    if_op = self.builder.create_if_op([ty.to_ir(self.builder) for ty in ret_types], cond.handle, True)
+                    then_block.merge_block_before(if_op.get_then_block())
+                    self.builder.set_insertion_point_to_end(if_op.get_then_block())
+                    if len(names) > 0:
+                        self.builder.create_yield_op([then_defs[n].handle for n in names])
+                    if not node.orelse:
+                        else_block = if_op.get_else_block()
+                    else:
+                        else_block.merge_block_before(if_op.get_else_block())
+                    self.builder.set_insertion_point_to_end(if_op.get_else_block())
+                    if len(names) > 0:
+                        self.builder.create_yield_op([else_defs[n].handle for n in names])
+                else:  # no else block
+                    if_op = self.builder.create_if_op([ty.to_ir(self.builder) for ty in ret_types], cond.handle, False)
+                    then_block.merge_block_before(if_op.get_then_block())
+
+            # update values yielded by IfOp
+            for i, name in enumerate(names):
+                new_tensor = triton.language.core.tensor(if_op.get_result(i), ret_types[i])
+                self.lscope[name] = new_tensor
+                self.local_defs[name] = new_tensor
+
         else:
             if isinstance(cond, triton.language.constexpr):
                 cond = cond.value
@@ -505,16 +448,14 @@ class CodeGenerator(ast.NodeVisitor):
         assert len(node.ops) == 1
         lhs = self.visit(node.left)
         rhs = self.visit(node.comparators[0])
-        is_lhs_constexpr = isinstance(lhs, triton.language.constexpr)
-        is_rhs_constexpr = isinstance(rhs, triton.language.constexpr)
-        lhs = lhs.value if is_lhs_constexpr else lhs
-        rhs = rhs.value if is_rhs_constexpr else rhs
-        # handle `is`` and `is not``
+        if isinstance(lhs, triton.language.constexpr):
+            lhs = lhs.value
+        if isinstance(rhs, triton.language.constexpr):
+            rhs = rhs.value
         if type(node.ops[0]) == ast.Is:
             return triton.language.constexpr(lhs is rhs)
         if type(node.ops[0]) == ast.IsNot:
             return triton.language.constexpr(lhs is not rhs)
-        # function name
         fn = {
             ast.Eq: '__eq__',
             ast.NotEq: '__ne__',
@@ -523,17 +464,13 @@ class CodeGenerator(ast.NodeVisitor):
             ast.Gt: '__gt__',
             ast.GtE: '__ge__',
         }[type(node.ops[0])]
-        # return a new constexpr if both arg are constexprs
-        if is_lhs_constexpr and is_rhs_constexpr:
-            return triton.language.constexpr(getattr(lhs, fn)(rhs))
-        # call operator
-        if is_triton_tensor(lhs):
+        if self.is_triton_tensor(lhs):
             return getattr(lhs, fn)(rhs, _builder=self.builder)
-        elif is_triton_tensor(rhs):
+        elif self.is_triton_tensor(rhs):
             fn = fn[:2] + 'r' + fn[2:]
             return getattr(rhs, fn)(lhs, _builder=self.builder)
         else:
-            assert False
+            return getattr(lhs, fn)(rhs)
 
     def visit_UnaryOp(self, node):
         op = self.visit(node.operand)
@@ -545,38 +482,79 @@ class CodeGenerator(ast.NodeVisitor):
             ast.UAdd: '__pos__',
             ast.Invert: '__invert__',
         }[type(node.op)]
-        if isinstance(op, triton.language.constexpr):
-            return triton.language.constexpr(getattr(op.value, fn)())
-        assert is_triton_tensor(op)
-        return getattr(op, fn)(_builder=self.builder)
+        if self.is_triton_tensor(op):
+            return getattr(op, fn)(_builder=self.builder)
+        return getattr(op, fn)()
 
     def visit_While(self, node):
-        current_bb = self.builder.get_insert_block()
-        loop_bb = _triton.ir.basic_block.create(self.builder.context, "loop", current_bb.parent)
-        next_bb = _triton.ir.basic_block.create(self.builder.context, "postloop", current_bb.parent)
+        with enter_sub_region(self) as sr:
+            liveins, insert_block = sr
 
-        def continue_fn():
+            # condition (the before region)
+            cond_block = self.builder.create_block()
+            self.builder.set_insertion_point_to_start(cond_block)
             cond = self.visit(node.test)
-            return self.builder.cond_br(cond.handle, loop_bb, next_bb)
 
-        continue_fn()
-        self.builder.set_insert_block(loop_bb)
-        self.visit_compound_statement(node.body)
-        continue_fn()
-        stop_bb = self.builder.get_insert_block()
-        self.value_constructor._seal_block(stop_bb)
-        self.value_constructor._seal_block(loop_bb)
-        self.value_constructor._seal_block(next_bb)
-        self.builder.set_insert_block(next_bb)
+            # loop body (the after region)
+            loop_block = self.builder.create_block()
+            self.builder.set_insertion_point_to_start(loop_block)
+            self.visit_compound_statement(node.body)
+            loop_defs = self.local_defs
+
+            # collect loop-carried values
+            names = []
+            ret_types = []
+            init_args = []
+            yields = []
+            for name in loop_defs:
+                if name in liveins:
+                    # We should not def new constexpr
+                    assert self.is_triton_tensor(loop_defs[name])
+                    assert self.is_triton_tensor(liveins[name])
+                    if loop_defs[name].type == liveins[name].type:
+                        # these are loop-carried values
+                        names.append(name)
+                        ret_types.append(loop_defs[name].type)
+                        init_args.append(liveins[name])
+                        yields.append(loop_defs[name])
+
+            self.builder.set_insertion_point_to_end(insert_block)
+            while_op = self.builder.create_while_op([ty.to_ir(self.builder) for ty in ret_types],
+                                                    [arg.handle for arg in init_args])
+            # merge the condition region
+            before_block = self.builder.create_block_with_parent(while_op.get_before(),
+                                                                 [ty.to_ir(self.builder) for ty in ret_types])
+            cond_block.merge_block_before(before_block)
+            self.builder.set_insertion_point_to_end(before_block)
+            # create ConditionOp: e.g., scf.condition(%cond) %arg0, %arg1, ...
+            self.builder.create_condition_op(cond.handle, [before_block.arg(i) for i in range(len(init_args))])
+            # merge the loop body
+            after_block = self.builder.create_block_with_parent(while_op.get_after(),
+                                                                [ty.to_ir(self.builder) for ty in ret_types])
+            loop_block.merge_block_before(after_block)
+            self.builder.set_insertion_point_to_end(after_block)
+            self.builder.create_yield_op([y.handle for y in yields])
+
+        # update global uses in while_op
+        for i, name in enumerate(names):
+            before_block.replace_use_in_block_with(init_args[i].handle, before_block.arg(i))
+            after_block.replace_use_in_block_with(init_args[i].handle, after_block.arg(i))
+
+        # WhileOp defines new values, update the symbol table (lscope, local_defs)
+        for i, name in enumerate(names):
+            new_def = triton.language.core.tensor(while_op.get_result(i), ret_types[i])
+            self.lscope[name] = new_def
+            self.local_defs[name] = new_def
 
         for stmt in node.orelse:
+            assert False, "Not implemented"
             ast.NodeVisitor.generic_visit(self, stmt)
 
     def visit_Subscript(self, node):
         assert node.ctx.__class__.__name__ == "Load"
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
-        if is_triton_tensor(lhs):
+        if self.is_triton_tensor(lhs):
             return lhs.__getitem__(slices, _builder=self.builder)
         return lhs[slices]
 
@@ -585,76 +563,103 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_For(self, node):
         iterator = self.visit(node.iter.func)
-        if iterator != self.value_constructor.builtins['range']:
+        if iterator != self.builtins['range']:
             raise RuntimeError('Only `range` iterator currently supported')
-        # static for loops: all iterator arguments are constexpr
+        # visit iterator arguments
+        # note: only `range` iterator is supported now
         iter_args = [self.visit(arg) for arg in node.iter.args]
-        is_static = all([isinstance(x, triton.language.constexpr) for x in iter_args])
-        if is_static:
-            st_target = ast.Name(id=node.target.id, ctx=ast.Store())
-            iter_args = [arg.value for arg in iter_args]
-            range = iterator(*iter_args)
-            if len(range) <= 10:
-                for i in iterator(*iter_args):
-                    self.value_constructor.lscope[node.target.id] = triton.language.constexpr(i)
+        # collect lower bound (lb), upper bound (ub), and step
+        lb = iter_args[0] if len(iter_args) > 1 else self.visit(ast.Num(0))
+        ub = iter_args[1] if len(iter_args) > 1 else self.visit(node.iter.args[0])
+        step = iter_args[2] if len(iter_args) > 2 else self.visit(ast.Num(1))
+        # static for loops: all iterator arguments are constexpr
+        if isinstance(lb, triton.language.constexpr) and \
+           isinstance(ub, triton.language.constexpr) and \
+           isinstance(step, triton.language.constexpr):
+            sta_range = iterator(lb.value, ub.value, step.value)
+            static_unrolling = os.environ.get('TRITON_STATIC_LOOP_UNROLLING', False)
+            if static_unrolling and len(sta_range) <= 10:
+                for i in sta_range:
+                    self.lscope[node.target.id] = triton.language.constexpr(i)
                     self.visit_compound_statement(node.body)
                     for stmt in node.orelse:
                         ast.NodeVisitor.generic_visit(self, stmt)
                 return
+        # handle negative constant step (not supported by scf.for in MLIR)
+        negative_step = False
+        if isinstance(step, triton.language.constexpr) and step.value < 0:
+            step = triton.language.constexpr(-step.value)
+            negative_step = True
+            lb, ub = ub, lb
+        # lb/ub/step might be constexpr, we need to cast them to tensor
+        lb = triton.language.core._to_tensor(lb, self.builder).handle
+        ub = triton.language.core._to_tensor(ub, self.builder).handle
+        step = triton.language.core._to_tensor(step, self.builder).handle
+        # ForOp can only accept IndexType as lb/ub/step. Cast integer to Index
+        lb = self.builder.create_to_index(lb)
+        ub = self.builder.create_to_index(ub)
+        step = self.builder.create_to_index(step)
+        # Create placeholder for the loop induction variable
+        iv = self.builder.create_undef(self.builder.get_int32_ty())
+        self.set_value(node.target.id, triton.language.core.tensor(iv, triton.language.core.int32))
 
-        # create nodes
-        st_target = ast.Name(id=node.target.id, ctx=ast.Store())
-        ld_target = ast.Name(id=node.target.id, ctx=ast.Load())
-        arg_0 = node.iter.args[0] if len(node.iter.args) > 1 else ast.Num(0)
-        arg_1 = node.iter.args[1] if len(node.iter.args) > 1 else node.iter.args[0]
-        arg_2 = node.iter.args[2] if len(node.iter.args) > 2 else ast.Num(1)
-        # init node
-        init_node = ast.Assign(targets=[st_target], value=arg_0)
+        with enter_sub_region(self) as sr:
+            liveins, insert_block = sr
 
-        # step node
-        pos_cond_node = ast.Compare(ld_target, [ast.Lt()], [arg_1])
-        neg_cond_node = ast.Compare(ld_target, [ast.Gt()], [arg_1])
-        pos_step_node = ast.Compare(arg_2, [ast.Gt()], [ast.Num(0)])
-        build_cond = lambda: triton.language.where(self.visit(pos_step_node),
-                                                   self.visit(pos_cond_node),
-                                                   self.visit(neg_cond_node),
-                                                   _builder=self.builder)
-        # cond_node = neg_cond_node
-        step_node = ast.AugAssign(target=st_target, op=ast.Add(), value=arg_2)
-        # code generation
-        current_bb = self.builder.get_insert_block()
-        loop_bb = _triton.ir.basic_block.create(self.builder.context, "loop", current_bb.parent)
-        next_bb = _triton.ir.basic_block.create(self.builder.context, "postloop", current_bb.parent)
+            # create loop body block
+            block = self.builder.create_block()
+            self.builder.set_insertion_point_to_start(block)
 
-        def continue_fn():
-            self.visit(step_node)
-            cond = build_cond()
-            return self.builder.cond_br(cond.handle, loop_bb, next_bb)
+            # visit loop body
+            self.visit_compound_statement(node.body)
 
-        # init loop induction variable
-        self.visit(init_node)
-        # promote it to right type
-        init_val = self.value_constructor.get_value(node.target.id)
-        promote = lambda a, b: triton.language.semantic.computation_type_impl(a, b, False)
-        start_ty = triton.language.core._to_tensor(iter_args[0], self.builder).type
-        stop_ty = triton.language.core._to_tensor(iter_args[1], self.builder).type if len(iter_args) > 1 else None
-        ty = promote(start_ty, stop_ty) if len(iter_args) > 1 else start_ty
-        casted = triton.language.semantic.cast(init_val, ty, self.builder)
-        self.value_constructor.set_value(node.target.id, casted)
-        # create cond
-        cond = build_cond()
-        self.builder.cond_br(cond.handle, loop_bb, next_bb)
-        self.builder.set_insert_block(loop_bb)
-        self.visit_compound_statement(node.body)
-        # TODO: handle case where body breaks control flow
-        continue_fn()
-        stop_bb = self.builder.get_insert_block()
-        self.value_constructor._seal_block(stop_bb)
-        self.value_constructor._seal_block(loop_bb)
-        self.value_constructor._seal_block(next_bb)
-        self.builder.set_insert_block(next_bb)
+            # If a variable (name) is defined in both its parent & itself, then it's
+            # a loop-carried variable. (They must be of the same type)
+            init_args = []
+            yields = []
+            names = []
+            for name in self.local_defs:
+                if name in liveins:
+                    assert self.is_triton_tensor(self.local_defs[name]), f'{name} is not tensor'
+                    assert self.is_triton_tensor(liveins[name])
+                    if self.local_defs[name].type != liveins[name].type:
+                        local_value = self.local_defs[name]
+                        self.local_defs[name] = local_value.to(liveins[name].dtype, _builder=self.builder)
+                    names.append(name)
+                    init_args.append(triton.language.core._to_tensor(liveins[name], self.builder))
+                    yields.append(triton.language.core._to_tensor(self.local_defs[name], self.builder))
+
+            # create ForOp
+            self.builder.set_insertion_point_to_end(insert_block)
+            for_op = self.builder.create_for_op(lb, ub, step, [arg.handle for arg in init_args])
+            block.merge_block_before(for_op.get_body(0))
+
+            # update induction variable with actual value, and replace all uses
+            self.builder.set_insertion_point_to_start(for_op.get_body(0))
+            iv = self.builder.create_index_to_si(for_op.get_induction_var())
+            if negative_step:
+                ub_si = self.builder.create_index_to_si(ub)
+                iv = self.builder.create_sub(ub_si, iv)
+            self.lscope[node.target.id].handle.replace_all_uses_with(iv)
+            self.set_value(node.target.id, triton.language.core.tensor(iv, triton.language.core.int32))
+
+            # create YieldOp
+            self.builder.set_insertion_point_to_end(for_op.get_body(0))
+            if len(yields) > 0:
+                self.builder.create_yield_op([y.handle for y in yields])
+            for_op_region = for_op.get_body(0).get_parent()
+            assert for_op_region.size() == 1, "We use SCF, so the loop body should only have one block"
+            # replace global uses with block arguments
+            for i, name in enumerate(names):
+                # arg0 is the induction variable
+                for_op.get_body(0).replace_use_in_block_with(init_args[i].handle, for_op.get_body(0).arg(i + 1))
+
+        # update lscope & local_defs (ForOp defines new values)
+        for i, name in enumerate(names):
+            self.set_value(name, triton.language.core.tensor(for_op.get_result(i), yields[i].type))
 
         for stmt in node.orelse:
+            assert False, "Don't know what to do with else after for"
             ast.NodeVisitor.generic_visit(self, stmt)
 
     def visit_Slice(self, node):
@@ -677,7 +682,6 @@ class CodeGenerator(ast.NodeVisitor):
         for keyword in node.keywords:
             kws.update(self.visit(keyword))
         args = [self.visit(arg) for arg in node.args]
-
         if isinstance(fn, triton.runtime.JITFunction):
             from inspect import getcallargs
             args = getcallargs(fn.fn, *args, **kws)
@@ -695,50 +699,58 @@ class CodeGenerator(ast.NodeVisitor):
             fn_name = mangle_fn(fn.__name__, arg_types, constants)
             # generate function def if necessary
             if not self.module.has_function(fn_name):
-                ret_type = triton.language.void
-                prototype = triton.language.function_type(ret_type, arg_types)
+                prototype = triton.language.function_type([], arg_types)
                 gscope = sys.modules[fn.fn.__module__].__dict__
-                generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, function_name=fn_name, prototypes=self.prototypes, module=self.module)
+                generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types)
                 generator.visit(fn.parse())
+                callee_ret_type = generator.last_ret_type
+                self.function_ret_types[fn_name] = callee_ret_type
+            else:
+                callee_ret_type = self.function_ret_types[fn_name]
             symbol = self.module.get_function(fn_name)
-            ret = self.builder.call(symbol, arg_vals)
-            if not ret.type.is_void():
-                ret = triton.language.tensor(ret, self.prototypes[fn_name].ret_type)
-            return ret
-        # built-in function
-        if sys.modules[fn.__module__] is triton.language.core or isinstance(fn, triton.language.extern.ExternalFunction):
-            ret = fn(*args, _builder=self.builder, **kws)
-        if fn in self.value_constructor.builtins.values():
+            call_op = self.builder.call(symbol, arg_vals)
+            if call_op.get_num_results() == 0 or callee_ret_type is None:
+                return None
+            elif call_op.get_num_results() == 1:
+                return triton.language.tensor(call_op.get_result(0), callee_ret_type)
+            else:
+                # should return a tuple of tl.tensor
+                results = []
+                for i in range(call_op.get_num_results()):
+                    results.append(triton.language.tensor(call_op.get_result(i), callee_ret_type[i]))
+                return tuple(results)
+        if (hasattr(fn, '__self__') and self.is_triton_tensor(fn.__self__)) \
+                or impl.is_builtin(fn):
+            return fn(*args, _builder=self.builder, **kws)
+        if fn in self.builtins.values():
             args = [arg.value if isinstance(arg, triton.language.constexpr) else arg
                     for arg in args]
-            ret = fn(*args, **kws)
-            if isinstance(ret, (bool, int, float)):
-                ret = triton.language.core.constexpr(ret)
-            else:
-                ret = triton.language.core._to_tensor(ret, self.builder)
-        # special case: dynamic parallelism
-        # in this case the core primitive returns a proxy
-        # if isinstance(ret, triton.language.core.LaunchProxy):
-        #     ret_type  = _triton.ir.type.get_void(self.builder.context)
-        #     arg_tys = [x.type for x in ret.args]
-        #     prototype = _triton.ir.type.make_function(ret_type, arg_tys)
-        #     gscope = sys.modules[ret.fn.fn.__module__].__dict__
-        #     constants = ret.constants
-        #     fn_name = mangle_fn(ret.fn.__name__, arg_tys, ret.constants)
-        #     # TODO: clean-up attributes handling in function
-        #     if not self.module.has_function(fn_name):
-        #         attributes = {i: list(arg.parent.get_attrs(arg))[0].value for i, arg in enumerate(ret.args) \
-        #                 if isinstance(arg, _triton.ir.argument) and arg.parent.has_attr(i + 1) }
-        #         generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, is_kernel=True)
-        #         generator.visit(ret.fn.parse())
-        #     symbol = self.module.get_function(fn_name)
-        #     # TODO: should ret.args not include any constants ?
-        #     ret = self.builder.launch(symbol, ret.args, ret.grid, ret.num_warps)
-        return ret
-        # return fn(*args, **kws)
+        return fn(*args, **kws)
 
     def visit_Constant(self, node):
         return triton.language.constexpr(node.value)
+
+    def visit_BoolOp(self, node: ast.BoolOp):
+        assert len(node.values) == 2
+        lhs = self.visit(node.values[0])
+        rhs = self.visit(node.values[1])
+        if isinstance(lhs, triton.language.constexpr):
+            lhs = lhs.value
+        if isinstance(rhs, triton.language.constexpr):
+            rhs = rhs.value
+
+        fn = {
+            ast.And: 'logical_and',
+            ast.Or: 'logical_or',
+        }[type(node.op)]
+
+        if self.is_triton_tensor(lhs):
+            return getattr(lhs, fn)(rhs, _builder=self.builder)
+        elif self.is_triton_tensor(rhs):
+            fn = fn[:2] + 'r' + fn[2:]
+            return getattr(rhs, fn)(lhs, _builder=self.builder)
+        else:
+            return getattr(lhs, fn)(rhs)
 
     if sys.version_info < (3, 8):
         def visit_NameConstant(self, node):
@@ -752,6 +764,9 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Attribute(self, node):
         lhs = self.visit(node.value)
+        if isinstance(lhs, triton.language.tensor):
+            if node.attr == "T":
+                return triton.language.semantic.trans(lhs, builder=self.builder)
         return getattr(lhs, node.attr)
 
     def visit_Expr(self, node):
@@ -794,6 +809,7 @@ class OutOfResources(Exception):
         self.message = f'out of resource: {name}, '\
                        f'Required: {required}, '\
                        f'Hardware limit: {limit}'
+        self.message += '. Reducing block sizes or `num_stages` may help.'
         self.required = required
         self.limit = limit
         self.name = name
@@ -816,9 +832,16 @@ def kernel_suffix(signature, specialization):
             suffix += 'd'
     return suffix
 
+# ------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 
-def make_triton_ir(fn, signature, specialization, constants):
+
+def build_triton_ir(fn, signature, specialization, constants):
+    # canonicalize signature
+    if isinstance(signature, str):
+        signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
     context = _triton.ir.context()
+    context.load_triton()
     # create kernel prototype
     cst_key = lambda i: fn.arg_names.index(i) if isinstance(i, str) else i
     constants = {cst_key(key): value for key, value in constants.items()}
@@ -832,7 +855,7 @@ def make_triton_ir(fn, signature, specialization, constants):
     all_constants.update(new_constants)
     arg_types = [str_to_ty(v) for k, v in signature.items() if k not in constants]
 
-    prototype = triton.language.function_type(triton.language.void, arg_types)
+    prototype = triton.language.function_type([], arg_types)
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name, attributes=new_attrs, is_kernel=True)
     try:
         generator.visit(fn.parse())
@@ -847,25 +870,81 @@ def make_triton_ir(fn, signature, specialization, constants):
     return ret, generator
 
 
-def make_ptx(mod: Any, device: int) -> Tuple[str, int]:
+def optimize_triton_ir(mod):
+    pm = _triton.ir.pass_manager(mod.context)
+    pm.enable_debug()
+    pm.add_inliner_pass()
+    pm.add_triton_combine_pass()
+    pm.add_canonicalizer_pass()
+    pm.add_cse_pass()
+    pm.add_licm_pass()
+    pm.run(mod)
+    return mod
+
+
+def ast_to_ttir(fn, signature, specialization, constants):
+    mod, _ = build_triton_ir(fn, signature, specialization, constants)
+    return optimize_triton_ir(mod)
+
+
+def ttir_to_ttgir(mod, num_warps, num_stages, compute_capability):
+    pm = _triton.ir.pass_manager(mod.context)
+    pm.add_convert_triton_to_tritongpu_pass(num_warps)
+    pm.enable_debug()
+    pm.add_coalesce_pass()
+    # The combine pass converts blocked layout to mma layout
+    # for dot ops so that pipeline can get shared memory swizzled correctly.
+    pm.add_triton_gpu_combine_pass(compute_capability)
+    pm.add_tritongpu_pipeline_pass(num_stages)
+    # Prefetch must be done after pipeline pass because pipeline pass
+    # extracts slices from the original tensor.
+    pm.add_tritongpu_prefetch_pass()
+    pm.add_canonicalizer_pass()
+    pm.add_cse_pass()
+    pm.add_triton_gpu_combine_pass(compute_capability)
+    pm.add_licm_pass()
+    pm.add_triton_gpu_combine_pass(compute_capability)
+    pm.add_cse_pass()
+    pm.run(mod)
+    return mod
+
+
+def add_external_libs(mod, libs):
+    for name, path in libs.items():
+        if len(name) == 0 or len(path) == 0:
+            return
+    _triton.add_external_libs(mod, list(libs.keys()), list(libs.values()))
+
+
+def ttgir_to_llir(mod, extern_libs, compute_capability):
+    if extern_libs:
+        add_external_libs(mod, extern_libs)
+    return _triton.translate_triton_gpu_to_llvmir(mod, compute_capability)
+
+
+def llir_to_ptx(mod: Any, compute_capability: int, ptx_version: int = None) -> Tuple[str, int]:
     '''
     Translate TritonGPU module to PTX code.
     :param mod: a TritonGPU dialect module
     :return:
         - PTX code
-        - shared memory alloaction size
+        - shared memory allocation size
     '''
-    return _triton.translate_triton_gpu_to_ptx(mod, device)
+    if ptx_version is None:
+        _, cuda_version = path_to_ptxas()
+        ptx_version = ptx_get_version(cuda_version)
+    return _triton.translate_llvmir_to_ptx(mod, compute_capability, ptx_version)
 
 
-def make_cubin(ptx, device):
+def ptx_to_cubin(ptx: str, compute_capability: int):
     '''
     Compile TritonGPU module to cubin.
     :param ptx: ptx code
-    :param device: CUDA device
+    :param compute_capability: compute capability
     :return: str
     '''
-    return _triton.compile_ptx_to_cubin(ptx, device)
+    ptxas, _ = path_to_ptxas()
+    return _triton.compile_ptx_to_cubin(ptx, ptxas, compute_capability)
 
 
 def ptx_get_kernel_name(ptx: str) -> str:
@@ -881,25 +960,57 @@ def ptx_get_kernel_name(ptx: str) -> str:
             return line.split()[-1]
 
 
-def _compile(fn, signature: str, device: int = -1, constants=dict(),
-             specialization=_triton.code_gen.instance_descriptor(),
-             num_warps: int = 4, num_stages: int = 3, extern_libs=None,
-             output: str = "ttgir", cc=0) -> Tuple[str, int, str]:
-    valid_outputs = ("ttir", "ttgir", "ptx", "cubin")
-    assert output in valid_outputs, "output should be one of [%s], but get \"%s\"" % (','.join(valid_outputs), output)
+@functools.lru_cache
+def ptx_get_version(cuda_version) -> int:
+    '''
+    Get the highest PTX version supported by the current CUDA driver.
+    '''
+    assert isinstance(cuda_version, str)
+    major, minor = map(int, cuda_version.split('.'))
+    version = major * 1000 + minor * 10
+    if version >= 11040:
+        return 74
+    if version >= 11030:
+        return 73
+    if version >= 11020:
+        return 72
+    if version >= 11010:
+        return 71
+    if version >= 11000:
+        return 70
+    if version >= 10020:
+        return 65
+    if version >= 10010:
+        return 64
+    if version >= 10000:
+        return 63
+    raise RuntimeError("Triton only support CUDA 10.0 or higher")
 
-    # triton-ir
-    module, _ = make_triton_ir(fn, signature, specialization, constants)
-    if output == "ttir":
-        return module
 
-    assert output == "cubin"
-    assert torch.version.hip is None
-    backend = _triton.runtime.backend.CUDA
-    if extern_libs is None:
-        extern_libs = dict()
-    name, asm, shared_mem = _triton.code_gen.compile_ttir(backend, module, device, num_warps, num_stages, extern_libs, cc)
-    return asm, shared_mem, name
+def path_to_ptxas():
+    prefixes = [
+        os.environ.get("TRITON_PTXAS_PATH", ""),
+        "",
+        "/usr",
+        os.environ.get('CUDA_PATH', default_cuda_dir())
+    ]
+    for prefix in prefixes:
+        ptxas = os.path.join(prefix, "bin", "ptxas")
+        if os.path.exists(ptxas):
+            result = subprocess.check_output([ptxas, "--version"], stderr=subprocess.STDOUT)
+            if result is not None:
+                version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
+                if version is not None:
+                    return ptxas, version.group(1)
+    raise RuntimeError("Cannot find ptxas")
+
+
+instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1"], defaults=[set(), set()])
+
+
+# ------------------------------------------------------------------------------
+# compiler
+# ------------------------------------------------------------------------------
 
 
 def ty_to_cpp(ty):
@@ -916,6 +1027,7 @@ def ty_to_cpp(ty):
         "fp16": "float",
         "bf16": "float",
         "fp32": "float",
+        "f32": "float",
         "fp64": "double",
     }[ty]
 
@@ -934,7 +1046,7 @@ def binary_name_to_header_name(name):
     return f"{name}.h"
 
 
-def generate_launcher(identifier, constants, signature):
+def generate_launcher(constants, signature):
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     def _extracted_type(ty):
@@ -949,6 +1061,7 @@ def generate_launcher(identifier, constants, signature):
             'fp16': 'float',
             'bf16': 'float',
             'fp32': 'float',
+            'f32': 'float',
             'fp64': 'double',
         }[ty]
 
@@ -984,8 +1097,8 @@ static inline void gpuAssert(CUresult code, const char *file, int line)
       PyErr_SetString(PyExc_RuntimeError, err);
    }}
 }}
-#define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
+#define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
 void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, CUstream stream, CUfunction function, {arg_decls}) {{
   void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
@@ -993,7 +1106,6 @@ void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, 
     CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
   }}
 }}
-
 
 static inline CUdeviceptr getPointer(PyObject *obj, int idx) {{
   if (PyLong_Check(obj)) {{
@@ -1016,7 +1128,6 @@ static inline CUdeviceptr getPointer(PyObject *obj, int idx) {{
   PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
   return (CUdeviceptr)0;
 }}
-
 
 static PyObject* launch(PyObject* self, PyObject* args) {{
   int gridX, gridY, gridZ;
@@ -1081,6 +1192,11 @@ def default_cache_dir():
     return os.path.join(os.environ["HOME"], ".triton", "cache")
 
 
+def default_cuda_dir():
+    default_dir = "/usr/local/cuda"
+    return os.getenv("CUDA_HOME", default=default_dir)
+
+
 class CacheManager:
 
     def __init__(self, key):
@@ -1104,6 +1220,9 @@ class CacheManager:
     def put(self, data, filename, binary=True):
         if not self.cache_dir:
             return
+        binary = isinstance(data, bytes)
+        if not binary:
+            data = str(data)
         assert self.lock_path is not None
         filepath = self._make_path(filename)
         with FileLock(self.lock_path):
@@ -1114,19 +1233,13 @@ class CacheManager:
             os.rename(filepath + ".tmp", filepath)
 
 
-# utilties for generating and compiling C wrappers
+# Utilities for generating and compiling C wrappers
 
 
 @functools.lru_cache()
 def libcuda_dirs():
     locs = subprocess.check_output(["whereis", "libcuda.so"]).decode().strip().split()[1:]
     return [os.path.dirname(loc) for loc in locs]
-
-
-@functools.lru_cache()
-def cuda_home_dirs():
-    default_dir = "/usr/local/cuda"
-    return os.getenv("CUDA_HOME", default=default_dir)
 
 
 @contextlib.contextmanager
@@ -1141,7 +1254,8 @@ def quiet():
 
 def _build(name, src, srcdir):
     cuda_lib_dirs = libcuda_dirs()
-    cu_include_dir = os.path.join(cuda_home_dirs(), "include")
+    cuda_path = os.environ.get('CUDA_PATH', default_cuda_dir())
+    cu_include_dir = os.path.join(cuda_path, "include")
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
@@ -1152,9 +1266,11 @@ def _build(name, src, srcdir):
         gcc = shutil.which("gcc")
         cc = gcc if gcc is not None else clang
     py_include_dir = get_paths()["include"]
+
     cc_cmd = [cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
     cc_cmd += [f"-L{dir}" for dir in cuda_lib_dirs]
     ret = subprocess.check_call(cc_cmd)
+
     if ret == 0:
         return so
     # fallback on setuptools
@@ -1207,12 +1323,26 @@ def make_fn_cache_key(fn_hash, signature, configs, constants, num_warps, num_sta
     return key
 
 
-def compile(fn, signature: str, device: int = -1, constants=dict(), constexpr=tuple(), num_warps: int = 4,
-            num_stages: int = 3, extern_libs=None, configs=None, cc=0, warm_cache_only=False):
-    # we get the kernel, i.e. the first function generated in the module
-    assert len(configs) == 1
-    # cache manager
-    name = fn.__name__
+def read_or_execute(cache_manager, force_compile, file_name, metadata,
+                    run_if_found: Callable[[str], bytes] = None,
+                    run_if_not_found: Callable = None):
+    suffix = file_name.split(".")[1]
+    if not force_compile and cache_manager.has_file(file_name):
+        module = run_if_found(cache_manager._make_path(file_name))
+        data = module if isinstance(module, bytes) else str(module).encode("utf-8")
+        md5 = hashlib.md5(data).hexdigest()
+        has_changed = metadata and md5 != metadata["md5"][suffix]
+        return module, md5, has_changed, True
+    module = run_if_not_found()
+    data = module if isinstance(module, bytes) else str(module).encode("utf-8")
+    md5 = hashlib.md5(data).hexdigest()
+    cache_manager.put(data, file_name, True if isinstance(data, bytes) else data)
+    return module, md5, True, False
+
+#
+
+
+def make_stub(name, signature, constants):
     # name of files that are cached
     so_cache_key = make_so_cache_key(triton.runtime.jit.version_key(), signature, constants)
     so_cache_manager = CacheManager(so_cache_key)
@@ -1220,40 +1350,168 @@ def compile(fn, signature: str, device: int = -1, constants=dict(), constexpr=tu
     # retrieve stub from cache if it exists
     if not so_cache_manager.has_file(so_name):
         with tempfile.TemporaryDirectory() as tmpdir:
-            src = generate_launcher(name, constants, signature)
+            src = generate_launcher(constants, signature)
             src_path = os.path.join(tmpdir, "main.c")
             with open(src_path, "w") as f:
                 f.write(src)
-            so = _build(fn.__name__, src_path, tmpdir)
+            so = _build(name, src_path, tmpdir)
             with open(so, "rb") as f:
                 so_cache_manager.put(f.read(), so_name, binary=True)
+    return so_cache_manager._make_path(so_name)
 
-    # retrieve cached shared object if it exists
-    fn_cache_key = make_fn_cache_key(fn.cache_key, signature, configs, constants, num_warps, num_stages)
-    fn_cache_manager = CacheManager(fn_cache_key)
-    ptx_name = f"{name}.ptx"
-    cubin_name = f"{name}.cubin"
-    data_name = f"{name}.json"
-    ttir_name = f"{name}.ttir"
-    llir_name = f"{name}.llir"
-    if not fn_cache_manager.has_file(cubin_name) or \
-       not fn_cache_manager.has_file(data_name) or \
-       not fn_cache_manager.has_file(ptx_name) or \
-       not fn_cache_manager.has_file(ttir_name) or \
-       not fn_cache_manager.has_file(llir_name):
-        asm, shared, kernel_name = _compile(fn, signature, device, constants, configs[0], num_warps, num_stages,
-                                            extern_libs, "cubin", cc)
-        metadata = {"name": kernel_name, "shared": shared, "num_warps": num_warps, "num_stages": num_stages, "constexpr": constexpr}
-        fn_cache_manager.put(asm["cubin"], cubin_name)
-        fn_cache_manager.put(asm["ptx"], ptx_name, binary=False)
-        fn_cache_manager.put(asm["ttir"], ttir_name, binary=False)
-        fn_cache_manager.put(asm["llir"], llir_name, binary=False)
-        fn_cache_manager.put(json.dumps(metadata), data_name, binary=False)
 
-    if warm_cache_only:
-        return  # load_binary() requires a valid cuda context
+def convert_type_repr(x):
+    match = re.search(r'!tt\.ptr<(.*)>', x)
+    if match is not None:
+        return '*' + convert_type_repr(match.group(1))
+    return x
 
-    return CompiledKernel(fn, so_cache_manager._make_path(so_name), fn_cache_manager.cache_dir, device)
+
+def make_hash(fn, **kwargs):
+    if isinstance(fn, triton.runtime.JITFunction):
+        configs = kwargs["configs"]
+        signature = kwargs["signature"]
+        constants = kwargs.get("constants", dict())
+        num_warps = kwargs.get("num_warps", 4)
+        num_stages = kwargs.get("num_stages", 3)
+        # Get unique key for the compiled code
+        get_conf_key = lambda conf: (sorted(conf.divisible_by_16), sorted(conf.equal_to_1))
+        configs_key = [get_conf_key(conf) for conf in configs]
+        key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}"
+        return hashlib.md5(key.encode("utf-8")).hexdigest()
+    assert isinstance(fn, str)
+    return hashlib.md5((Path(fn).read_text() + triton.runtime.jit.version_key()).encode("utf-8")).hexdigest()
+
+
+# - ^\s*func\s+ : match the start of the string, any leading whitespace, the keyword func,
+#    and any following whitespace
+# - (public\s+)? : optionally match the keyword public and any following whitespace
+# - (@\w+) : match an @ symbol followed by one or more word characters
+#   (letters, digits, or underscores), and capture it as group 1 (the function name)
+# - (\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\)) : match a pair of parentheses enclosing
+#   zero or more arguments separated by commas, and capture it as group 2 (the argument list)
+mlir_prototype_pattern = r'^\s*func\s+(?:public\s+)?(@\w+)(\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*\{\s*$'
+ptx_prototype_pattern = r"\.(?:visible|extern)\s+\.(?:entry|func)\s+(\w+)\s*\(([^)]*)\)"
+prototype_pattern = {
+    "ttir": mlir_prototype_pattern,
+    "ttgir": mlir_prototype_pattern,
+    "ptx": ptx_prototype_pattern,
+}
+
+mlir_arg_type_pattern = r'%\w+: ([^,^\)\s]+)(?: \{\S+ = \S+ : \S+\})?,?'
+ptx_arg_type_pattern = r"\.param\s+\.(\w+)"
+arg_type_pattern = {
+    "ttir": mlir_arg_type_pattern,
+    "ttgir": mlir_arg_type_pattern,
+    "ptx": ptx_arg_type_pattern,
+}
+
+
+# def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
+def compile(fn, **kwargs):
+    capability = kwargs.get("cc", None)
+    if capability is None:
+        device = torch.cuda.current_device()
+        capability = torch.cuda.get_device_capability(device)
+        capability = capability[0] * 10 + capability[1]
+    # we get the kernel, i.e. the first function generated in the module
+    # if fn is not a JITFunction, then it
+    # has to be a path to a file
+    context = _triton.ir.context()
+    asm = dict()
+    constants = kwargs.get("constants", dict())
+    num_warps = kwargs.get("num_warps", 4)
+    num_stages = kwargs.get("num_stages", 3 if capability >= 75 else 2)
+    extern_libs = kwargs.get("extern_libs", dict())
+    # build compilation stages
+    stages = {
+        "ast": (lambda path: fn, None),
+        "ttir": (lambda path: _triton.ir.parse_mlir_module(path, context),
+                 lambda src: ast_to_ttir(src, signature, configs[0], constants)),
+        "ttgir": (lambda path: _triton.ir.parse_mlir_module(path, context),
+                  lambda src: ttir_to_ttgir(src, num_warps, num_stages, capability)),
+        "llir": (lambda path: Path(path).read_bytes(),
+                 lambda src: ttgir_to_llir(src, extern_libs, capability)),
+        "ptx": (lambda path: Path(path).read_text(),
+                lambda src: llir_to_ptx(src, capability)),
+        "cubin": (lambda path: Path(path).read_bytes(),
+                  lambda src: ptx_to_cubin(src, capability))
+    }
+    # find out the signature of the function
+    if isinstance(fn, triton.runtime.JITFunction):
+        configs = kwargs.get("configs", None)
+        signature = kwargs["signature"]
+        if configs is None:
+            configs = [instance_descriptor()]
+        assert len(configs) == 1
+        kwargs["configs"] = configs
+        name = fn.__name__
+        first_stage = 0
+        if isinstance(signature, str):
+            signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
+        kwargs["signature"] = signature
+    else:
+        assert isinstance(fn, str)
+        _, ir = os.path.basename(fn).split(".")
+        src = Path(fn).read_text()
+        import re
+        match = re.search(prototype_pattern[ir], src, re.MULTILINE)
+        name, signature = match.group(1), match.group(2)
+        print(name, signature)
+        types = re.findall(arg_type_pattern[ir], signature)
+        print(types)
+        param_tys = [convert_type_repr(ty) for ty in types]
+        signature = {k: v for k, v in enumerate(param_tys)}
+        first_stage = list(stages.keys()).index(ir)
+
+    # cache manager
+    so_path = make_stub(name, signature, constants)
+    # create cache manager
+    fn_cache_manager = CacheManager(make_hash(fn, **kwargs))
+    # determine name and extension type of provided function
+    if isinstance(fn, triton.runtime.JITFunction):
+        name, ext = fn.__name__, "ast"
+    else:
+        name, ext = os.path.basename(fn).split(".")
+
+    # load metadata if any
+    metadata = None
+    if fn_cache_manager.has_file(f'{name}.json'):
+        with open(fn_cache_manager._make_path(f"{name}.json")) as f:
+            metadata = json.load(f)
+    else:
+        metadata = {"num_warps": num_warps, "num_stages": num_stages, "ctime": dict()}
+        if ext == "ptx":
+            assert "shared" in kwargs, "ptx compilation must provide shared memory size"
+            metadata["shared"] = kwargs["shared"]
+
+    first_stage = list(stages.keys()).index(ext)
+    asm = dict()
+    module = fn
+    # run compilation pipeline  and populate metadata
+    for ir, (parse, compile) in list(stages.items())[first_stage:]:
+        path = fn_cache_manager._make_path(f"{name}.{ir}")
+        if ir == ext:
+            next_module = parse(fn)
+        elif os.path.exists(path) and\
+                ir in metadata["ctime"] and\
+                os.path.getctime(path) == metadata["ctime"][ir]:
+            next_module = parse(path)
+        else:
+            next_module = compile(module)
+            fn_cache_manager.put(next_module, f"{name}.{ir}")
+        if os.path.exists(path):
+            metadata["ctime"][ir] = os.path.getctime(path)
+        asm[ir] = next_module if ir == "cubin" else str(next_module)
+        if ir == "llir" and "shared" not in metadata:
+            metadata["shared"] = _triton.get_shared_memory_size(module)
+        if ir == "ptx":
+            metadata["name"] = ptx_get_kernel_name(next_module)
+        module = next_module
+    # write-back metadata
+    fn_cache_manager.put(json.dumps(metadata), f"{name}.json", binary=False)
+    # return handle to compiled kernel
+    return CompiledKernel(fn, so_path, metadata, asm)
 
 
 class CompiledKernel:
@@ -1262,40 +1520,49 @@ class CompiledKernel:
     launch_enter_hook = None
     launch_exit_hook = None
 
-    def __init__(self, fn, so_path, cache_dir, device):
+    def __init__(self, fn, so_path, metadata, asm):
         # initialize launcher
         import importlib.util
         spec = importlib.util.spec_from_file_location("launcher", so_path)
         mod = importlib.util.module_from_spec(spec)
-        fn_name = fn.__name__
+        self.fn = fn
         spec.loader.exec_module(mod)
         self.c_wrapper = getattr(mod, "launch")
         # initialize metadata
-        with open(os.path.join(cache_dir, f"{fn_name}.json")) as f:
-            metadata = json.load(f)
         self.shared = metadata["shared"]
         self.num_warps = metadata["num_warps"]
         self.num_stages = metadata["num_stages"]
         self.constexpr = metadata["constexpr"]
         # initialize asm dict
-        self.asm = dict()
-        with open(os.path.join(cache_dir, f"{fn_name}.cubin"), "rb") as f:
-            self.asm["cubin"] = f.read()
-        with open(os.path.join(cache_dir, f"{fn_name}.ptx"), "r") as f:
-            self.asm["ptx"] = f.read()
-        with open(os.path.join(cache_dir, f"{fn_name}.llir"), "r") as f:
-            self.asm["llir"] = f.read()
-        with open(os.path.join(cache_dir, f"{fn_name}.ttir"), "r") as f:
-            self.asm["ttir"] = f.read()
+        self.asm = asm
+        # binaries are lazily initialized
+        # because it involves doing runtime things
+        # (e.g., checking amount of shared memory on current device)
+        self.metadata = metadata
+        self.cu_module = None
+        self.cu_function = None
 
-        mod, func, n_regs, n_spills = _triton.code_gen.load_binary(metadata["name"], self.asm["cubin"], self.shared, device)
-        self.fn = fn
+    def _init_handles(self):
+        if self.cu_module is not None:
+            return
+        device = torch.cuda.current_device()
+        global cuda_utils
+        init_cuda_utils()
+        max_shared = cuda_utils.get_device_properties(device)["max_shared_mem"]
+        if self.shared > max_shared:
+            raise OutOfResources(self.shared, max_shared, "shared memory")
+        mod, func, n_regs, n_spills = cuda_utils.load_binary(self.metadata["name"], self.asm["cubin"], self.shared, device)
         self.cu_module = mod
         self.cu_function = func
-        self.n_regs = n_regs
-        self.n_spills = n_spills
+
+    def __getattribute__(self, name):
+        if name == 'c_wrapper':
+            self._init_handles()
+        return super().__getattribute__(name)
 
     def __getitem__(self, grid):
+        self._init_handles()
+
         def runner(*args, stream=None):
             if stream is None:
                 stream = torch.cuda.current_stream().cuda_stream
@@ -1315,3 +1582,153 @@ class CompiledKernel:
             os.remove(path)
         self.asm['sass'] = self.sass
         return self.sass
+
+
+class CudaUtils(object):
+
+    def __new__(cls):
+        if not hasattr(cls, 'instance'):
+            cls.instance = super(CudaUtils, cls).__new__(cls)
+        return cls.instance
+
+    def _generate_src(self):
+        return """
+        #include <cuda.h>
+
+        #include \"cuda.h\"
+        #define PY_SSIZE_T_CLEAN
+        #include <Python.h>
+
+        static inline void gpuAssert(CUresult code, const char *file, int line)
+        {
+           if (code != CUDA_SUCCESS)
+           {
+              const char* prefix = "Triton Error [CUDA]: ";
+              const char* str;
+              cuGetErrorString(code, &str);
+              char err[1024] = {0};
+              strcat(err, prefix);
+              strcat(err, str);
+              PyErr_SetString(PyExc_RuntimeError, err);
+           }
+        }
+
+        #define CUDA_CHECK(ans) { gpuAssert((ans), __FILE__, __LINE__); if(PyErr_Occurred()) return NULL; }
+
+        static PyObject* getDeviceProperties(PyObject* self, PyObject* args){
+            int device_id;
+            if(!PyArg_ParseTuple(args, "i", &device_id))
+                return NULL;
+            // Get device handle
+            CUdevice device;
+            cuDeviceGet(&device, device_id);
+
+            // create a struct to hold device properties
+            int max_shared_mem;
+            int multiprocessor_count;
+            int sm_clock_rate;
+            int mem_clock_rate;
+            int mem_bus_width;
+            CUDA_CHECK(cuDeviceGetAttribute(&max_shared_mem, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, device));
+            CUDA_CHECK(cuDeviceGetAttribute(&multiprocessor_count, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device));
+            CUDA_CHECK(cuDeviceGetAttribute(&sm_clock_rate, CU_DEVICE_ATTRIBUTE_CLOCK_RATE, device));
+            CUDA_CHECK(cuDeviceGetAttribute(&mem_clock_rate, CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE, device));
+            CUDA_CHECK(cuDeviceGetAttribute(&mem_bus_width, CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH, device));
+
+
+            return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i}", "max_shared_mem", max_shared_mem,
+                                       "multiprocessor_count", multiprocessor_count,
+                                       "sm_clock_rate", sm_clock_rate,
+                                       "mem_clock_rate", mem_clock_rate,
+                                       "mem_bus_width", mem_bus_width);
+        }
+
+        static PyObject* loadBinary(PyObject* self, PyObject* args) {
+            const char* name;
+            const char* data;
+            Py_ssize_t data_size;
+            int shared;
+            int device;
+            if(!PyArg_ParseTuple(args, "ss#ii", &name, &data, &data_size, &shared, &device)) {
+                return NULL;
+            }
+            CUfunction fun;
+            CUmodule mod;
+            int32_t n_regs = 0;
+            int32_t n_spills = 0;
+            // create driver handles
+            CUDA_CHECK(cuModuleLoadData(&mod, data));
+            CUDA_CHECK(cuModuleGetFunction(&fun, mod, name));
+            // get allocated registers and spilled registers from the function
+            CUDA_CHECK(cuFuncGetAttribute(&n_regs, CU_FUNC_ATTRIBUTE_NUM_REGS, fun));
+            CUDA_CHECK(cuFuncGetAttribute(&n_spills, CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, fun));
+            n_spills /= 4;
+            // set dynamic shared memory if necessary
+            int shared_optin;
+            CUDA_CHECK(cuDeviceGetAttribute(&shared_optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, device));
+            if (shared > 49152 && shared_optin > 49152) {
+              CUDA_CHECK(cuFuncSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED));
+              int shared_total, shared_static;
+              CUDA_CHECK(cuDeviceGetAttribute(&shared_total, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR, device));
+              CUDA_CHECK(cuFuncGetAttribute(&shared_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun));
+              CUDA_CHECK(cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin - shared_static));
+            }
+
+            if(PyErr_Occurred()) {
+              return NULL;
+            }
+            return Py_BuildValue("(KKii)", (uint64_t)mod, (uint64_t)fun, n_regs, n_spills);
+        }
+
+        static PyMethodDef ModuleMethods[] = {
+          {"load_binary", loadBinary, METH_VARARGS, "Load provided cubin into CUDA driver"},
+          {"get_device_properties", getDeviceProperties, METH_VARARGS, "Get the properties for a given device"},
+          {NULL, NULL, 0, NULL} // sentinel
+        };
+
+        static struct PyModuleDef ModuleDef = {
+          PyModuleDef_HEAD_INIT,
+          \"cuda_utils\",
+          NULL, //documentation
+          -1, //size
+          ModuleMethods
+        };
+
+        PyMODINIT_FUNC PyInit_cuda_utils(void) {
+          PyObject *m = PyModule_Create(&ModuleDef);
+          if(m == NULL) {
+            return NULL;
+          }
+          PyModule_AddFunctions(m, ModuleMethods);
+          return m;
+        }
+        """
+
+    def __init__(self):
+        src = self._generate_src()
+        key = hashlib.md5(src.encode("utf-8")).hexdigest()
+        cache = CacheManager(key)
+        fname = "cuda_utils.so"
+        if not cache.has_file(fname):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                src_path = os.path.join(tmpdir, "main.c")
+                with open(src_path, "w") as f:
+                    f.write(src)
+                so = _build("cuda_utils", src_path, tmpdir)
+                with open(so, "rb") as f:
+                    cache.put(f.read(), fname, binary=True)
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("cuda_utils", cache._make_path(fname))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self.load_binary = mod.load_binary
+        self.get_device_properties = mod.get_device_properties
+
+
+def init_cuda_utils():
+    global cuda_utils
+    if cuda_utils is None:
+        cuda_utils = CudaUtils()
+
+
+cuda_utils = None
