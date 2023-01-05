@@ -885,27 +885,9 @@ SmallVector<int64_t, 2> mmaVersionToShapePerWarp(int version) {
 
 SmallVector<unsigned, 2> warpsPerTileV1(const ArrayRef<int64_t> shape,
                                         int numWarps) {
-  // Force the product(wpt) equals numWarps
+  // The wpt for mmaV1 is determined in GPUCombine Pass, here we just set a
+  // default value and ensure product of wpt equals numWarps
   return {static_cast<unsigned>(numWarps), 1};
-
-  // SmallVector<unsigned, 2> ret = {1, 1};
-  // SmallVector<int64_t, 2> shapePerWarp =
-  //     mmaVersionToShapePerWarp(1 /*version*/);
-  // bool changed = false;
-  // do {
-  //   changed = false;
-  //   int pre = ret[0];
-  //   if (ret[0] * ret[1] < numWarps) {
-  //     ret[0] = std::clamp<unsigned>(ret[0] * 2, 1, shape[0] /
-  //     shapePerWarp[0]); changed = pre != ret[0];
-  //   }
-  //   if (ret[0] * ret[1] < numWarps) {
-  //     pre = ret[1];
-  //     ret[1] = std::clamp<unsigned>(ret[1] * 2, 1, shape[1] /
-  //     shapePerWarp[1]); changed = pre != ret[1];
-  //   }
-  // } while (changed);
-  // return ret;
 }
 
 SmallVector<unsigned, 2> warpsPerTileV2(triton::DotOp dotOp,
