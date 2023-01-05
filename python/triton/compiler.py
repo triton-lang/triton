@@ -734,10 +734,6 @@ class CodeGenerator(ast.NodeVisitor):
         assert len(node.values) == 2
         lhs = self.visit(node.values[0])
         rhs = self.visit(node.values[1])
-        if isinstance(lhs, triton.language.constexpr):
-            lhs = lhs.value
-        if isinstance(rhs, triton.language.constexpr):
-            rhs = rhs.value
 
         fn = {
             ast.And: 'logical_and',
