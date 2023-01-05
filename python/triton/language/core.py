@@ -405,15 +405,13 @@ class constexpr:
 
     def __and__(self, other):
         return constexpr(self.value and other.value)
-
-    def logical_and(self, other):
-        return constexpr(self.value and other.value)
+    
+    logical_and = __and__
 
     def __or__(self, other):
         return constexpr(self.value or other.value)
-
-    def logical_or(self, other):
-        return constexpr(self.value or other.value)
+    
+    logical_or = __or__
 
     def __pos__(self):
         return constexpr(+self.value)
