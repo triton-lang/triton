@@ -4,7 +4,6 @@ import pytest
 import torch
 
 import triton
-import triton._C.libtriton.triton as _triton
 
 
 @pytest.mark.parametrize(
@@ -67,8 +66,10 @@ import triton._C.libtriton.triton as _triton
     ),
 )
 def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, DTYPE):
-    cc = _triton.runtime.cc(_triton.runtime.backend.CUDA, torch.cuda.current_device())
-    if cc < 80 and DTYPE == "bfloat16":
+    capability = torch.cuda.get_device_capability()
+    if capability[0] < 7:
+        pytest.skip("Only test tl.dot() on devices with sm >= 70")
+    if capability[0] < 8 and DTYPE == "bfloat16":
         pytest.skip("Only test bfloat16 on devices with sm >= 80")
     if DTYPE == "bfloat16" and SPLIT_K != 1:
         pytest.skip("bfloat16 matmuls don't allow split_k for now")
@@ -78,10 +79,9 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     pre_hook = None if SPLIT_K == 1 else lambda nargs: nargs['C'].zero_()
     configs = [triton.Config(kwargs=kwargs, num_warps=NWARP, num_stages=NSTAGE, pre_hook=pre_hook)]
     kernel = triton.ops._matmul.kernel
-    decorators = kernel.kernel_decorators
-    kernel.kernel_decorators = []
-    triton.autotune(configs, [])(kernel)
-    kernel.kernel_decorators += decorators[1:]
+    kernel.configs = configs
+    # kernel.run = kernel.run.run.run
+
     # get matrix shape
     M = BLOCK_M if M is None else M
     N = BLOCK_N if N is None else N

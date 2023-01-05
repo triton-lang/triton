@@ -37,7 +37,7 @@ matmul_data = {
         (256, 256, 256): {'float16': 0.027},
         (512, 512, 512): {'float16': 0.158},
         (1024, 1024, 1024): {'float16': 0.466},
-        (2048, 2048, 2048): {'float16': 0.680},
+        (2048, 2048, 2048): {'float16': 0.695},
         (4096, 4096, 4096): {'float16': 0.831},
         (8192, 8192, 8192): {'float16': 0.849},
         # tall-skinny
@@ -128,7 +128,7 @@ elementwise_data = {
         1024 * 16: 0.0219,
         1024 * 64: 0.0791,
         1024 * 256: 0.243,
-        1024 * 1024: 0.534,
+        1024 * 1024: 0.530,
         1024 * 4096: 0.796,
         1024 * 16384: 0.905,
         1024 * 65536: 0.939,
@@ -152,7 +152,7 @@ def test_elementwise(N):
     cur_mem_clock = nvsmi(['clocks.current.memory'])[0]
     ref_mem_clock = mem_clocks[DEVICE_NAME]
     max_gpu_perf = get_dram_gbps()
-    assert abs(cur_mem_clock - ref_mem_clock) < 10, f'GPU memmory must run at {ref_mem_clock} MHz'
+    assert abs(cur_mem_clock - ref_mem_clock) < 10, f'GPU memory must run at {ref_mem_clock} MHz'
     z = torch.empty((N, ), dtype=torch.float16, device='cuda')
     x = torch.randn_like(z)
     y = torch.randn_like(z)

@@ -175,3 +175,24 @@ def test_randn(size, seed, device='cuda'):
     kernel[grid](x, N, seed)
     assert abs(x.mean()) < 1e-2
     assert abs(x.std() - 1) < 1e-2
+
+
+# tl.rand() should never produce >=1.0
+
+def test_rand_limits():
+    @triton.jit
+    def kernel(input, output, n: tl.constexpr):
+        idx = tl.arange(0, n)
+        x = tl.load(input + idx)
+        y = tl.random.uint32_to_uniform_float(x)
+        tl.store(output + idx, y)
+
+    min_max_int32 = torch.tensor([
+        torch.iinfo(torch.int32).min,
+        torch.iinfo(torch.int32).max,
+    ], dtype=torch.int32, device='cuda')
+    output = torch.empty(2, dtype=torch.float32, device='cuda')
+    kernel[(1,)](min_max_int32, output, 2)
+
+    assert output[0] == output[1]
+    assert 1.0 - torch.finfo(torch.float32).eps <= output[0].item() < 1.0

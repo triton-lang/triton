@@ -13,7 +13,10 @@ import triton
                          ]
                          )
 def test_op(M, N, dtype, mode):
-    dtype = {'float16': torch.float16, 'float32': torch.float32}[dtype]
+    capability = torch.cuda.get_device_capability()
+    if capability[0] < 8 and dtype == "bfloat16":
+        pytest.skip("Only test bfloat16 on devices with sm >= 80")
+    dtype = {'bfloat16': torch.bfloat16, 'float16': torch.float16, 'float32': torch.float32}[dtype]
     # create inputs
     x = torch.randn(M, N, dtype=dtype, device='cuda', requires_grad=True)
     idx = 4 + torch.ones(M, dtype=torch.int64, device='cuda')
