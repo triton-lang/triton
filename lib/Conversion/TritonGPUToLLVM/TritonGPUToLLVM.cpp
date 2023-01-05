@@ -301,6 +301,7 @@ struct AssertOpConversion
       // MLIR::AssertOp is lowered to a call to llvm.abort, which cannot be
       // handled by ptxas
       // We should call __assertfail here
+      // Delete the definition of triton.assert, using mlir.assert instead
       PTXBuilder builder;
       auto &trapOp = *builder.create<PTXInstr>("trap");
       trapOp().predicate(condition);
