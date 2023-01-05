@@ -417,6 +417,15 @@ private:
       printf("numN: %d\n", numN);
       printf("coord: %lu\n", coord2valT.size());
 
+#define SHOW_ACCI 0
+#if SHOW_ACCI
+      for (unsigned elemId = 0; elemId < accumSizePerThread; elemId++) {
+        auto [coord, currVal] = coord2val[elemId];
+        LLVM::vprintf("acci t-%d (%d,%d) %f",
+                      {LLVM::gThreadId, coord[0], coord[1], currVal}, rewriter);
+      }
+#endif
+
       for (int r = 0; r < numM; r++) {
         for (int c = 0; c < numN; c++) {
           coord2valT[r * numN + c] = std::move(coord2val[c * numM + r]);
@@ -424,6 +433,9 @@ private:
       }
     }
 
+    // if (stNotRd) {
+    // LLVM::vprintf("before storeptr t-%d", {LLVM::gThreadId}, rewriter);
+    //}
     // Now the coord2valT has the transposed and contiguous elements(with
     // vec=2), the original vals is not needed.
     for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
@@ -442,6 +454,7 @@ private:
           auto currVal = coord2valT[elemId + v].second;
           valVec = insert_element(vecTy, valVec, currVal, idx_val(v));
         }
+        // LLVM::vprintf("storeptr t-%d %d", {LLVM::gThreadId, ptr}, rewriter);
         store(valVec, ptr);
       } else {
         Value valVec = load(ptr);
@@ -451,6 +464,11 @@ private:
         }
       }
     }
+
+    barrier();
+    // if (stNotRd) {
+    // LLVM::vprintf("after storeptr t-%d", {LLVM::gThreadId}, rewriter);
+    //}
   }
 
   // blocked/mma -> blocked/mma.

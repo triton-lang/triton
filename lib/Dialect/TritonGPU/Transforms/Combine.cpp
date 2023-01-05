@@ -1059,6 +1059,7 @@ public:
 
     // for FMA, should retain the blocked layout.
     int versionMajor = computeCapabilityToMMAVersion(computeCapability);
+    versionMajor = 1; // DEBUG
     if (!supportMMA(dotOp, versionMajor))
       return failure();
 

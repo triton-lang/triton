@@ -208,38 +208,39 @@ private:
       }
 #define SHOW_MMA_V1 0
 #if SHOW_MMA_V1
-      std::vector<Value> args = {ha.first, ha.second, hb.first, hb.second};
+      {
+        std::vector<Value> args = {ha.first, ha.second, hb.first, hb.second};
 
-      auto get_f16 = [&](Value value, int idx) {
-        return extract_element(f16_ty, value, idx_val(idx));
-      };
+        auto get_f16 = [&](Value value, int idx) {
+          return extract_element(f16_ty, value, idx_val(idx));
+        };
 
-      std::vector<Value> pargs({getThreadId(rewriter, loc)});
-      pargs.push_back(i32_val(m));
-      pargs.push_back(i32_val(n));
-      pargs.push_back(i32_val(k));
-      for (int i = 0; i < 4; i++) {
-        pargs.push_back(get_f16(args[i], 0));
-        pargs.push_back(get_f16(args[i], 1));
+        std::vector<Value> pargs({getThreadId(rewriter, loc)});
+        pargs.push_back(i32_val(m));
+        pargs.push_back(i32_val(n));
+        pargs.push_back(i32_val(k));
+        for (int i = 0; i < 4; i++) {
+          pargs.push_back(get_f16(args[i], 0));
+          pargs.push_back(get_f16(args[i], 1));
+        }
+        for (int i = 0; i < 8; i++) {
+          pargs.push_back(extract_val(f32_ty, res, getIntAttr(i)));
+        }
+
+        LLVM::vprintf("mma t-%d [%d %d %d] A:(%f,%f) (%f,%f) B:(%f,%f) (%f,%f) "
+                      "D:(%f,%f,%f,%f,%f,%f,%f,%f)",
+                      pargs, rewriter);
       }
-      for (int i = 0; i < 8; i++) {
-        pargs.push_back(extract_val(f32_ty, res, getIntAttr(i)));
-      }
-
-      LLVM::vprintf("mma t-%d [%d %d %d] A:(%f,%f) (%f,%f) B:(%f,%f) (%f,%f) "
-                    "D:(%f,%f,%f,%f,%f,%f,%f,%f)",
-                    pargs, rewriter);
-
 #endif
     };
 
-    printf("numMNK t-0 %d %d %d\n", numM, numN, NK);
+    printf("mnk t-0 numM,numN,numK %d,%d,%d\n", numM, numN, NK);
+
     for (unsigned k = 0; k < NK; k += 4)
       for (unsigned m = 0; m < numM / 2; ++m)
         for (unsigned n = 0; n < numN / 2; ++n) {
-          printf("callMMA (%d %d %d)\n", m, n, k);
+          // printf("** m,n,k: %d %d %d\n", m, n, k);
           callMMA(m, n, k);
-          printf("done callMMA (%d %d %d)\n", m, n, k);
         }
 
     // res holds the same layout of acc
