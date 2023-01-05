@@ -1603,7 +1603,6 @@ def compile(fn, **kwargs):
     # has to be a path to a file
     context = _triton.ir.context()
     asm = dict()
-    signature = kwargs.get("signature", "")
     constants = kwargs.get("constants", dict())
     num_warps = kwargs.get("num_warps", 4)
     num_stages = kwargs.get("num_stages", 3 if capability >= 75 else 2)
