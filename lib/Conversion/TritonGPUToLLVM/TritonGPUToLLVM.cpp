@@ -300,6 +300,7 @@ struct AssertOpConversion
       }
       // MLIR::AssertOp is lowered to a call to llvm.abort, which cannot be
       // handled by ptxas
+      // We should call __assertfail here
       PTXBuilder builder;
       auto &trapOp = *builder.create<PTXInstr>("trap");
       trapOp().predicate(condition);
