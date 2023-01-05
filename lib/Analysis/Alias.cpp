@@ -25,14 +25,16 @@ ChangeResult SharedMemoryAliasAnalysis::visitOperation(
   if (maybeSharedAllocationOp(op)) {
     // These ops may allocate a new shared memory buffer.
     auto result = op->getResult(0);
-    // FIXME(Keren): extract and insert are always alias for now
-    if (auto extractSliceOp = dyn_cast<tensor::ExtractSliceOp>(op)) {
+    // XXX(Keren): the following ops are always aliasing for now
+    if (isa<tensor::ExtractSliceOp, triton::TransOp>(op)) {
       // extract_slice %src
+      // trans %src
       aliasInfo = AliasInfo(operands[0]->getValue());
       pessimistic = false;
-    } else if (auto insertSliceOp =
-                   dyn_cast<triton::gpu::InsertSliceAsyncOp>(op)) {
+    } else if (isa<tensor::InsertSliceOp, triton::gpu::InsertSliceAsyncOp>(
+                   op)) {
       // insert_slice_async %src, %dst, %index
+      // insert_slice %src into %dst[%offsets]
       aliasInfo = AliasInfo(operands[1]->getValue());
       pessimistic = false;
     } else if (isSharedEncoding(result)) {
@@ -44,7 +46,7 @@ ChangeResult SharedMemoryAliasAnalysis::visitOperation(
   if (pessimistic) {
     return markAllPessimisticFixpoint(op->getResults());
   }
-  // Join all latice elements
+  // Join all lattice elements
   ChangeResult result = ChangeResult::NoChange;
   for (Value value : op->getResults()) {
     result |= getLatticeElement(value).join(aliasInfo);

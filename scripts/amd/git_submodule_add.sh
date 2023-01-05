@@ -1,0 +1,1 @@
+git submodule add https://github.com/ROCmSoftwarePlatform/hipify-torch third_party/hipify-torch

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   pull_request:
     branches:
-      - main
+      - master
       - triton-mlir
 
 jobs:
@@ -17,7 +17,7 @@ jobs:
         id: set-matrix
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
-            echo '::set-output name=matrix::[["self-hosted", "A10"], "macos-10.15"]'
+            echo '::set-output name=matrix::[["self-hosted", "A10"], ["self-hosted", "V100"], "macos-10.15"]'
           else
             echo '::set-output name=matrix::["ubuntu-latest", "macos-10.15"]'
           fi
@@ -40,26 +40,26 @@ jobs:
           rm -rf ~/.triton/cache/
 
       - name: Check imports
-        if: startsWith(matrix.runner, 'ubuntu')
+        if: ${{ matrix.runner != 'macos-10.15' }}
         run: |
           pip install isort
           isort -c ./python || ( echo '::error title=Imports not sorted::Please run \"isort ./python\"' ; exit 1 )
 
       - name: Check python style
-        if: startsWith(matrix.runner, 'ubuntu')
+        if: ${{ matrix.runner != 'macos-10.15' }}
         run: |
           pip install autopep8
           autopep8 -a -r -d --exit-code ./python || ( echo '::error title=Style issues::Please run \"autopep8 -a -r -i ./python\"' ; exit 1 )
 
       - name: Check cpp style
-        if: startsWith(matrix.runner, 'ubuntu')
+        if: ${{ matrix.runner != 'macos-10.15' }}
         run: |
           pip install clang-format
           find . -regex '.*\.\(cpp\|hpp\|h\|cc\)' -not -path "./python/build/*" -not -path "./include/triton/external/*" -print0 | xargs -0 -n1 clang-format -style=file --dry-run -Werror -i ||
           (echo '::error title=Style issues:: Please run `find . -regex ".*\.\(cpp\|hpp\|h\|cc\)" -not -path "./python/build/*" -not -path "./include/triton/external/*" -print0 | xargs -0 -n1 clang-format -style=file -i`' ; exit 1)
 
       - name: Flake8
-        if: startsWith(matrix.runner, 'ubuntu')
+        if: ${{ matrix.runner != 'macos-10.15' }}
         run: |
           pip install flake8
           flake8 --config ./python/setup.cfg ./python || ( echo '::error::Flake8 failed; see logs for errors.' ; exit 1 )
@@ -81,8 +81,9 @@ jobs:
       - name: Run python tests
         if: ${{matrix.runner[0] == 'self-hosted'}}
         run: |
-          cd python/tests
+          cd python/test/unit/
           pytest
+
 
       - name: Run CXX unittests
         run: |

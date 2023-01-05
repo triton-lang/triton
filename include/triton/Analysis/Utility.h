@@ -8,11 +8,56 @@
 
 namespace mlir {
 
+class ReduceOpHelper {
+public:
+  explicit ReduceOpHelper(triton::ReduceOp op) : op(op) {
+    srcTy = op.operand().getType().cast<RankedTensorType>();
+  }
+
+  ArrayRef<int64_t> getSrcShape() { return srcTy.getShape(); }
+
+  Attribute getSrcLayout() { return srcTy.getEncoding(); }
+
+  bool isFastReduction();
+
+  unsigned getInterWarpSize();
+
+  unsigned getIntraWarpSize();
+
+  unsigned getThreadsReductionAxis();
+
+  SmallVector<unsigned> getScratchConfigBasic();
+
+  SmallVector<SmallVector<unsigned>> getScratchConfigsFast();
+
+  unsigned getScratchSizeInBytes();
+
+private:
+  triton::ReduceOp op;
+  RankedTensorType srcTy{};
+};
+
 bool isSharedEncoding(Value value);
 
 bool maybeSharedAllocationOp(Operation *op);
 
+bool maybeAliasOp(Operation *op);
+
+bool supportMMA(triton::DotOp op, int version);
+
+bool supportMMA(Value value, int version);
+
+Type getElementType(Value value);
+
 std::string getValueOperandName(Value value, AsmState &state);
+
+template <typename T_OUT, typename T_IN>
+inline SmallVector<T_OUT> convertType(ArrayRef<T_IN> in) {
+  SmallVector<T_OUT> out;
+  for (const T_IN &i : in)
+    out.push_back(T_OUT(i));
+  return out;
+}
 
 template <typename Int> Int product(llvm::ArrayRef<Int> arr) {
   return std::accumulate(arr.begin(), arr.end(), 1, std::multiplies{});

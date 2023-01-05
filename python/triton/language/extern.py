@@ -86,25 +86,3 @@ def elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: 
             ret_shape = broadcast_arg.shape
     func = getattr(_builder, "create_external_elementwise")
     return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_shape, _builder)
-
-
-class ExternalFunction:
-    '''
-        A wrapper for external functions
-    '''
-
-    def __init__(self, fn):
-        self.fn = fn
-
-    def __call__(self, *args, **kwargs):
-        if '_builder' not in kwargs or \
-           kwargs['_builder'] is None:
-            raise ValueError("Did you forget to add @triton.jit ? (`_builder` argument must be provided outside of JIT functions.)")
-        return self.fn(*args, **kwargs)
-
-
-def extern(fn):
-    '''
-        A decorator for external functions
-    '''
-    return ExternalFunction(fn)

@@ -25,6 +25,10 @@ endif()
 #  used conditionally in this file and by lit tests
 find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
 
+# Customized release build type with assertions: TritonRelBuildWithAsserts
+set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
+set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
+
 # Default build type
 if(NOT CMAKE_BUILD_TYPE)
   message(STATUS "Default build type: Release")
@@ -50,11 +54,7 @@ endif()
 set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17 -fvisibility=hidden -fvisibility-inlines-hidden")
 
 if (TRITON_USE_ROCM)
-    set(MI_GPU_ARCH $ENV{MI_GPU_ARCH})
-    if (NOT MI_GPU_ARCH)
-        set(MI_GPU_ARCH "gfx90a")
-    endif()
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_ROCM -DMI_GPU_ARCH=${MI_GPU_ARCH} -Wno-unused-result -Wno-attributes")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_ROCM -Wno-unused-result -Wno-attributes")
 endif()
 
 if(APPLE)
@@ -215,7 +215,7 @@ target_link_libraries(triton
   TritonGPUTransforms
   TritonLLVMIR
   TritonPTX
-  TritonAMDGCN
+  TritonHSACO
   ${dialect_libs}
   ${conversion_libs}
   # optimizations

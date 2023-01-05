@@ -15,7 +15,7 @@ import triton.language as tl
 @triton.jit
 def _fwd_kernel(
     Q, K, V, sm_scale,
-    TMP, L, M,  # NOTE: TMP is a scratchpad buffer to workaround a compiler bug
+    TMP, L, M,  # NOTE: TMP is a scratchpad buffer to work around a compiler bug
     Out,
     stride_qz, stride_qh, stride_qm, stride_qk,
     stride_kz, stride_kh, stride_kn, stride_kk,
@@ -50,7 +50,7 @@ def _fwd_kernel(
         # -- compute qk ----
         k = tl.load(k_ptrs + start_n * stride_kn)
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
-        qk += tl.dot(q, k, trans_b=True)
+        qk += tl.dot(q, tl.trans(k))
         qk *= sm_scale
         qk += tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), 0, float("-inf"))
         # -- compute m_ij, p, l_ij
@@ -165,26 +165,26 @@ def _bwd_kernel(
             q = tl.load(q_ptrs)
             # recompute p = softmax(qk, dim=-1).T
             # NOTE: `do` is pre-divided by `l`; no normalization here
-            qk = tl.dot(q, k, trans_b=True)
+            qk = tl.dot(q, tl.trans(k))
             qk = tl.where(offs_m_curr[:, None] >= (offs_n[None, :]), qk, float("-inf"))
             m = tl.load(m_ptrs + offs_m_curr)
             p = tl.exp(qk * sm_scale - m[:, None])
             # compute dv
             do = tl.load(do_ptrs)
-            dv += tl.dot(p.to(tl.float16), do, trans_a=True)
+            dv += tl.dot(tl.trans(p.to(tl.float16)), do)
             # compute dp = dot(v, do)
             Di = tl.load(D_ptrs + offs_m_curr)
             dp = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32) - Di[:, None]
-            dp += tl.dot(do, v, trans_b=True)
+            dp += tl.dot(do, tl.trans(v))
             # compute ds = p * (dp - delta[:, None])
             ds = p * dp * sm_scale
             # compute dk = dot(ds.T, q)
-            dk += tl.dot(ds.to(tl.float16), q, trans_a=True)
-            # # compute dq
+            dk += tl.dot(tl.trans(ds.to(tl.float16)), q)
+            # compute dq
             dq = tl.load(dq_ptrs)
             dq += tl.dot(ds.to(tl.float16), k)
             tl.store(dq_ptrs, dq)
-            # # increment pointers
+            # increment pointers
             dq_ptrs += BLOCK_M * stride_qm
             q_ptrs += BLOCK_M * stride_qm
             do_ptrs += BLOCK_M * stride_qm
@@ -193,6 +193,9 @@ def _bwd_kernel(
         dk_ptrs = DK + (offs_n[:, None] * stride_kn + offs_k[None, :] * stride_kk)
         tl.store(dv_ptrs, dv)
         tl.store(dk_ptrs, dk)
+
+
+empty = torch.empty(128, device="cuda")
 
 
 class _attention(torch.autograd.Function):
@@ -205,7 +208,7 @@ class _attention(torch.autograd.Function):
         assert Lq == Lk and Lk == Lv
         assert Lk in {16, 32, 64, 128}
         o = torch.empty_like(q)
-        grid = (triton.cdiv(q.shape[2], BLOCK), q.shape[0] * q.shape[1])
+        grid = (triton.cdiv(q.shape[2], BLOCK), q.shape[0] * q.shape[1], 1)
         tmp = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         L = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         m = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
@@ -224,6 +227,7 @@ class _attention(torch.autograd.Function):
             BLOCK_DMODEL=Lk, num_warps=num_warps,
             num_stages=1,
         )
+
         ctx.save_for_backward(q, k, v, o, L, m)
         ctx.BLOCK = BLOCK
         ctx.grid = grid
@@ -246,7 +250,8 @@ class _attention(torch.autograd.Function):
             BLOCK_M=ctx.BLOCK, D_HEAD=ctx.BLOCK_DMODEL,
         )
 
-        num_warps = 4 if ctx.BLOCK_DMODEL <= 64 else 8
+        # NOTE: kernel currently buggy for other values of `num_warps`
+        num_warps = 8
         _bwd_kernel[(ctx.grid[1],)](
             q, k, v, ctx.sm_scale,
             o, do_scaled,
@@ -268,13 +273,13 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 
-@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(3, 2, 2048, 64)])
+@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(4, 48, 1024, 64)])
 def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     torch.manual_seed(20)
-    q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0, std=.5).requires_grad_()
-    k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0, std=.5).requires_grad_()
-    v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0, std=.5).requires_grad_()
-    sm_scale = 0.3
+    q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.1, std=0.2).requires_grad_()
+    k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.4, std=0.2).requires_grad_()
+    v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.3, std=0.2).requires_grad_()
+    sm_scale = 0.2
     dout = torch.randn_like(q)
     # reference implementation
     M = torch.tril(torch.ones((N_CTX, N_CTX), device="cuda"))
@@ -283,13 +288,16 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
         for h in range(H):
             p[:, :, M == 0] = float("-inf")
     p = torch.softmax(p.float(), dim=-1).half()
+    # p = torch.exp(p)
     ref_out = torch.matmul(p, v)
     ref_out.backward(dout)
     ref_dv, v.grad = v.grad.clone(), None
     ref_dk, k.grad = k.grad.clone(), None
     ref_dq, q.grad = q.grad.clone(), None
-    # triton implementation
+    # # triton implementation
     tri_out = attention(q, k, v, sm_scale)
+    # print(ref_out)
+    # print(tri_out)
     tri_out.backward(dout)
     tri_dv, v.grad = v.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
@@ -299,3 +307,57 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     triton.testing.assert_almost_equal(ref_dv, tri_dv)
     triton.testing.assert_almost_equal(ref_dk, tri_dk)
     triton.testing.assert_almost_equal(ref_dq, tri_dq)
+
+
+try:
+    from flash_attn.flash_attn_interface import flash_attn_func
+    HAS_FLASH = True
+except BaseException:
+    HAS_FLASH = False
+
+BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
+# vary seq length for fixed head and batch=4
+configs = [triton.testing.Benchmark(
+    x_names=['N_CTX'],
+    x_vals=[2**i for i in range(10, 16)],
+    line_arg='provider',
+    line_vals=['triton'] + (['flash'] if HAS_FLASH else []),
+    line_names=['Triton'] + (['Flash'] if HAS_FLASH else []),
+    styles=[('red', '-'), ('blue', '-')],
+    ylabel='ms',
+    plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}',
+    args={'H': N_HEADS, 'BATCH': BATCH, 'D_HEAD': D_HEAD, 'dtype': torch.float16, 'mode': mode}
+) for mode in ['fwd']]
+
+
+@triton.testing.perf_report(configs)
+def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.float16, device="cuda"):
+    assert mode in ['fwd', 'bwd']
+    warmup = 25
+    rep = 100
+    if provider == "triton":
+        q = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
+        k = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
+        v = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
+        sm_scale = 1.3
+        fn = lambda: attention(q, k, v, sm_scale)
+        if mode == 'bwd':
+            o = fn()
+            do = torch.randn_like(o)
+            fn = lambda: o.backward(do, retain_graph=True)
+        ms = triton.testing.do_bench(fn, percentiles=None, warmup=warmup, rep=rep)
+        return ms
+    if provider == "flash":
+        lengths = torch.full((BATCH,), fill_value=N_CTX, device=device)
+        cu_seqlens = torch.zeros((BATCH + 1,), device=device, dtype=torch.int32)
+        cu_seqlens[1:] = lengths.cumsum(0)
+        qkv = torch.randn((BATCH * N_CTX, 3, H, D_HEAD), dtype=dtype, device=device, requires_grad=True)
+        fn = lambda: flash_attn_func(qkv, cu_seqlens, 0., N_CTX, causal=True)
+        if mode == 'bwd':
+            o = fn()
+            do = torch.randn_like(o)
+            fn = lambda: o.backward(do, retain_graph=True)
+        ms = triton.testing.do_bench(fn, percentiles=None, warmup=warmup, rep=rep)
+        return ms
+
+# bench_flash_attention.run(save_path='.', print_data=True)

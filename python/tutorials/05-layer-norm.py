@@ -17,35 +17,51 @@ except ModuleNotFoundError:
     HAS_APEX = False
 
 
-# Forward Pass
 @triton.jit
-def _layer_norm_fwd_fused(X, Y, W, B, M, V, stride, N, eps,
-                          BLOCK_SIZE: tl.constexpr):
+def _layer_norm_fwd_fused(
+    A,
+    Out,
+    Weight,
+    Bias,
+    Mean, Rstd,
+    stride, N, eps,
+    BLOCK_SIZE: tl.constexpr,
+):
     # position of elements processed by this program
     row = tl.program_id(0)
-    cols = tl.arange(0, BLOCK_SIZE)
-    mask = cols < N
-    # offset data pointers to start at the row of interest
-    X += row * stride
-    Y += row * stride
-    # load data and cast to float32
-    x = tl.load(X + cols, mask=mask, other=0).to(tl.float32)
+    Out += row * stride
+    A += row * stride
     # compute mean
-    mean = tl.sum(x, axis=0) / N
-    # compute std
-    xmean = tl.where(mask, x - mean, 0.)
-    var = tl.sum(xmean * xmean, axis=0) / N
+    mean = 0
+    _mean = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
+    for off in range(0, N, BLOCK_SIZE):
+        cols = off + tl.arange(0, BLOCK_SIZE)
+        a = tl.load(A + cols, mask=cols < N, other=0.).to(tl.float32)
+        _mean += a
+    mean = tl.sum(_mean, axis=0) / N
+    # compute variance
+    _var = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
+    for off in range(0, N, BLOCK_SIZE):
+        cols = off + tl.arange(0, BLOCK_SIZE)
+        a = tl.load(A + cols, mask=cols < N, other=0.).to(tl.float32)
+        a = tl.where(cols < N, a - mean, 0.)
+        _var += a * a
+    var = tl.sum(_var, axis=0) / N
     rstd = 1 / tl.sqrt(var + eps)
-    xhat = xmean * rstd
     # write-back mean/rstd
-    tl.store(M + row, mean)
-    tl.store(V + row, rstd)
+    tl.store(Mean + row, mean)
+    tl.store(Rstd + row, rstd)
     # multiply by weight and add bias
-    w = tl.load(W + cols, mask=mask)
-    b = tl.load(B + cols, mask=mask)
-    y = xhat * w + b
-    # write-back
-    tl.store(Y + cols, y, mask=mask)
+    for off in range(0, N, BLOCK_SIZE):
+        cols = off + tl.arange(0, BLOCK_SIZE)
+        mask = cols < N
+        weight = tl.load(Weight + cols, mask=mask)
+        bias = tl.load(Bias + cols, mask=mask)
+        a = tl.load(A + cols, mask=mask, other=0.).to(tl.float32)
+        a_hat = (a - mean) * rstd
+        out = a_hat * weight + bias
+        # # write-back
+        tl.store(Out + cols, out, mask=mask)
 
 
 # Backward pass (DX + partial DW + partial DB)
@@ -258,4 +274,5 @@ def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device='c
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
 
-bench_layer_norm.run(save_path='.', print_data=True)
+test_layer_norm(1151, 8192, torch.float16)
+# bench_layer_norm.run(save_path='.', print_data=True)

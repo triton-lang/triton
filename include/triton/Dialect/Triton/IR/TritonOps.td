@@ -10,10 +10,7 @@ include "mlir/Interfaces/SideEffectInterfaces.td" // NoSideEffect
 include "mlir/Interfaces/ControlFlowInterfaces.td" // BranchOpInterface
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 include "mlir/Interfaces/SideEffectInterfaces.td" // NoSideEffect
-
-def TensorSizeTrait : NativeOpTrait<"TensorSizeTrait">;
-def SameOperandsAndResultEncoding : NativeOpTrait<"SameOperandsAndResultEncoding">;
-def SameOperandsEncoding : NativeOpTrait<"SameOperandsEncoding">;
+include "mlir/Interfaces/CastInterfaces.td" // CastOpInterface
 
 //
 // Op Base
@@ -72,17 +69,16 @@ def TT_BitcastOp : TT_Op<"bitcast", [SameOperandsAndResultShape,
     // TODO: Add verifier
 }
 
-def TT_FpToFp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
-                                   SameOperandsAndResultEncoding,
-                                   NoSideEffect,
-                                   /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
+def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
+                                     SameOperandsAndResultEncoding,
+                                     NoSideEffect,
+                                     DeclareOpInterfaceMethods<CastOpInterface>]> {
     let summary = "Floating point casting for custom types";
 
     let description = [{
-        Floating point casting for custom types (F8, BF8).
+        Floating point casting for custom types (F8).
 
-        F8 <-> BF8, FP16, FP32
-        BF8 <-> F8, FP16, FP32
+        F8 <-> FP16, BF16, FP32, FP64
     }];
 
     let arguments = (ins TT_FloatLike:$from);
@@ -103,15 +99,12 @@ def TT_AddPtrOp : TT_Op<"addptr",
                      SameOperandsAndResultShape,
                      SameOperandsAndResultEncoding,
                       TypesMatchWith<"result type matches ptr type",
-                                     "result", "ptr", "$_self">,
-                      TypesMatchWith<"result shape matches offset shape",
-                                     "result", "offset",
-                                     "getI32SameShape($_self)">]> {
-    let arguments = (ins TT_PtrLike:$ptr, TT_I32Like:$offset);
+                                     "result", "ptr", "$_self">]> {
+    let arguments = (ins TT_PtrLike:$ptr, TT_IntLike:$offset);
 
     let results = (outs TT_PtrLike:$result);
 
-    let assemblyFormat = "$ptr `,` $offset attr-dict `:` type($result)";
+    let assemblyFormat = "$ptr `,` $offset attr-dict `:` type($result) `,` type($offset)";
 }
 
 
@@ -187,6 +180,7 @@ def TT_StoreOp : TT_Op<"store",
 //
 def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
                                           SameOperandsAndResultEncoding,
+                                          MemoryEffects<[MemRead]>,
                                           MemoryEffects<[MemWrite]>,
                                           TypesMatchWith<"infer ptr type from value type",
                                                          "val", "ptr",
@@ -208,7 +202,9 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
     let results = (outs TT_Type:$result);
 }
 
-def TT_AtomicCASOp : TT_Op<"atomic_cas", [SameOperandsAndResultShape,
+def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead]>,
+                                          MemoryEffects<[MemWrite]>,
+                                          SameOperandsAndResultShape,
                                           SameOperandsAndResultEncoding]> {
     let summary = "atomic cas";
 
@@ -292,6 +288,18 @@ def TT_CatOp : TT_Op<"cat", [NoSideEffect,
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
 }
 
+def TT_TransOp : TT_Op<"trans", [NoSideEffect,
+                                 SameOperandsAndResultElementType]> {
+
+    let summary = "transpose a tensor";
+
+    let arguments = (ins TT_Tensor:$src);
+
+    let results = (outs TT_Tensor:$result);
+
+    let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
+}
+
 //
 // SPMD Ops
 //
@@ -324,7 +332,7 @@ def TT_DotOp : TT_Op<"dot", [NoSideEffect,
         $d = matrix_multiply($a, $b) + $c
     }];
 
-    let arguments = (ins TT_FpIntTensor:$a, TT_FpIntTensor:$b, TT_FpIntTensor:$c, BoolAttr:$allowTF32, BoolAttr:$transA, BoolAttr:$transB);
+    let arguments = (ins TT_FpIntTensor:$a, TT_FpIntTensor:$b, TT_FpIntTensor:$c, BoolAttr:$allowTF32);
 
     let results = (outs TT_FpIntTensor:$d);
 
@@ -348,6 +356,11 @@ def TT_ReduceOp : TT_Op<"reduce", [NoSideEffect,
 
     let assemblyFormat = "$operand attr-dict `:` type($operand) `->` type($result)";
 
+    let extraClassDeclaration = [{
+        // This member function is marked static because we need to call it before the ReduceOp
+        // is constructed, see the implementation of create_reduce in triton.cc.
+        static bool withIndex(mlir::triton::RedOp redOp);
+    }];
 }
 
 //

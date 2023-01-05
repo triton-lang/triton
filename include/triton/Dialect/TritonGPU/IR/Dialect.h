@@ -25,13 +25,21 @@ namespace gpu {
 
 unsigned getElemsPerThread(Type type);
 
-SmallVector<unsigned> getSizePerThread(Attribute layout);
+SmallVector<unsigned> getThreadsPerWarp(const Attribute &layout);
+
+SmallVector<unsigned> getWarpsPerCTA(const Attribute &layout);
+
+SmallVector<unsigned> getSizePerThread(const Attribute &layout);
+
+SmallVector<unsigned> getContigPerThread(Attribute layout);
 
 SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout);
 
 SmallVector<unsigned> getShapePerCTA(const Attribute &layout);
 
 SmallVector<unsigned> getOrder(const Attribute &layout);
+
+bool isaDistributedLayout(const Attribute &layout);
 
 } // namespace gpu
 } // namespace triton
