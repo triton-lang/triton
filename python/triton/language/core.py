@@ -414,8 +414,6 @@ class constexpr:
 
     def logical_or(self, other):
         return constexpr(self.value or other.value)
-    
-    logical_or = __or__
 
     def __pos__(self):
         return constexpr(+self.value)
