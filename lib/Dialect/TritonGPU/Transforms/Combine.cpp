@@ -1209,6 +1209,8 @@ public:
 // This pattern collects the wrong Mma those need to update and create the right
 // ones for each.
 class CollectMmaToUpdateForVolta : public mlir::RewritePattern {
+  // Holds the mapping from old(wrong) mmaEncodingAttr to the new(correct)
+  // mmaEncodingAttr.
   DenseMap<MmaEncodingAttr, MmaEncodingAttr> &mmaToUpdate;
 
 public:
@@ -1243,6 +1245,10 @@ public:
     bool isBRow = dotOperandB.getIsMMAv1Row().cast<BoolAttr>().getValue();
     auto [isARow_, isBRow_, isAVec4, isBVec4] =
         mmaLayout.decodeVoltaLayoutStates();
+
+    // The wpt of MMAv1 is also determined by isARow, isBRow and shape, and it
+    // could only be set here for those states might be updated by previous
+    // patterns in the Combine Pass.
     if (isARow_ == isARow && isBRow_ == isBRow) {
       auto tgtWpt =
           getWarpsPerCTA(DT.getShape(), isARow, isBRow, isAVec4, isBVec4,
@@ -1263,12 +1269,9 @@ public:
 
       // Recalculate the wpt, for here we could get the latest information, the
       // wpt should be updated.
-      printf("oriWpt t-0 %d %d\n", mmaLayout.getWarpsPerCTA()[0],
-             mmaLayout.getWarpsPerCTA()[1]);
       auto newWpt =
           getWarpsPerCTA(DT.getShape(), isARow, isBRow, isAVec4, isBVec4,
                          product(mmaLayout.getWarpsPerCTA()));
-      printf("newWpt t-0 %d %d\n", newWpt[0], newWpt[1]);
       newMmaLayout =
           MmaEncodingAttr::get(ctx, mmaLayout.getVersionMajor(), newWpt,
                                AT.getShape(), BT.getShape(), isARow, isBRow);
@@ -1280,10 +1283,15 @@ public:
     return failure();
   }
 
-  // Update the wpt using more information.
+  // Get the wpt for MMAv1 using more information.
+  // Reference the original logic here
+  // https://github.com/openai/triton/blob/0e4691e6dd91e001a8d33b71badf8b3314325459/lib/codegen/analysis/layout.cc#L223
   SmallVector<unsigned, 2> getWarpsPerCTA(ArrayRef<int64_t> shape, bool isARow,
                                           bool isBRow, bool isAVec4,
                                           bool isBVec4, int numWarps) const {
+    // TODO[Superjomn]: Share code with
+    // DotOpMmaV1ConversionHelper::AParam/BParam, since same code to compute the
+    // rep,spw and fpw.
     SmallVector<unsigned, 2> wpt({1, 1});
     SmallVector<unsigned, 2> wpt_nm1;
 
@@ -1297,7 +1305,6 @@ public:
     rep[1] = 2 * packSize1;
     spw[1] = fpw[1] * 4 * rep[1];
 
-    printf("spw: %d %d\n", spw[0], spw[1]);
     do {
       wpt_nm1 = wpt;
       if (wpt[0] * wpt[1] < numWarps)
@@ -1306,12 +1313,11 @@ public:
         wpt[1] = std::clamp<int>(wpt[1] * 2, 1, shape[1] / spw[1]);
     } while (wpt_nm1 != wpt);
 
-    printf("finalwpt: %d %d\n", wpt[0], wpt[1]);
     return wpt;
   }
 };
 
-// Correct the versionMinor field in MmaEncodingAttr for Volta.
+// Correct the versionMinor and wpt information in MmaEncodingAttr for Volta.
 class UpdateMMAVersionMinorForVolta : public mlir::RewritePattern {
   const DenseMap<MmaEncodingAttr, MmaEncodingAttr> &mmaToUpdate;
   enum class Kind {
