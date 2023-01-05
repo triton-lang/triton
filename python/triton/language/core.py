@@ -1253,3 +1253,9 @@ def printf(prefix, *args, _builder=None):
     for arg in args:
         new_args.append(_to_tensor(arg, _builder))
     return semantic.printf(new_prefix, new_args, _builder)
+
+
+@builtin
+def assert2(cond, msg="", _builder=None):
+    msg = _constexpr_to_value(msg)
+    return semantic.assert2(_to_tensor(cond, _builder), msg, _builder)

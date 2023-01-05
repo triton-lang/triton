@@ -408,8 +408,7 @@ def TT_MakeRangeOp : TT_Op<"make_range", [NoSideEffect]> {
 // Make PrintfOp
 //
 def TT_PrintfOp : TT_Op<"printf", [MemoryEffects<[MemWrite]>]>,
-  Arguments<(ins StrAttr:$prefix,
-                Variadic<AnyTypeOf<[TT_Type]>>:$args)> {
+  Arguments<(ins StrAttr:$prefix, Variadic<AnyTypeOf<[TT_Type]>>:$args)> {
   let summary = "Device-side printf, as in CUDA for debugging";
   let description = [{
     `tt.printf` takes a literal string prefix and an arbitrary number of scalar or tensor arguments that should be printed.
@@ -418,6 +417,16 @@ def TT_PrintfOp : TT_Op<"printf", [MemoryEffects<[MemWrite]>]>,
   let assemblyFormat = [{
     $prefix attr-dict ($args^ `:` type($args))?
   }];
+}
+
+//
+// Make AssertOp
+//
+def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite]>]> {
+  let summary = "Device-side assert, as in CUDA for debugging";
+  let description = [{}];
+  let arguments = (ins TT_Tensor:$condition, StrAttr:$message);
+  let assemblyFormat = "$condition `,` $message attr-dict `:` type($condition)";
 }
 
 #endif // Triton_OPS

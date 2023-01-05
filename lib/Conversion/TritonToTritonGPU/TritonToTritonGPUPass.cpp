@@ -453,13 +453,27 @@ struct TritonReducePattern : public OpConversionPattern<triton::ReduceOp> {
 };
 
 struct TritonPrintfPattern : public OpConversionPattern<triton::PrintfOp> {
-  using OpConversionPattern<PrintfOp>::OpConversionPattern;
+  using OpConversionPattern<triton::PrintfOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(PrintfOp op, typename PrintfOp::Adaptor adaptor,
+  matchAndRewrite(triton::PrintfOp op,
+                  typename triton::PrintfOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOpWithNewOp<triton::PrintfOp>(op, op.prefixAttr(),
                                                   adaptor.getOperands());
+    return success();
+  }
+};
+
+struct TritonAssertPattern : public OpConversionPattern<triton::AssertOp> {
+  using OpConversionPattern<triton::AssertOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::AssertOp op,
+                  typename triton::AssertOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<triton::AssertOp>(op, adaptor.condition(),
+                                                  op.messageAttr());
     return success();
   }
 };
@@ -478,7 +492,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       TritonReducePattern, TritonTransPattern, TritonExpandDimsPattern,
       TritonMakeRangePattern, TritonDotPattern, TritonLoadPattern,
       TritonStorePattern, TritonExtElemwisePattern, TritonPrintfPattern,
-      TritonAtomicRMWPattern>(typeConverter, context);
+      TritonAssertPattern, TritonAtomicRMWPattern>(typeConverter, context);
 }
 
 //

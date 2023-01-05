@@ -45,6 +45,9 @@
 #define fcmp_olt(lhs, rhs)                                                     \
   rewriter.create<LLVM::FCmpOp>(loc, rewriter.getI1Type(),                     \
                                 LLVM::FCmpPredicate::olt, lhs, rhs)
+#define fcmp_eq(lhs, rhs)                                                      \
+  rewriter.create<LLVM::FCmpOp>(loc, rewriter.getI1Type(),                     \
+                                LLVM::FCmpPredicate::oeq, lhs, rhs)
 #define icmp_eq(...)                                                           \
   rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::eq, __VA_ARGS__)
 #define icmp_ne(...)                                                           \
@@ -77,6 +80,7 @@
 #define f16_ty rewriter.getF16Type()
 #define bf16_ty rewriter.getBF16Type()
 #define i8_ty rewriter.getIntegerType(8)
+#define i1_ty rewriter.getI1Type()
 #define f32_ty rewriter.getF32Type()
 #define f64_ty rewriter.getF64Type()
 #define vec_ty(type, num) VectorType::get(num, type)

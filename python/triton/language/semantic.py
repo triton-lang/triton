@@ -1170,3 +1170,7 @@ def printf(prefix: str, args: List[tl.tensor], builder: ir.builder) -> tl.tensor
     for arg in args:
         new_args.append(arg.handle)
     return tl.tensor(builder.create_printf(prefix, new_args), tl.void)
+
+
+def assert2(cond: tl.tensor, msg: str, builder: ir.builder) -> tl.tensor:
+    return tl.tensor(builder.create_assert(cond.handle, msg), tl.void)
