@@ -8,6 +8,7 @@ import triton
 @pytest.mark.parametrize("TRANS_A", [False, True])
 @pytest.mark.parametrize("TRANS_B", [False, True])
 @pytest.mark.parametrize("BLOCK", [16, 32, 64])
+# TODO: float32 fails
 @pytest.mark.parametrize("DTYPE", [torch.float16])
 def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=256):
     seed = 0
@@ -31,9 +32,9 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     layout[1, 2, :] = 0
     layout[1, :, 1] = 0
     # create data
-    a_ref, a_tri = triton.testing.make_pair(a_shape, alpha=.1)
-    b_ref, b_tri = triton.testing.make_pair(b_shape, alpha=.1)
-    dc_ref, dc_tri = triton.testing.make_pair(c_shape)
+    a_ref, a_tri = triton.testing.make_pair(a_shape, alpha=.1, dtype=DTYPE)
+    b_ref, b_tri = triton.testing.make_pair(b_shape, alpha=.1, dtype=DTYPE)
+    dc_ref, dc_tri = triton.testing.make_pair(c_shape, dtype=DTYPE)
     # compute [torch]
     dc_ref = do_mask(dc_ref) if is_sdd else dc_ref
     a_ref = do_mask(a_ref) if is_dsd else a_ref
@@ -125,6 +126,10 @@ def test_attention_fwd_bwd(
     batch_size=2,
     n_heads=2,
 ):
+    capability = torch.cuda.get_device_capability()
+    if capability[0] < 7:
+        pytest.skip("Only test tl.dot() on devices with sm >= 70")
+
     # inputs
     qkv_shape = (batch_size, n_heads, n_ctx, 64)
     qkvs = [

@@ -78,9 +78,9 @@ def softmax_kernel(
     input_ptrs = row_start_ptr + col_offsets
     # Load the row into SRAM, using a mask since BLOCK_SIZE may be > than n_cols
     row = tl.load(input_ptrs, mask=col_offsets < n_cols, other=-float('inf'))
-    # Substract maximum for numerical stability
+    # Subtract maximum for numerical stability
     row_minus_max = row - tl.max(row, axis=0)
-    # Note that exponentials in Triton are fast but approximate (i.e., think __expf in CUDA)
+    # Note that exponentiation in Triton is fast but approximate (i.e., think __expf in CUDA)
     numerator = tl.exp(row_minus_max)
     denominator = tl.sum(numerator, axis=0)
     softmax_output = numerator / denominator
@@ -188,4 +188,4 @@ benchmark.run(show_plots=True, print_data=True)
 #
 #  - Triton is 4x faster than the Torch JIT. This confirms our suspicions that the Torch JIT does not do any fusion here.
 #  - Triton is noticeably faster than :code:`torch.softmax` -- in addition to being **easier to read, understand and maintain**.
-#    Note however that the PyTorch `softmax` operation is more general and will works on tensors of any shape.
+#    Note however that the PyTorch `softmax` operation is more general and will work on tensors of any shape.
