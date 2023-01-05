@@ -367,7 +367,6 @@ private:
                               ArrayRef<unsigned> outOrd,
                               SmallVector<Value> &vals, Value smemBase,
                               ArrayRef<int64_t> shape) const {
-    vec = 2;
     unsigned accumNumCTAsEachRep = 1;
     auto layout = type.getEncoding();
     auto mma = layout.cast<MmaEncodingAttr>();
@@ -395,6 +394,8 @@ private:
 
     std::vector<std::pair<SmallVector<Value>, Value>> coord2valT(
         accumSizePerThread);
+    bool needTrans = outOrd[0] != 0;
+    vec = needTrans ? 2 : 1;
     {
       // We need to transpose the coordinates and values here.
       std::vector<std::pair<SmallVector<Value>, Value>> coord2val(
@@ -406,30 +407,31 @@ private:
         coord2val[elemId] = std::make_pair(multiDimOffset, vals[elemId]);
       }
 
-      auto [isARow, isBRow, isAVec4, isBVec4] = mma.decodeVoltaLayoutStates();
-
-      DotOpMmaV1ConversionHelper helper(mma);
-      // do transpose
-      int numM =
-          helper.getElemsM(mma.getWarpsPerCTA()[0], shape[0], isARow, isAVec4);
-      int numN = accumSizePerThread / numM;
-      printf("numM: %d\n", numM);
-      printf("numN: %d\n", numN);
-      printf("coord: %lu\n", coord2valT.size());
+      if (needTrans) {
+        auto [isARow, isBRow, isAVec4, isBVec4] = mma.decodeVoltaLayoutStates();
+        DotOpMmaV1ConversionHelper helper(mma);
+        // do transpose
+        int numM = helper.getElemsM(mma.getWarpsPerCTA()[0], shape[0], isARow,
+                                    isAVec4);
+        int numN = accumSizePerThread / numM;
 
 #define SHOW_ACCI 0
 #if SHOW_ACCI
-      for (unsigned elemId = 0; elemId < accumSizePerThread; elemId++) {
-        auto [coord, currVal] = coord2val[elemId];
-        LLVM::vprintf("acci t-%d (%d,%d) %f",
-                      {LLVM::gThreadId, coord[0], coord[1], currVal}, rewriter);
-      }
+        for (unsigned elemId = 0; elemId < accumSizePerThread; elemId++) {
+          auto [coord, currVal] = coord2val[elemId];
+          LLVM::vprintf("acci t-%d (%d,%d) %f",
+                        {LLVM::gThreadId, coord[0], coord[1], currVal},
+                        rewriter);
+        }
 #endif
 
-      for (int r = 0; r < numM; r++) {
-        for (int c = 0; c < numN; c++) {
-          coord2valT[r * numN + c] = std::move(coord2val[c * numM + r]);
+        for (int r = 0; r < numM; r++) {
+          for (int c = 0; c < numN; c++) {
+            coord2valT[r * numN + c] = std::move(coord2val[c * numM + r]);
+          }
         }
+      } else {
+        coord2valT = std::move(coord2val);
       }
     }
 
@@ -440,22 +442,20 @@ private:
     // vec=2), the original vals is not needed.
     for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
       auto coord = coord2valT[elemId].first;
-      printf("coord.size: %lu\n", coord.size());
-      printf("paddeRepShape.size: %lu\n", paddedRepShape.size());
-      printf("outOrd.size: %lu\n", outOrd.size());
       Value offset = linearize(rewriter, loc, coord, paddedRepShape, outOrd);
       auto elemPtrTy = ptr_ty(elemTy, 3);
       Value ptr = gep(elemPtrTy, smemBase, offset);
       auto vecTy = vec_ty(elemTy, vec);
       ptr = bitcast(ptr, ptr_ty(vecTy, 3));
       if (stNotRd) {
+        // LLVM::vprintf("ptr t-%d %d", {LLVM::gThreadId, ptr}, rewriter);
         Value valVec = undef(vecTy);
         for (unsigned v = 0; v < vec; ++v) {
           auto currVal = coord2valT[elemId + v].second;
           valVec = insert_element(vecTy, valVec, currVal, idx_val(v));
         }
-        // LLVM::vprintf("storeptr t-%d %d", {LLVM::gThreadId, ptr}, rewriter);
         store(valVec, ptr);
+        // LLVM::vprintf("ptr t-%d done %d", {LLVM::gThreadId, ptr}, rewriter);
       } else {
         Value valVec = load(ptr);
         for (unsigned v = 0; v < vec; ++v) {
@@ -466,9 +466,6 @@ private:
     }
 
     barrier();
-    // if (stNotRd) {
-    // LLVM::vprintf("after storeptr t-%d", {LLVM::gThreadId}, rewriter);
-    //}
   }
 
   // blocked/mma -> blocked/mma.
