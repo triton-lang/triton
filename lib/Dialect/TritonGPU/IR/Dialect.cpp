@@ -109,9 +109,7 @@ SmallVector<unsigned> getSizePerThread(const Attribute &layout) {
     if (mmaLayout.isAmpere()) {
       return {2, 2};
     } else if (mmaLayout.isVolta()) {
-      // Note: here the definition of sizePerThread is obscure, which doesn't
-      // mean vecSize=4 can be supported in the last dimension.
-      return {2, 4};
+      return {1, 2};
     } else {
       llvm_unreachable("Unexpected mma version");
     }
@@ -180,7 +178,7 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout,
     for (unsigned d = 0, n = getOrder(parent).size(); d < n; ++d) {
       if (d == dim)
         continue;
-      shape.push_back(getShapePerCTA(parent)[d]);
+      shape.push_back(getShapePerCTA(parent, blockShape)[d]);
     }
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     if (mmaLayout.isAmpere())
@@ -188,6 +186,9 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout,
               8 * mmaLayout.getWarpsPerCTA()[1]};
     if (mmaLayout.isVolta()) {
       assert(!blockShape.empty() && "Volta needs the blockShape");
+      if (blockShape.size() == 1) // must be SliceEncoding
+        return {static_cast<unsigned>(blockShape[0]),
+                static_cast<unsigned>(blockShape[0])};
       return {static_cast<unsigned>(blockShape[0]),
               static_cast<unsigned>(blockShape[1])};
     }
@@ -198,7 +199,7 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout,
     if (auto parentMmaLayout = parentLayout.dyn_cast<MmaEncodingAttr>()) {
       assert(parentMmaLayout.isAmpere() &&
              "mmaLayout version = 1 is not implemented yet");
-      auto parentShapePerCTA = getShapePerCTA(parentLayout);
+      auto parentShapePerCTA = getShapePerCTA(parentLayout, blockShape);
       auto opIdx = dotLayout.getOpIdx();
       if (opIdx == 0) {
         return {parentShapePerCTA[0], 16};

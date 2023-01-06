@@ -288,7 +288,8 @@ private:
     auto sizePerThread = getSizePerThread(layout);
     auto accumSizePerThread = product<unsigned>(sizePerThread);
     SmallVector<unsigned> numCTAs(rank);
-    auto shapePerCTA = getShapePerCTA(layout);
+    llvm::outs() << "processReplica layout: " << layout << "\n";
+    auto shapePerCTA = getShapePerCTA(layout, type.getShape());
     auto order = getOrder(layout);
     for (unsigned d = 0; d < rank; ++d) {
       numCTAs[d] = ceil<unsigned>(type.getShape()[d], shapePerCTA[d]);
@@ -369,7 +370,11 @@ private:
                               ArrayRef<int64_t> shape) const {
     unsigned accumNumCTAsEachRep = 1;
     auto layout = type.getEncoding();
-    auto mma = layout.cast<MmaEncodingAttr>();
+    MmaEncodingAttr mma = layout.dyn_cast<MmaEncodingAttr>();
+    auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>();
+    if (sliceLayout)
+      mma = sliceLayout.getParent().cast<MmaEncodingAttr>();
+
     auto order = getOrder(layout);
     auto rank = type.getRank();
     int accumSizePerThread = vals.size();
@@ -377,9 +382,7 @@ private:
 
     SmallVector<unsigned> numCTAs(rank, 1);
     SmallVector<unsigned> numCTAsEachRep(rank, 1);
-    SmallVector<unsigned> shapePerCTA{
-        {static_cast<unsigned>(shape[0]), static_cast<unsigned>(shape[1])}};
-
+    SmallVector<unsigned> shapePerCTA = getShapePerCTA(layout, shape);
     auto elemTy = type.getElementType();
 
     int ctaId = 0;
@@ -395,9 +398,12 @@ private:
     std::vector<std::pair<SmallVector<Value>, Value>> coord2valT(
         accumSizePerThread);
     bool needTrans = outOrd[0] != 0;
+    if (sliceLayout)
+      needTrans = false;
     vec = needTrans ? 2 : 1;
     {
-      // We need to transpose the coordinates and values here.
+      // We need to transpose the coordinates and values here to enable vec=2
+      // when store to smem.
       std::vector<std::pair<SmallVector<Value>, Value>> coord2val(
           accumSizePerThread);
       for (unsigned elemId = 0; elemId < accumSizePerThread; ++elemId) {
@@ -405,6 +411,10 @@ private:
             getMultiDimOffset(layout, loc, rewriter, elemId, type.getShape(),
                               multiDimCTAInRepId, shapePerCTA);
         coord2val[elemId] = std::make_pair(multiDimOffset, vals[elemId]);
+        if (sliceLayout) {
+          LLVM::vprintf("acci %d", {multiDimOffset[0]}, rewriter);
+          printf("** vals.size: %ld\n", vals.size());
+        }
       }
 
       if (needTrans) {
@@ -415,14 +425,14 @@ private:
                                     isAVec4);
         int numN = accumSizePerThread / numM;
 
-#define SHOW_ACCI 0
+#define SHOW_ACCI 1
 #if SHOW_ACCI
-        for (unsigned elemId = 0; elemId < accumSizePerThread; elemId++) {
-          auto [coord, currVal] = coord2val[elemId];
-          LLVM::vprintf("acci t-%d (%d,%d) %f",
-                        {LLVM::gThreadId, coord[0], coord[1], currVal},
-                        rewriter);
-        }
+        if (sliceLayout)
+          for (unsigned elemId = 0; elemId < accumSizePerThread; elemId++) {
+            auto [coord, currVal] = coord2val[elemId];
+            LLVM::vprintf("acci t-%d (%d) %f",
+                          {LLVM::gThreadId, coord[0], currVal}, rewriter);
+          }
 #endif
 
         for (int r = 0; r < numM; r++) {
@@ -464,8 +474,6 @@ private:
         }
       }
     }
-
-    barrier();
   }
 
   // blocked/mma -> blocked/mma.
@@ -498,13 +506,24 @@ private:
     // For Volta, all the coords for a CTA are calculated.
     bool isSrcMmaV1{}, isDstMmaV1{};
     if (auto mmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>()) {
-      if (mmaLayout.isVolta())
-        isSrcMmaV1 = true;
+      isSrcMmaV1 = mmaLayout.isVolta();
+    }
+    if (auto sliceLayout = srcLayout.dyn_cast<SliceEncodingAttr>()) {
+      isSrcMmaV1 =
+          sliceLayout.getParent().isa<MmaEncodingAttr>() &&
+          sliceLayout.getParent().dyn_cast<MmaEncodingAttr>().isVolta();
     }
     if (auto mmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>()) {
-      if (mmaLayout.isVolta())
-        isDstMmaV1 = true;
+      isDstMmaV1 = mmaLayout.isVolta();
     }
+    if (auto sliceLayout = dstLayout.dyn_cast<SliceEncodingAttr>()) {
+      isDstMmaV1 =
+          sliceLayout.getParent().isa<MmaEncodingAttr>() &&
+          sliceLayout.getParent().dyn_cast<MmaEncodingAttr>().isVolta();
+    }
+
+    llvm::outs() << "srcTy: " << srcTy << " " << isSrcMmaV1 << "\n";
+    llvm::outs() << "dstTy: " << dstTy << " " << isDstMmaV1 << "\n";
 
     for (unsigned d = 0; d < rank; ++d) {
       unsigned inPerCTA = std::min<unsigned>(shape[d], srcShapePerCTA[d]);

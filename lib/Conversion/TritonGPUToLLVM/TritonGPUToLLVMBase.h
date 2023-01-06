@@ -373,8 +373,10 @@ public:
                            ArrayRef<int64_t> shape) const {
     SmallVector<SmallVector<unsigned>> ret;
 
-    for (unsigned i = 0; i < shape[0]; i += getShapePerCTA(mmaLayout)[0]) {
-      for (unsigned j = 0; j < shape[1]; j += getShapePerCTA(mmaLayout)[1]) {
+    for (unsigned i = 0; i < shape[0];
+         i += getShapePerCTA(mmaLayout, shape)[0]) {
+      for (unsigned j = 0; j < shape[1];
+           j += getShapePerCTA(mmaLayout, shape)[1]) {
         ret.push_back({i, j});
         ret.push_back({i, j + 1});
         ret.push_back({i + 2, j});
