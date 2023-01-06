@@ -1348,6 +1348,11 @@ void init_triton_ir(py::module &&m) {
             [](mlir::PassManager &self) {
               self.addPass(mlir::createTritonGPUOptimizeLoadConvertPass());
             })
+      .def("add_tritongpu_sink_conversions_from_shared_pass",
+            [](mlir::PassManager &self) {
+              self.addPass(
+                  mlir::createTritonGPUSinkConversionsFromSharedPass());
+            })
       .def("add_triton_gpu_to_llvm",
            [](mlir::PassManager &self) {
              self.addPass(mlir::triton::createConvertTritonGPUToLLVMPass());

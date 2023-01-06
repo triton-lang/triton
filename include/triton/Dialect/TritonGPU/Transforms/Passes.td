@@ -84,6 +84,18 @@ def TritonGPUOptimizeLoadConvert: Pass<"tritongpu-optimize-load-convert", "mlir:
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonGPUSinkConversionsFromShared: Pass<"tritongpu-sink-conversions-from-shared", "mlir::ModuleOp"> {
+  let summary = "Sink conversions from shared into loops";
+
+  let description = "This pass sinks conversions from shared memory into loops. This will lead the codegen "
+                    "to keep data in shared memory throughout loops, which will reduce register pressure.";
+
+  let constructor = "mlir::createTritonGPUSinkConversionsFromSharedPass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
 def TritonGPUCanonicalizeLoops: Pass<"tritongpu-canonicalize-loops", "mlir::ModuleOp"> {
   let summary = "canonicalize scf.ForOp ops";
 
