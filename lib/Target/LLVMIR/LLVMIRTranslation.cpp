@@ -36,9 +36,8 @@ static void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata) {
   auto &ctx = func->getContext();
 
   if (metadata.maxntidx > 0) {
-    auto i32_ty = llvm::IntegerType::get(ctx, 32);
-    auto warps =
-        llvm::ConstantInt::get(i32_ty, llvm::APInt(32, metadata.maxntidx));
+    auto warps = llvm::ConstantInt::get(llvm::IntegerType::get(ctx, 32),
+                                        llvm::APInt(32, metadata.maxntidx));
 
     llvm::Metadata *md_args[] = {llvm::ValueAsMetadata::get(func),
                                  llvm::MDString::get(ctx, "maxntidx"),
@@ -49,12 +48,12 @@ static void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata) {
   }
 
   if (metadata.isKernel) {
-    llvm::Metadata *md_args[] = {
+    llvm::Metadata *mdArgs[] = {
         llvm::ValueAsMetadata::get(func), llvm::MDString::get(ctx, "kernel"),
         llvm::ValueAsMetadata::get(
             llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx), 1))};
     module->getOrInsertNamedMetadata("nvvm.annotations")
-        ->addOperand(llvm::MDNode::get(ctx, md_args));
+        ->addOperand(llvm::MDNode::get(ctx, mdArgs));
   }
 }
 
@@ -99,8 +98,8 @@ static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
       auto path =
           func.getOperation()->getAttr("libpath").dyn_cast<StringAttr>();
       if (name) {
-        std::string lib_name = name.str();
-        externLibs[lib_name] = path.str();
+        std::string libName = name.str();
+        externLibs[libName] = path.str();
       }
     }
   }
@@ -123,12 +122,12 @@ static void linkLibdevice(llvm::Module &module) {
   // for example, when enable nvvm-reflect-ftz, sqrt.approx.f32 will change to
   // sqrt.approx.ftz.f32
   auto &ctx = module.getContext();
-  llvm::Type *I32 = llvm::Type::getInt32Ty(ctx);
+  llvm::Type *i32 = llvm::Type::getInt32Ty(ctx);
   llvm::Metadata *mdFour =
-      llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(I32, 4));
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(i32, 4));
   llvm::Metadata *mdName = llvm::MDString::get(ctx, "nvvm-reflect-ftz");
   llvm::Metadata *mdOne =
-      llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(I32, 1));
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(i32, 1));
   llvm::MDNode *reflect = llvm::MDNode::get(ctx, {mdFour, mdName, mdOne});
   module.addModuleFlag(reflect);
 }
