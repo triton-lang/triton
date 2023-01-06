@@ -32,8 +32,6 @@ static bool findAndReplace(std::string &str, const std::string &begin,
 }
 
 std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version) {
-  // linkExternal(module);
-
   // LLVM version in use may not officially support target hardware
   int maxNNVMCC = 75;
   // options
