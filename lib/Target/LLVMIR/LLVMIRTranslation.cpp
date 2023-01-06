@@ -185,7 +185,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
 
   llvm::SMDiagnostic err;
   for (auto &lib : externLibs) {
-    if (linkExternLib(*llvmir, lib.second))
+    if (linkExternLib(*llvmir, lib.first, lib.second))
       return nullptr;
   }
 
@@ -211,7 +211,24 @@ void addExternalLibs(mlir::ModuleOp &module,
   module.getOperation()->setAttr("triton_gpu.externs", dict);
 }
 
-bool linkExternLib(llvm::Module &module, llvm::StringRef path) {
+static void linkLibdevice(llvm::Module &module) {
+  // please check https://llvm.org/docs/NVPTXUsage.html#reflection-parameters
+  // this will enable fast math path in libdevice
+  // for example, when enable nvvm-reflect-ftz, sqrt.approx.f32 will change to
+  // sqrt.approx.ftz.f32
+  auto &ctx = module.getContext();
+  llvm::Type *I32 = llvm::Type::getInt32Ty(ctx);
+  llvm::Metadata *mdFour =
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(I32, 4));
+  llvm::Metadata *mdName = llvm::MDString::get(ctx, "nvvm-reflect-ftz");
+  llvm::Metadata *mdOne =
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(I32, 1));
+  llvm::MDNode *reflect = llvm::MDNode::get(ctx, {mdFour, mdName, mdOne});
+  module.addModuleFlag(reflect);
+}
+
+bool linkExternLib(llvm::Module &module, llvm::StringRef name,
+                   llvm::StringRef path) {
   llvm::SMDiagnostic err;
   auto &ctx = module.getContext();
 
@@ -228,6 +245,10 @@ bool linkExternLib(llvm::Module &module, llvm::StringRef path) {
                                 llvm::Linker::Flags::LinkOnlyNeeded)) {
     llvm::errs() << "Failed to link " << path;
     return true;
+  }
+
+  if (name == "libdevice") {
+    linkLibdevice(module);
   }
 
   return false;

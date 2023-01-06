@@ -31,7 +31,8 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
 std::unique_ptr<llvm::Module>
 translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module);
 
-bool linkExternLib(llvm::Module &module, llvm::StringRef path);
+bool linkExternLib(llvm::Module &module, llvm::StringRef name,
+                   llvm::StringRef path);
 
 } // namespace triton
 } // namespace mlir
