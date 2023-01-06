@@ -164,7 +164,6 @@ static bool linkExternLib(llvm::Module &module, llvm::StringRef name,
 
 std::unique_ptr<llvm::Module>
 translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
-  auto context = module->getContext();
   DialectRegistry registry;
   mlir::registerLLVMDialectTranslation(registry);
   mlir::registerNVVMDialectTranslation(registry);
@@ -179,6 +178,8 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
     return nullptr;
   }
 
+  // Link external libraries before perform optimizations
+  // Note from libdevice users guide:
   // https://docs.nvidia.com/cuda/libdevice-users-guide/basic-usage.html
   // The standard process for linking with libdevice is to first link it with
   // the target module, then run the standard LLVM optimization and code
