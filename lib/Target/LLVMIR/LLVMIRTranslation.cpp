@@ -26,7 +26,7 @@ namespace triton {
 // information from mlir module.
 struct NVVMMetadata {
   int maxntidx{-1};
-  bool is_kernel{};
+  bool isKernel{};
   // Free to extend with other information.
 };
 
@@ -48,7 +48,7 @@ static void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata) {
         ->addOperand(llvm::MDNode::get(ctx, md_args));
   }
 
-  if (metadata.is_kernel) {
+  if (metadata.isKernel) {
     llvm::Metadata *md_args[] = {
         llvm::ValueAsMetadata::get(func), llvm::MDString::get(ctx, "kernel"),
         llvm::ValueAsMetadata::get(
@@ -75,7 +75,7 @@ extractNVVMMetadata(mlir::ModuleOp module,
 
     // kernel
     if (op->hasAttr("nvvm.kernel")) {
-      meta.is_kernel = true;
+      meta.isKernel = true;
       hasMetadata = true;
     }
 
@@ -179,6 +179,18 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
     return nullptr;
   }
 
+  // https://docs.nvidia.com/cuda/libdevice-users-guide/basic-usage.html
+  // The standard process for linking with libdevice is to first link it with
+  // the target module, then run the standard LLVM optimization and code
+  // generation passes. This allows the optimizers to inline and perform
+  // analyses on the used library functions, and eliminate any used functions as
+  // dead code.
+  auto externLibs = getExternLibs(module);
+  for (auto &lib : externLibs) {
+    if (linkExternLib(*llvmModule, lib.first, lib.second))
+      return nullptr;
+  }
+
   auto optPipeline = mlir::makeOptimizingTransformer(
       /*optLevel=*/3, /*sizeLevel=*/0,
       /*targetMachine=*/nullptr);
@@ -192,12 +204,6 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
     auto it = nvvmMetadata.find(func.getName());
     if (it != nvvmMetadata.end())
       amendLLVMFunc(&func, it->second);
-  }
-
-  auto externLibs = getExternLibs(module);
-  for (auto &lib : externLibs) {
-    if (linkExternLib(*llvmModule, lib.first, lib.second))
-      return nullptr;
   }
 
   return llvmModule;
