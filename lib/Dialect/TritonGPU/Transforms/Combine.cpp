@@ -19,7 +19,6 @@
 
 #include <memory>
 
-
 using namespace mlir;
 namespace {
 #include "TritonGPUCombine.inc"
@@ -483,8 +482,7 @@ public:
       return op->getBlock() == cvt->getBlock() &&
              !(isa<triton::ReduceOp>(op) &&
                !op->getResult(0).getType().isa<RankedTensorType>()) &&
-             !isa<triton::gpu::ConvertLayoutOp>(op) &&
-             !isa<scf::YieldOp>(op);
+             !isa<triton::gpu::ConvertLayoutOp>(op) && !isa<scf::YieldOp>(op);
     };
     mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
     if (cvtSlices.empty())

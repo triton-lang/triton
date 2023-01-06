@@ -1345,14 +1345,18 @@ void init_triton_ir(py::module &&m) {
                  mlir::createTritonGPUCombineOpsPass(computeCapability));
            })
       .def("add_tritongpu_optimize_load_convert_pass",
-            [](mlir::PassManager &self) {
-              self.addPass(mlir::createTritonGPUOptimizeLoadConvertPass());
-            })
+           [](mlir::PassManager &self) {
+             self.addPass(mlir::createTritonGPUOptimizeLoadConvertPass());
+           })
       .def("add_tritongpu_sink_conversions_from_shared_pass",
-            [](mlir::PassManager &self) {
-              self.addPass(
-                  mlir::createTritonGPUSinkConversionsFromSharedPass());
-            })
+           [](mlir::PassManager &self) {
+             self.addPass(mlir::createTritonGPUSinkConversionsFromSharedPass());
+           })
+      .def("add_tritongpu_decompose_conversions_to_dot_operand_pass",
+           [](mlir::PassManager &self) {
+             self.addPass(
+                 mlir::createTritonGPUDecomposeConversionsToDotOperandPass());
+           })
       .def("add_triton_gpu_to_llvm",
            [](mlir::PassManager &self) {
              self.addPass(mlir::triton::createConvertTritonGPUToLLVMPass());

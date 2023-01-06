@@ -17,6 +17,8 @@ std::unique_ptr<Pass> createTritonGPUOptimizeLoadConvertPass();
 
 std::unique_ptr<Pass> createTritonGPUSinkConversionsFromSharedPass();
 
+std::unique_ptr<Pass> createTritonGPUDecomposeConversionsToDotOperandPass();
+
 std::unique_ptr<Pass> createTritonGPUCombineOpsPass(int computeCapability = 80);
 
 std::unique_ptr<Pass> createTritonGPUVerifier();

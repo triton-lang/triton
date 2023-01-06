@@ -96,6 +96,17 @@ def TritonGPUSinkConversionsFromShared: Pass<"tritongpu-sink-conversions-from-sh
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonGPUDecomposeConversionsToDotOperand: Pass<"tritongpu-decompose-conversions-to-dot-operand", "mlir::ModuleOp"> {
+  let summary = "Decompose convert[distributed -> dotOperand] into convert[distributed -> shared -> dotOperand]";
+
+  let description = "Decomposing conversions this way makes it possible to use CSE and re-use #shared tensors";
+
+  let constructor = "mlir::createTritonGPUDecomposeConversionsToDotOperandPass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
 def TritonGPUCanonicalizeLoops: Pass<"tritongpu-canonicalize-loops", "mlir::ModuleOp"> {
   let summary = "canonicalize scf.ForOp ops";
 
