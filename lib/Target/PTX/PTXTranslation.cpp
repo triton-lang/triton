@@ -72,27 +72,28 @@ static void linkExternal(llvm::Module &module) {
 std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version) {
   linkExternal(module);
 
-  // LLVM version in use may not officially support target hardware
-  int maxNNVMCC = 75;
+  // LLVM version in use may not officially support target hardware.
+  // Supported versions for LLVM 14 are here:
+  // https://github.com/llvm/llvm-project/blob/f28c006a5895fc0e329fe15fead81e37457cb1d1/clang/include/clang/Basic/BuiltinsNVPTX.def
+  int maxPTX = std::min(75, version);
+  int maxCC = std::min(86, cc);
   // options
   auto options = llvm::cl::getRegisteredOptions();
   auto *shortPtr =
       static_cast<llvm::cl::opt<bool> *>(options["nvptx-short-ptr"]);
   assert(shortPtr);
   shortPtr->setValue(true);
-  // compute capability
-  std::string sm = "sm_" + std::to_string(cc);
+  std::string sm = "sm_" + std::to_string(maxCC);
   // max PTX version
-  int ptxMajor = version / 10;
-  int ptxMinor = version % 10;
+  int ptxMajor = maxPTX / 10;
+  int ptxMinor = maxPTX % 10;
   // create
   llvm::SmallVector<char, 0> buffer;
   std::string triple = "nvptx64-nvidia-cuda";
-  std::string proc = "sm_" + std::to_string(std::min(cc, maxNNVMCC));
+  std::string proc = "sm_" + std::to_string(maxCC);
   std::string layout = "";
   std::string features = "";
-  // std::string features = "+ptx" + std::to_string(std::min(ptx,
-  // max_nvvm_ptx));
+  // std::string features = "+ptx" + std::to_string(maxPTX);
   initLLVM();
   // verify and store llvm
   llvm::legacy::PassManager pm;
