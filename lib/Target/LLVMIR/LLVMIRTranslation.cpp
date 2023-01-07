@@ -105,13 +105,14 @@ static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
     }
   }
 
-  if (!funcs.empty() && externLibs.count("libdevice") == 0) {
+  if (!funcs.empty() && externLibs.empty()) {
     // When using the Math Dialect, it is possible that some ops (e.g., log) are
     // lowered to a function call. In this case, we need to link libdevice
     // using its default path:
     // [triton root dir]/python/triton/language/libdevice.10.bc
     // TODO(Keren): handle external linkage other than libdevice?
     namespace fs = std::filesystem;
+    static const std::string libdevice = "libdevice";
     static const std::filesystem::path path = std::filesystem::path(__FILE__)
                                                   .parent_path()
                                                   .parent_path()
@@ -119,7 +120,7 @@ static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
                                                   .parent_path() /
                                               "python" / "triton" / "language" /
                                               "libdevice.10.bc";
-    externLibs["libdevice"] = path.string();
+    externLibs.try_emplace(libdevice, path.string());
   }
 
   if (module.getOperation()->hasAttr("triton_gpu.externs")) {
