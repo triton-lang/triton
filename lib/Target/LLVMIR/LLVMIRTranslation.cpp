@@ -105,7 +105,17 @@ static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
     }
   }
 
-  if (!funcs.empty() && externLibs.empty()) {
+  if (module.getOperation()->hasAttr("triton_gpu.externs")) {
+    auto dict = module.getOperation()
+                    ->getAttr("triton_gpu.externs")
+                    .dyn_cast<DictionaryAttr>();
+    for (auto &attr : dict) {
+      externLibs[attr.getName().strref().trim().str()] =
+          attr.getValue().dyn_cast<StringAttr>().strref().trim().str();
+    }
+  }
+
+  if (!funcs.empty()) {
     // When using the Math Dialect, it is possible that some ops (e.g., log) are
     // lowered to a function call. In this case, we need to link libdevice
     // using its default path:
@@ -123,15 +133,6 @@ static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
     externLibs.try_emplace(libdevice, path.string());
   }
 
-  if (module.getOperation()->hasAttr("triton_gpu.externs")) {
-    auto dict = module.getOperation()
-                    ->getAttr("triton_gpu.externs")
-                    .dyn_cast<DictionaryAttr>();
-    for (auto &attr : dict) {
-      externLibs[attr.getName().strref().trim().str()] =
-          attr.getValue().dyn_cast<StringAttr>().strref().trim().str();
-    }
-  }
   return externLibs;
 }
 
