@@ -18,6 +18,7 @@
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/Support/SourceMgr.h"
+#include <filesystem>
 
 namespace mlir {
 namespace triton {
@@ -104,6 +105,24 @@ static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
     }
   }
 
+  if (!funcs.empty() && externLibs.empty()) {
+    // When using the Math Dialect, it is possible that some ops (e.g., log) are
+    // lowered to a function call. In this case, we need to link libdevice
+    // using its default path:
+    // [triton root dir]/python/triton/language/libdevice.10.bc
+    // TODO(Keren): handle external linkage other than libdevice?
+    namespace fs = std::filesystem;
+    static const std::string libdevice = "libdevice";
+    static const std::filesystem::path path = std::filesystem::path(__FILE__)
+                                                  .parent_path()
+                                                  .parent_path()
+                                                  .parent_path()
+                                                  .parent_path() /
+                                              "python" / "triton" / "language" /
+                                              "libdevice.10.bc";
+    externLibs[libdevice] = path.string();
+  }
+
   if (module.getOperation()->hasAttr("triton_gpu.externs")) {
     auto dict = module.getOperation()
                     ->getAttr("triton_gpu.externs")
@@ -132,8 +151,8 @@ static void linkLibdevice(llvm::Module &module) {
   module.addModuleFlag(reflect);
 }
 
-bool linkExternLib(llvm::Module &module, llvm::StringRef name,
-                   llvm::StringRef path) {
+static bool linkExternLib(llvm::Module &module, llvm::StringRef name,
+                          llvm::StringRef path) {
   llvm::SMDiagnostic err;
   auto &ctx = module.getContext();
 
