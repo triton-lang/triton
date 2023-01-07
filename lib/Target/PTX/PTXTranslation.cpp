@@ -47,16 +47,16 @@ static void linkExternal(llvm::Module &module) {
     namespace fs = std::filesystem;
     // Using the default libdevice path:
     // [triton root dir]/python/triton/language/libdevice.10.bc
-    static const fs::path libdevice = fs::path(__FILE__)
-                                          .parent_path()
-                                          .parent_path()
-                                          .parent_path()
-                                          .parent_path() /
-                                      "python" / "triton" / "language" /
-                                      "libdevice.10.bc";
-    if (mlir::triton::linkExternLib(module, "libdevice", libdevice.string()))
-      llvm::errs() << "link failed for libdevice at path: "
-                   << libdevice.string();
+    static const std::string libdevice = "libdevice";
+    static const fs::path path = fs::path(__FILE__)
+                                     .parent_path()
+                                     .parent_path()
+                                     .parent_path()
+                                     .parent_path() /
+                                 "python" / "triton" / "language" /
+                                 "libdevice.10.bc";
+    if (mlir::triton::linkExternLib(module, libdevice, path.string()))
+      llvm::errs() << "link failed for libdevice at path: " << path.string();
   }
 }
 
