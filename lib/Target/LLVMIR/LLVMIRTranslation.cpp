@@ -132,8 +132,8 @@ static void linkLibdevice(llvm::Module &module) {
   module.addModuleFlag(reflect);
 }
 
-static bool linkExternLib(llvm::Module &module, llvm::StringRef name,
-                          llvm::StringRef path) {
+bool linkExternLib(llvm::Module &module, llvm::StringRef name,
+                   llvm::StringRef path) {
   llvm::SMDiagnostic err;
   auto &ctx = module.getContext();
 

@@ -31,7 +31,37 @@ static bool findAndReplace(std::string &str, const std::string &begin,
   return true;
 }
 
+// When using the Math Dialect, it is possible that some ops (e.g., log) are
+// lowered to a function call. In this case, we need to link the libdevice
+// TODO(Keren): handle external linkage other than libdevice?
+static void linkExternal(llvm::Module &module) {
+  bool hasExternal = false;
+  for (auto &func : module) {
+    if (func.hasExternalLinkage()) {
+      hasExternal = true;
+      break;
+    }
+  }
+
+  if (hasExternal) {
+    namespace fs = std::filesystem;
+    // Using the default libdevice path:
+    // [triton root dir]/python/triton/language/libdevice.10.bc
+    static const fs::path libdevice = fs::path(__FILE__)
+                                          .parent_path()
+                                          .parent_path()
+                                          .parent_path()
+                                          .parent_path() /
+                                      "python" / "triton" / "language" /
+                                      "libdevice.10.bc";
+    if (mlir::triton::linkExternLib(module, "libdevice", libdevice.string()))
+      llvm::errs() << "link failed for libdevice at path: "
+                   << libdevice.string();
+  }
+}
+
 std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version) {
+  linkExternal(module);
   // LLVM version in use may not officially support target hardware
   int maxNNVMCC = 75;
   // options
