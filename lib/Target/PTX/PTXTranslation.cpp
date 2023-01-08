@@ -8,7 +8,6 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
-#include <filesystem>
 
 namespace triton {
 
@@ -31,47 +30,7 @@ static bool findAndReplace(std::string &str, const std::string &begin,
   return true;
 }
 
-static void linkExternal(llvm::Module &module) {
-  bool hasExternal = false;
-  for (auto &func : module) {
-    if (func.hasExternalLinkage()) {
-      hasExternal = true;
-      break;
-    }
-  }
-
-  if (hasExternal) {
-    namespace fs = std::filesystem;
-    // [triton root dir]/python/triton/language/libdevice.10.bc
-    static const fs::path libdevice = fs::path(__FILE__)
-                                          .parent_path()
-                                          .parent_path()
-                                          .parent_path()
-                                          .parent_path() /
-                                      "python" / "triton" / "language" /
-                                      "libdevice.10.bc";
-    if (mlir::triton::linkExternLib(module, libdevice.string()))
-      llvm::errs() << "link failed for: " << libdevice.string();
-
-    // please check https://llvm.org/docs/NVPTXUsage.html#reflection-parameters
-    // this will enable fast math path in libdevice
-    // for example, when enable nvvm-reflect-ftz, sqrt.approx.f32 will change to
-    // sqrt.approx.ftz.f32
-    auto &ctx = module.getContext();
-    llvm::Type *I32 = llvm::Type::getInt32Ty(ctx);
-    llvm::Metadata *mdFour =
-        llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(I32, 4));
-    llvm::Metadata *mdName = llvm::MDString::get(ctx, "nvvm-reflect-ftz");
-    llvm::Metadata *mdOne =
-        llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(I32, 1));
-    llvm::MDNode *reflect = llvm::MDNode::get(ctx, {mdFour, mdName, mdOne});
-    module.addModuleFlag(reflect);
-  }
-}
-
 std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version) {
-  linkExternal(module);
-
   // LLVM version in use may not officially support target hardware
   int maxNNVMCC = 75;
   // options
