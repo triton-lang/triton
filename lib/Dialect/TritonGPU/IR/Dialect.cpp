@@ -738,6 +738,22 @@ struct TritonGPUInferLayoutInterface
   }
 
   LogicalResult
+  inferTransOpEncoding(Attribute operandEncoding, Attribute &resultEncoding) const {
+    SharedEncodingAttr sharedEncoding = operandEncoding.dyn_cast<SharedEncodingAttr>();
+    if(!sharedEncoding)
+      return failure();
+    SmallVector<unsigned> retOrder(sharedEncoding.getOrder().begin(),
+                                   sharedEncoding.getOrder().end());
+    std::reverse(retOrder.begin(), retOrder.end());
+    resultEncoding = SharedEncodingAttr::get(getDialect()->getContext(),
+                                              sharedEncoding.getVec(),
+                                              sharedEncoding.getPerPhase(),
+                                              sharedEncoding.getMaxPhase(),
+                                              retOrder);
+    return mlir::success();
+  }
+
+  LogicalResult
   inferExpandDimsOpEncoding(Attribute operandEncoding, unsigned axis,
                             Attribute &resultEncoding,
                             Optional<Location> location) const override {
