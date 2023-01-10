@@ -345,7 +345,7 @@ configs = [triton.testing.Benchmark(
     ylabel='ms',
     plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}',
     args={'H': N_HEADS, 'BATCH': BATCH, 'D_HEAD': D_HEAD, 'dtype': torch.float16, 'mode': mode}
-) for mode in ['bwd']]
+) for mode in ['fwd']]
 
 
 @triton.testing.perf_report(configs)
