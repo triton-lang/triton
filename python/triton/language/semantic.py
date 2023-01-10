@@ -1036,15 +1036,18 @@ def where(condition: tl.tensor,
 def reduce_impl(input: tl.tensor, axis: int, builder: ir.builder, name: str,
                 FLOAT_OP: ir.REDUCE_OP, INT_OP: ir.REDUCE_OP) -> tl.tensor:
     scalar_ty = input.type.scalar
+    out_scalar_ty = scalar_ty
     # input is extended to 32-bits if necessary
     # this increases numerical accuracy and can be done pretty much for free
     # on GPUs
     if scalar_ty.is_int() and scalar_ty.int_bitwidth <= 32:
         input = cast(input, tl.int32, builder)
+        out_scalar_ty = tl.int32
 
     # hardware doesn't support FMAX, FMIN, CMP for bfloat16
     if scalar_ty is tl.bfloat16:
         input = cast(input, tl.float32, builder)
+        out_scalar_ty = tl.float32
 
     # choose the right unsigned operation
     if scalar_ty.is_int_unsigned():
@@ -1058,7 +1061,6 @@ def reduce_impl(input: tl.tensor, axis: int, builder: ir.builder, name: str,
             INT_OP = int_op_to_unit[INT_OP]
 
     # If we are doing an argmin or argmax we want to use an int32 output type
-    out_scalar_ty = scalar_ty
     if FLOAT_OP is ir.REDUCE_OP.ARGFMAX or INT_OP is ir.REDUCE_OP.ARGMAX:
         out_scalar_ty = tl.int32
     elif FLOAT_OP is ir.REDUCE_OP.ARGFMIN or INT_OP is ir.REDUCE_OP.ARGMIN:

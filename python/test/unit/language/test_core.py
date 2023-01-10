@@ -893,7 +893,7 @@ def get_reduced_dtype(dtype_str, op):
 
 @pytest.mark.parametrize("op, dtype_str, shape",
                          [(op, dtype, shape)
-                          for op in ['min', 'max', 'sum']
+                          for op in ['min', 'max', 'sum', 'argmin', 'argmax']
                           for dtype in dtypes_with_bfloat16
                           for shape in [32, 64, 128, 512]])
 def test_reduce1d(op, dtype_str, shape, device='cuda'):
@@ -914,7 +914,7 @@ def test_reduce1d(op, dtype_str, shape, device='cuda'):
     numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min,
                 'argmin': np.argmin, 'argmax': np.argmax}[op]
     # numpy result
-    z_dtype_str = get_reduced_dtype(dtype_str, op)
+    z_dtype_str = 'int32' if op == 'argmin' or op == 'argmax' else dtype_str
     z_tri_dtype_str = z_dtype_str
     if op not in ['argmin', 'argmax'] and dtype_str == 'bfloat16':
         z_dtype_str = 'float32'
