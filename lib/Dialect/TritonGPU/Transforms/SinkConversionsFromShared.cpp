@@ -50,7 +50,7 @@ public:
     });
     // Sink conversions into loops when they will increase
     // register pressure
-    DenseMap<triton::gpu::ConvertLayoutOp, Operation *> opToMove;
+    DenseMap<Operation*, Operation *> opToMove;
     m.walk([&](triton::gpu::ConvertLayoutOp op){
       if(!willIncreaseRegisterPressure(op))
         return;
@@ -58,6 +58,15 @@ public:
       auto user_end = op->user_end();
       if(std::distance(user_begin, user_end) != 1)
         return;
+      opToMove.insert({op, *user_begin});
+    });
+    for(auto &kv: opToMove)
+      kv.first->moveBefore(kv.second);
+    
+    // Move transpositions just before their first use
+    opToMove.clear();
+    m.walk([&](triton::TransOp op){
+      auto user_begin = op->user_begin();
       opToMove.insert({op, *user_begin});
     });
     for(auto &kv: opToMove)
