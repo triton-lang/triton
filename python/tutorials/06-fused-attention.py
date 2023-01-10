@@ -288,8 +288,8 @@ class _attention(torch.autograd.Function):
             BLOCK_DMODEL=ctx.BLOCK_DMODEL, num_warps=8,
             num_stages=1,
         )
-        print(pgm.asm["ttgir"])
-        exit()
+        # print(pgm.asm["ttgir"])
+        # exit()
         return dq, dk, dv, None
 
 
