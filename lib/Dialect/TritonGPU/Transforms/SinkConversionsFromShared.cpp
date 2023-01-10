@@ -63,15 +63,14 @@ public:
     for(auto &kv: opToMove)
       kv.first->moveBefore(kv.second);
     
-    // Move transpositions just before their first use
+    // Move transpositions just after their definition
     opToMove.clear();
     m.walk([&](triton::TransOp op){
-      auto user_begin = op->user_begin();
-      opToMove.insert({op, *user_begin});
+      Operation* argOp =op.getOperand().getDefiningOp();
+      if(!argOp)
+        return;
+      op->moveAfter(argOp);
     });
-    for(auto &kv: opToMove)
-      kv.first->moveBefore(kv.second);
-
 
     return;
   }
