@@ -1,0 +1,11 @@
+add_kernel:
+  arg_order: x_ptr,y_ptr,output_ptr,n_elements,BLOCK_SIZE
+  constants:
+    BLOCK_SIZE: [32, 64]
+  params: x_ptr:*fp32(16) y_ptr:*fp32(16) output_ptr:*fp32(16) n_elements:i32(16)
+kernel:
+  arg_order: X,stride_xm,Z,stride_zn,BLOCK_M,BLOCK_N
+  constants:
+    BLOCK_M: [64]
+    BLOCK_N: [64]
+  params: X:*fp32(16) stride_xm:i32(16) Z:*fp32(16) stride_zn:i32(16)
