@@ -119,9 +119,7 @@ struct LoadOpConversion
       const size_t wordNElems = width / valueElemNbits;
       assert(wordNElems * nWords * numVecs == numElems);
 
-      
 #ifdef USE_ROCM
-
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         for (size_t wordElem = 0; wordElem < wordNElems; ++wordElem) {
@@ -130,7 +128,7 @@ struct LoadOpConversion
           // get values
           Value trueVal = load(ptrElems[elemOffset]);
           Value zeroVal = bitcast(i32_val(0), valueElemTy);
-          Value falseVal = other ? load(otherElems[elemOffset]) : zeroVal;
+          Value falseVal = other ? otherElems[elemOffset] : zeroVal;
 
           // select value based on mask
           Value ret = select(pred, trueVal, falseVal);
