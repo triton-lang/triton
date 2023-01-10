@@ -905,7 +905,7 @@ def ttir_to_ttgir(mod, num_warps, num_stages, compute_capability):
     pm.add_licm_pass()
     pm.add_tritongpu_combine_pass(compute_capability)
     pm.add_cse_pass()
-    # pm.add_tritongpu_optimize_load_convert_pass()
+    pm.add_tritongpu_optimize_load_convert_pass()
     pm.add_tritongpu_decompose_conversions_to_dot_operand_pass()
     pm.add_cse_pass()
     pm.add_symbol_dce_pass()
