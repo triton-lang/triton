@@ -592,15 +592,19 @@ bool MmaEncodingAttr::isVolta() const { return getVersionMajor() == 1; }
 
 bool MmaEncodingAttr::isAmpere() const { return getVersionMajor() == 2; }
 
-// Get [isARow, isBRow, isAVec4, isBVec4] from versionMinor
-std::tuple<bool, bool, bool, bool>
+// Get [isARow, isBRow, isAVec4, isBVec4, id] from versionMinor
+std::tuple<bool, bool, bool, bool, int>
 MmaEncodingAttr::decodeVoltaLayoutStates() const {
   unsigned versionMinor = getVersionMinor();
   bool isARow = versionMinor & (1 << 0);
   bool isBRow = versionMinor & (1 << 1);
   bool isAVec4 = versionMinor & (1 << 2);
   bool isBVec4 = versionMinor & (1 << 3);
-  return std::make_tuple(isARow, isBRow, isAVec4, isBVec4);
+  int id = static_cast<bool>(versionMinor & (1 << (4 + 2)));
+  id = (id << 1) + static_cast<bool>(versionMinor & (1 << (4 + 1)));
+  id = (id << 1) + static_cast<bool>(versionMinor & (1 << (4 + 0)));
+
+  return std::make_tuple(isARow, isBRow, isAVec4, isBVec4, id);
 }
 
 //===----------------------------------------------------------------------===//

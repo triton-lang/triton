@@ -256,12 +256,11 @@ private:
         multiDimOffset[1] = add(
             multiDimOffset[1], idx_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
       } else if (mmaLayout.isVolta()) {
-        auto [isARow, isBRow, isAVec4, isBVec4] =
+        auto [isARow, isBRow, isAVec4, isBVec4, mmaId] =
             mmaLayout.decodeVoltaLayoutStates();
         auto coords = DotOpMmaV1ConversionHelper::getMNCoords(
             threadId, rewriter, mmaLayout.getWarpsPerCTA(), shape, isARow,
             isBRow, isAVec4, isBVec4);
-        printf("coords.size: %lu\n", coords.size());
         return DotOpMmaV1ConversionHelper::getCoord(elemId, coords);
       } else {
         llvm_unreachable("Unexpected MMALayout version");
@@ -418,7 +417,8 @@ private:
       }
 
       if (needTrans) {
-        auto [isARow, isBRow, isAVec4, isBVec4] = mma.decodeVoltaLayoutStates();
+        auto [isARow, isBRow, isAVec4, isBVec4, mmaId] =
+            mma.decodeVoltaLayoutStates();
         DotOpMmaV1ConversionHelper helper(mma);
         // do transpose
         int numM = helper.getElemsM(mma.getWarpsPerCTA()[0], shape[0], isARow,

@@ -1025,6 +1025,7 @@ public:
 
 class BlockedToMMA : public mlir::RewritePattern {
   int computeCapability;
+  mutable int mmaV1Counter{};
 
 public:
   BlockedToMMA(mlir::MLIRContext *context, int computeCapability)
@@ -1089,8 +1090,7 @@ public:
       bool isARow = AOrder[0] != 0;
       bool isBRow = BOrder[0] != 0;
       mmaEnc = triton::gpu::MmaEncodingAttr::get(
-          oldRetType.getContext(), versionMajor, warpsPerTile, shapeA, shapeB,
-          isARow, isBRow);
+          oldRetType.getContext(), versionMajor, numWarps, mmaV1Counter++);
     } else if (versionMajor == 2) {
       mmaEnc = triton::gpu::MmaEncodingAttr::get(
           oldRetType.getContext(), versionMajor, 0 /*versionMinor*/,
@@ -1227,7 +1227,7 @@ public:
     auto dotOperandB = BT.getEncoding().cast<DotOperandEncodingAttr>();
     bool isARow = dotOperandA.getIsMMAv1Row().cast<BoolAttr>().getValue();
     bool isBRow = dotOperandB.getIsMMAv1Row().cast<BoolAttr>().getValue();
-    auto [isARow_, isBRow_, isAVec4, isBVec4] =
+    auto [isARow_, isBRow_, isAVec4, isBVec4, mmaId] =
         mmaLayout.decodeVoltaLayoutStates();
 
     // The wpt of MMAv1 is also determined by isARow, isBRow and shape, and it
@@ -1247,21 +1247,24 @@ public:
       // Create a temporary MMA layout to obtain the isAVec4 and isBVec4
       auto tmpMmaLayout = MmaEncodingAttr::get(
           ctx, mmaLayout.getVersionMajor(), mmaLayout.getWarpsPerCTA(),
-          AT.getShape(), BT.getShape(), isARow, isBRow);
-      auto [isARow, isBRow, isAVec4, isBVec4] =
+          AT.getShape(), BT.getShape(), isARow, isBRow, mmaId);
+      auto [isARow_, isBRow_, isAVec4_, isBVec4_, _] =
           tmpMmaLayout.decodeVoltaLayoutStates();
+
+      llvm::outs() << "isARow_, isBRow_: " << isARow_ << " " << isBRow_ << "\n";
 
       // Recalculate the wpt, for here we could get the latest information, the
       // wpt should be updated.
       auto newWpt =
-          getWarpsPerCTA(DT.getShape(), isARow, isBRow, isAVec4, isBVec4,
+          getWarpsPerCTA(DT.getShape(), isARow_, isBRow_, isAVec4_, isBVec4_,
                          product(mmaLayout.getWarpsPerCTA()));
-      newMmaLayout =
-          MmaEncodingAttr::get(ctx, mmaLayout.getVersionMajor(), newWpt,
-                               AT.getShape(), BT.getShape(), isARow, isBRow);
+      newMmaLayout = MmaEncodingAttr::get(ctx, mmaLayout.getVersionMajor(),
+                                          newWpt, AT.getShape(), BT.getShape(),
+                                          isARow, isBRow, mmaId);
     }
 
     // Collect the wrong MMA Layouts, and mark need to update.
+    llvm::outs() << "update " << *op << " -> " << newMmaLayout << "\n";
     mmaToUpdate.try_emplace(mmaLayout, newMmaLayout);
 
     return failure();

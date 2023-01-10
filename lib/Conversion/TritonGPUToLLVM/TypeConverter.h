@@ -114,7 +114,7 @@ public:
         }
 
         if (mmaLayout.isVolta()) {
-          auto [isARow, isBRow, isAVec4, isBVec4] =
+          auto [isARow, isBRow, isAVec4, isBVec4, mmaId] =
               mmaLayout.decodeVoltaLayoutStates();
           DotOpMmaV1ConversionHelper helper(mmaLayout);
           if (dotOpLayout.getOpIdx() == 0) { // $a

@@ -132,8 +132,6 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
 
         // ---- not implemented ----
         llvm_unreachable("unsupported swizzling for provided MMA version");
-
-
     }]>
   ];
 
@@ -373,31 +371,49 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
   );
 
   let builders = [
+     // specific for MMAV1(Volta)
+    AttrBuilder<(ins "int":$versionMajor,
+                     "int":$numWarps,
+                     "int":$id), [{
+      assert(versionMajor == 1 && "Only MMAv1 has multiple versionMinor.");
+      SmallVector<unsigned> wpt({numWarps, 1});
+      int versionMinor = 0;
+      versionMinor |= static_cast<bool>((1<<0) & id) * (1<<4);
+      versionMinor |= static_cast<bool>((1<<1) & id) * (1<<5);
+      versionMinor |= static_cast<bool>((1<<2) & id) * (1<<6);
+      return $_get(context, versionMajor, versionMinor, wpt);
+    }]>,
+
     // specific for MMAV1(Volta)
     AttrBuilder<(ins "int":$versionMajor,
                      "ArrayRef<unsigned>":$warpsPerCTA,
                      "ArrayRef<int64_t>":$shapeA,
                      "ArrayRef<int64_t>":$shapeB,
                      "bool":$isARow,
-                     "bool":$isBRow), [{
+                     "bool":$isBRow,
+                     "int":$id), [{
       assert(versionMajor == 1 && "Only MMAv1 has multiple versionMinor.");
       bool isAVec4 = !isARow && (shapeA[isARow] <= 16);
       bool isBVec4 = isBRow && (shapeB[isBRow] <= 16);
       // 4-bits to encode 4 booleans: [isARow, isBRow, isAVec4, isBVec4]
+      // 3-bits to encode the MMA ID to make each unique
       int versionMinor = (isARow * (1<<0)) |\
                          (isBRow * (1<<1)) |\
                          (isAVec4 * (1<<2)) |\
                          (isBVec4 * (1<<3));
+      versionMinor |= static_cast<bool>((1<<0) & id) * (1<<4);
+      versionMinor |= static_cast<bool>((1<<1) & id) * (1<<5);
+      versionMinor |= static_cast<bool>((1<<2) & id) * (1<<6);
+
       return $_get(context, versionMajor, versionMinor, warpsPerCTA);
     }]>
-
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
     bool isVolta() const;
     bool isAmpere() const;
-    // Get [isARow, isBRow, isAVec4, isBVec4] from versionMinor
-    std::tuple<bool, bool, bool, bool> decodeVoltaLayoutStates() const;
+    // Get [isARow, isBRow, isAVec4, isBVec4, id] from versionMinor
+    std::tuple<bool, bool, bool, bool, int> decodeVoltaLayoutStates() const;
   }];
 
 }
