@@ -21,11 +21,11 @@
 
 using namespace mlir;
 
-class TritonGPUDecomposeConversionsToDotOperandPass
-    : public TritonGPUDecomposeConversionsToDotOperandBase<
-          TritonGPUDecomposeConversionsToDotOperandPass> {
+class TritonGPUDecomposeConversionsPass
+    : public TritonGPUDecomposeConversionsBase<
+          TritonGPUDecomposeConversionsPass> {
 public:
-  TritonGPUDecomposeConversionsToDotOperandPass() = default;
+  TritonGPUDecomposeConversionsPass() = default;
 
   void runOnOperation() override { 
     MLIRContext *context = &getContext();
@@ -61,6 +61,6 @@ public:
 };
 
 std::unique_ptr<Pass>
-mlir::createTritonGPUDecomposeConversionsToDotOperandPass() {
-  return std::make_unique<TritonGPUDecomposeConversionsToDotOperandPass>();
+mlir::createTritonGPUDecomposeConversionsPass() {
+  return std::make_unique<TritonGPUDecomposeConversionsPass>();
 }

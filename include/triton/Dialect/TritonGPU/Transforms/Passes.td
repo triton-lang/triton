@@ -97,12 +97,12 @@ def TritonGPUReorderInstructions: Pass<"tritongpu-reorder-instructions", "mlir::
                            "mlir::triton::TritonDialect"];
 }
 
-def TritonGPUDecomposeConversionsToDotOperand: Pass<"tritongpu-decompose-conversions-to-dot-operand", "mlir::ModuleOp"> {
+def TritonGPUDecomposeConversions: Pass<"tritongpu-decompose-conversions", "mlir::ModuleOp"> {
   let summary = "Decompose convert[distributed -> dotOperand] into convert[distributed -> shared -> dotOperand]";
 
   let description = "Decomposing conversions this way makes it possible to use CSE and re-use #shared tensors";
 
-  let constructor = "mlir::createTritonGPUDecomposeConversionsToDotOperandPass()";
+  let constructor = "mlir::createTritonGPUDecomposeConversionsPass()";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];

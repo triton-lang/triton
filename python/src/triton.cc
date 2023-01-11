@@ -1352,10 +1352,10 @@ void init_triton_ir(py::module &&m) {
            [](mlir::PassManager &self) {
              self.addPass(mlir::createTritonGPUReorderInstructionsPass());
            })
-      .def("add_tritongpu_decompose_conversions_to_dot_operand_pass",
+      .def("add_tritongpu_decompose_conversions_pass",
            [](mlir::PassManager &self) {
              self.addPass(
-                 mlir::createTritonGPUDecomposeConversionsToDotOperandPass());
+                 mlir::createTritonGPUDecomposeConversionsPass());
            })
       .def("add_triton_gpu_to_llvm",
            [](mlir::PassManager &self) {
