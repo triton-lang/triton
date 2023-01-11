@@ -320,13 +320,6 @@ public:
       auto numWords = vecBitWidth / bitWidth;
       auto numWordElems = bitWidth / resElemTy.getIntOrFloatBitWidth();
 
-      // Tune CG and CA here.
-      auto byteWidth = bitWidth / 8;
-      CacheModifier srcCacheModifier =
-          byteWidth == 16 ? CacheModifier::CG : CacheModifier::CA;
-      assert(byteWidth == 16 || byteWidth == 8 || byteWidth == 4);
-      auto resByteWidth = resElemTy.getIntOrFloatBitWidth() / 8;
-
       Value tileOffset = tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}];
       Value baseOffset =
           add(mul(i32_val(baseOffsetRow), srcStrides[inOrder[1]]),
@@ -336,6 +329,118 @@ public:
     }
     return ret;
   }
+
+  bool isMmaToDotShortcut(MmaEncodingAttr &mmaLayout,
+                        triton::gpu::DotOperandEncodingAttr &dotOperandLayout) const {
+    // dot_op<opIdx=0, parent=#mma> = #mma
+    // when #mma = MmaEncoding<version=2, warpsPerCTA=[..., 1]>
+    return mmaLayout.getWarpsPerCTA()[1] == 1 &&
+           dotOperandLayout.getOpIdx() == 0 &&
+           dotOperandLayout.getParent() == mmaLayout;
+  }
+
+  void storeDistributedToShared(Value src, Value llSrc,
+                              ArrayRef<Value> dstStrides,
+                              ArrayRef<SmallVector<Value>> srcIndices,
+                              Value dst, Value smemBase, Type elemTy,
+                              Location loc,
+                              ConversionPatternRewriter &rewriter) const {
+    auto srcTy = src.getType().cast<RankedTensorType>();
+    auto srcShape = srcTy.getShape();
+    assert(srcShape.size() == 2 && "Unexpected rank of storeDistributedToShared");
+    auto dstTy = dst.getType().cast<RankedTensorType>();
+    auto srcDistributedLayout = srcTy.getEncoding();
+    if (auto mmaLayout = srcDistributedLayout.dyn_cast<MmaEncodingAttr>()) {
+      assert((!mmaLayout.isVolta()) &&
+             "ConvertLayout MMAv1->Shared is not suppported yet");
+    }
+    auto dstSharedLayout = dstTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
+    auto dstElemTy = dstTy.getElementType();
+    auto inOrd = triton::gpu::getOrder(srcDistributedLayout);
+    auto outOrd = dstSharedLayout.getOrder();
+    unsigned inVec =
+        inOrd == outOrd ? triton::gpu::getContigPerThread(srcDistributedLayout)[inOrd[0]] : 1;
+    unsigned outVec = dstSharedLayout.getVec();
+    unsigned minVec = std::min(outVec, inVec);
+    unsigned perPhase = dstSharedLayout.getPerPhase();
+    unsigned maxPhase = dstSharedLayout.getMaxPhase();
+    unsigned numElems = triton::gpu::getElemsPerThread(srcTy);
+    assert(numElems == srcIndices.size());
+    auto inVals = LLVM::getElementsFromStruct(loc, llSrc, rewriter);
+    auto wordTy = vec_ty(elemTy, minVec);
+    auto elemPtrTy = ptr_ty(elemTy);
+    Value outVecVal = i32_val(outVec);
+    Value minVecVal = i32_val(minVec);
+    Value word;
+
+    SmallVector<Value> srcStrides = {dstStrides[0], dstStrides[1]};
+    SmallVector<Value> offsetVals = {i32_val(0), i32_val(0)};
+    SharedMemoryObject smemObj(smemBase, srcStrides, offsetVals);
+
+    DenseMap<unsigned, Value> sharedPtrs = getSwizzledSharedPtrs(loc, inVec, srcTy, dstSharedLayout, dstElemTy, smemObj, rewriter, offsetVals, srcStrides);
+
+    std::map<unsigned, Value> cache0;
+    std::map<unsigned, Value> cache1;
+    for (unsigned i = 0; i < numElems; ++i) {
+      if (i % minVec == 0)
+        word = undef(wordTy);
+      word = insert_element(wordTy, word, inVals[i], i32_val(i % minVec));
+      if (i % minVec == minVec - 1) {
+        // step 1: recover the multidim_index from the index of
+        SmallVector<Value> multiDimIdx = srcIndices[i];
+        Value dynIdx0 = multiDimIdx[outOrd[0]];
+        Value staIdx0 = i32_val(0);
+        Value dynIdx1 = multiDimIdx[outOrd[1]];
+        Value staIdx1 = i32_val(0);
+        Value stride0 = dstStrides[outOrd[0]];
+        Value stride1 = dstStrides[outOrd[1]];
+        // if (auto addOp = dyn_cast<LLVM::AddOp>(dynIdx0.getDefiningOp()))
+        //   if (auto cstRhs =
+        //           dyn_cast<LLVM::ConstantOp>(addOp.getRhs().getDefiningOp())) {
+        //     unsigned rhsVal =
+        //         cstRhs.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+        //     unsigned key = (rhsVal / outVec) % maxPhase;
+        //     if (cache0.find(key) == cache0.end())
+        //       cache0[key] = dynIdx0;
+        //     dynIdx0 = cache0[key];
+        //     staIdx0 =
+        //         i32_val((rhsVal) / (outVec * maxPhase) * (outVec * maxPhase));
+        //   }
+        // if (auto addOp = dyn_cast<LLVM::AddOp>(dynIdx1.getDefiningOp()))
+        //   if (auto cstRhs =
+        //           dyn_cast<LLVM::ConstantOp>(addOp.getRhs().getDefiningOp())) {
+        //     unsigned rhsVal =
+        //         cstRhs.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+        //     unsigned key = rhsVal % maxPhase;
+        //     if (cache1.find(key) == cache1.end())
+        //         cache1[key] = dynIdx1;
+        //     dynIdx1 = cache1[key];
+        //     staIdx1 = addOp.getRhs();
+        //     staIdx1 = i32_val((rhsVal) / (maxPhase) * (maxPhase));
+        //   }
+
+        // offset along non-contiguous dimension
+        Value off1 = mul(dynIdx1, stride1);
+        // swizzled offset along contiguous dimension
+        Value phaseId = urem(udiv(dynIdx1, i32_val(perPhase)), i32_val(maxPhase));
+        Value off0 = xor_(udiv(dynIdx0, outVecVal), phaseId);
+        off0 = mul(off0, outVecVal);
+        Value remained = urem(dynIdx0, outVecVal);
+        remained = udiv(remained, minVecVal);
+        off0 = add(off0, mul(remained, minVecVal));
+        Value offset = add(off1, mul(off0, stride0));
+        Value staOffset = add(mul(staIdx1, stride1), mul(staIdx0, stride0));
+        // add static offset
+        offset = add(offset, staOffset);
+
+        // step 3: store
+        Value smemAddr = gep(elemPtrTy, smemBase, offset);
+        smemAddr = bitcast(smemAddr, ptr_ty(wordTy, 3));
+        store(word, smemAddr);
+      }
+    }
+  }
+
 
   // -----------------------------------------------------------------------
   // Utilities
