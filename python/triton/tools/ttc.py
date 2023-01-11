@@ -107,10 +107,8 @@ def compile_func(meta: AOTKernelMetadata, fn: ASTGeneratingObject) -> bytes:
     fn.__name__ == meta.name
 
     kwargs = make_compile_kwargs(meta)
-    bin_ = triton.compile(fn, **kwargs)
-    bin_.asm['cubin']
-    # TODO: add compile functions
-    bin_ = b"123"
+    compiled = triton.compile(fn, **kwargs)
+    bin_ = compiled.asm['cubin']
 
     fn.__name__ = old_name
     return bin_
