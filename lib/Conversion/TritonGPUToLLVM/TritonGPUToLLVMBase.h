@@ -219,6 +219,124 @@ public:
     return base;
   }
 
+  DenseMap<unsigned, Value> getSwizzledSharedPtrs(Location loc, unsigned inVec, RankedTensorType srcTy,
+                                         triton::gpu::SharedEncodingAttr resSharedLayout,
+                                         Type resElemTy,
+                                         SharedMemoryObject smemObj,
+                                         ConversionPatternRewriter &rewriter,
+                                         SmallVectorImpl<Value>& offsetVals,
+                                         SmallVectorImpl<Value>& srcStrides
+                                         ) const {
+
+    auto dstPtrTy = ptr_ty(resElemTy, 3);
+    auto dstOffset = dot(rewriter, loc, offsetVals, smemObj.strides);
+    Value dstPtrBase = gep(dstPtrTy, smemObj.base, dstOffset);
+
+    auto srcEncoding = srcTy.getEncoding();
+    auto srcShape = srcTy.getShape();
+    unsigned outVec = resSharedLayout.getVec();
+    unsigned minVec = std::min(outVec, inVec);
+    unsigned numElems = triton::gpu::getElemsPerThread(srcTy);
+    unsigned perPhase = resSharedLayout.getPerPhase();
+    unsigned maxPhase = resSharedLayout.getMaxPhase();
+    auto sizePerThread = triton::gpu::getSizePerThread(srcEncoding);
+    auto threadsPerCTA = triton::gpu::getThreadsPerCTA(srcEncoding);
+    auto inOrder = triton::gpu::getOrder(srcEncoding);
+
+    // If perPhase * maxPhase > threadsPerCTA, we will have elements
+    // that share the same tile indices. The index calculation will
+    // be cached.
+    unsigned numSwizzleRows = std::max<unsigned>(
+        (perPhase * maxPhase) / threadsPerCTA[inOrder[1]], 1);
+    // A sharedLayout encoding has a "vec" parameter.
+    // On the column dimension, if inVec > outVec, it means we have to divide
+    // single vector read into multiple ones
+    unsigned numVecCols = std::max<unsigned>(inVec / outVec, 1);
+
+    auto srcIndices = emitIndices(loc, rewriter, srcEncoding, srcShape);
+
+
+    DenseMap<unsigned, Value> ret;
+    DenseMap<std::pair<unsigned, unsigned>, Value> tileOffsetMap;
+    for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
+      // minVec = 2, inVec = 4, outVec = 2
+      //   baseOffsetCol = 0   baseOffsetCol = 0
+      //   tileVecIdxCol = 0   tileVecIdxCol = 1
+      //                -/\-   -/\-
+      //               [|x x| |x x| x x x x x]
+      //               [|x x| |x x| x x x x x]
+      // baseOffsetRow [|x x| |x x| x x x x x]
+      //               [|x x| |x x| x x x x x]
+      unsigned vecIdx = elemIdx / minVec;
+      unsigned vecIdxCol = vecIdx % (sizePerThread[inOrder[0]] / minVec);
+      unsigned vecIdxRow = vecIdx / (sizePerThread[inOrder[0]] / minVec);
+      unsigned baseOffsetCol =
+          vecIdxCol / numVecCols * numVecCols * threadsPerCTA[inOrder[0]];
+      unsigned baseOffsetRow = vecIdxRow / numSwizzleRows * numSwizzleRows *
+                           threadsPerCTA[inOrder[1]];
+      unsigned tileVecIdxCol = vecIdxCol % numVecCols;
+      unsigned tileVecIdxRow = vecIdxRow % numSwizzleRows;
+
+      if (!tileOffsetMap.count({tileVecIdxRow, tileVecIdxCol})) {
+        // Swizzling
+        // Since the swizzling index is related to outVec, and we know minVec
+        // already, inVec doesn't matter
+        //
+        // (Numbers represent row indices)
+        // Example1:
+        // outVec = 2, inVec = 2, minVec = 2
+        // outVec = 2, inVec = 4, minVec = 2
+        //     | [1 2] [3 4] [5 6] ... |
+        //     | [3 4] [1 2] [7 8] ... |
+        //     | [5 6] [7 8] [1 2] ... |
+        // Example2:
+        // outVec = 4, inVec = 2, minVec = 2
+        //     | [1 2 3 4] [5 6 7 8] [9 10 11 12] ... |
+        //     | [5 6 7 8] [1 2 3 4] [13 14 15 16] ... |
+        //     | [9 10 11 12] [13 14 15 16] [1 2 3 4] ... |
+        auto srcIdx = srcIndices[tileVecIdxRow * sizePerThread[inOrder[0]]];
+        Value phase = urem(udiv(srcIdx[inOrder[1]], i32_val(perPhase)),
+                           i32_val(maxPhase));
+        // srcShape and smemObj.shape maybe different if smemObj is a
+        // slice of the original shared memory object.
+        // So we need to use the original shape to compute the offset
+        Value rowOffset = mul(srcIdx[inOrder[1]], srcStrides[inOrder[1]]);
+        Value colOffset =
+            add(srcIdx[inOrder[0]], i32_val(tileVecIdxCol * minVec));
+        Value swizzleIdx = udiv(colOffset, i32_val(outVec));
+        Value swizzleColOffset =
+            add(mul(xor_(swizzleIdx, phase), i32_val(outVec)),
+                urem(colOffset, i32_val(outVec)));
+        Value tileOffset = add(rowOffset, swizzleColOffset);
+        tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}] =
+            gep(dstPtrTy, dstPtrBase, tileOffset);
+      }
+
+      // 16 * 8 = 128bits
+      auto maxBitWidth =
+          std::max<unsigned>(128, resElemTy.getIntOrFloatBitWidth());
+      auto vecBitWidth = resElemTy.getIntOrFloatBitWidth() * minVec;
+      auto bitWidth = std::min<unsigned>(maxBitWidth, vecBitWidth);
+      auto numWords = vecBitWidth / bitWidth;
+      auto numWordElems = bitWidth / resElemTy.getIntOrFloatBitWidth();
+
+      // Tune CG and CA here.
+      auto byteWidth = bitWidth / 8;
+      CacheModifier srcCacheModifier =
+          byteWidth == 16 ? CacheModifier::CG : CacheModifier::CA;
+      assert(byteWidth == 16 || byteWidth == 8 || byteWidth == 4);
+      auto resByteWidth = resElemTy.getIntOrFloatBitWidth() / 8;
+
+      Value tileOffset = tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}];
+      Value baseOffset =
+          add(mul(i32_val(baseOffsetRow), srcStrides[inOrder[1]]),
+              i32_val(baseOffsetCol));
+      Value basePtr = gep(dstPtrTy, tileOffset, baseOffset);
+      ret[elemIdx] = basePtr;
+    }
+    return ret;
+  }
+
   // -----------------------------------------------------------------------
   // Utilities
   // -----------------------------------------------------------------------
