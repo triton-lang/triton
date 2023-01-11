@@ -1731,24 +1731,27 @@ def compile(fn, **kwargs):
 
 @static_vars(discovered_gfx_arch = _get_amdgpu_arch())
 def _get_amdgcn_bitcode_paths():
-  gpu_arch_agnostic_bitcode_libraries = ["opencl.bc",
-                                         "ocml.bc",
-                                         "ockl.bc",
-                                         "oclc_finite_only_off.bc",
-                                         "oclc_daz_opt_off.bc",
-                                         "oclc_correctly_rounded_sqrt_on.bc",
-                                         "oclc_unsafe_math_off.bc",
-                                         "oclc_wavefrontsize64_on.bc"]
-  gfx_arch_id = re.search('gfx(\\w+)', _get_amdgcn_bitcode_paths.discovered_gfx_arch).group(1).strip()
-  gpu_arch_specific_bitcode_library = 'oclc_isa_version_' + gfx_arch_id + ".bc"
-  bitcode_path_dir = rocm_path_dir() + '/amdgcn/bitcode/'
-  amdgcn_bitcode_paths = {}
-  i = 1
-  for bc_lib in gpu_arch_agnostic_bitcode_libraries:
-    amdgcn_bitcode_paths['library_' + str(i)] = bitcode_path_dir + bc_lib
-    i += 1
-  amdgcn_bitcode_paths['library_' + str(i)] = bitcode_path_dir + gpu_arch_specific_bitcode_library
-  return amdgcn_bitcode_paths
+  if torch.version.hip is not None:
+      gpu_arch_agnostic_bitcode_libraries = ["opencl.bc",
+                                             "ocml.bc",
+                                             "ockl.bc",
+                                             "oclc_finite_only_off.bc",
+                                             "oclc_daz_opt_off.bc",
+                                             "oclc_correctly_rounded_sqrt_on.bc",
+                                             "oclc_unsafe_math_off.bc",
+                                             "oclc_wavefrontsize64_on.bc"]
+      gfx_arch_id = re.search('gfx(\\w+)', _get_amdgcn_bitcode_paths.discovered_gfx_arch).group(1).strip()
+      gpu_arch_specific_bitcode_library = 'oclc_isa_version_' + gfx_arch_id + ".bc"
+      bitcode_path_dir = rocm_path_dir() + '/amdgcn/bitcode/'
+      amdgcn_bitcode_paths = {}
+      i = 1
+      for bc_lib in gpu_arch_agnostic_bitcode_libraries:
+        amdgcn_bitcode_paths['library_' + str(i)] = bitcode_path_dir + bc_lib
+        i += 1
+      amdgcn_bitcode_paths['library_' + str(i)] = bitcode_path_dir + gpu_arch_specific_bitcode_library
+      return amdgcn_bitcode_paths
+  else:
+      return {}
 
 @static_vars(amdgcn_bitcode_paths = _get_amdgcn_bitcode_paths())
 def get_amdgcn_bitcode_paths():
