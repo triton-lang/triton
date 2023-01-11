@@ -337,7 +337,7 @@ BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
 # vary seq length for fixed head and batch=4
 configs = [triton.testing.Benchmark(
     x_names=['N_CTX'],
-    x_vals=[2**i for i in range(10, 17)],
+    x_vals=[2**i for i in range(10, 14)],
     line_arg='provider',
     line_vals=['triton'],
     line_names=['Triton'],
@@ -345,7 +345,7 @@ configs = [triton.testing.Benchmark(
     ylabel='ms',
     plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}',
     args={'H': N_HEADS, 'BATCH': BATCH, 'D_HEAD': D_HEAD, 'dtype': torch.float16, 'mode': mode}
-) for mode in ['fwd', 'bwd']]
+) for mode in ['bwd']]
 
 
 @triton.testing.perf_report(configs)
@@ -367,7 +367,7 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.f
         flops_per_matmul = 2. * BATCH * H * N_CTX * N_CTX * D_HEAD * 0.5
         total_flops = 2 * flops_per_matmul
         # print(total_flops/ms*1e-9)
-        # print(ms)
+        print(ms)
         return ms
     if provider == "flash":
         lengths = torch.full((BATCH,), fill_value=N_CTX, device=device)
@@ -383,4 +383,4 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.f
         return ms
 
 
-# bench_flash_attention.run(save_path='.', print_data=True)
+bench_flash_attention.run(save_path='.', print_data=True)

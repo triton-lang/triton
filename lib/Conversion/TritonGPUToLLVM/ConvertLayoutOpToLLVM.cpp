@@ -58,7 +58,8 @@ void storeDistributedToShared(Value src, Value llSrc,
   Value outVecVal = i32_val(outVec);
   Value minVecVal = i32_val(minVec);
   Value word;
-  std::map<unsigned, Value> cache;
+  std::map<unsigned, Value> cache0;
+  std::map<unsigned, Value> cache1;
   for (unsigned i = 0; i < numElems; ++i) {
     if (i % minVec == 0)
       word = undef(wordTy);
@@ -78,17 +79,23 @@ void storeDistributedToShared(Value src, Value llSrc,
           unsigned rhsVal =
               cstRhs.getValue().cast<IntegerAttr>().getValue().getSExtValue();
           unsigned key = (rhsVal / outVec) % maxPhase;
-          if (cache.find(key) == cache.end())
-            cache[key] = dynIdx0;
-          dynIdx0 = cache[key];
+          if (cache0.find(key) == cache0.end())
+            cache0[key] = dynIdx0;
+          dynIdx0 = cache0[key];
           staIdx0 =
               i32_val((rhsVal) / (outVec * maxPhase) * (outVec * maxPhase));
         }
       if (auto addOp = dyn_cast<LLVM::AddOp>(dynIdx1.getDefiningOp()))
         if (auto cstRhs =
                 dyn_cast<LLVM::ConstantOp>(addOp.getRhs().getDefiningOp())) {
-          dynIdx1 = addOp.getLhs();
+          unsigned rhsVal =
+              cstRhs.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+          unsigned key = rhsVal % maxPhase;
+          if (cache1.find(key) == cache1.end())
+              cache1[key] = dynIdx1;
+          dynIdx1 = cache1[key];
           staIdx1 = addOp.getRhs();
+          staIdx1 = i32_val((rhsVal) / (maxPhase) * (maxPhase));
         }
 
       // offset along non-contiguous dimension
