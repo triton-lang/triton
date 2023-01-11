@@ -384,8 +384,8 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
       SmallVector<unsigned> wpt({static_cast<unsigned>(numWarps), 1});
       int versionMinor = 0;
 
-      assert(id < (1<<numBitsToHoldMmaV1ID()) && "MMAv1 ID exceeds the maximum");
-      for (int i = 0; i < numBitsToHoldMmaV1ID(); ++i)
+      assert(id < (1<<numBitsToHoldMmaV1ID) && "MMAv1 ID exceeds the maximum");
+      for (int i = 0; i < numBitsToHoldMmaV1ID; ++i)
         versionMinor |= static_cast<bool>((1<<i) & id) * (1<<(4+i));
 
       return $_get(context, versionMajor, versionMinor, wpt);
@@ -408,8 +408,8 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
                          (isAVec4 * (1<<2)) |\
                          (isBVec4 * (1<<3));
 
-      assert(id < (1<<numBitsToHoldMmaV1ID()) && "MMAv1 ID exceeds the maximum");
-      for (int i = 0; i < numBitsToHoldMmaV1ID(); ++i)
+      assert(id < (1<<numBitsToHoldMmaV1ID) && "MMAv1 ID exceeds the maximum");
+      for (int i = 0; i < numBitsToHoldMmaV1ID; ++i)
         versionMinor |= static_cast<bool>((1<<i) & id) * (1<<(4+i));
 
       return $_get(context, versionMajor, versionMinor, warpsPerCTA);
@@ -421,8 +421,9 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     bool isAmpere() const;
     // Get [isARow, isBRow, isAVec4, isBVec4, id] from versionMinor
     std::tuple<bool, bool, bool, bool, int> decodeVoltaLayoutStates() const;
-    // Get number of bits in versionMinor to hold the ID of the MMA encoding instance.
-    static int numBitsToHoldMmaV1ID();
+    // Number of bits in versionMinor to hold the ID of the MMA encoding instance.
+    // Here 5 bits can hold 32 IDs in a single module.
+    static constexpr int numBitsToHoldMmaV1ID{5};
   }];
 
 }

@@ -603,15 +603,10 @@ MmaEncodingAttr::decodeVoltaLayoutStates() const {
   bool isBVec4 = versionMinor & (1 << 3);
 
   int id = 0;
-  for (int i = numBitsToHoldMmaV1ID() - 1; i >= 0; --i)
+  for (int i = numBitsToHoldMmaV1ID - 1; i >= 0; --i)
     id = (id << 1) + static_cast<bool>(versionMinor & (1 << (4 + i)));
 
   return std::make_tuple(isARow, isBRow, isAVec4, isBVec4, id);
-}
-
-int MmaEncodingAttr::numBitsToHoldMmaV1ID() {
-  return 5; // 5 bits to hold maxinum 32 MMA encoding instances in a single
-            // kernel.
 }
 
 //===----------------------------------------------------------------------===//
