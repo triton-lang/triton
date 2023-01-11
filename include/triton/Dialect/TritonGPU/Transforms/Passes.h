@@ -15,7 +15,7 @@ std::unique_ptr<Pass> createTritonGPUCoalescePass();
 
 std::unique_ptr<Pass> createTritonGPUOptimizeLoadConvertPass();
 
-std::unique_ptr<Pass> createTritonGPUSinkConversionsFromSharedPass();
+std::unique_ptr<Pass> createTritonGPUReorderInstructionsPass();
 
 std::unique_ptr<Pass> createTritonGPUDecomposeConversionsToDotOperandPass();
 

@@ -84,13 +84,14 @@ def TritonGPUOptimizeLoadConvert: Pass<"tritongpu-optimize-load-convert", "mlir:
                            "mlir::triton::TritonDialect"];
 }
 
-def TritonGPUSinkConversionsFromShared: Pass<"tritongpu-sink-conversions-from-shared", "mlir::ModuleOp"> {
-  let summary = "Sink conversions from shared into loops";
+def TritonGPUReorderInstructions: Pass<"tritongpu-reorder-instructions", "mlir::ModuleOp"> {
+  let summary = "Reorder instructions";
 
-  let description = "This pass sinks conversions from shared memory into loops. This will lead the codegen "
-                    "to keep data in shared memory throughout loops, which will reduce register pressure.";
+  let description = "This pass reorder instructions so as to (1) decrease register pressure (e.g., by moving "
+                    "conversions from shared memory before their first use) and (2) promote LLVM instruction "
+                    "order more friendly to `ptxas`.";
 
-  let constructor = "mlir::createTritonGPUSinkConversionsFromSharedPass()";
+  let constructor = "mlir::createTritonGPUReorderInstructionsPass()";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];

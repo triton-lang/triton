@@ -9,7 +9,7 @@ add_mlir_dialect_library(TritonGPUTransforms
   Pipeline.cpp
   Prefetch.cpp
   OptimizeLoadConvert.cpp
-  SinkConversionsFromShared.cpp
+  ReorderInstructions.cpp
   DecomposeConversionsToDotOperand.cpp
   TritonGPUConversion.cpp
 

@@ -33,10 +33,10 @@ static inline bool willIncreaseRegisterPressure(triton::gpu::ConvertLayoutOp op)
   return false;
 }
 
-class TritonGPUSinkConversionsFromSharedPass
-    : public TritonGPUSinkConversionsFromSharedBase<TritonGPUSinkConversionsFromSharedPass> {
+class TritonGPUReorderInstructionsPass
+    : public TritonGPUReorderInstructionsBase<TritonGPUReorderInstructionsPass> {
 public:
-  TritonGPUSinkConversionsFromSharedPass() = default;
+  TritonGPUReorderInstructionsPass() = default;
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -93,6 +93,6 @@ public:
 };
 
 std::unique_ptr<Pass>
-mlir::createTritonGPUSinkConversionsFromSharedPass() {
-  return std::make_unique<TritonGPUSinkConversionsFromSharedPass>();
+mlir::createTritonGPUReorderInstructionsPass() {
+  return std::make_unique<TritonGPUReorderInstructionsPass>();
 }

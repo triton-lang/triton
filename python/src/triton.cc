@@ -1348,9 +1348,9 @@ void init_triton_ir(py::module &&m) {
            [](mlir::PassManager &self) {
              self.addPass(mlir::createTritonGPUOptimizeLoadConvertPass());
            })
-      .def("add_tritongpu_sink_conversions_from_shared_pass",
+      .def("add_tritongpu_reorder_instructions_pass",
            [](mlir::PassManager &self) {
-             self.addPass(mlir::createTritonGPUSinkConversionsFromSharedPass());
+             self.addPass(mlir::createTritonGPUReorderInstructionsPass());
            })
       .def("add_tritongpu_decompose_conversions_to_dot_operand_pass",
            [](mlir::PassManager &self) {
