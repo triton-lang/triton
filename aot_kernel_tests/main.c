@@ -34,8 +34,10 @@ void main() {
   int device_id = 0;
   int max_shared_mem;
 
-  double *u =  AllocFloatVec(100);
-  double *v =  AllocFloatVec(100);
+  double *u =  AllocFloatVec(100000);
+  double *v =  AllocFloatVec(100000);
+  arange(u, 0, 100000);
+  arange(v, 0, 100000);
 
   CHECK_CUDA(cuInit(0), "Cuda init failed");
 
@@ -50,9 +52,9 @@ void main() {
   cuCtxCreate(&ctx, CU_CTX_SCHED_AUTO, device);
   
   CUdeviceptr u_cu, v_cu;
-  cuAllocFloatVec(100, &u_cu);
-  cuAllocFloatVec(100, &v_cu);
+  cuAllocFloatVec(100000, &u_cu);
+  cuAllocFloatVec(100000, &v_cu);
 
-  VectoDevice(100, u, u_cu);
-  VectoDevice(100, v, v_cu);
+  VectoDevice(100000, u, u_cu);
+  VectoDevice(100000, v, v_cu);
 }

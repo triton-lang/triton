@@ -32,12 +32,12 @@ def generate_jiited(*paths):
         p = Path(p)
         if p.exists():
             src = p.read_text()
-            sources.append(src)
+            sources.append((src, str(p)))
             continue
         print(f"[Source Not Found]: {str(p)}")
 
-    scope = {}
-    for src in sources:
+    for (src, fpath) in sources:
+        scope = {"__file__": fpath}
         exec(src, scope)
 
     return find_all_jitted(scope)
