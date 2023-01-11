@@ -874,7 +874,7 @@ def build_triton_ir(fn, signature, specialization, constants):
     context = _triton.ir.context()
     context.load_triton()
     # create kernel prototype
-    def cst_key(i): return fn.arg_names.index(i) if isinstance(i, str) else i
+    def cst_key(i): return fn.arg_names.index(i) if isinstance(i, str) else i  # noqa: E704
     constants = {cst_key(key): value for key, value in constants.items()}
     # visit kernel AST
     gscope = fn.__globals__.copy()
@@ -1365,7 +1365,7 @@ def make_so_cache_key(version_hash, signature, constants):
 
 def make_fn_cache_key(fn_hash, signature, configs, constants, num_warps, num_stages):
     # Get unique key for the compiled code
-    def get_conf_key(conf): return (
+    def get_conf_key(conf): return (  # noqa: E704
         sorted(conf.divisible_by_16), sorted(conf.equal_to_1))
     configs_key = [get_conf_key(conf) for conf in configs]
     key = f"{fn_hash}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}"
@@ -1428,7 +1428,7 @@ def make_hash(fn, **kwargs):
         num_warps = kwargs.get("num_warps", 4)
         num_stages = kwargs.get("num_stages", 3)
         # Get unique key for the compiled code
-        def get_conf_key(conf): return (
+        def get_conf_key(conf): return (  # noqa: E704
             sorted(conf.divisible_by_16), sorted(conf.equal_to_1))
         configs_key = [get_conf_key(conf) for conf in configs]
         key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}"
