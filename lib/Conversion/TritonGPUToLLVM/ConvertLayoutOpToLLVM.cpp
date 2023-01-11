@@ -73,30 +73,30 @@ void storeDistributedToShared(Value src, Value llSrc,
       Value staIdx1 = i32_val(0);
       Value stride0 = dstStrides[outOrd[0]];
       Value stride1 = dstStrides[outOrd[1]];
-      if (auto addOp = dyn_cast<LLVM::AddOp>(dynIdx0.getDefiningOp()))
-        if (auto cstRhs =
-                dyn_cast<LLVM::ConstantOp>(addOp.getRhs().getDefiningOp())) {
-          unsigned rhsVal =
-              cstRhs.getValue().cast<IntegerAttr>().getValue().getSExtValue();
-          unsigned key = (rhsVal / outVec) % maxPhase;
-          if (cache0.find(key) == cache0.end())
-            cache0[key] = dynIdx0;
-          dynIdx0 = cache0[key];
-          staIdx0 =
-              i32_val((rhsVal) / (outVec * maxPhase) * (outVec * maxPhase));
-        }
-      if (auto addOp = dyn_cast<LLVM::AddOp>(dynIdx1.getDefiningOp()))
-        if (auto cstRhs =
-                dyn_cast<LLVM::ConstantOp>(addOp.getRhs().getDefiningOp())) {
-          unsigned rhsVal =
-              cstRhs.getValue().cast<IntegerAttr>().getValue().getSExtValue();
-          unsigned key = rhsVal % maxPhase;
-          if (cache1.find(key) == cache1.end())
-              cache1[key] = dynIdx1;
-          dynIdx1 = cache1[key];
-          staIdx1 = addOp.getRhs();
-          staIdx1 = i32_val((rhsVal) / (maxPhase) * (maxPhase));
-        }
+      // if (auto addOp = dyn_cast<LLVM::AddOp>(dynIdx0.getDefiningOp()))
+      //   if (auto cstRhs =
+      //           dyn_cast<LLVM::ConstantOp>(addOp.getRhs().getDefiningOp())) {
+      //     unsigned rhsVal =
+      //         cstRhs.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+      //     unsigned key = (rhsVal / outVec) % maxPhase;
+      //     if (cache0.find(key) == cache0.end())
+      //       cache0[key] = dynIdx0;
+      //     dynIdx0 = cache0[key];
+      //     staIdx0 =
+      //         i32_val((rhsVal) / (outVec * maxPhase) * (outVec * maxPhase));
+      //   }
+      // if (auto addOp = dyn_cast<LLVM::AddOp>(dynIdx1.getDefiningOp()))
+      //   if (auto cstRhs =
+      //           dyn_cast<LLVM::ConstantOp>(addOp.getRhs().getDefiningOp())) {
+      //     unsigned rhsVal =
+      //         cstRhs.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+      //     unsigned key = rhsVal % maxPhase;
+      //     if (cache1.find(key) == cache1.end())
+      //         cache1[key] = dynIdx1;
+      //     dynIdx1 = cache1[key];
+      //     staIdx1 = addOp.getRhs();
+      //     staIdx1 = i32_val((rhsVal) / (maxPhase) * (maxPhase));
+      //   }
 
       // offset along non-contiguous dimension
       Value off1 = mul(dynIdx1, stride1);
