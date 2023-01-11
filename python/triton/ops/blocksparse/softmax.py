@@ -117,6 +117,7 @@ def _blocksparse_softmax_bwd(
     # compute
     da = a * (dout - tl.sum(a * dout, 0))
     da = tl.where((ns > m) & is_causal, 0., da)
+    da = tl.where(a != a, float("nan"), da)
     # apply relative attention
     if DR is not None:
         DR += z * stride_zr
