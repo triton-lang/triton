@@ -1344,6 +1344,10 @@ void init_triton_ir(py::module &&m) {
              self.addPass(
                  mlir::createTritonGPUCombineOpsPass(computeCapability));
            })
+      .def("add_triton_gpu_update_mma_for_volta_pass",
+           [](mlir::PassManager &self) {
+             self.addPass(mlir::createTritonGPUUpdateMmaForVoltaPass());
+           })
       .def("add_triton_gpu_to_llvm",
            [](mlir::PassManager &self) {
              self.addPass(mlir::triton::createConvertTritonGPUToLLVMPass());

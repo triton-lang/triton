@@ -102,6 +102,7 @@ bool maybeSharedAllocationOp(Operation *op) {
           dialect->getTypeID() ==
               mlir::TypeID::get<arith::ArithmeticDialect>() ||
           dialect->getTypeID() == mlir::TypeID::get<tensor::TensorDialect>());
+  return false;
 }
 
 bool maybeAliasOp(Operation *op) {
