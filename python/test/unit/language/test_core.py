@@ -775,6 +775,8 @@ def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
 
 @pytest.mark.parametrize("dtype_str", [dtype_str for dtype_str in torch_dtypes])
 def test_store_constant(dtype_str):
+    check_type_supported(dtype_str)
+
     """Tests that boolean True is stored as 1"""
     @triton.jit
     def kernel(output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
