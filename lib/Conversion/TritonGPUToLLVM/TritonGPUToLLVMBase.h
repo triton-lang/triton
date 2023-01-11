@@ -433,8 +433,9 @@ public:
         // add static offset
         offset = add(offset, staOffset);
 
-        // step 3: store
+        // // step 3: store
         Value smemAddr = gep(elemPtrTy, smemBase, offset);
+        // Value smemAddr = sharedPtrs[i/minVec*minVec];
         smemAddr = bitcast(smemAddr, ptr_ty(wordTy, 3));
         store(word, smemAddr);
       }

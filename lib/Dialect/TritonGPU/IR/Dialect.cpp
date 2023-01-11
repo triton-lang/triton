@@ -161,7 +161,12 @@ SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout) {
       threads.push_back(blockedLayout.getThreadsPerWarp()[d] *
                         blockedLayout.getWarpsPerCTA()[d]);
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-    assert(0 && "Unimplemented usage of MmaEncodingAttr");
+    if(mmaLayout.getVersionMajor() == 2){
+      threads = {8*mmaLayout.getWarpsPerCTA()[0], 
+                 4*mmaLayout.getWarpsPerCTA()[1]};
+    }
+    else
+      assert(0 && "Unimplemented usage of MmaEncodingAttr");
   } else {
     assert(0 && "Unimplemented usage of getShapePerCTA");
   }
