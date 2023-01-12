@@ -348,7 +348,7 @@ def make_compile_kwargs(meta: AOTKernelMetadata) -> str:
             is_1.add(p.argnum)
 
     # param specialization
-    kwargs["configs"] = instance_descriptor(divisible_by_16=div_16, equal_to_1=is_1)
+    kwargs["configs"] = [instance_descriptor(divisible_by_16=div_16, equal_to_1=is_1)]
 
     kwargs["constants"] = {c.name: c.val for c in meta.constants}
 
