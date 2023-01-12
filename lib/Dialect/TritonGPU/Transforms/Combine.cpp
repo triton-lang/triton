@@ -1207,6 +1207,8 @@ public:
           AT.getShape(), BT.getShape(), isARow, isBRow, mmaId);
       auto [isARow_, isBRow_, isAVec4_, isBVec4_, _] =
           tmpMmaLayout.decodeVoltaLayoutStates();
+      assert(isARow_ == isARow);
+      assert(isBRow_ == isBRow);
 
       llvm::outs() << "isARow_, isBRow_: " << isARow_ << " " << isBRow_ << "\n";
 
@@ -1221,7 +1223,7 @@ public:
     }
 
     // Collect the wrong MMA Layouts, and mark need to update.
-    llvm::outs() << "update " << *op << " -> " << newMmaLayout << "\n";
+    llvm::outs() << "update " << *dotOp << " -> " << newMmaLayout << "\n";
     mmaToUpdate.try_emplace(mmaLayout, newMmaLayout);
 
     return failure();
@@ -1398,8 +1400,9 @@ public:
     } else if (auto dotOp = encoding.dyn_cast<DotOperandEncodingAttr>()) {
       if (auto mma = dotOp.getParent().dyn_cast<MmaEncodingAttr>()) {
         auto newMma = mmaToUpdate.lookup(mma);
-        auto newDotOp = DotOperandEncodingAttr::get(dotOp.getContext(),
-                                                    dotOp.getOpIdx(), newMma);
+        auto newDotOp =
+            DotOperandEncodingAttr::get(dotOp.getContext(), dotOp.getOpIdx(),
+                                        newMma, dotOp.getIsMMAv1Row());
         return RankedTensorType::get(type.getShape(), type.getElementType(),
                                      newDotOp);
       }
