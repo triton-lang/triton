@@ -773,23 +773,26 @@ def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
         assert to_numpy(z_tri) == z_ref
 
 
-def test_store_bool():
+@pytest.mark.parametrize("dtype_str", [dtype_str for dtype_str in torch_dtypes])
+def test_store_constant(dtype_str):
+    check_type_supported(dtype_str)
+
     """Tests that boolean True is stored as 1"""
     @triton.jit
-    def copy_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    def kernel(output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
         offsets = tl.program_id(axis=0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
         mask = offsets < n_elements
-        input = tl.load(input_ptr + offsets, mask=mask)
-        output = input
+        output = GENERATE_TEST_HERE
         tl.store(output_ptr + offsets, output, mask=mask)
 
-    src = torch.tensor([True, False], dtype=torch.bool, device='cuda')
-    n_elements = src.numel()
-    dst = torch.empty_like(src)
-    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
-    copy_kernel[grid](src, dst, n_elements, BLOCK_SIZE=1024)
+    triton_dtype_str = 'uint8' if dtype_str == 'bool' else dtype_str
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.zeros([BLOCK_SIZE], dtype=tl.{triton_dtype_str}) + 1'})
+    block_size = 128
+    ref = torch.ones([block_size], dtype=getattr(torch, dtype_str), device='cuda')
+    output = torch.zeros([block_size], dtype=getattr(torch, dtype_str), device='cuda')
+    kernel[(1,)](output, block_size, BLOCK_SIZE=block_size)
 
-    assert (to_numpy(src).view('uint8') == to_numpy(dst).view('uint8')).all()
+    assert torch.all(output == ref)
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
