@@ -474,11 +474,14 @@ void init_triton_ir(py::module &&m) {
              return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
                  loc, v, self.getI32Type()));
            })
+      .def("get_int64",
+           [](mlir::OpBuilder &self, int64_t v) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
+                 loc, v, self.getI64Type()));
+           })
       // .def("get_uint32", &ir::builder::get_int32, ret::reference)
-      // .def("get_int64", [](ir::builder *self, int64_t v) { return
-      // self->get_int64((uint64_t)v); }, ret::reference) .def("get_uint64",
-      // &ir::builder::get_int64, ret::reference) .def("get_float16",
-      // &ir::builder::get_float16, ret::reference)
+      // .def("get_float16", &ir::builder::get_float16, ret::reference)
       .def("get_float32",
            [](mlir::OpBuilder &self, float v) -> mlir::Value {
              auto loc = self.getUnknownLoc();
