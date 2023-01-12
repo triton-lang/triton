@@ -242,89 +242,108 @@ public:
     auto sizePerThread = triton::gpu::getSizePerThread(srcEncoding);
     auto threadsPerCTA = triton::gpu::getThreadsPerCTA(srcEncoding);
     auto inOrder = triton::gpu::getOrder(srcEncoding);
+    auto outOrder = triton::gpu::getOrder(resSharedLayout);
 
     // If perPhase * maxPhase > threadsPerCTA, we will have elements
     // that share the same tile indices. The index calculation will
     // be cached.
     unsigned numSwizzleRows = std::max<unsigned>(
-        (perPhase * maxPhase) / threadsPerCTA[inOrder[1]], 1);
+        (perPhase * maxPhase) / threadsPerCTA[outOrder[1]], 1);
     // A sharedLayout encoding has a "vec" parameter.
     // On the column dimension, if inVec > outVec, it means we have to divide
     // single vector read into multiple ones
     unsigned numVecCols = std::max<unsigned>(inVec / outVec, 1);
+    // if(srcEncoding.isa<triton::gpu::MmaEncodingAttr>()){
+    //   numSwizzleRows = 1;
+    //   numVecCols = 64;
+    // }
 
     auto srcIndices = emitIndices(loc, rewriter, srcEncoding, srcShape);
 
 
     DenseMap<unsigned, Value> ret;
     DenseMap<std::pair<unsigned, unsigned>, Value> tileOffsetMap;
-    for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
-      // minVec = 2, inVec = 4, outVec = 2
-      //   baseOffsetCol = 0   baseOffsetCol = 0
-      //   tileVecIdxCol = 0   tileVecIdxCol = 1
-      //                -/\-   -/\-
-      //               [|x x| |x x| x x x x x]
-      //               [|x x| |x x| x x x x x]
-      // baseOffsetRow [|x x| |x x| x x x x x]
-      //               [|x x| |x x| x x x x x]
-      unsigned vecIdx = elemIdx / minVec;
-      unsigned vecIdxCol = vecIdx % (sizePerThread[inOrder[0]] / minVec);
-      unsigned vecIdxRow = vecIdx / (sizePerThread[inOrder[0]] / minVec);
-      unsigned baseOffsetCol =
-          vecIdxCol / numVecCols * numVecCols * threadsPerCTA[inOrder[0]];
-      unsigned baseOffsetRow = vecIdxRow / numSwizzleRows * numSwizzleRows *
-                           threadsPerCTA[inOrder[1]];
-      unsigned tileVecIdxCol = vecIdxCol % numVecCols;
-      unsigned tileVecIdxRow = vecIdxRow % numSwizzleRows;
 
-      if (!tileOffsetMap.count({tileVecIdxRow, tileVecIdxCol})) {
-        // Swizzling
-        // Since the swizzling index is related to outVec, and we know minVec
-        // already, inVec doesn't matter
-        //
-        // (Numbers represent row indices)
-        // Example1:
-        // outVec = 2, inVec = 2, minVec = 2
-        // outVec = 2, inVec = 4, minVec = 2
-        //     | [1 2] [3 4] [5 6] ... |
-        //     | [3 4] [1 2] [7 8] ... |
-        //     | [5 6] [7 8] [1 2] ... |
-        // Example2:
-        // outVec = 4, inVec = 2, minVec = 2
-        //     | [1 2 3 4] [5 6 7 8] [9 10 11 12] ... |
-        //     | [5 6 7 8] [1 2 3 4] [13 14 15 16] ... |
-        //     | [9 10 11 12] [13 14 15 16] [1 2 3 4] ... |
-        auto srcIdx = srcIndices[tileVecIdxRow * sizePerThread[inOrder[0]]];
-        Value phase = urem(udiv(srcIdx[inOrder[1]], i32_val(perPhase)),
-                           i32_val(maxPhase));
-        // srcShape and smemObj.shape maybe different if smemObj is a
-        // slice of the original shared memory object.
-        // So we need to use the original shape to compute the offset
-        Value rowOffset = mul(srcIdx[inOrder[1]], srcStrides[inOrder[1]]);
-        Value colOffset =
-            add(srcIdx[inOrder[0]], i32_val(tileVecIdxCol * minVec));
-        Value swizzleIdx = udiv(colOffset, i32_val(outVec));
-        Value swizzleColOffset =
-            add(mul(xor_(swizzleIdx, phase), i32_val(outVec)),
-                urem(colOffset, i32_val(outVec)));
-        Value tileOffset = add(rowOffset, swizzleColOffset);
-        tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}] =
-            gep(dstPtrTy, dstPtrBase, tileOffset);
+    DenseMap<unsigned, Value> cacheCol, cacheRow;
+    // llvm::outs() << "======\n";
+    for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
+      // extract multi dimensional index for current element
+      auto idx = srcIndices[elemIdx];
+      Value idxCol = idx[inOrder[0]]; // contiguous dimension
+      Value idxRow = idx[inOrder[1]]; // discontiguous dimension
+      Value strideCol = srcStrides[inOrder[0]]; 
+      Value strideRow = srcStrides[inOrder[1]]; 
+      // extract dynamic/static offset
+      unsigned baseOffsetCol = 0;
+      if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxCol.getDefiningOp()))
+      if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(add.getRhs().getDefiningOp())) {
+        unsigned cst = _cst.getValue().cast<IntegerAttr>()
+                           .getValue().getSExtValue();
+        unsigned key = cst % (outVec * maxPhase);
+        cacheCol.insert({key, idxCol});
+        idxCol = cacheCol[key];
+        baseOffsetCol = cst / (outVec * maxPhase) * (outVec * maxPhase);
+      }
+      unsigned baseOffsetRow = 0;
+      if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxRow.getDefiningOp()))
+      if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(add.getRhs().getDefiningOp())) {
+        unsigned cst = _cst.getValue().cast<IntegerAttr>()
+                           .getValue().getSExtValue();
+        unsigned key = cst % (perPhase * maxPhase);
+        cacheRow.insert({key, idxRow});
+        idxRow = cacheRow[key];
+        baseOffsetRow = cst / (perPhase * maxPhase) * (perPhase * maxPhase);
       }
 
-      // 16 * 8 = 128bits
-      auto maxBitWidth =
-          std::max<unsigned>(128, resElemTy.getIntOrFloatBitWidth());
-      auto vecBitWidth = resElemTy.getIntOrFloatBitWidth() * minVec;
-      auto bitWidth = std::min<unsigned>(maxBitWidth, vecBitWidth);
-      auto numWords = vecBitWidth / bitWidth;
-      auto numWordElems = bitWidth / resElemTy.getIntOrFloatBitWidth();
 
-      Value tileOffset = tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}];
+      // Swizzling
+      // Since the swizzling index is related to outVec, and we know minVec
+      // already, inVec doesn't matter
+      //
+      // (Numbers represent row indices)
+      // Example1:
+      // outVec = 2, inVec = 2, minVec = 2
+      // outVec = 2, inVec = 4, minVec = 2
+      //     | [1 2] [3 4] [5 6] ... |
+      //     | [3 4] [1 2] [7 8] ... |
+      //     | [5 6] [7 8] [1 2] ... |
+      // Example2:
+      // outVec = 4, inVec = 2, minVec = 2
+      //     | [1 2 3 4] [5 6 7 8] [9 10 11 12] ... |
+      //     | [5 6 7 8] [1 2 3 4] [13 14 15 16] ... |
+      //     | [9 10 11 12] [13 14 15 16] [1 2 3 4] ... |
+      // Value phase = urem(udiv(idxRow, i32_val(perPhase)),
+      //                    i32_val(maxPhase));
+      // srcShape and smemObj.shape maybe different if smemObj is a
+      // slice of the original shared memory object.
+      // So we need to use the original shape to compute the offset
+      // Value rowOffset = mul(idxRow, srcStrides[inOrder[1]]);
+      // Value colOffset =
+      //     add(idxCol, i32_val(tileVecIdxCol * minVec));
+      // Value swizzleIdx = udiv(colOffset, i32_val(outVec));
+      // Value swizzleColOffset =
+      //     add(mul(xor_(swizzleIdx, phase), i32_val(outVec)),
+      //         urem(colOffset, i32_val(outVec)));
+      // Value tileOffset = add(rowOffset, swizzleColOffset);
+      // Value tileOffset = gep(dstPtrTy, dstPtrBase, tileOffset);
+        // offset along non-contiguous dimension
+
+      Value phase = urem(udiv(idxRow, i32_val(perPhase)), i32_val(maxPhase));
+      Value rowOffset = mul(idxRow, strideRow);
+      Value colOffset = xor_(udiv(idxCol, i32_val(outVec)), phase);
+      colOffset = mul(colOffset, i32_val(outVec));
+      Value remained = urem(idxCol, i32_val(outVec));
+      remained = udiv(remained, i32_val(minVec));
+      colOffset = add(colOffset, mul(remained, i32_val(minVec)));
+
+      Value tileOffset = add(rowOffset, mul(colOffset, strideCol));
+      tileOffset = gep(dstPtrTy, dstPtrBase, tileOffset);
+
       Value baseOffset =
-          add(mul(i32_val(baseOffsetRow), srcStrides[inOrder[1]]),
+          add(mul(i32_val(baseOffsetRow), srcStrides[outOrder[1]]),
               i32_val(baseOffsetCol));
       Value basePtr = gep(dstPtrTy, tileOffset, baseOffset);
+
       ret[elemIdx] = basePtr;
     }
     return ret;
@@ -387,19 +406,20 @@ public:
       word = insert_element(wordTy, word, inVals[i], i32_val(i % minVec));
       if (i % minVec == minVec - 1) {
         // step 1: recover the multidim_index from the index of
-        SmallVector<Value> multiDimIdx = srcIndices[i];
-        Value dynIdx0 = multiDimIdx[outOrd[0]];
-        Value staIdx0 = i32_val(0);
-        Value dynIdx1 = multiDimIdx[outOrd[1]];
-        Value staIdx1 = i32_val(0);
-        Value stride0 = dstStrides[outOrd[0]];
-        Value stride1 = dstStrides[outOrd[1]];
+        // SmallVector<Value> multiDimIdx = srcIndices[i];
+        // Value dynIdx0 = multiDimIdx[outOrd[0]];
+        // Value staIdx0 = i32_val(0);
+        // Value dynIdx1 = multiDimIdx[outOrd[1]];
+        // Value staIdx1 = i32_val(0);
+        // Value stride0 = dstStrides[outOrd[0]];
+        // Value stride1 = dstStrides[outOrd[1]];
         // if (auto addOp = dyn_cast<LLVM::AddOp>(dynIdx0.getDefiningOp()))
         //   if (auto cstRhs =
         //           dyn_cast<LLVM::ConstantOp>(addOp.getRhs().getDefiningOp())) {
         //     unsigned rhsVal =
         //         cstRhs.getValue().cast<IntegerAttr>().getValue().getSExtValue();
         //     unsigned key = (rhsVal / outVec) % maxPhase;
+        //     // llvm::outs () << key << " ";
         //     if (cache0.find(key) == cache0.end())
         //       cache0[key] = dynIdx0;
         //     dynIdx0 = cache0[key];
@@ -412,6 +432,7 @@ public:
         //     unsigned rhsVal =
         //         cstRhs.getValue().cast<IntegerAttr>().getValue().getSExtValue();
         //     unsigned key = rhsVal % maxPhase;
+        //     // llvm::outs () << key << " \n";
         //     if (cache1.find(key) == cache1.end())
         //         cache1[key] = dynIdx1;
         //     dynIdx1 = cache1[key];
@@ -419,23 +440,23 @@ public:
         //     staIdx1 = i32_val((rhsVal) / (maxPhase) * (maxPhase));
         //   }
 
-        // offset along non-contiguous dimension
-        Value off1 = mul(dynIdx1, stride1);
-        // swizzled offset along contiguous dimension
-        Value phaseId = urem(udiv(dynIdx1, i32_val(perPhase)), i32_val(maxPhase));
-        Value off0 = xor_(udiv(dynIdx0, outVecVal), phaseId);
-        off0 = mul(off0, outVecVal);
-        Value remained = urem(dynIdx0, outVecVal);
-        remained = udiv(remained, minVecVal);
-        off0 = add(off0, mul(remained, minVecVal));
-        Value offset = add(off1, mul(off0, stride0));
-        Value staOffset = add(mul(staIdx1, stride1), mul(staIdx0, stride0));
-        // add static offset
-        offset = add(offset, staOffset);
+        // // offset along non-contiguous dimension
+        // Value off1 = mul(dynIdx1, stride1);
+        // // swizzled offset along contiguous dimension
+        // Value phaseId = urem(udiv(dynIdx1, i32_val(perPhase)), i32_val(maxPhase));
+        // Value off0 = xor_(udiv(dynIdx0, outVecVal), phaseId);
+        // off0 = mul(off0, outVecVal);
+        // Value remained = urem(dynIdx0, outVecVal);
+        // remained = udiv(remained, minVecVal);
+        // off0 = add(off0, mul(remained, minVecVal));
+        // Value offset = add(off1, mul(off0, stride0));
+        // Value staOffset = add(mul(staIdx1, stride1), mul(staIdx0, stride0));
+        // // add static offset
+        // offset = add(offset, staOffset);
 
-        // // step 3: store
-        Value smemAddr = gep(elemPtrTy, smemBase, offset);
-        // Value smemAddr = sharedPtrs[i/minVec*minVec];
+        // // // step 3: store
+        // Value smemAddr = gep(elemPtrTy, smemBase, offset);
+        Value smemAddr = sharedPtrs[i/minVec*minVec];
         smemAddr = bitcast(smemAddr, ptr_ty(wordTy, 3));
         store(word, smemAddr);
       }
