@@ -1,29 +1,16 @@
-/*[ common_header ]*/
-#pragma once
-
-#include <stdio.h>
-#include <stdint.h>
-#include <inttypes.h>
-#include <cuda.h>
-
-typedef struct
-{
-    int gX;
-    int gY;
-    int gZ;
-    int numWarps;
-} GridWarps;
-
 /*[ kernel_header ]*/
 #include "common.h"
 
 unsigned char {binary_arg_name}[{bin_size}];
-CUfunction load_{kernel_name}(void);
+void load_{kernel_name}(void);
 CUresult {kernel_name}(CUstream stream, GridWarps g, {signature});
+CUmodule {kernel_name}_mod;
+CUfunction {kernel_name}_func;
+
+/*[ default_load ]*/
 CUmodule {kernel_name}_mod = NULL;
 CUfunction {kernel_name}_func = NULL;
 
-/*[ default_load ]*/
 unsigned char {binary_arg_name}[{bin_size}] = {{ {binary_val} }};
 
 void load_{kernel_name}(void)
@@ -36,11 +23,13 @@ void load_{kernel_name}(void)
     err = cuModuleLoadData(&{kernel_name}_mod, image);
     if (err != CUDA_SUCCESS) {{
         // TODO: tell the user where things went wrong 
+        printf("Error Module Load: %d\n", err);
         return;
     }}
-    err = cuModuleGetFunction(&{kernel_name}_func, mod_ptr, "{kernel_name}");
+    err = cuModuleGetFunction(&{kernel_name}_func, {kernel_name}_mod, "{kernel_name}");
     if (err != CUDA_SUCCESS) {{
         // TODO: tell the user where things went wrong 
+        printf("Error Function Load: %d\n", err);
         return;
     }}
     return;
@@ -54,7 +43,7 @@ CUresult {kernel_name}(CUstream stream, GridWarps g, {signature})
 
 {{
     if ({kernel_name}_func == NULL) {{
-       load_{kernel_name}(void); 
+       load_{kernel_name}(); 
     }}
     void *args[{num_args}] = {{ {arg_pointers} }};
     return cuLaunchKernel({kernel_name}_func, g.gX, g.gY, g.gZ, g.numWarps * {threads_per_warp}, 1, 1, 0, stream, args, NULL);

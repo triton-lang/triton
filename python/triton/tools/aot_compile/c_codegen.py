@@ -191,5 +191,24 @@ def parse_template(template_src: str):
             snippets[section_name].append(lines[i])
             i += 1
 
-    return CodegenTemplates(**{k: "\n".join(v) for k, v in snippets.items()})
+    c_source_template = {k: "\n".join(v) for k, v in snippets.items()}
+    c_source_template["common_header"] = """
+#pragma once
 
+#include <stdio.h>
+#include <stdint.h>
+#include <inttypes.h>
+#include <cuda.h>
+
+
+typedef struct
+{
+    int gX;
+    int gY;
+    int gZ;
+    int numWarps;
+} GridWarps;
+    """
+
+
+    return CodegenTemplates(**c_source_template)
