@@ -424,6 +424,11 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     // Number of bits in versionMinor to hold the ID of the MMA encoding instance.
     // Here 5 bits can hold 32 IDs in a single module.
     static constexpr int numBitsToHoldMmaV1ID{5};
+
+    // Here is a temporary flag that indicates whether we need to update the warpsPerCTA for MMAv1.
+    // The mmav1's wpt-related logic is separated into multiple files, so a global flag is added here for universal coordination.
+    // TODO[Superjomn]: Remove this flag once the MMAv1 backend is ready.
+    static constexpr bool _mmaV1UpdateWpt{false};
   }];
 
 }
