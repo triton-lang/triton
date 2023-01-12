@@ -15,7 +15,8 @@ endif()
 option(TRITON_BUILD_TUTORIALS "Build C++ Triton tutorials" ON)
 option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 
-# Default build for this branch is ROCm support
+# Enable TRITON_USE_ROCM for ROCm support
+option(TRITON_USE_ROCM "Build with ROCm/AMDGPU support" OFF)
 if(DEFINED ENV{TRITON_USE_ROCM})
 set(TRITON_USE_ROCM "$ENV{TRITON_USE_ROCM}" CACHE BOOL "" FORCE)
 endif()
