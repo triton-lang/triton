@@ -203,10 +203,10 @@ def parse_template(template_src: str):
 
 typedef struct
 {
-    int gX;
-    int gY;
-    int gZ;
-    int numWarps;
+    unsigned int gX;
+    unsigned int gY;
+    unsigned int gZ;
+    unsigned int numWarps;
 } GridWarps;
     """
 
