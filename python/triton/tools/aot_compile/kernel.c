@@ -7,12 +7,12 @@
 #include <cuda.h>
 
 typedef struct
-{{
+{
     int gX;
     int gY;
     int gZ;
     int numWarps;
-}} GridWarps;
+} GridWarps;
 
 /*[ kernel_header ]*/
 #include "common.h"
@@ -24,7 +24,7 @@ CUmodule {kernel_name}_mod = NULL;
 CUfunction {kernel_name}_func = NULL;
 
 /*[ default_load ]*/
-unsigned char {binary_arg_name}[{bin_size}] = {binary_val};
+unsigned char {binary_arg_name}[{bin_size}] = {{ {binary_val} }};
 
 void load_{kernel_name}(void)
 /*
