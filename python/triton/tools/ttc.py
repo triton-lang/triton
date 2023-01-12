@@ -37,13 +37,21 @@ def _extract_kernel_src_from_ast(src: str, fpath: str):
 
     lines = src.split(os.linesep)
 
+    def _is_jit(n):
+        if isinstance(n, ast.Attribute):
+            return 'jit' in n.attr
+        if isinstance(n, ast.Name):
+            return 'jit' in n.id
+
+        return False
+
     tree = ast.parse(src)
     kernels = {}
     if isinstance(tree, ast.Module):
         tree = tree.body
         for node in tree:
             if isinstance(node, ast.FunctionDef):
-                is_jitted = any('jit' in dec.id for dec in node.decorator_list)
+                is_jitted = any(_is_jit(dec) for dec in node.decorator_list)
                 if is_jitted:
                     st = node.lineno - 1
                     en = node.end_lineno
