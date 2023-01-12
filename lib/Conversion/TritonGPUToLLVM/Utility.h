@@ -95,6 +95,10 @@
                             __VA_ARGS__)
 #define tid_val() getThreadId(rewriter, loc)
 
+// Attributes
+#define i32_arr_attr(...) rewriter.getI32ArrayAttr({__VA_ARGS__})
+#define i64_arr_attr(...) rewriter.getI64ArrayAttr({__VA_ARGS__})
+
 namespace mlir {
 namespace triton {
 
@@ -191,7 +195,7 @@ getElementsFromStruct(Location loc, Value llvmStruct,
   SmallVector<Value> results(types.size());
   for (unsigned i = 0; i < types.size(); ++i) {
     Type type = types[i];
-    results[i] = extract_val(type, llvmStruct, rewriter.getI64ArrayAttr(i));
+    results[i] = extract_val(type, llvmStruct, i64_arr_attr(i));
   }
   return results;
 }

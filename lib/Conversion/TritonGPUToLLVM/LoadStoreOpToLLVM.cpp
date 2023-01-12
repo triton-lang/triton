@@ -214,7 +214,7 @@ struct LoadOpConversion
         Value curr;
         if (retTy.isa<LLVM::LLVMStructType>()) {
           curr = extract_val(IntegerType::get(getContext(), width), ret,
-                             rewriter.getI64ArrayAttr(ii));
+                             i64_arr_attr(ii));
         } else {
           curr = ret;
         }
