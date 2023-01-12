@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import inspect
-from typing import Any, Dict, Sequence, Union
+import textwrap
+from typing import Any, Callable, Dict, Sequence, Union
 from enum import Enum
 
 import triton.language as tl
@@ -8,6 +9,7 @@ from triton.compiler import instance_descriptor
 from triton import JITFunction
 
 # TODO: Import from compiler when working with full trition
+# from collections import namedtuple
 # instance_descriptor = namedtuple(
 #     "instance_descriptor", ["divisible_by_16", "equal_to_1"], defaults=[set(), set()]
 # )
@@ -40,10 +42,31 @@ class FakeJITFunction:
         self.has_defaults = any(
             [v.default != inspect._empty for v in signature.parameters.values()]
         )
+        # self.src = textwrap.dedent(inspect.getsource(fn))
+        self.src = extract_source(fn)
         self.__doc__ = fn.__doc__
         self.__name__ = fn.__name__
         self.__globals__ = fn.__globals__
         self.__module__ = fn.__module__
+
+
+def extract_source(fn: Callable):
+    """
+    Extract source code from a function.
+
+    In case of executing a script from a string (like we do for the AOT compilation) inspect can't get the source code.
+    In that case we pass the source to the scope of the function with __AOT_COMPILE_src
+    """
+    try:
+        src = inspect.getsource(fn)
+    except OSError:
+        try:
+            # TODO: make `__AOT_COMPILE_src` into something maintainable
+            src = fn.__globals__["__AOT_COMPILE_src"][fn.__name__]
+        except:
+            raise OSError(f"Could get source code for {fn.__name__}")
+        
+    return textwrap.dedent(src)
 
 
 def jit(fn):
@@ -52,7 +75,10 @@ def jit(fn):
 
 # ASTGeneratingObject = FakeJITFunction
 ASTGeneratingObject = JITFunction
+# class constexpr:
+#     pass
 TritonConstantExpr = tl.constexpr
+# TritonConstantExpr = constexpr
 
 
 def _is_int_type(ann):

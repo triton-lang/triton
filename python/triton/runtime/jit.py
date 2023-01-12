@@ -110,6 +110,25 @@ class KernelInterface(Generic[T]):
         return cast(T, functools.partial(cast(Callable, self.run), grid=grid))
 
 
+def extract_source(fn: Callable):
+    """
+    Extract source code from a function.
+
+    In case of executing a script from a string (like we do for the AOT compilation) inspect can't get the source code.
+    In that case we pass the source to the scope of the function with __AOT_COMPILE_src
+    """
+    try:
+        src = inspect.getsource(fn)
+    except OSError:
+        try:
+            # TODO: make `__AOT_COMPILE_src` into something maintainable
+            src = fn.__globals__["__AOT_COMPILE_src"][fn.__name__]
+        except:
+            raise OSError(f"Could get source code for {fn.__name__}")
+        
+    return textwrap.dedent(src)
+
+
 class JITFunction(KernelInterface[T]):
 
     # Hook for inspecting compiled functions and modules
@@ -303,7 +322,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         self.do_not_specialize = [] if do_not_specialize is None else do_not_specialize
         self.do_not_specialize = set([self.arg_names.index(arg) if isinstance(arg, str) else arg for arg in self.do_not_specialize])
         # function source code (without decorators)
-        self.src = textwrap.dedent(inspect.getsource(fn))
+        self.src = extract_source(fn)
         self.src = self.src[self.src.find("def"):]
         # cache of just-in-time compiled kernels
         self.cache = defaultdict(dict)

@@ -1,16 +1,14 @@
+import ast
+import os
 from argparse import ArgumentParser
 from types import ModuleType
 from typing import Callable, Dict, Sequence, Tuple
 
 import triton
-
 from aot_compile.c_codegen import CodeGenerator
-from aot_compile.compile_metadata import (
-    AOTKernelMetadata,
-    ASTGeneratingObject,
-    infer_triton_signature,
-    make_compile_kwargs,
-)
+from aot_compile.compile_metadata import (AOTKernelMetadata, ASTGeneratingObject,
+                                          infer_triton_signature, make_compile_kwargs)
+
 
 def find_all_jitted(*wheres):
     res = {}
@@ -24,7 +22,40 @@ def find_all_jitted(*wheres):
     return res
 
 
+
+def _extract_kernel_src_from_ast(src: str, fpath: str):
+    """
+    Parse source and extract functions that are jit compiled
+
+    Why is this here? 
+    When executing modules from string with exec function, inspect has no access to the source code.
+    This function extracts sources of funcitons and passes those to exec as global scope data.
+
+    Assumption:
+    - functions must be decorated with the tirton.jit (or anything that has `jit` in the name of the decorator)
+    """
+
+    lines = src.split(os.linesep)
+
+    tree = ast.parse(src)
+    kernels = {}
+    if isinstance(tree, ast.Module):
+        tree = tree.body
+        for node in tree:
+            if isinstance(node, ast.FunctionDef):
+                is_jitted = any('jit' in dec.id for dec in node.decorator_list)
+                if is_jitted:
+                    st = node.lineno - 1
+                    en = node.end_lineno
+                    kernels[node.name] = os.linesep.join(lines[st:en])
+
+        if len(kernels):
+            return kernels
+
+    raise ValueError(f"AOT Compilation is supported for valid python modules.\n Failed on {fpath}:\n\n {src}")
+
 def generate_jiited(*paths):
+
     # TODO: maybe compile source file one by one and generate a single C source per python source?
     # TODO: (idea) conserve tree structure of a python source lib - people can use exisitng projects in a familiar structure
     sources = []
@@ -36,8 +67,9 @@ def generate_jiited(*paths):
             continue
         print(f"[Source Not Found]: {str(p)}")
 
+    scope = {}
     for (src, fpath) in sources:
-        scope = {"__file__": fpath}
+        scope["__AOT_COMPILE_src"] = _extract_kernel_src_from_ast(src, fpath)
         exec(src, scope)
 
     return find_all_jitted(scope)
@@ -104,7 +136,7 @@ def compile_func(meta: AOTKernelMetadata, fn: ASTGeneratingObject) -> bytes:
     # NOTE: we ovveride the function name here. in case we have several variants in the kerenel
     #       (those will have same signature in C)
     old_name = fn.__name__
-    fn.__name__ == meta.name
+    fn.__name__ = meta.name
 
     kwargs = make_compile_kwargs(meta)
     compiled = triton.compile(fn, **kwargs)
