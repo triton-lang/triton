@@ -79,11 +79,12 @@ public:
 
       // Recalculate the wpt, for here we could get the latest information, the
       // wpt should be updated.
-      auto newWpt =
-          MmaEncodingAttr::_mmaV1UpdateWpt
-              ? getWarpsPerCTA(DT.getShape(), isARow_, isBRow_, isAVec4_,
-                               isBVec4_, product(mmaLayout.getWarpsPerCTA()))
-              : mmaLayout.getWarpsPerCTA();
+      auto updatedWpt =
+          getWarpsPerCTA(DT.getShape(), isARow_, isBRow_, isAVec4_, isBVec4_,
+                         product(mmaLayout.getWarpsPerCTA()));
+      auto newWpt = MmaEncodingAttr::_mmaV1UpdateWpt
+                        ? updatedWpt
+                        : mmaLayout.getWarpsPerCTA();
       newMmaLayout = MmaEncodingAttr::get(ctx, mmaLayout.getVersionMajor(),
                                           newWpt, AT.getShape(), BT.getShape(),
                                           isARow, isBRow, mmaId);
