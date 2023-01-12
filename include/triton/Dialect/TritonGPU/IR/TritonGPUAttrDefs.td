@@ -376,7 +376,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
                      "int":$numWarps,
                      "int":$id), [{
       assert(versionMajor == 1 && "Only MMAv1 has multiple versionMinor.");
-      SmallVector<unsigned> wpt({numWarps, 1});
+      SmallVector<unsigned> wpt({static_cast<unsigned>(numWarps), 1});
       int versionMinor = 0;
       versionMinor |= static_cast<bool>((1<<0) & id) * (1<<4);
       versionMinor |= static_cast<bool>((1<<1) & id) * (1<<5);
