@@ -202,11 +202,17 @@ private:
         return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
       };
 
+      SmallVector<Value> C; // DEBUG
+      for (int i = 0; i < 8; i++) {
+        C.push_back(acc[idx[i]]);
+      }
+
       for (unsigned i = 0; i < 8; i++) {
         Value elem = extract_val(f32_ty, res, getIntAttr(i));
         acc[idx[i]] = elem;
       }
-#define SHOW_MMA_V1 0
+
+#define SHOW_MMA_V1 1
 #if SHOW_MMA_V1
       {
         std::vector<Value> args = {ha.first, ha.second, hb.first, hb.second};
@@ -224,11 +230,15 @@ private:
           pargs.push_back(get_f16(args[i], 1));
         }
         for (int i = 0; i < 8; i++) {
-          pargs.push_back(extract_val(f32_ty, res, getIntAttr(i)));
+          pargs.push_back(C[i]);
+        }
+        for (int i = 0; i < 8; i++) {
+          pargs.push_back(acc[idx[i]]);
         }
 
         LLVM::vprintf("mma t-%d [%d %d %d] A:(%f,%f) (%f,%f) B:(%f,%f) (%f,%f) "
-                      "D:(%f,%f,%f,%f,%f,%f,%f,%f)",
+                      "C:(%f,%f,%f,%f,%f,%f,%f,%f)"
+                      " D:(%f,%f,%f,%f,%f,%f,%f,%f)",
                       pargs, rewriter);
       }
 #endif
