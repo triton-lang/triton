@@ -268,8 +268,9 @@ public:
     } else if (auto dotOp = encoding.dyn_cast<DotOperandEncodingAttr>()) {
       if (auto mma = dotOp.getParent().dyn_cast<MmaEncodingAttr>()) {
         auto newMma = mmaToUpdate.lookup(mma);
-        auto newDotOp = DotOperandEncodingAttr::get(dotOp.getContext(),
-                                                    dotOp.getOpIdx(), newMma);
+        auto newDotOp =
+            DotOperandEncodingAttr::get(dotOp.getContext(), dotOp.getOpIdx(),
+                                        newMma, dotOp.getIsMMAv1Row());
         return RankedTensorType::get(type.getShape(), type.getElementType(),
                                      newDotOp);
       }
