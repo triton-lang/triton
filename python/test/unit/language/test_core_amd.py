@@ -594,6 +594,67 @@ def test_tuples():
 
 
 # ---------------
+# test atomics
+# ---------------
+@pytest.mark.parametrize("op, dtype_x_str, mode", itertools.chain.from_iterable([
+    [
+        ('add', 'float16', mode),
+        ('add', 'uint32', mode), ('add', 'int32', mode), ('add', 'float32', mode),
+        ('max', 'uint32', mode), ('max', 'int32', mode), ('max', 'float32', mode),
+        ('min', 'uint32', mode), ('min', 'int32', mode), ('min', 'float32', mode),
+    ]
+    for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']]))
+def test_atomic_rmw(op, dtype_x_str, mode, device='cuda'):
+    capability = torch.cuda.get_device_capability()
+    if capability[0] < 7:
+        if dtype_x_str == 'float16':
+            pytest.skip("Only test atomic float16 ops on devices with sm >= 70")
+    if torch.version.hip is not None:
+        if dtype_x_str == 'float16' or ((op == 'min' or op == 'max') and dtype_x_str == 'float32'):
+            pytest.skip("Not yet supported on AMDGPU.")
+    n_programs = 5
+
+    # triton kernel
+    @triton.jit
+    def kernel(X, Z):
+        pid = tl.program_id(0)
+        x = tl.load(X + pid)
+        old = GENERATE_TEST_HERE
+
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.atomic_{op}(Z, x)'})
+    numpy_op = {'add': np.sum, 'max': np.max, 'min': np.min}[op]
+    max_neutral = float('-inf') if dtype_x_str in float_dtypes else np.iinfo(getattr(np, dtype_x_str)).min
+    min_neutral = float('inf') if dtype_x_str in float_dtypes else np.iinfo(getattr(np, dtype_x_str)).max
+    neutral = {'add': 0, 'max': max_neutral, 'min': min_neutral}[op]
+
+    # triton result
+    rs = RandomState(17)
+    x = numpy_random((n_programs, ), dtype_str=dtype_x_str, rs=rs)
+    if mode == 'all_neg':
+        x = -np.abs(x)
+    if mode == 'all_pos':
+        x = np.abs(x)
+    if mode == 'min_neg':
+        idx = rs.randint(n_programs, size=(1, )).item()
+        x[idx] = -np.max(np.abs(x)) - 1
+    if mode == 'max_pos':
+        idx = rs.randint(n_programs, size=(1, )).item()
+        x[idx] = np.max(np.abs(x)) + 1
+    x_tri = to_triton(x, device=device)
+
+    z_tri = to_triton(np.array([neutral], dtype=getattr(np, dtype_x_str)), device=device)
+    kernel[(n_programs, )](x_tri, z_tri)
+    # torch result
+    z_ref = numpy_op(x).astype(getattr(np, dtype_x_str))
+    # compare
+    exact = op not in ['add']
+    if exact:
+        assert z_ref.item() == to_numpy(z_tri).item()
+    else:
+        np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
+
+
+# ---------------
 # test cast
 # ---------------
 
