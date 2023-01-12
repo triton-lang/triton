@@ -128,7 +128,7 @@ struct LoadOpConversion
 
           // get values
           Value trueVal = load(ptrElems[elemOffset]);
-          Value zeroVal = bitcast(i32_val(0), valueElemTy);
+          Value zeroVal = bitcast(int_val(valueElemNbits, 0), valueElemTy);
           Value falseVal = other ? otherElems[elemOffset] : zeroVal;
 
           // select value based on mask
@@ -340,7 +340,8 @@ struct StoreOpConversion
           elem = bitcast(elem, valueElemTy);
 #ifdef USE_ROCM
           Value maskVal = llMask ? maskElems[vecStart] : int_val(1, 1);
-          Value ret = select(maskVal, elem , bitcast(i32_val(0), valueElemTy));
+          Value ret = select(maskVal, elem,
+                             bitcast(int_val(valueElemNbits, 0), valueElemTy));
           store(ret, ptrElems[elemOffset]);
         }
       }
