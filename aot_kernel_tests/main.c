@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "add_kernel0.h"
+
 void errMsg(char* msg, int code) {
   if (code != CUDA_SUCCESS) {
    printf("%s with %d\n", msg, code); 
@@ -51,10 +53,16 @@ void main() {
   CUcontext ctx;
   cuCtxCreate(&ctx, CU_CTX_SCHED_AUTO, device);
   
-  CUdeviceptr u_cu, v_cu;
+  CUdeviceptr u_cu, v_cu, out_cu;
   cuAllocFloatVec(100000, &u_cu);
   cuAllocFloatVec(100000, &v_cu);
+  cuAllocFloatVec(100000, &out_cu);
 
   VectoDevice(100000, u, u_cu);
   VectoDevice(100000, v, v_cu);
+
+  GridWarps g = {32, 0, 0, 3};
+  CUstream stream;
+
+  CHECK_CUDA(add_kernel0(stream, g, u_cu, v_cu, out_cu, 100000), "kernel run");
 }

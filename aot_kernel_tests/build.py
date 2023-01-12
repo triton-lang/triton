@@ -45,7 +45,7 @@ def build_cuda_bin(out:str, *src_files, include_dirs: Sequence[str]=None, pic: b
   if pic:
     options.append("-fPIC")
   
-  cc_cmd = [cc, *src_files, "-O3", f"-I{cu_include_dir}", *includes, *options, "-lcuda", "-o", out]
+  cc_cmd = [cc, *src_files, "-O3", *includes, f"-I{cu_include_dir}" , *options, "-lcuda", "-o", out]
   cc_cmd += [f"-L{dir}" for dir in cuda_lib_dirs]
   print(" ".join(cc_cmd))
 #   ret = subprocess.check_call(cc_cmd)
