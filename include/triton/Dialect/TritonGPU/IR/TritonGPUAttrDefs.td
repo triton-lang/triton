@@ -380,7 +380,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     AttrBuilder<(ins "int":$versionMajor,
                      "int":$numWarps,
                      "int":$id), [{
-      assert(versionMajor == 1 && "Only MMAv1 has multiple versionMinor.");
+      assert(versionMajor == 1 && "This builder is specially for versionMajor==1");
       SmallVector<unsigned> wpt({static_cast<unsigned>(numWarps), 1});
       int versionMinor = 0;
 
@@ -399,7 +399,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
                      "bool":$isARow,
                      "bool":$isBRow,
                      "int":$id), [{
-      assert(versionMajor == 1 && "Only MMAv1 has multiple versionMinor.");
+      assert(versionMajor == 1 && "This builder is specially for versionMajor==1");
       bool isAVec4 = !isARow && (shapeA[isARow] <= 16);
       bool isBVec4 = isBRow && (shapeB[isBRow] <= 16);
       // 4-bits to encode 4 booleans: [isARow, isBRow, isAVec4, isBVec4]
