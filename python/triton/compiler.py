@@ -1067,6 +1067,7 @@ def generate_launcher(constants, signature):
     # generate glue code
     src = f"""
 #include \"cuda.h\"
+#include <stdbool.h>
 #include <Python.h>
 
 static inline void gpuAssert(CUresult code, const char *file, int line)
@@ -1092,12 +1093,22 @@ void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, 
   }}
 }}
 
-static inline CUdeviceptr getPointer(PyObject *obj, int idx) {{
+typedef struct _DevicePtrInfo {{
+    CUdeviceptr dev_ptr;
+    bool valid;
+}} DevicePtrInfo;
+
+static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
+  DevicePtrInfo ptr_info;
+  ptr_info.dev_ptr = 0;
+  ptr_info.valid = true;
   if (PyLong_Check(obj)) {{
-    return (CUdeviceptr)PyLong_AsUnsignedLongLong(obj);
+    ptr_info.dev_ptr = PyLong_AsUnsignedLongLong(obj);
+    return ptr_info;
   }}
   if (obj == Py_None) {{
-    return (CUdeviceptr)0;
+    // valid nullptr
+    return ptr_info;
   }}
   PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
   if(ptr){{
@@ -1107,11 +1118,21 @@ static inline CUdeviceptr getPointer(PyObject *obj, int idx) {{
     Py_DECREF(ptr);
     if (!PyLong_Check(ret)) {{
       PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
+      ptr_info.valid = false;
+      return ptr_info;
     }}
-    return (CUdeviceptr)PyLong_AsUnsignedLongLong(ret);
+    PyObject *is_cuda = PyObject_GetAttrString(obj, "is_cuda");
+    if (is_cuda && PyObject_RichCompareBool(is_cuda, Py_False, Py_EQ)) {{
+       PyErr_Format(PyExc_ValueError, "Pointer argument (at %d) must be on cuda", idx);
+       Py_DECREF(is_cuda);
+        ptr_info.valid = false;
+       return ptr_info;
+    }}
+    ptr_info.dev_ptr = PyLong_AsUnsignedLongLong(ret);
+    return ptr_info;
   }}
   PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
-  return (CUdeviceptr)0;
+  return ptr_info;
 }}
 
 static PyObject* launch(PyObject* self, PyObject* args) {{
@@ -1135,7 +1156,10 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
     Py_DECREF(new_args);
   }}
 
-  _launch(gridX, gridY, gridZ, num_warps, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"getPointer(_arg{i},{i})" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
+
+  // raise exception asap
+  {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
+  _launch(gridX, gridY, gridZ, num_warps, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
 
   if (launch_exit_hook != Py_None) {{
     PyObject *new_args = NULL;
