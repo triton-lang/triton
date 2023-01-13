@@ -43,8 +43,10 @@ public:
         return;
       if (auto srcMmaEncoding =
               srcEncoding.dyn_cast<triton::gpu::MmaEncodingAttr>()) {
-        if (srcMmaEncoding.getWarpsPerCTA()[1] == 1 &&
-            dstDotOp.getParent() == srcMmaEncoding)
+
+        if (srcMmaEncoding.getVersionMajor() == 1 ||
+            (srcMmaEncoding.getWarpsPerCTA()[1] == 1 &&
+             dstDotOp.getParent() == srcMmaEncoding))
           return;
       }
       auto tmpType = RankedTensorType::get(
