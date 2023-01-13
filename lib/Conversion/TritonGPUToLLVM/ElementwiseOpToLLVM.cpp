@@ -117,7 +117,6 @@ struct FpToFpOpConversion
     Value a1 = shl(i32_ty, fp16x2Vec1, i32_val(1));
     a0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
     a1 = and_(i32_ty, a1, i32_val(0x7fff7fff));
-    // Do we need to make sure it is unsigned add?
     a0 = add(i32_ty, a0, i32_val(0x00800080));
     a1 = add(i32_ty, a1, i32_val(0x00800080));
     Value b0 = or_( i32_ty, and_(i32_ty, fp16x2Vec0, i32_val(0x80008000)), a0 );
@@ -167,6 +166,45 @@ struct FpToFpOpConversion
                        const Value &v0, const Value &v1, const Value &v2,
                        const Value &v3) {
     auto ctx = rewriter.getContext();
+#ifdef USE_ROCM
+    auto fp8x4VecTy = vec_ty(i8_ty, 4);
+    Value a0 = undef(fp8x4VecTy);
+    a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(0));
+    a0 = insert_element(fp8x4VecTy, a0, v0, i32_val(1));
+    a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(2));
+    a0 = insert_element(fp8x4VecTy, a0, v1, i32_val(3));
+    a0 = bitcast(a0, i32_ty);
+
+    Value a1 = undef(fp8x4VecTy);
+    a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(0));
+    a1 = insert_element(fp8x4VecTy, a1, v2, i32_val(1));
+    a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(2));
+    a1 = insert_element(fp8x4VecTy, a1, v3, i32_val(3));
+    a1 = bitcast(a1, i32_ty);
+    
+    Value sign0 = and_(i32_ty, a0, i32_val(0x80008000));
+    Value sign1 = and_(i32_ty, a1, i32_val(0x80008000));
+    Value nosign0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
+    Value nosign1 = and_(i32_ty, a1, i32_val(0x7fff7fff));
+
+    nosign0 = lshr(i32_ty, nosign0, i32_val(4));
+    nosign1 = lshr(i32_ty, nosign1, i32_val(4));
+    nosign0 = add(i32_ty, nosign0, i32_val(0x38003800));
+    nosign1 = add(i32_ty, nosign1, i32_val(0x38003800));
+
+    auto bf16x2VecTy = vec_ty(i16_ty, 2);
+    Value bf16x2Vec0 = or_(i32_ty, sign0, nosign0);
+    Value bf16x2Vec1 = or_(i32_ty, sign1, nosign1);
+    bf16x2Vec0 = bitcast(bf16x2Vec0, bf16x2VecTy);
+    bf16x2Vec1 = bitcast(bf16x2Vec1, bf16x2VecTy);
+
+    return { extract_element(i16_ty, bf16x2Vec0, i32_val(0)),
+             extract_element(i16_ty, bf16x2Vec0, i32_val(1)),
+             extract_element(i16_ty, bf16x2Vec1, i32_val(0)),
+             extract_element(i16_ty, bf16x2Vec1, i32_val(1))
+           };
+
+#else
     auto fp8x4VecTy = vec_ty(i8_ty, 4);
     Value fp8x4Vec = undef(fp8x4VecTy);
     fp8x4Vec = insert_element(fp8x4VecTy, fp8x4Vec, v0, i32_val(0));
@@ -211,6 +249,7 @@ struct FpToFpOpConversion
             extract_element(i16_ty, bf16x2Vec0, i32_val(1)),
             extract_element(i16_ty, bf16x2Vec1, i32_val(0)),
             extract_element(i16_ty, bf16x2Vec1, i32_val(1))};
+#endif
   }
 
   static SmallVector<Value>
@@ -228,6 +267,62 @@ struct FpToFpOpConversion
     bf16x2Vec0 = bitcast(bf16x2Vec0, i32_ty);
     bf16x2Vec1 = bitcast(bf16x2Vec1, i32_ty);
 
+#ifdef USE_ROCM
+    Value sign0 = and_(i32_ty, bf16x2Vec0, i32_val(0x80008000));
+    Value sign1 = and_(i32_ty, bf16x2Vec1, i32_val(0x80008000));
+    auto fp8x4VecTy = vec_ty(i8_ty, 4);
+    Value sign = undef(fp8x4VecTy);
+    sign0 = bitcast(sign0, fp8x4VecTy);
+    sign1 = bitcast(sign1, fp8x4VecTy);
+    sign = insert_element( fp8x4VecTy, sign, extract_element(i8_ty, sign0, i32_val(1)), i32_val(0) );
+    sign = insert_element( fp8x4VecTy, sign, extract_element(i8_ty, sign0, i32_val(3)), i32_val(1) );
+    sign = insert_element( fp8x4VecTy, sign, extract_element(i8_ty, sign1, i32_val(1)), i32_val(2) );
+    sign = insert_element( fp8x4VecTy, sign, extract_element(i8_ty, sign1, i32_val(3)), i32_val(3) );
+    sign = bitcast(sign, i32_ty);
+
+    Value nosign0 = and_(i32_ty, bf16x2Vec0, i32_val(0x7fff7fff));
+    Value nosign1 = and_(i32_ty, bf16x2Vec1, i32_val(0x7fff7fff));
+
+    Value nosign_0_0 = and_(i32_ty, nosign0, i32_val(0xffff0000));
+    nosign_0_0 = umax(i32_ty, nosign_0_0, i32_val(0x38000000));
+    nosign_0_0 = umin(i32_ty, nosign_0_0, i32_val(0x3ff00000));
+    Value nosign_0_1 = and_(i32_ty, nosign0, i32_val(0x0000ffff));
+    nosign_0_1 = umax(i32_ty, nosign_0_1, i32_val(0x3800));
+    nosign_0_1 = umin(i32_ty, nosign_0_1, i32_val(0x3ff0));
+    nosign0 = or_(i32_ty, nosign_0_0, nosign_0_1);
+
+    Value nosign_1_0 = and_(i32_ty, nosign1, i32_val(0xffff0000));
+    nosign_1_0 = umax(i32_ty, nosign_1_0, i32_val(0x38000000));
+    nosign_1_0 = umin(i32_ty, nosign_1_0, i32_val(0x3ff00000));
+    Value nosign_1_1 = and_(i32_ty, nosign1, i32_val(0x0000ffff));
+    nosign_1_1 = umax(i32_ty, nosign_1_1, i32_val(0x3800));
+    nosign_1_1 = umin(i32_ty, nosign_1_1, i32_val(0x3ff0));
+    nosign1 = or_(i32_ty, nosign_1_0, nosign_1_1);
+
+    nosign0 = add(i32_ty, nosign0, i32_val(0x80008));
+    nosign1 = add(i32_ty, nosign1, i32_val(0x80008));
+    nosign0 = sub(i32_ty, nosign0, i32_val(0x38003800));
+    nosign1 = sub(i32_ty, nosign1, i32_val(0x38003800));
+    nosign0 = lshr(i32_ty, nosign0, i32_val(4));
+    nosign1 = lshr(i32_ty, nosign1, i32_val(4));
+
+    nosign0 = bitcast(nosign0, fp8x4VecTy);
+    nosign1 = bitcast(nosign1, fp8x4VecTy);
+    Value nosign = undef(fp8x4VecTy);
+    nosign = insert_element( fp8x4VecTy, nosign, extract_element(i8_ty, nosign0, i32_val(0)), i32_val(0) );
+    nosign = insert_element( fp8x4VecTy, nosign, extract_element(i8_ty, nosign0, i32_val(2)), i32_val(1) );
+    nosign = insert_element( fp8x4VecTy, nosign, extract_element(i8_ty, nosign1, i32_val(0)), i32_val(2) );
+    nosign = insert_element( fp8x4VecTy, nosign, extract_element(i8_ty, nosign1, i32_val(2)), i32_val(3) );
+    nosign = bitcast(nosign, i32_ty);
+
+    Value fp8x4Vec = or_(i32_ty, nosign, sign);
+    fp8x4Vec = bitcast(fp8x4Vec, fp8x4VecTy);
+    return {extract_element(i8_ty, fp8x4Vec, i32_val(0)),
+            extract_element(i8_ty, fp8x4Vec, i32_val(1)),
+            extract_element(i8_ty, fp8x4Vec, i32_val(2)),
+            extract_element(i8_ty, fp8x4Vec, i32_val(3))};
+
+#else
     PTXBuilder builder;
     auto *ptxAsm = "{                                            \n"
                    ".reg .u32 sign, sign<2>, nosign, nosign<2>;  \n"
@@ -278,6 +373,7 @@ struct FpToFpOpConversion
             extract_element(i8_ty, fp8x4Vec, i32_val(1)),
             extract_element(i8_ty, fp8x4Vec, i32_val(2)),
             extract_element(i8_ty, fp8x4Vec, i32_val(3))};
+#endif
   }
 
   static SmallVector<Value>
