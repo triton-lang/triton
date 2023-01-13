@@ -251,7 +251,7 @@ public:
     // z = 0b00000zzzz
     // then (x + y) XOR z = 0byyyyxxxx XOR 0b00000zzzz = (x XOR z) + y
     // This means that we can use some immediate offsets for shared memory
-    // operations. More specifically
+    // operations.
     auto dstPtrTy = ptr_ty(resElemTy, 3);
     auto dstOffset = dot(rewriter, loc, offsetVals, smemObj.strides);
     Value dstPtrBase = gep(dstPtrTy, smemObj.base, dstOffset);

@@ -289,7 +289,7 @@ def TT_CatOp : TT_Op<"cat", [NoSideEffect,
 }
 
 def TT_TransOp : TT_Op<"trans", [NoSideEffect,
-                                 SameOperandsAndResultElementType]> {
+                                 DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
 
     let summary = "transpose a tensor";
 

@@ -225,11 +225,10 @@ class _attention(torch.autograd.Function):
             q.shape[0], q.shape[1], q.shape[2],
             BLOCK_M=BLOCK, BLOCK_N=BLOCK,
             BLOCK_DMODEL=Lk, num_warps=num_warps,
-            num_stages=1,
+            num_stages=2,
         )
 
         ctx.save_for_backward(q, k, v, o, L, m)
-        ctx.BLOCK = BLOCK
         ctx.grid = grid
         ctx.sm_scale = sm_scale
         ctx.BLOCK_DMODEL = Lk
@@ -237,6 +236,7 @@ class _attention(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, do):
+        BLOCK = 128
         q, k, v, o, l, m = ctx.saved_tensors
         do = do.contiguous()
         dq = torch.zeros_like(q, dtype=torch.float32)
@@ -247,11 +247,8 @@ class _attention(torch.autograd.Function):
         _bwd_preprocess[(ctx.grid[0] * ctx.grid[1], )](
             o, do, l,
             do_scaled, delta,
-            BLOCK_M=ctx.BLOCK, D_HEAD=ctx.BLOCK_DMODEL,
+            BLOCK_M=BLOCK, D_HEAD=ctx.BLOCK_DMODEL,
         )
-
-        # NOTE: kernel currently buggy for other values of `num_warps`
-        num_warps = 8
         _bwd_kernel[(ctx.grid[1],)](
             q, k, v, ctx.sm_scale,
             o, do_scaled,
@@ -263,8 +260,8 @@ class _attention(torch.autograd.Function):
             v.stride(0), v.stride(1), v.stride(2), v.stride(3),
             q.shape[0], q.shape[1], q.shape[2],
             ctx.grid[0],
-            BLOCK_M=ctx.BLOCK, BLOCK_N=ctx.BLOCK,
-            BLOCK_DMODEL=ctx.BLOCK_DMODEL, num_warps=num_warps,
+            BLOCK_M=BLOCK, BLOCK_N=BLOCK,
+            BLOCK_DMODEL=ctx.BLOCK_DMODEL, num_warps=8,
             num_stages=1,
         )
         return dq, dk, dv, None
@@ -319,7 +316,7 @@ BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
 # vary seq length for fixed head and batch=4
 configs = [triton.testing.Benchmark(
     x_names=['N_CTX'],
-    x_vals=[2**i for i in range(10, 16)],
+    x_vals=[2**i for i in range(10, 15)],
     line_arg='provider',
     line_vals=['triton'] + (['flash'] if HAS_FLASH else []),
     line_names=['Triton'] + (['Flash'] if HAS_FLASH else []),
