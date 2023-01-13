@@ -5,7 +5,7 @@
 
 namespace mlir {
 
-void addFixupLoopPattern(MLIRContext *ctx, RewritePatternSet &patterns);
+LogicalResult fixupLoops(ModuleOp mod);
 
 } // namespace mlir
 

@@ -340,12 +340,9 @@ public:
 
       if (applyPatternsAndFoldGreedily(m, std::move(patterns), config).failed())
         signalPassFailure();
-    }
 
-    mlir::RewritePatternSet loopFixup(context);
-    addFixupLoopPattern(context, loopFixup);
-    if (applyPatternsAndFoldGreedily(m, std::move(loopFixup)).failed()) {
-      signalPassFailure();
+      if (fixupLoops(m).failed())
+        signalPassFailure();
     }
   }
 };
