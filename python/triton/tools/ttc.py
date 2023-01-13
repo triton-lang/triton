@@ -184,7 +184,7 @@ def generate_c_code(meta_and_ast: AOTMetadataWithAST, outdir: str):
             docstr = str(meta)
             if jit_fn.__doc__ is not None:
                 docstr = f"{docstr}\n\t{jit_fn.__doc__}"
-            codegen.gen_kernel(kernel_meta=meta, bin_=bin_, docstring=docstr)
+            codegen.gen_kernel(kernel_meta=meta, bin_=asm['cubin'], docstring=docstr)
 
     codegen.dump(out_dir=outdir)
 
