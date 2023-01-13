@@ -224,7 +224,7 @@ class _attention(torch.autograd.Function):
             o.stride(0), o.stride(1), o.stride(2), o.stride(3),
             q.shape[0], q.shape[1], q.shape[2],
             BLOCK_M=BLOCK, BLOCK_N=BLOCK,
-            BLOCK_DMODEL=Lk, num_warps=4,
+            BLOCK_DMODEL=Lk, num_warps=num_warps,
             num_stages=2,
         )
 
