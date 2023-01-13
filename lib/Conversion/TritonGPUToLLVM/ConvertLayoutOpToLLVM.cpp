@@ -26,67 +26,6 @@ bool isMmaToDotShortcut(MmaEncodingAttr &mmaLayout,
          dotOperandLayout.getParent() == mmaLayout;
 }
 
-void storeDistributedToShared(Value src, Value llSrc,
-                              ArrayRef<Value> dstStrides,
-                              ArrayRef<SmallVector<Value>> srcIndices,
-                              Value dst, Value smemBase, Type elemTy,
-                              Location loc,
-                              ConversionPatternRewriter &rewriter) {
-  auto srcTy = src.getType().cast<RankedTensorType>();
-  auto srcShape = srcTy.getShape();
-  assert(srcShape.size() == 2 && "Unexpected rank of storeDistributedToShared");
-  auto dstTy = dst.getType().cast<RankedTensorType>();
-  auto srcDistributedLayout = srcTy.getEncoding();
-  if (auto mmaLayout = srcDistributedLayout.dyn_cast<MmaEncodingAttr>()) {
-    assert((!mmaLayout.isVolta()) &&
-           "ConvertLayout MMAv1->Shared is not suppported yet");
-  }
-  auto dstSharedLayout = dstTy.getEncoding().cast<SharedEncodingAttr>();
-  auto inOrd = getOrder(srcDistributedLayout);
-  auto outOrd = dstSharedLayout.getOrder();
-  unsigned inVec =
-      inOrd == outOrd ? getContigPerThread(srcDistributedLayout)[inOrd[0]] : 1;
-  unsigned outVec = dstSharedLayout.getVec();
-  unsigned minVec = std::min(outVec, inVec);
-  unsigned perPhase = dstSharedLayout.getPerPhase();
-  unsigned maxPhase = dstSharedLayout.getMaxPhase();
-  unsigned numElems = getElemsPerThread(srcTy);
-  assert(numElems == srcIndices.size());
-  auto inVals = getElementsFromStruct(loc, llSrc, rewriter);
-  auto wordTy = vec_ty(elemTy, minVec);
-  auto elemPtrTy = ptr_ty(elemTy);
-  Value outVecVal = i32_val(outVec);
-  Value minVecVal = i32_val(minVec);
-  Value word;
-  for (unsigned i = 0; i < numElems; ++i) {
-    if (i % minVec == 0)
-      word = undef(wordTy);
-    word = insert_element(wordTy, word, inVals[i], i32_val(i % minVec));
-    if (i % minVec == minVec - 1) {
-      // step 1: recover the multidim_index from the index of
-      SmallVector<Value> multiDimIdx = srcIndices[i];
-      SmallVector<Value> dbgVal = srcIndices[i];
-
-      // step 2: do swizzling
-      Value remained = urem(multiDimIdx[outOrd[0]], outVecVal);
-      multiDimIdx[outOrd[0]] = udiv(multiDimIdx[outOrd[0]], outVecVal);
-      Value off_1 = mul(multiDimIdx[outOrd[1]], dstStrides[outOrd[1]]);
-      Value phaseId = udiv(multiDimIdx[outOrd[1]], i32_val(perPhase));
-      phaseId = urem(phaseId, i32_val(maxPhase));
-      Value off_0 = xor_(multiDimIdx[outOrd[0]], phaseId);
-      off_0 = mul(off_0, outVecVal);
-      remained = udiv(remained, minVecVal);
-      off_0 = add(off_0, mul(remained, minVecVal));
-      Value offset = add(off_1, mul(off_0, dstStrides[outOrd[0]]));
-
-      // step 3: store
-      Value smemAddr = gep(elemPtrTy, smemBase, offset);
-      smemAddr = bitcast(smemAddr, ptr_ty(wordTy, 3));
-      store(word, smemAddr);
-    }
-  }
-}
-
 struct ConvertLayoutOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
 public:

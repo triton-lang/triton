@@ -540,35 +540,23 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     %index = arith.constant 1 : i32
 
     // CHECK: llvm.mlir.constant(0 : i32) : i32
-    // CHECK: llvm.add
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.mlir.constant(0 : i32) : i32
-    // CHECK: llvm.add
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.mlir.constant(0 : i32) : i32
-    // CHECK: llvm.add
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.mlir.constant(0 : i32) : i32
-    // CHECK: llvm.add
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
     // CHECK: llvm.mlir.constant(16 : i32) : i32
+    // CHECK: llvm.mul
     // CHECK: llvm.add
     // CHECK: llvm.inline_asm
     // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.mlir.constant(16 : i32) : i32
-    // CHECK: llvm.add
     // CHECK: llvm.inline_asm
     // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.mlir.constant(16 : i32) : i32
-    // CHECK: llvm.add
     // CHECK: llvm.inline_asm
     // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.mlir.constant(16 : i32) : i32
-    // CHECK: llvm.add
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
     // CHECK: llvm.inline_asm
     // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
     // CHECK: llvm.inline_asm
