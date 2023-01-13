@@ -321,7 +321,11 @@ public:
     {
       mlir::RewritePatternSet patterns(context);
       patterns.add<CollectMmaToUpdateForVolta>(context, mmaToUpdate);
-      if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
+
+      GreedyRewriteConfig config;
+      config.enableRegionSimplification =
+          false; // The pattern doesn't modify the IR
+      if (applyPatternsAndFoldGreedily(m, std::move(patterns), config).failed())
         signalPassFailure();
     }
 
@@ -330,6 +334,8 @@ public:
       patterns.add<UpdateMMAForMMAv1>(context, mmaToUpdate);
 
       mlir::GreedyRewriteConfig config;
+      // Make sure the slice and dot_operand layouts' parent mma are updated
+      // before updating DotOp or it will get a mismatch parent-encoding.
       config.useTopDownTraversal = true;
 
       if (applyPatternsAndFoldGreedily(m, std::move(patterns), config).failed())
