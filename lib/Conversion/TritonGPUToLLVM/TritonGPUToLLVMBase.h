@@ -219,6 +219,164 @@ public:
     return base;
   }
 
+  DenseMap<unsigned, Value> getSwizzledSharedPtrs(Location loc, unsigned inVec, RankedTensorType srcTy,
+                                         triton::gpu::SharedEncodingAttr resSharedLayout,
+                                         Type resElemTy,
+                                         SharedMemoryObject smemObj,
+                                         ConversionPatternRewriter &rewriter,
+                                         SmallVectorImpl<Value>& offsetVals,
+                                         SmallVectorImpl<Value>& srcStrides
+                                         ) const {
+
+    auto dstPtrTy = ptr_ty(resElemTy, 3);
+    auto dstOffset = dot(rewriter, loc, offsetVals, smemObj.strides);
+    Value dstPtrBase = gep(dstPtrTy, smemObj.base, dstOffset);
+
+    auto srcEncoding = srcTy.getEncoding();
+    auto srcShape = srcTy.getShape();
+    unsigned outVec = resSharedLayout.getVec();
+    unsigned minVec = std::min(outVec, inVec);
+    unsigned numElems = triton::gpu::getElemsPerThread(srcTy);
+    unsigned perPhase = resSharedLayout.getPerPhase();
+    unsigned maxPhase = resSharedLayout.getMaxPhase();
+    auto inOrder = triton::gpu::getOrder(srcEncoding);
+    auto outOrder = triton::gpu::getOrder(resSharedLayout);
+
+    auto srcIndices = emitIndices(loc, rewriter, srcEncoding, srcShape);
+
+
+    DenseMap<unsigned, Value> ret;
+    DenseMap<unsigned, Value> cacheCol, cacheRow;
+
+    for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
+      // extract multi dimensional index for current element
+      auto idx = srcIndices[elemIdx];
+      Value idxCol = idx[inOrder[0]]; // contiguous dimension
+      Value idxRow = idx[inOrder[1]]; // discontiguous dimension
+      Value strideCol = srcStrides[inOrder[0]]; 
+      Value strideRow = srcStrides[inOrder[1]]; 
+      // extract dynamic/static offset
+      unsigned baseOffsetCol = 0;
+      if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxCol.getDefiningOp()))
+      if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(add.getRhs().getDefiningOp())) {
+        unsigned cst = _cst.getValue().cast<IntegerAttr>()
+                           .getValue().getSExtValue();
+        unsigned key = cst % (outVec * maxPhase);
+        cacheCol.insert({key, idxCol});
+        idxCol = cacheCol[key];
+        baseOffsetCol = cst / (outVec * maxPhase) * (outVec * maxPhase);
+      }
+      unsigned baseOffsetRow = 0;
+      if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxRow.getDefiningOp()))
+      if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(add.getRhs().getDefiningOp())) {
+        unsigned cst = _cst.getValue().cast<IntegerAttr>()
+                           .getValue().getSExtValue();
+        unsigned key = cst % (perPhase * maxPhase);
+        cacheRow.insert({key, idxRow});
+        idxRow = cacheRow[key];
+        baseOffsetRow = cst / (perPhase * maxPhase) * (perPhase * maxPhase);
+      }
+      // Swizzling
+      // Since the swizzling index is related to outVec, and we know minVec
+      // already, inVec doesn't matter
+      //
+      // (Numbers represent row indices)
+      // Example1:
+      // outVec = 2, inVec = 2, minVec = 2
+      // outVec = 2, inVec = 4, minVec = 2
+      //     | [1 2] [3 4] [5 6] ... |
+      //     | [3 4] [1 2] [7 8] ... |
+      //     | [5 6] [7 8] [1 2] ... |
+      // Example2:
+      // outVec = 4, inVec = 2, minVec = 2
+      //     | [1 2 3 4] [5 6 7 8] [9 10 11 12] ... |
+      //     | [5 6 7 8] [1 2 3 4] [13 14 15 16] ... |
+      //     | [9 10 11 12] [13 14 15 16] [1 2 3 4] ... |
+      Value phase = urem(udiv(idxRow, i32_val(perPhase)), i32_val(maxPhase));
+      Value rowOffset = mul(idxRow, strideRow);
+      Value colOffset = xor_(udiv(idxCol, i32_val(outVec)), phase);
+      colOffset = mul(colOffset, i32_val(outVec));
+      Value remained = urem(idxCol, i32_val(outVec));
+      remained = udiv(remained, i32_val(minVec));
+      colOffset = add(colOffset, mul(remained, i32_val(minVec)));
+
+      Value tileOffset = add(rowOffset, mul(colOffset, strideCol));
+      tileOffset = gep(dstPtrTy, dstPtrBase, tileOffset);
+
+      Value baseOffset =
+          add(mul(i32_val(baseOffsetRow), srcStrides[outOrder[1]]),
+              i32_val(baseOffsetCol));
+      Value basePtr = gep(dstPtrTy, tileOffset, baseOffset);
+
+      ret[elemIdx] = basePtr;
+    }
+    return ret;
+  }
+
+  bool isMmaToDotShortcut(MmaEncodingAttr &mmaLayout,
+                        triton::gpu::DotOperandEncodingAttr &dotOperandLayout) const {
+    // dot_op<opIdx=0, parent=#mma> = #mma
+    // when #mma = MmaEncoding<version=2, warpsPerCTA=[..., 1]>
+    return mmaLayout.getWarpsPerCTA()[1] == 1 &&
+           dotOperandLayout.getOpIdx() == 0 &&
+           dotOperandLayout.getParent() == mmaLayout;
+  }
+
+  void storeDistributedToShared(Value src, Value llSrc,
+                              ArrayRef<Value> dstStrides,
+                              ArrayRef<SmallVector<Value>> srcIndices,
+                              Value dst, Value smemBase, Type elemTy,
+                              Location loc,
+                              ConversionPatternRewriter &rewriter) const {
+    auto srcTy = src.getType().cast<RankedTensorType>();
+    auto srcShape = srcTy.getShape();
+    assert(srcShape.size() == 2 && "Unexpected rank of storeDistributedToShared");
+    auto dstTy = dst.getType().cast<RankedTensorType>();
+    auto srcDistributedLayout = srcTy.getEncoding();
+    if (auto mmaLayout = srcDistributedLayout.dyn_cast<MmaEncodingAttr>()) {
+      assert((!mmaLayout.isVolta()) &&
+             "ConvertLayout MMAv1->Shared is not suppported yet");
+    }
+    auto dstSharedLayout = dstTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
+    auto dstElemTy = dstTy.getElementType();
+    auto inOrd = triton::gpu::getOrder(srcDistributedLayout);
+    auto outOrd = dstSharedLayout.getOrder();
+    unsigned inVec =
+        inOrd == outOrd ? triton::gpu::getContigPerThread(srcDistributedLayout)[inOrd[0]] : 1;
+    unsigned outVec = dstSharedLayout.getVec();
+    unsigned minVec = std::min(outVec, inVec);
+    unsigned perPhase = dstSharedLayout.getPerPhase();
+    unsigned maxPhase = dstSharedLayout.getMaxPhase();
+    unsigned numElems = triton::gpu::getElemsPerThread(srcTy);
+    assert(numElems == srcIndices.size());
+    auto inVals = LLVM::getElementsFromStruct(loc, llSrc, rewriter);
+    auto wordTy = vec_ty(elemTy, minVec);
+    auto elemPtrTy = ptr_ty(elemTy);
+    Value outVecVal = i32_val(outVec);
+    Value minVecVal = i32_val(minVec);
+    Value word;
+
+    SmallVector<Value> srcStrides = {dstStrides[0], dstStrides[1]};
+    SmallVector<Value> offsetVals = {i32_val(0), i32_val(0)};
+    SharedMemoryObject smemObj(smemBase, srcStrides, offsetVals);
+
+    DenseMap<unsigned, Value> sharedPtrs = getSwizzledSharedPtrs(loc, inVec, srcTy, dstSharedLayout, dstElemTy, smemObj, rewriter, offsetVals, srcStrides);
+
+    std::map<unsigned, Value> cache0;
+    std::map<unsigned, Value> cache1;
+    for (unsigned i = 0; i < numElems; ++i) {
+      if (i % minVec == 0)
+        word = undef(wordTy);
+      word = insert_element(wordTy, word, inVals[i], i32_val(i % minVec));
+      if (i % minVec == minVec - 1) {
+        Value smemAddr = sharedPtrs[i/minVec*minVec];
+        smemAddr = bitcast(smemAddr, ptr_ty(wordTy, 3));
+        store(word, smemAddr);
+      }
+    }
+  }
+
+
   // -----------------------------------------------------------------------
   // Utilities
   // -----------------------------------------------------------------------
