@@ -17,6 +17,43 @@ struct FpToFpOpConversion
                        const Value &v0, const Value &v1, const Value &v2,
                        const Value &v3) {
     auto ctx = rewriter.getContext();
+#ifdef USE_ROCM
+    auto fp8x4VecTy = vec_ty(i8_ty, 4);
+    Value a0 = undef(fp8x4VecTy);
+    a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(0));
+    a0 = insert_element(fp8x4VecTy, a0, v0, i32_val(1));
+    a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(2));
+    a0 = insert_element(fp8x4VecTy, a0, v1, i32_val(3));
+    a0 = bitcast(a0, i32_ty);
+
+    Value a1 = undef(fp8x4VecTy);
+    a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(0));
+    a1 = insert_element(fp8x4VecTy, a1, v2, i32_val(1));
+    a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(2));
+    a1 = insert_element(fp8x4VecTy, a1, v3, i32_val(3));
+    a1 = bitcast(a1, i32_ty);
+
+    Value b0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
+    Value b1 = and_(i32_ty, a1, i32_val(0x7fff7fff));
+
+    b0 = lshr(i32_ty, b0, i32_val(1));
+    b1 = lshr(i32_ty, b1, i32_val(1));
+
+    b0 = or_( i32_ty, b0, and_(i32_ty, a0, i32_val(0x80008000)) );
+    b1 = or_( i32_ty, b1, and_(i32_ty, a1, i32_val(0x80008000)) );
+
+    auto fp16x2VecTy = vec_ty(f16_ty, 2);
+    auto fp16x2Vec0 = bitcast(b0, fp16x2VecTy);
+    auto fp16x2Vec1 = bitcast(b1, fp16x2VecTy);
+
+    return { extract_element(f16_ty, fp16x2Vec0, i32_val(0)),
+             extract_element(f16_ty, fp16x2Vec0, i32_val(1)),
+             extract_element(f16_ty, fp16x2Vec1, i32_val(0)),
+             extract_element(f16_ty, fp16x2Vec1, i32_val(1))
+           };
+
+
+#else
     auto fp8x4VecTy = vec_ty(i8_ty, 4);
     Value fp8x4Vec = undef(fp8x4VecTy);
     fp8x4Vec = insert_element(fp8x4VecTy, fp8x4Vec, v0, i32_val(0));
@@ -57,6 +94,7 @@ struct FpToFpOpConversion
             extract_element(f16_ty, fp16x2Vec0, i32_val(1)),
             extract_element(f16_ty, fp16x2Vec1, i32_val(0)),
             extract_element(f16_ty, fp16x2Vec1, i32_val(1))};
+#endif
   }
 
   static SmallVector<Value>
@@ -74,6 +112,27 @@ struct FpToFpOpConversion
     fp16x2Vec0 = bitcast(fp16x2Vec0, i32_ty);
     fp16x2Vec1 = bitcast(fp16x2Vec1, i32_ty);
 
+#ifdef USE_ROCM
+    Value a0 = shl(i32_ty, fp16x2Vec0, i32_val(1));
+    Value a1 = shl(i32_ty, fp16x2Vec1, i32_val(1));
+    a0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
+    a1 = and_(i32_ty, a1, i32_val(0x7fff7fff));
+    // Do we need to make sure it is unsigned add?
+    a0 = add(i32_ty, a0, i32_val(0x00800080));
+    a1 = add(i32_ty, a1, i32_val(0x00800080));
+    Value b0 = or_( i32_ty, and_(i32_ty, fp16x2Vec0, i32_val(0x80008000)), a0 );
+    Value b1 = or_( i32_ty, and_(i32_ty, fp16x2Vec1, i32_val(0x80008000)), a1 );
+
+    auto fp8x4VecTy = vec_ty(i8_ty, 4);
+    b0 = bitcast(b0, fp8x4VecTy); 
+    b1 = bitcast(b1, fp8x4VecTy); 
+
+    return {extract_element(i8_ty, b0, i32_val(1)),
+            extract_element(i8_ty, b0, i32_val(3)),
+            extract_element(i8_ty, b1, i32_val(1)),
+            extract_element(i8_ty, b1, i32_val(3))
+            };
+#else
     PTXBuilder builder;
     auto *ptxAsm = "{                                      \n"
                    ".reg .b32 a<2>, b<2>;                  \n"
@@ -100,6 +159,7 @@ struct FpToFpOpConversion
             extract_element(i8_ty, fp8x4Vec, i32_val(1)),
             extract_element(i8_ty, fp8x4Vec, i32_val(2)),
             extract_element(i8_ty, fp8x4Vec, i32_val(3))};
+#endif
   }
 
   static SmallVector<Value>
