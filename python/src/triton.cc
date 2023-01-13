@@ -1347,10 +1347,6 @@ void init_triton_ir(py::module &&m) {
              self.addPass(
                  mlir::createTritonGPUCombineOpsPass(computeCapability));
            })
-      .def("add_tritongpu_optimize_load_convert_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::createTritonGPUOptimizeLoadConvertPass());
-           })
       .def("add_tritongpu_reorder_instructions_pass",
            [](mlir::PassManager &self) {
              self.addPass(mlir::createTritonGPUReorderInstructionsPass());
