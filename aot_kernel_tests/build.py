@@ -2,6 +2,7 @@ from typing import Sequence
 import os
 import subprocess
 import shutil
+from pathlib import Path
 
 def libcuda_dirs():
     locs = subprocess.check_output(["whereis", "libcuda.so"]).decode().strip().split()[1:]
@@ -12,8 +13,11 @@ if not libcuda_dirs():
     # exit(1)   
 
 def default_cuda_dir():
-    default_dir = "/usr/local/cuda"
-    return os.getenv("CUDA_HOME", default=default_dir)
+    default_dir = Path("/usr/local/cuda")
+    if not default_dir.exists():
+      # On LambdaLabs
+      default_dir = Path('/lib/cuda')
+    return os.getenv("CUDA_HOME", default=str(default_dir))
 
 if not os.path.exists(default_cuda_dir()):
     print("No cuda directory found, set CUDA_HOME env var")
