@@ -2,21 +2,25 @@ import ast
 import os
 from argparse import ArgumentParser
 from types import ModuleType
-from typing import Callable, Dict, Sequence, Tuple
+from typing import Callable, Dict, Sequence, Tuple, Union
+import yaml
 
 import triton
 from aot_compile.c_codegen import CodeGenerator
 from aot_compile.compile_metadata import (AOTKernelMetadata, ASTGeneratingObject,
-                                          infer_triton_signature, make_compile_kwargs)
+                                          infer_triton_signature, make_compile_metadata)
 
 
-def find_all_jitted(*wheres):
+def filter_jitted_functions(*scopes):
+    """
+    Filter scopes for JITFunction objects
+    """
     res = {}
-    for where in wheres:
-        if isinstance(where, ModuleType):
-            where = where.__dict__
+    for scope in scopes:
+        if isinstance(scope, ModuleType):
+            scope = scope.__dict__
         all_jitted = {
-            v.__name__: v for v in where.values() if isinstance(v, ASTGeneratingObject)
+            v.__name__: v for v in scope.values() if isinstance(v, ASTGeneratingObject)
         }
         res.update(all_jitted)
     return res
@@ -29,7 +33,7 @@ def _extract_kernel_src_from_ast(src: str, fpath: str):
 
     Why is this here? 
     When executing modules from string with exec function, inspect has no access to the source code.
-    This function extracts sources of funcitons and passes those to exec as global scope data.
+    This function extracts sources of functions and passes those to exec as global scope data.
 
     Assumption:
     - functions must be decorated with the tirton.jit (or anything that has `jit` in the name of the decorator)
@@ -62,25 +66,30 @@ def _extract_kernel_src_from_ast(src: str, fpath: str):
 
     raise ValueError(f"AOT Compilation is supported for valid python modules.\n Failed on {fpath}:\n\n {src}")
 
-def generate_jiited(*paths):
+def generate_triton_ast_from_src(*paths: Sequence[str]) -> Dict[str, ASTGeneratingObject]:
+    """
+        - Load python source files that define Jitted functions.
+        - Execute sources  
+        - Return dict of kernel name -> `ASTGeneratingObject` 
+    """
 
     # TODO: maybe compile source file one by one and generate a single C source per python source?
-    # TODO: (idea) conserve tree structure of a python source lib - people can use exisitng projects in a familiar structure
-    sources = []
-    for p in paths:
-        p = Path(p)
+    # TODO: (idea) conserve tree structure of a python source lib - people can use existing projects in a familiar structure
+    scope = {}
+    for fpath in paths:
+        p = Path(fpath)
         if p.exists():
             src = p.read_text()
-            sources.append((src, str(p)))
+            scope["__AOT_COMPILE_src"] = _extract_kernel_src_from_ast(src, fpath)
+            try:
+                exec(src, scope)
+            except Exception as e:
+                raise 
             continue
         print(f"[Source Not Found]: {str(p)}")
 
-    scope = {}
-    for (src, fpath) in sources:
-        scope["__AOT_COMPILE_src"] = _extract_kernel_src_from_ast(src, fpath)
-        exec(src, scope)
-
-    return find_all_jitted(scope)
+        
+    return filter_jitted_functions(scope)
 
 
 def infer_config_dump_stdout(jitted: Dict[str, Callable]) -> str:
@@ -88,7 +97,7 @@ def infer_config_dump_stdout(jitted: Dict[str, Callable]) -> str:
     print(yaml.safe_dump(sigs))
 
 
-def parse_config_file(conf_file):
+def parse_config_file(conf_file) -> Dict[str, Sequence[AOTKernelMetadata]]:
     conf = Path(conf_file)
     if not conf.exists():
         raise ValueError(f"Config File Not Found [{conf_file}]")
@@ -103,16 +112,18 @@ def parse_config_file(conf_file):
 
 
 AOTMetadataWithAST = Dict[str, Tuple[Sequence[AOTKernelMetadata], ASTGeneratingObject]]
+""" Mapping: 
+    name -> ([`AOTKernelMetadata`...], `JITFunction`) """
 
 
-def config_matches_jitted_functions(
+def reconcile_metadata_with_ast(
     aot_meta: Dict[str, Sequence[AOTKernelMetadata]],
     jitted: Dict[str, ASTGeneratingObject],
 ) -> AOTMetadataWithAST:
     """
 
-    Take meta data and jitted functions found and make sure those are matching.
-    Kernels with missing jit funciton or metadata are skipped
+    Take metadata and jitted functions found and make sure those match.
+    Kernels with missing jit function or metadata are skipped
 
     :return:
         Dict with function names (major names)
@@ -139,19 +150,22 @@ def config_matches_jitted_functions(
 
     return valid_meta_func_paris
 
+ASMObject = Dict[str, Union[str, bytes]]
+""" The `asm` attr from `CompiledKernel` """
 
-def compile_func(meta: AOTKernelMetadata, fn: ASTGeneratingObject) -> bytes:
+
+def compile_func(meta: AOTKernelMetadata, fn: ASTGeneratingObject) -> ASMObject:
     # NOTE: we ovveride the function name here. in case we have several variants in the kerenel
     #       (those will have same signature in C)
     old_name = fn.__name__
     fn.__name__ = meta.name
 
-    kwargs = make_compile_kwargs(meta)
-    compiled = triton.compile(fn, **kwargs)
-    bin_ = compiled.asm['cubin']
+    compiler_metadata = make_compile_metadata(meta)
+    compiled = triton.compile(fn, **compiler_metadata.kwargs)
+    asm = compiled.asm
 
     fn.__name__ = old_name
-    return bin_
+    return asm
 
 
 def generate_c_code(meta_and_ast: AOTMetadataWithAST, outdir: str):
@@ -166,11 +180,11 @@ def generate_c_code(meta_and_ast: AOTMetadataWithAST, outdir: str):
 
     for fn_name, (metas, jit_fn) in meta_and_ast.items():
         for variant_idx, meta in enumerate(metas):
-            bin_ = compile_func(meta, jit_fn)
+            asm = compile_func(meta, jit_fn)
             docstr = str(meta)
             if jit_fn.__doc__ is not None:
                 docstr = f"{docstr}\n\t{jit_fn.__doc__}"
-            codegen.gen_kernel(meta=meta, bin_=bin_, docstring=docstr)
+            codegen.gen_kernel(kernel_meta=meta, bin_=bin_, docstring=docstr)
 
     codegen.dump(out_dir=outdir)
 
@@ -178,7 +192,6 @@ def generate_c_code(meta_and_ast: AOTMetadataWithAST, outdir: str):
 if __name__ == "__main__":
     from pathlib import Path
 
-    import yaml
 
     parser = ArgumentParser(description="Triton Ahead of Time Compilation (AoT)")
     parser.add_argument(
@@ -190,7 +203,7 @@ if __name__ == "__main__":
         "--infer-signature",
         "-infer",
         action="store_true",
-        help="Output inferred compile annotaitons as an stdout YAML",
+        help="Output inferred compile annotations as an stdout YAML",
     )
     parser.add_argument("--config", default="dummy.yml")
     parser.add_argument("--out-dir", "-o", type=Path)
@@ -198,15 +211,27 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    all_jitted = generate_jiited(*args.paths)
+    # execute python sources and extract functions wrapped in JITFunction
+    ast_gen_objects = generate_triton_ast_from_src(*args.paths)
 
+    # This generated a YAML file with needed configs for AOT (signature annotation, specialization values)
+    # If you annotate your kernel inputs with type annotations  e.g. X: *fp32(16), config will automatically populate those
+    # otherwise you'll need to edit the YAML file manually
+    # You can also provide default values for constants e.g. BLOCK_SIZE = 32 and those will be populated
+    # otherwise, you need to provide constant values manually
+    # In the YAML file you can provide several values, to generate different kernel variants. 
+    # ( all constants must have same number of variants)
     if args.infer_signature:
-        infer_config_dump_stdout(all_jitted)
+        infer_config_dump_stdout(ast_gen_objects)
         exit(0)
 
+    # When you have fully filled config YAML we use it to infer meta data needed for compilation
     aot_metas = parse_config_file(args.config)
-    matched_metas_with_fn = config_matches_jitted_functions(
-        aot_meta=aot_metas, jitted=all_jitted
+    matched_metas_with_fn = reconcile_metadata_with_ast(
+        aot_meta=aot_metas, jitted=ast_gen_objects
     )
 
-    generate_c_code(meta_and_ast=matched_metas_with_fn, outdir=args.out_dir)
+    # TODO: support different compilation stages (similar to aot.py)
+    if args.target == "CSource":
+        generate_c_code(meta_and_ast=matched_metas_with_fn, outdir=args.out_dir)
+        exit(0)

@@ -26,7 +26,7 @@ void load_{kernel_name}(void)
         printf("Error Module Load: %d\n", err);
         return;
     }}
-    err = cuModuleGetFunction(&{kernel_name}_func, {kernel_name}_mod, "{kernel_name}");
+    err = cuModuleGetFunction(&{kernel_name}_func, {kernel_name}_mod, "{compiled_func_name}");
     if (err != CUDA_SUCCESS) {{
         // TODO: tell the user where things went wrong 
         printf("Error Function Load: %d\n", err);
