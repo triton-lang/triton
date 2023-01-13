@@ -742,7 +742,7 @@ struct TritonGPUInferLayoutInterface
   }
 
   LogicalResult inferTransOpEncoding(Attribute operandEncoding,
-                                     Attribute &resultEncoding) const {
+                                     Attribute &resultEncoding) const override {
     SharedEncodingAttr sharedEncoding =
         operandEncoding.dyn_cast<SharedEncodingAttr>();
     if (!sharedEncoding)
