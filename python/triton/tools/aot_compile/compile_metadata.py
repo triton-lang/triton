@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, Sequence, Union
 from enum import Enum
 
 import triton.language as tl
-from triton.compiler import instance_descriptor
+from triton.compiler import instance_descriptor, kernel_suffix
 from triton import JITFunction
 
 # TODO: Import from compiler when working with full trition
@@ -65,7 +65,7 @@ def extract_source(fn: Callable):
             src = fn.__globals__["__AOT_COMPILE_src"][fn.__name__]
         except:
             raise OSError(f"Could get source code for {fn.__name__}")
-        
+
     return textwrap.dedent(src)
 
 
@@ -75,6 +75,7 @@ def jit(fn):
 
 # ASTGeneratingObject = FakeJITFunction
 ASTGeneratingObject = JITFunction
+""" Alias for `JITFunction` """
 # class constexpr:
 #     pass
 TritonConstantExpr = tl.constexpr
@@ -279,7 +280,7 @@ class AOTKernelMetadata:
         return {self.name: res}
 
     @classmethod
-    def parse(cls, name: str, conf_dict: Dict) -> Sequence["Self"]:
+    def parse(cls, name: str, conf_dict: Dict) -> Sequence["AOTKernelMetadata"]:
         _err_msgs = [f"For {name}:"]
         argnums = {k: i for i, k in enumerate(conf_dict["arg_order"].split(","))}
         params = [
@@ -333,9 +334,18 @@ def infer_triton_signature(jit_fn: ASTGeneratingObject) -> str:
     return AOTKernelMetadata.make_dict(params=params, constants=consts)
 
 
-def make_compile_kwargs(meta: AOTKernelMetadata) -> str:
+@dataclass
+class CompileMetadata:
+    kwargs: Dict
+    """ kwargs passed to `triton.compile` """
+    compiled_function_name: str
+    """ kernel name as generetaed by compiler """
+
+
+def make_compile_metadata(meta: AOTKernelMetadata) -> CompileMetadata:
     kwargs = {}
-    kwargs["signature"] = ",".join([p.type_ann for p in meta.params])
+    type_anns = [p.type_ann for p in meta.params]
+    kwargs["signature"] = ",".join(type_anns)
 
     div_16 = set()
     is_1 = set()
@@ -348,8 +358,12 @@ def make_compile_kwargs(meta: AOTKernelMetadata) -> str:
             is_1.add(p.argnum)
 
     # param specialization
-    kwargs["configs"] = [instance_descriptor(divisible_by_16=div_16, equal_to_1=is_1)]
+    specials = instance_descriptor(divisible_by_16=div_16, equal_to_1=is_1)
+    kwargs["configs"] = [specials]
 
     kwargs["constants"] = {c.name: c.val for c in meta.constants}
 
-    return kwargs
+    function_name = (
+        f"{meta.name}{kernel_suffix(signature=type_anns, specialization=specials)}"
+    )
+    return CompileMetadata(kwargs=kwargs, compiled_function_name=function_name)

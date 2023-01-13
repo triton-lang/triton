@@ -81,8 +81,5 @@ void main() {
   printf("Stream after %p\n", stream);
 
   uint32_t n_elem = VEC_SIZE;
-  printf("CUfunction before %p\n", add_kernel0_func);
   CHECK_CUDA(add_kernel0(stream, g, u_cu, v_cu, out_cu, n_elem), "kernel run");
-  printf("CUfunction after %p\n", add_kernel0_func);
-  // CHECK_CUDA(launch_add_kernel0(stream, g, u_cu, v_cu, out_cu, n_elem), "kernel run");
 }
