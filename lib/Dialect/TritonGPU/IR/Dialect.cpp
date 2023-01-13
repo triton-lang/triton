@@ -161,11 +161,10 @@ SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout) {
       threads.push_back(blockedLayout.getThreadsPerWarp()[d] *
                         blockedLayout.getWarpsPerCTA()[d]);
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-    if(mmaLayout.getVersionMajor() == 2){
-      threads = {8*mmaLayout.getWarpsPerCTA()[0], 
-                 4*mmaLayout.getWarpsPerCTA()[1]};
-    }
-    else
+    if (mmaLayout.getVersionMajor() == 2) {
+      threads = {8 * mmaLayout.getWarpsPerCTA()[0],
+                 4 * mmaLayout.getWarpsPerCTA()[1]};
+    } else
       assert(0 && "Unimplemented usage of MmaEncodingAttr");
   } else {
     assert(0 && "Unimplemented usage of getShapePerCTA");
@@ -742,19 +741,18 @@ struct TritonGPUInferLayoutInterface
     return success();
   }
 
-  LogicalResult
-  inferTransOpEncoding(Attribute operandEncoding, Attribute &resultEncoding) const {
-    SharedEncodingAttr sharedEncoding = operandEncoding.dyn_cast<SharedEncodingAttr>();
-    if(!sharedEncoding)
+  LogicalResult inferTransOpEncoding(Attribute operandEncoding,
+                                     Attribute &resultEncoding) const {
+    SharedEncodingAttr sharedEncoding =
+        operandEncoding.dyn_cast<SharedEncodingAttr>();
+    if (!sharedEncoding)
       return failure();
     SmallVector<unsigned> retOrder(sharedEncoding.getOrder().begin(),
                                    sharedEncoding.getOrder().end());
     std::reverse(retOrder.begin(), retOrder.end());
-    resultEncoding = SharedEncodingAttr::get(getDialect()->getContext(),
-                                              sharedEncoding.getVec(),
-                                              sharedEncoding.getPerPhase(),
-                                              sharedEncoding.getMaxPhase(),
-                                              retOrder);
+    resultEncoding = SharedEncodingAttr::get(
+        getDialect()->getContext(), sharedEncoding.getVec(),
+        sharedEncoding.getPerPhase(), sharedEncoding.getMaxPhase(), retOrder);
     return mlir::success();
   }
 

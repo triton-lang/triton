@@ -27,7 +27,7 @@ class TritonGPUDecomposeConversionsPass
 public:
   TritonGPUDecomposeConversionsPass() = default;
 
-  void runOnOperation() override { 
+  void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
@@ -35,14 +35,16 @@ public:
       auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
       auto dstType = cvtOp.getType().cast<RankedTensorType>();
       auto srcEncoding = srcType.getEncoding();
-      if(srcEncoding.isa<triton::gpu::SharedEncodingAttr>())
+      if (srcEncoding.isa<triton::gpu::SharedEncodingAttr>())
         return;
       auto dstDotOp =
           dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
-      if(!dstDotOp)
+      if (!dstDotOp)
         return;
-      if (auto srcMmaEncoding = srcEncoding.dyn_cast<triton::gpu::MmaEncodingAttr>()) {
-        if(srcMmaEncoding.getWarpsPerCTA()[1] == 1 && dstDotOp.getParent()==srcMmaEncoding)
+      if (auto srcMmaEncoding =
+              srcEncoding.dyn_cast<triton::gpu::MmaEncodingAttr>()) {
+        if (srcMmaEncoding.getWarpsPerCTA()[1] == 1 &&
+            dstDotOp.getParent() == srcMmaEncoding)
           return;
       }
       auto tmpType = RankedTensorType::get(
@@ -60,7 +62,6 @@ public:
   }
 };
 
-std::unique_ptr<Pass>
-mlir::createTritonGPUDecomposeConversionsPass() {
+std::unique_ptr<Pass> mlir::createTritonGPUDecomposeConversionsPass() {
   return std::make_unique<TritonGPUDecomposeConversionsPass>();
 }

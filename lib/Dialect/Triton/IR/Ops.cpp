@@ -221,10 +221,8 @@ mlir::LogicalResult mlir::triton::TransOp::inferReturnTypes(
   Attribute retEncoding;
   if (argEncoding) {
     Dialect &dialect = argEncoding.getDialect();
-    auto inferLayoutInterface =
-        dyn_cast<DialectInferLayoutInterface>(&dialect);
-    if (inferLayoutInterface
-            ->inferTransOpEncoding(argEncoding, retEncoding)
+    auto inferLayoutInterface = dyn_cast<DialectInferLayoutInterface>(&dialect);
+    if (inferLayoutInterface->inferTransOpEncoding(argEncoding, retEncoding)
             .failed()) {
       llvm::report_fatal_error("failed to infer layout for ReduceOp");
       return mlir::failure();
@@ -233,7 +231,6 @@ mlir::LogicalResult mlir::triton::TransOp::inferReturnTypes(
   inferredReturnTypes.push_back(
       RankedTensorType::get(retShape, retEltTy, retEncoding));
   return mlir::success();
-
 }
 
 //-- DotOp --
