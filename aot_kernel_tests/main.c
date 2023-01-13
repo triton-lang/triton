@@ -74,7 +74,7 @@ void main() {
   printf("Tst value %f\n", tst[15]);
   printf("u value %f\n", u[15]);
 
-  GridWarps g = {32, 0, 0, 3};
+  GridWarps g = {32, 1, 1, 3};
   CUstream stream;
   printf("Stream before %p\n", stream);
   CHECK_CUDA(cuStreamCreate(&stream, CU_STREAM_DEFAULT),"stream creation");
