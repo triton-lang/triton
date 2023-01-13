@@ -743,7 +743,9 @@ struct InsertSliceAsyncOpConversion
     auto sizePerThread = srcBlockedLayout.getSizePerThread();
     auto threadsPerCTA = getThreadsPerCTA(srcBlockedLayout);
     auto inOrder = srcBlockedLayout.getOrder();
-    DenseMap<unsigned, Value> sharedPtrs = getSwizzledSharedPtrs(loc, inVec, srcTy, resSharedLayout, resElemTy, smemObj, rewriter, offsetVals, srcStrides);
+    DenseMap<unsigned, Value> sharedPtrs =
+        getSwizzledSharedPtrs(loc, inVec, srcTy, resSharedLayout, resElemTy,
+                              smemObj, rewriter, offsetVals, srcStrides);
 
     // If perPhase * maxPhase > threadsPerCTA, we will have elements
     // that share the same tile indices. The index calculation will

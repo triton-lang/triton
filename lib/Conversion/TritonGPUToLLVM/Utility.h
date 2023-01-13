@@ -363,7 +363,6 @@ static Value shflSync(Location loc, ConversionPatternRewriter &rewriter,
   return builder.launch(rewriter, loc, val.getType(), false);
 }
 
-
 } // namespace LLVM
 } // namespace mlir
 
