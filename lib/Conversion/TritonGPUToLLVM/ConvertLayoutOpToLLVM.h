@@ -11,7 +11,6 @@ using ::mlir::triton::gpu::DotOperandEncodingAttr;
 bool isMmaToDotShortcut(MmaEncodingAttr &mmaLayout,
                         DotOperandEncodingAttr &dotOperandLayout);
 
-
 void populateConvertLayoutOpToLLVMPatterns(
     mlir::LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
