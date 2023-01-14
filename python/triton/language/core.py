@@ -26,7 +26,7 @@ def _to_tensor(x, builder):
         else:
             raise RuntimeError(f'Nonrepresentable integer {x}.')
     elif isinstance(x, float):
-        return tensor(builder.get_float32(x), float32)
+        return tensor(builder.get_fp32(x), float32)
     elif isinstance(x, constexpr):
         return _to_tensor(x.value, builder)
     elif isinstance(x, tensor):
@@ -708,6 +708,28 @@ def zeros(shape, dtype, _builder=None):
     shape = [x.value for x in shape]
     dtype = _constexpr_to_value(dtype)
     return semantic.zeros(shape, dtype, _builder)
+
+@builtin
+def fill(shape, value, dtype, _builder=None):
+    """
+    Returns a tensor filled with the scalar value for the given :code:`shape` and :code:`dtype`.
+
+    :param shape: Shape of the new array, e.g., (8, 16) or (8, )
+    :value value: Value to fill the array with, must be a constant
+    :type shape: tuple of ints
+    :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
+    :type dtype: DType
+    """
+    if not isinstance(value, constexpr):
+        raise TypeError(f"Value must have type `constexpr`")
+    for i, d in enumerate(shape):
+        if not isinstance(d, constexpr):
+            raise TypeError(f"Shape element {i} must have type `constexpr`")
+        if not isinstance(d.value, int):
+            raise TypeError(f"Shape element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
+    shape = [x.value for x in shape]
+    dtype = _constexpr_to_value(dtype)
+    return semantic.fill(shape, value, dtype, _builder)
 
 
 # -----------------------

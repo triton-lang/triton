@@ -1241,7 +1241,7 @@ def test_dot_without_load(dtype_str):
         out_ptr = out + tl.arange(0, 32)[:, None] * 32 + tl.arange(0, 32)[None, :]
         tl.store(out_ptr, c)
 
-    kernel = patch_kernel(_kernel, {'GENERATE_TEST_HERE': f"(tl.zeros((32, 32), tl.{dtype_str}) + 1.0).to(tl.{dtype_str})"})
+    kernel = patch_kernel(_kernel, {'GENERATE_TEST_HERE': f"tl.fill((32, 32), 1.0, tl.{dtype_str})"})
     a = torch.ones((32, 32), dtype=getattr(torch, dtype_str), device="cuda")
     b = torch.ones((32, 32), dtype=getattr(torch, dtype_str), device="cuda")
     out_ref = torch.matmul(a, b)

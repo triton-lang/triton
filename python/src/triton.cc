@@ -468,6 +468,12 @@ void init_triton_ir(py::module &&m) {
              return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
                  loc, v, self.getI1Type()));
            })
+      .def("get_int8",
+           [](mlir::OpBuilder &self, int64_t v) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
+                 loc, v, self.getI8Type()));
+           })
       .def("get_int32",
            [](mlir::OpBuilder &self, int64_t v) -> mlir::Value {
              auto loc = self.getUnknownLoc();
@@ -480,13 +486,32 @@ void init_triton_ir(py::module &&m) {
              return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
                  loc, v, self.getI64Type()));
            })
-      // .def("get_uint32", &ir::builder::get_int32, ret::reference)
-      // .def("get_float16", &ir::builder::get_float16, ret::reference)
-      .def("get_float32",
+      .def("get_bf16",
            [](mlir::OpBuilder &self, float v) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::ConstantOp>(
-                 loc, self.getF32FloatAttr(v));
+             auto type = self.getBF16Type();
+             return self.create<mlir::arith::ConstantFloatOp>(
+                 loc,
+                 mlir::APFloat(type.getFloatSemantics(), std::to_string(v)),
+                 type);
+           })
+      .def("get_fp16",
+           [](mlir::OpBuilder &self, float v) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             auto type = self.getF16Type();
+             return self.create<mlir::arith::ConstantFloatOp>(
+                 loc,
+                 mlir::APFloat(type.getFloatSemantics(), std::to_string(v)),
+                 type);
+           })
+      .def("get_fp32",
+           [](mlir::OpBuilder &self, float v) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             auto type = self.getF32Type();
+             return self.create<mlir::arith::ConstantFloatOp>(
+                 loc,
+                 mlir::APFloat(type.getFloatSemantics(), std::to_string(v)),
+                 type);
            })
       .def("get_null_value",
            [](mlir::OpBuilder &self, mlir::Type type) -> mlir::Value {
