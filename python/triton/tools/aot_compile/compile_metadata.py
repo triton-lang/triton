@@ -22,28 +22,6 @@ class Specializations(Enum):
     UNKNOWN = -1
 
 
-class TritonConstantExpr:
-    pass
-
-
-class FakeJITFunction:
-    def __init__(self, fn) -> None:
-        self.fn = fn
-        self.module = fn.__module__
-        # function signature information
-        signature = inspect.signature(fn)
-        self.arg_names = [v.name for v in signature.parameters.values()]
-        self.has_defaults = any(
-            [v.default != inspect._empty for v in signature.parameters.values()]
-        )
-        # self.src = textwrap.dedent(inspect.getsource(fn))
-        self.src = extract_source(fn)
-        self.__doc__ = fn.__doc__
-        self.__name__ = fn.__name__
-        self.__globals__ = fn.__globals__
-        self.__module__ = fn.__module__
-
-
 def extract_source(fn: Callable):
     """
     Extract source code from a function.
@@ -67,13 +45,9 @@ def jit(fn):
     return FakeJITFunction(fn=fn)
 
 
-# ASTGeneratingObject = FakeJITFunction
 ASTGeneratingObject = JITFunction
 """ Alias for `JITFunction` """
-# class constexpr:
-#     pass
 TritonConstantExpr = tl.constexpr
-# TritonConstantExpr = constexpr
 
 
 def _is_int_type(ann):

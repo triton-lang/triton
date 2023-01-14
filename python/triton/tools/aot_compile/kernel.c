@@ -13,6 +13,7 @@ CUfunction {kernel_name}_func = NULL;
 
 unsigned char {binary_arg_name}[{bin_size}] = {{ {binary_val} }};
 
+// TODO: make unloader function(?)
 void load_{kernel_name}(void)
 /*
     This loads the module and kernel to the global {kernel_name}_mod and {kernel_name}_func 

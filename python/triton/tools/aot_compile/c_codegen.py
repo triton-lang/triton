@@ -8,25 +8,6 @@ THREADS_PER_WARP = 32
 from triton.compiler import ty_to_cpp
 from .compile_metadata import AOTKernelMetadata, CompileMetadata
 
-# def ty_to_cpp(ty):
-#     if ty[0] == '*':
-#         return "CUdeviceptr"
-#     return {
-#         "i1": "int32_t",
-#         "i8": "int8_t",
-#         "i16": "int16_t",
-#         "i32": "int32_t",
-#         "i64": "int64_t",
-#         "u32": "uint32_t",
-#         "u64": "uint64_t",
-#         "fp16": "float",
-#         "bf16": "float",
-#         "fp32": "float",
-#         "f32": "float",
-#         "fp64": "double",
-#     }[ty]
-
-
 def _unzip(seq_of_pairs):
     A, B = [], []
     for (a, b) in seq_of_pairs:
