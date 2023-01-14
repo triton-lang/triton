@@ -233,5 +233,5 @@ if __name__ == "__main__":
     )
 
     # TODO: support different compilation stages (similar to aot.py)
-    if args.target == "CSource":
+    if args.target == "Csource":
         generate_c_code(meta_and_ast=matched_metas_with_fn, outdir=args.out_dir)

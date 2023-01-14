@@ -364,6 +364,6 @@ def make_compile_metadata(meta: AOTKernelMetadata) -> CompileMetadata:
     kwargs["constants"] = {c.name: c.val for c in meta.constants}
 
     function_name = (
-        f"{meta.name}{kernel_suffix(signature=type_anns, specialization=specials)}"
+        f"{meta.name}_{kernel_suffix(signature=type_anns, specialization=specials)}"
     )
     return CompileMetadata(kwargs=kwargs, compiled_function_name=function_name)
