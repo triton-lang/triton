@@ -709,6 +709,7 @@ def zeros(shape, dtype, _builder=None):
     dtype = _constexpr_to_value(dtype)
     return semantic.zeros(shape, dtype, _builder)
 
+
 @builtin
 def fill(shape, value, dtype, _builder=None):
     """
