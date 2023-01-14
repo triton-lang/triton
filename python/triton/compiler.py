@@ -902,7 +902,7 @@ def ttir_to_ttgir(mod, num_warps, num_stages, compute_capability):
     pm.add_tritongpu_combine_pass(compute_capability)
     if compute_capability // 10 == 7:
         # The update_mma_for_volta pass helps to compute some information for MMA encoding specifically for MMAv1
-        pm.add_triton_gpu_update_mma_for_volta_pass()
+        pm.add_tritongpu_update_mma_for_volta_pass()
     pm.add_cse_pass()
     pm.add_tritongpu_decompose_conversions_pass()
     pm.add_cse_pass()
