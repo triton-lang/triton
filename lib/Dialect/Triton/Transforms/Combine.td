@@ -39,10 +39,53 @@ def CombineDotAddFRevPattern : Pat<
 //         (TT_AddPtrOp $ptr, (Arith_AddIOp $idx0, $idx1))>;
 
 // broadcast(cst) => cst
-def getConstantValue : NativeCodeCall<"getConstantValue($_builder, $0, $1)">;
+def getBroadcastConstantValue : NativeCodeCall<"getBroadcastConstantValue($0, $1)">;
 def CombineBroadcastConstantPattern : Pat<
-    (TT_BroadcastOp:$bcast_res (Arith_ConstantOp $value)),
-    (Arith_ConstantOp (getConstantValue $value, $bcast_res)),
+    (TT_BroadcastOp:$bcastRes (Arith_ConstantOp $value)),
+    (Arith_ConstantOp (getBroadcastConstantValue $value, $bcastRes)),
     [(Constraint<CPred<"isBroadcastConstantCombinable($0)">> $value)]>;
+
+// extf/truncf/extsi/extui(constant(cst)) => constant(cst)
+def CombineExtFConstantPattern : Pat<
+    (Arith_ExtFOp:$res (Arith_ConstantOp $value)),
+    (Arith_ConstantOp (getBroadcastConstantValue $value, $res)),
+    [(Constraint<CPred<"isBroadcastConstantCombinable($0)">> $value)]>;
+
+def CombineTruncFConstantPattern : Pat<
+    (Arith_TruncFOp:$res (Arith_ConstantOp $value)),
+    (Arith_ConstantOp (getBroadcastConstantValue $value, $res)),
+    [(Constraint<CPred<"isBroadcastConstantCombinable($0)">> $value)]>;
+    
+def CombineExtSIConstantPattern : Pat<
+    (Arith_ExtSIOp:$res (Arith_ConstantOp $value)),
+    (Arith_ConstantOp (getBroadcastConstantValue $value, $res)),
+    [(Constraint<CPred<"isBroadcastConstantCombinable($0)">> $value)]>;
+
+def CombineExtUIConstantPattern : Pat<
+    (Arith_ExtUIOp:$res (Arith_ConstantOp $value)),
+    (Arith_ConstantOp (getBroadcastConstantValue $value, $res)),
+    [(Constraint<CPred<"isBroadcastConstantCombinable($0)">> $value)]>;
+
+// add(cst, constant(0)) => constant(cst)
+def getAddConstantValue : NativeCodeCall<"getAddConstantValue($0, $1)">;
+def CombineAddIConstantPattern : Pat<
+    (Arith_AddIOp $a, (Arith_ConstantOp $value)),
+    (Arith_ConstantOp (getAddConstantValue $value, $a)),
+    [(Constraint<CPred<"isAddConstantCombinable($0, $1)">> $value, $a)]>;
+
+def CombineAddFConstantPattern : Pat<
+    (Arith_AddFOp $a, (Arith_ConstantOp $value)),
+    (Arith_ConstantOp (getAddConstantValue $value, $a)),
+    [(Constraint<CPred<"isAddConstantCombinable($0, $1)">> $value, $a)]>;
+
+def CombineAddIRevConstantPattern : Pat<
+    (Arith_AddIOp (Arith_ConstantOp $value), $b),
+    (Arith_ConstantOp (getAddConstantValue $value, $b)),
+    [(Constraint<CPred<"isAddConstantCombinable($0, $1)">> $value, $b)]>;
+
+def CombineAddFRevConstantPattern : Pat<
+    (Arith_AddFOp (Arith_ConstantOp $value), $b),
+    (Arith_ConstantOp (getAddConstantValue $value, $b)),
+    [(Constraint<CPred<"isAddConstantCombinable($0, $1)">> $value, $b)]>;
 
 #endif

@@ -62,28 +62,45 @@ struct SplatOpConversion
     auto tensorTy = resType.cast<RankedTensorType>();
     auto shape = tensorTy.getShape();
     auto parent = layout.getParent();
+    Value retVal = constVal;
+    Type retTy = elemType;
     int numElems{};
     if (auto mmaLayout = parent.dyn_cast<MmaEncodingAttr>()) {
+      Type matTy;
       if (mmaLayout.isAmpere()) {
         numElems = layout.getOpIdx() == 0
                        ? MMA16816ConversionHelper::getANumElemsPerThread(
                              tensorTy, mmaLayout.getWarpsPerCTA()[0])
                        : MMA16816ConversionHelper::getBNumElemsPerThread(
                              tensorTy, mmaLayout.getWarpsPerCTA()[1]);
+        DotOpMmaV2ConversionHelper helper(mmaLayout);
+        helper.deduceMmaType(tensorTy);
+        matTy = helper.getMatType();
       } else if (mmaLayout.isVolta()) {
         DotOpMmaV1ConversionHelper helper(mmaLayout);
         numElems = layout.getOpIdx() == 0
                        ? helper.numElemsPerThreadA(shape, {0, 1})
                        : helper.numElemsPerThreadB(shape, {0, 1});
+        matTy = helper.getMatType(tensorTy);
+      }
+      auto numPackedElems = matTy.cast<LLVM::LLVMStructType>()
+                                .getBody()[0]
+                                .cast<VectorType>()
+                                .getNumElements();
+      retTy = vec_ty(elemType, numPackedElems);
+      retVal = undef(retTy);
+      for (auto i = 0; i < numPackedElems; ++i) {
+        retVal = insert_element(retTy, retVal, constVal, i32_val(i));
       }
     } else if (auto blockedLayout = parent.dyn_cast<BlockedEncodingAttr>()) {
       numElems = DotOpFMAConversionHelper::getNumElemsPerThread(shape, layout);
     } else {
       assert(false && "Unsupported layout found");
     }
+
     auto structTy = LLVM::LLVMStructType::getLiteral(
-        rewriter.getContext(), SmallVector<Type>(numElems, elemType));
-    return getStructFromElements(loc, SmallVector<Value>(numElems, constVal),
+        rewriter.getContext(), SmallVector<Type>(numElems, retTy));
+    return getStructFromElements(loc, SmallVector<Value>(numElems, retVal),
                                  rewriter, structTy);
   }
 

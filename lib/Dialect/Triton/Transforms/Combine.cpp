@@ -27,6 +27,16 @@ bool isZero(mlir::Value val) {
   return false;
 }
 
+bool isZero(mlir::Attribute attr) {
+  if (auto intAttr = attr.dyn_cast<mlir::IntegerAttr>())
+    return intAttr.getValue().isNullValue();
+  if (auto floatAttr = attr.dyn_cast<mlir::FloatAttr>())
+    return floatAttr.getValue().isZero();
+  if (auto denseAttr = attr.dyn_cast<mlir::DenseElementsAttr>())
+    return denseAttr.isSplat() && isZero(denseAttr.getSplatValue<Attribute>());
+  return false;
+}
+
 bool isBroadcastConstantCombinable(Attribute value) {
   if (auto denseValue = value.dyn_cast<DenseElementsAttr>()) {
     return denseValue.isSplat();
@@ -34,10 +44,13 @@ bool isBroadcastConstantCombinable(Attribute value) {
   return value.isa<FloatAttr, IntegerAttr>();
 }
 
-DenseElementsAttr getConstantValue(Builder &builder, Attribute value,
-                                   Value bcast_res) {
+bool isAddConstantCombinable(Attribute value, Value addRes) {
+  // Check if Attribute value is zero and addRes is a constant.
+  return isZero(value) && mlir::matchPattern(addRes, mlir::m_Constant());
+}
 
-  Type resType = bcast_res.getType();
+DenseElementsAttr getBroadcastConstantValue(Attribute value, Value bcastRes) {
+  Type resType = bcastRes.getType();
   DenseElementsAttr res;
   if (auto denseValue = value.dyn_cast<DenseElementsAttr>()) {
     res =
@@ -46,6 +59,14 @@ DenseElementsAttr getConstantValue(Builder &builder, Attribute value,
     res = DenseElementsAttr::get(resType, value);
   }
   return res;
+}
+
+DenseElementsAttr getAddConstantValue(Attribute value, Value addRes) {
+  // Get constant value from addRes and construct a DenseElementsAttr.
+  Type resType = value.getType();
+  Attribute constantAttr;
+  mlir::matchPattern(addRes, mlir::m_Constant(&constantAttr));
+  return DenseElementsAttr::get(resType, constantAttr);
 }
 
 #include "TritonCombine.inc"
@@ -198,6 +219,14 @@ public:
     patterns.add<CombineSelectMaskedLoadPattern>(context);
     // patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastConstantPattern>(context);
+    patterns.add<CombineAddIConstantPattern>(context);
+    patterns.add<CombineAddFConstantPattern>(context);
+    patterns.add<CombineAddIRevConstantPattern>(context);
+    patterns.add<CombineAddFRevConstantPattern>(context);
+    patterns.add<CombineExtFConstantPattern>(context);
+    patterns.add<CombineTruncFConstantPattern>(context);
+    patterns.add<CombineExtSIConstantPattern>(context);
+    patterns.add<CombineExtUIConstantPattern>(context);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();

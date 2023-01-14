@@ -93,6 +93,12 @@ struct DotOpMmaV1ConversionHelper {
 
   static ArrayRef<unsigned> getMmaInstrShape() { return instrShape; }
 
+  static Type getMatType(TensorType operand) {
+    auto *ctx = operand.getContext();
+    Type fp16Ty = type::f16Ty(ctx);
+    return struct_ty(SmallVector<Type>{fp16Ty, fp16Ty});
+  }
+
   static Type getMmaRetType(TensorType operand) {
     auto *ctx = operand.getContext();
     Type fp32Ty = type::f32Ty(ctx);
