@@ -25,7 +25,6 @@ void arange(float *arr, size_t start, size_t size) {
    val++;
     
   }
-  printf("final val: %f\n %f\n", val, arr[10]);
 }
 
 #define AllocFloatVec(N) (float *)malloc(N * sizeof(float));
@@ -44,7 +43,7 @@ void main() {
 
   float *u =  AllocFloatVec(VEC_SIZE);
   float *v =  AllocFloatVec(VEC_SIZE);
-  float *tst =  AllocFloatVec(VEC_SIZE);
+  float *out =  AllocFloatVec(VEC_SIZE);
   arange(u, 0, VEC_SIZE);
   arange(v, 0, VEC_SIZE);
 
@@ -61,25 +60,22 @@ void main() {
   cuCtxCreate(&ctx, CU_CTX_SCHED_AUTO, device);
   
   CUdeviceptr u_cu, v_cu, out_cu;
-  DEBUG(u_cu, "U ptr before");
   cuAllocFloatVec(VEC_SIZE, &u_cu);
-  DEBUG(u_cu, "U ptr after");
   cuAllocFloatVec(VEC_SIZE, &v_cu);
   cuAllocFloatVec(VEC_SIZE, &out_cu);
 
   VectoDevice(VEC_SIZE, u, u_cu);
   VectoDevice(VEC_SIZE, v, v_cu);
 
-  DevicetoVec(VEC_SIZE, u_cu, tst);
-  printf("Tst value %f\n", tst[15]);
-  printf("u value %f\n", u[15]);
 
   GridWarps g = {32, 1, 1, 3};
   CUstream stream;
-  printf("Stream before %p\n", stream);
   CHECK_CUDA(cuStreamCreate(&stream, CU_STREAM_DEFAULT),"stream creation");
-  printf("Stream after %p\n", stream);
 
   uint32_t n_elem = VEC_SIZE;
   CHECK_CUDA(add_kernel0(stream, g, u_cu, v_cu, out_cu, n_elem), "kernel run");
+  DevicetoVec(VEC_SIZE, out_cu, out);
+  printf("Out value is %f Expected 30\n", out[15]);
+  printf("Out value is %f Expected 2022\n", out[1011]);
+
 }
