@@ -743,6 +743,9 @@ struct InsertSliceAsyncOpConversion
     auto sizePerThread = srcBlockedLayout.getSizePerThread();
     auto threadsPerCTA = getThreadsPerCTA(srcBlockedLayout);
     auto inOrder = srcBlockedLayout.getOrder();
+    DenseMap<unsigned, Value> sharedPtrs =
+        getSwizzledSharedPtrs(loc, inVec, srcTy, resSharedLayout, resElemTy,
+                              smemObj, rewriter, offsetVals, srcStrides);
 
     // If perPhase * maxPhase > threadsPerCTA, we will have elements
     // that share the same tile indices. The index calculation will
@@ -755,61 +758,8 @@ struct InsertSliceAsyncOpConversion
     auto numVecCols = std::max<unsigned>(inVec / outVec, 1);
 
     auto srcIndices = emitIndices(loc, rewriter, srcBlockedLayout, srcShape);
-    //  <<tileVecIdxRow, tileVecIdxCol>, TileOffset>
-    DenseMap<std::pair<unsigned, unsigned>, Value> tileOffsetMap;
-    for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
-      // minVec = 2, inVec = 4, outVec = 2
-      //   baseOffsetCol = 0   baseOffsetCol = 0
-      //   tileVecIdxCol = 0   tileVecIdxCol = 1
-      //                -/\-   -/\-
-      //               [|x x| |x x| x x x x x]
-      //               [|x x| |x x| x x x x x]
-      // baseOffsetRow [|x x| |x x| x x x x x]
-      //               [|x x| |x x| x x x x x]
-      auto vecIdx = elemIdx / minVec;
-      auto vecIdxCol = vecIdx % (sizePerThread[inOrder[0]] / minVec);
-      auto vecIdxRow = vecIdx / (sizePerThread[inOrder[0]] / minVec);
-      auto baseOffsetCol =
-          vecIdxCol / numVecCols * numVecCols * threadsPerCTA[inOrder[0]];
-      auto baseOffsetRow = vecIdxRow / numSwizzleRows * numSwizzleRows *
-                           threadsPerCTA[inOrder[1]];
-      auto tileVecIdxCol = vecIdxCol % numVecCols;
-      auto tileVecIdxRow = vecIdxRow % numSwizzleRows;
 
-      if (!tileOffsetMap.count({tileVecIdxRow, tileVecIdxCol})) {
-        // Swizzling
-        // Since the swizzling index is related to outVec, and we know minVec
-        // already, inVec doesn't matter
-        //
-        // (Numbers represent row indices)
-        // Example1:
-        // outVec = 2, inVec = 2, minVec = 2
-        // outVec = 2, inVec = 4, minVec = 2
-        //     | [1 2] [3 4] [5 6] ... |
-        //     | [3 4] [1 2] [7 8] ... |
-        //     | [5 6] [7 8] [1 2] ... |
-        // Example2:
-        // outVec = 4, inVec = 2, minVec = 2
-        //     | [1 2 3 4] [5 6 7 8] [9 10 11 12] ... |
-        //     | [5 6 7 8] [1 2 3 4] [13 14 15 16] ... |
-        //     | [9 10 11 12] [13 14 15 16] [1 2 3 4] ... |
-        auto srcIdx = srcIndices[tileVecIdxRow * sizePerThread[inOrder[0]]];
-        Value phase = urem(udiv(srcIdx[inOrder[1]], i32_val(perPhase)),
-                           i32_val(maxPhase));
-        // srcShape and smemObj.shape maybe different if smemObj is a
-        // slice of the original shared memory object.
-        // So we need to use the original shape to compute the offset
-        Value rowOffset = mul(srcIdx[inOrder[1]], srcStrides[inOrder[1]]);
-        Value colOffset =
-            add(srcIdx[inOrder[0]], i32_val(tileVecIdxCol * minVec));
-        Value swizzleIdx = udiv(colOffset, i32_val(outVec));
-        Value swizzleColOffset =
-            add(mul(xor_(swizzleIdx, phase), i32_val(outVec)),
-                urem(colOffset, i32_val(outVec)));
-        Value tileOffset = add(rowOffset, swizzleColOffset);
-        tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}] =
-            gep(dstPtrTy, dstPtrBase, tileOffset);
-      }
+    for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
 
       // 16 * 8 = 128bits
       auto maxBitWidth =
@@ -826,11 +776,7 @@ struct InsertSliceAsyncOpConversion
       assert(byteWidth == 16 || byteWidth == 8 || byteWidth == 4);
       auto resByteWidth = resElemTy.getIntOrFloatBitWidth() / 8;
 
-      Value tileOffset = tileOffsetMap[{tileVecIdxRow, tileVecIdxCol}];
-      Value baseOffset =
-          add(mul(i32_val(baseOffsetRow), srcStrides[inOrder[1]]),
-              i32_val(baseOffsetCol));
-      Value basePtr = gep(dstPtrTy, tileOffset, baseOffset);
+      Value basePtr = sharedPtrs[elemIdx];
       for (size_t wordIdx = 0; wordIdx < numWords; ++wordIdx) {
         PTXBuilder ptxBuilder;
         auto wordElemIdx = wordIdx * numWordElems;

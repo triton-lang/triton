@@ -71,6 +71,30 @@ def TritonGPUCombineOps : Pass<"tritongpu-combine", "mlir::ModuleOp"> {
   ];
 }
 
+def TritonGPUReorderInstructions: Pass<"tritongpu-reorder-instructions", "mlir::ModuleOp"> {
+  let summary = "Reorder instructions";
+
+  let description = "This pass reorder instructions so as to (1) decrease register pressure (e.g., by moving "
+                    "conversions from shared memory before their first use) and (2) promote LLVM instruction "
+                    "order more friendly to `ptxas`.";
+
+  let constructor = "mlir::createTritonGPUReorderInstructionsPass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
+def TritonGPUDecomposeConversions: Pass<"tritongpu-decompose-conversions", "mlir::ModuleOp"> {
+  let summary = "Decompose convert[distributed -> dotOperand] into convert[distributed -> shared -> dotOperand]";
+
+  let description = "Decomposing conversions this way makes it possible to use CSE and re-use #shared tensors";
+
+  let constructor = "mlir::createTritonGPUDecomposeConversionsPass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
 def TritonGPUCanonicalizeLoops: Pass<"tritongpu-canonicalize-loops", "mlir::ModuleOp"> {
   let summary = "canonicalize scf.ForOp ops";
 

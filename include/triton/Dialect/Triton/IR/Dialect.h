@@ -26,6 +26,10 @@ public:
   DialectInferLayoutInterface(Dialect *dialect) : Base(dialect) {}
 
   virtual LogicalResult
+  inferTransOpEncoding(Attribute operandEncoding,
+                       Attribute &resultEncoding) const = 0;
+
+  virtual LogicalResult
   inferReduceOpEncoding(Attribute operandEncoding, unsigned axis,
                         Attribute &resultEncoding) const = 0;
 

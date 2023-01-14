@@ -484,7 +484,7 @@ public:
       return op->getBlock() == cvt->getBlock() &&
              !(isa<triton::ReduceOp>(op) &&
                !op->getResult(0).getType().isa<RankedTensorType>()) &&
-             !isa<scf::YieldOp>(op);
+             !isa<triton::gpu::ConvertLayoutOp>(op) && !isa<scf::YieldOp>(op);
     };
     mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
     if (cvtSlices.empty())
@@ -1169,6 +1169,250 @@ public:
   }
 };
 
+
+// Convert + trans + convert
+// x = convert_layout distributed -> #shared_x
+// y = trans x -> #shared_y
+// z = convert_layout y -> #dot_operand
+class ConvertTransConvert : public mlir::RewritePattern {
+
+public:
+  ConvertTransConvert(mlir::MLIRContext *context)
+      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
+                             1, context) {}
+
+  LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto dstOp = cast<triton::gpu::ConvertLayoutOp>(op);
+    auto tmpOp = dyn_cast_or_null<triton::TransOp>(dstOp.src().getDefiningOp());
+    if (!tmpOp)
+      return mlir::failure();
+    auto srcOp = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
+        tmpOp.src().getDefiningOp());
+    if (!srcOp)
+      return mlir::failure();
+    auto arg = srcOp.src();
+    auto X = tmpOp.src();
+    auto Y = dstOp.src();
+    // types
+    auto argType = arg.getType().cast<RankedTensorType>();
+    auto XType = X.getType().cast<RankedTensorType>();
+    auto YType = Y.getType().cast<RankedTensorType>();
+    auto ZType = dstOp.getResult().getType().cast<RankedTensorType>();
+    // encodings
+    auto argEncoding = argType.getEncoding();
+    auto XEncoding =
+        XType.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
+    auto YEncoding =
+        YType.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
+    auto ZEncoding =
+        ZType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+    if (!ZEncoding)
+      return mlir::failure();
+    // new X encoding
+    auto newXOrder = triton::gpu::getOrder(argEncoding);
+    auto newXEncoding = triton::gpu::SharedEncodingAttr::get(
+        getContext(), ZEncoding, XType.getShape(), newXOrder,
+        XType.getElementType());
+    auto newXType = RankedTensorType::get(XType.getShape(),
+                                          XType.getElementType(), newXEncoding);
+    if (XEncoding == newXEncoding)
+      return mlir::failure();
+
+    auto newX = rewriter.create<triton::gpu::ConvertLayoutOp>(srcOp.getLoc(),
+                                                              newXType, arg);
+    auto newY = rewriter.create<triton::TransOp>(tmpOp.getLoc(), newX);
+    rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(dstOp, ZType,
+                                                              newY);
+    return mlir::success();
+  }
+};
+
+//
+class ConvertDotConvert : public mlir::RewritePattern {
+public:
+  ConvertDotConvert(mlir::MLIRContext *context)
+      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
+                             1, context) {}
+
+  LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto dstOp = cast<triton::gpu::ConvertLayoutOp>(op);
+    auto dotOp = dyn_cast_or_null<triton::DotOp>(dstOp.src().getDefiningOp());
+    if (!dotOp)
+      return mlir::failure();
+    if (std::distance(dstOp->user_begin(), dstOp->user_end()) != 1 ||
+        std::distance(dotOp->user_begin(), dotOp->user_end()) != 1)
+      return mlir::failure();
+    auto cvtOp = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
+        dotOp.getOperand(2).getDefiningOp());
+    if (!cvtOp)
+      return mlir::failure();
+    auto loadOp = dyn_cast_or_null<triton::LoadOp>(cvtOp.src().getDefiningOp());
+    if (!loadOp)
+      return mlir::failure();
+    auto dstTy = dstOp.getResult().getType().cast<RankedTensorType>();
+    auto srcTy = cvtOp.getOperand().getType().cast<RankedTensorType>();
+    if (dstTy != srcTy)
+      return mlir::failure();
+
+    // TODO: int tensor cores
+    auto _0f = rewriter.create<arith::ConstantFloatOp>(
+        op->getLoc(), APFloat(0.0f), dstTy.getElementType().cast<FloatType>());
+    auto _0 = rewriter.create<triton::SplatOp>(
+        op->getLoc(), dotOp.getResult().getType(), _0f);
+    auto newDot = rewriter.create<triton::DotOp>(
+        op->getLoc(), dotOp.getResult().getType(), dotOp.getOperand(0),
+        dotOp.getOperand(1), _0, dotOp.allowTF32());
+    auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
+        op->getLoc(), dstTy, newDot.getResult());
+    auto newAdd = rewriter.replaceOpWithNewOp<arith::AddFOp>(
+        op, newCvt, cvtOp.getOperand());
+    return mlir::success();
+  }
+};
+
+// Correct the versionMinor field in MmaEncodingAttr for Volta.
+class UpdateMMAVersionMinorForVolta : public mlir::RewritePattern {
+  const DenseMap<MmaEncodingAttr, MmaEncodingAttr> &mmaToUpdate;
+  enum class Kind {
+    kUnk,
+    kCvtToMma,
+    kCvtToDotOp,
+    kDot,
+    kConstant,
+  };
+  mutable Kind rewriteKind{Kind::kUnk};
+
+public:
+  UpdateMMAVersionMinorForVolta(
+      mlir::MLIRContext *ctx, llvm::StringRef opName,
+      const DenseMap<MmaEncodingAttr, MmaEncodingAttr> &mmaToUpdate)
+      : RewritePattern(opName, 1 /*benefit*/, ctx), mmaToUpdate(mmaToUpdate) {}
+
+  LogicalResult match(Operation *op) const override {
+    MmaEncodingAttr mma;
+    if (mmaToUpdate.empty())
+      return failure();
+    if (op->getNumResults() != 1)
+      return failure();
+    auto tensorTy = op->getResult(0).getType().dyn_cast<RankedTensorType>();
+    if (!tensorTy)
+      return failure();
+
+    // ConvertLayoutOp
+    if (auto cvt = llvm::dyn_cast<ConvertLayoutOp>(op)) {
+      // cvt X -> dot_operand
+      if (auto dotOperand =
+              tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>()) {
+        mma = dotOperand.getParent().dyn_cast<MmaEncodingAttr>();
+        rewriteKind = Kind::kCvtToDotOp;
+        if (mma && mmaToUpdate.count(mma))
+          return success();
+      }
+      if ((mma = tensorTy.getEncoding().dyn_cast<MmaEncodingAttr>())) {
+        // cvt X -> mma
+        rewriteKind = Kind::kCvtToMma;
+        if (mma && mmaToUpdate.count(mma))
+          return success();
+      }
+    } else if (auto dot = llvm::dyn_cast<DotOp>(op)) {
+      // DotOp
+      mma = dot.d()
+                .getType()
+                .cast<RankedTensorType>()
+                .getEncoding()
+                .dyn_cast<MmaEncodingAttr>();
+      rewriteKind = Kind::kDot;
+    } else if (auto constant = llvm::dyn_cast<arith::ConstantOp>(op)) {
+      // ConstantOp
+      mma = tensorTy.getEncoding().dyn_cast<MmaEncodingAttr>();
+      rewriteKind = Kind::kConstant;
+    }
+
+    return success(mma && mmaToUpdate.count(mma));
+  }
+
+  void rewrite(Operation *op, PatternRewriter &rewriter) const override {
+    switch (rewriteKind) {
+    case Kind::kDot:
+      rewriteDot(op, rewriter);
+      break;
+    case Kind::kConstant:
+      rewriteConstant(op, rewriter);
+      break;
+    case Kind::kCvtToDotOp:
+      rewriteCvtDotOp(op, rewriter);
+      break;
+    case Kind::kCvtToMma:
+      rewriteCvtToMma(op, rewriter);
+      break;
+    default:
+      llvm::report_fatal_error("Not supported rewrite kind");
+    }
+  }
+
+private:
+  void rewriteCvtDotOp(Operation *op, PatternRewriter &rewriter) const {
+    auto *ctx = op->getContext();
+    auto cvt = llvm::cast<ConvertLayoutOp>(op);
+    auto tensorTy = cvt.result().getType().cast<RankedTensorType>();
+    auto dotOperand = tensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+    MmaEncodingAttr newMma =
+        mmaToUpdate.lookup(dotOperand.getParent().cast<MmaEncodingAttr>());
+    auto newDotOperand = DotOperandEncodingAttr::get(
+        ctx, dotOperand.getOpIdx(), newMma, dotOperand.getIsMMAv1Row());
+    auto newTensorTy = RankedTensorType::get(
+        tensorTy.getShape(), tensorTy.getElementType(), newDotOperand);
+    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, newTensorTy,
+                                                 cvt.getOperand());
+  }
+
+  void rewriteDot(Operation *op, PatternRewriter &rewriter) const {
+    auto *ctx = op->getContext();
+    auto dot = llvm::cast<DotOp>(op);
+    auto tensorTy = dot.d().getType().cast<RankedTensorType>();
+    auto mma = tensorTy.getEncoding().cast<MmaEncodingAttr>();
+    auto newMma = mmaToUpdate.lookup(mma);
+    auto newTensorTy = RankedTensorType::get(tensorTy.getShape(),
+                                             tensorTy.getElementType(), newMma);
+    rewriter.replaceOpWithNewOp<DotOp>(op, newTensorTy, dot.a(), dot.b(),
+                                       dot.c(), dot.allowTF32());
+  }
+
+  void rewriteCvtToMma(Operation *op, PatternRewriter &rewriter) const {
+    auto *ctx = op->getContext();
+    auto cvt = llvm::cast<ConvertLayoutOp>(op);
+    auto tensorTy = cvt.result().getType().cast<RankedTensorType>();
+    auto mma = tensorTy.getEncoding().cast<MmaEncodingAttr>();
+    auto newMma = mmaToUpdate.lookup(mma);
+    auto newTensorTy = RankedTensorType::get(tensorTy.getShape(),
+                                             tensorTy.getElementType(), newMma);
+    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, newTensorTy,
+                                                 cvt.getOperand());
+  }
+
+  void rewriteConstant(Operation *op, PatternRewriter &rewriter) const {
+    auto *ctx = op->getContext();
+    auto constant = llvm::cast<arith::ConstantOp>(op);
+    auto tensorTy = constant.getResult().getType().dyn_cast<RankedTensorType>();
+    auto mma = tensorTy.getEncoding().cast<MmaEncodingAttr>();
+    auto newMma = mmaToUpdate.lookup(mma);
+    auto newTensorTy = RankedTensorType::get(tensorTy.getShape(),
+                                             tensorTy.getElementType(), newMma);
+    if (auto attr = constant.getValue().dyn_cast<SplatElementsAttr>()) {
+      auto newRet =
+          SplatElementsAttr::get(newTensorTy, attr.getSplatValue<Attribute>());
+      rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, newTensorTy, newRet);
+      return;
+    }
+
+    assert(false && "Not supported ConstantOp value type");
+  }
+};
+
 } // namespace
 
 #define GEN_PASS_CLASSES
@@ -1198,6 +1442,8 @@ public:
     patterns.add<MoveConvertOutOfLoop>(context);
     patterns.add<MoveConvertOutOfIf>(context);
     patterns.add<BlockedToMMA>(context, computeCapability);
+    patterns.add<ConvertTransConvert>(context);
+    patterns.add<ConvertDotConvert>(context);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
