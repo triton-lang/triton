@@ -108,4 +108,16 @@ def TritonGPUCanonicalizeLoops: Pass<"tritongpu-canonicalize-loops", "mlir::Modu
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
 }
 
+def UpdateMmaForVolta : Pass<"tritongpu-update-mma-for-volta", "mlir::ModuleOp"> {
+  let summary = "Update mma encodings for Volta";
+
+  let description = [{
+    This helps to update the mma encodings for Volta.
+  }];
+
+  let constructor = "mlir::createTritonGPUUpdateMmaForVoltaPass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+}
+
 #endif
