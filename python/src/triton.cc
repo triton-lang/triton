@@ -486,15 +486,16 @@ void init_triton_ir(py::module &&m) {
              return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
                  loc, v, self.getI64Type()));
            })
-      .def("get_bf16",
-           [](mlir::OpBuilder &self, float v) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             auto type = self.getBF16Type();
-             return self.create<mlir::arith::ConstantFloatOp>(
-                 loc,
-                 mlir::APFloat(type.getFloatSemantics(), std::to_string(v)),
-                 type);
-           })
+      // bfloat16 cannot be initialized as it is treated as int16 for now
+      //.def("get_bf16",
+      //     [](mlir::OpBuilder &self, float v) -> mlir::Value {
+      //       auto loc = self.getUnknownLoc();
+      //       auto type = self.getBF16Type();
+      //       return self.create<mlir::arith::ConstantFloatOp>(
+      //           loc,
+      //           mlir::APFloat(type.getFloatSemantics(), std::to_string(v)),
+      //           type);
+      //     })
       .def("get_fp16",
            [](mlir::OpBuilder &self, float v) -> mlir::Value {
              auto loc = self.getUnknownLoc();

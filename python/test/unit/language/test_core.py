@@ -1231,7 +1231,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype, devi
         assert 'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
 
 
-@pytest.mark.parametrize("dtype_str", ['float32', 'float16', 'bfloat16'])
+@pytest.mark.parametrize("dtype_str", ['float32', 'float16'])
 def test_dot_without_load(dtype_str):
     @triton.jit
     def _kernel(out):
