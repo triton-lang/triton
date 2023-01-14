@@ -104,7 +104,10 @@ SmallVector<unsigned> getSizePerThread(const Attribute &layout) {
     return SmallVector<unsigned>(blockedLayout.getSizePerThread().begin(),
                                  blockedLayout.getSizePerThread().end());
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-    return getSizePerThread(sliceLayout.getParent());
+    auto ret = getSizePerThread(sliceLayout.getParent());
+    return ret;
+    // ret.erase(ret.begin() + sliceLayout.getDim());
+    return ret;
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     if (mmaLayout.isAmpere()) {
       return {2, 2};
@@ -158,7 +161,11 @@ SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout) {
       threads.push_back(blockedLayout.getThreadsPerWarp()[d] *
                         blockedLayout.getWarpsPerCTA()[d]);
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-    assert(0 && "Unimplemented usage of MmaEncodingAttr");
+    if (mmaLayout.getVersionMajor() == 2) {
+      threads = {8 * mmaLayout.getWarpsPerCTA()[0],
+                 4 * mmaLayout.getWarpsPerCTA()[1]};
+    } else
+      assert(0 && "Unimplemented usage of MmaEncodingAttr");
   } else {
     assert(0 && "Unimplemented usage of getShapePerCTA");
   }
@@ -593,15 +600,20 @@ bool MmaEncodingAttr::isVolta() const { return getVersionMajor() == 1; }
 
 bool MmaEncodingAttr::isAmpere() const { return getVersionMajor() == 2; }
 
-// Get [isARow, isBRow, isAVec4, isBVec4] from versionMinor
-std::tuple<bool, bool, bool, bool>
+// Get [isARow, isBRow, isAVec4, isBVec4, id] from versionMinor
+std::tuple<bool, bool, bool, bool, int>
 MmaEncodingAttr::decodeVoltaLayoutStates() const {
   unsigned versionMinor = getVersionMinor();
   bool isARow = versionMinor & (1 << 0);
   bool isBRow = versionMinor & (1 << 1);
   bool isAVec4 = versionMinor & (1 << 2);
   bool isBVec4 = versionMinor & (1 << 3);
-  return std::make_tuple(isARow, isBRow, isAVec4, isBVec4);
+
+  int id = 0;
+  for (int i = numBitsToHoldMmaV1ID - 1; i >= 0; --i)
+    id = (id << 1) + static_cast<bool>(versionMinor & (1 << (4 + i)));
+
+  return std::make_tuple(isARow, isBRow, isAVec4, isBVec4, id);
 }
 
 //===----------------------------------------------------------------------===//
@@ -732,6 +744,21 @@ struct TritonGPUInferLayoutInterface
     resultEncoding = SliceEncodingAttr::get(getDialect()->getContext(), axis,
                                             operandEncoding);
     return success();
+  }
+
+  LogicalResult inferTransOpEncoding(Attribute operandEncoding,
+                                     Attribute &resultEncoding) const override {
+    SharedEncodingAttr sharedEncoding =
+        operandEncoding.dyn_cast<SharedEncodingAttr>();
+    if (!sharedEncoding)
+      return failure();
+    SmallVector<unsigned> retOrder(sharedEncoding.getOrder().begin(),
+                                   sharedEncoding.getOrder().end());
+    std::reverse(retOrder.begin(), retOrder.end());
+    resultEncoding = SharedEncodingAttr::get(
+        getDialect()->getContext(), sharedEncoding.getVec(),
+        sharedEncoding.getPerPhase(), sharedEncoding.getMaxPhase(), retOrder);
+    return mlir::success();
   }
 
   LogicalResult
