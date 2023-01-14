@@ -4,11 +4,12 @@ from argparse import ArgumentParser
 from types import ModuleType
 from typing import Callable, Dict, Sequence, Tuple, Union
 import yaml
+from aot_compile.compile_metadata import CompileMetadata
 
 import triton
 from aot_compile.c_codegen import CodeGenerator
 from aot_compile.compile_metadata import (AOTKernelMetadata, ASTGeneratingObject,
-                                          infer_triton_signature, make_compile_metadata)
+                                          infer_triton_signature, make_compile_metadata, CompileMetadata)
 
 
 def filter_jitted_functions(*scopes):
@@ -154,18 +155,18 @@ ASMObject = Dict[str, Union[str, bytes]]
 """ The `asm` attr from `CompiledKernel` """
 
 
-def compile_func(meta: AOTKernelMetadata, fn: ASTGeneratingObject) -> ASMObject:
+def compile_func(meta: AOTKernelMetadata, fn: ASTGeneratingObject) -> Tuple[ASMObject, CompileMetadata]:
     # NOTE: we ovveride the function name here. in case we have several variants in the kerenel
     #       (those will have same signature in C)
     old_name = fn.__name__
     fn.__name__ = meta.name
 
-    compiler_metadata = make_compile_metadata(meta)
-    compiled = triton.compile(fn, **compiler_metadata.kwargs)
+    compile_metadata = make_compile_metadata(meta)
+    compiled = triton.compile(fn, **compile_metadata.kwargs)
     asm = compiled.asm
 
     fn.__name__ = old_name
-    return asm
+    return asm, compile_metadata
 
 
 def generate_c_code(meta_and_ast: AOTMetadataWithAST, outdir: str):
@@ -180,11 +181,11 @@ def generate_c_code(meta_and_ast: AOTMetadataWithAST, outdir: str):
 
     for fn_name, (metas, jit_fn) in meta_and_ast.items():
         for variant_idx, meta in enumerate(metas):
-            asm = compile_func(meta, jit_fn)
+            asm, comple_meta = compile_func(meta, jit_fn)
             docstr = str(meta)
             if jit_fn.__doc__ is not None:
                 docstr = f"{docstr}\n\t{jit_fn.__doc__}"
-            codegen.gen_kernel(kernel_meta=meta, bin_=asm['cubin'], docstring=docstr)
+            codegen.gen_kernel(kernel_meta=meta, compile_meta=comple_meta, bin_=asm['cubin'], docstring=docstr)
 
     codegen.dump(out_dir=outdir)
 
@@ -226,12 +227,11 @@ if __name__ == "__main__":
         exit(0)
 
     # When you have fully filled config YAML we use it to infer meta data needed for compilation
-    aot_metas = parse_config_file(args.config)
+    aot_metadata = parse_config_file(args.config)
     matched_metas_with_fn = reconcile_metadata_with_ast(
-        aot_meta=aot_metas, jitted=ast_gen_objects
+        aot_meta=aot_metadata, jitted=ast_gen_objects
     )
 
     # TODO: support different compilation stages (similar to aot.py)
     if args.target == "CSource":
         generate_c_code(meta_and_ast=matched_metas_with_fn, outdir=args.out_dir)
-        exit(0)
