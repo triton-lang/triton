@@ -735,6 +735,32 @@ def test_store_bool():
 
     assert (to_numpy(src).view('uint8') == to_numpy(dst).view('uint8')).all()
 
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_f8_xf16_roundtrip(dtype):
+    """Tests that converting an f8 to f16 and back to f8 doesn't change its value"""
+    check_type_supported(dtype)
+
+    @triton.jit
+    def copy_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(axis=0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        input = tl.load(input_ptr + offsets, mask=mask)
+        output = input
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    f8_tensor = torch.tensor(range(-128, 128), dtype=torch.int8, device='cuda')
+    f8 = triton.reinterpret(f8_tensor, tl.float8)
+    n_elements = f8_tensor.numel()
+    xf16 = torch.empty_like(f8_tensor, dtype=dtype)
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
+    copy_kernel[grid](f8, xf16, n_elements, BLOCK_SIZE=1024)
+
+    f8_output_tensor = torch.empty_like(xf16, dtype=torch.int8)
+    f8_output = triton.reinterpret(f8_output_tensor, tl.float8)
+    copy_kernel[grid](xf16, f8_output, n_elements, BLOCK_SIZE=1024)
+
+    assert torch.all(f8_tensor == f8_output_tensor)
+
 
 # ---------------
 # test reduce
