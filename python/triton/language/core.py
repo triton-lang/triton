@@ -722,7 +722,7 @@ def fill(shape, value, dtype, _builder=None):
     :type dtype: DType
     """
     if not isinstance(value, constexpr):
-        raise TypeError(f"Value must have type `constexpr`")
+        raise TypeError("Value must have type `constexpr`")
     for i, d in enumerate(shape):
         if not isinstance(d, constexpr):
             raise TypeError(f"Shape element {i} must have type `constexpr`")
