@@ -110,6 +110,13 @@ class enter_sub_region:
         self.generator.lscope = self.liveins
         self.generator.local_defs = self.prev_defs
 
+    def __enter__(self):
+        # record lscope & local_defs in the parent scope
+        self.liveins = self.generator.lscope.copy()
+        self.prev_defs = self.generator.local_defs.copy()
+        self.generator.local_defs = {}
+        self.insert_block = self.generator.builder.get_insertion_block()
+        return self.liveins, self.insert_block
 
 class CodeGenerator(ast.NodeVisitor):
     def __init__(self, context, prototype, gscope, attributes, constants, function_name, module=None, is_kernel=False, function_types=dict()):
@@ -740,10 +747,6 @@ class CodeGenerator(ast.NodeVisitor):
         assert len(node.values) == 2
         lhs = self.visit(node.values[0])
         rhs = self.visit(node.values[1])
-        if isinstance(lhs, triton.language.constexpr):
-            lhs = lhs.value
-        if isinstance(rhs, triton.language.constexpr):
-            rhs = rhs.value
 
         fn = {
             ast.And: 'logical_and',
@@ -900,17 +903,24 @@ def ttir_to_ttgir(mod, num_warps, num_stages, compute_capability):
     pm.add_coalesce_pass()
     # The combine pass converts blocked layout to mma layout
     # for dot ops so that pipeline can get shared memory swizzled correctly.
-    pm.add_triton_gpu_combine_pass(compute_capability)
+    pm.add_tritongpu_combine_pass(compute_capability)
     pm.add_tritongpu_pipeline_pass(num_stages)
     # Prefetch must be done after pipeline pass because pipeline pass
     # extracts slices from the original tensor.
     pm.add_tritongpu_prefetch_pass()
     pm.add_canonicalizer_pass()
     pm.add_cse_pass()
-    pm.add_triton_gpu_combine_pass(compute_capability)
+    pm.add_tritongpu_combine_pass(compute_capability)
     pm.add_licm_pass()
-    pm.add_triton_gpu_combine_pass(compute_capability)
+    pm.add_tritongpu_combine_pass(compute_capability)
+    if compute_capability // 10 == 7:
+        # The update_mma_for_volta pass helps to compute some information for MMA encoding specifically for MMAv1
+        pm.add_tritongpu_update_mma_for_volta_pass()
     pm.add_cse_pass()
+    pm.add_tritongpu_decompose_conversions_pass()
+    pm.add_cse_pass()
+    pm.add_symbol_dce_pass()
+    pm.add_tritongpu_reorder_instructions_pass()
     pm.run(mod)
     return mod
 
@@ -988,30 +998,19 @@ def llir_to_amdgcn_and_hsaco(mod: Any, gfx_arch: str) -> Tuple[str, str]:
     return _triton.translate_llvmir_to_hsaco(mod, gfx_arch)
 
 
-@functools.lru_cache()
+@functools.lru_cache
 def ptx_get_version(cuda_version) -> int:
     '''
     Get the highest PTX version supported by the current CUDA driver.
     '''
     assert isinstance(cuda_version, str)
     major, minor = map(int, cuda_version.split('.'))
-    version = major * 1000 + minor * 10
-    if version >= 11040:
-        return 74
-    if version >= 11030:
-        return 73
-    if version >= 11020:
-        return 72
-    if version >= 11010:
-        return 71
-    if version >= 11000:
-        return 70
-    if version >= 10020:
-        return 65
-    if version >= 10010:
-        return 64
-    if version >= 10000:
-        return 63
+    if major == 12:
+        return 80 + minor
+    if major == 11:
+        return 70 + minor
+    if major == 10:
+        return 63 + minor
     raise RuntimeError("Triton only support CUDA 10.0 or higher")
 
 
@@ -1228,77 +1227,103 @@ def generate_launcher(constants, signature):
     else:
         src = f"""
     #include \"cuda.h\"
+    #include <stdbool.h>
     #include <Python.h>
 
     static inline void gpuAssert(CUresult code, const char *file, int line)
     {{
-    if (code != CUDA_SUCCESS)
-    {{
-        const char* prefix = "Triton Error [CUDA]: ";
-        const char* str;
-        cuGetErrorString(code, &str);
-        char err[1024] = {{0}};
-        strcat(err, prefix);
-        strcat(err, str);
-        PyErr_SetString(PyExc_RuntimeError, err);
-    }}
+       if (code != CUDA_SUCCESS)
+       {{
+          const char* prefix = "Triton Error [CUDA]: ";
+          const char* str;
+          cuGetErrorString(code, &str);
+          char err[1024] = {{0}};
+          strcat(err, prefix);
+          strcat(err, str);
+          PyErr_SetString(PyExc_RuntimeError, err);
+       }}
     }}
 
     #define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
     void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, CUstream stream, CUfunction function, {arg_decls}) {{
-    void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
-    if(gridX*gridY*gridZ > 0){{
+      void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
+      if(gridX*gridY*gridZ > 0){{
         CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
-    }}
+      }}
     }}
 
-    static inline CUdeviceptr getPointer(PyObject *obj, int idx) {{
-    if (PyLong_Check(obj)) {{
-        return (CUdeviceptr)PyLong_AsUnsignedLongLong(obj);
-    }}
-    if (obj == Py_None) {{
-        return (CUdeviceptr)0;
-    }}
-    PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
-    if(ptr){{
+    typedef struct _DevicePtrInfo {{
+        CUdeviceptr dev_ptr;
+        bool valid;
+    }} DevicePtrInfo;
+
+    static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
+      DevicePtrInfo ptr_info;
+      ptr_info.dev_ptr = 0;
+      ptr_info.valid = true;
+      if (PyLong_Check(obj)) {{
+        ptr_info.dev_ptr = PyLong_AsUnsignedLongLong(obj);
+        return ptr_info;
+      }}
+      if (obj == Py_None) {{
+        // valid nullptr
+        return ptr_info;
+      }}
+      PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
+      if(ptr){{
         PyObject *empty_tuple = PyTuple_New(0);
         PyObject *ret = PyObject_Call(ptr, empty_tuple, NULL);
         Py_DECREF(empty_tuple);
         Py_DECREF(ptr);
         if (!PyLong_Check(ret)) {{
-        PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
+          PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
+          ptr_info.valid = false;
+          return ptr_info;
         }}
-        return (CUdeviceptr)PyLong_AsUnsignedLongLong(ret);
-    }}
-    PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
-    return (CUdeviceptr)0;
+        ptr_info.dev_ptr = PyLong_AsUnsignedLongLong(ret);
+        unsigned attr;
+        CUresult status =
+            cuPointerGetAttribute(&attr, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, ptr_info.dev_ptr);
+        if (!(attr == CU_MEMORYTYPE_DEVICE || attr == CU_MEMORYTYPE_UNIFIED) ||
+            !(status == CUDA_SUCCESS)) {{
+            PyErr_Format(PyExc_ValueError,
+                         "Pointer argument (at %d) cannot be accessed from Triton (cpu tensor?)", idx);
+            ptr_info.valid = false;
+        }}
+        return ptr_info;
+      }}
+      PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
+      return ptr_info;
     }}
 
     static PyObject* launch(PyObject* self, PyObject* args) {{
-    int gridX, gridY, gridZ;
-    uint64_t _stream;
-    uint64_t _function;
-    int num_warps;
-    int shared_memory;
-    PyObject *launch_enter_hook = NULL;
-    PyObject *launch_exit_hook = NULL;
-    PyObject *compiled_kernel = NULL;
-    PyObject *hook_ret = NULL;
-    {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-    if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
+      int gridX, gridY, gridZ;
+      uint64_t _stream;
+      uint64_t _function;
+      int num_warps;
+      int shared_memory;
+      PyObject *launch_enter_hook = NULL;
+      PyObject *launch_exit_hook = NULL;
+      PyObject *compiled_kernel = NULL;
+      PyObject *hook_ret = NULL;
+      {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
+      if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
         return NULL;
-    }}
+      }}
 
-    if (launch_enter_hook != Py_None) {{
+      if (launch_enter_hook != Py_None) {{
         PyObject *new_args = PyTuple_Pack(1, compiled_kernel);
         hook_ret = PyObject_CallObject(launch_enter_hook, new_args);
         Py_DECREF(new_args);
-    }}
+      }}
 
-    _launch(gridX, gridY, gridZ, num_warps, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"getPointer(_arg{i},{i})" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
 
-    if (launch_exit_hook != Py_None) {{
+      // raise exception asap
+      {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
+      _launch(gridX, gridY, gridZ, num_warps, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
+
+      if (launch_exit_hook != Py_None) {{
         PyObject *new_args = NULL;
         if (hook_ret) {{
             new_args = PyTuple_Pack(2, compiled_kernel, hook_ret);
@@ -1307,41 +1332,41 @@ def generate_launcher(constants, signature):
         }}
         hook_ret = PyObject_CallObject(launch_exit_hook, new_args);
         Py_DECREF(new_args);
-    }}
+      }}
 
-    if (hook_ret) {{
-        Py_DECREF(hook_ret);
-    }}
-    if(PyErr_Occurred()) {{
-        return NULL;
-    }}
-    // return None
-    Py_INCREF(Py_None);
-    return Py_None;
+      if (hook_ret) {{
+          Py_DECREF(hook_ret);
+      }}
+      if(PyErr_Occurred()) {{
+          return NULL;
+      }}
+      // return None
+      Py_INCREF(Py_None);
+      return Py_None;
     }}
 
     static PyMethodDef ModuleMethods[] = {{
-    {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
-    {{NULL, NULL, 0, NULL}} // sentinel
+      {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
+      {{NULL, NULL, 0, NULL}} // sentinel
     }};
 
     static struct PyModuleDef ModuleDef = {{
-    PyModuleDef_HEAD_INIT,
-    \"launcher\",
-    NULL, //documentation
-    -1, //size
-    ModuleMethods
+      PyModuleDef_HEAD_INIT,
+      \"launcher\",
+      NULL, //documentation
+      -1, //size
+      ModuleMethods
     }};
 
     PyMODINIT_FUNC PyInit_launcher(void) {{
-    PyObject *m = PyModule_Create(&ModuleDef);
-    if(m == NULL) {{
-        return NULL;
+      PyObject *m = PyModule_Create(&ModuleDef);
+      if(m == NULL) {{
+          return NULL;
+      }}
+      PyModule_AddFunctions(m, ModuleMethods);
+      return m;
     }}
-    PyModule_AddFunctions(m, ModuleMethods);
-    return m;
-    }}
-    """
+      """
     return src
 
 
@@ -1665,7 +1690,9 @@ def compile(fn, **kwargs):
         import re
         match = re.search(prototype_pattern[ir], src, re.MULTILINE)
         name, signature = match.group(1), match.group(2)
+        print(name, signature)
         types = re.findall(arg_type_pattern[ir], signature)
+        print(types)
         param_tys = [convert_type_repr(ty) for ty in types]
         signature = {k: v for k, v in enumerate(param_tys)}
         first_stage = list(stages.keys()).index(ir)

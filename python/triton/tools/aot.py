@@ -55,8 +55,6 @@ if __name__ == '__main__':
 
     # llvm-ir -> ptx
     if args.target == 'ptx':
-        if not args.sm:
-            raise argparse.ArgumentError(None, "Must specify --sm for PTX compilation")
         if not args.ptx_version:
             raise argparse.ArgumentError(None, "Must specify --ptx-version for PTX compilation")
         module = triton.compiler.llir_to_ptx(module, compute_capability=args.sm, ptx_version=args.ptx_version)

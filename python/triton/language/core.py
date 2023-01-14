@@ -403,6 +403,18 @@ class constexpr:
     def __neg__(self):
         return constexpr(-self.value)
 
+    def __and__(self, other):
+        return constexpr(self.value & other.value)
+
+    def logical_and(self, other):
+        return constexpr(self.value and other.value)
+
+    def __or__(self, other):
+        return constexpr(self.value | other.value)
+
+    def logical_or(self, other):
+        return constexpr(self.value or other.value)
+
     def __pos__(self):
         return constexpr(+self.value)
 
@@ -838,9 +850,9 @@ def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", 
     'type cache_modifier: str, optional
     """
     # mask, other can be constexpr
-    if mask is not None:
+    if _constexpr_to_value(mask) is not None:
         mask = _to_tensor(mask, _builder)
-    if other is not None:
+    if _constexpr_to_value(other) is not None:
         other = _to_tensor(other, _builder)
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
@@ -864,7 +876,7 @@ def store(pointer, value, mask=None, _builder=None):
     """
     # value can be constexpr
     value = _to_tensor(value, _builder)
-    if mask is not None:
+    if _constexpr_to_value(mask) is not None:
         mask = _to_tensor(mask, _builder)
     return semantic.store(pointer, value, mask, _builder)
 

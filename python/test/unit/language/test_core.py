@@ -773,23 +773,26 @@ def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
         assert to_numpy(z_tri) == z_ref
 
 
-def test_store_bool():
+@pytest.mark.parametrize("dtype_str", [dtype_str for dtype_str in torch_dtypes])
+def test_store_constant(dtype_str):
+    check_type_supported(dtype_str)
+
     """Tests that boolean True is stored as 1"""
     @triton.jit
-    def copy_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    def kernel(output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
         offsets = tl.program_id(axis=0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
         mask = offsets < n_elements
-        input = tl.load(input_ptr + offsets, mask=mask)
-        output = input
+        output = GENERATE_TEST_HERE
         tl.store(output_ptr + offsets, output, mask=mask)
 
-    src = torch.tensor([True, False], dtype=torch.bool, device='cuda')
-    n_elements = src.numel()
-    dst = torch.empty_like(src)
-    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
-    copy_kernel[grid](src, dst, n_elements, BLOCK_SIZE=1024)
+    triton_dtype_str = 'uint8' if dtype_str == 'bool' else dtype_str
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.zeros([BLOCK_SIZE], dtype=tl.{triton_dtype_str}) + 1'})
+    block_size = 128
+    ref = torch.ones([block_size], dtype=getattr(torch, dtype_str), device='cuda')
+    output = torch.zeros([block_size], dtype=getattr(torch, dtype_str), device='cuda')
+    kernel[(1,)](output, block_size, BLOCK_SIZE=block_size)
 
-    assert (to_numpy(src).view('uint8') == to_numpy(dst).view('uint8')).all()
+    assert torch.all(output == ref)
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
@@ -893,7 +896,7 @@ def get_reduced_dtype(dtype_str, op):
 
 @pytest.mark.parametrize("op, dtype_str, shape",
                          [(op, dtype, shape)
-                          for op in ['min', 'max', 'sum']
+                          for op in ['min', 'max', 'sum', 'argmin', 'argmax']
                           for dtype in dtypes_with_bfloat16
                           for shape in [32, 64, 128, 512]])
 def test_reduce1d(op, dtype_str, shape, device='cuda'):
@@ -1267,7 +1270,7 @@ def test_arange(start, device='cuda'):
 # ---------------
 
 
-@pytest.mark.parametrize("dtype_str, size, size_diff", [(dtype_str, size, size_diff) for dtype_str in torch_dtypes for size in [128, 512] for size_diff in [1, 2, 3, 4]])
+@pytest.mark.parametrize("dtype_str, size, size_diff", [(dtype_str, size, size_diff) for dtype_str in torch_dtypes for size in [128, 512] for size_diff in [0, 1, 2, 3, 4]])
 def test_masked_load(dtype_str, size, size_diff, device='cuda'):
     dtype = getattr(torch, dtype_str)
     check_type_supported(dtype)  # bfloat16 on cc < 80 will not be tested
@@ -1286,18 +1289,18 @@ def test_masked_load(dtype_str, size, size_diff, device='cuda'):
     def _kernel(in_ptr, out_ptr, in_size: tl.constexpr, out_size: tl.constexpr):
         in_offsets = tl.arange(0, out_size)
         # Load inputs.
-        x = tl.load(in_ptr + in_offsets, mask=in_offsets < in_size, other=1)
+        x = GENERATE_TEST_HERE
         # Store output
         output_offsets = tl.arange(0, out_size)
         tl.store(out_ptr + output_offsets, x)
 
-    _kernel[(1,)](input, output, input_size, output_size)
+    mask_str = "mask=in_offsets < in_size, other=1" if size_diff > 0 else "None"
+    kernel = patch_kernel(_kernel, {'GENERATE_TEST_HERE': f"tl.load(in_ptr + in_offsets, {mask_str})"})
+    kernel[(1,)](input, output, input_size, output_size)
 
-    reference_out = input
-    reference_out = torch.cat((reference_out, torch.ones((size_diff,), dtype=dtype, device=device)))
+    reference_out = torch.cat((input, torch.ones((size_diff,), dtype=dtype, device=device)))
     triton.testing.allclose(output, reference_out)
 
-# 'bfloat16': torch.bfloat16,
 # Testing masked loads with an intermate copy to shared memory run.
 
 
@@ -1444,6 +1447,20 @@ def test_noop(device='cuda'):
         pass
     x = to_triton(numpy_random((1,), dtype_str='int32'), device=device)
     kernel[(1, )](x)
+
+
+@pytest.mark.parametrize("device", ['cuda', 'cpu'])
+def test_pointer_arguments(device):
+    @triton.jit
+    def kernel(x):
+        pass
+    x = torch.empty(1024, device=device)
+    result = True
+    try:
+        kernel[(1,)](x)
+    except ValueError:
+        result = True if device == 'cpu' else False
+    assert result
 
 
 @pytest.mark.parametrize("value, value_type", [
