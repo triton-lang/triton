@@ -1,3 +1,4 @@
+#include "Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/SCF.h"
 #include "mlir/IR/BlockAndValueMapping.h"
@@ -26,6 +27,7 @@ using triton::DotOp;
 using triton::gpu::ConvertLayoutOp;
 using triton::gpu::DotOperandEncodingAttr;
 using triton::gpu::MmaEncodingAttr;
+using triton::gpu::SliceEncodingAttr;
 
 // -----------------------------------------------------------------------------
 //
@@ -885,24 +887,31 @@ SmallVector<int64_t, 2> mmaVersionToShapePerWarp(int version) {
 
 SmallVector<unsigned, 2> warpsPerTileV1(const ArrayRef<int64_t> shape,
                                         int numWarps) {
-  SmallVector<unsigned, 2> ret = {1, 1};
-  SmallVector<int64_t, 2> shapePerWarp =
-      mmaVersionToShapePerWarp(1 /*version*/);
-  bool changed = false;
-  do {
-    changed = false;
-    int pre = ret[0];
-    if (ret[0] * ret[1] < numWarps) {
-      ret[0] = std::clamp<unsigned>(ret[0] * 2, 1, shape[0] / shapePerWarp[0]);
-      changed = pre != ret[0];
-    }
-    if (ret[0] * ret[1] < numWarps) {
-      pre = ret[1];
-      ret[1] = std::clamp<unsigned>(ret[1] * 2, 1, shape[1] / shapePerWarp[1]);
-      changed = pre != ret[1];
-    }
-  } while (changed);
-  return ret;
+  if (!MmaEncodingAttr::_mmaV1UpdateWpt) {
+    SmallVector<unsigned, 2> ret = {1, 1};
+    SmallVector<int64_t, 2> shapePerWarp =
+        mmaVersionToShapePerWarp(1 /*version*/);
+    bool changed = false;
+    do {
+      changed = false;
+      int pre = ret[0];
+      if (ret[0] * ret[1] < numWarps) {
+        ret[0] =
+            std::clamp<unsigned>(ret[0] * 2, 1, shape[0] / shapePerWarp[0]);
+        changed = pre != ret[0];
+      }
+      if (ret[0] * ret[1] < numWarps) {
+        pre = ret[1];
+        ret[1] =
+            std::clamp<unsigned>(ret[1] * 2, 1, shape[1] / shapePerWarp[1]);
+        changed = pre != ret[1];
+      }
+    } while (changed);
+    return ret;
+  } else {
+    // Set a default value and ensure product of wpt equals numWarps
+    return {static_cast<unsigned>(numWarps), 1};
+  }
 }
 
 SmallVector<unsigned, 2> warpsPerTileV2(triton::DotOp dotOp,
@@ -1039,6 +1048,7 @@ public:
 
 class BlockedToMMA : public mlir::RewritePattern {
   int computeCapability;
+  mutable int mmaV1Counter{}; // used to generate ID for MMAv1 encoding
 
 public:
   BlockedToMMA(mlir::MLIRContext *context, int computeCapability)
@@ -1097,13 +1107,13 @@ public:
         getWarpsPerTile(dotOp, retShape, versionMajor, numWarps);
     triton::gpu::MmaEncodingAttr mmaEnc;
     if (versionMajor == 1) {
-      auto shapeA = AType.getShape();
-      auto shapeB = BType.getShape();
-      bool isARow = AOrder[0] != 0;
-      bool isBRow = BOrder[0] != 0;
-      mmaEnc = triton::gpu::MmaEncodingAttr::get(
-          oldRetType.getContext(), versionMajor, warpsPerTile, shapeA, shapeB,
-          isARow, isBRow);
+      if (MmaEncodingAttr::_mmaV1UpdateWpt)
+        mmaEnc = triton::gpu::MmaEncodingAttr::get(
+            oldRetType.getContext(), versionMajor, numWarps, mmaV1Counter++);
+      else
+        mmaEnc = triton::gpu::MmaEncodingAttr::get(
+            dotOp->getContext(), versionMajor, 0 /*versionMinor*/,
+            warpsPerTileV1(retShape, numWarps));
     } else if (versionMajor == 2) {
       mmaEnc = triton::gpu::MmaEncodingAttr::get(
           oldRetType.getContext(), versionMajor, 0 /*versionMinor*/,
@@ -1156,102 +1166,6 @@ public:
     rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
         op, oldRetType, newDot.getResult());
     return success();
-  }
-};
-
-class FixupLoop : public mlir::RewritePattern {
-
-public:
-  explicit FixupLoop(mlir::MLIRContext *context)
-      : mlir::RewritePattern(scf::ForOp::getOperationName(), 2, context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto forOp = cast<scf::ForOp>(op);
-
-    // Rewrite init argument
-    SmallVector<Value, 4> newInitArgs = forOp.getInitArgs();
-    bool shouldRematerialize = false;
-    for (size_t i = 0; i < newInitArgs.size(); i++) {
-      auto initArg = newInitArgs[i];
-      auto regionArg = forOp.getRegionIterArgs()[i];
-      if (newInitArgs[i].getType() != forOp.getRegionIterArgs()[i].getType() ||
-          newInitArgs[i].getType() != forOp.getResultTypes()[i]) {
-        shouldRematerialize = true;
-        break;
-      }
-    }
-    if (!shouldRematerialize)
-      return failure();
-
-    scf::ForOp newForOp = rewriter.create<scf::ForOp>(
-        forOp.getLoc(), forOp.getLowerBound(), forOp.getUpperBound(),
-        forOp.getStep(), newInitArgs);
-    newForOp->moveBefore(forOp);
-    rewriter.setInsertionPointToStart(newForOp.getBody());
-    BlockAndValueMapping mapping;
-    for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs()))
-      mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
-    mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
-
-    for (Operation &op : forOp.getBody()->getOperations()) {
-      rewriter.clone(op, mapping);
-    }
-    rewriter.replaceOp(forOp, newForOp.getResults());
-    return success();
-  }
-};
-
-// This pattern collects the wrong Mma those need to update and create the right
-// ones for each.
-class CollectMmaToUpdateForVolta : public mlir::RewritePattern {
-  DenseMap<MmaEncodingAttr, MmaEncodingAttr> &mmaToUpdate;
-
-public:
-  CollectMmaToUpdateForVolta(
-      mlir::MLIRContext *ctx,
-      DenseMap<MmaEncodingAttr, MmaEncodingAttr> &mmaToUpdate)
-      : mlir::RewritePattern(triton::DotOp::getOperationName(), 1, ctx),
-        mmaToUpdate(mmaToUpdate) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-
-    auto dotOp = cast<triton::DotOp>(op);
-    auto *ctx = dotOp->getContext();
-    auto AT = dotOp.a().getType().cast<RankedTensorType>();
-    auto BT = dotOp.b().getType().cast<RankedTensorType>();
-    auto DT = dotOp.d().getType().cast<RankedTensorType>();
-    if (!DT.getEncoding())
-      return failure();
-    auto mmaLayout = DT.getEncoding().dyn_cast<MmaEncodingAttr>();
-    if (!(mmaLayout && mmaLayout.isVolta()))
-      return failure();
-
-    // Has processed.
-    if (mmaToUpdate.count(mmaLayout))
-      return failure();
-
-    auto dotOperandA = AT.getEncoding().cast<DotOperandEncodingAttr>();
-    auto dotOperandB = BT.getEncoding().cast<DotOperandEncodingAttr>();
-    bool isARow = dotOperandA.getIsMMAv1Row().cast<BoolAttr>().getValue();
-    bool isBRow = dotOperandB.getIsMMAv1Row().cast<BoolAttr>().getValue();
-    auto [isARow_, isBRow_, isAVec4, isBVec4] =
-        mmaLayout.decodeVoltaLayoutStates();
-    if (isARow_ == isARow && isBRow_ == isBRow) {
-      return failure(); // No need to update
-    }
-
-    auto newMmaLayout = MmaEncodingAttr::get(
-        ctx, mmaLayout.getVersionMajor(), mmaLayout.getWarpsPerCTA(),
-        AT.getShape(), BT.getShape(), isARow, isBRow);
-
-    // Collect the wrong MMA Layouts, and mark need to update.
-    mmaToUpdate.try_emplace(mmaLayout, newMmaLayout);
-
-    return failure();
   }
 };
 
@@ -1359,145 +1273,6 @@ public:
   }
 };
 
-// Correct the versionMinor field in MmaEncodingAttr for Volta.
-class UpdateMMAVersionMinorForVolta : public mlir::RewritePattern {
-  const DenseMap<MmaEncodingAttr, MmaEncodingAttr> &mmaToUpdate;
-  enum class Kind {
-    kUnk,
-    kCvtToMma,
-    kCvtToDotOp,
-    kDot,
-    kConstant,
-  };
-  mutable Kind rewriteKind{Kind::kUnk};
-
-public:
-  UpdateMMAVersionMinorForVolta(
-      mlir::MLIRContext *ctx, llvm::StringRef opName,
-      const DenseMap<MmaEncodingAttr, MmaEncodingAttr> &mmaToUpdate)
-      : RewritePattern(opName, 1 /*benefit*/, ctx), mmaToUpdate(mmaToUpdate) {}
-
-  LogicalResult match(Operation *op) const override {
-    MmaEncodingAttr mma;
-    if (mmaToUpdate.empty())
-      return failure();
-    if (op->getNumResults() != 1)
-      return failure();
-    auto tensorTy = op->getResult(0).getType().dyn_cast<RankedTensorType>();
-    if (!tensorTy)
-      return failure();
-
-    // ConvertLayoutOp
-    if (auto cvt = llvm::dyn_cast<ConvertLayoutOp>(op)) {
-      // cvt X -> dot_operand
-      if (auto dotOperand =
-              tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>()) {
-        mma = dotOperand.getParent().dyn_cast<MmaEncodingAttr>();
-        rewriteKind = Kind::kCvtToDotOp;
-        if (mma && mmaToUpdate.count(mma))
-          return success();
-      }
-      if ((mma = tensorTy.getEncoding().dyn_cast<MmaEncodingAttr>())) {
-        // cvt X -> mma
-        rewriteKind = Kind::kCvtToMma;
-        if (mma && mmaToUpdate.count(mma))
-          return success();
-      }
-    } else if (auto dot = llvm::dyn_cast<DotOp>(op)) {
-      // DotOp
-      mma = dot.d()
-                .getType()
-                .cast<RankedTensorType>()
-                .getEncoding()
-                .dyn_cast<MmaEncodingAttr>();
-      rewriteKind = Kind::kDot;
-    } else if (auto constant = llvm::dyn_cast<arith::ConstantOp>(op)) {
-      // ConstantOp
-      mma = tensorTy.getEncoding().dyn_cast<MmaEncodingAttr>();
-      rewriteKind = Kind::kConstant;
-    }
-
-    return success(mma && mmaToUpdate.count(mma));
-  }
-
-  void rewrite(Operation *op, PatternRewriter &rewriter) const override {
-    switch (rewriteKind) {
-    case Kind::kDot:
-      rewriteDot(op, rewriter);
-      break;
-    case Kind::kConstant:
-      rewriteConstant(op, rewriter);
-      break;
-    case Kind::kCvtToDotOp:
-      rewriteCvtDotOp(op, rewriter);
-      break;
-    case Kind::kCvtToMma:
-      rewriteCvtToMma(op, rewriter);
-      break;
-    default:
-      llvm::report_fatal_error("Not supported rewrite kind");
-    }
-  }
-
-private:
-  void rewriteCvtDotOp(Operation *op, PatternRewriter &rewriter) const {
-    auto *ctx = op->getContext();
-    auto cvt = llvm::cast<ConvertLayoutOp>(op);
-    auto tensorTy = cvt.result().getType().cast<RankedTensorType>();
-    auto dotOperand = tensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-    MmaEncodingAttr newMma =
-        mmaToUpdate.lookup(dotOperand.getParent().cast<MmaEncodingAttr>());
-    auto newDotOperand = DotOperandEncodingAttr::get(
-        ctx, dotOperand.getOpIdx(), newMma, dotOperand.getIsMMAv1Row());
-    auto newTensorTy = RankedTensorType::get(
-        tensorTy.getShape(), tensorTy.getElementType(), newDotOperand);
-    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, newTensorTy,
-                                                 cvt.getOperand());
-  }
-
-  void rewriteDot(Operation *op, PatternRewriter &rewriter) const {
-    auto *ctx = op->getContext();
-    auto dot = llvm::cast<DotOp>(op);
-    auto tensorTy = dot.d().getType().cast<RankedTensorType>();
-    auto mma = tensorTy.getEncoding().cast<MmaEncodingAttr>();
-    auto newMma = mmaToUpdate.lookup(mma);
-    auto newTensorTy = RankedTensorType::get(tensorTy.getShape(),
-                                             tensorTy.getElementType(), newMma);
-    rewriter.replaceOpWithNewOp<DotOp>(op, newTensorTy, dot.a(), dot.b(),
-                                       dot.c(), dot.allowTF32());
-  }
-
-  void rewriteCvtToMma(Operation *op, PatternRewriter &rewriter) const {
-    auto *ctx = op->getContext();
-    auto cvt = llvm::cast<ConvertLayoutOp>(op);
-    auto tensorTy = cvt.result().getType().cast<RankedTensorType>();
-    auto mma = tensorTy.getEncoding().cast<MmaEncodingAttr>();
-    auto newMma = mmaToUpdate.lookup(mma);
-    auto newTensorTy = RankedTensorType::get(tensorTy.getShape(),
-                                             tensorTy.getElementType(), newMma);
-    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, newTensorTy,
-                                                 cvt.getOperand());
-  }
-
-  void rewriteConstant(Operation *op, PatternRewriter &rewriter) const {
-    auto *ctx = op->getContext();
-    auto constant = llvm::cast<arith::ConstantOp>(op);
-    auto tensorTy = constant.getResult().getType().dyn_cast<RankedTensorType>();
-    auto mma = tensorTy.getEncoding().cast<MmaEncodingAttr>();
-    auto newMma = mmaToUpdate.lookup(mma);
-    auto newTensorTy = RankedTensorType::get(tensorTy.getShape(),
-                                             tensorTy.getElementType(), newMma);
-    if (auto attr = constant.getValue().dyn_cast<SplatElementsAttr>()) {
-      auto newRet =
-          SplatElementsAttr::get(newTensorTy, attr.getSplatValue<Attribute>());
-      rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, newTensorTy, newRet);
-      return;
-    }
-
-    assert(false && "Not supported ConstantOp value type");
-  }
-};
-
 } // namespace
 
 #define GEN_PASS_CLASSES
@@ -1534,31 +1309,7 @@ public:
       signalPassFailure();
     }
 
-    llvm::DenseMap<MmaEncodingAttr, MmaEncodingAttr> mmaToUpdate;
-    {
-      mlir::RewritePatternSet patterns(context);
-      patterns.add<CollectMmaToUpdateForVolta>(context, mmaToUpdate);
-      if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
-        signalPassFailure();
-    }
-    {
-      mlir::RewritePatternSet patterns(context);
-      patterns.add<UpdateMMAVersionMinorForVolta>(
-          context, DotOp::getOperationName(), mmaToUpdate);
-      patterns.add<UpdateMMAVersionMinorForVolta>(
-          context, ConvertLayoutOp::getOperationName(), mmaToUpdate);
-      patterns.add<UpdateMMAVersionMinorForVolta>(
-          context, arith::ConstantOp::getOperationName(), mmaToUpdate);
-      mlir::GreedyRewriteConfig config;
-      config.useTopDownTraversal = true;
-
-      if (applyPatternsAndFoldGreedily(m, std::move(patterns), config).failed())
-        signalPassFailure();
-    }
-
-    mlir::RewritePatternSet loopFixup(context);
-    loopFixup.add<FixupLoop>(context);
-    if (applyPatternsAndFoldGreedily(m, std::move(loopFixup)).failed()) {
+    if (fixupLoops(m).failed()) {
       signalPassFailure();
     }
   }
