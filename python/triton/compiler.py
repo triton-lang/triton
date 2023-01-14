@@ -1121,14 +1121,16 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
       ptr_info.valid = false;
       return ptr_info;
     }}
-    PyObject *is_cuda = PyObject_GetAttrString(obj, "is_cuda");
-    if (is_cuda && PyObject_RichCompareBool(is_cuda, Py_False, Py_EQ)) {{
-       PyErr_Format(PyExc_ValueError, "Pointer argument (at %d) must be on cuda", idx);
-       Py_DECREF(is_cuda);
-        ptr_info.valid = false;
-       return ptr_info;
-    }}
     ptr_info.dev_ptr = PyLong_AsUnsignedLongLong(ret);
+    unsigned attr;
+    CUresult status =
+        cuPointerGetAttribute(&attr, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, ptr_info.dev_ptr);
+    if (!(attr == CU_MEMORYTYPE_DEVICE || attr == CU_MEMORYTYPE_UNIFIED) ||
+        !(status == CUDA_SUCCESS)) {{
+        PyErr_Format(PyExc_ValueError,
+                     "Pointer argument (at %d) cannot be accessed from Triton (cpu tensor?)", idx);
+        ptr_info.valid = false;
+    }}
     return ptr_info;
   }}
   PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
