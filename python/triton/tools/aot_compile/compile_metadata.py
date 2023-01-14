@@ -8,12 +8,6 @@ import triton.language as tl
 from triton.compiler import instance_descriptor, kernel_suffix
 from triton import JITFunction
 
-# TODO: Import from compiler when working with full trition
-# from collections import namedtuple
-# instance_descriptor = namedtuple(
-#     "instance_descriptor", ["divisible_by_16", "equal_to_1"], defaults=[set(), set()]
-# )
-
 
 def _exists(v):
     return v is not None
