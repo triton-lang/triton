@@ -1394,7 +1394,7 @@ struct MMA16816ConversionHelper {
       unsigned colsPerThread = numRepN * 2;
       PTXBuilder builder;
       auto &mma = *builder.create(helper.getMmaInstr().str());
-      auto retArgs = builder.newListOperand(4, "=r");
+      auto retArgs = builder.newListOperand(4, "=f");
       auto aArgs = builder.newListOperand({
           {ha[{m, k}], "r"},
           {ha[{m + 1, k}], "r"},
