@@ -477,9 +477,9 @@ def zeros(shape: List[int], dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_splat(_0, shape), ret_ty)
 
 
-def fill(shape: List[int], value: tl.constexpr, dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
+def fill(shape: List[int], value, dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
     get_value_fn = getattr(builder, f"get_{dtype.name}")
-    _value = get_value_fn(value.value)
+    _value = get_value_fn(value)
     ret_ty = tl.block_type(dtype, shape)
     return tl.tensor(builder.create_splat(_value, shape), ret_ty)
 

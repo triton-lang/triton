@@ -716,19 +716,18 @@ def fill(shape, value, dtype, _builder=None):
     Returns a tensor filled with the scalar value for the given :code:`shape` and :code:`dtype`.
 
     :param shape: Shape of the new array, e.g., (8, 16) or (8, )
-    :value value: Value to fill the array with, must be a constant
+    :value value: A scalar value to fill the array with
     :type shape: tuple of ints
     :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
     :type dtype: DType
     """
-    if not isinstance(value, constexpr):
-        raise TypeError("Value must have type `constexpr`")
     for i, d in enumerate(shape):
         if not isinstance(d, constexpr):
             raise TypeError(f"Shape element {i} must have type `constexpr`")
         if not isinstance(d.value, int):
             raise TypeError(f"Shape element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
     shape = [x.value for x in shape]
+    value = _constexpr_to_value(value)
     dtype = _constexpr_to_value(dtype)
     return semantic.fill(shape, value, dtype, _builder)
 
