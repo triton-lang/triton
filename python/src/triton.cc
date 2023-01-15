@@ -499,20 +499,14 @@ void init_triton_ir(py::module &&m) {
       .def("get_fp16",
            [](mlir::OpBuilder &self, float v) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             auto type = self.getF16Type();
-             return self.create<mlir::arith::ConstantFloatOp>(
-                 loc,
-                 mlir::APFloat(type.getFloatSemantics(), std::to_string(v)),
-                 type);
+             return self.create<mlir::arith::ConstantOp>(
+                 loc, self.getF16FloatAttr(v));
            })
       .def("get_fp32",
            [](mlir::OpBuilder &self, float v) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             auto type = self.getF32Type();
-             return self.create<mlir::arith::ConstantFloatOp>(
-                 loc,
-                 mlir::APFloat(type.getFloatSemantics(), std::to_string(v)),
-                 type);
+             return self.create<mlir::arith::ConstantOp>(
+                 loc, self.getF32FloatAttr(v));
            })
       .def("get_null_value",
            [](mlir::OpBuilder &self, mlir::Type type) -> mlir::Value {
