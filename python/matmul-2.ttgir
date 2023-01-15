@@ -82,8 +82,6 @@ module attributes {"triton_gpu.num-warps" = 8 : i32} {
     %61 = triton_gpu.insert_slice_async %57, %53, %c1_i32, %60 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x64x!tt.ptr<f16>, #blocked0> -> tensor<3x128x64xf16, #shared>
     %62 = tt.splat %59 : (i1) -> tensor<64x256xi1, #blocked1>
     %63 = triton_gpu.insert_slice_async %58, %56, %c1_i32, %62 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64x256x!tt.ptr<f16>, #blocked1> -> tensor<3x64x256xf16, #shared>
-    %64 = tt.addptr %57, %cst_0 : tensor<128x64x!tt.ptr<f16>, #blocked0>, tensor<128x64xi32, #blocked0>
-    %65 = tt.addptr %58, %41 : tensor<64x256x!tt.ptr<f16>, #blocked1>, tensor<64x256xi32, #blocked1>
     triton_gpu.async_wait {num = 2 : i32}
     %66 = tensor.extract_slice %61[0, 0, 0] [1, 128, 64] [1, 1, 1] : tensor<3x128x64xf16, #shared> to tensor<128x64xf16, #shared>
     %67 = tensor.extract_slice %63[0, 0, 0] [1, 64, 256] [1, 1, 1] : tensor<3x64x256xf16, #shared> to tensor<64x256xf16, #shared>
@@ -91,7 +89,7 @@ module attributes {"triton_gpu.num-warps" = 8 : i32} {
     %69 = tensor.extract_slice %67[0, 0] [16, 256] [1, 1] : tensor<64x256xf16, #shared> to tensor<16x256xf16, #shared>
     %70 = triton_gpu.convert_layout %68 : (tensor<128x16xf16, #shared>) -> tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>>
     %71 = triton_gpu.convert_layout %69 : (tensor<16x256xf16, #shared>) -> tensor<16x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>>
-    %72:14 = scf.for %arg9 = %c0 to %39 step %c64 iter_args(%arg10 = %cst, %arg11 = %45, %arg12 = %49, %arg13 = %61, %arg14 = %63, %arg15 = %66, %arg16 = %67, %arg17 = %64, %arg18 = %65, %arg19 = %c64, %arg20 = %c2_i32, %arg21 = %c1_i32, %arg22 = %70, %arg23 = %71) -> (tensor<128x256xf32, #mma>, tensor<128x64x!tt.ptr<f16>, #blocked0>, tensor<64x256x!tt.ptr<f16>, #blocked1>, tensor<3x128x64xf16, #shared>, tensor<3x64x256xf16, #shared>, tensor<128x64xf16, #shared>, tensor<64x256xf16, #shared>, tensor<128x64x!tt.ptr<f16>, #blocked0>, tensor<64x256x!tt.ptr<f16>, #blocked1>, index, i32, i32, tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>>, tensor<16x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>>) {
+    %72:12 = scf.for %arg9 = %c0 to %39 step %c64 iter_args(%arg10 = %cst, %arg11 = %57, %arg12 = %58, %arg13 = %61, %arg14 = %63, %arg15 = %66, %arg16 = %67, %arg19 = %c64, %arg20 = %c2_i32, %arg21 = %c1_i32, %arg22 = %70, %arg23 = %71) -> (tensor<128x256xf32, #mma>, tensor<128x64x!tt.ptr<f16>, #blocked0>, tensor<64x256x!tt.ptr<f16>, #blocked1>, tensor<3x128x64xf16, #shared>, tensor<3x64x256xf16, #shared>, tensor<128x64xf16, #shared>, tensor<64x256xf16, #shared>, index, i32, i32, tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>>, tensor<16x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>>) {
       %190 = tensor.extract_slice %arg15[0, 16] [128, 16] [1, 1] : tensor<128x64xf16, #shared> to tensor<128x16xf16, #shared>
       %191 = tensor.extract_slice %arg16[16, 0] [16, 256] [1, 1] : tensor<64x256xf16, #shared> to tensor<16x256xf16, #shared>
       %192 = triton_gpu.convert_layout %190 : (tensor<128x16xf16, #shared>) -> tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>>
@@ -111,17 +109,18 @@ module attributes {"triton_gpu.num-warps" = 8 : i32} {
       %94 = tt.dot %92, %93, %194 {allowTF32 = true} : tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>> * tensor<16x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>> -> tensor<128x256xf32, #mma>
       %99 = tt.dot %97, %98, %94 {allowTF32 = true} : tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>> * tensor<16x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>> -> tensor<128x256xf32, #mma>
 
+      %100 = tt.addptr %arg11, %cst_0 : tensor<128x64x!tt.ptr<f16>, #blocked0>, tensor<128x64xi32, #blocked0>
+      %101 = tt.addptr %arg12, %41 : tensor<64x256x!tt.ptr<f16>, #blocked1>, tensor<64x256xi32, #blocked1>
+
       %102 = arith.addi %arg19, %c64 : index
       %103 = arith.cmpi slt, %102, %39 : index
       %104 = arith.remsi %arg20, %c3_i32 : i32
       %105 = arith.remsi %arg21, %c3_i32 : i32
       %106 = arith.index_cast %105 : i32 to index
       %107 = tt.splat %103 : (i1) -> tensor<128x64xi1, #blocked0>
-      %108 = triton_gpu.insert_slice_async %arg17, %arg13, %104, %107 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x64x!tt.ptr<f16>, #blocked0> -> tensor<3x128x64xf16, #shared>
+      %108 = triton_gpu.insert_slice_async %100, %arg13, %104, %107 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x64x!tt.ptr<f16>, #blocked0> -> tensor<3x128x64xf16, #shared>
       %109 = tt.splat %103 : (i1) -> tensor<64x256xi1, #blocked1>
-      %110 = triton_gpu.insert_slice_async %arg18, %arg14, %104, %109 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64x256x!tt.ptr<f16>, #blocked1> -> tensor<3x64x256xf16, #shared>
-      %111 = tt.addptr %arg17, %cst_0 : tensor<128x64x!tt.ptr<f16>, #blocked0>, tensor<128x64xi32, #blocked0>
-      %112 = tt.addptr %arg18, %41 : tensor<64x256x!tt.ptr<f16>, #blocked1>, tensor<64x256xi32, #blocked1>
+      %110 = triton_gpu.insert_slice_async %101, %arg14, %104, %109 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64x256x!tt.ptr<f16>, #blocked1> -> tensor<3x64x256xf16, #shared>
       triton_gpu.async_wait {num = 2 : i32}
       %113 = tensor.extract_slice %108[%106, 0, 0] [1, 128, 64] [1, 1, 1] : tensor<3x128x64xf16, #shared> to tensor<128x64xf16, #shared>
       %114 = tensor.extract_slice %110[%106, 0, 0] [1, 64, 256] [1, 1, 1] : tensor<3x64x256xf16, #shared> to tensor<64x256xf16, #shared>
@@ -131,9 +130,7 @@ module attributes {"triton_gpu.num-warps" = 8 : i32} {
       %118 = tensor.extract_slice %114[0, 0] [16, 256] [1, 1] : tensor<64x256xf16, #shared> to tensor<16x256xf16, #shared>
       %119 = triton_gpu.convert_layout %117 : (tensor<128x16xf16, #shared>) -> tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>>
       %120 = triton_gpu.convert_layout %118 : (tensor<16x256xf16, #shared>) -> tensor<16x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>>
-      %100 = tt.addptr %arg11, %cst_0 : tensor<128x64x!tt.ptr<f16>, #blocked0>, tensor<128x64xi32, #blocked0>
-      %101 = tt.addptr %arg12, %41 : tensor<64x256x!tt.ptr<f16>, #blocked1>, tensor<64x256xi32, #blocked1>
-      scf.yield %99, %100, %101, %108, %110, %113, %114, %111, %112, %102, %115, %116, %119, %120 : tensor<128x256xf32, #mma>, tensor<128x64x!tt.ptr<f16>, #blocked0>, tensor<64x256x!tt.ptr<f16>, #blocked1>, tensor<3x128x64xf16, #shared>, tensor<3x64x256xf16, #shared>, tensor<128x64xf16, #shared>, tensor<64x256xf16, #shared>, tensor<128x64x!tt.ptr<f16>, #blocked0>, tensor<64x256x!tt.ptr<f16>, #blocked1>, index, i32, i32, tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>>, tensor<16x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>>
+      scf.yield %99, %100, %101, %108, %110, %113, %114, %102, %115, %116, %119, %120 : tensor<128x256xf32, #mma>, tensor<128x64x!tt.ptr<f16>, #blocked0>, tensor<64x256x!tt.ptr<f16>, #blocked1>, tensor<3x128x64xf16, #shared>, tensor<3x64x256xf16, #shared>, tensor<128x64xf16, #shared>, tensor<64x256xf16, #shared>, index, i32, i32, tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>>, tensor<16x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>>
     }
     triton_gpu.async_wait {num = 0 : i32}
     
