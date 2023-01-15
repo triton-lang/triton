@@ -885,7 +885,7 @@ def test_f16_to_f8_rounding():
 
 
 def get_reduced_dtype(dtype_str, op):
-    if op == 'argmin' or op == 'argmax':
+    if op in ('argmin', 'argmax'):
         return 'int32'
     if dtype_str in ['int8', 'uint8', 'int16', 'uint16']:
         return 'int32'
@@ -917,7 +917,7 @@ def test_reduce1d(op, dtype_str, shape, device='cuda'):
     numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min,
                 'argmin': np.argmin, 'argmax': np.argmax}[op]
     # numpy result
-    z_dtype_str = 'int32' if op == 'argmin' or op == 'argmax' else dtype_str
+    z_dtype_str = 'int32' if op in ('argmin', 'argmax') else dtype_str
     z_tri_dtype_str = z_dtype_str
     if op not in ['argmin', 'argmax'] and dtype_str == 'bfloat16':
         z_dtype_str = 'float32'
@@ -936,7 +936,7 @@ def test_reduce1d(op, dtype_str, shape, device='cuda'):
     if op == 'sum':
         np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
     else:
-        if op == 'argmin' or op == 'argmax':
+        if op in ('argmin', 'argmax'):
             # argmin and argmax can have multiple valid indices.
             # so instead we compare the values pointed by indices
             np.testing.assert_equal(x[z_ref], x[z_tri])
@@ -1013,7 +1013,7 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
     if op == 'sum':
         np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
     else:
-        if op == 'argmin' or op == 'argmax':
+        if op in ('argmin', 'argmax'):
             # argmin and argmax can have multiple valid indices.
             # so instead we compare the values pointed by indices
             z_ref_index = np.expand_dims(z_ref, axis=axis)
