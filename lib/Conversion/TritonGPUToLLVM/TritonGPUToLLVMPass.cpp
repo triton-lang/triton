@@ -221,7 +221,7 @@ public:
                                                             patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateStdToLLVMConversionPatterns(typeConverter, patterns);
- #ifdef USE_ROCM
+#ifdef USE_ROCM
     mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns, mlir::gpu::amd::HIP);
 #else
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);

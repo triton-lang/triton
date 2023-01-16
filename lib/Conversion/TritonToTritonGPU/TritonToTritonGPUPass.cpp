@@ -320,20 +320,7 @@ struct TritonTransPattern : public OpConversionPattern<triton::TransOp> {
       src = rewriter.create<triton::gpu::ConvertLayoutOp>(src.getLoc(), srcType,
                                                           src);
     }
-    auto srcSharedEncoding =
-        srcEncoding.cast<triton::gpu::SharedEncodingAttr>();
-    SmallVector<unsigned> retOrder(srcSharedEncoding.getOrder().begin(),
-                                   srcSharedEncoding.getOrder().end());
-    SmallVector<int64_t> retShapes(srcType.getShape().begin(),
-                                   srcType.getShape().end());
-    std::reverse(retOrder.begin(), retOrder.end());
-    std::reverse(retShapes.begin(), retShapes.end());
-    auto retEncoding =
-        triton::gpu::SharedEncodingAttr::get(getContext(), 1, 1, 1, retOrder);
-    auto retType =
-        RankedTensorType::get(retShapes, srcType.getElementType(), retEncoding);
-
-    rewriter.replaceOpWithNewOp<triton::TransOp>(op, retType, src);
+    rewriter.replaceOpWithNewOp<triton::TransOp>(op, src);
     return success();
   }
 };

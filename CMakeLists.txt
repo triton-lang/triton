@@ -235,8 +235,10 @@ target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
 
 if(WIN32)
     target_link_libraries(triton PRIVATE ${LLVM_LIBRARIES} dl) # dl is from dlfcn-win32
-else()
+elseif(APPLE)
     target_link_libraries(triton ${LLVM_LIBRARIES} z)
+else()
+    target_link_libraries(triton ${LLVM_LIBRARIES} z stdc++fs)
 endif()
 
 
