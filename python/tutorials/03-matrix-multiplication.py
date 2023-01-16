@@ -240,7 +240,7 @@ def matmul_kernel(
     tl.store(c_ptrs, c, mask=c_mask)
 
 
-# matmul_kernel = triton.compile("./matmul-2.ttgir", num_warps=8)
+# matmul_kernel = triton.compile("./matmul.ttgir", num_warps=8)
 # matmul_kernel = triton.compile("./slow.ptx", num_warps=8, shared=147456)
 
 # we can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`
