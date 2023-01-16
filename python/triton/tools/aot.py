@@ -1,5 +1,6 @@
 import argparse
 import sys
+
 import triton
 import triton._C.libtriton.triton as libtriton
 
