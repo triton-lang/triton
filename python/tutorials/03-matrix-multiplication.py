@@ -240,7 +240,7 @@ def matmul_kernel(
     tl.store(c_ptrs, c, mask=c_mask)
 
 
-matmul_kernel = triton.compile("./matmul-2.ttgir", num_warps=8)
+# matmul_kernel = triton.compile("./matmul-2.ttgir", num_warps=8)
 # matmul_kernel = triton.compile("./slow.ptx", num_warps=8, shared=147456)
 
 # we can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`
@@ -272,22 +272,22 @@ def matmul(a, b, activation=None):
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
     )
-    # matmul_kernel[grid](
-    #     a, b, c,
-    #     M, N, K,
-    #     a.stride(0), a.stride(1),
-    #     b.stride(0), b.stride(1),
-    #     c.stride(0), c.stride(1),
-    #     ACTIVATION=activation,
-    # )
-    grid = (triton.cdiv(M, 128) * triton.cdiv(N, 256), 1, 1)
     matmul_kernel[grid](
-        a.data_ptr(), b.data_ptr(), c.data_ptr(),
+        a, b, c,
         M, N, K,
-        a.stride(0),
-        b.stride(0),
-        c.stride(0)
+        a.stride(0), a.stride(1),
+        b.stride(0), b.stride(1),
+        c.stride(0), c.stride(1),
+        ACTIVATION=activation,
     )
+    # grid = (triton.cdiv(M, 128) * triton.cdiv(N, 256), 1, 1)
+    # matmul_kernel[grid](
+    #     a.data_ptr(), b.data_ptr(), c.data_ptr(),
+    #     M, N, K,
+    #     a.stride(0),
+    #     b.stride(0),
+    #     c.stride(0)
+    # )
     return c
 
 

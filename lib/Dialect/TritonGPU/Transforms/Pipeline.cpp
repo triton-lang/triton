@@ -319,6 +319,9 @@ void LoopPipeliner::emitPrologue() {
       }
 
       // Update mapping of results
+      if (stage == numStages - 2)
+        continue;
+
       for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
         Value originalResult = op->getResult(dstIdx);
         // copy_async will update the value of its only use
@@ -383,7 +386,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   //   (original args)
   //   (insertSliceAsync buffer at stage numStages - 1) for each load
   //   (extracted tensor) for each load
-  //   (depArgs at stage numStages - 1)
+  //   (depArgs at stage numStages - 2)
   //   (iv at stage numStages - 2)
   //   (pipeline iteration index)
   //   (loop iteration index)
@@ -404,7 +407,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   size_t depArgsBeginIdx = newLoopArgs.size();
   for (BlockArgument depArg : depArgs) {
     depArgsIdx[depArg] = newLoopArgs.size();
-    newLoopArgs.push_back(valueMapping[depArg][numStages - 1]);
+    newLoopArgs.push_back(valueMapping[depArg][numStages - 2]);
   }
 
   size_t nextIVIdx = newLoopArgs.size();
@@ -463,10 +466,12 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   DenseMap<BlockArgument, Value> depArgsMapping;
   size_t argIdx = 0;
   for (BlockArgument arg : depArgs) {
-    nextMapping.map(arg,
-                    newForOp.getRegionIterArgs()[argIdx + depArgsBeginIdx]);
+    BlockArgument nextArg =
+        newForOp.getRegionIterArgs()[argIdx + depArgsBeginIdx];
+    nextMapping.map(arg, nextArg);
     ++argIdx;
   }
+
   // Special handling for iv & loop condition
   Value nextIV = builder.create<arith::AddIOp>(
       newForOp.getInductionVar().getLoc(),
@@ -491,6 +496,24 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   extractSliceIndex = builder.create<arith::IndexCastOp>(
       extractSliceIndex.getLoc(), builder.getIndexType(), extractSliceIndex);
 
+  DenseMap<Operation *, Operation *> tmpDirtyHack;
+  for (Operation *op : orderedDeps)
+    if (!loads.contains(op->getResult(0))) {
+      Operation *newOp = builder.clone(*op, nextMapping);
+      tmpDirtyHack[op] = newOp;
+
+      auto originYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+      for (OpOperand &operand : originYield->getOpOperands()) {
+        if (operand.get() == op->getResult(0)) {
+          size_t originIdx = operand.getOperandNumber();
+          size_t newArgIdx = depArgsIdx[forOp.getRegionIterArgs()[originIdx]];
+          BlockArgument newArg = newForOp.getRegionIterArgs()[newArgIdx];
+          nextMapping.map(forOp.getRegionIterArgs()[originIdx],
+                          newOp->getResult(0));
+        }
+      }
+    }
+
   for (Operation *op : orderedDeps) {
     Operation *nextOp = nullptr;
     // Update loading mask
@@ -511,6 +534,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
       } else
         newMask = builder.create<triton::SplatOp>(
             loadOp.getLoc(), getI1SameShape(loadOp), nextLoopCond);
+      llvm::outs() << loadOp.ptr() << "\n";
       Value insertAsyncOp = builder.create<triton::gpu::InsertSliceAsyncOp>(
           op->getLoc(), loadsBuffer[loadOp].getType(),
           nextMapping.lookupOrDefault(loadOp.ptr()),
@@ -532,8 +556,9 @@ scf::ForOp LoopPipeliner::createNewForOp() {
                                     int_attr(sliceType.getShape()[1])},
           SmallVector<OpFoldResult>{int_attr(1), int_attr(1), int_attr(1)});
       extractSlices.push_back(nextOp->getResult(0));
-    } else
-      nextOp = builder.clone(*op, nextMapping);
+    } else {
+      nextOp = tmpDirtyHack.lookup(op);
+    }
     // Update mapping of results
     for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
       nextMapping.map(op->getResult(dstIdx), nextOp->getResult(dstIdx));
