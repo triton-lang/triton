@@ -600,6 +600,7 @@ MmaEncodingAttr::decodeVoltaLayoutStates() const {
   bool isBRow = versionMinor & (1 << 1);
   bool isAVec4 = versionMinor & (1 << 2);
   bool isBVec4 = versionMinor & (1 << 3);
+  llvm::outs() << "** isAVec4, isBVec4: " << isAVec4 << " " << isBVec4 << "\n";
   int id = static_cast<bool>(versionMinor & (1 << (4 + 2)));
   id = (id << 1) + static_cast<bool>(versionMinor & (1 << (4 + 1)));
   id = (id << 1) + static_cast<bool>(versionMinor & (1 << (4 + 0)));

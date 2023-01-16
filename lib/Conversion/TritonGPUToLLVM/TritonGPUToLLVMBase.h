@@ -387,7 +387,7 @@ public:
         ret.push_back({i + 2, j + 9});
       }
     }
-    printf("**** emitOffsetForMmaLayoutV1 ret.size: %lu\n", ret.size());
+
     return ret;
   }
 
@@ -471,6 +471,9 @@ public:
   SmallVector<SmallVector<Value>> emitIndicesForDistributedLayout(
       Location loc, ConversionPatternRewriter &rewriter,
       const Attribute &layout, ArrayRef<int64_t> shape) const {
+    if (auto mmaLayout = layout.template dyn_cast<MmaEncodingAttr>()) {
+      assert(!mmaLayout.isVolta());
+    }
 
     // step 1, delinearize threadId to get the base index
     auto multiDimBase = emitBaseIndexForLayout(loc, rewriter, layout, shape);

@@ -212,7 +212,7 @@ private:
         acc[idx[i]] = elem;
       }
 
-#define SHOW_MMA_V1 0
+#define SHOW_MMA_V1 1
 #if SHOW_MMA_V1
       {
         std::vector<Value> args = {ha.first, ha.second, hb.first, hb.second};
@@ -236,9 +236,13 @@ private:
           pargs.push_back(acc[idx[i]]);
         }
 
+        // LLVM::vprintf("mma t-%d [%d %d %d] A:(%f,%f) (%f,%f) B:(%f,%f)
+        // (%f,%f) "
+        //               "C:(%f,%f,%f,%f,%f,%f,%f,%f)"
+        //               " D:(%f,%f,%f,%f,%f,%f,%f,%f)",
+        //               pargs, rewriter);
         LLVM::vprintf("mma t-%d [%d %d %d] A:(%f,%f) (%f,%f) B:(%f,%f) (%f,%f) "
-                      "C:(%f,%f,%f,%f,%f,%f,%f,%f)"
-                      " D:(%f,%f,%f,%f,%f,%f,%f,%f)",
+                      "C:(%f,%f,%f,%f,%f,%f,%f,%f)",
                       pargs, rewriter);
       }
 #endif

@@ -40,6 +40,8 @@ struct BroadcastOpConversion
   LogicalResult
   matchAndRewrite(triton::BroadcastOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    LLVM::gThreadId =
+        getThreadId(rewriter, UnknownLoc::get(rewriter.getContext()));
     // Following the order of indices in the legacy code, a broadcast of:
     //   [s(0), s(1) ... s(k-1),    1, s(k+1), s(k+2) ... s(n-1)]
     // =>
@@ -68,10 +70,43 @@ struct BroadcastOpConversion
     auto srcOffsets = emitOffsetForLayout(srcLayout, srcShape);
     auto resultOffsets = emitOffsetForLayout(resultLayout, resultShape);
     SmallVector<Value> srcVals = getElementsFromStruct(loc, src, rewriter);
+    if (auto srcMma = srcLayout.dyn_cast<MmaEncodingAttr>()) {
+
+      // NOTE: This is just an naive fix, but for MMA layout, and 2-d fix should
+      // be all right.
+      // TODO[Superjomn]: Replace this with a generic implementation.
+      if (srcMma.isVolta()) {
+        int numElemsPerThread = srcMma.getElemsPerThread(resultTy.getShape());
+        int srcUniqElems = srcVals.size() / 2;
+        int dup = numElemsPerThread / srcUniqElems;
+        SmallVector<Value> retVals;
+        if (srcShape[0] == 1) { // add-cols
+          for (int i = 0; i < srcUniqElems; ++i) {
+            for (int k = 0; k < dup; ++k) {
+              retVals.push_back(srcVals[i * 2]);
+            }
+          }
+        } else { // add-rows
+          for (int k = 0; k < dup; ++k) {
+            for (int i = 0; i < srcUniqElems; ++i) {
+              retVals.push_back(srcVals[i]);
+            }
+          }
+        }
+
+        auto llvmStructTy = getTypeConverter()->convertType(resultTy);
+        Value ret = getStructFromElements(loc, retVals, rewriter, llvmStructTy);
+
+        rewriter.replaceOp(op, {ret});
+        return success();
+      }
+    }
+
     DenseMap<SmallVector<unsigned>, Value, SmallVectorKeyInfo> srcValues;
     for (size_t i = 0; i < srcOffsets.size(); i++) {
       srcValues[srcOffsets[i]] = srcVals[i];
     }
+
     SmallVector<Value> resultVals;
     for (size_t i = 0; i < resultOffsets.size(); i++) {
       auto offset = resultOffsets[i];
@@ -80,6 +115,29 @@ struct BroadcastOpConversion
           offset[j] = 0;
       resultVals.push_back(srcValues.lookup(offset));
     }
+
+    if (srcTy.getEncoding().isa<MmaEncodingAttr>() &&
+        resultTy.getEncoding().isa<MmaEncodingAttr>()) {
+      LLVM::vprintf_array(LLVM::gThreadId, srcVals, "bst-in", "%f", rewriter);
+      LLVM::vprintf_array(LLVM::gThreadId, resultVals, "bst-out", "%f",
+                          rewriter);
+    }
+
+    if (srcTy.getEncoding().isa<MmaEncodingAttr>() &&
+        resultTy.getEncoding().isa<MmaEncodingAttr>()) {
+      printf("-- broadcast src [%ld]: ", srcOffsets.size());
+      for (int i = 0; i < srcOffsets.size(); i++) {
+        printf("(%d,%d) ", srcOffsets[i][0], srcOffsets[i][1]);
+      }
+      printf("\n");
+
+      printf("-- broadcast dst[%ld]: ", resultOffsets.size());
+      for (int i = 0; i < resultOffsets.size(); i++) {
+        printf("(%d,%d) ", resultOffsets[i][0], resultOffsets[i][1]);
+      }
+      printf("\n");
+    }
+
     auto llvmStructTy = getTypeConverter()->convertType(resultTy);
     Value resultStruct =
         getStructFromElements(loc, resultVals, rewriter, llvmStructTy);
