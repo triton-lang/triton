@@ -75,12 +75,16 @@ struct SplatOpConversion
       } else if (mmaLayout.isVolta()) {
         DotOpMmaV1ConversionHelper helper(mmaLayout);
         bool isRow = layout.getIsMMAv1Row().cast<BoolAttr>().getValue();
+        auto [isARow, isBRow, isAVec4, isBVec4, _0] =
+            mmaLayout.decodeVoltaLayoutStates();
         if (layout.getOpIdx() == 0) {
-          DotOpMmaV1ConversionHelper::AParam aParam(isRow, shape);
-          numElems = helper.numElemsPerThreadA(shape, isRow, aParam.vec);
+          DotOpMmaV1ConversionHelper::AParam aParam(isARow, isAVec4);
+          numElems =
+              helper.numElemsPerThreadA(shape, isARow, isAVec4, aParam.vec);
         } else {
-          DotOpMmaV1ConversionHelper::BParam bParam(isRow, shape);
-          numElems = helper.numElemsPerThreadA(shape, isRow, bParam.vec);
+          DotOpMmaV1ConversionHelper::BParam bParam(isBRow, isBVec4);
+          numElems =
+              helper.numElemsPerThreadA(shape, isBRow, isBVec4, bParam.vec);
         }
       }
     } else if (auto blockedLayout = parent.dyn_cast<BlockedEncodingAttr>()) {

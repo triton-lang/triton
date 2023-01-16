@@ -118,15 +118,17 @@ public:
               mmaLayout.decodeVoltaLayoutStates();
           DotOpMmaV1ConversionHelper helper(mmaLayout);
           if (dotOpLayout.getOpIdx() == 0) { // $a
-            DotOpMmaV1ConversionHelper::AParam param(isARow, shape);
-            int elems = helper.numElemsPerThreadA(shape, isARow, param.vec);
+            DotOpMmaV1ConversionHelper::AParam param(isARow, isAVec4);
+            int elems =
+                helper.numElemsPerThreadA(shape, isARow, isAVec4, param.vec);
             printf("A.typeconverter.elems: %d\n", elems);
             Type x2Ty = vec_ty(elemTy, 2);
             return struct_ty(SmallVector<Type>(elems, x2Ty));
           }
           if (dotOpLayout.getOpIdx() == 1) { // $b
-            DotOpMmaV1ConversionHelper::BParam param(isBRow, shape);
-            int elems = helper.numElemsPerThreadB(shape, isBRow, param.vec);
+            DotOpMmaV1ConversionHelper::BParam param(isBRow, isBVec4);
+            int elems =
+                helper.numElemsPerThreadB(shape, isBRow, isBVec4, param.vec);
             printf("B.typeconverter.elems: %d\n", elems);
             Type x2Ty = vec_ty(elemTy, 2);
             return struct_ty(SmallVector<Type>(elems, x2Ty));

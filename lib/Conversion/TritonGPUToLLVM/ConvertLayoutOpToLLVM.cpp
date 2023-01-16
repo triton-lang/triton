@@ -410,10 +410,10 @@ private:
             getMultiDimOffset(layout, loc, rewriter, elemId, type.getShape(),
                               multiDimCTAInRepId, shapePerCTA);
         coord2val[elemId] = std::make_pair(multiDimOffset, vals[elemId]);
-        if (sliceLayout) {
-          LLVM::vprintf("acci %d", {multiDimOffset[0]}, rewriter);
-          printf("** vals.size: %ld\n", vals.size());
-        }
+        // if (sliceLayout) {
+        //   LLVM::vprintf("acci %d", {multiDimOffset[0]}, rewriter);
+        //   printf("** vals.size: %ld\n", vals.size());
+        // }
       }
 
       if (needTrans) {
@@ -425,7 +425,7 @@ private:
                                     isAVec4);
         int numN = accumSizePerThread / numM;
 
-#define SHOW_ACCI 1
+#define SHOW_ACCI 0
 #if SHOW_ACCI
         if (sliceLayout)
           for (unsigned elemId = 0; elemId < accumSizePerThread; elemId++) {

@@ -53,11 +53,6 @@ struct DotOpMmaV1ConversionHelper {
     bool isAVec4{};
     int vec{};
 
-    AParam(bool isARow, ArrayRef<int64_t> shape) {
-      isAVec4 = !isARow && shape[isARow] <= 16;
-      build(isARow);
-    }
-
     AParam(bool isARow, bool isAVec4) : isAVec4(isAVec4) { build(isARow); }
 
   private:
@@ -78,11 +73,6 @@ struct DotOpMmaV1ConversionHelper {
     SmallVector<int> spw;
     bool isBVec4{};
     int vec{};
-
-    BParam(bool isBRow, ArrayRef<int64_t> shape) {
-      isBVec4 = isBRow && shape[isBRow] <= 16;
-      build(isBRow);
-    }
 
     BParam(bool isBRow, bool isBVec4) : isBVec4(isBVec4) { build(isBRow); }
 
@@ -112,15 +102,6 @@ struct DotOpMmaV1ConversionHelper {
   }
 
   // Get the number of fp16x2 elements for $a.
-  unsigned getNumM(ArrayRef<int64_t> shapeA, bool isARow) const {
-    AParam param(isARow, shapeA);
-
-    printf("MN0 t-0 M rep:%d M:%ld spw:%d wpt:%d\n", param.rep[0], shapeA[0],
-           param.spw[0], wpt[0]);
-    unsigned numM = param.rep[0] * shapeA[0] / (param.spw[0] * wpt[0]);
-    return numM;
-  }
-
   unsigned getNumM(int M, bool isARow, bool isAVec4) const {
     AParam param(isARow, isAVec4);
 
@@ -129,15 +110,6 @@ struct DotOpMmaV1ConversionHelper {
   }
 
   // Get the number of fp16x2 elements for $b.
-  unsigned getNumN(ArrayRef<int64_t> shapeB, bool isBRow) const {
-    BParam param(isBRow, shapeB);
-    printf("MN0 t-0 N rep:%d N:%ld spw:%d wpt:%d\n", param.rep[1], shapeB[1],
-           param.spw[1], wpt[1]);
-
-    unsigned numN = param.rep[1] * shapeB[1] / (param.spw[1] * wpt[1]);
-    return numN;
-  }
-
   unsigned getNumN(int N, bool isBRow, bool isBVec4) const {
     BParam param(isBRow, isBVec4);
 
@@ -145,8 +117,9 @@ struct DotOpMmaV1ConversionHelper {
     return numN;
   }
 
-  int numElemsPerThreadA(ArrayRef<int64_t> shape, bool isRow, int vec) const {
-    int numM = getNumM(shape, isRow);
+  int numElemsPerThreadA(ArrayRef<int64_t> shape, bool isARow, bool isAVec4,
+                         int vec) const {
+    int numM = getNumM(shape[0], isARow, isAVec4);
     int NK = shape[1];
     // Here we mimic the logic in loadA, the result cannot be calculated
     // directly.
@@ -154,7 +127,7 @@ struct DotOpMmaV1ConversionHelper {
     auto ld = [&](int m, int k) {
       visited.insert({m, k});
       if (vec > 4) {
-        if (isRow)
+        if (isARow)
           visited.insert({m, k + 4});
         else
           visited.insert({m + 1, k});
@@ -171,8 +144,9 @@ struct DotOpMmaV1ConversionHelper {
     return visited.size() * 2;
   }
 
-  int numElemsPerThreadB(ArrayRef<int64_t> shape, bool isRow, int vec) const {
-    unsigned numN = getNumN(shape, isRow);
+  int numElemsPerThreadB(ArrayRef<int64_t> shape, bool isBRow, bool isBVec4,
+                         int vec) const {
+    unsigned numN = getNumN(shape[1], isBRow, isBVec4);
     int NK = shape[0];
     // Here we mimic the logic in loadA, the result cannot be calculated
     // directly.
@@ -181,7 +155,7 @@ struct DotOpMmaV1ConversionHelper {
     auto ld = [&](int n, int k) {
       visited.insert({n, k});
       if (vec > 4) {
-        if (isRow)
+        if (isBRow)
           visited.insert({n + 1, k});
         else
           visited.insert({n, k + 4});
@@ -212,9 +186,11 @@ struct DotOpMmaV1ConversionHelper {
     Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
 
     bool isARow = order[0] != 0;
-    AParam param(isARow, shape);
+    auto [isARow_, _0, isAVec4, _1, _2] = mmaLayout.decodeVoltaLayoutStates();
 
-    auto [offsetAM, offsetAK, _0, _1] = computeOffsets(
+    AParam param(isARow_, isAVec4);
+
+    auto [offsetAM, offsetAK, _3, _4] = computeOffsets(
         thread, isARow, false, fpw, param.spw, param.rep, rewriter, loc);
 
     int vecA = sharedLayout.getVec();
@@ -292,7 +268,7 @@ struct DotOpMmaV1ConversionHelper {
       }
     };
 
-    unsigned numM = getNumM(shape, order[0] == 1);
+    unsigned numM = getNumM(shape[0], isARow, isAVec4);
     for (unsigned k = 0; k < NK; k += 4)
       for (unsigned m = 0; m < numM / 2; ++m)
         if (!has.count({m, k}))
@@ -325,8 +301,11 @@ struct DotOpMmaV1ConversionHelper {
     auto order = sharedLayout.getOrder();
 
     Value smem = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
-    bool isBRow = order[0] != 0;
-    BParam param(isBRow, shape);
+    bool isBRow = order[0] != 0; // is row-major in shared memory layout
+    // isBRow_ indicates whether B is row-major in DotOperand layout
+    auto [_0, isBRow_, _1, isBVec4, _2] = mmaLayout.decodeVoltaLayoutStates();
+
+    BParam param(isBRow_, isBVec4);
 
     int vecB = sharedLayout.getVec();
     Value strideBN = isBRow ? i32_val(1) : strides[1];
@@ -336,7 +315,7 @@ struct DotOpMmaV1ConversionHelper {
     int strideRepN = wpt[1] * fpw[1] * 8;
     int strideRepK = 1;
 
-    auto [_0, _1, offsetBN, offsetBK] = computeOffsets(
+    auto [_3, _4, offsetBN, offsetBK] = computeOffsets(
         thread, false, isBRow, fpw, param.spw, param.rep, rewriter, loc);
 
     // swizzling
@@ -403,7 +382,7 @@ struct DotOpMmaV1ConversionHelper {
       }
     };
 
-    unsigned numN = getNumN(shape, order[0] == 1);
+    unsigned numN = getNumN(shape[1], isBRow, isBVec4);
     for (unsigned k = 0; k < NK; k += 4)
       for (unsigned n = 0; n < numN / 2; ++n) {
         if (!hbs.count({n, k}))
@@ -541,10 +520,10 @@ struct DotOpMmaV1ConversionHelper {
     SmallVector<int, 2> rep({aParam.rep[0], bParam.rep[1]});
     SmallVector<int, 2> spw({aParam.spw[0], bParam.spw[1]});
     SmallVector<unsigned, 2> shapePerCTA({spw[0] * wpt[0], spw[1] * wpt[1]});
-    printf("MN t-0 M shape:%lu spc:%d rep:%d\n", shape[0], shapePerCTA[0],
-           rep[0]);
-    printf("MN t-0 N shape:%lu spc:%d rep:%d\n", shape[1], shapePerCTA[1],
-           rep[1]);
+    // printf("MN t-0 M shape:%lu spc:%d rep:%d\n", shape[0], shapePerCTA[0],
+    //        rep[0]);
+    // printf("MN t-0 N shape:%lu spc:%d rep:%d\n", shape[1], shapePerCTA[1],
+    //        rep[1]);
 
     Value lane = urem(thread, _32);
     Value warp = udiv(thread, _32);

@@ -387,6 +387,7 @@ public:
         ret.push_back({i + 2, j + 9});
       }
     }
+    printf("**** emitOffsetForMmaLayoutV1 ret.size: %lu\n", ret.size());
     return ret;
   }
 

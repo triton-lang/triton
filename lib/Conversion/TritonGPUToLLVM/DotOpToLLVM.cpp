@@ -128,8 +128,8 @@ private:
 
     DotOpMmaV1ConversionHelper helper(mmaLayout);
 
-    unsigned numM = helper.getNumM(AShape, isARow);
-    unsigned numN = helper.getNumN(BShape, isBRow);
+    unsigned numM = helper.getNumM(AShape[0], isARow, isAVec4_);
+    unsigned numN = helper.getNumN(BShape[1], isBRow, isBVec4_);
     printf("MN0 t-0 isArow:%d isBRow:%d, isAVec4:%d, isBVec4:%d, M:%ld, N:%ld "
            "numM:%d numN:%d wpt:%d-%d\n",
            isARow, isBRow, isAVec4_, isBVec4_, AShape[0], BShape[1], numM, numN,
@@ -212,7 +212,7 @@ private:
         acc[idx[i]] = elem;
       }
 
-#define SHOW_MMA_V1 1
+#define SHOW_MMA_V1 0
 #if SHOW_MMA_V1
       {
         std::vector<Value> args = {ha.first, ha.second, hb.first, hb.second};
