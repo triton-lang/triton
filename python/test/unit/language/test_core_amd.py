@@ -790,6 +790,62 @@ def test_f8_xf16_roundtrip(dtype):
 
     assert torch.all(f8_tensor == f8_output_tensor)
 
+def test_f16_to_f8_rounding():
+    """Takes all float16s, converts them to float8 and back to float16. Checks that the absolute
+    error is the minimum over all float8.
+    Or the same explanation a bit mathier:
+    for all f16 |f16 - fromf8(tof8(f16))| == min over all f8 |f16 - fromf8(f8)|"""
+    @triton.jit
+    def copy_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(axis=0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        input = tl.load(input_ptr + offsets, mask=mask)
+        output = input
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    # torch.view with a dtype isn't supported in triton's torch yet so use numpy's view
+    f16_input_np = (
+        np.array(
+            range(-int(2 ** (16 - 1)), int(2 ** (16 - 1))), dtype=np.int16,
+        )
+        .view(np.float16)
+    )
+    f16_input = torch.tensor(f16_input_np, dtype=torch.float16, device='cuda')
+    n_elements = f16_input.numel()
+    f8_output_tensor = torch.empty_like(f16_input, dtype=torch.int8)
+    f8_output = triton.reinterpret(f8_output_tensor, tl.float8)
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
+    copy_kernel[grid](f16_input, f8_output, n_elements, BLOCK_SIZE=1024)
+
+    f16_output = torch.empty_like(f16_input, dtype=torch.float16)
+    copy_kernel[grid](f8_output, f16_output, n_elements, BLOCK_SIZE=1024)
+
+    abs_error = torch.abs(f16_input - f16_output)
+
+    all_f8_vals_tensor = torch.tensor(range(2 ** 8), dtype=torch.uint8, device='cuda')
+    all_f8_vals = triton.reinterpret(all_f8_vals_tensor, tl.float8)
+    all_f8_vals_in_f16 = torch.empty_like(all_f8_vals_tensor, dtype=torch.float16)
+    copy_kernel[grid](all_f8_vals, all_f8_vals_in_f16, n_elements=256, BLOCK_SIZE=1024)
+
+    all_finite_f8_vals_in_f16 = all_f8_vals_in_f16[
+        torch.isfinite(all_f8_vals_in_f16)
+    ]
+
+    min_error = torch.min(
+        torch.abs(
+            f16_input.reshape((-1, 1))
+            - all_finite_f8_vals_in_f16.reshape((1, -1))
+        ),
+        dim=1,
+    )[0]
+    # 1.9375 is float8 max
+    mismatch = torch.logical_and(
+        abs_error != min_error, torch.logical_and(torch.isfinite(f16_input), torch.abs(f16_input) < 1.9375)
+    )
+    assert torch.all(
+        torch.logical_not(mismatch)
+    ), f"f16_input[mismatch]={f16_input[mismatch]} f16_output[mismatch]={f16_output[mismatch]} abs_error[mismatch]={abs_error[mismatch]} min_error[mismatch]={min_error[mismatch]}"
+
 
 # ---------------
 # test reduce
@@ -956,6 +1012,43 @@ def test_arange(start, device='cuda'):
     _kernel[(1,)](z_tri, START=start, END=start + BLOCK, BLOCK=BLOCK)
     z_ref = torch.arange(start, BLOCK + start, dtype=torch.int32, device=device)
     triton.testing.assert_almost_equal(z_tri, z_ref)
+
+
+# ---------------
+# test load
+# ---------------
+
+
+@pytest.mark.parametrize("dtype_str, size, size_diff", [(dtype_str, size, size_diff) for dtype_str in torch_dtypes for size in [128, 512] for size_diff in [0, 1, 2, 3, 4]])
+def test_masked_load(dtype_str, size, size_diff, device='cuda'):
+    dtype = getattr(torch, dtype_str)
+    check_type_supported(dtype)  # bfloat16 on cc < 80 will not be tested
+
+    input_size = size - size_diff
+    output_size = size
+    if dtype_str == 'bool':
+        input = torch.randint(0, 2, (input_size,), dtype=dtype, device=device)
+    elif dtype_str in int_dtypes or dtype_str in uint_dtypes:
+        input = torch.randint(0, 127, (input_size,), dtype=dtype, device=device)
+    else:
+        input = torch.rand(input_size, dtype=dtype, device=device)
+    output = torch.zeros((output_size,), dtype=dtype, device=device)
+
+    @triton.jit
+    def _kernel(in_ptr, out_ptr, in_size: tl.constexpr, out_size: tl.constexpr):
+        in_offsets = tl.arange(0, out_size)
+        # Load inputs.
+        x = GENERATE_TEST_HERE
+        # Store output
+        output_offsets = tl.arange(0, out_size)
+        tl.store(out_ptr + output_offsets, x)
+
+    mask_str = "mask=in_offsets < in_size, other=1" if size_diff > 0 else "None"
+    kernel = patch_kernel(_kernel, {'GENERATE_TEST_HERE': f"tl.load(in_ptr + in_offsets, {mask_str})"})
+    kernel[(1,)](input, output, input_size, output_size)
+
+    reference_out = torch.cat((input, torch.ones((size_diff,), dtype=dtype, device=device)))
+    triton.testing.allclose(output, reference_out)
 
 
 # ---------------

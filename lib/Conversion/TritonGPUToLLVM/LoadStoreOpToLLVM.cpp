@@ -122,18 +122,23 @@ struct LoadOpConversion
 
 #ifdef USE_ROCM
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
+      Value zeroVal = bitcast(int_val(valueElemNbits, 0), valueElemTy);
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         for (size_t wordElem = 0; wordElem < wordNElems; ++wordElem) {
           size_t elemOffset = vecStart + wordIdx * wordNElems + wordElem;
-
-          // get values
-          Value trueVal = load(ptrElems[elemOffset]);
-          Value zeroVal = bitcast(int_val(valueElemNbits, 0), valueElemTy);
-          Value falseVal = other ? otherElems[elemOffset] : zeroVal;
-
-          // select value based on mask
-          Value ret = select(pred, trueVal, falseVal);
-          loadedVals.push_back(ret);
+          Value otherVal = other ? otherElems[elemOffset] : zeroVal;
+          auto *curBlock = rewriter.getBlock();
+          auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
+          endBlock->addArgument({valueElemTy}, {loc});
+          auto *loadBlock = rewriter.createBlock(
+              curBlock->getParent(), std::next(Region::iterator(curBlock)));
+          rewriter.setInsertionPointToEnd(curBlock);
+          rewriter.create<LLVM::CondBrOp>(loc, pred, loadBlock, endBlock, otherVal);
+          rewriter.setInsertionPointToEnd(loadBlock);
+          Value loadVal = load(ptrElems[elemOffset]);
+          rewriter.create<LLVM::BrOp>(loc, loadVal, endBlock);
+          rewriter.setInsertionPointToStart(endBlock);
+          loadedVals.push_back(endBlock->getArgument(0));
         }
       }
 #else
@@ -340,9 +345,16 @@ struct StoreOpConversion
           elem = bitcast(elem, valueElemTy);
 #ifdef USE_ROCM
           Value maskVal = llMask ? maskElems[vecStart] : int_val(1, 1);
-          Value ret = select(maskVal, elem,
-                             bitcast(int_val(valueElemNbits, 0), valueElemTy));
-          store(ret, ptrElems[elemOffset]);
+          auto *curBlock = rewriter.getBlock();
+          auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
+          auto *storeBlock = rewriter.createBlock(
+              curBlock->getParent(), std::next(Region::iterator(curBlock)));
+          rewriter.setInsertionPointToEnd(curBlock);
+          rewriter.create<LLVM::CondBrOp>(loc, maskVal, storeBlock, endBlock);
+          rewriter.setInsertionPointToEnd(storeBlock);
+          store(elem, ptrElems[elemOffset]);
+          rewriter.create<LLVM::BrOp>(loc, ValueRange(), endBlock);
+          rewriter.setInsertionPointToStart(endBlock);
         }
       }
 #else
