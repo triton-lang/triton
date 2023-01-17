@@ -389,7 +389,7 @@ private:
     });
 
     mod.walk([&](triton::gpu::AsyncCommitGroupOp asyncCommitGroupOp) -> void {
-      if (!triton::gpu::AsyncCommitGroupOp::isSupported(computeCapability)) 
+      if (!triton::gpu::AsyncCommitGroupOp::isSupported(computeCapability))
         asyncCommitGroupOp.erase();
     });
 

@@ -78,9 +78,8 @@ SmallVector<PTXBuilder::Operand *, 4> PTXBuilder::getAllArgs() const {
   return res;
 }
 
-mlir::Value PTXBuilder::launch(OpBuilder &rewriter,
-                               Location loc, Type resTy, bool hasSideEffect,
-                               bool isAlignStack,
+mlir::Value PTXBuilder::launch(OpBuilder &rewriter, Location loc, Type resTy,
+                               bool hasSideEffect, bool isAlignStack,
                                ArrayRef<Attribute> attrs) const {
   auto *ctx = rewriter.getContext();
   auto inlineAsm = rewriter.create<LLVM::InlineAsmOp>(
