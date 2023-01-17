@@ -1391,7 +1391,9 @@ struct MMA16816ConversionHelper {
       unsigned colsPerThread = numRepN * 2;
       PTXBuilder builder;
       auto &mma = *builder.create(helper.getMmaInstr().str());
-      auto retArgs = builder.newListOperand(4, "=r");
+      // using =r for float32 works but leads to less readable ptx.
+      bool isIntMMA = dTensorTy.getElementType().isInteger(32);
+      auto retArgs = builder.newListOperand(4, isIntMMA ? "=r" : "=f");
       auto aArgs = builder.newListOperand({
           {ha[{m, k}], "r"},
           {ha[{m + 1, k}], "r"},
