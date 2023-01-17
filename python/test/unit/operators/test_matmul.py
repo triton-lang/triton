@@ -46,7 +46,7 @@ import triton
                 # variable input
                 (128, 128, 32, 1, 4, 2, 1024, 1024, 1024, AT, BT, DTYPE),
                 (128, 128, 32, 1, 4, 2, 384, 128, 640, AT, BT, DTYPE),
-                (128, 128, 32, 1, 4, 2, 107, 233, 256, AT, BT, DTYPE),
+                (128, 128, 32, 1, 4, 2, 8107, 2233, 256, AT, BT, DTYPE),
                 (128, 128, 32, 1, 4, 2, 107, 233, 311, AT, BT, DTYPE),
             ] for DTYPE in ["float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True]
         ],
