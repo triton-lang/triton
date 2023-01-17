@@ -164,8 +164,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.lscope[name] = value
         self.local_defs[name] = value
 
-    @staticmethod
-    def is_triton_tensor(value):
+    def is_triton_tensor(self, value):
         return isinstance(value, triton.language.tensor)
 
     #
@@ -750,16 +749,13 @@ class CodeGenerator(ast.NodeVisitor):
             return getattr(lhs, fn)(rhs)
 
     if sys.version_info < (3, 8):
-        @staticmethod
-        def visit_NameConstant(node):
+        def visit_NameConstant(self, node):
             return triton.language.constexpr(node.value)
 
-        @staticmethod
-        def visit_Num(node):
+        def visit_Num(self, node):
             return triton.language.constexpr(node.n)
 
-        @staticmethod
-        def visit_Str(node):
+        def visit_Str(self, node):
             return triton.language.constexpr(ast.literal_eval(node))
 
     def visit_Attribute(self, node):
@@ -772,7 +768,6 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Expr(self, node):
         ast.NodeVisitor.generic_visit(self, node)
 
-    @staticmethod
     def visit_NoneType(self, node):
         return None
 
