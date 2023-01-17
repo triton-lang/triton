@@ -300,10 +300,24 @@ private:
 
   /// Resolves liveness of all values involved under the root operation.
   void resolveLiveness() {
-    // In the SCF dialect, we always have a sequentially nested structure of
-    // blocks
+    // Assign an ID to each operation using post-order traversal.
+    // To achieve the correct liveness range, the parent operation's ID
+    // should be greater than each of its child operation's ID .
+    // Example:
+    //     ...
+    //     %5 = triton.convert_layout %4
+    //     %6 = scf.for ... iter_args(%arg0 = %0) -> (i32) {
+    //       %2 = triton.convert_layout %5
+    //       ...
+    //       scf.yield %arg0
+    //     }
+    // For example, %5 is defined in the parent region and used in
+    // the child region, and is not passed as a block argument.
+    // %6 should should have an ID greater than its child operations,
+    // otherwise %5 liveness range ends before the child operation's liveness
+    // range ends.
     DenseMap<Operation *, size_t> operationId;
-    operation->walk<WalkOrder::PreOrder>(
+    operation->walk<WalkOrder::PostOrder>(
         [&](Operation *op) { operationId[op] = operationId.size(); });
 
     // Analyze liveness of explicit buffers

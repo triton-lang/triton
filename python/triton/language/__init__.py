@@ -5,6 +5,7 @@ from ..impl import (
     ir,
     builtin,
 )
+from . import libdevice
 from .core import (
     abs,
     arange,
@@ -130,6 +131,7 @@ __all__ = [
     "int64",
     "int8",
     "ir",
+    "libdevice",
     "load",
     "log",
     "max",

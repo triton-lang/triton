@@ -117,6 +117,8 @@ struct DotOpMmaV1ConversionHelper {
     return numN;
   }
 
+  // NOTE isARow should be from a shared layout, it doesnt necessarily equal
+  // DotOperand.isMMAv1Row
   int numElemsPerThreadA(ArrayRef<int64_t> shape, bool isARow, bool isAVec4,
                          int vec) const {
     int numM = getNumM(shape[0], isARow, isAVec4);
@@ -144,6 +146,8 @@ struct DotOpMmaV1ConversionHelper {
     return visited.size() * 2;
   }
 
+  // NOTE isBRow should be from a shared layout, it doesnt necessarily equal
+  // DotOperand.isMMAv1Row
   int numElemsPerThreadB(ArrayRef<int64_t> shape, bool isBRow, bool isBVec4,
                          int vec) const {
     unsigned numN = getNumN(shape[1], isBRow, isBVec4);
