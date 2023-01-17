@@ -690,24 +690,14 @@ def arange(start, end, _builder=None):
     return semantic.arange(start, end, _builder)
 
 
-@builtin
-def zeros(shape, dtype, _builder=None):
-    """
-    Returns a tensor filled with the scalar value 0 for the given :code:`shape` and :code:`dtype`.
-
-    :param shape: Shape of the new array, e.g., (8, 16) or (8, )
-    :type shape: tuple of ints
-    :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
-    :type dtype: DType
-    """
+def _shape_check_impl(shape):
+    shape = _constexpr_to_value(shape)
     for i, d in enumerate(shape):
         if not isinstance(d, constexpr):
             raise TypeError(f"Shape element {i} must have type `constexpr`")
         if not isinstance(d.value, int):
             raise TypeError(f"Shape element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
-    shape = [x.value for x in shape]
-    dtype = _constexpr_to_value(dtype)
-    return semantic.zeros(shape, dtype, _builder)
+    return [_constexpr_to_value(x) for x in shape]
 
 
 @builtin
@@ -721,12 +711,7 @@ def full(shape, value, dtype, _builder=None):
     :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
     :type dtype: DType
     """
-    for i, d in enumerate(shape):
-        if not isinstance(d, constexpr):
-            raise TypeError(f"Shape element {i} must have type `constexpr`")
-        if not isinstance(d.value, int):
-            raise TypeError(f"Shape element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
-    shape = [x.value for x in shape]
+    shape = _shape_check_impl(shape)
     value = _constexpr_to_value(value)
     dtype = _constexpr_to_value(dtype)
     return semantic.full(shape, value, dtype, _builder)
@@ -760,7 +745,7 @@ def broadcast_to(input, shape, _builder=None):
     :param shape: The desired shape.
     :type shape: Tuple[int]
     """
-    shape = [_constexpr_to_value(s) for s in shape]
+    shape = _shape_check_impl(shape)
     return semantic.broadcast_impl_shape(input, shape, _builder)
 
 
@@ -798,14 +783,14 @@ def view(input, shape, _builder=None):
     :type shape: Tuple[int]
 
     """
-    shape = [x.value for x in shape]
+    shape = _shape_check_impl(shape)
     return semantic.view(input, shape, _builder)
 
 
 @builtin
 def reshape(input, shape, _builder=None):
     # TODO: should be more than just a view
-    shape = [x.value for x in shape]
+    shape = _shape_check_impl(shape)
     return semantic.view(input, shape, _builder)
 
 # -----------------------
@@ -1264,6 +1249,19 @@ def swizzle2d(i, j, size_i, size_j, size_g):
     new_i = off_i + (ij % size_g)
     new_j = (ij % size_gj) // size_g
     return new_i, new_j
+
+
+@triton.jit
+def zeros(shape, dtype):
+    """
+    Returns a tensor filled with the scalar value 0 for the given :code:`shape` and :code:`dtype`.
+
+    :param shape: Shape of the new array, e.g., (8, 16) or (8, )
+    :type shape: tuple of ints
+    :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
+    :type dtype: DType
+    """
+    return full(shape, 0, dtype)
 
 
 @triton.jit

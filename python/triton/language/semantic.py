@@ -471,15 +471,12 @@ def arange(start: int, end: int, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_make_range(start, end), ret_ty)
 
 
-def zeros(shape: List[int], dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
-    _0 = builder.get_null_value(dtype.to_ir(builder))
-    ret_ty = tl.block_type(dtype, shape)
-    return tl.tensor(builder.create_splat(_0, shape), ret_ty)
-
-
 def full(shape: List[int], value, dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
-    get_value_fn = getattr(builder, f"get_{dtype.name}")
-    _value = get_value_fn(value)
+    if value == 0:
+        _value = builder.get_null_value(dtype.to_ir(builder))
+    else:
+        get_value_fn = getattr(builder, f"get_{dtype.name}")
+        _value = get_value_fn(value)
     ret_ty = tl.block_type(dtype, shape)
     return tl.tensor(builder.create_splat(_value, shape), ret_ty)
 
