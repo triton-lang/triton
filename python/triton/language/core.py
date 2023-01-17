@@ -140,15 +140,15 @@ class dtype:
         return self.is_int1()
 
     @staticmethod
-    def is_void(self):
+    def is_void():
         raise RuntimeError("Not implemented")
     
     @staticmethod
-    def is_block(self):
+    def is_block():
         return False
 
     @staticmethod
-    def is_ptr(self):
+    def is_ptr():
         return False
 
     def __eq__(self, other: dtype):

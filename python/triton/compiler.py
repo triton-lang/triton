@@ -165,7 +165,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.local_defs[name] = value
 
     @staticmethod
-    def is_triton_tensor(self, value):
+    def is_triton_tensor(value):
         return isinstance(value, triton.language.tensor)
 
     #
@@ -751,15 +751,15 @@ class CodeGenerator(ast.NodeVisitor):
 
     if sys.version_info < (3, 8):
         @staticmethod
-        def visit_NameConstant(self, node):
+        def visit_NameConstant(node):
             return triton.language.constexpr(node.value)
 
         @staticmethod
-        def visit_Num(self, node):
+        def visit_Num(node):
             return triton.language.constexpr(node.n)
 
         @staticmethod
-        def visit_Str(self, node):
+        def visit_Str(node):
             return triton.language.constexpr(ast.literal_eval(node))
 
     def visit_Attribute(self, node):
@@ -1625,7 +1625,7 @@ class CudaUtils(object):
         return cls.instance
 
     @staticmethod
-    def _generate_src(self):
+    def _generate_src():
         return """
         #include <cuda.h>
 
