@@ -768,7 +768,7 @@ class CodeGenerator(ast.NodeVisitor):
             if node.attr == "T":
                 return triton.language.semantic.trans(lhs, builder=self.builder)
         return getattr(lhs, node.attr)
-    
+
     def visit_Expr(self, node):
         ast.NodeVisitor.generic_visit(self, node)
 

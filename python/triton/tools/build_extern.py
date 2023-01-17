@@ -156,7 +156,7 @@ class Libdevice(ExternLibrary):
         '''
         super().__init__("libdevice", path)
         self._symbol_groups = {}
-        
+
     @staticmethod
     def _extract_symbol(line) -> Optional[Symbol]:
         # Extract symbols from line in the following format:

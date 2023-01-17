@@ -142,7 +142,7 @@ class dtype:
     @staticmethod
     def is_void():
         raise RuntimeError("Not implemented")
-    
+
     @staticmethod
     def is_block():
         return False
