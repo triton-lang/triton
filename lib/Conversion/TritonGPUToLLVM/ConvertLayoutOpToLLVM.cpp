@@ -306,6 +306,15 @@ private:
         // }
       }
 
+#define SHOW_ACCI 1
+#if SHOW_ACCI
+      for (unsigned elemId = 0; elemId < accumSizePerThread; elemId++) {
+        auto [coord, currVal] = coord2val[elemId];
+        LLVM::vprintf("acci t-%d (%d %d) %f",
+                      {LLVM::gThreadId, coord[0], coord[1], currVal}, rewriter);
+      }
+#endif
+
       if (needTrans) {
         auto [isARow, isBRow, isAVec4, isBVec4, mmaId] =
             mma.decodeVoltaLayoutStates();
@@ -314,16 +323,6 @@ private:
         int numM = helper.getElemsM(mma.getWarpsPerCTA()[0], shape[0], isARow,
                                     isAVec4);
         int numN = accumSizePerThread / numM;
-
-#define SHOW_ACCI 0
-#if SHOW_ACCI
-        if (sliceLayout)
-          for (unsigned elemId = 0; elemId < accumSizePerThread; elemId++) {
-            auto [coord, currVal] = coord2val[elemId];
-            LLVM::vprintf("acci t-%d (%d) %f",
-                          {LLVM::gThreadId, coord[0], currVal}, rewriter);
-          }
-#endif
 
         for (int r = 0; r < numM; r++) {
           for (int c = 0; c < numN; c++) {

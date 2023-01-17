@@ -241,7 +241,10 @@ public:
 
     auto srcTy = op->getOperand(0).getType();
     auto resTy = op->getResult(0).getType();
-    if (!needUpdate(srcTy) && needUpdate(resTy)) {
+
+    if (needUpdate(resTy)) {
+      //  The op-inputs' types are not necessary to update, for some
+      //  replaceOpWithNewOp will help update them.
       op->getResult(0).setType(
           getUpdatedType(resTy.dyn_cast<RankedTensorType>()));
       return success();
@@ -317,6 +320,8 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
 
+    // llvm::outs() << "input ir:\n" << *m << "\n";
+
     llvm::DenseMap<MmaEncodingAttr, MmaEncodingAttr> mmaToUpdate;
     {
       mlir::RewritePatternSet patterns(context);
@@ -328,6 +333,13 @@ public:
       if (applyPatternsAndFoldGreedily(m, std::move(patterns), config).failed())
         signalPassFailure();
     }
+
+    /*
+    for (auto& item : mmaToUpdate) {
+      llvm::outs() << "updatemma t-0 " << item.first << " -> " << item.second <<
+    "\n";
+    }
+     */
 
     if (!mmaToUpdate.empty()) {
       mlir::RewritePatternSet patterns(context);
@@ -343,6 +355,8 @@ public:
 
       if (fixupLoops(m).failed())
         signalPassFailure();
+
+      // llvm::outs() << "output ir:\n" << *m << "\n";
     }
   }
 };

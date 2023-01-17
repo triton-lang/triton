@@ -507,6 +507,8 @@ struct DotOpMmaV1ConversionHelper {
   getMNCoords(Value thread, ConversionPatternRewriter &rewriter,
               ArrayRef<unsigned> wpt, ArrayRef<int64_t> shape, bool isARow,
               bool isBRow, bool isAVec4, bool isBVec4) {
+    printf("getMNCoords t-0 wpt:[%d %d] shape:[%ld %ld] %d %d %d %d\n", wpt[0],
+           wpt[1], shape[0], shape[1], isARow, isBRow, isAVec4, isBVec4);
 
     auto *ctx = thread.getContext();
     auto loc = UnknownLoc::get(ctx);
@@ -598,6 +600,24 @@ struct DotOpMmaV1ConversionHelper {
         coords.push_back(std::move(idx));
       }
     }
+
+#define SHOW_COORD 0
+#if SHOW_COORD
+    static bool visited{};
+    if (!visited) {
+      std::string fmt = "coord t-%d ";
+      SmallVector<Value> args;
+      args.push_back(gThreadId);
+      for (auto &coord : coords) {
+        fmt += "(%d %d) ";
+        args.push_back(coord[0]);
+        args.push_back(coord[1]);
+      }
+      LLVM::vprintf(fmt, args, rewriter);
+      visited = true;
+    }
+#endif
+
     return coords; // {M,N} in row-major
   }
 

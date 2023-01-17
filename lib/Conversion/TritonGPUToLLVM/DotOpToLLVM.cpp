@@ -125,6 +125,8 @@ private:
         mmaLayout.decodeVoltaLayoutStates();
     assert(isARow == isARow_);
     assert(isBRow == isBRow_);
+    printf("mma.decode t-0 %d %d %d %d %d\n", isARow_, isBRow_, isAVec4_,
+           isBVec4_, mmaId);
 
     DotOpMmaV1ConversionHelper helper(mmaLayout);
 
@@ -236,14 +238,12 @@ private:
           pargs.push_back(acc[idx[i]]);
         }
 
-        // LLVM::vprintf("mma t-%d [%d %d %d] A:(%f,%f) (%f,%f) B:(%f,%f)
-        // (%f,%f) "
-        //               "C:(%f,%f,%f,%f,%f,%f,%f,%f)"
-        //               " D:(%f,%f,%f,%f,%f,%f,%f,%f)",
-        //               pargs, rewriter);
         LLVM::vprintf("mma t-%d [%d %d %d] A:(%f,%f) (%f,%f) B:(%f,%f) (%f,%f) "
-                      "C:(%f,%f,%f,%f,%f,%f,%f,%f)",
+                      "C:(%f,%f,%f,%f,%f,%f,%f,%f)"
+                      " D:(%f,%f,%f,%f,%f,%f,%f,%f)",
                       pargs, rewriter);
+        // LLVM::vprintf("mma t-%d [%d %d %d] A:(%f,%f) (%f,%f) B:(%f,%f)
+        // (%f,%f) " "C:(%f,%f,%f,%f,%f,%f,%f,%f)", pargs, rewriter);
       }
 #endif
     };
