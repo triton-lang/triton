@@ -923,10 +923,10 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mma>
     // CHECK: llvm.inline_asm
     // CHECK-SAME: ldmatrix.sync.aligned.m8n8.x4.shared.b16
-    // CHECK-SAME: (f32, f32, f32, f32)
+    // CHECK-SAME: (vector<1xf32>, vector<1xf32>, vector<1xf32>, vector<1xf32>)
     // CHECK: llvm.inline_asm
     // CHECK-SAME: ldmatrix.sync.aligned.m8n8.x4.shared.b16
-    // CHECK-SAME: (f32, f32, f32, f32)
+    // CHECK-SAME: (vector<1xf32>, vector<1xf32>, vector<1xf32>, vector<1xf32>)
     %a_mat = triton_gpu.convert_layout %a : (tensor<32x16xf32, #shared>) -> tensor<32x16xf32, #dot_operand_a>
     %b_mat = triton_gpu.convert_layout %b : (tensor<16x32xf32, #shared>) -> tensor<16x32xf32, #dot_operand_b>
 
