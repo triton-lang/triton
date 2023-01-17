@@ -212,7 +212,7 @@ private:
         acc[idx[i]] = elem;
       }
 
-#define SHOW_MMA_V1 1
+#define SHOW_MMA_V1 0
 #if SHOW_MMA_V1
       {
         std::vector<Value> args = {ha.first, ha.second, hb.first, hb.second};

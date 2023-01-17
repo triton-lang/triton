@@ -399,6 +399,9 @@ private:
     bool needTrans = outOrd[0] != 0;
     if (sliceLayout)
       needTrans = false;
+
+    // TODO[Superjomn]: Enable this optimization later
+    needTrans = false; // DEBUG
     vec = needTrans ? 2 : 1;
     {
       // We need to transpose the coordinates and values here to enable vec=2

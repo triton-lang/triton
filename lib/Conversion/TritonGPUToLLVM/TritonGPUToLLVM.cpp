@@ -75,7 +75,8 @@ struct BroadcastOpConversion
       // NOTE: This is just an naive fix, but for MMA layout, and 2-d fix should
       // be all right.
       // TODO[Superjomn]: Replace this with a generic implementation.
-      if (srcMma.isVolta()) {
+      if (srcMma.isVolta() &&
+          (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16())) {
         int numElemsPerThread = srcMma.getElemsPerThread(resultTy.getShape());
         int srcUniqElems = srcVals.size() / 2;
         int dup = numElemsPerThread / srcUniqElems;
@@ -118,9 +119,9 @@ struct BroadcastOpConversion
 
     if (srcTy.getEncoding().isa<MmaEncodingAttr>() &&
         resultTy.getEncoding().isa<MmaEncodingAttr>()) {
-      LLVM::vprintf_array(LLVM::gThreadId, srcVals, "bst-in", "%f", rewriter);
-      LLVM::vprintf_array(LLVM::gThreadId, resultVals, "bst-out", "%f",
-                          rewriter);
+      // LLVM::vprintf_array(LLVM::gThreadId, srcVals, "bst-in", "%f",
+      // rewriter); LLVM::vprintf_array(LLVM::gThreadId, resultVals, "bst-out",
+      // "%f", rewriter);
     }
 
     if (srcTy.getEncoding().isa<MmaEncodingAttr>() &&
