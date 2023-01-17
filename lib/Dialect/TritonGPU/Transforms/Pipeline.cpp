@@ -302,6 +302,7 @@ void LoopPipeliner::emitPrologue() {
               loadStageBuffer[loadOp][stage], pipelineIterIdx, newMask,
               lookupOrDefault(loadOp.other(), stage), loadOp.cache(),
               loadOp.evict(), loadOp.isVolatile(), /*axis*/ 0);
+          builder.create<triton::gpu::AsyncCommitGroupOp>(op->getLoc());
           loadStageBuffer[loadOp].push_back(newOp->getResult(0));
         } else
           llvm_unreachable("This should be LoadOp");
@@ -542,6 +543,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
           insertSliceIndex, newMask,
           nextMapping.lookupOrDefault(loadOp.other()), loadOp.cache(),
           loadOp.evict(), loadOp.isVolatile(), /*axis*/ 0);
+      builder.create<triton::gpu::AsyncCommitGroupOp>(op->getLoc());
       nextBuffers.push_back(insertAsyncOp);
       auto sliceType = loadsMapping[loadOp].getType().cast<RankedTensorType>();
       sliceType = RankedTensorType::get(sliceType.getShape(),

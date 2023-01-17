@@ -161,7 +161,7 @@ struct PTXBuilder {
 
   std::string dump() const;
 
-  mlir::Value launch(ConversionPatternRewriter &rewriter, Location loc,
+  mlir::Value launch(OpBuilder &rewriter, Location loc,
                      Type resTy, bool hasSideEffect = true,
                      bool isAlignStack = false,
                      ArrayRef<Attribute> attrs = {}) const;

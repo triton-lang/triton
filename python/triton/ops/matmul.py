@@ -111,9 +111,6 @@ def _kernel(A, B, C, M, N, K,
     else:
         tl.atomic_add(C, acc, mask=mask)
 
-
-_kernel = triton.compile("matmul.ptx", num_warps=4, shared=32768)
-
 class _matmul(torch.autograd.Function):
     kernel = _kernel
 
@@ -137,16 +134,11 @@ class _matmul(torch.autograd.Function):
         ACC_TYPE = tl.float32 if a.dtype in [torch.float16, torch.bfloat16, torch.float32] else tl.int32
         # launch kernel
         grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), META['SPLIT_K'], 1)
-        # _kernel[grid](a, b, c, M, N, K,
-        #               a.stride(0), a.stride(1),
-        #               b.stride(0), b.stride(1),
-        #               c.stride(0), c.stride(1),
-        #               GROUP_M=8, ACC_TYPE=ACC_TYPE)
-        grid = grid({"BLOCK_M": 128, "BLOCK_N":128, "BLOCK_K":32, "SPLIT_K": 1})
-        _kernel[grid](a.data_ptr(), b.data_ptr(), c.data_ptr(), M, N, K,
-                      a.stride(1),
-                      b.stride(0),
-                      c.stride(0),)
+        _kernel[grid](a, b, c, M, N, K,
+                      a.stride(0), a.stride(1),
+                      b.stride(0), b.stride(1),
+                      c.stride(0), c.stride(1),
+                      GROUP_M=8, ACC_TYPE=ACC_TYPE)
         return c
 
     @staticmethod

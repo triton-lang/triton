@@ -802,9 +802,6 @@ struct InsertSliceAsyncOpConversion
       }
     }
 
-    PTXBuilder ptxBuilder;
-    ptxBuilder.create<>("cp.async.commit_group")->operator()();
-    ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
     rewriter.replaceOp(op, llDst);
     return success();
   }

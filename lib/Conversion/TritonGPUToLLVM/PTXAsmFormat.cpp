@@ -78,7 +78,7 @@ SmallVector<PTXBuilder::Operand *, 4> PTXBuilder::getAllArgs() const {
   return res;
 }
 
-mlir::Value PTXBuilder::launch(ConversionPatternRewriter &rewriter,
+mlir::Value PTXBuilder::launch(OpBuilder &rewriter,
                                Location loc, Type resTy, bool hasSideEffect,
                                bool isAlignStack,
                                ArrayRef<Attribute> attrs) const {

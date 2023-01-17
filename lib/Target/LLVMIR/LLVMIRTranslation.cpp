@@ -258,6 +258,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
     return nullptr;
   }
 
+  // llvm::outs() << module << "\n";
   auto llvmIR = translateLLVMToLLVMIR(llvmContext, module);
   if (!llvmIR) {
     llvm::errs() << "Translate to LLVM IR failed";
