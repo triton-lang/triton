@@ -1,27 +1,20 @@
-#include "mlir/ExecutionEngine/ExecutionEngine.h"
-#include "mlir/ExecutionEngine/OptUtils.h"
-#include "mlir/IR/AsmState.h"
-#include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/Dialect.h"
-#include "mlir/Parser.h"
-#include "mlir/Pass/Pass.h"
-#include "mlir/Pass/PassManager.h"
-#include "mlir/Support/FileUtilities.h"
-#include "mlir/Support/LogicalResult.h"
-#include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
-#include "mlir/Target/LLVMIR/Export.h"
-#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
-#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
-#include "triton/driver/llvm.h"
+#include "triton/Target/PTX/PTXTranslation.h"
+#include "triton/Target/HSACO/HSACOTranslation.h"
+
+#include "mlir/IR/AsmState.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/Parser.h"
+#include "mlir/Support/FileUtilities.h"
+
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
-#include <iostream>
 
 namespace mlir {
 namespace triton {
@@ -78,7 +71,7 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
       llvm::cl::init("-"));
 
   static llvm::cl::opt<std::string> targetKind(
-      "target", llvm::cl::desc("<translation target, options: llvmir/ptx>"),
+      "target", llvm::cl::desc("<translation target, options: llvmir/ptx/hsaco>"),
       llvm::cl::value_desc("target"), llvm::cl::init("llvmir"));
 
   static llvm::cl::opt<int> SMArch("sm", llvm::cl::desc("sm arch"),
@@ -86,6 +79,10 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
 
   static llvm::cl::opt<int> ptxVersion(
       "ptx-version", llvm::cl::desc("PTX version"), llvm::cl::init(10000));
+
+  static llvm::cl::opt<std::string> GCNArch(
+      "gfx", llvm::cl::desc("AMDGCN target. e.g. '90a'"),
+      llvm::cl::value_desc("architecture"), llvm::cl::init("90a"));
 
   llvm::InitLLVM y(argc, argv);
 
@@ -116,8 +113,16 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
   if (targetKind == "llvmir")
     llvm::outs() << *llvmir << '\n';
   else if (targetKind == "ptx")
-    llvm::outs() << ::triton::driver::llir_to_ptx(
-        llvmir.get(), SMArch.getValue(), ptxVersion.getValue());
+    llvm::outs() << ::triton::translateLLVMIRToPTX(*llvmir, SMArch.getValue(),
+                                                   ptxVersion.getValue());
+  else if (targetKind == "hsaco") {
+    auto [module, hsaco] =
+        ::triton::translateLLVMIRToHSACO(*llvmir, GCNArch.getValue());
+    llvm::outs() << hsaco;
+  } else {
+    llvm::errs() << "Error: Unknown target specified: " << targetKind << "\n";
+    return failure();
+  }
 
   return success();
 }
