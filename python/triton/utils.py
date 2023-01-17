@@ -33,7 +33,8 @@ class MockTensor:
     def __init__(self, dtype):
         self.dtype = dtype
 
-    def data_ptr(self):
+    @staticmethod
+    def data_ptr():
         return 0  # optimistically assumes multiple of 16
 
 
