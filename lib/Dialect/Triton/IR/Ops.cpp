@@ -206,6 +206,33 @@ void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
   state.addTypes({resultType});
 }
 
+//-- TransOp --
+mlir::LogicalResult mlir::triton::TransOp::inferReturnTypes(
+    MLIRContext *context, Optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  // type is the same as the input
+  auto argTy = operands[0].getType().cast<RankedTensorType>();
+  SmallVector<int64_t> retShape(argTy.getShape().begin(),
+                                argTy.getShape().end());
+  std::reverse(retShape.begin(), retShape.end());
+  auto retEltTy = argTy.getElementType();
+  Attribute argEncoding = argTy.getEncoding();
+  Attribute retEncoding;
+  if (argEncoding) {
+    Dialect &dialect = argEncoding.getDialect();
+    auto inferLayoutInterface = dyn_cast<DialectInferLayoutInterface>(&dialect);
+    if (inferLayoutInterface->inferTransOpEncoding(argEncoding, retEncoding)
+            .failed()) {
+      llvm::report_fatal_error("failed to infer layout for ReduceOp");
+      return mlir::failure();
+    }
+  }
+  inferredReturnTypes.push_back(
+      RankedTensorType::get(retShape, retEltTy, retEncoding));
+  return mlir::success();
+}
+
 //-- DotOp --
 mlir::LogicalResult mlir::triton::DotOp::inferReturnTypes(
     MLIRContext *context, Optional<Location> location, ValueRange operands,

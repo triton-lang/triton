@@ -1,6 +1,7 @@
 #include "Utility.h"
 #include "mlir/Dialect/SCF/SCF.h"
 #include "mlir/IR/BlockAndValueMapping.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 namespace mlir {
 
@@ -21,8 +22,6 @@ public:
     SmallVector<Value, 4> newInitArgs = forOp.getInitArgs();
     bool shouldRematerialize = false;
     for (size_t i = 0; i < newInitArgs.size(); i++) {
-      auto initArg = newInitArgs[i];
-      auto regionArg = forOp.getRegionIterArgs()[i];
       if (newInitArgs[i].getType() != forOp.getRegionIterArgs()[i].getType() ||
           newInitArgs[i].getType() != forOp.getResultTypes()[i]) {
         shouldRematerialize = true;
@@ -52,8 +51,13 @@ public:
 
 } // namespace
 
-void addFixupLoopPattern(MLIRContext *ctx, RewritePatternSet &patterns) {
+LogicalResult fixupLoops(ModuleOp mod) {
+  auto *ctx = mod.getContext();
+  mlir::RewritePatternSet patterns(ctx);
   patterns.add<FixupLoop>(ctx);
+  if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
+    return failure();
+  return success();
 }
 
 } // namespace mlir

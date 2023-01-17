@@ -3,6 +3,7 @@
 #AL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #BL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #A_SHARED = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#A_SHARED_T = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0, 1]}>
 #B_SHARED = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 #C = #triton_gpu.mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
 #A_DOT = #triton_gpu.dot_op<{opIdx = 0, parent = #C}>
@@ -49,6 +50,15 @@ func @convert(%A : !tt.ptr<f16>) {
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   // CHECK: %0 -> %0
   %cst1 = triton_gpu.convert_layout %cst0 : (tensor<16x16xf16, #AL>) -> tensor<16x16xf16, #A_SHARED>
+  return
+}
+
+// CHECK-LABEL: trans
+func @trans(%A : !tt.ptr<f16>) {
+  // CHECK: %cst -> %cst
+  %tensor = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #A_SHARED>
+  // CHECK: %0 -> %cst
+  %b = tt.trans %tensor : (tensor<16x32xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED_T>
   return
 }
 

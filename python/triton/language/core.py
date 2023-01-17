@@ -168,13 +168,13 @@ class dtype:
             return builder.get_void_ty()
         elif self.name == 'int1':
             return builder.get_int1_ty()
-        elif self.name == 'int8' or self.name == 'uint8':
+        elif self.name in ('int8', 'uint8'):
             return builder.get_int8_ty()
-        elif self.name == 'int16' or self.name == 'uint16':
+        elif self.name in ('int16', 'uint16'):
             return builder.get_int16_ty()
-        elif self.name == 'int32' or self.name == 'uint32':
+        elif self.name in ('int32', 'uint32'):
             return builder.get_int32_ty()
-        elif self.name == 'int64' or self.name == 'uint64':
+        elif self.name in ('int64', 'uint64'):
             return builder.get_int64_ty()
         elif self.name == 'fp8':
             return builder.get_fp8_ty()
@@ -402,6 +402,18 @@ class constexpr:
 
     def __neg__(self):
         return constexpr(-self.value)
+
+    def __and__(self, other):
+        return constexpr(self.value & other.value)
+
+    def logical_and(self, other):
+        return constexpr(self.value and other.value)
+
+    def __or__(self, other):
+        return constexpr(self.value | other.value)
+
+    def logical_or(self, other):
+        return constexpr(self.value or other.value)
 
     def __pos__(self):
         return constexpr(+self.value)
@@ -818,9 +830,9 @@ def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", 
     'type cache_modifier: str, optional
     """
     # mask, other can be constexpr
-    if mask is not None:
+    if _constexpr_to_value(mask) is not None:
         mask = _to_tensor(mask, _builder)
-    if other is not None:
+    if _constexpr_to_value(other) is not None:
         other = _to_tensor(other, _builder)
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
@@ -844,7 +856,7 @@ def store(pointer, value, mask=None, _builder=None):
     """
     # value can be constexpr
     value = _to_tensor(value, _builder)
-    if mask is not None:
+    if _constexpr_to_value(mask) is not None:
         mask = _to_tensor(mask, _builder)
     return semantic.store(pointer, value, mask, _builder)
 

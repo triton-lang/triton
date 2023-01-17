@@ -371,20 +371,22 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
   );
 
   let builders = [
-     // specific for MMAV1(Volta)
+     // Specially for MMAV1(Volta)
     AttrBuilder<(ins "int":$versionMajor,
                      "int":$numWarps,
                      "int":$id), [{
-      assert(versionMajor == 1 && "Only MMAv1 has multiple versionMinor.");
+      assert(versionMajor == 1 && "This builder is specially for versionMajor==1");
       SmallVector<unsigned> wpt({static_cast<unsigned>(numWarps), 1});
       int versionMinor = 0;
-      versionMinor |= static_cast<bool>((1<<0) & id) * (1<<4);
-      versionMinor |= static_cast<bool>((1<<1) & id) * (1<<5);
-      versionMinor |= static_cast<bool>((1<<2) & id) * (1<<6);
+
+      assert(id < (1<<numBitsToHoldMmaV1ID) && "MMAv1 ID exceeds the maximum");
+      for (int i = 0; i < numBitsToHoldMmaV1ID; ++i)
+        versionMinor |= static_cast<bool>((1<<i) & id) * (1<<(4+i));
+
       return $_get(context, versionMajor, versionMinor, wpt);
     }]>,
 
-    // specific for MMAV1(Volta)
+    // Specially for MMAV1(Volta)
     AttrBuilder<(ins "int":$versionMajor,
                      "ArrayRef<unsigned>":$warpsPerCTA,
                      "ArrayRef<int64_t>":$shapeA,
@@ -392,7 +394,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
                      "bool":$isARow,
                      "bool":$isBRow,
                      "int":$id), [{
-      assert(versionMajor == 1 && "Only MMAv1 has multiple versionMinor.");
+      assert(versionMajor == 1 && "This builder is specially for versionMajor==1");
       bool isAVec4 = !isARow && (shapeA[isARow] <= 16);
       bool isBVec4 = isBRow && (shapeB[isBRow] <= 16);
       // 4-bits to encode 4 booleans: [isARow, isBRow, isAVec4, isBVec4]
@@ -401,9 +403,10 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
                          (isBRow * (1<<1)) |\
                          (isAVec4 * (1<<2)) |\
                          (isBVec4 * (1<<3));
-      versionMinor |= static_cast<bool>((1<<0) & id) * (1<<4);
-      versionMinor |= static_cast<bool>((1<<1) & id) * (1<<5);
-      versionMinor |= static_cast<bool>((1<<2) & id) * (1<<6);
+
+      assert(id < (1<<numBitsToHoldMmaV1ID) && "MMAv1 ID exceeds the maximum");
+      for (int i = 0; i < numBitsToHoldMmaV1ID; ++i)
+        versionMinor |= static_cast<bool>((1<<i) & id) * (1<<(4+i));
 
       return $_get(context, versionMajor, versionMinor, warpsPerCTA);
     }]>
@@ -414,6 +417,14 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     bool isAmpere() const;
     // Get [isARow, isBRow, isAVec4, isBVec4, id] from versionMinor
     std::tuple<bool, bool, bool, bool, int> decodeVoltaLayoutStates() const;
+    // Number of bits in versionMinor to hold the ID of the MMA encoding instance.
+    // Here 5 bits can hold 32 IDs in a single module.
+    static constexpr int numBitsToHoldMmaV1ID{5};
+
+    // Here is a temporary flag that indicates whether we need to update the warpsPerCTA for MMAv1, since the current backend cannot support the updated wpt.
+    // The mmav1's wpt-related logic is separated into multiple files, so a global flag is added here for universal coordination.
+    // TODO[Superjomn]: Remove this flag once the MMAv1 backend is ready.
+    static constexpr bool _mmaV1UpdateWpt{false};
   }];
 
 }
