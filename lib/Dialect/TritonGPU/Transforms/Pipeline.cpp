@@ -319,8 +319,8 @@ void LoopPipeliner::emitPrologue() {
       }
 
       // Update mapping of results
-      if (stage == numStages - 2)
-        continue;
+      // if (stage == numStages - 2)
+      //   continue;
 
       for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
         Value originalResult = op->getResult(dstIdx);
@@ -496,20 +496,21 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   extractSliceIndex = builder.create<arith::IndexCastOp>(
       extractSliceIndex.getLoc(), builder.getIndexType(), extractSliceIndex);
 
-  DenseMap<Operation *, Operation *> tmpDirtyHack;
   for (Operation *op : orderedDeps)
     if (!loads.contains(op->getResult(0))) {
-      Operation *newOp = builder.clone(*op, nextMapping);
-      tmpDirtyHack[op] = newOp;
+      Operation *nextOp = builder.clone(*op, nextMapping);
 
       auto originYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-      for (OpOperand &operand : originYield->getOpOperands()) {
-        if (operand.get() == op->getResult(0)) {
-          size_t originIdx = operand.getOperandNumber();
-          size_t newArgIdx = depArgsIdx[forOp.getRegionIterArgs()[originIdx]];
-          BlockArgument newArg = newForOp.getRegionIterArgs()[newArgIdx];
-          nextMapping.map(forOp.getRegionIterArgs()[originIdx],
-                          newOp->getResult(0));
+      for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
+        for (OpOperand &operand : originYield->getOpOperands()) {
+          if (operand.get() == op->getResult(dstIdx)) {
+            size_t originIdx = operand.getOperandNumber();
+            size_t newArgIdx = depArgsIdx[forOp.getRegionIterArgs()[originIdx]];
+            BlockArgument newArg = newForOp.getRegionIterArgs()[newArgIdx];
+            nextMapping.map(forOp.getRegionIterArgs()[originIdx],
+                            nextOp->getResult(dstIdx));
+            depArgsMapping[newArg] = nextOp->getResult(dstIdx);
+          }
         }
       }
     }
@@ -534,7 +535,6 @@ scf::ForOp LoopPipeliner::createNewForOp() {
       } else
         newMask = builder.create<triton::SplatOp>(
             loadOp.getLoc(), getI1SameShape(loadOp), nextLoopCond);
-      llvm::outs() << loadOp.ptr() << "\n";
       Value insertAsyncOp = builder.create<triton::gpu::InsertSliceAsyncOp>(
           op->getLoc(), loadsBuffer[loadOp].getType(),
           nextMapping.lookupOrDefault(loadOp.ptr()),
@@ -556,20 +556,19 @@ scf::ForOp LoopPipeliner::createNewForOp() {
                                     int_attr(sliceType.getShape()[1])},
           SmallVector<OpFoldResult>{int_attr(1), int_attr(1), int_attr(1)});
       extractSlices.push_back(nextOp->getResult(0));
-    } else {
-      nextOp = tmpDirtyHack.lookup(op);
-    }
-    // Update mapping of results
-    for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
-      nextMapping.map(op->getResult(dstIdx), nextOp->getResult(dstIdx));
-      // If this is a loop-carried value, update the mapping for yield
-      auto originYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-      for (OpOperand &operand : originYield->getOpOperands()) {
-        if (operand.get() == op->getResult(dstIdx)) {
-          size_t originIdx = operand.getOperandNumber();
-          size_t newArgIdx = depArgsIdx[forOp.getRegionIterArgs()[originIdx]];
-          BlockArgument newArg = newForOp.getRegionIterArgs()[newArgIdx];
-          depArgsMapping[newArg] = nextOp->getResult(dstIdx);
+
+      // Update mapping of results
+      for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
+        nextMapping.map(op->getResult(dstIdx), nextOp->getResult(dstIdx));
+        // If this is a loop-carried value, update the mapping for yield
+        auto originYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+        for (OpOperand &operand : originYield->getOpOperands()) {
+          if (operand.get() == op->getResult(dstIdx)) {
+            size_t originIdx = operand.getOperandNumber();
+            size_t newArgIdx = depArgsIdx[forOp.getRegionIterArgs()[originIdx]];
+            BlockArgument newArg = newForOp.getRegionIterArgs()[newArgIdx];
+            depArgsMapping[newArg] = nextOp->getResult(dstIdx);
+          }
         }
       }
     }
