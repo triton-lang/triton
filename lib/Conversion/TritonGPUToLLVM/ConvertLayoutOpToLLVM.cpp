@@ -306,7 +306,7 @@ private:
         // }
       }
 
-#define SHOW_ACCI 1
+#define SHOW_ACCI 0
 #if SHOW_ACCI
       for (unsigned elemId = 0; elemId < accumSizePerThread; elemId++) {
         auto [coord, currVal] = coord2val[elemId];

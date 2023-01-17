@@ -39,6 +39,8 @@ public:
     auto AT = dotOp.a().getType().cast<RankedTensorType>();
     auto BT = dotOp.b().getType().cast<RankedTensorType>();
     auto DT = dotOp.d().getType().cast<RankedTensorType>();
+    auto shapeA = AT.getShape();
+    auto shapeB = BT.getShape();
     if (!DT.getEncoding())
       return failure();
     auto mmaLayout = DT.getEncoding().dyn_cast<MmaEncodingAttr>();
@@ -60,12 +62,13 @@ public:
     // could only be set here for those states might be updated by previous
     // patterns in the Combine Pass.
     if (isARow_ == isARow && isBRow_ == isBRow) {
+      isAVec4 = !isARow && (shapeA[isARow] <= 16);
+      isBVec4 = isBRow && (shapeB[isBRow] <= 16);
       auto tgtWpt =
           getWarpsPerCTA(DT.getShape(), isARow, isBRow, isAVec4, isBVec4,
                          product(mmaLayout.getWarpsPerCTA()));
       // Check if the wpt should be updated.
-      if (tgtWpt == mmaLayout.getWarpsPerCTA() ||
-          !MmaEncodingAttr::_mmaV1UpdateWpt)
+      if (tgtWpt == mmaLayout.getWarpsPerCTA())
         return failure();
     }
 
@@ -83,12 +86,9 @@ public:
       auto updatedWpt =
           getWarpsPerCTA(DT.getShape(), isARow_, isBRow_, isAVec4_, isBVec4_,
                          product(mmaLayout.getWarpsPerCTA()));
-      auto newWpt = MmaEncodingAttr::_mmaV1UpdateWpt
-                        ? updatedWpt
-                        : mmaLayout.getWarpsPerCTA();
       newMmaLayout = MmaEncodingAttr::get(ctx, mmaLayout.getVersionMajor(),
-                                          newWpt, AT.getShape(), BT.getShape(),
-                                          isARow, isBRow, mmaId);
+                                          updatedWpt, AT.getShape(),
+                                          BT.getShape(), isARow, isBRow, mmaId);
     }
 
     // Collect the wrong MMA Layouts, and mark need to update.
@@ -118,6 +118,7 @@ public:
     int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
     rep[1] = 2 * packSize1;
     spw[1] = fpw[1] * 4 * rep[1];
+    printf("wpt-spw t-0 %d %d\n", spw[0], spw[1]);
 
     do {
       wpt_nm1 = wpt;

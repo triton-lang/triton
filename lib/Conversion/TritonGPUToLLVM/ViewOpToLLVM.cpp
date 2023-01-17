@@ -84,7 +84,7 @@ struct SplatOpConversion
         } else {
           DotOpMmaV1ConversionHelper::BParam bParam(isBRow, isBVec4);
           numElems =
-              helper.numElemsPerThreadA(shape, isBRow, isBVec4, bParam.vec);
+              helper.numElemsPerThreadB(shape, isBRow, isBVec4, bParam.vec);
         }
       }
     } else if (auto blockedLayout = parent.dyn_cast<BlockedEncodingAttr>()) {
