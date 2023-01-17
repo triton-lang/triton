@@ -1552,7 +1552,6 @@ class CompiledKernel:
             raise OutOfResources(self.shared, max_shared, "shared memory")
         mod, func, n_regs, n_spills = cuda_utils.load_binary(self.metadata["name"], self.asm["cubin"], self.shared, device)
         # print(self.shared, n_regs, n_spills)
-        # print(self.shared, n_regs, n_spills)
         self.cu_module = mod
         self.cu_function = func
 
