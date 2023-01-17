@@ -1619,7 +1619,8 @@ class CudaUtils(object):
             cls.instance = super(CudaUtils, cls).__new__(cls)
         return cls.instance
 
-    def _generate_src(self):
+    @staticmethod
+    def _generate_src():
         return """
         #include <cuda.h>
 
