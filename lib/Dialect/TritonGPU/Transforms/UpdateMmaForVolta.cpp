@@ -220,14 +220,15 @@ public:
 
     auto tensorTy = constant.getResult().getType().cast<RankedTensorType>();
     auto mma = tensorTy.getEncoding().dyn_cast<MmaEncodingAttr>();
-    if ((!mma))
+    auto dot = tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
+    if (!mma && !dot)
       return failure();
 
     auto newTensorTy = getUpdatedType(tensorTy);
     if (auto attr = constant.getValue().dyn_cast<SplatElementsAttr>()) {
       auto newRet =
           SplatElementsAttr::get(newTensorTy, attr.getSplatValue<Attribute>());
-      rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, newTensorTy, newRet);
+      rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, newRet);
       return success();
     }
 
