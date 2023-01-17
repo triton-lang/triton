@@ -177,7 +177,9 @@ private:
       PTXBuilder builder;
       auto idx = getIdx(m, n);
 
-      auto *resOprs = builder.newListOperand(8, "=f");
+      // note: using "=f" for float leads to cleaner PTX
+      bool isIntMMA = DTensorTy.getElementType().isInteger(32);
+      auto *resOprs = builder.newListOperand(8, isIntMMA ? "=r" : "=f");
       auto *AOprs = builder.newListOperand({
           {ha.first, "r"},
           {ha.second, "r"},
