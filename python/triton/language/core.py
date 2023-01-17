@@ -139,12 +139,15 @@ class dtype:
     def is_bool(self):
         return self.is_int1()
 
+    @staticmethod
     def is_void(self):
         raise RuntimeError("Not implemented")
-
+    
+    @staticmethod
     def is_block(self):
         return False
 
+    @staticmethod
     def is_ptr(self):
         return False
 

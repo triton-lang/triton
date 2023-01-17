@@ -156,7 +156,8 @@ class Libdevice(ExternLibrary):
         '''
         super().__init__("libdevice", path)
         self._symbol_groups = {}
-
+        
+    @staticmethod
     def _extract_symbol(self, line) -> Optional[Symbol]:
         # Extract symbols from line in the following format:
         # "define [internal] <ret_type> @<name>(<arg_types>,)"
