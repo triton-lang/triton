@@ -201,12 +201,8 @@ private:
       Value res =
           builder.launch(rewriter, loc, helper.getMmaRetType(ATensorTy));
 
-      auto getIntAttr = [&](int v) {
-        return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
-      };
-
-      for (unsigned i = 0; i < 8; i++) {
-        Value elem = extract_val(f32_ty, res, getIntAttr(i));
+      for (auto i = 0; i < 8; i++) {
+        Value elem = extract_val(f32_ty, res, i32_arr_attr(i));
         acc[idx[i]] = elem;
         resVals[(m * numN / 2 + n) * 8 + i] = elem;
       }
