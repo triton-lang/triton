@@ -111,6 +111,7 @@ def _kernel(A, B, C, M, N, K,
     else:
         tl.atomic_add(C, acc, mask=mask)
 
+
 class _matmul(torch.autograd.Function):
     kernel = _kernel
 
