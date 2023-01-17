@@ -6,5 +6,6 @@ add_mlir_library(TritonAnalysis
   Utility.cpp
 
   DEPENDS
+  TritonTableGen
   TritonGPUAttrDefsIncGen
 )
