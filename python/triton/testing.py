@@ -151,8 +151,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
     torch.cuda.synchronize()
     estimate_ms = start_event.elapsed_time(end_event) / 5
     # compute number of warmup and repeat
-    n_warmup = min(500, max(1, int(warmup / estimate_ms)))
-    n_repeat = min(500, max(1, int(rep / estimate_ms)))
+    n_warmup = max(1, int(warmup / estimate_ms))
+    n_repeat = max(1, int(rep / estimate_ms))
     # We maintain a buffer of 256 MB that we clear
     # before each kernel call to make sure that the L2
     # doesn't contain any input data before the run

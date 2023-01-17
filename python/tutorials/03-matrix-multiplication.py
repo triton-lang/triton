@@ -240,11 +240,7 @@ def matmul_kernel(
     tl.store(c_ptrs, c, mask=c_mask)
 
 
-# matmul_kernel = triton.compile("./matmul-2.ttgir", num_warps=8)
-
 # we can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`
-
-
 @triton.jit
 def leaky_relu(x):
     return tl.where(x >= 0, x, 0.01 * x)
@@ -279,14 +275,6 @@ def matmul(a, b, activation=None):
         c.stride(0), c.stride(1),
         ACTIVATION=activation,
     )
-    # grid = (triton.cdiv(M, 128) * triton.cdiv(N, 256), 1, 1)
-    # matmul_kernel[grid](
-    #     a.data_ptr(), b.data_ptr(), c.data_ptr(),
-    #     M, N, K,
-    #     a.stride(0),
-    #     b.stride(0),
-    #     c.stride(0)
-    # )
     return c
 
 
@@ -339,9 +327,9 @@ def benchmark(M, N, K, provider):
     a = torch.randn((M, K), device='cuda', dtype=torch.float16)
     b = torch.randn((K, N), device='cuda', dtype=torch.float16)
     if provider == 'cublas':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), rep=500)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), rep=100)
     if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), rep=500)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), rep=100)
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
 
