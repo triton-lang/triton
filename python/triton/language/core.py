@@ -711,7 +711,7 @@ def zeros(shape, dtype, _builder=None):
 
 
 @builtin
-def fill(shape, value, dtype, _builder=None):
+def full(shape, value, dtype, _builder=None):
     """
     Returns a tensor filled with the scalar value for the given :code:`shape` and :code:`dtype`.
 
@@ -729,7 +729,7 @@ def fill(shape, value, dtype, _builder=None):
     shape = [x.value for x in shape]
     value = _constexpr_to_value(value)
     dtype = _constexpr_to_value(dtype)
-    return semantic.fill(shape, value, dtype, _builder)
+    return semantic.full(shape, value, dtype, _builder)
 
 
 # -----------------------
@@ -760,6 +760,7 @@ def broadcast_to(input, shape, _builder=None):
     :param shape: The desired shape.
     :type shape: Tuple[int]
     """
+    shape = [_constexpr_to_value(s) for s in shape]
     return semantic.broadcast_impl_shape(input, shape, _builder)
 
 
