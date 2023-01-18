@@ -47,11 +47,14 @@ struct DotOpMmaV1ConversionHelper {
       : mmaLayout(mmaLayout), wpt(mmaLayout.getWarpsPerCTA()) {}
 
   // Help to share some variables across multiple functions for A.
+  // TODO[Superjomn]: refactor and restrict this to only use in DotOp
+  // conversion.
   struct AParam {
     SmallVector<int> rep;
     SmallVector<int> spw;
     bool isAVec4{};
-    int vec{};
+    int vec{}; // This could only used in DotOp, not in
+               // loadA/loadB/TypeConverter
 
     AParam(bool isARow, bool isAVec4) : isAVec4(isAVec4) { build(isARow); }
 
@@ -68,11 +71,14 @@ struct DotOpMmaV1ConversionHelper {
   };
 
   // Help to share some variables across multiple functions for A.
+  // TODO[Superjomn]: refactor and restrict this to only use in DotOp
+  // conversion.
   struct BParam {
     SmallVector<int> rep;
     SmallVector<int> spw;
     bool isBVec4{};
-    int vec{};
+    int vec{}; // This could only used in DotOp, not in
+               // loadA/loadB/TypeConverter
 
     BParam(bool isBRow, bool isBVec4) : isBVec4(isBVec4) { build(isBRow); }
 
@@ -123,6 +129,8 @@ struct DotOpMmaV1ConversionHelper {
                          int vec) const {
     int numM = getNumM(shape[0], isARow, isAVec4);
     int NK = shape[1];
+    printf("* numElemsPerThreadA: numM:%d NK:%d vec:%d isARow:%d\n", numM, NK,
+           vec, isARow);
     // Here we mimic the logic in loadA, the result cannot be calculated
     // directly.
     llvm::DenseSet<std::pair<int, int>> visited;
@@ -278,6 +286,9 @@ struct DotOpMmaV1ConversionHelper {
         if (!has.count({m, k}))
           loadA(m, k);
 
+    printf("loadA-params t-0 numM:%d NK:%d vec:%d isARow:%d isAVec4:%d\n", numM,
+           NK, vecA, isARow, isAVec4);
+
     SmallVector<Value> elems;
     elems.reserve(has.size() * 2);
     for (auto item : has) { // has is a map, the key should be ordered.
@@ -308,6 +319,7 @@ struct DotOpMmaV1ConversionHelper {
     bool isBRow = order[0] != 0; // is row-major in shared memory layout
     // isBRow_ indicates whether B is row-major in DotOperand layout
     auto [_0, isBRow_, _1, isBVec4, _2] = mmaLayout.decodeVoltaLayoutStates();
+    assert(isBRow == isBRow_ && "B need smem isRow");
 
     BParam param(isBRow_, isBVec4);
 

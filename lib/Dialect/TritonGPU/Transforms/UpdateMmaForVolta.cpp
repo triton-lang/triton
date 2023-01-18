@@ -13,6 +13,7 @@ using triton::DotOp;
 using triton::gpu::ConvertLayoutOp;
 using triton::gpu::DotOperandEncodingAttr;
 using triton::gpu::MmaEncodingAttr;
+using triton::gpu::SharedEncodingAttr;
 using triton::gpu::SliceEncodingAttr;
 
 // This pattern collects the wrong Mma those need to update and create the right
@@ -33,7 +34,6 @@ public:
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
-
     auto dotOp = cast<triton::DotOp>(op);
     auto *ctx = dotOp->getContext();
     auto AT = dotOp.a().getType().cast<RankedTensorType>();
@@ -55,37 +55,31 @@ public:
     auto dotOperandB = BT.getEncoding().cast<DotOperandEncodingAttr>();
     bool isARow = dotOperandA.getIsMMAv1Row().cast<BoolAttr>().getValue();
     bool isBRow = dotOperandB.getIsMMAv1Row().cast<BoolAttr>().getValue();
-    auto [isARow_, isBRow_, isAVec4, isBVec4, mmaId] =
+    auto [isARow_, isBRow_, isAVec4_, isBVec4_, mmaId] =
         mmaLayout.decodeVoltaLayoutStates();
+
+    bool isAVec4 = !isARow && (shapeA[isARow] <= 16);
+    bool isBVec4 = isBRow && (shapeB[isBRow] <= 16);
 
     // The wpt of MMAv1 is also determined by isARow, isBRow and shape, and it
     // could only be set here for those states might be updated by previous
     // patterns in the Combine Pass.
-    if (isARow_ == isARow && isBRow_ == isBRow) {
-      isAVec4 = !isARow && (shapeA[isARow] <= 16);
-      isBVec4 = isBRow && (shapeB[isBRow] <= 16);
-      auto tgtWpt =
-          getWarpsPerCTA(DT.getShape(), isARow, isBRow, isAVec4, isBVec4,
-                         product(mmaLayout.getWarpsPerCTA()));
-      // Check if the wpt should be updated.
+    auto tgtWpt = getWarpsPerCTA(DT.getShape(), isARow, isBRow, isAVec4,
+                                 isBVec4, product(mmaLayout.getWarpsPerCTA()));
+    if (isARow == isARow_ && isBRow == isBRow_ && isAVec4 == isAVec4_ &&
+        isBVec4 == isBVec4_) {
       if (tgtWpt == mmaLayout.getWarpsPerCTA())
         return failure();
     }
 
     MmaEncodingAttr newMmaLayout;
     {
-      // Create a temporary MMA layout to obtain the isAVec4 and isBVec4
-      auto tmpMmaLayout = MmaEncodingAttr::get(
-          ctx, mmaLayout.getVersionMajor(), mmaLayout.getWarpsPerCTA(),
-          AT.getShape(), BT.getShape(), isARow, isBRow, mmaId);
-      auto [isARow_, isBRow_, isAVec4_, isBVec4_, _] =
-          tmpMmaLayout.decodeVoltaLayoutStates();
-
       // Recalculate the wpt, for here we could get the latest information, the
       // wpt should be updated.
       auto updatedWpt =
-          getWarpsPerCTA(DT.getShape(), isARow_, isBRow_, isAVec4_, isBVec4_,
+          getWarpsPerCTA(DT.getShape(), isARow, isBRow, isAVec4, isBVec4,
                          product(mmaLayout.getWarpsPerCTA()));
+
       newMmaLayout = MmaEncodingAttr::get(ctx, mmaLayout.getVersionMajor(),
                                           updatedWpt, AT.getShape(),
                                           BT.getShape(), isARow, isBRow, mmaId);
@@ -97,12 +91,14 @@ public:
     return failure();
   }
 
+  void collectDot(mlir::Operation *op) const {}
+
   // Get the wpt for MMAv1 using more information.
   // Reference the original logic here
   // https://github.com/openai/triton/blob/0e4691e6dd91e001a8d33b71badf8b3314325459/lib/codegen/analysis/layout.cc#L223
-  SmallVector<unsigned, 2> getWarpsPerCTA(ArrayRef<int64_t> shape, bool isARow,
-                                          bool isBRow, bool isAVec4,
-                                          bool isBVec4, int numWarps) const {
+  SmallVector<unsigned> getWarpsPerCTA(ArrayRef<int64_t> shape, bool isARow,
+                                       bool isBRow, bool isAVec4, bool isBVec4,
+                                       int numWarps) const {
     // TODO[Superjomn]: Share code with
     // DotOpMmaV1ConversionHelper::AParam/BParam, since same code to compute the
     // rep,spw and fpw.
