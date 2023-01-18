@@ -176,7 +176,9 @@ private:
       PTXBuilder builder;
       auto idx = getIdx(m, n);
 
-      auto *resOprs = builder.newListOperand(8, "=f");
+      // note: using "=f" for float leads to cleaner PTX
+      bool isIntMMA = DTensorTy.getElementType().isInteger(32);
+      auto *resOprs = builder.newListOperand(8, isIntMMA ? "=r" : "=f");
       auto *AOprs = builder.newListOperand({
           {ha.first, "r"},
           {ha.second, "r"},
@@ -200,17 +202,8 @@ private:
       Value res =
           builder.launch(rewriter, loc, helper.getMmaRetType(ATensorTy));
 
-      auto getIntAttr = [&](int v) {
-        return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
-      };
-
-      SmallVector<Value> C; // DEBUG
-      for (int i = 0; i < 8; i++) {
-        C.push_back(acc[idx[i]]);
-      }
-
-      for (unsigned i = 0; i < 8; i++) {
-        Value elem = extract_val(f32_ty, res, getIntAttr(i));
+      for (auto i = 0; i < 8; i++) {
+        Value elem = extract_val(f32_ty, res, i32_arr_attr(i));
         acc[idx[i]] = elem;
       }
 

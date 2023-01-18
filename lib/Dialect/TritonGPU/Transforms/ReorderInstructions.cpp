@@ -53,6 +53,9 @@ public:
       auto user_end = op->user_end();
       if (std::distance(user_begin, user_end) != 1)
         return;
+      if (user_begin->getParentOfType<scf::ForOp>() ==
+          op->getParentOfType<scf::ForOp>())
+        return;
       opToMove.insert({op, *user_begin});
     });
     for (auto &kv : opToMove)
@@ -89,8 +92,13 @@ public:
         return;
       if (op->getUsers().empty())
         return;
-      auto user_begin = op->user_begin();
-      op->moveBefore(*user_begin);
+      auto dotUser = dyn_cast<triton::DotOp>(*op->user_begin());
+      if (!dotUser)
+        return;
+      auto BOp = dotUser.getOperand(1).getDefiningOp();
+      if (!BOp)
+        return;
+      op->moveBefore(BOp);
     });
     return;
   }

@@ -49,10 +49,8 @@ struct FpToFpOpConversion
         struct_ty(SmallVector<Type>{fp16x2VecTy, fp16x2VecTy});
     auto fp16x2x2Struct =
         builder.launch(rewriter, loc, fp16x2x2StructTy, false);
-    auto fp16x2Vec0 =
-        extract_val(fp16x2VecTy, fp16x2x2Struct, rewriter.getI32ArrayAttr({0}));
-    auto fp16x2Vec1 =
-        extract_val(fp16x2VecTy, fp16x2x2Struct, rewriter.getI32ArrayAttr({1}));
+    auto fp16x2Vec0 = extract_val(fp16x2VecTy, fp16x2x2Struct, i32_arr_attr(0));
+    auto fp16x2Vec1 = extract_val(fp16x2VecTy, fp16x2x2Struct, i32_arr_attr(1));
     return {extract_element(f16_ty, fp16x2Vec0, i32_val(0)),
             extract_element(f16_ty, fp16x2Vec0, i32_val(1)),
             extract_element(f16_ty, fp16x2Vec1, i32_val(0)),
@@ -143,10 +141,8 @@ struct FpToFpOpConversion
         struct_ty(SmallVector<Type>{bf16x2VecTy, bf16x2VecTy});
     auto bf16x2x2Struct =
         builder.launch(rewriter, loc, bf16x2x2StructTy, false);
-    auto bf16x2Vec0 =
-        extract_val(bf16x2VecTy, bf16x2x2Struct, rewriter.getI32ArrayAttr({0}));
-    auto bf16x2Vec1 =
-        extract_val(bf16x2VecTy, bf16x2x2Struct, rewriter.getI32ArrayAttr({1}));
+    auto bf16x2Vec0 = extract_val(bf16x2VecTy, bf16x2x2Struct, i32_arr_attr(0));
+    auto bf16x2Vec1 = extract_val(bf16x2VecTy, bf16x2x2Struct, i32_arr_attr(1));
     return {extract_element(i16_ty, bf16x2Vec0, i32_val(0)),
             extract_element(i16_ty, bf16x2Vec0, i32_val(1)),
             extract_element(i16_ty, bf16x2Vec1, i32_val(0)),

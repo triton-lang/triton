@@ -214,7 +214,7 @@ struct LoadOpConversion
         Value curr;
         if (retTy.isa<LLVM::LLVMStructType>()) {
           curr = extract_val(IntegerType::get(getContext(), width), ret,
-                             rewriter.getI64ArrayAttr(ii));
+                             i64_arr_attr(ii));
         } else {
           curr = ret;
         }
@@ -802,9 +802,6 @@ struct InsertSliceAsyncOpConversion
       }
     }
 
-    PTXBuilder ptxBuilder;
-    ptxBuilder.create<>("cp.async.commit_group")->operator()();
-    ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
     rewriter.replaceOp(op, llDst);
     return success();
   }

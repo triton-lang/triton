@@ -1488,9 +1488,9 @@ def compile(fn, **kwargs):
         import re
         match = re.search(prototype_pattern[ir], src, re.MULTILINE)
         name, signature = match.group(1), match.group(2)
-        print(name, signature)
+        # print(name, signature)
         types = re.findall(arg_type_pattern[ir], signature)
-        print(types)
+        # print(types)
         param_tys = [convert_type_repr(ty) for ty in types]
         signature = {k: v for k, v in enumerate(param_tys)}
         first_stage = list(stages.keys()).index(ir)
@@ -1581,6 +1581,7 @@ class CompiledKernel:
         if self.shared > max_shared:
             raise OutOfResources(self.shared, max_shared, "shared memory")
         mod, func, n_regs, n_spills = cuda_utils.load_binary(self.metadata["name"], self.asm["cubin"], self.shared, device)
+        # print(self.shared, n_regs, n_spills)
         self.cu_module = mod
         self.cu_function = func
 
@@ -1620,7 +1621,8 @@ class CudaUtils(object):
             cls.instance = super(CudaUtils, cls).__new__(cls)
         return cls.instance
 
-    def _generate_src(self):
+    @staticmethod
+    def _generate_src():
         return """
         #include <cuda.h>
 

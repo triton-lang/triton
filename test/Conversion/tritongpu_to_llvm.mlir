@@ -461,6 +461,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
     // CHECK-SAME: cp.async.commit_group
     %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x64x!tt.ptr<f32>, #AL> -> tensor<2x16x64xf32, #A>
+    triton_gpu.async_commit_group
     return
   }
 }
@@ -506,6 +507,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     // CHECK: llvm.inline_asm
     // CHECK-SAME: cp.async.commit_group
     %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x32x!tt.ptr<f32>, #AL> -> tensor<2x16x32xf32, #A>
+    triton_gpu.async_commit_group
     return
   }
 }
@@ -562,6 +564,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     // CHECK: llvm.inline_asm
     // CHECK-SAME: cp.async.commit_group
     %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32x!tt.ptr<f32>, #AL> -> tensor<2x32x32xf32, #A>
+    triton_gpu.async_commit_group
     return
   }
 }
@@ -923,10 +926,10 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mma>
     // CHECK: llvm.inline_asm
     // CHECK-SAME: ldmatrix.sync.aligned.m8n8.x4.shared.b16
-    // CHECK-SAME: (f32, f32, f32, f32)
+    // CHECK-SAME: (vector<1xf32>, vector<1xf32>, vector<1xf32>, vector<1xf32>)
     // CHECK: llvm.inline_asm
     // CHECK-SAME: ldmatrix.sync.aligned.m8n8.x4.shared.b16
-    // CHECK-SAME: (f32, f32, f32, f32)
+    // CHECK-SAME: (vector<1xf32>, vector<1xf32>, vector<1xf32>, vector<1xf32>)
     %a_mat = triton_gpu.convert_layout %a : (tensor<32x16xf32, #shared>) -> tensor<32x16xf32, #dot_operand_a>
     %b_mat = triton_gpu.convert_layout %b : (tensor<16x32xf32, #shared>) -> tensor<16x32xf32, #dot_operand_b>
 
