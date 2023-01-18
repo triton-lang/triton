@@ -32,7 +32,7 @@ def _fwd_kernel(
     offs_n = tl.arange(0, BLOCK_N)
     offs_d = tl.arange(0, BLOCK_DMODEL)
     off_q = off_hz * stride_qh + offs_m[:, None] * stride_qm + offs_d[None, :] * stride_qk
-    off_k = off_hz * stride_qh + offs_n[:, None] * stride_kn + offs_d[None, :] * stride_kk
+    off_k = off_hz * stride_qh + offs_n[None, :] * stride_kn + offs_d[:, None] * stride_kk
     off_v = off_hz * stride_qh + offs_n[:, None] * stride_qm + offs_d[None, :] * stride_qk
     # Initialize pointers to Q, K, V
     q_ptrs = Q + off_q
@@ -48,9 +48,9 @@ def _fwd_kernel(
     for start_n in range(0, (start_m + 1) * BLOCK_M, BLOCK_N):
         # start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
-        k = tl.load(k_ptrs + start_n * stride_kn)
+        k = tl.load(k_ptrs)
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
-        qk += tl.dot(q, tl.trans(k))
+        qk += tl.dot(q, k)
         qk *= sm_scale
         qk += tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), 0, float("-inf"))
         # -- compute m_ij, p, l_ij
@@ -70,12 +70,14 @@ def _fwd_kernel(
         acc_scale = l_i / l_i_new * alpha
         acc = acc * acc_scale[:, None]
         # update acc
-        v = tl.load(v_ptrs + start_n * stride_vk)
+        v = tl.load(v_ptrs)
         p = p.to(tl.float16)
         acc += tl.dot(p, v)
         # update m_i and l_i
         l_i = l_i_new
         m_i = m_i_new
+        k_ptrs += BLOCK_N * stride_kn
+        v_ptrs += BLOCK_N * stride_vk
     # rematerialize offsets to save registers
     start_m = tl.program_id(0)
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -316,7 +318,7 @@ BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
 # vary seq length for fixed head and batch=4
 configs = [triton.testing.Benchmark(
     x_names=['N_CTX'],
-    x_vals=[2**i for i in range(10, 15)],
+    x_vals=[2**i for i in range(10, 13)],
     line_arg='provider',
     line_vals=['triton'] + (['flash'] if HAS_FLASH else []),
     line_names=['Triton'] + (['Flash'] if HAS_FLASH else []),
@@ -357,4 +359,5 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.f
         ms = triton.testing.do_bench(fn, percentiles=None, warmup=warmup, rep=rep)
         return ms
 
-# bench_flash_attention.run(save_path='.', print_data=True)
+
+bench_flash_attention.run(save_path='.', print_data=True)
