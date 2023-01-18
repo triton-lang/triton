@@ -48,6 +48,10 @@ SmallVector<SmallVector<unsigned>> ReduceOpHelper::getScratchConfigsFast() {
   auto axis = op.axis();
   SmallVector<SmallVector<unsigned>> smemShapes(3);
 
+  auto argLayout = srcTy.getEncoding();
+  if(triton::gpu::getWarpsPerCTA(argLayout)[axis] == 1)
+    return {{1}, {1}};
+
   /// shared memory block0
   smemShapes[0] = convertType<unsigned>(getSrcShape());
   smemShapes[0][axis] = getInterWarpSize();

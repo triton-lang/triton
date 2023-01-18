@@ -51,6 +51,17 @@ getCvtOrder(const Attribute &srcLayout, const Attribute &dstLayout) {
   return {inOrd, outOrd};
 }
 
+bool isMmaToDotShortcut(MmaEncodingAttr &mmaLayout,
+                        DotOperandEncodingAttr &dotOperandLayout) {
+  // dot_op<opIdx=0, parent=#mma> = #mma
+  // when #mma = MmaEncoding<version=2, warpsPerCTA=[..., 1]>
+  return mmaLayout.getWarpsPerCTA()[1] == 1 &&
+         dotOperandLayout.getOpIdx() == 0 &&
+         dotOperandLayout.getParent() == mmaLayout;
+}
+
+
+
 SmallVector<unsigned>
 getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
                              unsigned &outVec) {
@@ -58,6 +69,13 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   auto dstTy = op.result().getType().cast<RankedTensorType>();
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
+  
+  // MmaToDotShortcut doesn't use shared mem
+  if(auto mmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>())
+    if(auto dotOperandLayout = dstLayout.dyn_cast<DotOperandEncodingAttr>())
+      if(isMmaToDotShortcut(mmaLayout, dotOperandLayout))
+        return {};
+        
   assert(srcLayout && dstLayout &&
          "Unexpect layout in getScratchConfigForCvtLayout()");
   auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
