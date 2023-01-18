@@ -90,7 +90,7 @@ public:
         Type elemTy = convertType(type.getElementType());
         if (mmaLayout.isAmpere()) {
           const llvm::DenseMap<int, Type> targetTyMap = {
-              {32, elemTy},
+              {32, vec_ty(elemTy, 1)},
               {16, vec_ty(elemTy, 2)},
               {8, vec_ty(elemTy, 4)},
           };
@@ -103,8 +103,7 @@ public:
           if (dotOpLayout.getOpIdx() == 0) { // $a
             auto elems =
                 MMA16816ConversionHelper::getANumElemsPerThread(type, wpt[0]);
-            return LLVM::LLVMStructType::getLiteral(
-                ctx, SmallVector<Type>(elems, targetTy));
+            return struct_ty(SmallVector<Type>(elems, targetTy));
           }
           if (dotOpLayout.getOpIdx() == 1) { // $b
             auto elems =

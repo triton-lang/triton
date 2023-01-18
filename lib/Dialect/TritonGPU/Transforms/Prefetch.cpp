@@ -248,13 +248,17 @@ scf::ForOp Prefetcher::createNewForOp() {
                      prefetchWidth;
       Operation *prevDot = firstDot;
       while (kRem != 0) {
-        int64_t kShape = largestPow2(kRem);
+        // int64_t kShape = largestPow2(kRem);
+        int64_t kShape = prefetchWidth;
+        auto insertionPoint = builder.saveInsertionPoint();
+        builder.setInsertionPoint(prevDot);
         Value aRem =
             generatePrefetch(mapping.lookup(dot2aLoopArg[dot]), 0, false,
                              dotEncoding, builder, kOff, kShape);
         Value bRem =
             generatePrefetch(mapping.lookup(dot2bLoopArg[dot]), 1, false,
                              dotEncoding, builder, kOff, kShape);
+        builder.restoreInsertionPoint(insertionPoint);
         newOp = builder.clone(*dot, mapping);
         newOp->setOperand(0, aRem);
         newOp->setOperand(1, bRem);
