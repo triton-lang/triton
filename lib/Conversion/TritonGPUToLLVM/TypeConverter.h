@@ -120,7 +120,6 @@ public:
             DotOpMmaV1ConversionHelper::AParam param(isARow, isAVec4);
             int elems =
                 helper.numElemsPerThreadA(shape, isARow, isAVec4, param.vec);
-            printf("A.typeconverter.elems: %d\n", elems);
             Type x2Ty = vec_ty(elemTy, 2);
             return struct_ty(SmallVector<Type>(elems, x2Ty));
           }
@@ -128,7 +127,6 @@ public:
             DotOpMmaV1ConversionHelper::BParam param(isBRow, isBVec4);
             int elems =
                 helper.numElemsPerThreadB(shape, isBRow, isBVec4, param.vec);
-            printf("B.typeconverter.elems: %d\n", elems);
             Type x2Ty = vec_ty(elemTy, 2);
             return struct_ty(SmallVector<Type>(elems, x2Ty));
           }

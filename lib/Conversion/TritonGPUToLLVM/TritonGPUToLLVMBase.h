@@ -21,7 +21,6 @@ using ::mlir::triton::gpu::SliceEncodingAttr;
 
 namespace mlir {
 namespace LLVM {
-extern Value gThreadId;
 
 // Helper function for using printf in LLVM conversion.
 void vprintf(StringRef msg, ValueRange args,
@@ -214,7 +213,6 @@ public:
         ValueRange{rewriter.create<::mlir::gpu::ThreadIdOp>(
             loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x)});
     Value threadId = cast.getResult(0);
-    LLVM::gThreadId = threadId; // DEBUG
 
     return threadId;
   }

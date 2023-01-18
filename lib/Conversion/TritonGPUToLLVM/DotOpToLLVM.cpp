@@ -91,7 +91,6 @@ private:
   /// Convert to mma.m8n8k4
   LogicalResult convertMMA884(triton::DotOp op, OpAdaptor adaptor,
                               ConversionPatternRewriter &rewriter) const {
-    printf(">> begin dotop\n");
     auto *ctx = op.getContext();
     auto loc = op.getLoc();
 
@@ -125,19 +124,11 @@ private:
         mmaLayout.decodeVoltaLayoutStates();
     assert(isARow == isARow_);
     assert(isBRow == isBRow_);
-    printf("mma.decode t-0 %d %d %d %d %d\n", isARow_, isBRow_, isAVec4_,
-           isBVec4_, mmaId);
 
     DotOpMmaV1ConversionHelper helper(mmaLayout);
 
     unsigned numM = helper.getNumM(AShape[0], isARow, isAVec4_);
     unsigned numN = helper.getNumN(BShape[1], isBRow, isBVec4_);
-    printf("MN0 t-0 isArow:%d isBRow:%d, isAVec4:%d, isBVec4:%d, M:%ld, N:%ld "
-           "numM:%d numN:%d wpt:%d-%d\n",
-           isARow, isBRow, isAVec4_, isBVec4_, AShape[0], BShape[1], numM, numN,
-           wpt[0], wpt[1]);
-    printf("mma884 numM: %d\n", numM);
-    printf("mma884 numN: %d\n", numN);
     unsigned NK = AShape[1];
 
     auto has = helper.extractLoadedOperand(adaptor.a(), NK, rewriter);
@@ -206,47 +197,11 @@ private:
         Value elem = extract_val(f32_ty, res, i32_arr_attr(i));
         acc[idx[i]] = elem;
       }
-
-#define SHOW_MMA_V1 0
-#if SHOW_MMA_V1
-      {
-        std::vector<Value> args = {ha.first, ha.second, hb.first, hb.second};
-
-        auto get_f16 = [&](Value value, int idx) {
-          return extract_element(f16_ty, value, idx_val(idx));
-        };
-
-        std::vector<Value> pargs({getThreadId(rewriter, loc)});
-        pargs.push_back(i32_val(m));
-        pargs.push_back(i32_val(n));
-        pargs.push_back(i32_val(k));
-        for (int i = 0; i < 4; i++) {
-          pargs.push_back(get_f16(args[i], 0));
-          pargs.push_back(get_f16(args[i], 1));
-        }
-        for (int i = 0; i < 8; i++) {
-          pargs.push_back(C[i]);
-        }
-        for (int i = 0; i < 8; i++) {
-          pargs.push_back(acc[idx[i]]);
-        }
-
-        LLVM::vprintf("mma t-%d [%d %d %d] A:(%f,%f) (%f,%f) B:(%f,%f) (%f,%f) "
-                      "C:(%f,%f,%f,%f,%f,%f,%f,%f)"
-                      " D:(%f,%f,%f,%f,%f,%f,%f,%f)",
-                      pargs, rewriter);
-        // LLVM::vprintf("mma t-%d [%d %d %d] A:(%f,%f) (%f,%f) B:(%f,%f)
-        // (%f,%f) " "C:(%f,%f,%f,%f,%f,%f,%f,%f)", pargs, rewriter);
-      }
-#endif
     };
-
-    printf("mnk t-0 numM,numN,numK %d,%d,%d\n", numM, numN, NK);
 
     for (unsigned k = 0; k < NK; k += 4)
       for (unsigned m = 0; m < numM / 2; ++m)
         for (unsigned n = 0; n < numN / 2; ++n) {
-          // printf("** m,n,k: %d %d %d\n", m, n, k);
           callMMA(m, n, k);
         }
 
@@ -254,13 +209,11 @@ private:
     for (size_t i = 0; i < acc.size(); ++i) {
       resVals[i] = acc[i];
     }
-    // LLVM::vprintf_array(LLVM::gThreadId, acc, "acc", "%f", rewriter);
 
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(resSize, type::f32Ty(ctx)));
     Value res = getStructFromElements(loc, resVals, rewriter, structTy);
     rewriter.replaceOp(op, res);
-    printf("<< end dotop\n");
     return success();
   }
 

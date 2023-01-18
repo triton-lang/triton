@@ -130,14 +130,10 @@ struct DotOpMmaV1ConversionHelper {
     return numN;
   }
 
-  // NOTE isARow should be from a shared layout, it doesnt necessarily equal
-  // DotOperand.isMMAv1Row
   int numElemsPerThreadA(ArrayRef<int64_t> shape, bool isARow, bool isAVec4,
                          int vec) const {
     int numM = getNumM(shape[0], isARow, isAVec4);
     int NK = shape[1];
-    printf("* numElemsPerThreadA: numM:%d NK:%d vec:%d isARow:%d\n", numM, NK,
-           vec, isARow);
     // Here we mimic the logic in loadA, the result cannot be calculated
     // directly.
     llvm::DenseSet<std::pair<int, int>> visited;
@@ -156,13 +152,9 @@ struct DotOpMmaV1ConversionHelper {
         if (!visited.count({m, k}))
           ld(m, k);
 
-    printf("numElemsPerThreadA: %d\n", visited.size() * 2);
-
     return visited.size() * 2;
   }
 
-  // NOTE isBRow should be from a shared layout, it doesnt necessarily equal
-  // DotOperand.isMMAv1Row
   int numElemsPerThreadB(ArrayRef<int64_t> shape, bool isBRow, bool isBVec4,
                          int vec) const {
     unsigned numN = getNumN(shape[1], isBRow, isBVec4);
@@ -186,8 +178,6 @@ struct DotOpMmaV1ConversionHelper {
         if (!visited.count({n, k}))
           ld(n, k);
       }
-
-    printf("numElemsPerThreadB: %d\n", visited.size() * 2);
 
     return visited.size() * 2;
   }
@@ -293,9 +283,6 @@ struct DotOpMmaV1ConversionHelper {
         if (!has.count({m, k}))
           loadA(m, k);
 
-    printf("loadA-params t-0 numM:%d NK:%d vec:%d isARow:%d isAVec4:%d\n", numM,
-           NK, vecA, isARow, isAVec4);
-
     SmallVector<Value> elems;
     elems.reserve(has.size() * 2);
     for (auto item : has) { // has is a map, the key should be ordered.
@@ -303,7 +290,6 @@ struct DotOpMmaV1ConversionHelper {
       elems.push_back(item.second.second);
     }
 
-    printf("loadA.elems: %lu\n", elems.size());
     Type resTy = struct_ty(SmallVector<Type>(elems.size(), elemX2Ty));
     Value res = getStructFromElements(loc, elems, rewriter, resTy);
     return res;
@@ -418,7 +404,6 @@ struct DotOpMmaV1ConversionHelper {
       elems.push_back(item.second.second);
     }
 
-    printf("loadB.elems: %lu\n", elems.size());
     Type resTy = struct_ty(SmallVector<Type>(elems.size(), elemX2Ty));
     Value res = getStructFromElements(loc, elems, rewriter, resTy);
     return res;
@@ -526,8 +511,6 @@ struct DotOpMmaV1ConversionHelper {
   getMNCoords(Value thread, ConversionPatternRewriter &rewriter,
               ArrayRef<unsigned> wpt, ArrayRef<int64_t> shape, bool isARow,
               bool isBRow, bool isAVec4, bool isBVec4) {
-    printf("getMNCoords t-0 wpt:[%d %d] shape:[%ld %ld] %d %d %d %d\n", wpt[0],
-           wpt[1], shape[0], shape[1], isARow, isBRow, isAVec4, isBVec4);
 
     auto *ctx = thread.getContext();
     auto loc = UnknownLoc::get(ctx);
@@ -545,10 +528,6 @@ struct DotOpMmaV1ConversionHelper {
     SmallVector<int, 2> rep({aParam.rep[0], bParam.rep[1]});
     SmallVector<int, 2> spw({aParam.spw[0], bParam.spw[1]});
     SmallVector<unsigned, 2> shapePerCTA({spw[0] * wpt[0], spw[1] * wpt[1]});
-    // printf("MN t-0 M shape:%lu spc:%d rep:%d\n", shape[0], shapePerCTA[0],
-    //        rep[0]);
-    // printf("MN t-0 N shape:%lu spc:%d rep:%d\n", shape[1], shapePerCTA[1],
-    //        rep[1]);
 
     Value lane = urem(thread, _32);
     Value warp = udiv(thread, _32);
@@ -619,23 +598,6 @@ struct DotOpMmaV1ConversionHelper {
         coords.push_back(std::move(idx));
       }
     }
-
-#define SHOW_COORD 0
-#if SHOW_COORD
-    static bool visited{};
-    if (!visited) {
-      std::string fmt = "coord t-%d ";
-      SmallVector<Value> args;
-      args.push_back(gThreadId);
-      for (auto &coord : coords) {
-        fmt += "(%d %d) ";
-        args.push_back(coord[0]);
-        args.push_back(coord[1]);
-      }
-      LLVM::vprintf(fmt, args, rewriter);
-      visited = true;
-    }
-#endif
 
     return coords; // {M,N} in row-major
   }

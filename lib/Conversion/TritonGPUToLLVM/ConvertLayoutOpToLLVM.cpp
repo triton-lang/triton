@@ -174,7 +174,6 @@ private:
     auto sizePerThread = getSizePerThread(layout);
     auto accumSizePerThread = product<unsigned>(sizePerThread);
     SmallVector<unsigned> numCTAs(rank);
-    llvm::outs() << "processReplica layout: " << layout << "\n";
     auto shapePerCTA = getShapePerCTA(layout, type.getShape());
     auto order = getOrder(layout);
     for (unsigned d = 0; d < rank; ++d) {
@@ -265,7 +264,6 @@ private:
     auto order = getOrder(layout);
     auto rank = type.getRank();
     int accumSizePerThread = vals.size();
-    printf("accumSizePerThread(acc.size): %d\n", accumSizePerThread);
 
     SmallVector<unsigned> numCTAs(rank, 1);
     SmallVector<unsigned> numCTAsEachRep(rank, 1);
@@ -301,20 +299,7 @@ private:
             getMultiDimOffset(layout, loc, rewriter, elemId, type.getShape(),
                               multiDimCTAInRepId, shapePerCTA);
         coord2val[elemId] = std::make_pair(multiDimOffset, vals[elemId]);
-        // if (sliceLayout) {
-        //   LLVM::vprintf("acci %d", {multiDimOffset[0]}, rewriter);
-        //   printf("** vals.size: %ld\n", vals.size());
-        // }
       }
-
-#define SHOW_ACCI 0
-#if SHOW_ACCI
-      for (unsigned elemId = 0; elemId < accumSizePerThread; elemId++) {
-        auto [coord, currVal] = coord2val[elemId];
-        LLVM::vprintf("acci t-%d (%d %d) %f",
-                      {LLVM::gThreadId, coord[0], coord[1], currVal}, rewriter);
-      }
-#endif
 
       if (needTrans) {
         auto [isARow, isBRow, isAVec4, isBVec4, mmaId] =
@@ -335,9 +320,6 @@ private:
       }
     }
 
-    // if (stNotRd) {
-    // LLVM::vprintf("before storeptr t-%d", {LLVM::gThreadId}, rewriter);
-    //}
     // Now the coord2valT has the transposed and contiguous elements(with
     // vec=2), the original vals is not needed.
     for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
@@ -348,14 +330,12 @@ private:
       auto vecTy = vec_ty(elemTy, vec);
       ptr = bitcast(ptr, ptr_ty(vecTy, 3));
       if (stNotRd) {
-        // LLVM::vprintf("ptr t-%d %d", {LLVM::gThreadId, ptr}, rewriter);
         Value valVec = undef(vecTy);
         for (unsigned v = 0; v < vec; ++v) {
           auto currVal = coord2valT[elemId + v].second;
           valVec = insert_element(vecTy, valVec, currVal, idx_val(v));
         }
         store(valVec, ptr);
-        // LLVM::vprintf("ptr t-%d done %d", {LLVM::gThreadId, ptr}, rewriter);
       } else {
         Value valVec = load(ptr);
         for (unsigned v = 0; v < vec; ++v) {
@@ -411,9 +391,6 @@ private:
           sliceLayout.getParent().isa<MmaEncodingAttr>() &&
           sliceLayout.getParent().dyn_cast<MmaEncodingAttr>().isVolta();
     }
-
-    llvm::outs() << "srcTy: " << srcTy << " " << isSrcMmaV1 << "\n";
-    llvm::outs() << "dstTy: " << dstTy << " " << isDstMmaV1 << "\n";
 
     for (unsigned d = 0; d < rank; ++d) {
       unsigned inPerCTA = std::min<unsigned>(shape[d], srcShapePerCTA[d]);

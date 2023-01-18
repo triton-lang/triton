@@ -114,7 +114,6 @@ public:
     int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
     rep[1] = 2 * packSize1;
     spw[1] = fpw[1] * 4 * rep[1];
-    printf("wpt-spw t-0 %d %d\n", spw[0], spw[1]);
 
     do {
       wpt_nm1 = wpt;
@@ -318,8 +317,6 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
 
-    // llvm::outs() << "input ir:\n" << *m << "\n";
-
     llvm::DenseMap<MmaEncodingAttr, MmaEncodingAttr> mmaToUpdate;
     {
       mlir::RewritePatternSet patterns(context);
@@ -331,13 +328,6 @@ public:
       if (applyPatternsAndFoldGreedily(m, std::move(patterns), config).failed())
         signalPassFailure();
     }
-
-    /*
-    for (auto& item : mmaToUpdate) {
-      llvm::outs() << "updatemma t-0 " << item.first << " -> " << item.second <<
-    "\n";
-    }
-     */
 
     if (!mmaToUpdate.empty()) {
       mlir::RewritePatternSet patterns(context);
@@ -353,8 +343,6 @@ public:
 
       if (fixupLoops(m).failed())
         signalPassFailure();
-
-      // llvm::outs() << "output ir:\n" << *m << "\n";
     }
   }
 };
