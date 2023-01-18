@@ -7,7 +7,7 @@
 
 **`Documentation`** |
 ------------------- |
-[![Documentation](https://github.com/openai/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/)
+[![Documentation](https://github.com/openai/triton/actions/workflows/pages/pages-build-deployment/badge.svg)](https://triton-lang.org/)
 
 
 # Triton
