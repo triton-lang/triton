@@ -302,6 +302,7 @@ void LoopPipeliner::emitPrologue() {
               loadStageBuffer[loadOp][stage], pipelineIterIdx, newMask,
               lookupOrDefault(loadOp.other(), stage), loadOp.cache(),
               loadOp.evict(), loadOp.isVolatile(), /*axis*/ 0);
+          builder.create<triton::gpu::AsyncCommitGroupOp>(op->getLoc());
           loadStageBuffer[loadOp].push_back(newOp->getResult(0));
         } else
           llvm_unreachable("This should be LoadOp");
@@ -319,6 +320,9 @@ void LoopPipeliner::emitPrologue() {
       }
 
       // Update mapping of results
+      // if (stage == numStages - 2)
+      //   continue;
+
       for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
         Value originalResult = op->getResult(dstIdx);
         // copy_async will update the value of its only use
@@ -383,7 +387,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   //   (original args)
   //   (insertSliceAsync buffer at stage numStages - 1) for each load
   //   (extracted tensor) for each load
-  //   (depArgs at stage numStages - 1)
+  //   (depArgs at stage numStages - 2)
   //   (iv at stage numStages - 2)
   //   (pipeline iteration index)
   //   (loop iteration index)
@@ -404,7 +408,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   size_t depArgsBeginIdx = newLoopArgs.size();
   for (BlockArgument depArg : depArgs) {
     depArgsIdx[depArg] = newLoopArgs.size();
-    newLoopArgs.push_back(valueMapping[depArg][numStages - 1]);
+    newLoopArgs.push_back(valueMapping[depArg][numStages - 2]);
   }
 
   size_t nextIVIdx = newLoopArgs.size();
@@ -463,10 +467,12 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   DenseMap<BlockArgument, Value> depArgsMapping;
   size_t argIdx = 0;
   for (BlockArgument arg : depArgs) {
-    nextMapping.map(arg,
-                    newForOp.getRegionIterArgs()[argIdx + depArgsBeginIdx]);
+    BlockArgument nextArg =
+        newForOp.getRegionIterArgs()[argIdx + depArgsBeginIdx];
+    nextMapping.map(arg, nextArg);
     ++argIdx;
   }
+
   // Special handling for iv & loop condition
   Value nextIV = builder.create<arith::AddIOp>(
       newForOp.getInductionVar().getLoc(),
@@ -490,6 +496,25 @@ scf::ForOp LoopPipeliner::createNewForOp() {
       builder.create<arith::ConstantIntOp>(nextIV.getLoc(), numStages, 32));
   extractSliceIndex = builder.create<arith::IndexCastOp>(
       extractSliceIndex.getLoc(), builder.getIndexType(), extractSliceIndex);
+
+  for (Operation *op : orderedDeps)
+    if (!loads.contains(op->getResult(0))) {
+      Operation *nextOp = builder.clone(*op, nextMapping);
+
+      auto originYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+      for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
+        for (OpOperand &operand : originYield->getOpOperands()) {
+          if (operand.get() == op->getResult(dstIdx)) {
+            size_t originIdx = operand.getOperandNumber();
+            size_t newArgIdx = depArgsIdx[forOp.getRegionIterArgs()[originIdx]];
+            BlockArgument newArg = newForOp.getRegionIterArgs()[newArgIdx];
+            nextMapping.map(forOp.getRegionIterArgs()[originIdx],
+                            nextOp->getResult(dstIdx));
+            depArgsMapping[newArg] = nextOp->getResult(dstIdx);
+          }
+        }
+      }
+    }
 
   for (Operation *op : orderedDeps) {
     Operation *nextOp = nullptr;
@@ -518,6 +543,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
           insertSliceIndex, newMask,
           nextMapping.lookupOrDefault(loadOp.other()), loadOp.cache(),
           loadOp.evict(), loadOp.isVolatile(), /*axis*/ 0);
+      builder.create<triton::gpu::AsyncCommitGroupOp>(op->getLoc());
       nextBuffers.push_back(insertAsyncOp);
       auto sliceType = loadsMapping[loadOp].getType().cast<RankedTensorType>();
       sliceType = RankedTensorType::get(sliceType.getShape(),
@@ -532,19 +558,19 @@ scf::ForOp LoopPipeliner::createNewForOp() {
                                     int_attr(sliceType.getShape()[1])},
           SmallVector<OpFoldResult>{int_attr(1), int_attr(1), int_attr(1)});
       extractSlices.push_back(nextOp->getResult(0));
-    } else
-      nextOp = builder.clone(*op, nextMapping);
-    // Update mapping of results
-    for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
-      nextMapping.map(op->getResult(dstIdx), nextOp->getResult(dstIdx));
-      // If this is a loop-carried value, update the mapping for yield
-      auto originYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-      for (OpOperand &operand : originYield->getOpOperands()) {
-        if (operand.get() == op->getResult(dstIdx)) {
-          size_t originIdx = operand.getOperandNumber();
-          size_t newArgIdx = depArgsIdx[forOp.getRegionIterArgs()[originIdx]];
-          BlockArgument newArg = newForOp.getRegionIterArgs()[newArgIdx];
-          depArgsMapping[newArg] = nextOp->getResult(dstIdx);
+
+      // Update mapping of results
+      for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
+        nextMapping.map(op->getResult(dstIdx), nextOp->getResult(dstIdx));
+        // If this is a loop-carried value, update the mapping for yield
+        auto originYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+        for (OpOperand &operand : originYield->getOpOperands()) {
+          if (operand.get() == op->getResult(dstIdx)) {
+            size_t originIdx = operand.getOperandNumber();
+            size_t newArgIdx = depArgsIdx[forOp.getRegionIterArgs()[originIdx]];
+            BlockArgument newArg = newForOp.getRegionIterArgs()[newArgIdx];
+            depArgsMapping[newArg] = nextOp->getResult(dstIdx);
+          }
         }
       }
     }

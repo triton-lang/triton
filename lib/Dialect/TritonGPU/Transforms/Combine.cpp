@@ -1,3 +1,4 @@
+#include "Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/SCF.h"
 #include "mlir/IR/BlockAndValueMapping.h"
@@ -22,6 +23,11 @@
 using namespace mlir;
 namespace {
 #include "TritonGPUCombine.inc"
+using triton::DotOp;
+using triton::gpu::ConvertLayoutOp;
+using triton::gpu::DotOperandEncodingAttr;
+using triton::gpu::MmaEncodingAttr;
+using triton::gpu::SliceEncodingAttr;
 
 // -----------------------------------------------------------------------------
 //
@@ -478,7 +484,7 @@ public:
       return op->getBlock() == cvt->getBlock() &&
              !(isa<triton::ReduceOp>(op) &&
                !op->getResult(0).getType().isa<RankedTensorType>()) &&
-             !isa<scf::YieldOp>(op);
+             !isa<triton::gpu::ConvertLayoutOp>(op) && !isa<scf::YieldOp>(op);
     };
     mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
     if (cvtSlices.empty())
@@ -881,24 +887,31 @@ SmallVector<int64_t, 2> mmaVersionToShapePerWarp(int version) {
 
 SmallVector<unsigned, 2> warpsPerTileV1(const ArrayRef<int64_t> shape,
                                         int numWarps) {
-  SmallVector<unsigned, 2> ret = {1, 1};
-  SmallVector<int64_t, 2> shapePerWarp =
-      mmaVersionToShapePerWarp(1 /*version*/);
-  bool changed = false;
-  do {
-    changed = false;
-    int pre = ret[0];
-    if (ret[0] * ret[1] < numWarps) {
-      ret[0] = std::clamp<unsigned>(ret[0] * 2, 1, shape[0] / shapePerWarp[0]);
-      changed = pre != ret[0];
-    }
-    if (ret[0] * ret[1] < numWarps) {
-      pre = ret[1];
-      ret[1] = std::clamp<unsigned>(ret[1] * 2, 1, shape[1] / shapePerWarp[1]);
-      changed = pre != ret[1];
-    }
-  } while (changed);
-  return ret;
+  if (!MmaEncodingAttr::_mmaV1UpdateWpt) {
+    SmallVector<unsigned, 2> ret = {1, 1};
+    SmallVector<int64_t, 2> shapePerWarp =
+        mmaVersionToShapePerWarp(1 /*version*/);
+    bool changed = false;
+    do {
+      changed = false;
+      int pre = ret[0];
+      if (ret[0] * ret[1] < numWarps) {
+        ret[0] =
+            std::clamp<unsigned>(ret[0] * 2, 1, shape[0] / shapePerWarp[0]);
+        changed = pre != ret[0];
+      }
+      if (ret[0] * ret[1] < numWarps) {
+        pre = ret[1];
+        ret[1] =
+            std::clamp<unsigned>(ret[1] * 2, 1, shape[1] / shapePerWarp[1]);
+        changed = pre != ret[1];
+      }
+    } while (changed);
+    return ret;
+  } else {
+    // Set a default value and ensure product of wpt equals numWarps
+    return {static_cast<unsigned>(numWarps), 1};
+  }
 }
 
 SmallVector<unsigned, 2> warpsPerTileV2(triton::DotOp dotOp,
@@ -1019,6 +1032,7 @@ public:
         dstDotOperandLayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
     if ((order[0] == 1 && isMMAv1Row) || (order[0] == 0 && !isMMAv1Row))
       return failure();
+
     auto newIsRow = BoolAttr::get(op->getContext(), !isMMAv1Row);
     auto newDstEncoding = triton::gpu::DotOperandEncodingAttr::get(
         op->getContext(), dstDotOperandLayout.getOpIdx(),
@@ -1034,6 +1048,7 @@ public:
 
 class BlockedToMMA : public mlir::RewritePattern {
   int computeCapability;
+  mutable int mmaV1Counter{}; // used to generate ID for MMAv1 encoding
 
 public:
   BlockedToMMA(mlir::MLIRContext *context, int computeCapability)
@@ -1060,7 +1075,8 @@ public:
     auto dotOp = cast<triton::DotOp>(op);
     // TODO: Check data-types and SM compatibility
     auto oldRetType = dotOp.getResult().getType().cast<RankedTensorType>();
-    if (oldRetType.getEncoding().isa<triton::gpu::MmaEncodingAttr>())
+    if (!oldRetType.getEncoding() ||
+        oldRetType.getEncoding().isa<triton::gpu::MmaEncodingAttr>())
       return failure();
 
     auto AType = dotOp.getOperand(0).getType().cast<RankedTensorType>();
@@ -1091,13 +1107,13 @@ public:
         getWarpsPerTile(dotOp, retShape, versionMajor, numWarps);
     triton::gpu::MmaEncodingAttr mmaEnc;
     if (versionMajor == 1) {
-      auto shapeA = AType.getShape();
-      auto shapeB = BType.getShape();
-      bool isARow = AOrder[0] != 0;
-      bool isBRow = BOrder[0] != 0;
-      mmaEnc = triton::gpu::MmaEncodingAttr::get(
-          oldRetType.getContext(), versionMajor, warpsPerTile, shapeA, shapeB,
-          isARow, isBRow);
+      if (MmaEncodingAttr::_mmaV1UpdateWpt)
+        mmaEnc = triton::gpu::MmaEncodingAttr::get(
+            oldRetType.getContext(), versionMajor, numWarps, mmaV1Counter++);
+      else
+        mmaEnc = triton::gpu::MmaEncodingAttr::get(
+            dotOp->getContext(), versionMajor, 0 /*versionMinor*/,
+            warpsPerTileV1(retShape, numWarps));
     } else if (versionMajor == 2) {
       mmaEnc = triton::gpu::MmaEncodingAttr::get(
           oldRetType.getContext(), versionMajor, 0 /*versionMinor*/,
@@ -1153,45 +1169,107 @@ public:
   }
 };
 
-class FixupLoop : public mlir::RewritePattern {
+// Convert + trans + convert
+// x = convert_layout distributed -> #shared_x
+// y = trans x -> #shared_y
+// z = convert_layout y -> #dot_operand
+class ConvertTransConvert : public mlir::RewritePattern {
 
 public:
-  explicit FixupLoop(mlir::MLIRContext *context)
-      : mlir::RewritePattern(scf::ForOp::getOperationName(), 2, context) {}
+  ConvertTransConvert(mlir::MLIRContext *context)
+      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
+                             1, context) {}
 
-  mlir::LogicalResult
+  LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
-    auto forOp = cast<scf::ForOp>(op);
+    auto dstOp = cast<triton::gpu::ConvertLayoutOp>(op);
+    auto tmpOp = dyn_cast_or_null<triton::TransOp>(dstOp.src().getDefiningOp());
+    if (!tmpOp)
+      return mlir::failure();
+    auto srcOp = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
+        tmpOp.src().getDefiningOp());
+    if (!srcOp)
+      return mlir::failure();
+    auto arg = srcOp.src();
+    auto X = tmpOp.src();
+    auto Y = dstOp.src();
+    // types
+    auto argType = arg.getType().cast<RankedTensorType>();
+    auto XType = X.getType().cast<RankedTensorType>();
+    auto YType = Y.getType().cast<RankedTensorType>();
+    auto ZType = dstOp.getResult().getType().cast<RankedTensorType>();
+    // encodings
+    auto argEncoding = argType.getEncoding();
+    auto XEncoding =
+        XType.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
+    auto YEncoding =
+        YType.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
+    auto ZEncoding =
+        ZType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+    if (!ZEncoding)
+      return mlir::failure();
+    // new X encoding
+    auto newXOrder = triton::gpu::getOrder(argEncoding);
+    auto newXEncoding = triton::gpu::SharedEncodingAttr::get(
+        getContext(), ZEncoding, XType.getShape(), newXOrder,
+        XType.getElementType());
+    auto newXType = RankedTensorType::get(XType.getShape(),
+                                          XType.getElementType(), newXEncoding);
+    if (XEncoding == newXEncoding)
+      return mlir::failure();
 
-    // Rewrite init argument
-    SmallVector<Value, 4> newInitArgs = forOp.getInitArgs();
-    bool shouldRematerialize = false;
-    for (size_t i = 0; i < newInitArgs.size(); i++) {
-      auto initArg = newInitArgs[i];
-      auto regionArg = forOp.getRegionIterArgs()[i];
-      if (newInitArgs[i].getType() != forOp.getRegionIterArgs()[i].getType()) {
-        shouldRematerialize = true;
-        break;
-      }
-    }
-    if (!shouldRematerialize)
-      return failure();
+    auto newX = rewriter.create<triton::gpu::ConvertLayoutOp>(srcOp.getLoc(),
+                                                              newXType, arg);
+    auto newY = rewriter.create<triton::TransOp>(tmpOp.getLoc(), newX);
+    rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(dstOp, ZType,
+                                                              newY);
+    return mlir::success();
+  }
+};
 
-    scf::ForOp newForOp = rewriter.create<scf::ForOp>(
-        forOp.getLoc(), forOp.getLowerBound(), forOp.getUpperBound(),
-        forOp.getStep(), newInitArgs);
-    newForOp->moveBefore(forOp);
-    rewriter.setInsertionPointToStart(newForOp.getBody());
-    BlockAndValueMapping mapping;
-    for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs()))
-      mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
+//
+class ConvertDotConvert : public mlir::RewritePattern {
+public:
+  ConvertDotConvert(mlir::MLIRContext *context)
+      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
+                             1, context) {}
 
-    for (Operation &op : forOp.getBody()->getOperations()) {
-      Operation *newOp = rewriter.clone(op, mapping);
-    }
-    rewriter.replaceOp(forOp, newForOp.getResults());
-    return success();
+  LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto dstOp = cast<triton::gpu::ConvertLayoutOp>(op);
+    auto dotOp = dyn_cast_or_null<triton::DotOp>(dstOp.src().getDefiningOp());
+    if (!dotOp)
+      return mlir::failure();
+    if (std::distance(dstOp->user_begin(), dstOp->user_end()) != 1 ||
+        std::distance(dotOp->user_begin(), dotOp->user_end()) != 1)
+      return mlir::failure();
+    auto cvtOp = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
+        dotOp.getOperand(2).getDefiningOp());
+    if (!cvtOp)
+      return mlir::failure();
+    auto loadOp = dyn_cast_or_null<triton::LoadOp>(cvtOp.src().getDefiningOp());
+    if (!loadOp)
+      return mlir::failure();
+    auto dstTy = dstOp.getResult().getType().cast<RankedTensorType>();
+    auto srcTy = cvtOp.getOperand().getType().cast<RankedTensorType>();
+    if (dstTy != srcTy)
+      return mlir::failure();
+
+    // TODO: int tensor cores
+    auto _0f = rewriter.create<arith::ConstantFloatOp>(
+        op->getLoc(), APFloat(0.0f), dstTy.getElementType().cast<FloatType>());
+    auto _0 = rewriter.create<triton::SplatOp>(
+        op->getLoc(), dotOp.getResult().getType(), _0f);
+    auto newDot = rewriter.create<triton::DotOp>(
+        op->getLoc(), dotOp.getResult().getType(), dotOp.getOperand(0),
+        dotOp.getOperand(1), _0, dotOp.allowTF32());
+    auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
+        op->getLoc(), dstTy, newDot.getResult());
+    auto newAdd = rewriter.replaceOpWithNewOp<arith::AddFOp>(
+        op, newCvt, cvtOp.getOperand());
+    return mlir::success();
   }
 };
 
@@ -1224,14 +1302,14 @@ public:
     patterns.add<MoveConvertOutOfLoop>(context);
     patterns.add<MoveConvertOutOfIf>(context);
     patterns.add<BlockedToMMA>(context, computeCapability);
+    patterns.add<ConvertTransConvert>(context);
+    patterns.add<ConvertDotConvert>(context);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }
 
-    mlir::RewritePatternSet loopFixup(context);
-    loopFixup.add<FixupLoop>(context);
-    if (applyPatternsAndFoldGreedily(m, std::move(loopFixup)).failed()) {
+    if (fixupLoops(m).failed()) {
       signalPassFailure();
     }
   }

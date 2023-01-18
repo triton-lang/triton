@@ -5,6 +5,7 @@ from ..impl import (
     ir,
     builtin,
 )
+from . import libdevice
 from .core import (
     abs,
     arange,
@@ -30,6 +31,7 @@ from .core import (
     dot,
     dtype,
     exp,
+    full,
     fdiv,
     float16,
     float32,
@@ -123,6 +125,7 @@ __all__ = [
     "float32",
     "float64",
     "float8",
+    "full",
     "function_type",
     "int1",
     "int16",
@@ -130,6 +133,7 @@ __all__ = [
     "int64",
     "int8",
     "ir",
+    "libdevice",
     "load",
     "log",
     "max",

@@ -40,6 +40,19 @@ def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
   }];
 }
 
+def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
+  let summary = "async commit group";
+
+  let assemblyFormat = "attr-dict";
+
+  let extraClassDeclaration = [{
+    static bool isSupported(int computeCapability) {
+      return computeCapability >= 80;
+    }
+  }];
+}
+
+
 // Port Arith_CmpIOp & Arith_CmpFOp & Std_SelectOp to TritonGPU.
 // This is needed because these ops don't
 // handle encodings

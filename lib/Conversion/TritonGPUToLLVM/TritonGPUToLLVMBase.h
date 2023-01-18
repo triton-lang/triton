@@ -18,7 +18,6 @@ using ::mlir::LLVM::SharedMemoryObject;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
-
 // FuncOpConversion/FuncOpConversionBase is borrowed from
 // https://github.com/llvm/llvm-project/blob/fae656b2dd80246c3c6f01e9c77c49560368752c/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp#L276
 // since it is not exposed on header files in mlir v14
@@ -128,7 +127,60 @@ protected:
   }
 };
 
-struct ConvertTritonGPUOpToLLVMPatternBase {
+using IndexCacheKeyT = std::pair<Attribute, SmallVector<int64_t>>;
+
+struct CacheKeyDenseMapInfo {
+  static IndexCacheKeyT getEmptyKey() {
+    auto *pointer = llvm::DenseMapInfo<void *>::getEmptyKey();
+    return std::make_pair(
+        mlir::Attribute(static_cast<mlir::Attribute::ImplType *>(pointer)),
+        SmallVector<int64_t>{});
+  }
+  static IndexCacheKeyT getTombstoneKey() {
+    auto *pointer = llvm::DenseMapInfo<void *>::getTombstoneKey();
+    return std::make_pair(
+        mlir::Attribute(static_cast<mlir::Attribute::ImplType *>(pointer)),
+        SmallVector<int64_t>{std::numeric_limits<int64_t>::max()});
+  }
+  static unsigned getHashValue(IndexCacheKeyT key) {
+    return llvm::hash_combine(
+        mlir::hash_value(key.first),
+        llvm::hash_combine_range(key.second.begin(), key.second.end()));
+  }
+  static bool isEqual(IndexCacheKeyT LHS, IndexCacheKeyT RHS) {
+    return LHS == RHS;
+  }
+};
+
+class ConvertTritonGPUOpToLLVMPatternBase {
+public:
+  // Two levels of value cache in emitting indices calculation:
+  // Key: pair<layout, shape>
+  struct IndexCacheInfo {
+    DenseMap<IndexCacheKeyT, SmallVector<Value>, CacheKeyDenseMapInfo>
+        *baseIndexCache;
+    DenseMap<IndexCacheKeyT, SmallVector<SmallVector<Value>>,
+             CacheKeyDenseMapInfo> *indexCache;
+    OpBuilder::InsertPoint *indexInsertPoint;
+  };
+
+  explicit ConvertTritonGPUOpToLLVMPatternBase(LLVMTypeConverter &typeConverter)
+      : converter(&typeConverter) {}
+
+  explicit ConvertTritonGPUOpToLLVMPatternBase(LLVMTypeConverter &typeConverter,
+                                               const Allocation *allocation,
+                                               Value smem)
+      : converter(&typeConverter), allocation(allocation), smem(smem) {}
+
+  explicit ConvertTritonGPUOpToLLVMPatternBase(LLVMTypeConverter &typeConverter,
+                                               const Allocation *allocation,
+                                               Value smem,
+                                               IndexCacheInfo indexCacheInfo)
+      : converter(&typeConverter), indexCacheInfo(indexCacheInfo),
+        allocation(allocation), smem(smem) {}
+
+  LLVMTypeConverter *getTypeConverter() const { return converter; }
+
   static Value
   getStructFromSharedMemoryObject(Location loc,
                                   const SharedMemoryObject &smemObj,
@@ -139,25 +191,6 @@ struct ConvertTritonGPUOpToLLVMPatternBase {
         LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
     return getStructFromElements(loc, elems, rewriter, structTy);
   }
-};
-
-template <typename SourceOp>
-class ConvertTritonGPUOpToLLVMPattern
-    : public ConvertOpToLLVMPattern<SourceOp>,
-      public ConvertTritonGPUOpToLLVMPatternBase {
-public:
-  using OpAdaptor = typename SourceOp::Adaptor;
-
-  explicit ConvertTritonGPUOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                           PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit) {}
-
-  explicit ConvertTritonGPUOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                           const Allocation *allocation,
-                                           Value smem,
-                                           PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
-        allocation(allocation), smem(smem) {}
 
   Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) const {
     auto llvmIndexTy = this->getTypeConverter()->getIndexType();
@@ -167,6 +200,204 @@ public:
             loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x)});
     Value threadId = cast.getResult(0);
     return threadId;
+  }
+
+  // -----------------------------------------------------------------------
+  // Shared memory utilities
+  // -----------------------------------------------------------------------
+  template <typename T>
+  Value getSharedMemoryBase(Location loc, ConversionPatternRewriter &rewriter,
+                            T value) const {
+
+    auto ptrTy = LLVM::LLVMPointerType::get(
+        this->getTypeConverter()->convertType(rewriter.getI8Type()), 3);
+    auto bufferId = allocation->getBufferId(value);
+    assert(bufferId != Allocation::InvalidBufferId && "BufferId not found");
+    size_t offset = allocation->getOffset(bufferId);
+    Value offVal = idx_val(offset);
+    Value base = gep(ptrTy, smem, offVal);
+    return base;
+  }
+
+  DenseMap<unsigned, Value>
+  getSwizzledSharedPtrs(Location loc, unsigned inVec, RankedTensorType srcTy,
+                        triton::gpu::SharedEncodingAttr resSharedLayout,
+                        Type resElemTy, SharedMemoryObject smemObj,
+                        ConversionPatternRewriter &rewriter,
+                        SmallVectorImpl<Value> &offsetVals,
+                        SmallVectorImpl<Value> &srcStrides) const {
+    // This utililty computes the pointers for accessing the provided swizzled
+    // shared memory layout `resSharedLayout`. More specifically, it computes,
+    // for all indices (row, col) of `srcEncoding` such that idx % inVec = 0,
+    // the pointer: ptr[(row, col)] = base + (rowOff * strides[ord[1]] + colOff)
+    // where :
+    //   compute phase = (row // perPhase) % maxPhase
+    //   rowOff = row
+    //   colOff = colOffSwizzled + colOffOrdered
+    //     colOffSwizzled = ((col // outVec) ^ phase) * outVec
+    //     colOffOrdered = (col % outVec) // minVec * minVec
+    //
+    // Note 1:
+    // -------
+    // Because swizzling happens at a granularity of outVec, we need to
+    // decompose the offset into a swizzled factor and a non-swizzled (ordered)
+    // factor
+    //
+    // Note 2:
+    // -------
+    // If we have x, y, z of the form:
+    // x = 0b00000xxxx
+    // y = 0byyyyy0000
+    // z = 0b00000zzzz
+    // then (x + y) XOR z = 0byyyyxxxx XOR 0b00000zzzz = (x XOR z) + y
+    // This means that we can use some immediate offsets for shared memory
+    // operations.
+    auto dstPtrTy = ptr_ty(resElemTy, 3);
+    auto dstOffset = dot(rewriter, loc, offsetVals, smemObj.strides);
+    Value dstPtrBase = gep(dstPtrTy, smemObj.base, dstOffset);
+
+    auto srcEncoding = srcTy.getEncoding();
+    auto srcShape = srcTy.getShape();
+    unsigned numElems = triton::gpu::getElemsPerThread(srcTy);
+    // swizzling params as described in TritonGPUAttrDefs.td
+    unsigned outVec = resSharedLayout.getVec();
+    unsigned perPhase = resSharedLayout.getPerPhase();
+    unsigned maxPhase = resSharedLayout.getMaxPhase();
+    // order
+    auto inOrder = triton::gpu::getOrder(srcEncoding);
+    auto outOrder = triton::gpu::getOrder(resSharedLayout);
+    // tensor indices held by the current thread, as LLVM values
+    auto srcIndices = emitIndices(loc, rewriter, srcEncoding, srcShape);
+    // return values
+    DenseMap<unsigned, Value> ret;
+    // cache for non-immediate offsets
+    DenseMap<unsigned, Value> cacheCol, cacheRow;
+    unsigned minVec = std::min(outVec, inVec);
+    for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
+      // extract multi dimensional index for current element
+      auto idx = srcIndices[elemIdx];
+      Value idxCol = idx[inOrder[0]]; // contiguous dimension
+      Value idxRow = idx[inOrder[1]]; // discontiguous dimension
+      Value strideCol = srcStrides[inOrder[0]];
+      Value strideRow = srcStrides[inOrder[1]];
+      // extract dynamic/static offset for immediate offseting
+      unsigned immedateOffCol = 0;
+      if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxCol.getDefiningOp()))
+        if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
+                add.getRhs().getDefiningOp())) {
+          unsigned cst =
+              _cst.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+          unsigned key = cst % (outVec * maxPhase);
+          cacheCol.insert({key, idxCol});
+          idxCol = cacheCol[key];
+          immedateOffCol = cst / (outVec * maxPhase) * (outVec * maxPhase);
+        }
+      // extract dynamic/static offset for immediate offseting
+      unsigned immedateOffRow = 0;
+      if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxRow.getDefiningOp()))
+        if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
+                add.getRhs().getDefiningOp())) {
+          unsigned cst =
+              _cst.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+          unsigned key = cst % (perPhase * maxPhase);
+          cacheRow.insert({key, idxRow});
+          idxRow = cacheRow[key];
+          immedateOffRow = cst / (perPhase * maxPhase) * (perPhase * maxPhase);
+        }
+      // compute phase = (row // perPhase) % maxPhase
+      Value phase = urem(udiv(idxRow, i32_val(perPhase)), i32_val(maxPhase));
+      // row offset is simply row index
+      Value rowOff = mul(idxRow, strideRow);
+      // because swizzling happens at a granularity of outVec, we need to
+      // decompose the offset into a swizzled factor and a non-swizzled
+      // (ordered) factor: colOffSwizzled = ((col // outVec) ^ phase) * outVec
+      // colOffOrdered = (col % outVec) // minVec * minVec
+      Value colOffSwizzled = xor_(udiv(idxCol, i32_val(outVec)), phase);
+      colOffSwizzled = mul(colOffSwizzled, i32_val(outVec));
+      Value colOffOrdered = urem(idxCol, i32_val(outVec));
+      colOffOrdered = udiv(colOffOrdered, i32_val(minVec));
+      colOffOrdered = mul(colOffOrdered, i32_val(minVec));
+      Value colOff = add(colOffSwizzled, colOffOrdered);
+      // compute non-immediate offset
+      Value offset = add(rowOff, mul(colOff, strideCol));
+      Value currPtr = gep(dstPtrTy, dstPtrBase, offset);
+      // compute immediate offset
+      Value immedateOff =
+          add(mul(i32_val(immedateOffRow), srcStrides[inOrder[1]]),
+              i32_val(immedateOffCol));
+      ret[elemIdx] = gep(dstPtrTy, currPtr, immedateOff);
+    }
+    return ret;
+  }
+
+  bool isMmaToDotShortcut(
+      MmaEncodingAttr &mmaLayout,
+      triton::gpu::DotOperandEncodingAttr &dotOperandLayout) const {
+    // dot_op<opIdx=0, parent=#mma> = #mma
+    // when #mma = MmaEncoding<version=2, warpsPerCTA=[..., 1]>
+    return mmaLayout.getWarpsPerCTA()[1] == 1 &&
+           dotOperandLayout.getOpIdx() == 0 &&
+           dotOperandLayout.getParent() == mmaLayout;
+  }
+
+  void storeDistributedToShared(Value src, Value llSrc,
+                                ArrayRef<Value> dstStrides,
+                                ArrayRef<SmallVector<Value>> srcIndices,
+                                Value dst, Value smemBase, Type elemTy,
+                                Location loc,
+                                ConversionPatternRewriter &rewriter) const {
+    auto srcTy = src.getType().cast<RankedTensorType>();
+    auto srcShape = srcTy.getShape();
+    assert(srcShape.size() == 2 &&
+           "Unexpected rank of storeDistributedToShared");
+    auto dstTy = dst.getType().cast<RankedTensorType>();
+    auto srcDistributedLayout = srcTy.getEncoding();
+    if (auto mmaLayout = srcDistributedLayout.dyn_cast<MmaEncodingAttr>()) {
+      assert((!mmaLayout.isVolta()) &&
+             "ConvertLayout MMAv1->Shared is not suppported yet");
+    }
+    auto dstSharedLayout =
+        dstTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
+    auto dstElemTy = dstTy.getElementType();
+    auto inOrd = triton::gpu::getOrder(srcDistributedLayout);
+    auto outOrd = dstSharedLayout.getOrder();
+    unsigned inVec =
+        inOrd == outOrd
+            ? triton::gpu::getContigPerThread(srcDistributedLayout)[inOrd[0]]
+            : 1;
+    unsigned outVec = dstSharedLayout.getVec();
+    unsigned minVec = std::min(outVec, inVec);
+    unsigned perPhase = dstSharedLayout.getPerPhase();
+    unsigned maxPhase = dstSharedLayout.getMaxPhase();
+    unsigned numElems = triton::gpu::getElemsPerThread(srcTy);
+    assert(numElems == srcIndices.size());
+    auto inVals = LLVM::getElementsFromStruct(loc, llSrc, rewriter);
+    auto wordTy = vec_ty(elemTy, minVec);
+    auto elemPtrTy = ptr_ty(elemTy);
+    Value outVecVal = i32_val(outVec);
+    Value minVecVal = i32_val(minVec);
+    Value word;
+
+    SmallVector<Value> srcStrides = {dstStrides[0], dstStrides[1]};
+    SmallVector<Value> offsetVals = {i32_val(0), i32_val(0)};
+    SharedMemoryObject smemObj(smemBase, srcStrides, offsetVals);
+
+    DenseMap<unsigned, Value> sharedPtrs =
+        getSwizzledSharedPtrs(loc, inVec, srcTy, dstSharedLayout, dstElemTy,
+                              smemObj, rewriter, offsetVals, srcStrides);
+
+    std::map<unsigned, Value> cache0;
+    std::map<unsigned, Value> cache1;
+    for (unsigned i = 0; i < numElems; ++i) {
+      if (i % minVec == 0)
+        word = undef(wordTy);
+      word = insert_element(wordTy, word, inVals[i], i32_val(i % minVec));
+      if (i % minVec == minVec - 1) {
+        Value smemAddr = sharedPtrs[i / minVec * minVec];
+        smemAddr = bitcast(smemAddr, ptr_ty(wordTy, 3));
+        store(word, smemAddr);
+      }
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -240,6 +471,116 @@ public:
       ret = add(ret, mul(offset, stride));
     }
     return ret;
+  }
+
+  struct SmallVectorKeyInfo {
+    static unsigned getHashValue(const SmallVector<unsigned> &key) {
+      return llvm::hash_combine_range(key.begin(), key.end());
+    }
+    static bool isEqual(const SmallVector<unsigned> &lhs,
+                        const SmallVector<unsigned> &rhs) {
+      return lhs == rhs;
+    }
+    static SmallVector<unsigned> getEmptyKey() {
+      return SmallVector<unsigned>();
+    }
+    static SmallVector<unsigned> getTombstoneKey() {
+      return {std::numeric_limits<unsigned>::max()};
+    }
+  };
+
+  // -----------------------------------------------------------------------
+  // Get offsets / indices for any layout
+  // -----------------------------------------------------------------------
+
+  SmallVector<Value> emitBaseIndexForLayout(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const Attribute &layout,
+                                            ArrayRef<int64_t> shape) const {
+    IndexCacheKeyT key = std::make_pair(layout, llvm::to_vector(shape));
+    auto cache = indexCacheInfo.baseIndexCache;
+    assert(cache && "baseIndexCache is nullptr");
+    auto insertPt = indexCacheInfo.indexInsertPoint;
+    if (cache->count(key) > 0) {
+      return cache->lookup(key);
+    } else {
+      ConversionPatternRewriter::InsertionGuard guard(rewriter);
+      restoreInsertionPointIfSet(insertPt, rewriter);
+      SmallVector<Value> result;
+      if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
+        result =
+            emitBaseIndexForBlockedLayout(loc, rewriter, blockedLayout, shape);
+      } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+        if (mmaLayout.isVolta())
+          result = emitBaseIndexForMmaLayoutV1(loc, rewriter, mmaLayout, shape);
+        if (mmaLayout.isAmpere())
+          result = emitBaseIndexForMmaLayoutV2(loc, rewriter, mmaLayout, shape);
+      } else {
+        llvm_unreachable("unsupported emitBaseIndexForLayout");
+      }
+      cache->insert(std::make_pair(key, result));
+      *insertPt = rewriter.saveInsertionPoint();
+      return result;
+    }
+  }
+
+  SmallVector<SmallVector<unsigned>>
+  emitOffsetForLayout(const Attribute &layout, ArrayRef<int64_t> shape) const {
+    if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>())
+      return emitOffsetForBlockedLayout(blockedLayout, shape);
+    if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+      if (mmaLayout.isVolta())
+        return emitOffsetForMmaLayoutV1(mmaLayout, shape);
+      if (mmaLayout.isAmpere())
+        return emitOffsetForMmaLayoutV2(mmaLayout, shape);
+    }
+    llvm_unreachable("unsupported emitOffsetForLayout");
+  }
+
+  // -----------------------------------------------------------------------
+  // Emit indices
+  // -----------------------------------------------------------------------
+  SmallVector<SmallVector<Value>> emitIndices(Location loc,
+                                              ConversionPatternRewriter &b,
+                                              const Attribute &layout,
+                                              ArrayRef<int64_t> shape) const {
+    IndexCacheKeyT key(layout, llvm::to_vector(shape));
+    auto cache = indexCacheInfo.indexCache;
+    assert(cache && "indexCache is nullptr");
+    auto insertPt = indexCacheInfo.indexInsertPoint;
+    if (cache->count(key) > 0) {
+      return cache->lookup(key);
+    } else {
+      ConversionPatternRewriter::InsertionGuard guard(b);
+      restoreInsertionPointIfSet(insertPt, b);
+      SmallVector<SmallVector<Value>> result;
+      if (auto blocked = layout.dyn_cast<BlockedEncodingAttr>()) {
+        result = emitIndicesForDistributedLayout(loc, b, blocked, shape);
+      } else if (auto mma = layout.dyn_cast<MmaEncodingAttr>()) {
+        result = emitIndicesForDistributedLayout(loc, b, mma, shape);
+      } else if (auto slice = layout.dyn_cast<SliceEncodingAttr>()) {
+        result = emitIndicesForSliceLayout(loc, b, slice, shape);
+      } else {
+        llvm_unreachable(
+            "emitIndices for layouts other than blocked & slice not "
+            "implemented yet");
+      }
+      cache->insert(std::make_pair(key, result));
+      *insertPt = b.saveInsertionPoint();
+      return result;
+    }
+  }
+
+private:
+  void restoreInsertionPointIfSet(OpBuilder::InsertPoint *insertPt,
+                                  ConversionPatternRewriter &rewriter) const {
+    if (insertPt->isSet()) {
+      rewriter.restoreInsertionPoint(*insertPt);
+    } else {
+      auto func =
+          rewriter.getInsertionPoint()->getParentOfType<LLVM::LLVMFuncOp>();
+      rewriter.setInsertionPointToStart(&func.getBody().front());
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -411,38 +752,6 @@ public:
     return ret;
   }
 
-  // -----------------------------------------------------------------------
-  // Get offsets / indices for any layout
-  // -----------------------------------------------------------------------
-
-  SmallVector<Value> emitBaseIndexForLayout(Location loc,
-                                            ConversionPatternRewriter &rewriter,
-                                            const Attribute &layout,
-                                            ArrayRef<int64_t> shape) const {
-    if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>())
-      return emitBaseIndexForBlockedLayout(loc, rewriter, blockedLayout, shape);
-    if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-      if (mmaLayout.isVolta())
-        return emitBaseIndexForMmaLayoutV1(loc, rewriter, mmaLayout, shape);
-      if (mmaLayout.isAmpere())
-        return emitBaseIndexForMmaLayoutV2(loc, rewriter, mmaLayout, shape);
-    }
-    llvm_unreachable("unsupported emitBaseIndexForLayout");
-  }
-
-  SmallVector<SmallVector<unsigned>>
-  emitOffsetForLayout(const Attribute &layout, ArrayRef<int64_t> shape) const {
-    if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>())
-      return emitOffsetForBlockedLayout(blockedLayout, shape);
-    if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-      if (mmaLayout.isVolta())
-        return emitOffsetForMmaLayoutV1(mmaLayout, shape);
-      if (mmaLayout.isAmpere())
-        return emitOffsetForMmaLayoutV2(mmaLayout, shape);
-    }
-    llvm_unreachable("unsupported emitOffsetForLayout");
-  }
-
   // Emit indices calculation within each ConversionPattern, and returns a
   // [elemsPerThread X rank] index matrix.
 
@@ -470,22 +779,6 @@ public:
     return multiDimIdx;
   }
 
-  struct SmallVectorKeyInfo {
-    static unsigned getHashValue(const SmallVector<unsigned> &key) {
-      return llvm::hash_combine_range(key.begin(), key.end());
-    }
-    static bool isEqual(const SmallVector<unsigned> &lhs,
-                        const SmallVector<unsigned> &rhs) {
-      return lhs == rhs;
-    }
-    static SmallVector<unsigned> getEmptyKey() {
-      return SmallVector<unsigned>();
-    }
-    static SmallVector<unsigned> getTombstoneKey() {
-      return {std::numeric_limits<unsigned>::max()};
-    }
-  };
-
   SmallVector<SmallVector<Value>>
   emitIndicesForSliceLayout(Location loc, ConversionPatternRewriter &rewriter,
                             const SliceEncodingAttr &sliceLayout,
@@ -505,46 +798,45 @@ public:
     return resultIndices;
   }
 
-  // -----------------------------------------------------------------------
-  // Emit indices
-  // -----------------------------------------------------------------------
-  SmallVector<SmallVector<Value>> emitIndices(Location loc,
-                                              ConversionPatternRewriter &b,
-                                              const Attribute &layout,
-                                              ArrayRef<int64_t> shape) const {
-    if (auto blocked = layout.dyn_cast<BlockedEncodingAttr>()) {
-      return emitIndicesForDistributedLayout(loc, b, blocked, shape);
-    } else if (auto mma = layout.dyn_cast<MmaEncodingAttr>()) {
-      return emitIndicesForDistributedLayout(loc, b, mma, shape);
-    } else if (auto slice = layout.dyn_cast<SliceEncodingAttr>()) {
-      return emitIndicesForSliceLayout(loc, b, slice, shape);
-    } else {
-      assert(0 && "emitIndices for layouts other than blocked & slice not "
-                  "implemented yet");
-      return {};
-    }
-  }
-
-  // -----------------------------------------------------------------------
-  // Shared memory utilities
-  // -----------------------------------------------------------------------
-  template <typename T>
-  Value getSharedMemoryBase(Location loc, ConversionPatternRewriter &rewriter,
-                            T value) const {
-
-    auto ptrTy = LLVM::LLVMPointerType::get(
-        this->getTypeConverter()->convertType(rewriter.getI8Type()), 3);
-    auto bufferId = allocation->getBufferId(value);
-    assert(bufferId != Allocation::InvalidBufferId && "BufferId not found");
-    size_t offset = allocation->getOffset(bufferId);
-    Value offVal = idx_val(offset);
-    Value base = gep(ptrTy, smem, offVal);
-    return base;
-  }
-
 protected:
+  LLVMTypeConverter *converter;
   const Allocation *allocation;
   Value smem;
+  IndexCacheInfo indexCacheInfo;
+};
+
+template <typename SourceOp>
+class ConvertTritonGPUOpToLLVMPattern
+    : public ConvertOpToLLVMPattern<SourceOp>,
+      public ConvertTritonGPUOpToLLVMPatternBase {
+public:
+  using OpAdaptor = typename SourceOp::Adaptor;
+
+  explicit ConvertTritonGPUOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                           PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
+        ConvertTritonGPUOpToLLVMPatternBase(typeConverter) {}
+
+  explicit ConvertTritonGPUOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                           const Allocation *allocation,
+                                           Value smem,
+                                           PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
+        ConvertTritonGPUOpToLLVMPatternBase(typeConverter, allocation, smem) {}
+
+  explicit ConvertTritonGPUOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                           const Allocation *allocation,
+                                           Value smem,
+                                           IndexCacheInfo indexCacheInfo,
+                                           PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
+        ConvertTritonGPUOpToLLVMPatternBase(typeConverter, allocation, smem,
+                                            indexCacheInfo) {}
+
+protected:
+  LLVMTypeConverter *getTypeConverter() const {
+    return ((ConvertTritonGPUOpToLLVMPatternBase *)this)->getTypeConverter();
+  }
 };
 
 #endif

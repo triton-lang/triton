@@ -141,10 +141,10 @@ class CMakeBuild(build_ext):
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
             "-DTRITON_BUILD_TUTORIALS=OFF",
             "-DTRITON_BUILD_PYTHON_MODULE=ON",
-            # '-DPYTHON_EXECUTABLE=' + sys.executable,
-            '-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
+            "-DPython3_EXECUTABLE:FILEPATH=" + sys.executable,
+            "-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON",
             "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
-            "-DLLVM_EXTERNAL_LIT=" + lit_dir
+            "-DLLVM_EXTERNAL_LIT=" + lit_dir,
         ] + thirdparty_cmake_args
 
         # configuration
@@ -173,7 +173,7 @@ setup(
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
-    packages=["triton", "triton/_C", "triton/language", "triton/tools", "triton/ops", "triton/runtime", "triton/ops/blocksparse"],
+    packages=["triton", "triton/_C", "triton/language", "triton/tools", "triton/impl", "triton/ops", "triton/runtime", "triton/ops/blocksparse"],
     install_requires=[
         "cmake",
         "filelock",

@@ -471,10 +471,15 @@ def arange(start: int, end: int, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_make_range(start, end), ret_ty)
 
 
-def zeros(shape: List[int], dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
-    _0 = builder.get_null_value(dtype.to_ir(builder))
+def full(shape: List[int], value, dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
+    if value == 0:
+        _value = builder.get_null_value(dtype.to_ir(builder))
+    else:
+        get_value_fn = getattr(builder, f"get_{dtype.name}")
+        _value = get_value_fn(value)
     ret_ty = tl.block_type(dtype, shape)
-    return tl.tensor(builder.create_splat(_0, shape), ret_ty)
+    return tl.tensor(builder.create_splat(_value, shape), ret_ty)
+
 
 # ===----------------------------------------------------------------------===//
 #                               Shape Manipulation
@@ -891,8 +896,8 @@ def atomic_max(ptr: tl.tensor,
     # return atomic_umin(i_ptr, i_val) if val < 0
     i_val = bitcast(val, tl.int32, builder)
     i_ptr = bitcast(ptr, tl.pointer_type(tl.int32, 1), builder)
-    pos = greater_equal(val, tl.tensor(builder.get_float32(0), sca_ty), builder)
-    neg = less_than(val, tl.tensor(builder.get_float32(0), sca_ty), builder)
+    pos = greater_equal(val, tl.tensor(builder.get_fp32(0), sca_ty), builder)
+    neg = less_than(val, tl.tensor(builder.get_fp32(0), sca_ty), builder)
     pos_ret = tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.MAX, i_ptr.handle, i_val.handle, and_(mask, pos, builder).handle), i_val.type)
     neg_ret = tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.UMIN, i_ptr.handle, i_val.handle, and_(mask, neg, builder).handle), i_val.type)
     return where(pos, pos_ret, neg_ret, builder)
@@ -923,8 +928,8 @@ def atomic_min(ptr: tl.tensor,
     # return atomic_umax(i_ptr, i_val) if val < 0
     i_val = bitcast(val, tl.int32, builder)
     i_ptr = bitcast(ptr, tl.pointer_type(tl.int32, 1), builder)
-    pos = greater_equal(val, tl.tensor(builder.get_float32(0), sca_ty), builder)
-    neg = less_than(val, tl.tensor(builder.get_float32(0), sca_ty), builder)
+    pos = greater_equal(val, tl.tensor(builder.get_fp32(0), sca_ty), builder)
+    neg = less_than(val, tl.tensor(builder.get_fp32(0), sca_ty), builder)
     pos_ret = tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.MIN,
                                                   i_ptr.handle,
                                                   i_val.handle,
@@ -998,7 +1003,7 @@ def dot(lhs: tl.tensor,
         _0 = builder.get_int32(0)
         ret_scalar_ty = tl.int32
     else:
-        _0 = builder.get_float32(0)
+        _0 = builder.get_fp32(0)
         ret_scalar_ty = tl.float32
     M = lhs.type.shape[0]
     N = rhs.type.shape[1]
@@ -1036,15 +1041,18 @@ def where(condition: tl.tensor,
 def reduce_impl(input: tl.tensor, axis: int, builder: ir.builder, name: str,
                 FLOAT_OP: ir.REDUCE_OP, INT_OP: ir.REDUCE_OP) -> tl.tensor:
     scalar_ty = input.type.scalar
+    out_scalar_ty = scalar_ty
     # input is extended to 32-bits if necessary
     # this increases numerical accuracy and can be done pretty much for free
     # on GPUs
     if scalar_ty.is_int() and scalar_ty.int_bitwidth <= 32:
         input = cast(input, tl.int32, builder)
+        out_scalar_ty = tl.int32
 
     # hardware doesn't support FMAX, FMIN, CMP for bfloat16
     if scalar_ty is tl.bfloat16:
         input = cast(input, tl.float32, builder)
+        out_scalar_ty = tl.float32
 
     # choose the right unsigned operation
     if scalar_ty.is_int_unsigned():
@@ -1057,6 +1065,12 @@ def reduce_impl(input: tl.tensor, axis: int, builder: ir.builder, name: str,
         if INT_OP in int_op_to_unit:
             INT_OP = int_op_to_unit[INT_OP]
 
+    # If we are doing an argmin or argmax we want to use an int32 output type
+    if FLOAT_OP is ir.REDUCE_OP.ARGFMAX or INT_OP is ir.REDUCE_OP.ARGMAX:
+        out_scalar_ty = tl.int32
+    elif FLOAT_OP is ir.REDUCE_OP.ARGFMIN or INT_OP is ir.REDUCE_OP.ARGMIN:
+        out_scalar_ty = tl.int32
+
     # get result type
     shape = input.type.shape
     ret_shape = []
@@ -1064,10 +1078,10 @@ def reduce_impl(input: tl.tensor, axis: int, builder: ir.builder, name: str,
         if i != axis:
             ret_shape.append(s)
     if ret_shape:
-        res_ty = tl.block_type(scalar_ty, ret_shape)
+        res_ty = tl.block_type(out_scalar_ty, ret_shape)
     else:
         # 0d-tensor -> scalar
-        res_ty = scalar_ty
+        res_ty = out_scalar_ty
 
     if scalar_ty.is_floating():
         return tl.tensor(builder.create_reduce(input.handle, FLOAT_OP, axis), res_ty)
@@ -1109,11 +1123,13 @@ def xor_sum(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
 
 def umulhi(x: tl.tensor, y: tl.tensor, builder: ir.builder) -> tl.tensor:
     x, y = binary_op_type_checking_impl(x, y, builder)
+    # FIXME(Keren): not portable, should be fixed
     from . import libdevice
     return libdevice.mulhi(x, y, _builder=builder)
 
 
 def floor(x: tl.tensor, builder: ir.builder) -> tl.tensor:
+    # FIXME(Keren): not portable, should be fixed
     from . import libdevice
     return libdevice.floor(x, _builder=builder)
 

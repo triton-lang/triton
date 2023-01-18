@@ -93,6 +93,13 @@ struct DotOpMmaV1ConversionHelper {
 
   static ArrayRef<unsigned> getMmaInstrShape() { return instrShape; }
 
+  static Type getMatType(TensorType operand) {
+    auto *ctx = operand.getContext();
+    Type fp16Ty = type::f16Ty(ctx);
+    Type vecTy = vec_ty(fp16Ty, 2);
+    return struct_ty(SmallVector<Type>{vecTy});
+  }
+
   static Type getMmaRetType(TensorType operand) {
     auto *ctx = operand.getContext();
     Type fp32Ty = type::f32Ty(ctx);
@@ -204,7 +211,12 @@ struct DotOpMmaV1ConversionHelper {
       offA[i] = add(mul(offA0I, strideA0), mul(offA1, strideA1));
     }
 
-    Type f16x2Ty = vec_ty(f16_ty, 2);
+    Type elemX2Ty = vec_ty(f16_ty, 2);
+    Type elemPtrTy = ptr_ty(f16_ty);
+    if (tensorTy.getElementType().isBF16()) {
+      elemX2Ty = vec_ty(i16_ty, 2);
+      elemPtrTy = ptr_ty(i16_ty);
+    }
 
     // prepare arguments
     SmallVector<Value> ptrA(numPtrA);
@@ -213,30 +225,28 @@ struct DotOpMmaV1ConversionHelper {
     for (int i = 0; i < numPtrA; i++)
       ptrA[i] = gep(ptr_ty(f16_ty), smemBase, offA[i]);
 
-    Type f16PtrTy = ptr_ty(f16_ty);
-
     auto ld = [&](decltype(has) &vals, int m, int k, Value val0, Value val1) {
       vals[{m, k}] = {val0, val1};
     };
     auto loadA = [&](int m, int k) {
       int offidx = (isARow ? k / 4 : m) % numPtrA;
-      Value thePtrA = gep(f16PtrTy, smemBase, offA[offidx]);
+      Value thePtrA = gep(elemPtrTy, smemBase, offA[offidx]);
 
       int stepAM = isARow ? m : m / numPtrA * numPtrA;
       int stepAK = isARow ? k / (numPtrA * vecA) * (numPtrA * vecA) : k;
       Value offset = add(mul(i32_val(stepAM * strideRepM), strideAM),
                          mul(i32_val(stepAK), strideAK));
-      Value pa = gep(f16PtrTy, thePtrA, offset);
+      Value pa = gep(elemPtrTy, thePtrA, offset);
       Type aPtrTy = ptr_ty(vec_ty(i32_ty, std::max<int>(vecA / 2, 1)), 3);
       Value ha = load(bitcast(pa, aPtrTy));
       // record lds that needs to be moved
-      Value ha00 = bitcast(extract_element(ha, i32_val(0)), f16x2Ty);
-      Value ha01 = bitcast(extract_element(ha, i32_val(1)), f16x2Ty);
+      Value ha00 = bitcast(extract_element(ha, i32_val(0)), elemX2Ty);
+      Value ha01 = bitcast(extract_element(ha, i32_val(1)), elemX2Ty);
       ld(has, m, k, ha00, ha01);
 
       if (vecA > 4) {
-        Value ha10 = bitcast(extract_element(ha, i32_val(2)), f16x2Ty);
-        Value ha11 = bitcast(extract_element(ha, i32_val(3)), f16x2Ty);
+        Value ha10 = bitcast(extract_element(ha, i32_val(2)), elemX2Ty);
+        Value ha11 = bitcast(extract_element(ha, i32_val(3)), elemX2Ty);
         if (isARow)
           ld(has, m, k + 4, ha10, ha11);
         else
@@ -256,7 +266,7 @@ struct DotOpMmaV1ConversionHelper {
       elems.push_back(item.second.second);
     }
 
-    Type resTy = struct_ty(SmallVector<Type>(elems.size(), f16x2Ty));
+    Type resTy = struct_ty(SmallVector<Type>(elems.size(), elemX2Ty));
     Value res = getStructFromElements(loc, elems, rewriter, resTy);
     return res;
   }
@@ -319,8 +329,12 @@ struct DotOpMmaV1ConversionHelper {
       offB[i] = add(mul(offB0I, strideB0), mul(offB1, strideB1));
     }
 
-    Type f16PtrTy = ptr_ty(f16_ty);
-    Type f16x2Ty = vec_ty(f16_ty, 2);
+    Type elemPtrTy = ptr_ty(f16_ty);
+    Type elemX2Ty = vec_ty(f16_ty, 2);
+    if (tensorTy.getElementType().isBF16()) {
+      elemPtrTy = ptr_ty(i16_ty);
+      elemX2Ty = vec_ty(i16_ty, 2);
+    }
 
     SmallVector<Value> ptrB(numPtrB);
     ValueTable hbs;
@@ -339,17 +353,17 @@ struct DotOpMmaV1ConversionHelper {
       int stepBK = isBRow ? K : K / (numPtrB * vecB) * (numPtrB * vecB);
       Value offset = add(mul(i32_val(stepBN * strideRepN), strideBN),
                          mul(i32_val(stepBK), strideBK));
-      Value pb = gep(f16PtrTy, thePtrB, offset);
+      Value pb = gep(elemPtrTy, thePtrB, offset);
 
       Value hb =
           load(bitcast(pb, ptr_ty(vec_ty(i32_ty, std::max(vecB / 2, 1)), 3)));
       // record lds that needs to be moved
-      Value hb00 = bitcast(extract_element(hb, i32_val(0)), f16x2Ty);
-      Value hb01 = bitcast(extract_element(hb, i32_val(1)), f16x2Ty);
+      Value hb00 = bitcast(extract_element(hb, i32_val(0)), elemX2Ty);
+      Value hb01 = bitcast(extract_element(hb, i32_val(1)), elemX2Ty);
       ld(hbs, n, K, hb00, hb01);
       if (vecB > 4) {
-        Value hb10 = bitcast(extract_element(hb, i32_val(2)), f16x2Ty);
-        Value hb11 = bitcast(extract_element(hb, i32_val(3)), f16x2Ty);
+        Value hb10 = bitcast(extract_element(hb, i32_val(2)), elemX2Ty);
+        Value hb11 = bitcast(extract_element(hb, i32_val(3)), elemX2Ty);
         if (isBRow)
           ld(hbs, n + 1, K, hb10, hb11);
         else
@@ -369,8 +383,7 @@ struct DotOpMmaV1ConversionHelper {
       elems.push_back(item.second.first);
       elems.push_back(item.second.second);
     }
-    Type fp16x2Ty = vec_ty(type::f16Ty(ctx), 2);
-    Type resTy = struct_ty(SmallVector<Type>(elems.size(), fp16x2Ty));
+    Type resTy = struct_ty(SmallVector<Type>(elems.size(), elemX2Ty));
     Value res = getStructFromElements(loc, elems, rewriter, resTy);
     return res;
   }
@@ -532,17 +545,17 @@ struct DotOpMmaV2ConversionHelper {
 
   // The type of matrix that loaded by either a ldmatrix or composed lds.
   Type getMatType() const {
-    Type fp32Ty = type::f32Ty(ctx);
+    // floating point types
+    Type fp32x1Ty = vec_ty(type::f32Ty(ctx), 1);
     Type fp16x2Ty = vec_ty(type::f16Ty(ctx), 2);
     Type i16x2Ty = vec_ty(type::i16Ty(ctx), 2);
-    // floating point types
     Type fp16x2Pack4Ty =
         LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp16x2Ty));
     // LLVM 14.0 does not support bf16 type, so we use i16 instead.
     Type bf16x2Pack4Ty =
         LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i16x2Ty));
     Type fp32Pack4Ty =
-        LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp32Ty));
+        LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp32x1Ty));
     // integer types
     Type i8x4Ty = vec_ty(type::i8Ty(ctx), 4);
     Type i8x4Pack4Ty =
@@ -954,7 +967,7 @@ public:
   // Load 4 matrices and returns 4 vec<2> elements.
   std::tuple<Value, Value, Value, Value>
   loadX4(int mat0, int mat1, ArrayRef<Value> offs, ArrayRef<Value> ptrs,
-         Type ldmatrixRetTy, Type shemPtrTy) const {
+         Type matTy, Type shemPtrTy) const {
     assert(mat0 % 2 == 0 && mat1 % 2 == 0 &&
            "smem matrix load must be aligned");
     int matIdx[2] = {mat0, mat1};
@@ -977,6 +990,9 @@ public:
 
     Value ptr = getPtr(ptrIdx);
 
+    // The struct should have exactly the same element types.
+    Type elemTy = matTy.cast<LLVM::LLVMStructType>().getBody()[0];
+
     if (canUseLdmatrix) {
       Value sOffset =
           mul(i32_val(matIdx[order[1]] * sMatStride * sMatShape), sStride);
@@ -994,20 +1010,12 @@ public:
       ldmatrix(resArgs, addrArg);
 
       // The result type is 4xi32, each i32 is composed of 2xf16
-      // elements(adjacent two columns in a row)
-      Value resV4 = builder.launch(rewriter, loc, ldmatrixRetTy);
-
-      auto getIntAttr = [&](int v) {
-        return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
-      };
-
-      // The struct should have exactly the same element types.
-      Type elemType = resV4.getType().cast<LLVM::LLVMStructType>().getBody()[0];
-
-      return {extract_val(elemType, resV4, getIntAttr(0)),
-              extract_val(elemType, resV4, getIntAttr(1)),
-              extract_val(elemType, resV4, getIntAttr(2)),
-              extract_val(elemType, resV4, getIntAttr(3))};
+      // elements (adjacent two columns in a row) or a single f32 element.
+      Value resV4 = builder.launch(rewriter, loc, matTy);
+      return {extract_val(elemTy, resV4, i32_arr_attr(0)),
+              extract_val(elemTy, resV4, i32_arr_attr(1)),
+              extract_val(elemTy, resV4, i32_arr_attr(2)),
+              extract_val(elemTy, resV4, i32_arr_attr(3))};
     } else if (elemBytes == 4 &&
                needTrans) { // Use lds.32 to load tf32 matrices
       Value ptr2 = getPtr(ptrIdx + 1);
@@ -1019,21 +1027,23 @@ public:
           add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sStride));
 
       Value elems[4];
-      Type elemTy = type::f32Ty(ctx);
-      Type elemPtrTy = ptr_ty(elemTy);
       if (kOrder == 1) {
-        elems[0] = load(gep(elemPtrTy, ptr, sOffsetElemVal));
-        elems[1] = load(gep(elemPtrTy, ptr2, sOffsetElemVal));
-        elems[2] = load(gep(elemPtrTy, ptr, sOffsetArrElemVal));
-        elems[3] = load(gep(elemPtrTy, ptr2, sOffsetArrElemVal));
+        elems[0] = load(gep(shemPtrTy, ptr, sOffsetElemVal));
+        elems[1] = load(gep(shemPtrTy, ptr2, sOffsetElemVal));
+        elems[2] = load(gep(shemPtrTy, ptr, sOffsetArrElemVal));
+        elems[3] = load(gep(shemPtrTy, ptr2, sOffsetArrElemVal));
       } else {
-        elems[0] = load(gep(elemPtrTy, ptr, sOffsetElemVal));
-        elems[2] = load(gep(elemPtrTy, ptr2, sOffsetElemVal));
-        elems[1] = load(gep(elemPtrTy, ptr, sOffsetArrElemVal));
-        elems[3] = load(gep(elemPtrTy, ptr2, sOffsetArrElemVal));
+        elems[0] = load(gep(shemPtrTy, ptr, sOffsetElemVal));
+        elems[2] = load(gep(shemPtrTy, ptr2, sOffsetElemVal));
+        elems[1] = load(gep(shemPtrTy, ptr, sOffsetArrElemVal));
+        elems[3] = load(gep(shemPtrTy, ptr2, sOffsetArrElemVal));
       }
-      return {elems[0], elems[1], elems[2], elems[3]};
-
+      std::array<Value, 4> retElems;
+      retElems.fill(undef(elemTy));
+      for (auto i = 0; i < 4; ++i) {
+        retElems[i] = insert_element(elemTy, retElems[i], elems[i], i32_val(0));
+      }
+      return {retElems[0], retElems[1], retElems[2], retElems[3]};
     } else if (elemBytes == 1 && needTrans) { // work with int8
       std::array<std::array<Value, 4>, 2> ptrs;
       ptrs[0] = {
@@ -1058,49 +1068,42 @@ public:
           add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sStride));
 
       std::array<Value, 4> i8v4Elems;
-      std::array<Value, 4> i32Elems;
-      i8v4Elems.fill(
-          rewriter.create<LLVM::UndefOp>(loc, vec_ty(type::i8Ty(ctx), 4)));
+      i8v4Elems.fill(undef(elemTy));
 
       Value i8Elems[4][4];
-      Type elemTy = type::i8Ty(ctx);
-      Type elemPtrTy = ptr_ty(elemTy);
-      Type i8x4Ty = vec_ty(type::i8Ty(ctx), 4);
       if (kOrder == 1) {
         for (int i = 0; i < 2; ++i)
           for (int j = 0; j < 4; ++j)
-            i8Elems[i][j] = load(gep(elemPtrTy, ptrs[i][j], sOffsetElemVal));
+            i8Elems[i][j] = load(gep(shemPtrTy, ptrs[i][j], sOffsetElemVal));
 
         for (int i = 2; i < 4; ++i)
           for (int j = 0; j < 4; ++j)
             i8Elems[i][j] =
-                load(gep(elemPtrTy, ptrs[i - 2][j], sOffsetArrElemVal));
+                load(gep(shemPtrTy, ptrs[i - 2][j], sOffsetArrElemVal));
 
         for (int m = 0; m < 4; ++m) {
           for (int e = 0; e < 4; ++e)
             i8v4Elems[m] = insert_element(i8v4Elems[m].getType(), i8v4Elems[m],
                                           i8Elems[m][e], i32_val(e));
-          i32Elems[m] = bitcast(i8v4Elems[m], i8x4Ty);
         }
       } else { // k first
         for (int j = 0; j < 4; ++j)
-          i8Elems[0][j] = load(gep(elemPtrTy, ptrs[0][j], sOffsetElemVal));
+          i8Elems[0][j] = load(gep(shemPtrTy, ptrs[0][j], sOffsetElemVal));
         for (int j = 0; j < 4; ++j)
-          i8Elems[2][j] = load(gep(elemPtrTy, ptrs[1][j], sOffsetElemVal));
+          i8Elems[2][j] = load(gep(shemPtrTy, ptrs[1][j], sOffsetElemVal));
         for (int j = 0; j < 4; ++j)
-          i8Elems[1][j] = load(gep(elemPtrTy, ptrs[0][j], sOffsetArrElemVal));
+          i8Elems[1][j] = load(gep(shemPtrTy, ptrs[0][j], sOffsetArrElemVal));
         for (int j = 0; j < 4; ++j)
-          i8Elems[3][j] = load(gep(elemPtrTy, ptrs[1][j], sOffsetArrElemVal));
+          i8Elems[3][j] = load(gep(shemPtrTy, ptrs[1][j], sOffsetArrElemVal));
 
         for (int m = 0; m < 4; ++m) {
           for (int e = 0; e < 4; ++e)
             i8v4Elems[m] = insert_element(i8v4Elems[m].getType(), i8v4Elems[m],
                                           i8Elems[m][e], i32_val(e));
-          i32Elems[m] = bitcast(i8v4Elems[m], i8x4Ty);
         }
       }
 
-      return {i32Elems[0], i32Elems[1], i32Elems[2], i32Elems[3]};
+      return {i8v4Elems[0], i8v4Elems[1], i8v4Elems[2], i8v4Elems[3]};
     }
 
     assert(false && "Invalid smem load");
@@ -1388,7 +1391,9 @@ struct MMA16816ConversionHelper {
       unsigned colsPerThread = numRepN * 2;
       PTXBuilder builder;
       auto &mma = *builder.create(helper.getMmaInstr().str());
-      auto retArgs = builder.newListOperand(4, "=r");
+      // using =r for float32 works but leads to less readable ptx.
+      bool isIntMMA = dTensorTy.getElementType().isInteger(32);
+      auto retArgs = builder.newListOperand(4, isIntMMA ? "=r" : "=f");
       auto aArgs = builder.newListOperand({
           {ha[{m, k}], "r"},
           {ha[{m + 1, k}], "r"},
@@ -1407,14 +1412,10 @@ struct MMA16816ConversionHelper {
       mma(retArgs, aArgs, bArgs, cArgs);
       Value mmaOut = builder.launch(rewriter, loc, helper.getMmaRetType());
 
-      auto getIntAttr = [&](int v) {
-        return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
-      };
-
       Type elemTy = mmaOut.getType().cast<LLVM::LLVMStructType>().getBody()[0];
       for (int i = 0; i < 4; ++i)
         fc[m * colsPerThread + 4 * n + i] =
-            extract_val(elemTy, mmaOut, getIntAttr(i));
+            extract_val(elemTy, mmaOut, i32_arr_attr(i));
     };
 
     for (int k = 0; k < numRepK; ++k)
