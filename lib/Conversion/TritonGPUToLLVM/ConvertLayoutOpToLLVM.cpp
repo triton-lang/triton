@@ -253,7 +253,8 @@ private:
                               ArrayRef<unsigned> paddedRepShape,
                               ArrayRef<unsigned> outOrd,
                               SmallVector<Value> &vals, Value smemBase,
-                              ArrayRef<int64_t> shape) const {
+                              ArrayRef<int64_t> shape,
+                              bool isDestMma = false) const {
     unsigned accumNumCTAsEachRep = 1;
     auto layout = type.getEncoding();
     MmaEncodingAttr mma = layout.dyn_cast<MmaEncodingAttr>();
@@ -284,11 +285,9 @@ private:
     std::vector<std::pair<SmallVector<Value>, Value>> coord2valT(
         accumSizePerThread);
     bool needTrans = outOrd[0] != 0;
-    if (sliceLayout)
+    if (sliceLayout || isDestMma)
       needTrans = false;
 
-    // TODO[Superjomn]: Enable this optimization later
-    needTrans = false; // DEBUG
     vec = needTrans ? 2 : 1;
     {
       // We need to transpose the coordinates and values here to enable vec=2
@@ -296,6 +295,8 @@ private:
       std::vector<std::pair<SmallVector<Value>, Value>> coord2val(
           accumSizePerThread);
       for (unsigned elemId = 0; elemId < accumSizePerThread; ++elemId) {
+        // TODO[Superjomn]: Move the coordinate computation out of loop, it is
+        // duplicate in Volta.
         SmallVector<Value> multiDimOffset =
             getMultiDimOffset(layout, loc, rewriter, elemId, type.getShape(),
                               multiDimCTAInRepId, shapePerCTA);
@@ -465,7 +466,7 @@ private:
         if (isDstMmaV1)
           processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ false, dstTy,
                                  multiDimRepId, outVec, paddedRepShape, outOrd,
-                                 outVals, smemBase, shape);
+                                 outVals, smemBase, shape, /*isDestMma=*/true);
         else
           processReplica(loc, rewriter, /*stNotRd*/ false, dstTy,
                          outNumCTAsEachRep, multiDimRepId, outVec,
