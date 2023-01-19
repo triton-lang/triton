@@ -302,7 +302,7 @@ inline bool expensive_to_remat(Operation *op) {
           triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp,
           triton::AtomicRMWOp, triton::AtomicCASOp, triton::DotOp>(op))
     return true;
-  if (isa<scf::YieldOp, scf::ForOp>(op))
+  if (isa<scf::YieldOp, scf::ForOp, scf::IfOp>(op))
     return true;
   return false;
 }
