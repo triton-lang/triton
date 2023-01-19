@@ -75,8 +75,10 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   inVec = outOrd[0] == 0 ? 1 : inOrd[0] == 0 ? 1 : srcContigPerThread;
   outVec = outOrd[0] == 0 ? 1 : dstContigPerThread;
 
-  auto srcShapePerCTA = getShapePerCTA(srcLayout);
-  auto dstShapePerCTA = getShapePerCTA(dstLayout);
+  auto srcShape = srcTy.getShape();
+  auto dstShape = dstTy.getShape();
+  auto srcShapePerCTA = getShapePerCTA(srcLayout, srcShape);
+  auto dstShapePerCTA = getShapePerCTA(dstLayout, dstShape);
 
   unsigned rank = dstTy.getRank();
   SmallVector<unsigned> paddedRepShape(rank);
