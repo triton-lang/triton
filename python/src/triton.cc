@@ -1286,11 +1286,19 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_assert",
            [](mlir::OpBuilder &self, mlir::Value &condition,
-              const std::string &message) -> void {
+              const std::string &message, const std::string &fileName,
+              const std::string &funcName, unsigned lineNo) -> void {
              auto loc = self.getUnknownLoc();
              auto messageAttr = mlir::StringAttr::get(self.getContext(),
                                                       llvm::StringRef(message));
-             self.create<mlir::triton::AssertOp>(loc, condition, messageAttr);
+             auto fileNameAttr = mlir::StringAttr::get(
+                 self.getContext(), llvm::StringRef(fileName));
+             auto funcNameAttr = mlir::StringAttr::get(
+                 self.getContext(), llvm::StringRef(funcName));
+             auto lineNoAttr = self.getI32IntegerAttr(lineNo);
+             self.create<mlir::triton::AssertOp>(loc, condition, messageAttr,
+                                                 fileNameAttr, funcNameAttr,
+                                                 lineNoAttr);
            })
       // Undef
       .def("create_undef",

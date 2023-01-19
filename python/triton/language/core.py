@@ -1294,4 +1294,10 @@ def printf(prefix, *args, _builder=None):
 @builtin
 def assert2(cond, msg="", _builder=None):
     msg = _constexpr_to_value(msg)
-    return semantic.assert2(_to_tensor(cond, _builder), msg, _builder)
+    # Get the file name, function name and line number of the caller
+    import inspect
+    frame = inspect.currentframe()
+    file_name = frame.f_back.f_code.co_filename
+    func_name = frame.f_back.f_code.co_name
+    lineno = frame.f_back.f_lineno
+    return semantic.assert2(_to_tensor(cond, _builder), msg, file_name, func_name, lineno, _builder)

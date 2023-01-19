@@ -1181,5 +1181,5 @@ def printf(prefix: str, args: List[tl.tensor], builder: ir.builder) -> tl.tensor
     return tl.tensor(builder.create_printf(prefix, new_args), tl.void)
 
 
-def assert2(cond: tl.tensor, msg: str, builder: ir.builder) -> tl.tensor:
-    return tl.tensor(builder.create_assert(cond.handle, msg), tl.void)
+def assert2(cond: tl.tensor, msg: str, file_name: str, func_name, lineno: int, builder: ir.builder) -> tl.tensor:
+    return tl.tensor(builder.create_assert(cond.handle, msg, file_name, func_name, lineno), tl.void)

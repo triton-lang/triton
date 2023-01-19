@@ -425,7 +425,7 @@ def TT_PrintfOp : TT_Op<"printf", [MemoryEffects<[MemWrite]>]>,
 def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite]>]> {
   let summary = "Device-side assert, as in CUDA for debugging";
   let description = [{}];
-  let arguments = (ins TT_Tensor:$condition, StrAttr:$message);
+  let arguments = (ins TT_Tensor:$condition, StrAttr:$message, StrAttr:$file, I32Attr:$line);
   let assemblyFormat = "$condition `,` $message attr-dict `:` type($condition)";
 }
 

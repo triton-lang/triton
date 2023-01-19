@@ -280,35 +280,112 @@ struct AssertOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto ctx = rewriter.getContext();
-    auto voidTy = void_ty(ctx);
     auto elems = getElementsFromStruct(loc, adaptor.condition(), rewriter);
-    Value ret;
+    auto elemTy = elems[0].getType();
+    Value condition = int_val(elemTy.getIntOrFloatBitWidth(), 0);
     for (auto elem : elems) {
-      auto type = elem.getType();
-      Value condition;
-      if (type.isIntOrFloat()) {
-        if (type.isSignedInteger() || type.isSignlessInteger()) {
-          condition = icmp_eq(elem, rewriter.create<LLVM::ConstantOp>(
-                                        loc, type, rewriter.getZeroAttr(type)));
-        } else {
-          condition = fcmp_eq(elem, rewriter.create<LLVM::ConstantOp>(
-                                        loc, type, rewriter.getZeroAttr(type)));
-        }
+      if (elemTy.isSignedInteger() || elemTy.isSignlessInteger()) {
+        condition =
+            or_(condition,
+                icmp_eq(elem, rewriter.create<LLVM::ConstantOp>(
+                                  loc, elemTy, rewriter.getZeroAttr(elemTy))));
       } else {
         assert(false && "Unsupported type for assert");
         return failure();
       }
-      // MLIR::AssertOp is lowered to a call to llvm.abort, which cannot be
-      // handled by ptxas
-      // We should call __assertfail here
-      // Delete the definition of triton.assert, using mlir.assert instead
-      PTXBuilder builder;
-      auto &trapOp = *builder.create<PTXInstr>("trap");
-      trapOp().predicate(condition);
-      ret = builder.launch(rewriter, loc, voidTy);
     }
-    rewriter.replaceOp(op, ret);
+    llAssert(op, condition, adaptor.message(), rewriter);
+    rewriter.eraseOp(op);
     return success();
+  }
+
+  static void llAssert(triton::AssertOp op, Value condition, StringRef message,
+                       ConversionPatternRewriter &rewriter) {
+    ConversionPatternRewriter::InsertionGuard guard(rewriter);
+    auto ctx = rewriter.getContext();
+    auto loc = op.getLoc();
+
+    // #block1
+    // if (condition) {
+    //   #block2 
+    //   __assertfail(message);
+    // }
+    // #block3
+    Block *prevBlock = op->getBlock();
+    Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
+    rewriter.setInsertionPointToStart(ifBlock);
+
+    auto funcOp = getAssertfailDeclaration(rewriter);
+    auto moduleOp =
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    static const char messageStringPrefix[] = "assertMessage_";
+    unsigned stringNumber = 0;
+    SmallString<16> stringConstName;
+    do {
+      stringConstName.clear();
+      (messageStringPrefix + Twine(stringNumber++))
+          .toStringRef(stringConstName);
+    } while (moduleOp.lookupSymbol(stringConstName));
+
+    llvm::SmallString<64> messageStr(message);
+    size_t messageSize = messageStr.size_in_bytes();
+    auto globalType = LLVM::LLVMArrayType::get(i8_ty, messageSize);
+
+    LLVM::GlobalOp global;
+    {
+      ConversionPatternRewriter::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(moduleOp.getBody());
+      global = rewriter.create<LLVM::GlobalOp>(
+          UnknownLoc::get(ctx), globalType,
+          /*isConstant=*/true, LLVM::Linkage::Internal, stringConstName,
+          rewriter.getStringAttr(messageStr));
+    }
+
+    Value zero = i32_val(0);
+    Value globalPtr =
+        rewriter.create<LLVM::AddressOfOp>(UnknownLoc::get(ctx), global);
+    Value assertionStart = rewriter.create<LLVM::GEPOp>(
+        UnknownLoc::get(ctx), ptr_ty(i8_ty), globalPtr,
+        SmallVector<Value>({zero, zero}));
+    Value nullPtr =
+        rewriter.create<LLVM::NullOp>(UnknownLoc::get(ctx), ptr_ty(i8_ty));
+    Value charSize = int_val(sizeof(size_t) * 8, sizeof(char));
+
+    SmallVector<Value> operands = {assertionStart, nullPtr, zero, nullPtr,
+                                   charSize};
+    auto ret =
+        rewriter.create<LLVM::CallOp>(UnknownLoc::get(ctx), funcOp, operands);
+
+    // Split a block after the call.
+    Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
+    rewriter.setInsertionPointToEnd(ifBlock);
+    rewriter.create<BranchOp>(loc, thenBlock);
+    rewriter.setInsertionPointToEnd(prevBlock);
+    rewriter.create<CondBranchOp>(loc, condition, ifBlock, thenBlock);
+  }
+
+  static LLVM::LLVMFuncOp
+  getAssertfailDeclaration(ConversionPatternRewriter &rewriter) {
+    auto moduleOp =
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    StringRef funcName("__assertfail");
+    Operation *funcOp = moduleOp.lookupSymbol(funcName);
+    if (funcOp)
+      return cast<LLVM::LLVMFuncOp>(*funcOp);
+
+    // void __assert_fail(const char * assertion, const char * file, unsigned
+    // int line, const char * function);
+    auto *ctx = rewriter.getContext();
+    SmallVector<Type> argsType{ptr_ty(i8_ty), ptr_ty(i8_ty), i32_ty,
+                               ptr_ty(i8_ty),
+                               rewriter.getIntegerType(sizeof(size_t) * 8)};
+    auto funcType = LLVM::LLVMFunctionType::get(void_ty(ctx), argsType);
+
+    ConversionPatternRewriter::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(moduleOp.getBody());
+
+    return rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(ctx), funcName,
+                                             funcType);
   }
 };
 
