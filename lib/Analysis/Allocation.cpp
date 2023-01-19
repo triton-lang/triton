@@ -6,7 +6,6 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
-#include "triton/Analysis/Utility.h"
 
 #include <algorithm>
 #include <limits>

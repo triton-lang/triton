@@ -152,9 +152,8 @@ std::string getValueOperandName(Value value, AsmState &state) {
   return opName;
 }
 
-bool isMmaToDotShortcut(
-    triton::gpu::MmaEncodingAttr &mmaLayout,
-    triton::gpu::DotOperandEncodingAttr &dotOperandLayout) {
+bool isMmaToDotShortcut(triton::gpu::MmaEncodingAttr &mmaLayout,
+                        triton::gpu::DotOperandEncodingAttr &dotOperandLayout) {
   // dot_op<opIdx=0, parent=#mma> = #mma
   // when #mma = MmaEncoding<version=2, warpsPerCTA=[..., 1]>
   return mmaLayout.getWarpsPerCTA()[1] == 1 &&
