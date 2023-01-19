@@ -6,6 +6,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
+#include "triton/Analysis/Utility.h"
 
 #include <algorithm>
 #include <limits>
@@ -49,15 +50,6 @@ getCvtOrder(const Attribute &srcLayout, const Attribute &dstLayout) {
                                                : getOrder(dstLayout);
 
   return {inOrd, outOrd};
-}
-
-bool isMmaToDotShortcut(MmaEncodingAttr &mmaLayout,
-                        DotOperandEncodingAttr &dotOperandLayout) {
-  // dot_op<opIdx=0, parent=#mma> = #mma
-  // when #mma = MmaEncoding<version=2, warpsPerCTA=[..., 1]>
-  return mmaLayout.getWarpsPerCTA()[1] == 1 &&
-         dotOperandLayout.getOpIdx() == 0 &&
-         dotOperandLayout.getParent() == mmaLayout;
 }
 
 SmallVector<unsigned>
