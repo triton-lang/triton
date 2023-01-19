@@ -345,16 +345,6 @@ public:
     return ret;
   }
 
-  bool isMmaToDotShortcut(
-      MmaEncodingAttr &mmaLayout,
-      triton::gpu::DotOperandEncodingAttr &dotOperandLayout) const {
-    // dot_op<opIdx=0, parent=#mma> = #mma
-    // when #mma = MmaEncoding<version=2, warpsPerCTA=[..., 1]>
-    return mmaLayout.getWarpsPerCTA()[1] == 1 &&
-           dotOperandLayout.getOpIdx() == 0 &&
-           dotOperandLayout.getParent() == mmaLayout;
-  }
-
   void storeDistributedToShared(Value src, Value llSrc,
                                 ArrayRef<Value> dstStrides,
                                 ArrayRef<SmallVector<Value>> srcIndices,

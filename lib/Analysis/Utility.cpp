@@ -48,6 +48,12 @@ SmallVector<SmallVector<unsigned>> ReduceOpHelper::getScratchConfigsFast() {
   auto axis = op.axis();
   SmallVector<SmallVector<unsigned>> smemShapes(3);
 
+  auto argLayout = srcTy.getEncoding();
+  auto argLayoutMma = argLayout.dyn_cast<triton::gpu::MmaEncodingAttr>();
+  if (argLayoutMma && argLayoutMma.getVersionMajor() == 2 &&
+      triton::gpu::getWarpsPerCTA(argLayout)[axis] == 1)
+    return {{1, 1}, {1, 1}};
+
   /// shared memory block0
   smemShapes[0] = convertType<unsigned>(getSrcShape());
   smemShapes[0][axis] = getInterWarpSize();
@@ -146,6 +152,16 @@ std::string getValueOperandName(Value value, AsmState &state) {
   llvm::raw_string_ostream ss(opName);
   value.printAsOperand(ss, state);
   return opName;
+}
+
+bool isMmaToDotShortcut(triton::gpu::MmaEncodingAttr &mmaLayout,
+                        triton::gpu::DotOperandEncodingAttr &dotOperandLayout) {
+  // dot_op<opIdx=0, parent=#mma> = #mma
+  // when #mma = MmaEncoding<version=2, warpsPerCTA=[..., 1]>
+  return mmaLayout.getVersionMajor() == 2 &&
+         mmaLayout.getWarpsPerCTA()[1] == 1 &&
+         dotOperandLayout.getOpIdx() == 0 &&
+         dotOperandLayout.getParent() == mmaLayout;
 }
 
 } // namespace mlir
