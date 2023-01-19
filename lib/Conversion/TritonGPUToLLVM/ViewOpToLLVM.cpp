@@ -61,6 +61,8 @@ struct SplatOpConversion
       ConversionPatternRewriter &rewriter, Location loc) {
     auto tensorTy = resType.cast<RankedTensorType>();
     auto shape = tensorTy.getShape();
+    auto dotOperand =
+        tensorTy.getEncoding().cast<triton::gpu::DotOperandEncodingAttr>();
     auto parent = layout.getParent();
     Value retVal = constVal;
     Type retTy = elemType;
@@ -78,11 +80,21 @@ struct SplatOpConversion
         matTy = helper.getMatType();
       } else if (mmaLayout.isVolta()) {
         DotOpMmaV1ConversionHelper helper(mmaLayout);
-        numElems = layout.getOpIdx() == 0
-                       ? helper.numElemsPerThreadA(shape, {0, 1})
-                       : helper.numElemsPerThreadB(shape, {0, 1});
+        bool isRow = layout.getIsMMAv1Row().cast<BoolAttr>().getValue();
+        auto [isARow, isBRow, isAVec4, isBVec4, _0] =
+            mmaLayout.decodeVoltaLayoutStates();
+        if (layout.getOpIdx() == 0) {
+          DotOpMmaV1ConversionHelper::AParam aParam(isARow, isAVec4);
+          numElems =
+              helper.numElemsPerThreadA(shape, isARow, isAVec4, aParam.vec);
+        } else {
+          DotOpMmaV1ConversionHelper::BParam bParam(isBRow, isBVec4);
+          numElems =
+              helper.numElemsPerThreadB(shape, isBRow, isBVec4, bParam.vec);
+        }
         matTy = helper.getMatType(tensorTy);
       }
+
       auto numPackedElems = matTy.cast<LLVM::LLVMStructType>()
                                 .getBody()[0]
                                 .cast<VectorType>()
@@ -92,6 +104,7 @@ struct SplatOpConversion
       for (auto i = 0; i < numPackedElems; ++i) {
         retVal = insert_element(retTy, retVal, constVal, i32_val(i));
       }
+
     } else if (auto blockedLayout = parent.dyn_cast<BlockedEncodingAttr>()) {
       numElems = DotOpFMAConversionHelper::getNumElemsPerThread(shape, layout);
     } else {
