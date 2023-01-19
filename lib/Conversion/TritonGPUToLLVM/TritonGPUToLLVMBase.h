@@ -18,6 +18,20 @@ using ::mlir::LLVM::SharedMemoryObject;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
+
+namespace mlir {
+namespace LLVM {
+
+// Helper function for using printf in LLVM conversion.
+void vprintf(StringRef msg, ValueRange args,
+             ConversionPatternRewriter &rewriter);
+
+void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
+                   std::string elem_repr, ConversionPatternRewriter &builder);
+
+} // namespace LLVM
+} // namespace mlir
+
 // FuncOpConversion/FuncOpConversionBase is borrowed from
 // https://github.com/llvm/llvm-project/blob/fae656b2dd80246c3c6f01e9c77c49560368752c/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp#L276
 // since it is not exposed on header files in mlir v14
@@ -199,6 +213,7 @@ public:
         ValueRange{rewriter.create<::mlir::gpu::ThreadIdOp>(
             loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x)});
     Value threadId = cast.getResult(0);
+
     return threadId;
   }
 
@@ -688,8 +703,10 @@ private:
                            ArrayRef<int64_t> shape) const {
     SmallVector<SmallVector<unsigned>> ret;
 
-    for (unsigned i = 0; i < shape[0]; i += getShapePerCTA(mmaLayout)[0]) {
-      for (unsigned j = 0; j < shape[1]; j += getShapePerCTA(mmaLayout)[1]) {
+    for (unsigned i = 0; i < shape[0];
+         i += getShapePerCTA(mmaLayout, shape)[0]) {
+      for (unsigned j = 0; j < shape[1];
+           j += getShapePerCTA(mmaLayout, shape)[1]) {
         ret.push_back({i, j});
         ret.push_back({i, j + 1});
         ret.push_back({i + 2, j});
@@ -700,6 +717,7 @@ private:
         ret.push_back({i + 2, j + 9});
       }
     }
+
     return ret;
   }
 
@@ -751,6 +769,9 @@ private:
   SmallVector<SmallVector<Value>> emitIndicesForDistributedLayout(
       Location loc, ConversionPatternRewriter &rewriter,
       const Attribute &layout, ArrayRef<int64_t> shape) const {
+    if (auto mmaLayout = layout.template dyn_cast<MmaEncodingAttr>()) {
+      assert(!mmaLayout.isVolta());
+    }
 
     // step 1, delinearize threadId to get the base index
     auto multiDimBase = emitBaseIndexForLayout(loc, rewriter, layout, shape);

@@ -1108,6 +1108,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype, devi
             pytest.skip("Only test int8 on devices with sm >= 80")
         elif dtype == 'float32' and allow_tf32:
             pytest.skip("Only test tf32 on devices with sm >= 80")
+    if capability[0] == 7:
+        if (M, N, K, num_warps) == (128, 256, 32, 8):
+            pytest.skip("shared memory out of resource")
+
     torch.backends.cuda.matmul.allow_tf32 = allow_tf32
 
     # triton kernel
