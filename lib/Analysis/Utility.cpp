@@ -49,7 +49,7 @@ SmallVector<SmallVector<unsigned>> ReduceOpHelper::getScratchConfigsFast() {
   SmallVector<SmallVector<unsigned>> smemShapes(3);
 
   auto argLayout = srcTy.getEncoding();
-  auto argLayoutMma = argLayout.dyn_cast<triton::gpu::MmaOperandEncodingAttr>();
+  auto argLayoutMma = argLayout.dyn_cast<triton::gpu::MmaEncodingAttr>();
   if (argLayoutMma && argLayoutMma.getVersionMajor() == 2 &&
       triton::gpu::getWarpsPerCTA(argLayout)[axis] == 1)
     return {{1, 1}, {1, 1}};
