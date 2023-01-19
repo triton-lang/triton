@@ -102,8 +102,8 @@ public:
     // TODO[Superjomn]: Share code with
     // DotOpMmaV1ConversionHelper::AParam/BParam, since same code to compute the
     // rep,spw and fpw.
-    SmallVector<unsigned, 2> wpt({1, 1});
-    SmallVector<unsigned, 2> wpt_nm1;
+    SmallVector<unsigned> wpt({1, 1});
+    SmallVector<unsigned> wpt_nm1;
 
     SmallVector<int, 2> rep(2), spw(2);
     std::array<int, 3> fpw{{2, 2, 1}};

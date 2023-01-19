@@ -100,18 +100,18 @@ struct DotOpMmaV1ConversionHelper {
 
   static ArrayRef<unsigned> getMmaInstrShape() { return instrShape; }
 
-  static Type getMatType(TensorType operand) {
-    auto *ctx = operand.getContext();
-    Type fp16Ty = type::f16Ty(ctx);
-    Type vecTy = vec_ty(fp16Ty, 2);
-    return struct_ty(SmallVector<Type>{vecTy});
-  }
-
   static Type getMmaRetType(TensorType operand) {
     auto *ctx = operand.getContext();
     Type fp32Ty = type::f32Ty(ctx);
     // f16*f16+f32->f32
     return struct_ty(SmallVector<Type>{8, fp32Ty});
+  }
+
+  static Type getMatType(TensorType operand) {
+    auto *ctx = operand.getContext();
+    Type fp16Ty = type::f16Ty(ctx);
+    Type vecTy = vec_ty(fp16Ty, 2);
+    return struct_ty(SmallVector<Type>{vecTy});
   }
 
   // Get the number of fp16x2 elements for $a.

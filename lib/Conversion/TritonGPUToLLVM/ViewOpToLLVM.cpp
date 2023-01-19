@@ -92,7 +92,19 @@ struct SplatOpConversion
           numElems =
               helper.numElemsPerThreadB(shape, isBRow, isBVec4, bParam.vec);
         }
+        matTy = helper.getMatType(tensorTy);
       }
+
+      auto numPackedElems = matTy.cast<LLVM::LLVMStructType>()
+                                .getBody()[0]
+                                .cast<VectorType>()
+                                .getNumElements();
+      retTy = vec_ty(elemType, numPackedElems);
+      retVal = undef(retTy);
+      for (auto i = 0; i < numPackedElems; ++i) {
+        retVal = insert_element(retTy, retVal, constVal, i32_val(i));
+      }
+
     } else if (auto blockedLayout = parent.dyn_cast<BlockedEncodingAttr>()) {
       numElems = DotOpFMAConversionHelper::getNumElemsPerThread(shape, layout);
     } else {
