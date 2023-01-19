@@ -1,5 +1,3 @@
-#include "mlir/ExecutionEngine/ExecutionEngine.h"
-#include "mlir/ExecutionEngine/OptUtils.h"
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
@@ -8,16 +6,19 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Support/LogicalResult.h"
-#include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
-#include "mlir/Target/LLVMIR/Export.h"
+#include "mlir/Transforms/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 #include "triton/Target/PTX/PTXTranslation.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
@@ -78,14 +79,26 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
       llvm::cl::init("-"));
 
   static llvm::cl::opt<std::string> targetKind(
-      "target", llvm::cl::desc("<translation target, options: llvmir/ptx>"),
+      "target", llvm::cl::desc("Translation target, one of: llvmir, ptx"),
       llvm::cl::value_desc("target"), llvm::cl::init("llvmir"));
 
-  static llvm::cl::opt<int> SMArch("sm", llvm::cl::desc("sm arch"),
+  static llvm::cl::opt<int> SMArch("sm", llvm::cl::desc("SM architecture"),
                                    llvm::cl::init(80));
 
   static llvm::cl::opt<int> ptxVersion(
       "ptx-version", llvm::cl::desc("PTX version"), llvm::cl::init(10000));
+
+  static llvm::cl::opt<int> numWarps(
+      "num-warps", llvm::cl::desc("Number of warps per block"),
+      llvm::cl::init(8));
+
+  static llvm::cl::opt<int> numStages(
+      "num-stages", llvm::cl::desc("Number of stages for dots"),
+      llvm::cl::init(1));
+
+  static llvm::cl::opt<bool> printIrAfterAll(
+      "print-ir-after-all", llvm::cl::desc("Print IR after every pass"),
+      llvm::cl::init(false));
 
   llvm::InitLLVM y(argc, argv);
 
@@ -98,6 +111,49 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
   if (!module) {
     return failure();
   }
+
+  mlir::PassManager pm(module->getContext());
+
+  if (printIrAfterAll.getValue()) {
+    pm.getContext()->disableMultithreading();
+    pm.enableIRPrinting(
+        /*shouldPrintBeforePass=*/nullptr,
+        /*shouldPrintAfterPass=*/
+        [](mlir::Pass *, mlir::Operation *) { return true; },
+        /*printModuleScope=*/false,
+        /*printAfterOnlyOnChange=*/false,
+        /*printAfterOnlyOnFailure=*/false, llvm::dbgs());
+  }
+
+  // This follows optimize_triton_ir() from python/triton/compiler.py
+  // TODO: share code between these two places
+  pm.addPass(createInlinerPass());
+  pm.addPass(createCombineOpsPass());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(createCSEPass());
+  pm.addPass(createLoopInvariantCodeMotionPass());
+  // This follows ttir_to_ttgir() from python/triton/compiler.py
+  // TODO: share code between these two places
+  pm.addPass(createConvertTritonToTritonGPUPass(numWarps.getValue()));
+  pm.addPass(createTritonGPUCoalescePass());
+  pm.addPass(createTritonGPUCombineOpsPass(SMArch.getValue()));
+  pm.addPass(createTritonGPUPipelinePass(numStages.getValue()));
+  pm.addPass(createTritonGPUPrefetchPass());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(createCSEPass());
+  pm.addPass(createTritonGPUCombineOpsPass(SMArch.getValue()));
+  pm.addPass(createLoopInvariantCodeMotionPass());
+  pm.addPass(createTritonGPUCombineOpsPass(SMArch.getValue()));
+  if (SMArch.getValue() / 10 == 7)
+    pm.addPass(createTritonGPUUpdateMmaForVoltaPass());
+  pm.addPass(createCSEPass());
+  pm.addPass(createTritonGPUDecomposeConversionsPass());
+  pm.addPass(createCSEPass());
+  pm.addPass(createSymbolDCEPass());
+  pm.addPass(createTritonGPUReorderInstructionsPass());
+
+  if (failed(pm.run(module.get())))
+    return failure();
 
   std::string errorMessage;
   auto output = openOutputFile(outputFilename, &errorMessage);
@@ -113,11 +169,20 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
     llvm::errs() << "Translate to LLVM IR failed";
   }
 
-  if (targetKind == "llvmir")
-    llvm::outs() << *llvmir << '\n';
-  else if (targetKind == "ptx")
-    llvm::outs() << ::triton::translateLLVMIRToPTX(*llvmir, SMArch.getValue(),
-                                                   ptxVersion.getValue());
+  if (printIrAfterAll.getValue())
+    llvm::dbgs() << *llvmir << '\n';
+
+  if (targetKind == "llvmir") {
+    output->os() << *llvmir << '\n';
+  } else if (targetKind == "ptx") {
+    auto ptx = ::triton::translateLLVMIRToPTX(*llvmir, SMArch.getValue(),
+                                              ptxVersion.getValue());
+    if (printIrAfterAll.getValue())
+      llvm::dbgs() << ptx;
+    output->os() << ptx;
+  }
+
+  output->keep();
 
   return success();
 }

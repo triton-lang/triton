@@ -13,6 +13,7 @@ configure_lit_site_cfg(
 
 set(TRITON_TEST_DEPENDS
   triton-opt
+  triton-translate
   FileCheck
 )
 
