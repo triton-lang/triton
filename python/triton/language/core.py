@@ -424,6 +424,15 @@ class constexpr:
     def __invert__(self):
         return constexpr(~self.value)
 
+    def __pow__(self, other):
+        return constexpr(self.value ** other.value)
+
+    def __rshift__(self, other):
+        return constexpr(self.value >> other.value)
+
+    def __lshift__(self, other):
+        return constexpr(self.value << other.value)
+
     def __call__(self, *args, **kwds):
         return self.value(*args, **kwds)
 
