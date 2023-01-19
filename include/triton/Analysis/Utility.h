@@ -77,6 +77,9 @@ SmallVector<RES_T> reorder(ArrayRef<T> input, ArrayRef<unsigned> order) {
   return result;
 }
 
+bool isMmaToDotShortcut(triton::gpu::MmaEncodingAttr &mmaLayout,
+                        triton::gpu::DotOperandEncodingAttr &dotOperandLayout);
+
 } // namespace mlir
 
 #endif // TRITON_ANALYSIS_UTILITY_H

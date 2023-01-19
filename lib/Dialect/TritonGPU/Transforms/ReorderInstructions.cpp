@@ -88,7 +88,7 @@ public:
       if (!dstEncoding)
         return;
       int opIdx = dstEncoding.getOpIdx();
-      if (opIdx != 1)
+      if (opIdx != 0)
         return;
       if (op->getUsers().empty())
         return;
