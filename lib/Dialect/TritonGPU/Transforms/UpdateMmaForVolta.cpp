@@ -91,8 +91,6 @@ public:
     return failure();
   }
 
-  void collectDot(mlir::Operation *op) const {}
-
   // Get the wpt for MMAv1 using more information.
   // Reference the original logic here
   // https://github.com/openai/triton/blob/0e4691e6dd91e001a8d33b71badf8b3314325459/lib/codegen/analysis/layout.cc#L223

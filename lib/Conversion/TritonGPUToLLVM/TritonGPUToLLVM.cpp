@@ -74,8 +74,9 @@ struct BroadcastOpConversion
       // NOTE: This is just an naive fix, but for MMA layout, and 2-d fix should
       // be all right.
       // TODO[Superjomn]: Replace this with a generic implementation.
-      if (srcMma.isVolta() &&
-          (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16())) {
+      if (srcMma.isVolta()) {
+        assert(srcTy.getElementType().isF16() ||
+               srcTy.getElementType().isBF16());
         int numElemsPerThread = srcMma.getElemsPerThread(resultTy.getShape());
         int srcUniqElems = srcVals.size() / 2;
         int dup = numElemsPerThread / srcUniqElems;

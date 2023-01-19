@@ -128,7 +128,7 @@ private:
         mmaColIdx[0] = add(mmaThreadIdInGrpM2, colWarpOffset);
         mmaColIdx[1] = add(mmaThreadIdInGrpM2P1, colWarpOffset);
       } else if (mmaLayout.isVolta()) {
-        // Volta doesn't follow the pattern here.
+        llvm_unreachable("Volta doesn't follow the pattern here.");
       } else {
         llvm_unreachable("Unexpected MMALayout version");
       }
@@ -379,17 +379,15 @@ private:
       isSrcMmaV1 = mmaLayout.isVolta();
     }
     if (auto sliceLayout = srcLayout.dyn_cast<SliceEncodingAttr>()) {
-      isSrcMmaV1 =
-          sliceLayout.getParent().isa<MmaEncodingAttr>() &&
-          sliceLayout.getParent().dyn_cast<MmaEncodingAttr>().isVolta();
+      isSrcMmaV1 = sliceLayout.getParent().isa<MmaEncodingAttr>() &&
+                   sliceLayout.getParent().cast<MmaEncodingAttr>().isVolta();
     }
     if (auto mmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>()) {
       isDstMmaV1 = mmaLayout.isVolta();
     }
     if (auto sliceLayout = dstLayout.dyn_cast<SliceEncodingAttr>()) {
-      isDstMmaV1 =
-          sliceLayout.getParent().isa<MmaEncodingAttr>() &&
-          sliceLayout.getParent().dyn_cast<MmaEncodingAttr>().isVolta();
+      isDstMmaV1 = sliceLayout.getParent().isa<MmaEncodingAttr>() &&
+                   sliceLayout.getParent().cast<MmaEncodingAttr>().isVolta();
     }
 
     for (unsigned d = 0; d < rank; ++d) {
