@@ -37,7 +37,7 @@ SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout);
 
 SmallVector<unsigned>
 getShapePerCTA(const Attribute &layout,
-               ArrayRef<int64_t> blockShape = ArrayRef<int64_t>());
+               ArrayRef<int64_t> tensorShape = ArrayRef<int64_t>());
 
 SmallVector<unsigned> getOrder(const Attribute &layout);
 

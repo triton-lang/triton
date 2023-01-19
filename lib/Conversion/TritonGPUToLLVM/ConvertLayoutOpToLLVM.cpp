@@ -120,7 +120,7 @@ private:
         mmaColIdx[0] = add(mmaThreadIdInGrpM2, colWarpOffset);
         mmaColIdx[1] = add(mmaThreadIdInGrpM2P1, colWarpOffset);
       } else if (mmaLayout.isVolta()) {
-        llvm_unreachable("Volta doesn't follow the pattern here.");
+        // Volta doesn't follow the pattern here."
       } else {
         llvm_unreachable("Unexpected MMALayout version");
       }

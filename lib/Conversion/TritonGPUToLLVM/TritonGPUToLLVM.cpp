@@ -75,8 +75,8 @@ struct BroadcastOpConversion
       // be all right.
       // TODO[Superjomn]: Replace this with a generic implementation.
       if (srcMma.isVolta()) {
-        assert(srcTy.getElementType().isF16() ||
-               srcTy.getElementType().isBF16());
+        assert(srcTy.getElementType().isF16() &&
+               "Unexpected data type on Volta");
         int numElemsPerThread = srcMma.getElemsPerThread(resultTy.getShape());
         int srcUniqElems = srcVals.size() / 2;
         int dup = numElemsPerThread / srcUniqElems;
