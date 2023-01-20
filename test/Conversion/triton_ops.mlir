@@ -1,6 +1,6 @@
 // RUN: triton-opt %s | FileCheck %s
 
-func @cast_ops(%scalar_ptr: !tt.ptr<f32>, %scalar_f32: f32, %scalar_i64: i64) {
+func.func @cast_ops(%scalar_ptr: !tt.ptr<f32>, %scalar_f32: f32, %scalar_i64: i64) {
   // scalar -> scalar
   // CHECK:  i64 -> !tt.ptr<f32>
   %0 = tt.int_to_ptr %scalar_i64 : i64 -> !tt.ptr<f32>
@@ -35,7 +35,7 @@ func @cast_ops(%scalar_ptr: !tt.ptr<f32>, %scalar_f32: f32, %scalar_i64: i64) {
   return
 }
 
-func @addptr_ops(%scalar_ptr: !tt.ptr<f32>, %scalar_i32: i32) {
+func.func @addptr_ops(%scalar_ptr: !tt.ptr<f32>, %scalar_i32: i32) {
   // scalar -> scalar
   // CHECK: !tt.ptr<f32>
   %0 = tt.addptr %scalar_ptr, %scalar_i32 : !tt.ptr<f32>, i32
@@ -54,7 +54,7 @@ func @addptr_ops(%scalar_ptr: !tt.ptr<f32>, %scalar_i32: i32) {
   return
 }
 
-func @load_store_ops_scalar(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %mask : i1) {
+func.func @load_store_ops_scalar(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %mask : i1) {
   // Test if Load/Store ops can handle scalar values
   %other = arith.constant 0.0e+0 : f32
 
@@ -76,7 +76,7 @@ func @load_store_ops_scalar(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %ma
   return
 }
 
-func @reduce_ops_infer(%ptr: !tt.ptr<f32>, %v : tensor<1x2x4xf32>) {
+func.func @reduce_ops_infer(%ptr: !tt.ptr<f32>, %v : tensor<1x2x4xf32>) {
   // Test if reduce ops infer types correctly
 
   // CHECK: %{{.*}} = tt.reduce %{{.*}} -> tensor<2x4xf32>
@@ -101,7 +101,7 @@ func @reduce_ops_infer(%ptr: !tt.ptr<f32>, %v : tensor<1x2x4xf32>) {
   return
 }
 
-func @dot_ops_infer(%ptr: !tt.ptr<f32>, %v : f32) {
+func.func @dot_ops_infer(%ptr: !tt.ptr<f32>, %v : f32) {
   // Test if reduce ops infer types correctly
   %v128x32 = tt.splat %v : (f32) -> tensor<128x32xf32>
   %v32x128 = tt.splat %v : (f32) -> tensor<32x128xf32>

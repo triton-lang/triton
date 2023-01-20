@@ -10,7 +10,7 @@
 #A = #triton_gpu.dot_op<{opIdx = 0, parent = #C}>
 #B = #triton_gpu.dot_op<{opIdx = 1, parent = #C}>
 
-// CHECK: func @matmul_loop
+// CHECK: func.func @matmul_loop
 // CHECK-DAG: %[[CONSTANT_0:.*]] = arith.constant 0 : i32
 // CHECK-DAG: %[[CONSTANT_1:.*]] = arith.constant 1 : i32
 // CHECK-DAG: %[[CONSTANT_2:.*]] = arith.constant 2 : i32
@@ -46,8 +46,8 @@
 // CHECK-DAG: %[[NEXT_PIPELINE_IDX:.*]] = arith.addi %[[PIPELINE_IDX]], %[[CONSTANT_1]]
 // CHECK-DAG: %[[NEXT_LOOP_IDX:.*]] = arith.addi %[[LOOP_IDX]], %[[CONSTANT_1]]
 // CHECK:   scf.yield {{.*}}, {{.*}}, {{.*}}, %[[NEXT_A_BUFFER]], %[[NEXT_B_BUFFER]], %[[NEXT_A]], %[[NEXT_B]], {{.*}}, {{.*}}, {{.*}}, %[[NEXT_PIPELINE_IDX]], %[[NEXT_LOOP_IDX]]
-func @matmul_loop(%lb : index, %ub : index, %step : index, 
-                  %A : !tt.ptr<f16> {tt.divisibility = 16 : i32}, 
+func.func @matmul_loop(%lb : index, %ub : index, %step : index,
+                  %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
                   %B : !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
   // A ptrs
   %a_ptr_splat = tt.splat %A : (!tt.ptr<f16>) -> tensor<128x32x!tt.ptr<f16>, #AL>
@@ -61,7 +61,7 @@ func @matmul_loop(%lb : index, %ub : index, %step : index,
   %b_tmp1 = tt.expand_dims %b_tmp0 {axis = 0 : i32} : (tensor<128xi32, #BLs0>) -> tensor<1x128xi32, #BL>
   %b_offs = tt.broadcast %b_tmp1 : (tensor<1x128xi32, #BL>) -> tensor<32x128xi32, #BL>
   %b_ptr_init = tt.addptr %b_ptr_splat, %b_offs : tensor<32x128x!tt.ptr<f16>, #BL>, tensor<32x128xi32, #BL>
-  
+
 
   %a_mask = arith.constant dense<true> : tensor<128x32xi1, #AL>
   %a_other = arith.constant dense<0.00e+00> : tensor<128x32xf16, #AL>
@@ -88,7 +88,7 @@ func @matmul_loop(%lb : index, %ub : index, %step : index,
 }
 
 
-// CHECK: func @matmul_loop_nested
+// CHECK: func.func @matmul_loop_nested
 // CHECK-DAG: %[[CONSTANT_0:.*]] = arith.constant 0 : i32
 // CHECK-DAG: %[[CONSTANT_1:.*]] = arith.constant 1 : i32
 // CHECK-DAG: %[[CONSTANT_2:.*]] = arith.constant 2 : i32
@@ -118,8 +118,8 @@ func @matmul_loop(%lb : index, %ub : index, %step : index,
 // CHECK-DAG: %[[NEXT_PIPELINE_IDX:.*]] = arith.addi %[[PIPELINE_IDX]], %[[CONSTANT_1]]
 // CHECK-DAG: %[[NEXT_LOOP_IDX:.*]] = arith.addi %[[LOOP_IDX]], %[[CONSTANT_1]]
 // CHECK:     scf.yield {{.*}}, {{.*}}, {{.*}}, %[[NEXT_A_BUFFER]], %[[NEXT_B_BUFFER]], %[[NEXT_A]], %[[NEXT_B]], {{.*}}, {{.*}}, {{.*}}, %[[NEXT_PIPELINE_IDX]], %[[NEXT_LOOP_IDX]]
-func @matmul_loop_nested(%lb : index, %ub : index, %step : index, 
-                         %A : !tt.ptr<f16> {tt.divisibility = 16 : i32}, 
+func.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
+                         %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
                          %B : !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
   scf.for %iv0 = %lb to %ub step %step {
     // A ptrs
@@ -134,7 +134,7 @@ func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
     %b_tmp1 = tt.expand_dims %b_tmp0 {axis = 0 : i32} : (tensor<128xi32, #BLs0>) -> tensor<1x128xi32, #BL>
     %b_offs = tt.broadcast %b_tmp1 : (tensor<1x128xi32, #BL>) -> tensor<32x128xi32, #BL>
     %b_ptr_init = tt.addptr %b_ptr_splat, %b_offs : tensor<32x128x!tt.ptr<f16>, #BL>, tensor<32x128xi32, #BL>
-  
+
     %a_mask = arith.constant dense<true> : tensor<128x32xi1, #AL>
     %a_other = arith.constant dense<0.00e+00> : tensor<128x32xf16, #AL>
     %b_mask = arith.constant dense<true> : tensor<32x128xi1, #BL>
@@ -161,7 +161,7 @@ func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 }
 
 
-// CHECK: func @matmul_loop_single_pipeline
+// CHECK: func.func @matmul_loop_single_pipeline
 // CHECK-DAG: %[[CONSTANT_0:.*]] = arith.constant 0 : i32
 // CHECK-DAG: %[[CONSTANT_1:.*]] = arith.constant 1 : i32
 // CHECK-DAG: %[[CONSTANT_2:.*]] = arith.constant 2 : i32
@@ -183,8 +183,8 @@ func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 // CHECK-DAG: %[[NEXT_PIPELINE_IDX:.*]] = arith.addi %[[PIPELINE_IDX]], %[[CONSTANT_1]]
 // CHECK-DAG: %[[NEXT_LOOP_IDX:.*]] = arith.addi %[[LOOP_IDX]], %[[CONSTANT_1]]
 // CHECK:   scf.yield {{.*}}, {{.*}}, %[[NEXT_B_BUFFER]], %[[NEXT_B]], {{.*}}, {{.*}}, %[[NEXT_PIPELINE_IDX]], %[[NEXT_LOOP_IDX]]
-func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index, 
-                                  %A : !tt.ptr<f16> {tt.divisibility = 16 : i32}, 
+func.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
+                                  %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
                                   %B : !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
   // A ptrs
   %a_ptr_splat = tt.splat %A : (!tt.ptr<f16>) -> tensor<128x32x!tt.ptr<f16>, #AL>

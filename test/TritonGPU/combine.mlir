@@ -9,7 +9,7 @@
 // CHECK: [[col_layout:#.*]] = #triton_gpu.blocked<{sizePerThread = [4, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [0, 1]}>
 // CHECK: [[col_layout_novec:#.*]] = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 // CHECK-LABEL: cst
-func @cst() -> tensor<1024xi32, #layout1> {
+func.func @cst() -> tensor<1024xi32, #layout1> {
   %cst = arith.constant dense<0> : tensor<1024xi32, #layout0>
   %1 = triton_gpu.convert_layout %cst : (tensor<1024xi32, #layout0>) -> tensor<1024xi32, #layout1>
   // CHECK-NOT: triton_gpu.convert_layout
@@ -18,7 +18,7 @@ func @cst() -> tensor<1024xi32, #layout1> {
 }
 
 // CHECK-LABEL: range
-func @range() -> tensor<1024xi32, #layout1> {
+func.func @range() -> tensor<1024xi32, #layout1> {
   %0 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #layout0>
   %1 = triton_gpu.convert_layout %0 : (tensor<1024xi32, #layout0>) -> tensor<1024xi32, #layout1>
   // CHECK-NOT: triton_gpu.convert_layout
@@ -27,7 +27,7 @@ func @range() -> tensor<1024xi32, #layout1> {
 }
 
 // CHECK-LABEL: splat
-func @splat(%arg0: i32) -> tensor<1024xi32, #layout1> {
+func.func @splat(%arg0: i32) -> tensor<1024xi32, #layout1> {
   %0 = tt.splat %arg0 : (i32) -> tensor<1024xi32, #layout0>
   %1 = triton_gpu.convert_layout %0 : (tensor<1024xi32, #layout0>) -> tensor<1024xi32, #layout1>
   // CHECK-NOT: triton_gpu.convert_layout
@@ -36,7 +36,7 @@ func @splat(%arg0: i32) -> tensor<1024xi32, #layout1> {
 }
 
 // CHECK-LABEL: remat
-func @remat(%arg0: i32) -> tensor<1024xi32, #layout1> {
+func.func @remat(%arg0: i32) -> tensor<1024xi32, #layout1> {
   %0 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #layout0>
   %1 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #layout0>
   %2 = arith.muli %0, %1 : tensor<1024xi32, #layout0>
@@ -56,7 +56,7 @@ func @remat(%arg0: i32) -> tensor<1024xi32, #layout1> {
 }
 
 // CHECK-LABEL: remat_load_store
-func @remat_load_store(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+func.func @remat_load_store(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #layout0>
   %1 = tt.splat %arg : (!tt.ptr<i32>) -> tensor<64x!tt.ptr<i32>, #layout0>
   %2 = tt.addptr %1, %0 : tensor<64x!tt.ptr<i32>, #layout0>, tensor<64xi32, #layout0>
@@ -70,7 +70,7 @@ func @remat_load_store(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
 
 // Don't rematerialize vectorized loads
 // CHECK-LABEL: remat_expensive
-func @remat_expensive(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+func.func @remat_expensive(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #layout1>
   %1 = tt.splat %arg : (!tt.ptr<i32>) -> tensor<64x!tt.ptr<i32>, #layout1>
   %2 = tt.addptr %1, %0 : tensor<64x!tt.ptr<i32>, #layout1>, tensor<64xi32, #layout1>
@@ -85,7 +85,7 @@ func @remat_expensive(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
 
 // Don't rematerialize loads when original and target layouts are different
 // CHECK-LABEL: remat_multi_layout
-func @remat_multi_layout(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+func.func @remat_multi_layout(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #layout0>
   %1 = tt.splat %arg : (!tt.ptr<i32>) -> tensor<64x!tt.ptr<i32>, #layout0>
   %2 = tt.addptr %1, %0 : tensor<64x!tt.ptr<i32>, #layout0>, tensor<64xi32, #layout0>
@@ -100,7 +100,7 @@ func @remat_multi_layout(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
 
 // Always rematerialize single value loads
 // CHECK-LABEL: remat_single_value
-func @remat_single_value(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+func.func @remat_single_value(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   %0 = tt.splat %arg : (!tt.ptr<i32>) -> tensor<1x!tt.ptr<i32>, #layout1>
   %1 = tt.load %0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<1xi32, #layout1>
   // CHECK-NOT: triton_gpu.convert_layout
@@ -111,7 +111,7 @@ func @remat_single_value(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
 }
 
 // CHECK-LABEL: if
-func @if(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+func.func @if(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   // CHECK-NOT: triton_gpu.convert_layout
   %c32_i32 = arith.constant dense<32> : tensor<1024xi32, #layout1>
   %0 = tt.get_program_id {axis = 0 : i32} : i32
@@ -128,7 +128,7 @@ func @if(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
 }
 
 // CHECK-LABEL: if_convert_else_not
-func @if_convert_else_not(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+func.func @if_convert_else_not(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   %c32_i32 = arith.constant dense<32> : tensor<1024xi32, #layout0>
   %0 = tt.get_program_id {axis = 0 : i32} : i32
   %1 = tt.splat %0 : (i32) -> tensor<1024xi32, #layout0>
@@ -149,7 +149,7 @@ func @if_convert_else_not(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 
 }
 
 // CHECK-LABEL: if_not_else_convert
-func @if_not_else_convert(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+func.func @if_not_else_convert(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   %c32_i32 = arith.constant dense<32> : tensor<1024xi32, #layout0>
   %0 = tt.get_program_id {axis = 0 : i32} : i32
   %1 = tt.splat %0 : (i32) -> tensor<1024xi32, #layout0>
@@ -170,7 +170,7 @@ func @if_not_else_convert(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 
 }
 
 // CHECK-LABEL: if_else_both_convert
-func @if_else_both_convert(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+func.func @if_else_both_convert(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   %c32_i32 = arith.constant dense<32> : tensor<1024xi32, #layout0>
   %0 = tt.get_program_id {axis = 0 : i32} : i32
   %1 = tt.splat %0 : (i32) -> tensor<1024xi32, #layout0>
@@ -200,7 +200,7 @@ func @if_else_both_convert(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16
 #blocked4 = #triton_gpu.blocked<{sizePerThread = [4, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [0, 1]}>
 
 // CHECK-LABEL: transpose
-func @transpose(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}) {
+func.func @transpose(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}) {
   // CHECK-NOT: triton_gpu.convert_layout
   // CHECK: [[loaded_val:%.*]] = tt.load {{.*}}, {{%cst.*}}, {{%cst.*}} {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64x64xf32, [[row_layout]]>
   // CHECK: [[cvt_val:%.*]] = triton_gpu.convert_layout [[loaded_val]] : (tensor<64x64xf32, [[row_layout]]>) -> tensor<64x64xf32, [[col_layout]]>
@@ -241,7 +241,7 @@ func @transpose(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 {tt
 }
 
 // CHECK-LABEL: loop
-func @loop(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: !tt.ptr<f32>, %arg3: i32, %arg4: i32) {
+func.func @loop(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: !tt.ptr<f32>, %arg3: i32, %arg4: i32) {
     // CHECK-NOT: triton_gpu.convert_layout
     // CHECK: [[loop_ret:%.*]]:2 = scf.for {{.*}} -> (tensor<64x64xf32, [[row_layout]]>, tensor<64x64x!tt.ptr<f32>, [[row_layout]]>)
     // CHECK-NEXT: {{.*}} = tt.load {{.*}} : tensor<64x64xf32, [[row_layout]]>
@@ -295,7 +295,7 @@ func @loop(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: !tt.ptr<f32>, %arg3: i32, %ar
 }
 
 // CHECK-LABEL: vecadd
-func @vecadd(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32) {
+func.func @vecadd(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32) {
   // CHECK-NOT: triton_gpu.convert_layout
   %c256_i32 = arith.constant 256 : i32
   %0 = tt.get_program_id {axis = 0 : i32} : i32
@@ -327,7 +327,7 @@ func @vecadd(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f3
 
 // Select has args with different element types
 // CHECK-LABEL: select
-func @select(%arg0: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}) {
+func.func @select(%arg0: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}) {
   // CHECK-NOT: triton_gpu.convert_layout
   %cst = arith.constant dense<30000> : tensor<1x1xi32, #blocked2>
   %cst_0 = arith.constant dense<30000> : tensor<1x512xi32, #blocked2>
@@ -378,7 +378,7 @@ func @select(%arg0: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f6
 
 // Make sure the following IR doesn't hang the compiler.
 // CHECK-LABEL: long_func
-func public @long_func(%arg0: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg6: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg7: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg8: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg9: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %arg10: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %arg11: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg12: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg13: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg14: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %arg15: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %arg16: i32 {tt.divisibility = 16 : i32}) {
+func.func public @long_func(%arg0: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg6: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg7: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg8: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg9: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %arg10: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %arg11: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg12: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg13: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg14: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %arg15: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %arg16: i32 {tt.divisibility = 16 : i32}) {
   %cst = arith.constant dense<1.000000e+00> : tensor<1024xf32, #blocked0>
   %cst_0 = arith.constant dense<5.000000e-04> : tensor<1024xf32, #blocked0>
   %cst_1 = arith.constant dense<0.999499976> : tensor<1024xf32, #blocked0>
@@ -775,7 +775,7 @@ func public @long_func(%arg0: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg1: 
 // A mnist model from torch inductor.
 // Check if topological sort is working correct and there's no unnecessary convert
 // CHECK-LABEL: mnist
-func public @mnist(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}, %arg3: i32) {
+func.func public @mnist(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}, %arg3: i32) {
   // CHECK-NOT: triton_gpu.convert_layout
   %cst = arith.constant dense<10> : tensor<16x1xi32, #blocked2>
   %cst_0 = arith.constant dense<10> : tensor<1x16xi32, #blocked3>
@@ -862,7 +862,7 @@ func public @mnist(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.
 #blocked5 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
 // cmpf and cmpi have different operands and result types
 // CHECK-LABEL: cmp
-func public @cmp(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}) {
+func.func public @cmp(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}) {
   %c64 = arith.constant 64 : index
   %c2048 = arith.constant 2048 : index
   %c0 = arith.constant 0 : index

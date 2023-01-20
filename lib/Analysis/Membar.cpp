@@ -2,7 +2,7 @@
 #include "triton/Analysis/Alias.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
-#include "mlir/Dialect/GPU/GPUDialect.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 
 namespace mlir {

@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.6)
+
+cmake_policy(SET CMP0116 OLD)
+
 include(ExternalProject)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -155,7 +158,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     endif()
 endif()
 
-
 # # Triton
 # file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
 # if (WIN32 AND TRITON_BUILD_PYTHON_MODULE)
@@ -212,7 +214,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     # optimizations
     MLIRPass
     MLIRTransforms
-    MLIRLLVMIR
+    MLIRLLVMDialect
     MLIRSupport
     MLIRTargetLLVMIRExport
     MLIRExecutionEngine

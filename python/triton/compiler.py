@@ -1501,14 +1501,14 @@ def make_hash(fn, **kwargs):
     return hashlib.md5((Path(fn).read_text() + triton.runtime.jit.version_key()).encode("utf-8")).hexdigest()
 
 
-# - ^\s*func\s+ : match the start of the string, any leading whitespace, the keyword func,
+# - ^\s*func\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
 #    and any following whitespace
 # - (public\s+)? : optionally match the keyword public and any following whitespace
 # - (@\w+) : match an @ symbol followed by one or more word characters
 #   (letters, digits, or underscores), and capture it as group 1 (the function name)
 # - (\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\)) : match a pair of parentheses enclosing
 #   zero or more arguments separated by commas, and capture it as group 2 (the argument list)
-mlir_prototype_pattern = r'^\s*func\s+(?:public\s+)?(@\w+)(\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*\{\s*$'
+mlir_prototype_pattern = r'^\s*func\.func\s+(?:public\s+)?(@\w+)(\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*\{\s*$'
 ptx_prototype_pattern = r"\.(?:visible|extern)\s+\.(?:entry|func)\s+(\w+)\s*\(([^)]*)\)"
 prototype_pattern = {
     "ttir": mlir_prototype_pattern,

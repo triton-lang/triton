@@ -1,6 +1,7 @@
 #ifndef TRITON_ANALYSIS_UTILITY_H
 #define TRITON_ANALYSIS_UTILITY_H
 
+#include "mlir/Analysis/DataFlowFramework.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <algorithm>
 #include <numeric>
@@ -11,7 +12,7 @@ namespace mlir {
 class ReduceOpHelper {
 public:
   explicit ReduceOpHelper(triton::ReduceOp op) : op(op) {
-    srcTy = op.operand().getType().cast<RankedTensorType>();
+    srcTy = op.getOperand().getType().cast<RankedTensorType>();
   }
 
   ArrayRef<int64_t> getSrcShape() { return srcTy.getShape(); }
@@ -96,6 +97,9 @@ bool isMmaToDotShortcut(triton::gpu::MmaEncodingAttr &mmaLayout,
 /// been visited before.
 SetVector<Operation *>
 multiRootTopologicalSort(const SetVector<Operation *> &toSort);
+
+// Create a basic DataFlowSolver with constant and dead code analysis included.
+std::unique_ptr<DataFlowSolver> createDataFlowSolver();
 
 } // namespace mlir
 

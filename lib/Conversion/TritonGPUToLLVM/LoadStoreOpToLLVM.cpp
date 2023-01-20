@@ -109,7 +109,8 @@ struct LoadOpConversion
     DenseElementsAttr constAttr;
     int64_t splatVal = 0;
     if (other && valueElemTy.isa<IntegerType>() &&
-        matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat()) {
+        matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat() &&
+        constAttr.getElementType().isa<IntegerType>()) {
       otherIsSplatConstInt = true;
       splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
     }
@@ -333,7 +334,6 @@ struct StoreOpConversion
             elem = rewriter.create<LLVM::SExtOp>(loc, type::i8Ty(ctx), elem);
           elem = bitcast(elem, valueElemTy);
 
-          Type u32Ty = typeConverter->convertType(type::u32Ty(ctx));
           llWord = insert_element(wordTy, llWord, elem, i32_val(elemIdx));
         }
         llWord = bitcast(llWord, valArgTy);
@@ -387,7 +387,6 @@ struct AtomicCASOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     MLIRContext *ctx = rewriter.getContext();
-    Value ptr = op.ptr();
 
     Value llPtr = adaptor.ptr();
     Value llCmp = adaptor.cmp();
