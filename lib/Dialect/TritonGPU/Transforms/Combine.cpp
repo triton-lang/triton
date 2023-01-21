@@ -498,8 +498,6 @@ public:
       // don't rematerialize non-element-wise
       if (!op->hasTrait<mlir::OpTrait::Elementwise>())
         return failure();
-      Attribute dstEncoding =
-          cvt.getOperand().getType().cast<RankedTensorType>().getEncoding();
       // don't rematerialize if it adds an extra conversion that can't
       // be removed
       for (Value arg : op->getOperands()) {
@@ -509,7 +507,7 @@ public:
         llvm::MapVector<Value, Attribute> toConvert;
         if (argOp && (argOp != cvt) && cvtSlices.count(argOp) == 0 &&
             failed(simulateBackwardRematerialization(argOp, processed, layout,
-                                                     toConvert, dstEncoding))) {
+                                                     toConvert, srcEncoding))) {
           return failure();
         }
       }
@@ -521,8 +519,11 @@ public:
       if (arg.getDefiningOp() == cvt)
         mapping.map(arg, cvt.getOperand());
       else {
-        auto cvtI = rewriter.create<triton::gpu::ConvertLayoutOp>(
-            arg.getLoc(), cvt.getOperand().getType(), arg);
+        auto oldType = arg.getType().cast<RankedTensorType>();
+        auto newType = RankedTensorType::get(
+            oldType.getShape(), oldType.getElementType(), srcEncoding);
+        auto cvtI = rewriter.create<triton::gpu::ConvertLayoutOp>(arg.getLoc(),
+                                                                  newType, arg);
         if (Operation *argOp = arg.getDefiningOp())
           cvtI->moveAfter(argOp);
         mapping.map(arg, cvtI);
@@ -531,14 +532,12 @@ public:
     rewriter.setInsertionPoint(op);
     Operation *newOp = rewriter.clone(*op, mapping);
     auto oldType = op->getResult(0).getType().cast<RankedTensorType>();
-    auto newType = RankedTensorType::get(
-        oldType.getShape(), oldType.getElementType(),
-        cvt.getOperand().getType().cast<RankedTensorType>().getEncoding());
+    auto newType = RankedTensorType::get(oldType.getShape(),
+                                         oldType.getElementType(), srcEncoding);
 
     newOp->getResult(0).setType(newType);
     auto newCvtType = RankedTensorType::get(
-        oldType.getShape(), oldType.getElementType(),
-        cvt.getResult().getType().cast<RankedTensorType>().getEncoding());
+        oldType.getShape(), oldType.getElementType(), dstEncoding);
     auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
         newOp->getLoc(), newCvtType, newOp->getResult(0));
     rewriter.replaceOp(op, newCvt->getResults());
