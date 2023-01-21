@@ -295,9 +295,22 @@ LogicalResult getForwardEncoding(Attribute sourceEncoding, Operation *op,
   return failure();
 }
 
-inline bool expensive_to_remat(Operation *op) {
+inline bool expensiveToRemat(Operation *op) {
   if (!op)
     return true;
+  if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
+    // Don't consider load as expensive if it is loading a scalar.
+    if (auto tensorTy = loadOp.ptr().getType().dyn_cast<RankedTensorType>()) {
+      return tensorTy.getNumElements() != 1;
+    }
+    // TODO: Handle other cases.
+    // For example, when ptr is a tensor of single value.
+    // It means that ptr is a resultant of broadcast or generated through
+    // a chain of broadcast and other operations.
+    // Rematerialize it without considering contiguous memory access pattern is
+    // fine.
+    return false;
+  }
   if (isa<tensor::ExtractSliceOp, triton::gpu::AllocTensorOp,
           triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp,
           triton::AtomicRMWOp, triton::AtomicCASOp, triton::DotOp>(op))
@@ -324,7 +337,7 @@ LogicalResult simulateBackwardRematerialization(
     queue.pop_back();
     // If the current operation is expensive to rematerialize,
     // we stop everything
-    if (expensive_to_remat(currOp))
+    if (expensiveToRemat(currOp))
       return mlir::failure();
     // we would propagate the conversion here
     numCvts -= 1;
@@ -493,7 +506,7 @@ public:
     llvm::MapVector<Value, Attribute> toConvert;
     for (Operation *op : cvtSlices) {
       // don't rematerialize anything expensive
-      if (expensive_to_remat(op))
+      if (expensiveToRemat(op))
         return failure();
       // don't rematerialize non-element-wise
       if (!op->hasTrait<mlir::OpTrait::Elementwise>())
@@ -590,7 +603,7 @@ public:
       queue.pop_back();
       // If the current operation is expensive to rematerialize,
       // we stop everything
-      if (expensive_to_remat(currOp))
+      if (expensiveToRemat(currOp))
         break;
       // a conversion will be removed here (i.e. transferred to operands)
       numCvts -= 1;

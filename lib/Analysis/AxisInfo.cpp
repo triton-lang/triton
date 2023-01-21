@@ -101,9 +101,12 @@ ChangeResult AxisInfoAnalysis::visitOperation(
   AxisInfo curr;
   // This preserves the input axes (e.g., cast):
   if (llvm::isa<arith::ExtSIOp, arith::ExtUIOp, arith::TruncIOp,
-                triton::PtrToIntOp, triton::IntToPtrOp,
+                arith::IndexCastOp, triton::PtrToIntOp, triton::IntToPtrOp,
                 triton::gpu::ConvertLayoutOp>(op))
     curr = operands[0]->getValue();
+  if (llvm::isa<arith::IndexCastOp>(op)) {
+    // Check if the operand is an inductor variable, if so, we assign preprocessed values
+  }
   // Constant ranges
   if (triton::MakeRangeOp make_range =
           llvm::dyn_cast<triton::MakeRangeOp>(op)) {
@@ -147,6 +150,21 @@ ChangeResult AxisInfoAnalysis::visitOperation(
     };
     curr = visitBinaryOp(op, operands[0]->getValue(), operands[1]->getValue(),
                          newContiguity, newDivisibility, newConstancy);
+    //int rank = operands[0]->getValue().getRank();
+    //if (rank >= 2) {
+    //  llvm::errs() << *op << "\n";
+    //  llvm::errs() << "contiguity: " << curr.getContiguity()[0] << ", " << curr.getContiguity()[1] << "\n";
+    //  llvm::errs() << "divisibility: " << curr.getDivisibility()[0] << ", " << curr.getDivisibility()[1] << "\n";
+    //  llvm::errs() << "constancy: " << curr.getConstancy()[0] << ", " << curr.getConstancy()[1] << "\n";
+    //  llvm::errs() << "lhs: \n";
+    //  llvm::errs() << "contiguity: " << operands[0]->getValue().getContiguity()[0] << ", " << operands[0]->getValue().getContiguity()[1] << "\n";
+    //  llvm::errs() << "divisibility: " << operands[0]->getValue().getDivisibility()[0] << ", " << operands[0]->getValue().getDivisibility()[1] << "\n";
+    //  llvm::errs() << "constancy: " << operands[0]->getValue().getConstancy()[0] << ", " << operands[0]->getValue().getConstancy()[1] << "\n";
+    //  llvm::errs() << "rhs: \n";
+    //  llvm::errs() << "contiguity: " << operands[1]->getValue().getContiguity()[0] << ", " << operands[1]->getValue().getContiguity()[1] << "\n";
+    //  llvm::errs() << "divisibility: " << operands[1]->getValue().getDivisibility()[0] << ", " << operands[1]->getValue().getDivisibility()[1] << "\n";
+    //  llvm::errs() << "constancy: " << operands[1]->getValue().getConstancy()[0] << ", " << operands[1]->getValue().getConstancy()[1] << "\n";
+    //}
   }
   // Multiplication
   if (llvm::isa<arith::MulIOp>(op)) {
@@ -159,6 +177,30 @@ ChangeResult AxisInfoAnalysis::visitOperation(
     };
     curr = visitBinaryOp(op, operands[0]->getValue(), operands[1]->getValue(),
                          newContiguity, newDivisibility, newConstancy);
+  }
+  // Division
+  if (llvm::isa<arith::DivSIOp, arith::DivUIOp>(op)) {
+    auto newContiguity = [](AxisInfo lhs, AxisInfo rhs, int d) { return 1; };
+    auto newDivisibility = [](AxisInfo lhs, AxisInfo rhs, int d) {
+      return gcd(lhs.getDivisibility(d), rhs.getDivisibility(d));
+    };
+    auto newConstancy = [](AxisInfo lhs, AxisInfo rhs, int d) {
+      return gcd(lhs.getContiguity(d), rhs.getDivisibility(d));
+    };
+    curr = visitBinaryOp(op, operands[0]->getValue(), operands[1]->getValue(),
+                         newContiguity, newDivisibility, newConstancy);
+    //llvm::errs() << *op << "\n";
+    //llvm::errs() << "contiguity: " << curr.getContiguity()[0] << ", " << curr.getContiguity()[1] << "\n";
+    //llvm::errs() << "divisibility: " << curr.getDivisibility()[0] << ", " << curr.getDivisibility()[1] << "\n";
+    //llvm::errs() << "constancy: " << curr.getConstancy()[0] << ", " << curr.getConstancy()[1] << "\n";
+    //llvm::errs() << "lhs: \n";
+    //llvm::errs() << "contiguity: " << operands[0]->getValue().getContiguity()[0] << ", " << operands[0]->getValue().getContiguity()[1] << "\n";
+    //llvm::errs() << "divisibility: " << operands[0]->getValue().getDivisibility()[0] << ", " << operands[0]->getValue().getDivisibility()[1] << "\n";
+    //llvm::errs() << "constancy: " << operands[0]->getValue().getConstancy()[0] << ", " << operands[0]->getValue().getConstancy()[1] << "\n";
+    //llvm::errs() << "rhs: \n";
+    //llvm::errs() << "contiguity: " << operands[1]->getValue().getContiguity()[0] << ", " << operands[1]->getValue().getContiguity()[1] << "\n";
+    //llvm::errs() << "divisibility: " << operands[1]->getValue().getDivisibility()[0] << ", " << operands[1]->getValue().getDivisibility()[1] << "\n";
+    //llvm::errs() << "constancy: " << operands[1]->getValue().getConstancy()[0] << ", " << operands[1]->getValue().getConstancy()[1] << "\n";
   }
   // Remainder
   if (llvm::isa<arith::RemSIOp, arith::RemUIOp>(op)) {
@@ -257,6 +299,7 @@ ChangeResult AxisInfoAnalysis::visitOperation(
     curr = AxisInfo(contiguity, divisibility, constancy);
   }
 
+
   // UnrealizedConversionCast
   // This is needed by TritonGPUToLLVM, to get AxisInfo when the graph is
   // in the process of a PartialConversion, where UnrealizedConversionCast
@@ -288,9 +331,19 @@ unsigned AxisInfoAnalysis::getPtrVectorSize(Value ptr) {
   auto order = triton::gpu::getOrder(layout);
   unsigned align = getPtrAlignment(ptr);
 
-  unsigned contigPerThread = triton::gpu::getSizePerThread(layout)[order[0]];
+  auto axis = 0;
+  for (auto i = 0; i < shape.size(); ++i) {
+    if (shape[order[i]] != 1) {
+      axis = i;
+      break;
+    }
+  }
+
+  unsigned contigPerThread = triton::gpu::getSizePerThread(layout)[order[axis]];
   unsigned vec = std::min(align, contigPerThread);
-  vec = std::min<unsigned>(shape[order[0]], vec);
+  vec = std::min<unsigned>(shape[order[axis]], vec);
+  llvm::errs() << "align: " << align << " contigPerThread: " << contigPerThread
+               << " vec: " << vec << "\n";
 
   return vec;
 }
@@ -302,8 +355,17 @@ unsigned AxisInfoAnalysis::getPtrAlignment(Value ptr) {
   auto axisInfo = lookupLatticeElement(ptr)->getValue();
   auto layout = tensorTy.getEncoding();
   auto order = triton::gpu::getOrder(layout);
-  unsigned maxMultiple = axisInfo.getDivisibility(order[0]);
-  unsigned maxContig = axisInfo.getContiguity(order[0]);
+
+  auto axis = 0;
+  auto shape = tensorTy.getShape();
+  for (auto i = 0; i < shape.size(); ++i) {
+    if (shape[order[i]] != 1) {
+      axis = i;
+      break;
+    }
+  }
+  unsigned maxMultiple = axisInfo.getDivisibility(order[axis]);
+  unsigned maxContig = axisInfo.getContiguity(order[axis]);
   unsigned alignment = std::min(maxMultiple, maxContig);
   return alignment;
 }
@@ -313,8 +375,16 @@ unsigned AxisInfoAnalysis::getMaskAlignment(Value mask) {
   if (!tensorTy)
     return 1;
   auto maskOrder = triton::gpu::getOrder(tensorTy.getEncoding());
+  auto axis = 0;
+  auto shape = tensorTy.getShape();
+  for (auto i = 0; i < shape.size(); ++i) {
+    if (shape[maskOrder[i]] != 1) {
+      axis = i;
+      break;
+    }
+  }
   auto maskAxis = lookupLatticeElement(mask)->getValue();
-  auto alignment = std::max<unsigned>(maskAxis.getConstancy(maskOrder[0]), 1);
+  auto alignment = std::max<unsigned>(maskAxis.getConstancy(maskOrder[axis]), 1);
   return alignment;
 }
 
