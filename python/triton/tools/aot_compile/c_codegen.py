@@ -8,6 +8,7 @@ THREADS_PER_WARP = 32
 from triton.compiler import ty_to_cpp
 from .compile_metadata import AOTKernelMetadata, CompileMetadata
 
+
 def _unzip(seq_of_pairs):
     A, B = [], []
     for (a, b) in seq_of_pairs:
