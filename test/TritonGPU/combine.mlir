@@ -50,6 +50,20 @@ func @remat(%arg0: i32) -> tensor<1024xi32, #layout1> {
   // CHECK: return %6 : tensor<1024xi32, [[target_layout]]>
 }
 
+// Select has args with different element types
+func @remat_forward(%arg0: i32) -> tensor<1024xf16, #layout1> {
+  %1 = arith.constant dense<true> : tensor<1024xi1, #layout0>
+  %2 = arith.constant dense<0.0> : tensor<1024xf16, #layout1>
+  %3 = arith.constant dense<0.0> : tensor<1024xf16, #layout1>
+  %4 = triton_gpu.convert_layout %1 : (tensor<1024xi1, #layout0>) -> tensor<1024xi1, #layout1>
+  %5 = "triton_gpu.select"(%4, %2, %3): (tensor<1024xi1, #layout1>, tensor<1024xf16, #layout1>, tensor<1024xf16, #layout1>) -> tensor<1024xf16, #layout1>
+  return %5: tensor<1024xf16, #layout1>
+  // CHECK: %cst = arith.constant dense<0.000000e+00> : tensor<1024xf16, [[target_layout]]>
+  // CHECK-NEXT: %cst_0 = arith.constant dense<true> : tensor<1024xi1, [[target_layout]]>
+  // CHECK-NEXT: %0 = "triton_gpu.select"(%cst_0, %cst, %cst) : (tensor<1024xi1, [[target_layout]]>, tensor<1024xf16, [[target_layout]]>, tensor<1024xf16, [[target_layout]]>) -> tensor<1024xf16, [[target_layout]]>
+  // CHECK-NEXT: return %0 : tensor<1024xf16, [[target_layout]]>
+}
+
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #slice1dim1 = #triton_gpu.slice<{dim = 1, parent = #blocked1}>
