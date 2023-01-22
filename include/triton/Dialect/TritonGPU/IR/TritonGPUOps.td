@@ -16,7 +16,9 @@ class TTG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonGPU_Dialect, mnemonic, traits>;
 
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
-                                 [SameOperandsAndResultShape, NoSideEffect]> {
+                                 [SameOperandsAndResultShape,
+                                  SameOperandsAndResultElementType,
+                                  NoSideEffect]> {
   let summary = "convert layout";
 
   let arguments = (ins TT_Tensor:$src);
@@ -87,8 +89,8 @@ def TTG_CmpFOp : TTG_Op<"cmpf", [NoSideEffect, Elementwise,
 
 // TODO: migrate to arith::SelectOp on LLVM16
 def TTG_SelectOp : TTG_Op<"select", [NoSideEffect, Elementwise, 
-                                 SameOperandsAndResultShape, 
-                                 SameOperandsAndResultEncoding]> {
+                                     SameOperandsAndResultShape, 
+                                     SameOperandsAndResultEncoding]> {
   let summary = "select operation";
 
   let description = [{}];
