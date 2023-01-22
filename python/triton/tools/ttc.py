@@ -12,7 +12,7 @@ from aot_compile.compile_metadata import (AOTKernelMetadata, ASTGeneratingObject
                                           infer_triton_signature, make_compile_metadata, CompileMetadata)
 
 
-def filter_jitted_functions(*scopes):
+def filter_jitted_functions(*scopes) -> Dict[str, ASTGeneratingObject]:
     """
     Filter scopes for JITFunction objects
     """
