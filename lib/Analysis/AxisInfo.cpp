@@ -32,10 +32,6 @@ static int gcdImpl(int a, int b, int *x, int *y) {
 }
 
 static int gcd(int a, int b) {
-  if (a == AxisInfo::defaultValue())
-    return b;
-  if (b == AxisInfo::defaultValue())
-    return a;
   int x, y;
   return gcdImpl(a, b, &x, &y);
 }
@@ -44,9 +40,17 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
   size_t rank = 1;
   if (TensorType ty = value.getType().dyn_cast<TensorType>())
     rank = ty.getRank();
-  int divHint = AxisInfo::defaultValue();
+  int contiHint = 1;
+  int divHint = 1;
+  int constHint = 1;
   BlockArgument blockArg = value.dyn_cast<BlockArgument>();
   if (blockArg && blockArg.getOwner()->isEntryBlock()) {
+    // If the block argument is the entry block, we can get the
+    // hints by joining with the initial values of the block arguments.
+    // gcd(0, x) = x
+    contiHint = 0;
+    divHint = 0;
+    constHint = 0;
     Operation *op = blockArg.getOwner()->getParentOp();
     if (FuncOp fun = dyn_cast<FuncOp>(op)) {
       Attribute attr =
@@ -61,9 +65,9 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
     }
   }
 
-  DimVectorT contiguity(rank, AxisInfo::defaultValue());
+  DimVectorT contiguity(rank, contiHint);
   DimVectorT divisibility(rank, divHint);
-  DimVectorT constancy(rank, AxisInfo::defaultValue());
+  DimVectorT constancy(rank, constHint);
   return AxisInfo(contiguity, divisibility, constancy);
 }
 
@@ -170,7 +174,7 @@ ChangeResult AxisInfoAnalysis::visitOperation(
   if (llvm::isa<arith::DivSIOp, arith::DivUIOp>(op)) {
     auto newContiguity = [](AxisInfo lhs, AxisInfo rhs, int d) { return 1; };
     auto newDivisibility = [](AxisInfo lhs, AxisInfo rhs, int d) {
-      return lhs.getDivisibility(d) / rhs.getDivisibility(d);
+      return 1;
     };
     auto newConstancy = [](AxisInfo lhs, AxisInfo rhs, int d) {
       return gcd(lhs.getContiguity(d), rhs.getDivisibility(d));
@@ -306,10 +310,9 @@ unsigned AxisInfoAnalysis::getPtrVectorSize(Value ptr) {
   auto order = triton::gpu::getOrder(layout);
   unsigned align = getPtrAlignment(ptr);
 
-  auto axis = getReducedNonSingleAxis(ptr);
-  unsigned contigPerThread = triton::gpu::getSizePerThread(layout)[order[axis]];
+  unsigned contigPerThread = triton::gpu::getSizePerThread(layout)[order[0]];
   unsigned vec = std::min(align, contigPerThread);
-  vec = std::min<unsigned>(shape[order[axis]], vec);
+  vec = std::min<unsigned>(shape[order[0]], vec);
 
   return vec;
 }
@@ -321,9 +324,8 @@ unsigned AxisInfoAnalysis::getPtrAlignment(Value ptr) {
   auto axisInfo = lookupLatticeElement(ptr)->getValue();
   auto layout = tensorTy.getEncoding();
   auto order = triton::gpu::getOrder(layout);
-  auto axis = getReducedNonSingleAxis(ptr);
-  unsigned maxMultiple = axisInfo.getDivisibility(order[axis]);
-  unsigned maxContig = axisInfo.getContiguity(order[axis]);
+  unsigned maxMultiple = axisInfo.getDivisibility(order[0]);
+  unsigned maxContig = axisInfo.getContiguity(order[0]);
   unsigned alignment = std::min(maxMultiple, maxContig);
   return alignment;
 }
@@ -333,10 +335,8 @@ unsigned AxisInfoAnalysis::getMaskAlignment(Value mask) {
   if (!tensorTy)
     return 1;
   auto maskOrder = triton::gpu::getOrder(tensorTy.getEncoding());
-  auto axis = getReducedNonSingleAxis(mask);
   auto maskAxis = lookupLatticeElement(mask)->getValue();
-  auto alignment =
-      std::max<unsigned>(maskAxis.getConstancy(maskOrder[axis]), 1);
+  auto alignment = std::max<unsigned>(maskAxis.getConstancy(maskOrder[0]), 1);
   return alignment;
 }
 

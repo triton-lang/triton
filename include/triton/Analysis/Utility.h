@@ -89,8 +89,6 @@ bool isSingleValue(Value value);
 bool isMmaToDotShortcut(triton::gpu::MmaEncodingAttr &mmaLayout,
                         triton::gpu::DotOperandEncodingAttr &dotOperandLayout);
 
-unsigned getReducedNonSingleAxis(Value value);
-
 } // namespace mlir
 
 #endif // TRITON_ANALYSIS_UTILITY_H

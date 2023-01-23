@@ -36,12 +36,11 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     unsigned numBits = pointeeType.isa<triton::Float8Type>()
                            ? 8
                            : pointeeType.getIntOrFloatBitWidth();
-    auto axis = getReducedNonSingleAxis(ptr);
-    unsigned maxMultiple = info.getDivisibility(order[axis]);
-    unsigned maxContig = info.getContiguity(order[axis]);
+    unsigned maxMultiple = info.getDivisibility(order[0]);
+    unsigned maxContig = info.getContiguity(order[0]);
     unsigned alignment = std::min(maxMultiple, maxContig);
     unsigned perThread = std::min(alignment, 128 / numBits);
-    sizePerThread[order[axis]] = std::min<int>(perThread, numElemsPerThread);
+    sizePerThread[order[0]] = std::min<int>(perThread, numElemsPerThread);
 
     SmallVector<unsigned> dims(rank);
     std::iota(dims.begin(), dims.end(), 0);

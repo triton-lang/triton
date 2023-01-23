@@ -177,18 +177,4 @@ bool isSingleValue(Value value) {
   return false;
 }
 
-unsigned getReducedNonSingleAxis(Value value) {
-  auto tensorTy = value.getType().cast<RankedTensorType>();
-  auto axis = 0;
-  auto shape = tensorTy.getShape();
-  auto order = triton::gpu::getOrder(tensorTy.getEncoding());
-  for (auto i = 0; i < shape.size(); ++i) {
-    if (shape[order[i]] != 1) {
-      axis = i;
-      break;
-    }
-  }
-  return axis;
-}
-
 } // namespace mlir

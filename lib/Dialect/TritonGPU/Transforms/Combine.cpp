@@ -500,6 +500,9 @@ public:
       // don't rematerialize anything expensive
       if (expensiveToRemat(op))
         return failure();
+      // don't rematerialize non-element-wise
+      if (!op->hasTrait<mlir::OpTrait::Elementwise>())
+        return failure();
       // don't rematerialize if it adds an extra conversion that can't
       // be removed
       for (Value arg : op->getOperands()) {

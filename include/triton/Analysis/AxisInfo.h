@@ -18,10 +18,7 @@ namespace mlir {
 /// Axis information is represented by a std::map<int, int>
 class AxisInfo {
 public:
-  // XXX: Enlarge the size of attributes to fix arraies > 2^31?
   typedef SmallVector<int, 4> DimVectorT;
-
-  static int defaultValue() { return -1; }
 
 public:
   // Default constructor
