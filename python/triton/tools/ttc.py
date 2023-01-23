@@ -11,8 +11,9 @@ from aot_compile.c_codegen import CodeGenerator
 from aot_compile.compile_metadata import (AOTKernelMetadata, ASTGeneratingObject,
                                           infer_triton_signature, make_compile_metadata, CompileMetadata)
 
+from aot_compile.static_analysis import build_jit_stubs
 
-def filter_jitted_functions(*scopes):
+def filter_jitted_functions(*scopes) -> Dict[str, ASTGeneratingObject]:
     """
     Filter scopes for JITFunction objects
     """
@@ -213,7 +214,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # execute python sources and extract functions wrapped in JITFunction
-    ast_gen_objects = generate_triton_ast_from_src(*args.paths)
+    ast_gen_objects = build_jit_stubs(*args.paths)
+    # ast_gen_objects = generate_triton_ast_from_src(*args.paths)
 
     # This generated a YAML file with needed configs for AOT (signature annotation, specialization values)
     # If you annotate your kernel inputs with type annotations  e.g. X: *fp32(16), config will automatically populate those
