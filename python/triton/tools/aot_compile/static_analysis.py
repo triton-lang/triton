@@ -279,6 +279,11 @@ def build_jit_stubs(*src_paths: Sequence[str]) -> Dict[str, JITStub]:
         )
         gscope.update(jit_stubs)
 
+
+    # TODO: proper configs for user definitions of tl and trioton
+    import triton.language as tl
+    import triton
+    gscope.update({"tl": tl, "triton": triton})
     return jit_stubs
 
 
