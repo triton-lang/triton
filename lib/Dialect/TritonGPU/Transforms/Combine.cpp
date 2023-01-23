@@ -298,22 +298,13 @@ LogicalResult getForwardEncoding(Attribute sourceEncoding, Operation *op,
 inline bool expensiveToRemat(Operation *op) {
   if (!op)
     return true;
-  if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
-    // Don't consider load as expensive if it is loading a scalar.
-    if (auto tensorTy = loadOp.ptr().getType().dyn_cast<RankedTensorType>()) {
-      return tensorTy.getNumElements() != 1;
-    }
-    // TODO: Handle other cases.
-    // For example, when ptr is a tensor of single value.
-    // It means that ptr is a resultant of broadcast or generated through
-    // a chain of broadcast and other operations.
-    // Rematerialize it without considering contiguous memory access pattern is
-    // fine.
-    return false;
-  }
+  if (isa<triton::LoadOp>(op))
+    return isSingleValue(dyn_cast<triton::LoadOp>(op).ptr());
+  if (isa<triton::StoreOp>(op))
+    return isSingleValue(dyn_cast<triton::StoreOp>(op).ptr());
   if (isa<tensor::ExtractSliceOp, triton::gpu::AllocTensorOp,
-          triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp,
-          triton::AtomicRMWOp, triton::AtomicCASOp, triton::DotOp>(op))
+          triton::gpu::InsertSliceAsyncOp, triton::AtomicRMWOp,
+          triton::AtomicCASOp, triton::DotOp>(op))
     return true;
   if (isa<scf::YieldOp, scf::ForOp>(op))
     return true;
@@ -490,6 +481,7 @@ public:
         cvt.getOperand().getType().cast<RankedTensorType>().getEncoding();
     auto dstEncoding =
         cvt.getResult().getType().cast<RankedTensorType>().getEncoding();
+    // XXX: why is this needed?
     if (srcEncoding.isa<triton::gpu::SliceEncodingAttr>())
       return failure();
     SetVector<Operation *> cvtSlices;
@@ -507,9 +499,6 @@ public:
     for (Operation *op : cvtSlices) {
       // don't rematerialize anything expensive
       if (expensiveToRemat(op))
-        return failure();
-      // don't rematerialize non-element-wise
-      if (!op->hasTrait<mlir::OpTrait::Elementwise>())
         return failure();
       // don't rematerialize if it adds an extra conversion that can't
       // be removed

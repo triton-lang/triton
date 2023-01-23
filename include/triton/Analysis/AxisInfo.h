@@ -18,7 +18,10 @@ namespace mlir {
 /// Axis information is represented by a std::map<int, int>
 class AxisInfo {
 public:
+  // XXX: Enlarge the size of attributes to fix arraies > 2^31?
   typedef SmallVector<int, 4> DimVectorT;
+
+  static int defaultValue() { return -1; }
 
 public:
   // Default constructor
@@ -111,14 +114,6 @@ private:
 class AxisInfoAnalysis : public ForwardDataFlowAnalysis<AxisInfo> {
 
 private:
-  static const int maxPow2Divisor = 65536;
-
-  int highestPowOf2Divisor(int n) {
-    if (n == 0)
-      return maxPow2Divisor;
-    return (n & (~(n - 1)));
-  }
-
   AxisInfo visitBinaryOp(
       Operation *op, AxisInfo lhsInfo, AxisInfo rhsInfo,
       const std::function<int(AxisInfo, AxisInfo, int)> &getContiguity,
