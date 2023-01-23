@@ -110,7 +110,7 @@ def check_type_supported(dtype):
         pytest.skip("bfloat16 is only supported on NVGPU with cc >= 80")
 
 
-@pytest.mark.parametrize("dtype_x", [dtype_x for dtype_x in dtypes] + ["bfloat16"])
+@pytest.mark.parametrize("dtype_x", list(dtypes) + ["bfloat16"])
 def test_empty_kernel(dtype_x, device='cuda'):
     SIZE = 128
 
@@ -773,7 +773,7 @@ def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
         assert to_numpy(z_tri) == z_ref
 
 
-@pytest.mark.parametrize("dtype_str", [dtype_str for dtype_str in torch_dtypes])
+@pytest.mark.parametrize("dtype_str", list(torch_dtype_name))
 def test_store_constant(dtype_str):
     check_type_supported(dtype_str)
 
