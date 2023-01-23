@@ -226,7 +226,6 @@ def test_layer_norm(M, N, dtype, eps=1e-5, device='cuda'):
     # forward pass
     y_tri = layer_norm(x, w_shape, weight, bias, eps)
     y_ref = torch.nn.functional.layer_norm(x, w_shape, weight, bias, eps).to(dtype)
-    return
     # backward pass (triton)
     y_tri.backward(dy, retain_graph=True)
     dx_tri, dw_tri, db_tri = [_.grad.clone() for _ in [x, weight, bias]]
@@ -251,7 +250,7 @@ def test_layer_norm(M, N, dtype, eps=1e-5, device='cuda'):
         styles=[('blue', '-'), ('green', '-'), ('orange', '-')],
         ylabel='GB/s',
         plot_name='layer-norm-backward',
-        args={'M': 4096, 'dtype': torch.float16, 'mode': 'forward'}
+        args={'M': 4096, 'dtype': torch.float16, 'mode': 'backward'}
     )
 )
 def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device='cuda'):
