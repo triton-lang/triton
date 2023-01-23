@@ -126,19 +126,17 @@ struct LoadOpConversion
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         for (size_t wordElem = 0; wordElem < wordNElems; ++wordElem) {
           size_t elemOffset = vecStart + wordIdx * wordNElems + wordElem;
-          Value otherVal = other ? otherElems[elemOffset] : zeroVal;
-          auto *curBlock = rewriter.getBlock();
-          auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
-          endBlock->addArgument({valueElemTy}, {loc});
-          auto *loadBlock = rewriter.createBlock(
-              curBlock->getParent(), std::next(Region::iterator(curBlock)));
-          rewriter.setInsertionPointToEnd(curBlock);
-          rewriter.create<LLVM::CondBrOp>(loc, pred, loadBlock, endBlock, otherVal);
-          rewriter.setInsertionPointToEnd(loadBlock);
-          Value loadVal = load(ptrElems[elemOffset]);
-          rewriter.create<LLVM::BrOp>(loc, loadVal, endBlock);
-          rewriter.setInsertionPointToStart(endBlock);
-          loadedVals.push_back(endBlock->getArgument(0));
+          auto loaded = rewriter.create<scf::IfOp>(loc, TypeRange({valueElemTy}), pred,
+                                     [&](OpBuilder &builder, Location loc){
+                                       auto loadVal = builder.create<LLVM::LoadOp>(loc, ptrElems[elemOffset]);
+                                       builder.create<mlir::scf::YieldOp>(loc, ValueRange({loadVal}));
+                                     },
+                                     [&](OpBuilder &builder, Location loc){
+                                       Value otherVal = other ? otherElems[elemOffset] : zeroVal;
+                                       builder.create<mlir::scf::YieldOp>(loc,ValueRange({otherVal}));
+                                     }
+                                    );
+          loadedVals.push_back(loaded->getResult(0));
         }
       }
 #else
@@ -345,16 +343,13 @@ struct StoreOpConversion
           elem = bitcast(elem, valueElemTy);
 #ifdef USE_ROCM
           Value maskVal = llMask ? maskElems[vecStart] : int_val(1, 1);
-          auto *curBlock = rewriter.getBlock();
-          auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
-          auto *storeBlock = rewriter.createBlock(
-              curBlock->getParent(), std::next(Region::iterator(curBlock)));
-          rewriter.setInsertionPointToEnd(curBlock);
-          rewriter.create<LLVM::CondBrOp>(loc, maskVal, storeBlock, endBlock);
-          rewriter.setInsertionPointToEnd(storeBlock);
-          store(elem, ptrElems[elemOffset]);
-          rewriter.create<LLVM::BrOp>(loc, ValueRange(), endBlock);
-          rewriter.setInsertionPointToStart(endBlock);
+          rewriter.create<scf::IfOp>(loc, llvm::None, maskVal,
+                                     [&](OpBuilder &builder, Location loc){
+                                       auto storeOp = builder.create<LLVM::StoreOp>(loc, elem, ptrElems[elemOffset]);
+                                       builder.create<scf::YieldOp>(loc);
+                                     },
+                                     nullptr
+                                    );
         }
       }
 #else

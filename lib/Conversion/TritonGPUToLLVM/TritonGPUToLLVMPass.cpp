@@ -40,6 +40,7 @@ public:
     addLegalDialect<LLVM::LLVMDialect>();
 #ifdef USE_ROCM
     addLegalDialect<ROCDL::ROCDLDialect>();
+    addLegalDialect<mlir::scf::SCFDialect>();
 #else
     addLegalDialect<NVVM::NVVMDialect>();
 #endif
@@ -229,6 +230,20 @@ public:
 
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
       return signalPassFailure();
+
+    // Take care of scf pattern introduced by LoadStoreOp
+#ifdef USE_ROCM
+    RewritePatternSet scf_patterns_extra(context);
+    mlir::populateLoopToStdConversionPatterns(scf_patterns_extra);
+    if (failed(
+            applyPartialConversion(mod, scf_target, std::move(scf_patterns_extra))))
+      return signalPassFailure();
+    RewritePatternSet patterns_extra(context);
+    mlir::populateStdToLLVMConversionPatterns(typeConverter, patterns_extra);
+    if (failed(
+            applyPartialConversion(mod, target, std::move(patterns_extra))))
+      return signalPassFailure();
+#endif
   }
 
 private:
