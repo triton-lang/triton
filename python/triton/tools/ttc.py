@@ -1,97 +1,19 @@
-import ast
-import os
 from argparse import ArgumentParser
-from types import ModuleType
 from typing import Callable, Dict, Sequence, Tuple, Union
 import yaml
 from aot_compile.compile_metadata import CompileMetadata
 
 import triton
 from aot_compile.c_codegen import CodeGenerator
-from aot_compile.compile_metadata import (AOTKernelMetadata, ASTGeneratingObject,
-                                          infer_triton_signature, make_compile_metadata, CompileMetadata)
+from aot_compile.compile_metadata import (
+    AOTKernelMetadata,
+    ASTGeneratingObject,
+    infer_triton_signature,
+    make_compile_metadata,
+    CompileMetadata,
+)
 
 from aot_compile.static_analysis import build_jit_stubs
-
-def filter_jitted_functions(*scopes) -> Dict[str, ASTGeneratingObject]:
-    """
-    Filter scopes for JITFunction objects
-    """
-    res = {}
-    for scope in scopes:
-        if isinstance(scope, ModuleType):
-            scope = scope.__dict__
-        all_jitted = {
-            v.__name__: v for v in scope.values() if isinstance(v, ASTGeneratingObject)
-        }
-        res.update(all_jitted)
-    return res
-
-
-
-def _extract_kernel_src_from_ast(src: str, fpath: str):
-    """
-    Parse source and extract functions that are jit compiled
-
-    Why is this here? 
-    When executing modules from string with exec function, inspect has no access to the source code.
-    This function extracts sources of functions and passes those to exec as global scope data.
-
-    Assumption:
-    - functions must be decorated with the tirton.jit (or anything that has `jit` in the name of the decorator)
-    """
-
-    lines = src.split(os.linesep)
-
-    def _is_jit(n):
-        if isinstance(n, ast.Attribute):
-            return 'jit' in n.attr
-        if isinstance(n, ast.Name):
-            return 'jit' in n.id
-
-        return False
-
-    tree = ast.parse(src)
-    kernels = {}
-    if isinstance(tree, ast.Module):
-        tree = tree.body
-        for node in tree:
-            if isinstance(node, ast.FunctionDef):
-                is_jitted = any(_is_jit(dec) for dec in node.decorator_list)
-                if is_jitted:
-                    st = node.lineno - 1
-                    en = node.end_lineno
-                    kernels[node.name] = os.linesep.join(lines[st:en])
-
-        if len(kernels):
-            return kernels
-
-    raise ValueError(f"AOT Compilation is supported for valid python modules.\n Failed on {fpath}:\n\n {src}")
-
-def generate_triton_ast_from_src(*paths: Sequence[str]) -> Dict[str, ASTGeneratingObject]:
-    """
-        - Load python source files that define Jitted functions.
-        - Execute sources  
-        - Return dict of kernel name -> `ASTGeneratingObject` 
-    """
-
-    # TODO: maybe compile source file one by one and generate a single C source per python source?
-    # TODO: (idea) conserve tree structure of a python source lib - people can use existing projects in a familiar structure
-    scope = {}
-    for fpath in paths:
-        p = Path(fpath)
-        if p.exists():
-            src = p.read_text()
-            scope["__AOT_COMPILE_src"] = _extract_kernel_src_from_ast(src, fpath)
-            try:
-                exec(src, scope)
-            except Exception as e:
-                raise 
-            continue
-        print(f"[Source Not Found]: {str(p)}")
-
-        
-    return filter_jitted_functions(scope)
 
 
 def infer_config_dump_stdout(jitted: Dict[str, Callable]) -> str:
@@ -152,11 +74,14 @@ def reconcile_metadata_with_ast(
 
     return valid_meta_func_paris
 
+
 ASMObject = Dict[str, Union[str, bytes]]
 """ The `asm` attr from `CompiledKernel` """
 
 
-def compile_func(meta: AOTKernelMetadata, fn: ASTGeneratingObject) -> Tuple[ASMObject, CompileMetadata]:
+def compile_func(
+    meta: AOTKernelMetadata, fn: ASTGeneratingObject
+) -> Tuple[ASMObject, CompileMetadata]:
     # NOTE: we ovveride the function name here. in case we have several variants in the kerenel
     #       (those will have same signature in C)
     old_name = fn.__name__
@@ -186,14 +111,18 @@ def generate_c_code(meta_and_ast: AOTMetadataWithAST, outdir: str):
             docstr = str(meta)
             if jit_fn.__doc__ is not None:
                 docstr = f"{docstr}\n\t{jit_fn.__doc__}"
-            codegen.gen_kernel(kernel_meta=meta, compile_meta=comple_meta, bin_=asm['cubin'], docstring=docstr)
+            codegen.gen_kernel(
+                kernel_meta=meta,
+                compile_meta=comple_meta,
+                bin_=asm["cubin"],
+                docstring=docstr,
+            )
 
     codegen.dump(out_dir=outdir)
 
 
 if __name__ == "__main__":
     from pathlib import Path
-
 
     parser = ArgumentParser(description="Triton Ahead of Time Compilation (AoT)")
     parser.add_argument(
@@ -215,14 +144,13 @@ if __name__ == "__main__":
 
     # execute python sources and extract functions wrapped in JITFunction
     ast_gen_objects = build_jit_stubs(*args.paths)
-    # ast_gen_objects = generate_triton_ast_from_src(*args.paths)
 
     # This generated a YAML file with needed configs for AOT (signature annotation, specialization values)
     # If you annotate your kernel inputs with type annotations  e.g. X: *fp32(16), config will automatically populate those
     # otherwise you'll need to edit the YAML file manually
     # You can also provide default values for constants e.g. BLOCK_SIZE = 32 and those will be populated
     # otherwise, you need to provide constant values manually
-    # In the YAML file you can provide several values, to generate different kernel variants. 
+    # In the YAML file you can provide several values, to generate different kernel variants.
     # ( all constants must have same number of variants)
     if args.infer_signature:
         infer_config_dump_stdout(ast_gen_objects)
