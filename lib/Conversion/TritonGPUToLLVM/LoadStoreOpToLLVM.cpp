@@ -408,6 +408,78 @@ struct AtomicCASOpConversion
             converter, allocation, smem, benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
+#ifdef USE_ROCM
+  LogicalResult
+  matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    MLIRContext *ctx = rewriter.getContext();
+    Value ptr = op.ptr();
+
+    Value llPtr = adaptor.ptr();
+    Value llCmp = adaptor.cmp();
+    Value llVal = adaptor.val();
+
+    auto ptrElements = getElementsFromStruct(loc, llPtr, rewriter);
+    auto cmpElements = getElementsFromStruct(loc, llCmp, rewriter);
+    auto valElements = getElementsFromStruct(loc, llVal, rewriter);
+
+    auto valueTy = op.getResult().getType().dyn_cast<RankedTensorType>();
+    Type valueElemTy =
+        valueTy ? getTypeConverter()->convertType(valueTy.getElementType())
+                : op.getResult().getType();
+    auto tid = tid_val();
+    Value pred = icmp_eq(tid, i32_val(0));
+
+    Value casPtr = ptrElements[0];
+    Value casCmp = cmpElements[0];
+    Value casVal = valElements[0];
+
+    // Build blocks to bypass the atomic instruction for ~rmwMask.
+    auto *curBlock = rewriter.getInsertionBlock();
+    auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
+    auto *atomicBlock = rewriter.createBlock(
+        curBlock->getParent(), std::next(Region::iterator(curBlock)));
+
+    // Fill entry block with global memory barrier and conditional branch.
+    rewriter.setInsertionPointToEnd(curBlock);
+    Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+    atomPtr = bitcast(atomPtr, ptr_ty(valueElemTy, 3));
+    rewriter.create<LLVM::CondBrOp>(loc, pred, atomicBlock, endBlock);
+
+    // Build main block with atomic_cmpxchg.
+    rewriter.setInsertionPointToEnd(atomicBlock);
+
+    auto successOrdering = LLVM::AtomicOrdering::acq_rel;
+    auto failureOrdering = LLVM::AtomicOrdering::monotonic;
+    auto boolType = IntegerType::get(rewriter.getContext(), 1);
+    auto pairType = LLVM::LLVMStructType::getLiteral(rewriter.getContext(),
+                                                     {valueElemTy, boolType});
+    auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
+        loc, pairType, casPtr, casCmp, casVal, successOrdering,
+        failureOrdering);
+    // Extract the new_loaded value from the pair.
+    Value newLoaded = rewriter.create<LLVM::ExtractValueOp>(
+        loc, valueElemTy, cmpxchg, rewriter.getI64ArrayAttr({0}));
+
+    store(newLoaded, atomPtr);
+
+    rewriter.create<LLVM::BrOp>(loc, ValueRange(), endBlock);
+
+    // Build the last block: synced load from shared memory, exit.
+    rewriter.setInsertionPointToStart(endBlock);
+
+    GCNBuilder BuilderMemfenceLDS;
+    BuilderMemfenceLDS.create<>("s_waitcnt lgkmcnt(0)")->operator()();
+    BuilderMemfenceLDS.launch(rewriter, loc, void_ty(ctx));
+    barrier();
+    Value ret = load(atomPtr);
+    rewriter.replaceOp(op, {ret});
+    return success();
+  }
+
+#else // USE_ROCM
+
   LogicalResult
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -467,6 +539,7 @@ struct AtomicCASOpConversion
     rewriter.replaceOp(op, {ret});
     return success();
   }
+#endif // USE_ROCM
 };
 
 struct AtomicRMWOpConversion
@@ -511,21 +584,6 @@ struct AtomicRMWOpConversion
       return llvm::None;
     }
     llvm_unreachable("Invalid RMWOp");
-  }
-
-  /// Clones a segment of ops [start, end) and erases the original.
-  static void moveOpsRange(ValueRange oldResult, ValueRange newResult,
-                           Block::iterator start, Block::iterator end,
-                           ConversionPatternRewriter &rewriter) {
-    BlockAndValueMapping mapping;
-    mapping.map(oldResult, newResult);
-    SmallVector<Operation *, 2> opsToErase;
-    for (auto it = start; it != end; ++it) {
-      rewriter.clone(*it, mapping);
-      opsToErase.push_back(&*it);
-    }
-    for (auto *it : opsToErase)
-      rewriter.eraseOp(it);
   }
 
   LogicalResult
@@ -585,41 +643,42 @@ struct AtomicRMWOpConversion
         rmwMask = and_(rmwMask, icmp_eq(tid, i32_val(0)));
       }
 
+      Value undefVal = undef(valueElemTy);
       // Build blocks to bypass the atomic instruction for ~rmwMask.
       auto *curBlock = rewriter.getInsertionBlock();
+      auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
       auto *atomicBlock = rewriter.createBlock(
           curBlock->getParent(), std::next(Region::iterator(curBlock)));
-      auto *endBlock = rewriter.createBlock(
-          atomicBlock->getParent(), std::next(Region::iterator(atomicBlock)));
+      endBlock->addArgument({valueElemTy}, {loc});
 
-      // Operations range to be moved to `endBlock`.
-      auto opsToMoveStart = op->getIterator();
-      auto opsToMoveEnd = curBlock->back().getIterator();
       rewriter.setInsertionPointToEnd(curBlock);
+      rewriter.create<LLVM::CondBrOp>(loc, rmwMask, atomicBlock, endBlock,
+                                      undefVal);
 
-      rewriter.create<LLVM::CondBrOp>(loc, rmwMask, atomicBlock, endBlock);
       rewriter.setInsertionPointToEnd(atomicBlock);
-
       auto maybeKind = matchAtomicOp(atomicRmwAttr);
+      // TODO: use amdgpu.raw_buffer_atomic_fadd for MI-* series of AMD GPU
+      // since it supports memref indexes (after moving triton to use memrefs).
       auto atom = rewriter.create<LLVM::AtomicRMWOp>(
           loc, valueElemTy, *maybeKind, rmwPtr, valElements[i],
           LLVM::AtomicOrdering::monotonic);
-      rewriter.create<LLVM::BrOp>(loc, ValueRange(), endBlock);
+      rewriter.create<LLVM::BrOp>(loc, atom.getResult(), endBlock);
 
-      rewriter.setInsertionPointToEnd(endBlock);
-      Value ret = atom.getResult();
+      rewriter.setInsertionPointToStart(endBlock);
+      Value retVal = endBlock->getArgument(0);
       if (valueTy) {
         for (int ii = 0; ii < vec; ++ii) {
           resultVals[i + ii] =
-              vec == 1 ? ret : extract_element(valueElemTy, ret, idx_val(ii));
+              vec == 1 ? retVal
+                       : extract_element(valueElemTy, retVal, idx_val(ii));
         }
       } else {
-        rewriter.replaceOp(op, {atom});
+        Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+        atomPtr = bitcast(atomPtr, ptr_ty(valueElemTy, 3));
+        store(retVal, atomPtr);
+        Value ret = load(atomPtr);
+        rewriter.replaceOp(op, {ret});
       }
-
-      // Move the all the instructions after tt.atomic to `endBlock`.
-      moveOpsRange(opResult, ret, std::next(opsToMoveStart),
-                   std::next(opsToMoveEnd), rewriter);
     }
     if (valueTy) {
       Type structTy = getTypeConverter()->convertType(valueTy);

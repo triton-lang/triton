@@ -892,6 +892,7 @@ def atomic_max(ptr: tl.tensor,
                                                        val.handle,
                                                        mask.handle),
                              val.type)
+    # ROCM TODO: implement atomic_max/min for f32 as they are supported by MI cards.
     # for float
     # return atomic_smax(i_ptr, i_val) if val >= 0
     # return atomic_umin(i_ptr, i_val) if val < 0
