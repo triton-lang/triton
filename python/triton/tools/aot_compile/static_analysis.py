@@ -4,8 +4,10 @@ from typing import Any, Dict, Sequence
 
 from dataclasses import dataclass
 
+from triton import JITFunction
 
-class JITStub:
+
+class JITStub(JITFunction):
     def __init__(
         self,
         fn,
@@ -231,6 +233,11 @@ def _merge_conflict_report(main_, includes, main_path, inc_paths):
 
 
 def build_jit_stubs(*src_paths: Sequence[str]) -> Dict[str, JITStub]:
+    """
+    - Analyze AST: find global constants + triton.jit decorated functions
+    - Function Stubs: Generate function stubs and wrap in a stub JITFunction
+    - All include paths get added to the kernel function scope (kernel takes precedence) 
+    """
     # Get globals and Jitted function from static source code
     generator = CollectJITandGlobals()
 
