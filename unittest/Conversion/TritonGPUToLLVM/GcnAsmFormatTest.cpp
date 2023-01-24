@@ -45,7 +45,7 @@ TEST_F(GcnAsmFormatTest, basic) {
   auto &mov = *builder.create("v_mov_b32");
 
   mov(val, cst);
-  ASSERT_EQ(builder.dump(), "v_mov_b32 $0, 0x1;");
+  ASSERT_EQ(builder.dump(), "v_mov_b32 $0, 0x1");
 
   auto constraints = builder.getConstraints();
   ASSERT_EQ(constraints, "=v");
@@ -59,7 +59,7 @@ TEST_F(GcnAsmFormatTest, complexInstruction) {
   Value addrVal = v[0];
   auto dst = builder.newOperand("=v");
   auto addr = builder.newAddrOperand(addrVal, "v");
-  auto offOpr = builder.newEmptyOperand("off");
+  auto offOpr = builder.newConstantOperand("off");
 
   auto offsetMod = builder.newModifier("offset", std::to_string(offset));
 
@@ -68,7 +68,7 @@ TEST_F(GcnAsmFormatTest, complexInstruction) {
   // Link the instruction to operands
   ld({addr, dst, offOpr}, {offsetMod});
 
-  EXPECT_EQ(builder.dump(), "global_load_ushort $1, $0, off offset:128;");
+  EXPECT_EQ(builder.dump(), "global_load_ushort $1, $0, off offset:128");
 
   auto constraints = builder.getConstraints();
   ASSERT_EQ(constraints, "=v,v");
