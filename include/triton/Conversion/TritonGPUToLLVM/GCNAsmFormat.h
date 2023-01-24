@@ -134,8 +134,6 @@ struct Modifier {
 
   Operand *newAddrOperand(mlir::Value addr, StringRef constraint);
 
-  Operand *newEmptyOperand(std::string arg);
-
   Modifier *newModifier(StringRef modifier, StringRef arg);
 
   llvm::SmallVector<Operand *, 4> getAllArgs() const;
