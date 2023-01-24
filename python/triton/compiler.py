@@ -1223,8 +1223,9 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
     unsigned attr;
     CUresult status =
         cuPointerGetAttribute(&attr, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, ptr_info.dev_ptr);
-    if (!(attr == CU_MEMORYTYPE_DEVICE || attr == CU_MEMORYTYPE_UNIFIED) ||
-        !(status == CUDA_SUCCESS)) {{
+    if (ptr_info.dev_ptr &&
+        (!(attr == CU_MEMORYTYPE_DEVICE || attr == CU_MEMORYTYPE_UNIFIED) ||
+         !(status == CUDA_SUCCESS))) {{
         PyErr_Format(PyExc_ValueError,
                      "Pointer argument (at %d) cannot be accessed from Triton (cpu tensor?)", idx);
         ptr_info.valid = false;
