@@ -913,11 +913,12 @@ def ttir_to_ttgir(mod, num_warps, num_stages, compute_capability):
     pm.add_tritongpu_combine_pass(compute_capability)
     pm.add_licm_pass()
     pm.add_tritongpu_combine_pass(compute_capability)
-    if compute_capability // 10 == 7:
-        # The update_mma_for_volta pass helps to compute some information for MMA encoding specifically for MMAv1
-        pm.add_tritongpu_update_mma_for_volta_pass()
     pm.add_cse_pass()
     pm.add_tritongpu_decompose_conversions_pass()
+    if compute_capability // 10 == 7:
+        # The update_mma_for_volta pass helps to compute some information for MMA encoding specifically for MMAv1
+        # NOTE this pass should be placed after all the passes those modifies mma layout
+        pm.add_tritongpu_update_mma_for_volta_pass()
     pm.add_cse_pass()
     pm.add_symbol_dce_pass()
     pm.add_tritongpu_reorder_instructions_pass()
@@ -1690,9 +1691,9 @@ def compile(fn, **kwargs):
         import re
         match = re.search(prototype_pattern[ir], src, re.MULTILINE)
         name, signature = match.group(1), match.group(2)
-        print(name, signature)
+        # print(name, signature)
         types = re.findall(arg_type_pattern[ir], signature)
-        print(types)
+        # print(types)
         param_tys = [convert_type_repr(ty) for ty in types]
         signature = {k: v for k, v in enumerate(param_tys)}
         first_stage = list(stages.keys()).index(ir)
@@ -1827,6 +1828,7 @@ class CompiledKernel:
             if self.shared > max_shared:
                 raise OutOfResources(self.shared, max_shared, "shared memory")
             mod, func, n_regs, n_spills = cuda_utils.load_binary(self.metadata["name"], self.asm["cubin"], self.shared, device)
+            # print(self.shared, n_regs, n_spills)
             self.cu_module = mod
             self.cu_function = func
 
@@ -1866,7 +1868,8 @@ class CudaUtils(object):
             cls.instance = super(CudaUtils, cls).__new__(cls)
         return cls.instance
 
-    def _generate_src(self):
+    @staticmethod
+    def _generate_src():
         return """
         #include <cuda.h>
 

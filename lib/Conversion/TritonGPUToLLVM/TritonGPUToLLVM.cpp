@@ -69,10 +69,42 @@ struct BroadcastOpConversion
     auto srcOffsets = emitOffsetForLayout(srcLayout, srcShape);
     auto resultOffsets = emitOffsetForLayout(resultLayout, resultShape);
     SmallVector<Value> srcVals = getElementsFromStruct(loc, src, rewriter);
+    if (auto srcMma = srcLayout.dyn_cast<MmaEncodingAttr>()) {
+
+      // NOTE: This is just an naive fix, but for MMA layout, and 2-d fix should
+      // be all right.
+      // TODO[Superjomn]: Replace this with a generic implementation.
+      if (srcMma.isVolta()) {
+        assert(srcTy.getElementType().isF16() &&
+               "Unexpected data type on Volta");
+        int numElemsPerThread = srcMma.getElemsPerThread(resultTy.getShape());
+        int srcUniqElems = srcVals.size() / 2;
+        int dup = numElemsPerThread / srcUniqElems;
+        SmallVector<Value> retVals;
+        if (srcShape[0] == 1) { // add-cols
+          for (int i = 0; i < srcUniqElems; ++i)
+            for (int k = 0; k < dup; ++k)
+              retVals.push_back(srcVals[i * 2]);
+
+        } else { // add-rows
+          for (int k = 0; k < dup; ++k)
+            for (int i = 0; i < srcUniqElems; ++i)
+              retVals.push_back(srcVals[i]);
+        }
+
+        auto llvmStructTy = getTypeConverter()->convertType(resultTy);
+        Value ret = getStructFromElements(loc, retVals, rewriter, llvmStructTy);
+
+        rewriter.replaceOp(op, {ret});
+        return success();
+      }
+    }
+
     DenseMap<SmallVector<unsigned>, Value, SmallVectorKeyInfo> srcValues;
     for (size_t i = 0; i < srcOffsets.size(); i++) {
       srcValues[srcOffsets[i]] = srcVals[i];
     }
+
     SmallVector<Value> resultVals;
     for (size_t i = 0; i < resultOffsets.size(); i++) {
       auto offset = resultOffsets[i];
@@ -81,6 +113,7 @@ struct BroadcastOpConversion
           offset[j] = 0;
       resultVals.push_back(srcValues.lookup(offset));
     }
+
     auto llvmStructTy = getTypeConverter()->convertType(resultTy);
     Value resultStruct =
         getStructFromElements(loc, resultVals, rewriter, llvmStructTy);
@@ -505,6 +538,47 @@ struct AsyncWaitOpConversion
   }
 };
 
+struct AsyncCommitGroupOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::AsyncCommitGroupOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::AsyncCommitGroupOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::AsyncCommitGroupOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+
+    PTXBuilder ptxBuilder;
+    ptxBuilder.create<>("cp.async.commit_group")->operator()();
+    ptxBuilder.launch(rewriter, op.getLoc(), void_ty(op.getContext()));
+    // Safe to remove the op since it doesn't have any return value.
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+namespace mlir {
+namespace LLVM {
+
+void vprintf(StringRef msg, ValueRange args,
+             ConversionPatternRewriter &rewriter) {
+  PrintfOpConversion::llPrintf(msg, args, rewriter);
+}
+
+void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
+                   std::string elem_repr, ConversionPatternRewriter &builder) {
+  std::string fmt = info + " t-%d ";
+  std::vector<Value> new_arr({thread});
+  for (int i = 0; i < arr.size(); ++i) {
+    fmt += elem_repr + ((i == arr.size() - 1) ? "" : ", ");
+    new_arr.push_back(arr[i]);
+  }
+
+  vprintf(fmt, new_arr, builder);
+}
+
+} // namespace LLVM
+} // namespace mlir
+
 void populateTritonGPUToLLVMPatterns(
     mlir::LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
@@ -514,6 +588,7 @@ void populateTritonGPUToLLVMPatterns(
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
   patterns.add<AllocTensorOpConversion>(typeConverter, allocation, smem,
                                         benefit);
+  patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
 

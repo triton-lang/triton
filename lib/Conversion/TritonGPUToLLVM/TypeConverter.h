@@ -90,7 +90,7 @@ public:
         Type elemTy = convertType(type.getElementType());
         if (mmaLayout.isAmpere()) {
           const llvm::DenseMap<int, Type> targetTyMap = {
-              {32, elemTy},
+              {32, vec_ty(elemTy, 1)},
               {16, vec_ty(elemTy, 2)},
               {8, vec_ty(elemTy, 4)},
           };
@@ -103,8 +103,7 @@ public:
           if (dotOpLayout.getOpIdx() == 0) { // $a
             auto elems =
                 MMA16816ConversionHelper::getANumElemsPerThread(type, wpt[0]);
-            return LLVM::LLVMStructType::getLiteral(
-                ctx, SmallVector<Type>(elems, targetTy));
+            return struct_ty(SmallVector<Type>(elems, targetTy));
           }
           if (dotOpLayout.getOpIdx() == 1) { // $b
             auto elems =
@@ -114,24 +113,20 @@ public:
         }
 
         if (mmaLayout.isVolta()) {
+          auto [isARow, isBRow, isAVec4, isBVec4, mmaId] =
+              mmaLayout.decodeVoltaLayoutStates();
           DotOpMmaV1ConversionHelper helper(mmaLayout);
-
-          // TODO[Superjomn]: Both transA and transB are not available here.
-          bool trans = false;
-          // TODO[Superjomn]: The order of A and B are not available here.
-          SmallVector<unsigned> order({1, 0});
-          if (trans) {
-            std::swap(shape[0], shape[1]);
-            std::swap(order[0], order[1]);
-          }
-
           if (dotOpLayout.getOpIdx() == 0) { // $a
-            int elems = helper.numElemsPerThreadA(shape, order);
+            DotOpMmaV1ConversionHelper::AParam param(isARow, isAVec4);
+            int elems =
+                helper.numElemsPerThreadA(shape, isARow, isAVec4, param.vec);
             Type x2Ty = vec_ty(elemTy, 2);
             return struct_ty(SmallVector<Type>(elems, x2Ty));
           }
           if (dotOpLayout.getOpIdx() == 1) { // $b
-            int elems = helper.numElemsPerThreadB(shape, order);
+            DotOpMmaV1ConversionHelper::BParam param(isBRow, isBVec4);
+            int elems =
+                helper.numElemsPerThreadB(shape, isBRow, isBVec4, param.vec);
             Type x2Ty = vec_ty(elemTy, 2);
             return struct_ty(SmallVector<Type>(elems, x2Ty));
           }
