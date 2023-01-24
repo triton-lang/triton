@@ -28,7 +28,7 @@ mlir_check_all_link_libraries(triton-opt)
 
 add_llvm_executable(triton-translate triton-translate.cpp PARTIAL_SOURCES_INTENDED)
 llvm_update_compile_flags(triton-translate)
-target_link_libraries(triton-translate PRIVATE
+ target_link_libraries(triton-translate PRIVATE
          TritonAnalysis
          TritonTransforms
          TritonGPUTransforms
@@ -37,8 +37,8 @@ target_link_libraries(triton-translate PRIVATE
          TritonHSACO
          ${dialect_libs}
          ${conversion_libs}
-#         # tests
-#         TritonTestAnalysis
+         # tests
+         TritonTestAnalysis
 
          LLVMCore
          LLVMSupport
@@ -49,6 +49,7 @@ target_link_libraries(triton-translate PRIVATE
          # MLIR core
          MLIROptLib
          MLIRIR
+         MLIRLLVMIR
          MLIRPass
          MLIRSupport
          MLIRTransforms
@@ -60,3 +61,4 @@ target_link_libraries(triton-translate PRIVATE
          MLIRROCDLToLLVMIRTranslation
          MLIRSCFToStandard
          )
+mlir_check_all_link_libraries(triton-translate)

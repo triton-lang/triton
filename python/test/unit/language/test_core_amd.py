@@ -911,7 +911,7 @@ def test_f16_to_f8_rounding():
 
 
 def get_reduced_dtype(dtype_str, op):
-    if op == 'argmin' or op == 'argmax':
+    if op in ('argmin', 'argmax'):
         return 'int32'
     if dtype_str in ['int8', 'uint8', 'int16', 'uint16']:
         return 'int32'
@@ -943,7 +943,7 @@ def test_reduce1d(op, dtype_str, shape, device='cuda'):
     numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min,
                 'argmin': np.argmin, 'argmax': np.argmax}[op]
     # numpy result
-    z_dtype_str = get_reduced_dtype(dtype_str, op)
+    z_dtype_str = 'int32' if op in ('argmin', 'argmax') else dtype_str
     z_tri_dtype_str = z_dtype_str
     if op not in ['argmin', 'argmax'] and dtype_str == 'bfloat16':
         z_dtype_str = 'float32'
@@ -962,7 +962,7 @@ def test_reduce1d(op, dtype_str, shape, device='cuda'):
     if op == 'sum':
         np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
     else:
-        if op == 'argmin' or op == 'argmax':
+        if op in ('argmin', 'argmax'):
             # argmin and argmax can have multiple valid indices.
             # so instead we compare the values pointed by indices
             np.testing.assert_equal(x[z_ref], x[z_tri])
@@ -1039,7 +1039,7 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
     if op == 'sum':
         np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
     else:
-        if op == 'argmin' or op == 'argmax':
+        if op in ('argmin', 'argmax'):
             # argmin and argmax can have multiple valid indices.
             # so instead we compare the values pointed by indices
             z_ref_index = np.expand_dims(z_ref, axis=axis)
@@ -1372,6 +1372,7 @@ def system_libdevice_path() -> str:
 
 @pytest.mark.parametrize("dtype_str, expr, lib_path",
                          [('int32', 'libdevice.ffs', ''),
+                          ('float32', 'libdevice.log2', ''),
                           ('float32', 'libdevice.pow', system_libdevice_path()),
                           ('float64', 'libdevice.norm4d', '')])
 def test_libdevice_tensor(dtype_str, expr, lib_path):
@@ -1387,7 +1388,11 @@ def test_libdevice_tensor(dtype_str, expr, lib_path):
     # limit the range of integers so that the sum does not overflow
     x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
 
-    if expr == 'libdevice.ffs':
+
+    if expr == 'libdevice.log2':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.broadcast_to(tl.libdevice.log2(5.0), x.shape)'})
+        y_ref = np.log2(5.0)
+    elif expr == 'libdevice.ffs':
         kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.ffs(x)'})
         y_ref = np.zeros(shape, dtype=x.dtype)
         for i in range(shape[0]):

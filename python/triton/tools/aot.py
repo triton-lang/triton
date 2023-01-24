@@ -1,4 +1,5 @@
 import argparse
+import sys
 
 import triton
 import triton._C.libtriton.triton as libtriton
@@ -25,7 +26,7 @@ if __name__ == '__main__':
     # check for validity of format arguments
     if args.target not in VALID_FORMATS:
         print("Invalid target format: " + args.target)
-        exit(0)
+        sys.exit(0)
 
     # parse source file to MLIR module
     context = libtriton.ir.context()
@@ -36,7 +37,7 @@ if __name__ == '__main__':
     module = triton.compiler.optimize_triton_ir(module)
     if args.target == 'triton-ir':
         print(module.str())
-        exit(0)
+        sys.exit(0)
 
     if not args.sm:
         raise argparse.ArgumentError(None, "Must specify --sm for PTX compilation")
@@ -45,13 +46,13 @@ if __name__ == '__main__':
     module = triton.compiler.ttir_to_ttgir(module, num_warps=4, num_stages=3, compute_capability=args.sm)
     if args.target == 'triton-gpu-ir':
         print(module.str())
-        exit(0)
+        sys.exit(0)
 
     # triton-gpu-ir -> llvm-ir
     module = triton.compiler.ttgir_to_llir(module, extern_libs=None, compute_capability=args.sm)
     if args.target == 'llvm-ir':
         print(module)
-        exit(0)
+        sys.exit(0)
 
     # llvm-ir -> ptx
     if args.target == 'ptx':
