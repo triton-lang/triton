@@ -96,8 +96,8 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
 
 def TT_AddPtrOp : TT_Op<"addptr",
                      [NoSideEffect,
-                     SameOperandsAndResultShape,
-                     SameOperandsAndResultEncoding,
+                      SameOperandsAndResultShape,
+                      SameOperandsAndResultEncoding,
                       TypesMatchWith<"result type matches ptr type",
                                      "result", "ptr", "$_self">]> {
     let arguments = (ins TT_PtrLike:$ptr, TT_IntLike:$offset);

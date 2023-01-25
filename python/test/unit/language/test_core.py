@@ -1108,6 +1108,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype, devi
             pytest.skip("Only test int8 on devices with sm >= 80")
         elif dtype == 'float32' and allow_tf32:
             pytest.skip("Only test tf32 on devices with sm >= 80")
+    if capability[0] == 7:
+        if (M, N, K, num_warps) == (128, 256, 32, 8):
+            pytest.skip("shared memory out of resource")
+
     torch.backends.cuda.matmul.allow_tf32 = allow_tf32
 
     # triton kernel
@@ -1660,6 +1664,7 @@ def system_libdevice_path() -> str:
 
 @pytest.mark.parametrize("dtype_str, expr, lib_path",
                          [('int32', 'libdevice.ffs', ''),
+                          ('float32', 'libdevice.log2', ''),
                           ('float32', 'libdevice.pow', system_libdevice_path()),
                           ('float64', 'libdevice.norm4d', '')])
 def test_libdevice_tensor(dtype_str, expr, lib_path):
@@ -1675,7 +1680,10 @@ def test_libdevice_tensor(dtype_str, expr, lib_path):
     # limit the range of integers so that the sum does not overflow
     x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
 
-    if expr == 'libdevice.ffs':
+    if expr == 'libdevice.log2':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.broadcast_to(tl.libdevice.log2(5.0), x.shape)'})
+        y_ref = np.log2(5.0)
+    elif expr == 'libdevice.ffs':
         kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.libdevice.ffs(x)'})
         y_ref = np.zeros(shape, dtype=x.dtype)
         for i in range(shape[0]):
