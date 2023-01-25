@@ -561,12 +561,10 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_UnaryOp(self, node):
         op = self.visit(node.operand)
-        if type(node.op) == ast.Not:
-            assert isinstance(op, triton.language.constexpr), "`not` only supported for constexpr at the moment"
-            return triton.language.constexpr(not op)
         fn = {
             ast.USub: '__neg__',
             ast.UAdd: '__pos__',
+            ast.Not: '__not__',
             ast.Invert: '__invert__',
         }[type(node.op)]
         if self.is_triton_tensor(op):
