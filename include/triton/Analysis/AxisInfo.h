@@ -20,6 +20,9 @@ class AxisInfo {
 public:
   typedef SmallVector<int, 4> DimVectorT;
 
+  static const int Unknown = 0;
+  static const int Default = 1;
+
 public:
   // Default constructor
   AxisInfo() : AxisInfo({}, {}, {}) {}
@@ -63,7 +66,11 @@ public:
 private:
   /// The _contiguity_ information maps the `d`-th
   /// dimension to the length of the shortest
-  /// sequence of contiguous integers along it
+  /// sequence of contiguous integers along it.
+  /// Suppose we have an array of N elements,
+  /// with a contiguity value C,
+  /// the array can be divided into a list of
+  /// N/C sequences of C contiguous elements.
   /// For example:
   /// [10, 11, 12, 13, 18, 19, 20, 21]
   /// [20, 21, 22, 23, 28, 29, 30, 31]
@@ -97,7 +104,11 @@ private:
   /// dimension to the length of the shortest
   /// sequence of constant integer along it. This is
   /// particularly useful to infer the contiguity
-  /// of operations (e.g., add) involving a constant
+  /// of operations (e.g., add) involving a constant.
+  /// Suppose we have an array of N elements,
+  /// with a contiguity value C,
+  /// the array can be divided into a list of
+  /// N/C sequences of C elements with the same value.
   /// For example
   /// [8, 8, 8, 8, 12, 12, 12, 12]
   /// [16, 16, 16, 16, 20, 20, 20, 20]
@@ -108,17 +119,94 @@ private:
   int rank;
 };
 
-class AxisInfoAnalysis : public ForwardDataFlowAnalysis<AxisInfo> {
+class AxisInfoVisitor {
+public:
+  AxisInfoVisitor() = default;
 
-private:
-  AxisInfo visitBinaryOp(
+  static bool isContiguousDim(const AxisInfo &info, ArrayRef<int64_t> shape,
+                               int dim) {
+    return dim < shape.size() && info.getContiguity(dim) == shape[dim];
+  }
+
+  static bool isConstantDim(const AxisInfo &info, ArrayRef<int64_t> shape,
+                                 int dim) {
+    return dim < shape.size() && info.getConstancy(dim) == shape[dim];
+  }
+
+  static bool isContiguityConstancyAligned(const AxisInfo &lhs,
+                                           const AxisInfo &rhs,
+                                           ArrayRef<int64_t> shape, int dim) {
+    return dim < shape.size() &&
+           (lhs.getContiguity(dim) % rhs.getConstancy(dim) == 0 ||
+            rhs.getContiguity(dim) % lhs.getConstancy(dim) == 0);
+  }
+
+  static bool isContiguityAligned(const AxisInfo &lhs, const AxisInfo &rhs,
+                                     ArrayRef<int64_t> shape, int dim) {
+    return dim < shape.size() &&
+           (lhs.getContiguity(dim) % rhs.getContiguity(dim) == 0 ||
+            rhs.getContiguity(dim) % lhs.getContiguity(dim) == 0);
+  }
+
+  static bool isConstancyAligned(const AxisInfo &lhs, const AxisInfo &rhs,
+                                   ArrayRef<int64_t> shape, int dim) {
+    return dim < shape.size() &&
+           (lhs.getConstancy(dim) % rhs.getConstancy(dim) == 0 ||
+            rhs.getConstancy(dim) % lhs.getConstancy(dim) == 0);
+  }
+
+  static AxisInfo visitBinaryOp(
       Operation *op, AxisInfo lhsInfo, AxisInfo rhsInfo,
       const std::function<int(AxisInfo, AxisInfo, int)> &getContiguity,
       const std::function<int(AxisInfo, AxisInfo, int)> &getDivisibility,
       const std::function<int(AxisInfo, AxisInfo, int)> &getConstancy);
 
+  virtual bool match(Operation *op) = 0;
+
+  virtual AxisInfo
+  getAxisInfo(Operation *op, ArrayRef<LatticeElement<AxisInfo> *> operands) = 0;
+};
+
+template <typename OpTy> class AxisInfoVisitorImpl : public AxisInfoVisitor {
 public:
-  using ForwardDataFlowAnalysis<AxisInfo>::ForwardDataFlowAnalysis;
+  AxisInfo getAxisInfo(Operation *op,
+                       ArrayRef<LatticeElement<AxisInfo> *> operands) final {
+    return getAxisInfo(cast<OpTy>(op), operands);
+  }
+
+  bool match(Operation *op) final { return isa<OpTy>(op); }
+
+  virtual AxisInfo getAxisInfo(OpTy op,
+                               ArrayRef<LatticeElement<AxisInfo> *> operands) {
+    llvm_unreachable("Unimplemented getAxisInfo for op");
+  }
+};
+
+class AxisInfoVisitorList {
+public:
+  template <typename... Ts, typename = std::enable_if_t<sizeof...(Ts) != 0>>
+  void add() {
+    // Iterate over all the types in the parameter pack.
+    (visitors.emplace_back(std::make_unique<Ts>()), ...);
+  }
+
+  AxisInfo apply(Operation *op, ArrayRef<LatticeElement<AxisInfo> *> operands) {
+    for (auto &visitor : visitors)
+      if (visitor->match(op))
+        return visitor->getAxisInfo(op, operands);
+    llvm_unreachable("Unimplemented getAxisInfo for op");
+  }
+
+private:
+  std::vector<std::unique_ptr<AxisInfoVisitor>> visitors;
+};
+
+class AxisInfoAnalysis : public ForwardDataFlowAnalysis<AxisInfo> {
+private:
+  AxisInfoVisitorList visitors;
+
+public:
+  AxisInfoAnalysis(MLIRContext *context);
 
   ChangeResult
   visitOperation(Operation *op,
