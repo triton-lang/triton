@@ -164,7 +164,7 @@ std::string GCNInstrExecution::dump() const {
 
   std::string modsRepr = strJoin(modReprs, " ");
   if (!modsRepr.empty()) {
-    os << instrRepr << " " << argsRepr << ", " << modsRepr;
+    os << instrRepr << " " << argsRepr << " " << modsRepr;
   } else {
     os << instrRepr << " " << argsRepr;
   }
