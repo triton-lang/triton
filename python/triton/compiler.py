@@ -395,21 +395,25 @@ class CodeGenerator(ast.NodeVisitor):
                 names = []
                 ret_types = []
                 ir_ret_types = []
-                for name in liveins:
+                for name in liveins | then_defs | else_defs:
                     if name in then_defs and name in else_defs:
                         assert then_defs[name].type == else_defs[name].type
                     if name in then_defs:
-                        assert then_defs[name].type == liveins[name].type
+                        if name in liveins:
+                          assert then_defs[name].type == liveins[name].type
                         names.append(name)
                         ret_types.append(then_defs[name].type)
                         ir_ret_types.append(then_defs[name].handle.get_type())
-                        else_defs[name] = liveins[name]
+                        if not name in else_defs:
+                          else_defs[name] = liveins[name]
                     elif name in else_defs:
-                        assert else_defs[name].type == liveins[name].type
+                        if name in liveins:
+                          assert else_defs[name].type == liveins[name].type
                         names.append(name)
                         ret_types.append(else_defs[name].type)
                         ir_ret_types.append(else_defs[name].handle.get_type())
-                        then_defs[name] = liveins[name]
+                        if not name in then_defs:
+                          then_defs[name] = liveins[name]
  
                 # then terminator
                 self.builder.set_insertion_point_to_end(then_block)
