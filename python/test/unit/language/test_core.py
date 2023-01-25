@@ -1810,6 +1810,7 @@ def test_nested_if_else_return():
       (False, False, False): 3,
     }
     for (cond1_val, cond2_val, cond3_val), ret in targets.items():
+      out[0] = -1
       cond1[0] = cond1_val
       cond2[0] = cond2_val
       cond3[0] = cond3_val

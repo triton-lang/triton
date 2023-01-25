@@ -366,72 +366,67 @@ class CodeGenerator(ast.NodeVisitor):
                 liveins_copy = liveins.copy()
                 then_block = self.builder.create_block()
                 else_block = self.builder.create_block()
-                self.builder.set_insertion_point_to_start(then_block)
-                self.visit_compound_statement(node.body)
-                # then_block = self.builder.get_insertion_block()
-                then_defs = self.local_defs.copy()
-
-                # when need an else block when:
-                # 1. we have an orelse node
-                #   or
-                # 2. the then block defines new variable
-                else_defs = {}
-                if then_defs or node.orelse:
-                    if node.orelse:
-                        self.lscope = liveins
-                        self.local_defs = {}
-                        self.builder.set_insertion_point_to_end(else_block)
-                        self.visit_compound_statement(node.orelse)
-                        # then_block = self.builder.get_insertion_block()
-                        else_defs = self.local_defs.copy()
-                    else:
-                        # collect else_defs
-                        for name in then_defs:
-                            if name in liveins:
-                                assert self.is_triton_tensor(then_defs[name])
-                                assert self.is_triton_tensor(liveins[name])
-                                else_defs[name] = liveins[name]
-                # collect yields
-                names = []
-                ret_types = []
-                ir_ret_types = []
-                for then_name in then_defs:
-                    for else_name in else_defs:
-                        if then_name == else_name:
-                            if then_defs[then_name].type == else_defs[else_name].type:
-                                names.append(then_name)
-                                ret_types.append(then_defs[then_name].type)
-                                ir_ret_types.append(then_defs[then_name].handle.get_type())
-
-
-                # defined in else block but not in then block
-                # to find in parent scope and yield them
-                for else_name in else_defs:
-                    if else_name in liveins and else_name not in then_defs:
-                        if else_defs[else_name].type == liveins[else_name].type:
-                            names.append(else_name)
-                            ret_types.append(else_defs[else_name].type)
-                            then_defs[else_name] = liveins_copy[else_name]
-                            ir_ret_types.append(else_defs[else_name].handle.get_type())
-
                 # create basic-block after conditional
                 endif_block = self.builder.create_block()
-                for ty in ir_ret_types:
-                  endif_block.add_argument(ty)
-
+                # create branch
                 self.builder.set_insertion_point_to_end(ip_block)
                 self.builder.create_cond_branch(cond.handle, then_block, else_block)
                 # then block
+                self.builder.set_insertion_point_to_start(then_block)
+                self.visit_compound_statement(node.body)
+                then_block = self.builder.get_insertion_block()
+                then_defs = self.local_defs.copy()
+                # else block
+                self.builder.set_insertion_point_to_start(else_block)
+                else_defs = {}
+                if node.orelse:
+                  self.local_defs = {}
+                  self.visit_compound_statement(node.orelse)
+                  else_defs = self.local_defs.copy()
+                  else_block = self.builder.get_insertion_block()
+                else:
+                  for name in then_defs:
+                    if name in liveins:
+                        assert self.is_triton_tensor(then_defs[name])
+                        assert self.is_triton_tensor(liveins[name])
+                        else_defs[name] = liveins[name]
+                
+                # update block arguments
+                names = []
+                ret_types = []
+                ir_ret_types = []
+                for name in liveins:
+                    if name in then_defs and name in else_defs:
+                        assert then_defs[name].type == else_defs[name].type
+                    if name in then_defs:
+                        assert then_defs[name].type == liveins[name].type
+                        names.append(name)
+                        ret_types.append(then_defs[name].type)
+                        ir_ret_types.append(then_defs[name].handle.get_type())
+                    elif name in else_defs:
+                        assert else_defs[name].type == liveins[name].type
+                        names.append(name)
+                        ret_types.append(else_defs[name].type)
+                        ir_ret_types.append(else_defs[name].handle.get_type())
+ 
+                # then terminator
                 self.builder.set_insertion_point_to_end(then_block)
                 if not then_block.has_terminator():
                   self.builder.create_branch(endif_block, [then_defs[n].handle for n in names])
-                # else block
+                # else terminator
+                # print(str(else_block))
                 self.builder.set_insertion_point_to_end(else_block)
                 if not else_block.has_terminator():
                   self.builder.create_branch(endif_block, [else_defs[n].handle for n in names])
+                for ty in ir_ret_types:
+                  endif_block.add_argument(ty)
+                # print(str(endif_block))
+
+                # for ty in ir_ret_types:
+                #   endif_block.add_argument(ty)
 
             # change block
-            self.builder.set_insertion_point_to_end(endif_block)
+            self.builder.set_insertion_point_to_start(endif_block)
 
             # update values yielded by IfOp
             for i, name in enumerate(names):

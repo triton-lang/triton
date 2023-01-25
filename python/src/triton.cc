@@ -245,6 +245,12 @@ void init_triton_ir(py::module &&m) {
           return false;
         });
       })
+      .def("__str__",  [](mlir::Block &self) {
+         std::string str;
+         llvm::raw_string_ostream os(str);
+         self.print(os);
+         return str;
+      })
       .def("has_terminator", [](mlir::Block &self) {
         return !self.empty() && 
                self.back().hasTrait<mlir::OpTrait::IsTerminator>();
