@@ -197,7 +197,8 @@ void init_triton_ir(py::module &&m) {
       .def("replace_all_uses_with",
            [](mlir::Value &self, mlir::Value &newValue) {
              self.replaceAllUsesWith(newValue);
-           });
+           })
+      .def("get_type", &mlir::Value::getType);
 
   py::class_<mlir::BlockArgument, mlir::Value>(m, "block_argument");
 
@@ -208,9 +209,13 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<mlir::Block>(m, "block")
       .def("arg",
-           [](mlir::Block &self, int index) -> mlir::BlockArgument {
-             return self.getArgument(index);
-           })
+         [](mlir::Block &self, int index) -> mlir::BlockArgument {
+           return self.getArgument(index);
+      })
+      .def("add_argument", [](mlir::Block &self, mlir::Type ty) {
+         auto loc = mlir::UnknownLoc::get(ty.getContext());
+         self.addArgument(ty, loc);
+      })
       .def("get_num_arguments", &mlir::Block::getNumArguments)
       .def("dump", &mlir::Block::dump)
       .def("move_before", &mlir::Block::moveBefore)
@@ -622,6 +627,22 @@ void init_triton_ir(py::module &&m) {
             return new mlir::Block();
           },
           ret::reference)
+      // Unstructured control flow
+      .def("create_cond_branch",
+            [](mlir::OpBuilder &self, mlir::Value condition, mlir::Block *trueDest,
+                mlir::Block *falseDest) {
+              auto loc = self.getUnknownLoc();
+              self.create<mlir::CondBranchOp>(loc, condition, trueDest,
+                                              falseDest);
+              return;
+            })
+      .def("create_branch",
+           [](mlir::OpBuilder &self, mlir::Block *dest,
+              std::vector<mlir::Value> &args) {
+             auto loc = self.getUnknownLoc();
+             self.create<mlir::BranchOp>(loc, dest, args);
+             return;
+           })
       // Structured control flow
       .def("create_for_op",
            [](mlir::OpBuilder &self, mlir::Value &lb, mlir::Value &ub,

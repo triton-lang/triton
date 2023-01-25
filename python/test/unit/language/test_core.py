@@ -1729,6 +1729,54 @@ def test_libdevice_scalar(dtype_str, expr, lib_path):
     np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
 
 # -----------------------
+# test control flow
+# -----------------------
+
+def test_if_else():
+      
+    @triton.jit
+    def kernel(Cond, TrueVal, FalseVal, Out):
+        if tl.load(Cond):
+          val = tl.load(TrueVal)
+        else:
+          val = tl.load(FalseVal)
+        tl.store(Out, val)
+  
+    out = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+    true_val = to_triton(np.full((1,), 1, dtype=np.int32), device='cuda')
+    false_val = to_triton(np.full((1,), 2, dtype=np.int32), device='cuda')
+    cond = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+    # True
+    cond[0] = True
+    kernel[(1,)](cond, true_val, false_val, out)
+    assert to_numpy(out)[0] == true_val[0]
+    # False
+    cond[0] = False
+    kernel[(1,)](cond, true_val, false_val, out)
+    assert to_numpy(out)[0] == false_val[0]
+
+def test_if_return():
+
+    @triton.jit
+    def kernel(ExitEarly, Out):
+        if tl.load(ExitEarly):
+            tl.store(Out, 0)
+            return
+        tl.store(Out, 1)
+
+    out = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+    exit_early = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+    # exit early path taken
+    exit_early[0] = 1
+    kernel[(1,)](exit_early, out)
+    assert to_numpy(out)[0] == 0
+    # exit early path not taken
+    exit_early[0] = 0
+    kernel[(1,)](exit_early, out)
+    assert to_numpy(out)[0] == 1
+
+
+# -----------------------
 # test layout conversions
 # -----------------------
 # TODO: backend hsould be tested separately
