@@ -1775,7 +1775,10 @@ def test_if_return():
     kernel[(1,)](exit_early, out)
     assert to_numpy(out)[0] == 1
 
-def test_nested_if_else_return():
+@pytest.mark.parametrize("_cond1", [True, False])
+@pytest.mark.parametrize("_cond2", [True, False])
+@pytest.mark.parametrize("_cond3", [True, False])
+def test_nested_if_else_return(_cond1, _cond2, _cond3):
     
     @triton.jit
     def kernel(Cond1, Cond2, Cond3, Val1, Val2, Val3, Out):
@@ -1791,31 +1794,27 @@ def test_nested_if_else_return():
           else:
             val = tl.load(Val3)
         tl.store(Out, val)
+    
 
     out = to_triton(np.full((1,), -1, dtype=np.int32), device='cuda')
-    cond1 = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
-    cond2 = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
-    cond3 = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+    cond1 = to_triton(np.full((1,), _cond1, dtype=np.int32), device='cuda')
+    cond2 = to_triton(np.full((1,), _cond2, dtype=np.int32), device='cuda')
+    cond3 = to_triton(np.full((1,), _cond3, dtype=np.int32), device='cuda')
     val1 = to_triton(np.full((1,), 1, dtype=np.int32), device='cuda')
     val2 = to_triton(np.full((1,), 2, dtype=np.int32), device='cuda')
     val3 = to_triton(np.full((1,), 3, dtype=np.int32), device='cuda')
+    kernel[(1,)](cond1, cond2, cond3, val1, val2, val3, out)
     targets = {
-      (True, True, True): 1,
-      (True, True, False): 1,
-      (True, False, True): -1,
-      (True, False, False): -1,
-      (False, True, True): 2,
-      (False, True, False): 3,
-      (False, False, True): 2,
-      (False, False, False): 3,
+      (True, True, True): val1[0],
+      (True, True, False): val1[0],
+      (True, False, True): out[0],
+      (True, False, False): out[0],
+      (False, True, True): val2[0],
+      (False, True, False): val3[0],
+      (False, False, True): val2[0],
+      (False, False, False): val3[0],
     }
-    for (cond1_val, cond2_val, cond3_val), ret in targets.items():
-      out[0] = -1
-      cond1[0] = cond1_val
-      cond2[0] = cond2_val
-      cond3[0] = cond3_val
-      kernel[(1,)](cond1, cond2, cond3, val1, val2, val3, out)
-      assert to_numpy(out)[0] == ret
+    assert out[0] == targets[(_cond1, _cond2, _cond3)]
 
 
 # -----------------------
