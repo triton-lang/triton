@@ -403,11 +403,13 @@ class CodeGenerator(ast.NodeVisitor):
                         names.append(name)
                         ret_types.append(then_defs[name].type)
                         ir_ret_types.append(then_defs[name].handle.get_type())
+                        else_defs[name] = liveins[name]
                     elif name in else_defs:
                         assert else_defs[name].type == liveins[name].type
                         names.append(name)
                         ret_types.append(else_defs[name].type)
                         ir_ret_types.append(else_defs[name].handle.get_type())
+                        then_defs[name] = liveins[name]
  
                 # then terminator
                 self.builder.set_insertion_point_to_end(then_block)
@@ -520,12 +522,12 @@ class CodeGenerator(ast.NodeVisitor):
                     # We should not def new constexpr
                     assert self.is_triton_tensor(loop_defs[name])
                     assert self.is_triton_tensor(liveins[name])
-                    if loop_defs[name].type == liveins[name].type:
-                        # these are loop-carried values
-                        names.append(name)
-                        ret_types.append(loop_defs[name].type)
-                        init_args.append(liveins[name])
-                        yields.append(loop_defs[name])
+                    assert loop_defs[name].type == liveins[name].type
+                    # these are loop-carried values
+                    names.append(name)
+                    ret_types.append(loop_defs[name].type)
+                    init_args.append(liveins[name])
+                    yields.append(loop_defs[name])
 
             self.builder.set_insertion_point_to_end(insert_block)
             while_op = self.builder.create_while_op([ty.to_ir(self.builder) for ty in ret_types],
