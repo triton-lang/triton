@@ -1816,6 +1816,29 @@ def test_nested_if_else_return(_cond1, _cond2, _cond3):
     }
     assert out[0] == targets[(_cond1, _cond2, _cond3)]
 
+def test_while():
+
+    @triton.jit
+    def kernel(InitI, Bound, CutOff, OutI, OutJ):
+        init_i = tl.load(InitI)
+        curr_i = init_i
+        j = 0
+        while curr_i == init_i and j < tl.load(Bound):
+            curr_i = curr_i + (j == tl.load(CutOff))
+            j += 1
+        tl.store(OutI, curr_i)
+        tl.store(OutJ, j)
+
+    out_i = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+    out_j = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+    init_i = to_triton(np.full((1,), 1, dtype=np.int32), device='cuda')
+    bound = to_triton(np.full((1,), 10, dtype=np.int32), device='cuda')
+    cut_off = to_triton(np.full((1,), 5, dtype=np.int32), device='cuda')
+    kernel[(1,)](init_i, bound, cut_off, out_i, out_j)
+    assert out_i[0] == init_i[0] + 1
+    assert out_j[0] == cut_off[0] + 1
+            
+
 
 # -----------------------
 # test layout conversions

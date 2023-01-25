@@ -501,11 +501,6 @@ class CodeGenerator(ast.NodeVisitor):
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
 
-            # condition (the before region)
-            cond_block = self.builder.create_block()
-            self.builder.set_insertion_point_to_start(cond_block)
-            cond = self.visit(node.test)
-
             # loop body (the after region)
             loop_block = self.builder.create_block()
             self.builder.set_insertion_point_to_start(loop_block)
@@ -535,7 +530,11 @@ class CodeGenerator(ast.NodeVisitor):
             # merge the condition region
             before_block = self.builder.create_block_with_parent(while_op.get_before(),
                                                                  [ty.to_ir(self.builder) for ty in ret_types])
-            cond_block.merge_block_before(before_block)
+            self.builder.set_insertion_point_to_start(before_block)
+            for i, name in enumerate(names):
+                self.lscope[name] = triton.language.core.tensor(before_block.arg(i), ret_types[i])
+                self.local_defs[name] = self.lscope[name]
+            cond = self.visit(node.test)
             self.builder.set_insertion_point_to_end(before_block)
             # create ConditionOp: e.g., scf.condition(%cond) %arg0, %arg1, ...
             self.builder.create_condition_op(cond.handle, [before_block.arg(i) for i in range(len(init_args))])
@@ -548,7 +547,6 @@ class CodeGenerator(ast.NodeVisitor):
 
         # update global uses in while_op
         for i, name in enumerate(names):
-            before_block.replace_use_in_block_with(init_args[i].handle, before_block.arg(i))
             after_block.replace_use_in_block_with(init_args[i].handle, after_block.arg(i))
 
         # WhileOp defines new values, update the symbol table (lscope, local_defs)
@@ -878,7 +876,6 @@ def build_triton_ir(fn, signature, specialization, constants):
 
 
 def optimize_triton_ir(mod):
-    print(str(mod))
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_inliner_pass()
