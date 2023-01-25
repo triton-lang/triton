@@ -1775,6 +1775,47 @@ def test_if_return():
     kernel[(1,)](exit_early, out)
     assert to_numpy(out)[0] == 1
 
+def test_nested_if_else_return():
+    
+    @triton.jit
+    def kernel(Cond1, Cond2, Cond3, Val1, Val2, Val3, Out):
+        val = 0
+        if tl.load(Cond1):
+          if tl.load(Cond2):
+            val = tl.load(Val1)
+          else:
+            return
+        else:
+          if tl.load(Cond3):
+            val = tl.load(Val2)
+          else:
+            val = tl.load(Val3)
+        tl.store(Out, val)
+
+    out = to_triton(np.full((1,), -1, dtype=np.int32), device='cuda')
+    cond1 = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+    cond2 = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+    cond3 = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+    val1 = to_triton(np.full((1,), 1, dtype=np.int32), device='cuda')
+    val2 = to_triton(np.full((1,), 2, dtype=np.int32), device='cuda')
+    val3 = to_triton(np.full((1,), 3, dtype=np.int32), device='cuda')
+    targets = {
+      (True, True, True): 1,
+      (True, True, False): 1,
+      (True, False, True): -1,
+      (True, False, False): -1,
+      (False, True, True): 2,
+      (False, True, False): 3,
+      (False, False, True): 2,
+      (False, False, False): 3,
+    }
+    for (cond1_val, cond2_val, cond3_val), ret in targets.items():
+      cond1[0] = cond1_val
+      cond2[0] = cond2_val
+      cond3[0] = cond3_val
+      kernel[(1,)](cond1, cond2, cond3, val1, val2, val3, out)
+      assert to_numpy(out)[0] == ret
+
 
 # -----------------------
 # test layout conversions

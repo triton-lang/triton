@@ -367,7 +367,8 @@ class CodeGenerator(ast.NodeVisitor):
                 then_block = self.builder.create_block()
                 else_block = self.builder.create_block()
                 self.builder.set_insertion_point_to_start(then_block)
-                then_has_returned = self.visit_compound_statement(node.body)
+                self.visit_compound_statement(node.body)
+                # then_block = self.builder.get_insertion_block()
                 then_defs = self.local_defs.copy()
 
                 # when need an else block when:
@@ -375,13 +376,13 @@ class CodeGenerator(ast.NodeVisitor):
                 #   or
                 # 2. the then block defines new variable
                 else_defs = {}
-                else_has_returned = False
                 if then_defs or node.orelse:
                     if node.orelse:
                         self.lscope = liveins
                         self.local_defs = {}
                         self.builder.set_insertion_point_to_end(else_block)
-                        else_has_returned = self.visit_compound_statement(node.orelse)
+                        self.visit_compound_statement(node.orelse)
+                        # then_block = self.builder.get_insertion_block()
                         else_defs = self.local_defs.copy()
                     else:
                         # collect else_defs
@@ -414,27 +415,27 @@ class CodeGenerator(ast.NodeVisitor):
                             ir_ret_types.append(else_defs[else_name].handle.get_type())
 
                 # create basic-block after conditional
-                after_block = self.builder.create_block()
+                endif_block = self.builder.create_block()
                 for ty in ir_ret_types:
-                  after_block.add_argument(ty)
+                  endif_block.add_argument(ty)
 
                 self.builder.set_insertion_point_to_end(ip_block)
                 self.builder.create_cond_branch(cond.handle, then_block, else_block)
                 # then block
                 self.builder.set_insertion_point_to_end(then_block)
-                if not then_has_returned:
-                  self.builder.create_branch(after_block, [then_defs[n].handle for n in names])
+                if not then_block.has_terminator():
+                  self.builder.create_branch(endif_block, [then_defs[n].handle for n in names])
                 # else block
                 self.builder.set_insertion_point_to_end(else_block)
-                if not else_has_returned:
-                  self.builder.create_branch(after_block, [else_defs[n].handle for n in names])
+                if not else_block.has_terminator():
+                  self.builder.create_branch(endif_block, [else_defs[n].handle for n in names])
 
             # change block
-            self.builder.set_insertion_point_to_end(after_block)
+            self.builder.set_insertion_point_to_end(endif_block)
 
             # update values yielded by IfOp
             for i, name in enumerate(names):
-                new_tensor = triton.language.core.tensor(after_block.arg(i), ret_types[i])
+                new_tensor = triton.language.core.tensor(endif_block.arg(i), ret_types[i])
                 self.lscope[name] = new_tensor
                 self.local_defs[name] = new_tensor
 
@@ -880,6 +881,7 @@ def build_triton_ir(fn, signature, specialization, constants):
 
 
 def optimize_triton_ir(mod):
+    print(str(mod))
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_inliner_pass()
