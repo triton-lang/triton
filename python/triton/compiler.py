@@ -127,6 +127,7 @@ class CodeGenerator(ast.NodeVisitor):
             'isinstance': isinstance,
             'getattr': getattr,
         }
+        self.scf_stack = []
         # SSA-construction
         # name => triton.language.tensor
         self.local_defs: Dict[str, triton.language.tensor] = {}
@@ -357,89 +358,160 @@ class CodeGenerator(ast.NodeVisitor):
         else:
             return getattr(lhs, fn)(rhs)
 
+    def visit_if_top_level(self, cond, node):
+        with enter_sub_region(self) as sr:
+            liveins, ip_block = sr
+            then_block = self.builder.create_block()
+            else_block = self.builder.create_block()
+            # create basic-block after conditional
+            endif_block = self.builder.create_block()
+            # create branch
+            self.builder.set_insertion_point_to_end(ip_block)
+            self.builder.create_cond_branch(cond.handle, then_block, else_block)
+            # then block
+            self.builder.set_insertion_point_to_start(then_block)
+            self.visit_compound_statement(node.body)
+            then_block = self.builder.get_insertion_block()
+            then_defs = self.local_defs.copy()
+            # else block
+            self.builder.set_insertion_point_to_start(else_block)
+            else_defs = {}
+            if node.orelse:
+              self.local_defs = {}
+              self.visit_compound_statement(node.orelse)
+              else_defs = self.local_defs.copy()
+              else_block = self.builder.get_insertion_block()
+            else:
+              for name in then_defs:
+                if name in liveins:
+                    assert self.is_triton_tensor(then_defs[name])
+                    assert self.is_triton_tensor(liveins[name])
+                    else_defs[name] = liveins[name]
+            
+            # update block arguments
+            names = []
+            ret_types = []
+            ir_ret_types = []
+            for name in liveins | then_defs | else_defs:
+                if name in then_defs and name in else_defs:
+                    assert then_defs[name].type == else_defs[name].type
+                if name in then_defs:
+                    if name in liveins:
+                      assert then_defs[name].type == liveins[name].type
+                    names.append(name)
+                    ret_types.append(then_defs[name].type)
+                    ir_ret_types.append(then_defs[name].handle.get_type())
+                    if not name in else_defs:
+                      else_defs[name] = liveins[name]
+                elif name in else_defs:
+                    if name in liveins:
+                      assert else_defs[name].type == liveins[name].type
+                    names.append(name)
+                    ret_types.append(else_defs[name].type)
+                    ir_ret_types.append(else_defs[name].handle.get_type())
+                    if not name in then_defs:
+                      then_defs[name] = liveins[name]
+
+            # then terminator
+            self.builder.set_insertion_point_to_end(then_block)
+            if not then_block.has_terminator():
+              self.builder.create_branch(endif_block, [then_defs[n].handle for n in names])
+            # else terminator
+            self.builder.set_insertion_point_to_end(else_block)
+            if not else_block.has_terminator():
+              self.builder.create_branch(endif_block, [else_defs[n].handle for n in names])
+            for ty in ir_ret_types:
+              endif_block.add_argument(ty)
+
+        # change block
+        self.builder.set_insertion_point_to_start(endif_block)
+
+        # update values yielded by IfOp
+        for i, name in enumerate(names):
+            new_tensor = triton.language.core.tensor(endif_block.arg(i), ret_types[i])
+            self.lscope[name] = new_tensor
+            self.local_defs[name] = new_tensor
+
+    def visit_if_scf(self, cond, node):
+        with enter_sub_region(self) as sr:
+            liveins, ip_block = sr
+            liveins_copy = liveins.copy()
+            then_block = self.builder.create_block()
+            self.builder.set_insertion_point_to_start(then_block)
+            self.visit_compound_statement(node.body)
+            then_defs = self.local_defs.copy()
+
+            # when need an else block when:
+            # 1. we have an orelse node
+            #   or
+            # 2. the then block defines new variable
+            else_defs = {}
+            if then_defs or node.orelse:
+                if node.orelse:
+                    self.lscope = liveins
+                    self.local_defs = {}
+                    else_block = self.builder.create_block()
+                    self.builder.set_insertion_point_to_end(else_block)
+                    self.visit_compound_statement(node.orelse)
+                    else_defs = self.local_defs.copy()
+                else:
+                    # collect else_defs
+                    for name in then_defs:
+                        if name in liveins:
+                            assert self.is_triton_tensor(then_defs[name])
+                            assert self.is_triton_tensor(liveins[name])
+                            else_defs[name] = liveins[name]
+            # collect yields
+            names = []
+            ret_types = []
+            for then_name in then_defs:
+                for else_name in else_defs:
+                    if then_name == else_name:
+                        if then_defs[then_name].type == else_defs[else_name].type:
+                            names.append(then_name)
+                            ret_types.append(then_defs[then_name].type)
+
+            # defined in else block but not in then block
+            # to find in parent scope and yield them
+            for else_name in else_defs:
+                if else_name in liveins and else_name not in then_defs:
+                    if else_defs[else_name].type == liveins[else_name].type:
+                        names.append(else_name)
+                        ret_types.append(else_defs[else_name].type)
+                        then_defs[else_name] = liveins_copy[else_name]
+            self.builder.set_insertion_point_to_end(ip_block)
+
+            if then_defs or node.orelse:  # with else block
+                if_op = self.builder.create_if_op([ty.to_ir(self.builder) for ty in ret_types], cond.handle, True)
+                then_block.merge_block_before(if_op.get_then_block())
+                self.builder.set_insertion_point_to_end(if_op.get_then_block())
+                if len(names) > 0:
+                    self.builder.create_yield_op([then_defs[n].handle for n in names])
+                if not node.orelse:
+                    else_block = if_op.get_else_block()
+                else:
+                    else_block.merge_block_before(if_op.get_else_block())
+                self.builder.set_insertion_point_to_end(if_op.get_else_block())
+                if len(names) > 0:
+                    self.builder.create_yield_op([else_defs[n].handle for n in names])
+            else:  # no else block
+                if_op = self.builder.create_if_op([ty.to_ir(self.builder) for ty in ret_types], cond.handle, False)
+                then_block.merge_block_before(if_op.get_then_block())
+
+        # update values yielded by IfOp
+        for i, name in enumerate(names):
+            new_tensor = triton.language.core.tensor(if_op.get_result(i), ret_types[i])
+            self.lscope[name] = new_tensor
+            self.local_defs[name] = new_tensor
+
     def visit_If(self, node):
         cond = self.visit(node.test)
         if isinstance(cond, triton.language.tensor):
             cond = cond.to(triton.language.int1, _builder=self.builder)
-            with enter_sub_region(self) as sr:
-                liveins, ip_block = sr
-                liveins_copy = liveins.copy()
-                then_block = self.builder.create_block()
-                else_block = self.builder.create_block()
-                # create basic-block after conditional
-                endif_block = self.builder.create_block()
-                # create branch
-                self.builder.set_insertion_point_to_end(ip_block)
-                self.builder.create_cond_branch(cond.handle, then_block, else_block)
-                # then block
-                self.builder.set_insertion_point_to_start(then_block)
-                self.visit_compound_statement(node.body)
-                then_block = self.builder.get_insertion_block()
-                then_defs = self.local_defs.copy()
-                # else block
-                self.builder.set_insertion_point_to_start(else_block)
-                else_defs = {}
-                if node.orelse:
-                  self.local_defs = {}
-                  self.visit_compound_statement(node.orelse)
-                  else_defs = self.local_defs.copy()
-                  else_block = self.builder.get_insertion_block()
-                else:
-                  for name in then_defs:
-                    if name in liveins:
-                        assert self.is_triton_tensor(then_defs[name])
-                        assert self.is_triton_tensor(liveins[name])
-                        else_defs[name] = liveins[name]
-                
-                # update block arguments
-                names = []
-                ret_types = []
-                ir_ret_types = []
-                for name in liveins | then_defs | else_defs:
-                    if name in then_defs and name in else_defs:
-                        assert then_defs[name].type == else_defs[name].type
-                    if name in then_defs:
-                        if name in liveins:
-                          assert then_defs[name].type == liveins[name].type
-                        names.append(name)
-                        ret_types.append(then_defs[name].type)
-                        ir_ret_types.append(then_defs[name].handle.get_type())
-                        if not name in else_defs:
-                          else_defs[name] = liveins[name]
-                    elif name in else_defs:
-                        if name in liveins:
-                          assert else_defs[name].type == liveins[name].type
-                        names.append(name)
-                        ret_types.append(else_defs[name].type)
-                        ir_ret_types.append(else_defs[name].handle.get_type())
-                        if not name in then_defs:
-                          then_defs[name] = liveins[name]
- 
-                # then terminator
-                self.builder.set_insertion_point_to_end(then_block)
-                if not then_block.has_terminator():
-                  self.builder.create_branch(endif_block, [then_defs[n].handle for n in names])
-                # else terminator
-                # print(str(else_block))
-                self.builder.set_insertion_point_to_end(else_block)
-                if not else_block.has_terminator():
-                  self.builder.create_branch(endif_block, [else_defs[n].handle for n in names])
-                for ty in ir_ret_types:
-                  endif_block.add_argument(ty)
-                # print(str(endif_block))
-
-                # for ty in ir_ret_types:
-                #   endif_block.add_argument(ty)
-
-            # change block
-            self.builder.set_insertion_point_to_start(endif_block)
-
-            # update values yielded by IfOp
-            for i, name in enumerate(names):
-                new_tensor = triton.language.core.tensor(endif_block.arg(i), ret_types[i])
-                self.lscope[name] = new_tensor
-                self.local_defs[name] = new_tensor
-
+            if self.scf_stack:
+              self.visit_if_scf(cond, node)
+            else:
+              self.visit_if_top_level(cond, node)
         else:
             if isinstance(cond, triton.language.constexpr):
                 cond = cond.value
@@ -508,7 +580,9 @@ class CodeGenerator(ast.NodeVisitor):
             # loop body (the after region)
             loop_block = self.builder.create_block()
             self.builder.set_insertion_point_to_start(loop_block)
+            self.scf_stack.append(node)
             self.visit_compound_statement(node.body)
+            self.scf_stack.pop()
             loop_defs = self.local_defs
 
             # collect loop-carried values
@@ -619,10 +693,14 @@ class CodeGenerator(ast.NodeVisitor):
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
 
+            # create loop body block
+            block = self.builder.create_block()
+            self.builder.set_insertion_point_to_start(block)
+
             # visit loop body
-            dummy = self.builder.create_block()
-            self.builder.set_insertion_point_to_start(dummy)
+            self.scf_stack.append(node)
             self.visit_compound_statement(node.body)
+            self.scf_stack.pop()
 
             # If a variable (name) is defined in both its parent & itself, then it's
             # a loop-carried variable. (They must be of the same type)
@@ -643,24 +721,7 @@ class CodeGenerator(ast.NodeVisitor):
             # create ForOp
             self.builder.set_insertion_point_to_end(insert_block)
             for_op = self.builder.create_for_op(lb, ub, step, [arg.handle for arg in init_args])
-
-            for i, name in enumerate(names):
-                self.set_value(name, triton.language.core.tensor(for_op.get_body(0).arg(i+1), 
-                                     yields[i].type))
-
-            self.builder.set_insertion_point_to_start(for_op.get_body(0))
-            self.visit_compound_statement(node.body)
-            yields = []
-            for name in self.local_defs:
-                if name in liveins:
-                    assert self.is_triton_tensor(self.local_defs[name]), f'{name} is not tensor'
-                    assert self.is_triton_tensor(liveins[name])
-                    if self.local_defs[name].type != liveins[name].type:
-                        local_value = self.local_defs[name]
-                        self.local_defs[name] = local_value.to(liveins[name].dtype, _builder=self.builder)
-                    yields.append(triton.language.core._to_tensor(self.local_defs[name], self.builder))
-
-            new_body = self.builder.get_insertion_block()
+            block.merge_block_before(for_op.get_body(0))
 
             # update induction variable with actual value, and replace all uses
             self.builder.set_insertion_point_to_start(for_op.get_body(0))
@@ -672,9 +733,11 @@ class CodeGenerator(ast.NodeVisitor):
             self.set_value(node.target.id, triton.language.core.tensor(iv, triton.language.core.int32))
 
             # create YieldOp
-            self.builder.set_insertion_point_to_end(new_body)
+            self.builder.set_insertion_point_to_end(for_op.get_body(0))
             if len(yields) > 0:
                 self.builder.create_yield_op([y.handle for y in yields])
+            for_op_region = for_op.get_body(0).get_parent()
+            assert for_op_region.size() == 1, "We use SCF, so the loop body should only have one block"
             # replace global uses with block arguments
             for i, name in enumerate(names):
                 # arg0 is the induction variable
