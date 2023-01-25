@@ -1837,6 +1837,27 @@ def test_while():
     kernel[(1,)](init_i, bound, cut_off, out_i, out_j)
     assert out_i[0] == init_i[0] + 1
     assert out_j[0] == cut_off[0] + 1
+
+def test_for_if():
+
+    @triton.jit
+    def kernel(bound, cutoff, M, N):
+        m = 0
+        n = 0
+        for i in range(bound):
+            if i > cutoff:
+                m = m + 1
+            else:
+                n = n + 1
+        tl.store(M, m)
+        tl.store(N, n)
+
+    m = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+    n = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+    kernel[(1,)](10, 7, m, n)
+    print(m[0])
+    print(n[0])
+    
             
 
 

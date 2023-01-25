@@ -619,11 +619,9 @@ class CodeGenerator(ast.NodeVisitor):
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
 
-            # create loop body block
-            block = self.builder.create_block()
-            self.builder.set_insertion_point_to_start(block)
-
             # visit loop body
+            dummy = self.builder.create_block()
+            self.builder.set_insertion_point_to_start(dummy)
             self.visit_compound_statement(node.body)
 
             # If a variable (name) is defined in both its parent & itself, then it's
@@ -645,7 +643,24 @@ class CodeGenerator(ast.NodeVisitor):
             # create ForOp
             self.builder.set_insertion_point_to_end(insert_block)
             for_op = self.builder.create_for_op(lb, ub, step, [arg.handle for arg in init_args])
-            block.merge_block_before(for_op.get_body(0))
+
+            for i, name in enumerate(names):
+                self.set_value(name, triton.language.core.tensor(for_op.get_body(0).arg(i+1), 
+                                     yields[i].type))
+
+            self.builder.set_insertion_point_to_start(for_op.get_body(0))
+            self.visit_compound_statement(node.body)
+            yields = []
+            for name in self.local_defs:
+                if name in liveins:
+                    assert self.is_triton_tensor(self.local_defs[name]), f'{name} is not tensor'
+                    assert self.is_triton_tensor(liveins[name])
+                    if self.local_defs[name].type != liveins[name].type:
+                        local_value = self.local_defs[name]
+                        self.local_defs[name] = local_value.to(liveins[name].dtype, _builder=self.builder)
+                    yields.append(triton.language.core._to_tensor(self.local_defs[name], self.builder))
+
+            new_body = self.builder.get_insertion_block()
 
             # update induction variable with actual value, and replace all uses
             self.builder.set_insertion_point_to_start(for_op.get_body(0))
@@ -657,11 +672,9 @@ class CodeGenerator(ast.NodeVisitor):
             self.set_value(node.target.id, triton.language.core.tensor(iv, triton.language.core.int32))
 
             # create YieldOp
-            self.builder.set_insertion_point_to_end(for_op.get_body(0))
+            self.builder.set_insertion_point_to_end(new_body)
             if len(yields) > 0:
                 self.builder.create_yield_op([y.handle for y in yields])
-            for_op_region = for_op.get_body(0).get_parent()
-            assert for_op_region.size() == 1, "We use SCF, so the loop body should only have one block"
             # replace global uses with block arguments
             for i, name in enumerate(names):
                 # arg0 is the induction variable
@@ -880,6 +893,7 @@ def build_triton_ir(fn, signature, specialization, constants):
 
 
 def optimize_triton_ir(mod):
+    print(str(mod))
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_inliner_pass()
