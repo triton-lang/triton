@@ -477,7 +477,7 @@ class CodeGenerator(ast.NodeVisitor):
                     assert else_defs[else_name].type == liveins[else_name].type
                     names.append(else_name)
                     ret_types.append(else_defs[else_name].type)
-                    then_defs[else_name] = liveins_copy[else_name]
+                    then_defs[else_name] = liveins[else_name]
             self.builder.set_insertion_point_to_end(ip_block)
 
             if then_defs or node.orelse:  # with else block
@@ -708,9 +708,8 @@ class CodeGenerator(ast.NodeVisitor):
                 if name in liveins:
                     assert self.is_triton_tensor(self.local_defs[name]), f'{name} is not tensor'
                     assert self.is_triton_tensor(liveins[name])
-                    if self.local_defs[name].type != liveins[name].type:
-                        local_value = self.local_defs[name]
-                        self.local_defs[name] = local_value.to(liveins[name].dtype, _builder=self.builder)
+                    assert self.local_defs[name].type == liveins[name].type,\
+                            f'loop-carried variable ({name}) type is different from initialized value'
                     names.append(name)
                     init_args.append(triton.language.core._to_tensor(liveins[name], self.builder))
                     yields.append(triton.language.core._to_tensor(self.local_defs[name], self.builder))

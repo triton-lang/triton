@@ -95,7 +95,7 @@ public:
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto reduce = cast<triton::ReduceOp>(*op);
-    auto reduceArg = dyn_cast<triton::gpu::ConvertLayoutOp>(
+    auto reduceArg = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
         reduce.getOperand().getDefiningOp());
     if (!reduceArg)
       return mlir::failure();
