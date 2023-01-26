@@ -378,6 +378,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.builder.set_insertion_point_to_start(else_block)
             else_defs = {}
             if node.orelse:
+              self.lscope = liveins
               self.local_defs = {}
               self.visit_compound_statement(node.orelse)
               else_defs = self.local_defs.copy()
@@ -396,7 +397,9 @@ class CodeGenerator(ast.NodeVisitor):
             for then_name in then_defs:
                 for else_name in else_defs:
                     if then_name == else_name:
-                        assert then_defs[then_name].type == else_defs[else_name].type
+                        assert then_defs[then_name].type == else_defs[else_name].type,\
+                                 f'`{then_name}` has type {then_defs[then_name].type} in then block, '\
+                                 f'but type {else_defs[else_name].type} in else block'
                         names.append(then_name)
                         ret_types.append(then_defs[then_name].type)
                         ir_ret_types.append(then_defs[then_name].handle.get_type())
@@ -405,11 +408,13 @@ class CodeGenerator(ast.NodeVisitor):
             # to find in parent scope and yield them
             for else_name in else_defs:
                 if else_name in liveins and else_name not in then_defs:
-                    assert else_defs[else_name].type == liveins[else_name].type
+                    assert else_defs[else_name].type == liveins[else_name].type,\
+                            f'Initial value for `{else_name}` is of type {liveins[else_name].type}, '\
+                            f'but the else block redefines it as {else_defs[else_name].type}'
                     names.append(else_name)
                     ret_types.append(else_defs[else_name].type)
                     ir_ret_types.append(else_defs[else_name].handle.get_type())
-                    then_defs[else_name] = liveins_copy[else_name]
+                    then_defs[else_name] = liveins[else_name]
 
             # then terminator
             self.builder.set_insertion_point_to_end(then_block)
@@ -466,7 +471,9 @@ class CodeGenerator(ast.NodeVisitor):
             for then_name in then_defs:
                 for else_name in else_defs:
                     if then_name == else_name:
-                        assert then_defs[then_name].type == else_defs[else_name].type
+                        assert then_defs[then_name].type == else_defs[else_name].type,\
+                                 f'`{then_name}` has type {then_defs[then_name].type} in then block, '\
+                                 f'but type {else_defs[else_name].type} in else block'
                         names.append(then_name)
                         ret_types.append(then_defs[then_name].type)
 
@@ -474,7 +481,9 @@ class CodeGenerator(ast.NodeVisitor):
             # to find in parent scope and yield them
             for else_name in else_defs:
                 if else_name in liveins and else_name not in then_defs:
-                    assert else_defs[else_name].type == liveins[else_name].type
+                    assert else_defs[else_name].type == liveins[else_name].type,\
+                           f'Initial value for `{else_name}` is of type {liveins[else_name].type}, '\
+                           f'but the else block redefines it as {else_defs[else_name].type}'
                     names.append(else_name)
                     ret_types.append(else_defs[else_name].type)
                     then_defs[else_name] = liveins[else_name]
