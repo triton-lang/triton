@@ -112,7 +112,7 @@ private:
   /// particularly useful to infer the contiguity
   /// of operations (e.g., add) involving a constant.
   /// Suppose we have an array of N elements,
-  /// with a contiguity value C,
+  /// with a constancy value C,
   /// the array can be divided into a list of
   /// N/C sequences of C elements with the same value.
   /// Since we have N = 2^k, C must be a power of two.
@@ -143,31 +143,13 @@ public:
     return info.known() && info.getConstancy(dim) == shape[dim];
   }
 
-  static bool isContiguityConstancyAligned(const AxisInfo &lhs,
-                                           const AxisInfo &rhs,
-                                           ArrayRef<int64_t> shape, int dim) {
-    return lhs.getContiguity(dim) % rhs.getConstancy(dim) == 0 ||
-           rhs.getContiguity(dim) % lhs.getConstancy(dim) == 0;
-  }
-
-  static bool isContiguityAligned(const AxisInfo &lhs, const AxisInfo &rhs,
-                                  ArrayRef<int64_t> shape, int dim) {
-    return lhs.getContiguity(dim) % rhs.getContiguity(dim) == 0 ||
-           rhs.getContiguity(dim) % lhs.getContiguity(dim) == 0;
-  }
-
-  static bool isConstancyAligned(const AxisInfo &lhs, const AxisInfo &rhs,
-                                 ArrayRef<int64_t> shape, int dim) {
-    return lhs.getConstancy(dim) % rhs.getConstancy(dim) == 0 ||
-           rhs.getConstancy(dim) % lhs.getConstancy(dim) == 0;
-  }
-
   virtual AxisInfo
   getAxisInfo(Operation *op, ArrayRef<LatticeElement<AxisInfo> *> operands) = 0;
 
   virtual bool match(Operation *op) = 0;
 };
 
+/// Base class for all operations
 template <typename OpTy> class AxisInfoVisitorImpl : public AxisInfoVisitor {
 public:
   using AxisInfoVisitor::AxisInfoVisitor;
@@ -185,10 +167,11 @@ public:
   }
 };
 
+/// Binary operations
 template <typename OpTy>
 class BinaryOpVisitorImpl : public AxisInfoVisitorImpl<OpTy> {
 public:
-  using AxisInfoVisitorImpl::AxisInfoVisitorImpl<OpTy>;
+  using AxisInfoVisitorImpl<OpTy>::AxisInfoVisitorImpl;
 
   AxisInfo getAxisInfo(OpTy op,
                        ArrayRef<LatticeElement<AxisInfo> *> operands) override {
@@ -234,7 +217,6 @@ class AxisInfoVisitorList {
 public:
   template <typename... Ts, typename = std::enable_if_t<sizeof...(Ts) != 0>>
   void add() {
-    // Iterate over all the types in the parameter pack.
     (visitors.emplace_back(std::make_unique<Ts>()), ...);
   }
 

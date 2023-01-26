@@ -254,8 +254,6 @@ private:
 
   int64_t getConstancy(arith::MulIOp op, const AxisInfo &lhs,
                        const AxisInfo &rhs, int dim) override {
-    auto shape =
-        op->getOperand(0).getType().cast<RankedTensorType>().getShape();
     return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
   }
 
@@ -422,11 +420,8 @@ public:
       divisibility.push_back(opInfo.getDivisibility(0));
       constancy.push_back(retTy.getShape()[d]);
     }
-    std::optional<int64_t> constantValue;
-    if (operands[0]->getValue().getConstantValue().has_value()) {
-      constantValue = operands[0]->getValue().getConstantValue();
-    }
-    return AxisInfo(contiguity, divisibility, constancy, constantValue);
+    return AxisInfo(contiguity, divisibility, constancy,
+                    operands[0]->getValue().getConstantValue());
   }
 };
 
@@ -444,11 +439,8 @@ public:
     contiguity.insert(contiguity.begin() + op.axis(), 1);
     divisibility.insert(divisibility.begin() + op.axis(), 1);
     constancy.insert(constancy.begin() + op.axis(), 1);
-    std::optional<int64_t> constantValue;
-    if (operands[0]->getValue().getConstantValue().has_value()) {
-      constantValue = operands[0]->getValue().getConstantValue();
-    }
-    return AxisInfo(contiguity, divisibility, constancy, constantValue);
+    return AxisInfo(contiguity, divisibility, constancy,
+                    operands[0]->getValue().getConstantValue());
   }
 };
 
@@ -475,7 +467,8 @@ public:
       constancy.push_back(opShape[d] == 1 ? retShape[d]
                                           : opInfo.getConstancy(d));
     }
-    return AxisInfo(contiguity, divisibility, constancy);
+    return AxisInfo(contiguity, divisibility, constancy,
+                    operands[0]->getValue().getConstantValue());
   }
 };
 
@@ -490,7 +483,6 @@ public:
     short rank = resTy.getRank();
     auto lhsInfo = operands[0]->getValue();
     auto rhsInfo = operands[1]->getValue();
-    auto shape = resTy.getShape();
 
     AxisInfo::DimVectorT contiguity, divisibility, constancy;
     std::optional<int64_t> constantValue;
@@ -608,7 +600,7 @@ public:
 
 AxisInfoAnalysis::AxisInfoAnalysis(MLIRContext *context)
     : ForwardDataFlowAnalysis<AxisInfo>(context) {
-  // UnrealizedConversionCast
+  // UnrealizedConversionCast:
   // This is needed by TritonGPUToLLVM, to get AxisInfo when the graph is
   // in the process of a PartialConversion, where UnrealizedConversionCast
   // may exist
