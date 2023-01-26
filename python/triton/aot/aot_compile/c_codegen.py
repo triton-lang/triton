@@ -5,20 +5,12 @@ from typing import Sequence, Tuple
 from pathlib import Path
 
 THREADS_PER_WARP = 32
-from triton.compiler import ty_to_cpp
+# from triton.compiler import ty_to_cpp
 from .compile_metadata import AOTKernelMetadata, CompileMetadata
 
 
-def _unzip(seq_of_pairs):
-    A, B = [], []
-    for (a, b) in seq_of_pairs:
-        A.append(a)
-        B.append(b)
-    return A, B
-
-
 @dataclass
-class CodegenKernelData:
+class TemplateFields:
     kernel_name: str
     compiled_func_name: str
     """ compiler adds specialization info to kernel name. this is the full PTX name"""
@@ -26,7 +18,8 @@ class CodegenKernelData:
     """ the var names that stores the cubin/ptx in source"""
     bin_size: int
     """ lenght in bytes of kernels binary """
-    binary_val: bytes
+    binary_val: str 
+    """ Binary as hex string """
     signature: str
     """ Kernels input args signature """
     arg_pointers: str
@@ -37,29 +30,27 @@ class CodegenKernelData:
     threads_per_warp: int = THREADS_PER_WARP
 
 
-def parse_aot_kerenl_metadata(
-    kernel_meta: AOTKernelMetadata,
+def metadata_to_template_strings(
     compile_meta: CompileMetadata,
     bin_: bytes,
     docstring: str = None,
 ):
-    kernel_name = kernel_meta.name
-    compiled_func_name = compile_meta.compiled_function_name
+    kernel_name = compile_meta.compiled_function_name 
     binary_arg_name = f"{kernel_name}_cubin"
     binary_val, bin_size = bytes_to_uchar_array(bin_)
 
-    names, tt_types = _unzip((p.name, p.type_ann) for p in kernel_meta.params)
-    signature, arg_pointers = signature_tt_to_c_args(names=names, tt_types=tt_types)
+    signature, arg_pointers = signature_tt_to_c_args(names=compile_meta.arg_names, tt_types=compile_meta.signature)
+    num_args = len(compile_meta.arg_names)
 
-    return CodegenKernelData(
+    return TemplateFields(
         kernel_name=kernel_name,
-        compiled_func_name=compiled_func_name,
+        compiled_func_name=kernel_name,
         binary_arg_name=binary_arg_name,
         bin_size=bin_size,
         binary_val=binary_val,
         signature=signature,
         arg_pointers=arg_pointers,
-        num_args=len(names),
+        num_args=num_args,
         threads_per_warp=THREADS_PER_WARP,
         kernel_docstring=docstring or "",
     )
@@ -102,20 +93,72 @@ class CodegenTemplates:
     common_header: str
     kernel_header: str
     default_load: str
+    """ Load cuda module and function using a global CUmodule & CUfunction pointers"""
     default_launch: str
+    """ Launch kernel using the global CUfunction pointers """
     user_launch: str
+    """ User handles kernel loading, and passes CUfunction as an argument """
 
+@dataclass
+class KernelCSource:
+    """ Header and source strings """
+    header: str
+    source: str
+    docstring: str
+    name: str
+
+    def dump_to_file(self, fname: str):
+        _path = Path(fname)
+        h, c =_path.with_suffix(".h"), _path.with_suffix(".c") 
+
+        with h.open("w") as fp:
+                fp.write(self.header)
+        
+        with c.open("w") as fp:
+            fp.write(self.source)
+
+        print(f"\tWritten {self.name} to [{', '.join([str(h), str(c)])}]")
+        if self.docstring:
+            print(f"\t{self.docstring}")
+            print("")
+        print("")
+        return
 
 class CodeGenerator:
     def __init__(self, template_path: str = None):
         if template_path is None:
             template_path = Path(__file__).parent / "kernel.c"
         self._template = Path(template_path).read_text()
-        common_h = parse_template(self._template).common_header
-        self._headers = {"common": common_h}
-        self._sources = {}
+        self._common_h = split_template(self._template).common_header
+        self._gen_code = []
 
-        self._summray_docstrings = {}
+    def make_source(
+        self,
+        compile_meta: CompileMetadata,
+        bin_: bytes,
+        docstring: str = None,
+    ) -> KernelCSource:
+
+        template_fields = metadata_to_template_strings(
+            compile_meta=compile_meta,
+            bin_=bin_,
+            docstring=docstring,
+        )
+        _fields_dict = asdict(template_fields)
+        _code = self._template.format(**_fields_dict)
+        code = split_template(_code)
+
+        header = code.kernel_header
+        source = [
+            f'#include "{template_fields.kernel_name}.h"',
+            code.default_load,
+            code.default_launch,
+            code.user_launch,
+        ]
+        src_str = "\n".join(source)
+
+        return KernelCSource(source=src_str, header=header, docstring=docstring,name=template_fields.kernel_name)
+
 
     def gen_kernel(
         self,
@@ -124,54 +167,28 @@ class CodeGenerator:
         bin_: bytes,
         docstring: str = None,
     ):
-        codegen_data = parse_aot_kerenl_metadata(
-            kernel_meta=kernel_meta,
-            compile_meta=compile_meta,
-            bin_=bin_,
-            docstring=docstring,
-        )
-        _cgen_dict = asdict(codegen_data)
-        _code = self._template.format(**_cgen_dict)
-        code = parse_template(_code)
+        generated_code = self.make_source(kernel_meta=kernel_meta, compile_meta=compile_meta, bin_=bin_, docstring=docstring)
+        self._gen_code.append(generated_code)
+        file_name = generated_code.name
 
-        file_name = codegen_data.kernel_name
-        self._headers[file_name] = code.kernel_header
-        source = [
-            f'#include "{codegen_data.kernel_name}.h"',
-            code.default_load,
-            code.default_launch,
-            code.user_launch,
-        ]
-        src_str = "\n".join(source)
 
-        self._sources[file_name] = src_str
-
-        self._summray_docstrings[file_name] = docstring
+        self._headers[file_name] = generated_code.header 
+        self._sources[file_name] = generated_code.source 
+        self._summray_docstrings[file_name] = generated_code.docstring 
 
     def dump(self, out_dir: str):
         outdir = Path(out_dir)
         print(f"Summary of generated code in ({str(outdir)}):")
-        for hname, txt in self._headers.items():
-            _path = outdir / hname
-            files = []
-            with _path.with_suffix(".h").open("w") as fp:
-                fp.write(txt)
-                files.append(str(_path.with_suffix(".h").name))
 
-            if hname in self._sources:
-                src = self._sources[hname]
-                with _path.with_suffix(".c").open("w") as fp:
-                    fp.write(src)
-                    files.append(str(_path.with_suffix(".c").name))
+        with (out_dir /"common.h").open("w") as fp:
+                fp.write(self._common_h)
 
-            print(f"\tFILES: {', '.join(files)}")
-            if hname in self._summray_docstrings:
-                print(f"\t{self._summray_docstrings[hname]}")
-                print("")
-            print("")
+        code: KernelCSource
+        for code in self._gen_code:
+            file_name = code.name
+            code.dump_to_file(file_name)
 
-
-def parse_template(template_src: str):
+def split_template(template_src: str):
     """
     Helper func to keep sanity when dealing with C code inside a python string
     """
