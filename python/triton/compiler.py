@@ -1296,6 +1296,8 @@ def _build(name, src, srcdir):
         clang = shutil.which("clang")
         gcc = shutil.which("gcc")
         cc = gcc if gcc is not None else clang
+        if cc is None:
+            raise RuntimeError("Failed to find C compiler. Please specify via CC environment variable.")
     py_include_dir = get_paths()["include"]
 
     cc_cmd = [cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
