@@ -11,7 +11,7 @@ struct TestAxisInfoPass
   // LLVM15+
   // MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestAlignmentPass);
 
-  void print(const std::string &name, raw_ostream &os, ArrayRef<int> vals) {
+  void print(const std::string &name, raw_ostream &os, ArrayRef<int64_t> vals) {
     os << name << ": [";
     for (size_t d = 0; d < vals.size(); d++) {
       if (d != 0)

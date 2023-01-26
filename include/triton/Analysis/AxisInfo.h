@@ -175,20 +175,20 @@ public:
 
   AxisInfo getAxisInfo(OpTy op,
                        ArrayRef<LatticeElement<AxisInfo> *> operands) override {
+    auto lhsInfo = operands[0]->getValue();
+    auto rhsInfo = operands[1]->getValue();
     auto rank = lhsInfo.getRank();
     assert(operands.size() == 2 && "Expected two operands");
     AxisInfo::DimVectorT contiguity;
     AxisInfo::DimVectorT divisibility;
     AxisInfo::DimVectorT constancy;
-    auto lhsInfo = operands[0]->getValue();
-    auto rhsInfo = operands[1]->getValue();
     for (auto d = 0; d < rank; ++d) {
-      contiguity.push_back(getContiguity(lhsInfo, rhsInfo, d));
-      divisibility.push_back(getDivisibility(lhsInfo, rhsInfo, d));
-      constancy.push_back(getConstancy(lhsInfo, rhsInfo, d));
+      contiguity.push_back(getContiguity(op, lhsInfo, rhsInfo, d));
+      divisibility.push_back(getDivisibility(op, lhsInfo, rhsInfo, d));
+      constancy.push_back(getConstancy(op, lhsInfo, rhsInfo, d));
     }
     return AxisInfo(contiguity, divisibility, constancy,
-                    getConstantValue(lhsInfo, rhsInfo));
+                    getConstantValue(op, lhsInfo, rhsInfo));
   }
 
 protected:
@@ -216,7 +216,7 @@ protected:
 class AxisInfoVisitorList {
 public:
   template <typename... Ts, typename = std::enable_if_t<sizeof...(Ts) != 0>>
-  void add() {
+  void append() {
     (visitors.emplace_back(std::make_unique<Ts>()), ...);
   }
 

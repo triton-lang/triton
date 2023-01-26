@@ -105,7 +105,7 @@ class CastOpAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
 public:
   using AxisInfoVisitorImpl<OpTy>::AxisInfoVisitorImpl;
 
-  AxisInfo getAxisInfo(Operation *op,
+  AxisInfo getAxisInfo(OpTy op,
                        ArrayRef<LatticeElement<AxisInfo> *> operands) override {
     return operands[0]->getValue();
   }
@@ -186,8 +186,6 @@ private:
 
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
-    auto shape =
-        op->getOperand(0).getType().cast<RankedTensorType>().getShape();
     if (lhs.getConstantValue().has_value() &&
         rhs.getConstantValue().has_value())
       return {lhs.getConstantValue().value() + rhs.getConstantValue().value()};
@@ -223,8 +221,6 @@ private:
 
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
-    auto shape =
-        op->getOperand(0).getType().cast<RankedTensorType>().getShape();
     if (lhs.getConstantValue().has_value() &&
         rhs.getConstantValue().has_value())
       return {lhs.getConstantValue().value() - rhs.getConstantValue().value()};
@@ -283,14 +279,16 @@ private:
   int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                         int dim) override {
     // lhs / 1 = lhs
-    return rhs.getConstantValue().has_value() && rhs.getConstantValue() == 1
+    return rhs.getConstantValue().has_value() &&
+                   rhs.getConstantValue().value() == 1
                ? lhs.getContiguity(dim)
                : 1;
   }
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                        int dim) override {
-    auto shape = op.getOperand(0).getType().cast<RankedTensorType>().getShape();
+    auto shape =
+        op.getResult().getType().template cast<RankedTensorType>().getShape();
     // Case 1: both lhs and rhs are constants.
     auto constancy = gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
     // Case 2: lhs contiguous, rhs constant.
@@ -304,14 +302,14 @@ private:
         rhs.getConstantValue().has_value()) {
       // If d_lhs % p = 0 -> t % p = 0. The total number of ts in the
       // segment is gcd(n, p).
-      if (lhs.getDivisibility(dim) % rhs.getConstantValue() == 0)
-        constancy = std::max(
-            constancy, gcd(lhs.getContiguity(dim), rhs.getConstantValue()));
+      if (lhs.getDivisibility(dim) % rhs.getConstantValue().value() == 0)
+        constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
+                                            rhs.getConstantValue().value()));
       // If p % d_lhs = 0 -> t = p - d_lhs
-      if (rhs.getConstantValue() % lhs.getDivisibility(dim) == 0)
-        constancy = std::max(
-            constancy, gcd(lhs.getContiguity(dim),
-                           rhs.getConstantValue() - lhs.getDivisibility(dim)));
+      if (rhs.getConstantValue().value() % lhs.getDivisibility(dim) == 0)
+        constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
+                                            rhs.getConstantValue().value() -
+                                                lhs.getDivisibility(dim)));
     }
     return constancy;
   }
@@ -323,8 +321,8 @@ private:
     // lhs / rhs = k * k' * gcd(d_lhs, d_rhs) / (p * p' * gcd(d_lhs, d_rhs))
     //           = k / p * k' / p'
     // gcd(k', p') = gcd(d_lhs / gcd(d_lhs, d_rhs), d_rhs / gcd(d_lhs, d_rhs))
-    auto lhsDivisibility = lhs.getDivisibility(d);
-    auto rhsDivisibility = rhs.getDivisibility(d);
+    auto lhsDivisibility = lhs.getDivisibility(dim);
+    auto rhsDivisibility = rhs.getDivisibility(dim);
     auto initGcd = gcd(lhsDivisibility, rhsDivisibility);
     return gcd(lhsDivisibility / initGcd, rhsDivisibility / initGcd);
   };
@@ -351,11 +349,13 @@ private:
     // rhs: p, p + 1, ..., p + n
     // lhs % rhs = k % p, (k + 1) % (p + 1), ..., (k + n) % (p + n)
     // (k + 1) % (p + 1) = k % (p + 1) + 1 % (p + 1) = k + 1
-    auto shape = op.getOperand(0).getType().cast<RankedTensorType>().getShape();
+    auto shape =
+        op.getResult().getType().template cast<RankedTensorType>().getShape();
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
         AxisInfoVisitor::isContiguousDim(rhs, shape, dim)) {
       return lhs.getContiguity(dim);
     }
+    int64_t constancy = 1;
     // Case 2: lhs contiguous, rhs constant
     // lhs: d_lhs * k, d_lhs * k + 1, ..., d_lhs * k + n
     // rhs: p, p, ..., p
@@ -365,18 +365,16 @@ private:
         rhs.getConstantValue().has_value()) {
       // If d_lhs % p = 0 -> t % p = 0. The total number of ts in the
       // segment is gcd(n, p).
-      // 4 * 11, 4 * 11 + 1, 4 * 11 + 2, 4 * 11 + 3
-      // 4, 4, 4, 4
-      if (lhs.getDivisibility(dim) % rhs.getConstantValue() == 0)
-        constancy = std::max(
-            constancy, gcd(lhs.getContiguity(dim), rhs.getConstantValue()));
+      if (lhs.getDivisibility(dim) % rhs.getConstantValue().value() == 0)
+        constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
+                                            rhs.getConstantValue().value()));
       // If p % d_lhs = 0 -> t = p - d_lhs
-      if (rhs.getConstantValue() % lhs.getDivisibility(dim) == 0)
-        constancy = std::max(
-            constancy, gcd(lhs.getContiguity(dim),
-                           rhs.getConstantValue() - lhs.getDivisibility(dim)));
+      if (rhs.getConstantValue().value() % lhs.getDivisibility(dim) == 0)
+        constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
+                                            rhs.getConstantValue().value() -
+                                                lhs.getDivisibility(dim)));
     }
-    return 1;
+    return constancy;
   }
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
@@ -390,14 +388,14 @@ private:
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                        int dim) override {
-    return = gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
+    return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
   }
 
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
         rhs.getConstantValue().has_value())
-      return {lhs.getConstantValue() % rhs.getConstantValue()};
+      return {lhs.getConstantValue().value() % rhs.getConstantValue().value()};
     return {};
   }
 };
@@ -479,7 +477,7 @@ public:
 
   AxisInfo getAxisInfo(OpTy op,
                        ArrayRef<LatticeElement<AxisInfo> *> operands) override {
-    auto resTy = op.getResult(0).getType().cast<TensorType>();
+    auto resTy = op.getResult().getType().template cast<RankedTensorType>();
     short rank = resTy.getRank();
     auto lhsInfo = operands[0]->getValue();
     auto rhsInfo = operands[1]->getValue();
@@ -513,7 +511,7 @@ private:
     return op.predicate();
   }
 
-  static arith::CmpFPredicate getPredicate(arith::CmpIOp op) {
+  static arith::CmpIPredicate getPredicate(arith::CmpIOp op) {
     return op.getPredicate();
   }
 
@@ -554,7 +552,7 @@ public:
 
   AxisInfo getAxisInfo(OpTy op,
                        ArrayRef<LatticeElement<AxisInfo> *> operands) override {
-    auto rank = op->getResult(0).getType().cast<TensorType>().getRank();
+    auto rank = op.getResult().getType().template cast<TensorType>().getRank();
     auto condConstancy = operands[0]->getValue().getConstancy();
     auto lhsInfo = operands[1]->getValue();
     auto rhsInfo = operands[2]->getValue();
@@ -584,10 +582,10 @@ public:
             std::min(gcd(lhsInfo.getContiguity(d), condConstancy[d]),
                      gcd(rhsInfo.getContiguity(d), condConstancy[d])));
       }
-      if (lhs.getConstantValue().has_value() &&
-          rhs.getConstantValue().has_value() &&
-          lhs.getConstantValue() == rhs.getConstantValue())
-        constantValue = lhs.getConstantValue();
+      if (lhsInfo.getConstantValue().has_value() &&
+          rhsInfo.getConstantValue().has_value() &&
+          lhsInfo.getConstantValue() == rhsInfo.getConstantValue())
+        constantValue = lhsInfo.getConstantValue();
     }
 
     return AxisInfo(contiguity, divisibility, constancy, constantValue);
@@ -604,30 +602,30 @@ AxisInfoAnalysis::AxisInfoAnalysis(MLIRContext *context)
   // This is needed by TritonGPUToLLVM, to get AxisInfo when the graph is
   // in the process of a PartialConversion, where UnrealizedConversionCast
   // may exist
-  visitors.add<CastOpAxisInfoVisitor<arith::ExtSIOp>,
-               CastOpAxisInfoVisitor<arith::ExtUIOp>,
-               CastOpAxisInfoVisitor<arith::TruncIOp>,
-               CastOpAxisInfoVisitor<arith::IndexCastOp>,
-               CastOpAxisInfoVisitor<triton::PtrToIntOp>,
-               CastOpAxisInfoVisitor<triton::IntToPtrOp>,
-               CastOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
-               CastOpAxisInfoVisitor<mlir::UnrealizedConversionCastOp>>();
-  visitors.add<MakeRangeOpAxisInfoVisitor>();
-  visitors.add<ConstantOpAxisInfoVisitor>();
-  visitors.add<AddOpAxisInfoVisitor<triton::AddPtrOp>,
-               AddOpAxisInfoVisitor<arith::AddIOp>>();
-  visitors.add<SubOpAxisInfoVisitor<arith::SubIOp>>();
-  visitors.add<MulIOpAxisInfoVisitor>();
-  visitors.add<DivOpAxisInfoVisitor<arith::DivSIOp>,
-               DivOpAxisInfoVisitor<arith::DivUIOp>>();
-  visitors.add<RemOpAxisInfoVisitor<arith::RemSIOp>,
-               RemOpAxisInfoVisitor<arith::RemUIOp>>();
-  visitors.add<SplatOpAxisInfoVisitor>();
-  visitors.add<ExpandDimsOpAxisInfoVisitor>();
-  visitors.add<CmpOpAxisInfoVisitor<arith::CmpIOp>,
-               CmpOpAxisInfoVisitor<triton::gpu::CmpIOp>>();
-  visitors.add<SelectOpAxisInfoVisitor<mlir::SelectOp>,
-               SelectOpAxisInfoVisitor<triton::gpu::SelectOp>>();
+  visitors.append<CastOpAxisInfoVisitor<arith::ExtSIOp>,
+                  CastOpAxisInfoVisitor<arith::ExtUIOp>,
+                  CastOpAxisInfoVisitor<arith::TruncIOp>,
+                  CastOpAxisInfoVisitor<arith::IndexCastOp>,
+                  CastOpAxisInfoVisitor<triton::PtrToIntOp>,
+                  CastOpAxisInfoVisitor<triton::IntToPtrOp>,
+                  CastOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
+                  CastOpAxisInfoVisitor<mlir::UnrealizedConversionCastOp>>();
+  visitors.append<MakeRangeOpAxisInfoVisitor>();
+  visitors.append<ConstantOpAxisInfoVisitor>();
+  visitors.append<AddOpAxisInfoVisitor<triton::AddPtrOp>,
+                  AddOpAxisInfoVisitor<arith::AddIOp>>();
+  visitors.append<SubOpAxisInfoVisitor<arith::SubIOp>>();
+  visitors.append<MulIOpAxisInfoVisitor>();
+  visitors.append<DivOpAxisInfoVisitor<arith::DivSIOp>,
+                  DivOpAxisInfoVisitor<arith::DivUIOp>>();
+  visitors.append<RemOpAxisInfoVisitor<arith::RemSIOp>,
+                  RemOpAxisInfoVisitor<arith::RemUIOp>>();
+  visitors.append<SplatOpAxisInfoVisitor>();
+  visitors.append<ExpandDimsOpAxisInfoVisitor>();
+  visitors.append<CmpOpAxisInfoVisitor<arith::CmpIOp>,
+                  CmpOpAxisInfoVisitor<triton::gpu::CmpIOp>>();
+  visitors.append<SelectOpAxisInfoVisitor<mlir::SelectOp>,
+                  SelectOpAxisInfoVisitor<triton::gpu::SelectOp>>();
 }
 
 ChangeResult AxisInfoAnalysis::visitOperation(
@@ -635,12 +633,6 @@ ChangeResult AxisInfoAnalysis::visitOperation(
   AxisInfo curr = visitors.apply(op, operands);
   if (curr.getRank() == 0) {
     return markAllPessimisticFixpoint(op->getResults());
-  }
-  llvm::errs() << *op << "\n";
-  for (size_t d = 0; d < curr.getRank(); ++d) {
-    llvm::errs() << "d: " << d << " contiguity: " << curr.getContiguity(d)
-                 << " divisibility: " << curr.getDivisibility(d)
-                 << " constancy: " << curr.getConstancy(d) << "\n";
   }
 
   // join all lattice elements
