@@ -1,12 +1,15 @@
+from argparse import Namespace
 from dataclasses import dataclass
 import inspect
 import textwrap
 from typing import Any, Callable, Dict, Sequence, Union
 from enum import Enum
 
-import triton.language as tl
-from triton.compiler import instance_descriptor, kernel_suffix
-from triton import JITFunction
+from aot_compile.static_analysis import JITStub
+
+# import triton.language as tl
+# from triton.compiler import instance_descriptor, kernel_suffix
+# from triton import JITFunction
 
 
 def _exists(v):
@@ -45,9 +48,11 @@ def jit(fn):
     return FakeJITFunction(fn=fn)
 
 
-ASTGeneratingObject = JITFunction
+# ASTGeneratingObject = JITFunction
+ASTGeneratingObject = Any
 """ Alias for `JITFunction` """
-TritonConstantExpr = tl.constexpr
+# TritonConstantExpr = tl.constexpr
+TritonConstantExpr = Any
 
 
 def _is_int_type(ann):
@@ -121,34 +126,40 @@ class Param(InputArgMeta):
         return f"{self.name}:{self.type_ann}({spec})"
 
     @classmethod
-    def from_str(cls, repr: str, argnums: Dict[str, int]):
-        name, rest = repr.split(":")
+    def from_args(cls, name: str, type_ann: str, specialization: str, argnum: int):
         _err_msgs = [f"For {name}:"]
-
-        type_ann, rest = rest.split("(")
-
         ty = _valid_triton_ty_ann(type_ann)
         if not ty:
             _err_msgs.append(f"{type_ann} is not a valid Triton type annotation")
 
-        raw_spec = rest.replace(")", "")
-
-        if raw_spec == Param.NONE_TOKEN:
+        if specialization == Param.NONE_TOKEN:
             specialization = Specializations.NONE
         else:
             try:
-                specialization = Specializations(int(raw_spec))
+                specialization = Specializations(int(specialization))
             except ValueError:
-                _err_msgs.append(f"{raw_spec} is not a valid Specialization value")
+                _err_msgs.append(
+                    f"{specialization} is not a valid Specialization value"
+                )
 
         if len(_err_msgs) > 1:
             raise ValueError("\n\t".join(_err_msgs))
 
-        return Param(
+        return cls(
             name=name,
             type_ann=type_ann,
             specialization=specialization,
-            argnum=argnums[name],
+            argnum=argnum,
+        )
+
+    @classmethod
+    def from_str(cls, repr: str, argnums: Dict[str, int]):
+        name, rest = repr.split(":")
+        type_ann, rest = rest.split("(")
+        raw_spec = rest.replace(")", "")
+        argnum = argnums[name]
+        return cls.from_args(
+            name=name, type_ann=type_ann, specialization=raw_spec, argnum=argnum
         )
 
 
@@ -248,7 +259,7 @@ class AOTKernelMetadata:
         return {self.name: res}
 
     @classmethod
-    def parse(cls, name: str, conf_dict: Dict) -> Sequence["AOTKernelMetadata"]:
+    def prase_config(cls, name: str, conf_dict: Dict) -> Sequence["AOTKernelMetadata"]:
         _err_msgs = [f"For {name}:"]
         argnums = {k: i for i, k in enumerate(conf_dict["arg_order"].split(","))}
         params = [
@@ -282,6 +293,27 @@ class AOTKernelMetadata:
         ]
         return variants
 
+    @classmethod
+    def parse_args(cls, args: Namespace):
+        const_dict = vars(args)
+        params = []
+
+        for argnum, (arg_str, arg) in enumerate(zip(args.signature, ker_args)):
+            # e.g.: *fp32:16
+            type_ann, spec = arg_str.split(":")
+            param = Param.from_args(
+                name=arg, type_ann=type_ann, specialization=spec, argnum=argnum
+            )
+            params.append(param)
+
+        const_dict.pop("signature")
+        consts = [
+            Constant(name=k, argnum=arg_names.index(k), val=v)
+            for k, v in const_dict.items()
+        ]
+
+        return AOTKernelMetadata(name=kernel.__name__, params=params, constants=consts)
+
 
 def infer_triton_signature(jit_fn: ASTGeneratingObject) -> str:
     # TODO: this needs to output AOTKernelMetadata and turning to dict is optional
@@ -304,10 +336,116 @@ def infer_triton_signature(jit_fn: ASTGeneratingObject) -> str:
 
 @dataclass
 class CompileMetadata:
-    kwargs: Dict
-    """ kwargs passed to `triton.compile` """
+    arg_names: Sequence[str]
+    """ Names of input arguments """
+    signature: Sequence[str]
+    """ Triton type annotations of function argument """
+    constants: Dict[str, Union[int, JITStub]]
+    specializations: instance_descriptor
     compiled_function_name: str
     """ kernel name as generetaed by compiler """
+    docstr: str
+    """ Represents argument types and constant values"""
+
+
+def parse_signature(type_anns: Sequence[str]) -> Dict[int, str]:
+    signature = {}
+    for argnum, type_ann in enumerate(type_anns):
+        assert _exists(
+            _valid_triton_ty_ann(type_ann)
+        ), f"Bad type annotaoin {type_ann} is not valid"
+        signature[argnum] = type_ann.strip()
+    return signature
+
+
+def parse_specializations(spec_ann: Sequence[str]) -> instance_descriptor:
+
+    # index by spec_val % 16
+    div_16 = set()
+    is_1 = set()
+
+    for argnum, spec in enumerate(spec_ann):
+        try:
+            spec_val = int(spec)
+            if spec_val == 16:
+                div_16.add(argnum)
+            elif spec_val == 1:
+                is_1.add(argnum)
+        except ValueError:
+            # No specializations
+            continue
+
+    return instance_descriptor(divisible_by_16=div_16, equal_to_1=is_1)
+
+
+def compilation_metadata_from_args(
+    kernel: JITStub, kernel_args: Sequence[str]
+) -> CompileMetadata:
+    from argparse import ArgumentParser
+
+    parser = ArgumentParser(description=f"Meta params for {kernel.__name__}")
+    arg_names = kernel.arg_names
+    consts = []
+    ker_arg_names = []
+
+    for arg_num, arg in enumerate(arg_names):
+        if arg_num in kernel.constants:
+            consts.append(arg)
+        else:
+            ker_arg_names.append(arg)
+
+    sig = ",".join(ker_arg_names)
+    parser.add_argument(
+        "--signature",
+        "-s",
+        nargs=len(ker_arg_names),
+        type=str,
+        required=False,
+        metavar=tuple(ker_arg_names),
+        help=f"Provide annotations for the following (in order) {sig} e.g. *fp32:16, i32:1",
+    )
+
+    # TODO: add support for defaults
+    for c in consts:
+        parser.add_argument(
+            f"--{c}",
+            type=int,
+            help="Constant value for kernel compilation",
+            required=False,
+        )
+
+    args = parser.parse_args(args=kernel_args)
+
+    signature = []
+    specializations = []
+
+    doc_str = []
+
+    for argnum, arg_str in enumerate(args.signature):
+        type_ann, spec = arg_str.split(":")
+        doc_str.append(f"{ker_arg_names[arg_num]}: {arg_str}")
+        signature.append(type_ann)
+        specializations.append(spec)
+
+    arg_docstr = ",".join(doc_str)
+
+    const_dict = vars(args)
+    const_dict.pop("signature")
+    conts_docstr = ",".join([f"{k}: {v}" for k, v in const_dict.items()])
+
+    specials = parse_specializations(specializations)
+    function_name = f"{kernel.__name__}_{kernel_suffix(signature=ker_arg_names, specialization=specials)}"
+
+    docstr = "\n".join([kernel.__name__, "---", arg_docstr, conts_docstr])
+
+    return CompileMetadata(
+        arg_names=ker_arg_names,
+        signature=parse_signature(signature),
+        constants=const_dict,
+        specializations=specials,
+        compiled_function_name=function_name,
+        docstr=docstr,
+    )
 
 
 def make_compile_metadata(meta: AOTKernelMetadata) -> CompileMetadata:
@@ -334,4 +472,4 @@ def make_compile_metadata(meta: AOTKernelMetadata) -> CompileMetadata:
     function_name = (
         f"{meta.name}_{kernel_suffix(signature=type_anns, specialization=specials)}"
     )
-    return CompileMetadata(kwargs=kwargs, compiled_function_name=function_name)
+    return CompileMetadata(compile_kwargs=kwargs, compiled_function_name=function_name)
