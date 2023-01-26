@@ -3,10 +3,11 @@
 
 #include "mlir/Analysis/DataFlowAnalysis.h"
 #include "llvm/Support/raw_ostream.h"
-#include <iostream>
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+
+#include <optional>
 
 namespace mlir {
 
@@ -15,39 +16,43 @@ namespace mlir {
 //===----------------------------------------------------------------------===//
 
 /// This lattice value represents known information on the axes of a lattice.
-/// Axis information is represented by a std::map<int, int>
 class AxisInfo {
 public:
-  typedef SmallVector<int, 4> DimVectorT;
-
-  static const int Unknown = 0;
-  static const int Default = 1;
+  typedef SmallVector<int64_t, 4> DimVectorT;
 
 public:
-  // Default constructor
+  /// Default constructor
   AxisInfo() : AxisInfo({}, {}, {}) {}
-  // Construct contiguity info with known contiguity
+  /// Construct contiguity info with known contiguity
   AxisInfo(DimVectorT knownContiguity, DimVectorT knownDivisibility,
            DimVectorT knownConstancy)
+      : AxisInfo(knownContiguity, knownDivisibility, knownConstancy, {}) {}
+  AxisInfo(DimVectorT knownContiguity, DimVectorT knownDivisibility,
+           DimVectorT knownConstancy, std::optional<int64_t> knownConstantValue)
       : contiguity(knownContiguity), divisibility(knownDivisibility),
-        constancy(knownConstancy), rank(contiguity.size()) {
-    assert(knownDivisibility.size() == (size_t)rank);
-    assert(knownConstancy.size() == (size_t)rank);
+        constancy(knownConstancy), constantValue(knownConstantValue),
+        rank(contiguity.size()) {
+    assert(knownDivisibility.size() == static_cast<size_t>(rank));
+    assert(knownConstancy.size() == static_cast<size_t>(rank));
   }
 
-  // Accessors
-  int getContiguity(size_t d) const { return contiguity[d]; }
+  /// Accessors
+  int64_t getContiguity(size_t dim) const { return contiguity[dim]; }
   const DimVectorT &getContiguity() const { return contiguity; }
 
-  int getDivisibility(size_t d) const { return divisibility[d]; }
+  int64_t getDivisibility(size_t dim) const { return divisibility[dim]; }
   const DimVectorT &getDivisibility() const { return divisibility; }
 
-  int getConstancy(size_t d) const { return constancy[d]; }
+  int64_t getConstancy(size_t dim) const { return constancy[dim]; }
   const DimVectorT &getConstancy() const { return constancy; }
 
   int getRank() const { return rank; }
 
-  // Comparison
+  bool known() const { return rank != 0; }
+
+  std::optional<int64_t> getConstantValue() const { return constantValue; }
+
+  /// Comparison
   bool operator==(const AxisInfo &other) const {
     return (contiguity == other.contiguity) &&
            (divisibility == other.divisibility) &&
@@ -60,7 +65,7 @@ public:
   }
   static AxisInfo getPessimisticValueState(Value value);
 
-  // The gcd of both arguments for each dimension
+  /// The gcd of both arguments for each dimension
   static AxisInfo join(const AxisInfo &lhs, const AxisInfo &rhs);
 
 private:
@@ -71,6 +76,7 @@ private:
   /// with a contiguity value C,
   /// the array can be divided into a list of
   /// N/C sequences of C contiguous elements.
+  /// Since we have N = 2^k, C must be a power of two.
   /// For example:
   /// [10, 11, 12, 13, 18, 19, 20, 21]
   /// [20, 21, 22, 23, 28, 29, 30, 31]
@@ -109,14 +115,18 @@ private:
   /// with a contiguity value C,
   /// the array can be divided into a list of
   /// N/C sequences of C elements with the same value.
+  /// Since we have N = 2^k, C must be a power of two.
   /// For example
   /// [8, 8, 8, 8, 12, 12, 12, 12]
   /// [16, 16, 16, 16, 20, 20, 20, 20]
   /// would have constancy [1, 4]
   DimVectorT constancy;
 
+  /// The constant value of the lattice if we can infer it.
+  std::optional<int64_t> constantValue;
+
   // number of dimensions of the lattice
-  int rank;
+  int rank{};
 };
 
 class AxisInfoVisitor {
@@ -124,51 +134,44 @@ public:
   AxisInfoVisitor() = default;
 
   static bool isContiguousDim(const AxisInfo &info, ArrayRef<int64_t> shape,
-                               int dim) {
-    return dim < shape.size() && info.getContiguity(dim) == shape[dim];
+                              int dim) {
+    return info.known() && info.getContiguity(dim) == shape[dim];
   }
 
   static bool isConstantDim(const AxisInfo &info, ArrayRef<int64_t> shape,
-                                 int dim) {
-    return dim < shape.size() && info.getConstancy(dim) == shape[dim];
+                            int dim) {
+    return info.known() && info.getConstancy(dim) == shape[dim];
   }
 
   static bool isContiguityConstancyAligned(const AxisInfo &lhs,
                                            const AxisInfo &rhs,
                                            ArrayRef<int64_t> shape, int dim) {
-    return dim < shape.size() &&
-           (lhs.getContiguity(dim) % rhs.getConstancy(dim) == 0 ||
-            rhs.getContiguity(dim) % lhs.getConstancy(dim) == 0);
+    return lhs.getContiguity(dim) % rhs.getConstancy(dim) == 0 ||
+           rhs.getContiguity(dim) % lhs.getConstancy(dim) == 0;
   }
 
   static bool isContiguityAligned(const AxisInfo &lhs, const AxisInfo &rhs,
-                                     ArrayRef<int64_t> shape, int dim) {
-    return dim < shape.size() &&
-           (lhs.getContiguity(dim) % rhs.getContiguity(dim) == 0 ||
-            rhs.getContiguity(dim) % lhs.getContiguity(dim) == 0);
+                                  ArrayRef<int64_t> shape, int dim) {
+    return lhs.getContiguity(dim) % rhs.getContiguity(dim) == 0 ||
+           rhs.getContiguity(dim) % lhs.getContiguity(dim) == 0;
   }
 
   static bool isConstancyAligned(const AxisInfo &lhs, const AxisInfo &rhs,
-                                   ArrayRef<int64_t> shape, int dim) {
-    return dim < shape.size() &&
-           (lhs.getConstancy(dim) % rhs.getConstancy(dim) == 0 ||
-            rhs.getConstancy(dim) % lhs.getConstancy(dim) == 0);
+                                 ArrayRef<int64_t> shape, int dim) {
+    return lhs.getConstancy(dim) % rhs.getConstancy(dim) == 0 ||
+           rhs.getConstancy(dim) % lhs.getConstancy(dim) == 0;
   }
-
-  static AxisInfo visitBinaryOp(
-      Operation *op, AxisInfo lhsInfo, AxisInfo rhsInfo,
-      const std::function<int(AxisInfo, AxisInfo, int)> &getContiguity,
-      const std::function<int(AxisInfo, AxisInfo, int)> &getDivisibility,
-      const std::function<int(AxisInfo, AxisInfo, int)> &getConstancy);
-
-  virtual bool match(Operation *op) = 0;
 
   virtual AxisInfo
   getAxisInfo(Operation *op, ArrayRef<LatticeElement<AxisInfo> *> operands) = 0;
+
+  virtual bool match(Operation *op) = 0;
 };
 
 template <typename OpTy> class AxisInfoVisitorImpl : public AxisInfoVisitor {
 public:
+  using AxisInfoVisitor::AxisInfoVisitor;
+
   AxisInfo getAxisInfo(Operation *op,
                        ArrayRef<LatticeElement<AxisInfo> *> operands) final {
     return getAxisInfo(cast<OpTy>(op), operands);
@@ -179,6 +182,51 @@ public:
   virtual AxisInfo getAxisInfo(OpTy op,
                                ArrayRef<LatticeElement<AxisInfo> *> operands) {
     llvm_unreachable("Unimplemented getAxisInfo for op");
+  }
+};
+
+template <typename OpTy>
+class BinaryOpVisitorImpl : public AxisInfoVisitorImpl<OpTy> {
+public:
+  using AxisInfoVisitorImpl::AxisInfoVisitorImpl<OpTy>;
+
+  AxisInfo getAxisInfo(OpTy op,
+                       ArrayRef<LatticeElement<AxisInfo> *> operands) override {
+    auto rank = lhsInfo.getRank();
+    assert(operands.size() == 2 && "Expected two operands");
+    AxisInfo::DimVectorT contiguity;
+    AxisInfo::DimVectorT divisibility;
+    AxisInfo::DimVectorT constancy;
+    auto lhsInfo = operands[0]->getValue();
+    auto rhsInfo = operands[1]->getValue();
+    for (auto d = 0; d < rank; ++d) {
+      contiguity.push_back(getContiguity(lhsInfo, rhsInfo, d));
+      divisibility.push_back(getDivisibility(lhsInfo, rhsInfo, d));
+      constancy.push_back(getConstancy(lhsInfo, rhsInfo, d));
+    }
+    return AxisInfo(contiguity, divisibility, constancy,
+                    getConstantValue(lhsInfo, rhsInfo));
+  }
+
+protected:
+  virtual int64_t getContiguity(OpTy op, const AxisInfo &lhs,
+                                const AxisInfo &rhs, int dim) {
+    return 1;
+  }
+
+  virtual int64_t getDivisibility(OpTy op, const AxisInfo &lhs,
+                                  const AxisInfo &rhs, int dim) {
+    return 1;
+  }
+
+  virtual int64_t getConstancy(OpTy op, const AxisInfo &lhs,
+                               const AxisInfo &rhs, int dim) {
+    return 1;
+  }
+
+  virtual std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
+                                                  const AxisInfo &rhs) {
+    return {};
   }
 };
 
