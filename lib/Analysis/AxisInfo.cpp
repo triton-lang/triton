@@ -126,15 +126,21 @@ public:
   }
 };
 
-class ConstantOpAxisInfoVisitor final : public AxisInfoVisitorImpl<ConstantOp> {
+class ConstantOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<arith::ConstantOp> {
 public:
-  using AxisInfoVisitorImpl<ConstantOp>::AxisInfoVisitorImpl;
+  using AxisInfoVisitorImpl<arith::ConstantOp>::AxisInfoVisitorImpl;
 
-  AxisInfo getAxisInfo(ConstantOp op,
+  AxisInfo getAxisInfo(arith::ConstantOp op,
                        ArrayRef<LatticeElement<AxisInfo> *> operands) override {
     auto intAttr = op.getValue().dyn_cast<IntegerAttr>();
-    if (intAttr) {
-      int64_t value = intAttr.getValue().getZExtValue();
+    auto boolAttr = op.getValue().dyn_cast<BoolAttr>();
+    if (intAttr || boolAttr) {
+      int64_t value{};
+      if (intAttr)
+        value = intAttr.getValue().getZExtValue();
+      else
+        value = boolAttr.getValue() ? 1 : 0;
       return AxisInfo(/*contiguity=*/{1},
                       /*divisibility=*/{highestPowOf2Divisor(value)},
                       /*constancy=*/{1},
@@ -142,8 +148,8 @@ public:
     }
     // TODO: generalize to dense attr
     auto splatAttr = op.getValue().dyn_cast<SplatElementsAttr>();
-    if (splatAttr && splatAttr.getElementType().isIntOrIndex()) {
-      auto value = splatAttr.getSplatValue<int64_t>();
+    if (splatAttr && splatAttr.getType().isIntOrIndex()) {
+      int64_t value = splatAttr.getSplatValue<APInt>().getZExtValue();
       TensorType ty = splatAttr.getType().cast<TensorType>();
       return AxisInfo(
           /*contiguity=*/AxisInfo::DimVectorT(ty.getRank(), 1),
@@ -153,7 +159,6 @@ public:
           AxisInfo::DimVectorT(ty.getShape().begin(), ty.getShape().end()),
           /*knownConstantValue=*/{value});
     }
-    llvm_unreachable("unsupported constant type");
     return AxisInfo();
   }
 };
@@ -293,23 +298,18 @@ private:
     auto constancy = gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
     // Case 2: lhs contiguous, rhs constant.
     // lhs: d_lhs * k, d_lhs * k + 1, ..., d_lhs * k + n
-    // rhs: p, p, ..., p
-    // lhs / rhs = d_lhs * k / p, (d_lhs * k + 1) / p, ...,
-    // (d_lhs * k + n) / p
-    //           = gcd(d_lhs, p) * k, gcd(d_lhs, p) * k, ...,
-    // So whenever (d_lhs * k + t) % p = 0, we get a constant segment.
+    // rhs: d_rhs * p, d_rhs * p, ..., d_rhs * p
+    // lhs / rhs = d_lhs * k / (d_rhs * p), (d_lhs * k + 1) / (d_rhs * p),
+    // ..., (d_lhs * k + n) / (d_rhs * p)
+    // Because d_lhs % d_rhs = 0 || d_rhs % d_lhs = 0,
+    // the minimal constancy is gcd(d_lhs, d_rhs).
+    // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
+    // we need to use another gcd to get the actual constancy.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        rhs.getConstantValue().has_value()) {
-      // If d_lhs % p = 0 -> t % p = 0. The total number of ts in the
-      // segment is gcd(n, p).
-      if (lhs.getDivisibility(dim) % rhs.getConstantValue().value() == 0)
-        constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
-                                            rhs.getConstantValue().value()));
-      // If p % d_lhs = 0 -> t = p - d_lhs
-      if (rhs.getConstantValue().value() % lhs.getDivisibility(dim) == 0)
-        constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
-                                            rhs.getConstantValue().value() -
-                                                lhs.getDivisibility(dim)));
+        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+      constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
+                                          gcd(lhs.getDivisibility(dim),
+                                              rhs.getDivisibility(dim))));
     }
     return constancy;
   }
@@ -344,37 +344,25 @@ public:
 private:
   int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                         int dim) override {
-    // Case 1: all contiguous
-    // lhs: k, k + 1, ..., k + n
-    // rhs: p, p + 1, ..., p + n
-    // lhs % rhs = k % p, (k + 1) % (p + 1), ..., (k + n) % (p + n)
-    // (k + 1) % (p + 1) = k % (p + 1) + 1 % (p + 1) = k + 1
     auto shape =
         op.getResult().getType().template cast<RankedTensorType>().getShape();
-    if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isContiguousDim(rhs, shape, dim)) {
-      return lhs.getContiguity(dim);
-    }
-    int64_t constancy = 1;
-    // Case 2: lhs contiguous, rhs constant
+    int64_t contiguity = 1;
+    // lhs contiguous, rhs constant
     // lhs: d_lhs * k, d_lhs * k + 1, ..., d_lhs * k + n
-    // rhs: p, p, ..., p
-    // lhs % rhs = d_lhs * k % p, (d_lhs * k + 1) % p, ..., (d_lhs * k + n) % p
-    // So whenever (d_lhs * k + t) % p = 0, we get a contiguous segment.
+    // rhs: d_rhs * p, d_rhs * p, ..., d_rhs * p
+    // lhs % rhs = d_lhs * k % (d_rhs * p), (d_lhs * k + 1) % (d_rhs * p),
+    // ..., (d_lhs * k + n) % (d_rhs * p)
+    // Because d_lhs % d_rhs = 0 || d_rhs % d_lhs = 0,
+    // The minimal contiguity is gcd(d_lhs, d_rhs).
+    // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
+    // we need to use another gcd to get the actual contiguity.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        rhs.getConstantValue().has_value()) {
-      // If d_lhs % p = 0 -> t % p = 0. The total number of ts in the
-      // segment is gcd(n, p).
-      if (lhs.getDivisibility(dim) % rhs.getConstantValue().value() == 0)
-        constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
-                                            rhs.getConstantValue().value()));
-      // If p % d_lhs = 0 -> t = p - d_lhs
-      if (rhs.getConstantValue().value() % lhs.getDivisibility(dim) == 0)
-        constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
-                                            rhs.getConstantValue().value() -
-                                                lhs.getDivisibility(dim)));
+        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+      contiguity = std::max(contiguity, gcd(lhs.getContiguity(dim),
+                                            gcd(lhs.getDivisibility(dim),
+                                                rhs.getDivisibility(dim))));
     }
-    return constancy;
+    return contiguity;
   }
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
@@ -478,6 +466,7 @@ public:
   AxisInfo getAxisInfo(OpTy op,
                        ArrayRef<LatticeElement<AxisInfo> *> operands) override {
     auto resTy = op.getResult().getType().template cast<RankedTensorType>();
+    auto shape = resTy.getShape();
     short rank = resTy.getRank();
     auto lhsInfo = operands[0]->getValue();
     auto rhsInfo = operands[1]->getValue();
@@ -485,20 +474,42 @@ public:
     AxisInfo::DimVectorT contiguity, divisibility, constancy;
     std::optional<int64_t> constantValue;
     for (short d = 0; d < rank; ++d) {
-      auto contigHint = 1;
+      int64_t constHint = 1;
       if (lhsInfo.getConstantValue().has_value() &&
           rhsInfo.getConstantValue().has_value()) {
-        contigHint = lhsInfo.getConstancy(d);
+        constHint = lhsInfo.getConstancy(d);
         constantValue =
             compare(getPredicate(op), lhsInfo.getConstantValue().value(),
                     rhsInfo.getConstantValue().value())
                 ? 1
                 : 0;
       } else {
-        contigHint = gcd(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d));
+        // Case 1: lhs and rhs are both partial constants
+        constHint = gcd(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d));
+        // Case 2: lhs all contiguous, rhs all constants
+        // NOTE:
+        // lhs: 4 4 4 4
+        // rhs: 4 5 6 7
+        // lhs ge rhs: 1, 0, 0, 0
+        // Case 3: lhs all constants, rhs all contiguous
+        // NOTE
+        // lhs: 4 5 6 7
+        // rhs: 4 4 4 4
+        // lhs sle rhs: 1, 0, 0, 0
+        if (/*Case 2=*/(notGePredicate(getPredicate(op)) &&
+                        (AxisInfoVisitor::isContiguousDim(lhsInfo, shape, d) &&
+                         AxisInfoVisitor::isConstantDim(rhsInfo, shape, d))) ||
+            /*Case 3=*/(
+                notSePredicate(getPredicate(op)) &&
+                (AxisInfoVisitor::isConstantDim(lhsInfo, shape, d) &&
+                 AxisInfoVisitor::isContiguousDim(rhsInfo, shape, d)))) {
+          constHint = std::max(constHint, gcd(lhsInfo.getContiguity(d),
+                                              gcd(lhsInfo.getDivisibility(d),
+                                                  rhsInfo.getDivisibility(d))));
+        }
       }
 
-      constancy.push_back(contigHint);
+      constancy.push_back(constHint);
       divisibility.push_back(1);
       contiguity.push_back(1);
     }
@@ -513,6 +524,16 @@ private:
 
   static arith::CmpIPredicate getPredicate(arith::CmpIOp op) {
     return op.getPredicate();
+  }
+
+  static bool notGePredicate(arith::CmpIPredicate predicate) {
+    return predicate != arith::CmpIPredicate::sge &&
+           predicate != arith::CmpIPredicate::uge;
+  }
+
+  static bool notSePredicate(arith::CmpIPredicate predicate) {
+    return predicate != arith::CmpIPredicate::sle &&
+           predicate != arith::CmpIPredicate::ule;
   }
 
   static bool compare(arith::CmpIPredicate predicate, int64_t lhs,
@@ -620,6 +641,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(MLIRContext *context)
                   DivOpAxisInfoVisitor<arith::DivUIOp>>();
   visitors.append<RemOpAxisInfoVisitor<arith::RemSIOp>,
                   RemOpAxisInfoVisitor<arith::RemUIOp>>();
+  visitors.append<BroadcastOpAxisInfoVisitor>();
   visitors.append<SplatOpAxisInfoVisitor>();
   visitors.append<ExpandDimsOpAxisInfoVisitor>();
   visitors.append<CmpOpAxisInfoVisitor<arith::CmpIOp>,

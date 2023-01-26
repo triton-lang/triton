@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include <optional>
+#include <type_traits>
 
 namespace mlir {
 
@@ -132,6 +133,7 @@ private:
 class AxisInfoVisitor {
 public:
   AxisInfoVisitor() = default;
+  virtual ~AxisInfoVisitor() = default;
 
   static bool isContiguousDim(const AxisInfo &info, ArrayRef<int64_t> shape,
                               int dim) {
@@ -163,7 +165,7 @@ public:
 
   virtual AxisInfo getAxisInfo(OpTy op,
                                ArrayRef<LatticeElement<AxisInfo> *> operands) {
-    llvm_unreachable("Unimplemented getAxisInfo for op");
+    llvm_unreachable("Unimplemented getAxisInfo");
   }
 };
 
@@ -224,7 +226,10 @@ public:
     for (auto &visitor : visitors)
       if (visitor->match(op))
         return visitor->getAxisInfo(op, operands);
-    llvm_unreachable("Unimplemented getAxisInfo for op");
+    llvm::errs() << "Unimplemented getAxisInfo for op " +
+                        op->getName().getStringRef().str()
+                 << "\n";
+    return AxisInfo();
   }
 
 private:
