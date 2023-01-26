@@ -709,7 +709,10 @@ class CodeGenerator(ast.NodeVisitor):
                     assert self.is_triton_tensor(self.local_defs[name]), f'{name} is not tensor'
                     assert self.is_triton_tensor(liveins[name])
                     assert self.local_defs[name].type == liveins[name].type,\
-                            f'loop-carried variable ({name}) type is different from initialized value'
+                            f'Loop-carried variable {name} has initial type {liveins[name].type} '\
+                            f'but is re-assigned to {self.local_defs[name].type} in loop! '\
+                            f'Please make sure that the type stays consistent.'
+
                     names.append(name)
                     init_args.append(triton.language.core._to_tensor(liveins[name], self.builder))
                     yields.append(triton.language.core._to_tensor(self.local_defs[name], self.builder))
