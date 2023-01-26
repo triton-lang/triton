@@ -361,6 +361,7 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_if_top_level(self, cond, node):
         with enter_sub_region(self) as sr:
             liveins, ip_block = sr
+            liveins_copy = liveins.copy()
             then_block = self.builder.create_block()
             else_block = self.builder.create_block()
             # create basic-block after conditional
@@ -392,25 +393,23 @@ class CodeGenerator(ast.NodeVisitor):
             names = []
             ret_types = []
             ir_ret_types = []
-            for name in liveins | then_defs | else_defs:
-                if name in then_defs and name in else_defs:
-                    assert then_defs[name].type == else_defs[name].type
-                if name in then_defs:
-                    if name in liveins:
-                      assert then_defs[name].type == liveins[name].type
-                    names.append(name)
-                    ret_types.append(then_defs[name].type)
-                    ir_ret_types.append(then_defs[name].handle.get_type())
-                    if not name in else_defs:
-                      else_defs[name] = liveins[name]
-                elif name in else_defs:
-                    if name in liveins:
-                      assert else_defs[name].type == liveins[name].type
-                    names.append(name)
-                    ret_types.append(else_defs[name].type)
-                    ir_ret_types.append(else_defs[name].handle.get_type())
-                    if not name in then_defs:
-                      then_defs[name] = liveins[name]
+            for then_name in then_defs:
+                for else_name in else_defs:
+                    if then_name == else_name:
+                        assert then_defs[then_name].type == else_defs[else_name].type
+                        names.append(then_name)
+                        ret_types.append(then_defs[then_name].type)
+                        ir_ret_types.append(then_defs[then_name].handle.get_type())
+
+            # defined in else block but not in then block
+            # to find in parent scope and yield them
+            for else_name in else_defs:
+                if else_name in liveins and else_name not in then_defs:
+                    assert else_defs[else_name].type == liveins[else_name].type
+                    names.append(else_name)
+                    ret_types.append(else_defs[else_name].type)
+                    ir_ret_types.append(else_defs[else_name].handle.get_type())
+                    then_defs[else_name] = liveins_copy[else_name]
 
             # then terminator
             self.builder.set_insertion_point_to_end(then_block)
@@ -467,18 +466,18 @@ class CodeGenerator(ast.NodeVisitor):
             for then_name in then_defs:
                 for else_name in else_defs:
                     if then_name == else_name:
-                        if then_defs[then_name].type == else_defs[else_name].type:
-                            names.append(then_name)
-                            ret_types.append(then_defs[then_name].type)
+                        assert then_defs[then_name].type == else_defs[else_name].type
+                        names.append(then_name)
+                        ret_types.append(then_defs[then_name].type)
 
             # defined in else block but not in then block
             # to find in parent scope and yield them
             for else_name in else_defs:
                 if else_name in liveins and else_name not in then_defs:
-                    if else_defs[else_name].type == liveins[else_name].type:
-                        names.append(else_name)
-                        ret_types.append(else_defs[else_name].type)
-                        then_defs[else_name] = liveins_copy[else_name]
+                    assert else_defs[else_name].type == liveins[else_name].type
+                    names.append(else_name)
+                    ret_types.append(else_defs[else_name].type)
+                    then_defs[else_name] = liveins_copy[else_name]
             self.builder.set_insertion_point_to_end(ip_block)
 
             if then_defs or node.orelse:  # with else block
@@ -954,7 +953,6 @@ def build_triton_ir(fn, signature, specialization, constants):
 
 
 def optimize_triton_ir(mod):
-    print(str(mod))
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_inliner_pass()
