@@ -292,8 +292,10 @@ private:
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                        int dim) override {
-    auto shape =
-        op.getResult().getType().template cast<RankedTensorType>().getShape();
+    auto resTy = op.getResult().getType().template dyn_cast<RankedTensorType>();
+    if (!resTy)
+      return BinaryOpVisitorImpl<OpTy>::getConstancy(op, lhs, rhs, dim);
+    auto shape = resTy.getShape();
     // Case 1: both lhs and rhs are constants.
     auto constancy = gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
     // Case 2: lhs contiguous, rhs constant.
@@ -344,8 +346,10 @@ public:
 private:
   int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                         int dim) override {
-    auto shape =
-        op.getResult().getType().template cast<RankedTensorType>().getShape();
+    auto resTy = op.getResult().getType().template dyn_cast<RankedTensorType>();
+    if (!resTy)
+      return BinaryOpVisitorImpl<OpTy>::getContiguity(op, lhs, rhs, dim);
+    auto shape = resTy.getShape();
     int64_t contiguity = 1;
     // lhs contiguous, rhs constant
     // lhs: d_lhs * k, d_lhs * k + 1, ..., d_lhs * k + n
@@ -465,7 +469,9 @@ public:
 
   AxisInfo getAxisInfo(OpTy op,
                        ArrayRef<LatticeElement<AxisInfo> *> operands) override {
-    auto resTy = op.getResult().getType().template cast<RankedTensorType>();
+    auto resTy = op.getResult().getType().template dyn_cast<RankedTensorType>();
+    if (!resTy)
+      return AxisInfo();
     auto shape = resTy.getShape();
     short rank = resTy.getRank();
     auto lhsInfo = operands[0]->getValue();
@@ -573,7 +579,11 @@ public:
 
   AxisInfo getAxisInfo(OpTy op,
                        ArrayRef<LatticeElement<AxisInfo> *> operands) override {
-    auto rank = op.getResult().getType().template cast<TensorType>().getRank();
+    auto resTy = op.getResult().getType().template dyn_cast<RankedTensorType>();
+    if (!resTy)
+      return AxisInfo();
+    auto shape = resTy.getShape();
+    auto rank = shape.size();
     auto condConstancy = operands[0]->getValue().getConstancy();
     auto lhsInfo = operands[1]->getValue();
     auto rhsInfo = operands[2]->getValue();

@@ -226,9 +226,6 @@ public:
     for (auto &visitor : visitors)
       if (visitor->match(op))
         return visitor->getAxisInfo(op, operands);
-    llvm::errs() << "Unimplemented getAxisInfo for op " +
-                        op->getName().getStringRef().str()
-                 << "\n";
     return AxisInfo();
   }
 
