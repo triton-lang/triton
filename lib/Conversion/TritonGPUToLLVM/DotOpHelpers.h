@@ -1123,7 +1123,21 @@ public:
     Value ptr = getPtr(ptrIdx);
 
     // The struct should have exactly the same element types.
+    auto resTy = matTy.cast<LLVM::LLVMStructType>();
     Type elemTy = matTy.cast<LLVM::LLVMStructType>().getBody()[0];
+
+    // For some reasons, LLVM's NVPTX backend inserts unnecessary (?) integer
+    // instructions to pack & unpack sub-word integers. A workaround is to
+    // store the results of ldmatrix in i32
+    if (auto vecElemTy = elemTy.dyn_cast<VectorType>()) {
+      Type elemElemTy = vecElemTy.getElementType();
+      if (auto intTy = elemElemTy.dyn_cast<IntegerType>()) {
+        if (intTy.getWidth() <= 16) {
+          elemTy = rewriter.getI32Type();
+          resTy = LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, elemTy));
+        }
+      }
+    }
 
     if (canUseLdmatrix) {
       Value sOffset =
@@ -1143,7 +1157,7 @@ public:
 
       // The result type is 4xi32, each i32 is composed of 2xf16
       // elements (adjacent two columns in a row) or a single f32 element.
-      Value resV4 = builder.launch(rewriter, loc, matTy);
+      Value resV4 = builder.launch(rewriter, loc, resTy);
       return {extract_val(elemTy, resV4, i32_arr_attr(0)),
               extract_val(elemTy, resV4, i32_arr_attr(1)),
               extract_val(elemTy, resV4, i32_arr_attr(2)),
@@ -1177,6 +1191,8 @@ public:
       }
       return {retElems[0], retElems[1], retElems[2], retElems[3]};
     } else if (elemBytes == 1 && needTrans) { // work with int8
+      // Can't use i32 here. Use LLVM's VectorType
+      elemTy = matTy.cast<LLVM::LLVMStructType>().getBody()[0];
       std::array<std::array<Value, 4>, 2> ptrs;
       ptrs[0] = {
           getPtr(ptrIdx),
