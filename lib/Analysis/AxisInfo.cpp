@@ -60,6 +60,10 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
       if (attr)
         divHint = attr.cast<IntegerAttr>().getValue().getZExtValue();
     } else {
+      // By default, if a block argument is from the entry block,
+      // we first call AxisInfo::getPessimisticValueState
+      // and assign it with dummy values, then immedidately call
+      // AxisInfo::join to assign the hint with the init block argument.
       contiHint = highestPowOf2Divisor<int64_t>(0);
       divHint = highestPowOf2Divisor<int64_t>(0);
       constHint = highestPowOf2Divisor<int64_t>(0);
