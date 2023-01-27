@@ -82,8 +82,7 @@ AxisInfo AxisInfo::join(const AxisInfo &lhs, const AxisInfo &rhs) {
   DimVectorT constancy;
   for (auto d = 0; d < lhs.getRank(); ++d) {
     contiguity.push_back(gcd(lhs.getContiguity(d), rhs.getContiguity(d)));
-    divisibility.push_back(
-        gcd(lhs.getDivisibility(d), rhs.getDivisibility(d)));
+    divisibility.push_back(gcd(lhs.getDivisibility(d), rhs.getDivisibility(d)));
     constancy.push_back(gcd(lhs.getConstancy(d), rhs.getConstancy(d)));
   }
   std::optional<int64_t> constantValue;
