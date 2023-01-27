@@ -755,7 +755,7 @@ unsigned AxisInfoAnalysis::getPtrVectorSize(Value ptr) {
                       ? 8
                       : pointeeType.getIntOrFloatBitWidth();
   } else {
-    numElemBits = tensorTy.getElementType().getIntOrFloatBitWidth();
+    numElemBits = tensorTy.getElementTypeBitWidth();
   }
   unsigned contigPerThread = triton::gpu::getSizePerThread(layout)[order[0]];
   unsigned vec = std::min(align, contigPerThread);
