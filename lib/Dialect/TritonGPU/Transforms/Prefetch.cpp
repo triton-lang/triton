@@ -161,7 +161,8 @@ LogicalResult Prefetcher::initialize() {
     auto kSize = dot.a().getType().cast<RankedTensorType>().getShape()[1];
 
     // works better with nvidia tensor cores
-    unsigned elementWidth = dot.a().getType().cast<RankedTensorType>().getElementTypeBitWidth();
+    unsigned elementWidth =
+        dot.a().getType().cast<RankedTensorType>().getElementTypeBitWidth();
     prefetchWidth = 256 / elementWidth;
 
     // Skip prefetching if kSize is less than prefetchWidth
