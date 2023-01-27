@@ -33,6 +33,7 @@ public:
       : contiguity(knownContiguity), divisibility(knownDivisibility),
         constancy(knownConstancy), constantValue(knownConstantValue),
         rank(contiguity.size()) {
+    assert(knownContiguity.size() == static_cast<size_t>(rank));
     assert(knownDivisibility.size() == static_cast<size_t>(rank));
     assert(knownConstancy.size() == static_cast<size_t>(rank));
   }

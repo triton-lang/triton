@@ -72,8 +72,10 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
 // The gcd of both arguments for each dimension
 AxisInfo AxisInfo::join(const AxisInfo &lhs, const AxisInfo &rhs) {
   if (!lhs.known() && rhs.known()) {
+    llvm::errs() << "here1\n";
     return rhs;
   } else if (lhs.known() && !rhs.known()) {
+    llvm::errs() << "here2\n";
     return lhs;
   } else if (lhs.known() && rhs.known()) {
     DimVectorT contiguity;
@@ -148,7 +150,7 @@ public:
     }
     // TODO: generalize to dense attr
     auto splatAttr = op.getValue().dyn_cast<SplatElementsAttr>();
-    if (splatAttr && splatAttr.getType().isIntOrIndex()) {
+    if (splatAttr && splatAttr.getElementType().isIntOrIndex()) {
       int64_t value = splatAttr.getSplatValue<APInt>().getZExtValue();
       TensorType ty = splatAttr.getType().cast<TensorType>();
       return AxisInfo(
