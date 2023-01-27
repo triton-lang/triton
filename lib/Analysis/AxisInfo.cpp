@@ -748,9 +748,19 @@ unsigned AxisInfoAnalysis::getPtrVectorSize(Value ptr) {
   auto order = triton::gpu::getOrder(layout);
   unsigned align = getPtrAlignment(ptr);
 
+  unsigned numElemBits = 0;
+  if (auto ptrTy = tensorTy.getElementType().cast<triton::PointerType>()) {
+    auto pointeeType = ptrTy.getPointeeType();
+    numElemBits = pointeeType.isa<triton::Float8Type>()
+                      ? 8
+                      : pointeeType.getIntOrFloatBitWidth();
+  } else {
+    numElemBits = tensorTy.getElementType().getIntOrFloatBitWidth();
+  }
   unsigned contigPerThread = triton::gpu::getSizePerThread(layout)[order[0]];
   unsigned vec = std::min(align, contigPerThread);
   vec = std::min<unsigned>(shape[order[0]], vec);
+  vec = std::min<unsigned>(128 / numElemBits, vec);
 
   return vec;
 }
