@@ -298,10 +298,8 @@ LogicalResult getForwardEncoding(Attribute sourceEncoding, Operation *op,
 inline bool expensiveToRemat(Operation *op) {
   if (!op)
     return true;
-  if (isa<triton::LoadOp>(op))
-    return isSingleValue(dyn_cast<triton::LoadOp>(op).ptr());
-  if (isa<triton::StoreOp>(op))
-    return isSingleValue(dyn_cast<triton::StoreOp>(op).ptr());
+  if (isa<triton::LoadOp, triton::StoreOp>(op))
+    return !isSingleValue(op->getOperand(0));
   if (isa<tensor::ExtractSliceOp, triton::gpu::AllocTensorOp,
           triton::gpu::InsertSliceAsyncOp, triton::AtomicRMWOp,
           triton::AtomicCASOp, triton::DotOp>(op))
