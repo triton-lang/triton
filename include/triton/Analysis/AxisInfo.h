@@ -50,8 +50,6 @@ public:
 
   int getRank() const { return rank; }
 
-  bool known() const { return rank != 0; }
-
   std::optional<int64_t> getConstantValue() const { return constantValue; }
 
   /// Comparison
@@ -138,12 +136,12 @@ public:
 
   static bool isContiguousDim(const AxisInfo &info, ArrayRef<int64_t> shape,
                               int dim) {
-    return info.known() && info.getContiguity(dim) == shape[dim];
+    return info.getContiguity(dim) == shape[dim];
   }
 
   static bool isConstantDim(const AxisInfo &info, ArrayRef<int64_t> shape,
                             int dim) {
-    return info.known() && info.getConstancy(dim) == shape[dim];
+    return info.getConstancy(dim) == shape[dim];
   }
 
   virtual AxisInfo

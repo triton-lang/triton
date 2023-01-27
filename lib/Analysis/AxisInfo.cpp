@@ -27,6 +27,10 @@ static int64_t gcdImpl(int64_t a, int64_t b, int64_t *x, int64_t *y) {
 }
 
 static int64_t gcd(int64_t a, int64_t b) {
+  if (a == 0)
+    return b;
+  if (b == 0)
+    return a;
   int64_t x, y;
   return gcdImpl(a, b, &x, &y);
 }
@@ -56,11 +60,9 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
       if (attr)
         divHint = attr.cast<IntegerAttr>().getValue().getZExtValue();
     } else {
-      // By default, if a block argument is from the entry block,
-      // we first call AxisInfo::getPessimisticValueState
-      // and mark it as "Unknown", then immedidately call
-      // AxisInfo::join to assign the hint with the init block argument.
-      return AxisInfo();
+      contiHint = highestPowOf2Divisor<int64_t>(0);
+      divHint = highestPowOf2Divisor<int64_t>(0);
+      constHint = highestPowOf2Divisor<int64_t>(0);
     }
   }
 
@@ -71,31 +73,21 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
 
 // The gcd of both arguments for each dimension
 AxisInfo AxisInfo::join(const AxisInfo &lhs, const AxisInfo &rhs) {
-  if (!lhs.known() && rhs.known()) {
-    llvm::errs() << "here1\n";
-    return rhs;
-  } else if (lhs.known() && !rhs.known()) {
-    llvm::errs() << "here2\n";
-    return lhs;
-  } else if (lhs.known() && rhs.known()) {
-    DimVectorT contiguity;
-    DimVectorT divisibility;
-    DimVectorT constancy;
-    for (auto d = 0; d < lhs.getRank(); ++d) {
-      contiguity.push_back(gcd(lhs.getContiguity(d), rhs.getContiguity(d)));
-      divisibility.push_back(
-          gcd(lhs.getDivisibility(d), rhs.getDivisibility(d)));
-      constancy.push_back(gcd(lhs.getConstancy(d), rhs.getConstancy(d)));
-    }
-    std::optional<int64_t> constantValue;
-    if (lhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().has_value() &&
-        lhs.getConstantValue() == rhs.getConstantValue())
-      constantValue = lhs.getConstantValue();
-    return AxisInfo(contiguity, divisibility, constancy, constantValue);
+  DimVectorT contiguity;
+  DimVectorT divisibility;
+  DimVectorT constancy;
+  for (auto d = 0; d < lhs.getRank(); ++d) {
+    contiguity.push_back(gcd(lhs.getContiguity(d), rhs.getContiguity(d)));
+    divisibility.push_back(
+        gcd(lhs.getDivisibility(d), rhs.getDivisibility(d)));
+    constancy.push_back(gcd(lhs.getConstancy(d), rhs.getConstancy(d)));
   }
-  llvm_unreachable("Join two unknown axis info");
-  return AxisInfo();
+  std::optional<int64_t> constantValue;
+  if (lhs.getConstantValue().has_value() &&
+      rhs.getConstantValue().has_value() &&
+      lhs.getConstantValue() == rhs.getConstantValue())
+    constantValue = lhs.getConstantValue();
+  return AxisInfo(contiguity, divisibility, constancy, constantValue);
 }
 
 //===----------------------------------------------------------------------===//
