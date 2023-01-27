@@ -623,6 +623,63 @@ public:
   }
 };
 
+class AndIOpAxisInfoVisitor final : public BinaryOpVisitorImpl<arith::AndIOp> {
+public:
+  using BinaryOpVisitorImpl<arith::AndIOp>::BinaryOpVisitorImpl;
+
+private:
+  int64_t getConstancy(arith::AndIOp op, const AxisInfo &lhs,
+                       const AxisInfo &rhs, int dim) override {
+    return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
+  }
+
+  std::optional<int64_t> getConstantValue(arith::AndIOp op, const AxisInfo &lhs,
+                                          const AxisInfo &rhs) override {
+    if (lhs.getConstantValue().has_value() &&
+        rhs.getConstantValue().has_value())
+      return {lhs.getConstantValue().value() & rhs.getConstantValue().value()};
+    return {};
+  }
+};
+
+class OrIOpAxisInfoVisitor final : public BinaryOpVisitorImpl<arith::OrIOp> {
+public:
+  using BinaryOpVisitorImpl<arith::OrIOp>::BinaryOpVisitorImpl;
+
+private:
+  int64_t getConstancy(arith::OrIOp op, const AxisInfo &lhs,
+                       const AxisInfo &rhs, int dim) override {
+    return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
+  }
+
+  std::optional<int64_t> getConstantValue(arith::OrIOp op, const AxisInfo &lhs,
+                                          const AxisInfo &rhs) override {
+    if (lhs.getConstantValue().has_value() &&
+        rhs.getConstantValue().has_value())
+      return {lhs.getConstantValue().value() | rhs.getConstantValue().value()};
+    return {};
+  }
+};
+
+class XorIOpAxisInfoVisitor final : public BinaryOpVisitorImpl<arith::XOrIOp> {
+public:
+  using BinaryOpVisitorImpl<arith::XOrIOp>::BinaryOpVisitorImpl;
+
+private:
+  int64_t getConstancy(arith::XOrIOp op, const AxisInfo &lhs,
+                       const AxisInfo &rhs, int dim) override {
+    return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
+  }
+
+  std::optional<int64_t> getConstantValue(arith::XOrIOp op, const AxisInfo &lhs,
+                                          const AxisInfo &rhs) override {
+    if (lhs.getConstantValue().has_value() &&
+        rhs.getConstantValue().has_value())
+      return {lhs.getConstantValue().value() ^ rhs.getConstantValue().value()};
+    return {};
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // AxisInfoAnalysis
 //===----------------------------------------------------------------------===//
@@ -640,7 +697,8 @@ AxisInfoAnalysis::AxisInfoAnalysis(MLIRContext *context)
                   CastOpAxisInfoVisitor<triton::PtrToIntOp>,
                   CastOpAxisInfoVisitor<triton::IntToPtrOp>,
                   CastOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
-                  CastOpAxisInfoVisitor<mlir::UnrealizedConversionCastOp>>();
+                  CastOpAxisInfoVisitor<mlir::UnrealizedConversionCastOp>,
+                  CastOpAxisInfoVisitor<triton::BitcastOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
   visitors.append<ConstantOpAxisInfoVisitor>();
   visitors.append<AddOpAxisInfoVisitor<triton::AddPtrOp>,
@@ -656,6 +714,8 @@ AxisInfoAnalysis::AxisInfoAnalysis(MLIRContext *context)
   visitors.append<ExpandDimsOpAxisInfoVisitor>();
   visitors.append<CmpOpAxisInfoVisitor<arith::CmpIOp>,
                   CmpOpAxisInfoVisitor<triton::gpu::CmpIOp>>();
+  visitors.append<AndIOpAxisInfoVisitor, OrIOpAxisInfoVisitor,
+                  XorIOpAxisInfoVisitor>();
   visitors.append<SelectOpAxisInfoVisitor<mlir::SelectOp>,
                   SelectOpAxisInfoVisitor<triton::gpu::SelectOp>>();
 }
