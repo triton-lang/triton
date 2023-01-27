@@ -1252,7 +1252,8 @@ public:
         }
       }
 
-      return {i8v4Elems[0], i8v4Elems[1], i8v4Elems[2], i8v4Elems[3]};
+      return {bitcast(i8v4Elems[0], i32_ty), bitcast(i8v4Elems[1], i32_ty),
+              bitcast(i8v4Elems[2], i32_ty), bitcast(i8v4Elems[3], i32_ty)};
     }
 
     assert(false && "Invalid smem load");
