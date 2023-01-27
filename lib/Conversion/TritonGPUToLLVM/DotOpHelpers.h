@@ -1134,7 +1134,8 @@ public:
       if (auto intTy = elemElemTy.dyn_cast<IntegerType>()) {
         if (intTy.getWidth() <= 16) {
           elemTy = rewriter.getI32Type();
-          resTy = LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, elemTy));
+          resTy = LLVM::LLVMStructType::getLiteral(
+              ctx, SmallVector<Type>(4, elemTy));
         }
       }
     }
