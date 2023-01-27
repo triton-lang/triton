@@ -987,6 +987,9 @@ def path_to_ptxas():
         "/usr",
         os.environ.get('CUDA_PATH', default_cuda_dir())
     ]
+    if not os.getenv("TRITON_IGNORE_BUNDLED_PTXAS"):
+        prefixes.insert(0, os.path.dirname(__file__))
+
     for prefix in prefixes:
         ptxas = os.path.join(prefix, "bin", "ptxas")
         if os.path.exists(ptxas):
@@ -1287,6 +1290,11 @@ def _build(name, src, srcdir):
     cuda_lib_dirs = libcuda_dirs()
     cuda_path = os.environ.get('CUDA_PATH', default_cuda_dir())
     cu_include_dir = os.path.join(cuda_path, "include")
+    triton_include_dir = os.path.join(os.path.dirname(__file__), "include")
+    cuda_header = os.path.join(cu_include_dir, "cuda.h")
+    triton_cuda_header = os.path.join(triton_include_dir, "cuda.h")
+    if not os.path.exists(cuda_header) and os.path.exists(triton_cuda_header):
+        cu_include_dir = triton_include_dir
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
