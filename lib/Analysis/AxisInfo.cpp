@@ -696,7 +696,11 @@ AxisInfoAnalysis::AxisInfoAnalysis(MLIRContext *context)
                   CastOpAxisInfoVisitor<triton::IntToPtrOp>,
                   CastOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
                   CastOpAxisInfoVisitor<mlir::UnrealizedConversionCastOp>,
-                  CastOpAxisInfoVisitor<triton::BitcastOp>>();
+                  CastOpAxisInfoVisitor<triton::BitcastOp>,
+                  CastOpAxisInfoVisitor<arith::SIToFPOp>,
+                  CastOpAxisInfoVisitor<arith::UIToFPOp>,
+                  CastOpAxisInfoVisitor<arith::FPToSIOp>,
+                  CastOpAxisInfoVisitor<arith::FPToUIOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
   visitors.append<ConstantOpAxisInfoVisitor>();
   visitors.append<AddOpAxisInfoVisitor<triton::AddPtrOp>,
