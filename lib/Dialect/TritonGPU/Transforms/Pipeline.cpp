@@ -62,13 +62,13 @@ class LoopPipeliner {
   DenseMap<Value, SmallVector<Value>> valueMapping;
 
   /// Block arguments that loads depend on
-  DenseSet<BlockArgument> depArgs;
+  SetVector<BlockArgument> depArgs;
 
   /// Operations (inside the loop body) that loads depend on
-  DenseSet<Operation *> depOps;
+  SetVector<Operation *> depOps;
 
   /// collect values that v depends on and are defined inside the loop
-  void collectDeps(Value v, int stages, DenseSet<Value> &deps);
+  void collectDeps(Value v, int stages, SetVector<Value> &deps);
 
   void setValueMapping(Value origin, Value newValue, int stage);
 
@@ -112,7 +112,7 @@ Value LoopPipeliner::lookupOrDefault(Value origin, int stage) {
   return valueMapping[origin][stage];
 }
 
-void LoopPipeliner::collectDeps(Value v, int stages, DenseSet<Value> &deps) {
+void LoopPipeliner::collectDeps(Value v, int stages, SetVector<Value> &deps) {
   // Loop-invariant value, skip
   if (v.getParentRegion() != &forOp.getLoopBody())
     return;
@@ -169,9 +169,9 @@ LogicalResult LoopPipeliner::initialize() {
     return failure();
 
   // load => values that it depends on
-  DenseMap<Value, DenseSet<Value>> loadDeps;
+  DenseMap<Value, SetVector<Value>> loadDeps;
   for (triton::LoadOp loadOp : allLoads) {
-    DenseSet<Value> deps;
+    SetVector<Value> deps;
     for (Value op : loadOp->getOperands())
       collectDeps(op, numStages - 1, deps);
     loadDeps[loadOp] = deps;

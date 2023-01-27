@@ -462,7 +462,7 @@ struct CmpIOpConversion
 
 #undef __PRED_ENUM
     }
-    return LLVM::ICmpPredicate::eq;
+    llvm_unreachable("Unknown arith::CmpIPredicate");
   }
 };
 
@@ -510,7 +510,7 @@ struct CmpFOpConversion
 
 #undef __PRED_ENUM
     }
-    return LLVM::FCmpPredicate::_true;
+    llvm_unreachable("Unknown arith::CmpFPredicate");
   }
 };
 
