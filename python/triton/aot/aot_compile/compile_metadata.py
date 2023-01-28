@@ -64,7 +64,6 @@ def parse_signature(type_anns: Sequence[str]) -> Dict[int, str]:
 
 def parse_specializations(spec_ann: Sequence[str]) -> instance_descriptor:
 
-    # index by spec_val % 16
     div_16 = set()
     is_1 = set()
 
@@ -80,6 +79,24 @@ def parse_specializations(spec_ann: Sequence[str]) -> instance_descriptor:
             continue
 
     return instance_descriptor(divisible_by_16=div_16, equal_to_1=is_1)
+
+
+def _valid_constant(const: str, const_name: str, global_scope: Dict[str, Any]) -> Union[int, float, JITStub]:
+    if const.isnumeric():
+        return int(const)
+
+    try:
+        return float(const)
+    except ValueError:
+        # not a float, so assume string
+        pass
+
+    try:
+        return global_scope[const]
+    except KeyError:
+        from argparse import ArgumentError
+
+        raise ArgumentError(f"[Bad Value: {const_name}]{const} is not a valid number and no global object with this name exists")
 
 
 def compilation_metadata_from_args(
@@ -110,10 +127,10 @@ def compilation_metadata_from_args(
     )
 
     # TODO: add support for defaults
-    for c in consts:
+    for cname in consts:
         parser.add_argument(
-            f"--{c}",
-            type=int,
+            f"--{cname}",
+            type=lambda x: _valid_constant(x, cname, kernel.__globals__),
             help="Constant value for kernel compilation",
             required=True,
         )
@@ -137,6 +154,7 @@ def compilation_metadata_from_args(
     const_dict.pop("signature")
     conts_docstr = ",".join([f"{k}: {v}" for k, v in const_dict.items()])
 
+    
     specials = parse_specializations(specializations)
     function_name = f"{kernel.__name__}_{kernel_suffix(signature=ker_arg_names, specialization=specials)}"
 
