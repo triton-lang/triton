@@ -5,7 +5,7 @@ from typing import Sequence, Tuple
 from pathlib import Path
 
 THREADS_PER_WARP = 32
-# from triton.compiler import ty_to_cpp
+from triton.compiler import ty_to_cpp
 from .compile_metadata import AOTKernelMetadata, CompileMetadata
 
 
@@ -18,7 +18,7 @@ class TemplateFields:
     """ the var names that stores the cubin/ptx in source"""
     bin_size: int
     """ lenght in bytes of kernels binary """
-    binary_val: str 
+    binary_val: str
     """ Binary as hex string """
     signature: str
     """ Kernels input args signature """
@@ -33,13 +33,18 @@ class TemplateFields:
 def metadata_to_template_strings(
     compile_meta: CompileMetadata,
     bin_: bytes,
-    docstring: str = None,
 ):
-    kernel_name = compile_meta.compiled_function_name 
+    kernel_name = compile_meta.compiled_function_name
     binary_arg_name = f"{kernel_name}_cubin"
     binary_val, bin_size = bytes_to_uchar_array(bin_)
 
-    signature, arg_pointers = signature_tt_to_c_args(names=compile_meta.arg_names, tt_types=compile_meta.signature)
+    sig = [
+        compile_meta.signature[idx] for idx, arg in enumerate(compile_meta.arg_names)
+    ]
+
+    signature, arg_pointers = signature_tt_to_c_args(
+        names=compile_meta.arg_names, tt_types=sig
+    )
     num_args = len(compile_meta.arg_names)
 
     return TemplateFields(
@@ -52,7 +57,7 @@ def metadata_to_template_strings(
         arg_pointers=arg_pointers,
         num_args=num_args,
         threads_per_warp=THREADS_PER_WARP,
-        kernel_docstring=docstring or "",
+        kernel_docstring=compile_meta.docstr,
     )
 
 
@@ -99,9 +104,11 @@ class CodegenTemplates:
     user_launch: str
     """ User handles kernel loading, and passes CUfunction as an argument """
 
+
 @dataclass
 class KernelCSource:
-    """ Header and source strings """
+    """Header and source strings"""
+
     header: str
     source: str
     docstring: str
@@ -109,11 +116,11 @@ class KernelCSource:
 
     def dump_to_file(self, fname: str):
         _path = Path(fname)
-        h, c =_path.with_suffix(".h"), _path.with_suffix(".c") 
+        h, c = _path.with_suffix(".h"), _path.with_suffix(".c")
 
         with h.open("w") as fp:
-                fp.write(self.header)
-        
+            fp.write(self.header)
+
         with c.open("w") as fp:
             fp.write(self.source)
 
@@ -124,6 +131,7 @@ class KernelCSource:
         print("")
         return
 
+
 class CodeGenerator:
     def __init__(self, template_path: str = None):
         if template_path is None:
@@ -133,60 +141,66 @@ class CodeGenerator:
         self._gen_code = []
 
     def make_source(
-        self,
-        compile_meta: CompileMetadata,
-        bin_: bytes,
-        docstring: str = None,
+        self, compile_meta: CompileMetadata, bin_: bytes, out_filename: str = None
     ) -> KernelCSource:
-
         template_fields = metadata_to_template_strings(
             compile_meta=compile_meta,
             bin_=bin_,
-            docstring=docstring,
         )
+
+        if out_filename is None:
+            out_filename = template_fields.kernel_name
+
         _fields_dict = asdict(template_fields)
         _code = self._template.format(**_fields_dict)
         code = split_template(_code)
 
         header = code.kernel_header
         source = [
-            f'#include "{template_fields.kernel_name}.h"',
+            f'#include "{out_filename}.h"',
             code.default_load,
             code.default_launch,
             code.user_launch,
         ]
         src_str = "\n".join(source)
 
-        return KernelCSource(source=src_str, header=header, docstring=docstring,name=template_fields.kernel_name)
-
+        return KernelCSource(
+            source=src_str,
+            header=header,
+            docstring=compile_meta.docstr,
+            name=template_fields.kernel_name,
+        )
 
     def gen_kernel(
         self,
         kernel_meta: AOTKernelMetadata,
         compile_meta: CompileMetadata,
         bin_: bytes,
-        docstring: str = None,
     ):
-        generated_code = self.make_source(kernel_meta=kernel_meta, compile_meta=compile_meta, bin_=bin_, docstring=docstring)
+        generated_code = self.make_source(
+            kernel_meta=kernel_meta,
+            compile_meta=compile_meta,
+            bin_=bin_,
+        )
         self._gen_code.append(generated_code)
         file_name = generated_code.name
 
-
-        self._headers[file_name] = generated_code.header 
-        self._sources[file_name] = generated_code.source 
-        self._summray_docstrings[file_name] = generated_code.docstring 
+        self._headers[file_name] = generated_code.header
+        self._sources[file_name] = generated_code.source
+        self._summray_docstrings[file_name] = generated_code.docstring
 
     def dump(self, out_dir: str):
         outdir = Path(out_dir)
         print(f"Summary of generated code in ({str(outdir)}):")
 
-        with (out_dir /"common.h").open("w") as fp:
-                fp.write(self._common_h)
+        with (out_dir / "common.h").open("w") as fp:
+            fp.write(self._common_h)
 
         code: KernelCSource
         for code in self._gen_code:
             file_name = code.name
             code.dump_to_file(file_name)
+
 
 def split_template(template_src: str):
     """

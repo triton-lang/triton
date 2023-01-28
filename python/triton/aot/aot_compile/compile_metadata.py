@@ -436,7 +436,12 @@ def compilation_metadata_from_args(
     specials = parse_specializations(specializations)
     function_name = f"{kernel.__name__}_{kernel_suffix(signature=ker_arg_names, specialization=specials)}"
 
-    docstr = "\n".join([kernel.__name__, "---", arg_docstr, conts_docstr])
+    docstr_parts = [kernel.__name__, "---", arg_docstr, conts_docstr]
+
+    if kernel.__doc__ is not None:
+        docstr_parts += kernel.__doc__.split("\n")
+    
+    docstr = "\n\t".join(docstr_parts)
 
     return CompileMetadata(
         arg_names=ker_arg_names,
