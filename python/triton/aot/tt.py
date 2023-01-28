@@ -1,7 +1,7 @@
 from argparse import ArgumentParser, Namespace
 from typing import Dict, Sequence, Tuple, Union
 
-# import triton
+import triton
 from aot_compile.c_codegen import CodeGenerator
 from aot_compile.compile_metadata import (
     AOTKernelMetadata,
@@ -19,30 +19,23 @@ ASMObject = Dict[str, Union[str, bytes]]
 
 
 def generate_asm(
-    kernel: JITStub, meta: CompileMetadata, out_name: str = None
+    kernel: JITStub,
+    meta: CompileMetadata,
 ) -> ASMObject:
 
-    if out_name is None:
-        out_name = kernel.__name__
-
-    old_name = kernel.__name__
-    kernel.__name__ = out_name
     kwargs = {
         "signature": meta.signature,
         "configs": [meta.specializations],
         "constants": meta.constants,
     }
+    print(f"Compiling with name: {kernel.__name__}")
     compiled = triton.compile(kernel, **kwargs)
     asm = compiled.asm
-
-    kernel.__name__ = old_name
 
     return asm
 
 
-def generate_c_code(
-    kernel: JITStub, meta: CompileMetadata, out_kernel_name: str, out_filename: str
-):
+def generate_c_code(kernel: JITStub, meta: CompileMetadata, out_path: str, out_format: str="cubin"):
     """
     Code generation goes like this:
         - each jitted function gets replicated according to the number of constexpr variants it has
@@ -52,14 +45,17 @@ def generate_c_code(
     # C Code generation.
     codegen = CodeGenerator()
 
-    asm = generate_asm(kernel=kernel, meta=meta, out_name=out_kernel_name)
-    docstr = meta.docstr
-    if kernel.__doc__ is not None:
-        docstr = f"{docstr}\n\t{kernel.__doc__}"
+    asm = generate_asm(kernel=kernel, meta=meta)
+    if out_format not in asm:
+        raise ValueError(f"{out_format} is not a supported output format")
+
+    out_filename = Path(out_path).name
 
     codegen.make_source(
-        compile_meta=meta, bin_=asm["cubin"], docstring=docstr
-    ).dump_to_file(out_filename)
+        compile_meta=meta,
+        bin_=asm[out_format],
+        out_filename=out_filename,
+    ).dump_to_file(out_path)
 
 
 if __name__ == "__main__":
@@ -93,6 +89,11 @@ if __name__ == "__main__":
     ast_gen_objects = build_jit_stubs(*src_files)
 
     kernel_to_compile = ast_gen_objects[args.kernel_name]
+
+    if args.out_name:
+        print(args.out_name)
+        kernel_to_compile.__name__ = args.out_name
+
     compile_meta = compilation_metadata_from_args(
         kernel_to_compile, kernel_args=unknown
     )
@@ -102,6 +103,5 @@ if __name__ == "__main__":
         generate_c_code(
             kernel=kernel_to_compile,
             meta=compile_meta,
-            out_kernel_name=args.out_name,
-            out_filename=args.out_path,
+            out_path=args.out_path,
         )
