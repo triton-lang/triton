@@ -68,12 +68,19 @@ void main() {
   VectoDevice(VEC_SIZE, v, v_cu);
 
 
-  GridWarps g = {32, 1, 1, 3};
+  // GridWarps g = {32, 1, 1, 3};
+
+  unsigned int gX, gY, gZ, numWarps;
+  gX = 32;
+  gY =1;
+  gZ =1;
+  numWarps = 3;
+
   CUstream stream;
   CHECK_CUDA(cuStreamCreate(&stream, CU_STREAM_DEFAULT),"stream creation");
 
   uint32_t n_elem = VEC_SIZE;
-  CHECK_CUDA(add_kernel0(stream, g, u_cu, v_cu, out_cu, n_elem), "kernel run");
+  CHECK_CUDA(vec_add_64_0d1d2d3d(stream, gX, gY, gZ, numWarps, u_cu, v_cu, out_cu, n_elem), "kernel run");
   DevicetoVec(VEC_SIZE, out_cu, out);
   printf("Out value is %f Expected 30\n", out[15]);
   printf("Out value is %f Expected 2022\n", out[1011]);
