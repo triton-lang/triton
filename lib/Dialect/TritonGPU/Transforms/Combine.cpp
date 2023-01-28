@@ -298,21 +298,8 @@ LogicalResult getForwardEncoding(Attribute sourceEncoding, Operation *op,
 inline bool expensive_to_remat(Operation *op) {
   if (!op)
     return true;
-  if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
-    // Don't consider load as expensive if it is loading a scalar.
-    if (auto tensorTy = loadOp.ptr().getType().dyn_cast<RankedTensorType>()) {
-      return tensorTy.getNumElements() != 1;
-    }
-    // TODO: Handle other cases.
-    // For example, when ptr is a tensor of single value.
-    // It means that ptr is a resultant of broadcast or generated through
-    // a chain of broadcast and other operations.
-    // Rematerialize it without considering contiguous memory access pattern is
-    // fine.
-    return false;
-  }
   if (isa<tensor::ExtractSliceOp, triton::gpu::AllocTensorOp,
-          triton::gpu::InsertSliceAsyncOp, triton::StoreOp,
+          triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp,
           triton::AtomicRMWOp, triton::AtomicCASOp, triton::DotOp>(op))
     return true;
   if (isa<scf::YieldOp, scf::ForOp>(op))
