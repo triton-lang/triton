@@ -1,9 +1,14 @@
 /*[ kernel_header ]*/
-#include "common.h"
+#pragma once
+
+#include <stdio.h>
+#include <stdint.h>
+#include <inttypes.h>
+#include <cuda.h>
 
 unsigned char {binary_arg_name}[{bin_size}];
 void load_{kernel_name}(void);
-CUresult {kernel_name}(CUstream stream, GridWarps g, {signature});
+CUresult {kernel_name}(CUstream stream, unsigned int gX,unsigned int gY,unsigned int gZ,unsigned int numWarps, {signature});
 CUmodule {kernel_name}_mod;
 CUfunction {kernel_name}_func;
 
@@ -37,7 +42,7 @@ void load_{kernel_name}(void)
 }}
 
 /*[ default_launch ]*/
-CUresult {kernel_name}(CUstream stream, GridWarps g, {signature})
+CUresult {kernel_name}(CUstream stream, unsigned int gX,unsigned int gY,unsigned int gZ,unsigned int numWarps, {signature})
 /*
     {kernel_docstring}
 */
@@ -47,11 +52,11 @@ CUresult {kernel_name}(CUstream stream, GridWarps g, {signature})
        load_{kernel_name}(); 
     }}
     void *args[{num_args}] = {{ {arg_pointers} }};
-    return cuLaunchKernel({kernel_name}_func, g.gX, g.gY, g.gZ, g.numWarps * {threads_per_warp}, 1, 1, 0, stream, args, NULL);
+    return cuLaunchKernel({kernel_name}_func, gX, gY, gZ, numWarps * {threads_per_warp}, 1, 1, 0, stream, args, NULL);
 }}
 
 /*[ user_launch ]*/
-CUresult launch_{kernel_name}(CUstream stream, GridWarps g, CUfunction* func, {signature}) 
+CUresult launch_{kernel_name}(CUstream stream, unsigned int gX,unsigned int gY,unsigned int gZ,unsigned int numWarps, CUfunction* func, {signature}) 
 /*
     This is a launch function, to let the user handle its own loading.
     To use the default kernel loding (cubin stored in source) use {kernel_name}
@@ -60,5 +65,5 @@ CUresult launch_{kernel_name}(CUstream stream, GridWarps g, CUfunction* func, {s
 */
 {{
     void *args[{num_args}] = {{ {arg_pointers} }};
-    return cuLaunchKernel(*func, g.gX, g.gY, g.gZ, g.numWarps * {threads_per_warp}, 1, 1, 0, stream, args, NULL);
+    return cuLaunchKernel(*func, gX, gY, gZ, numWarps * {threads_per_warp}, 1, 1, 0, stream, args, NULL);
 }}

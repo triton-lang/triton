@@ -6,24 +6,26 @@ from dataclasses import dataclass
 
 from triton import JITFunction
 
-
 class JITStub(JITFunction):
+# class JITStub:
     def __init__(
         self,
         fn,
         arg_names: Sequence[str],
+        constants: Sequence[int],
         src: str,
         globals: Dict[str, Any],
     ) -> None:
         self.fn = fn
         self.arg_names = arg_names
+        self.constants = sorted(constants)
         self.src = src
 
         self.__globals__ = globals
         self.__name__ = fn.__name__
 
     def __repr__(self):
-        return f"JITStub({self.fn.__name__})"
+        return f"JITStub({self.__name__})"
 
 
 @dataclass
@@ -31,6 +33,7 @@ class KernelMeta:
     arg_names: Sequence[str]
     src: str
     consts: Sequence[int]
+    """ arg numbers of constant"""
     stub: Sequence[ast.FunctionDef]
     dependencies: Sequence[str]
 
@@ -272,10 +275,11 @@ def build_jit_stubs(*src_paths: Sequence[str]) -> Dict[str, JITStub]:
 
     # Update globals as we generate JITStub
     jit_stubs = {}
+    meta: KernelMeta
     for k, meta in zip(ker_name, ker_vals):
         fn = stub_scope[k]
         jit_stubs[k] = JITStub(
-            fn=fn, arg_names=meta.arg_names, src=meta.src, globals=gscope
+            fn=fn, arg_names=meta.arg_names, src=meta.src, globals=gscope, constants=meta.consts
         )
         gscope.update(jit_stubs)
 
