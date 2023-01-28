@@ -7,8 +7,8 @@ from enum import Enum
 
 from aot_compile.static_analysis import JITStub
 
-# import triton.language as tl
-# from triton.compiler import instance_descriptor, kernel_suffix
+import triton.language as tl
+from triton.compiler import instance_descriptor, kernel_suffix
 # from triton import JITFunction
 
 
@@ -338,7 +338,7 @@ def infer_triton_signature(jit_fn: ASTGeneratingObject) -> str:
 class CompileMetadata:
     arg_names: Sequence[str]
     """ Names of input arguments """
-    signature: Sequence[str]
+    signature: Dict[int, str]
     """ Triton type annotations of function argument """
     constants: Dict[str, Union[int, JITStub]]
     specializations: instance_descriptor
@@ -423,7 +423,7 @@ def compilation_metadata_from_args(
 
     for argnum, arg_str in enumerate(args.signature):
         type_ann, spec = arg_str.split(":")
-        doc_str.append(f"{ker_arg_names[arg_num]}: {arg_str}")
+        doc_str.append(f"{ker_arg_names[argnum]}: {arg_str}")
         signature.append(type_ann)
         specializations.append(spec)
 
