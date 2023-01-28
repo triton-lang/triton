@@ -1,7 +1,9 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BlockAndValueMapping.h"
+#include "mlir/IR/TypeUtilities.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "triton/Analysis/AxisInfo.h"
 
 //===----------------------------------------------------------------------===//
 //
@@ -158,11 +160,20 @@ ttg::AllocTensorOp LoopPipeliner::allocateEmptyBuffer(Operation *op,
 LogicalResult LoopPipeliner::initialize() {
   Block *loop = forOp.getBody();
 
+  AxisInfoAnalysis axisInfoAnalysis(forOp.getContext());
+  axisInfoAnalysis.run(forOp->getParentOfType<ModuleOp>());
+
   // can we use forOp.walk(...) here?
   SmallVector<triton::LoadOp, 2> allLoads;
   for (Operation &op : *loop)
-    if (auto loadOp = dyn_cast<triton::LoadOp>(&op))
-      allLoads.push_back(loadOp);
+    if (auto loadOp = dyn_cast<triton::LoadOp>(&op)){
+      auto ptr = loadOp.ptr();
+      unsigned vec = axisInfoAnalysis.getPtrVectorSize(ptr);
+      auto ty = getElementTypeOrSelf(ptr.getType()).cast<triton::PointerType>().getPointeeType();
+      unsigned width = vec * ty.getIntOrFloatBitWidth();
+      if(width >= 32)
+        allLoads.push_back(loadOp);
+    }
 
   // Early stop: no need to continue if there is no load in the loop.
   if (allLoads.empty())
