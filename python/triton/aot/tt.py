@@ -49,7 +49,7 @@ def generate_c_code(kernel: JITStub, meta: CompileMetadata, out_path: str, out_f
     if out_format not in asm:
         raise ValueError(f"{out_format} is not a supported output format")
 
-    out_filename = Path(out_path).name
+    out_filename = Path(out_path).stem
 
     codegen.make_source(
         compile_meta=meta,
