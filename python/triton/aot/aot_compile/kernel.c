@@ -1,13 +1,18 @@
 /*[ kernel_header ]*/
-#pragma once
+#ifndef TT_KERNEL_INCLUDES
+#define TT_KERNEL_INCLUDES
 
 #include <stdio.h>
 #include <stdint.h>
 #include <inttypes.h>
 #include <cuda.h>
 
+#endif
+
 unsigned char {binary_arg_name}[{bin_size}];
 void load_{kernel_name}(void);
+// tt-linker-name: {kernel_name}
+// tt-linker-args: {signature}
 CUresult {kernel_name}(CUstream stream, unsigned int gX,unsigned int gY,unsigned int gZ,unsigned int numWarps, {signature});
 CUmodule {kernel_name}_mod;
 CUfunction {kernel_name}_func;
