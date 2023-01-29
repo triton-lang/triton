@@ -80,6 +80,9 @@ SmallVector<RES_T> reorder(ArrayRef<T> input, ArrayRef<unsigned> order) {
 bool isMmaToDotShortcut(triton::gpu::MmaEncodingAttr &mmaLayout,
                         triton::gpu::DotOperandEncodingAttr &dotOperandLayout);
 
+SetVector<Operation *>
+multiRootTopologicalSort(const SetVector<Operation *> &toSort);
+
 } // namespace mlir
 
 #endif // TRITON_ANALYSIS_UTILITY_H
