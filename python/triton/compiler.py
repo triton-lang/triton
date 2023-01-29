@@ -399,7 +399,10 @@ class CodeGenerator(ast.NodeVisitor):
                         if else_defs[else_name].type == liveins[else_name].type:
                             names.append(else_name)
                             ret_types.append(else_defs[else_name].type)
-                            then_defs[else_name] = liveins_copy[else_name]
+                            if else_name in liveins_copy:
+                                then_defs[else_name] = liveins_copy[else_name]
+                            else:
+                                then_defs[else_name] = else_defs[else_name]
                 self.builder.set_insertion_point_to_end(ip_block)
 
                 if then_defs or node.orelse:  # with else block
