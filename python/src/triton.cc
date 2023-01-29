@@ -254,6 +254,9 @@ void init_triton_ir(py::module &&m) {
       .def("has_terminator", [](mlir::Block &self) {
         return !self.empty() && 
                self.back().hasTrait<mlir::OpTrait::IsTerminator>();
+      })
+      .def("erase", [](mlir::Block &self) {
+        self.erase();
       });
 
   // using eattr = ir::attribute_kind_t;

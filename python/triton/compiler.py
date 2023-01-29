@@ -584,8 +584,9 @@ class CodeGenerator(ast.NodeVisitor):
             liveins, insert_block = sr
 
             # loop body (the after region)
-            loop_block = self.builder.create_block()
-            self.builder.set_insertion_point_to_start(loop_block)
+            # loop_block = self.builder.create_block()
+            dummy = self.builder.create_block()
+            self.builder.set_insertion_point_to_start(dummy)
             self.scf_stack.append(node)
             self.visit_compound_statement(node.body)
             self.scf_stack.pop()
@@ -625,8 +626,20 @@ class CodeGenerator(ast.NodeVisitor):
             # merge the loop body
             after_block = self.builder.create_block_with_parent(while_op.get_after(),
                                                                 [ty.to_ir(self.builder) for ty in ret_types])
-            loop_block.merge_block_before(after_block)
-            self.builder.set_insertion_point_to_end(after_block)
+            
+            # dirty for now -- generate loop body
+            self.builder.set_insertion_point_to_start(after_block)
+            for i, name in enumerate(names):
+                self.lscope[name] = triton.language.core.tensor(after_block.arg(i), ret_types[i])
+                self.local_defs[name] = self.lscope[name]
+            self.scf_stack.append(node)
+            self.visit_compound_statement(node.body)
+            self.scf_stack.pop()
+            loop_defs = self.local_defs
+            yields = []
+            for name in loop_defs:
+                if name in liveins:
+                    yields.append(loop_defs[name])            
             self.builder.create_yield_op([y.handle for y in yields])
 
         # update global uses in while_op
@@ -707,6 +720,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.scf_stack.append(node)
             self.visit_compound_statement(node.body)
             self.scf_stack.pop()
+            block.erase()
 
             # If a variable (name) is defined in both its parent & itself, then it's
             # a loop-carried variable. (They must be of the same type)
@@ -729,7 +743,17 @@ class CodeGenerator(ast.NodeVisitor):
             # create ForOp
             self.builder.set_insertion_point_to_end(insert_block)
             for_op = self.builder.create_for_op(lb, ub, step, [arg.handle for arg in init_args])
-            block.merge_block_before(for_op.get_body(0))
+
+            self.scf_stack.append(node)
+            self.builder.set_insertion_point_to_start(for_op.get_body(0))
+            for i, name in enumerate(names):
+                self.set_value(name, triton.language.core.tensor(for_op.get_body(0).arg(i+1), yields[i].type))
+            self.visit_compound_statement(node.body)
+            yields = []
+            for name in self.local_defs:
+                if name in liveins:
+                    yields.append(triton.language.core._to_tensor(self.local_defs[name], self.builder))
+            self.scf_stack.pop()
 
             # update induction variable with actual value, and replace all uses
             self.builder.set_insertion_point_to_start(for_op.get_body(0))
@@ -747,9 +771,10 @@ class CodeGenerator(ast.NodeVisitor):
             for_op_region = for_op.get_body(0).get_parent()
             assert for_op_region.size() == 1, "We use SCF, so the loop body should only have one block"
             # replace global uses with block arguments
-            for i, name in enumerate(names):
+            # for i, name in enumerate(names):
+            #     print(i, name)
                 # arg0 is the induction variable
-                for_op.get_body(0).replace_use_in_block_with(init_args[i].handle, for_op.get_body(0).arg(i + 1))
+                # for_op.get_body(0).replace_use_in_block_with(init_args[i].handle, for_op.get_body(0).arg(i + 1))
 
         # update lscope & local_defs (ForOp defines new values)
         for i, name in enumerate(names):
