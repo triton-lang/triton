@@ -176,15 +176,14 @@ struct DFSState {
   DenseSet<Operation *> seen;
 };
 
-static void dfsPostorder(Operation *root, DFSState *state) {
+void dfsPostorder(Operation *root, DFSState *state) {
   SmallVector<Operation *> queue(1, root);
   std::vector<Operation *> ops;
   while (!queue.empty()) {
     Operation *current = queue.pop_back_val();
-    if (state->seen.count(current) > 0)
+    if (!state->seen.insert(current).second)
       continue;
     ops.push_back(current);
-    state->seen.insert(current);
     for (Value result : current->getResults()) {
       for (Operation *op : result.getUsers())
         queue.push_back(op);
