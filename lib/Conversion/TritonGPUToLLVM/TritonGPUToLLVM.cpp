@@ -70,7 +70,6 @@ struct BroadcastOpConversion
     auto resultOffsets = emitOffsetForLayout(resultLayout, resultShape);
     SmallVector<Value> srcVals = getElementsFromStruct(loc, src, rewriter);
     if (auto srcMma = srcLayout.dyn_cast<MmaEncodingAttr>()) {
-
       // NOTE: This is just an naive fix, but for MMA layout, and 2-d fix should
       // be all right.
       // TODO[Superjomn]: Replace this with a generic implementation.
