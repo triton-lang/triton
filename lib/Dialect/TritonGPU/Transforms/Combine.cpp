@@ -613,7 +613,7 @@ public:
       else
         sortedValues.push_back(v);
     }
-    tmp = mlir::topologicalSort(tmp);
+    tmp = mlir::multiRootTopologicalSort(tmp);
     for (Operation *op : tmp)
       sortedValues.push_back(op->getResult(0));
 
