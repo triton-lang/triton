@@ -95,9 +95,6 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
           bool is_row = order[0] != 0;
           bool is_vec4 = opIdx == 0 ? !is_row && (shape[order[0]] <= 16) :
               is_row && (shape[order[0]] <= 16);
-          // TODO[Superjomn]: Support the case when is_vec4=false later
-          // Currently, we only support ld.v2, for the mma layout varies with different ld vector width.
-          is_vec4 = true;
           int pack_size = opIdx == 0 ? ((is_row || is_vec4) ? 1 : 2) :
                                        ((is_row && !is_vec4) ? 2 : 1);
           int rep = 2 * pack_size;
@@ -135,8 +132,6 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
 
         // ---- not implemented ----
         llvm_unreachable("unsupported swizzling for provided MMA version");
-
-
     }]>
   ];
 
@@ -403,6 +398,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
       bool isAVec4 = !isARow && (shapeA[isARow] <= 16);
       bool isBVec4 = isBRow && (shapeB[isBRow] <= 16);
       // 4-bits to encode 4 booleans: [isARow, isBRow, isAVec4, isBVec4]
+      // 3-bits to encode the MMA ID to make each unique
       int versionMinor = (isARow * (1<<0)) |\
                          (isBRow * (1<<1)) |\
                          (isAVec4 * (1<<2)) |\
@@ -424,11 +420,6 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     // Number of bits in versionMinor to hold the ID of the MMA encoding instance.
     // Here 5 bits can hold 32 IDs in a single module.
     static constexpr int numBitsToHoldMmaV1ID{5};
-
-    // Here is a temporary flag that indicates whether we need to update the warpsPerCTA for MMAv1, since the current backend cannot support the updated wpt.
-    // The mmav1's wpt-related logic is separated into multiple files, so a global flag is added here for universal coordination.
-    // TODO[Superjomn]: Remove this flag once the MMAv1 backend is ready.
-    static constexpr bool _mmaV1UpdateWpt{false};
   }];
 
 }

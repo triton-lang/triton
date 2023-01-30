@@ -120,11 +120,15 @@ private:
 
     bool isARow = ALayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
     bool isBRow = BLayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
+    auto [isARow_, isBRow_, isAVec4_, isBVec4_, mmaId] =
+        mmaLayout.decodeVoltaLayoutStates();
+    assert(isARow == isARow_);
+    assert(isBRow == isBRow_);
 
     DotOpMmaV1ConversionHelper helper(mmaLayout);
 
-    unsigned numM = helper.getNumM(AShape, isARow);
-    unsigned numN = helper.getNumN(BShape, isBRow);
+    unsigned numM = helper.getNumM(AShape[0], isARow, isAVec4_);
+    unsigned numN = helper.getNumN(BShape[1], isBRow, isBVec4_);
     unsigned NK = AShape[1];
 
     auto has = helper.extractLoadedOperand(adaptor.a(), NK, rewriter);
@@ -156,20 +160,6 @@ private:
       return idx;
     };
 
-    { // convert the acc's value from accumuator-external order to
-      // accumulator-internal order.
-      SmallVector<Value> accInit(acc.size());
-
-      for (unsigned m = 0; m < numM / 2; ++m)
-        for (unsigned n = 0; n < numN / 2; ++n) {
-          auto idx = getIdx(m, n);
-          for (unsigned i = 0; i < 8; ++i)
-            accInit[idx[i]] = acc[(m * numN / 2 + n) * 8 + i];
-        }
-
-      acc = accInit;
-    }
-
     auto callMMA = [&](unsigned m, unsigned n, unsigned k) {
       auto ha = has.at({m, k});
       auto hb = hbs.at({n, k});
@@ -177,7 +167,9 @@ private:
       PTXBuilder builder;
       auto idx = getIdx(m, n);
 
-      auto *resOprs = builder.newListOperand(8, "=f");
+      // note: using "=f" for float leads to cleaner PTX
+      bool isIntMMA = DTensorTy.getElementType().isInteger(32);
+      auto *resOprs = builder.newListOperand(8, isIntMMA ? "=r" : "=f");
       auto *AOprs = builder.newListOperand({
           {ha.first, "r"},
           {ha.second, "r"},
@@ -201,14 +193,9 @@ private:
       Value res =
           builder.launch(rewriter, loc, helper.getMmaRetType(ATensorTy));
 
-      auto getIntAttr = [&](int v) {
-        return ArrayAttr::get(ctx, {IntegerAttr::get(i32_ty, v)});
-      };
-
-      for (unsigned i = 0; i < 8; i++) {
-        Value elem = extract_val(f32_ty, res, getIntAttr(i));
+      for (auto i = 0; i < 8; i++) {
+        Value elem = extract_val(f32_ty, res, i32_arr_attr(i));
         acc[idx[i]] = elem;
-        resVals[(m * numN / 2 + n) * 8 + i] = elem;
       }
     };
 
@@ -217,6 +204,11 @@ private:
         for (unsigned n = 0; n < numN / 2; ++n) {
           callMMA(m, n, k);
         }
+
+    // res holds the same layout of acc
+    for (size_t i = 0; i < acc.size(); ++i) {
+      resVals[i] = acc[i];
+    }
 
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(resSize, type::f32Ty(ctx)));

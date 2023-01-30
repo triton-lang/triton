@@ -95,6 +95,10 @@
                             __VA_ARGS__)
 #define tid_val() getThreadId(rewriter, loc)
 
+// Attributes
+#define i32_arr_attr(...) rewriter.getI32ArrayAttr({__VA_ARGS__})
+#define i64_arr_attr(...) rewriter.getI64ArrayAttr({__VA_ARGS__})
+
 namespace mlir {
 namespace triton {
 
@@ -133,8 +137,7 @@ llvm::SmallVector<T> getMultiDimIndex(T linearIndex, llvm::ArrayRef<T> shape,
 
 // Linearize supposing order is [0, 1, .. , n]
 template <typename T>
-static T getLinearIndexImpl(llvm::ArrayRef<T> multiDimIndex,
-                            llvm::ArrayRef<T> shape) {
+T getLinearIndexImpl(llvm::ArrayRef<T> multiDimIndex, llvm::ArrayRef<T> shape) {
   assert(multiDimIndex.size() == shape.size());
   // shape: {a, b, c, d}  ->  accMul: {1, a, a*b, a*b*c}
   size_t rank = shape.size();
@@ -150,9 +153,8 @@ static T getLinearIndexImpl(llvm::ArrayRef<T> multiDimIndex,
 }
 
 template <typename T>
-static T getLinearIndex(llvm::ArrayRef<T> multiDimIndex,
-                        llvm::ArrayRef<T> shape,
-                        llvm::ArrayRef<unsigned> order) {
+T getLinearIndex(llvm::ArrayRef<T> multiDimIndex, llvm::ArrayRef<T> shape,
+                 llvm::ArrayRef<unsigned> order) {
   assert(shape.size() == order.size());
   return getLinearIndexImpl<T>(reorder(multiDimIndex, order),
                                reorder(shape, order));
@@ -163,91 +165,34 @@ static T getLinearIndex(llvm::ArrayRef<T> multiDimIndex,
 namespace LLVM {
 using namespace mlir::triton;
 
-static Value getStructFromElements(Location loc, ValueRange resultVals,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type structType) {
-  if (!structType.isa<LLVM::LLVMStructType>()) {
-    return *resultVals.begin();
-  }
+Value getStructFromElements(Location loc, ValueRange resultVals,
+                            ConversionPatternRewriter &rewriter,
+                            Type structType);
 
-  Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
-  for (const auto &v : llvm::enumerate(resultVals)) {
-    assert(v.value() && "can not insert null values");
-    llvmStruct = insert_val(structType, llvmStruct, v.value(),
-                            rewriter.getI64ArrayAttr(v.index()));
-  }
-  return llvmStruct;
-}
+SmallVector<Value> getElementsFromStruct(Location loc, Value llvmStruct,
+                                         ConversionPatternRewriter &rewriter);
 
-static SmallVector<Value>
-getElementsFromStruct(Location loc, Value llvmStruct,
-                      ConversionPatternRewriter &rewriter) {
-  if (llvmStruct.getType().isIntOrIndexOrFloat() ||
-      llvmStruct.getType().isa<triton::PointerType>() ||
-      llvmStruct.getType().isa<LLVM::LLVMPointerType>())
-    return {llvmStruct};
-  ArrayRef<Type> types =
-      llvmStruct.getType().cast<LLVM::LLVMStructType>().getBody();
-  SmallVector<Value> results(types.size());
-  for (unsigned i = 0; i < types.size(); ++i) {
-    Type type = types[i];
-    results[i] = extract_val(type, llvmStruct, rewriter.getI64ArrayAttr(i));
-  }
-  return results;
-}
+/// Create a 32-bit integer constant.
+Value createConstantI32(Location loc, PatternRewriter &rewriter, int32_t v);
 
-// Create a 32-bit integer constant.
-static Value createConstantI32(Location loc, PatternRewriter &rewriter,
-                               int32_t v) {
-  auto i32ty = rewriter.getIntegerType(32);
-  return rewriter.create<LLVM::ConstantOp>(loc, i32ty,
-                                           IntegerAttr::get(i32ty, v));
-}
+/// Create a 32-bit float constant.
+Value createConstantF32(Location loc, PatternRewriter &rewriter, float v);
 
-static Value createConstantF32(Location loc, PatternRewriter &rewriter,
-                               float v) {
-  auto type = type::f32Ty(rewriter.getContext());
-  return rewriter.create<LLVM::ConstantOp>(loc, type,
-                                           rewriter.getF32FloatAttr(v));
-}
+/// Create a 64-bit float constant.
+Value createConstantF64(Location loc, PatternRewriter &rewriter, float v);
 
-static Value createConstantF64(Location loc, PatternRewriter &rewriter,
-                               float v) {
-  auto type = type::f64Ty(rewriter.getContext());
-  return rewriter.create<LLVM::ConstantOp>(loc, type,
-                                           rewriter.getF64FloatAttr(v));
-}
+/// Create an index type constant.
+Value createIndexConstant(OpBuilder &builder, Location loc,
+                          TypeConverter *converter, int64_t value);
 
-// Create an index type constant.
-static Value createIndexConstant(OpBuilder &builder, Location loc,
-                                 TypeConverter *converter, int64_t value) {
-  Type ty = converter->convertType(builder.getIndexType());
-  return builder.create<LLVM::ConstantOp>(loc, ty,
-                                          builder.getIntegerAttr(ty, value));
-}
-
-// Create an integer constant of \param width bits.
-static Value createLLVMIntegerConstant(OpBuilder &builder, Location loc,
-                                       short width, int64_t value) {
-  Type ty = builder.getIntegerType(width);
-  return builder.create<LLVM::ConstantOp>(loc, ty,
-                                          builder.getIntegerAttr(ty, value));
-}
+/// Create an integer constant of \param width bits.
+Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
+                                int64_t value);
 
 /// Helper function to get strides from a given shape and its order
-static SmallVector<Value>
+SmallVector<Value>
 getStridesFromShapeAndOrder(ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
-                            Location loc, ConversionPatternRewriter &rewriter) {
-  auto rank = shape.size();
-  SmallVector<Value> strides(rank);
-  int64_t stride = 1;
-  for (auto idx : order) {
-    strides[idx] = i32_val(stride);
-    stride *= shape[idx];
-  }
-  return strides;
-}
-
+                            Location loc, ConversionPatternRewriter &rewriter);
 struct SharedMemoryObject {
   Value base; // i32 ptr. The start address of the shared memory object.
   // We need to store strides as Values but not integers because the
@@ -311,57 +256,15 @@ struct SharedMemoryObject {
   }
 };
 
-static SharedMemoryObject
+SharedMemoryObject
 getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
-                                ConversionPatternRewriter &rewriter) {
-  auto elems = getElementsFromStruct(loc, llvmStruct, rewriter);
-  auto rank = (elems.size() - 1) / 2;
-  return {/*base=*/elems[0],
-          /*strides=*/{elems.begin() + 1, elems.begin() + 1 + rank},
-          /*offsets=*/{elems.begin() + 1 + rank, elems.end()}};
-}
+                                ConversionPatternRewriter &rewriter);
 
-static Value storeShared(ConversionPatternRewriter &rewriter, Location loc,
-                         Value ptr, Value val, Value pred) {
-  MLIRContext *ctx = rewriter.getContext();
-  unsigned bits = val.getType().getIntOrFloatBitWidth();
-  const char *c = bits == 64 ? "l" : (bits == 16 ? "h" : "r");
+Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+                  Value val, Value pred);
 
-  PTXBuilder builder;
-  auto *ptrOpr = builder.newAddrOperand(ptr, "r");
-  auto *valOpr = builder.newOperand(val, c);
-  auto &st = builder.create<>("st")->shared().b(bits);
-  st(ptrOpr, valOpr).predicate(pred, "b");
-  return builder.launch(rewriter, loc, void_ty(ctx));
-}
-
-static Value shflSync(Location loc, ConversionPatternRewriter &rewriter,
-                      Value val, int i) {
-  unsigned bits = val.getType().getIntOrFloatBitWidth();
-
-  if (bits == 64) {
-    Type vecTy = vec_ty(f32_ty, 2);
-    Value vec = bitcast(val, vecTy);
-    Value val0 = extract_element(f32_ty, vec, i32_val(0));
-    Value val1 = extract_element(f32_ty, vec, i32_val(1));
-    val0 = shflSync(loc, rewriter, val0, i);
-    val1 = shflSync(loc, rewriter, val1, i);
-    vec = undef(vecTy);
-    vec = insert_element(vecTy, vec, val0, i32_val(0));
-    vec = insert_element(vecTy, vec, val1, i32_val(1));
-    return bitcast(vec, val.getType());
-  }
-
-  PTXBuilder builder;
-  auto &shfl = builder.create("shfl.sync")->o("bfly").o("b32");
-  auto *dOpr = builder.newOperand("=r");
-  auto *aOpr = builder.newOperand(val, "r");
-  auto *bOpr = builder.newConstantOperand(i);
-  auto *cOpr = builder.newConstantOperand("0x1f");
-  auto *maskOpr = builder.newConstantOperand("0xffffffff");
-  shfl(dOpr, aOpr, bOpr, cOpr, maskOpr);
-  return builder.launch(rewriter, loc, val.getType(), false);
-}
+Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+               int i);
 
 } // namespace LLVM
 } // namespace mlir
