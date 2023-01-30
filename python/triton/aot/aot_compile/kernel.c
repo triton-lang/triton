@@ -11,8 +11,7 @@
 
 unsigned char {binary_arg_name}[{bin_size}];
 void load_{kernel_name}(void);
-// tt-linker-name: {kernel_name}
-// tt-linker-args: {signature}
+// tt-linker: {kernel_name}:{signature}
 CUresult {kernel_name}(CUstream stream, unsigned int gX,unsigned int gY,unsigned int gZ,unsigned int numWarps, {signature});
 CUmodule {kernel_name}_mod;
 CUfunction {kernel_name}_func;
