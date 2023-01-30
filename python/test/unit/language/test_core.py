@@ -773,7 +773,7 @@ def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
         assert to_numpy(z_tri) == z_ref
 
 
-@pytest.mark.parametrize("dtype_str", list(torch_dtype_name()))
+@pytest.mark.parametrize("dtype_str", list(torch_dtypes))
 def test_store_constant(dtype_str):
     check_type_supported(dtype_str)
 
