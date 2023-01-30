@@ -408,14 +408,14 @@ class CodeGenerator(ast.NodeVisitor):
             # defined in else block but not in then block
             # to find in parent scope and yield them
             for else_name in else_defs:
-                if else_name in liveins and else_name not in then_defs:
-                    assert else_defs[else_name].type == liveins[else_name].type,\
-                            f'Initial value for `{else_name}` is of type {liveins[else_name].type}, '\
+                if else_name in liveins_copy and else_name not in then_defs:
+                    assert else_defs[else_name].type == liveins_copy[else_name].type,\
+                            f'Initial value for `{else_name}` is of type {liveins_copy[else_name].type}, '\
                             f'but the else block redefines it as {else_defs[else_name].type}'
                     names.append(else_name)
                     ret_types.append(else_defs[else_name].type)
                     ir_ret_types.append(else_defs[else_name].handle.get_type())
-                    then_defs[else_name] = liveins[else_name]
+                    then_defs[else_name] = liveins_copy[else_name]
 
             # then terminator
             self.builder.set_insertion_point_to_end(then_block)
