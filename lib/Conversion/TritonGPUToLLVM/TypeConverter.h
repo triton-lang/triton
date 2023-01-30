@@ -97,6 +97,15 @@ public:
           Type targetTy;
           if (targetTyMap.count(elemTy.getIntOrFloatBitWidth())) {
             targetTy = targetTyMap.lookup(elemTy.getIntOrFloatBitWidth());
+            // <2xi16>/<4xi8> => i32
+            // We are doing this because NVPTX inserts extra integer instrs to
+            // pack & unpack vectors of sub-word integers
+            // Note: this needs to be synced with
+            //       DotOpMmaV2ConversionHelper::loadX4
+            if (elemTy.isa<IntegerType>() &&
+                (elemTy.getIntOrFloatBitWidth() == 8 ||
+                 elemTy.getIntOrFloatBitWidth() == 16))
+              targetTy = IntegerType::get(ctx, 32);
           } else {
             assert(false && "Unsupported element type");
           }

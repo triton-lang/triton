@@ -169,6 +169,22 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=self.build_temp)
 
 
+package_data = {
+    "triton/ops": ["*.c"],
+    "triton/ops/blocksparse": ["*.c"],
+    "triton/language": ["*.bc"],
+}
+
+if os.getenv("TRITION_PACKAGE_CUDA_DEPS"):
+    base_dir = os.path.dirname(__file__)
+    cuda_dir = os.getenv("CUDA_HOME", "/usr/local/cuda")
+    triton_dir = os.path.join(base_dir, "triton")
+    os.makedirs(os.path.join(triton_dir, "include"), exist_ok=True)
+    os.makedirs(os.path.join(triton_dir, "bin"), exist_ok=True)
+    shutil.copy(os.path.join(cuda_dir, "include", "cuda.h"), os.path.join(triton_dir, "include"))
+    shutil.copy(os.path.join(cuda_dir, "bin", "ptxas"), os.path.join(triton_dir, "bin"))
+    package_data["triton"] = ["include/cuda.h", "bin/ptxas"]
+
 setup(
     name="triton",
     version="2.0.0",
@@ -183,11 +199,7 @@ setup(
         "torch",
         "lit",
     ],
-    package_data={
-        "triton/ops": ["*.c"],
-        "triton/ops/blocksparse": ["*.c"],
-        "triton/language": ["*.bc"]
-    },
+    package_data=package_data,
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={"build_ext": CMakeBuild},
