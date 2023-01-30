@@ -87,11 +87,12 @@ func @if_convert_else_not(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 
   } else {
     scf.yield %9 : tensor<1024xi32, #layout1>
   }
+  // CHECK-NOT: triton_gpu.convert_layout
   tt.store %5, %8 : tensor<1024xi32, #layout1>
   return
 }
 
-// CHECK-LABEL: if_convert_else_not
+// CHECK-LABEL: if_not_else_convert
 func @if_not_else_convert(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   %c32_i32 = arith.constant dense<32> : tensor<1024xi32, #layout0>
   %0 = tt.get_program_id {axis = 0 : i32} : i32
@@ -107,6 +108,7 @@ func @if_not_else_convert(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 
     %7 = triton_gpu.convert_layout %3 : (tensor<1024xi32, #layout0>) -> tensor<1024xi32, #layout1>
     scf.yield %7 : tensor<1024xi32, #layout1>
   }
+  // CHECK-NOT: triton_gpu.convert_layout
   tt.store %5, %8 : tensor<1024xi32, #layout1>
   return
 }
