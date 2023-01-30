@@ -4,7 +4,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "add_kernel0.h"
+// #include "add_kernel0.h"
+#include "dispatcher.c"
 
 void errMsg(char* msg, int code) {
   if (code != CUDA_SUCCESS) {
@@ -80,9 +81,16 @@ void main() {
   CHECK_CUDA(cuStreamCreate(&stream, CU_STREAM_DEFAULT),"stream creation");
 
   uint32_t n_elem = VEC_SIZE;
-  CHECK_CUDA(vec_add_64_0d1d2d3d(stream, gX, gY, gZ, numWarps, u_cu, v_cu, out_cu, n_elem), "kernel run");
+  // CHECK_CUDA(vec_add_64_0d1d2d3d(stream, gX, gY, gZ, numWarps, u_cu, v_cu, out_cu, n_elem), "kernel run");
+  printf("Trying 64 Block size:\n");
+  CHECK_CUDA(vec_add_64(stream, gX, gY, gZ, numWarps, u_cu, v_cu, out_cu, n_elem), "kernel run");
   DevicetoVec(VEC_SIZE, out_cu, out);
   printf("Out value is %f Expected 30\n", out[15]);
   printf("Out value is %f Expected 2022\n", out[1011]);
-
+  printf("\n\n---------\n\n");
+  printf("Trying 128 Block size:\n");
+  CHECK_CUDA(vec_add_128(stream, gX, gY, gZ, numWarps, u_cu, v_cu, out_cu, n_elem), "kernel run");
+  DevicetoVec(VEC_SIZE, out_cu, out);
+  printf("Out value is %f Expected 30\n", out[15]);
+  printf("Out value is %f Expected 2024\n", out[1012]);
 }
