@@ -395,28 +395,22 @@ class CodeGenerator(ast.NodeVisitor):
             names = []
             ret_types = []
             ir_ret_types = []
-            for then_name in then_defs:
-                for else_name in else_defs:
-                    if then_name == else_name:
-                        assert then_defs[then_name].type == else_defs[else_name].type,\
-                                 f'`{then_name}` has type {then_defs[then_name].type} in then block, '\
-                                 f'but type {else_defs[else_name].type} in else block'
-                        names.append(then_name)
-                        ret_types.append(then_defs[then_name].type)
-                        ir_ret_types.append(then_defs[then_name].handle.get_type())
-
-            # defined in else block but not in then block
-            # to find in parent scope and yield them
-            for else_name in else_defs:
-                if else_name in liveins_copy and else_name not in then_defs:
-                    assert else_defs[else_name].type == liveins_copy[else_name].type,\
-                            f'Initial value for `{else_name}` is of type {liveins_copy[else_name].type}, '\
-                            f'but the else block redefines it as {else_defs[else_name].type}'
-                    names.append(else_name)
-                    ret_types.append(else_defs[else_name].type)
-                    ir_ret_types.append(else_defs[else_name].handle.get_type())
-                    then_defs[else_name] = liveins_copy[else_name]
-
+            for name in liveins_copy:
+                # check type
+                for defs, block_name in [(then_defs, 'then'), (else_defs, 'else')]:
+                    if name in defs:
+                        assert defs[name].type == liveins_copy[name].type,\
+                                f'initial value for `{name}` is of type {liveins_copy[name].type}, '\
+                                f'but the {block_name} block redefines it as {defs[name].type}'
+                if name in then_defs or name in else_defs:
+                    names.append(name)
+                    ret_types.append(then_defs[name].type if name in then_defs else else_defs[name].type)
+                    ir_ret_types.append(then_defs[name].handle.get_type() if name in then_defs else else_defs[name].handle.get_type())
+                if name in then_defs and name not in else_defs:
+                    else_defs[name] = liveins_copy[name]
+                if name in else_defs and name not in then_defs:
+                    then_defs[name] = liveins_copy[name]
+                
             # then terminator
             self.builder.set_insertion_point_to_end(then_block)
             if not then_block.has_terminator():
