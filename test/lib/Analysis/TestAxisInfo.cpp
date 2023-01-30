@@ -51,7 +51,14 @@ struct TestAxisInfoPass
         print("Divisibility", os, info.getDivisibility());
         os << " ; ";
         print("Constancy", os, info.getConstancy());
-        os << " ( ";
+        os << " ; ";
+        auto constantValue = info.getConstantValue();
+        os << "ConstantValue: [";
+        if (constantValue.has_value())
+          os << constantValue.value();
+        else
+          os << "None";
+        os << "] ( ";
         result.print(os);
         os << " ) ";
         os << "\n";
