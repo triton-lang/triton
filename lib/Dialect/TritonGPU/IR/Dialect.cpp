@@ -112,9 +112,7 @@ SmallVector<unsigned> getSizePerThread(const Attribute &layout) {
     if (mmaLayout.isAmpere()) {
       return {2, 2};
     } else if (mmaLayout.isVolta()) {
-      // Note: here the definition of sizePerThread is obscure, which doesn't
-      // mean vecSize=4 can be supported in the last dimension.
-      return {2, 4};
+      return {1, 2};
     } else {
       llvm_unreachable("Unexpected mma version");
     }
@@ -173,7 +171,8 @@ SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout) {
   return threads;
 }
 
-SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
+SmallVector<unsigned> getShapePerCTA(const Attribute &layout,
+                                     ArrayRef<int64_t> tensorShape) {
   SmallVector<unsigned> shape;
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     for (unsigned d = 0, n = blockedLayout.getOrder().size(); d < n; ++d)
@@ -186,15 +185,20 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
     for (unsigned d = 0, n = getOrder(parent).size(); d < n; ++d) {
       if (d == dim)
         continue;
-      shape.push_back(getShapePerCTA(parent)[d]);
+      shape.push_back(getShapePerCTA(parent, tensorShape)[d]);
     }
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     if (mmaLayout.isAmpere())
       return {16 * mmaLayout.getWarpsPerCTA()[0],
               8 * mmaLayout.getWarpsPerCTA()[1]};
-    if (mmaLayout.isVolta())
-      return {16 * mmaLayout.getWarpsPerCTA()[0],
-              16 * mmaLayout.getWarpsPerCTA()[1]};
+    if (mmaLayout.isVolta()) {
+      assert(!tensorShape.empty() && "Volta needs the tensorShape");
+      if (tensorShape.size() == 1) // must be SliceEncoding
+        return {static_cast<unsigned>(tensorShape[0]),
+                static_cast<unsigned>(tensorShape[0])};
+      return {static_cast<unsigned>(tensorShape[0]),
+              static_cast<unsigned>(tensorShape[1])};
+    }
     assert(0 && "Unexpected MMA layout version found");
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
     auto parentLayout = dotLayout.getParent();
@@ -202,7 +206,7 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout) {
     if (auto parentMmaLayout = parentLayout.dyn_cast<MmaEncodingAttr>()) {
       assert(parentMmaLayout.isAmpere() &&
              "mmaLayout version = 1 is not implemented yet");
-      auto parentShapePerCTA = getShapePerCTA(parentLayout);
+      auto parentShapePerCTA = getShapePerCTA(parentLayout, tensorShape);
       auto opIdx = dotLayout.getOpIdx();
       if (opIdx == 0) {
         return {parentShapePerCTA[0], 16};

@@ -58,6 +58,13 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   auto dstTy = op.result().getType().cast<RankedTensorType>();
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
+
+  // MmaToDotShortcut doesn't use shared mem
+  if (auto mmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>())
+    if (auto dotOperandLayout = dstLayout.dyn_cast<DotOperandEncodingAttr>())
+      if (isMmaToDotShortcut(mmaLayout, dotOperandLayout))
+        return {};
+
   assert(srcLayout && dstLayout &&
          "Unexpect layout in getScratchConfigForCvtLayout()");
   auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
@@ -68,8 +75,10 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   inVec = outOrd[0] == 0 ? 1 : inOrd[0] == 0 ? 1 : srcContigPerThread;
   outVec = outOrd[0] == 0 ? 1 : dstContigPerThread;
 
-  auto srcShapePerCTA = getShapePerCTA(srcLayout);
-  auto dstShapePerCTA = getShapePerCTA(dstLayout);
+  auto srcShape = srcTy.getShape();
+  auto dstShape = dstTy.getShape();
+  auto srcShapePerCTA = getShapePerCTA(srcLayout, srcShape);
+  auto dstShapePerCTA = getShapePerCTA(dstLayout, dstShape);
 
   unsigned rank = dstTy.getRank();
   SmallVector<unsigned> paddedRepShape(rank);
