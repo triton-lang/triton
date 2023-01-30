@@ -16,7 +16,9 @@ class TTG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonGPU_Dialect, mnemonic, traits>;
 
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
-                                 [SameOperandsAndResultShape, NoSideEffect]> {
+                                 [SameOperandsAndResultShape,
+                                  SameOperandsAndResultElementType,
+                                  NoSideEffect]> {
   let summary = "convert layout";
 
   let arguments = (ins TT_Tensor:$src);
@@ -39,6 +41,19 @@ def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
     }
   }];
 }
+
+def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
+  let summary = "async commit group";
+
+  let assemblyFormat = "attr-dict";
+
+  let extraClassDeclaration = [{
+    static bool isSupported(int computeCapability) {
+      return computeCapability >= 80;
+    }
+  }];
+}
+
 
 // Port Arith_CmpIOp & Arith_CmpFOp & Std_SelectOp to TritonGPU.
 // This is needed because these ops don't
@@ -74,8 +89,8 @@ def TTG_CmpFOp : TTG_Op<"cmpf", [NoSideEffect, Elementwise,
 
 // TODO: migrate to arith::SelectOp on LLVM16
 def TTG_SelectOp : TTG_Op<"select", [NoSideEffect, Elementwise, 
-                                 SameOperandsAndResultShape, 
-                                 SameOperandsAndResultEncoding]> {
+                                     SameOperandsAndResultShape, 
+                                     SameOperandsAndResultEncoding]> {
   let summary = "select operation";
 
   let description = [{}];
