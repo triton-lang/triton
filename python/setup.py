@@ -7,7 +7,6 @@ import subprocess
 import sys
 import tarfile
 import urllib.request
-import torch
 from distutils.version import LooseVersion
 from typing import NamedTuple
 
@@ -147,8 +146,6 @@ class CMakeBuild(build_ext):
             "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
             "-DLLVM_EXTERNAL_LIT=" + lit_dir,
         ] + thirdparty_cmake_args
-        if torch.version.hip is not None:
-            cmake_args.append("-DTRITON_USE_ROCM=ON")
 
         # configuration
         cfg = get_build_type()

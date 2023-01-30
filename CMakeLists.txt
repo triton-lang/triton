@@ -21,9 +21,9 @@ option(TRITON_BUILD_TUTORIALS "Build C++ Triton tutorials" ON)
 option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 
 # Enable TRITON_USE_ROCM for ROCm support
-option(TRITON_USE_ROCM "Build with ROCm/AMDGPU support" OFF)
-if(DEFINED ENV{TRITON_USE_ROCM})
-set(TRITON_USE_ROCM "$ENV{TRITON_USE_ROCM}" CACHE BOOL "" FORCE)
+find_package(HIP)
+if(HIP_FOUND)
+  set(TRITON_USE_ROCM ON)
 endif()
 
 # Ensure Python3 vars are set correctly
