@@ -71,8 +71,48 @@ func @if(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   return
 }
 
-// CHECK-LABEL: if_else
-func @if_else(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+// CHECK-LABEL: if_convert_else_not
+func @if_convert_else_not(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+  %c32_i32 = arith.constant dense<32> : tensor<1024xi32, #layout0>
+  %0 = tt.get_program_id {axis = 0 : i32} : i32
+  %1 = tt.splat %0 : (i32) -> tensor<1024xi32, #layout0>
+  %9 = tt.splat %0 : (i32) -> tensor<1024xi32, #layout1>
+  %2 = arith.muli %1, %c32_i32 : tensor<1024xi32, #layout0>
+  %3 = arith.addi %2, %c32_i32 : tensor<1024xi32, #layout0>
+  %4 = arith.cmpi sgt, %0, %arg0 : i32
+  %5 = tt.splat %arg1 : (!tt.ptr<i32>) -> tensor<1024x!tt.ptr<i32>, #layout1>
+  %8 = scf.if %4 -> tensor<1024xi32, #layout1> {
+    %6 = triton_gpu.convert_layout %2 : (tensor<1024xi32, #layout0>) -> tensor<1024xi32, #layout1>
+    scf.yield %6 : tensor<1024xi32, #layout1>
+  } else {
+    scf.yield %9 : tensor<1024xi32, #layout1>
+  }
+  tt.store %5, %8 : tensor<1024xi32, #layout1>
+  return
+}
+
+// CHECK-LABEL: if_convert_else_not
+func @if_not_else_convert(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+  %c32_i32 = arith.constant dense<32> : tensor<1024xi32, #layout0>
+  %0 = tt.get_program_id {axis = 0 : i32} : i32
+  %1 = tt.splat %0 : (i32) -> tensor<1024xi32, #layout0>
+  %9 = tt.splat %0 : (i32) -> tensor<1024xi32, #layout1>
+  %2 = arith.muli %1, %c32_i32 : tensor<1024xi32, #layout0>
+  %3 = arith.addi %2, %c32_i32 : tensor<1024xi32, #layout0>
+  %4 = arith.cmpi sgt, %0, %arg0 : i32
+  %5 = tt.splat %arg1 : (!tt.ptr<i32>) -> tensor<1024x!tt.ptr<i32>, #layout1>
+  %8 = scf.if %4 -> tensor<1024xi32, #layout1> {
+    scf.yield %9 : tensor<1024xi32, #layout1>
+  } else {
+    %7 = triton_gpu.convert_layout %3 : (tensor<1024xi32, #layout0>) -> tensor<1024xi32, #layout1>
+    scf.yield %7 : tensor<1024xi32, #layout1>
+  }
+  tt.store %5, %8 : tensor<1024xi32, #layout1>
+  return
+}
+
+// CHECK-LABEL: if_else_both_convert
+func @if_else_both_convert(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   %c32_i32 = arith.constant dense<32> : tensor<1024xi32, #layout0>
   %0 = tt.get_program_id {axis = 0 : i32} : i32
   %1 = tt.splat %0 : (i32) -> tensor<1024xi32, #layout0>
