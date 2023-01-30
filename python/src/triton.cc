@@ -453,6 +453,10 @@ void init_triton_ir(py::module &&m) {
            [](mlir::OpBuilder &self, mlir::Block &block) {
              self.setInsertionPointToEnd(&block);
            })
+      .def("set_insertion_point_after",
+           [](mlir::OpBuilder &self, mlir::Operation &op) {
+             self.setInsertionPointAfter(&op);
+           })
       .def(
           "get_insertion_block",
           [](mlir::OpBuilder &self) -> mlir::Block * {
