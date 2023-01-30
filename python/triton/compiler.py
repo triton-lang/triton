@@ -97,10 +97,11 @@ class enter_sub_region:
         self.prev_defs = self.generator.local_defs.copy()
         self.generator.local_defs = {}
         self.insert_block = self.generator.builder.get_insertion_block()
+        self.insert_point = self.generator.builder.get_insertion_point()
         return self.liveins, self.insert_block
 
     def __exit__(self, *args, **kwargs):
-        self.generator.builder.set_insertion_point_to_end(self.insert_block)
+        self.generator.builder.restore_insertion_point(self.insert_point)
         self.generator.lscope = self.liveins
         self.generator.local_defs = self.prev_defs
 
@@ -441,12 +442,11 @@ class CodeGenerator(ast.NodeVisitor):
         with enter_sub_region(self) as sr:
             liveins, ip_block = sr
             ip = self.builder.get_insertion_point()
-
-            dummy = self.builder.create_block()
-            self.builder.set_insertion_point_to_start(dummy)
+            liveins_copy = liveins.copy()
+            then_block = self.builder.create_block()
+            self.builder.set_insertion_point_to_start(then_block)
             self.visit_compound_statement(node.body)
             then_defs = self.local_defs.copy()
-            dummy.erase()
 
             # when need an else block when:
             # 1. we have an orelse node
@@ -457,11 +457,10 @@ class CodeGenerator(ast.NodeVisitor):
                 if node.orelse:
                     self.lscope = liveins
                     self.local_defs = {}
-                    dummy = self.builder.create_block()
-                    self.builder.set_insertion_point_to_end(dummy)
+                    else_block = self.builder.create_block()
+                    self.builder.set_insertion_point_to_end(else_block)
                     self.visit_compound_statement(node.orelse)
                     else_defs = self.local_defs.copy()
-                    dummy.erase()
                 else:
                     # collect else_defs
                     for name in then_defs:
@@ -476,8 +475,8 @@ class CodeGenerator(ast.NodeVisitor):
                 for else_name in else_defs:
                     if then_name == else_name:
                         assert then_defs[then_name].type == else_defs[else_name].type,\
-                                 f'`{then_name}` has type {then_defs[then_name].type} in then block, '\
-                                 f'but type {else_defs[else_name].type} in else block'
+                                    f'`{then_name}` has type {then_defs[then_name].type} in then block, '\
+                                    f'but type {else_defs[else_name].type} in else block'
                         names.append(then_name)
                         ret_types.append(then_defs[then_name].type)
 
@@ -486,34 +485,36 @@ class CodeGenerator(ast.NodeVisitor):
             for else_name in else_defs:
                 if else_name in liveins and else_name not in then_defs:
                     assert else_defs[else_name].type == liveins[else_name].type,\
-                           f'Initial value for `{else_name}` is of type {liveins[else_name].type}, '\
-                           f'but the else block redefines it as {else_defs[else_name].type}'
+                            f'Initial value for `{else_name}` is of type {liveins[else_name].type}, '\
+                            f'but the else block redefines it as {else_defs[else_name].type}'
                     names.append(else_name)
                     ret_types.append(else_defs[else_name].type)
                     then_defs[else_name] = liveins[else_name]
 
             self.builder.restore_insertion_point(ip)
-            if_op = self.builder.create_if_op([ty.to_ir(self.builder) for ty in ret_types], cond.handle, True)
-            # then codegen
-            self.builder.set_insertion_point_to_start(if_op.get_then_block())
-            self.visit_compound_statement(node.body)
-            then_defs = self.local_defs.copy()
-            if len(names) > 0:
-                self.builder.create_yield_op([then_defs[n].handle for n in names])
-            # else codegen
-            self.builder.set_insertion_point_to_start(if_op.get_else_block())
-            if node.orelse:
-                self.visit_compound_statement(node.orelse)
-                else_defs = self.local_defs.copy()
-            if len(names) > 0:
-                self.builder.create_yield_op([else_defs[n].handle for n in names])
-            
+            if then_defs or node.orelse:  # with else block
+                if_op = self.builder.create_if_op([ty.to_ir(self.builder) for ty in ret_types], cond.handle, True)
+                then_block.merge_block_before(if_op.get_then_block())
+                self.builder.set_insertion_point_to_end(if_op.get_then_block())
+                if len(names) > 0:
+                    self.builder.create_yield_op([then_defs[n].handle for n in names])
+                if not node.orelse:
+                    else_block = if_op.get_else_block()
+                else:
+                    else_block.merge_block_before(if_op.get_else_block())
+                self.builder.set_insertion_point_to_end(if_op.get_else_block())
+                if len(names) > 0:
+                    self.builder.create_yield_op([else_defs[n].handle for n in names])
+            else:  # no else block
+                if_op = self.builder.create_if_op([ty.to_ir(self.builder) for ty in ret_types], cond.handle, False)
+                then_block.merge_block_before(if_op.get_then_block())
 
         # update values yielded by IfOp
         for i, name in enumerate(names):
             new_tensor = triton.language.core.tensor(if_op.get_result(i), ret_types[i])
             self.lscope[name] = new_tensor
             self.local_defs[name] = new_tensor
+
 
     def visit_If(self, node):
         cond = self.visit(node.test)
@@ -712,6 +713,7 @@ class CodeGenerator(ast.NodeVisitor):
 
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
+            ip = self.builder.get_insertion_point()
 
             # create loop body block
             block = self.builder.create_block()
@@ -741,7 +743,7 @@ class CodeGenerator(ast.NodeVisitor):
                     yields.append(triton.language.core._to_tensor(self.local_defs[name], self.builder))
 
             # create ForOp
-            self.builder.set_insertion_point_to_end(insert_block)
+            self.builder.restore_insertion_point(ip)
             for_op = self.builder.create_for_op(lb, ub, step, [arg.handle for arg in init_args])
 
             self.scf_stack.append(node)
