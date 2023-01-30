@@ -6,7 +6,7 @@ from pathlib import Path
 
 THREADS_PER_WARP = 32
 from triton.compiler import ty_to_cpp
-from .compile_metadata import AOTKernelMetadata, CompileMetadata
+from .compile_metadata import CompileMetadata
 
 
 @dataclass
@@ -171,23 +171,23 @@ class CodeGenerator:
             name=template_fields.kernel_name,
         )
 
-    def gen_kernel(
-        self,
-        kernel_meta: AOTKernelMetadata,
-        compile_meta: CompileMetadata,
-        bin_: bytes,
-    ):
-        generated_code = self.make_source(
-            kernel_meta=kernel_meta,
-            compile_meta=compile_meta,
-            bin_=bin_,
-        )
-        self._gen_code.append(generated_code)
-        file_name = generated_code.name
+    # def gen_kernel(
+    #     self,
+    #     kernel_meta: AOTKernelMetadata,
+    #     compile_meta: CompileMetadata,
+    #     bin_: bytes,
+    # ):
+    #     generated_code = self.make_source(
+    #         kernel_meta=kernel_meta,
+    #         compile_meta=compile_meta,
+    #         bin_=bin_,
+    #     )
+    #     self._gen_code.append(generated_code)
+    #     file_name = generated_code.name
 
-        self._headers[file_name] = generated_code.header
-        self._sources[file_name] = generated_code.source
-        self._summray_docstrings[file_name] = generated_code.docstring
+    #     self._headers[file_name] = generated_code.header
+    #     self._sources[file_name] = generated_code.source
+    #     self._summray_docstrings[file_name] = generated_code.docstring
 
     def dump(self, out_dir: str):
         outdir = Path(out_dir)
