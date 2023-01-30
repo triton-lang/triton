@@ -388,6 +388,11 @@ private:
       decomposed = true;
     });
 
+    mod.walk([&](triton::gpu::AsyncCommitGroupOp asyncCommitGroupOp) -> void {
+      if (!triton::gpu::AsyncCommitGroupOp::isSupported(computeCapability))
+        asyncCommitGroupOp.erase();
+    });
+
     mod.walk([&](triton::gpu::AsyncWaitOp asyncWaitOp) -> void {
       if (!triton::gpu::AsyncWaitOp::isSupported(computeCapability)) {
         // async wait is supported in Ampere and later

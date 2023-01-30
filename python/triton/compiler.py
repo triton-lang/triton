@@ -900,11 +900,12 @@ def ttir_to_ttgir(mod, num_warps, num_stages, compute_capability):
     pm.add_tritongpu_combine_pass(compute_capability)
     pm.add_licm_pass()
     pm.add_tritongpu_combine_pass(compute_capability)
-    if compute_capability // 10 == 7:
-        # The update_mma_for_volta pass helps to compute some information for MMA encoding specifically for MMAv1
-        pm.add_tritongpu_update_mma_for_volta_pass()
     pm.add_cse_pass()
     pm.add_tritongpu_decompose_conversions_pass()
+    if compute_capability // 10 == 7:
+        # The update_mma_for_volta pass helps to compute some information for MMA encoding specifically for MMAv1
+        # NOTE this pass should be placed after all the passes those modifies mma layout
+        pm.add_tritongpu_update_mma_for_volta_pass()
     pm.add_cse_pass()
     pm.add_symbol_dce_pass()
     pm.add_tritongpu_reorder_instructions_pass()
@@ -986,6 +987,9 @@ def path_to_ptxas():
         "/usr",
         os.environ.get('CUDA_PATH', default_cuda_dir())
     ]
+    if not os.getenv("TRITON_IGNORE_BUNDLED_PTXAS"):
+        prefixes.insert(0, os.path.dirname(__file__))
+
     for prefix in prefixes:
         ptxas = os.path.join(prefix, "bin", "ptxas")
         if os.path.exists(ptxas):
@@ -1286,6 +1290,11 @@ def _build(name, src, srcdir):
     cuda_lib_dirs = libcuda_dirs()
     cuda_path = os.environ.get('CUDA_PATH', default_cuda_dir())
     cu_include_dir = os.path.join(cuda_path, "include")
+    triton_include_dir = os.path.join(os.path.dirname(__file__), "include")
+    cuda_header = os.path.join(cu_include_dir, "cuda.h")
+    triton_cuda_header = os.path.join(triton_include_dir, "cuda.h")
+    if not os.path.exists(cuda_header) and os.path.exists(triton_cuda_header):
+        cu_include_dir = triton_include_dir
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
@@ -1295,6 +1304,8 @@ def _build(name, src, srcdir):
         clang = shutil.which("clang")
         gcc = shutil.which("gcc")
         cc = gcc if gcc is not None else clang
+        if cc is None:
+            raise RuntimeError("Failed to find C compiler. Please specify via CC environment variable.")
     py_include_dir = get_paths()["include"]
 
     cc_cmd = [cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
@@ -1487,9 +1498,9 @@ def compile(fn, **kwargs):
         import re
         match = re.search(prototype_pattern[ir], src, re.MULTILINE)
         name, signature = match.group(1), match.group(2)
-        print(name, signature)
+        # print(name, signature)
         types = re.findall(arg_type_pattern[ir], signature)
-        print(types)
+        # print(types)
         param_tys = [convert_type_repr(ty) for ty in types]
         signature = {k: v for k, v in enumerate(param_tys)}
         first_stage = list(stages.keys()).index(ir)
@@ -1580,6 +1591,7 @@ class CompiledKernel:
         if self.shared > max_shared:
             raise OutOfResources(self.shared, max_shared, "shared memory")
         mod, func, n_regs, n_spills = cuda_utils.load_binary(self.metadata["name"], self.asm["cubin"], self.shared, device)
+        # print(self.shared, n_regs, n_spills)
         self.cu_module = mod
         self.cu_function = func
 
@@ -1619,7 +1631,8 @@ class CudaUtils(object):
             cls.instance = super(CudaUtils, cls).__new__(cls)
         return cls.instance
 
-    def _generate_src(self):
+    @staticmethod
+    def _generate_src():
         return """
         #include <cuda.h>
 
